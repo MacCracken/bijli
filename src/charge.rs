@@ -35,6 +35,7 @@ impl PointCharge {
     /// # Errors
     ///
     /// Returns [`BijliError::InvalidParameter`] if `mass` is not positive.
+    #[inline]
     pub fn new(charge: f64, mass: f64, position: [f64; 3], velocity: [f64; 3]) -> Result<Self> {
         if mass <= 0.0 {
             return Err(BijliError::InvalidParameter {
@@ -50,6 +51,7 @@ impl PointCharge {
     }
 
     /// Create an electron at rest at a position.
+    #[inline]
     #[must_use]
     pub fn electron(position: [f64; 3]) -> Self {
         // SAFETY: ELECTRON_MASS is a known positive constant.
@@ -62,6 +64,7 @@ impl PointCharge {
     }
 
     /// Create a proton at rest at a position.
+    #[inline]
     #[must_use]
     pub fn proton(position: [f64; 3]) -> Self {
         // SAFETY: PROTON_MASS is a known positive constant.
@@ -100,6 +103,7 @@ pub fn coulomb_force(q1: &PointCharge, q2: &PointCharge) -> Result<FieldVector> 
 }
 
 /// Lorentz force on a charged particle: F = q(E + v × B).
+#[inline]
 #[must_use]
 pub fn lorentz_force(
     charge: f64,
@@ -107,9 +111,7 @@ pub fn lorentz_force(
     electric_field: &FieldVector,
     magnetic_field: &FieldVector,
 ) -> FieldVector {
-    let v_cross_b = velocity.cross(magnetic_field);
-    let total = electric_field.add(&v_cross_b);
-    total.scale(charge)
+    (*electric_field + velocity.cross(magnetic_field)) * charge
 }
 
 /// Electric dipole moment: p = qd (C⋅m).

@@ -132,6 +132,7 @@ impl EmTensor {
 ///   E'⊥ = γ(E⊥ + v × B)
 ///   B'∥ = B∥
 ///   B'⊥ = γ(B⊥ − v × E/c²)
+#[inline]
 pub fn lorentz_transform_fields(
     e: &FieldVector,
     b: &FieldVector,
@@ -182,6 +183,7 @@ pub fn lorentz_transform_fields(
 /// E'_x = E_x           B'_x = B_x
 /// E'_y = γ(E_y − vB_z) B'_y = γ(B_y + vE_z/c²)
 /// E'_z = γ(E_z + vB_y) B'_z = γ(B_z − vE_y/c²)
+#[inline]
 pub fn lorentz_transform_x(
     e: &FieldVector,
     b: &FieldVector,
@@ -256,6 +258,7 @@ impl FourVector {
     }
 
     /// Boost along x-axis with speed v.
+    #[inline]
     pub fn boost_x(&self, speed: f64) -> Result<Self> {
         let gamma = lorentz_factor(speed)?;
         let beta_val = speed / SPEED_OF_LIGHT;
@@ -398,6 +401,7 @@ pub fn larmor_power(charge: f64, acceleration: f64) -> f64 {
 /// P = q²γ⁶ / (6πε₀c) × [(a)² − (v × a)²/c²]
 ///
 /// In the rest frame this reduces to the non-relativistic Larmor formula.
+#[inline]
 pub fn relativistic_larmor_power(
     charge: f64,
     velocity: &FieldVector,

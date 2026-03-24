@@ -1,7 +1,7 @@
 //! Maxwell's equations — divergence, curl, wave equation.
 //!
-//! Provides finite-difference approximations for Maxwell's equations
-//! on a uniform 3D grid.
+//! Analytical solutions for Maxwell's equations: wave speed, impedance,
+//! refractive index, wavelength/frequency, skin depth.
 
 use crate::error::{BijliError, Result};
 use crate::field::{EPSILON_0, FieldVector, MU_0};
