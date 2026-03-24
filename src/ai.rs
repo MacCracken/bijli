@@ -38,6 +38,12 @@ pub struct DaimonClient {
 }
 
 impl DaimonClient {
+    /// Returns a reference to the client's configuration.
+    #[must_use]
+    pub fn config(&self) -> &DaimonConfig {
+        &self.config
+    }
+
     pub fn new(config: DaimonConfig) -> Result<Self> {
         let client = reqwest::Client::builder()
             .timeout(std::time::Duration::from_secs(30))
@@ -68,7 +74,12 @@ impl DaimonClient {
                 .map_err(|e| BijliError::InvalidParameter {
                     reason: format!("invalid registration response: {e}"),
                 })?;
-        Ok(data["agent_id"].as_str().unwrap_or("unknown").to_string())
+        data["agent_id"]
+            .as_str()
+            .map(String::from)
+            .ok_or_else(|| BijliError::InvalidParameter {
+                reason: "registration response missing agent_id field".into(),
+            })
     }
 }
 

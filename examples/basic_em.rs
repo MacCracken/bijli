@@ -1,22 +1,23 @@
 //! Basic electromagnetism with bijli.
 
 fn main() {
-    use bijli::field;
     use bijli::charge::{self, PointCharge};
+    use bijli::field;
     use bijli::maxwell;
     use bijli::wave;
 
     // Electric field from a point charge
     let e = field::electric_field_point_charge(
-        1e-6,           // 1 μC
+        1e-6, // 1 μC
         [0.0, 0.0, 0.0],
         [1.0, 0.0, 0.0],
-    ).unwrap();
+    )
+    .unwrap();
     println!("E field at 1m from 1μC: {:.2} V/m", e.magnitude());
 
     // Coulomb force between two charges
-    let q1 = PointCharge::new(1e-6, 1.0, [0.0, 0.0, 0.0], [0.0; 3]);
-    let q2 = PointCharge::new(-1e-6, 1.0, [0.5, 0.0, 0.0], [0.0; 3]);
+    let q1 = PointCharge::new(1e-6, 1.0, [0.0, 0.0, 0.0], [0.0; 3]).unwrap();
+    let q2 = PointCharge::new(-1e-6, 1.0, [0.5, 0.0, 0.0], [0.0; 3]).unwrap();
     let f = charge::coulomb_force(&q1, &q2).unwrap();
     println!("Coulomb force: {:.4} N", f.magnitude());
 

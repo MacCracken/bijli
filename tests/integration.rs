@@ -1,8 +1,8 @@
 //! Integration tests for bijli.
 
-use bijli::field::{self, FieldVector, COULOMB_K, EPSILON_0, MU_0, SPEED_OF_LIGHT};
+use bijli::charge::{self, ELEMENTARY_CHARGE};
+use bijli::field::{self, EPSILON_0, FieldVector, MU_0, SPEED_OF_LIGHT};
 use bijli::maxwell;
-use bijli::charge::{self, PointCharge, ELEMENTARY_CHARGE, ELECTRON_MASS};
 use bijli::wave;
 
 #[test]
@@ -46,11 +46,8 @@ fn test_lorentz_force_circular_motion() {
 fn test_hydrogen_atom_energy() {
     // Coulomb energy at Bohr radius
     let bohr_radius = 5.29177e-11;
-    let u = charge::coulomb_potential_energy(
-        ELEMENTARY_CHARGE,
-        -ELEMENTARY_CHARGE,
-        bohr_radius,
-    ).unwrap();
+    let u = charge::coulomb_potential_energy(ELEMENTARY_CHARGE, -ELEMENTARY_CHARGE, bohr_radius)
+        .unwrap();
     // Should be approximately -4.36e-18 J (-27.2 eV)
     let ev = u / ELEMENTARY_CHARGE;
     assert!((ev - (-27.2)).abs() < 0.5);
@@ -58,10 +55,7 @@ fn test_hydrogen_atom_energy() {
 
 #[test]
 fn test_superposition_principle() {
-    let charges = vec![
-        (1e-6, [0.0, 0.0, 0.0]),
-        (-1e-6, [2.0, 0.0, 0.0]),
-    ];
+    let charges = vec![(1e-6, [0.0, 0.0, 0.0]), (-1e-6, [2.0, 0.0, 0.0])];
     let e = field::electric_field_superposition(&charges, [1.0, 0.0, 0.0]).unwrap();
     // At midpoint of dipole, both fields point in same direction (+x)
     assert!(e.x > 0.0);
@@ -81,6 +75,6 @@ fn test_poynting_vector_direction() {
 #[test]
 fn test_refractive_index_snells_law() {
     // Glass: ε_r ≈ 2.25 → n ≈ 1.5
-    let n = maxwell::refractive_index(2.25, 1.0);
+    let n = maxwell::refractive_index(2.25, 1.0).unwrap();
     assert!((n - 1.5).abs() < 1e-10);
 }

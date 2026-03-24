@@ -1,9 +1,7 @@
 //! Electromagnetic wave propagation, polarization, Poynting vector.
 
-use serde::{Deserialize, Serialize};
-
 use crate::error::{BijliError, Result};
-use crate::field::{FieldVector, EPSILON_0, MU_0, SPEED_OF_LIGHT};
+use crate::field::{EPSILON_0, FieldVector, MU_0, SPEED_OF_LIGHT};
 
 /// Poynting vector S = E × B / μ₀ (W/m²).
 ///
@@ -64,6 +62,7 @@ pub fn plane_wave_e(e_amplitude: f64, k: f64, x: f64, omega: f64, t: f64, phase:
 }
 
 /// Wave number from frequency: k = ω/v = 2πf/v.
+#[inline]
 pub fn wave_number(frequency: f64, velocity: f64) -> Result<f64> {
     if velocity.abs() < 1e-30 {
         return Err(BijliError::DivisionByZero {
@@ -142,5 +141,28 @@ mod tests {
     fn test_angular_frequency() {
         let omega = angular_frequency(60.0);
         assert!((omega - 120.0 * std::f64::consts::PI).abs() < 1e-10);
+    }
+
+    #[test]
+    fn test_wave_number_zero_velocity_fails() {
+        assert!(wave_number(5e14, 0.0).is_err());
+    }
+
+    #[test]
+    fn test_momentum_density() {
+        let e = FieldVector::new(0.0, 1000.0, 0.0);
+        let b = FieldVector::new(0.0, 0.0, 1e-6);
+        let g = momentum_density(&e, &b);
+        // g = S/c² — should be in +x direction (same as Poynting vector)
+        assert!(g.x > 0.0);
+        assert!(g.y.abs() < 1e-30);
+        assert!(g.z.abs() < 1e-30);
+    }
+
+    #[test]
+    fn test_radiation_pressure_absorbed_value() {
+        // 1 kW/m² → P = I/c ≈ 3.34e-6 Pa
+        let p = radiation_pressure_absorbed(1000.0);
+        assert!((p - 1000.0 / SPEED_OF_LIGHT).abs() < 1e-15);
     }
 }

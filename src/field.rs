@@ -19,7 +19,7 @@ pub const SPEED_OF_LIGHT: f64 = 299_792_458.0;
 pub const COULOMB_K: f64 = 8.987_551_792e9;
 
 /// A 3D vector field value at a point.
-#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 pub struct FieldVector {
     pub x: f64,
     pub y: f64,
@@ -60,6 +60,7 @@ impl FieldVector {
     }
 
     /// Unit vector in this direction.
+    #[inline]
     pub fn normalized(&self) -> Result<Self> {
         let mag = self.magnitude();
         if mag < 1e-15 {
@@ -115,9 +116,58 @@ impl FieldVector {
     }
 }
 
+impl std::ops::Add for FieldVector {
+    type Output = Self;
+    #[inline]
+    fn add(self, rhs: Self) -> Self {
+        Self {
+            x: self.x + rhs.x,
+            y: self.y + rhs.y,
+            z: self.z + rhs.z,
+        }
+    }
+}
+
+impl std::ops::Sub for FieldVector {
+    type Output = Self;
+    #[inline]
+    fn sub(self, rhs: Self) -> Self {
+        Self {
+            x: self.x - rhs.x,
+            y: self.y - rhs.y,
+            z: self.z - rhs.z,
+        }
+    }
+}
+
+impl std::ops::Mul<f64> for FieldVector {
+    type Output = Self;
+    #[inline]
+    fn mul(self, rhs: f64) -> Self {
+        Self {
+            x: self.x * rhs,
+            y: self.y * rhs,
+            z: self.z * rhs,
+        }
+    }
+}
+
+impl std::ops::Neg for FieldVector {
+    type Output = Self;
+    #[inline]
+    fn neg(self) -> Self {
+        Self {
+            x: -self.x,
+            y: -self.y,
+            z: -self.z,
+        }
+    }
+}
+
 /// Electric field E at a point due to a point charge.
 ///
 /// E = kq/r² r̂ (V/m)
+#[inline]
 pub fn electric_field_point_charge(
     charge_q: f64,
     charge_pos: [f64; 3],
@@ -132,19 +182,21 @@ pub fn electric_field_point_charge(
         return Err(BijliError::Singularity);
     }
 
-    let r = r_sq.sqrt();
-    let e_mag = COULOMB_K * charge_q / r_sq;
+    // kq / r³ — avoids separate sqrt + division
+    let inv_r = 1.0 / r_sq.sqrt();
+    let factor = COULOMB_K * charge_q * inv_r * inv_r * inv_r;
 
     Ok(FieldVector {
-        x: e_mag * dx / r,
-        y: e_mag * dy / r,
-        z: e_mag * dz / r,
+        x: factor * dx,
+        y: factor * dy,
+        z: factor * dz,
     })
 }
 
 /// Electric potential V at a point due to a point charge.
 ///
 /// V = kq/r (volts)
+#[inline]
 pub fn electric_potential_point_charge(
     charge_q: f64,
     charge_pos: [f64; 3],
@@ -165,6 +217,7 @@ pub fn electric_potential_point_charge(
 /// Magnetic field B at a point due to a moving point charge (Biot-Savart).
 ///
 /// B = (μ₀/4π) × q(v × r̂)/r² (tesla)
+#[inline]
 pub fn magnetic_field_moving_charge(
     charge_q: f64,
     charge_pos: [f64; 3],
@@ -180,15 +233,15 @@ pub fn magnetic_field_moving_charge(
         return Err(BijliError::Singularity);
     }
 
-    let r = r_sq.sqrt();
-    let r_hat = [dx / r, dy / r, dz / r];
+    let inv_r = 1.0 / r_sq.sqrt();
+    let r_hat = [dx * inv_r, dy * inv_r, dz * inv_r];
 
     // v × r̂
     let cross_x = velocity[1] * r_hat[2] - velocity[2] * r_hat[1];
     let cross_y = velocity[2] * r_hat[0] - velocity[0] * r_hat[2];
     let cross_z = velocity[0] * r_hat[1] - velocity[1] * r_hat[0];
 
-    let factor = (MU_0 / (4.0 * std::f64::consts::PI)) * charge_q / r_sq;
+    let factor = (MU_0 / (4.0 * std::f64::consts::PI)) * charge_q * inv_r * inv_r;
 
     Ok(FieldVector {
         x: factor * cross_x,
@@ -198,14 +251,14 @@ pub fn magnetic_field_moving_charge(
 }
 
 /// Superposition of electric fields from multiple point charges.
+#[inline]
 pub fn electric_field_superposition(
     charges: &[(f64, [f64; 3])],
     field_pos: [f64; 3],
 ) -> Result<FieldVector> {
     let mut total = FieldVector::zero();
     for &(q, pos) in charges {
-        let e = electric_field_point_charge(q, pos, field_pos)?;
-        total = total.add(&e);
+        total = total + electric_field_point_charge(q, pos, field_pos)?;
     }
     Ok(total)
 }
@@ -274,7 +327,7 @@ mod tests {
     fn test_electric_potential() {
         let v = electric_potential_point_charge(1e-6, [0.0, 0.0, 0.0], [1.0, 0.0, 0.0]).unwrap();
         // V = kq/r ≈ 8987.55 V
-        assert!((v - 8987.551_792).abs() < 1.0);
+        assert!((v - 8_987.551_792).abs() < 1.0);
     }
 
     #[test]
@@ -288,10 +341,7 @@ mod tests {
 
     #[test]
     fn test_superposition_cancellation() {
-        let charges = vec![
-            (1e-6, [-1.0, 0.0, 0.0]),
-            (1e-6, [1.0, 0.0, 0.0]),
-        ];
+        let charges = vec![(1e-6, [-1.0, 0.0, 0.0]), (1e-6, [1.0, 0.0, 0.0])];
         let e = electric_field_superposition(&charges, [0.0, 0.0, 0.0]).unwrap();
         // Symmetric charges: E_x cancels at midpoint
         assert!(e.x.abs() < 1e-6);
@@ -304,7 +354,8 @@ mod tests {
             [0.0, 0.0, 0.0],
             [1e6, 0.0, 0.0], // moving in +x
             [0.0, 1.0, 0.0], // field point at +y
-        ).unwrap();
+        )
+        .unwrap();
         // v × r̂ = x̂ × ŷ = ẑ → B should be in +z direction
         assert!(b.z > 0.0);
     }
@@ -333,5 +384,63 @@ mod tests {
     fn test_zero_vector_normalize_fails() {
         let v = FieldVector::zero();
         assert!(v.normalized().is_err());
+    }
+
+    #[test]
+    fn test_ops_add() {
+        let a = FieldVector::new(1.0, 2.0, 3.0);
+        let b = FieldVector::new(4.0, 5.0, 6.0);
+        let c = a + b;
+        assert_eq!(c, FieldVector::new(5.0, 7.0, 9.0));
+    }
+
+    #[test]
+    fn test_ops_sub() {
+        let a = FieldVector::new(4.0, 5.0, 6.0);
+        let b = FieldVector::new(1.0, 2.0, 3.0);
+        let c = a - b;
+        assert_eq!(c, FieldVector::new(3.0, 3.0, 3.0));
+    }
+
+    #[test]
+    fn test_ops_mul() {
+        let a = FieldVector::new(1.0, 2.0, 3.0);
+        let c = a * 2.0;
+        assert_eq!(c, FieldVector::new(2.0, 4.0, 6.0));
+    }
+
+    #[test]
+    fn test_ops_neg() {
+        let a = FieldVector::new(1.0, -2.0, 3.0);
+        let c = -a;
+        assert_eq!(c, FieldVector::new(-1.0, 2.0, -3.0));
+    }
+
+    #[test]
+    fn test_partial_eq() {
+        let a = FieldVector::new(1.0, 2.0, 3.0);
+        let b = FieldVector::new(1.0, 2.0, 3.0);
+        assert_eq!(a, b);
+    }
+
+    #[test]
+    fn test_magnitude_sq() {
+        let v = FieldVector::new(1.0, 2.0, 3.0);
+        assert!((v.magnitude_sq() - 14.0).abs() < 1e-10);
+    }
+
+    #[test]
+    fn test_electric_field_singularity() {
+        assert!(electric_field_point_charge(1e-6, [0.0; 3], [0.0; 3]).is_err());
+    }
+
+    #[test]
+    fn test_electric_potential_singularity() {
+        assert!(electric_potential_point_charge(1e-6, [0.0; 3], [0.0; 3]).is_err());
+    }
+
+    #[test]
+    fn test_magnetic_field_singularity() {
+        assert!(magnetic_field_moving_charge(1e-6, [0.0; 3], [1e6, 0.0, 0.0], [0.0; 3]).is_err());
     }
 }

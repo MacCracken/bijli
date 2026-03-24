@@ -3,10 +3,8 @@
 //! Provides finite-difference approximations for Maxwell's equations
 //! on a uniform 3D grid.
 
-use serde::{Deserialize, Serialize};
-
 use crate::error::{BijliError, Result};
-use crate::field::{FieldVector, EPSILON_0, MU_0, SPEED_OF_LIGHT};
+use crate::field::{EPSILON_0, FieldVector, MU_0};
 
 /// Gauss's law for electricity: ∇⋅E = ρ/ε₀.
 ///
@@ -36,6 +34,7 @@ pub fn displacement_current(de_dt: &FieldVector) -> FieldVector {
 }
 
 /// EM wave speed in a medium: v = 1/√(εμ).
+#[inline]
 pub fn wave_speed(permittivity: f64, permeability: f64) -> Result<f64> {
     if permittivity <= 0.0 {
         return Err(BijliError::InvalidPermittivity {
@@ -51,13 +50,28 @@ pub fn wave_speed(permittivity: f64, permeability: f64) -> Result<f64> {
 }
 
 /// Refractive index: n = c/v = √(ε_r × μ_r).
+///
+/// # Errors
+///
+/// Returns [`BijliError::InvalidPermittivity`] or [`BijliError::InvalidPermeability`]
+/// if the relative values are not positive.
 #[inline]
-#[must_use]
-pub fn refractive_index(relative_permittivity: f64, relative_permeability: f64) -> f64 {
-    (relative_permittivity * relative_permeability).sqrt()
+pub fn refractive_index(relative_permittivity: f64, relative_permeability: f64) -> Result<f64> {
+    if relative_permittivity <= 0.0 {
+        return Err(BijliError::InvalidPermittivity {
+            value: relative_permittivity,
+        });
+    }
+    if relative_permeability <= 0.0 {
+        return Err(BijliError::InvalidPermeability {
+            value: relative_permeability,
+        });
+    }
+    Ok((relative_permittivity * relative_permeability).sqrt())
 }
 
 /// Impedance of a medium: η = √(μ/ε) (ohms).
+#[inline]
 pub fn impedance(permittivity: f64, permeability: f64) -> Result<f64> {
     if permittivity <= 0.0 {
         return Err(BijliError::InvalidPermittivity {
@@ -79,20 +93,32 @@ pub fn free_space_impedance() -> f64 {
 }
 
 /// Wavelength from frequency: λ = v/f.
+#[inline]
 pub fn wavelength(frequency: f64, velocity: f64) -> Result<f64> {
     if frequency <= 0.0 {
         return Err(BijliError::InvalidParameter {
             reason: format!("frequency must be positive, got {frequency}"),
         });
     }
+    if velocity <= 0.0 {
+        return Err(BijliError::InvalidParameter {
+            reason: format!("velocity must be positive, got {velocity}"),
+        });
+    }
     Ok(velocity / frequency)
 }
 
 /// Frequency from wavelength: f = v/λ.
+#[inline]
 pub fn frequency(wavelength_m: f64, velocity: f64) -> Result<f64> {
     if wavelength_m <= 0.0 {
         return Err(BijliError::InvalidParameter {
             reason: format!("wavelength must be positive, got {wavelength_m}"),
+        });
+    }
+    if velocity <= 0.0 {
+        return Err(BijliError::InvalidParameter {
+            reason: format!("velocity must be positive, got {velocity}"),
         });
     }
     Ok(velocity / wavelength_m)
@@ -101,6 +127,7 @@ pub fn frequency(wavelength_m: f64, velocity: f64) -> Result<f64> {
 /// Skin depth: δ = √(2/(ωμσ)) (meters).
 ///
 /// How far EM waves penetrate into a conductor.
+#[inline]
 pub fn skin_depth(angular_freq: f64, permeability: f64, conductivity: f64) -> Result<f64> {
     let denom = angular_freq * permeability * conductivity;
     if denom <= 0.0 {
@@ -114,6 +141,7 @@ pub fn skin_depth(angular_freq: f64, permeability: f64, conductivity: f64) -> Re
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::field::SPEED_OF_LIGHT;
 
     #[test]
     fn test_gauss_electric() {
@@ -135,15 +163,30 @@ mod tests {
 
     #[test]
     fn test_refractive_index_vacuum() {
-        let n = refractive_index(1.0, 1.0);
+        let n = refractive_index(1.0, 1.0).unwrap();
         assert!((n - 1.0).abs() < 1e-10);
     }
 
     #[test]
     fn test_refractive_index_glass() {
         // Glass: ε_r ≈ 2.25, μ_r ≈ 1.0 → n ≈ 1.5
-        let n = refractive_index(2.25, 1.0);
+        let n = refractive_index(2.25, 1.0).unwrap();
         assert!((n - 1.5).abs() < 1e-10);
+    }
+
+    #[test]
+    fn test_refractive_index_negative_permittivity() {
+        assert!(refractive_index(-1.0, 1.0).is_err());
+    }
+
+    #[test]
+    fn test_wavelength_zero_velocity() {
+        assert!(wavelength(5e14, 0.0).is_err());
+    }
+
+    #[test]
+    fn test_frequency_zero_velocity() {
+        assert!(frequency(530e-9, 0.0).is_err());
     }
 
     #[test]
@@ -168,11 +211,7 @@ mod tests {
     #[test]
     fn test_skin_depth() {
         // Copper at 60 Hz: σ ≈ 5.96e7, μ ≈ μ₀
-        let delta = skin_depth(
-            2.0 * std::f64::consts::PI * 60.0,
-            MU_0,
-            5.96e7,
-        ).unwrap();
+        let delta = skin_depth(2.0 * std::f64::consts::PI * 60.0, MU_0, 5.96e7).unwrap();
         // Should be around 8.5 mm
         assert!((delta * 1000.0 - 8.5).abs() < 1.0);
     }

@@ -1,4 +1,4 @@
-use criterion::{black_box, criterion_group, criterion_main, Criterion};
+use criterion::{Criterion, black_box, criterion_group, criterion_main};
 
 fn field_benchmarks(c: &mut Criterion) {
     let mut group = c.benchmark_group("field");
@@ -34,9 +34,7 @@ fn field_benchmarks(c: &mut Criterion) {
         })
     });
 
-    let charges: Vec<(f64, [f64; 3])> = (0..10)
-        .map(|i| (1e-6, [i as f64, 0.0, 0.0]))
-        .collect();
+    let charges: Vec<(f64, [f64; 3])> = (0..10).map(|i| (1e-6, [i as f64, 0.0, 0.0])).collect();
     group.bench_function("superposition_10", |b| {
         b.iter(|| {
             black_box(bijli::field::electric_field_superposition(
@@ -47,15 +45,11 @@ fn field_benchmarks(c: &mut Criterion) {
     });
 
     let v = bijli::field::FieldVector::new(3.0, 4.0, 5.0);
-    group.bench_function("vector_magnitude", |b| {
-        b.iter(|| black_box(v.magnitude()))
-    });
+    group.bench_function("vector_magnitude", |b| b.iter(|| black_box(v.magnitude())));
 
     let a = bijli::field::FieldVector::new(1.0, 2.0, 3.0);
     let bv = bijli::field::FieldVector::new(4.0, 5.0, 6.0);
-    group.bench_function("vector_cross", |b| {
-        b.iter(|| black_box(a.cross(&bv)))
-    });
+    group.bench_function("vector_cross", |b| b.iter(|| black_box(a.cross(&bv))));
 
     group.finish();
 }
@@ -97,8 +91,8 @@ fn maxwell_benchmarks(c: &mut Criterion) {
 fn charge_benchmarks(c: &mut Criterion) {
     let mut group = c.benchmark_group("charge");
 
-    let q1 = bijli::charge::PointCharge::new(1e-6, 1.0, [0.0, 0.0, 0.0], [0.0; 3]);
-    let q2 = bijli::charge::PointCharge::new(1e-6, 1.0, [1.0, 0.0, 0.0], [0.0; 3]);
+    let q1 = bijli::charge::PointCharge::new(1e-6, 1.0, [0.0, 0.0, 0.0], [0.0; 3]).unwrap();
+    let q2 = bijli::charge::PointCharge::new(1e-6, 1.0, [1.0, 0.0, 0.0], [0.0; 3]).unwrap();
     group.bench_function("coulomb_force", |b| {
         b.iter(|| black_box(bijli::charge::coulomb_force(&q1, &q2)))
     });
@@ -110,7 +104,9 @@ fn charge_benchmarks(c: &mut Criterion) {
         b.iter(|| {
             black_box(bijli::charge::lorentz_force(
                 bijli::charge::ELEMENTARY_CHARGE,
-                &v, &e, &bf,
+                &v,
+                &e,
+                &bf,
             ))
         })
     });
