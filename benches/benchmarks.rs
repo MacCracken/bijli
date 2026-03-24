@@ -51,6 +51,44 @@ fn field_benchmarks(c: &mut Criterion) {
     let bv = bijli::field::FieldVector::new(4.0, 5.0, 6.0);
     group.bench_function("vector_cross", |b| b.iter(|| black_box(a.cross(&bv))));
 
+    let dipole = bijli::field::FieldVector::new(0.0, 0.0, 1e-30);
+    group.bench_function("electric_dipole_field", |b| {
+        b.iter(|| {
+            black_box(bijli::field::electric_dipole_field(
+                &dipole,
+                [0.0, 0.0, 1.0],
+            ))
+        })
+    });
+
+    group.bench_function("magnetic_dipole_field", |b| {
+        let m = bijli::field::FieldVector::new(0.0, 0.0, 1.0);
+        b.iter(|| black_box(bijli::field::magnetic_dipole_field(&m, [0.0, 0.0, 1.0])))
+    });
+
+    group.bench_function("charged_sphere", |b| {
+        b.iter(|| black_box(bijli::field::electric_field_charged_sphere(1e-6, 2.0)))
+    });
+
+    group.bench_function("ring_axis", |b| {
+        b.iter(|| black_box(bijli::field::electric_field_ring_axis(1e-6, 1.0, 0.5)))
+    });
+
+    group.bench_function("disk_axis", |b| {
+        b.iter(|| black_box(bijli::field::electric_field_disk_axis(1e-6, 1.0, 0.5)))
+    });
+
+    group.bench_function("trace_field_line_10", |b| {
+        b.iter(|| {
+            black_box(bijli::field::trace_field_line(
+                [0.1, 0.0, 0.0],
+                0.01,
+                10,
+                |pos| bijli::field::electric_field_point_charge(1e-6, [0.0; 3], pos),
+            ))
+        })
+    });
+
     group.finish();
 }
 

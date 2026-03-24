@@ -16,11 +16,11 @@
 
 ## V0.2 — Field Computation
 
-- [ ] Charge distributions (line, surface, volume)
-- [ ] Gauss's law applications (infinite plane, sphere, cylinder)
-- [ ] Electric dipole field (full 3D)
-- [ ] Magnetic dipole field
-- [ ] Field line tracing
+- [x] Charge distributions (line, surface, volume)
+- [x] Gauss's law applications (infinite plane, sphere, cylinder)
+- [x] Electric dipole field (full 3D)
+- [x] Magnetic dipole field
+- [x] Field line tracing
 
 ## V0.3 — Circuits & Materials
 
