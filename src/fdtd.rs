@@ -19,6 +19,10 @@ pub struct Fdtd1d {
     permittivity: Vec<f64>,
     /// Relative permeability at each half-grid point.
     permeability: Vec<f64>,
+    /// Pre-computed E-field update coefficient: dt/(ε₀ε_r dx).
+    e_coeff: Vec<f64>,
+    /// Pre-computed H-field update coefficient: dt/(μ₀μ_r dx).
+    h_coeff: Vec<f64>,
     /// Spatial step size (m).
     pub dx: f64,
     /// Time step size (s).
@@ -51,11 +55,16 @@ impl Fdtd1d {
         // Use half the Courant limit for safety margin
         let dt = dx / (2.0 * SPEED_OF_LIGHT);
 
+        let e_coeff = vec![dt / (EPSILON_0 * dx); num_cells];
+        let h_coeff = vec![dt / (MU_0 * dx); num_cells];
+
         Ok(Self {
             e_field: vec![0.0; num_cells],
             h_field: vec![0.0; num_cells],
             permittivity: vec![1.0; num_cells],
             permeability: vec![1.0; num_cells],
+            e_coeff,
+            h_coeff,
             dx,
             dt,
             step: 0,
@@ -69,8 +78,10 @@ impl Fdtd1d {
             return Err(BijliError::InvalidPermittivity { value: eps_r });
         }
         let end = end.min(self.num_cells);
-        for cell in &mut self.permittivity[start..end] {
-            *cell = eps_r;
+        let base_coeff = self.dt / (EPSILON_0 * self.dx);
+        for i in start..end {
+            self.permittivity[i] = eps_r;
+            self.e_coeff[i] = base_coeff / eps_r;
         }
         Ok(())
     }
@@ -81,8 +92,10 @@ impl Fdtd1d {
             return Err(BijliError::InvalidPermeability { value: mu_r });
         }
         let end = end.min(self.num_cells);
-        for cell in &mut self.permeability[start..end] {
-            *cell = mu_r;
+        let base_coeff = self.dt / (MU_0 * self.dx);
+        for i in start..end {
+            self.permeability[i] = mu_r;
+            self.h_coeff[i] = base_coeff / mu_r;
         }
         Ok(())
     }
@@ -105,16 +118,14 @@ impl Fdtd1d {
         let e_left = self.e_field[1];
         let e_right = self.e_field[n - 2];
 
-        // Update H from E: H^{n+1/2} = H^{n-1/2} + (dt/(μ₀μ_r dx))(E^n[i+1] - E^n[i])
+        // Update H from E: H^{n+1/2} = H^{n-1/2} + coeff_h[i] × (E^n[i+1] - E^n[i])
         for i in 0..n - 1 {
-            let coeff = self.dt / (self.permeability[i] * MU_0 * self.dx);
-            self.h_field[i] += coeff * (self.e_field[i + 1] - self.e_field[i]);
+            self.h_field[i] += self.h_coeff[i] * (self.e_field[i + 1] - self.e_field[i]);
         }
 
-        // Update E from H: E^{n+1} = E^n + (dt/(ε₀ε_r dx))(H^{n+1/2}[i] - H^{n+1/2}[i-1])
+        // Update E from H: E^{n+1} = E^n + coeff_e[i] × (H^{n+1/2}[i] - H^{n+1/2}[i-1])
         for i in 1..n - 1 {
-            let coeff = self.dt / (self.permittivity[i] * EPSILON_0 * self.dx);
-            self.e_field[i] += coeff * (self.h_field[i] - self.h_field[i - 1]);
+            self.e_field[i] += self.e_coeff[i] * (self.h_field[i] - self.h_field[i - 1]);
         }
 
         // First-order Mur absorbing boundary conditions

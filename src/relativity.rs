@@ -10,6 +10,9 @@ use crate::field::{FieldVector, MU_0, SPEED_OF_LIGHT};
 /// Speed of light squared, cached for convenience.
 const C2: f64 = SPEED_OF_LIGHT * SPEED_OF_LIGHT;
 
+/// Speed of light cubed.
+const C3: f64 = SPEED_OF_LIGHT * SPEED_OF_LIGHT * SPEED_OF_LIGHT;
+
 // ── Lorentz factor ─────────────────────────────────────────────────
 
 /// Lorentz factor γ = 1/√(1 − v²/c²).
@@ -42,7 +45,7 @@ pub fn beta(speed: f64) -> f64 {
 ///        ⎢ Ey/c   Bz      0    -Bx   ⎥
 ///        ⎣ Ez/c  -By     Bx      0    ⎦
 /// ```
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub struct EmTensor {
     /// The 4×4 matrix F^μν stored in row-major order.
     pub components: [[f64; 4]; 4],
@@ -208,7 +211,7 @@ pub fn lorentz_transform_x(
 // ── Four-vectors ───────────────────────────────────────────────────
 
 /// A four-vector (ct, x, y, z).
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub struct FourVector {
     pub t: f64,
     pub x: f64,
@@ -391,7 +394,7 @@ pub fn lienard_wiechert_b(n_hat: &FieldVector, e_field: &FieldVector) -> FieldVe
 #[inline]
 #[must_use]
 pub fn larmor_power(charge: f64, acceleration: f64) -> f64 {
-    let c3 = SPEED_OF_LIGHT * SPEED_OF_LIGHT * SPEED_OF_LIGHT;
+    let c3 = C3;
     charge * charge * acceleration * acceleration
         / (6.0 * std::f64::consts::PI * crate::field::EPSILON_0 * c3)
 }
@@ -415,12 +418,13 @@ pub fn relativistic_larmor_power(
     }
 
     let gamma = 1.0 / (1.0 - v_sq / C2).sqrt();
-    let gamma6 = gamma * gamma * gamma * gamma * gamma * gamma;
+    let gamma2 = gamma * gamma;
+    let gamma6 = gamma2 * gamma2 * gamma2;
     let a_sq = acceleration.magnitude_sq();
     let v_cross_a = velocity.cross(acceleration);
     let v_cross_a_sq = v_cross_a.magnitude_sq();
 
-    let c3 = SPEED_OF_LIGHT * SPEED_OF_LIGHT * SPEED_OF_LIGHT;
+    let c3 = C3;
     let prefactor = charge * charge / (6.0 * std::f64::consts::PI * crate::field::EPSILON_0 * c3);
 
     Ok(prefactor * gamma6 * (a_sq - v_cross_a_sq / C2))

@@ -143,8 +143,10 @@ pub fn brewster_angle(n1: f64, n2: f64) -> Result<f64> {
 /// r_s = (n₁ cos θ_i − n₂ cos θ_t) / (n₁ cos θ_i + n₂ cos θ_t)
 #[inline]
 pub fn fresnel_rs(n1: f64, theta_i: f64, n2: f64, theta_t: f64) -> Result<f64> {
-    let num = n1 * theta_i.cos() - n2 * theta_t.cos();
-    let den = n1 * theta_i.cos() + n2 * theta_t.cos();
+    let cos_i = theta_i.cos();
+    let cos_t = theta_t.cos();
+    let num = n1 * cos_i - n2 * cos_t;
+    let den = n1 * cos_i + n2 * cos_t;
     if den.abs() < 1e-30 {
         return Err(BijliError::DivisionByZero {
             context: "Fresnel denominator is zero".into(),
@@ -158,8 +160,10 @@ pub fn fresnel_rs(n1: f64, theta_i: f64, n2: f64, theta_t: f64) -> Result<f64> {
 /// r_p = (n₂ cos θ_i − n₁ cos θ_t) / (n₂ cos θ_i + n₁ cos θ_t)
 #[inline]
 pub fn fresnel_rp(n1: f64, theta_i: f64, n2: f64, theta_t: f64) -> Result<f64> {
-    let num = n2 * theta_i.cos() - n1 * theta_t.cos();
-    let den = n2 * theta_i.cos() + n1 * theta_t.cos();
+    let cos_i = theta_i.cos();
+    let cos_t = theta_t.cos();
+    let num = n2 * cos_i - n1 * cos_t;
+    let den = n2 * cos_i + n1 * cos_t;
     if den.abs() < 1e-30 {
         return Err(BijliError::DivisionByZero {
             context: "Fresnel denominator is zero".into(),

@@ -164,6 +164,51 @@ impl std::ops::Neg for FieldVector {
     }
 }
 
+impl std::ops::AddAssign for FieldVector {
+    #[inline]
+    fn add_assign(&mut self, rhs: Self) {
+        self.x += rhs.x;
+        self.y += rhs.y;
+        self.z += rhs.z;
+    }
+}
+
+impl std::ops::SubAssign for FieldVector {
+    #[inline]
+    fn sub_assign(&mut self, rhs: Self) {
+        self.x -= rhs.x;
+        self.y -= rhs.y;
+        self.z -= rhs.z;
+    }
+}
+
+impl std::ops::MulAssign<f64> for FieldVector {
+    #[inline]
+    fn mul_assign(&mut self, rhs: f64) {
+        self.x *= rhs;
+        self.y *= rhs;
+        self.z *= rhs;
+    }
+}
+
+impl std::ops::Mul<FieldVector> for f64 {
+    type Output = FieldVector;
+    #[inline]
+    fn mul(self, rhs: FieldVector) -> FieldVector {
+        FieldVector {
+            x: self * rhs.x,
+            y: self * rhs.y,
+            z: self * rhs.z,
+        }
+    }
+}
+
+impl std::fmt::Display for FieldVector {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "({}, {}, {})", self.x, self.y, self.z)
+    }
+}
+
 /// Electric field E at a point due to a point charge.
 ///
 /// E = kq/r² r̂ (V/m)
@@ -258,7 +303,7 @@ pub fn electric_field_superposition(
 ) -> Result<FieldVector> {
     let mut total = FieldVector::zero();
     for &(q, pos) in charges {
-        total = total + electric_field_point_charge(q, pos, field_pos)?;
+        total += electric_field_point_charge(q, pos, field_pos)?;
     }
     Ok(total)
 }
@@ -679,6 +724,41 @@ mod tests {
     fn test_magnitude_sq() {
         let v = FieldVector::new(1.0, 2.0, 3.0);
         assert!((v.magnitude_sq() - 14.0).abs() < 1e-10);
+    }
+
+    #[test]
+    fn test_ops_add_assign() {
+        let mut a = FieldVector::new(1.0, 2.0, 3.0);
+        a += FieldVector::new(4.0, 5.0, 6.0);
+        assert_eq!(a, FieldVector::new(5.0, 7.0, 9.0));
+    }
+
+    #[test]
+    fn test_ops_sub_assign() {
+        let mut a = FieldVector::new(4.0, 5.0, 6.0);
+        a -= FieldVector::new(1.0, 2.0, 3.0);
+        assert_eq!(a, FieldVector::new(3.0, 3.0, 3.0));
+    }
+
+    #[test]
+    fn test_ops_mul_assign() {
+        let mut a = FieldVector::new(1.0, 2.0, 3.0);
+        a *= 2.0;
+        assert_eq!(a, FieldVector::new(2.0, 4.0, 6.0));
+    }
+
+    #[test]
+    fn test_ops_scalar_mul_lhs() {
+        let a = FieldVector::new(1.0, 2.0, 3.0);
+        let c = 2.0 * a;
+        assert_eq!(c, FieldVector::new(2.0, 4.0, 6.0));
+    }
+
+    #[test]
+    fn test_display() {
+        let v = FieldVector::new(1.0, 2.5, -3.0);
+        let s = format!("{v}");
+        assert_eq!(s, "(1, 2.5, -3)");
     }
 
     #[test]
