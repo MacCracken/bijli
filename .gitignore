@@ -1,0 +1,43 @@
+# Build artifacts
+/target/
+
+# Library crate lock file
+Cargo.lock
+
+# Editor / IDE
+*.swp
+*.swo
+*~
+.idea/
+.vscode/
+*.iml
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Debugging
+*.pdb
+core
+core.*
+
+# Coverage
+lcov.info
+tarpaulin-report.html
+coverage/
+
+# Benchmark output (criterion generates large HTML reports)
+criterion/
+
+# Claude Code
+.claude/
+
+# Environment / secrets
+.env
+.env.*
+
+# Property testing regressions
+proptest-regressions/
+
+# Supply chain cache
+supply-chain/.cache/
