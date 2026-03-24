@@ -169,6 +169,54 @@ fn wave_benchmarks(c: &mut Criterion) {
         b.iter(|| black_box(bijli::wave::plane_wave_e(100.0, 1e7, 0.5, 3e15, 1e-15, 0.0)))
     });
 
+    group.bench_function("fresnel_rs", |b| {
+        b.iter(|| black_box(bijli::wave::fresnel_rs(1.0, 0.5, 1.5, 0.33)))
+    });
+
+    group.bench_function("snell_refraction", |b| {
+        b.iter(|| black_box(bijli::wave::snell_refraction_angle(1.0, 1.5, 0.5)))
+    });
+
+    group.bench_function("half_wave_dipole_pattern", |b| {
+        b.iter(|| black_box(bijli::wave::half_wave_dipole_pattern(1.0)))
+    });
+
+    group.bench_function("rect_waveguide_cutoff", |b| {
+        b.iter(|| {
+            black_box(bijli::wave::rectangular_waveguide_cutoff(
+                22.86e-3,
+                10.16e-3,
+                1,
+                0,
+                bijli::field::SPEED_OF_LIGHT,
+            ))
+        })
+    });
+
+    group.finish();
+}
+
+fn fdtd_benchmarks(c: &mut Criterion) {
+    let mut group = c.benchmark_group("fdtd");
+
+    group.bench_function("step_100_cells", |b| {
+        let mut sim = bijli::fdtd::Fdtd1d::new(100, 1e-3).unwrap();
+        sim.add_source(50, 1.0);
+        b.iter(|| {
+            sim.step_once();
+            black_box(sim.e_field[50])
+        })
+    });
+
+    group.bench_function("step_1000_cells", |b| {
+        let mut sim = bijli::fdtd::Fdtd1d::new(1000, 1e-3).unwrap();
+        sim.add_source(500, 1.0);
+        b.iter(|| {
+            sim.step_once();
+            black_box(sim.e_field[500])
+        })
+    });
+
     group.finish();
 }
 
@@ -233,6 +281,7 @@ criterion_group!(
     maxwell_benchmarks,
     charge_benchmarks,
     wave_benchmarks,
+    fdtd_benchmarks,
     circuit_benchmarks,
     material_benchmarks,
 );

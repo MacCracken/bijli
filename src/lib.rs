@@ -15,6 +15,7 @@
 //! - [`wave`] — EM wave propagation, polarization, Poynting vector
 //! - [`circuit`] — Ohm's law, capacitance, inductance, RC/RL/RLC circuits
 //! - [`material`] — Dielectric and magnetic materials, polarization, magnetization
+//! - [`fdtd`] — Finite-Difference Time-Domain solver for EM wave simulation
 //! - [`error`] — Error types
 
 pub mod error;
@@ -36,6 +37,9 @@ pub mod circuit;
 
 #[cfg(feature = "material")]
 pub mod material;
+
+#[cfg(feature = "fdtd")]
+pub mod fdtd;
 
 #[cfg(feature = "logging")]
 pub mod logging;

@@ -2,6 +2,7 @@
 
 use bijli::charge::{self, ELEMENTARY_CHARGE};
 use bijli::circuit;
+use bijli::fdtd;
 use bijli::field::{self, EPSILON_0, FieldVector, MU_0, SPEED_OF_LIGHT};
 use bijli::material;
 use bijli::maxwell;
@@ -174,4 +175,109 @@ fn test_magnetic_energy_in_material() {
     let u1 = material::magnetic_energy_density_material(mu_r, b_mag).unwrap();
     let u2 = 0.5 * mu_r * MU_0 * h_mag * h_mag;
     assert!((u1 - u2).abs() / u1 < 1e-6);
+}
+
+// ── Wave propagation integration tests ─────────────────────────────
+
+#[test]
+fn test_snell_law_reciprocity() {
+    // Snell's law is symmetric: air→glass→air should return to original angle
+    let theta_i = 0.5; // ~28.6°
+    let theta_t = wave::snell_refraction_angle(1.0, 1.5, theta_i)
+        .unwrap()
+        .unwrap();
+    let theta_back = wave::snell_refraction_angle(1.5, 1.0, theta_t)
+        .unwrap()
+        .unwrap();
+    assert!((theta_back - theta_i).abs() < 1e-10);
+}
+
+#[test]
+fn test_fresnel_energy_conservation() {
+    // R + T = 1 for normal incidence (no absorption)
+    let r = wave::reflectance_normal(1.0, 1.5).unwrap();
+    let t = wave::transmittance_normal(1.0, 1.5).unwrap();
+    assert!((r + t - 1.0).abs() < 1e-10);
+}
+
+#[test]
+fn test_waveguide_cutoff_vs_wavelength() {
+    // f_c × λ_c = c for TE₁₀ mode
+    let a = 22.86e-3;
+    let b = 10.16e-3;
+    let fc = wave::rectangular_waveguide_cutoff(a, b, 1, 0, SPEED_OF_LIGHT).unwrap();
+    let lc = wave::rectangular_waveguide_cutoff_wavelength(a, b, 1, 0).unwrap();
+    assert!((fc * lc - SPEED_OF_LIGHT).abs() / SPEED_OF_LIGHT < 1e-6);
+}
+
+#[test]
+fn test_antenna_aperture_directivity_relation() {
+    // A_e × 4π/λ² = D for any antenna
+    let lambda = 0.1; // 3 GHz
+    let d = wave::half_wave_dipole_directivity();
+    let ae = wave::effective_aperture(lambda, d).unwrap();
+    let d_back = ae * 4.0 * std::f64::consts::PI / (lambda * lambda);
+    assert!((d_back - d).abs() < 1e-6);
+}
+
+// ── FDTD integration tests ─────────────────────────────────────────
+
+#[test]
+fn test_fdtd_wave_propagation() {
+    // A pulse should propagate outward from the source
+    let mut sim = fdtd::Fdtd1d::new(200, 1e-4).unwrap();
+    sim.add_source(100, 1.0);
+
+    for _ in 0..50 {
+        sim.step_once();
+    }
+
+    // Field should have spread beyond the source cell
+    // The field should be nonzero away from source
+    let has_spread = sim
+        .e_field
+        .iter()
+        .enumerate()
+        .any(|(i, &v)| i != 100 && v.abs() > 1e-10);
+    assert!(has_spread);
+}
+
+#[test]
+fn test_fdtd_dielectric_slows_wave() {
+    let n = 400;
+    let dx = 1e-4;
+    let steps = 100;
+
+    // Vacuum simulation
+    let mut vac = fdtd::Fdtd1d::new(n, dx).unwrap();
+    // Dielectric simulation (ε_r = 4 → v = c/2)
+    let mut die = fdtd::Fdtd1d::new(n, dx).unwrap();
+    die.set_permittivity(0, n, 4.0).unwrap();
+
+    for _ in 0..steps {
+        let t_vac = vac.step as f64 * vac.dt;
+        let t_die = die.step as f64 * die.dt;
+        vac.add_source(50, (2.0 * std::f64::consts::PI * 1e9 * t_vac).sin());
+        die.add_source(50, (2.0 * std::f64::consts::PI * 1e9 * t_die).sin());
+        vac.step_once();
+        die.step_once();
+    }
+
+    // Find furthest cell with significant field
+    let threshold = 0.001;
+    let vac_front = vac
+        .e_field
+        .iter()
+        .rposition(|&v| v.abs() > threshold)
+        .unwrap_or(50);
+    let die_front = die
+        .e_field
+        .iter()
+        .rposition(|&v| v.abs() > threshold)
+        .unwrap_or(50);
+
+    assert!(
+        die_front <= vac_front,
+        "dielectric wave should travel slower"
+    );
 }

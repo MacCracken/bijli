@@ -31,10 +31,10 @@
 
 ## V0.4 — Wave Propagation
 
-- [ ] EM wave in media (refraction, reflection, transmission)
-- [ ] Waveguides (rectangular, cylindrical)
-- [ ] Antenna patterns (dipole, monopole)
-- [ ] FDTD (Finite-Difference Time-Domain) solver
+- [x] EM wave in media (refraction, reflection, transmission)
+- [x] Waveguides (rectangular, cylindrical)
+- [x] Antenna patterns (dipole, monopole)
+- [x] FDTD (Finite-Difference Time-Domain) solver
 
 ## V0.5 — Relativistic Electrodynamics
 

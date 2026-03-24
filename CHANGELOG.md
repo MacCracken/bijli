@@ -21,6 +21,16 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
 - **maxwell**: `wavelength`/`frequency` now validate velocity > 0
 - **ai**: `register_agent` returns error instead of silent fallback on missing `agent_id`
 
+### Added (V0.4)
+
+- **wave**: Snell's law refraction, critical angle, Brewster's angle
+- **wave**: Fresnel equations (r_s, r_p), reflectance/transmittance (s, p, normal)
+- **wave**: Rectangular waveguide cutoff frequency/wavelength, guide wavelength
+- **wave**: Cylindrical waveguide cutoff
+- **wave**: Hertzian and half-wave dipole antenna patterns, directivity, radiation resistance
+- **wave**: Effective aperture, Friis transmission equation
+- **fdtd**: New module — 1D FDTD Yee algorithm solver with Mur absorbing boundaries, dielectric/magnetic material support, soft source injection, energy tracking
+
 ### Added (V0.3)
 
 - **circuit**: New module — Ohm's law (V/I/R/P), resistance from geometry, series/parallel combinations (R, C, L), parallel plate capacitance, solenoid inductance, capacitor/inductor energy
