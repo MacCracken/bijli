@@ -6,6 +6,7 @@ use bijli::fdtd;
 use bijli::field::{self, EPSILON_0, FieldVector, MU_0, SPEED_OF_LIGHT};
 use bijli::material;
 use bijli::maxwell;
+use bijli::relativity;
 use bijli::wave;
 
 #[test]
@@ -280,4 +281,76 @@ fn test_fdtd_dielectric_slows_wave() {
         die_front <= vac_front,
         "dielectric wave should travel slower"
     );
+}
+
+// ── Relativity integration tests ───────────────────────────────────
+
+#[test]
+fn test_lorentz_transform_preserves_both_invariants() {
+    let e = FieldVector::new(1e3, 2e3, -500.0);
+    let b = FieldVector::new(1e-5, -3e-5, 2e-5);
+    let f1 = relativity::EmTensor::from_fields(&e, &b);
+
+    let (ep, bp) = relativity::lorentz_transform_x(&e, &b, 0.7 * SPEED_OF_LIGHT).unwrap();
+    let f2 = relativity::EmTensor::from_fields(&ep, &bp);
+
+    // Both Lorentz invariants must be preserved
+    assert!(
+        (f1.first_invariant() - f2.first_invariant()).abs() / (f1.first_invariant().abs() + 1e-30)
+            < 1e-6
+    );
+    assert!(
+        (f1.second_invariant() - f2.second_invariant()).abs()
+            / (f1.second_invariant().abs() + 1e-30)
+            < 1e-6
+    );
+}
+
+#[test]
+fn test_lw_velocity_field_matches_coulomb_at_rest() {
+    // A static charge's LW field should match the Coulomb field exactly
+    let q = 1e-6;
+    let r_vec = FieldVector::new(0.0, 2.0, 0.0);
+    let e_lw =
+        relativity::lienard_wiechert_e(q, &r_vec, &FieldVector::zero(), &FieldVector::zero())
+            .unwrap();
+    let e_coulomb = field::electric_field_point_charge(q, [0.0; 3], [0.0, 2.0, 0.0]).unwrap();
+    assert!((e_lw.x - e_coulomb.x).abs() < 1e-3);
+    assert!((e_lw.y - e_coulomb.y).abs() / e_coulomb.y.abs() < 1e-6);
+    assert!((e_lw.z - e_coulomb.z).abs() < 1e-3);
+}
+
+#[test]
+fn test_four_vector_interval_lorentz_invariant() {
+    // Spacetime interval must be preserved under boost
+    let event = relativity::FourVector::from_time_position(1e-9, [0.3, 0.0, 0.0]);
+    let s2_lab = event.interval_sq();
+    let boosted = event.boost_x(0.9 * SPEED_OF_LIGHT).unwrap();
+    let s2_boosted = boosted.interval_sq();
+    assert!((s2_lab - s2_boosted).abs() / s2_lab.abs() < 1e-6);
+}
+
+#[test]
+fn test_relativistic_larmor_matches_nonrelativistic_at_low_v() {
+    let q = ELEMENTARY_CHARGE;
+    let a = 1e15;
+    let v = FieldVector::new(1e3, 0.0, 0.0); // v << c
+    let acc = FieldVector::new(0.0, a, 0.0);
+    let p_rel = relativity::relativistic_larmor_power(q, &v, &acc).unwrap();
+    let p_nr = relativity::larmor_power(q, a);
+    // At v << c, should be nearly equal
+    assert!((p_rel - p_nr).abs() / p_nr < 0.01);
+}
+
+#[test]
+fn test_pure_magnetic_field_transforms_to_electric() {
+    // A pure B field, when boosted, gains an E field
+    let e = FieldVector::zero();
+    let b = FieldVector::new(0.0, 0.0, 1.0); // 1T in z
+    let v = 0.5 * SPEED_OF_LIGHT;
+    let (ep, _) = relativity::lorentz_transform_x(&e, &b, v).unwrap();
+    // Should create E_y = −γvB_z
+    let gamma = relativity::lorentz_factor(v).unwrap();
+    let expected_ey = -gamma * v * b.z;
+    assert!((ep.y - expected_ey).abs() / expected_ey.abs() < 1e-6);
 }

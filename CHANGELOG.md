@@ -21,6 +21,16 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
 - **maxwell**: `wavelength`/`frequency` now validate velocity > 0
 - **ai**: `register_agent` returns error instead of silent fallback on missing `agent_id`
 
+### Added (V0.5)
+
+- **relativity**: New module — Lorentz factor, beta, four-vectors (Minkowski dot, interval, boost)
+- **relativity**: Electromagnetic field tensor F^μν — construction from E/B, field extraction, first/second Lorentz invariants, Hodge dual
+- **relativity**: Lorentz transformation of E/B fields — general boost and x-axis special case
+- **relativity**: Retarded scalar and vector potentials for point charges
+- **relativity**: Liénard-Wiechert fields — electric (velocity + acceleration terms) and magnetic
+- **relativity**: Larmor radiation power (non-relativistic and relativistic/Liénard extension)
+- **relativity**: Four-potential A^μ
+
 ### Added (V0.4)
 
 - **wave**: Snell's law refraction, critical angle, Brewster's angle

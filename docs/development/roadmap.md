@@ -38,10 +38,10 @@
 
 ## V0.5 — Relativistic Electrodynamics
 
-- [ ] Electromagnetic tensor
-- [ ] Lorentz transformations of fields
-- [ ] Retarded potentials
-- [ ] Liénard-Wiechert fields
+- [x] Electromagnetic tensor
+- [x] Lorentz transformations of fields
+- [x] Retarded potentials
+- [x] Liénard-Wiechert fields
 
 ## V1.0 — Stable Release
 

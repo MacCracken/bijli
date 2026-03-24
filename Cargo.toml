@@ -14,7 +14,7 @@ categories = ["science", "simulation"]
 exclude = [".claude/", ".github/", "docs/", "scripts/"]
 
 [features]
-default = ["field", "maxwell", "charge", "wave", "circuit", "material", "fdtd"]
+default = ["field", "maxwell", "charge", "wave", "circuit", "material", "fdtd", "relativity"]
 field = []
 maxwell = []
 charge = []
@@ -22,9 +22,10 @@ wave = []
 circuit = []
 material = []
 fdtd = []
+relativity = []
 ai = ["dep:reqwest", "dep:tokio", "dep:serde_json"]
 logging = ["dep:tracing-subscriber"]
-full = ["field", "maxwell", "charge", "wave", "circuit", "material", "fdtd", "ai", "logging"]
+full = ["field", "maxwell", "charge", "wave", "circuit", "material", "fdtd", "relativity", "ai", "logging"]
 
 [dependencies]
 hisab = "0.22.4"
@@ -46,11 +47,11 @@ criterion = { version = "0.5", features = ["html_reports"] }
 [[bench]]
 name = "benchmarks"
 harness = false
-required-features = ["field", "maxwell", "charge", "wave", "circuit", "material", "fdtd"]
+required-features = ["field", "maxwell", "charge", "wave", "circuit", "material", "fdtd", "relativity"]
 
 [[test]]
 name = "integration"
-required-features = ["field", "maxwell", "charge", "wave", "circuit", "material", "fdtd"]
+required-features = ["field", "maxwell", "charge", "wave", "circuit", "material", "fdtd", "relativity"]
 
 [[example]]
 name = "basic_em"

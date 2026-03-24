@@ -275,6 +275,52 @@ fn material_benchmarks(c: &mut Criterion) {
     group.finish();
 }
 
+fn relativity_benchmarks(c: &mut Criterion) {
+    let mut group = c.benchmark_group("relativity");
+
+    group.bench_function("lorentz_factor", |b| {
+        b.iter(|| {
+            black_box(bijli::relativity::lorentz_factor(
+                0.9 * bijli::field::SPEED_OF_LIGHT,
+            ))
+        })
+    });
+
+    let e = bijli::field::FieldVector::new(1e3, 2e3, 3e3);
+    let bf = bijli::field::FieldVector::new(1e-6, 2e-6, 3e-6);
+    group.bench_function("em_tensor_from_fields", |b| {
+        b.iter(|| black_box(bijli::relativity::EmTensor::from_fields(&e, &bf)))
+    });
+
+    group.bench_function("lorentz_transform_x", |b| {
+        b.iter(|| {
+            black_box(bijli::relativity::lorentz_transform_x(
+                &e,
+                &bf,
+                0.5 * bijli::field::SPEED_OF_LIGHT,
+            ))
+        })
+    });
+
+    let r = bijli::field::FieldVector::new(1.0, 0.0, 0.0);
+    let beta_vec = bijli::field::FieldVector::new(0.1, 0.0, 0.0);
+    let beta_dot = bijli::field::FieldVector::new(0.0, 1e-5, 0.0);
+    group.bench_function("lienard_wiechert_e", |b| {
+        b.iter(|| {
+            black_box(bijli::relativity::lienard_wiechert_e(
+                1e-6, &r, &beta_vec, &beta_dot,
+            ))
+        })
+    });
+
+    group.bench_function("four_vector_boost", |b| {
+        let fv = bijli::relativity::FourVector::new(bijli::field::SPEED_OF_LIGHT, 1.0, 2.0, 3.0);
+        b.iter(|| black_box(fv.boost_x(0.5 * bijli::field::SPEED_OF_LIGHT)))
+    });
+
+    group.finish();
+}
+
 criterion_group!(
     benches,
     field_benchmarks,
@@ -284,5 +330,6 @@ criterion_group!(
     fdtd_benchmarks,
     circuit_benchmarks,
     material_benchmarks,
+    relativity_benchmarks,
 );
 criterion_main!(benches);
