@@ -172,11 +172,68 @@ fn wave_benchmarks(c: &mut Criterion) {
     group.finish();
 }
 
+fn circuit_benchmarks(c: &mut Criterion) {
+    let mut group = c.benchmark_group("circuit");
+
+    group.bench_function("rc_charging", |b| {
+        b.iter(|| black_box(bijli::circuit::rc_charging_voltage(10.0, 1e3, 1e-6, 5e-4)))
+    });
+
+    group.bench_function("rl_current_rise", |b| {
+        b.iter(|| black_box(bijli::circuit::rl_current_rise(10.0, 1.0, 1e-3, 5e-4)))
+    });
+
+    group.bench_function("rlc_impedance", |b| {
+        b.iter(|| black_box(bijli::circuit::rlc_impedance(10.0, 1e-3, 1e-6, 31_416.0)))
+    });
+
+    group.bench_function("resonant_frequency", |b| {
+        b.iter(|| black_box(bijli::circuit::resonant_frequency(1e-3, 1e-6)))
+    });
+
+    group.bench_function("resistance_parallel", |b| {
+        let r = vec![10.0, 20.0, 30.0, 40.0, 50.0];
+        b.iter(|| black_box(bijli::circuit::resistance_parallel(&r)))
+    });
+
+    group.finish();
+}
+
+fn material_benchmarks(c: &mut Criterion) {
+    let mut group = c.benchmark_group("material");
+
+    let e = bijli::field::FieldVector::new(1000.0, 0.0, 0.0);
+    group.bench_function("polarization", |b| {
+        b.iter(|| black_box(bijli::material::polarization(4.0, &e)))
+    });
+
+    group.bench_function("displacement_field", |b| {
+        b.iter(|| black_box(bijli::material::displacement_field(4.0, &e)))
+    });
+
+    let bf = bijli::field::FieldVector::new(0.0, 0.0, 1.0);
+    group.bench_function("h_field_from_b", |b| {
+        b.iter(|| black_box(bijli::material::h_field_from_b(1000.0, &bf)))
+    });
+
+    group.bench_function("clausius_mossotti", |b| {
+        b.iter(|| black_box(bijli::material::clausius_mossotti(1e-40, 1e28)))
+    });
+
+    group.bench_function("curie_weiss", |b| {
+        b.iter(|| black_box(bijli::material::curie_weiss(1.0, 1000.0, 770.0)))
+    });
+
+    group.finish();
+}
+
 criterion_group!(
     benches,
     field_benchmarks,
     maxwell_benchmarks,
     charge_benchmarks,
     wave_benchmarks,
+    circuit_benchmarks,
+    material_benchmarks,
 );
 criterion_main!(benches);

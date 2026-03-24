@@ -13,6 +13,8 @@
 //! - [`maxwell`] — Maxwell's equations, divergence, curl, wave equation
 //! - [`charge`] — Point charges, Coulomb's law, Lorentz force, charge distributions
 //! - [`wave`] — EM wave propagation, polarization, Poynting vector
+//! - [`circuit`] — Ohm's law, capacitance, inductance, RC/RL/RLC circuits
+//! - [`material`] — Dielectric and magnetic materials, polarization, magnetization
 //! - [`error`] — Error types
 
 pub mod error;
@@ -28,6 +30,12 @@ pub mod charge;
 
 #[cfg(feature = "wave")]
 pub mod wave;
+
+#[cfg(feature = "circuit")]
+pub mod circuit;
+
+#[cfg(feature = "material")]
+pub mod material;
 
 #[cfg(feature = "logging")]
 pub mod logging;

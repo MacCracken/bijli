@@ -24,10 +24,10 @@
 
 ## V0.3 — Circuits & Materials
 
-- [ ] Ohm's law, resistance, capacitance, inductance
-- [ ] RC, RL, RLC circuits
-- [ ] Dielectric materials (polarization, bound charges)
-- [ ] Magnetic materials (diamagnetic, paramagnetic, ferromagnetic)
+- [x] Ohm's law, resistance, capacitance, inductance
+- [x] RC, RL, RLC circuits
+- [x] Dielectric materials (polarization, bound charges)
+- [x] Magnetic materials (diamagnetic, paramagnetic, ferromagnetic)
 
 ## V0.4 — Wave Propagation
 

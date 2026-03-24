@@ -21,6 +21,16 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
 - **maxwell**: `wavelength`/`frequency` now validate velocity > 0
 - **ai**: `register_agent` returns error instead of silent fallback on missing `agent_id`
 
+### Added (V0.3)
+
+- **circuit**: New module — Ohm's law (V/I/R/P), resistance from geometry, series/parallel combinations (R, C, L), parallel plate capacitance, solenoid inductance, capacitor/inductor energy
+- **circuit**: RC circuits — time constant, charging/discharging voltage
+- **circuit**: RL circuits — time constant, current rise/decay
+- **circuit**: RLC circuits — resonant frequency, quality factor, damping ratio, impedance
+- **material**: New module — electric susceptibility, relative/absolute permittivity, polarization, displacement field, bound surface/volume charges, dielectric energy density, Clausius-Mossotti relation
+- **material**: Magnetic materials — susceptibility, relative/absolute permeability, magnetization, H/B field conversions, bound surface current, magnetic energy density
+- **material**: Curie's law, Curie-Weiss law, magnetic type classification (dia/para/ferromagnetic)
+
 ### Fixed
 
 - Removed unused `serde` imports from `wave` and `maxwell` modules

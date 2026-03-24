@@ -1,7 +1,9 @@
 //! Integration tests for bijli.
 
 use bijli::charge::{self, ELEMENTARY_CHARGE};
+use bijli::circuit;
 use bijli::field::{self, EPSILON_0, FieldVector, MU_0, SPEED_OF_LIGHT};
+use bijli::material;
 use bijli::maxwell;
 use bijli::wave;
 
@@ -77,4 +79,99 @@ fn test_refractive_index_snells_law() {
     // Glass: ε_r ≈ 2.25 → n ≈ 1.5
     let n = maxwell::refractive_index(2.25, 1.0).unwrap();
     assert!((n - 1.5).abs() < 1e-10);
+}
+
+// ── Circuit integration tests ──────────────────────────────────────
+
+#[test]
+fn test_rc_full_charge_cycle() {
+    // Charge to ~63%, then discharge from there
+    let v0 = 12.0;
+    let r = 1e3;
+    let c = 1e-6;
+    let tau = circuit::rc_time_constant(r, c);
+
+    let v_charged = circuit::rc_charging_voltage(v0, r, c, 5.0 * tau);
+    // After 5τ, should be ~99.3% charged
+    assert!((v_charged / v0 - 0.9933).abs() < 0.001);
+
+    let v_discharged = circuit::rc_discharging_voltage(v_charged, r, c, 5.0 * tau);
+    // After 5τ discharge, should be ~0.7% of charged value
+    assert!(v_discharged / v_charged < 0.01);
+}
+
+#[test]
+fn test_rlc_resonance_matches_components() {
+    // At resonance, impedance equals resistance
+    let r = 50.0;
+    let l = 10e-3;
+    let c = 100e-9;
+    let f0 = circuit::resonant_frequency(l, c).unwrap();
+    let omega0 = 2.0 * std::f64::consts::PI * f0;
+    let z = circuit::rlc_impedance(r, l, c, omega0).unwrap();
+    assert!((z - r).abs() / r < 1e-6);
+}
+
+#[test]
+fn test_series_parallel_identity() {
+    // Two equal resistors: series = 4 × parallel
+    let r = 100.0;
+    let series = circuit::resistance_series(&[r, r]);
+    let parallel = circuit::resistance_parallel(&[r, r]).unwrap();
+    assert!((series / parallel - 4.0).abs() < 1e-10);
+}
+
+#[test]
+fn test_capacitor_energy_from_field() {
+    // Energy stored in a parallel-plate capacitor should equal
+    // the energy density × volume between the plates
+    let eps_r = 1.0;
+    let area = 0.01; // 100 cm²
+    let sep = 1e-3; // 1mm
+    let v = 100.0; // 100V
+
+    let cap = circuit::parallel_plate_capacitance(EPSILON_0 * eps_r, area, sep).unwrap();
+    let u_circuit = circuit::capacitor_energy(cap, v);
+
+    // E = V/d, energy density = ε₀E²/2, total = u × A × d
+    let e_field = v / sep;
+    let u_field = material::dielectric_energy_density(eps_r, e_field) * area * sep;
+
+    assert!((u_circuit - u_field).abs() / u_circuit < 1e-6);
+}
+
+// ── Material integration tests ─────────────────────────────────────
+
+#[test]
+fn test_d_field_equals_eps_e() {
+    // D = ε₀ε_r E, verify consistency
+    let eps_r = 4.7; // FR-4
+    let e = FieldVector::new(500.0, 0.0, 0.0);
+    let d = material::displacement_field(eps_r, &e);
+    let p = material::polarization(eps_r, &e);
+    // D = ε₀E + P
+    let d_check = e.scale(EPSILON_0) + p;
+    assert!((d.x - d_check.x).abs() < 1e-20);
+}
+
+#[test]
+fn test_b_h_m_consistency() {
+    // B = μ₀(H + M) = μ₀μ_r H
+    let mu_r = 5000.0; // soft iron
+    let h = FieldVector::new(100.0, 0.0, 0.0);
+    let b = material::b_field_from_h(mu_r, &h);
+    let m = material::magnetization(mu_r, &h);
+    let b_check = (h + m).scale(MU_0);
+    assert!((b.x - b_check.x).abs() / b.x < 1e-10);
+}
+
+#[test]
+fn test_magnetic_energy_in_material() {
+    // u = B²/(2μ) should equal u = μH²/2
+    let mu_r = 1000.0;
+    let h_mag = 100.0;
+    let b_mag = mu_r * MU_0 * h_mag;
+    let u1 = material::magnetic_energy_density_material(mu_r, b_mag).unwrap();
+    let u2 = 0.5 * mu_r * MU_0 * h_mag * h_mag;
+    assert!((u1 - u2).abs() / u1 < 1e-6);
 }
