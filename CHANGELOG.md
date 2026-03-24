@@ -4,7 +4,7 @@ All notable changes to bijli will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
-## [Unreleased] — V0.2
+## [0.24.3] — 2026-03-24
 
 ### Added
 

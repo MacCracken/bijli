@@ -45,10 +45,10 @@
 
 ## V1.0 — Stable Release
 
-- [ ] API review and stabilization
-- [ ] Feature audit
-- [ ] Complete documentation with physics references
-- [ ] Performance optimization pass
+- [x] API review and stabilization
+- [x] Feature audit
+- [x] Complete documentation with physics references
+- [x] Performance optimization pass
 
 ## Consumer Mapping
 

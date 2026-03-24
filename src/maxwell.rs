@@ -87,6 +87,7 @@ pub fn impedance(permittivity: f64, permeability: f64) -> Result<f64> {
 }
 
 /// Impedance of free space: η₀ = √(μ₀/ε₀) ≈ 376.73 Ω.
+#[inline]
 #[must_use]
 pub fn free_space_impedance() -> f64 {
     (MU_0 / EPSILON_0).sqrt()

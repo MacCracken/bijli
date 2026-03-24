@@ -6,6 +6,7 @@ use crate::field::{EPSILON_0, FieldVector, MU_0, SPEED_OF_LIGHT};
 /// Poynting vector S = E × B / μ₀ (W/m²).
 ///
 /// Represents energy flux of the electromagnetic field.
+#[inline]
 #[must_use]
 pub fn poynting_vector(e: &FieldVector, b: &FieldVector) -> FieldVector {
     e.cross(b).scale(1.0 / MU_0)
@@ -80,6 +81,7 @@ pub fn angular_frequency(frequency: f64) -> f64 {
 }
 
 /// Electromagnetic momentum density: g = S/c² (kg/(m²⋅s)).
+#[inline]
 #[must_use]
 pub fn momentum_density(e: &FieldVector, b: &FieldVector) -> FieldVector {
     poynting_vector(e, b).scale(1.0 / (SPEED_OF_LIGHT * SPEED_OF_LIGHT))

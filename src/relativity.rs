@@ -50,6 +50,7 @@ pub struct EmTensor {
 
 impl EmTensor {
     /// Construct the EM tensor from E and B fields.
+    #[inline]
     #[must_use]
     pub fn from_fields(e: &FieldVector, b: &FieldVector) -> Self {
         let ex_c = e.x / SPEED_OF_LIGHT;
@@ -67,6 +68,7 @@ impl EmTensor {
     }
 
     /// Extract the electric field from the tensor.
+    #[inline]
     #[must_use]
     pub fn electric_field(&self) -> FieldVector {
         let f = &self.components;
@@ -78,6 +80,7 @@ impl EmTensor {
     }
 
     /// Extract the magnetic field from the tensor.
+    #[inline]
     #[must_use]
     pub fn magnetic_field(&self) -> FieldVector {
         let f = &self.components;
@@ -85,6 +88,7 @@ impl EmTensor {
     }
 
     /// First Lorentz invariant: F_μν F^μν = 2(B² − E²/c²).
+    #[inline]
     #[must_use]
     pub fn first_invariant(&self) -> f64 {
         let e = self.electric_field();
@@ -95,6 +99,7 @@ impl EmTensor {
     /// Second Lorentz invariant: ε_μνρσ F^μν F^ρσ / 8 = −E⋅B/c.
     ///
     /// Proportional to E⋅B — vanishes for radiation fields.
+    #[inline]
     #[must_use]
     pub fn second_invariant(&self) -> f64 {
         let e = self.electric_field();
@@ -103,6 +108,7 @@ impl EmTensor {
     }
 
     /// Dual tensor *F^μν (Hodge dual), swaps E↔B roles.
+    #[inline]
     #[must_use]
     pub fn dual(&self) -> Self {
         let e = self.electric_field();
@@ -371,6 +377,7 @@ pub fn lienard_wiechert_e(
 ///
 /// The B field is always perpendicular to both n̂ and E.
 #[inline]
+#[must_use]
 pub fn lienard_wiechert_b(n_hat: &FieldVector, e_field: &FieldVector) -> FieldVector {
     n_hat.cross(e_field).scale(1.0 / SPEED_OF_LIGHT)
 }
@@ -379,6 +386,7 @@ pub fn lienard_wiechert_b(n_hat: &FieldVector, e_field: &FieldVector) -> FieldVe
 ///
 /// P = q²a² / (6πε₀c³) (non-relativistic)
 #[inline]
+#[must_use]
 pub fn larmor_power(charge: f64, acceleration: f64) -> f64 {
     let c3 = SPEED_OF_LIGHT * SPEED_OF_LIGHT * SPEED_OF_LIGHT;
     charge * charge * acceleration * acceleration
