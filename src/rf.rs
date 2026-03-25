@@ -68,10 +68,15 @@ pub fn phase_velocity(inductance_per_m: f64, capacitance_per_m: f64) -> Result<f
 ///
 /// For lossless line: γ = jβ, tanh(jβl) = j tan(βl).
 #[inline]
-#[must_use]
-pub fn input_impedance_lossless(z0: f64, z_load: f64, beta: f64, length: f64) -> f64 {
+pub fn input_impedance_lossless(z0: f64, z_load: f64, beta: f64, length: f64) -> Result<f64> {
     let tan_bl = (beta * length).tan();
-    z0 * (z_load + z0 * tan_bl) / (z0 + z_load * tan_bl)
+    let den = z0 + z_load * tan_bl;
+    if den.abs() < 1e-30 {
+        return Err(BijliError::DivisionByZero {
+            context: "transmission line input impedance denominator is zero".into(),
+        });
+    }
+    Ok(z0 * (z_load + z0 * tan_bl) / den)
 }
 
 // ── Reflection coefficient & VSWR ─────────────────────────────────
@@ -151,9 +156,13 @@ pub fn mismatch_loss(gamma_mag: f64) -> Result<f64> {
 
 /// Normalize impedance: z = Z / Z₀.
 #[inline]
-#[must_use]
-pub fn normalize_impedance(z: Complex, z0: f64) -> Complex {
-    z * (1.0 / z0)
+pub fn normalize_impedance(z: Complex, z0: f64) -> Result<Complex> {
+    if z0.abs() < 1e-30 {
+        return Err(BijliError::DivisionByZero {
+            context: "reference impedance Z₀ cannot be zero".into(),
+        });
+    }
+    Ok(z * (1.0 / z0))
 }
 
 /// Denormalize impedance: Z = z × Z₀.
@@ -572,14 +581,15 @@ pub fn linear_array_factor(
     let half_psi = psi / 2.0;
     let n = n_elements as f64;
 
-    let denom = (n * half_psi).sin();
-    let numer = half_psi.sin();
+    // AF = sin(N ψ/2) / (N sin(ψ/2))
+    let sin_n_half_psi = (n * half_psi).sin();
+    let sin_half_psi = half_psi.sin();
 
-    if numer.abs() < 1e-15 {
+    if sin_half_psi.abs() < 1e-15 {
         return 1.0; // main beam peak (L'Hôpital)
     }
 
-    (denom / (n * numer)).abs()
+    (sin_n_half_psi / (n * sin_half_psi)).abs()
 }
 
 /// Array factor for a planar (rectangular) array.
@@ -686,7 +696,7 @@ mod tests {
     #[test]
     fn test_input_impedance_matched() {
         // Matched load: Z_in = Z₀ regardless of length
-        let z_in = input_impedance_lossless(50.0, 50.0, 10.0, 0.1);
+        let z_in = input_impedance_lossless(50.0, 50.0, 10.0, 0.1).unwrap();
         assert!((z_in - 50.0).abs() < 0.01);
     }
 
@@ -694,7 +704,7 @@ mod tests {
     fn test_input_impedance_quarter_wave() {
         // λ/4 transformer: Z_in = Z₀²/Z_L
         let beta = 2.0 * std::f64::consts::PI; // β = 2π/λ, so βl = π/2 at l = λ/4
-        let z_in = input_impedance_lossless(50.0, 100.0, beta, 0.25);
+        let z_in = input_impedance_lossless(50.0, 100.0, beta, 0.25).unwrap();
         // Z_in = 50² / 100 = 25
         assert!((z_in - 25.0).abs() < 0.1);
     }
@@ -758,7 +768,7 @@ mod tests {
     #[test]
     fn test_normalize_denormalize() {
         let z = Complex::new(100.0, 50.0);
-        let z_n = normalize_impedance(z, 50.0);
+        let z_n = normalize_impedance(z, 50.0).unwrap();
         let z_back = denormalize_impedance(z_n, 50.0);
         assert!((z_back.re - z.re).abs() < TOL);
         assert!((z_back.im - z.im).abs() < TOL);
@@ -951,5 +961,94 @@ mod tests {
         // Should produce a finite positive value
         assert!(af > 0.0);
         assert!(af <= 1.0);
+    }
+
+    // ── Audit-driven edge case tests ──────────────────────────────
+
+    #[test]
+    fn test_normalize_zero_z0() {
+        assert!(normalize_impedance(Complex::new(50.0, 0.0), 0.0).is_err());
+    }
+
+    #[test]
+    fn test_reflection_coefficient_complex_matched() {
+        let z = Complex::new(50.0, 0.0);
+        let g = reflection_coefficient_complex(z, z).unwrap();
+        assert!(g.norm() < TOL);
+    }
+
+    #[test]
+    fn test_return_loss_zero_gamma() {
+        // |Γ| = 0 → RL = ∞, but log(0) = -inf, so we error
+        assert!(return_loss(0.0).is_err());
+    }
+
+    #[test]
+    fn test_insertion_loss_total_reflection() {
+        assert!(insertion_loss(1.0).is_err());
+    }
+
+    #[test]
+    fn test_cascade_non_2port() {
+        let s3 = SMatrix::new(3, 50.0);
+        let s2 = SMatrix::new(2, 50.0);
+        assert!(s3.cascade(&s2).is_err());
+    }
+
+    #[test]
+    fn test_s_to_z_non_2port() {
+        let s3 = SMatrix::new(3, 50.0);
+        assert!(s_to_z(&s3).is_err());
+    }
+
+    #[test]
+    fn test_touchstone_parse_mhz() {
+        let content = "# MHZ S RI R 75\n100.0  0.1  0.2\n";
+        let data = parse_touchstone(content, 1).unwrap();
+        assert!((data.z0 - 75.0).abs() < TOL);
+        assert!((data.frequencies[0] - 100e6).abs() < 1.0);
+    }
+
+    #[test]
+    fn test_quarter_wave_negative() {
+        assert!(quarter_wave_transformer(-50.0, 100.0).is_err());
+    }
+
+    #[test]
+    fn test_linear_array_factor_bounded() {
+        // AF should always be in [0, 1] for normalized array
+        let k = 2.0 * std::f64::consts::PI;
+        for i in 0..100 {
+            let theta = i as f64 * std::f64::consts::PI / 100.0;
+            let af = linear_array_factor(8, 0.5, k, 0.0, theta);
+            assert!(
+                (-TOL..=1.0 + TOL).contains(&af),
+                "AF out of range at θ={theta}: {af}"
+            );
+        }
+    }
+
+    #[test]
+    fn test_propagation_constant_lossless() {
+        // Lossless (R=0, G=0): γ = jβ = jω√(LC)
+        let gamma = propagation_constant(0.0, 250e-9, 0.0, 100e-12, 2e9 * std::f64::consts::PI);
+        assert!(gamma.re.abs() < 1e-3); // α ≈ 0 (lossless)
+        assert!(gamma.im > 0.0); // β > 0
+    }
+
+    #[test]
+    fn test_characteristic_impedance_lossy_approaches_lossless() {
+        // With R, G very small, lossy Z₀ ≈ lossless Z₀
+        let omega = 2e9 * std::f64::consts::PI;
+        let z_lossy = characteristic_impedance_lossy(0.001, 250e-9, 1e-6, 100e-12, omega);
+        let z_lossless = characteristic_impedance_lossless(250e-9, 100e-12).unwrap();
+        assert!((z_lossy.re - z_lossless).abs() / z_lossless < 0.01);
+        assert!(z_lossy.im.abs() < 1.0); // small imaginary part
+    }
+
+    #[test]
+    fn test_feature_gate_rf_compiles_alone() {
+        // This test existing proves rf feature compiles
+        let _ = reflection_coefficient(75.0, 50.0);
     }
 }
