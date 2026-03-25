@@ -56,13 +56,13 @@
 
 > Unlocks downstream: prakash (optical systems), kiran (sky rendering, volumetric effects)
 
-- [ ] Trig-free Fresnel equations (`fresnel_rs_direct`, `fresnel_rp_direct` taking cos θ_i only)
-- [ ] Polarization formalism — Jones vectors and Jones matrices (coherent light)
-- [ ] Stokes parameters and Mueller matrices (partially polarized light)
-- [ ] Standard optical elements: polarizer, waveplate, retarder matrices
-- [ ] Mie scattering — coefficients a_n/b_n, Q_sca, Q_ext, Q_abs, asymmetry parameter g
-- [ ] Rayleigh scattering — small-particle limit, λ⁻⁴ dependence, cross-sections
-- [ ] Scattering cross-section, absorption cross-section, phase function
+- [x] Trig-free Fresnel equations (`fresnel_rs_direct`, `fresnel_rp_direct` taking cos θ_i only)
+- [x] Polarization formalism — Jones vectors and Jones matrices (coherent light)
+- [x] Stokes parameters and Mueller matrices (partially polarized light)
+- [x] Standard optical elements: polarizer, waveplate, retarder matrices
+- [x] Mie scattering — coefficients a_n/b_n, Q_sca, Q_ext, Q_abs, asymmetry parameter g
+- [x] Rayleigh scattering — small-particle limit, λ⁻⁴ dependence, cross-sections
+- [x] Scattering cross-section, absorption cross-section, phase function
 
 ## V1.2 — Gaussian Beams & Paraxial Optics
 

@@ -179,6 +179,18 @@ fn wave_benchmarks(c: &mut Criterion) {
         b.iter(|| black_box(bijli::wave::snell_refraction_angle(1.0, 1.5, 0.5)))
     });
 
+    group.bench_function("fresnel_rs_direct", |b| {
+        b.iter(|| black_box(bijli::wave::fresnel_rs_direct(1.0, 1.5, 0.707)))
+    });
+
+    group.bench_function("reflectance_unpolarized", |b| {
+        b.iter(|| black_box(bijli::wave::reflectance_unpolarized(1.0, 1.5, 0.707)))
+    });
+
+    group.bench_function("schlick_reflectance", |b| {
+        b.iter(|| black_box(bijli::wave::schlick_reflectance(1.0, 1.5, 0.707)))
+    });
+
     group.bench_function("half_wave_dipole_pattern", |b| {
         b.iter(|| black_box(bijli::wave::half_wave_dipole_pattern(1.0)))
     });
@@ -331,6 +343,60 @@ fn relativity_benchmarks(c: &mut Criterion) {
     group.finish();
 }
 
+fn polarization_benchmarks(c: &mut Criterion) {
+    let mut group = c.benchmark_group("polarization");
+
+    group.bench_function("jones_apply_polarizer", |b| {
+        let pol = bijli::polarization::JonesMatrix::horizontal_polarizer();
+        let v = bijli::polarization::JonesVector::diagonal();
+        b.iter(|| black_box(pol.apply(&v)))
+    });
+
+    group.bench_function("jones_qwp_apply", |b| {
+        let qwp = bijli::polarization::JonesMatrix::quarter_wave_plate(std::f64::consts::FRAC_PI_4);
+        let v = bijli::polarization::JonesVector::horizontal();
+        b.iter(|| black_box(qwp.apply(&v)))
+    });
+
+    group.bench_function("mueller_apply", |b| {
+        let m = bijli::polarization::MuellerMatrix::horizontal_polarizer();
+        let s = bijli::polarization::StokesVector::unpolarized(1.0);
+        b.iter(|| black_box(m.apply(&s)))
+    });
+
+    group.bench_function("stokes_from_jones", |b| {
+        let j = bijli::polarization::JonesVector::diagonal();
+        b.iter(|| black_box(bijli::polarization::StokesVector::from_jones(&j)))
+    });
+
+    group.finish();
+}
+
+fn scattering_benchmarks(c: &mut Criterion) {
+    let mut group = c.benchmark_group("scattering");
+
+    group.bench_function("mie_x1_real", |b| {
+        let m = bijli::polarization::Complex::real(1.5);
+        b.iter(|| black_box(bijli::scattering::mie(1.0, m)))
+    });
+
+    group.bench_function("mie_x10_real", |b| {
+        let m = bijli::polarization::Complex::real(1.33);
+        b.iter(|| black_box(bijli::scattering::mie(10.0, m)))
+    });
+
+    group.bench_function("rayleigh_cross_section", |b| {
+        let m = bijli::polarization::Complex::real(1.5);
+        b.iter(|| black_box(bijli::scattering::rayleigh_cross_section(10e-9, 500e-9, m)))
+    });
+
+    group.bench_function("rayleigh_phase_function", |b| {
+        b.iter(|| black_box(bijli::scattering::rayleigh_phase_function(0.5)))
+    });
+
+    group.finish();
+}
+
 criterion_group!(
     benches,
     field_benchmarks,
@@ -341,5 +407,7 @@ criterion_group!(
     circuit_benchmarks,
     material_benchmarks,
     relativity_benchmarks,
+    polarization_benchmarks,
+    scattering_benchmarks,
 );
 criterion_main!(benches);

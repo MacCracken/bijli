@@ -17,6 +17,8 @@
 //! - [`material`] — Dielectric and magnetic materials, polarization, magnetization
 //! - [`fdtd`] — Finite-Difference Time-Domain solver for EM wave simulation
 //! - [`relativity`] — Relativistic electrodynamics, EM tensor, Lorentz field transforms
+//! - [`polarization`] — Jones vectors/matrices, Stokes parameters, Mueller matrices
+//! - [`scattering`] — Mie scattering, Rayleigh scattering, cross-sections
 //! - [`error`] — Error types
 
 pub mod error;
@@ -44,6 +46,12 @@ pub mod fdtd;
 
 #[cfg(feature = "relativity")]
 pub mod relativity;
+
+#[cfg(feature = "polarization")]
+pub mod polarization;
+
+#[cfg(feature = "scattering")]
+pub mod scattering;
 
 #[cfg(feature = "logging")]
 pub mod logging;

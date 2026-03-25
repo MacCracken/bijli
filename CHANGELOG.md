@@ -4,6 +4,32 @@ All notable changes to bijli will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
+## [Unreleased] — V1.1 Optics & Scattering
+
+### Added
+
+- **wave**: Trig-free Fresnel equations — `fresnel_rs_direct`, `fresnel_rp_direct`, `snell_cos_theta_t`, reflectance/transmittance variants, Schlick approximation
+- **polarization**: New module — Jones vectors (H, V, D, A, R, L, arbitrary linear), Jones matrices (polarizer, waveplate, QWP, HWP, rotator)
+- **polarization**: Stokes parameters — construction from Jones, unpolarized/polarized states, DOP, ellipticity/orientation angles, incoherent addition
+- **polarization**: Mueller matrices — polarizers (linear, circular), waveplates, rotator, depolarizer, attenuator, composition
+- **polarization**: Complex number type for polarization math
+- **scattering**: New module — Mie scattering (Bohren-Huffman algorithm), coefficients a_n/b_n, Q_sca/Q_ext/Q_abs, asymmetry parameter g
+- **scattering**: Rayleigh scattering — cross-section (λ⁻⁴ dependence), efficiency, phase function, angular intensity
+
+### Changed
+
+- **circuit**: `resistance_series`, `capacitance_parallel`, `inductance_series` now return `Result` and reject empty slices
+- **fdtd**: Mur ABC coefficient precomputed in constructor (minor FDTD step performance improvement)
+- **fdtd**: Added tracing instrumentation to `new`, `run`
+- **field**: Added tracing to `trace_field_line`
+
+### Dependencies
+
+- hisab 0.22.4 → 1.1.0
+- impetus 0.23.3 → 1.0.0
+- reqwest 0.12 → 0.13
+- criterion 0.5 → 0.8
+
 ## [0.24.3] — 2026-03-24
 
 ### Added

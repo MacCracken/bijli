@@ -205,6 +205,123 @@ pub fn transmittance_normal(n1: f64, n2: f64) -> Result<f64> {
     Ok(1.0 - reflectance_normal(n1, n2)?)
 }
 
+// ── Trig-free Fresnel (direct cosine interface) ──────────────────
+
+/// Compute cos θ_t from cos θ_i via Snell's law (no trig).
+///
+/// cos θ_t = √(1 − (n₁/n₂)²(1 − cos²θ_i))
+///
+/// Returns `None` for total internal reflection (negative radicand).
+#[inline]
+pub fn snell_cos_theta_t(n1: f64, n2: f64, cos_theta_i: f64) -> Result<Option<f64>> {
+    if n2.abs() < 1e-30 {
+        return Err(BijliError::DivisionByZero {
+            context: "refractive index n₂ cannot be zero".into(),
+        });
+    }
+    let ratio = n1 / n2;
+    let sin2_t = ratio * ratio * (1.0 - cos_theta_i * cos_theta_i);
+    if sin2_t > 1.0 {
+        Ok(None) // total internal reflection
+    } else {
+        Ok(Some((1.0 - sin2_t).sqrt()))
+    }
+}
+
+/// Trig-free Fresnel reflection coefficient for s-polarization (TE).
+///
+/// Takes cos θ_i directly; computes cos θ_t via Snell's law internally.
+/// Returns `None` for total internal reflection.
+///
+/// r_s = (n₁ cos θ_i − n₂ cos θ_t) / (n₁ cos θ_i + n₂ cos θ_t)
+#[inline]
+pub fn fresnel_rs_direct(n1: f64, n2: f64, cos_theta_i: f64) -> Result<Option<f64>> {
+    let cos_t = match snell_cos_theta_t(n1, n2, cos_theta_i)? {
+        Some(c) => c,
+        None => return Ok(None), // TIR → |r| = 1
+    };
+    let num = n1 * cos_theta_i - n2 * cos_t;
+    let den = n1 * cos_theta_i + n2 * cos_t;
+    if den.abs() < 1e-30 {
+        return Err(BijliError::DivisionByZero {
+            context: "Fresnel denominator is zero".into(),
+        });
+    }
+    Ok(Some(num / den))
+}
+
+/// Trig-free Fresnel reflection coefficient for p-polarization (TM).
+///
+/// Takes cos θ_i directly; computes cos θ_t via Snell's law internally.
+/// Returns `None` for total internal reflection.
+///
+/// r_p = (n₂ cos θ_i − n₁ cos θ_t) / (n₂ cos θ_i + n₁ cos θ_t)
+#[inline]
+pub fn fresnel_rp_direct(n1: f64, n2: f64, cos_theta_i: f64) -> Result<Option<f64>> {
+    let cos_t = match snell_cos_theta_t(n1, n2, cos_theta_i)? {
+        Some(c) => c,
+        None => return Ok(None), // TIR → |r| = 1
+    };
+    let num = n2 * cos_theta_i - n1 * cos_t;
+    let den = n2 * cos_theta_i + n1 * cos_t;
+    if den.abs() < 1e-30 {
+        return Err(BijliError::DivisionByZero {
+            context: "Fresnel denominator is zero".into(),
+        });
+    }
+    Ok(Some(num / den))
+}
+
+/// Trig-free reflectance for s-polarization: R_s = |r_s|².
+///
+/// Returns 1.0 for total internal reflection.
+#[inline]
+pub fn reflectance_s_direct(n1: f64, n2: f64, cos_theta_i: f64) -> Result<f64> {
+    match fresnel_rs_direct(n1, n2, cos_theta_i)? {
+        Some(r) => Ok(r * r),
+        None => Ok(1.0), // TIR
+    }
+}
+
+/// Trig-free reflectance for p-polarization: R_p = |r_p|².
+///
+/// Returns 1.0 for total internal reflection.
+#[inline]
+pub fn reflectance_p_direct(n1: f64, n2: f64, cos_theta_i: f64) -> Result<f64> {
+    match fresnel_rp_direct(n1, n2, cos_theta_i)? {
+        Some(r) => Ok(r * r),
+        None => Ok(1.0), // TIR
+    }
+}
+
+/// Trig-free unpolarized reflectance: R = (R_s + R_p) / 2.
+///
+/// Returns 1.0 for total internal reflection.
+#[inline]
+pub fn reflectance_unpolarized(n1: f64, n2: f64, cos_theta_i: f64) -> Result<f64> {
+    let rs = reflectance_s_direct(n1, n2, cos_theta_i)?;
+    let rp = reflectance_p_direct(n1, n2, cos_theta_i)?;
+    Ok(0.5 * (rs + rp))
+}
+
+/// Trig-free unpolarized transmittance: T = 1 − R.
+#[inline]
+pub fn transmittance_unpolarized(n1: f64, n2: f64, cos_theta_i: f64) -> Result<f64> {
+    Ok(1.0 - reflectance_unpolarized(n1, n2, cos_theta_i)?)
+}
+
+/// Schlick's approximation for reflectance (common in rendering).
+///
+/// R(θ) ≈ R₀ + (1 − R₀)(1 − cos θ)⁵ where R₀ = ((n₁−n₂)/(n₁+n₂))²
+#[inline]
+pub fn schlick_reflectance(n1: f64, n2: f64, cos_theta_i: f64) -> Result<f64> {
+    let r0 = reflectance_normal(n1, n2)?;
+    let one_minus_cos = 1.0 - cos_theta_i;
+    let omc2 = one_minus_cos * one_minus_cos;
+    let omc5 = omc2 * omc2 * one_minus_cos;
+    Ok(r0 + (1.0 - r0) * omc5)
+}
+
 // ── Waveguides ─────────────────────────────────────────────────────
 
 /// Cutoff frequency of a rectangular waveguide TE_mn or TM_mn mode.
@@ -611,5 +728,130 @@ mod tests {
     #[test]
     fn test_friis_singularity() {
         assert!(friis_transmission(1.0, 1.0, 1.0, 0.0).is_err());
+    }
+
+    // ── Trig-free Fresnel tests ───────────────────────────────────
+
+    #[test]
+    fn test_snell_cos_theta_t_normal() {
+        // Normal incidence: cos θ_i = 1 → cos θ_t = 1
+        let cos_t = snell_cos_theta_t(1.0, 1.5, 1.0).unwrap().unwrap();
+        assert!((cos_t - 1.0).abs() < 1e-10);
+    }
+
+    #[test]
+    fn test_snell_cos_theta_t_45_deg() {
+        // Air to glass at 45°: cos(45°) = √2/2
+        let cos_i = std::f64::consts::FRAC_PI_4.cos();
+        let cos_t = snell_cos_theta_t(1.0, 1.5, cos_i).unwrap().unwrap();
+        // Verify via trig: sin θ_t = sin(45°)/1.5, cos θ_t = √(1 - sin²θ_t)
+        let sin_t = std::f64::consts::FRAC_PI_4.sin() / 1.5;
+        let expected = (1.0 - sin_t * sin_t).sqrt();
+        assert!((cos_t - expected).abs() < 1e-10);
+    }
+
+    #[test]
+    fn test_snell_cos_theta_t_tir() {
+        // Glass to air at steep angle → TIR
+        let cos_i = 0.3; // steep angle (cos θ_i small → θ_i large)
+        assert!(snell_cos_theta_t(1.5, 1.0, cos_i).unwrap().is_none());
+    }
+
+    #[test]
+    fn test_fresnel_rs_direct_normal() {
+        // Normal incidence: r_s = (n₁ - n₂)/(n₁ + n₂)
+        let r = fresnel_rs_direct(1.0, 1.5, 1.0).unwrap().unwrap();
+        let expected = (1.0 - 1.5) / (1.0 + 1.5);
+        assert!((r - expected).abs() < 1e-10);
+    }
+
+    #[test]
+    fn test_fresnel_rp_direct_normal() {
+        // Normal incidence: r_p = (n₂ - n₁)/(n₂ + n₁)
+        let r = fresnel_rp_direct(1.0, 1.5, 1.0).unwrap().unwrap();
+        let expected = (1.5 - 1.0) / (1.5 + 1.0);
+        assert!((r - expected).abs() < 1e-10);
+    }
+
+    #[test]
+    fn test_fresnel_direct_matches_trig() {
+        // Verify trig-free matches trig-based at 30°
+        let theta_i = std::f64::consts::PI / 6.0;
+        let cos_i = theta_i.cos();
+        let theta_t = snell_refraction_angle(1.0, 1.5, theta_i).unwrap().unwrap();
+
+        let rs_trig = fresnel_rs(1.0, theta_i, 1.5, theta_t).unwrap();
+        let rs_direct = fresnel_rs_direct(1.0, 1.5, cos_i).unwrap().unwrap();
+        assert!((rs_trig - rs_direct).abs() < 1e-10);
+
+        let rp_trig = fresnel_rp(1.0, theta_i, 1.5, theta_t).unwrap();
+        let rp_direct = fresnel_rp_direct(1.0, 1.5, cos_i).unwrap().unwrap();
+        assert!((rp_trig - rp_direct).abs() < 1e-10);
+    }
+
+    #[test]
+    fn test_fresnel_direct_tir() {
+        // Glass to air, steep angle → TIR, returns None
+        assert!(fresnel_rs_direct(1.5, 1.0, 0.3).unwrap().is_none());
+        assert!(fresnel_rp_direct(1.5, 1.0, 0.3).unwrap().is_none());
+    }
+
+    #[test]
+    fn test_reflectance_s_direct_tir() {
+        // TIR → reflectance = 1.0
+        let r = reflectance_s_direct(1.5, 1.0, 0.3).unwrap();
+        assert!((r - 1.0).abs() < 1e-10);
+    }
+
+    #[test]
+    fn test_reflectance_p_direct_tir() {
+        let r = reflectance_p_direct(1.5, 1.0, 0.3).unwrap();
+        assert!((r - 1.0).abs() < 1e-10);
+    }
+
+    #[test]
+    fn test_reflectance_unpolarized_normal() {
+        // At normal incidence, R_s = R_p, so unpolarized = same as normal
+        let r = reflectance_unpolarized(1.0, 1.5, 1.0).unwrap();
+        let r_normal = reflectance_normal(1.0, 1.5).unwrap();
+        assert!((r - r_normal).abs() < 1e-10);
+    }
+
+    #[test]
+    fn test_transmittance_unpolarized_complement() {
+        let cos_i = std::f64::consts::FRAC_PI_4.cos();
+        let r = reflectance_unpolarized(1.0, 1.5, cos_i).unwrap();
+        let t = transmittance_unpolarized(1.0, 1.5, cos_i).unwrap();
+        assert!((r + t - 1.0).abs() < 1e-10);
+    }
+
+    #[test]
+    fn test_schlick_normal_matches_exact() {
+        // At normal incidence, Schlick = exact
+        let r_schlick = schlick_reflectance(1.0, 1.5, 1.0).unwrap();
+        let r_exact = reflectance_normal(1.0, 1.5).unwrap();
+        assert!((r_schlick - r_exact).abs() < 1e-10);
+    }
+
+    #[test]
+    fn test_schlick_grazing() {
+        // At grazing incidence (cos θ → 0), Schlick → 1.0
+        let r = schlick_reflectance(1.0, 1.5, 0.0).unwrap();
+        assert!((r - 1.0).abs() < 1e-10);
+    }
+
+    #[test]
+    fn test_schlick_approximates_fresnel() {
+        // Schlick should be close to exact unpolarized Fresnel
+        let cos_i = std::f64::consts::FRAC_PI_4.cos();
+        let r_schlick = schlick_reflectance(1.0, 1.5, cos_i).unwrap();
+        let r_exact = reflectance_unpolarized(1.0, 1.5, cos_i).unwrap();
+        // Schlick is an approximation — within a few percent
+        assert!((r_schlick - r_exact).abs() < 0.02);
+    }
+
+    #[test]
+    fn test_snell_cos_theta_t_zero_n2() {
+        assert!(snell_cos_theta_t(1.0, 0.0, 0.5).is_err());
     }
 }
