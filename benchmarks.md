@@ -5,132 +5,132 @@ Three-point tracking: **baseline** (first run) / **previous** / **latest**
 | Point | Date | Commit |
 |-------|------|--------|
 | Baseline | 2026-03-25T12:34:25Z | `2df8cdf` |
-| Previous | 2026-03-25T20:27:44Z | `efbb8ec` |
-| Latest | 2026-03-25T20:44:46Z | `e1a7c32` |
+| Previous | 2026-03-25T21:15:52Z | `e3a6eb3` |
+| Latest | 2026-03-25T21:27:22Z | `27831eb` |
 
 ## field
 
 | Benchmark | Baseline | Previous | Latest |
 |-----------|----------|----------|--------|
-| `electric_field_point` | 2.07 ns | 1.61 ns | 1.73 ns |
-| `electric_potential_point` | 1.55 ns | 1.31 ns | 1.36 ns |
-| `magnetic_field_moving` | 1.82 ns | 1.83 ns | 1.93 ns |
-| `superposition_10` | 40.11 ns | 41.68 ns | 44.02 ns |
-| `vector_magnitude` | 543.30 ps | 523.40 ps | 536.30 ps |
-| `vector_cross` | 1.46 ns | 1.06 ns | 1.04 ns |
-| `electric_dipole_field` | 1.81 ns | 6.02 ns | 6.11 ns |
-| `magnetic_dipole_field` | 2.08 ns | 6.09 ns | 6.32 ns |
-| `charged_sphere` | 1.56 ns | 1.38 ns | 1.59 ns |
-| `ring_axis` | 1.55 ns | 1.37 ns | 1.48 ns |
-| `disk_axis` | 1.56 ns | 1.30 ns | 1.49 ns |
-| `trace_field_line_10` | 335.97 ns | 344.43 ns | 379.24 ns |
+| `electric_field_point` | 2.07 ns | 1.60 ns | 1.68 ns |
+| `electric_potential_point` | 1.55 ns | 1.30 ns | 1.31 ns |
+| `magnetic_field_moving` | 1.82 ns | 1.83 ns | 1.86 ns |
+| `superposition_10` | 40.11 ns | 41.56 ns | 46.73 ns |
+| `vector_magnitude` | 543.30 ps | 527.60 ps | 544.20 ps |
+| `vector_cross` | 1.46 ns | 1.05 ns | 1.06 ns |
+| `electric_dipole_field` | 1.81 ns | 5.76 ns | 5.92 ns |
+| `magnetic_dipole_field` | 2.08 ns | 5.77 ns | 5.88 ns |
+| `charged_sphere` | 1.56 ns | 1.29 ns | 1.32 ns |
+| `ring_axis` | 1.55 ns | 1.29 ns | 1.41 ns |
+| `disk_axis` | 1.56 ns | 1.32 ns | 1.37 ns |
+| `trace_field_line_10` | 335.97 ns | 343.18 ns | 346.43 ns |
 
 ## maxwell
 
 | Benchmark | Baseline | Previous | Latest |
 |-----------|----------|----------|--------|
-| `wave_speed` | 1.56 ns | 1.30 ns | 1.45 ns |
-| `impedance` | 1.59 ns | 1.30 ns | 1.48 ns |
-| `skin_depth` | 1.56 ns | 1.31 ns | 1.50 ns |
+| `wave_speed` | 1.56 ns | 1.33 ns | 1.42 ns |
+| `impedance` | 1.59 ns | 1.30 ns | 1.31 ns |
+| `skin_depth` | 1.56 ns | 1.30 ns | 1.32 ns |
 
 ## charge
 
 | Benchmark | Baseline | Previous | Latest |
 |-----------|----------|----------|--------|
-| `coulomb_force` | 1.82 ns | 5.99 ns | 6.84 ns |
-| `lorentz_force` | 1.47 ns | 1.75 ns | 1.97 ns |
+| `coulomb_force` | 1.82 ns | 5.81 ns | 5.88 ns |
+| `lorentz_force` | 1.47 ns | 1.82 ns | 1.75 ns |
 
 ## wave
 
 | Benchmark | Baseline | Previous | Latest |
 |-----------|----------|----------|--------|
-| `poynting_vector` | 1.46 ns | 1.06 ns | 1.25 ns |
-| `plane_wave_intensity` | 516.10 ps | 531.50 ps | 716.30 ps |
-| `plane_wave_e` | 801.90 ps | 539.00 ps | 604.30 ps |
-| `fresnel_rs` | 2.01 ns | 1.79 ns | 1.45 ns |
-| `snell_refraction` | 1.90 ns | 2.48 ns | 2.09 ns |
-| `fresnel_rs_direct` | — | 2.33 ns | 2.06 ns |
-| `reflectance_unpolarized` | — | 1.75 ns | 1.47 ns |
-| `schlick_reflectance` | — | 1.57 ns | 1.44 ns |
-| `half_wave_dipole_pattern` | 537.00 ps | 550.90 ps | 690.60 ps |
-| `rect_waveguide_cutoff` | 1.67 ns | 1.35 ns | 1.50 ns |
+| `poynting_vector` | 1.46 ns | 1.04 ns | 1.35 ns |
+| `plane_wave_intensity` | 516.10 ps | 533.50 ps | 1.48 ns |
+| `plane_wave_e` | 801.90 ps | 528.10 ps | 852.10 ps |
+| `fresnel_rs` | 2.01 ns | 1.35 ns | 1.78 ns |
+| `snell_refraction` | 1.90 ns | 2.04 ns | 2.26 ns |
+| `fresnel_rs_direct` | — | 1.95 ns | 2.19 ns |
+| `reflectance_unpolarized` | — | 1.32 ns | 1.40 ns |
+| `schlick_reflectance` | — | 1.30 ns | 1.38 ns |
+| `half_wave_dipole_pattern` | 537.00 ps | 534.10 ps | 680.10 ps |
+| `rect_waveguide_cutoff` | 1.67 ns | 1.31 ns | 1.35 ns |
 
 ## fdtd
 
 | Benchmark | Baseline | Previous | Latest |
 |-----------|----------|----------|--------|
-| `step_100_cells` | 76.69 ns | 79.45 ns | 80.80 ns |
-| `step_1000_cells` | 659.12 ns | 744.48 ns | 691.22 ns |
-| `run_100_steps_500_cells` | — | 37.36 µs | 38.42 µs |
-| `2d_step_100x100_tm` | — | 16.36 µs | 16.82 µs |
-| `2d_run_50_steps_80x80` | — | 566.73 µs | 591.98 µs |
+| `step_100_cells` | 76.69 ns | 82.35 ns | 75.52 ns |
+| `step_1000_cells` | 659.12 ns | 664.56 ns | 706.91 ns |
+| `run_100_steps_500_cells` | — | 36.26 µs | 37.84 µs |
+| `2d_step_100x100_tm` | — | 15.66 µs | 15.77 µs |
+| `2d_run_50_steps_80x80` | — | 536.51 µs | 558.08 µs |
 
 ## circuit
 
 | Benchmark | Baseline | Previous | Latest |
 |-----------|----------|----------|--------|
-| `rc_charging` | 527.50 ps | 545.70 ps | 539.80 ps |
-| `rl_current_rise` | 1.60 ns | 1.39 ns | 1.36 ns |
-| `rlc_impedance` | 1.55 ns | 1.38 ns | 1.35 ns |
-| `resonant_frequency` | 1.55 ns | 1.37 ns | 1.36 ns |
-| `resistance_parallel` | 6.97 ns | 7.71 ns | 8.53 ns |
+| `rc_charging` | 527.50 ps | 536.60 ps | 577.70 ps |
+| `rl_current_rise` | 1.60 ns | 1.32 ns | 1.45 ns |
+| `rlc_impedance` | 1.55 ns | 1.31 ns | 1.45 ns |
+| `resonant_frequency` | 1.55 ns | 1.33 ns | 1.42 ns |
+| `resistance_parallel` | 6.97 ns | 7.02 ns | 7.11 ns |
 
 ## material
 
 | Benchmark | Baseline | Previous | Latest |
 |-----------|----------|----------|--------|
-| `polarization` | 1.47 ns | 1.12 ns | 1.08 ns |
-| `displacement_field` | 1.43 ns | 1.14 ns | 1.06 ns |
-| `h_field_from_b` | 2.07 ns | 6.12 ns | 5.83 ns |
-| `clausius_mossotti` | 1.57 ns | 1.37 ns | 1.60 ns |
-| `curie_weiss` | 1.55 ns | 1.32 ns | 1.44 ns |
+| `polarization` | 1.47 ns | 1.06 ns | 1.09 ns |
+| `displacement_field` | 1.43 ns | 1.08 ns | 1.14 ns |
+| `h_field_from_b` | 2.07 ns | 5.82 ns | 6.03 ns |
+| `clausius_mossotti` | 1.57 ns | 1.30 ns | 1.41 ns |
+| `curie_weiss` | 1.55 ns | 1.31 ns | 1.40 ns |
 
 ## relativity
 
 | Benchmark | Baseline | Previous | Latest |
 |-----------|----------|----------|--------|
-| `lorentz_factor` | 1.55 ns | 1.32 ns | 1.32 ns |
-| `em_tensor_from_fields` | 8.20 ns | 8.67 ns | 8.85 ns |
-| `lorentz_transform_x` | 3.81 ns | 6.43 ns | 7.16 ns |
-| `lienard_wiechert_e` | 24.58 ns | 24.62 ns | 26.49 ns |
-| `four_vector_boost` | 2.09 ns | 5.89 ns | 5.93 ns |
+| `lorentz_factor` | 1.55 ns | 1.32 ns | 1.36 ns |
+| `em_tensor_from_fields` | 8.20 ns | 8.39 ns | 8.62 ns |
+| `lorentz_transform_x` | 3.81 ns | 6.31 ns | 6.61 ns |
+| `lienard_wiechert_e` | 24.58 ns | 24.41 ns | 26.24 ns |
+| `four_vector_boost` | 2.09 ns | 5.80 ns | 6.27 ns |
 
 ## polarization
 
 | Benchmark | Baseline | Previous | Latest |
 |-----------|----------|----------|--------|
-| `jones_apply_polarizer` | — | 1.07 ns | 1.05 ns |
-| `jones_qwp_apply` | — | 1.10 ns | 1.04 ns |
-| `mueller_apply` | — | 1.08 ns | 1.04 ns |
-| `stokes_from_jones` | — | 6.00 ns | 5.78 ns |
+| `jones_apply_polarizer` | — | 1.06 ns | 1.17 ns |
+| `jones_qwp_apply` | — | 1.07 ns | 1.13 ns |
+| `mueller_apply` | — | 1.06 ns | 1.10 ns |
+| `stokes_from_jones` | — | 5.93 ns | 6.02 ns |
 
 ## scattering
 
 | Benchmark | Baseline | Previous | Latest |
 |-----------|----------|----------|--------|
-| `mie_x1_real` | — | 526.07 ns | 496.26 ns |
-| `mie_x10_real` | — | 1.02 µs | 973.70 ns |
-| `rayleigh_cross_section` | — | 1.90 ns | 1.81 ns |
-| `rayleigh_phase_function` | — | 561.60 ps | 526.90 ps |
+| `mie_x1_real` | — | 495.57 ns | 532.97 ns |
+| `mie_x10_real` | — | 989.18 ns | 1.04 µs |
+| `rayleigh_cross_section` | — | 1.83 ns | 1.92 ns |
+| `rayleigh_phase_function` | — | 524.70 ps | 538.00 ps |
 
 ## beam
 
 | Benchmark | Baseline | Previous | Latest |
 |-----------|----------|----------|--------|
-| `spot_size` | — | 555.90 ps | 522.70 ps |
-| `abcd_propagate_beam` | — | 2.00 ns | 1.89 ns |
-| `abcd_compose` | — | 1.07 ns | 1.04 ns |
-| `hermite_gaussian_hg33` | — | 25.08 ns | 22.43 ns |
-| `resonator_stability` | — | 7.02 ns | 6.73 ns |
+| `spot_size` | — | 527.50 ps | 553.20 ps |
+| `abcd_propagate_beam` | — | 1.87 ns | 2.03 ns |
+| `abcd_compose` | — | 1.06 ns | 1.05 ns |
+| `hermite_gaussian_hg33` | — | 23.00 ns | 22.34 ns |
+| `resonator_stability` | — | 6.59 ns | 6.45 ns |
 
 ## rf
 
 | Benchmark | Baseline | Previous | Latest |
 |-----------|----------|----------|--------|
-| `reflection_coefficient` | — | — | 1.30 ns |
-| `vswr` | — | — | 1.30 ns |
-| `linear_array_factor_8` | — | — | 532.40 ps |
-| `s_cascade` | — | — | 68.48 ns |
+| `reflection_coefficient` | — | 1.30 ns | 1.29 ns |
+| `vswr` | — | 1.31 ns | 1.29 ns |
+| `linear_array_factor_8` | — | 581.80 ps | 529.20 ps |
+| `s_cascade` | — | 70.06 ns | 68.08 ns |
 
 ---
 

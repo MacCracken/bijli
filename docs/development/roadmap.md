@@ -125,12 +125,12 @@
 
 > Improves ergonomics for all downstream consumers
 
-- [ ] `PointCharge::electric_field_at(pos)` → delegates to field module
-- [ ] `PointCharge::lienard_wiechert_field_at(pos, time)` → delegates to relativity
-- [ ] `wave` Fresnel functions accepting material structs from `material` module
-- [ ] `fdtd.set_material(region, material_params)` using `material` module types
-- [ ] `circuit` ↔ `wave` bridge for transmission line reflection/Fresnel overlap
-- [ ] Unified `Material` struct spanning `material` + `fdtd` + `wave`
+- [x] `PointCharge::electric_field_at(pos)` → delegates to field module
+- [x] `PointCharge::lienard_wiechert_field_at(pos, time)` → delegates to relativity
+- [x] `wave` Fresnel functions accepting material structs from `material` module
+- [x] `fdtd.set_material(region, material_params)` using `material` module types
+- [x] `circuit` ↔ `wave` bridge for transmission line reflection/Fresnel overlap
+- [x] Unified `Material` struct spanning `material` + `fdtd` + `wave`
 
 ## V2.0 — 3D FDTD & GPU
 

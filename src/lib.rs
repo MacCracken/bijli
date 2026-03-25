@@ -61,6 +61,9 @@ pub mod beam;
 #[cfg(feature = "rf")]
 pub mod rf;
 
+#[cfg(feature = "compute")]
+pub mod compute;
+
 #[cfg(feature = "logging")]
 pub mod logging;
 

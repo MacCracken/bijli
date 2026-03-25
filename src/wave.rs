@@ -322,6 +322,51 @@ pub fn schlick_reflectance(n1: f64, n2: f64, cos_theta_i: f64) -> Result<f64> {
     Ok(r0 + (1.0 - r0) * omc5)
 }
 
+// ── Material-based Fresnel interface ───────────────────────────────
+
+/// Trig-free unpolarized reflectance at interface between two materials.
+///
+/// Convenience wrapper that extracts refractive indices from [`crate::material::Material`] structs.
+#[inline]
+pub fn reflectance_at_interface(
+    mat1: &crate::material::Material,
+    mat2: &crate::material::Material,
+    cos_theta_i: f64,
+) -> Result<f64> {
+    let n1 = mat1.refractive_index();
+    let n2 = mat2.refractive_index();
+    reflectance_unpolarized(n1, n2, cos_theta_i)
+}
+
+/// Normal-incidence reflectance between two materials.
+#[inline]
+pub fn reflectance_normal_materials(
+    mat1: &crate::material::Material,
+    mat2: &crate::material::Material,
+) -> Result<f64> {
+    reflectance_normal(mat1.refractive_index(), mat2.refractive_index())
+}
+
+/// Transmission line reflection coefficient from material impedances.
+///
+/// Bridges `circuit`/`rf` reflection coefficient with `wave`/`material` modules.
+/// Γ = (η₂ − η₁)/(η₂ + η₁) where η = √(μ/ε) is the wave impedance.
+#[inline]
+pub fn material_reflection_coefficient(
+    mat1: &crate::material::Material,
+    mat2: &crate::material::Material,
+) -> Result<f64> {
+    let eta1 = mat1.impedance()?;
+    let eta2 = mat2.impedance()?;
+    let den = eta2 + eta1;
+    if den.abs() < 1e-30 {
+        return Err(BijliError::DivisionByZero {
+            context: "η₁ + η₂ = 0".into(),
+        });
+    }
+    Ok((eta2 - eta1) / den)
+}
+
 // ── Waveguides ─────────────────────────────────────────────────────
 
 /// Cutoff frequency of a rectangular waveguide TE_mn or TM_mn mode.
@@ -853,5 +898,45 @@ mod tests {
     #[test]
     fn test_snell_cos_theta_t_zero_n2() {
         assert!(snell_cos_theta_t(1.0, 0.0, 0.5).is_err());
+    }
+
+    // ── Material-based interface tests ────────────────────────────
+
+    #[test]
+    fn test_reflectance_at_interface_normal() {
+        use crate::material::Material;
+        let air = Material::vacuum();
+        let glass = Material::dielectric(2.25);
+        let r = reflectance_at_interface(&air, &glass, 1.0).unwrap();
+        let expected = reflectance_normal(1.0, 1.5).unwrap();
+        assert!((r - expected).abs() < 1e-6);
+    }
+
+    #[test]
+    fn test_reflectance_normal_materials_air_glass() {
+        use crate::material::Material;
+        let air = Material::vacuum();
+        let glass = Material::dielectric(2.25);
+        let r = reflectance_normal_materials(&air, &glass).unwrap();
+        assert!((r - 0.04).abs() < 1e-6);
+    }
+
+    #[test]
+    fn test_material_reflection_coefficient() {
+        use crate::material::Material;
+        let air = Material::vacuum();
+        let glass = Material::dielectric(2.25);
+        // Γ = (η₂ - η₁)/(η₂ + η₁), and η ∝ 1/n for non-magnetic
+        // η_glass = η₀/1.5, Γ = (η₀/1.5 - η₀)/(η₀/1.5 + η₀) = (1/1.5-1)/(1/1.5+1) = (-1/3)/(5/3) = -0.2
+        let g = material_reflection_coefficient(&air, &glass).unwrap();
+        assert!((g - (-0.2)).abs() < 1e-6);
+    }
+
+    #[test]
+    fn test_material_reflection_coefficient_same_material() {
+        use crate::material::Material;
+        let m = Material::dielectric(4.0);
+        let g = material_reflection_coefficient(&m, &m).unwrap();
+        assert!(g.abs() < 1e-10);
     }
 }

@@ -881,6 +881,22 @@ impl Fdtd2d {
         Ok(())
     }
 
+    /// Set material properties in a rectangular region using a [`crate::material::Material`] struct.
+    ///
+    /// Sets both permittivity and permeability from the material.
+    pub fn set_material(
+        &mut self,
+        x0: usize,
+        y0: usize,
+        x1: usize,
+        y1: usize,
+        mat: &crate::material::Material,
+    ) -> Result<()> {
+        self.set_permittivity(x0, y0, x1, y1, mat.eps_r)?;
+        self.set_permeability(x0, y0, x1, y1, mat.mu_r)?;
+        Ok(())
+    }
+
     /// Inject a soft source at grid point (x, y) into the z-component field.
     #[inline]
     pub fn add_source(&mut self, x: usize, y: usize, value: f64) {
@@ -1679,6 +1695,17 @@ mod tests {
     fn test_fdtd2d_set_permeability_invalid() {
         let mut sim = Fdtd2d::new(50, 50, 1e-3, Mode2d::Tm).unwrap();
         assert!(sim.set_permeability(0, 0, 50, 50, -1.0).is_err());
+    }
+
+    #[test]
+    fn test_fdtd2d_set_material() {
+        use crate::material::Material;
+        let mut sim = Fdtd2d::new(50, 50, 1e-3, Mode2d::Tm).unwrap();
+        let glass = Material::dielectric(2.25);
+        sim.set_material(10, 10, 30, 30, &glass).unwrap();
+        let center = sim.idx(20, 20);
+        assert!((sim.permittivity[center] - 2.25).abs() < 1e-15);
+        assert!((sim.permeability[center] - 1.0).abs() < 1e-15);
     }
 
     #[test]

@@ -6,7 +6,9 @@ targets = []
 all-features = true
 
 [advisories]
-ignore = []
+ignore = [
+    "RUSTSEC-2024-0436", # paste crate unmaintained — wgpu transitive dep, no security impact
+]
 
 [licenses]
 allow = [
@@ -22,6 +24,7 @@ allow = [
     "CDLA-Permissive-2.0",
     "Zlib",
     "OpenSSL",
+    "CC0-1.0",
 ]
 
 [bans]

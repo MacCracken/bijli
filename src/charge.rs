@@ -75,6 +75,47 @@ impl PointCharge {
             velocity: [0.0; 3],
         }
     }
+
+    /// Electric field at a point due to this charge.
+    ///
+    /// Delegates to [`crate::field::electric_field_point_charge`].
+    #[inline]
+    pub fn electric_field_at(&self, field_pos: [f64; 3]) -> Result<FieldVector> {
+        crate::field::electric_field_point_charge(self.charge, self.position, field_pos)
+    }
+
+    /// Electric potential at a point due to this charge.
+    ///
+    /// Delegates to [`crate::field::electric_potential_point_charge`].
+    #[inline]
+    pub fn electric_potential_at(&self, field_pos: [f64; 3]) -> Result<f64> {
+        crate::field::electric_potential_point_charge(self.charge, self.position, field_pos)
+    }
+
+    /// Magnetic field at a point due to this moving charge (Biot-Savart).
+    ///
+    /// Delegates to [`crate::field::magnetic_field_moving_charge`].
+    #[inline]
+    pub fn magnetic_field_at(&self, field_pos: [f64; 3]) -> Result<FieldVector> {
+        crate::field::magnetic_field_moving_charge(
+            self.charge,
+            self.position,
+            self.velocity,
+            field_pos,
+        )
+    }
+
+    /// Lorentz force on this charge in given E and B fields.
+    #[inline]
+    #[must_use]
+    pub fn lorentz_force_in(
+        &self,
+        electric_field: &FieldVector,
+        magnetic_field: &FieldVector,
+    ) -> FieldVector {
+        let v = FieldVector::new(self.velocity[0], self.velocity[1], self.velocity[2]);
+        lorentz_force(self.charge, &v, electric_field, magnetic_field)
+    }
 }
 
 /// Coulomb force between two point charges.
@@ -288,5 +329,44 @@ mod tests {
         let q1 = PointCharge::new(1e-6, 1.0, [0.0; 3], [0.0; 3]).unwrap();
         let q2 = PointCharge::new(1e-6, 1.0, [0.0; 3], [0.0; 3]).unwrap();
         assert!(coulomb_force(&q1, &q2).is_err());
+    }
+
+    // ── PointCharge convenience method tests ──────────────────────
+
+    #[test]
+    fn test_point_charge_electric_field_at() {
+        let q = PointCharge::new(1e-6, 1.0, [0.0; 3], [0.0; 3]).unwrap();
+        let e = q.electric_field_at([1.0, 0.0, 0.0]).unwrap();
+        assert!(e.x > 0.0); // positive charge → field points away
+    }
+
+    #[test]
+    fn test_point_charge_electric_potential_at() {
+        let q = PointCharge::new(1e-6, 1.0, [0.0; 3], [0.0; 3]).unwrap();
+        let v = q.electric_potential_at([1.0, 0.0, 0.0]).unwrap();
+        assert!(v > 0.0); // positive charge → positive potential
+    }
+
+    #[test]
+    fn test_point_charge_magnetic_field_at() {
+        let q = PointCharge::new(1e-6, 1.0, [0.0; 3], [1e6, 0.0, 0.0]).unwrap();
+        let b = q.magnetic_field_at([0.0, 1.0, 0.0]).unwrap();
+        assert!(b.z > 0.0); // v×r̂ = x̂×ŷ = ẑ
+    }
+
+    #[test]
+    fn test_point_charge_lorentz_force() {
+        let q =
+            PointCharge::new(ELEMENTARY_CHARGE, PROTON_MASS, [0.0; 3], [1e6, 0.0, 0.0]).unwrap();
+        let e = FieldVector::new(1000.0, 0.0, 0.0);
+        let b = FieldVector::zero();
+        let f = q.lorentz_force_in(&e, &b);
+        assert!(f.x > 0.0); // qE in +x
+    }
+
+    #[test]
+    fn test_point_charge_singularity() {
+        let q = PointCharge::new(1e-6, 1.0, [0.0; 3], [0.0; 3]).unwrap();
+        assert!(q.electric_field_at([0.0; 3]).is_err());
     }
 }

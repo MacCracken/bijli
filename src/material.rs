@@ -207,6 +207,136 @@ pub fn classify_magnetic(susceptibility: f64) -> MagneticType {
     }
 }
 
+// ── Unified Material struct ────────────────────────────────────────
+
+/// Unified electromagnetic material properties.
+///
+/// Combines dielectric, magnetic, and conductive properties in one struct,
+/// bridging the `material`, `fdtd`, and `wave` modules.
+#[derive(Debug, Clone, Copy, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct Material {
+    /// Relative permittivity ε_r.
+    pub eps_r: f64,
+    /// Relative permeability μ_r.
+    pub mu_r: f64,
+    /// Conductivity σ (S/m). Zero for lossless.
+    pub conductivity: f64,
+}
+
+impl Material {
+    /// Create a material with given properties.
+    #[inline]
+    #[must_use]
+    pub fn new(eps_r: f64, mu_r: f64, conductivity: f64) -> Self {
+        Self {
+            eps_r,
+            mu_r,
+            conductivity,
+        }
+    }
+
+    /// Vacuum.
+    #[inline]
+    #[must_use]
+    pub fn vacuum() -> Self {
+        Self {
+            eps_r: 1.0,
+            mu_r: 1.0,
+            conductivity: 0.0,
+        }
+    }
+
+    /// Simple dielectric (non-magnetic, lossless).
+    #[inline]
+    #[must_use]
+    pub fn dielectric(eps_r: f64) -> Self {
+        Self {
+            eps_r,
+            mu_r: 1.0,
+            conductivity: 0.0,
+        }
+    }
+
+    /// Conductor with given conductivity.
+    #[inline]
+    #[must_use]
+    pub fn conductor(conductivity: f64) -> Self {
+        Self {
+            eps_r: 1.0,
+            mu_r: 1.0,
+            conductivity,
+        }
+    }
+
+    /// Refractive index n = √(ε_r μ_r) (lossless approximation).
+    #[inline]
+    #[must_use]
+    pub fn refractive_index(&self) -> f64 {
+        (self.eps_r * self.mu_r).sqrt()
+    }
+
+    /// Absolute permittivity ε = ε_r ε₀.
+    #[inline]
+    #[must_use]
+    pub fn permittivity(&self) -> f64 {
+        self.eps_r * EPSILON_0
+    }
+
+    /// Absolute permeability μ = μ_r μ₀.
+    #[inline]
+    #[must_use]
+    pub fn permeability(&self) -> f64 {
+        self.mu_r * MU_0
+    }
+
+    /// Wave impedance η = √(μ/ε).
+    #[inline]
+    pub fn impedance(&self) -> Result<f64> {
+        if self.eps_r <= 0.0 {
+            return Err(BijliError::InvalidPermittivity { value: self.eps_r });
+        }
+        Ok((self.mu_r * MU_0 / (self.eps_r * EPSILON_0)).sqrt())
+    }
+
+    /// Wave speed v = 1/√(εμ).
+    #[inline]
+    pub fn wave_speed(&self) -> Result<f64> {
+        if self.eps_r <= 0.0 || self.mu_r <= 0.0 {
+            return Err(BijliError::InvalidParameter {
+                reason: "ε_r and μ_r must be positive".into(),
+            });
+        }
+        Ok(1.0 / (self.eps_r * EPSILON_0 * self.mu_r * MU_0).sqrt())
+    }
+
+    /// Whether this material is lossy (has conductivity).
+    #[inline]
+    #[must_use]
+    pub fn is_lossy(&self) -> bool {
+        self.conductivity > 0.0
+    }
+
+    /// Normal-incidence reflectance at interface with another material.
+    ///
+    /// R = ((n₁ − n₂)/(n₁ + n₂))²
+    #[inline]
+    #[must_use]
+    pub fn reflectance_at(&self, other: &Self) -> f64 {
+        let n1 = self.refractive_index();
+        let n2 = other.refractive_index();
+        let r = (n1 - n2) / (n1 + n2);
+        r * r
+    }
+}
+
+impl Default for Material {
+    /// Default is vacuum.
+    #[inline]
+    fn default() -> Self {
+        Self::vacuum()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -367,5 +497,73 @@ mod tests {
     #[test]
     fn test_classify_ferromagnetic() {
         assert_eq!(classify_magnetic(1000.0), MagneticType::Ferromagnetic);
+    }
+
+    // ── Unified Material tests ────────────────────────────────────
+
+    #[test]
+    fn test_material_vacuum() {
+        let m = Material::vacuum();
+        assert!((m.eps_r - 1.0).abs() < 1e-15);
+        assert!((m.mu_r - 1.0).abs() < 1e-15);
+        assert!(m.conductivity.abs() < 1e-30);
+        assert!(!m.is_lossy());
+    }
+
+    #[test]
+    fn test_material_dielectric() {
+        let m = Material::dielectric(4.0);
+        assert!((m.refractive_index() - 2.0).abs() < 1e-10);
+    }
+
+    #[test]
+    fn test_material_conductor() {
+        let m = Material::conductor(5.96e7); // copper
+        assert!(m.is_lossy());
+    }
+
+    #[test]
+    fn test_material_wave_speed_vacuum() {
+        let v = Material::vacuum().wave_speed().unwrap();
+        assert!((v - crate::field::SPEED_OF_LIGHT).abs() / crate::field::SPEED_OF_LIGHT < 1e-6);
+    }
+
+    #[test]
+    fn test_material_impedance_vacuum() {
+        let z = Material::vacuum().impedance().unwrap();
+        // Z₀ ≈ 376.73 Ω
+        assert!((z - 376.73).abs() < 0.1);
+    }
+
+    #[test]
+    fn test_material_reflectance_same() {
+        let m = Material::dielectric(2.25);
+        assert!(m.reflectance_at(&m) < 1e-10); // no reflection at same material
+    }
+
+    #[test]
+    fn test_material_reflectance_air_glass() {
+        let air = Material::vacuum();
+        let glass = Material::dielectric(2.25); // n = 1.5
+        let r = air.reflectance_at(&glass);
+        // R = ((1-1.5)/(1+1.5))² = 0.04
+        assert!((r - 0.04).abs() < 1e-6);
+    }
+
+    #[test]
+    fn test_material_default_is_vacuum() {
+        assert_eq!(Material::default(), Material::vacuum());
+    }
+
+    #[test]
+    fn test_material_permittivity() {
+        let m = Material::dielectric(4.0);
+        assert!((m.permittivity() - 4.0 * EPSILON_0).abs() < 1e-25);
+    }
+
+    #[test]
+    fn test_material_permeability() {
+        let m = Material::new(1.0, 1000.0, 0.0);
+        assert!((m.permeability() - 1000.0 * MU_0).abs() < 1e-15);
     }
 }

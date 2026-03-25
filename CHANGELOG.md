@@ -4,7 +4,7 @@ All notable changes to bijli will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
-## [Unreleased] — V1.1–V1.5 Optics, Scattering, Beams, FDTD, RF, Advanced Fields
+## [Unreleased] — V1.1–V1.6 Optics, Scattering, Beams, FDTD, RF, Advanced Fields, Integration
 
 ### Added
 
@@ -38,6 +38,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
 - **field**: Maxwell stress tensor (3×3), stress-to-force computation, Poynting flux surface integration
 - **relativity**: Retarded time solver (Newton-Raphson on light-cone equation)
 - **relativity**: Convenience `lienard_wiechert_fields()` combining retarded time solver + E + B computation
+- **charge**: `PointCharge` convenience methods — `electric_field_at`, `electric_potential_at`, `magnetic_field_at`, `lorentz_force_in`
+- **material**: Unified `Material` struct — vacuum/dielectric/conductor constructors, refractive index, impedance, wave speed, reflectance, Default impl
+- **fdtd**: `Fdtd2d::set_material` accepting `Material` struct for region setup
+- **wave**: Material-based Fresnel — `reflectance_at_interface`, `reflectance_normal_materials`, `material_reflection_coefficient` bridging wave/circuit/material modules
 
 ### Changed
 
