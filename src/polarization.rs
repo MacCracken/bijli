@@ -144,6 +144,38 @@ impl std::ops::Mul<Complex> for f64 {
     }
 }
 
+impl From<f64> for Complex {
+    #[inline]
+    fn from(re: f64) -> Self {
+        Self::real(re)
+    }
+}
+
+impl Default for Complex {
+    #[inline]
+    fn default() -> Self {
+        Self::zero()
+    }
+}
+
+impl std::ops::Div for Complex {
+    type Output = Self;
+    /// Complex division: a/b = (a × b*) / |b|².
+    ///
+    /// # Panics
+    ///
+    /// Panics if `rhs` is zero. For fallible division, use the module-level
+    /// functions in [`crate::scattering`].
+    #[inline]
+    fn div(self, rhs: Self) -> Self {
+        let d = rhs.norm_sq();
+        Self {
+            re: (self.re * rhs.re + self.im * rhs.im) / d,
+            im: (self.im * rhs.re - self.re * rhs.im) / d,
+        }
+    }
+}
+
 impl std::ops::Neg for Complex {
     type Output = Self;
     #[inline]
@@ -175,6 +207,14 @@ impl std::fmt::Display for Complex {
 pub struct JonesVector {
     pub x: Complex,
     pub y: Complex,
+}
+
+impl Default for JonesVector {
+    /// Default is horizontal polarization.
+    #[inline]
+    fn default() -> Self {
+        Self::horizontal()
+    }
 }
 
 impl JonesVector {
@@ -473,6 +513,14 @@ pub struct StokesVector {
     pub s: [f64; 4],
 }
 
+impl Default for StokesVector {
+    /// Default is unpolarized light with zero intensity.
+    #[inline]
+    fn default() -> Self {
+        Self { s: [0.0; 4] }
+    }
+}
+
 impl StokesVector {
     /// Create a Stokes vector from components.
     #[inline]
@@ -581,20 +629,6 @@ impl StokesVector {
     #[must_use]
     pub fn orientation_angle(&self) -> f64 {
         0.5 * self.s[2].atan2(self.s[1])
-    }
-
-    /// Add two Stokes vectors (incoherent superposition).
-    #[inline]
-    #[must_use]
-    pub fn add(&self, other: &Self) -> Self {
-        Self {
-            s: [
-                self.s[0] + other.s[0],
-                self.s[1] + other.s[1],
-                self.s[2] + other.s[2],
-                self.s[3] + other.s[3],
-            ],
-        }
     }
 }
 
@@ -1134,7 +1168,7 @@ mod tests {
     #[test]
     fn test_stokes_partially_polarized() {
         // Mix H and unpolarized: S = [2, 1, 0, 0] → DOP = 0.5
-        let s = StokesVector::horizontal(1.0).add(&StokesVector::unpolarized(1.0));
+        let s = StokesVector::horizontal(1.0) + StokesVector::unpolarized(1.0);
         assert!((s.degree_of_polarization().unwrap() - 0.5).abs() < TOL);
     }
 

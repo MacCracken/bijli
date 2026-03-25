@@ -18,6 +18,9 @@ pub const SPEED_OF_LIGHT: f64 = 299_792_458.0;
 /// Coulomb's constant k = 1/(4πε₀) (N⋅m²/C²).
 pub const COULOMB_K: f64 = 8.987_551_792e9;
 
+/// Speed of light squared c² (m²/s²).
+pub const SPEED_OF_LIGHT_SQ: f64 = SPEED_OF_LIGHT * SPEED_OF_LIGHT;
+
 /// A 3D vector field value at a point.
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 pub struct FieldVector {
@@ -103,16 +106,30 @@ impl FieldVector {
             z: self.z * s,
         }
     }
+}
 
-    /// Add two field vectors.
+impl Default for FieldVector {
     #[inline]
-    #[must_use]
-    pub fn add(&self, other: &Self) -> Self {
+    fn default() -> Self {
+        Self::zero()
+    }
+}
+
+impl From<[f64; 3]> for FieldVector {
+    #[inline]
+    fn from(arr: [f64; 3]) -> Self {
         Self {
-            x: self.x + other.x,
-            y: self.y + other.y,
-            z: self.z + other.z,
+            x: arr[0],
+            y: arr[1],
+            z: arr[2],
         }
+    }
+}
+
+impl From<FieldVector> for [f64; 3] {
+    #[inline]
+    fn from(v: FieldVector) -> Self {
+        [v.x, v.y, v.z]
     }
 }
 
@@ -991,5 +1008,26 @@ mod tests {
         assert!(
             trace_field_line([0.0; 3], -1.0, 10, |_| Ok(FieldVector::new(1.0, 0.0, 0.0)),).is_err()
         );
+    }
+
+    // ── Trait impl tests ──────────────────────────────────────────
+
+    #[test]
+    fn test_default_is_zero() {
+        let v = FieldVector::default();
+        assert_eq!(v, FieldVector::zero());
+    }
+
+    #[test]
+    fn test_from_array() {
+        let v = FieldVector::from([1.0, 2.0, 3.0]);
+        assert_eq!(v, FieldVector::new(1.0, 2.0, 3.0));
+    }
+
+    #[test]
+    fn test_into_array() {
+        let v = FieldVector::new(1.0, 2.0, 3.0);
+        let arr: [f64; 3] = v.into();
+        assert_eq!(arr, [1.0, 2.0, 3.0]);
     }
 }

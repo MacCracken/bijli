@@ -5,13 +5,13 @@
 //! Indices: 0=t, 1=x, 2=y, 3=z.
 
 use crate::error::{BijliError, Result};
-use crate::field::{FieldVector, MU_0, SPEED_OF_LIGHT};
+use crate::field::{FieldVector, MU_0, SPEED_OF_LIGHT, SPEED_OF_LIGHT_SQ};
 
-/// Speed of light squared, cached for convenience.
-const C2: f64 = SPEED_OF_LIGHT * SPEED_OF_LIGHT;
+/// Speed of light squared, alias for readability.
+const C2: f64 = SPEED_OF_LIGHT_SQ;
 
 /// Speed of light cubed.
-const C3: f64 = SPEED_OF_LIGHT * SPEED_OF_LIGHT * SPEED_OF_LIGHT;
+const C3: f64 = SPEED_OF_LIGHT * SPEED_OF_LIGHT_SQ;
 
 // ── Lorentz factor ─────────────────────────────────────────────────
 
