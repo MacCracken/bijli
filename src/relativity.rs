@@ -448,7 +448,12 @@ pub fn solve_retarded_time<F>(
 where
     F: Fn(f64) -> ([f64; 3], [f64; 3]),
 {
-    let mut t_r = observation_time - 1e-15; // initial guess: just before observation
+    // Initial guess: t_r ≈ t - |r_obs|/c (light travel time from origin)
+    let r_obs = (observer_pos[0] * observer_pos[0]
+        + observer_pos[1] * observer_pos[1]
+        + observer_pos[2] * observer_pos[2])
+        .sqrt();
+    let mut t_r = observation_time - r_obs / SPEED_OF_LIGHT;
 
     for _ in 0..max_iterations {
         let (pos, vel) = trajectory_fn(t_r);

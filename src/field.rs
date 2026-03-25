@@ -676,10 +676,9 @@ fn associated_legendre(l: u32, m: u32, x: f64) -> f64 {
     if m > 0 {
         let somx2 = (1.0 - x * x).sqrt();
         let mut fact = 1.0;
-        for i in 1..=m {
+        for _ in 1..=m {
             pmm *= -fact * somx2;
             fact += 2.0;
-            let _ = i; // suppress unused warning
         }
     }
 
@@ -763,6 +762,11 @@ pub fn image_charge_dielectric(
     eps_r1: f64,
     eps_r2: f64,
 ) -> Result<(f64, [f64; 3])> {
+    if position[2] < 0.0 {
+        return Err(BijliError::InvalidParameter {
+            reason: "charge must be in medium 1 (z > 0) for dielectric image method".into(),
+        });
+    }
     let den = eps_r1 + eps_r2;
     if den.abs() < 1e-30 {
         return Err(BijliError::DivisionByZero {
@@ -1460,5 +1464,89 @@ mod tests {
         let da = 0.01; // 1 cm²
         let flux = poynting_flux_surface(&[(e, b, normal, da)]);
         assert!(flux > 0.0);
+    }
+
+    // ── Audit-driven V1.5 edge case tests ─────────────────────────
+
+    #[test]
+    fn test_stress_tensor_symmetric() {
+        // Maxwell stress tensor should be symmetric: T_{ij} = T_{ji}
+        let e = FieldVector::new(100.0, 200.0, 300.0);
+        let b = FieldVector::new(1e-4, 2e-4, 3e-4);
+        let t = maxwell_stress_tensor(&e, &b);
+        // Check off-diagonal symmetry
+        assert!((t[0][1] - t[1][0]).abs() < 1e-15);
+        assert!((t[0][2] - t[2][0]).abs() < 1e-15);
+        assert!((t[1][2] - t[2][1]).abs() < 1e-15);
+    }
+
+    #[test]
+    fn test_stress_tensor_trace() {
+        // Trace = ε₀E²/2 + B²/(2μ₀) - ε₀E²/2 - B²/(2μ₀) ... no,
+        // Tr(T) = ε₀(E²-3E²/2) + (B²-3B²/2)/μ₀ = -ε₀E²/2 - B²/(2μ₀)
+        let e = FieldVector::new(1000.0, 0.0, 0.0);
+        let b = FieldVector::zero();
+        let t = maxwell_stress_tensor(&e, &b);
+        let trace = t[0][0] + t[1][1] + t[2][2];
+        let expected = -0.5 * EPSILON_0 * e.magnitude_sq();
+        assert!((trace - expected).abs() / expected.abs() < 1e-6);
+    }
+
+    #[test]
+    fn test_poynting_flux_empty_surface() {
+        let flux = poynting_flux_surface(&[]);
+        assert!(flux.abs() < 1e-30);
+    }
+
+    #[test]
+    fn test_greens_function_inverse_r() {
+        // G should fall off as 1/r
+        let g1 = greens_function_static([1.0, 0.0, 0.0], [0.0; 3]).unwrap();
+        let g2 = greens_function_static([2.0, 0.0, 0.0], [0.0; 3]).unwrap();
+        assert!((g1 / g2 - 2.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn test_greens_scalar_oscillates() {
+        // For k > 0, the imaginary part should oscillate
+        let k = 100.0;
+        let (_, im1) = greens_function_scalar([0.01, 0.0, 0.0], [0.0; 3], k).unwrap();
+        let (_, im2) = greens_function_scalar([0.05, 0.0, 0.0], [0.0; 3], k).unwrap();
+        // Different signs possible (oscillation)
+        assert!(im1.abs() > 0.0);
+        assert!(im2.abs() > 0.0);
+    }
+
+    #[test]
+    fn test_image_charge_dielectric_wrong_halfspace() {
+        assert!(image_charge_dielectric(1e-6, [0.0, 0.0, -1.0], 1.0, 4.0).is_err());
+    }
+
+    #[test]
+    fn test_image_charge_dielectric_equal_media() {
+        // ε₁ = ε₂ → no image charge (q' = 0)
+        let (q_img, _) = image_charge_dielectric(1e-6, [0.0, 0.0, 1.0], 2.0, 2.0).unwrap();
+        assert!(q_img.abs() < 1e-20);
+    }
+
+    #[test]
+    fn test_image_charge_sphere_on_surface() {
+        // Charge exactly on sphere surface → error (not outside)
+        assert!(image_charge_sphere(1e-6, [0.0, 0.0, 1.0], 1.0).is_err());
+    }
+
+    #[test]
+    fn test_associated_legendre_p20() {
+        // P_2^0(x) = (3x²-1)/2
+        let x = 0.5;
+        let p = associated_legendre(2, 0, x);
+        let expected = (3.0 * x * x - 1.0) / 2.0;
+        assert!((p - expected).abs() < 1e-10);
+    }
+
+    #[test]
+    fn test_multipole_moment_empty_charges() {
+        let m = multipole_moment(1, 0, &[]).unwrap();
+        assert!(m.abs() < 1e-30);
     }
 }
