@@ -1,4 +1,6 @@
-use criterion::{Criterion, black_box, criterion_group, criterion_main};
+use std::hint::black_box;
+
+use criterion::{Criterion, criterion_group, criterion_main};
 
 fn field_benchmarks(c: &mut Criterion) {
     let mut group = c.benchmark_group("field");
