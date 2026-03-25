@@ -136,9 +136,9 @@
 
 > Unlocks downstream: joshua (production 3D simulation), kiran (real-time EM)
 
-- [ ] 3D FDTD on full vector Yee grid
-- [ ] Trait-based solver backend (CPU/GPU agnostic)
-- [ ] GPU compute backend via wgpu (cross-platform)
+- [x] 3D FDTD on full vector Yee grid
+- [x] Trait-based solver backend (CPU/GPU agnostic)
+- [x] GPU compute backend via wgpu (cross-platform)
 - [ ] Non-uniform grid spacing (first step toward AMR)
 - [ ] Higher-order FDTD (4th-order spatial derivatives)
 - [ ] Frequency-domain (CW) solver

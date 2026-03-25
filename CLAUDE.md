@@ -46,6 +46,19 @@ kiran (game engine), joshua (simulation), prakash (optics)
 11. Version check — VERSION, Cargo.toml, recipe all in sync
 12. Return to step 1
 
+### Task Sizing
+
+- **Low/Medium effort**: Batch freely — multiple items per work loop cycle
+- **Large effort**: Small bites only — break into sub-tasks, verify each before moving to the next. Never batch large items together
+- **If unsure**: Treat it as large. Smaller bites are always safer than overcommitting
+
+### Refactoring
+
+- Refactor when the code tells you to — duplication, unclear boundaries, performance bottlenecks
+- Never refactor speculatively. Wait for the third instance before extracting an abstraction
+- Refactoring is part of the work loop, not a separate phase. If a review (step 5) reveals structural issues, refactor before moving to step 6
+- Every refactor must pass the same cleanliness + benchmark gates as new code
+
 ### Key Principles
 
 - **Never skip benchmarks.** Numbers don't lie.

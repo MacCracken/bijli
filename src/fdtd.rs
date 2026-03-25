@@ -1071,6 +1071,331 @@ impl Fdtd2d {
     }
 }
 
+// ── 3D FDTD ──────────────────────────────────────────────────────
+
+/// 3D FDTD simulation on a full vector Yee grid.
+///
+/// Updates all six field components: E_x, E_y, E_z, H_x, H_y, H_z.
+/// Fields are stored in row-major order: index = z * (nx * ny) + y * nx + x.
+pub struct Fdtd3d {
+    /// Grid dimensions.
+    pub nx: usize,
+    pub ny: usize,
+    pub nz: usize,
+    /// Uniform spatial step (m).
+    pub dx: f64,
+    /// Time step (s).
+    pub dt: f64,
+    /// Current step index.
+    pub step: usize,
+
+    /// Electric field components.
+    pub ex: Vec<f64>,
+    pub ey: Vec<f64>,
+    pub ez: Vec<f64>,
+    /// Magnetic field components.
+    pub hx: Vec<f64>,
+    pub hy: Vec<f64>,
+    pub hz: Vec<f64>,
+
+    /// E-field update coefficient per cell: dt/(ε₀ε_r dx).
+    ce: Vec<f64>,
+    /// H-field update coefficient per cell: dt/(μ₀μ_r dx).
+    ch: Vec<f64>,
+    /// Relative permittivity per cell.
+    permittivity: Vec<f64>,
+    /// Relative permeability per cell.
+    permeability: Vec<f64>,
+}
+
+impl Fdtd3d {
+    /// Create a new 3D FDTD simulation.
+    ///
+    /// Uses uniform grid spacing `dx` in all three dimensions.
+    /// Time step set to 3D Courant limit: dt = dx/(2√3 c).
+    pub fn new(nx: usize, ny: usize, nz: usize, dx: f64) -> Result<Self> {
+        if nx < 3 || ny < 3 || nz < 3 {
+            return Err(BijliError::InsufficientResolution {
+                cells: nx.min(ny).min(nz),
+                domain_size: nx.min(ny).min(nz) as f64 * dx,
+            });
+        }
+        if dx <= 0.0 {
+            return Err(BijliError::InvalidParameter {
+                reason: format!("dx must be positive, got {dx}"),
+            });
+        }
+
+        // 3D Courant: dt ≤ dx/(c√3). Use half for safety.
+        let dt = dx / (2.0 * 3.0_f64.sqrt() * SPEED_OF_LIGHT);
+        let n = nx * ny * nz;
+
+        let ce = vec![dt / (EPSILON_0 * dx); n];
+        let ch = vec![dt / (MU_0 * dx); n];
+
+        tracing::debug!(nx, ny, nz, dx, dt, n, "3D FDTD simulation created");
+
+        Ok(Self {
+            nx,
+            ny,
+            nz,
+            dx,
+            dt,
+            step: 0,
+            ex: vec![0.0; n],
+            ey: vec![0.0; n],
+            ez: vec![0.0; n],
+            hx: vec![0.0; n],
+            hy: vec![0.0; n],
+            hz: vec![0.0; n],
+            ce,
+            ch,
+            permittivity: vec![1.0; n],
+            permeability: vec![1.0; n],
+        })
+    }
+
+    /// Linear index from (x, y, z) coordinates.
+    #[inline]
+    #[must_use]
+    pub fn idx(&self, x: usize, y: usize, z: usize) -> usize {
+        z * (self.nx * self.ny) + y * self.nx + x
+    }
+
+    /// Set relative permittivity in a rectangular region.
+    #[allow(clippy::too_many_arguments)]
+    pub fn set_permittivity(
+        &mut self,
+        x0: usize,
+        y0: usize,
+        z0: usize,
+        x1: usize,
+        y1: usize,
+        z1: usize,
+        eps_r: f64,
+    ) -> Result<()> {
+        if eps_r <= 0.0 {
+            return Err(BijliError::InvalidPermittivity { value: eps_r });
+        }
+        let base = self.dt / (EPSILON_0 * self.dx);
+        let x1 = x1.min(self.nx);
+        let y1 = y1.min(self.ny);
+        let z1 = z1.min(self.nz);
+        for z in z0..z1 {
+            for y in y0..y1 {
+                for x in x0..x1 {
+                    let i = self.idx(x, y, z);
+                    self.permittivity[i] = eps_r;
+                    self.ce[i] = base / eps_r;
+                }
+            }
+        }
+        Ok(())
+    }
+
+    /// Set material properties in a rectangular region using a [`crate::material::Material`] struct.
+    #[allow(clippy::too_many_arguments)]
+    pub fn set_material(
+        &mut self,
+        x0: usize,
+        y0: usize,
+        z0: usize,
+        x1: usize,
+        y1: usize,
+        z1: usize,
+        mat: &crate::material::Material,
+    ) -> Result<()> {
+        if mat.eps_r <= 0.0 {
+            return Err(BijliError::InvalidPermittivity { value: mat.eps_r });
+        }
+        if mat.mu_r <= 0.0 {
+            return Err(BijliError::InvalidPermeability { value: mat.mu_r });
+        }
+        let base_ce = self.dt / (EPSILON_0 * self.dx);
+        let base_ch = self.dt / (MU_0 * self.dx);
+        let x1 = x1.min(self.nx);
+        let y1 = y1.min(self.ny);
+        let z1 = z1.min(self.nz);
+        for z in z0..z1 {
+            for y in y0..y1 {
+                for x in x0..x1 {
+                    let i = self.idx(x, y, z);
+                    self.permittivity[i] = mat.eps_r;
+                    self.permeability[i] = mat.mu_r;
+                    self.ce[i] = base_ce / mat.eps_r;
+                    self.ch[i] = base_ch / mat.mu_r;
+                }
+            }
+        }
+        Ok(())
+    }
+
+    /// Inject a soft source at grid point (x, y, z) into E_z.
+    #[inline]
+    pub fn add_source_ez(&mut self, x: usize, y: usize, z: usize, value: f64) {
+        if x < self.nx && y < self.ny && z < self.nz {
+            let i = self.idx(x, y, z);
+            self.ez[i] += value;
+        }
+    }
+
+    /// Advance the simulation by one time step using the 3D Yee algorithm.
+    ///
+    /// Updates all 6 field components with zero boundary conditions.
+    pub fn step_once(&mut self) {
+        let (nx, ny, nz) = (self.nx, self.ny, self.nz);
+        let nxy = nx * ny;
+
+        // ── Update H from curl(E) ────────────────────────────
+        // H_x += ch * (dEy/dz - dEz/dy)
+        for z in 0..nz - 1 {
+            for y in 0..ny - 1 {
+                for x in 0..nx {
+                    let i = z * nxy + y * nx + x;
+                    let dey_dz = self.ey[(z + 1) * nxy + y * nx + x] - self.ey[i];
+                    let dez_dy = self.ez[z * nxy + (y + 1) * nx + x] - self.ez[i];
+                    self.hx[i] += self.ch[i] * (dey_dz - dez_dy);
+                }
+            }
+        }
+        // H_y += ch * (dEz/dx - dEx/dz)
+        for z in 0..nz - 1 {
+            for y in 0..ny {
+                for x in 0..nx - 1 {
+                    let i = z * nxy + y * nx + x;
+                    let dez_dx = self.ez[z * nxy + y * nx + (x + 1)] - self.ez[i];
+                    let dex_dz = self.ex[(z + 1) * nxy + y * nx + x] - self.ex[i];
+                    self.hy[i] += self.ch[i] * (dez_dx - dex_dz);
+                }
+            }
+        }
+        // H_z += ch * (dEx/dy - dEy/dx)
+        for z in 0..nz {
+            for y in 0..ny - 1 {
+                for x in 0..nx - 1 {
+                    let i = z * nxy + y * nx + x;
+                    let dex_dy = self.ex[z * nxy + (y + 1) * nx + x] - self.ex[i];
+                    let dey_dx = self.ey[z * nxy + y * nx + (x + 1)] - self.ey[i];
+                    self.hz[i] += self.ch[i] * (dex_dy - dey_dx);
+                }
+            }
+        }
+
+        // ── Update E from curl(H) ────────────────────────────
+        // E_x += ce * (dHz/dy - dHy/dz)
+        for z in 1..nz - 1 {
+            for y in 1..ny - 1 {
+                for x in 0..nx {
+                    let i = z * nxy + y * nx + x;
+                    let dhz_dy = self.hz[i] - self.hz[z * nxy + (y - 1) * nx + x];
+                    let dhy_dz = self.hy[i] - self.hy[(z - 1) * nxy + y * nx + x];
+                    self.ex[i] += self.ce[i] * (dhz_dy - dhy_dz);
+                }
+            }
+        }
+        // E_y += ce * (dHx/dz - dHz/dx)
+        for z in 1..nz - 1 {
+            for y in 0..ny {
+                for x in 1..nx - 1 {
+                    let i = z * nxy + y * nx + x;
+                    let dhx_dz = self.hx[i] - self.hx[(z - 1) * nxy + y * nx + x];
+                    let dhz_dx = self.hz[i] - self.hz[z * nxy + y * nx + (x - 1)];
+                    self.ey[i] += self.ce[i] * (dhx_dz - dhz_dx);
+                }
+            }
+        }
+        // E_z += ce * (dHy/dx - dHx/dy)
+        for z in 0..nz {
+            for y in 1..ny - 1 {
+                for x in 1..nx - 1 {
+                    let i = z * nxy + y * nx + x;
+                    let dhy_dx = self.hy[i] - self.hy[z * nxy + y * nx + (x - 1)];
+                    let dhx_dy = self.hx[i] - self.hx[z * nxy + (y - 1) * nx + x];
+                    self.ez[i] += self.ce[i] * (dhy_dx - dhx_dy);
+                }
+            }
+        }
+
+        // ── Zero boundary on all E components ─────────────────
+        // x boundaries
+        for z in 0..nz {
+            for y in 0..ny {
+                let i0 = z * nxy + y * nx;
+                let i1 = z * nxy + y * nx + (nx - 1);
+                self.ey[i0] = 0.0;
+                self.ey[i1] = 0.0;
+                self.ez[i0] = 0.0;
+                self.ez[i1] = 0.0;
+            }
+        }
+        // y boundaries
+        for z in 0..nz {
+            for x in 0..nx {
+                let i0 = z * nxy + x;
+                let i1 = z * nxy + (ny - 1) * nx + x;
+                self.ex[i0] = 0.0;
+                self.ex[i1] = 0.0;
+                self.ez[i0] = 0.0;
+                self.ez[i1] = 0.0;
+            }
+        }
+        // z boundaries
+        for y in 0..ny {
+            for x in 0..nx {
+                let i0 = y * nx + x;
+                let i1 = (nz - 1) * nxy + y * nx + x;
+                self.ex[i0] = 0.0;
+                self.ex[i1] = 0.0;
+                self.ey[i0] = 0.0;
+                self.ey[i1] = 0.0;
+            }
+        }
+
+        self.step += 1;
+    }
+
+    /// Run for multiple steps with optional sinusoidal E_z source.
+    pub fn run(
+        &mut self,
+        steps: usize,
+        source: Option<(usize, usize, usize)>,
+        frequency: f64,
+        amplitude: f64,
+    ) {
+        tracing::debug!(steps, ?source, frequency, amplitude, "3D FDTD run started");
+        for _ in 0..steps {
+            if let Some((sx, sy, sz)) = source {
+                let t = self.step as f64 * self.dt;
+                let value = amplitude * (2.0 * std::f64::consts::PI * frequency * t).sin();
+                self.add_source_ez(sx, sy, sz, value);
+            }
+            self.step_once();
+        }
+    }
+
+    /// Current simulation time in seconds.
+    #[inline]
+    #[must_use]
+    pub fn time(&self) -> f64 {
+        self.step as f64 * self.dt
+    }
+
+    /// Total electromagnetic energy in the 3D grid.
+    #[must_use]
+    pub fn total_energy(&self) -> f64 {
+        let n = self.nx * self.ny * self.nz;
+        let vol = self.dx * self.dx * self.dx;
+        let mut energy = 0.0;
+        for i in 0..n {
+            let e_sq = self.ex[i] * self.ex[i] + self.ey[i] * self.ey[i] + self.ez[i] * self.ez[i];
+            let h_sq = self.hx[i] * self.hx[i] + self.hy[i] * self.hy[i] + self.hz[i] * self.hz[i];
+            energy += 0.5 * self.permittivity[i] * EPSILON_0 * e_sq
+                + 0.5 * self.permeability[i] * MU_0 * h_sq;
+        }
+        energy * vol
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1723,5 +2048,143 @@ mod tests {
         // 4 angles: 0, π/2, π, 3π/2
         assert!((result.angles[0]).abs() < 1e-10);
         assert!((result.angles[1] - std::f64::consts::FRAC_PI_2).abs() < 1e-10);
+    }
+
+    // ── 3D FDTD tests ────────────────────────────────────────────
+
+    #[test]
+    fn test_fdtd3d_creation() {
+        let sim = Fdtd3d::new(10, 10, 10, 1e-3).unwrap();
+        assert_eq!(sim.nx, 10);
+        assert_eq!(sim.ny, 10);
+        assert_eq!(sim.nz, 10);
+        assert_eq!(sim.ex.len(), 1000);
+        assert!(sim.dt > 0.0);
+    }
+
+    #[test]
+    fn test_fdtd3d_too_small() {
+        assert!(Fdtd3d::new(2, 10, 10, 1e-3).is_err());
+        assert!(Fdtd3d::new(10, 2, 10, 1e-3).is_err());
+        assert!(Fdtd3d::new(10, 10, 2, 1e-3).is_err());
+    }
+
+    #[test]
+    fn test_fdtd3d_invalid_dx() {
+        assert!(Fdtd3d::new(10, 10, 10, 0.0).is_err());
+        assert!(Fdtd3d::new(10, 10, 10, -1.0).is_err());
+    }
+
+    #[test]
+    fn test_fdtd3d_courant() {
+        let sim = Fdtd3d::new(10, 10, 10, 1e-3).unwrap();
+        // 3D Courant: dt ≤ dx/(c√3)
+        assert!(sim.dt <= sim.dx / (SPEED_OF_LIGHT * 3.0_f64.sqrt()));
+    }
+
+    #[test]
+    fn test_fdtd3d_idx() {
+        let sim = Fdtd3d::new(5, 6, 7, 1e-3).unwrap();
+        assert_eq!(sim.idx(0, 0, 0), 0);
+        assert_eq!(sim.idx(1, 0, 0), 1);
+        assert_eq!(sim.idx(0, 1, 0), 5);
+        assert_eq!(sim.idx(0, 0, 1), 30); // 5*6 = 30
+    }
+
+    #[test]
+    fn test_fdtd3d_source_injection() {
+        let mut sim = Fdtd3d::new(10, 10, 10, 1e-3).unwrap();
+        sim.add_source_ez(5, 5, 5, 1.0);
+        let i = sim.idx(5, 5, 5);
+        assert!((sim.ez[i] - 1.0).abs() < 1e-15);
+    }
+
+    #[test]
+    fn test_fdtd3d_source_oob() {
+        let mut sim = Fdtd3d::new(10, 10, 10, 1e-3).unwrap();
+        sim.add_source_ez(99, 99, 99, 1.0); // should not panic
+    }
+
+    #[test]
+    fn test_fdtd3d_energy_after_source() {
+        let mut sim = Fdtd3d::new(10, 10, 10, 1e-3).unwrap();
+        assert!(sim.total_energy().abs() < 1e-30);
+        sim.add_source_ez(5, 5, 5, 1.0);
+        assert!(sim.total_energy() > 0.0);
+    }
+
+    #[test]
+    fn test_fdtd3d_propagation() {
+        let mut sim = Fdtd3d::new(20, 20, 20, 1e-4).unwrap();
+        sim.add_source_ez(10, 10, 10, 1.0);
+        for _ in 0..10 {
+            sim.step_once();
+        }
+        // Energy should have spread from center
+        let center = sim.idx(10, 10, 10);
+        let has_spread = sim
+            .ez
+            .iter()
+            .enumerate()
+            .any(|(i, &v)| i != center && v.abs() > 1e-15);
+        assert!(has_spread);
+    }
+
+    #[test]
+    fn test_fdtd3d_run_with_source() {
+        let mut sim = Fdtd3d::new(15, 15, 15, 1e-4).unwrap();
+        sim.run(20, Some((7, 7, 7)), 1e9, 1.0);
+        let max_ez: f64 = sim.ez.iter().map(|v| v.abs()).fold(0.0, f64::max);
+        assert!(max_ez > 0.0);
+    }
+
+    #[test]
+    fn test_fdtd3d_time() {
+        let mut sim = Fdtd3d::new(5, 5, 5, 1e-3).unwrap();
+        assert!(sim.time().abs() < 1e-30);
+        sim.step_once();
+        assert!((sim.time() - sim.dt).abs() < 1e-30);
+    }
+
+    #[test]
+    fn test_fdtd3d_set_permittivity() {
+        let mut sim = Fdtd3d::new(10, 10, 10, 1e-3).unwrap();
+        sim.set_permittivity(2, 2, 2, 8, 8, 8, 4.0).unwrap();
+        let center = sim.idx(5, 5, 5);
+        let outside = sim.idx(0, 0, 0);
+        assert!((sim.permittivity[center] - 4.0).abs() < 1e-15);
+        assert!((sim.permittivity[outside] - 1.0).abs() < 1e-15);
+    }
+
+    #[test]
+    fn test_fdtd3d_set_permittivity_invalid() {
+        let mut sim = Fdtd3d::new(10, 10, 10, 1e-3).unwrap();
+        assert!(sim.set_permittivity(0, 0, 0, 10, 10, 10, -1.0).is_err());
+    }
+
+    #[test]
+    fn test_fdtd3d_set_material() {
+        use crate::material::Material;
+        let mut sim = Fdtd3d::new(10, 10, 10, 1e-3).unwrap();
+        let glass = Material::dielectric(2.25);
+        sim.set_material(2, 2, 2, 8, 8, 8, &glass).unwrap();
+        let center = sim.idx(5, 5, 5);
+        assert!((sim.permittivity[center] - 2.25).abs() < 1e-15);
+    }
+
+    #[test]
+    fn test_fdtd3d_six_components() {
+        // After stepping, all 6 field components should have nonzero values
+        let mut sim = Fdtd3d::new(15, 15, 15, 1e-4).unwrap();
+        sim.add_source_ez(7, 7, 7, 1.0);
+        for _ in 0..5 {
+            sim.step_once();
+        }
+        // H fields should be excited by E_z source
+        assert!(sim.hx.iter().any(|&v| v.abs() > 1e-20));
+        assert!(sim.hy.iter().any(|&v| v.abs() > 1e-20));
+        // E_x and E_y should be excited by curl(H)
+        assert!(sim.ex.iter().any(|&v| v.abs() > 1e-20));
+        assert!(sim.ey.iter().any(|&v| v.abs() > 1e-20));
     }
 }
