@@ -78,17 +78,17 @@
 
 > Unlocks downstream: joshua (production EM simulation), kiran (real-time EM viz)
 
-- [ ] 2D FDTD on Yee grid (TM and TE modes)
-- [ ] CPML (Convolutional PML) absorbing boundaries — replace Mur ABC
-- [ ] Gaussian pulse source (broadband excitation)
-- [ ] Total-field/scattered-field (TFSF) plane wave source
-- [ ] Lossy/conductive materials (conductivity term in update equations)
-- [ ] Dispersive materials — Drude model (metals/plasmas)
-- [ ] Dispersive materials — Lorentz oscillator model (dielectric resonances)
-- [ ] Dispersive materials — Debye model (polar molecules)
-- [ ] Auxiliary Differential Equation (ADE) method for dispersive FDTD
-- [ ] Near-field to far-field (NF2FF) transform
-- [ ] Subpixel smoothing at material boundaries
+- [x] 2D FDTD on Yee grid (TM and TE modes)
+- [x] CPML (Convolutional PML) absorbing boundaries — replace Mur ABC
+- [x] Gaussian pulse source (broadband excitation)
+- [x] Total-field/scattered-field (TFSF) plane wave source
+- [x] Lossy/conductive materials (conductivity term in update equations)
+- [x] Dispersive materials — Drude model (metals/plasmas)
+- [x] Dispersive materials — Lorentz oscillator model (dielectric resonances)
+- [x] Dispersive materials — Debye model (polar molecules)
+- [x] Auxiliary Differential Equation (ADE) method for dispersive FDTD
+- [x] Near-field to far-field (NF2FF) transform
+- [x] Subpixel smoothing at material boundaries
 
 ## V1.4 — RF & Microwave
 

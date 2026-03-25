@@ -4,7 +4,7 @@ All notable changes to bijli will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
-## [Unreleased] — V1.1 + V1.2 Optics, Scattering, Beams
+## [Unreleased] — V1.1 + V1.2 + V1.3 Optics, Scattering, Beams, FDTD
 
 ### Added
 
@@ -19,6 +19,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
 - **beam**: ABCD ray transfer matrices — free space, thin lens, curved mirror, flat/curved interface, compose, beam propagation
 - **beam**: Resonator stability — g-parameters, stability condition, beam waist in cavity, transverse mode spacing
 - **beam**: Hermite-Gaussian (HG_mn) and Laguerre-Gaussian (LG_pl) mode profiles
+- **fdtd**: 2D FDTD on Yee grid — TM and TE modes, source injection, dielectric regions, energy computation
+- **fdtd**: CPML absorbing boundary infrastructure — polynomial-graded conductivity, auxiliary field allocation
+- **fdtd**: Source functions — Gaussian pulse, Ricker wavelet, modulated Gaussian, TFSF plane wave source with 1D auxiliary grid
+- **fdtd**: Dispersive material models — LossyMaterial (conductivity), DrudeMaterial (metals: gold/silver presets), LorentzMaterial (dielectric resonances), DebyeMaterial (polar molecules: water preset), all with ADE coefficients
+- **fdtd**: NF2FF near-field to far-field transform for 2D TM mode
+- **fdtd**: Subpixel smoothing — parallel (harmonic mean) and perpendicular (arithmetic mean) effective permittivity
 
 ### Changed
 
