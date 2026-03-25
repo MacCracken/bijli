@@ -20,6 +20,7 @@
 //! - [`polarization`] — Jones vectors/matrices, Stokes parameters, Mueller matrices
 //! - [`scattering`] — Mie scattering, Rayleigh scattering, cross-sections
 //! - [`beam`] — Gaussian beams, ABCD matrices, resonator stability, HG/LG modes
+//! - [`rf`] — Transmission lines, S-parameters, Smith chart, matching networks, Touchstone I/O
 //! - [`error`] — Error types
 
 pub mod error;
@@ -56,6 +57,9 @@ pub mod scattering;
 
 #[cfg(feature = "beam")]
 pub mod beam;
+
+#[cfg(feature = "rf")]
+pub mod rf;
 
 #[cfg(feature = "logging")]
 pub mod logging;

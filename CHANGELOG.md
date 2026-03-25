@@ -4,7 +4,7 @@ All notable changes to bijli will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
-## [Unreleased] — V1.1 + V1.2 + V1.3 Optics, Scattering, Beams, FDTD
+## [Unreleased] — V1.1–V1.4 Optics, Scattering, Beams, FDTD, RF
 
 ### Added
 
@@ -25,6 +25,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
 - **fdtd**: Dispersive material models — LossyMaterial (conductivity), DrudeMaterial (metals: gold/silver presets), LorentzMaterial (dielectric resonances), DebyeMaterial (polar molecules: water preset), all with ADE coefficients
 - **fdtd**: NF2FF near-field to far-field transform for 2D TM mode
 - **fdtd**: Subpixel smoothing — parallel (harmonic mean) and perpendicular (arithmetic mean) effective permittivity
+- **rf**: New module — transmission lines (lossless/lossy Z₀, propagation constant, phase velocity, input impedance)
+- **rf**: Reflection coefficient, VSWR, return loss, insertion loss, mismatch loss
+- **rf**: Smith chart — impedance normalization, Γ↔Z conversion
+- **rf**: Matching networks — quarter-wave transformer, single-stub matching
+- **rf**: S-parameter matrix (N-port), cascade via T-parameters, S→Z conversion
+- **rf**: Touchstone (.snp) file parse/write (RI, MA, DB formats)
+- **rf**: Antenna arrays — linear, planar, circular array factors
 
 ### Changed
 

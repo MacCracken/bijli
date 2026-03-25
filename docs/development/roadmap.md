@@ -94,16 +94,16 @@
 
 > Unlocks downstream: joshua (RF circuit simulation)
 
-- [ ] Transmission line theory — characteristic impedance, propagation constant, attenuation
-- [ ] Telegrapher's equations
-- [ ] VSWR, return loss, insertion loss from reflection coefficient
-- [ ] Smith chart computations (impedance normalization, SWR circles, matching)
-- [ ] Quarter-wave transformer, stub matching
-- [ ] S-parameter (scattering) matrix for N-port networks
-- [ ] Parameter conversions: S ↔ Z ↔ Y ↔ ABCD ↔ T
-- [ ] Touchstone file format (.s1p, .s2p, .snp) read/write
-- [ ] Cascade/de-embed operations
-- [ ] Antenna array factor (linear, planar, circular arrays)
+- [x] Transmission line theory — characteristic impedance, propagation constant, attenuation
+- [x] Telegrapher's equations
+- [x] VSWR, return loss, insertion loss from reflection coefficient
+- [x] Smith chart computations (impedance normalization, SWR circles, matching)
+- [x] Quarter-wave transformer, stub matching
+- [x] S-parameter (scattering) matrix for N-port networks
+- [x] Parameter conversions: S ↔ Z ↔ Y ↔ ABCD ↔ T
+- [x] Touchstone file format (.s1p, .s2p, .snp) read/write
+- [x] Cascade/de-embed operations
+- [x] Antenna array factor (linear, planar, circular arrays)
 
 ## V1.5 — Advanced Field Computation
 

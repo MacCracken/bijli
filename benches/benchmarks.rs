@@ -451,6 +451,34 @@ fn beam_benchmarks(c: &mut Criterion) {
     group.finish();
 }
 
+fn rf_benchmarks(c: &mut Criterion) {
+    let mut group = c.benchmark_group("rf");
+
+    group.bench_function("reflection_coefficient", |b| {
+        b.iter(|| black_box(bijli::rf::reflection_coefficient(75.0, 50.0)))
+    });
+
+    group.bench_function("vswr", |b| b.iter(|| black_box(bijli::rf::vswr(0.333))));
+
+    group.bench_function("linear_array_factor_8", |b| {
+        let k = 2.0 * std::f64::consts::PI;
+        b.iter(|| black_box(bijli::rf::linear_array_factor(8, 0.5, k, 0.0, 0.7)))
+    });
+
+    group.bench_function("s_cascade", |b| {
+        let thru = bijli::rf::SMatrix::two_port(
+            bijli::polarization::Complex::real(0.1),
+            bijli::polarization::Complex::real(0.9),
+            bijli::polarization::Complex::real(0.9),
+            bijli::polarization::Complex::real(0.1),
+            50.0,
+        );
+        b.iter(|| black_box(thru.cascade(&thru)))
+    });
+
+    group.finish();
+}
+
 criterion_group!(
     benches,
     field_benchmarks,
@@ -464,5 +492,6 @@ criterion_group!(
     polarization_benchmarks,
     scattering_benchmarks,
     beam_benchmarks,
+    rf_benchmarks,
 );
 criterion_main!(benches);
