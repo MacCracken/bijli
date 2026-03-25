@@ -19,6 +19,7 @@
 //! - [`relativity`] — Relativistic electrodynamics, EM tensor, Lorentz field transforms
 //! - [`polarization`] — Jones vectors/matrices, Stokes parameters, Mueller matrices
 //! - [`scattering`] — Mie scattering, Rayleigh scattering, cross-sections
+//! - [`beam`] — Gaussian beams, ABCD matrices, resonator stability, HG/LG modes
 //! - [`error`] — Error types
 
 pub mod error;
@@ -52,6 +53,9 @@ pub mod polarization;
 
 #[cfg(feature = "scattering")]
 pub mod scattering;
+
+#[cfg(feature = "beam")]
+pub mod beam;
 
 #[cfg(feature = "logging")]
 pub mod logging;

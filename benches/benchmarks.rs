@@ -397,6 +397,43 @@ fn scattering_benchmarks(c: &mut Criterion) {
     group.finish();
 }
 
+fn beam_benchmarks(c: &mut Criterion) {
+    let mut group = c.benchmark_group("beam");
+
+    group.bench_function("spot_size", |b| {
+        let beam = bijli::beam::GaussianBeam::new(1064e-9, 100e-6).unwrap();
+        b.iter(|| black_box(beam.spot_size(0.01)))
+    });
+
+    group.bench_function("abcd_propagate_beam", |b| {
+        let beam = bijli::beam::GaussianBeam::new(1064e-9, 100e-6).unwrap();
+        let m = bijli::beam::AbcdMatrix::free_space(0.01);
+        let q = beam.q(0.0);
+        b.iter(|| black_box(m.propagate_beam(q)))
+    });
+
+    group.bench_function("abcd_compose", |b| {
+        let m1 = bijli::beam::AbcdMatrix::free_space(0.05);
+        let m2 = bijli::beam::AbcdMatrix::thin_lens(0.1).unwrap();
+        b.iter(|| black_box(m2.compose(&m1)))
+    });
+
+    group.bench_function("hermite_gaussian_hg33", |b| {
+        let beam = bijli::beam::GaussianBeam::new(1064e-9, 100e-6).unwrap();
+        b.iter(|| {
+            black_box(bijli::beam::hermite_gaussian(
+                &beam, 3, 3, 50e-6, 50e-6, 0.01,
+            ))
+        })
+    });
+
+    group.bench_function("resonator_stability", |b| {
+        b.iter(|| black_box(bijli::beam::resonator_stability(0.1, 0.2, 0.2)))
+    });
+
+    group.finish();
+}
+
 criterion_group!(
     benches,
     field_benchmarks,
@@ -409,5 +446,6 @@ criterion_group!(
     relativity_benchmarks,
     polarization_benchmarks,
     scattering_benchmarks,
+    beam_benchmarks,
 );
 criterion_main!(benches);

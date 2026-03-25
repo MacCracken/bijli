@@ -4,7 +4,7 @@ All notable changes to bijli will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
-## [Unreleased] — V1.1 Optics & Scattering
+## [Unreleased] — V1.1 + V1.2 Optics, Scattering, Beams
 
 ### Added
 
@@ -15,6 +15,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
 - **polarization**: Complex number type for polarization math
 - **scattering**: New module — Mie scattering (Bohren-Huffman algorithm), coefficients a_n/b_n, Q_sca/Q_ext/Q_abs, asymmetry parameter g
 - **scattering**: Rayleigh scattering — cross-section (λ⁻⁴ dependence), efficiency, phase function, angular intensity
+- **beam**: New module — Gaussian beam parameter q(z), waist, Rayleigh range, spot size, divergence, Gouy phase, peak intensity
+- **beam**: ABCD ray transfer matrices — free space, thin lens, curved mirror, flat/curved interface, compose, beam propagation
+- **beam**: Resonator stability — g-parameters, stability condition, beam waist in cavity, transverse mode spacing
+- **beam**: Hermite-Gaussian (HG_mn) and Laguerre-Gaussian (LG_pl) mode profiles
 
 ### Changed
 
@@ -22,6 +26,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
 - **fdtd**: Mur ABC coefficient precomputed in constructor (minor FDTD step performance improvement)
 - **fdtd**: Added tracing instrumentation to `new`, `run`
 - **field**: Added tracing to `trace_field_line`
+- **field**: Added `Default`, `From<[f64;3]>`, `Into<[f64;3]>` for `FieldVector`; exposed `SPEED_OF_LIGHT_SQ` constant
+- **field**: Removed redundant `FieldVector::add()` method (use `+` operator)
+- **polarization**: Added `Default` for `Complex`, `JonesVector`, `StokesVector`; `From<f64>` and `Div` for `Complex`
+- **polarization**: Removed redundant `StokesVector::add()` method (use `+` operator)
 
 ### Dependencies
 

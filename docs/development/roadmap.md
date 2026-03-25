@@ -68,11 +68,11 @@
 
 > Unlocks downstream: prakash (laser/beam optics, resonator design)
 
-- [ ] Complex beam parameter q(z) — waist, Rayleigh range, divergence, spot size
-- [ ] ABCD ray transfer matrices — free space, thin lens, curved mirror, flat interface
-- [ ] ABCD propagation: q_out = (Aq_in + B)/(Cq_in + D)
-- [ ] Resonator stability analysis (g-parameters)
-- [ ] Higher-order Hermite-Gaussian and Laguerre-Gaussian modes
+- [x] Complex beam parameter q(z) — waist, Rayleigh range, divergence, spot size
+- [x] ABCD ray transfer matrices — free space, thin lens, curved mirror, flat interface
+- [x] ABCD propagation: q_out = (Aq_in + B)/(Cq_in + D)
+- [x] Resonator stability analysis (g-parameters)
+- [x] Higher-order Hermite-Gaussian and Laguerre-Gaussian modes
 
 ## V1.3 — FDTD Maturity
 
