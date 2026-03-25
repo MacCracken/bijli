@@ -6,7 +6,7 @@
 
 - **Type**: Flat crate (library)
 - **License**: GPL-3.0
-- **Version**: 0.1.0
+- **Version**: 1.0.0
 
 ## Consumers
 
