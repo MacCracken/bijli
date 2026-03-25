@@ -55,6 +55,7 @@ impl DaimonClient {
     }
 
     pub async fn register_agent(&self) -> Result<String> {
+        tracing::debug!(endpoint = %self.config.endpoint, "registering agent with daimon");
         let body = serde_json::json!({
             "name": "bijli",
             "capabilities": ["electric_fields", "magnetic_fields", "maxwell", "charge_dynamics"],

@@ -118,7 +118,7 @@ fn test_rlc_resonance_matches_components() {
 fn test_series_parallel_identity() {
     // Two equal resistors: series = 4 × parallel
     let r = 100.0;
-    let series = circuit::resistance_series(&[r, r]);
+    let series = circuit::resistance_series(&[r, r]).unwrap();
     let parallel = circuit::resistance_parallel(&[r, r]).unwrap();
     assert!((series / parallel - 4.0).abs() < 1e-10);
 }

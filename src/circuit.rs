@@ -60,15 +60,32 @@ pub fn resistance_from_geometry(
 // ── Series / parallel ──────────────────────────────────────────────
 
 /// Total resistance of resistors in series: R = R₁ + R₂ + ...
+///
+/// # Errors
+///
+/// Returns [`BijliError::InvalidParameter`] if the slice is empty.
 #[inline]
-#[must_use]
-pub fn resistance_series(resistances: &[f64]) -> f64 {
-    resistances.iter().sum()
+pub fn resistance_series(resistances: &[f64]) -> Result<f64> {
+    if resistances.is_empty() {
+        return Err(BijliError::InvalidParameter {
+            reason: "at least one resistance value is required".into(),
+        });
+    }
+    Ok(resistances.iter().sum())
 }
 
 /// Total resistance of resistors in parallel: 1/R = 1/R₁ + 1/R₂ + ...
+///
+/// # Errors
+///
+/// Returns an error if the slice is empty or any resistance is zero.
 #[inline]
 pub fn resistance_parallel(resistances: &[f64]) -> Result<f64> {
+    if resistances.is_empty() {
+        return Err(BijliError::InvalidParameter {
+            reason: "at least one resistance value is required".into(),
+        });
+    }
     let mut sum_inv = 0.0;
     for &r in resistances {
         if r.abs() < 1e-30 {
@@ -87,8 +104,17 @@ pub fn resistance_parallel(resistances: &[f64]) -> Result<f64> {
 }
 
 /// Total capacitance of capacitors in series: 1/C = 1/C₁ + 1/C₂ + ...
+///
+/// # Errors
+///
+/// Returns an error if the slice is empty or any capacitance is zero.
 #[inline]
 pub fn capacitance_series(capacitances: &[f64]) -> Result<f64> {
+    if capacitances.is_empty() {
+        return Err(BijliError::InvalidParameter {
+            reason: "at least one capacitance value is required".into(),
+        });
+    }
     let mut sum_inv = 0.0;
     for &c in capacitances {
         if c.abs() < 1e-30 {
@@ -107,22 +133,47 @@ pub fn capacitance_series(capacitances: &[f64]) -> Result<f64> {
 }
 
 /// Total capacitance of capacitors in parallel: C = C₁ + C₂ + ...
+///
+/// # Errors
+///
+/// Returns [`BijliError::InvalidParameter`] if the slice is empty.
 #[inline]
-#[must_use]
-pub fn capacitance_parallel(capacitances: &[f64]) -> f64 {
-    capacitances.iter().sum()
+pub fn capacitance_parallel(capacitances: &[f64]) -> Result<f64> {
+    if capacitances.is_empty() {
+        return Err(BijliError::InvalidParameter {
+            reason: "at least one capacitance value is required".into(),
+        });
+    }
+    Ok(capacitances.iter().sum())
 }
 
 /// Total inductance of inductors in series: L = L₁ + L₂ + ...
+///
+/// # Errors
+///
+/// Returns [`BijliError::InvalidParameter`] if the slice is empty.
 #[inline]
-#[must_use]
-pub fn inductance_series(inductances: &[f64]) -> f64 {
-    inductances.iter().sum()
+pub fn inductance_series(inductances: &[f64]) -> Result<f64> {
+    if inductances.is_empty() {
+        return Err(BijliError::InvalidParameter {
+            reason: "at least one inductance value is required".into(),
+        });
+    }
+    Ok(inductances.iter().sum())
 }
 
 /// Total inductance of inductors in parallel: 1/L = 1/L₁ + 1/L₂ + ...
+///
+/// # Errors
+///
+/// Returns an error if the slice is empty or any inductance is zero.
 #[inline]
 pub fn inductance_parallel(inductances: &[f64]) -> Result<f64> {
+    if inductances.is_empty() {
+        return Err(BijliError::InvalidParameter {
+            reason: "at least one inductance value is required".into(),
+        });
+    }
     let mut sum_inv = 0.0;
     for &l in inductances {
         if l.abs() < 1e-30 {
@@ -381,7 +432,7 @@ mod tests {
 
     #[test]
     fn test_resistance_series() {
-        assert!((resistance_series(&[10.0, 20.0, 30.0]) - 60.0).abs() < 1e-15);
+        assert!((resistance_series(&[10.0, 20.0, 30.0]).unwrap() - 60.0).abs() < 1e-15);
     }
 
     #[test]
@@ -405,12 +456,12 @@ mod tests {
 
     #[test]
     fn test_capacitance_parallel() {
-        assert!((capacitance_parallel(&[10e-6, 20e-6]) - 30e-6).abs() < 1e-20);
+        assert!((capacitance_parallel(&[10e-6, 20e-6]).unwrap() - 30e-6).abs() < 1e-20);
     }
 
     #[test]
     fn test_inductance_series() {
-        assert!((inductance_series(&[1e-3, 2e-3]) - 3e-3).abs() < 1e-18);
+        assert!((inductance_series(&[1e-3, 2e-3]).unwrap() - 3e-3).abs() < 1e-18);
     }
 
     #[test]
@@ -550,5 +601,98 @@ mod tests {
     #[test]
     fn test_rlc_impedance_zero_freq() {
         assert!(rlc_impedance(10.0, 1e-3, 1e-6, 0.0).is_err());
+    }
+
+    // ── Empty slice edge cases ────────────────────────────────────
+
+    #[test]
+    fn test_resistance_series_empty() {
+        assert!(resistance_series(&[]).is_err());
+    }
+
+    #[test]
+    fn test_resistance_parallel_empty() {
+        assert!(resistance_parallel(&[]).is_err());
+    }
+
+    #[test]
+    fn test_capacitance_series_empty() {
+        assert!(capacitance_series(&[]).is_err());
+    }
+
+    #[test]
+    fn test_capacitance_parallel_empty() {
+        assert!(capacitance_parallel(&[]).is_err());
+    }
+
+    #[test]
+    fn test_inductance_series_empty() {
+        assert!(inductance_series(&[]).is_err());
+    }
+
+    #[test]
+    fn test_inductance_parallel_empty() {
+        assert!(inductance_parallel(&[]).is_err());
+    }
+
+    // ── Single-element combination ────────────────────────────────
+
+    #[test]
+    fn test_resistance_series_single() {
+        assert!((resistance_series(&[47.0]).unwrap() - 47.0).abs() < 1e-15);
+    }
+
+    #[test]
+    fn test_resistance_parallel_single() {
+        assert!((resistance_parallel(&[47.0]).unwrap() - 47.0).abs() < 1e-10);
+    }
+
+    #[test]
+    fn test_capacitance_parallel_single() {
+        assert!((capacitance_parallel(&[10e-6]).unwrap() - 10e-6).abs() < 1e-20);
+    }
+
+    // ── RC/RL zero-tau edge cases ─────────────────────────────────
+
+    #[test]
+    fn test_rc_charging_zero_tau() {
+        // tau ≈ 0 → instant charge
+        let v = rc_charging_voltage(10.0, 0.0, 1e-6, 1.0);
+        assert!((v - 10.0).abs() < 1e-10);
+    }
+
+    #[test]
+    fn test_rc_discharging_zero_tau() {
+        // tau ≈ 0 → instant discharge
+        let v = rc_discharging_voltage(10.0, 0.0, 1e-6, 1.0);
+        assert!(v.abs() < 1e-10);
+    }
+
+    // ── Geometry edge cases ───────────────────────────────────────
+
+    #[test]
+    fn test_resistance_from_geometry_zero_area() {
+        assert!(resistance_from_geometry(1.68e-8, 1.0, 0.0).is_err());
+    }
+
+    #[test]
+    fn test_parallel_plate_capacitance_zero_separation() {
+        use crate::field::EPSILON_0;
+        assert!(parallel_plate_capacitance(EPSILON_0, 1.0, 0.0).is_err());
+    }
+
+    #[test]
+    fn test_quality_factor_zero_resistance() {
+        assert!(quality_factor(0.0, 1e-3, 1e-6).is_err());
+    }
+
+    #[test]
+    fn test_damping_ratio_zero_inductance() {
+        assert!(damping_ratio(10.0, 0.0, 1e-6).is_err());
+    }
+
+    #[test]
+    fn test_resonant_frequency_negative_lc() {
+        assert!(resonant_frequency(-1e-3, 1e-6).is_err());
     }
 }

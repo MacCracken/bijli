@@ -217,6 +217,14 @@ fn fdtd_benchmarks(c: &mut Criterion) {
         })
     });
 
+    group.bench_function("run_100_steps_500_cells", |b| {
+        b.iter(|| {
+            let mut sim = bijli::fdtd::Fdtd1d::new(500, 1e-4).unwrap();
+            sim.run(100, Some(250), 1e9, 1.0);
+            black_box(sim.total_energy())
+        })
+    });
+
     group.finish();
 }
 

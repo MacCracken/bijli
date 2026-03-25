@@ -31,6 +31,8 @@ pub struct Fdtd1d {
     pub step: usize,
     /// Number of grid cells.
     pub num_cells: usize,
+    /// Pre-computed Mur ABC coefficient: (S − 1)/(S + 1) where S = c⋅dt/dx.
+    abc_coeff: f64,
 }
 
 impl Fdtd1d {
@@ -58,6 +60,12 @@ impl Fdtd1d {
         let e_coeff = vec![dt / (EPSILON_0 * dx); num_cells];
         let h_coeff = vec![dt / (MU_0 * dx); num_cells];
 
+        // Pre-compute Mur ABC coefficient (constant for the simulation)
+        let c_dt_dx = SPEED_OF_LIGHT * dt / dx;
+        let abc_coeff = (c_dt_dx - 1.0) / (c_dt_dx + 1.0);
+
+        tracing::debug!(num_cells, dx, dt, abc_coeff, "FDTD 1D simulation created");
+
         Ok(Self {
             e_field: vec![0.0; num_cells],
             h_field: vec![0.0; num_cells],
@@ -69,6 +77,7 @@ impl Fdtd1d {
             dt,
             step: 0,
             num_cells,
+            abc_coeff,
         })
     }
 
@@ -129,10 +138,9 @@ impl Fdtd1d {
         }
 
         // First-order Mur absorbing boundary conditions
-        let c_dt_dx = SPEED_OF_LIGHT * self.dt / self.dx;
-        let abc_coeff = (c_dt_dx - 1.0) / (c_dt_dx + 1.0);
-        self.e_field[0] = e_left + abc_coeff * (self.e_field[1] - self.e_field[0]);
-        self.e_field[n - 1] = e_right + abc_coeff * (self.e_field[n - 2] - self.e_field[n - 1]);
+        self.e_field[0] = e_left + self.abc_coeff * (self.e_field[1] - self.e_field[0]);
+        self.e_field[n - 1] =
+            e_right + self.abc_coeff * (self.e_field[n - 2] - self.e_field[n - 1]);
 
         self.step += 1;
     }
@@ -146,6 +154,13 @@ impl Fdtd1d {
         source_frequency: f64,
         source_amplitude: f64,
     ) {
+        tracing::debug!(
+            steps,
+            ?source_cell,
+            source_frequency,
+            source_amplitude,
+            "FDTD run started"
+        );
         for _ in 0..steps {
             if let Some(cell) = source_cell {
                 let t = self.step as f64 * self.dt;
@@ -290,5 +305,52 @@ mod tests {
         assert!(sim.time().abs() < 1e-30);
         sim.step_once();
         assert!((sim.time() - sim.dt).abs() < 1e-30);
+    }
+
+    #[test]
+    fn test_abc_coeff_precomputed() {
+        let sim = Fdtd1d::new(100, 1e-3).unwrap();
+        let expected = {
+            let s = SPEED_OF_LIGHT * sim.dt / sim.dx;
+            (s - 1.0) / (s + 1.0)
+        };
+        assert!((sim.abc_coeff - expected).abs() < 1e-15);
+    }
+
+    #[test]
+    fn test_source_out_of_bounds_ignored() {
+        let mut sim = Fdtd1d::new(10, 1e-3).unwrap();
+        sim.add_source(999, 1.0); // should not panic
+        assert!(sim.e_field.iter().all(|&v| v == 0.0));
+    }
+
+    #[test]
+    fn test_set_permeability() {
+        let mut sim = Fdtd1d::new(100, 1e-3).unwrap();
+        sim.set_permeability(20, 40, 2.0).unwrap();
+        assert!((sim.permeability[30] - 2.0).abs() < 1e-15);
+        assert!((sim.permeability[10] - 1.0).abs() < 1e-15);
+    }
+
+    #[test]
+    fn test_set_permeability_invalid() {
+        let mut sim = Fdtd1d::new(100, 1e-3).unwrap();
+        assert!(sim.set_permeability(0, 100, -1.0).is_err());
+        assert!(sim.set_permeability(0, 100, 0.0).is_err());
+    }
+
+    #[test]
+    fn test_energy_nonzero_after_source() {
+        let mut sim = Fdtd1d::new(100, 1e-3).unwrap();
+        assert!(sim.total_energy().abs() < 1e-30);
+        sim.add_source(50, 1.0);
+        assert!(sim.total_energy() > 0.0);
+    }
+
+    #[test]
+    fn test_min_cells() {
+        // Exactly 2 cells should work
+        let sim = Fdtd1d::new(2, 1e-3);
+        assert!(sim.is_ok());
     }
 }

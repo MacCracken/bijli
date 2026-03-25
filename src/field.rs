@@ -551,6 +551,8 @@ where
         });
     }
 
+    tracing::debug!(?start, step_size, max_steps, "tracing field line");
+
     let mut points = Vec::with_capacity(max_steps + 1);
     let mut pos = start;
     points.push(pos);
