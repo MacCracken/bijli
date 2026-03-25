@@ -521,7 +521,8 @@ pub struct Nf2ffResult {
 /// Compute 2D NF2FF transform from a TM-mode FDTD simulation.
 ///
 /// Integrates equivalent surface currents on a rectangular box to get
-/// the far-field radiation pattern.
+/// the far-field radiation pattern. This is a single-timestep snapshot;
+/// for frequency-domain far-field, accumulate DFT of fields first.
 ///
 /// # Parameters
 /// - `sim`: the 2D FDTD simulation (must be TM mode)
@@ -604,15 +605,23 @@ pub fn nf2ff_2d(
 /// Effective permittivity at a material boundary — parallel component (harmonic mean).
 ///
 /// For E-field parallel to the interface: 1/ε_eff = f/ε₂ + (1−f)/ε₁.
-/// `fill_fraction` is the fraction of the cell occupied by `eps2`.
+/// `fill_fraction` is the fraction of the cell occupied by `eps2` (must be in [0, 1]).
+///
+/// Both permittivities must be positive.
 #[inline]
-#[must_use]
-pub fn subpixel_permittivity_parallel(eps1: f64, eps2: f64, fill_fraction: f64) -> f64 {
+pub fn subpixel_permittivity_parallel(eps1: f64, eps2: f64, fill_fraction: f64) -> Result<f64> {
+    if eps1 <= 0.0 || eps2 <= 0.0 {
+        return Err(BijliError::InvalidPermittivity {
+            value: if eps1 <= 0.0 { eps1 } else { eps2 },
+        });
+    }
     let f = fill_fraction;
-    1.0 / (f / eps2 + (1.0 - f) / eps1)
+    Ok(1.0 / (f / eps2 + (1.0 - f) / eps1))
 }
 
 /// Effective permittivity at a material boundary — perpendicular component (arithmetic mean).
+///
+/// Both permittivities must be positive.
 #[inline]
 #[must_use]
 pub fn subpixel_permittivity_perpendicular(eps1: f64, eps2: f64, fill_fraction: f64) -> f64 {
@@ -673,8 +682,9 @@ impl Cpml {
             let d_e = (n as f64 - i as f64 - 0.5) / n as f64;
             let sigma_e = sigma_max * d_e.powf(grading_order);
             be[i] = (-sigma_e * dt / EPSILON_0).exp();
+            // c_e = (b_e - 1) / dx for simplified PML (κ=1, α=0)
             ce[i] = if sigma_e.abs() > 1e-30 {
-                (be[i] - 1.0) * sigma_e / (sigma_e * dx)
+                (be[i] - 1.0) / dx
             } else {
                 0.0
             };
@@ -684,7 +694,7 @@ impl Cpml {
             let sigma_h = sigma_max * d_h.powf(grading_order);
             bh[i] = (-sigma_h * dt / EPSILON_0).exp();
             ch_pml[i] = if sigma_h.abs() > 1e-30 {
-                (bh[i] - 1.0) * sigma_h / (sigma_h * dx)
+                (bh[i] - 1.0) / dx
             } else {
                 0.0
             };
@@ -902,6 +912,7 @@ impl Fdtd2d {
     }
 
     /// TM mode update: E_z, H_x, H_y.
+    #[inline]
     fn step_tm(&mut self) {
         let nx = self.nx;
         let ny = self.ny;
@@ -946,6 +957,7 @@ impl Fdtd2d {
     }
 
     /// TE mode update: H_z, E_x, E_y.
+    #[inline]
     fn step_te(&mut self) {
         let nx = self.nx;
         let ny = self.ny;
@@ -1590,8 +1602,8 @@ mod tests {
     #[test]
     fn test_subpixel_parallel_limits() {
         // f=0 → ε₁, f=1 → ε₂
-        assert!((subpixel_permittivity_parallel(1.0, 4.0, 0.0) - 1.0).abs() < 1e-10);
-        assert!((subpixel_permittivity_parallel(1.0, 4.0, 1.0) - 4.0).abs() < 1e-10);
+        assert!((subpixel_permittivity_parallel(1.0, 4.0, 0.0).unwrap() - 1.0).abs() < 1e-10);
+        assert!((subpixel_permittivity_parallel(1.0, 4.0, 1.0).unwrap() - 4.0).abs() < 1e-10);
     }
 
     #[test]
@@ -1603,7 +1615,7 @@ mod tests {
     #[test]
     fn test_subpixel_parallel_less_than_perpendicular() {
         // Harmonic mean ≤ arithmetic mean (by AM-HM inequality)
-        let par = subpixel_permittivity_parallel(1.0, 4.0, 0.5);
+        let par = subpixel_permittivity_parallel(1.0, 4.0, 0.5).unwrap();
         let perp = subpixel_permittivity_perpendicular(1.0, 4.0, 0.5);
         assert!(par <= perp);
     }
@@ -1613,7 +1625,76 @@ mod tests {
         // At f=0.5: arithmetic = 2.5, harmonic = 8/5 = 1.6
         let perp = subpixel_permittivity_perpendicular(1.0, 4.0, 0.5);
         assert!((perp - 2.5).abs() < 1e-10);
-        let par = subpixel_permittivity_parallel(1.0, 4.0, 0.5);
+        let par = subpixel_permittivity_parallel(1.0, 4.0, 0.5).unwrap();
         assert!((par - 1.6).abs() < 1e-10);
+    }
+
+    // ── Audit-driven edge case tests ──────────────────────────────
+
+    #[test]
+    fn test_subpixel_parallel_zero_eps_fails() {
+        assert!(subpixel_permittivity_parallel(0.0, 4.0, 0.5).is_err());
+        assert!(subpixel_permittivity_parallel(1.0, 0.0, 0.5).is_err());
+    }
+
+    #[test]
+    fn test_gaussian_pulse_narrow_tau() {
+        // Very narrow pulse — should not panic, just very peaked
+        let v = gaussian_pulse(0.0, 0.0, 1e-20);
+        assert!((v - 1.0).abs() < 1e-10); // peak at t=t0
+    }
+
+    #[test]
+    fn test_ricker_wavelet_integral_approx_zero() {
+        // Ricker wavelet integrates to ~0 (zero DC content)
+        let tau = 1e-10;
+        let t0 = 5.0 * tau;
+        let dt = tau / 100.0;
+        let mut integral = 0.0;
+        let n = 1000;
+        for i in 0..n {
+            let t = i as f64 * dt;
+            integral += ricker_wavelet(t, t0, tau) * dt;
+        }
+        assert!(integral.abs() < 0.01, "integral = {integral}");
+    }
+
+    #[test]
+    fn test_tfsf_boundary_at_zero() {
+        // boundary_x = 0 → source_cell = 0, should still work
+        let tfsf = TfsfSource::new(100, 0, 1e-4, 1e-13);
+        assert_eq!(tfsf.source_cell, 0);
+        assert_eq!(tfsf.boundary_x, 0);
+    }
+
+    #[test]
+    fn test_fdtd2d_set_permeability() {
+        let mut sim = Fdtd2d::new(50, 50, 1e-3, Mode2d::Tm).unwrap();
+        sim.set_permeability(10, 10, 30, 30, 2.0).unwrap();
+        let center = sim.idx(20, 20);
+        assert!((sim.permeability[center] - 2.0).abs() < 1e-15);
+    }
+
+    #[test]
+    fn test_fdtd2d_set_permeability_invalid() {
+        let mut sim = Fdtd2d::new(50, 50, 1e-3, Mode2d::Tm).unwrap();
+        assert!(sim.set_permeability(0, 0, 50, 50, -1.0).is_err());
+    }
+
+    #[test]
+    fn test_lossy_material_high_conductivity() {
+        // Very high σ → Ca approaches -1 (strong damping)
+        let mat = LossyMaterial::new(1.0, 1e10);
+        let (ca, _) = mat.update_coefficients(1e-13, 1e-4);
+        assert!(ca < 0.0); // heavy damping flips sign
+    }
+
+    #[test]
+    fn test_nf2ff_angle_coverage() {
+        let sim = Fdtd2d::new(30, 30, 1e-4, Mode2d::Tm).unwrap();
+        let result = nf2ff_2d(&sim, 3, 4, 1e9).unwrap();
+        // 4 angles: 0, π/2, π, 3π/2
+        assert!((result.angles[0]).abs() < 1e-10);
+        assert!((result.angles[1] - std::f64::consts::FRAC_PI_2).abs() < 1e-10);
     }
 }
