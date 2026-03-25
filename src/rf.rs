@@ -240,7 +240,7 @@ pub fn single_stub_match(z_load: f64, z0: f64) -> Result<(f64, f64)> {
 pub struct SMatrix {
     /// Number of ports.
     pub ports: usize,
-    /// S-parameter data: s[i][j] = S_{i+1,j+1}.
+    /// S-parameter data: `s[i][j]` = S_{i+1,j+1}.
     pub s: Vec<Vec<Complex>>,
     /// Reference impedance per port (ohms).
     pub z0: Vec<f64>,

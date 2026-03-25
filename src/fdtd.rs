@@ -1472,7 +1472,7 @@ impl NonUniformGrid {
 
 /// 4th-order spatial derivative coefficients for FDTD.
 ///
-/// Uses the 4-point stencil: df/dx ≈ (c₁(f[i+1]-f[i]) + c₂(f[i+2]-f[i-1])) / dx
+/// Uses the 4-point stencil: df/dx ≈ (c₁(f\[i+1\]-f\[i\]) + c₂(f\[i+2\]-f\[i-1\])) / dx
 /// where c₁ = 9/8, c₂ = -1/24 (Yee fourth-order).
 pub const FOURTH_ORDER_C1: f64 = 9.0 / 8.0;
 /// Second coefficient for 4th-order stencil.
@@ -1480,7 +1480,7 @@ pub const FOURTH_ORDER_C2: f64 = -1.0 / 24.0;
 
 /// Compute 4th-order spatial derivative of a 1D field array.
 ///
-/// df/dx ≈ (c₁(f[i+1]-f[i]) + c₂(f[i+2]-f[i-1])) / dx
+/// df/dx ≈ (c₁(f\[i+1\]-f\[i\]) + c₂(f\[i+2\]-f\[i-1\])) / dx
 ///
 /// Returns a vector of derivative values (length = n, zero-padded at edges).
 #[must_use]
