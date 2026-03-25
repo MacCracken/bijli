@@ -593,6 +593,286 @@ where
     Ok(points)
 }
 
+// ── Multipole expansion ───────────────────────────────────────────
+
+/// Electric quadrupole potential at position r from a quadrupole at the origin.
+///
+/// V = (1/4πε₀) Σᵢⱼ Qᵢⱼ rᵢ rⱼ / (4r⁵)
+///
+/// `q_tensor` is the traceless quadrupole moment tensor Q_{ij} as a 3×3 array.
+#[inline]
+pub fn electric_quadrupole_potential(q_tensor: &[[f64; 3]; 3], field_pos: [f64; 3]) -> Result<f64> {
+    let r_sq =
+        field_pos[0] * field_pos[0] + field_pos[1] * field_pos[1] + field_pos[2] * field_pos[2];
+    if r_sq < 1e-30 {
+        return Err(BijliError::Singularity);
+    }
+    let r = r_sq.sqrt();
+    let r5 = r_sq * r_sq * r;
+
+    let mut sum = 0.0;
+    for i in 0..3 {
+        for j in 0..3 {
+            sum += q_tensor[i][j] * field_pos[i] * field_pos[j];
+        }
+    }
+
+    Ok(sum / (4.0 * std::f64::consts::PI * EPSILON_0 * 4.0 * r5))
+}
+
+/// Spherical harmonic expansion coefficient for a charge distribution.
+///
+/// Computes the multipole moment q_{lm} = Σ qᵢ rᵢˡ Y*_{lm}(θᵢ,φᵢ)
+/// for point charges at given positions.
+///
+/// Returns the real part of the expansion (sufficient for real charge distributions
+/// with the convention q_{l,-m} = (-1)^m q*_{lm}).
+///
+/// `l`: multipole order (0=monopole, 1=dipole, 2=quadrupole, ...)
+/// `m`: azimuthal index (-l..=l)
+/// `charges`: slice of (charge, [x, y, z]) tuples
+pub fn multipole_moment(l: u32, m: i32, charges: &[(f64, [f64; 3])]) -> Result<f64> {
+    if m.unsigned_abs() > l {
+        return Err(BijliError::InvalidParameter {
+            reason: format!("|m| must be ≤ l, got l={l}, m={m}"),
+        });
+    }
+
+    let mut moment = 0.0;
+    for &(q, pos) in charges {
+        let r = (pos[0] * pos[0] + pos[1] * pos[1] + pos[2] * pos[2]).sqrt();
+        if r < 1e-30 && l > 0 {
+            continue; // r^l = 0 for l > 0 at origin
+        }
+        let theta = if r > 1e-30 { (pos[2] / r).acos() } else { 0.0 };
+        let phi = pos[1].atan2(pos[0]);
+
+        let r_l = r.powi(l as i32);
+        // Real spherical harmonic (simplified: cos(mφ) for m≥0, sin(|m|φ) for m<0)
+        let angular = if m >= 0 {
+            associated_legendre(l, m as u32, theta.cos()) * (m as f64 * phi).cos()
+        } else {
+            associated_legendre(l, m.unsigned_abs(), theta.cos())
+                * (m.unsigned_abs() as f64 * phi).sin()
+        };
+
+        moment += q * r_l * angular;
+    }
+
+    Ok(moment)
+}
+
+/// Associated Legendre polynomial P_l^m(x) via recurrence.
+///
+/// Uses the standard physics convention (includes Condon-Shortley phase).
+#[must_use]
+fn associated_legendre(l: u32, m: u32, x: f64) -> f64 {
+    if m > l {
+        return 0.0;
+    }
+
+    // P_m^m(x) = (-1)^m (2m-1)!! (1-x²)^{m/2}
+    let mut pmm = 1.0;
+    if m > 0 {
+        let somx2 = (1.0 - x * x).sqrt();
+        let mut fact = 1.0;
+        for i in 1..=m {
+            pmm *= -fact * somx2;
+            fact += 2.0;
+            let _ = i; // suppress unused warning
+        }
+    }
+
+    if l == m {
+        return pmm;
+    }
+
+    // P_{m+1}^m(x) = x(2m+1) P_m^m
+    let mut pmmp1 = x * (2 * m + 1) as f64 * pmm;
+    if l == m + 1 {
+        return pmmp1;
+    }
+
+    // Recurrence: (l-m) P_l^m = x(2l-1) P_{l-1}^m - (l+m-1) P_{l-2}^m
+    let mut pll = 0.0;
+    for ll in (m + 2)..=l {
+        pll = (x * (2 * ll - 1) as f64 * pmmp1 - (ll + m - 1) as f64 * pmm) / (ll - m) as f64;
+        pmm = pmmp1;
+        pmmp1 = pll;
+    }
+
+    pll
+}
+
+// ── Method of images ──────────────────────────────────────────────
+
+/// Image charge for a point charge near an infinite conducting plane.
+///
+/// The plane is at z = `plane_z`. Returns (image_charge, image_position).
+#[inline]
+#[must_use]
+pub fn image_charge_plane(charge: f64, position: [f64; 3], plane_z: f64) -> (f64, [f64; 3]) {
+    let image_z = 2.0 * plane_z - position[2];
+    (-charge, [position[0], position[1], image_z])
+}
+
+/// Image charge for a point charge near a grounded conducting sphere.
+///
+/// Sphere centered at origin with radius R. Returns (image_charge, image_position).
+///
+/// q' = -(R/d)q at position (R²/d) r̂
+#[inline]
+pub fn image_charge_sphere(
+    charge: f64,
+    position: [f64; 3],
+    sphere_radius: f64,
+) -> Result<(f64, [f64; 3])> {
+    let d_sq = position[0] * position[0] + position[1] * position[1] + position[2] * position[2];
+    if d_sq < 1e-30 {
+        return Err(BijliError::Singularity);
+    }
+    let d = d_sq.sqrt();
+    if d <= sphere_radius {
+        return Err(BijliError::InvalidParameter {
+            reason: "charge must be outside the sphere".into(),
+        });
+    }
+
+    let q_image = -charge * sphere_radius / d;
+    let scale = sphere_radius * sphere_radius / d_sq;
+    let pos_image = [
+        position[0] * scale,
+        position[1] * scale,
+        position[2] * scale,
+    ];
+
+    Ok((q_image, pos_image))
+}
+
+/// Image charge for a point charge near a dielectric half-space.
+///
+/// Charge in medium with ε₁ (z > 0), dielectric with ε₂ (z < 0).
+/// Interface at z = 0.
+///
+/// Returns (image_charge_for_field_in_medium1, image_position).
+/// The image charge is q' = -q(ε₂ - ε₁)/(ε₂ + ε₁) at the mirror position.
+#[inline]
+pub fn image_charge_dielectric(
+    charge: f64,
+    position: [f64; 3],
+    eps_r1: f64,
+    eps_r2: f64,
+) -> Result<(f64, [f64; 3])> {
+    let den = eps_r1 + eps_r2;
+    if den.abs() < 1e-30 {
+        return Err(BijliError::DivisionByZero {
+            context: "ε₁ + ε₂ = 0".into(),
+        });
+    }
+    let q_image = -charge * (eps_r2 - eps_r1) / den;
+    let pos_image = [position[0], position[1], -position[2]];
+    Ok((q_image, pos_image))
+}
+
+// ── Green's functions ─────────────────────────────────────────────
+
+/// Free-space scalar Green's function: G(r,r') = e^{ikR}/(4πR).
+///
+/// Returns (Re(G), Im(G)) since the result is complex.
+/// `k` is the wavenumber (2π/λ).
+#[inline]
+pub fn greens_function_scalar(
+    field_pos: [f64; 3],
+    source_pos: [f64; 3],
+    k: f64,
+) -> Result<(f64, f64)> {
+    let dx = field_pos[0] - source_pos[0];
+    let dy = field_pos[1] - source_pos[1];
+    let dz = field_pos[2] - source_pos[2];
+    let r = (dx * dx + dy * dy + dz * dz).sqrt();
+
+    if r < 1e-30 {
+        return Err(BijliError::Singularity);
+    }
+
+    let factor = 1.0 / (4.0 * std::f64::consts::PI * r);
+    let kr = k * r;
+    Ok((factor * kr.cos(), factor * kr.sin()))
+}
+
+/// Static Green's function (k=0): G(r,r') = 1/(4πR).
+#[inline]
+pub fn greens_function_static(field_pos: [f64; 3], source_pos: [f64; 3]) -> Result<f64> {
+    let dx = field_pos[0] - source_pos[0];
+    let dy = field_pos[1] - source_pos[1];
+    let dz = field_pos[2] - source_pos[2];
+    let r = (dx * dx + dy * dy + dz * dz).sqrt();
+
+    if r < 1e-30 {
+        return Err(BijliError::Singularity);
+    }
+
+    Ok(1.0 / (4.0 * std::f64::consts::PI * r))
+}
+
+// ── Maxwell stress tensor ─────────────────────────────────────────
+
+/// Maxwell stress tensor component T_{ij}.
+///
+/// T_{ij} = ε₀(E_iE_j − ½δ_{ij}E²) + (1/μ₀)(B_iB_j − ½δ_{ij}B²)
+///
+/// Returns the 3×3 stress tensor.
+#[must_use]
+pub fn maxwell_stress_tensor(e: &FieldVector, b: &FieldVector) -> [[f64; 3]; 3] {
+    let e_arr = [e.x, e.y, e.z];
+    let b_arr = [b.x, b.y, b.z];
+    let e_sq = e.magnitude_sq();
+    let b_sq = b.magnitude_sq();
+    let inv_mu0 = 1.0 / MU_0;
+
+    let mut t = [[0.0; 3]; 3];
+    for i in 0..3 {
+        for j in 0..3 {
+            let delta = if i == j { 1.0 } else { 0.0 };
+            t[i][j] = EPSILON_0 * (e_arr[i] * e_arr[j] - 0.5 * delta * e_sq)
+                + inv_mu0 * (b_arr[i] * b_arr[j] - 0.5 * delta * b_sq);
+        }
+    }
+    t
+}
+
+/// Electromagnetic force per unit area (radiation pressure) from stress tensor.
+///
+/// F_i = Σ_j T_{ij} n_j where n is the outward surface normal.
+#[inline]
+#[must_use]
+pub fn stress_tensor_force(tensor: &[[f64; 3]; 3], normal: &FieldVector) -> FieldVector {
+    let n = [normal.x, normal.y, normal.z];
+    let mut f = [0.0; 3];
+    for i in 0..3 {
+        for j in 0..3 {
+            f[i] += tensor[i][j] * n[j];
+        }
+    }
+    FieldVector::new(f[0], f[1], f[2])
+}
+
+/// Total Poynting flux through a closed surface (discrete integration).
+///
+/// P = ∮ S⃗ · n̂ dA ≈ Σ (E × B / μ₀) · n̂ ΔA
+///
+/// `samples`: slice of (E, B, outward_normal, area_element) at surface points.
+#[must_use]
+pub fn poynting_flux_surface(samples: &[(FieldVector, FieldVector, FieldVector, f64)]) -> f64 {
+    let inv_mu0 = 1.0 / MU_0;
+    let mut total = 0.0;
+    for &(ref e, ref b, ref normal, da) in samples {
+        let s = e.cross(b).scale(inv_mu0);
+        total += s.dot(normal) * da;
+    }
+    total
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1029,5 +1309,156 @@ mod tests {
         let v = FieldVector::new(1.0, 2.0, 3.0);
         let arr: [f64; 3] = v.into();
         assert_eq!(arr, [1.0, 2.0, 3.0]);
+    }
+
+    // ── Multipole expansion tests ─────────────────────────────────
+
+    #[test]
+    fn test_quadrupole_potential_singularity() {
+        let q = [[1.0, 0.0, 0.0], [0.0, -1.0, 0.0], [0.0, 0.0, 0.0]];
+        assert!(electric_quadrupole_potential(&q, [0.0; 3]).is_err());
+    }
+
+    #[test]
+    fn test_quadrupole_potential_decays_faster_than_dipole() {
+        // Quadrupole ∝ 1/r³, dipole ∝ 1/r²
+        let q = [[1e-30, 0.0, 0.0], [0.0, -1e-30, 0.0], [0.0, 0.0, 0.0]];
+        let v1 = electric_quadrupole_potential(&q, [1.0, 0.0, 0.0])
+            .unwrap()
+            .abs();
+        let v2 = electric_quadrupole_potential(&q, [2.0, 0.0, 0.0])
+            .unwrap()
+            .abs();
+        // V ∝ 1/r³ → ratio ≈ 8
+        let ratio = v1 / v2;
+        assert!((ratio - 8.0).abs() < 0.1);
+    }
+
+    #[test]
+    fn test_multipole_moment_monopole() {
+        // l=0: monopole moment = total charge
+        let charges = vec![(1e-6, [0.0, 0.0, 0.0]), (2e-6, [1.0, 0.0, 0.0])];
+        let q00 = multipole_moment(0, 0, &charges).unwrap();
+        // P_0^0(x) = 1, Y_00 ∝ 1, so monopole ∝ Σq
+        assert!(q00 > 0.0);
+    }
+
+    #[test]
+    fn test_multipole_moment_invalid_m() {
+        assert!(multipole_moment(1, 2, &[]).is_err());
+    }
+
+    #[test]
+    fn test_associated_legendre_basic() {
+        // P_0^0 = 1
+        assert!((associated_legendre(0, 0, 0.5) - 1.0).abs() < 1e-10);
+        // P_1^0 = x
+        assert!((associated_legendre(1, 0, 0.5) - 0.5).abs() < 1e-10);
+        // P_1^1 = -√(1-x²)
+        let p11 = associated_legendre(1, 1, 0.5);
+        assert!((p11 - (-(1.0 - 0.25_f64).sqrt())).abs() < 1e-10);
+    }
+
+    // ── Method of images tests ────────────────────────────────────
+
+    #[test]
+    fn test_image_charge_plane() {
+        let (q_img, pos_img) = image_charge_plane(1e-6, [0.0, 0.0, 1.0], 0.0);
+        assert!((q_img - (-1e-6)).abs() < 1e-20);
+        assert!((pos_img[2] - (-1.0)).abs() < 1e-10);
+    }
+
+    #[test]
+    fn test_image_charge_plane_tangential_zero() {
+        // On the conducting plane (z=0), tangential E (x,y) should be zero
+        let q = 1e-6;
+        let pos = [0.0, 0.0, 1.0];
+        let (q_img, pos_img) = image_charge_plane(q, pos, 0.0);
+        let point_on_plane = [1.0, 0.0, 0.0];
+        let e_real = electric_field_point_charge(q, pos, point_on_plane).unwrap();
+        let e_img = electric_field_point_charge(q_img, pos_img, point_on_plane).unwrap();
+        // Tangential components (x,y) should cancel by symmetry
+        assert!((e_real.x + e_img.x).abs() < 1e-10);
+        assert!((e_real.y + e_img.y).abs() < 1e-10);
+    }
+
+    #[test]
+    fn test_image_charge_sphere() {
+        let (q_img, pos_img) = image_charge_sphere(1e-6, [0.0, 0.0, 2.0], 1.0).unwrap();
+        // q' = -R/d * q = -0.5e-6
+        assert!((q_img - (-0.5e-6)).abs() < 1e-20);
+        // pos = R²/d² * pos = 0.25 * [0,0,2] = [0,0,0.5]
+        assert!((pos_img[2] - 0.5).abs() < 1e-10);
+    }
+
+    #[test]
+    fn test_image_charge_sphere_inside_fails() {
+        assert!(image_charge_sphere(1e-6, [0.0, 0.0, 0.5], 1.0).is_err());
+    }
+
+    #[test]
+    fn test_image_charge_dielectric() {
+        let (q_img, pos_img) = image_charge_dielectric(1e-6, [0.0, 0.0, 1.0], 1.0, 4.0).unwrap();
+        // q' = -q(ε₂-ε₁)/(ε₂+ε₁) = -q(3/5) = -0.6e-6
+        assert!((q_img - (-0.6e-6)).abs() < 1e-12);
+        assert!((pos_img[2] - (-1.0)).abs() < 1e-10);
+    }
+
+    // ── Green's function tests ────────────────────────────────────
+
+    #[test]
+    fn test_greens_static_coulomb() {
+        // Static Green's function at r=1 should be 1/(4π)
+        let g = greens_function_static([1.0, 0.0, 0.0], [0.0; 3]).unwrap();
+        assert!((g - 1.0 / (4.0 * std::f64::consts::PI)).abs() < 1e-10);
+    }
+
+    #[test]
+    fn test_greens_static_singularity() {
+        assert!(greens_function_static([0.0; 3], [0.0; 3]).is_err());
+    }
+
+    #[test]
+    fn test_greens_scalar_k0_matches_static() {
+        let (re, im) = greens_function_scalar([2.0, 0.0, 0.0], [0.0; 3], 0.0).unwrap();
+        let g_static = greens_function_static([2.0, 0.0, 0.0], [0.0; 3]).unwrap();
+        assert!((re - g_static).abs() < 1e-10);
+        assert!(im.abs() < 1e-10);
+    }
+
+    // ── Stress tensor tests ───────────────────────────────────────
+
+    #[test]
+    fn test_stress_tensor_pure_e_field() {
+        let e = FieldVector::new(1000.0, 0.0, 0.0);
+        let b = FieldVector::zero();
+        let t = maxwell_stress_tensor(&e, &b);
+        // T_xx = ε₀(E_x² - E²/2) = ε₀ E²/2
+        let expected = 0.5 * EPSILON_0 * 1e6;
+        assert!((t[0][0] - expected).abs() / expected < 1e-6);
+        // T_yy = T_zz = -ε₀ E²/2
+        assert!((t[1][1] - (-expected)).abs() / expected < 1e-6);
+    }
+
+    #[test]
+    fn test_stress_tensor_force_on_surface() {
+        let e = FieldVector::new(1000.0, 0.0, 0.0);
+        let b = FieldVector::zero();
+        let t = maxwell_stress_tensor(&e, &b);
+        let normal = FieldVector::new(1.0, 0.0, 0.0); // surface facing +x
+        let force = stress_tensor_force(&t, &normal);
+        // Force should be in +x (tension along field lines)
+        assert!(force.x > 0.0);
+    }
+
+    #[test]
+    fn test_poynting_flux_plane_wave() {
+        // Plane wave: S = E × B / μ₀, all pointing in same direction
+        let e = FieldVector::new(0.0, 100.0, 0.0); // E in y
+        let b = FieldVector::new(0.0, 0.0, 100.0 / SPEED_OF_LIGHT); // B in z
+        let normal = FieldVector::new(1.0, 0.0, 0.0); // surface normal +x
+        let da = 0.01; // 1 cm²
+        let flux = poynting_flux_surface(&[(e, b, normal, da)]);
+        assert!(flux > 0.0);
     }
 }

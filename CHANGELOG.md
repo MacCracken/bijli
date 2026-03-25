@@ -4,7 +4,7 @@ All notable changes to bijli will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
-## [Unreleased] — V1.1–V1.4 Optics, Scattering, Beams, FDTD, RF
+## [Unreleased] — V1.1–V1.5 Optics, Scattering, Beams, FDTD, RF, Advanced Fields
 
 ### Added
 
@@ -32,6 +32,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
 - **rf**: S-parameter matrix (N-port), cascade via T-parameters, S→Z conversion
 - **rf**: Touchstone (.snp) file parse/write (RI, MA, DB formats)
 - **rf**: Antenna arrays — linear, planar, circular array factors
+- **field**: Multipole expansion — quadrupole potential, general spherical harmonic moments, associated Legendre polynomials
+- **field**: Method of images — conducting plane, grounded sphere, dielectric half-space
+- **field**: Green's functions — free-space scalar (complex, k-dependent) and static
+- **field**: Maxwell stress tensor (3×3), stress-to-force computation, Poynting flux surface integration
+- **relativity**: Retarded time solver (Newton-Raphson on light-cone equation)
+- **relativity**: Convenience `lienard_wiechert_fields()` combining retarded time solver + E + B computation
 
 ### Changed
 

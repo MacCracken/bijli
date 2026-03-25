@@ -430,6 +430,121 @@ pub fn relativistic_larmor_power(
     Ok(prefactor * gamma6 * (a_sq - v_cross_a_sq / C2))
 }
 
+// ── Retarded time solver ──────────────────────────────────────────
+
+/// Solve for the retarded time t_r given observer position, observation time,
+/// and a charge trajectory.
+///
+/// Solves |r_obs − r_charge(t_r)| = c(t − t_r) using Newton-Raphson iteration.
+///
+/// `trajectory_fn` returns (position, velocity) of the charge at time t.
+/// Returns the retarded time t_r.
+pub fn solve_retarded_time<F>(
+    observer_pos: [f64; 3],
+    observation_time: f64,
+    trajectory_fn: F,
+    max_iterations: usize,
+) -> Result<f64>
+where
+    F: Fn(f64) -> ([f64; 3], [f64; 3]),
+{
+    let mut t_r = observation_time - 1e-15; // initial guess: just before observation
+
+    for _ in 0..max_iterations {
+        let (pos, vel) = trajectory_fn(t_r);
+        let dx = observer_pos[0] - pos[0];
+        let dy = observer_pos[1] - pos[1];
+        let dz = observer_pos[2] - pos[2];
+        let r = (dx * dx + dy * dy + dz * dz).sqrt();
+
+        // f(t_r) = r(t_r) - c(t - t_r) = 0
+        let f = r - SPEED_OF_LIGHT * (observation_time - t_r);
+
+        // f'(t_r) = dr/dt_r + c = -(v⃗ · r̂) + c
+        if r < 1e-30 {
+            return Err(BijliError::Singularity);
+        }
+        let r_hat = [dx / r, dy / r, dz / r];
+        let v_dot_rhat = vel[0] * r_hat[0] + vel[1] * r_hat[1] + vel[2] * r_hat[2];
+        let f_prime = -v_dot_rhat + SPEED_OF_LIGHT;
+
+        if f_prime.abs() < 1e-30 {
+            return Err(BijliError::DivisionByZero {
+                context: "retarded time Newton-Raphson derivative is zero".into(),
+            });
+        }
+
+        let delta = f / f_prime;
+        t_r -= delta;
+
+        if delta.abs() < 1e-20 {
+            return Ok(t_r);
+        }
+    }
+
+    Err(BijliError::InvalidParameter {
+        reason: format!("retarded time solver did not converge in {max_iterations} iterations"),
+    })
+}
+
+/// Complete Liénard-Wiechert fields (E and B) at an observation point.
+///
+/// Combines the retarded time solver with the LW field computation.
+/// Returns (E, B) at the observer position.
+///
+/// `trajectory_fn` returns (position, velocity, acceleration) at time t.
+pub fn lienard_wiechert_fields<F>(
+    charge: f64,
+    observer_pos: [f64; 3],
+    observation_time: f64,
+    trajectory_fn: F,
+) -> Result<(FieldVector, FieldVector)>
+where
+    F: Fn(f64) -> ([f64; 3], [f64; 3], [f64; 3]),
+{
+    // Solve for retarded time using position+velocity only
+    let t_r = solve_retarded_time(
+        observer_pos,
+        observation_time,
+        |t| {
+            let (pos, vel, _) = trajectory_fn(t);
+            (pos, vel)
+        },
+        50,
+    )?;
+
+    let (pos_r, vel_r, acc_r) = trajectory_fn(t_r);
+
+    // r⃗ = observer - retarded position
+    let r_vec = FieldVector::new(
+        observer_pos[0] - pos_r[0],
+        observer_pos[1] - pos_r[1],
+        observer_pos[2] - pos_r[2],
+    );
+    let r_mag = r_vec.magnitude();
+    if r_mag < 1e-30 {
+        return Err(BijliError::Singularity);
+    }
+    let n_hat = r_vec.scale(1.0 / r_mag);
+
+    // β⃗ = v⃗/c, β̇ = a⃗/c
+    let beta_vec = FieldVector::new(
+        vel_r[0] / SPEED_OF_LIGHT,
+        vel_r[1] / SPEED_OF_LIGHT,
+        vel_r[2] / SPEED_OF_LIGHT,
+    );
+    let beta_dot = FieldVector::new(
+        acc_r[0] / SPEED_OF_LIGHT,
+        acc_r[1] / SPEED_OF_LIGHT,
+        acc_r[2] / SPEED_OF_LIGHT,
+    );
+
+    let e = lienard_wiechert_e(charge, &r_vec, &beta_vec, &beta_dot)?;
+    let b = lienard_wiechert_b(&n_hat, &e);
+
+    Ok((e, b))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -739,5 +854,47 @@ mod tests {
         let v = FieldVector::new(SPEED_OF_LIGHT, 0.0, 0.0);
         let acc = FieldVector::new(0.0, 1e10, 0.0);
         assert!(relativistic_larmor_power(1e-6, &v, &acc).is_err());
+    }
+
+    // ── Retarded time solver tests ────────────────────────────────
+
+    #[test]
+    fn test_retarded_time_static_charge() {
+        // Static charge at origin: t_r = t - r/c
+        let obs = [1.0, 0.0, 0.0];
+        let t_obs = 1e-8;
+        let t_r = solve_retarded_time(obs, t_obs, |_t| ([0.0; 3], [0.0; 3]), 50).unwrap();
+        let expected = t_obs - 1.0 / SPEED_OF_LIGHT;
+        assert!((t_r - expected).abs() < 1e-18);
+    }
+
+    #[test]
+    fn test_retarded_time_moving_charge() {
+        // Charge moving in +x at constant velocity
+        let v = 0.1 * SPEED_OF_LIGHT;
+        let obs = [2.0, 0.0, 0.0];
+        let t_obs = 1e-8;
+        let t_r =
+            solve_retarded_time(obs, t_obs, |t| ([v * t, 0.0, 0.0], [v, 0.0, 0.0]), 50).unwrap();
+        // Verify light-cone condition: |obs - pos(t_r)| = c(t_obs - t_r)
+        let pos_r = v * t_r;
+        let r = (obs[0] - pos_r).abs();
+        let c_dt = SPEED_OF_LIGHT * (t_obs - t_r);
+        assert!((r - c_dt).abs() < 1e-10);
+    }
+
+    #[test]
+    fn test_lw_fields_static() {
+        // Static charge: convenience function should match direct computation
+        let q = 1e-6;
+        let obs = [0.0, 1.0, 0.0];
+        let t = 1e-8;
+        let (e, b) =
+            lienard_wiechert_fields(q, obs, t, |_t| ([0.0; 3], [0.0; 3], [0.0; 3])).unwrap();
+        // E should be Coulomb field pointing in +y
+        assert!(e.y > 0.0);
+        assert!(e.x.abs() < 1e-3);
+        // B should be ~zero for static charge
+        assert!(b.magnitude() < 1e-10);
     }
 }

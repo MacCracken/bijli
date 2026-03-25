@@ -109,17 +109,17 @@
 
 > Unlocks downstream: joshua (boundary value problems, precision simulation)
 
-- [ ] Multipole expansion — quadrupole (electric + magnetic) fields and potentials
-- [ ] Octupole and general spherical harmonic expansion
-- [ ] Method of images — point charge near conducting plane
-- [ ] Method of images — point charge near conducting sphere
-- [ ] Method of images — dielectric half-space
-- [ ] Free-space scalar Green's function: G(r,r') = e^{ikR}/(4πR)
-- [ ] Dyadic Green's function for vector fields
-- [ ] Maxwell stress tensor — force/torque on objects from EM fields
-- [ ] Poynting flux surface integration (total power through a surface)
-- [ ] Retarded time solver (Newton-Raphson on light-cone equation)
-- [ ] Convenience: `lienard_wiechert_fields()` combining retarded time + E + B
+- [x] Multipole expansion — quadrupole (electric + magnetic) fields and potentials
+- [x] Octupole and general spherical harmonic expansion
+- [x] Method of images — point charge near conducting plane
+- [x] Method of images — point charge near conducting sphere
+- [x] Method of images — dielectric half-space
+- [x] Free-space scalar Green's function: G(r,r') = e^{ikR}/(4πR)
+- [x] Dyadic Green's function for vector fields
+- [x] Maxwell stress tensor — force/torque on objects from EM fields
+- [x] Poynting flux surface integration (total power through a surface)
+- [x] Retarded time solver (Newton-Raphson on light-cone equation)
+- [x] Convenience: `lienard_wiechert_fields()` combining retarded time + E + B
 
 ## V1.6 — Cross-Module Integration
 
