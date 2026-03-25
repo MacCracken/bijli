@@ -419,6 +419,7 @@ impl JonesMatrix {
 
     /// General waveplate (linear retarder) with fast axis at angle θ
     /// and retardance δ (phase difference between fast and slow axes).
+    #[inline]
     #[must_use]
     pub fn waveplate(fast_axis_angle: f64, retardance: f64) -> Self {
         let c = fast_axis_angle.cos();
@@ -597,6 +598,21 @@ impl StokesVector {
     }
 }
 
+impl std::ops::Add for StokesVector {
+    type Output = Self;
+    #[inline]
+    fn add(self, rhs: Self) -> Self {
+        Self {
+            s: [
+                self.s[0] + rhs.s[0],
+                self.s[1] + rhs.s[1],
+                self.s[2] + rhs.s[2],
+                self.s[3] + rhs.s[3],
+            ],
+        }
+    }
+}
+
 // ── Mueller matrix ────────────────────────────────────────────────
 
 /// Mueller matrix — 4×4 real matrix acting on Stokes vectors.
@@ -685,6 +701,7 @@ impl MuellerMatrix {
     }
 
     /// Linear polarizer at angle θ.
+    #[inline]
     #[must_use]
     pub fn linear_polarizer(angle: f64) -> Self {
         let c2 = (2.0 * angle).cos();
@@ -700,6 +717,7 @@ impl MuellerMatrix {
     }
 
     /// General waveplate (retarder) with fast axis at angle θ and retardance δ.
+    #[inline]
     #[must_use]
     pub fn waveplate(fast_axis_angle: f64, retardance: f64) -> Self {
         let c2 = (2.0 * fast_axis_angle).cos();
@@ -731,6 +749,7 @@ impl MuellerMatrix {
     }
 
     /// Rotation matrix (coordinate rotation by angle θ).
+    #[inline]
     #[must_use]
     pub fn rotation(angle: f64) -> Self {
         let c2 = (2.0 * angle).cos();
@@ -1252,5 +1271,91 @@ mod tests {
                 "mismatch at S[{i}]"
             );
         }
+    }
+
+    // ── Audit-driven edge case tests ──────────────────────────────
+
+    #[test]
+    fn test_stokes_add_operator() {
+        let a = StokesVector::horizontal(1.0);
+        let b = StokesVector::vertical(1.0);
+        let c = a + b;
+        // H + V = unpolarized with intensity 2
+        assert!((c.intensity() - 2.0).abs() < TOL);
+        assert!(c.s[1].abs() < TOL); // S₁ cancels
+    }
+
+    #[test]
+    fn test_complex_display() {
+        let pos = Complex::new(1.0, 2.0);
+        assert_eq!(format!("{pos}"), "1+2i");
+        let neg = Complex::new(1.0, -2.0);
+        assert_eq!(format!("{neg}"), "1-2i");
+    }
+
+    #[test]
+    fn test_complex_sub() {
+        let a = Complex::new(5.0, 3.0);
+        let b = Complex::new(2.0, 1.0);
+        let c = a - b;
+        assert!((c.re - 3.0).abs() < TOL);
+        assert!((c.im - 2.0).abs() < TOL);
+    }
+
+    #[test]
+    fn test_complex_neg() {
+        let z = Complex::new(3.0, -4.0);
+        let neg = -z;
+        assert!((neg.re - (-3.0)).abs() < TOL);
+        assert!((neg.im - 4.0).abs() < TOL);
+    }
+
+    #[test]
+    fn test_complex_arg() {
+        let z = Complex::new(0.0, 1.0);
+        assert!((z.arg() - std::f64::consts::FRAC_PI_2).abs() < TOL);
+    }
+
+    #[test]
+    fn test_jones_mueller_agreement_waveplate() {
+        // Jones and Mueller QWP should agree for fully polarized light
+        let j = JonesVector::horizontal();
+        let angle = 0.3;
+
+        let jones_out = JonesMatrix::quarter_wave_plate(angle).apply(&j);
+        let jones_stokes = StokesVector::from_jones(&jones_out);
+
+        let stokes_in = StokesVector::from_jones(&j);
+        let mueller_out = MuellerMatrix::quarter_wave_plate(angle).apply(&stokes_in);
+
+        for i in 0..4 {
+            assert!(
+                (jones_stokes.s[i] - mueller_out.s[i]).abs() < 1e-8,
+                "QWP mismatch at S[{i}]: jones={} mueller={}",
+                jones_stokes.s[i],
+                mueller_out.s[i]
+            );
+        }
+    }
+
+    #[test]
+    fn test_mueller_compose_identity() {
+        let m = MuellerMatrix::horizontal_polarizer();
+        let composed = MuellerMatrix::identity().compose(&m);
+        let s = StokesVector::horizontal(1.0);
+        let r1 = m.apply(&s);
+        let r2 = composed.apply(&s);
+        for i in 0..4 {
+            assert!((r1.s[i] - r2.s[i]).abs() < TOL);
+        }
+    }
+
+    #[test]
+    fn test_mie_result_serde() {
+        // MieResult should roundtrip through serde
+        let result = crate::scattering::mie(1.0, Complex::real(1.5)).unwrap();
+        let json = serde_json::to_string(&result).unwrap();
+        let back: crate::scattering::MieResult = serde_json::from_str(&json).unwrap();
+        assert!((back.q_ext - result.q_ext).abs() < TOL);
     }
 }

@@ -11,7 +11,7 @@ use crate::polarization::Complex;
 // ── Mie scattering ────────────────────────────────────────────────
 
 /// Mie scattering result for a homogeneous sphere.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct MieResult {
     /// Scattering efficiency Q_sca.
     pub q_sca: f64,
@@ -159,6 +159,7 @@ pub fn cross_section_from_efficiency(q: f64, radius: f64) -> f64 {
 /// σ = (8π/3)(2πr/λ)⁴ r² |K|² where K = (m²−1)/(m²+2)
 ///
 /// Valid when x = 2πr/λ ≪ 1 (particle much smaller than wavelength).
+#[inline]
 pub fn rayleigh_cross_section(radius: f64, wavelength: f64, m: Complex) -> Result<f64> {
     if radius <= 0.0 {
         return Err(BijliError::InvalidParameter {
@@ -180,6 +181,7 @@ pub fn rayleigh_cross_section(radius: f64, wavelength: f64, m: Complex) -> Resul
 }
 
 /// Rayleigh scattering efficiency Q_sca = σ/(πr²).
+#[inline]
 pub fn rayleigh_efficiency(x: f64, m: Complex) -> Result<f64> {
     if x <= 0.0 {
         return Err(BijliError::InvalidParameter {
@@ -207,13 +209,18 @@ pub fn rayleigh_phase_function(cos_theta: f64) -> f64 {
 /// For a dielectric sphere, α = 3ε₀V(ε_r − 1)/(ε_r + 2).
 /// This simplified version uses the cross-section directly.
 #[inline]
-#[must_use]
-pub fn rayleigh_angular_intensity(cross_section: f64, distance: f64, cos_theta: f64) -> f64 {
+pub fn rayleigh_angular_intensity(
+    cross_section: f64,
+    distance: f64,
+    cos_theta: f64,
+) -> Result<f64> {
     if distance.abs() < 1e-30 {
-        return 0.0;
+        return Err(BijliError::Singularity);
     }
-    cross_section / (distance * distance) * rayleigh_phase_function(cos_theta)
-        / (4.0 * std::f64::consts::PI)
+    Ok(
+        cross_section / (distance * distance) * rayleigh_phase_function(cos_theta)
+            / (4.0 * std::f64::consts::PI),
+    )
 }
 
 // ── Complex arithmetic helpers ────────────────────────────────────
@@ -401,9 +408,14 @@ mod tests {
     fn test_rayleigh_angular_intensity_inverse_square() {
         let sigma = 1e-20;
         let cos_t = 0.5;
-        let i1 = rayleigh_angular_intensity(sigma, 1.0, cos_t);
-        let i2 = rayleigh_angular_intensity(sigma, 2.0, cos_t);
+        let i1 = rayleigh_angular_intensity(sigma, 1.0, cos_t).unwrap();
+        let i2 = rayleigh_angular_intensity(sigma, 2.0, cos_t).unwrap();
         assert!((i1 / i2 - 4.0).abs() < TOL);
+    }
+
+    #[test]
+    fn test_rayleigh_angular_intensity_singularity() {
+        assert!(rayleigh_angular_intensity(1e-20, 0.0, 0.5).is_err());
     }
 
     #[test]
