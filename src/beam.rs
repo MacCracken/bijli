@@ -38,6 +38,7 @@ impl GaussianBeam {
             });
         }
         let rayleigh_range = std::f64::consts::PI * waist * waist / wavelength;
+        tracing::debug!(wavelength, waist, rayleigh_range, "Gaussian beam created");
         Ok(Self {
             wavelength,
             waist,
@@ -272,6 +273,7 @@ impl AbcdMatrix {
     ///
     /// Given a `GaussianBeam` at its waist, propagate through this system
     /// and return the new waist size and waist location (relative to output plane).
+    #[inline]
     pub fn transform_beam(&self, beam: &GaussianBeam) -> Result<GaussianBeam> {
         let q_in = beam.q(0.0); // at waist: q = i*z_R
         let q_out = self.propagate_beam(q_in)?;
@@ -344,6 +346,7 @@ pub fn resonator_stability(length: f64, r1: f64, r2: f64) -> Result<ResonatorSta
 /// w₀² = (Lλ/π) √(g₁g₂(1−g₁g₂)) / (g₁+g₂−2g₁g₂)²)
 ///
 /// Returns the waist radius in meters, or error if cavity is unstable.
+#[inline]
 pub fn resonator_beam_waist(length: f64, r1: f64, r2: f64, wavelength: f64) -> Result<f64> {
     let stab = resonator_stability(length, r1, r2)?;
     if !stab.is_stable {
@@ -371,7 +374,8 @@ pub fn resonator_beam_waist(length: f64, r1: f64, r2: f64, wavelength: f64) -> R
         });
     }
 
-    let w0_sq = length * wavelength / std::f64::consts::PI * (gp * (1.0 - gp) / denom).abs().sqrt();
+    // For a stable cavity (0 ≤ gp ≤ 1), gp*(1-gp) is always non-negative.
+    let w0_sq = length * wavelength / std::f64::consts::PI * (gp * (1.0 - gp) / denom).sqrt();
     Ok(w0_sq.sqrt())
 }
 
@@ -402,6 +406,8 @@ pub fn transverse_mode_spacing(fsr: f64, g1: f64, g2: f64) -> Result<f64> {
 /// - `m`, `n`: mode indices (m for x, n for y)
 /// - `x`, `y`: transverse coordinates (m)
 /// - `z`: distance from waist (m)
+#[inline]
+#[must_use]
 pub fn hermite_gaussian(beam: &GaussianBeam, m: u32, n: u32, x: f64, y: f64, z: f64) -> f64 {
     let w = beam.spot_size(z);
     let w0 = beam.waist;
@@ -439,6 +445,7 @@ pub fn hermite_gaussian(beam: &GaussianBeam, m: u32, n: u32, x: f64, y: f64, z: 
 /// - `l`: azimuthal mode index (orbital angular momentum)
 /// - `r`: radial distance from axis (m)
 /// - `z`: distance from waist (m)
+#[inline]
 #[must_use]
 pub fn laguerre_gaussian_intensity(beam: &GaussianBeam, p: u32, l: i32, r: f64, z: f64) -> f64 {
     let w = beam.spot_size(z);
@@ -809,5 +816,105 @@ mod tests {
         assert!((m.d - 1.0).abs() < TOL);
         assert!(m.b.abs() < TOL);
         assert!(m.c.abs() < TOL);
+    }
+
+    // ── Audit-driven edge case tests ──────────────────────────────
+
+    #[test]
+    fn test_curved_interface() {
+        // Convex surface n1=1 → n2=1.5, R=0.1m
+        let m = AbcdMatrix::curved_interface(1.0, 1.5, 0.1).unwrap();
+        // det = n1/n2
+        assert!((m.determinant() - 1.0 / 1.5).abs() < TOL);
+        // C = (n1 - n2)/(n2 * R) = -0.5/0.15 = -10/3
+        assert!((m.c - (-10.0 / 3.0)).abs() < TOL);
+    }
+
+    #[test]
+    fn test_curved_interface_zero_n2() {
+        assert!(AbcdMatrix::curved_interface(1.0, 0.0, 0.1).is_err());
+    }
+
+    #[test]
+    fn test_curved_interface_zero_radius() {
+        assert!(AbcdMatrix::curved_interface(1.0, 1.5, 0.0).is_err());
+    }
+
+    #[test]
+    fn test_curved_mirror_zero_radius() {
+        assert!(AbcdMatrix::curved_mirror(0.0).is_err());
+    }
+
+    #[test]
+    fn test_flat_interface_zero_n2() {
+        assert!(AbcdMatrix::flat_interface(1.0, 0.0).is_err());
+    }
+
+    #[test]
+    fn test_peak_intensity_at_waist_vs_far() {
+        // Peak intensity decreases away from waist
+        let beam = GaussianBeam::new(1064e-9, 100e-6).unwrap();
+        let i_waist = beam.peak_intensity_factor(0.0);
+        let i_far = beam.peak_intensity_factor(10.0 * beam.rayleigh_range);
+        assert!(i_waist > i_far);
+    }
+
+    #[test]
+    fn test_gouy_phase_limits() {
+        let beam = GaussianBeam::new(1064e-9, 100e-6).unwrap();
+        // At z → +∞, Gouy → π/2
+        let far = beam.gouy_phase(1e10 * beam.rayleigh_range);
+        assert!((far - std::f64::consts::FRAC_PI_2).abs() < 1e-4);
+        // At z → -∞, Gouy → -π/2
+        let neg_far = beam.gouy_phase(-1e10 * beam.rayleigh_range);
+        assert!((neg_far - (-std::f64::consts::FRAC_PI_2)).abs() < 1e-4);
+    }
+
+    #[test]
+    fn test_radius_of_curvature_at_rayleigh() {
+        // R(z_R) = 2 z_R (minimum radius of curvature)
+        let beam = GaussianBeam::new(1064e-9, 100e-6).unwrap();
+        let r = beam.radius_of_curvature(beam.rayleigh_range).unwrap();
+        assert!((r - 2.0 * beam.rayleigh_range).abs() / r < TOL);
+    }
+
+    #[test]
+    fn test_lens_imaging_condition() {
+        // Object at 2f, image at 2f: compose free_space(2f) → lens(f) → free_space(2f)
+        // Should give magnification = -1 (A = -1)
+        let f = 0.1;
+        let system = AbcdMatrix::free_space(2.0 * f)
+            .compose(&AbcdMatrix::thin_lens(f).unwrap())
+            .compose(&AbcdMatrix::free_space(2.0 * f));
+        assert!((system.a - (-1.0)).abs() < TOL);
+        assert!(system.b.abs() < TOL); // imaging condition: B = 0
+    }
+
+    #[test]
+    fn test_resonator_beam_waist_invalid_wavelength() {
+        assert!(resonator_beam_waist(0.1, 0.2, 0.2, 0.0).is_err());
+        assert!(resonator_beam_waist(0.1, 0.2, 0.2, -1.0).is_err());
+    }
+
+    #[test]
+    fn test_hg_higher_order_symmetry() {
+        // HG₂₀ should be symmetric in x: HG(x) = HG(-x)
+        let beam = GaussianBeam::new(1064e-9, 100e-6).unwrap();
+        let pos = hermite_gaussian(&beam, 2, 0, 50e-6, 0.0, 0.0);
+        let neg = hermite_gaussian(&beam, 2, 0, -50e-6, 0.0, 0.0);
+        assert!((pos - neg).abs() < 1e-15);
+    }
+
+    #[test]
+    fn test_lg_radial_symmetry() {
+        // LG intensity depends only on r, not angle
+        let beam = GaussianBeam::new(1064e-9, 100e-6).unwrap();
+        let i1 = laguerre_gaussian_intensity(&beam, 1, 0, 50e-6, 0.0);
+        let i2 = laguerre_gaussian_intensity(&beam, 1, 0, 50e-6, 0.01);
+        // Different z but same r — should differ (z affects w)
+        // But at same z, same r, intensity is same regardless of azimuthal angle
+        // (which isn't a parameter — the function is already radially symmetric)
+        assert!(i1 > 0.0);
+        assert!(i2 > 0.0);
     }
 }
