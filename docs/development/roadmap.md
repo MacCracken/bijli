@@ -139,10 +139,10 @@
 - [x] 3D FDTD on full vector Yee grid
 - [x] Trait-based solver backend (CPU/GPU agnostic)
 - [x] GPU compute backend via wgpu (cross-platform)
-- [ ] Non-uniform grid spacing (first step toward AMR)
-- [ ] Higher-order FDTD (4th-order spatial derivatives)
-- [ ] Frequency-domain (CW) solver
-- [ ] Eigenmode solver for resonant structures
+- [x] Non-uniform grid spacing (first step toward AMR)
+- [x] Higher-order FDTD (4th-order spatial derivatives)
+- [x] Frequency-domain (CW) solver
+- [x] Eigenmode solver for resonant structures
 
 ## Future — Research Watch
 

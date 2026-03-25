@@ -14,7 +14,7 @@ kiran (game engine), joshua (simulation), prakash (optics)
 
 **Foundation**: hisab (PDE solvers), impetus (particle dynamics)
 
-**Modules**: field, maxwell, charge, wave, circuit, material, fdtd, relativity, polarization, scattering, error, ai, logging
+**Modules**: field, maxwell, charge, wave, circuit, material, fdtd, relativity, polarization, scattering, beam, rf, compute, error, ai, logging
 
 ## Development Process
 

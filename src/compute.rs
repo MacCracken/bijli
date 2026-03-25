@@ -269,6 +269,13 @@ impl<B: ComputeBackend> GpuFdtd2d<B> {
         frequency: f64,
         amplitude: f64,
     ) -> Result<()> {
+        tracing::debug!(
+            steps,
+            ?source,
+            frequency,
+            amplitude,
+            "GpuFdtd2d run started"
+        );
         for _ in 0..steps {
             if let Some((sx, sy)) = source {
                 let t = self.step as f64 * self.dt;

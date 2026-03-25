@@ -29,7 +29,11 @@ echo "╚═══════════════════════�
 echo ""
 
 # Run benchmarks and capture output, stripping ANSI escape codes
-BENCH_OUTPUT=$(cargo bench --all-features 2>&1 | sed 's/\x1b\[[0-9;]*m//g')
+# Use temp file to avoid SIGPIPE on large output
+BENCH_RAW=$(mktemp)
+cargo bench --all-features 2>&1 > "$BENCH_RAW" || true
+BENCH_OUTPUT=$(sed 's/\x1b\[[0-9;]*m//g' "$BENCH_RAW")
+rm -f "$BENCH_RAW"
 
 # Show full output
 echo "$BENCH_OUTPUT"

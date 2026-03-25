@@ -1396,6 +1396,293 @@ impl Fdtd3d {
     }
 }
 
+// ── Non-uniform grid ──────────────────────────────────────────────
+
+/// Non-uniform grid specification for FDTD.
+///
+/// Stores per-cell spacing in each dimension, enabling mesh refinement
+/// near material boundaries or objects of interest.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct NonUniformGrid {
+    /// Cell widths in x-direction (length = nx).
+    pub dx: Vec<f64>,
+    /// Cell widths in y-direction (length = ny).
+    pub dy: Vec<f64>,
+    /// Cell widths in z-direction (length = nz).
+    pub dz: Vec<f64>,
+}
+
+impl NonUniformGrid {
+    /// Create a uniform grid (all cells same size).
+    #[must_use]
+    pub fn uniform(nx: usize, ny: usize, nz: usize, spacing: f64) -> Self {
+        Self {
+            dx: vec![spacing; nx],
+            dy: vec![spacing; ny],
+            dz: vec![spacing; nz],
+        }
+    }
+
+    /// Create a grid with graded spacing (smooth transition from `d_min` to `d_max`).
+    ///
+    /// Uses geometric grading: d_i = d_min * ratio^i where ratio is computed
+    /// to reach d_max at the end.
+    pub fn graded(n: usize, d_min: f64, d_max: f64) -> Result<Vec<f64>> {
+        if n < 2 {
+            return Err(BijliError::InvalidParameter {
+                reason: format!("need at least 2 cells for grading, got {n}"),
+            });
+        }
+        if d_min <= 0.0 || d_max <= 0.0 {
+            return Err(BijliError::InvalidParameter {
+                reason: "cell sizes must be positive".into(),
+            });
+        }
+        let ratio = (d_max / d_min).powf(1.0 / (n - 1) as f64);
+        Ok((0..n).map(|i| d_min * ratio.powi(i as i32)).collect())
+    }
+
+    /// Minimum cell size across all dimensions.
+    #[must_use]
+    pub fn min_spacing(&self) -> f64 {
+        let min_dx = self.dx.iter().copied().fold(f64::INFINITY, f64::min);
+        let min_dy = self.dy.iter().copied().fold(f64::INFINITY, f64::min);
+        let min_dz = self.dz.iter().copied().fold(f64::INFINITY, f64::min);
+        min_dx.min(min_dy).min(min_dz)
+    }
+
+    /// Courant-stable time step for 3D non-uniform grid: dt ≤ d_min/(c√3).
+    #[must_use]
+    pub fn courant_dt(&self) -> f64 {
+        self.min_spacing() / (2.0 * 3.0_f64.sqrt() * SPEED_OF_LIGHT)
+    }
+
+    /// Total physical extent in each dimension.
+    #[must_use]
+    pub fn extents(&self) -> [f64; 3] {
+        [
+            self.dx.iter().sum(),
+            self.dy.iter().sum(),
+            self.dz.iter().sum(),
+        ]
+    }
+}
+
+// ── Higher-order FDTD (4th-order spatial) ─────────────────────────
+
+/// 4th-order spatial derivative coefficients for FDTD.
+///
+/// Uses the 4-point stencil: df/dx ≈ (c₁(f[i+1]-f[i]) + c₂(f[i+2]-f[i-1])) / dx
+/// where c₁ = 9/8, c₂ = -1/24 (Yee fourth-order).
+pub const FOURTH_ORDER_C1: f64 = 9.0 / 8.0;
+/// Second coefficient for 4th-order stencil.
+pub const FOURTH_ORDER_C2: f64 = -1.0 / 24.0;
+
+/// Compute 4th-order spatial derivative of a 1D field array.
+///
+/// df/dx ≈ (c₁(f[i+1]-f[i]) + c₂(f[i+2]-f[i-1])) / dx
+///
+/// Returns a vector of derivative values (length = n, zero-padded at edges).
+#[must_use]
+pub fn fourth_order_derivative(field: &[f64], dx: f64) -> Vec<f64> {
+    let n = field.len();
+    let mut deriv = vec![0.0; n];
+    let inv_dx = 1.0 / dx;
+
+    // Interior: 4th-order stencil (needs i-1 and i+2)
+    for i in 1..n.saturating_sub(2) {
+        deriv[i] = inv_dx
+            * (FOURTH_ORDER_C1 * (field[i + 1] - field[i])
+                + FOURTH_ORDER_C2 * (field.get(i + 2).copied().unwrap_or(0.0) - field[i - 1]));
+    }
+
+    // Boundary cells: fall back to 2nd-order
+    if n > 1 {
+        deriv[0] = (field[1] - field[0]) * inv_dx;
+        deriv[n - 1] = (field[n - 1] - field[n - 2]) * inv_dx;
+    }
+
+    deriv
+}
+
+// ── Frequency-domain (CW) solver ──────────────────────────────────
+
+/// Frequency-domain field accumulator for CW (continuous-wave) analysis.
+///
+/// Accumulates the running DFT of time-domain fields at a single frequency,
+/// enabling extraction of steady-state amplitude and phase after FDTD run.
+#[derive(Debug, Clone)]
+pub struct CwAccumulator {
+    /// Target angular frequency ω = 2πf.
+    omega: f64,
+    /// Accumulated DFT real parts (cos component).
+    pub real: Vec<f64>,
+    /// Accumulated DFT imaginary parts (sin component).
+    pub imag: Vec<f64>,
+    /// Number of samples accumulated.
+    pub n_samples: usize,
+    /// Time step used for accumulation.
+    dt: f64,
+}
+
+impl CwAccumulator {
+    /// Create a CW accumulator for a field of given size at target frequency.
+    #[must_use]
+    pub fn new(field_size: usize, frequency: f64, dt: f64) -> Self {
+        Self {
+            omega: 2.0 * std::f64::consts::PI * frequency,
+            real: vec![0.0; field_size],
+            imag: vec![0.0; field_size],
+            n_samples: 0,
+            dt,
+        }
+    }
+
+    /// Accumulate one time sample of the field into the running DFT.
+    pub fn accumulate(&mut self, field: &[f64], time_step: usize) {
+        let t = time_step as f64 * self.dt;
+        let cos_wt = (self.omega * t).cos();
+        let sin_wt = (self.omega * t).sin();
+
+        for (i, &f) in field.iter().enumerate() {
+            self.real[i] += f * cos_wt * self.dt;
+            self.imag[i] -= f * sin_wt * self.dt;
+        }
+        self.n_samples += 1;
+    }
+
+    /// Get the amplitude |F(ω)| at each grid point.
+    #[must_use]
+    pub fn amplitude(&self) -> Vec<f64> {
+        self.real
+            .iter()
+            .zip(self.imag.iter())
+            .map(|(&r, &i)| (r * r + i * i).sqrt())
+            .collect()
+    }
+
+    /// Get the phase arg(F(ω)) at each grid point.
+    #[must_use]
+    pub fn phase(&self) -> Vec<f64> {
+        self.real
+            .iter()
+            .zip(self.imag.iter())
+            .map(|(&r, &i)| i.atan2(r))
+            .collect()
+    }
+}
+
+// ── Eigenmode solver ──────────────────────────────────────────────
+
+/// Result from eigenmode analysis.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct EigenmodeResult {
+    /// Detected resonant frequencies (Hz).
+    pub frequencies: Vec<f64>,
+    /// Quality factors for each mode (if determinable).
+    pub quality_factors: Vec<f64>,
+    /// Spectral amplitudes at each frequency.
+    pub amplitudes: Vec<f64>,
+}
+
+/// Find resonant modes of a structure using FDTD + spectral analysis.
+///
+/// Excites the structure with a broadband pulse, records the time-domain
+/// response at a probe point, then performs DFT to identify resonance peaks.
+///
+/// # Parameters
+/// - `time_signal`: recorded field values at probe point over time
+/// - `dt`: time step between samples (s)
+/// - `freq_min`, `freq_max`: frequency search range (Hz)
+/// - `n_freq`: number of frequency points to evaluate
+pub fn find_eigenmodes(
+    time_signal: &[f64],
+    dt: f64,
+    freq_min: f64,
+    freq_max: f64,
+    n_freq: usize,
+) -> Result<EigenmodeResult> {
+    if time_signal.is_empty() {
+        return Err(BijliError::InvalidParameter {
+            reason: "time signal is empty".into(),
+        });
+    }
+    if n_freq == 0 {
+        return Err(BijliError::InvalidParameter {
+            reason: "need at least one frequency point".into(),
+        });
+    }
+    if freq_min >= freq_max {
+        return Err(BijliError::InvalidParameter {
+            reason: format!("freq_min ({freq_min}) must be < freq_max ({freq_max})"),
+        });
+    }
+
+    tracing::debug!(
+        n_samples = time_signal.len(),
+        dt,
+        freq_min,
+        freq_max,
+        n_freq,
+        "finding eigenmodes via DFT"
+    );
+
+    let df = (freq_max - freq_min) / n_freq as f64;
+    let mut spectrum = Vec::with_capacity(n_freq);
+
+    // Compute DFT magnitude at each frequency
+    for fi in 0..n_freq {
+        let freq = freq_min + fi as f64 * df;
+        let omega = 2.0 * std::f64::consts::PI * freq;
+        let mut re = 0.0;
+        let mut im = 0.0;
+        for (i, &s) in time_signal.iter().enumerate() {
+            let t = i as f64 * dt;
+            re += s * (omega * t).cos() * dt;
+            im -= s * (omega * t).sin() * dt;
+        }
+        spectrum.push((freq, (re * re + im * im).sqrt()));
+    }
+
+    // Peak detection: find local maxima above threshold
+    let max_amp = spectrum.iter().map(|(_, a)| *a).fold(0.0, f64::max);
+    let threshold = max_amp * 0.1; // 10% of peak
+
+    let mut frequencies = Vec::new();
+    let mut amplitudes = Vec::new();
+
+    for i in 1..spectrum.len().saturating_sub(1) {
+        let (freq, amp) = spectrum[i];
+        if amp > threshold && amp > spectrum[i - 1].1 && amp > spectrum[i + 1].1 {
+            frequencies.push(freq);
+            amplitudes.push(amp);
+        }
+    }
+
+    // Approximate Q from peak width (half-power bandwidth)
+    let quality_factors = frequencies
+        .iter()
+        .zip(amplitudes.iter())
+        .map(|(&f, &a)| {
+            let half_power = a / std::f64::consts::SQRT_2;
+            // Find half-power bandwidth by scanning spectrum
+            let mut bw = df; // minimum resolution
+            for &(sf, sa) in &spectrum {
+                if sa >= half_power && (sf - f).abs() > bw / 2.0 {
+                    bw = 2.0 * (sf - f).abs();
+                }
+            }
+            if bw > 1e-30 { f / bw } else { 0.0 }
+        })
+        .collect();
+
+    Ok(EigenmodeResult {
+        frequencies,
+        quality_factors,
+        amplitudes,
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -2174,17 +2461,168 @@ mod tests {
 
     #[test]
     fn test_fdtd3d_six_components() {
-        // After stepping, all 6 field components should have nonzero values
         let mut sim = Fdtd3d::new(15, 15, 15, 1e-4).unwrap();
         sim.add_source_ez(7, 7, 7, 1.0);
         for _ in 0..5 {
             sim.step_once();
         }
-        // H fields should be excited by E_z source
         assert!(sim.hx.iter().any(|&v| v.abs() > 1e-20));
         assert!(sim.hy.iter().any(|&v| v.abs() > 1e-20));
-        // E_x and E_y should be excited by curl(H)
         assert!(sim.ex.iter().any(|&v| v.abs() > 1e-20));
         assert!(sim.ey.iter().any(|&v| v.abs() > 1e-20));
+    }
+
+    // ── Non-uniform grid tests ────────────────────────────────────
+
+    #[test]
+    fn test_nonuniform_grid_uniform() {
+        let g = NonUniformGrid::uniform(10, 10, 10, 1e-3);
+        assert_eq!(g.dx.len(), 10);
+        assert!((g.min_spacing() - 1e-3).abs() < 1e-15);
+    }
+
+    #[test]
+    fn test_nonuniform_grid_graded() {
+        let d = NonUniformGrid::graded(10, 0.1e-3, 1.0e-3).unwrap();
+        assert_eq!(d.len(), 10);
+        assert!((d[0] - 0.1e-3).abs() < 1e-10);
+        assert!((d[9] - 1.0e-3).abs() < 1e-10);
+        // Should be monotonically increasing
+        for i in 1..d.len() {
+            assert!(d[i] > d[i - 1]);
+        }
+    }
+
+    #[test]
+    fn test_nonuniform_grid_graded_invalid() {
+        assert!(NonUniformGrid::graded(1, 0.1e-3, 1.0e-3).is_err());
+        assert!(NonUniformGrid::graded(10, 0.0, 1.0e-3).is_err());
+    }
+
+    #[test]
+    fn test_nonuniform_grid_courant_dt() {
+        let g = NonUniformGrid::uniform(10, 10, 10, 1e-3);
+        let dt = g.courant_dt();
+        assert!(dt > 0.0);
+        assert!(dt <= 1e-3 / (SPEED_OF_LIGHT * 3.0_f64.sqrt()));
+    }
+
+    #[test]
+    fn test_nonuniform_grid_extents() {
+        let g = NonUniformGrid::uniform(10, 5, 3, 1e-3);
+        let ext = g.extents();
+        assert!((ext[0] - 0.01).abs() < 1e-15);
+        assert!((ext[1] - 0.005).abs() < 1e-15);
+        assert!((ext[2] - 0.003).abs() < 1e-15);
+    }
+
+    // ── Higher-order FDTD tests ───────────────────────────────────
+
+    #[test]
+    fn test_fourth_order_constants() {
+        // c₁ + c₂ should sum to 1 + 1/24 ≈ ... no, check: 9/8 - 1/24 = 26/24 ≈ 1.083
+        assert!((FOURTH_ORDER_C1 - 1.125).abs() < 1e-10);
+        assert!((FOURTH_ORDER_C2 - (-1.0 / 24.0)).abs() < 1e-10);
+    }
+
+    #[test]
+    fn test_fourth_order_derivative_linear() {
+        // For f(x) = x, df/dx = 1 everywhere
+        let dx = 0.1;
+        let field: Vec<f64> = (0..10).map(|i| i as f64 * dx).collect();
+        let deriv = fourth_order_derivative(&field, dx);
+        // Interior should be close to 1.0
+        for &d in &deriv[2..8] {
+            assert!((d - 1.0).abs() < 0.1, "derivative = {d}");
+        }
+    }
+
+    #[test]
+    fn test_fourth_order_derivative_quadratic() {
+        // For f(x) = x², df/dx = 2x
+        let dx = 0.1;
+        let field: Vec<f64> = (0..20).map(|i| (i as f64 * dx).powi(2)).collect();
+        let deriv = fourth_order_derivative(&field, dx);
+        // At i=10 (x=1.0), should be ~2.0 (within stencil accuracy)
+        assert!((deriv[10] - 2.0).abs() < 0.5, "deriv[10] = {}", deriv[10]);
+    }
+
+    // ── CW accumulator tests ──────────────────────────────────────
+
+    #[test]
+    fn test_cw_accumulator_sinusoid() {
+        // Accumulate sin(ωt) at frequency ω — should get strong response
+        let freq = 1e9;
+        let dt = 1e-12;
+        let n = 10000;
+        let mut acc = CwAccumulator::new(1, freq, dt);
+        for step in 0..n {
+            let t = step as f64 * dt;
+            let val = (2.0 * std::f64::consts::PI * freq * t).sin();
+            acc.accumulate(&[val], step);
+        }
+        let amp = acc.amplitude();
+        assert!(amp[0] > 0.0);
+    }
+
+    #[test]
+    fn test_cw_accumulator_off_frequency() {
+        // Accumulate sin(2ωt) at frequency ω — should get weak response
+        let freq = 1e9;
+        let dt = 1e-12;
+        let n = 10000;
+
+        let mut on = CwAccumulator::new(1, freq, dt);
+        let mut off = CwAccumulator::new(1, freq, dt);
+
+        for step in 0..n {
+            let t = step as f64 * dt;
+            let v_on = (2.0 * std::f64::consts::PI * freq * t).sin();
+            let v_off = (2.0 * std::f64::consts::PI * 2.0 * freq * t).sin();
+            on.accumulate(&[v_on], step);
+            off.accumulate(&[v_off], step);
+        }
+
+        assert!(on.amplitude()[0] > off.amplitude()[0] * 5.0);
+    }
+
+    // ── Eigenmode solver tests ────────────────────────────────────
+
+    #[test]
+    fn test_eigenmode_single_frequency() {
+        // Create a signal with a single known frequency
+        let freq = 5e9;
+        let dt = 1e-12;
+        let n = 20000;
+        let signal: Vec<f64> = (0..n)
+            .map(|i| {
+                let t = i as f64 * dt;
+                (2.0 * std::f64::consts::PI * freq * t).sin() * (-t / 5e-9).exp()
+            })
+            .collect();
+
+        let result = find_eigenmodes(&signal, dt, 1e9, 10e9, 1000).unwrap();
+        assert!(!result.frequencies.is_empty());
+        // The detected frequency should be close to 5 GHz
+        let closest = result
+            .frequencies
+            .iter()
+            .min_by(|a, b| {
+                ((*a - freq).abs())
+                    .partial_cmp(&((*b - freq).abs()))
+                    .unwrap()
+            })
+            .unwrap();
+        assert!((*closest - freq).abs() / freq < 0.05);
+    }
+
+    #[test]
+    fn test_eigenmode_empty_signal() {
+        assert!(find_eigenmodes(&[], 1e-12, 1e9, 10e9, 100).is_err());
+    }
+
+    #[test]
+    fn test_eigenmode_invalid_freq_range() {
+        assert!(find_eigenmodes(&[1.0], 1e-12, 10e9, 1e9, 100).is_err());
     }
 }

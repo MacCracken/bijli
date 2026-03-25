@@ -4,7 +4,7 @@ All notable changes to bijli will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
-## [Unreleased] — V1.1–V1.6 Optics, Scattering, Beams, FDTD, RF, Advanced Fields, Integration
+## [Unreleased] — V1.1–V2.0 Full Roadmap
 
 ### Added
 
@@ -42,6 +42,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
 - **material**: Unified `Material` struct — vacuum/dielectric/conductor constructors, refractive index, impedance, wave speed, reflectance, Default impl
 - **fdtd**: `Fdtd2d::set_material` accepting `Material` struct for region setup
 - **wave**: Material-based Fresnel — `reflectance_at_interface`, `reflectance_normal_materials`, `material_reflection_coefficient` bridging wave/circuit/material modules
+- **compute**: New module — `ComputeBackend` trait (vendor-agnostic GPU/CPU), `CpuBackend` reference impl, `GpuFdtd2d<B>` generic solver, `SooratBackend`/`WgpuBackend` scaffolds
+- **fdtd**: 3D FDTD — `Fdtd3d` with full vector Yee grid (Ex,Ey,Ez,Hx,Hy,Hz), 3D Courant condition, material setting
+- **fdtd**: `NonUniformGrid` — per-cell spacing, geometric grading, Courant dt computation
+- **fdtd**: Higher-order FDTD — 4th-order spatial derivative stencil (c₁=9/8, c₂=-1/24)
+- **fdtd**: `CwAccumulator` — running DFT for frequency-domain steady-state extraction
+- **fdtd**: `find_eigenmodes` — eigenmode solver via broadband excitation + DFT peak detection
 
 ### Changed
 
