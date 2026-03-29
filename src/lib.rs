@@ -23,7 +23,11 @@
 //! - [`rf`] — Transmission lines, S-parameters, Smith chart, matching networks, Touchstone I/O
 //! - [`error`] — Error types
 
+/// Cross-crate bridges — primitive-value conversions from other AGNOS science crates.
+pub mod bridge;
 pub mod error;
+/// Integration APIs for downstream consumers (soorat rendering).
+pub mod integration;
 
 #[cfg(feature = "field")]
 pub mod field;

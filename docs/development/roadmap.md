@@ -26,6 +26,27 @@ All milestones through V2.0 are shipped. See [CHANGELOG.md](/CHANGELOG.md) for d
 
 ---
 
+## Cross-Crate Bridges
+
+- [ ] **`bridge.rs` module** — primitive-value conversions for cross-crate electromagnetism
+- [ ] **ushma bridge**: current density (A/m²), resistance (Ω) → Joule heating power (W); EM field energy density → temperature rise rate
+- [ ] **prakash bridge**: wavelength (nm) → refractive index in medium; E-field amplitude → optical intensity (W/m²)
+- [ ] **tanmatra bridge**: electron energy level (eV) → emission wavelength (nm); nuclear charge → Coulomb potential scaling
+- [ ] **dravya bridge**: electric field strength (V/m) → piezoelectric stress; magnetic flux density (T) → magnetostrictive strain
+
+---
+
+## Soorat Integration (rendering visualization)
+
+- [ ] **`integration/soorat.rs` module** — feature-gated `soorat-compat`, visualization data structures for soorat to consume
+- [ ] **FDTD field slices**: Expose `FieldSlice2D` / `FieldSlice3D` structs from `Fdtd2d`/`Fdtd3d` grids (field component, dimensions, spacing, origin) for heatmap/volumetric rendering
+- [ ] **Field line traces**: Expose `FieldLineVisualization` wrapping `trace_field_line()` output as `Vec<[f64; 3]>` polylines with field magnitude per point
+- [ ] **Point charge visualization**: Expose `ChargeVisualization` with charge positions, magnitudes, and sign for particle rendering with field halos
+- [ ] **Radiation pattern**: Expose `RadiationPattern` wrapping `Nf2ffResult` (angles + gain) for polar plot / 3D balloon rendering
+- [ ] **Vector field sampling**: Expose `VectorFieldSample` — grid of `FieldVector` values at regular positions for arrow/streamline rendering
+
+---
+
 ## Future — Research Watch
 
 > Not scheduled — track for when they reach practical maturity

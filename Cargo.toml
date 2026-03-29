@@ -1,6 +1,6 @@
 [package]
 name = "bijli"
-version = "1.0.1"
+version = "1.1.0"
 edition = "2024"
 rust-version = "1.89"
 license = "GPL-3.0-only"
@@ -27,11 +27,12 @@ polarization = []
 scattering = ["polarization"]
 beam = []
 rf = ["polarization"]
+soorat-compat = []
 compute = []
 compute-wgpu = ["compute", "dep:wgpu"]
 ai = ["dep:reqwest", "dep:tokio", "dep:serde_json"]
 logging = ["dep:tracing-subscriber"]
-full = ["field", "maxwell", "charge", "wave", "circuit", "material", "fdtd", "relativity", "polarization", "scattering", "beam", "rf", "compute", "ai", "logging"]
+full = ["field", "maxwell", "charge", "wave", "circuit", "material", "fdtd", "relativity", "polarization", "scattering", "beam", "rf", "soorat-compat", "compute", "ai", "logging"]
 
 [dependencies]
 hisab = "1.3.0"

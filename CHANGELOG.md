@@ -6,6 +6,15 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
 
+## [1.1.0]
+
+### Added
+- **bridge** — cross-crate primitive-value bridges for ushma (Joule heating, EM energy to heating rate), prakash (Sellmeier refractive index, E-field to optical intensity), tanmatra (energy level to wavelength, nuclear charge potential), dravya (piezoelectric stress, magnetostrictive strain)
+- **integration/soorat** — feature-gated `soorat-compat` module with visualization data structures: `FieldSlice2D`/`FieldSlice3D` (FDTD heatmaps with `from_fdtd_2d`/`from_fdtd_3d`), `FieldLineVisualization` (polylines with magnitudes), `ChargeVisualization` (point charges with `from_point_charges`), `RadiationPattern` (far-field with `from_nf2ff`), `VectorFieldSample` (arrow/streamline grids)
+
+### Updated
+- iri-string 0.7.11 -> 0.7.12
+
 ### Changed
 
 - **license**: GPL-3.0 → GPL-3.0-only (no "or later" clause)
