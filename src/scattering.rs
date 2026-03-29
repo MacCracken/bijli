@@ -6,7 +6,7 @@
 //! Size parameter: x = 2πr/λ where r is the sphere radius and λ is the wavelength.
 
 use crate::error::{BijliError, Result};
-use crate::polarization::Complex;
+use crate::polarization::{Complex, ComplexExt, complex_real, complex_zero};
 
 // ── Mie scattering ────────────────────────────────────────────────
 
@@ -56,10 +56,10 @@ pub fn mie(x: f64, m: Complex) -> Result<MieResult> {
 
     // Logarithmic derivatives D_n(mx) via downward recurrence (stable)
     let n_stop = n_max + 15;
-    let mut d_mx = vec![Complex::zero(); n_stop + 1];
+    let mut d_mx = vec![complex_zero(); n_stop + 1];
     // Start from large n and recur downward: D_{n-1}(z) = n/z - 1/(D_n(z) + n/z)
     for n in (1..=n_stop).rev() {
-        let nf = Complex::real(n as f64);
+        let nf = complex_real(n as f64);
         let ratio = nf * inv_complex(mx)?;
         d_mx[n - 1] = ratio - inv_complex(d_mx[n] + ratio)?;
     }
@@ -83,7 +83,7 @@ pub fn mie(x: f64, m: Complex) -> Result<MieResult> {
             psi_prev = psi_curr;
             psi_curr = psi_next;
 
-            let xi_next = Complex::real(nf / x) * xi_curr - xi_prev;
+            let xi_next = complex_real(nf / x) * xi_curr - xi_prev;
             xi_prev = xi_curr;
             xi_curr = xi_next;
         }
@@ -93,15 +93,15 @@ pub fn mie(x: f64, m: Complex) -> Result<MieResult> {
         // b_n = (D_n(mx)/m + n/x) ψ_n - ψ_{n-1} / ((D_n(mx)/m + n/x) ξ_n - ξ_{n-1})
 
         let d_n = d_mx[n]; // D_n(mx)
-        let n_over_x = Complex::real(n as f64 / x);
+        let n_over_x = complex_real(n as f64 / x);
 
         let a_factor = complex_div(d_n, m)? + n_over_x;
-        let a_num = a_factor * Complex::real(psi_curr) - Complex::real(psi_prev);
+        let a_num = a_factor * complex_real(psi_curr) - complex_real(psi_prev);
         let a_den = a_factor * xi_curr - xi_prev;
         let a_n = complex_div(a_num, a_den)?;
 
         let b_factor = m * d_n + n_over_x;
-        let b_num = b_factor * Complex::real(psi_curr) - Complex::real(psi_prev);
+        let b_num = b_factor * complex_real(psi_curr) - complex_real(psi_prev);
         let b_den = b_factor * xi_curr - xi_prev;
         let b_n = complex_div(b_num, b_den)?;
 
@@ -174,7 +174,7 @@ pub fn rayleigh_cross_section(radius: f64, wavelength: f64, m: Complex) -> Resul
 
     let x = 2.0 * std::f64::consts::PI * radius / wavelength;
     let m2 = m * m;
-    let k = complex_div(m2 - Complex::real(1.0), m2 + Complex::real(2.0))?;
+    let k = complex_div(m2 - complex_real(1.0), m2 + complex_real(2.0))?;
     let x4 = x * x * x * x;
 
     Ok(8.0 / 3.0 * std::f64::consts::PI * radius * radius * x4 * k.norm_sq())
@@ -189,7 +189,7 @@ pub fn rayleigh_efficiency(x: f64, m: Complex) -> Result<f64> {
         });
     }
     let m2 = m * m;
-    let k = complex_div(m2 - Complex::real(1.0), m2 + Complex::real(2.0))?;
+    let k = complex_div(m2 - complex_real(1.0), m2 + complex_real(2.0))?;
     Ok(8.0 / 3.0 * x * x * x * x * k.norm_sq())
 }
 
@@ -279,7 +279,7 @@ mod tests {
     fn test_mie_nonabsorbing_q_ext_equals_q_sca() {
         // For real refractive index (no absorption), Q_abs = 0
         let x = 1.0;
-        let m = Complex::real(1.5);
+        let m = complex_real(1.5);
         let result = mie(x, m).unwrap();
         assert!(result.q_abs.abs() < 1e-10);
     }
@@ -309,7 +309,7 @@ mod tests {
     fn test_mie_asymmetry_small_sphere() {
         // Small sphere: g ≈ 0 (isotropic)
         let x = 0.01;
-        let m = Complex::real(1.5);
+        let m = complex_real(1.5);
         let result = mie(x, m).unwrap();
         assert!(result.g.abs() < 0.01);
     }
@@ -318,15 +318,15 @@ mod tests {
     fn test_mie_asymmetry_large_sphere() {
         // Large sphere: g > 0 (forward scattering dominant)
         let x = 10.0;
-        let m = Complex::real(1.5);
+        let m = complex_real(1.5);
         let result = mie(x, m).unwrap();
         assert!(result.g > 0.0);
     }
 
     #[test]
     fn test_mie_invalid_x() {
-        assert!(mie(0.0, Complex::real(1.5)).is_err());
-        assert!(mie(-1.0, Complex::real(1.5)).is_err());
+        assert!(mie(0.0, complex_real(1.5)).is_err());
+        assert!(mie(-1.0, complex_real(1.5)).is_err());
     }
 
     #[test]
@@ -344,7 +344,7 @@ mod tests {
     #[test]
     fn test_mie_coefficients_count() {
         let x = 5.0;
-        let m = Complex::real(1.5);
+        let m = complex_real(1.5);
         let result = mie(x, m).unwrap();
         assert!(result.a.len() >= 4);
         assert_eq!(result.a.len(), result.b.len());
@@ -356,7 +356,7 @@ mod tests {
     fn test_rayleigh_cross_section_lambda4() {
         // σ ∝ λ⁻⁴: halving wavelength → 16× cross-section
         let r = 1e-8;
-        let m = Complex::real(1.5);
+        let m = complex_real(1.5);
         let s1 = rayleigh_cross_section(r, 500e-9, m).unwrap();
         let s2 = rayleigh_cross_section(r, 250e-9, m).unwrap();
         assert!((s2 / s1 - 16.0).abs() < 0.1);
@@ -365,7 +365,7 @@ mod tests {
     #[test]
     fn test_rayleigh_cross_section_r6() {
         // σ ∝ r⁶: doubling radius → 64× cross-section
-        let m = Complex::real(1.5);
+        let m = complex_real(1.5);
         let s1 = rayleigh_cross_section(1e-8, 500e-9, m).unwrap();
         let s2 = rayleigh_cross_section(2e-8, 500e-9, m).unwrap();
         assert!((s2 / s1 - 64.0).abs() < 0.1);
@@ -393,15 +393,15 @@ mod tests {
 
     #[test]
     fn test_rayleigh_efficiency_positive() {
-        let q = rayleigh_efficiency(0.1, Complex::real(1.5)).unwrap();
+        let q = rayleigh_efficiency(0.1, complex_real(1.5)).unwrap();
         assert!(q > 0.0);
     }
 
     #[test]
     fn test_rayleigh_invalid_params() {
-        assert!(rayleigh_cross_section(0.0, 500e-9, Complex::real(1.5)).is_err());
-        assert!(rayleigh_cross_section(1e-8, 0.0, Complex::real(1.5)).is_err());
-        assert!(rayleigh_efficiency(0.0, Complex::real(1.5)).is_err());
+        assert!(rayleigh_cross_section(0.0, 500e-9, complex_real(1.5)).is_err());
+        assert!(rayleigh_cross_section(1e-8, 0.0, complex_real(1.5)).is_err());
+        assert!(rayleigh_efficiency(0.0, complex_real(1.5)).is_err());
     }
 
     #[test]
@@ -435,7 +435,7 @@ mod tests {
         let r = 10e-9;
         let wavelength = 500e-9;
         let x = 2.0 * std::f64::consts::PI * r / wavelength;
-        let m = Complex::real(1.5);
+        let m = complex_real(1.5);
 
         let mie_sigma = cross_section_from_efficiency(mie(x, m).unwrap().q_sca, r);
         let ray_sigma = rayleigh_cross_section(r, wavelength, m).unwrap();

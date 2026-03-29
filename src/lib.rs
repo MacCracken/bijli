@@ -4,8 +4,8 @@
 //!
 //! Provides electric and magnetic field computation, Maxwell's equations,
 //! charge dynamics, and electromagnetic wave propagation. Built on
-//! [hisab](https://crates.io/crates/hisab) for PDE solvers and
-//! [impetus](https://crates.io/crates/impetus) for particle interactions.
+//! [hisab](https://crates.io/crates/hisab) for numerical computing
+//! (complex arithmetic, root-finding, transforms).
 //!
 //! # Modules
 //!

@@ -35,6 +35,7 @@ logging = ["dep:tracing-subscriber"]
 full = ["field", "maxwell", "charge", "wave", "circuit", "material", "fdtd", "relativity", "polarization", "scattering", "beam", "rf", "compute", "ai", "logging"]
 
 [dependencies]
+hisab = "1.3.0"
 serde = { version = "1", features = ["derive"] }
 thiserror = "2"
 tracing = "0.1"

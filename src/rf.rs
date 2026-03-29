@@ -6,7 +6,7 @@
 use serde::{Deserialize, Serialize};
 
 use crate::error::{BijliError, Result};
-use crate::polarization::Complex;
+use crate::polarization::{Complex, ComplexExt, complex_from_polar, complex_real, complex_zero};
 
 // ── Transmission lines ────────────────────────────────────────────
 
@@ -36,7 +36,7 @@ pub fn characteristic_impedance_lossy(r: f64, l: f64, g: f64, c: f64, omega: f64
     let ratio = num / den;
     let mag = ratio.norm().sqrt();
     let phase = ratio.arg() / 2.0;
-    Complex::from_polar(mag, phase)
+    complex_from_polar(mag, phase)
 }
 
 /// Complex propagation constant: γ = α + jβ = √((R'+jωL')(G'+jωC')).
@@ -48,7 +48,7 @@ pub fn propagation_constant(r: f64, l: f64, g: f64, c: f64, omega: f64) -> Compl
     let prod = a * b;
     let mag = prod.norm().sqrt();
     let phase = prod.arg() / 2.0;
-    Complex::from_polar(mag, phase)
+    complex_from_polar(mag, phase)
 }
 
 /// Phase velocity on a lossless line: v_p = 1/√(LC).
@@ -176,7 +176,7 @@ pub fn denormalize_impedance(z_norm: Complex, z0: f64) -> Complex {
 #[inline]
 #[must_use]
 pub fn gamma_from_z(z_norm: Complex) -> Complex {
-    let one = Complex::real(1.0);
+    let one = complex_real(1.0);
     (z_norm - one) / (z_norm + one)
 }
 
@@ -184,7 +184,7 @@ pub fn gamma_from_z(z_norm: Complex) -> Complex {
 #[inline]
 #[must_use]
 pub fn z_from_gamma(gamma: Complex) -> Complex {
-    let one = Complex::real(1.0);
+    let one = complex_real(1.0);
     (one + gamma) / (one - gamma)
 }
 
@@ -252,7 +252,7 @@ impl SMatrix {
     pub fn new(ports: usize, z0: f64) -> Self {
         Self {
             ports,
-            s: vec![vec![Complex::zero(); ports]; ports],
+            s: vec![vec![complex_zero(); ports]; ports],
             z0: vec![z0; ports],
         }
     }
@@ -331,12 +331,12 @@ fn s_to_t(s: &SMatrix) -> Result<[[Complex; 2]; 2]> {
     let s11 = s.s[0][0];
     let s12 = s.s[0][1];
     let s22 = s.s[1][1];
-    let inv_s21 = Complex::real(1.0) / s21;
+    let inv_s21 = complex_real(1.0) / s21;
 
     let det = s11 * s22 - s12 * s21;
     Ok([
-        [inv_s21 * Complex::real(-1.0) * det, s11 * inv_s21],
-        [Complex::real(-1.0) * s22 * inv_s21, inv_s21],
+        [inv_s21 * complex_real(-1.0) * det, s11 * inv_s21],
+        [complex_real(-1.0) * s22 * inv_s21, inv_s21],
     ])
 }
 
@@ -348,11 +348,11 @@ fn t_to_s(t: &[[Complex; 2]; 2], z0: f64) -> Result<SMatrix> {
             context: "T22 = 0, cannot convert to S-parameters".into(),
         });
     }
-    let inv_t22 = Complex::real(1.0) / t22;
+    let inv_t22 = complex_real(1.0) / t22;
     let s11 = t[0][1] * inv_t22;
     let s12 = (t[0][0] * t[1][1] - t[0][1] * t[1][0]) * inv_t22;
     let s21 = inv_t22;
-    let s22 = Complex::real(-1.0) * t[1][0] * inv_t22;
+    let s22 = complex_real(-1.0) * t[1][0] * inv_t22;
     Ok(SMatrix::two_port(s11, s12, s21, s22, z0))
 }
 
@@ -363,12 +363,12 @@ pub fn s_to_z(s: &SMatrix) -> Result<[[Complex; 2]; 2]> {
             reason: "S→Z conversion requires 2-port network".into(),
         });
     }
-    let one = Complex::real(1.0);
+    let one = complex_real(1.0);
     let s11 = s.s[0][0];
     let s12 = s.s[0][1];
     let s21 = s.s[1][0];
     let s22 = s.s[1][1];
-    let z0 = Complex::real(s.z0[0]);
+    let z0 = complex_real(s.z0[0]);
 
     let det = (one - s11) * (one - s22) - s12 * s21;
     if det.norm_sq() < 1e-60 {
@@ -381,10 +381,10 @@ pub fn s_to_z(s: &SMatrix) -> Result<[[Complex; 2]; 2]> {
     Ok([
         [
             z0 * ((one + s11) * (one - s22) + s12 * s21) * inv_det,
-            z0 * Complex::real(2.0) * s12 * inv_det,
+            z0 * complex_real(2.0) * s12 * inv_det,
         ],
         [
-            z0 * Complex::real(2.0) * s21 * inv_det,
+            z0 * complex_real(2.0) * s21 * inv_det,
             z0 * ((one - s11) * (one + s22) + s12 * s21) * inv_det,
         ],
     ])
@@ -535,10 +535,10 @@ pub fn write_touchstone(data: &TouchstoneData, format: TouchstoneFormat) -> Stri
 fn parse_complex_pair(v1: f64, v2: f64, format: TouchstoneFormat) -> Complex {
     match format {
         TouchstoneFormat::RealImag => Complex::new(v1, v2),
-        TouchstoneFormat::MagnitudeAngle => Complex::from_polar(v1, v2.to_radians()),
+        TouchstoneFormat::MagnitudeAngle => complex_from_polar(v1, v2.to_radians()),
         TouchstoneFormat::DbAngle => {
             let mag = 10.0_f64.powf(v1 / 20.0);
-            Complex::from_polar(mag, v2.to_radians())
+            complex_from_polar(mag, v2.to_radians())
         }
     }
 }
@@ -786,7 +786,7 @@ mod tests {
 
     #[test]
     fn test_gamma_matched() {
-        let g = gamma_from_z(Complex::real(1.0));
+        let g = gamma_from_z(complex_real(1.0));
         assert!(g.norm() < TOL);
     }
 
@@ -834,10 +834,10 @@ mod tests {
     fn test_cascade_thru() {
         // Two ideal thru connections: S21 = S12 = 1, S11 = S22 = 0
         let thru = SMatrix::two_port(
-            Complex::zero(),
-            Complex::real(1.0),
-            Complex::real(1.0),
-            Complex::zero(),
+            complex_zero(),
+            complex_real(1.0),
+            complex_real(1.0),
+            complex_zero(),
             50.0,
         );
         let cascaded = thru.cascade(&thru).unwrap();
@@ -850,10 +850,10 @@ mod tests {
     fn test_s_to_z_conversion() {
         // 3dB attenuator: S11=S22=0, S12=S21=1/√2 in 50Ω
         let s = SMatrix::two_port(
-            Complex::zero(),
-            Complex::real(std::f64::consts::FRAC_1_SQRT_2),
-            Complex::real(std::f64::consts::FRAC_1_SQRT_2),
-            Complex::zero(),
+            complex_zero(),
+            complex_real(std::f64::consts::FRAC_1_SQRT_2),
+            complex_real(std::f64::consts::FRAC_1_SQRT_2),
+            complex_zero(),
             50.0,
         );
         let z = s_to_z(&s).unwrap();
@@ -868,10 +868,10 @@ mod tests {
     fn test_s_to_z_thru_is_singular() {
         // Ideal thru has no Z-parameter representation
         let thru = SMatrix::two_port(
-            Complex::zero(),
-            Complex::real(1.0),
-            Complex::real(1.0),
-            Complex::zero(),
+            complex_zero(),
+            complex_real(1.0),
+            complex_real(1.0),
+            complex_zero(),
             50.0,
         );
         assert!(s_to_z(&thru).is_err());
@@ -888,16 +888,16 @@ mod tests {
             s_matrices: vec![
                 SMatrix::two_port(
                     Complex::new(0.5, 0.1),
-                    Complex::zero(),
-                    Complex::zero(),
-                    Complex::zero(),
+                    complex_zero(),
+                    complex_zero(),
+                    complex_zero(),
                     50.0,
                 ),
                 SMatrix::two_port(
                     Complex::new(0.3, -0.2),
-                    Complex::zero(),
-                    Complex::zero(),
-                    Complex::zero(),
+                    complex_zero(),
+                    complex_zero(),
+                    complex_zero(),
                     50.0,
                 ),
             ],

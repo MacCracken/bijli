@@ -435,7 +435,8 @@ pub fn relativistic_larmor_power(
 /// Solve for the retarded time t_r given observer position, observation time,
 /// and a charge trajectory.
 ///
-/// Solves |r_obs − r_charge(t_r)| = c(t − t_r) using Newton-Raphson iteration.
+/// Solves |r_obs − r_charge(t_r)| = c(t − t_r) using Newton-Raphson iteration
+/// via [`hisab::num::newton_raphson`].
 ///
 /// `trajectory_fn` returns (position, velocity) of the charge at time t.
 /// Returns the retarded time t_r.
@@ -453,42 +454,45 @@ where
         + observer_pos[1] * observer_pos[1]
         + observer_pos[2] * observer_pos[2])
         .sqrt();
-    let mut t_r = observation_time - r_obs / SPEED_OF_LIGHT;
+    let x0 = observation_time - r_obs / SPEED_OF_LIGHT;
 
-    for _ in 0..max_iterations {
+    // f(t_r) = |r_obs − r_charge(t_r)| − c(t − t_r) = 0
+    let f = |t_r: f64| {
+        let (pos, _) = trajectory_fn(t_r);
+        let dx = observer_pos[0] - pos[0];
+        let dy = observer_pos[1] - pos[1];
+        let dz = observer_pos[2] - pos[2];
+        let r = (dx * dx + dy * dy + dz * dz).sqrt();
+        r - SPEED_OF_LIGHT * (observation_time - t_r)
+    };
+
+    // f'(t_r) = −(v⃗ · r̂) + c
+    let df = |t_r: f64| {
         let (pos, vel) = trajectory_fn(t_r);
         let dx = observer_pos[0] - pos[0];
         let dy = observer_pos[1] - pos[1];
         let dz = observer_pos[2] - pos[2];
         let r = (dx * dx + dy * dy + dz * dz).sqrt();
-
-        // f(t_r) = r(t_r) - c(t - t_r) = 0
-        let f = r - SPEED_OF_LIGHT * (observation_time - t_r);
-
-        // f'(t_r) = dr/dt_r + c = -(v⃗ · r̂) + c
         if r < 1e-30 {
-            return Err(BijliError::Singularity);
+            return SPEED_OF_LIGHT;
         }
         let r_hat = [dx / r, dy / r, dz / r];
         let v_dot_rhat = vel[0] * r_hat[0] + vel[1] * r_hat[1] + vel[2] * r_hat[2];
-        let f_prime = -v_dot_rhat + SPEED_OF_LIGHT;
+        -v_dot_rhat + SPEED_OF_LIGHT
+    };
 
-        if f_prime.abs() < 1e-30 {
-            return Err(BijliError::DivisionByZero {
-                context: "retarded time Newton-Raphson derivative is zero".into(),
-            });
-        }
-
-        let delta = f / f_prime;
-        t_r -= delta;
-
-        if delta.abs() < 1e-20 {
-            return Ok(t_r);
-        }
-    }
-
-    Err(BijliError::InvalidParameter {
-        reason: format!("retarded time solver did not converge in {max_iterations} iterations"),
+    // Tolerance is on |f(x)| (meters), not |delta| (seconds).
+    // f ≈ f' × δt and f' ≈ c, so 1e-12 m ≈ 3e-21 s precision.
+    hisab::num::newton_raphson(f, df, x0, 1e-12, max_iterations).map_err(|e| match e {
+        hisab::HisabError::InvalidInput(_) => BijliError::DivisionByZero {
+            context: "retarded time Newton-Raphson derivative is zero".into(),
+        },
+        hisab::HisabError::NoConvergence(n) => BijliError::InvalidParameter {
+            reason: format!("retarded time solver did not converge in {n} iterations"),
+        },
+        other => BijliError::InvalidParameter {
+            reason: format!("retarded time solver failed: {other}"),
+        },
     })
 }
 

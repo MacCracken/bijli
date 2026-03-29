@@ -393,17 +393,17 @@ fn scattering_benchmarks(c: &mut Criterion) {
     let mut group = c.benchmark_group("scattering");
 
     group.bench_function("mie_x1_real", |b| {
-        let m = bijli::polarization::Complex::real(1.5);
+        let m = bijli::polarization::complex_real(1.5);
         b.iter(|| black_box(bijli::scattering::mie(1.0, m)))
     });
 
     group.bench_function("mie_x10_real", |b| {
-        let m = bijli::polarization::Complex::real(1.33);
+        let m = bijli::polarization::complex_real(1.33);
         b.iter(|| black_box(bijli::scattering::mie(10.0, m)))
     });
 
     group.bench_function("rayleigh_cross_section", |b| {
-        let m = bijli::polarization::Complex::real(1.5);
+        let m = bijli::polarization::complex_real(1.5);
         b.iter(|| black_box(bijli::scattering::rayleigh_cross_section(10e-9, 500e-9, m)))
     });
 
@@ -467,10 +467,10 @@ fn rf_benchmarks(c: &mut Criterion) {
 
     group.bench_function("s_cascade", |b| {
         let thru = bijli::rf::SMatrix::two_port(
-            bijli::polarization::Complex::real(0.1),
-            bijli::polarization::Complex::real(0.9),
-            bijli::polarization::Complex::real(0.9),
-            bijli::polarization::Complex::real(0.1),
+            bijli::polarization::complex_real(0.1),
+            bijli::polarization::complex_real(0.9),
+            bijli::polarization::complex_real(0.9),
+            bijli::polarization::complex_real(0.1),
             50.0,
         );
         b.iter(|| black_box(thru.cascade(&thru)))

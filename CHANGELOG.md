@@ -11,10 +11,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
 ### Changed
 
 - **license**: GPL-3.0 → GPL-3.0-only (no "or later" clause)
+- **deps**: hisab 1.1.0 → 1.3.0
+- **polarization**: `Complex` type now re-exported from `hisab::num::Complex`; added `ComplexExt` trait and `complex_real`/`complex_zero`/`complex_from_polar` free functions
+- **relativity**: `solve_retarded_time` now uses `hisab::num::newton_raphson` for root-finding
 
 ### Removed
 
-- **deps**: Removed unused `hisab` and `impetus` dependencies
+- **deps**: Removed unused `impetus` dependency
+- **polarization**: Removed custom `Complex` implementation (~185 lines) in favor of hisab's
 
 ## [1.0.0] — 2026-03-25
 

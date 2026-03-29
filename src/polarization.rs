@@ -9,192 +9,56 @@ use serde::{Deserialize, Serialize};
 
 use crate::error::{BijliError, Result};
 
-// ── Complex helper ────────────────────────────────────────────────
+// ── Complex (re-exported from hisab) ─────────────────────────────
 
-/// Minimal complex number for polarization math (avoids external dep).
-#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
-pub struct Complex {
-    pub re: f64,
-    pub im: f64,
+pub use hisab::num::Complex;
+
+/// Extension methods for hisab's [`Complex`] used throughout bijli.
+pub trait ComplexExt {
+    /// Squared magnitude |z|².
+    fn norm_sq(self) -> f64;
+    /// Magnitude |z| (alias for [`Complex::abs`]).
+    fn norm(self) -> f64;
+    /// Phase angle arg(z) = atan2(im, re).
+    fn arg(self) -> f64;
 }
 
-impl Complex {
-    /// Create a complex number.
+impl ComplexExt for Complex {
     #[inline]
-    #[must_use]
-    pub fn new(re: f64, im: f64) -> Self {
-        Self { re, im }
-    }
-
-    /// Real number (zero imaginary part).
-    #[inline]
-    #[must_use]
-    pub fn real(re: f64) -> Self {
-        Self { re, im: 0.0 }
-    }
-
-    /// Pure imaginary number.
-    #[inline]
-    #[must_use]
-    pub fn imag(im: f64) -> Self {
-        Self { re: 0.0, im }
-    }
-
-    /// Zero.
-    #[inline]
-    #[must_use]
-    pub fn zero() -> Self {
-        Self { re: 0.0, im: 0.0 }
-    }
-
-    /// Complex conjugate.
-    #[inline]
-    #[must_use]
-    pub fn conj(self) -> Self {
-        Self {
-            re: self.re,
-            im: -self.im,
-        }
-    }
-
-    /// Squared magnitude |z|².
-    #[inline]
-    #[must_use]
-    pub fn norm_sq(self) -> f64 {
+    fn norm_sq(self) -> f64 {
         self.re * self.re + self.im * self.im
     }
 
-    /// Magnitude |z|.
     #[inline]
-    #[must_use]
-    pub fn norm(self) -> f64 {
-        self.norm_sq().sqrt()
+    fn norm(self) -> f64 {
+        self.abs()
     }
 
-    /// e^(iθ) = cos θ + i sin θ.
     #[inline]
-    #[must_use]
-    pub fn from_polar(magnitude: f64, phase: f64) -> Self {
-        Self {
-            re: magnitude * phase.cos(),
-            im: magnitude * phase.sin(),
-        }
-    }
-
-    /// Phase angle arg(z).
-    #[inline]
-    #[must_use]
-    pub fn arg(self) -> f64 {
+    fn arg(self) -> f64 {
         self.im.atan2(self.re)
     }
 }
 
-impl std::ops::Add for Complex {
-    type Output = Self;
-    #[inline]
-    fn add(self, rhs: Self) -> Self {
-        Self {
-            re: self.re + rhs.re,
-            im: self.im + rhs.im,
-        }
-    }
+/// Real number as complex (zero imaginary part).
+#[inline]
+#[must_use]
+pub fn complex_real(re: f64) -> Complex {
+    Complex::from_real(re)
 }
 
-impl std::ops::Sub for Complex {
-    type Output = Self;
-    #[inline]
-    fn sub(self, rhs: Self) -> Self {
-        Self {
-            re: self.re - rhs.re,
-            im: self.im - rhs.im,
-        }
-    }
+/// Complex zero.
+#[inline]
+#[must_use]
+pub fn complex_zero() -> Complex {
+    Complex::new(0.0, 0.0)
 }
 
-impl std::ops::Mul for Complex {
-    type Output = Self;
-    #[inline]
-    fn mul(self, rhs: Self) -> Self {
-        Self {
-            re: self.re * rhs.re - self.im * rhs.im,
-            im: self.re * rhs.im + self.im * rhs.re,
-        }
-    }
-}
-
-impl std::ops::Mul<f64> for Complex {
-    type Output = Self;
-    #[inline]
-    fn mul(self, rhs: f64) -> Self {
-        Self {
-            re: self.re * rhs,
-            im: self.im * rhs,
-        }
-    }
-}
-
-impl std::ops::Mul<Complex> for f64 {
-    type Output = Complex;
-    #[inline]
-    fn mul(self, rhs: Complex) -> Complex {
-        Complex {
-            re: self * rhs.re,
-            im: self * rhs.im,
-        }
-    }
-}
-
-impl From<f64> for Complex {
-    #[inline]
-    fn from(re: f64) -> Self {
-        Self::real(re)
-    }
-}
-
-impl Default for Complex {
-    #[inline]
-    fn default() -> Self {
-        Self::zero()
-    }
-}
-
-impl std::ops::Div for Complex {
-    type Output = Self;
-    /// Complex division: a/b = (a × b*) / |b|².
-    ///
-    /// # Panics
-    ///
-    /// Panics if `rhs` is zero. For fallible division, use the module-level
-    /// functions in [`crate::scattering`].
-    #[inline]
-    fn div(self, rhs: Self) -> Self {
-        let d = rhs.norm_sq();
-        Self {
-            re: (self.re * rhs.re + self.im * rhs.im) / d,
-            im: (self.im * rhs.re - self.re * rhs.im) / d,
-        }
-    }
-}
-
-impl std::ops::Neg for Complex {
-    type Output = Self;
-    #[inline]
-    fn neg(self) -> Self {
-        Self {
-            re: -self.re,
-            im: -self.im,
-        }
-    }
-}
-
-impl std::fmt::Display for Complex {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        if self.im >= 0.0 {
-            write!(f, "{}+{}i", self.re, self.im)
-        } else {
-            write!(f, "{}{}i", self.re, self.im)
-        }
-    }
+/// Complex from polar form: magnitude × e^(i·phase).
+#[inline]
+#[must_use]
+pub fn complex_from_polar(magnitude: f64, phase: f64) -> Complex {
+    Complex::new(magnitude * phase.cos(), magnitude * phase.sin())
 }
 
 // ── Jones vector ──────────────────────────────────────────────────
@@ -230,8 +94,8 @@ impl JonesVector {
     #[must_use]
     pub fn horizontal() -> Self {
         Self {
-            x: Complex::real(1.0),
-            y: Complex::zero(),
+            x: complex_real(1.0),
+            y: complex_zero(),
         }
     }
 
@@ -240,8 +104,8 @@ impl JonesVector {
     #[must_use]
     pub fn vertical() -> Self {
         Self {
-            x: Complex::zero(),
-            y: Complex::real(1.0),
+            x: complex_zero(),
+            y: complex_real(1.0),
         }
     }
 
@@ -251,8 +115,8 @@ impl JonesVector {
     pub fn diagonal() -> Self {
         let s = std::f64::consts::FRAC_1_SQRT_2;
         Self {
-            x: Complex::real(s),
-            y: Complex::real(s),
+            x: complex_real(s),
+            y: complex_real(s),
         }
     }
 
@@ -262,8 +126,8 @@ impl JonesVector {
     pub fn anti_diagonal() -> Self {
         let s = std::f64::consts::FRAC_1_SQRT_2;
         Self {
-            x: Complex::real(s),
-            y: Complex::real(-s),
+            x: complex_real(s),
+            y: complex_real(-s),
         }
     }
 
@@ -273,7 +137,7 @@ impl JonesVector {
     pub fn right_circular() -> Self {
         let s = std::f64::consts::FRAC_1_SQRT_2;
         Self {
-            x: Complex::real(s),
+            x: complex_real(s),
             y: Complex::new(0.0, -s),
         }
     }
@@ -284,7 +148,7 @@ impl JonesVector {
     pub fn left_circular() -> Self {
         let s = std::f64::consts::FRAC_1_SQRT_2;
         Self {
-            x: Complex::real(s),
+            x: complex_real(s),
             y: Complex::new(0.0, s),
         }
     }
@@ -294,8 +158,8 @@ impl JonesVector {
     #[must_use]
     pub fn linear(angle: f64) -> Self {
         Self {
-            x: Complex::real(angle.cos()),
-            y: Complex::real(angle.sin()),
+            x: complex_real(angle.cos()),
+            y: complex_real(angle.sin()),
         }
     }
 
@@ -373,10 +237,10 @@ impl JonesMatrix {
     #[must_use]
     pub fn identity() -> Self {
         Self::new(
-            Complex::real(1.0),
-            Complex::zero(),
-            Complex::zero(),
-            Complex::real(1.0),
+            complex_real(1.0),
+            complex_zero(),
+            complex_zero(),
+            complex_real(1.0),
         )
     }
 
@@ -406,10 +270,10 @@ impl JonesMatrix {
     #[must_use]
     pub fn horizontal_polarizer() -> Self {
         Self::new(
-            Complex::real(1.0),
-            Complex::zero(),
-            Complex::zero(),
-            Complex::zero(),
+            complex_real(1.0),
+            complex_zero(),
+            complex_zero(),
+            complex_zero(),
         )
     }
 
@@ -418,10 +282,10 @@ impl JonesMatrix {
     #[must_use]
     pub fn vertical_polarizer() -> Self {
         Self::new(
-            Complex::zero(),
-            Complex::zero(),
-            Complex::zero(),
-            Complex::real(1.0),
+            complex_zero(),
+            complex_zero(),
+            complex_zero(),
+            complex_real(1.0),
         )
     }
 
@@ -432,10 +296,10 @@ impl JonesMatrix {
         let c = angle.cos();
         let s = angle.sin();
         Self::new(
-            Complex::real(c * c),
-            Complex::real(c * s),
-            Complex::real(c * s),
-            Complex::real(s * s),
+            complex_real(c * c),
+            complex_real(c * s),
+            complex_real(c * s),
+            complex_real(s * s),
         )
     }
 
@@ -484,10 +348,10 @@ impl JonesMatrix {
         let c = angle.cos();
         let s = angle.sin();
         Self::new(
-            Complex::real(c),
-            Complex::real(-s),
-            Complex::real(s),
-            Complex::real(c),
+            complex_real(c),
+            complex_real(-s),
+            complex_real(s),
+            complex_real(c),
         )
     }
 
@@ -887,7 +751,7 @@ mod tests {
 
     #[test]
     fn test_complex_from_polar() {
-        let z = Complex::from_polar(1.0, std::f64::consts::FRAC_PI_2);
+        let z = complex_from_polar(1.0, std::f64::consts::FRAC_PI_2);
         assert!(z.re.abs() < TOL);
         assert!((z.im - 1.0).abs() < TOL);
     }
@@ -949,7 +813,7 @@ mod tests {
 
     #[test]
     fn test_normalize_zero_fails() {
-        let z = JonesVector::new(Complex::zero(), Complex::zero());
+        let z = JonesVector::new(complex_zero(), complex_zero());
         assert!(z.normalized().is_err());
     }
 
@@ -1387,7 +1251,7 @@ mod tests {
     #[test]
     fn test_mie_result_serde() {
         // MieResult should roundtrip through serde
-        let result = crate::scattering::mie(1.0, Complex::real(1.5)).unwrap();
+        let result = crate::scattering::mie(1.0, complex_real(1.5)).unwrap();
         let json = serde_json::to_string(&result).unwrap();
         let back: crate::scattering::MieResult = serde_json::from_str(&json).unwrap();
         assert!((back.q_ext - result.q_ext).abs() < TOL);
