@@ -6,8 +6,6 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
 
-## [1.0.1] — 2026-03-28
-
 ### Changed
 
 - **license**: GPL-3.0 → GPL-3.0-only (no "or later" clause)
