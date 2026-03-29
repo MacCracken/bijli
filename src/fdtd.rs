@@ -13,6 +13,7 @@ use crate::field::{EPSILON_0, MU_0, SPEED_OF_LIGHT};
 /// 1D FDTD simulation state.
 ///
 /// Models E_z and H_y propagating in the x-direction.
+#[derive(Debug, Clone)]
 pub struct Fdtd1d {
     /// Electric field E_z at each grid point.
     pub e_field: Vec<f64>,
@@ -745,6 +746,7 @@ pub enum Mode2d {
 /// For TE mode: updates H_z, E_x, E_y.
 ///
 /// Fields are stored in row-major order: index = y * nx + x.
+#[derive(Debug, Clone)]
 pub struct Fdtd2d {
     /// Polarization mode.
     pub mode: Mode2d,
@@ -1077,6 +1079,7 @@ impl Fdtd2d {
 ///
 /// Updates all six field components: E_x, E_y, E_z, H_x, H_y, H_z.
 /// Fields are stored in row-major order: index = z * (nx * ny) + y * nx + x.
+#[derive(Debug, Clone)]
 pub struct Fdtd3d {
     /// Grid dimensions.
     pub nx: usize,

@@ -32,6 +32,7 @@ impl Default for HooshConfig {
     }
 }
 
+#[derive(Debug, Clone)]
 pub struct DaimonClient {
     config: DaimonConfig,
     client: reqwest::Client,
