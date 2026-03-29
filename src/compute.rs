@@ -2,7 +2,6 @@
 //!
 //! Defines the [`ComputeBackend`] trait and provides:
 //! - [`CpuBackend`] — reference CPU implementation (always available)
-//! - [`SooratBackend`] — GPU via soorat (requires `compute-soorat` feature)
 //! - [`WgpuBackend`] — GPU via wgpu (requires `compute-wgpu` feature)
 //!
 //! Use [`GpuFdtd2d`] for a backend-agnostic 2D FDTD solver.
@@ -315,40 +314,6 @@ impl<B: ComputeBackend> GpuFdtd2d<B> {
     }
 }
 
-// ── Soorat backend (optional) ─────────────────────────────────────
-
-#[cfg(feature = "compute-soorat")]
-mod soorat_backend {
-    use super::*;
-
-    /// GPU compute backend using soorat (AGNOS GPU engine).
-    ///
-    /// Delegates buffer management and kernel execution to soorat's
-    /// GPU compute infrastructure (wgpu-based).
-    pub struct SooratBackend {
-        _placeholder: (), // Will hold soorat::ComputeContext or similar
-    }
-
-    impl SooratBackend {
-        /// Create a new soorat backend.
-        ///
-        /// Initializes the GPU device through soorat.
-        pub fn new() -> Result<Self> {
-            tracing::info!("initializing soorat GPU compute backend");
-            Ok(Self { _placeholder: () })
-        }
-    }
-
-    // TODO: Implement ComputeBackend for SooratBackend once soorat
-    // exposes its compute pipeline API. The implementation will:
-    // 1. Create GPU buffers via soorat
-    // 2. Submit FDTD update shaders as compute dispatches
-    // 3. Synchronize via soorat's command queue
-}
-
-#[cfg(feature = "compute-soorat")]
-pub use soorat_backend::SooratBackend;
-
 // ── wgpu backend (optional) ───────────────────────────────────────
 
 #[cfg(feature = "compute-wgpu")]
@@ -356,8 +321,6 @@ mod wgpu_backend {
     use super::*;
 
     /// GPU compute backend using wgpu directly.
-    ///
-    /// For standalone GPU compute without the full soorat engine.
     pub struct WgpuBackend {
         _placeholder: (), // Will hold wgpu::Device, Queue, etc.
     }

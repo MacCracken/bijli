@@ -22,7 +22,7 @@ All milestones through V2.0 are shipped. See [CHANGELOG.md](/CHANGELOG.md) for d
 
 **V1.6**: Cross-module integration — PointCharge convenience methods, unified Material struct, FDTD/wave/circuit bridges.
 
-**V2.0**: 3D FDTD & GPU — full vector Yee grid, ComputeBackend trait (CPU/soorat/wgpu pipes), non-uniform grids, 4th-order FDTD, CW solver, eigenmode solver.
+**V2.0**: 3D FDTD & GPU — full vector Yee grid, ComputeBackend trait (CPU/wgpu pipes), non-uniform grids, 4th-order FDTD, CW solver, eigenmode solver.
 
 ---
 
@@ -54,5 +54,5 @@ All milestones through V2.0 are shipped. See [CHANGELOG.md](/CHANGELOG.md) for d
 | Particle dynamics | impetus | bijli computes forces, impetus integrates |
 | Optics (ray, wave) | prakash | bijli provides EM foundations; prakash builds ray tracing, lens design, etc. |
 | Quantum EM (QED) | future | bijli is classical EM |
-| GPU compute | soorat/wgpu | bijli provides the trait; backends are pluggable |
+| GPU compute | wgpu (interim) | bijli provides the trait; backends are pluggable — wgpu will be replaced by a custom GPU backend |
 | ML surrogates | daimon/hoosh | bijli defines solver interfaces; AI agents provide trained surrogates |

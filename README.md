@@ -45,7 +45,7 @@ sim.run(500, Some((100, 100)), 3e9, 1.0);
 | `scattering` | Yes | Mie and Rayleigh scattering |
 | `beam` | Yes | Gaussian beams, ABCD matrices, resonator stability, HG/LG modes |
 | `rf` | Yes | Transmission lines, S-parameters, Smith chart, Touchstone I/O, arrays |
-| `compute` | No | GPU compute backend trait (CPU/soorat/wgpu) |
+| `compute` | No | GPU compute backend trait (CPU/wgpu) |
 | `ai` | No | Daimon/hoosh AI integration |
 | `logging` | No | Structured logging via `BIJLI_LOG` |
 

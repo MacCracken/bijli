@@ -58,8 +58,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
 - impetus 0.23.3 → 1.0.0
 - reqwest 0.12 → 0.13
 - criterion 0.5 → 0.8
-- Added: soorat 0.24.3 (optional, `compute-soorat` feature)
 - Added: wgpu 25 (optional, `compute-wgpu` feature)
+- Removed: soorat dependency
 
 ## [0.24.3] — 2026-03-24
 

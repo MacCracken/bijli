@@ -1,6 +1,6 @@
 [package]
 name = "bijli"
-version = "1.0.1"
+version = "1.0.2"
 edition = "2024"
 rust-version = "1.89"
 license = "GPL-3.0-only"
@@ -28,7 +28,6 @@ scattering = ["polarization"]
 beam = []
 rf = ["polarization"]
 compute = []
-compute-soorat = ["compute", "dep:soorat"]
 compute-wgpu = ["compute", "dep:wgpu"]
 ai = ["dep:reqwest", "dep:tokio", "dep:serde_json"]
 logging = ["dep:tracing-subscriber"]
@@ -45,7 +44,6 @@ reqwest = { version = "0.13", features = ["json"], optional = true }
 tokio = { version = "1", features = ["full"], optional = true }
 serde_json = { version = "1", optional = true }
 tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"], optional = true }
-soorat = { version = "0.24.3", optional = true }
 wgpu = { version = "25", optional = true }
 
 [dev-dependencies]
