@@ -1,9 +1,9 @@
 [package]
 name = "bijli"
-version = "1.0.0"
+version = "1.0.1"
 edition = "2024"
 rust-version = "1.89"
-license = "GPL-3.0"
+license = "GPL-3.0-only"
 description = "Electromagnetism simulation — fields, Maxwell's equations, charge dynamics, EM waves"
 homepage = "https://github.com/MacCracken/bijli"
 repository = "https://github.com/MacCracken/bijli"
@@ -35,8 +35,6 @@ logging = ["dep:tracing-subscriber"]
 full = ["field", "maxwell", "charge", "wave", "circuit", "material", "fdtd", "relativity", "polarization", "scattering", "beam", "rf", "compute", "ai", "logging"]
 
 [dependencies]
-hisab = "1.1.0"
-impetus = "1.0.0"
 serde = { version = "1", features = ["derive"] }
 thiserror = "2"
 tracing = "0.1"

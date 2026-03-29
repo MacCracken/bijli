@@ -5,8 +5,8 @@
 **Bijli** (Hindi: बिजली — electricity, lightning) — Electromagnetism simulation — fields, Maxwell's equations, charge dynamics, EM waves
 
 - **Type**: Flat crate (library)
-- **License**: GPL-3.0
-- **Version**: 1.0.0
+- **License**: GPL-3.0-only
+- **Version**: 1.0.1
 
 ## Consumers
 
@@ -88,7 +88,7 @@ Root files (required):
   CONTRIBUTING.md    — fork, branch, make check, PR workflow
   SECURITY.md        — supported versions, scope, reporting
   CODE_OF_CONDUCT.md — Contributor Covenant
-  LICENSE            — GPL-3.0
+  LICENSE            — GPL-3.0-only
 
 docs/ (required):
   architecture/
