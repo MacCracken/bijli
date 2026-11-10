@@ -1397,8 +1397,20 @@ pub fn subpixel_permittivity_perpendicular_checked(
 const ETA_0: f64 = MU_0 * SPEED_OF_LIGHT;
 
 /// Minimum number of grid nodes required between opposite CPML layers:
-/// a grid needs `2·thickness + CPML_MIN_INTERIOR ≤ min(nx, ny)`.
+/// a grid needs `2·thickness + CPML_MIN_INTERIOR ≤ min(nx, ny)` in 2D and
+/// `≤ min(nx, ny, nz)` in 3D.
 const CPML_MIN_INTERIOR: usize = 3;
+
+/// Whether a CPML of `thickness` cells per side fits a grid whose smallest
+/// dimension is `min_dim` nodes (`thickness ≥ 1`, `2·thickness + 3 ≤ min_dim`).
+#[inline]
+fn cpml_fits(thickness: usize, min_dim: usize) -> bool {
+    thickness > 0
+        && thickness
+            .checked_mul(2)
+            .and_then(|v| v.checked_add(CPML_MIN_INTERIOR))
+            .is_some_and(|need| need <= min_dim)
+}
 
 /// Grading parameters for a [`Cpml`] absorbing layer.
 ///
@@ -1414,9 +1426,15 @@ const CPML_MIN_INTERIOR: usize = 3;
 /// The defaults of [`CpmlParams::new`] (m = 3, σ_max = σ_opt, κ_max = 1,
 /// α_max = 0) are the classic CPML, which absorbs propagating waves over a
 /// wide range of incidence angles (≈ −88 dB reflection measured for a
-/// 10-cell layer around a 2D point source). Raising `kappa_max` (5–15) and `alpha_max` improves absorption of
+/// 10-cell layer around a 2D point source, ≈ −80 dB in 3D). Raising
+/// `kappa_max` (5–15) and `alpha_max` improves absorption of
 /// evanescent / grazing fields; α_max = 2π ε₀ f_c only affects frequencies
 /// near or below f_c, so keep f_c well below the band of interest.
+///
+/// κ also shortens the wavelength inside the layer by up to κ_max, so it
+/// needs well-resolved sources: with κ_max = 5 a 10-cell layer reflects
+/// ≈ −60 dB for a Gaussian with c·τ ≈ 4 cells but ≈ −85 dB at c·τ ≳ 7 cells
+/// (2D and 3D alike).
 ///
 /// σ_opt assumes a vacuum background; scale `sigma_ratio` by 1/√(ε_r μ_r)
 /// when the layer is filled with another material.
@@ -1484,7 +1502,7 @@ impl CpmlParams {
     }
 }
 
-/// Convolutional PML (CPML) absorbing layer for [`Fdtd2d`].
+/// Convolutional PML (CPML) absorbing layer for [`Fdtd2d`] and [`Fdtd3d`].
 ///
 /// Implements the stretched-coordinate PML of Roden & Gedney (2000) with
 /// recursive convolution. Inside the layer every spatial derivative ∂/∂u
@@ -1494,11 +1512,16 @@ impl CpmlParams {
 /// c = σ (b − 1) / (κ (σ + κα)),
 ///
 /// where σ, κ, α are graded as described in [`CpmlParams`]. The profiles are
-/// sampled at the true Yee positions — integer nodes for the out-of-plane
-/// field (E_z in TM, H_z in TE) and half-cell nodes for the in-plane
-/// components — and Ψ is stored only inside the four PML strips.
+/// sampled at the true Yee positions of each corrected component along the
+/// derivative axis — integer nodes for the E update in 3D and for the
+/// out-of-plane field in 2D (E_z in TM, H_z in TE), half-cell nodes for the
+/// H update in 3D and the in-plane components in 2D. Ψ is stored only inside
+/// the PML: the four edge strips in 2D, the six face slabs in 3D (12 Ψ
+/// fields, one per field component and normal derivative).
 ///
-/// Normally created and attached through [`Fdtd2d::try_enable_cpml`].
+/// Normally created and attached through [`Fdtd2d::try_enable_cpml`] or
+/// [`Fdtd3d::try_enable_cpml`]; [`Fdtd3d::cpml`] returns the layer with its
+/// grading (its own 3D Ψ storage is internal to the simulation).
 #[derive(Debug, Clone)]
 pub struct Cpml {
     /// Number of PML cells on each side.
@@ -1625,12 +1648,13 @@ impl Cpml {
         }
     }
 
-    /// Allocate (and zero) the auxiliary Ψ fields for an `nx` × `ny` grid.
+    /// Allocate (and zero) the auxiliary Ψ fields for an `nx` × `ny` 2D grid.
     ///
     /// Ψ is stored only inside the PML strips: 2·thickness rows of `nx` cells
     /// and 2·thickness columns of `ny` cells per field. If the sizes overflow
     /// or cannot be allocated, a warning is logged and the layer is left
-    /// unattached.
+    /// unattached. ([`Fdtd3d`] keeps its own face-slab storage and does not
+    /// use this.)
     pub fn attach(&mut self, nx: usize, ny: usize) {
         let sizes = self
             .thickness
@@ -1702,16 +1726,21 @@ impl Cpml {
     /// grid; the strip updates rely on this (it bounds every index they use).
     fn is_attached_to(&self, nx: usize, ny: usize) -> bool {
         let t = self.thickness;
-        let fits = t
-            .checked_mul(2)
-            .and_then(|v| v.checked_add(CPML_MIN_INTERIOR))
-            .is_some_and(|need| need <= nx.min(ny));
-        if t == 0 || !fits || self.nx != nx || self.ny != ny {
+        if !cpml_fits(t, nx.min(ny)) || self.nx != nx || self.ny != ny || !self.has_profiles() {
             return false;
         }
         let (Some(sx), Some(sy)) = ((2 * t).checked_mul(nx), (2 * t).checked_mul(ny)) else {
             return false;
         };
+        self.psi_fx_y.len() == sx
+            && self.psi_fz_y.len() == sx
+            && self.psi_fy_x.len() == sy
+            && self.psi_fz_x.len() == sy
+    }
+
+    /// Whether every coefficient profile has one entry per layer (false for
+    /// the inert layer built from invalid input).
+    fn has_profiles(&self) -> bool {
         [
             &self.b_node,
             &self.c_node,
@@ -1721,11 +1750,116 @@ impl Cpml {
             &self.km1_half,
         ]
         .iter()
-        .all(|v| v.len() == t)
-            && self.psi_fx_y.len() == sx
-            && self.psi_fz_y.len() == sx
-            && self.psi_fy_x.len() == sy
-            && self.psi_fz_x.len() == sy
+        .all(|v| v.len() == self.thickness)
+    }
+
+    /// One 3D CPML derivative term over both face slabs normal to `AXIS`
+    /// (0 = x, 1 = y, 2 = z):
+    ///
+    /// Ψ ← b·Ψ + c·Δ,  f += sign·k·((1/κ − 1)·Δ + Ψ)
+    ///
+    /// With `HALF` the corrected field sits half a cell off the nodes along
+    /// `AXIS` (the H update): Δ = src[u + 1] − src[u] and layer l = 0..t lies
+    /// l + ½ cells from the wall. Otherwise (the E update) Δ = src[u] − src[u − 1]
+    /// and layer l = 1..t lies on the integer node l cells from the wall
+    /// (l = 0 is the PEC wall itself, reset after the update). `psi` has the
+    /// grid's shape with the `AXIS` extent replaced by 2·t layers, indexed
+    /// `side·t + l`, in the grid's x-fastest order.
+    ///
+    /// Caller guarantees `Cpml3d::is_attached_to(pass.dims)`, slice lengths
+    /// `nx·ny·nz` and `pass.ranges` within the main-loop update ranges.
+    #[inline]
+    fn correct_slabs<const AXIS: usize, const HALF: bool>(
+        &self,
+        psi: &mut [f64],
+        f: &mut [f64],
+        src: &[f64],
+        k: &[f64],
+        pass: &SlabPass,
+    ) {
+        let [nx, ny, _] = pass.dims;
+        let nxy = nx * ny;
+        let n = pass.dims[AXIS];
+        let t = self.thickness;
+        let stride = [1, nx, nxy][AXIS];
+        let (b, c, km1) = if HALF {
+            (&self.b_half, &self.c_half, &self.km1_half)
+        } else {
+            (&self.b_node, &self.c_node, &self.km1_node)
+        };
+        // First layer, and the high-side position offset: layer l of the high
+        // slab sits at index n − off − l along AXIS.
+        let (l0, off) = if HALF { (0, 2) } else { (1, 1) };
+        let mut pdims = pass.dims;
+        pdims[AXIS] = 2 * t;
+        let sign = pass.sign;
+
+        for side in 0..2 {
+            let layer = |u: usize| if side == 0 { u } else { n - off - u };
+            let mut r = pass.ranges.clone();
+            r[AXIS] = if side == 0 {
+                l0..t
+            } else {
+                n + 1 - off - t..n + 1 - off - l0
+            };
+            for z in r[2].clone() {
+                for y in r[1].clone() {
+                    let row = z * nxy + y * nx;
+                    if AXIS == 0 {
+                        // x-slab: the layer changes along the row — ascending
+                        // on the low side, descending on the high side.
+                        let xs = row + r[0].start..row + r[0].end;
+                        let (up, down) = if HALF {
+                            (xs.start + 1..xs.end + 1, xs.clone())
+                        } else {
+                            (xs.clone(), xs.start - 1..xs.end - 1)
+                        };
+                        let prow = (z * pdims[1] + y) * pdims[0] + side * t;
+                        let cells = f[xs.clone()]
+                            .iter_mut()
+                            .zip(&k[xs])
+                            .zip(src[up].iter().zip(&src[down]));
+                        let layers = b[l0..t]
+                            .iter()
+                            .zip(&c[l0..t])
+                            .zip(&km1[l0..t])
+                            .zip(psi[prow + l0..prow + t].iter_mut());
+                        if side == 0 {
+                            cpml_cells(cells, layers, sign);
+                        } else {
+                            cpml_cells(cells, layers.rev(), sign);
+                        }
+                    } else {
+                        // y- or z-slab: one layer per row, contiguous in x.
+                        let l = layer(if AXIS == 1 { y } else { z });
+                        let s = side * t + l;
+                        let (py, pz) = if AXIS == 1 { (s, z) } else { (y, s) };
+                        let xs = r[0].clone();
+                        let prow = (pz * pdims[1] + py) * pdims[0];
+                        let (hi, lo) = if HALF {
+                            (row + stride, row)
+                        } else {
+                            (row, row - stride)
+                        };
+                        let (bl, cl, kl) = (b[l], c[l], km1[l]);
+                        let cells = f[row + xs.start..row + xs.end]
+                            .iter_mut()
+                            .zip(&k[row + xs.start..row + xs.end])
+                            .zip(
+                                src[hi + xs.start..hi + xs.end]
+                                    .iter()
+                                    .zip(&src[lo + xs.start..lo + xs.end]),
+                            )
+                            .zip(psi[prow + xs.start..prow + xs.end].iter_mut());
+                        for (((fv, &kk), (&up, &down)), p) in cells {
+                            let d = up - down;
+                            *p = bl * *p + cl * d;
+                            *fv += sign * kk * (kl * d + *p);
+                        }
+                    }
+                }
+            }
+        }
     }
 
     /// CPML term for f_x at (x, y + ½) in the y-strips:
@@ -1846,6 +1980,21 @@ impl Cpml {
                 }
             }
         }
+    }
+}
+
+/// CPML update of consecutive cells paired with their layers:
+/// Ψ ← b·Ψ + c·Δ, f += sign·k·((1/κ − 1)·Δ + Ψ), Δ = up − down.
+#[inline]
+fn cpml_cells<'a>(
+    cells: impl Iterator<Item = ((&'a mut f64, &'a f64), (&'a f64, &'a f64))>,
+    layers: impl Iterator<Item = (((&'a f64, &'a f64), &'a f64), &'a mut f64)>,
+    sign: f64,
+) {
+    for (((f, &k), (&up, &down)), (((&b, &c), &km1), psi)) in cells.zip(layers) {
+        let d = up - down;
+        *psi = b * *psi + c * d;
+        *f += sign * k * (km1 * d + *psi);
     }
 }
 
@@ -2511,11 +2660,7 @@ impl Fdtd2d {
         self.check_grid()?;
         let (nx, ny) = (self.nx, self.ny);
         let t = params.thickness;
-        let fits = t
-            .checked_mul(2)
-            .and_then(|v| v.checked_add(CPML_MIN_INTERIOR))
-            .is_some_and(|need| need <= nx.min(ny));
-        if t == 0 || !fits {
+        if !cpml_fits(t, nx.min(ny)) {
             return Err(BijliError::InvalidParameter {
                 reason: format!(
                     "CPML thickness {t} is invalid for a {nx}×{ny} grid \
@@ -3254,6 +3399,181 @@ mod cpml_tests {
 
 // ── 3D FDTD ──────────────────────────────────────────────────────
 
+/// Geometry of one 3D CPML correction pass (see [`Cpml::correct_slabs`]).
+#[derive(Debug, Clone)]
+struct SlabPass {
+    /// Grid nodes along x, y, z.
+    dims: [usize; 3],
+    /// Main-loop update ranges of the corrected field along x, y, z; the
+    /// range along the derivative axis is replaced by the two slabs.
+    ranges: [std::ops::Range<usize>; 3],
+    /// Sign of this derivative term in the curl update.
+    sign: f64,
+}
+
+/// A [`Cpml`] attached to an [`Fdtd3d`] grid.
+///
+/// Holds the 12 auxiliary Ψ fields of the Roden–Gedney CPML, named
+/// `<component>_<derivative axis>` (e.g. `hx_z` is Ψ of ∂E_y/∂z in the H_x
+/// update). Each is stored only in the two face slabs normal to its
+/// derivative axis: the grid's shape with that axis cut to 2·thickness
+/// layers. The slabs overlap in the edge and corner regions, where several
+/// Ψ terms apply to the same component.
+#[derive(Debug, Clone)]
+struct Cpml3d {
+    /// Grading profiles and parameters.
+    layer: Cpml,
+    /// Grid nodes along x, y, z the Ψ fields are allocated for.
+    dims: [usize; 3],
+    hx_y: Vec<f64>,
+    hx_z: Vec<f64>,
+    hy_x: Vec<f64>,
+    hy_z: Vec<f64>,
+    hz_x: Vec<f64>,
+    hz_y: Vec<f64>,
+    ex_y: Vec<f64>,
+    ex_z: Vec<f64>,
+    ey_x: Vec<f64>,
+    ey_z: Vec<f64>,
+    ez_x: Vec<f64>,
+    ez_y: Vec<f64>,
+}
+
+impl Cpml3d {
+    /// Ψ lengths of the slabs normal to x, y and z (`None` on overflow).
+    fn slab_lens(thickness: usize, dims: [usize; 3]) -> Option<[usize; 3]> {
+        let [nx, ny, nz] = dims;
+        let t2 = thickness.checked_mul(2)?;
+        let len = |a: usize, b: usize| t2.checked_mul(a)?.checked_mul(b);
+        Some([len(ny, nz)?, len(nx, nz)?, len(nx, ny)?])
+    }
+
+    /// Allocate zeroed Ψ slabs for `layer` on a grid of `dims` nodes.
+    fn attach(layer: Cpml, dims: [usize; 3]) -> Result<Self> {
+        let [sx, sy, sz] =
+            Self::slab_lens(layer.thickness, dims).ok_or_else(|| BijliError::InvalidParameter {
+                reason: format!("CPML slabs for a {dims:?} grid are too large"),
+            })?;
+        Ok(Self {
+            layer,
+            dims,
+            hx_y: try_filled(sy, 0.0)?,
+            hx_z: try_filled(sz, 0.0)?,
+            hy_x: try_filled(sx, 0.0)?,
+            hy_z: try_filled(sz, 0.0)?,
+            hz_x: try_filled(sx, 0.0)?,
+            hz_y: try_filled(sy, 0.0)?,
+            ex_y: try_filled(sy, 0.0)?,
+            ex_z: try_filled(sz, 0.0)?,
+            ey_x: try_filled(sx, 0.0)?,
+            ey_z: try_filled(sz, 0.0)?,
+            ez_x: try_filled(sx, 0.0)?,
+            ez_y: try_filled(sy, 0.0)?,
+        })
+    }
+
+    /// Whether the profiles and every Ψ slab match a grid of `dims` nodes;
+    /// the slab corrections rely on this (it bounds every index they use).
+    fn is_attached_to(&self, dims: [usize; 3]) -> bool {
+        let t = self.layer.thickness;
+        let min_dim = dims[0].min(dims[1]).min(dims[2]);
+        if !cpml_fits(t, min_dim) || self.dims != dims || !self.layer.has_profiles() {
+            return false;
+        }
+        let Some([sx, sy, sz]) = Self::slab_lens(t, dims) else {
+            return false;
+        };
+        [
+            (&self.hx_y, sy),
+            (&self.hx_z, sz),
+            (&self.hy_x, sx),
+            (&self.hy_z, sz),
+            (&self.hz_x, sx),
+            (&self.hz_y, sy),
+            (&self.ex_y, sy),
+            (&self.ex_z, sz),
+            (&self.ey_x, sx),
+            (&self.ey_z, sz),
+            (&self.ez_x, sx),
+            (&self.ez_y, sy),
+        ]
+        .iter()
+        .all(|(v, len)| v.len() == *len)
+    }
+
+    /// CPML terms of the H update (half-cell profiles), applied after the
+    /// main H loops with the same update ranges.
+    ///
+    /// Caller guarantees `is_attached_to(dims)` and slice lengths `nx·ny·nz`.
+    fn correct_h(&mut self, h: [&mut [f64]; 3], e: [&[f64]; 3], ch: &[f64]) {
+        let Self {
+            layer,
+            dims,
+            hx_y,
+            hx_z,
+            hy_x,
+            hy_z,
+            hz_x,
+            hz_y,
+            ..
+        } = self;
+        let dims = *dims;
+        let [nx, ny, nz] = dims;
+        let [hx, hy, hz] = h;
+        let [ex, ey, ez] = e;
+        let pass = |ranges, sign| SlabPass { dims, ranges, sign };
+
+        // H_x at (x, y+½, z+½) += C_h·(Δ_z E_y − Δ_y E_z)
+        let r = [0..nx, 0..ny - 1, 0..nz - 1];
+        layer.correct_slabs::<2, true>(hx_z, hx, ey, ch, &pass(r.clone(), 1.0));
+        layer.correct_slabs::<1, true>(hx_y, hx, ez, ch, &pass(r, -1.0));
+        // H_y at (x+½, y, z+½) += C_h·(Δ_x E_z − Δ_z E_x)
+        let r = [0..nx - 1, 0..ny, 0..nz - 1];
+        layer.correct_slabs::<0, true>(hy_x, hy, ez, ch, &pass(r.clone(), 1.0));
+        layer.correct_slabs::<2, true>(hy_z, hy, ex, ch, &pass(r, -1.0));
+        // H_z at (x+½, y+½, z) += C_h·(Δ_y E_x − Δ_x E_y)
+        let r = [0..nx - 1, 0..ny - 1, 0..nz];
+        layer.correct_slabs::<1, true>(hz_y, hz, ex, ch, &pass(r.clone(), 1.0));
+        layer.correct_slabs::<0, true>(hz_x, hz, ey, ch, &pass(r, -1.0));
+    }
+
+    /// CPML terms of the E update (integer-node profiles), applied after the
+    /// main E loops and before the PEC walls.
+    ///
+    /// Caller guarantees `is_attached_to(dims)` and slice lengths `nx·ny·nz`.
+    fn correct_e(&mut self, e: [&mut [f64]; 3], h: [&[f64]; 3], ce: &[f64]) {
+        let Self {
+            layer,
+            dims,
+            ex_y,
+            ex_z,
+            ey_x,
+            ey_z,
+            ez_x,
+            ez_y,
+            ..
+        } = self;
+        let dims = *dims;
+        let [nx, ny, nz] = dims;
+        let [ex, ey, ez] = e;
+        let [hx, hy, hz] = h;
+        let pass = |ranges, sign| SlabPass { dims, ranges, sign };
+
+        // E_x at (x+½, y, z) += C_b·(Δ_y H_z − Δ_z H_y)
+        let r = [0..nx, 1..ny - 1, 1..nz - 1];
+        layer.correct_slabs::<1, false>(ex_y, ex, hz, ce, &pass(r.clone(), 1.0));
+        layer.correct_slabs::<2, false>(ex_z, ex, hy, ce, &pass(r, -1.0));
+        // E_y at (x, y+½, z) += C_b·(Δ_z H_x − Δ_x H_z)
+        let r = [1..nx - 1, 0..ny, 1..nz - 1];
+        layer.correct_slabs::<2, false>(ey_z, ey, hx, ce, &pass(r.clone(), 1.0));
+        layer.correct_slabs::<0, false>(ey_x, ey, hz, ce, &pass(r, -1.0));
+        // E_z at (x, y, z+½) += C_b·(Δ_x H_y − Δ_y H_x)
+        let r = [1..nx - 1, 1..ny - 1, 0..nz];
+        layer.correct_slabs::<0, false>(ez_x, ez, hy, ce, &pass(r.clone(), 1.0));
+        layer.correct_slabs::<1, false>(ez_y, ez, hx, ce, &pass(r, -1.0));
+    }
+}
+
 /// 3D FDTD simulation on a full vector Yee grid.
 ///
 /// Updates all six field components: E_x, E_y, E_z, H_x, H_y, H_z.
@@ -3261,9 +3581,12 @@ mod cpml_tests {
 ///
 /// # Boundaries
 ///
-/// The outer faces are perfect electric conductors (PEC): tangential E is
-/// held at zero on all six faces, so outgoing waves are fully reflected.
-/// CPML absorbing boundaries are currently available only for [`Fdtd2d`].
+/// By default the outer faces are perfect electric conductors (PEC):
+/// tangential E is held at zero on all six faces, so outgoing waves are
+/// fully reflected. Call [`Fdtd3d::try_enable_cpml`] to absorb outgoing waves
+/// instead: the CPML occupies the outermost `thickness` cells on every face
+/// (including the edge and corner regions) and is terminated by the same
+/// PEC wall.
 ///
 /// # Materials
 ///
@@ -3321,6 +3644,8 @@ pub struct Fdtd3d {
     permeability: Vec<f64>,
     /// Electric conductivity σ per cell (S/m); empty while all cells are lossless.
     conductivity: Vec<f64>,
+    /// Optional CPML absorbing boundaries.
+    cpml: Option<Cpml3d>,
 }
 
 /// Index ranges of a validated 3D region.
@@ -3387,6 +3712,7 @@ impl Fdtd3d {
             permittivity,
             permeability,
             conductivity: Vec::new(),
+            cpml: None,
         })
     }
 
@@ -3397,8 +3723,23 @@ impl Fdtd3d {
         z * (self.nx * self.ny) + y * self.nx + x
     }
 
-    /// Check that the grid geometry and every per-cell vector agree.
+    /// [`Self::check_grid`] plus consistency of the attached CPML.
     fn check_layout(&self) -> Result<usize> {
+        let n = self.check_grid()?;
+        let dims = [self.nx, self.ny, self.nz];
+        if self.cpml.as_ref().is_some_and(|c| !c.is_attached_to(dims)) {
+            return Err(BijliError::InvalidParameter {
+                reason: format!(
+                    "CPML is not attached to the current {}×{}×{} grid",
+                    self.nx, self.ny, self.nz
+                ),
+            });
+        }
+        Ok(n)
+    }
+
+    /// Check that the grid geometry and every per-cell vector agree.
+    fn check_grid(&self) -> Result<usize> {
         let n = grid_cells(&[self.nx, self.ny, self.nz])
             .ok()
             .filter(|_| self.nx >= 3 && self.ny >= 3 && self.nz >= 3);
@@ -3463,7 +3804,7 @@ impl Fdtd3d {
         mu_r: Option<f64>,
         sigma: Option<f64>,
     ) -> Result<()> {
-        let n = self.check_layout()?;
+        let n = self.check_grid()?;
         if sigma.is_some_and(|s| s > 0.0) && self.ca.is_empty() {
             let ca = try_filled(n, 1.0)?;
             let conductivity = try_filled(n, 0.0)?;
@@ -3641,11 +3982,93 @@ impl Fdtd3d {
         }
     }
 
+    /// Enable CPML absorbing boundaries on all six faces with the classic
+    /// grading ([`CpmlParams::new`]) and the given thickness (cells per side).
+    ///
+    /// Replaces the reflecting PEC walls by a convolutional PML occupying the
+    /// outermost `thickness` cells on every face. Typical thickness: 8–20
+    /// cells. Calling it again replaces the layer (Ψ restarts at zero).
+    ///
+    /// # Errors
+    ///
+    /// [`BijliError::InvalidParameter`] if `thickness == 0` or
+    /// `2·thickness + 3 > min(nx, ny, nz)`, or the grid state is
+    /// inconsistent. The current boundary configuration is unchanged on error.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use bijli::fdtd::Fdtd3d;
+    ///
+    /// let mut sim = Fdtd3d::new(32, 32, 32, 1e-3)?;
+    /// sim.try_enable_cpml(8)?;
+    /// sim.run(50, Some((16, 16, 16)), 3e10, 1.0);
+    /// assert_eq!(sim.cpml().map(|c| c.thickness), Some(8));
+    /// # Ok::<(), bijli::error::BijliError>(())
+    /// ```
+    pub fn try_enable_cpml(&mut self, thickness: usize) -> Result<()> {
+        self.try_enable_cpml_with(&CpmlParams::new(thickness))
+    }
+
+    /// Enable CPML absorbing boundaries with explicit grading parameters
+    /// (κ and CFS-α profiles, grading order, σ_max scale).
+    ///
+    /// # Errors
+    ///
+    /// As [`Fdtd3d::try_enable_cpml`], plus any parameter rejected by
+    /// [`Cpml::with_params`], or if the Ψ slabs cannot be allocated. The
+    /// current boundary configuration is unchanged on error.
+    pub fn try_enable_cpml_with(&mut self, params: &CpmlParams) -> Result<()> {
+        self.check_grid()?;
+        let dims = [self.nx, self.ny, self.nz];
+        let t = params.thickness;
+        if !cpml_fits(t, self.nx.min(self.ny).min(self.nz)) {
+            return Err(BijliError::InvalidParameter {
+                reason: format!(
+                    "CPML thickness {t} is invalid for a {}×{}×{} grid (need thickness ≥ 1 \
+                     and 2·thickness + {CPML_MIN_INTERIOR} ≤ min(nx, ny, nz))",
+                    self.nx, self.ny, self.nz
+                ),
+            });
+        }
+        let cpml = Cpml3d::attach(Cpml::with_params(params, self.dx, self.dt)?, dims)?;
+        if !cpml.is_attached_to(dims) {
+            return Err(BijliError::InvalidParameter {
+                reason: format!("cannot attach CPML to a {dims:?} grid"),
+            });
+        }
+        tracing::debug!(
+            thickness = t,
+            sigma_max = cpml.layer.sigma_max,
+            kappa_max = cpml.layer.kappa_max,
+            alpha_max = cpml.layer.alpha_max,
+            ?dims,
+            "3D CPML enabled"
+        );
+        self.cpml = Some(cpml);
+        Ok(())
+    }
+
+    /// Remove the CPML and return to reflecting PEC walls.
+    pub fn disable_cpml(&mut self) {
+        if self.cpml.take().is_some() {
+            tracing::debug!("3D CPML disabled");
+        }
+    }
+
+    /// The active CPML layer (thickness and grading), if any.
+    #[inline]
+    #[must_use]
+    pub fn cpml(&self) -> Option<&Cpml> {
+        self.cpml.as_ref().map(|c| &c.layer)
+    }
+
     /// Advance the simulation by one time step using the 3D Yee algorithm.
     ///
-    /// Updates all 6 field components; tangential E is zeroed on all faces
-    /// (PEC). If the public geometry fields or vector lengths were changed
-    /// into an inconsistent state, logs an error and does nothing.
+    /// Updates all 6 field components and applies the CPML if enabled;
+    /// tangential E is then zeroed on all faces (PEC). If the public geometry
+    /// fields or vector lengths were changed into an inconsistent state, logs
+    /// an error and does nothing.
     pub fn step_once(&mut self) {
         if let Err(e) = self.check_layout() {
             tracing::error!(error = %e, step = self.step, "Fdtd3d step skipped");
@@ -3689,6 +4112,14 @@ impl Fdtd3d {
             }
         }
 
+        if let Some(p) = self.cpml.as_mut() {
+            p.correct_h(
+                [&mut self.hx, &mut self.hy, &mut self.hz],
+                [&self.ex, &self.ey, &self.ez],
+                &self.ch,
+            );
+        }
+
         // Lossy cells: E ← C_a·E before adding the curl term.
         scale_by(&mut self.ex, &self.ca);
         scale_by(&mut self.ey, &self.ca);
@@ -3727,6 +4158,14 @@ impl Fdtd3d {
                     self.ez[i] += self.ce[i] * (dhy_dx - dhx_dy);
                 }
             }
+        }
+
+        if let Some(p) = self.cpml.as_mut() {
+            p.correct_e(
+                [&mut self.ex, &mut self.ey, &mut self.ez],
+                [&self.hx, &self.hy, &self.hz],
+                &self.ce,
+            );
         }
 
         // ── PEC walls: tangential E = 0 on all six faces ─────
@@ -3778,7 +4217,14 @@ impl Fdtd3d {
         frequency: f64,
         amplitude: f64,
     ) {
-        tracing::debug!(steps, ?source, frequency, amplitude, "3D FDTD run started");
+        tracing::debug!(
+            steps,
+            ?source,
+            frequency,
+            amplitude,
+            cpml = ?self.cpml.as_ref().map(|c| c.layer.thickness),
+            "3D FDTD run started"
+        );
         if let Err(e) = self.check_layout() {
             tracing::error!(error = %e, "Fdtd3d run aborted");
             return;
@@ -3814,6 +4260,308 @@ impl Fdtd3d {
             energy += 0.5 * eps * EPSILON_0 * e_sq + 0.5 * mu * MU_0 * h_sq;
         }
         energy * vol
+    }
+}
+
+#[cfg(test)]
+mod cpml3d_tests {
+    use super::*;
+    use crate::material::Material;
+
+    const DX: f64 = 1e-3;
+    /// CPML thickness of the reflection test.
+    const T: usize = 10;
+    /// Probe distance from the source along an axis.
+    const P: isize = 4;
+    /// Test grid (n³): the source at the centre lies P + 2 cells from the
+    /// CPML interface, so axis probes sit 2 cells inside the interior.
+    const N: usize = 2 * (P as usize + 2 + T) + 1;
+    /// Gaussian width in time steps (≈ 4.3 cells at S ≈ 0.289).
+    const TAU_STEPS: f64 = 15.0;
+    /// Recording window: covers the pulse, the reflections from the whole
+    /// graded layer and the PEC wall behind it, and ends before the wall
+    /// reflection of the reference grid reaches any probe.
+    const STEPS: usize = 170;
+    /// Reference grid (no CPML): its walls are 26 cells from the source.
+    /// Checked against a 97³ grid: the two agree to −85 dB over the window.
+    const N_REF: usize = 53;
+
+    /// Probe offsets from the source: all six faces, an edge and a corner.
+    const PROBES: [(isize, isize, isize); 8] = [
+        (-P, 0, 0),
+        (P, 0, 0),
+        (0, -P, 0),
+        (0, P, 0),
+        (0, 0, -P),
+        (0, 0, P),
+        (-P, P, 0),
+        (P, -P, -P),
+    ];
+
+    /// Soft Gaussian E_z point source at the grid centre; record E_z at the
+    /// probes.
+    fn record(n: usize, cpml: Option<&CpmlParams>) -> Vec<Vec<f64>> {
+        let mut sim = Fdtd3d::new(n, n, n, DX).unwrap();
+        if let Some(p) = cpml {
+            sim.try_enable_cpml_with(p).unwrap();
+        }
+        let c = (n / 2) as isize;
+        let at = |o: isize| (c + o) as usize;
+        let probes: Vec<usize> = PROBES
+            .iter()
+            .map(|&(ox, oy, oz)| sim.idx(at(ox), at(oy), at(oz)))
+            .collect();
+        let tau = TAU_STEPS * sim.dt;
+        let t0 = 4.0 * tau;
+        let mut out = vec![Vec::with_capacity(STEPS); probes.len()];
+        for _ in 0..STEPS {
+            sim.add_source_ez(n / 2, n / 2, n / 2, gaussian_pulse(sim.time(), t0, tau));
+            sim.step_once();
+            for (series, &i) in out.iter_mut().zip(&probes) {
+                series.push(sim.ez[i]);
+            }
+        }
+        out
+    }
+
+    /// Worst-case reflection over all probes: max|f − f_ref| / max|f_ref|.
+    fn reflection(test: &[Vec<f64>], reference: &[Vec<f64>]) -> f64 {
+        test.iter()
+            .zip(reference)
+            .map(|(a, r)| {
+                let peak = r.iter().fold(0.0_f64, |m, v| m.max(v.abs()));
+                let err = a
+                    .iter()
+                    .zip(r)
+                    .fold(0.0_f64, |m, (x, y)| m.max((x - y).abs()));
+                err / peak
+            })
+            .fold(0.0, f64::max)
+    }
+
+    fn db(r: f64) -> f64 {
+        20.0 * r.log10()
+    }
+
+    /// CFS-CPML parameters that exercise the κ and α terms.
+    fn cfs(thickness: usize, kappa_max: f64) -> CpmlParams {
+        let mut p = CpmlParams::new(thickness);
+        p.kappa_max = kappa_max;
+        p.alpha_max = 2.0 * std::f64::consts::PI * EPSILON_0 * 1e9;
+        p
+    }
+
+    #[test]
+    fn cpml3d_reflection() {
+        let classic = CpmlParams::new(T);
+        // κ shortens the wavelength inside the layer; with this narrow pulse
+        // (c·τ ≈ 4 cells) κ_max = 5 measures ≈ −64 dB (2D alike), κ_max = 3
+        // ≈ −77 dB.
+        let cfs = cfs(T, 3.0);
+        // Independent runs; threads keep the debug-build test short.
+        let [reference, wall, classic_rec, cfs_rec] = std::thread::scope(|s| {
+            [
+                s.spawn(|| record(N_REF, None)),
+                s.spawn(|| record(N, None)),
+                s.spawn(|| record(N, Some(&classic))),
+                s.spawn(|| record(N, Some(&cfs))),
+            ]
+            .map(|h| h.join().unwrap())
+        });
+        let pec = reflection(&wall, &reference);
+        let classic_r = reflection(&classic_rec, &reference);
+        let cfs_r = reflection(&cfs_rec, &reference);
+        eprintln!(
+            "3D: wall {:.1} dB, CPML({T}) {:.1} dB, CFS-CPML({T}, κ=3) {:.1} dB",
+            db(pec),
+            db(classic_r),
+            db(cfs_r)
+        );
+        // Without CPML the PEC walls reflect everything back into the probes.
+        assert!(pec > 0.3, "reference wall reflection only {pec}");
+        // 10-cell CPML measures ≈ −80 dB here (≈ −87 dB for a zero-DC
+        // differentiated Gaussian, whose residual does not grow late in the
+        // window like the plain Gaussian's static remnant); require ≤ −60 dB.
+        assert!(classic_r < 1e-3, "CPML reflection {classic_r}");
+        assert!(cfs_r < 1e-3, "CFS-CPML reflection {cfs_r}");
+    }
+
+    /// Peak and final total energy for a zero-DC (Ricker) pulse.
+    fn energy_history(cpml: Option<usize>) -> (f64, f64) {
+        let n = 25;
+        let mut sim = Fdtd3d::new(n, n, n, DX).unwrap();
+        if let Some(t) = cpml {
+            sim.try_enable_cpml(t).unwrap();
+        }
+        let tau = TAU_STEPS * sim.dt;
+        let t0 = 4.0 * tau;
+        let mut peak = 0.0_f64;
+        for step in 0..260 {
+            sim.add_source_ez(n / 2, n / 2, n / 2, ricker_wavelet(sim.time(), t0, tau));
+            sim.step_once();
+            if step % 5 == 0 {
+                peak = peak.max(sim.total_energy());
+            }
+        }
+        (peak, sim.total_energy())
+    }
+
+    #[test]
+    fn cpml3d_energy_decays() {
+        let [(peak_wall, end_wall), (peak_cpml, end_cpml)] = std::thread::scope(|s| {
+            [
+                s.spawn(|| energy_history(None)),
+                s.spawn(|| energy_history(Some(6))),
+            ]
+            .map(|h| h.join().unwrap())
+        });
+        eprintln!(
+            "3D: wall end/peak {:.3e}, CPML end/peak {:.3e}",
+            end_wall / peak_wall,
+            end_cpml / peak_cpml
+        );
+        // The source cell stores most of the peak energy reactively, so a
+        // closed PEC box keeps ≈ 10% of the peak once the pulse has left.
+        assert!(end_wall / peak_wall > 0.03, "PEC walls must trap energy");
+        assert!(
+            end_cpml / peak_cpml < 1e-6,
+            "CPML must absorb energy: {}",
+            end_cpml / peak_cpml
+        );
+    }
+
+    /// A z-directed source at the centre of a grid that is symmetric about
+    /// the source must produce mirror-symmetric fields; any index error in
+    /// the low/high slabs or between the x/y slab code paths breaks this.
+    #[test]
+    fn cpml3d_fields_are_mirror_symmetric() {
+        // E_z sits at z + ½: an even nz puts the source E_z on the mid-plane.
+        let (n, nz) = (21, 20);
+        let (c, cz) = (n / 2, nz / 2 - 1);
+        let mut sim = Fdtd3d::new(n, n, nz, DX).unwrap();
+        sim.try_enable_cpml_with(&cfs(5, 3.0)).unwrap();
+        let tau = 8.0 * sim.dt;
+        for _ in 0..120 {
+            sim.add_source_ez(c, c, cz, gaussian_pulse(sim.time(), 4.0 * tau, tau));
+            sim.step_once();
+        }
+        let max_abs = |f: &[f64]| f.iter().fold(0.0_f64, |m, v| m.max(v.abs()));
+        let (tol, tol_h) = (1e-9 * max_abs(&sim.ez), 1e-9 * max_abs(&sim.hx));
+        assert!(tol > 0.0 && tol_h > 0.0);
+        let close = |a: f64, b: f64| (a - b).abs() <= tol;
+        let i = |x, y, z| sim.idx(x, y, z);
+        for z in 0..nz - 1 {
+            for y in 0..n {
+                for x in 0..n {
+                    let ez = sim.ez[i(x, y, z)];
+                    // E_z is even under x, y and z mirrors and under x ↔ y.
+                    assert!(
+                        close(ez, sim.ez[i(n - 1 - x, y, z)]),
+                        "x mirror at {x},{y},{z}"
+                    );
+                    assert!(
+                        close(ez, sim.ez[i(x, n - 1 - y, z)]),
+                        "y mirror at {x},{y},{z}"
+                    );
+                    assert!(
+                        close(ez, sim.ez[i(x, y, nz - 2 - z)]),
+                        "z mirror at {x},{y},{z}"
+                    );
+                    assert!(close(ez, sim.ez[i(y, x, z)]), "x↔y at {x},{y},{z}");
+                    // x ↔ y swaps E_x ↔ E_y and H_x ↔ −H_y.
+                    assert!(close(sim.ex[i(x, y, z)], sim.ey[i(y, x, z)]), "E x↔y");
+                    let (hx, hy) = (sim.hx[i(x, y, z)], sim.hy[i(y, x, z)]);
+                    assert!((hx + hy).abs() <= tol_h, "H x↔y at {x},{y},{z}");
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn cpml3d_stable_long_run_with_materials() {
+        let mut sim = Fdtd3d::new(19, 19, 19, DX).unwrap();
+        sim.try_enable_cpml_with(&cfs(4, 5.0)).unwrap();
+        // Dielectric + lossy block that overlaps the x-low PML slab.
+        sim.set_material(0, 6, 6, 9, 13, 13, &Material::new(4.0, 2.0, 0.5))
+            .unwrap();
+        sim.run(500, Some((12, 9, 9)), 3e10, 1.0);
+        let fields = [&sim.ex, &sim.ey, &sim.ez, &sim.hx, &sim.hy, &sim.hz];
+        assert!(fields.iter().all(|f| f.iter().all(|v| v.is_finite())));
+        assert!(sim.total_energy() > 0.0);
+    }
+
+    #[test]
+    fn cpml3d_enable_validates_and_disables() {
+        let mut sim = Fdtd3d::new(20, 30, 40, DX).unwrap();
+        assert!(sim.try_enable_cpml(0).is_err());
+        // 2·9 + 3 = 21 > min(20, 30, 40)
+        assert!(sim.try_enable_cpml(9).is_err());
+        assert!(sim.cpml().is_none());
+        sim.try_enable_cpml(8).unwrap();
+        let cpml = sim.cpml().unwrap();
+        assert_eq!(cpml.thickness, 8);
+        let sigma_opt = 0.8 * 4.0 / (ETA_0 * DX);
+        assert!((cpml.sigma_max() - sigma_opt).abs() < 1e-9 * sigma_opt);
+        assert!((cpml.kappa_max() - 1.0).abs() < 1e-15);
+        // Invalid requests keep the active layer.
+        assert!(sim.try_enable_cpml(100).is_err());
+        let mut bad = CpmlParams::new(4);
+        bad.kappa_max = 0.5;
+        assert!(sim.try_enable_cpml_with(&bad).is_err());
+        bad.kappa_max = f64::NAN;
+        assert!(sim.try_enable_cpml_with(&bad).is_err());
+        assert_eq!(sim.cpml().map(|c| c.thickness), Some(8));
+        // Re-enabling replaces the layer.
+        sim.try_enable_cpml_with(&cfs(5, 7.0)).unwrap();
+        let cpml = sim.cpml().unwrap();
+        assert_eq!(cpml.thickness, 5);
+        assert!((cpml.kappa_max() - 7.0).abs() < 1e-15);
+        sim.disable_cpml();
+        assert!(sim.cpml().is_none());
+        sim.disable_cpml();
+        assert!(sim.cpml().is_none());
+    }
+
+    #[test]
+    fn cpml3d_disabled_matches_pec() {
+        // Disabling the CPML restores the original PEC update exactly.
+        let run = |toggle: bool| {
+            let mut sim = Fdtd3d::new(11, 11, 11, DX).unwrap();
+            if toggle {
+                sim.try_enable_cpml(2).unwrap();
+                sim.disable_cpml();
+            }
+            sim.run(40, Some((5, 5, 5)), 3e10, 1.0);
+            sim.ez
+        };
+        assert_eq!(run(false), run(true));
+    }
+
+    #[test]
+    fn cpml3d_desynced_fields_do_not_panic() {
+        let mut sim = Fdtd3d::new(12, 12, 12, DX).unwrap();
+        sim.try_enable_cpml(3).unwrap();
+        // Same cell count, but the CPML no longer matches the geometry.
+        sim.nx = 6;
+        sim.ny = 24;
+        sim.step_once();
+        sim.run(3, Some((2, 2, 2)), 1e9, 1.0);
+        assert_eq!(sim.step, 0);
+        // The material API only needs a consistent grid.
+        assert!(sim.set_permittivity(0, 0, 0, 2, 2, 2, 2.0).is_ok());
+        sim.nx = 12;
+        sim.ny = 12;
+        sim.step_once();
+        assert_eq!(sim.step, 1);
+        sim.nz = 1000;
+        assert!(sim.try_enable_cpml(3).is_err());
+        sim.step_once();
+        assert_eq!(sim.step, 1);
+        sim.nz = 12;
+        sim.ex.truncate(5);
+        sim.step_once();
+        assert!(sim.try_enable_cpml(3).is_err());
+        assert_eq!(sim.step, 1);
     }
 }
 

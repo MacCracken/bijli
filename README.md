@@ -38,7 +38,7 @@ sim.run(500, Some((100, 100)), 3e9, 1.0);
 | `wave` | Yes | EM waves, Fresnel equations, waveguides, antenna patterns |
 | `circuit` | Yes | Ohm's law, RC/RL/RLC circuits, series/parallel combinations |
 | `material` | Yes | Dielectric/magnetic materials, unified `Material` struct |
-| `fdtd` | Yes | 1D/2D/3D FDTD solvers, CPML (2D), lossy/dispersive materials, TFSF, NF2FF, eigenmode |
+| `fdtd` | Yes | 1D/2D/3D FDTD solvers, CPML (2D/3D), lossy/dispersive materials, TFSF, NF2FF, eigenmode |
 | `relativity` | Yes | EM tensor, Lorentz transforms, Liénard-Wiechert fields, retarded time |
 | `polarization` | Yes | Jones/Stokes/Mueller formalism, optical elements |
 | `scattering` | Yes | Mie and Rayleigh scattering |

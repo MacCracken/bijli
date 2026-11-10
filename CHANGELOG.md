@@ -6,6 +6,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
 
+### Added
+
+- **fdtd**: CPML absorbing boundaries for `Fdtd3d` — `try_enable_cpml`, `try_enable_cpml_with`, `disable_cpml`, `cpml` (same validation as 2D: thickness ≥ 1 and `2·t + 3 ≤ min(nx, ny, nz)`; errors leave the boundaries unchanged). Roden–Gedney CPML on all six faces, including edges and corners: 12 Ψ fields (one per field component and normal derivative) stored only in the face slabs, with κ scaling and b/c profiles at the integer (E) / half-cell (H) Yee positions, applied as corrections after the main loops so the PEC path is unchanged. Measured against a 53³ PEC reference grid at 8 probes (faces, edge, corner) for a 10-cell layer: −80 dB (classic), −77 dB (CFS, κ_max = 3). Energy falls to 2e-8 of its peak once the pulse has left (PEC box: ≈ 0.1). Cost (new bench `fdtd/3d_step_30x30x30_cpml8`): 452 µs vs 298 µs for `fdtd/3d_step_30x30x30` (+51%, 15 s criterion run — the 8-cell slabs cover over half of a 30³ grid)
+
 ## [1.2.0] — 2026-11-09
 
 Toolchain/dependency refresh plus a full physics and robustness audit of every module.

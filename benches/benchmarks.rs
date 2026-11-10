@@ -291,6 +291,16 @@ fn fdtd_benchmarks(c: &mut Criterion) {
         })
     });
 
+    group.bench_function("3d_step_30x30x30_cpml8", |b| {
+        let mut sim = bijli::fdtd::Fdtd3d::new(30, 30, 30, 1e-3).unwrap();
+        sim.try_enable_cpml(8).unwrap();
+        sim.add_source_ez(15, 15, 15, 1.0);
+        b.iter(|| {
+            sim.step_once();
+            black_box(sim.total_energy())
+        })
+    });
+
     group.bench_function("nf2ff_2d_80x80_180", |b| {
         let mut sim = bijli::fdtd::Fdtd2d::new(80, 80, 1e-3, bijli::fdtd::Mode2d::Tm).unwrap();
         sim.run(60, Some((40, 40)), 3e10, 1.0);

@@ -19,7 +19,7 @@
 | `scattering` | `scattering` | polarization | Mie (Bohren–Huffman), Rayleigh |
 | `beam` | `beam` | — | Gaussian beams, ABCD, resonators, HG/LG modes |
 | `rf` | `rf` | polarization | Transmission lines, Smith chart, stub matching, 2-port S-parameters, Touchstone v1.1 I/O, arrays |
-| `fdtd` | `fdtd` | field, material | 1D/2D/3D Yee solvers, 2D CPML, lossy + Drude/Lorentz/Debye ADE, TFSF, NF2FF, CW accumulation, eigenmodes |
+| `fdtd` | `fdtd` | field, material | 1D/2D/3D Yee solvers, 2D/3D CPML, lossy + Drude/Lorentz/Debye ADE, TFSF, NF2FF, CW accumulation, eigenmodes |
 | `compute` | `compute` | fdtd, field | `ComputeBackend` trait, `CpuBackend`, `GpuFdtd2d<B>`; `WgpuBackend` (`compute-wgpu`) is a scaffold |
 | `integration::soorat` | `soorat-compat` | (fdtd, charge for some constructors) | Visualization DTOs for the soorat renderer |
 | `ai` | `ai` | reqwest, tokio, serde_json | Daimon/hoosh agent registration client |
@@ -33,7 +33,7 @@ imports must be mirrored as feature dependencies in `Cargo.toml`.
 ```
 Material ──► maxwell / wave (Fresnel, impedance) ──► kiran (rendering), prakash (optics)
    │
-   └──► fdtd (set_material: ε, μ, σ) ──► Fdtd1d / Fdtd2d (+CPML) / Fdtd3d
+   └──► fdtd (set_material: ε, μ, σ) ──► Fdtd1d / Fdtd2d (+CPML) / Fdtd3d (+CPML)
                                               │
               sources (gaussian, ricker, TFSF)┘── CwAccumulator ──► nf2ff_2d_phasor ──► RadiationPattern (soorat)
 PointCharge ──► field (E, φ, B) ──► charge (forces) ──► impetus (integration, outside bijli)

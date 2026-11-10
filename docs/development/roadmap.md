@@ -51,7 +51,7 @@ All milestones through V2.0 are shipped. See [CHANGELOG.md](/CHANGELOG.md) for d
 
 ## Backlog — follow-ups from the 1.2.0 audit
 
-- [ ] **CPML for `Fdtd3d`** — 3D walls are PEC only; port the 2D Roden–Gedney implementation (Ψ in six face slabs)
+- [x] **CPML for `Fdtd3d`** — Roden–Gedney CPML on all six faces (`try_enable_cpml`/`try_enable_cpml_with`/`disable_cpml`/`cpml`): 12 Ψ fields stored only in the face slabs, −80 dB reflection measured for a 10-cell layer around a 3D point source
 - [ ] **CPML + materials for `GpuFdtd2d`** — the compute-backend solver has PEC walls and vacuum only
 - [ ] **TFSF integration into `Fdtd2d`** — `TfsfSource` is a standalone auxiliary grid; add plane-wave injection on the TF/SF contour
 - [ ] **Frequency-aware lossy Fresnel** — complex ε = ε − jσ/ω so conductors are supported (today they return `Err`)
