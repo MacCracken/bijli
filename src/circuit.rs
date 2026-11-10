@@ -315,54 +315,89 @@ pub fn rl_current_decay(i0: f64, resistance: f64, inductance: f64, t: f64) -> Re
 
 // ── RLC circuit ────────────────────────────────────────────────────
 
-/// Resonant frequency of an LC/RLC circuit: f₀ = 1/(2π√(LC)).
+/// Validate that L and C are finite and positive.
+#[inline]
+fn validate_lc(inductance: f64, capacitance: f64) -> Result<()> {
+    if !(inductance.is_finite() && inductance > 0.0 && capacitance.is_finite() && capacitance > 0.0)
+    {
+        return Err(BijliError::InvalidParameter {
+            reason: format!(
+                "L and C must be finite and positive, got L={inductance}, C={capacitance}"
+            ),
+        });
+    }
+    Ok(())
+}
+
+/// Resonant frequency of an LC/RLC circuit: f₀ = 1/(2π√(LC)) (Hz).
+///
+/// # Errors
+///
+/// [`BijliError::InvalidParameter`] unless L and C are both finite and
+/// positive.
 #[inline]
 pub fn resonant_frequency(inductance: f64, capacitance: f64) -> Result<f64> {
-    let product = inductance * capacitance;
-    if product <= 0.0 {
-        return Err(BijliError::InvalidParameter {
-            reason: format!("LC product must be positive, got L={inductance}, C={capacitance}"),
-        });
-    }
-    Ok(1.0 / (2.0 * std::f64::consts::PI * product.sqrt()))
+    validate_lc(inductance, capacitance)?;
+    Ok(1.0 / (2.0 * std::f64::consts::PI * (inductance * capacitance).sqrt()))
 }
 
-/// Angular resonant frequency: ω₀ = 1/√(LC).
+/// Angular resonant frequency: ω₀ = 1/√(LC) (rad/s).
+///
+/// # Errors
+///
+/// [`BijliError::InvalidParameter`] unless L and C are both finite and
+/// positive.
 #[inline]
 pub fn resonant_angular_frequency(inductance: f64, capacitance: f64) -> Result<f64> {
-    let product = inductance * capacitance;
-    if product <= 0.0 {
-        return Err(BijliError::InvalidParameter {
-            reason: format!("LC product must be positive, got L={inductance}, C={capacitance}"),
-        });
-    }
-    Ok(1.0 / product.sqrt())
+    validate_lc(inductance, capacitance)?;
+    Ok(1.0 / (inductance * capacitance).sqrt())
 }
 
-/// Quality factor of an RLC circuit: Q = (1/R)√(L/C).
+/// Quality factor of a **series** RLC circuit: Q = (1/R)√(L/C) = ω₀L/R.
+///
+/// This is the series-RLC formula; for a parallel RLC tank Q = R√(C/L),
+/// which this function does not compute. Related to [`damping_ratio`] by
+/// Q = 1/(2ζ).
+///
+/// # Errors
+///
+/// - [`BijliError::DivisionByZero`] if |R| < 10⁻³⁰.
+/// - [`BijliError::InvalidParameter`] if R is negative or not finite, or L
+///   and C are not both finite and positive.
 #[inline]
 pub fn quality_factor(resistance: f64, inductance: f64, capacitance: f64) -> Result<f64> {
-    if resistance.abs() < 1e-30 {
+    if !(resistance.is_finite() && resistance >= 0.0) {
+        return Err(BijliError::InvalidParameter {
+            reason: format!("resistance must be finite and non-negative, got {resistance}"),
+        });
+    }
+    if resistance < 1e-30 {
         return Err(BijliError::DivisionByZero {
             context: "resistance cannot be zero for quality factor".into(),
         });
     }
-    if capacitance <= 0.0 {
-        return Err(BijliError::InvalidParameter {
-            reason: format!("capacitance must be positive, got {capacitance}"),
-        });
-    }
+    validate_lc(inductance, capacitance)?;
     Ok((inductance / capacitance).sqrt() / resistance)
 }
 
-/// Damping ratio of a series RLC circuit: ζ = R/(2)√(C/L).
+/// Damping ratio of a **series** RLC circuit: ζ = (R/2)√(C/L).
+///
+/// This is the series-RLC formula; for a parallel RLC tank
+/// ζ = (1/(2R))√(L/C), which this function does not compute. ζ < 1 is
+/// underdamped, ζ = 1 critically damped, ζ > 1 overdamped; ζ = 1/(2Q).
+///
+/// # Errors
+///
+/// [`BijliError::InvalidParameter`] if R is negative or not finite, or L and
+/// C are not both finite and positive.
 #[inline]
 pub fn damping_ratio(resistance: f64, inductance: f64, capacitance: f64) -> Result<f64> {
-    if inductance <= 0.0 {
+    if !(resistance.is_finite() && resistance >= 0.0) {
         return Err(BijliError::InvalidParameter {
-            reason: format!("inductance must be positive, got {inductance}"),
+            reason: format!("resistance must be finite and non-negative, got {resistance}"),
         });
     }
+    validate_lc(inductance, capacitance)?;
     Ok(resistance * 0.5 * (capacitance / inductance).sqrt())
 }
 
@@ -472,6 +507,7 @@ mod tests {
 
     // ── Capacitance & Inductance ───────────────────────────────────
 
+    #[cfg(feature = "field")]
     #[test]
     fn test_parallel_plate_capacitance() {
         use crate::field::EPSILON_0;
@@ -491,6 +527,7 @@ mod tests {
         assert!((capacitor_charge(1e-6, 5.0) - 5e-6).abs() < 1e-20);
     }
 
+    #[cfg(feature = "field")]
     #[test]
     fn test_solenoid_inductance() {
         use crate::field::MU_0;
@@ -675,6 +712,7 @@ mod tests {
         assert!(resistance_from_geometry(1.68e-8, 1.0, 0.0).is_err());
     }
 
+    #[cfg(feature = "field")]
     #[test]
     fn test_parallel_plate_capacitance_zero_separation() {
         use crate::field::EPSILON_0;
@@ -694,5 +732,46 @@ mod tests {
     #[test]
     fn test_resonant_frequency_negative_lc() {
         assert!(resonant_frequency(-1e-3, 1e-6).is_err());
+    }
+
+    #[test]
+    fn test_resonant_frequency_both_negative_or_nan() {
+        // L·C > 0 with both negative used to pass the product check.
+        assert!(resonant_frequency(-1e-3, -1e-6).is_err());
+        assert!(resonant_angular_frequency(-1e-3, -1e-6).is_err());
+        assert!(resonant_frequency(f64::NAN, 1e-6).is_err());
+        assert!(resonant_angular_frequency(1e-3, f64::NAN).is_err());
+    }
+
+    #[test]
+    fn test_quality_factor_validates_inductance() {
+        // Used to return Ok(NaN) / Ok(0) because only C was checked.
+        assert!(quality_factor(10.0, -1e-3, 1e-6).is_err());
+        assert!(quality_factor(10.0, 0.0, 1e-6).is_err());
+        assert!(quality_factor(10.0, f64::NAN, 1e-6).is_err());
+        assert!(quality_factor(f64::NAN, 1e-3, 1e-6).is_err());
+        assert!(quality_factor(-10.0, 1e-3, 1e-6).is_err());
+    }
+
+    #[test]
+    fn test_damping_ratio_validates_capacitance() {
+        // Used to return Ok(NaN) / Ok(0) because only L was checked.
+        assert!(damping_ratio(10.0, 1e-3, -1e-6).is_err());
+        assert!(damping_ratio(10.0, 1e-3, 0.0).is_err());
+        assert!(damping_ratio(10.0, 1e-3, f64::NAN).is_err());
+        assert!(damping_ratio(-10.0, 1e-3, 1e-6).is_err());
+        // R = 0 is a valid (undamped) series LC.
+        assert_eq!(damping_ratio(0.0, 1e-3, 1e-6).unwrap(), 0.0);
+    }
+
+    #[test]
+    fn test_series_rlc_q_zeta_closed_form() {
+        // R=10 Ω, L=1 mH, C=1 µF: ω₀ = 1/√(LC) = 31622.7766 rad/s,
+        // Q = ω₀L/R = 3.16227766, ζ = 1/(2Q) = 0.158113883.
+        let q = quality_factor(10.0, 1e-3, 1e-6).unwrap();
+        let zeta = damping_ratio(10.0, 1e-3, 1e-6).unwrap();
+        assert!((q - 3.162_277_660_168_379).abs() < 1e-12);
+        assert!((zeta - 0.158_113_883_008_418_97).abs() < 1e-14);
+        assert!((q * 2.0 * zeta - 1.0).abs() < 1e-14);
     }
 }

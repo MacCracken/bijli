@@ -3,7 +3,30 @@
 //! Jones formalism handles fully polarized coherent light. Stokes/Mueller
 //! handles partially polarized and incoherent light.
 //!
-//! All angles in radians. Jones vectors use complex amplitudes (Re, Im pairs).
+//! All angles in radians, measured from the +x (horizontal) axis toward +y.
+//! Jones vectors use complex amplitudes (Re, Im pairs).
+//!
+//! # Phase and handedness conventions
+//!
+//! - **Time dependence e^{−iωt}** (physics convention: Born & Wolf, Hecht,
+//!   Jackson). A component E = |E| e^{iφ} with larger φ *lags* in time.
+//! - **Retarders**: [`JonesMatrix::waveplate`] multiplies the fast-axis
+//!   component by e^{−iδ/2} and the slow-axis component by e^{+iδ/2}, so the
+//!   slow axis lags the fast axis by δ. [`MuellerMatrix::waveplate`] is the
+//!   Mueller form of the same element (via [`StokesVector::from_jones`]).
+//! - **Handedness**: [`JonesVector::right_circular`] = [1, −i]/√2 rotates
+//!   clockwise as seen by an observer looking toward the source (Born & Wolf /
+//!   Hecht "right-handed"; this is *left*-handed in the IEEE convention) and
+//!   has S₃ = +1, with S₃ = 2 Im(E_x E_y*).
+//! - **Rotations**: [`JonesMatrix::rotator`]`(θ)` actively rotates the
+//!   polarization by +θ; [`MuellerMatrix::rotation`]`(θ)` rotates the
+//!   *coordinate frame* by +θ and therefore equals the Mueller form of
+//!   `JonesMatrix::rotator(−θ)`.
+//!
+//! [`crate::scattering::mie`] uses the opposite **e^{+iωt}** convention
+//! (absorbing index Im(m) < 0, outgoing Hankel function h⁽²⁾). Complex
+//! amplitudes must be conjugated when moving phases between the two modules;
+//! intensities, Stokes parameters and efficiencies are unaffected.
 
 use serde::{Deserialize, Serialize};
 
@@ -14,6 +37,10 @@ use crate::error::{BijliError, Result};
 pub use hisab::num::Complex;
 
 /// Extension methods for hisab's [`Complex`] used throughout bijli.
+///
+/// Since hisab 1.4, `norm_sq` and `arg` are inherent methods on [`Complex`]
+/// (inherent methods win method resolution); the trait versions delegate to
+/// them and are kept for API compatibility.
 pub trait ComplexExt {
     /// Squared magnitude |z|².
     fn norm_sq(self) -> f64;
@@ -26,7 +53,7 @@ pub trait ComplexExt {
 impl ComplexExt for Complex {
     #[inline]
     fn norm_sq(self) -> f64 {
-        self.re * self.re + self.im * self.im
+        Complex::norm_sq(self)
     }
 
     #[inline]
@@ -36,7 +63,7 @@ impl ComplexExt for Complex {
 
     #[inline]
     fn arg(self) -> f64 {
-        self.im.atan2(self.re)
+        Complex::arg(self)
     }
 }
 
@@ -58,10 +85,14 @@ pub fn complex_zero() -> Complex {
 #[inline]
 #[must_use]
 pub fn complex_from_polar(magnitude: f64, phase: f64) -> Complex {
-    Complex::new(magnitude * phase.cos(), magnitude * phase.sin())
+    Complex::from_polar(magnitude, phase)
 }
 
 // ── Jones vector ──────────────────────────────────────────────────
+
+/// Intensities at or above this are computed without loss of precision to
+/// underflow; smaller (or non-finite) values take the rescaling path.
+const SAFE_MIN_INTENSITY: f64 = 1e-290;
 
 /// Jones vector — represents the polarization state of fully polarized light.
 ///
@@ -171,15 +202,46 @@ impl JonesVector {
     }
 
     /// Normalize to unit intensity.
+    ///
+    /// Works for any non-zero finite amplitude scale (e.g. 1e-200 or 1e200):
+    /// when |E_x|² + |E_y|² would under- or overflow, the vector is first
+    /// rescaled by its largest component.
+    ///
+    /// # Errors
+    /// [`BijliError::DivisionByZero`] for the zero vector;
+    /// [`BijliError::InvalidParameter`] for non-finite components.
     #[inline]
     pub fn normalized(&self) -> Result<Self> {
         let i = self.intensity();
-        if i < 1e-30 {
-            return Err(BijliError::DivisionByZero {
-                context: "cannot normalize zero Jones vector".into(),
+        let v = if i.is_finite() && i >= SAFE_MIN_INTENSITY {
+            *self
+        } else {
+            self.rescaled()?
+        };
+        let s = 1.0 / v.intensity().sqrt();
+        Ok(Self {
+            x: v.x * s,
+            y: v.y * s,
+        })
+    }
+
+    /// Copy scaled so that its largest real or imaginary component has
+    /// magnitude 1 (so the intensity lies in [1, 4]).
+    #[inline]
+    fn rescaled(&self) -> Result<Self> {
+        let parts = [self.x.re, self.x.im, self.y.re, self.y.im];
+        if parts.iter().any(|p| !p.is_finite()) {
+            return Err(BijliError::InvalidParameter {
+                reason: "Jones vector components must be finite".into(),
             });
         }
-        let s = 1.0 / i.sqrt();
+        let max = parts.iter().fold(0.0_f64, |acc, p| acc.max(p.abs()));
+        if max == 0.0 {
+            return Err(BijliError::DivisionByZero {
+                context: "zero Jones vector has no polarization state".into(),
+            });
+        }
+        let s = 1.0 / max;
         Ok(Self {
             x: self.x * s,
             y: self.y * s,
@@ -195,16 +257,22 @@ impl JonesVector {
 
     /// Degree of orthogonality: |⟨J₁|J₂⟩|² / (I₁ × I₂).
     ///
-    /// Returns 0 for orthogonal states, 1 for parallel states.
+    /// Returns 0 for orthogonal states, 1 for parallel states. Independent of
+    /// the amplitude scale of either vector (tiny or huge amplitudes are
+    /// rescaled internally).
+    ///
+    /// # Errors
+    /// [`BijliError::DivisionByZero`] if either vector is zero;
+    /// [`BijliError::InvalidParameter`] for non-finite components.
     #[inline]
     pub fn overlap(&self, other: &Self) -> Result<f64> {
         let denom = self.intensity() * other.intensity();
-        if denom < 1e-30 {
-            return Err(BijliError::DivisionByZero {
-                context: "cannot compute overlap with zero-intensity state".into(),
-            });
+        if denom.is_finite() && denom >= SAFE_MIN_INTENSITY {
+            return Ok(self.inner(other).norm_sq() / denom);
         }
-        Ok(self.inner(other).norm_sq() / denom)
+        let a = self.rescaled()?;
+        let b = other.rescaled()?;
+        Ok(a.inner(&b).norm_sq() / (a.intensity() * b.intensity()))
     }
 }
 
@@ -323,6 +391,10 @@ impl JonesMatrix {
 
     /// General waveplate (linear retarder) with fast axis at angle θ
     /// and retardance δ (phase difference between fast and slow axes).
+    ///
+    /// M = R(−θ) · diag(e^{−iδ/2}, e^{+iδ/2}) · R(θ): the fast-axis component
+    /// gains e^{−iδ/2}, the slow-axis component e^{+iδ/2} (slow axis lags by δ
+    /// in the e^{−iωt} convention — see the [module docs](self)).
     #[inline]
     #[must_use]
     pub fn waveplate(fast_axis_angle: f64, retardance: f64) -> Self {
@@ -341,7 +413,10 @@ impl JonesMatrix {
         Self::new(a, b, b, d)
     }
 
-    /// Faraday rotator — rotates polarization by angle θ.
+    /// Faraday rotator — actively rotates the polarization by angle θ
+    /// (from +x toward +y): [[cos θ, −sin θ], [sin θ, cos θ]].
+    ///
+    /// Its Mueller form is [`MuellerMatrix::rotation`]`(−θ)`.
     #[inline]
     #[must_use]
     pub fn rotator(angle: f64) -> Self {
@@ -466,16 +541,28 @@ impl StokesVector {
 
     /// Degree of polarization: p = √(S₁² + S₂² + S₃²) / S₀.
     ///
-    /// 0 = unpolarized, 1 = fully polarized.
+    /// 0 = unpolarized, 1 = fully polarized. Valid for any positive finite
+    /// S₀, however small.
+    ///
+    /// # Errors
+    /// [`BijliError::DivisionByZero`] for S₀ = 0;
+    /// [`BijliError::InvalidParameter`] for S₀ < 0 or non-finite components.
     #[inline]
     pub fn degree_of_polarization(&self) -> Result<f64> {
-        if self.s[0].abs() < 1e-30 {
+        let s0 = self.s[0];
+        if s0 == 0.0 {
             return Err(BijliError::DivisionByZero {
                 context: "cannot compute DOP for zero-intensity light".into(),
             });
         }
-        let pol = (self.s[1] * self.s[1] + self.s[2] * self.s[2] + self.s[3] * self.s[3]).sqrt();
-        Ok(pol / self.s[0])
+        if !(s0 > 0.0 && self.s.iter().all(|v| v.is_finite())) {
+            return Err(BijliError::InvalidParameter {
+                reason: format!("Stokes vector must be finite with S₀ > 0, got {:?}", self.s),
+            });
+        }
+        // hypot avoids under/overflow of the squared components.
+        let pol = self.s[1].hypot(self.s[2]).hypot(self.s[3]);
+        Ok(pol / s0)
     }
 
     /// Ellipticity angle χ: tan(2χ) = S₃ / √(S₁² + S₂²).
@@ -554,7 +641,8 @@ impl MuellerMatrix {
         StokesVector { s: out }
     }
 
-    /// Compose two Mueller matrices: self × other.
+    /// Compose two Mueller matrices: self × other (self applied after other).
+    #[inline]
     #[must_use]
     pub fn compose(&self, other: &Self) -> Self {
         let mut m = [[0.0; 4]; 4];
@@ -615,6 +703,9 @@ impl MuellerMatrix {
     }
 
     /// General waveplate (retarder) with fast axis at angle θ and retardance δ.
+    ///
+    /// Mueller form of [`JonesMatrix::waveplate`] (slow axis lags by δ in the
+    /// e^{−iωt} convention — see the [module docs](self)).
     #[inline]
     #[must_use]
     pub fn waveplate(fast_axis_angle: f64, retardance: f64) -> Self {
@@ -646,7 +737,19 @@ impl MuellerMatrix {
         Self::waveplate(fast_axis_angle, std::f64::consts::PI)
     }
 
-    /// Rotation matrix (coordinate rotation by angle θ).
+    /// Rotation of the **coordinate frame** by angle θ (passive rotation).
+    ///
+    /// ```text
+    /// S₁′ =  cos 2θ S₁ + sin 2θ S₂
+    /// S₂′ = −sin 2θ S₁ + cos 2θ S₂
+    /// ```
+    ///
+    /// Re-expressing a state in axes rotated by +θ is the same as physically
+    /// rotating the polarization by −θ, so `rotation(θ)` equals the Mueller
+    /// form of [`JonesMatrix::rotator`]`(−θ)` — *not* `rotator(θ)`.
+    /// An element with Mueller matrix M rotated by θ is
+    /// `rotation(−θ) · M · rotation(θ)`; e.g.
+    /// `linear_polarizer(θ) = rotation(−θ) · horizontal_polarizer() · rotation(θ)`.
     #[inline]
     #[must_use]
     pub fn rotation(angle: f64) -> Self {
@@ -1249,11 +1352,146 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "scattering")]
     fn test_mie_result_serde() {
         // MieResult should roundtrip through serde
         let result = crate::scattering::mie(1.0, complex_real(1.5)).unwrap();
         let json = serde_json::to_string(&result).unwrap();
         let back: crate::scattering::MieResult = serde_json::from_str(&json).unwrap();
         assert!((back.q_ext - result.q_ext).abs() < TOL);
+    }
+
+    // ── Scale-robustness regression tests ─────────────────────────
+
+    #[test]
+    fn test_normalized_tiny_amplitude() {
+        // |E| ~ 1e-200: intensity underflows to 0; old code returned Err.
+        let j = JonesVector::new(Complex::new(1e-200, 0.0), Complex::new(0.0, 1e-200));
+        let n = j.normalized().unwrap();
+        let s = std::f64::consts::FRAC_1_SQRT_2;
+        assert!((n.x.re - s).abs() < TOL && n.x.im.abs() < TOL);
+        assert!(n.y.re.abs() < TOL && (n.y.im - s).abs() < TOL);
+        assert!((n.intensity() - 1.0).abs() < TOL);
+    }
+
+    #[test]
+    fn test_normalized_huge_amplitude() {
+        // Intensity overflows to ∞; old code silently returned the zero vector.
+        let j = JonesVector::new(complex_real(3e200), complex_real(4e200));
+        let n = j.normalized().unwrap();
+        assert!((n.x.re - 0.6).abs() < TOL);
+        assert!((n.y.re - 0.8).abs() < TOL);
+    }
+
+    #[test]
+    fn test_normalized_rejects_non_finite() {
+        assert!(
+            JonesVector::new(complex_real(f64::NAN), complex_zero())
+                .normalized()
+                .is_err()
+        );
+        assert!(
+            JonesVector::new(complex_real(f64::INFINITY), complex_zero())
+                .normalized()
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn test_overlap_tiny_amplitude() {
+        // 1e-8 V/m fields: I₁I₂ = 1e-32 < old 1e-30 threshold → old code Err.
+        // Malus: |⟨H|D⟩|² = cos²45° = 0.5.
+        let h = JonesVector::new(complex_real(1e-8), complex_zero());
+        let d = JonesVector::new(complex_real(1e-8), complex_real(1e-8));
+        assert!((h.overlap(&d).unwrap() - 0.5).abs() < TOL);
+        // Extreme scale mismatch: 1e-300 vs 1e300.
+        let tiny = JonesVector::linear(0.3);
+        let tiny = JonesVector::new(tiny.x * 1e-300, tiny.y * 1e-300);
+        let huge = JonesVector::new(complex_real(1e300), complex_zero());
+        let expected = 0.3_f64.cos().powi(2);
+        assert!((tiny.overlap(&huge).unwrap() - expected).abs() < TOL);
+    }
+
+    #[test]
+    fn test_overlap_zero_and_nan() {
+        let z = JonesVector::new(complex_zero(), complex_zero());
+        assert!(z.overlap(&JonesVector::horizontal()).is_err());
+        let nan = JonesVector::new(complex_real(f64::NAN), complex_zero());
+        assert!(nan.overlap(&JonesVector::horizontal()).is_err());
+    }
+
+    #[test]
+    fn test_dop_tiny_intensity() {
+        // S₀ = 1e-40 is valid; old 1e-30 threshold rejected it.
+        let s = StokesVector::new(1e-40, 0.5e-40, 0.0, 0.0);
+        assert!((s.degree_of_polarization().unwrap() - 0.5).abs() < TOL);
+        // Fully polarized tiny state: components ~1e-170 (squares underflow).
+        let s = StokesVector::new(1e-170, 0.6e-170, 0.0, 0.8e-170);
+        assert!((s.degree_of_polarization().unwrap() - 1.0).abs() < TOL);
+        assert!(
+            StokesVector::new(-1.0, 0.0, 0.0, 0.0)
+                .degree_of_polarization()
+                .is_err()
+        );
+        assert!(
+            StokesVector::new(f64::NAN, 0.0, 0.0, 0.0)
+                .degree_of_polarization()
+                .is_err()
+        );
+    }
+
+    // ── Convention regression tests (lock documented behaviour) ───
+
+    #[test]
+    fn test_mueller_rotation_is_jones_rotator_negative_angle() {
+        // Closed form: a frame rotation by θ maps linear(φ) to linear(φ − θ).
+        let theta = 0.3;
+        for phi in [0.0, 0.4, 1.1, -0.7] {
+            let s = StokesVector::from_jones(&JonesVector::linear(phi));
+            let out = MuellerMatrix::rotation(theta).apply(&s);
+            let expected = StokesVector::from_jones(&JonesVector::linear(phi - theta));
+            let via_jones = StokesVector::from_jones(
+                &JonesMatrix::rotator(-theta).apply(&JonesVector::linear(phi)),
+            );
+            for i in 0..4 {
+                assert!((out.s[i] - expected.s[i]).abs() < TOL, "φ={phi} S[{i}]");
+                assert!((out.s[i] - via_jones.s[i]).abs() < TOL, "φ={phi} S[{i}]");
+            }
+        }
+        // Also for a circular input (S₃ untouched).
+        let rc = StokesVector::from_jones(&JonesVector::right_circular());
+        let out = MuellerMatrix::rotation(theta).apply(&rc);
+        assert!((out.s[3] - 1.0).abs() < TOL);
+    }
+
+    #[test]
+    fn test_mueller_rotated_element_identity() {
+        // linear_polarizer(θ) = R(−θ) · H · R(θ)
+        let theta = 0.37;
+        let built = MuellerMatrix::rotation(-theta)
+            .compose(&MuellerMatrix::horizontal_polarizer())
+            .compose(&MuellerMatrix::rotation(theta));
+        let direct = MuellerMatrix::linear_polarizer(theta);
+        for i in 0..4 {
+            for j in 0..4 {
+                assert!((built.m[i][j] - direct.m[i][j]).abs() < TOL, "[{i}][{j}]");
+            }
+        }
+    }
+
+    #[test]
+    fn test_waveplate_slow_axis_lags() {
+        // QWP, fast axis horizontal, on +45° linear light: E_y lags E_x by π/2,
+        // E(t) = (cos ωt, sin ωt) for e^{−iωt} — counter-clockwise facing the
+        // source = left circular (Hecht), S₃ = −1.
+        let out = JonesMatrix::quarter_wave_plate(0.0).apply(&JonesVector::diagonal());
+        let phase = out.y.arg() - out.x.arg();
+        assert!((phase - std::f64::consts::FRAC_PI_2).abs() < TOL);
+        assert!((out.overlap(&JonesVector::left_circular()).unwrap() - 1.0).abs() < TOL);
+        let s = StokesVector::from_jones(&out);
+        assert!((s.s[3] + 1.0).abs() < TOL);
+        let m = MuellerMatrix::quarter_wave_plate(0.0)
+            .apply(&StokesVector::from_jones(&JonesVector::diagonal()));
+        assert!((m.s[3] + 1.0).abs() < TOL);
     }
 }

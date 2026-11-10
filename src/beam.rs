@@ -2,8 +2,23 @@
 //! and higher-order Hermite-Gaussian / Laguerre-Gaussian modes.
 //!
 //! All SI units. Wavelength in meters, distances in meters.
+//!
+//! # Conventions
+//!
+//! - [`GaussianBeam::wavelength`] is the wavelength **in the medium** the beam
+//!   currently propagates in (λ₀/n); the complex beam parameter is
+//!   q = (z − z_waist) + i z_R with z_R = πw₀²/λ.
+//! - ABCD matrices act on (height, actual ray angle), so a system that ends
+//!   in a different medium has det = n_in/n_out, and the output wavelength is
+//!   λ_out = λ_in · det.
+//! - Complex mode fields ([`hermite_gaussian_field`]) use the physics
+//!   **e^{−iωt}** convention (field ∝ e^{+ikz}), matching
+//!   [`crate::polarization`]. Siegman's *Lasers* uses e^{+jωt}; conjugate to
+//!   compare.
 
 use serde::{Deserialize, Serialize};
+
+use hisab::num::Complex;
 
 use crate::error::{BijliError, Result};
 
@@ -15,7 +30,7 @@ use crate::error::{BijliError, Result};
 /// complex beam parameter q(z) = z - z_waist + i z_R, where z_R = πw₀²/λ.
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 pub struct GaussianBeam {
-    /// Wavelength λ (m).
+    /// Wavelength λ in the propagation medium (m), i.e. λ₀/n.
     pub wavelength: f64,
     /// Beam waist radius w₀ (m) — the 1/e² intensity radius at the focus.
     pub waist: f64,
@@ -24,20 +39,32 @@ pub struct GaussianBeam {
 }
 
 impl GaussianBeam {
-    /// Create a Gaussian beam from wavelength and waist radius.
+    /// Create a Gaussian beam from wavelength (in the medium) and waist radius.
+    ///
+    /// # Errors
+    /// [`BijliError::InvalidParameter`] unless both are positive and finite
+    /// and the resulting Rayleigh range is positive and finite.
     #[inline]
     pub fn new(wavelength: f64, waist: f64) -> Result<Self> {
-        if wavelength <= 0.0 {
+        if !(wavelength.is_finite() && wavelength > 0.0) {
             return Err(BijliError::InvalidParameter {
-                reason: format!("wavelength must be positive, got {wavelength}"),
+                reason: format!("wavelength must be positive and finite, got {wavelength}"),
             });
         }
-        if waist <= 0.0 {
+        if !(waist.is_finite() && waist > 0.0) {
             return Err(BijliError::InvalidParameter {
-                reason: format!("beam waist must be positive, got {waist}"),
+                reason: format!("beam waist must be positive and finite, got {waist}"),
             });
         }
         let rayleigh_range = std::f64::consts::PI * waist * waist / wavelength;
+        if !(rayleigh_range.is_finite() && rayleigh_range > 0.0) {
+            return Err(BijliError::InvalidParameter {
+                reason: format!(
+                    "Rayleigh range πw₀²/λ = {rayleigh_range} is not representable \
+                     (w₀ = {waist}, λ = {wavelength})"
+                ),
+            });
+        }
         tracing::debug!(wavelength, waist, rayleigh_range, "Gaussian beam created");
         Ok(Self {
             wavelength,
@@ -164,6 +191,11 @@ impl AbcdMatrix {
     /// Positive f = converging, negative f = diverging.
     #[inline]
     pub fn thin_lens(focal_length: f64) -> Result<Self> {
+        if focal_length.is_nan() {
+            return Err(BijliError::InvalidParameter {
+                reason: "focal length must not be NaN".into(),
+            });
+        }
         if focal_length.abs() < 1e-30 {
             return Err(BijliError::DivisionByZero {
                 context: "focal length cannot be zero".into(),
@@ -178,6 +210,11 @@ impl AbcdMatrix {
     /// Equivalent to a thin lens with f = R/2.
     #[inline]
     pub fn curved_mirror(radius: f64) -> Result<Self> {
+        if radius.is_nan() {
+            return Err(BijliError::InvalidParameter {
+                reason: "mirror radius must not be NaN".into(),
+            });
+        }
         if radius.abs() < 1e-30 {
             return Err(BijliError::DivisionByZero {
                 context: "mirror radius cannot be zero".into(),
@@ -189,6 +226,11 @@ impl AbcdMatrix {
     /// Flat interface between media with refractive indices n1 → n2.
     #[inline]
     pub fn flat_interface(n1: f64, n2: f64) -> Result<Self> {
+        if n1.is_nan() || n2.is_nan() {
+            return Err(BijliError::InvalidParameter {
+                reason: "refractive indices must not be NaN".into(),
+            });
+        }
         if n2.abs() < 1e-30 {
             return Err(BijliError::DivisionByZero {
                 context: "refractive index n₂ cannot be zero".into(),
@@ -202,6 +244,11 @@ impl AbcdMatrix {
     /// R > 0 when center of curvature is on the transmission side.
     #[inline]
     pub fn curved_interface(n1: f64, n2: f64, radius: f64) -> Result<Self> {
+        if n1.is_nan() || n2.is_nan() || radius.is_nan() {
+            return Err(BijliError::InvalidParameter {
+                reason: "refractive indices and radius must not be NaN".into(),
+            });
+        }
         if n2.abs() < 1e-30 {
             return Err(BijliError::DivisionByZero {
                 context: "refractive index n₂ cannot be zero".into(),
@@ -269,23 +316,70 @@ impl AbcdMatrix {
         ])
     }
 
-    /// Extract beam parameters after propagation through this matrix.
+    /// Output beam of this system for an input beam whose **waist lies at the
+    /// input plane**.
     ///
-    /// Given a `GaussianBeam` at its waist, propagate through this system
-    /// and return the new waist size and waist location (relative to output plane).
+    /// q_out = (A·i z_R + B)/(C·i z_R + D); the output beam has Rayleigh range
+    /// z_R′ = Im(q_out), wavelength λ′ = λ·det(M) (det = n_in/n_out, so a
+    /// system ending in a denser medium shortens λ) and waist
+    /// w₀′ = √(z_R′ λ′/π).
+    ///
+    /// The waist *location* is not part of [`GaussianBeam`]; use
+    /// [`transform_beam_with_waist_position`](Self::transform_beam_with_waist_position)
+    /// to obtain it.
+    ///
+    /// # Errors
+    /// [`BijliError::InvalidParameter`] if det(M) ≤ 0 or the output Rayleigh
+    /// range is not positive; [`BijliError::DivisionByZero`] if
+    /// C·q + D = 0.
     #[inline]
     pub fn transform_beam(&self, beam: &GaussianBeam) -> Result<GaussianBeam> {
+        self.transform_beam_with_waist_position(beam)
+            .map(|(out, _)| out)
+    }
+
+    /// Like [`transform_beam`](Self::transform_beam), but also returns the
+    /// signed distance from the **output plane to the new waist**:
+    /// d = −Re(q_out). Positive d means the waist lies after (downstream of)
+    /// the output plane (converging beam); negative means it lies before it
+    /// (diverging beam, virtual waist).
+    ///
+    /// Example: a thin lens of focal length f placed at the input waist gives
+    /// d = f z_R²/(z_R² + f²) and w₀′ = w₀ f/√(f² + z_R²) (Self, 1983).
+    ///
+    /// # Errors
+    /// Same as [`transform_beam`](Self::transform_beam).
+    pub fn transform_beam_with_waist_position(
+        &self,
+        beam: &GaussianBeam,
+    ) -> Result<(GaussianBeam, f64)> {
+        let det = self.determinant();
+        if !(det.is_finite() && det > 0.0) {
+            return Err(BijliError::InvalidParameter {
+                reason: format!(
+                    "ABCD determinant must be positive and finite (det = n_in/n_out), got {det}"
+                ),
+            });
+        }
         let q_in = beam.q(0.0); // at waist: q = i*z_R
         let q_out = self.propagate_beam(q_in)?;
-        // Im(q_out) = z_R_new = π w₀_new² / λ
+        // Im(q_out) = z_R′ = π w₀′² / λ′
         let z_r_new = q_out[1];
-        if z_r_new <= 0.0 {
+        if !(z_r_new.is_finite() && z_r_new > 0.0) {
             return Err(BijliError::InvalidParameter {
                 reason: "transformed beam has non-physical Rayleigh range".into(),
             });
         }
-        let w0_new = (z_r_new * beam.wavelength / std::f64::consts::PI).sqrt();
-        GaussianBeam::new(beam.wavelength, w0_new)
+        // Same-medium systems have det = 1 analytically; treat rounding noise
+        // as exactly 1 so the wavelength is preserved bit-for-bit.
+        let wavelength = if (det - 1.0).abs() <= 1e-12 {
+            beam.wavelength
+        } else {
+            beam.wavelength * det
+        };
+        let w0_new = (z_r_new * wavelength / std::f64::consts::PI).sqrt();
+        let out = GaussianBeam::new(wavelength, w0_new)?;
+        Ok((out, -q_out[0]))
     }
 }
 
@@ -314,14 +408,19 @@ pub struct ResonatorStability {
 /// Analyze stability of a two-mirror resonator.
 ///
 /// # Parameters
-/// - `length`: cavity length L (m)
-/// - `r1`: radius of curvature of mirror 1 (m, positive = concave)
-/// - `r2`: radius of curvature of mirror 2 (m, positive = concave)
+/// - `length`: cavity length L (m, positive and finite)
+/// - `r1`: radius of curvature of mirror 1 (m, positive = concave; ±∞ = flat)
+/// - `r2`: radius of curvature of mirror 2 (m, positive = concave; ±∞ = flat)
 #[inline]
 pub fn resonator_stability(length: f64, r1: f64, r2: f64) -> Result<ResonatorStability> {
-    if length <= 0.0 {
+    if !(length.is_finite() && length > 0.0) {
         return Err(BijliError::InvalidParameter {
-            reason: format!("cavity length must be positive, got {length}"),
+            reason: format!("cavity length must be positive and finite, got {length}"),
+        });
+    }
+    if r1.is_nan() || r2.is_nan() {
+        return Err(BijliError::InvalidParameter {
+            reason: "mirror radii must not be NaN".into(),
         });
     }
     if r1.abs() < 1e-30 || r2.abs() < 1e-30 {
@@ -343,9 +442,21 @@ pub fn resonator_stability(length: f64, r1: f64, r2: f64) -> Result<ResonatorSta
 
 /// Beam waist of the fundamental mode inside a stable resonator.
 ///
-/// w₀² = (Lλ/π) √(g₁g₂(1−g₁g₂)) / (g₁+g₂−2g₁g₂)²)
+/// ```text
+/// w₀² = (Lλ/π) · √[ g₁g₂(1 − g₁g₂) / (g₁ + g₂ − 2g₁g₂)² ]
+/// ```
 ///
-/// Returns the waist radius in meters, or error if cavity is unstable.
+/// (Siegman, *Lasers*, ch. 19). The symmetric confocal cavity
+/// (g₁ = g₂ = 0), where the expression is 0/0, returns its limit
+/// w₀ = √(Lλ/2π). On the other stability edges the formula's limit is
+/// returned (w₀ = 0 when exactly one gᵢ = 0 or g₁g₂ = 1 with gᵢ ≠ 1).
+///
+/// Returns the waist radius in meters.
+///
+/// # Errors
+/// [`BijliError::InvalidParameter`] if the cavity is unstable or the
+/// wavelength is not positive and finite; [`BijliError::DivisionByZero`]
+/// for the planar cavity (g₁ = g₂ = 1), which has no confined mode.
 #[inline]
 pub fn resonator_beam_waist(length: f64, r1: f64, r2: f64, wavelength: f64) -> Result<f64> {
     let stab = resonator_stability(length, r1, r2)?;
@@ -357,9 +468,9 @@ pub fn resonator_beam_waist(length: f64, r1: f64, r2: f64, wavelength: f64) -> R
             ),
         });
     }
-    if wavelength <= 0.0 {
+    if !(wavelength.is_finite() && wavelength > 0.0) {
         return Err(BijliError::InvalidParameter {
-            reason: format!("wavelength must be positive, got {wavelength}"),
+            reason: format!("wavelength must be positive and finite, got {wavelength}"),
         });
     }
 
@@ -367,39 +478,75 @@ pub fn resonator_beam_waist(length: f64, r1: f64, r2: f64, wavelength: f64) -> R
     let g2 = stab.g2;
     let gp = stab.g_product;
 
-    let denom = (g1 + g2 - 2.0 * gp).powi(2);
-    if denom < 1e-30 {
+    // Inside the stability region s = g₁ + g₂ − 2g₁g₂ vanishes only at
+    // (0, 0) (confocal) and (1, 1) (planar). Dividing by |s| rather than
+    // comparing s² to a threshold keeps near-confocal cavities accurate.
+    let s = g1 + g2 - 2.0 * gp;
+    if s == 0.0 {
+        if g1 == 0.0 && g2 == 0.0 {
+            return Ok((length * wavelength / (2.0 * std::f64::consts::PI)).sqrt());
+        }
         return Err(BijliError::DivisionByZero {
-            context: "degenerate cavity geometry".into(),
+            context: "planar cavity (g₁ = g₂ = 1) has no confined mode".into(),
         });
     }
 
     // For a stable cavity (0 ≤ gp ≤ 1), gp*(1-gp) is always non-negative.
-    let w0_sq = length * wavelength / std::f64::consts::PI * (gp * (1.0 - gp) / denom).sqrt();
+    let w0_sq = length * wavelength / std::f64::consts::PI * (gp * (1.0 - gp)).sqrt() / s.abs();
     Ok(w0_sq.sqrt())
 }
 
-/// Transverse mode spacing (frequency difference between adjacent modes).
+/// Transverse mode spacing (frequency step per unit of m + n).
 ///
-/// Δν_transverse = (Δν_FSR / π) × arccos(±√(g₁g₂))
+/// ```text
+/// Δν_T = (Δν_FSR / π) · arccos(±√(g₁g₂))
+/// ```
 ///
-/// `fsr` is the free spectral range c/(2L).
+/// with the **+** sign when g₁, g₂ ≥ 0 and the **−** sign when g₁, g₂ < 0
+/// (Siegman, *Lasers*, ch. 19), so that the TEM_mnq resonances lie at
+/// ν = q·Δν_FSR + (m + n + 1)·Δν_T, with Δν_T ∈ [0, Δν_FSR].
+///
+/// `fsr` is the free spectral range c/(2L) (positive, finite).
+///
+/// # Errors
+/// [`BijliError::InvalidParameter`] for an unstable cavity (g₁g₂ ∉ [0, 1]),
+/// NaN g-parameters, or a non-positive/non-finite `fsr`.
 #[inline]
 pub fn transverse_mode_spacing(fsr: f64, g1: f64, g2: f64) -> Result<f64> {
+    if !(fsr.is_finite() && fsr > 0.0) {
+        return Err(BijliError::InvalidParameter {
+            reason: format!("free spectral range must be positive and finite, got {fsr}"),
+        });
+    }
     let gp = g1 * g2;
     if !(0.0..=1.0).contains(&gp) {
         return Err(BijliError::InvalidParameter {
             reason: format!("cavity is unstable (g₁g₂ = {gp:.4})"),
         });
     }
-    Ok(fsr / std::f64::consts::PI * gp.sqrt().acos())
+    let root = gp.sqrt();
+    // Both g < 0 (e.g. near-concentric): lower sign. If either g is 0 the
+    // root is 0 and the sign is irrelevant.
+    let arg = if g1 < 0.0 || g2 < 0.0 { -root } else { root };
+    Ok(fsr / std::f64::consts::PI * arg.acos())
 }
 
 // ── Hermite-Gaussian modes ────────────────────────────────────────
 
-/// Hermite-Gaussian beam amplitude HG_mn at position (x, y, z).
+/// Hermite-Gaussian real amplitude envelope HG_mn at position (x, y, z).
 ///
-/// Returns the normalized field amplitude (dimensionless, relative to peak of TEM₀₀).
+/// ```text
+/// u_mn(x, y, z) = (w₀/w) · H_m(√2 x/w) · H_n(√2 y/w) · exp(−(x² + y²)/w²)
+/// ```
+///
+/// This is the field with all propagation phases (kz, k r²/2R, Gouy phase)
+/// removed: |u_mn| = |E| and u_mn² is the intensity. The sign of the Hermite
+/// lobes is kept. Use [`hermite_gaussian_field`] for the complex field.
+///
+/// Normalization: the TEM₀₀ prefactor is used for every mode, so
+/// HG₀₀(0, 0, 0) = 1. Modes are **not** power-normalized: HG_mn carries
+/// 2^{m+n} m! n! times the power of TEM₀₀; multiply by 1/√(2^{m+n} m! n!)
+/// to compare modes at equal power.
 ///
 /// # Parameters
 /// - `beam`: the fundamental Gaussian beam parameters
@@ -427,17 +574,49 @@ pub fn hermite_gaussian(beam: &GaussianBeam, m: u32, n: u32, x: f64, y: f64, z: 
     // Amplitude scaling: w₀/w
     let scale = w0 / w;
 
-    // Gouy phase contribution: (m + n + 1) × ζ(z)
-    // (phase is real part of complex amplitude — for intensity, this cancels)
-    // For amplitude we include it
-    let gouy = (m + n + 1) as f64 * beam.gouy_phase(z);
+    scale * hm * hn * envelope
+}
 
-    scale * hm * hn * envelope * gouy.cos()
+/// Complex Hermite-Gaussian field HG_mn at (x, y, z), e^{−iωt} convention.
+///
+/// ```text
+/// E_mn = u_mn(x, y, z) · exp(i [k z + k (x² + y²)/(2R(z)) − (m + n + 1) ζ(z)])
+/// ```
+///
+/// with u_mn = [`hermite_gaussian`], k = 2π/λ (λ in the medium),
+/// 1/R(z) = z/(z² + z_R²) (finite at the waist) and ζ(z) = arctan(z/z_R).
+/// For Siegman's e^{+jωt} convention take the complex conjugate.
+/// Normalization as in [`hermite_gaussian`].
+#[inline]
+#[must_use]
+pub fn hermite_gaussian_field(
+    beam: &GaussianBeam,
+    m: u32,
+    n: u32,
+    x: f64,
+    y: f64,
+    z: f64,
+) -> Complex {
+    let amplitude = hermite_gaussian(beam, m, n, x, y, z);
+    let k = 2.0 * std::f64::consts::PI / beam.wavelength;
+    let z_r = beam.rayleigh_range;
+    let inv_r = z / (z * z + z_r * z_r);
+    let order = f64::from(m) + f64::from(n) + 1.0;
+    let phase = k * z + 0.5 * k * (x * x + y * y) * inv_r - order * beam.gouy_phase(z);
+    Complex::from_polar(amplitude, phase)
 }
 
 /// Laguerre-Gaussian beam intensity profile LG_pl at position (r, z).
 ///
-/// Returns the normalized intensity (dimensionless, relative to peak of TEM₀₀).
+/// ```text
+/// I_pl(r, z) = (w₀/w)² · (2r²/w²)^|l| · [L_p^|l|(2r²/w²)]² · exp(−2r²/w²)
+/// ```
+///
+/// This is |E|² (phases, including the e^{ilφ} vortex and Gouy phase
+/// (2p + |l| + 1)ζ, drop out). Normalization: the TEM₀₀ prefactor is used for
+/// every mode, so LG₀₀(0, 0) = 1. Modes are **not** power-normalized: LG_pl
+/// carries (p + |l|)!/p! times the power of TEM₀₀; multiply by
+/// p!/(p + |l|)! to compare modes at equal power.
 ///
 /// # Parameters
 /// - `beam`: the fundamental Gaussian beam parameters
@@ -916,5 +1095,177 @@ mod tests {
         // (which isn't a parameter — the function is already radially symmetric)
         assert!(i1 > 0.0);
         assert!(i2 > 0.0);
+    }
+
+    // ── Regression tests (closed-form references) ─────────────────
+
+    #[test]
+    fn test_resonator_beam_waist_symmetric_confocal() {
+        // g₁ = g₂ = 0 is stable; Siegman: w₀ = √(Lλ/2π). Old code: Err.
+        let (l, lambda) = (0.5, 1064e-9);
+        let w = resonator_beam_waist(l, 0.5, 0.5, lambda).unwrap();
+        let expected = (l * lambda / (2.0 * std::f64::consts::PI)).sqrt();
+        assert!((w - expected).abs() / expected < 1e-12, "{w} vs {expected}");
+    }
+
+    #[test]
+    fn test_resonator_beam_waist_symmetric_closed_form() {
+        // Symmetric cavity: w₀² = (Lλ/2π)·√((1+g)/(1−g)); g = 0.5 → √3.
+        let (l, lambda) = (0.1, 1064e-9);
+        let w = resonator_beam_waist(l, 0.2, 0.2, lambda).unwrap();
+        let expected = (l * lambda / (2.0 * std::f64::consts::PI) * 3.0_f64.sqrt()).sqrt();
+        assert!((w - expected).abs() / expected < 1e-12);
+        // Near-confocal (g ≈ ±1e-9) stays continuous with the confocal limit.
+        let near =
+            resonator_beam_waist(0.5, 0.5 * (1.0 + 1e-9), 0.5 * (1.0 + 1e-9), lambda).unwrap();
+        let conf = resonator_beam_waist(0.5, 0.5, 0.5, lambda).unwrap();
+        assert!((near - conf).abs() / conf < 1e-6);
+    }
+
+    #[test]
+    fn test_resonator_beam_waist_planar_errs() {
+        // Flat–flat cavity (R = ∞ → g = 1): no confined mode.
+        assert!(resonator_beam_waist(0.1, f64::INFINITY, f64::INFINITY, 1064e-9).is_err());
+        let stab = resonator_stability(0.1, f64::INFINITY, f64::INFINITY).unwrap();
+        assert!((stab.g_product - 1.0).abs() < 1e-15);
+    }
+
+    #[test]
+    fn test_transverse_mode_spacing_negative_g() {
+        // Siegman: lower sign for g₁, g₂ < 0. g = −0.5: arccos(−0.5) = 2π/3
+        // → Δν_T = 2·FSR/3. Old code returned FSR/3.
+        let fsr = 1.5e9;
+        let s = transverse_mode_spacing(fsr, -0.5, -0.5).unwrap();
+        assert!((s - 2.0 * fsr / 3.0).abs() / fsr < 1e-12, "{s}");
+        // Near-concentric (g → −1): Δν_T → FSR; near-planar (g → +1): → 0.
+        assert!((transverse_mode_spacing(fsr, -1.0, -1.0).unwrap() - fsr).abs() / fsr < 1e-12);
+        assert!(transverse_mode_spacing(fsr, 1.0, 1.0).unwrap().abs() < 1e-3);
+        // Confocal: Δν_T = FSR/2 regardless of sign.
+        assert!((transverse_mode_spacing(fsr, 0.0, 0.0).unwrap() - fsr / 2.0).abs() / fsr < 1e-12);
+    }
+
+    #[test]
+    fn test_transverse_mode_spacing_invalid() {
+        assert!(transverse_mode_spacing(f64::NAN, 0.5, 0.5).is_err());
+        assert!(transverse_mode_spacing(0.0, 0.5, 0.5).is_err());
+        assert!(transverse_mode_spacing(-1.0, 0.5, 0.5).is_err());
+        assert!(transverse_mode_spacing(1e9, f64::NAN, 0.5).is_err());
+    }
+
+    #[test]
+    fn test_hg_envelope_at_rayleigh_range() {
+        // At z = z_R, w = √2 w₀. The old cos((m+n+1)ζ) factor made HG₁₀
+        // cos(π/2) ≈ 0 everywhere and halved HG₀₀ on axis.
+        let beam = GaussianBeam::new(1064e-9, 100e-6).unwrap();
+        let z_r = beam.rayleigh_range;
+        // HG₁₀ at x = w₀: (1/√2)·H₁(1)·e^{−1/2} = √2 e^{−1/2}
+        let v = hermite_gaussian(&beam, 1, 0, beam.waist, 0.0, z_r);
+        let expected = std::f64::consts::SQRT_2 * (-0.5_f64).exp();
+        assert!((v - expected).abs() < 1e-12, "{v} vs {expected}");
+        // HG₀₀ on axis: |E| ∝ w₀/w = 1/√2 (intensity halves at z_R)
+        let v = hermite_gaussian(&beam, 0, 0, 0.0, 0.0, z_r);
+        assert!((v - std::f64::consts::FRAC_1_SQRT_2).abs() < 1e-12);
+    }
+
+    #[test]
+    fn test_hermite_gaussian_field_closed_form() {
+        // λ = 1, w₀ = 1 → z_R = π, k = 2π. At z = z_R: w² = 2, R = 2z_R, ζ = π/4.
+        let beam = GaussianBeam::new(1.0, 1.0).unwrap();
+        let pi = std::f64::consts::PI;
+        let z = pi;
+        // HG₀₀ at x = 0.5: amplitude (1/√2)e^{−0.125},
+        // phase k z + k x²/(2R) − ζ = 2π² + 2π·0.25/(4π) − π/4
+        let e = hermite_gaussian_field(&beam, 0, 0, 0.5, 0.0, z);
+        let amp = std::f64::consts::FRAC_1_SQRT_2 * (-0.125_f64).exp();
+        let ph = 2.0 * pi * pi + 0.125 - pi / 4.0;
+        assert!((e.re - amp * ph.cos()).abs() < 1e-12);
+        assert!((e.im - amp * ph.sin()).abs() < 1e-12);
+        // HG₂₀ on axis: H₂(0) = −2 → amplitude −√2, Gouy factor 3ζ.
+        let e = hermite_gaussian_field(&beam, 2, 0, 0.0, 0.0, z);
+        let ph = 2.0 * pi * pi - 3.0 * pi / 4.0;
+        assert!((e.re + std::f64::consts::SQRT_2 * ph.cos()).abs() < 1e-12);
+        assert!((e.im + std::f64::consts::SQRT_2 * ph.sin()).abs() < 1e-12);
+        // At the waist the field is real and equals the envelope.
+        let e = hermite_gaussian_field(&beam, 1, 1, 0.3, -0.2, 0.0);
+        let u = hermite_gaussian(&beam, 1, 1, 0.3, -0.2, 0.0);
+        assert!((e.re - u).abs() < 1e-15 && e.im.abs() < 1e-15);
+        // |E| equals the envelope magnitude everywhere.
+        let e = hermite_gaussian_field(&beam, 3, 1, 0.4, 0.7, 2.3);
+        let u = hermite_gaussian(&beam, 3, 1, 0.4, 0.7, 2.3);
+        assert!((e.abs() - u.abs()).abs() < 1e-12);
+    }
+
+    #[test]
+    fn test_transform_beam_flat_interface() {
+        // Air → glass (n = 1.5) at the waist: w₀ is continuous across the
+        // interface, λ′ = λ/1.5, z_R′ = 1.5 z_R. Old code returned √1.5·w₀.
+        let beam = GaussianBeam::new(1064e-9, 100e-6).unwrap();
+        let m = AbcdMatrix::flat_interface(1.0, 1.5).unwrap();
+        let out = m.transform_beam(&beam).unwrap();
+        assert!(
+            (out.waist - beam.waist).abs() / beam.waist < 1e-12,
+            "{}",
+            out.waist
+        );
+        assert!((out.wavelength - 1064e-9 / 1.5).abs() / out.wavelength < 1e-12);
+        assert!(
+            (out.rayleigh_range - 1.5 * beam.rayleigh_range).abs() / out.rayleigh_range < 1e-12
+        );
+    }
+
+    #[test]
+    fn test_transform_beam_lens_waist_position() {
+        // Self (1983), input waist at a thin lens:
+        //   d = f z_R²/(z_R² + f²),  w₀′ = w₀ f/√(f² + z_R²)
+        let beam = GaussianBeam::new(1064e-9, 100e-6).unwrap();
+        let f = 0.1;
+        let z_r = beam.rayleigh_range;
+        let lens = AbcdMatrix::thin_lens(f).unwrap();
+        let (out, d) = lens.transform_beam_with_waist_position(&beam).unwrap();
+        let d_expected = f * z_r * z_r / (z_r * z_r + f * f);
+        let w_expected = beam.waist * f / (f * f + z_r * z_r).sqrt();
+        assert!(
+            (d - d_expected).abs() / d_expected < 1e-12,
+            "{d} vs {d_expected}"
+        );
+        assert!((out.waist - w_expected).abs() / w_expected < 1e-12);
+        assert_eq!(out.wavelength, beam.wavelength);
+        // Free space: the waist is a distance L behind the output plane.
+        let (out, d) = AbcdMatrix::free_space(0.25)
+            .transform_beam_with_waist_position(&beam)
+            .unwrap();
+        assert!((d + 0.25).abs() < 1e-15);
+        assert!((out.waist - beam.waist).abs() / beam.waist < 1e-12);
+    }
+
+    #[test]
+    fn test_transform_beam_invalid_determinant() {
+        let beam = GaussianBeam::new(1064e-9, 100e-6).unwrap();
+        assert!(
+            AbcdMatrix::new(1.0, 0.0, 0.0, -1.0)
+                .transform_beam(&beam)
+                .is_err()
+        );
+        assert!(
+            AbcdMatrix::new(1.0, 0.0, 0.0, f64::NAN)
+                .transform_beam(&beam)
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn test_nan_inputs_rejected() {
+        assert!(GaussianBeam::new(f64::NAN, 100e-6).is_err());
+        assert!(GaussianBeam::new(1064e-9, f64::NAN).is_err());
+        assert!(GaussianBeam::new(f64::INFINITY, 100e-6).is_err());
+        assert!(GaussianBeam::new(1064e-9, 1e-200).is_err()); // z_R underflows to 0
+        assert!(resonator_stability(f64::NAN, 1.0, 1.0).is_err());
+        assert!(resonator_stability(0.1, f64::NAN, 1.0).is_err());
+        assert!(resonator_stability(f64::INFINITY, 1.0, 1.0).is_err());
+        assert!(resonator_beam_waist(0.1, 0.2, 0.2, f64::NAN).is_err());
+        assert!(AbcdMatrix::thin_lens(f64::NAN).is_err());
+        assert!(AbcdMatrix::curved_mirror(f64::NAN).is_err());
+        assert!(AbcdMatrix::flat_interface(f64::NAN, 1.0).is_err());
+        assert!(AbcdMatrix::curved_interface(1.0, 1.5, f64::NAN).is_err());
     }
 }

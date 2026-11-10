@@ -36,12 +36,12 @@ pub fn displacement_current(de_dt: &FieldVector) -> FieldVector {
 /// EM wave speed in a medium: v = 1/√(εμ).
 #[inline]
 pub fn wave_speed(permittivity: f64, permeability: f64) -> Result<f64> {
-    if permittivity <= 0.0 {
+    if permittivity.is_nan() || permittivity <= 0.0 {
         return Err(BijliError::InvalidPermittivity {
             value: permittivity,
         });
     }
-    if permeability <= 0.0 {
+    if permeability.is_nan() || permeability <= 0.0 {
         return Err(BijliError::InvalidPermeability {
             value: permeability,
         });
@@ -57,12 +57,12 @@ pub fn wave_speed(permittivity: f64, permeability: f64) -> Result<f64> {
 /// if the relative values are not positive.
 #[inline]
 pub fn refractive_index(relative_permittivity: f64, relative_permeability: f64) -> Result<f64> {
-    if relative_permittivity <= 0.0 {
+    if relative_permittivity.is_nan() || relative_permittivity <= 0.0 {
         return Err(BijliError::InvalidPermittivity {
             value: relative_permittivity,
         });
     }
-    if relative_permeability <= 0.0 {
+    if relative_permeability.is_nan() || relative_permeability <= 0.0 {
         return Err(BijliError::InvalidPermeability {
             value: relative_permeability,
         });
@@ -73,12 +73,12 @@ pub fn refractive_index(relative_permittivity: f64, relative_permeability: f64) 
 /// Impedance of a medium: η = √(μ/ε) (ohms).
 #[inline]
 pub fn impedance(permittivity: f64, permeability: f64) -> Result<f64> {
-    if permittivity <= 0.0 {
+    if permittivity.is_nan() || permittivity <= 0.0 {
         return Err(BijliError::InvalidPermittivity {
             value: permittivity,
         });
     }
-    if permeability <= 0.0 {
+    if permeability.is_nan() || permeability <= 0.0 {
         return Err(BijliError::InvalidPermeability {
             value: permeability,
         });
@@ -96,12 +96,12 @@ pub fn free_space_impedance() -> f64 {
 /// Wavelength from frequency: λ = v/f.
 #[inline]
 pub fn wavelength(frequency: f64, velocity: f64) -> Result<f64> {
-    if frequency <= 0.0 {
+    if frequency.is_nan() || frequency <= 0.0 {
         return Err(BijliError::InvalidParameter {
             reason: format!("frequency must be positive, got {frequency}"),
         });
     }
-    if velocity <= 0.0 {
+    if velocity.is_nan() || velocity <= 0.0 {
         return Err(BijliError::InvalidParameter {
             reason: format!("velocity must be positive, got {velocity}"),
         });
@@ -112,12 +112,12 @@ pub fn wavelength(frequency: f64, velocity: f64) -> Result<f64> {
 /// Frequency from wavelength: f = v/λ.
 #[inline]
 pub fn frequency(wavelength_m: f64, velocity: f64) -> Result<f64> {
-    if wavelength_m <= 0.0 {
+    if wavelength_m.is_nan() || wavelength_m <= 0.0 {
         return Err(BijliError::InvalidParameter {
             reason: format!("wavelength must be positive, got {wavelength_m}"),
         });
     }
-    if velocity <= 0.0 {
+    if velocity.is_nan() || velocity <= 0.0 {
         return Err(BijliError::InvalidParameter {
             reason: format!("velocity must be positive, got {velocity}"),
         });
@@ -127,15 +127,27 @@ pub fn frequency(wavelength_m: f64, velocity: f64) -> Result<f64> {
 
 /// Skin depth: δ = √(2/(ωμσ)) (meters).
 ///
-/// How far EM waves penetrate into a conductor.
+/// How far EM waves penetrate into a good conductor (σ ≫ ωε). `angular_freq`
+/// ω in rad/s, `permeability` μ in H/m, `conductivity` σ in S/m.
+///
+/// # Errors
+///
+/// [`BijliError::InvalidParameter`] unless each of ω, μ and σ is positive
+/// (NaN is rejected).
 #[inline]
 pub fn skin_depth(angular_freq: f64, permeability: f64, conductivity: f64) -> Result<f64> {
-    let denom = angular_freq * permeability * conductivity;
-    if denom <= 0.0 {
-        return Err(BijliError::InvalidParameter {
-            reason: "all parameters must be positive for skin depth".into(),
-        });
+    for (name, value) in [
+        ("angular frequency", angular_freq),
+        ("permeability", permeability),
+        ("conductivity", conductivity),
+    ] {
+        if value.is_nan() || value <= 0.0 {
+            return Err(BijliError::InvalidParameter {
+                reason: format!("{name} must be positive for skin depth, got {value}"),
+            });
+        }
     }
+    let denom = angular_freq * permeability * conductivity;
     Ok((2.0 / denom).sqrt())
 }
 
@@ -232,5 +244,34 @@ mod tests {
     #[test]
     fn test_invalid_permeability() {
         assert!(impedance(EPSILON_0, -1.0).is_err());
+    }
+
+    // ── Audit regression tests (1.2.0) ────────────────────────────
+
+    #[test]
+    fn test_skin_depth_rejects_paired_negatives() {
+        // Product of two negatives is positive — each factor must be checked.
+        assert!(skin_depth(-1.0, -MU_0, 5.96e7).is_err());
+        assert!(skin_depth(-1.0, MU_0, -5.96e7).is_err());
+        assert!(skin_depth(1.0, -MU_0, -5.96e7).is_err());
+        assert!(skin_depth(f64::NAN, MU_0, 5.96e7).is_err());
+    }
+
+    #[test]
+    fn test_skin_depth_copper_reference() {
+        // δ = √(2/(ωμσ)); copper at 1 MHz: ω = 2π·1e6, σ = 5.96e7 S/m
+        // → δ = 6.519_240_483e-5 m (python reference, CODATA 2018 μ₀).
+        let delta = skin_depth(2.0 * std::f64::consts::PI * 1e6, MU_0, 5.96e7).unwrap();
+        assert!((delta - 6.519_240_483e-5).abs() / delta < 1e-9, "{delta}");
+    }
+
+    #[test]
+    fn test_nan_material_parameters_rejected() {
+        assert!(wave_speed(f64::NAN, MU_0).is_err());
+        assert!(wave_speed(EPSILON_0, f64::NAN).is_err());
+        assert!(impedance(f64::NAN, MU_0).is_err());
+        assert!(refractive_index(f64::NAN, 1.0).is_err());
+        assert!(wavelength(f64::NAN, SPEED_OF_LIGHT).is_err());
+        assert!(frequency(530e-9, f64::NAN).is_err());
     }
 }

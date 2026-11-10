@@ -4,12 +4,11 @@
 
 Electromagnetism simulation for the AGNOS ecosystem. Fields, Maxwell's equations, charge dynamics, EM wave propagation, optics, scattering, FDTD solvers, RF/microwave, and GPU compute.
 
-Built on [hisab](https://crates.io/crates/hisab) for PDE solvers and [impetus](https://crates.io/crates/impetus) for particle interactions.
+Built on [hisab](https://crates.io/crates/hisab) for numerical computing (complex arithmetic, root-finding, transforms). Requires Rust 1.99+ (edition 2024).
 
 ## Quick Start
 
 ```rust
-use bijli::field;
 use bijli::charge::PointCharge;
 use bijli::material::Material;
 
@@ -20,7 +19,7 @@ let e = q.electric_field_at([1.0, 0.0, 0.0]).unwrap();
 // Reflectance at air-glass interface
 let air = Material::vacuum();
 let glass = Material::dielectric(2.25);
-let r = air.reflectance_at(&glass); // 4%
+let r = air.try_reflectance_at(&glass).unwrap(); // ≈ 4%
 
 // 2D FDTD simulation
 use bijli::fdtd::{Fdtd2d, Mode2d};
@@ -39,13 +38,13 @@ sim.run(500, Some((100, 100)), 3e9, 1.0);
 | `wave` | Yes | EM waves, Fresnel equations, waveguides, antenna patterns |
 | `circuit` | Yes | Ohm's law, RC/RL/RLC circuits, series/parallel combinations |
 | `material` | Yes | Dielectric/magnetic materials, unified `Material` struct |
-| `fdtd` | Yes | 1D/2D/3D FDTD solvers, CPML, dispersive materials, NF2FF, eigenmode |
+| `fdtd` | Yes | 1D/2D/3D FDTD solvers, CPML (2D), lossy/dispersive materials, TFSF, NF2FF, eigenmode |
 | `relativity` | Yes | EM tensor, Lorentz transforms, Liénard-Wiechert fields, retarded time |
 | `polarization` | Yes | Jones/Stokes/Mueller formalism, optical elements |
 | `scattering` | Yes | Mie and Rayleigh scattering |
 | `beam` | Yes | Gaussian beams, ABCD matrices, resonator stability, HG/LG modes |
 | `rf` | Yes | Transmission lines, S-parameters, Smith chart, Touchstone I/O, arrays |
-| `compute` | No | GPU compute backend trait (CPU/wgpu) |
+| `compute` | No | Compute backend trait + CPU reference backend (wgpu backend is a scaffold) |
 | `ai` | No | Daimon/hoosh AI integration |
 | `logging` | No | Structured logging via `BIJLI_LOG` |
 
@@ -60,8 +59,9 @@ sim.run(500, Some((100, 100)), 3e9, 1.0);
 ```bash
 cargo build                    # default features
 cargo build --all-features     # everything including GPU backends
-cargo test --all-features      # full test suite (589+ tests)
+cargo test --all-features      # full test suite (850 tests)
 make check                     # fmt + clippy + test + audit
+make features                  # every feature compiles on its own
 make bench                     # criterion benchmarks with history
 ```
 

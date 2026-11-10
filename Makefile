@@ -1,10 +1,19 @@
-.PHONY: check fmt clippy test audit deny vet semver bench coverage build doc clean all
+.PHONY: check fmt clippy test audit deny vet semver bench coverage build doc clean all features
 
 # Run all CI checks locally
 check: fmt clippy test audit
 
 # Full check including supply-chain
-all: check deny doc
+all: check deny doc features
+
+# Every feature must compile on its own (catches missing inter-feature deps)
+FEATURES := field maxwell charge wave circuit material fdtd relativity polarization scattering beam rf soorat-compat compute logging ai
+features:
+	cargo check --no-default-features
+	@for f in $(FEATURES); do \
+		echo "cargo check --no-default-features --features $$f --lib --tests"; \
+		cargo check --quiet --no-default-features --features $$f --lib --tests || exit 1; \
+	done
 
 # Format check
 fmt:

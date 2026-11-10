@@ -187,6 +187,12 @@ fn wave_benchmarks(c: &mut Criterion) {
         b.iter(|| black_box(bijli::wave::reflectance_unpolarized(1.0, 1.5, 0.707)))
     });
 
+    group.bench_function("reflectance_at_interface", |b| {
+        let air = bijli::material::Material::vacuum();
+        let glass = bijli::material::Material::dielectric(2.25);
+        b.iter(|| black_box(bijli::wave::reflectance_at_interface(&air, &glass, 0.707)))
+    });
+
     group.bench_function("schlick_reflectance", |b| {
         b.iter(|| black_box(bijli::wave::schlick_reflectance(1.0, 1.5, 0.707)))
     });
@@ -254,6 +260,52 @@ fn fdtd_benchmarks(c: &mut Criterion) {
             sim.run(50, Some((40, 40)), 1e9, 1.0);
             black_box(sim.total_energy())
         })
+    });
+
+    group.bench_function("2d_step_100x100_tm_cpml10", |b| {
+        let mut sim = bijli::fdtd::Fdtd2d::new(100, 100, 1e-4, bijli::fdtd::Mode2d::Tm).unwrap();
+        sim.try_enable_cpml(10).unwrap();
+        sim.add_source(50, 50, 1.0);
+        b.iter(|| {
+            sim.step_once();
+            black_box(sim.fz[5050])
+        })
+    });
+
+    group.bench_function("2d_step_100x100_tm_lossy", |b| {
+        let mut sim = bijli::fdtd::Fdtd2d::new(100, 100, 1e-4, bijli::fdtd::Mode2d::Tm).unwrap();
+        sim.set_conductivity(60, 0, 100, 100, 1.0).unwrap();
+        sim.add_source(30, 50, 1.0);
+        b.iter(|| {
+            sim.step_once();
+            black_box(sim.fz[5030])
+        })
+    });
+
+    group.bench_function("3d_step_30x30x30", |b| {
+        let mut sim = bijli::fdtd::Fdtd3d::new(30, 30, 30, 1e-3).unwrap();
+        sim.add_source_ez(15, 15, 15, 1.0);
+        b.iter(|| {
+            sim.step_once();
+            black_box(sim.total_energy())
+        })
+    });
+
+    group.bench_function("nf2ff_2d_80x80_180", |b| {
+        let mut sim = bijli::fdtd::Fdtd2d::new(80, 80, 1e-3, bijli::fdtd::Mode2d::Tm).unwrap();
+        sim.run(60, Some((40, 40)), 3e10, 1.0);
+        b.iter(|| black_box(bijli::fdtd::nf2ff_2d(&sim, 5, 180, 3e10)))
+    });
+
+    group.bench_function("find_eigenmodes_4096x256", |b| {
+        let dt = 1e-12;
+        let signal: Vec<f64> = (0..4096)
+            .map(|i| {
+                let t = i as f64 * dt;
+                (2.0 * std::f64::consts::PI * 3e10 * t).sin() * (-t / 1e-9).exp()
+            })
+            .collect();
+        b.iter(|| black_box(bijli::fdtd::find_eigenmodes(&signal, dt, 1e10, 5e10, 256)))
     });
 
     group.finish();
@@ -352,6 +404,50 @@ fn relativity_benchmarks(c: &mut Criterion) {
         })
     });
 
+    group.bench_function("solve_retarded_time_uniform_t1s", |b| {
+        // Uniform motion at 0.5c along x, observed at t = 1 s (beyond the old solver's reach)
+        let v = 0.5 * 299_792_458.0;
+        b.iter(|| {
+            black_box(bijli::relativity::solve_retarded_time(
+                [1.0, 1.0, 0.0],
+                1.0,
+                |t| ([v * (t - 1.0), 0.0, 0.0], [v, 0.0, 0.0]),
+                100,
+            ))
+        })
+    });
+
+    group.bench_function("lienard_wiechert_fields_orbit_b099", |b| {
+        // Circular orbit, R = 1 m, β = 0.99
+        let c = 299_792_458.0;
+        let omega = 0.99 * c;
+        b.iter(|| {
+            black_box(bijli::relativity::lienard_wiechert_fields(
+                1e-9,
+                [0.89, 0.805, -0.081],
+                6.93e-8,
+                |t| {
+                    let (s, co) = (omega * t).sin_cos();
+                    (
+                        [co, s, 0.0],
+                        [-omega * s, omega * co, 0.0],
+                        [-omega * omega * co, -omega * omega * s, 0.0],
+                    )
+                },
+            ))
+        })
+    });
+
+    group.bench_function("lienard_wiechert_scalar_potential", |b| {
+        let rv = bijli::field::FieldVector::new(1.0, 0.5, 0.0);
+        let bv = bijli::field::FieldVector::new(0.5, 0.0, 0.0);
+        b.iter(|| {
+            black_box(bijli::relativity::lienard_wiechert_scalar_potential(
+                1e-9, &rv, &bv,
+            ))
+        })
+    });
+
     group.bench_function("four_vector_boost", |b| {
         let fv = bijli::relativity::FourVector::new(bijli::field::SPEED_OF_LIGHT, 1.0, 2.0, 3.0);
         b.iter(|| black_box(fv.boost_x(0.5 * bijli::field::SPEED_OF_LIGHT)))
@@ -402,6 +498,11 @@ fn scattering_benchmarks(c: &mut Criterion) {
         b.iter(|| black_box(bijli::scattering::mie(10.0, m)))
     });
 
+    group.bench_function("mie_x50_m3_5", |b| {
+        let m = bijli::polarization::complex_real(3.5);
+        b.iter(|| black_box(bijli::scattering::mie(50.0, m)))
+    });
+
     group.bench_function("rayleigh_cross_section", |b| {
         let m = bijli::polarization::complex_real(1.5);
         b.iter(|| black_box(bijli::scattering::rayleigh_cross_section(10e-9, 500e-9, m)))
@@ -448,6 +549,15 @@ fn beam_benchmarks(c: &mut Criterion) {
         b.iter(|| black_box(bijli::beam::resonator_stability(0.1, 0.2, 0.2)))
     });
 
+    group.bench_function("hermite_gaussian_field_hg33", |b| {
+        let beam = bijli::beam::GaussianBeam::new(1064e-9, 100e-6).unwrap();
+        b.iter(|| {
+            black_box(bijli::beam::hermite_gaussian_field(
+                &beam, 3, 3, 50e-6, 50e-6, 0.01,
+            ))
+        })
+    });
+
     group.finish();
 }
 
@@ -474,6 +584,42 @@ fn rf_benchmarks(c: &mut Criterion) {
             50.0,
         );
         b.iter(|| black_box(thru.cascade(&thru)))
+    });
+
+    group.bench_function("input_impedance_complex", |b| {
+        let zl = bijli::polarization::Complex::new(100.0, -25.0);
+        b.iter(|| {
+            black_box(bijli::rf::input_impedance_lossless_complex(
+                50.0,
+                zl,
+                2.0 * std::f64::consts::PI,
+                0.125,
+            ))
+        })
+    });
+
+    group.bench_function("single_stub_match", |b| {
+        b.iter(|| black_box(bijli::rf::single_stub_match(100.0, 50.0)))
+    });
+
+    // 201-point 2-port Touchstone file (typical VNA sweep)
+    let mut s2p = String::from("! bench\n# GHz S MA R 50\n");
+    for i in 0..201 {
+        let f = 1.0 + i as f64 * 0.01;
+        s2p.push_str(&format!("{f} 0.1 -30 0.9 -45 0.01 60 0.2 15\n"));
+    }
+    group.bench_function("parse_touchstone_s2p_201", |b| {
+        b.iter(|| black_box(bijli::rf::parse_touchstone(&s2p, 2)))
+    });
+
+    let parsed = bijli::rf::parse_touchstone(&s2p, 2).unwrap();
+    group.bench_function("write_touchstone_s2p_201", |b| {
+        b.iter(|| {
+            black_box(bijli::rf::try_write_touchstone(
+                &parsed,
+                bijli::rf::TouchstoneFormat::MagnitudeAngle,
+            ))
+        })
     });
 
     group.finish();

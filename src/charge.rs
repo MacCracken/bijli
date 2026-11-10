@@ -34,10 +34,10 @@ impl PointCharge {
     ///
     /// # Errors
     ///
-    /// Returns [`BijliError::InvalidParameter`] if `mass` is not positive.
+    /// Returns [`BijliError::InvalidParameter`] if `mass` is not positive (or NaN).
     #[inline]
     pub fn new(charge: f64, mass: f64, position: [f64; 3], velocity: [f64; 3]) -> Result<Self> {
-        if mass <= 0.0 {
+        if mass.is_nan() || mass <= 0.0 {
             return Err(BijliError::InvalidParameter {
                 reason: format!("mass must be positive, got {mass}"),
             });
@@ -173,23 +173,54 @@ pub fn potential_energy(charge: f64, potential: f64) -> f64 {
 
 /// Coulomb potential energy between two point charges.
 ///
-/// U = kq₁q₂/r (joules)
+/// U = kq₁q₂/r (joules), `distance` r ≥ 0 in metres.
+///
+/// # Errors
+///
+/// [`BijliError::InvalidParameter`] if `distance` is negative or NaN,
+/// [`BijliError::Singularity`] if it is (numerically) zero.
 #[inline]
 pub fn coulomb_potential_energy(q1: f64, q2: f64, distance: f64) -> Result<f64> {
-    if distance.abs() < 1e-30 {
-        return Err(BijliError::Singularity);
-    }
+    crate::field::check_radial_distance(distance)?;
     Ok(COULOMB_K * q1 * q2 / distance)
+}
+
+/// Validate a particle mass: zero → `DivisionByZero`, negative/NaN → `InvalidParameter`.
+#[inline]
+fn check_mass(mass: f64, what: &str) -> Result<()> {
+    if mass == 0.0 {
+        return Err(BijliError::DivisionByZero {
+            context: format!("mass cannot be zero for {what}"),
+        });
+    }
+    if mass.is_nan() || mass <= 0.0 {
+        return Err(BijliError::InvalidParameter {
+            reason: format!("mass must be positive for {what}, got {mass}"),
+        });
+    }
+    Ok(())
 }
 
 /// Cyclotron frequency for a charged particle in a magnetic field.
 ///
-/// ω_c = |q|B/m (rad/s)
+/// ω_c = |q|B/m (rad/s), with `b_magnitude` = |B| ≥ 0 in tesla.
+///
+/// # Errors
+///
+/// - [`BijliError::DivisionByZero`] if `mass` is zero.
+/// - [`BijliError::InvalidParameter`] if `mass` is negative, `b_magnitude`
+///   is negative, or any argument is NaN.
 #[inline]
 pub fn cyclotron_frequency(charge: f64, mass: f64, b_magnitude: f64) -> Result<f64> {
-    if mass.abs() < 1e-50 {
-        return Err(BijliError::DivisionByZero {
-            context: "mass cannot be zero for cyclotron frequency".into(),
+    check_mass(mass, "cyclotron frequency")?;
+    if charge.is_nan() {
+        return Err(BijliError::InvalidParameter {
+            reason: "charge must not be NaN".into(),
+        });
+    }
+    if b_magnitude.is_nan() || b_magnitude < 0.0 {
+        return Err(BijliError::InvalidParameter {
+            reason: format!("|B| must be non-negative, got {b_magnitude}"),
         });
     }
     Ok(charge.abs() * b_magnitude / mass)
@@ -197,16 +228,40 @@ pub fn cyclotron_frequency(charge: f64, mass: f64, b_magnitude: f64) -> Result<f
 
 /// Larmor radius (gyroradius) of a charged particle.
 ///
-/// r_L = mv_⊥/(|q|B) (meters)
+/// r_L = m|v_⊥|/(|q|B) (meters), with `b_magnitude` = |B| > 0 in tesla. Any
+/// non-zero charge and field strength is accepted (e.g. an electron in a
+/// 10⁻¹² T interplanetary field).
+///
+/// # Errors
+///
+/// - [`BijliError::DivisionByZero`] if `mass`, `charge` or `b_magnitude` is zero.
+/// - [`BijliError::InvalidParameter`] if `mass` or `b_magnitude` is negative,
+///   or any argument is NaN.
 #[inline]
 pub fn larmor_radius(mass: f64, v_perp: f64, charge: f64, b_magnitude: f64) -> Result<f64> {
-    let denom = charge.abs() * b_magnitude;
-    if denom < 1e-30 {
-        return Err(BijliError::DivisionByZero {
-            context: "charge×B cannot be zero for Larmor radius".into(),
+    check_mass(mass, "Larmor radius")?;
+    if v_perp.is_nan() || charge.is_nan() {
+        return Err(BijliError::InvalidParameter {
+            reason: "v_perp and charge must not be NaN".into(),
         });
     }
-    Ok(mass * v_perp.abs() / denom)
+    if charge == 0.0 {
+        return Err(BijliError::DivisionByZero {
+            context: "charge cannot be zero for Larmor radius".into(),
+        });
+    }
+    if b_magnitude == 0.0 {
+        return Err(BijliError::DivisionByZero {
+            context: "|B| cannot be zero for Larmor radius".into(),
+        });
+    }
+    if b_magnitude.is_nan() || b_magnitude <= 0.0 {
+        return Err(BijliError::InvalidParameter {
+            reason: format!("|B| must be positive, got {b_magnitude}"),
+        });
+    }
+    // Divide in two steps so a tiny |q|·B product cannot underflow to zero.
+    Ok(mass * v_perp.abs() / charge.abs() / b_magnitude)
 }
 
 #[cfg(test)]
@@ -368,5 +423,52 @@ mod tests {
     fn test_point_charge_singularity() {
         let q = PointCharge::new(1e-6, 1.0, [0.0; 3], [0.0; 3]).unwrap();
         assert!(q.electric_field_at([0.0; 3]).is_err());
+    }
+
+    // ── Audit regression tests (1.2.0) ────────────────────────────
+
+    #[test]
+    fn test_larmor_radius_weak_field() {
+        // Electron at 1e3 m/s in 1e-12 T (|q|B ≈ 1.6e-31 < old 1e-30 floor).
+        let b = 1e-12;
+        let v = 1e3;
+        let r = larmor_radius(ELECTRON_MASS, v, -ELEMENTARY_CHARGE, b).unwrap();
+        // r_L = m v / (|q| B) = 9.109383702e-31·1e3 / (1.602176634e-19·1e-12)
+        let expected = 5.685_630_103_877_797e3;
+        assert!((r - expected).abs() / expected < 1e-9, "{r}");
+    }
+
+    #[test]
+    fn test_larmor_radius_rejects_invalid() {
+        assert!(larmor_radius(ELECTRON_MASS, 1e6, 0.0, 1.0).is_err());
+        assert!(larmor_radius(ELECTRON_MASS, 1e6, ELEMENTARY_CHARGE, -1.0).is_err());
+        assert!(larmor_radius(-ELECTRON_MASS, 1e6, ELEMENTARY_CHARGE, 1.0).is_err());
+        assert!(larmor_radius(ELECTRON_MASS, f64::NAN, ELEMENTARY_CHARGE, 1.0).is_err());
+        assert!(larmor_radius(ELECTRON_MASS, 1e6, f64::NAN, 1.0).is_err());
+        assert!(larmor_radius(ELECTRON_MASS, 1e6, ELEMENTARY_CHARGE, f64::NAN).is_err());
+    }
+
+    #[test]
+    fn test_cyclotron_frequency_rejects_invalid() {
+        assert!(cyclotron_frequency(ELEMENTARY_CHARGE, -ELECTRON_MASS, 1.0).is_err());
+        assert!(cyclotron_frequency(ELEMENTARY_CHARGE, f64::NAN, 1.0).is_err());
+        assert!(cyclotron_frequency(ELEMENTARY_CHARGE, ELECTRON_MASS, -1.0).is_err());
+        assert!(cyclotron_frequency(f64::NAN, ELECTRON_MASS, 1.0).is_err());
+        // B = 0 is a valid (zero) frequency.
+        assert_eq!(
+            cyclotron_frequency(ELEMENTARY_CHARGE, ELECTRON_MASS, 0.0).unwrap(),
+            0.0
+        );
+    }
+
+    #[test]
+    fn test_coulomb_potential_energy_rejects_negative_distance() {
+        assert!(coulomb_potential_energy(1.0, 1.0, -1.0).is_err());
+        assert!(coulomb_potential_energy(1.0, 1.0, f64::NAN).is_err());
+    }
+
+    #[test]
+    fn test_new_rejects_nan_mass() {
+        assert!(PointCharge::new(1e-6, f64::NAN, [0.0; 3], [0.0; 3]).is_err());
     }
 }

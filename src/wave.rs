@@ -206,70 +206,139 @@ pub fn transmittance_normal(n1: f64, n2: f64) -> Result<f64> {
 }
 
 // ── Trig-free Fresnel (direct cosine interface) ──────────────────
+//
+// Conventions shared by the `*_direct`, unpolarized, Schlick and
+// material-based functions below:
+// - n₁ (incident side) and n₂ must be positive and finite (lossless media).
+// - cos θ_i is the cosine of the angle between the incident ray and the
+//   surface normal on the incident side, in [0, 1]. Values within
+//   `COS_THETA_TOLERANCE` (1e-6) outside that range — rounding from
+//   normalized f32/f64 vectors — are clamped; anything else (including NaN or
+//   a cosine computed against the wrong-side normal) is an error. No
+//   automatic side flip is done: swap n₁ and n₂ yourself for rays leaving
+//   the denser medium.
+
+/// Tolerance for cos θ_i slightly outside [0, 1] (rounding); clamped.
+const COS_THETA_TOLERANCE: f64 = 1e-6;
+
+/// Validate refractive indices for the trig-free Fresnel family.
+#[inline]
+fn check_indices(n1: f64, n2: f64) -> Result<()> {
+    if n2 == 0.0 {
+        return Err(BijliError::DivisionByZero {
+            context: "refractive index n₂ cannot be zero".into(),
+        });
+    }
+    if !(n1.is_finite() && n1 > 0.0 && n2.is_finite() && n2 > 0.0) {
+        return Err(BijliError::InvalidParameter {
+            reason: format!("refractive indices must be positive and finite, got n₁={n1}, n₂={n2}"),
+        });
+    }
+    Ok(())
+}
+
+/// Validate cos θ_i ∈ [0, 1] (clamping within `COS_THETA_TOLERANCE`).
+#[inline]
+fn check_cos_theta_i(cos_theta_i: f64) -> Result<f64> {
+    if (0.0..=1.0).contains(&cos_theta_i) {
+        Ok(cos_theta_i)
+    } else if (-COS_THETA_TOLERANCE..=1.0 + COS_THETA_TOLERANCE).contains(&cos_theta_i) {
+        Ok(cos_theta_i.clamp(0.0, 1.0))
+    } else {
+        Err(BijliError::InvalidParameter {
+            reason: format!(
+                "cos θ_i must lie in [0, 1] (measured against the incident-side normal), got {cos_theta_i}"
+            ),
+        })
+    }
+}
+
+/// Validated (cos θ_i, cos θ_t); cos θ_t is `None` under total internal reflection.
+#[inline]
+fn fresnel_cosines(n1: f64, n2: f64, cos_theta_i: f64) -> Result<(f64, Option<f64>)> {
+    check_indices(n1, n2)?;
+    let cos_i = check_cos_theta_i(cos_theta_i)?;
+    let ratio = n1 / n2;
+    let sin2_t = ratio * ratio * (1.0 - cos_i * cos_i);
+    if sin2_t > 1.0 {
+        Ok((cos_i, None)) // total internal reflection
+    } else {
+        Ok((cos_i, Some((1.0 - sin2_t).sqrt())))
+    }
+}
+
+/// a/b for a Fresnel ratio whose denominator is a sum of non-negative terms.
+#[inline]
+fn fresnel_ratio(num: f64, den: f64) -> Result<f64> {
+    if den == 0.0 {
+        return Err(BijliError::DivisionByZero {
+            context: "Fresnel denominator is zero".into(),
+        });
+    }
+    Ok(num / den)
+}
 
 /// Compute cos θ_t from cos θ_i via Snell's law (no trig).
 ///
 /// cos θ_t = √(1 − (n₁/n₂)²(1 − cos²θ_i))
 ///
 /// Returns `None` for total internal reflection (negative radicand).
+///
+/// # Errors
+/// [`BijliError::DivisionByZero`] for n₂ = 0; [`BijliError::InvalidParameter`]
+/// for non-positive/non-finite indices or cos θ_i outside [0, 1] (beyond a
+/// 1e-6 rounding tolerance, which is clamped).
 #[inline]
 pub fn snell_cos_theta_t(n1: f64, n2: f64, cos_theta_i: f64) -> Result<Option<f64>> {
-    if n2.abs() < 1e-30 {
-        return Err(BijliError::DivisionByZero {
-            context: "refractive index n₂ cannot be zero".into(),
-        });
-    }
-    let ratio = n1 / n2;
-    let sin2_t = ratio * ratio * (1.0 - cos_theta_i * cos_theta_i);
-    if sin2_t > 1.0 {
-        Ok(None) // total internal reflection
-    } else {
-        Ok(Some((1.0 - sin2_t).sqrt()))
-    }
+    Ok(fresnel_cosines(n1, n2, cos_theta_i)?.1)
 }
 
 /// Trig-free Fresnel reflection coefficient for s-polarization (TE).
 ///
 /// Takes cos θ_i directly; computes cos θ_t via Snell's law internally.
-/// Returns `None` for total internal reflection.
+/// Returns `None` for total internal reflection. For n₁ = n₂ it is exactly
+/// 0 at every angle (including grazing incidence, where the formula is 0/0).
 ///
 /// r_s = (n₁ cos θ_i − n₂ cos θ_t) / (n₁ cos θ_i + n₂ cos θ_t)
+///
+/// # Errors
+/// As [`snell_cos_theta_t`].
 #[inline]
 pub fn fresnel_rs_direct(n1: f64, n2: f64, cos_theta_i: f64) -> Result<Option<f64>> {
-    let cos_t = match snell_cos_theta_t(n1, n2, cos_theta_i)? {
-        Some(c) => c,
-        None => return Ok(None), // TIR → |r| = 1
+    let (cos_i, cos_t) = fresnel_cosines(n1, n2, cos_theta_i)?;
+    let Some(cos_t) = cos_t else {
+        return Ok(None); // TIR → |r| = 1
     };
-    let num = n1 * cos_theta_i - n2 * cos_t;
-    let den = n1 * cos_theta_i + n2 * cos_t;
-    if den.abs() < 1e-30 {
-        return Err(BijliError::DivisionByZero {
-            context: "Fresnel denominator is zero".into(),
-        });
+    if n1 == n2 {
+        return Ok(Some(0.0));
     }
-    Ok(Some(num / den))
+    let num = n1 * cos_i - n2 * cos_t;
+    let den = n1 * cos_i + n2 * cos_t;
+    fresnel_ratio(num, den).map(Some)
 }
 
 /// Trig-free Fresnel reflection coefficient for p-polarization (TM).
 ///
 /// Takes cos θ_i directly; computes cos θ_t via Snell's law internally.
-/// Returns `None` for total internal reflection.
+/// Returns `None` for total internal reflection. For n₁ = n₂ it is exactly
+/// 0 at every angle.
 ///
 /// r_p = (n₂ cos θ_i − n₁ cos θ_t) / (n₂ cos θ_i + n₁ cos θ_t)
+///
+/// # Errors
+/// As [`snell_cos_theta_t`].
 #[inline]
 pub fn fresnel_rp_direct(n1: f64, n2: f64, cos_theta_i: f64) -> Result<Option<f64>> {
-    let cos_t = match snell_cos_theta_t(n1, n2, cos_theta_i)? {
-        Some(c) => c,
-        None => return Ok(None), // TIR → |r| = 1
+    let (cos_i, cos_t) = fresnel_cosines(n1, n2, cos_theta_i)?;
+    let Some(cos_t) = cos_t else {
+        return Ok(None); // TIR → |r| = 1
     };
-    let num = n2 * cos_theta_i - n1 * cos_t;
-    let den = n2 * cos_theta_i + n1 * cos_t;
-    if den.abs() < 1e-30 {
-        return Err(BijliError::DivisionByZero {
-            context: "Fresnel denominator is zero".into(),
-        });
+    if n1 == n2 {
+        return Ok(Some(0.0));
     }
-    Ok(Some(num / den))
+    let num = n2 * cos_i - n1 * cos_t;
+    let den = n2 * cos_i + n1 * cos_t;
+    fresnel_ratio(num, den).map(Some)
 }
 
 /// Trig-free reflectance for s-polarization: R_s = |r_s|².
@@ -294,17 +363,28 @@ pub fn reflectance_p_direct(n1: f64, n2: f64, cos_theta_i: f64) -> Result<f64> {
     }
 }
 
-/// Trig-free unpolarized reflectance: R = (R_s + R_p) / 2.
+/// Trig-free unpolarized reflectance: R = (R_s + R_p) / 2, in [0, 1].
 ///
-/// Returns 1.0 for total internal reflection.
+/// Returns 1.0 for total internal reflection. cos θ_t is computed once and
+/// shared by both polarizations.
+///
+/// # Errors
+/// As [`snell_cos_theta_t`].
 #[inline]
 pub fn reflectance_unpolarized(n1: f64, n2: f64, cos_theta_i: f64) -> Result<f64> {
-    let rs = reflectance_s_direct(n1, n2, cos_theta_i)?;
-    let rp = reflectance_p_direct(n1, n2, cos_theta_i)?;
-    Ok(0.5 * (rs + rp))
+    let (cos_i, cos_t) = fresnel_cosines(n1, n2, cos_theta_i)?;
+    let Some(cos_t) = cos_t else {
+        return Ok(1.0); // TIR
+    };
+    if n1 == n2 {
+        return Ok(0.0);
+    }
+    let rs = fresnel_ratio(n1 * cos_i - n2 * cos_t, n1 * cos_i + n2 * cos_t)?;
+    let rp = fresnel_ratio(n2 * cos_i - n1 * cos_t, n2 * cos_i + n1 * cos_t)?;
+    Ok(0.5 * (rs * rs + rp * rp))
 }
 
-/// Trig-free unpolarized transmittance: T = 1 − R.
+/// Trig-free unpolarized transmittance: T = 1 − R, in [0, 1].
 #[inline]
 pub fn transmittance_unpolarized(n1: f64, n2: f64, cos_theta_i: f64) -> Result<f64> {
     Ok(1.0 - reflectance_unpolarized(n1, n2, cos_theta_i)?)
@@ -312,11 +392,29 @@ pub fn transmittance_unpolarized(n1: f64, n2: f64, cos_theta_i: f64) -> Result<f
 
 /// Schlick's approximation for reflectance (common in rendering).
 ///
-/// R(θ) ≈ R₀ + (1 − R₀)(1 − cos θ)⁵ where R₀ = ((n₁−n₂)/(n₁+n₂))²
+/// R ≈ R₀ + (1 − R₀)(1 − cos θ)⁵, R₀ = ((n₁−n₂)/(n₁+n₂))²,
+///
+/// where θ is the angle on the **optically thinner** side: θ = θ_i when
+/// n₁ ≤ n₂ and θ = θ_t when n₁ > n₂. Under total internal reflection the
+/// result is exactly 1.0 (de Greve, *Reflections and Refractions in Ray
+/// Tracing*, 2006). Using cos θ_i for n₁ > n₂ underestimates R badly near
+/// the critical angle.
+///
+/// # Errors
+/// As [`snell_cos_theta_t`].
 #[inline]
 pub fn schlick_reflectance(n1: f64, n2: f64, cos_theta_i: f64) -> Result<f64> {
+    let (cos_i, cos_t) = fresnel_cosines(n1, n2, cos_theta_i)?;
+    let cos = if n1 > n2 {
+        match cos_t {
+            Some(c) => c,
+            None => return Ok(1.0), // TIR
+        }
+    } else {
+        cos_i
+    };
     let r0 = reflectance_normal(n1, n2)?;
-    let one_minus_cos = 1.0 - cos_theta_i;
+    let one_minus_cos = 1.0 - cos;
     let omc2 = one_minus_cos * one_minus_cos;
     let omc5 = omc2 * omc2 * one_minus_cos;
     Ok(r0 + (1.0 - r0) * omc5)
@@ -324,38 +422,83 @@ pub fn schlick_reflectance(n1: f64, n2: f64, cos_theta_i: f64) -> Result<f64> {
 
 // ── Material-based Fresnel interface ───────────────────────────────
 
-/// Trig-free unpolarized reflectance at interface between two materials.
+/// Trig-free unpolarized reflectance at the interface between two
+/// **lossless** materials, valid for magnetic media.
 ///
-/// Convenience wrapper that extracts refractive indices from [`crate::material::Material`] structs.
+/// Snell's law uses n = √(ε_r μ_r); the amplitudes use the relative wave
+/// impedance η = √(μ_r/ε_r):
+///
+/// ```text
+/// r_s = (η₂ cos θ_i − η₁ cos θ_t) / (η₂ cos θ_i + η₁ cos θ_t)
+/// r_p = (η₁ cos θ_i − η₂ cos θ_t) / (η₁ cos θ_i + η₂ cos θ_t)
+/// R   = (r_s² + r_p²)/2          (1.0 under total internal reflection)
+/// ```
+///
+/// For non-magnetic media this equals [`reflectance_unpolarized`] with
+/// n = √ε_r. `cos_theta_i` follows the same rules as there.
+///
+/// # Errors
+/// [`BijliError::InvalidPermittivity`] / [`BijliError::InvalidPermeability`]
+/// for non-positive or non-finite ε_r / μ_r; [`BijliError::InvalidParameter`]
+/// if either material has conductivity σ ≠ 0 (a conductor's Fresnel
+/// coefficients need its frequency-dependent complex index) or for an
+/// out-of-range cos θ_i.
 #[inline]
 pub fn reflectance_at_interface(
     mat1: &crate::material::Material,
     mat2: &crate::material::Material,
     cos_theta_i: f64,
 ) -> Result<f64> {
-    let n1 = mat1.refractive_index();
-    let n2 = mat2.refractive_index();
-    reflectance_unpolarized(n1, n2, cos_theta_i)
+    let (n1, eta1) = mat1.lossless_optical_constants()?;
+    let (n2, eta2) = mat2.lossless_optical_constants()?;
+    let (cos_i, cos_t) = fresnel_cosines(n1, n2, cos_theta_i)?;
+    let Some(cos_t) = cos_t else {
+        return Ok(1.0); // TIR
+    };
+    if n1 == n2 {
+        // cos θ_t = cos θ_i at every angle: R = Γ², Γ = (η₂ − η₁)/(η₂ + η₁)
+        // (also covers grazing incidence, where the general form is 0/0).
+        let gamma = (eta2 - eta1) / (eta2 + eta1);
+        return Ok(gamma * gamma);
+    }
+    let rs = fresnel_ratio(eta2 * cos_i - eta1 * cos_t, eta2 * cos_i + eta1 * cos_t)?;
+    let rp = fresnel_ratio(eta1 * cos_i - eta2 * cos_t, eta1 * cos_i + eta2 * cos_t)?;
+    Ok(0.5 * (rs * rs + rp * rp))
 }
 
-/// Normal-incidence reflectance between two materials.
+/// Normal-incidence reflectance between two lossless materials:
+/// R = ((η₂ − η₁)/(η₂ + η₁))², η = √(μ_r/ε_r).
+///
+/// Equivalent to [`crate::material::Material::try_reflectance_at`].
+///
+/// # Errors
+/// As [`reflectance_at_interface`].
 #[inline]
 pub fn reflectance_normal_materials(
     mat1: &crate::material::Material,
     mat2: &crate::material::Material,
 ) -> Result<f64> {
-    reflectance_normal(mat1.refractive_index(), mat2.refractive_index())
+    mat1.try_reflectance_at(mat2)
 }
 
 /// Transmission line reflection coefficient from material impedances.
 ///
 /// Bridges `circuit`/`rf` reflection coefficient with `wave`/`material` modules.
-/// Γ = (η₂ − η₁)/(η₂ + η₁) where η = √(μ/ε) is the wave impedance.
+/// Γ = (η₂ − η₁)/(η₂ + η₁) where η = √(μ/ε) is the (lossless) wave impedance.
+///
+/// # Errors
+/// [`BijliError::InvalidPermittivity`] / [`BijliError::InvalidPermeability`]
+/// for non-positive or non-finite ε_r / μ_r; [`BijliError::InvalidParameter`]
+/// if either material has σ ≠ 0 (a conductor's impedance is complex and
+/// frequency-dependent).
 #[inline]
 pub fn material_reflection_coefficient(
     mat1: &crate::material::Material,
     mat2: &crate::material::Material,
 ) -> Result<f64> {
+    // Validates ε_r, μ_r and rejects conductors.
+    mat1.lossless_optical_constants()?;
+    mat2.lossless_optical_constants()?;
     let eta1 = mat1.impedance()?;
     let eta2 = mat2.impedance()?;
     let den = eta2 + eta1;
@@ -369,16 +512,39 @@ pub fn material_reflection_coefficient(
 
 // ── Waveguides ─────────────────────────────────────────────────────
 
+/// Validate rectangular waveguide dimensions and mode indices.
+#[inline]
+fn check_rectangular_waveguide(a: f64, b: f64, m: u32, n: u32) -> Result<()> {
+    if !(a.is_finite() && a > 0.0 && b.is_finite() && b > 0.0) {
+        return Err(BijliError::InvalidParameter {
+            reason: format!("waveguide dimensions must be positive and finite, got a={a}, b={b}"),
+        });
+    }
+    if m == 0 && n == 0 {
+        return Err(BijliError::InvalidParameter {
+            reason: "both m and n cannot be zero (no TE₀₀/TM₀₀ mode)".into(),
+        });
+    }
+    Ok(())
+}
+
 /// Cutoff frequency of a rectangular waveguide TE_mn or TM_mn mode.
 ///
-/// f_c = (c/2)√((m/a)² + (n/b)²)
+/// f_c = (v/2)√((m/a)² + (n/b)²)
 ///
-/// `a` and `b` are the waveguide dimensions (a ≥ b by convention).
+/// `a` and `b` are the waveguide dimensions (a ≥ b by convention); `velocity`
+/// is the phase velocity of the filling medium (c for air).
+///
+/// # Errors
+/// [`BijliError::InvalidParameter`] for non-positive/non-finite `a`, `b` or
+/// `velocity`, or m = n = 0 (consistent with
+/// [`rectangular_waveguide_cutoff_wavelength`]).
 #[inline]
 pub fn rectangular_waveguide_cutoff(a: f64, b: f64, m: u32, n: u32, velocity: f64) -> Result<f64> {
-    if a <= 0.0 || b <= 0.0 {
+    check_rectangular_waveguide(a, b, m, n)?;
+    if !(velocity.is_finite() && velocity > 0.0) {
         return Err(BijliError::InvalidParameter {
-            reason: format!("waveguide dimensions must be positive, got a={a}, b={b}"),
+            reason: format!("wave velocity must be positive and finite, got {velocity}"),
         });
     }
     let ma = m as f64 / a;
@@ -389,19 +555,19 @@ pub fn rectangular_waveguide_cutoff(a: f64, b: f64, m: u32, n: u32, velocity: f6
 /// Cutoff wavelength of a rectangular waveguide mode.
 ///
 /// λ_c = 2/√((m/a)² + (n/b)²)
+///
+/// # Errors
+/// [`BijliError::InvalidParameter`] for non-positive/non-finite `a`, `b`, or
+/// m = n = 0.
 #[inline]
 pub fn rectangular_waveguide_cutoff_wavelength(a: f64, b: f64, m: u32, n: u32) -> Result<f64> {
-    if a <= 0.0 || b <= 0.0 {
-        return Err(BijliError::InvalidParameter {
-            reason: format!("waveguide dimensions must be positive, got a={a}, b={b}"),
-        });
-    }
+    check_rectangular_waveguide(a, b, m, n)?;
     let ma = m as f64 / a;
     let nb = n as f64 / b;
     let denom = (ma * ma + nb * nb).sqrt();
-    if denom < 1e-30 {
+    if denom.is_nan() || denom <= 0.0 {
         return Err(BijliError::InvalidParameter {
-            reason: "both m and n cannot be zero".into(),
+            reason: format!("cutoff wavelength not representable for a={a}, b={b}"),
         });
     }
     Ok(2.0 / denom)
@@ -409,17 +575,31 @@ pub fn rectangular_waveguide_cutoff_wavelength(a: f64, b: f64, m: u32, n: u32) -
 
 /// Guide wavelength: λ_g = λ/√(1 − (λ/λ_c)²).
 ///
-/// Only valid when λ < λ_c (above cutoff).
+/// Only valid when λ < λ_c (above cutoff). λ_c = +∞ (a TEM line) gives λ_g = λ.
+///
+/// # Errors
+/// [`BijliError::DivisionByZero`] for λ_c = 0; [`BijliError::InvalidParameter`]
+/// for non-positive/NaN wavelengths, a non-finite λ, or λ ≥ λ_c.
 #[inline]
 pub fn guide_wavelength(free_space_wavelength: f64, cutoff_wavelength: f64) -> Result<f64> {
-    if cutoff_wavelength.abs() < 1e-30 {
+    if cutoff_wavelength == 0.0 {
         return Err(BijliError::DivisionByZero {
             context: "cutoff wavelength cannot be zero".into(),
         });
     }
+    if cutoff_wavelength.is_nan() || cutoff_wavelength < 0.0 {
+        return Err(BijliError::InvalidParameter {
+            reason: format!("cutoff wavelength must be positive, got {cutoff_wavelength}"),
+        });
+    }
+    if !(free_space_wavelength.is_finite() && free_space_wavelength > 0.0) {
+        return Err(BijliError::InvalidParameter {
+            reason: format!("wavelength must be positive and finite, got {free_space_wavelength}"),
+        });
+    }
     let ratio = free_space_wavelength / cutoff_wavelength;
     let radicand = 1.0 - ratio * ratio;
-    if radicand <= 0.0 {
+    if radicand.is_nan() || radicand <= 0.0 {
         return Err(BijliError::InvalidParameter {
             reason: format!("frequency below cutoff: λ/λ_c = {ratio:.4} (must be < 1)"),
         });
@@ -427,16 +607,36 @@ pub fn guide_wavelength(free_space_wavelength: f64, cutoff_wavelength: f64) -> R
     Ok(free_space_wavelength / radicand.sqrt())
 }
 
-/// Cutoff frequency of a cylindrical waveguide TE_mn mode.
+/// Cutoff frequency of a circular (cylindrical) waveguide mode.
 ///
-/// f_c = x'_mn c / (2πa) where x'_mn is the n-th root of J'_m.
+/// f_c = x · v / (2πa)
 ///
-/// `bessel_root` is the appropriate root (e.g., 1.8412 for TE₁₁).
+/// where `bessel_root` x is the mode's characteristic root and `radius` is a:
+/// - **TE_mn**: x = x′_mn, the n-th root of J′_m — e.g. TE₁₁ 1.8412 (the
+///   dominant mode), TE₂₁ 3.0542, TE₀₁ 3.8317;
+/// - **TM_mn**: x = x_mn, the n-th root of J_m — e.g. TM₀₁ 2.4048,
+///   TM₁₁ 3.8317.
+///
+/// `velocity` is the phase velocity of the filling medium (c for air).
+///
+/// # Errors
+/// [`BijliError::InvalidParameter`] unless `radius`, `bessel_root` and
+/// `velocity` are positive and finite.
 #[inline]
 pub fn cylindrical_waveguide_cutoff(radius: f64, bessel_root: f64, velocity: f64) -> Result<f64> {
-    if radius <= 0.0 {
+    if !(radius.is_finite() && radius > 0.0) {
         return Err(BijliError::InvalidParameter {
-            reason: format!("waveguide radius must be positive, got {radius}"),
+            reason: format!("waveguide radius must be positive and finite, got {radius}"),
+        });
+    }
+    if !(bessel_root.is_finite() && bessel_root > 0.0) {
+        return Err(BijliError::InvalidParameter {
+            reason: format!("Bessel root must be positive and finite, got {bessel_root}"),
+        });
+    }
+    if !(velocity.is_finite() && velocity > 0.0) {
+        return Err(BijliError::InvalidParameter {
+            reason: format!("wave velocity must be positive and finite, got {velocity}"),
         });
     }
     Ok(bessel_root * velocity / (2.0 * std::f64::consts::PI * radius))
@@ -938,5 +1138,205 @@ mod tests {
         let m = Material::dielectric(4.0);
         let g = material_reflection_coefficient(&m, &m).unwrap();
         assert!(g.abs() < 1e-10);
+    }
+
+    // ── Fresnel regression tests ──────────────────────────────────
+    //
+    // Reference values: exact Fresnel equations evaluated independently in
+    // Python from Jackson (3rd ed.) eqs. (7.39) and (7.41), which are written
+    // in terms of n and μ (not impedances).
+
+    #[test]
+    fn test_schlick_dense_to_rare_uses_cos_theta_t() {
+        // Glass → air near the critical angle (41.8°). Exact R(cos θ_i = 0.76)
+        // = 0.30233831088147745; old Schlick (cos θ_i) gave 0.0408.
+        let r = schlick_reflectance(1.5, 1.0, 0.76).unwrap();
+        assert!((r - 0.302_338_310_881_477_45).abs() < 0.02, "{r}");
+        let r = schlick_reflectance(1.5, 1.0, 0.9).unwrap();
+        assert!((r - 0.046_332_647_954_037_66).abs() < 0.01, "{r}");
+        // Under TIR R = 1 exactly (old: 0.07).
+        assert_eq!(schlick_reflectance(1.5, 1.0, 0.5).unwrap(), 1.0);
+        // Rare → dense is unchanged.
+        let r0 = reflectance_normal(1.0, 1.5).unwrap();
+        let expected = r0 + (1.0 - r0) * 0.5_f64.powi(5);
+        assert!((schlick_reflectance(1.0, 1.5, 0.5).unwrap() - expected).abs() < 1e-15);
+    }
+
+    #[test]
+    fn test_cos_theta_i_range_checked() {
+        // Old code: reflectance_unpolarized(1, 1.5, −1) = 25.
+        assert!(reflectance_unpolarized(1.0, 1.5, -1.0).is_err());
+        assert!(reflectance_unpolarized(1.0, 1.5, 1.5).is_err());
+        assert!(reflectance_unpolarized(1.0, 1.5, f64::NAN).is_err());
+        assert!(transmittance_unpolarized(1.0, 1.5, -0.5).is_err());
+        assert!(schlick_reflectance(1.0, 1.5, -0.2).is_err());
+        assert!(fresnel_rs_direct(1.0, 1.5, 2.0).is_err());
+        assert!(snell_cos_theta_t(1.0, 1.5, -0.1).is_err());
+        // Rounding-level excursions are clamped.
+        let normal = reflectance_unpolarized(1.0, 1.5, 1.0).unwrap();
+        assert_eq!(
+            reflectance_unpolarized(1.0, 1.5, 1.0 + 1e-9).unwrap(),
+            normal
+        );
+        let grazing = reflectance_unpolarized(1.0, 1.5, 0.0).unwrap();
+        assert_eq!(reflectance_unpolarized(1.0, 1.5, -1e-9).unwrap(), grazing);
+        assert!((grazing - 1.0).abs() < 1e-15); // R → 1 at grazing incidence
+    }
+
+    #[test]
+    fn test_invalid_indices_rejected() {
+        assert!(reflectance_unpolarized(-1.0, 1.5, 0.5).is_err());
+        assert!(reflectance_unpolarized(1.0, f64::NAN, 0.5).is_err());
+        assert!(snell_cos_theta_t(f64::INFINITY, 1.5, 0.5).is_err());
+    }
+
+    #[test]
+    fn test_reflectance_and_transmittance_in_unit_interval() {
+        for (n1, n2) in [(1.0, 1.5), (1.5, 1.0), (1.0, 3.5), (2.4, 1.0), (1.0, 1.0)] {
+            for i in 0..=1000 {
+                let c = f64::from(i) / 1000.0;
+                let r = reflectance_unpolarized(n1, n2, c).unwrap();
+                let t = transmittance_unpolarized(n1, n2, c).unwrap();
+                assert!((0.0..=1.0).contains(&r), "R={r} n1={n1} n2={n2} c={c}");
+                assert!((0.0..=1.0).contains(&t), "T={t} n1={n1} n2={n2} c={c}");
+                let s = schlick_reflectance(n1, n2, c).unwrap();
+                assert!((0.0..=1.0).contains(&s), "Schlick={s}");
+            }
+        }
+    }
+
+    #[test]
+    fn test_index_matched_grazing_is_zero() {
+        // Old code: Err(DivisionByZero) from the 0/0 at cos θ_i = 0.
+        assert_eq!(fresnel_rs_direct(1.0, 1.0, 0.0).unwrap(), Some(0.0));
+        assert_eq!(fresnel_rp_direct(1.0, 1.0, 0.0).unwrap(), Some(0.0));
+        assert_eq!(reflectance_unpolarized(1.33, 1.33, 0.0).unwrap(), 0.0);
+        assert_eq!(transmittance_unpolarized(1.33, 1.33, 0.0).unwrap(), 1.0);
+    }
+
+    #[test]
+    fn test_reflectance_unpolarized_single_pass_matches_per_polarization() {
+        // The shared-cos θ_t fast path must reproduce (R_s + R_p)/2 exactly.
+        for (n1, n2) in [(1.0, 1.5), (1.5, 1.0), (1.0, 2.42), (1.33, 1.0)] {
+            for i in 0..=200 {
+                let c = f64::from(i) / 200.0;
+                let r = reflectance_unpolarized(n1, n2, c).unwrap();
+                let rs = reflectance_s_direct(n1, n2, c).unwrap();
+                let rp = reflectance_p_direct(n1, n2, c).unwrap();
+                assert_eq!(r, 0.5 * (rs + rp), "n1={n1} n2={n2} c={c}");
+            }
+        }
+    }
+
+    #[test]
+    fn test_reflectance_at_interface_magnetic_media() {
+        use crate::material::Material;
+        let vac = Material::vacuum();
+        let matched = Material::new(4.0, 4.0, 0.0); // n = 4, η = η₀
+        // Old (n-only) values: 0.36, 0.3595, 0.3725.
+        assert!(reflectance_at_interface(&vac, &matched, 1.0).unwrap().abs() < 1e-15);
+        let r = reflectance_at_interface(&vac, &matched, 0.8).unwrap();
+        assert!((r - 0.011_127_846_503_534_383).abs() < 1e-12, "{r}");
+        let r = reflectance_at_interface(&vac, &matched, 0.3).unwrap();
+        assert!((r - 0.278_768_233_115_061_8).abs() < 1e-12, "{r}");
+        let r = reflectance_at_interface(&matched, &vac, 0.99).unwrap();
+        assert!((r - 0.008_200_057_075_464_767).abs() < 1e-12, "{r}");
+        // ε_r = 1, μ_r = 2.25 at 45°
+        let mag = Material::new(1.0, 2.25, 0.0);
+        let r = reflectance_at_interface(&vac, &mag, std::f64::consts::FRAC_PI_4.cos()).unwrap();
+        assert!((r - 0.050_239_911_012_235_95).abs() < 1e-12, "{r}");
+        // Same index, different impedance, grazing: R = Γ² (no 0/0 error).
+        let a = Material::new(4.0, 4.0, 0.0);
+        let b = Material::new(16.0, 1.0, 0.0); // n = 4, η = η₀/4
+        let r = reflectance_at_interface(&a, &b, 0.0).unwrap();
+        assert!((r - 0.36).abs() < 1e-15, "{r}");
+        // Normal incidence wrapper agrees.
+        assert!(reflectance_normal_materials(&vac, &matched).unwrap().abs() < 1e-15);
+    }
+
+    #[test]
+    fn test_reflectance_at_interface_dielectric_matches_index_form() {
+        use crate::material::Material;
+        let air = Material::vacuum();
+        let glass = Material::dielectric(2.25);
+        for i in 0..=50 {
+            let c = f64::from(i) / 50.0;
+            let a = reflectance_at_interface(&air, &glass, c).unwrap();
+            let b = reflectance_unpolarized(1.0, 1.5, c).unwrap();
+            assert!((a - b).abs() < 1e-14, "c={c}: {a} vs {b}");
+            let a = reflectance_at_interface(&glass, &air, c).unwrap();
+            let b = reflectance_unpolarized(1.5, 1.0, c).unwrap();
+            assert!((a - b).abs() < 1e-14, "c={c}: {a} vs {b}");
+        }
+    }
+
+    #[test]
+    fn test_material_fresnel_rejects_conductors_and_invalid() {
+        use crate::error::BijliError;
+        use crate::material::Material;
+        let vac = Material::vacuum();
+        let cu = Material::conductor(5.96e7); // old code: R = 0, Γ = 0
+        assert!(reflectance_at_interface(&vac, &cu, 1.0).is_err());
+        assert!(reflectance_normal_materials(&vac, &cu).is_err());
+        assert!(material_reflection_coefficient(&vac, &cu).is_err());
+        let neg = Material::dielectric(-2.0);
+        assert!(matches!(
+            reflectance_at_interface(&vac, &neg, 1.0),
+            Err(BijliError::InvalidPermittivity { .. })
+        ));
+        assert!(matches!(
+            reflectance_normal_materials(&vac, &neg),
+            Err(BijliError::InvalidPermittivity { .. })
+        ));
+        assert!(matches!(
+            material_reflection_coefficient(&vac, &neg),
+            Err(BijliError::InvalidPermittivity { .. })
+        ));
+        let bad_mu = Material::new(1.0, -1.0, 0.0);
+        assert!(matches!(
+            reflectance_at_interface(&vac, &bad_mu, 1.0),
+            Err(BijliError::InvalidPermeability { .. })
+        ));
+        assert!(reflectance_at_interface(&vac, &Material::dielectric(2.25), -0.5).is_err());
+    }
+
+    // ── Waveguide regression tests ────────────────────────────────
+
+    #[test]
+    fn test_rectangular_waveguide_cutoff_validation() {
+        let (a, b) = (22.86e-3, 10.16e-3);
+        // Old code: Ok(0.0) for m = n = 0 (the wavelength sibling errs).
+        assert!(rectangular_waveguide_cutoff(a, b, 0, 0, SPEED_OF_LIGHT).is_err());
+        assert!(rectangular_waveguide_cutoff(a, b, 1, 0, 0.0).is_err());
+        assert!(rectangular_waveguide_cutoff(a, b, 1, 0, -SPEED_OF_LIGHT).is_err());
+        assert!(rectangular_waveguide_cutoff(a, b, 1, 0, f64::NAN).is_err());
+        assert!(rectangular_waveguide_cutoff(f64::NAN, b, 1, 0, SPEED_OF_LIGHT).is_err());
+        assert!(rectangular_waveguide_cutoff_wavelength(a, f64::NAN, 1, 0).is_err());
+        // TE₁₀ closed form f_c = c/(2a).
+        let fc = rectangular_waveguide_cutoff(a, b, 1, 0, SPEED_OF_LIGHT).unwrap();
+        assert!((fc - SPEED_OF_LIGHT / (2.0 * a)).abs() / fc < 1e-15);
+    }
+
+    #[test]
+    fn test_guide_wavelength_validation() {
+        assert!(guide_wavelength(f64::NAN, 0.05).is_err());
+        assert!(guide_wavelength(0.03, f64::NAN).is_err());
+        assert!(guide_wavelength(-0.03, 0.05).is_err());
+        assert!(guide_wavelength(0.03, 0.0).is_err());
+        // TEM line (no cutoff): λ_g = λ.
+        assert_eq!(guide_wavelength(0.03, f64::INFINITY).unwrap(), 0.03);
+    }
+
+    #[test]
+    fn test_cylindrical_waveguide_tm01_and_validation() {
+        // TM₀₁ uses the first root of J₀, 2.4048: f_c = 2.4048 c/(2πa).
+        let r = 10e-3;
+        let fc = cylindrical_waveguide_cutoff(r, 2.4048, SPEED_OF_LIGHT).unwrap();
+        let expected = 2.4048 * SPEED_OF_LIGHT / (2.0 * std::f64::consts::PI * r);
+        assert!((fc - expected).abs() / expected < 1e-15);
+        assert!((fc / 1e9 - 11.474).abs() < 0.01);
+        assert!(cylindrical_waveguide_cutoff(f64::NAN, 1.8412, SPEED_OF_LIGHT).is_err());
+        assert!(cylindrical_waveguide_cutoff(r, -1.8412, SPEED_OF_LIGHT).is_err());
+        assert!(cylindrical_waveguide_cutoff(r, 1.8412, f64::NAN).is_err());
     }
 }

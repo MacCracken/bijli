@@ -68,19 +68,39 @@ pub fn dielectric_energy_density(relative_permittivity: f64, e_magnitude: f64) -
     0.5 * relative_permittivity * EPSILON_0 * e_magnitude * e_magnitude
 }
 
-/// Clausius-Mossotti relation: (ε_r − 1)/(ε_r + 2) = nα/(3ε₀).
+/// Clausius-Mossotti relation: (ε_r − 1)/(ε_r + 2) = Nα/(3ε₀).
 ///
-/// Given molecular polarizability α and number density n, returns ε_r.
+/// Given molecular polarizability α (SI, C·m²/V = F·m²) and number density
+/// N (m⁻³), returns ε_r = (1 + 2X)/(1 − X) with X = Nα/(3ε₀).
+///
+/// # Errors
+/// [`BijliError::InvalidParameter`] for non-finite inputs, N < 0, or
+/// X ≥ 1 (the relation diverges at X = 1 — the "polarization catastrophe" —
+/// and gives a negative, unphysical ε_r beyond it);
+/// [`BijliError::InvalidPermittivity`] if X ≤ −1/2 (ε_r ≤ 0, only possible
+/// for negative α).
 #[inline]
 pub fn clausius_mossotti(polarizability: f64, number_density: f64) -> Result<f64> {
-    let chi = number_density * polarizability / (3.0 * EPSILON_0);
-    let denom = 1.0 - chi;
-    if denom.abs() < 1e-30 {
-        return Err(BijliError::DivisionByZero {
-            context: "Clausius-Mossotti divergence (ferroelectric transition)".into(),
+    if !polarizability.is_finite() || !number_density.is_finite() || number_density < 0.0 {
+        return Err(BijliError::InvalidParameter {
+            reason: format!(
+                "polarizability and number density must be finite with N ≥ 0, got α = {polarizability}, N = {number_density}"
+            ),
         });
     }
-    Ok((1.0 + 2.0 * chi) / denom)
+    let chi = number_density * polarizability / (3.0 * EPSILON_0);
+    if chi.is_nan() || chi >= 1.0 {
+        return Err(BijliError::InvalidParameter {
+            reason: format!(
+                "Nα/(3ε₀) = {chi} ≥ 1: Clausius-Mossotti diverges (polarization catastrophe), no physical ε_r"
+            ),
+        });
+    }
+    let eps_r = (1.0 + 2.0 * chi) / (1.0 - chi);
+    if eps_r.is_nan() || eps_r <= 0.0 {
+        return Err(BijliError::InvalidPermittivity { value: eps_r });
+    }
+    Ok(eps_r)
 }
 
 // ── Magnetic materials ─────────────────────────────────────────────
@@ -289,19 +309,58 @@ impl Material {
         self.mu_r * MU_0
     }
 
-    /// Wave impedance η = √(μ/ε).
+    /// Lossless wave impedance η = √(μ/ε) (Ω). Conductivity is ignored.
+    ///
+    /// # Errors
+    /// [`BijliError::InvalidPermittivity`] unless ε_r is positive and finite;
+    /// [`BijliError::InvalidPermeability`] unless μ_r is positive and finite.
     #[inline]
     pub fn impedance(&self) -> Result<f64> {
-        if self.eps_r <= 0.0 {
+        if !(self.eps_r.is_finite() && self.eps_r > 0.0) {
             return Err(BijliError::InvalidPermittivity { value: self.eps_r });
         }
+        if !(self.mu_r.is_finite() && self.mu_r > 0.0) {
+            return Err(BijliError::InvalidPermeability { value: self.mu_r });
+        }
         Ok((self.mu_r * MU_0 / (self.eps_r * EPSILON_0)).sqrt())
+    }
+
+    /// Refractive index n = √(ε_r μ_r) and relative impedance η/η₀ = √(μ_r/ε_r)
+    /// for **lossless** optics (Fresnel coefficients).
+    ///
+    /// # Errors
+    /// [`BijliError::InvalidPermittivity`] / [`BijliError::InvalidPermeability`]
+    /// unless ε_r / μ_r are positive and finite;
+    /// [`BijliError::InvalidParameter`] if σ ≠ 0 — a conductor needs the
+    /// frequency-dependent complex index n² = ε_r μ_r − iσμ_r/(ωε₀), which a
+    /// frequency-free `Material` cannot provide.
+    #[inline]
+    pub(crate) fn lossless_optical_constants(&self) -> Result<(f64, f64)> {
+        if !(self.eps_r.is_finite() && self.eps_r > 0.0) {
+            return Err(BijliError::InvalidPermittivity { value: self.eps_r });
+        }
+        if !(self.mu_r.is_finite() && self.mu_r > 0.0) {
+            return Err(BijliError::InvalidPermeability { value: self.mu_r });
+        }
+        if self.conductivity != 0.0 {
+            return Err(BijliError::InvalidParameter {
+                reason: format!(
+                    "Fresnel coefficients from Material are lossless-only; conductivity σ = {} S/m \
+                     needs a frequency-dependent complex refractive index",
+                    self.conductivity
+                ),
+            });
+        }
+        Ok((
+            (self.eps_r * self.mu_r).sqrt(),
+            (self.mu_r / self.eps_r).sqrt(),
+        ))
     }
 
     /// Wave speed v = 1/√(εμ).
     #[inline]
     pub fn wave_speed(&self) -> Result<f64> {
-        if self.eps_r <= 0.0 || self.mu_r <= 0.0 {
+        if !(self.eps_r > 0.0 && self.mu_r > 0.0) {
             return Err(BijliError::InvalidParameter {
                 reason: "ε_r and μ_r must be positive".into(),
             });
@@ -316,16 +375,39 @@ impl Material {
         self.conductivity > 0.0
     }
 
-    /// Normal-incidence reflectance at interface with another material.
+    /// Normal-incidence reflectance at the interface with another lossless
+    /// material.
     ///
-    /// R = ((n₁ − n₂)/(n₁ + n₂))²
+    /// R = ((η₂ − η₁)/(η₂ + η₁))², η = √(μ_r/ε_r) (relative wave impedance).
+    /// For non-magnetic media this reduces to ((n₁ − n₂)/(n₁ + n₂))²; for
+    /// magnetic media it is the correct form (e.g. ε_r = μ_r = 4 is
+    /// impedance-matched to vacuum: R = 0, although n = 4).
+    ///
+    /// # Errors
+    /// [`BijliError::InvalidPermittivity`] / [`BijliError::InvalidPermeability`]
+    /// for non-positive or non-finite ε_r / μ_r; [`BijliError::InvalidParameter`]
+    /// if either material has σ ≠ 0 (lossless only — a conductor's
+    /// reflectance depends on frequency).
+    #[inline]
+    pub fn try_reflectance_at(&self, other: &Self) -> Result<f64> {
+        let (_, eta1) = self.lossless_optical_constants()?;
+        let (_, eta2) = other.lossless_optical_constants()?;
+        let r = (eta2 - eta1) / (eta2 + eta1);
+        Ok(r * r)
+    }
+
+    /// Normal-incidence reflectance at the interface with another material.
+    ///
+    /// Same as [`try_reflectance_at`](Self::try_reflectance_at), but returns
+    /// `NaN` where that returns an error (conductive or invalid materials).
+    #[deprecated(
+        since = "1.2.0",
+        note = "cannot report conductive (σ ≠ 0) or invalid materials; use `try_reflectance_at`, which returns Result"
+    )]
     #[inline]
     #[must_use]
     pub fn reflectance_at(&self, other: &Self) -> f64 {
-        let n1 = self.refractive_index();
-        let n2 = other.refractive_index();
-        let r = (n1 - n2) / (n1 + n2);
-        r * r
+        self.try_reflectance_at(other).unwrap_or(f64::NAN)
     }
 }
 
@@ -536,12 +618,14 @@ mod tests {
     }
 
     #[test]
+    #[allow(deprecated)]
     fn test_material_reflectance_same() {
         let m = Material::dielectric(2.25);
         assert!(m.reflectance_at(&m) < 1e-10); // no reflection at same material
     }
 
     #[test]
+    #[allow(deprecated)]
     fn test_material_reflectance_air_glass() {
         let air = Material::vacuum();
         let glass = Material::dielectric(2.25); // n = 1.5
@@ -565,5 +649,112 @@ mod tests {
     fn test_material_permeability() {
         let m = Material::new(1.0, 1000.0, 0.0);
         assert!((m.permeability() - 1000.0 * MU_0).abs() < 1e-15);
+    }
+
+    // ── Regression tests ──────────────────────────────────────────
+
+    #[test]
+    fn test_try_reflectance_magnetic_impedance_matched() {
+        // ε_r = μ_r = 4 → η = η₀: no reflection from vacuum at normal
+        // incidence (old n-only formula gave ((1−4)/(1+4))² = 0.36).
+        let m = Material::new(4.0, 4.0, 0.0);
+        let r = Material::vacuum().try_reflectance_at(&m).unwrap();
+        assert!(r.abs() < 1e-15, "R = {r}");
+        // Pure magnetic medium μ_r = 2.25, ε_r = 1: η = 1.5 η₀ → R = (0.5/2.5)² = 0.04
+        let mag = Material::new(1.0, 2.25, 0.0);
+        let r = Material::vacuum().try_reflectance_at(&mag).unwrap();
+        assert!((r - 0.04).abs() < 1e-15);
+    }
+
+    #[test]
+    fn test_try_reflectance_dielectric_matches_n_formula() {
+        let r = Material::vacuum()
+            .try_reflectance_at(&Material::dielectric(2.25))
+            .unwrap();
+        assert!((r - 0.04).abs() < 1e-15);
+    }
+
+    #[test]
+    fn test_try_reflectance_rejects_conductor_and_invalid() {
+        // Copper: old code returned R = 0 (σ ignored).
+        let cu = Material::conductor(5.96e7);
+        assert!(Material::vacuum().try_reflectance_at(&cu).is_err());
+        assert!(cu.try_reflectance_at(&Material::vacuum()).is_err());
+        assert!(matches!(
+            Material::vacuum().try_reflectance_at(&Material::dielectric(-2.0)),
+            Err(BijliError::InvalidPermittivity { .. })
+        ));
+        assert!(matches!(
+            Material::vacuum().try_reflectance_at(&Material::new(1.0, -1.0, 0.0)),
+            Err(BijliError::InvalidPermeability { .. })
+        ));
+        assert!(
+            Material::vacuum()
+                .try_reflectance_at(&Material::dielectric(f64::NAN))
+                .is_err()
+        );
+    }
+
+    #[test]
+    #[allow(deprecated)]
+    fn test_reflectance_at_deprecated_never_wrong() {
+        let m = Material::new(4.0, 4.0, 0.0);
+        assert!(Material::vacuum().reflectance_at(&m).abs() < 1e-15);
+        assert!(
+            Material::vacuum()
+                .reflectance_at(&Material::conductor(5.96e7))
+                .is_nan()
+        );
+    }
+
+    #[test]
+    fn test_impedance_validates_permeability() {
+        // Old code: μ_r = −1 → NaN, μ_r = 0 → 0 Ω.
+        assert!(matches!(
+            Material::new(1.0, -1.0, 0.0).impedance(),
+            Err(BijliError::InvalidPermeability { .. })
+        ));
+        assert!(matches!(
+            Material::new(1.0, 0.0, 0.0).impedance(),
+            Err(BijliError::InvalidPermeability { .. })
+        ));
+        assert!(matches!(
+            Material::dielectric(f64::NAN).impedance(),
+            Err(BijliError::InvalidPermittivity { .. })
+        ));
+        // η = η₀ √(μ_r/ε_r): μ_r = 4, ε_r = 1 → 2η₀
+        let z0 = Material::vacuum().impedance().unwrap();
+        let z = Material::new(1.0, 4.0, 0.0).impedance().unwrap();
+        assert!((z / z0 - 2.0).abs() < 1e-12);
+    }
+
+    #[test]
+    fn test_wave_speed_nan_rejected() {
+        assert!(Material::dielectric(f64::NAN).wave_speed().is_err());
+        assert!(Material::new(1.0, f64::NAN, 0.0).wave_speed().is_err());
+    }
+
+    #[test]
+    fn test_clausius_mossotti_closed_form() {
+        // X = Nα/(3ε₀) = 0.5 → ε_r = (1 + 1)/(1 − 0.5) = 4
+        let n = 1e28;
+        let alpha = 1.5 * EPSILON_0 / n;
+        let eps = clausius_mossotti(alpha, n).unwrap();
+        assert!((eps - 4.0).abs() < 1e-12, "{eps}");
+    }
+
+    #[test]
+    fn test_clausius_mossotti_catastrophe_rejected() {
+        // X = 1.2: old code returned ε_r = (1 + 2.4)/(1 − 1.2) = −17 as Ok.
+        let n = 1e28;
+        assert!(clausius_mossotti(3.6 * EPSILON_0 / n, n).is_err());
+        assert!(clausius_mossotti(3.0 * EPSILON_0 * (1.0 + 1e-9) / n, n).is_err()); // X ≈ 1⁺
+        assert!(clausius_mossotti(f64::NAN, n).is_err());
+        assert!(clausius_mossotti(1e-40, -1.0).is_err());
+        // X = −0.6 ≤ −1/2 → ε_r < 0
+        assert!(matches!(
+            clausius_mossotti(-1.8 * EPSILON_0 / n, n),
+            Err(BijliError::InvalidPermittivity { .. })
+        ));
     }
 }

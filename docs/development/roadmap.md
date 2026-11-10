@@ -2,7 +2,7 @@
 
 > Electromagnetism simulation for AGNOS
 
-## Completed (V1.0.0)
+## Completed (through 1.2.0)
 
 All milestones through V2.0 are shipped. See [CHANGELOG.md](/CHANGELOG.md) for details.
 
@@ -24,26 +24,41 @@ All milestones through V2.0 are shipped. See [CHANGELOG.md](/CHANGELOG.md) for d
 
 **V2.0**: 3D FDTD & GPU — full vector Yee grid, ComputeBackend trait (CPU/wgpu pipes), non-uniform grids, 4th-order FDTD, CW solver, eigenmode solver.
 
----
-
-## Cross-Crate Bridges
-
-- [ ] **`bridge.rs` module** — primitive-value conversions for cross-crate electromagnetism
-- [ ] **ushma bridge**: current density (A/m²), resistance (Ω) → Joule heating power (W); EM field energy density → temperature rise rate
-- [ ] **prakash bridge**: wavelength (nm) → refractive index in medium; E-field amplitude → optical intensity (W/m²)
-- [ ] **tanmatra bridge**: electron energy level (eV) → emission wavelength (nm); nuclear charge → Coulomb potential scaling
-- [ ] **dravya bridge**: electric field strength (V/m) → piezoelectric stress; magnetic flux density (T) → magnetostrictive strain
+**1.2.0 (crate release)**: Toolchain refresh (MSRV 1.99, hisab 1.4, wgpu 30) and a full physics/robustness audit — working 2D CPML (−88 dB), FDTD conductivity, correct Mie for high-index spheres, robust retarded-time solver, corrected Fresnel/Schlick/Touchstone/stub-matching/beam formulas, non-panicking public API, per-feature build isolation.
 
 ---
 
-## Soorat Integration (rendering visualization)
+## Cross-Crate Bridges (shipped in 1.1.0)
 
-- [ ] **`integration/soorat.rs` module** — feature-gated `soorat-compat`, visualization data structures for soorat to consume
-- [ ] **FDTD field slices**: Expose `FieldSlice2D` / `FieldSlice3D` structs from `Fdtd2d`/`Fdtd3d` grids (field component, dimensions, spacing, origin) for heatmap/volumetric rendering
-- [ ] **Field line traces**: Expose `FieldLineVisualization` wrapping `trace_field_line()` output as `Vec<[f64; 3]>` polylines with field magnitude per point
-- [ ] **Point charge visualization**: Expose `ChargeVisualization` with charge positions, magnitudes, and sign for particle rendering with field halos
-- [ ] **Radiation pattern**: Expose `RadiationPattern` wrapping `Nf2ffResult` (angles + gain) for polar plot / 3D balloon rendering
-- [ ] **Vector field sampling**: Expose `VectorFieldSample` — grid of `FieldVector` values at regular positions for arrow/streamline rendering
+- [x] **`bridge.rs` module** — primitive-value conversions for cross-crate electromagnetism
+- [x] **ushma bridge**: current density (A/m²), resistance (Ω) → Joule heating power (W); EM field energy density → temperature rise rate
+- [x] **prakash bridge**: wavelength (nm) → refractive index in medium; E-field amplitude → optical intensity (W/m²)
+- [x] **tanmatra bridge**: electron energy level (eV) → emission wavelength (nm); nuclear charge → Coulomb potential scaling
+- [x] **dravya bridge**: electric field strength (V/m) → piezoelectric stress; magnetic flux density (T) → magnetostrictive strain
+
+---
+
+## Soorat Integration (rendering visualization — shipped in 1.1.0)
+
+- [x] **`integration/soorat.rs` module** — feature-gated `soorat-compat`, visualization data structures for soorat to consume
+- [x] **FDTD field slices**: Expose `FieldSlice2D` / `FieldSlice3D` structs from `Fdtd2d`/`Fdtd3d` grids (field component, dimensions, spacing, origin) for heatmap/volumetric rendering
+- [x] **Field line traces**: Expose `FieldLineVisualization` wrapping `trace_field_line()` output as `Vec<[f64; 3]>` polylines with field magnitude per point
+- [x] **Point charge visualization**: Expose `ChargeVisualization` with charge positions, magnitudes, and sign for particle rendering with field halos
+- [x] **Radiation pattern**: Expose `RadiationPattern` wrapping `Nf2ffResult` (angles + gain) for polar plot / 3D balloon rendering
+- [x] **Vector field sampling**: Expose `VectorFieldSample` — grid of `FieldVector` values at regular positions for arrow/streamline rendering
+
+---
+
+## Backlog — follow-ups from the 1.2.0 audit
+
+- [ ] **CPML for `Fdtd3d`** — 3D walls are PEC only; port the 2D Roden–Gedney implementation (Ψ in six face slabs)
+- [ ] **CPML + materials for `GpuFdtd2d`** — the compute-backend solver has PEC walls and vacuum only
+- [ ] **TFSF integration into `Fdtd2d`** — `TfsfSource` is a standalone auxiliary grid; add plane-wave injection on the TF/SF contour
+- [ ] **Frequency-aware lossy Fresnel** — complex ε = ε − jσ/ω so conductors are supported (today they return `Err`)
+- [ ] **Transport error variant** — `BijliError` has no network/transport variant; the `ai` client maps to `InvalidParameter`
+- [ ] **Sub-femtometre point-charge separations** — field/potential/Coulomb functions treat r² < 1e-30 m² as singular
+- [ ] **2.0 cleanup (breaking)** — remove the 1.2.0 deprecations (`rf::input_impedance_lossless`, `rf::write_touchstone`, `Material::reflectance_at`), make FDTD grid fields private behind accessors, make `TfsfSource::new`/`Cpml::new` fallible, unify the polarization (e^{−iωt}) and scattering (e^{+iωt}) time conventions
+- [ ] **Real `WgpuBackend`** — currently a scaffold
 
 ---
 
