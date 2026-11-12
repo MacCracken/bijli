@@ -1079,3 +1079,54 @@ Language facts the probes found, beyond plan §2:
   - The twins' record (`docs/benchmarks-rust-v-cyrius.md`) keeps its earlier column. This run read every twin 4–8 %
     slower, and HEAD read the same under the same load, while nothing it covers changed.
   - Speed is measured, not gated.
+
+## 20. M1 part 5d-1: the exact Singularity threshold (2026-11-12)
+
+- **ADR 0002 row 17**, the user's "exact thresholds" decision. Rust tests the rounded r² against the double nearest
+  10^-30, which lies 0.37 ulp above 10^-30, and the Green's functions test the rounded R the same way. The port tests
+  the exact Σ (aᵢ − bᵢ)² of the inputs against 10^-30, or against 10^-60 for R. That covers `electric_field_point_charge`,
+  `electric_potential_point_charge`, `magnetic_field_moving_charge` (and through them superposition and the
+  `PointCharge` methods), the three dipole functions, the quadrupole, both Green's functions and `coulomb_force`.
+  - **Radial distances need nothing.** A distance is a double, and the double 1e-30's predecessor lies below 10^-30,
+    so `distance < 1e-30` is exact; `validate.py` checks the claim.
+- **`src/crmath_cmp.cyr`** (new; an internals file, in the bundle after crmath_ux):
+  - **The band test** (`_bj_x_band`): the rounded value decides when it is more than 64 ulps from the cutoff (its
+    error is a few ulps), and a NaN keeps Rust's false.
+  - **The exact test** (`_bj_x_r2_below`), inside the band only: each difference is s + t by TwoSum, so r² is nine
+    products of two doubles. Times 10^p their sum is compared with 1 in 2,560-bit integers (80 limbs of 32 bits),
+    which hold the widest spread the band allows (about 2,300 bits, from a subnormal t's square).
+  - A first version named its integers `_bj_bn_*`, which `fmtf.cyr` already defines. The later definitions won,
+    with a warning, and the harness segfaulted. They are `_bj_xn_*` now.
+- **The knife-edge grid** (`grids.rs`'s `knife_edge`, selected in double-double with 10^-30 from 5^30 in a u128):
+  field points along four directions stepped by ulps, against three sources (the origin; −3·10^-32·s, and 2^-1070,
+  whose differences round). It keeps the 421 pairs whose exact r² is within an ulp of 10^-30, and 781 within two ulps
+  of 10^-60 for R. A Python search over 3,185 candidates found 13 flips, all inside a one-ulp window.
+  - The rows: 3,405 in `field.tsv`, through every threshold function (the dipoles and the quadrupole only on the
+    145 pairs about the origin), and 421 `coulomb_force` rows in `charge.tsv`.
+- **The model**: `validate.py`'s transcriptions test through `cut_r2` and `cut_r`. With `EXACT_THR` off they are Rust's
+  comparisons, which `validate_field` and `validate_charge` check against the oracle. `adr17_rows` turns it on, maps
+  each row whose outcome changes, and writes the port's outputs (MPFR's primitives for the Green's function's cos and
+  sin). The corrected oracle skips any row that row 17 makes an error.
+  - **302 mapped rows**, all passed: field 263 (point E, V and B 39 each, the dipoles and the quadrupole 13 each, the
+    two Green's functions 47 each) and charge 39 (`coulomb_force`). 202 go from Ok to Singularity and 100 from
+    Singularity to Ok.
+- **`cr_verify.py`'s `r2_below` family** (an exact family, against Fractions): 200,000 calls on x86_64 and on aarch64,
+  0 mismatches. 55 % lie within 2^-46 of the cutoff, and the points include rounding differences with tiny and
+  subnormal partners, nearly equal large points, and p = 30 and 60.
+- **Tests**: `tests/field.tcyr`'s `cyrius_exact_threshold (ADR 0002 row 17)`, 7 assertions on golden knife-edge points:
+  - an r² that rounds to the double 1e-30 but lies below 10^-30 is Singularity;
+  - a source 16·2^-1074 from the origin decides through the exact difference;
+  - an r² that rounds below 1e-30 but lies above 10^-30 gives Rust's value, for both the potential and the field;
+  - R just above 10^-30 gives Rust's 1/(4πR);
+  - r = 0 stays Singularity, and a NaN point keeps Rust's test.
+- **Result, every target**: 9 modules, 0 failing; **188,902 ok, 0 failed, 10,879 accepted (ADR 01: 6,505; ADR 0002:
+  4,374)**. All 145 digests are equal on x86_64 ELF, x86_64 PE and aarch64, and field's 152 and charge's 66 assertions
+  pass on all three. The ten threshold functions' digests changed with their new rows.
+- **Benchmarks** (interleaved A/B against HEAD fbfe263, twice, load average 2.4 to 3.1):
+  - `field/electric_field_point` +2–3 ns (30/32 → 33/34 ns) and `electric_potential_point` +4 ns (18/19 → 22/23);
+  - the two dipole fields +4 ns (83/86 → 87/90);
+  - `magnetic_field_moving`, `coulomb_force` and `superposition_10` within their noise (+0–3 ns, +1–12 ns over 10
+    charges).
+
+  The cost is the band test's call: its body is over `#inline`'s 32 tokens. A first version called it through a
+  five-argument wrapper and cost 5–9 ns. Speed is measured, not gated.

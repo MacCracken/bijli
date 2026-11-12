@@ -290,6 +290,31 @@ def exact_families(rng, count):
         s1 = rng.uniform(1.0, 2.0)
         e1 = rng.randint(-4300, 2100)
         calls.append(("ux_sqrt", [s1, e1], rn_sqrt(Fraction(s1) * Fraction(2) ** e1)))
+    # src/crmath_cmp.cyr's exact Σ (aᵢ − bᵢ)² < 10^-p (p = 30, 60): points crowded around the cutoff a few ulps either
+    # side, differences that round (an offset with a tiny or subnormal partner), and far ones (the result as 0 or 1).
+    for i in range(count):
+        p = 30 if i % 2 == 0 else 60
+        scale = 1e-15 if p == 30 else 1e-30
+        u = [rng.uniform(-1.0, 1.0) for _ in range(3)]
+        nrm = math.sqrt(sum(x * x for x in u)) or 1.0
+        mode = i % 7
+        a = [x / nrm * scale for x in u]
+        if mode == 1:
+            a = [b2f(f2b(x) + rng.randint(-40, 40)) if x else x for x in a]
+        b = [0.0, 0.0, 0.0]
+        if mode in (2, 3):
+            tiny = [5e-324, 3e-321, 2.2250738585072014e-308, 1e-300, 3e-32, 1e-47][rng.randint(0, 5)]
+            b = [rng.choice([-1.0, 1.0]) * tiny * rng.randint(1, 9) if rng.random() < 0.7 else 0.0 for _ in range(3)]
+        if mode == 4:                                         # big, nearly equal points: exact differences
+            off = [rng.uniform(-1e3, 1e3) for _ in range(3)]
+            b = [o for o in off]
+            a = [b2f(f2b(o) + rng.randint(-3, 3)) for o in off]
+        if mode == 5:
+            a = [x * rng.uniform(0.5, 2.0) for x in a]
+        if mode == 6:
+            a = [x * 2.0 ** rng.randint(-60, 60) for x in a]
+        ex = sum((Fraction(x) - Fraction(y)) ** 2 for x, y in zip(a, b)) < Fraction(1, 10 ** p)
+        calls.append(("r2_below", a + b + [p], 1.0 if ex else 0.0))
     return calls
 
 
@@ -452,7 +477,7 @@ def run(target, lines):
 
 
 EXACT = ["mono"] + list(SHAPES) + ["sqrt_div", "wsqrt", "sqrt_mono", "sqrt_mono_acc", "ux_mul", "ux_div", "ux_add",
-         "ux_sub", "ux_sqrt"]
+         "ux_sub", "ux_sqrt", "r2_below"]
 UX = ["ux_exp", "ux_cosh", "ux_sinh", "ux_ln", "ux_pow", "ux_sin", "ux_cos"]
 
 

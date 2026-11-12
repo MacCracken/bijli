@@ -1121,6 +1121,57 @@ fn main() {
     var ro_ue: f64 = bj_electric_energy_density(ro_inf);
     assert(ro_ue == ro_inf, "an infinite E keeps Rust's ∞");
 
+    test_group("cyrius_exact_threshold (ADR 0002 row 17)");
+    # The Singularity tests on the exact squared distance against 10^-30 (10^-60 for R); the points are golden rows of
+    # the knife-edge grid (scripts/oracle/src/grids.rs), the expected outcomes validate.py's exact ones.
+    var xq: f64 = fb(0x3EB0C6F7A0B5ED8D);                    # 1e-6
+    var xs0: f64[3];
+    var xf0: f64[3];
+    xs0[0] = 0.0;
+    xs0[1] = 0.0;
+    xs0[2] = 0.0;
+    xf0[0] = fb(0x3CC59E05F1E26744);
+    xf0[1] = fb(0x3CCCD2B297D889C3);
+    xf0[2] = 0.0;
+    var xt1, xv1 = bj_electric_potential_point_charge(xq, &xs0, &xf0);
+    assert(is_err_result(xt1) == 1 && xv1 == BJ_ERR_SINGULARITY,
+      "r² rounds to the double 1e-30 but is below 10^-30: Singularity (Rust: Ok)");
+    var xs1: f64[3];
+    xs1[0] = fb(0x0000000000000010);                         # 16·2^-1074: the difference rounds
+    xs1[1] = 0.0;
+    xs1[2] = 0.0;
+    var xt2, xv2 = bj_electric_potential_point_charge(xq, &xs1, &xf0);
+    assert(is_err_result(xt2) == 1 && xv2 == BJ_ERR_SINGULARITY, "the exact difference, not the rounded one, decides");
+    var xs2: f64[3];
+    var xf2: f64[3];
+    xs2[0] = fb(0xB963789AE03E7D66);                         # about −3e-32
+    xs2[1] = 0.0;
+    xs2[2] = 0.0;
+    xf2[0] = fb(0x3CC59E05F1E26748);
+    xf2[1] = fb(0x3CCCD2B297D889C0);
+    xf2[2] = 0.0;
+    var xt3, xv3 = bj_electric_potential_point_charge(xq, &xs2, &xf2);
+    assert(ok_bits(xt3, xv3, 0x43DF2E8CAF2A89C3) == 1, "r² rounds below 1e-30 but is above 10^-30: Rust's value");
+    var xe3: BjFieldVector;
+    var xt4, xv4 = bj_electric_field_point_charge(xq, &xs2, &xf2, &xe3);
+    assert(is_ok(xt4) == 1, "the point charge's field agrees");
+    var xg_f: f64[3];
+    var xg_s: f64[3];
+    xg_f[0] = fb(0x39A856C1984E1CB1);
+    xg_f[1] = fb(0x39B039D665896885);
+    xg_f[2] = 0.0;
+    xg_s[0] = fb(0xB645EC2A91CECCDB);
+    xg_s[1] = 0.0;
+    xg_s[2] = 0.0;
+    var xt5, xv5 = bj_greens_function_static(&xg_f, &xg_s);
+    assert(ok_bits(xt5, xv5, 0x45F0120F1108D0E0) == 1, "R rounds below 1e-30 but is above 10^-30: Rust's 1/(4πR)");
+    var xt6, xv6 = bj_electric_potential_point_charge(xq, &xs0, &xs0);
+    assert(is_err_result(xt6) == 1 && xv6 == BJ_ERR_SINGULARITY, "r = 0 stays Singularity (outside the band)");
+    var xnan: f64 = 0.0 / 0.0;
+    xf2[2] = xnan;
+    var xt7, xv7 = bj_electric_potential_point_charge(xq, &xs0, &xf2);
+    assert(is_ok(xt7) == 1, "a NaN point keeps Rust's test (NaN < 1e-30 is false)");
+
     return assert_summary();
 }
 

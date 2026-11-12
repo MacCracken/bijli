@@ -7369,6 +7369,210 @@ fn _bj_ux_sin_cos(ts: f64, te, want_sin): f64 {
     return r;
 }
 
+# --- crmath_cmp.cyr ---
+
+# crmath_cmp.cyr — the exact Singularity threshold (bijli, M1 part 5d-1, ADR 0002 row 17).
+#
+# field.rs and charge.rs refuse a field point closer to its source than √(1e-30) m by testing the rounded
+# r² = dx² + dy² + dz² against the double nearest 10^-30, and the Green's functions test the rounded R = √r² the same
+# way. The user's decision of 2026-11-12 makes the test exact: the exact Σ (aᵢ − bᵢ)² of the inputs themselves against
+# 10^-30, or against 10^-60 for R < 10^-30.
+#
+# The band. The rounded r² is within a few ulps of the exact one: each difference, square and sum is rounded once
+# (five roundings, each within half an ulp), and a square that underflows costs at most 2^-1074 absolute, nothing at
+# this scale (10^-30 is about 2^-100). R adds one correctly rounded root. A non-finite input makes the rounded value NaN
+# or +∞, and Rust's comparison stands. So outside 64 ulps of the double nearest 10^-30 the rounded comparison is the
+# exact one, and only inside that band (_bj_x_band's 2) does _bj_x_r2_below run.
+#
+# The exact test. Each difference is s + t exactly (TwoSum, exact in binary64 with gradual underflow), so
+# r² = Σ (s² + 2st + t²): nine products of two doubles, each ±m·2^k with m < 2^107. Times 10^p the sum is compared with
+# 1 in integers: Σ ±m·5^p·2^(k + p − b) against 2^(−b), b the least exponent (or 0). In the band no term exceeds
+# about 2^-98 (r² is near 10^-30) and none has a bit below 2^-2148 (t² of a subnormal t), so the integers span at most
+# about 2,300 bits, inside the 2,560 the 80 limbs of 32 bits hold.
+
+const _BJ_XN_L = 80;
+const _BJ_XN_M = 4294967295;
+
+# The origin, for a test of |a|² (b = 0).
+var _bj_x_origin[24];
+
+# a = 0.
+fn _bj_xn_zero(a) {
+    for (var i = 0; i < _BJ_XN_L; i = i + 1) { store64(a + i * 8, 0); }
+    return 0;
+}
+
+# a = m, for 0 ≤ m < 2^63.
+fn _bj_xn_set(a, m) {
+    _bj_xn_zero(a);
+    store64(a, m & _BJ_XN_M);
+    store64(a + 8, m >> 32);
+    return 0;
+}
+
+# a = a·v, for 0 < v < 2^30: no limb product or carry leaves 2^62.
+fn _bj_xn_mul_small(a, v) {
+    var carry = 0;
+    for (var i = 0; i < _BJ_XN_L; i = i + 1) {
+        var t = load64(a + i * 8) * v + carry;
+        store64(a + i * 8, t & _BJ_XN_M);
+        carry = t >> 32;
+    }
+    return 0;
+}
+
+# acc = acc + a·2^sh, for sh ≥ 0, the sum below 2^2560.
+fn _bj_xn_add_shl(acc, a, sh) {
+    var q = sh / 32;
+    var r = sh % 32;
+    var carry = 0;
+    for (var i = 0; i + q < _BJ_XN_L; i = i + 1) {
+        var x = load64(a + i * 8);
+        var lo = (x << r) & _BJ_XN_M;
+        var hi = 0;
+        if (r > 0) { hi = x >> (32 - r); }
+        var t = load64(acc + (i + q) * 8) + lo + carry;
+        store64(acc + (i + q) * 8, t & _BJ_XN_M);
+        carry = (t >> 32) + hi;
+    }
+    return 0;
+}
+
+# −1, 0 or 1 as a <, =, > b.
+#must_use
+fn _bj_xn_cmp(a, b): i64 {
+    var i = _BJ_XN_L - 1;
+    while (i >= 0) {
+        var x = load64(a + i * 8);
+        var y = load64(b + i * 8);
+        if (x < y) { return 0 - 1; }
+        if (x > y) { return 1; }
+        i = i - 1;
+    }
+    return 0;
+}
+
+# dst = m1·m2·c·5^p, for m1, m2 < 2^53, c 1 or 2, p ≥ 0: m2 in two parts below 2^27, 5^p twelve fives at a time.
+fn _bj_xn_term(dst, m1, m2, c, p) {
+    var lo[640];
+    var hi[640];
+    _bj_xn_set(&lo, m1);
+    _bj_xn_mul_small(&lo, m2 & 67108863);
+    _bj_xn_set(&hi, m1);
+    _bj_xn_mul_small(&hi, m2 >> 26);
+    _bj_xn_zero(dst);
+    _bj_xn_add_shl(dst, &lo, 0);
+    _bj_xn_add_shl(dst, &hi, 26);
+    if (c == 2) { _bj_xn_mul_small(dst, 2); }
+    var f12 = 1;
+    for (var k = 0; k < 12; k = k + 1) { f12 = f12 * 5; }
+    var q = p;
+    while (q >= 12) {
+        _bj_xn_mul_small(dst, f12);
+        q = q - 12;
+    }
+    var f = 1;
+    for (var j = 0; j < q; j = j + 1) { f = f * 5; }
+    if (f > 1) { _bj_xn_mul_small(dst, f); }
+    return 0;
+}
+
+# The finite double x ≠ 0 as ±m·2^k: m (below 2^53) into out[0], k into out[1]; returns 1 for a negative x.
+fn _bj_x_split(x: f64, out): i64 {
+    var w = _bj_cr_word(x);
+    var a = w & 9223372036854775807;
+    var be = a >> 52;
+    var m = a & 4503599627370495;
+    var k = 0 - 1074;
+    if (be != 0) {
+        m = m | 4503599627370496;
+        k = be - 1075;
+    }
+    store64(out, m);
+    store64(out + 8, k);
+    if (w < 0) { return 1; }
+    return 0;
+}
+
+# 1 when the exact Σᵢ (aᵢ − bᵢ)² (i < 3) is below 10^-p, for finite aᵢ, bᵢ whose differences don't overflow and
+# 0 < p ≤ 60 (the section comment).
+#must_use
+fn _bj_x_r2_below(a: *f64, b: *f64, p): i64 {
+    var tm: i64[54];                                         # per term: m1, k1, m2, k2, c, negative
+    var nt = 0;
+    var sp: i64[2];
+    var tp: i64[2];
+    for (var i = 0; i < 3; i = i + 1) {
+        var ai: f64 = a[i];
+        var nb: f64 = -b[i];
+        var s, t = _bj_cr_two_sum(ai, nb);
+        var sv: f64 = s;
+        var tv: f64 = t;
+        var sn = 0;
+        var tn = 0;
+        if (sv != 0.0) { sn = _bj_x_split(sv, &sp); }
+        if (tv != 0.0) { tn = _bj_x_split(tv, &tp); }
+        if (sv != 0.0) {
+            tm[nt * 6] = sp[0];
+            tm[nt * 6 + 1] = sp[1];
+            tm[nt * 6 + 2] = sp[0];
+            tm[nt * 6 + 3] = sp[1];
+            tm[nt * 6 + 4] = 1;
+            tm[nt * 6 + 5] = 0;
+            nt = nt + 1;
+        }
+        if (sv != 0.0 && tv != 0.0) {
+            tm[nt * 6] = sp[0];
+            tm[nt * 6 + 1] = sp[1];
+            tm[nt * 6 + 2] = tp[0];
+            tm[nt * 6 + 3] = tp[1];
+            tm[nt * 6 + 4] = 2;
+            tm[nt * 6 + 5] = sn ^ tn;
+            nt = nt + 1;
+        }
+        if (tv != 0.0) {
+            tm[nt * 6] = tp[0];
+            tm[nt * 6 + 1] = tp[1];
+            tm[nt * 6 + 2] = tp[0];
+            tm[nt * 6 + 3] = tp[1];
+            tm[nt * 6 + 4] = 1;
+            tm[nt * 6 + 5] = 0;
+            nt = nt + 1;
+        }
+    }
+    var base = 0;
+    for (var j = 0; j < nt; j = j + 1) {
+        var e = tm[j * 6 + 1] + tm[j * 6 + 3] + p;
+        if (e < base) { base = e; }
+    }
+    var P[640];
+    var N[640];
+    var T[640];
+    _bj_xn_zero(&P);
+    _bj_xn_zero(&N);
+    for (var u = 0; u < nt; u = u + 1) {
+        _bj_xn_term(&T, tm[u * 6], tm[u * 6 + 2], tm[u * 6 + 4], p);
+        var sh = tm[u * 6 + 1] + tm[u * 6 + 3] + p - base;
+        if (tm[u * 6 + 5] == 1) { _bj_xn_add_shl(&N, &T, sh); } else { _bj_xn_add_shl(&P, &T, sh); }
+    }
+    _bj_xn_set(&T, 1);
+    _bj_xn_add_shl(&N, &T, 0 - base);
+    if (_bj_xn_cmp(&P, &N) < 0) { return 1; }
+    return 0;
+}
+
+# The band test for a rounded value v (r² against the double t nearest 10^-30, or R against it): 0 when v is NaN or
+# more than 64 ulps above t (not singular), 1 when more than 64 ulps below (singular), 2 inside the band (the exact
+# test decides). v is non-negative or NaN.
+#must_use
+fn _bj_x_band(v: f64, t: f64): i64 {
+    if (v != v) { return 0; }
+    var w = _bj_cr_word(v) - _bj_cr_word(t);
+    if (w > 64) { return 0; }
+    if (w < -64) { return 1; }
+    return 2;
+}
+
 # --- mathx.cyr ---
 
 # mathx.cyr — bijli's math helpers: Rust std semantics on top of the Cyrius builtins.
@@ -9462,11 +9666,15 @@ public fn bj_complex_from_polar(magnitude: f64, phase: f64): BjComplex {
 # or `Err(code)` with the error in the last-error record (src/error.cyr), `out` untouched. A `Result<f64>` stays a
 # Result with the f64 payload. Every formula is Rust's in Rust's order of operations, so the golden rows compare bit
 # for bit (class A); constants are src/constants.cyr's (generated), and `1e-30`, the singular cutoff on r², is its
-# literal written out (pinned by the rows either side of it).
+# literal written out (pinned by the rows either side of it). The cutoff is tested exactly (ADR 0002 row 17, the
+# user's decision of 2026-11-12): the exact r² of the inputs against 10^-30, and the exact R against 10^-30, through
+# src/crmath_cmp.cyr, whose band test leaves Rust's comparison wherever the rounded value is more than 64 ulps from
+# the cutoff. A radial distance is a double, and the double nearest 10^-30 lies above it, so `distance < 1e-30` is
+# already exact.
 
 private
 
-# Rust's `1e-30`: field points closer to the source than √(1e-30) m are singular.
+# Rust's `1e-30`, the double nearest 10^-30: field points closer to the source than 10^-15 m are singular.
 public var _BJ_FIELD_R2_MIN: f64 = 0.000000000000000000000000000001;
 
 # ── BjFieldVector ───────────────────────────────────────────────────────────────────────────────────────────────
@@ -9695,14 +9903,18 @@ impl BjFieldVector {
 # ── point charges ───────────────────────────────────────────────────────────────────────────────────────────────
 
 # E = kq/r²·r̂ (V/m) at field_pos from a point charge at charge_pos, as k·q·(1/r)³ times the offset. Singularity when
-# r² < 1e-30. Mirrors `field::electric_field_point_charge`.
+# the exact r² < 10^-30 (ADR 0002 row 17). Mirrors `field::electric_field_point_charge`.
 public fn bj_electric_field_point_charge(charge_q: f64, charge_pos: *f64, field_pos: *f64,
   out: *BjFieldVector): Result {
     var dx: f64 = field_pos[0] - charge_pos[0];
     var dy: f64 = field_pos[1] - charge_pos[1];
     var dz: f64 = field_pos[2] - charge_pos[2];
     var r_sq: f64 = dx * dx + dy * dy + dz * dz;
-    if (r_sq < _BJ_FIELD_R2_MIN) { return Err(_bj_err_singularity()); }
+    var band = _bj_x_band(r_sq, _BJ_FIELD_R2_MIN);
+    if (band == 2) { band = _bj_x_r2_below(field_pos, charge_pos, 30); }
+    if (band == 1) {
+        return Err(_bj_err_singularity());
+    }
     var rt: f64 = f64_sqrt(r_sq);
     var inv_r: f64 = 1.0 / rt;
     var factor: f64 = BJ_COULOMB_K * charge_q * inv_r * inv_r * inv_r;
@@ -9712,27 +9924,36 @@ public fn bj_electric_field_point_charge(charge_q: f64, charge_pos: *f64, field_
     return Ok(0);
 }
 
-# V = kq/r (volts). Singularity when r² < 1e-30. Mirrors `field::electric_potential_point_charge`.
+# V = kq/r (volts). Singularity when the exact r² < 10^-30 (ADR 0002 row 17). Mirrors
+# `field::electric_potential_point_charge`.
 public fn bj_electric_potential_point_charge(charge_q: f64, charge_pos: *f64, field_pos: *f64): Result {
     var dx: f64 = field_pos[0] - charge_pos[0];
     var dy: f64 = field_pos[1] - charge_pos[1];
     var dz: f64 = field_pos[2] - charge_pos[2];
     var r_sq: f64 = dx * dx + dy * dy + dz * dz;
-    if (r_sq < _BJ_FIELD_R2_MIN) { return Err(_bj_err_singularity()); }
+    var band = _bj_x_band(r_sq, _BJ_FIELD_R2_MIN);
+    if (band == 2) { band = _bj_x_r2_below(field_pos, charge_pos, 30); }
+    if (band == 1) {
+        return Err(_bj_err_singularity());
+    }
     var rt: f64 = f64_sqrt(r_sq);
     var v: f64 = BJ_COULOMB_K * charge_q / rt;
     return Ok(v);
 }
 
 # B = (μ₀/4π)·q(v × r̂)/r² (tesla) at field_pos from a charge at charge_pos moving with `velocity` (Biot–Savart).
-# Singularity when r² < 1e-30. Mirrors `field::magnetic_field_moving_charge`.
+# Singularity when the exact r² < 10^-30 (ADR 0002 row 17). Mirrors `field::magnetic_field_moving_charge`.
 public fn bj_magnetic_field_moving_charge(charge_q: f64, charge_pos: *f64, velocity: *f64, field_pos: *f64,
   out: *BjFieldVector): Result {
     var dx: f64 = field_pos[0] - charge_pos[0];
     var dy: f64 = field_pos[1] - charge_pos[1];
     var dz: f64 = field_pos[2] - charge_pos[2];
     var r_sq: f64 = dx * dx + dy * dy + dz * dz;
-    if (r_sq < _BJ_FIELD_R2_MIN) { return Err(_bj_err_singularity()); }
+    var band = _bj_x_band(r_sq, _BJ_FIELD_R2_MIN);
+    if (band == 2) { band = _bj_x_r2_below(field_pos, charge_pos, 30); }
+    if (band == 1) {
+        return Err(_bj_err_singularity());
+    }
     var rt: f64 = f64_sqrt(r_sq);
     var inv_r: f64 = 1.0 / rt;
     var rx: f64 = dx * inv_r;
@@ -9798,11 +10019,13 @@ public fn bj_magnetic_energy_density(b_magnitude: f64): f64 {
 
 # ── dipoles ─────────────────────────────────────────────────────────────────────────────────────────────────────
 
-# The unit vector toward p and 1/|p| for a field position p with |p|² ≥ 1e-30, into r_hat; returns 1/|p|, or −1 when
-# |p|² < 1e-30 (singular).
+# The unit vector toward p and 1/|p| for a field position p with |p|² ≥ 10^-30 exactly, into r_hat; returns 1/|p|, or
+# −1 when the exact |p|² < 10^-30 (singular: ADR 0002 row 17).
 fn _bj_field_rhat(p: *f64, r_hat: *BjFieldVector): f64 {
     var r_sq: f64 = p[0] * p[0] + p[1] * p[1] + p[2] * p[2];
-    if (r_sq < _BJ_FIELD_R2_MIN) { return -1.0; }
+    var band = _bj_x_band(r_sq, _BJ_FIELD_R2_MIN);
+    if (band == 2) { band = _bj_x_r2_below(p, &_bj_x_origin, 30); }
+    if (band == 1) { return -1.0; }
     var rt: f64 = f64_sqrt(r_sq);
     var inv_r: f64 = 1.0 / rt;
     r_hat.x = p[0] * inv_r;
@@ -9812,7 +10035,7 @@ fn _bj_field_rhat(p: *f64, r_hat: *BjFieldVector): f64 {
 }
 
 # E = (1/4πε₀r³)·[3(p·r̂)r̂ − p] at field_pos from a dipole p at the origin, as r̂·(3(p·r̂)·f) − p·f with f =
-# (1/r)³/(4πε₀). Singularity when r² < 1e-30. Mirrors `field::electric_dipole_field`.
+# (1/r)³/(4πε₀). Singularity when the exact r² < 10^-30. Mirrors `field::electric_dipole_field`.
 public fn bj_electric_dipole_field(dipole_moment: BjFieldVector, field_pos: *f64, out: *BjFieldVector): Result {
     var r_hat: BjFieldVector;
     var inv_r: f64 = _bj_field_rhat(field_pos, &r_hat);
@@ -9832,7 +10055,7 @@ public fn bj_electric_dipole_field(dipole_moment: BjFieldVector, field_pos: *f64
 }
 
 # V = p·r̂/(4πε₀r²) at field_pos from a dipole p at the origin, as (p·r̂)·(1/r)·(1/r)/(4πε₀). Singularity when
-# r² < 1e-30. Mirrors `field::electric_dipole_potential`.
+# the exact r² < 10^-30. Mirrors `field::electric_dipole_potential`.
 public fn bj_electric_dipole_potential(dipole_moment: BjFieldVector, field_pos: *f64): Result {
     var r_hat: BjFieldVector;
     var inv_r: f64 = _bj_field_rhat(field_pos, &r_hat);
@@ -9844,7 +10067,7 @@ public fn bj_electric_dipole_potential(dipole_moment: BjFieldVector, field_pos: 
 }
 
 # B = (μ₀/4πr³)·[3(m·r̂)r̂ − m] at field_pos from a magnetic dipole m at the origin, as r̂·(3(m·r̂)·f) − m·f with
-# f = μ₀·(1/r)³/(4π). Singularity when r² < 1e-30. Mirrors `field::magnetic_dipole_field`.
+# f = μ₀·(1/r)³/(4π). Singularity when the exact r² < 10^-30. Mirrors `field::magnetic_dipole_field`.
 public fn bj_magnetic_dipole_field(magnetic_moment: BjFieldVector, field_pos: *f64, out: *BjFieldVector): Result {
     var r_hat: BjFieldVector;
     var inv_r: f64 = _bj_field_rhat(field_pos, &r_hat);
@@ -9875,7 +10098,8 @@ public fn bj_electric_field_infinite_plane(surface_charge_density: f64): f64 {
     return e;
 }
 
-# A radial distance's errors: InvalidParameter when NaN or negative, Singularity below 1e-30 m; else Ok(0). Mirrors
+# A radial distance's errors: InvalidParameter when NaN or negative, Singularity below 10^-30 m (the double nearest
+# 10^-30 lies above it, so Rust's `distance < 1e-30` is the exact test); else Ok(0). Mirrors
 # field.rs's `pub(crate) check_radial_distance`.
 public fn _bj_check_radial_distance(distance: f64): Result {
     if (distance != distance || distance < 0.0) {
@@ -10039,11 +10263,15 @@ public fn bj_electric_field_disk_axis(surface_charge_density: f64, disk_radius: 
 # ── multipoles (M1 part 3b) ─────────────────────────────────────────────────────────────────────────────────────
 
 # V = (1/4πε₀)·½·Σᵢⱼ Qᵢⱼxᵢxⱼ/r⁵ (volts) at field_pos from a quadrupole at the origin: Σ in i-then-j order from 0, over
-# 8πε₀r⁵ with r⁵ = r²·r²·r. q_tensor is 9 f64, row-major (Rust's `[[f64; 3]; 3]`). Singularity when r² < 1e-30.
-# Mirrors `field::electric_quadrupole_potential`.
+# 8πε₀r⁵ with r⁵ = r²·r²·r. q_tensor is 9 f64, row-major (Rust's `[[f64; 3]; 3]`). Singularity when the exact
+# r² < 10^-30 (ADR 0002 row 17). Mirrors `field::electric_quadrupole_potential`.
 public fn bj_electric_quadrupole_potential(q_tensor: *f64, field_pos: *f64): Result {
     var r_sq: f64 = field_pos[0] * field_pos[0] + field_pos[1] * field_pos[1] + field_pos[2] * field_pos[2];
-    if (r_sq < _BJ_FIELD_R2_MIN) { return Err(_bj_err_singularity()); }
+    var band = _bj_x_band(r_sq, _BJ_FIELD_R2_MIN);
+    if (band == 2) { band = _bj_x_r2_below(field_pos, &_bj_x_origin, 30); }
+    if (band == 1) {
+        return Err(_bj_err_singularity());
+    }
     var r: f64 = f64_sqrt(r_sq);
     var r5: f64 = r_sq * r_sq * r;
     var sum: f64 = 0.0;
@@ -10332,15 +10560,19 @@ public fn bj_image_charge_dielectric(charge: f64, position: *f64, eps_r1: f64, e
 
 # G(r, r') = e^{−jkR}/(4πR), the free-space scalar Green's function of the outgoing wave in bijli's e^{+jωt}
 # convention (src/complex.cyr), into out: (cos kR, −sin kR)/(4πR). Rust's e^{+ikR}/(4πR) was the e^{−iωt} form, so the
-# port's value is its conjugate (ADR 0002 row 5). Singularity when R < 1e-30. Mirrors `field::greens_function_scalar`
-# (its `(f64, f64)` is a BjComplex here).
+# port's value is its conjugate (ADR 0002 row 5). Singularity when the exact R < 10^-30 (row 17). Mirrors
+# `field::greens_function_scalar` (its `(f64, f64)` is a BjComplex here).
 public fn bj_greens_function_scalar(field_pos: *f64, source_pos: *f64, k: f64, out: *BjComplex): Result {
     var dx: f64 = field_pos[0] - source_pos[0];
     var dy: f64 = field_pos[1] - source_pos[1];
     var dz: f64 = field_pos[2] - source_pos[2];
     var s: f64 = dx * dx + dy * dy + dz * dz;
     var r: f64 = f64_sqrt(s);
-    if (r < _BJ_FIELD_R2_MIN) { return Err(_bj_err_singularity()); }
+    var band = _bj_x_band(r, _BJ_FIELD_R2_MIN);
+    if (band == 2) { band = _bj_x_r2_below(field_pos, source_pos, 60); }
+    if (band == 1) {
+        return Err(_bj_err_singularity());
+    }
     var d: f64 = 4.0 * _BJ_PI * r;
     var factor: f64 = 1.0 / d;
     var kr: f64 = k * r;
@@ -10352,15 +10584,19 @@ public fn bj_greens_function_scalar(field_pos: *f64, source_pos: *f64, k: f64, o
     return Ok(0);
 }
 
-# G(r, r') = 1/(4πR), the static Green's function (k = 0). Singularity when R < 1e-30. Mirrors
-# `field::greens_function_static`.
+# G(r, r') = 1/(4πR), the static Green's function (k = 0). Singularity when the exact R < 10^-30 (ADR 0002 row 17).
+# Mirrors `field::greens_function_static`.
 public fn bj_greens_function_static(field_pos: *f64, source_pos: *f64): Result {
     var dx: f64 = field_pos[0] - source_pos[0];
     var dy: f64 = field_pos[1] - source_pos[1];
     var dz: f64 = field_pos[2] - source_pos[2];
     var s: f64 = dx * dx + dy * dy + dz * dz;
     var r: f64 = f64_sqrt(s);
-    if (r < _BJ_FIELD_R2_MIN) { return Err(_bj_err_singularity()); }
+    var band = _bj_x_band(r, _BJ_FIELD_R2_MIN);
+    if (band == 2) { band = _bj_x_r2_below(field_pos, source_pos, 60); }
+    if (band == 1) {
+        return Err(_bj_err_singularity());
+    }
     var d: f64 = 4.0 * _BJ_PI * r;
     var g: f64 = 1.0 / d;
     return Ok(g);
@@ -10893,13 +11129,25 @@ impl BjPointCharge {
 }
 
 # F = kq₁q₂/r²·r̂ (N) on q1 from q2, as k·q₁·q₂·(1/r)³ times the offset q1 − q2 (away from q2 when they repel).
-# Singularity when r² < 1e-30. Mirrors `charge::coulomb_force`.
+# Singularity when the exact r² < 10^-30 (ADR 0002 row 17). Mirrors `charge::coulomb_force`.
 public fn bj_coulomb_force(q1: BjPointCharge, q2: BjPointCharge, out: *BjFieldVector): Result {
     var dx: f64 = q1.position.0 - q2.position.0;
     var dy: f64 = q1.position.1 - q2.position.1;
     var dz: f64 = q1.position.2 - q2.position.2;
     var r_sq: f64 = dx * dx + dy * dy + dz * dz;
-    if (r_sq < _BJ_FIELD_R2_MIN) { return Err(_bj_err_singularity()); }
+    var band = _bj_x_band(r_sq, _BJ_FIELD_R2_MIN);
+    if (band == 2) {
+        var pa: f64[3];
+        var pb: f64[3];
+        pa[0] = q1.position.0;
+        pa[1] = q1.position.1;
+        pa[2] = q1.position.2;
+        pb[0] = q2.position.0;
+        pb[1] = q2.position.1;
+        pb[2] = q2.position.2;
+        band = _bj_x_r2_below(&pa, &pb, 30);
+    }
+    if (band == 1) { return Err(_bj_err_singularity()); }
     var rt: f64 = f64_sqrt(r_sq);
     var inv_r: f64 = 1.0 / rt;
     var factor: f64 = BJ_COULOMB_K * q1.charge * q2.charge * inv_r * inv_r * inv_r;

@@ -5,7 +5,8 @@
 # correctly rounded monomials, square roots of quotients and unbounded-exponent final operations (src/crmath_kx.cyr, M1
 # part 5), bijli's √ of a monomial (src/crmath_mono.cyr), which cr_verify.py checks against exact values (Python's
 # Fraction and integer square root), and bijli's transcendentals with an unbounded exponent (src/crmath_ux.cyr, M1 part
-# 5c-2), checked against MPFR with its widest exponent range. Built from the math sources the bundle carries
+# 5c-2), checked against MPFR with its widest exponent range, and the exact Singularity threshold (src/crmath_cmp.cyr,
+# M1 part 5d-1), against Fractions. Built from the math sources the bundle carries
 # (src/constants.cyr … src/mathx.cyr, in the manifest's order and byte for byte what dist/bijli.cyr holds): the bundle
 # is `private` and these entry points are bijli-internal, so a consumer of dist/bijli.cyr can't call them, but a file of
 # internals only has no marker and can be included on its own. scripts/oracle/cr_verify.py builds it, runs it natively
@@ -27,6 +28,7 @@ include "src/crmath_k.cyr"
 include "src/crmath_kx.cyr"
 include "src/crmath_mono.cyr"
 include "src/crmath_ux.cyr"
+include "src/crmath_cmp.cyr"
 include "src/mathx.cyr"
 
 # The value of hex digit byte c (lowercase).
@@ -127,6 +129,10 @@ fn _call(fp, fl, w): i64 {
         var ss, se = _bj_ux_sinh(x);
         if (load64(w + 8) == 1) { return se; }
         r = ss;
+    }
+    elif (_is(fp, fl, "r2_below") == 1) {
+        # r2_below a0 a1 a2 b0 b1 b2 p: 1.0 when the exact Σ (aᵢ − bᵢ)² < 10^-p (src/crmath_cmp.cyr), else 0.0
+        if (_bj_x_r2_below(w, w + 24, load64(w + 48)) == 1) { r = 1.0; }
     }
     elif (_is(fp, fl, "ux_pow") == 1) {
         # ux_pow s e y part: (s·2^e)^y's s (part 0) or e (part 1)

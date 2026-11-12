@@ -11,7 +11,7 @@
 //! force; field.rs's vectors for the Lorentz force; field.rs's distances for the Coulomb energy; and the cyclotron
 //! and Larmor arguments crossed over the specials and SI scales (the weak-field Larmor case among them).
 
-use crate::grids::{Rng, specials};
+use crate::grids::{Rng, knife_edge, specials};
 use crate::m_field::{cat, charges, distances, p3, pairs, res_f, res_v, v3, vectors};
 use crate::tsv::{Class, Module, Tok, err, f, s};
 use bijli::charge::{
@@ -240,6 +240,28 @@ pub fn emit() -> Module {
             Class::A,
             &[f(mass), f(v), f(q), f(bm)],
             &res_f(larmor_radius(black_box(mass), v, q, bm)),
+        );
+    }
+    // The singular cutoff's knife edge (bijli ADR 0002 row 17, M1 part 5d-1), appended: q1 at grids.rs's field point,
+    // q2 at its source, so the offset q1 − q2 is the one the selection measured.
+    for (src, at) in knife_edge(false) {
+        let q1 = PointCharge {
+            charge: 1e-6,
+            mass: 1.0,
+            position: at,
+            velocity: [0.0; 3],
+        };
+        let q2 = PointCharge {
+            charge: -2e-6,
+            mass: 1.0,
+            position: src,
+            velocity: [0.0; 3],
+        };
+        m.row(
+            "charge::coulomb_force",
+            Class::A,
+            &cat(&[pc(&q1), pc(&q2)]),
+            &res_v(coulomb_force(black_box(&q1), &q2)),
         );
     }
     m

@@ -157,8 +157,19 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
   against MPFR at 53 bits with its widest exponent range (`mpfr_ref.wide`). The golden corpus gains a 910-row edge
   grid, and `complex.adr.tsv` grows to 1,987 rows (row 16: 299).
 
+- **Cyrius port, M1 part 5d-1 — the exact Singularity threshold** (ADR 0002 row 17). The point-charge fields and
+  potential, the dipoles, the quadrupole, the Green's functions and `coulomb_force` now test the exact squared distance
+  of their inputs against 10^-30 (R against 10^-30 through 10^-60). The new `src/crmath_cmp.cyr` leaves Rust's
+  comparison wherever the rounded r² is more than 64 ulps from the cutoff, and decides the band in integers.
+  `cr_verify.py`'s `r2_below` family checks it against Fractions. A knife-edge grid adds 3,826 golden rows, and 302
+  of them map: 202 that Rust accepted are Singularity, and 100 it refused are Ok. 5d's remaining bites (field's
+  chains with an unbounded exponent) are listed in the port plan §0.1.
+
 ### Fixed
 
+- **field, charge** (ADR 0002 row 17): within an ulp of the cutoff, Rust's Singularity verdict followed the
+  roundings rather than the distance. A point whose exact r² is below 10^-30 could be accepted, and one above refused,
+  and a source 16·2^-1074 from the origin could change the verdict through the rounded difference.
 - **complex** (ADR 0002 row 16): `exp(710 + j0)` was (∞, NaN) for (∞, 0), and `exp(1000 + j2^-1074)` (∞, ∞) for
   (∞, 9.73e110). `sin(j800)` was (NaN, ∞) and `cos(π/2 + j720)` (∞, −∞) for (1.51e296, −∞). `ln|DBL_MAX·(1 + j)|`
   was ∞ for 710.13. `(1e200)²` by `powf` was (∞, NaN), and `(−1)^1e308` NaN for a finite unit value.

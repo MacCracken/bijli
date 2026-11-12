@@ -746,11 +746,35 @@ def ok3(v):
     return [("f", v[0]), ("f", v[1]), ("f", v[2])]
 
 
+# ADR 0002 row 17 (M1 part 5d-1): the Singularity tests on the exact squared distance of the inputs, against 10^-30
+# (r² < 1e-30) or 10^-60 (R < 1e-30), the user's decision of 2026-11-12. The transcriptions below call cut_r2 and cut_r;
+# with EXACT_THR off they are Rust's comparisons (validate_field and validate_charge check the oracle with it off), and
+# adr17_rows turns it on to find the rows whose outcome the exact test changes. A non-finite point keeps Rust's test.
+EXACT_THR = False
+ORIGIN = (0.0, 0.0, 0.0)
+
+
+def exact_sq(a, b):
+    return sum((Fraction(x) - Fraction(y)) ** 2 for x, y in zip(a, b))
+
+
+def cut_r2(r_sq, a, b) -> bool:
+    if EXACT_THR and all(math.isfinite(x) for x in (*a, *b)):
+        return exact_sq(a, b) < Fraction(1, 10 ** 30)
+    return r_sq < R2_MIN
+
+
+def cut_r(r, a, b) -> bool:
+    if EXACT_THR and all(math.isfinite(x) for x in (*a, *b)):
+        return exact_sq(a, b) < Fraction(1, 10 ** 60)
+    return r < R2_MIN
+
+
 def point_e_k(K, q, a, b):
     """field::electric_field_point_charge: SINGULAR, or (its tokens, the vector)."""
     dx, dy, dz = b[0] - a[0], b[1] - a[1], b[2] - a[2]
     r_sq = dx * dx + dy * dy + dz * dz
-    if r_sq < R2_MIN:
+    if cut_r2(r_sq, a, b):
         return SINGULAR
     inv_r = fdiv(1.0, fsqrt(r_sq))
     fct = K * q * inv_r * inv_r * inv_r
@@ -761,14 +785,14 @@ def point_v_k(K, q, a, b):
     """field::electric_potential_point_charge's tokens."""
     dx, dy, dz = b[0] - a[0], b[1] - a[1], b[2] - a[2]
     r_sq = dx * dx + dy * dy + dz * dz
-    return SINGULAR if r_sq < R2_MIN else [("f", fdiv(K * q, fsqrt(r_sq)))]
+    return SINGULAR if cut_r2(r_sq, a, b) else [("f", fdiv(K * q, fsqrt(r_sq)))]
 
 
 def moving_b_k(MU0, q, a, vel, b):
     """field::magnetic_field_moving_charge's tokens."""
     d = [b[i] - a[i] for i in range(3)]
     r_sq = d[0] * d[0] + d[1] * d[1] + d[2] * d[2]
-    if r_sq < R2_MIN:
+    if cut_r2(r_sq, a, b):
         return SINGULAR
     inv_r = fdiv(1.0, fsqrt(r_sq))
     r = [d[i] * inv_r for i in range(3)]
@@ -804,7 +828,11 @@ def rows_agree(fn, v, outs, want, label, n, errs):
         errs.append(f"{label} row {n}: {fn}{tuple(v)} recorded {got}, transcription {want}")
 
 
-def validate_field(root: Path, path: Path) -> list:
+def validate_field(root: Path, path: Path, sink=None, P=None) -> list:
+    """field.rs transcribed (Rust's thresholds unless EXACT_THR). With a sink list, each row's expected tokens (None
+    where nothing transcribes it) go to the sink instead of being checked, the class-C primitives P (glibc's by
+    default)."""
+    P = P or GLIBC_P
     c = golden_consts(root)
     K, EPS0, MU0 = c["field::COULOMB_K"], c["field::EPSILON_0"], c["field::MU_0"]
     _header, rows = read_tsv(path)
@@ -814,7 +842,7 @@ def validate_field(root: Path, path: Path) -> list:
 
     def rhat(p):
         r_sq = p[0] * p[0] + p[1] * p[1] + p[2] * p[2]
-        if r_sq < R2_MIN:
+        if cut_r2(r_sq, p, ORIGIN):
             return None
         inv_r = fdiv(1.0, fsqrt(r_sq))
         return inv_r, (p[0] * inv_r, p[1] * inv_r, p[2] * inv_r)
@@ -916,7 +944,7 @@ def validate_field(root: Path, path: Path) -> list:
         v = [tok_text(b) if k == "s" else b for k, b in ins]
         V = tuple(v[0:3])
         W = tuple(v[3:6])
-        w3b = field_3b(fn, v, ins, GLIBC_P, K, EPS0, MU0)
+        w3b = field_3b(fn, v, ins, P, K, EPS0, MU0)
         if fn == "field::trace_field_line":
             want = trace(v, ins)
         elif w3b is not None:
@@ -987,9 +1015,19 @@ def validate_field(root: Path, path: Path) -> list:
         elif fn == "field::magnetic_energy_density":
             want = [("f", fdiv(v[0] * v[0], 2.0 * MU0))]
         else:
+            if sink is not None:
+                sink.append(None)
+                continue
             errs.append(f"field row {n}: no transcription for {fn}")
             continue
+        if sink is not None:
+            sink.append(want)
+            continue
         rows_agree(fn, v, outs, want, "field", n, errs)
+    lo = Fraction(math.nextafter(R2_MIN, 0.0))
+    if not (lo < Fraction(1, 10 ** 30) < Fraction(R2_MIN)):
+        errs.append("field: 10^-30 is not between the double 1e-30 and its predecessor, so `distance < 1e-30` is not "
+                    "the exact radial test (ADR 0002 row 17)")
     return errs
 
 
@@ -1103,7 +1141,7 @@ def field_3b(fn, v, ins, P, K, EPS0, MU0):
     if fn == "field::electric_quadrupole_potential":
         qt, p = v[0:9], v[9:12]
         r_sq = p[0] * p[0] + p[1] * p[1] + p[2] * p[2]
-        if r_sq < R2_MIN:
+        if cut_r2(r_sq, p, ORIGIN):
             return SINGULAR
         r = fsqrt(r_sq)
         r5 = r_sq * r_sq * r
@@ -1175,7 +1213,7 @@ def field_3b(fn, v, ins, P, K, EPS0, MU0):
         a, b = v[0:3], v[3:6]
         d = [a[i] - b[i] for i in range(3)]
         r = fsqrt(d[0] * d[0] + d[1] * d[1] + d[2] * d[2])
-        if r < R2_MIN:
+        if cut_r(r, a, b):
             return SINGULAR
         fct = fdiv(1.0, 4.0 * PI * r)
         if fn.endswith("static"):
@@ -1273,9 +1311,9 @@ def validate_maxwell(root: Path, path: Path) -> list:
 
 
 # ── charge: rust-old/src/charge.rs ────────────────────────────────────────────────────────────
-def validate_charge(root: Path, path: Path) -> list:
+def validate_charge(root: Path, path: Path, sink=None, P=None) -> list:
     """charge.rs transcribed in its order of operations (class A), its checks and error texts; the PointCharge
-    methods through field.rs's transcriptions above."""
+    methods through field.rs's transcriptions above. A sink as validate_field's (charge has no class-C row)."""
     c = golden_consts(root)
     K, MU0 = c["field::COULOMB_K"], c["field::MU_0"]
     E, ME, MP = c["charge::ELEMENTARY_CHARGE"], c["charge::ELECTRON_MASS"], c["charge::PROTON_MASS"]
@@ -1324,7 +1362,7 @@ def validate_charge(root: Path, path: Path) -> list:
             q1, a, q2, b = v[0], v[2:5], v[8], v[10:13]
             dx, dy, dz = a[0] - b[0], a[1] - b[1], a[2] - b[2]
             r_sq = dx * dx + dy * dy + dz * dz
-            if r_sq < R2_MIN:
+            if cut_r2(r_sq, a, b):
                 want = SINGULAR
             else:
                 inv_r = fdiv(1.0, fsqrt(r_sq))
@@ -1359,7 +1397,13 @@ def validate_charge(root: Path, path: Path) -> list:
             if want is None:
                 want = [("f", fdiv(fdiv(mass * abs(vp), abs(q)), bm))]
         else:
+            if sink is not None:
+                sink.append(None)
+                continue
             errs.append(f"charge row {n}: no transcription for {fn}")
+            continue
+        if sink is not None:
+            sink.append(want)
             continue
         rows_agree(fn, v, outs, want, "charge", n, errs)
     return errs
@@ -1377,8 +1421,14 @@ def field_corrections(root: Path):
                 continue
             v = [tok_text(b) if k == "s" else b for k, b in ins]
             want = field_3b(fn, v, ins, MPFR_P, K, EPS0, MU0)
-            if want is None or any(k != "f" for k, _ in want):
+            if want is None or any(k != "f" for k, _ in want) or any(k != "f" for k, _ in outs):
                 continue
+            global EXACT_THR
+            EXACT_THR = True
+            w17 = field_3b(fn, v, ins, MPFR_P, K, EPS0, MU0)
+            EXACT_THR = False
+            if any(k != "f" for k, _ in w17):
+                continue                    # the exact threshold makes it Singularity: row 17's mapping
             old = [b for k, b in outs]
             new = [b for _, b in want]
             if len(old) == len(new) and all(same(a, b) for a, b in zip(old, new)):
@@ -1656,12 +1706,61 @@ def adr13(root: Path):
     }
 
 
+def pct(text: str) -> str:
+    """tsv.rs's `s:` body: bytes 0x21–0x7e as they are (but %), the rest as %XX."""
+    return "".join(chr(b) if 0x21 <= b <= 0x7E and b != 0x25 else f"%{b:02X}" for b in text.encode())
+
+
+def wire(toks) -> str:
+    out = []
+    for k, b in toks:
+        if k == "f":
+            out.append(f"f:{f_to_bits(b):016x}")
+        elif k == "s":
+            out.append("s:" + pct(b))
+        else:
+            out.append(f"{k}:{b}")
+    return " ".join(out)
+
+
+def toks_same(x, y) -> bool:
+    if x is None or y is None:
+        return x is y
+    return len(x) == len(y) and all(a[0] == b[0] and (same(a[1], b[1]) if a[0] == "f" else a[1] == b[1])
+                                    for a, b in zip(x, y))
+
+
+def adr17_rows(root: Path, module: str, path: Path) -> list:
+    """Row 17's mappings: the golden rows whose outcome the exact Singularity threshold changes (Rust's chain with the
+    exact test against Rust's, both on glibc's primitives as the oracle ran them), with the port's outputs (the exact
+    test, MPFR's correctly rounded primitives)."""
+    global EXACT_THR
+    check = validate_field if module == "field" else validate_charge
+    rust, exact, port = [], [], []
+    try:
+        EXACT_THR = False
+        check(root, path, rust)
+        EXACT_THR = True
+        check(root, path, exact)
+        check(root, path, port, MPFR_P)
+    finally:
+        EXACT_THR = False
+    lines = [l for l in path.read_text().splitlines() if not l.startswith("#")]
+    out = []
+    for line, w0, w1, wp in zip(lines, rust, exact, port):
+        if toks_same(w0, w1):
+            continue
+        fn, _cls, ins, outs, _note = line.split("\t")
+        out.append((fn, ins, wire(wp), "17", f"oracle {outs}; ADR 0002 row 17: the exact threshold"))
+    return out
+
+
 def adr_rows(root: Path, module: str, path: Path) -> list:
     """(fn, raw inputs, outputs, ADR 0002 row, note) for each golden row of `module` an ADR 0002 row changes."""
     if module == "complex":
         return cx_rows(path)[0]
     maps = {13: adr13(root)}
-    out = []
+    out = adr17_rows(root, module, path) if module in ("field", "charge") else []
     for line in path.read_text().splitlines():
         if line.startswith("#"):
             continue

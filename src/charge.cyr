@@ -107,13 +107,25 @@ impl BjPointCharge {
 }
 
 # F = kq₁q₂/r²·r̂ (N) on q1 from q2, as k·q₁·q₂·(1/r)³ times the offset q1 − q2 (away from q2 when they repel).
-# Singularity when r² < 1e-30. Mirrors `charge::coulomb_force`.
+# Singularity when the exact r² < 10^-30 (ADR 0002 row 17). Mirrors `charge::coulomb_force`.
 public fn bj_coulomb_force(q1: BjPointCharge, q2: BjPointCharge, out: *BjFieldVector): Result {
     var dx: f64 = q1.position.0 - q2.position.0;
     var dy: f64 = q1.position.1 - q2.position.1;
     var dz: f64 = q1.position.2 - q2.position.2;
     var r_sq: f64 = dx * dx + dy * dy + dz * dz;
-    if (r_sq < _BJ_FIELD_R2_MIN) { return Err(_bj_err_singularity()); }
+    var band = _bj_x_band(r_sq, _BJ_FIELD_R2_MIN);
+    if (band == 2) {
+        var pa: f64[3];
+        var pb: f64[3];
+        pa[0] = q1.position.0;
+        pa[1] = q1.position.1;
+        pa[2] = q1.position.2;
+        pb[0] = q2.position.0;
+        pb[1] = q2.position.1;
+        pb[2] = q2.position.2;
+        band = _bj_x_r2_below(&pa, &pb, 30);
+    }
+    if (band == 1) { return Err(_bj_err_singularity()); }
     var rt: f64 = f64_sqrt(r_sq);
     var inv_r: f64 = 1.0 / rt;
     var factor: f64 = BJ_COULOMB_K * q1.charge * q2.charge * inv_r * inv_r * inv_r;

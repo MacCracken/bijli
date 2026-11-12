@@ -102,3 +102,97 @@ impl Rng {
         if self.next_u64() & 1 == 1 { -x } else { x }
     }
 }
+
+/// a·b exactly, as a double-double (a fused multiply-add is correctly rounded).
+fn two_prod(a: f64, b: f64) -> (f64, f64) {
+    let p = a * b;
+    (p, a.mul_add(b, -p))
+}
+
+/// a + b exactly, as a double-double (Knuth's TwoSum).
+fn two_sum(a: f64, b: f64) -> (f64, f64) {
+    let s = a + b;
+    let bb = s - a;
+    (s, (a - (s - bb)) + (b - bb))
+}
+
+/// 10^-30 to about 2^-104 relative: the double `1e-30` and its remainder, from 5^30 exactly (u128).
+fn ten_m30() -> (f64, f64) {
+    let hi = 1e-30_f64;
+    let bits = hi.to_bits();
+    let m = (bits & ((1_u64 << 52) - 1)) | (1_u64 << 52);
+    let e = i32::try_from((bits >> 52) & 0x7ff).unwrap_or(0) - 1075; // hi = m·2^e
+    let num = u128::from(m) * 5_u128.pow(30); // hi·10^30 = num·2^(e + 30)
+    let sh = -(e + 30);
+    let one = 1_u128 << sh;
+    let d = i128::try_from(num).unwrap_or(0) - i128::try_from(one).unwrap_or(0); // hi·10^30 − 1 = d·2^-sh
+    #[allow(clippy::cast_precision_loss)]
+    let lo = -(d as f64) * pow2(-sh) * hi;
+    (hi, lo)
+}
+
+/// |a − b|² as a double-double: each difference exactly (TwoSum), its square to about 2^-104.
+fn dist_sq_dd(a: [f64; 3], b: [f64; 3]) -> (f64, f64) {
+    let mut acc = (0.0, 0.0);
+    for i in 0..3 {
+        let (s, t) = two_sum(a[i], -b[i]);
+        let (p, pe) = two_prod(s, s);
+        let lo = pe + 2.0 * s * t + t * t;
+        let (h, l) = two_sum(acc.0, p);
+        acc = two_sum(h, l + acc.1 + lo);
+    }
+    acc
+}
+
+/// Knife-edge points for the singular cutoff (bijli ADR 0002 row 17, M1 part 5d-1), as (source, field point) pairs:
+/// field points along four directions at |d| = 10^-15 (`p60`: 10^-30, for R), stepped by ulps, against three sources
+/// (the origin, which leaves the difference exact, and two small offsets, which make it round), kept where the exact
+/// |d − b|² lies within an ulp of 10^-30 (two of 10^-60). Every row on which Rust's rounded test and the exact one can
+/// disagree is among them.
+pub fn knife_edge(p60: bool) -> Vec<([f64; 3], [f64; 3])> {
+    let (th, tl) = ten_m30();
+    let (target, tol, scale) = if p60 {
+        let (p, pe) = two_prod(th, th);
+        (two_sum(p, pe + 2.0 * th * tl), pow2(-251), 1e-30)
+    } else {
+        ((th, tl), pow2(-152), 1e-15)
+    };
+    let step = |x: f64, k: i64| {
+        if x == 0.0 {
+            x
+        } else {
+            f64::from_bits(x.to_bits().wrapping_add_signed(k))
+        }
+    };
+    let dirs = [
+        [0.6, 0.8, 0.0],
+        [0.28, 0.96, 0.0],
+        [0.48, 0.64, 0.6],
+        [1.0, 0.0, 0.0],
+    ];
+    let sources = [
+        [0.0, 0.0, 0.0],
+        [-3e-32 * scale * 1e15, 0.0, 0.0],
+        [pow2(-1070), 0.0, 0.0],
+    ];
+    let mut out = Vec::new();
+    for dir in dirs {
+        for k in -24_i64..=24 {
+            for j in -6_i64..=6 {
+                let a = [
+                    step(dir[0] * scale, k),
+                    step(dir[1] * scale, j),
+                    dir[2] * scale,
+                ];
+                for b in sources {
+                    let (h, l) = dist_sq_dd(a, b);
+                    let diff = (h - target.0) + (l - target.1);
+                    if diff.abs() <= tol {
+                        out.push((b, a));
+                    }
+                }
+            }
+        }
+    }
+    out
+}

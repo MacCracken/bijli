@@ -14,7 +14,7 @@
 //! path of `normalized` among them), seeded vectors and SI-scale charges; positions on a lattice, at random, and at
 //! offsets from the source around the singular cutoff r² = 1e-30 (√1e-30 = 1e-15 m) on both sides.
 
-use crate::grids::{Rng, pow2, specials};
+use crate::grids::{knife_edge, Rng, pow2, specials};
 use crate::tsv::{Class, Module, Tok, err, f, s};
 use bijli::BijliError;
 use bijli::field::{
@@ -412,7 +412,86 @@ pub fn emit() -> Module {
     }
     emit_3b(&mut m, &mut rng, &vs);
     emit_3c(&mut m);
+    emit_5d(&mut m);
     m
+}
+
+/// The singular cutoff's knife edge (bijli ADR 0002 row 17, M1 part 5d-1), appended so the rows above keep their
+/// places: grids.rs's `knife_edge` points through every function that tests r² < 1e-30 (the dipoles and the
+/// quadrupole on field points about the origin only) and, at 10^-30, the Green's functions' R < 1e-30.
+fn emit_5d(m: &mut Module) {
+    let q = 1e-6;
+    let vel = [3e6, -2e6, 1e6];
+    let dm = FieldVector::new(1e-30, -2e-30, 5e-31);
+    let qt = [[1e-20, 0.0, 2e-21], [0.0, -5e-21, 0.0], [2e-21, 0.0, -5e-21]];
+    for (a, b) in knife_edge(false) {
+        let ins = cat(&[vec![f(q)], p3(a), p3(b)]);
+        m.row(
+            "field::electric_field_point_charge",
+            Class::A,
+            &ins,
+            &res_v(electric_field_point_charge(black_box(q), a, b)),
+        );
+        m.row(
+            "field::electric_potential_point_charge",
+            Class::A,
+            &ins,
+            &res_f(electric_potential_point_charge(black_box(q), a, b)),
+        );
+        m.row(
+            "field::magnetic_field_moving_charge",
+            Class::A,
+            &cat(&[vec![f(q)], p3(a), p3(vel), p3(b)]),
+            &res_v(magnetic_field_moving_charge(black_box(q), a, vel, b)),
+        );
+        if a != [0.0; 3] {
+            continue;
+        }
+        let din = cat(&[v3(dm), p3(b)]);
+        m.row(
+            "field::electric_dipole_field",
+            Class::A,
+            &din,
+            &res_v(electric_dipole_field(&dm, black_box(b))),
+        );
+        m.row(
+            "field::electric_dipole_potential",
+            Class::A,
+            &din,
+            &res_f(electric_dipole_potential(&dm, black_box(b))),
+        );
+        m.row(
+            "field::magnetic_dipole_field",
+            Class::A,
+            &din,
+            &res_v(magnetic_dipole_field(&dm, black_box(b))),
+        );
+        let mut qin: Vec<Tok> = qt
+            .iter()
+            .flat_map(|row| row.iter().map(|&x| f(x)))
+            .collect();
+        qin.extend(p3(b));
+        m.row(
+            "field::electric_quadrupole_potential",
+            Class::A,
+            &qin,
+            &res_f(electric_quadrupole_potential(&qt, black_box(b))),
+        );
+    }
+    for (a, b) in knife_edge(true) {
+        m.row(
+            "field::greens_function_scalar",
+            Class::C,
+            &cat(&[p3(b), p3(a), vec![f(2.0)]]),
+            &res_pair(greens_function_scalar(black_box(b), a, 2.0)),
+        );
+        m.row(
+            "field::greens_function_static",
+            Class::A,
+            &cat(&[p3(b), p3(a)]),
+            &res_f(greens_function_static(black_box(b), a)),
+        );
+    }
 }
 
 /// Part 3b: the Gauss's-law fields, the multipoles, the images, the Green's functions and the stress tensor.
