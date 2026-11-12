@@ -1,0 +1,61 @@
+# Probe 1 at full size (port plan §6 step 9): a 53³ Fdtd3d-shaped grid — six field arrays, three coefficient
+# arrays, three material arrays and twelve CPML Ψ slabs (10 cells deep on each face) — allocated and freed 200
+# times, (a) through fl_calloc per array and (b) as one mmap per grid. The global bump heap must not grow, and the
+# resident peak (read externally, VmHWM) must stay at one grid.
+#   cyrius build scripts/probes/p7_grid_memory.cyr build/p7 && ./build/p7
+include "lib/syscalls.cyr"
+include "lib/string.cyr"
+include "lib/alloc.cyr"
+include "lib/fmt.cyr"
+include "lib/io.cyr"
+include "lib/mmap.cyr"
+include "lib/freelist.cyr"
+include "lib/bench.cyr"
+
+var N = 53;
+var T = 10;
+var CYCLES = 200;
+
+fn touch(p, words) {
+    for (var i = 0; i < words; i = i + 512) { store64(p + i * 8, i); }
+    return 0;
+}
+
+fn cycle_fl(): i64 {
+    var cells = N * N * N;
+    var slab = 2 * T * N * N;
+    var arr: i64[24];
+    for (var a = 0; a < 12; a = a + 1) { arr[a] = fl_calloc(cells * 8); if (arr[a] == 0) { return 1; } touch(arr[a], cells); }
+    for (var a = 12; a < 24; a = a + 1) { arr[a] = fl_calloc(slab * 8); if (arr[a] == 0) { return 1; } touch(arr[a], slab); }
+    var bad = 0;
+    for (var a = 0; a < 24; a = a + 1) { if (fl_free(arr[a]) != 0) { bad = bad + 1; } }
+    return bad;
+}
+
+fn cycle_mmap(): i64 {
+    var cells = N * N * N;
+    var slab = 2 * T * N * N;
+    var bytes = (12 * cells + 12 * slab) * 8;
+    var p = mmap_anon(bytes);
+    if (p == 0) { return 1; }
+    touch(p, 12 * cells + 12 * slab);
+    cyr_munmap(p, bytes);
+    return 0;
+}
+
+fn main(): i64 {
+    alloc_init(); fl_init();
+    var b0 = alloc_used();
+    var t0 = now_ns();
+    var bad = 0;
+    for (var c = 0; c < CYCLES; c = c + 1) { bad = bad + cycle_fl(); }
+    var t1 = now_ns();
+    for (var c = 0; c < CYCLES; c = c + 1) { bad = bad + cycle_mmap(); }
+    var t2 = now_ns();
+    print("failures ", 9); fmt_int(bad); print(" | bump growth ", 15); fmt_int(alloc_used() - b0);
+    print(" B | fl_calloc ", 15); fmt_int((t1 - t0) / CYCLES / 1000);
+    print(" us/grid | one mmap ", 20); fmt_int((t2 - t1) / CYCLES / 1000); println(" us/grid");
+    return 0;
+}
+var r = main();
+sys_exit_group(r);

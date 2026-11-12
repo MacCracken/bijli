@@ -1,0 +1,61 @@
+# Probe 7 (port plan §6 step 9): the cost of one 3D Yee cell-step in Cyrius, against Rust's
+# `fdtd/3d_step_30x30x30` (298 µs per step on a quiet machine: 11 ns per cell-step for six components). A scalar
+# H and E update of all six components over 30³ cells, PEC walls, 20 steps; the time sets the size of the class-T
+# scenarios (CI budget) and the slow-file split.
+#   cyrius build scripts/probes/p13_cell_step.cyr build/p13 && ./build/p13
+include "lib/syscalls.cyr"
+include "lib/string.cyr"
+include "lib/alloc.cyr"
+include "lib/fmt.cyr"
+include "lib/io.cyr"
+include "lib/mmap.cyr"
+include "lib/freelist.cyr"
+include "lib/bench.cyr"
+
+var NX = 30;
+var NY = 30;
+var NZ = 30;
+var STEPS = 20;
+
+fn grid(n): *f64 { return fl_calloc(n * 8); }
+
+fn main(): i64 {
+    alloc_init(); fl_init();
+    var n = NX * NY * NZ;
+    var ex: *f64 = grid(n); var ey: *f64 = grid(n); var ez: *f64 = grid(n);
+    var hx: *f64 = grid(n); var hy: *f64 = grid(n); var hz: *f64 = grid(n);
+    var ce: f64 = 0.5; var ch: f64 = 0.5;
+    var sxy = NX * NY;
+    ez[(NZ / 2) * sxy + (NY / 2) * NX + NX / 2] = 1.0;
+    var t0 = now_ns();
+    for (var s = 0; s < STEPS; s = s + 1) {
+        for (var k = 0; k < NZ - 1; k = k + 1) {
+            for (var j = 0; j < NY - 1; j = j + 1) {
+                var row = k * sxy + j * NX;
+                for (var i = 0; i < NX - 1; i = i + 1) {
+                    var c = row + i;
+                    hx[c] = hx[c] - ch * ((ez[c + NX] - ez[c]) - (ey[c + sxy] - ey[c]));
+                    hy[c] = hy[c] - ch * ((ex[c + sxy] - ex[c]) - (ez[c + 1] - ez[c]));
+                    hz[c] = hz[c] - ch * ((ey[c + 1] - ey[c]) - (ex[c + NX] - ex[c]));
+                }
+            }
+        }
+        for (var k = 1; k < NZ - 1; k = k + 1) {
+            for (var j = 1; j < NY - 1; j = j + 1) {
+                var row = k * sxy + j * NX;
+                for (var i = 1; i < NX - 1; i = i + 1) {
+                    var c = row + i;
+                    ex[c] = ex[c] + ce * ((hz[c] - hz[c - NX]) - (hy[c] - hy[c - sxy]));
+                    ey[c] = ey[c] + ce * ((hx[c] - hx[c - sxy]) - (hz[c] - hz[c - 1]));
+                    ez[c] = ez[c] + ce * ((hy[c] - hy[c - 1]) - (hx[c] - hx[c - NX]));
+                }
+            }
+        }
+    }
+    var dt = now_ns() - t0;
+    print("30^3, 20 steps: ", 16); fmt_int(dt / STEPS / 1000); print(" us/step, ", 10);
+    fmt_int(dt * 1000 / (STEPS * n)); println(" ps per cell-step (six components)");
+    return 0;
+}
+var r = main();
+sys_exit_group(r);

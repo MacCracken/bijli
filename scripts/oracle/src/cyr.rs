@@ -1,7 +1,7 @@
 //! Cyrius source emission for the generated modules (port plan §6 step 6). Adapted from
 //! impetus's `scripts/oracle/src/cyr.rs` (itself kimiya's and tanmatra's).
 //!
-//! Rules the output must keep (probed on 6.7.18; `docs/development/port-probes/p6_misc.cyr`):
+//! Rules the output must keep (probed on 6.7.18; `scripts/probes/p6_misc.cyr`):
 //! - **Hex is never used in a `const`**, where it is an integer and `CONST * x` then does
 //!   integer arithmetic. An f64 constant is a positional decimal: the lexer has no exponent
 //!   form, and it rounds a decimal literal correctly, so the shortest round-trip digits give

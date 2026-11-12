@@ -1,0 +1,69 @@
+# Probe 3 (port plan §6 step 9): what a field callback costs. trace_field_line's loop calls the field function
+# once per step: direct, through callptr on a plain fn pointer, and through callptr on a capturing closure.
+#   cyrius build scripts/probes/p9_callback.cyr build/p9 && ./build/p9
+include "lib/syscalls.cyr"
+include "lib/string.cyr"
+include "lib/alloc.cyr"
+include "lib/fmt.cyr"
+include "lib/io.cyr"
+include "lib/math.cyr"
+include "lib/bench.cyr"
+
+struct V3 { x: f64; y: f64; z: f64; }
+var STEPS = 1000000;
+
+# A closure's parameters are untyped words; a typed-return helper binds one to a *V3 without the
+# typed-pointer warning.
+fn _as_v3(p): *V3 { return p; }
+
+# The field of a unit charge at the origin into `out`; status 0.
+fn point_field(pos: *V3, out: *V3): i64 {
+    var r2: f64 = pos.x * pos.x + pos.y * pos.y + pos.z * pos.z;
+    var r: f64 = f64_sqrt(r2);
+    var k: f64 = 1.0 / (r2 * r);
+    out.x = k * pos.x; out.y = k * pos.y; out.z = k * pos.z;
+    return 0;
+}
+
+fn make_closure(q: f64): i64 {
+    return |pos, out| {
+        var pp: *V3 = _as_v3(pos); var oo: *V3 = _as_v3(out); var cq: f64 = q;
+        var r2: f64 = pp.x * pp.x + pp.y * pp.y + pp.z * pp.z;
+        var r: f64 = f64_sqrt(r2);
+        var k: f64 = cq / (r2 * r);
+        oo.x = k * pp.x; oo.y = k * pp.y; oo.z = k * pp.z;
+        return 0;
+    };
+}
+
+fn trace(kind, fp): i64 {
+    var p = V3 { 1.0, 0.25, 0.0 };
+    var e: V3;
+    for (var i = 0; i < STEPS; i = i + 1) {
+        var st = 0;
+        if (kind == 0) { st = point_field(&p, &e); } else { st = callptr(fp, &p, &e); }
+        if (st != 0) { break; }
+        var m: f64 = f64_sqrt(e.x * e.x + e.y * e.y + e.z * e.z);
+        p.x = p.x + 0.000001 * e.x / m; p.y = p.y + 0.000001 * e.y / m; p.z = p.z + 0.000001 * e.z / m;
+    }
+    var hx = p.x;
+    return hx;
+}
+
+fn timed(name, kind, fp) {
+    var t0 = now_ns();
+    var h = trace(kind, fp);
+    var ps = (now_ns() - t0) * 1000 / STEPS;
+    print(name, strlen(name)); fmt_hex(h); print("  ", 2); fmt_int(ps); println(" ps/step");
+    return 0;
+}
+
+fn main(): i64 {
+    alloc_init();
+    timed("direct   ", 0, 0);
+    timed("fn ptr   ", 1, &point_field);
+    timed("closure  ", 1, make_closure(1.0));
+    return 0;
+}
+var r = main();
+sys_exit_group(r);

@@ -1,11 +1,13 @@
-# Language-review probes (Cyrius 6.7.18, 2026-11-11)
+# Probes (Cyrius 6.7.18, 2026-11-11)
 
-These are the evidence behind [`bijli-port-plan.md`](../bijli-port-plan.md) §2. Each one is a small
-program that checks one claim the port relies on. Every float result was compared bit for bit
+The evidence behind the port plan's §2 (the language review, p1–p6) and its M0 step 9 (p7–p14), recorded in
+[`port-parity.md`](../../docs/development/port-parity.md) §4. Each one is a small program that checks one claim
+the port relies on. Every float result was compared bit for bit
 against Python's IEEE arithmetic, and `p5_serde_ref.rs` produces the serde_json reference text.
 
-Run a probe with `cyrius run <file>.cyr`. Run p4 with `cyrius build p4_freelist.cyr p4 && ./p4`.
-Re-run them all at every Cyrius pin bump, and move them to `scripts/probes/` at M0.
+Run a probe from the repo root with `cyrius run scripts/probes/<file>.cyr`, or build it
+(`cyrius build scripts/probes/<file>.cyr build/<name> && ./build/<name>`) where it is timed or sampled. The `.rs`
+files are Rust references (`rustc -O`). Re-run them all at every Cyrius pin bump.
 
 | Probe | Claim | Expected output (6.7.18) |
 |---|---|---|
@@ -17,3 +19,11 @@ Re-run them all at every Cyrius pin bump, and move them to `scripts/probes/` at 
 | `p5_derive.cyr` | `#derive(Serialize)` on nested `Complex`, `JonesVector`, `Vec<Complex>`; scanner decode | `{"ex":{"re":0.1,"im":1e-12},"ey":{"re":1.0,"im":-299792458.0}}`, `{"q_sca":8.8541878128e-12,"q_ext":100000000000000000000.0,"a":[{"re":1.5,"im":-0.0}]}`, `0x3da37876f1206634`, `0x8000000000000000`. With `T_from_json(bayan_json_parse(..))` instead: `vec: index out of bounds` |
 | `p5b_fmt.cyr` | bayan's number notation at the edges (compare `p5_serde_ref.rs`: serde_json writes `1e+16`, `1.2345678901234568e+17`, `1e-6`, `1e-5`) | `10000000000000000.0 1000000000000000.0 123456789012345680.0 0.000001 1e-7 5e-324 1.7976931348623157e+308 0.00001 0.0001` |
 | `p6_misc.cyr` | a decimal `const`; ⚠ captured `f64` as a left operand (`a * 2.0`); `Result` with an f64 payload and `?`; a declared `(f64, f64)` multi-return | `0x3da37876f1206634 0x4008000000000000 0x4008000000000000 0x0 1 0x3ff8000000000000 0 3 0x4023800000000000 0x402d400000000000`: the fourth value, `0x0`, is the trap |
+| `p7_grid_memory.cyr` | a 53³ grid with CPML slabs (19.2 MB), 200 alloc/free cycles, `fl_calloc` per array vs one mmap | `failures 0 \| bump growth 0 B \| fl_calloc ≈ 8,700 us/grid \| one mmap ≈ 850 us/grid`; peak RSS ≈ one grid (sample `VmHWM` from outside) |
+| `p8_hot_loops.cyr` | complex struct values vs f64 locals: the Mie recurrence and an NF2FF-style accumulation | equal digests per pair (`98b386cd5b5d633`, `8a6749a2e812e8f1`); structs ≈ 2.2× and 2.7× slower |
+| `p9_callback.cyr` | a field callback per step: direct, `callptr` on `&fn`, a capturing closure | equal digests (`3fff85b424670a80`); ≈ 50, 50 and 62 ns/step |
+| `p10_fdtd_kernel.cyr` + `p10_kernel_ref.rs` | `row_diff` four ways (index, pointer step, `f64v_*`, unrolled) against Rust's | every Cyrius digest `bb2c6a49c09f2a7b`, Rust's the same; `f64v_*` ≈ 1.3 ns/cell, the scalar forms ≈ 5–6, Rust ≈ 0.8 |
+| `p11_rust_sum.rs` | Rust's float `Sum` | `sum([]) 8000000000000000` (−0.0), a left fold |
+| `p12_text.cyr` + `p12_text_gen.py` + `p12_check.py` | `f64_parse_n` vs Python's (Rust's) parse, bayan's digits vs the shortest | `120018 lines \| parse mismatches vs float(): 0 \| bayan round-trip failures: 0 \| bayan longer than repr: 104, shorter: 0` |
+| `p13_cell_step.cyr` | one scalar 3D Yee cell-step, 30³ | ≈ 1,280 us/step (≈ 47 ns per cell-step; Rust 298 us/step) |
+| `p14_last_error.cyr` | the per-thread last-error record on two threads | `threads ok: 2 of 2 \| main's own record code 33` |

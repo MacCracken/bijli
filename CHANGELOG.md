@@ -34,6 +34,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
   rows measured until `src/crmath.cyr`); and the port tooling, run in CI: surface parity, the
   Rust-test ledger (`docs/development/rust-test-ledger.md`), the benchmark record
   (`docs/benchmarks-rust-v-cyrius.md`) and the doc-example check.
+- **Cyrius port, M0 Part 3 — M0 done**: the cross-target baselines (`docs/development/port-parity.md`): the corpus
+  replayed on x86_64 ELF, x86_64 PE and aarch64, with per-function digests in the harness (20 of 25 functions
+  bit-identical on all three), the measured class-C histograms, and the size of M1's corrected oracle (125 rows where
+  glibc misrounds). Probes p7–p14 in `scripts/probes/` (the language-review probes moved there): grid memory, struct
+  vs f64 hot loops, callbacks, the FDTD kernel (bit-identical to Rust's), Rust's `.sum()`, Touchstone text, the
+  cell-step cost and the last-error record.
 
 ## [1.2.0] — 2026-11-11
 

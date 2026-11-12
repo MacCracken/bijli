@@ -44,7 +44,7 @@ and nothing in it is edited.
     profile) and the `WgpuBackend` scaffold included;
   - only the three functions bijli's own roadmap deprecates are dropped;
   - nothing is deferred for want of a language feature. Plan §2 reviews Cyrius 6.7.18 against
-    every Rust construct bijli uses, with probe programs in `docs/development/port-probes/`.
+    every Rust construct bijli uses, with probe programs in `scripts/probes/`.
 - **Parity classes:**
   - A: exact;
   - B: arithmetic;

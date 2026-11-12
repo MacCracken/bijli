@@ -1,0 +1,54 @@
+# Probe 8 (port plan §6 step 9): the last-error record (ADR 0002 row 4) on two threads. Each thread keeps its
+# error payload behind a thread_local slot; two workers set different payloads at the same time and each reads
+# back only its own.
+#   cyrius build scripts/probes/p14_last_error.cyr build/p14 && ./build/p14
+include "lib/syscalls.cyr"
+include "lib/string.cyr"
+include "lib/alloc.cyr"
+include "lib/atomic.cyr"
+include "lib/fmt.cyr"
+include "lib/io.cyr"
+include "lib/thread_local.cyr"
+include "lib/thread.cyr"
+
+var _BJ_ERR_SLOT = 0 - 1;
+
+# The calling thread's record: code, two integer payload words, one f64 payload (alloc on first use).
+fn _bj_err_rec(): i64 {
+    var p = thread_local_get(_BJ_ERR_SLOT);
+    if (p == 0) { p = alloc(32); thread_local_set(_BJ_ERR_SLOT, p); }
+    return p;
+}
+fn _bj_err_set(code, a, b, v) {
+    var p = _bj_err_rec();
+    store64(p, code); store64(p + 8, a); store64(p + 16, b); store64(p + 24, v);
+    return 0;
+}
+
+var _ok = 0;
+fn worker(arg): i64 {
+    var mine = arg;
+    for (var i = 0; i < 100000; i = i + 1) {
+        _bj_err_set(mine, i, mine * 7, i ^ mine);
+        var p = _bj_err_rec();
+        if (load64(p) != mine || load64(p + 8) != i || load64(p + 16) != mine * 7) { return 1; }
+    }
+    var prev = atomic_fetch_add(&_ok, 1);
+    return 0;
+}
+
+fn main(): i64 {
+    alloc_init();
+    if (thread_local_init() != 1) { println("no TLS"); return 1; }
+    _BJ_ERR_SLOT = thread_local_alloc();
+    var t1 = thread_create(&worker, 11);
+    var t2 = thread_create(&worker, 22);
+    thread_join(t1);
+    thread_join(t2);
+    _bj_err_set(33, 1, 2, 3);
+    var p = _bj_err_rec();
+    print("threads ok: ", 12); fmt_int(_ok); print(" of 2 | main's own record code ", 31); fmt_int(load64(p)); println("");
+    return 0;
+}
+var r = main();
+sys_exit_group(r);

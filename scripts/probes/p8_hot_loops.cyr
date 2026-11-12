@@ -1,0 +1,118 @@
+# Probe 2 (port plan §6 step 9): complex struct values against f64 locals in bijli's two complex hot loops — the
+# Mie downward log-derivative recurrence D_{n-1} = n/z − 1/(D_n + n/z) and an NF2FF-style accumulation
+# acc += f·e^{jφ} — each written both ways, checked bit-identical, and timed.
+#   cyrius build scripts/probes/p8_hot_loops.cyr build/p8 && ./build/p8
+include "lib/syscalls.cyr"
+include "lib/string.cyr"
+include "lib/alloc.cyr"
+include "lib/fmt.cyr"
+include "lib/io.cyr"
+include "lib/math.cyr"
+include "lib/bench.cyr"
+
+struct C { re: f64; im: f64; }
+fn C_add(a: C, b: C): C { var z: C; z.re = a.re + b.re; z.im = a.im + b.im; return z; }
+fn C_sub(a: C, b: C): C { var z: C; z.re = a.re - b.re; z.im = a.im - b.im; return z; }
+fn C_mul(a: C, b: C): C { var z: C; z.re = a.re * b.re - a.im * b.im; z.im = a.re * b.im + a.im * b.re; return z; }
+fn C_div(a: C, b: C): C {
+    var d: f64 = b.re * b.re + b.im * b.im;
+    var z: C; z.re = (a.re * b.re + a.im * b.im) / d; z.im = (a.im * b.re - a.re * b.im) / d; return z;
+}
+
+var STEPS = 2000000;
+
+# The bits of an f64 as an integer word (an untyped parameter).
+fn _bits(x): i64 { return x; }
+
+fn mie_struct(): i64 {
+    var z = C { 3.25, -0.125 };
+    var dn = C { 0.0, 0.0 };
+    var one = C { 1.0, 0.0 };
+    for (var k = 0; k < STEPS; k = k + 1) {
+        var nn: f64 = f64_from(1 + k % 200);
+        var nr = C { nn, 0.0 };
+        var noz = nr / z;
+        var s = dn + noz;
+        var inv = one / s;
+        dn = noz - inv;
+    }
+    var h = _bits(dn.re) * 31 + _bits(dn.im);
+    return h;
+}
+
+fn mie_locals(): i64 {
+    var zr: f64 = 3.25; var zi: f64 = -0.125;
+    var dr: f64 = 0.0; var di: f64 = 0.0;
+    for (var k = 0; k < STEPS; k = k + 1) {
+        var nn: f64 = f64_from(1 + k % 200);
+        var d0: f64 = zr * zr + zi * zi;
+        var qr: f64 = (nn * zr + 0.0 * zi) / d0;
+        var qi: f64 = (0.0 * zr - nn * zi) / d0;
+        var sr: f64 = dr + qr; var si: f64 = di + qi;
+        var d1: f64 = sr * sr + si * si;
+        var ir: f64 = (1.0 * sr + 0.0 * si) / d1;
+        var ii: f64 = (0.0 * sr - 1.0 * si) / d1;
+        dr = qr - ir; di = qi - ii;
+    }
+    var h = _bits(dr) * 31 + _bits(di);
+    return h;
+}
+
+fn acc_struct(): i64 {
+    var acc = C { 0.0, 0.0 };
+    var w = C { 0.9999998, 0.0006 };
+    var ph = C { 1.0, 0.0 };
+    for (var k = 0; k < STEPS; k = k + 1) {
+        var fv: f64 = f64_from(k % 97) * 0.01;
+        var f = C { fv, 0.0 };
+        var t = f * ph;
+        acc = acc + t;
+        ph = ph * w;
+    }
+    var h = _bits(acc.re) * 31 + _bits(acc.im);
+    return h;
+}
+
+fn acc_locals(): i64 {
+    var ar: f64 = 0.0; var ai: f64 = 0.0;
+    var wr: f64 = 0.9999998; var wi: f64 = 0.0006;
+    var pr: f64 = 1.0; var pi: f64 = 0.0;
+    for (var k = 0; k < STEPS; k = k + 1) {
+        var fv: f64 = f64_from(k % 97) * 0.01;
+        var tr: f64 = fv * pr - 0.0 * pi;
+        var ti: f64 = fv * pi + 0.0 * pr;
+        ar = ar + tr; ai = ai + ti;
+        var nr: f64 = pr * wr - pi * wi;
+        var ni: f64 = pr * wi + pi * wr;
+        pr = nr; pi = ni;
+    }
+    var h = _bits(ar) * 31 + _bits(ai);
+    return h;
+}
+
+fn timed(name, which) {
+    var t0 = now_ns();
+    var h = 0;
+    if (which == 1) { h = mie_struct(); }
+    if (which == 2) { h = mie_locals(); }
+    if (which == 3) { h = acc_struct(); }
+    if (which == 4) { h = acc_locals(); }
+    var ns = (now_ns() - t0) * 1000 / STEPS;
+    print(name, strlen(name));
+    fmt_hex(h);
+    print("  ", 2);
+    fmt_int(ns);
+    println(" ps/step");
+    return 0;
+}
+
+fn main(): i64 {
+    alloc_init();
+    timed("mie struct   ", 1);
+    timed("mie locals   ", 2);
+    timed("accum struct ", 3);
+    timed("accum locals ", 4);
+    return 0;
+}
+var r = main();
+sys_exit_group(r);

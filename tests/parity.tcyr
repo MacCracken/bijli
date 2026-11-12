@@ -35,6 +35,60 @@ fn _par_error_name(code): i64 {
     return "Unknown";
 }
 
+# ── cross-target digests (M0 step 8) ────────────────────────────────────────────────
+# A 64-bit FNV-1a fold of every output word the port returns, per function, in row order. Run on
+# x86_64 ELF, x86_64 PE and aarch64: equal digests mean bit-identical results on every row, which
+# is what ADR 0002 row 6 promises. Histograms alone can't show that. One slot per golden function
+# (_PAR_DG_NAMES, in order), then one per shadow.
+var _PAR_DG_N = 32;
+var _par_dg: i64[32];
+var _par_dg_used = 0;
+var _PAR_DG_NAMES = 0;
+
+fn _par_dg_init() {
+    for (var k = 0; k < _PAR_DG_N; k = k + 1) { _par_dg[k] = 0xcbf29ce484222325; }
+    _par_dg_used = 0;
+    return 0;
+}
+
+# The digest slot of (function), registered on first sight in a module's row order; -1 when the
+# table is full.
+var _par_dg_fp: i64[32];
+var _par_dg_fl: i64[32];
+fn _par_dg_slot(fp, fl): i64 {
+    for (var k = 0; k < _par_dg_used; k = k + 1) {
+        if (_par_dg_fl[k] == fl && memeq(_par_dg_fp[k], fp, fl) == 1) { return k; }
+    }
+    if (_par_dg_used >= _PAR_DG_N) { return 0 - 1; }
+    _par_dg_fp[_par_dg_used] = fp;
+    _par_dg_fl[_par_dg_used] = fl;
+    _par_dg_used = _par_dg_used + 1;
+    return _par_dg_used - 1;
+}
+
+# Folds the got list into digest `slot`.
+fn _par_dg_fold(slot) {
+    if (slot < 0) { return 0; }
+    var h = _par_dg[slot];
+    for (var k = 0; k < _par_got_n; k = k + 1) {
+        h = (h ^ load64(_par_got_v + k * 8)) * 0x100000001b3;
+    }
+    _par_dg[slot] = h;
+    return 0;
+}
+
+# Prints every registered digest.
+fn _par_dg_print_all() {
+    for (var k = 0; k < _par_dg_used; k = k + 1) {
+        print("  digest ", 9);
+        _par_print_pad(_par_dg_fp[k], _par_dg_fl[k], 34);
+        print(" 0x", 3);
+        fmt_hex(_par_dg[k]);
+        println("");
+    }
+    return 0;
+}
+
 # ── dispatch ────────────────────────────────────────────────────────────────────────
 # Each module's dispatcher fills the got list for one row. It returns 1 when it handled the
 # function, 0 when the function is pending (not ported), or -1 when the inputs are unusable (a
@@ -130,6 +184,8 @@ fn _par_dispatch(mp, ml, fp, fl): i64 {
 #   x86_64): the cross-target fallback before src/crmath.cyr;
 # - the stdlib min / max, to show where their NaN semantics differ from Rust's.
 fn _par_shadows(mp, ml, fp, fl, cls) {
+    # The port's own outputs, still in the got list after dispatch: fold them first.
+    if (_par_got_n > 0) { _par_dg_fold(_par_dg_slot(fp, fl)); }
     if (_par_eq(mp, ml, "math") != 1) { return 0; }
     var x: f64 = _par_in(0);
     if (_par_eq(fp, fl, "f64::exp") == 1) {
@@ -188,8 +244,10 @@ fn _par_accepted_quiet(adr): i64 {
     return 0;
 }
 
-# Module-specific summary lines after a module's report. None yet.
+# Module-specific summary lines after a module's report: each function's cross-target digest.
 fn _par_module_done(mp, ml) {
+    _par_dg_print_all();
+    _par_dg_init();
     return 0;
 }
 
@@ -199,5 +257,6 @@ fn _par_skip(mp, ml): i64 {
     return 0;
 }
 
+_par_dg_init();
 var exit_code = _par_main();
 sys_exit_group(exit_code);

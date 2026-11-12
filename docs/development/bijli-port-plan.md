@@ -141,7 +141,7 @@
 
 Every scope and mapping decision below rests on this section. Each row was read in
 `cyrius/docs/guides/cyrius-guide.md` or `docs/stdlib-reference.md`, and the ✅/⚠ rows were run as
-programs on the installed 6.7.18 compiler (`docs/development/port-probes/`, 2026-11-11). Numbers
+programs on the installed 6.7.18 compiler (`scripts/probes/`, 2026-11-11). Numbers
 were checked bit for bit against Python's IEEE arithmetic. **The sibling ports' limitation lists
 were not taken on trust**: two of their claims are refined here (marked "corrects").
 
@@ -546,7 +546,7 @@ plan commit landed.
    - The new correctly rounded primitives (asin, tan) are gated at 0 ulp against MPFR on
      ≥ 10⁶ pairs, as impetus measured its pow and atan2. ganita's `ganita_f64_asin` /
      `ganita_f64_tan` are measured beside them, as the fallback's cost.
-9. **Probes.** The 2026-11-11 language review (§2, `docs/development/port-probes/`) has
+9. **Probes.** The 2026-11-11 language review (§2, `scripts/probes/`) has
    already answered six. Move them to `scripts/probes/` and re-run them at the M0 pin:
    - ✅ complex by value with operators, arrays and pointer stepping (p1);
    - ✅ traits, a bounded generic struct and `dyn` (p2);
@@ -555,7 +555,8 @@ plan commit landed.
    - ✅/⚠ `#derive(Serialize)` against serde_json (p5, p5b);
    - ✅ `Result` with an f64 payload, `(f64, f64)` multi-returns, decimal `const`s (p6).
 
-   Still to answer before M1 writes code:
+   ✅ **Answered 2026-11-11** (M0 Part 3, [`port-parity.md`](port-parity.md) §4, probes p7–p14). The
+   questions were:
    1. **Grid memory at full size.** p4 with real `BjFdtd3d` grids (CPML and dispersive arrays
       on), and freelist against a single mmap per grid for 53³.
    2. **Struct values against `f64` locals in the hot loops**: a Mie recurrence step and an
@@ -746,17 +747,17 @@ that class B/C rows can be compared:
 | `FieldVector` (`Add`, `Sub`, `Mul<f64>`, `Neg`, `*Assign`, `f64 * v`) | `BjFieldVector` struct value (24 B) with operator overloads and explicit `_scale_left` |
 | `Complex` | `BjComplex` struct value (16 B, two registers), §9.2 |
 | `JonesVector`, `JonesMatrix`, `StokesVector`, `MuellerMatrix` | struct values. Matrices are flat fields (`m00 … m33`) because struct fields can't be fixed arrays |
-| `Vec<f64>` grid fields | `*f64` buffers from `fl_calloc`, released by `fl_free` in `Bj*_free` (§2, p4); accessors return pointer + length; kernels index `p[i]` |
+| `Vec<f64>` grid fields | **one mmap per grid**, sliced into its `*f64` arrays (zeroed by the kernel; 10× faster than `fl_calloc` per array, p7), unmapped by `Bj*_free`; accessors return pointer + length; typed through `_bj_alloc_f64(n): *f64` (an untyped word into a `*T` warns, a typed return does not) |
 | `Vec<Complex>` (Mie `a`/`b`), `Vec<Vec<Complex>>` (`SMatrix`) | one stride buffer of `BjComplex` with n (or n × n × freq) and an index helper |
 | `Result<T, BijliError>` | value-form `Result` + `BJ_ERR_*` code, with `?` (p6); the error's payload in the last-error record. A result over one word (complex, field vector) is the code plus an out-pointer. No `Result` through `callptr` |
 | `Option<f64>` (`half_power_offset`), tuples (`(f64, f64)` stub match, `(f64, f64, f64)` CPML coefficients) | `Option` (value form) for one word; a declared `: (f64, f64)` / `: (f64, f64, f64)` multi-return (p6) for the tuples; an out-struct past three values |
 | `impl Fn` / generic `F: Fn` | a closure (or `&fn`) called with `callptr`: `\|pos, out\| -> status`, its float captures rebound as typed locals (§2, p3/p3b/p6) |
 | `ComputeBackend` trait + `GpuFdtd2d<B>` | `trait BjComputeBackend` with `impl BjComputeBackend for BjCpuBackend`; `struct BjGpuFdtd2d<B: BjComputeBackend>` (p2). The associated `Buffer` type is an opaque handle word. `BjWgpuBackend` is Rust's scaffold, ported 1:1 |
-| `row_diff::<ADD>` / `row_curl::<ADD>` | two functions each (`_add`, `_sub`), since there are no const generics, in probe 4's fastest bit-exact form |
+| `row_diff::<ADD>` / `row_curl::<ADD>` | two functions each (`_add`, `_sub`), since there are no const generics, on `f64v_*` with a scalar tail for the open lane-multiple bug: bit-identical to Rust and 4.5× faster than the scalar forms (p10) |
 | `try_filled` (`try_reserve`) | `fl_calloc` returns 0 → `BJ_ERR_ALLOCATION` (a new code, appended) |
 | `checked_mul` in `grid_cells` | `overflow.cyr` |
 | `tracing::{warn, error, debug}` (67 sites) | `_bj_warn` / `_bj_error` / `_bj_debug` over sakshi, behind a level |
-| iterator chains, `.sum()`, `.zip()`, `.windows()` | loops in Rust's order. `.sum()` starts from −0.0 (probe 5) |
+| iterator chains, `.sum()`, `.zip()`, `.windows()` | loops in Rust's order. `.sum()` is a left fold from −0.0 (p11) |
 | `#[non_exhaustive]` / `#[must_use]` | append-only enum values / `#must_use` |
 | `#[derive(Serialize, Deserialize)]` (36 types) | `#derive(Serialize)` writers; readers per D5 |
 | `pub` / private | `private` file + `public` items (§2) |
@@ -766,7 +767,10 @@ that class B/C rows can be compared:
 - An **undeclared** multi-return (`return (a, b);` with no `: (T1, T2)`) gives untyped bindings,
   so `-x` on one is integer negation. Declare `: (f64, f64)` and the bindings are f64 (p6; this
   corrects the siblings' general claim). Arity is 2 or 3; four values don't parse.
-- A captured `f64` is untyped inside a closure (§2, p6): rebind it.
+- A captured `f64` is untyped inside a closure (§2, p6): rebind it. A closure's parameters are untyped words:
+  bind them to typed pointers through a typed-return helper (`_bj_as_vec(p): *BjFieldVector`), since a direct
+  `var q: *T = param;` warns (p9).
+- `var x = f()` with `fn f(): *f64` leaves `x` untyped: write `var x: *f64 = f();` (p13).
 - A `var u = x` copy of an f64 is f64-typed, which can turn a NaN self-compare into a trap.
 - `&c.field` is refused.
 - `#inline` takes at most two parameters (p2: the compiler says so and ignores it).
@@ -789,8 +793,10 @@ that class B/C rows can be compared:
 ### 9.5 Memory
 
 Settled by the language review (§2, p4); M0 probe 1 confirms it at full grid size.
-- **Grid lifetime**: field, coefficient, Ψ and ADE arrays come from `fl_calloc` (blocks over
-  4 KB are their own mmap) and are released by `fl_free` in `Bj*_free`.
+- **Grid lifetime**: a grid's field, coefficient, material, Ψ and ADE arrays are one anonymous mmap,
+  sliced (p7: flat over 200 cycles of a 19.2 MB grid; 0.85 ms per grid against 8.7 ms for
+  `fl_calloc` per array, whose zeroing is a byte loop), released by one munmap in `Bj*_free`.
+  Smaller per-call buffers use freelist.
 - **Call lifetime**: NF2FF accumulators, eigenmode spectra and Touchstone buffers are allocated
   per call, and their caller frees them. Field-line polylines go into a caller-owned growable
   buffer.
@@ -870,7 +876,7 @@ Each one gets an issue in the owning repo, with the probe or benchmark that show
 | Milestone | Status | Golden rows | Reference tests | Benches | Notes |
 |---|---|---|---|---|---|
 | P Prep | ✅ | | | 80 (Rust, 2026-11-12T03:15, under load) | D1–D5 answered; 1.2.0 tagged and green; P3, P4, P5 done (2026-11-11); P6 is done at the scaffold; the commit remains |
-| M0 Initialize | ◐ | 34,746 (constants 12, math 34,734): 15,507 ok, 18,006 measured, 1,233 pending | | 80 Rust (pending twins) | Parts 1, 2a and 2b (steps 1–7) done 2026-11-11. Part 3 (steps 8–9: baselines on three targets, the remaining probes) next |
+| M0 Initialize | ✅ | 34,746 (constants 12, math 34,734): 15,507 ok, 0 failed, 18,006 measured, 1,233 pending, on all three targets | | 80 Rust (pending twins) | done 2026-11-11: Parts 1–3. Baselines and probes in `port-parity.md` |
 | M1 Foundation | ☐ | | | | |
 | M2 Media, waves, circuits, relativity | ☐ | | | | |
 | M3 Optics | ☐ | | | | |

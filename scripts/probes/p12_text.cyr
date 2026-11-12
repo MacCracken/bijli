@@ -1,0 +1,40 @@
+# Probe 6 (port plan §6 step 9): Touchstone text. (1) f64_parse_n on every line of build/p12_in.txt, printed as
+# hex for p12_check.py to compare with Python's correctly rounded float() (what Rust's str::parse::<f64> gives).
+# (2) bayan_f64_to_json on each parsed value: its digits must read back to the same bits (round trip) and be as
+# short as Python's repr (shortest round-trip), so it can back Rust's {:e} writer.
+#   python3 -I -B scripts/probes/p12_text_gen.py build/p12_in.txt
+#   cyrius build scripts/probes/p12_text.cyr build/p12 && ./build/p12 > build/p12_out.txt
+#   python3 -I -B scripts/probes/p12_check.py build/p12_in.txt build/p12_out.txt
+include "lib/syscalls.cyr"
+include "lib/string.cyr"
+include "lib/alloc.cyr"
+include "lib/str.cyr"
+include "lib/fmt.cyr"
+include "lib/io.cyr"
+include "lib/vec.cyr"
+include "lib/math.cyr"
+include "lib/bayan.cyr"
+
+fn main(): i64 {
+    alloc_init();
+    var lenw: i64[1];
+    var buf = file_read_whole("build/p12_in.txt", &lenw);
+    if (buf == 0) { println("cannot read build/p12_in.txt"); return 1; }
+    var len = lenw[0];
+    var out: u8[64];
+    var at = 0;
+    while (at < len) {
+        var end = at;
+        while (end < len && load8(buf + end) != 10) { end = end + 1; }
+        var bits = f64_parse_n(buf + at, end - at);
+        fmt_hex0x(bits);
+        print(" ", 1);
+        var n = bayan_f64_to_json(bits, &out);
+        print(&out, n);
+        println("");
+        at = end + 1;
+    }
+    return 0;
+}
+var r = main();
+sys_exit_group(r);

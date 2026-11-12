@@ -1,0 +1,125 @@
+# Probe 4 (port plan §6 step 9): the FDTD row kernel `dst[i] ±= k[i]·(a[i] − b[i])` (bijli 1.2.0's row_diff)
+# written four ways, each checked bit for bit against the Rust kernel (p10_kernel_ref.rs prints its digest) and
+# timed. Same seeded rows, REPS alternating ADD / SUB passes, then the FNV-1a digest of dst.
+#   cyrius build scripts/probes/p10_fdtd_kernel.cyr build/p10 && ./build/p10
+include "lib/syscalls.cyr"
+include "lib/string.cyr"
+include "lib/alloc.cyr"
+include "lib/fmt.cyr"
+include "lib/io.cyr"
+include "lib/mmap.cyr"
+include "lib/freelist.cyr"
+include "lib/bench.cyr"
+
+var N = 10000;
+var REPS = 100;
+var _seed = 12345;
+
+# The Rust probe's LCG: the top 53 bits as a fraction, scaled to [-1, 1).
+fn lcg(): f64 {
+    _seed = _seed * 6364136223846793005 + 1442695040888963407;
+    var top = (_seed >> 11) & 0x1FFFFFFFFFFFFF;
+    var u: f64 = f64_from(top) * (1.0 / 9007199254740992.0);
+    var r: f64 = u * 2.0 - 1.0;
+    return r;
+}
+
+fn fill(p: *f64, n, scale: f64) {
+    for (var i = 0; i < n; i = i + 1) { var v: f64 = lcg(); p[i] = v * scale; }
+    return 0;
+}
+
+fn digest(p: *f64, n): i64 {
+    var h = 0xcbf29ce484222325;
+    for (var i = 0; i < n; i = i + 1) { var w = load64(p + i); h = (h ^ w) * 0x100000001b3; }
+    return h;
+}
+
+# (1) *f64 subscripts.
+fn diff_index(d: *f64, k: *f64, a: *f64, b: *f64, n, add) {
+    for (var i = 0; i < n; i = i + 1) {
+        var v: f64 = k[i] * (a[i] - b[i]);
+        if (add == 1) { d[i] = d[i] + v; } else { d[i] = d[i] - v; }
+    }
+    return 0;
+}
+
+# (2) pointers stepped one element at a time.
+fn diff_step(d: *f64, k: *f64, a: *f64, b: *f64, n, add) {
+    var end: *f64 = d + n;
+    while (d < end) {
+        var kv: f64 = load64(k);
+        var av: f64 = load64(a);
+        var bv: f64 = load64(b);
+        var dv: f64 = load64(d);
+        var v: f64 = kv * (av - bv);
+        if (add == 1) { dv = dv + v; } else { dv = dv - v; }
+        store64(d, dv);
+        d = d + 1; k = k + 1; a = a + 1; b = b + 1;
+    }
+    return 0;
+}
+
+# (3) the packed builtins through a scratch row (n a multiple of 4: the open scalar-tail issue).
+fn diff_simd(d: *f64, k: *f64, a: *f64, b: *f64, n, add, tmp: *f64) {
+    f64v_sub(tmp, a, b, n);
+    f64v_mul(tmp, k, tmp, n);
+    if (add == 1) { f64v_add(d, d, tmp, n); } else { f64v_sub(d, d, tmp, n); }
+    return 0;
+}
+
+# (4) unrolled by 4 (n a multiple of 4).
+fn diff_unroll(d: *f64, k: *f64, a: *f64, b: *f64, n, add) {
+    for (var i = 0; i < n; i = i + 4) {
+        var v0: f64 = k[i] * (a[i] - b[i]);
+        var v1: f64 = k[i + 1] * (a[i + 1] - b[i + 1]);
+        var v2: f64 = k[i + 2] * (a[i + 2] - b[i + 2]);
+        var v3: f64 = k[i + 3] * (a[i + 3] - b[i + 3]);
+        if (add == 1) {
+            d[i] = d[i] + v0; d[i + 1] = d[i + 1] + v1; d[i + 2] = d[i + 2] + v2; d[i + 3] = d[i + 3] + v3;
+        } else {
+            d[i] = d[i] - v0; d[i + 1] = d[i + 1] - v1; d[i + 2] = d[i + 2] - v2; d[i + 3] = d[i + 3] - v3;
+        }
+    }
+    return 0;
+}
+
+fn run(which): i64 {
+    _seed = 12345;
+    var k: *f64 = fl_alloc(N * 8);
+    var a: *f64 = fl_alloc(N * 8);
+    var b: *f64 = fl_alloc(N * 8);
+    var d: *f64 = fl_alloc(N * 8);
+    var tmp: *f64 = fl_alloc(N * 8);
+    fill(k, N, 0.5); fill(a, N, 1.0); fill(b, N, 1.0); fill(d, N, 1.0);
+    var t0 = now_ns();
+    for (var r = 0; r < REPS; r = r + 1) {
+        var add = 0;
+        var x: *f64 = b;
+        var y: *f64 = a;
+        if (r % 2 == 0) { add = 1; x = a; y = b; }
+        if (which == 1) { diff_index(d, k, x, y, N, add); }
+        if (which == 2) { diff_step(d, k, x, y, N, add); }
+        if (which == 3) { diff_simd(d, k, x, y, N, add, tmp); }
+        if (which == 4) { diff_unroll(d, k, x, y, N, add); }
+    }
+    var ps = (now_ns() - t0) * 1000 / (REPS * N);
+    fmt_hex(digest(d, N));
+    print("  ", 2);
+    fmt_int(ps);
+    println(" ps/cell");
+    fl_free(k); fl_free(a); fl_free(b); fl_free(d); fl_free(tmp);
+    return 0;
+}
+
+fn main(): i64 {
+    alloc_init();
+    fl_init();
+    print("index   ", 8); run(1);
+    print("step    ", 8); run(2);
+    print("simd    ", 8); run(3);
+    print("unroll  ", 8); run(4);
+    return 0;
+}
+var r = main();
+sys_exit_group(r);
