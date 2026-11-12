@@ -732,14 +732,14 @@ that class B/C rows can be compared:
 | Rust hisab 1.4.0 | Formula (keep exactly) | Note |
 |---|---|---|
 | `abs` / bijli `norm` | `sqrt(re·re + im·im)` | no hypot rescue; Cyrius hisab's `cx_abs` has one, so it would differ. In range: Rust's bits. Beyond about 2^±511: a power-of-two prescale, as an ADR 0002 row (§0.1) |
-| `norm_sq`, `conj`, `+ − ×`, `× f64`, `neg` | the textbook forms, Rust's order | class B |
+| `norm_sq`, `conj`, `+ − ×`, `× f64`, `neg` | the textbook forms, Rust's order | class A (M1 part 2c: the same IEEE operations in the same order, so bit for bit) |
 | `/` | `((a·c + b·d)/den, (b·c − a·d)/den)`, `den = c² + d²` | naive. bijli's own Smith `cdiv`/`crecip` (rf) and `complex_div` (scattering) are ported as written too |
-| `/ f64`, `inv` | componentwise | class B |
+| `/ f64`, `inv` | componentwise | class A |
 | `arg` | `atan2(im, re)` | class C |
 | `from_polar(r, θ)` | `(r·cos θ, r·sin θ)` | class C |
 | `exp` | `e^re · (cos im, sin im)` | class C |
 | `sqrt` | `from_polar(sqrt(abs), arg/2)` | class C. Not the C99 branch of Cyrius hisab's `cx_sqrt` |
-| `ln`, `powf`, `sin`, `cos`, `is_zero` | as written | ported only if a non-test call exists. Today there is none, except `sqrt` (rf.rs:145) |
+| `ln`, `powf`, `sin`, `cos`, `is_zero` | as written | ~~ported only if a non-test call exists~~ **all ported** (M1 part 2c): bijli 1.2.0 re-exports `Complex` (`pub use hisab::num::Complex` in polarization.rs), so its whole surface is bijli's API. `ln` on kimiya's correctly rounded ln, `powf` and `is_zero` in 2c; `sin` and `cos` need correctly rounded `sinh` and `cosh`, new primitives, in M1 part 2d. Display (`"{re}+{im}i"`) through src/fmtf.cyr |
 
 ### 9.3 Types and idioms
 
@@ -878,7 +878,7 @@ Each one gets an issue in the owning repo, with the probe or benchmark that show
 |---|---|---|---|---|---|
 | P Prep | ✅ | | | 80 (Rust, 2026-11-12T03:15, under load) | D1–D5 answered; 1.2.0 tagged and green; P3, P4, P5 done (2026-11-11); P6 is done at the scaffold; the commit remains |
 | M0 Initialize | ✅ | 34,746 (constants 12, math 34,734): 15,507 ok, 0 failed, 18,006 measured, 1,233 pending, on all three targets | | 80 Rust (pending twins) | done 2026-11-11: Parts 1–3. Baselines and probes in `port-parity.md` |
-| M1 Foundation | ◐ | 4 modules, 73,832 ok, 125 accepted (ADR 01), 0 measured | error.rs 10/10, logging.rs 1/1 | 0 of 80 twinned (M1's with part 3); 4 Cyrius-only | Part 1 (the math) done 2026-11-11: 1a (crmath, corrected oracle, cr_verify), 1b (acos, log10, asin), 1c (tan). Part 2a (fmtf, log, error) done 2026-11-11; 2c (complex) and part 3 (field, maxwell, charge) next |
+| M1 Foundation | ◐ | 5 modules, 102,606 ok, 130 accepted (ADR 01), 0 measured | error.rs 10/10, logging.rs 1/1 | 0 of 80 twinned (M1's with part 3); 6 Cyrius-only | Part 1 (the math) done 2026-11-11: 1a (crmath, corrected oracle, cr_verify), 1b (acos, log10, asin), 1c (tan). Part 2a (fmtf, log, error) and 2c (complex, ln, digest v2) done 2026-11-11; 2d (sinh, cosh, complex sin and cos), then part 3 (field, maxwell, charge) next |
 | M2 Media, waves, circuits, relativity | ☐ | | | | |
 | M3 Optics | ☐ | | | | |
 | M4 RF | ☐ | | | | |

@@ -209,6 +209,13 @@ fn _bj_asin(x: f64): f64 {
     return r;
 }
 
+# ln x, correctly rounded (src/crmath_k.cyr, kimiya's). Stands for `f64::ln`.
+#must_use
+fn _bj_ln(x: f64): f64 {
+    var r: f64 = _bj_k_cr_ln(x);
+    return r;
+}
+
 # log10 x, correctly rounded (src/crmath_k.cyr, kimiya's): log10(10^k) = k exactly for k = 0 … 22. Stands for
 # `f64::log10`.
 #must_use

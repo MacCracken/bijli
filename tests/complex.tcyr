@@ -1,0 +1,114 @@
+# complex.tcyr — src/complex.cyr: BjComplex by value.
+#
+# tests/golden/complex.tsv pins every operation against Rust hisab 1.4.0's Complex over its grids (class A bit for
+# bit, class C at 0 ulp against the corrected oracle). These check what the corpus doesn't say directly: a
+# BjComplex is a value (copies are independent, operators equal their fns inside chained expressions), hisab's
+# formulas keep their IEEE behaviour at the specials (no hypot rescue, the textbook division), and the Display
+# text's edge cases. Every expected word is Python's IEEE arithmetic on hisab's formula.
+
+include "tests/lib.cyr"
+
+# 1 when a and b have the same bits.
+fn same(a: f64, b: f64): i64 {
+    if (_bj_bits(a) == _bj_bits(b)) { return 1; }
+    return 0;
+}
+
+# 1 when z has exactly the parts (re, im).
+fn is_c(z: BjComplex, re: f64, im: f64): i64 {
+    var zr: f64 = z.re;
+    var zi: f64 = z.im;
+    if (same(zr, re) == 1 && same(zi, im) == 1) { return 1; }
+    return 0;
+}
+
+# 1 when z's Display text is the C string want.
+fn shows(z: BjComplex, want): i64 {
+    var buf[800];
+    var tx[24];
+    _bj_tx_init(&tx, &buf, 800);
+    z.display(&tx);
+    var n = strlen(want);
+    if (_bj_tx_len(&tx) != n) { return 0; }
+    return memeq(_bj_tx_ptr(&tx), want, n);
+}
+
+# Runs the complex tests.
+fn main() {
+    alloc_init();
+    var zero: f64 = 0.0;
+    var nan: f64 = zero / zero;
+    var inf: f64 = 1.0 / zero;
+    var nzero: f64 = -zero;
+
+    test_group("value_semantics");
+    var a = BjComplex_new(1.5, -2.25);
+    var b = a;
+    b.re = 9.0;
+    var are: f64 = a.re;
+    assert(are == 1.5, "a copy is independent of its source");
+    var c = a.conj();
+    assert(is_c(a, 1.5, -2.25) == 1, "a method leaves its receiver alone");
+    assert(is_c(c, 1.5, 2.25) == 1, "conj");
+
+    test_group("operators_equal_their_fns");
+    var p = BjComplex_new(0.5, 4.0);
+    var q = BjComplex_new(-3.0, 0.125);
+    var chain = a * p + q / p - BjComplex_neg(a);
+    var step = BjComplex_sub(BjComplex_add(BjComplex_mul(a, p), BjComplex_div(q, p)), BjComplex_neg(a));
+    var cr: f64 = chain.re;
+    var ci: f64 = chain.im;
+    assert(is_c(step, cr, ci) == 1, "a * p + q / p - (-a) is the fns composed, precedence included");
+    var m = a * p;
+    assert(is_c(m, 0.75 + 9.0, 6.0 - 1.125) == 1, "a * p by hand: (1.5*0.5 - (-2.25)*4, 1.5*4 + (-2.25)*0.5)");
+    var s = a.scale(2.0);
+    assert(is_c(s, 3.0, -4.5) == 1, "scale, Rust's z * 2.0 and 2.0 * z");
+    var dv = a.div_f64(2.0);
+    assert(is_c(dv, 0.75, -1.125) == 1, "div_f64");
+
+    test_group("specials_keep_hisab_formulas");
+    var o = BjComplex_new(1.0, 0.0);
+    var z0 = BjComplex_default();
+    var dz = o / z0;
+    var dzr: f64 = dz.re;
+    var dzi: f64 = dz.im;
+    assert(dzr != dzr, "1 / 0 by the textbook division: (1·0 + 0·0)/0 = 0/0 is NaN, not inf");
+    assert(dzi != dzi, "and (0·0 − 1·0)/0 is NaN too");
+    var ninf = BjComplex_new(inf, nan);
+    var an: f64 = ninf.abs();
+    assert(an != an, "abs(inf + j NaN) is NaN: sqrt(re² + im²), no hypot rescue");
+    var e160: f64 = _bj_from_bits(0x6126C2D4256FFCC3);        # 1e160
+    var big = BjComplex_new(e160, 0.0);
+    var ab: f64 = big.abs();
+    assert(same(ab, inf) == 1, "abs(1e160) overflows in re², as hisab's does (the range-edge part fixes it)");
+    var em160: f64 = _bj_from_bits(0x1EB67E9C127B6E74);       # 1e-160
+    var tiny = BjComplex_new(em160, 0.0);
+    var tp = tiny.powf(2.0);
+    assert(is_c(tp, 0.0, 0.0) == 1, "powf of |z|² below 1e-300 is 0");
+    var nz = BjComplex_new(0.0, 0.0);
+    assert_eq(nz.is_zero(0.0), 0, "0 is not below a zero tolerance");
+    var zn = BjComplex_new(nan, 0.0);
+    assert_eq(zn.is_zero(1.0), 0, "NaN is never near zero");
+    var ln0 = z0.ln();
+    var l0: f64 = ln0.re;
+    assert(same(l0, -inf) == 1, "ln 0 = -inf + j0");
+
+    test_group("display");
+    assert(shows(BjComplex_new(1.0, nzero), "1+-0i") == 1, "-0 imaginary: hisab's `im >= 0.0` holds for -0");
+    assert(shows(BjComplex_new(1.0, nan), "1NaNi") == 1, "a NaN imaginary part takes no sign");
+    assert(shows(BjComplex_new(-1.5, -2.25), "-1.5-2.25i") == 1, "negative parts");
+    assert(shows(BjComplex_new(inf, inf), "inf+infi") == 1, "infinities");
+    assert(shows(BjComplex_new(0.1, 100.0), "0.1+100i") == 1, "Rust's shortest Display digits");
+
+    test_group("polarization_helpers");
+    assert(is_c(bj_complex_real(2.5), 2.5, 0.0) == 1, "complex_real");
+    assert(is_c(bj_complex_zero(), 0.0, 0.0) == 1, "complex_zero");
+    var fp = bj_complex_from_polar(2.0, 0.0);
+    assert(is_c(fp, 2.0, 0.0) == 1, "complex_from_polar(2, 0)");
+
+    return assert_summary();
+}
+
+var exit_code = main();
+if (exit_code > 0) { exit_code = 1; }
+sys_exit_group(exit_code);

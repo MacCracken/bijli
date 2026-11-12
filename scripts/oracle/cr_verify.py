@@ -83,7 +83,7 @@ def unary_args(name, rng, count):
             xs += around(e) + around(-e)
         xs += [b2f(f2b(1.0) - k) for k in range(1, 2000)] + [-b2f(f2b(1.0) - k) for k in range(1, 2000)]
         xs += [rng.uniform(-3.0, 3.0) for _ in range(1000)]
-    elif name == "log10":
+    elif name in ("log10", "ln"):
         xs += [rng.uniform(1.0, 2.0) * 2.0 ** rng.randint(-1074, 1023) for _ in range(share)]
         xs += [1.0 + rng.uniform(-1.0, 1.0) * 2.0 ** -rng.randint(1, 60) for _ in range(share // 2)]
         xs += [b2f(rng.getrandbits(52)) for _ in range(share // 4)]          # subnormals
@@ -132,7 +132,7 @@ FUNCS = {
     "exp": (1, "exp"), "sin": (1, "sin"), "cos": (1, "cos"), "atan": (1, "atan"),
     "atan2": (2, "atan2"), "hypot": (2, "hypot"), "pow": (2, "pow"),
     "acos": (1, "acos"), "asin": (1, "asin"), "log10": (1, "log10"),
-    "tan": (1, "tan"), "tan_slow": (1, "tan"),
+    "tan": (1, "tan"), "tan_slow": (1, "tan"), "ln": (1, "log"),
 }
 
 

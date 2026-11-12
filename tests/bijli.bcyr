@@ -14,7 +14,8 @@ fn bench_noop(): i64 { return 0; }
 # Runs the bijli benchmarks and reports each. Beside the Rust twins (as their modules land), the Cyrius-only costs
 # of the port's own machinery: a log site with the gate off (Rust's tracing with no subscriber), making an error
 # (the last-error record, on the main thread's static record: two syscalls on Linux to tell the main thread), the
-# same with an f64 field (Rust's Display through src/fmtf.cyr), and one Display.
+# same with an f64 field (Rust's Display through src/fmtf.cyr), one Display, a complex multiply-and-divide (src/
+# complex.cyr, by value) and a complex exp (three correctly rounded calls).
 fn main(): i64 {
     alloc_init();
     var b = bench_new("noop");
@@ -62,6 +63,28 @@ fn main(): i64 {
     }
     bench_batch_stop(bd, 100000);
     bench_report(bd);
+    var bc = bench_new("complex_mul_div");
+    var ca = BjComplex_new(1.25, -0.5);
+    var cb = BjComplex_new(0.75, 2.0);
+    var acc = BjComplex_new(0.0, 0.0);
+    bench_batch_start(bc);
+    for (var k = 0; k < 1000000; k = k + 1) {
+        var r = ca * cb / cb;
+        acc = acc + r;
+    }
+    bench_batch_stop(bc, 1000000);
+    bench_report(bc);
+
+    var bx = bench_new("complex_exp");
+    bench_batch_start(bx);
+    for (var k = 0; k < 100000; k = k + 1) {
+        var ex = ca.exp();
+        acc = acc + ex;
+    }
+    bench_batch_stop(bx, 100000);
+    bench_report(bx);
+    var ar: f64 = acc.re;
+    if (ar == 7.0) { println("."); }
     if (keep == 7) { println("."); }
     return 0;
 }

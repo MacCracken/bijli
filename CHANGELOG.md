@@ -75,6 +75,18 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
   - error.rs's 10 and logging.rs's 1 Rust tests are ported. 73,832 rows pass on all three targets, with equal
     digests.
 
+- **Cyrius port, M1 part 2c — BjComplex**: `src/complex.cyr`, complex numbers by value. It ports the whole surface
+  of the Rust hisab 1.4.0 `Complex` that bijli 1.2.0 re-exports: construction, polar form, `abs`, `conj`,
+  `norm_sq`, `arg`, `exp`, `ln`, `sqrt`, `powf`, `inv`, `is_zero`, the operators and Display. It also has
+  polarization.rs's `complex_real`, `complex_zero` and `complex_from_polar`. Complex `sin` and `cos` follow with
+  correctly rounded `sinh` and `cosh` (part 2d). Its header states the library's one time convention: e^{+jωt}, with
+  IEEE handedness. The correctly rounded `ln` is kimiya's, checked against MPFR on 300,000 arguments on both
+  targets. `tests/golden/complex.tsv` (28,779 rows) passes on all three targets: bit for bit for the IEEE
+  sequences, and at 0 ulp against the corrected oracle where a transcendental is involved.
+- **Parity harness**: digest v2. The v1 fold could not see sign-bit differences that came in pairs, and a generated
+  NaN differs in sign between x86 and ARM. v2 folds each NaN as one quiet NaN and mixes every bit through. ADR 0002
+  row 6 now states that a NaN's bits are the hardware's.
+
 ### Performance
 
 - **error** (Cyrius-only benches): making an error 960 ns → 122 ns (−87 %). It now skips the two syscalls that tell the

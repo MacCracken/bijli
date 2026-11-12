@@ -65,8 +65,18 @@ fn _par_dg_slot(fp, fl): i64 {
     return _par_dg_used - 1;
 }
 
-# Folds the got list into digest `slot`: a word for f, i, v and n tokens, the bytes of the text for s, e and E
-# tokens (whose word is an address, which differs from run to run).
+# One digest step: FNV-1a's xor and multiply, then a right-shift mix. The multiply alone carries a difference only
+# upward, so a difference in a word's bit 63 (an f64's sign) reached only the digest's own bit 63, and two of them
+# cancelled; the shift brings every bit down (port-parity.md §9, digest v2).
+#must_use
+fn _par_dg_step(h, v): i64 {
+    var x = (h ^ v) * 0x100000001b3;
+    return x ^ (x >>> 29);
+}
+
+# Folds the got list into digest `slot`: a word for f, i, v and n tokens, every NaN as the one quiet NaN (IEEE 754
+# leaves a generated NaN's sign and payload to the hardware: x86 makes 0xFFF8…, ARM 0x7FF8…, and the class rules
+# match any NaN with any NaN), and the bytes of the text for s, e and E tokens (whose word is an address).
 fn _par_dg_fold(slot) {
     if (slot < 0) { return 0; }
     var h = _par_dg[slot];
@@ -75,10 +85,11 @@ fn _par_dg_fold(slot) {
         var v = load64(_par_got_v + k * 8);
         if (kind == 115 || kind == 101 || kind == 69) {
             var len = load64(_par_got_l + k * 8);
-            for (var j = 0; j < len; j = j + 1) { h = (h ^ load8(v + j)) * 0x100000001b3; }
-            h = (h ^ 0xff) * 0x100000001b3;
+            for (var j = 0; j < len; j = j + 1) { h = _par_dg_step(h, load8(v + j)); }
+            h = _par_dg_step(h, 0xff);
         } else {
-            h = (h ^ v) * 0x100000001b3;
+            if (kind == 102 && (v & 0x7FFFFFFFFFFFFFFF) > 0x7FF0000000000000) { v = 0x7FF8000000000000; }
+            h = _par_dg_step(h, v);
         }
     }
     _par_dg[slot] = h;
@@ -251,6 +262,73 @@ fn _par_error(fp, fl): i64 {
     return 1;
 }
 
+# A complex result to the got list: its two parts, the real first (format 1).
+fn _par_got_c(z: BjComplex) {
+    var re: f64 = z.re;
+    var im: f64 = z.im;
+    _par_got_f(re);
+    _par_got_f(im);
+    return 0;
+}
+
+# `Complex::*` and polarization's complex rows: src/complex.cyr's BjComplex. Inputs are complex values as two f64
+# tokens each; an f64 operand follows them (before them for `f64::mul_complex`, Rust's `x * z`).
+public fn _par_complex(fp, fl): i64 {
+    if (_par_eq(fp, fl, "Complex::default") == 1) { _par_got_c(BjComplex_default()); return 1; }
+    if (_par_eq(fp, fl, "polarization::complex_zero") == 1) { _par_got_c(bj_complex_zero()); return 1; }
+    if (_par_in_n < 1) { return 0; }
+    var x0: f64 = _par_in(0);
+    if (_par_eq(fp, fl, "Complex::from_real") == 1) { _par_got_c(BjComplex_from_real(x0)); return 1; }
+    if (_par_eq(fp, fl, "polarization::complex_real") == 1) { _par_got_c(bj_complex_real(x0)); return 1; }
+    if (_par_in_n < 2) { return 0; }
+    var x1: f64 = _par_in(1);
+    if (_par_eq(fp, fl, "Complex::from_polar") == 1) { _par_got_c(BjComplex_from_polar(x0, x1)); return 1; }
+    if (_par_eq(fp, fl, "polarization::complex_from_polar") == 1) {
+        _par_got_c(bj_complex_from_polar(x0, x1));
+        return 1;
+    }
+    var z = BjComplex_new(x0, x1);
+    if (_par_eq(fp, fl, "Complex::new") == 1) { _par_got_c(z); return 1; }
+    if (_par_eq(fp, fl, "Complex::abs") == 1) { var a: f64 = z.abs(); _par_got_f(a); return 1; }
+    if (_par_eq(fp, fl, "ComplexExt::norm") == 1) { var nm: f64 = z.norm(); _par_got_f(nm); return 1; }
+    if (_par_eq(fp, fl, "Complex::norm_sq") == 1) { var ns: f64 = z.norm_sq(); _par_got_f(ns); return 1; }
+    if (_par_eq(fp, fl, "Complex::arg") == 1) { var g: f64 = z.arg(); _par_got_f(g); return 1; }
+    if (_par_eq(fp, fl, "Complex::conj") == 1) { _par_got_c(z.conj()); return 1; }
+    if (_par_eq(fp, fl, "Complex::neg") == 1) { _par_got_c(BjComplex_neg(z)); return 1; }
+    if (_par_eq(fp, fl, "Complex::inv") == 1) { _par_got_c(z.inv()); return 1; }
+    if (_par_eq(fp, fl, "Complex::exp") == 1) { _par_got_c(z.exp()); return 1; }
+    if (_par_eq(fp, fl, "Complex::ln") == 1) { _par_got_c(z.ln()); return 1; }
+    if (_par_eq(fp, fl, "Complex::sqrt") == 1) { _par_got_c(z.sqrt()); return 1; }
+    if (_par_eq(fp, fl, "Complex::fmt") == 1) {
+        var buf[800];
+        var tx[24];
+        _bj_tx_init(&tx, &buf, 800);
+        z.display(&tx);
+        if (_bj_tx_overflowed(&tx) == 1) { return 0 - 1; }
+        _par_got_text(_bj_tx_ptr(&tx), _bj_tx_len(&tx));
+        return 1;
+    }
+    if (_par_in_n < 3) { return 0; }
+    var x2: f64 = _par_in(2);
+    if (_par_eq(fp, fl, "Complex::mul_f64") == 1) { _par_got_c(z.scale(x2)); return 1; }
+    if (_par_eq(fp, fl, "Complex::div_f64") == 1) { _par_got_c(z.div_f64(x2)); return 1; }
+    if (_par_eq(fp, fl, "Complex::is_zero") == 1) { _par_got_i(z.is_zero(x2)); return 1; }
+    if (_par_eq(fp, fl, "Complex::powf") == 1) { _par_got_c(z.powf(x2)); return 1; }
+    if (_par_eq(fp, fl, "f64::mul_complex") == 1) {
+        var zr = BjComplex_new(x1, x2);
+        _par_got_c(zr.scale(x0));
+        return 1;
+    }
+    if (_par_in_n < 4) { return 0; }
+    var x3: f64 = _par_in(3);
+    var w = BjComplex_new(x2, x3);
+    if (_par_eq(fp, fl, "Complex::add") == 1) { _par_got_c(z + w); return 1; }
+    if (_par_eq(fp, fl, "Complex::sub") == 1) { _par_got_c(z - w); return 1; }
+    if (_par_eq(fp, fl, "Complex::mul") == 1) { _par_got_c(z * w); return 1; }
+    if (_par_eq(fp, fl, "Complex::div") == 1) { _par_got_c(z / w); return 1; }
+    return 0;
+}
+
 # `f64::fmt_display` and `serde_json::f64` rows: src/fmtf.cyr's two layouts, into a bounded BjText.
 fn _par_fmtf(fp, fl): i64 {
     var x: f64 = _par_in(0);
@@ -271,6 +349,7 @@ fn _par_fmtf(fp, fl): i64 {
 
 public fn _par_dispatch(mp, ml, fp, fl): i64 {
     _par_got_n = 0;
+    if (_par_eq(mp, ml, "complex") == 1) { return _par_complex(fp, fl); }
     if (_par_eq(mp, ml, "constants") == 1) { return _par_constants(fp, fl); }
     if (_par_eq(mp, ml, "error") == 1) { return _par_error(fp, fl); }
     if (_par_eq(mp, ml, "fmtf") == 1) { return _par_fmtf(fp, fl); }
@@ -338,6 +417,13 @@ public fn _par_c_bound(fp, fl): i64 {
     if (_par_eq(fp, fl, "f64::acos") == 1) { return 0; }
     if (_par_eq(fp, fl, "f64::log10") == 1) { return 0; }
     if (_par_eq(fp, fl, "f64::tan") == 1) { return 0; }
+    if (_par_eq(fp, fl, "Complex::arg") == 1) { return 0; }
+    if (_par_eq(fp, fl, "Complex::exp") == 1) { return 0; }
+    if (_par_eq(fp, fl, "Complex::ln") == 1) { return 0; }
+    if (_par_eq(fp, fl, "Complex::sqrt") == 1) { return 0; }
+    if (_par_eq(fp, fl, "Complex::powf") == 1) { return 0; }
+    if (_par_eq(fp, fl, "Complex::from_polar") == 1) { return 0; }
+    if (_par_eq(fp, fl, "polarization::complex_from_polar") == 1) { return 0; }
     return 0 - 1;
 }
 

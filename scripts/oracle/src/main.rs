@@ -23,6 +23,7 @@
 mod cyr;
 mod glibc;
 mod grids;
+mod m_complex;
 mod m_constants;
 mod m_error;
 mod m_fmtf;
@@ -38,6 +39,7 @@ use std::process::ExitCode;
 /// Every golden emitter, in file-name order.
 fn golden_modules() -> Vec<tsv::Module> {
     vec![
+        m_complex::emit(),
         m_constants::emit(),
         m_error::emit(),
         m_fmtf::emit(),

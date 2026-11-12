@@ -48,6 +48,8 @@ EXTRA = {
     "error_record": "making an error into the last-error record (src/error.cyr, ADR 0002 row 4)",
     "error_record_f64": "the same with an f64 field in Rust's Display form (src/fmtf.cyr)",
     "fmt_f64_display": "one f64 in Rust's Display form (src/fmtf.cyr)",
+    "complex_mul_div": "a BjComplex multiply and divide, by value (src/complex.cyr)",
+    "complex_exp": "BjComplex::exp: e^re and cos, sin of im, each correctly rounded (src/complex.cyr)",
 }
 
 

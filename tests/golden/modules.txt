@@ -1,4 +1,5 @@
 # bijli golden corpus: one module per line; tests/parity.tcyr replays each
+complex
 constants
 error
 fmtf

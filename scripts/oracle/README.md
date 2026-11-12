@@ -49,6 +49,7 @@ port's harness reads the same files. This README records what is specific to bij
 
 | Module | Milestone | Golden rows | Golden emitter | Generated Cyrius |
 |---|---|---|---|---|
+| `complex` | M1 | 28,779 (+ 5 corrected) | `src/m_complex.rs` | — |
 | `constants` | M0 | 12 | `src/m_constants.rs` | `src/constants.cyr` (`src/t_constants.rs`, with the completeness proof) |
 | `error` | M1 | 1,635 | `src/m_error.rs` | — |
 | `fmtf` | M1 | 37,576 | `src/m_fmtf.rs` (impetus's grid) | — |

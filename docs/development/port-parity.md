@@ -282,3 +282,124 @@ Language facts the probes found, beyond plan §2:
 | BijliError::InvalidParameter | `187d253e26632343` |
 | f64::fmt_display | `737b6e256576067a` |
 | serde_json::f64 | `b64474e0f3090f73` |
+
+## 9. M1 part 2c: BjComplex and ln (2026-11-11), and digest v2
+
+(Part 2b, the logging, went into 2a.)
+
+- **`src/complex.cyr`**: `BjComplex`, a 16-byte struct value, the port of Rust hisab 1.4.0's `num::Complex`.
+  bijli 1.2.0 re-exports that type (`pub use hisab::num::Complex` in polarization.rs), so **its whole surface is
+  bijli's API** and is ported, not only the methods bijli calls. The plan's §9.2 first said "ported only if a non-test
+  call exists", which would have dropped re-exported surface without an ADR. The file holds:
+  - the constructors, `from_polar`, Default and `From`;
+  - `abs`, `norm`, `conj`, `norm_sq`, `arg`, `exp`, `ln`, `sqrt`, `powf`, `inv` and `is_zero`;
+  - the four operators, `neg`, `scale` (Rust's `z * s` and `s * z`) and `div_f64`;
+  - Display;
+  - polarization.rs's `complex_real`, `complex_zero` and `complex_from_polar`.
+
+  Complex `sin` and `cos` need correctly rounded `sinh` and `cosh`, new primitives, so they arrive in part 2d. The
+  header states **the one time convention** (e^{+jωt}, IEEE handedness) for the whole library.
+- **The language review** was p1 (`scripts/probes/p1_complex.cyr`): by-value `T_add` / `T_mul` / `T_div` operators,
+  a scalar right operand and struct arrays, bit-exact against Python. One operator fn per name means
+  `Complex * f64` is the method `scale`. Cyrius refuses `+=` on a struct value, so hisab's compound assignments are
+  written `a = a + b` (the same operations).
+- **`ln`**: kimiya's correctly rounded ln (`_bj_k_cr_ln`, with its fast path and accurate entry; the core was already
+  in `src/crmath_k.cyr` for log10). `cr_verify.py`: 300,000 arguments, **all equal to MPFR on x86_64 and aarch64**.
+- **`tests/golden/complex.tsv`**: **28,779 rows**. The grid crosses the specials with each other, spans every
+  seventh decade from 1e-310 to 1e308 with both signs, takes points on the unit circle, and adds seeded values;
+  binary operations take six partners each. The rows are classed by what they compute:
+  - pure IEEE sequences are **class A**, bit for bit, which is stricter than the plan's class B, and they all pass;
+  - rows that call a transcendental are **class C**, at 0 ulp against `complex.cr.tsv`. glibc misrounded inside
+    5 of them (2 `exp`, 2 `sqrt`, 1 `powf`), and in each of those the port equals MPFR's value, not glibc's.
+
+  `validate.py` transcribes every operation in hisab's order twice: with glibc's primitives it reproduces all
+  28,779 oracle rows exactly, and with MPFR's it writes the corrected oracle.
+- **`tests/complex.tcyr`**, 23 assertions on all three targets:
+  - value semantics: copies are independent, and a method leaves its receiver alone;
+  - the operators equal their fns inside a chained expression;
+  - hisab's formulas at the specials: 1/0 is NaN + jNaN by the textbook division, `abs(∞ + jNaN)` is NaN with no
+    hypot rescue, `abs(1e160)` overflows (a range-edge candidate), and `powf` under 1e-300 gives 0;
+  - Display's edges: `1+-0i`, `1NaNi`, `inf+infi`.
+- **Coverage** 29 of 29 public fns executed. **Costs** (Cyrius-only benches, with kimiya's and agnosai's benches
+  running beside them, load 2.2): a complex multiply and divide costs 37 ns, and `exp` 403 ns (three correctly
+  rounded calls).
+- **Digest v2.** The complex run gave equal rows but four unequal digests (`sub`, `div_f64`, `sqrt`, `powf`), and
+  they differed **in bit 63 alone**. A generated NaN (∞ − ∞, 0/0, √−1) is `0xFFF8…` on x86 and `0x7FF8…` on ARM:
+  IEEE 754 leaves a NaN's sign and payload open, and a probe on both targets confirmed it. The v1 fold
+  `h = (h ^ w)·p` carries a difference only upward, so a sign-bit difference reached nothing but the digest's own top
+  bit, and **an even number of them cancelled**. That is why `f64::sqrt` (√−1) and `f64::sin` (sin ±∞) had shown
+  equal digests in §2 and §5–§8. The guarantee itself was never in doubt: every non-NaN output is checked exactly
+  against the x86 oracle on each target. But the digests were weaker than those sections said. v2 folds any NaN as
+  one quiet NaN (the class rules already match any NaN with any NaN; ADR 0002 row 6, clarified) and adds a
+  right-shift mix to each step, so every bit reaches the whole digest. **With v2, all 64 digests are equal on
+  x86_64 ELF, x86_64 PE and aarch64.** The digests in §2 and §5–§8 are v1's; v2's, for every function so far, are
+  below.
+- **Result, every target**: **5 modules, 0 failing; 102,606 ok, 0 failed, 0 measured, 0 pending, 130 accepted
+  (ADR 01)**.
+
+| Function | Digest v2, every target |
+|---|---|
+| Complex::from_real | `93890af3323383b` |
+| polarization::complex_real | `93890af3323383b` |
+| Complex::from_polar | `1a5bcded97aba4fc` |
+| polarization::complex_from_polar | `1a5bcded97aba4fc` |
+| Complex::default | `15e30f71b82b3f49` |
+| polarization::complex_zero | `15e30f71b82b3f49` |
+| Complex::new | `138ee5f603ef66ac` |
+| Complex::abs | `6f941a7f2f954e45` |
+| ComplexExt::norm | `6f941a7f2f954e45` |
+| Complex::norm_sq | `69cf04fa49c4eda4` |
+| Complex::conj | `263b60fdb4ff4662` |
+| Complex::neg | `592be8942100dbdd` |
+| Complex::inv | `1b1f1d8dc4717f15` |
+| Complex::arg | `650917640d35cc4d` |
+| Complex::exp | `7d71c1b844cea38f` |
+| Complex::ln | `16a502fce112f802` |
+| Complex::sqrt | `6378c83897ce0cc0` |
+| Complex::fmt | `4f5314e9e82d1a16` |
+| Complex::add | `733a991f7bf422ad` |
+| Complex::sub | `1557d6338798be51` |
+| Complex::mul | `7382450d17a73c68` |
+| Complex::div | `8632bf6e16883e9` |
+| Complex::mul_f64 | `29e8507f5c559dc8` |
+| f64::mul_complex | `29e8507f5c559dc8` |
+| Complex::div_f64 | `34631a46c487397d` |
+| Complex::is_zero | `715afc37cdf20bd4` |
+| Complex::powf | `14a53d59bf180a53` |
+| const | `4a4ee3d6e449876a` |
+| BijliError::DimensionMismatch | `668b75c621ba8449` |
+| BijliError::ZeroCharge | `35eda1ee9785b119` |
+| BijliError::Singularity | `4f2dcf083f999d83` |
+| BijliError::InsufficientResolution | `1b01215ab3ab9bfb` |
+| BijliError::InvalidPermittivity | `4408414f52c5e4fc` |
+| BijliError::InvalidPermeability | `6ec818c146d4da14` |
+| BijliError::InvalidParameter/f64 | `7936ed192f15f08b` |
+| BijliError::DivisionByZero | `14045824a4fbbd7` |
+| BijliError::InvalidParameter | `65fa3d84c5daf63f` |
+| f64::fmt_display | `562cda75c1763c4c` |
+| serde_json::f64 | `d4f03a226e67586` |
+| f64::sqrt | `3023e740efc97dc0` |
+| f64::abs | `2c74b9f1ad2c373c` |
+| f64::ceil | `5071c4cbb2ba4d80` |
+| f64::max | `912c1a3db38cfcf` |
+| f64::min | `4c864c68de7d2954` |
+| f64::clamp | `28c00100ce689ae1` |
+| f64::is_finite | `76f0ad36418ef63a` |
+| f64::is_nan | `29b13373c47492e6` |
+| f64::copysign | `17f3cefae04fdbe9` |
+| f64::to_radians | `637906467d68ba9e` |
+| f64::to_degrees | `2e02ab9265252d52` |
+| f64::powi | `7e6904ca7ebd9dfc` |
+| f64::sin_cos | `2e0ed56d67abe021` |
+| f64::sin | `cec83064268b1ed` |
+| f64::cos | `511ffb33517201e1` |
+| f64::exp | `2ff1a66e408d4d69` |
+| f64::atan2 | `588c44b505f60fb1` |
+| f64::hypot | `74b7edba7f47975` |
+| f64::powf | `34a482f213b211ed` |
+| f64::log10 | `651a02ab4d58fb7d` |
+| f64::atan | `34c1cb536a8ce5d0` |
+| f64::asin | `35d87844c33daff4` |
+| f64::acos | `478d08451f218cc5` |
+| f64::tan | `6b5c3a573a69716c` |
+| f64::cbrt | `7fbcb357e22caa6f` |
