@@ -1,7 +1,9 @@
 # cr_driver.cyr — evaluates bijli's correctly rounded primitives on the arguments cr_verify.py writes.
 #
-# Input build/cr_in.txt, one call per line: `<fn> <x bits hex> [<y bits hex>]`. Output, one line per call: the
-# result's bits in hex. Built from the math sources the bundle carries (src/constants.cyr … src/mathx.cyr, in the
+# Input build/cr_in.txt, one call per line: `<fn> <word hex> …` (up to twelve 16-digit words: an f64's bits, or an
+# integer in two's complement). Output, one line per call: the result's bits in hex. Beside the primitives: kimiya's
+# correctly rounded monomials, square roots of quotients and unbounded-exponent final operations (src/crmath_kx.cyr,
+# M1 part 5), which cr_verify.py checks against exact values (Python's Fraction and integer square root). Built from the math sources the bundle carries (src/constants.cyr … src/mathx.cyr, in the
 # manifest's order and byte for byte what dist/bijli.cyr holds): the bundle is `private` and these entry points are
 # bijli-internal, so a consumer of dist/bijli.cyr can't call them, but a file of internals only has no marker and can
 # be included on its own. scripts/oracle/cr_verify.py builds it, runs it natively and under qemu-aarch64, and compares
@@ -20,6 +22,7 @@ include "src/crmath_data.cyr"
 include "src/crmath.cyr"
 include "src/crmath_k_data.cyr"
 include "src/crmath_k.cyr"
+include "src/crmath_kx.cyr"
 include "src/mathx.cyr"
 
 # The value of hex digit byte c (lowercase).
@@ -41,8 +44,17 @@ fn _is(p, n, s): i64 {
     return memeq(p, s, n);
 }
 
-# One call: the result's bits, or -1 for an unknown function name.
-fn _call(fp, fl, x: f64, y: f64): i64 {
+# Word k of the call as an f64.
+#must_use
+fn _wf(w, k): f64 {
+    var x: f64 = load64(w + k * 8);
+    return x;
+}
+
+# One call on the words at w: the result's bits, or -1 for an unknown function name.
+fn _call(fp, fl, w): i64 {
+    var x: f64 = _wf(w, 0);
+    var y: f64 = _wf(w, 1);
     var r: f64 = 0.0;
     if (_is(fp, fl, "exp") == 1) { r = _bj_exp(x); }
     elif (_is(fp, fl, "sin") == 1) { r = _bj_sin(x); }
@@ -61,9 +73,31 @@ fn _call(fp, fl, x: f64, y: f64): i64 {
     elif (_is(fp, fl, "cosh_slow") == 1) { r = _bj_cr_cosh_slow(x); }
     elif (_is(fp, fl, "tan") == 1) { r = _bj_tan(x); }
     elif (_is(fp, fl, "tan_slow") == 1) { r = _bj_cr_tan_slow(x); }
+    elif (_is(fp, fl, "mono") == 1) {
+        # mono nn nd f1 … f(nn) d1 … d(nd): the factors from word 2 on
+        var nn = load64(w);
+        var nd = load64(w + 8);
+        r = _bj_k_cr_mono(w + 16, nn, w + 16 + nn * 8, nd);
+    }
+    elif (_is(fp, fl, "mul_div") == 1) { r = _bj_k_cr_mul_div(x, y, _wf(w, 2)); }
+    elif (_is(fp, fl, "mul3") == 1) { r = _bj_k_cr_mul3(x, y, _wf(w, 2)); }
+    elif (_is(fp, fl, "div2") == 1) { r = _bj_k_cr_div2(x, y, _wf(w, 2)); }
+    elif (_is(fp, fl, "mul3_div") == 1) { r = _bj_k_cr_mul3_div(x, y, _wf(w, 2), _wf(w, 3)); }
+    elif (_is(fp, fl, "mul5") == 1) { r = _bj_k_cr_mul5(x, y, _wf(w, 2), _wf(w, 3), _wf(w, 4)); }
+    elif (_is(fp, fl, "mul2_div2") == 1) { r = _bj_k_cr_mul2_div2(x, y, _wf(w, 2), _wf(w, 3)); }
+    elif (_is(fp, fl, "mul3_div2") == 1) { r = _bj_k_cr_mul3_div2(x, y, _wf(w, 2), _wf(w, 3), _wf(w, 4)); }
+    elif (_is(fp, fl, "mul4") == 1) { r = _bj_k_cr_mul4(x, y, _wf(w, 2), _wf(w, 3)); }
+    elif (_is(fp, fl, "div3") == 1) { r = _bj_k_cr_div3(x, y, _wf(w, 2), _wf(w, 3)); }
+    elif (_is(fp, fl, "sqrt_div") == 1) { r = _bj_k_cr_sqrt_div(x, y); }
+    elif (_is(fp, fl, "wsqrt") == 1) { r = _bj_k_cr_mul_sqrt_ratio(x, y, _wf(w, 2), load64(w + 24)); }
+    elif (_is(fp, fl, "ux_mul") == 1) { r = _bj_k_ux_mul_f64(x, load64(w + 8), _wf(w, 2), load64(w + 24)); }
+    elif (_is(fp, fl, "ux_div") == 1) { r = _bj_k_ux_div_f64(x, load64(w + 8), _wf(w, 2), load64(w + 24)); }
+    elif (_is(fp, fl, "ux_add") == 1) { r = _bj_k_ux_add_f64(x, load64(w + 8), _wf(w, 2), load64(w + 24)); }
+    elif (_is(fp, fl, "ux_sub") == 1) { r = _bj_k_ux_sub_f64(x, load64(w + 8), _wf(w, 2), load64(w + 24)); }
+    elif (_is(fp, fl, "ux_sqrt") == 1) { r = _bj_k_ux_sqrt_f64(x, load64(w + 8)); }
     else { return 0 - 1; }
-    var w = _bj_bits(r);
-    return w;
+    var b = _bj_bits(r);
+    return b;
 }
 
 fn main(): i64 {
@@ -78,10 +112,15 @@ fn main(): i64 {
         while (end < len && load8(buf + end) != 10) { end = end + 1; }
         var sp = at;
         while (sp < end && load8(buf + sp) != 32) { sp = sp + 1; }
-        var x: f64 = _hexw(buf + sp + 1, 16);
-        var y: f64 = 0.0;
-        if (end - sp > 18) { y = _hexw(buf + sp + 18, 16); }
-        var w = _call(buf + at, sp - at, x, y);
+        var words: i64[12];
+        var nw = 0;
+        var p = sp + 1;
+        while (p + 16 <= end && nw < 12) {
+            words[nw] = _hexw(buf + p, 16);
+            nw = nw + 1;
+            p = p + 17;
+        }
+        var w = _call(buf + at, sp - at, &words);
         if (w == 0 - 1) { println("cr_driver: unknown function"); return 1; }
         fmt_hex(w);
         println("");

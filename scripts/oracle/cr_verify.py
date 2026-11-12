@@ -12,6 +12,7 @@ a new primitive earns its 0-ulp gate (port plan §6 step 8: ≥ 10⁶ arguments 
 """
 import math
 import os
+from fractions import Fraction
 import random
 import struct
 import subprocess
@@ -148,6 +149,150 @@ FUNCS = {
 }
 
 
+# ── kimiya's exact rationals and unbounded exponent (src/crmath_kx.cyr, M1 part 5): exact references ──────────────
+# Each family's reference is exact: Python's Fraction for the monomials and the unbounded operations (CPython's int
+# division rounds once, to nearest even, onto the subnormal grid), an integer square root for the roots. A call line
+# carries words: an f64's bits, or an integer in two's complement.
+
+INF = float("inf")
+
+
+def rn_frac(v: Fraction) -> float:
+    """RN(v) in binary64: ±∞ past DBL_MAX's rounding boundary, a signed zero below half the least subnormal."""
+    if v == 0:
+        return 0.0
+    try:
+        return v.numerator / v.denominator
+    except OverflowError:
+        return INF if v > 0 else -INF
+
+
+def rn_sqrt(v: Fraction) -> float:
+    """RN(√v) for v > 0, exactly: the ulp's exponent k from √v's binade, m = ⌊√v/2^k⌋ by an integer square root,
+    then the side of the midpoint (m + ½)·2^k by an exact comparison (ties to even)."""
+    p, q = v.numerator, v.denominator
+    lf = p.bit_length() - q.bit_length()
+    if (p << max(0, -lf)) < (q << max(0, lf)):
+        lf -= 1                                 # 2^lf ≤ v < 2^(lf + 1)
+    e = lf // 2                                 # 2^e ≤ √v < 2^(e + 1)
+    k = max(e - 52, -1074)
+    num, den = (p, q << (2 * k)) if k >= 0 else (p << (-2 * k), q)
+    m = math.isqrt(num // den)
+    lhs, rhs = 4 * num, (2 * m + 1) ** 2 * den
+    if lhs > rhs or (lhs == rhs and m % 2 == 1):
+        m += 1
+    r = Fraction(m) * Fraction(2) ** k
+    return INF if r >= Fraction(2) ** 1024 else float(r)
+
+
+def w64(x) -> str:
+    """A call word: an f64's bits, or an int in two's complement."""
+    return f"{(x if isinstance(x, int) else f2b(x)) & 0xFFFFFFFFFFFFFFFF:016x}"
+
+
+def any_finite(rng):
+    """A finite double from any binade (subnormals included), either sign, sometimes a small integer."""
+    c = rng.random()
+    if c < 0.1:
+        return float(rng.choice([1, 2, 3, 5, 7, 9, 10, 100, 1000])) * rng.choice([1.0, -1.0])
+    if c < 0.2:
+        return b2f(rng.getrandbits(52)) * rng.choice([1.0, -1.0])
+    return rng.uniform(1.0, 2.0) * 2.0 ** rng.randint(-1022, 1023) * rng.choice([1.0, -1.0])
+
+
+def near_one(rng):
+    return rng.uniform(1.0, 2.0) * 2.0 ** rng.randint(-60, 60) * rng.choice([1.0, -1.0])
+
+
+def mono_ref(num, den):
+    v = Fraction(1)
+    for x in num:
+        v *= Fraction(x)
+    for y in den:
+        v /= Fraction(y)
+    if v == 0:          # a zero factor: the signed zero of the factors' signs
+        neg = sum(math.copysign(1.0, x) < 0 for x in num + den) % 2
+        return -0.0 if neg else 0.0
+    return rn_frac(v)
+
+
+SHAPES = {  # name: (numerator count, denominator count)
+    "mul_div": (2, 1), "mul3": (3, 0), "div2": (1, 2), "mul3_div": (3, 1), "mul5": (5, 0),
+    "mul2_div2": (2, 2), "mul3_div2": (3, 2), "mul4": (4, 0), "div3": (1, 3),
+}
+
+
+def factor_sets(rng, nn, nd, count):
+    """Factor lists: any binade, near one (ties and the fast path's rounding test), products that leave the range."""
+    out = []
+    for i in range(count):
+        mode = i % 4
+        pick = any_finite if mode in (0, 1) else near_one
+        num = [pick(rng) for _ in range(nn)]
+        den = [pick(rng) for _ in range(nd)]
+        den = [d if d != 0 else 1.0 for d in den]
+        if nn == 5:     # the exact path's capacity: four doubles and a 41-bit integer per side (kimiya's domain)
+            num[4] = float(rng.randint(1, (1 << 41) - 1)) * rng.choice([1.0, -1.0])
+        if mode == 3 and nn >= 1:
+            # a midpoint: 3·y with 3y a 54-bit integer over a power-of-two denominator
+            num[0] = float(rng.getrandbits(52) | (1 << 52)) * 2.0 ** rng.randint(-30, 30)
+            if nn >= 2:
+                num[1] = 3.0
+        out.append((num, den))
+    return out
+
+
+def exact_families(rng, count):
+    """(family, call words, reference) for every exact family."""
+    calls = []
+    for name, (nn, nd) in SHAPES.items():
+        for num, den in factor_sets(rng, nn, nd, count):
+            calls.append((name, num + den, mono_ref(num, den)))
+    for i in range(count):
+        nn, nd = rng.randint(0, 4), rng.randint(0, 4)
+        num, den = factor_sets(rng, nn, nd, 1)[0]
+        calls.append(("mono", [nn, nd] + num + den, mono_ref(num, den)))
+    for i in range(count):
+        if i % 3 == 0:
+            x, y = abs(any_finite(rng)), abs(any_finite(rng))
+        elif i % 3 == 1:
+            x, y = abs(near_one(rng)), abs(near_one(rng))
+        else:
+            m = rng.getrandbits(26) | 1
+            y = abs(near_one(rng))
+            x = float(m * m) * y if float(m * m) * y != INF else 4.0   # exact squares
+        x, y = x or 1.0, y or 1.0
+        calls.append(("sqrt_div", [x, y], rn_sqrt(Fraction(x) / Fraction(y))))
+    for i in range(count):
+        w, x, y = (abs(any_finite(rng)) or 1.0, abs(any_finite(rng)) or 1.0, abs(any_finite(rng)) or 1.0)
+        if i % 2:
+            w, x, y = abs(near_one(rng)), abs(near_one(rng)), abs(near_one(rng))
+        if i % 7 == 0:
+            x, y = 9.0, 1.0                     # w·3: a midpoint when 3w has 54 bits
+            w = float(rng.getrandbits(52) | (1 << 52)) * 2.0 ** rng.randint(-40, 40)
+        e = rng.randint(-2200, 2200) if i % 3 == 0 else rng.randint(-8, 8)
+        ref = rn_sqrt(Fraction(w) ** 2 * Fraction(x) * Fraction(2) ** e / Fraction(y))
+        calls.append(("wsqrt", [w, x, y, e], ref))
+    for op in ("ux_mul", "ux_div", "ux_add", "ux_sub"):
+        for i in range(count):
+            s1 = rng.uniform(1.0, 2.0) * rng.choice([1.0, -1.0])
+            s2 = rng.uniform(1.0, 2.0) * rng.choice([1.0, -1.0])
+            if i % 5 == 0:
+                s2 = s1 * rng.choice([1.0, -1.0])   # cancellation and exact doubling
+            e1 = rng.randint(-2600, 2600)
+            e2 = e1 + rng.randint(-70, 70) if i % 2 else rng.randint(-2600, 2600)
+            if op in ("ux_mul", "ux_div") and i % 3 == 0:
+                e2 = rng.choice([-1, 1]) * rng.randint(900, 1200) - e1 * (1 if op == "ux_mul" else -1)
+            a, b = Fraction(s1) * Fraction(2) ** e1, Fraction(s2) * Fraction(2) ** e2
+            v = {"ux_mul": a * b, "ux_div": a / b, "ux_add": a + b, "ux_sub": a - b}[op]
+            calls.append((op, [s1, e1, s2, e2], rn_frac(v)))
+    for i in range(count):
+        s1 = rng.uniform(1.0, 2.0)
+        e1 = rng.randint(-4300, 2100)
+        calls.append(("ux_sqrt", [s1, e1], rn_sqrt(Fraction(s1) * Fraction(2) ** e1)))
+    return calls
+
+
 def mpfr(name, a):
     return mpfr_ref.cr(name, a[0]) if len(a) == 1 else mpfr_ref.cr2(name, a[0], a[1])
 
@@ -169,23 +314,31 @@ def run(target, lines):
     return [int(g, 16) for g in got]
 
 
+EXACT = ["mono"] + list(SHAPES) + ["sqrt_div", "wsqrt", "ux_mul", "ux_div", "ux_add", "ux_sub", "ux_sqrt"]
+
+
 def main() -> int:
     (root / "build").mkdir(exist_ok=True)
-    names = wanted or list(FUNCS)
+    names = wanted or list(FUNCS) + ["exact"]
     rng = random.Random(0xB1_1E_C0DE)
     calls = []
     for name in names:
+        if name == "exact" or name in EXACT:
+            continue
         arity, mname = FUNCS[name]
         argsets = unary_args(name, rng, n) if arity == 1 else binary_args(name, rng, n)
-        calls += [(name, mname, a) for a in argsets]
-    lines = [" ".join([name] + [f"{f2b(x):016x}" for x in a]) for name, _, a in calls]
+        calls += [(name, (lambda m, a: f2b(mpfr(m, a)))(mname, a), a) for a in argsets]
+    if "exact" in names or any(x in EXACT for x in names):
+        erng = random.Random(0xC0DE_5A)
+        fams = exact_families(erng, max(1, n // 5))
+        calls += [(f, f2b(ref), ws) for f, ws, ref in fams if "exact" in names or f in names]
+    lines = [" ".join([name] + [w64(x) for x in a]) for name, _, a in calls]
     (root / "build/cr_in.txt").write_text("\n".join(lines) + "\n")
     targets = ["x86_64"] + (["aarch64"] if aarch64 else [])
     results = {t: run(t, lines) for t in targets}
     bad = 0
     per = {}
-    for i, (name, mname, a) in enumerate(calls):
-        want = f2b(mpfr(mname, a))
+    for i, (name, want, a) in enumerate(calls):
         for t in targets:
             g = results[t][i]
             ok = g == want or (b2f(g) != b2f(g) and b2f(want) != b2f(want))
@@ -193,10 +346,12 @@ def main() -> int:
             if not ok:
                 bad += 1
                 if bad <= 20:
-                    print(f"MISMATCH {t} {name}{tuple(a)}: got {g:016x}, MPFR {want:016x}")
+                    print(f"MISMATCH {t} {name}{tuple(a)}: got {g:016x}, want {want:016x}")
     for (name, t), (ok, ko) in sorted(per.items()):
-        print(f"  {name:6} {t:7} {ok + ko:8} args: {ok} equal to MPFR, {ko} differ")
-    print(f"cr_verify: {len(calls)} calls x {len(targets)} targets, {bad} mismatches (MPFR {mpfr_ref.VERSION})")
+        ref = "the exact value" if name in EXACT else "MPFR"
+        print(f"  {name:9} {t:7} {ok + ko:8} args: {ok} equal to {ref}, {ko} differ")
+    print(f"cr_verify: {len(calls)} calls x {len(targets)} targets, {bad} mismatches (MPFR {mpfr_ref.VERSION}; "
+          "Fraction and isqrt for the exact families)")
     return 1 if bad else 0
 
 

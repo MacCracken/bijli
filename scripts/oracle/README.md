@@ -64,7 +64,9 @@ port's harness reads the same files. This README records what is specific to bij
 Beyond the corpus, `cr_verify.py` checks each correctly rounded primitive against MPFR on seeded argument sets,
 natively and under qemu-aarch64 (`python3 -I -B scripts/oracle/cr_verify.py . --n 100000 --aarch64`, after
 `cyrius distlib`). `tan_slow` calls tan's fixed-point path directly, so the path the rounding test rarely reaches is
-checked on arguments of its own.
+checked on arguments of its own. Its exact families (`cr_verify.py . exact`) check src/crmath_kx.cyr's copy of kimiya's
+correctly rounded monomials, square roots and unbounded-exponent operations against exact values (Python's Fraction and
+an integer square root), not MPFR.
 
 ## Format 1
 

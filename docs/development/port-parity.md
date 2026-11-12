@@ -808,3 +808,39 @@ Language facts the probes found, beyond plan §2:
 | json::FieldVector::from_str | `2d9a9d3270002358` |
 | json::PointCharge::to_string | `4429d64e05c2e255` |
 | json::PointCharge::from_str | `2b9687ddb5ad7846` |
+
+## 16. M1 part 5a: the correctly rounded machinery for the range-edge review (2026-11-12)
+
+- **The review's scope** (plan §0.1, the user's decisions of 2026-11-12): the survey of M1's chains found four
+  families. (1) Raw sums of squares and what uses them: `magnitude`, complex `abs`, `ln`, `sqrt`, `inv`, `/` and
+  `is_zero`, and every field, Green's, image and Coulomb chain on r². These go to 0, ±∞ or NaN, or lose most of their
+  bits, past about 1e±154; their cubes (`inv_r³`) fail near 1e±102, and the quadrupole's r⁵ near 1e61. The
+  point-charge field of q = 1 is exact at r = 1e100, 2 ulp off at 1e105, 3×10¹¹ ulp off at 1e110 and 0 from about
+  1e120, where the true field is normal. (2) Single products, quotients and roots of inputs and constants:
+  `wave_speed(1e-160, 1e-160)` is 3.6×10¹⁰ ulp off and `(1e160, 1e160)` gives 0; in range `wave_speed` isn't
+  correctly rounded on 28 % of seeded inputs and `skin_depth` on 22 %. (3) The `r² < 1e-30` thresholds. (4) hisab's
+  `powf`, 0 for every |z| < 1e-150 whatever the exponent. The user chose, each the recommended option: Rust's chain
+  with an unbounded exponent at the edges, round once in range for the single products, exact thresholds, and no
+  `powf` cutoff.
+- **`src/crmath_kx.cyr`, 78 items, generated** by `scripts/port/kimiya_closure.py` from kimiya's `src/mathx.cyr`:
+  the call closure of `_km_cr_mono` and its nine shapes (x·y/z, x·y·z, x/(y·z), x·y·z/w, five factors, x·y/(z·w),
+  x·y·z/(v·w), four factors, x/(y·z·w)), `_km_cr_sqrt_div` (√(x/y)), `_km_cr_mul_sqrt_ratio` (w·√((x/y)·2^e)), the
+  multi-word integers and `_km_cr_ratio` (RN(p/q·2^e)), and binary64 with an unbounded exponent (`_km_ux_*`, without
+  its atan2: bijli's correctly rounded atan2 is scale-free). The prefixes are renamed as src/crmath_k.cyr's copy was,
+  and what that copy already holds is used from it (checked identical). Comment lines the rename pushed past 120
+  characters are rewrapped, and the file goes through `cyrius fmt`. `--check` exits 1 when either output differs
+  from what kimiya's current text gives.
+- **`tests/crmath_kx.tcyr`, 148 assertions in 11 groups**, from kimiya's `tests/mathx.tcyr` by the same script (its
+  ux, multi-word, ratio, monomial, B2 and B3 groups). The script drops six exact passages, the ux atan2 checks, and
+  refuses to run if kimiya's text no longer has them. Every expected value is kimiya's (MPFR 4.2.2 or Python's
+  Fraction). They pass on x86_64 ELF, x86_64 PE and aarch64.
+- **`scripts/oracle/cr_verify.py`'s exact families**: the generic monomial and its nine shapes, √(x/y),
+  w·√((x/y)·2^e) and the five unbounded final operations (×, ÷, +, −, √), against exact values. The monomials and
+  operations use Python's Fraction, rounded by CPython's int division, which rounds once, ties to even, onto the
+  subnormal grid. The roots use an integer square root and an exact midpoint comparison. The arguments cover every
+  binade, subnormal factors, products that leave the range both ways, midpoints (a 54-bit 3y, w·3), exact squares,
+  cancellation, and exponents to ±4,300. `cr_driver.cyr` now takes up to twelve words per call. **1,700,000 calls on
+  x86_64 and aarch64: 0 mismatches**, and the MPFR families still pass after the driver change (319,071 calls).
+  `mul5`'s arguments keep kimiya's documented domain: the exact path's capacity is four doubles and a 41-bit integer
+  per side, and past it the result is NaN by design. No bijli formula has five doubles on a side.
+- **The corpus is unchanged**: 9 modules, 188,486 ok, 6,559 accepted on all three targets, all 145 digests as §15.

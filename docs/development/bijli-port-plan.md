@@ -51,6 +51,24 @@
   Ordinary chains of IEEE operations stay as Rust wrote them. Each fix is an ADR 0002 row, with
   its oracle rows mapped. Anything debatable goes to the user.
 
+  **The user's decisions for bijli (2026-11-12, M1 part 5), each the recommended option, as kimiya's
+  were:**
+  - **range edges**: where an intermediate leaves the normal range and the result is representable,
+    Rust's chain is evaluated with an unbounded exponent and its last step rounded once (kimiya ADR
+    0002 #20); in-range rows keep Rust's bits;
+  - **round once in range** for every formula that is one product, quotient or root of inputs and
+    constants (kimiya's overflow-audit answer): correctly rounded everywhere, not only at the edges.
+    Formulas with sums inside get the edge fix only;
+  - **exact thresholds**: the Singularity tests compare the exact r² (or r, or distance) against
+    10⁻³⁰, not the rounded value against the double 1e-30;
+  - **hisab's `powf` cutoff is dropped**: `|z|² < 1e-300` no longer returns 0 whatever the exponent,
+    so z⁰ = 1 and z⁻¹ = 1/z for every z ≠ 0; z = 0 follows pow's rules.
+
+  The machinery is kimiya's, copied by `scripts/port/kimiya_closure.py` (src/crmath_kx.cyr: its
+  correctly rounded monomials, √(x/y), w·√((x/y)·2^e), the multi-word integers and binary64 with
+  an unbounded exponent). M1's Part 5 runs as 5a (the machinery, verified), 5b (maxwell and charge),
+  5c (complex) and 5d (field and the thresholds), each its own commit.
+
   kimiya ran this as a 12-batch, library-wide audit after M4. Here it is **one Part at the end of
   each milestone**. bijli's obvious candidates:
   - `re² + im²` in complex `abs`/`norm_sq`/division;
@@ -890,7 +908,7 @@ Each one gets an issue in the owning repo, with the probe or benchmark that show
 |---|---|---|---|---|---|
 | P Prep | ✅ | | | 80 (Rust, 2026-11-12T03:15, under load) | D1–D5 answered; 1.2.0 tagged and green; P3, P4, P5 done (2026-11-11); P6 is done at the scaffold; the commit remains |
 | M0 Initialize | ✅ | 34,746 (constants 12, math 34,734): 15,507 ok, 0 failed, 18,006 measured, 1,233 pending, on all three targets | | 80 Rust (pending twins) | done 2026-11-11: Parts 1–3. Baselines and probes in `port-parity.md` |
-| M1 Foundation | ◐ | 9 modules, 188,486 ok, 6,559 accepted (ADR 01: 6,505; ADR 0002 row 12: 54), 0 measured | error.rs 10/10, logging.rs 1/1, field.rs 105/105, maxwell.rs 18/18, charge.rs 26/26 | 17 of 80 twinned; 11 Cyrius-only | Part 1 (the math) done 2026-11-11: 1a (crmath, corrected oracle, cr_verify), 1b (acos, log10, asin), 1c (tan). Part 2 done 2026-11-11: 2a (fmtf, log, error), 2c (complex, ln, digest v2), 2d (sinh, cosh, complex sin and cos). Part 3 done 2026-11-11: 3a–3c (field: vectors, point charges, dipoles; Gauss, multipoles, images, Green's, stress; trace_field_line), 3d (maxwell, charge). Part 4 done 2026-11-12: the JSON (D5, amended) of `BjComplex`, `BjFieldVector` and `BjPointCharge`, writers on bayan's printer and readers on bayan's tree with serde's semantics; ADR 0002 rows 10–12; `json.cr.tsv` (6,390 rows serde_json misreads). Next: Part 5, the range-edge review (§0.1) as ADR 0002 rows, which closes M1 |
+| M1 Foundation | ◐ | 9 modules, 188,486 ok, 6,559 accepted (ADR 01: 6,505; ADR 0002 row 12: 54), 0 measured | error.rs 10/10, logging.rs 1/1, field.rs 105/105, maxwell.rs 18/18, charge.rs 26/26 | 17 of 80 twinned; 11 Cyrius-only | Part 1 (the math) done 2026-11-11: 1a (crmath, corrected oracle, cr_verify), 1b (acos, log10, asin), 1c (tan). Part 2 done 2026-11-11: 2a (fmtf, log, error), 2c (complex, ln, digest v2), 2d (sinh, cosh, complex sin and cos). Part 3 done 2026-11-11: 3a–3c (field: vectors, point charges, dipoles; Gauss, multipoles, images, Green's, stress; trace_field_line), 3d (maxwell, charge). Part 4 done 2026-11-12: the JSON (D5, amended) of `BjComplex`, `BjFieldVector` and `BjPointCharge`, writers on bayan's printer and readers on bayan's tree with serde's semantics; ADR 0002 rows 10–12; `json.cr.tsv` (6,390 rows serde_json misreads). Part 5 (the range-edge review, §0.1, with the user's 2026-11-12 decisions) runs as 5a–5d. 5a done 2026-11-12: kimiya's correctly rounded monomials, square roots of quotients and unbounded-exponent arithmetic, copied (src/crmath_kx.cyr, tests/crmath_kx.tcyr) and verified against exact values (`cr_verify.py`'s exact families: 1,700,000 calls on x86_64 and aarch64, 0 mismatches). Next: 5b (maxwell and charge), 5c (complex), 5d (field and the thresholds), which close M1 |
 | M2 Media, waves, circuits, relativity | ☐ | | | | |
 | M3 Optics | ☐ | | | | |
 | M4 RF | ☐ | | | | |

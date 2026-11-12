@@ -126,6 +126,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
   bytes in strings. New: `BJ_ERR_DESERIALIZE` (ADR 0002 row 10), `json.tsv` (14,758 rows) and `json.cr.tsv`, with a
   `validate.py` model of serde. Surface parity now requires the JSON pair for every serde type.
 
+- **Cyrius port, M1 part 5a — the range-edge review's machinery**: the user's decisions for M1's range edges (plan
+  §0.1: Rust's chain with an unbounded exponent at the edges, round once in range for single products and roots,
+  exact thresholds, no `powf` cutoff) rest on kimiya's correctly rounded monomials, √(x/y), w·√((x/y)·2^e),
+  multi-word integers and unbounded-exponent arithmetic. `scripts/port/kimiya_closure.py` copies their call closure
+  into `src/crmath_kx.cyr` (78 items) and kimiya's tests into `tests/crmath_kx.tcyr` (148 assertions, all three
+  targets). `cr_verify.py` gains exact-reference families (Fraction, integer square root): 1,700,000 calls on x86_64
+  and aarch64, 0 mismatches. No behaviour changes yet; 5b–5d apply them.
+
 ### Fixed
 
 - **json** (ADR 0002 row 11): serde_json's default float parse misreads 6,342 of the corpus's documents by 1–2 ulp
