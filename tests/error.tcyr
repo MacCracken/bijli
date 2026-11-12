@@ -1,0 +1,189 @@
+# error.tcyr — src/error.cyr: the BJ_ERR_* codes and the per-thread last-error record.
+#
+# The groups named test_* are rust-old/src/error.rs's tests, ported (the ledger matches them by name): each makes
+# the error and checks the same fragment of its Display text, now read from the last-error record. The others
+# are Cyrius-only: the record's fields, the names and messages, a reason formatted with Rust's f64 Display, and
+# one record per thread. tests/golden/error.tsv pins every variant's Display text against Rust besides.
+
+include "tests/lib.cyr"
+
+# 1 when the C string s contains the C string part.
+fn contains(s, part): i64 {
+    var n = strlen(s);
+    var m = strlen(part);
+    if (m == 0) { return 1; }
+    var i = 0;
+    while (i + m <= n) {
+        if (memeq(s + i, part, m) == 1) { return 1; }
+        i = i + 1;
+    }
+    return 0;
+}
+
+# 1 when the C strings a and b are equal.
+fn text_is(a, b): i64 {
+    var n = strlen(a);
+    if (n != strlen(b)) { return 0; }
+    return memeq(a, b, n);
+}
+
+# Ok(x).
+fn ok_value(x: f64): Result {
+    return Ok(x);
+}
+
+# Err(ZeroCharge).
+fn zero_charge_result(): Result {
+    return Err(_bj_err_zero_charge());
+}
+
+# A worker: makes its own error 20,000 times and checks it reads back only its own. Returns 0 when it always did.
+fn worker(arg): i64 {
+    var bad = 0;
+    for (var i = 0; i < 20000; i = i + 1) {
+        var code = _bj_err_dimension_mismatch(arg, i);
+        if (code != BJ_ERR_DIMENSION_MISMATCH) { bad = bad + 1; }
+        if (bj_last_error_expected() != arg || bj_last_error_got() != i) { bad = bad + 1; }
+    }
+    bj_thread_done();
+    return bad;
+}
+
+# Runs the error tests.
+fn main() {
+    alloc_init();
+
+    test_group("test_dimension_mismatch");
+    var c = _bj_err_dimension_mismatch(3, 2);
+    assert_eq(c, BJ_ERR_DIMENSION_MISMATCH, "the code");
+    var msg = bj_last_error_display();
+    assert(contains(msg, "3D") == 1, "the message names 3D");
+    assert(contains(msg, "2D") == 1, "the message names 2D");
+
+    test_group("test_zero_charge");
+    c = _bj_err_zero_charge();
+    assert(contains(bj_last_error_display(), "zero") == 1, "the message says zero");
+
+    test_group("test_singularity");
+    c = _bj_err_singularity();
+    assert(contains(bj_last_error_display(), "distance = 0") == 1, "the message says distance = 0");
+
+    test_group("test_insufficient_resolution");
+    c = _bj_err_insufficient_resolution(4, 100.0);
+    assert(contains(bj_last_error_display(), "4 cells") == 1, "the message says 4 cells");
+
+    test_group("test_invalid_permittivity");
+    c = _bj_err_invalid_permittivity(-1.0);
+    assert(contains(bj_last_error_display(), "-1") == 1, "the message holds -1");
+
+    test_group("test_invalid_permeability");
+    c = _bj_err_invalid_permeability(0.0);
+    assert(contains(bj_last_error_display(), "0") == 1, "the message holds 0");
+
+    test_group("test_division_by_zero");
+    c = _bj_err_division_by_zero("field magnitude");
+    assert(contains(bj_last_error_display(), "field magnitude") == 1, "the message holds the context");
+
+    test_group("test_invalid_parameter");
+    c = _bj_err_invalid_parameter("negative frequency");
+    assert(contains(bj_last_error_display(), "negative frequency") == 1, "the message holds the reason");
+
+    test_group("test_result_alias");
+    var t1, v1 = ok_value(1.0);
+    assert(is_ok(t1) == 1, "Ok(1.0) is ok");
+    var t2, v2 = zero_charge_result();
+    assert(is_err_result(t2) == 1, "Err(ZeroCharge) is an error");
+    assert_eq(v2, BJ_ERR_ZERO_CHARGE, "its payload is the code");
+
+    test_group("test_error_is_debug");
+    # Rust's derived Debug names the variant; the Cyrius name of a code is bj_error_name.
+    c = _bj_err_singularity();
+    assert(contains(bj_error_name(bj_last_error()), "Singularity") == 1, "the code's name is Singularity");
+
+    test_group("record_fields");
+    c = _bj_err_dimension_mismatch(7, 9223372036854775807);
+    assert_eq(bj_last_error(), BJ_ERR_DIMENSION_MISMATCH, "the last code");
+    assert_eq(bj_last_error_expected(), 7, "expected");
+    assert_eq(bj_last_error_got(), 9223372036854775807, "got, the largest i64");
+    assert(text_is(bj_last_error_display(), "invalid field dimensions: expected 7D, got 9223372036854775807D") == 1,
+      "Rust's text");
+    assert(text_is(bj_last_error_detail(), "") == 1, "no detail");
+    var huge = 0 - 1;
+    c = _bj_err_dimension_mismatch(huge, 0);
+    assert(text_is(bj_last_error_display(), "invalid field dimensions: expected 18446744073709551615D, got 0D") == 1,
+      "a usize field prints unsigned");
+    c = _bj_err_insufficient_resolution(12, 0.1);
+    assert_eq(bj_last_error_cells(), 12, "cells");
+    var ds: f64 = bj_last_error_domain_size();
+    assert(ds == 0.1, "domain_size");
+    assert(text_is(bj_last_error_display(), "grid resolution too coarse: 12 cells for domain size 0.1") == 1,
+      "Rust's text, the f64 in Display form");
+    assert_eq(bj_last_error_expected(), 0, "expected is 0 for another error");
+    c = _bj_err_invalid_permeability(-0.0);
+    var pv: f64 = bj_last_error_value();
+    assert_eq(_bj_bits(pv), _bj_bits(-0.0), "value keeps -0");
+    assert(text_is(bj_last_error_display(), "invalid permeability: -0 (must be > 0)") == 1, "-0 as Rust prints it");
+    var t3 = _bj_err_reason(BJ_ERR_INVALID_PARAMETER);
+    _bj_tx_cstr(t3, "frequency must be positive, got ");
+    _bj_fmt_f64_display(t3, 0.000001);
+    assert(text_is(bj_last_error_display(), "invalid parameter: frequency must be positive, got 0.000001") == 1,
+      "a formatted reason");
+    assert(text_is(bj_last_error_detail(), "frequency must be positive, got 0.000001") == 1, "the reason alone");
+    c = _bj_err_transport("daimon: connection refused");
+    assert_eq(c, BJ_ERR_TRANSPORT, "the Cyrius-only code");
+    assert(text_is(bj_last_error_display(), "transport error: daimon: connection refused") == 1, "its text");
+    bj_last_error_clear();
+    assert_eq(bj_last_error(), BJ_ERR_NONE, "cleared");
+    assert(text_is(bj_last_error_display(), "") == 1, "no text after a clear");
+
+    test_group("names_and_messages");
+    assert(text_is(bj_error_name(BJ_ERR_NONE), "None") == 1, "None");
+    assert(text_is(bj_error_name(BJ_ERR_INVALID_PERMITTIVITY), "InvalidPermittivity") == 1, "a variant's name");
+    assert(text_is(bj_error_name(BJ_ERR_TRANSPORT), "Transport") == 1, "the Cyrius-only name");
+    assert(text_is(bj_error_name(99), "Unknown") == 1, "no code");
+    assert(text_is(bj_error_message(BJ_ERR_INVALID_PARAMETER), "invalid parameter") == 1, "the text before the field");
+    assert(text_is(bj_error_message(BJ_ERR_SINGULARITY), "singularity: field evaluation at source point (distance = 0)")
+      == 1, "a message with no field");
+    assert(text_is(bj_error_message(99), "unknown error") == 1, "no code");
+    for (var k = 0; k <= 9; k = k + 1) {
+        assert(text_is(bj_error_name(k), "Unknown") == 0, "every code has a name");
+    }
+
+    test_group("text_bounded");
+    # src/fmtf.cyr's BjText: bytes past capacity − 1 are dropped, counted, and the text stays NUL-terminated.
+    var small[8];
+    var tx[24];
+    _bj_tx_init(&tx, &small, 8);
+    _bj_tx_cstr(&tx, "abcdefghij");
+    assert_eq(_bj_tx_len(&tx), 7, "7 bytes kept in 8");
+    assert_eq(_bj_tx_overflowed(&tx), 1, "the overflow is reported");
+    assert(text_is(_bj_tx_ptr(&tx), "abcdefg") == 1, "the kept bytes, terminated");
+    _bj_tx_putc(&tx, 122);
+    assert(text_is(_bj_tx_ptr(&tx), "abcdefg") == 1, "a byte past the end changes nothing");
+    var wide[64];
+    _bj_tx_init(&tx, &wide, 64);
+    _bj_tx_i64(&tx, 0 - 9223372036854775807 - 1);
+    _bj_tx_putc(&tx, 32);
+    _bj_tx_u64(&tx, 0 - 1);
+    _bj_tx_putc(&tx, 32);
+    _bj_tx_i64(&tx, 0);
+    assert(text_is(_bj_tx_ptr(&tx), "-9223372036854775808 18446744073709551615 0") == 1, "the integer extremes");
+    assert_eq(_bj_tx_overflowed(&tx), 0, "no overflow");
+
+    test_group("last_error_per_thread");
+    assert_eq(bj_init(), 1, "a slot for per-thread records");
+    var main_code = _bj_err_singularity();
+    var h1 = thread_create(&worker, 11);
+    var h2 = thread_create(&worker, 22);
+    var r1 = thread_join(h1);
+    var r2 = thread_join(h2);
+    assert_eq(r1, 0, "the first worker read only its own errors");
+    assert_eq(r2, 0, "the second worker read only its own errors");
+    assert_eq(bj_last_error(), BJ_ERR_SINGULARITY, "the main thread's record is untouched");
+
+    return assert_summary();
+}
+
+var exit_code = main();
+if (exit_code > 0) { exit_code = 1; }
+sys_exit_group(exit_code);

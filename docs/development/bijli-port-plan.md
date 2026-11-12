@@ -174,7 +174,7 @@ were not taken on trust**: two of their claims are refined here (marked "correct
 | `pub` / private helpers | **`private` files with `public` items** (6.5.0): a hard error across files; private fns leave the symbol table and `cyrius api-surface` | guide *Visibility* | each `src/*.cyr` is `private`, with its Rust `pub` items `public`. The `_bj_` prefix stays, against collisions inside one compilation unit |
 | scientific literals (`8.854_187_812_8e-12`) | no exponent form; decimal literals are correctly rounded; `const` takes no annotation (`const EPS0 = 0.0000000000088541878128;` is an f64) | guide *Number Literals*, *Constants*; **p6 ✅** bit-exact | generated `const`s, as decimals |
 | `#[cfg(feature)]` gates | `[features]` (optional deps only) + `[lib.<profile>]` bundles; `#define` capped at 16 names | guide *Manifest keys*, *Preprocessor* | profiles: `[lib]`, `[lib.ai]` |
-| tests over the library | `[test] modules` (prepended to every test, bench and fuzz unit); `[test.embed]` (embed golden files); `cyrius coverage --min N`; `cyrius api-surface`; `#bounds` | guide *Tests*, *Manifest keys* | corrects impetus's `tests/lib_*.cyr` mirrors: list the modules in `[test] modules` with a check that they equal `[lib]`. Golden TSVs ride `[test.embed]`. CLAUDE.md's 80 % coverage target becomes `cyrius coverage --min 80` |
+| tests over the library | `[test] modules` (prepended to every test, bench and fuzz unit); `[test.embed]` (embed golden files); `cyrius coverage --min N`; `cyrius api-surface`; `#bounds` | guide *Tests*, *Manifest keys* | ~~corrects impetus's `tests/lib_*.cyr` mirrors: list the modules in `[test] modules`~~ **Reversed in M1 part 2a** (port-parity.md §8): a prepended module becomes part of the test's own file, so a `private` src/ file makes the test file private and `cyrius coverage --exec` credits no src/ fn. Tests include `tests/lib.cyr`, the `[lib]` list as files of their own (impetus's pattern), checked against `[lib]`. Golden TSVs ride `[test.embed]`. CLAUDE.md's 80 % coverage target becomes `cyrius coverage --exec --min 80` |
 
 Struct fields can't be fixed arrays (`T[N]`); an inline tuple field `(f64, f64, f64)` or named
 fields replace them.
@@ -524,8 +524,9 @@ plan commit landed.
      failed.
    - Add the trajectory runner and the digest comparator.
    - Add the divergence table that reports each ADR 0002 mapping by name.
-   - **Tests see the library through `[test] modules`** (§2), not through impetus's
-     `tests/lib_*.cyr` mirrors. A check keeps `[test] modules` equal to `[lib]`.
+   - ~~Tests see the library through `[test] modules`~~ (§2). **Reversed in M1 part 2a**: tests include
+     `tests/lib.cyr`, the `[lib]` modules as files of their own (impetus's `tests/lib_*.cyr` pattern), and a
+     check keeps it equal to `[lib]` (port-parity.md §8).
    - The harness reads `tests/golden/` at run time, as impetus's does (`file_read_whole`).
      `[test.embed]` stays available if a unit ever has to run without the files.
    - **Coverage**: `cyrius coverage --exec --min 80`, CLAUDE.md's target, from M1 on. It measures
@@ -877,7 +878,7 @@ Each one gets an issue in the owning repo, with the probe or benchmark that show
 |---|---|---|---|---|---|
 | P Prep | ✅ | | | 80 (Rust, 2026-11-12T03:15, under load) | D1–D5 answered; 1.2.0 tagged and green; P3, P4, P5 done (2026-11-11); P6 is done at the scaffold; the commit remains |
 | M0 Initialize | ✅ | 34,746 (constants 12, math 34,734): 15,507 ok, 0 failed, 18,006 measured, 1,233 pending, on all three targets | | 80 Rust (pending twins) | done 2026-11-11: Parts 1–3. Baselines and probes in `port-parity.md` |
-| M1 Foundation | ◐ | math: 34,621 ok, 125 accepted (ADR 01), 0 measured | | | Part 1 (the math) done 2026-11-11: 1a (crmath, corrected oracle, cr_verify), 1b (acos, log10, asin), 1c (tan); parts 2–3 next |
+| M1 Foundation | ◐ | 4 modules, 73,832 ok, 125 accepted (ADR 01), 0 measured | error.rs 10/10, logging.rs 1/1 | 0 of 80 twinned (M1's with part 3); 4 Cyrius-only | Part 1 (the math) done 2026-11-11: 1a (crmath, corrected oracle, cr_verify), 1b (acos, log10, asin), 1c (tan). Part 2a (fmtf, log, error) done 2026-11-11; 2c (complex) and part 3 (field, maxwell, charge) next |
 | M2 Media, waves, circuits, relativity | ☐ | | | | |
 | M3 Optics | ☐ | | | | |
 | M4 RF | ☐ | | | | |

@@ -1,12 +1,12 @@
 #!/usr/bin/env python3
 """Verifies bijli's correctly rounded primitives against MPFR, beyond the golden corpus (bijli ADR 0001).
 
-Usage, from the repo root, after `cyrius distlib`:
+Usage, from the repo root:
     python3 -I -B scripts/oracle/cr_verify.py . [--n N] [--aarch64] [fn ...]
 
 For each function it draws N arguments (default 100,000) from seeded sets that cover the whole domain, every binade
 and the implementation's thresholds, writes them to build/cr_in.txt, builds scripts/oracle/cr_driver.cyr (against
-dist/bijli.cyr) natively, and with --aarch64 also for aarch64 under qemu-aarch64, runs it, and compares every result
+the math sources) natively, and with --aarch64 also for aarch64 under qemu-aarch64, runs it, and compares every result
 with MPFR's correctly rounded value (mpfr_ref.py). Any difference is printed and fails the run (exit 1). This is how
 a new primitive earns its 0-ulp gate (port plan §6 step 8: ≥ 10⁶ arguments for asin and tan).
 """

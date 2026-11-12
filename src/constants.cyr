@@ -10,18 +10,23 @@
 # back to the oracle's exact bits.
 #
 # Private constants are extracted and proven at the milestone whose module uses them.
+#
+# The file is `private` and each constant `public`: the bundle is one file, so its API is
+# exactly its `public` items (CLAUDE.md, Names).
+
+private
 
 # Elementary charge e (coulombs).
 # Rust: bijli::charge::ELEMENTARY_CHARGE
-const BJ_ELEMENTARY_CHARGE = 0.0000000000000000001602176634;
+public const BJ_ELEMENTARY_CHARGE = 0.0000000000000000001602176634;
 
 # Electron mass (kg).
 # Rust: bijli::charge::ELECTRON_MASS
-const BJ_ELECTRON_MASS = 0.0000000000000000000000000000009109383702;
+public const BJ_ELECTRON_MASS = 0.0000000000000000000000000000009109383702;
 
 # Proton mass (kg).
 # Rust: bijli::charge::PROTON_MASS
-const BJ_PROTON_MASS = 0.000000000000000000000000001672621924;
+public const BJ_PROTON_MASS = 0.000000000000000000000000001672621924;
 
 # 4th-order spatial derivative coefficients for FDTD.
 #
@@ -29,48 +34,48 @@ const BJ_PROTON_MASS = 0.000000000000000000000000001672621924;
 # f'(x_{i+½}) ≈ (c₁(f\[i+1\]-f\[i\]) + c₂(f\[i+2\]-f\[i-1\])) / dx
 # where c₁ = 9/8, c₂ = -1/24 (Yee fourth-order).
 # Rust: bijli::fdtd::FOURTH_ORDER_C1
-const BJ_FOURTH_ORDER_C1 = 1.125;
+public const BJ_FOURTH_ORDER_C1 = 1.125;
 
 # Second coefficient for 4th-order stencil.
 # Rust: bijli::fdtd::FOURTH_ORDER_C2
-const BJ_FOURTH_ORDER_C2 = -0.041666666666666664;
+public const BJ_FOURTH_ORDER_C2 = -0.041666666666666664;
 
 # Permittivity of free space ε₀ (F/m), CODATA 2018: 8.854 187 8128(13) × 10⁻¹² F/m.
 # Rust: bijli::field::EPSILON_0
-const BJ_EPSILON_0 = 0.0000000000088541878128;
+public const BJ_EPSILON_0 = 0.0000000000088541878128;
 
 # Permeability of free space μ₀ (H/m), CODATA 2018: 1.256 637 062 12(19) × 10⁻⁶ H/m.
 # Rust: bijli::field::MU_0
-const BJ_MU_0 = 0.00000125663706212;
+public const BJ_MU_0 = 0.00000125663706212;
 
 # Speed of light in vacuum c (m/s), exact by definition of the metre.
 #
 # c = 1/√(ε₀μ₀); with the CODATA 2018 [`EPSILON_0`] and [`MU_0`] above,
 # ε₀μ₀c² − 1 ≈ −4 × 10⁻¹⁴ (well inside their 1.5 × 10⁻¹⁰ uncertainty).
 # Rust: bijli::field::SPEED_OF_LIGHT
-const BJ_SPEED_OF_LIGHT = 299792458.0;
+public const BJ_SPEED_OF_LIGHT = 299792458.0;
 
 # Coulomb's constant k = 1/(4πε₀) ≈ 8.987 551 7923 × 10⁹ N⋅m²/C² (CODATA 2018).
 #
 # Computed from [`EPSILON_0`] at compile time, so `COULOMB_K` and
 # `1/(4π EPSILON_0)` agree to the last bit.
 # Rust: bijli::field::COULOMB_K
-const BJ_COULOMB_K = 8987551792.261171;
+public const BJ_COULOMB_K = 8987551792.261171;
 
 # Speed of light squared c² (m²/s²).
 # Rust: bijli::field::SPEED_OF_LIGHT_SQ
-const BJ_SPEED_OF_LIGHT_SQ = 89875517873681760.0;
+public const BJ_SPEED_OF_LIGHT_SQ = 89875517873681760.0;
 
 # Largest size parameter x accepted by [`mie`].
 #
 # The series needs ≈ x + 4x^{1/3} + 2 terms, so this bounds both run time
 # and the size of the returned coefficient vectors (≈ 10⁵ entries).
 # Rust: bijli::scattering::MIE_MAX_SIZE_PARAMETER
-const BJ_MIE_MAX_SIZE_PARAMETER = 100000.0;
+public const BJ_MIE_MAX_SIZE_PARAMETER = 100000.0;
 
 # Largest |m|·x accepted by [`mie`].
 #
 # The logarithmic derivative Dₙ(mx) is computed by downward recurrence
 # from n ≈ max(n_max, |mx| + 4|mx|^{1/3}) + 15, so |mx| bounds the run time.
 # Rust: bijli::scattering::MIE_MAX_MX
-const BJ_MIE_MAX_MX = 10000000.0;
+public const BJ_MIE_MAX_MX = 10000000.0;

@@ -6,7 +6,7 @@
 > (`tests/golden/`) checks every ported function on its grid besides; this ledger is about the oracle's own
 > assertions.
 
-**858 Rust tests:** 0 ported, 0 not applicable, 858 pending.
+**858 Rust tests:** 11 ported, 0 not applicable, 847 pending.
 
 | Rust file | Milestone | Cyrius tests | Rust tests | Ported | N/A | Pending |
 |---|---|---|---:|---:|---:|---:|
@@ -16,11 +16,11 @@
 | `src/charge.rs` | M1 | `tests/charge.tcyr` | 26 | 0 | 0 | 26 |
 | `src/circuit.rs` | M2 | `tests/circuit.tcyr` | 51 | 0 | 0 | 51 |
 | `src/compute.rs` | M6 | `tests/compute.tcyr` | 18 | 0 | 0 | 18 |
-| `src/error.rs` | M1 | `tests/error.tcyr` | 10 | 0 | 0 | 10 |
+| `src/error.rs` | M1 | `tests/error.tcyr` | 10 | 10 | 0 | 0 |
 | `src/fdtd.rs` | M6 | `tests/fdtd1d.tcyr`, `tests/fdtd_media.tcyr`, `tests/nf2ff.tcyr`, `tests/fdtd_util.tcyr`, `tests/cpml.tcyr`, `tests/fdtd2d.tcyr`, `tests/fdtd3d.tcyr` | 167 | 0 | 0 | 167 |
 | `src/field.rs` | M1 | `tests/field.tcyr` | 105 | 0 | 0 | 105 |
 | `src/integration/soorat.rs` | M7 | `tests/soorat.tcyr` | 14 | 0 | 0 | 14 |
-| `src/logging.rs` | M1 | `tests/log.tcyr` | 1 | 0 | 0 | 1 |
+| `src/logging.rs` | M1 | `tests/log.tcyr` | 1 | 1 | 0 | 0 |
 | `src/material.rs` | M2 | `tests/material.tcyr` | 42 | 0 | 0 | 42 |
 | `src/maxwell.rs` | M1 | `tests/maxwell.tcyr` | 18 | 0 | 0 | 18 |
 | `src/polarization.rs` | M3 | `tests/polarization.tcyr` | 69 | 0 | 0 | 69 |

@@ -50,6 +50,8 @@ port's harness reads the same files. This README records what is specific to bij
 | Module | Milestone | Golden rows | Golden emitter | Generated Cyrius |
 |---|---|---|---|---|
 | `constants` | M0 | 12 | `src/m_constants.rs` | `src/constants.cyr` (`src/t_constants.rs`, with the completeness proof) |
+| `error` | M1 | 1,635 | `src/m_error.rs` | — |
+| `fmtf` | M1 | 37,576 | `src/m_fmtf.rs` (impetus's grid) | — |
 | `math` | M0 (+ 125 corrected, M1) | 34,734 | `src/m_math.rs` | — |
 | (correctly rounded tables) | M1 | — | — | `src/crmath_data.cyr` (`crtables.py`, written and checked by `validate.py`) |
 | (correctly rounded tables, kimiya's) | M1 | — | — | `src/crmath_k_data.cyr` (`crtables_k.py`, written and checked by `validate.py`) |
@@ -75,7 +77,8 @@ fn <TAB> class <TAB> inputs <TAB> outputs <TAB> note
   - `e:<Enum>.<Variant>`: a Rust enum variant by name;
   - `s:<percent-encoded UTF-8>`: a string (bytes outside printable ASCII, and `%`, as `%XX`);
   - `n:`: `None`;
-  - `E:<Variant>`: `Err(BijliError::<Variant>)`, its payload omitted;
+  - `E:<Variant>`: `Err(BijliError::<Variant>)`; the error rows follow it with the variant's fields and its Display
+    text (`s:`), which the port reads back from the last-error record (ADR 0002 row 4);
   - `v:<len>`: a sequence, its elements' tokens following.
 - **A complex value is two `f:` tokens**, the real part first.
 - The **note** column is a human-readable rendering for review; the harness ignores it.

@@ -15,6 +15,9 @@ description = "Drives the frozen Rust bijli 1.2.0 in rust-old/ to write the Cyri
 # is a scaffold with one infallible constructor, and wgpu adds nothing to any row.
 [dependencies]
 bijli = { path = "../../rust-old", default-features = false, features = ["full"] }
+# serde_json is bijli's own (the `full` features pull it), named here for the fmtf rows' `serde_json::f64` form:
+# the lock keeps it at 1.0.154, the version the oracle was tested with.
+serde_json = "1.0.154"
 
 [[bin]]
 name = "oracle"

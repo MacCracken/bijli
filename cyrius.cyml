@@ -11,23 +11,24 @@ cyrius = "6.7.18"
 entry = "src/main.cyr"
 output = "build/bijli"
 
-# Stdlib leaves for M0 (the harness and the math check). Port plan §6 step 3 lists the full
-# set; sakshi, bayan and thread_local join with log.cyr / error.cyr in M1, and the [lib.ai]
-# profile adds sandhi in M7. No [deps.hisab]: bijli has no production hisab dependency (ADR 0001).
+# Stdlib leaves (port plan §6 step 3): atomic and thread_local hold the per-thread last-error record
+# (src/error.cyr), sakshi is the logging (src/log.cyr); bayan joins with the JSON readers, and the
+# [lib.ai] profile adds sandhi in M7. No [deps.hisab]: bijli has no production hisab dependency
+# (ADR 0001).
 [deps]
 stdlib = ["syscalls", "string", "alloc", "str", "fmt", "io", "vec", "args", "math", "ganita",
-          "tagged", "result", "fnptr", "freelist", "mmap", "overflow"]
+          "tagged", "result", "fnptr", "freelist", "mmap", "overflow", "atomic", "thread_local",
+          "sakshi"]
 
-# [test] modules is the [lib] list, so every test, bench and fuzz unit sees the library (port plan
-# §6 step 7); scripts/surface_parity.py checks that the two lists stay equal.
+# Every test, bench and fuzz unit includes tests/lib.cyr, the [lib] modules as files of their own (not
+# `[test] modules`, which would fold them into the test's own file: port-parity.md §8);
+# scripts/surface_parity.py checks that its list equals [lib] modules.
 [test]
-stdlib = ["assert", "bench"]
-modules = ["src/constants.cyr", "src/crmath_data.cyr", "src/crmath.cyr", "src/crmath_k_data.cyr",
-           "src/crmath_k.cyr", "src/mathx.cyr"]
+stdlib = ["assert", "bench", "thread"]
 timeout = 300
 
 # The default bundle (dist/bijli.cyr). The order is load-bearing: no src/ file includes another.
 # [lib.ai] joins in M7.
 [lib]
 modules = ["src/constants.cyr", "src/crmath_data.cyr", "src/crmath.cyr", "src/crmath_k_data.cyr",
-           "src/crmath_k.cyr", "src/mathx.cyr"]
+           "src/crmath_k.cyr", "src/mathx.cyr", "src/fmtf.cyr", "src/log.cyr", "src/error.cyr"]

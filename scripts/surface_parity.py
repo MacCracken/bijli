@@ -20,8 +20,8 @@ A function the rules would name otherwise is in FN_RENAMES; anything else needs 
 NOT_APPLICABLE_MODULES.
 
 It also checks two things the port relies on:
-- `[test] modules` equals `[lib] modules` in cyrius.cyml, in order: tests see exactly the library (port plan §6
-  step 7, replacing impetus's tests/lib_*.cyr mirrors);
+- tests/lib.cyr includes `[lib] modules` in cyrius.cyml, in order, and there is no `[test] modules`: tests see
+  exactly the library, each src/ file as a file of its own (port-parity.md §8; impetus's tests/lib_*.cyr pattern);
 - no `s.f = g(.., t.e, ..)` where g returns a struct and t.e is struct-typed (impetus's scan of the open cyrius
   field-store defect).
 Exits 1 on a missing item, an EXCEPTIONS entry that names no Rust item, a file unaccounted for, or a failed check.
@@ -36,10 +36,10 @@ import rustsrc  # noqa: E402
 root = Path(sys.argv[1] if len(sys.argv) > 1 else ".").resolve()
 
 # Ported modules (their milestone done or in progress, item by item).
-MODULES = []
+MODULES = ["error", "logging"]
 # Rust module -> the milestone that ports it (port plan §4.1).
 PENDING_MODULES = {
-    "error": "M1", "logging": "M1", "field": "M1", "maxwell": "M1", "charge": "M1",
+    "field": "M1", "maxwell": "M1", "charge": "M1",
     "material": "M2", "wave": "M2", "circuit": "M2", "relativity": "M2",
     "polarization": "M3", "scattering": "M3", "beam": "M3",
     "rf": "M4",
@@ -54,7 +54,8 @@ NOT_APPLICABLE_MODULES = {
 ENUM_NAMES = {"BijliError": "BjError"}
 ENUM_PREFIX = {"BijliError": "BJ_ERR_"}
 OPERATORS = {"Add": "add", "Sub": "sub", "Mul": "mul", "Div": "div", "Neg": "neg"}
-FN_RENAMES = {}
+# Cyrius has one namespace per program, so logging's `init` / `init_with_level` keep their module in the name.
+FN_RENAMES = {"init": "bj_log_init", "init_with_level": "bj_log_init_with_level"}
 FIELD_RENAMES = {}
 EXCEPTIONS = {}
 
@@ -79,7 +80,7 @@ def cyrius_index():
         text = path.read_text()
         for line in text.splitlines():
             s = line.strip()
-            m = re.match(r"impl (?:\w+ for )?(\w+) \{", s)
+            m = re.match(r"(?:public |pub )?impl (?:\w+ for )?(\w+) \{", s)
             if m and impl is None:
                 impl, depth = m.group(1), 0
             m = re.match(r"(?:public |pub )?fn (\w+)", s)
@@ -94,14 +95,14 @@ def cyrius_index():
             m = re.match(r"(BJ_\w+) = -?\d+;", s)
             if m:
                 members.add(m.group(1))
-            m = re.match(r"enum (\w+)", s)
+            m = re.match(r"(?:public |pub )?enum (\w+)", s)
             if m:
                 enums.add(m.group(1))
             if impl is not None:
                 depth += line.count("{") - line.count("}")
                 if depth <= 0 and s == "}":
                     impl = None
-        for m in re.finditer(r"struct (\w+) \{(.*?)\}", text, re.S):
+        for m in re.finditer(r"(?:public |pub )?struct (\w+) \{(.*?)\}", text, re.S):
             structs[m.group(1)] = {f.strip().split(":")[0].strip() for f in m.group(2).replace("\n", ";").split(";")
                                    if f.strip() and not f.strip().startswith("#")}
     return fns, consts, members, enums, structs
@@ -151,7 +152,7 @@ def rust_items(module):
 
 
 def lib_sync():
-    """[test] modules equals [lib] modules, in order."""
+    """tests/lib.cyr includes [lib] modules, in order, and cyrius.cyml has no [test] modules (port-parity.md §8)."""
     sections, current = {}, None
     for line in (root / "cyrius.cyml").read_text().split("\n"):
         if re.match(r"\[[\w.]+\]\s*$", line):
@@ -166,8 +167,11 @@ def lib_sync():
         lists[table] = re.findall(r'"([^"]+)"', m.group(1)) if m else None
     if lists["lib"] is None:
         return ["cyrius.cyml has no [lib] modules list"]
-    if lists["test"] != lists["lib"]:
-        return [f"cyrius.cyml [test] modules {lists['test']} differ from [lib] modules {lists['lib']}"]
+    if lists["test"] is not None:
+        return ["cyrius.cyml [test] modules is back: test units include tests/lib.cyr instead"]
+    mirror = re.findall(r'^include "([^"]+)"', (root / "tests/lib.cyr").read_text(), re.M)
+    if mirror != lists["lib"]:
+        return [f"tests/lib.cyr includes {mirror}, not [lib] modules {lists['lib']}"]
     return []
 
 

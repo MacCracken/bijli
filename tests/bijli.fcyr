@@ -1,5 +1,7 @@
 # bijli fuzz harness
 
+include "tests/lib.cyr"
+
 # Fuzz entry: feeds one input buffer (`data`, `len` bytes) to the code under test.
 fn fuzz_main(data, len) {
     if (len == 0) { return 0; }

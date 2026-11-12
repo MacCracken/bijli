@@ -1,0 +1,171 @@
+# log.cyr — bijli's logging: Rust's `tracing` sites and `logging::init` on sakshi (port of rust-old/src/logging.rs).
+#
+# Rust 1.2.0 emits through `tracing` (39 debug!, 15 warn!, 4 error!, 4 trace!), which prints nothing until the
+# consumer installs a subscriber; `bijli::logging::init()` installs one filtered by the `BIJLI_LOG` environment
+# variable, else "info". The port keeps that:
+# - bijli's own gate, `_bj_log_level`, starts OFF (−1): a consumer that never calls bj_log_init sees nothing, as a
+#   Rust consumer with no subscriber;
+# - bj_log_init sets the gate from BIJLI_LOG, else from its default, once (Rust's `try_init`: the first
+#   subscriber stays), and raises sakshi's process-wide level to it when sakshi's is lower, so bijli's events
+#   reach sakshi's output. It never lowers sakshi's level: other libraries' logging is not bijli's to silence
+#   (Rust's subscriber filters every crate; ADR 0002 row 8);
+# - BIJLI_LOG takes a level (`off`, `error`, `warn`, `info`, `debug`, `trace`, any case, or `0`–`5`) or a
+#   comma-separated list of directives, of which bare levels and `bijli=<level>` apply, the last one winning.
+#   Other targets' directives are ignored, and a value with none that applies falls back to the default, as
+#   `EnvFilter::try_from_env` falls back on an invalid value (ADR 0002 row 8: not EnvFilter's whole grammar).
+# Each helper tests the gate before it touches the message, so a disabled site costs one compare (prakash measured
+# strlen first at 28–37 ns and the level first at 7 ns). Sites that format values test `_bj_log_on(level)`, then
+# write into a stack BjText (src/fmtf.cyr) and emit it with `_bj_log_text`.
+# The levels are sakshi's: SK_ERROR 1, SK_WARN 2, SK_INFO 3, SK_DEBUG 4, SK_TRACE 5; −1 is off.
+
+private
+
+# bijli's gate: events above it are dropped before sakshi sees them. −1: off.
+var _bj_log_level = 0 - 1;
+
+# 1 once bj_log_init has run (the first call decides, as Rust's `try_init`).
+var _bj_log_inited = 0;
+
+# The lowercase of ASCII byte c.
+#must_use
+fn _bj_log_lower(c): i64 {
+    if (c >= 65 && c <= 90) { return c + 32; }
+    return c;
+}
+
+# 1 when [p, p + n) is the lowercase word w, compared without case.
+#must_use
+fn _bj_log_word_is(p, n, w): i64 {
+    if (n != strlen(w)) { return 0; }
+    for (var i = 0; i < n; i = i + 1) {
+        if (_bj_log_lower(load8(p + i)) != load8(w + i)) { return 0; }
+    }
+    return 1;
+}
+
+# The level a level name [p, p + n) names: −1 for off, 1–5 for error … trace, −2 for no level.
+#must_use
+fn _bj_log_level_of(p, n): i64 {
+    if (n == 1) {
+        var c = load8(p);
+        if (c == 48) { return 0 - 1; }
+        if (c >= 49 && c <= 53) { return c - 48; }
+        return 0 - 2;
+    }
+    if (_bj_log_word_is(p, n, "off") == 1) { return 0 - 1; }
+    if (_bj_log_word_is(p, n, "error") == 1) { return 1; }
+    if (_bj_log_word_is(p, n, "warn") == 1) { return 2; }
+    if (_bj_log_word_is(p, n, "info") == 1) { return 3; }
+    if (_bj_log_word_is(p, n, "debug") == 1) { return 4; }
+    if (_bj_log_word_is(p, n, "trace") == 1) { return 5; }
+    return 0 - 2;
+}
+
+# The level a filter string sets for bijli (see the header), or −2 when none of its directives applies or s is 0.
+#must_use
+public fn _bj_log_parse(s): i64 {
+    if (s == 0) { return 0 - 2; }
+    var lv = 0 - 2;
+    var n = strlen(s);
+    var at = 0;
+    while (at <= n) {
+        var end = at;
+        while (end < n && load8(s + end) != 44) { end = end + 1; }
+        var a = at;
+        var b = end;
+        while (a < b && load8(s + a) == 32) { a = a + 1; }
+        while (b > a && load8(s + b - 1) == 32) { b = b - 1; }
+        var eq = a;
+        while (eq < b && load8(s + eq) != 61) { eq = eq + 1; }
+        if (eq == b) {
+            var l1 = _bj_log_level_of(s + a, b - a);
+            if (l1 != 0 - 2) { lv = l1; }
+        } elif (eq - a == 5 && memeq(s + a, "bijli", 5) == 1) {
+            var l2 = _bj_log_level_of(s + eq + 1, b - eq - 1);
+            if (l2 != 0 - 2) { lv = l2; }
+        }
+        at = end + 1;
+    }
+    return lv;
+}
+
+# Installs bijli's logging with `default_level` (a level name, as BIJLI_LOG takes) when BIJLI_LOG is unset or
+# sets nothing for bijli; an unreadable default is "info". Once only: a later call changes nothing. Mirrors
+# `bijli::logging::init_with_level`.
+public fn bj_log_init_with_level(default_level): i64 {
+    if (_bj_log_inited == 1) { return 0; }
+    _bj_log_inited = 1;
+    var lv = _bj_log_parse(getenv("BIJLI_LOG"));
+    if (lv == 0 - 2) { lv = _bj_log_parse(default_level); }
+    if (lv == 0 - 2) { lv = 3; }
+    _bj_log_level = lv;
+    if (lv > sakshi_get_level()) { sakshi_set_level(lv); }
+    return 0;
+}
+
+# Installs bijli's logging at BIJLI_LOG's level, else "info". Mirrors `bijli::logging::init`.
+public fn bj_log_init(): i64 {
+    return bj_log_init_with_level("info");
+}
+
+# Sets bijli's gate directly (−1 off, 1 error … 5 trace), leaving sakshi's own level alone: for a consumer that
+# configures sakshi itself.
+public fn bj_set_log_level(level): i64 {
+    _bj_log_level = level;
+    return 0;
+}
+
+# bijli's gate (−1 off, 1 error … 5 trace).
+#must_use
+public fn bj_log_level(): i64 {
+    return _bj_log_level;
+}
+
+# 1 when an event at `level` passes bijli's gate: test it before formatting a message.
+#must_use
+public fn _bj_log_on(level): i64 {
+    if (level <= _bj_log_level) { return 1; }
+    return 0;
+}
+
+# Emits the C string msg at `level` through sakshi, when the gate passes it.
+public fn _bj_log(level, msg): i64 {
+    if (level > _bj_log_level) { return 0; }
+    var n = strlen(msg);
+    if (level == 1) { sakshi_error(msg, n); }
+    elif (level == 2) { sakshi_warn(msg, n); }
+    elif (level == 3) { sakshi_info(msg, n); }
+    elif (level == 4) { sakshi_debug(msg, n); }
+    else { sakshi_trace(msg, n); }
+    return 0;
+}
+
+# Emits a BjText's contents at `level` (the gate tested again, so a caller may skip `_bj_log_on`).
+public fn _bj_log_text(level, t): i64 {
+    if (level > _bj_log_level) { return 0; }
+    return _bj_log(level, _bj_tx_ptr(t));
+}
+
+# Rust's `tracing::error!` with a fixed message.
+public fn _bj_error(msg): i64 {
+    if (_bj_log_level < 1) { return 0; }
+    return _bj_log(1, msg);
+}
+
+# Rust's `tracing::warn!` with a fixed message.
+public fn _bj_warn(msg): i64 {
+    if (_bj_log_level < 2) { return 0; }
+    return _bj_log(2, msg);
+}
+
+# Rust's `tracing::debug!` with a fixed message.
+public fn _bj_debug(msg): i64 {
+    if (_bj_log_level < 4) { return 0; }
+    return _bj_log(4, msg);
+}
+
+# Rust's `tracing::trace!` with a fixed message.
+public fn _bj_trace(msg): i64 {
+    if (_bj_log_level < 5) { return 0; }
+    return _bj_log(5, msg);
+}

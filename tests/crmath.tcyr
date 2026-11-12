@@ -3,9 +3,11 @@
 #
 # Against the oracle, the golden math rows gate them at 0 ulp (tests/parity.tcyr, with the corrected
 # oracle where glibc misrounds). Copied from impetus's tests/crmath.tcyr; the library comes from
-# cyrius.cyml's [test] modules. These check what the corpus can't say directly: the IEEE special cases,
+# tests/lib.cyr. These check what the corpus can't say directly: the IEEE special cases,
 # that the fast and slow paths agree wherever both run, and that phase 1 decides ordinary arguments
 # (phase 2 costs about 25×, the slow path about 250×).
+
+include "tests/lib.cyr"
 
 # 1 when a and b have the same bits.
 fn same(a: f64, b: f64): i64 {

@@ -191,8 +191,12 @@ and still exits 0.
   - Public structs are `Bj<Name>`, with `impl` blocks, so methods keep their Rust names.
   - Free functions are `bj_<rust_name>`.
   - Globals and enum members carry `BJ_`; private helpers carry `_bj_`.
-  - Each `src/*.cyr` is a `private` file that marks its API `public`.
+  - A `src/*.cyr` with public API is a `private` file that marks that API `public`. The bundle is one
+    file, so the marker makes all of it private, and consumers see exactly the `public` items. A file
+    of internals only (the math, fmtf) carries no marker.
   - A bundle shares one namespace with its consumers.
+  - Tests, benches and fuzz units include `tests/lib.cyr`, never `[test] modules`: a prepended module
+    joins the test's own file, which breaks `private` and execution coverage (port-parity.md §8).
 - Build with `cyrius build`, not raw `cat file | cc5` — the manifest auto-resolves deps.
 - Source files only need project includes — stdlib auto-resolves from `cyrius.cyml`.
 - `var buf[N]` = N **bytes**, not N entries. Declare `var a: f64[N]` for elements.

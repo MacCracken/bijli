@@ -1,5 +1,7 @@
 # bijli test suite
-# Stdlib auto-included via cyrius.cyml
+# Stdlib auto-included via cyrius.cyml; the library through tests/lib.cyr
+
+include "tests/lib.cyr"
 
 # Runs the bijli test groups and returns the assert summary as the exit code.
 fn main() {

@@ -20,19 +20,18 @@
 # compare the same rows against another Cyrius candidate and are never gated. The exit code is
 # the number of modules with a failure.
 
-include "tests/ulp.cyr"
+include "tests/lib.cyr"
 
-alloc_init();
+include "tests/ulp.cyr"
 
 include "tests/parity_core.cyr"
 
 # ── hooks ───────────────────────────────────────────────────────────────────────────
 
-# The Rust variant name of an error code. src/error.cyr (M1) brings `bj_error_name`; until then
-# no dispatcher returns an error.
+# The Rust variant name of an error code: src/error.cyr's.
 #must_use
-fn _par_error_name(code): i64 {
-    return "Unknown";
+public fn _par_error_name(code): i64 {
+    return bj_error_name(code);
 }
 
 # ── cross-target digests (M0 step 8) ────────────────────────────────────────────────
@@ -40,8 +39,8 @@ fn _par_error_name(code): i64 {
 # x86_64 ELF, x86_64 PE and aarch64: equal digests mean bit-identical results on every row, which
 # is what ADR 0002 row 6 promises. Histograms alone can't show that. One slot per golden function
 # (_PAR_DG_NAMES, in order), then one per shadow.
-var _PAR_DG_N = 32;
-var _par_dg: i64[32];
+var _PAR_DG_N = 64;
+var _par_dg: i64[64];
 var _par_dg_used = 0;
 var _PAR_DG_NAMES = 0;
 
@@ -53,8 +52,8 @@ fn _par_dg_init() {
 
 # The digest slot of (function), registered on first sight in a module's row order; -1 when the
 # table is full.
-var _par_dg_fp: i64[32];
-var _par_dg_fl: i64[32];
+var _par_dg_fp: i64[64];
+var _par_dg_fl: i64[64];
 fn _par_dg_slot(fp, fl): i64 {
     for (var k = 0; k < _par_dg_used; k = k + 1) {
         if (_par_dg_fl[k] == fl && memeq(_par_dg_fp[k], fp, fl) == 1) { return k; }
@@ -66,12 +65,21 @@ fn _par_dg_slot(fp, fl): i64 {
     return _par_dg_used - 1;
 }
 
-# Folds the got list into digest `slot`.
+# Folds the got list into digest `slot`: a word for f, i, v and n tokens, the bytes of the text for s, e and E
+# tokens (whose word is an address, which differs from run to run).
 fn _par_dg_fold(slot) {
     if (slot < 0) { return 0; }
     var h = _par_dg[slot];
     for (var k = 0; k < _par_got_n; k = k + 1) {
-        h = (h ^ load64(_par_got_v + k * 8)) * 0x100000001b3;
+        var kind = load64(_par_got_k + k * 8);
+        var v = load64(_par_got_v + k * 8);
+        if (kind == 115 || kind == 101 || kind == 69) {
+            var len = load64(_par_got_l + k * 8);
+            for (var j = 0; j < len; j = j + 1) { h = (h ^ load8(v + j)) * 0x100000001b3; }
+            h = (h ^ 0xff) * 0x100000001b3;
+        } else {
+            h = (h ^ v) * 0x100000001b3;
+        }
     }
     _par_dg[slot] = h;
     return 0;
@@ -174,9 +182,98 @@ fn _par_math(fp, fl): i64 {
     return 0;
 }
 
-fn _par_dispatch(mp, ml, fp, fl): i64 {
+# `BijliError::*` rows: src/error.cyr's constructors, then the calling thread's record read back: the code (the
+# `E:` token, which must be the code the constructor returned), the variant's fields through bj_last_error_*,
+# and Rust's Display text.
+fn _par_error(fp, fl): i64 {
+    var code = 0 - 1;
+    if (_par_eq(fp, fl, "BijliError::DimensionMismatch") == 1) {
+        code = _bj_err_dimension_mismatch(_par_in(0), _par_in(1));
+        _par_got_err(bj_last_error());
+        _par_got_i(bj_last_error_expected());
+        _par_got_i(bj_last_error_got());
+    } elif (_par_eq(fp, fl, "BijliError::ZeroCharge") == 1) {
+        code = _bj_err_zero_charge();
+        _par_got_err(bj_last_error());
+    } elif (_par_eq(fp, fl, "BijliError::Singularity") == 1) {
+        code = _bj_err_singularity();
+        _par_got_err(bj_last_error());
+    } elif (_par_eq(fp, fl, "BijliError::InsufficientResolution") == 1) {
+        var d: f64 = _par_in(1);
+        code = _bj_err_insufficient_resolution(_par_in(0), d);
+        _par_got_err(bj_last_error());
+        _par_got_i(bj_last_error_cells());
+        var ds: f64 = bj_last_error_domain_size();
+        _par_got_f(ds);
+    } elif (_par_eq(fp, fl, "BijliError::InvalidPermittivity") == 1) {
+        var v1: f64 = _par_in(0);
+        code = _bj_err_invalid_permittivity(v1);
+        _par_got_err(bj_last_error());
+        var r1: f64 = bj_last_error_value();
+        _par_got_f(r1);
+    } elif (_par_eq(fp, fl, "BijliError::InvalidPermeability") == 1) {
+        var v2: f64 = _par_in(0);
+        code = _bj_err_invalid_permeability(v2);
+        _par_got_err(bj_last_error());
+        var r2: f64 = bj_last_error_value();
+        _par_got_f(r2);
+    } elif (_par_eq(fp, fl, "BijliError::DivisionByZero") == 1) {
+        var c1 = _par_in_cstr(0);
+        if (c1 == 0) { return 0 - 1; }
+        code = _bj_err_division_by_zero(c1);
+        _par_got_err(bj_last_error());
+        var d1 = bj_last_error_detail();
+        _par_got_text(d1, strlen(d1));
+    } elif (_par_eq(fp, fl, "BijliError::InvalidParameter") == 1) {
+        var c2 = _par_in_cstr(0);
+        if (c2 == 0) { return 0 - 1; }
+        code = _bj_err_invalid_parameter(c2);
+        _par_got_err(bj_last_error());
+        var d2 = bj_last_error_detail();
+        _par_got_text(d2, strlen(d2));
+    } elif (_par_eq(fp, fl, "BijliError::InvalidParameter/f64") == 1) {
+        var pre = _par_in_cstr(0);
+        if (pre == 0) { return 0 - 1; }
+        var x: f64 = _par_in(1);
+        var tx = _bj_err_reason(BJ_ERR_INVALID_PARAMETER);
+        _bj_tx_cstr(tx, pre);
+        _bj_fmt_f64_display(tx, x);
+        code = BJ_ERR_INVALID_PARAMETER;
+        _par_got_err(bj_last_error());
+        var d3 = bj_last_error_detail();
+        _par_got_text(d3, strlen(d3));
+    } else {
+        return 0;
+    }
+    if (code != bj_last_error()) { return 0 - 1; }
+    var txt = bj_last_error_display();
+    _par_got_text(txt, strlen(txt));
+    return 1;
+}
+
+# `f64::fmt_display` and `serde_json::f64` rows: src/fmtf.cyr's two layouts, into a bounded BjText.
+fn _par_fmtf(fp, fl): i64 {
+    var x: f64 = _par_in(0);
+    var buf[400];
+    var t[24];
+    _bj_tx_init(&t, &buf, 400);
+    if (_par_eq(fp, fl, "f64::fmt_display") == 1) {
+        _bj_fmt_f64_display(&t, x);
+    } elif (_par_eq(fp, fl, "serde_json::f64") == 1) {
+        _bj_fmt_f64_json(&t, x);
+    } else {
+        return 0;
+    }
+    if (_bj_tx_overflowed(&t) == 1) { return 0 - 1; }
+    _par_got_text(_bj_tx_ptr(&t), _bj_tx_len(&t));
+    return 1;
+}
+
+public fn _par_dispatch(mp, ml, fp, fl): i64 {
     _par_got_n = 0;
     if (_par_eq(mp, ml, "constants") == 1) { return _par_constants(fp, fl); }
+    if (_par_eq(mp, ml, "error") == 1) { return _par_error(fp, fl); }
+    if (_par_eq(mp, ml, "fmtf") == 1) { return _par_fmtf(fp, fl); }
     if (_par_eq(mp, ml, "math") == 1) { return _par_math(fp, fl); }
     return 0;
 }
@@ -185,7 +282,7 @@ fn _par_dispatch(mp, ml, fp, fl): i64 {
 # - the exp and atan polyfills, the cross-target fallback before src/crmath.cyr (1 ulp from the corrected
 #   oracle on a few percent of rows);
 # - the stdlib min / max, to show where their NaN semantics differ from Rust's.
-fn _par_shadows(mp, ml, fp, fl, cls) {
+public fn _par_shadows(mp, ml, fp, fl, cls) {
     # The port's own outputs, still in the got list after dispatch: fold them first.
     if (_par_got_n > 0) { _par_dg_fold(_par_dg_slot(fp, fl)); }
     if (_par_eq(mp, ml, "math") != 1) { return 0; }
@@ -227,7 +324,7 @@ fn _par_shadows(mp, ml, fp, fl, cls) {
 # The class-C bound for a function, in ulps; -1 when none is set yet (the rows are measured). bijli's bound is 0
 # against the corrected oracle (ADR 0001), set per function as its correctly rounded form is dispatched.
 #must_use
-fn _par_c_bound(fp, fl): i64 {
+public fn _par_c_bound(fp, fl): i64 {
     if (_par_eq(fp, fl, "f64::cbrt") == 1) { return 0; }
     if (_par_eq(fp, fl, "f64::exp") == 1) { return 0; }
     if (_par_eq(fp, fl, "f64::sin") == 1) { return 0; }
@@ -247,18 +344,18 @@ fn _par_c_bound(fp, fl): i64 {
 # The ADR accepting a divergent row (function and raw input field), or 0. None yet: the ADR 0002
 # mappings arrive with their modules.
 #must_use
-fn _par_accepted(fp, fl, ip, il): i64 {
+public fn _par_accepted(fp, fl, ip, il): i64 {
     return 0;
 }
 
 # 1 for an ADR whose accepted rows are counted but not printed row by row. None yet.
 #must_use
-fn _par_accepted_quiet(adr): i64 {
+public fn _par_accepted_quiet(adr): i64 {
     return 0;
 }
 
 # Module-specific summary lines after a module's report: each function's cross-target digest.
-fn _par_module_done(mp, ml) {
+public fn _par_module_done(mp, ml) {
     _par_dg_print_all();
     _par_dg_init();
     return 0;
@@ -266,10 +363,13 @@ fn _par_module_done(mp, ml) {
 
 # Every module is replayed here: bijli has one profile.
 #must_use
-fn _par_skip(mp, ml): i64 {
+public fn _par_skip(mp, ml): i64 {
     return 0;
 }
 
+# The first top-level statement: every `public` hook above must precede it, since the library modules prepended
+# to this unit are `private` (src/error.cyr) and parity_core.cyr calls the hooks from its own file.
+alloc_init();
 _par_dg_init();
 var exit_code = _par_main();
 sys_exit_group(exit_code);

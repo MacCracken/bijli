@@ -1,9 +1,11 @@
 # cr_driver.cyr — evaluates bijli's correctly rounded primitives on the arguments cr_verify.py writes.
 #
 # Input build/cr_in.txt, one call per line: `<fn> <x bits hex> [<y bits hex>]`. Output, one line per call: the
-# result's bits in hex. Built against the shipped bundle (dist/bijli.cyr, after `cyrius distlib`), so it checks what a
-# consumer links. scripts/oracle/cr_verify.py builds it, runs it natively and under qemu-aarch64, and compares every
-# result with MPFR. `tan_slow` calls tan's fixed-point path directly (finite |x| ≥ 2^-27 only), so the path the
+# result's bits in hex. Built from the math sources the bundle carries (src/constants.cyr … src/mathx.cyr, in the
+# manifest's order and byte for byte what dist/bijli.cyr holds): the bundle is `private` and these entry points are
+# bijli-internal, so a consumer of dist/bijli.cyr can't call them, but a file of internals only has no marker and can
+# be included on its own. scripts/oracle/cr_verify.py builds it, runs it natively and under qemu-aarch64, and compares
+# every result with MPFR. `tan_slow` calls tan's fixed-point path directly (finite |x| ≥ 2^-27 only), so the path the
 # rounding test rarely reaches is checked on arguments of its own.
 include "lib/syscalls.cyr"
 include "lib/string.cyr"
@@ -13,7 +15,12 @@ include "lib/fmt.cyr"
 include "lib/io.cyr"
 include "lib/math.cyr"
 include "lib/ganita.cyr"
-include "dist/bijli.cyr"
+include "src/constants.cyr"
+include "src/crmath_data.cyr"
+include "src/crmath.cyr"
+include "src/crmath_k_data.cyr"
+include "src/crmath_k.cyr"
+include "src/mathx.cyr"
 
 # The value of hex digit byte c (lowercase).
 fn _hexv(c): i64 {

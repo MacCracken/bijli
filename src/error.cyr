@@ -1,0 +1,361 @@
+# error.cyr — bijli's error codes and the per-thread last-error record (port of rust-old/src/error.rs).
+#
+# A fallible bijli function returns a value-form Result whose Err payload is one of the BJ_ERR_* codes:
+# `var t, v = f(..); if (is_err_result(t) == 1) { .. v is the code .. }`. The golden token `E:InvalidParameter`
+# is BJ_ERR_INVALID_PARAMETER: BJ_ERR_ + snake(variant). The values follow the Rust variant order and are
+# append-only (the Cyrius form of #[non_exhaustive]); BJ_ERR_TRANSPORT is Cyrius-only (ADR 0002 row 7).
+#
+# Rust's variants carry data (`DimensionMismatch { expected, got }`, `InvalidPermittivity { value }`, the
+# `reason` and `context` strings, mostly `format!`ed with the caller's values). A one-word Result can't hold it,
+# so the code that makes an error also fills the calling thread's LAST-ERROR RECORD (ADR 0002 row 4): the code,
+# the variant's fields, and Rust's Display text of the error byte for byte (`e.to_string()`, with f64 fields in
+# Rust's shortest form through src/fmtf.cyr). bj_last_error_* read it back. A later error on the same thread
+# replaces it; a success leaves it alone (as errno). Nothing is lost, nothing is logged (Rust logs no error),
+# and nothing allocates per error.
+#
+# Where the record lives. Cyrius has no thread-local variables; lib/thread_local.cyr gives slots in a per-thread
+# block, which on Linux the main thread has only once someone calls thread_local_init, and whose slot numbers are
+# claimed once (thread_local_alloc). So:
+# - on Linux the main thread (tid = pid) uses a static record, and needs no block; elsewhere (Windows, macOS) every
+#   thread has a block, the main one included, and keeps its record in the slot like the others;
+# - every other thread keeps a pointer to its own record, from fl_alloc (thread-safe since 6.5.19), in one slot
+#   bijli claims on first use; bj_init claims it early, on the main thread before any worker starts, as
+#   thread_local.cyr's contract asks of a library; bj_thread_done gives a worker's record back;
+# - without a slot (the 112 library slots used up), or in thread_local.cyr's foreign mode (one slot array for
+#   one glibc thread), every thread shares the static record.
+#
+# Making an error, inside bijli: `return Err(_bj_err_singularity());`, or for a formatted reason
+#     var t = _bj_err_reason(BJ_ERR_INVALID_PARAMETER);
+#     _bj_tx_cstr(t, "frequency must be positive, got ");
+#     _bj_fmt_f64_display(t, frequency);
+#     return Err(BJ_ERR_INVALID_PARAMETER);
+
+private
+
+public enum BjError {
+    BJ_ERR_NONE = 0;
+    BJ_ERR_DIMENSION_MISMATCH = 1;
+    BJ_ERR_ZERO_CHARGE = 2;
+    BJ_ERR_SINGULARITY = 3;
+    BJ_ERR_INSUFFICIENT_RESOLUTION = 4;
+    BJ_ERR_INVALID_PERMITTIVITY = 5;
+    BJ_ERR_INVALID_PERMEABILITY = 6;
+    BJ_ERR_DIVISION_BY_ZERO = 7;
+    BJ_ERR_INVALID_PARAMETER = 8;
+    BJ_ERR_TRANSPORT = 9;
+}
+
+# ── the record ──────────────────────────────────────────────────────────────────────
+# Words: 0 the code; 8 and 16 the integer fields (expected and got, or cells); 24 the f64 field (value, or
+# domain_size) as bits; 32 the byte offset of the reason or context inside the text, −1 when the variant has
+# none; 40–56 the text's BjText header (src/fmtf.cyr). The text, NUL-terminated, from byte 64.
+const _BJ_ERR_REC = 2112;
+const _BJ_ERR_TEXT = 64;
+const _BJ_ERR_CAP = 2048;
+
+# The static record: the Linux main thread's, and every thread's when there is no slot.
+var _bj_err_static[2112];
+
+# The thread_local slot holding a thread's record pointer: −1 until claimed, and −1 for good when none was left.
+var _bj_err_slot = 0 - 1;
+
+# The claim's once-gate (0 unclaimed, 1 claiming) and its published flag.
+var _bj_err_gate = 0;
+var _bj_err_ready = 0;
+
+# Claims the slot once, from whichever thread gets there first; the others wait for it to be published.
+fn _bj_err_claim(): i64 {
+    if (_bj_err_ready == 1) { return _bj_err_slot; }
+    if (atomic_cas(&_bj_err_gate, 0, 1) == 1) {
+        _bj_err_slot = thread_local_alloc();
+        atomic_store(&_bj_err_ready, 1);
+    }
+    while (atomic_load(&_bj_err_ready) == 0) { }
+    return _bj_err_slot;
+}
+
+# r = an empty record: no error.
+fn _bj_err_reset(r) {
+    store64(r, BJ_ERR_NONE);
+    store64(r + 8, 0);
+    store64(r + 16, 0);
+    store64(r + 24, 0);
+    store64(r + 32, 0 - 1);
+    _bj_tx_init(r + 40, r + _BJ_ERR_TEXT, _BJ_ERR_CAP);
+    return 0;
+}
+
+# 1 when the calling thread uses the static record (see the header). On Linux, until thread_create has run
+# (lib/atomic.cyr's `_threads_active`, armed before any child starts), the caller can only be the main thread, whose
+# record is the static one whatever happens later: no slot, no syscall. Elsewhere the main thread keeps its record
+# in the slot like any other, from the first call on, so the shortcut would switch records under it (the PE run
+# of tests/error.tcyr's last_error_per_thread caught that).
+#must_use
+fn _bj_err_uses_static(): i64 {
+    #ifdef CYRIUS_TARGET_LINUX
+    if (_threads_active == 0) { return 1; }
+    #endif
+    if (_bj_err_claim() < 0) { return 1; }
+    if (_tlocal_foreign == 1) { return 1; }
+    #ifdef CYRIUS_TARGET_LINUX
+    if (syscall(SYS_GETTID) == sys_getpid()) { return 1; }
+    #endif
+    return 0;
+}
+
+# The calling thread's record, made on first use.
+#must_use
+fn _bj_err_rec(): i64 {
+    if (_bj_err_uses_static() == 1) {
+        if (load64(&_bj_err_static + 40) == 0) { _bj_err_reset(&_bj_err_static); }
+        return &_bj_err_static;
+    }
+    var r = thread_local_get(_bj_err_slot);
+    if (r == 0) {
+        r = fl_alloc(_BJ_ERR_REC);
+        if (r == 0) {
+            # No memory for this thread's record: share the static one rather than lose the error.
+            if (load64(&_bj_err_static + 40) == 0) { _bj_err_reset(&_bj_err_static); }
+            return &_bj_err_static;
+        }
+        _bj_err_reset(r);
+        thread_local_set(_bj_err_slot, r);
+    }
+    return r;
+}
+
+# Starts recording error `code` on the calling thread: the record emptied, the code set, and the text's BjText
+# returned for the Display text to be written into.
+fn _bj_err_begin(code): i64 {
+    var r = _bj_err_rec();
+    _bj_err_reset(r);
+    store64(r, code);
+    return r + 40;
+}
+
+# ── making errors (bijli-internal) ──────────────────────────────────────────────────
+
+# Records DimensionMismatch { expected, got } (usize fields); returns its code. Rust's text:
+# "invalid field dimensions: expected {expected}D, got {got}D".
+public fn _bj_err_dimension_mismatch(expected, got): i64 {
+    var t = _bj_err_begin(BJ_ERR_DIMENSION_MISMATCH);
+    store64(t - 32, expected);
+    store64(t - 24, got);
+    _bj_tx_cstr(t, "invalid field dimensions: expected ");
+    _bj_tx_u64(t, expected);
+    _bj_tx_cstr(t, "D, got ");
+    _bj_tx_u64(t, got);
+    _bj_tx_putc(t, 68);
+    return BJ_ERR_DIMENSION_MISMATCH;
+}
+
+# Records ZeroCharge; returns its code.
+public fn _bj_err_zero_charge(): i64 {
+    var t = _bj_err_begin(BJ_ERR_ZERO_CHARGE);
+    _bj_tx_cstr(t, "charge magnitude is zero — cannot compute field direction");
+    return BJ_ERR_ZERO_CHARGE;
+}
+
+# Records Singularity; returns its code.
+public fn _bj_err_singularity(): i64 {
+    var t = _bj_err_begin(BJ_ERR_SINGULARITY);
+    _bj_tx_cstr(t, "singularity: field evaluation at source point (distance = 0)");
+    return BJ_ERR_SINGULARITY;
+}
+
+# Records InsufficientResolution { cells, domain_size }; returns its code. Rust's text:
+# "grid resolution too coarse: {cells} cells for domain size {domain_size}".
+public fn _bj_err_insufficient_resolution(cells, domain_size: f64): i64 {
+    var t = _bj_err_begin(BJ_ERR_INSUFFICIENT_RESOLUTION);
+    store64(t - 32, cells);
+    store64(t - 16, _bj_bits(domain_size));
+    _bj_tx_cstr(t, "grid resolution too coarse: ");
+    _bj_tx_u64(t, cells);
+    _bj_tx_cstr(t, " cells for domain size ");
+    _bj_fmt_f64_display(t, domain_size);
+    return BJ_ERR_INSUFFICIENT_RESOLUTION;
+}
+
+# Records InvalidPermittivity { value }; returns its code. Rust's text: "invalid permittivity: {value} (must be > 0)".
+public fn _bj_err_invalid_permittivity(value: f64): i64 {
+    var t = _bj_err_begin(BJ_ERR_INVALID_PERMITTIVITY);
+    store64(t - 16, _bj_bits(value));
+    _bj_tx_cstr(t, "invalid permittivity: ");
+    _bj_fmt_f64_display(t, value);
+    _bj_tx_cstr(t, " (must be > 0)");
+    return BJ_ERR_INVALID_PERMITTIVITY;
+}
+
+# Records InvalidPermeability { value }; returns its code. Rust's text: "invalid permeability: {value} (must be > 0)".
+public fn _bj_err_invalid_permeability(value: f64): i64 {
+    var t = _bj_err_begin(BJ_ERR_INVALID_PERMEABILITY);
+    store64(t - 16, _bj_bits(value));
+    _bj_tx_cstr(t, "invalid permeability: ");
+    _bj_fmt_f64_display(t, value);
+    _bj_tx_cstr(t, " (must be > 0)");
+    return BJ_ERR_INVALID_PERMEABILITY;
+}
+
+# Starts an error whose payload is a string, DivisionByZero { context }, InvalidParameter { reason } or the
+# Cyrius-only Transport { reason }: writes the Display text's prefix, marks where the string starts, and returns
+# the BjText for the caller to write the string into. A code with no string payload gets no prefix.
+public fn _bj_err_reason(code): i64 {
+    var t = _bj_err_begin(code);
+    if (code == BJ_ERR_DIVISION_BY_ZERO) { _bj_tx_cstr(t, "division by zero in EM calculation: "); }
+    elif (code == BJ_ERR_INVALID_PARAMETER) { _bj_tx_cstr(t, "invalid parameter: "); }
+    elif (code == BJ_ERR_TRANSPORT) { _bj_tx_cstr(t, "transport error: "); }
+    else { return t; }
+    store64(t - 8, _bj_tx_len(t));
+    return t;
+}
+
+# Records DivisionByZero { context } with a fixed context; returns its code.
+public fn _bj_err_division_by_zero(context): i64 {
+    var t = _bj_err_reason(BJ_ERR_DIVISION_BY_ZERO);
+    _bj_tx_cstr(t, context);
+    return BJ_ERR_DIVISION_BY_ZERO;
+}
+
+# Records InvalidParameter { reason } with a fixed reason; returns its code.
+public fn _bj_err_invalid_parameter(reason): i64 {
+    var t = _bj_err_reason(BJ_ERR_INVALID_PARAMETER);
+    _bj_tx_cstr(t, reason);
+    return BJ_ERR_INVALID_PARAMETER;
+}
+
+# Records the Cyrius-only Transport { reason } (ADR 0002 row 7) with a fixed reason; returns its code.
+public fn _bj_err_transport(reason): i64 {
+    var t = _bj_err_reason(BJ_ERR_TRANSPORT);
+    _bj_tx_cstr(t, reason);
+    return BJ_ERR_TRANSPORT;
+}
+
+# ── the public API ──────────────────────────────────────────────────────────────────
+
+# Claims bijli's thread-local slot now. Call it once on the main thread before starting threads that call
+# bijli, as lib/thread_local.cyr asks of a library; without it the slot is claimed on the first error. Returns 1
+# when threads get records of their own, 0 when they will share one (no slot was left).
+public fn bj_init(): i64 {
+    if (_bj_err_claim() < 0) { return 0; }
+    return 1;
+}
+
+# Gives the calling worker thread's record back (call it before the thread ends, so a thread pool that churns
+# threads does not keep one record per thread ever started). Its last error is forgotten. No effect on a thread
+# that uses the static record.
+public fn bj_thread_done(): i64 {
+    if (_bj_err_uses_static() == 1) { return 0; }
+    var r = thread_local_get(_bj_err_slot);
+    if (r != 0) {
+        thread_local_set(_bj_err_slot, 0);
+        fl_free(r);
+    }
+    return 0;
+}
+
+# The calling thread's last error code, or BJ_ERR_NONE.
+#must_use
+public fn bj_last_error(): i64 {
+    return load64(_bj_err_rec());
+}
+
+# The calling thread's last error as Rust's Display writes it (`e.to_string()`), NUL-terminated; "" for none.
+# Valid until the thread's next error.
+#must_use
+public fn bj_last_error_display(): i64 {
+    return _bj_err_rec() + _BJ_ERR_TEXT;
+}
+
+# The reason or context string of the last error when it has one (DivisionByZero, InvalidParameter, Transport),
+# NUL-terminated; "" otherwise.
+#must_use
+public fn bj_last_error_detail(): i64 {
+    var r = _bj_err_rec();
+    var at = load64(r + 32);
+    if (at < 0) { return ""; }
+    return r + _BJ_ERR_TEXT + at;
+}
+
+# DimensionMismatch's `expected` (0 for another error).
+#must_use
+public fn bj_last_error_expected(): i64 {
+    var r = _bj_err_rec();
+    if (load64(r) != BJ_ERR_DIMENSION_MISMATCH) { return 0; }
+    return load64(r + 8);
+}
+
+# DimensionMismatch's `got` (0 for another error).
+#must_use
+public fn bj_last_error_got(): i64 {
+    var r = _bj_err_rec();
+    if (load64(r) != BJ_ERR_DIMENSION_MISMATCH) { return 0; }
+    return load64(r + 16);
+}
+
+# InsufficientResolution's `cells` (0 for another error).
+#must_use
+public fn bj_last_error_cells(): i64 {
+    var r = _bj_err_rec();
+    if (load64(r) != BJ_ERR_INSUFFICIENT_RESOLUTION) { return 0; }
+    return load64(r + 8);
+}
+
+# InsufficientResolution's `domain_size` (0 for another error).
+#must_use
+public fn bj_last_error_domain_size(): f64 {
+    var r = _bj_err_rec();
+    var v: f64 = 0.0;
+    if (load64(r) == BJ_ERR_INSUFFICIENT_RESOLUTION) { v = load64(r + 24); }
+    return v;
+}
+
+# InvalidPermittivity's or InvalidPermeability's `value` (0 for another error).
+#must_use
+public fn bj_last_error_value(): f64 {
+    var r = _bj_err_rec();
+    var c = load64(r);
+    var v: f64 = 0.0;
+    if (c == BJ_ERR_INVALID_PERMITTIVITY || c == BJ_ERR_INVALID_PERMEABILITY) { v = load64(r + 24); }
+    return v;
+}
+
+# Forgets the calling thread's last error.
+public fn bj_last_error_clear(): i64 {
+    _bj_err_reset(_bj_err_rec());
+    return 0;
+}
+
+# The Rust variant name of an error code (`"InvalidParameter"`), "None" for BJ_ERR_NONE, "Transport" for the
+# Cyrius-only code, or "Unknown" for a value that is no code.
+#must_use
+public fn bj_error_name(code): i64 {
+    if (code == BJ_ERR_NONE) { return "None"; }
+    if (code == BJ_ERR_DIMENSION_MISMATCH) { return "DimensionMismatch"; }
+    if (code == BJ_ERR_ZERO_CHARGE) { return "ZeroCharge"; }
+    if (code == BJ_ERR_SINGULARITY) { return "Singularity"; }
+    if (code == BJ_ERR_INSUFFICIENT_RESOLUTION) { return "InsufficientResolution"; }
+    if (code == BJ_ERR_INVALID_PERMITTIVITY) { return "InvalidPermittivity"; }
+    if (code == BJ_ERR_INVALID_PERMEABILITY) { return "InvalidPermeability"; }
+    if (code == BJ_ERR_DIVISION_BY_ZERO) { return "DivisionByZero"; }
+    if (code == BJ_ERR_INVALID_PARAMETER) { return "InvalidParameter"; }
+    if (code == BJ_ERR_TRANSPORT) { return "Transport"; }
+    return "Unknown";
+}
+
+# The Rust error's Display text without its payload: thiserror's message up to the first field
+# (`"invalid parameter"` for `invalid parameter: negative frequency`), the whole message for ZeroCharge and
+# Singularity. "no error" for BJ_ERR_NONE and "unknown error" for a value that is no code.
+#must_use
+public fn bj_error_message(code): i64 {
+    if (code == BJ_ERR_NONE) { return "no error"; }
+    if (code == BJ_ERR_DIMENSION_MISMATCH) { return "invalid field dimensions"; }
+    if (code == BJ_ERR_ZERO_CHARGE) { return "charge magnitude is zero — cannot compute field direction"; }
+    if (code == BJ_ERR_SINGULARITY) { return "singularity: field evaluation at source point (distance = 0)"; }
+    if (code == BJ_ERR_INSUFFICIENT_RESOLUTION) { return "grid resolution too coarse"; }
+    if (code == BJ_ERR_INVALID_PERMITTIVITY) { return "invalid permittivity"; }
+    if (code == BJ_ERR_INVALID_PERMEABILITY) { return "invalid permeability"; }
+    if (code == BJ_ERR_DIVISION_BY_ZERO) { return "division by zero in EM calculation"; }
+    if (code == BJ_ERR_INVALID_PARAMETER) { return "invalid parameter"; }
+    if (code == BJ_ERR_TRANSPORT) { return "transport error"; }
+    return "unknown error";
+}

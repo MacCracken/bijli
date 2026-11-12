@@ -28,10 +28,11 @@ found them.
 | 1 | `rf::input_impedance_lossless`, `rf::write_touchstone` and `Material::reflectance_at`, deprecated in 1.2.0 | removed | through their replacements (`input_impedance_lossless_complex`, `try_write_touchstone`, the fallible `Material` Fresnel functions). Their Rust tests are n/a in the ledger |
 | 2 | public FDTD grid fields (`ex`, `ez`, `nx`, …), with a per-step layout check because callers can resize them | buffers fixed at construction, read through accessors (pointer + length). Nothing can resize them, so the per-step layout check and its error path go | class T on the accessors. The Rust layout-mismatch tests are n/a |
 | 3 | `TfsfSource::new` and `Cpml::new` sanitize with a warning; `Fdtd2d::enable_cpml` warns and ignores | fallible only: the constructors return `Err`, and `enable_cpml` is the `try_` form | each oracle sanitize-or-ignore row ↔ the `Err` code, mapped by name |
-| 4 | `BijliError` variants carry data (`DimensionMismatch { expected, got }`, `InsufficientResolution { cells, domain_size }`, `InvalidPermittivity { value }`, …) and `String` reasons | append-only `BJ_ERR_*` codes in a value-form `Result`. The payload goes into a per-thread last-error record (`bj_last_error_*`), and the reason text to a sakshi warning | class A on the code and on the recorded payload |
+| 4 | `BijliError` variants carry data (`DimensionMismatch { expected, got }`, `InsufficientResolution { cells, domain_size }`, `InvalidPermittivity { value }`, …) and `String` reasons | append-only `BJ_ERR_*` codes in a value-form `Result`. The payload goes into a per-thread last-error record (`bj_last_error_*`): the variant's fields, and Rust's Display text of the error byte for byte, its reason or context included (`bj_last_error_display`, `bj_last_error_detail`). *Amended 2026-11-11 (M1 part 2a)*: the record holds the text, so nothing is logged (the first draft sent the reason to a sakshi warning; Rust logs no error) | class A on the code, on each field and on the Display text (`tests/golden/error.tsv`) |
 | 5 | two time conventions: `polarization`, `beam`, the field Green's function and the FDTD media use e^{−iωt} with Born & Wolf handedness; `scattering`, `rf` and the FDTD CW/NF2FF phasors use e^{+jωt} | **e^{+jωt} in every module, with IEEE handedness** (IEEE Std 145), stated once in `src/complex.cyr`. Absorbing indices are n − jκ | complex amplitudes ↔ `conj(oracle)`; phases ↔ `−oracle`; circular-state names by physical state, each pinned by a convention-free rotation-sense test; real observables against the oracle directly. All exact |
 | 6 | results bit-identical only on the same platform | bit-identical across x86_64 ELF, x86_64 PE and aarch64, with correctly rounded transcendentals (ADR 0001) | the parity digests equal on all three targets |
 | 7 | no transport error: the `ai` client reports network failures as `InvalidParameter` | `BJ_ERR_TRANSPORT`, appended | the `ai` client's oracle `InvalidParameter` rows for transport failures ↔ `BJ_ERR_TRANSPORT` |
+| 8 | `logging::init` installs a process-wide `tracing` subscriber that filters every crate's events, set by `BIJLI_LOG` in `EnvFilter`'s grammar (M1 part 2a) | `bj_log_init` sets bijli's own gate and only raises sakshi's process-wide level, never lowers it: other libraries' logging is not bijli's to silence. `BIJLI_LOG` takes a level or `bijli=<level>` directives; other targets' directives are ignored, and a value with none that applies falls back to the default, as `EnvFilter::try_from_env` does on an invalid one. With no init, nothing is printed, as Rust with no subscriber | none: logging is outside the corpus. `tests/log.tcyr` pins the gate and the grammar |
 
 ## Consequences
 
@@ -49,7 +50,8 @@ found them.
   - The harness carries a mapping table, and every mapped row is reported by number.
 - **Neutral**
   - Rows 1–3 come from the roadmap's "2.0 cleanup (breaking)" item, rows 5 and 7 from its
-    backlog, and row 4 from the Cyrius `Result` shape (plan §2).
+    backlog, row 4 from the Cyrius `Result` shape (plan §2), and row 8 from sakshi's process-wide level
+    (M1 part 2a).
 
 ## Alternatives considered
 

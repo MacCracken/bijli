@@ -198,8 +198,11 @@ pub fn emit(root: &Path, provenance: &str) -> Result<String, String> {
             "Each is a positional decimal (the lexer has no exponent form) that the lexer rounds\n\
              back to the oracle's exact bits.",
             "Private constants are extracted and proven at the milestone whose module uses them.",
+            "The file is `private` and each constant `public`: the bundle is one file, so its API is\n\
+             exactly its `public` items (CLAUDE.md, Names).",
         ],
     );
+    out.push_str("private\n\n");
     for c in &all() {
         if !c.value.is_finite() {
             return Err(format!("{} is not finite", c.path));
@@ -208,7 +211,7 @@ pub fn emit(root: &Path, provenance: &str) -> Result<String, String> {
         let src = std::fs::read_to_string(&file).map_err(|e| format!("{}: {e}", file.display()))?;
         out.push_str(&doc_comment(&src, c.item)?);
         let _ = writeln!(out, "# Rust: bijli::{}", c.path);
-        let _ = writeln!(out, "const {} = {};", c.cyr, f64_literal(c.value));
+        let _ = writeln!(out, "public const {} = {};", c.cyr, f64_literal(c.value));
         out.push('\n');
     }
     // One trailing newline, not a blank line, at the end of the file.

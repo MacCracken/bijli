@@ -57,6 +57,28 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
   1,000,000 arguments and the slow path alone on 157,132 more against MPFR, on x86_64 and aarch64: all equal.
   `tests/crmath_bijli.tcyr` tests bijli's own tan and asin (33 assertions). Every one of the corpus's 34,746 rows now
   gates, none measured or pending, on all three targets (`docs/development/port-parity.md` §7).
+- **Cyrius port, M1 part 2a — fmtf, log, error**:
+  - `src/fmtf.cyr`: impetus's exact f64 printer, Rust's Display and serde_json's form, into a bounded buffer, pinned
+    by `tests/golden/fmtf.tsv` (37,576 rows) and checked by an independent transcription in `validate.py`.
+  - `src/error.cyr`: the `BJ_ERR_*` codes and the per-thread last-error record. Each error keeps its variant's fields
+    and Rust's Display text byte for byte (`bj_last_error`, `bj_last_error_display`, `bj_last_error_detail`, and
+    the field accessors), with no allocation per error; `bj_init` and `bj_thread_done` for threaded consumers.
+    `tests/golden/error.tsv` (1,635 rows) pins every variant. ADR 0002 row 4 is amended: the record holds the text,
+    so nothing is logged.
+  - `src/log.cyr`: `bj_log_init` / `bj_log_init_with_level` (Rust's `logging::init`, renamed for Cyrius's single
+    namespace) and the site helpers on sakshi. bijli prints nothing until init, and init never lowers sakshi's
+    process-wide level (ADR 0002 row 8).
+  - The bundle is `private`: consumers see exactly its `public` items, the constants now among them.
+  - Tests include `tests/lib.cyr` instead of `[test] modules`, which folded the library into each test's own file and
+    so broke `private` and execution coverage. `cyrius coverage --exec --min 80` (17/17 executed) and
+    `cyrius api-surface` join the gate.
+  - error.rs's 10 and logging.rs's 1 Rust tests are ported. 73,832 rows pass on all three targets, with equal
+    digests.
+
+### Performance
+
+- **error** (Cyrius-only benches): making an error 960 ns → 122 ns (−87 %). It now skips the two syscalls that tell the
+  Linux main thread while no thread exists, and `_bj_tx_cstr` copies in one loop. A disabled log site costs 3 ns.
 
 ## [1.2.0] — 2026-11-11
 

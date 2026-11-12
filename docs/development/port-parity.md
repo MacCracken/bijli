@@ -221,3 +221,64 @@ Language facts the probes found, beyond plan §2:
 | Function | Digest, every target |
 |---|---|
 | f64::tan | `b33eeff0806f9a96` |
+
+## 8. M1 part 2a: fmtf, log and error (2026-11-11)
+
+- **`src/fmtf.cyr`**: impetus's f64 printer (its ADR 0010), the bignum and Burger & Dybvig's digit generator line for
+  line. Its output goes to a bounded `BjText` buffer instead of a growing string builder, so the error record and
+  log lines format into fixed storage. `tests/golden/fmtf.tsv` (impetus's grid: every binade, the powers of ten, the
+  2^53 edge, 300 ties and a seeded sweep, both signs): **37,576 rows, Rust's Display and serde_json's form, every
+  one byte for byte**. `validate.py` transcribes both printers independently, Python's shortest `repr` with Rust's
+  round-up on an exact tie (751 Display rows are such ties), and matches every row.
+- **`src/error.cyr`**: the `BJ_ERR_*` codes (Rust's 8 variants in order, plus `BJ_ERR_TRANSPORT`, ADR 0002 row 7) and
+  the per-thread **last-error record** (ADR 0002 row 4, amended): the code, the variant's fields, and Rust's Display
+  text of the error byte for byte, the reason or context included. `tests/golden/error.tsv`: **1,635 rows**, every
+  variant over its payload grid (usize fields to i64::MAX, f64 fields over the specials, binades, powers of ten and
+  seeded bits, strings with UTF-8, `%`, quotes and spaces, and reasons built `format!("{prefix}{x}")` as bijli's
+  are). Each row checks the code, each field through `bj_last_error_*`, and the text: all exact.
+  - **Where the record lives.** Cyrius has no thread-local variables. `lib/thread_local.cyr`'s slots need a
+    per-thread block, which a Linux main thread has only after `thread_local_init`. So the Linux main thread uses a
+    static record; other threads (and, off Linux, every thread) keep one from `fl_alloc` behind a slot claimed
+    once. bijli never calls `thread_local_init`, so it never replaces another library's block. Until
+    `thread_create` has run (`_threads_active`), a Linux caller can only be the main thread, so making an error
+    costs no syscall. **The PE run caught a defect in the first version**: off Linux, that shortcut moved the main
+    thread from the static record to its slot's record once workers started, losing its last error. The shortcut is
+    now Linux-only, and `tests/error.tcyr`'s `last_error_per_thread` (two workers, 20,000 errors each, then the main
+    thread's own) passes on all three targets.
+- **`src/log.cyr`**: Rust's `logging::init` / `init_with_level` as `bj_log_init` / `bj_log_init_with_level`, and the
+  `_bj_error` / `_bj_warn` / `_bj_debug` / `_bj_trace` site helpers on sakshi. bijli's gate starts off (Rust with no
+  subscriber prints nothing), and init raises sakshi's process-wide level but never lowers it (ADR 0002 row 8).
+- **The visibility finding.** A `private` marker applies to the whole file it sits in, and **a bundle is one file**,
+  so `dist/bijli.cyr` is private as a whole: a consumer sees exactly the `public` items (17 `bj_*` fns, the
+  constants, now `public const`, and `BjError`'s members), as a probe confirmed. **`[test] modules` was the wrong
+  way to give tests the library** (plan §2, reversed): a prepended module becomes part of the test's own file
+  (`<source>` in a coverage dump), so the test file turned private (`parity_core.cyr` could not call its hooks), and
+  `cyrius coverage --exec` could never credit a src/ fn (0 of 17 executed though every one ran). Tests now include
+  `tests/lib.cyr`, the `[lib]` list as files of their own, as impetus's and kimiya's do; `surface_parity.py` checks
+  it against `[lib]`. Files of internals only (the math, fmtf) carry no marker, so `cr_driver.cyr` includes the math
+  sources directly.
+- **Coverage**: `cyrius coverage --exec --min 80` joins the gate: **17 of 17 public fns executed (100 %)**. `cyrius
+  api-surface` has its snapshot (`docs/api-surface.snapshot`; the tool's only scope lists the vendored stdlib too).
+- **Ledger and surface**: error.rs's 10 tests and logging.rs's 1 ported (`tests/error.tcyr`, `tests/log.tcyr`; Rust's
+  `test_error_is_debug` checks the variant's name through `bj_error_name`); surface parity 11 items, 0 problems.
+- **Costs** (`cyrius bench`, Cyrius-only; another repo's tests ran beside it, load 1.9): a log site with the gate off
+  3 ns (the loop's own cost); making an error 122 ns (960 ns in the first version: two syscalls per error to tell the
+  main thread, then 311 ns before `_bj_tx_cstr` became one copy loop); an error with an f64 field 2.9 µs; one f64 in
+  Display form 1.9 µs (impetus's exact bignum printer, never on a step path).
+- **Result, every target** (x86_64 ELF, x86_64 PE, aarch64): **4 modules, 0 failing; 73,832 ok, 0 failed, 0
+  measured, 0 pending, 125 accepted (ADR 01)**; all 37 digests equal on all three targets. The digest now folds the
+  bytes of a text token (its word is an address).
+
+| Function | Digest, every target |
+|---|---|
+| BijliError::DimensionMismatch | `7ce0df9f10df6a39` |
+| BijliError::ZeroCharge | `1cb0386e31fb2aaf` |
+| BijliError::Singularity | `4aeb42d525e34032` |
+| BijliError::InsufficientResolution | `f59bbe8c7ab5b6c7` |
+| BijliError::InvalidPermittivity | `4b2990a05ea1e62c` |
+| BijliError::InvalidPermeability | `7a37a32db98ea3b4` |
+| BijliError::InvalidParameter/f64 | `dcb4da1e5054485f` |
+| BijliError::DivisionByZero | `36f278fcb8b1b69b` |
+| BijliError::InvalidParameter | `187d253e26632343` |
+| f64::fmt_display | `737b6e256576067a` |
+| serde_json::f64 | `b64474e0f3090f73` |

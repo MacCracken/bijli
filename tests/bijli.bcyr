@@ -1,15 +1,20 @@
 # bijli benchmarks
-# Stdlib auto-included via cyrius.cyml
+# Stdlib auto-included via cyrius.cyml; the library through tests/lib.cyr
 #
 # Pattern: bench_new -> bench_batch_start -> tight loop -> bench_batch_stop -> bench_report.
 # For sub-1us ops use batch_size >= 1000 to amortize clock_gettime overhead
 # (~240 ns per start/stop pair on x86_64 Linux). See lib/bench.cyr header for
 # the full overhead-vs-batching guidance.
 
+include "tests/lib.cyr"
+
 # A no-op body that measures the harness's own per-iteration overhead.
 fn bench_noop(): i64 { return 0; }
 
-# Runs the bijli benchmarks and reports each.
+# Runs the bijli benchmarks and reports each. Beside the Rust twins (as their modules land), the Cyrius-only costs
+# of the port's own machinery: a log site with the gate off (Rust's tracing with no subscriber), making an error
+# (the last-error record, on the main thread's static record: two syscalls on Linux to tell the main thread), the
+# same with an f64 field (Rust's Display through src/fmtf.cyr), and one Display.
 fn main(): i64 {
     alloc_init();
     var b = bench_new("noop");
@@ -18,6 +23,46 @@ fn main(): i64 {
     while (i < 1000000) { bench_noop(); i = i + 1; }
     bench_batch_stop(b, 1000000);
     bench_report(b);
+
+    var bl = bench_new("log_gate_off");
+    bench_batch_start(bl);
+    for (var k = 0; k < 1000000; k = k + 1) { _bj_debug("bijli: a debug event nobody listens to"); }
+    bench_batch_stop(bl, 1000000);
+    bench_report(bl);
+
+    var be = bench_new("error_record");
+    var keep = 0;
+    bench_batch_start(be);
+    for (var k = 0; k < 100000; k = k + 1) {
+        var c = _bj_err_invalid_parameter("negative frequency");
+        keep = keep + c;
+    }
+    bench_batch_stop(be, 100000);
+    bench_report(be);
+
+    var bf = bench_new("error_record_f64");
+    var v: f64 = -1.2345678901234567;
+    bench_batch_start(bf);
+    for (var k = 0; k < 100000; k = k + 1) {
+        var c2 = _bj_err_invalid_permittivity(v);
+        keep = keep + c2;
+    }
+    bench_batch_stop(bf, 100000);
+    bench_report(bf);
+
+    var bd = bench_new("fmt_f64_display");
+    var buf[400];
+    var tx[24];
+    var w: f64 = 0.000123456789;
+    bench_batch_start(bd);
+    for (var k = 0; k < 100000; k = k + 1) {
+        _bj_tx_init(&tx, &buf, 400);
+        _bj_fmt_f64_display(&tx, w);
+        keep = keep + _bj_tx_len(&tx);
+    }
+    bench_batch_stop(bd, 100000);
+    bench_report(bd);
+    if (keep == 7) { println("."); }
     return 0;
 }
 

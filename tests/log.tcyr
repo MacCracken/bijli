@@ -1,0 +1,52 @@
+# log.tcyr — src/log.cyr: bijli's logging gate on sakshi.
+#
+# init_does_not_panic is rust-old/src/logging.rs's test, ported (the ledger matches it by name). The others are
+# Cyrius-only: the gate starts off, the BIJLI_LOG grammar, and that bj_log_init never lowers sakshi's level.
+
+include "tests/lib.cyr"
+
+# Runs the logging tests.
+fn main() {
+    alloc_init();
+
+    test_group("gate_starts_off");
+    assert_eq(bj_log_level(), 0 - 1, "no output until bj_log_init, as Rust with no subscriber");
+    assert_eq(_bj_log_on(1), 0, "an error event is dropped");
+    assert_eq(_bj_warn("dropped"), 0, "a warning is dropped quietly");
+
+    test_group("filter_grammar");
+    assert_eq(_bj_log_parse("debug"), 4, "a level");
+    assert_eq(_bj_log_parse("WARN"), 2, "any case");
+    assert_eq(_bj_log_parse("Trace"), 5, "mixed case");
+    assert_eq(_bj_log_parse("off"), 0 - 1, "off");
+    assert_eq(_bj_log_parse("0"), 0 - 1, "0 is off");
+    assert_eq(_bj_log_parse("3"), 3, "a digit");
+    assert_eq(_bj_log_parse("bijli=trace"), 5, "a bijli directive");
+    assert_eq(_bj_log_parse("hisab=debug,bijli=error"), 1, "another target's directive is ignored");
+    assert_eq(_bj_log_parse("info, bijli=debug"), 4, "the last directive that applies wins");
+    assert_eq(_bj_log_parse("hisab=debug"), 0 - 2, "nothing for bijli");
+    assert_eq(_bj_log_parse("loud"), 0 - 2, "not a level");
+    assert_eq(_bj_log_parse(""), 0 - 2, "empty");
+    assert_eq(_bj_log_parse(0), 0 - 2, "unset");
+
+    test_group("init_does_not_panic");
+    sakshi_set_level(SK_DEBUG);
+    bj_log_init();
+    bj_log_init();
+    var lv = bj_log_level();
+    assert(lv >= 0 - 1 && lv <= 5, "a level is set");
+    assert(sakshi_get_level() >= SK_DEBUG, "sakshi's level is never lowered");
+
+    test_group("gate");
+    bj_set_log_level(2);
+    assert_eq(_bj_log_on(2), 1, "warn passes at warn");
+    assert_eq(_bj_log_on(4), 0, "debug is dropped at warn");
+    bj_set_log_level(0 - 1);
+    assert_eq(_bj_log_on(1), 0, "off again");
+
+    return assert_summary();
+}
+
+var exit_code = main();
+if (exit_code > 0) { exit_code = 1; }
+sys_exit_group(exit_code);

@@ -437,11 +437,150 @@ def validate_constants(root: Path, path: Path) -> list:
     return errs
 
 
+# ── fmtf: Rust's Display and serde_json's f64 text ───────────────────────────────────────────
+from fractions import Fraction  # noqa: E402
+from urllib.parse import unquote  # noqa: E402
+
+
+def tok_text(body: str) -> str:
+    """An `s:` token's text: its %XX escapes decoded as UTF-8."""
+    return unquote(body)
+
+
+def shortest(a: float, rust_ties: bool):
+    """(digits, k) with a = 0.d1…dn × 10^k: the shortest digits that read back to the positive finite a, the closest
+    to it. Python's repr gives them (Gay's shortest mode, an exact tie between two closest candidates to the even
+    one, as serde_json's zmij); Rust's core printer takes the upper one on such a tie (src/fmtf.cyr)."""
+    mant, _, ex = repr(a).partition("e")
+    ip, _, fp = mant.partition(".")
+    alld = (ip + fp).lstrip("0")
+    k = len(alld) + (int(ex) if ex else 0) - len(fp)
+    ds = alld.rstrip("0")
+    if rust_ties:
+        n = len(ds)
+        q = Fraction(a) * Fraction(10) ** (n - k)
+        if (2 * q).denominator == 1 and (2 * q).numerator % 2 == 1:
+            lo = q.numerator // q.denominator
+            hi = lo + 1
+
+            def back(m):
+                return float(Fraction(m) * Fraction(10) ** (k - n)) == a
+            if back(lo) and back(hi) and str(lo) == ds:
+                h = str(hi)
+                k += len(h) - n
+                ds = h.rstrip("0")
+    return ds, k
+
+
+def positional(ds: str, k: int, int_suffix: bool) -> str:
+    n = len(ds)
+    if k <= 0:
+        return "0." + "0" * (-k) + ds
+    if k >= n:
+        return ds + "0" * (k - n) + (".0" if int_suffix else "")
+    return ds[:k] + "." + ds[k:]
+
+
+def rust_display(x: float) -> str:
+    """`format!("{x}")` for an f64."""
+    if math.isnan(x):
+        return "NaN"
+    sign = "-" if math.copysign(1.0, x) < 0 else ""
+    if math.isinf(x):
+        return sign + "inf"
+    if x == 0:
+        return sign + "0"
+    ds, k = shortest(abs(x), True)
+    return sign + positional(ds, k, False)
+
+
+def serde_json_f64(x: float) -> str:
+    """`serde_json::to_string(&x)` (1.0.154, zmij) for an f64."""
+    if math.isnan(x) or math.isinf(x):
+        return "null"
+    sign = "-" if math.copysign(1.0, x) < 0 else ""
+    if x == 0:
+        return sign + "0.0"
+    ds, k = shortest(abs(x), False)
+    ex = k - 1
+    if -5 <= ex <= 15:
+        return sign + positional(ds, k, True)
+    return sign + ds[0] + ("." + ds[1:] if len(ds) > 1 else "") + "e" + ("+" if ex >= 0 else "-") + str(abs(ex))
+
+
+def validate_fmtf(path: Path) -> list:
+    """Both printers transcribed: every row's text, byte for byte."""
+    _header, rows = read_tsv(path)
+    errs = []
+    ties = 0
+    for fn, _cls, ins, outs in rows:
+        x = ins[0][1]
+        got = tok_text(outs[0][1])
+        if fn == "f64::fmt_display":
+            want = rust_display(x)
+            if math.isfinite(x) and x != 0 and shortest(abs(x), True) != shortest(abs(x), False):
+                ties += 1
+        elif fn == "serde_json::f64":
+            want = serde_json_f64(x)
+        else:
+            errs.append(f"fmtf: unknown function {fn}")
+            continue
+        if got != want:
+            errs.append(f"fmtf: {fn}({x!r}): Rust {got!r}, transcription {want!r}")
+    print(f"     fmtf: {ties} Display rows are exact ties (Rust rounds up, Python to even), each matched")
+    return errs
+
+
+# ── error: BijliError's Display text ──────────────────────────────────────────────────────────
+ERROR_TEXT = {
+    "BijliError::DimensionMismatch": lambda i: f"invalid field dimensions: expected {i[0]}D, got {i[1]}D",
+    "BijliError::ZeroCharge": lambda i: "charge magnitude is zero — cannot compute field direction",
+    "BijliError::Singularity": lambda i: "singularity: field evaluation at source point (distance = 0)",
+    "BijliError::InsufficientResolution":
+        lambda i: f"grid resolution too coarse: {i[0]} cells for domain size {rust_display(i[1])}",
+    "BijliError::InvalidPermittivity": lambda i: f"invalid permittivity: {rust_display(i[0])} (must be > 0)",
+    "BijliError::InvalidPermeability": lambda i: f"invalid permeability: {rust_display(i[0])} (must be > 0)",
+    "BijliError::DivisionByZero": lambda i: f"division by zero in EM calculation: {i[0]}",
+    "BijliError::InvalidParameter": lambda i: f"invalid parameter: {i[0]}",
+    "BijliError::InvalidParameter/f64": lambda i: f"invalid parameter: {i[0]}{rust_display(i[1])}",
+}
+
+
+def validate_error(path: Path) -> list:
+    """thiserror's messages transcribed from rust-old/src/error.rs, the f64 fields through rust_display; the
+    variant token names the row's variant, and the payload tokens repeat the inputs (the reason, for the /f64
+    rows, is the prefix and the value's Display)."""
+    _header, rows = read_tsv(path)
+    errs = []
+    for fn, _cls, ins, outs in rows:
+        vals = [tok_text(b) if k == "s" else b for k, b in ins]
+        if fn not in ERROR_TEXT:
+            errs.append(f"error: unknown function {fn}")
+            continue
+        variant = fn.split("::")[1].split("/")[0]
+        if outs[0] != ("E", variant):
+            errs.append(f"error: {fn}: variant token {outs[0]}")
+        want_payload = vals
+        if fn.endswith("/f64"):
+            want_payload = [vals[0] + rust_display(vals[1])]
+        got_payload = [tok_text(b) if k == "s" else b for k, b in outs[1:-1]]
+        if len(got_payload) != len(want_payload) or any(
+                not (same(g, w) if isinstance(w, float) else g == w) for g, w in zip(got_payload, want_payload)):
+            errs.append(f"error: {fn}{tuple(vals)}: payload {got_payload!r}, inputs {want_payload!r}")
+        text = tok_text(outs[-1][1])
+        want = ERROR_TEXT[fn](vals)
+        if text != want:
+            errs.append(f"error: {fn}{tuple(vals)}: Rust {text!r}, transcription {want!r}")
+    return errs
+
+
 def main() -> int:
     root = Path(sys.argv[1] if len(sys.argv) > 1 else ".").resolve()
     golden = root / "tests/golden"
     checks = {
         "constants": lambda p: validate_constants(root, p),
+        "error": validate_error,
+        "fmtf": validate_fmtf,
         "math": validate_math,
     }
     listed = [l for l in (golden / "modules.txt").read_text().splitlines() if l and not l.startswith("#")]

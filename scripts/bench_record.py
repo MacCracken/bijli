@@ -42,7 +42,13 @@ TWINS = {}
 # Rust bench -> why it has no twin.
 REASONS = {}
 # Cyrius benches that twin no Rust bench (the scaffold's harness check among them).
-EXTRA = {"noop": "the scaffold's harness check (tests/bijli.bcyr)"}
+EXTRA = {
+    "noop": "the scaffold's harness check (tests/bijli.bcyr)",
+    "log_gate_off": "a disabled log site (src/log.cyr): Rust's tracing with no subscriber has no bench",
+    "error_record": "making an error into the last-error record (src/error.cyr, ADR 0002 row 4)",
+    "error_record_f64": "the same with an f64 field in Rust's Display form (src/fmtf.cyr)",
+    "fmt_f64_display": "one f64 in Rust's Display form (src/fmtf.cyr)",
+}
 
 
 def milestone(bench: str) -> str:

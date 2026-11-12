@@ -1,0 +1,17 @@
+# lib.cyr — the library for test, bench and fuzz units: cyrius.cyml's [lib] modules, in its order.
+#
+# Every tests/*.tcyr, *.bcyr and *.fcyr includes this file first. Each src/ module is included as a file of its own,
+# as in impetus's tests/lib_2d.cyr and kimiya's tests, rather than prepended through `[test] modules`: a prepended
+# module becomes part of the test's own file (`<source>`), so a `private` src/ file would make the test file private
+# too, and `cyrius coverage --exec` would credit no src/ fn (it counts by file; port-parity.md §8). Included on their
+# own, each src/ file keeps its own visibility and its coverage. scripts/surface_parity.py checks that this list
+# equals [lib] modules.
+include "src/constants.cyr"
+include "src/crmath_data.cyr"
+include "src/crmath.cyr"
+include "src/crmath_k_data.cyr"
+include "src/crmath_k.cyr"
+include "src/mathx.cyr"
+include "src/fmtf.cyr"
+include "src/log.cyr"
+include "src/error.cyr"
