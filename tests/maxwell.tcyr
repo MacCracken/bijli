@@ -31,6 +31,20 @@ fn text_is(a, b): i64 {
     return memeq(a, b, n);
 }
 
+# The f64 with bit pattern b.
+fn fb(b): f64 {
+    var x: f64 = 0.0;
+    store64(&x, b);
+    return x;
+}
+
+# 1 when the Ok Result (t, v) holds the f64 with bit pattern b.
+fn ok_bits(t, v, b): i64 {
+    if (is_ok(t) != 1) { return 0; }
+    if (v != b) { return 0; }
+    return 1;
+}
+
 # Runs maxwell.rs's tests, then the Cyrius-only checks.
 fn main() {
     alloc_init();
@@ -153,6 +167,34 @@ fn main() {
     assert(is_err_result(t22) == 1, "frequency, v NaN");
 
     # ── Cyrius-only: the error each check records (the golden rows pin every text over the grid) ──
+    test_group("cyrius_round_once (ADR 0002 row 13)");
+    # Each root is correctly rounded: Rust's 1/√(ε·μ) is 3.6·10¹⁰ ulp off at 1e-160 and 0 at 1e160, its products and
+    # quotients overflow at 1e200, its skin depth underflows; the expected bits are Python's exact rounding.
+    var e160m: f64 = fb(0x1EB67E9C127B6E74);
+    var e160: f64 = fb(0x6126C2D4256FFCC3);
+    var e200: f64 = fb(0x6974E718D7D7625A);
+    var e200m: f64 = fb(0x16687E92154EF7AC);
+    var tw1, vw1 = bj_wave_speed(e160m, e160m);
+    assert(ok_bits(tw1, vw1, 0x6126C2D4256FFCC3) == 1, "1/√(1e-160·1e-160) = 1e160 (Rust: 1.0000055664551363e160)");
+    var tw2, vw2 = bj_wave_speed(e160, e160);
+    assert(ok_bits(tw2, vw2, 0x1EB67E9C127B6E74) == 1, "1/√(1e160·1e160) = 1e-160 (Rust: 0)");
+    var tw3, vw3 = bj_wave_speed(BJ_EPSILON_0, BJ_MU_0);
+    assert(ok_bits(tw3, vw3, 0x41B1DE784A00006D) == 1, "c from ε₀ and μ₀: 299792458.0000065");
+    var inf: f64 = 1.0 / 0.0;
+    var tw4, vw4 = bj_wave_speed(inf, 2.0);
+    assert(ok_bits(tw4, vw4, 0) == 1, "an infinite ε keeps Rust's 1/√∞ = 0");
+    var tn1, vn1 = bj_refractive_index(e200, e200);
+    assert(ok_bits(tn1, vn1, 0x6974E718D7D7625A) == 1, "√(1e200·1e200) = 1e200 (Rust: ∞)");
+    var ti1, vi1 = bj_impedance(e200m, e200);
+    assert(ok_bits(ti1, vi1, 0x6974E718D7D7625A) == 1, "√(1e200/1e-200) = 1e200 (Rust: ∞)");
+    var ti2, vi2 = bj_impedance(inf, inf);
+    var ni2: f64 = vi2;
+    assert(is_ok(ti2) == 1 && ni2 != ni2, "both infinite keep Rust's √(∞/∞) = NaN");
+    var ts1, vs1 = bj_skin_depth(e200, e200, e200);
+    assert(ok_bits(ts1, vs1, 0x01AE4E8D12762226) == 1, "√(2/1e600) = 1.4142135623730952e-300 (Rust: 0)");
+    var ts2, vs2 = bj_skin_depth(1.0, inf, 1.0);
+    assert(ok_bits(ts2, vs2, 0) == 1, "an infinite μ keeps Rust's √(2/∞) = 0");
+
     test_group("cyrius_maxwell_error_records");
     var t23, v23 = bj_wave_speed(BJ_EPSILON_0, -2.0);
     assert(is_err_result(t23) == 1 && v23 == BJ_ERR_INVALID_PERMEABILITY, "μ refused as InvalidPermeability");

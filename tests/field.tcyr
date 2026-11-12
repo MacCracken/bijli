@@ -65,6 +65,20 @@ fn as_f64p(p): *f64 { return p; }
 # A closure's untyped parameter as a *BjFieldVector.
 fn as_fv(p): *BjFieldVector { return p; }
 
+# The f64 with bit pattern b.
+fn fb(b): f64 {
+    var x: f64 = 0.0;
+    store64(&x, b);
+    return x;
+}
+
+# 1 when the Ok Result (t, v) holds the f64 with bit pattern b.
+fn ok_bits(t, v, b): i64 {
+    if (is_ok(t) != 1) { return 0; }
+    if (v != b) { return 0; }
+    return 1;
+}
+
 # Runs field.rs's tests (parts 3a, 3b and 3c).
 fn main() {
     alloc_init();
@@ -1085,6 +1099,27 @@ fn main() {
     assert(is_ok(te2) == 1 && bj_last_error() == BJ_ERR_SINGULARITY, "a null point records nothing");
     BjPolyline_free(&poly);
     assert(poly.count() == 0, "freed");
+
+    test_group("cyrius_round_once (ADR 0002 row 13)");
+    # The single-product fields and energies rounded once; the expected bits are Python's exact rounding.
+    var ro_r1m: f64 = fb(0x1EB67E9C127B6E74);
+    var ro_r160: f64 = fb(0x6126C2D4256FFCC3);
+    var ro_r300: f64 = fb(0x7E37E43C8800759C);
+    var ro_r300m: f64 = fb(0x01A56E1FC2F8F359);
+    var ro_r30m: f64 = fb(0x39B4484BFEEBC2A0);
+    var ro_um: f64 = bj_magnetic_energy_density(ro_r1m);
+    var ro_umb = 0;
+    store64(&ro_umb, ro_um);
+    assert_eq(ro_umb, 0x00000000300067F1, "B²/(2μ₀) at B = 1e-160 on the subnormal grid (Rust's B² lost 15 bits)");
+    var ro_ts1, ro_vs1 = bj_electric_field_charged_sphere(1.0, ro_r160);
+    assert(ok_bits(ro_ts1, ro_vs1, 0x0000108B6C87E83A) == 1, "kQ/r² at r = 1e160: 8.987551792261e-311 (Rust: 0)");
+    var ro_ti1, ro_vi1 = bj_electric_field_inside_sphere(ro_r300, ro_r300, ro_r300);
+    assert(ok_bits(ro_ti1, ro_vi1, 0x03B66C11DEF566EF) == 1, "kQr/R³ = 8.987551792261171e-291 (Rust: ∞/∞ = NaN)");
+    var ro_tc1, ro_vc1 = bj_electric_field_inside_cylinder(ro_r300m, ro_r30m);
+    assert(ok_bits(ro_tc1, ro_vc1, 0x0000000000002CA6) == 1, "ρr/(2ε₀) = 5.647e-320 (Rust: ρ·r underflows to 0)");
+    var ro_inf: f64 = 1.0 / 0.0;
+    var ro_ue: f64 = bj_electric_energy_density(ro_inf);
+    assert(ro_ue == ro_inf, "an infinite E keeps Rust's ∞");
 
     return assert_summary();
 }

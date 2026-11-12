@@ -1,10 +1,12 @@
 # charge.cyr — point charges, Coulomb's law, the Lorentz force, cyclotron motion (port of rust-old/src/charge.rs,
 # M1 part 3d).
 #
-# SI units: coulombs, newtons, metres, seconds. Every formula is Rust's in Rust's order (the golden rows compare bit
-# for bit, class A). The constants (BJ_ELEMENTARY_CHARGE, BJ_ELECTRON_MASS, BJ_PROTON_MASS) are src/constants.cyr's.
-# Shapes as src/field.cyr's: a `[f64; 3]` is the address of three f64; a `Result<FieldVector>` writes through an out
-# pointer; a fallible constructor of a struct over 16 bytes writes through `out` too.
+# SI units: coulombs, newtons, metres, seconds. Every formula is Rust's in Rust's order (the golden rows compare bit for
+# bit, class A), but for the three that are one product or quotient of inputs and constants (the Coulomb energy,
+# cyclotron frequency and Larmor radius), which are rounded once (ADR 0002 row 13). The constants (BJ_ELEMENTARY_CHARGE,
+# BJ_ELECTRON_MASS, BJ_PROTON_MASS) are src/constants.cyr's. Shapes as src/field.cyr's: a `[f64; 3]` is the address of
+# three f64; a `Result<FieldVector>` writes through an out pointer; a fallible constructor of a struct over 16 bytes
+# writes through `out` too.
 
 private
 
@@ -148,13 +150,18 @@ public fn bj_potential_energy(charge: f64, potential: f64): f64 {
     return u;
 }
 
-# U = kq₁q₂/r (J). InvalidParameter when r is NaN or negative, Singularity below 1e-30 m (field.rs's
-# check_radial_distance). Mirrors `charge::coulomb_potential_energy`.
+# U = kq₁q₂/r (J), correctly rounded (ADR 0002 row 13; an infinite or NaN operand keeps Rust's (k·q₁·q₂)/r).
+# InvalidParameter when r is NaN or negative, Singularity below 1e-30 m (field.rs's check_radial_distance). Mirrors
+# `charge::coulomb_potential_energy`.
 public fn bj_coulomb_potential_energy(q1: f64, q2: f64, distance: f64): Result {
     var t, v = _bj_check_radial_distance(distance);
     if (is_err_result(t) == 1) { return Err(v); }
-    var u: f64 = BJ_COULOMB_K * q1 * q2 / distance;
-    return Ok(u);
+    if (_bj_is_finite(q1) == 0 || _bj_is_finite(q2) == 0 || _bj_is_finite(distance) == 0) {
+        var u: f64 = BJ_COULOMB_K * q1 * q2 / distance;
+        return Ok(u);
+    }
+    var cr: f64 = _bj_k_cr_mul3_div(BJ_COULOMB_K, q1, q2, distance);
+    return Ok(cr);
 }
 
 # A particle mass's error for `what`: DivisionByZero "mass cannot be zero for <what>" for 0, InvalidParameter "mass
@@ -177,7 +184,8 @@ fn _bj_check_mass(mass: f64, what): i64 {
     return 0;
 }
 
-# ω_c = |q|B/m (rad/s) for |B| ≥ 0 (T). DivisionByZero for a zero mass; InvalidParameter for a negative mass, a NaN
+# ω_c = |q|B/m (rad/s) for |B| ≥ 0 (T), correctly rounded (ADR 0002 row 13; an infinite operand keeps Rust's
+# (|q|·B)/m). DivisionByZero for a zero mass; InvalidParameter for a negative mass, a NaN
 # charge, or a negative or NaN |B| (in that order). Mirrors `charge::cyclotron_frequency`.
 public fn bj_cyclotron_frequency(charge: f64, mass: f64, b_magnitude: f64): Result {
     var c = _bj_check_mass(mass, "cyclotron frequency");
@@ -190,13 +198,18 @@ public fn bj_cyclotron_frequency(charge: f64, mass: f64, b_magnitude: f64): Resu
         return Err(BJ_ERR_INVALID_PARAMETER);
     }
     var aq: f64 = f64_abs(charge);
-    var w: f64 = aq * b_magnitude / mass;
-    return Ok(w);
+    if (_bj_is_finite(aq) == 0 || _bj_is_finite(b_magnitude) == 0 || _bj_is_finite(mass) == 0) {
+        var w: f64 = aq * b_magnitude / mass;
+        return Ok(w);
+    }
+    var cr: f64 = _bj_k_cr_mul_div(aq, b_magnitude, mass);
+    return Ok(cr);
 }
 
-# r_L = m|v⊥|/(|q|B) (m) for |B| > 0, divided in two steps (m·|v⊥|/|q|/B) so a tiny |q|·B can't underflow.
-# DivisionByZero for a zero mass, charge or |B|; InvalidParameter for a negative mass or |B|, or a NaN argument (in
-# Rust's order). Mirrors `charge::larmor_radius`.
+# r_L = m|v⊥|/(|q|B) (m) for |B| > 0, correctly rounded (ADR 0002 row 13: Rust divides in two steps, m·|v⊥|/|q|/B,
+# so a tiny |q|·B can't underflow, but m·|v⊥| still can; an infinite operand keeps that chain). DivisionByZero for a
+# zero mass, charge or |B|; InvalidParameter for a negative mass or |B|, or a NaN argument (in Rust's order). Mirrors
+# `charge::larmor_radius`.
 public fn bj_larmor_radius(mass: f64, v_perp: f64, charge: f64, b_magnitude: f64): Result {
     var c = _bj_check_mass(mass, "Larmor radius");
     if (c != 0) { return Err(c); }
@@ -213,6 +226,11 @@ public fn bj_larmor_radius(mass: f64, v_perp: f64, charge: f64, b_magnitude: f64
     }
     var av: f64 = f64_abs(v_perp);
     var aq: f64 = f64_abs(charge);
-    var r: f64 = mass * av / aq / b_magnitude;
-    return Ok(r);
+    var fin = _bj_is_finite(mass) + _bj_is_finite(av) + _bj_is_finite(aq) + _bj_is_finite(b_magnitude);
+    if (fin != 4) {
+        var r: f64 = mass * av / aq / b_magnitude;
+        return Ok(r);
+    }
+    var cr: f64 = _bj_k_cr_mul2_div2(mass, av, aq, b_magnitude);
+    return Ok(cr);
 }

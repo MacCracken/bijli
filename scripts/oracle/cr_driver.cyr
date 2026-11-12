@@ -2,13 +2,14 @@
 #
 # Input build/cr_in.txt, one call per line: `<fn> <word hex> …` (up to twelve 16-digit words: an f64's bits, or an
 # integer in two's complement). Output, one line per call: the result's bits in hex. Beside the primitives: kimiya's
-# correctly rounded monomials, square roots of quotients and unbounded-exponent final operations (src/crmath_kx.cyr,
-# M1 part 5), which cr_verify.py checks against exact values (Python's Fraction and integer square root). Built from the math sources the bundle carries (src/constants.cyr … src/mathx.cyr, in the
-# manifest's order and byte for byte what dist/bijli.cyr holds): the bundle is `private` and these entry points are
-# bijli-internal, so a consumer of dist/bijli.cyr can't call them, but a file of internals only has no marker and can
-# be included on its own. scripts/oracle/cr_verify.py builds it, runs it natively and under qemu-aarch64, and compares
-# every result with MPFR. `tan_slow` calls tan's fixed-point path directly (finite |x| ≥ 2^-27 only), so the path the
-# rounding test rarely reaches is checked on arguments of its own.
+# correctly rounded monomials, square roots of quotients and unbounded-exponent final operations (src/crmath_kx.cyr, M1
+# part 5) and bijli's √ of a monomial (src/crmath_mono.cyr), which cr_verify.py checks against exact values (Python's
+# Fraction and integer square root). Built from the math sources the bundle carries (src/constants.cyr … src/mathx.cyr,
+# in the manifest's order and byte for byte what dist/bijli.cyr holds): the bundle is `private` and these entry points
+# are bijli-internal, so a consumer of dist/bijli.cyr can't call them, but a file of internals only has no marker and
+# can be included on its own. scripts/oracle/cr_verify.py builds it, runs it natively and under qemu-aarch64, and
+# compares every result with MPFR. `tan_slow` calls tan's fixed-point path directly (finite |x| ≥ 2^-27 only), so the
+# path the rounding test rarely reaches is checked on arguments of its own.
 include "lib/syscalls.cyr"
 include "lib/string.cyr"
 include "lib/alloc.cyr"
@@ -23,6 +24,7 @@ include "src/crmath.cyr"
 include "src/crmath_k_data.cyr"
 include "src/crmath_k.cyr"
 include "src/crmath_kx.cyr"
+include "src/crmath_mono.cyr"
 include "src/mathx.cyr"
 
 # The value of hex digit byte c (lowercase).
@@ -78,6 +80,13 @@ fn _call(fp, fl, w): i64 {
         var nn = load64(w);
         var nd = load64(w + 8);
         r = _bj_k_cr_mono(w + 16, nn, w + 16 + nn * 8, nd);
+    }
+    elif (_is(fp, fl, "sqrt_mono") == 1 || _is(fp, fl, "sqrt_mono_acc") == 1) {
+        # sqrt_mono nn nd f1 … d…: RN(√(Π f / Π d)), the full function or the exact path alone
+        var sn = load64(w);
+        var sdn = load64(w + 8);
+        if (fl == 9) { r = _bj_cr_sqrt_mono(w + 16, sn, w + 16 + sn * 8, sdn); }
+        else { r = _bj_cr_sqrt_mono_acc(w + 16, sn, w + 16 + sn * 8, sdn); }
     }
     elif (_is(fp, fl, "mul_div") == 1) { r = _bj_k_cr_mul_div(x, y, _wf(w, 2)); }
     elif (_is(fp, fl, "mul3") == 1) { r = _bj_k_cr_mul3(x, y, _wf(w, 2)); }

@@ -100,6 +100,12 @@ fn <TAB> class <TAB> inputs <TAB> outputs <TAB> note
 | D | relative ≤ 1e-12 (expected to stay empty) |
 | T | an FDTD trajectory frame: each field component's digest equal, probe cells by their path's class (M5) |
 
+`<module>.adr.tsv` (M1 part 5) holds the ADR 0002 mappings: for a golden row whose port result an ADR 0002 row
+changes, the port's outputs as that row gives them, written by `validate.py --write` from exact values
+(`exact.py`: Fraction and an integer square root), never from the port. Its columns are fn, inputs (the key, byte for
+byte), outputs, the ADR 0002 row number, and a note; the harness loads it beside `<module>.cr.tsv`, compares the port
+against it under the row's class, and reports each row number's count. A golden row never has both.
+
 `<module>.cr.tsv` (the corrected oracle, kimiya ADR 0006) holds, for a row whose glibc calls
 misrounded, the oracle's sequence of operations evaluated with correctly rounded primitives
 (`mpfr_ref.py`). `validate.py --write` produces it; the generator only checks it has a module. `json.cr.tsv` holds, for a reader row serde_json misread

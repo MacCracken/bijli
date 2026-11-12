@@ -329,6 +329,7 @@ var _par_fn_pend = 0;
 var _par_fn_acc = 0;
 var _par_fn_diff = 0;  # shadow slots only: rows where the candidate differs
 var _par_fn_adr6 = 0;  # rows accepted under ADR 01 (a pass against the corrected outputs)
+var _par_fn_map = 0;   # rows accepted under an ADR 0002 mapping (a pass against <module>.adr.tsv's outputs)
 var _par_fn_glibc = 0; # measured rows that match only the oracle's misrounded outputs (the transitional rule, off)
 var _par_fn_cr = 0;    # rows with an ADR 0001 correction
 var _par_fn_cr0 = 0;   # ... whose port outputs are bit-identical to the corrected outputs
@@ -358,6 +359,7 @@ fn _par_fn_slot(fp, fl, cls): i64 {
     store64(_par_fn_acc + at, 0);
     store64(_par_fn_diff + at, 0);
     store64(_par_fn_adr6 + at, 0);
+    store64(_par_fn_map + at, 0);
     store64(_par_fn_glibc + at, 0);
     store64(_par_fn_cr + at, 0);
     store64(_par_fn_cr0 + at, 0);
@@ -530,6 +532,8 @@ fn _par_report_fns() {
         if (acc > 0) { print(", ", 2); fmt_int(acc); print(" accepted", 9); }
         var a6 = load64(_par_fn_adr6 + at);
         if (a6 > 0) { print(" (ADR 01: ", 10); fmt_int(a6); print(")", 1); }
+        var am = load64(_par_fn_map + at);
+        if (am > 0) { print(" (ADR 0002 mapped: ", 19); fmt_int(am); print(")", 1); }
         var dif = load64(_par_fn_diff + at);
         if (dif > 0) { print(", ", 2); fmt_int(dif); print(" differ (shadow)", 16); }
         var hb = k * 6;
@@ -601,24 +605,41 @@ fn _par_cr_key_is(r, fp, fl, ip, il): i64 {
     return memeq(load64(at + 16), ip, il);
 }
 
-# Loads tests/golden/<module>.cr.tsv into the table. Returns its row count (0 when the module has no file), or -1
-# when the file exists but can't be read or holds a malformed row.
-fn _par_cr_load(mp, ml): i64 {
-    _par_cr_n = 0;
+# The ADR 0002 mappings (tests/golden/<module>.adr.tsv, M1 part 5; format: scripts/oracle/README.md) share the table:
+# fn <TAB> inputs <TAB> the port's outputs <TAB> the ADR 0002 row <TAB> note. A row's word +56 is that row number, 0
+# for an ADR 0001 correction. validate.py never writes both for one golden row.
+var _par_adr_file[128];
+var _par_cr_n_cr = 0;     # the table's ADR 0001 corrections
+var _par_cr_n_adr = 0;    # ... and ADR 0002 mappings
+
+# tests/golden/<module><ext> into path (NUL-terminated); 0, or -1 when it doesn't fit.
+fn _par_golden_path(path, mp, ml, ext): i64 {
     var pre = "tests/golden/";
     var pl = strlen(pre);
-    if (pl + ml + 8 > 127) { return 0 - 1; }
-    memcpy(&_par_cr_file, pre, pl);
-    memcpy(&_par_cr_file + pl, mp, ml);
-    memcpy(&_par_cr_file + pl + ml, ".cr.tsv", 7);
-    store8(&_par_cr_file + pl + ml + 7, 0);
+    var el = strlen(ext);
+    if (pl + ml + el + 1 > 127) { return 0 - 1; }
+    memcpy(path, pre, pl);
+    memcpy(path + pl, mp, ml);
+    memcpy(path + pl + ml, ext, el);
+    store8(path + pl + ml + el, 0);
+    return 0;
+}
+
+# The file at path whole, its length at *lenp; 0 with length 0 when it doesn't exist, 0 with −1 when unreadable.
+fn _par_read_opt(path, lenp): i64 {
     var lenw[8];
-    var buf = file_read_whole(&_par_cr_file, &lenw);
+    var buf = file_read_whole(path, &lenw);
     var len = load64(&lenw);
     if (buf == 0) {
-        if (len == 0 - 2) { return 0; }   # ENOENT: no row of this module needs a correction
-        return 0 - 1;
+        if (len == 0 - 2) { store64(lenp, 0); } else { store64(lenp, 0 - 1); }
+        return 0;
     }
+    store64(lenp, len);
+    return buf;
+}
+
+# The number of rows (non-comment, non-empty lines) of [buf, buf + len).
+fn _par_count_rows(buf, len): i64 {
     var rows = 0;
     var line = 0;
     while (line < len) {
@@ -626,15 +647,13 @@ fn _par_cr_load(mp, ml): i64 {
         if (eol > line && load8(buf + line) != 35) { rows = rows + 1; }
         line = eol + 1;
     }
-    var cap = 16;
-    while (cap < rows * 2) { cap = cap * 2; }
-    _par_cr_t = _par_words(rows * 8 + 8);
-    _par_cr_idx = _par_words(cap);
-    if (_par_cr_t == 0 || _par_cr_idx == 0) { return 0 - 1; }
-    _par_cr_mask = cap - 1;
-    var s = 0;
-    while (s < cap) { store64(_par_cr_idx + s * 8, 0); s = s + 1; }
-    line = 0;
+    return rows;
+}
+
+# Appends the rows of [buf, buf + len) to the table; adr = 1 reads an .adr.tsv row's fourth field as its ADR 0002 row.
+# Returns 0, or -1 on a malformed row.
+fn _par_cr_add(buf, len, adr): i64 {
+    var line = 0;
     while (line < len) {
         var eol = _par_find(buf, line, len, 10);
         if (eol > line && load8(buf + line) != 35) {
@@ -642,6 +661,13 @@ fn _par_cr_load(mp, ml): i64 {
             var t2 = _par_find(buf, t1 + 1, eol, 9);
             var t3 = _par_find(buf, t2 + 1, eol, 9);
             if (t3 >= eol || t1 == line || t2 == t1 + 1 || t3 == t2 + 1) { return 0 - 1; }
+            var row = 0;
+            if (adr == 1) {
+                var t4 = _par_find(buf, t3 + 1, eol, 9);
+                var ok = 1;                         # _par_parse_int clears it on a bad digit
+                row = _par_parse_int(buf + t3 + 1, t4 - t3 - 1, &ok);
+                if (ok != 1 || row <= 0 || row >= _PAR_ADR_ROWS) { return 0 - 1; }
+            }
             var at = _par_cr_t + _par_cr_n * 64;
             store64(at, buf + line);
             store64(at + 8, t1 - line);
@@ -650,7 +676,7 @@ fn _par_cr_load(mp, ml): i64 {
             store64(at + 32, buf + t2 + 1);
             store64(at + 40, t3 - t2 - 1);
             store64(at + 48, 0);
-            store64(at + 56, 0);
+            store64(at + 56, row);
             var h = _par_cr_hash(buf + line, t1 - line, buf + t1 + 1, t2 - t1 - 1) & _par_cr_mask;
             while (load64(_par_cr_idx + h * 8) != 0) { h = (h + 1) & _par_cr_mask; }
             _par_cr_n = _par_cr_n + 1;
@@ -658,6 +684,38 @@ fn _par_cr_load(mp, ml): i64 {
         }
         line = eol + 1;
     }
+    return 0;
+}
+
+# Loads tests/golden/<module>.cr.tsv and <module>.adr.tsv into the table. Returns its row count (0 when the module has
+# neither file), or -1 when a file exists but can't be read or holds a malformed row.
+fn _par_cr_load(mp, ml): i64 {
+    _par_cr_n = 0;
+    _par_cr_n_cr = 0;
+    _par_cr_n_adr = 0;
+    if (_par_golden_path(&_par_cr_file, mp, ml, ".cr.tsv") != 0) { return 0 - 1; }
+    if (_par_golden_path(&_par_adr_file, mp, ml, ".adr.tsv") != 0) { return 0 - 1; }
+    var lc[8];
+    var la[8];
+    var bc = _par_read_opt(&_par_cr_file, &lc);
+    var ba = _par_read_opt(&_par_adr_file, &la);
+    if (load64(&lc) < 0 || load64(&la) < 0) { return 0 - 1; }
+    var nc = _par_count_rows(bc, load64(&lc));
+    var na = _par_count_rows(ba, load64(&la));
+    var rows = nc + na;
+    if (rows == 0) { return 0; }
+    var cap = 16;
+    while (cap < rows * 2) { cap = cap * 2; }
+    _par_cr_t = _par_words(rows * 8 + 8);
+    _par_cr_idx = _par_words(cap);
+    if (_par_cr_t == 0 || _par_cr_idx == 0) { return 0 - 1; }
+    _par_cr_mask = cap - 1;
+    var s = 0;
+    while (s < cap) { store64(_par_cr_idx + s * 8, 0); s = s + 1; }
+    if (_par_cr_add(bc, load64(&lc), 0) != 0) { return 0 - 1; }
+    if (_par_cr_add(ba, load64(&la), 1) != 0) { return 0 - 1; }
+    _par_cr_n_cr = nc;
+    _par_cr_n_adr = na;
     return _par_cr_n;
 }
 
@@ -711,6 +769,10 @@ var _par_rows_meas = 0;
 var _par_rows_pend = 0;
 var _par_rows_acc = 0;
 var _par_rows_adr6 = 0;    # of _par_rows_acc: accepted under ADR 01 (a pass against the corrected outputs)
+var _par_rows_adr2 = 0;    # of _par_rows_acc: accepted under ADR 0002 (an .adr.tsv mapping, or _par_accepted's 2NN)
+var _PAR_ADR_ROWS = 64;
+var _par_map_acc: i64[64]; # a module's .adr.tsv rows passed, per ADR 0002 row
+var _par_map_fail = 0;     # ... and failed
 var _par_rows_glibc = 0;   # of _par_rows_meas: glibc-matching corrected rows (the transitional rule, off)
 
 # The index of the next byte `c` in [p + at, p + end), or `end`.
@@ -807,7 +869,9 @@ fn _par_module(mp, ml): i64 {
             # transitional rule, when it fails against the corrected outputs: does it match the oracle's misrounded
             # outputs under the same class and bound? Then it still uses a glibc-like primitive, and is measured.
             var glibc = 0;
-            if (cr >= 0 && handled == 1) {
+            var maprow = 0;
+            if (cr >= 0) { maprow = load64(_par_cr_t + cr * 64 + 56); }
+            if (cr >= 0 && maprow == 0 && handled == 1) {
                 var outl = _par_outlier;
                 _par_bump(_par_fn_cr, slot);
                 if (_par_identical(slot, fp, fl) == 1) { _par_bump(_par_fn_cr0, slot); }
@@ -825,7 +889,15 @@ fn _par_module(mp, ml): i64 {
             # The ADR accepting this row, asked only of a row that failed its comparison.
             var adr = 0;
             if (bad == 0 && outcome == 0 && glibc == 0) { adr = _par_accepted(fp, fl, buf + t2 + 1, t3 - t2 - 1); }
-            if (outcome == 1 && cr >= 0) {
+            if (outcome == 1 && cr >= 0 && maprow > 0) {
+                # ADR 0002: the port matches the mapping its ADR 0002 row gives the oracle's row.
+                _par_bump(_par_fn_acc, slot);
+                _par_bump(_par_fn_map, slot);
+                _par_rows_acc = _par_rows_acc + 1;
+                _par_rows_adr2 = _par_rows_adr2 + 1;
+                _par_map_acc[maprow] = _par_map_acc[maprow] + 1;
+            }
+            elif (outcome == 1 && cr >= 0) {
                 # ADR 01: the port matches the corrected oracle where the oracle's libm misrounded.
                 _par_bump(_par_fn_acc, slot);
                 _par_bump(_par_fn_adr6, slot);
@@ -862,6 +934,7 @@ fn _par_module(mp, ml): i64 {
                 if (cr >= 0) { cr_other = cr_other + 1; }
                 _par_bump(_par_fn_acc, slot);
                 _par_rows_acc = _par_rows_acc + 1;
+                if (adr >= 200) { _par_rows_adr2 = _par_rows_adr2 + 1; }
             }
             elif (adr > 0) {
                 if (cr >= 0) { cr_other = cr_other + 1; }
@@ -875,13 +948,20 @@ fn _par_module(mp, ml): i64 {
                 ulp_print_pair(load64(_par_got_v), load64(_par_want_v));
             }
             else {
-                if (cr >= 0) { cr_fail = cr_fail + 1; }
+                if (cr >= 0 && maprow > 0) { _par_map_fail = _par_map_fail + 1; }
+                elif (cr >= 0) { cr_fail = cr_fail + 1; }
                 _par_bump(_par_fn_fail, slot);
                 _par_rows_fail = _par_rows_fail + 1;
                 mod_fail = 1;
                 if (fails_shown < 10) {
                     eprint("  FAIL: ", 8);
-                    if (cr >= 0) { eprint("(against the ADR 01 corrected outputs) ", 39); }
+                    if (cr >= 0 && maprow > 0) {
+                        eprint("(against the ADR 0002 row ", 26);
+                        var rb[24];
+                        var rn = fmt_int_buf(maprow, &rb);
+                        eprint(&rb, rn);
+                        eprint(" mapping) ", 10);
+                    } elif (cr >= 0) { eprint("(against the ADR 01 corrected outputs) ", 39); }
                     if (crbad == 1) {
                         eprint("malformed correction for the row: ", 34);
                         eprint(buf + line, eol - line);
@@ -921,11 +1001,32 @@ fn _par_module(mp, ml): i64 {
         k = k + 1;
     }
     _par_report_fns();
-    if (crn > 0) {
+    if (_par_cr_n_adr > 0) {
+        print("  ADR 0002 mappings, ", 21);
+        print(&_par_adr_file, strlen(&_par_adr_file));
+        print(": ", 2);
+        fmt_int(_par_cr_n_adr);
+        print(" rows:", 6);
+        for (var r = 1; r < _PAR_ADR_ROWS; r = r + 1) {
+            if (_par_map_acc[r] > 0) {
+                print(" row ", 5);
+                fmt_int(r);
+                print(" ", 1);
+                fmt_int(_par_map_acc[r]);
+                print(" accepted;", 10);
+            }
+        }
+        print(" ", 1);
+        fmt_int(_par_map_fail);
+        println(" FAILED");
+    }
+    for (var r2 = 0; r2 < _PAR_ADR_ROWS; r2 = r2 + 1) { _par_map_acc[r2] = 0; }
+    _par_map_fail = 0;
+    if (_par_cr_n_cr > 0) {
         print("  ADR 0001 corrected oracle, ", 29);
         print(&_par_cr_file, strlen(&_par_cr_file));
         print(": ", 2);
-        fmt_int(crn);
+        fmt_int(_par_cr_n_cr);
         print(" rows: ", 7);
         fmt_int(cr_acc6);
         print(" accepted (ADR 01), ", 20);
@@ -978,6 +1079,7 @@ fn _par_alloc(): i64 {
     _par_fn_acc = _par_words(_PAR_FN_MAX);
     _par_fn_diff = _par_words(_PAR_FN_MAX);
     _par_fn_adr6 = _par_words(_PAR_FN_MAX);
+    _par_fn_map = _par_words(_PAR_FN_MAX);
     _par_fn_glibc = _par_words(_PAR_FN_MAX);
     _par_fn_cr = _par_words(_PAR_FN_MAX);
     _par_fn_cr0 = _par_words(_PAR_FN_MAX);
@@ -994,7 +1096,7 @@ fn _par_alloc(): i64 {
     if (_par_fn_ok == 0 || _par_fn_fail == 0 || _par_fn_meas == 0 || _par_fn_pend == 0) { return 1; }
     if (_par_fn_acc == 0 || _par_fn_diff == 0 || _par_fn_h == 0 || _par_fn_max == 0) { return 1; }
     if (_par_fn_adr6 == 0 || _par_fn_glibc == 0 || _par_fn_cr == 0) { return 1; }
-    if (_par_fn_cr0 == 0 || _par_fn_crg == 0) { return 1; }
+    if (_par_fn_cr0 == 0 || _par_fn_crg == 0 || _par_fn_map == 0) { return 1; }
     if (_par_alt_k == 0 || _par_alt_v == 0 || _par_alt_l == 0) { return 1; }
     return 0;
 }
@@ -1040,6 +1142,8 @@ fn _par_main(): i64 {
     fmt_int(_par_rows_acc);
     print(" accepted (ADR 01: ", 19);
     fmt_int(_par_rows_adr6);
+    print(", ADR 0002: ", 12);
+    fmt_int(_par_rows_adr2);
     print("), ", 3);
     fmt_int(_par_rows_glibc);
     println(" glibc-matching (measured) ===");

@@ -844,3 +844,90 @@ Language facts the probes found, beyond plan §2:
   `mul5`'s arguments keep kimiya's documented domain: the exact path's capacity is four doubles and a 41-bit integer
   per side, and past it the result is NaN by design. No bijli formula has five doubles on a side.
 - **The corpus is unchanged**: 9 modules, 188,486 ok, 6,559 accepted on all three targets, all 145 digests as §15.
+
+## 17. M1 part 5b: round once (2026-11-12)
+
+- **ADR 0002 row 13**: every formula that is one product, quotient or root of inputs and constants is correctly
+  rounded for finite operands (the user's "round once" decision). Fourteen functions change:
+  - maxwell: `wave_speed` (1/√(ε·μ)), `refractive_index` (√(ε_r·μ_r)), `impedance` (√(μ/ε)), `skin_depth`
+    (√(2/(ω·μ·σ)));
+  - charge: `coulomb_potential_energy` (kq₁q₂/r), `cyclotron_frequency` (|q|B/m), `larmor_radius` (m|v⊥|/(|q|B));
+  - field: `electric_energy_density` (ε₀E²/2), `magnetic_energy_density` (B²/(2μ₀)), and the `charged_sphere`
+    (kQ/r²), `inside_sphere` (kQr/R³), `infinite_line` and `outside_cylinder` (λ/(2πε₀r)) and `inside_cylinder`
+    (ρr/(2ε₀)) fields.
+
+  `free_space_impedance` is rounded once too; Rust's value already was. A physical constant enters as its double
+  and π as Rust's. An infinite or NaN operand keeps Rust's chain (the callers test finiteness first), and so does
+  every error. A single IEEE operation (`wavelength`, `frequency`, the divergences, `dipole_moment`,
+  `potential_energy`, the plane field) was already rounded once and is unchanged. The functions with a sum inside
+  (ring, disk, point charges, dipoles, Green's) get the edge treatment in 5d.
+- **`src/crmath_mono.cyr`**: bijli's RN(√(Π num / Π den)), up to 3 over 4 positive finite factors, for
+  `wave_speed`, `refractive_index` and `skin_depth`. kimiya's shapes stop at √(x/y) and w·√((x/y)·2^e), and no
+  exact rewrite takes 1/√(ε·μ) or √(2/(ω·μ·σ)) to one of them.
+  - **Fast path**: kimiya's significand split (`_bj_k_mono_sig`) and double-double products (`_bj_k_mono_prod`), a
+    double-double quotient and one Newton step. The value is within 13u² of the exact root, inside kimiya's
+    rounding test's 32u² budget (`_bj_k_dd_round_ends`), and `_bj_k_mono_fin` scales it.
+  - **Exact path**: R = ⌊√(P·2^S/Q)⌋ to 56 or 57 bits by exact comparisons of R²·Q with P·2^S, a sticky bit, and
+    kimiya's `_bj_k_cr_from_int`, which rounds once onto the binade's grid or the subnormal one.
+  - Its multi-word integers are its own, 12 limbs of 32 bits: R²·Q reaches 2^327, past kimiya's 2^256. Cyrius's `>>`
+    is the logical shift (`>>>` the arithmetic one), so a limb product's carry is `t >> 32`.
+  - **Checks**: `cr_verify.py`'s `sqrt_mono` and `sqrt_mono_acc` families, 1,000,000 calls on x86_64 and aarch64 (the
+    full function and the exact path alone), all equal to an exact integer square root. The arguments cover every
+    size in the domain, every binade, subnormal factors, roots past DBL_MAX and on the subnormal grid, exact squares,
+    and both maxwell shapes.
+- **The impedances use kimiya's `_bj_k_cr_sqrt_div`**, which gives the same bits as the general root for one factor
+  over one (72 ns against 123 ns).
+- **The mappings**: `tests/golden/<module>.adr.tsv`, written by `validate.py --write` from exact values
+  (`scripts/oracle/exact.py`: Fraction, an integer square root, IEEE's signed zero for a zero factor), never from
+  the port. Each row is fn, inputs, the port's outputs, the ADR 0002 row and a note. The harness
+  (`tests/parity_core.cyr`) loads it beside `<module>.cr.tsv` into one table, tags each row with its ADR 0002 row,
+  compares the port against it, and reports each row number's count (`ADR 0002 mappings, …: row 13 N accepted`).
+  The summary now reads `accepted (ADR 01: …, ADR 0002: …)`.
+  - **2,031 mapped rows**: maxwell 1,613 (wave_speed 642, impedance 333, refractive_index 322, skin_depth 316),
+    charge 248 (larmor 137, cyclotron 67, Coulomb energy 44), field 170 (inside_sphere 70, magnetic energy 32,
+    electric energy 19, line and outside cylinder 15 each, charged sphere 11, inside cylinder 8).
+  - Those counts are exactly the rows the harness failed before the mappings existed: the exact reference changes
+    precisely the rows the port changed.
+  - The rest of these functions' golden rows (in range, where Rust's chain happened to round once, and every error
+    row) stay Rust's bits.
+- **Tests**: a `cyrius_round_once (ADR 0002 row 13)` group in `tests/maxwell.tcyr` (9 assertions), `tests/charge.tcyr`
+  (4) and `tests/field.tcyr` (5) pins the edges Rust fails outright, among them:
+  - 1/√(1e-160·1e-160) = 1e160, where Rust gives 1.0000055664551363e160;
+  - √(2/1e600) = 1.4142135623730952e-300, where Rust gives 0;
+  - kQr/R³ at 1e300 = 8.987551792261171e-291, where Rust gives NaN;
+  - B²/(2μ₀) at B = 1e-160, exact on the subnormal grid, where Rust loses 15 bits;
+  - infinite operands keeping Rust's results.
+- **Result, every target**: 9 modules, 0 failing; **186,455 ok, 0 failed, 0 measured, 0 pending, 8,590 accepted (ADR
+  01: 6,505; ADR 0002: 2,085)**. All 145 digests are equal on x86_64 ELF, x86_64 PE and aarch64. Fourteen changed,
+  for the fourteen functions above (`free_space_impedance`'s is unchanged); the other 131 are §16's.
+
+| Function | Digest v2, every target |
+|---|---|
+| charge::coulomb_potential_energy | `5ce7145fa9a402d6` |
+| charge::cyclotron_frequency | `568aae27e1dcff05` |
+| charge::larmor_radius | `1d41c82248b61a02` |
+| field::electric_energy_density | `49ecf4e86ae15ee1` |
+| field::magnetic_energy_density | `48ab3b2a35bf0eed` |
+| field::electric_field_charged_sphere | `42f9335f2ee931e5` |
+| field::electric_field_inside_sphere | `4054ea92538a2564` |
+| field::electric_field_infinite_line | `22b383a69be51ff` |
+| field::electric_field_outside_cylinder | `22b383a69be51ff` (the line's) |
+| field::electric_field_inside_cylinder | `5185a3a13729d380` |
+| maxwell::wave_speed | `203d2973e8936288` |
+| maxwell::refractive_index | `5b31a22f587bb545` |
+| maxwell::impedance | `70b4787eec185117` |
+| maxwell::skin_depth | `6f7fbf4ff1f1cf3` |
+
+- **Benchmarks** (`cyrius bench` once agnosai's benches were done; the other rows are within 3 % of §15's):
+
+  | Bench | Rust | Cyrius (5a) | Cyrius (5b) | Ratio to Rust |
+  |---|---|---|---|---|
+  | `maxwell/wave_speed` | 1.24 ns | 15 ns | 141 ns | 114× |
+  | `maxwell/impedance` | 1.24 ns | 13 ns | 84 ns | 68× |
+  | `maxwell/skin_depth` | 1.29 ns | 27 ns | 186 ns | 144× |
+
+  Correct rounding costs a double-double root and its rounding test: about 70 ns for kimiya's √(x/y), and 120 ns for
+  the general monomial root (its significand split and products through memory; Cyrius inlines none of it). Rust's
+  numbers are LLVM folding constant arguments. These are findings with their numbers (speed is measured, not
+  gated). A shape-specific fast path for 1/√(x·y) and √(2/(x·y·z)), like kimiya's √(x/y), would close part of the
+  gap.

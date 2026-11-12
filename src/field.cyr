@@ -316,21 +316,31 @@ public fn bj_electric_field_superposition(charges: *f64, n, field_pos: *f64, out
     return Ok(0);
 }
 
-# u = ε₀E²/2 (J/m³). Mirrors `field::electric_energy_density`.
+# u = ε₀E²/2 (J/m³), correctly rounded (ADR 0002 row 13; a non-finite E keeps Rust's 0.5·ε₀·E·E). Mirrors
+# `field::electric_energy_density`.
 #must_use
 #pure
 public fn bj_electric_energy_density(e_magnitude: f64): f64 {
-    var u: f64 = 0.5 * BJ_EPSILON_0 * e_magnitude * e_magnitude;
-    return u;
+    if (_bj_is_finite(e_magnitude) == 0) {
+        var u: f64 = 0.5 * BJ_EPSILON_0 * e_magnitude * e_magnitude;
+        return u;
+    }
+    var cr: f64 = _bj_k_cr_mul4(0.5, BJ_EPSILON_0, e_magnitude, e_magnitude);
+    return cr;
 }
 
-# u = B²/(2μ₀) (J/m³). Mirrors `field::magnetic_energy_density`.
+# u = B²/(2μ₀) (J/m³), correctly rounded (ADR 0002 row 13; a non-finite B keeps Rust's B·B/(2μ₀)). Mirrors
+# `field::magnetic_energy_density`.
 #must_use
 #pure
 public fn bj_magnetic_energy_density(b_magnitude: f64): f64 {
     var two_mu: f64 = 2.0 * BJ_MU_0;
-    var u: f64 = b_magnitude * b_magnitude / two_mu;
-    return u;
+    if (_bj_is_finite(b_magnitude) == 0) {
+        var u: f64 = b_magnitude * b_magnitude / two_mu;
+        return u;
+    }
+    var cr: f64 = _bj_k_cr_mul_div(b_magnitude, b_magnitude, two_mu);
+    return cr;
 }
 
 # ── dipoles ─────────────────────────────────────────────────────────────────────────────────────────────────────
@@ -425,17 +435,22 @@ public fn _bj_check_radial_distance(distance: f64): Result {
     return Ok(0);
 }
 
-# E_r = kQ/r² (V/m) outside a uniformly charged sphere (r > R). Errors as _bj_check_radial_distance. Mirrors
-# `field::electric_field_charged_sphere`.
+# E_r = kQ/r² (V/m) outside a uniformly charged sphere (r > R), correctly rounded (ADR 0002 row 13; a non-finite
+# operand keeps Rust's k·Q/(r·r)). Errors as _bj_check_radial_distance. Mirrors `field::electric_field_charged_sphere`.
 public fn bj_electric_field_charged_sphere(total_charge: f64, distance: f64): Result {
     var t, v = _bj_check_radial_distance(distance);
     if (is_err_result(t) == 1) { return Err(v); }
-    var r2: f64 = distance * distance;
-    var e: f64 = BJ_COULOMB_K * total_charge / r2;
-    return Ok(e);
+    if (_bj_is_finite(total_charge) == 0 || _bj_is_finite(distance) == 0) {
+        var r2: f64 = distance * distance;
+        var e: f64 = BJ_COULOMB_K * total_charge / r2;
+        return Ok(e);
+    }
+    var cr: f64 = _bj_k_cr_mul2_div2(BJ_COULOMB_K, total_charge, distance, distance);
+    return Ok(cr);
 }
 
-# E_r = kQ·(r/R)/R² (V/m) inside a uniformly charged sphere, 0 ≤ r ≤ R. InvalidParameter when R is not positive and
+# E_r = kQ·(r/R)/R² (V/m) inside a uniformly charged sphere, 0 ≤ r ≤ R: kQr/R³ correctly rounded (ADR 0002 row 13;
+# a non-finite Q keeps Rust's chain). InvalidParameter when R is not positive and
 # finite, or r is outside [0, R] (or NaN). Mirrors `field::electric_field_inside_sphere`.
 public fn bj_electric_field_inside_sphere(total_charge: f64, sphere_radius: f64, distance: f64): Result {
     if (!(sphere_radius > 0.0 && _bj_is_finite(sphere_radius) == 1)) {
@@ -452,20 +467,38 @@ public fn bj_electric_field_inside_sphere(total_charge: f64, sphere_radius: f64,
         _bj_fmt_f64_display(t2, distance);
         return Err(BJ_ERR_INVALID_PARAMETER);
     }
-    var frac: f64 = distance / sphere_radius;
-    var r2: f64 = sphere_radius * sphere_radius;
-    var e: f64 = BJ_COULOMB_K * total_charge * frac / r2;
-    return Ok(e);
+    if (_bj_is_finite(total_charge) == 0) {
+        var frac: f64 = distance / sphere_radius;
+        var r2: f64 = sphere_radius * sphere_radius;
+        var e: f64 = BJ_COULOMB_K * total_charge * frac / r2;
+        return Ok(e);
+    }
+    var num: f64[3];
+    var den: f64[3];
+    num[0] = BJ_COULOMB_K;
+    num[1] = total_charge;
+    num[2] = distance;
+    den[0] = sphere_radius;
+    den[1] = sphere_radius;
+    den[2] = sphere_radius;
+    var cr: f64 = _bj_k_cr_mono(&num, 3, &den, 3);
+    return Ok(cr);
 }
 
-# E_r = λ/(2πε₀r) (V/m) from an infinite line of linear charge density λ. Errors as _bj_check_radial_distance.
-# Mirrors `field::electric_field_infinite_line`.
+# E_r = λ/(2πε₀r) (V/m) from an infinite line of linear charge density λ, correctly rounded with π as Rust's double
+# (ADR 0002 row 13; a non-finite operand keeps Rust's λ/(2·π·ε₀·r)). Errors as _bj_check_radial_distance. Mirrors
+# `field::electric_field_infinite_line`.
 public fn bj_electric_field_infinite_line(linear_charge_density: f64, distance: f64): Result {
     var t, v = _bj_check_radial_distance(distance);
     if (is_err_result(t) == 1) { return Err(v); }
-    var d: f64 = 2.0 * _BJ_PI * BJ_EPSILON_0 * distance;
-    var e: f64 = linear_charge_density / d;
-    return Ok(e);
+    if (_bj_is_finite(linear_charge_density) == 0 || _bj_is_finite(distance) == 0) {
+        var d: f64 = 2.0 * _BJ_PI * BJ_EPSILON_0 * distance;
+        var e: f64 = linear_charge_density / d;
+        return Ok(e);
+    }
+    var two_pi: f64 = 2.0 * _BJ_PI;
+    var cr: f64 = _bj_k_cr_div3(linear_charge_density, two_pi, BJ_EPSILON_0, distance);
+    return Ok(cr);
 }
 
 # E_r = λ/(2πε₀r) outside an infinite uniformly charged cylinder: the line's field and errors. Mirrors
@@ -474,7 +507,8 @@ public fn bj_electric_field_outside_cylinder(linear_charge_density: f64, distanc
     return bj_electric_field_infinite_line(linear_charge_density, distance);
 }
 
-# E_r = ρr/(2ε₀) (V/m) inside an infinite uniformly charged cylinder. InvalidParameter when r is NaN or negative.
+# E_r = ρr/(2ε₀) (V/m) inside an infinite uniformly charged cylinder, correctly rounded (ADR 0002 row 13; a non-finite
+# operand keeps Rust's ρ·r/(2ε₀)). InvalidParameter when r is NaN or negative.
 # Mirrors `field::electric_field_inside_cylinder`.
 public fn bj_electric_field_inside_cylinder(volume_charge_density: f64, distance: f64): Result {
     if (distance != distance || distance < 0.0) {
@@ -484,8 +518,12 @@ public fn bj_electric_field_inside_cylinder(volume_charge_density: f64, distance
         return Err(BJ_ERR_INVALID_PARAMETER);
     }
     var d: f64 = 2.0 * BJ_EPSILON_0;
-    var e: f64 = volume_charge_density * distance / d;
-    return Ok(e);
+    if (_bj_is_finite(volume_charge_density) == 0 || _bj_is_finite(distance) == 0) {
+        var e: f64 = volume_charge_density * distance / d;
+        return Ok(e);
+    }
+    var cr: f64 = _bj_k_cr_mul_div(volume_charge_density, distance, d);
+    return Ok(cr);
 }
 
 # E_z = kQz/(z² + R²)^(3/2) (V/m) on the axis of a ring of radius R in the plane z = 0, z signed; 0 at the centre,

@@ -154,35 +154,7 @@ FUNCS = {
 # division rounds once, to nearest even, onto the subnormal grid), an integer square root for the roots. A call line
 # carries words: an f64's bits, or an integer in two's complement.
 
-INF = float("inf")
-
-
-def rn_frac(v: Fraction) -> float:
-    """RN(v) in binary64: ±∞ past DBL_MAX's rounding boundary, a signed zero below half the least subnormal."""
-    if v == 0:
-        return 0.0
-    try:
-        return v.numerator / v.denominator
-    except OverflowError:
-        return INF if v > 0 else -INF
-
-
-def rn_sqrt(v: Fraction) -> float:
-    """RN(√v) for v > 0, exactly: the ulp's exponent k from √v's binade, m = ⌊√v/2^k⌋ by an integer square root,
-    then the side of the midpoint (m + ½)·2^k by an exact comparison (ties to even)."""
-    p, q = v.numerator, v.denominator
-    lf = p.bit_length() - q.bit_length()
-    if (p << max(0, -lf)) < (q << max(0, lf)):
-        lf -= 1                                 # 2^lf ≤ v < 2^(lf + 1)
-    e = lf // 2                                 # 2^e ≤ √v < 2^(e + 1)
-    k = max(e - 52, -1074)
-    num, den = (p, q << (2 * k)) if k >= 0 else (p << (-2 * k), q)
-    m = math.isqrt(num // den)
-    lhs, rhs = 4 * num, (2 * m + 1) ** 2 * den
-    if lhs > rhs or (lhs == rhs and m % 2 == 1):
-        m += 1
-    r = Fraction(m) * Fraction(2) ** k
-    return INF if r >= Fraction(2) ** 1024 else float(r)
+from exact import INF, rn_frac, rn_sqrt  # noqa: E402  (shared with validate.py)
 
 
 def w64(x) -> str:
@@ -273,6 +245,34 @@ def exact_families(rng, count):
         e = rng.randint(-2200, 2200) if i % 3 == 0 else rng.randint(-8, 8)
         ref = rn_sqrt(Fraction(w) ** 2 * Fraction(x) * Fraction(2) ** e / Fraction(y))
         calls.append(("wsqrt", [w, x, y, e], ref))
+    # bijli's RN(√(Π num / Π den)) (src/crmath_mono.cyr): the full function and the exact path alone, on factor
+    # sets of every size in the domain (≤ 3 over ≤ 4), any binade (subnormal factors, roots past DBL_MAX and on the
+    # subnormal grid), near one, exact squares, and maxwell's two shapes at SI scales and at the range ends.
+    for i in range(2 * count):
+        mode = i % 6
+        if mode == 4:      # wave_speed: 1/√(ε·μ)
+            num, den = [], [abs(any_finite(rng)) or 1.0, abs(any_finite(rng)) or 1.0]
+        elif mode == 5:    # skin_depth: √(2/(ω·μ·σ))
+            num, den = [2.0], [abs(any_finite(rng)) or 1.0 for _ in range(3)]
+        else:
+            nn, nd = rng.randint(0, 3), rng.randint(0, 4)
+            if nn + nd == 0:
+                nd = 1
+            pick = any_finite if mode < 2 else near_one
+            num = [abs(pick(rng)) or 1.0 for _ in range(nn)]
+            den = [abs(pick(rng)) or 1.0 for _ in range(nd)]
+            if mode == 3 and nn:
+                m = rng.getrandbits(26) | (1 << 25)
+                num[0] = float(m * m) * 2.0 ** (2 * rng.randint(-200, 200))    # an exact square times …
+                den = [d * d for d in den[:1]] if den and den[0] * den[0] not in (0.0, INF) else []
+                num = num[:1]
+        v = Fraction(1)
+        for x in num:
+            v *= Fraction(x)
+        for y in den:
+            v /= Fraction(y)
+        fam = "sqrt_mono" if i % 2 == 0 else "sqrt_mono_acc"
+        calls.append((fam, [len(num), len(den)] + num + den, rn_sqrt(v)))
     for op in ("ux_mul", "ux_div", "ux_add", "ux_sub"):
         for i in range(count):
             s1 = rng.uniform(1.0, 2.0) * rng.choice([1.0, -1.0])
@@ -314,7 +314,8 @@ def run(target, lines):
     return [int(g, 16) for g in got]
 
 
-EXACT = ["mono"] + list(SHAPES) + ["sqrt_div", "wsqrt", "ux_mul", "ux_div", "ux_add", "ux_sub", "ux_sqrt"]
+EXACT = ["mono"] + list(SHAPES) + ["sqrt_div", "wsqrt", "sqrt_mono", "sqrt_mono_acc", "ux_mul", "ux_div", "ux_add",
+         "ux_sub", "ux_sqrt"]
 
 
 def main() -> int:

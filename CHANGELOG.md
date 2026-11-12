@@ -134,8 +134,20 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
   targets). `cr_verify.py` gains exact-reference families (Fraction, integer square root): 1,700,000 calls on x86_64
   and aarch64, 0 mismatches. No behaviour changes yet; 5b–5d apply them.
 
+- **Cyrius port, M1 part 5b — round once** (ADR 0002 row 13): the fourteen functions that are one product,
+  quotient or root of inputs and constants are correctly rounded for finite operands. They are maxwell's
+  `wave_speed`, `refractive_index`, `impedance` and `skin_depth`; charge's Coulomb energy, cyclotron frequency and
+  Larmor radius; and field's energy densities and sphere, line and cylinder fields. They use kimiya's monomials and
+  √(x/y), and the new `src/crmath_mono.cyr`, bijli's correctly rounded √ of a monomial (`cr_verify.py`: 1,000,000
+  calls exact on x86_64 and aarch64). The parity harness reads ADR 0002 mappings (`tests/golden/<module>.adr.tsv`,
+  written by validate.py from exact values): 2,031 rows.
+
 ### Fixed
 
+- **maxwell, charge, field** (ADR 0002 row 13): Rust's two to four roundings missed the correctly rounded value by
+  one ulp on about a quarter of inputs, and gave 0, ±∞ or NaN where the value is representable:
+  `wave_speed(1e160, 1e160)` was 0, the skin depth of three 1e200 was 0, and the inside-sphere field at 1e300 was
+  NaN.
 - **json** (ADR 0002 row 11): serde_json's default float parse misreads 6,342 of the corpus's documents by 1–2 ulp
   (`1.602176634e-19`, the elementary charge as serde_json writes it, reads back one ulp high) and refuses 48 numbers
   that round to `f64::MAX`. The port reads every number correctly rounded.

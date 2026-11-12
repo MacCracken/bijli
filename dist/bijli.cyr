@@ -6768,6 +6768,294 @@ fn _bj_k_cr_mul_sqrt_ratio(w: f64, x: f64, y: f64, e): f64 {
     return a;
 }
 
+# --- crmath_mono.cyr ---
+
+# crmath_mono.cyr — RN(√(x₁·…·xₐ / (y₁·…·y_b))), the correctly rounded square root of a monomial (bijli, M1 part 5b),
+# on kimiya's machinery (src/crmath_kx.cyr).
+#
+# For the "round once" decision of the range-edge review (plan §0.1, the user's 2026-11-12 answer): a formula that is
+# one root of a product or quotient of inputs and constants is correctly rounded, where kimiya's shapes stop at
+# √(x/y) and w·√((x/y)·2^e). bijli's are maxwell's wave_speed 1/√(ε·μ) (no numerator factor, two denominator factors)
+# and skin_depth √(2/(ω·μ·σ)) (2 enters as an exponent, three denominator factors). Rust's chains round three or
+# four times (one ulp off on about a quarter of inputs) and their products over- or underflow where the root is
+# representable (wave_speed(1e-160, 1e-160) is 3.6·10¹⁰ ulp off, (1e160, 1e160) gives 0).
+#
+# Domain: at most _BJ_SQM_NMAX numerator and _BJ_SQM_DMAX denominator factors, each a positive finite double; NaN
+# otherwise (the callers keep Rust's semantics for ±∞, zeros and NaN). The value v = √F lies within about 2^±2200;
+# it is +∞ past DBL_MAX's rounding boundary, subnormal below 2^-1022, +0 below half of 2^-1074.
+#
+# The fast path, _bj_cr_sqrt_mono_fast (u = 2⁻⁵³). kimiya's _bj_k_mono_sig splits each side into its significands
+# other than 1 (in [1, 2); a subnormal scaled by 2⁵⁴ first) and the sum of exponents; _bj_k_mono_prod makes the
+# products N = n_h + n_l and D = d_h + d_l normalised double-doubles (one factor exact, two an exact TwoProduct, a
+# third by _bj_k_dd_mul_d within 3.01u²), so N/D is within 3.1u² of the exact significand quotient. With
+# K = Σ e_num − Σ e_den made even (N doubled, exactly, when it is odd), F = N/D·2^K, N in [1, 2⁴), D in [1, 2⁴).
+# _bj_sqm_dd then forms q_h + q_l = N/D (q_h = RN(n_h/d_h); its remainder n_h − q_h·d_h is exact by TwoProduct and
+# Sterbenz, and n_l − q_h·d_l joins it with an error at most 3u²·q_h), y₀ = RN(√q_h), and the Newton step
+# δ = ((q_h − y₀²) + q_l)/(2y₀) (q_h − y₀² exact by TwoProduct and Sterbenz, as kimiya's _bj_k_sqrt_div_dd). The
+# quotient's error is at most 7u² relative, half of it in the root, and the step's own at most 5.7u² (kimiya's bound),
+# so y₀ + δ is within 11u² of √(N/D), and within 13u² of the exact root with N's and D's errors. That is inside
+# _bj_k_dd_round_ends's budget of 32u²: z₁ = z₂ proves RN(√(N/D)) = z₁, and _bj_k_mono_fin scales it by 2^(K/2),
+# exactly for a normal result, to ±∞ past DBL_MAX, and declines a possibly subnormal one.
+#
+# The exact path, _bj_cr_sqrt_mono_acc: each factor x = M·2^E with 2⁵² ≤ M < 2⁵³ (kimiya's _bj_k_f64_int), P the
+# product of the numerator's M and Q the denominator's (multi-word, below 2^160 and 2^213), F = P/Q·2^E. With S chosen
+# so that R = ⌊√(P·2^S/Q)⌋ has 56 or 57 bits and E − S is even, R is the largest integer with R²·Q ≤ P·2^S: an
+# estimate from the double-double root, within one or two, corrected by exact comparisons. The sticky bit records
+# R²·Q ≠ P·2^S, and kimiya's _bj_k_cr_from_int rounds (2R + sticky)·2^((E − S)/2 − 1) once: the binade's grid or the
+# subnormal one, ties to even, +∞ past DBL_MAX. (R has at least 55 bits, so the sticky bit sits below every rounding
+# position.) The multi-word integers here are bijli's own, of _BJ_SQM_LIMBS 32-bit limbs (below 2^384): kimiya's
+# stop at 2^256, and R²·Q reaches 2^327.
+#
+# scripts/oracle/cr_verify.py's sqrt_mono family checks both paths against an exact integer square root on x86_64 and
+# aarch64.
+
+const _BJ_SQM_NMAX = 3;
+const _BJ_SQM_DMAX = 4;
+const _BJ_SQM_LIMBS = 12;
+
+# ── multi-word integers: _BJ_SQM_LIMBS limbs of 32 bits, least significant first, one per 64-bit word ──────────────
+
+# a = v, for 0 ≤ v < 2^63.
+fn _bj_sqm_set(a, v) {
+    for (var k = 0; k < _BJ_SQM_LIMBS; k = k + 1) { store64(a + 8 * k, 0); }
+    store64(a, v & 0xFFFFFFFF);
+    store64(a + 8, v >> 32);
+    return 0;
+}
+
+# The number of significant bits of a (0 for zero).
+#must_use
+fn _bj_sqm_bitlen(a): i64 {
+    var k = _BJ_SQM_LIMBS - 1;
+    while (k >= 0 && load64(a + 8 * k) == 0) { k = k - 1; }
+    if (k < 0) { return 0; }
+    var top = load64(a + 8 * k);
+    var b = 0;
+    while (top != 0) {
+        top = top >> 1;
+        b = b + 1;
+    }
+    return 32 * k + b;
+}
+
+# r = a·b, truncated to the capacity (the callers stay below it); r must not alias a or b.
+fn _bj_sqm_mul(r, a, b) {
+    for (var k = 0; k < _BJ_SQM_LIMBS; k = k + 1) { store64(r + 8 * k, 0); }
+    var la = (_bj_sqm_bitlen(a) + 31) / 32;
+    var lb = (_bj_sqm_bitlen(b) + 31) / 32;
+    for (var i = 0; i < la; i = i + 1) {
+        var ai = load64(a + 8 * i);
+        var c = 0;
+        var j = 0;
+        while (j < lb && i + j < _BJ_SQM_LIMBS) {
+            # ai·bⱼ + rᵢ₊ⱼ + c < 2⁶⁴: the sum wraps nothing, and >> is logical
+            var t = ai * load64(b + 8 * j) + load64(r + 8 * (i + j)) + c;
+            store64(r + 8 * (i + j), t & 0xFFFFFFFF);
+            c = t >> 32;
+            j = j + 1;
+        }
+        if (i + lb < _BJ_SQM_LIMBS) { store64(r + 8 * (i + lb), c); }
+    }
+    return 0;
+}
+
+# a = a·2^s, for 0 ≤ s (truncated to the capacity).
+fn _bj_sqm_shl(a, s) {
+    var w = s / 32;
+    var b = s - 32 * w;
+    var k = _BJ_SQM_LIMBS - 1;
+    while (k >= 0) {
+        var v = 0;
+        if (k - w >= 0) { v = (load64(a + 8 * (k - w)) << b) & 0xFFFFFFFF; }
+        if (b > 0 && k - w - 1 >= 0) { v = v | (load64(a + 8 * (k - w - 1)) >> (32 - b)); }
+        store64(a + 8 * k, v);
+        k = k - 1;
+    }
+    return 0;
+}
+
+# −1, 0 or 1 as a < b, a = b or a > b.
+#must_use
+fn _bj_sqm_cmp(a, b): i64 {
+    var k = _BJ_SQM_LIMBS - 1;
+    while (k >= 0) {
+        var x = load64(a + 8 * k);
+        var y = load64(b + 8 * k);
+        if (x < y) { return 0 - 1; }
+        if (x > y) { return 1; }
+        k = k - 1;
+    }
+    return 0;
+}
+
+# w = R²·B, for 0 ≤ R < 2^62 and B at bb; t and s are scratch.
+fn _bj_sqm_sq_mul(w, rr, bb, t, s) {
+    _bj_sqm_set(t, rr);
+    _bj_sqm_mul(s, t, t);
+    _bj_sqm_mul(w, s, bb);
+    return 0;
+}
+
+# ── the root ────────────────────────────────────────────────────────────────────────────────────────────────────
+
+# (y₀, δ) with y₀ + δ = √(N/D) to 11u² (the section comment), for normalised double-doubles N = n_h + n_l and
+# D = d_h + d_l in [1, 2⁴).
+#must_use
+fn _bj_sqm_dd(nh: f64, nl: f64, dh: f64, dl: f64): (f64, f64) {
+    var qh: f64 = nh / dh;
+    var a, b = _bj_k_two_prod(qh, dh);
+    var r0: f64 = (nh - a) - b;
+    var r1: f64 = qh * dl;
+    var r2: f64 = nl - r1;
+    var rem: f64 = r0 + r2;
+    var ql: f64 = rem / dh;
+    var y0: f64 = f64_sqrt(qh);
+    var p, pe = _bj_k_two_prod(y0, y0);
+    var t1: f64 = (qh - p) - pe;
+    var t: f64 = t1 + ql;
+    var tr: f64 = y0 + y0;
+    var d: f64 = t / tr;
+    return (y0, d);
+}
+
+# The significands of the n factors at p written to out as kimiya's _bj_k_mono_sig does, for a side of the domain:
+# (count, exponent sum), or (−1, 0) when a factor is not positive and finite.
+#must_use
+fn _bj_sqm_side(p, n, out): (i64, i64) {
+    var fl, c, e = _bj_k_mono_sig(p, n, out);
+    if (fl != 0) { return (0 - 1, 0); }
+    return (c, e);
+}
+
+# RN(√F) by the fast path (the section comment): (RN, 1), or (0, 0) for a failed rounding test, a possibly subnormal
+# result or an argument outside the domain.
+#must_use
+fn _bj_cr_sqrt_mono_fast(num, nn, den, nd): (f64, i64) {
+    if (nn < 0 || nd < 0 || nn > _BJ_SQM_NMAX || nd > _BJ_SQM_DMAX) { return (0.0, 0); }
+    var sn: f64[3];
+    var sd: f64[4];
+    var cn, en = _bj_sqm_side(num, nn, &sn);
+    var cd, ed = _bj_sqm_side(den, nd, &sd);
+    if (cn < 0 || cd < 0) { return (0.0, 0); }
+    var nh, nl = _bj_k_mono_prod(&sn, cn);
+    var dh, dl = _bj_k_mono_prod(&sd, cd);
+    var kk = en - ed;
+    if ((kk & 1) != 0) {
+        nh = nh * 2.0;
+        nl = nl * 2.0;
+        kk = kk - 1;
+    }
+    var y0, d = _bj_sqm_dd(nh, nl, dh, dl);
+    var z1, z2 = _bj_k_dd_round_ends(y0, d);
+    if (z1 != z2) { return (0.0, 0); }
+    var r, ok = _bj_k_mono_fin(z1, kk / 2, 0);
+    return (r, ok);
+}
+
+# RN(√F) by the exact path alone (the section comment); NaN outside the domain.
+#must_use
+fn _bj_cr_sqrt_mono_acc(num, nn, den, nd): f64 {
+    var nan: f64 = _bj_k_nan();
+    if (nn < 0 || nd < 0 || nn > _BJ_SQM_NMAX || nd > _BJ_SQM_DMAX) { return nan; }
+    var pb[96];
+    var qb[96];
+    var tb[96];
+    var rb[96];
+    var ee = 0;
+    _bj_sqm_set(&pb, 1);
+    _bj_sqm_set(&qb, 1);
+    var side = 0;
+    while (side < 2) {
+        var p = num;
+        var n = nn;
+        var acc = &pb;
+        if (side == 1) {
+            p = den;
+            n = nd;
+            acc = &qb;
+        }
+        for (var i = 0; i < n; i = i + 1) {
+            var b = load64(p + 8 * i);
+            if (b <= 0 || b >= 0x7FF0000000000000) { return nan; }
+            var mm, e = _bj_k_f64_int(b);
+            if (side == 0) { ee = ee + e; } else { ee = ee - e; }
+            _bj_sqm_set(&tb, mm);
+            _bj_sqm_mul(&rb, acc, &tb);
+            for (var k = 0; k < _BJ_SQM_LIMBS; k = k + 1) { store64(acc + 8 * k, load64(&rb + 8 * k)); }
+        }
+        side = side + 1;
+    }
+    # S: R = ⌊√(P·2^S/Q)⌋ near 2^56, with E − S even.
+    var bp = _bj_sqm_bitlen(&pb);
+    var bq = _bj_sqm_bitlen(&qb);
+    var s = 112 - bp + bq;
+    if (((ee - s) & 1) != 0) { s = s + 1; }
+    var ab[96];
+    var bb[96];
+    for (var k2 = 0; k2 < _BJ_SQM_LIMBS; k2 = k2 + 1) {
+        store64(&ab + 8 * k2, load64(&pb + 8 * k2));
+        store64(&bb + 8 * k2, load64(&qb + 8 * k2));
+    }
+    if (s >= 0) { _bj_sqm_shl(&ab, s); } else { _bj_sqm_shl(&bb, 0 - s); }
+    # The estimate: the significands' root by _bj_sqm_dd, scaled by 2^h (A/B = (Π sₙ/Π s_d)·2^(52·(nn − nd) + s)).
+    var sn: f64[3];
+    var sd: f64[4];
+    var g = 52 * (nn - nd) + s;
+    var p52: f64 = 0x3CB0000000000000;      # 2⁻⁵²: each M as its significand in [1, 2), exactly
+    for (var i2 = 0; i2 < nn; i2 = i2 + 1) {
+        var m2, e2 = _bj_k_f64_int(load64(num + 8 * i2));
+        var mf: f64 = f64_from(m2);
+        sn[i2] = mf * p52;
+    }
+    for (var i3 = 0; i3 < nd; i3 = i3 + 1) {
+        var m3, e3 = _bj_k_f64_int(load64(den + 8 * i3));
+        var mf3: f64 = f64_from(m3);
+        sd[i3] = mf3 * p52;
+    }
+    var nh, nl = _bj_k_mono_prod(&sn, nn);
+    var dh, dl = _bj_k_mono_prod(&sd, nd);
+    if ((g & 1) != 0) {
+        nh = nh * 2.0;
+        nl = nl * 2.0;
+        g = g - 1;
+    }
+    var y0, d = _bj_sqm_dd(nh, nl, dh, dl);
+    var sc: f64 = _bj_k_cr_pow2(g / 2);     # 2^h, h ≤ 57 + … : the root near 2^56
+    var gy: f64 = y0 * sc;
+    var gd: f64 = d * sc;
+    var rr = f64_to(gy) + f64_to(gd);
+    # R: the largest integer with R²·B ≤ A.
+    var wb[96];
+    var w2[96];
+    var t1[96];
+    var t2[96];
+    _bj_sqm_sq_mul(&wb, rr, &bb, &t1, &t2);
+    while (_bj_sqm_cmp(&wb, &ab) > 0) {
+        rr = rr - 1;
+        _bj_sqm_sq_mul(&wb, rr, &bb, &t1, &t2);
+    }
+    var up = 1;
+    while (up == 1) {
+        _bj_sqm_sq_mul(&w2, rr + 1, &bb, &t1, &t2);
+        if (_bj_sqm_cmp(&w2, &ab) > 0) { up = 0; } else { rr = rr + 1; }
+    }
+    _bj_sqm_sq_mul(&wb, rr, &bb, &t1, &t2);
+    var sticky = 0;
+    if (_bj_sqm_cmp(&wb, &ab) != 0) { sticky = 1; }
+    var r: f64 = _bj_k_cr_from_int(2 * rr + sticky, (ee - s) / 2 - 1);
+    return r;
+}
+
+# RN(√(Π num / Π den)), correctly rounded (the section comment), for at most _BJ_SQM_NMAX positive finite numerator
+# and _BJ_SQM_DMAX denominator factors: the fast path, then the exact path where it declines; NaN outside the domain.
+#must_use
+fn _bj_cr_sqrt_mono(num, nn, den, nd): f64 {
+    var r, ok = _bj_cr_sqrt_mono_fast(num, nn, den, nd);
+    if (ok == 1) { return r; }
+    var a: f64 = _bj_cr_sqrt_mono_acc(num, nn, den, nd);
+    return a;
+}
+
 # --- mathx.cyr ---
 
 # mathx.cyr — bijli's math helpers: Rust std semantics on top of the Cyrius builtins.
@@ -8798,21 +9086,31 @@ public fn bj_electric_field_superposition(charges: *f64, n, field_pos: *f64, out
     return Ok(0);
 }
 
-# u = ε₀E²/2 (J/m³). Mirrors `field::electric_energy_density`.
+# u = ε₀E²/2 (J/m³), correctly rounded (ADR 0002 row 13; a non-finite E keeps Rust's 0.5·ε₀·E·E). Mirrors
+# `field::electric_energy_density`.
 #must_use
 #pure
 public fn bj_electric_energy_density(e_magnitude: f64): f64 {
-    var u: f64 = 0.5 * BJ_EPSILON_0 * e_magnitude * e_magnitude;
-    return u;
+    if (_bj_is_finite(e_magnitude) == 0) {
+        var u: f64 = 0.5 * BJ_EPSILON_0 * e_magnitude * e_magnitude;
+        return u;
+    }
+    var cr: f64 = _bj_k_cr_mul4(0.5, BJ_EPSILON_0, e_magnitude, e_magnitude);
+    return cr;
 }
 
-# u = B²/(2μ₀) (J/m³). Mirrors `field::magnetic_energy_density`.
+# u = B²/(2μ₀) (J/m³), correctly rounded (ADR 0002 row 13; a non-finite B keeps Rust's B·B/(2μ₀)). Mirrors
+# `field::magnetic_energy_density`.
 #must_use
 #pure
 public fn bj_magnetic_energy_density(b_magnitude: f64): f64 {
     var two_mu: f64 = 2.0 * BJ_MU_0;
-    var u: f64 = b_magnitude * b_magnitude / two_mu;
-    return u;
+    if (_bj_is_finite(b_magnitude) == 0) {
+        var u: f64 = b_magnitude * b_magnitude / two_mu;
+        return u;
+    }
+    var cr: f64 = _bj_k_cr_mul_div(b_magnitude, b_magnitude, two_mu);
+    return cr;
 }
 
 # ── dipoles ─────────────────────────────────────────────────────────────────────────────────────────────────────
@@ -8907,17 +9205,22 @@ public fn _bj_check_radial_distance(distance: f64): Result {
     return Ok(0);
 }
 
-# E_r = kQ/r² (V/m) outside a uniformly charged sphere (r > R). Errors as _bj_check_radial_distance. Mirrors
-# `field::electric_field_charged_sphere`.
+# E_r = kQ/r² (V/m) outside a uniformly charged sphere (r > R), correctly rounded (ADR 0002 row 13; a non-finite
+# operand keeps Rust's k·Q/(r·r)). Errors as _bj_check_radial_distance. Mirrors `field::electric_field_charged_sphere`.
 public fn bj_electric_field_charged_sphere(total_charge: f64, distance: f64): Result {
     var t, v = _bj_check_radial_distance(distance);
     if (is_err_result(t) == 1) { return Err(v); }
-    var r2: f64 = distance * distance;
-    var e: f64 = BJ_COULOMB_K * total_charge / r2;
-    return Ok(e);
+    if (_bj_is_finite(total_charge) == 0 || _bj_is_finite(distance) == 0) {
+        var r2: f64 = distance * distance;
+        var e: f64 = BJ_COULOMB_K * total_charge / r2;
+        return Ok(e);
+    }
+    var cr: f64 = _bj_k_cr_mul2_div2(BJ_COULOMB_K, total_charge, distance, distance);
+    return Ok(cr);
 }
 
-# E_r = kQ·(r/R)/R² (V/m) inside a uniformly charged sphere, 0 ≤ r ≤ R. InvalidParameter when R is not positive and
+# E_r = kQ·(r/R)/R² (V/m) inside a uniformly charged sphere, 0 ≤ r ≤ R: kQr/R³ correctly rounded (ADR 0002 row 13;
+# a non-finite Q keeps Rust's chain). InvalidParameter when R is not positive and
 # finite, or r is outside [0, R] (or NaN). Mirrors `field::electric_field_inside_sphere`.
 public fn bj_electric_field_inside_sphere(total_charge: f64, sphere_radius: f64, distance: f64): Result {
     if (!(sphere_radius > 0.0 && _bj_is_finite(sphere_radius) == 1)) {
@@ -8934,20 +9237,38 @@ public fn bj_electric_field_inside_sphere(total_charge: f64, sphere_radius: f64,
         _bj_fmt_f64_display(t2, distance);
         return Err(BJ_ERR_INVALID_PARAMETER);
     }
-    var frac: f64 = distance / sphere_radius;
-    var r2: f64 = sphere_radius * sphere_radius;
-    var e: f64 = BJ_COULOMB_K * total_charge * frac / r2;
-    return Ok(e);
+    if (_bj_is_finite(total_charge) == 0) {
+        var frac: f64 = distance / sphere_radius;
+        var r2: f64 = sphere_radius * sphere_radius;
+        var e: f64 = BJ_COULOMB_K * total_charge * frac / r2;
+        return Ok(e);
+    }
+    var num: f64[3];
+    var den: f64[3];
+    num[0] = BJ_COULOMB_K;
+    num[1] = total_charge;
+    num[2] = distance;
+    den[0] = sphere_radius;
+    den[1] = sphere_radius;
+    den[2] = sphere_radius;
+    var cr: f64 = _bj_k_cr_mono(&num, 3, &den, 3);
+    return Ok(cr);
 }
 
-# E_r = λ/(2πε₀r) (V/m) from an infinite line of linear charge density λ. Errors as _bj_check_radial_distance.
-# Mirrors `field::electric_field_infinite_line`.
+# E_r = λ/(2πε₀r) (V/m) from an infinite line of linear charge density λ, correctly rounded with π as Rust's double
+# (ADR 0002 row 13; a non-finite operand keeps Rust's λ/(2·π·ε₀·r)). Errors as _bj_check_radial_distance. Mirrors
+# `field::electric_field_infinite_line`.
 public fn bj_electric_field_infinite_line(linear_charge_density: f64, distance: f64): Result {
     var t, v = _bj_check_radial_distance(distance);
     if (is_err_result(t) == 1) { return Err(v); }
-    var d: f64 = 2.0 * _BJ_PI * BJ_EPSILON_0 * distance;
-    var e: f64 = linear_charge_density / d;
-    return Ok(e);
+    if (_bj_is_finite(linear_charge_density) == 0 || _bj_is_finite(distance) == 0) {
+        var d: f64 = 2.0 * _BJ_PI * BJ_EPSILON_0 * distance;
+        var e: f64 = linear_charge_density / d;
+        return Ok(e);
+    }
+    var two_pi: f64 = 2.0 * _BJ_PI;
+    var cr: f64 = _bj_k_cr_div3(linear_charge_density, two_pi, BJ_EPSILON_0, distance);
+    return Ok(cr);
 }
 
 # E_r = λ/(2πε₀r) outside an infinite uniformly charged cylinder: the line's field and errors. Mirrors
@@ -8956,7 +9277,8 @@ public fn bj_electric_field_outside_cylinder(linear_charge_density: f64, distanc
     return bj_electric_field_infinite_line(linear_charge_density, distance);
 }
 
-# E_r = ρr/(2ε₀) (V/m) inside an infinite uniformly charged cylinder. InvalidParameter when r is NaN or negative.
+# E_r = ρr/(2ε₀) (V/m) inside an infinite uniformly charged cylinder, correctly rounded (ADR 0002 row 13; a non-finite
+# operand keeps Rust's ρ·r/(2ε₀)). InvalidParameter when r is NaN or negative.
 # Mirrors `field::electric_field_inside_cylinder`.
 public fn bj_electric_field_inside_cylinder(volume_charge_density: f64, distance: f64): Result {
     if (distance != distance || distance < 0.0) {
@@ -8966,8 +9288,12 @@ public fn bj_electric_field_inside_cylinder(volume_charge_density: f64, distance
         return Err(BJ_ERR_INVALID_PARAMETER);
     }
     var d: f64 = 2.0 * BJ_EPSILON_0;
-    var e: f64 = volume_charge_density * distance / d;
-    return Ok(e);
+    if (_bj_is_finite(volume_charge_density) == 0 || _bj_is_finite(distance) == 0) {
+        var e: f64 = volume_charge_density * distance / d;
+        return Ok(e);
+    }
+    var cr: f64 = _bj_k_cr_mul_div(volume_charge_density, distance, d);
+    return Ok(cr);
 }
 
 # E_z = kQz/(z² + R²)^(3/2) (V/m) on the axis of a ring of radius R in the plane z = 0, z signed; 0 at the centre,
@@ -9617,9 +9943,15 @@ public fn bj_trace_field_line(start: *f64, step_size: f64, max_steps, field_fn, 
 # maxwell.cyr — Maxwell's equations: the divergences, the displacement current, wave speed, refractive index,
 # impedance, wavelength and frequency, skin depth (port of rust-old/src/maxwell.rs, M1 part 3d).
 #
-# SI units throughout. Every formula is Rust's in Rust's order (the golden rows compare bit for bit, class A); a
-# fallible function returns a value-form Result with its f64 payload, the error in the last-error record
-# (src/error.cyr). No harmonic quantity appears here, so no time convention (src/complex.cyr) is involved.
+# SI units throughout. A fallible function returns a value-form Result with its f64 payload, the error in the last-error
+# record (src/error.cyr). No harmonic quantity appears here, so no time convention (src/complex.cyr) is involved.
+#
+# The roots are rounded once (ADR 0002 row 13, the user's "round once" decision of 2026-11-12): wave_speed, the
+# refractive index, the impedances and skin depth are the correctly rounded √ of their monomial (src/crmath_mono.cyr;
+# kimiya's √(x/y) for the impedances), where Rust's chains round two to four times (one ulp off on about a quarter of
+# inputs) and their products and quotients over- or underflow where the root is representable. An infinite operand keeps
+# Rust's result (an infinite product or quotient, then its root). The divergences, the displacement current, wavelength
+# and frequency are one IEEE operation each, already rounded once: Rust's bits.
 
 private
 
@@ -9666,41 +9998,51 @@ public fn bj_displacement_current(de_dt: BjFieldVector): BjFieldVector {
     return j;
 }
 
-# v = 1/√(εμ) (m/s). InvalidPermittivity, then InvalidPermeability, for a NaN or non-positive ε or μ. Mirrors
-# `maxwell::wave_speed`.
+# v = 1/√(εμ) (m/s), correctly rounded (ADR 0002 row 13); 0 for an infinite ε or μ, as Rust's 1/√∞.
+# InvalidPermittivity, then InvalidPermeability, for a NaN or non-positive ε or μ. Mirrors `maxwell::wave_speed`.
 public fn bj_wave_speed(permittivity: f64, permeability: f64): Result {
     var c = _bj_check_eps_mu(permittivity, permeability);
     if (c != 0) { return Err(c); }
-    var p: f64 = permittivity * permeability;
-    var s: f64 = f64_sqrt(p);
-    var v: f64 = 1.0 / s;
+    if (permittivity == _BJ_K_INF || permeability == _BJ_K_INF) { return Ok(0.0); }
+    var den: f64[2];
+    den[0] = permittivity;
+    den[1] = permeability;
+    var v: f64 = _bj_cr_sqrt_mono(0, 0, &den, 2);
     return Ok(v);
 }
 
-# n = √(ε_r·μ_r). Errors as wave_speed's. Mirrors `maxwell::refractive_index`.
+# n = √(ε_r·μ_r), correctly rounded (ADR 0002 row 13); +∞ for an infinite ε_r or μ_r. Errors as wave_speed's.
+# Mirrors `maxwell::refractive_index`.
 public fn bj_refractive_index(relative_permittivity: f64, relative_permeability: f64): Result {
     var c = _bj_check_eps_mu(relative_permittivity, relative_permeability);
     if (c != 0) { return Err(c); }
-    var p: f64 = relative_permittivity * relative_permeability;
-    var n: f64 = f64_sqrt(p);
+    if (relative_permittivity == _BJ_K_INF || relative_permeability == _BJ_K_INF) { return Ok(_BJ_K_INF); }
+    var num: f64[2];
+    num[0] = relative_permittivity;
+    num[1] = relative_permeability;
+    var n: f64 = _bj_cr_sqrt_mono(&num, 2, 0, 0);
     return Ok(n);
 }
 
-# η = √(μ/ε) (ohms). Errors as wave_speed's. Mirrors `maxwell::impedance`.
+# η = √(μ/ε) (ohms), correctly rounded (ADR 0002 row 13); an infinite ε or μ keeps Rust's √(μ/ε) (+∞, 0, or NaN for
+# both). Errors as wave_speed's. Mirrors `maxwell::impedance`.
 public fn bj_impedance(permittivity: f64, permeability: f64): Result {
     var c = _bj_check_eps_mu(permittivity, permeability);
     if (c != 0) { return Err(c); }
-    var q: f64 = permeability / permittivity;
-    var eta: f64 = f64_sqrt(q);
-    return Ok(eta);
+    if (permittivity == _BJ_K_INF || permeability == _BJ_K_INF) {
+        var q: f64 = permeability / permittivity;
+        var eta: f64 = f64_sqrt(q);
+        return Ok(eta);
+    }
+    var r: f64 = _bj_k_cr_sqrt_div(permeability, permittivity);   # kimiya's √(x/y): the same bits, faster
+    return Ok(r);
 }
 
-# η₀ = √(μ₀/ε₀) ≈ 376.73 Ω. Mirrors `maxwell::free_space_impedance`.
+# η₀ = √(μ₀/ε₀) ≈ 376.73 Ω, correctly rounded (ADR 0002 row 13). Mirrors `maxwell::free_space_impedance`.
 #must_use
 #pure
 public fn bj_free_space_impedance(): f64 {
-    var q: f64 = BJ_MU_0 / BJ_EPSILON_0;
-    var eta: f64 = f64_sqrt(q);
+    var eta: f64 = _bj_k_cr_sqrt_div(BJ_MU_0, BJ_EPSILON_0);
     return eta;
 }
 
@@ -9736,8 +10078,9 @@ fn _bj_check_skin(name, value: f64): i64 {
     return 0;
 }
 
-# δ = √(2/(ωμσ)) (m), how far an EM wave reaches into a good conductor (σ ≫ ωε). InvalidParameter unless ω, μ and σ
-# are each positive (checked in that order; NaN refused). Mirrors `maxwell::skin_depth`.
+# δ = √(2/(ωμσ)) (m), how far an EM wave reaches into a good conductor (σ ≫ ωε), correctly rounded (ADR 0002 row 13);
+# 0 for an infinite ω, μ or σ, as Rust's √(2/∞). InvalidParameter unless ω, μ and σ are each positive (checked in
+# that order; NaN refused). Mirrors `maxwell::skin_depth`.
 public fn bj_skin_depth(angular_freq: f64, permeability: f64, conductivity: f64): Result {
     var c = _bj_check_skin("angular frequency", angular_freq);
     if (c != 0) { return Err(c); }
@@ -9745,9 +10088,14 @@ public fn bj_skin_depth(angular_freq: f64, permeability: f64, conductivity: f64)
     if (c != 0) { return Err(c); }
     c = _bj_check_skin("conductivity", conductivity);
     if (c != 0) { return Err(c); }
-    var denom: f64 = angular_freq * permeability * conductivity;
-    var q: f64 = 2.0 / denom;
-    var d: f64 = f64_sqrt(q);
+    if (angular_freq == _BJ_K_INF || permeability == _BJ_K_INF || conductivity == _BJ_K_INF) { return Ok(0.0); }
+    var num: f64[1];
+    var den: f64[3];
+    num[0] = 2.0;
+    den[0] = angular_freq;
+    den[1] = permeability;
+    den[2] = conductivity;
+    var d: f64 = _bj_cr_sqrt_mono(&num, 1, &den, 3);
     return Ok(d);
 }
 
@@ -9756,10 +10104,12 @@ public fn bj_skin_depth(angular_freq: f64, permeability: f64, conductivity: f64)
 # charge.cyr — point charges, Coulomb's law, the Lorentz force, cyclotron motion (port of rust-old/src/charge.rs,
 # M1 part 3d).
 #
-# SI units: coulombs, newtons, metres, seconds. Every formula is Rust's in Rust's order (the golden rows compare bit
-# for bit, class A). The constants (BJ_ELEMENTARY_CHARGE, BJ_ELECTRON_MASS, BJ_PROTON_MASS) are src/constants.cyr's.
-# Shapes as src/field.cyr's: a `[f64; 3]` is the address of three f64; a `Result<FieldVector>` writes through an out
-# pointer; a fallible constructor of a struct over 16 bytes writes through `out` too.
+# SI units: coulombs, newtons, metres, seconds. Every formula is Rust's in Rust's order (the golden rows compare bit for
+# bit, class A), but for the three that are one product or quotient of inputs and constants (the Coulomb energy,
+# cyclotron frequency and Larmor radius), which are rounded once (ADR 0002 row 13). The constants (BJ_ELEMENTARY_CHARGE,
+# BJ_ELECTRON_MASS, BJ_PROTON_MASS) are src/constants.cyr's. Shapes as src/field.cyr's: a `[f64; 3]` is the address of
+# three f64; a `Result<FieldVector>` writes through an out pointer; a fallible constructor of a struct over 16 bytes
+# writes through `out` too.
 
 private
 
@@ -9903,13 +10253,18 @@ public fn bj_potential_energy(charge: f64, potential: f64): f64 {
     return u;
 }
 
-# U = kq₁q₂/r (J). InvalidParameter when r is NaN or negative, Singularity below 1e-30 m (field.rs's
-# check_radial_distance). Mirrors `charge::coulomb_potential_energy`.
+# U = kq₁q₂/r (J), correctly rounded (ADR 0002 row 13; an infinite or NaN operand keeps Rust's (k·q₁·q₂)/r).
+# InvalidParameter when r is NaN or negative, Singularity below 1e-30 m (field.rs's check_radial_distance). Mirrors
+# `charge::coulomb_potential_energy`.
 public fn bj_coulomb_potential_energy(q1: f64, q2: f64, distance: f64): Result {
     var t, v = _bj_check_radial_distance(distance);
     if (is_err_result(t) == 1) { return Err(v); }
-    var u: f64 = BJ_COULOMB_K * q1 * q2 / distance;
-    return Ok(u);
+    if (_bj_is_finite(q1) == 0 || _bj_is_finite(q2) == 0 || _bj_is_finite(distance) == 0) {
+        var u: f64 = BJ_COULOMB_K * q1 * q2 / distance;
+        return Ok(u);
+    }
+    var cr: f64 = _bj_k_cr_mul3_div(BJ_COULOMB_K, q1, q2, distance);
+    return Ok(cr);
 }
 
 # A particle mass's error for `what`: DivisionByZero "mass cannot be zero for <what>" for 0, InvalidParameter "mass
@@ -9932,7 +10287,8 @@ fn _bj_check_mass(mass: f64, what): i64 {
     return 0;
 }
 
-# ω_c = |q|B/m (rad/s) for |B| ≥ 0 (T). DivisionByZero for a zero mass; InvalidParameter for a negative mass, a NaN
+# ω_c = |q|B/m (rad/s) for |B| ≥ 0 (T), correctly rounded (ADR 0002 row 13; an infinite operand keeps Rust's
+# (|q|·B)/m). DivisionByZero for a zero mass; InvalidParameter for a negative mass, a NaN
 # charge, or a negative or NaN |B| (in that order). Mirrors `charge::cyclotron_frequency`.
 public fn bj_cyclotron_frequency(charge: f64, mass: f64, b_magnitude: f64): Result {
     var c = _bj_check_mass(mass, "cyclotron frequency");
@@ -9945,13 +10301,18 @@ public fn bj_cyclotron_frequency(charge: f64, mass: f64, b_magnitude: f64): Resu
         return Err(BJ_ERR_INVALID_PARAMETER);
     }
     var aq: f64 = f64_abs(charge);
-    var w: f64 = aq * b_magnitude / mass;
-    return Ok(w);
+    if (_bj_is_finite(aq) == 0 || _bj_is_finite(b_magnitude) == 0 || _bj_is_finite(mass) == 0) {
+        var w: f64 = aq * b_magnitude / mass;
+        return Ok(w);
+    }
+    var cr: f64 = _bj_k_cr_mul_div(aq, b_magnitude, mass);
+    return Ok(cr);
 }
 
-# r_L = m|v⊥|/(|q|B) (m) for |B| > 0, divided in two steps (m·|v⊥|/|q|/B) so a tiny |q|·B can't underflow.
-# DivisionByZero for a zero mass, charge or |B|; InvalidParameter for a negative mass or |B|, or a NaN argument (in
-# Rust's order). Mirrors `charge::larmor_radius`.
+# r_L = m|v⊥|/(|q|B) (m) for |B| > 0, correctly rounded (ADR 0002 row 13: Rust divides in two steps, m·|v⊥|/|q|/B,
+# so a tiny |q|·B can't underflow, but m·|v⊥| still can; an infinite operand keeps that chain). DivisionByZero for a
+# zero mass, charge or |B|; InvalidParameter for a negative mass or |B|, or a NaN argument (in Rust's order). Mirrors
+# `charge::larmor_radius`.
 public fn bj_larmor_radius(mass: f64, v_perp: f64, charge: f64, b_magnitude: f64): Result {
     var c = _bj_check_mass(mass, "Larmor radius");
     if (c != 0) { return Err(c); }
@@ -9968,8 +10329,13 @@ public fn bj_larmor_radius(mass: f64, v_perp: f64, charge: f64, b_magnitude: f64
     }
     var av: f64 = f64_abs(v_perp);
     var aq: f64 = f64_abs(charge);
-    var r: f64 = mass * av / aq / b_magnitude;
-    return Ok(r);
+    var fin = _bj_is_finite(mass) + _bj_is_finite(av) + _bj_is_finite(aq) + _bj_is_finite(b_magnitude);
+    if (fin != 4) {
+        var r: f64 = mass * av / aq / b_magnitude;
+        return Ok(r);
+    }
+    var cr: f64 = _bj_k_cr_mul2_div2(mass, av, aq, b_magnitude);
+    return Ok(cr);
 }
 
 # --- json.cyr ---

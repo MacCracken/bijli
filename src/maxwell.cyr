@@ -1,9 +1,15 @@
 # maxwell.cyr — Maxwell's equations: the divergences, the displacement current, wave speed, refractive index,
 # impedance, wavelength and frequency, skin depth (port of rust-old/src/maxwell.rs, M1 part 3d).
 #
-# SI units throughout. Every formula is Rust's in Rust's order (the golden rows compare bit for bit, class A); a
-# fallible function returns a value-form Result with its f64 payload, the error in the last-error record
-# (src/error.cyr). No harmonic quantity appears here, so no time convention (src/complex.cyr) is involved.
+# SI units throughout. A fallible function returns a value-form Result with its f64 payload, the error in the last-error
+# record (src/error.cyr). No harmonic quantity appears here, so no time convention (src/complex.cyr) is involved.
+#
+# The roots are rounded once (ADR 0002 row 13, the user's "round once" decision of 2026-11-12): wave_speed, the
+# refractive index, the impedances and skin depth are the correctly rounded √ of their monomial (src/crmath_mono.cyr;
+# kimiya's √(x/y) for the impedances), where Rust's chains round two to four times (one ulp off on about a quarter of
+# inputs) and their products and quotients over- or underflow where the root is representable. An infinite operand keeps
+# Rust's result (an infinite product or quotient, then its root). The divergences, the displacement current, wavelength
+# and frequency are one IEEE operation each, already rounded once: Rust's bits.
 
 private
 
@@ -50,41 +56,51 @@ public fn bj_displacement_current(de_dt: BjFieldVector): BjFieldVector {
     return j;
 }
 
-# v = 1/√(εμ) (m/s). InvalidPermittivity, then InvalidPermeability, for a NaN or non-positive ε or μ. Mirrors
-# `maxwell::wave_speed`.
+# v = 1/√(εμ) (m/s), correctly rounded (ADR 0002 row 13); 0 for an infinite ε or μ, as Rust's 1/√∞.
+# InvalidPermittivity, then InvalidPermeability, for a NaN or non-positive ε or μ. Mirrors `maxwell::wave_speed`.
 public fn bj_wave_speed(permittivity: f64, permeability: f64): Result {
     var c = _bj_check_eps_mu(permittivity, permeability);
     if (c != 0) { return Err(c); }
-    var p: f64 = permittivity * permeability;
-    var s: f64 = f64_sqrt(p);
-    var v: f64 = 1.0 / s;
+    if (permittivity == _BJ_K_INF || permeability == _BJ_K_INF) { return Ok(0.0); }
+    var den: f64[2];
+    den[0] = permittivity;
+    den[1] = permeability;
+    var v: f64 = _bj_cr_sqrt_mono(0, 0, &den, 2);
     return Ok(v);
 }
 
-# n = √(ε_r·μ_r). Errors as wave_speed's. Mirrors `maxwell::refractive_index`.
+# n = √(ε_r·μ_r), correctly rounded (ADR 0002 row 13); +∞ for an infinite ε_r or μ_r. Errors as wave_speed's.
+# Mirrors `maxwell::refractive_index`.
 public fn bj_refractive_index(relative_permittivity: f64, relative_permeability: f64): Result {
     var c = _bj_check_eps_mu(relative_permittivity, relative_permeability);
     if (c != 0) { return Err(c); }
-    var p: f64 = relative_permittivity * relative_permeability;
-    var n: f64 = f64_sqrt(p);
+    if (relative_permittivity == _BJ_K_INF || relative_permeability == _BJ_K_INF) { return Ok(_BJ_K_INF); }
+    var num: f64[2];
+    num[0] = relative_permittivity;
+    num[1] = relative_permeability;
+    var n: f64 = _bj_cr_sqrt_mono(&num, 2, 0, 0);
     return Ok(n);
 }
 
-# η = √(μ/ε) (ohms). Errors as wave_speed's. Mirrors `maxwell::impedance`.
+# η = √(μ/ε) (ohms), correctly rounded (ADR 0002 row 13); an infinite ε or μ keeps Rust's √(μ/ε) (+∞, 0, or NaN for
+# both). Errors as wave_speed's. Mirrors `maxwell::impedance`.
 public fn bj_impedance(permittivity: f64, permeability: f64): Result {
     var c = _bj_check_eps_mu(permittivity, permeability);
     if (c != 0) { return Err(c); }
-    var q: f64 = permeability / permittivity;
-    var eta: f64 = f64_sqrt(q);
-    return Ok(eta);
+    if (permittivity == _BJ_K_INF || permeability == _BJ_K_INF) {
+        var q: f64 = permeability / permittivity;
+        var eta: f64 = f64_sqrt(q);
+        return Ok(eta);
+    }
+    var r: f64 = _bj_k_cr_sqrt_div(permeability, permittivity);   # kimiya's √(x/y): the same bits, faster
+    return Ok(r);
 }
 
-# η₀ = √(μ₀/ε₀) ≈ 376.73 Ω. Mirrors `maxwell::free_space_impedance`.
+# η₀ = √(μ₀/ε₀) ≈ 376.73 Ω, correctly rounded (ADR 0002 row 13). Mirrors `maxwell::free_space_impedance`.
 #must_use
 #pure
 public fn bj_free_space_impedance(): f64 {
-    var q: f64 = BJ_MU_0 / BJ_EPSILON_0;
-    var eta: f64 = f64_sqrt(q);
+    var eta: f64 = _bj_k_cr_sqrt_div(BJ_MU_0, BJ_EPSILON_0);
     return eta;
 }
 
@@ -120,8 +136,9 @@ fn _bj_check_skin(name, value: f64): i64 {
     return 0;
 }
 
-# δ = √(2/(ωμσ)) (m), how far an EM wave reaches into a good conductor (σ ≫ ωε). InvalidParameter unless ω, μ and σ
-# are each positive (checked in that order; NaN refused). Mirrors `maxwell::skin_depth`.
+# δ = √(2/(ωμσ)) (m), how far an EM wave reaches into a good conductor (σ ≫ ωε), correctly rounded (ADR 0002 row 13);
+# 0 for an infinite ω, μ or σ, as Rust's √(2/∞). InvalidParameter unless ω, μ and σ are each positive (checked in
+# that order; NaN refused). Mirrors `maxwell::skin_depth`.
 public fn bj_skin_depth(angular_freq: f64, permeability: f64, conductivity: f64): Result {
     var c = _bj_check_skin("angular frequency", angular_freq);
     if (c != 0) { return Err(c); }
@@ -129,8 +146,13 @@ public fn bj_skin_depth(angular_freq: f64, permeability: f64, conductivity: f64)
     if (c != 0) { return Err(c); }
     c = _bj_check_skin("conductivity", conductivity);
     if (c != 0) { return Err(c); }
-    var denom: f64 = angular_freq * permeability * conductivity;
-    var q: f64 = 2.0 / denom;
-    var d: f64 = f64_sqrt(q);
+    if (angular_freq == _BJ_K_INF || permeability == _BJ_K_INF || conductivity == _BJ_K_INF) { return Ok(0.0); }
+    var num: f64[1];
+    var den: f64[3];
+    num[0] = 2.0;
+    den[0] = angular_freq;
+    den[1] = permeability;
+    den[2] = conductivity;
+    var d: f64 = _bj_cr_sqrt_mono(&num, 1, &den, 3);
     return Ok(d);
 }
