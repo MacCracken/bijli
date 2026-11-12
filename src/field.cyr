@@ -125,30 +125,124 @@ public fn BjFieldVector_neg(a: BjFieldVector): BjFieldVector {
     return v;
 }
 
+# Rust's u·v in binary64, with no range-edge path: for the chains that keep Rust's evaluation until their own part
+# of M1 part 5d (the dipoles, the Poynting flux).
+#must_use
+fn _bj_fv_dot_rust(u: BjFieldVector, v: BjFieldVector): f64 {
+    var r: f64 = u.x * v.x + u.y * v.y + u.z * v.z;
+    return r;
+}
+
+# Rust's u × v in binary64, with no range-edge path (the Poynting flux, until its part of 5d).
+#must_use
+fn _bj_fv_cross_rust(u: BjFieldVector, v: BjFieldVector): BjFieldVector {
+    var w: BjFieldVector;
+    w.x = u.y * v.z - u.z * v.y;
+    w.y = u.z * v.x - u.x * v.z;
+    w.z = u.x * v.y - u.y * v.x;
+    return w;
+}
+
+# |(x, y, z)| at a range edge: the sum of squares with an unbounded exponent, the root rounded once.
+#must_use
+fn _bj_fv_mag_edge(x: f64, y: f64, z: f64): f64 {
+    var us, ue = _bj_vx_sumsq(x, y, z);
+    var u: f64 = _bj_k_ux_sqrt_f64(us, ue);
+    return u;
+}
+
+# |(x, y, z)|² at a range edge: the chain with an unbounded exponent, the last sum rounded once.
+#must_use
+fn _bj_fv_msq_edge(x: f64, y: f64, z: f64): f64 {
+    var as2, ae2 = _bj_vx_mul(x, x);
+    var bs2, be2 = _bj_vx_mul(y, y);
+    var cs2, ce2 = _bj_vx_mul(z, z);
+    var ss, se = _bj_k_ux_add(as2, ae2, bs2, be2);
+    var u: f64 = _bj_k_ux_add_f64(ss, se, cs2, ce2);
+    return u;
+}
+
+# (x, y, z)/|(x, y, z)| at a range edge into out: |v| to 53 bits with an unbounded exponent, each quotient rounded once.
+fn _bj_fv_norm_edge(x: f64, y: f64, z: f64, out: *BjFieldVector) {
+    var ms2, me2 = _bj_vx_sumsq(x, y, z);
+    var mg, mge = _bj_k_ux_sqrt(ms2, me2);
+    var xs, xe = _bj_k_ux_from(x);
+    var ys, ye = _bj_k_ux_from(y);
+    var zs, ze = _bj_k_ux_from(z);
+    var ox: f64 = _bj_k_ux_div_f64(xs, xe, mg, mge);
+    var oy: f64 = _bj_k_ux_div_f64(ys, ye, mg, mge);
+    var oz: f64 = _bj_k_ux_div_f64(zs, ze, mg, mge);
+    out.x = ox;
+    out.y = oy;
+    out.z = oz;
+    return 0;
+}
+
+# u·v at a range edge: the chain with an unbounded exponent, the last sum rounded once; Rust's s where its chain is
+# the unbounded one (an exact 0, or a part not finite: the band test is the caller's).
+#must_use
+fn _bj_fv_dot_edge(u: BjFieldVector, v: BjFieldVector, s: f64): f64 {
+    if (_bj_vx_finite4(u.x, u.y, u.z, v.x) == 0 || _bj_vx_finite4(v.y, v.z, 0.0, 0.0) == 0) { return s; }
+    if (s == 0.0) {
+        var p: f64 = u.x * v.x;
+        var q: f64 = u.y * v.y;
+        var r: f64 = u.z * v.z;
+        var e = _bj_vx_exact(u.x, v.x, p) + _bj_vx_exact(u.y, v.y, q) + _bj_vx_exact(u.z, v.z, r);
+        if (e == 3) { return s; }
+    }
+    var ps, pe = _bj_vx_mul(u.x, v.x);
+    var qs, qe = _bj_vx_mul(u.y, v.y);
+    var rs, re = _bj_vx_mul(u.z, v.z);
+    var ss, se = _bj_k_ux_add(ps, pe, qs, qe);
+    var w: f64 = _bj_k_ux_add_f64(ss, se, rs, re);
+    return w;
+}
+
 impl BjFieldVector {
-    # √(x² + y² + z²). Mirrors `FieldVector::magnitude`.
+    # √(x² + y² + z²), no rescaling; at a range edge (a square past DBL_MAX or below 2^-1022 that the result can
+    # see) with an unbounded exponent, the root rounded once (ADR 0002 row 18, src/crmath_vx.cyr's guard). Mirrors
+    # `FieldVector::magnitude`.
     #must_use
     #pure
     public fn magnitude(self): f64 {
-        var s: f64 = self.x * self.x + self.y * self.y + self.z * self.z;
-        var r: f64 = f64_sqrt(s);
-        return r;
+        var x: f64 = self.x;
+        var y: f64 = self.y;
+        var z: f64 = self.z;
+        var s: f64 = x * x + y * y + z * z;
+        if ((s >= _BJ_VX_LO && s <= _BJ_VX_HI) || _bj_vx_sumsq_plain(x, y, z, s) == 1) {
+            var r: f64 = f64_sqrt(s);
+            return r;
+        }
+        var u: f64 = _bj_fv_mag_edge(x, y, z);
+        return u;
     }
 
-    # x² + y² + z². Mirrors `FieldVector::magnitude_sq`.
+    # x² + y² + z²; at a range edge with an unbounded exponent, the last sum rounded once (ADR 0002 row 18). Mirrors
+    # `FieldVector::magnitude_sq`.
     #must_use
     #pure
     public fn magnitude_sq(self): f64 {
-        var r: f64 = self.x * self.x + self.y * self.y + self.z * self.z;
-        return r;
+        var x: f64 = self.x;
+        var y: f64 = self.y;
+        var z: f64 = self.z;
+        var s: f64 = x * x + y * y + z * z;
+        if ((s >= _BJ_VX_LO && s <= _BJ_VX_HI) || _bj_vx_sumsq_plain(x, y, z, s) == 1) { return s; }
+        var u: f64 = _bj_fv_msq_edge(x, y, z);
+        return u;
     }
 
-    # The unit vector in this direction, into out. A finite vector whose |v|² is normal is divided by |v|; any other
-    # finite non-zero vector is rescaled by its largest component first, so SI-scale and huge components work. Errors:
-    # DivisionByZero for the zero vector, InvalidParameter for a NaN or infinite component. Mirrors
+    # The unit vector in this direction, into out: each part over |v|. Errors: DivisionByZero for the zero vector,
+    # InvalidParameter for a NaN or infinite component. In range (every part ±0 or in [2^-511, 2^511)) this is Rust's
+    # code. At a range edge, where Rust rescales by the largest part first (two more roundings), its first branch runs
+    # with an unbounded exponent instead: |v| to 53 bits, each quotient rounded once (ADR 0002 row 18). So the result
+    # is exactly scale-invariant, the same bits for 2^k·v wherever the parts stay exact. Mirrors
     # `FieldVector::normalized`.
     public fn normalized(self, out: *BjFieldVector): Result {
-        var ms: f64 = BjFieldVector_magnitude_sq(self);
+        var ms: f64 = self.x * self.x + self.y * self.y + self.z * self.z;
+        if (_bj_vx_sumsq_plain(self.x, self.y, self.z, ms) == 0) {
+            _bj_fv_norm_edge(self.x, self.y, self.z, out);
+            return Ok(0);
+        }
         var tiny: f64 = _bj_from_bits(0x0010000000000000);        # f64::MIN_POSITIVE
         if (_bj_is_finite(ms) == 1 && ms >= tiny) {
             var mag: f64 = f64_sqrt(ms);
@@ -166,36 +260,58 @@ impl BjFieldVector {
             BjFieldVector_display(self, t);
             return Err(BJ_ERR_INVALID_PARAMETER);
         }
-        var ax: f64 = f64_abs(x);
-        var ay: f64 = f64_abs(y);
-        var az: f64 = f64_abs(z);
-        var m1: f64 = _bj_max(ax, ay);
-        var s: f64 = _bj_max(m1, az);
-        if (s == 0.0) { return Err(_bj_err_division_by_zero("zero vector cannot be normalized")); }
-        var v: BjFieldVector = BjFieldVector_new(x / s, y / s, z / s);
-        var mv: f64 = v.magnitude();
-        out.x = v.x / mv;
-        out.y = v.y / mv;
-        out.z = v.z / mv;
-        return Ok(0);
+        # Rust's chain stands and |v|² is below 2^-1022 or not finite: every part is ±0 (a non-finite one was refused
+        # above). Rust's rescale by the largest part, which only the range edges reach, is the unbounded path above.
+        return Err(_bj_err_division_by_zero("zero vector cannot be normalized"));
     }
 
-    # self·o. Mirrors `FieldVector::dot`.
+    # self·o; at a range edge with an unbounded exponent, the last sum rounded once (ADR 0002 row 18). Mirrors
+    # `FieldVector::dot`.
     #must_use
     #pure
     public fn dot(self, o: BjFieldVector): f64 {
         var r: f64 = self.x * o.x + self.y * o.y + self.z * o.z;
-        return r;
+        var a: f64 = f64_abs(r);
+        if (a >= _BJ_VX_LO && a <= _BJ_VX_HI) { return r; }
+        var u: f64 = _bj_fv_dot_edge(self, o, r);
+        return u;
     }
 
-    # self × o. Mirrors `FieldVector::cross`.
+    # self × o; at a range edge with an unbounded exponent, each difference rounded once (ADR 0002 row 18). Mirrors
+    # `FieldVector::cross`.
     #must_use
     #pure
     public fn cross(self, o: BjFieldVector): BjFieldVector {
         var v: BjFieldVector;
-        v.x = self.y * o.z - self.z * o.y;
-        v.y = self.z * o.x - self.x * o.z;
-        v.z = self.x * o.y - self.y * o.x;
+        var cx: f64 = self.y * o.z - self.z * o.y;
+        var cy: f64 = self.z * o.x - self.x * o.z;
+        var cz: f64 = self.x * o.y - self.y * o.x;
+        v.x = cx;
+        v.y = cy;
+        v.z = cz;
+        # Every component's biased exponent in [123, 2046] is |c| ∈ [2^-900, DBL_MAX] (src/crmath_vx.cyr's band).
+        var ex = (load64(&cx) >> 52) & 0x7FF;
+        var ey = (load64(&cy) >> 52) & 0x7FF;
+        var ez = (load64(&cz) >> 52) & 0x7FF;
+        if (((ex - 123) | (ey - 123) | (ez - 123) | (2046 - ex) | (2046 - ey) | (2046 - ez)) >= 0) { return v; }
+        # A component that is 0 through zero factors is exact; so is one in the band.
+        var hard = 0;
+        if (((ex - 123) | (2046 - ex)) < 0 && !(cx == 0.0 && (self.y == 0.0 || o.z == 0.0) && (self.z == 0.0
+              || o.y == 0.0))) { hard = 1; }
+        if (((ey - 123) | (2046 - ey)) < 0 && !(cy == 0.0 && (self.z == 0.0 || o.x == 0.0) && (self.x == 0.0
+              || o.z == 0.0))) { hard = 1; }
+        if (((ez - 123) | (2046 - ez)) < 0 && !(cz == 0.0 && (self.x == 0.0 || o.y == 0.0) && (self.y == 0.0
+              || o.x == 0.0))) { hard = 1; }
+        if (hard == 0) { return v; }
+        if (_bj_vx_finite4(self.x, self.y, self.z, o.x) == 0 || _bj_vx_finite4(o.y, o.z, 0.0, 0.0) == 0) {
+            return v;                                       # a non-finite part keeps Rust's chain
+        }
+        var ux: f64 = _bj_vx_cross1_f64(self.y, o.z, self.z, o.y, cx);
+        var uy: f64 = _bj_vx_cross1_f64(self.z, o.x, self.x, o.z, cy);
+        var uz: f64 = _bj_vx_cross1_f64(self.x, o.y, self.y, o.x, cz);
+        v.x = ux;
+        v.y = uy;
+        v.z = uz;
         return v;
     }
 
@@ -384,7 +500,7 @@ public fn bj_electric_dipole_field(dipole_moment: BjFieldVector, field_pos: *f64
     var inv_r: f64 = _bj_field_rhat(field_pos, &r_hat);
     if (inv_r < 0.0) { return Err(_bj_err_singularity()); }
     var inv_r3: f64 = inv_r * inv_r * inv_r;
-    var p_dot: f64 = dipole_moment.dot(r_hat);
+    var p_dot: f64 = _bj_fv_dot_rust(dipole_moment, r_hat);
     var d: f64 = 4.0 * _BJ_PI * BJ_EPSILON_0;
     var factor: f64 = inv_r3 / d;
     var k: f64 = 3.0 * p_dot * factor;
@@ -403,7 +519,7 @@ public fn bj_electric_dipole_potential(dipole_moment: BjFieldVector, field_pos: 
     var r_hat: BjFieldVector;
     var inv_r: f64 = _bj_field_rhat(field_pos, &r_hat);
     if (inv_r < 0.0) { return Err(_bj_err_singularity()); }
-    var p_dot: f64 = dipole_moment.dot(r_hat);
+    var p_dot: f64 = _bj_fv_dot_rust(dipole_moment, r_hat);
     var d: f64 = 4.0 * _BJ_PI * BJ_EPSILON_0;
     var v: f64 = p_dot * inv_r * inv_r / d;
     return Ok(v);
@@ -416,7 +532,7 @@ public fn bj_magnetic_dipole_field(magnetic_moment: BjFieldVector, field_pos: *f
     var inv_r: f64 = _bj_field_rhat(field_pos, &r_hat);
     if (inv_r < 0.0) { return Err(_bj_err_singularity()); }
     var inv_r3: f64 = inv_r * inv_r * inv_r;
-    var m_dot: f64 = magnetic_moment.dot(r_hat);
+    var m_dot: f64 = _bj_fv_dot_rust(magnetic_moment, r_hat);
     var four_pi: f64 = 4.0 * _BJ_PI;
     var factor: f64 = BJ_MU_0 * inv_r3 / four_pi;
     var k: f64 = 3.0 * m_dot * factor;
@@ -833,11 +949,20 @@ public fn bj_spherical_multipole_moment(l, m, charges: *f64, n, out: *BjComplex)
 # ── method of images (M1 part 3b) ───────────────────────────────────────────────────────────────────────────────
 
 # The image of a charge at `position` in a conducting plane z = plane_z: returns −charge, and writes the mirror
-# point (x, y, 2·plane_z − z) to image_pos. Mirrors `field::image_charge_plane` (its tuple: the charge returned, the
-# position written).
+# point (x, y, 2·plane_z − z) to image_pos; where 2·plane_z overflows (|plane_z| ≥ 2^1023, z finite) the difference
+# with an unbounded exponent, rounded once (ADR 0002 row 18). Mirrors `field::image_charge_plane` (its tuple: the
+# charge returned, the position written).
 #must_use
 public fn bj_image_charge_plane(charge: f64, position: *f64, plane_z: f64, image_pos: *f64): f64 {
-    var image_z: f64 = 2.0 * plane_z - position[2];
+    var z: f64 = position[2];
+    var image_z: f64 = 2.0 * plane_z - z;
+    var bp = (_bj_bits(plane_z) >> 52) & 0x7FF;
+    if (bp >= 2046 && bp != 2047 && _bj_is_finite(z) == 1) {
+        var ps, pe = _bj_k_ux_from(plane_z);
+        var zs, ze = _bj_k_ux_from(z);
+        var iz: f64 = _bj_k_ux_sub_f64(ps, pe + 1, zs, ze);
+        image_z = iz;
+    }
     image_pos[0] = position[0];
     image_pos[1] = position[1];
     image_pos[2] = image_z;
@@ -878,7 +1003,9 @@ public fn bj_image_charge_sphere(charge: f64, position: *f64, sphere_radius: f64
 
 # The image of a charge at height z > 0 over a dielectric half-space (Jackson §4.4): Ok(q' = −q(ε₂ − ε₁)/(ε₁ + ε₂)),
 # and the mirror point (x, y, −z) into image_pos. InvalidParameter when z is not positive and finite, then
-# InvalidPermittivity for the first of ε₁, ε₂ that is not positive and finite. Mirrors `field::image_charge_dielectric`.
+# InvalidPermittivity for the first of ε₁, ε₂ that is not positive and finite. Where the product −q·(ε₂ − ε₁) or the
+# sum ε₁ + ε₂ leaves the normal range (a finite q), the chain runs with an unbounded exponent and the quotient is
+# rounded once (ADR 0002 row 18). Mirrors `field::image_charge_dielectric`.
 public fn bj_image_charge_dielectric(charge: f64, position: *f64, eps_r1: f64, eps_r2: f64, image_pos: *f64): Result {
     var z: f64 = position[2];
     if (!(z > 0.0 && _bj_is_finite(z) == 1)) {
@@ -890,13 +1017,40 @@ public fn bj_image_charge_dielectric(charge: f64, position: *f64, eps_r1: f64, e
     if (!(eps_r1 > 0.0 && _bj_is_finite(eps_r1) == 1)) { return Err(_bj_err_invalid_permittivity(eps_r1)); }
     if (!(eps_r2 > 0.0 && _bj_is_finite(eps_r2) == 1)) { return Err(_bj_err_invalid_permittivity(eps_r2)); }
     var nq: f64 = -charge;
-    var num: f64 = nq * (eps_r2 - eps_r1);
+    var diff: f64 = eps_r2 - eps_r1;
+    var num: f64 = nq * diff;
     var den: f64 = eps_r1 + eps_r2;
     var q_image: f64 = num / den;
+    if (_bj_is_finite(charge) == 1 && _bj_fv_dielectric_plain(nq, diff, num, den) == 0) {
+        var ns, ne = _bj_k_ux_from(nq);
+        var e1s, e1e = _bj_k_ux_from(eps_r1);
+        var e2s, e2e = _bj_k_ux_from(eps_r2);
+        var ds, de = _bj_k_ux_sub(e2s, e2e, e1s, e1e);
+        var ms, me = _bj_k_ux_mul(ns, ne, ds, de);
+        var ss, se = _bj_k_ux_add(e1s, e1e, e2s, e2e);
+        var qi: f64 = _bj_k_ux_div_f64(ms, me, ss, se);
+        q_image = qi;
+    }
     image_pos[0] = position[0];
     image_pos[1] = position[1];
     image_pos[2] = -z;
     return Ok(q_image);
+}
+
+# 1 when the dielectric image's binary64 chain is the unbounded one (ε₁, ε₂ positive normal doubles): the sum below
+# DBL_MAX, the product of −q and the difference exactly 0 (one factor 0) or normal and above 2^-1022; the difference
+# of two positive doubles is exact wherever it is small, so it needs no test.
+#must_use
+fn _bj_fv_dielectric_plain(nq: f64, diff: f64, num: f64, den: f64): i64 {
+    var bd = _bj_bits(den) >> 52;
+    if (bd >= 2047) { return 0; }
+    var bn = _bj_bits(num) & 0x7FFFFFFFFFFFFFFF;
+    if (bn == 0) {
+        if (nq == 0.0 || diff == 0.0) { return 1; }
+        return 0;
+    }
+    if (bn <= 0x0010000000000000 || bn >= 0x7FF0000000000000) { return 0; }
+    return 1;
 }
 
 # ── Green's functions (M1 part 3b) ──────────────────────────────────────────────────────────────────────────────
@@ -954,8 +1108,8 @@ public fn bj_maxwell_stress_tensor(e: BjFieldVector, b: BjFieldVector, out: *f64
     var ba: f64[3];
     e.to_array(&ea);
     b.to_array(&ba);
-    var e_sq: f64 = e.magnitude_sq();
-    var b_sq: f64 = b.magnitude_sq();
+    var e_sq: f64 = _bj_fv_dot_rust(e, e);
+    var b_sq: f64 = _bj_fv_dot_rust(b, b);
     var inv_mu0: f64 = 1.0 / BJ_MU_0;
     for (var i = 0; i < 3; i = i + 1) {
         for (var j = 0; j < 3; j = j + 1) {
@@ -1003,9 +1157,9 @@ public fn bj_poynting_flux_surface(samples: *f64, n): f64 {
         var b: BjFieldVector = BjFieldVector_from_array(p + 3);
         var nv: BjFieldVector = BjFieldVector_from_array(p + 6);
         var da: f64 = p[9];
-        var cr: BjFieldVector = e.cross(b);
+        var cr: BjFieldVector = _bj_fv_cross_rust(e, b);
         var s: BjFieldVector = cr.scale(inv_mu0);
-        var dt: f64 = s.dot(nv);
+        var dt: f64 = _bj_fv_dot_rust(s, nv);
         var term: f64 = dt * da;
         total = total + term;
     }

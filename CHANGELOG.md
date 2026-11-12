@@ -165,8 +165,17 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
   of them map: 202 that Rust accepted are Singularity, and 100 it refused are Ok. 5d's remaining bites (field's
   chains with an unbounded exponent) are listed in the port plan §0.1.
 
+- **Cyrius port, M1 part 5d-2 — the vector chains' range edges** (ADR 0002 row 18). `BjFieldVector`'s magnitude,
+  magnitude_sq, dot, cross and normalized, the Lorentz force, and the plane and dielectric images run their chains with
+  an unbounded exponent at a range edge (the new `src/crmath_vx.cyr`). The guard tests Rust's own result: a final sum or
+  difference in [2^-900, DBL_MAX] is already the unbounded chain's. `normalized` is now exactly scale-invariant. A
+  520-row edge grid maps 294 rows.
+
 ### Fixed
 
+- **field, charge** (ADR 0002 row 18): |2^600·(3, 4, 12)| was ∞, a cross component 2^1100 − 2^1100 was NaN, the
+  plane image of a charge at DBL_MAX in z_p = DBL_MAX was ∞, and the dielectric image with ε₁ + ε₂ past DBL_MAX was −0
+  for −0.2q. `normalized` rescaled at an edge with two more roundings, an ulp off its own formula on the subnormal grid.
 - **field, charge** (ADR 0002 row 17): within an ulp of the cutoff, Rust's Singularity verdict followed the
   roundings rather than the distance. A point whose exact r² is below 10^-30 could be accepted, and one above refused,
   and a source 16·2^-1074 from the origin could change the verdict through the rounded difference.
@@ -198,6 +207,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
 ### Performance
 
+- **charge** (interleaved A/B against the previous commit, both rounds): `charge/lorentz_force` 65/66 ns → 52/55 ns
+  (−17 %). M1 part 5d-2's inline chain no longer calls three struct-valued methods. Its guard costs
+  `field/vector_magnitude` +1–2 ns and `field/vector_cross` +4–7 ns.
 - **error** (Cyrius-only benches): making an error 960 ns → 122 ns (−87 %). It now skips the two syscalls that tell the
   Linux main thread while no thread exists, and `_bj_tx_cstr` copies in one loop. A disabled log site costs 3 ns.
 

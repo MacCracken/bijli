@@ -12,7 +12,7 @@
 //! and Larmor arguments crossed over the specials and SI scales (the weak-field Larmor case among them).
 
 use crate::grids::{Rng, knife_edge, specials};
-use crate::m_field::{cat, charges, distances, p3, pairs, res_f, res_v, v3, vectors};
+use crate::m_field::{cat, charges, distances, edge_vectors, p3, pairs, res_f, res_v, v3, vectors};
 use crate::tsv::{Class, Module, Tok, err, f, s};
 use bijli::charge::{
     ELECTRON_MASS, ELEMENTARY_CHARGE, PROTON_MASS, PointCharge, coulomb_force,
@@ -263,6 +263,21 @@ pub fn emit() -> Module {
             &cat(&[pc(&q1), pc(&q2)]),
             &res_v(coulomb_force(black_box(&q1), &q2)),
         );
+    }
+    // Row 18's edge grid (M1 part 5d-2): the Lorentz force where v × B or E + v × B leaves the normal range, over
+    // m_field.rs's edge vectors.
+    let ev = edge_vectors();
+    for (k, &v) in ev.iter().enumerate() {
+        for (j, &bf) in ev.iter().enumerate().step_by(3) {
+            let e = ev[(k + j + 1) % ev.len()];
+            let q = [1e-6, 1e300, f64::from_bits(1)][(k + j) % 3];
+            m.row(
+                "charge::lorentz_force",
+                Class::A,
+                &cat(&[vec![f(q)], v3(v), v3(e), v3(bf)]),
+                &v3(lorentz_force(black_box(q), &v, &e, &bf)),
+            );
+        }
     }
     m
 }

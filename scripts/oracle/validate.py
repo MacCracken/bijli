@@ -1755,12 +1755,198 @@ def adr17_rows(root: Path, module: str, path: Path) -> list:
     return out
 
 
+# Row 18 (M1 part 5d-2): field.rs's and charge.rs's vector chains at a range edge, as row 14's complex ones. The model
+# is the chain with an unbounded exponent, exact values rounded to 53 bits (rnd53), the last operation once into
+# binary64; normalized is its first branch, |v| then each quotient, wherever the port leaves Rust's code.
+FV_FNS = ("FieldVector::magnitude", "FieldVector::magnitude_sq", "FieldVector::dot", "FieldVector::cross",
+          "FieldVector::normalized", "field::image_charge_plane", "field::image_charge_dielectric",
+          "charge::lorentz_force", "PointCharge::lorentz_force_in")
+
+
+VX_LO, VX_HI = 2.0 ** -900, sys.float_info.max
+
+
+def vx_band(x) -> bool:
+    """src/crmath_vx.cyr's band: |x| in [2^-900, DBL_MAX] (NaN: False)."""
+    return VX_LO <= abs(x) <= VX_HI
+
+
+def vx_exact(a, b) -> bool:
+    p = a * b
+    return a == 0.0 or b == 0.0 or MIN_NORMAL < abs(p) <= VX_HI
+
+
+def vx_nonfinite(*xs) -> bool:
+    return not all(math.isfinite(x) for x in xs)
+
+
+def sumsq_plain(x, y, z) -> bool:
+    s = x * x + y * y + z * z
+    return vx_band(s) or (x == 0.0 and y == 0.0 and z == 0.0) or vx_nonfinite(x, y, z)
+
+
+def cross1_plain(a, b, c, d) -> bool:
+    r = a * b - c * d
+    return vx_band(r) or vx_nonfinite(a, b, c, d) or (r == 0.0 and vx_exact(a, b) and vx_exact(c, d))
+
+
+def lorentz1_plain(e, a, b, c, d, q) -> bool:
+    s = e + (a * b - c * d)
+    return (vx_band(s) or vx_nonfinite(q, e) or vx_nonfinite(a, b, c, d)
+            or (s == 0.0 and vx_exact(a, b) and vx_exact(c, d)))
+
+
+def fv_sumsq(x, y, z):
+    return ux_add(ux_add(ux_mul(ux(x), ux(x)), ux_mul(ux(y), ux(y))), ux_mul(ux(z), ux(z)))
+
+
+def fv_cross1(a, b, c, d, r=None):
+    return ux_sub(ux_mul(ux(a), ux(b)), ux_mul(ux(c), ux(d)), r or rnd53)
+
+
+def fv_lorentz(q, vel, e, b):
+    ident = lambda t: t                                  # noqa: E731
+    vb = [fv_cross1(vel[1], b[2], vel[2], b[1]), fv_cross1(vel[2], b[0], vel[0], b[2]),
+          fv_cross1(vel[0], b[1], vel[1], b[0])]
+    return ok3(tuple(ux_fin(ux_mul(ux_add(ux(e[i]), vb[i]), ux(q), ident)) for i in range(3)))
+
+
+def fv_args(fn, v):
+    """The parts a row-18 function's chain reads (None for the images)."""
+    if fn in ("FieldVector::magnitude", "FieldVector::magnitude_sq", "FieldVector::normalized"):
+        return v[0:3]
+    if fn in ("FieldVector::dot", "FieldVector::cross"):
+        return v[0:6]
+    if fn == "charge::lorentz_force":
+        return [v[0]] + v[1:10]
+    if fn == "PointCharge::lorentz_force_in":
+        return [v[0]] + v[5:8] + v[8:14]
+    return None
+
+
+def fv_governed(fn, v) -> int:
+    """18 where the port takes the unbounded chain for this row (any component), else 0 (Rust's chain): the guards of
+    src/field.cyr and src/charge.cyr, on Rust's binary64 values."""
+    if fn == "field::image_charge_plane":
+        pz, z = v[4], v[3]
+        return 18 if math.isfinite(pz) and abs(pz) >= 2.0 ** 1023 and math.isfinite(z) else 0
+    if fn == "field::image_charge_dielectric":
+        q, p, e1, e2 = v[0], v[1:4], v[4], v[5]
+        if not (p[2] > 0.0 and math.isfinite(p[2]) and all(x > 0.0 and math.isfinite(x) for x in (e1, e2))):
+            return 0
+        if not math.isfinite(q):
+            return 0
+        nq, diff = -q, e2 - e1
+        num, den = nq * diff, e1 + e2
+        if not math.isfinite(den):
+            return 18
+        if num == 0.0:
+            return 0 if (nq == 0.0 or diff == 0.0) else 18
+        return 0 if MIN_NORMAL < abs(num) < math.inf else 18
+    if fn in ("FieldVector::magnitude", "FieldVector::magnitude_sq", "FieldVector::normalized"):
+        return 0 if sumsq_plain(*v[0:3]) else 18
+    if fn == "FieldVector::dot":
+        a, b = v[0:3], v[3:6]
+        s = a[0] * b[0] + a[1] * b[1] + a[2] * b[2]
+        ok = vx_band(s) or vx_nonfinite(*a, *b) or (s == 0.0 and all(vx_exact(a[i], b[i]) for i in range(3)))
+        return 0 if ok else 18
+    if fn == "FieldVector::cross":
+        a, b = v[0:3], v[3:6]
+        ok = (cross1_plain(a[1], b[2], a[2], b[1]) and cross1_plain(a[2], b[0], a[0], b[2])
+              and cross1_plain(a[0], b[1], a[1], b[0]))
+        return 0 if ok else 18
+    q, vel, e, b = (v[0], v[1:4], v[4:7], v[7:10]) if fn == "charge::lorentz_force" else (v[0], v[5:8], v[8:11],
+                                                                                         v[11:14])
+    ok = (lorentz1_plain(e[0], vel[1], b[2], vel[2], b[1], q) and lorentz1_plain(e[1], vel[2], b[0], vel[0], b[2], q)
+          and lorentz1_plain(e[2], vel[0], b[1], vel[1], b[0], q))
+    return 0 if ok else 18
+
+
+def fv_model(fn, v):
+    """The port's outputs under row 18 for a governed row (finite parts)."""
+    ident = lambda t: t                                  # noqa: E731
+    if fn == "FieldVector::magnitude":
+        return [("f", ux_fin_sqrt(fv_sumsq(*v[0:3])))]
+    if fn == "FieldVector::magnitude_sq":
+        x, y, z = v[0:3]
+        return [("f", ux_fin(ux_add(ux_add(ux_mul(ux(x), ux(x)), ux_mul(ux(y), ux(y))), ux_mul(ux(z), ux(z)),
+                                    ident)))]
+    if fn == "FieldVector::dot":
+        a, b = v[0:3], v[3:6]
+        return [("f", ux_fin(ux_add(ux_add(ux_mul(ux(a[0]), ux(b[0])), ux_mul(ux(a[1]), ux(b[1]))),
+                                    ux_mul(ux(a[2]), ux(b[2])), ident)))]
+    if fn == "FieldVector::cross":
+        a, b = v[0:3], v[3:6]
+        return ok3((ux_fin(fv_cross1(a[1], b[2], a[2], b[1], ident)), ux_fin(fv_cross1(a[2], b[0], a[0], b[2], ident)),
+                    ux_fin(fv_cross1(a[0], b[1], a[1], b[0], ident))))
+    if fn == "FieldVector::normalized":
+        m = ux_sqrt(fv_sumsq(*v[0:3]))
+        return ok3(tuple(ux_fin(ux_div(ux(c), m, ident)) for c in v[0:3]))
+    if fn == "field::image_charge_plane":
+        q, p, pz = v[0], v[1:4], v[4]
+        two = ux(pz)
+        iz = ux_fin(ux_sub((2 * two[0], two[1]), ux(p[2]), ident))
+        return [("f", -q), ("f", p[0]), ("f", p[1]), ("f", iz)]
+    if fn == "field::image_charge_dielectric":
+        q, p, e1, e2 = v[0], v[1:4], v[4], v[5]
+        diff = ux_sub(ux(e2), ux(e1))
+        num = ux_mul(ux(-q), diff)
+        den = ux_add(ux(e1), ux(e2))
+        return [("f", ux_fin(ux_div(num, den, ident))), ("f", p[0]), ("f", p[1]), ("f", -p[2])]
+    if fn == "charge::lorentz_force":
+        return fv_lorentz(v[0], v[1:4], v[4:7], v[7:10])
+    return fv_lorentz(v[0], v[5:8], v[8:11], v[11:14])
+
+
+def fv_rows(root: Path, module: str, path: Path):
+    """(row-18 mappings, problems) for field.tsv or charge.tsv: each governed row whose model differs from the oracle's
+    outputs is mapped; on every other row of these functions, the port keeps Rust's chain, and the check that the
+    unbounded chain gives the same value there is the guard's proof, row by row (Rust's chain from validate_field's
+    or validate_charge's transcription)."""
+    rust = []
+    (validate_field if module == "field" else validate_charge)(root, path, rust)
+    lines = [l for l in path.read_text().splitlines() if not l.startswith("#")]
+    out, errs = [], []
+    for n, (line, want) in enumerate(zip(lines, rust), 1):
+        fn, _cls, ins, outs, _note = line.split("\t")
+        if fn not in FV_FNS or ins == "-":
+            continue
+        toks = [parse_tok(t) for t in ins.split(" ")]
+        v = [b for _k, b in toks]
+        args = fv_args(fn, v)
+        if args is not None and not all(isinstance(x, float) and math.isfinite(x) for x in args):
+            continue                                    # a non-finite part keeps Rust's chain
+        row = fv_governed(fn, v)
+        if row == 0:
+            if fn == "field::image_charge_plane":
+                proof = all(math.isfinite(x) for x in v)
+            elif fn == "field::image_charge_dielectric":
+                proof = all(math.isfinite(x) for x in v) and v[3] > 0.0 and v[4] > 0.0 and v[5] > 0.0
+            elif fn == "FieldVector::normalized":
+                proof = all(math.isfinite(x) for x in args) and any(x != 0.0 for x in args)
+            else:
+                proof = all(math.isfinite(x) for x in args)
+            if proof:
+                if not toks_same(fv_model(fn, v), want):
+                    errs.append(f"{module} row {n}: {fn}{tuple(v)}: the unbounded model {fv_model(fn, v)} differs "
+                                f"from Rust's chain {want} where the port keeps the chain")
+            continue
+        model = fv_model(fn, v)
+        old = [parse_tok(t) for t in outs.split(" ")]
+        if toks_same(model, old):
+            continue
+        out.append((fn, ins, wire(model), "18", f"oracle {outs}; ADR 0002 row 18"))
+    return out, errs
+
+
 def adr_rows(root: Path, module: str, path: Path) -> list:
     """(fn, raw inputs, outputs, ADR 0002 row, note) for each golden row of `module` an ADR 0002 row changes."""
     if module == "complex":
         return cx_rows(path)[0]
     maps = {13: adr13(root)}
     out = adr17_rows(root, module, path) if module in ("field", "charge") else []
+    if module in ("field", "charge"):
+        out += fv_rows(root, module, path)[0]
     for line in path.read_text().splitlines():
         if line.startswith("#"):
             continue
@@ -2137,6 +2323,7 @@ def main() -> int:
     for mod in ("charge", "complex", "field", "maxwell"):
         errs += check_adr(root, mod, golden / f"{mod}.tsv")
     errs += cx_rows(golden / "complex.tsv")[1]
+    errs += fv_rows(root, "field", golden / "field.tsv")[1] + fv_rows(root, "charge", golden / "charge.tsv")[1]
     errs += check_tables(root)
     for e in errs[:40]:
         print("  " + e)

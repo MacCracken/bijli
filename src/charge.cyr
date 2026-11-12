@@ -135,15 +135,73 @@ public fn bj_coulomb_force(q1: BjPointCharge, q2: BjPointCharge, out: *BjFieldVe
     return Ok(0);
 }
 
-# F = q(E + v × B) (N), as (E + v × B)·q. Mirrors `charge::lorentz_force`.
+# One component of the Lorentz force, (e + (a·b − c·d))·q, given Rust's s = e + (a·b − c·d): s·q where Rust's chain is
+# the unbounded one (s in the band, an exact 0 from exact products, or a part not finite: src/crmath_vx.cyr's guard),
+# else the chain with an unbounded exponent and the product by q rounded once.
+#must_use
+fn _bj_ch_lorentz1(e: f64, a: f64, b: f64, c: f64, d: f64, s: f64, q: f64): f64 {
+    var f: f64 = s * q;
+    var dq: f64 = (q - q) + (e - e);
+    if (_bj_vx_band(s) == 1 || dq != 0.0 || _bj_vx_finite4(a, b, c, d) == 0) { return f; }
+    if (s == 0.0) {
+        var p: f64 = a * b;
+        var r: f64 = c * d;
+        if (_bj_vx_exact(a, b, p) == 1 && _bj_vx_exact(c, d, r) == 1) { return f; }
+    }
+    var vs, ve = _bj_vx_cross1(a, b, c, d);
+    var es, ee = _bj_k_ux_from(e);
+    var ss, se = _bj_k_ux_add(es, ee, vs, ve);
+    var qs, qe = _bj_k_ux_from(q);
+    var u: f64 = _bj_k_ux_mul_f64(ss, se, qs, qe);
+    return u;
+}
+
+# F = q(E + v × B) (N), as (E + v × B)·q; at a range edge (a product past DBL_MAX or below 2^-1022 that the result can
+# see) the chain with an unbounded exponent, each product by q rounded once (ADR 0002 row 18). Mirrors
+# `charge::lorentz_force`.
 #must_use
 #pure
 public fn bj_lorentz_force(charge: f64, velocity: BjFieldVector, electric_field: BjFieldVector,
   magnetic_field: BjFieldVector): BjFieldVector {
-    var vb: BjFieldVector = velocity.cross(magnetic_field);
-    var s: BjFieldVector = electric_field + vb;
-    var f: BjFieldVector = s * charge;
-    return f;
+    var v: BjFieldVector = velocity;
+    var b: BjFieldVector = magnetic_field;
+    var e: BjFieldVector = electric_field;
+    var sx: f64 = e.x + (v.y * b.z - v.z * b.y);
+    var sy: f64 = e.y + (v.z * b.x - v.x * b.z);
+    var sz: f64 = e.z + (v.x * b.y - v.y * b.x);
+    var w: BjFieldVector;
+    w.x = sx * charge;
+    w.y = sy * charge;
+    w.z = sz * charge;
+    # Each s's biased exponent in [123, 2046] is |s| ∈ [2^-900, DBL_MAX] (src/crmath_vx.cyr's band); q finite.
+    var cq: f64 = charge;
+    var ex = (load64(&sx) >> 52) & 0x7FF;
+    var ey = (load64(&sy) >> 52) & 0x7FF;
+    var ez = (load64(&sz) >> 52) & 0x7FF;
+    var eq = (load64(&cq) >> 52) & 0x7FF;
+    if (((ex - 123) | (ey - 123) | (ez - 123) | (2046 - ex) | (2046 - ey) | (2046 - ez) | (2046 - eq)) >= 0) {
+        return w;
+    }
+    # A component that is 0 through zero factors and a zero E is exact; so is one in the band.
+    var hard = 0;
+    if (((ex - 123) | (2046 - ex)) < 0 && !(sx == 0.0 && e.x == 0.0 && (v.y == 0.0 || b.z == 0.0) && (v.z == 0.0
+          || b.y == 0.0))) { hard = 1; }
+    if (((ey - 123) | (2046 - ey)) < 0 && !(sy == 0.0 && e.y == 0.0 && (v.z == 0.0 || b.x == 0.0) && (v.x == 0.0
+          || b.z == 0.0))) { hard = 1; }
+    if (((ez - 123) | (2046 - ez)) < 0 && !(sz == 0.0 && e.z == 0.0 && (v.x == 0.0 || b.y == 0.0) && (v.y == 0.0
+          || b.x == 0.0))) { hard = 1; }
+    if (hard == 0 && eq != 2047) { return w; }
+    var dq: f64 = charge - charge;
+    var dv: f64 = (v.x - v.x) + (v.y - v.y) + (v.z - v.z) + (e.x - e.x) + (e.y - e.y) + (e.z - e.z);
+    dv = dv + (b.x - b.x) + (b.y - b.y) + (b.z - b.z) + dq;
+    if (dv != 0.0) { return w; }                            # a non-finite part keeps Rust's chain
+    var fx: f64 = _bj_ch_lorentz1(e.x, v.y, b.z, v.z, b.y, sx, charge);
+    var fy: f64 = _bj_ch_lorentz1(e.y, v.z, b.x, v.x, b.z, sy, charge);
+    var fz: f64 = _bj_ch_lorentz1(e.z, v.x, b.y, v.y, b.x, sz, charge);
+    w.x = fx;
+    w.y = fy;
+    w.z = fz;
+    return w;
 }
 
 # p = qd (C·m). Mirrors `charge::dipole_moment`.

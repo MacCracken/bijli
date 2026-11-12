@@ -72,6 +72,14 @@ fn fb(b): f64 {
     return x;
 }
 
+# 1 when the f64 x has bit pattern b.
+fn same_bits(x: f64, b): i64 {
+    var w = 0;
+    store64(&w, x);
+    if (w == b) { return 1; }
+    return 0;
+}
+
 # 1 when the Ok Result (t, v) holds the f64 with bit pattern b.
 fn ok_bits(t, v, b): i64 {
     if (is_ok(t) != 1) { return 0; }
@@ -1171,6 +1179,60 @@ fn main() {
     xf2[2] = xnan;
     var xt7, xv7 = bj_electric_potential_point_charge(xq, &xs0, &xf2);
     assert(is_ok(xt7) == 1, "a NaN point keeps Rust's test (NaN < 1e-30 is false)");
+
+    test_group("cyrius_vector_edges (ADR 0002 row 18)");
+    # The vector chains at a range edge with an unbounded exponent; the expected bits are validate.py's model (exact
+    # values rounded to 53 bits, the last operation once).
+    var g600: f64 = fb(0x6570000000000000);                    # 2^600
+    var g500: f64 = fb(0x5F30000000000000);                    # 2^500
+    var ve18_1 = BjFieldVector_new(3.0 * g600, 4.0 * g600, 12.0 * g600);
+    var ve18_1m: f64 = ve18_1.magnitude();
+    assert(same_bits(ve18_1m, 0x65AA000000000000) == 1, "|2^600·(3, 4, 12)| = 13·2^600 (Rust: ∞)");
+    var g537: f64 = fb(0x1E68000000000000);                    # 1.5·2^-537
+    var ve18_2 = BjFieldVector_new(g537, g537, g537);
+    var ve18_2s: f64 = ve18_2.magnitude_sq();
+    assert(same_bits(ve18_2s, 7) == 1, "three squares of 2.25·2^-1074, summed exactly: 7·2^-1074 (Rust: 6)");
+    var ve18_3 = BjFieldVector_new(g600, g600, 0.0);
+    var ve18_3w = BjFieldVector_new(g500, g500, 0.0);
+    var ve18_3c: BjFieldVector = ve18_3.cross(ve18_3w);
+    var ve18_3cz: f64 = ve18_3c.z;
+    assert(same_bits(ve18_3cz, 0) == 1, "2^1100 − 2^1100 is 0 with an unbounded exponent (Rust: ∞ − ∞ = NaN)");
+    var ve18_3d: f64 = ve18_3.dot(ve18_3w);
+    assert(ve18_3d == 1.0 / 0.0, "a dot product past DBL_MAX is still ∞");
+    var ve18_4 = BjFieldVector_new(fb(0x8000000000000001), 0.0, fb(0x80000000000000BC));
+    var ve18_4n: BjFieldVector;
+    var ve18_4t, ve18_4v = ve18_4.normalized(&ve18_4n);
+    var ve18_4x: f64 = ve18_4n.x;
+    var ve18_4z: f64 = ve18_4n.z;
+    var ve18_4ok = 0;
+    if (same_bits(ve18_4x, 0xBF75C973F8A9C7EE) == 1 && same_bits(ve18_4z, 0xBFEFFFE255395DA6) == 1) { ve18_4ok = 1; }
+    assert(is_ok(ve18_4t) == 1 && ve18_4ok == 1,
+      "normalized on the subnormal grid: each part over |v|, rounded once (Rust's rescale: an ulp off)");
+    var ve18_4s = BjFieldVector_new(-1.0, 0.0, -188.0);                # the same vector × 2^1074, in range
+    var ve18_4sn: BjFieldVector;
+    var ve18_4st, ve18_4sv = ve18_4s.normalized(&ve18_4sn);
+    var ve18_4sx: f64 = ve18_4sn.x;
+    assert(same_bits(ve18_4sx, 0xBF75C973F8A9C7EE) == 1,
+      "exactly scale-invariant: Rust's in-range bits at 2^1074 times it");
+    var ve18_5p: f64[3];
+    ve18_5p[0] = 1.0;
+    ve18_5p[1] = -2.0;
+    ve18_5p[2] = fb(0x7FEFFFFFFFFFFFFF);
+    var ve18_5i: f64[3];
+    var ve18_5q: f64 = bj_image_charge_plane(1.0, &ve18_5p, fb(0x7FEFFFFFFFFFFFFF), &ve18_5i);
+    var ve18_5z: f64 = ve18_5i[2];
+    assert(same_bits(ve18_5z, 0x7FEFFFFFFFFFFFFF) == 1,
+      "the plane image at z = DBL_MAX: 2·DBL_MAX − DBL_MAX (Rust: ∞)");
+    var ve18_6p: f64[3];
+    ve18_6p[0] = 0.5;
+    ve18_6p[1] = 0.0;
+    ve18_6p[2] = 1.0;
+    var ve18_6i: f64[3];
+    var ve18_e1: f64 = fb(0x7FE1CCF385EBC8A0);               # 1e308
+    var ve18_e2: f64 = fb(0x7FEAB36D48E1ACF0);               # 1.5e308
+    var ve18_6t, ve18_6v = bj_image_charge_dielectric(1.0, &ve18_6p, ve18_e1, ve18_e2, &ve18_6i);
+    assert(ok_bits(ve18_6t, ve18_6v, 0xBFC999999999999A) == 1, "ε₁ + ε₂ past DBL_MAX: q' = −0.2 (Rust: −q·Δε/∞ = −0)");
+    if (ve18_5q == 7.0 || ve18_4sv == 7 || ve18_4v == 7) { println("."); }
 
     return assert_summary();
 }

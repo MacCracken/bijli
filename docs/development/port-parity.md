@@ -1130,3 +1130,53 @@ Language facts the probes found, beyond plan §2:
 
   The cost is the band test's call: its body is over `#inline`'s 32 tokens. A first version called it through a
   five-argument wrapper and cost 5–9 ns. Speed is measured, not gated.
+
+## 21. M1 part 5d-2: the vector chains' range edges (2026-11-12)
+
+- **ADR 0002 row 18**: row 14's rule for field.rs's and charge.rs's vector chains: `FieldVector::magnitude`,
+  `magnitude_sq`, `dot`, `cross` and `normalized`, the Lorentz force (and `PointCharge::lorentz_force_in`), and the
+  plane and dielectric images. At an edge the chain runs with an unbounded exponent, and its last operation rounds once.
+  - **`normalized`** at an edge is its first branch, |v| to 53 bits and then each quotient, where Rust rescaled by
+    its largest part with two more roundings. The result is exactly scale-invariant: 2^1074·v and v give the same
+    bits wherever the parts stay exact. Rust's rescale branch is gone; only the zero vector and a non-finite part
+    reach the code after the fast test.
+  - **The images**: the plane image's 2·z_p is exact unless |z_p| ≥ 2^1023. The dielectric image checks its product
+    −q·(ε₂ − ε₁) and its sum ε₁ + ε₂ after Rust computes them.
+- **The guard** (`src/crmath_vx.cyr`) tests what Rust's chain computed. A product below 2^-1022 differs from its
+  53-bit value, but it lies under half an ulp of any operand of 2^-968 or more, and a sum of such small values is
+  absorbed in turn by any term of 2^-913 or more. So a final sum or difference S with |S| in [2^-900, DBL_MAX] is
+  the unbounded chain's, an overflow shows as a non-finite S, and an exact 0 is the chain's when every product is
+  exact (a zero factor, or normal). In code, `cross` and the Lorentz force fold the three results' biased exponents
+  into one sign test ([123, 2046] is the band), then test components that are 0 through zero factors. A non-finite
+  part, anywhere in a call, keeps Rust's chain.
+  - **Two guards were tried first.** The parts in [2^-511, 2^511), as row 14's, called through a helper: magnitude
+    9 → 19 ns, cross 19 → 44 ns, the Lorentz force 61 → 216 ns. Inline and with zeros folded in, it was still 18 ns.
+    A scratch bench put the cost in the guard's integer work itself (Cyrius keeps every local in memory), and two
+    compares on the sum Rust computes anyway cost 2 ns.
+  - **A per-component non-finite test** was also wrong at first. A NaN in E's y left the z component on the
+    unbounded path, and the harness's 13 failures showed it. The rule is per call, as for complex.
+  - The dipoles, the stress tensor and the Poynting flux call Rust's raw dot and cross (`_bj_fv_dot_rust`,
+    `_bj_fv_cross_rust`) until their own parts of 5d. The dipoles had picked up the new dot at once (4 harness
+    failures).
+- **The model** (`validate.py`'s `fv_model`, `fv_governed`, `fv_rows`): the exact chain rounded to 53 bits (`rnd53`),
+  the last operation once. `fv_governed` mirrors the port's guards on Rust's binary64 values, and every row they leave
+  on Rust's chain must equal Rust's transcription: the guard's proof, which held for the band argument on every row.
+- **The edge grid**: 455 field rows over `m_field.rs`'s 13 `edge_vectors` (cancellations past DBL_MAX, the subnormal
+  grid, three squares of 2.25·2^-1074 that Rust rounds to 2 each), the plane image at |z_p| ≥ 2^1023, and the
+  dielectric image where its product or sum leaves the range; 65 Lorentz rows in `charge.tsv`.
+- **294 mapped rows**, all passed: magnitude 145, cross 55, dot 28, normalized 11, the plane and dielectric images 6
+  each, magnitude_sq 1 (7·2^-1074 for Rust's 6), the Lorentz force 40 and `lorentz_force_in` 2.
+- **Tests**: `tests/field.tcyr`'s `cyrius_vector_edges (ADR 0002 row 18)`, 8 assertions:
+  - |2^600·(3, 4, 12)| = 13·2^600;
+  - the three subnormal squares summed exactly;
+  - a cross component 2^1100 − 2^1100 = 0, and a dot product past DBL_MAX still ∞;
+  - normalized on the subnormal grid, and its scale invariance against Rust's in-range bits;
+  - the plane image at z_p = DBL_MAX, and the dielectric image with ε₁ + ε₂ past DBL_MAX.
+- **Result, every target**: 9 modules, 0 failing; **189,128 ok, 0 failed, 11,173 accepted (ADR 01: 6,505; ADR 0002:
+  4,668)**. All 145 digests are equal on x86_64 ELF, x86_64 PE and aarch64, and field's 160 and charge's 66 assertions
+  pass on all three. The nine functions' digests changed.
+- **Benchmarks** (interleaved A/B against HEAD 16d9c20, twice, load average 3.6 to 5.3):
+  - `field/vector_magnitude` +1–2 ns (10/11 → 12 ns) and `vector_cross` +4–7 ns (19/22 → 26/27 ns);
+  - `charge/lorentz_force` −10 to −14 ns (65/66 → 52/55 ns): the inline chain no longer calls three struct-valued
+    methods (cross, add, scale);
+  - the dipoles and `trace_field_line_10` within the load's noise.

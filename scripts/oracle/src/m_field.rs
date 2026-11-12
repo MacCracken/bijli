@@ -413,7 +413,81 @@ pub fn emit() -> Module {
     emit_3b(&mut m, &mut rng, &vs);
     emit_3c(&mut m);
     emit_5d(&mut m);
+    emit_5d2(&mut m);
     m
+}
+
+/// Range-edge vectors (bijli ADR 0002 row 18, M1 part 5d-2): parts past 2^±511 where a square, product or sum leaves
+/// the normal range though the result is representable, cancellations of products past DBL_MAX, and the subnormal
+/// grid. Exact by construction (powers of two, literals and their products).
+pub(crate) fn edge_vectors() -> Vec<FieldVector> {
+    let e = f64::EPSILON;
+    vec![
+        FieldVector::new(pow2(600) * (1.0 + e), pow2(600), 0.0),
+        FieldVector::new(pow2(500) * (1.0 - e / 2.0), -pow2(500), 0.0),
+        FieldVector::new(pow2(-600), -pow2(-600), pow2(-600)),
+        FieldVector::new(f64::MAX, f64::MAX, f64::MAX),
+        FieldVector::new(1e300, 1e-300, 0.0),
+        FieldVector::new(f64::from_bits(1), 0.0, 1e-310),
+        FieldVector::new(pow2(1000), -pow2(999), pow2(998)),
+        FieldVector::new(pow2(-1000), pow2(-1001), 0.0),
+        FieldVector::new(3.0 * pow2(600), 4.0 * pow2(600), 12.0 * pow2(600)),
+        FieldVector::new(pow2(700), pow2(700), 0.0),
+        FieldVector::new(-2.5e-200, 1e-200, 7.5e-201),
+        FieldVector::new(1.0, pow2(-600), -2.0),
+        // Squares on the subnormal grid: Rust rounds each (2.25·2^-1074 to 2), the chain rounds their sum once.
+        FieldVector::new(1.5 * pow2(-537), 1.5 * pow2(-537), 1.5 * pow2(-537)),
+    ]
+}
+
+/// The row-18 edge grid, appended so the rows above keep their places: magnitude, magnitude_sq and normalized of
+/// each edge vector, dot and cross of every pair, the plane image past 2^1023 and the dielectric image where its
+/// product or sum leaves the range.
+fn emit_5d2(m: &mut Module) {
+    let vs = edge_vectors();
+    for &v in &vs {
+        let ins = v3(v);
+        m.row("FieldVector::magnitude", Class::A, &ins, &[f(black_box(v).magnitude())]);
+        m.row("FieldVector::magnitude_sq", Class::A, &ins, &[f(black_box(v).magnitude_sq())]);
+        m.row("FieldVector::normalized", Class::A, &ins, &res_v(black_box(v).normalized()));
+        for &w in &vs {
+            let both = cat(&[v3(v), v3(w)]);
+            m.row("FieldVector::dot", Class::A, &both, &[f(black_box(v).dot(&w))]);
+            m.row("FieldVector::cross", Class::A, &both, &v3(black_box(v).cross(&w)));
+        }
+    }
+    for pz in [f64::MAX, -f64::MAX, 1e308, 9e307, 8.9e307, -pow2(1023)] {
+        for z in [f64::MAX, 1e308, -1e308, 1.0, 0.0, f64::from_bits(1)] {
+            let a = [1.0, -2.0, z];
+            let (qi, pi) = image_charge_plane(black_box(-3e-9), a, pz);
+            m.row(
+                "field::image_charge_plane",
+                Class::A,
+                &cat(&[vec![f(-3e-9)], p3(a), vec![f(pz)]]),
+                &cat(&[vec![f(qi)], p3(pi)]),
+            );
+        }
+    }
+    let eps = [
+        (1.0, 4.0),
+        (1.0, 1.0 + f64::EPSILON),
+        (f64::MAX, f64::MAX),
+        (1e308, 1.5e308),
+        (1e-300, 2e-300),
+        (f64::from_bits(1), 1.0),
+        (3.0, 3.0),
+    ];
+    for q in [1e300, f64::MAX, 1e-300, f64::from_bits(1), 1.0, 0.0] {
+        for (e1, e2) in eps {
+            let b = [0.5, 0.0, 1.0];
+            m.row(
+                "field::image_charge_dielectric",
+                Class::A,
+                &cat(&[vec![f(q)], p3(b), vec![f(e1), f(e2)]]),
+                &res_image(image_charge_dielectric(black_box(q), b, e1, e2)),
+            );
+        }
+    }
 }
 
 /// The singular cutoff's knife edge (bijli ADR 0002 row 17, M1 part 5d-1), appended so the rows above keep their

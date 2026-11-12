@@ -1,0 +1,102 @@
+# crmath_vx.cyr — 3-vector chains with an unbounded exponent (bijli, M1 part 5d-2, ADR 0002 row 18).
+#
+# At a range edge field.rs's and charge.rs's chains run with an unbounded exponent, as BjComplex's do (ADR 0002 row
+# 14): every operation rounded to 53 bits (kimiya's _bj_k_ux_*, src/crmath_kx.cyr), the last one once into binary64.
+# These are the helpers field.cyr and charge.cyr share (both are `private` files, so the helpers live in a file of
+# internals).
+#
+# The guard: Rust's chain, then a test of what it computed. A chain of products and sums of doubles differs from the
+# unbounded one only where a product leaves the normal range. One past DBL_MAX makes the sums it enters ±∞ or NaN. One
+# below 2^-1022 (subnormal, or 0 from nonzero factors) is u, |u| < 2^-1022, and its 53-bit value differs. Where u meets
+# an operand o with |o| ≥ 2^-968 it lies below half the gap next to o (at least 2^(-968-54) = 2^-1022), so both chains
+# give o. Where |o| < 2^-968 the sum is below 2^-967, and a later term t with |t| ≥ 2^-913 absorbs it the same way;
+# otherwise the final value is below 2^-912 in magnitude. Every product of normal values, and every sum of them, rounds
+# alike in both (a difference below 2^-1022 is exact). So when the chain's sum (or difference) S has
+# |S| ∈ [2^-900, DBL_MAX], the two chains agree on S: _BJ_VX_LO and _BJ_VX_HI. An exact 0 agrees when every product is
+# exact (a zero factor, or normal): _bj_vx_exact. Anything else takes the unbounded chain, which gives Rust's bits
+# wherever they were right. A non-finite input keeps Rust's chain.
+
+# 2^-900, DBL_MAX and 2^-1022, the guards' bounds (bit patterns into f64 variables).
+var _BJ_VX_LO: f64 = 0x07B0000000000000;
+var _BJ_VX_HI: f64 = 0x7FEFFFFFFFFFFFFF;
+var _BJ_VX_MN: f64 = 0x0010000000000000;
+
+# 1 when |s| ∈ [2^-900, DBL_MAX] (the section comment); NaN gives 0.
+#must_use
+fn _bj_vx_band(s: f64): i64 {
+    var a: f64 = f64_abs(s);
+    if (a >= _BJ_VX_LO && a <= _BJ_VX_HI) { return 1; }
+    return 0;
+}
+
+# 1 when the binary64 product p = a·b is its exact value for the chain: a zero factor, or |p| in (2^-1022, DBL_MAX].
+#must_use
+fn _bj_vx_exact(a: f64, b: f64, p: f64): i64 {
+    if (a == 0.0 || b == 0.0) { return 1; }
+    var ap: f64 = f64_abs(p);
+    if (ap > _BJ_VX_MN && ap <= _BJ_VX_HI) { return 1; }
+    return 0;
+}
+
+# 1 when none of a, b, c, d is NaN or infinite.
+#must_use
+fn _bj_vx_finite4(a: f64, b: f64, c: f64, d: f64): i64 {
+    var s: f64 = (a - a) + (b - b) + (c - c) + (d - d);
+    if (s == 0.0) { return 1; }
+    return 0;
+}
+
+# x·y with an unbounded exponent, rounded to 53 bits: (s, e).
+#must_use
+fn _bj_vx_mul(x: f64, y: f64): (f64, i64) {
+    var xs, xe = _bj_k_ux_from(x);
+    var ys, ye = _bj_k_ux_from(y);
+    var s, e = _bj_k_ux_mul(xs, xe, ys, ye);
+    return (s, e);
+}
+
+# (x² + y²) + z², each operation with an unbounded exponent and rounded to 53 bits: (s, e).
+#must_use
+fn _bj_vx_sumsq(x: f64, y: f64, z: f64): (f64, i64) {
+    var as2, ae2 = _bj_vx_mul(x, x);
+    var bs2, be2 = _bj_vx_mul(y, y);
+    var cs2, ce2 = _bj_vx_mul(z, z);
+    var ss, se = _bj_k_ux_add(as2, ae2, bs2, be2);
+    var ts, te = _bj_k_ux_add(ss, se, cs2, ce2);
+    return (ts, te);
+}
+
+# 1 when Rust's (x² + y²) + z² = s is the unbounded chain's: |s| in the band, or every part 0, or a part not finite.
+#must_use
+fn _bj_vx_sumsq_plain(x: f64, y: f64, z: f64, s: f64): i64 {
+    if (s >= _BJ_VX_LO && s <= _BJ_VX_HI) { return 1; }
+    if (x == 0.0 && y == 0.0 && z == 0.0) { return 1; }
+    var d: f64 = (x - x) + (y - y) + (z - z);
+    if (d != 0.0) { return 1; }
+    return 0;
+}
+
+# a·b − c·d with an unbounded exponent, to 53 bits: (s, e).
+#must_use
+fn _bj_vx_cross1(a: f64, b: f64, c: f64, d: f64): (f64, i64) {
+    var ps, pe = _bj_vx_mul(a, b);
+    var qs, qe = _bj_vx_mul(c, d);
+    var s, e = _bj_k_ux_sub(ps, pe, qs, qe);
+    return (s, e);
+}
+
+# One cross-product component, a·b − c·d rounded once into binary64, given Rust's r = a·b − c·d: r itself where Rust's
+# chain is the unbounded one (r in the band, an exact 0, or a factor not finite), else the unbounded chain.
+#must_use
+fn _bj_vx_cross1_f64(a: f64, b: f64, c: f64, d: f64, r: f64): f64 {
+    if (_bj_vx_band(r) == 1 || _bj_vx_finite4(a, b, c, d) == 0) { return r; }
+    if (r == 0.0) {
+        var p: f64 = a * b;
+        var q: f64 = c * d;
+        if (_bj_vx_exact(a, b, p) == 1 && _bj_vx_exact(c, d, q) == 1) { return r; }
+    }
+    var ps, pe = _bj_vx_mul(a, b);
+    var qs, qe = _bj_vx_mul(c, d);
+    var u: f64 = _bj_k_ux_sub_f64(ps, pe, qs, qe);
+    return u;
+}
