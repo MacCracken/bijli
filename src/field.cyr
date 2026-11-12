@@ -1,6 +1,6 @@
 # field.cyr — electric and magnetic fields (port of rust-old/src/field.rs). M1 part 3a: BjFieldVector, point charges,
 # superposition, energy densities and dipoles; part 3b: the Gauss's-law fields, multipoles, images, Green's functions
-# and the stress tensor; trace_field_line follows in 3c.
+# and the stress tensor; part 3c: trace_field_line, into a BjPolyline.
 #
 # SI units: metres, coulombs, volts per metre, tesla. The harmonic time convention is src/complex.cyr's.
 #
@@ -940,4 +940,192 @@ public fn bj_poynting_flux_surface(samples: *f64, n): f64 {
         total = total + term;
     }
     return total;
+}
+
+# ── field lines (M1 part 3c) ────────────────────────────────────────────────────────────────────────────────────
+
+# A polyline of 3D points, a caller-owned growable buffer (Rust's `Vec<[f64; 3]>`, port plan §9.5): `pts` the address
+# of 3·cap f64 from fl_alloc (0 while empty), `len` the points in use. Make one with BjPolyline_new, reuse it across
+# calls (its buffer is kept), and give it back with BjPolyline_free.
+public struct BjPolyline {
+    pts;
+    len;
+    cap;
+}
+
+# The address a as a *f64 (an untyped word stored into a typed pointer warns; a typed return does not).
+#must_use
+fn _bj_f64p(a): *f64 {
+    return a;
+}
+
+# An empty polyline (no buffer yet).
+#must_use
+public fn BjPolyline_new(): BjPolyline {
+    var p: BjPolyline;
+    p.pts = 0;
+    p.len = 0;
+    p.cap = 0;
+    return p;
+}
+
+# Frees p's buffer and empties it.
+public fn BjPolyline_free(p: *BjPolyline): i64 {
+    if (p.pts != 0) { fl_free(p.pts); }
+    p.pts = 0;
+    p.len = 0;
+    p.cap = 0;
+    return 0;
+}
+
+impl BjPolyline {
+    # The number of points.
+    #must_use
+    public fn count(self): i64 {
+        return self.len;
+    }
+
+    # The address of point i's three f64 (0 ≤ i < count).
+    #must_use
+    public fn at(self, i): *f64 {
+        var a: *f64 = _bj_f64p(self.pts + i * 24);
+        return a;
+    }
+}
+
+# Room in p for n points (p's points kept): 1, or 0 when the allocation fails. Grows to n, or to twice p's capacity
+# when that is more.
+fn _bj_poly_reserve(p: *BjPolyline, n): i64 {
+    if (n <= p.cap) { return 1; }
+    var c = p.cap * 2;
+    if (c < n) { c = n; }
+    var buf = fl_alloc(c * 24);
+    if (buf == 0) { return 0; }
+    if (p.pts != 0) {
+        memcpy(buf, p.pts, p.len * 24);
+        fl_free(p.pts);
+    }
+    p.pts = buf;
+    p.cap = c;
+    return 1;
+}
+
+# Appends point q (three f64) to p: 1, or 0 when p can't grow.
+fn _bj_poly_push(p: *BjPolyline, q: *f64): i64 {
+    if (p.len == p.cap && _bj_poly_reserve(p, p.len + 1) == 0) { return 0; }
+    var a: *f64 = _bj_f64p(p.pts + p.len * 24);
+    a[0] = q[0];
+    a[1] = q[1];
+    a[2] = q[2];
+    p.len = p.len + 1;
+    return 1;
+}
+
+# Rust's TRACE_INITIAL_CAPACITY: the first reservation is min(max_steps + 1, 4096) points; the buffer grows beyond.
+var _BJ_TRACE_INITIAL_CAPACITY = 4096;
+
+# Traces a field line from `start` by forward Euler, x ← x + h·F(x)/|F(x)|, into out (emptied first): `start`, then
+# one point per step, at most max_steps + 1 points. `max_steps` is Rust's usize, its 64 bits unsigned: −1 is usize::MAX.
+# `field_fn` is called through callptr as `field_fn(pos, f)`, pos the three f64 of the position and f a *BjFieldVector
+# to fill; it returns BJ_ERR_NONE, or a BJ_ERR_* code with its error recorded (Rust's `Fn([f64; 3]) ->
+# Result<FieldVector>`: a Result can't pass through callptr, plan §9.3). The line stops early, Ok, at a null point
+# (a zero field), when field_fn returns Singularity (a source or sink), or at a field with an infinite component.
+# Errors: InvalidParameter when step_size is not positive and finite, start is not finite, or field_fn returns a NaN
+# component; any other error of field_fn's is returned as is; Allocation when out can't grow (Rust aborts there; ADR
+# 0002 row 9). On an error out is empty. A success leaves the last-error record as field_fn left it. Mirrors
+# `field::trace_field_line`.
+public fn bj_trace_field_line(start: *f64, step_size: f64, max_steps, field_fn, out: *BjPolyline): Result {
+    out.len = 0;
+    if (!(step_size > 0.0 && _bj_is_finite(step_size) == 1)) {
+        var t = _bj_err_reason(BJ_ERR_INVALID_PARAMETER);
+        _bj_tx_cstr(t, "step size must be positive and finite, got ");
+        _bj_fmt_f64_display(t, step_size);
+        return Err(BJ_ERR_INVALID_PARAMETER);
+    }
+    if (_bj_is_finite(start[0]) == 0 || _bj_is_finite(start[1]) == 0 || _bj_is_finite(start[2]) == 0) {
+        var t2 = _bj_err_reason(BJ_ERR_INVALID_PARAMETER);
+        _bj_tx_cstr(t2, "start position must be finite, got ");
+        _bj_fmt_f64x3_debug(t2, start);
+        return Err(BJ_ERR_INVALID_PARAMETER);
+    }
+    if (_bj_log_on(4) == 1) {
+        var lb[400];
+        var lt[24];
+        _bj_tx_init(&lt, &lb, 400);
+        _bj_tx_cstr(&lt, "tracing field line start=");
+        _bj_fmt_f64x3_debug(&lt, start);
+        _bj_tx_cstr(&lt, " step_size=");
+        _bj_fmt_f64_debug(&lt, step_size);
+        _bj_tx_cstr(&lt, " max_steps=");
+        _bj_tx_u64(&lt, max_steps);
+        _bj_log_text(4, &lt);
+    }
+    var first = _BJ_TRACE_INITIAL_CAPACITY;
+    if (max_steps >= 0 && max_steps < _BJ_TRACE_INITIAL_CAPACITY - 1) { first = max_steps + 1; }
+    if (_bj_poly_reserve(out, first) == 0) {
+        _bj_tx_cstr(_bj_err_reason(BJ_ERR_ALLOCATION), "field line buffer");
+        return Err(BJ_ERR_ALLOCATION);
+    }
+    var pos: f64[3];
+    pos[0] = start[0];
+    pos[1] = start[1];
+    pos[2] = start[2];
+    _bj_poly_push(out, &pos);
+    var stop_reason = "max_steps reached";
+    var f: BjFieldVector;
+    var dir: BjFieldVector;
+    var i = 0;
+    while (i != max_steps) {
+        var st = callptr(field_fn, &pos, &f);
+        if (st != BJ_ERR_NONE) {
+            if (st == BJ_ERR_SINGULARITY) {
+                stop_reason = "singularity (source/sink)";
+                break;
+            }
+            out.len = 0;
+            return Err(st);
+        }
+        var fx: f64 = f.x;
+        var fy: f64 = f.y;
+        var fz: f64 = f.z;
+        if (fx != fx || fy != fy || fz != fz) {
+            out.len = 0;
+            var t3 = _bj_err_reason(BJ_ERR_INVALID_PARAMETER);
+            _bj_tx_cstr(t3, "field function returned NaN at ");
+            _bj_fmt_f64x3_debug(t3, &pos);
+            return Err(BJ_ERR_INVALID_PARAMETER);
+        }
+        if (_bj_is_finite(fx) == 0 || _bj_is_finite(fy) == 0 || _bj_is_finite(fz) == 0) {
+            stop_reason = "infinite field (source/sink)";
+            break;
+        }
+        # A finite field fails to normalize only when it is zero: test that first, so a null point leaves the
+        # last-error record alone, as Rust's discarded error has no effect.
+        if (fx == 0.0 && fy == 0.0 && fz == 0.0) {
+            stop_reason = "null point";
+            break;
+        }
+        var tn, vn = f.normalized(&dir);
+        pos[0] = pos[0] + step_size * dir.x;
+        pos[1] = pos[1] + step_size * dir.y;
+        pos[2] = pos[2] + step_size * dir.z;
+        if (_bj_poly_push(out, &pos) == 0) {
+            out.len = 0;
+            _bj_tx_cstr(_bj_err_reason(BJ_ERR_ALLOCATION), "field line buffer");
+            return Err(BJ_ERR_ALLOCATION);
+        }
+        i = i + 1;
+    }
+    if (_bj_log_on(4) == 1) {
+        var lb2[160];
+        var lt2[24];
+        _bj_tx_init(&lt2, &lb2, 160);
+        _bj_tx_cstr(&lt2, "field line traced points=");
+        _bj_tx_u64(&lt2, out.len);
+        _bj_tx_cstr(&lt2, " stop_reason=\"");
+        _bj_tx_cstr(&lt2, stop_reason);
+        _bj_tx_putc(&lt2, 34);
+        _bj_log_text(4, &lt2);
+    }
+    return Ok(0);
 }

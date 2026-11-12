@@ -410,6 +410,147 @@ fn _par_got_res_c(t, v, c: BjComplex) {
     return 0;
 }
 
+# ── trace_field_line's scenarios (M1 part 3c) ──
+# The field functions scripts/oracle/src/m_field.rs's field_fn numbers, as plain fns called through callptr, reading
+# the row's parameters from _par_tf (the harness is single-threaded).
+var _par_tf: f64[8];
+
+# out = (x, y, z); status BJ_ERR_NONE.
+fn _par_tf_put(out: *BjFieldVector, x: f64, y: f64, z: f64): i64 {
+    out.x = x;
+    out.y = y;
+    out.z = z;
+    return BJ_ERR_NONE;
+}
+
+# The status of a field function's Result: BJ_ERR_NONE, or its code.
+fn _par_tf_status(t, v): i64 {
+    if (is_err_result(t) == 1) { return v; }
+    return BJ_ERR_NONE;
+}
+
+# 0: uniform (fx, fy, fz).
+fn _par_tf_uniform(pos: *f64, out: *BjFieldVector): i64 {
+    return _par_tf_put(out, _par_tf[0], _par_tf[1], _par_tf[2]);
+}
+
+# 1: a point charge q at (x, y, z).
+fn _par_tf_point(pos: *f64, out: *BjFieldVector): i64 {
+    var c: f64[3];
+    c[0] = _par_tf[1];
+    c[1] = _par_tf[2];
+    c[2] = _par_tf[3];
+    var q: f64 = _par_tf[0];
+    var t, v = bj_electric_field_point_charge(q, &c, pos, out);
+    return _par_tf_status(t, v);
+}
+
+# 2: an electric dipole p at the origin.
+fn _par_tf_dipole(pos: *f64, out: *BjFieldVector): i64 {
+    var p: BjFieldVector = BjFieldVector_new(_par_tf[0], _par_tf[1], _par_tf[2]);
+    var t, v = bj_electric_dipole_field(p, pos, out);
+    return _par_tf_status(t, v);
+}
+
+# 3: a linear quadrupole, +q at ±d ẑ and −2q at the origin.
+fn _par_tf_quadrupole(pos: *f64, out: *BjFieldVector): i64 {
+    var cs: f64[12];
+    var q: f64 = _par_tf[0];
+    var d: f64 = _par_tf[1];
+    cs[0] = q;
+    cs[1] = 0.0;
+    cs[2] = 0.0;
+    cs[3] = d;
+    cs[4] = q;
+    cs[5] = 0.0;
+    cs[6] = 0.0;
+    cs[7] = -d;
+    cs[8] = -2.0 * q;
+    cs[9] = 0.0;
+    cs[10] = 0.0;
+    cs[11] = 0.0;
+    var t, v = bj_electric_field_superposition(&cs, 3, pos, out);
+    return _par_tf_status(t, v);
+}
+
+# 4: a sink, Singularity once x ≥ a, else x̂.
+fn _par_tf_sink(pos: *f64, out: *BjFieldVector): i64 {
+    var x: f64 = pos[0];
+    var a: f64 = _par_tf[0];
+    if (x >= a) { return _bj_err_singularity(); }
+    return _par_tf_put(out, 1.0, 0.0, 0.0);
+}
+
+# 5: always ZeroCharge.
+fn _par_tf_error(pos: *f64, out: *BjFieldVector): i64 {
+    return _bj_err_zero_charge();
+}
+
+# 6: a NaN field once x ≥ a, else x̂.
+fn _par_tf_nan(pos: *f64, out: *BjFieldVector): i64 {
+    var x: f64 = pos[0];
+    var a: f64 = _par_tf[0];
+    var zero: f64 = 0.0;
+    var nan: f64 = zero / zero;
+    if (x >= a) { return _par_tf_put(out, nan, 0.0, 0.0); }
+    return _par_tf_put(out, 1.0, 0.0, 0.0);
+}
+
+# 7: an infinite field once x ≥ a, else x̂.
+fn _par_tf_inf(pos: *f64, out: *BjFieldVector): i64 {
+    var x: f64 = pos[0];
+    var a: f64 = _par_tf[0];
+    var inf: f64 = 1.0 / 0.0;
+    if (x >= a) { return _par_tf_put(out, inf, 0.0, 0.0); }
+    return _par_tf_put(out, 1.0, 0.0, 0.0);
+}
+
+# 8: a magnetic dipole m at the origin.
+fn _par_tf_mdipole(pos: *f64, out: *BjFieldVector): i64 {
+    var m: BjFieldVector = BjFieldVector_new(_par_tf[0], _par_tf[1], _par_tf[2]);
+    var t, v = bj_magnetic_dipole_field(m, pos, out);
+    return _par_tf_status(t, v);
+}
+
+# A `field::trace_field_line` row: the scenario's field function, the trace, and its points or error.
+fn _par_trace(): i64 {
+    var a: f64[3];
+    var id = _par_in(0);
+    _par_in3(1, &a);
+    var step: f64 = _par_in(4);
+    var max = _par_in(5);
+    var np = _par_in_f64s(6, &_par_tf);
+    var fp = &_par_tf_uniform;
+    if (id == 1) { fp = &_par_tf_point; }
+    elif (id == 2) { fp = &_par_tf_dipole; }
+    elif (id == 3) { fp = &_par_tf_quadrupole; }
+    elif (id == 4) { fp = &_par_tf_sink; }
+    elif (id == 5) { fp = &_par_tf_error; }
+    elif (id == 6) { fp = &_par_tf_nan; }
+    elif (id == 7) { fp = &_par_tf_inf; }
+    elif (id == 8) { fp = &_par_tf_mdipole; }
+    var poly = BjPolyline_new();
+    var t, v = bj_trace_field_line(&a, step, max, fp, &poly);
+    if (is_err_result(t) == 1) {
+        _par_got_error(v);
+    } else {
+        var n = poly.count();
+        _par_got_seq(3 * n);
+        for (var k = 0; k < n; k = k + 1) {
+            var p: *f64 = poly.at(k);
+            var x: f64 = p[0];
+            var y: f64 = p[1];
+            var z: f64 = p[2];
+            _par_got_f(x);
+            _par_got_f(y);
+            _par_got_f(z);
+        }
+    }
+    BjPolyline_free(&poly);
+    if (np < 0) { return 0 - 1; }
+    return 1;
+}
+
 # Part 3b's `field::*` rows, by name; −2 for a name that is not one of them.
 fn _par_field_3b(fp, fl): i64 {
     var a: f64[3];
@@ -417,6 +558,7 @@ fn _par_field_3b(fp, fl): i64 {
     var tq: f64[9];
     var cs: f64[24];
     var c: BjComplex;
+    if (_par_eq(fp, fl, "field::trace_field_line") == 1) { return _par_trace(); }
     if (_par_eq(fp, fl, "field::electric_field_infinite_plane") == 1) {
         var x0: f64 = _par_in(0);
         var e0: f64 = bj_electric_field_infinite_plane(x0);
@@ -697,6 +839,8 @@ fn _par_fmtf(fp, fl): i64 {
     _bj_tx_init(&t, &buf, 400);
     if (_par_eq(fp, fl, "f64::fmt_display") == 1) {
         _bj_fmt_f64_display(&t, x);
+    } elif (_par_eq(fp, fl, "f64::fmt_debug") == 1) {
+        _bj_fmt_f64_debug(&t, x);
     } elif (_par_eq(fp, fl, "serde_json::f64") == 1) {
         _bj_fmt_f64_json(&t, x);
     } else {

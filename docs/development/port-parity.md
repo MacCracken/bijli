@@ -592,3 +592,46 @@ Language facts the probes found, beyond plan §2:
 | field::maxwell_stress_tensor | `15043abe365d8997` |
 | field::stress_tensor_force | `6de79c1edb44fddc` |
 | field::poynting_flux_surface | `b2072256d29a879` |
+
+## 13. M1 part 3c: field — trace_field_line (2026-11-11); field.rs complete
+
+- **`bj_trace_field_line(start, step, max_steps, field_fn, out)`**, Rust's forward-Euler tracer:
+  - **The callback.** Rust's `Fn([f64; 3]) -> Result<FieldVector>` is a closure or `&fn` called through
+    `callptr` as `field_fn(pos, f)`. It returns `BJ_ERR_NONE` with the field in `f`, or an error code, its
+    error recorded: a Result can't pass through `callptr` (plan §9.3). Probe p9 measured that call at 62 ns.
+  - **The output.** Rust's `Vec<[f64; 3]>` is a **`BjPolyline`**, a caller-owned buffer that grows by `fl_alloc`,
+    is reused across calls (`count`, `at`) and is freed by `BjPolyline_free`. On an error it is left empty.
+  - **`max_steps`** is Rust's usize, so its 64 bits count unsigned: the loop runs to `i != max_steps`, so `-1` is
+    `usize::MAX`, as Rust's huge-max-steps test needs. The first reservation is Rust's min(max_steps + 1, 4096).
+  - **A null point** is tested before `normalized`, so a successful trace leaves the last-error record as the
+    field function left it, as Rust's discarded `Err` has no effect.
+  - **A buffer that can't grow** returns the new `BJ_ERR_ALLOCATION`, where Rust aborts: **ADR 0002 row 9**.
+  - The two `tracing::debug!` sites log through `_bj_log_on` and a stack BjText.
+- **`_bj_fmt_f64_debug`**, Rust's `{:?}`, for the positions in two of the error messages: exponential below 1e-4
+  and from 1e16, otherwise positional with at least one fractional digit. **18,788 new `f64::fmt_debug` rows** in
+  `fmtf.tsv`, on impetus's grid, all exact, and `validate.py` transcribes it independently.
+- **`tests/golden/field.tsv` +36 `trace_field_line` rows** (2,265 coordinates). Each row names a field-function
+  scenario that the oracle (a Rust closure) and the harness (a Cyrius `&fn`) both build:
+  - fields: uniform (a 1e-35 field, zero and −0 fields, 1e300 components), a ±point charge (the line escaping, or
+    falling into a sink), electric and magnetic dipoles, a linear quadrupole;
+  - ends: a sink reporting Singularity, a propagated ZeroCharge, NaN and infinite fields;
+  - rejections: steps of −1, 0, −0, NaN and ∞, and non-finite starts;
+  - `usize::MAX` steps.
+
+  All exact, error texts with Rust's Debug positions included (`[1e-5, -0.0, 1e16]`). `validate.py` replays every
+  scenario with its own transcription of the 3a functions.
+- **Rust tests**: field.rs's 7 trace tests are ported with closures, as Rust writes them, and Cyrius-only checks
+  join them: the polyline growing past 4,096 points and being reused, an error emptying it, and a null point
+  leaving the record alone. **`tests/field.tcyr`: 140 assertions; field.rs's 105 tests are all ported.** Lint
+  compiles a file standalone, and a capturing closure there needs `include "lib/alloc.cyr"`, which the compiler
+  asks for by name; the test and bench files with closures now carry it.
+- **Surface parity**: field.rs is a ported module, 69 items matched, 0 problems.
+- **Benchmark**: `field/trace_field_line_10` costs 1.09 µs against Rust's 318 ns (3.4×). Rust allocates a Vec per
+  call, while the port reuses its polyline. 12 of 80 Rust benches are twinned.
+- **Result, every target** (x86_64 ELF, x86_64 PE, aarch64): **6 modules, 0 failing; 147,528 ok, 0 failed, 0
+  measured, 0 pending, 133 accepted (ADR 01)**; **all 115 digests equal**, the 113 of §12 unchanged.
+
+| Function | Digest v2, every target |
+|---|---|
+| field::trace_field_line | `382668389d61f92e` |
+| f64::fmt_debug | `708dfd83398d149f` |

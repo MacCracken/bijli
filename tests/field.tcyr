@@ -2,9 +2,10 @@
 # images, Green's functions and the stress tensor.
 #
 # Every group named test_* is rust-old/src/field.rs's test of that name, ported assertion for assertion (the ledger
-# matches them by name): parts 3a and 3b here; trace_field_line's arrive with 3c. tests/golden/field.tsv pins every
+# matches them by name): all 105, parts 3a, 3b and 3c. tests/golden/field.tsv pins every
 # function over its grid against Rust besides.
 
+include "lib/alloc.cyr"    # a capturing closure's heap environment (the compiler asks for it by name)
 include "tests/lib.cyr"
 
 # p = (x, y, z), three f64 at p.
@@ -58,7 +59,13 @@ fn direct_potential(charges: *f64, n, p: *f64): f64 {
     return sum;
 }
 
-# Runs field.rs's tests (parts 3a and 3b).
+# A closure's untyped parameter as a *f64 (a typed return binds it without a warning).
+fn as_f64p(p): *f64 { return p; }
+
+# A closure's untyped parameter as a *BjFieldVector.
+fn as_fv(p): *BjFieldVector { return p; }
+
+# Runs field.rs's tests (parts 3a, 3b and 3c).
 fn main() {
     alloc_init();
     var o: f64[3];
@@ -953,6 +960,131 @@ fn main() {
       "the message names the types");
     var tz2, vz2 = bj_multipole_moment(1, 2, &cs, 0);
     assert(text_is(bj_last_error_display(), "invalid parameter: |m| must be ≤ l, got l=1, m=2") == 1, "Rust's text");
+
+    # ── part 3c: trace_field_line, with closures as the field functions (Rust's `Fn([f64; 3]) -> Result`) ──
+    var poly = BjPolyline_new();
+    var x_hat = |pos, out| {
+        var oo: *BjFieldVector = as_fv(out);
+        oo.x = 1.0;
+        oo.y = 0.0;
+        oo.z = 0.0;
+        return 0;
+    };
+
+    test_group("test_trace_field_line_uniform");
+    var tt1, vt1 = bj_trace_field_line(&o, 0.1, 10, x_hat, &poly);
+    assert(is_ok(tt1) == 1, "ok");
+    assert_eq(poly.count(), 11, "start and 10 steps");
+    var p10: *f64 = poly.at(10);
+    var p10x: f64 = p10[0];
+    var p10y: f64 = p10[1];
+    assert(near(p10x, 1.0, e10) == 1 && near(p10y, 0.0, e10) == 1, "a straight line to (1, 0, 0)");
+
+    test_group("test_trace_field_line_from_charge");
+    var cq: f64 = 0.000001;
+    var from_charge = |pos, out| {
+        var q: f64 = cq;
+        var at: f64[3];
+        at[0] = 0.0;
+        at[1] = 0.0;
+        at[2] = 0.0;
+        var t, v = bj_electric_field_point_charge(q, &at, as_f64p(pos), as_fv(out));
+        if (is_err_result(t) == 1) { return v; }
+        return 0;
+    };
+    at3(&q, 0.1, 0.0, 0.0);
+    var tt2, vt2 = bj_trace_field_line(&q, 0.01, 5, from_charge, &poly);
+    var pf: *f64 = poly.at(0);
+    var pl: *f64 = poly.at(poly.count() - 1);
+    var fx0: f64 = pf[0];
+    var flx: f64 = pl[0];
+    assert(is_ok(tt2) == 1 && flx > fx0, "the line runs outward from a positive charge");
+
+    test_group("test_trace_field_line_invalid_step");
+    var tt3, vt3 = bj_trace_field_line(&o, -1.0, 10, x_hat, &poly);
+    assert(is_err_result(tt3) == 1, "a negative step");
+
+    test_group("test_trace_field_line_huge_max_steps");
+    var zero_field = |pos, out| {
+        var oo: *BjFieldVector = as_fv(out);
+        oo.x = 0.0;
+        oo.y = 0.0;
+        oo.z = 0.0;
+        return 0;
+    };
+    var tt4, vt4 = bj_trace_field_line(&o, 0.1, 0 - 1, zero_field, &poly);
+    assert(is_ok(tt4) == 1 && poly.count() == 1, "usize::MAX steps, a null point at once: no huge reservation");
+
+    test_group("test_trace_field_line_nan_step_rejected");
+    var tt5, vt5 = bj_trace_field_line(&o, nan, 10, x_hat, &poly);
+    var tt6, vt6 = bj_trace_field_line(&o, inf, 10, x_hat, &poly);
+    at3(&q, nan, 0.0, 0.0);
+    var tt7, vt7 = bj_trace_field_line(&q, 0.1, 10, x_hat, &poly);
+    assert(is_err_result(tt5) == 1 && is_err_result(tt6) == 1 && is_err_result(tt7) == 1,
+      "NaN or infinite step, NaN start");
+
+    test_group("test_trace_field_line_stops_at_sink");
+    var sink = |pos, out| {
+        var pp: *f64 = as_f64p(pos);
+        var x: f64 = pp[0];
+        if (x >= 0.25) { return _bj_err_singularity(); }
+        var oo: *BjFieldVector = as_fv(out);
+        oo.x = 1.0;
+        oo.y = 0.0;
+        oo.z = 0.0;
+        return 0;
+    };
+    var tt8, vt8 = bj_trace_field_line(&o, 0.1, 100, sink, &poly);
+    var p3x: *f64 = poly.at(3);
+    var x3: f64 = p3x[0];
+    assert(is_ok(tt8) == 1 && poly.count() == 4 && near(x3, 0.3, e12) == 1, "x = 0, 0.1, 0.2, 0.3, then the sink");
+    var zc = |pos, out| { return _bj_err_zero_charge(); };
+    var tt9, vt9 = bj_trace_field_line(&o, 0.1, 10, zc, &poly);
+    assert(is_err_result(tt9) == 1 && vt9 == BJ_ERR_ZERO_CHARGE, "another error propagates");
+
+    test_group("test_trace_field_line_tiny_field_still_traced");
+    var tiny_y = |pos, out| {
+        var oo: *BjFieldVector = as_fv(out);
+        oo.x = 0.0;
+        oo.y = 0.00000000000000000000000000000000001;
+        oo.z = 0.0;
+        return 0;
+    };
+    var tt10, vt10 = bj_trace_field_line(&o, 0.5, 2, tiny_y, &poly);
+    var p2t: *f64 = poly.at(2);
+    var y2: f64 = p2t[1];
+    assert(is_ok(tt10) == 1 && poly.count() == 3 && near(y2, 1.0, e15) == 1, "a 1e-35 field still has a direction");
+
+    test_group("polyline_growth_and_reuse");
+    # Cyrius-only: past the first reservation (4,096 points) the buffer grows; a shorter trace reuses it.
+    var tg1, vg1 = bj_trace_field_line(&o, 0.001, 5000, x_hat, &poly);
+    assert(is_ok(tg1) == 1 && poly.count() == 5001, "5,001 points");
+    var plast: *f64 = poly.at(5000);
+    var plx: f64 = plast[0];
+    assert(near(plx, 5.0, 0.000001) == 1, "5,000 steps of 0.001");
+    var tg2, vg2 = bj_trace_field_line(&o, 0.1, 3, x_hat, &poly);
+    assert(is_ok(tg2) == 1 && poly.count() == 4, "the buffer is reused, its length reset");
+
+    test_group("trace_errors_and_the_record");
+    # Cyrius-only: an error empties out and records Rust's text; a null point leaves an earlier error recorded.
+    var nan_x = |pos, out| {
+        var oo: *BjFieldVector = as_fv(out);
+        var zz: f64 = 0.0;
+        oo.x = zz / zz;
+        oo.y = 0.0;
+        oo.z = 0.0;
+        return 0;
+    };
+    at3(&q, 0.25, 0.0, 0.0);
+    var te1, ve1 = bj_trace_field_line(&q, 0.1, 3, nan_x, &poly);
+    assert(is_err_result(te1) == 1 && poly.count() == 0, "out is empty after an error");
+    assert(text_is(bj_last_error_display(), "invalid parameter: field function returned NaN at [0.25, 0.0, 0.0]") == 1,
+      "Rust's Debug of the position");
+    var ce = _bj_err_singularity();
+    var te2, ve2 = bj_trace_field_line(&o, 0.1, 10, zero_field, &poly);
+    assert(is_ok(te2) == 1 && bj_last_error() == BJ_ERR_SINGULARITY, "a null point records nothing");
+    BjPolyline_free(&poly);
+    assert(poly.count() == 0, "freed");
 
     return assert_summary();
 }

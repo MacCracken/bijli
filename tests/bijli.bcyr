@@ -6,7 +6,14 @@
 # (~240 ns per start/stop pair on x86_64 Linux). See lib/bench.cyr header for
 # the full overhead-vs-batching guidance.
 
+include "lib/alloc.cyr"    # a capturing closure's heap environment (the compiler asks for it by name)
 include "tests/lib.cyr"
+
+# A closure's untyped parameter as a *f64 (a typed return binds it without a warning).
+fn bench_f64p(p): *f64 { return p; }
+
+# A closure's untyped parameter as a *BjFieldVector.
+fn bench_fv(p): *BjFieldVector { return p; }
 
 # A no-op body that measures the harness's own per-iteration overhead.
 fn bench_noop(): i64 { return 0; }
@@ -245,6 +252,31 @@ fn main(): i64 {
     }
     bench_batch_stop(b11, 1000000);
     bench_report(b11);
+    var tq: f64 = 0.000001;
+    var tfn = |pos, out| {
+        var q: f64 = tq;
+        var at: f64[3];
+        at[0] = 0.0;
+        at[1] = 0.0;
+        at[2] = 0.0;
+        var t, v = bj_electric_field_point_charge(q, &at, bench_f64p(pos), bench_fv(out));
+        if (is_err_result(t) == 1) { return v; }
+        return 0;
+    };
+    var tstart: f64[3];
+    tstart[0] = 0.1;
+    tstart[1] = 0.0;
+    tstart[2] = 0.0;
+    var tpoly = BjPolyline_new();
+    var b12 = bench_new("field/trace_field_line_10");
+    bench_batch_start(b12);
+    for (var k = 0; k < 100000; k = k + 1) {
+        var t12, v12 = bj_trace_field_line(&tstart, 0.01, 10, tfn, &tpoly);
+        keep = keep + tpoly.count();
+    }
+    bench_batch_stop(b12, 100000);
+    bench_report(b12);
+    BjPolyline_free(&tpoly);
     if (fsum == 7.0) { println("."); }
 
     var ar: f64 = acc.re;

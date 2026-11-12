@@ -33,6 +33,7 @@ found them.
 | 6 | results bit-identical only on the same platform | bit-identical across x86_64 ELF, x86_64 PE and aarch64, with correctly rounded transcendentals (ADR 0001). *Clarified 2026-11-11 (M1 part 2c)*: a NaN is the same NaN in the same places, its sign and payload the hardware's (IEEE 754 leaves them open: x86 generates 0xFFF8…, ARM 0x7FF8…; Rust guarantees no NaN bits either). Canonicalizing would cost every operation for no observable value: Display prints `NaN` and JSON `null` either way | every row exact on every target (any NaN matching any NaN), and the parity digests equal on all three, with each NaN folded as one (port-parity.md §9) |
 | 7 | no transport error: the `ai` client reports network failures as `InvalidParameter` | `BJ_ERR_TRANSPORT`, appended | the `ai` client's oracle `InvalidParameter` rows for transport failures ↔ `BJ_ERR_TRANSPORT` |
 | 8 | `logging::init` installs a process-wide `tracing` subscriber that filters every crate's events, set by `BIJLI_LOG` in `EnvFilter`'s grammar (M1 part 2a) | `bj_log_init` sets bijli's own gate and only raises sakshi's process-wide level, never lowers it: other libraries' logging is not bijli's to silence. `BIJLI_LOG` takes a level or `bijli=<level>` directives; other targets' directives are ignored, and a value with none that applies falls back to the default, as `EnvFilter::try_from_env` does on an invalid one. With no init, nothing is printed, as Rust with no subscriber | none: logging is outside the corpus. `tests/log.tcyr` pins the gate and the grammar |
+| 9 | a failed allocation aborts the process: `trace_field_line`'s `Vec` growth, and the FDTD grids' `try_filled` (M1 part 3c) | `BJ_ERR_ALLOCATION`, appended (Display "allocation failed: {reason}"): `bj_trace_field_line` returns it when its `BjPolyline` can't grow, leaving the polyline empty; the FDTD grids follow in M5–M6. Library code never aborts (CLAUDE.md) | none: the corpus can't make an allocation fail. `tests/field.tcyr` covers the growth path; the error path has no reachable test (freelist refuses only past its 2 GiB request limit or an exhausted heap) |
 
 ## Consequences
 
@@ -50,8 +51,8 @@ found them.
   - The harness carries a mapping table, and every mapped row is reported by number.
 - **Neutral**
   - Rows 1–3 come from the roadmap's "2.0 cleanup (breaking)" item, rows 5 and 7 from its
-    backlog, row 4 from the Cyrius `Result` shape (plan §2), and row 8 from sakshi's process-wide level
-    (M1 part 2a).
+    backlog, row 4 from the Cyrius `Result` shape (plan §2), row 8 from sakshi's process-wide level
+    (M1 part 2a), and row 9 from the rule that library code never aborts (M1 part 3c).
 
 ## Alternatives considered
 

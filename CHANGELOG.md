@@ -103,6 +103,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
   conjugate of Rust's (ADR 0002 row 5). The harness compares it through that mapping and reports the count.
   `field.tsv` grows to 22,325 rows, all exact on all three targets. 102 of field.rs's 105 tests are ported, and 11
   of the 80 Rust benches are twinned.
+- **Cyrius port, M1 part 3c — field complete**: `bj_trace_field_line`, Rust's forward-Euler field-line tracer. Its field
+  function is a closure or `&fn` called through `callptr` that returns a status. Its points go into `BjPolyline`, a
+  caller-owned buffer that grows and is reused. `fmtf` gains Rust's f64 Debug form (18,788 golden rows), for the
+  positions in the tracer's error messages. `BJ_ERR_ALLOCATION` is appended (ADR 0002 row 9), returned where Rust
+  would abort on a failed allocation. All of field.rs's 105 tests are ported, and 12 of the 80 Rust benches are twinned.
 - **Parity harness**: digest v2. The v1 fold could not see sign-bit differences that came in pairs, and a generated
   NaN differs in sign between x86 and ARM. v2 folds each NaN as one quiet NaN and mixes every bit through. ADR 0002
   row 6 now states that a NaN's bits are the hardware's.

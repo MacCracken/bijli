@@ -497,6 +497,27 @@ def rust_display(x: float) -> str:
     return sign + positional(ds, k, False)
 
 
+def rust_debug(x: float) -> str:
+    """`format!("{x:?}")` for an f64 (core's float_to_general_debug)."""
+    if math.isnan(x):
+        return "NaN"
+    sign = "-" if math.copysign(1.0, x) < 0 else ""
+    if math.isinf(x):
+        return sign + "inf"
+    if x == 0:
+        return sign + "0.0"
+    a = abs(x)
+    ds, k = shortest(a, True)
+    if a < 1e-4 or a >= 1e16:
+        return sign + ds[0] + ("." + ds[1:] if len(ds) > 1 else "") + "e" + str(k - 1)
+    return sign + positional(ds, k, True)
+
+
+def debug3(p) -> str:
+    """`format!("{p:?}")` for a [f64; 3]."""
+    return "[" + ", ".join(rust_debug(c) for c in p) + "]"
+
+
 def serde_json_f64(x: float) -> str:
     """`serde_json::to_string(&x)` (1.0.154, zmij) for an f64."""
     if math.isnan(x) or math.isinf(x):
@@ -525,6 +546,8 @@ def validate_fmtf(path: Path) -> list:
                 ties += 1
         elif fn == "serde_json::f64":
             want = serde_json_f64(x)
+        elif fn == "f64::fmt_debug":
+            want = rust_debug(x)
         else:
             errs.append(f"fmtf: unknown function {fn}")
             continue
@@ -766,13 +789,79 @@ def validate_field(root: Path, path: Path) -> list:
         mag = math.sqrt(w[0] * w[0] + w[1] * w[1] + w[2] * w[2])
         return ok3((w[0] / mag, w[1] / mag, w[2] / mag))
 
+    ZERO_CHARGE = [("E", "ZeroCharge"), ("s", "charge magnitude is zero — cannot compute field direction")]
+
+    def superpose(cs, at):
+        tot = (0.0, 0.0, 0.0)
+        for q, c in cs:
+            r = point_e(q, c, at)
+            if r is SINGULAR:
+                return SINGULAR
+            tot = tuple(tot[i] + r[1][i] for i in range(3))
+        return ok3(tot)
+
+    def field_fn(sid, p, pos):
+        """m_field.rs's field_fn scenarios: the field's tokens (ok3) or an error's."""
+        if sid == 0:
+            return ok3((p[0], p[1], p[2]))
+        if sid == 1:
+            r = point_e(p[0], p[1:4], pos)
+            return r if r is SINGULAR else r[0]
+        if sid == 2:
+            return dipole(tuple(p[0:3]), pos, False)
+        if sid == 3:
+            return superpose([(p[0], (0.0, 0.0, p[1])), (p[0], (0.0, 0.0, -p[1])), (-2.0 * p[0], (0.0, 0.0, 0.0))],
+                             pos)
+        if sid == 4:
+            return SINGULAR if pos[0] >= p[0] else ok3((1.0, 0.0, 0.0))
+        if sid == 5:
+            return ZERO_CHARGE
+        if sid == 6:
+            return ok3((math.nan, 0.0, 0.0)) if pos[0] >= p[0] else ok3((1.0, 0.0, 0.0))
+        if sid == 7:
+            return ok3((math.inf, 0.0, 0.0)) if pos[0] >= p[0] else ok3((1.0, 0.0, 0.0))
+        return dipole(tuple(p[0:3]), pos, True)
+
+    def trace(v, ins):
+        """field.rs's trace_field_line over a scenario: the points' tokens, or the error's."""
+        sid, start, step, maxw = v[0], tuple(v[1:4]), v[4], v[5] & 0xFFFFFFFFFFFFFFFF
+        params = v[7:7 + int(ins[6][1])]
+        if not (step > 0.0 and math.isfinite(step)):
+            return [("E", "InvalidParameter"), ("s", "invalid parameter: step size must be positive and finite, got "
+                                                     + rust_display(step))]
+        if not all(math.isfinite(c) for c in start):
+            return [("E", "InvalidParameter"), ("s", "invalid parameter: start position must be finite, got "
+                                                     + debug3(start))]
+        pos, pts = start, [start]
+        for _ in range(maxw):
+            r = field_fn(sid, params, pos)
+            if r[0][0] == "E":
+                if r is SINGULAR:
+                    break
+                return r
+            fv = tuple(b for _k, b in r)
+            if any(math.isnan(c) for c in fv):
+                return [("E", "InvalidParameter"), ("s", "invalid parameter: field function returned NaN at "
+                                                         + debug3(pos))]
+            if any(math.isinf(c) for c in fv):
+                break
+            nd = normalized(fv)
+            if nd[0][0] == "E":
+                break
+            d = tuple(b for _k, b in nd)
+            pos = (pos[0] + step * d[0], pos[1] + step * d[1], pos[2] + step * d[2])
+            pts.append(pos)
+        return [("v", str(3 * len(pts)))] + [("f", c) for pt in pts for c in pt]
+
     errs = []
     for n, (fn, _cls, ins, outs) in enumerate(rows, 1):
         v = [tok_text(b) if k == "s" else b for k, b in ins]
         V = tuple(v[0:3])
         W = tuple(v[3:6])
         w3b = field_3b(fn, v, ins, GLIBC_P, K, EPS0, MU0)
-        if w3b is not None:
+        if fn == "field::trace_field_line":
+            want = trace(v, ins)
+        elif w3b is not None:
             want = w3b
         elif fn == "FieldVector::zero" or fn == "FieldVector::default":
             want = ok3((0.0, 0.0, 0.0))

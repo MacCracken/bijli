@@ -1,6 +1,6 @@
 //! `field.tsv` — rust-old/src/field.rs. M1 part 3a: `FieldVector`, the point-charge fields and potential, the
 //! superposition, the energy densities and the dipoles. Part 3b: the Gauss's-law fields, the multipoles, the images,
-//! the Green's functions and the stress tensor. (3c adds `trace_field_line`.)
+//! the Green's functions and the stress tensor. Part 3c: `trace_field_line`.
 //!
 //! Rows are class A where a function is + − × ÷, sqrt, copysign and clamp in a fixed order, which the port repeats;
 //! the multipole moments (atan2, cos, sin) and the scalar Green's function (cos, sin) are class C, against the
@@ -16,6 +16,7 @@
 
 use crate::grids::{Rng, pow2, specials};
 use crate::tsv::{Class, Module, Tok, err, f, s};
+use bijli::BijliError;
 use bijli::field::{
     FieldVector, electric_dipole_field, electric_dipole_potential, electric_energy_density,
     electric_field_charged_sphere, electric_field_disk_axis, electric_field_infinite_line,
@@ -25,7 +26,7 @@ use bijli::field::{
     greens_function_scalar, greens_function_static, image_charge_dielectric, image_charge_plane,
     image_charge_sphere, magnetic_dipole_field, magnetic_energy_density,
     magnetic_field_moving_charge, maxwell_stress_tensor, multipole_moment, poynting_flux_surface,
-    spherical_multipole_moment, stress_tensor_force,
+    spherical_multipole_moment, stress_tensor_force, trace_field_line,
 };
 use std::hint::black_box;
 
@@ -410,6 +411,7 @@ pub fn emit() -> Module {
         );
     }
     emit_3b(&mut m, &mut rng, &vs);
+    emit_3c(&mut m);
     m
 }
 
@@ -637,5 +639,129 @@ fn emit_3b(m: &mut Module, rng: &mut Rng, vs: &[FieldVector]) {
             &ins,
             &[f(poynting_flux_surface(black_box(&samples)))],
         );
+    }
+}
+
+/// trace_field_line's field functions, by number, from their parameters; the harness builds the same ones.
+/// 0 uniform (fx, fy, fz); 1 a point charge q at (x, y, z); 2 an electric dipole p at the origin; 3 a linear
+/// quadrupole (+q at ±d ẑ, −2q at the origin); 4 a sink: Singularity once x ≥ a, else x̂; 5 always ZeroCharge;
+/// 6 a NaN field once x ≥ a, else x̂; 7 an infinite field once x ≥ a, else x̂; 8 a magnetic dipole m at the origin.
+/// A boxed field function, as `trace_field_line` takes one.
+type FieldFn = Box<dyn Fn([f64; 3]) -> bijli::error::Result<FieldVector>>;
+
+/// One trace row's inputs: the scenario, the start, the step, max_steps and the scenario's parameters.
+type TraceCase = (i64, [f64; 3], f64, usize, Vec<f64>);
+
+fn field_fn(id: i64, p: Vec<f64>) -> FieldFn {
+    let ex = FieldVector::new(1.0, 0.0, 0.0);
+    match id {
+        0 => Box::new(move |_| Ok(FieldVector::new(p[0], p[1], p[2]))),
+        1 => Box::new(move |pos| electric_field_point_charge(p[0], [p[1], p[2], p[3]], pos)),
+        2 => Box::new(move |pos| electric_dipole_field(&FieldVector::new(p[0], p[1], p[2]), pos)),
+        3 => Box::new(move |pos| {
+            let cs = [
+                (p[0], [0.0, 0.0, p[1]]),
+                (p[0], [0.0, 0.0, -p[1]]),
+                (-2.0 * p[0], [0.0; 3]),
+            ];
+            electric_field_superposition(&cs, pos)
+        }),
+        4 => Box::new(move |pos| {
+            if pos[0] >= p[0] {
+                Err(BijliError::Singularity)
+            } else {
+                Ok(ex)
+            }
+        }),
+        5 => Box::new(|_| Err(BijliError::ZeroCharge)),
+        6 => Box::new(move |pos| {
+            if pos[0] >= p[0] {
+                Ok(FieldVector::new(f64::NAN, 0.0, 0.0))
+            } else {
+                Ok(ex)
+            }
+        }),
+        7 => Box::new(move |pos| {
+            if pos[0] >= p[0] {
+                Ok(FieldVector::new(f64::INFINITY, 0.0, 0.0))
+            } else {
+                Ok(ex)
+            }
+        }),
+        _ => Box::new(move |pos| magnetic_dipole_field(&FieldVector::new(p[0], p[1], p[2]), pos)),
+    }
+}
+
+/// Part 3c: `trace_field_line` over the scenarios, their singular and escaping ends, and the rejected inputs. A row's
+/// inputs are the scenario number, the start, the step, max_steps as its 64-bit word (usize::MAX is `i:-1`) and the
+/// scenario's parameters (`v:<k>`); its outputs the points as `v:<3n>` and their coordinates, or the error.
+fn emit_3c(m: &mut Module) {
+    let cases: Vec<TraceCase> = vec![
+        (0, [0.0; 3], 0.1, 10, vec![1.0, 0.0, 0.0]),
+        (0, [0.5, -1.0, 2.0], 0.5, 7, vec![0.0, 0.0, -2.0]),
+        (0, [0.0; 3], 0.1, 50, vec![3.0, 4.0, 12.0]),
+        (0, [0.0; 3], 0.5, 2, vec![0.0, 1e-35, 0.0]),
+        (0, [0.0; 3], 0.1, 10, vec![0.0, 0.0, 0.0]),
+        (0, [0.0; 3], 0.1, 10, vec![-0.0, 0.0, -0.0]),
+        (0, [1.0, 1.0, 1.0], 0.25, 9, vec![1e300, 1e300, 0.0]),
+        (0, [0.0; 3], 0.1, 0, vec![1.0, 0.0, 0.0]),
+        (0, [0.0; 3], 0.1, 1, vec![1.0, 0.0, 0.0]),
+        (0, [0.0; 3], 0.1, usize::MAX, vec![0.0, 0.0, 0.0]),
+        (1, [0.1, 0.0, 0.0], 0.01, 5, vec![1e-6, 0.0, 0.0, 0.0]),
+        (1, [0.1, 0.0, 0.0], 0.01, 10, vec![1e-6, 0.0, 0.0, 0.0]),
+        (1, [0.3, 0.2, -0.1], 0.05, 60, vec![1e-6, 0.0, 0.0, 0.0]),
+        (1, [0.3, 0.2, -0.1], 0.05, 60, vec![-1e-6, 0.0, 0.0, 0.0]),
+        (1, [0.1, 0.0, 0.0], 0.03, 40, vec![-1e-6, 0.0, 0.0, 0.0]),
+        (1, [2.0, 2.0, 2.0], 0.2, 30, vec![-3e-9, 1.0, 1.0, 1.0]),
+        (2, [0.5, 0.0, 0.5], 0.02, 100, vec![0.0, 0.0, 1e-30]),
+        (2, [0.0, 0.3, -0.4], 0.05, 80, vec![1e-30, -2e-30, 0.5e-30]),
+        (8, [0.5, 0.0, 0.5], 0.02, 100, vec![0.0, 0.0, 1.0]),
+        (3, [0.01, 0.0, 0.01], 0.001, 100, vec![1e-9, 1e-3]),
+        (3, [0.0, 0.02, 0.0], 0.002, 60, vec![-1e-9, 1e-3]),
+        (4, [0.0; 3], 0.1, 100, vec![0.25]),
+        (4, [0.0; 3], 0.1, 100, vec![-1.0]),
+        (5, [0.0; 3], 0.1, 10, vec![]),
+        (5, [0.0; 3], 0.1, 0, vec![]),
+        (6, [0.0; 3], 0.1, 100, vec![0.25]),
+        (6, [1e-5, -0.0, 1e16], 0.1, 3, vec![-1.0]),
+        (7, [0.0; 3], 0.1, 100, vec![0.25]),
+        (0, [0.0; 3], -1.0, 10, vec![1.0, 0.0, 0.0]),
+        (0, [0.0; 3], 0.0, 10, vec![1.0, 0.0, 0.0]),
+        (0, [0.0; 3], -0.0, 10, vec![1.0, 0.0, 0.0]),
+        (0, [0.0; 3], f64::NAN, 10, vec![1.0, 0.0, 0.0]),
+        (0, [0.0; 3], f64::INFINITY, 10, vec![1.0, 0.0, 0.0]),
+        (0, [f64::NAN, 0.0, 0.0], 0.1, 10, vec![1.0, 0.0, 0.0]),
+        (
+            0,
+            [f64::INFINITY, f64::NEG_INFINITY, 1e-5],
+            0.1,
+            10,
+            vec![1.0, 0.0, 0.0],
+        ),
+        (0, [0.25, 1e20, -3.5e-7], 0.1, 3, vec![f64::NAN, 0.0, 0.0]),
+    ];
+    for (id, start, step, max, params) in cases {
+        let word = i64::from_ne_bytes(max.to_ne_bytes());
+        let mut ins = vec![
+            crate::tsv::i(id),
+            f(start[0]),
+            f(start[1]),
+            f(start[2]),
+            f(step),
+            crate::tsv::i(word),
+        ];
+        ins.push(Tok::V(params.len()));
+        ins.extend(params.iter().map(|&x| f(x)));
+        let outs = match trace_field_line(black_box(start), step, max, field_fn(id, params)) {
+            Ok(points) => {
+                let mut v = vec![Tok::V(3 * points.len())];
+                for pt in &points {
+                    v.extend(p3(*pt));
+                }
+                v
+            }
+            Err(e) => vec![err(&e), s(e.to_string())],
+        };
+        m.row("field::trace_field_line", Class::A, &ins, &outs);
     }
 }

@@ -14,6 +14,8 @@
 # One f64 needs at most 327 bytes in either form (the smallest subnormal is "0." + 323 zeros + "5" in Display).
 #
 # Forms:
+# - `_bj_fmt_f64_debug` (bijli's, M1 part 3c): Rust's `{:?}` — exponential below 1e-4 and from 1e16, else positional
+#   with a fractional digit (`1.0`, `1e-5`, `1e16`), for the `{pos:?}` in trace_field_line's errors.
 # - `_bj_fmt_f64_display`: Rust's `{}` — always positional, no ".0" (`100`, `0.1`, `-0`), `NaN`, `inf`, `-inf`.
 # - `_bj_fmt_f64_json`: serde_json — positional while the decimal exponent is in −5..=15, with ".0" on an integer
 #   (`100.0`, `0.00001`); otherwise `d.ddde±x` (`1e+16`, `1.5e-7`); `null` for NaN and ±∞.
@@ -467,6 +469,58 @@ fn _bj_fmt_f64_display(t, x: f64) {
     var digits[24];
     var n, k = _bj_shortest(mag, &digits, 0);
     _bj_tx_positional(t, &digits, n, k, 0);
+    return 0;
+}
+
+# Appends x as Rust's `Debug` (`{:?}`) writes an f64 (core's `float_to_general_debug`): the shortest digits as Display,
+# but exponential (`1e-5`, `1.5e16`, no `+`) when |x| is non-zero and below 1e-4, or at least 1e16, and otherwise
+# positional with at least one fractional digit (`1.0`, `0.1`); `NaN`, `inf`, `-inf`, `0.0`, `-0.0`. Mirrors
+# `<f64 as Debug>::fmt`.
+fn _bj_fmt_f64_debug(t, x: f64) {
+    var bits = _bj_bits(x);
+    if (x != x) {
+        _bj_tx_cstr(t, "NaN");
+        return 0;
+    }
+    if (bits < 0) { _bj_tx_putc(t, 45); }
+    var mag = bits & 0x7FFFFFFFFFFFFFFF;
+    if (mag == 0x7FF0000000000000) {
+        _bj_tx_cstr(t, "inf");
+        return 0;
+    }
+    if (mag == 0) {
+        _bj_tx_cstr(t, "0.0");
+        return 0;
+    }
+    var digits[24];
+    var n, k = _bj_shortest(mag, &digits, 0);
+    var ax: f64 = _bj_from_bits(mag);
+    var lo: f64 = 0.0001;
+    var hi: f64 = 10000000000000000.0;
+    if (ax < lo || ax >= hi) {
+        _bj_tx_putc(t, load8(&digits));
+        if (n > 1) {
+            _bj_tx_putc(t, 46);
+            _bj_tx_digits(t, &digits, 1, n);
+        }
+        _bj_tx_putc(t, 101);
+        _bj_tx_i64(t, k - 1);
+        return 0;
+    }
+    _bj_tx_positional(t, &digits, n, k, 1);
+    return 0;
+}
+
+# Appends a Rust `[f64; 3]` as its Debug writes it: "[a, b, c]", each element in f64 Debug form. Mirrors
+# `<[f64; 3] as Debug>::fmt`.
+fn _bj_fmt_f64x3_debug(t, p: *f64) {
+    _bj_tx_putc(t, 91);
+    _bj_fmt_f64_debug(t, p[0]);
+    _bj_tx_cstr(t, ", ");
+    _bj_fmt_f64_debug(t, p[1]);
+    _bj_tx_cstr(t, ", ");
+    _bj_fmt_f64_debug(t, p[2]);
+    _bj_tx_putc(t, 93);
     return 0;
 }
 

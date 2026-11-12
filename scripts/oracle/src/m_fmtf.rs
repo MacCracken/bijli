@@ -1,5 +1,6 @@
 //! `fmtf.tsv` — f64 to text, as Rust's `Display` and serde_json 1.0.154 write it (impetus ADR 0010; copied from
-//! impetus's oracle unchanged, so the two corpora pin the same printer).
+//! impetus's oracle, so the two corpora pin the same printer), and bijli's addition, Rust's `Debug` (`{x:?}`, which
+//! `trace_field_line`'s errors print positions in; M1 part 3c).
 //!
 //! Both print the shortest digits that read back to the same double, the closest to its exact
 //! value; they differ in layout (`src/fmtf.cyr`). The grid covers every binade and its neighbours,
@@ -106,6 +107,7 @@ pub fn emit() -> Module {
     xs.extend(negs);
     for &x in &xs {
         m.row("f64::fmt_display", Class::A, &[f(x)], &[s(format!("{x}"))]);
+        m.row("f64::fmt_debug", Class::A, &[f(x)], &[s(format!("{x:?}"))]);
         let json = serde_json::to_string(&x).unwrap_or_default();
         m.row("serde_json::f64", Class::A, &[f(x)], &[s(json)]);
     }

@@ -147,6 +147,8 @@ field::BjFieldVector_new/3
 field::BjFieldVector_scale_left/2
 field::BjFieldVector_sub/2
 field::BjFieldVector_zero/0
+field::BjPolyline_free/1
+field::BjPolyline_new/0
 field::bj_electric_dipole_field/3
 field::bj_electric_dipole_potential/2
 field::bj_electric_energy_density/1
@@ -175,6 +177,7 @@ field::bj_multipole_moment/4
 field::bj_poynting_flux_surface/2
 field::bj_spherical_multipole_moment/5
 field::bj_stress_tensor_force/2
+field::bj_trace_field_line/5
 fmt::efmt_int/1
 fmt::fmt_bool/1
 fmt::fmt_byte/1
