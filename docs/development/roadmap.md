@@ -37,7 +37,7 @@ Plan of record: [bijli-port-plan.md](bijli-port-plan.md). Decision: [ADR 0001](.
   - ✅ **1.2.0** tagged at `c95fd30` (2026-11-11): the last Rust release and the frozen oracle, 3D CPML included, with the P(-1) gate green;
   - take a quiet bench baseline;
   - land the port-plan commit.
-- [ ] **M0**: run `cyrius port`, which moves the Rust crate to `rust-old/`. Repair the scaffold. Build the oracle generator, the parity harness and the probes.
+- [ ] **M0**: run `cyrius port`, which moves the Rust crate to `rust-old/`. Repair the scaffold. Build the oracle generator, the parity harness and the probes. *Part 1 done 2026-11-11: the scaffold, the repairs and `cyrius.cyml`, with the gate green.*
 - [ ] **M1–M8**:
   - foundation;
   - media, waves, circuits and relativity;

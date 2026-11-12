@@ -41,3 +41,8 @@ proptest-regressions/
 
 # Supply chain cache
 supply-chain/.cache/
+
+# Cyrius port
+/rust-old/target/
+/rust-old/**/__pycache__/
+/build/

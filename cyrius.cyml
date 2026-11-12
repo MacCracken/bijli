@@ -1,0 +1,26 @@
+[package]
+name = "bijli"
+version = "${file:VERSION}"
+description = "Electromagnetism simulation — fields, Maxwell's equations, charge dynamics, EM waves"
+license = "GPL-3.0-only"
+language = "cyrius"
+repository = "https://github.com/MacCracken/bijli"
+cyrius = "6.7.18"
+
+[build]
+entry = "src/main.cyr"
+output = "build/bijli"
+
+# Stdlib leaves for M0 (the harness and the math check). Port plan §6 step 3 lists the full
+# set; sakshi, bayan and thread_local join with log.cyr / error.cyr in M1, and the [lib.ai]
+# profile adds sandhi in M7. No [deps.hisab]: bijli has no production hisab dependency (ADR 0001).
+[deps]
+stdlib = ["syscalls", "string", "alloc", "str", "fmt", "io", "vec", "args", "math", "ganita",
+          "tagged", "result", "fnptr", "freelist", "mmap", "overflow"]
+
+[test]
+stdlib = ["assert", "bench"]
+timeout = 300
+
+# [lib] (the default bundle) and [lib.ai] are declared in M1 with the first module: an empty
+# `modules` list is invalid. [test] modules then mirrors [lib] (port plan §6 step 7).

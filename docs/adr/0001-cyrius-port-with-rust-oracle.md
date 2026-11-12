@@ -1,8 +1,8 @@
 # 0001 — Port to Cyrius, with Rust 1.2.0 frozen as the parity oracle
 
-**Status**: Proposed. It is accepted at M0 step 2 of the [port plan](../development/bijli-port-plan.md),
-now that plan §0.3's decisions are answered (2026-11-11): D1 the `1.2.0` tag at `c95fd30`, which includes the 3D CPML; D3 e^{+jωt} with IEEE
-handedness; D5 derive writers with hand-written readers.
+**Status**: Accepted (2026-11-11, at M0 step 2 of the [port plan](../development/bijli-port-plan.md)).
+Plan §0.3's decisions: D1 the `1.2.0` tag at `c95fd30`, which includes the 3D CPML; D3 e^{+jωt}
+with IEEE handedness; D5 derive writers with hand-written readers.
 **Date**: 2026-11-11
 
 ## Context

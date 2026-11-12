@@ -273,8 +273,8 @@ compares it, so no function leaves parity entirely.
 | 3 | `TfsfSource::new` and `Cpml::new` sanitize with a warning; `Fdtd2d::enable_cpml` warns and ignores | fallible only: the constructors return `Err`, and `enable_cpml` is the `try_` form | oracle sanitize-or-ignore rows ↔ `Err`, mapped by name |
 | 4 | `BijliError` variants carry data and `String`s | `BJ_ERR_*` codes (append-only) in `Result`; the payload in the per-thread last-error record (§2) | class A on the code **and** on the recorded payload |
 | 5 | two time conventions (polarization, beam, field and the FDTD media in e^{−iωt}; scattering, rf and the FDTD phasors in e^{+jωt}) | **e^{+jωt} everywhere**, IEEE handedness (D3, §4.4) | amplitudes ↔ `conj(oracle)`, phases ↔ `−oracle`, observables unchanged: all exact |
-| 7 | no transport error: the `ai` client maps network failures to `InvalidParameter` (roadmap backlog) | `BJ_ERR_TRANSPORT`, appended | oracle `InvalidParameter` rows from the `ai` client ↔ `BJ_ERR_TRANSPORT` |
 | 6 | results bit-identical only on the same platform | **bit-identical across targets** | measured on three targets, as impetus |
+| 7 | no transport error: the `ai` client maps network failures to `InvalidParameter` (roadmap backlog) | `BJ_ERR_TRANSPORT`, appended | oracle `InvalidParameter` rows from the `ai` client ↔ `BJ_ERR_TRANSPORT` |
 
 ### 4.4 One time convention (D3)
 
@@ -860,8 +860,8 @@ Each one gets an issue in the owning repo, with the probe or benchmark that show
 
 | Milestone | Status | Golden rows | Reference tests | Benches | Notes |
 |---|---|---|---|---|---|
-| P Prep | ◐ | | | 80 (Rust, 2026-11-12T03:15, under load) | D1–D5 answered; 1.2.0 tagged and green; P3, P4, P5 done (2026-11-11); P6 is done at the scaffold; the commit remains |
-| M0 Initialize | ☐ | | | | |
+| P Prep | ✅ | | | 80 (Rust, 2026-11-12T03:15, under load) | D1–D5 answered; 1.2.0 tagged and green; P3, P4, P5 done (2026-11-11); P6 is done at the scaffold; the commit remains |
+| M0 Initialize | ◐ | | | | Part 1 (steps 1–3) done 2026-11-11: scaffold, repairs, `cyrius.cyml`; gate green. Part 2 (steps 4–7) next |
 | M1 Foundation | ☐ | | | | |
 | M2 Media, waves, circuits, relativity | ☐ | | | | |
 | M3 Optics | ☐ | | | | |

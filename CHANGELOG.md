@@ -6,6 +6,23 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
 
+### Changed
+
+- **Cyrius port (2.0.0-dev), M0 Part 1**: bijli is now a Cyrius project. `cyrius port` (6.7.18)
+  moved the Rust crate into `rust-old/` as the frozen 1.2.0 oracle, byte for byte, and scaffolded
+  `cyrius.cyml`, `src/main.cyr` and the test, bench and fuzz stubs. The scaffold's overwrites are
+  repaired:
+  - CLAUDE.md is the Cyrius version (port plan P6), and the roadmap is restored;
+  - `docs/development/state.md` is new;
+  - CI runs `build`, `test`, `test --bounds`, `deps --locked`, `fuzz` and `audit`, and the Rust
+    workflows move to `rust-old/.github/workflows/`;
+  - `cyrius.cyml` reads `${file:VERSION}` and has `bench` in `[test] stdlib`;
+  - the Rust-only scripts and the Rust architecture overview move to `rust-old/`.
+
+  ADR 0001 (the port) is accepted. ADR 0002 (the 2.0 API changes: removed deprecations,
+  fixed-size grids, fallible constructors, error codes with a last-error record, one time
+  convention e^{+jωt} with IEEE handedness, cross-target bit identity, a transport error) is new.
+
 ## [1.2.0] — 2026-11-11
 
 Toolchain/dependency refresh plus a full physics and robustness audit of every module.
