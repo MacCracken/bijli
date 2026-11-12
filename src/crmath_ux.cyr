@@ -1,0 +1,310 @@
+# crmath_ux.cyr — e^x, cosh, sinh, ln(s·2^E), (s·2^E)^y, and sin and cos past DBL_MAX, each with an unbounded
+# exponent (bijli, M1 part 5c-2), for BjComplex's transcendental range edges (ADR 0002 row 16).
+#
+# At a range edge hisab's chain runs with an unbounded exponent (the user's decision of 2026-11-12, ADR 0002 rows 14
+# and 16): every operation rounded to 53 bits, the last one once into binary64. The transcendental operations of that
+# chain that can leave binary64's normal range are e^re in complex exp, cosh and sinh of im in complex sin and cos,
+# ln and pow of an |z| (or a power) past DBL_MAX or below 2^-1022, and sin and cos of powf's angle n·arg z past
+# DBL_MAX. Each returns its 53-bit value as kimiya's _bj_k_ux_* pair (s in [1, 2), an i64 exponent), or ln, sin and
+# cos their final binary64 value (always normal). Every one runs on src/crmath.cyr's 364-bit fixed point (impetus's
+# slow paths, error below 2^-290 relative): e^x by _bj_cr_exp_fx_parts (x = k·ln 2 + r, e^r by its series), ln by
+# _bj_cr_log_fx plus E·ln 2, pow as pow's own slow path (an exactness test, then |y|·|ln x| and e^±), sin and cos by
+# Payne–Hanek against the same 2/π bits. They are slow (tens of microseconds), and only the edges reach them.
+#
+# The rounding. _bj_cr_round_ux takes the fixed point's 53 leading bits, the round bit and the sticky bit, ties to
+# even, with no exponent range. A value within 2^-290 of a rounding boundary would need an argument far harder than
+# any known: the hardest double arguments of exp, log, sin and cos need about 2^-120 (Lefèvre–Muller), and the
+# arguments here differ only in their exponent (s·2^E, or a 53-bit angle), for which no search is published; the
+# 170-bit margin is what crmath's pow already relies on. Exact midpoints: e^x, ln x, sin and cos of a nonzero
+# rational are transcendental (Lindemann–Weierstrass), and a dyadic power is caught exactly by _bj_ux_pow_exact.
+# scripts/oracle/cr_verify.py's ux_* families check every function here against MPFR at 53 bits with its widest
+# exponent range, on x86_64 and aarch64.
+#
+# Far past the range the value is (1, ±_BJ_UX_HUGE): a stand-in whose products with every factor the chain can give it
+# overflow, or round to zero, exactly as the true value's do. For e^x, cosh and sinh that is beyond |x| = 1500: their
+# factors are doubles (cos and sin of a part), at least 2^-1074 in magnitude, and e^1500·2^-1074 > 2^1090. For a power
+# it is beyond |y·ln x| = 10000: its factor can be the sine of an angle n·arg z far below 2^-1074, but never below
+# 2^-2098·|n| (arg z ≥ 2^-1074/2^1024), and a power past e^1500 needs |n| ≥ 2 (|ln |z|| < 745), while e^10000 is
+# 2^14426. Every real exponent here stays below 2^15, far from the stand-in's 2^20.
+
+# The exponent of the stand-in for a value beyond every product's range (2^20).
+const _BJ_UX_HUGE = 1048576;
+
+# The fixed-point a·2^k (a ≥ 0, its integer part below 2^28) rounded to 53 bits, ties to even, with an unbounded
+# exponent: (s, e), s in [1, 2) (negated when neg is 1), so that the value is s·2^e; (±0, 0) for a = 0. _bj_cr_round
+# without its subnormal and overflow ends.
+#must_use
+fn _bj_cr_round_ux(a, k, neg): (f64, i64) {
+    var sign = 0;
+    if (neg == 1) { sign = 0 - 9223372036854775807 - 1; }
+    var j0 = 0;
+    while (j0 < _BJ_CR_L && load64(a + j0 * 8) == 0) { j0 = j0 + 1; }
+    if (j0 == _BJ_CR_L) {
+        var z: f64 = _bj_cr_from_word(sign);
+        return (z, 0);
+    }
+    var v = load64(a + j0 * 8);
+    var b = 0;
+    while ((v >> (b + 1)) != 0) { b = b + 1; }
+    var top = b - 28 * j0;
+    var mant = 0;
+    for (var i = 0; i < 53; i = i + 1) { mant = (mant << 1) | _bj_cr_bit(a, top - i); }
+    var rb = _bj_cr_bit(a, top - 53);
+    var st = _bj_cr_sticky(a, top - 53);
+    if (rb == 1 && (st == 1 || (mant & 1) == 1)) { mant = mant + 1; }
+    var ex = top + k;
+    if (mant == 9007199254740992) {
+        mant = 4503599627370496;
+        ex = ex + 1;
+    }
+    var s: f64 = _bj_cr_from_word(sign | (1023 << 52) | (mant - 4503599627370496));
+    return (s, ex);
+}
+
+# e^x rounded to 53 bits with an unbounded exponent, for finite x with |x| ≥ 2^-300: (s, e); (1, ±_BJ_UX_HUGE)
+# beyond |x| = 1500 (the section comment).
+#must_use
+fn _bj_ux_exp(x: f64): (f64, i64) {
+    if (x > 1500.0) { return (1.0, _BJ_UX_HUGE); }
+    if (x < -1500.0) { return (1.0, 0 - _BJ_UX_HUGE); }
+    _bj_cr_load();
+    var X[112];
+    var S[112];
+    var ax: f64 = f64_abs(x);
+    _bj_cr_set(&X, ax);
+    var q: f64 = x * _BJ_CR_INVLN2;
+    var neg = 0;
+    if (x < 0.0) { neg = 1; }
+    var k = _bj_cr_exp_fx_parts(&S, &X, neg, q);
+    var s, e = _bj_cr_round_ux(&S, k, 0);
+    return (s, e);
+}
+
+# cosh x rounded to 53 bits with an unbounded exponent, for finite |x| > 710: e^|x|/2. e^-|x| is below 2^-2048 of it,
+# so far below the fixed point's 2^-364 that the exact sum and e^|x| round alike (as _bj_cr_hyp_slow_exp truncates
+# it); (1, _BJ_UX_HUGE) beyond 1500.
+#must_use
+fn _bj_ux_cosh(x: f64): (f64, i64) {
+    var ax: f64 = f64_abs(x);
+    var s, e = _bj_ux_exp(ax);
+    if (e == _BJ_UX_HUGE) { return (s, e); }
+    return (s, e - 1);
+}
+
+# sinh x rounded to 53 bits with an unbounded exponent, for finite |x| > 710: ±e^|x|/2, as _bj_ux_cosh.
+#must_use
+fn _bj_ux_sinh(x: f64): (f64, i64) {
+    var s, e = _bj_ux_cosh(x);
+    if (x < 0.0) {
+        var ns: f64 = -s;
+        return (ns, e);
+    }
+    return (s, e);
+}
+
+# |ln(s·2^E)| into L, and its sign (1 for a value below 1), for a positive normal double s and |E| < 2^26.
+fn _bj_ux_log_fx(L, s: f64, ex): i64 {
+    _bj_cr_load();
+    var ls = _bj_cr_log_fx(L, s);
+    var E[112];
+    var ae = ex;
+    var es = 0;
+    if (ex < 0) {
+        ae = 0 - ex;
+        es = 1;
+    }
+    _bj_cr_mul_small(&E, &_bj_cr_ln2, ae);
+    var sg = _bj_cr_sadd(L, &E, es, L, ls);
+    return sg;
+}
+
+# ln(s·2^E), correctly rounded into binary64, for a positive normal double s and |E| < 2^26 (the section comment).
+#must_use
+fn _bj_ux_ln(s: f64, ex): f64 {
+    var L[112];
+    var sg = _bj_ux_log_fx(&L, s, ex);
+    var r: f64 = _bj_cr_round(&L, 0, sg);
+    return r;
+}
+
+# The exactness test of the pow slow path for x = s·2^E (a positive normal double s, |E| < 2^26) and a finite y ≠ 0:
+# when x^y is a dyadic rational whose odd part is below 2^63, its 53-bit rounding into out (s, then e) and 1;
+# otherwise 0. _bj_cr_pow_exact's body with the base's exponent unbounded and the rounding _bj_cr_round_ux's
+# (src/crmath.cyr is impetus's copy, kept in step with it, so the variant is bijli's and lives here). A power this
+# test rejects is irrational, or has an odd part of at least 2^63, which no 53-bit midpoint has.
+fn _bj_ux_pow_exact(s: f64, ex, y: f64, out): i64 {
+    var w = _bj_cr_word(s);
+    var a = (w & 4503599627370495) | 4503599627370496;
+    var u = ((w >> 52) & 2047) - 1075 + ex;
+    while ((a & 1) == 0) {
+        a = a >> 1;
+        u = u + 1;
+    }
+    var wy = _bj_cr_word(y) & 9223372036854775807;
+    var ey = (wy >> 52) & 2047;
+    var yy = wy & 4503599627370495;
+    var v = 0 - 1074;
+    if (ey != 0) {
+        yy = yy | 4503599627370496;
+        v = ey - 1075;
+    }
+    while ((yy & 1) == 0) {
+        yy = yy >> 1;
+        v = v + 1;
+    }
+    var yn = yy;
+    if (y < 0.0) { yn = 0 - yy; }
+    var n = 1;
+    var e = 0;
+    if (v >= 0) {
+        if (v > 20 || yy > 1048576) { return 0; }
+        var ni = yn << v;
+        if (a == 1) {
+            e = u * ni;
+        } else {
+            if (ni < 0 || ni > 63) { return 0; }
+            n = _bj_cr_ipow(a, ni);
+            if (n == 0) { return 0; }
+            e = u * ni;
+        }
+    } else {
+        var sh = 0 - v;
+        if (sh > 30) { return 0; }
+        var p2 = 1 << sh;
+        if (u % p2 != 0) { return 0; }
+        var us = u / p2;
+        if (a == 1) {
+            e = us * yn;
+        } else {
+            if (yn < 0 || sh > 5) { return 0; }
+            var c = a;
+            for (var j = 0; j < sh; j = j + 1) {
+                var r = _bj_cr_isqrt(c);
+                if (r * r != c) { return 0; }
+                c = r;
+            }
+            if (yn > 63) { return 0; }
+            n = _bj_cr_ipow(c, yn);
+            if (n == 0) { return 0; }
+            e = us * yn;
+        }
+    }
+    # n·2^e with n < 2^63, as n/2^60 in fixed point, rounded to 53 bits.
+    var A[112];
+    _bj_cr_zero(&A);
+    store64(&A, n >> 60);
+    store64(&A + 8, (n >> 32) & _BJ_CR_MASK);
+    store64(&A + 16, (n >> 4) & _BJ_CR_MASK);
+    store64(&A + 24, (n & 15) << 24);
+    var rs, re = _bj_cr_round_ux(&A, e + 60, 0);
+    store64(out, _bj_cr_word(rs));
+    store64(out + 8, re);
+    return 1;
+}
+
+# (s·2^E)^y rounded to 53 bits with an unbounded exponent, for a positive normal double s, |E| < 2^26 and a finite y:
+# (r, e). y = 0 gives 1 (pow's rule); |y·ln x| below 2^-60 gives 1 (the power is within 2^-60 of 1); past 10000 the
+# stand-in (1, ±_BJ_UX_HUGE) (the section comment). Then an exact dyadic power exactly, else the fixed point (where
+# |y·ln x| ≤ 10000 keeps every value below 2^27).
+#must_use
+fn _bj_ux_pow(s: f64, ex, y: f64): (f64, i64) {
+    if (y == 0.0) { return (1.0, 0); }
+    var ls0: f64 = _bj_k_cr_ln(s);
+    var ef: f64 = f64_from(ex);
+    var lnv: f64 = ls0 + ef * 0.6931471805599453;
+    var t: f64 = y * lnv;
+    if (t > 10000.0) { return (1.0, _BJ_UX_HUGE); }
+    if (t < -10000.0) { return (1.0, 0 - _BJ_UX_HUGE); }
+    var at: f64 = f64_abs(t);
+    if (at < 0.000000000000000000867361737988403547205962240695953369140625) { return (1.0, 0); }   # 2^-60
+    var o[16];
+    if (_bj_ux_pow_exact(s, ex, y, &o) == 1) {
+        var xs: f64 = load64(&o);
+        var xe = load64(&o + 8);
+        return (xs, xe);
+    }
+    _bj_cr_load();
+    var L[112];
+    var M[112];
+    var P[112];
+    var S[112];
+    var ls = _bj_ux_log_fx(&L, s, ex);
+    # |y| = my·2^q with 1 ≤ my < 2 (y is normal: |y·ln x| ≥ 2^-60 and |ln x| < 2^25).
+    var wy = _bj_cr_word(y) & 9223372036854775807;
+    var q = ((wy >> 52) & 2047) - 1023;
+    var my: f64 = _bj_cr_from_word((wy & 4503599627370495) | (1023 << 52));
+    _bj_cr_set(&M, my);
+    _bj_cr_mul(&P, &M, &L);
+    _bj_cr_shift(&P, &P, q);
+    var rs = ls;
+    if (y < 0.0) { rs = 1 - ls; }
+    var qe: f64 = t * _BJ_CR_INVLN2;
+    var k = _bj_cr_exp_fx_parts(&S, &P, rs, qe);
+    var r, re = _bj_cr_round_ux(&S, k, 0);
+    return (r, re);
+}
+
+# Y = (t·2/π mod 1)·π/2 in fixed point, and the quadrant floor(t·2/π) mod 4, for t = m·2^e with m < 2^54 and
+# e ≤ 973 (a 53-bit value below 2^1026): _bj_cr_reduce's body with m and e given, for powf's angle past DBL_MAX
+# (_bj_cr_reduce takes a double; src/crmath.cyr is impetus's copy). The 2/π chunks it reads end at index 50 of 56.
+fn _bj_ux_reduce(Y, m, e): i64 {
+    var u = ((e - 2) % 28 + 28) % 28;
+    var t = e - 2 - u;
+    var d = e - t;
+    var mk[24];
+    store64(&mk, (m << d) & _BJ_CR_MASK);
+    if (d >= 28) {
+        store64(&mk + 8, (m << (d - 28)) & _BJ_CR_MASK);
+    } else {
+        store64(&mk + 8, (m >> (28 - d)) & _BJ_CR_MASK);
+    }
+    store64(&mk + 16, (m >> (56 - d)) & _BJ_CR_MASK);
+    var base = t / 28;
+    var ncol = _BJ_CR_L + 2;
+    var col[128];
+    for (var f = 0; f < ncol; f = f + 1) {
+        var sum = 0;
+        for (var kk = 0; kk < 3; kk = kk + 1) {
+            var jj = kk + f - 1;
+            var idx = base + jj;
+            if (jj >= 0 && idx >= 0 && idx < 56) {
+                sum = sum + load64(&mk + kk * 8) * load64(&_bj_cr_2opi + idx * 8);
+            }
+        }
+        store64(&col + f * 8, sum);
+    }
+    var p = ncol - 1;
+    while (p > 0) {
+        var v = load64(&col + p * 8);
+        store64(&col + (p - 1) * 8, load64(&col + (p - 1) * 8) + (v >> 28));
+        store64(&col + p * 8, v & _BJ_CR_MASK);
+        p = p - 1;
+    }
+    var quad = load64(&col) & 3;
+    store64(Y, 0);
+    for (var j = 1; j < _BJ_CR_L; j = j + 1) { store64(Y + j * 8, load64(&col + j * 8)); }
+    _bj_cr_mul(Y, Y, &_bj_cr_pio2);
+    return quad;
+}
+
+# sin t (want_sin 1) or cos t (0), correctly rounded into binary64, for the 53-bit t = ts·2^te past DBL_MAX
+# (1 ≤ |ts| < 2, 1024 ≤ te ≤ 1025): _bj_cr_sin_cos_slow on _bj_ux_reduce.
+#must_use
+fn _bj_ux_sin_cos(ts: f64, te, want_sin): f64 {
+    _bj_cr_load();
+    var Y[112];
+    var D[112];
+    var w = _bj_cr_word(ts);
+    var m = (w & 4503599627370495) | 4503599627370496;
+    var quad = _bj_ux_reduce(&Y, m, te - 52);
+    # sin(y + qπ/2) is sin y, cos y, −sin y, −cos y; cos(y + qπ/2) is cos y, −sin y, −cos y, sin y.
+    var use_sin = want_sin;
+    if ((quad & 1) == 1) { use_sin = 1 - want_sin; }
+    var neg = 0;
+    if (want_sin == 1 && quad >= 2) { neg = 1; }
+    if (want_sin == 0 && (quad == 1 || quad == 2)) { neg = 1; }
+    if (want_sin == 1 && ts < 0.0) { neg = 1 - neg; }
+    _bj_cr_sin_cos_series(&D, &Y, use_sin);
+    var r: f64 = _bj_cr_round(&D, 0, neg);
+    return r;
+}

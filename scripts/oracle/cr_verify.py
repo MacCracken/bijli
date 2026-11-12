@@ -293,6 +293,143 @@ def exact_families(rng, count):
     return calls
 
 
+UX_HUGE = 1 << 20      # src/crmath_ux.cyr's stand-in exponent for a value beyond every product's range
+
+
+def split53(v):
+    """(s, e) with v = s·2^e and 1 ≤ |s| < 2, for a nonzero Fraction of at most 53 bits."""
+    a = abs(v)
+    e = a.numerator.bit_length() - a.denominator.bit_length()
+    if a < Fraction(2) ** e:
+        e -= 1
+    return float(v / Fraction(2) ** e), e
+
+
+def ux_families(rng, count):
+    """(family, call words, wanted result word) for src/crmath_ux.cyr's functions, against MPFR at 53 bits with its
+    widest exponent range (mpfr_ref.wide): e^x, cosh and sinh as (s, e) pairs (two calls each, part 0 and 1), ln of
+    s·2^e, (s·2^e)^y as a pair, and sin and cos of a 53-bit angle past DBL_MAX."""
+    W = mpfr_ref.wide
+    M = 0xFFFFFFFFFFFFFFFF
+    calls = []
+
+    def pair(fam, ws, se):
+        calls.append((fam, ws + [0], f2b(se[0])))
+        calls.append((fam, ws + [1], se[1] & M))
+
+    sign = lambda: rng.choice([1.0, -1.0])
+    for i in range(count):
+        c = i % 6
+        if c == 0:
+            x = rng.uniform(-1500.0, 1500.0)
+        elif c == 1:
+            x = rng.uniform(700.0, 760.0) * sign()           # binary64's ends
+        elif c == 2:
+            x = rng.uniform(1.0, 2.0) * 2.0 ** rng.randint(-300, 10) * sign()
+        elif c == 3:
+            x = float(rng.randint(-1500, 1500))
+        elif c == 4:
+            x = rng.uniform(1400.0, 1500.0) * sign()
+        else:
+            x = rng.uniform(1500.001, 1e6) * sign()          # the stand-in
+        pair("ux_exp", [x], (1.0, UX_HUGE if x > 0 else -UX_HUGE) if abs(x) > 1500 else split53(W("exp", x)))
+        y = rng.uniform(710.000001, 1500.0) * sign() if i % 5 else rng.uniform(1500.001, 1e5) * sign()
+        if abs(y) > 1500:
+            ch, sh = (1.0, UX_HUGE), (math.copysign(1.0, y), UX_HUGE)
+        else:
+            ch, sh = split53(W("cosh", y)), split53(W("sinh", y))
+        pair("ux_cosh", [y], ch)
+        pair("ux_sinh", [y], sh)
+    for i in range(count):
+        c = i % 7
+        s1 = rng.uniform(1.0, 2.0)
+        e1 = rng.randint(-2200, 2200)
+        if c == 0:
+            s1 = 1.0                                          # powers of two
+        elif c == 1:
+            s1, e1 = 2.0 - rng.uniform(0.0, 1e-9), rng.choice([-1, -1, 0, 2200, -2200])   # near 1 from below
+        elif c == 2:
+            s1, e1 = 1.0 + rng.uniform(0.0, 1e-12), rng.choice([0, 0, 1, -1, 1500])       # near 1 from above
+        elif c == 3:
+            s1, e1 = abs(any_finite(rng)) or 1.0, rng.randint(-1000, 1000)               # any normal s
+            if s1 < 2.2250738585072014e-308:
+                s1 = 1.5
+        v = Fraction(s1) * Fraction(2) ** e1
+        lv = W("log", v)
+        calls.append(("ux_ln", [s1, e1], f2b(float(lv))))
+    exact_y = [1.0, 2.0, -1.0, -2.0, 0.5, 1.5, 0.25, -0.5, 3.0, 0.75, -1.5, 1.25]
+    i = 0
+    while i < count:
+        c = i % 8
+        s1, e1 = rng.uniform(1.0, 2.0), rng.randint(-2200, 2200)
+        if c == 3:                                            # exact powers: squares and fourth powers
+            m = rng.getrandbits(13) | 1
+            s1, e0 = split53(Fraction(m ** 4))
+            e1 = 4 * rng.randint(-500, 500) + e0
+        elif c == 5:                                          # 53-bit midpoints: w³ and a² of 54 bits
+            if i % 16 < 8:
+                w = rng.randrange(185365, 262144, 2) | 1     # w³ in [2^53, 2^54)
+                s1, e0 = split53(Fraction(w * w))
+                e1 = e0 + 2 * rng.randint(-1000, 1000)
+            else:
+                a = rng.randrange(94906267, 134217728, 2) | 1   # a² in [2^53, 2^54)
+                s1, e0 = split53(Fraction(a))
+                e1 = e0 + rng.randint(-1000, 1000)
+        lnx = math.log(s1) + e1 * math.log(2.0)
+        if lnx == 0.0:
+            continue
+        if c in (0, 1, 2):
+            y = rng.uniform(-1480.0, 1480.0) / lnx if c < 2 else rng.uniform(-9900.0, 9900.0) / lnx
+        elif c == 3:
+            y = rng.choice(exact_y)
+        elif c == 4:
+            y = rng.uniform(1.0, 2.0) * 2.0 ** rng.randint(-75, -50) * sign() / max(1.0, abs(lnx))   # near 1
+        elif c == 5:
+            y = 1.5 if i % 16 < 8 else 2.0
+        elif c == 6:
+            y = rng.uniform(10050.0, 1e6) * sign() / lnx      # the stand-in
+        else:
+            y = rng.uniform(-3.0, 3.0)
+        t = y * lnx
+        if 9999.0 < abs(t) < 10001.0:
+            continue
+        i += 1
+        if t > 10000:
+            pe = (1.0, UX_HUGE)
+        elif t < -10000:
+            pe = (1.0, -UX_HUGE)
+        else:
+            pe = split53(W("pow", Fraction(s1) * Fraction(2) ** e1, y))
+        pair("ux_pow", [s1, e1, y], pe)
+    for i in range(count):
+        if i % 2:
+            ts, te = rng.uniform(1.0, 2.0) * sign(), rng.choice([1024, 1025])
+        else:                                                 # powf's angle: RN53(arg·n) past DBL_MAX
+            g = rng.choice([math.pi, -math.pi, 3.0 * math.pi / 4.0, math.pi / 2.0, 2.5, 3.1])
+            n = rng.uniform(5.8e307, 1.7976931348623157e308) * sign()
+            ts, te = split53(rnd53_frac(Fraction(g) * Fraction(n)))
+            if te < 1024:
+                continue
+        th = Fraction(ts) * Fraction(2) ** te
+        calls.append(("ux_sin", [ts, te], f2b(float(W("sin", th)))))
+        calls.append(("ux_cos", [ts, te], f2b(float(W("cos", th)))))
+    return calls
+
+
+def rnd53_frac(v):
+    """v rounded to 53 bits, ties to even, with an unbounded exponent (a nonzero Fraction)."""
+    a = abs(v)
+    e = a.numerator.bit_length() - a.denominator.bit_length()
+    if a < Fraction(2) ** e:
+        e -= 1
+    sc = a / Fraction(2) ** (e - 52)
+    q, r = divmod(sc.numerator, sc.denominator)
+    if 2 * r > sc.denominator or (2 * r == sc.denominator and q & 1):
+        q += 1
+    out = Fraction(q) * Fraction(2) ** (e - 52)
+    return out if v > 0 else -out
+
+
 def mpfr(name, a):
     return mpfr_ref.cr(name, a[0]) if len(a) == 1 else mpfr_ref.cr2(name, a[0], a[1])
 
@@ -316,15 +453,16 @@ def run(target, lines):
 
 EXACT = ["mono"] + list(SHAPES) + ["sqrt_div", "wsqrt", "sqrt_mono", "sqrt_mono_acc", "ux_mul", "ux_div", "ux_add",
          "ux_sub", "ux_sqrt"]
+UX = ["ux_exp", "ux_cosh", "ux_sinh", "ux_ln", "ux_pow", "ux_sin", "ux_cos"]
 
 
 def main() -> int:
     (root / "build").mkdir(exist_ok=True)
-    names = wanted or list(FUNCS) + ["exact"]
+    names = wanted or list(FUNCS) + ["exact", "ux"]
     rng = random.Random(0xB1_1E_C0DE)
     calls = []
     for name in names:
-        if name == "exact" or name in EXACT:
+        if name in ("exact", "ux") or name in EXACT or name in UX:
             continue
         arity, mname = FUNCS[name]
         argsets = unary_args(name, rng, n) if arity == 1 else binary_args(name, rng, n)
@@ -333,6 +471,10 @@ def main() -> int:
         erng = random.Random(0xC0DE_5A)
         fams = exact_families(erng, max(1, n // 5))
         calls += [(f, f2b(ref), ws) for f, ws, ref in fams if "exact" in names or f in names]
+    if "ux" in names or any(x in UX for x in names):
+        urng = random.Random(0x5C_2E_D6E)
+        fams = ux_families(urng, max(1, n // 20))
+        calls += [(f, want, ws) for f, ws, want in fams if "ux" in names or f in names]
     lines = [" ".join([name] + [w64(x) for x in a]) for name, _, a in calls]
     (root / "build/cr_in.txt").write_text("\n".join(lines) + "\n")
     targets = ["x86_64"] + (["aarch64"] if aarch64 else [])
@@ -342,17 +484,17 @@ def main() -> int:
     for i, (name, want, a) in enumerate(calls):
         for t in targets:
             g = results[t][i]
-            ok = g == want or (b2f(g) != b2f(g) and b2f(want) != b2f(want))
+            ok = g == want or (name not in UX and b2f(g) != b2f(g) and b2f(want) != b2f(want))
             per.setdefault((name, t), [0, 0])[0 if ok else 1] += 1
             if not ok:
                 bad += 1
                 if bad <= 20:
                     print(f"MISMATCH {t} {name}{tuple(a)}: got {g:016x}, want {want:016x}")
     for (name, t), (ok, ko) in sorted(per.items()):
-        ref = "the exact value" if name in EXACT else "MPFR"
+        ref = "the exact value" if name in EXACT else ("MPFR (widest range)" if name in UX else "MPFR")
         print(f"  {name:9} {t:7} {ok + ko:8} args: {ok} equal to {ref}, {ko} differ")
     print(f"cr_verify: {len(calls)} calls x {len(targets)} targets, {bad} mismatches (MPFR {mpfr_ref.VERSION}; "
-          "Fraction and isqrt for the exact families)")
+          "Fraction and isqrt for the exact families; MPFR's widest exponent range for the ux families)")
     return 1 if bad else 0
 
 

@@ -52,6 +52,8 @@ EXTRA = {
     "complex_exp": "BjComplex::exp: e^re and cos, sin of im, each correctly rounded (src/complex.cyr)",
     "sinh_cosh": "one sinh and one cosh over [0, 70), correctly rounded (src/crmath.cyr)",
     "complex_sin": "BjComplex::sin: sin, cos, sinh, cosh, each correctly rounded (src/complex.cyr)",
+    "complex_exp_edge": "BjComplex::exp at e^1000, with an unbounded exponent (src/crmath_ux.cyr, ADR 0002 row 16)",
+    "complex_powf_edge": "BjComplex::powf with |z|^2.5 past DBL_MAX, on the fixed point (src/crmath_ux.cyr, row 16)",
     "json/field_vector_to_json": "a FieldVector's JSON (src/json.cyr); rust-old benches no serde",
     "json/field_vector_from_json": "a FieldVector read from serde_json's document (src/json.cyr)",
     "json/point_charge_from_json": "a PointCharge read from serde_json's document (src/json.cyr)",

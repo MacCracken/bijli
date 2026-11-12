@@ -7056,6 +7056,319 @@ fn _bj_cr_sqrt_mono(num, nn, den, nd): f64 {
     return a;
 }
 
+# --- crmath_ux.cyr ---
+
+# crmath_ux.cyr — e^x, cosh, sinh, ln(s·2^E), (s·2^E)^y, and sin and cos past DBL_MAX, each with an unbounded
+# exponent (bijli, M1 part 5c-2), for BjComplex's transcendental range edges (ADR 0002 row 16).
+#
+# At a range edge hisab's chain runs with an unbounded exponent (the user's decision of 2026-11-12, ADR 0002 rows 14
+# and 16): every operation rounded to 53 bits, the last one once into binary64. The transcendental operations of that
+# chain that can leave binary64's normal range are e^re in complex exp, cosh and sinh of im in complex sin and cos,
+# ln and pow of an |z| (or a power) past DBL_MAX or below 2^-1022, and sin and cos of powf's angle n·arg z past
+# DBL_MAX. Each returns its 53-bit value as kimiya's _bj_k_ux_* pair (s in [1, 2), an i64 exponent), or ln, sin and
+# cos their final binary64 value (always normal). Every one runs on src/crmath.cyr's 364-bit fixed point (impetus's
+# slow paths, error below 2^-290 relative): e^x by _bj_cr_exp_fx_parts (x = k·ln 2 + r, e^r by its series), ln by
+# _bj_cr_log_fx plus E·ln 2, pow as pow's own slow path (an exactness test, then |y|·|ln x| and e^±), sin and cos by
+# Payne–Hanek against the same 2/π bits. They are slow (tens of microseconds), and only the edges reach them.
+#
+# The rounding. _bj_cr_round_ux takes the fixed point's 53 leading bits, the round bit and the sticky bit, ties to
+# even, with no exponent range. A value within 2^-290 of a rounding boundary would need an argument far harder than
+# any known: the hardest double arguments of exp, log, sin and cos need about 2^-120 (Lefèvre–Muller), and the
+# arguments here differ only in their exponent (s·2^E, or a 53-bit angle), for which no search is published; the
+# 170-bit margin is what crmath's pow already relies on. Exact midpoints: e^x, ln x, sin and cos of a nonzero
+# rational are transcendental (Lindemann–Weierstrass), and a dyadic power is caught exactly by _bj_ux_pow_exact.
+# scripts/oracle/cr_verify.py's ux_* families check every function here against MPFR at 53 bits with its widest
+# exponent range, on x86_64 and aarch64.
+#
+# Far past the range the value is (1, ±_BJ_UX_HUGE): a stand-in whose products with every factor the chain can give it
+# overflow, or round to zero, exactly as the true value's do. For e^x, cosh and sinh that is beyond |x| = 1500: their
+# factors are doubles (cos and sin of a part), at least 2^-1074 in magnitude, and e^1500·2^-1074 > 2^1090. For a power
+# it is beyond |y·ln x| = 10000: its factor can be the sine of an angle n·arg z far below 2^-1074, but never below
+# 2^-2098·|n| (arg z ≥ 2^-1074/2^1024), and a power past e^1500 needs |n| ≥ 2 (|ln |z|| < 745), while e^10000 is
+# 2^14426. Every real exponent here stays below 2^15, far from the stand-in's 2^20.
+
+# The exponent of the stand-in for a value beyond every product's range (2^20).
+const _BJ_UX_HUGE = 1048576;
+
+# The fixed-point a·2^k (a ≥ 0, its integer part below 2^28) rounded to 53 bits, ties to even, with an unbounded
+# exponent: (s, e), s in [1, 2) (negated when neg is 1), so that the value is s·2^e; (±0, 0) for a = 0. _bj_cr_round
+# without its subnormal and overflow ends.
+#must_use
+fn _bj_cr_round_ux(a, k, neg): (f64, i64) {
+    var sign = 0;
+    if (neg == 1) { sign = 0 - 9223372036854775807 - 1; }
+    var j0 = 0;
+    while (j0 < _BJ_CR_L && load64(a + j0 * 8) == 0) { j0 = j0 + 1; }
+    if (j0 == _BJ_CR_L) {
+        var z: f64 = _bj_cr_from_word(sign);
+        return (z, 0);
+    }
+    var v = load64(a + j0 * 8);
+    var b = 0;
+    while ((v >> (b + 1)) != 0) { b = b + 1; }
+    var top = b - 28 * j0;
+    var mant = 0;
+    for (var i = 0; i < 53; i = i + 1) { mant = (mant << 1) | _bj_cr_bit(a, top - i); }
+    var rb = _bj_cr_bit(a, top - 53);
+    var st = _bj_cr_sticky(a, top - 53);
+    if (rb == 1 && (st == 1 || (mant & 1) == 1)) { mant = mant + 1; }
+    var ex = top + k;
+    if (mant == 9007199254740992) {
+        mant = 4503599627370496;
+        ex = ex + 1;
+    }
+    var s: f64 = _bj_cr_from_word(sign | (1023 << 52) | (mant - 4503599627370496));
+    return (s, ex);
+}
+
+# e^x rounded to 53 bits with an unbounded exponent, for finite x with |x| ≥ 2^-300: (s, e); (1, ±_BJ_UX_HUGE)
+# beyond |x| = 1500 (the section comment).
+#must_use
+fn _bj_ux_exp(x: f64): (f64, i64) {
+    if (x > 1500.0) { return (1.0, _BJ_UX_HUGE); }
+    if (x < -1500.0) { return (1.0, 0 - _BJ_UX_HUGE); }
+    _bj_cr_load();
+    var X[112];
+    var S[112];
+    var ax: f64 = f64_abs(x);
+    _bj_cr_set(&X, ax);
+    var q: f64 = x * _BJ_CR_INVLN2;
+    var neg = 0;
+    if (x < 0.0) { neg = 1; }
+    var k = _bj_cr_exp_fx_parts(&S, &X, neg, q);
+    var s, e = _bj_cr_round_ux(&S, k, 0);
+    return (s, e);
+}
+
+# cosh x rounded to 53 bits with an unbounded exponent, for finite |x| > 710: e^|x|/2. e^-|x| is below 2^-2048 of it,
+# so far below the fixed point's 2^-364 that the exact sum and e^|x| round alike (as _bj_cr_hyp_slow_exp truncates
+# it); (1, _BJ_UX_HUGE) beyond 1500.
+#must_use
+fn _bj_ux_cosh(x: f64): (f64, i64) {
+    var ax: f64 = f64_abs(x);
+    var s, e = _bj_ux_exp(ax);
+    if (e == _BJ_UX_HUGE) { return (s, e); }
+    return (s, e - 1);
+}
+
+# sinh x rounded to 53 bits with an unbounded exponent, for finite |x| > 710: ±e^|x|/2, as _bj_ux_cosh.
+#must_use
+fn _bj_ux_sinh(x: f64): (f64, i64) {
+    var s, e = _bj_ux_cosh(x);
+    if (x < 0.0) {
+        var ns: f64 = -s;
+        return (ns, e);
+    }
+    return (s, e);
+}
+
+# |ln(s·2^E)| into L, and its sign (1 for a value below 1), for a positive normal double s and |E| < 2^26.
+fn _bj_ux_log_fx(L, s: f64, ex): i64 {
+    _bj_cr_load();
+    var ls = _bj_cr_log_fx(L, s);
+    var E[112];
+    var ae = ex;
+    var es = 0;
+    if (ex < 0) {
+        ae = 0 - ex;
+        es = 1;
+    }
+    _bj_cr_mul_small(&E, &_bj_cr_ln2, ae);
+    var sg = _bj_cr_sadd(L, &E, es, L, ls);
+    return sg;
+}
+
+# ln(s·2^E), correctly rounded into binary64, for a positive normal double s and |E| < 2^26 (the section comment).
+#must_use
+fn _bj_ux_ln(s: f64, ex): f64 {
+    var L[112];
+    var sg = _bj_ux_log_fx(&L, s, ex);
+    var r: f64 = _bj_cr_round(&L, 0, sg);
+    return r;
+}
+
+# The exactness test of the pow slow path for x = s·2^E (a positive normal double s, |E| < 2^26) and a finite y ≠ 0:
+# when x^y is a dyadic rational whose odd part is below 2^63, its 53-bit rounding into out (s, then e) and 1;
+# otherwise 0. _bj_cr_pow_exact's body with the base's exponent unbounded and the rounding _bj_cr_round_ux's
+# (src/crmath.cyr is impetus's copy, kept in step with it, so the variant is bijli's and lives here). A power this
+# test rejects is irrational, or has an odd part of at least 2^63, which no 53-bit midpoint has.
+fn _bj_ux_pow_exact(s: f64, ex, y: f64, out): i64 {
+    var w = _bj_cr_word(s);
+    var a = (w & 4503599627370495) | 4503599627370496;
+    var u = ((w >> 52) & 2047) - 1075 + ex;
+    while ((a & 1) == 0) {
+        a = a >> 1;
+        u = u + 1;
+    }
+    var wy = _bj_cr_word(y) & 9223372036854775807;
+    var ey = (wy >> 52) & 2047;
+    var yy = wy & 4503599627370495;
+    var v = 0 - 1074;
+    if (ey != 0) {
+        yy = yy | 4503599627370496;
+        v = ey - 1075;
+    }
+    while ((yy & 1) == 0) {
+        yy = yy >> 1;
+        v = v + 1;
+    }
+    var yn = yy;
+    if (y < 0.0) { yn = 0 - yy; }
+    var n = 1;
+    var e = 0;
+    if (v >= 0) {
+        if (v > 20 || yy > 1048576) { return 0; }
+        var ni = yn << v;
+        if (a == 1) {
+            e = u * ni;
+        } else {
+            if (ni < 0 || ni > 63) { return 0; }
+            n = _bj_cr_ipow(a, ni);
+            if (n == 0) { return 0; }
+            e = u * ni;
+        }
+    } else {
+        var sh = 0 - v;
+        if (sh > 30) { return 0; }
+        var p2 = 1 << sh;
+        if (u % p2 != 0) { return 0; }
+        var us = u / p2;
+        if (a == 1) {
+            e = us * yn;
+        } else {
+            if (yn < 0 || sh > 5) { return 0; }
+            var c = a;
+            for (var j = 0; j < sh; j = j + 1) {
+                var r = _bj_cr_isqrt(c);
+                if (r * r != c) { return 0; }
+                c = r;
+            }
+            if (yn > 63) { return 0; }
+            n = _bj_cr_ipow(c, yn);
+            if (n == 0) { return 0; }
+            e = us * yn;
+        }
+    }
+    # n·2^e with n < 2^63, as n/2^60 in fixed point, rounded to 53 bits.
+    var A[112];
+    _bj_cr_zero(&A);
+    store64(&A, n >> 60);
+    store64(&A + 8, (n >> 32) & _BJ_CR_MASK);
+    store64(&A + 16, (n >> 4) & _BJ_CR_MASK);
+    store64(&A + 24, (n & 15) << 24);
+    var rs, re = _bj_cr_round_ux(&A, e + 60, 0);
+    store64(out, _bj_cr_word(rs));
+    store64(out + 8, re);
+    return 1;
+}
+
+# (s·2^E)^y rounded to 53 bits with an unbounded exponent, for a positive normal double s, |E| < 2^26 and a finite y:
+# (r, e). y = 0 gives 1 (pow's rule); |y·ln x| below 2^-60 gives 1 (the power is within 2^-60 of 1); past 10000 the
+# stand-in (1, ±_BJ_UX_HUGE) (the section comment). Then an exact dyadic power exactly, else the fixed point (where
+# |y·ln x| ≤ 10000 keeps every value below 2^27).
+#must_use
+fn _bj_ux_pow(s: f64, ex, y: f64): (f64, i64) {
+    if (y == 0.0) { return (1.0, 0); }
+    var ls0: f64 = _bj_k_cr_ln(s);
+    var ef: f64 = f64_from(ex);
+    var lnv: f64 = ls0 + ef * 0.6931471805599453;
+    var t: f64 = y * lnv;
+    if (t > 10000.0) { return (1.0, _BJ_UX_HUGE); }
+    if (t < -10000.0) { return (1.0, 0 - _BJ_UX_HUGE); }
+    var at: f64 = f64_abs(t);
+    if (at < 0.000000000000000000867361737988403547205962240695953369140625) { return (1.0, 0); }   # 2^-60
+    var o[16];
+    if (_bj_ux_pow_exact(s, ex, y, &o) == 1) {
+        var xs: f64 = load64(&o);
+        var xe = load64(&o + 8);
+        return (xs, xe);
+    }
+    _bj_cr_load();
+    var L[112];
+    var M[112];
+    var P[112];
+    var S[112];
+    var ls = _bj_ux_log_fx(&L, s, ex);
+    # |y| = my·2^q with 1 ≤ my < 2 (y is normal: |y·ln x| ≥ 2^-60 and |ln x| < 2^25).
+    var wy = _bj_cr_word(y) & 9223372036854775807;
+    var q = ((wy >> 52) & 2047) - 1023;
+    var my: f64 = _bj_cr_from_word((wy & 4503599627370495) | (1023 << 52));
+    _bj_cr_set(&M, my);
+    _bj_cr_mul(&P, &M, &L);
+    _bj_cr_shift(&P, &P, q);
+    var rs = ls;
+    if (y < 0.0) { rs = 1 - ls; }
+    var qe: f64 = t * _BJ_CR_INVLN2;
+    var k = _bj_cr_exp_fx_parts(&S, &P, rs, qe);
+    var r, re = _bj_cr_round_ux(&S, k, 0);
+    return (r, re);
+}
+
+# Y = (t·2/π mod 1)·π/2 in fixed point, and the quadrant floor(t·2/π) mod 4, for t = m·2^e with m < 2^54 and
+# e ≤ 973 (a 53-bit value below 2^1026): _bj_cr_reduce's body with m and e given, for powf's angle past DBL_MAX
+# (_bj_cr_reduce takes a double; src/crmath.cyr is impetus's copy). The 2/π chunks it reads end at index 50 of 56.
+fn _bj_ux_reduce(Y, m, e): i64 {
+    var u = ((e - 2) % 28 + 28) % 28;
+    var t = e - 2 - u;
+    var d = e - t;
+    var mk[24];
+    store64(&mk, (m << d) & _BJ_CR_MASK);
+    if (d >= 28) {
+        store64(&mk + 8, (m << (d - 28)) & _BJ_CR_MASK);
+    } else {
+        store64(&mk + 8, (m >> (28 - d)) & _BJ_CR_MASK);
+    }
+    store64(&mk + 16, (m >> (56 - d)) & _BJ_CR_MASK);
+    var base = t / 28;
+    var ncol = _BJ_CR_L + 2;
+    var col[128];
+    for (var f = 0; f < ncol; f = f + 1) {
+        var sum = 0;
+        for (var kk = 0; kk < 3; kk = kk + 1) {
+            var jj = kk + f - 1;
+            var idx = base + jj;
+            if (jj >= 0 && idx >= 0 && idx < 56) {
+                sum = sum + load64(&mk + kk * 8) * load64(&_bj_cr_2opi + idx * 8);
+            }
+        }
+        store64(&col + f * 8, sum);
+    }
+    var p = ncol - 1;
+    while (p > 0) {
+        var v = load64(&col + p * 8);
+        store64(&col + (p - 1) * 8, load64(&col + (p - 1) * 8) + (v >> 28));
+        store64(&col + p * 8, v & _BJ_CR_MASK);
+        p = p - 1;
+    }
+    var quad = load64(&col) & 3;
+    store64(Y, 0);
+    for (var j = 1; j < _BJ_CR_L; j = j + 1) { store64(Y + j * 8, load64(&col + j * 8)); }
+    _bj_cr_mul(Y, Y, &_bj_cr_pio2);
+    return quad;
+}
+
+# sin t (want_sin 1) or cos t (0), correctly rounded into binary64, for the 53-bit t = ts·2^te past DBL_MAX
+# (1 ≤ |ts| < 2, 1024 ≤ te ≤ 1025): _bj_cr_sin_cos_slow on _bj_ux_reduce.
+#must_use
+fn _bj_ux_sin_cos(ts: f64, te, want_sin): f64 {
+    _bj_cr_load();
+    var Y[112];
+    var D[112];
+    var w = _bj_cr_word(ts);
+    var m = (w & 4503599627370495) | 4503599627370496;
+    var quad = _bj_ux_reduce(&Y, m, te - 52);
+    # sin(y + qπ/2) is sin y, cos y, −sin y, −cos y; cos(y + qπ/2) is cos y, −sin y, −cos y, sin y.
+    var use_sin = want_sin;
+    if ((quad & 1) == 1) { use_sin = 1 - want_sin; }
+    var neg = 0;
+    if (want_sin == 1 && quad >= 2) { neg = 1; }
+    if (want_sin == 0 && (quad == 1 || quad == 2)) { neg = 1; }
+    if (want_sin == 1 && ts < 0.0) { neg = 1 - neg; }
+    _bj_cr_sin_cos_series(&D, &Y, use_sin);
+    var r: f64 = _bj_cr_round(&D, 0, neg);
+    return r;
+}
+
 # --- mathx.cyr ---
 
 # mathx.cyr — bijli's math helpers: Rust std semantics on top of the Cyrius builtins.
@@ -8454,10 +8767,13 @@ public fn bj_error_message(code): i64 {
 # quotient, is_zero's comparison, and sqrt's root and polar products. When every nonzero component lies in [2^-511,
 # 2^511) no square or product leaves the normal range, so that evaluation IS hisab's in binary64, and the rows keep
 # Rust's bits; a NaN or infinite component keeps hisab's chain as it is. ln and powf take |z| from the same evaluation
-# where it is a normal double (ADR 0002 row 14); past DBL_MAX or below 2^-1022 their transcendental of an unbounded |z|
-# is M1 part 5c-2's. powf has no cutoff (ADR 0002 row 15): hisab returned 0 for every |z|² < 1e-300, whatever the
-# exponent. The transcendentals are bijli's correctly rounded ones (src/mathx.cyr), so the results are the same on every
-# target and match the corrected oracle where glibc misrounds.
+# (row 14). The chain's transcendental steps follow the same rule (ADR 0002 row 16, M1 part 5c-2): where e^re (exp),
+# cosh and sinh of im (sin, cos), ln or pow of |z|, the power |z|^n, or an angle (sqrt's arg z / 2, powf's n·arg z)
+# is not a normal double, it is taken to 53 bits with an unbounded exponent (src/crmath_ux.cyr) and each final product
+# rounded once: exp(710 + j0) is (∞, 0) where hisab's is (∞, NaN), sin(j800) (0, ∞) for (NaN, ∞). powf has no cutoff
+# (row 15): hisab returned 0 for every |z|² < 1e-300, whatever the exponent. The transcendentals are bijli's correctly
+# rounded ones (src/mathx.cyr, src/crmath_ux.cyr), so the results are the same on every target and match the corrected
+# oracle where glibc misrounds.
 #
 # A BjComplex is a 16-byte struct value: returned in two registers, passed by address and copied on entry. Rust's
 # operators are the operator fns, `a + b`, `a - b`, `a * b`, `a / b`; with an f64 operand, `a.scale(s)` (Rust's
@@ -8541,17 +8857,103 @@ fn _bj_cx_ux_abs(x: f64, y: f64): (f64, i64) {
     return (rs, re2);
 }
 
-# |z| as a double for ln and powf: hisab's abs where the components are in range (or one is not finite); at a range
-# edge the unbounded |z| when it is a normal double, else hisab's abs (∞ or a subnormal: M1 part 5c-2).
+# ── the transcendental range edges (ADR 0002 row 16) ──────────────────────────────────────────────────────────────
+
+# arg z with an unbounded exponent, to 53 bits, given its binary64 value g: g itself when it is exact (im = ±0: ±0 or
+# ±π) or normal and above 2^-1022 (binary64's rounding is then the 53-bit one); else im/re to 53 bits. An arg that
+# small has re > 0 and |im/re| < 2^-1021, where atan2(im, re) = (im/re)(1 − δ) with δ < 2^-2042, while a quotient of
+# two doubles that is not a 53-bit value lies at least 2^-107 (relative) from every 53-bit midpoint: both round alike.
 #must_use
-fn _bj_cx_abs_for(x: f64, y: f64): f64 {
-    var plain: f64 = x * x + y * y;
-    var r: f64 = f64_sqrt(plain);
-    if (_bj_cx_plain(x, y) == 1) { return r; }
-    var s, e = _bj_cx_ux_abs(x, y);
-    if (e < 0 - 1022 || e > 1023) { return r; }
-    var a: f64 = _bj_k_ux_round(s, e, 0.0);
-    return a;
+fn _bj_cx_arg_ux(g: f64, re: f64, im: f64): (f64, i64) {
+    var gb = _bj_bits(g) & 0x7FFFFFFFFFFFFFFF;
+    if (im == 0.0 || gb > 0x0010000000000000) {
+        var s, e = _bj_k_ux_from(g);
+        return (s, e);
+    }
+    var ys, ye = _bj_k_ux_from(im);
+    var xs, xe = _bj_k_ux_from(re);
+    var qs, qe = _bj_k_ux_div(ys, ye, xs, xe);
+    return (qs, qe);
+}
+
+# cos t to 53 bits, for the 53-bit t = ts·2^te: 1 below 2^-1022 (and at 0); past DBL_MAX by _bj_ux_sin_cos; else the
+# double t's correctly rounded cosine (binary64's rounding of a normal value is the 53-bit one).
+#must_use
+fn _bj_cx_cos_ux(ts: f64, te): (f64, i64) {
+    if (ts == 0.0 || te < 0 - 1022) { return (1.0, 0); }
+    if (te > 1023) {
+        var cb: f64 = _bj_ux_sin_cos(ts, te, 0);
+        var bs, be = _bj_k_ux_from(cb);
+        return (bs, be);
+    }
+    var t: f64 = _bj_k_ux_round(ts, te, 0.0);
+    var c: f64 = _bj_cos(t);
+    var s, e = _bj_k_ux_from(c);
+    return (s, e);
+}
+
+# sin t to 53 bits, for the 53-bit t = ts·2^te: t itself below 2^-1022 (sin t = t(1 − t²/6) rounds to t; ±0 keeps
+# its sign); past DBL_MAX by _bj_ux_sin_cos; else the double t's correctly rounded sine.
+#must_use
+fn _bj_cx_sin_ux(ts: f64, te): (f64, i64) {
+    if (ts == 0.0 || te < 0 - 1022) { return (ts, te); }
+    if (te > 1023) {
+        var sb: f64 = _bj_ux_sin_cos(ts, te, 1);
+        var bs, be = _bj_k_ux_from(sb);
+        return (bs, be);
+    }
+    var t: f64 = _bj_k_ux_round(ts, te, 0.0);
+    var sn: f64 = _bj_sin(t);
+    var s, e = _bj_k_ux_from(sn);
+    return (s, e);
+}
+
+# z^n = from_polar(|z|^n, n·arg z) with an unbounded exponent, for the 53-bit |z| = as·2^ae (positive, normal) and a
+# finite n: |z|^n by _bj_ux_pow, arg z by _bj_cx_arg_ux, their product n·arg to 53 bits, its cosine and sine, each
+# polar product rounded once.
+#must_use
+fn _bj_cx_powf_edge(as: f64, ae, n: f64, g: f64, re: f64, im: f64): BjComplex {
+    var ps, pe = _bj_ux_pow(as, ae, n);
+    var gs, ge = _bj_cx_arg_ux(g, re, im);
+    var ns, ne = _bj_k_ux_from(n);
+    var ts, te = _bj_k_ux_mul(gs, ge, ns, ne);
+    var cs, ce = _bj_cx_cos_ux(ts, te);
+    var ss, se = _bj_cx_sin_ux(ts, te);
+    var wr: f64 = _bj_k_ux_mul_f64(ps, pe, cs, ce);
+    var wi: f64 = _bj_k_ux_mul_f64(ps, pe, ss, se);
+    var w: BjComplex;
+    w.re = wr;
+    w.im = wi;
+    return w;
+}
+
+# 1 when complex sin and cos keep hisab's chain: |im| ≤ 710 (cosh and sinh are normal, or sinh is im itself), or a part
+# is not finite; 0 at an edge.
+#must_use
+fn _bj_cx_hyp_plain(re: f64, im: f64): i64 {
+    var ib = _bj_bits(im) & 0x7FFFFFFFFFFFFFFF;
+    if (ib <= 0x4086300000000000) { return 1; }                                 # |im| ≤ 710
+    if (ib >= 0x7FF0000000000000) { return 1; }
+    if ((_bj_bits(re) & 0x7FF0000000000000) == 0x7FF0000000000000) { return 1; }
+    return 0;
+}
+
+# 1 when powf's binary64 chain is the unbounded one: |z|^n = r normal and above 2^-1022, arg z = g exact or above
+# 2^-1022, and θ = g·n exactly 0 or normal and above 2^-1022 (every intermediate's rounding is then the 53-bit one);
+# 0 at an edge.
+#must_use
+fn _bj_cx_powf_plain(r: f64, g: f64, theta: f64, n: f64, im: f64): i64 {
+    var rb = _bj_bits(r) & 0x7FFFFFFFFFFFFFFF;
+    if (rb <= 0x0010000000000000 || rb >= 0x7FF0000000000000) { return 0; }
+    var gb = _bj_bits(g) & 0x7FFFFFFFFFFFFFFF;
+    if (im != 0.0 && gb <= 0x0010000000000000) { return 0; }
+    var tb = _bj_bits(theta) & 0x7FFFFFFFFFFFFFFF;
+    if (tb == 0) {
+        if (gb == 0 || n == 0.0) { return 1; }
+        return 0;
+    }
+    if (tb <= 0x0010000000000000 || tb >= 0x7FF0000000000000) { return 0; }
+    return 1;
 }
 
 # The product (ar + j·ai)(br + j·bi) at a range edge: hisab's chain with an unbounded exponent, each sum rounded once.
@@ -8749,41 +9151,75 @@ impl BjComplex {
         return r;
     }
 
-    # e^re·(cos im, sin im). Mirrors `Complex::exp`.
+    # e^re·(cos im, sin im); for a finite z with re outside [−708, 709] (e^re past DBL_MAX or below 2^-1022) e^re
+    # with an unbounded exponent and each product rounded once (ADR 0002 row 16). Mirrors `Complex::exp`.
     #must_use
     #pure
     public fn exp(self): BjComplex {
-        var r: f64 = _bj_exp(self.re);
         var c: f64 = _bj_cos(self.im);
         var s: f64 = _bj_sin(self.im);
         var z: BjComplex;
-        z.re = r * c;
-        z.im = r * s;
+        var dr: f64 = self.re - self.re;
+        var di: f64 = self.im - self.im;
+        if ((self.re >= -708.0 && self.re <= 709.0) || dr != 0.0 || di != 0.0) {
+            var r: f64 = _bj_exp(self.re);
+            z.re = r * c;
+            z.im = r * s;
+            return z;
+        }
+        var es, ee = _bj_ux_exp(self.re);
+        var cs, ce = _bj_k_ux_from(c);
+        var ss, se = _bj_k_ux_from(s);
+        var wr: f64 = _bj_k_ux_mul_f64(es, ee, cs, ce);
+        var wi: f64 = _bj_k_ux_mul_f64(es, ee, ss, se);
+        z.re = wr;
+        z.im = wi;
         return z;
     }
 
-    # (ln |z|, arg z), the principal branch; |z| unbounded where it is a normal double (_bj_cx_abs_for, ADR 0002 row
-    # 14). Mirrors `Complex::ln`.
+    # (ln |z|, arg z), the principal branch; at a range edge |z| with an unbounded exponent (ADR 0002 row 14), and its
+    # logarithm with one where it is past DBL_MAX or below 2^-1022 (row 16). Mirrors `Complex::ln`.
     #must_use
     #pure
     public fn ln(self): BjComplex {
-        var a: f64 = _bj_cx_abs_for(self.re, self.im);
-        var l: f64 = _bj_ln(a);
         var g: f64 = BjComplex_arg(self);
         var z: BjComplex;
-        z.re = l;
         z.im = g;
+        if (_bj_cx_plain(self.re, self.im) == 1) {
+            var p: f64 = self.re * self.re + self.im * self.im;
+            var a: f64 = f64_sqrt(p);
+            var l: f64 = _bj_ln(a);
+            z.re = l;
+            return z;
+        }
+        var as, ae = _bj_cx_ux_abs(self.re, self.im);
+        if (ae < 0 - 1022 || ae > 1023) {
+            var lu: f64 = _bj_ux_ln(as, ae);
+            z.re = lu;
+            return z;
+        }
+        var a2: f64 = _bj_k_ux_round(as, ae, 0.0);
+        var l2: f64 = _bj_ln(a2);
+        z.re = l2;
         return z;
     }
 
     # from_polar(√|z|, arg z / 2), the principal branch; at a range edge |z| and its root with an unbounded exponent,
-    # the polar products rounded once (ADR 0002 row 14). Mirrors `Complex::sqrt`.
+    # the polar products rounded once (ADR 0002 row 14). Where im ≠ 0 and |arg z| < 2^-1020, so that arg z / 2 is not
+    # a normal double, the angle with an unbounded exponent too (row 16): its cosine is 1 and its sine itself.
+    # Mirrors `Complex::sqrt`.
     #must_use
     #pure
     public fn sqrt(self): BjComplex {
         var g: f64 = BjComplex_arg(self);
         var theta: f64 = g / 2.0;
-        if (_bj_cx_plain(self.re, self.im) == 1) {
+        var tiny = 0;
+        if ((_bj_bits(g) & 0x7FFFFFFFFFFFFFFF) < 0x0030000000000000 && self.im != 0.0) {
+            var dr: f64 = self.re - self.re;
+            if (dr == 0.0) { tiny = 1; }                    # re = +∞ (arg ±0) keeps hisab's chain
+        }
+        var plain = _bj_cx_plain(self.re, self.im);
+        if (plain == 1 && tiny == 0) {
             var a: f64 = BjComplex_abs(self);
             var r: f64 = f64_sqrt(a);
             var z: BjComplex = BjComplex_from_polar(r, theta);
@@ -8791,6 +9227,15 @@ impl BjComplex {
         }
         var as2, ae2 = _bj_cx_ux_abs(self.re, self.im);
         var rs, re2 = _bj_k_ux_sqrt(as2, ae2);
+        if (tiny == 1) {
+            var gs, ge = _bj_cx_arg_ux(g, self.re, self.im);
+            var t: BjComplex;
+            var tr: f64 = _bj_k_ux_mul_f64(rs, re2, 1.0, 0);
+            var ti: f64 = _bj_k_ux_mul_f64(rs, re2, gs, ge - 1);
+            t.re = tr;
+            t.im = ti;
+            return t;
+        }
         var c: f64 = _bj_cos(theta);
         var sn: f64 = _bj_sin(theta);
         var cs, ce = _bj_k_ux_from(c);
@@ -8803,9 +9248,11 @@ impl BjComplex {
         return w;
     }
 
-    # z^n = from_polar(|z|^n, n·arg z) for every z ≠ 0, |z| unbounded where it is a normal double (ADR 0002 row 14).
-    # z = 0 follows pow's rules for a zero base: 0 for n > 0, 1 for n = 0, +∞ for n < 0 (each with im +0), NaN for a
-    # NaN n. hisab returned 0 for every |z|² < 1e-300 (ADR 0002 row 15: z⁰ was 0, z⁻¹ 0). Mirrors `Complex::powf`.
+    # z^n = from_polar(|z|^n, n·arg z) for every z ≠ 0; at a range edge |z| with an unbounded exponent (ADR 0002 row
+    # 14), and where |z|, |z|^n, arg z or n·arg z is not a normal double (past DBL_MAX, below 2^-1022), the whole chain
+    # with one, each polar product rounded once (row 16, _bj_cx_powf_edge). z = 0 follows pow's rules for a zero base:
+    # 0 for n > 0, 1 for n = 0, +∞ for n < 0 (each with im +0), NaN for a NaN n. hisab returned 0 for every |z|² <
+    # 1e-300 (row 15: z⁰ was 0, z⁻¹ 0). A non-finite z or n keeps hisab's chain. Mirrors `Complex::powf`.
     #must_use
     #pure
     public fn powf(self, n: f64): BjComplex {
@@ -8824,40 +9271,84 @@ impl BjComplex {
             }
             return zz;
         }
-        var a: f64 = _bj_cx_abs_for(self.re, self.im);
-        var r: f64 = _bj_powf(a, n);
         var g: f64 = BjComplex_arg(self);
         var theta: f64 = g * n;
-        var z: BjComplex = BjComplex_from_polar(r, theta);
-        return z;
+        var dn: f64 = n - n;
+        if (_bj_cx_plain(self.re, self.im) == 1 || dn != 0.0) {
+            var p: f64 = self.re * self.re + self.im * self.im;
+            var a: f64 = f64_sqrt(p);                       # hisab's |z| (a non-finite n gives NaN whatever |z| is)
+            var r: f64 = _bj_powf(a, n);
+            var da: f64 = a - a;
+            if (da != 0.0 || dn != 0.0 || _bj_cx_powf_plain(r, g, theta, n, self.im) == 1) {
+                var z: BjComplex = BjComplex_from_polar(r, theta);
+                return z;
+            }
+            var ps, pe = _bj_k_ux_from(a);
+            var w: BjComplex = _bj_cx_powf_edge(ps, pe, n, g, self.re, self.im);
+            return w;
+        }
+        var as, ae = _bj_cx_ux_abs(self.re, self.im);
+        if (ae >= 0 - 1022 && ae <= 1023) {
+            var a2: f64 = _bj_k_ux_round(as, ae, 0.0);
+            var r2: f64 = _bj_powf(a2, n);
+            if (_bj_cx_powf_plain(r2, g, theta, n, self.im) == 1) {
+                var z2: BjComplex = BjComplex_from_polar(r2, theta);
+                return z2;
+            }
+        }
+        var w2: BjComplex = _bj_cx_powf_edge(as, ae, n, g, self.re, self.im);
+        return w2;
     }
 
-    # sin z = (sin re·cosh im, cos re·sinh im). Mirrors `Complex::sin`.
+    # sin z = (sin re·cosh im, cos re·sinh im); for a finite z with |im| > 710 (cosh and sinh past DBL_MAX) cosh and
+    # sinh with an unbounded exponent and each product rounded once (ADR 0002 row 16). Mirrors `Complex::sin`.
     #must_use
     #pure
     public fn sin(self): BjComplex {
         var s: f64 = _bj_sin(self.re);
         var c: f64 = _bj_cos(self.re);
-        var ch: f64 = _bj_cosh(self.im);
-        var sh: f64 = _bj_sinh(self.im);
         var z: BjComplex;
-        z.re = s * ch;
-        z.im = c * sh;
+        if (_bj_cx_hyp_plain(self.re, self.im) == 1) {
+            var ch: f64 = _bj_cosh(self.im);
+            var sh: f64 = _bj_sinh(self.im);
+            z.re = s * ch;
+            z.im = c * sh;
+            return z;
+        }
+        var hs, he = _bj_ux_cosh(self.im);
+        var ks, ke = _bj_ux_sinh(self.im);
+        var ss, se = _bj_k_ux_from(s);
+        var cs, ce = _bj_k_ux_from(c);
+        var wr: f64 = _bj_k_ux_mul_f64(ss, se, hs, he);
+        var wi: f64 = _bj_k_ux_mul_f64(cs, ce, ks, ke);
+        z.re = wr;
+        z.im = wi;
         return z;
     }
 
-    # cos z = (cos re·cosh im, (−sin re)·sinh im). Mirrors `Complex::cos`.
+    # cos z = (cos re·cosh im, (−sin re)·sinh im); for a finite z with |im| > 710 as sin. Mirrors `Complex::cos`.
     #must_use
     #pure
     public fn cos(self): BjComplex {
         var c: f64 = _bj_cos(self.re);
         var s: f64 = _bj_sin(self.re);
-        var ch: f64 = _bj_cosh(self.im);
-        var sh: f64 = _bj_sinh(self.im);
         var ns: f64 = -s;
         var z: BjComplex;
-        z.re = c * ch;
-        z.im = ns * sh;
+        if (_bj_cx_hyp_plain(self.re, self.im) == 1) {
+            var ch: f64 = _bj_cosh(self.im);
+            var sh: f64 = _bj_sinh(self.im);
+            z.re = c * ch;
+            z.im = ns * sh;
+            return z;
+        }
+        var hs, he = _bj_ux_cosh(self.im);
+        var ks, ke = _bj_ux_sinh(self.im);
+        var cs, ce = _bj_k_ux_from(c);
+        var ns2, nse = _bj_k_ux_from(ns);
+        var wr: f64 = _bj_k_ux_mul_f64(cs, ce, hs, he);
+        var wi: f64 = _bj_k_ux_mul_f64(ns2, nse, ks, ke);
+        z.re = wr;
+        z.im = wi;
         return z;
     }
 

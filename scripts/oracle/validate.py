@@ -713,7 +713,7 @@ def complex_corrections(rows) -> list:
             continue
         v = [t[1] for t in ins]
         if cx_governed(fn, v):
-            continue            # ADR 0002 rows 14 and 15 set this row's expectation (complex.adr.tsv)
+            continue            # ADR 0002 rows 14 to 16 set this row's expectation (complex.adr.tsv)
         want = COMPLEX[fn](MPFR_P, v)
         old = [t[1] for t in outs]
         if all(same(a, b) for a, b in zip(want, old)):
@@ -1682,10 +1682,11 @@ def adr_rows(root: Path, module: str, path: Path) -> list:
     return out
 
 
-# Rows 14 and 15 (M1 part 5c): BjComplex's range edges. At an edge (a finite, nonzero component outside
+# Rows 14, 15 and 16 (M1 part 5c): BjComplex's range edges. At an edge (a finite, nonzero component outside
 # [2^-511, 2^511)) hisab's chain runs with an unbounded exponent, each operation rounded to 53 bits, the last one once
 # into binary64 (IEEE's signed zeros throughout); in range the chain IS hisab's, which cx_model checks row by row.
-# ln and powf take the unbounded |z| where it is a normal double. powf has no cutoff (row 15).
+# powf has no cutoff (row 15). Row 16 extends the unbounded chain to its transcendental operations: e^re, cosh and
+# sinh, ln and pow of an |z| or a power past either end, and the angles arg z / 2 and n·arg z.
 from exact import binade, rn_frac, rn_sqrt, rnd53, rnd53_sqrt  # noqa: E402
 
 UX_LO, UX_HI = 2.0 ** -511, 2.0 ** 511
@@ -1753,15 +1754,106 @@ def ux_sumsq(x, y):
     return ux_add(ux_mul(ux(x), ux(x)), ux_mul(ux(y), ux(y)))
 
 
-def cx_abs_for(re, im):
-    """|z| for ln and powf: hisab's where the components are in range or one isn't finite; else the unbounded |z|
-    where it is a normal double, else hisab's."""
+# Row 16 (M1 part 5c-2): the transcendental operations of the chain with an unbounded exponent too. Each is MPFR's
+# value at 53 bits with its widest exponent range (mpfr_ref.wide), whatever the port's guard: the model is the whole
+# unbounded chain, so on the rows the port keeps hisab's chain for, cx_rows proves the guard as it does row 14's.
+# A value past 2^5000 (or below 2^-5000) stands as 2^±6000: any product of it with a nonzero double overflows (rounds
+# to zero) exactly as the true value's does, and an exact one would be billions of bits.
+W_FAR = 5000
+
+
+def wv(name, *xs):
+    """mpfr_ref.wide as a model pair (Fraction, negative): float arguments keep their zeros' signs."""
+    r = mpfr_ref.wide(name, *xs)
+    if isinstance(r, float):
+        if r != r or r in (math.inf, -math.inf):
+            raise ValueError(f"{name}{xs}: {r} in the widest exponent range")
+        return Fraction(0), math.copysign(1.0, r) < 0
+    return r, r < 0
+
+
+def w_log2(a) -> float:
+    """log2 of a positive Fraction, to a double's precision (it may be far outside the binary64 range)."""
+    e = a.numerator.bit_length() - a.denominator.bit_length()
+    if a < Fraction(2) ** e:
+        e -= 1
+    return e + math.log2(float(a / Fraction(2) ** e))
+
+
+def wv_exp(x: float):
+    if x > W_FAR:
+        return Fraction(2) ** 6000, False
+    if x < -W_FAR:
+        return Fraction(2) ** -6000, False
+    return wv("exp", x)
+
+
+def wv_hyp(name, x: float):
+    if abs(x) > W_FAR:
+        return (Fraction(2) ** 6000) * (-1 if name == "sinh" and x < 0 else 1), name == "sinh" and x < 0
+    return wv(name, x)
+
+
+def wv_pow(a, n: float):
+    """|z|^n for the model pair a (positive) and a finite n."""
+    if n == 0:
+        return Fraction(1), False
+    t = n * w_log2(a[0])
+    if t > 4 * W_FAR:                                   # past 2^20000: its products overflow
+        return Fraction(2) ** 30000, False
+    if t < -4 * W_FAR:
+        return Fraction(2) ** -30000, False
+    return wv("pow", a[0], n)
+
+
+def w_trig(name, t):
+    """cos or sin of the model pair t, to 53 bits: of ±0, 1 and ±0."""
+    if t[0] == 0:
+        return (Fraction(1), False) if name == "cos" else t
+    return wv(name, t[0])
+
+
+def ux_abs(re, im):
+    return ux_sqrt(ux_sumsq(re, im))
+
+
+def ux_is_normal(a) -> bool:
+    return a[0] != 0 and -1022 <= binade(a[0]) <= 1023
+
+
+MIN_NORMAL = 2.0 ** -1022
+
+
+def powf_plain(r, g, th, n, im) -> bool:
+    """src/complex.cyr's _bj_cx_powf_plain: every intermediate of powf's binary64 chain a 53-bit value."""
+    def nrm(x):
+        return MIN_NORMAL < abs(x) < math.inf
+    if not nrm(r):
+        return False
+    if im != 0 and not abs(g) > MIN_NORMAL:
+        return False
+    if th == 0:
+        return g == 0 or n == 0
+    return nrm(th)
+
+
+def cx_powf_path(re, im, n) -> str:
+    """The path src/complex.cyr's powf takes for a finite z ≠ 0 and a finite n: "plain" (hisab's chain), "abs" (the
+    unbounded |z|, rounded, then hisab's chain: row 14) or "edge" (the unbounded chain: row 16)."""
+    P = MPFR_P
+    g = P["atan2"](im, re)
+    th = g * n
     if cx_plain(re, im):
-        return cx_abs(re, im)
-    a = ux_sqrt(ux_sumsq(re, im))
-    if a[0] != 0 and -1022 <= binade(a[0]) <= 1023:
-        return float(a[0])
-    return cx_abs(re, im)
+        return "plain" if powf_plain(P["pow"](cx_abs(re, im), n), g, th, n, im) else "edge"
+    a = ux_abs(re, im)
+    if ux_is_normal(a) and powf_plain(P["pow"](float(a[0]), n), g, th, n, im):
+        return "abs"
+    return "edge"
+
+
+def cx_sqrt_tiny(re, im) -> bool:
+    """src/complex.cyr's sqrt: im ≠ 0 and |arg z| < 2^-1020 take the unbounded angle (row 16)."""
+    return im != 0 and abs(MPFR_P["atan2"](im, re)) < 2.0 ** -1020
 
 
 def cx_model(fn, v):
@@ -1789,45 +1881,66 @@ def cx_model(fn, v):
         ns = ux_sumsq(v[0], v[1])[0]
         t2 = ux_mul(ux(v[2]), ux(v[2]))[0]
         return [int(ns < t2)]
+    ident = lambda t: t                                  # noqa: E731
     if fn == "Complex::sqrt":
-        theta = P["atan2"](v[1], v[0]) / 2.0
-        if cx_plain(v[0], v[1]):
-            return cx_polar(P, fsqrt(cx_abs(v[0], v[1])), theta)
-        r = ux_sqrt(ux_sqrt(ux_sumsq(v[0], v[1])))
-        return [ux_fin(ux_mul(r, ux(P["cos"](theta)), lambda t: t)),
-                ux_fin(ux_mul(r, ux(P["sin"](theta)), lambda t: t))]
+        r = ux_sqrt(ux_abs(v[0], v[1]))
+        g = wv("atan2", v[1], v[0])
+        th = (g[0] / 2, g[1])
+        return [ux_fin(ux_mul(r, w_trig("cos", th), ident)), ux_fin(ux_mul(r, w_trig("sin", th), ident))]
     if fn == "Complex::ln":
-        return [P["log"](cx_abs_for(v[0], v[1])), P["atan2"](v[1], v[0])]
+        a = ux_abs(v[0], v[1])
+        lv = float(mpfr_ref.wide("log", a[0])) if a[0] != 0 else -math.inf
+        return [lv, P["atan2"](v[1], v[0])]
     if fn == "Complex::powf":
         re, im, n = v
         if re == 0 and im == 0:
             if n != n:
                 return [n, n]
             return [0.0 if n > 0 else (1.0 if n == 0 else float("inf")), 0.0]
-        a = cx_abs_for(re, im)
-        return cx_polar(P, P["pow"](a, n), P["atan2"](im, re) * n)
+        pw = wv_pow(ux_abs(re, im), n)
+        g = wv("atan2", im, re)
+        th = ux_mul(g, ux(n))
+        return [ux_fin(ux_mul(pw, w_trig("cos", th), ident)), ux_fin(ux_mul(pw, w_trig("sin", th), ident))]
+    if fn == "Complex::exp":
+        e = wv_exp(v[0])
+        return [ux_fin(ux_mul(e, ux(P["cos"](v[1])), ident)), ux_fin(ux_mul(e, ux(P["sin"](v[1])), ident))]
+    if fn in ("Complex::sin", "Complex::cos"):
+        ch, sh = wv_hyp("cosh", v[1]), wv_hyp("sinh", v[1])
+        s, c = P["sin"](v[0]), P["cos"](v[0])
+        if fn == "Complex::sin":
+            return [ux_fin(ux_mul(ux(s), ch, ident)), ux_fin(ux_mul(ux(c), sh, ident))]
+        return [ux_fin(ux_mul(ux(c), ch, ident)), ux_fin(ux_mul(ux(-s), sh, ident))]
     return None
 
 
 def cx_governed(fn, v) -> int:
-    """The ADR 0002 row whose model sets this complex row's expectation (14 or 15), or 0 where hisab's chain (with
-    the corrected oracle's primitives) still does."""
+    """The ADR 0002 row whose model sets this complex row's expectation (14, 15 or 16), or 0 where hisab's chain (with
+    the corrected oracle's primitives) still does: the path src/complex.cyr takes."""
     if fn not in ("Complex::abs", "ComplexExt::norm", "Complex::norm_sq", "Complex::mul", "Complex::inv",
-                  "Complex::div", "Complex::is_zero", "Complex::sqrt", "Complex::ln", "Complex::powf"):
+                  "Complex::div", "Complex::is_zero", "Complex::sqrt", "Complex::ln", "Complex::powf",
+                  "Complex::exp", "Complex::sin", "Complex::cos"):
         return 0
     if not all(math.isfinite(x) for x in v):
         return 0
+    if fn == "Complex::exp":
+        return 0 if -708.0 <= v[0] <= 709.0 else 16
+    if fn in ("Complex::sin", "Complex::cos"):
+        return 0 if abs(v[1]) <= 710.0 else 16
     if fn == "Complex::powf":
-        re, im, _n = v
+        re, im, n = v
         if (re == 0 and im == 0) or re * re + im * im < TINY_300:
             return 15
-        return 14 if cx_abs_for(re, im) != cx_abs(re, im) else 0
+        return {"plain": 0, "abs": 14, "edge": 16}[cx_powf_path(re, im, n)]
     if fn in ("Complex::mul", "Complex::div"):
         return 0 if all(cx_ok(x) for x in v) else 14
     if fn == "Complex::is_zero":
         return 0 if all(cx_ok(x) for x in v) else 14
     if fn == "Complex::ln":
-        return 14 if cx_abs_for(v[0], v[1]) != cx_abs(v[0], v[1]) else 0
+        if cx_plain(v[0], v[1]):
+            return 0
+        return 14 if ux_is_normal(ux_abs(v[0], v[1])) else 16
+    if fn == "Complex::sqrt" and cx_sqrt_tiny(v[0], v[1]):
+        return 16
     return 0 if cx_plain(v[0], v[1]) else 14
 
 

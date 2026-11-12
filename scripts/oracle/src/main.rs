@@ -12,9 +12,9 @@
 //! file. It exits 1 if any output differs or is missing, if a `.tsv` in `tests/golden/` has no
 //! emitter, or if a file was recorded on another glibc platform (`glibc.rs`): its transcendental
 //! rows are glibc's bits, so they can only be checked where they were made. A `<module>.cr.tsv`
-//! beside a module's file is the corrected oracle (kimiya ADR 0006), which `validate.py --write`
-//! writes and checks: here it is stale only when its module has no emitter, and its platform is
-//! checked like the corpus's.
+//! beside a module's file is the corrected oracle (kimiya ADR 0006), and a `<module>.adr.tsv` its
+//! ADR 0002 mappings, which `validate.py --write` writes and checks: here either is stale only
+//! when its module has no emitter, and a `.cr.tsv`'s platform is checked like the corpus's.
 //!
 //! Adapted from impetus's `scripts/oracle/` (itself kimiya's and tanmatra's: same format, same
 //! rules). bijli has one profile, so there is one build. Modules are added at the start of their
@@ -157,10 +157,14 @@ fn tsv_names(dir: &Path) -> Vec<String> {
 
 /// In check mode: every `.tsv` must have been recorded on the running platform. Its `# oracle:`
 /// header line names the glibc, so a corpus made elsewhere is refused with a reason rather than
-/// as an anonymous DIFFERS.
+/// as an anonymous DIFFERS. A `.adr.tsv` holds exact values, the same on every platform, and has
+/// no such line.
 fn check_platform(dir: &Path, platform: &str) -> bool {
     let mut ok = true;
     for name in tsv_names(dir) {
+        if name.ends_with(".adr.tsv") {
+            continue;
+        }
         let Ok(text) = fs::read_to_string(dir.join(&name)) else {
             continue;
         };
@@ -236,11 +240,12 @@ fn run() -> Result<bool, String> {
     }
 
     // A .tsv with no emitter is stale: the harness would test rows nobody regenerates. A
-    // `<module>.cr.tsv` (the corrected oracle, written by validate.py) belongs to its module's
-    // emitter.
+    // `<module>.cr.tsv` (the corrected oracle) or `<module>.adr.tsv` (the ADR 0002 mappings), both
+    // written by validate.py, belongs to its module's emitter.
     for name in tsv_names(&dir) {
         let module_file = name
             .strip_suffix(".cr.tsv")
+            .or_else(|| name.strip_suffix(".adr.tsv"))
             .map_or_else(|| name.clone(), |m| format!("{m}.tsv"));
         if !emitted.contains(&module_file) {
             println!("STALE    tests/golden/{name} (no emitter)");

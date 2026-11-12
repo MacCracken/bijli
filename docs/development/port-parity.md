@@ -998,3 +998,84 @@ Language facts the probes found, beyond plan §2:
     enough to file.
   - **Two attempts changed nothing:** moving the edge paths out of the operator fns, and reading the parts in place.
   - Speed is measured, not gated.
+
+## 19. M1 part 5c-2: BjComplex's transcendental range edges (2026-11-12)
+
+- **ADR 0002 row 16** carries row 14's rule into the chain's transcendental steps. Where e^re (`exp`), cosh and
+  sinh of im (`sin`, `cos`), ln or pow of |z|, the power |z|ⁿ, or an angle (`sqrt`'s arg z / 2, `powf`'s n·arg z)
+  is not a normal double, it is taken to 53 bits with an unbounded exponent and each final product rounded once.
+  - **The guards**: `exp` off re ∈ [−708, 709]; `sin` and `cos` past |im| = 710; `ln` at row 14's edge where the
+    unbounded |z| is outside the normal range; `sqrt` where im ≠ 0 and |arg z| < 2^-1020; `powf` wherever |z|, |z|ⁿ,
+    arg z or n·arg z is not a normal double above 2^-1022 (a binary64 value of exactly 2^-1022 may be the rounding of
+    a smaller 53-bit one, so it takes the edge too). A non-finite part or exponent keeps hisab's chain.
+  - **A fix to 5c-1**: `sqrt`'s edge path used the binary64 arg z / 2, which loses bits below 2^-1022. √(DBL_MAX + j)
+    came out as 2^-513 less an ulp, where 1/(2√DBL_MAX) rounds to 2^-513 exactly.
+- **`src/crmath_ux.cyr`** (new; in the bundle after crmath_mono) computes the steps on crmath's 364-bit fixed point
+  (impetus's slow paths, error below 2^-290):
+  - e^x by `_bj_cr_exp_fx_parts`;
+  - cosh and sinh past 710 as e^|x|/2, since e^-|x| is below 2^-2048 of it;
+  - ln(s·2^E) by `_bj_cr_log_fx` plus E·ln 2;
+  - (s·2^E)^y as crmath's pow slow path, with its exactness test given an unbounded exponent;
+  - sin and cos of a 53-bit angle past DBL_MAX by Payne–Hanek against the same 1,568 bits of 2/π;
+  - `_bj_cr_round_ux` for the 53-bit rounding, with no exponent range.
+
+  Two of these are bijli-side copies of crmath functions taking an unbounded input: the exactness test
+  (`_bj_ux_pow_exact`) and the reduction (`_bj_ux_reduce`). src/crmath.cyr is impetus's copy, kept in step with it.
+  - **Midpoints**: an exact dyadic power can be a 53-bit midpoint. For example, (2^18 − 1)²·2^700 to the power 1.5
+    is (2^18 − 1)³·2^1050, and (2^18 − 1)³ is an odd 54-bit integer. With the exactness test disabled, `cr_verify`'s
+    pow family shows 65 mismatches in 2,000 calls; with it, none.
+  - **The stand-in**: far past the range a value is (1, ±2^20) in the exponent, whose products overflow or vanish
+    exactly as the true value's do. For e^x, cosh and sinh that is past |x| = 1500, since their factors are doubles.
+    For a power it is past |y·ln x| = 10000. Its factor can be the sine of an angle far below 2^-1074, but never
+    below 2^-2098·|n|.
+- **The model** (`validate.py`'s `cx_model`) is the whole unbounded chain. Its transcendental steps are MPFR at 53
+  bits with its widest exponent range (`mpfr_ref.wide`, new), with Fractions throughout. `cx_governed` mirrors the
+  port's guards, and on every row the port keeps hisab's chain for, the model must equal that chain. That is the
+  guard's proof, now for exp, sin and cos too.
+- **The edge grid**: 910 rows appended to `complex.tsv` (`m_complex.rs`'s `edges`):
+  - exp at re ∈ ±[708, 1e10] across a dozen angles;
+  - sin and cos at |im| ∈ [710, 1e300];
+  - ln and sqrt of 20 moduli past either end or with a tiny angle;
+  - 202 powf rows: moduli and powers past either end, the two 54-bit midpoints, n·arg z past DBL_MAX, and n below
+    2^-1022.
+- **`complex.adr.tsv`: 1,987 rows**, all passed. Row 14 has 1,596, row 15 has 92, and row 16 has 299 (sin 82, cos 82,
+  powf 54, exp 51, ln 22, sqrt 8).
+- **Tests**: `tests/complex.tcyr`'s `cyrius_transcendental_edges (ADR 0002 row 16)`, 13 assertions on the model's
+  values:
+  - e^710·(1, 0) = (∞, +0), and e^1000·sin 2^-1074 = 9.733444573000164e110;
+  - e^-740·cos π on the subnormal grid, rounded once;
+  - sin(j800) = (0, ∞), and sin(−0 + j1e5) = (−0, ∞) past the stand-in;
+  - cos(π/2 + j720) = (1.5065301609522464e296, −∞);
+  - ln|DBL_MAX·(1 + j)| = 710.1292864836639, and ln|2^-1074·(1 + j)| = −744.0934983311013;
+  - √(DBL_MAX + j) with im 2^-513;
+  - (1e200)² = (∞, +0), and the 53-bit midpoint (2^18 − 1)³·2^1050 broken to even;
+  - (−1)^1e308 finite, and (2^-1074·(3 + j4))^0.5 = 2^-536 + j2^-537.
+- **`cr_verify.py`'s ux families** (`cr_verify.py . --n 2000000 --aarch64 ux`): 1,087,540 calls on x86_64 and on
+  aarch64, 0 mismatches against MPFR at 53 bits with its widest exponent range. They cover 687,540 arguments: e^x,
+  cosh, sinh, ln and pow 100,000 each, sin and cos 93,770 each, and each (s, e) result is read in two calls. The
+  arguments include binary64's ends, the stand-ins, powers of two and near-one values for ln, and for pow exact
+  squares and fourth powers, both 54-bit midpoint families, near-one powers, and powers up to |y·ln x| = 9900. The
+  angles include ones of the form RN53(arg·n) past DBL_MAX.
+- **Result, every target**: 9 modules, 0 failing; **185,378 ok, 0 failed, 10,577 accepted (ADR 01: 6,505; ADR 0002:
+  4,072)**. All 145 digests are equal on x86_64 ELF, x86_64 PE and aarch64, and `tests/complex.tcyr`'s 52 assertions
+  pass on all three. Six digests changed, those of the functions row 16 touches, whose rows the edge grid also
+  extends.
+
+| Function | Digest v2, every target |
+|---|---|
+| Complex::exp | `65d6dc5819b417b8` |
+| Complex::ln | `47ef68bf6eba60fd` |
+| Complex::sqrt | `07394dbe48c66d2d` |
+| Complex::sin | `188c17d4248e51c1` |
+| Complex::cos | `3427714b3af83662` |
+| Complex::powf | `4f6fcb559a507331` |
+- **Benchmarks** (Cyrius-only). The machine is never free of other repos' gates now, so this is an interleaved A/B:
+  HEAD (an export of 6685842) then this tree, twice over, at a load average of 2.9 to 4.1.
+  - `complex_exp` costs about 10 ns more, 395/399 ns against 405/408 ns (≈ 2.5 %): the guard's two compares.
+  - `complex_sin` is unchanged (867 ns against 867/869 ns; HEAD's second round read 959 ns, a load spike), and so is
+    `complex_mul_div` (86 ns against 87 ns).
+  - The edge paths are new benches: `complex_exp_edge` (exp(1000 + j0.5)) takes 30.7 µs, and `complex_powf_edge`
+    (|z|^2.5 past DBL_MAX, on the fixed point) 66–69 µs. Only the edges reach them.
+  - The twins' record (`docs/benchmarks-rust-v-cyrius.md`) keeps its earlier column. This run read every twin 4–8 %
+    slower, and HEAD read the same under the same load, while nothing it covers changed.
+  - Speed is measured, not gated.

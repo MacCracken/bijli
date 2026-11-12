@@ -1,7 +1,8 @@
 """Correctly rounded binary64 results from the system MPFR library (ADR 0011).
 
 Copied from impetus's scripts/oracle/mpfr_ref.py (itself kimiya's, its ADR 0006), with `const_bits` for the
-correctly rounded math tables (scripts/oracle/crtables.py); keep the two in step.
+correctly rounded math tables (scripts/oracle/crtables.py); keep the two in step. `wide` (53 bits with MPFR's
+widest exponent range, for the unbounded-exponent transcendentals of src/crmath_ux.cyr) is bijli's own.
 
 Each function returns the IEEE-754 binary64 round-to-nearest-even value of the exact mathematical
 result: MPFR at 53 bits of precision with binary64's exponent range (emin = -1073, emax = 1024) and
@@ -117,6 +118,60 @@ def const_bits(name, n):
     return mant << shift if shift >= 0 else mant >> -shift
 
 
+# ── bijli's own: 53 bits with MPFR's widest exponent range (M1 part 5c-2, ADR 0002 row 16) ──────────────────
+_m.mpfr_get_emin_min.restype = ctypes.c_long
+_m.mpfr_get_emax_max.restype = ctypes.c_long
+_m.mpfr_mul_2si.argtypes = [_P, _P, ctypes.c_long, ctypes.c_int]
+_m.mpfr_get_d_2exp.argtypes = [ctypes.POINTER(ctypes.c_long), _P, ctypes.c_int]
+_m.mpfr_get_d_2exp.restype = ctypes.c_double
+_wa, _wb, _wr = _MPFR_T(), _MPFR_T(), _MPFR_T()
+for _v in (_wa, _wb, _wr):
+    _m.mpfr_init2(ctypes.byref(_v), 53)
+
+
+def _wset(dst, v):
+    """dst = v exactly, for a float or a Fraction of at most 53 significant bits (any exponent)."""
+    if isinstance(v, float) or v == 0:
+        _m.mpfr_set_d(ctypes.byref(dst), float(v), _RNDN)
+        return
+    from fractions import Fraction
+    a = abs(v)
+    e = a.numerator.bit_length() - a.denominator.bit_length()
+    if a < Fraction(2) ** e:
+        e -= 1
+    s = v / Fraction(2) ** e
+    if Fraction(float(s)) != s:
+        raise ValueError(f"{v} has more than 53 significant bits")
+    _m.mpfr_set_d(ctypes.byref(dst), float(s), _RNDN)
+    _m.mpfr_mul_2si(ctypes.byref(dst), ctypes.byref(dst), e, _RNDN)
+
+
+def wide(name, *xs):
+    """The MPFR function `name` (a unary one, pow or atan2) at 53 bits, round to nearest even, with MPFR's widest
+    exponent range: nothing over- or underflows. Each argument is a float or a Fraction of at most 53 bits; the result
+    is a Fraction, or a float for ±0, ±∞ and NaN. The binary64 range is restored after the call."""
+    from fractions import Fraction
+    if name not in _UNARY + _BINARY or len(xs) != (1 if name in _UNARY else 2):
+        raise ValueError(name)
+    _m.mpfr_set_emin(_m.mpfr_get_emin_min())
+    _m.mpfr_set_emax(_m.mpfr_get_emax_max())
+    try:
+        _wset(_wa, xs[0])
+        if len(xs) == 2:
+            _wset(_wb, xs[1])
+            getattr(_m, "mpfr_" + name)(ctypes.byref(_wr), ctypes.byref(_wa), ctypes.byref(_wb), _RNDN)
+        else:
+            getattr(_m, "mpfr_" + name)(ctypes.byref(_wr), ctypes.byref(_wa), _RNDN)
+        e = ctypes.c_long(0)
+        d = _m.mpfr_get_d_2exp(ctypes.byref(e), ctypes.byref(_wr), _RNDN)
+    finally:
+        _m.mpfr_set_emin(-1073)
+        _m.mpfr_set_emax(1024)
+    if d == 0 or d != d or d in (float("inf"), float("-inf")):
+        return d
+    return Fraction(d) * Fraction(2) ** e.value
+
+
 def bits(x):
     return struct.unpack("<Q", struct.pack("<d", x))[0]
 
@@ -141,4 +196,11 @@ if __name__ == "__main__":
     assert log(0.0) == -math.inf and exp(-math.inf) == 0.0
     # Agrees with glibc where glibc is correctly rounded.
     assert exp(1.0) == math.e and log(10.0) == math.log(10.0) and acos(-1.0) == math.pi
+    # The widest exponent range (bijli's section): nothing overflows, and the binary64 range comes back.
+    from fractions import Fraction
+    big = wide("exp", 1000.0)
+    assert big > Fraction(2) ** 1442 and big < Fraction(2) ** 1443 and exp(1000.0) == math.inf
+    assert abs(float(wide("log", Fraction(2) ** 3000)) - 3000 * math.log(2)) < 1e-12
+    assert wide("pow", Fraction(5) * Fraction(2) ** 1022, 2.0) == Fraction(25) * Fraction(2) ** 2044
+    assert wide("sin", Fraction(2) ** -1100) == Fraction(2) ** -1100 and exp(-746.0) == 0.0
     print(f"mpfr_ref: MPFR {VERSION}, self-checks ok")

@@ -172,6 +172,60 @@ fn main() {
     var p13i: f64 = p13.im;
     assert(p13i == re_inf, "a non-finite part keeps hisab's chain");
 
+    test_group("cyrius_transcendental_edges (ADR 0002 row 16)");
+    # The chain's transcendental operations with an unbounded exponent too (src/crmath_ux.cyr); the expected bits are
+    # scripts/oracle/validate.py's model (MPFR at 53 bits with its widest exponent range).
+    var t1074: f64 = _bj_from_bits(1);                          # 2^-1074
+    var dmax: f64 = _bj_from_bits(0x7FEFFFFFFFFFFFFF);          # DBL_MAX
+    var x5 = BjComplex_new(710.0, 0.0);
+    var y5 = x5.exp();
+    assert(is_c(y5, _BJ_K_INF, 0.0) == 1, "e^710·(1, 0): im +0 (hisab: ∞·0 = NaN)");
+    var x6 = BjComplex_new(1000.0, t1074);
+    var y6 = x6.exp();
+    assert(is_c(y6, _BJ_K_INF, _bj_from_bits(0x56F9E72379AED73B)) == 1,
+      "e^1000·sin 2^-1074 = 9.733444573000164e110 (hisab: ∞)");
+    var x7 = BjComplex_new(-740.0, _bj_from_bits(0x400921FB54442D18));
+    var y7 = x7.exp();
+    assert(is_c(y7, _bj_from_bits(0x8000000000000055), 0.0) == 1, "e^-740·cos π on the subnormal grid, rounded once");
+    var x8 = BjComplex_new(0.0, 800.0);
+    var y8 = x8.sin();
+    assert(is_c(y8, 0.0, _BJ_K_INF) == 1, "sin(j800) = (0, ∞) (hisab: 0·∞ = NaN)");
+    var x9 = BjComplex_new(-0.0, 100000.0);
+    var y9 = x9.sin();
+    assert(is_c(y9, -0.0, _BJ_K_INF) == 1, "sin(−0 + j1e5) = (−0, ∞): past 1500 the stand-in keeps the zero's sign");
+    var x10 = BjComplex_new(_bj_from_bits(0x3FF921FB54442D18), 720.0);
+    var y10 = x10.cos();
+    assert(is_c(y10, _bj_from_bits(0x7D6D7C59A708141D), -_BJ_K_INF) == 1,
+      "cos(π/2 + j720): cos(π/2)·cosh 720 = 1.5065301609522464e296 (hisab: ∞)");
+    var x11 = BjComplex_new(dmax, dmax);
+    var y11 = x11.ln();
+    var y11r: f64 = y11.re;
+    assert(same(y11r, _bj_from_bits(0x40863108C75A1936)) == 1, "ln|DBL_MAX·(1 + j)| = 710.1292864836639 (hisab: ∞)");
+    var x12 = BjComplex_new(t1074, t1074);
+    var y12 = x12.ln();
+    var y12r: f64 = y12.re;
+    assert(same(y12r, _bj_from_bits(0xC08740BF7C0D927C)) == 1, "ln|2^-1074·(1 + j)| = −744.0934983311013 (hisab: −∞)");
+    var x13 = BjComplex_new(dmax, 1.0);
+    var y13 = x13.sqrt();
+    assert(is_c(y13, _bj_from_bits(0x5FEFFFFFFFFFFFFF), _bj_from_bits(0x1FE0000000000000)) == 1,
+      "√(DBL_MAX + j): im 2^-513, the angle arg/2 below 2^-1022 kept to 53 bits");
+    var x14 = BjComplex_new(_bj_from_bits(0x6974E718D7D7625A), 0.0);
+    var y14 = x14.powf(2.0);
+    assert(is_c(y14, _BJ_K_INF, 0.0) == 1, "(1e200)²: (∞, +0) (hisab: ∞·0 = NaN)");
+    var a3: f64 = 68718952449.0 * _bj_from_bits(0x6BB0000000000000);   # (2^18 − 1)²·2^700
+    var x15 = BjComplex_new(a3, _bj_from_bits(0x0170000000000000));       # im 2^-1000
+    var y15 = x15.powf(1.5);
+    assert(is_c(y15, _BJ_K_INF, _bj_from_bits(0x1877FFFA00000001)) == 1,
+      "|z|^1.5 = (2^18 − 1)³·2^1050, a 53-bit midpoint, broken to even exactly");
+    var x16 = BjComplex_new(-1.0, 0.0);
+    var y16 = x16.powf(_bj_from_bits(0x7FE1CCF385EBC8A0));               # 1e308
+    assert(is_c(y16, _bj_from_bits(0xBFE2586F820417F1), _bj_from_bits(0xBFEA381AF18E8762)) == 1,
+      "(−1)^1e308: n·π past DBL_MAX, its cosine and sine (hisab: NaN)");
+    var x17 = BjComplex_new(3.0 * t1074, 4.0 * t1074);
+    var y17 = x17.powf(0.5);
+    assert(is_c(y17, _bj_from_bits(0x1E70000000000000), _bj_from_bits(0x1E60000000000000)) == 1,
+      "(2^-1074·(3 + j4))^0.5 = 2^-536 + j2^-537");
+
     return assert_summary();
 }
 

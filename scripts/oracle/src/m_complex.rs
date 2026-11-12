@@ -9,7 +9,7 @@
 //! part 2d). The grid: the specials crossed with each other, values over every decade from 1e-310 to 1e308
 //! with both signs (the range edges of re² + im² among them), the unit circle, and seeded uniform values.
 
-use crate::grids::{Rng, specials};
+use crate::grids::{Rng, pow2, specials};
 use crate::tsv::{Class, Module, b, f, s};
 use bijli::polarization::{Complex, ComplexExt, complex_from_polar, complex_real, complex_zero};
 use std::hint::black_box;
@@ -173,5 +173,117 @@ pub fn emit() -> Module {
             &c(bb(a).powf(black_box(n))),
         );
     }
+    edges(&mut m);
     m
+}
+
+/// The transcendental range edges (bijli ADR 0002 row 16, M1 part 5c-2), appended so the rows above keep their
+/// places: e^re past DBL_MAX or below 2^-1022 (exp), cosh and sinh past DBL_MAX (sin, cos), ln and sqrt of an |z|
+/// past DBL_MAX or below 2^-1022, sqrt's angle arg z / 2 below 2^-1022, and powf's |z|, |z|^n, arg z and n·arg z
+/// past either end, with exact 53-bit midpoints of |z|^n. Every input is exact (literals, products by powers of two).
+fn edges(m: &mut Module) {
+    use std::f64::consts::{FRAC_PI_2, PI};
+    let bb = |z: Complex| black_box(z);
+    let tiny = f64::from_bits(1);
+    let min = f64::MIN_POSITIVE;
+    let max = f64::MAX;
+    let exp_re = [
+        709.0, 709.5, 709.78, 709.8, 710.0, 745.0, 1000.0, 1499.0, 1501.0, 1e10, -708.0, -708.5, -720.0, -745.0,
+        -745.2, -800.0, -1000.0, -1501.0, -1e10,
+    ];
+    let exp_im = [0.0, -0.0, tiny, 1e-300, min, 1.0, -1.0, FRAC_PI_2, PI, 1e10, 1e300, -2.5];
+    for &re in &exp_re {
+        for &im in &exp_im {
+            let z = Complex::new(re, im);
+            m.row("Complex::exp", Class::C, &c(z), &c(bb(z).exp()));
+        }
+    }
+    let hyp_im = [710.0, 710.4, 710.5, 711.0, 800.0, 1200.0, 1499.0, 1501.0, 1e5, 1e300];
+    let hyp_re = [0.0, -0.0, tiny, 1e-300, min, 1.0, -2.0, PI, FRAC_PI_2, 1e10, 1e300];
+    for &im in &hyp_im {
+        for sg in [1.0, -1.0] {
+            for &re in &hyp_re {
+                let z = Complex::new(re, sg * im);
+                m.row("Complex::sin", Class::C, &c(z), &c(bb(z).sin()));
+                m.row("Complex::cos", Class::C, &c(z), &c(bb(z).cos()));
+            }
+        }
+    }
+    let k = 13.0 * pow2(1018); // (3k, 4k): |z| = 5k = 1.015625·2^1024, past DBL_MAX, exactly
+    // (MAX, MAX), (MAX, 1), (2^-1074, 2^-1074) and (2^-1022, 0) are the specials grid's already.
+    let mods = [
+        (max, -max),
+        (-max, max),
+        (1e308, 1e308),
+        (-1e308, 1e308),
+        (1.5e308, -1.2e308),
+        (3.0 * k, 4.0 * k),
+        (-4.0 * k, -3.0 * k),
+        (1e-310, 1e-310),
+        (pow2(-1023), pow2(-1023)),
+        (-1e-320, 3e-321),
+        (3.0 * tiny, 4.0 * tiny),
+        (1e-308, -1e-309),
+        // sqrt's angle below 2^-1021: arg z subnormal, underflowed, or just above 2^-1022 with components in range
+        (1.0, 1e-310),
+        (4.0, 1e-310),
+        (3.0, tiny),
+        (1e300, 1e-300),
+        (1.0, -1e-320),
+        (1e200, 1e-200),
+        (f64::from_bits(0x5FDF_FFFF_FFFF_FFFF), pow2(-511)),
+        (1.0, pow2(-1021)),
+    ];
+    for &(re, im) in &mods {
+        let z = Complex::new(re, im);
+        m.row("Complex::ln", Class::C, &c(z), &c(bb(z).ln()));
+        m.row("Complex::sqrt", Class::C, &c(z), &c(bb(z).sqrt()));
+    }
+    // powf: |z| past either end, |z|^n past either end with |z| normal, both angles, and exact midpoints of |z|^n:
+    // (2^18 − 1)³ and (2^27 − 1)² have 54 bits, odd.
+    let a3 = 262_143.0 * 262_143.0 * pow2(700);
+    let a2 = 134_217_727.0 * pow2(500);
+    let pzs = [
+        (max, max),
+        (1e308, 1e308),
+        (3.0 * k, 4.0 * k),
+        (tiny, tiny),
+        (1e-310, 1e-310),
+        (3.0 * tiny, 4.0 * tiny),
+        (1e200, 0.0),
+        (1e200, 1e199),
+        (-1e200, 0.0),
+        (1e-200, 0.0),
+        (0.0, 1e-200),
+        (1e154, 1e154),
+        (1.0, 1e-310),
+        (1e300, 1e-300),
+    ];
+    let ns = [0.5, 1.0, 2.0, -1.0, -2.0, 0.25, 1.5, 3.0, -0.5, 1e-20, -1.6, 0.0];
+    let mut pow_rows: Vec<(f64, f64, f64)> = Vec::new();
+    for &(re, im) in &pzs {
+        for &n in &ns {
+            pow_rows.push((re, im, n));
+        }
+    }
+    pow_rows.extend([(a3, pow2(-1000), 1.5), (a3, 0.0, 1.5), (a2, pow2(-1000), 2.0), (a2, 0.0, 2.0)]);
+    for &(re, im) in &[(-1.0, 0.0), (-2.0, 0.0), (-0.5, 0.0), (0.0, 1.0), (-1.0, 1e-300)] {
+        for n in [1e308, -1e308, max, 6e307] {
+            pow_rows.push((re, im, n));
+        }
+    }
+    for &(re, im) in &[(1.0, 1.0), (3.0, -4.0)] {
+        for n in [tiny, 1e-310, -1e-315, min, 4e-308] {
+            pow_rows.push((re, im, n));
+        }
+    }
+    for &(re, im, n) in &pow_rows {
+        let z = Complex::new(re, im);
+        m.row(
+            "Complex::powf",
+            Class::C,
+            &[f(re), f(im), f(n)],
+            &c(bb(z).powf(black_box(n))),
+        );
+    }
 }

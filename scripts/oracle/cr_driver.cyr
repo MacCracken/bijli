@@ -3,13 +3,14 @@
 # Input build/cr_in.txt, one call per line: `<fn> <word hex> …` (up to twelve 16-digit words: an f64's bits, or an
 # integer in two's complement). Output, one line per call: the result's bits in hex. Beside the primitives: kimiya's
 # correctly rounded monomials, square roots of quotients and unbounded-exponent final operations (src/crmath_kx.cyr, M1
-# part 5) and bijli's √ of a monomial (src/crmath_mono.cyr), which cr_verify.py checks against exact values (Python's
-# Fraction and integer square root). Built from the math sources the bundle carries (src/constants.cyr … src/mathx.cyr,
-# in the manifest's order and byte for byte what dist/bijli.cyr holds): the bundle is `private` and these entry points
-# are bijli-internal, so a consumer of dist/bijli.cyr can't call them, but a file of internals only has no marker and
-# can be included on its own. scripts/oracle/cr_verify.py builds it, runs it natively and under qemu-aarch64, and
-# compares every result with MPFR. `tan_slow` calls tan's fixed-point path directly (finite |x| ≥ 2^-27 only), so the
-# path the rounding test rarely reaches is checked on arguments of its own.
+# part 5), bijli's √ of a monomial (src/crmath_mono.cyr), which cr_verify.py checks against exact values (Python's
+# Fraction and integer square root), and bijli's transcendentals with an unbounded exponent (src/crmath_ux.cyr, M1 part
+# 5c-2), checked against MPFR with its widest exponent range. Built from the math sources the bundle carries
+# (src/constants.cyr … src/mathx.cyr, in the manifest's order and byte for byte what dist/bijli.cyr holds): the bundle
+# is `private` and these entry points are bijli-internal, so a consumer of dist/bijli.cyr can't call them, but a file of
+# internals only has no marker and can be included on its own. scripts/oracle/cr_verify.py builds it, runs it natively
+# and under qemu-aarch64, and compares every result with MPFR. `tan_slow` calls tan's fixed-point path directly (finite
+# |x| ≥ 2^-27 only), so the path the rounding test rarely reaches is checked on arguments of its own.
 include "lib/syscalls.cyr"
 include "lib/string.cyr"
 include "lib/alloc.cyr"
@@ -25,6 +26,7 @@ include "src/crmath_k_data.cyr"
 include "src/crmath_k.cyr"
 include "src/crmath_kx.cyr"
 include "src/crmath_mono.cyr"
+include "src/crmath_ux.cyr"
 include "src/mathx.cyr"
 
 # The value of hex digit byte c (lowercase).
@@ -53,7 +55,10 @@ fn _wf(w, k): f64 {
     return x;
 }
 
-# One call on the words at w: the result's bits, or -1 for an unknown function name.
+# Set when a call names an unknown function (a result word may be any value, -1 among them).
+var _unknown = 0;
+
+# One call on the words at w: the result's bits (_unknown set, and 0, for an unknown function name).
 fn _call(fp, fl, w): i64 {
     var x: f64 = _wf(w, 0);
     var y: f64 = _wf(w, 1);
@@ -104,7 +109,35 @@ fn _call(fp, fl, w): i64 {
     elif (_is(fp, fl, "ux_add") == 1) { r = _bj_k_ux_add_f64(x, load64(w + 8), _wf(w, 2), load64(w + 24)); }
     elif (_is(fp, fl, "ux_sub") == 1) { r = _bj_k_ux_sub_f64(x, load64(w + 8), _wf(w, 2), load64(w + 24)); }
     elif (_is(fp, fl, "ux_sqrt") == 1) { r = _bj_k_ux_sqrt_f64(x, load64(w + 8)); }
-    else { return 0 - 1; }
+    elif (_is(fp, fl, "ux_ln") == 1) { r = _bj_ux_ln(x, load64(w + 8)); }
+    elif (_is(fp, fl, "ux_sin") == 1) { r = _bj_ux_sin_cos(x, load64(w + 8), 1); }
+    elif (_is(fp, fl, "ux_cos") == 1) { r = _bj_ux_sin_cos(x, load64(w + 8), 0); }
+    elif (_is(fp, fl, "ux_exp") == 1) {
+        # ux_exp x part (and ux_cosh, ux_sinh): the 53-bit value's s (part 0) or e (part 1)
+        var es, ee = _bj_ux_exp(x);
+        if (load64(w + 8) == 1) { return ee; }
+        r = es;
+    }
+    elif (_is(fp, fl, "ux_cosh") == 1) {
+        var cs, ce = _bj_ux_cosh(x);
+        if (load64(w + 8) == 1) { return ce; }
+        r = cs;
+    }
+    elif (_is(fp, fl, "ux_sinh") == 1) {
+        var ss, se = _bj_ux_sinh(x);
+        if (load64(w + 8) == 1) { return se; }
+        r = ss;
+    }
+    elif (_is(fp, fl, "ux_pow") == 1) {
+        # ux_pow s e y part: (s·2^e)^y's s (part 0) or e (part 1)
+        var ps, pe = _bj_ux_pow(x, load64(w + 8), _wf(w, 2));
+        if (load64(w + 24) == 1) { return pe; }
+        r = ps;
+    }
+    else {
+        _unknown = 1;
+        return 0;
+    }
     var b = _bj_bits(r);
     return b;
 }
@@ -130,7 +163,7 @@ fn main(): i64 {
             p = p + 17;
         }
         var w = _call(buf + at, sp - at, &words);
-        if (w == 0 - 1) { println("cr_driver: unknown function"); return 1; }
+        if (_unknown == 1) { println("cr_driver: unknown function"); return 1; }
         fmt_hex(w);
         println("");
         at = end + 1;

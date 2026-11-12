@@ -66,7 +66,10 @@ natively and under qemu-aarch64 (`python3 -I -B scripts/oracle/cr_verify.py . --
 `cyrius distlib`). `tan_slow` calls tan's fixed-point path directly, so the path the rounding test rarely reaches is
 checked on arguments of its own. Its exact families (`cr_verify.py . exact`) check src/crmath_kx.cyr's copy of kimiya's
 correctly rounded monomials, square roots and unbounded-exponent operations against exact values (Python's Fraction and
-an integer square root), not MPFR.
+an integer square root), not MPFR. Its ux families (`cr_verify.py . ux`, M1 part 5c-2) check src/crmath_ux.cyr's
+e^x, cosh, sinh, ln(s·2^E), (s·2^E)^y and sin and cos past DBL_MAX against `mpfr_ref.wide`: MPFR at 53 bits with its
+widest exponent range, where nothing over- or underflows. Each (s, e) result is read in two calls, its significand
+and its exponent.
 
 ## Format 1
 
@@ -102,9 +105,11 @@ fn <TAB> class <TAB> inputs <TAB> outputs <TAB> note
 
 `<module>.adr.tsv` (M1 part 5) holds the ADR 0002 mappings: for a golden row whose port result an ADR 0002 row
 changes, the port's outputs as that row gives them, written by `validate.py --write` from exact values
-(`exact.py`: Fraction and an integer square root), never from the port. Its columns are fn, inputs (the key, byte for
-byte), outputs, the ADR 0002 row number, and a note; the harness loads it beside `<module>.cr.tsv`, compares the port
-against it under the row's class, and reports each row number's count. A golden row never has both.
+(`exact.py`: Fraction and an integer square root; `mpfr_ref.wide` for the transcendental steps of ADR 0002 row 16),
+never from the port. Its columns are fn, inputs (the key, byte for byte), outputs, the ADR 0002 row number, and a note;
+the harness loads it beside `<module>.cr.tsv`, compares the port against it under the row's class, and reports each
+row number's count. A golden row never has both. The generator only checks that it has a module; it has no platform
+header, since exact values are the same everywhere.
 
 `<module>.cr.tsv` (the corrected oracle, kimiya ADR 0006) holds, for a row whose glibc calls
 misrounded, the oracle's sequence of operations evaluated with correctly rounded primitives

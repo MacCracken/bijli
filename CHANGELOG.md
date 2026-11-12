@@ -148,7 +148,26 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
   is a normal double. `powf` has no cutoff. `validate.py` gains an exact model of the chains, which writes
   `complex.adr.tsv` (1,592 rows) and proves, row by row, that in-range rows keep hisab's bits.
 
+- **Cyrius port, M1 part 5c-2 — BjComplex's transcendental range edges** (ADR 0002 row 16). The unbounded chain now
+  covers its transcendental steps too: e^re in `exp`, cosh and sinh in `sin` and `cos`, ln and pow of an |z| or a
+  power past DBL_MAX or below 2^-1022, and the angles of `sqrt` and `powf`. Each is taken to 53 bits with an
+  unbounded exponent and each final product rounded once. The new `src/crmath_ux.cyr` computes them on crmath's
+  364-bit fixed point. That covers e^x, cosh and sinh, ln(s·2^E), and (s·2^E)^y, whose exactness test catches its
+  53-bit midpoints, and sin and cos of an angle past DBL_MAX. `cr_verify.py`'s new ux families check every function
+  against MPFR at 53 bits with its widest exponent range (`mpfr_ref.wide`). The golden corpus gains a 910-row edge
+  grid, and `complex.adr.tsv` grows to 1,987 rows (row 16: 299).
+
 ### Fixed
+
+- **complex** (ADR 0002 row 16): `exp(710 + j0)` was (∞, NaN) for (∞, 0), and `exp(1000 + j2^-1074)` (∞, ∞) for
+  (∞, 9.73e110). `sin(j800)` was (NaN, ∞) and `cos(π/2 + j720)` (∞, −∞) for (1.51e296, −∞). `ln|DBL_MAX·(1 + j)|`
+  was ∞ for 710.13. `(1e200)²` by `powf` was (∞, NaN), and `(−1)^1e308` NaN for a finite unit value.
+- **complex** (5c-1's `sqrt` edge): where arg z / 2 falls below 2^-1022, its binary64 rounding lost bits, so
+  `√(DBL_MAX + j)` came out an ulp low. The angle is now kept to 53 bits.
+- **Oracle check**: `cargo run … -- --check` reported every `.adr.tsv` as stale ("no emitter") and as missing a
+  platform header, so it had exited 1 since M1 part 5b. Like a `.cr.tsv`, a `.adr.tsv` now belongs to its module's
+  emitter, and the platform check skips it, since it holds exact values. `cr_driver.cyr`'s "unknown function"
+  sentinel was −1, which an exponent result can be; it is now a flag.
 
 - **complex** (ADR 0002 rows 14, 15): `abs(1e160, 1e160)` was ∞, `(1e200 + j1e200)²`'s real part NaN, `1/1e160` 0,
   `ln(1e200 + j1e200)` ∞, and `powf` returned 0 for every |z| < 1e-150 whatever the exponent (0⁰ was 0).

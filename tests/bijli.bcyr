@@ -23,7 +23,8 @@ fn bench_noop(): i64 { return 0; }
 # (the last-error record, on the main thread's static record, with no syscall until a thread exists), the same with
 # an f64 field (Rust's Display through src/fmtf.cyr), one Display, a complex multiply-and-divide (src/complex.cyr,
 # by value), a complex exp (three correctly rounded calls), a sinh and a cosh over [0, 70) (src/crmath.cyr's bijli
-# section), a complex sin (four calls), and the JSON writer and readers (src/json.cyr).
+# section), a complex sin (four calls), a complex exp and powf at the range edge (src/crmath_ux.cyr's slow paths), and
+# the JSON writer and readers (src/json.cyr).
 fn main(): i64 {
     alloc_init();
     var b = bench_new("noop");
@@ -112,6 +113,26 @@ fn main(): i64 {
     }
     bench_batch_stop(bs, 100000);
     bench_report(bs);
+    # The range edges' slow paths (ADR 0002 row 16, src/crmath_ux.cyr): e^1000 with an unbounded exponent, and a
+    # power past DBL_MAX (|z|^2.5 for |z| ≈ 1e200) on the fixed point.
+    var ce = BjComplex_new(1000.0, 0.5);
+    var bxe = bench_new("complex_exp_edge");
+    bench_batch_start(bxe);
+    for (var k = 0; k < 2000; k = k + 1) {
+        var ee = ce.exp();
+        acc = acc + ee;
+    }
+    bench_batch_stop(bxe, 2000);
+    bench_report(bxe);
+    var cp = BjComplex_new(_bj_from_bits(0x6974E718D7D7625A), _bj_from_bits(0x693A9C2B1E8B2B7A));
+    var bpe = bench_new("complex_powf_edge");
+    bench_batch_start(bpe);
+    for (var k = 0; k < 2000; k = k + 1) {
+        var pe = cp.powf(2.5);
+        acc = acc + pe;
+    }
+    bench_batch_stop(bpe, 2000);
+    bench_report(bpe);
     if (hsum == 7.0) { println("."); }
     # ── Rust twins (rust-old/benches/benchmarks.rs, the same inputs) ──
     var fo: f64[3];
