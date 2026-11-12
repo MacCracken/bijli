@@ -1,7 +1,11 @@
-//! `field.tsv` — rust-old/src/field.rs, M1 part 3a: `FieldVector`, the point-charge fields and potential, the
-//! superposition, the energy densities and the dipoles (3b and 3c add the rest of the module).
+//! `field.tsv` — rust-old/src/field.rs. M1 part 3a: `FieldVector`, the point-charge fields and potential, the
+//! superposition, the energy densities and the dipoles. Part 3b: the Gauss's-law fields, the multipoles, the images,
+//! the Green's functions and the stress tensor. (3c adds `trace_field_line`.)
 //!
-//! Every row is class A: the functions are + − × ÷ and sqrt in a fixed order, which the port repeats. A vector is
+//! Rows are class A where a function is + − × ÷, sqrt, copysign and clamp in a fixed order, which the port repeats;
+//! the multipole moments (atan2, cos, sin) and the scalar Green's function (cos, sin) are class C, against the
+//! corrected oracle, and the scalar Green's function is mapped by ADR 0002 row 5 (the port's value is the conjugate:
+//! e^{+jωt}). A 3×3 tensor is nine `f:` tokens, row-major. A vector is
 //! three `f:` tokens; a position `[f64; 3]` likewise. A `Result` is its value's tokens on `Ok`, or `E:<Variant>` and
 //! the error's Display text on `Err` (ADR 0002 row 4: the port reads both back from the last-error record). The
 //! superposition's charges are `v:<4n>` then q, x, y, z per charge.
@@ -14,8 +18,14 @@ use crate::grids::{Rng, pow2, specials};
 use crate::tsv::{Class, Module, Tok, err, f, s};
 use bijli::field::{
     FieldVector, electric_dipole_field, electric_dipole_potential, electric_energy_density,
-    electric_field_point_charge, electric_field_superposition, electric_potential_point_charge,
-    magnetic_dipole_field, magnetic_energy_density, magnetic_field_moving_charge,
+    electric_field_charged_sphere, electric_field_disk_axis, electric_field_infinite_line,
+    electric_field_infinite_plane, electric_field_inside_cylinder, electric_field_inside_sphere,
+    electric_field_outside_cylinder, electric_field_point_charge, electric_field_ring_axis,
+    electric_field_superposition, electric_potential_point_charge, electric_quadrupole_potential,
+    greens_function_scalar, greens_function_static, image_charge_dielectric, image_charge_plane,
+    image_charge_sphere, magnetic_dipole_field, magnetic_energy_density,
+    magnetic_field_moving_charge, maxwell_stress_tensor, multipole_moment, poynting_flux_surface,
+    spherical_multipole_moment, stress_tensor_force,
 };
 use std::hint::black_box;
 
@@ -39,6 +49,77 @@ fn res_f(r: bijli::error::Result<f64>) -> Vec<Tok> {
         Ok(x) => vec![f(x)],
         Err(e) => vec![err(&e), s(e.to_string())],
     }
+}
+
+fn res_pair(r: bijli::error::Result<(f64, f64)>) -> Vec<Tok> {
+    match r {
+        Ok((a, b)) => vec![f(a), f(b)],
+        Err(e) => vec![err(&e), s(e.to_string())],
+    }
+}
+
+fn res_image(r: bijli::error::Result<(f64, [f64; 3])>) -> Vec<Tok> {
+    match r {
+        Ok((q, p)) => cat(&[vec![f(q)], p3(p)]),
+        Err(e) => vec![err(&e), s(e.to_string())],
+    }
+}
+
+/// Distances and radii: the specials, negatives, the cutoff 1e-30 from both sides, binades, seeded.
+fn distances(rng: &mut Rng) -> Vec<f64> {
+    let mut ds = specials();
+    ds.extend([
+        -2.0, -1e-300, 0.99e-30, 1e-30, 1.01e-30, 1e-15, 0.25, 0.5, 1.0, 2.0, 1e8, 1e200,
+    ]);
+    for k in (-1074..=1023).step_by(41) {
+        ds.push(pow2(k));
+    }
+    for _ in 0..60 {
+        ds.push(rng.log_uniform(-12.0, 6.0));
+    }
+    ds
+}
+
+/// Charge sets for the multipole moments: none, one at the origin, one near the pole, and 1–4 seeded charges (one at
+/// the origin or on the z axis in some).
+fn charge_sets(rng: &mut Rng) -> Vec<Vec<(f64, [f64; 3])>> {
+    let mut sets = vec![
+        vec![],
+        vec![(4.0, [0.0; 3])],
+        vec![(2e-9, [1e-9, 0.0, 1.0])],
+    ];
+    for n in 0..30 {
+        let count = 1 + n % 4;
+        let mut cs: Vec<(f64, [f64; 3])> = (0..count)
+            .map(|_| {
+                (
+                    rng.signed_log_uniform(-10.0, -8.0),
+                    [
+                        rng.uniform(-1.0, 1.0),
+                        rng.uniform(-1.0, 1.0),
+                        rng.uniform(-1.0, 1.0),
+                    ],
+                )
+            })
+            .collect();
+        if n % 7 == 3 {
+            cs[0].1 = [0.0; 3];
+        }
+        if n % 5 == 1 {
+            cs[0].1 = [0.0, 0.0, rng.uniform(-1.0, 1.0)];
+        }
+        sets.push(cs);
+    }
+    sets
+}
+
+fn charges_tok(cs: &[(f64, [f64; 3])]) -> Vec<Tok> {
+    let mut v = vec![Tok::V(4 * cs.len())];
+    for (q, p) in cs {
+        v.push(f(*q));
+        v.extend(p3(*p));
+    }
+    v
 }
 
 fn cat(parts: &[Vec<Tok>]) -> Vec<Tok> {
@@ -321,6 +402,240 @@ pub fn emit() -> Module {
             &[f(e)],
             &[f(magnetic_energy_density(black_box(e)))],
         );
+        m.row(
+            "field::electric_field_infinite_plane",
+            Class::A,
+            &[f(e)],
+            &[f(electric_field_infinite_plane(black_box(e)))],
+        );
     }
+    emit_3b(&mut m, &mut rng, &vs);
     m
+}
+
+/// Part 3b: the Gauss's-law fields, the multipoles, the images, the Green's functions and the stress tensor.
+fn emit_3b(m: &mut Module, rng: &mut Rng, vs: &[FieldVector]) {
+    let ds = distances(rng);
+    let qs = charges();
+    for (k, &d) in ds.iter().enumerate() {
+        let q = qs[k % qs.len()];
+        let r = ds[(k * 13 + 5) % ds.len()];
+        let ins = [f(q), f(d)];
+        m.row(
+            "field::electric_field_charged_sphere",
+            Class::A,
+            &ins,
+            &res_f(electric_field_charged_sphere(black_box(q), d)),
+        );
+        m.row(
+            "field::electric_field_infinite_line",
+            Class::A,
+            &ins,
+            &res_f(electric_field_infinite_line(black_box(q), d)),
+        );
+        m.row(
+            "field::electric_field_outside_cylinder",
+            Class::A,
+            &ins,
+            &res_f(electric_field_outside_cylinder(black_box(q), d)),
+        );
+        m.row(
+            "field::electric_field_inside_cylinder",
+            Class::A,
+            &ins,
+            &res_f(electric_field_inside_cylinder(black_box(q), d)),
+        );
+        for (rr, dd) in [(r, d), (d, r), (1.0, d), (d, 0.5 * d), (d, d)] {
+            m.row(
+                "field::electric_field_inside_sphere",
+                Class::A,
+                &[f(q), f(rr), f(dd)],
+                &res_f(electric_field_inside_sphere(black_box(q), rr, dd)),
+            );
+        }
+        for z in [r, -r, d, 0.0, -0.0, 1e-11] {
+            m.row(
+                "field::electric_field_ring_axis",
+                Class::A,
+                &[f(q), f(d), f(z)],
+                &res_f(electric_field_ring_axis(black_box(q), d, z)),
+            );
+            m.row(
+                "field::electric_field_disk_axis",
+                Class::A,
+                &[f(q), f(d), f(z)],
+                &res_f(electric_field_disk_axis(black_box(q), d, z)),
+            );
+        }
+    }
+    m.row(
+        "field::electric_field_ring_axis",
+        Class::A,
+        &[f(1e-9), f(0.0), f(0.0)],
+        &res_f(electric_field_ring_axis(black_box(1e-9), 0.0, 0.0)),
+    );
+
+    // Quadrupole tensors from the vector grid, a linear quadrupole among them; positions random and near the origin.
+    for (k, &v) in vs.iter().enumerate().step_by(3) {
+        let a = vs[(k * 5 + 1) % vs.len()];
+        let b = vs[(k * 7 + 2) % vs.len()];
+        let mut qt = [[v.x, v.y, v.z], [a.x, a.y, a.z], [b.x, b.y, b.z]];
+        if k % 9 == 0 {
+            qt = [[-2e-15, 0.0, 0.0], [0.0, -2e-15, 0.0], [0.0, 0.0, 4e-15]];
+        }
+        let p = if k % 11 == 4 {
+            [0.0, 1e-16, 0.0]
+        } else {
+            [
+                rng.uniform(-3.0, 3.0),
+                rng.uniform(-3.0, 3.0),
+                rng.uniform(-3.0, 3.0),
+            ]
+        };
+        let mut ins: Vec<Tok> = qt
+            .iter()
+            .flat_map(|row| row.iter().map(|&x| f(x)))
+            .collect();
+        ins.extend(p3(p));
+        m.row(
+            "field::electric_quadrupole_potential",
+            Class::A,
+            &ins,
+            &res_f(electric_quadrupole_potential(&qt, black_box(p))),
+        );
+    }
+
+    // Multipole moments: l ≤ 10 for every m (and |m| = l + 1, refused), then high orders.
+    let sets = charge_sets(rng);
+    let mut lms: Vec<(u32, i32)> = Vec::new();
+    for l in 0..=10_u32 {
+        let li = i32::try_from(l).unwrap_or(0);
+        for mm in -li - 1..=li + 1 {
+            lms.push((l, mm));
+        }
+    }
+    lms.extend([
+        (20, 7),
+        (20, -20),
+        (50, 25),
+        (200, 200),
+        (200, 0),
+        (200, -199),
+    ]);
+    for (n, cs) in sets.iter().enumerate() {
+        for (j, &(l, mm)) in lms.iter().enumerate() {
+            if (j + n) % 3 != 0 && l <= 10 {
+                continue;
+            }
+            let ins = cat(&[vec![crate::tsv::i(l), crate::tsv::i(mm)], charges_tok(cs)]);
+            m.row(
+                "field::multipole_moment",
+                Class::C,
+                &ins,
+                &res_f(multipole_moment(black_box(l), mm, cs)),
+            );
+            m.row(
+                "field::spherical_multipole_moment",
+                Class::C,
+                &ins,
+                &res_pair(spherical_multipole_moment(black_box(l), mm, cs)),
+            );
+        }
+    }
+
+    // Images and Green's functions over the position pairs.
+    let ps = pairs(rng);
+    for (k, &(a, b)) in ps.iter().enumerate() {
+        let q = qs[k % qs.len()];
+        let rr = ds[k % ds.len()];
+        let e1 = [1.0, 4.0, 2.0, 2.0, 0.0, -1.0, f64::NAN, 80.0][k % 8];
+        let e2 = [4.0, 1.0, 2.0, -1.0, 4.0, 1.0, 2.0, f64::INFINITY][(k / 8) % 8];
+        let pz = b[2];
+        let (qi, pi) = image_charge_plane(black_box(q), a, pz);
+        m.row(
+            "field::image_charge_plane",
+            Class::A,
+            &cat(&[vec![f(q)], p3(a), vec![f(pz)]]),
+            &cat(&[vec![f(qi)], p3(pi)]),
+        );
+        m.row(
+            "field::image_charge_sphere",
+            Class::A,
+            &cat(&[vec![f(q)], p3(b), vec![f(rr)]]),
+            &res_image(image_charge_sphere(black_box(q), b, rr)),
+        );
+        m.row(
+            "field::image_charge_dielectric",
+            Class::A,
+            &cat(&[vec![f(q)], p3(b), vec![f(e1), f(e2)]]),
+            &res_image(image_charge_dielectric(black_box(q), b, e1, e2)),
+        );
+        let kk = [
+            0.0,
+            1.0,
+            100.0,
+            2.0 * std::f64::consts::PI,
+            -3.5,
+            1e6,
+            f64::NAN,
+        ][k % 7];
+        m.row(
+            "field::greens_function_scalar",
+            Class::C,
+            &cat(&[p3(b), p3(a), vec![f(kk)]]),
+            &res_pair(greens_function_scalar(black_box(b), a, kk)),
+        );
+        m.row(
+            "field::greens_function_static",
+            Class::A,
+            &cat(&[p3(b), p3(a)]),
+            &res_f(greens_function_static(black_box(b), a)),
+        );
+    }
+
+    // The stress tensor, its force, and the Poynting flux.
+    for (k, &e) in vs.iter().enumerate().step_by(2) {
+        let b = vs[(k * 3 + 7) % vs.len()].scale(1e-4);
+        let nrm = vs[(k * 5 + 1) % vs.len()];
+        let t = maxwell_stress_tensor(&black_box(e), &b);
+        let tt: Vec<Tok> = t.iter().flat_map(|row| row.iter().map(|&x| f(x))).collect();
+        m.row(
+            "field::maxwell_stress_tensor",
+            Class::A,
+            &cat(&[v3(e), v3(b)]),
+            &tt,
+        );
+        m.row(
+            "field::stress_tensor_force",
+            Class::A,
+            &cat(&[tt.clone(), v3(nrm)]),
+            &v3(stress_tensor_force(&black_box(t), &nrm)),
+        );
+    }
+    for n in 0..60 {
+        let count = n % 5;
+        let samples: Vec<(FieldVector, FieldVector, FieldVector, f64)> = (0..count)
+            .map(|j| {
+                (
+                    vs[(n * 7 + j * 3) % vs.len()],
+                    vs[(n * 11 + j * 5 + 1) % vs.len()].scale(1e-6),
+                    vs[(n * 13 + j) % vs.len()],
+                    rng.log_uniform(-4.0, 0.0),
+                )
+            })
+            .collect();
+        let mut ins = vec![Tok::V(10 * samples.len())];
+        for (e, b, nrm, da) in &samples {
+            ins.extend(v3(*e));
+            ins.extend(v3(*b));
+            ins.extend(v3(*nrm));
+            ins.push(f(*da));
+        }
+        m.row(
+            "field::poynting_flux_surface",
+            Class::A,
+            &ins,
+            &[f(poynting_flux_surface(black_box(&samples)))],
+        );
+    }
 }

@@ -50,14 +50,7 @@ PENDING_MODULES = {
 # other items are checked as a ported module's now; the listed ones count as pending, and one found ported is a
 # problem (drop it from the list).
 IN_PROGRESS = {
-    "field": ("M1 parts 3b and 3c", {
-        "electric_field_infinite_plane", "check_radial_distance", "electric_field_charged_sphere",
-        "electric_field_inside_sphere", "electric_field_infinite_line", "electric_field_outside_cylinder",
-        "electric_field_inside_cylinder", "electric_field_ring_axis", "electric_field_disk_axis", "trace_field_line",
-        "electric_quadrupole_potential", "multipole_moment", "spherical_multipole_moment", "image_charge_plane",
-        "image_charge_sphere", "image_charge_dielectric", "greens_function_scalar", "greens_function_static",
-        "maxwell_stress_tensor", "stress_tensor_force", "poynting_flux_surface",
-    }),
+    "field": ("M1 part 3c", {"trace_field_line"}),
 }
 NOT_APPLICABLE_MODULES = {
     "lib": "crate root: module list and re-exports",

@@ -96,6 +96,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
   matches bit for bit on all three targets, error texts included. field.rs's 42 tests on these functions are ported.
   These are the first Rust bench twins (8, at 14–25× Rust's time). `scripts/surface_parity.py` gains `IN_PROGRESS`
   for a module ported Part by Part.
+- **Cyrius port, M1 part 3b — field, second part**: field.rs's other 20 non-callback functions: the Gauss's-law
+  fields, the ring and disk on their axes, the quadrupole potential, the real and complex multipole moments, the
+  plane, sphere and dielectric image charges, the Green's functions, the Maxwell stress tensor and its force, and
+  the Poynting flux. The scalar Green's function follows bijli's e^{+jωt} convention: e^{−jkR}/(4πR), the
+  conjugate of Rust's (ADR 0002 row 5). The harness compares it through that mapping and reports the count.
+  `field.tsv` grows to 22,325 rows, all exact on all three targets. 102 of field.rs's 105 tests are ported, and 11
+  of the 80 Rust benches are twinned.
 - **Parity harness**: digest v2. The v1 fold could not see sign-bit differences that came in pairs, and a generated
   NaN differs in sign between x86 and ARM. v2 folds each NaN as one quiet NaN and mixes every bit through. ADR 0002
   row 6 now states that a NaN's bits are the hardware's.

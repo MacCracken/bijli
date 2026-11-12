@@ -882,7 +882,7 @@ Each one gets an issue in the owning repo, with the probe or benchmark that show
 |---|---|---|---|---|---|
 | P Prep | ✅ | | | 80 (Rust, 2026-11-12T03:15, under load) | D1–D5 answered; 1.2.0 tagged and green; P3, P4, P5 done (2026-11-11); P6 is done at the scaffold; the commit remains |
 | M0 Initialize | ✅ | 34,746 (constants 12, math 34,734): 15,507 ok, 0 failed, 18,006 measured, 1,233 pending, on all three targets | | 80 Rust (pending twins) | done 2026-11-11: Parts 1–3. Baselines and probes in `port-parity.md` |
-| M1 Foundation | ◐ | 6 modules, 119,354 ok, 133 accepted (ADR 01), 0 measured | error.rs 10/10, logging.rs 1/1, field.rs 42/105 | 8 of 80 twinned (14–25×); 8 Cyrius-only | Part 1 (the math) done 2026-11-11: 1a (crmath, corrected oracle, cr_verify), 1b (acos, log10, asin), 1c (tan). Part 2 done 2026-11-11: 2a (fmtf, log, error), 2c (complex, ln, digest v2), 2d (sinh, cosh, complex sin and cos). Part 3a (field: vectors, point charges, dipoles) done 2026-11-11; 3b, 3c (field), 3d (maxwell, charge) next |
+| M1 Foundation | ◐ | 6 modules, 128,704 ok, 133 accepted (ADR 01), 0 measured | error.rs 10/10, logging.rs 1/1, field.rs 102/105 | 11 of 80 twinned; 8 Cyrius-only | Part 1 (the math) done 2026-11-11: 1a (crmath, corrected oracle, cr_verify), 1b (acos, log10, asin), 1c (tan). Part 2 done 2026-11-11: 2a (fmtf, log, error), 2c (complex, ln, digest v2), 2d (sinh, cosh, complex sin and cos). Part 3a (field: vectors, point charges, dipoles) and 3b (field: Gauss, multipoles, images, Green's, stress) done 2026-11-11; 3c (trace_field_line), 3d (maxwell, charge) next |
 | M2 Media, waves, circuits, relativity | ☐ | | | | |
 | M3 Optics | ☐ | | | | |
 | M4 RF | ☐ | | | | |

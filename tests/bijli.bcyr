@@ -219,6 +219,32 @@ fn main(): i64 {
     }
     bench_batch_stop(b8, 1000000);
     bench_report(b8);
+    var b9 = bench_new("field/charged_sphere");
+    bench_batch_start(b9);
+    for (var k = 0; k < 1000000; k = k + 1) {
+        var t9, v9 = bj_electric_field_charged_sphere(fq, 2.0);
+        keep = keep + v9;
+    }
+    bench_batch_stop(b9, 1000000);
+    bench_report(b9);
+
+    var b10 = bench_new("field/ring_axis");
+    bench_batch_start(b10);
+    for (var k = 0; k < 1000000; k = k + 1) {
+        var t10, v10 = bj_electric_field_ring_axis(fq, 1.0, 0.5);
+        keep = keep + v10;
+    }
+    bench_batch_stop(b10, 1000000);
+    bench_report(b10);
+
+    var b11 = bench_new("field/disk_axis");
+    bench_batch_start(b11);
+    for (var k = 0; k < 1000000; k = k + 1) {
+        var t11, v11 = bj_electric_field_disk_axis(fq, 1.0, 0.5);
+        keep = keep + v11;
+    }
+    bench_batch_stop(b11, 1000000);
+    bench_report(b11);
     if (fsum == 7.0) { println("."); }
 
     var ar: f64 = acc.re;

@@ -771,7 +771,10 @@ def validate_field(root: Path, path: Path) -> list:
         v = [tok_text(b) if k == "s" else b for k, b in ins]
         V = tuple(v[0:3])
         W = tuple(v[3:6])
-        if fn == "FieldVector::zero" or fn == "FieldVector::default":
+        w3b = field_3b(fn, v, ins, GLIBC_P, K, EPS0, MU0)
+        if w3b is not None:
+            want = w3b
+        elif fn == "FieldVector::zero" or fn == "FieldVector::default":
             want = ok3((0.0, 0.0, 0.0))
         elif fn in ("FieldVector::new", "FieldVector::from_array", "FieldVector::into_array"):
             want = ok3(V)
@@ -861,6 +864,265 @@ def validate_field(root: Path, path: Path) -> list:
     return errs
 
 
+def field_3b(fn, v, ins, P, K, EPS0, MU0):
+    """Part 3b's functions transcribed from field.rs (None for another name), with the primitives P (glibc's or
+    MPFR's) for the class-C ones."""
+    def ip(reason):
+        return [("E", "InvalidParameter"), ("s", "invalid parameter: " + reason)]
+
+    def okf(x):
+        return [("f", x)]
+
+    def radial(d):
+        if math.isnan(d) or d < 0.0:
+            return ip("distance must be non-negative, got " + rust_display(d))
+        if d < R2_MIN:
+            return SINGULAR
+        return None
+
+    def coords(p):
+        rho_sq = p[0] * p[0] + p[1] * p[1]
+        r = fsqrt(rho_sq + p[2] * p[2])
+        if r == 0.0:
+            return None
+        return (r, rust_clamp(fdiv(p[2], r), -1.0, 1.0), rust_clamp(fdiv(fsqrt(rho_sq), r), 0.0, 1.0),
+                P["atan2"](p[1], p[0]))
+
+    def rpow(r, ll):
+        return powidf2_ieee(r, ll) if ll <= 2147483647 else P["pow"](r, float(ll))
+
+    def legendre(ll, m, x, s):
+        if m > ll:
+            return 0.0
+        pmm, fact = 1.0, 1.0
+        for _ in range(m):
+            pmm *= -fact * s
+            fact += 2.0
+        if ll == m:
+            return pmm
+        mf = float(m)
+        pmmp1 = x * (2.0 * mf + 1.0) * pmm
+        if ll == m + 1:
+            return pmmp1
+        pll = 0.0
+        for k in range(m + 2, ll + 1):
+            kf = float(k)
+            pll = fdiv(x * (2.0 * kf - 1.0) * pmmp1 - (kf + mf - 1.0) * pmm, kf - mf)
+            pmm, pmmp1 = pmmp1, pll
+        return pll
+
+    def nlegendre(ll, m, x, s):
+        if m > ll:
+            return 0.0
+        pmm = 1.0
+        for k in range(1, m + 1):
+            kf = float(k)
+            pmm *= -s * fsqrt((2.0 * kf - 1.0) / (2.0 * kf))
+        mf = float(m)
+        pmm *= fsqrt((2.0 * mf + 1.0) / (4.0 * PI))
+        if ll == m:
+            return pmm
+        pmmp1 = x * fsqrt(2.0 * mf + 3.0) * pmm
+        if ll == m + 1:
+            return pmmp1
+        m_sq = mf * mf
+        a_prev = fsqrt((4.0 * (mf + 1.0) * (mf + 1.0) - 1.0) / ((mf + 1.0) * (mf + 1.0) - m_sq))
+        pll = 0.0
+        for k in range(m + 2, ll + 1):
+            kf = float(k)
+            a = fsqrt((4.0 * kf * kf - 1.0) / (kf * kf - m_sq))
+            pll = a * (x * pmmp1 - fdiv(pmm, a_prev))
+            pmm, pmmp1, a_prev = pmmp1, pll, a
+        return pll
+
+    if fn == "field::electric_field_infinite_plane":
+        return okf(fdiv(v[0], 2.0 * EPS0))
+    if fn in ("field::electric_field_charged_sphere", "field::electric_field_infinite_line",
+              "field::electric_field_outside_cylinder"):
+        q, d = v[0], v[1]
+        e = radial(d)
+        if e:
+            return e
+        if fn.endswith("charged_sphere"):
+            return okf(fdiv(K * q, d * d))
+        return okf(fdiv(q, 2.0 * PI * EPS0 * d))
+    if fn == "field::electric_field_inside_cylinder":
+        q, d = v[0], v[1]
+        if math.isnan(d) or d < 0.0:
+            return ip("distance must be non-negative, got " + rust_display(d))
+        return okf(fdiv(q * d, 2.0 * EPS0))
+    if fn == "field::electric_field_inside_sphere":
+        q, rr, d = v[0], v[1], v[2]
+        if not (rr > 0.0 and math.isfinite(rr)):
+            return ip("sphere radius must be positive and finite, got " + rust_display(rr))
+        if not (d >= 0.0 and d <= rr):
+            return ip(f"distance must lie in [0, R] = [0, {rust_display(rr)}] for the interior field, got "
+                      + rust_display(d))
+        return okf(fdiv(K * q * fdiv(d, rr), rr * rr))
+    if fn == "field::electric_field_ring_axis":
+        q, rr, z = v[0], v[1], v[2]
+        if not (rr >= 0.0 and math.isfinite(rr)):
+            return ip("ring radius must be non-negative and finite, got " + rust_display(rr))
+        if not math.isfinite(z):
+            return ip("axial distance must be finite, got " + rust_display(z))
+        if z == 0.0:
+            return SINGULAR if rr == 0.0 else okf(0.0)
+        d_sq = z * z + rr * rr
+        return okf(fdiv(K * q * z, d_sq * fsqrt(d_sq)))
+    if fn == "field::electric_field_disk_axis":
+        q, rr, z = v[0], v[1], v[2]
+        if not (rr > 0.0 and math.isfinite(rr)):
+            return ip("disk radius must be positive and finite, got " + rust_display(rr))
+        if not math.isfinite(z):
+            return ip("axial distance must be finite, got " + rust_display(z))
+        r = fsqrt(z * z + rr * rr)
+        geo = fdiv(rr, r) * fdiv(rr, r + abs(z))
+        return okf(fdiv(math.copysign(1.0, z) * q, 2.0 * EPS0) * geo)
+    if fn == "field::electric_quadrupole_potential":
+        qt, p = v[0:9], v[9:12]
+        r_sq = p[0] * p[0] + p[1] * p[1] + p[2] * p[2]
+        if r_sq < R2_MIN:
+            return SINGULAR
+        r = fsqrt(r_sq)
+        r5 = r_sq * r_sq * r
+        s = 0.0
+        for i in range(3):
+            for j in range(3):
+                s += qt[3 * i + j] * p[i] * p[j]
+        return okf(fdiv(s, 8.0 * PI * EPS0 * r5))
+    if fn in ("field::multipole_moment", "field::spherical_multipole_moment"):
+        ll, m = v[0], v[1]
+        cnt = int(ins[2][1]) // 4
+        cs = v[3:3 + 4 * cnt]
+        ma = abs(m)
+        if ma > ll:
+            return ip(f"|m| must be ≤ l, got l={ll}, m={m}")
+        mf = float(ma)
+        if fn == "field::multipole_moment":
+            mom = 0.0
+            for j in range(cnt):
+                q, pos = cs[4 * j], cs[4 * j + 1:4 * j + 4]
+                c = coords(pos)
+                if c is None:
+                    if ll == 0:
+                        mom += q
+                    continue
+                az = P["cos"](mf * c[3]) if m >= 0 else P["sin"](mf * c[3])
+                mom += q * rpow(c[0], ll) * legendre(ll, ma, c[1], c[2]) * az
+            return okf(mom)
+        neg = 1.0 if ma % 2 == 0 else -1.0
+        re = im = 0.0
+        for j in range(cnt):
+            q, pos = cs[4 * j], cs[4 * j + 1:4 * j + 4]
+            c = coords(pos)
+            if c is None:
+                if ll == 0:
+                    re += fdiv(q * 0.5, fsqrt(PI))
+                continue
+            w = q * rpow(c[0], ll) * nlegendre(ll, ma, c[1], c[2])
+            sn, cn = P["sin"](mf * c[3]), P["cos"](mf * c[3])
+            if m >= 0:
+                re += w * cn
+                im -= w * sn
+            else:
+                re += neg * w * cn
+                im += neg * w * sn
+        return [("f", re), ("f", im)]
+    if fn == "field::image_charge_plane":
+        q, p, pz = v[0], v[1:4], v[4]
+        return [("f", -q), ("f", p[0]), ("f", p[1]), ("f", 2.0 * pz - p[2])]
+    if fn == "field::image_charge_sphere":
+        q, p, rr = v[0], v[1:4], v[4]
+        if not (rr > 0.0 and math.isfinite(rr)):
+            return ip("sphere radius must be positive and finite, got " + rust_display(rr))
+        d = fsqrt(p[0] * p[0] + p[1] * p[1] + p[2] * p[2])
+        if math.isnan(d) or d <= rr:
+            return ip(f"charge must be outside the sphere (|r| = {rust_display(d)} > R = {rust_display(rr)})")
+        ratio = fdiv(rr, d)
+        sc = ratio * ratio
+        return [("f", -q * ratio), ("f", p[0] * sc), ("f", p[1] * sc), ("f", p[2] * sc)]
+    if fn == "field::image_charge_dielectric":
+        q, p, e1, e2 = v[0], v[1:4], v[4], v[5]
+        if not (p[2] > 0.0 and math.isfinite(p[2])):
+            return ip("charge must be in medium 1 (z > 0) for dielectric image method, got z = " + rust_display(p[2]))
+        for eps in (e1, e2):
+            if not (eps > 0.0 and math.isfinite(eps)):
+                return [("E", "InvalidPermittivity"), ("s", f"invalid permittivity: {rust_display(eps)} (must be > 0)")]
+        return [("f", fdiv(-q * (e2 - e1), e1 + e2)), ("f", p[0]), ("f", p[1]), ("f", -p[2])]
+    if fn in ("field::greens_function_scalar", "field::greens_function_static"):
+        a, b = v[0:3], v[3:6]
+        d = [a[i] - b[i] for i in range(3)]
+        r = fsqrt(d[0] * d[0] + d[1] * d[1] + d[2] * d[2])
+        if r < R2_MIN:
+            return SINGULAR
+        fct = fdiv(1.0, 4.0 * PI * r)
+        if fn.endswith("static"):
+            return okf(fct)
+        kr = v[6] * r
+        return [("f", fct * P["cos"](kr)), ("f", fct * P["sin"](kr))]
+    if fn == "field::maxwell_stress_tensor":
+        e, b = v[0:3], v[3:6]
+        e_sq = e[0] * e[0] + e[1] * e[1] + e[2] * e[2]
+        b_sq = b[0] * b[0] + b[1] * b[1] + b[2] * b[2]
+        inv_mu0 = fdiv(1.0, MU0)
+        out = []
+        for i in range(3):
+            for j in range(3):
+                dl = 1.0 if i == j else 0.0
+                out.append(("f", EPS0 * (e[i] * e[j] - 0.5 * dl * e_sq) + inv_mu0 * (b[i] * b[j] - 0.5 * dl * b_sq)))
+        return out
+    if fn == "field::stress_tensor_force":
+        tt, n = v[0:9], v[9:12]
+        out = []
+        for i in range(3):
+            acc = 0.0
+            for j in range(3):
+                acc += tt[3 * i + j] * n[j]
+            out.append(("f", acc))
+        return out
+    if fn == "field::poynting_flux_surface":
+        cnt = int(ins[0][1]) // 10
+        sm = v[1:1 + 10 * cnt]
+        inv_mu0 = fdiv(1.0, MU0)
+        total = 0.0
+        for j in range(cnt):
+            e, b, n, da = sm[10 * j:10 * j + 3], sm[10 * j + 3:10 * j + 6], sm[10 * j + 6:10 * j + 9], sm[10 * j + 9]
+            c = (e[1] * b[2] - e[2] * b[1], e[2] * b[0] - e[0] * b[2], e[0] * b[1] - e[1] * b[0])
+            s = [c[i] * inv_mu0 for i in range(3)]
+            total += (s[0] * n[0] + s[1] * n[1] + s[2] * n[2]) * da
+        return okf(total)
+    return None
+
+
+def field_corrections(root: Path):
+    """The field rows whose class-C outputs change when the primitives are correctly rounded (MPFR)."""
+    c = golden_consts(root)
+    K, EPS0, MU0 = c["field::COULOMB_K"], c["field::EPSILON_0"], c["field::MU_0"]
+
+    def fixes(rows):
+        out = []
+        for fn, cls, ins, outs in rows:
+            if cls != "C":
+                continue
+            v = [tok_text(b) if k == "s" else b for k, b in ins]
+            want = field_3b(fn, v, ins, MPFR_P, K, EPS0, MU0)
+            if want is None or any(k != "f" for k, _ in want):
+                continue
+            old = [b for k, b in outs]
+            new = [b for _, b in want]
+            if len(old) == len(new) and all(same(a, b) for a, b in zip(old, new)):
+                continue
+            raw_ins = []
+            for k, b in ins:
+                raw_ins.append(f"f:{f_to_bits(b):016x}" if k == "f" else f"{k}:{b}")
+            outs_old = " ".join(f"f:{f_to_bits(a):016x}" for a in old)
+            outs_new = " ".join(f"f:{f_to_bits(a):016x}" for a in new)
+            out.append((fn, " ".join(raw_ins), outs_new, f"oracle {outs_old}; correctly rounded primitives give "
+                        f"{outs_new}"))
+        return out
+    return fixes
+
+
 def main() -> int:
     root = Path(sys.argv[1] if len(sys.argv) > 1 else ".").resolve()
     golden = root / "tests/golden"
@@ -888,6 +1150,7 @@ def main() -> int:
         errs.extend(e)
     errs += check_corrections(root, "math", golden / "math.tsv")
     errs += check_corrections(root, "complex", golden / "complex.tsv", complex_corrections)
+    errs += check_corrections(root, "field", golden / "field.tsv", field_corrections(root))
     errs += check_tables(root)
     for e in errs[:40]:
         print("  " + e)

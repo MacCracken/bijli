@@ -529,3 +529,66 @@ Language facts the probes found, beyond plan §2:
 | field::electric_field_superposition | `3768b8946570930b` |
 | field::electric_energy_density | `368e46cc416720b3` |
 | field::magnetic_energy_density | `5b959635d3878461` |
+
+## 12. M1 part 3b: field — the Gauss's-law fields, multipoles, images, Green's functions, stress tensor (2026-11-11)
+
+- **`src/field.cyr`** gains field.rs's other 20 non-callback functions:
+  - the Gauss's-law fields (plane, sphere outside and inside, line, cylinder outside and inside), the ring and disk
+    on their axes (the disk in Rust's cancellation-free form, with its one-sided limits at ±0), and the internal
+    `check_radial_distance`, as `_bj_check_radial_distance`;
+  - the quadrupole potential;
+  - the real and the normalized complex multipole moments, with both associated-Legendre recurrences and Rust's
+    pole-accurate spherical coordinates;
+  - the plane, sphere and dielectric image charges;
+  - the scalar and static Green's functions;
+  - the Maxwell stress tensor, its force, and the Poynting flux through a sampled surface.
+
+  Shapes: a `[[f64; 3]; 3]` is 9 f64, row-major. A `(f64, [f64; 3])` image result returns the charge (in a `Result`
+  where Rust's is fallible) and writes the position. A complex `(f64, f64)` is a `BjComplex` out. l and m stay
+  Rust's u32 and i32: outside those types the port refuses by name, a Cyrius-only error, since Rust's types make the
+  case unrepresentable.
+- **The first ADR 0002 row 5 mapping.** Rust's `greens_function_scalar` is e^{+ikR}/(4πR), the outgoing wave in
+  e^{−iωt}. The port's is **e^{−jkR}/(4πR)**, the outgoing wave in bijli's e^{+jωt}. The harness conjugates the
+  port's value back and compares exactly, so a wrong value still fails, and it reports the count after the module:
+  *"ADR 0002 row 5: 320 field::greens_function_scalar rows compared as port = conj(oracle)"*. Every other function
+  so far is convention-free.
+- **`tests/golden/field.tsv`: 22,325 rows (9,350 new).**
+  - Class A for the Gauss's-law fields, images, quadrupole, static Green's function, stress tensor and flux, with
+    distances either side of the 1e-30 cutoff, negative and NaN.
+  - Class C for the multipole moments (atan2, cos, sin; l ≤ 10 for every m, |m| = l + 1 refused, and l up to 200)
+    and the scalar Green's function. **All at 0 ulp, and no row needed a correction**: glibc rounded every call
+    in them correctly, so there is no `field.cr.tsv`.
+  - `validate.py` transcribes all 20 functions independently, with glibc's primitives (exact) and MPFR's (the
+    corrections, none), and matches every row.
+- **Rust tests**: field.rs's 56 tests on these functions are ported, the `direct_potential` helper included, plus
+  Cyrius-only checks of the l/m type messages. `tests/field.tcyr` holds **123 assertions, passing on all three
+  targets**. The ledger counts 109 of 858 Rust tests as ported, 102 of field.rs's 105 (its 7
+  `trace_field_line` tests come with 3c), and surface parity matches 68 items, with only `trace_field_line` pending.
+- **Benchmarks** (machine quiet, load 0.95): charged sphere 14 ns, ring axis 24 ns, disk axis 38 ns. Rust's three
+  read 1.23 ns, the `black_box` floor: LLVM folds those constant-input calls, so the ratios (11–31×) compare with
+  no work at all. The 3a numbers reproduced on the quiet machine. 11 of 80 benches are twinned.
+- **Result, every target** (x86_64 ELF, x86_64 PE, aarch64): **6 modules, 0 failing; 128,704 ok, 0 failed, 0
+  measured, 0 pending, 133 accepted (ADR 01)**; **all 113 digests equal** on all three targets. The 94 of §11 are
+  unchanged, and the new ones follow.
+
+| Function | Digest v2, every target |
+|---|---|
+| field::electric_field_infinite_plane | `61ba4ecfd28100d4` |
+| field::electric_field_charged_sphere | `522c3aa7c06fcd4c` |
+| field::electric_field_infinite_line | `7a0b43b1b59fc4fd` |
+| field::electric_field_outside_cylinder | `7a0b43b1b59fc4fd` |
+| field::electric_field_inside_cylinder | `597828e09ab62715` |
+| field::electric_field_inside_sphere | `146c581b3c6f19e7` |
+| field::electric_field_ring_axis | `4a0593674452e0df` |
+| field::electric_field_disk_axis | `31cc0e6af1e0623c` |
+| field::electric_quadrupole_potential | `707d3cf6285b2c13` |
+| field::multipole_moment | `714bd0e852839289` |
+| field::spherical_multipole_moment | `5ae627701c328e31` |
+| field::image_charge_plane | `24f3f6041cf03fc3` |
+| field::image_charge_sphere | `6d957079cb835d4b` |
+| field::image_charge_dielectric | `3f83c9af53116711` |
+| field::greens_function_scalar | `1271e84da12f6cce` |
+| field::greens_function_static | `17d9959d2c9868ff` |
+| field::maxwell_stress_tensor | `15043abe365d8997` |
+| field::stress_tensor_force | `6de79c1edb44fddc` |
+| field::poynting_flux_surface | `b2072256d29a879` |

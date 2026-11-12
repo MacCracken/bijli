@@ -6523,8 +6523,8 @@ public fn bj_complex_from_polar(magnitude: f64, phase: f64): BjComplex {
 # --- field.cyr ---
 
 # field.cyr — electric and magnetic fields (port of rust-old/src/field.rs). M1 part 3a: BjFieldVector, point charges,
-# superposition, energy densities and dipoles; the Gauss's-law fields, multipoles, images, Green's functions and the
-# stress tensor follow in 3b, and trace_field_line in 3c.
+# superposition, energy densities and dipoles; part 3b: the Gauss's-law fields, multipoles, images, Green's functions
+# and the stress tensor; trace_field_line follows in 3c.
 #
 # SI units: metres, coulombs, volts per metre, tesla. The harmonic time convention is src/complex.cyr's.
 #
@@ -6922,4 +6922,546 @@ public fn bj_magnetic_dipole_field(magnetic_moment: BjFieldVector, field_pos: *f
     out.y = e.y;
     out.z = e.z;
     return Ok(0);
+}
+
+# ── Gauss's-law fields (M1 part 3b) ─────────────────────────────────────────────────────────────────────────────
+
+# |E| = σ/(2ε₀) (V/m) from an infinite plane of surface charge density σ. Mirrors
+# `field::electric_field_infinite_plane`.
+#must_use
+#pure
+public fn bj_electric_field_infinite_plane(surface_charge_density: f64): f64 {
+    var d: f64 = 2.0 * BJ_EPSILON_0;
+    var e: f64 = surface_charge_density / d;
+    return e;
+}
+
+# A radial distance's errors: InvalidParameter when NaN or negative, Singularity below 1e-30 m; else Ok(0). Mirrors
+# field.rs's `pub(crate) check_radial_distance`.
+public fn _bj_check_radial_distance(distance: f64): Result {
+    if (distance != distance || distance < 0.0) {
+        var t = _bj_err_reason(BJ_ERR_INVALID_PARAMETER);
+        _bj_tx_cstr(t, "distance must be non-negative, got ");
+        _bj_fmt_f64_display(t, distance);
+        return Err(BJ_ERR_INVALID_PARAMETER);
+    }
+    if (distance < _BJ_FIELD_R2_MIN) { return Err(_bj_err_singularity()); }
+    return Ok(0);
+}
+
+# E_r = kQ/r² (V/m) outside a uniformly charged sphere (r > R). Errors as _bj_check_radial_distance. Mirrors
+# `field::electric_field_charged_sphere`.
+public fn bj_electric_field_charged_sphere(total_charge: f64, distance: f64): Result {
+    var t, v = _bj_check_radial_distance(distance);
+    if (is_err_result(t) == 1) { return Err(v); }
+    var r2: f64 = distance * distance;
+    var e: f64 = BJ_COULOMB_K * total_charge / r2;
+    return Ok(e);
+}
+
+# E_r = kQ·(r/R)/R² (V/m) inside a uniformly charged sphere, 0 ≤ r ≤ R. InvalidParameter when R is not positive and
+# finite, or r is outside [0, R] (or NaN). Mirrors `field::electric_field_inside_sphere`.
+public fn bj_electric_field_inside_sphere(total_charge: f64, sphere_radius: f64, distance: f64): Result {
+    if (!(sphere_radius > 0.0 && _bj_is_finite(sphere_radius) == 1)) {
+        var t = _bj_err_reason(BJ_ERR_INVALID_PARAMETER);
+        _bj_tx_cstr(t, "sphere radius must be positive and finite, got ");
+        _bj_fmt_f64_display(t, sphere_radius);
+        return Err(BJ_ERR_INVALID_PARAMETER);
+    }
+    if (!(distance >= 0.0 && distance <= sphere_radius)) {
+        var t2 = _bj_err_reason(BJ_ERR_INVALID_PARAMETER);
+        _bj_tx_cstr(t2, "distance must lie in [0, R] = [0, ");
+        _bj_fmt_f64_display(t2, sphere_radius);
+        _bj_tx_cstr(t2, "] for the interior field, got ");
+        _bj_fmt_f64_display(t2, distance);
+        return Err(BJ_ERR_INVALID_PARAMETER);
+    }
+    var frac: f64 = distance / sphere_radius;
+    var r2: f64 = sphere_radius * sphere_radius;
+    var e: f64 = BJ_COULOMB_K * total_charge * frac / r2;
+    return Ok(e);
+}
+
+# E_r = λ/(2πε₀r) (V/m) from an infinite line of linear charge density λ. Errors as _bj_check_radial_distance.
+# Mirrors `field::electric_field_infinite_line`.
+public fn bj_electric_field_infinite_line(linear_charge_density: f64, distance: f64): Result {
+    var t, v = _bj_check_radial_distance(distance);
+    if (is_err_result(t) == 1) { return Err(v); }
+    var d: f64 = 2.0 * _BJ_PI * BJ_EPSILON_0 * distance;
+    var e: f64 = linear_charge_density / d;
+    return Ok(e);
+}
+
+# E_r = λ/(2πε₀r) outside an infinite uniformly charged cylinder: the line's field and errors. Mirrors
+# `field::electric_field_outside_cylinder`.
+public fn bj_electric_field_outside_cylinder(linear_charge_density: f64, distance: f64): Result {
+    return bj_electric_field_infinite_line(linear_charge_density, distance);
+}
+
+# E_r = ρr/(2ε₀) (V/m) inside an infinite uniformly charged cylinder. InvalidParameter when r is NaN or negative.
+# Mirrors `field::electric_field_inside_cylinder`.
+public fn bj_electric_field_inside_cylinder(volume_charge_density: f64, distance: f64): Result {
+    if (distance != distance || distance < 0.0) {
+        var t = _bj_err_reason(BJ_ERR_INVALID_PARAMETER);
+        _bj_tx_cstr(t, "distance must be non-negative, got ");
+        _bj_fmt_f64_display(t, distance);
+        return Err(BJ_ERR_INVALID_PARAMETER);
+    }
+    var d: f64 = 2.0 * BJ_EPSILON_0;
+    var e: f64 = volume_charge_density * distance / d;
+    return Ok(e);
+}
+
+# E_z = kQz/(z² + R²)^(3/2) (V/m) on the axis of a ring of radius R in the plane z = 0, z signed; 0 at the centre,
+# Singularity there only for R = 0 (a point charge). InvalidParameter when R is negative, NaN or infinite, or z is not
+# finite. Mirrors `field::electric_field_ring_axis`.
+public fn bj_electric_field_ring_axis(total_charge: f64, ring_radius: f64, axial_distance: f64): Result {
+    if (!(ring_radius >= 0.0 && _bj_is_finite(ring_radius) == 1)) {
+        var t = _bj_err_reason(BJ_ERR_INVALID_PARAMETER);
+        _bj_tx_cstr(t, "ring radius must be non-negative and finite, got ");
+        _bj_fmt_f64_display(t, ring_radius);
+        return Err(BJ_ERR_INVALID_PARAMETER);
+    }
+    if (_bj_is_finite(axial_distance) == 0) {
+        var t2 = _bj_err_reason(BJ_ERR_INVALID_PARAMETER);
+        _bj_tx_cstr(t2, "axial distance must be finite, got ");
+        _bj_fmt_f64_display(t2, axial_distance);
+        return Err(BJ_ERR_INVALID_PARAMETER);
+    }
+    if (axial_distance == 0.0) {
+        if (ring_radius == 0.0) { return Err(_bj_err_singularity()); }
+        var zero: f64 = 0.0;
+        return Ok(zero);
+    }
+    var d_sq: f64 = axial_distance * axial_distance + ring_radius * ring_radius;
+    var rt: f64 = f64_sqrt(d_sq);
+    var denom: f64 = d_sq * rt;
+    var e: f64 = BJ_COULOMB_K * total_charge * axial_distance / denom;
+    return Ok(e);
+}
+
+# E_z = sgn(z)·(σ/2ε₀)·(R/r)·(R/(r + |z|)), r = √(z² + R²), on the axis of a disk of radius R in the plane z = 0: the
+# cancellation-free form, the one-sided limit at z = ±0 by the sign bit. InvalidParameter when R is not positive and
+# finite, or z is not finite. Mirrors `field::electric_field_disk_axis`.
+public fn bj_electric_field_disk_axis(surface_charge_density: f64, disk_radius: f64, axial_distance: f64): Result {
+    if (!(disk_radius > 0.0 && _bj_is_finite(disk_radius) == 1)) {
+        var t = _bj_err_reason(BJ_ERR_INVALID_PARAMETER);
+        _bj_tx_cstr(t, "disk radius must be positive and finite, got ");
+        _bj_fmt_f64_display(t, disk_radius);
+        return Err(BJ_ERR_INVALID_PARAMETER);
+    }
+    if (_bj_is_finite(axial_distance) == 0) {
+        var t2 = _bj_err_reason(BJ_ERR_INVALID_PARAMETER);
+        _bj_tx_cstr(t2, "axial distance must be finite, got ");
+        _bj_fmt_f64_display(t2, axial_distance);
+        return Err(BJ_ERR_INVALID_PARAMETER);
+    }
+    var abs_z: f64 = f64_abs(axial_distance);
+    var s2: f64 = axial_distance * axial_distance + disk_radius * disk_radius;
+    var r: f64 = f64_sqrt(s2);
+    var g1: f64 = disk_radius / r;
+    var rz: f64 = r + abs_z;
+    var g2: f64 = disk_radius / rz;
+    var geometric: f64 = g1 * g2;
+    var sign: f64 = _bj_copysign(1.0, axial_distance);
+    var d: f64 = 2.0 * BJ_EPSILON_0;
+    var e: f64 = sign * surface_charge_density / d * geometric;
+    return Ok(e);
+}
+
+# ── multipoles (M1 part 3b) ─────────────────────────────────────────────────────────────────────────────────────
+
+# V = (1/4πε₀)·½·Σᵢⱼ Qᵢⱼxᵢxⱼ/r⁵ (volts) at field_pos from a quadrupole at the origin: Σ in i-then-j order from 0, over
+# 8πε₀r⁵ with r⁵ = r²·r²·r. q_tensor is 9 f64, row-major (Rust's `[[f64; 3]; 3]`). Singularity when r² < 1e-30.
+# Mirrors `field::electric_quadrupole_potential`.
+public fn bj_electric_quadrupole_potential(q_tensor: *f64, field_pos: *f64): Result {
+    var r_sq: f64 = field_pos[0] * field_pos[0] + field_pos[1] * field_pos[1] + field_pos[2] * field_pos[2];
+    if (r_sq < _BJ_FIELD_R2_MIN) { return Err(_bj_err_singularity()); }
+    var r: f64 = f64_sqrt(r_sq);
+    var r5: f64 = r_sq * r_sq * r;
+    var sum: f64 = 0.0;
+    for (var i = 0; i < 3; i = i + 1) {
+        for (var j = 0; j < 3; j = j + 1) {
+            var term: f64 = q_tensor[i * 3 + j] * field_pos[i] * field_pos[j];
+            sum = sum + term;
+        }
+    }
+    var d: f64 = 8.0 * _BJ_PI * BJ_EPSILON_0 * r5;
+    var v: f64 = sum / d;
+    return Ok(v);
+}
+
+# (r, cos θ, sin θ, φ) of a point into out (4 f64); 0 at the origin, else 1. cos θ = z/r and sin θ = ρ/r, clamped,
+# straight from the components (no acos round trip); φ = atan2(y, x). Mirrors field.rs's `spherical_coords`.
+fn _bj_spherical_coords(pos: *f64, out: *f64): i64 {
+    var rho_sq: f64 = pos[0] * pos[0] + pos[1] * pos[1];
+    var s: f64 = rho_sq + pos[2] * pos[2];
+    var r: f64 = f64_sqrt(s);
+    if (r == 0.0) { return 0; }
+    var c0: f64 = pos[2] / r;
+    var rho: f64 = f64_sqrt(rho_sq);
+    var s0: f64 = rho / r;
+    out[0] = r;
+    out[1] = _bj_clamp(c0, -1.0, 1.0);
+    out[2] = _bj_clamp(s0, 0.0, 1.0);
+    out[3] = _bj_atan2(pos[1], pos[0]);
+    return 1;
+}
+
+# rˡ: compiler-rt's powi for l up to 2^31 − 1 (Rust's `r.powi(l as i32)`), powf above. Mirrors field.rs's
+# `radial_power`.
+#must_use
+fn _bj_radial_power(r: f64, l): f64 {
+    if (l <= 2147483647) {
+        var p: f64 = _bj_powi(r, l);
+        return p;
+    }
+    var lf: f64 = f64_from(l);
+    var q: f64 = _bj_powf(r, lf);
+    return q;
+}
+
+# P_l^m(x), the associated Legendre function with the Condon–Shortley phase, by the upward recurrence; s = √(1 − x²)
+# passed in so it stays accurate near |x| = 1. 0 for m > l. Mirrors field.rs's private `associated_legendre`.
+#must_use
+public fn _bj_associated_legendre(l, m, x: f64, s: f64): f64 {
+    if (m > l) {
+        var z0: f64 = 0.0;
+        return z0;
+    }
+    var pmm: f64 = 1.0;
+    var fact: f64 = 1.0;
+    for (var k = 0; k < m; k = k + 1) {
+        var nf: f64 = -fact;
+        pmm = pmm * (nf * s);
+        fact = fact + 2.0;
+    }
+    if (l == m) { return pmm; }
+    var m_f: f64 = f64_from(m);
+    var pmmp1: f64 = x * (2.0 * m_f + 1.0) * pmm;
+    if (l == m + 1) { return pmmp1; }
+    var pll: f64 = 0.0;
+    for (var ll = m + 2; ll <= l; ll = ll + 1) {
+        var ll_f: f64 = f64_from(ll);
+        var a: f64 = x * (2.0 * ll_f - 1.0) * pmmp1;
+        var b: f64 = (ll_f + m_f - 1.0) * pmm;
+        pll = (a - b) / (ll_f - m_f);
+        pmm = pmmp1;
+        pmmp1 = pll;
+    }
+    return pll;
+}
+
+# P̄_l^m(x) = √((2l+1)/(4π)·(l−m)!/(l+m)!)·P_l^m(x), CS phase included, by the stable recurrence (Numerical Recipes
+# §6.7, no factorials). 0 for m > l. Mirrors field.rs's private `normalized_associated_legendre`.
+#must_use
+fn _bj_normalized_associated_legendre(l, m, x: f64, s: f64): f64 {
+    if (m > l) {
+        var z0: f64 = 0.0;
+        return z0;
+    }
+    var pmm: f64 = 1.0;
+    for (var k = 1; k <= m; k = k + 1) {
+        var k_f: f64 = f64_from(k);
+        var ratio: f64 = (2.0 * k_f - 1.0) / (2.0 * k_f);
+        var sr: f64 = f64_sqrt(ratio);
+        var ns: f64 = -s;
+        pmm = pmm * (ns * sr);
+    }
+    var m_f: f64 = f64_from(m);
+    var c0: f64 = (2.0 * m_f + 1.0) / (4.0 * _BJ_PI);
+    var c: f64 = f64_sqrt(c0);
+    pmm = pmm * c;
+    if (l == m) { return pmm; }
+    var c3: f64 = 2.0 * m_f + 3.0;
+    var s3: f64 = f64_sqrt(c3);
+    var pmmp1: f64 = x * s3 * pmm;
+    if (l == m + 1) { return pmmp1; }
+    var m_sq: f64 = m_f * m_f;
+    var mp1: f64 = m_f + 1.0;
+    var a0: f64 = (4.0 * mp1 * mp1 - 1.0) / (mp1 * mp1 - m_sq);
+    var a_prev: f64 = f64_sqrt(a0);
+    var pll: f64 = 0.0;
+    for (var ll = m + 2; ll <= l; ll = ll + 1) {
+        var ll_f: f64 = f64_from(ll);
+        var an: f64 = (4.0 * ll_f * ll_f - 1.0) / (ll_f * ll_f - m_sq);
+        var a: f64 = f64_sqrt(an);
+        var inner: f64 = x * pmmp1 - pmm / a_prev;
+        pll = a * inner;
+        pmm = pmmp1;
+        pmmp1 = pll;
+        a_prev = a;
+    }
+    return pll;
+}
+
+# The InvalidParameter of a moment's order: "|m| must be ≤ l, got l={l}, m={m}" (Rust's), and, Cyrius-only, l outside
+# a u32 or m outside an i32 (the types Rust's signature gives them).
+fn _bj_moment_order_error(l, m): i64 {
+    var t = _bj_err_reason(BJ_ERR_INVALID_PARAMETER);
+    if (l < 0 || l > 4294967295 || m < 0 - 2147483648 || m > 2147483647) {
+        _bj_tx_cstr(t, "l must be a u32 and m an i32, got l=");
+    } else {
+        _bj_tx_cstr(t, "|m| must be ≤ l, got l=");
+    }
+    _bj_tx_i64(t, l);
+    _bj_tx_cstr(t, ", m=");
+    _bj_tx_i64(t, m);
+    return BJ_ERR_INVALID_PARAMETER;
+}
+
+# M_lm = Σᵢ qᵢ·rᵢˡ·P_l^|m|(cos θᵢ)·{cos(mφᵢ) for m ≥ 0, sin(|m|φᵢ) for m < 0}, the unnormalized real moment (C·mˡ) of
+# n charges at `charges` (32 bytes each: q, x, y, z), summed in order; a charge at the origin adds q to the monopole
+# only. InvalidParameter when |m| > l. Mirrors `field::multipole_moment`.
+public fn bj_multipole_moment(l, m, charges: *f64, n): Result {
+    var m_abs = m;
+    if (m < 0) { m_abs = 0 - m; }
+    if (l < 0 || l > 4294967295 || m < 0 - 2147483648 || m > 2147483647 || m_abs > l) {
+        return Err(_bj_moment_order_error(l, m));
+    }
+    var m_f: f64 = f64_from(m_abs);
+    var moment: f64 = 0.0;
+    var sc: f64[4];
+    for (var i = 0; i < n; i = i + 1) {
+        var c: *f64 = charges + i * 4;
+        var q: f64 = c[0];
+        if (_bj_spherical_coords(c + 1, &sc) == 0) {
+            if (l == 0) { moment = moment + q; }
+        } else {
+            var r: f64 = sc[0];
+            var ang: f64 = m_f * sc[3];
+            var az: f64 = 0.0;
+            if (m >= 0) { az = _bj_cos(ang); } else { az = _bj_sin(ang); }
+            var rp: f64 = _bj_radial_power(r, l);
+            var pl: f64 = _bj_associated_legendre(l, m_abs, sc[1], sc[2]);
+            var term: f64 = q * rp * pl * az;
+            moment = moment + term;
+        }
+    }
+    return Ok(moment);
+}
+
+# q_lm = Σᵢ qᵢ·rᵢˡ·Y*_lm(θᵢ, φᵢ) (Jackson eq. 4.3, orthonormal Y with the CS phase), into out as (Re, Im):
+# w·(cos mφ, −sin mφ) for m ≥ 0, and (−1)^|m|·w·(cos |m|φ, sin |m|φ) for m < 0, w = q·rˡ·P̄_l^|m|(cos θ); a charge at
+# the origin adds q·0.5/√π to Re q₀₀ only. Static, so no time convention enters. InvalidParameter when |m| > l. Mirrors
+# `field::spherical_multipole_moment` (its `(f64, f64)` is a BjComplex here).
+public fn bj_spherical_multipole_moment(l, m, charges: *f64, n, out: *BjComplex): Result {
+    var m_abs = m;
+    if (m < 0) { m_abs = 0 - m; }
+    if (l < 0 || l > 4294967295 || m < 0 - 2147483648 || m > 2147483647 || m_abs > l) {
+        return Err(_bj_moment_order_error(l, m));
+    }
+    var m_f: f64 = f64_from(m_abs);
+    var neg_sign: f64 = 1.0;
+    if ((m_abs & 1) == 1) { neg_sign = -1.0; }
+    var re: f64 = 0.0;
+    var im: f64 = 0.0;
+    var sp: f64 = f64_sqrt(_BJ_PI);
+    var sc: f64[4];
+    for (var i = 0; i < n; i = i + 1) {
+        var c: *f64 = charges + i * 4;
+        var q: f64 = c[0];
+        if (_bj_spherical_coords(c + 1, &sc) == 0) {
+            if (l == 0) {
+                var y00: f64 = q * 0.5 / sp;
+                re = re + y00;
+            }
+        } else {
+            var rp: f64 = _bj_radial_power(sc[0], l);
+            var pl: f64 = _bj_normalized_associated_legendre(l, m_abs, sc[1], sc[2]);
+            var w: f64 = q * rp * pl;
+            var ang: f64 = m_f * sc[3];
+            var s, cs = _bj_sin_cos(ang);
+            var sv: f64 = s;
+            var cv: f64 = cs;
+            if (m >= 0) {
+                var wc: f64 = w * cv;
+                var ws: f64 = w * sv;
+                re = re + wc;
+                im = im - ws;
+            } else {
+                var nc: f64 = neg_sign * w * cv;
+                var ns: f64 = neg_sign * w * sv;
+                re = re + nc;
+                im = im + ns;
+            }
+        }
+    }
+    out.re = re;
+    out.im = im;
+    return Ok(0);
+}
+
+# ── method of images (M1 part 3b) ───────────────────────────────────────────────────────────────────────────────
+
+# The image of a charge at `position` in a conducting plane z = plane_z: returns −charge, and writes the mirror
+# point (x, y, 2·plane_z − z) to image_pos. Mirrors `field::image_charge_plane` (its tuple: the charge returned, the
+# position written).
+#must_use
+public fn bj_image_charge_plane(charge: f64, position: *f64, plane_z: f64, image_pos: *f64): f64 {
+    var image_z: f64 = 2.0 * plane_z - position[2];
+    image_pos[0] = position[0];
+    image_pos[1] = position[1];
+    image_pos[2] = image_z;
+    var q: f64 = -charge;
+    return q;
+}
+
+# The image of a charge at `position` outside a grounded sphere of radius R at the origin: Ok(q' = −(R/d)·q), and the
+# position (R²/d²)·r into image_pos (Griffiths Ex. 3.2). InvalidParameter when R is not positive and finite, or the
+# charge is not strictly outside (a NaN position included). Mirrors `field::image_charge_sphere`.
+public fn bj_image_charge_sphere(charge: f64, position: *f64, sphere_radius: f64, image_pos: *f64): Result {
+    if (!(sphere_radius > 0.0 && _bj_is_finite(sphere_radius) == 1)) {
+        var t = _bj_err_reason(BJ_ERR_INVALID_PARAMETER);
+        _bj_tx_cstr(t, "sphere radius must be positive and finite, got ");
+        _bj_fmt_f64_display(t, sphere_radius);
+        return Err(BJ_ERR_INVALID_PARAMETER);
+    }
+    var d_sq: f64 = position[0] * position[0] + position[1] * position[1] + position[2] * position[2];
+    var d: f64 = f64_sqrt(d_sq);
+    if (d != d || d <= sphere_radius) {
+        var t2 = _bj_err_reason(BJ_ERR_INVALID_PARAMETER);
+        _bj_tx_cstr(t2, "charge must be outside the sphere (|r| = ");
+        _bj_fmt_f64_display(t2, d);
+        _bj_tx_cstr(t2, " > R = ");
+        _bj_fmt_f64_display(t2, sphere_radius);
+        _bj_tx_putc(t2, 41);
+        return Err(BJ_ERR_INVALID_PARAMETER);
+    }
+    var ratio: f64 = sphere_radius / d;
+    var nq: f64 = -charge;
+    var q_image: f64 = nq * ratio;
+    var scale: f64 = ratio * ratio;
+    image_pos[0] = position[0] * scale;
+    image_pos[1] = position[1] * scale;
+    image_pos[2] = position[2] * scale;
+    return Ok(q_image);
+}
+
+# The image of a charge at height z > 0 over a dielectric half-space (Jackson §4.4): Ok(q' = −q(ε₂ − ε₁)/(ε₁ + ε₂)),
+# and the mirror point (x, y, −z) into image_pos. InvalidParameter when z is not positive and finite, then
+# InvalidPermittivity for the first of ε₁, ε₂ that is not positive and finite. Mirrors `field::image_charge_dielectric`.
+public fn bj_image_charge_dielectric(charge: f64, position: *f64, eps_r1: f64, eps_r2: f64, image_pos: *f64): Result {
+    var z: f64 = position[2];
+    if (!(z > 0.0 && _bj_is_finite(z) == 1)) {
+        var t = _bj_err_reason(BJ_ERR_INVALID_PARAMETER);
+        _bj_tx_cstr(t, "charge must be in medium 1 (z > 0) for dielectric image method, got z = ");
+        _bj_fmt_f64_display(t, z);
+        return Err(BJ_ERR_INVALID_PARAMETER);
+    }
+    if (!(eps_r1 > 0.0 && _bj_is_finite(eps_r1) == 1)) { return Err(_bj_err_invalid_permittivity(eps_r1)); }
+    if (!(eps_r2 > 0.0 && _bj_is_finite(eps_r2) == 1)) { return Err(_bj_err_invalid_permittivity(eps_r2)); }
+    var nq: f64 = -charge;
+    var num: f64 = nq * (eps_r2 - eps_r1);
+    var den: f64 = eps_r1 + eps_r2;
+    var q_image: f64 = num / den;
+    image_pos[0] = position[0];
+    image_pos[1] = position[1];
+    image_pos[2] = -z;
+    return Ok(q_image);
+}
+
+# ── Green's functions (M1 part 3b) ──────────────────────────────────────────────────────────────────────────────
+
+# G(r, r') = e^{−jkR}/(4πR), the free-space scalar Green's function of the outgoing wave in bijli's e^{+jωt}
+# convention (src/complex.cyr), into out: (cos kR, −sin kR)/(4πR). Rust's e^{+ikR}/(4πR) was the e^{−iωt} form, so the
+# port's value is its conjugate (ADR 0002 row 5). Singularity when R < 1e-30. Mirrors `field::greens_function_scalar`
+# (its `(f64, f64)` is a BjComplex here).
+public fn bj_greens_function_scalar(field_pos: *f64, source_pos: *f64, k: f64, out: *BjComplex): Result {
+    var dx: f64 = field_pos[0] - source_pos[0];
+    var dy: f64 = field_pos[1] - source_pos[1];
+    var dz: f64 = field_pos[2] - source_pos[2];
+    var s: f64 = dx * dx + dy * dy + dz * dz;
+    var r: f64 = f64_sqrt(s);
+    if (r < _BJ_FIELD_R2_MIN) { return Err(_bj_err_singularity()); }
+    var d: f64 = 4.0 * _BJ_PI * r;
+    var factor: f64 = 1.0 / d;
+    var kr: f64 = k * r;
+    var c: f64 = _bj_cos(kr);
+    var sn: f64 = _bj_sin(kr);
+    var im: f64 = factor * sn;
+    out.re = factor * c;
+    out.im = -im;
+    return Ok(0);
+}
+
+# G(r, r') = 1/(4πR), the static Green's function (k = 0). Singularity when R < 1e-30. Mirrors
+# `field::greens_function_static`.
+public fn bj_greens_function_static(field_pos: *f64, source_pos: *f64): Result {
+    var dx: f64 = field_pos[0] - source_pos[0];
+    var dy: f64 = field_pos[1] - source_pos[1];
+    var dz: f64 = field_pos[2] - source_pos[2];
+    var s: f64 = dx * dx + dy * dy + dz * dz;
+    var r: f64 = f64_sqrt(s);
+    if (r < _BJ_FIELD_R2_MIN) { return Err(_bj_err_singularity()); }
+    var d: f64 = 4.0 * _BJ_PI * r;
+    var g: f64 = 1.0 / d;
+    return Ok(g);
+}
+
+# ── the Maxwell stress tensor (M1 part 3b) ──────────────────────────────────────────────────────────────────────
+
+# T_ij = ε₀(EᵢEⱼ − ½δᵢⱼE²) + (1/μ₀)(BᵢBⱼ − ½δᵢⱼB²) (Pa) into out, 9 f64 row-major (Rust's `[[f64; 3]; 3]`). Mirrors
+# `field::maxwell_stress_tensor`.
+public fn bj_maxwell_stress_tensor(e: BjFieldVector, b: BjFieldVector, out: *f64): i64 {
+    var ea: f64[3];
+    var ba: f64[3];
+    e.to_array(&ea);
+    b.to_array(&ba);
+    var e_sq: f64 = e.magnitude_sq();
+    var b_sq: f64 = b.magnitude_sq();
+    var inv_mu0: f64 = 1.0 / BJ_MU_0;
+    for (var i = 0; i < 3; i = i + 1) {
+        for (var j = 0; j < 3; j = j + 1) {
+            var delta: f64 = 0.0;
+            if (i == j) { delta = 1.0; }
+            var te: f64 = ea[i] * ea[j] - 0.5 * delta * e_sq;
+            var tb: f64 = ba[i] * ba[j] - 0.5 * delta * b_sq;
+            var t1: f64 = BJ_EPSILON_0 * te;
+            var t2: f64 = inv_mu0 * tb;
+            out[i * 3 + j] = t1 + t2;
+        }
+    }
+    return 0;
+}
+
+# Fᵢ = Σⱼ Tᵢⱼnⱼ (N/m²), the force per unit area on a surface of outward normal n, each sum from 0 in j order.
+# `tensor` is 9 f64, row-major. Mirrors `field::stress_tensor_force`.
+#must_use
+public fn bj_stress_tensor_force(tensor: *f64, normal: BjFieldVector): BjFieldVector {
+    var n: f64[3];
+    normal.to_array(&n);
+    var f: f64[3];
+    for (var i = 0; i < 3; i = i + 1) {
+        var acc: f64 = 0.0;
+        for (var j = 0; j < 3; j = j + 1) {
+            var term: f64 = tensor[i * 3 + j] * n[j];
+            acc = acc + term;
+        }
+        f[i] = acc;
+    }
+    var v: BjFieldVector = BjFieldVector_new(f[0], f[1], f[2]);
+    return v;
+}
+
+# P ≈ Σ ((E × B)·(1/μ₀))·n̂·ΔA (W), the Poynting flux through a closed surface from n samples, each 10 f64 at
+# `samples` (E, B, the outward normal, ΔA: Rust's `(FieldVector, FieldVector, FieldVector, f64)`), summed in order
+# from 0. Mirrors `field::poynting_flux_surface`.
+#must_use
+public fn bj_poynting_flux_surface(samples: *f64, n): f64 {
+    var inv_mu0: f64 = 1.0 / BJ_MU_0;
+    var total: f64 = 0.0;
+    for (var i = 0; i < n; i = i + 1) {
+        var p: *f64 = samples + i * 10;
+        var e: BjFieldVector = BjFieldVector_from_array(p);
+        var b: BjFieldVector = BjFieldVector_from_array(p + 3);
+        var nv: BjFieldVector = BjFieldVector_from_array(p + 6);
+        var da: f64 = p[9];
+        var cr: BjFieldVector = e.cross(b);
+        var s: BjFieldVector = cr.scale(inv_mu0);
+        var dt: f64 = s.dot(nv);
+        var term: f64 = dt * da;
+        total = total + term;
+    }
+    return total;
 }

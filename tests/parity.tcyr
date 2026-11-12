@@ -383,8 +383,186 @@ fn _par_in_fv(k): BjFieldVector {
     return v;
 }
 
-# `FieldVector::*` and `field::*` rows: src/field.cyr (M1 part 3a).
+# ADR 0002 row 5 rows compared through their mapping: the port's complex value, conjugated back, against the oracle's
+# (exact: a sign flip). Counted per module run and reported after the module.
+var _par_map5_greens = 0;
+
+# An image charge result to the got list: Ok(q') then the position written to p, or the error.
+fn _par_got_res_image(t, v, p: *f64) {
+    if (is_err_result(t) == 1) { return _par_got_error(v); }
+    _par_got_f(v);
+    var x: f64 = p[0];
+    var y: f64 = p[1];
+    var z: f64 = p[2];
+    _par_got_f(x);
+    _par_got_f(y);
+    _par_got_f(z);
+    return 0;
+}
+
+# A complex result written to `c` on Ok (with its Result's two halves t, v) to the got list, or the error.
+fn _par_got_res_c(t, v, c: BjComplex) {
+    if (is_err_result(t) == 1) { return _par_got_error(v); }
+    var re: f64 = c.re;
+    var im: f64 = c.im;
+    _par_got_f(re);
+    _par_got_f(im);
+    return 0;
+}
+
+# Part 3b's `field::*` rows, by name; −2 for a name that is not one of them.
+fn _par_field_3b(fp, fl): i64 {
+    var a: f64[3];
+    var b: f64[3];
+    var tq: f64[9];
+    var cs: f64[24];
+    var c: BjComplex;
+    if (_par_eq(fp, fl, "field::electric_field_infinite_plane") == 1) {
+        var x0: f64 = _par_in(0);
+        var e0: f64 = bj_electric_field_infinite_plane(x0);
+        _par_got_f(e0);
+        return 1;
+    }
+    if (_par_eq(fp, fl, "field::multipole_moment") == 1) {
+        var n4 = _par_in_f64s(2, &cs);
+        var t1, v1 = bj_multipole_moment(_par_in(0), _par_in(1), &cs, n4 / 4);
+        _par_got_res_f(t1, v1);
+        return 1;
+    }
+    if (_par_eq(fp, fl, "field::spherical_multipole_moment") == 1) {
+        var n4b = _par_in_f64s(2, &cs);
+        var t2, v2 = bj_spherical_multipole_moment(_par_in(0), _par_in(1), &cs, n4b / 4, &c);
+        _par_got_res_c(t2, v2, c);
+        return 1;
+    }
+    if (_par_eq(fp, fl, "field::poynting_flux_surface") == 1) {
+        var sm: f64[50];
+        var n10 = _par_in_f64s(0, &sm);
+        var pf: f64 = bj_poynting_flux_surface(&sm, n10 / 10);
+        _par_got_f(pf);
+        return 1;
+    }
+    if (_par_eq(fp, fl, "field::maxwell_stress_tensor") == 1) {
+        var e1: BjFieldVector = _par_in_fv(0);
+        var b1: BjFieldVector = _par_in_fv(3);
+        bj_maxwell_stress_tensor(e1, b1, &tq);
+        for (var k = 0; k < 9; k = k + 1) {
+            var w: f64 = tq[k];
+            _par_got_f(w);
+        }
+        return 1;
+    }
+    if (_par_eq(fp, fl, "field::stress_tensor_force") == 1) {
+        for (var k2 = 0; k2 < 9; k2 = k2 + 1) { tq[k2] = _par_in(k2); }
+        var nv: BjFieldVector = _par_in_fv(9);
+        _par_got_fv(bj_stress_tensor_force(&tq, nv));
+        return 1;
+    }
+    if (_par_eq(fp, fl, "field::electric_quadrupole_potential") == 1) {
+        for (var k3 = 0; k3 < 9; k3 = k3 + 1) { tq[k3] = _par_in(k3); }
+        _par_in3(9, &a);
+        var t3, v3 = bj_electric_quadrupole_potential(&tq, &a);
+        _par_got_res_f(t3, v3);
+        return 1;
+    }
+    if (_par_eq(fp, fl, "field::greens_function_scalar") == 1) {
+        _par_in3(0, &a);
+        _par_in3(3, &b);
+        var k6: f64 = _par_in(6);
+        var t4, v4 = bj_greens_function_scalar(&a, &b, k6, &c);
+        if (is_ok(t4) == 1) {
+            # ADR 0002 row 5: the port's e^{−jkR} is the oracle's e^{+ikR} conjugated; compare it conjugated back.
+            c = c.conj();
+            _par_map5_greens = _par_map5_greens + 1;
+        }
+        _par_got_res_c(t4, v4, c);
+        return 1;
+    }
+    if (_par_eq(fp, fl, "field::greens_function_static") == 1) {
+        _par_in3(0, &a);
+        _par_in3(3, &b);
+        var t5, v5 = bj_greens_function_static(&a, &b);
+        _par_got_res_f(t5, v5);
+        return 1;
+    }
+    if (_par_eq(fp, fl, "field::image_charge_plane") == 1) {
+        var q1: f64 = _par_in(0);
+        _par_in3(1, &a);
+        var z1: f64 = _par_in(4);
+        var qi: f64 = bj_image_charge_plane(q1, &a, z1, &b);
+        _par_got_f(qi);
+        var bx: f64 = b[0];
+        var by: f64 = b[1];
+        var bz: f64 = b[2];
+        _par_got_f(bx);
+        _par_got_f(by);
+        _par_got_f(bz);
+        return 1;
+    }
+    if (_par_eq(fp, fl, "field::image_charge_sphere") == 1) {
+        var q2: f64 = _par_in(0);
+        _par_in3(1, &a);
+        var r2: f64 = _par_in(4);
+        var t6, v6 = bj_image_charge_sphere(q2, &a, r2, &b);
+        _par_got_res_image(t6, v6, &b);
+        return 1;
+    }
+    if (_par_eq(fp, fl, "field::image_charge_dielectric") == 1) {
+        var q3: f64 = _par_in(0);
+        _par_in3(1, &a);
+        var ea: f64 = _par_in(4);
+        var eb: f64 = _par_in(5);
+        var t7, v7 = bj_image_charge_dielectric(q3, &a, ea, eb, &b);
+        _par_got_res_image(t7, v7, &b);
+        return 1;
+    }
+    if (_par_in_n < 2) { return 0 - 2; }
+    var p0: f64 = _par_in(0);
+    var p1: f64 = _par_in(1);
+    if (_par_eq(fp, fl, "field::electric_field_charged_sphere") == 1) {
+        var t8, v8 = bj_electric_field_charged_sphere(p0, p1);
+        _par_got_res_f(t8, v8);
+        return 1;
+    }
+    if (_par_eq(fp, fl, "field::electric_field_infinite_line") == 1) {
+        var t9, v9 = bj_electric_field_infinite_line(p0, p1);
+        _par_got_res_f(t9, v9);
+        return 1;
+    }
+    if (_par_eq(fp, fl, "field::electric_field_outside_cylinder") == 1) {
+        var t10, v10 = bj_electric_field_outside_cylinder(p0, p1);
+        _par_got_res_f(t10, v10);
+        return 1;
+    }
+    if (_par_eq(fp, fl, "field::electric_field_inside_cylinder") == 1) {
+        var t11, v11 = bj_electric_field_inside_cylinder(p0, p1);
+        _par_got_res_f(t11, v11);
+        return 1;
+    }
+    if (_par_in_n < 3) { return 0 - 2; }
+    var p2: f64 = _par_in(2);
+    if (_par_eq(fp, fl, "field::electric_field_inside_sphere") == 1) {
+        var t12, v12 = bj_electric_field_inside_sphere(p0, p1, p2);
+        _par_got_res_f(t12, v12);
+        return 1;
+    }
+    if (_par_eq(fp, fl, "field::electric_field_ring_axis") == 1) {
+        var t13, v13 = bj_electric_field_ring_axis(p0, p1, p2);
+        _par_got_res_f(t13, v13);
+        return 1;
+    }
+    if (_par_eq(fp, fl, "field::electric_field_disk_axis") == 1) {
+        var t14, v14 = bj_electric_field_disk_axis(p0, p1, p2);
+        _par_got_res_f(t14, v14);
+        return 1;
+    }
+    return 0 - 2;
+}
+
+# `FieldVector::*` and `field::*` rows: src/field.cyr (M1 parts 3a and 3b).
 public fn _par_field(fp, fl): i64 {
+    var r3b = _par_field_3b(fp, fl);
+    if (r3b != 0 - 2) { return r3b; }
     if (_par_eq(fp, fl, "FieldVector::zero") == 1) { _par_got_fv(BjFieldVector_zero()); return 1; }
     if (_par_eq(fp, fl, "FieldVector::default") == 1) { _par_got_fv(BjFieldVector_default()); return 1; }
     var a: f64[3];
@@ -611,6 +789,9 @@ public fn _par_c_bound(fp, fl): i64 {
     if (_par_eq(fp, fl, "Complex::powf") == 1) { return 0; }
     if (_par_eq(fp, fl, "Complex::from_polar") == 1) { return 0; }
     if (_par_eq(fp, fl, "polarization::complex_from_polar") == 1) { return 0; }
+    if (_par_eq(fp, fl, "field::multipole_moment") == 1) { return 0; }
+    if (_par_eq(fp, fl, "field::spherical_multipole_moment") == 1) { return 0; }
+    if (_par_eq(fp, fl, "field::greens_function_scalar") == 1) { return 0; }
     return 0 - 1;
 }
 
@@ -629,6 +810,11 @@ public fn _par_accepted_quiet(adr): i64 {
 
 # Module-specific summary lines after a module's report: each function's cross-target digest.
 public fn _par_module_done(mp, ml) {
+    if (_par_eq(mp, ml, "field") == 1) {
+        print("  ADR 0002 row 5 (e^{+jωt}): ", 30);
+        fmt_int(_par_map5_greens);
+        println(" field::greens_function_scalar rows compared as port = conj(oracle)");
+    }
     _par_dg_print_all();
     _par_dg_init();
     return 0;

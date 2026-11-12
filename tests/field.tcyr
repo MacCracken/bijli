@@ -1,7 +1,8 @@
-# field.tcyr — src/field.cyr: BjFieldVector, point charges, superposition, energy densities and dipoles (M1 part 3a).
+# field.tcyr — src/field.cyr (M1 parts 3a and 3b): vectors, point charges, dipoles, the Gauss's-law fields, multipoles,
+# images, Green's functions and the stress tensor.
 #
 # Every group named test_* is rust-old/src/field.rs's test of that name, ported assertion for assertion (the ledger
-# matches them by name); the rest of field.rs's tests arrive with parts 3b and 3c. tests/golden/field.tsv pins every
+# matches them by name): parts 3a and 3b here; trace_field_line's arrive with 3c. tests/golden/field.tsv pins every
 # function over its grid against Rust besides.
 
 include "tests/lib.cyr"
@@ -29,12 +30,41 @@ fn text_is(a, b): i64 {
     return memeq(a, b, n);
 }
 
-# Runs field.rs's 3a tests.
+# Charge k of a charge list (32 bytes each: q, x, y, z, Rust's `(f64, [f64; 3])`).
+fn put4(p: *f64, k, q: f64, x: f64, y: f64, z: f64) {
+    p[k * 4] = q;
+    p[k * 4 + 1] = x;
+    p[k * 4 + 2] = y;
+    p[k * 4 + 3] = z;
+    return 0;
+}
+
+# Σ kq/|p − c| over n charges, each distance √(Σ (pᵢ − cᵢ)²) by powi(2), summed in order from 0: the Rust tests'
+# `direct_potential` (rust-old/src/field.rs, its test module).
+fn direct_potential(charges: *f64, n, p: *f64): f64 {
+    var sum: f64 = 0.0;
+    for (var i = 0; i < n; i = i + 1) {
+        var c: *f64 = charges + i * 4;
+        var dx: f64 = p[0] - c[1];
+        var dy: f64 = p[1] - c[2];
+        var dz: f64 = p[2] - c[3];
+        var sx: f64 = _bj_powi(dx, 2);
+        var sy: f64 = _bj_powi(dy, 2);
+        var sz: f64 = _bj_powi(dz, 2);
+        var d: f64 = f64_sqrt(sx + sy + sz);
+        var v: f64 = BJ_COULOMB_K * c[0] / d;
+        sum = sum + v;
+    }
+    return sum;
+}
+
+# Runs field.rs's tests (parts 3a and 3b).
 fn main() {
     alloc_init();
     var o: f64[3];
     var p: f64[3];
     var q: f64[3];
+    var b3: f64[3];
     var e: BjFieldVector;
     at3(&o, 0.0, 0.0, 0.0);
     var e10: f64 = 0.0000000001;
@@ -342,6 +372,587 @@ fn main() {
     var tq3, vq3 = nv.normalized(&n);
     assert(text_is(bj_last_error_display(), "invalid parameter: cannot normalize non-finite vector (NaN, 1, 0)") == 1,
       "Rust's message");
+
+    # ── part 3b ──
+    var cs: f64[16];
+    var ip: f64[3];
+    var cc: BjComplex;
+    var e12: f64 = 0.000000000001;
+    var e30: f64 = 0.000000000000000000000000000001;
+    var e20: f64 = 0.00000000000000000001;
+
+    test_group("test_infinite_plane");
+    var sg: f64 = 0.000001;
+    var pe: f64 = bj_electric_field_infinite_plane(sg);
+    var pe2: f64 = sg / (2.0 * BJ_EPSILON_0);
+    assert(near(pe, pe2, 1.0) == 1, "σ/(2ε₀)");
+
+    test_group("test_charged_sphere_matches_point_charge");
+    var tb1, vb1 = bj_electric_field_charged_sphere(q6, 2.0);
+    var es1: f64 = vb1;
+    at3(&q, 2.0, 0.0, 0.0);
+    var tb2, vb2 = bj_electric_field_point_charge(q6, &o, &q, &e);
+    var ep1: f64 = e.magnitude();
+    assert(f64_abs(es1 - ep1) / ep1 < e6, "the sphere's field is the point charge's");
+
+    test_group("test_charged_sphere_singularity");
+    var tb3, vb3 = bj_electric_field_charged_sphere(q6, 0.0);
+    assert(is_err_result(tb3) == 1, "r = 0 is singular");
+
+    test_group("test_inside_sphere_zero_at_center");
+    var tb4, vb4 = bj_electric_field_inside_sphere(q6, 1.0, 0.0);
+    var ei0: f64 = vb4;
+    assert(f64_abs(ei0) < e30, "zero at the centre");
+
+    test_group("test_inside_sphere_linear_growth");
+    var tb5, vb5 = bj_electric_field_inside_sphere(q6, 1.0, 0.25);
+    var tb6, vb6 = bj_electric_field_inside_sphere(q6, 1.0, 0.5);
+    var g1: f64 = vb5;
+    var g2: f64 = vb6;
+    assert(near(g2 / g1, 2.0, e6) == 1, "linear in r");
+
+    test_group("test_infinite_line");
+    var tb7, vb7 = bj_electric_field_infinite_line(q6, 1.0);
+    var el: f64 = vb7;
+    var elx: f64 = q6 / (2.0 * _BJ_PI * BJ_EPSILON_0 * 1.0);
+    assert(f64_abs(el - elx) / elx < e6, "λ/(2πε₀r)");
+
+    test_group("test_infinite_line_singularity");
+    var tb8, vb8 = bj_electric_field_infinite_line(q6, 0.0);
+    assert(is_err_result(tb8) == 1, "r = 0 is singular");
+
+    test_group("test_outside_cylinder_equals_line");
+    var tb9, vb9 = bj_electric_field_outside_cylinder(q6, 2.0);
+    var tb10, vb10 = bj_electric_field_infinite_line(q6, 2.0);
+    var ec1: f64 = vb9;
+    var ec2: f64 = vb10;
+    assert(f64_abs(ec1 - ec2) < e30, "the same field");
+
+    test_group("test_inside_cylinder");
+    var tb11, vb11 = bj_electric_field_inside_cylinder(q6, 0.5);
+    var eic: f64 = vb11;
+    var eicx: f64 = q6 * 0.5 / (2.0 * BJ_EPSILON_0);
+    assert(f64_abs(eic - eicx) / eicx < e6, "ρr/(2ε₀)");
+
+    test_group("test_ring_axis_center");
+    var tb12, vb12 = bj_electric_field_ring_axis(q6, 1.0, 0.0);
+    var er0: f64 = vb12;
+    assert(f64_abs(er0) < e30, "zero at the ring's centre");
+
+    test_group("test_ring_axis_far_field");
+    var tb13, vb13 = bj_electric_field_ring_axis(q6, 0.01, 10.0);
+    var erf: f64 = vb13;
+    var epf: f64 = BJ_COULOMB_K * q6 / (10.0 * 10.0);
+    assert(f64_abs(erf - epf) / epf < 0.0001, "a point charge far away");
+
+    test_group("test_disk_axis_far_field_approaches_point");
+    var tb14, vb14 = bj_electric_field_disk_axis(q6, 0.01, 100.0);
+    var edf: f64 = vb14;
+    var qd: f64 = q6 * _BJ_PI * 0.01 * 0.01;
+    var epd: f64 = BJ_COULOMB_K * qd / (100.0 * 100.0);
+    assert(f64_abs(edf - epd) / epd < 0.01, "a point charge far away");
+
+    test_group("test_disk_axis_close_approaches_infinite_plane");
+    var tb15, vb15 = bj_electric_field_disk_axis(q6, 1000.0, 0.001);
+    var edc: f64 = vb15;
+    var epl: f64 = bj_electric_field_infinite_plane(q6);
+    assert(f64_abs(edc - epl) / epl < 0.01, "a plane close up");
+
+    test_group("test_quadrupole_potential_singularity");
+    var qt: f64[9];
+    for (var k = 0; k < 9; k = k + 1) { qt[k] = 0.0; }
+    qt[0] = 1.0;
+    qt[4] = -1.0;
+    var tb16, vb16 = bj_electric_quadrupole_potential(&qt, &o);
+    assert(is_err_result(tb16) == 1, "singular at the origin");
+
+    test_group("test_quadrupole_potential_decays_faster_than_dipole");
+    qt[0] = p30;
+    qt[4] = -p30;
+    at3(&q, 1.0, 0.0, 0.0);
+    var tb17, vb17 = bj_electric_quadrupole_potential(&qt, &q);
+    at3(&q, 2.0, 0.0, 0.0);
+    var tb18, vb18 = bj_electric_quadrupole_potential(&qt, &q);
+    var qv1: f64 = vb17;
+    var qv2: f64 = vb18;
+    var qr: f64 = f64_abs(qv1) / f64_abs(qv2);
+    assert(near(qr, 8.0, 0.1) == 1, "1/r³");
+
+    test_group("test_multipole_moment_monopole");
+    put4(&cs, 0, q6, 0.0, 0.0, 0.0);
+    put4(&cs, 1, 2.0 * q6, 1.0, 0.0, 0.0);
+    var tb19, vb19 = bj_multipole_moment(0, 0, &cs, 2);
+    var q00: f64 = vb19;
+    assert(q00 > 0.0, "the monopole is the total charge");
+
+    test_group("test_multipole_moment_invalid_m");
+    var tb20, vb20 = bj_multipole_moment(1, 2, &cs, 0);
+    assert(is_err_result(tb20) == 1, "|m| > l");
+
+    test_group("test_associated_legendre_basic");
+    var sl: f64 = f64_sqrt(1.0 - 0.25);
+    var lp0: f64 = _bj_associated_legendre(0, 0, 0.5, sl);
+    var lp1: f64 = _bj_associated_legendre(1, 0, 0.5, sl);
+    var lp11: f64 = _bj_associated_legendre(1, 1, 0.5, sl);
+    var nsl: f64 = -sl;
+    assert(near(lp0, 1.0, e10) == 1 && near(lp1, 0.5, e10) == 1 && near(lp11, nsl, e10) == 1, "P00, P10, P11");
+
+    test_group("test_image_charge_plane");
+    at3(&q, 0.0, 0.0, 1.0);
+    var qi1: f64 = bj_image_charge_plane(q6, &q, 0.0, &ip);
+    var iz: f64 = ip[2];
+    var mq: f64 = -q6;
+    assert(near(qi1, mq, e20) == 1 && near(iz, -1.0, e10) == 1, "-q at the mirror point");
+
+    test_group("test_image_charge_plane_tangential_zero");
+    var on: f64[3];
+    at3(&on, 1.0, 0.0, 0.0);
+    var er: BjFieldVector;
+    var ei: BjFieldVector;
+    var tb21, vb21 = bj_electric_field_point_charge(q6, &q, &on, &er);
+    var tb22, vb22 = bj_electric_field_point_charge(qi1, &ip, &on, &ei);
+    var tx1: f64 = er.x + ei.x;
+    var ty1: f64 = er.y + ei.y;
+    assert(f64_abs(tx1) < e10 && f64_abs(ty1) < e10, "no tangential field on the plane");
+
+    test_group("test_image_charge_sphere");
+    at3(&q, 0.0, 0.0, 2.0);
+    var tb23, vb23 = bj_image_charge_sphere(q6, &q, 1.0, &ip);
+    var qs1: f64 = vb23;
+    var isz: f64 = ip[2];
+    assert(near(qs1, -0.0000005, e20) == 1 && near(isz, 0.5, e10) == 1, "-q/2 at R²/d");
+
+    test_group("test_image_charge_sphere_inside_fails");
+    at3(&q, 0.0, 0.0, 0.5);
+    var tb24, vb24 = bj_image_charge_sphere(q6, &q, 1.0, &ip);
+    assert(is_err_result(tb24) == 1, "inside the sphere");
+
+    test_group("test_image_charge_dielectric");
+    at3(&q, 0.0, 0.0, 1.0);
+    var tb25, vb25 = bj_image_charge_dielectric(q6, &q, 1.0, 4.0, &ip);
+    var qd1: f64 = vb25;
+    var idz: f64 = ip[2];
+    assert(near(qd1, -0.0000006, e12) == 1 && near(idz, -1.0, e10) == 1, "-q(ε₂ − ε₁)/(ε₁ + ε₂)");
+
+    test_group("test_greens_static_coulomb");
+    at3(&q, 1.0, 0.0, 0.0);
+    var tb26, vb26 = bj_greens_function_static(&q, &o);
+    var gs: f64 = vb26;
+    assert(near(gs, 1.0 / (4.0 * _BJ_PI), e10) == 1, "1/(4πR)");
+
+    test_group("test_greens_static_singularity");
+    var tb27, vb27 = bj_greens_function_static(&o, &o);
+    assert(is_err_result(tb27) == 1, "R = 0");
+
+    test_group("test_greens_scalar_k0_matches_static");
+    at3(&q, 2.0, 0.0, 0.0);
+    var tb28, vb28 = bj_greens_function_scalar(&q, &o, 0.0, &cc);
+    var tb29, vb29 = bj_greens_function_static(&q, &o);
+    var gre: f64 = cc.re;
+    var gim: f64 = cc.im;
+    var gst: f64 = vb29;
+    assert(near(gre, gst, e10) == 1 && f64_abs(gim) < e10, "k = 0 is the static function");
+
+    test_group("test_stress_tensor_pure_e_field");
+    var st: f64[9];
+    var ef = BjFieldVector_new(1000.0, 0.0, 0.0);
+    var bf = BjFieldVector_zero();
+    bj_maxwell_stress_tensor(ef, bf, &st);
+    var sx: f64 = 0.5 * BJ_EPSILON_0 * 1000000.0;
+    var t00: f64 = st[0];
+    var tyy: f64 = st[4];
+    var nsx: f64 = -sx;
+    assert(f64_abs(t00 - sx) / sx < e6 && f64_abs(tyy - nsx) / sx < e6, "T_xx = ε₀E²/2, T_yy = -ε₀E²/2");
+
+    test_group("test_stress_tensor_force_on_surface");
+    var nx1 = BjFieldVector_new(1.0, 0.0, 0.0);
+    var fo1: BjFieldVector = bj_stress_tensor_force(&st, nx1);
+    var fox: f64 = fo1.x;
+    assert(fox > 0.0, "a tension along +x");
+
+    test_group("test_poynting_flux_plane_wave");
+    var sm: f64[10];
+    at3(&sm, 0.0, 100.0, 0.0);
+    sm[3] = 0.0;
+    sm[4] = 0.0;
+    sm[5] = 100.0 / BJ_SPEED_OF_LIGHT;
+    sm[6] = 1.0;
+    sm[7] = 0.0;
+    sm[8] = 0.0;
+    sm[9] = 0.01;
+    var pf1: f64 = bj_poynting_flux_surface(&sm, 1);
+    assert(pf1 > 0.0, "energy flows out through +x");
+
+    test_group("test_stress_tensor_symmetric");
+    var es2 = BjFieldVector_new(100.0, 200.0, 300.0);
+    var bs2 = BjFieldVector_new(0.0001, 0.0002, 0.0003);
+    bj_maxwell_stress_tensor(es2, bs2, &st);
+    var d01: f64 = st[1] - st[3];
+    var d02: f64 = st[2] - st[6];
+    var d12: f64 = st[5] - st[7];
+    assert(f64_abs(d01) < e15 && f64_abs(d02) < e15 && f64_abs(d12) < e15, "T is symmetric");
+
+    test_group("test_stress_tensor_trace");
+    bj_maxwell_stress_tensor(ef, bf, &st);
+    var tr: f64 = st[0] + st[4] + st[8];
+    var trx: f64 = -0.5 * BJ_EPSILON_0 * ef.magnitude_sq();
+    assert(f64_abs(tr - trx) / f64_abs(trx) < e6, "tr T = -ε₀E²/2");
+
+    test_group("test_poynting_flux_empty_surface");
+    var pf0: f64 = bj_poynting_flux_surface(&sm, 0);
+    assert(f64_abs(pf0) < e30, "no samples, no flux");
+
+    test_group("test_greens_function_inverse_r");
+    at3(&q, 1.0, 0.0, 0.0);
+    var tb30, vb30 = bj_greens_function_static(&q, &o);
+    at3(&q, 2.0, 0.0, 0.0);
+    var tb31, vb31 = bj_greens_function_static(&q, &o);
+    var gi1: f64 = vb30;
+    var gi2: f64 = vb31;
+    assert(near(gi1 / gi2, 2.0, e6) == 1, "1/R");
+
+    test_group("test_greens_scalar_oscillates");
+    at3(&q, 0.01, 0.0, 0.0);
+    var tb32, vb32 = bj_greens_function_scalar(&q, &o, 100.0, &cc);
+    var im1: f64 = cc.im;
+    at3(&q, 0.05, 0.0, 0.0);
+    var tb33, vb33 = bj_greens_function_scalar(&q, &o, 100.0, &cc);
+    var im2: f64 = cc.im;
+    assert(f64_abs(im1) > 0.0 && f64_abs(im2) > 0.0, "a non-zero imaginary part");
+
+    test_group("test_image_charge_dielectric_wrong_halfspace");
+    at3(&q, 0.0, 0.0, -1.0);
+    var tb34, vb34 = bj_image_charge_dielectric(q6, &q, 1.0, 4.0, &ip);
+    assert(is_err_result(tb34) == 1, "z < 0");
+
+    test_group("test_image_charge_dielectric_equal_media");
+    at3(&q, 0.0, 0.0, 1.0);
+    var tb35, vb35 = bj_image_charge_dielectric(q6, &q, 2.0, 2.0, &ip);
+    var qe: f64 = vb35;
+    assert(f64_abs(qe) < e20, "no image between equal media");
+
+    test_group("test_image_charge_sphere_on_surface");
+    at3(&q, 0.0, 0.0, 1.0);
+    var tb36, vb36 = bj_image_charge_sphere(q6, &q, 1.0, &ip);
+    assert(is_err_result(tb36) == 1, "on the surface");
+
+    test_group("test_associated_legendre_p20");
+    var lx: f64 = 0.5;
+    var ls: f64 = f64_sqrt(1.0 - lx * lx);
+    var p20: f64 = _bj_associated_legendre(2, 0, lx, ls);
+    var p20x: f64 = (3.0 * lx * lx - 1.0) / 2.0;
+    assert(near(p20, p20x, e10) == 1, "P2 = (3x² − 1)/2");
+
+    test_group("test_multipole_moment_empty_charges");
+    var tb37, vb37 = bj_multipole_moment(1, 0, &cs, 0);
+    var me: f64 = vb37;
+    assert(f64_abs(me) < e30, "no charges, no moment");
+
+    test_group("test_quadrupole_potential_linear_quadrupole_far_field");
+    var lq: f64 = 0.000000001;
+    var ld: f64 = 0.001;
+    var lch: f64[12];
+    put4(&lch, 0, lq, 0.0, 0.0, ld);
+    put4(&lch, 1, lq, 0.0, 0.0, -ld);
+    put4(&lch, 2, -2.0 * lq, 0.0, 0.0, 0.0);
+    var qd2: f64 = lq * ld * ld;
+    for (var k = 0; k < 9; k = k + 1) { qt[k] = 0.0; }
+    qt[0] = -2.0 * qd2;
+    qt[4] = -2.0 * qd2;
+    qt[8] = 4.0 * qd2;
+    var lps: f64[12];
+    at3(&lps, 0.0, 0.0, 1.0);
+    lps[3] = 0.3;
+    lps[4] = -0.4;
+    lps[5] = 0.5;
+    lps[6] = 1.0;
+    lps[7] = 0.0;
+    lps[8] = 0.0;
+    lps[9] = 0.2;
+    lps[10] = 0.7;
+    lps[11] = -0.9;
+    var lbad = 0;
+    for (var k = 0; k < 4; k = k + 1) {
+        var lp: *f64 = &lps + k * 24;
+        var tl, vl = bj_electric_quadrupole_potential(&qt, lp);
+        var lv: f64 = vl;
+        var lref: f64 = direct_potential(&lch, 3, lp);
+        if (!(f64_abs(lv - lref) / f64_abs(lref) < 0.00001)) { lbad = lbad + 1; }
+    }
+    assert_eq(lbad, 0, "the quadrupole term is the far field of +q, -2q, +q");
+
+    test_group("test_disk_axis_below_disk_antisymmetric");
+    var tb38, vb38 = bj_electric_field_disk_axis(q6, 1.0, 0.5);
+    var tb39, vb39 = bj_electric_field_disk_axis(q6, 1.0, -0.5);
+    var dab: f64 = vb38;
+    var dbe: f64 = vb39;
+    var dsq: f64 = f64_sqrt(0.5 * 0.5 + 1.0 * 1.0);
+    var dx2: f64 = q6 / (2.0 * BJ_EPSILON_0) * (1.0 - 0.5 / dsq);
+    assert(f64_abs(dab - dx2) / dx2 < e12 && f64_abs(dbe + dx2) / dx2 < e12, "odd in z");
+
+    test_group("test_disk_axis_far_field_no_cancellation");
+    var tb40, vb40 = bj_electric_field_disk_axis(q6, 1.0, 100000000.0);
+    var dff: f64 = vb40;
+    var dpt: f64 = BJ_COULOMB_K * q6 * _BJ_PI * 1.0 * 1.0 / (100000000.0 * 100000000.0);
+    assert(f64_abs(dff - dpt) / dpt < e12, "kσπR²/z², no cancellation");
+
+    test_group("test_disk_axis_on_surface_one_sided_limits");
+    var dpl: f64 = q6 / (2.0 * BJ_EPSILON_0);
+    var tb41, vb41 = bj_electric_field_disk_axis(q6, 1.0, 0.0);
+    var tb42, vb42 = bj_electric_field_disk_axis(q6, 1.0, -0.0);
+    var dup: f64 = vb41;
+    var ddn: f64 = vb42;
+    assert(f64_abs(dup - dpl) / dpl < e15 && f64_abs(ddn + dpl) / dpl < e15, "±σ/(2ε₀) by the sign of zero");
+
+    test_group("test_ring_axis_atomic_scale");
+    var aq: f64 = -BJ_ELEMENTARY_CHARGE;
+    var ar: f64 = 0.0000000000529;
+    var az: f64 = 0.00000000001;
+    var tb43, vb43 = bj_electric_field_ring_axis(aq, ar, az);
+    var ea: f64 = vb43;
+    var ab: f64 = az * az + ar * ar;
+    var ap: f64 = _bj_powf(ab, 1.5);
+    var eax: f64 = BJ_COULOMB_K * aq * az / ap;
+    assert(f64_abs(ea - eax) / f64_abs(eax) < e12, "kQz/(z² + R²)^(3/2) at the Bohr radius");
+
+    test_group("test_ring_axis_true_singularity");
+    var tb44, vb44 = bj_electric_field_ring_axis(0.000000001, 0.0, 0.0);
+    assert(is_err_result(tb44) == 1 && vb44 == BJ_ERR_SINGULARITY, "R = 0 at z = 0 is Singularity");
+    var tb45, vb45 = bj_electric_field_ring_axis(0.000000001, nan, 1.0);
+    assert(is_err_result(tb45) == 1, "a NaN radius");
+
+    test_group("test_inside_sphere_rejects_outside_domain");
+    var tb46, vb46 = bj_electric_field_inside_sphere(q6, 1.0, 2.0);
+    var tb47, vb47 = bj_electric_field_inside_sphere(q6, 1.0, -0.5);
+    var tb48, vb48 = bj_electric_field_inside_sphere(q6, 1.0, nan);
+    var tb49, vb49 = bj_electric_field_inside_sphere(q6, nan, 0.5);
+    assert(is_err_result(tb46) == 1 && is_err_result(tb47) == 1 && is_err_result(tb48) == 1
+      && is_err_result(tb49) == 1, "outside [0, R], or NaN");
+    var tb50, vb50 = bj_electric_field_inside_sphere(q6, 1.0, 1.0);
+    var tb51, vb51 = bj_electric_field_charged_sphere(q6, 1.0);
+    var at_s: f64 = vb50;
+    var outs: f64 = vb51;
+    assert(f64_abs(at_s - outs) / outs < e15, "continuous at r = R");
+
+    test_group("test_image_charge_sphere_rejects_bad_radius");
+    at3(&q, 0.0, 0.0, 2.0);
+    var tb52, vb52 = bj_image_charge_sphere(q6, &q, -1.0, &ip);
+    var tb53, vb53 = bj_image_charge_sphere(q6, &q, 0.0, &ip);
+    var tb54, vb54 = bj_image_charge_sphere(q6, &q, nan, &ip);
+    at3(&b3, nan, 0.0, 2.0);
+    var tb55, vb55 = bj_image_charge_sphere(q6, &b3, 1.0, &ip);
+    assert(is_err_result(tb52) == 1 && is_err_result(tb53) == 1 && is_err_result(tb54) == 1
+      && is_err_result(tb55) == 1, "R ≤ 0, NaN R, NaN position");
+
+    test_group("test_image_charge_sphere_grounded_surface_potential_zero");
+    var gq: f64 = 0.000000001;
+    var gpos: f64[3];
+    at3(&gpos, 0.3, -1.1, 2.0);
+    var gr: f64 = 0.7;
+    var gi: f64[3];
+    var tb56, vb56 = bj_image_charge_sphere(gq, &gpos, gr, &gi);
+    var gqi: f64 = vb56;
+    var pair: f64[8];
+    put4(&pair, 0, gq, gpos[0], gpos[1], gpos[2]);
+    put4(&pair, 1, gqi, gi[0], gi[1], gi[2]);
+    var gps: f64[9];
+    at3(&gps, gr, 0.0, 0.0);
+    gps[3] = 0.0;
+    gps[4] = 0.0;
+    gps[5] = -gr;
+    gps[6] = 0.4;
+    gps[7] = 0.4;
+    gps[8] = gr * 0.5;
+    var gbad = 0;
+    for (var k = 0; k < 3; k = k + 1) {
+        var gp: *f64 = &gps + k * 24;
+        var gn: f64 = f64_sqrt(gp[0] * gp[0] + gp[1] * gp[1] + gp[2] * gp[2]);
+        var gsp: f64[3];
+        at3(&gsp, gp[0] * gr / gn, gp[1] * gr / gn, gp[2] * gr / gn);
+        var gv: f64 = direct_potential(&pair, 2, &gsp);
+        var gscale: f64 = direct_potential(&pair, 1, &gsp);
+        if (!(f64_abs(gv) / gscale < e12)) { gbad = gbad + 1; }
+    }
+    assert_eq(gbad, 0, "the grounded sphere's surface is at zero potential");
+
+    test_group("test_image_charge_dielectric_rejects_invalid");
+    var dbad = 0;
+    at3(&q, 0.0, 0.0, 0.0);
+    var tc1, vc1 = bj_image_charge_dielectric(q6, &q, 1.0, 4.0, &ip);
+    if (is_err_result(tc1) == 0) { dbad = dbad + 1; }
+    at3(&q, 0.0, 0.0, nan);
+    var tc2, vc2 = bj_image_charge_dielectric(q6, &q, 1.0, 4.0, &ip);
+    if (is_err_result(tc2) == 0) { dbad = dbad + 1; }
+    at3(&q, 0.0, 0.0, 1.0);
+    var tc3, vc3 = bj_image_charge_dielectric(q6, &q, 2.0, -1.0, &ip);
+    if (is_err_result(tc3) == 0) { dbad = dbad + 1; }
+    var tc4, vc4 = bj_image_charge_dielectric(q6, &q, 0.0, 4.0, &ip);
+    if (is_err_result(tc4) == 0) { dbad = dbad + 1; }
+    var tc5, vc5 = bj_image_charge_dielectric(q6, &q, 1.0, nan, &ip);
+    if (is_err_result(tc5) == 0) { dbad = dbad + 1; }
+    assert_eq(dbad, 0, "z ≤ 0, NaN z, ε ≤ 0, NaN ε");
+
+    test_group("test_gauss_law_rejects_negative_distance");
+    var gbd = 0;
+    var tc6, vc6 = bj_electric_field_charged_sphere(q6, -2.0);
+    if (is_err_result(tc6) == 0) { gbd = gbd + 1; }
+    var tc7, vc7 = bj_electric_field_infinite_line(q6, -1.0);
+    if (is_err_result(tc7) == 0) { gbd = gbd + 1; }
+    var tc8, vc8 = bj_electric_field_outside_cylinder(q6, -1.0);
+    if (is_err_result(tc8) == 0) { gbd = gbd + 1; }
+    var tc9, vc9 = bj_electric_field_charged_sphere(q6, nan);
+    if (is_err_result(tc9) == 0) { gbd = gbd + 1; }
+    var tc10, vc10 = bj_electric_field_infinite_line(q6, nan);
+    if (is_err_result(tc10) == 0) { gbd = gbd + 1; }
+    var tc11, vc11 = bj_electric_field_inside_cylinder(q6, nan);
+    if (is_err_result(tc11) == 0) { gbd = gbd + 1; }
+    assert_eq(gbd, 0, "negative or NaN distances are refused");
+
+    test_group("test_multipole_moment_near_pole_precision");
+    var nq: f64 = 0.000000002;
+    var nx2: f64 = 0.000000001;
+    put4(&cs, 0, nq, nx2, 0.0, 1.0);
+    var tc12, vc12 = bj_multipole_moment(1, 1, &cs, 1);
+    var m11: f64 = vc12;
+    var m11x: f64 = -nq * nx2;
+    assert(f64_abs(m11 - m11x) / (nq * nx2) < e12, "M11 = -qx near the pole");
+
+    test_group("test_multipole_moment_documented_definition");
+    var dq: f64 = 0.0000000015;
+    var dxx: f64 = 0.3;
+    var dyy: f64 = -0.7;
+    var dzz: f64 = 0.4;
+    var dr2: f64 = dxx * dxx + dyy * dyy + dzz * dzz;
+    put4(&cs, 0, dq, dxx, dyy, dzz);
+    var dexp: f64[8];
+    dexp[0] = dq * dzz;
+    dexp[1] = -dq * dxx;
+    dexp[2] = -dq * dyy;
+    dexp[3] = dq * (3.0 * dzz * dzz - dr2) / 2.0;
+    dexp[4] = -3.0 * dq * dxx * dzz;
+    dexp[5] = -3.0 * dq * dyy * dzz;
+    dexp[6] = 3.0 * dq * (dxx * dxx - dyy * dyy);
+    dexp[7] = 6.0 * dq * dxx * dyy;
+    var dls: i64[8];
+    var dms: i64[8];
+    dls[0] = 1; dms[0] = 0;
+    dls[1] = 1; dms[1] = 1;
+    dls[2] = 1; dms[2] = 0 - 1;
+    dls[3] = 2; dms[3] = 0;
+    dls[4] = 2; dms[4] = 1;
+    dls[5] = 2; dms[5] = 0 - 1;
+    dls[6] = 2; dms[6] = 2;
+    dls[7] = 2; dms[7] = 0 - 2;
+    var ddbad = 0;
+    for (var k = 0; k < 8; k = k + 1) {
+        var tm, vm = bj_multipole_moment(dls[k], dms[k], &cs, 1);
+        var gotm: f64 = vm;
+        var want: f64 = dexp[k];
+        if (!(f64_abs(gotm - want) < e12 * dq)) { ddbad = ddbad + 1; }
+    }
+    assert_eq(ddbad, 0, "M_lm as documented for l ≤ 2");
+
+    test_group("test_spherical_multipole_moment_jackson_low_orders");
+    var jq: f64 = 0.0000000025;
+    put4(&cs, 0, jq, dxx, dyy, dzz);
+    var xr: f64 = dxx;
+    var xi: f64 = -dyy;
+    var sq0: f64 = xr * xr - xi * xi;
+    var sq1: f64 = 2.0 * xr * xi;
+    var jre: f64[8];
+    var jim: f64[8];
+    jre[0] = jq / f64_sqrt(4.0 * _BJ_PI);
+    jim[0] = 0.0;
+    jre[1] = f64_sqrt(3.0 / (4.0 * _BJ_PI)) * jq * dzz;
+    jim[1] = 0.0;
+    var k11: f64 = -f64_sqrt(3.0 / (8.0 * _BJ_PI)) * jq;
+    jre[2] = k11 * xr;
+    jim[2] = k11 * xi;
+    var k1m: f64 = f64_sqrt(3.0 / (8.0 * _BJ_PI)) * jq;
+    jre[3] = k1m * xr;
+    jim[3] = -k1m * xi;
+    jre[4] = 0.5 * f64_sqrt(5.0 / (4.0 * _BJ_PI)) * jq * (3.0 * dzz * dzz - dr2);
+    jim[4] = 0.0;
+    var k21: f64 = -f64_sqrt(15.0 / (8.0 * _BJ_PI)) * jq * dzz;
+    jre[5] = k21 * xr;
+    jim[5] = k21 * xi;
+    var k22: f64 = 0.25 * f64_sqrt(15.0 / (2.0 * _BJ_PI)) * jq;
+    jre[6] = k22 * sq0;
+    jim[6] = -k22 * sq1;
+    jre[7] = k22 * sq0;
+    jim[7] = k22 * sq1;
+    dls[0] = 0; dms[0] = 0;
+    dls[1] = 1; dms[1] = 0;
+    dls[2] = 1; dms[2] = 1;
+    dls[3] = 1; dms[3] = 0 - 1;
+    dls[4] = 2; dms[4] = 0;
+    dls[5] = 2; dms[5] = 1;
+    dls[6] = 2; dms[6] = 0 - 2;
+    dls[7] = 2; dms[7] = 2;
+    var jbad = 0;
+    var e14: f64 = 0.00000000000001;
+    for (var k = 0; k < 8; k = k + 1) {
+        var tj, vj = bj_spherical_multipole_moment(dls[k], dms[k], &cs, 1, &cc);
+        var cre: f64 = cc.re;
+        var cim: f64 = cc.im;
+        var wre: f64 = jre[k];
+        var wim: f64 = jim[k];
+        if (!(f64_abs(cre - wre) < e14 * jq && f64_abs(cim - wim) < e14 * jq)) { jbad = jbad + 1; }
+    }
+    assert_eq(jbad, 0, "Jackson's eqs 4.4-4.6");
+
+    test_group("test_spherical_multipole_moment_relation_to_real_moment");
+    put4(&cs, 0, 0.000000001, 0.2, 0.5, -0.3);
+    put4(&cs, 1, -0.000000003, -0.4, 0.1, 0.6);
+    put4(&cs, 2, 0.000000002, 0.0, -0.8, 0.1);
+    var rn: f64 = f64_sqrt(11.0 / (4.0 * _BJ_PI) * 2.0 / 40320.0);
+    var tr1, vr1 = bj_multipole_moment(5, 3, &cs, 3);
+    var tr2, vr2 = bj_multipole_moment(5, 0 - 3, &cs, 3);
+    var tr3, vr3 = bj_spherical_multipole_moment(5, 3, &cs, 3, &cc);
+    var mc: f64 = vr1;
+    var ms3: f64 = vr2;
+    var rre: f64 = cc.re;
+    var rim: f64 = cc.im;
+    var rsc: f64 = _bj_max(f64_abs(mc), f64_abs(ms3)) * rn;
+    var e13: f64 = 0.0000000000001;
+    assert(f64_abs(rre - rn * mc) < e13 * rsc && f64_abs(rim + rn * ms3) < e13 * rsc, "q_lm = N(M_lm − i M_l,−m)");
+
+    test_group("test_spherical_multipole_moment_high_order_no_overflow");
+    put4(&cs, 0, 1.0, 1.0, 0.0, 0.0);
+    var th1, vh1 = bj_spherical_multipole_moment(200, 200, &cs, 1, &cc);
+    var hre: f64 = cc.re;
+    var him: f64 = cc.im;
+    assert(f64_abs(hre - 1.1279414857494803) < e12 && f64_abs(him) < e15, "q(200, 200) without overflow");
+    var hs: f64 = f64_sqrt(1.0 - 0.09);
+    put4(&cs, 0, 1.0, hs, 0.0, 0.3);
+    var th2, vh2 = bj_spherical_multipole_moment(200, 0, &cs, 1, &cc);
+    var hre2: f64 = cc.re;
+    assert(f64_abs(hre2 - -0.05513183897158158) < e12, "q(200, 0)");
+
+    test_group("test_spherical_multipole_moment_invalid_and_origin");
+    var ti1, vi1 = bj_spherical_multipole_moment(1, 0 - 2, &cs, 0, &cc);
+    assert(is_err_result(ti1) == 1, "|m| > l");
+    put4(&cs, 0, 4.0, 0.0, 0.0, 0.0);
+    var ti2, vi2 = bj_spherical_multipole_moment(0, 0, &cs, 1, &cc);
+    var ore: f64 = cc.re;
+    var oim: f64 = cc.im;
+    assert(f64_abs(ore - 4.0 / f64_sqrt(4.0 * _BJ_PI)) < e15 && oim == 0.0, "q at the origin: Q/√(4π)");
+    var ti3, vi3 = bj_spherical_multipole_moment(2, 1, &cs, 1, &cc);
+    var o2r: f64 = cc.re;
+    var o2i: f64 = cc.im;
+    assert(o2r == 0.0 && o2i == 0.0, "no higher moment from the origin");
+    var ti4, vi4 = bj_multipole_moment(0, 0, &cs, 1);
+    var om: f64 = vi4;
+    assert(f64_abs(om - 4.0) < e15, "M00 = Q");
+
+    test_group("moment_order_types");
+    # Cyrius-only: Rust's u32 l and i32 m are types; outside them the port refuses by name.
+    var tz1, vz1 = bj_multipole_moment(0 - 1, 0, &cs, 0);
+    assert(is_err_result(tz1) == 1, "a negative l");
+    assert(text_is(bj_last_error_display(), "invalid parameter: l must be a u32 and m an i32, got l=-1, m=0") == 1,
+      "the message names the types");
+    var tz2, vz2 = bj_multipole_moment(1, 2, &cs, 0);
+    assert(text_is(bj_last_error_display(), "invalid parameter: |m| must be ≤ l, got l=1, m=2") == 1, "Rust's text");
 
     return assert_summary();
 }
