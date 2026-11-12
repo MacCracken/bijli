@@ -1,0 +1,25 @@
+[package]
+name = "bijli-oracle"
+version = "0.0.0"
+edition = "2024"
+rust-version = "1.99"
+license = "GPL-3.0-only"
+publish = false
+description = "Drives the frozen Rust bijli 1.2.0 in rust-old/ to write the Cyrius port's golden corpus"
+
+# The oracle is used by path and never built or edited in place (CLAUDE.md: do not modify
+# rust-old/). Cargo.lock was seeded from rust-old/Cargo.lock, so every shared dependency (Rust
+# hisab 1.4.0, whose `Complex` is the oracle's complex arithmetic, above all) resolves to the
+# version the oracle was tested with. `full` is every module bijli 1.2.0 has: the default physics
+# set plus soorat-compat, compute, ai and logging. `compute-wgpu` is left out: its `WgpuBackend`
+# is a scaffold with one infallible constructor, and wgpu adds nothing to any row.
+[dependencies]
+bijli = { path = "../../rust-old", default-features = false, features = ["full"] }
+
+[[bin]]
+name = "oracle"
+path = "src/main.rs"
+
+[profile.release]
+# Correctness, not speed: keep overflow checks so a bad grid index fails loudly.
+overflow-checks = true

@@ -361,8 +361,12 @@ initial-port commit.
     Method: every non-test call site in `src/`, then a disassembly of the release unit-test and
     bench binaries (`objdump -d`), with each libm call attributed to its calling function.
     - **glibc symbols reached:** `sin`, `cos`, `sincos`, `exp`, `pow`, `atan`, `atan2`, `asin`,
-      `acos`, `hypot`, `log10`, `cbrt`. (`sinh` is reached only from tests; `log` in the bench
+      `acos`, `tan`, `hypot`, `log10`. (`sinh` is reached only from tests; `log` in the bench
       binary is criterion's.)
+    - **`cbrt` is not glibc's** (corrected at M0 step 5, when `validate.py` disagreed on 504 of
+      1,084 `cbrt` rows). Rust std links compiler-builtins' own `cbrt`, a local symbol: the
+      `libm` crate's port of CORE-MATH, which is correctly rounded. MPFR 4.2.2 agrees on all
+      1,084 rows. So the oracle's `cbrt` rows are already the correctly rounded target.
     - **`sin` + `cos` of one argument become one `sincos` call** (`nf2ff_2d_phasor`, `mie`,
       `parse_touchstone`, the multipoles, `single_stub_match_complex`). glibc 2.44's `sincos`
       equals separate `sin` and `cos` bit for bit: 0 mismatches over 399,944 arguments in four
@@ -861,7 +865,7 @@ Each one gets an issue in the owning repo, with the probe or benchmark that show
 | Milestone | Status | Golden rows | Reference tests | Benches | Notes |
 |---|---|---|---|---|---|
 | P Prep | ✅ | | | 80 (Rust, 2026-11-12T03:15, under load) | D1–D5 answered; 1.2.0 tagged and green; P3, P4, P5 done (2026-11-11); P6 is done at the scaffold; the commit remains |
-| M0 Initialize | ◐ | | | | Part 1 (steps 1–3) done 2026-11-11: scaffold, repairs, `cyrius.cyml`; gate green. Part 2 (steps 4–7) next |
+| M0 Initialize | ◐ | 34,746 (constants 12, math 34,734) | | | Part 1 (steps 1–3) and Part 2a (steps 5–6: generator, corpus, `src/constants.cyr`, `validate.py`) done 2026-11-11. Part 2b (steps 4, 7) next |
 | M1 Foundation | ☐ | | | | |
 | M2 Media, waves, circuits, relativity | ☐ | | | | |
 | M3 Optics | ☐ | | | | |

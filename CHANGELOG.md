@@ -22,6 +22,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
   ADR 0001 (the port) is accepted. ADR 0002 (the 2.0 API changes: removed deprecations,
   fixed-size grids, fallible constructors, error codes with a last-error record, one time
   convention e^{+jωt} with IEEE handedness, cross-target bit identity, a transport error) is new.
+- **Cyrius port, M0 Part 2a**: the golden-value generator `scripts/oracle/` drives the frozen
+  oracle and writes `tests/golden/constants.tsv` (12 rows), `tests/golden/math.tsv` (34,734 rows)
+  and the generated `src/constants.cyr`, deterministically, with a `--check` mode and a glibc
+  provenance check. `scripts/oracle/validate.py` re-derives every row independently (0
+  disagreements). It found that Rust std's `f64::cbrt` is compiler-builtins' correctly rounded
+  `cbrt`, not glibc's, which the port plan's P3 record now says.
 
 ## [1.2.0] — 2026-11-11
 
