@@ -89,7 +89,9 @@
   - atan comes free: `atan(y)` is `atan2(y, 1)`, and both are the correctly rounded value of the
     same real number.
   - cbrt is already correctly rounded in ganita.
-  - That leaves **asin and tan** as the only new primitives. sinh appears only in tests.
+  - That leaves **asin and tan** as the only new primitives. sinh appears only in tests. *(M1 part 2c/2d: the
+    `Complex` bijli re-exports is bijli's API too, and its `sin`, `cos` and `ln` reach sinh, cosh and ln, so
+    **sinh and cosh** are new as well, and ln is kimiya's.)*
 
   File the shared module upstream (§10 G1), so a fourth port can depend on it instead of copying.
 - **The FDTD solvers are compared over whole trajectories** (§3 item 2). Their updates are
@@ -712,6 +714,8 @@ Every std f64 method in `src/` outside tests, at the `1.2.0` tag:
 | `atan` (4) | `_bj_cr_atan2(y, 1.0)` | class C; exact, since both are the rounding of the same real |
 | `asin` (4), `tan` (2) | **new**: `_bj_k_cr_asin` (on kimiya's atan core), `_bj_cr_tan` (on impetus's sin/cos phases, with a fixed-point slow path) | class C; gated on ≥ 10⁶ MPFR arguments each (M1 parts 1b, 1c) |
 | `cbrt` (2) | `ganita_f64_cbrt` (correctly rounded) | class C |
+| `sinh`, `cosh` (through hisab's complex `sin` / `cos` only) | **new** (M1 part 2d): `_bj_cr_sinh`, `_bj_cr_cosh` on impetus's exp phases, sinh's small arguments by series | class C; 10⁶ MPFR arguments each |
+| `ln` (through hisab's complex `ln` only) | `_bj_k_cr_ln` (from kimiya, M1 part 2c) | class C |
 | `powi` (3) | explicit products in LLVM's square-and-multiply order (as tanmatra) | class B |
 | `min` (40), `max` (18), `clamp` (8) | `_bj_min` / `_bj_max` / `_bj_clamp`, Rust's NaN-ignoring semantics | exact |
 | `is_nan` (62), `is_finite` (101) | `x != x`; `x - x == 0` | exact |
@@ -739,7 +743,7 @@ that class B/C rows can be compared:
 | `from_polar(r, θ)` | `(r·cos θ, r·sin θ)` | class C |
 | `exp` | `e^re · (cos im, sin im)` | class C |
 | `sqrt` | `from_polar(sqrt(abs), arg/2)` | class C. Not the C99 branch of Cyrius hisab's `cx_sqrt` |
-| `ln`, `powf`, `sin`, `cos`, `is_zero` | as written | ~~ported only if a non-test call exists~~ **all ported** (M1 part 2c): bijli 1.2.0 re-exports `Complex` (`pub use hisab::num::Complex` in polarization.rs), so its whole surface is bijli's API. `ln` on kimiya's correctly rounded ln, `powf` and `is_zero` in 2c; `sin` and `cos` need correctly rounded `sinh` and `cosh`, new primitives, in M1 part 2d. Display (`"{re}+{im}i"`) through src/fmtf.cyr |
+| `ln`, `powf`, `sin`, `cos`, `is_zero` | as written | ~~ported only if a non-test call exists~~ **all ported**: bijli 1.2.0 re-exports `Complex` (`pub use hisab::num::Complex` in polarization.rs), so its whole surface is bijli's API. `ln` on kimiya's correctly rounded ln, `powf` and `is_zero` (M1 part 2c); `sin` and `cos` on bijli's new correctly rounded `sinh` and `cosh` (M1 part 2d). Display (`"{re}+{im}i"`) through src/fmtf.cyr |
 
 ### 9.3 Types and idioms
 
@@ -878,7 +882,7 @@ Each one gets an issue in the owning repo, with the probe or benchmark that show
 |---|---|---|---|---|---|
 | P Prep | ✅ | | | 80 (Rust, 2026-11-12T03:15, under load) | D1–D5 answered; 1.2.0 tagged and green; P3, P4, P5 done (2026-11-11); P6 is done at the scaffold; the commit remains |
 | M0 Initialize | ✅ | 34,746 (constants 12, math 34,734): 15,507 ok, 0 failed, 18,006 measured, 1,233 pending, on all three targets | | 80 Rust (pending twins) | done 2026-11-11: Parts 1–3. Baselines and probes in `port-parity.md` |
-| M1 Foundation | ◐ | 5 modules, 102,606 ok, 130 accepted (ADR 01), 0 measured | error.rs 10/10, logging.rs 1/1 | 0 of 80 twinned (M1's with part 3); 6 Cyrius-only | Part 1 (the math) done 2026-11-11: 1a (crmath, corrected oracle, cr_verify), 1b (acos, log10, asin), 1c (tan). Part 2a (fmtf, log, error) and 2c (complex, ln, digest v2) done 2026-11-11; 2d (sinh, cosh, complex sin and cos), then part 3 (field, maxwell, charge) next |
+| M1 Foundation | ◐ | 5 modules, 106,379 ok, 133 accepted (ADR 01), 0 measured | error.rs 10/10, logging.rs 1/1 | 0 of 80 twinned (M1's with part 3); 8 Cyrius-only | Part 1 (the math) done 2026-11-11: 1a (crmath, corrected oracle, cr_verify), 1b (acos, log10, asin), 1c (tan). Part 2 done 2026-11-11: 2a (fmtf, log, error), 2c (complex, ln, digest v2), 2d (sinh, cosh, complex sin and cos). Part 3 (field, maxwell, charge) next |
 | M2 Media, waves, circuits, relativity | ☐ | | | | |
 | M3 Optics | ☐ | | | | |
 | M4 RF | ☐ | | | | |

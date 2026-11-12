@@ -4,9 +4,9 @@
 //! Each row is one operation on run-time values. A complex value is two `f:` tokens, the real part first. The pure
 //! IEEE sequences (construction, conj, norm_sq, abs, the four operators and their f64 forms, neg, inv, is_zero) are
 //! class A: the port evaluates the same operations in the same order, so the bits are equal. Rows that call a
-//! transcendental (arg, from_polar, exp, ln, sqrt, powf) are class C: 0 ulp against the corrected oracle,
-//! `complex.cr.tsv`, where glibc misrounded one of the row's calls. `sin` and `cos` (sinh and cosh inside) arrive
-//! with M1 part 2d. The grid: the specials crossed with each other, values over every decade from 1e-310 to 1e308
+//! transcendental (arg, from_polar, exp, ln, sqrt, powf, sin, cos) are class C: 0 ulp against the corrected
+//! oracle, `complex.cr.tsv`, where glibc misrounded one of the row's calls (sin and cos call sinh and cosh too: M1
+//! part 2d). The grid: the specials crossed with each other, values over every decade from 1e-310 to 1e308
 //! with both signs (the range edges of re² + im² among them), the unit circle, and seeded uniform values.
 
 use crate::grids::{Rng, specials};
@@ -134,6 +134,8 @@ pub fn emit() -> Module {
         m.row("Complex::exp", Class::C, &ins, &c(bb(z).exp()));
         m.row("Complex::ln", Class::C, &ins, &c(bb(z).ln()));
         m.row("Complex::sqrt", Class::C, &ins, &c(bb(z).sqrt()));
+        m.row("Complex::sin", Class::C, &ins, &c(bb(z).sin()));
+        m.row("Complex::cos", Class::C, &ins, &c(bb(z).cos()));
         m.row("Complex::fmt", Class::A, &ins, &[s(format!("{}", bb(z)))]);
     }
     let mut rng = Rng::new(0xb1_7a2);

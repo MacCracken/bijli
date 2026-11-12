@@ -83,6 +83,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
   IEEE handedness. The correctly rounded `ln` is kimiya's, checked against MPFR on 300,000 arguments on both
   targets. `tests/golden/complex.tsv` (28,779 rows) passes on all three targets: bit for bit for the IEEE
   sequences, and at 0 ulp against the corrected oracle where a transcendental is involved.
+- **Cyrius port, M1 part 2d — sinh and cosh**: correctly rounded `sinh` and `cosh`, bijli's own, on impetus's exp
+  phases and slow path (`src/crmath.cyr`). Both exponentials are summed at e^|x|'s scale, so nothing overflows before
+  the result does. sinh below |x| = ½ is a double-double series instead. `cr_verify.py` checks 1,000,000 arguments each
+  and their slow paths against MPFR on x86_64 and aarch64: all equal. With them, `BjComplex` gains complex `sin` and
+  `cos` and so carries the whole hisab surface. `math.tsv` pins `f64::sinh`/`cosh` (894 rows each) and `complex.tsv`
+  `sin`/`cos` (994 each, 3 against the corrected oracle). Every one of the 106,512 rows passes on all three targets,
+  with equal digests.
 - **Parity harness**: digest v2. The v1 fold could not see sign-bit differences that came in pairs, and a generated
   NaN differs in sign between x86 and ARM. v2 folds each NaN as one quiet NaN and mixes every bit through. ADR 0002
   row 6 now states that a NaN's bits are the hardware's.

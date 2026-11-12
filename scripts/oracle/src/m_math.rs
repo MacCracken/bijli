@@ -4,14 +4,15 @@
 //! The calls, counted in `rust-old/src` outside test code (2026-11-11): is_finite 101, abs 81,
 //! sqrt 72, is_nan 62, min 40, sin 27, cos 21, max 18, exp 11, sin_cos 8, clamp 8, atan2 5,
 //! log10 5, powf 4, hypot 4, atan 4, asin 4, acos 3, powi 3 (every exponent a run-time value),
-//! ceil 2, to_radians 2, to_degrees 2, cbrt 2, tan 2, copysign 1.
+//! ceil 2, to_radians 2, to_degrees 2, cbrt 2, tan 2, copysign 1; and sinh and cosh, which bijli reaches only
+//! through the hisab `Complex` it re-exports (its `sin` and `cos`).
 //!
 //! Where each result comes from (rustc 1.99.1, x86_64-unknown-linux-gnu; port plan §5 P3, from
 //! a disassembly of the release binaries):
 //! - **glibc's libm** (dynamic): sin, cos, sincos (LLVM merges a `sin` and a `cos` of one
 //!   argument into it; glibc 2.44's `sincos` gives the bits of the separate calls), exp, pow
 //!   (`10.0.powf(y)` stays `pow`: there is no `exp10` rewrite), atan, atan2, asin, acos, tan,
-//!   hypot, log10. These rows are glibc's bits (`glibc.rs`): the header records the glibc, and
+//!   hypot, log10, sinh, cosh. These rows are glibc's bits (`glibc.rs`): the header records the glibc, and
 //!   `--check` refuses another.
 //! - **compiler-builtins' `cbrt`** (linked in, a local `t cbrt` symbol): Rust std's `f64::cbrt`
 //!   resolves to the `libm` crate's port of CORE-MATH's correctly rounded cbrt, not glibc's.
@@ -28,7 +29,7 @@
 //! - **A**: exact on both sides — sqrt, abs, ceil, min, max, clamp, is_nan, is_finite, copysign.
 //! - **B**: arithmetic — to_radians, to_degrees, powi.
 //! - **C**: glibc — sin_cos, sin, cos, exp, atan2, powf, hypot, log10, atan, asin, acos, tan,
-//!   cbrt. The port matches the corrected oracle (MPFR), not glibc (port plan §0.1).
+//!   sinh, cosh, cbrt. The port matches the corrected oracle (MPFR), not glibc (port plan §0.1).
 //!
 //! Inputs are the special values, the ranges bijli feeds each function, and seeded sweeps.
 
@@ -459,6 +460,28 @@ pub fn emit() -> Module {
     cb.extend((1..=100).map(|k| f64::from(k * k * k)));
     cb.extend(wide(0xcb02, 200));
     unary(&mut m, "f64::cbrt", Class::C, f64::cbrt, &cb);
+
+    // sinh and cosh: bijli's code calls neither, but the Complex it re-exports does (hisab's `sin` and `cos`
+    // take `im.cosh()` and `im.sinh()`, glibc's), so they are pinned here too (M1 part 2d). Small arguments, the
+    // port's thresholds (2^-26, 1/2, e^-|x|'s last term at 708, exp's 709.78), the overflow edge, and the range.
+    let mut hy = specials();
+    hy.extend(sweep(0x51a1, 400, -3.0, 3.0));
+    hy.extend(log_sweep(0x51a2, 200, -12.0, 2.85));
+    for x in [
+        pow2(-26),
+        0.5,
+        22.0,
+        708.0,
+        709.78,
+        710.475_860_073_943_9,
+        711.0,
+    ] {
+        hy.extend(around(x));
+        hy.extend(around(-x));
+    }
+    hy.extend(sweep(0x51a3, 200, -720.0, 720.0));
+    unary(&mut m, "f64::sinh", Class::C, f64::sinh, &hy);
+    unary(&mut m, "f64::cosh", Class::C, f64::cosh, &hy);
 
     m
 }

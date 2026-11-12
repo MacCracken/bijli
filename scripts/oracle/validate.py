@@ -59,7 +59,7 @@ def same(a: float, b: float) -> bool:
 
 # ── glibc ─────────────────────────────────────────────────────────────────────────────────────
 LIBM = ctypes.CDLL("libm.so.6")
-for _name in ("sin", "cos", "tan", "asin", "acos", "atan", "exp", "log", "log10", "cbrt"):
+for _name in ("sin", "cos", "tan", "asin", "acos", "atan", "exp", "log", "log10", "cbrt", "sinh", "cosh"):
     getattr(LIBM, _name).restype = ctypes.c_double
     getattr(LIBM, _name).argtypes = [ctypes.c_double]
 for _name in ("atan2", "pow", "hypot"):
@@ -194,6 +194,8 @@ MATH = {
     "f64::sin": lambda xs: [LIBM.sin(xs[0])],
     "f64::cos": lambda xs: [LIBM.cos(xs[0])],
     "f64::tan": lambda xs: [LIBM.tan(xs[0])],
+    "f64::sinh": lambda xs: [LIBM.sinh(xs[0])],
+    "f64::cosh": lambda xs: [LIBM.cosh(xs[0])],
     "f64::exp": lambda xs: [LIBM.exp(xs[0])],
     "f64::atan2": lambda xs: [LIBM.atan2(xs[0], xs[1])],
     "f64::powf": lambda xs: [LIBM.pow(xs[0], xs[1])],
@@ -282,7 +284,8 @@ def validate_math(path: Path) -> list:
 # A class-C math row's reference is the oracle's operation with its primitive correctly rounded. For a primitive
 # row that is the MPFR value itself. Where glibc rounded correctly the oracle's row stands and nothing is written.
 CR_UNARY = {"f64::sin": "sin", "f64::cos": "cos", "f64::tan": "tan", "f64::asin": "asin", "f64::acos": "acos",
-            "f64::atan": "atan", "f64::exp": "exp", "f64::log10": "log10", "f64::cbrt": "cbrt"}
+            "f64::atan": "atan", "f64::exp": "exp", "f64::log10": "log10", "f64::cbrt": "cbrt",
+            "f64::sinh": "sinh", "f64::cosh": "cosh"}
 CR_BINARY = {"f64::atan2": "atan2", "f64::powf": "pow", "f64::hypot": "hypot"}
 
 
@@ -592,9 +595,10 @@ def fsqrt(x: float) -> float:
 
 
 GLIBC_P = {"sin": LIBM.sin, "cos": LIBM.cos, "exp": LIBM.exp, "log": LIBM.log, "atan2": LIBM.atan2,
-           "pow": LIBM.pow}
+           "pow": LIBM.pow, "sinh": LIBM.sinh, "cosh": LIBM.cosh}
 MPFR_P = {"sin": mpfr_ref.sin, "cos": mpfr_ref.cos, "exp": mpfr_ref.exp, "log": lambda x: mpfr_ref.cr("log", x),
-          "atan2": mpfr_ref.atan2, "pow": mpfr_ref.pow}
+          "atan2": mpfr_ref.atan2, "pow": mpfr_ref.pow, "sinh": lambda x: mpfr_ref.cr("sinh", x),
+          "cosh": lambda x: mpfr_ref.cr("cosh", x)}
 TINY_300 = bits_to_f("01a56e1fc2f8f359")  # 1e-300
 
 
@@ -636,6 +640,8 @@ COMPLEX = {
     "Complex::ln": lambda P, v: [P["log"](cx_abs(v[0], v[1])), P["atan2"](v[1], v[0])],
     "Complex::sqrt": lambda P, v: cx_polar(P, fsqrt(cx_abs(v[0], v[1])), P["atan2"](v[1], v[0]) / 2.0),
     "Complex::powf": lambda P, v: cx_powf(P, v[0], v[1], v[2]),
+    "Complex::sin": lambda P, v: [P["sin"](v[0]) * P["cosh"](v[1]), P["cos"](v[0]) * P["sinh"](v[1])],
+    "Complex::cos": lambda P, v: [P["cos"](v[0]) * P["cosh"](v[1]), -P["sin"](v[0]) * P["sinh"](v[1])],
     "Complex::add": lambda P, v: [v[0] + v[2], v[1] + v[3]],
     "Complex::sub": lambda P, v: [v[0] - v[2], v[1] - v[3]],
     "Complex::mul": lambda P, v: [v[0] * v[2] - v[1] * v[3], v[0] * v[3] + v[1] * v[2]],

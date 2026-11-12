@@ -140,7 +140,8 @@ fn _par_constants(fp, fl): i64 {
 # - Classes A and B: the builtins (sqrt, abs, ceil) and src/mathx.cyr, gated.
 # - Class C: src/crmath.cyr's correctly rounded exp, sin, cos, sin_cos, hypot, pow, atan2 and atan (M1 part 1a),
 #   gated at 0 ulp against the corrected oracle (tests/golden/math.cr.tsv where glibc misrounds), and
-#   src/crmath_k.cyr's acos, log10 (kimiya's) and asin (M1 part 1b), and tan (bijli's, M1 part 1c); cbrt is ganita's
+#   src/crmath_k.cyr's acos, log10 (kimiya's) and asin (M1 part 1b), tan (bijli's, M1 part 1c), and sinh and cosh
+#   (bijli's, M1 part 2d, which hisab's complex sin and cos reach); cbrt is ganita's
 #   correctly rounded one, against the oracle's correctly rounded one (compiler-builtins).
 fn _par_math(fp, fl): i64 {
     var x: f64 = _par_in(0);
@@ -168,6 +169,8 @@ fn _par_math(fp, fl): i64 {
     if (_par_eq(fp, fl, "f64::acos") == 1) { var r: f64 = _bj_acos(x); _par_got_f(r); return 1; }
     if (_par_eq(fp, fl, "f64::cbrt") == 1) { var r: f64 = ganita_f64_cbrt(x); _par_got_f(r); return 1; }
     if (_par_eq(fp, fl, "f64::log10") == 1) { var r: f64 = _bj_log10(x); _par_got_f(r); return 1; }
+    if (_par_eq(fp, fl, "f64::sinh") == 1) { var r: f64 = _bj_sinh(x); _par_got_f(r); return 1; }
+    if (_par_eq(fp, fl, "f64::cosh") == 1) { var r: f64 = _bj_cosh(x); _par_got_f(r); return 1; }
     if (_par_in_n < 2) { return 0; }
     if (_par_eq(fp, fl, "f64::powi") == 1) {
         var n = _par_in(1);
@@ -299,6 +302,8 @@ public fn _par_complex(fp, fl): i64 {
     if (_par_eq(fp, fl, "Complex::exp") == 1) { _par_got_c(z.exp()); return 1; }
     if (_par_eq(fp, fl, "Complex::ln") == 1) { _par_got_c(z.ln()); return 1; }
     if (_par_eq(fp, fl, "Complex::sqrt") == 1) { _par_got_c(z.sqrt()); return 1; }
+    if (_par_eq(fp, fl, "Complex::sin") == 1) { _par_got_c(z.sin()); return 1; }
+    if (_par_eq(fp, fl, "Complex::cos") == 1) { _par_got_c(z.cos()); return 1; }
     if (_par_eq(fp, fl, "Complex::fmt") == 1) {
         var buf[800];
         var tx[24];
@@ -417,7 +422,11 @@ public fn _par_c_bound(fp, fl): i64 {
     if (_par_eq(fp, fl, "f64::acos") == 1) { return 0; }
     if (_par_eq(fp, fl, "f64::log10") == 1) { return 0; }
     if (_par_eq(fp, fl, "f64::tan") == 1) { return 0; }
+    if (_par_eq(fp, fl, "f64::sinh") == 1) { return 0; }
+    if (_par_eq(fp, fl, "f64::cosh") == 1) { return 0; }
     if (_par_eq(fp, fl, "Complex::arg") == 1) { return 0; }
+    if (_par_eq(fp, fl, "Complex::sin") == 1) { return 0; }
+    if (_par_eq(fp, fl, "Complex::cos") == 1) { return 0; }
     if (_par_eq(fp, fl, "Complex::exp") == 1) { return 0; }
     if (_par_eq(fp, fl, "Complex::ln") == 1) { return 0; }
     if (_par_eq(fp, fl, "Complex::sqrt") == 1) { return 0; }

@@ -50,6 +50,8 @@ EXTRA = {
     "fmt_f64_display": "one f64 in Rust's Display form (src/fmtf.cyr)",
     "complex_mul_div": "a BjComplex multiply and divide, by value (src/complex.cyr)",
     "complex_exp": "BjComplex::exp: e^re and cos, sin of im, each correctly rounded (src/complex.cyr)",
+    "sinh_cosh": "one sinh and one cosh over [0, 70), correctly rounded (src/crmath.cyr)",
+    "complex_sin": "BjComplex::sin: sin, cos, sinh, cosh, each correctly rounded (src/complex.cyr)",
 }
 
 

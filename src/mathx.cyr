@@ -209,6 +209,20 @@ fn _bj_asin(x: f64): f64 {
     return r;
 }
 
+# sinh x, correctly rounded (src/crmath.cyr's sinh and cosh section, bijli's). Stands for `f64::sinh`.
+#must_use
+fn _bj_sinh(x: f64): f64 {
+    var r: f64 = _bj_cr_sinh(x);
+    return r;
+}
+
+# cosh x, correctly rounded (src/crmath.cyr's sinh and cosh section, bijli's). Stands for `f64::cosh`.
+#must_use
+fn _bj_cosh(x: f64): f64 {
+    var r: f64 = _bj_cr_cosh(x);
+    return r;
+}
+
 # ln x, correctly rounded (src/crmath_k.cyr, kimiya's). Stands for `f64::ln`.
 #must_use
 fn _bj_ln(x: f64): f64 {

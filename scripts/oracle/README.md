@@ -32,8 +32,8 @@ port's harness reads the same files. This README records what is specific to bij
   construction and seeded xorshift (`src/grids.rs`); never a transcendental std method, never a
   timestamp or a hash-map order.
 - **glibc, mostly.** bijli calls the std f64 methods. On x86_64 Linux those reach the host glibc
-  for sin, cos, sincos, tan, asin, acos, atan, atan2, exp, pow, hypot and log10 (`src/glibc.rs`;
-  port plan §5 P3). Every TSV header records the glibc and the CPU class
+  for sin, cos, sincos, tan, asin, acos, atan, atan2, exp, pow, hypot and log10, and through the re-exported
+  `Complex` for ln, sinh and cosh (`src/glibc.rs`; port plan §5 P3). Every TSV header records the glibc and the CPU class
   (`glibc 2.44 x86_64 fma`), and `--check` refuses a corpus from another one. **`cbrt` is the
   exception**: Rust std links compiler-builtins' own, correctly rounded `cbrt` (the `libm`
   crate's port of CORE-MATH), so its rows are MPFR's bits. `powi` with a run-time exponent is
@@ -49,11 +49,11 @@ port's harness reads the same files. This README records what is specific to bij
 
 | Module | Milestone | Golden rows | Golden emitter | Generated Cyrius |
 |---|---|---|---|---|
-| `complex` | M1 | 28,779 (+ 5 corrected) | `src/m_complex.rs` | — |
+| `complex` | M1 | 30,767 (+ 8 corrected) | `src/m_complex.rs` | — |
 | `constants` | M0 | 12 | `src/m_constants.rs` | `src/constants.cyr` (`src/t_constants.rs`, with the completeness proof) |
 | `error` | M1 | 1,635 | `src/m_error.rs` | — |
 | `fmtf` | M1 | 37,576 | `src/m_fmtf.rs` (impetus's grid) | — |
-| `math` | M0 (+ 125 corrected, M1) | 34,734 | `src/m_math.rs` | — |
+| `math` | M0 (+ sinh, cosh and 125 corrected, M1) | 36,522 | `src/m_math.rs` | — |
 | (correctly rounded tables) | M1 | — | — | `src/crmath_data.cyr` (`crtables.py`, written and checked by `validate.py`) |
 | (correctly rounded tables, kimiya's) | M1 | — | — | `src/crmath_k_data.cyr` (`crtables_k.py`, written and checked by `validate.py`) |
 

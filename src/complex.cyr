@@ -28,8 +28,8 @@
 # operators are the operator fns, `a + b`, `a - b`, `a * b`, `a / b`; with an f64 operand, `a.scale(s)` (Rust's
 # `a * s` and `s * a`: the same two products) and `a.div_f64(s)`. A compound assignment is `a = a + b` (Cyrius
 # refuses `+=` on a struct value; hisab's `+=` computes the same). `From<f64>` is BjComplex_from_real, `From<(f64,
-# f64)>` is BjComplex_new, `Default` is BjComplex_default. `sin` and `cos` arrive with the correctly rounded sinh
-# and cosh they need (M1 part 2d).
+# f64)>` is BjComplex_new, `Default` is BjComplex_default. `sin` and `cos` take bijli's correctly rounded sinh and
+# cosh (src/crmath.cyr, M1 part 2d).
 
 private
 
@@ -230,6 +230,35 @@ impl BjComplex {
         var g: f64 = BjComplex_arg(self);
         var theta: f64 = g * n;
         var z: BjComplex = BjComplex_from_polar(r, theta);
+        return z;
+    }
+
+    # sin z = (sin re·cosh im, cos re·sinh im). Mirrors `Complex::sin`.
+    #must_use
+    #pure
+    public fn sin(self): BjComplex {
+        var s: f64 = _bj_sin(self.re);
+        var c: f64 = _bj_cos(self.re);
+        var ch: f64 = _bj_cosh(self.im);
+        var sh: f64 = _bj_sinh(self.im);
+        var z: BjComplex;
+        z.re = s * ch;
+        z.im = c * sh;
+        return z;
+    }
+
+    # cos z = (cos re·cosh im, (−sin re)·sinh im). Mirrors `Complex::cos`.
+    #must_use
+    #pure
+    public fn cos(self): BjComplex {
+        var c: f64 = _bj_cos(self.re);
+        var s: f64 = _bj_sin(self.re);
+        var ch: f64 = _bj_cosh(self.im);
+        var sh: f64 = _bj_sinh(self.im);
+        var ns: f64 = -s;
+        var z: BjComplex;
+        z.re = c * ch;
+        z.im = ns * sh;
         return z;
     }
 

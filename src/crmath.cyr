@@ -1,8 +1,9 @@
-# crmath.cyr — correctly rounded exp, sin, cos, tan, hypot, pow and atan2 (impetus ADR 0011 and its amendments;
-# hypot, pow and atan2 have their own sections after exp, sin and cos).
+# crmath.cyr — correctly rounded exp, sin, cos, tan, sinh, cosh, hypot, pow and atan2 (impetus ADR 0011 and its
+# amendments; hypot, pow and atan2 have their own sections after exp, sin and cos).
 # Copied from impetus's src/crmath.cyr (its ADR 0011) with the prefixes renamed (_im_cr_ → _bj_cr_, _IM_ → _BJ_);
 # bijli's ADR 0001 adopts it. Keep the two in step: a fix in one is a fix for the other. The tan section, after
-# cos, is bijli's own (M1 part 1c), built on impetus's sin and cos phases and reduction.
+# cos, is bijli's own (M1 part 1c), built on impetus's sin and cos phases and reduction; so is the sinh and cosh
+# section after it (M1 part 2d), on impetus's exp phases and slow path.
 #
 # Round-to-nearest-even of the exact mathematical value, on every input, the same bits on every
 # target: only + − × ÷, the f64 rounding builtins and integer operations, no x87 and no polyfill.
@@ -1083,6 +1084,284 @@ fn _bj_cr_tan(x: f64): f64 {
     _bj_cr_tan_slow_calls = _bj_cr_tan_slow_calls + 1;
     var r: f64 = _bj_cr_tan_slow(x);
     return r;
+}
+
+# ── sinh and cosh (bijli's, M1 part 2d: not in impetus's file) ────────────────────
+# cosh x = (e^|x| + e^−|x|)/2 and sinh x = sign(x)·(e^|x| − e^−|x|)/2, on exp's phases and slow path above. The two
+# terms are summed as a double-double at e^|x|'s scale and scaled by 2^(k−1) once, so nothing overflows before the
+# result does (|x| to 711; exp's phases hold there, only its final scaling stops at 709.7). Each phase's bound is
+# absolute (both terms' errors), so sinh's cancellation only lowers how often the rounding test passes, never its
+# correctness; below |x| = 1/2, where it would cancel more than a bit, sinh is its Taylor series instead. Then, as
+# everywhere in this file, the slow path in fixed point, rounded once. Rust reaches these through hisab's complex
+# sin and cos (glibc's sinh and cosh); bijli calls no other.
+
+# Calls that phase 1 could not decide, and slow-path calls, since start (diagnostics, as for sin and cos).
+var _bj_cr_hyp_phase2_calls = 0;
+var _bj_cr_hyp_slow_calls = 0;
+
+# The k with e^x = S·2^k, and S = e^r in [1, 2) into S, for the fixed-point |x| = X (below 746), x negative when neg
+# is 1, with q an estimate of x/ln 2 within 1: _bj_cr_exp_fx's reduction and series, the rounding left to the
+# caller.
+fn _bj_cr_exp_fx_parts(S, X, neg, q: f64): i64 {
+    var A[112];
+    var R[112];
+    var T[112];
+    var kf: f64 = f64_floor(q);
+    var k = f64_to(kf);
+    var tries = 0;
+    while (tries < 4) {
+        var kk = k;
+        if (kk < 0) { kk = 0 - kk; }
+        _bj_cr_mul_small(&A, &_bj_cr_ln2, kk);
+        var lo = 0;
+        if (neg == 0) {
+            if (_bj_cr_cmp(X, &A) < 0) { lo = 1; } else { _bj_cr_sub(&R, X, &A); }
+        } else {
+            if (_bj_cr_cmp(&A, X) < 0) { lo = 1; } else { _bj_cr_sub(&R, &A, X); }
+        }
+        if (lo == 1) {
+            k = k - 1;
+        } elif (_bj_cr_cmp(&R, &_bj_cr_ln2) >= 0) {
+            k = k + 1;
+        } else {
+            tries = 4;
+        }
+        tries = tries + 1;
+    }
+    _bj_cr_zero(S);
+    _bj_cr_zero(&T);
+    store64(S, 1);
+    store64(&T, 1);
+    for (var n = 1; n < 200; n = n + 1) {
+        _bj_cr_mul(&T, &T, &R);
+        _bj_cr_div_small(&T, &T, n);
+        if (_bj_cr_is_zero(&T) == 1) { break; }
+        _bj_cr_add(S, S, &T);
+    }
+    return k;
+}
+
+# D = sinh Y for the fixed-point Y = |x| < 1/2, by its Taylor series (every term positive; the last below 2^-364).
+fn _bj_cr_sinh_series(D, Y) {
+    var Y2[112];
+    var T[112];
+    _bj_cr_mul(&Y2, Y, Y);
+    memcpy(&T, Y, 112);
+    memcpy(D, Y, 112);
+    for (var n = 1; n < 120; n = n + 1) {
+        _bj_cr_mul(&T, &T, &Y2);
+        _bj_cr_div_small(&T, &T, (2 * n) * (2 * n + 1));
+        if (_bj_cr_is_zero(&T) == 1) { break; }
+        _bj_cr_add(D, D, &T);
+    }
+    return 0;
+}
+
+# (e^ax − e^−ax)/2 (minus 1) or (e^ax + e^−ax)/2 (minus 0) in fixed point, correctly rounded and negated when neg is
+# 1, for 2^-26 ≤ ax < 711: e^ax = S1·2^k1 and e^−ax = S2·2^k2 (k1 ≥ 0 > k2), S2 shifted to S1's scale (truncated:
+# below 2^-364 of S1 when the shift passes the 364 bits), the sum or difference rounded once at 2^(k1 − 1). Each
+# exponential is within a few 2^-360 relative and the difference is at least a fifth of S1 for ax ≥ 1/2, so the
+# result keeps 2^-350.
+#must_use
+fn _bj_cr_hyp_slow_exp(ax: f64, minus, neg): f64 {
+    _bj_cr_load();
+    var X[112];
+    var S1[112];
+    var S2[112];
+    var U[112];
+    var D[112];
+    _bj_cr_set(&X, ax);
+    var q: f64 = ax * _BJ_CR_INVLN2;
+    var nq: f64 = -q;
+    var k1 = _bj_cr_exp_fx_parts(&S1, &X, 0, q);
+    var k2 = _bj_cr_exp_fx_parts(&S2, &X, 1, nq);
+    _bj_cr_shr(&U, &S2, k1 - k2);
+    if (minus == 1) {
+        _bj_cr_sub(&D, &S1, &U);
+    } else {
+        _bj_cr_add(&D, &S1, &U);
+    }
+    var r: f64 = _bj_cr_round(&D, k1 - 1, neg);
+    return r;
+}
+
+# sinh x, correctly rounded, in fixed point, for finite 2^-26 ≤ |x| < 711: the series below 1/2, the exponentials
+# above.
+#must_use
+fn _bj_cr_sinh_slow(x: f64): f64 {
+    _bj_cr_load();
+    var ax: f64 = f64_abs(x);
+    var neg = 0;
+    if (x < 0.0) { neg = 1; }
+    if (ax < 0.5) {
+        var Y[112];
+        var D[112];
+        _bj_cr_set(&Y, ax);
+        _bj_cr_sinh_series(&D, &Y);
+        var r: f64 = _bj_cr_round(&D, 0, neg);
+        return r;
+    }
+    var r2: f64 = _bj_cr_hyp_slow_exp(ax, 1, neg);
+    return r2;
+}
+
+# cosh x, correctly rounded, in fixed point, for finite 2^-26 ≤ |x| < 711.
+#must_use
+fn _bj_cr_cosh_slow(x: f64): f64 {
+    var ax: f64 = f64_abs(x);
+    var r: f64 = _bj_cr_hyp_slow_exp(ax, 0, 0);
+    return r;
+}
+
+# sinh of a double 2^-26 ≤ |x| < 1/2 by 16 Taylor terms in double-double (as _bj_cr_dd_sin_cos, every sign +): the
+# last term is below 2^-150 of the sum, and the 16 steps' roundings (each about 2^-104 relative) stay below 2^-98.
+#must_use
+fn _bj_cr_dd_sinh(x: f64): (f64, f64) {
+    var x2h, x2l = _bj_cr_two_prod(x, x);
+    var th: f64 = x;
+    var tl: f64 = 0.0;
+    var sh: f64 = x;
+    var sl: f64 = 0.0;
+    var k = 1;
+    for (var n = 1; n <= 16; n = n + 1) {
+        var mh, ml = _bj_cr_dd_mul(th, tl, x2h, x2l);
+        var d: f64 = f64_from((k + 1) * (k + 2));
+        var qh, ql = _bj_cr_dd_div_d(mh, ml, d);
+        th = qh;
+        tl = ql;
+        var ah, al = _bj_cr_dd_add(sh, sl, th, tl);
+        sh = ah;
+        sl = al;
+        k = k + 2;
+    }
+    return (sh, sl);
+}
+
+# Phase p (1: exp's phase 1, 2^-62; 2: its phase 2, 2^-88) of (e^ax − e^−ax)/2 (minus 1) or the sum (minus 0), for
+# 0 < ax < 711, into out: h, l (the sum at e^ax's scale 2^k), an absolute error bound on h + l, and k. e^ax =
+# 2^k·(h1 + l1); e^−ax = 2^k2·(h2 + l2), scaled to 2^k (exact, or below 2^-1074 of a term ≥ 1/2 if it underflows);
+# above ax = 708, e^−ax is below 2^-2040 of the result and is left out. The bound is twice the two terms' errors,
+# 2^-61 (2^-87) of h1 + |R|, which also covers the double-double sum's rounding and an underflowed R.
+fn _bj_cr_hyp_phase(ax: f64, minus, p, out) {
+    var o1[24];
+    if (p == 1) { _bj_cr_exp_p1(ax, &o1); } else { _bj_cr_exp_p2(ax, &o1); }
+    var h1: f64 = load64(&o1);
+    var l1: f64 = load64(&o1 + 8);
+    var k1 = load64(&o1 + 16);
+    var rh: f64 = 0.0;
+    var rl: f64 = 0.0;
+    if (ax <= 708.0) {
+        var o2[24];
+        var nax: f64 = -ax;
+        if (p == 1) { _bj_cr_exp_p1(nax, &o2); } else { _bj_cr_exp_p2(nax, &o2); }
+        var h2: f64 = load64(&o2);
+        var l2: f64 = load64(&o2 + 8);
+        var dk = load64(&o2 + 16) - k1;
+        rh = _bj_cr_ldexp(h2, dk);
+        rl = _bj_cr_ldexp(l2, dk);
+    }
+    if (minus == 1) {
+        rh = -rh;
+        rl = -rl;
+    }
+    var sh, sl = _bj_cr_dd_add(h1, l1, rh, rl);
+    var rel: f64 = _bj_cr_pow2(0 - 61);
+    if (p == 2) { rel = _bj_cr_pow2(0 - 87); }
+    var ar: f64 = f64_abs(rh);
+    var mag: f64 = h1 + ar;
+    var err: f64 = mag * rel;
+    store64(out, _bj_cr_word(sh));
+    store64(out + 8, _bj_cr_word(sl));
+    store64(out + 16, _bj_cr_word(err));
+    store64(out + 24, k1);
+    return 0;
+}
+
+# The value of a decided phase: h·2^(k − 1), negated when neg is 1 (±∞ when it overflows, which is then the correctly
+# rounded result: h is).
+#must_use
+fn _bj_cr_hyp_value(h: f64, k, neg): f64 {
+    var r: f64 = _bj_cr_scale(h, k - 1);
+    if (neg == 1) { r = -r; }
+    return r;
+}
+
+# cosh x, correctly rounded. cosh(±0) = 1, +∞ for ±∞ and |x| ≥ 711 (cosh overflows from 710.4758600739439 on), NaN
+# for NaN; |x| < 2^-26 gives 1 (cosh x − 1 < x²/2·(1 + x²) is below half an ulp of 1). Phases 1 and 2 of the
+# exponentials (see the section header), each value returned only when the rounding test decides it; then the slow
+# path.
+#must_use
+fn _bj_cr_cosh(x: f64): f64 {
+    if (x != x) { return x; }
+    var ax: f64 = f64_abs(x);
+    if (ax < 0.000000014901161193847656250) { return 1.0; }
+    if (ax >= 711.0) {
+        var inf: f64 = 1.0 / 0.0;
+        return inf;
+    }
+    var o[32];
+    _bj_cr_hyp_phase(ax, 0, 1, &o);
+    var h1: f64 = load64(&o);
+    if (_bj_cr_rounds_to(h1, load64(&o + 8), load64(&o + 16)) == 1) {
+        var r1: f64 = _bj_cr_hyp_value(h1, load64(&o + 24), 0);
+        return r1;
+    }
+    _bj_cr_hyp_phase2_calls = _bj_cr_hyp_phase2_calls + 1;
+    _bj_cr_hyp_phase(ax, 0, 2, &o);
+    var h2: f64 = load64(&o);
+    if (_bj_cr_rounds_to(h2, load64(&o + 8), load64(&o + 16)) == 1) {
+        var r2: f64 = _bj_cr_hyp_value(h2, load64(&o + 24), 0);
+        return r2;
+    }
+    _bj_cr_hyp_slow_calls = _bj_cr_hyp_slow_calls + 1;
+    var r3: f64 = _bj_cr_cosh_slow(x);
+    return r3;
+}
+
+# sinh x, correctly rounded. sinh(±0) = ±0, ±∞ for ±∞ and |x| ≥ 711, NaN for NaN; |x| < 2^-26 gives x itself (sinh x
+# − x < x³/6·(1 + x²) is below half an ulp of x). Below |x| = 1/2 the double-double series (bound 2^-96), above it the
+# exponentials' phases 1 and 2, each value returned only when the rounding test decides it; then the slow path. sinh
+# is odd: the sign is applied last (negation is exact, and rounding to nearest is symmetric).
+#must_use
+fn _bj_cr_sinh(x: f64): f64 {
+    if (x != x) { return x; }
+    var ax: f64 = f64_abs(x);
+    if (ax < 0.000000014901161193847656250) { return x; }
+    var neg = 0;
+    if (x < 0.0) { neg = 1; }
+    if (ax >= 711.0) {
+        var inf: f64 = 1.0 / 0.0;
+        if (neg == 1) { inf = -inf; }
+        return inf;
+    }
+    if (ax < 0.5) {
+        var sh, sl = _bj_cr_dd_sinh(ax);
+        var hs: f64 = sh;
+        var ls: f64 = sl;
+        var es: f64 = hs * _bj_cr_pow2(0 - 96);
+        if (_bj_cr_rounds_to(hs, ls, es) == 1) {
+            if (neg == 1) { hs = -hs; }
+            return hs;
+        }
+    } else {
+        var o[32];
+        _bj_cr_hyp_phase(ax, 1, 1, &o);
+        var h1: f64 = load64(&o);
+        if (_bj_cr_rounds_to(h1, load64(&o + 8), load64(&o + 16)) == 1) {
+            var r1: f64 = _bj_cr_hyp_value(h1, load64(&o + 24), neg);
+            return r1;
+        }
+        _bj_cr_hyp_phase2_calls = _bj_cr_hyp_phase2_calls + 1;
+        _bj_cr_hyp_phase(ax, 1, 2, &o);
+        var h2: f64 = load64(&o);
+        if (_bj_cr_rounds_to(h2, load64(&o + 8), load64(&o + 16)) == 1) {
+            var r2: f64 = _bj_cr_hyp_value(h2, load64(&o + 24), neg);
+            return r2;
+        }
+    }
+    _bj_cr_hyp_slow_calls = _bj_cr_hyp_slow_calls + 1;
+    var r3: f64 = _bj_cr_sinh_slow(x);
+    return r3;
 }
 
 # ── hypot ───────────────────────────────────────────────────────────────────────────

@@ -1,5 +1,5 @@
-# crmath_bijli.tcyr — Cyrius-only tests of bijli's own correctly rounded functions: tan (src/crmath.cyr's tan
-# section, M1 part 1c) and asin (src/crmath_k.cyr, M1 part 1b).
+# crmath_bijli.tcyr — Cyrius-only tests of bijli's own correctly rounded functions: tan, sinh and cosh
+# (src/crmath.cyr's bijli sections, M1 parts 1c and 2d) and asin (src/crmath_k.cyr, M1 part 1b).
 #
 # Against the oracle, the golden math rows gate them at 0 ulp (tests/parity.tcyr, with the corrected oracle where
 # glibc misrounds), and scripts/oracle/cr_verify.py checks them against MPFR beyond the corpus. These check what
@@ -130,6 +130,93 @@ fn main() {
     assert(slow < 5, "at most a handful of 4,000 ordinary results need the slow path");
     var p2 = _bj_cr_tan_phase2_calls - before2;
     assert(p2 < 100, "phase 1 decides over 97.5% of them (its 2^-60 bound fails about 1.1% of the time)");
+
+    test_group("sinh_cosh_specials");
+    var hs: f64 = _bj_cr_sinh(nan);
+    assert(hs != hs, "sinh(NaN) is NaN");
+    var hc: f64 = _bj_cr_cosh(nan);
+    assert(hc != hc, "cosh(NaN) is NaN");
+    hs = _bj_cr_sinh(inf);
+    assert(same(hs, inf) == 1, "sinh(+inf) = +inf");
+    hs = _bj_cr_sinh(ninf);
+    assert(same(hs, ninf) == 1, "sinh(-inf) = -inf");
+    hc = _bj_cr_cosh(ninf);
+    assert(same(hc, inf) == 1, "cosh(-inf) = +inf");
+    hs = _bj_cr_sinh(nzero);
+    assert(same(hs, nzero) == 1, "sinh(-0) = -0");
+    hc = _bj_cr_cosh(nzero);
+    assert(hc == 1.0, "cosh(-0) = 1");
+    hs = _bj_cr_sinh(tiny);
+    assert(same(hs, tiny) == 1, "sinh of the smallest subnormal is itself");
+    var h26: f64 = _bj_cr_from_word(4490088828488384512);
+    var hb26x: f64 = _bj_cr_from_word(4490088828488384511);
+    hc = _bj_cr_cosh(h26);
+    assert_eq(_bj_cr_word(hc), 4607182418800017409, "cosh(2^-26) = 1 + 2^-52: x²/2 is half an ulp, x⁴/24 tips it");
+    hc = _bj_cr_cosh(hb26x);
+    assert(hc == 1.0, "cosh just below 2^-26 is 1 (the shortcut)");
+    hs = _bj_cr_sinh(h26);
+    assert(same(hs, h26) == 1, "sinh(2^-26) = 2^-26, through the series");
+
+    test_group("sinh_cosh_values");
+    hs = _bj_cr_sinh(0.5);
+    assert_eq(_bj_cr_word(hs), 4602868828792568727, "sinh(0.5), the exponentials' first argument");
+    var hsn: f64 = _bj_cr_sinh(-0.5);
+    var nhs: f64 = -hs;
+    assert(same(hsn, nhs) == 1, "sinh is odd");
+    hc = _bj_cr_cosh(0.5);
+    assert_eq(_bj_cr_word(hc), 4607757195049363664, "cosh(0.5)");
+    hc = _bj_cr_cosh(1.0);
+    assert_eq(_bj_cr_word(hc), 4609628236544603472, "cosh(1) = 1.5430806348152437");
+    hs = _bj_cr_sinh(3.0);
+    assert_eq(_bj_cr_word(hs), 4621829180278524334, "sinh(3) = 10.017874927409903");
+    hc = _bj_cr_cosh(22.0);
+    assert_eq(_bj_cr_word(hc), 4745304915138852352, "cosh(22) = 1792456423.065796");
+    hs = _bj_cr_sinh(710.0);
+    assert_eq(_bj_cr_word(hs), 9215457865006123001, "sinh(710) = 1.1169973830808555e308, hpast exp's own overflow");
+    var hedge: f64 = _bj_cr_from_word(4649460627574225021);
+    hc = _bj_cr_cosh(hedge);
+    assert_eq(_bj_cr_word(hc), 9218868437227404603, "cosh(710.4758600739439), the largest finite cosh");
+    var hpast: f64 = _bj_cr_from_word(4649460627574225022);
+    hc = _bj_cr_cosh(hpast);
+    assert(same(hc, inf) == 1, "cosh(710.475860073944) overflows");
+    var hnpast: f64 = -hpast;
+    hs = _bj_cr_sinh(hnpast);
+    assert(same(hs, ninf) == 1, "sinh(-710.475860073944) = -inf");
+
+    test_group("sinh_cosh_fast_and_slow_agree");
+    var hbad = 0;
+    for (var i = 0; i < 300; i = i + 1) {
+        var hx: f64 = uniform(-30.0, 30.0);
+        var hx2: f64 = uniform(-0.5, 0.5);
+        var fa: f64 = _bj_cr_sinh(hx);
+        var fb: f64 = _bj_cr_sinh_slow(hx);
+        var ga: f64 = _bj_cr_cosh(hx);
+        var gb: f64 = _bj_cr_cosh_slow(hx);
+        var sa: f64 = _bj_cr_sinh(hx2);
+        var sb: f64 = _bj_cr_sinh_slow(hx2);
+        if (same(fa, fb) == 0 || same(ga, gb) == 0 || same(sa, sb) == 0) { hbad = hbad + 1; }
+    }
+    for (var i = 0; i < 40; i = i + 1) {
+        var hy: f64 = uniform(700.0, 710.4);
+        var ya: f64 = _bj_cr_cosh(hy);
+        var yb: f64 = _bj_cr_cosh_slow(hy);
+        if (same(ya, yb) == 0) { hbad = hbad + 1; }
+    }
+    assert_eq(hbad, 0, "fast = slow on 900 arguments to 30, 300 below 1/2 and 40 near overflow");
+
+    test_group("sinh_cosh_fast_path_decides");
+    var hb = _bj_cr_hyp_slow_calls;
+    var hb2 = _bj_cr_hyp_phase2_calls;
+    var hkeep = 0;
+    for (var i = 0; i < 4000; i = i + 1) {
+        var hz: f64 = uniform(-50.0, 50.0);
+        var r1: f64 = _bj_cr_sinh(hz);
+        var r2: f64 = _bj_cr_cosh(hz);
+        hkeep = hkeep + _bj_cr_word(r1) + _bj_cr_word(r2);
+    }
+    if (hkeep == 1) { hbad = hbad + 1; }
+    assert(_bj_cr_hyp_slow_calls - hb < 5, "at most a handful of 8,000 ordinary results need the slow path");
+    assert(_bj_cr_hyp_phase2_calls - hb2 < 200, "phase 1 decides over 97.5 % of them");
 
     test_group("asin_specials");
     var s: f64 = _bj_k_cr_asin(nan);

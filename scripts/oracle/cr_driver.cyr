@@ -55,6 +55,10 @@ fn _call(fp, fl, x: f64, y: f64): i64 {
     elif (_is(fp, fl, "asin") == 1) { r = _bj_asin(x); }
     elif (_is(fp, fl, "log10") == 1) { r = _bj_log10(x); }
     elif (_is(fp, fl, "ln") == 1) { r = _bj_ln(x); }
+    elif (_is(fp, fl, "sinh") == 1) { r = _bj_sinh(x); }
+    elif (_is(fp, fl, "cosh") == 1) { r = _bj_cosh(x); }
+    elif (_is(fp, fl, "sinh_slow") == 1) { r = _bj_cr_sinh_slow(x); }
+    elif (_is(fp, fl, "cosh_slow") == 1) { r = _bj_cr_cosh_slow(x); }
     elif (_is(fp, fl, "tan") == 1) { r = _bj_tan(x); }
     elif (_is(fp, fl, "tan_slow") == 1) { r = _bj_cr_tan_slow(x); }
     else { return 0 - 1; }

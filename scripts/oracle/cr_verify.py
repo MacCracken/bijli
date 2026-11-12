@@ -102,7 +102,18 @@ def unary_args(name, rng, count):
         xs += around(6381956970095103.0 * 2.0 ** 797)    # the double closest to a multiple of π/2
         for e in (2.0 ** -27, 2.0 ** -24, 0.78, 2.0 ** 20):
             xs += around(e) + around(-e)
+    elif name in ("sinh", "cosh", "sinh_slow", "cosh_slow"):
+        xs += [rng.uniform(-1.0, 1.0) for _ in range(share)]
+        xs += [rng.uniform(-30.0, 30.0) for _ in range(share // 2)]
+        xs += [rng.uniform(-711.0, 711.0) for _ in range(share // 2)]
+        xs += [rng.uniform(-1.0, 1.0) * 2.0 ** -rng.randint(0, 40) for _ in range(share // 4)]
+        xs += [math.copysign(rng.uniform(700.0, 712.0), rng.uniform(-1, 1)) for _ in range(share // 8)]
+        # The thresholds: the tiny shortcut, the series' end, e^-ax's last term, exp's phases' range, overflow.
+        for e in (2.0 ** -26, 0.5, 708.0, 709.7, 709.78, 710.4758600739439, 710.4758600739440, 711.0):
+            xs += around(e) + around(-e)
     xs += [rand_double(rng) for _ in range(count - len(xs))]
+    if name in ("sinh_slow", "cosh_slow"):    # the fixed-point path's domain: finite, 2^-26 ≤ |x| < 711
+        xs = [x for x in xs if x == x and 2.0 ** -26 <= abs(x) < 711.0]
     if name == "tan_slow":    # the fixed-point path's domain: finite, |x| ≥ 2^-27
         xs = [x for x in xs if x == x and 2.0 ** -27 <= abs(x) < float("inf")]
     return [(x,) for x in xs[:count]]
@@ -133,6 +144,7 @@ FUNCS = {
     "atan2": (2, "atan2"), "hypot": (2, "hypot"), "pow": (2, "pow"),
     "acos": (1, "acos"), "asin": (1, "asin"), "log10": (1, "log10"),
     "tan": (1, "tan"), "tan_slow": (1, "tan"), "ln": (1, "log"),
+    "sinh": (1, "sinh"), "cosh": (1, "cosh"), "sinh_slow": (1, "sinh"), "cosh_slow": (1, "cosh"),
 }
 
 

@@ -100,6 +100,21 @@ fn main() {
     assert(shows(BjComplex_new(inf, inf), "inf+infi") == 1, "infinities");
     assert(shows(BjComplex_new(0.1, 100.0), "0.1+100i") == 1, "Rust's shortest Display digits");
 
+    test_group("sin_cos");
+    # On the real axis sin z is (sin x, cos x·sinh 0) = (sin x, +0); on the imaginary axis cos z is
+    # (cosh y, (−sin 0)·sinh y) = (cosh y, −0): the sign of zero from hisab's (−sin re)·sinh im.
+    var s1 = BjComplex_new(1.0, 0.0);
+    var sz = s1.sin();
+    var sin1: f64 = _bj_sin(1.0);
+    assert(is_c(sz, sin1, 0.0) == 1, "sin(1 + j0) = (sin 1, +0)");
+    var c1 = BjComplex_new(0.0, 1.0);
+    var cz = c1.cos();
+    var cosh1: f64 = _bj_cosh(1.0);
+    assert(is_c(cz, cosh1, nzero) == 1, "cos(0 + j1) = (cosh 1, -0)");
+    var sj = c1.sin();
+    var sinh1: f64 = _bj_sinh(1.0);
+    assert(is_c(sj, 0.0, sinh1) == 1, "sin(0 + j1) = (0, sinh 1)");
+
     test_group("polarization_helpers");
     assert(is_c(bj_complex_real(2.5), 2.5, 0.0) == 1, "complex_real");
     assert(is_c(bj_complex_zero(), 0.0, 0.0) == 1, "complex_zero");

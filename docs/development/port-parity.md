@@ -403,3 +403,50 @@ Language facts the probes found, beyond plan §2:
 | f64::acos | `478d08451f218cc5` |
 | f64::tan | `6b5c3a573a69716c` |
 | f64::cbrt | `7fbcb357e22caa6f` |
+
+## 10. M1 part 2d: correctly rounded sinh and cosh, complex sin and cos (2026-11-11)
+
+- **sinh and cosh are bijli's**, in `src/crmath.cyr`'s second bijli section, on impetus's exp phases and slow path:
+  - **cosh** |x| = (e^|x| + e^−|x|)/2 and **sinh** |x| = (e^|x| − e^−|x|)/2. Both terms come from exp's phase 1
+    (2^-62) or phase 2 (2^-88) as 2^k·(h + l), are summed as a double-double at e^|x|'s scale, and are scaled by
+    2^(k−1) once. So nothing overflows before the result does: the phases hold to |x| = 711, and only exp's own
+    final scaling stops at 709.7. Each phase's error bound is absolute, twice both terms' errors, so sinh's
+    cancellation lowers only how often the rounding test passes, never its correctness.
+  - **sinh below |x| = ½** is a 16-term Taylor series in double-double (bound 2^-96), where the difference would
+    cancel more than a bit.
+  - **The slow path**, in 364-bit fixed point: both exponentials (exp's reduction and series, the rounding left
+    out), summed or subtracted at e^|x|'s scale and rounded once; below ½, sinh's series.
+  - **Shortcuts:** |x| < 2^-26 gives 1 for cosh and x for sinh. At 2^-26 itself cosh is 1 + 2^-52, not 1: x²/2 is
+    exactly half an ulp there, and x⁴/24 tips it up, so the shortcut is strictly below. |x| ≥ 711 gives ±∞, and
+    cosh overflows from 710.475860073944 on.
+- **Measured**: on 100,000 arguments in [−50, 50], phase 1 decides 99.4 % of the 200,000 sinh and cosh calls,
+  phase 2 the rest, and none reaches the slow path. The series decides every one of 100,000 sinh arguments below ½.
+  `cyrius bench` (machine quiet, load 1.1): a sinh plus a cosh costs 580 ns over [0, 70), and a complex sin 833 ns.
+- **Beyond the corpus** (`cr_verify.py`): sinh and cosh on **1,000,000 arguments each**, and their slow paths called
+  directly on 114,877 and 114,843 more. The sets cover the whole domain, the thresholds 2^-26, ½, 708, 709.7,
+  709.78 and 711, both sides of the overflow edge, and dense [700, 712]. **Every result equals MPFR's, on x86_64
+  and on aarch64 (qemu).**
+- **The corpus**:
+  - `tests/golden/math.tsv` gains `f64::sinh` and `f64::cosh`, 894 rows each. bijli calls neither itself, but the
+    `Complex` it re-exports does: hisab's `sin` and `cos` take glibc's `sinh` and `cosh`. glibc rounds every one of
+    those rows correctly, so `math.cr.tsv` is unchanged.
+  - `complex.tsv` gains `Complex::sin` and `Complex::cos`, 994 rows each. glibc misrounded inside 3 of them; the
+    port equals MPFR's value in each (`complex.cr.tsv`: 8 rows now).
+  - `validate.py` transcribes all four with glibc (exact) and MPFR (the corrections).
+- **Cyrius tests**:
+  - `tests/crmath_bijli.tcyr`, 24 new assertions: the specials, the 2^-26 edge on both sides, MPFR's values at ½,
+    1, 3, 22, 710 and the largest finite cosh, fast equal to slow on 940 arguments (40 of them near overflow), and
+    phase 1 deciding;
+  - `tests/complex.tcyr`, 3 new: sin and cos on the axes, the sign of zero included.
+
+  All pass on all three targets.
+- **Result, every target** (x86_64 ELF, x86_64 PE, aarch64): **5 modules, 0 failing; 106,379 ok, 0 failed, 0
+  measured, 0 pending, 133 accepted (ADR 01)**. **All 68 digests (v2) are equal** on all three targets. The 64 of §9
+  are unchanged, and the four new ones follow.
+
+| Function | Digest v2, every target |
+|---|---|
+| f64::sinh | `2fdbec357845cfe2` |
+| f64::cosh | `5e635b625102bd04` |
+| Complex::sin | `3a216378d8e33b5c` |
+| Complex::cos | `5b3bc04c1482e544` |

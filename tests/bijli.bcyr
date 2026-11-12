@@ -13,9 +13,10 @@ fn bench_noop(): i64 { return 0; }
 
 # Runs the bijli benchmarks and reports each. Beside the Rust twins (as their modules land), the Cyrius-only costs
 # of the port's own machinery: a log site with the gate off (Rust's tracing with no subscriber), making an error
-# (the last-error record, on the main thread's static record: two syscalls on Linux to tell the main thread), the
-# same with an f64 field (Rust's Display through src/fmtf.cyr), one Display, a complex multiply-and-divide (src/
-# complex.cyr, by value) and a complex exp (three correctly rounded calls).
+# (the last-error record, on the main thread's static record, with no syscall until a thread exists), the same with
+# an f64 field (Rust's Display through src/fmtf.cyr), one Display, a complex multiply-and-divide (src/complex.cyr,
+# by value), a complex exp (three correctly rounded calls), a sinh and a cosh over [0, 70) (src/crmath.cyr's bijli
+# section) and a complex sin (four calls).
 fn main(): i64 {
     alloc_init();
     var b = bench_new("noop");
@@ -83,6 +84,28 @@ fn main(): i64 {
     }
     bench_batch_stop(bx, 100000);
     bench_report(bx);
+    var bh = bench_new("sinh_cosh");
+    var hx: f64 = 0.0;
+    var hsum: f64 = 0.0;
+    bench_batch_start(bh);
+    for (var k = 0; k < 100000; k = k + 1) {
+        var s1: f64 = _bj_sinh(hx);
+        var c1: f64 = _bj_cosh(hx);
+        hsum = hsum + s1 + c1;
+        hx = hx + 0.0007;
+    }
+    bench_batch_stop(bh, 100000);
+    bench_report(bh);
+
+    var bs = bench_new("complex_sin");
+    bench_batch_start(bs);
+    for (var k = 0; k < 100000; k = k + 1) {
+        var zs = ca.sin();
+        acc = acc + zs;
+    }
+    bench_batch_stop(bs, 100000);
+    bench_report(bs);
+    if (hsum == 7.0) { println("."); }
     var ar: f64 = acc.re;
     if (ar == 7.0) { println("."); }
     if (keep == 7) { println("."); }
