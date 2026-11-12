@@ -106,6 +106,121 @@ fn main(): i64 {
     bench_batch_stop(bs, 100000);
     bench_report(bs);
     if (hsum == 7.0) { println("."); }
+    # ── Rust twins (rust-old/benches/benchmarks.rs, the same inputs) ──
+    var fo: f64[3];
+    var fx: f64[3];
+    var fy: f64[3];
+    var fz: f64[3];
+    var fv: f64[3];
+    fo[0] = 0.0;
+    fo[1] = 0.0;
+    fo[2] = 0.0;
+    fx[0] = 1.0;
+    fx[1] = 0.0;
+    fx[2] = 0.0;
+    fy[0] = 0.0;
+    fy[1] = 1.0;
+    fy[2] = 0.0;
+    fz[0] = 0.0;
+    fz[1] = 0.0;
+    fz[2] = 1.0;
+    fv[0] = 1000000.0;
+    fv[1] = 0.0;
+    fv[2] = 0.0;
+    var fq: f64 = 0.000001;
+    var fe: BjFieldVector;
+    var fsum: f64 = 0.0;
+
+    var b1 = bench_new("field/electric_field_point");
+    bench_batch_start(b1);
+    for (var k = 0; k < 1000000; k = k + 1) {
+        var t1, v1 = bj_electric_field_point_charge(fq, &fo, &fx, &fe);
+        fsum = fsum + fe.x;
+    }
+    bench_batch_stop(b1, 1000000);
+    bench_report(b1);
+
+    var b2 = bench_new("field/electric_potential_point");
+    bench_batch_start(b2);
+    for (var k = 0; k < 1000000; k = k + 1) {
+        var t2, v2 = bj_electric_potential_point_charge(fq, &fo, &fx);
+        keep = keep + v2;
+    }
+    bench_batch_stop(b2, 1000000);
+    bench_report(b2);
+
+    var b3 = bench_new("field/magnetic_field_moving");
+    bench_batch_start(b3);
+    for (var k = 0; k < 1000000; k = k + 1) {
+        var t3, v3 = bj_magnetic_field_moving_charge(fq, &fo, &fv, &fy, &fe);
+        fsum = fsum + fe.z;
+    }
+    bench_batch_stop(b3, 1000000);
+    bench_report(b3);
+
+    var fcs: f64[40];
+    for (var i = 0; i < 10; i = i + 1) {
+        fcs[i * 4] = fq;
+        fcs[i * 4 + 1] = f64_from(i);
+        fcs[i * 4 + 2] = 0.0;
+        fcs[i * 4 + 3] = 0.0;
+    }
+    var fat: f64[3];
+    fat[0] = 5.0;
+    fat[1] = 1.0;
+    fat[2] = 0.0;
+    var b4 = bench_new("field/superposition_10");
+    bench_batch_start(b4);
+    for (var k = 0; k < 100000; k = k + 1) {
+        var t4, v4 = bj_electric_field_superposition(&fcs, 10, &fat, &fe);
+        fsum = fsum + fe.x;
+    }
+    bench_batch_stop(b4, 100000);
+    bench_report(b4);
+
+    var vm = BjFieldVector_new(3.0, 4.0, 5.0);
+    var b5 = bench_new("field/vector_magnitude");
+    bench_batch_start(b5);
+    for (var k = 0; k < 1000000; k = k + 1) {
+        var mg: f64 = vm.magnitude();
+        fsum = fsum + mg;
+    }
+    bench_batch_stop(b5, 1000000);
+    bench_report(b5);
+
+    var va = BjFieldVector_new(1.0, 2.0, 3.0);
+    var vb = BjFieldVector_new(4.0, 5.0, 6.0);
+    var b6 = bench_new("field/vector_cross");
+    bench_batch_start(b6);
+    for (var k = 0; k < 1000000; k = k + 1) {
+        var cr = va.cross(vb);
+        fsum = fsum + cr.z;
+    }
+    bench_batch_stop(b6, 1000000);
+    bench_report(b6);
+
+    var p30: f64 = _bj_from_bits(0x39B4484BFEEBC2A0);       # 1e-30
+    var dip = BjFieldVector_new(0.0, 0.0, p30);
+    var b7 = bench_new("field/electric_dipole_field");
+    bench_batch_start(b7);
+    for (var k = 0; k < 1000000; k = k + 1) {
+        var t7, v7 = bj_electric_dipole_field(dip, &fz, &fe);
+        fsum = fsum + fe.z;
+    }
+    bench_batch_stop(b7, 1000000);
+    bench_report(b7);
+
+    var mdip = BjFieldVector_new(0.0, 0.0, 1.0);
+    var b8 = bench_new("field/magnetic_dipole_field");
+    bench_batch_start(b8);
+    for (var k = 0; k < 1000000; k = k + 1) {
+        var t8, v8 = bj_magnetic_dipole_field(mdip, &fz, &fe);
+        fsum = fsum + fe.z;
+    }
+    bench_batch_stop(b8, 1000000);
+    bench_report(b8);
+    if (fsum == 7.0) { println("."); }
+
     var ar: f64 = acc.re;
     if (ar == 7.0) { println("."); }
     if (keep == 7) { println("."); }

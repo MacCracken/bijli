@@ -26,6 +26,7 @@ mod grids;
 mod m_complex;
 mod m_constants;
 mod m_error;
+mod m_field;
 mod m_fmtf;
 mod m_math;
 mod t_constants;
@@ -42,6 +43,7 @@ fn golden_modules() -> Vec<tsv::Module> {
         m_complex::emit(),
         m_constants::emit(),
         m_error::emit(),
+        m_field::emit(),
         m_fmtf::emit(),
         m_math::emit(),
     ]

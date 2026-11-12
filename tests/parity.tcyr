@@ -334,6 +334,183 @@ public fn _par_complex(fp, fl): i64 {
     return 0;
 }
 
+# A BjFieldVector to the got list: x, y, z.
+fn _par_got_fv(v: BjFieldVector) {
+    var x: f64 = v.x;
+    var y: f64 = v.y;
+    var z: f64 = v.z;
+    _par_got_f(x);
+    _par_got_f(y);
+    _par_got_f(z);
+    return 0;
+}
+
+# An error to the got list as the golden rows hold it: the `E:` token, then the record's Display text.
+fn _par_got_error(code) {
+    _par_got_err(code);
+    var d = bj_last_error_display();
+    _par_got_text(d, strlen(d));
+    return 0;
+}
+
+# A Result<FieldVector> (its two halves, and the vector written on Ok) to the got list.
+fn _par_got_res_v(t, v, e: BjFieldVector) {
+    if (is_err_result(t) == 1) { return _par_got_error(v); }
+    return _par_got_fv(e);
+}
+
+# A Result<f64> (its two halves) to the got list.
+fn _par_got_res_f(t, v) {
+    if (is_err_result(t) == 1) { return _par_got_error(v); }
+    _par_got_f(v);
+    return 0;
+}
+
+# Input tokens k, k + 1, k + 2 into the three f64 at p.
+fn _par_in3(k, p: *f64) {
+    p[0] = _par_in(k);
+    p[1] = _par_in(k + 1);
+    p[2] = _par_in(k + 2);
+    return 0;
+}
+
+# The vector of input tokens k … k + 2.
+fn _par_in_fv(k): BjFieldVector {
+    var x: f64 = _par_in(k);
+    var y: f64 = _par_in(k + 1);
+    var z: f64 = _par_in(k + 2);
+    var v: BjFieldVector = BjFieldVector_new(x, y, z);
+    return v;
+}
+
+# `FieldVector::*` and `field::*` rows: src/field.cyr (M1 part 3a).
+public fn _par_field(fp, fl): i64 {
+    if (_par_eq(fp, fl, "FieldVector::zero") == 1) { _par_got_fv(BjFieldVector_zero()); return 1; }
+    if (_par_eq(fp, fl, "FieldVector::default") == 1) { _par_got_fv(BjFieldVector_default()); return 1; }
+    var a: f64[3];
+    var b: f64[3];
+    var c: f64[3];
+    var e: BjFieldVector;
+    if (_par_eq(fp, fl, "field::electric_energy_density") == 1) {
+        var x0: f64 = _par_in(0);
+        var u0: f64 = bj_electric_energy_density(x0);
+        _par_got_f(u0);
+        return 1;
+    }
+    if (_par_eq(fp, fl, "field::magnetic_energy_density") == 1) {
+        var x1: f64 = _par_in(0);
+        var u1: f64 = bj_magnetic_energy_density(x1);
+        _par_got_f(u1);
+        return 1;
+    }
+    if (_par_eq(fp, fl, "field::electric_field_superposition") == 1) {
+        var cs: f64[24];
+        var n4 = _par_in_f64s(0, &cs);
+        _par_in3(n4 + 1, &a);
+        var ts, vs = bj_electric_field_superposition(&cs, n4 / 4, &a, &e);
+        _par_got_res_v(ts, vs, e);
+        return 1;
+    }
+    if (_par_eq(fp, fl, "f64::mul_field_vector") == 1) {
+        var s0: f64 = _par_in(0);
+        var w0: BjFieldVector = _par_in_fv(1);
+        _par_got_fv(BjFieldVector_scale_left(s0, w0));
+        return 1;
+    }
+    var v: BjFieldVector = _par_in_fv(0);
+    if (_par_eq(fp, fl, "FieldVector::new") == 1) { _par_got_fv(v); return 1; }
+    if (_par_eq(fp, fl, "FieldVector::magnitude") == 1) { var mg: f64 = v.magnitude(); _par_got_f(mg); return 1; }
+    if (_par_eq(fp, fl, "FieldVector::magnitude_sq") == 1) {
+        var m2: f64 = v.magnitude_sq();
+        _par_got_f(m2);
+        return 1;
+    }
+    if (_par_eq(fp, fl, "FieldVector::normalized") == 1) {
+        var tn, vn = v.normalized(&e);
+        _par_got_res_v(tn, vn, e);
+        return 1;
+    }
+    if (_par_eq(fp, fl, "FieldVector::neg") == 1) { _par_got_fv(BjFieldVector_neg(v)); return 1; }
+    if (_par_eq(fp, fl, "FieldVector::fmt") == 1) {
+        var buf[1100];
+        var tx[24];
+        _bj_tx_init(&tx, &buf, 1100);
+        v.display(&tx);
+        if (_bj_tx_overflowed(&tx) == 1) { return 0 - 1; }
+        _par_got_text(_bj_tx_ptr(&tx), _bj_tx_len(&tx));
+        return 1;
+    }
+    if (_par_eq(fp, fl, "FieldVector::from_array") == 1) {
+        _par_in3(0, &a);
+        _par_got_fv(BjFieldVector_from_array(&a));
+        return 1;
+    }
+    if (_par_eq(fp, fl, "FieldVector::into_array") == 1) {
+        v.to_array(&a);
+        var a0: f64 = a[0];
+        var a1: f64 = a[1];
+        var a2: f64 = a[2];
+        _par_got_f(a0);
+        _par_got_f(a1);
+        _par_got_f(a2);
+        return 1;
+    }
+    if (_par_in_n == 4) {
+        var x4: f64 = _par_in(3);
+        if (_par_eq(fp, fl, "FieldVector::scale") == 1) { _par_got_fv(v.scale(x4)); return 1; }
+        if (_par_eq(fp, fl, "FieldVector::mul") == 1) { _par_got_fv(v * x4); return 1; }
+        return 0;
+    }
+    if (_par_in_n == 6) {
+        var w: BjFieldVector = _par_in_fv(3);
+        if (_par_eq(fp, fl, "FieldVector::dot") == 1) { var d: f64 = v.dot(w); _par_got_f(d); return 1; }
+        if (_par_eq(fp, fl, "FieldVector::cross") == 1) { _par_got_fv(v.cross(w)); return 1; }
+        if (_par_eq(fp, fl, "FieldVector::add") == 1) { _par_got_fv(v + w); return 1; }
+        if (_par_eq(fp, fl, "FieldVector::sub") == 1) { _par_got_fv(v - w); return 1; }
+        _par_in3(3, &b);
+        if (_par_eq(fp, fl, "field::electric_dipole_field") == 1) {
+            var t1, v1 = bj_electric_dipole_field(v, &b, &e);
+            _par_got_res_v(t1, v1, e);
+            return 1;
+        }
+        if (_par_eq(fp, fl, "field::electric_dipole_potential") == 1) {
+            var t2, v2 = bj_electric_dipole_potential(v, &b);
+            _par_got_res_f(t2, v2);
+            return 1;
+        }
+        if (_par_eq(fp, fl, "field::magnetic_dipole_field") == 1) {
+            var t3, v3 = bj_magnetic_dipole_field(v, &b, &e);
+            _par_got_res_v(t3, v3, e);
+            return 1;
+        }
+        return 0;
+    }
+    var q: f64 = _par_in(0);
+    _par_in3(1, &a);
+    if (_par_in_n == 7) {
+        _par_in3(4, &b);
+        if (_par_eq(fp, fl, "field::electric_field_point_charge") == 1) {
+            var t4, v4 = bj_electric_field_point_charge(q, &a, &b, &e);
+            _par_got_res_v(t4, v4, e);
+            return 1;
+        }
+        if (_par_eq(fp, fl, "field::electric_potential_point_charge") == 1) {
+            var t5, v5 = bj_electric_potential_point_charge(q, &a, &b);
+            _par_got_res_f(t5, v5);
+            return 1;
+        }
+        return 0;
+    }
+    if (_par_in_n == 10 && _par_eq(fp, fl, "field::magnetic_field_moving_charge") == 1) {
+        _par_in3(4, &b);
+        _par_in3(7, &c);
+        var t6, v6 = bj_magnetic_field_moving_charge(q, &a, &b, &c, &e);
+        _par_got_res_v(t6, v6, e);
+        return 1;
+    }
+    return 0;
+}
+
 # `f64::fmt_display` and `serde_json::f64` rows: src/fmtf.cyr's two layouts, into a bounded BjText.
 fn _par_fmtf(fp, fl): i64 {
     var x: f64 = _par_in(0);
@@ -357,6 +534,7 @@ public fn _par_dispatch(mp, ml, fp, fl): i64 {
     if (_par_eq(mp, ml, "complex") == 1) { return _par_complex(fp, fl); }
     if (_par_eq(mp, ml, "constants") == 1) { return _par_constants(fp, fl); }
     if (_par_eq(mp, ml, "error") == 1) { return _par_error(fp, fl); }
+    if (_par_eq(mp, ml, "field") == 1) { return _par_field(fp, fl); }
     if (_par_eq(mp, ml, "fmtf") == 1) { return _par_fmtf(fp, fl); }
     if (_par_eq(mp, ml, "math") == 1) { return _par_math(fp, fl); }
     return 0;

@@ -39,12 +39,25 @@ root = Path(sys.argv[1] if len(sys.argv) > 1 else ".").resolve()
 MODULES = ["error", "logging"]
 # Rust module -> the milestone that ports it (port plan §4.1).
 PENDING_MODULES = {
-    "field": "M1", "maxwell": "M1", "charge": "M1",
+    "maxwell": "M1", "charge": "M1",
     "material": "M2", "wave": "M2", "circuit": "M2", "relativity": "M2",
     "polarization": "M3", "scattering": "M3", "beam": "M3",
     "rf": "M4",
     "fdtd": "M5–M6", "compute": "M6",
     "integration/soorat": "M7", "bridge": "M7", "ai": "M7",
+}
+# Modules being ported Part by Part: module -> (the Parts that finish it, the Rust items still to come, by name). Their
+# other items are checked as a ported module's now; the listed ones count as pending, and one found ported is a
+# problem (drop it from the list).
+IN_PROGRESS = {
+    "field": ("M1 parts 3b and 3c", {
+        "electric_field_infinite_plane", "check_radial_distance", "electric_field_charged_sphere",
+        "electric_field_inside_sphere", "electric_field_infinite_line", "electric_field_outside_cylinder",
+        "electric_field_inside_cylinder", "electric_field_ring_axis", "electric_field_disk_axis", "trace_field_line",
+        "electric_quadrupole_potential", "multipole_moment", "spherical_multipole_moment", "image_charge_plane",
+        "image_charge_sphere", "image_charge_dielectric", "greens_function_scalar", "greens_function_static",
+        "maxwell_stress_tensor", "stress_tensor_force", "poynting_flux_surface",
+    }),
 }
 NOT_APPLICABLE_MODULES = {
     "lib": "crate root: module list and re-exports",
@@ -55,9 +68,20 @@ ENUM_NAMES = {"BijliError": "BjError"}
 ENUM_PREFIX = {"BijliError": "BJ_ERR_"}
 OPERATORS = {"Add": "add", "Sub": "sub", "Mul": "mul", "Div": "div", "Neg": "neg"}
 # Cyrius has one namespace per program, so logging's `init` / `init_with_level` keep their module in the name.
-FN_RENAMES = {"init": "bj_log_init", "init_with_level": "bj_log_init_with_level"}
+FN_RENAMES = {"init": "bj_log_init", "init_with_level": "bj_log_init_with_level",
+              # pub(crate): bijli-internal in the port
+              "check_radial_distance": "_bj_check_radial_distance"}
 FIELD_RENAMES = {}
-EXCEPTIONS = {}
+EXCEPTIONS = {
+    "field::impl From for FieldVector": "BjFieldVector_from_array(p); the other direction, From<FieldVector> for "
+                                        "[f64; 3], is the method to_array(p)",
+    "field::impl AddAssign for FieldVector": "`a = a + b`: Cyrius refuses `+=` on a struct value (guide, Compound "
+                                             "assignment); the same operations",
+    "field::impl SubAssign for FieldVector": "`a = a - b`, as AddAssign",
+    "field::impl MulAssign for FieldVector": "`a = a * s`, as AddAssign",
+    "field::impl Mul for f64": "BjFieldVector_scale_left(s, v): an operator fn belongs to its left operand's type",
+    "field::impl Display for FieldVector": "the method display(t), into a BjText (src/fmtf.cyr)",
+}
 
 
 def snake(camel):
@@ -256,7 +280,8 @@ def main() -> int:
     used = set()
     modules = rustsrc.rust_modules(root)
     for module in modules:
-        if module not in MODULES and module not in PENDING_MODULES and module not in NOT_APPLICABLE_MODULES:
+        if module not in MODULES and module not in PENDING_MODULES and module not in NOT_APPLICABLE_MODULES \
+                and module not in IN_PROGRESS:
             problems.append(f"rust-old/src/{module}.rs is in no module list")
     pending_counts = {}
     for module in modules:
@@ -264,9 +289,16 @@ def main() -> int:
         if module in PENDING_MODULES:
             pending_counts[module] = len(items)
             continue
-        if module not in MODULES:
+        if module not in MODULES and module not in IN_PROGRESS:
             continue
+        still = IN_PROGRESS.get(module, ("", set()))[1]
         for kind, owner, name, has_self in items:
+            if name in still and kind == "fn":
+                pending_counts[module] = pending_counts.get(module, 0) + 1
+                where, want = expected(module, kind, owner, name, has_self)
+                if where == "fn" and want in fns:
+                    problems.append(f"{module}::{name} is ported ({want}): drop it from IN_PROGRESS")
+                continue
             label = f"{module}::{owner + '::' if owner else ''}{name}"
             key = label if kind != "trait" else f"{module}::impl {name} for {owner}"
             if key in EXCEPTIONS:
@@ -294,8 +326,8 @@ def main() -> int:
     for p in problems:
         print("  " + p)
     pend = sum(pending_counts.values())
-    print(f"surface parity: {len(MODULES)} modules ported, {ok} items matched; {len(pending_counts)} modules pending "
-          f"({pend} public items); {len(problems)} problems")
+    print(f"surface parity: {len(MODULES)} modules ported, {len(IN_PROGRESS)} in progress, {ok} items matched; "
+          f"{len(pending_counts)} modules pending ({pend} public items); {len(problems)} problems")
     return 1 if problems else 0
 
 

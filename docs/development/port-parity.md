@@ -450,3 +450,82 @@ Language facts the probes found, beyond plan §2:
 | f64::cosh | `5e635b625102bd04` |
 | Complex::sin | `3a216378d8e33b5c` |
 | Complex::cos | `5b3bc04c1482e544` |
+
+## 11. M1 part 3a: field — BjFieldVector, point charges, superposition, energy densities, dipoles (2026-11-11)
+
+- **`src/field.cyr`** ports field.rs's first part, the rest coming in 3b and 3c:
+  - `BjFieldVector` by value: `new`, `zero`, `default`, `magnitude`, `magnitude_sq`, `normalized` (with its
+    rescaled path for huge or tiny components), `dot`, `cross`, `scale`, `eq`, `to_array`, `from_array` and
+    Display;
+  - the operators `+ − ×f64` and `neg`, and `scale_left` for `f64 * v`;
+  - point-charge E, V and moving-charge B, the superposition, the two energy densities, and the electric dipole's
+    field and potential and the magnetic dipole's field.
+
+  Shapes (plan §9.3): a Rust `[f64; 3]` position is a `*f64`. A typed-pointer subscript is a typed f64, and a
+  probe confirmed it bit for bit. A `Result<FieldVector>` writes through `out: *BjFieldVector` and returns
+  `Ok(0)` or `Err(code)`, leaving `out` untouched on an error; a `Result<f64>` keeps its f64 payload. Rust's `+=`,
+  `-=` and `*=` are written `a = a + b` and so on, since Cyrius refuses compound assignment on a struct value.
+- **`tests/golden/field.tsv`**: **12,975 rows, every one class A** (+ − × ÷ and sqrt in Rust's order). The grids:
+  - vectors: the specials crossed, every 37th binade with both signs, and seeded;
+  - source and field-point pairs: a lattice, random points, offsets either side of the singular cutoff r² = 1e-30,
+    and the specials;
+  - charges: SI-scale, zero, the specials, and superpositions of 0–5 charges, one of them singular.
+
+  Every error row carries Rust's Display text. `validate.py` transcribes each function independently and matches
+  all 12,975.
+- **Rust tests**: field.rs's 42 tests on these functions are ported to `tests/field.tcyr` under their own names, and
+  Cyrius-only checks join them: the cutoff is 1e-30 to the bit, `out` is untouched on an error, and the normalize
+  message is Rust's text. **58 assertions, passing on all three targets.** The ledger now counts 53 of 858 Rust
+  tests as ported.
+- **Surface parity** gains `IN_PROGRESS`, for a module ported Part by Part. field.rs's 3a items are checked now:
+  48 matched, 0 problems. Its 21 functions for 3b and 3c count as pending. The six trait impls with a different
+  Cyrius form (`From`, the three compound assignments, `f64 * v`, Display) are EXCEPTIONS entries, each naming its
+  form.
+- **Benchmarks, the first Rust twins** (`docs/benchmarks-rust-v-cyrius.md`): 8 of field's benches. Each Cyrius
+  call costs **14–25×** Rust's time:
+
+  | Bench | Rust | Cyrius | Ratio |
+  |---|---|---|---|
+  | point-charge E | 1.52 ns | 31 ns | 20× |
+  | potential | 1.23 ns | 18 ns | 15× |
+  | moving-charge B | 1.73 ns | 43 ns | 25× |
+  | superposition of 10 | 39.8 ns | 552 ns | 14× |
+  | magnitude | 0.50 ns | 9 ns | 18× |
+  | cross | 0.99 ns | 18 ns | 18× |
+  | each dipole field | 5.5 ns | 84 ns | 15× |
+
+  impetus measured 10–13×. Rust's benches pass constant inputs and black-box only the result, so LLVM may fold
+  part of each call, and the Rust column is a floor. The Cyrius run overlapped another project's `cargo bench`
+  (load 1.3); it was started without waiting, which it should not have been.
+- **Result, every target** (x86_64 ELF, x86_64 PE, aarch64): **6 modules, 0 failing; 119,354 ok, 0 failed, 0
+  measured, 0 pending, 133 accepted (ADR 01)**; **all 94 digests equal** on all three targets (the field ones below;
+  every earlier one unchanged).
+
+| Function | Digest v2, every target |
+|---|---|
+| FieldVector::new | `72b01b0fd53fd139` |
+| FieldVector::magnitude | `2f60dfe27dbbf625` |
+| FieldVector::magnitude_sq | `530e8372112c0470` |
+| FieldVector::normalized | `696d8d70ff04a1b2` |
+| FieldVector::dot | `70dd4f6547171b2d` |
+| FieldVector::cross | `74b338e0fd4c3e88` |
+| FieldVector::add | `7098164f178bb9a4` |
+| FieldVector::sub | `264f93f12420552f` |
+| FieldVector::neg | `7dd25cf7f9444002` |
+| FieldVector::scale | `744f9269ea73faa8` |
+| FieldVector::mul | `744f9269ea73faa8` |
+| f64::mul_field_vector | `744f9269ea73faa8` |
+| FieldVector::fmt | `22a7ee8ed0fb7fd` |
+| FieldVector::from_array | `24050fe88a1107e6` |
+| FieldVector::into_array | `24050fe88a1107e6` |
+| FieldVector::zero | `5c12873911e8b0d4` |
+| FieldVector::default | `5c12873911e8b0d4` |
+| field::electric_field_point_charge | `7d35fbcfd36153d9` |
+| field::electric_potential_point_charge | `3a8e93094703bbfe` |
+| field::magnetic_field_moving_charge | `41f275f887ae2310` |
+| field::electric_dipole_field | `7c00e1c229105b7b` |
+| field::electric_dipole_potential | `2061d141d5d37a67` |
+| field::magnetic_dipole_field | `3fdfb0298d42e286` |
+| field::electric_field_superposition | `3768b8946570930b` |
+| field::electric_energy_density | `368e46cc416720b3` |
+| field::magnetic_energy_density | `5b959635d3878461` |

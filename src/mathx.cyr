@@ -13,6 +13,10 @@
 #   already correctly rounded.
 # Adapted from impetus's src/mathx.cyr (its `_im_` helpers).
 
+# `std::f64::consts::PI`, the double nearest π (0x400921FB54442D18). Rust folds `4.0 * PI * EPSILON_0` and the like at
+# compile time; the port computes the same IEEE products at run time, which gives the same bits.
+var _BJ_PI: f64 = 3.141592653589793;
+
 # π/180 as Rust folds `consts::PI / 180.0`: the double nearest, pinned by the to_radians rows.
 var _BJ_RADS_PER_DEG: f64 = 0.017453292519943295;
 

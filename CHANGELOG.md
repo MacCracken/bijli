@@ -90,6 +90,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
   `cos` and so carries the whole hisab surface. `math.tsv` pins `f64::sinh`/`cosh` (894 rows each) and `complex.tsv`
   `sin`/`cos` (994 each, 3 against the corrected oracle). Every one of the 106,512 rows passes on all three targets,
   with equal digests.
+- **Cyrius port, M1 part 3a — field, first part**: `src/field.cyr` with `BjFieldVector` (by value, its operators and
+  methods, `normalized` with Rust's rescaled path, Display), point-charge E and V, moving-charge B, the
+  superposition, the energy densities, and the electric and magnetic dipoles. `tests/golden/field.tsv` (12,975 rows)
+  matches bit for bit on all three targets, error texts included. field.rs's 42 tests on these functions are ported.
+  These are the first Rust bench twins (8, at 14–25× Rust's time). `scripts/surface_parity.py` gains `IN_PROGRESS`
+  for a module ported Part by Part.
 - **Parity harness**: digest v2. The v1 fold could not see sign-bit differences that came in pairs, and a generated
   NaN differs in sign between x86 and ARM. v2 folds each NaN as one quiet NaN and mixes every bit through. ADR 0002
   row 6 now states that a NaN's bits are the hardware's.

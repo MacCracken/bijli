@@ -1,0 +1,351 @@
+# field.tcyr — src/field.cyr: BjFieldVector, point charges, superposition, energy densities and dipoles (M1 part 3a).
+#
+# Every group named test_* is rust-old/src/field.rs's test of that name, ported assertion for assertion (the ledger
+# matches them by name); the rest of field.rs's tests arrive with parts 3b and 3c. tests/golden/field.tsv pins every
+# function over its grid against Rust besides.
+
+include "tests/lib.cyr"
+
+# p = (x, y, z), three f64 at p.
+fn at3(p: *f64, x: f64, y: f64, z: f64) {
+    p[0] = x;
+    p[1] = y;
+    p[2] = z;
+    return 0;
+}
+
+# |a − b| < tol.
+fn near(a: f64, b: f64, tol: f64): i64 {
+    var d: f64 = a - b;
+    var ad: f64 = f64_abs(d);
+    if (ad < tol) { return 1; }
+    return 0;
+}
+
+# 1 when the C strings a and b are equal.
+fn text_is(a, b): i64 {
+    var n = strlen(a);
+    if (n != strlen(b)) { return 0; }
+    return memeq(a, b, n);
+}
+
+# Runs field.rs's 3a tests.
+fn main() {
+    alloc_init();
+    var o: f64[3];
+    var p: f64[3];
+    var q: f64[3];
+    var e: BjFieldVector;
+    at3(&o, 0.0, 0.0, 0.0);
+    var e10: f64 = 0.0000000001;
+    var e6: f64 = 0.000001;
+    var q6: f64 = 0.000001;
+    var p30: f64 = _bj_from_bits(0x39B4484BFEEBC2A0);          # 1e-30
+
+    test_group("test_field_vector_magnitude");
+    var v = BjFieldVector_new(3.0, 4.0, 0.0);
+    var vm: f64 = v.magnitude();
+    assert(near(vm, 5.0, e10) == 1, "|(3, 4, 0)| = 5");
+
+    test_group("test_field_vector_dot");
+    var ax = BjFieldVector_new(1.0, 0.0, 0.0);
+    var ay = BjFieldVector_new(0.0, 1.0, 0.0);
+    var dt: f64 = ax.dot(ay);
+    assert(near(dt, 0.0, e10) == 1, "x̂·ŷ = 0");
+
+    test_group("test_field_vector_cross");
+    var xz = ax.cross(ay);
+    var xzz: f64 = xz.z;
+    assert(near(xzz, 1.0, e10) == 1, "x̂ × ŷ = ẑ");
+
+    test_group("test_electric_field_positive_charge");
+    at3(&p, 1.0, 0.0, 0.0);
+    var t1, v1 = bj_electric_field_point_charge(q6, &o, &p, &e);
+    assert(is_ok(t1) == 1, "ok");
+    var ex: f64 = e.x;
+    var ey: f64 = e.y;
+    assert(ex > 0.0, "E points away from a positive charge");
+    assert(near(ey, 0.0, e10) == 1, "no y component");
+
+    test_group("test_electric_field_negative_charge");
+    var mq6: f64 = -q6;
+    var t2, v2 = bj_electric_field_point_charge(mq6, &o, &p, &e);
+    ex = e.x;
+    assert(ex < 0.0, "E points toward a negative charge");
+
+    test_group("test_singularity_at_source");
+    var t3, v3 = bj_electric_field_point_charge(q6, &o, &o, &e);
+    assert(is_err_result(t3) == 1, "the source point is singular");
+
+    test_group("test_electric_potential");
+    var t4, v4 = bj_electric_potential_point_charge(q6, &o, &p);
+    var pv: f64 = v4;
+    assert(near(pv, 8987.551792, 1.0) == 1, "V = kq/r ≈ 8987.55 V");
+
+    test_group("test_inverse_square_law");
+    var e1: BjFieldVector;
+    var e2: BjFieldVector;
+    at3(&q, 2.0, 0.0, 0.0);
+    var t5, v5 = bj_electric_field_point_charge(q6, &o, &p, &e1);
+    var t6, v6 = bj_electric_field_point_charge(q6, &o, &q, &e2);
+    var m1: f64 = e1.magnitude();
+    var m2: f64 = e2.magnitude();
+    var ratio: f64 = m1 / m2;
+    assert(near(ratio, 4.0, e6) == 1, "E at 2r is E at r / 4");
+
+    test_group("test_superposition_cancellation");
+    var charges: f64[8];
+    charges[0] = q6;
+    charges[1] = -1.0;
+    charges[2] = 0.0;
+    charges[3] = 0.0;
+    charges[4] = q6;
+    charges[5] = 1.0;
+    charges[6] = 0.0;
+    charges[7] = 0.0;
+    var t7, v7 = bj_electric_field_superposition(&charges, 2, &o, &e);
+    assert(is_ok(t7) == 1, "ok");
+    ex = e.x;
+    assert(near(ex, 0.0, e6) == 1, "symmetric charges cancel at the midpoint");
+
+    test_group("test_magnetic_field_moving_charge");
+    var vel: f64[3];
+    at3(&vel, 1000000.0, 0.0, 0.0);
+    at3(&q, 0.0, 1.0, 0.0);
+    var t8, v8 = bj_magnetic_field_moving_charge(q6, &o, &vel, &q, &e);
+    var bz: f64 = e.z;
+    assert(bz > 0.0, "x̂ × ŷ = ẑ: B along +z");
+
+    test_group("test_energy_density_electric");
+    var u: f64 = bj_electric_energy_density(1000.0);
+    assert(u > 0.0, "positive");
+    var ue: f64 = 0.5 * BJ_EPSILON_0 * 1000000.0;
+    assert(near(u, ue, e10) == 1, "ε₀E²/2");
+
+    test_group("test_energy_density_magnetic");
+    var um: f64 = bj_magnetic_energy_density(1.0);
+    assert(um > 0.0, "positive");
+
+    test_group("test_normalized");
+    var n = BjFieldVector_zero();
+    var t9, v9 = v.normalized(&n);
+    var nm: f64 = n.magnitude();
+    assert(near(nm, 1.0, e10) == 1, "a unit vector");
+
+    test_group("test_zero_vector_normalize_fails");
+    var z0 = BjFieldVector_zero();
+    var t10, v10 = z0.normalized(&n);
+    assert(is_err_result(t10) == 1, "the zero vector has no direction");
+
+    test_group("test_ops_add");
+    var a = BjFieldVector_new(1.0, 2.0, 3.0);
+    var b = BjFieldVector_new(4.0, 5.0, 6.0);
+    var c = a + b;
+    assert_eq(c.eq(BjFieldVector_new(5.0, 7.0, 9.0)), 1, "a + b");
+
+    test_group("test_ops_sub");
+    c = b - a;
+    assert_eq(c.eq(BjFieldVector_new(3.0, 3.0, 3.0)), 1, "b - a");
+
+    test_group("test_ops_mul");
+    c = a * 2.0;
+    assert_eq(c.eq(BjFieldVector_new(2.0, 4.0, 6.0)), 1, "a * 2");
+
+    test_group("test_ops_neg");
+    var an = BjFieldVector_new(1.0, -2.0, 3.0);
+    c = BjFieldVector_neg(an);
+    assert_eq(c.eq(BjFieldVector_new(-1.0, 2.0, -3.0)), 1, "-a");
+
+    test_group("test_partial_eq");
+    var a2 = BjFieldVector_new(1.0, 2.0, 3.0);
+    assert_eq(a.eq(a2), 1, "equal components are equal");
+
+    test_group("test_magnitude_sq");
+    var ms: f64 = a.magnitude_sq();
+    assert(near(ms, 14.0, e10) == 1, "1 + 4 + 9");
+
+    test_group("test_ops_add_assign");
+    # Rust's `a += b` is `a = a + b` (Cyrius refuses += on a struct value).
+    var aa = BjFieldVector_new(1.0, 2.0, 3.0);
+    aa = aa + BjFieldVector_new(4.0, 5.0, 6.0);
+    assert_eq(aa.eq(BjFieldVector_new(5.0, 7.0, 9.0)), 1, "a += b");
+
+    test_group("test_ops_sub_assign");
+    var asb = BjFieldVector_new(4.0, 5.0, 6.0);
+    asb = asb - BjFieldVector_new(1.0, 2.0, 3.0);
+    assert_eq(asb.eq(BjFieldVector_new(3.0, 3.0, 3.0)), 1, "a -= b");
+
+    test_group("test_ops_mul_assign");
+    var am = BjFieldVector_new(1.0, 2.0, 3.0);
+    am = am * 2.0;
+    assert_eq(am.eq(BjFieldVector_new(2.0, 4.0, 6.0)), 1, "a *= 2");
+
+    test_group("test_ops_scalar_mul_lhs");
+    c = BjFieldVector_scale_left(2.0, a);
+    assert_eq(c.eq(BjFieldVector_new(2.0, 4.0, 6.0)), 1, "2 * a");
+
+    test_group("test_display");
+    var buf[200];
+    var tx[24];
+    _bj_tx_init(&tx, &buf, 200);
+    var dv = BjFieldVector_new(1.0, 2.5, -3.0);
+    dv.display(&tx);
+    assert(text_is(_bj_tx_ptr(&tx), "(1, 2.5, -3)") == 1, "\"(1, 2.5, -3)\"");
+
+    test_group("test_electric_field_singularity");
+    var t11, v11 = bj_electric_field_point_charge(q6, &o, &o, &e);
+    assert(is_err_result(t11) == 1, "singular");
+
+    test_group("test_electric_potential_singularity");
+    var t12, v12 = bj_electric_potential_point_charge(q6, &o, &o);
+    assert(is_err_result(t12) == 1, "singular");
+
+    test_group("test_magnetic_field_singularity");
+    var t13, v13 = bj_magnetic_field_moving_charge(q6, &o, &vel, &o, &e);
+    assert(is_err_result(t13) == 1, "singular");
+
+    test_group("test_electric_dipole_on_axis");
+    var dp = BjFieldVector_new(0.0, 0.0, p30);
+    at3(&q, 0.0, 0.0, 1.0);
+    var t14, v14 = bj_electric_dipole_field(dp, &q, &e);
+    var k4: f64 = 4.0 * _BJ_PI * BJ_EPSILON_0 * 1.0 * 1.0 * 1.0;
+    var expz: f64 = 2.0 * p30 / k4;
+    var ez: f64 = e.z;
+    var rel: f64 = (ez - expz) / expz;
+    var arel: f64 = f64_abs(rel);
+    assert(arel < e6, "E_z = 2p/(4πε₀d³) on the axis");
+    ex = e.x;
+    var axx: f64 = f64_abs(ex);
+    assert(axx < 0.0000000000000000000000000000000000000001, "|E_x| < 1e-40");
+
+    test_group("test_electric_dipole_equatorial");
+    at3(&q, 1.0, 0.0, 0.0);
+    var t15, v15 = bj_electric_dipole_field(dp, &q, &e);
+    var mp30: f64 = -p30;
+    var expe: f64 = mp30 / k4;
+    ez = e.z;
+    var rel2: f64 = (ez - expe) / f64_abs(expe);
+    var arel2: f64 = f64_abs(rel2);
+    assert(arel2 < e6, "E = -p/(4πε₀r³) on the equatorial plane");
+
+    test_group("test_electric_dipole_singularity");
+    var t16, v16 = bj_electric_dipole_field(dp, &o, &e);
+    assert(is_err_result(t16) == 1, "singular at the dipole");
+
+    test_group("test_electric_dipole_potential_on_axis");
+    at3(&q, 0.0, 0.0, 1.0);
+    var t17, v17 = bj_electric_dipole_potential(dp, &q);
+    var dpv: f64 = v17;
+    var four: f64 = 4.0 * _BJ_PI * BJ_EPSILON_0;
+    var expv: f64 = p30 / four;
+    var rel3: f64 = (dpv - expv) / expv;
+    var arel3: f64 = f64_abs(rel3);
+    assert(arel3 < e6, "V = p/(4πε₀r²) on the axis");
+
+    test_group("test_electric_dipole_potential_equatorial_zero");
+    at3(&q, 1.0, 0.0, 0.0);
+    var t18, v18 = bj_electric_dipole_potential(dp, &q);
+    var dv0: f64 = v18;
+    var adv0: f64 = f64_abs(dv0);
+    assert(adv0 < 0.00000000000000000000000000000000000000000000000001, "p·r̂ = 0: |V| < 1e-50");
+
+    test_group("test_magnetic_dipole_on_axis");
+    var mm = BjFieldVector_new(0.0, 0.0, 1.0);
+    at3(&q, 0.0, 0.0, 1.0);
+    var t19, v19 = bj_magnetic_dipole_field(mm, &q, &e);
+    var kb: f64 = 4.0 * _BJ_PI * 1.0 * 1.0 * 1.0;
+    var expb: f64 = 2.0 * BJ_MU_0 / kb;
+    var bzz: f64 = e.z;
+    var rel4: f64 = (bzz - expb) / expb;
+    var arel4: f64 = f64_abs(rel4);
+    assert(arel4 < e6, "B_z = 2μ₀m/(4πd³) on the axis");
+
+    test_group("test_magnetic_dipole_singularity");
+    var t20, v20 = bj_magnetic_dipole_field(mm, &o, &e);
+    assert(is_err_result(t20) == 1, "singular at the dipole");
+
+    test_group("test_default_is_zero");
+    var dz = BjFieldVector_default();
+    assert_eq(dz.eq(BjFieldVector_zero()), 1, "Default is zero");
+
+    test_group("test_from_array");
+    var arr: f64[3];
+    at3(&arr, 1.0, 2.0, 3.0);
+    var fa = BjFieldVector_from_array(&arr);
+    assert_eq(fa.eq(BjFieldVector_new(1.0, 2.0, 3.0)), 1, "from [1, 2, 3]");
+
+    test_group("test_into_array");
+    var out3: f64[3];
+    a.to_array(&out3);
+    var o0: f64 = out3[0];
+    var o1: f64 = out3[1];
+    var o2: f64 = out3[2];
+    assert(o0 == 1.0 && o1 == 2.0 && o2 == 3.0, "into [1, 2, 3]");
+
+    test_group("test_normalized_small_si_magnitudes");
+    var scales: f64[4];
+    scales[0] = _bj_from_bits(0x3C079CA10C924223);             # 1.6e-19
+    scales[1] = _bj_from_bits(0x39DF700F64BA3A77);             # 6.2e-30
+    scales[2] = _bj_from_bits(0x16687E92154EF7AC);             # 1e-200
+    scales[3] = _bj_from_bits(0x01A56E1FC2F8F359);             # 1e-300
+    var e15: f64 = 0.000000000000001;
+    for (var k = 0; k < 4; k = k + 1) {
+        var s: f64 = scales[k];
+        var sv = BjFieldVector_new(3.0 * s, 0.0, 4.0 * s);
+        var tn, vn = sv.normalized(&n);
+        var nx: f64 = n.x;
+        var nz: f64 = n.z;
+        assert(is_ok(tn) == 1 && near(nx, 0.6, e15) == 1 && near(nz, 0.8, e15) == 1, "(3s, 0, 4s) -> (0.6, 0, 0.8)");
+    }
+
+    test_group("test_normalized_huge_components");
+    var h200: f64 = _bj_from_bits(0x6974E718D7D7625A);         # 1e200
+    var hv = BjFieldVector_new(h200, h200, 0.0);
+    var th, vh = hv.normalized(&n);
+    var hh: f64 = 0.7071067811865476;                           # FRAC_1_SQRT_2
+    var hx: f64 = n.x;
+    var hy: f64 = n.y;
+    assert(is_ok(th) == 1 && near(hx, hh, e15) == 1 && near(hy, hh, e15) == 1,
+      "|v|² overflows, the direction does not");
+
+    test_group("test_normalized_non_finite_fails");
+    var zero: f64 = 0.0;
+    var nan: f64 = zero / zero;
+    var inf: f64 = 1.0 / zero;
+    var nv = BjFieldVector_new(nan, 1.0, 0.0);
+    var tq1, vq1 = nv.normalized(&n);
+    assert(is_err_result(tq1) == 1, "NaN component");
+    var iv = BjFieldVector_new(inf, 1.0, 0.0);
+    var tq2, vq2 = iv.normalized(&n);
+    assert(is_err_result(tq2) == 1, "infinite component");
+
+    test_group("test_constants_codata_2018_consistent");
+    var one: f64 = BJ_EPSILON_0 * BJ_MU_0 * BJ_SPEED_OF_LIGHT_SQ;
+    assert(near(one, 1.0, 0.000000000001) == 1, "ε₀μ₀c² = 1 to 1e-12");
+    var kk: f64 = 1.0 / (4.0 * _BJ_PI * BJ_EPSILON_0);
+    var rk: f64 = (BJ_COULOMB_K - kk) / kk;
+    var ark: f64 = f64_abs(rk);
+    assert(ark < e15, "k = 1/(4πε₀)");
+    assert(near(BJ_EPSILON_0, 0.0000000000088541878128, 0.0000000000000000000001) == 1, "ε₀ = 8.8541878128e-12");
+    var rk2: f64 = (BJ_COULOMB_K - 8987551792.3) / BJ_COULOMB_K;
+    var ark2: f64 = f64_abs(rk2);
+    assert(ark2 < e10, "k = 8.9875517923e9");
+
+    test_group("singular_cutoff_and_records");
+    # Cyrius-only: the cutoff is Rust's 1e-30 to the bit, a singular call leaves out alone and records Singularity,
+    # and a normalize error records Rust's text.
+    assert_eq(_bj_bits(_BJ_FIELD_R2_MIN), _bj_bits(p30), "the r² cutoff is 1e-30");
+    var keep = BjFieldVector_new(7.0, 8.0, 9.0);
+    var tk, vk = bj_electric_field_point_charge(q6, &o, &o, &keep);
+    assert_eq(keep.eq(BjFieldVector_new(7.0, 8.0, 9.0)), 1, "out untouched on an error");
+    assert_eq(bj_last_error(), BJ_ERR_SINGULARITY, "Singularity recorded");
+    var tq3, vq3 = nv.normalized(&n);
+    assert(text_is(bj_last_error_display(), "invalid parameter: cannot normalize non-finite vector (NaN, 1, 0)") == 1,
+      "Rust's message");
+
+    return assert_summary();
+}
+
+var exit_code = main();
+if (exit_code > 0) { exit_code = 1; }
+sys_exit_group(exit_code);

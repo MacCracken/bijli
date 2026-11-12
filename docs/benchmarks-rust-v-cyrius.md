@@ -6,18 +6,18 @@
 
 **Rust column**: rust-old/bench-history.csv, run `2026-11-12T03:15:21Z` at `c95fd30` (the 1.2.0 tag's source), criterion medians. Taken under load (kimiya's gates ran beside it: load average about 2.6, median CI width 0.8 %, p90 4.2 %, max 13 %), so a ratio within the Rust row's own noise is read as parity (port plan §5 P4).
 
-**80 Rust benches:** 0 twinned, 0 not applicable, 80 pending.
+**80 Rust benches:** 8 twinned, 0 not applicable, 72 pending.
 
 | Rust bench | Rust | Cyrius twin | Cyrius | Cyrius / Rust |
 |---|---:|---|---:|---:|
-| `field/electric_field_point` | 1.52 ns | pending (M1) | — | — |
-| `field/electric_potential_point` | 1.23 ns | pending (M1) | — | — |
-| `field/magnetic_field_moving` | 1.73 ns | pending (M1) | — | — |
-| `field/superposition_10` | 39.79 ns | pending (M1) | — | — |
-| `field/vector_magnitude` | 0.50 ns | pending (M1) | — | — |
-| `field/vector_cross` | 0.99 ns | pending (M1) | — | — |
-| `field/electric_dipole_field` | 5.53 ns | pending (M1) | — | — |
-| `field/magnetic_dipole_field` | 5.52 ns | pending (M1) | — | — |
+| `field/electric_field_point` | 1.52 ns | `field/electric_field_point` | 31.00 ns | 20.4× |
+| `field/electric_potential_point` | 1.23 ns | `field/electric_potential_point` | 18.00 ns | 14.6× |
+| `field/magnetic_field_moving` | 1.73 ns | `field/magnetic_field_moving` | 43.00 ns | 24.9× |
+| `field/superposition_10` | 39.79 ns | `field/superposition_10` | 552.00 ns | 13.9× |
+| `field/vector_magnitude` | 0.50 ns | `field/vector_magnitude` | 9.00 ns | 18.0× |
+| `field/vector_cross` | 0.99 ns | `field/vector_cross` | 18.00 ns | 18.2× |
+| `field/electric_dipole_field` | 5.53 ns | `field/electric_dipole_field` | 84.00 ns | 15.2× |
+| `field/magnetic_dipole_field` | 5.52 ns | `field/magnetic_dipole_field` | 84.00 ns | 15.2× |
 | `field/charged_sphere` | 1.23 ns | pending (M1) | — | — |
 | `field/ring_axis` | 1.23 ns | pending (M1) | — | — |
 | `field/disk_axis` | 1.23 ns | pending (M1) | — | — |

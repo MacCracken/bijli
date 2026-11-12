@@ -11,6 +11,7 @@ include "lib/string.cyr"
 include "lib/io.cyr"
 include "lib/sakshi.cyr"
 include "lib/freelist.cyr"
+include "lib/result.cyr"
 
 # --- constants.cyr ---
 
@@ -4892,6 +4893,10 @@ fn _bj_k_cr_asin(x: f64): f64 {
 #   already correctly rounded.
 # Adapted from impetus's src/mathx.cyr (its `_im_` helpers).
 
+# `std::f64::consts::PI`, the double nearest π (0x400921FB54442D18). Rust folds `4.0 * PI * EPSILON_0` and the like at
+# compile time; the port computes the same IEEE products at run time, which gives the same bits.
+var _BJ_PI: f64 = 3.141592653589793;
+
 # π/180 as Rust folds `consts::PI / 180.0`: the double nearest, pinned by the to_radians rows.
 var _BJ_RADS_PER_DEG: f64 = 0.017453292519943295;
 
@@ -6513,4 +6518,408 @@ public fn bj_complex_zero(): BjComplex {
 public fn bj_complex_from_polar(magnitude: f64, phase: f64): BjComplex {
     var z: BjComplex = BjComplex_from_polar(magnitude, phase);
     return z;
+}
+
+# --- field.cyr ---
+
+# field.cyr — electric and magnetic fields (port of rust-old/src/field.rs). M1 part 3a: BjFieldVector, point charges,
+# superposition, energy densities and dipoles; the Gauss's-law fields, multipoles, images, Green's functions and the
+# stress tensor follow in 3b, and trace_field_line in 3c.
+#
+# SI units: metres, coulombs, volts per metre, tesla. The harmonic time convention is src/complex.cyr's.
+#
+# Shapes. A Rust position `[f64; 3]` is the address of three consecutive f64 (`var p: f64[3];`, passed as `&p`). A
+# Rust `Result<FieldVector>` writes the vector through `out: *BjFieldVector` and returns a value-form Result: `Ok(0)`,
+# or `Err(code)` with the error in the last-error record (src/error.cyr), `out` untouched. A `Result<f64>` stays a
+# Result with the f64 payload. Every formula is Rust's in Rust's order of operations, so the golden rows compare bit
+# for bit (class A); constants are src/constants.cyr's (generated), and `1e-30`, the singular cutoff on r², is its
+# literal written out (pinned by the rows either side of it).
+
+private
+
+# Rust's `1e-30`: field points closer to the source than √(1e-30) m are singular.
+public var _BJ_FIELD_R2_MIN: f64 = 0.000000000000000000000000000001;
+
+# ── BjFieldVector ───────────────────────────────────────────────────────────────────────────────────────────────
+
+# A 3D vector field value at a point. Mirrors `FieldVector` (24 bytes, by value).
+public struct BjFieldVector {
+    x: f64;
+    y: f64;
+    z: f64;
+}
+
+# (x, y, z). Mirrors `FieldVector::new`.
+#must_use
+#pure
+public fn BjFieldVector_new(x: f64, y: f64, z: f64): BjFieldVector {
+    var v: BjFieldVector;
+    v.x = x;
+    v.y = y;
+    v.z = z;
+    return v;
+}
+
+# (0, 0, 0). Mirrors `FieldVector::zero`.
+#must_use
+#pure
+public fn BjFieldVector_zero(): BjFieldVector {
+    var v: BjFieldVector;
+    v.x = 0.0;
+    v.y = 0.0;
+    v.z = 0.0;
+    return v;
+}
+
+# (0, 0, 0). Mirrors `Default for FieldVector`.
+#must_use
+#pure
+public fn BjFieldVector_default(): BjFieldVector {
+    var v: BjFieldVector = BjFieldVector_zero();
+    return v;
+}
+
+# The vector of the three f64 at p. Mirrors `From<[f64; 3]> for FieldVector`.
+#must_use
+#pure
+public fn BjFieldVector_from_array(p: *f64): BjFieldVector {
+    var v: BjFieldVector;
+    v.x = p[0];
+    v.y = p[1];
+    v.z = p[2];
+    return v;
+}
+
+# a + b. Mirrors `Add for FieldVector` (and `+=`: write `a = a + b`).
+#must_use
+#pure
+public fn BjFieldVector_add(a: BjFieldVector, b: BjFieldVector): BjFieldVector {
+    var v: BjFieldVector;
+    v.x = a.x + b.x;
+    v.y = a.y + b.y;
+    v.z = a.z + b.z;
+    return v;
+}
+
+# a − b. Mirrors `Sub for FieldVector` (and `-=`).
+#must_use
+#pure
+public fn BjFieldVector_sub(a: BjFieldVector, b: BjFieldVector): BjFieldVector {
+    var v: BjFieldVector;
+    v.x = a.x - b.x;
+    v.y = a.y - b.y;
+    v.z = a.z - b.z;
+    return v;
+}
+
+# a·s. Mirrors `Mul<f64> for FieldVector` (and `*=` with an f64): `v * 2.0`.
+#must_use
+#pure
+public fn BjFieldVector_mul(a: BjFieldVector, s: f64): BjFieldVector {
+    var v: BjFieldVector;
+    v.x = a.x * s;
+    v.y = a.y * s;
+    v.z = a.z * s;
+    return v;
+}
+
+# s·a, each product s·component in that order. Mirrors `Mul<FieldVector> for f64` (`2.0 * v`).
+#must_use
+#pure
+public fn BjFieldVector_scale_left(s: f64, a: BjFieldVector): BjFieldVector {
+    var v: BjFieldVector;
+    v.x = s * a.x;
+    v.y = s * a.y;
+    v.z = s * a.z;
+    return v;
+}
+
+# −a. Mirrors `Neg for FieldVector`.
+#must_use
+#pure
+public fn BjFieldVector_neg(a: BjFieldVector): BjFieldVector {
+    var v: BjFieldVector;
+    v.x = -a.x;
+    v.y = -a.y;
+    v.z = -a.z;
+    return v;
+}
+
+impl BjFieldVector {
+    # √(x² + y² + z²). Mirrors `FieldVector::magnitude`.
+    #must_use
+    #pure
+    public fn magnitude(self): f64 {
+        var s: f64 = self.x * self.x + self.y * self.y + self.z * self.z;
+        var r: f64 = f64_sqrt(s);
+        return r;
+    }
+
+    # x² + y² + z². Mirrors `FieldVector::magnitude_sq`.
+    #must_use
+    #pure
+    public fn magnitude_sq(self): f64 {
+        var r: f64 = self.x * self.x + self.y * self.y + self.z * self.z;
+        return r;
+    }
+
+    # The unit vector in this direction, into out. A finite vector whose |v|² is normal is divided by |v|; any other
+    # finite non-zero vector is rescaled by its largest component first, so SI-scale and huge components work. Errors:
+    # DivisionByZero for the zero vector, InvalidParameter for a NaN or infinite component. Mirrors
+    # `FieldVector::normalized`.
+    public fn normalized(self, out: *BjFieldVector): Result {
+        var ms: f64 = BjFieldVector_magnitude_sq(self);
+        var tiny: f64 = _bj_from_bits(0x0010000000000000);        # f64::MIN_POSITIVE
+        if (_bj_is_finite(ms) == 1 && ms >= tiny) {
+            var mag: f64 = f64_sqrt(ms);
+            out.x = self.x / mag;
+            out.y = self.y / mag;
+            out.z = self.z / mag;
+            return Ok(0);
+        }
+        var x: f64 = self.x;
+        var y: f64 = self.y;
+        var z: f64 = self.z;
+        if (_bj_is_finite(x) == 0 || _bj_is_finite(y) == 0 || _bj_is_finite(z) == 0) {
+            var t = _bj_err_reason(BJ_ERR_INVALID_PARAMETER);
+            _bj_tx_cstr(t, "cannot normalize non-finite vector ");
+            BjFieldVector_display(self, t);
+            return Err(BJ_ERR_INVALID_PARAMETER);
+        }
+        var ax: f64 = f64_abs(x);
+        var ay: f64 = f64_abs(y);
+        var az: f64 = f64_abs(z);
+        var m1: f64 = _bj_max(ax, ay);
+        var s: f64 = _bj_max(m1, az);
+        if (s == 0.0) { return Err(_bj_err_division_by_zero("zero vector cannot be normalized")); }
+        var v: BjFieldVector = BjFieldVector_new(x / s, y / s, z / s);
+        var mv: f64 = v.magnitude();
+        out.x = v.x / mv;
+        out.y = v.y / mv;
+        out.z = v.z / mv;
+        return Ok(0);
+    }
+
+    # self·o. Mirrors `FieldVector::dot`.
+    #must_use
+    #pure
+    public fn dot(self, o: BjFieldVector): f64 {
+        var r: f64 = self.x * o.x + self.y * o.y + self.z * o.z;
+        return r;
+    }
+
+    # self × o. Mirrors `FieldVector::cross`.
+    #must_use
+    #pure
+    public fn cross(self, o: BjFieldVector): BjFieldVector {
+        var v: BjFieldVector;
+        v.x = self.y * o.z - self.z * o.y;
+        v.y = self.z * o.x - self.x * o.z;
+        v.z = self.x * o.y - self.y * o.x;
+        return v;
+    }
+
+    # self·s. Mirrors `FieldVector::scale`.
+    #must_use
+    #pure
+    public fn scale(self, s: f64): BjFieldVector {
+        var v: BjFieldVector;
+        v.x = self.x * s;
+        v.y = self.y * s;
+        v.z = self.z * s;
+        return v;
+    }
+
+    # 1 when every component equals o's (IEEE: −0 equals +0, NaN equals nothing). Mirrors the derived `PartialEq`.
+    #must_use
+    #pure
+    public fn eq(self, o: BjFieldVector): i64 {
+        var a: f64 = self.x;
+        var b: f64 = self.y;
+        var c: f64 = self.z;
+        if (a == o.x && b == o.y && c == o.z) { return 1; }
+        return 0;
+    }
+
+    # Writes the three components to the f64 at p. Mirrors `From<FieldVector> for [f64; 3]`.
+    public fn to_array(self, p: *f64): i64 {
+        p[0] = self.x;
+        p[1] = self.y;
+        p[2] = self.z;
+        return 0;
+    }
+
+    # Writes "(x, y, z)" as Rust's Display does, each component in Rust's f64 Display form (src/fmtf.cyr). Mirrors
+    # `Display for FieldVector`.
+    public fn display(self, t): i64 {
+        _bj_tx_putc(t, 40);
+        _bj_fmt_f64_display(t, self.x);
+        _bj_tx_cstr(t, ", ");
+        _bj_fmt_f64_display(t, self.y);
+        _bj_tx_cstr(t, ", ");
+        _bj_fmt_f64_display(t, self.z);
+        _bj_tx_putc(t, 41);
+        return 0;
+    }
+}
+
+# ── point charges ───────────────────────────────────────────────────────────────────────────────────────────────
+
+# E = kq/r²·r̂ (V/m) at field_pos from a point charge at charge_pos, as k·q·(1/r)³ times the offset. Singularity when
+# r² < 1e-30. Mirrors `field::electric_field_point_charge`.
+public fn bj_electric_field_point_charge(charge_q: f64, charge_pos: *f64, field_pos: *f64,
+  out: *BjFieldVector): Result {
+    var dx: f64 = field_pos[0] - charge_pos[0];
+    var dy: f64 = field_pos[1] - charge_pos[1];
+    var dz: f64 = field_pos[2] - charge_pos[2];
+    var r_sq: f64 = dx * dx + dy * dy + dz * dz;
+    if (r_sq < _BJ_FIELD_R2_MIN) { return Err(_bj_err_singularity()); }
+    var rt: f64 = f64_sqrt(r_sq);
+    var inv_r: f64 = 1.0 / rt;
+    var factor: f64 = BJ_COULOMB_K * charge_q * inv_r * inv_r * inv_r;
+    out.x = factor * dx;
+    out.y = factor * dy;
+    out.z = factor * dz;
+    return Ok(0);
+}
+
+# V = kq/r (volts). Singularity when r² < 1e-30. Mirrors `field::electric_potential_point_charge`.
+public fn bj_electric_potential_point_charge(charge_q: f64, charge_pos: *f64, field_pos: *f64): Result {
+    var dx: f64 = field_pos[0] - charge_pos[0];
+    var dy: f64 = field_pos[1] - charge_pos[1];
+    var dz: f64 = field_pos[2] - charge_pos[2];
+    var r_sq: f64 = dx * dx + dy * dy + dz * dz;
+    if (r_sq < _BJ_FIELD_R2_MIN) { return Err(_bj_err_singularity()); }
+    var rt: f64 = f64_sqrt(r_sq);
+    var v: f64 = BJ_COULOMB_K * charge_q / rt;
+    return Ok(v);
+}
+
+# B = (μ₀/4π)·q(v × r̂)/r² (tesla) at field_pos from a charge at charge_pos moving with `velocity` (Biot–Savart).
+# Singularity when r² < 1e-30. Mirrors `field::magnetic_field_moving_charge`.
+public fn bj_magnetic_field_moving_charge(charge_q: f64, charge_pos: *f64, velocity: *f64, field_pos: *f64,
+  out: *BjFieldVector): Result {
+    var dx: f64 = field_pos[0] - charge_pos[0];
+    var dy: f64 = field_pos[1] - charge_pos[1];
+    var dz: f64 = field_pos[2] - charge_pos[2];
+    var r_sq: f64 = dx * dx + dy * dy + dz * dz;
+    if (r_sq < _BJ_FIELD_R2_MIN) { return Err(_bj_err_singularity()); }
+    var rt: f64 = f64_sqrt(r_sq);
+    var inv_r: f64 = 1.0 / rt;
+    var rx: f64 = dx * inv_r;
+    var ry: f64 = dy * inv_r;
+    var rz: f64 = dz * inv_r;
+    var cross_x: f64 = velocity[1] * rz - velocity[2] * ry;
+    var cross_y: f64 = velocity[2] * rx - velocity[0] * rz;
+    var cross_z: f64 = velocity[0] * ry - velocity[1] * rx;
+    var four_pi: f64 = 4.0 * _BJ_PI;
+    var mu4: f64 = BJ_MU_0 / four_pi;
+    var factor: f64 = mu4 * charge_q * inv_r * inv_r;
+    out.x = factor * cross_x;
+    out.y = factor * cross_y;
+    out.z = factor * cross_z;
+    return Ok(0);
+}
+
+# The sum of the point-charge fields of n charges at field_pos, each charge 32 bytes at `charges` (q, then its
+# position: Rust's `(f64, [f64; 3])`), accumulated in order from zero. The first singular charge's error is returned.
+# Mirrors `field::electric_field_superposition`.
+public fn bj_electric_field_superposition(charges: *f64, n, field_pos: *f64, out: *BjFieldVector): Result {
+    var total: BjFieldVector = BjFieldVector_zero();
+    var e: BjFieldVector;
+    for (var i = 0; i < n; i = i + 1) {
+        var c: *f64 = charges + i * 4;
+        var q: f64 = c[0];
+        var t, v = bj_electric_field_point_charge(q, c + 1, field_pos, &e);
+        if (is_err_result(t) == 1) { return Err(v); }
+        total = total + e;
+    }
+    out.x = total.x;
+    out.y = total.y;
+    out.z = total.z;
+    return Ok(0);
+}
+
+# u = ε₀E²/2 (J/m³). Mirrors `field::electric_energy_density`.
+#must_use
+#pure
+public fn bj_electric_energy_density(e_magnitude: f64): f64 {
+    var u: f64 = 0.5 * BJ_EPSILON_0 * e_magnitude * e_magnitude;
+    return u;
+}
+
+# u = B²/(2μ₀) (J/m³). Mirrors `field::magnetic_energy_density`.
+#must_use
+#pure
+public fn bj_magnetic_energy_density(b_magnitude: f64): f64 {
+    var two_mu: f64 = 2.0 * BJ_MU_0;
+    var u: f64 = b_magnitude * b_magnitude / two_mu;
+    return u;
+}
+
+# ── dipoles ─────────────────────────────────────────────────────────────────────────────────────────────────────
+
+# The unit vector toward p and 1/|p| for a field position p with |p|² ≥ 1e-30, into r_hat; returns 1/|p|, or −1 when
+# |p|² < 1e-30 (singular).
+fn _bj_field_rhat(p: *f64, r_hat: *BjFieldVector): f64 {
+    var r_sq: f64 = p[0] * p[0] + p[1] * p[1] + p[2] * p[2];
+    if (r_sq < _BJ_FIELD_R2_MIN) { return -1.0; }
+    var rt: f64 = f64_sqrt(r_sq);
+    var inv_r: f64 = 1.0 / rt;
+    r_hat.x = p[0] * inv_r;
+    r_hat.y = p[1] * inv_r;
+    r_hat.z = p[2] * inv_r;
+    return inv_r;
+}
+
+# E = (1/4πε₀r³)·[3(p·r̂)r̂ − p] at field_pos from a dipole p at the origin, as r̂·(3(p·r̂)·f) − p·f with f =
+# (1/r)³/(4πε₀). Singularity when r² < 1e-30. Mirrors `field::electric_dipole_field`.
+public fn bj_electric_dipole_field(dipole_moment: BjFieldVector, field_pos: *f64, out: *BjFieldVector): Result {
+    var r_hat: BjFieldVector;
+    var inv_r: f64 = _bj_field_rhat(field_pos, &r_hat);
+    if (inv_r < 0.0) { return Err(_bj_err_singularity()); }
+    var inv_r3: f64 = inv_r * inv_r * inv_r;
+    var p_dot: f64 = dipole_moment.dot(r_hat);
+    var d: f64 = 4.0 * _BJ_PI * BJ_EPSILON_0;
+    var factor: f64 = inv_r3 / d;
+    var k: f64 = 3.0 * p_dot * factor;
+    var a: BjFieldVector = r_hat.scale(k);
+    var b: BjFieldVector = dipole_moment.scale(factor);
+    var e: BjFieldVector = a - b;
+    out.x = e.x;
+    out.y = e.y;
+    out.z = e.z;
+    return Ok(0);
+}
+
+# V = p·r̂/(4πε₀r²) at field_pos from a dipole p at the origin, as (p·r̂)·(1/r)·(1/r)/(4πε₀). Singularity when
+# r² < 1e-30. Mirrors `field::electric_dipole_potential`.
+public fn bj_electric_dipole_potential(dipole_moment: BjFieldVector, field_pos: *f64): Result {
+    var r_hat: BjFieldVector;
+    var inv_r: f64 = _bj_field_rhat(field_pos, &r_hat);
+    if (inv_r < 0.0) { return Err(_bj_err_singularity()); }
+    var p_dot: f64 = dipole_moment.dot(r_hat);
+    var d: f64 = 4.0 * _BJ_PI * BJ_EPSILON_0;
+    var v: f64 = p_dot * inv_r * inv_r / d;
+    return Ok(v);
+}
+
+# B = (μ₀/4πr³)·[3(m·r̂)r̂ − m] at field_pos from a magnetic dipole m at the origin, as r̂·(3(m·r̂)·f) − m·f with
+# f = μ₀·(1/r)³/(4π). Singularity when r² < 1e-30. Mirrors `field::magnetic_dipole_field`.
+public fn bj_magnetic_dipole_field(magnetic_moment: BjFieldVector, field_pos: *f64, out: *BjFieldVector): Result {
+    var r_hat: BjFieldVector;
+    var inv_r: f64 = _bj_field_rhat(field_pos, &r_hat);
+    if (inv_r < 0.0) { return Err(_bj_err_singularity()); }
+    var inv_r3: f64 = inv_r * inv_r * inv_r;
+    var m_dot: f64 = magnetic_moment.dot(r_hat);
+    var four_pi: f64 = 4.0 * _BJ_PI;
+    var factor: f64 = BJ_MU_0 * inv_r3 / four_pi;
+    var k: f64 = 3.0 * m_dot * factor;
+    var a: BjFieldVector = r_hat.scale(k);
+    var b: BjFieldVector = magnetic_moment.scale(factor);
+    var e: BjFieldVector = a - b;
+    out.x = e.x;
+    out.y = e.y;
+    out.z = e.z;
+    return Ok(0);
 }

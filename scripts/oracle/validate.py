@@ -697,6 +697,170 @@ def complex_corrections(rows) -> list:
     return out
 
 
+# ── field (M1 part 3a): rust-old/src/field.rs ─────────────────────────────────────────────────
+# Each function transcribed from field.rs in its order of operations, in IEEE double (Python's floats, with fdiv and
+# fsqrt for the cases Python raises on). The constants are constants.tsv's, which validate_constants proves.
+def golden_consts(root: Path) -> dict:
+    _h, rows = read_tsv(root / "tests/golden/constants.tsv")
+    return {ins[0][1]: outs[0][1] for _fn, _cls, ins, outs in rows}
+
+
+def fv_text(x, y, z):
+    return "(" + rust_display(x) + ", " + rust_display(y) + ", " + rust_display(z) + ")"
+
+
+SINGULAR = [("E", "Singularity"), ("s", "singularity: field evaluation at source point (distance = 0)")]
+R2_MIN = 1e-30
+MIN_POSITIVE = 2.2250738585072014e-308
+
+
+def validate_field(root: Path, path: Path) -> list:
+    c = golden_consts(root)
+    K, EPS0, MU0 = c["field::COULOMB_K"], c["field::EPSILON_0"], c["field::MU_0"]
+    _header, rows = read_tsv(path)
+
+    def ok3(v):
+        return [("f", v[0]), ("f", v[1]), ("f", v[2])]
+
+    def point_e(q, a, b):
+        dx, dy, dz = b[0] - a[0], b[1] - a[1], b[2] - a[2]
+        r_sq = dx * dx + dy * dy + dz * dz
+        if r_sq < R2_MIN:
+            return SINGULAR
+        inv_r = fdiv(1.0, fsqrt(r_sq))
+        fct = K * q * inv_r * inv_r * inv_r
+        return ok3((fct * dx, fct * dy, fct * dz)), (fct * dx, fct * dy, fct * dz)
+
+    def rhat(p):
+        r_sq = p[0] * p[0] + p[1] * p[1] + p[2] * p[2]
+        if r_sq < R2_MIN:
+            return None
+        inv_r = fdiv(1.0, fsqrt(r_sq))
+        return inv_r, (p[0] * inv_r, p[1] * inv_r, p[2] * inv_r)
+
+    def dipole(m, p, magnetic):
+        h = rhat(p)
+        if h is None:
+            return SINGULAR
+        inv_r, r = h
+        inv_r3 = inv_r * inv_r * inv_r
+        d = m[0] * r[0] + m[1] * r[1] + m[2] * r[2]
+        fct = fdiv(MU0 * inv_r3, 4.0 * PI) if magnetic else fdiv(inv_r3, 4.0 * PI * EPS0)
+        k = 3.0 * d * fct
+        return ok3(tuple(r[i] * k - m[i] * fct for i in range(3)))
+
+    def normalized(v):
+        x, y, z = v
+        ms = x * x + y * y + z * z
+        if math.isfinite(ms) and ms >= MIN_POSITIVE:
+            mag = math.sqrt(ms)
+            return ok3((x / mag, y / mag, z / mag))
+        if not (math.isfinite(x) and math.isfinite(y) and math.isfinite(z)):
+            return [("E", "InvalidParameter"), ("s", "invalid parameter: cannot normalize non-finite vector "
+                                                     + fv_text(x, y, z))]
+        s = rust_max(rust_max(abs(x), abs(y)), abs(z))
+        if s == 0.0:
+            return [("E", "DivisionByZero"), ("s", "division by zero in EM calculation: zero vector cannot be "
+                                                   "normalized")]
+        w = (x / s, y / s, z / s)
+        mag = math.sqrt(w[0] * w[0] + w[1] * w[1] + w[2] * w[2])
+        return ok3((w[0] / mag, w[1] / mag, w[2] / mag))
+
+    errs = []
+    for n, (fn, _cls, ins, outs) in enumerate(rows, 1):
+        v = [tok_text(b) if k == "s" else b for k, b in ins]
+        V = tuple(v[0:3])
+        W = tuple(v[3:6])
+        if fn == "FieldVector::zero" or fn == "FieldVector::default":
+            want = ok3((0.0, 0.0, 0.0))
+        elif fn in ("FieldVector::new", "FieldVector::from_array", "FieldVector::into_array"):
+            want = ok3(V)
+        elif fn == "FieldVector::magnitude":
+            want = [("f", fsqrt(V[0] * V[0] + V[1] * V[1] + V[2] * V[2]))]
+        elif fn == "FieldVector::magnitude_sq":
+            want = [("f", V[0] * V[0] + V[1] * V[1] + V[2] * V[2])]
+        elif fn == "FieldVector::normalized":
+            want = normalized(V)
+        elif fn == "FieldVector::dot":
+            want = [("f", V[0] * W[0] + V[1] * W[1] + V[2] * W[2])]
+        elif fn == "FieldVector::cross":
+            want = ok3((V[1] * W[2] - V[2] * W[1], V[2] * W[0] - V[0] * W[2], V[0] * W[1] - V[1] * W[0]))
+        elif fn == "FieldVector::add":
+            want = ok3(tuple(V[i] + W[i] for i in range(3)))
+        elif fn == "FieldVector::sub":
+            want = ok3(tuple(V[i] - W[i] for i in range(3)))
+        elif fn == "FieldVector::neg":
+            want = ok3(tuple(-V[i] for i in range(3)))
+        elif fn in ("FieldVector::scale", "FieldVector::mul"):
+            want = ok3(tuple(V[i] * v[3] for i in range(3)))
+        elif fn == "f64::mul_field_vector":
+            want = ok3(tuple(v[0] * v[1 + i] for i in range(3)))
+        elif fn == "FieldVector::fmt":
+            want = [("s", fv_text(*V))]
+        elif fn in ("field::electric_field_point_charge", "field::electric_potential_point_charge"):
+            q, a, b = v[0], v[1:4], v[4:7]
+            if fn.endswith("field_point_charge"):
+                r = point_e(q, a, b)
+                want = r if r is SINGULAR else r[0]
+            else:
+                dx, dy, dz = b[0] - a[0], b[1] - a[1], b[2] - a[2]
+                r_sq = dx * dx + dy * dy + dz * dz
+                want = SINGULAR if r_sq < R2_MIN else [("f", fdiv(K * q, fsqrt(r_sq)))]
+        elif fn == "field::magnetic_field_moving_charge":
+            q, a, vel, b = v[0], v[1:4], v[4:7], v[7:10]
+            d = [b[i] - a[i] for i in range(3)]
+            r_sq = d[0] * d[0] + d[1] * d[1] + d[2] * d[2]
+            if r_sq < R2_MIN:
+                want = SINGULAR
+            else:
+                inv_r = fdiv(1.0, fsqrt(r_sq))
+                r = [d[i] * inv_r for i in range(3)]
+                cx = vel[1] * r[2] - vel[2] * r[1]
+                cy = vel[2] * r[0] - vel[0] * r[2]
+                cz = vel[0] * r[1] - vel[1] * r[0]
+                fct = fdiv(MU0, 4.0 * PI) * q * inv_r * inv_r
+                want = ok3((fct * cx, fct * cy, fct * cz))
+        elif fn == "field::electric_dipole_field":
+            want = dipole(V, W, False)
+        elif fn == "field::magnetic_dipole_field":
+            want = dipole(V, W, True)
+        elif fn == "field::electric_dipole_potential":
+            h = rhat(W)
+            if h is None:
+                want = SINGULAR
+            else:
+                inv_r, r = h
+                d = V[0] * r[0] + V[1] * r[1] + V[2] * r[2]
+                want = [("f", fdiv(d * inv_r * inv_r, 4.0 * PI * EPS0))]
+        elif fn == "field::electric_field_superposition":
+            cnt = int(ins[0][1]) // 4
+            cs = v[1:1 + 4 * cnt]
+            at = v[1 + 4 * cnt:4 + 4 * cnt]
+            tot = (0.0, 0.0, 0.0)
+            want = None
+            for j in range(cnt):
+                r = point_e(cs[4 * j], cs[4 * j + 1:4 * j + 4], at)
+                if r is SINGULAR:
+                    want = SINGULAR
+                    break
+                tot = tuple(tot[i] + r[1][i] for i in range(3))
+            if want is None:
+                want = ok3(tot)
+        elif fn == "field::electric_energy_density":
+            want = [("f", 0.5 * EPS0 * v[0] * v[0])]
+        elif fn == "field::magnetic_energy_density":
+            want = [("f", fdiv(v[0] * v[0], 2.0 * MU0))]
+        else:
+            errs.append(f"field row {n}: no transcription for {fn}")
+            continue
+        got = [(k, tok_text(b) if k == "s" else b) for k, b in outs]
+        good = len(got) == len(want) and all(
+            gk == wk and (same(gb, wb) if gk == "f" else gb == wb) for (gk, gb), (wk, wb) in zip(got, want))
+        if not good:
+            errs.append(f"field row {n}: {fn}{tuple(v)} recorded {got}, transcription {want}")
+    return errs
+
+
 def main() -> int:
     root = Path(sys.argv[1] if len(sys.argv) > 1 else ".").resolve()
     golden = root / "tests/golden"
@@ -704,6 +868,7 @@ def main() -> int:
         "complex": validate_complex,
         "constants": lambda p: validate_constants(root, p),
         "error": validate_error,
+        "field": lambda p: validate_field(root, p),
         "fmtf": validate_fmtf,
         "math": validate_math,
     }
