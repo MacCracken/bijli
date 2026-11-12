@@ -61,6 +61,20 @@ jobs:
       - name: Audit (fmt, lint, docs, test, bench)
         run: cyrius audit
 
-      # The port's tooling checks join as each lands (port plan §6 step 7):
-      # distlib --check once [lib] exists (M1), coverage --exec --min 80,
-      # api-surface, surface parity, the Rust-test ledger, bench twins, doc examples.
+      - name: Bundle is current (dist/)
+        run: cyrius distlib --check
+
+      - name: Surface parity against rust-old/ (and [test] modules = [lib])
+        run: python3 -I -B scripts/surface_parity.py .
+
+      - name: Rust-test ledger (every Rust test ported, pending or recorded)
+        run: python3 -I -B scripts/rust_test_ledger.py . --check
+
+      - name: Benchmark twins (every Rust bench has one, or is pending)
+        run: python3 -I -B scripts/bench_record.py . --check
+
+      - name: Doc examples (the README's and guides' cyrius blocks compile and run)
+        run: python3 -I -B scripts/doc_examples.py .
+
+      # Joins in M1 with the first public API (it measures public fns only):
+      # cyrius coverage --exec --min 80, and cyrius api-surface.

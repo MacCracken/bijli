@@ -28,6 +28,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
   provenance check. `scripts/oracle/validate.py` re-derives every row independently (0
   disagreements). It found that Rust std's `f64::cbrt` is compiler-builtins' correctly rounded
   `cbrt`, not glibc's, which the port plan's P3 record now says.
+- **Cyrius port, M0 Part 2b**: `src/mathx.cyr` (Rust's NaN-ignoring min/max/clamp, the predicates,
+  copysign, the folded degree constants, compiler-rt's `__powidf2`); the `[lib]` bundle
+  `dist/bijli.cyr`; the parity harness `tests/parity.tcyr` (15,507 rows exact, 0 failed, the class-C
+  rows measured until `src/crmath.cyr`); and the port tooling, run in CI: surface parity, the
+  Rust-test ledger (`docs/development/rust-test-ledger.md`), the benchmark record
+  (`docs/benchmarks-rust-v-cyrius.md`) and the doc-example check.
 
 ## [1.2.0] — 2026-11-11
 

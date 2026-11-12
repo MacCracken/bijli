@@ -1,0 +1,126 @@
+# mathx.cyr — bijli's math helpers: Rust std semantics on top of the Cyrius builtins.
+#
+# Port plan §9.1 and §6 step 4. Each helper mirrors one std f64 method as rustc 1.99.1 compiles
+# it, and is pinned by tests/golden/math.tsv:
+# - min / max / clamp ignore a NaN operand as Rust does (the stdlib f64_min / f64_max return the
+#   second operand when the first is NaN, and NaN when the second is);
+# - the predicates and copysign have no public stdlib counterpart;
+# - to_radians and to_degrees are one multiply by Rust's folded constant;
+# - powi is compiler-rt's `__powidf2`, which Rust calls for bijli's run-time exponents.
+# The correctly rounded transcendentals (sin, cos, exp, atan2, pow, hypot, log10, atan, asin,
+# acos, tan) arrive with src/crmath.cyr in M1; cbrt is ganita's, already correctly rounded.
+# Adapted from impetus's src/mathx.cyr (its `_im_` helpers).
+
+# π/180 as Rust folds `consts::PI / 180.0`: the double nearest, pinned by the to_radians rows.
+var _BJ_RADS_PER_DEG: f64 = 0.017453292519943295;
+
+# 180/π as Rust folds `180.0f64 / consts::PI`: pinned by the to_degrees rows.
+var _BJ_DEGS_PER_RAD: f64 = 57.29577951308232;
+
+# The bits of an f64 as an integer word: an untyped parameter, an i64 return.
+#must_use
+fn _bj_bits(x): i64 {
+    return x;
+}
+
+# The f64 whose bit pattern is the word `w`.
+#must_use
+fn _bj_from_bits(w): f64 {
+    var r: f64 = w;
+    return r;
+}
+
+# 1 when x is NaN. Mirrors `f64::is_nan`.
+#must_use
+fn _bj_is_nan(x: f64): i64 {
+    if (x != x) { return 1; }
+    return 0;
+}
+
+# 1 when x is neither infinite nor NaN (x − x is 0 only then). Mirrors `f64::is_finite`.
+#must_use
+fn _bj_is_finite(x: f64): i64 {
+    var d: f64 = x - x;
+    if (d == 0.0) { return 1; }
+    return 0;
+}
+
+# The smaller of x and y, ignoring a NaN operand (NaN only when both are). Equal operands, +0 and
+# −0 included, give y, as rustc 1.99.1's `x.min(y)` does (minsd). Mirrors `f64::min`.
+#must_use
+fn _bj_min(x: f64, y: f64): f64 {
+    if (x != x) { return y; }
+    if (y != y) { return x; }
+    if (x < y) { return x; }
+    return y;
+}
+
+# The larger of x and y, ignoring a NaN operand (NaN only when both are). Equal operands give y
+# (maxsd). Mirrors `f64::max`.
+#must_use
+fn _bj_max(x: f64, y: f64): f64 {
+    if (x != x) { return y; }
+    if (y != y) { return x; }
+    if (x > y) { return x; }
+    return y;
+}
+
+# x restricted to [lo, hi]: lo when x < lo, hi when x > hi, else x (a NaN x stays NaN). Rust
+# panics on lo > hi or a NaN bound; every caller passes valid bounds. Mirrors `f64::clamp`.
+#must_use
+fn _bj_clamp(x: f64, lo: f64, hi: f64): f64 {
+    var r: f64 = x;
+    if (r < lo) { r = lo; }
+    if (r > hi) { r = hi; }
+    return r;
+}
+
+# x's magnitude with y's sign bit (NaN payloads kept; a NaN y gives its own sign). Mirrors
+# `f64::copysign`.
+#must_use
+fn _bj_copysign(x: f64, y: f64): f64 {
+    var mag = _bj_bits(x) & 0x7FFFFFFFFFFFFFFF;
+    var sign = _bj_bits(y) & 0x8000000000000000;
+    var r: f64 = _bj_from_bits(mag | sign);
+    return r;
+}
+
+# Degrees to radians: one multiply by the folded π/180. Mirrors `f64::to_radians`.
+#must_use
+fn _bj_to_radians(x: f64): f64 {
+    var r: f64 = x * _BJ_RADS_PER_DEG;
+    return r;
+}
+
+# Radians to degrees: one multiply by the folded 180/π. Mirrors `f64::to_degrees`.
+#must_use
+fn _bj_to_degrees(x: f64): f64 {
+    var r: f64 = x * _BJ_DEGS_PER_RAD;
+    return r;
+}
+
+# x^n for an integer n, as compiler-rt's `__powidf2` computes it (Rust's `x.powi(n)` with a
+# run-time exponent): square-and-multiply over |n|, then 1 / result for a negative n. `n` is an
+# i32 value; |i32::MIN| = 2^31 fits the i64 loop counter.
+#must_use
+fn _bj_powi(x: f64, n): f64 {
+    var a: f64 = x;
+    var p = n;
+    var recip = 0;
+    if (n < 0) {
+        recip = 1;
+        p = 0 - n;
+    }
+    var mul: f64 = 1.0;
+    loop {
+        if ((p & 1) != 0) { mul = mul * a; }
+        p = p >> 1;
+        if (p == 0) { break; }
+        a = a * a;
+    }
+    if (recip == 1) {
+        var q: f64 = 1.0 / mul;
+        return q;
+    }
+    return mul;
+}

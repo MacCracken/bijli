@@ -83,6 +83,10 @@ cyrius distlib --all && cyrius distlib --check
 cyrius deps --locked
 cyrius api-surface                   # the public API against its snapshot
 cyrius audit                         # read its exit status; never pipe it through `tail`
+python3 -I -B scripts/surface_parity.py .           # every ported Rust item has its Cyrius name
+python3 -I -B scripts/rust_test_ledger.py . --check  # every Rust test ported, pending or recorded
+python3 -I -B scripts/bench_record.py . --check      # every Rust bench has a twin, or is pending
+python3 -I -B scripts/doc_examples.py .              # the README's and guides' cyrius blocks run
 ```
 
 `cyrius test` must be **warning-free**. The f64 type diagnostics come only from the compiles that

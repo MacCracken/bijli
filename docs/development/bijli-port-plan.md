@@ -526,8 +526,10 @@ plan commit landed.
    - Add the divergence table that reports each ADR 0002 mapping by name.
    - **Tests see the library through `[test] modules`** (§2), not through impetus's
      `tests/lib_*.cyr` mirrors. A check keeps `[test] modules` equal to `[lib]`.
-   - Golden corpora reach the parity units through `[test.embed]`, so a unit needs no file I/O.
-   - **Coverage**: `cyrius coverage --exec --min 80`, CLAUDE.md's target, from M1 on.
+   - The harness reads `tests/golden/` at run time, as impetus's does (`file_read_whole`).
+     `[test.embed]` stays available if a unit ever has to run without the files.
+   - **Coverage**: `cyrius coverage --exec --min 80`, CLAUDE.md's target, from M1 on. It measures
+     public fns only, and M0's `src/` has none (the `_bj_` helpers and the constants).
    - **API surface**: `cyrius api-surface --update` writes the public-API snapshot that the
      surface-parity script compares with Rust's `pub` items.
    - **Bring M8's tooling forward**, so it runs at every milestone, not just at release:
@@ -828,6 +830,9 @@ Each one gets an issue in the owning repo, with the probe or benchmark that show
   names.
 - distlib's sidecar omits stdlib leaves (noted by kimiya, not yet filed). If bijli hits it,
   file it.
+- **The 6.7.18 stdlib has no `log10`** (only `f64_ln` and `f64_log2`), so the `log10` rows stay
+  pending until bijli's correctly rounded copy of kimiya's `_km_cr_log10` lands (M1). It belongs in
+  G1's shared module.
 - **New from bijli's language review (2026-11-11), not yet filed:**
   - a captured `f64` (local or parameter) is an untyped word inside a closure, so `a * 2.0` there
     is integer arithmetic and gives 0 (p6). The guide's 6.7.16 note covers a captured `f64` only
@@ -865,7 +870,7 @@ Each one gets an issue in the owning repo, with the probe or benchmark that show
 | Milestone | Status | Golden rows | Reference tests | Benches | Notes |
 |---|---|---|---|---|---|
 | P Prep | ✅ | | | 80 (Rust, 2026-11-12T03:15, under load) | D1–D5 answered; 1.2.0 tagged and green; P3, P4, P5 done (2026-11-11); P6 is done at the scaffold; the commit remains |
-| M0 Initialize | ◐ | 34,746 (constants 12, math 34,734) | | | Part 1 (steps 1–3) and Part 2a (steps 5–6: generator, corpus, `src/constants.cyr`, `validate.py`) done 2026-11-11. Part 2b (steps 4, 7) next |
+| M0 Initialize | ◐ | 34,746 (constants 12, math 34,734): 15,507 ok, 18,006 measured, 1,233 pending | | 80 Rust (pending twins) | Parts 1, 2a and 2b (steps 1–7) done 2026-11-11. Part 3 (steps 8–9: baselines on three targets, the remaining probes) next |
 | M1 Foundation | ☐ | | | | |
 | M2 Media, waves, circuits, relativity | ☐ | | | | |
 | M3 Optics | ☐ | | | | |

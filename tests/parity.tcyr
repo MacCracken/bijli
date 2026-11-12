@@ -1,0 +1,203 @@
+# parity.tcyr — replays the golden corpus (tests/golden/*.tsv) against the port.
+#
+# Port plan §6 step 7, adapted from impetus's tests/parity_2d.tcyr at its M0 (itself kimiya's
+# tests/parity.tcyr and tanmatra's). Format and comparison rules: scripts/oracle/README.md. The
+# module list is tests/golden/modules.txt, which the generator writes. The replay machinery is
+# tests/parity_core.cyr; this file holds the dispatchers. The library modules come from
+# cyrius.cyml's [test] modules, prepended to every test unit.
+#
+# Every row of every module is one of:
+# - ok: every output matched within its class;
+# - FAILED: an output differs; the first 10 per module are printed with the row's note and both
+#   bit patterns;
+# - measured: class C, with no bound set yet for its function. The ulp distance is recorded but
+#   not gated. bijli's class-C rows gate at 0 ulp once src/crmath.cyr dispatches them (M1); until
+#   then the stdlib/ganita counterparts are measured, which is the M0 step 8 baseline;
+# - accepted: a divergence an ADR accepts, listed by row in _par_accepted;
+# - pending: its function isn't ported yet (no dispatcher entry).
+#
+# Per function it prints the row counts and the ulp histogram. Shadow lines (`fn ~ candidate`)
+# compare the same rows against another Cyrius candidate and are never gated. The exit code is
+# the number of modules with a failure.
+
+include "tests/ulp.cyr"
+
+alloc_init();
+
+include "tests/parity_core.cyr"
+
+# ── hooks ───────────────────────────────────────────────────────────────────────────
+
+# The Rust variant name of an error code. src/error.cyr (M1) brings `bj_error_name`; until then
+# no dispatcher returns an error.
+#must_use
+fn _par_error_name(code): i64 {
+    return "Unknown";
+}
+
+# ── dispatch ────────────────────────────────────────────────────────────────────────
+# Each module's dispatcher fills the got list for one row. It returns 1 when it handled the
+# function, 0 when the function is pending (not ported), or -1 when the inputs are unusable (a
+# defect, counted as a failure). Add a function the moment it's ported.
+
+# `const` rows (input `s:<path>`): src/constants.cyr's BJ_ consts. Any other name is a defect.
+fn _par_constants(fp, fl): i64 {
+    if (_par_eq(fp, fl, "const") != 1 || _par_in_n != 1) { return 0 - 1; }
+    var np = load64(_par_in_v);
+    var nl = load64(_par_in_l);
+    if (_par_eq(np, nl, "charge::ELEMENTARY_CHARGE") == 1) { _par_got_f(BJ_ELEMENTARY_CHARGE); return 1; }
+    if (_par_eq(np, nl, "charge::ELECTRON_MASS") == 1) { _par_got_f(BJ_ELECTRON_MASS); return 1; }
+    if (_par_eq(np, nl, "charge::PROTON_MASS") == 1) { _par_got_f(BJ_PROTON_MASS); return 1; }
+    if (_par_eq(np, nl, "fdtd::FOURTH_ORDER_C1") == 1) { _par_got_f(BJ_FOURTH_ORDER_C1); return 1; }
+    if (_par_eq(np, nl, "fdtd::FOURTH_ORDER_C2") == 1) { _par_got_f(BJ_FOURTH_ORDER_C2); return 1; }
+    if (_par_eq(np, nl, "field::EPSILON_0") == 1) { _par_got_f(BJ_EPSILON_0); return 1; }
+    if (_par_eq(np, nl, "field::MU_0") == 1) { _par_got_f(BJ_MU_0); return 1; }
+    if (_par_eq(np, nl, "field::SPEED_OF_LIGHT") == 1) { _par_got_f(BJ_SPEED_OF_LIGHT); return 1; }
+    if (_par_eq(np, nl, "field::COULOMB_K") == 1) { _par_got_f(BJ_COULOMB_K); return 1; }
+    if (_par_eq(np, nl, "field::SPEED_OF_LIGHT_SQ") == 1) { _par_got_f(BJ_SPEED_OF_LIGHT_SQ); return 1; }
+    if (_par_eq(np, nl, "scattering::MIE_MAX_SIZE_PARAMETER") == 1) {
+        _par_got_f(BJ_MIE_MAX_SIZE_PARAMETER);
+        return 1;
+    }
+    if (_par_eq(np, nl, "scattering::MIE_MAX_MX") == 1) { _par_got_f(BJ_MIE_MAX_MX); return 1; }
+    return 0 - 1;
+}
+
+# `f64::*` rows: the Rust std reference values (port plan §9.1).
+# - Classes A and B: the builtins (sqrt, abs, ceil) and src/mathx.cyr, gated.
+# - Class C: measured through the stdlib and ganita counterparts until src/crmath.cyr (M1). cbrt is
+#   ganita's correctly rounded one, against the oracle's correctly rounded one (compiler-builtins).
+#   log10 is pending: the 6.7.18 stdlib has none (port plan §10).
+fn _par_math(fp, fl): i64 {
+    var x: f64 = _par_in(0);
+    if (_par_eq(fp, fl, "f64::sqrt") == 1) { var r: f64 = f64_sqrt(x); _par_got_f(r); return 1; }
+    if (_par_eq(fp, fl, "f64::abs") == 1) { var r: f64 = f64_abs(x); _par_got_f(r); return 1; }
+    if (_par_eq(fp, fl, "f64::ceil") == 1) { var r: f64 = f64_ceil(x); _par_got_f(r); return 1; }
+    if (_par_eq(fp, fl, "f64::is_nan") == 1) { _par_got_i(_bj_is_nan(x)); return 1; }
+    if (_par_eq(fp, fl, "f64::is_finite") == 1) { _par_got_i(_bj_is_finite(x)); return 1; }
+    if (_par_eq(fp, fl, "f64::to_radians") == 1) { var r: f64 = _bj_to_radians(x); _par_got_f(r); return 1; }
+    if (_par_eq(fp, fl, "f64::to_degrees") == 1) { var r: f64 = _bj_to_degrees(x); _par_got_f(r); return 1; }
+    if (_par_eq(fp, fl, "f64::sin_cos") == 1) {
+        var s: f64 = f64_sin(x);
+        var c: f64 = f64_cos(x);
+        _par_got_f(s);
+        _par_got_f(c);
+        return 1;
+    }
+    if (_par_eq(fp, fl, "f64::sin") == 1) { var r: f64 = f64_sin(x); _par_got_f(r); return 1; }
+    if (_par_eq(fp, fl, "f64::cos") == 1) { var r: f64 = f64_cos(x); _par_got_f(r); return 1; }
+    if (_par_eq(fp, fl, "f64::tan") == 1) { var r: f64 = ganita_f64_tan(x); _par_got_f(r); return 1; }
+    if (_par_eq(fp, fl, "f64::exp") == 1) { var r: f64 = f64_exp(x); _par_got_f(r); return 1; }
+    if (_par_eq(fp, fl, "f64::atan") == 1) { var r: f64 = f64_atan(x); _par_got_f(r); return 1; }
+    if (_par_eq(fp, fl, "f64::asin") == 1) { var r: f64 = ganita_f64_asin(x); _par_got_f(r); return 1; }
+    if (_par_eq(fp, fl, "f64::acos") == 1) { var r: f64 = ganita_f64_acos(x); _par_got_f(r); return 1; }
+    if (_par_eq(fp, fl, "f64::cbrt") == 1) { var r: f64 = ganita_f64_cbrt(x); _par_got_f(r); return 1; }
+    if (_par_eq(fp, fl, "f64::log10") == 1) { return 0; }
+    if (_par_in_n < 2) { return 0; }
+    if (_par_eq(fp, fl, "f64::powi") == 1) {
+        var n = _par_in(1);
+        var r: f64 = _bj_powi(x, n);
+        _par_got_f(r);
+        return 1;
+    }
+    var y: f64 = _par_in(1);
+    if (_par_eq(fp, fl, "f64::min") == 1) { var r: f64 = _bj_min(x, y); _par_got_f(r); return 1; }
+    if (_par_eq(fp, fl, "f64::max") == 1) { var r: f64 = _bj_max(x, y); _par_got_f(r); return 1; }
+    if (_par_eq(fp, fl, "f64::copysign") == 1) { var r: f64 = _bj_copysign(x, y); _par_got_f(r); return 1; }
+    # Rust's y.atan2(x) is the golden f64::atan2(y, x): inputs in C order.
+    if (_par_eq(fp, fl, "f64::atan2") == 1) { var r: f64 = ganita_f64_atan2(x, y); _par_got_f(r); return 1; }
+    if (_par_eq(fp, fl, "f64::hypot") == 1) { var r: f64 = ganita_f64_hypot(x, y); _par_got_f(r); return 1; }
+    if (_par_eq(fp, fl, "f64::powf") == 1) { var r: f64 = ganita_f64_pow(x, y); _par_got_f(r); return 1; }
+    if (_par_in_n < 3) { return 0; }
+    if (_par_eq(fp, fl, "f64::clamp") == 1) {
+        var hi: f64 = _par_in(2);
+        var r: f64 = _bj_clamp(x, y, hi);
+        _par_got_f(r);
+        return 1;
+    }
+    return 0;
+}
+
+fn _par_dispatch(mp, ml, fp, fl): i64 {
+    _par_got_n = 0;
+    if (_par_eq(mp, ml, "constants") == 1) { return _par_constants(fp, fl); }
+    if (_par_eq(mp, ml, "math") == 1) { return _par_math(fp, fl); }
+    return 0;
+}
+
+# Shadow comparisons, never gated: the same golden rows through another Cyrius candidate.
+# - the exp and atan polyfills, which give the same bits on every target (the builtins are x87 on
+#   x86_64): the cross-target fallback before src/crmath.cyr;
+# - the stdlib min / max, to show where their NaN semantics differ from Rust's.
+fn _par_shadows(mp, ml, fp, fl, cls) {
+    if (_par_eq(mp, ml, "math") != 1) { return 0; }
+    var x: f64 = _par_in(0);
+    if (_par_eq(fp, fl, "f64::exp") == 1) {
+        _par_got_n = 0;
+        var r: f64 = _f64_exp_polyfill(x);
+        _par_got_f(r);
+        _par_shadow_record("f64::exp ~ _f64_exp_polyfill", cls);
+        return 0;
+    }
+    if (_par_eq(fp, fl, "f64::atan") == 1) {
+        _par_got_n = 0;
+        var r: f64 = _f64_atan_polyfill(x);
+        _par_got_f(r);
+        _par_shadow_record("f64::atan ~ _f64_atan_polyfill", cls);
+        return 0;
+    }
+    if (_par_in_n < 2) { return 0; }
+    if (_par_eq(fp, fl, "f64::powi") == 1) { return 0; }
+    var y: f64 = _par_in(1);
+    if (_par_eq(fp, fl, "f64::max") == 1) {
+        _par_got_n = 0;
+        var r: f64 = f64_max(x, y);
+        _par_got_f(r);
+        _par_shadow_record("f64::max ~ f64_max", cls);
+        return 0;
+    }
+    if (_par_eq(fp, fl, "f64::min") == 1) {
+        _par_got_n = 0;
+        var r: f64 = f64_min(x, y);
+        _par_got_f(r);
+        _par_shadow_record("f64::min ~ f64_min", cls);
+        return 0;
+    }
+    return 0;
+}
+
+# The class-C bound for a function, in ulps; -1 when none is set yet (the rows are measured).
+# bijli's bound is 0 against the corrected oracle (ADR 0001), set per function when src/crmath.cyr
+# dispatches it (M1). cbrt's counterpart is already correctly rounded, so it gates at 0 now.
+#must_use
+fn _par_c_bound(fp, fl): i64 {
+    if (_par_eq(fp, fl, "f64::cbrt") == 1) { return 0; }
+    return 0 - 1;
+}
+
+# The ADR accepting a divergent row (function and raw input field), or 0. None yet: the ADR 0002
+# mappings arrive with their modules.
+#must_use
+fn _par_accepted(fp, fl, ip, il): i64 {
+    return 0;
+}
+
+# 1 for an ADR whose accepted rows are counted but not printed row by row. None yet.
+#must_use
+fn _par_accepted_quiet(adr): i64 {
+    return 0;
+}
+
+# Module-specific summary lines after a module's report. None yet.
+fn _par_module_done(mp, ml) {
+    return 0;
+}
+
+# Every module is replayed here: bijli has one profile.
+#must_use
+fn _par_skip(mp, ml): i64 {
+    return 0;
+}
+
+var exit_code = _par_main();
+sys_exit_group(exit_code);

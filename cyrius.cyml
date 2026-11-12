@@ -18,9 +18,14 @@ output = "build/bijli"
 stdlib = ["syscalls", "string", "alloc", "str", "fmt", "io", "vec", "args", "math", "ganita",
           "tagged", "result", "fnptr", "freelist", "mmap", "overflow"]
 
+# [test] modules is the [lib] list, so every test, bench and fuzz unit sees the library (port plan
+# §6 step 7); scripts/surface_parity.py checks that the two lists stay equal.
 [test]
 stdlib = ["assert", "bench"]
+modules = ["src/constants.cyr", "src/mathx.cyr"]
 timeout = 300
 
-# [lib] (the default bundle) and [lib.ai] are declared in M1 with the first module: an empty
-# `modules` list is invalid. [test] modules then mirrors [lib] (port plan §6 step 7).
+# The default bundle (dist/bijli.cyr). The order is load-bearing: no src/ file includes another.
+# [lib.ai] joins in M7.
+[lib]
+modules = ["src/constants.cyr", "src/mathx.cyr"]
