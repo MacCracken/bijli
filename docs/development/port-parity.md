@@ -1286,3 +1286,61 @@ Language facts the probes found, beyond plan §2:
   - `trace_field_line_10` within noise.
 
   The dipole guard reads eleven values and six zero bits, about 70 integer operations. Speed is measured, not gated.
+
+## 24. M1 part 5d-5: the stress tensor's, the force's, the Poynting flux's, the multipoles' and the field line's range edges (2026-11-12)
+
+- **ADR 0002 row 18, amended** (the last bite: Part 5 and M1 are complete): `maxwell_stress_tensor`,
+  `stress_tensor_force`, `poynting_flux_surface`, both multipole moments and `trace_field_line`'s step run with an
+  unbounded exponent at a range edge. Typical edges:
+  - the stress tensor of E = (1e155, 1e155, 0), B = x̂ is (3.98e5, 8.85e298, 0, …) where Rust's E² overflowed and
+    eight elements were NaN (the off-diagonal ½·0·∞ among them);
+  - a force row (1e200, −1e200, 0)·(1e200, 1e200, 0) is +0 for NaN;
+  - E × B = 10^400 ẑ through n̂ = 10^-200 ẑ and ΔA = 10^-200 gives 7.96e5 W for ∞;
+  - a 1e300 C charge at z = 1e-170 has M₁₀ = 1e130: Rust's z² underflowed, so r = 0 put it at the origin;
+  - P₁₇₀¹⁷⁰ past DBL_MAX times rˡ below 2^-1074 is 7.0e-103 for NaN;
+  - a field line past a 1e290 C charge traces its 4 steps, where Rust's kq/r³ = ∞ made ∞·0 = NaN and refused it.
+- **The guards** test Rust's own values.
+  - **The stress tensor**: a box. Every part of E and B ±0 or with its biased exponent in [773, 1273) (2^±250) keeps
+    each product, E², B², their halves, each difference (exact when it is that small) and its products by ε₀ and 1/μ₀
+    normal or an exact 0. Branch-free: per part, a word that is negative exactly in the box or at 0.
+  - **The force and the flux**: sums of products, so src/crmath_vx.cyr's band applies at each level. A force component,
+    each cross component, each dot product and the flux's total in [2^-900, DBL_MAX] is the unbounded chain's, as is
+    an exact 0 whose products are exact. A non-finite part anywhere in the call keeps Rust's chain.
+  - **The multipoles**: no sum to absorb an underflow, so the checked twins (`_bj_spherical_coords`,
+    `_bj_assoc_legendre_k`, `_bj_norm_legendre_k`) clear a flag unless every product and quotient is normal above
+    2^-1022 or an exact 0 from a zero operand. rˡ needs only its own test: with r normal, powi's intermediates lie
+    between 1 and rˡ. Rust's origin test must agree (r = 0 only when every coordinate is 0), and φ = atan2(y, x)
+    below 2^-1021 with y ≠ 0 fails (the unbounded chain takes y/x to 53 bits there, which atan2 rounds alike).
+  - **The field line's step**: |F|² in the band (normalized's first branch), h < 2^1023, and per part F_i = 0 or
+    v_i normal, v_i = h·F_i/|F| for h ≤ 1 (|F_i/|F|| ≥ |v_i| then) and F_i/|F| for h > 1 (then |h·F_i/|F|| ≥ it, and
+    |F_i/|F|| ≤ 1 + 2^-51 keeps it finite). The trace's field function decides its own chain.
+- **The unbounded twins**: `_bj_ux_sph` (r, cos θ, sin θ and φ with Rust's clamps), `_bj_ux_radial` (powi's
+  square-and-multiply to 53 bits, `_bj_ux_pow` past 2^31 − 1), `_bj_ux_assoc_legendre`, `_bj_ux_norm_legendre`, and
+  each moment's sum with its last addition pending (`_bj_ux_sum_add`, `_bj_ux_sum_fin`), so it rounds once.
+- **validate.py**: `m5_plain` mirrors each guard on Rust's values and `m5_model` is the whole unbounded chain. The
+  trace runs in a port mode: each step's field is the field function's row-18 model where its own guard leaves Rust's
+  chain, each step the unbounded one, and on every step the port keeps, the unbounded step must equal Rust's (the
+  guard's proof, step by step).
+- **The edge grid** (`m_field.rs`'s `emit_5d5`), 204 rows: 8 (E, B) pairs; 4 tensors over 4 normals; 6 flux sample
+  sets; 8 charge sets over 10 (l, m) through both moments; 14 field lines (a uniform field on the subnormal grid or past
+  either end, steps of 5e-324 to 1e308, and the point charge, dipoles and quadrupole far out).
+- **166 more mapped rows** (row 18: 962), all passed: the stress tensor 70, the real multipole moment 54, the
+  spherical 26, the force 7, the Poynting flux 5, the field line 4. 97 of them are existing rows of `field.tsv`
+  (stress 64, multipole 30, force 3), now read at the edge.
+- **Tests**: `tests/field.tcyr`'s `cyrius_stress_multipole_trace_edges (ADR 0002 row 18)`, 9 assertions on mapped
+  rows' values.
+- **Result, every target**: 9 modules, 0 failing; **189,015 ok, 0 failed, 11,841 accepted (ADR 01: 6,505; ADR 0002:
+  5,336)** over 200,856 rows. All 145 digests are equal on x86_64 ELF, x86_64 PE and aarch64, and field's 182
+  assertions pass on all three.
+- **Benchmarks** (interleaved A/B against HEAD dacd8b9, twice, load average 1.9 to 2.3, another repo's validate.py
+  on one core):
+  - `trace_field_line_10` +5 % (1.128/1.131 → 1.182/1.194 µs), the step guard's ~5.5 ns a step. Its first version
+    (both F/|F| and h·F/|F| tested per part, ~60 integer operations) cost +13 %. A third pair at load 3.1–3.5 read
+    +7 % and +11 %, with untouched twins (the dipole field, the disk axis) moving up to +21 % in one round of it;
+  - every other twin within ±5 % at load 2.2, with no consistent sign.
+
+  Ad hoc, with no Rust twin (`tests/zz_mp.bcyr` in the scratch trees, not committed): the stress tensor 142 → 170 ns,
+  the force 60 → 72 ns, the flux over 3 samples 229 → 294 ns, a real l = 4 moment of 5 charges 2.22 → 2.75 µs (+24 %),
+  the spherical 2.63 → 3.24 µs. The force's and the flux's first guards re-ran every product through a check
+  (172 and 645 ns); the band made them a test per sum. The multipoles' cost is the per-product check, about 20 a
+  charge. Speed is measured, not gated.

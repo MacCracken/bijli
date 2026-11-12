@@ -11319,20 +11319,50 @@ fn _bj_fv_quad_edge(qt: *f64, p: *f64): f64 {
     return u;
 }
 
+# ── the multipoles' chains at a range edge (ADR 0002 row 18, M1 part 5d-5) ──────────────────────────────────────
+#
+# Each moment is a chain of products and sums over the charges: the spherical coordinates, rˡ (powi's square-and-
+# multiply, or pow), the Legendre recurrence, the angle's cosine or sine, the term's products, the running sum. Rust's
+# chain is the unbounded one when every product, quotient and root it computes is normal and above 2^-1022 or an exact 0
+# from a zero operand (a sum or difference of such values always is: exact when it is below 2^-1022), nothing
+# overflows, and its origin test agrees (r = 0 only for a point at the origin). The *_k functions evaluate Rust's chain
+# and clear a flag where that fails; the _bj_ux_* ones evaluate it with an unbounded exponent; each moment's last
+# addition then rounds once. A non-finite part keeps Rust's chain.
+
 # (r, cos θ, sin θ, φ) of a point into out (4 f64); 0 at the origin, else 1. cos θ = z/r and sin θ = ρ/r, clamped,
-# straight from the components (no acos round trip); φ = atan2(y, x). Mirrors field.rs's `spherical_coords`.
-fn _bj_spherical_coords(pos: *f64, out: *f64): i64 {
-    var rho_sq: f64 = pos[0] * pos[0] + pos[1] * pos[1];
-    var s: f64 = rho_sq + pos[2] * pos[2];
+# straight from the components (no acos round trip); φ = atan2(y, x). Clears *ok where the chain is not the unbounded
+# one (the section comment). Mirrors field.rs's `spherical_coords`.
+fn _bj_spherical_coords(pos: *f64, out: *f64, ok: *i64): i64 {
+    var x: f64 = pos[0];
+    var y: f64 = pos[1];
+    var z: f64 = pos[2];
+    var xx: f64 = x * x;
+    var yy: f64 = y * y;
+    var zz: f64 = z * z;
+    _bj_fv_chk(xx, x, x, ok);
+    _bj_fv_chk(yy, y, y, ok);
+    _bj_fv_chk(zz, z, z, ok);
+    var rho_sq: f64 = xx + yy;
+    var s: f64 = rho_sq + zz;
     var r: f64 = f64_sqrt(s);
-    if (r == 0.0) { return 0; }
-    var c0: f64 = pos[2] / r;
+    var bs = (load64(&s) >> 52) & 0x7FF;
+    if (bs == 2047) { ok[0] = 0; }
+    if (r == 0.0) {
+        if (x != 0.0 || y != 0.0 || z != 0.0) { ok[0] = 0; }
+        return 0;
+    }
+    var c0: f64 = z / r;
+    _bj_fv_chk(c0, z, r, ok);
     var rho: f64 = f64_sqrt(rho_sq);
     var s0: f64 = rho / r;
+    _bj_fv_chk(s0, rho, r, ok);
     out[0] = r;
     out[1] = _bj_clamp(c0, -1.0, 1.0);
     out[2] = _bj_clamp(s0, 0.0, 1.0);
-    out[3] = _bj_atan2(pos[1], pos[0]);
+    var g: f64 = _bj_atan2(y, x);
+    out[3] = g;
+    var bg = (load64(&g) >> 52) & 0x7FF;
+    if (y != 0.0 && bg < 2) { ok[0] = 0; }
     return 1;
 }
 
@@ -11353,6 +11383,14 @@ fn _bj_radial_power(r: f64, l): f64 {
 # passed in so it stays accurate near |x| = 1. 0 for m > l. Mirrors field.rs's private `associated_legendre`.
 #must_use
 public fn _bj_associated_legendre(l, m, x: f64, s: f64): f64 {
+    var ok = 1;
+    var p: f64 = _bj_assoc_legendre_k(l, m, x, s, &ok);
+    return p;
+}
+
+# _bj_associated_legendre, clearing *ok where a product or quotient is not the unbounded chain's (the section comment).
+#must_use
+fn _bj_assoc_legendre_k(l, m, x: f64, s: f64, ok: *i64): f64 {
     if (m > l) {
         var z0: f64 = 0.0;
         return z0;
@@ -11361,19 +11399,36 @@ public fn _bj_associated_legendre(l, m, x: f64, s: f64): f64 {
     var fact: f64 = 1.0;
     for (var k = 0; k < m; k = k + 1) {
         var nf: f64 = -fact;
-        pmm = pmm * (nf * s);
+        var t: f64 = nf * s;
+        _bj_fv_chk(t, nf, s, ok);
+        var p2: f64 = pmm * t;
+        _bj_fv_chk(p2, pmm, t, ok);
+        pmm = p2;
         fact = fact + 2.0;
     }
     if (l == m) { return pmm; }
     var m_f: f64 = f64_from(m);
-    var pmmp1: f64 = x * (2.0 * m_f + 1.0) * pmm;
+    var c1: f64 = 2.0 * m_f + 1.0;
+    var u: f64 = x * c1;
+    _bj_fv_chk(u, x, c1, ok);
+    var pmmp1: f64 = u * pmm;
+    _bj_fv_chk(pmmp1, u, pmm, ok);
     if (l == m + 1) { return pmmp1; }
     var pll: f64 = 0.0;
     for (var ll = m + 2; ll <= l; ll = ll + 1) {
         var ll_f: f64 = f64_from(ll);
-        var a: f64 = x * (2.0 * ll_f - 1.0) * pmmp1;
-        var b: f64 = (ll_f + m_f - 1.0) * pmm;
-        pll = (a - b) / (ll_f - m_f);
+        var c2: f64 = 2.0 * ll_f - 1.0;
+        var u2: f64 = x * c2;
+        _bj_fv_chk(u2, x, c2, ok);
+        var a: f64 = u2 * pmmp1;
+        _bj_fv_chk(a, u2, pmmp1, ok);
+        var c3: f64 = ll_f + m_f - 1.0;
+        var b: f64 = c3 * pmm;
+        _bj_fv_chk(b, c3, pmm, ok);
+        var c4: f64 = ll_f - m_f;
+        var dd: f64 = a - b;
+        pll = dd / c4;
+        _bj_fv_chk(pll, dd, c4, ok);
         pmm = pmmp1;
         pmmp1 = pll;
     }
@@ -11381,9 +11436,10 @@ public fn _bj_associated_legendre(l, m, x: f64, s: f64): f64 {
 }
 
 # P̄_l^m(x) = √((2l+1)/(4π)·(l−m)!/(l+m)!)·P_l^m(x), CS phase included, by the stable recurrence (Numerical Recipes
-# §6.7, no factorials). 0 for m > l. Mirrors field.rs's private `normalized_associated_legendre`.
+# §6.7, no factorials). 0 for m > l. Clears *ok as _bj_assoc_legendre_k. Mirrors field.rs's private
+# `normalized_associated_legendre`.
 #must_use
-fn _bj_normalized_associated_legendre(l, m, x: f64, s: f64): f64 {
+fn _bj_norm_legendre_k(l, m, x: f64, s: f64, ok: *i64): f64 {
     if (m > l) {
         var z0: f64 = 0.0;
         return z0;
@@ -11394,16 +11450,25 @@ fn _bj_normalized_associated_legendre(l, m, x: f64, s: f64): f64 {
         var ratio: f64 = (2.0 * k_f - 1.0) / (2.0 * k_f);
         var sr: f64 = f64_sqrt(ratio);
         var ns: f64 = -s;
-        pmm = pmm * (ns * sr);
+        var t: f64 = ns * sr;
+        _bj_fv_chk(t, ns, sr, ok);
+        var p2: f64 = pmm * t;
+        _bj_fv_chk(p2, pmm, t, ok);
+        pmm = p2;
     }
     var m_f: f64 = f64_from(m);
     var c0: f64 = (2.0 * m_f + 1.0) / (4.0 * _BJ_PI);
     var c: f64 = f64_sqrt(c0);
-    pmm = pmm * c;
+    var p3: f64 = pmm * c;
+    _bj_fv_chk(p3, pmm, c, ok);
+    pmm = p3;
     if (l == m) { return pmm; }
     var c3: f64 = 2.0 * m_f + 3.0;
     var s3: f64 = f64_sqrt(c3);
-    var pmmp1: f64 = x * s3 * pmm;
+    var u: f64 = x * s3;
+    _bj_fv_chk(u, x, s3, ok);
+    var pmmp1: f64 = u * pmm;
+    _bj_fv_chk(pmmp1, u, pmm, ok);
     if (l == m + 1) { return pmmp1; }
     var m_sq: f64 = m_f * m_f;
     var mp1: f64 = m_f + 1.0;
@@ -11414,8 +11479,13 @@ fn _bj_normalized_associated_legendre(l, m, x: f64, s: f64): f64 {
         var ll_f: f64 = f64_from(ll);
         var an: f64 = (4.0 * ll_f * ll_f - 1.0) / (ll_f * ll_f - m_sq);
         var a: f64 = f64_sqrt(an);
-        var inner: f64 = x * pmmp1 - pmm / a_prev;
+        var xa: f64 = x * pmmp1;
+        _bj_fv_chk(xa, x, pmmp1, ok);
+        var pb: f64 = pmm / a_prev;
+        _bj_fv_chk(pb, pmm, a_prev, ok);
+        var inner: f64 = xa - pb;
         pll = a * inner;
+        _bj_fv_chk(pll, a, inner, ok);
         pmm = pmmp1;
         pmmp1 = pll;
         a_prev = a;
@@ -11438,9 +11508,264 @@ fn _bj_moment_order_error(l, m): i64 {
     return BJ_ERR_INVALID_PARAMETER;
 }
 
+# ── the multipoles with an unbounded exponent ──
+
+# The spherical coordinates with an unbounded exponent, to 53 bits: r, cos θ, sin θ (clamped as Rust's) and φ (atan2,
+# im/re below 2^-1022 as complex's arg) into s[0..3] and e[0..3]; 0 at the origin (every part 0), else 1.
+fn _bj_ux_sph(pos: *f64, s: *f64, e: *i64): i64 {
+    var x: f64 = pos[0];
+    var y: f64 = pos[1];
+    var z: f64 = pos[2];
+    if (x == 0.0 && y == 0.0 && z == 0.0) { return 0; }
+    var xs, xe = _bj_vx_mul(x, x);
+    var ys, ye = _bj_vx_mul(y, y);
+    var zs, ze = _bj_vx_mul(z, z);
+    var r2s, r2e = _bj_k_ux_add(xs, xe, ys, ye);
+    var ss, se = _bj_k_ux_add(r2s, r2e, zs, ze);
+    var rs, re = _bj_k_ux_sqrt(ss, se);
+    s[0] = rs;
+    e[0] = re;
+    var zps, zpe = _bj_k_ux_from(z);
+    var cs, ce = _bj_k_ux_div(zps, zpe, rs, re);
+    if (_bj_k_ux_cmp(cs, ce, 1.0, 0) == 1) {
+        cs = 1.0;
+        ce = 0;
+    }
+    if (_bj_k_ux_cmp(cs, ce, -1.0, 0) == 0 - 1) {
+        cs = -1.0;
+        ce = 0;
+    }
+    s[1] = cs;
+    e[1] = ce;
+    var hs, he = _bj_k_ux_sqrt(r2s, r2e);
+    var ns, ne = _bj_k_ux_div(hs, he, rs, re);
+    if (_bj_k_ux_cmp(ns, ne, 1.0, 0) == 1) {
+        ns = 1.0;
+        ne = 0;
+    }
+    s[2] = ns;
+    e[2] = ne;
+    var g: f64 = _bj_atan2(y, x);
+    var gb = _bj_bits(g) & 0x7FFFFFFFFFFFFFFF;
+    if (y == 0.0 || gb > 0x0010000000000000) {
+        var as, ae = _bj_k_ux_from(g);
+        s[3] = as;
+        e[3] = ae;
+    } else {
+        var yys, yye = _bj_k_ux_from(y);
+        var xxs, xxe = _bj_k_ux_from(x);
+        var qs, qe = _bj_k_ux_div(yys, yye, xxs, xxe);
+        s[3] = qs;
+        e[3] = qe;
+    }
+    return 1;
+}
+
+# rˡ with an unbounded exponent, for r = rs·2^re > 0 and l ≥ 0: powi's square-and-multiply with each product to 53
+# bits for l < 2^31, _bj_ux_pow above (as _bj_radial_power).
+#must_use
+fn _bj_ux_radial(rs: f64, re, l): (f64, i64) {
+    if (l > 2147483647) {
+        var lf: f64 = f64_from(l);
+        var ps, pe = _bj_ux_pow(rs, re, lf);
+        return (ps, pe);
+    }
+    var as: f64 = rs;
+    var ae = re;
+    var ms: f64 = 1.0;
+    var me = 0;
+    var p = l;
+    loop {
+        if ((p & 1) != 0) {
+            var ns, ne = _bj_k_ux_mul(ms, me, as, ae);
+            ms = ns;
+            me = ne;
+        }
+        p = p >> 1;
+        if (p == 0) { break; }
+        var ts, te = _bj_k_ux_mul(as, ae, as, ae);
+        as = ts;
+        ae = te;
+    }
+    return (ms, me);
+}
+
+# P_l^m(x) with an unbounded exponent (x = xs·2^xe, s = ss·2^se): _bj_assoc_legendre_k's operations, each to 53 bits.
+#must_use
+fn _bj_ux_assoc_legendre(l, m, xs: f64, xe, ss: f64, se): (f64, i64) {
+    if (m > l) { return (0.0, 0); }
+    var ps: f64 = 1.0;
+    var pe = 0;
+    var fact: f64 = 1.0;
+    for (var k = 0; k < m; k = k + 1) {
+        var nf: f64 = -fact;
+        var ts, te = _bj_k_ux_mul(nf, 0, ss, se);
+        var ns, ne = _bj_k_ux_mul(ps, pe, ts, te);
+        ps = ns;
+        pe = ne;
+        fact = fact + 2.0;
+    }
+    if (l == m) { return (ps, pe); }
+    var m_f: f64 = f64_from(m);
+    var c1: f64 = 2.0 * m_f + 1.0;
+    var c1s, c1e = _bj_k_ux_from(c1);
+    var us, ue = _bj_k_ux_mul(xs, xe, c1s, c1e);
+    var qs, qe = _bj_k_ux_mul(us, ue, ps, pe);
+    if (l == m + 1) { return (qs, qe); }
+    var ls: f64 = 0.0;
+    var le = 0;
+    for (var ll = m + 2; ll <= l; ll = ll + 1) {
+        var ll_f: f64 = f64_from(ll);
+        var c2: f64 = 2.0 * ll_f - 1.0;
+        var c2s, c2e = _bj_k_ux_from(c2);
+        var u2s, u2e = _bj_k_ux_mul(xs, xe, c2s, c2e);
+        var as, ae = _bj_k_ux_mul(u2s, u2e, qs, qe);
+        var c3: f64 = ll_f + m_f - 1.0;
+        var c3s, c3e = _bj_k_ux_from(c3);
+        var bs, be = _bj_k_ux_mul(c3s, c3e, ps, pe);
+        var ds, de = _bj_k_ux_sub(as, ae, bs, be);
+        var c4: f64 = ll_f - m_f;
+        var c4s, c4e = _bj_k_ux_from(c4);
+        var rs, re = _bj_k_ux_div(ds, de, c4s, c4e);
+        ls = rs;
+        le = re;
+        ps = qs;
+        pe = qe;
+        qs = rs;
+        qe = re;
+    }
+    return (ls, le);
+}
+
+# P̄_l^m(x) with an unbounded exponent: _bj_norm_legendre_k's operations, each to 53 bits (its constants, all normal,
+# are Rust's doubles).
+#must_use
+fn _bj_ux_norm_legendre(l, m, xs: f64, xe, ss: f64, se): (f64, i64) {
+    if (m > l) { return (0.0, 0); }
+    var ps: f64 = 1.0;
+    var pe = 0;
+    var nss: f64 = -ss;
+    for (var k = 1; k <= m; k = k + 1) {
+        var k_f: f64 = f64_from(k);
+        var ratio: f64 = (2.0 * k_f - 1.0) / (2.0 * k_f);
+        var sr: f64 = f64_sqrt(ratio);
+        var srs, sre = _bj_k_ux_from(sr);
+        var ts, te = _bj_k_ux_mul(nss, se, srs, sre);
+        var ns, ne = _bj_k_ux_mul(ps, pe, ts, te);
+        ps = ns;
+        pe = ne;
+    }
+    var m_f: f64 = f64_from(m);
+    var c0: f64 = (2.0 * m_f + 1.0) / (4.0 * _BJ_PI);
+    var c: f64 = f64_sqrt(c0);
+    var cs, ce = _bj_k_ux_from(c);
+    var p3s, p3e = _bj_k_ux_mul(ps, pe, cs, ce);
+    ps = p3s;
+    pe = p3e;
+    if (l == m) { return (ps, pe); }
+    var c3: f64 = 2.0 * m_f + 3.0;
+    var s3: f64 = f64_sqrt(c3);
+    var s3s, s3e = _bj_k_ux_from(s3);
+    var us, ue = _bj_k_ux_mul(xs, xe, s3s, s3e);
+    var qs, qe = _bj_k_ux_mul(us, ue, ps, pe);
+    if (l == m + 1) { return (qs, qe); }
+    var m_sq: f64 = m_f * m_f;
+    var mp1: f64 = m_f + 1.0;
+    var a0: f64 = (4.0 * mp1 * mp1 - 1.0) / (mp1 * mp1 - m_sq);
+    var a_prev: f64 = f64_sqrt(a0);
+    var ls: f64 = 0.0;
+    var le = 0;
+    for (var ll = m + 2; ll <= l; ll = ll + 1) {
+        var ll_f: f64 = f64_from(ll);
+        var an: f64 = (4.0 * ll_f * ll_f - 1.0) / (ll_f * ll_f - m_sq);
+        var a: f64 = f64_sqrt(an);
+        var xas, xae = _bj_k_ux_mul(xs, xe, qs, qe);
+        var aps, ape = _bj_k_ux_from(a_prev);
+        var pbs, pbe = _bj_k_ux_div(ps, pe, aps, ape);
+        var ins, ine = _bj_k_ux_sub(xas, xae, pbs, pbe);
+        var as2, ae2 = _bj_k_ux_from(a);
+        var rs, re = _bj_k_ux_mul(as2, ae2, ins, ine);
+        ls = rs;
+        le = re;
+        ps = qs;
+        pe = qe;
+        qs = rs;
+        qe = re;
+        a_prev = a;
+    }
+    return (ls, le);
+}
+
+# A running sum with an unbounded exponent whose last addition rounds once: acc (s[0], e[0]) and the pending term
+# (s[1], e[1]), with e[2] = 1 once a term is pending. _bj_ux_sum_add adds a term; _bj_ux_sum_fin rounds.
+fn _bj_ux_sum_add(s: *f64, e: *i64, ts: f64, te) {
+    if (e[2] == 1) {
+        var ns, ne = _bj_k_ux_add(s[0], e[0], s[1], e[1]);
+        s[0] = ns;
+        e[0] = ne;
+    }
+    s[1] = ts;
+    e[1] = te;
+    e[2] = 1;
+    return 0;
+}
+
+#must_use
+fn _bj_ux_sum_fin(s: *f64, e: *i64): f64 {
+    if (e[2] == 0) {
+        var a: f64 = s[0];
+        return a;
+    }
+    var r: f64 = _bj_k_ux_add_f64(s[0], e[0], s[1], e[1]);
+    return r;
+}
+
+# The real moment at a range edge: every charge's term with an unbounded exponent, the sum's last addition rounded once.
+#must_use
+fn _bj_fv_multipole_edge(l, m, m_abs, charges: *f64, n): f64 {
+    var m_f: f64 = f64_from(m_abs);
+    var sm: f64[2];
+    var em: i64[3];
+    sm[0] = 0.0;
+    em[0] = 0;
+    em[2] = 0;
+    var cs: f64[4];
+    var ce: i64[4];
+    for (var i = 0; i < n; i = i + 1) {
+        var c: *f64 = charges + i * 4;
+        var q: f64 = c[0];
+        var qs, qe = _bj_k_ux_from(q);
+        if (_bj_ux_sph(c + 1, &cs, &ce) == 0) {
+            if (l == 0) { _bj_ux_sum_add(&sm, &em, qs, qe); }
+        } else {
+            var as, ae = _bj_k_ux_mul(m_f, 0, cs[3], ce[3]);
+            var zs: f64 = 0.0;
+            var ze = 0;
+            if (m >= 0) {
+                var c1s, c1e = _bj_vx_cos53(as, ae);
+                zs = c1s;
+                ze = c1e;
+            } else {
+                var s1s, s1e = _bj_vx_sin53(as, ae);
+                zs = s1s;
+                ze = s1e;
+            }
+            var rps, rpe = _bj_ux_radial(cs[0], ce[0], l);
+            var pls, ple = _bj_ux_assoc_legendre(l, m_abs, cs[1], ce[1], cs[2], ce[2]);
+            var t1s, t1e = _bj_k_ux_mul(qs, qe, rps, rpe);
+            var t2s, t2e = _bj_k_ux_mul(t1s, t1e, pls, ple);
+            var t3s, t3e = _bj_k_ux_mul(t2s, t2e, zs, ze);
+            _bj_ux_sum_add(&sm, &em, t3s, t3e);
+        }
+    }
+    var r: f64 = _bj_ux_sum_fin(&sm, &em);
+    return r;
+}
+
 # M_lm = Σᵢ qᵢ·rᵢˡ·P_l^|m|(cos θᵢ)·{cos(mφᵢ) for m ≥ 0, sin(|m|φᵢ) for m < 0}, the unnormalized real moment (C·mˡ) of
 # n charges at `charges` (32 bytes each: q, x, y, z), summed in order; a charge at the origin adds q to the monopole
-# only. InvalidParameter when |m| > l. Mirrors `field::multipole_moment`.
+# only. At a range edge the whole sum runs with an unbounded exponent and its last addition rounds once (ADR 0002 row
+# 18). InvalidParameter when |m| > l. Mirrors `field::multipole_moment`.
 public fn bj_multipole_moment(l, m, charges: *f64, n): Result {
     var m_abs = m;
     if (m < 0) { m_abs = 0 - m; }
@@ -11450,28 +11775,102 @@ public fn bj_multipole_moment(l, m, charges: *f64, n): Result {
     var m_f: f64 = f64_from(m_abs);
     var moment: f64 = 0.0;
     var sc: f64[4];
+    var ok = 1;
     for (var i = 0; i < n; i = i + 1) {
         var c: *f64 = charges + i * 4;
         var q: f64 = c[0];
-        if (_bj_spherical_coords(c + 1, &sc) == 0) {
+        if (_bj_spherical_coords(c + 1, &sc, &ok) == 0) {
             if (l == 0) { moment = moment + q; }
         } else {
             var r: f64 = sc[0];
-            var ang: f64 = m_f * sc[3];
+            var phi: f64 = sc[3];
+            var ang: f64 = m_f * phi;
+            _bj_fv_chk(ang, m_f, phi, &ok);
             var az: f64 = 0.0;
             if (m >= 0) { az = _bj_cos(ang); } else { az = _bj_sin(ang); }
             var rp: f64 = _bj_radial_power(r, l);
-            var pl: f64 = _bj_associated_legendre(l, m_abs, sc[1], sc[2]);
-            var term: f64 = q * rp * pl * az;
+            var brp = (load64(&rp) >> 52) & 0x7FF;
+            if (l != 0 && (brp < 2 || brp > 2046)) { ok = 0; }
+            var pl: f64 = _bj_assoc_legendre_k(l, m_abs, sc[1], sc[2], &ok);
+            var t1: f64 = q * rp;
+            _bj_fv_chk(t1, q, rp, &ok);
+            var t2: f64 = t1 * pl;
+            _bj_fv_chk(t2, t1, pl, &ok);
+            var term: f64 = t2 * az;
+            _bj_fv_chk(term, t2, az, &ok);
             moment = moment + term;
         }
     }
-    return Ok(moment);
+    var bm = (load64(&moment) >> 52) & 0x7FF;
+    if ((ok == 1 && bm != 2047) || _bj_vx_finite_n(charges, 4 * n) == 0) { return Ok(moment); }
+    var u: f64 = _bj_fv_multipole_edge(l, m, m_abs, charges, n);
+    return Ok(u);
+}
+
+# The spherical moment at a range edge, into out: every charge's w = q·rˡ·P̄ and its angle's sine and cosine with an
+# unbounded exponent, Re and Im each summed with their last addition rounded once.
+fn _bj_fv_sph_multipole_edge(l, m, m_abs, charges: *f64, n, out: *BjComplex) {
+    var m_f: f64 = f64_from(m_abs);
+    var neg_sign: f64 = 1.0;
+    if ((m_abs & 1) == 1) { neg_sign = -1.0; }
+    var sr: f64[2];
+    var er: i64[3];
+    var si: f64[2];
+    var ei: i64[3];
+    sr[0] = 0.0;
+    er[0] = 0;
+    er[2] = 0;
+    si[0] = 0.0;
+    ei[0] = 0;
+    ei[2] = 0;
+    var spi: f64 = f64_sqrt(_BJ_PI);
+    var sps, spe = _bj_k_ux_from(spi);
+    var cs: f64[4];
+    var ce: i64[4];
+    for (var i = 0; i < n; i = i + 1) {
+        var c: *f64 = charges + i * 4;
+        var q: f64 = c[0];
+        var qs, qe = _bj_k_ux_from(q);
+        if (_bj_ux_sph(c + 1, &cs, &ce) == 0) {
+            if (l == 0) {
+                var hs, he = _bj_k_ux_mul(qs, qe, 0.5, 0);
+                var ys, ye = _bj_k_ux_div(hs, he, sps, spe);
+                _bj_ux_sum_add(&sr, &er, ys, ye);
+            }
+        } else {
+            var rps, rpe = _bj_ux_radial(cs[0], ce[0], l);
+            var pls, ple = _bj_ux_norm_legendre(l, m_abs, cs[1], ce[1], cs[2], ce[2]);
+            var t1s, t1e = _bj_k_ux_mul(qs, qe, rps, rpe);
+            var ws, we = _bj_k_ux_mul(t1s, t1e, pls, ple);
+            var as, ae = _bj_k_ux_mul(m_f, 0, cs[3], ce[3]);
+            var vs, ve = _bj_vx_sin53(as, ae);
+            var us, ue = _bj_vx_cos53(as, ae);
+            if (m >= 0) {
+                var wcs, wce = _bj_k_ux_mul(ws, we, us, ue);
+                var wss, wse = _bj_k_ux_mul(ws, we, vs, ve);
+                var nws: f64 = -wss;
+                _bj_ux_sum_add(&sr, &er, wcs, wce);
+                _bj_ux_sum_add(&si, &ei, nws, wse);
+            } else {
+                var gs, ge = _bj_k_ux_mul(neg_sign, 0, ws, we);
+                var ncs, nce = _bj_k_ux_mul(gs, ge, us, ue);
+                var nss, nse = _bj_k_ux_mul(gs, ge, vs, ve);
+                _bj_ux_sum_add(&sr, &er, ncs, nce);
+                _bj_ux_sum_add(&si, &ei, nss, nse);
+            }
+        }
+    }
+    var re: f64 = _bj_ux_sum_fin(&sr, &er);
+    var im: f64 = _bj_ux_sum_fin(&si, &ei);
+    out.re = re;
+    out.im = im;
+    return 0;
 }
 
 # q_lm = Σᵢ qᵢ·rᵢˡ·Y*_lm(θᵢ, φᵢ) (Jackson eq. 4.3, orthonormal Y with the CS phase), into out as (Re, Im):
 # w·(cos mφ, −sin mφ) for m ≥ 0, and (−1)^|m|·w·(cos |m|φ, sin |m|φ) for m < 0, w = q·rˡ·P̄_l^|m|(cos θ); a charge at
-# the origin adds q·0.5/√π to Re q₀₀ only. Static, so no time convention enters. InvalidParameter when |m| > l. Mirrors
+# the origin adds q·0.5/√π to Re q₀₀ only. Static, so no time convention enters. At a range edge both sums run with an
+# unbounded exponent, each last addition rounded once (ADR 0002 row 18). InvalidParameter when |m| > l. Mirrors
 # `field::spherical_multipole_moment` (its `(f64, f64)` is a BjComplex here).
 public fn bj_spherical_multipole_moment(l, m, charges: *f64, n, out: *BjComplex): Result {
     var m_abs = m;
@@ -11486,30 +11885,46 @@ public fn bj_spherical_multipole_moment(l, m, charges: *f64, n, out: *BjComplex)
     var im: f64 = 0.0;
     var sp: f64 = f64_sqrt(_BJ_PI);
     var sc: f64[4];
+    var ok = 1;
     for (var i = 0; i < n; i = i + 1) {
         var c: *f64 = charges + i * 4;
         var q: f64 = c[0];
-        if (_bj_spherical_coords(c + 1, &sc) == 0) {
+        if (_bj_spherical_coords(c + 1, &sc, &ok) == 0) {
             if (l == 0) {
-                var y00: f64 = q * 0.5 / sp;
+                var qh: f64 = q * 0.5;
+                _bj_fv_chk(qh, q, 0.5, &ok);
+                var y00: f64 = qh / sp;
+                _bj_fv_chk(y00, qh, sp, &ok);
                 re = re + y00;
             }
         } else {
             var rp: f64 = _bj_radial_power(sc[0], l);
-            var pl: f64 = _bj_normalized_associated_legendre(l, m_abs, sc[1], sc[2]);
-            var w: f64 = q * rp * pl;
-            var ang: f64 = m_f * sc[3];
+            var brp = (load64(&rp) >> 52) & 0x7FF;
+            if (l != 0 && (brp < 2 || brp > 2046)) { ok = 0; }
+            var pl: f64 = _bj_norm_legendre_k(l, m_abs, sc[1], sc[2], &ok);
+            var t1: f64 = q * rp;
+            _bj_fv_chk(t1, q, rp, &ok);
+            var w: f64 = t1 * pl;
+            _bj_fv_chk(w, t1, pl, &ok);
+            var phi: f64 = sc[3];
+            var ang: f64 = m_f * phi;
+            _bj_fv_chk(ang, m_f, phi, &ok);
             var s, cs = _bj_sin_cos(ang);
             var sv: f64 = s;
             var cv: f64 = cs;
             if (m >= 0) {
                 var wc: f64 = w * cv;
                 var ws: f64 = w * sv;
+                _bj_fv_chk(wc, w, cv, &ok);
+                _bj_fv_chk(ws, w, sv, &ok);
                 re = re + wc;
                 im = im - ws;
             } else {
-                var nc: f64 = neg_sign * w * cv;
-                var ns: f64 = neg_sign * w * sv;
+                var g: f64 = neg_sign * w;
+                var nc: f64 = g * cv;
+                var ns: f64 = g * sv;
+                _bj_fv_chk(nc, g, cv, &ok);
+                _bj_fv_chk(ns, g, sv, &ok);
                 re = re + nc;
                 im = im + ns;
             }
@@ -11517,6 +11932,10 @@ public fn bj_spherical_multipole_moment(l, m, charges: *f64, n, out: *BjComplex)
     }
     out.re = re;
     out.im = im;
+    var br = (load64(&re) >> 52) & 0x7FF;
+    var bi = (load64(&im) >> 52) & 0x7FF;
+    if ((ok == 1 && br != 2047 && bi != 2047) || _bj_vx_finite_n(charges, 4 * n) == 0) { return Ok(0); }
+    _bj_fv_sph_multipole_edge(l, m, m_abs, charges, n, out);
     return Ok(0);
 }
 
@@ -11777,8 +12196,11 @@ public fn bj_greens_function_static(field_pos: *f64, source_pos: *f64): Result {
 
 # ── the Maxwell stress tensor (M1 part 3b) ──────────────────────────────────────────────────────────────────────
 
-# T_ij = ε₀(EᵢEⱼ − ½δᵢⱼE²) + (1/μ₀)(BᵢBⱼ − ½δᵢⱼB²) (Pa) into out, 9 f64 row-major (Rust's `[[f64; 3]; 3]`). Mirrors
-# `field::maxwell_stress_tensor`.
+# T_ij = ε₀(EᵢEⱼ − ½δᵢⱼE²) + (1/μ₀)(BᵢBⱼ − ½δᵢⱼB²) (Pa) into out, 9 f64 row-major (Rust's `[[f64; 3]; 3]`). With
+# every part of E and B ±0 or in [2^-250, 2^251) each product, E², B² and their halves, each difference and its product
+# by ε₀ or 1/μ₀ is normal or an exact 0 (a difference that small is exact), so Rust's chain is the unbounded one; any
+# other finite part takes the chain with an unbounded exponent, each element's sum rounded once (ADR 0002 row 18).
+# Mirrors `field::maxwell_stress_tensor`.
 public fn bj_maxwell_stress_tensor(e: BjFieldVector, b: BjFieldVector, out: *f64): i64 {
     var ea: f64[3];
     var ba: f64[3];
@@ -11798,11 +12220,83 @@ public fn bj_maxwell_stress_tensor(e: BjFieldVector, b: BjFieldVector, out: *f64
             out[i * 3 + j] = t1 + t2;
         }
     }
+    # The box, branch-free: per part a negative word when it is ±0 or its biased exponent is in [773, 1273); w < 0
+    # when every part's is.
+    var e0: f64 = ea[0];
+    var e1: f64 = ea[1];
+    var e2: f64 = ea[2];
+    var b0: f64 = ba[0];
+    var b1: f64 = ba[1];
+    var b2: f64 = ba[2];
+    var w = _bj_fv_box1(load64(&e0) & 0x7FFFFFFFFFFFFFFF) & _bj_fv_box1(load64(&e1) & 0x7FFFFFFFFFFFFFFF);
+    w = w & _bj_fv_box1(load64(&e2) & 0x7FFFFFFFFFFFFFFF) & _bj_fv_box1(load64(&b0) & 0x7FFFFFFFFFFFFFFF);
+    w = w & _bj_fv_box1(load64(&b1) & 0x7FFFFFFFFFFFFFFF) & _bj_fv_box1(load64(&b2) & 0x7FFFFFFFFFFFFFFF);
+    if (w < 0) { return 0; }
+    var p: f64[6];
+    for (var k = 0; k < 3; k = k + 1) {
+        p[k] = ea[k];
+        p[3 + k] = ba[k];
+    }
+    if (_bj_vx_finite_n(&p, 6) == 0) { return 0; }
+    _bj_fv_stress_edge(&ea, &ba, inv_mu0, out);
     return 0;
 }
 
-# Fᵢ = Σⱼ Tᵢⱼnⱼ (N/m²), the force per unit area on a surface of outward normal n, each sum from 0 in j order.
-# `tensor` is 9 f64, row-major. Mirrors `field::stress_tensor_force`.
+# The stress tensor's box test for one part's magnitude bits a: negative when a = 0 (a − 1 < 0) or its biased exponent
+# is in [773, 1273) (~((a − 773·2^52) | (1273·2^52 − 1 − a)) < 0), where every product and sum of the chain is normal
+# or an exact 0.
+#inline
+#must_use
+fn _bj_fv_box1(a): i64 {
+    return (0 - 1 - ((a - 0x3050000000000000) | (0x4F8FFFFFFFFFFFFF - a))) | (a - 1);
+}
+
+# The stress tensor at a range edge, into out: E², B², each product, half-square, difference and its product by ε₀ or
+# 1/μ₀ with an unbounded exponent, each element's sum rounded once.
+fn _bj_fv_stress_edge(ea: *f64, ba: *f64, inv_mu0: f64, out: *f64) {
+    var es, ee = _bj_vx_sumsq(ea[0], ea[1], ea[2]);
+    var bs, be = _bj_vx_sumsq(ba[0], ba[1], ba[2]);
+    var hes, hee = _bj_k_ux_mul(0.5, 0, es, ee);
+    var hbs, hbe = _bj_k_ux_mul(0.5, 0, bs, be);
+    var eps_s, eps_e = _bj_k_ux_from(BJ_EPSILON_0);
+    var mus, mue = _bj_k_ux_from(inv_mu0);
+    for (var i = 0; i < 3; i = i + 1) {
+        for (var j = 0; j < 3; j = j + 1) {
+            var ps, pe = _bj_vx_mul(ea[i], ea[j]);
+            var qs, qe = _bj_vx_mul(ba[i], ba[j]);
+            var ts: f64 = ps;
+            var tt = pe;
+            var us: f64 = qs;
+            var uu = qe;
+            if (i == j) {
+                var d1s, d1e = _bj_k_ux_sub(ps, pe, hes, hee);
+                var d2s, d2e = _bj_k_ux_sub(qs, qe, hbs, hbe);
+                ts = d1s;
+                tt = d1e;
+                us = d2s;
+                uu = d2e;
+            } else {
+                # a − 0·E²: the difference with +0 (Rust's 0.5·0·E² is +0 for a finite E²).
+                var z1s, z1e = _bj_k_ux_sub(ps, pe, 0.0, 0);
+                var z2s, z2e = _bj_k_ux_sub(qs, qe, 0.0, 0);
+                ts = z1s;
+                tt = z1e;
+                us = z2s;
+                uu = z2e;
+            }
+            var t1s, t1e = _bj_k_ux_mul(eps_s, eps_e, ts, tt);
+            var t2s, t2e = _bj_k_ux_mul(mus, mue, us, uu);
+            var r: f64 = _bj_k_ux_add_f64(t1s, t1e, t2s, t2e);
+            out[i * 3 + j] = r;
+        }
+    }
+    return 0;
+}
+
+# Fᵢ = Σⱼ Tᵢⱼnⱼ (N/m²), the force per unit area on a surface of outward normal n, each sum from 0 in j order. `tensor`
+# is 9 f64, row-major. Each component is a dot product, so src/crmath_vx.cyr's guard applies: a sum in [2^-900,
+# DBL_MAX], or an exact 0 from exact products, is the unbounded chain's; any other, with finite parts, runs with an
+# unbounded exponent and its last sum rounds once (ADR 0002 row 18). Mirrors `field::stress_tensor_force`.
 #must_use
 public fn bj_stress_tensor_force(tensor: *f64, normal: BjFieldVector): BjFieldVector {
     var n: f64[3];
@@ -11811,22 +12305,72 @@ public fn bj_stress_tensor_force(tensor: *f64, normal: BjFieldVector): BjFieldVe
     for (var i = 0; i < 3; i = i + 1) {
         var acc: f64 = 0.0;
         for (var j = 0; j < 3; j = j + 1) {
-            var term: f64 = tensor[i * 3 + j] * n[j];
-            acc = acc + term;
+            var tij: f64 = tensor[i * 3 + j];
+            var nj: f64 = n[j];
+            acc = acc + tij * nj;
         }
         f[i] = acc;
+        var aa: f64 = f64_abs(acc);
+        if (!(aa >= _BJ_VX_LO && aa <= _BJ_VX_HI)) { f[i] = _bj_fv_force_edge(tensor, &n, i, acc); }
     }
     var v: BjFieldVector = BjFieldVector_new(f[0], f[1], f[2]);
     return v;
 }
 
+# Component i of the force outside the band: Rust's acc for a part not finite (anywhere in the call) or an exact 0 from
+# exact products, else Σⱼ Tᵢⱼnⱼ with an unbounded exponent, the last sum rounded once.
+#must_use
+fn _bj_fv_force_edge(tensor: *f64, n: *f64, i, acc: f64): f64 {
+    if (_bj_vx_finite_n(tensor, 9) == 0 || _bj_vx_finite_n(n, 3) == 0) { return acc; }
+    if (acc == 0.0) {
+        var e = 0;
+        for (var j = 0; j < 3; j = j + 1) {
+            var tij: f64 = tensor[i * 3 + j];
+            var nj: f64 = n[j];
+            var p: f64 = tij * nj;
+            e = e + _bj_vx_exact(tij, nj, p);
+        }
+        if (e == 3) { return acc; }
+    }
+    var as: f64 = 0.0;
+    var ae = 0;
+    for (var j2 = 0; j2 < 2; j2 = j2 + 1) {
+        var ts, te = _bj_vx_mul(tensor[i * 3 + j2], n[j2]);
+        var ns, ne = _bj_k_ux_add(as, ae, ts, te);
+        as = ns;
+        ae = ne;
+    }
+    var ls, le = _bj_vx_mul(tensor[i * 3 + 2], n[2]);
+    var r: f64 = _bj_k_ux_add_f64(as, ae, ls, le);
+    return r;
+}
+
+# Clears *ok unless the binary64 result r = a ⊗ b (a product or quotient) is the unbounded chain's value: normal and
+# above 2^-1022, or 0 with a zero operand.
+fn _bj_fv_chk(r: f64, a: f64, b: f64, ok: *i64) {
+    var x = load64(&r) & 0x7FFFFFFFFFFFFFFF;
+    if (x == 0) {
+        if (a != 0.0 && b != 0.0) { ok[0] = 0; }
+        return 0;
+    }
+    var be = x >> 52;
+    if (be < 2 || be > 2046) { ok[0] = 0; }
+    return 0;
+}
+
 # P ≈ Σ ((E × B)·(1/μ₀))·n̂·ΔA (W), the Poynting flux through a closed surface from n samples, each 10 f64 at
 # `samples` (E, B, the outward normal, ΔA: Rust's `(FieldVector, FieldVector, FieldVector, f64)`), summed in order
-# from 0. Mirrors `field::poynting_flux_surface`.
+# from 0. The chain is sums of products three deep (E × B, then the dot product with n̂ of its scaling, then the sum
+# of each by ΔA), so src/crmath_vx.cyr's guard applies at each: a cross component, a dot product and the total in
+# [2^-900, DBL_MAX], or an exact 0 from exact products, is the unbounded chain's. Anything else, with finite parts,
+# runs the whole sum with an unbounded exponent, its last addition rounded once (ADR 0002 row 18). Mirrors
+# `field::poynting_flux_surface`.
 #must_use
 public fn bj_poynting_flux_surface(samples: *f64, n): f64 {
     var inv_mu0: f64 = 1.0 / BJ_MU_0;
     var total: f64 = 0.0;
+    var ok = 1;
+    var tz = 1;
     for (var i = 0; i < n; i = i + 1) {
         var p: *f64 = samples + i * 10;
         var e: BjFieldVector = BjFieldVector_from_array(p);
@@ -11838,8 +12382,106 @@ public fn bj_poynting_flux_surface(samples: *f64, n): f64 {
         var dt: f64 = _bj_fv_dot_rust(s, nv);
         var term: f64 = dt * da;
         total = total + term;
+        # The band test inline (each cross component and dt); a miss takes the full test.
+        var c0: f64 = f64_abs(cr.x);
+        var c1: f64 = f64_abs(cr.y);
+        var c2: f64 = f64_abs(cr.z);
+        var ad: f64 = f64_abs(dt);
+        var lo: f64 = _BJ_VX_LO;
+        var hi: f64 = _BJ_VX_HI;
+        if (!(c0 >= lo && c0 <= hi && c1 >= lo && c1 <= hi && c2 >= lo && c2 <= hi && ad >= lo && ad <= hi)) {
+            if (ok == 1 && _bj_fv_poynting_ok(p, cr, s, dt) == 0) { ok = 0; }
+        }
+        var am: f64 = f64_abs(term);
+        if (!(dt == 0.0 || da == 0.0 || (am > _BJ_VX_MN && am <= hi))) { tz = 0; }
     }
-    return total;
+    var at: f64 = f64_abs(total);
+    if (ok == 1 && ((at >= _BJ_VX_LO && at <= _BJ_VX_HI) || (total == 0.0 && tz == 1))) { return total; }
+    if (_bj_vx_finite_n(samples, 10 * n) == 0) { return total; }
+    var u: f64 = _bj_fv_poynting_edge(samples, n, inv_mu0);
+    return u;
+}
+
+# 1 when one Poynting sample's cross product cr = E × B and dot product dt = (cr·(1/μ₀))·n̂ (s the scaled cross product)
+# are the unbounded chain's: each in [2^-900, DBL_MAX] or an exact 0 from exact products (src/crmath_vx.cyr's guard).
+#must_use
+fn _bj_fv_poynting_ok(p: *f64, cr: BjFieldVector, s: BjFieldVector, dt: f64): i64 {
+    var c: f64[3];
+    c[0] = cr.x;
+    c[1] = cr.y;
+    c[2] = cr.z;
+    for (var k = 0; k < 3; k = k + 1) {
+        var ck: f64 = c[k];
+        var ak: f64 = f64_abs(ck);
+        if (!(ak >= _BJ_VX_LO && ak <= _BJ_VX_HI)) {
+            if (ck != 0.0) { return 0; }
+            var j1 = (k + 1) % 3;
+            var j2 = (k + 2) % 3;
+            var a1: f64 = p[j1];
+            var b1: f64 = p[3 + j2];
+            var a2: f64 = p[j2];
+            var b2: f64 = p[3 + j1];
+            var x1: f64 = a1 * b1;
+            var x2: f64 = a2 * b2;
+            if (_bj_vx_exact(a1, b1, x1) == 0 || _bj_vx_exact(a2, b2, x2) == 0) { return 0; }
+        }
+    }
+    var ad: f64 = f64_abs(dt);
+    if (ad >= _BJ_VX_LO && ad <= _BJ_VX_HI) { return 1; }
+    if (dt != 0.0) { return 0; }
+    var sa: f64[3];
+    sa[0] = s.x;
+    sa[1] = s.y;
+    sa[2] = s.z;
+    for (var k2 = 0; k2 < 3; k2 = k2 + 1) {
+        var sk: f64 = sa[k2];
+        var nk: f64 = p[6 + k2];
+        var dk: f64 = sk * nk;
+        if (_bj_vx_exact(sk, nk, dk) == 0) { return 0; }
+    }
+    return 1;
+}
+
+# The Poynting sum at a range edge: each sample's cross product, its scaling, the dot product and the area's product
+# with an unbounded exponent, the sum from 0 with one, the last addition rounded once.
+#must_use
+fn _bj_fv_poynting_edge(samples: *f64, n, inv_mu0: f64): f64 {
+    var ms, me = _bj_k_ux_from(inv_mu0);
+    var acs: f64 = 0.0;
+    var ace = 0;
+    var fin: f64 = 0.0;
+    for (var i = 0; i < n; i = i + 1) {
+        var p: *f64 = samples + i * 10;
+        var dts: f64 = 0.0;
+        var dte = 0;
+        for (var k = 0; k < 3; k = k + 1) {
+            var j1 = (k + 1) % 3;
+            var j2 = (k + 2) % 3;
+            var cs, ce = _bj_vx_cross1(p[j1], p[3 + j2], p[j2], p[3 + j1]);
+            var ss, se = _bj_k_ux_mul(cs, ce, ms, me);
+            var ns, ne = _bj_k_ux_from(p[6 + k]);
+            var ds, de = _bj_k_ux_mul(ss, se, ns, ne);
+            if (k == 0) {
+                dts = ds;
+                dte = de;
+            } else {
+                var ts, te = _bj_k_ux_add(dts, dte, ds, de);
+                dts = ts;
+                dte = te;
+            }
+        }
+        var as, ae = _bj_k_ux_from(p[9]);
+        var ws, we = _bj_k_ux_mul(dts, dte, as, ae);
+        if (i == n - 1) {
+            var r: f64 = _bj_k_ux_add_f64(acs, ace, ws, we);
+            fin = r;
+        } else {
+            var us, ue = _bj_k_ux_add(acs, ace, ws, we);
+            acs = us;
+            ace = ue;
+        }
+    }
+    return fin;
 }
 
 # ── field lines (M1 part 3c) ────────────────────────────────────────────────────────────────────────────────────
@@ -11924,12 +12566,35 @@ fn _bj_poly_push(p: *BjPolyline, q: *f64): i64 {
 # Rust's TRACE_INITIAL_CAPACITY: the first reservation is min(max_steps + 1, 4096) points; the buffer grows beyond.
 var _BJ_TRACE_INITIAL_CAPACITY = 4096;
 
+# One field-line step at a range edge: pos_i ← pos_i + h·F_i/|F|, with |F|² (each square and sum), |F|, each quotient
+# and each product to 53 bits with an unbounded exponent, and each new position rounded once (ADR 0002 row 18). F is
+# finite and nonzero, h positive and finite.
+fn _bj_fv_trace_edge(fx: f64, fy: f64, fz: f64, h: f64, pos: *f64) {
+    var ms, me = _bj_vx_sumsq(fx, fy, fz);
+    var mg, mge = _bj_k_ux_sqrt(ms, me);
+    var hs, he = _bj_k_ux_from(h);
+    var f: f64[3];
+    f[0] = fx;
+    f[1] = fy;
+    f[2] = fz;
+    for (var i = 0; i < 3; i = i + 1) {
+        var fs, fe = _bj_k_ux_from(f[i]);
+        var ds, de = _bj_k_ux_div(fs, fe, mg, mge);
+        var ts, te = _bj_k_ux_mul(hs, he, ds, de);
+        var ps, pe = _bj_k_ux_from(pos[i]);
+        var r: f64 = _bj_k_ux_add_f64(ps, pe, ts, te);
+        pos[i] = r;
+    }
+    return 0;
+}
+
 # Traces a field line from `start` by forward Euler, x ← x + h·F(x)/|F(x)|, into out (emptied first): `start`, then
 # one point per step, at most max_steps + 1 points. `max_steps` is Rust's usize, its 64 bits unsigned: −1 is usize::MAX.
 # `field_fn` is called through callptr as `field_fn(pos, f)`, pos the three f64 of the position and f a *BjFieldVector
 # to fill; it returns BJ_ERR_NONE, or a BJ_ERR_* code with its error recorded (Rust's `Fn([f64; 3]) ->
 # Result<FieldVector>`: a Result can't pass through callptr, plan §9.3). The line stops early, Ok, at a null point
-# (a zero field), when field_fn returns Singularity (a source or sink), or at a field with an infinite component.
+# (a zero field), when field_fn returns Singularity (a source or sink), or at a field with an infinite component. At a
+# range edge a step runs with an unbounded exponent, each new position rounded once (ADR 0002 row 18).
 # Errors: InvalidParameter when step_size is not positive and finite, start is not finite, or field_fn returns a NaN
 # component; any other error of field_fn's is returned as is; Allocation when out can't grow (Rust aborts there; ADR
 # 0002 row 9). On an error out is empty. A success leaves the last-error record as field_fn left it. Mirrors
@@ -11973,7 +12638,9 @@ public fn bj_trace_field_line(start: *f64, step_size: f64, max_steps, field_fn, 
     _bj_poly_push(out, &pos);
     var stop_reason = "max_steps reached";
     var f: BjFieldVector;
-    var dir: BjFieldVector;
+    var h_small = 0;
+    if (step_size <= 1.0) { h_small = 1; }
+    var wh = (load64(&step_size) >> 52) - 2046;                     # negative when h < 2^1023
     var i = 0;
     while (i != max_steps) {
         var st = callptr(field_fn, &pos, &f);
@@ -12005,10 +12672,41 @@ public fn bj_trace_field_line(start: *f64, step_size: f64, max_steps, field_fn, 
             stop_reason = "null point";
             break;
         }
-        var tn, vn = f.normalized(&dir);
-        pos[0] = pos[0] + step_size * dir.x;
-        pos[1] = pos[1] + step_size * dir.y;
-        pos[2] = pos[2] + step_size * dir.z;
+        # The step, F/|F| (normalized's first branch, as Rust's in the band) times h, added to pos. Rust's chain is the
+        # unbounded one when |F|² is in the band and each d_i = F_i/|F| and t_i = h·d_i is normal above 2^-1022 or an
+        # exact 0 (F_i = 0); else the step runs with an unbounded exponent, each new position rounded once (ADR 0002
+        # row 18). |d_i| ≤ 1 + 2^-51, so for h ≤ 1 a normal t_i makes d_i normal (|d_i| ≥ |t_i|), and for h > 1 a
+        # normal d_i makes t_i normal, finite while h < 2^1023 (wh): one test per part, on v_i (t_i or d_i).
+        var ms: f64 = fx * fx + fy * fy + fz * fz;
+        var w = 0;
+        if (ms >= _BJ_VX_LO && ms <= _BJ_VX_HI) {
+            var mag: f64 = f64_sqrt(ms);
+            var ux: f64 = fx / mag;
+            var uy: f64 = fy / mag;
+            var uz: f64 = fz / mag;
+            var tx: f64 = step_size * ux;
+            var ty: f64 = step_size * uy;
+            var tz: f64 = step_size * uz;
+            var vx: f64 = ux;
+            var vy: f64 = uy;
+            var vz: f64 = uz;
+            if (h_small == 1) {
+                vx = tx;
+                vy = ty;
+                vz = tz;
+            }
+            # Negative when good: |v_i| ≥ 2^-1021 (bits ≥ 2^53), or F_i = 0 (bits − 1 < 0); w is negative when all are.
+            var gx = (0x1FFFFFFFFFFFFF - (load64(&vx) & 0x7FFFFFFFFFFFFFFF)) | ((load64(&fx) & 0x7FFFFFFFFFFFFFFF) - 1);
+            var gy = (0x1FFFFFFFFFFFFF - (load64(&vy) & 0x7FFFFFFFFFFFFFFF)) | ((load64(&fy) & 0x7FFFFFFFFFFFFFFF) - 1);
+            var gz = (0x1FFFFFFFFFFFFF - (load64(&vz) & 0x7FFFFFFFFFFFFFFF)) | ((load64(&fz) & 0x7FFFFFFFFFFFFFFF) - 1);
+            w = gx & gy & gz & wh;
+            if (w < 0) {
+                pos[0] = pos[0] + tx;
+                pos[1] = pos[1] + ty;
+                pos[2] = pos[2] + tz;
+            }
+        }
+        if (w >= 0) { _bj_fv_trace_edge(fx, fy, fz, step_size, &pos); }
         if (_bj_poly_push(out, &pos) == 0) {
             out.len = 0;
             _bj_tx_cstr(_bj_err_reason(BJ_ERR_ALLOCATION), "field line buffer");

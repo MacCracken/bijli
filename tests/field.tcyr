@@ -1325,6 +1325,91 @@ fn main() {
     if (dq_v1 == 7 || dq_v6 == 7) { println("."); }
     assert(is_ok(pe_tq1) == 1 && is_ok(pe_tq2) == 1 && pe_vq1 == 0 && pe_vq2 == 0, "the two charges are valid");
 
+    test_group("cyrius_stress_multipole_trace_edges (ADR 0002 row 18)");
+    # The stress tensor's, the force's, the Poynting flux's, the multipoles' and the field-line steps' chains at a
+    # range edge; the expected bits are validate.py's model (rows of tests/golden/field.adr.tsv).
+    var me_st: f64[9];
+    var me_e = BjFieldVector_new(fb(0x601DD55745CBB7ED), fb(0x601DD55745CBB7ED), 0.0);     # (1e155, 1e155, 0)
+    var me_b = BjFieldVector_new(1.0, 0.0, 0.0);
+    bj_maxwell_stress_tensor(me_e, me_b, &me_st);
+    var me_t00: f64 = me_st[0];
+    var me_t01: f64 = me_st[1];
+    var me_t02: f64 = me_st[2];
+    assert(same_bits(me_t00, 0x411848FD6E17EC91) == 1 && same_bits(me_t01, 0x7E00EC5831167D88) == 1
+      && same_bits(me_t02, 0) == 1, "E² past DBL_MAX: T_xx is B's part, T_xy = ε₀EₓE_y, T_xz = 0 (Rust: NaN)");
+    var me_tt: f64[9];
+    for (var me_k = 0; me_k < 9; me_k = me_k + 1) { me_tt[me_k] = 0.0; }
+    me_tt[0] = fb(0x6974E718D7D7625A);                        # 1e200
+    me_tt[1] = fb(0xE974E718D7D7625A);                        # −1e200
+    me_tt[4] = 1.0;
+    me_tt[8] = 1.0;
+    var me_n = BjFieldVector_new(fb(0x6974E718D7D7625A), fb(0x6974E718D7D7625A), 0.0);
+    var me_f: BjFieldVector = bj_stress_tensor_force(&me_tt, me_n);
+    var me_fx: f64 = me_f.x;
+    var me_fy: f64 = me_f.y;
+    assert(same_bits(me_fx, 0) == 1 && same_bits(me_fy, 0x6974E718D7D7625A) == 1,
+      "a force whose products cancel past DBL_MAX: F_x = +0 (Rust: ∞ − ∞ = NaN)");
+    var me_sm: f64[10];
+    for (var me_j = 0; me_j < 10; me_j = me_j + 1) { me_sm[me_j] = 0.0; }
+    me_sm[0] = fb(0x6974E718D7D7625A);
+    me_sm[4] = fb(0x6974E718D7D7625A);
+    me_sm[8] = fb(0x16687E92154EF7AC);                        # n = (0, 0, 1e-200)
+    me_sm[9] = fb(0x16687E92154EF7AC);                        # ΔA = 1e-200
+    var me_pf: f64 = bj_poynting_flux_surface(&me_sm, 1);
+    assert(same_bits(me_pf, 0x412848FD6E17EC91) == 1, "E × B past DBL_MAX, brought back by n and ΔA (Rust: ∞)");
+    var me_cs: f64[8];
+    put4(&me_cs, 0, fb(0x7E37E43C8800759C), 0.0, 0.0, fb(0x1CA3529BA7D19EAF));          # 1e300 at z = 1e-170
+    var me_t1, me_v1 = bj_multipole_moment(1, 0, &me_cs, 1);
+    assert(ok_bits(me_t1, me_v1, 0x5AECDA62055B2D9E) == 1,
+      "a charge at 1e-170 is not at the origin: M₁₀ = qz (Rust: 0)");
+    var me_y: BjComplex;
+    var me_t2, me_v2 = bj_spherical_multipole_moment(1, 0, &me_cs, 1, &me_y);
+    var me_yr: f64 = me_y.re;
+    var me_yi: f64 = me_y.im;
+    assert(is_ok(me_t2) == 1 && same_bits(me_yr, 0x5ADC3202AE4AE673) == 1 && same_bits(me_yi, 0) == 1,
+      "its spherical q₁₀ (Rust: 0)");
+    put4(&me_cs, 0, fb(0x7E37E43C8800759C), 3.0, fb(0x000012688B70E62B), 0.0);          # 1e300 at (3, 1e-310, 0)
+    var me_t3, me_v3 = bj_multipole_moment(1, 0 - 1, &me_cs, 1);
+    assert(ok_bits(me_t3, me_v3, 0xBDDB7CDFD9D7BDA3) == 1, "an azimuth below 2^-1022 to 53 bits, y/x");
+    put4(&me_cs, 0, 1.0, fb(0x3F50624DD2F1A9FC), 0.0, 0.0);                               # +1 at (1e-3, 0, 0)
+    put4(&me_cs, 1, -1.0, 0.0, fb(0x3F60624DD2F1A9FC), fb(0x3F50624DD2F1A9FC));           # −1 at (0, 2e-3, 1e-3)
+    var me_t4, me_v4 = bj_multipole_moment(170, 170, &me_cs, 2);
+    assert(ok_bits(me_t4, me_v4, 0x2AB92FEDE35B39EE) == 1,
+      "rˡ below 2^-1074 and P₁₇₀¹⁷⁰ past DBL_MAX (Rust: 0·∞ = NaN)");
+    var me_poly = BjPolyline_new();
+    var me_wide = |pos, out| {
+        var oo: *BjFieldVector = as_fv(out);
+        oo.x = 3.0;
+        oo.y = fb(0x000012688B70E62B);
+        oo.z = 0.0;
+        return 0;
+    };
+    var me_o: f64[3];
+    at3(&me_o, 0.0, 0.0, 0.0);
+    var me_t5, me_v5 = bj_trace_field_line(&me_o, fb(0x7E37E43C8800759C), 2, me_wide, &me_poly);
+    var me_p2: *f64 = me_poly.at(2);
+    var me_p2x: f64 = me_p2[0];
+    var me_p2y: f64 = me_p2[1];
+    assert(is_ok(me_t5) == 1 && me_poly.count() == 3 && same_bits(me_p2x, 0x7E47E43C8800759C) == 1
+      && same_bits(me_p2y, 0x3DD2533FE68FD3C2) == 1, "a step of 1e300 along a direction below 2^-1022, to 53 bits");
+    var me_hot = |pos, out| {
+        var at: f64[3];
+        at[0] = 0.0;
+        at[1] = 0.0;
+        at[2] = 0.0;
+        var t, v = bj_electric_field_point_charge(fb(0x7C2485CE9E7A065F), &at, as_f64p(pos), as_fv(out));
+        if (is_err_result(t) == 1) { return v; }
+        return 0;
+    };
+    at3(&me_o, fb(0x3F50624DD2F1A9FC), 0.0, 0.0);
+    var me_t6, me_v6 = bj_trace_field_line(&me_o, fb(0x3F1A36E2EB1C432D), 4, me_hot, &me_poly);
+    var me_p4: *f64 = me_poly.at(4);
+    var me_p4x: f64 = me_p4[0];
+    assert(is_ok(me_t6) == 1 && me_poly.count() == 5 && same_bits(me_p4x, 0x3F56F0068DB8BAC8) == 1,
+      "a field line past a 1e290 C charge, its field finite (Rust: kq/r³ = ∞, ∞·0 = NaN, InvalidParameter)");
+    BjPolyline_free(&me_poly);
+    if (me_v1 == 7 || me_v2 == 7 || me_v5 == 7 || me_v6 == 7) { println("."); }
+
     return assert_summary();
 }
 

@@ -920,8 +920,9 @@ def validate_field(root: Path, path: Path, sink=None, P=None) -> list:
             return ok3((math.inf, 0.0, 0.0)) if pos[0] >= p[0] else ok3((1.0, 0.0, 0.0))
         return dipole(tuple(p[0:3]), pos, True)
 
-    def trace(v, ins):
-        """field.rs's trace_field_line over a scenario: the points' tokens, or the error's."""
+    def trace(v, ins, port=False):
+        """field.rs's trace_field_line over a scenario: the points' tokens, or the error's. With port, the port's
+        (row 18): (its tokens, whether a field or a step left Rust's chain, the guard proof's problems)."""
         sid, start, step, maxw = v[0], tuple(v[1:4]), v[4], v[5] & 0xFFFFFFFFFFFFFFFF
         params = v[7:7 + int(ins[6][1])]
         if not (step > 0.0 and math.isfinite(step)):
@@ -931,8 +932,12 @@ def validate_field(root: Path, path: Path, sink=None, P=None) -> list:
             return [("E", "InvalidParameter"), ("s", "invalid parameter: start position must be finite, got "
                                                      + debug3(start))]
         pos, pts = start, [start]
+        gov, perr = False, []
         for _ in range(maxw):
             r = field_fn(sid, params, pos)
+            if port:
+                r, g = m5_trace_field(sid, params, pos, r)
+                gov = gov or g
             if r[0][0] == "E":
                 if r is SINGULAR:
                     break
@@ -947,9 +952,21 @@ def validate_field(root: Path, path: Path, sink=None, P=None) -> list:
             if nd[0][0] == "E":
                 break
             d = tuple(b for _k, b in nd)
-            pos = (pos[0] + step * d[0], pos[1] + step * d[1], pos[2] + step * d[2])
+            rp = (pos[0] + step * d[0], pos[1] + step * d[1], pos[2] + step * d[2])
+            if port:
+                mp = m5_step(pos, fv, step)
+                if not m5_step_plain(fv, step):
+                    gov, rp = True, mp
+                elif not toks_same(ok3(mp), ok3(rp)):
+                    perr.append(f"the step from {pos} along {fv}: the unbounded step {mp} differs from Rust's {rp} "
+                                f"where the port keeps Rust's chain")
+            pos = rp
             pts.append(pos)
-        return [("v", str(3 * len(pts)))] + [("f", c) for pt in pts for c in pt]
+        toks = [("v", str(3 * len(pts)))] + [("f", c) for pt in pts for c in pt]
+        return (toks, gov, perr) if port else toks
+
+    global TRACE_FN
+    TRACE_FN = trace
 
     errs = []
     for n, (fn, _cls, ins, outs) in enumerate(rows, 1):
@@ -1781,7 +1798,9 @@ D4_FNS = ("field::electric_dipole_field", "field::magnetic_dipole_field", "field
           "field::image_charge_sphere")
 FV_FNS = ("FieldVector::magnitude", "FieldVector::magnitude_sq", "FieldVector::dot", "FieldVector::cross",
           "FieldVector::normalized", "field::image_charge_plane", "field::image_charge_dielectric",
-          "charge::lorentz_force", "PointCharge::lorentz_force_in") + PC_FNS + D4_FNS
+          "charge::lorentz_force", "PointCharge::lorentz_force_in", "field::trace_field_line") + PC_FNS + D4_FNS + (
+    "field::maxwell_stress_tensor", "field::stress_tensor_force", "field::poynting_flux_surface",
+    "field::multipole_moment", "field::spherical_multipole_moment")
 
 
 VX_LO, VX_HI = 2.0 ** -900, sys.float_info.max
@@ -2142,6 +2161,454 @@ def d4_model(fn, v):
             + [("f", ux_fin(ux_mul(ux(p[i]), sc, ident))) for i in range(3)])
 
 
+# M1 part 5d-5's chains: the stress tensor, the force from it, the Poynting flux, the multipoles and a field line's
+# steps. m5_plain mirrors src/field.cyr's guards on Rust's binary64 values; m5_model is the whole unbounded chain.
+M5_FNS = ("field::maxwell_stress_tensor", "field::stress_tensor_force", "field::poynting_flux_surface",
+          "field::multipole_moment", "field::spherical_multipole_moment")
+HALF = (Fraction(1, 2), False)
+TRACE_FN = None                                         # validate_field's trace, registered by each run
+
+
+def chk(r, a, b) -> bool:
+    """src/field.cyr's _bj_fv_chk: the product or quotient r = a ⊗ b is normal above 2^-1022, or 0 with a zero
+    operand."""
+    if r == 0.0:
+        return a == 0.0 or b == 0.0
+    return nrm(r)
+
+
+def ux_neg(a):
+    return -a[0], not a[1]
+
+
+def ux_sum(terms):
+    """Σ terms from 0 in order, each addition to 53 bits but the last, the result rounded once (+0 for none)."""
+    if not terms:
+        return 0.0
+    acc = (Fraction(0), False)
+    for t in terms[:-1]:
+        acc = ux_add(acc, t)
+    return ux_fin(ux_add(acc, terms[-1], lambda t: t))
+
+
+def m5_box(xs, lo, hi) -> bool:
+    """_bj_fv_box: each part ±0 or with its biased exponent in [lo, hi)."""
+    for x in xs:
+        a = f_to_bits(x) & 0x7FFFFFFFFFFFFFFF
+        if a != 0 and not (lo <= a >> 52 < hi):
+            return False
+    return True
+
+
+def m5_consts():
+    c0 = golden_consts_cached()
+    return c0["field::EPSILON_0"], c0["field::MU_0"]
+
+
+def m5_coords_k(p, ok):
+    """_bj_spherical_coords on Rust's values: (r, cos θ, sin θ, φ) or None at the origin; clears ok[0]."""
+    x, y, z = p
+    xx, yy, zz = x * x, y * y, z * z
+    ok[0] &= chk(xx, x, x) and chk(yy, y, y) and chk(zz, z, z)
+    rho_sq = xx + yy
+    sq = rho_sq + zz
+    r = fsqrt(sq)
+    if not math.isfinite(sq):
+        ok[0] = False
+    if r == 0.0:
+        if x != 0.0 or y != 0.0 or z != 0.0:
+            ok[0] = False
+        return None
+    c0 = fdiv(z, r)
+    rho = fsqrt(rho_sq)
+    s0 = fdiv(rho, r)
+    ok[0] &= chk(c0, z, r) and chk(s0, rho, r)
+    g = MPFR_P["atan2"](y, x)
+    if y != 0.0 and abs(g) < 2.0 ** -1021:
+        ok[0] = False
+    return r, rust_clamp(c0, -1.0, 1.0), rust_clamp(s0, 0.0, 1.0), g
+
+
+def m5_rpow(r, ll):
+    return powidf2_ieee(r, ll) if ll <= 2147483647 else MPFR_P["pow"](r, float(ll))
+
+
+def m5_legendre_k(ll, m, x, s, ok):
+    if m > ll:
+        return 0.0
+    pmm, fact = 1.0, 1.0
+    for _ in range(m):
+        t = -fact * s
+        p2 = pmm * t
+        ok[0] &= chk(t, -fact, s) and chk(p2, pmm, t)
+        pmm = p2
+        fact += 2.0
+    if ll == m:
+        return pmm
+    mf = float(m)
+    c1 = 2.0 * mf + 1.0
+    u = x * c1
+    pmmp1 = u * pmm
+    ok[0] &= chk(u, x, c1) and chk(pmmp1, u, pmm)
+    if ll == m + 1:
+        return pmmp1
+    pll = 0.0
+    for k in range(m + 2, ll + 1):
+        kf = float(k)
+        c2 = 2.0 * kf - 1.0
+        u2 = x * c2
+        a = u2 * pmmp1
+        c3 = kf + mf - 1.0
+        b = c3 * pmm
+        c4 = kf - mf
+        dd = a - b
+        pll = fdiv(dd, c4)
+        ok[0] &= chk(u2, x, c2) and chk(a, u2, pmmp1) and chk(b, c3, pmm) and chk(pll, dd, c4)
+        pmm, pmmp1 = pmmp1, pll
+    return pll
+
+
+def m5_nlegendre_k(ll, m, x, s, ok):
+    if m > ll:
+        return 0.0
+    pmm = 1.0
+    for k in range(1, m + 1):
+        kf = float(k)
+        sr = fsqrt(fdiv(2.0 * kf - 1.0, 2.0 * kf))
+        t = -s * sr
+        p2 = pmm * t
+        ok[0] &= chk(t, -s, sr) and chk(p2, pmm, t)
+        pmm = p2
+    mf = float(m)
+    c = fsqrt(fdiv(2.0 * mf + 1.0, 4.0 * PI))
+    p3 = pmm * c
+    ok[0] &= chk(p3, pmm, c)
+    pmm = p3
+    if ll == m:
+        return pmm
+    s3 = fsqrt(2.0 * mf + 3.0)
+    u = x * s3
+    pmmp1 = u * pmm
+    ok[0] &= chk(u, x, s3) and chk(pmmp1, u, pmm)
+    if ll == m + 1:
+        return pmmp1
+    m_sq = mf * mf
+    a_prev = fsqrt(fdiv(4.0 * (mf + 1.0) * (mf + 1.0) - 1.0, (mf + 1.0) * (mf + 1.0) - m_sq))
+    pll = 0.0
+    for k in range(m + 2, ll + 1):
+        kf = float(k)
+        a = fsqrt(fdiv(4.0 * kf * kf - 1.0, kf * kf - m_sq))
+        xa = x * pmmp1
+        pb = fdiv(pmm, a_prev)
+        inner = xa - pb
+        pll = a * inner
+        ok[0] &= chk(xa, x, pmmp1) and chk(pb, pmm, a_prev) and chk(pll, a, inner)
+        pmm, pmmp1, a_prev = pmmp1, pll, a
+    return pll
+
+
+def m5_charges(v):
+    cnt = int(v[2]) // 4
+    return v[0], v[1], v[3:3 + 4 * cnt]
+
+
+def m5_plain(fn, v) -> bool:
+    """The port keeps Rust's chain for this row (finite parts, no error)."""
+    EPS0, MU0 = m5_consts()
+    inv_mu0 = fdiv(1.0, MU0)
+    if fn == "field::maxwell_stress_tensor":
+        return m5_box(v[0:6], 773, 1273)
+    if fn == "field::stress_tensor_force":
+        tt, n = v[0:9], v[9:12]
+        for i in range(3):
+            acc = 0.0
+            for j in range(3):
+                acc += tt[3 * i + j] * n[j]
+            if not (vx_band(acc) or (acc == 0.0 and all(vx_exact(tt[3 * i + j], n[j]) for j in range(3)))):
+                return False
+        return True
+    if fn == "field::poynting_flux_surface":
+        cnt = int(v[0]) // 10
+        sm = v[1:1 + 10 * cnt]
+        total, ok, tz = 0.0, True, True
+        for j in range(cnt):
+            p = sm[10 * j:10 * j + 10]
+            dt = 0.0
+            for k in range(3):
+                j1, j2 = (k + 1) % 3, (k + 2) % 3
+                ck = p[j1] * p[3 + j2] - p[j2] * p[3 + j1]
+                if not (vx_band(ck) or (ck == 0.0 and vx_exact(p[j1], p[3 + j2]) and vx_exact(p[j2], p[3 + j1]))):
+                    ok = False
+                sk = ck * inv_mu0
+                dt = sk * p[6 + k] if k == 0 else dt + sk * p[6 + k]
+            if not vx_band(dt):
+                if dt != 0.0:
+                    ok = False
+                else:
+                    for k in range(3):
+                        j1, j2 = (k + 1) % 3, (k + 2) % 3
+                        sk = (p[j1] * p[3 + j2] - p[j2] * p[3 + j1]) * inv_mu0
+                        if not vx_exact(sk, p[6 + k]):
+                            ok = False
+            tm = dt * p[9]
+            tz = tz and vx_exact(dt, p[9])
+            total += tm
+        return ok and (vx_band(total) or (total == 0.0 and tz))
+    ll, m, cs = m5_charges(v)
+    ma = abs(m)
+    mf = float(ma)
+    ok = [True]
+    if fn == "field::multipole_moment":
+        mom = 0.0
+        for j in range(len(cs) // 4):
+            q = cs[4 * j]
+            c = m5_coords_k(cs[4 * j + 1:4 * j + 4], ok)
+            if c is None:
+                if ll == 0:
+                    mom += q
+                continue
+            ang = mf * c[3]
+            ok[0] &= chk(ang, mf, c[3])
+            az = MPFR_P["cos"](ang) if m >= 0 else MPFR_P["sin"](ang)
+            rp = m5_rpow(c[0], ll)
+            if ll != 0 and not nrm(rp):
+                ok[0] = False
+            pl = m5_legendre_k(ll, ma, c[1], c[2], ok)
+            t1 = q * rp
+            t2 = t1 * pl
+            term = t2 * az
+            ok[0] &= chk(t1, q, rp) and chk(t2, t1, pl) and chk(term, t2, az)
+            mom += term
+        return ok[0] and math.isfinite(mom)
+    neg = 1.0 if ma % 2 == 0 else -1.0
+    sp = fsqrt(PI)
+    re = im = 0.0
+    for j in range(len(cs) // 4):
+        q = cs[4 * j]
+        c = m5_coords_k(cs[4 * j + 1:4 * j + 4], ok)
+        if c is None:
+            if ll == 0:
+                qh = q * 0.5
+                y00 = fdiv(qh, sp)
+                ok[0] &= chk(qh, q, 0.5) and chk(y00, qh, sp)
+                re += y00
+            continue
+        rp = m5_rpow(c[0], ll)
+        if ll != 0 and not nrm(rp):
+            ok[0] = False
+        pl = m5_nlegendre_k(ll, ma, c[1], c[2], ok)
+        t1 = q * rp
+        w = t1 * pl
+        ang = mf * c[3]
+        ok[0] &= chk(t1, q, rp) and chk(w, t1, pl) and chk(ang, mf, c[3])
+        sv, cv = MPFR_P["sin"](ang), MPFR_P["cos"](ang)
+        if m >= 0:
+            wc, ws = w * cv, w * sv
+            ok[0] &= chk(wc, w, cv) and chk(ws, w, sv)
+            re += wc
+            im -= ws
+        else:
+            g = neg * w
+            nc, ns = g * cv, g * sv
+            ok[0] &= chk(nc, g, cv) and chk(ns, g, sv)
+            re += nc
+            im += ns
+    return ok[0] and math.isfinite(re) and math.isfinite(im)
+
+
+def m5_clamp(a, lo, hi):
+    if a[0] < lo[0]:
+        return lo
+    if a[0] > hi[0]:
+        return hi
+    return a
+
+
+def m5_coords_ux(p):
+    """_bj_ux_sph: (r, cos θ, sin θ, φ) as model pairs, None at the origin."""
+    x, y, z = p
+    if x == 0.0 and y == 0.0 and z == 0.0:
+        return None
+    r2 = ux_add(ux_mul(ux(x), ux(x)), ux_mul(ux(y), ux(y)))
+    r = ux_sqrt(ux_add(r2, ux_mul(ux(z), ux(z))))
+    c = m5_clamp(ux_div(ux(z), r), (Fraction(-1), True), (Fraction(1), False))
+    sn = ux_div(ux_sqrt(r2), r)
+    if sn[0] > 1:
+        sn = (Fraction(1), False)
+    g = MPFR_P["atan2"](y, x)
+    phi = ux(g) if (y == 0.0 or abs(g) > 2.0 ** -1022) else ux_div(ux(y), ux(x))
+    return r, c, sn, phi
+
+
+def m5_rpow_ux(r, ll):
+    if ll > 2147483647:
+        return wv_pow(r, float(ll))
+    a, acc, p = r, (Fraction(1), False), ll
+    while True:
+        if p & 1:
+            acc = ux_mul(acc, a)
+        p >>= 1
+        if p == 0:
+            break
+        a = ux_mul(a, a)
+    return acc
+
+
+def m5_legendre_ux(ll, m, x, s):
+    if m > ll:
+        return Fraction(0), False
+    pmm, fact = (Fraction(1), False), 1.0
+    for _ in range(m):
+        pmm = ux_mul(pmm, ux_mul(ux(-fact), s))
+        fact += 2.0
+    if ll == m:
+        return pmm
+    mf = float(m)
+    pmmp1 = ux_mul(ux_mul(x, ux(2.0 * mf + 1.0)), pmm)
+    if ll == m + 1:
+        return pmmp1
+    pll = (Fraction(0), False)
+    for k in range(m + 2, ll + 1):
+        kf = float(k)
+        a = ux_mul(ux_mul(x, ux(2.0 * kf - 1.0)), pmmp1)
+        b = ux_mul(ux(kf + mf - 1.0), pmm)
+        pll = ux_div(ux_sub(a, b), ux(kf - mf))
+        pmm, pmmp1 = pmmp1, pll
+    return pll
+
+
+def m5_nlegendre_ux(ll, m, x, s):
+    if m > ll:
+        return Fraction(0), False
+    pmm = (Fraction(1), False)
+    for k in range(1, m + 1):
+        kf = float(k)
+        pmm = ux_mul(pmm, ux_mul(ux_neg(s), ux(fsqrt(fdiv(2.0 * kf - 1.0, 2.0 * kf)))))
+    mf = float(m)
+    pmm = ux_mul(pmm, ux(fsqrt(fdiv(2.0 * mf + 1.0, 4.0 * PI))))
+    if ll == m:
+        return pmm
+    pmmp1 = ux_mul(ux_mul(x, ux(fsqrt(2.0 * mf + 3.0))), pmm)
+    if ll == m + 1:
+        return pmmp1
+    m_sq = mf * mf
+    a_prev = fsqrt(fdiv(4.0 * (mf + 1.0) * (mf + 1.0) - 1.0, (mf + 1.0) * (mf + 1.0) - m_sq))
+    pll = (Fraction(0), False)
+    for k in range(m + 2, ll + 1):
+        kf = float(k)
+        a = fsqrt(fdiv(4.0 * kf * kf - 1.0, kf * kf - m_sq))
+        inner = ux_sub(ux_mul(x, pmmp1), ux_div(pmm, ux(a_prev)))
+        pll = ux_mul(ux(a), inner)
+        pmm, pmmp1, a_prev = pmmp1, pll, a
+    return pll
+
+
+def m5_model(fn, v):
+    """The port's outputs under row 18 (finite parts, no error)."""
+    ident = lambda t: t                                  # noqa: E731
+    EPS0, MU0 = m5_consts()
+    inv_mu0 = fdiv(1.0, MU0)
+    if fn == "field::maxwell_stress_tensor":
+        e, b = v[0:3], v[3:6]
+        he, hb = ux_mul(HALF, fv_sumsq(*e)), ux_mul(HALF, fv_sumsq(*b))
+        out = []
+        for i in range(3):
+            for j in range(3):
+                p, qq = ux_mul(ux(e[i]), ux(e[j])), ux_mul(ux(b[i]), ux(b[j]))
+                t = ux_sub(p, he if i == j else ux(0.0))
+                u = ux_sub(qq, hb if i == j else ux(0.0))
+                out.append(("f", ux_fin(ux_add(ux_mul(ux(EPS0), t), ux_mul(ux(inv_mu0), u), ident))))
+        return out
+    if fn == "field::stress_tensor_force":
+        tt, n = v[0:9], v[9:12]
+        return ok3(tuple(ux_sum([ux_mul(ux(tt[3 * i + j]), ux(n[j])) for j in range(3)]) for i in range(3)))
+    if fn == "field::poynting_flux_surface":
+        cnt = int(v[0]) // 10
+        sm = v[1:1 + 10 * cnt]
+        terms = []
+        for j in range(cnt):
+            p = sm[10 * j:10 * j + 10]
+            dt = None
+            for k in range(3):
+                j1, j2 = (k + 1) % 3, (k + 2) % 3
+                ck = fv_cross1(p[j1], p[3 + j2], p[j2], p[3 + j1])
+                dk = ux_mul(ux_mul(ck, ux(inv_mu0)), ux(p[6 + k]))
+                dt = dk if k == 0 else ux_add(dt, dk)
+            terms.append(ux_mul(dt, ux(p[9])))
+        return [("f", ux_sum(terms))]
+    ll, m, cs = m5_charges(v)
+    ma = abs(m)
+    mf = ux(float(ma))
+    if fn == "field::multipole_moment":
+        terms = []
+        for j in range(len(cs) // 4):
+            q = ux(cs[4 * j])
+            c = m5_coords_ux(cs[4 * j + 1:4 * j + 4])
+            if c is None:
+                if ll == 0:
+                    terms.append(q)
+                continue
+            az = w_trig("cos" if m >= 0 else "sin", ux_mul(mf, c[3]))
+            pl = m5_legendre_ux(ll, ma, c[1], c[2])
+            terms.append(ux_mul(ux_mul(ux_mul(q, m5_rpow_ux(c[0], ll)), pl), az))
+        return [("f", ux_sum(terms))]
+    neg = ux(1.0 if ma % 2 == 0 else -1.0)
+    sp = ux(fsqrt(PI))
+    tr, ti = [], []
+    for j in range(len(cs) // 4):
+        q = ux(cs[4 * j])
+        c = m5_coords_ux(cs[4 * j + 1:4 * j + 4])
+        if c is None:
+            if ll == 0:
+                tr.append(ux_div(ux_mul(q, HALF), sp))
+            continue
+        w = ux_mul(ux_mul(q, m5_rpow_ux(c[0], ll)), m5_nlegendre_ux(ll, ma, c[1], c[2]))
+        ang = ux_mul(mf, c[3])
+        sv, cv = w_trig("sin", ang), w_trig("cos", ang)
+        if m >= 0:
+            tr.append(ux_mul(w, cv))
+            ti.append(ux_neg(ux_mul(w, sv)))
+        else:
+            g = ux_mul(neg, w)
+            tr.append(ux_mul(g, cv))
+            ti.append(ux_mul(g, sv))
+    return [("f", ux_sum(tr)), ("f", ux_sum(ti))]
+
+
+def m5_step(pos, f, h):
+    """One field-line step with an unbounded exponent: pos + h·F/|F|, each new position rounded once."""
+    mg = ux_sqrt(fv_sumsq(*f))
+    return tuple(ux_fin(ux_add(ux(pos[i]), ux_mul(ux(h), ux_div(ux(f[i]), mg)), lambda t: t)) for i in range(3))
+
+
+def m5_step_plain(f, h) -> bool:
+    """The trace's step guard on Rust's values: |F|² in the band, h < 2^1023, and each part F_i = 0 or v_i normal above
+    2^-1022, v_i = h·F_i/|F| for h ≤ 1 (then |F_i/|F|| ≥ |v_i|) and F_i/|F| for h > 1 (then |h·F_i/|F|| ≥ it)."""
+    ms = f[0] * f[0] + f[1] * f[1] + f[2] * f[2]
+    if not vx_band(ms) or h >= 2.0 ** 1023:
+        return False
+    mag = math.sqrt(ms)
+    return all(f[i] == 0.0 or 2.0 ** -1021 <= abs(h * (f[i] / mag) if h <= 1.0 else f[i] / mag) for i in range(3))
+
+
+def m5_trace_field(sid, p, pos, rust):
+    """The port's field for a trace scenario: the field function's row-18 model where its guard leaves Rust's chain,
+    else Rust's tokens (`rust`); and whether it was governed."""
+    if sid == 1:
+        fn, vv = "field::electric_field_point_charge", [p[0], p[1], p[2], p[3], *pos]
+    elif sid in (2, 8):
+        fn = "field::magnetic_dipole_field" if sid == 8 else "field::electric_dipole_field"
+        vv = [p[0], p[1], p[2], *pos]
+    elif sid == 3:
+        fn = "field::electric_field_superposition"
+        vv = [p[0], 0.0, 0.0, p[1], p[0], 0.0, 0.0, -p[1], -2.0 * p[0], 0.0, 0.0, 0.0, *pos]
+    else:
+        return rust, False
+    if not all(math.isfinite(x) for x in vv) or fv_governed(fn, vv) == 0:
+        return rust, False
+    return fv_model(fn, vv), True
+
+
 def fv_args(fn, v):
     """The parts a row-18 function's chain reads (None for the images)."""
     if fn in D4_FNS:
@@ -2162,6 +2629,14 @@ def fv_args(fn, v):
         return [v[0]] + v[1:10]
     if fn == "PointCharge::lorentz_force_in":
         return [v[0]] + v[5:8] + v[8:14]
+    if fn == "field::maxwell_stress_tensor":
+        return v[0:6]
+    if fn == "field::stress_tensor_force":
+        return v[0:12]
+    if fn == "field::poynting_flux_surface":
+        return v[1:1 + int(v[0])]
+    if fn in ("field::multipole_moment", "field::spherical_multipole_moment"):
+        return m5_charges(v)[2]
     return None
 
 
@@ -2172,6 +2647,8 @@ def fv_governed(fn, v) -> int:
         return 0 if (pc_model(fn, v) is SINGULAR or pc_plain(fn, v)) else 18
     if fn in D4_FNS:
         return 0 if (d4_model(fn, v) is SINGULAR or d4_plain(fn, v)) else 18
+    if fn in M5_FNS:
+        return 0 if m5_plain(fn, v) else 18
     if fn == "field::image_charge_plane":
         pz, z = v[4], v[3]
         return 18 if math.isfinite(pz) and abs(pz) >= 2.0 ** 1023 and math.isfinite(z) else 0
@@ -2214,6 +2691,8 @@ def fv_model(fn, v):
         return pc_model(fn, v)
     if fn in D4_FNS:
         return d4_model(fn, v)
+    if fn in M5_FNS:
+        return m5_model(fn, v)
     if fn == "FieldVector::magnitude":
         return [("f", ux_fin_sqrt(fv_sumsq(*v[0:3])))]
     if fn == "FieldVector::magnitude_sq":
@@ -2274,6 +2753,25 @@ def fv_rows(root: Path, module: str, path: Path):
         v = [b for _k, b in toks]
         if fn == "field::electric_field_superposition":
             v = v[1:]                                   # the charges' count token
+        if fn == "field::trace_field_line":
+            try:
+                EXACT_THR = True
+                res = TRACE_FN(v, toks, port=True)
+            finally:
+                EXACT_THR = False
+            model, gov, perr = res if isinstance(res, tuple) else (res, False, [])     # an error: no step ran
+            errs += [f"{module} row {n}: {e}" for e in perr]
+            if not gov:
+                if not toks_same(model, want):
+                    errs.append(f"{module} row {n}: {fn}: the port's trace {model} differs from Rust's {want} where "
+                                f"every step keeps Rust's chain")
+                continue
+            old = [(k, tok_text(b) if k == "s" else b) for k, b in (parse_tok(t) for t in outs.split(" "))]
+            if not toks_same(model, old):
+                out.append((fn, ins, wire(model), "18", f"oracle {outs}; ADR 0002 row 18"))
+            continue
+        if fn in M5_FNS and want[0][0] == "E":
+            continue                                    # an order error: no chain
         args = fv_args(fn, v)
         if args is not None and not all(isinstance(x, float) and math.isfinite(x) for x in args):
             continue                                    # a non-finite part keeps Rust's chain

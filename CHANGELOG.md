@@ -182,8 +182,21 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
   and disk axial fields and the sphere image run their chains with an unbounded exponent at a range edge. The sphere
   image decides `|r| > R` on the unbounded |r|. An 88-row edge grid maps 251 rows.
 
+- **Cyrius port, M1 part 5d-5 — the stress tensor's, the force's, the Poynting flux's, the multipoles' and the field
+  line's range edges** (ADR 0002 row 18, amended), which completes Part 5 and M1. Their chains run with an unbounded
+  exponent at a range edge, each result's last operation rounded once. The guards test Rust's own values: a box on
+  the stress tensor's parts, the band at each sum of the force and the flux, every product and quotient of the
+  multipoles' chains (the origin test exact, an azimuth below 2^-1022 as y/x), and each field-line step's direction
+  and h·F/|F|. A 204-row edge grid maps 166 rows.
+
 ### Fixed
 
+- **field** (ADR 0002 row 18, 5d-5): the stress tensor of E = (1e155, 1e155, 0) was NaN in all but one element (E²
+  overflowed, and its off-diagonal 0·∞); a force row whose products cancel past DBL_MAX was NaN for +0; E × B past
+  DBL_MAX made the Poynting flux ∞ where n̂ and ΔA bring it back to 7.96e5 W; a 1e300 C charge at z = 1e-170 had a
+  dipole moment of 0 (Rust's r underflowed to 0, the origin) for 1e130; P₁₇₀¹⁷⁰ past DBL_MAX times rˡ below 2^-1074
+  was NaN; and a field line past a 1e290 C charge was refused (kq/r³ = ∞, then ∞·0 = NaN) where its field is
+  finite.
 - **field** (ADR 0002 row 18, 5d-4): a DBL_MAX dipole's E_z was NaN (∞ − ∞) for −∞; the ring axis at z = 2^361 was 0
   (z³ overflowed); the disk axis at R = z = 2^-1022 was ∞; a charge at 1e-200 outside a sphere of 1e-210 was refused as
   inside (|r|² underflowed to 0).

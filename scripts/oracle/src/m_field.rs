@@ -416,7 +416,134 @@ pub fn emit() -> Module {
     emit_5d2(&mut m);
     emit_5d3(&mut m);
     emit_5d4(&mut m);
+    emit_5d5(&mut m);
     m
+}
+
+/// The stress tensor's, the force's, the Poynting flux's, the multipoles' and the field-line steps' range edges (bijli
+/// ADR 0002 row 18, M1 part 5d-5), appended: E and B whose squares or products leave the range though the elements
+/// don't (E² past DBL_MAX makes Rust's off-diagonal 0·∞); tensors and normals whose products over- or underflow;
+/// cross products past DBL_MAX or below 2^-1074 that the scaling, normal and area bring back; charges whose r², rˡ or
+/// P_l^m leave the range (a charge at 10^-170 that Rust's r = 0 puts at the origin), and an azimuth on the subnormal
+/// grid; and field-line steps whose direction or h·F/|F| leaves the range, or whose field does.
+fn emit_5d5(m: &mut Module) {
+    let tiny = f64::from_bits(1);
+    let fvs = |x: f64, y: f64, z: f64| FieldVector::new(x, y, z);
+    let ebs = [
+        (fvs(1e155, 1e155, 0.0), fvs(1.0, 0.0, 0.0)),
+        (fvs(1e160, 0.0, 0.0), fvs(0.0, 0.0, 0.0)),
+        (fvs(0.0, 0.0, 0.0), fvs(1e154, 1e154, 0.0)),
+        (fvs(1.0, 2.0, 3.0), fvs(1e-155, 3e-156, 0.0)),
+        (fvs(tiny, 0.0, 0.0), fvs(tiny, 0.0, 0.0)),
+        (fvs(2e-160, -1e-160, 3e-161), fvs(5e-158, 0.0, -2e-158)),
+        (fvs(pow2(-260), 0.0, pow2(-300)), fvs(0.0, pow2(240), 0.0)),
+        (fvs(1e-3, 0.0, 0.0), fvs(1e-160, 1e-160, 1e-160)),
+    ];
+    for (e, b) in ebs {
+        let t = maxwell_stress_tensor(&black_box(e), &b);
+        let tt: Vec<Tok> = t.iter().flat_map(|row| row.iter().map(|&x| f(x))).collect();
+        m.row("field::maxwell_stress_tensor", Class::A, &cat(&[v3(e), v3(b)]), &tt);
+    }
+    let tensors = [
+        [[1e200, -1e200, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]],
+        [[1e-200, 1e-200, 1e-200], [3e-200, -1e-200, 0.0], [0.0, 0.0, 7e-201]],
+        [[1e300, 1e300, 0.0], [1e300, -1e300, 1.0], [1.0, 1.0, 1.0]],
+        [[1e-160, 2e-160, -3e-160], [0.0, 0.0, 0.0], [5e-324, 1.0, 0.0]],
+    ];
+    let normals = [
+        fvs(1e200, 1e200, 0.0),
+        fvs(1e-120, 3e-121, 1e-120),
+        fvs(1e10, -1e10, 1.0),
+        fvs(1e-160, 0.0, -1e-160),
+    ];
+    for t in tensors {
+        for nv in normals {
+            let tt: Vec<Tok> = t.iter().flat_map(|row| row.iter().map(|&x| f(x))).collect();
+            m.row(
+                "field::stress_tensor_force",
+                Class::A,
+                &cat(&[tt, v3(nv)]),
+                &v3(stress_tensor_force(&black_box(t), &nv)),
+            );
+        }
+    }
+    let flux: [Vec<(FieldVector, FieldVector, FieldVector, f64)>; 6] = [
+        vec![(fvs(1e200, 0.0, 0.0), fvs(0.0, 1e200, 0.0), fvs(0.0, 0.0, 1e-200), 1e-200)],
+        vec![(fvs(1e-170, 0.0, 0.0), fvs(0.0, 1e-170, 0.0), fvs(0.0, 0.0, 1e100), 1.0)],
+        vec![
+            (fvs(1e200, 0.0, 0.0), fvs(0.0, 1e200, 0.0), fvs(0.0, 0.0, 1.0), 1.0),
+            (fvs(-1e200, 0.0, 0.0), fvs(0.0, 1e200, 0.0), fvs(0.0, 0.0, 1.0), 1.0),
+            (fvs(1.0, 0.0, 0.0), fvs(0.0, 1.0, 0.0), fvs(0.0, 0.0, 1.0), 0.5),
+        ],
+        vec![(fvs(3e-160, 1e-160, 0.0), fvs(-2e-160, 5e-161, 1e-160), fvs(1.0, 1.0, 1.0), 1e10)],
+        vec![(fvs(1.0, 2.0, 3.0), fvs(4.0, 5.0, 6.0), fvs(1e-300, 1e-300, 1e-300), 1e-30)],
+        vec![
+            (fvs(1e-3, 0.0, 0.0), fvs(0.0, 1e-3, 0.0), fvs(0.0, 0.0, 1.0), 1e-4),
+            (fvs(1e150, 0.0, 0.0), fvs(0.0, 1e160, 0.0), fvs(0.0, 0.0, 1e-5), 1e-5),
+        ],
+    ];
+    for samples in &flux {
+        let mut ins = vec![Tok::V(10 * samples.len())];
+        for (e, b, nv, da) in samples {
+            ins.extend(v3(*e));
+            ins.extend(v3(*b));
+            ins.extend(v3(*nv));
+            ins.push(f(*da));
+        }
+        m.row(
+            "field::poynting_flux_surface",
+            Class::A,
+            &ins,
+            &[f(poynting_flux_surface(black_box(samples)))],
+        );
+    }
+    let sets: [Vec<(f64, [f64; 3])>; 8] = [
+        vec![(1e300, [0.0, 0.0, 1e-170])],
+        vec![(1e-100, [1e200, 0.0, 0.0])],
+        vec![(1e300, [3.0, 1e-310, 0.0])],
+        vec![(1.0, [1e-3, 0.0, 0.0]), (-1.0, [0.0, 2e-3, 1e-3])],
+        vec![(1e300, [0.0, 0.0, 1e-20]), (2.0, [0.0; 3])],
+        vec![(1e-100, [0.0, 0.0, 1e30]), (-1e-100, [1e30, 1e30, 0.0])],
+        vec![(1e-6, [0.3, -0.4, 1e-160]), (tiny, [1.0, 1.0, 1.0]), (1e-6, [0.0; 3])],
+        vec![(1e10, [2e-160, -3e-160, 1e-160]), (1e10, [-1e-155, 0.0, 0.0])],
+    ];
+    let lms: [(u32, i32); 10] = [(0, 0), (1, 0), (1, 1), (1, -1), (2, -2), (3, 1), (12, 0), (16, -3), (20, 0), (170, 170)];
+    for cs in &sets {
+        for (l, mm) in lms {
+            let ins = cat(&[vec![crate::tsv::i(l), crate::tsv::i(mm)], charges_tok(cs)]);
+            m.row(
+                "field::multipole_moment",
+                Class::C,
+                &ins,
+                &res_f(multipole_moment(black_box(l), mm, cs)),
+            );
+            m.row(
+                "field::spherical_multipole_moment",
+                Class::C,
+                &ins,
+                &res_pair(spherical_multipole_moment(black_box(l), mm, cs)),
+            );
+        }
+    }
+    let cases: Vec<TraceCase> = vec![
+        (0, [0.0; 3], 1e300, 2, vec![3.0, 1e-310, 0.0]),
+        (0, [0.0; 3], 0.5, 3, vec![1e-160, 1e-160, 1e-160]),
+        (0, [0.0; 3], 0.75, 2, vec![3e-160, 4e-160, 1e-170]),
+        (0, [0.0; 3], 1.0, 2, vec![1e200, 3e199, 7e198]),
+        (0, [1.0, -1.0, 0.0], 0.5, 3, vec![1e200, 1e200, 0.0]),
+        (0, [0.0; 3], tiny, 3, vec![1.0, 0.0, 0.0]),
+        (0, [0.0; 3], 1e-300, 3, vec![1.0, 1e-20, -3e-21]),
+        (0, [1e-310, -0.0, 0.0], 1e-310, 4, vec![3.0, -4.0, 0.0]),
+        (0, [0.0; 3], 1e308, 3, vec![1.0, 1.0, 0.0]),
+        (0, [0.0; 3], 0.25, 2, vec![tiny, tiny, 0.0]),
+        (1, [1e-3, 0.0, 0.0], 1e-4, 4, vec![1e290, 0.0, 0.0, 0.0]),
+        (2, [1e100, 0.0, 1e100], 1e99, 3, vec![0.0, 0.0, 1e-30]),
+        (8, [0.0, 1e-160, 1e-160], 1e-161, 3, vec![1.0, 0.0, 0.0]),
+        (3, [1e150, 0.0, 1e150], 1e149, 2, vec![1e-9, 1e-3]),
+    ];
+    for case in cases {
+        trace_row(m, case);
+    }
 }
 
 /// The dipoles', the quadrupole's, the axes' and the sphere image's range edges (bijli ADR 0002 row 18, M1 part 5d-4),
@@ -1075,7 +1202,14 @@ fn emit_3c(m: &mut Module) {
         ),
         (0, [0.25, 1e20, -3.5e-7], 0.1, 3, vec![f64::NAN, 0.0, 0.0]),
     ];
-    for (id, start, step, max, params) in cases {
+    for case in cases {
+        trace_row(m, case);
+    }
+}
+
+/// One `field::trace_field_line` row (emit_3c's format).
+fn trace_row(m: &mut Module, (id, start, step, max, params): TraceCase) {
+    {
         let word = i64::from_ne_bytes(max.to_ne_bytes());
         let mut ins = vec![
             crate::tsv::i(id),
