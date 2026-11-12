@@ -1,7 +1,7 @@
 # bijli Rust → Cyrius port plan
 
-> **Plan of record** for porting bijli to Cyrius. Rust **1.3.0** will be the final Rust feature
-> release and the **reference implementation** (the oracle); the Cyrius port ships as **2.0.0**.
+> **Plan of record** for porting bijli to Cyrius. Rust **1.2.0** (tag `1.2.0`, commit `c95fd30`) is
+> the final Rust release and the **reference implementation** (the oracle); the Cyrius port ships as **2.0.0**.
 > The method is tanmatra's ([its ADR 0006](../../../tanmatra/docs/adr/0006-cyrius-port-with-rust-oracle.md),
 > [its port plan](../../../tanmatra/docs/development/tanmatra-port-plan.md)), as executed by impetus
 > ([its port plan](../../../impetus/docs/development/impetus-port-plan.md), finished 2026-11-10) and kimiya
@@ -9,12 +9,12 @@
 > says "as impetus" or "as kimiya", follow that document. §2 is the review of the Cyrius
 > language that every scope decision rests on; §3 lists what is different from the siblings.
 >
-> ▶ **Prep first (§5), then `cyrius port`.** Start on Cyrius 6.7.18, after 1.3.0 is committed and
-> tagged (§5 P1). Nothing in `src/` changes after the tag.
+> ▶ **Prep first (§5), then `cyrius port`.** Start on Cyrius 6.7.18. The oracle is tagged (§5 P1), and
+> nothing in `src/` changes after the tag.
 
 | Thing | Value | Source |
 |---|---|---|
-| Rust source (oracle) | bijli **1.3.0** (to be cut: 1.2.0 + the `[Unreleased]` 3D CPML). 8,589 code lines in `src/` (no tests, no comments, no blank lines), 19 files, 430 `pub fn`s, 827 `#[test]`s, 80 criterion benches, 1 example | `Cargo.toml`, `VERSION`, a line count of `src/` |
+| Rust source (oracle) | bijli **1.2.0**, tag `1.2.0` at `c95fd30` (2026-11-11), which includes the 3D CPML that the tagged CHANGELOG still lists under `[Unreleased]`. Never published: crates.io stops at 1.1.0. 8,589 code lines in `src/` (no tests, no comments, no blank lines), 19 files, 430 `pub fn`s, 827 `#[test]`s, 80 criterion benches, 1 example | `Cargo.toml`, `VERSION`, a line count of `src/` |
 | Rust health, 2026-11-11 on rustc 1.99.1 | ✅ `fmt --check`, clippy `-D warnings` (all features, all targets), rustdoc `-D warnings`, `cargo audit`, `cargo deny`. Tests: 830 unit, 26 integration and 2 doc tests pass in 6.2 s | local run |
 | Correctness baseline | The 1.2.0 audit of every module (CHANGELOG 1.2.0, *Breaking (behavioral)* and *Fixed*), plus the 3D CPML measured at −80 dB | `CHANGELOG.md` |
 | Cyrius toolchain | **6.7.18** (installed; still the newest) | `~/.cyrius/current` |
@@ -28,9 +28,9 @@
 
 ### 0.1 Carried from the earlier ports (no new decision needed)
 
-- **The oracle is frozen.** Rust 1.3.0 moves to `rust-old/` and is never edited. A generator
+- **The oracle is frozen.** Rust 1.2.0 moves to `rust-old/` and is never edited. A generator
   crate in `scripts/oracle/` drives it by path, as tanmatra and impetus do. A wrong oracle value
-  is fixed in Rust as 1.3.x and the corpus is regenerated.
+  is fixed in Rust as 1.2.x and the corpus is regenerated.
 - **Correct rounding is the accuracy target**, from the first milestone. This follows
   [kimiya ADR 0006](../../../kimiya/docs/adr/0006-correct-rounding-is-the-accuracy-target.md) and
   [impetus ADR 0011](../../../impetus/docs/adr/0011-correctly-rounded-exp-sin-cos.md); the user's ruling
@@ -99,7 +99,7 @@
 
 | # | Question | Recommendation | Alternative |
 |---|---|---|---|
-| D1 | Which Rust version is the oracle? | ✅ **Accepted 2026-11-11: cut 1.3.0** (with the 3D CPML) | — |
+| D1 | Which Rust version is the oracle? | ✅ **Settled 2026-11-11: the `1.2.0` tag at `c95fd30`.** It includes the 3D CPML, so no 1.3.0 is cut | — |
 | D2 | ~~`bridge.rs`~~ | **Settled by §2: ported, all 8 (M7).** They are dependency-free functions, and two partners (prakash, tanmatra) are already in Cyrius | — |
 | D3 | Rust mixes two time conventions (§4.4). Which **one** does the port use everywhere? | ✅ **Accepted 2026-11-11: e^{+jωt} (engineering) with IEEE handedness, in every module, in 2.0.0** (§4.4). Keeping Rust's split was wrong: the port removes Rust's faults instead of carrying them | e^{−iωt} everywhere: rejected (§4.4) |
 | D4 | ~~`ai`~~ | **Settled by §2: ported, in a `[lib.ai]` profile (M7)**, on prakash's model (sandhi + bayan) | — |
@@ -266,7 +266,7 @@ Surface parity (§8 gates) covers every `pub fn` and every `pub` method.
 These come from the roadmap's "2.0 cleanup (breaking)". Each row says how the harness still
 compares it, so no function leaves parity entirely.
 
-| # | Rust 1.3.0 | Cyrius 2.0.0 | Golden comparison |
+| # | Rust 1.2.0 | Cyrius 2.0.0 | Golden comparison |
 |---|---|---|---|
 | 1 | three deprecated functions | removed | through their replacements |
 | 2 | public FDTD grid fields (`ex`, `ez`, `nx`, …), with a per-step layout check because callers can resize them | the buffers are fixed at construction and read through accessors (pointer + length); nothing can resize them, so the per-step layout check and its `tracing::error` path go | class T on the accessors. The Rust layout-mismatch tests are n/a |
@@ -278,7 +278,7 @@ compares it, so no function leaves parity entirely.
 
 ### 4.4 One time convention (D3)
 
-Rust 1.3.0 mixes the two harmonic time conventions, module by module, and in `fdtd.rs` within one
+Rust 1.2.0 mixes the two harmonic time conventions, module by module, and in `fdtd.rs` within one
 file:
 
 | Rust module | Convention | Where it shows |
@@ -331,39 +331,66 @@ These steps run on the Rust tree. They end in a Rust-side **"port plan" commit**
 tanmatra (`2febf11`), impetus (`a26296b`) and kimiya (`6281f19`) each landed before their
 initial-port commit.
 
-- **P0. Read this plan and settle D1, D3 and D5** (§0.3; D2 and D4 are settled by §2). Done 2026-11-11: D1 1.3.0, D3 e^{+jωt}, D5 derive writers with hand-written readers. Record the answers in ADR 0001 / 0002 drafts.
-- **P1. Cut the oracle release.** *Maintainer action.*
-  - Move `[Unreleased]` to `[1.3.0] — <date>`. Bump `VERSION` and `Cargo.toml` with
-    `scripts/version-bump.sh`.
-  - Run the full P(-1) gate on that commit: `cargo fmt --check`; clippy
-    `--all-features --all-targets -D warnings`; `cargo test --all-features`;
-    `RUSTDOCFLAGS="-D warnings" cargo doc`; `cargo audit`; `cargo deny check`; and
-    **`make features`**, which builds every feature on its own (1.2.0's per-feature isolation).
-  - Commit and tag `1.3.0`. The release workflow requires the tag to equal `VERSION`.
-  - **Also check that the 1.2.0 tag exists on GitHub.** The local clone has `0.24.3`, `1.0.0`,
-    `1.0.1` and `1.1.0`, but not `1.2.0`.
+- **P0. Read this plan and settle D1, D3 and D5** (§0.3; D2 and D4 are settled by §2). Done 2026-11-11: D1 the 1.2.0 tag, D3 e^{+jωt}, D5 derive writers with hand-written readers. Record the answers in ADR 0001 / 0002 drafts.
+- **P1. Tag the oracle.** ✅ *Done 2026-11-11.* There had been no 1.2.0 tag, so the maintainer
+  tagged `c95fd30` (HEAD, `origin/main`) as `1.2.0`. `VERSION` and `Cargo.toml` both read 1.2.0,
+  which is what the release workflow checks.
+  - **The full P(-1) gate is green on the tagged tree.** `src/`, `tests/`, `benches/` and the
+    manifests are byte-identical to `1e0a889`, where `cargo fmt --check`, clippy
+    `--all-features --all-targets -D warnings`, `cargo test --all-features` (830 unit, 26
+    integration, 2 doc), `RUSTDOCFLAGS="-D warnings" cargo doc`, `cargo audit` and
+    `cargo deny check` passed. `make features` (each of the 16 features alone, plus
+    no-default) passed on `c95fd30` itself.
+  - **The 3D CPML is in 1.2.0.** The tagged CHANGELOG still lists it under `[Unreleased]`. On
+    `main` the entry is folded into `[1.2.0]` (dated 2026-11-11, the tag's date); the tag itself
+    keeps the old text unless it is re-tagged.
+  - crates.io stops at 1.1.0, so the tag is the only 1.2.0 there is.
 - **P2. Decide on oracle hooks: none planned.** impetus needed a hidden `oracle` feature to see
   state its API hid. bijli's API already shows almost everything:
   - the FDTD field arrays are public;
   - Mie's `a`/`b` coefficients are public;
   - class T starts every run at t = 0 (§3 item 2), so no mid-run state has to be loaded.
 
-  Add a `#[doc(hidden)]` `oracle` feature in 1.3.1 only if an M0 probe shows a need. The likely
+  Add a `#[doc(hidden)]` `oracle` feature in 1.2.1 only if an M0 probe shows a need. The likely
   candidates are the CPML σ/κ/α profile coefficients (`cpml_coefficients`) and the private Mur
   coefficient.
 - **P3. Record the oracle's environment** in the plan's header table and in ADR 0001:
   - rustc 1.99.1, glibc 2.44 (Rust std's libm), Rust hisab 1.4.0 (`Complex`);
   - the `Cargo.lock` at the tag.
-  - **Which calls actually reach glibc** in the generator's build profile. Release LLVM rewrites
-    some calls: `2.0.powf(y)` becomes `exp2`, as kimiya's `port-parity.md` records, and
-    constant arguments fold at compile time. List each `powf`/`powi`/`exp` site with what the
-    optimized oracle executes.
+  - **Which calls actually reach glibc** in the generator's build profile. ✅ *Done 2026-11-11.*
+    Method: every non-test call site in `src/`, then a disassembly of the release unit-test and
+    bench binaries (`objdump -d`), with each libm call attributed to its calling function.
+    - **glibc symbols reached:** `sin`, `cos`, `sincos`, `exp`, `pow`, `atan`, `atan2`, `asin`,
+      `acos`, `hypot`, `log10`, `cbrt`. (`sinh` is reached only from tests; `log` in the bench
+      binary is criterion's.)
+    - **`sin` + `cos` of one argument become one `sincos` call** (`nf2ff_2d_phasor`, `mie`,
+      `parse_touchstone`, the multipoles, `single_stub_match_complex`). glibc 2.44's `sincos`
+      equals separate `sin` and `cos` bit for bit: 0 mismatches over 399,944 arguments in four
+      ranges, checked through `ctypes`. So the corrected oracle treats it as two calls.
+    - **`10.0_f64.powf(v1 / 20.0)` (`rf.rs:1247`, Touchstone dB) stays `pow`.** `parse_touchstone`
+      calls `pow@GLIBC_2.29`; there is no `exp10` rewrite. bijli has no `2.0.powf` site.
+    - **`powi` with a runtime exponent** (`beam.rs:643`, `fdtd.rs:4664`, `field.rs:934`) reaches
+      compiler-rt's `__powidf2`, not glibc. Constant exponents expand inline instead. Both are
+      square-and-multiply in the same order, and `_bj_powi` copies that order (class B).
+    - **Constant folding:** with constant arguments LLVM folds `asin`, `acos`, `tan` and `cbrt`
+      at compile time (none of their calls survive in the test binary). **The generator must feed
+      every input at run time** (from its grids, through `std::hint::black_box`), so each golden
+      row is what glibc computes at run time.
 - **P4. Take a quiet Rust bench baseline at the tag.** Run `./scripts/bench-history.sh` on an
-  idle machine; the 2026-11-10T04:57 row ran under load. That run is the Rust column of
-  `docs/benchmarks-rust-v-cyrius.md`: 80 benches, including `fdtd/3d_step_30x30x30_cpml8`.
-- **P5. Tidy what will move.**
-  - `target/` is 5.5 GB, ignored and untracked. `cyrius port` moves it into `rust-old/target/`.
-    Either `cargo clean` first, or accept the move and ignore `/rust-old/target/`.
+  idle machine. That run is the Rust column of `docs/benchmarks-rust-v-cyrius.md`: 80 benches,
+  including `fdtd/3d_step_30x30x30_cpml8`.
+  - ✅ **Done 2026-11-11 (maintainer's choice): the `2026-11-12T03:15:21Z` row at `c95fd30` is the
+    Rust column.** It ran under load: kimiya's `cr_verify.py` and wine gate jobs, at a load
+    average of about 2.6. Median CI width 0.8 %, p90 4.2 %, maximum 13 %;
+    `fdtd/3d_step_30x30x30_cpml8` read 495 µs against 452 µs quiet.
+  - The Rust-vs-Cyrius ratios carry that caveat. `docs/benchmarks-rust-v-cyrius.md` states it in
+    its header, and a ratio within the Rust row's own CI width is read as parity, not as a
+    finding.
+  - Before Cyrius bench runs, check `ps` for other repos' gates and benches, not only the load
+    average.
+- **P5. Tidy what will move.** ✅ *Done 2026-11-11.*
+  - `target/` (5.8 GiB) was removed with `cargo clean`, so `cyrius port` has no build cache to
+    move. The generator builds `rust-old/` into its own target directory at M0.
   - No tracked build output, unlike impetus's `fuzz/target/`.
   - `.claude/` is ignored. Nothing else needs untracking.
 - **P6. Pre-stage what the scaffold will overwrite.** `cyrius port` 6.7.18 still overwrites
@@ -373,18 +400,13 @@ initial-port commit.
   after the scaffold. Draft the merged CLAUDE.md now (§6 step 2) so the repair is a paste.
 - **P7. Draft ADRs 0001 and 0002.**
   - bijli has no `docs/adr/` yet, so start directly in the scaffold's four-digit form.
-  - [0001 — Port to Cyrius with Rust 1.3.0 frozen as the oracle](../adr/0001-cyrius-port-with-rust-oracle.md)
+  - [0001 — Port to Cyrius with Rust 1.2.0 frozen as the oracle](../adr/0001-cyrius-port-with-rust-oracle.md)
     is drafted with this plan.
   - 0002, the §4.3 API divergences, is written at M0 step 2.
-- **P8. Check upstream readiness.**
-  - Is a Cyrius newer than 6.7.18 out? If so, read its `ecosystem-migration.md` entries and
-    decide the pin.
-  - Re-read the open issues in §1. A fixed small-struct `Result` bug or scoped allocator (S1)
-    changes §9.3 and §9.5.
-- **P9. Land the "port plan" commit:** this file, the ADR 0001 draft, and the roadmap's pointer
+- **P8. Land the "port plan" commit:** this file, the ADR 0001 draft, and the roadmap's pointer
   to this plan. No `src/` change.
 
-**Gate for P:** 1.3.0 tagged and green; D1, D3 and D5 answered; the bench baseline recorded; the port
+**Gate for P:** 1.2.0 tagged and green ✅; D1, D3 and D5 answered; the bench baseline recorded; the port
 plan commit landed.
 
 ---
@@ -413,7 +435,7 @@ plan commit landed.
      `test --bounds`, `bench`, `vet`, `lint`, `fmt --check`, `distlib --check`, `deps --locked`
      and `audit`.
    - **Roadmap**: restore from git, then add the port section. **`state.md`**: write it for
-     1.3.0 → 2.0.0-dev.
+     1.2.0 → 2.0.0-dev.
    - **Workflows**: keep the scaffold's `release.yml`, which is identical in all three siblings.
      Take impetus's `ci.yml`, with `test --bounds`, `deps --locked`, `audit`, the ledger,
      bench-twin and doc-example checks on from the start, plus an **`[lib.ai]` profile job**
@@ -568,7 +590,7 @@ Rules:
 - **Never widen a class to make a row pass** (as tanmatra). A failure is one of three things:
   - a port defect;
   - a Cyrius or ganita defect, which is filed upstream;
-  - an oracle defect, which is fixed in Rust 1.3.x and regenerated.
+  - an oracle defect, which is fixed in Rust 1.2.x and regenerated.
 
   The only exception is a divergence accepted by ADR, and the harness still reports it by name.
 - **A class T digest mismatch is never "close enough".** Bisect to the first frame and cell that
@@ -663,7 +685,7 @@ The maintainer does all git. A Part ends by asking whether to commit it.
 
 ### 9.1 Math functions
 
-Every std f64 method in `src/` outside tests, at 1.2.0 + `[Unreleased]`:
+Every std f64 method in `src/` outside tests, at the `1.2.0` tag:
 
 | Rust (calls) | Cyrius | Parity |
 |---|---|---|
@@ -785,7 +807,7 @@ Each one gets an issue in the owning repo, with the probe or benchmark that show
 - **G4.** Hermite H_n and generalized Laguerre L_p^l polynomials (`beam`).
 - **G5.** Complex values without a heap allocation per result (hisab D011; impetus's H1/H9).
 
-**Cyrius stdlib / compiler** (re-check each at P8; add any new ones the probes find)
+**Cyrius stdlib / compiler** (all open; add any new ones the probes find)
 - `cyrius port` overwriting docs (open, 2026-11-08). Add a ✚ to the issue for bijli.
 - The small-struct `Result` payload bug (open, 2026-11-08): it hits every complex-valued
   `Result`.
@@ -834,7 +856,7 @@ Each one gets an issue in the owning repo, with the probe or benchmark that show
 
 | Milestone | Status | Golden rows | Reference tests | Benches | Notes |
 |---|---|---|---|---|---|
-| P Prep | ☐ | | | | D1–D5 answered 2026-11-11; the 1.3.0 tag, bench baseline and P2–P8 remain |
+| P Prep | ◐ | | | 80 (Rust, 2026-11-12T03:15, under load) | D1–D5 answered; 1.2.0 tagged and green; P3, P4, P5 done (2026-11-11); P6 is done at the scaffold; the commit remains |
 | M0 Initialize | ☐ | | | | |
 | M1 Foundation | ☐ | | | | |
 | M2 Media, waves, circuits, relativity | ☐ | | | | |

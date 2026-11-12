@@ -6,11 +6,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
 
-### Added
-
-- **fdtd**: CPML absorbing boundaries for `Fdtd3d` — `try_enable_cpml`, `try_enable_cpml_with`, `disable_cpml`, `cpml` (same validation as 2D: thickness ≥ 1 and `2·t + 3 ≤ min(nx, ny, nz)`; errors leave the boundaries unchanged). Roden–Gedney CPML on all six faces, including edges and corners: 12 Ψ fields (one per field component and normal derivative) stored only in the face slabs, with κ scaling and b/c profiles at the integer (E) / half-cell (H) Yee positions, applied as corrections after the main loops so the PEC path is unchanged. Measured against a 53³ PEC reference grid at 8 probes (faces, edge, corner) for a 10-cell layer: −80 dB (classic), −77 dB (CFS, κ_max = 3). Energy falls to 2e-8 of its peak once the pulse has left (PEC box: ≈ 0.1). Cost (new bench `fdtd/3d_step_30x30x30_cpml8`): 452 µs vs 298 µs for `fdtd/3d_step_30x30x30` (+51%, 15 s criterion run — the 8-cell slabs cover over half of a 30³ grid)
-
-## [1.2.0] — 2026-11-09
+## [1.2.0] — 2026-11-11
 
 Toolchain/dependency refresh plus a full physics and robustness audit of every module.
 No public signatures were changed or removed; APIs whose correct answer did not fit
@@ -121,6 +117,7 @@ Migration notes for consumers (kiran, joshua, prakash):
 
 ### Added
 
+- **fdtd**: CPML absorbing boundaries for `Fdtd3d` — `try_enable_cpml`, `try_enable_cpml_with`, `disable_cpml`, `cpml` (same validation as 2D: thickness ≥ 1 and `2·t + 3 ≤ min(nx, ny, nz)`; errors leave the boundaries unchanged). Roden–Gedney CPML on all six faces, including edges and corners: 12 Ψ fields (one per field component and normal derivative) stored only in the face slabs, with κ scaling and b/c profiles at the integer (E) / half-cell (H) Yee positions, applied as corrections after the main loops so the PEC path is unchanged. Measured against a 53³ PEC reference grid at 8 probes (faces, edge, corner) for a 10-cell layer: −80 dB (classic), −77 dB (CFS, κ_max = 3). Energy falls to 2e-8 of its peak once the pulse has left (PEC box: ≈ 0.1). Cost (new bench `fdtd/3d_step_30x30x30_cpml8`): 452 µs vs 298 µs for `fdtd/3d_step_30x30x30` (+51%, 15 s criterion run — the 8-cell slabs cover over half of a 30³ grid)
 - **fdtd**: `CpmlParams` (thickness, grading order, σ_max/σ_opt ratio, κ_max, CFS α_max), `Cpml::with_params`, `Cpml::{sigma_max, kappa_max, alpha_max, grading_order}`
 - **fdtd**: `Fdtd2d::{try_enable_cpml, try_enable_cpml_with, disable_cpml, cpml, set_conductivity}`, `Fdtd3d::{set_conductivity, set_permeability}`
 - **fdtd**: `nf2ff_2d_phasor` — frequency-domain NF2FF from `CwAccumulator` phasors (validated against the exact Hankel-function line source to 0.4%)

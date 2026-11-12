@@ -1,7 +1,7 @@
-# 0001 — Port to Cyrius, with Rust 1.3.0 frozen as the parity oracle
+# 0001 — Port to Cyrius, with Rust 1.2.0 frozen as the parity oracle
 
 **Status**: Proposed. It is accepted at M0 step 2 of the [port plan](../development/bijli-port-plan.md),
-now that plan §0.3's decisions are answered (2026-11-11): D1 cut 1.3.0; D3 e^{+jωt} with IEEE
+now that plan §0.3's decisions are answered (2026-11-11): D1 the `1.2.0` tag at `c95fd30`, which includes the 3D CPML; D3 e^{+jωt} with IEEE
 handedness; D5 derive writers with hand-written readers.
 **Date**: 2026-11-11
 
@@ -16,10 +16,10 @@ Each freezes an audited Rust release as the oracle and compares the port against
 value. Two of bijli's partners are already in Cyrius: prakash, and tanmatra, which has deferred
 its bijli bridge until bijli ports.
 
-bijli 1.2.0 audited and repaired every module. The `[Unreleased]` 3D CPML is measured at −80 dB.
-The Rust tree is green on rustc 1.99.1: fmt, clippy `-D warnings`, rustdoc, audit and deny pass,
-and the 830 unit, 26 integration and 2 doc tests pass. So once it is tagged, it can serve as the
-oracle.
+bijli 1.2.0 audited and repaired every module, and it includes the 3D CPML, measured at −80 dB.
+It is tagged `1.2.0` at `c95fd30` (2026-11-11). The tagged tree is green on rustc 1.99.1: fmt,
+clippy `-D warnings`, rustdoc, audit, deny and `make features` all pass, as do the 830 unit, 26
+integration and 2 doc tests. So it can serve as the oracle.
 
 bijli differs from the siblings in ways that shape the decision:
 - **Its only hisab use is `hisab::num::Complex`**, and Cyrius hisab's complex type differs from
@@ -33,7 +33,7 @@ bijli differs from the siblings in ways that shape the decision:
 
 ## Decision
 
-bijli 2.0.0 is a Cyrius library. Rust **1.3.0** is frozen in `rust-old/` as the parity oracle,
+bijli 2.0.0 is a Cyrius library. Rust **1.2.0** (tag `1.2.0`, `c95fd30`) is frozen in `rust-old/` as the parity oracle,
 and nothing in it is edited.
 
 - **Initialization.** Start with `cyrius port` on Cyrius 6.7.18, after the prep in plan §4.
@@ -85,7 +85,7 @@ and nothing in it is edited.
     met.
 - **Neutral**
   - The generator drives `rust-old/` by path from `scripts/oracle/`, so the oracle itself is never
-    modified. A wrong oracle value is fixed in Rust 1.3.x and the corpus is regenerated.
+    modified. A wrong oracle value is fixed in Rust 1.2.x and the corpus is regenerated.
   - Cargo features become `[lib]` plus a `[lib.ai]` profile.
 
 ## Alternatives considered
@@ -95,8 +95,8 @@ and nothing in it is edited.
 - **Defer the soorat integration and drop `WgpuBackend`, as the siblings deferred theirs.**
   Rejected after the language review: the soorat module has no soorat dependency (goonj ported
   its own), and the scaffold is one struct and one function.
-- **Port from 1.2.0 and carry the 3D CPML as Cyrius-only work.** Rejected: it leaves the newest
-  and hardest code (12 Ψ slabs, edges and corners) without an oracle.
+- **Leave the 3D CPML out of the oracle and carry it as Cyrius-only work.** Rejected: it leaves the
+  newest and hardest code (12 Ψ slabs, edges and corners) without an oracle.
 - **Use Cyrius hisab's `cx_*` for complex values.** Rejected: its results differ from the
   oracle's formulas, and it allocates per operation inside Mie and NF2FF loops.
 - **Keep bijli in Rust.** Rejected: its Cyrius consumers would need a foreign-function bridge
