@@ -264,6 +264,35 @@ pub fn emit() -> Module {
             &res_v(coulomb_force(black_box(&q1), &q2)),
         );
     }
+    // Row 18's coulomb_force edges (M1 part 5d-3): k·q₁·q₂ past DBL_MAX or below 2^-1022 while the force is
+    // representable, and offsets past DBL_MAX.
+    for (q1, q2, a, b) in [
+        (1e200, 1e200, [1e100, 0.0, 0.0], [0.0; 3]),
+        (1e-200, 1e-200, [1e-100, 0.0, 0.0], [0.0; 3]),
+        (1e-200, -1e200, [0.0, 3e-5, 4e-5], [0.0; 3]),
+        (1e-6, 1e-6, [f64::MAX, 0.0, 0.0], [-f64::MAX, 0.0, 0.0]),
+        (0.0, 1e-6, [f64::MAX, 0.0, 0.0], [-f64::MAX, 0.0, 0.0]),
+        (1e300, 1e10, [1e-3, 0.0, 0.0], [0.0; 3]),
+    ] {
+        let p1 = PointCharge {
+            charge: q1,
+            mass: 1.0,
+            position: a,
+            velocity: [0.0; 3],
+        };
+        let p2 = PointCharge {
+            charge: q2,
+            mass: 1.0,
+            position: b,
+            velocity: [0.0; 3],
+        };
+        m.row(
+            "charge::coulomb_force",
+            Class::A,
+            &cat(&[pc(&p1), pc(&p2)]),
+            &res_v(coulomb_force(black_box(&p1), &p2)),
+        );
+    }
     // Row 18's edge grid (M1 part 5d-2): the Lorentz force where v × B or E + v × B leaves the normal range, over
     // m_field.rs's edge vectors.
     let ev = edge_vectors();

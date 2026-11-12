@@ -171,8 +171,17 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
   difference in [2^-900, DBL_MAX] is already the unbounded chain's. `normalized` is now exactly scale-invariant. A
   520-row edge grid maps 294 rows.
 
+- **Cyrius port, M1 part 5d-3 — the point charges' and Green's functions' range edges** (ADR 0002 row 18, amended).
+  The point charge's E and V, the moving charge's B, superposition (each field kept to 53 bits, the last addition
+  rounded once), `coulomb_force` and both Green's functions run their chains with an unbounded exponent at a range
+  edge. The guards test Rust's own values. The new generated `src/crmath_ux_data.cyr` holds 2,688 bits of 2/π for a
+  Green's kR past DBL_MAX. A 263-row edge grid maps 251 rows.
+
 ### Fixed
 
+- **field, charge** (ADR 0002 row 18, 5d-3): E of 1.1e90 C at 1e200 m underflowed in Rust's kq/r³ (9.89e-301 is
+  representable), k·q₁·q₂ of two 1e200 C charges overflowed (the force at 1e100 m is 8.99e209), superposed fields past
+  DBL_MAX that cancel gave NaN, 1/(4π·1e308) gave 0, and the scalar Green's function with kR past DBL_MAX gave NaN.
 - **field, charge** (ADR 0002 row 18): |2^600·(3, 4, 12)| was ∞, a cross component 2^1100 − 2^1100 was NaN, the
   plane image of a charge at DBL_MAX in z_p = DBL_MAX was ∞, and the dielectric image with ε₁ + ε₂ past DBL_MAX was −0
   for −0.2q. `normalized` rescaled at an edge with two more roundings, an ulp off its own formula on the subnormal grid.

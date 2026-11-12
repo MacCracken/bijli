@@ -138,38 +138,6 @@ fn _bj_cx_arg_ux(g: f64, re: f64, im: f64): (f64, i64) {
     return (qs, qe);
 }
 
-# cos t to 53 bits, for the 53-bit t = ts·2^te: 1 below 2^-1022 (and at 0); past DBL_MAX by _bj_ux_sin_cos; else the
-# double t's correctly rounded cosine (binary64's rounding of a normal value is the 53-bit one).
-#must_use
-fn _bj_cx_cos_ux(ts: f64, te): (f64, i64) {
-    if (ts == 0.0 || te < 0 - 1022) { return (1.0, 0); }
-    if (te > 1023) {
-        var cb: f64 = _bj_ux_sin_cos(ts, te, 0);
-        var bs, be = _bj_k_ux_from(cb);
-        return (bs, be);
-    }
-    var t: f64 = _bj_k_ux_round(ts, te, 0.0);
-    var c: f64 = _bj_cos(t);
-    var s, e = _bj_k_ux_from(c);
-    return (s, e);
-}
-
-# sin t to 53 bits, for the 53-bit t = ts·2^te: t itself below 2^-1022 (sin t = t(1 − t²/6) rounds to t; ±0 keeps
-# its sign); past DBL_MAX by _bj_ux_sin_cos; else the double t's correctly rounded sine.
-#must_use
-fn _bj_cx_sin_ux(ts: f64, te): (f64, i64) {
-    if (ts == 0.0 || te < 0 - 1022) { return (ts, te); }
-    if (te > 1023) {
-        var sb: f64 = _bj_ux_sin_cos(ts, te, 1);
-        var bs, be = _bj_k_ux_from(sb);
-        return (bs, be);
-    }
-    var t: f64 = _bj_k_ux_round(ts, te, 0.0);
-    var sn: f64 = _bj_sin(t);
-    var s, e = _bj_k_ux_from(sn);
-    return (s, e);
-}
-
 # z^n = from_polar(|z|^n, n·arg z) with an unbounded exponent, for the 53-bit |z| = as·2^ae (positive, normal) and a
 # finite n: |z|^n by _bj_ux_pow, arg z by _bj_cx_arg_ux, their product n·arg to 53 bits, its cosine and sine, each
 # polar product rounded once.
@@ -179,8 +147,8 @@ fn _bj_cx_powf_edge(as: f64, ae, n: f64, g: f64, re: f64, im: f64): BjComplex {
     var gs, ge = _bj_cx_arg_ux(g, re, im);
     var ns, ne = _bj_k_ux_from(n);
     var ts, te = _bj_k_ux_mul(gs, ge, ns, ne);
-    var cs, ce = _bj_cx_cos_ux(ts, te);
-    var ss, se = _bj_cx_sin_ux(ts, te);
+    var cs, ce = _bj_vx_cos53(ts, te);
+    var ss, se = _bj_vx_sin53(ts, te);
     var wr: f64 = _bj_k_ux_mul_f64(ps, pe, cs, ce);
     var wi: f64 = _bj_k_ux_mul_f64(ps, pe, ss, se);
     var w: BjComplex;

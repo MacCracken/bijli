@@ -427,8 +427,16 @@ def ux_families(rng, count):
             pe = split53(W("pow", Fraction(s1) * Fraction(2) ** e1, y))
         pair("ux_pow", [s1, e1, y], pe)
     for i in range(count):
-        if i % 2:
+        if i % 4 == 1:
             ts, te = rng.uniform(1.0, 2.0) * sign(), rng.choice([1024, 1025])
+        elif i % 4 == 3:                                      # the Green's function's k·R, up to 2^2052
+            ts, te = rng.uniform(1.0, 2.0) * sign(), rng.randint(1024, 2052)
+        elif i % 4 == 2:
+            kk = rng.uniform(1.0, 2.0) * 2.0 ** rng.randint(500, 1023)
+            rr = Fraction(rng.uniform(1.0, 2.0)) * Fraction(2) ** rng.randint(524, 1025)
+            ts, te = split53(rnd53_frac(Fraction(kk) * rr))
+            if te < 1024:
+                continue
         else:                                                 # powf's angle: RN53(arg·n) past DBL_MAX
             g = rng.choice([math.pi, -math.pi, 3.0 * math.pi / 4.0, math.pi / 2.0, 2.5, 3.1])
             n = rng.uniform(5.8e307, 1.7976931348623157e308) * sign()

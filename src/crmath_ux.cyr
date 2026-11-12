@@ -1,15 +1,16 @@
 # crmath_ux.cyr — e^x, cosh, sinh, ln(s·2^E), (s·2^E)^y, and sin and cos past DBL_MAX, each with an unbounded
 # exponent (bijli, M1 part 5c-2), for BjComplex's transcendental range edges (ADR 0002 row 16).
 #
-# At a range edge hisab's chain runs with an unbounded exponent (the user's decision of 2026-11-12, ADR 0002 rows 14
-# and 16): every operation rounded to 53 bits, the last one once into binary64. The transcendental operations of that
-# chain that can leave binary64's normal range are e^re in complex exp, cosh and sinh of im in complex sin and cos,
-# ln and pow of an |z| (or a power) past DBL_MAX or below 2^-1022, and sin and cos of powf's angle n·arg z past
-# DBL_MAX. Each returns its 53-bit value as kimiya's _bj_k_ux_* pair (s in [1, 2), an i64 exponent), or ln, sin and
-# cos their final binary64 value (always normal). Every one runs on src/crmath.cyr's 364-bit fixed point (impetus's
-# slow paths, error below 2^-290 relative): e^x by _bj_cr_exp_fx_parts (x = k·ln 2 + r, e^r by its series), ln by
-# _bj_cr_log_fx plus E·ln 2, pow as pow's own slow path (an exactness test, then |y|·|ln x| and e^±), sin and cos by
-# Payne–Hanek against the same 2/π bits. They are slow (tens of microseconds), and only the edges reach them.
+# At a range edge hisab's chain runs with an unbounded exponent (the user's decision of 2026-11-12, ADR 0002 rows 14 and
+# 16): every operation rounded to 53 bits, the last one once into binary64. The transcendental operations of that chain
+# that can leave binary64's normal range are e^re in complex exp, cosh and sinh of im in complex sin and cos, ln and pow
+# of an |z| (or a power) past DBL_MAX or below 2^-1022, and sin and cos of an angle past DBL_MAX (powf's n·arg z; the
+# Green's function's k·R, M1 part 5d-3). Each returns its 53-bit value as kimiya's _bj_k_ux_* pair (s in [1, 2), an i64
+# exponent), or ln, sin and cos their final binary64 value (always normal). Every one runs on src/crmath.cyr's 364-bit
+# fixed point (impetus's slow paths, error below 2^-290 relative): e^x by _bj_cr_exp_fx_parts (x = k·ln 2 + r, e^r by
+# its series), ln by _bj_cr_log_fx plus E·ln 2, pow as pow's own slow path (an exactness test, then |y|·|ln x| and e^±),
+# sin and cos by Payne–Hanek against a longer table of the same 2/π (src/crmath_ux_data.cyr). They are slow (tens of
+# microseconds), and only the edges reach them.
 #
 # The rounding. _bj_cr_round_ux takes the fixed point's 53 leading bits, the round bit and the sticky bit, ties to
 # even, with no exponent range. A value within 2^-290 of a rounding boundary would need an argument far harder than
@@ -245,9 +246,11 @@ fn _bj_ux_pow(s: f64, ex, y: f64): (f64, i64) {
 }
 
 # Y = (t·2/π mod 1)·π/2 in fixed point, and the quadrant floor(t·2/π) mod 4, for t = m·2^e with m < 2^54 and
-# e ≤ 973 (a 53-bit value below 2^1026): _bj_cr_reduce's body with m and e given, for powf's angle past DBL_MAX
-# (_bj_cr_reduce takes a double; src/crmath.cyr is impetus's copy). The 2/π chunks it reads end at index 50 of 56.
+# e ≤ 2000 (a 53-bit value below 2^2054): _bj_cr_reduce's body with m and e given, for an angle past DBL_MAX (powf's
+# n·arg z, the Green's function's k·R), against src/crmath_ux_data.cyr's 96 chunks of 2/π (_bj_cr_reduce takes a
+# double and impetus's 56 chunks; src/crmath.cyr is impetus's copy). The chunks it reads end at index 88.
 fn _bj_ux_reduce(Y, m, e): i64 {
+    _bj_ux_load();
     var u = ((e - 2) % 28 + 28) % 28;
     var t = e - 2 - u;
     var d = e - t;
@@ -267,8 +270,8 @@ fn _bj_ux_reduce(Y, m, e): i64 {
         for (var kk = 0; kk < 3; kk = kk + 1) {
             var jj = kk + f - 1;
             var idx = base + jj;
-            if (jj >= 0 && idx >= 0 && idx < 56) {
-                sum = sum + load64(&mk + kk * 8) * load64(&_bj_cr_2opi + idx * 8);
+            if (jj >= 0 && idx >= 0 && idx < 96) {
+                sum = sum + load64(&mk + kk * 8) * load64(&_bj_ux_2opi + idx * 8);
             }
         }
         store64(&col + f * 8, sum);
@@ -288,7 +291,7 @@ fn _bj_ux_reduce(Y, m, e): i64 {
 }
 
 # sin t (want_sin 1) or cos t (0), correctly rounded into binary64, for the 53-bit t = ts·2^te past DBL_MAX
-# (1 ≤ |ts| < 2, 1024 ≤ te ≤ 1025): _bj_cr_sin_cos_slow on _bj_ux_reduce.
+# (1 ≤ |ts| < 2, 1024 ≤ te ≤ 2052): _bj_cr_sin_cos_slow on _bj_ux_reduce.
 #must_use
 fn _bj_ux_sin_cos(ts: f64, te, want_sin): f64 {
     _bj_cr_load();

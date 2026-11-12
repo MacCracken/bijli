@@ -414,7 +414,94 @@ pub fn emit() -> Module {
     emit_3c(&mut m);
     emit_5d(&mut m);
     emit_5d2(&mut m);
+    emit_5d3(&mut m);
     m
+}
+
+/// The point charges' and Green's functions' range edges (bijli ADR 0002 row 18, M1 part 5d-3), appended: results
+/// that are representable where an intermediate is not. |E| = kq/r² while the factor kq/r³ under- or overflows (q =
+/// 1.1e90 at r = 1e200, q = 1e290 at r = 1e-3); offsets past DBL_MAX; a unit-vector part on the subnormal grid for B;
+/// superpositions whose fields overflow but cancel; and for the Green's functions 4πR past DBL_MAX, 1/(4πR) subnormal,
+/// kR past DBL_MAX and kR subnormal.
+fn emit_5d3(m: &mut Module) {
+    let max = f64::MAX;
+    let tiny = f64::from_bits(1);
+    let qs = [1e-6, 1.1e90, 1e290, 1e300, 1e-300, tiny, 0.0, max];
+    let pts: [([f64; 3], [f64; 3]); 9] = [
+        ([0.0; 3], [1e200, 0.0, 0.0]),
+        ([0.0; 3], [6e199, 8e199, 0.0]),
+        ([0.0; 3], [1e-3, 0.0, 0.0]),
+        ([0.0; 3], [1e300, 1e300, 0.0]),
+        ([-max, 0.0, 0.0], [max, 0.0, 0.0]),
+        ([1e160, 0.0, 0.0], [-1e160, 1e160, 0.0]),
+        ([0.0; 3], [3.0, 1e-320, 0.0]),
+        ([0.0; 3], [1e-14, 0.0, 2e-14]),
+        ([1.0, 2.0, 3.0], [1.0 + 1e-15, 2.0, 3.0 + 1e-15]),
+    ];
+    let vel = [0.0, 2e6, 1e6];
+    for &q in &qs {
+        for &(a, b) in &pts {
+            let ins = cat(&[vec![f(q)], p3(a), p3(b)]);
+            m.row(
+                "field::electric_field_point_charge",
+                Class::A,
+                &ins,
+                &res_v(electric_field_point_charge(black_box(q), a, b)),
+            );
+            m.row(
+                "field::electric_potential_point_charge",
+                Class::A,
+                &ins,
+                &res_f(electric_potential_point_charge(black_box(q), a, b)),
+            );
+            m.row(
+                "field::magnetic_field_moving_charge",
+                Class::A,
+                &cat(&[vec![f(q)], p3(a), p3(vel), p3(b)]),
+                &res_v(magnetic_field_moving_charge(black_box(q), a, vel, b)),
+            );
+        }
+    }
+    let sets: Vec<Vec<(f64, [f64; 3])>> = vec![
+        vec![(1e300, [1e-3, 0.0, 0.0]), (1e300, [-1e-3, 0.0, 0.0])],
+        vec![(1.1e90, [1e200, 0.0, 0.0]), (-1.1e90, [0.0, 1e200, 0.0]), (2.2e90, [-1e200, 0.0, 0.0])],
+        vec![(1e300, [1e-3, 0.0, 0.0]), (-1e300, [1e-3, 1e-18, 0.0]), (1e-6, [0.0, 0.0, 1.0])],
+        vec![(1.1e90, [1e200, 0.0, 0.0])],
+        vec![(1e-300, [0.0, 0.0, 1e200]), (1e-6, [1.0, 0.0, 0.0])],
+    ];
+    for cs in &sets {
+        let at = [0.0, 0.0, 0.0];
+        m.row(
+            "field::electric_field_superposition",
+            Class::A,
+            &cat(&[charges_tok(cs), p3(at)]),
+            &res_v(electric_field_superposition(black_box(cs), at)),
+        );
+    }
+    let gp: [([f64; 3], [f64; 3]); 6] = [
+        ([1e308, 0.0, 0.0], [0.0; 3]),
+        ([1e307, 0.0, 0.0], [0.0; 3]),
+        ([1e300, 0.0, 0.0], [0.0; 3]),
+        ([1.0, 0.0, 0.0], [0.0; 3]),
+        ([3e-29, 4e-29, 0.0], [0.0; 3]),
+        ([max, 0.0, 0.0], [-max, 0.0, 0.0]),
+    ];
+    for &(b, a) in &gp {
+        for kk in [2.0, 1e10, 1e-320, 1e300, 0.0] {
+            m.row(
+                "field::greens_function_scalar",
+                Class::C,
+                &cat(&[p3(b), p3(a), vec![f(kk)]]),
+                &res_pair(greens_function_scalar(black_box(b), a, kk)),
+            );
+        }
+        m.row(
+            "field::greens_function_static",
+            Class::A,
+            &cat(&[p3(b), p3(a)]),
+            &res_f(greens_function_static(black_box(b), a)),
+        );
+    }
 }
 
 /// Range-edge vectors (bijli ADR 0002 row 18, M1 part 5d-2): parts past 2^±511 where a square, product or sum leaves

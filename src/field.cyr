@@ -360,9 +360,19 @@ impl BjFieldVector {
 }
 
 # ── point charges ───────────────────────────────────────────────────────────────────────────────────────────────
+#
+# Range edges (ADR 0002 row 18, M1 part 5d-3): where the offset overflows, or k·q, the factor k·q·(1/r)³ (or
+# μ₀q/(4πr²)), a unit-vector part or a cross component leaves the normal range, the chain runs with an unbounded
+# exponent and each output component's last product rounds once (src/crmath_vx.cyr). The guard tests Rust's own values:
+# past the Singularity cutoff r² ≥ 10^-30 (2^-100), so r² finite keeps the squares' sum the unbounded chain's
+# (crmath_vx's band argument), and a chain of products by 1/r is the unbounded one when its first and last values are
+# normal and above 2^-1022 (the ones between lie between them). Biased exponents in [2, 2046] are that test. A zero
+# charge passes when r² is finite (then the offset, and so the signs of the zero products, are the unbounded chain's),
+# and a non-finite input keeps Rust's chain.
 
-# E = kq/r²·r̂ (V/m) at field_pos from a point charge at charge_pos, as k·q·(1/r)³ times the offset. Singularity when
-# the exact r² < 10^-30 (ADR 0002 row 17). Mirrors `field::electric_field_point_charge`.
+# E = kq/r²·r̂ (V/m) at field_pos from a point charge at charge_pos, as k·q·(1/r)³ times the offset; at a range edge
+# with an unbounded exponent, each component rounded once (ADR 0002 row 18). Singularity when the exact r² < 10^-30
+# (row 17). Mirrors `field::electric_field_point_charge`.
 public fn bj_electric_field_point_charge(charge_q: f64, charge_pos: *f64, field_pos: *f64,
   out: *BjFieldVector): Result {
     var dx: f64 = field_pos[0] - charge_pos[0];
@@ -376,15 +386,51 @@ public fn bj_electric_field_point_charge(charge_q: f64, charge_pos: *f64, field_
     }
     var rt: f64 = f64_sqrt(r_sq);
     var inv_r: f64 = 1.0 / rt;
-    var factor: f64 = BJ_COULOMB_K * charge_q * inv_r * inv_r * inv_r;
+    var kq: f64 = BJ_COULOMB_K * charge_q;
+    var factor: f64 = kq * inv_r * inv_r * inv_r;
     out.x = factor * dx;
     out.y = factor * dy;
     out.z = factor * dz;
+    # k·q and the factor normal (an overflowed offset makes 1/r and so the factor 0, so r² needs no test of its own).
+    var e2 = (load64(&kq) >> 52) & 0x7FF;
+    var e3 = (load64(&factor) >> 52) & 0x7FF;
+    if (((e2 - 2) | (2046 - e2) | (e3 - 2) | (2046 - e3)) >= 0) { return Ok(0); }
+    _bj_fv_point_e_slow(charge_q, charge_pos, field_pos, r_sq, kq, factor, out);
     return Ok(0);
 }
 
-# V = kq/r (volts). Singularity when the exact r² < 10^-30 (ADR 0002 row 17). Mirrors
-# `field::electric_potential_point_charge`.
+# The point charge's field past its fast test, into out (which holds Rust's): Rust's chain stands for a zero charge
+# with r² finite or a non-finite input, else the unbounded chain.
+fn _bj_fv_point_e_slow(q: f64, c: *f64, f: *f64, r_sq: f64, kq: f64, factor: f64, out: *BjFieldVector) {
+    var p: f64[7];
+    p[0] = q;
+    p[1] = c[0];
+    p[2] = c[1];
+    p[3] = c[2];
+    p[4] = f[0];
+    p[5] = f[1];
+    p[6] = f[2];
+    if (_bj_vx_coulomb_plain(r_sq, kq, kq, factor, q, 1.0, &p, 7) == 1) { return 0; }
+    _bj_vx_coulomb_edge(BJ_COULOMB_K, q, 1.0, f, c, out);
+    return 0;
+}
+
+# V = kq/r (volts) at a range edge: the offset and |d| with an unbounded exponent, k·q to 53 bits, the quotient rounded
+# once.
+#must_use
+fn _bj_fv_potential_edge(q: f64, f: *f64, c: *f64): f64 {
+    var s: f64[5];
+    var e: i64[5];
+    _bj_vx_offset_ux(f, c, &s, &e);
+    var ks, ke = _bj_k_ux_from(BJ_COULOMB_K);
+    var qs, qe = _bj_k_ux_from(q);
+    var ms, me = _bj_k_ux_mul(ks, ke, qs, qe);
+    var v: f64 = _bj_k_ux_div_f64(ms, me, s[3], e[3]);
+    return v;
+}
+
+# V = kq/r (volts); at a range edge with an unbounded exponent, the quotient rounded once (ADR 0002 row 18).
+# Singularity when the exact r² < 10^-30 (row 17). Mirrors `field::electric_potential_point_charge`.
 public fn bj_electric_potential_point_charge(charge_q: f64, charge_pos: *f64, field_pos: *f64): Result {
     var dx: f64 = field_pos[0] - charge_pos[0];
     var dy: f64 = field_pos[1] - charge_pos[1];
@@ -396,12 +442,80 @@ public fn bj_electric_potential_point_charge(charge_q: f64, charge_pos: *f64, fi
         return Err(_bj_err_singularity());
     }
     var rt: f64 = f64_sqrt(r_sq);
-    var v: f64 = BJ_COULOMB_K * charge_q / rt;
-    return Ok(v);
+    var kq: f64 = BJ_COULOMB_K * charge_q;
+    var v: f64 = kq / rt;
+    var e1 = (load64(&r_sq) >> 52) & 0x7FF;
+    var e2 = (load64(&kq) >> 52) & 0x7FF;
+    if (((2046 - e1) | (e2 - 2) | (2046 - e2)) >= 0) { return Ok(v); }
+    var p: f64[7];
+    p[0] = charge_q;
+    p[1] = charge_pos[0];
+    p[2] = charge_pos[1];
+    p[3] = charge_pos[2];
+    p[4] = field_pos[0];
+    p[5] = field_pos[1];
+    p[6] = field_pos[2];
+    if ((charge_q == 0.0 && e1 <= 2046) || _bj_vx_finite_n(&p, 7) == 0) { return Ok(v); }
+    var u: f64 = _bj_fv_potential_edge(charge_q, field_pos, charge_pos);
+    return Ok(u);
 }
 
-# B = (μ₀/4π)·q(v × r̂)/r² (tesla) at field_pos from a charge at charge_pos moving with `velocity` (Biot–Savart).
-# Singularity when the exact r² < 10^-30 (ADR 0002 row 17). Mirrors `field::magnetic_field_moving_charge`.
+# B = (μ₀/4π)·q(v × r̂)/r² at a range edge, into out: the offset, 1/r and r̂ with an unbounded exponent, v × r̂ and the
+# factor ((μ₀/4π)·q)·(1/r)² to 53 bits, each component's product rounded once.
+fn _bj_fv_moving_b_edge(q: f64, c: *f64, vel: *f64, f: *f64, mu4: f64, out: *BjFieldVector) {
+    var s: f64[5];
+    var e: i64[5];
+    _bj_vx_offset_ux(f, c, &s, &e);
+    var hxs, hxe = _bj_k_ux_mul(s[0], e[0], s[4], e[4]);
+    var hys, hye = _bj_k_ux_mul(s[1], e[1], s[4], e[4]);
+    var hzs, hze = _bj_k_ux_mul(s[2], e[2], s[4], e[4]);
+    var v0s, v0e = _bj_k_ux_from(vel[0]);
+    var v1s, v1e = _bj_k_ux_from(vel[1]);
+    var v2s, v2e = _bj_k_ux_from(vel[2]);
+    var a1s, a1e = _bj_k_ux_mul(v1s, v1e, hzs, hze);
+    var a2s, a2e = _bj_k_ux_mul(v2s, v2e, hys, hye);
+    var cxs, cxe = _bj_k_ux_sub(a1s, a1e, a2s, a2e);
+    var b1s, b1e = _bj_k_ux_mul(v2s, v2e, hxs, hxe);
+    var b2s, b2e = _bj_k_ux_mul(v0s, v0e, hzs, hze);
+    var cys, cye = _bj_k_ux_sub(b1s, b1e, b2s, b2e);
+    var c1s, c1e = _bj_k_ux_mul(v0s, v0e, hys, hye);
+    var c2s, c2e = _bj_k_ux_mul(v1s, v1e, hxs, hxe);
+    var czs, cze = _bj_k_ux_sub(c1s, c1e, c2s, c2e);
+    var ms, me = _bj_k_ux_from(mu4);
+    var qs, qe = _bj_k_ux_from(q);
+    var mqs, mqe = _bj_k_ux_mul(ms, me, qs, qe);
+    var f1s, f1e = _bj_k_ux_mul(mqs, mqe, s[4], e[4]);
+    var f2s, f2e = _bj_k_ux_mul(f1s, f1e, s[4], e[4]);
+    var ox: f64 = _bj_k_ux_mul_f64(f2s, f2e, cxs, cxe);
+    var oy: f64 = _bj_k_ux_mul_f64(f2s, f2e, cys, cye);
+    var oz: f64 = _bj_k_ux_mul_f64(f2s, f2e, czs, cze);
+    out.x = ox;
+    out.y = oy;
+    out.z = oz;
+    return 0;
+}
+
+# 1 when a moving charge's unit-vector part h = d·(1/r) is its 53-bit value: normal and above 2^-1022, or d = 0.
+#must_use
+fn _bj_fv_unit_ok(h: f64, d: f64): i64 {
+    if (d == 0.0) { return 1; }
+    var b = (load64(&h) >> 52) & 0x7FF;
+    if (b >= 2 && b <= 2046) { return 1; }
+    return 0;
+}
+
+# 1 when a cross component c = a·b − x·y of the moving charge's v × r̂ is its 53-bit value: in the band, or 0 through
+# zero factors.
+#must_use
+fn _bj_fv_cross_ok(c: f64, a: f64, b: f64, x: f64, y: f64): i64 {
+    if (_bj_vx_band(c) == 1) { return 1; }
+    if (c == 0.0 && (a == 0.0 || b == 0.0) && (x == 0.0 || y == 0.0)) { return 1; }
+    return 0;
+}
+
+# B = (μ₀/4π)·q(v × r̂)/r² (tesla) at field_pos from a charge at charge_pos moving with `velocity` (Biot–Savart); at a
+# range edge with an unbounded exponent, each component rounded once (ADR 0002 row 18). Singularity when the exact
+# r² < 10^-30 (row 17). Mirrors `field::magnetic_field_moving_charge`.
 public fn bj_magnetic_field_moving_charge(charge_q: f64, charge_pos: *f64, velocity: *f64, field_pos: *f64,
   out: *BjFieldVector): Result {
     var dx: f64 = field_pos[0] - charge_pos[0];
@@ -423,29 +537,173 @@ public fn bj_magnetic_field_moving_charge(charge_q: f64, charge_pos: *f64, veloc
     var cross_z: f64 = velocity[0] * ry - velocity[1] * rx;
     var four_pi: f64 = 4.0 * _BJ_PI;
     var mu4: f64 = BJ_MU_0 / four_pi;
-    var factor: f64 = mu4 * charge_q * inv_r * inv_r;
+    var mq: f64 = mu4 * charge_q;
+    var factor: f64 = mq * inv_r * inv_r;
     out.x = factor * cross_x;
     out.y = factor * cross_y;
     out.z = factor * cross_z;
+    var e1 = (load64(&r_sq) >> 52) & 0x7FF;
+    var e2 = (load64(&mq) >> 52) & 0x7FF;
+    var e3 = (load64(&factor) >> 52) & 0x7FF;
+    var hx = (load64(&rx) >> 52) & 0x7FF;
+    var hy = (load64(&ry) >> 52) & 0x7FF;
+    var hz = (load64(&rz) >> 52) & 0x7FF;
+    var cx = (load64(&cross_x) >> 52) & 0x7FF;
+    var cy = (load64(&cross_y) >> 52) & 0x7FF;
+    var cz = (load64(&cross_z) >> 52) & 0x7FF;
+    # One test, branch-free: each term is negative when out of range, and masked to 0 when the part is an exact 0 (an
+    # offset part 0 for r̂; zero factors in both products for a cross component). z(x) = 1 when x = ±0.
+    var v0: f64 = velocity[0];
+    var v1: f64 = velocity[1];
+    var v2: f64 = velocity[2];
+    var zdx = ((load64(&dx) & 0x7FFFFFFFFFFFFFFF) - 1) >> 63;
+    var zdy = ((load64(&dy) & 0x7FFFFFFFFFFFFFFF) - 1) >> 63;
+    var zdz = ((load64(&dz) & 0x7FFFFFFFFFFFFFFF) - 1) >> 63;
+    var zv0 = ((load64(&v0) & 0x7FFFFFFFFFFFFFFF) - 1) >> 63;
+    var zv1 = ((load64(&v1) & 0x7FFFFFFFFFFFFFFF) - 1) >> 63;
+    var zv2 = ((load64(&v2) & 0x7FFFFFFFFFFFFFFF) - 1) >> 63;
+    var w = (2046 - e1) | (e2 - 2) | (2046 - e2) | (e3 - 2) | (2046 - e3);
+    w = w | (((hx - 2) | (2046 - hx)) & (zdx - 1)) | (((hy - 2) | (2046 - hy)) & (zdy - 1));
+    w = w | (((hz - 2) | (2046 - hz)) & (zdz - 1));
+    w = w | (((cx - 123) | (2046 - cx)) & ((((zv1 | zdz) & (zv2 | zdy))) - 1));
+    w = w | (((cy - 123) | (2046 - cy)) & ((((zv2 | zdx) & (zv0 | zdz))) - 1));
+    w = w | (((cz - 123) | (2046 - cz)) & ((((zv0 | zdy) & (zv1 | zdx))) - 1));
+    if (w >= 0) { return Ok(0); }
+    _bj_fv_moving_b_slow(charge_q, charge_pos, velocity, field_pos, mu4, out);
     return Ok(0);
+}
+
+# The moving charge's field past both tiers, into out (which holds Rust's): Rust's chain stands for a non-finite input,
+# else the unbounded chain.
+fn _bj_fv_moving_b_slow(q: f64, c: *f64, vel: *f64, f: *f64, mu4: f64, out: *BjFieldVector) {
+    var p: f64[10];
+    p[0] = q;
+    for (var i = 0; i < 3; i = i + 1) {
+        p[1 + i] = c[i];
+        p[4 + i] = vel[i];
+        p[7 + i] = f[i];
+    }
+    if (_bj_vx_finite_n(&p, 10) == 0) { return 0; }
+    _bj_fv_moving_b_edge(q, c, vel, f, mu4, out);
+    return 0;
+}
+
+# 1 when one charge's field in a superposition is its 53-bit value with Rust's chain the unbounded one: the point
+# charge's fast test, and each component normal and above 2^-1022 or exactly 0 (a zero offset part); a zero charge
+# with r² finite makes every product an exact 0 with the unbounded chain's signs.
+#must_use
+fn _bj_fv_super_plain(r_sq: f64, kq: f64, factor: f64, ex: f64, ey: f64, ez: f64, dx: f64, dy: f64, dz: f64,
+  q: f64): i64 {
+    var e1 = (load64(&r_sq) >> 52) & 0x7FF;
+    if (q == 0.0 && e1 <= 2046) { return 1; }
+    var e2 = (load64(&kq) >> 52) & 0x7FF;
+    var e3 = (load64(&factor) >> 52) & 0x7FF;
+    if (((2046 - e1) | (e2 - 2) | (2046 - e2) | (e3 - 2) | (2046 - e3)) < 0) { return 0; }
+    if (_bj_fv_unit_ok(ex, dx) + _bj_fv_unit_ok(ey, dy) + _bj_fv_unit_ok(ez, dz) == 3) { return 1; }
+    return 0;
+}
+
+# The superposition at a range edge, into out: each charge's field to 53 bits (_bj_vx_coulomb_ux, its products with an
+# unbounded exponent), summed in order from zero with an unbounded exponent, the last addition rounded once.
+fn _bj_fv_super_edge(charges: *f64, n, field_pos: *f64, out: *BjFieldVector) {
+    var s: f64[6];
+    var e: i64[6];
+    var acs: f64[3];
+    var ace: i64[3];
+    var fin: f64[3];
+    for (var k = 0; k < 3; k = k + 1) {
+        acs[k] = 0.0;
+        ace[k] = 0;
+    }
+    for (var i = 0; i < n; i = i + 1) {
+        var c: *f64 = charges + i * 4;
+        var q: f64 = c[0];
+        _bj_vx_coulomb_ux(BJ_COULOMB_K, q, 1.0, field_pos, c + 1, &s, &e);
+        for (var j = 0; j < 3; j = j + 1) {
+            var gs, ge = _bj_k_ux_mul(s[5], e[5], s[j], e[j]);
+            if (i == n - 1) {
+                var r: f64 = _bj_k_ux_add_f64(acs[j], ace[j], gs, ge);
+                fin[j] = r;
+            } else {
+                var ns, ne = _bj_k_ux_add(acs[j], ace[j], gs, ge);
+                acs[j] = ns;
+                ace[j] = ne;
+            }
+        }
+    }
+    out.x = fin[0];
+    out.y = fin[1];
+    out.z = fin[2];
+    return 0;
 }
 
 # The sum of the point-charge fields of n charges at field_pos, each charge 32 bytes at `charges` (q, then its
 # position: Rust's `(f64, [f64; 3])`), accumulated in order from zero. The first singular charge's error is returned.
-# Mirrors `field::electric_field_superposition`.
+# At a range edge (a field or a partial sum Rust rounded outside the normal range) the whole sum runs with an
+# unbounded exponent, each field kept to 53 bits and the last addition rounded once (ADR 0002 row 18). Mirrors
+# `field::electric_field_superposition`.
 public fn bj_electric_field_superposition(charges: *f64, n, field_pos: *f64, out: *BjFieldVector): Result {
-    var total: BjFieldVector = BjFieldVector_zero();
-    var e: BjFieldVector;
+    var tx: f64 = 0.0;
+    var ty: f64 = 0.0;
+    var tz: f64 = 0.0;
+    var plain = 1;
     for (var i = 0; i < n; i = i + 1) {
         var c: *f64 = charges + i * 4;
         var q: f64 = c[0];
-        var t, v = bj_electric_field_point_charge(q, c + 1, field_pos, &e);
-        if (is_err_result(t) == 1) { return Err(v); }
-        total = total + e;
+        var cp: *f64 = c + 1;
+        var dx: f64 = field_pos[0] - cp[0];
+        var dy: f64 = field_pos[1] - cp[1];
+        var dz: f64 = field_pos[2] - cp[2];
+        var r_sq: f64 = dx * dx + dy * dy + dz * dz;
+        var band = _bj_x_band(r_sq, _BJ_FIELD_R2_MIN);
+        if (band == 2) { band = _bj_x_r2_below(field_pos, cp, 30); }
+        if (band == 1) { return Err(_bj_err_singularity()); }
+        var rt: f64 = f64_sqrt(r_sq);
+        var inv_r: f64 = 1.0 / rt;
+        var kq: f64 = BJ_COULOMB_K * q;
+        var factor: f64 = kq * inv_r * inv_r * inv_r;
+        var ex: f64 = factor * dx;
+        var ey: f64 = factor * dy;
+        var ez: f64 = factor * dz;
+        tx = tx + ex;
+        ty = ty + ey;
+        tz = tz + ez;
+        if (plain == 1) {
+            # k·q, the factor and each field component normal (a zero component with a zero offset part is exact).
+            var b2 = (load64(&kq) >> 52) & 0x7FF;
+            var b3 = (load64(&factor) >> 52) & 0x7FF;
+            var g1 = (load64(&ex) >> 52) & 0x7FF;
+            var g2 = (load64(&ey) >> 52) & 0x7FF;
+            var g3 = (load64(&ez) >> 52) & 0x7FF;
+            var w = (b2 - 2) | (2046 - b2) | (b3 - 2) | (2046 - b3);
+            var w2 = w;
+            if (dx != 0.0) { w2 = w2 | (g1 - 2) | (2046 - g1); }
+            if (dy != 0.0) { w2 = w2 | (g2 - 2) | (2046 - g2); }
+            if (dz != 0.0) { w2 = w2 | (g3 - 2) | (2046 - g3); }
+            if (w2 < 0) { plain = _bj_fv_super_plain(r_sq, kq, factor, ex, ey, ez, dx, dy, dz, q); }
+        }
     }
-    out.x = total.x;
-    out.y = total.y;
-    out.z = total.z;
+    var b1 = (load64(&tx) >> 52) & 0x7FF;
+    var b2 = (load64(&ty) >> 52) & 0x7FF;
+    var b3 = (load64(&tz) >> 52) & 0x7FF;
+    if (plain == 1 && b1 != 2047 && b2 != 2047 && b3 != 2047) {
+        out.x = tx;
+        out.y = ty;
+        out.z = tz;
+        return Ok(0);
+    }
+    var all: f64 = 0.0;
+    for (var j = 0; j < 4 * n; j = j + 1) {
+        var y: f64 = charges[j];
+        all = all + (y - y);
+    }
+    if (all != 0.0 || _bj_vx_finite_n(field_pos, 3) == 0) {
+        out.x = tx;                                         # a non-finite input keeps Rust's chain
+        out.y = ty;
+        out.z = tz;
+        return Ok(0);
+    }
+    _bj_fv_super_edge(charges, n, field_pos, out);
     return Ok(0);
 }
 
@@ -1055,10 +1313,45 @@ fn _bj_fv_dielectric_plain(nq: f64, diff: f64, num: f64, den: f64): i64 {
 
 # ── Green's functions (M1 part 3b) ──────────────────────────────────────────────────────────────────────────────
 
+# (4π)·R for R = |f − c| with an unbounded exponent, to 53 bits: (s, e) (the Green's functions at a range edge).
+#must_use
+fn _bj_fv_green_den_ux(f: *f64, c: *f64): (f64, i64) {
+    var o: f64[5];
+    var oe: i64[5];
+    _bj_vx_offset_ux(f, c, &o, &oe);
+    var four_pi: f64 = 4.0 * _BJ_PI;
+    var ps, pe = _bj_k_ux_from(four_pi);
+    var ds, de = _bj_k_ux_mul(ps, pe, o[3], oe[3]);
+    return (ds, de);
+}
+
+# The scalar Green's function at a range edge, into out: R, 4πR, its reciprocal and k·R with an unbounded exponent, the
+# cosine and sine of the 53-bit k·R (past DBL_MAX by _bj_vx_cos53, _bj_vx_sin53), each product rounded once.
+fn _bj_fv_green_scalar_edge(f: *f64, c: *f64, k: f64, out: *BjComplex) {
+    var o: f64[5];
+    var oe: i64[5];
+    _bj_vx_offset_ux(f, c, &o, &oe);
+    var four_pi: f64 = 4.0 * _BJ_PI;
+    var ps, pe = _bj_k_ux_from(four_pi);
+    var ds, de = _bj_k_ux_mul(ps, pe, o[3], oe[3]);
+    var fs, fe = _bj_k_ux_div(1.0, 0, ds, de);
+    var ks, ke = _bj_k_ux_from(k);
+    var ts, te = _bj_k_ux_mul(ks, ke, o[3], oe[3]);
+    var cs, ce = _bj_vx_cos53(ts, te);
+    var ss, se = _bj_vx_sin53(ts, te);
+    var re: f64 = _bj_k_ux_mul_f64(fs, fe, cs, ce);
+    var im: f64 = _bj_k_ux_mul_f64(fs, fe, ss, se);
+    out.re = re;
+    out.im = -im;
+    return 0;
+}
+
 # G(r, r') = e^{−jkR}/(4πR), the free-space scalar Green's function of the outgoing wave in bijli's e^{+jωt}
 # convention (src/complex.cyr), into out: (cos kR, −sin kR)/(4πR). Rust's e^{+ikR}/(4πR) was the e^{−iωt} form, so the
-# port's value is its conjugate (ADR 0002 row 5). Singularity when the exact R < 10^-30 (row 17). Mirrors
-# `field::greens_function_scalar` (its `(f64, f64)` is a BjComplex here).
+# port's value is its conjugate (ADR 0002 row 5). At a range edge (4πR past DBL_MAX, 1/(4πR) or kR outside the normal
+# range) the chain runs with an unbounded exponent, kR's cosine and sine included, each product rounded once (row 18).
+# Singularity when the exact R < 10^-30 (row 17). Mirrors `field::greens_function_scalar` (its `(f64, f64)` is a
+# BjComplex here).
 public fn bj_greens_function_scalar(field_pos: *f64, source_pos: *f64, k: f64, out: *BjComplex): Result {
     var dx: f64 = field_pos[0] - source_pos[0];
     var dy: f64 = field_pos[1] - source_pos[1];
@@ -1078,11 +1371,25 @@ public fn bj_greens_function_scalar(field_pos: *f64, source_pos: *f64, k: f64, o
     var im: f64 = factor * sn;
     out.re = factor * c;
     out.im = -im;
+    var e1 = (load64(&d) >> 52) & 0x7FF;
+    var e2 = (load64(&factor) >> 52) & 0x7FF;
+    var e3 = (load64(&kr) >> 52) & 0x7FF;
+    if (((2046 - e1) | (e2 - 2) | (2046 - e2) | (e3 - 2) | (2046 - e3)) >= 0) { return Ok(0); }
+    var p: f64[7];
+    for (var i = 0; i < 3; i = i + 1) {
+        p[i] = field_pos[i];
+        p[3 + i] = source_pos[i];
+    }
+    p[6] = k;
+    if (_bj_vx_finite_n(&p, 7) == 0) { return Ok(0); }
+    if (k == 0.0 && ((2046 - e1) | (e2 - 2) | (2046 - e2)) >= 0) { return Ok(0); }
+    _bj_fv_green_scalar_edge(field_pos, source_pos, k, out);
     return Ok(0);
 }
 
-# G(r, r') = 1/(4πR), the static Green's function (k = 0). Singularity when the exact R < 10^-30 (ADR 0002 row 17).
-# Mirrors `field::greens_function_static`.
+# G(r, r') = 1/(4πR), the static Green's function (k = 0); where 4πR passes DBL_MAX, R and 4πR with an unbounded
+# exponent and the quotient rounded once (ADR 0002 row 18). Singularity when the exact R < 10^-30 (row 17). Mirrors
+# `field::greens_function_static`.
 public fn bj_greens_function_static(field_pos: *f64, source_pos: *f64): Result {
     var dx: f64 = field_pos[0] - source_pos[0];
     var dy: f64 = field_pos[1] - source_pos[1];
@@ -1096,7 +1403,17 @@ public fn bj_greens_function_static(field_pos: *f64, source_pos: *f64): Result {
     }
     var d: f64 = 4.0 * _BJ_PI * r;
     var g: f64 = 1.0 / d;
-    return Ok(g);
+    var e1 = (load64(&d) >> 52) & 0x7FF;
+    if (e1 <= 2046) { return Ok(g); }
+    var p: f64[6];
+    for (var i = 0; i < 3; i = i + 1) {
+        p[i] = field_pos[i];
+        p[3 + i] = source_pos[i];
+    }
+    if (_bj_vx_finite_n(&p, 6) == 0) { return Ok(g); }
+    var ds, de = _bj_fv_green_den_ux(field_pos, source_pos);
+    var u: f64 = _bj_k_ux_div_f64(1.0, 0, ds, de);
+    return Ok(u);
 }
 
 # ── the Maxwell stress tensor (M1 part 3b) ──────────────────────────────────────────────────────────────────────

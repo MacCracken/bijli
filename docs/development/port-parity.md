@@ -1180,3 +1180,62 @@ Language facts the probes found, beyond plan §2:
   - `charge/lorentz_force` −10 to −14 ns (65/66 → 52/55 ns): the inline chain no longer calls three struct-valued
     methods (cross, add, scale);
   - the dipoles and `trace_field_line_10` within the load's noise.
+
+## 22. M1 part 5d-3: the point charges' and Green's functions' range edges (2026-11-12)
+
+- **ADR 0002 row 18, amended.** The point charge's E and V, the moving charge's B, superposition, `coulomb_force`, the
+  `PointCharge` methods through them, and both Green's functions now run with an unbounded exponent at a range edge,
+  each output's last product rounding once. Typical edges:
+  - |E| = kq/r² is representable while the factor kq/r³ under- or overflows (q = 1.1e90 at r = 1e200 gives
+    9.886306971487286e-301, where Rust's factor underflowed);
+  - k·q₁·q₂ overflows while the force does not (1e200·1e200 at 1e100 gives 8.987551792261174e209);
+  - two fields past DBL_MAX cancel in a superposition (0, where Rust has ∞ − ∞ = NaN);
+  - 4πR passes DBL_MAX (1/(4π·1e308) = 7.95774715459477e-310, where Rust has 1/∞ = 0);
+  - kR passes DBL_MAX (kR = 1e600 gives a finite e^{−jkR}/(4πR), where Rust has NaN).
+- **The guards** test Rust's own values:
+  - Past the Singularity cutoff r² ≥ 10^-30, so r² finite keeps the squares' sum exact by crmath_vx's band argument.
+  - A chain of products by 1/r is the unbounded one when its first and last products are normal (biased exponent in
+    [2, 2046]), since the ones between lie between them; an overflowed offset makes the factor 0, so E and
+    `coulomb_force` need no r² test.
+  - B adds its unit-vector parts and cross components, folded branch-free with exact zeros masked in.
+  - Superposition needs each field component normal (or 0 with a zero offset part) and the totals finite.
+  - The Green's functions test 4πR, its reciprocal and kR.
+  - **A zero charge** keeps Rust's chain only where r² is finite. Otherwise Rust's 1/r is 0, its r̂ and cross
+    components are signed zeros, and its 0·∞ is NaN. `validate.py`'s guard proof caught that on 2 rows of a moving
+    zero charge at DBL_MAX (−0 where the chain gives +0).
+- **The shared helpers** (`_bj_vx_offset_ux`, `_bj_vx_coulomb_ux`, `_bj_vx_coulomb_edge`, `_bj_vx_coulomb_plain`,
+  `_bj_vx_finite_n`) moved into `src/crmath_vx.cyr`. charge.cyr can't reach a private field.cyr function (the
+  compiler says so). The 53-bit angle helpers moved there from complex.cyr too (`_bj_vx_cos53`, `_bj_vx_sin53`).
+- **A longer 2/π.** kR reaches 2^2050, past 5c-2's reduction, which reads impetus's 56 chunks of 2/π and stops at
+  2^1026. The first run gave NaN on the 4 corpus rows with k = 1e300 and R ≥ 1e300.
+  - `src/crmath_ux_data.cyr` (generated: `crtables.py`'s `render_ux`, from π to 2,800 bits checked against MPFR) holds
+    96 chunks, whose first 56 equal impetus's, and `_bj_ux_reduce` reads them up to index 88.
+  - `cr_verify.py`'s angle families now reach te = 2052 and RN53(k·R), and the whole ux set passes again: 1,093,984
+    calls on x86_64 and on aarch64, 0 mismatches.
+- **The model** (`validate.py`'s `pc_plain`, `pc_model`): the exact threshold, then the exact chain rounded to 53 bits
+  (MPFR's widest range for the Green's cosine and sine), mirrored guards, and the guard's proof on every row the guards
+  leave on Rust's chain. That proof compares against Rust's chain with the exact threshold and MPFR's primitives, and
+  skips the rows row 17 maps. The corrected oracle skips rows row 18 governs.
+- **The edge grid** (`m_field.rs`'s `emit_5d3`, `m_charge.rs`), 263 rows:
+  - 8 charges over 9 point pairs through E, V and B;
+  - 5 superpositions;
+  - 6 Green's positions with 5 wavenumbers;
+  - 6 `coulomb_force` pairs.
+- **251 more mapped rows** (row 18: 545), all passed: point E 63 and `electric_field_at` 24, moving B 50 and
+  `magnetic_field_at` 4, V 32 and `electric_potential_at` 4, `coulomb_force` 36, the scalar Green's function 24, the
+  static 9, superposition 5.
+- **Tests**: `tests/field.tcyr`'s `cyrius_point_charge_edges (ADR 0002 row 18)`, 8 assertions: the six edges above
+  with their bits, and the two charges' construction.
+- **Result, every target**: 9 modules, 0 failing; **189,140 ok, 0 failed, 11,424 accepted (ADR 01: 6,505; ADR 0002:
+  4,919)**. All 145 digests are equal on x86_64 ELF, x86_64 PE and aarch64, and field's 167 and charge's 66 assertions
+  pass on all three.
+- **Benchmarks** (interleaved A/B against HEAD 72e1a56, twice, load average 3.5 to 4.2):
+  - `field/electric_field_point` +4 ns (35/36 → 39/40 ns) and `electric_potential_point` +3 ns (24 → 27);
+  - `charge/coulomb_force` +6–8 ns (46/48 → 54);
+  - `superposition_10` +24–44 ns (569/583 → 607/613);
+  - `trace_field_line_10` within noise;
+  - **`magnetic_field_moving` +38–39 ns (45/46 → 84/85).** Its bench geometry is axis-aligned, so two r̂ parts and two
+    cross components are exact zeros. The first guard sent those through a second tier of compares and calls (163 ns,
+    then 98 ns inline); the branch-free fold with masked zeros gets 85. Cyrius spends about a nanosecond per integer
+    operation here (every local is in memory), and the guard needs about 40. This is a finding with its numbers; speed
+    is measured, not gated.

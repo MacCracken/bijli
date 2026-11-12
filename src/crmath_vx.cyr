@@ -100,3 +100,131 @@ fn _bj_vx_cross1_f64(a: f64, b: f64, c: f64, d: f64, r: f64): f64 {
     var u: f64 = _bj_k_ux_sub_f64(ps, pe, qs, qe);
     return u;
 }
+
+# ── an angle with an unbounded exponent (M1 part 5c-2's, shared by complex powf and the Green's function) ──
+
+# cos t to 53 bits, for the 53-bit t = ts·2^te: 1 below 2^-1022 (and at 0); past DBL_MAX by _bj_ux_sin_cos; else the
+# double t's correctly rounded cosine (binary64's rounding of a normal value is the 53-bit one).
+#must_use
+fn _bj_vx_cos53(ts: f64, te): (f64, i64) {
+    if (ts == 0.0 || te < 0 - 1022) { return (1.0, 0); }
+    if (te > 1023) {
+        var cb: f64 = _bj_ux_sin_cos(ts, te, 0);
+        var bs, be = _bj_k_ux_from(cb);
+        return (bs, be);
+    }
+    var t: f64 = _bj_k_ux_round(ts, te, 0.0);
+    var c: f64 = _bj_cos(t);
+    var s, e = _bj_k_ux_from(c);
+    return (s, e);
+}
+
+# sin t to 53 bits, for the 53-bit t = ts·2^te: t itself below 2^-1022 (sin t = t(1 − t²/6) rounds to t; ±0 keeps
+# its sign); past DBL_MAX by _bj_ux_sin_cos; else the double t's correctly rounded sine.
+#must_use
+fn _bj_vx_sin53(ts: f64, te): (f64, i64) {
+    if (ts == 0.0 || te < 0 - 1022) { return (ts, te); }
+    if (te > 1023) {
+        var sb: f64 = _bj_ux_sin_cos(ts, te, 1);
+        var bs, be = _bj_k_ux_from(sb);
+        return (bs, be);
+    }
+    var t: f64 = _bj_k_ux_round(ts, te, 0.0);
+    var sn: f64 = _bj_sin(t);
+    var s, e = _bj_k_ux_from(sn);
+    return (s, e);
+}
+
+# ── the point charges' chains (M1 part 5d-3), shared by field.cyr and charge.cyr ─────────────────────────────────
+
+# The address a as a *f64 (a typed return binds an untyped word without a warning).
+#must_use
+fn _bj_vx_f64p(a): *f64 {
+    return a;
+}
+
+# 1 when none of the n doubles at p is NaN or infinite.
+#must_use
+fn _bj_vx_finite_n(p: *f64, n): i64 {
+    var s: f64 = 0.0;
+    for (var i = 0; i < n; i = i + 1) {
+        var x: f64 = p[i];
+        s = s + (x - x);
+    }
+    if (s == 0.0) { return 1; }
+    return 0;
+}
+
+# The unbounded chain's offset d = f − c, |d| and 1/|d|, each to 53 bits: d into s[0..2] and e[0..2], |d| into s[3]
+# and e[3], 1/|d| into s[4] and e[4].
+fn _bj_vx_offset_ux(f: *f64, c: *f64, s: *f64, e: *i64) {
+    for (var i = 0; i < 3; i = i + 1) {
+        var a: f64 = f[i];
+        var b: f64 = c[i];
+        var as, ae = _bj_k_ux_from(a);
+        var bs, be = _bj_k_ux_from(b);
+        var ds, de = _bj_k_ux_sub(as, ae, bs, be);
+        s[i] = ds;
+        e[i] = de;
+    }
+    var xs, xe = _bj_k_ux_mul(s[0], e[0], s[0], e[0]);
+    var ys, ye = _bj_k_ux_mul(s[1], e[1], s[1], e[1]);
+    var zs, ze = _bj_k_ux_mul(s[2], e[2], s[2], e[2]);
+    var ps, pe = _bj_k_ux_add(xs, xe, ys, ye);
+    var r2s, r2e = _bj_k_ux_add(ps, pe, zs, ze);
+    var rs, re = _bj_k_ux_sqrt(r2s, r2e);
+    s[3] = rs;
+    e[3] = re;
+    var is, ie = _bj_k_ux_div(1.0, 0, rs, re);
+    s[4] = is;
+    e[4] = ie;
+    return 0;
+}
+
+# The unbounded chain of k·q₁·q₂·(1/r)³ for the offset f − c (Rust's left-to-right products; q₂ = 1 for one charge):
+# the offset and 1/r as _bj_vx_offset_ux, the factor into s[5] and e[5].
+fn _bj_vx_coulomb_ux(k: f64, q1: f64, q2: f64, f: *f64, c: *f64, s: *f64, e: *i64) {
+    _bj_vx_offset_ux(f, c, s, e);
+    var ks, ke = _bj_k_ux_from(k);
+    var as, ae = _bj_k_ux_from(q1);
+    var bs, be = _bj_k_ux_from(q2);
+    var m1s, m1e = _bj_k_ux_mul(ks, ke, as, ae);
+    var m2s, m2e = _bj_k_ux_mul(m1s, m1e, bs, be);
+    var f1s, f1e = _bj_k_ux_mul(m2s, m2e, s[4], e[4]);
+    var f2s, f2e = _bj_k_ux_mul(f1s, f1e, s[4], e[4]);
+    var f3s, f3e = _bj_k_ux_mul(f2s, f2e, s[4], e[4]);
+    s[5] = f3s;
+    e[5] = f3e;
+    return 0;
+}
+
+# k·q₁·q₂·(1/r)³·(f − c) at a range edge, into the three f64 at out (a BjFieldVector's x, y, z): _bj_vx_coulomb_ux,
+# each component's product rounded once.
+fn _bj_vx_coulomb_edge(k: f64, q1: f64, q2: f64, f: *f64, c: *f64, out) {
+    var s: f64[6];
+    var e: i64[6];
+    _bj_vx_coulomb_ux(k, q1, q2, f, c, &s, &e);
+    var o: *f64 = _bj_vx_f64p(out);
+    var ox: f64 = _bj_k_ux_mul_f64(s[5], e[5], s[0], e[0]);
+    var oy: f64 = _bj_k_ux_mul_f64(s[5], e[5], s[1], e[1]);
+    var oz: f64 = _bj_k_ux_mul_f64(s[5], e[5], s[2], e[2]);
+    o[0] = ox;
+    o[1] = oy;
+    o[2] = oz;
+    return 0;
+}
+
+# 1 when the point-charge chain k·q₁·q₂·(1/r)³·d that Rust evaluated (r² = rsq, its first product kq = k·q₁, then
+# kq2 = kq·q₂, the factor fct) is the unbounded one: the fast test of field.cyr's section comment, else a zero charge
+# with r² finite (the offset exact, so 0·d has the unbounded chain's signs), or a non-finite input among the n at p.
+#must_use
+fn _bj_vx_coulomb_plain(rsq: f64, kq: f64, kq2: f64, fct: f64, q1: f64, q2: f64, p: *f64, n): i64 {
+    var e1 = (load64(&rsq) >> 52) & 0x7FF;
+    var e2 = (load64(&kq) >> 52) & 0x7FF;
+    var e3 = (load64(&kq2) >> 52) & 0x7FF;
+    var e4 = (load64(&fct) >> 52) & 0x7FF;
+    if (((2046 - e1) | (e2 - 2) | (2046 - e2) | (e3 - 2) | (2046 - e3) | (e4 - 2) | (2046 - e4)) >= 0) { return 1; }
+    if ((q1 == 0.0 || q2 == 0.0) && e1 <= 2046) { return 1; }               # an exact 0 factor, the offset exact
+    if (_bj_vx_finite_n(p, n) == 0) { return 1; }
+    return 0;
+}

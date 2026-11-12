@@ -1234,6 +1234,60 @@ fn main() {
     assert(ok_bits(ve18_6t, ve18_6v, 0xBFC999999999999A) == 1, "ε₁ + ε₂ past DBL_MAX: q' = −0.2 (Rust: −q·Δε/∞ = −0)");
     if (ve18_5q == 7.0 || ve18_4sv == 7 || ve18_4v == 7) { println("."); }
 
+    test_group("cyrius_point_charge_edges (ADR 0002 row 18)");
+    # The point charges' and Green's functions' chains at a range edge with an unbounded exponent; the expected bits
+    # are validate.py's model.
+    var pe_o: f64[3];
+    at3(&pe_o, 0.0, 0.0, 0.0);
+    var pe_f: f64[3];
+    at3(&pe_f, fb(0x6974E718D7D7625A), 0.0, 0.0);              # (1e200, 0, 0)
+    var pe_e: BjFieldVector;
+    var pe_t1, pe_v1 = bj_electric_field_point_charge(fb(0x52A147AEAB7057C7), &pe_o, &pe_f, &pe_e);
+    var pe_ex: f64 = pe_e.x;
+    assert(is_ok(pe_t1) == 1 && same_bits(pe_ex, 0x01A52FC02B6F88EB) == 1,
+      "kq/r² = 9.886306971487286e-301 for q = 1.1e90 at r = 1e200 (Rust's kq/r³ underflowed)");
+    var pe_g: f64[3];
+    at3(&pe_g, fb(0x4415AF1D78B58C40), 0.0, 0.0);              # (1e20, 0, 0)
+    var pe_t2, pe_v2 = bj_electric_potential_point_charge(fb(0x7FEFFFFFFFFFFFFF), &pe_o, &pe_g);
+    assert(ok_bits(pe_t2, pe_v2, 0x7DD8B46D656712A9) == 1, "k·DBL_MAX/1e20 = 1.6156860156167408e298 (Rust: ∞)");
+    var pe_cs: f64[8];
+    at3(&pe_cs, fb(0x7E37E43C8800759C), fb(0x3F50624DD2F1A9FC), 0.0);     # 1e300 at (1e-3, 0, 0)
+    pe_cs[3] = 0.0;
+    pe_cs[4] = fb(0x7E37E43C8800759C);
+    pe_cs[5] = fb(0xBF50624DD2F1A9FC);
+    pe_cs[6] = 0.0;
+    pe_cs[7] = 0.0;
+    var pe_s: BjFieldVector;
+    var pe_t3, pe_v3 = bj_electric_field_superposition(&pe_cs, 2, &pe_o, &pe_s);
+    var pe_sx: f64 = pe_s.x;
+    assert(is_ok(pe_t3) == 1 && same_bits(pe_sx, 0) == 1,
+      "two fields past DBL_MAX that cancel sum to 0 (Rust: ∞ − ∞ = NaN)");
+    var pe_p1: f64[3];
+    at3(&pe_p1, fb(0x54B249AD2594C37D), 0.0, 0.0);             # (1e100, 0, 0)
+    var pe_q1: BjPointCharge;
+    var pe_tq1, pe_vq1 = BjPointCharge_new(fb(0x6974E718D7D7625A), 1.0, &pe_p1, &pe_o, &pe_q1);   # 1e200 C
+    var pe_q2: BjPointCharge;
+    var pe_tq2, pe_vq2 = BjPointCharge_new(fb(0x6974E718D7D7625A), 1.0, &pe_o, &pe_o, &pe_q2);
+    var pe_fc: BjFieldVector;
+    var pe_t4, pe_v4 = bj_coulomb_force(pe_q1, pe_q2, &pe_fc);
+    var pe_fx: f64 = pe_fc.x;
+    assert(is_ok(pe_t4) == 1 && same_bits(pe_fx, 0x6B85DECAE4BF5B0C) == 1,
+      "k·q₁q₂/r² = 8.987551792261174e209 for 1e200·1e200 at 1e100 (Rust: k·q₁·q₂ overflowed)");
+    var pe_h: f64[3];
+    at3(&pe_h, fb(0x7FE1CCF385EBC8A0), 0.0, 0.0);              # (1e308, 0, 0)
+    var pe_t5, pe_v5 = bj_greens_function_static(&pe_h, &pe_o);
+    assert(ok_bits(pe_t5, pe_v5, 0x0000927D3D36449E) == 1, "1/(4π·1e308) = 7.95774715459477e-310 (Rust: 1/∞ = 0)");
+    var pe_k: f64[3];
+    at3(&pe_k, fb(0x7E37E43C8800759C), 0.0, 0.0);              # (1e300, 0, 0)
+    var pe_gs: BjComplex;
+    var pe_t6, pe_v6 = bj_greens_function_scalar(&pe_k, &pe_o, fb(0x7E37E43C8800759C), &pe_gs);
+    var pe_gr: f64 = pe_gs.re;
+    var pe_gi: f64 = pe_gs.im;
+    assert(is_ok(pe_t6) == 1 && same_bits(pe_gr, 0x816B2151537ED1F0) == 1 && same_bits(pe_gi, 0x8137473EBCD84550) == 1,
+      "e^{−jkR}/(4πR) with kR = 1e600, its cosine and sine past DBL_MAX (Rust: kR = ∞, NaN)");
+    if (pe_v1 == 7 || pe_v3 == 7 || pe_v4 == 7 || pe_v6 == 7) { println("."); }
+    assert(is_ok(pe_tq1) == 1 && is_ok(pe_tq2) == 1 && pe_vq1 == 0 && pe_vq2 == 0, "the two charges are valid");
+
     return assert_summary();
 }
 

@@ -107,7 +107,8 @@ impl BjPointCharge {
 }
 
 # F = kq₁q₂/r²·r̂ (N) on q1 from q2, as k·q₁·q₂·(1/r)³ times the offset q1 − q2 (away from q2 when they repel).
-# Singularity when the exact r² < 10^-30 (ADR 0002 row 17). Mirrors `charge::coulomb_force`.
+# At a range edge with an unbounded exponent, each component rounded once (ADR 0002 row 18). Singularity when the
+# exact r² < 10^-30 (row 17). Mirrors `charge::coulomb_force`.
 public fn bj_coulomb_force(q1: BjPointCharge, q2: BjPointCharge, out: *BjFieldVector): Result {
     var dx: f64 = q1.position.0 - q2.position.0;
     var dy: f64 = q1.position.1 - q2.position.1;
@@ -128,11 +129,43 @@ public fn bj_coulomb_force(q1: BjPointCharge, q2: BjPointCharge, out: *BjFieldVe
     if (band == 1) { return Err(_bj_err_singularity()); }
     var rt: f64 = f64_sqrt(r_sq);
     var inv_r: f64 = 1.0 / rt;
-    var factor: f64 = BJ_COULOMB_K * q1.charge * q2.charge * inv_r * inv_r * inv_r;
+    var kq: f64 = BJ_COULOMB_K * q1.charge;
+    var kq2: f64 = kq * q2.charge;
+    var factor: f64 = kq2 * inv_r * inv_r * inv_r;
     out.x = factor * dx;
     out.y = factor * dy;
     out.z = factor * dz;
+    # k·q₁, k·q₁·q₂ and the factor normal (an overflowed offset makes the factor 0, so r² needs no test of its own).
+    var e2 = (load64(&kq) >> 52) & 0x7FF;
+    var e3 = (load64(&kq2) >> 52) & 0x7FF;
+    var e4 = (load64(&factor) >> 52) & 0x7FF;
+    if (((e2 - 2) | (2046 - e2) | (e3 - 2) | (2046 - e3) | (e4 - 2) | (2046 - e4)) >= 0) { return Ok(0); }
+    _bj_ch_coulomb_slow(q1, q2, r_sq, kq, kq2, factor, out);
     return Ok(0);
+}
+
+# coulomb_force past its fast test, into out (which holds Rust's): Rust's chain stands for a zero charge with r² finite
+# or a non-finite input, else the unbounded chain.
+fn _bj_ch_coulomb_slow(q1: BjPointCharge, q2: BjPointCharge, r_sq: f64, kq: f64, kq2: f64, factor: f64,
+  out: *BjFieldVector) {
+    var pa: f64[3];
+    var pb: f64[3];
+    var p: f64[8];
+    pa[0] = q1.position.0;
+    pa[1] = q1.position.1;
+    pa[2] = q1.position.2;
+    pb[0] = q2.position.0;
+    pb[1] = q2.position.1;
+    pb[2] = q2.position.2;
+    p[0] = q1.charge;
+    p[1] = q2.charge;
+    for (var i = 0; i < 3; i = i + 1) {
+        p[2 + i] = pa[i];
+        p[5 + i] = pb[i];
+    }
+    if (_bj_vx_coulomb_plain(r_sq, kq, kq2, factor, q1.charge, q2.charge, &p, 8) == 1) { return 0; }
+    _bj_vx_coulomb_edge(BJ_COULOMB_K, q1.charge, q2.charge, &pa, &pb, out);
+    return 0;
 }
 
 # One component of the Lorentz force, (e + (a·b − c·d))·q, given Rust's s = e + (a·b − c·d): s·q where Rust's chain is

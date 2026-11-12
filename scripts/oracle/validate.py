@@ -19,7 +19,8 @@ It also writes and checks two generated outputs (`--write` writes them; a plain 
 - **the corrected oracle**, `tests/golden/math.cr.tsv` (kimiya ADR 0006, bijli ADR 0001): for every class-C row
   whose glibc result is not correctly rounded, the correctly rounded outputs (MPFR), which the harness compares
   against instead of glibc's;
-- **src/crmath_data.cyr**, crtables.py's rendering, with its π and ln 2 and every table's hi checked against MPFR.
+- **src/crmath_data.cyr**, crtables.py's rendering, with its π and ln 2 and every table's hi checked against MPFR;
+  and **src/crmath_ux_data.cyr**, its render_ux (bijli's longer 2/π), from π checked to 2,800 bits.
 
 Run with `python3 -I -B scripts/oracle/validate.py . [--write]` from the repo root. Exit status 0 when every row
 agrees and the generated files are current, 1 otherwise. Copied in spirit from impetus's and kimiya's validate.py.
@@ -388,6 +389,17 @@ def check_tables(root: Path) -> list:
         errs.append("src/crmath_data.cyr is not crtables.py's output (regenerate with --write)")
     elif not errs:
         print(f"ok   crmath_data: π and ln 2 to {n} bits, and every table's hi, equal MPFR {mpfr_ref.VERSION}'s")
+    upath = root / "src/crmath_ux_data.cyr"
+    utext = crtables.render_ux()
+    if crtables.pi_bits(crtables.UX_PREC) != mpfr_ref.const_bits("pi", crtables.UX_PREC):
+        errs.append(f"crtables: π to {crtables.UX_PREC} bits (crmath_ux_data's 2/π) differs from MPFR's")
+    if WRITE:
+        upath.write_text(utext)
+        print(f"wrote src/crmath_ux_data.cyr ({len(utext.splitlines())} lines)")
+    elif not upath.exists() or upath.read_text() != utext:
+        errs.append("src/crmath_ux_data.cyr is not crtables.py's render_ux output (regenerate with --write)")
+    else:
+        print(f"ok   crmath_ux_data: 2/π from π to {crtables.UX_PREC} bits, equal to MPFR's")
     kpath = root / "src/crmath_k_data.cyr"
     ktext = crtables_k.render()
     if WRITE:
@@ -1429,6 +1441,8 @@ def field_corrections(root: Path):
             EXACT_THR = False
             if any(k != "f" for k, _ in w17):
                 continue                    # the exact threshold makes it Singularity: row 17's mapping
+            if fn in FV_FNS and all(isinstance(x, float) and math.isfinite(x) for x in v) and fv_governed(fn, v):
+                continue                    # row 18's unbounded chain sets it
             old = [b for k, b in outs]
             new = [b for _, b in want]
             if len(old) == len(new) and all(same(a, b) for a, b in zip(old, new)):
@@ -1758,9 +1772,13 @@ def adr17_rows(root: Path, module: str, path: Path) -> list:
 # Row 18 (M1 part 5d-2): field.rs's and charge.rs's vector chains at a range edge, as row 14's complex ones. The model
 # is the chain with an unbounded exponent, exact values rounded to 53 bits (rnd53), the last operation once into
 # binary64; normalized is its first branch, |v| then each quotient, wherever the port leaves Rust's code.
+PC_FNS = ("field::electric_field_point_charge", "field::electric_potential_point_charge",
+          "field::magnetic_field_moving_charge", "field::electric_field_superposition", "charge::coulomb_force",
+          "PointCharge::electric_field_at", "PointCharge::electric_potential_at", "PointCharge::magnetic_field_at",
+          "field::greens_function_static", "field::greens_function_scalar")
 FV_FNS = ("FieldVector::magnitude", "FieldVector::magnitude_sq", "FieldVector::dot", "FieldVector::cross",
           "FieldVector::normalized", "field::image_charge_plane", "field::image_charge_dielectric",
-          "charge::lorentz_force", "PointCharge::lorentz_force_in")
+          "charge::lorentz_force", "PointCharge::lorentz_force_in") + PC_FNS
 
 
 VX_LO, VX_HI = 2.0 ** -900, sys.float_info.max
@@ -1811,8 +1829,184 @@ def fv_lorentz(q, vel, e, b):
     return ok3(tuple(ux_fin(ux_mul(ux_add(ux(e[i]), vb[i]), ux(q), ident)) for i in range(3)))
 
 
+# M1 part 5d-3's chains: the point charges, coulomb_force and the Green's functions. pc_parts gives the inputs in the
+# port's terms; pc_plain mirrors src/field.cyr's and src/charge.cyr's guards on Rust's binary64 values; pc_model is the
+# exact chain rounded to 53 bits, the exact threshold first (row 17).
+def pc_parts(fn, v):
+    """(kind, charges [(q, pos)], second charge, field point, velocity, k) of a 5d-3 row."""
+    if fn in ("field::electric_field_point_charge", "field::electric_potential_point_charge"):
+        return v[0], v[1:4], v[4:7], None, None
+    if fn == "field::magnetic_field_moving_charge":
+        return v[0], v[1:4], v[7:10], v[4:7], None
+    if fn in ("PointCharge::electric_field_at", "PointCharge::electric_potential_at", "PointCharge::magnetic_field_at"):
+        return v[0], v[2:5], v[8:11], v[5:8], None
+    if fn in ("field::greens_function_static", "field::greens_function_scalar"):
+        return None, v[3:6], v[0:3], None, (v[6] if fn.endswith("scalar") else None)
+    return None
+
+
+def nrm(x) -> bool:
+    """A biased exponent in [2, 2046]: 2^-1021 ≤ |x| ≤ DBL_MAX."""
+    return 2.0 ** -1021 <= abs(x) <= VX_HI
+
+
+def unit_ok(h, d) -> bool:
+    return d == 0.0 or nrm(h)
+
+
+def pc_rust(c, f):
+    """Rust's offset, r², 1/r in binary64."""
+    d = [f[i] - c[i] for i in range(3)]
+    r_sq = d[0] * d[0] + d[1] * d[1] + d[2] * d[2]
+    rt = fsqrt(r_sq)
+    return d, r_sq, rt, fdiv(1.0, rt)
+
+
+def pc_plain(fn, v) -> bool:
+    """The port takes Rust's chain for this (finite, non-singular) row."""
+    c0 = golden_consts_cached()
+    K, MU0 = c0["field::COULOMB_K"], c0["field::MU_0"]
+    if fn == "charge::coulomb_force":
+        q1, a, q2, b = v[0], v[2:5], v[8], v[10:13]
+        d, r_sq, rt, inv = pc_rust(b, a)
+        kq = K * q1
+        kq2 = kq * q2
+        fct = kq2 * inv * inv * inv
+        return r_sq <= VX_HI and ((nrm(kq) and nrm(kq2) and nrm(fct)) or q1 == 0.0 or q2 == 0.0)
+    if fn == "field::electric_field_superposition":
+        cnt = int(len(v) - 3) // 4
+        cs, at = v[0:4 * cnt], v[4 * cnt:4 * cnt + 3]
+        tot = [0.0, 0.0, 0.0]
+        ok = True
+        for j in range(cnt):
+            q, c = cs[4 * j], cs[4 * j + 1:4 * j + 4]
+            d, r_sq, rt, inv = pc_rust(c, at)
+            kq = K * q
+            fct = kq * inv * inv * inv
+            e = [fct * d[i] for i in range(3)]
+            tot = [tot[i] + e[i] for i in range(3)]
+            if not (r_sq <= VX_HI and (q == 0.0 or (nrm(kq) and nrm(fct) and all(unit_ok(e[i], d[i]) for i in range(3))))):
+                ok = False
+        return ok and all(math.isfinite(t) for t in tot)
+    q, c, f, vel, k = pc_parts(fn, v)
+    d, r_sq, rt, inv = pc_rust(c, f)
+    if fn.startswith("field::greens_function"):
+        den = 4.0 * PI * rt
+        if fn.endswith("static"):
+            return den <= VX_HI
+        fct = fdiv(1.0, den)
+        kr = k * rt
+        return den <= VX_HI and nrm(fct) and (nrm(kr) or k == 0.0)
+    if fn.endswith("magnetic_field_moving_charge") or fn.endswith("magnetic_field_at"):
+        h = [d[i] * inv for i in range(3)]
+        cr = [vel[1] * h[2] - vel[2] * h[1], vel[2] * h[0] - vel[0] * h[2], vel[0] * h[1] - vel[1] * h[0]]
+        mq = fdiv(MU0, 4.0 * PI) * q
+        fct = mq * inv * inv
+        pairs = [(vel[1], h[2], vel[2], h[1]), (vel[2], h[0], vel[0], h[2]), (vel[0], h[1], vel[1], h[0])]
+        crok = all(vx_band(cr[i]) or (cr[i] == 0.0 and (a == 0.0 or b == 0.0) and (x == 0.0 or y == 0.0))
+                   for i, (a, b, x, y) in enumerate(pairs))
+        return r_sq <= VX_HI and (q == 0.0 or (nrm(mq) and nrm(fct))) and all(unit_ok(h[i], d[i]) for i in range(3)) and crok
+    kq = K * q
+    if fn.endswith("potential_point_charge") or fn.endswith("potential_at"):
+        return r_sq <= VX_HI and (q == 0.0 or nrm(kq))
+    fct = kq * inv * inv * inv
+    return r_sq <= VX_HI and (q == 0.0 or (nrm(kq) and nrm(fct)))
+
+
+_CONSTS = {}
+
+
+def golden_consts_cached():
+    if not _CONSTS:
+        _CONSTS.update(golden_consts(Path(__file__).resolve().parents[2]))
+    return _CONSTS
+
+
+ONE = (Fraction(1), False)
+
+
+def pc_offset_ux(c, f):
+    d = [ux_sub(ux(f[i]), ux(c[i])) for i in range(3)]
+    r2 = ux_add(ux_add(ux_mul(d[0], d[0]), ux_mul(d[1], d[1])), ux_mul(d[2], d[2]))
+    rt = ux_sqrt(r2)
+    return d, rt, ux_div(ONE, rt)
+
+
+def pc_factor_ux(K, q1, q2, inv):
+    m = ux_mul(ux_mul(ux(K), ux(q1)), ux(q2))
+    for _ in range(3):
+        m = ux_mul(m, inv)
+    return m
+
+
+def pc_model(fn, v):
+    """The port's outputs for a 5d-3 row with finite inputs: the exact threshold, then the unbounded chain."""
+    ident = lambda t: t                                  # noqa: E731
+    c0 = golden_consts_cached()
+    K, MU0 = c0["field::COULOMB_K"], c0["field::MU_0"]
+    if fn == "charge::coulomb_force":
+        q1, a, q2, b = v[0], v[2:5], v[8], v[10:13]
+        if exact_sq(a, b) < Fraction(1, 10 ** 30):
+            return SINGULAR
+        d, rt, inv = pc_offset_ux(b, a)
+        fct = pc_factor_ux(K, q1, q2, inv)
+        return ok3(tuple(ux_fin(ux_mul(fct, d[i], ident)) for i in range(3)))
+    if fn == "field::electric_field_superposition":
+        cnt = int(len(v) - 3) // 4
+        cs, at = v[0:4 * cnt], v[4 * cnt:4 * cnt + 3]
+        acc = [(Fraction(0), False)] * 3
+        fin = [0.0, 0.0, 0.0]
+        for j in range(cnt):
+            q, c = cs[4 * j], cs[4 * j + 1:4 * j + 4]
+            if exact_sq(c, at) < Fraction(1, 10 ** 30):
+                return SINGULAR
+            d, rt, inv = pc_offset_ux(c, at)
+            fct = pc_factor_ux(K, q, 1.0, inv)
+            for i in range(3):
+                g = ux_mul(fct, d[i])
+                if j == cnt - 1:
+                    fin[i] = ux_fin(ux_add(acc[i], g, ident))
+                else:
+                    acc[i] = ux_add(acc[i], g)
+        return ok3(tuple(fin))
+    q, c, f, vel, k = pc_parts(fn, v)
+    if fn.startswith("field::greens_function"):
+        if exact_sq(c, f) < Fraction(1, 10 ** 60):
+            return SINGULAR
+        d, rt, inv = pc_offset_ux(c, f)
+        den = ux_mul(ux(4.0 * PI), rt)
+        if fn.endswith("static"):
+            return [("f", ux_fin(ux_div(ONE, den, ident)))]
+        fct = ux_div(ONE, den)
+        kr = ux_mul(ux(k), rt)
+        return [("f", ux_fin(ux_mul(fct, w_trig("cos", kr), ident))),
+                ("f", ux_fin(ux_mul(fct, w_trig("sin", kr), ident)))]
+    if exact_sq(c, f) < Fraction(1, 10 ** 30):
+        return SINGULAR
+    d, rt, inv = pc_offset_ux(c, f)
+    if fn.endswith("magnetic_field_moving_charge") or fn.endswith("magnetic_field_at"):
+        h = [ux_mul(d[i], inv) for i in range(3)]
+        cr = [ux_sub(ux_mul(ux(vel[1]), h[2]), ux_mul(ux(vel[2]), h[1])),
+              ux_sub(ux_mul(ux(vel[2]), h[0]), ux_mul(ux(vel[0]), h[2])),
+              ux_sub(ux_mul(ux(vel[0]), h[1]), ux_mul(ux(vel[1]), h[0]))]
+        fct = ux_mul(ux_mul(ux_mul(ux(fdiv(MU0, 4.0 * PI)), ux(q)), inv), inv)
+        return ok3(tuple(ux_fin(ux_mul(fct, cr[i], ident)) for i in range(3)))
+    kq = ux_mul(ux(K), ux(q))
+    if fn.endswith("potential_point_charge") or fn.endswith("potential_at"):
+        return [("f", ux_fin(ux_div(kq, rt, ident)))]
+    fct = pc_factor_ux(K, q, 1.0, inv)
+    return ok3(tuple(ux_fin(ux_mul(fct, d[i], ident)) for i in range(3)))
+
+
 def fv_args(fn, v):
     """The parts a row-18 function's chain reads (None for the images)."""
+    if fn == "charge::coulomb_force":
+        return [v[0], v[8]] + v[2:5] + v[10:13]
+    if fn == "field::electric_field_superposition":
+        return list(v)
+    if fn in PC_FNS:
+        q, c, f, vel, k = pc_parts(fn, v)
+        return [x for x in [q, k] if x is not None] + list(c) + list(f) + (list(vel) if vel is not None else [])
     if fn in ("FieldVector::magnitude", "FieldVector::magnitude_sq", "FieldVector::normalized"):
         return v[0:3]
     if fn in ("FieldVector::dot", "FieldVector::cross"):
@@ -1827,6 +2021,8 @@ def fv_args(fn, v):
 def fv_governed(fn, v) -> int:
     """18 where the port takes the unbounded chain for this row (any component), else 0 (Rust's chain): the guards of
     src/field.cyr and src/charge.cyr, on Rust's binary64 values."""
+    if fn in PC_FNS:
+        return 0 if (pc_model(fn, v) is SINGULAR or pc_plain(fn, v)) else 18
     if fn == "field::image_charge_plane":
         pz, z = v[4], v[3]
         return 18 if math.isfinite(pz) and abs(pz) >= 2.0 ** 1023 and math.isfinite(z) else 0
@@ -1865,6 +2061,8 @@ def fv_governed(fn, v) -> int:
 def fv_model(fn, v):
     """The port's outputs under row 18 for a governed row (finite parts)."""
     ident = lambda t: t                                  # noqa: E731
+    if fn in PC_FNS:
+        return pc_model(fn, v)
     if fn == "FieldVector::magnitude":
         return [("f", ux_fin_sqrt(fv_sumsq(*v[0:3])))]
     if fn == "FieldVector::magnitude_sq":
@@ -1903,16 +2101,28 @@ def fv_rows(root: Path, module: str, path: Path):
     outputs is mapped; on every other row of these functions, the port keeps Rust's chain, and the check that the
     unbounded chain gives the same value there is the guard's proof, row by row (Rust's chain from validate_field's
     or validate_charge's transcription)."""
-    rust = []
-    (validate_field if module == "field" else validate_charge)(root, path, rust)
+    global EXACT_THR
+    check = validate_field if module == "field" else validate_charge
+    rust, rounded = [], []
+    try:
+        EXACT_THR = True
+        check(root, path, rust, MPFR_P)
+        EXACT_THR = False
+        check(root, path, rounded, MPFR_P)
+    finally:
+        EXACT_THR = False
     lines = [l for l in path.read_text().splitlines() if not l.startswith("#")]
     out, errs = [], []
-    for n, (line, want) in enumerate(zip(lines, rust), 1):
+    for n, (line, want, w_round) in enumerate(zip(lines, rust, rounded), 1):
         fn, _cls, ins, outs, _note = line.split("\t")
         if fn not in FV_FNS or ins == "-":
             continue
+        if not toks_same(want, w_round):
+            continue                                    # row 17's (the exact threshold changes it)
         toks = [parse_tok(t) for t in ins.split(" ")]
         v = [b for _k, b in toks]
+        if fn == "field::electric_field_superposition":
+            v = v[1:]                                   # the charges' count token
         args = fv_args(fn, v)
         if args is not None and not all(isinstance(x, float) and math.isfinite(x) for x in args):
             continue                                    # a non-finite part keeps Rust's chain
