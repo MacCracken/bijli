@@ -120,10 +120,10 @@ fn _par_constants(fp, fl): i64 {
 # `f64::*` rows: the Rust std reference values (port plan §9.1).
 # - Classes A and B: the builtins (sqrt, abs, ceil) and src/mathx.cyr, gated.
 # - Class C: src/crmath.cyr's correctly rounded exp, sin, cos, sin_cos, hypot, pow, atan2 and atan (M1 part 1a),
-#   gated at 0 ulp against the corrected oracle (tests/golden/math.cr.tsv where glibc misrounds); cbrt is ganita's
-#   correctly rounded one, against the oracle's correctly rounded one (compiler-builtins). tan, asin and acos are
-#   still measured through ganita, and log10 is pending (the 6.7.18 stdlib has none), until their correctly
-#   rounded forms land (M1 part 1b/1c).
+#   gated at 0 ulp against the corrected oracle (tests/golden/math.cr.tsv where glibc misrounds), and
+#   src/crmath_k.cyr's acos, log10 (kimiya's) and asin (M1 part 1b); cbrt is ganita's correctly rounded one,
+#   against the oracle's correctly rounded one (compiler-builtins). tan is still measured through ganita until its
+#   correctly rounded form lands (M1 part 1c).
 fn _par_math(fp, fl): i64 {
     var x: f64 = _par_in(0);
     if (_par_eq(fp, fl, "f64::sqrt") == 1) { var r: f64 = f64_sqrt(x); _par_got_f(r); return 1; }
@@ -146,10 +146,10 @@ fn _par_math(fp, fl): i64 {
     if (_par_eq(fp, fl, "f64::tan") == 1) { var r: f64 = ganita_f64_tan(x); _par_got_f(r); return 1; }
     if (_par_eq(fp, fl, "f64::exp") == 1) { var r: f64 = _bj_exp(x); _par_got_f(r); return 1; }
     if (_par_eq(fp, fl, "f64::atan") == 1) { var r: f64 = _bj_atan(x); _par_got_f(r); return 1; }
-    if (_par_eq(fp, fl, "f64::asin") == 1) { var r: f64 = ganita_f64_asin(x); _par_got_f(r); return 1; }
-    if (_par_eq(fp, fl, "f64::acos") == 1) { var r: f64 = ganita_f64_acos(x); _par_got_f(r); return 1; }
+    if (_par_eq(fp, fl, "f64::asin") == 1) { var r: f64 = _bj_asin(x); _par_got_f(r); return 1; }
+    if (_par_eq(fp, fl, "f64::acos") == 1) { var r: f64 = _bj_acos(x); _par_got_f(r); return 1; }
     if (_par_eq(fp, fl, "f64::cbrt") == 1) { var r: f64 = ganita_f64_cbrt(x); _par_got_f(r); return 1; }
-    if (_par_eq(fp, fl, "f64::log10") == 1) { return 0; }
+    if (_par_eq(fp, fl, "f64::log10") == 1) { var r: f64 = _bj_log10(x); _par_got_f(r); return 1; }
     if (_par_in_n < 2) { return 0; }
     if (_par_eq(fp, fl, "f64::powi") == 1) {
         var n = _par_in(1);
@@ -238,6 +238,9 @@ fn _par_c_bound(fp, fl): i64 {
     if (_par_eq(fp, fl, "f64::powf") == 1) { return 0; }
     if (_par_eq(fp, fl, "f64::atan2") == 1) { return 0; }
     if (_par_eq(fp, fl, "f64::atan") == 1) { return 0; }
+    if (_par_eq(fp, fl, "f64::asin") == 1) { return 0; }
+    if (_par_eq(fp, fl, "f64::acos") == 1) { return 0; }
+    if (_par_eq(fp, fl, "f64::log10") == 1) { return 0; }
     return 0 - 1;
 }
 

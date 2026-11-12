@@ -8,8 +8,9 @@
 # - to_radians and to_degrees are one multiply by Rust's folded constant;
 # - powi is compiler-rt's `__powidf2`, which Rust calls for bijli's run-time exponents.
 # - exp, sin, cos, sin_cos, hypot, pow, atan2 and atan are correctly rounded (src/crmath.cyr, impetus's ADR 0011
-#   adopted by bijli's ADR 0001): the same bits on every target, matching the corrected oracle. log10, asin, acos
-#   and tan join them in M1; cbrt is ganita's, already correctly rounded.
+#   adopted by bijli's ADR 0001), and so are acos, log10 (kimiya's) and asin (src/crmath_k.cyr): the same bits on
+#   every target, matching the corrected oracle. tan joins them in M1; cbrt is ganita's, already correctly
+#   rounded.
 # Adapted from impetus's src/mathx.cyr (its `_im_` helpers).
 
 # π/180 as Rust folds `consts::PI / 180.0`: the double nearest, pinned by the to_radians rows.
@@ -184,5 +185,27 @@ fn _bj_atan2(y: f64, x: f64): f64 {
 #must_use
 fn _bj_atan(x: f64): f64 {
     var r: f64 = _bj_cr_atan2(x, 1.0);
+    return r;
+}
+
+# acos x, correctly rounded (src/crmath_k.cyr, kimiya's). Stands for `f64::acos`.
+#must_use
+fn _bj_acos(x: f64): f64 {
+    var r: f64 = _bj_k_cr_acos(x);
+    return r;
+}
+
+# asin x, correctly rounded (src/crmath_k.cyr). Stands for `f64::asin`.
+#must_use
+fn _bj_asin(x: f64): f64 {
+    var r: f64 = _bj_k_cr_asin(x);
+    return r;
+}
+
+# log10 x, correctly rounded (src/crmath_k.cyr, kimiya's): log10(10^k) = k exactly for k = 0 … 22. Stands for
+# `f64::log10`.
+#must_use
+fn _bj_log10(x: f64): f64 {
+    var r: f64 = _bj_k_cr_log10(x);
     return r;
 }

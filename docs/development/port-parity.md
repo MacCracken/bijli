@@ -156,3 +156,31 @@ Language facts the probes found, beyond plan §2:
 | f64::hypot | `b904b4aff7f5703d` |
 | f64::powf | `e25863c3e07f8bf6` |
 | f64::atan | `c025934e4462a8a2` |
+
+## 6. M1 part 1b: correctly rounded acos, log10 and asin (2026-11-11)
+
+- **`src/crmath_k.cyr` and `src/crmath_k_data.cyr`**: kimiya's acos and log10 (its ADR 0006), copied function for
+  function with the prefixes renamed (`_km_` → `_bj_k_`): the 24 functions their call closure reaches, the atan and
+  ln cores (a double-double fast path with a proven bound and a rounding test, then a triple-double accurate path)
+  and the triple-double arithmetic under them. `scripts/oracle/crtables_k.py` (kimiya's `mathx_tables.py`, its ln
+  and atan tables) regenerates the data, and `validate.py` checks it is that output.
+- **asin is bijli's**, on the same atan core as kimiya's acos: asin |x| = atan2(|x|, √(1 − x²)). 1 − x² is a
+  double-double ((1 − |x|)·(1 + |x|) by Dekker's product for |x| ≥ ½, 1 − x² below), its square root a double-double
+  by one Newton step, and the core takes the pair in the octant that keeps its quotient ≤ 1, so its rounding test
+  and accurate path decide the last bit. |x| < 2⁻²⁶ returns x (asin x − x < x³/6 is below half an ulp), ±1 returns ±π/2, |x| > 1
+  and NaN give NaN, and a negative x is the negated result.
+- **Beyond the corpus** (`cr_verify.py`): asin on **1,000,000 arguments** (the plan's §6 step 8 floor), acos and
+  log10 on 300,000 each, drawn over the whole domain, the binades near 0 and 1, the last 2,000 doubles below ±1,
+  the thresholds, every power of ten from 10⁻³⁰ to 10³⁰ and the subnormals: **every result equals MPFR's, on
+  x86_64 and on aarch64 (qemu)**.
+- **Bounds: 0** for asin, acos and log10, against the corrected oracle: log10 1,141 ok and 92 accepted (ADR 01), asin
+  1,083 ok and 1 accepted, acos 1,084 ok. Every one of those 93 rows equals MPFR's value, none glibc's.
+- **Result, every target** (x86_64 ELF, x86_64 PE, aarch64): 2 modules, 0 failing; **32,473 ok, 0 failed, 2,156
+  measured (tan), 0 pending, 117 accepted (ADR 01)**. **Digests: all 26 equal on all three targets.** tan is still
+  ganita's, measured (2,097 rows at 0 ulp, 59 at 1 ulp), until part 1c.
+
+| Function | Digest, every target |
+|---|---|
+| f64::log10 | `401a912eb68a4da1` |
+| f64::asin | `eb26b0ebcaa77e11` |
+| f64::acos | `35c6927605dbf37c` |

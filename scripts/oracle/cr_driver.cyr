@@ -43,6 +43,9 @@ fn _call(fp, fl, x: f64, y: f64): i64 {
     elif (_is(fp, fl, "atan2") == 1) { r = _bj_atan2(x, y); }
     elif (_is(fp, fl, "hypot") == 1) { r = _bj_hypot(x, y); }
     elif (_is(fp, fl, "pow") == 1) { r = _bj_powf(x, y); }
+    elif (_is(fp, fl, "acos") == 1) { r = _bj_acos(x); }
+    elif (_is(fp, fl, "asin") == 1) { r = _bj_asin(x); }
+    elif (_is(fp, fl, "log10") == 1) { r = _bj_log10(x); }
     else { return 0 - 1; }
     var w = _bj_bits(r);
     return w;

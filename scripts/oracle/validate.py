@@ -37,6 +37,7 @@ from pathlib import Path
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import mpfr_ref  # noqa: E402  (system MPFR through ctypes)
 import crtables  # noqa: E402  (src/crmath_data.cyr's generator)
+import crtables_k  # noqa: E402  (src/crmath_k_data.cyr's generator, kimiya's ln and atan tables)
 
 WRITE = "--write" in sys.argv[2:]
 
@@ -381,6 +382,15 @@ def check_tables(root: Path) -> list:
         errs.append("src/crmath_data.cyr is not crtables.py's output (regenerate with --write)")
     elif not errs:
         print(f"ok   crmath_data: π and ln 2 to {n} bits, and every table's hi, equal MPFR {mpfr_ref.VERSION}'s")
+    kpath = root / "src/crmath_k_data.cyr"
+    ktext = crtables_k.render()
+    if WRITE:
+        kpath.write_text(ktext)
+        print(f"wrote src/crmath_k_data.cyr ({len(ktext.splitlines())} lines)")
+    elif not kpath.exists() or kpath.read_text() != ktext:
+        errs.append("src/crmath_k_data.cyr is not crtables_k.py's output (regenerate with --write)")
+    else:
+        print(f"ok   crmath_k_data: crtables_k.py's output (MPFR {mpfr_ref.VERSION}, 400-bit values)")
     return errs
 
 

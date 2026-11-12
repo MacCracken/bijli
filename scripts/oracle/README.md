@@ -52,6 +52,7 @@ port's harness reads the same files. This README records what is specific to bij
 | `constants` | M0 | 12 | `src/m_constants.rs` | `src/constants.cyr` (`src/t_constants.rs`, with the completeness proof) |
 | `math` | M0 (+ 125 corrected, M1) | 34,734 | `src/m_math.rs` | — |
 | (correctly rounded tables) | M1 | — | — | `src/crmath_data.cyr` (`crtables.py`, written and checked by `validate.py`) |
+| (correctly rounded tables, kimiya's) | M1 | — | — | `src/crmath_k_data.cyr` (`crtables_k.py`, written and checked by `validate.py`) |
 
 Beyond the corpus, `cr_verify.py` checks each correctly rounded primitive against MPFR on seeded argument sets,
 natively and under qemu-aarch64 (`python3 -I -B scripts/oracle/cr_verify.py . --n 100000 --aarch64`, after

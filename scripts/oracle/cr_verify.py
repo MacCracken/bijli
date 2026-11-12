@@ -10,6 +10,7 @@ dist/bijli.cyr) natively, and with --aarch64 also for aarch64 under qemu-aarch64
 with MPFR's correctly rounded value (mpfr_ref.py). Any difference is printed and fails the run (exit 1). This is how
 a new primitive earns its 0-ulp gate (port plan §6 step 8: ≥ 10⁶ arguments for asin and tan).
 """
+import math
 import os
 import random
 import struct
@@ -73,6 +74,22 @@ def unary_args(name, rng, count):
     elif name == "atan":
         xs += [rng.uniform(-10.0, 10.0) for _ in range(share)]
         xs += [rng.uniform(-1.0, 1.0) * 2.0 ** rng.randint(-1074, 1023) for _ in range(share)]
+    elif name in ("asin", "acos"):
+        xs += [rng.uniform(-1.0, 1.0) for _ in range(share)]
+        xs += [math.copysign(1.0 - rng.uniform(0, 1) * 2.0 ** -rng.randint(1, 53), rng.uniform(-1, 1))
+               for _ in range(share // 2)]
+        xs += [rng.uniform(-1.0, 1.0) * 2.0 ** -rng.randint(0, 80) for _ in range(share // 2)]
+        for e in (2.0 ** -26, 2.0 ** -56, 0.5, 2.0 ** -0.5, 1.0):
+            xs += around(e) + around(-e)
+        xs += [b2f(f2b(1.0) - k) for k in range(1, 2000)] + [-b2f(f2b(1.0) - k) for k in range(1, 2000)]
+        xs += [rng.uniform(-3.0, 3.0) for _ in range(1000)]
+    elif name == "log10":
+        xs += [rng.uniform(1.0, 2.0) * 2.0 ** rng.randint(-1074, 1023) for _ in range(share)]
+        xs += [1.0 + rng.uniform(-1.0, 1.0) * 2.0 ** -rng.randint(1, 60) for _ in range(share // 2)]
+        xs += [b2f(rng.getrandbits(52)) for _ in range(share // 4)]          # subnormals
+        for k in range(-30, 31):
+            xs += around(10.0 ** k)
+        xs += [-rng.uniform(0.0, 10.0) for _ in range(500)]
     xs += [rand_double(rng) for _ in range(count - len(xs))]
     return [(x,) for x in xs[:count]]
 
@@ -100,6 +117,7 @@ def binary_args(name, rng, count):
 FUNCS = {
     "exp": (1, "exp"), "sin": (1, "sin"), "cos": (1, "cos"), "atan": (1, "atan"),
     "atan2": (2, "atan2"), "hypot": (2, "hypot"), "pow": (2, "pow"),
+    "acos": (1, "acos"), "asin": (1, "asin"), "log10": (1, "log10"),
 }
 
 
