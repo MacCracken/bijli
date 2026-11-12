@@ -1,4 +1,4 @@
-# Probes (Cyrius 6.7.18, 2026-11-11)
+# Probes (Cyrius 6.7.18, 2026-11-11; p16 2026-11-12)
 
 The evidence behind the port plan's §2 (the language review, p1–p6) and its M0 step 9 (p7–p14), recorded in
 [`port-parity.md`](../../docs/development/port-parity.md) §4. Each one is a small program that checks one claim
@@ -28,3 +28,5 @@ files are Rust references (`rustc -O`). Re-run them all at every Cyrius pin bump
 | `p13_cell_step.cyr` | one scalar 3D Yee cell-step, 30³ | ≈ 1,280 us/step (≈ 47 ns per cell-step; Rust 298 us/step) |
 | `p14_last_error.cyr` | the per-thread last-error record on two threads | `threads ok: 2 of 2 \| main's own record code 33` |
 | `p15_tuple_field.cyr` | `(f64, f64, f64)` tuple fields for Rust's `[f64; 3]` (`PointCharge`): typed element reads, a literal store, a struct copy, `&x + offset` as a `*f64`, by-value passing | `4008000000000000 4022000000000000 4018000000000000 3fec000000000000 40` |
+| `p16_json.cyr` | bayan 1.11.1's value tree and printer against serde_json 1.0.154 (M1 part 4): ⚠ `-0` is the integer 0, an integer past i64 is refused, `1e400` is +∞ with no error, a raw control character and an overlong UTF-8 form in a string are taken; a lone surrogate, a repeated key and the 129th level are refused | `2 0 \| ERR integer is out of range for i64 \| 3 7ff0000000000000 \| 5 0 \| 5 0 \| ERR incomplete surrogate pair \| ERR duplicate key \| ERR nesting too deep \|`, then `10000000000000000.0 1e-7 null null -0.0` |
+| `p16b_derive_private.cyr` (+ `p16b_private_a.cyr`, `p16b_private_b.cyr`) | ⚠ `#derive(Serialize)` in two `private` files | the build **fails**: `'_cy_json_skipval' is private to its file` (it builds with the first file's `private` removed) |

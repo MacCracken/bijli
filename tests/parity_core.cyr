@@ -183,6 +183,37 @@ fn _par_in_cstr(k): i64 {
     return out;
 }
 
+# Input token k, an `s:` token, as fresh bytes with its `%XX` escapes decoded (a NUL byte among them), their count at
+# *lenp. 0 if the token is no `s:` token or an escape is malformed.
+fn _par_in_bytes(k, lenp): i64 {
+    var at = k * 8;
+    if (k >= _par_in_n || load64(_par_in_k + at) != 115) { return 0; }
+    var p = load64(_par_in_v + at);
+    var len = load64(_par_in_l + at);
+    var out = alloc(len + 1);
+    if (out == 0) { return 0; }
+    var n = 0;
+    var j = 0;
+    while (j < len) {
+        var c = load8(p + j);
+        if (c == 37) {
+            if (j + 2 >= len) { return 0; }
+            var hi = _par_hex_upper(load8(p + j + 1));
+            var lo = _par_hex_upper(load8(p + j + 2));
+            if (hi < 0 || lo < 0) { return 0; }
+            c = hi * 16 + lo;
+            j = j + 3;
+        } else {
+            j = j + 1;
+        }
+        store8(out + n, c);
+        n = n + 1;
+    }
+    store8(out + n, 0);
+    store64(lenp, n);
+    return out;
+}
+
 # Appends an f64 result word to the got list.
 fn _par_got_f(bits) {
     var at = _par_got_n * 8;

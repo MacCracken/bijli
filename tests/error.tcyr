@@ -145,7 +145,7 @@ fn main() {
     assert(text_is(bj_error_message(BJ_ERR_SINGULARITY), "singularity: field evaluation at source point (distance = 0)")
       == 1, "a message with no field");
     assert(text_is(bj_error_message(99), "unknown error") == 1, "no code");
-    for (var k = 0; k <= 10; k = k + 1) {
+    for (var k = 0; k <= 11; k = k + 1) {
         assert(text_is(bj_error_name(k), "Unknown") == 0, "every code has a name");
     }
 

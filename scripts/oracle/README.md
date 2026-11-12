@@ -55,6 +55,7 @@ port's harness reads the same files. This README records what is specific to bij
 | `error` | M1 | 1,635 | `src/m_error.rs` | — |
 | `field` | M1 (parts 3a–3c) | 22,361 | `src/m_field.rs` | — |
 | `fmtf` | M1 (+ Debug, part 3c) | 56,364 | `src/m_fmtf.rs` (impetus's grid) | — |
+| `json` | M1 (part 4) | 14,758 (+ 6,390 corrected) | `src/m_json.rs` (serde_json 1.0.154 on `Complex`, `FieldVector`, `PointCharge`) | — |
 | `math` | M0 (+ sinh, cosh and 125 corrected, M1) | 36,522 | `src/m_math.rs` | — |
 | `maxwell` | M1 (part 3d) | 20,349 | `src/m_maxwell.rs` | — |
 | (correctly rounded tables) | M1 | — | — | `src/crmath_data.cyr` (`crtables.py`, written and checked by `validate.py`) |
@@ -99,7 +100,9 @@ fn <TAB> class <TAB> inputs <TAB> outputs <TAB> note
 
 `<module>.cr.tsv` (the corrected oracle, kimiya ADR 0006) holds, for a row whose glibc calls
 misrounded, the oracle's sequence of operations evaluated with correctly rounded primitives
-(`mpfr_ref.py`). `validate.py --write` produces it; the generator only checks it has a module.
+(`mpfr_ref.py`). `validate.py --write` produces it; the generator only checks it has a module. `json.cr.tsv` holds, for a reader row serde_json misread
+(its default float parse is best-effort: ADR 0002 row 11), the document read with every number correctly rounded
+(Python's `float`).
 
 ## bijli specifics
 
@@ -107,3 +110,10 @@ misrounded, the oracle's sequence of operations evaluated with correctly rounded
 - `f64::sin_cos` has two outputs, sin then cos (glibc's `sincos`, which equals the separate calls).
 - `f64::powi` rows take the exponent as an `i:` input: bijli's exponents are run-time values,
   which reach `__powidf2`.
+- **`json` rows** (`m_json.rs`). A writer row (`json::<Type>::to_string`, class A) gives serde_json's text as parsed
+  tokens: each number outside strings an `f:` token (its correctly rounded value), each run between numbers an `s:`
+  token, so the port's text matches it whatever notation each printer chose (D5). A reader row
+  (`json::<Type>::from_str`, class C at 0 ulp) takes the document (`s:`) and `i:<flags>`, what serde_json reads
+  without checking (1 a repeated key, 2 a lone surrogate escape, 4 nesting past 128, set only on a document it
+  reads: ADR 0002 row 12), and gives the f64 in field order, or `E:Deserialize` with serde_json's message in the
+  note. Each (function, inputs) appears once, since a correction keys on it.

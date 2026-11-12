@@ -1,0 +1,71 @@
+# p16 — bayan 1.11.1's JSON value tree and f64 printer against serde_json 1.0.154, as src/json.cyr relies on them
+# (M1 part 4). For each document: `tag` and the f64 bits bayan_json_v_float reads, or `ERR` and bayan's message.
+# serde_json's readings, for comparison: `-0` is -0.0 (bayan: the integer 0, so the sign is lost); 2^63 and 2^64 are
+# numbers (bayan: refused); `1e400` is refused as out of range (bayan: +∞, no error); a raw control character in a
+# string is refused (bayan: taken); a lone surrogate escape in a value serde skips is taken (bayan: refused); a
+# repeated key in a value serde skips is taken (bayan: refused); nesting in a skipped value has no limit (bayan: 128).
+include "lib/syscalls.cyr"
+include "lib/string.cyr"
+include "lib/alloc.cyr"
+include "lib/str.cyr"
+include "lib/fmt.cyr"
+include "lib/io.cyr"
+include "lib/vec.cyr"
+include "lib/math.cyr"
+include "lib/bayan.cyr"
+
+fn puts(s) {
+    print(s, strlen(s));
+    return 0;
+}
+
+fn show(txt, n) {
+    var a = arena_allocator_growable(4096);
+    var ps[48];
+    var v = bayan_json_v_parse_ctx_a(a, &ps, txt, n);
+    if (v == 0) {
+        puts("ERR ");
+        puts(bayan_json_state_error(&ps));
+    } else {
+        fmt_int(bayan_json_v_tag(v));
+        puts(" ");
+        fmt_hex(bayan_json_v_float(v));
+    }
+    puts(" | ");
+    return 0;
+}
+
+fn wr(bits) {
+    var buf[32];
+    var n = bayan_f64_to_json(bits, &buf);
+    print(&buf, n);
+    puts(" ");
+    return 0;
+}
+
+fn main() {
+    alloc_init();
+    show("-0", 2);
+    show("9223372036854775808", 19);
+    show("1e400", 5);
+    show("[\"a\x01b\"]", 7);
+    show("[\"\xc0\xaf\"]", 6);
+    show("[\"\\ud800\"]", 10);
+    show("{\"a\":1,\"a\":2}", 13);
+    var deep = str_builder_new();
+    for (var k = 0; k < 129; k = k + 1) { str_builder_putc(deep, 91); }
+    for (var k2 = 0; k2 < 129; k2 = k2 + 1) { str_builder_putc(deep, 93); }
+    var ds = str_builder_build(deep);
+    show(str_data(ds), str_len(ds));
+    puts("\n");
+    wr(0x4341C37937E08000);
+    wr(0x3E7AD7F29ABCAF48);
+    wr(0x7FF8000000000000);
+    wr(0xFFF0000000000000);
+    wr(0x8000000000000000);
+    puts("\n");
+    return 0;
+}
+
+var r = main();
+syscall(60, 0);

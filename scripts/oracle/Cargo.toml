@@ -18,6 +18,8 @@ bijli = { path = "../../rust-old", default-features = false, features = ["full"]
 # serde_json is bijli's own (the `full` features pull it), named here for the fmtf rows' `serde_json::f64` form:
 # the lock keeps it at 1.0.154, the version the oracle was tested with.
 serde_json = "1.0.154"
+# serde is bijli's own too (1.0.229 in the lock); the json rows' repeated-key scan implements its Visitor.
+serde = "1.0.229"
 
 [[bin]]
 name = "oracle"

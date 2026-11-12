@@ -12,6 +12,10 @@ include "lib/io.cyr"
 include "lib/sakshi.cyr"
 include "lib/freelist.cyr"
 include "lib/result.cyr"
+include "lib/bayan.cyr"
+include "lib/str.cyr"
+include "lib/alloc.cyr"
+include "lib/fnptr.cyr"
 
 # --- constants.cyr ---
 
@@ -5872,8 +5876,9 @@ public fn _bj_trace(msg): i64 {
 # A fallible bijli function returns a value-form Result whose Err payload is one of the BJ_ERR_* codes:
 # `var t, v = f(..); if (is_err_result(t) == 1) { .. v is the code .. }`. The golden token `E:InvalidParameter`
 # is BJ_ERR_INVALID_PARAMETER: BJ_ERR_ + snake(variant). The values follow the Rust variant order and are
-# append-only (the Cyrius form of #[non_exhaustive]); BJ_ERR_TRANSPORT (ADR 0002 row 7) and BJ_ERR_ALLOCATION (row 9:
-# where Rust aborts on a failed allocation, the port returns this) are Cyrius-only.
+# append-only (the Cyrius form of #[non_exhaustive]); BJ_ERR_TRANSPORT (ADR 0002 row 7), BJ_ERR_ALLOCATION (row 9:
+# where Rust aborts on a failed allocation, the port returns this) and BJ_ERR_DESERIALIZE (row 10: a JSON document
+# the readers refuse, where Rust's serde_json returns its own error type) are Cyrius-only.
 #
 # Rust's variants carry data (`DimensionMismatch { expected, got }`, `InvalidPermittivity { value }`, the
 # `reason` and `context` strings, mostly `format!`ed with the caller's values). A one-word Result can't hold it,
@@ -5914,6 +5919,7 @@ public enum BjError {
     BJ_ERR_INVALID_PARAMETER = 8;
     BJ_ERR_TRANSPORT = 9;
     BJ_ERR_ALLOCATION = 10;
+    BJ_ERR_DESERIALIZE = 11;
 }
 
 # ── the record ──────────────────────────────────────────────────────────────────────
@@ -6068,15 +6074,16 @@ public fn _bj_err_invalid_permeability(value: f64): i64 {
 }
 
 # Starts an error whose payload is a string, DivisionByZero { context }, InvalidParameter { reason } or the
-# Cyrius-only Transport { reason } and Allocation { reason }: writes the Display text's prefix, marks where the string
-# starts, and returns the BjText for the caller to write the string into. A code with no string payload gets no
-# prefix.
+# Cyrius-only Transport { reason }, Allocation { reason } and Deserialize { reason }: writes the Display text's prefix,
+# marks where the string starts, and returns the BjText for the caller to write the string into. A code with no
+# string payload gets no prefix.
 public fn _bj_err_reason(code): i64 {
     var t = _bj_err_begin(code);
     if (code == BJ_ERR_DIVISION_BY_ZERO) { _bj_tx_cstr(t, "division by zero in EM calculation: "); }
     elif (code == BJ_ERR_INVALID_PARAMETER) { _bj_tx_cstr(t, "invalid parameter: "); }
     elif (code == BJ_ERR_TRANSPORT) { _bj_tx_cstr(t, "transport error: "); }
     elif (code == BJ_ERR_ALLOCATION) { _bj_tx_cstr(t, "allocation failed: "); }
+    elif (code == BJ_ERR_DESERIALIZE) { _bj_tx_cstr(t, "deserialization failed: "); }
     else { return t; }
     store64(t - 8, _bj_tx_len(t));
     return t;
@@ -6199,8 +6206,8 @@ public fn bj_last_error_clear(): i64 {
     return 0;
 }
 
-# The Rust variant name of an error code (`"InvalidParameter"`), "None" for BJ_ERR_NONE, "Transport" and
-# "Allocation" for the Cyrius-only codes, or "Unknown" for a value that is no code.
+# The Rust variant name of an error code (`"InvalidParameter"`), "None" for BJ_ERR_NONE, "Transport", "Allocation"
+# and "Deserialize" for the Cyrius-only codes, or "Unknown" for a value that is no code.
 #must_use
 public fn bj_error_name(code): i64 {
     if (code == BJ_ERR_NONE) { return "None"; }
@@ -6214,6 +6221,7 @@ public fn bj_error_name(code): i64 {
     if (code == BJ_ERR_INVALID_PARAMETER) { return "InvalidParameter"; }
     if (code == BJ_ERR_TRANSPORT) { return "Transport"; }
     if (code == BJ_ERR_ALLOCATION) { return "Allocation"; }
+    if (code == BJ_ERR_DESERIALIZE) { return "Deserialize"; }
     return "Unknown";
 }
 
@@ -6233,6 +6241,7 @@ public fn bj_error_message(code): i64 {
     if (code == BJ_ERR_INVALID_PARAMETER) { return "invalid parameter"; }
     if (code == BJ_ERR_TRANSPORT) { return "transport error"; }
     if (code == BJ_ERR_ALLOCATION) { return "allocation failed"; }
+    if (code == BJ_ERR_DESERIALIZE) { return "deserialization failed"; }
     return "unknown error";
 }
 
@@ -8073,4 +8082,640 @@ public fn bj_larmor_radius(mass: f64, v_perp: f64, charge: f64, b_magnitude: f64
     var aq: f64 = f64_abs(charge);
     var r: f64 = mass * av / aq / b_magnitude;
     return Ok(r);
+}
+
+# --- json.cyr ---
+
+# json.cyr — JSON for M1's serializable types: BjComplex (Rust hisab 1.4.0's `Complex`), BjFieldVector and
+# BjPointCharge, as serde_json 1.0.154 writes and reads them (port plan D5, M1 part 4; ADR 0002 rows 10–12).
+#
+# Writers append serde's document to a `str_builder`: the fields in Rust declaration order, no spaces, a `[f64; 3]`
+# as an array, every f64 through bayan's printer (`bayan_f64_to_json`, the printer `#derive(Serialize)` uses): the
+# shortest round-trip digits, `null` for NaN and ±∞ as serde_json writes them. The notation is bayan's, not ryu's
+# (`10000000000000000.0` where serde_json writes `1e16`); each parses to the same bits, which is what the golden rows
+# compare (D5). The document is built on the stack and appended in one grow, so a refused allocation leaves the
+# builder as it was and returns BJ_ERR_ALLOCATION (the builder's own grow would exit the process). Hand-written, not
+# derived: on cyrius 6.7.18 a `#derive(Serialize)` in a second `private` file fails to compile (the derive's shared
+# helper is private to the first one), and the derive would export its scanner decoders as bijli API (probe p16).
+#
+# Readers parse the text with bayan's value tree and apply serde's derive semantics:
+# - a struct reads from an object, by field name, or from an array, by position (serde's sequence form), which must
+#   hold exactly its fields; a `[f64; 3]` reads from an array of exactly three numbers;
+# - a field missing, a value of the wrong JSON type, or an array of the wrong length is BJ_ERR_DESERIALIZE;
+# - unknown fields are ignored, whatever their value (it must still be valid JSON);
+# - an f64 takes any JSON number, correctly rounded (ADR 0002 row 11: serde_json's default parse is best-effort, and
+#   the golden rows compare against the correctly rounded value), and never `null` (serde_json writes NaN and ±∞ as
+#   `null` and can't read them back, nor can the port); a number whose correctly rounded value overflows is refused,
+#   as serde_json refuses `1e400`;
+# - the whole document is checked, unknown values included (ADR 0002 row 12): a key repeated in any object, a lone
+#   surrogate escape in any string, or containers nested past 128 levels refuse it. serde_json checks only what it
+#   deserializes: it refuses those in the struct's own fields and keys, and skips an unknown value unchecked;
+# - a mass that `BjPointCharge_new` would refuse is read as written: Rust's fields are public, and the readers read
+#   back every document the writers write.
+# Where bayan reads the text otherwise than serde_json, one pass before bayan sees it puts that right: the integer
+# `-0` (an integer 0 in bayan's tree, so an f64 field would lose the sign; serde_json reads -0.0) and an integer
+# outside i64 (refused by bayan; a number to serde_json) each get `.0` appended, which bayan reads as a float,
+# correctly rounded; a raw control character in a string (taken by bayan; refused by serde_json and RFC 8259 §7) and
+# bytes that are not UTF-8 in a string (which a Rust `&str` can't hold) refuse the document. A document with no such
+# integer is parsed in place.
+#
+# A failed read fills the calling thread's last-error record: BJ_ERR_DESERIALIZE, Display
+# `deserialization failed: <reason>`, with serde's wording where it applies (`missing field `y``) and bayan's for a
+# syntax error, at its byte offset in the caller's text. `out` is written only on success.
+#
+# Memory. Every node of the tree comes from a decode region on the reader's stack: freelist chunks, chained and given
+# back when the read ends, so a read leaves the heap as it found it (nothing on the bump heap) and two threads reading
+# at once share nothing.
+
+private
+
+# ── writers ─────────────────────────────────────────────────────────────────────────
+
+# Appends the C string s at buf + n; the new length.
+fn _bj_jw_cstr(buf, n, s): i64 {
+    var k = strlen(s);
+    memcpy(buf + n, s, k);
+    return n + k;
+}
+
+# Appends the f64 with bits x in bayan's JSON form (at most 25 bytes; `null` for NaN and ±∞); the new length.
+fn _bj_jw_f64(buf, n, x): i64 {
+    return n + bayan_f64_to_json(x, buf + n);
+}
+
+# Appends `[a,b,c]` for the three f64 at p; the new length.
+fn _bj_jw_triple(buf, n, a, b, c): i64 {
+    var m = n;
+    store8(buf + m, 91);
+    m = _bj_jw_f64(buf, m + 1, a);
+    store8(buf + m, 44);
+    m = _bj_jw_f64(buf, m + 1, b);
+    store8(buf + m, 44);
+    m = _bj_jw_f64(buf, m + 1, c);
+    store8(buf + m, 93);
+    return m + 1;
+}
+
+# Appends the document [buf, buf + n) to the builder sb in one grow: Ok(0), or Err(BJ_ERR_ALLOCATION) with sb as it
+# was.
+#must_use
+fn _bj_jw_put(sb, buf, n): Result {
+    store8(buf + n, 0);
+    if (str_builder_add_cstr_a(default_alloc(), sb, buf) != 0) {
+        var t = _bj_err_reason(BJ_ERR_ALLOCATION);
+        _bj_tx_cstr(t, "the JSON document's builder can't grow");
+        return Err(BJ_ERR_ALLOCATION);
+    }
+    return Ok(0);
+}
+
+# Appends `{"re":<re>,"im":<im>}` to the builder sb: Ok(0), or Err(BJ_ERR_ALLOCATION) with sb as it was. Mirrors
+# `serde_json::to_string(&c)` for Rust hisab's `Complex`.
+#must_use
+public fn BjComplex_to_json(c: *BjComplex, sb): Result {
+    var buf[80];
+    var n = _bj_jw_cstr(&buf, 0, "{\"re\":");
+    n = _bj_jw_f64(&buf, n, c.re);
+    n = _bj_jw_cstr(&buf, n, ",\"im\":");
+    n = _bj_jw_f64(&buf, n, c.im);
+    n = _bj_jw_cstr(&buf, n, "}");
+    return _bj_jw_put(sb, &buf, n);
+}
+
+# Appends `{"x":<x>,"y":<y>,"z":<z>}` to the builder sb: Ok(0), or Err(BJ_ERR_ALLOCATION) with sb as it was. Mirrors
+# `serde_json::to_string(&v)` for `field::FieldVector`.
+#must_use
+public fn BjFieldVector_to_json(v: *BjFieldVector, sb): Result {
+    var buf[112];
+    var n = _bj_jw_cstr(&buf, 0, "{\"x\":");
+    n = _bj_jw_f64(&buf, n, v.x);
+    n = _bj_jw_cstr(&buf, n, ",\"y\":");
+    n = _bj_jw_f64(&buf, n, v.y);
+    n = _bj_jw_cstr(&buf, n, ",\"z\":");
+    n = _bj_jw_f64(&buf, n, v.z);
+    n = _bj_jw_cstr(&buf, n, "}");
+    return _bj_jw_put(sb, &buf, n);
+}
+
+# Appends `{"charge":<q>,"mass":<m>,"position":[<x>,<y>,<z>],"velocity":[<vx>,<vy>,<vz>]}` to the builder sb: Ok(0),
+# or Err(BJ_ERR_ALLOCATION) with sb as it was. Mirrors `serde_json::to_string(&p)` for `charge::PointCharge`.
+#must_use
+public fn BjPointCharge_to_json(p: *BjPointCharge, sb): Result {
+    var buf[320];
+    var n = _bj_jw_cstr(&buf, 0, "{\"charge\":");
+    n = _bj_jw_f64(&buf, n, p.charge);
+    n = _bj_jw_cstr(&buf, n, ",\"mass\":");
+    n = _bj_jw_f64(&buf, n, p.mass);
+    n = _bj_jw_cstr(&buf, n, ",\"position\":");
+    var x: f64 = p.position.0;
+    var y: f64 = p.position.1;
+    var z: f64 = p.position.2;
+    n = _bj_jw_triple(&buf, n, x, y, z);
+    n = _bj_jw_cstr(&buf, n, ",\"velocity\":");
+    var vx: f64 = p.velocity.0;
+    var vy: f64 = p.velocity.1;
+    var vz: f64 = p.velocity.2;
+    n = _bj_jw_triple(&buf, n, vx, vy, vz);
+    n = _bj_jw_cstr(&buf, n, "}");
+    return _bj_jw_put(sb, &buf, n);
+}
+
+# ── the decode region ───────────────────────────────────────────────────────────────
+# A region on the reader's stack, 64 bytes: +0 the chunk chain (each chunk's first word links the next), +8 the next
+# free byte, +16 the current chunk's end, +24 the 40-byte allocator bayan calls (lib/alloc.cyr's vtable: alloc,
+# realloc, free, reset, state). Chunks are freelist blocks of one 4,096-byte class; a request larger than a chunk
+# gets a block of its own. Nothing is freed before the read ends, when _bj_jr_close gives every chunk back.
+
+const _BJ_JR_REGION = 64;
+const _BJ_JR_CHUNK = 4080;
+
+# A block of `size` bytes, 16-byte aligned, or 0 when the freelist refuses.
+fn _bj_jr_alloc(st, size): i64 {
+    var n = (size + 15) & (0 - 16);
+    if (n <= 0) { n = 16; }
+    var cur = load64(st + 8);
+    if (cur != 0 && cur + n <= load64(st + 16)) {
+        store64(st + 8, cur + n);
+        return cur;
+    }
+    var cap = _BJ_JR_CHUNK - 16;
+    var own = 0;
+    if (n > cap) {
+        cap = n;
+        own = 1;
+    }
+    var c = fl_alloc(cap + 16);
+    if (c == 0) { return 0; }
+    store64(c, load64(st));
+    store64(st, c);
+    if (own == 0) {
+        store64(st + 8, c + 16 + n);
+        store64(st + 16, c + 16 + cap);
+    }
+    return c + 16;
+}
+
+# A block of new_size bytes holding the first min(old_size, new_size) bytes at old, or 0.
+fn _bj_jr_realloc(st, old, old_size, new_size): i64 {
+    var p = _bj_jr_alloc(st, new_size);
+    if (p == 0) { return 0; }
+    var k = old_size;
+    if (new_size < k) { k = new_size; }
+    if (old != 0 && k > 0) { memcpy(p, old, k); }
+    return p;
+}
+
+# A block is freed with its region.
+fn _bj_jr_free(st, p): i64 {
+    return 0;
+}
+
+# Gives every chunk back; the region is empty and usable again.
+fn _bj_jr_reset(st): i64 {
+    var c = load64(st);
+    while (c != 0) {
+        var next = load64(c);
+        fl_free(c);
+        c = next;
+    }
+    store64(st, 0);
+    store64(st + 8, 0);
+    store64(st + 16, 0);
+    return 0;
+}
+
+# Makes the region at rg empty; its allocator is rg + 24.
+fn _bj_jr_open(rg): i64 {
+    store64(rg, 0);
+    store64(rg + 8, 0);
+    store64(rg + 16, 0);
+    store64(rg + 24, &_bj_jr_alloc);
+    store64(rg + 32, &_bj_jr_realloc);
+    store64(rg + 40, &_bj_jr_free);
+    store64(rg + 48, &_bj_jr_reset);
+    store64(rg + 56, rg);
+    return rg + 24;
+}
+
+# Gives the region's memory back.
+fn _bj_jr_close(rg): i64 {
+    return _bj_jr_reset(rg);
+}
+
+# ── the document ────────────────────────────────────────────────────────────────────
+
+# 1 when the integer token [p, p + n), its digits from offset ds, is one bayan reads otherwise than serde_json: `-0`,
+# or a magnitude outside i64 (more than 19 digits, or 19 above i64's bound; leading zeros, which both refuse, count
+# as digits).
+#must_use
+fn _bj_jr_int_odd(p, n, ds): i64 {
+    if (n == 2 && load8(p) == 45 && load8(p + 1) == 48) { return 1; }
+    var digits = n - ds;
+    if (digits < 19) { return 0; }
+    if (digits > 19) { return 1; }
+    var bound = "9223372036854775807";
+    if (ds == 1) { bound = "9223372036854775808"; }
+    for (var k = 0; k < 19; k = k + 1) {
+        var d = load8(p + ds + k);
+        var b = load8(bound + k);
+        if (d < b) { return 0; }
+        if (d > b) { return 1; }
+    }
+    return 0;
+}
+
+# The length of the well-formed UTF-8 sequence (RFC 3629: no overlong form, no surrogate, nothing past U+10FFFF) at
+# p, whose first byte is 0x80 or above and which has n bytes left, or 0.
+#must_use
+fn _bj_jr_utf8(p, n): i64 {
+    var b0 = load8(p);
+    var need = 0;
+    var lo = 128;
+    var hi = 191;
+    if (b0 >= 194 && b0 <= 223) { need = 1; }
+    elif (b0 == 224) {
+        need = 2;
+        lo = 160;
+    } elif (b0 >= 225 && b0 <= 236) { need = 2; }
+    elif (b0 == 237) {
+        need = 2;
+        hi = 159;
+    } elif (b0 >= 238 && b0 <= 239) { need = 2; }
+    elif (b0 == 240) {
+        need = 3;
+        lo = 144;
+    } elif (b0 >= 241 && b0 <= 243) { need = 3; }
+    elif (b0 == 244) {
+        need = 3;
+        hi = 143;
+    } else { return 0; }
+    if (need >= n) { return 0; }
+    var b1 = load8(p + 1);
+    if (b1 < lo || b1 > hi) { return 0; }
+    for (var k = 2; k <= need; k = k + 1) {
+        var b = load8(p + k);
+        if (b < 128 || b > 191) { return 0; }
+    }
+    return need + 1;
+}
+
+# Notes the defect `msg` at byte `pos` in flaw[0..2] (its offset, its message), unless an earlier one is noted.
+fn _bj_jr_flaw(flaw, pos, msg) {
+    if (load64(flaw) < 0) {
+        store64(flaw, pos);
+        store64(flaw + 8, msg);
+    }
+    return 0;
+}
+
+# One read-only pass over the JSON text [buf, buf + len) for what bayan's tree reads otherwise than serde_json:
+# - the integer tokens outside strings that _bj_jr_int_odd names: their count is returned, and when `ends` is not 0
+#   each one's end offset goes to ends[0..] (a number with a fraction or an exponent is bayan's to read as it is);
+# - inside strings, a raw control character (U+0000..U+001F, which RFC 8259 §7 and serde_json refuse and bayan
+#   takes) or bytes that are not UTF-8 (which a Rust `&str` can't hold): the first is noted in flaw[0..2].
+# On a malformed document the pass may misread where strings are, but `.0` after a run of digits can't make a
+# malformed document well formed, and bayan's own error comes first when it is earlier in the text.
+fn _bj_jr_scan(buf, len, ends, flaw): i64 {
+    var count = 0;
+    var i = 0;
+    while (i < len) {
+        var c = load8(buf + i);
+        if (c == 34) {
+            i = i + 1;
+            while (i < len) {
+                var d = load8(buf + i);
+                if (d == 34) { break; }
+                if (d == 92) { i = i + 2; }
+                elif (d < 32) {
+                    _bj_jr_flaw(flaw, i, "a control character (U+0000..U+001F) in a string");
+                    i = i + 1;
+                } elif (d < 128) { i = i + 1; }
+                else {
+                    var u = _bj_jr_utf8(buf + i, len - i);
+                    if (u == 0) {
+                        _bj_jr_flaw(flaw, i, "invalid UTF-8 in a string");
+                        u = 1;
+                    }
+                    i = i + u;
+                }
+            }
+            i = i + 1;
+        } elif (c == 45 || (c >= 48 && c <= 57)) {
+            var s = i;
+            if (c == 45) { i = i + 1; }
+            var ds = i - s;
+            while (i < len && load8(buf + i) >= 48 && load8(buf + i) <= 57) { i = i + 1; }
+            var e = i;
+            var g = 0;
+            if (i < len) { g = load8(buf + i); }
+            if (g == 46 || g == 101 || g == 69) {
+                while (i < len) {
+                    var h = load8(buf + i);
+                    if ((h >= 48 && h <= 57) || h == 46 || h == 101 || h == 69 || h == 43 || h == 45) { i = i + 1; }
+                    else { break; }
+                }
+            } elif (e > s + ds && _bj_jr_int_odd(buf + s, e - s, ds) == 1) {
+                if (ends != 0) { store64(ends + count * 8, e); }
+                count = count + 1;
+            }
+        } else {
+            i = i + 1;
+        }
+    }
+    return count;
+}
+
+# Records a syntax error: bayan's message at byte `pos` of the caller's text. Returns BJ_ERR_DESERIALIZE.
+fn _bj_jr_syntax(msg, pos): i64 {
+    var t = _bj_err_reason(BJ_ERR_DESERIALIZE);
+    _bj_tx_cstr(t, msg);
+    _bj_tx_cstr(t, " at byte ");
+    _bj_tx_i64(t, pos);
+    return BJ_ERR_DESERIALIZE;
+}
+
+# The value tree of the JSON text [buf, buf + len), on the region whose allocator is `a`, or 0 with the error
+# recorded (BJ_ERR_DESERIALIZE; BJ_ERR_ALLOCATION when the region can't grow). Of a string defect the scan noted and
+# bayan's own error, the earlier in the text is reported.
+fn _bj_jr_doc(a, buf, len): i64 {
+    if (buf == 0 || len < 0) {
+        _bj_jr_syntax("no document", 0);
+        return 0;
+    }
+    var flaw: i64[2];
+    flaw[0] = 0 - 1;
+    flaw[1] = 0;
+    var text = buf;
+    var tlen = len;
+    var ends = 0;
+    var odd = _bj_jr_scan(buf, len, 0, &flaw);
+    if (odd > 0) {
+        ends = alloc_via(a, odd * 8);
+        tlen = len + odd * 2;
+        text = alloc_via(a, tlen);
+        if (ends == 0 || text == 0) {
+            var t = _bj_err_reason(BJ_ERR_ALLOCATION);
+            _bj_tx_cstr(t, "the JSON reader's decode region can't grow");
+            return 0;
+        }
+        _bj_jr_scan(buf, len, ends, &flaw);
+        var from = 0;
+        var to = 0;
+        for (var k = 0; k < odd; k = k + 1) {
+            var e = load64(ends + k * 8);
+            memcpy(text + to, buf + from, e - from);
+            to = to + e - from;
+            store8(text + to, 46);
+            store8(text + to + 1, 48);
+            to = to + 2;
+            from = e;
+        }
+        memcpy(text + to, buf + from, len - from);
+    }
+    var ps[48];
+    var v = bayan_json_v_parse_ctx_a(a, &ps, text, tlen);
+    if (v != 0) {
+        if (flaw[0] < 0) { return v; }
+        _bj_jr_syntax(flaw[1], flaw[0]);
+        return 0;
+    }
+    var msg = bayan_json_state_error(&ps);
+    var pos = bayan_json_state_error_pos(&ps);
+    # A position in the rewritten text, back in the caller's: two bytes fewer for each `.0` before it.
+    if (odd > 0) {
+        var shift = 0;
+        for (var j = 0; j < odd; j = j + 1) {
+            if (load64(ends + j * 8) + shift + 2 <= pos) { shift = shift + 2; }
+        }
+        pos = pos - shift;
+    }
+    if (_bj_jr_starts(msg, "out of memory") == 1) {
+        var t2 = _bj_err_reason(BJ_ERR_ALLOCATION);
+        _bj_tx_cstr(t2, "the JSON reader's decode region can't grow");
+        return 0;
+    }
+    if (flaw[0] >= 0 && flaw[0] < pos) {
+        _bj_jr_syntax(flaw[1], flaw[0]);
+        return 0;
+    }
+    _bj_jr_syntax(msg, pos);
+    return 0;
+}
+
+# 1 when the C string s starts with the C string p.
+#must_use
+fn _bj_jr_starts(s, p): i64 {
+    var k = 0;
+    while (load8(p + k) != 0) {
+        if (load8(s + k) != load8(p + k)) { return 0; }
+        k = k + 1;
+    }
+    return 1;
+}
+
+# ── values ──────────────────────────────────────────────────────────────────────────
+
+# serde's name for the JSON type of node v, as its "invalid type" message gives it.
+#must_use
+fn _bj_jr_kind(v): i64 {
+    var tag = bayan_json_v_tag(v);
+    if (tag == JTAG_NULL) { return "null"; }
+    if (tag == JTAG_BOOL) { return "boolean"; }
+    if (tag == JTAG_INT) { return "integer"; }
+    if (tag == JTAG_FLOAT) { return "floating point"; }
+    if (tag == JTAG_STR) { return "string"; }
+    if (tag == JTAG_ARR) { return "sequence"; }
+    return "map";
+}
+
+# Records `invalid type: <kind of v>, expected <what>`. Returns BJ_ERR_DESERIALIZE.
+fn _bj_jr_type(v, what): i64 {
+    var t = _bj_err_reason(BJ_ERR_DESERIALIZE);
+    _bj_tx_cstr(t, "invalid type: ");
+    _bj_tx_cstr(t, _bj_jr_kind(v));
+    _bj_tx_cstr(t, ", expected ");
+    _bj_tx_cstr(t, what);
+    return BJ_ERR_DESERIALIZE;
+}
+
+# Records `invalid length <n>, expected <what>`. Returns BJ_ERR_DESERIALIZE.
+fn _bj_jr_length(n, what): i64 {
+    var t = _bj_err_reason(BJ_ERR_DESERIALIZE);
+    _bj_tx_cstr(t, "invalid length ");
+    _bj_tx_i64(t, n);
+    _bj_tx_cstr(t, ", expected ");
+    _bj_tx_cstr(t, what);
+    return BJ_ERR_DESERIALIZE;
+}
+
+# Records `missing field `<name>``. Returns BJ_ERR_DESERIALIZE.
+fn _bj_jr_missing(name): i64 {
+    var t = _bj_err_reason(BJ_ERR_DESERIALIZE);
+    _bj_tx_cstr(t, "missing field `");
+    _bj_tx_cstr(t, name);
+    _bj_tx_putc(t, 96);
+    return BJ_ERR_DESERIALIZE;
+}
+
+# Node v as an f64 into *out: 0, or BJ_ERR_DESERIALIZE recorded. An integer converts to the nearest f64 (exact below
+# 2^53, as serde's `n as f64`); a float is bayan's correctly rounded parse, refused when it overflowed.
+fn _bj_jr_f64(v, out): i64 {
+    var tag = bayan_json_v_tag(v);
+    if (tag != JTAG_INT && tag != JTAG_FLOAT) { return _bj_jr_type(v, "f64"); }
+    var bits = bayan_json_v_float(v);
+    if ((bits & 0x7FF0000000000000) == 0x7FF0000000000000) {
+        var t = _bj_err_reason(BJ_ERR_DESERIALIZE);
+        _bj_tx_cstr(t, "number out of range");
+        return BJ_ERR_DESERIALIZE;
+    }
+    store64(out, bits);
+    return 0;
+}
+
+# Node v as a `[f64; 3]` into out[0..3]: an array of exactly three numbers. 0, or BJ_ERR_DESERIALIZE recorded.
+fn _bj_jr_f64x3(v, out): i64 {
+    if (bayan_json_v_tag(v) != JTAG_ARR) { return _bj_jr_type(v, "an array of length 3"); }
+    var n = bayan_json_v_arr_len(v);
+    if (n != 3) { return _bj_jr_length(n, "an array of length 3"); }
+    for (var k = 0; k < 3; k = k + 1) {
+        var c = _bj_jr_f64(bayan_json_v_arr_get(v, k), out + k * 8);
+        if (c != 0) { return c; }
+    }
+    return 0;
+}
+
+# The form of struct node v with n fields: 1 an object, 2 an array of exactly n elements (serde's sequence form), or
+# 0 with BJ_ERR_DESERIALIZE recorded (`what` names the struct: "struct FieldVector").
+fn _bj_jr_form(v, n, what): i64 {
+    var tag = bayan_json_v_tag(v);
+    if (tag == JTAG_OBJ) { return 1; }
+    if (tag != JTAG_ARR) {
+        _bj_jr_type(v, what);
+        return 0;
+    }
+    var k = bayan_json_v_arr_len(v);
+    if (k != n) {
+        var t = _bj_err_reason(BJ_ERR_DESERIALIZE);
+        _bj_tx_cstr(t, "invalid length ");
+        _bj_tx_i64(t, k);
+        _bj_tx_cstr(t, ", expected ");
+        _bj_tx_cstr(t, what);
+        _bj_tx_cstr(t, " with ");
+        _bj_tx_i64(t, n);
+        _bj_tx_cstr(t, " elements");
+        return 0;
+    }
+    return 2;
+}
+
+# Field i, named `name`, of struct node v in `form`: its node, or 0 with `missing field` recorded.
+fn _bj_jr_field(v, form, i, name): i64 {
+    var f = 0;
+    if (form == 1) { f = bayan_json_v_obj_get_by_cstr(v, name); }
+    else { f = bayan_json_v_arr_get(v, i); }
+    if (f == 0) { _bj_jr_missing(name); }
+    return f;
+}
+
+# Struct node v whose n fields, named names[0..n], are all f64, into out[0..n]. 0, or the code recorded.
+fn _bj_jr_f64_struct(v, names, n, what, out): i64 {
+    var form = _bj_jr_form(v, n, what);
+    if (form == 0) { return BJ_ERR_DESERIALIZE; }
+    for (var k = 0; k < n; k = k + 1) {
+        var f = _bj_jr_field(v, form, k, load64(names + k * 8));
+        if (f == 0) { return BJ_ERR_DESERIALIZE; }
+        var c = _bj_jr_f64(f, out + k * 8);
+        if (c != 0) { return c; }
+    }
+    return 0;
+}
+
+# Reads the document [buf, buf + len) with decoder `dec(node, words)` into the n words at w: 0, or the code recorded.
+fn _bj_jr_read(buf, len, dec, w): i64 {
+    var rg[64];
+    var a = _bj_jr_open(&rg);
+    var code = BJ_ERR_DESERIALIZE;
+    var v = _bj_jr_doc(a, buf, len);
+    if (v != 0) { code = fncall2(dec, v, w); }
+    else { code = bj_last_error(); }
+    _bj_jr_close(&rg);
+    return code;
+}
+
+# The decoders, each from a node into words.
+fn _bj_jr_complex(v, w): i64 {
+    var names: i64[2];
+    names[0] = "re";
+    names[1] = "im";
+    return _bj_jr_f64_struct(v, &names, 2, "struct Complex", w);
+}
+
+fn _bj_jr_field_vector(v, w): i64 {
+    var names: i64[3];
+    names[0] = "x";
+    names[1] = "y";
+    names[2] = "z";
+    return _bj_jr_f64_struct(v, &names, 3, "struct FieldVector", w);
+}
+
+fn _bj_jr_point_charge(v, w): i64 {
+    var form = _bj_jr_form(v, 4, "struct PointCharge");
+    if (form == 0) { return BJ_ERR_DESERIALIZE; }
+    var f = _bj_jr_field(v, form, 0, "charge");
+    if (f == 0) { return BJ_ERR_DESERIALIZE; }
+    var c = _bj_jr_f64(f, w);
+    if (c != 0) { return c; }
+    f = _bj_jr_field(v, form, 1, "mass");
+    if (f == 0) { return BJ_ERR_DESERIALIZE; }
+    c = _bj_jr_f64(f, w + 8);
+    if (c != 0) { return c; }
+    f = _bj_jr_field(v, form, 2, "position");
+    if (f == 0) { return BJ_ERR_DESERIALIZE; }
+    c = _bj_jr_f64x3(f, w + 16);
+    if (c != 0) { return c; }
+    f = _bj_jr_field(v, form, 3, "velocity");
+    if (f == 0) { return BJ_ERR_DESERIALIZE; }
+    return _bj_jr_f64x3(f, w + 40);
+}
+
+# ── readers ─────────────────────────────────────────────────────────────────────────
+
+# Reads a `Complex` document from [buf, buf + len) into *out: Ok(0), or Err(BJ_ERR_DESERIALIZE) (BJ_ERR_ALLOCATION
+# when the decode region can't grow) with the reason recorded and out untouched. Mirrors
+# `serde_json::from_str::<Complex>` for Rust hisab's `Complex`.
+#must_use
+public fn BjComplex_from_json(buf, len, out: *BjComplex): Result {
+    var w: f64[2];
+    var code = _bj_jr_read(buf, len, &_bj_jr_complex, &w);
+    if (code != 0) { return Err(code); }
+    out.re = w[0];
+    out.im = w[1];
+    return Ok(0);
+}
+
+# Reads a `FieldVector` document from [buf, buf + len) into *out: Ok(0), or the error recorded with out untouched,
+# as BjComplex_from_json. Mirrors `serde_json::from_str::<FieldVector>`.
+#must_use
+public fn BjFieldVector_from_json(buf, len, out: *BjFieldVector): Result {
+    var w: f64[3];
+    var code = _bj_jr_read(buf, len, &_bj_jr_field_vector, &w);
+    if (code != 0) { return Err(code); }
+    out.x = w[0];
+    out.y = w[1];
+    out.z = w[2];
+    return Ok(0);
+}
+
+# Reads a `PointCharge` document from [buf, buf + len) into *out: Ok(0), or the error recorded with out untouched,
+# as BjComplex_from_json. Mirrors `serde_json::from_str::<PointCharge>`.
+#must_use
+public fn BjPointCharge_from_json(buf, len, out: *BjPointCharge): Result {
+    var w: f64[8];
+    var code = _bj_jr_read(buf, len, &_bj_jr_point_charge, &w);
+    if (code != 0) { return Err(code); }
+    out.charge = w[0];
+    out.mass = w[1];
+    out.position = (w[2], w[3], w[4]);
+    out.velocity = (w[5], w[6], w[7]);
+    return Ok(0);
 }

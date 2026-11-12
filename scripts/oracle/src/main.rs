@@ -29,6 +29,7 @@ mod m_constants;
 mod m_error;
 mod m_field;
 mod m_fmtf;
+mod m_json;
 mod m_math;
 mod m_maxwell;
 mod t_constants;
@@ -48,6 +49,7 @@ fn golden_modules() -> Vec<tsv::Module> {
         m_error::emit(),
         m_field::emit(),
         m_fmtf::emit(),
+        m_json::emit(),
         m_math::emit(),
         m_maxwell::emit(),
     ]

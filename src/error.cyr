@@ -3,8 +3,9 @@
 # A fallible bijli function returns a value-form Result whose Err payload is one of the BJ_ERR_* codes:
 # `var t, v = f(..); if (is_err_result(t) == 1) { .. v is the code .. }`. The golden token `E:InvalidParameter`
 # is BJ_ERR_INVALID_PARAMETER: BJ_ERR_ + snake(variant). The values follow the Rust variant order and are
-# append-only (the Cyrius form of #[non_exhaustive]); BJ_ERR_TRANSPORT (ADR 0002 row 7) and BJ_ERR_ALLOCATION (row 9:
-# where Rust aborts on a failed allocation, the port returns this) are Cyrius-only.
+# append-only (the Cyrius form of #[non_exhaustive]); BJ_ERR_TRANSPORT (ADR 0002 row 7), BJ_ERR_ALLOCATION (row 9:
+# where Rust aborts on a failed allocation, the port returns this) and BJ_ERR_DESERIALIZE (row 10: a JSON document
+# the readers refuse, where Rust's serde_json returns its own error type) are Cyrius-only.
 #
 # Rust's variants carry data (`DimensionMismatch { expected, got }`, `InvalidPermittivity { value }`, the
 # `reason` and `context` strings, mostly `format!`ed with the caller's values). A one-word Result can't hold it,
@@ -45,6 +46,7 @@ public enum BjError {
     BJ_ERR_INVALID_PARAMETER = 8;
     BJ_ERR_TRANSPORT = 9;
     BJ_ERR_ALLOCATION = 10;
+    BJ_ERR_DESERIALIZE = 11;
 }
 
 # ── the record ──────────────────────────────────────────────────────────────────────
@@ -199,15 +201,16 @@ public fn _bj_err_invalid_permeability(value: f64): i64 {
 }
 
 # Starts an error whose payload is a string, DivisionByZero { context }, InvalidParameter { reason } or the
-# Cyrius-only Transport { reason } and Allocation { reason }: writes the Display text's prefix, marks where the string
-# starts, and returns the BjText for the caller to write the string into. A code with no string payload gets no
-# prefix.
+# Cyrius-only Transport { reason }, Allocation { reason } and Deserialize { reason }: writes the Display text's prefix,
+# marks where the string starts, and returns the BjText for the caller to write the string into. A code with no
+# string payload gets no prefix.
 public fn _bj_err_reason(code): i64 {
     var t = _bj_err_begin(code);
     if (code == BJ_ERR_DIVISION_BY_ZERO) { _bj_tx_cstr(t, "division by zero in EM calculation: "); }
     elif (code == BJ_ERR_INVALID_PARAMETER) { _bj_tx_cstr(t, "invalid parameter: "); }
     elif (code == BJ_ERR_TRANSPORT) { _bj_tx_cstr(t, "transport error: "); }
     elif (code == BJ_ERR_ALLOCATION) { _bj_tx_cstr(t, "allocation failed: "); }
+    elif (code == BJ_ERR_DESERIALIZE) { _bj_tx_cstr(t, "deserialization failed: "); }
     else { return t; }
     store64(t - 8, _bj_tx_len(t));
     return t;
@@ -330,8 +333,8 @@ public fn bj_last_error_clear(): i64 {
     return 0;
 }
 
-# The Rust variant name of an error code (`"InvalidParameter"`), "None" for BJ_ERR_NONE, "Transport" and
-# "Allocation" for the Cyrius-only codes, or "Unknown" for a value that is no code.
+# The Rust variant name of an error code (`"InvalidParameter"`), "None" for BJ_ERR_NONE, "Transport", "Allocation"
+# and "Deserialize" for the Cyrius-only codes, or "Unknown" for a value that is no code.
 #must_use
 public fn bj_error_name(code): i64 {
     if (code == BJ_ERR_NONE) { return "None"; }
@@ -345,6 +348,7 @@ public fn bj_error_name(code): i64 {
     if (code == BJ_ERR_INVALID_PARAMETER) { return "InvalidParameter"; }
     if (code == BJ_ERR_TRANSPORT) { return "Transport"; }
     if (code == BJ_ERR_ALLOCATION) { return "Allocation"; }
+    if (code == BJ_ERR_DESERIALIZE) { return "Deserialize"; }
     return "Unknown";
 }
 
@@ -364,5 +368,6 @@ public fn bj_error_message(code): i64 {
     if (code == BJ_ERR_INVALID_PARAMETER) { return "invalid parameter"; }
     if (code == BJ_ERR_TRANSPORT) { return "transport error"; }
     if (code == BJ_ERR_ALLOCATION) { return "allocation failed"; }
+    if (code == BJ_ERR_DESERIALIZE) { return "deserialization failed"; }
     return "unknown error";
 }

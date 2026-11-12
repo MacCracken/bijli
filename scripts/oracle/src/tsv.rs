@@ -178,6 +178,11 @@ impl Module {
         self.push(func, class, ins, outs, &note);
     }
 
+    /// As [`Module::row`], with the note given whole (the json rows: a preview of a long document, serde's message).
+    pub fn row_with_note(&mut self, func: &str, class: Class, ins: &[Tok], outs: &[Tok], note: &str) {
+        self.push(func, class, ins, outs, note);
+    }
+
     fn push(&mut self, func: &str, class: Class, ins: &[Tok], outs: &[Tok], note: &str) {
         self.rows.push(format!(
             "{func}\t{}\t{}\t{}\t{note}",

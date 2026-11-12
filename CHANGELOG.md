@@ -115,6 +115,25 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
   `position` and `velocity` are `(f64, f64, f64)` tuples stored inline (probe p15). New golden files:
   `maxwell.tsv` (20,349 rows) and `charge.tsv` (12,277 rows), all class A. The 18 + 26 Rust tests are ported, and 17
   of the 80 Rust benches are twinned.
+- **Cyrius port, M1 part 4 — the JSON of `BjComplex`, `BjFieldVector` and `BjPointCharge`** (port plan D5, amended):
+  `src/json.cyr`. The writers (`Bj<T>_to_json(p, sb)`) append serde_json's document, every f64 through bayan's
+  printer (the derive's), `null` for NaN and ±∞. They are hand-written because a `#derive(Serialize)` in a second
+  `private` file fails to compile on 6.7.18 (probe p16b, filed). The readers (`Bj<T>_from_json(buf, len, out)`)
+  apply serde's derive semantics on bayan's value tree: object or sequence form, unknown keys skipped, serde's
+  reasons, byte offsets, `out` untouched on an error. A per-read decode region on freelist chunks keeps the heaps
+  unchanged, and reads are thread-safe. A pre-pass corrects bayan where it reads otherwise than serde_json (probe
+  p16, filed): it keeps the sign of `-0`, reads integers past i64, and refuses raw control characters and non-UTF-8
+  bytes in strings. New: `BJ_ERR_DESERIALIZE` (ADR 0002 row 10), `json.tsv` (14,758 rows) and `json.cr.tsv`, with a
+  `validate.py` model of serde. Surface parity now requires the JSON pair for every serde type.
+
+### Fixed
+
+- **json** (ADR 0002 row 11): serde_json's default float parse misreads 6,342 of the corpus's documents by 1–2 ulp
+  (`1.602176634e-19`, the elementary charge as serde_json writes it, reads back one ulp high) and refuses 48 numbers
+  that round to `f64::MAX`. The port reads every number correctly rounded.
+- **json** (ADR 0002 row 12): serde_json skips an unknown field's value unchecked (repeated keys, lone surrogate
+  escapes, unbounded nesting). The port refuses those defects wherever they are, as serde_json does in the fields it
+  reads.
 - **Parity harness**: digest v2. The v1 fold could not see sign-bit differences that came in pairs, and a generated
   NaN differs in sign between x86 and ARM. v2 folds each NaN as one quiet NaN and mixes every bit through. ADR 0002
   row 6 now states that a NaN's bits are the hardware's.

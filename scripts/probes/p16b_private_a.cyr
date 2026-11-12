@@ -1,0 +1,5 @@
+# p16b's first private file: a `#derive(Serialize)` struct, whose derive emits its shared helper here.
+private
+
+#derive(Serialize)
+public struct P16A { re: f64; im: f64; }

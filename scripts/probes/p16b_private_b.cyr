@@ -1,0 +1,5 @@
+# p16b's second private file: another `#derive(Serialize)`, whose generated decoder calls the first file's helper.
+private
+
+#derive(Serialize)
+public struct P16B { x: f64; y: f64; z: f64; }

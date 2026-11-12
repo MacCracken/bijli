@@ -1,0 +1,331 @@
+# json.tcyr — src/json.cyr (M1 part 4): the JSON of BjComplex, BjFieldVector and BjPointCharge.
+#
+# rust-old has no test of these types' serde (its serde tests are of later modules' types), so every group here is
+# Cyrius-only. tests/golden/json.tsv pins the writers and readers against serde_json 1.0.154 besides; these groups
+# pin what the corpus can't show: the exact text, the record's reasons and byte offsets, `out` left alone on an
+# error, the heap left as it was, and reads on several threads at once.
+
+include "tests/lib.cyr"
+
+# 1 when the C strings a and b are equal.
+fn text_is(a, b): i64 {
+    var n = strlen(a);
+    if (n != strlen(b)) { return 0; }
+    return memeq(a, b, n);
+}
+
+# 1 when the builder sb holds exactly the C string want.
+fn built_is(sb, want): i64 {
+    var s = str_builder_build(sb);
+    if (str_len(s) != strlen(want)) { return 0; }
+    return memeq(str_data(s), want, str_len(s));
+}
+
+# 1 when the last error's Display text is "deserialization failed: " + want.
+fn reason_is(want): i64 {
+    var d = bj_last_error_display();
+    var p = "deserialization failed: ";
+    var n = strlen(p);
+    if (strlen(d) != n + strlen(want)) { return 0; }
+    if (memeq(d, p, n) != 1) { return 0; }
+    return memeq(d + n, want, strlen(want));
+}
+
+# Reads the C string doc as a FieldVector into *v: 1 on Ok, 0 on Err.
+fn read_fv(doc, v: *BjFieldVector): i64 {
+    var t, e = BjFieldVector_from_json(doc, strlen(doc), v);
+    if (is_err_result(t) == 1) { return 0; }
+    return 1;
+}
+
+# 1 when the FieldVector document doc is refused as Deserialize with the reason `want`.
+fn refused_fv(doc, want): i64 {
+    var v: BjFieldVector;
+    var t, e = BjFieldVector_from_json(doc, strlen(doc), &v);
+    if (is_err_result(t) != 1 || e != BJ_ERR_DESERIALIZE) { return 0; }
+    return reason_is(want);
+}
+
+# Writes the FieldVector (x, y, z) given as bits and reads it back: 1 when the three words come back unchanged.
+fn fv_round_trip(x, y, z): i64 {
+    var v: BjFieldVector;
+    store64(&v, x);
+    store64(&v + 8, y);
+    store64(&v + 16, z);
+    var sb = str_builder_new();
+    var t, e = BjFieldVector_to_json(&v, sb);
+    if (is_err_result(t) == 1) { return 0; }
+    var s = str_builder_build(sb);
+    var back: BjFieldVector;
+    var t2, e2 = BjFieldVector_from_json(str_data(s), str_len(s), &back);
+    if (is_err_result(t2) == 1) { return 0; }
+    if (load64(&back) != x || load64(&back + 8) != y || load64(&back + 16) != z) { return 0; }
+    return 1;
+}
+
+# A worker thread: 2000 reads of its own documents, each checked. Returns the count of wrong answers.
+fn worker(seed): i64 {
+    var wrong = 0;
+    var buf[64];
+    for (var k = 0; k < 2000; k = k + 1) {
+        var n = seed * 100000 + k;
+        var sb = str_builder_new();
+        str_builder_add_cstr(sb, "{\"x\":");
+        str_builder_add_int(sb, n);
+        str_builder_add_cstr(sb, ",\"w\":[1,{\"a\":\"b\"}],\"y\":-0,\"z\":2.5}");
+        var s = str_builder_build(sb);
+        var v: BjFieldVector;
+        var t, e = BjFieldVector_from_json(str_data(s), str_len(s), &v);
+        var want: f64 = f64_from(n);
+        var x: f64 = v.x;
+        if (is_err_result(t) == 1 || x != want || load64(&v + 8) != 0x8000000000000000) { wrong = wrong + 1; }
+        var t2, e2 = BjFieldVector_from_json("{\"x\":1}", 7, &v);
+        if (is_err_result(t2) != 1 || reason_is("missing field `y`") != 1) { wrong = wrong + 1; }
+    }
+    return wrong;
+}
+
+# Runs the Cyrius-only JSON checks (rust-old has no serde test of these types).
+fn main(): i64 {
+    alloc_init();
+
+    test_group("cyrius_json_writers");
+    var c: BjComplex = BjComplex_new(1.0, 0.1);
+    var sb = str_builder_new();
+    var t1, v1 = BjComplex_to_json(&c, sb);
+    assert(is_ok(t1) == 1, "Ok");
+    assert(built_is(sb, "{\"re\":1.0,\"im\":0.1}") == 1, "serde's shape: the fields in order, no spaces");
+    var nan: f64 = 0.0 / 0.0;
+    var c2: BjComplex = BjComplex_new(-0.0, nan);
+    var sb2 = str_builder_new();
+    var t2, v2 = BjComplex_to_json(&c2, sb2);
+    assert(built_is(sb2, "{\"re\":-0.0,\"im\":null}") == 1, "-0.0 keeps its sign; NaN is null, as serde_json writes");
+    var inf: f64 = 1.0 / 0.0;
+    var minf: f64 = -inf;
+    var fv: BjFieldVector = BjFieldVector_new(10000000000000000.0, 0.0000001, minf);
+    var sb3 = str_builder_new();
+    var t3, v3 = BjFieldVector_to_json(&fv, sb3);
+    assert(built_is(sb3, "{\"x\":10000000000000000.0,\"y\":1e-7,\"z\":null}") == 1,
+      "bayan's notation (serde_json writes 1e16), ±∞ as null");
+    var pos: f64[3];
+    pos[0] = 1.0;
+    pos[1] = -2.0;
+    pos[2] = 3.5;
+    var vel: f64[3];
+    vel[0] = 0.0;
+    vel[1] = 0.0;
+    vel[2] = -0.0;
+    var pc: BjPointCharge;
+    var tp, vp = BjPointCharge_new(2.0, 0.5, &pos, &vel, &pc);
+    var sb4 = str_builder_new();
+    var t4, v4 = BjPointCharge_to_json(&pc, sb4);
+    assert(built_is(sb4, "{\"charge\":2.0,\"mass\":0.5,\"position\":[1.0,-2.0,3.5],\"velocity\":[0.0,0.0,-0.0]}") == 1,
+      "the [f64; 3] fields as arrays");
+    var sb5 = str_builder_new();
+    str_builder_add_cstr(sb5, "[");
+    var t5, v5 = BjComplex_to_json(&c, sb5);
+    str_builder_add_cstr(sb5, ",");
+    var t6, v6 = BjComplex_to_json(&c, sb5);
+    str_builder_add_cstr(sb5, "]");
+    assert(built_is(sb5, "[{\"re\":1.0,\"im\":0.1},{\"re\":1.0,\"im\":0.1}]") == 1, "a writer appends to the builder");
+    # The longest numbers bayan writes: −f64::MAX (24 bytes), the smallest subnormal, 21-digit integers, 0.00000ddd…
+    var big: BjPointCharge;
+    var longest: i64[8];
+    longest[0] = 0xFFEFFFFFFFFFFFFF;
+    longest[1] = 0x8000000000000001;
+    longest[2] = 0xC4EB1DAC0B9F2FEB;
+    longest[3] = 0x800FFFFFFFFFFFFF;
+    longest[4] = 0x3EB4B6231ABFD271;
+    longest[5] = 0xBEB4B6231ABFD271;
+    longest[6] = 0x444B1AE4D6E2EF4F;
+    longest[7] = 0xC3E0000000000001;
+    memcpy(&big, &longest, 64);
+    var sb6 = str_builder_new();
+    var t7, v7 = BjPointCharge_to_json(&big, sb6);
+    assert(is_ok(t7) == 1, "the longest numbers fit the writer's buffer");
+    var s6 = str_builder_build(sb6);
+    var back: BjPointCharge;
+    var t8, v8 = BjPointCharge_from_json(str_data(s6), str_len(s6), &back);
+    assert(is_ok(t8) == 1 && memeq(&back, &big, 64) == 1, "and read back bit for bit");
+
+    test_group("cyrius_json_round_trip");
+    # Every finite f64 class, and 3000 seeded bit patterns, come back bit for bit; NaN and ±∞ come back refused.
+    assert(fv_round_trip(0, 0x8000000000000000, 1) == 1, "±0 and the smallest subnormal");
+    assert(fv_round_trip(0x000FFFFFFFFFFFFF, 0x0010000000000000, 0x7FEFFFFFFFFFFFFF) == 1, "subnormal max, min, max");
+    assert(fv_round_trip(0x3FB999999999999A, 0x4341C37937E08000, 0x3E7AD7F29ABCAF48) == 1, "0.1, 1e16, 1e-7");
+    var seed = 0x2545F4914F6CDD1D;
+    var bad = 0;
+    for (var k = 0; k < 1000; k = k + 1) {
+        var w: i64[3];
+        for (var j = 0; j < 3; j = j + 1) {
+            seed = seed ^ (seed << 13);
+            seed = seed ^ (seed >>> 7);
+            seed = seed ^ (seed << 17);
+            var b = seed;
+            if ((b & 0x7FF0000000000000) == 0x7FF0000000000000) { b = b & 0xBFFFFFFFFFFFFFFF; }
+            w[j] = b;
+        }
+        if (fv_round_trip(w[0], w[1], w[2]) != 1) { bad = bad + 1; }
+    }
+    assert_eq(bad, 0, "3000 seeded finite f64 come back bit for bit");
+    assert(fv_round_trip(0x7FF8000000000000, 0, 0) == 0, "NaN is written null and not read back");
+    assert(reason_is("invalid type: null, expected f64") == 1, "the reason");
+
+    test_group("cyrius_json_reader_semantics");
+    var v: BjFieldVector;
+    assert(read_fv("{\"x\":1,\"y\":2,\"z\":3}", &v) == 1, "an object");
+    var x: f64 = v.x;
+    assert(x == 1.0, "an integer reads as an f64");
+    assert(read_fv(" \t\n\r{ \"z\" : 3 , \"x\" : 1 , \"y\" : 2 } \n", &v) == 1, "any field order, JSON whitespace");
+    var y: f64 = v.y;
+    assert(y == 2.0, "by name");
+    assert(read_fv("[4,5,6]", &v) == 1, "serde's sequence form");
+    var z: f64 = v.z;
+    assert(z == 6.0, "by position");
+    assert(read_fv("{\"w\":{\"x\":[true,null,\"}\"]},\"x\":1,\"y\":2,\"z\":3,\"q\":-1e400}", &v) == 1,
+      "unknown keys skipped, whatever their value");
+    x = v.x;
+    assert(x == 1.0, "an unknown key's x is not the field x");
+    assert(read_fv("{\"x\":-0,\"y\":9223372036854775808,\"z\":-18446744073709551616}", &v) == 1,
+      "-0 and integers past i64 (bayan's tree reads neither as serde_json does: the reader rewrites them)");
+    assert(load64(&v) == 0x8000000000000000, "-0 is -0.0");
+    assert(load64(&v + 8) == 0x43E0000000000000 && load64(&v + 16) == 0xC3F0000000000000, "2^63 and -2^64 exactly");
+    assert(read_fv("{\"x\":1.7976931348623158e308,\"y\":2.4703282292062328e-324,\"z\":1e-400}", &v) == 1,
+      "numbers correctly rounded at the range edges");
+    assert(load64(&v) == 0x7FEFFFFFFFFFFFFF && load64(&v + 8) == 1 && load64(&v + 16) == 0,
+      "f64::MAX, the smallest subnormal, 0");
+    assert(read_fv("{\"x\":1.602176634e-19,\"y\":0.1000000000000000055511151231257827021181583404541015625,\"z\":0}",
+        &v) == 1, "long spellings");
+    assert(load64(&v) == 0x3C07A4DA290C1653, "e, correctly rounded (serde_json's default parse gives …654)");
+    assert(refused_fv("{\"x\":1,\"y\":2}", "missing field `z`") == 1, "a missing field");
+    assert(refused_fv("{\"x\":1,\"y\":2,\"z\":\"3\"}", "invalid type: string, expected f64") == 1, "a wrong type");
+    assert(refused_fv("[1,2]", "invalid length 2, expected struct FieldVector with 3 elements") == 1, "a short array");
+    assert(refused_fv("[1,2,3,4]", "invalid length 4, expected struct FieldVector with 3 elements") == 1, "a long one");
+    assert(refused_fv("true", "invalid type: boolean, expected struct FieldVector") == 1, "not a struct");
+    assert(refused_fv("{\"x\":1,\"y\":2,\"z\":1e400}", "number out of range") == 1, "an overflow, as serde_json");
+    assert(refused_fv("{\"x\":1,\"y\":2,\"z\":3,\"x\":4}", "duplicate key at byte 19") == 1, "a repeated field");
+    assert(refused_fv("{\"x\":1,\"y\":2,\"z\":3,\"w\":{\"a\":1,\"a\":1}}", "duplicate key at byte 30") == 1,
+      "a key repeated in an unknown value (ADR 0002 row 12)");
+    var t9, v9 = BjFieldVector_from_json("{\"x\":1,\"y\":2,\"z\":3,\"w\":\"\\ud800\"}", 34, &v);
+    assert(is_err_result(t9) == 1 && v9 == BJ_ERR_DESERIALIZE, "a lone surrogate in an unknown value (row 12)");
+    assert(refused_fv("{\"x\":1,\"y\":2,\"z\":3,\"w\":\"a\tb\"}",
+        "a control character (U+0000..U+001F) in a string at byte 25") == 1, "a raw control character (RFC 8259 §7)");
+    assert(read_fv("{\"x\":1,\"y\":2,\"z\":3,\"w\":\"\xc3\xa9\xf0\x9f\x98\x80\"}", &v) == 1, "é and 😀");
+    var utf8_bad = 0;
+    var bads: i64[6];
+    bads[0] = "{\"w\":\"\x80\",\"x\":1,\"y\":2,\"z\":3}";
+    bads[1] = "{\"w\":\"\xc0\xaf\",\"x\":1,\"y\":2,\"z\":3}";
+    bads[2] = "{\"w\":\"\xed\xa0\x80\",\"x\":1,\"y\":2,\"z\":3}";
+    bads[3] = "{\"w\":\"\xf5\x80\x80\x80\",\"x\":1,\"y\":2,\"z\":3}";
+    bads[4] = "{\"w\":\"\xe2\x82\",\"x\":1,\"y\":2,\"z\":3}";
+    bads[5] = "{\"\xff\":1,\"x\":1,\"y\":2,\"z\":3}";
+    for (var k2 = 0; k2 < 6; k2 = k2 + 1) {
+        var b2 = bads[k2];
+        var tb, vb = BjFieldVector_from_json(b2, strlen(b2), &v);
+        var at = "invalid UTF-8 in a string at byte 6";
+        if (k2 == 5) { at = "invalid UTF-8 in a string at byte 2"; }
+        if (is_err_result(tb) != 1 || reason_is(at) != 1) { utf8_bad = utf8_bad + 1; }
+    }
+    assert_eq(utf8_bad, 0,
+      "a stray continuation, an overlong form, a surrogate, past U+10FFFF, a cut sequence, 0xFF in a key");
+    var deep = str_builder_new();
+    str_builder_add_cstr(deep, "{\"x\":1,\"y\":2,\"z\":3,\"w\":");
+    for (var d = 0; d < 127; d = d + 1) { str_builder_putc(deep, 91); }
+    for (var d2 = 0; d2 < 127; d2 = d2 + 1) { str_builder_putc(deep, 93); }
+    str_builder_putc(deep, 125);
+    var ds = str_builder_build(deep);
+    var td, vd = BjFieldVector_from_json(str_data(ds), str_len(ds), &v);
+    assert(is_ok(td) == 1, "128 levels of nesting");
+    var deeper = str_builder_new();
+    str_builder_add_cstr(deeper, "{\"x\":1,\"y\":2,\"z\":3,\"w\":");
+    for (var d3 = 0; d3 < 128; d3 = d3 + 1) { str_builder_putc(deeper, 91); }
+    for (var d4 = 0; d4 < 128; d4 = d4 + 1) { str_builder_putc(deeper, 93); }
+    str_builder_putc(deeper, 125);
+    var ds2 = str_builder_build(deeper);
+    var te, ve = BjFieldVector_from_json(str_data(ds2), str_len(ds2), &v);
+    assert(is_err_result(te) == 1 && reason_is("nesting too deep at byte 150") == 1, "129 refused (row 12)");
+    var pq: BjPointCharge;
+    var sp = "{\"charge\":1,\"mass\":-2,\"position\":[1,2,3],\"velocity\":[4,5,6]}";
+    var tq, vq = BjPointCharge_from_json(sp, strlen(sp), &pq);
+    var m: f64 = pq.mass;
+    assert(is_ok(tq) == 1 && m == -2.0, "a mass PointCharge::new refuses is read as written (Rust's fields are pub)");
+    var sp2 = "{\"charge\":1,\"mass\":2,\"position\":[1,2],\"velocity\":[4,5,6]}";
+    var tq2, vq2 = BjPointCharge_from_json(sp2, strlen(sp2), &pq);
+    assert(is_err_result(tq2) == 1 && reason_is("invalid length 2, expected an array of length 3") == 1, "[f64; 3]");
+    var sp3 = "[1,2,[1,2,3],[4,5,6]]";
+    var tq3, vq3 = BjPointCharge_from_json(sp3, strlen(sp3), &pq);
+    var vz: f64 = pq.velocity.2;
+    assert(is_ok(tq3) == 1 && vz == 6.0, "a PointCharge in the sequence form");
+    var cx: BjComplex;
+    var tc, vc = BjComplex_from_json("{\"im\":-1,\"re\":0.5}", 18, &cx);
+    var cre: f64 = cx.re;
+    var cim: f64 = cx.im;
+    assert(is_ok(tc) == 1 && cre == 0.5 && cim == -1.0, "a Complex");
+
+    test_group("cyrius_json_syntax_positions");
+    assert(refused_fv("", "unexpected EOF at byte 0") == 1, "an empty document");
+    assert(refused_fv("{\"x\":1,\"y\":2,\"z\":3} x", "trailing content after JSON value at byte 20") == 1,
+      "trailing data");
+    assert(refused_fv("{\"x\":-0,\"y\":-0,\"z\":3} x", "trailing content after JSON value at byte 22") == 1,
+      "a byte offset in the caller's text, after the reader's rewrite of -0");
+    assert(refused_fv("{\"x\":-0,\"y\":01,\"z\":3}", "a number may not have a leading zero at byte 12") == 1,
+      "an offset after one rewrite");
+    var tn, vn = BjFieldVector_from_json(0, 5, &v);
+    assert(is_err_result(tn) == 1 && reason_is("no document at byte 0") == 1, "a null buffer");
+
+    test_group("cyrius_json_out_untouched");
+    var keep: BjFieldVector = BjFieldVector_new(7.0, 8.0, 9.0);
+    var tk, vk = BjFieldVector_from_json("{\"x\":1,\"y\":2}", 13, &keep);
+    var kx: f64 = keep.x;
+    var kz: f64 = keep.z;
+    assert(is_err_result(tk) == 1 && kx == 7.0 && kz == 9.0, "a refused document leaves out as it was");
+    var keepc: BjComplex = BjComplex_new(3.0, 4.0);
+    var tk2, vk2 = BjComplex_from_json("{\"re\":1,\"im\":2", 14, &keepc);
+    var kre: f64 = keepc.re;
+    assert(is_err_result(tk2) == 1 && kre == 3.0, "a truncated one too");
+
+    test_group("cyrius_json_heap_unchanged");
+    # The decode region gives every chunk back: after a first read has filled the freelist's classes, 3000 more
+    # (small, large and rewritten documents, accepted and refused) leave both heaps as they were.
+    var long_doc = str_builder_new();
+    str_builder_add_cstr(long_doc, "{\"x\":-0,\"y\":2,\"z\":3,\"w\":\"");
+    for (var a = 0; a < 9000; a = a + 1) { str_builder_putc(long_doc, 97); }
+    str_builder_add_cstr(long_doc, "\",\"v\":[");
+    for (var a2 = 0; a2 < 500; a2 = a2 + 1) {
+        if (a2 > 0) { str_builder_putc(long_doc, 44); }
+        str_builder_add_int(long_doc, a2);
+    }
+    str_builder_add_cstr(long_doc, "]}");
+    var ld = str_builder_build(long_doc);
+    var tl, vl = BjFieldVector_from_json(str_data(ld), str_len(ld), &v);
+    assert(is_ok(tl) == 1, "a 12 KB document");
+    read_fv("{\"x\":1,\"y\":2,\"z\":3}", &v);
+    refused_fv("{\"x\":1,\"y\":2,\"z\":3,\"x\":4}", "duplicate key at byte 19");
+    var fl0 = _fl_arena_pos;
+    var bump0 = alloc_used();
+    var fails = 0;
+    for (var r = 0; r < 1000; r = r + 1) {
+        if (read_fv("{\"x\":1,\"y\":-0,\"z\":[3]}", &v) == 1) { fails = fails + 1; }
+        if (read_fv("{\"x\":1,\"y\":-0,\"z\":3,\"w\":{\"a\":[1,2,{\"b\":null}]}}", &v) != 1) { fails = fails + 1; }
+        var tr, vr = BjFieldVector_from_json(str_data(ld), str_len(ld), &v);
+        if (is_err_result(tr) == 1) { fails = fails + 1; }
+    }
+    assert_eq(fails, 0, "3000 reads, each as expected");
+    assert_eq(_fl_arena_pos, fl0, "the freelist's arena did not grow");
+    assert_eq(alloc_used(), bump0, "nothing on the bump heap");
+
+    test_group("cyrius_json_threads");
+    assert_eq(bj_init(), 1, "per-thread error records");
+    var h1 = thread_create(&worker, 1);
+    var h2 = thread_create(&worker, 2);
+    var h3 = thread_create(&worker, 3);
+    var h4 = thread_create(&worker, 4);
+    assert_eq(thread_join(h1) + thread_join(h2) + thread_join(h3) + thread_join(h4), 0,
+      "four threads reading at once, 16,000 reads, each its own answer and its own reason");
+
+    return assert_summary();
+}
+
+var exit_code = main();
+if (exit_code > 0) { exit_code = 1; }
+sys_exit_group(exit_code);

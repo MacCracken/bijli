@@ -1052,6 +1052,118 @@ fn _par_fmtf(fp, fl): i64 {
     return 1;
 }
 
+# `json::<Type>::*` rows: src/json.cyr (M1 part 4).
+# - `to_string`: the port's document, tokenized as the oracle tokenizes serde_json's (scripts/oracle/src/m_json.rs):
+#   each number outside strings (a maximal run of `-0123456789.eE+`) an f: token, its correctly rounded parse, and
+#   every run between numbers an s: token. Equal tokens are the same text but for each number's notation (D5).
+# - `from_str`: the document read, its fields on Ok or E:Deserialize; a row whose document repeats a key (its `i:1`)
+#   and that serde_json reads is ADR 0002 row 12's, which the port refuses (_par_accepted).
+
+# The JSON text [p, p + n) to the got list as the oracle's tokens.
+fn _par_got_json(p, n) {
+    var run = 0;
+    var k = 0;
+    while (k < n) {
+        var c = load8(p + k);
+        if (c == 34) {
+            k = k + 1;
+            while (k < n && load8(p + k) != 34) {
+                if (load8(p + k) == 92) { k = k + 2; } else { k = k + 1; }
+            }
+            if (k < n) { k = k + 1; }
+        } elif (c == 45 || (c >= 48 && c <= 57)) {
+            if (k > run) { _par_got_text(p + run, k - run); }
+            var st = k;
+            while (k < n) {
+                var d = load8(p + k);
+                if ((d >= 48 && d <= 57) || d == 46 || d == 101 || d == 69 || d == 43 || d == 45) { k = k + 1; }
+                else { break; }
+            }
+            _par_got_f(f64_parse_n(p + st, k - st));
+            run = k;
+        } else {
+            k = k + 1;
+        }
+    }
+    if (n > run) { _par_got_text(p + run, n - run); }
+    return 0;
+}
+
+# The builder's document to the got list as tokens, or the error.
+fn _par_got_json_res(t, v, sb) {
+    if (is_err_result(t) == 1) { return _par_got_error(v); }
+    var js = str_builder_build(sb);
+    return _par_got_json(str_data(js), str_len(js));
+}
+
+# n f64 words at w to the got list.
+fn _par_got_words(w: *f64, n) {
+    for (var k = 0; k < n; k = k + 1) {
+        var x: f64 = w[k];
+        _par_got_f(x);
+    }
+    return 0;
+}
+
+# `json::<Type>::to_string` / `from_str` rows (the module's rules above): the port's document as tokens, or its reading.
+public fn _par_json(fp, fl): i64 {
+    if (_par_eq(fp, fl, "json::Complex::to_string") == 1) {
+        var cr: f64 = _par_in(0);
+        var ci: f64 = _par_in(1);
+        var c: BjComplex = BjComplex_new(cr, ci);
+        var sb = str_builder_new();
+        var t, v = BjComplex_to_json(&c, sb);
+        _par_got_json_res(t, v, sb);
+        return 1;
+    }
+    if (_par_eq(fp, fl, "json::FieldVector::to_string") == 1) {
+        var fx: f64 = _par_in(0);
+        var fy: f64 = _par_in(1);
+        var fz: f64 = _par_in(2);
+        var fv: BjFieldVector = BjFieldVector_new(fx, fy, fz);
+        var sb2 = str_builder_new();
+        var t2, v2 = BjFieldVector_to_json(&fv, sb2);
+        _par_got_json_res(t2, v2, sb2);
+        return 1;
+    }
+    if (_par_eq(fp, fl, "json::PointCharge::to_string") == 1) {
+        var pc: BjPointCharge = _par_in_pc(0);
+        var sb3 = str_builder_new();
+        var t3, v3 = BjPointCharge_to_json(&pc, sb3);
+        _par_got_json_res(t3, v3, sb3);
+        return 1;
+    }
+    var lenw[8];
+    var doc = _par_in_bytes(0, &lenw);
+    if (doc == 0) { return 0 - 1; }
+    var len = load64(&lenw);
+    if (_par_eq(fp, fl, "json::Complex::from_str") == 1) {
+        var rc: BjComplex;
+        var t4, v4 = BjComplex_from_json(doc, len, &rc);
+        if (is_err_result(t4) == 1) { _par_got_err(v4); return 1; }
+        var re: f64 = rc.re;
+        var im: f64 = rc.im;
+        _par_got_f(re);
+        _par_got_f(im);
+        return 1;
+    }
+    if (_par_eq(fp, fl, "json::FieldVector::from_str") == 1) {
+        var rv: BjFieldVector;
+        var t5, v5 = BjFieldVector_from_json(doc, len, &rv);
+        if (is_err_result(t5) == 1) { _par_got_err(v5); return 1; }
+        _par_got_fv(rv);
+        return 1;
+    }
+    if (_par_eq(fp, fl, "json::PointCharge::from_str") == 1) {
+        var rp: BjPointCharge;
+        var t6, v6 = BjPointCharge_from_json(doc, len, &rp);
+        if (is_err_result(t6) == 1) { _par_got_err(v6); return 1; }
+        _par_got_pc(rp);
+        return 1;
+    }
+    return 0;
+}
+
 public fn _par_dispatch(mp, ml, fp, fl): i64 {
     _par_got_n = 0;
     if (_par_eq(mp, ml, "charge") == 1) { return _par_charge(fp, fl); }
@@ -1060,6 +1172,7 @@ public fn _par_dispatch(mp, ml, fp, fl): i64 {
     if (_par_eq(mp, ml, "error") == 1) { return _par_error(fp, fl); }
     if (_par_eq(mp, ml, "field") == 1) { return _par_field(fp, fl); }
     if (_par_eq(mp, ml, "fmtf") == 1) { return _par_fmtf(fp, fl); }
+    if (_par_eq(mp, ml, "json") == 1) { return _par_json(fp, fl); }
     if (_par_eq(mp, ml, "math") == 1) { return _par_math(fp, fl); }
     if (_par_eq(mp, ml, "maxwell") == 1) { return _par_maxwell(fp, fl); }
     return 0;
@@ -1139,19 +1252,35 @@ public fn _par_c_bound(fp, fl): i64 {
     if (_par_eq(fp, fl, "field::multipole_moment") == 1) { return 0; }
     if (_par_eq(fp, fl, "field::spherical_multipole_moment") == 1) { return 0; }
     if (_par_eq(fp, fl, "field::greens_function_scalar") == 1) { return 0; }
+    # The JSON readers: every number correctly rounded (json.cr.tsv where serde_json's best-effort parse misrounds).
+    if (_par_eq(fp, fl, "json::Complex::from_str") == 1) { return 0; }
+    if (_par_eq(fp, fl, "json::FieldVector::from_str") == 1) { return 0; }
+    if (_par_eq(fp, fl, "json::PointCharge::from_str") == 1) { return 0; }
     return 0 - 1;
 }
 
-# The ADR accepting a divergent row (function and raw input field), or 0. None yet: the ADR 0002
-# mappings arrive with their modules.
+# ADR 0002 row 12 rows: documents serde_json reads with something it doesn't check in an unknown value (a repeated
+# key, a lone surrogate escape, nesting past 128), which the port refuses. Counted per module run.
+var _par_map12 = 0;
+
+# The ADR accepting a divergent row (function and raw input field), or 0. 212 is ADR 0002 row 12: a `json::*::from_str`
+# row whose `i:` flags are set, which the oracle reads and the port refuses as Deserialize.
 #must_use
 public fn _par_accepted(fp, fl, ip, il): i64 {
-    return 0;
+    if (fl < 16 || _par_eq(fp + fl - 10, 10, "::from_str") != 1 || memeq(fp, "json::", 6) != 1) { return 0; }
+    if (_par_in_n != 2 || _par_in(1) == 0) { return 0; }
+    if (_par_want_n < 1 || load64(_par_want_k) != 102) { return 0; }
+    if (_par_got_n != 1 || load64(_par_got_k) != 69) { return 0; }
+    if (_par_eq(load64(_par_got_v), load64(_par_got_l), "Deserialize") != 1) { return 0; }
+    _par_map12 = _par_map12 + 1;
+    return 212;
 }
 
-# 1 for an ADR whose accepted rows are counted but not printed row by row. None yet.
+# 1 for an ADR whose accepted rows are counted but not printed row by row: ADR 0002 row 12's, reported after the
+# module.
 #must_use
 public fn _par_accepted_quiet(adr): i64 {
+    if (adr == 212) { return 1; }
     return 0;
 }
 
@@ -1161,6 +1290,12 @@ public fn _par_module_done(mp, ml) {
         print("  ADR 0002 row 5 (e^{+jωt}): ", 30);
         fmt_int(_par_map5_greens);
         println(" field::greens_function_scalar rows compared as port = conj(oracle)");
+    }
+    if (_par_eq(mp, ml, "json") == 1) {
+        print("  ADR 0002 row 12 (the whole document checked): ", 48);
+        fmt_int(_par_map12);
+        println(" json::*::from_str rows serde_json reads, refused by the port as Deserialize");
+        _par_map12 = 0;
     }
     _par_dg_print_all();
     _par_dg_init();

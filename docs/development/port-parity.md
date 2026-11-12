@@ -713,3 +713,98 @@ Language facts the probes found, beyond plan §2:
 | maxwell::wavelength | `2a51a212b9db5c1` |
 | maxwell::frequency | `4d7f9c82d5504df7` |
 | maxwell::skin_depth | `46c2da50c032dc3d` |
+
+## 15. M1 part 4: the JSON of BjComplex, BjFieldVector and BjPointCharge (2026-11-12)
+
+- **`src/json.cyr`** (D5, amended): serde_json 1.0.154's documents for M1's three serde types, written and read.
+  - **Writers, by hand on the derive's printer.** `BjComplex_to_json`, `BjFieldVector_to_json` and
+    `BjPointCharge_to_json` append serde's shape (fields in Rust's order, no spaces, `[f64; 3]` as an array) to a
+    `str_builder`, every f64 through `bayan_f64_to_json`, the printer `#derive(Serialize)` uses: the same text the
+    derive would write, `null` for NaN and ±∞ as serde_json writes. The document is built on the stack (the longest
+    is 251 bytes) and appended in one grow, so a refused allocation returns `BJ_ERR_ALLOCATION` with the builder as
+    it was. The derive itself isn't used. **Probe p16b** shows why: on 6.7.18 a derive in a second `private` file
+    fails to compile (`'_cy_json_skipval' is private to its file`; bijli's two types live in two private files),
+    and in a library the derive exports its zero-filling, bump-allocating decoders as public API.
+  - **Readers, on bayan's tree with serde's semantics.** `T_from_json(buf, len, out)`: Ok(0), or
+    `BJ_ERR_DESERIALIZE` (ADR 0002 row 10) with the reason in the record and `out` untouched. A struct reads from an
+    object by name (unknown keys skipped) or from an array of exactly its fields; a `[f64; 3]` from an array of
+    three numbers; an f64 from any number, never `null`. The reasons are serde's words where they apply
+    (`missing field `z``, `invalid type: null, expected f64`, `invalid length 2, expected struct FieldVector with 3
+    elements`) and bayan's for syntax, at the byte offset in the caller's text.
+  - **Where bayan reads otherwise than serde_json** (**probe p16**): one read-only pass before bayan puts it
+    right. The integer `-0` (bayan's integer 0, so the sign would be lost) and integers outside i64 (bayan refuses
+    them) get `.0` appended, which bayan reads as a correctly rounded float. A raw control character in a string
+    (bayan takes it, serde_json and RFC 8259 §7 refuse it) and bytes that are not UTF-8 in a string (a Rust `&str`
+    can't hold them) refuse the document. bayan's own error wins when it comes earlier in the text, and offsets
+    after a rewrite are mapped back. A document with none of these is parsed in place. `1e400` (bayan: +∞, no
+    error) is refused as serde_json refuses it.
+  - **Memory.** Every node comes from a decode region on the reader's stack: freelist chunks of one 4,096-byte
+    class, chained, and given back when the read ends (a request larger than a chunk gets a block of its own). A
+    read leaves both heaps as it found it, and two threads reading at once share nothing (impetus's reader keeps one
+    module-level arena and isn't thread-safe).
+- **What serde_json does that the port doesn't** (ADR 0002 rows 11 and 12):
+  - **Its default float parse is best-effort** (`float_roundtrip` is off in bijli's build): it misreads 6,342 of
+    the corpus's documents by 1–2 ulp, its own output among them. The elementary charge as serde_json writes it,
+    `1.602176634e-19`, reads back as `0x3c07a4da290c1654`; correctly rounded (Rust's `str::parse`, Python, the
+    port) it is `…653`. It also refuses 48 numbers that round correctly to `f64::MAX`
+    (`1.7976931348623158e308`, `17976931348623157` followed by 292 zeros) as out of range. The port reads every
+    number correctly rounded, through ADR 0001's corrected oracle: `tests/golden/json.cr.tsv`, 6,390 rows, written by
+    `validate.py` from Python's `float`.
+  - **It checks only what it deserializes.** An unknown field's value is skipped with no check of repeated keys,
+    lone surrogate escapes or nesting (serde_json's recursion limit doesn't reach a skipped value: 200 levels read),
+    while the same defects in the struct's own keys refuse the document. The port reads the whole document as one
+    tree and refuses any of them anywhere: 54 rows, which the oracle flags (`i:` 1 a repeated key, 2 a lone
+    surrogate, 4 nesting past 128) and the harness reports as row 12's.
+- **`json.tsv`, 14,758 rows** (`m_json.rs`):
+  - **Writer rows, class A** (3,558): 1,186 value sets per type (the specials, the notation edges 1e15–1e23 and
+    1e-5–1e-7, SI and bijli constants, every 131st binade of both signs, 600 seeded bit patterns of every class,
+    NaN payloads among them, 200 seeded SI-scale values). The output is serde's text *as parsed tokens*: each
+    number an `f:` token (its correctly rounded value) and each run between numbers an `s:` token. The port's text,
+    tokenized the same way (`_par_got_json`), must equal it: the same punctuation, keys and `null`s byte for byte,
+    and the same bits for every number in whichever notation.
+  - **Reader rows, class C at 0 ulp** (11,200): serde's own text for every writer value; the same values in bayan's
+    notation, in Rust's `{}` (every digit, no exponent: 300-digit integers, 320-digit fractions) and `{:e}`; 120
+    number spellings in each field position (signs, `-0`, integers past i64 and u64, the overflow, underflow and
+    half-way edges of f64, 800-digit significands, `1e00000000000000000000001`, and refused forms: `01`, `.1`, `1.`,
+    `+1`, `NaN`, `Infinity`, `0x10`, a fullwidth digit); 1,200 seeded decimals per type of up to 40 digits with
+    exponents across the range; and the shapes: field order, JSON and non-JSON whitespace (form feed, NBSP,
+    U+2028, BOM), unknown keys of every kind (deep, 20 KB strings, 2,000-element arrays, 100-key objects, escapes,
+    lone and paired surrogates), escaped field names, missing and repeated fields, wrong types in each field, the
+    sequence form (short, long, nested), every prefix of a document, trailing data, comments, nesting at 120–200.
+  - **`validate.py`** recomputes every row from Python's json and a transcription of serde's derive semantics,
+    numbers correctly rounded: the writer rows' shape and values, the readers' outcomes, and the flags. Where its
+    reading and the oracle's differ, only a misrounding or an overflow judgment may explain it, and that row is a
+    correction; anything else is a problem. It agreed on every row the first time it ran.
+- **Tests**: `tests/json.tcyr`, 60 assertions in 7 groups, all Cyrius-only (rust-old tests no serde of these types):
+  the exact text, round trips of 3,000 seeded f64 bit for bit, the reasons and byte offsets, `out` untouched, 3,000
+  reads leaving the freelist's arena and the bump heap unchanged, and four threads reading 16,000 documents at once,
+  each its own answer and reason. The ledger stays at 160 of 858.
+- **Surface parity** now checks the serde derives: every `#[derive(Serialize)]` / `#[derive(Deserialize)]` of a
+  ported module needs `Bj<T>_to_json` / `Bj<T>_from_json`, and hisab's re-exported `Complex` its pair. 107 items
+  matched (6 new); the pending modules' 30 serde types count among their items.
+- **Benchmarks** (Cyrius-only: rust-old benches no serde; `cyrius bench` on a quiet machine, ushma's gate done):
+
+  | Bench | Cyrius |
+  |---|---|
+  | `json/field_vector_to_json` | 2.87 µs |
+  | `json/field_vector_from_json` | 1.94 µs |
+  | `json/point_charge_from_json` | 4.59 µs |
+
+  The writer's time is bayan's printer: `bayan_f64_to_json` alone takes 710–800 ns per f64 (1.5, c, e), so three
+  numbers are about 2.3 µs of the 2.87, and the one builder append 161 ns. src/fmtf.cyr's `_bj_fmt_f64_json`,
+  which writes serde_json's own text (zmij's notation, `1e16`), takes 0.42–1.92 µs per f64 over the same values, so
+  a writer whose text equals serde_json's byte for byte would cost about twice as much. A reader's time is bayan's
+  tree (a call per byte through its bounds-checked slices) and the decode region's two freelist calls. Rust has no
+  twin to set beside these numbers. They are findings with their numbers, not changes.
+- **Result, every target** (x86_64 ELF, x86_64 PE, aarch64): **9 modules, 0 failing; 188,486 ok, 0 failed, 0
+  measured, 0 pending, 6,559 accepted (ADR 01: 6,505; ADR 0002 row 12: 54)**; **all 145 digests equal**, the 139 of
+  §14 unchanged. `tests/json.tcyr`'s 60 assertions pass on all three, its four threads included.
+
+| Function | Digest v2, every target |
+|---|---|
+| json::Complex::to_string | `4d9ed1ed8014f65d` |
+| json::Complex::from_str | `1c5a58b59a93cae1` |
+| json::FieldVector::to_string | `16d67f22edc24710` |
+| json::FieldVector::from_str | `2d9a9d3270002358` |
+| json::PointCharge::to_string | `4429d64e05c2e255` |
+| json::PointCharge::from_str | `2b9687ddb5ad7846` |

@@ -23,7 +23,7 @@ fn bench_noop(): i64 { return 0; }
 # (the last-error record, on the main thread's static record, with no syscall until a thread exists), the same with
 # an f64 field (Rust's Display through src/fmtf.cyr), one Display, a complex multiply-and-divide (src/complex.cyr,
 # by value), a complex exp (three correctly rounded calls), a sinh and a cosh over [0, 70) (src/crmath.cyr's bijli
-# section) and a complex sin (four calls).
+# section), a complex sin (four calls), and the JSON writer and readers (src/json.cyr).
 fn main(): i64 {
     alloc_init();
     var b = bench_new("noop");
@@ -331,6 +331,45 @@ fn main(): i64 {
     }
     bench_batch_stop(b17, 1000000);
     bench_report(b17);
+    if (fsum == 7.0) { println("."); }
+
+    # The JSON (src/json.cyr): a FieldVector written into one builder, emptied each time through its length word
+    # (lib/str.cyr's layout: buf, len, cap), and serde_json's documents read back.
+    var jv = BjFieldVector_new(1.5, -0.25, BJ_SPEED_OF_LIGHT);
+    var jsb = str_builder_new();
+    var b18 = bench_new("json/field_vector_to_json");
+    bench_batch_start(b18);
+    for (var k = 0; k < 1000000; k = k + 1) {
+        store64(jsb + 8, 0);
+        var t18, v18 = BjFieldVector_to_json(&jv, jsb);
+        keep = keep + v18;
+    }
+    bench_batch_stop(b18, 1000000);
+    bench_report(b18);
+
+    var jdoc = "{\"x\":1.5,\"y\":-0.25,\"z\":299792458.0}";
+    var jlen = strlen(jdoc);
+    var jout: BjFieldVector;
+    var b19 = bench_new("json/field_vector_from_json");
+    bench_batch_start(b19);
+    for (var k = 0; k < 200000; k = k + 1) {
+        var t19, v19 = BjFieldVector_from_json(jdoc, jlen, &jout);
+        fsum = fsum + jout.z;
+    }
+    bench_batch_stop(b19, 200000);
+    bench_report(b19);
+
+    var pdoc = "{\"charge\":-1.6e-19,\"mass\":9.1093837015e-31,\"position\":[0,1e-10,0],\"velocity\":[2.2e6,0,0]}";
+    var plen = strlen(pdoc);
+    var pout: BjPointCharge;
+    var b20 = bench_new("json/point_charge_from_json");
+    bench_batch_start(b20);
+    for (var k = 0; k < 200000; k = k + 1) {
+        var t20, v20 = BjPointCharge_from_json(pdoc, plen, &pout);
+        fsum = fsum + pout.mass;
+    }
+    bench_batch_stop(b20, 200000);
+    bench_report(b20);
     if (fsum == 7.0) { println("."); }
 
     var ar: f64 = acc.re;

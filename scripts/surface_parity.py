@@ -123,6 +123,10 @@ def cyrius_index():
 
 
 VIS = r"pub(?:\((?:crate|super)\))?"
+# A serde derive's Cyrius counterparts (port plan D5): the writer and the reader, src/json.cyr's shapes.
+SERDE = {"Serialize": "to_json", "Deserialize": "from_json"}
+# Serde types bijli takes from Rust hisab rather than defining (its re-exported `Complex`): checked by name.
+HISAB_SERDE = ["Complex"]
 
 
 def rust_items(module):
@@ -130,9 +134,18 @@ def rust_items(module):
     text = rustsrc.library_text(root / "rust-old/src" / f"{module}.rs")
     items = []
     owner = enum_name = struct_name = None
+    derives = set()
     lines = text.splitlines()
     for li, line in enumerate(lines):
         s = line.strip()
+        # A `#[derive(..)]` naming Serialize / Deserialize gives the next struct or enum its JSON writer / reader
+        # (port plan D5), as the trait items `impl Serialize for X` / `impl Deserialize for X`.
+        if (m := re.match(r"#\[derive\((.*)\)\]", s)):
+            derives |= {d.strip().split("::")[-1] for d in m.group(1).split(",")}
+            continue
+        if s.startswith("#["):
+            continue
+        serde, derives = derives & {"Serialize", "Deserialize"}, set()
         if (m := re.match(r"impl(?:<[^>]*>)? (?:std::ops::|std::fmt::)?(\w+)(?:<[^>]*>)? for (\w+)", s)):
             owner = m.group(2)
             items.append(("trait", owner, m.group(1), None))
@@ -143,10 +156,12 @@ def rust_items(module):
         if (m := re.match(VIS + r" enum (\w+)", s)):
             enum_name, struct_name = m.group(1), None
             items.append(("enum", None, enum_name, None))
+            items += [("trait", enum_name, t, None) for t in sorted(serde)]
             continue
         if (m := re.match(VIS + r" struct (\w+)", s)):
             struct_name, enum_name = m.group(1), None
             items.append(("struct", None, struct_name, None))
+            items += [("trait", struct_name, t, None) for t in sorted(serde)]
             continue
         if s.startswith("}") and not line.startswith(" "):
             owner = enum_name = struct_name = None
@@ -260,6 +275,8 @@ def expected(module, kind, owner, name, has_self):
             return "fn", f"Bj{owner}_default"
         if name in OPERATORS:
             return "fn", f"Bj{owner}_{OPERATORS[name]}"
+        if name in SERDE:
+            return "fn", f"Bj{owner}_{SERDE[name]}"
         return "exception", None
     return "exception", None
 
@@ -308,6 +325,12 @@ def main() -> int:
                 ok += 1
             else:
                 problems.append(f"{label} ({kind}) -> {want}")
+    for name in HISAB_SERDE:
+        for trait, suffix in SERDE.items():
+            if f"Bj{name}_{suffix}" in fns:
+                ok += 1
+            else:
+                problems.append(f"hisab::{name} ({trait}, re-exported) -> Bj{name}_{suffix}")
     for key in EXCEPTIONS:
         if key not in used:
             problems.append(f"EXCEPTIONS entry {key!r} names no Rust item of a ported module")
