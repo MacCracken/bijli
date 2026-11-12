@@ -1,0 +1,75 @@
+# cr_driver.cyr — evaluates bijli's correctly rounded primitives on the arguments cr_verify.py writes.
+#
+# Input build/cr_in.txt, one call per line: `<fn> <x bits hex> [<y bits hex>]`. Output, one line per call: the
+# result's bits in hex. Built against the shipped bundle (dist/bijli.cyr, after `cyrius distlib`), so it checks what a
+# consumer links. scripts/oracle/cr_verify.py builds it, runs it natively and under qemu-aarch64, and compares every
+# result with MPFR.
+include "lib/syscalls.cyr"
+include "lib/string.cyr"
+include "lib/alloc.cyr"
+include "lib/str.cyr"
+include "lib/fmt.cyr"
+include "lib/io.cyr"
+include "lib/math.cyr"
+include "lib/ganita.cyr"
+include "dist/bijli.cyr"
+
+# The value of hex digit byte c (lowercase).
+fn _hexv(c): i64 {
+    if (c >= 97) { return c - 87; }
+    return c - 48;
+}
+
+# The word written as hex in [p, p + n).
+fn _hexw(p, n): i64 {
+    var v = 0;
+    for (var k = 0; k < n; k = k + 1) { v = (v << 4) | _hexv(load8(p + k)); }
+    return v;
+}
+
+# 1 when [p, p + n) is the C string s.
+fn _is(p, n, s): i64 {
+    if (n != strlen(s)) { return 0; }
+    return memeq(p, s, n);
+}
+
+# One call: the result's bits, or -1 for an unknown function name.
+fn _call(fp, fl, x: f64, y: f64): i64 {
+    var r: f64 = 0.0;
+    if (_is(fp, fl, "exp") == 1) { r = _bj_exp(x); }
+    elif (_is(fp, fl, "sin") == 1) { r = _bj_sin(x); }
+    elif (_is(fp, fl, "cos") == 1) { r = _bj_cos(x); }
+    elif (_is(fp, fl, "atan") == 1) { r = _bj_atan(x); }
+    elif (_is(fp, fl, "atan2") == 1) { r = _bj_atan2(x, y); }
+    elif (_is(fp, fl, "hypot") == 1) { r = _bj_hypot(x, y); }
+    elif (_is(fp, fl, "pow") == 1) { r = _bj_powf(x, y); }
+    else { return 0 - 1; }
+    var w = _bj_bits(r);
+    return w;
+}
+
+fn main(): i64 {
+    alloc_init();
+    var lenw: i64[1];
+    var buf = file_read_whole("build/cr_in.txt", &lenw);
+    if (buf == 0) { println("cr_driver: cannot read build/cr_in.txt"); return 1; }
+    var len = lenw[0];
+    var at = 0;
+    while (at < len) {
+        var end = at;
+        while (end < len && load8(buf + end) != 10) { end = end + 1; }
+        var sp = at;
+        while (sp < end && load8(buf + sp) != 32) { sp = sp + 1; }
+        var x: f64 = _hexw(buf + sp + 1, 16);
+        var y: f64 = 0.0;
+        if (end - sp > 18) { y = _hexw(buf + sp + 18, 16); }
+        var w = _call(buf + at, sp - at, x, y);
+        if (w == 0 - 1) { println("cr_driver: unknown function"); return 1; }
+        fmt_hex(w);
+        println("");
+        at = end + 1;
+    }
+    return 0;
+}
+var r = main();
+sys_exit_group(r);

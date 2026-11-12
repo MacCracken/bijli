@@ -40,6 +40,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
   glibc misrounds). Probes p7–p14 in `scripts/probes/` (the language-review probes moved there): grid memory, struct
   vs f64 hot loops, callbacks, the FDTD kernel (bit-identical to Rust's), Rust's `.sum()`, Touchstone text, the
   cell-step cost and the last-error record.
+- **Cyrius port, M1 part 1a**: correctly rounded exp, sin, cos, sin_cos, hypot, pow and atan2 (`src/crmath.cyr`, impetus's,
+  with its generated tables `src/crmath_data.cyr` and `scripts/oracle/crtables.py`), wrapped in `src/mathx.cyr`, plus
+  atan as atan2(x, 1). The corrected oracle `tests/golden/math.cr.tsv` (125 rows where glibc misrounds) and
+  `scripts/oracle/cr_verify.py`, which checks the primitives against MPFR beyond the corpus (700,000 calls on x86_64
+  and aarch64, all equal). Those functions' 14,766 golden rows (cbrt's included) now gate at 0 ulp, on all three targets.
 
 ## [1.2.0] — 2026-11-11
 

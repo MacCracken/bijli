@@ -125,3 +125,34 @@ Language facts the probes found, beyond plan §2:
 - Storing an untyped word (`fl_alloc`'s result, a closure parameter) in a `*T` warns; returning it from a fn
   declared `: *T` does not. The port uses typed helpers (`_bj_alloc_f64(n): *f64`, `_bj_as_vec(p): *BjFieldVector`).
 - `var x = f()` with `fn f(): *f64` leaves `x` untyped: declare `var x: *f64 = f();`.
+
+## 5. M1 part 1a: correctly rounded exp, sin, cos, hypot, pow, atan2 and atan (2026-11-11)
+
+- **`src/crmath.cyr` and `src/crmath_data.cyr`** are impetus's (its ADR 0011 and amendments), with the prefixes
+  renamed. `scripts/oracle/crtables.py` regenerates the tables byte for byte, and `validate.py` checks them: π and
+  ln 2 to 2,048 bits and every table's hi equal MPFR 4.2.2's. impetus's 78 Cyrius-only tests
+  (`tests/crmath.tcyr`: the IEEE specials, fast and slow paths agreeing, phase 1 deciding) pass.
+- **`src/mathx.cyr`** wraps them as `_bj_exp`, `_bj_sin`, `_bj_cos`, `_bj_sin_cos`, `_bj_hypot`, `_bj_powf`,
+  `_bj_atan2`, and **`_bj_atan` = `atan2(x, 1)`**, which is exact: both are the correctly rounded value of the same
+  real number, and the specials agree.
+- **The corrected oracle**, `tests/golden/math.cr.tsv`: the 125 rows of §2 where glibc misrounds. The harness
+  compares them against MPFR's value: **all 24 rows of the dispatched functions equal the corrected value, none
+  glibc's**. The rest belong to tan, asin and acos (measured) and log10 (pending).
+- **Beyond the corpus** (`scripts/oracle/cr_verify.py`, the driver `scripts/oracle/cr_driver.cyr` built against
+  `dist/bijli.cyr`): 100,000 arguments per function (the whole domain, every binade, the implementation's
+  thresholds, the special grid), **700,000 calls on x86_64 and on aarch64 (qemu): every result equals MPFR's**.
+- **Bounds: 0** for exp, sin, cos, sin_cos, hypot, powf, atan2, atan and cbrt.
+- **Result, every target** (x86_64 ELF, x86_64 PE, aarch64): 2 modules, 0 failing; **29,165 ok, 0 failed, 4,324
+  measured (tan, asin, acos), 1,233 pending (log10), 24 accepted (ADR 01)**. Digests: 23 of 25 equal on all three
+  targets; asin and acos (ganita's, on the native atan) still differ on aarch64 until part 1b/1c replaces them.
+
+| Function | Digest, every target |
+|---|---|
+| f64::exp | `9763e0c4a6dc5471` (= impetus's: the same grid) |
+| f64::sin | `cf422e1f146f3036` |
+| f64::cos | `ccbaeb8b2a98fec2` |
+| f64::sin_cos | `cca2d7bb6f9b190b` |
+| f64::atan2 | `6b403ab79185f15f` |
+| f64::hypot | `b904b4aff7f5703d` |
+| f64::powf | `e25863c3e07f8bf6` |
+| f64::atan | `c025934e4462a8a2` |

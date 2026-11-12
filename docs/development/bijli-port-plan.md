@@ -877,7 +877,7 @@ Each one gets an issue in the owning repo, with the probe or benchmark that show
 |---|---|---|---|---|---|
 | P Prep | ✅ | | | 80 (Rust, 2026-11-12T03:15, under load) | D1–D5 answered; 1.2.0 tagged and green; P3, P4, P5 done (2026-11-11); P6 is done at the scaffold; the commit remains |
 | M0 Initialize | ✅ | 34,746 (constants 12, math 34,734): 15,507 ok, 0 failed, 18,006 measured, 1,233 pending, on all three targets | | 80 Rust (pending twins) | done 2026-11-11: Parts 1–3. Baselines and probes in `port-parity.md` |
-| M1 Foundation | ☐ | | | | |
+| M1 Foundation | ◐ | math: 29,165 ok, 24 accepted (ADR 01) | | | Part 1a (crmath, corrected oracle, cr_verify) done 2026-11-11; 1b (acos, log10), 1c (asin, tan), parts 2–3 next |
 | M2 Media, waves, circuits, relativity | ☐ | | | | |
 | M3 Optics | ☐ | | | | |
 | M4 RF | ☐ | | | | |

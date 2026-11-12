@@ -7,8 +7,9 @@
 # - the predicates and copysign have no public stdlib counterpart;
 # - to_radians and to_degrees are one multiply by Rust's folded constant;
 # - powi is compiler-rt's `__powidf2`, which Rust calls for bijli's run-time exponents.
-# The correctly rounded transcendentals (sin, cos, exp, atan2, pow, hypot, log10, atan, asin,
-# acos, tan) arrive with src/crmath.cyr in M1; cbrt is ganita's, already correctly rounded.
+# - exp, sin, cos, sin_cos, hypot, pow, atan2 and atan are correctly rounded (src/crmath.cyr, impetus's ADR 0011
+#   adopted by bijli's ADR 0001): the same bits on every target, matching the corrected oracle. log10, asin, acos
+#   and tan join them in M1; cbrt is ganita's, already correctly rounded.
 # Adapted from impetus's src/mathx.cyr (its `_im_` helpers).
 
 # π/180 as Rust folds `consts::PI / 180.0`: the double nearest, pinned by the to_radians rows.
@@ -123,4 +124,65 @@ fn _bj_powi(x: f64, n): f64 {
         return q;
     }
     return mul;
+}
+
+# e^x, correctly rounded (src/crmath.cyr). Stands for `f64::exp`.
+#must_use
+fn _bj_exp(x: f64): f64 {
+    var r: f64 = _bj_cr_exp(x);
+    return r;
+}
+
+# √(x² + y²), correctly rounded. Stands for `f64::hypot`.
+#must_use
+fn _bj_hypot(x: f64, y: f64): f64 {
+    var r: f64 = _bj_cr_hypot(x, y);
+    return r;
+}
+
+# x^y, correctly rounded. Stands for `f64::powf`.
+#must_use
+fn _bj_powf(x: f64, y: f64): f64 {
+    var r: f64 = _bj_cr_pow(x, y);
+    return r;
+}
+
+# (sin x, cos x), each correctly rounded. Stands for `f64::sin_cos`. Read as `var s, c = _bj_sin_cos(x);` and
+# bind each to an f64 local.
+#must_use
+fn _bj_sin_cos(x: f64): (f64, f64) {
+    var s, c = _bj_cr_sin_cos(x);
+    var sv: f64 = s;
+    var cv: f64 = c;
+    return (sv, cv);
+}
+
+# sin x, correctly rounded. Stands for `f64::sin`.
+#must_use
+fn _bj_sin(x: f64): f64 {
+    var r: f64 = _bj_cr_sin(x);
+    return r;
+}
+
+# cos x, correctly rounded. Stands for `f64::cos`.
+#must_use
+fn _bj_cos(x: f64): f64 {
+    var r: f64 = _bj_cr_cos(x);
+    return r;
+}
+
+# The angle of (x, y) in [−π, π], correctly rounded, C99 Annex F's specials and signs of zero included. Stands for
+# `y.atan2(x)`.
+#must_use
+fn _bj_atan2(y: f64, x: f64): f64 {
+    var r: f64 = _bj_cr_atan2(y, x);
+    return r;
+}
+
+# atan x, correctly rounded: atan2(x, 1) is the same real number, so its correctly rounded value is atan's. The
+# specials agree too: atan(±0) = ±0 (atan2(±0, 1)), atan(±∞) = ±π/2, atan(NaN) = NaN. Stands for `f64::atan`.
+#must_use
+fn _bj_atan(x: f64): f64 {
+    var r: f64 = _bj_cr_atan2(x, 1.0);
+    return r;
 }
