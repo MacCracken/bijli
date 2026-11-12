@@ -1,0 +1,418 @@
+# material.tcyr — src/material.cyr (M2 part 1a): the dielectric and magnetic relations, Clausius–Mossotti, the
+# Curie laws, the classification and BjMaterial, and its JSON (src/json.cyr).
+#
+# Every group named test_* is rust-old/src/material.rs's test of that name, ported assertion for assertion (the ledger
+# matches them by name): 39 of 42. The other three test the deprecated `Material::reflectance_at`, which is not
+# carried (ADR 0002 row 1); `cyrius_reflectance_via_try` checks their values through try_reflectance_at. The cyrius_*
+# groups check what the port adds: the recorded errors and their Display texts, ADR 0002 rows 19–21, out untouched on
+# an error, and the JSON. tests/golden/material.tsv pins every function over its grid against Rust besides.
+
+include "tests/lib.cyr"
+
+# |a − b| < tol.
+fn near(a: f64, b: f64, tol: f64): i64 {
+    var d: f64 = a - b;
+    var ad: f64 = f64_abs(d);
+    if (ad < tol) { return 1; }
+    return 0;
+}
+
+# 1 when the C strings a and b are equal.
+fn text_is(a, b): i64 {
+    var n = strlen(a);
+    if (n != strlen(b)) { return 0; }
+    return memeq(a, b, n);
+}
+
+# 1 when the Result (t, v) is an error with code `code` and the record's Display text is `want`.
+fn err_is(t, v, code, want): i64 {
+    if (is_err_result(t) != 1 || v != code) { return 0; }
+    return text_is(bj_last_error_display(), want);
+}
+
+# 1 when the Result (t, v) is an error with code `code` and the record's Display text is a followed by b (a literal
+# can't continue across lines).
+fn err_is2(t, v, code, a, b): i64 {
+    if (is_err_result(t) != 1 || v != code) { return 0; }
+    var d = bj_last_error_display();
+    var la = strlen(a);
+    var lb = strlen(b);
+    if (strlen(d) != la + lb) { return 0; }
+    if (memeq(d, a, la) != 1) { return 0; }
+    return memeq(d + la, b, lb);
+}
+
+# 1 when the builder sb holds exactly the C string want.
+fn built_is(sb, want): i64 {
+    var s = str_builder_build(sb);
+    if (str_len(s) != strlen(want)) { return 0; }
+    return memeq(str_data(s), want, str_len(s));
+}
+
+# Runs material.rs's tests, then the Cyrius-only checks.
+fn main(): i64 {
+    alloc_init();
+    var zero: f64 = 0.0;
+    var nan: f64 = zero / zero;
+    var inf: f64 = 1.0 / zero;
+    var e15: f64 = 0.000000000000001;
+    var e25: f64 = 0.0000000000000000000000001;
+    var e10: f64 = 0.0000000001;
+    var ex = BjFieldVector_new(1000.0, 0.0, 0.0);
+
+    # ── dielectrics ──
+    test_group("test_electric_susceptibility");
+    var chi_e: f64 = bj_electric_susceptibility(4.0);
+    assert(near(chi_e, 3.0, e15) == 1, "glass, ε_r ≈ 4: χ_e = 3");
+
+    test_group("test_relative_permittivity");
+    var eps_r1: f64 = bj_relative_permittivity(3.0);
+    assert(near(eps_r1, 4.0, e15) == 1, "ε_r = 1 + χ_e");
+
+    test_group("test_absolute_permittivity");
+    var eps1: f64 = bj_absolute_permittivity(4.0);
+    var eps1x: f64 = 4.0 * BJ_EPSILON_0;
+    assert(near(eps1, eps1x, e25) == 1, "ε = ε_r·ε₀");
+
+    test_group("test_polarization_vacuum");
+    var p0: BjFieldVector = bj_polarization(1.0, ex);
+    var p0m: f64 = p0.magnitude();
+    assert(p0m < e25, "vacuum: P = 0");
+
+    test_group("test_polarization_dielectric");
+    var p4: BjFieldVector = bj_polarization(4.0, ex);
+    var p4x: f64 = p4.x;
+    var p4w: f64 = 3.0 * BJ_EPSILON_0 * 1000.0;
+    assert(near(p4x, p4w, e15) == 1, "P = 3ε₀·1000");
+
+    test_group("test_displacement_field");
+    var d4: BjFieldVector = bj_displacement_field(4.0, ex);
+    var d4x: f64 = d4.x;
+    var d4w: f64 = 4.0 * BJ_EPSILON_0 * 1000.0;
+    assert(near(d4x, d4w, e15) == 1, "D = 4ε₀·1000");
+
+    test_group("test_bound_surface_charge");
+    var pp = BjFieldVector_new(0.000001, 0.0, 0.0);
+    var nx = BjFieldVector_new(1.0, 0.0, 0.0);
+    var sb1: f64 = bj_bound_surface_charge(pp, nx);
+    var e20: f64 = 0.00000000000000000001;
+    assert(near(sb1, 0.000001, e20) == 1, "σ_b = P·n̂");
+
+    test_group("test_bound_volume_charge_uniform");
+    var rb: f64 = bj_bound_volume_charge(0.0, 0.0, 0.0);
+    var rba: f64 = f64_abs(rb);
+    var e30: f64 = 0.000000000000000000000000000001;
+    assert(rba < e30, "uniform polarization: ρ_b = 0");
+
+    test_group("test_dielectric_energy_density");
+    var ud: f64 = bj_dielectric_energy_density(4.0, 1000.0);
+    var udw: f64 = 0.5 * 4.0 * BJ_EPSILON_0 * 1000000.0;
+    assert(near(ud, udw, e10) == 1, "u = ε E²/2");
+
+    test_group("test_clausius_mossotti");
+    var tcm, vcm = bj_clausius_mossotti(0.0000000000000000000000000000000000000001, 10000000000000000000000000000.0);
+    var cm: f64 = vcm;
+    assert(is_ok(tcm) == 1 && cm > 1.0 && cm < 2.0, "a small polarizability: ε_r just above 1");
+
+    # ── magnetic materials ──
+    test_group("test_magnetic_susceptibility");
+    var chi_m: f64 = bj_magnetic_susceptibility(1.001);
+    assert(near(chi_m, 0.001, e15) == 1, "χ_m = μ_r − 1");
+
+    test_group("test_relative_permeability");
+    var mu_r1: f64 = bj_relative_permeability(0.001);
+    assert(near(mu_r1, 1.001, e15) == 1, "μ_r = 1 + χ_m");
+
+    test_group("test_absolute_permeability");
+    var mu1: f64 = bj_absolute_permeability(1000.0);
+    var mu1x: f64 = 1000.0 * BJ_MU_0;
+    assert(near(mu1, mu1x, e15) == 1, "μ = μ_r·μ₀");
+
+    test_group("test_magnetization");
+    var mz: BjFieldVector = bj_magnetization(1000.0, ex);
+    var mzx: f64 = mz.x;
+    var e6: f64 = 0.000001;
+    assert(near(mzx, 999000.0, e6) == 1, "M = (μ_r − 1)H = 999·1000");
+
+    test_group("test_h_b_roundtrip");
+    var h100 = BjFieldVector_new(100.0, 0.0, 0.0);
+    var bh: BjFieldVector = bj_b_field_from_h(1000.0, h100);
+    var hb: BjFieldVector;
+    var thb, vhb = bj_h_field_from_b(1000.0, bh, &hb);
+    var hbx: f64 = hb.x;
+    assert(is_ok(thb) == 1 && near(hbx, 100.0, e10) == 1, "H → B → H");
+
+    test_group("test_magnetic_energy_density");
+    var tmu, vmu = bj_magnetic_energy_density_material(1.0, 1.0);
+    var um: f64 = vmu;
+    var umw: f64 = 1.0 / (2.0 * BJ_MU_0);
+    var umd: f64 = um - umw;
+    var umr: f64 = f64_abs(umd) / umw;
+    assert(is_ok(tmu) == 1 && umr < e6, "u = B²/(2μ₀) in vacuum");
+
+    test_group("test_bound_surface_current");
+    var ny = BjFieldVector_new(0.0, 1.0, 0.0);
+    var kb: BjFieldVector = bj_bound_surface_current(ex, ny);
+    var kbz: f64 = kb.z;
+    assert(near(kbz, 1000.0, e10) == 1, "M × n̂ = (1000, 0, 0) × (0, 1, 0) = (0, 0, 1000)");
+
+    test_group("test_curie_law");
+    var tcl, vcl = bj_curie_law(1.0, 300.0);
+    var cl: f64 = vcl;
+    var clw: f64 = 1.0 / 300.0;
+    assert(is_ok(tcl) == 1 && near(cl, clw, e10) == 1, "χ = C/T");
+
+    test_group("test_curie_law_zero_temp");
+    var tcz, vcz = bj_curie_law(1.0, 0.0);
+    assert(is_err_result(tcz) == 1, "T = 0 refused");
+
+    test_group("test_curie_weiss");
+    var tcw, vcw = bj_curie_weiss(1.0, 1000.0, 770.0);
+    var cw: f64 = vcw;
+    var cww: f64 = 1.0 / 230.0;
+    assert(is_ok(tcw) == 1 && near(cw, cww, e10) == 1, "χ = C/(T − T_c)");
+
+    test_group("test_curie_weiss_below_tc");
+    var tcb, vcb = bj_curie_weiss(1.0, 700.0, 770.0);
+    assert(is_err_result(tcb) == 1, "below T_c refused");
+
+    test_group("test_classify_diamagnetic");
+    var tk1, vk1 = bj_classify_magnetic(-0.00001);
+    assert(is_ok(tk1) == 1 && vk1 == BJ_MAGNETIC_TYPE_DIAMAGNETIC, "χ = −1e-5: diamagnetic");
+
+    test_group("test_classify_paramagnetic");
+    var tk2, vk2 = bj_classify_magnetic(0.001);
+    assert(is_ok(tk2) == 1 && vk2 == BJ_MAGNETIC_TYPE_PARAMAGNETIC, "χ = 1e-3: paramagnetic");
+
+    test_group("test_classify_ferromagnetic");
+    var tk3, vk3 = bj_classify_magnetic(1000.0);
+    assert(is_ok(tk3) == 1 && vk3 == BJ_MAGNETIC_TYPE_FERROMAGNETIC, "χ = 1000: ferromagnetic");
+
+    # ── the unified material ──
+    test_group("test_material_vacuum");
+    var vac: BjMaterial = BjMaterial_vacuum();
+    var ve: f64 = vac.eps_r;
+    var vm: f64 = vac.mu_r;
+    var vs: f64 = vac.conductivity;
+    var vsa: f64 = f64_abs(vs);
+    assert(near(ve, 1.0, e15) == 1 && near(vm, 1.0, e15) == 1 && vsa < e30, "ε_r = μ_r = 1, σ = 0");
+    assert(vac.is_lossy() == 0, "lossless");
+
+    test_group("test_material_dielectric");
+    var d4m: BjMaterial = BjMaterial_dielectric(4.0);
+    var n4: f64 = d4m.refractive_index();
+    assert(near(n4, 2.0, e10) == 1, "ε_r = 4: n = 2");
+
+    test_group("test_material_conductor");
+    var cu: BjMaterial = BjMaterial_conductor(59600000.0);
+    assert(cu.is_lossy() == 1, "copper is lossy");
+
+    test_group("test_material_wave_speed_vacuum");
+    var tws, vws = vac.wave_speed();
+    var ws: f64 = vws;
+    var wsd: f64 = ws - BJ_SPEED_OF_LIGHT;
+    var wsr: f64 = f64_abs(wsd) / BJ_SPEED_OF_LIGHT;
+    assert(is_ok(tws) == 1 && wsr < e6, "v = c in vacuum");
+
+    test_group("test_material_impedance_vacuum");
+    var tz0, vz0 = vac.impedance();
+    var z0: f64 = vz0;
+    assert(is_ok(tz0) == 1 && near(z0, 376.73, 0.1) == 1, "Z₀ ≈ 376.73 Ω");
+
+    test_group("test_material_default_is_vacuum");
+    var dm: BjMaterial = BjMaterial_default();
+    assert(dm.eq(vac) == 1, "default is vacuum");
+
+    test_group("test_material_permittivity");
+    var pe: f64 = d4m.permittivity();
+    var pew: f64 = 4.0 * BJ_EPSILON_0;
+    assert(near(pe, pew, e25) == 1, "ε = 4ε₀");
+
+    test_group("test_material_permeability");
+    var m1000: BjMaterial = BjMaterial_new(1.0, 1000.0, 0.0);
+    var pm: f64 = m1000.permeability();
+    var pmw: f64 = 1000.0 * BJ_MU_0;
+    assert(near(pm, pmw, e15) == 1, "μ = 1000μ₀");
+
+    test_group("test_try_reflectance_magnetic_impedance_matched");
+    var m44: BjMaterial = BjMaterial_new(4.0, 4.0, 0.0);
+    var tr1, vr1 = vac.try_reflectance_at(m44);
+    var r1: f64 = vr1;
+    var r1a: f64 = f64_abs(r1);
+    assert(is_ok(tr1) == 1 && r1a < e15, "ε_r = μ_r = 4 is matched to vacuum: R = 0");
+    var mag: BjMaterial = BjMaterial_new(1.0, 2.25, 0.0);
+    var tr2, vr2 = vac.try_reflectance_at(mag);
+    var r2: f64 = vr2;
+    assert(is_ok(tr2) == 1 && near(r2, 0.04, e15) == 1, "μ_r = 2.25: η = 1.5η₀, R = 0.04");
+
+    test_group("test_try_reflectance_dielectric_matches_n_formula");
+    var glass: BjMaterial = BjMaterial_dielectric(2.25);
+    var tr3, vr3 = vac.try_reflectance_at(glass);
+    var r3: f64 = vr3;
+    assert(is_ok(tr3) == 1 && near(r3, 0.04, e15) == 1, "air–glass: ((1 − 1.5)/(1 + 1.5))² = 0.04");
+
+    test_group("test_try_reflectance_rejects_conductor_and_invalid");
+    var tr4, vr4 = vac.try_reflectance_at(cu);
+    assert(is_err_result(tr4) == 1, "into copper refused");
+    var tr5, vr5 = cu.try_reflectance_at(vac);
+    assert(is_err_result(tr5) == 1, "out of copper refused");
+    var neg: BjMaterial = BjMaterial_dielectric(-2.0);
+    var tr6, vr6 = vac.try_reflectance_at(neg);
+    assert(is_err_result(tr6) == 1 && vr6 == BJ_ERR_INVALID_PERMITTIVITY, "ε_r = −2: InvalidPermittivity");
+    var negmu: BjMaterial = BjMaterial_new(1.0, -1.0, 0.0);
+    var tr7, vr7 = vac.try_reflectance_at(negmu);
+    assert(is_err_result(tr7) == 1 && vr7 == BJ_ERR_INVALID_PERMEABILITY, "μ_r = −1: InvalidPermeability");
+    var nanm: BjMaterial = BjMaterial_dielectric(nan);
+    var tr8, vr8 = vac.try_reflectance_at(nanm);
+    assert(is_err_result(tr8) == 1, "ε_r = NaN refused");
+
+    test_group("test_impedance_validates_permeability");
+    var ti1, vi1 = negmu.impedance();
+    assert(is_err_result(ti1) == 1 && vi1 == BJ_ERR_INVALID_PERMEABILITY, "μ_r = −1: InvalidPermeability");
+    var zmu: BjMaterial = BjMaterial_new(1.0, 0.0, 0.0);
+    var ti2, vi2 = zmu.impedance();
+    assert(is_err_result(ti2) == 1 && vi2 == BJ_ERR_INVALID_PERMEABILITY, "μ_r = 0: InvalidPermeability");
+    var ti3, vi3 = nanm.impedance();
+    assert(is_err_result(ti3) == 1 && vi3 == BJ_ERR_INVALID_PERMITTIVITY, "ε_r = NaN: InvalidPermittivity");
+    var m14: BjMaterial = BjMaterial_new(1.0, 4.0, 0.0);
+    var ti4, vi4 = m14.impedance();
+    var z14: f64 = vi4;
+    var zr: f64 = z14 / z0;
+    var e12: f64 = 0.000000000001;
+    assert(is_ok(ti4) == 1 && near(zr, 2.0, e12) == 1, "μ_r = 4, ε_r = 1: η = 2η₀");
+
+    test_group("test_wave_speed_nan_rejected");
+    var tw1, vw1 = nanm.wave_speed();
+    assert(is_err_result(tw1) == 1, "ε_r = NaN refused");
+    var nanmu: BjMaterial = BjMaterial_new(1.0, nan, 0.0);
+    var tw2, vw2 = nanmu.wave_speed();
+    assert(is_err_result(tw2) == 1, "μ_r = NaN refused");
+
+    test_group("test_clausius_mossotti_closed_form");
+    var nd: f64 = 10000000000000000000000000000.0;
+    var a05: f64 = 1.5 * BJ_EPSILON_0 / nd;
+    var tc1, vc1 = bj_clausius_mossotti(a05, nd);
+    var c1: f64 = vc1;
+    assert(is_ok(tc1) == 1 && near(c1, 4.0, e12) == 1, "X = 0.5: ε_r = 4");
+
+    test_group("test_clausius_mossotti_catastrophe_rejected");
+    var a12: f64 = 3.6 * BJ_EPSILON_0 / nd;
+    var tc2, vc2 = bj_clausius_mossotti(a12, nd);
+    assert(is_err_result(tc2) == 1, "X = 1.2 refused");
+    var e9: f64 = 0.000000001;
+    var a1p: f64 = 3.0 * BJ_EPSILON_0 * (1.0 + e9) / nd;
+    var tc3, vc3 = bj_clausius_mossotti(a1p, nd);
+    assert(is_err_result(tc3) == 1, "X ≈ 1⁺ refused");
+    var tc4, vc4 = bj_clausius_mossotti(nan, nd);
+    assert(is_err_result(tc4) == 1, "α = NaN refused");
+    var tc5, vc5 = bj_clausius_mossotti(0.0000000000000000000000000000000000000001, -1.0);
+    assert(is_err_result(tc5) == 1, "N < 0 refused");
+    var a06: f64 = -1.8 * BJ_EPSILON_0 / nd;
+    var tc6, vc6 = bj_clausius_mossotti(a06, nd);
+    assert(is_err_result(tc6) == 1 && vc6 == BJ_ERR_INVALID_PERMITTIVITY, "X = −0.6: ε_r < 0, InvalidPermittivity");
+
+    # ── Cyrius-only ──
+    test_group("cyrius_reflectance_via_try");
+    # The deprecated reflectance_at's tests, through its replacement (ADR 0002 row 1).
+    var tr9, vr9 = glass.try_reflectance_at(glass);
+    var r9: f64 = vr9;
+    assert(is_ok(tr9) == 1 && r9 < e10, "no reflection at the same material");
+    var tr10, vr10 = vac.try_reflectance_at(glass);
+    var r10: f64 = vr10;
+    assert(is_ok(tr10) == 1 && near(r10, 0.04, e6) == 1, "air–glass: 0.04");
+    assert(is_err_result(tr4) == 1 && vr4 == BJ_ERR_INVALID_PARAMETER, "copper: InvalidParameter, never a NaN R");
+
+    test_group("cyrius_material_errors");
+    var tr11, vr11 = vac.try_reflectance_at(cu);
+    assert(err_is2(tr11, vr11, BJ_ERR_INVALID_PARAMETER, "invalid parameter: Fresnel coefficients from Material are ",
+        "lossless-only; conductivity σ = 59600000 S/m needs a frequency-dependent complex refractive index") == 1,
+      "the conductor's text");
+    var tcx, vcx = bj_clausius_mossotti(nan, 1.0);
+    assert(err_is2(tcx, vcx, BJ_ERR_INVALID_PARAMETER, "invalid parameter: polarizability and number density must be ",
+        "finite with N ≥ 0, got α = NaN, N = 1") == 1, "Clausius–Mossotti's input text");
+    var tcy, vcy = bj_clausius_mossotti(a12, nd);
+    var cyt = bj_last_error_display();
+    var cyp = "invalid parameter: Nα/(3ε₀) = 1.2";
+    assert(is_err_result(tcy) == 1 && memeq(cyt, cyp, strlen(cyp)) == 1,
+      "the catastrophe's text names X");
+    var tc7, vc7 = bj_clausius_mossotti(a06, nd);
+    var ev: f64 = bj_last_error_value();
+    assert(is_err_result(tc7) == 1 && vc7 == BJ_ERR_INVALID_PERMITTIVITY && ev < 0.0, "ε_r ≤ 0 carries its value");
+    var tdz, vdz = bj_magnetic_energy_density_material(0.0, 1.0);
+    var dz = "division by zero in EM calculation: ";
+    assert(err_is2(tdz, vdz, BJ_ERR_DIVISION_BY_ZERO, dz, "permeability cannot be zero for energy density") == 1,
+      "μ = 0's text");
+    var hun = BjFieldVector_new(7.0, 7.0, 7.0);
+    var th0, vh0 = bj_h_field_from_b(0.0, bh, &hun);
+    var hux: f64 = hun.x;
+    assert(err_is2(th0, vh0, BJ_ERR_DIVISION_BY_ZERO, dz, "relative permeability cannot be zero") == 1 && hux == 7.0,
+      "μ_r = 0: DivisionByZero, out untouched");
+    var tcw2, vcw2 = bj_curie_weiss(1.0, 700.0, 770.0);
+    var ipx = "invalid parameter: ";
+    var cwt = "temperature (700 K) must be above Curie temperature (770 K)";
+    assert(err_is2(tcw2, vcw2, BJ_ERR_INVALID_PARAMETER, ipx, cwt)
+      == 1, "Curie–Weiss's text");
+
+    test_group("cyrius_adr_rows_19_to_21");
+    var tn1, vn1 = bj_curie_law(1.0, nan);
+    assert(err_is2(tn1, vn1, BJ_ERR_INVALID_PARAMETER, ipx, "temperature must be positive, got NaN K") == 1,
+      "row 19: a NaN temperature is refused (Rust: Ok(NaN))");
+    var tn2, vn2 = bj_curie_weiss(1.0, inf, inf);
+    assert(err_is2(tn2, vn2, BJ_ERR_INVALID_PARAMETER, "invalid parameter: temperature (inf K) must be above Curie ",
+        "temperature (inf K)") == 1, "row 19: T − T_c = ∞ − ∞ is refused");
+    var infm: BjMaterial = BjMaterial_dielectric(inf);
+    var tn3, vn3 = infm.wave_speed();
+    assert(err_is(tn3, vn3, BJ_ERR_INVALID_PERMITTIVITY, "invalid permittivity: inf (must be > 0)") == 1,
+      "row 20: ε_r = ∞ is InvalidPermittivity, as impedance (Rust: Ok(0))");
+    var tn4, vn4 = negmu.wave_speed();
+    assert(err_is(tn4, vn4, BJ_ERR_INVALID_PERMEABILITY, "invalid permeability: -1 (must be > 0)") == 1,
+      "row 20: μ_r = −1 is InvalidPermeability with its value (Rust: InvalidParameter)");
+    var tn5, vn5 = bj_classify_magnetic(nan);
+    assert(err_is2(tn5, vn5, BJ_ERR_INVALID_PARAMETER, "invalid parameter: magnetic susceptibility must not be NaN, ",
+        "got NaN") == 1, "row 21: NaN is refused (Rust: Paramagnetic)");
+    var tn6, vn6 = bj_classify_magnetic(-e15);
+    assert(is_ok(tn6) == 1 && vn6 == BJ_MAGNETIC_TYPE_PARAMAGNETIC, "χ = −1e-15 itself is paramagnetic (strict <)");
+
+    test_group("cyrius_lossless_optical_constants");
+    var oc: f64[2];
+    var to1, vo1 = _bj_material_lossless_optical_constants(BjMaterial_new(2.25, 4.0, 0.0), &oc);
+    var on: f64 = oc[0];
+    var oeta: f64 = oc[1];
+    assert(is_ok(to1) == 1 && on == 3.0 && near(oeta, 1.3333333333333333, e15) == 1, "n = √(ε_r μ_r), η = √(μ_r/ε_r)");
+    var minus0: BjMaterial = BjMaterial_new(2.25, 1.0, -0.0);
+    var to2, vo2 = _bj_material_lossless_optical_constants(minus0, &oc);
+    assert(is_ok(to2) == 1, "σ = −0 is lossless (σ ≠ 0 is false)");
+
+    test_group("cyrius_material_json");
+    var sbm = str_builder_new();
+    var tj1, vj1 = BjMaterial_to_json(&glass, sbm);
+    assert(is_ok(tj1) == 1 && built_is(sbm, "{\"eps_r\":2.25,\"mu_r\":1.0,\"conductivity\":0.0}") == 1,
+      "serde's shape: the fields in order, no spaces");
+    var back: BjMaterial;
+    var doc = "{\"conductivity\":5.96e7,\"mu_r\":1,\"eps_r\":1,\"x\":[1,2]}";
+    var tj2, vj2 = BjMaterial_from_json(doc, strlen(doc), &back);
+    var bs: f64 = back.conductivity;
+    assert(is_ok(tj2) == 1 && back.eq(cu) == 1 && bs == 59600000.0, "any field order; unknown fields ignored");
+    var doc2 = "{\"eps_r\":1.0,\"mu_r\":1.0}";
+    var keep: BjMaterial = BjMaterial_new(9.0, 9.0, 9.0);
+    var tj3, vj3 = BjMaterial_from_json(doc2, strlen(doc2), &keep);
+    var ke: f64 = keep.eps_r;
+    assert(err_is(tj3, vj3, BJ_ERR_DESERIALIZE, "deserialization failed: missing field `conductivity`") == 1
+      && ke == 9.0, "a missing field refused, out untouched");
+    var doc3 = "[4.0,4.0,0.0]";
+    var tj4, vj4 = BjMaterial_from_json(doc3, strlen(doc3), &back);
+    assert(is_ok(tj4) == 1 && back.eq(m44) == 1, "serde's sequence form");
+
+    if (vcz == 7 || vcb == 7 || vr5 == 7 || vr8 == 7 || vw1 == 7 || vw2 == 7 || vc2 == 7 || vc3 == 7 || vc4 == 7) {
+        println(".");
+    }
+    if (vc5 == 7 || vr1 == 0 || vr2 == 0 || vr3 == 0 || vmu == 0 || vhb == 7 || vcl == 0 || vcw == 0) { println("."); }
+    if (vo1 == 7 || vo2 == 7 || vj1 == 7 || vj2 == 7 || vj4 == 7 || vi4 == 0 || vws == 0 || vz0 == 0) { println("."); }
+    if (vk1 == 7 || vk2 == 7 || vk3 == 7 || vcm == 0 || vc1 == 0 || vcy == 0 || vcx == 0) { println("."); }
+    if (vc6 == 7 || vr11 == 7) { println("."); }
+    return assert_summary();
+}
+
+var exit_code = main();
+if (exit_code > 0) { exit_code = 1; }
+sys_exit_group(exit_code);

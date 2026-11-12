@@ -36,10 +36,10 @@ import rustsrc  # noqa: E402
 root = Path(sys.argv[1] if len(sys.argv) > 1 else ".").resolve()
 
 # Ported modules (their milestone done or in progress, item by item).
-MODULES = ["error", "logging", "field", "maxwell", "charge"]
+MODULES = ["error", "logging", "field", "maxwell", "charge", "material"]
 # Rust module -> the milestone that ports it (port plan §4.1).
 PENDING_MODULES = {
-    "material": "M2", "wave": "M2", "circuit": "M2", "relativity": "M2",
+    "wave": "M2", "circuit": "M2", "relativity": "M2",
     "polarization": "M3", "scattering": "M3", "beam": "M3",
     "rf": "M4",
     "fdtd": "M5–M6", "compute": "M6",
@@ -60,7 +60,8 @@ OPERATORS = {"Add": "add", "Sub": "sub", "Mul": "mul", "Div": "div", "Neg": "neg
 # Cyrius has one namespace per program, so logging's `init` / `init_with_level` keep their module in the name.
 FN_RENAMES = {"init": "bj_log_init", "init_with_level": "bj_log_init_with_level",
               # pub(crate): bijli-internal in the port
-              "check_radial_distance": "_bj_check_radial_distance"}
+              "check_radial_distance": "_bj_check_radial_distance",
+              "Material::lossless_optical_constants": "_bj_material_lossless_optical_constants"}
 FIELD_RENAMES = {}
 EXCEPTIONS = {
     "field::impl From for FieldVector": "BjFieldVector_from_array(p); the other direction, From<FieldVector> for "
@@ -71,6 +72,7 @@ EXCEPTIONS = {
     "field::impl MulAssign for FieldVector": "`a = a * s`, as AddAssign",
     "field::impl Mul for f64": "BjFieldVector_scale_left(s, v): an operator fn belongs to its left operand's type",
     "field::impl Display for FieldVector": "the method display(t), into a BjText (src/fmtf.cyr)",
+    "material::Material::reflectance_at": "deprecated in 1.2.0, not carried (ADR 0002 row 1): try_reflectance_at",
 }
 
 

@@ -1,6 +1,6 @@
-//! `json.tsv` — serde_json 1.0.154 on M1's serializable types (port plan D5, M1 part 4): Rust hisab 1.4.0's
-//! `Complex`, `field::FieldVector` and `charge::PointCharge`, written with `serde_json::to_string` and read with
-//! `serde_json::from_str`.
+//! `json.tsv` — serde_json 1.0.154 on the serializable types (port plan D5; M1 part 4, M2 part 1a): Rust hisab
+//! 1.4.0's `Complex`, `field::FieldVector`, `charge::PointCharge` and `material::Material`, written with
+//! `serde_json::to_string` and read with `serde_json::from_str`.
 //!
 //! - **Writer rows** (`json::<Type>::to_string`, class A): the value's fields in, serde_json's text out as *parsed
 //!   tokens*: each number in the text (outside strings, a maximal run of `-0123456789.eE+`) is an `f:` token, the
@@ -26,6 +26,7 @@ use crate::grids::{Rng, pow2, specials};
 use crate::tsv::{Class, Module, Tok, f, i, s};
 use bijli::charge::{ELECTRON_MASS, ELEMENTARY_CHARGE, PROTON_MASS, PointCharge};
 use bijli::field::{EPSILON_0, FieldVector, MU_0, SPEED_OF_LIGHT};
+use bijli::material::Material;
 use bijli::polarization::Complex;
 use std::collections::BTreeSet;
 use std::hint::black_box;
@@ -36,16 +37,18 @@ enum Kind {
     Complex,
     FieldVector,
     PointCharge,
+    Material,
 }
 
 impl Kind {
-    const ALL: [Kind; 3] = [Kind::Complex, Kind::FieldVector, Kind::PointCharge];
+    const ALL: [Kind; 4] = [Kind::Complex, Kind::FieldVector, Kind::PointCharge, Kind::Material];
 
     fn name(self) -> &'static str {
         match self {
             Kind::Complex => "Complex",
             Kind::FieldVector => "FieldVector",
             Kind::PointCharge => "PointCharge",
+            Kind::Material => "Material",
         }
     }
 
@@ -55,6 +58,7 @@ impl Kind {
             Kind::Complex => 2,
             Kind::FieldVector => 3,
             Kind::PointCharge => 8,
+            Kind::Material => 3,
         }
     }
 
@@ -67,6 +71,7 @@ impl Kind {
                 "{{\"charge\":{},\"mass\":{},\"position\":[{},{},{}],\"velocity\":[{},{},{}]}}",
                 v[0], v[1], v[2], v[3], v[4], v[5], v[6], v[7]
             ),
+            Kind::Material => format!("{{\"eps_r\":{},\"mu_r\":{},\"conductivity\":{}}}", v[0], v[1], v[2]),
         }
     }
 
@@ -79,6 +84,7 @@ impl Kind {
                 "[{},{},[{},{},{}],[{},{},{}]]",
                 v[0], v[1], v[2], v[3], v[4], v[5], v[6], v[7]
             ),
+            Kind::Material => format!("[{},{},{}]", v[0], v[1], v[2]),
         }
     }
 
@@ -93,6 +99,7 @@ impl Kind {
                 ("position", true),
                 ("velocity", true),
             ],
+            Kind::Material => &[("eps_r", false), ("mu_r", false), ("conductivity", false)],
         }
     }
 
@@ -109,6 +116,7 @@ impl Kind {
                 position: [black_box(v[2]), black_box(v[3]), black_box(v[4])],
                 velocity: [black_box(v[5]), black_box(v[6]), black_box(v[7])],
             }),
+            Kind::Material => serde_json::to_string(&Material::new(black_box(v[0]), black_box(v[1]), black_box(v[2]))),
         }
         .expect("serde_json writes every value")
     }
@@ -125,6 +133,9 @@ impl Kind {
                 out.extend(p.velocity);
                 out
             }),
+            Kind::Material => {
+                serde_json::from_str::<Material>(doc).map(|m| vec![m.eps_r, m.mu_r, m.conductivity])
+            }
         }
         .map_err(|e| e.to_string())
     }

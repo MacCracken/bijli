@@ -1105,6 +1105,212 @@ fn _par_got_words(w: *f64, n) {
     return 0;
 }
 
+# A BjMaterial from the input tokens k, k + 1, k + 2 (eps_r, mu_r, conductivity).
+fn _par_in_mat(k): BjMaterial {
+    var e: f64 = _par_in(k);
+    var u: f64 = _par_in(k + 1);
+    var s: f64 = _par_in(k + 2);
+    var m: BjMaterial = BjMaterial_new(e, u, s);
+    return m;
+}
+
+# A BjMaterial to the got list: its three fields.
+fn _par_got_mat(m: BjMaterial) {
+    var e: f64 = m.eps_r;
+    var u: f64 = m.mu_r;
+    var s: f64 = m.conductivity;
+    _par_got_f(e);
+    _par_got_f(u);
+    _par_got_f(s);
+    return 0;
+}
+
+# A BjMagneticType's golden text.
+fn _par_magnetic_name(t): i64 {
+    if (t == BJ_MAGNETIC_TYPE_DIAMAGNETIC) { return "MagneticType.Diamagnetic"; }
+    if (t == BJ_MAGNETIC_TYPE_FERROMAGNETIC) { return "MagneticType.Ferromagnetic"; }
+    return "MagneticType.Paramagnetic";
+}
+
+# `material::*` and `Material::*` rows: src/material.cyr (M2 part 1a). Inputs are f64 tokens; a vector is three, a
+# material three (eps_r, mu_r, conductivity).
+public fn _par_material(fp, fl): i64 {
+    if (_par_eq(fp, fl, "Material::vacuum") == 1) {
+        _par_got_mat(BjMaterial_vacuum());
+        return 1;
+    }
+    if (_par_eq(fp, fl, "Material::default") == 1) {
+        _par_got_mat(BjMaterial_default());
+        return 1;
+    }
+    var a: f64 = _par_in(0);
+    if (_par_in_n == 1) {
+        if (_par_eq(fp, fl, "material::electric_susceptibility") == 1) {
+            var r1: f64 = bj_electric_susceptibility(a);
+            _par_got_f(r1);
+            return 1;
+        }
+        if (_par_eq(fp, fl, "material::relative_permittivity") == 1) {
+            var r2: f64 = bj_relative_permittivity(a);
+            _par_got_f(r2);
+            return 1;
+        }
+        if (_par_eq(fp, fl, "material::absolute_permittivity") == 1) {
+            var r3: f64 = bj_absolute_permittivity(a);
+            _par_got_f(r3);
+            return 1;
+        }
+        if (_par_eq(fp, fl, "material::magnetic_susceptibility") == 1) {
+            var r4: f64 = bj_magnetic_susceptibility(a);
+            _par_got_f(r4);
+            return 1;
+        }
+        if (_par_eq(fp, fl, "material::relative_permeability") == 1) {
+            var r5: f64 = bj_relative_permeability(a);
+            _par_got_f(r5);
+            return 1;
+        }
+        if (_par_eq(fp, fl, "material::absolute_permeability") == 1) {
+            var r6: f64 = bj_absolute_permeability(a);
+            _par_got_f(r6);
+            return 1;
+        }
+        if (_par_eq(fp, fl, "material::classify_magnetic") == 1) {
+            var tc, vc = bj_classify_magnetic(a);
+            if (is_err_result(tc) == 1) { _par_got_error(vc); return 1; }
+            _par_got_e(_par_magnetic_name(vc));
+            return 1;
+        }
+        if (_par_eq(fp, fl, "Material::dielectric") == 1) {
+            _par_got_mat(BjMaterial_dielectric(a));
+            return 1;
+        }
+        if (_par_eq(fp, fl, "Material::conductor") == 1) {
+            _par_got_mat(BjMaterial_conductor(a));
+            return 1;
+        }
+        return 0;
+    }
+    if (_par_in_n == 2) {
+        var b: f64 = _par_in(1);
+        if (_par_eq(fp, fl, "material::dielectric_energy_density") == 1) {
+            var u1: f64 = bj_dielectric_energy_density(a, b);
+            _par_got_f(u1);
+            return 1;
+        }
+        if (_par_eq(fp, fl, "material::clausius_mossotti") == 1) {
+            var t1, v1 = bj_clausius_mossotti(a, b);
+            _par_got_res_f(t1, v1);
+            return 1;
+        }
+        if (_par_eq(fp, fl, "material::magnetic_energy_density_material") == 1) {
+            var t2, v2 = bj_magnetic_energy_density_material(a, b);
+            _par_got_res_f(t2, v2);
+            return 1;
+        }
+        if (_par_eq(fp, fl, "material::curie_law") == 1) {
+            var t3, v3 = bj_curie_law(a, b);
+            _par_got_res_f(t3, v3);
+            return 1;
+        }
+        return 0;
+    }
+    if (_par_in_n == 4) {
+        var w: BjFieldVector = _par_in_fv(1);
+        if (_par_eq(fp, fl, "material::polarization") == 1) {
+            _par_got_fv(bj_polarization(a, w));
+            return 1;
+        }
+        if (_par_eq(fp, fl, "material::displacement_field") == 1) {
+            _par_got_fv(bj_displacement_field(a, w));
+            return 1;
+        }
+        if (_par_eq(fp, fl, "material::magnetization") == 1) {
+            _par_got_fv(bj_magnetization(a, w));
+            return 1;
+        }
+        if (_par_eq(fp, fl, "material::b_field_from_h") == 1) {
+            _par_got_fv(bj_b_field_from_h(a, w));
+            return 1;
+        }
+        if (_par_eq(fp, fl, "material::h_field_from_b") == 1) {
+            var h: BjFieldVector;
+            var t4, v4 = bj_h_field_from_b(a, w, &h);
+            _par_got_res_v(t4, v4, h);
+            return 1;
+        }
+        return 0;
+    }
+    if (_par_in_n == 6 && _par_eq(fp, fl, "Material::try_reflectance_at") == 0) {
+        var p: BjFieldVector = _par_in_fv(0);
+        var q: BjFieldVector = _par_in_fv(3);
+        if (_par_eq(fp, fl, "material::bound_surface_charge") == 1) {
+            var sc: f64 = bj_bound_surface_charge(p, q);
+            _par_got_f(sc);
+            return 1;
+        }
+        if (_par_eq(fp, fl, "material::bound_surface_current") == 1) {
+            _par_got_fv(bj_bound_surface_current(p, q));
+            return 1;
+        }
+        return 0;
+    }
+    if (_par_in_n == 6) {
+        var m1: BjMaterial = _par_in_mat(0);
+        var m2: BjMaterial = _par_in_mat(3);
+        var t5, v5 = m1.try_reflectance_at(m2);
+        _par_got_res_f(t5, v5);
+        return 1;
+    }
+    var b2: f64 = _par_in(1);
+    var c2: f64 = _par_in(2);
+    if (_par_eq(fp, fl, "material::curie_weiss") == 1) {
+        var t6, v6 = bj_curie_weiss(a, b2, c2);
+        _par_got_res_f(t6, v6);
+        return 1;
+    }
+    if (_par_eq(fp, fl, "material::bound_volume_charge") == 1) {
+        var bv: f64 = bj_bound_volume_charge(a, b2, c2);
+        _par_got_f(bv);
+        return 1;
+    }
+    var m: BjMaterial = _par_in_mat(0);
+    if (_par_eq(fp, fl, "Material::new") == 1) {
+        _par_got_mat(BjMaterial_new(a, b2, c2));
+        return 1;
+    }
+    if (_par_eq(fp, fl, "Material::refractive_index") == 1) {
+        var n1: f64 = m.refractive_index();
+        _par_got_f(n1);
+        return 1;
+    }
+    if (_par_eq(fp, fl, "Material::permittivity") == 1) {
+        var e1: f64 = m.permittivity();
+        _par_got_f(e1);
+        return 1;
+    }
+    if (_par_eq(fp, fl, "Material::permeability") == 1) {
+        var u2: f64 = m.permeability();
+        _par_got_f(u2);
+        return 1;
+    }
+    if (_par_eq(fp, fl, "Material::impedance") == 1) {
+        var t7, v7 = m.impedance();
+        _par_got_res_f(t7, v7);
+        return 1;
+    }
+    if (_par_eq(fp, fl, "Material::wave_speed") == 1) {
+        var t8, v8 = m.wave_speed();
+        _par_got_res_f(t8, v8);
+        return 1;
+    }
+    if (_par_eq(fp, fl, "Material::is_lossy") == 1) {
+        _par_got_i(m.is_lossy());
+        return 1;
+    }
+    return 0;
+}
+
 # `json::<Type>::to_string` / `from_str` rows (the module's rules above): the port's document as tokens, or its reading.
 public fn _par_json(fp, fl): i64 {
     if (_par_eq(fp, fl, "json::Complex::to_string") == 1) {
@@ -1131,6 +1337,13 @@ public fn _par_json(fp, fl): i64 {
         var sb3 = str_builder_new();
         var t3, v3 = BjPointCharge_to_json(&pc, sb3);
         _par_got_json_res(t3, v3, sb3);
+        return 1;
+    }
+    if (_par_eq(fp, fl, "json::Material::to_string") == 1) {
+        var mt: BjMaterial = _par_in_mat(0);
+        var sb4 = str_builder_new();
+        var t7, v7 = BjMaterial_to_json(&mt, sb4);
+        _par_got_json_res(t7, v7, sb4);
         return 1;
     }
     var lenw[8];
@@ -1161,6 +1374,13 @@ public fn _par_json(fp, fl): i64 {
         _par_got_pc(rp);
         return 1;
     }
+    if (_par_eq(fp, fl, "json::Material::from_str") == 1) {
+        var rm: BjMaterial;
+        var t8, v8 = BjMaterial_from_json(doc, len, &rm);
+        if (is_err_result(t8) == 1) { _par_got_err(v8); return 1; }
+        _par_got_mat(rm);
+        return 1;
+    }
     return 0;
 }
 
@@ -1173,6 +1393,7 @@ public fn _par_dispatch(mp, ml, fp, fl): i64 {
     if (_par_eq(mp, ml, "field") == 1) { return _par_field(fp, fl); }
     if (_par_eq(mp, ml, "fmtf") == 1) { return _par_fmtf(fp, fl); }
     if (_par_eq(mp, ml, "json") == 1) { return _par_json(fp, fl); }
+    if (_par_eq(mp, ml, "material") == 1) { return _par_material(fp, fl); }
     if (_par_eq(mp, ml, "math") == 1) { return _par_math(fp, fl); }
     if (_par_eq(mp, ml, "maxwell") == 1) { return _par_maxwell(fp, fl); }
     return 0;
@@ -1255,6 +1476,7 @@ public fn _par_c_bound(fp, fl): i64 {
     # The JSON readers: every number correctly rounded (json.cr.tsv where serde_json's best-effort parse misrounds).
     if (_par_eq(fp, fl, "json::Complex::from_str") == 1) { return 0; }
     if (_par_eq(fp, fl, "json::FieldVector::from_str") == 1) { return 0; }
+    if (_par_eq(fp, fl, "json::Material::from_str") == 1) { return 0; }
     if (_par_eq(fp, fl, "json::PointCharge::from_str") == 1) { return 0; }
     return 0 - 1;
 }

@@ -1,5 +1,6 @@
-# json.cyr — JSON for M1's serializable types: BjComplex (Rust hisab 1.4.0's `Complex`), BjFieldVector and
-# BjPointCharge, as serde_json 1.0.154 writes and reads them (port plan D5, M1 part 4; ADR 0002 rows 10–12).
+# json.cyr — JSON for the serializable types: BjComplex (Rust hisab 1.4.0's `Complex`), BjFieldVector,
+# BjPointCharge and (M2 part 1a) BjMaterial, as serde_json 1.0.154 writes and reads them (port plan D5, M1 part 4;
+# ADR 0002 rows 10–12).
 #
 # Writers append serde's document to a `str_builder`: the fields in Rust declaration order, no spaces, a `[f64; 3]`
 # as an array, every f64 through bayan's printer (`bayan_f64_to_json`, the printer `#derive(Serialize)` uses): the
@@ -128,6 +129,21 @@ public fn BjPointCharge_to_json(p: *BjPointCharge, sb): Result {
     var vy: f64 = p.velocity.1;
     var vz: f64 = p.velocity.2;
     n = _bj_jw_triple(&buf, n, vx, vy, vz);
+    n = _bj_jw_cstr(&buf, n, "}");
+    return _bj_jw_put(sb, &buf, n);
+}
+
+# Appends `{"eps_r":<ε_r>,"mu_r":<μ_r>,"conductivity":<σ>}` to the builder sb: Ok(0), or Err(BJ_ERR_ALLOCATION) with
+# sb as it was. Mirrors `serde_json::to_string(&m)` for `material::Material`.
+#must_use
+public fn BjMaterial_to_json(m: *BjMaterial, sb): Result {
+    var buf[128];
+    var n = _bj_jw_cstr(&buf, 0, "{\"eps_r\":");
+    n = _bj_jw_f64(&buf, n, m.eps_r);
+    n = _bj_jw_cstr(&buf, n, ",\"mu_r\":");
+    n = _bj_jw_f64(&buf, n, m.mu_r);
+    n = _bj_jw_cstr(&buf, n, ",\"conductivity\":");
+    n = _bj_jw_f64(&buf, n, m.conductivity);
     n = _bj_jw_cstr(&buf, n, "}");
     return _bj_jw_put(sb, &buf, n);
 }
@@ -570,6 +586,14 @@ fn _bj_jr_field_vector(v, w): i64 {
     return _bj_jr_f64_struct(v, &names, 3, "struct FieldVector", w);
 }
 
+fn _bj_jr_material(v, w): i64 {
+    var names: i64[3];
+    names[0] = "eps_r";
+    names[1] = "mu_r";
+    names[2] = "conductivity";
+    return _bj_jr_f64_struct(v, &names, 3, "struct Material", w);
+}
+
 fn _bj_jr_point_charge(v, w): i64 {
     var form = _bj_jr_form(v, 4, "struct PointCharge");
     if (form == 0) { return BJ_ERR_DESERIALIZE; }
@@ -629,5 +653,19 @@ public fn BjPointCharge_from_json(buf, len, out: *BjPointCharge): Result {
     out.mass = w[1];
     out.position = (w[2], w[3], w[4]);
     out.velocity = (w[5], w[6], w[7]);
+    return Ok(0);
+}
+
+# Reads a `Material` document from [buf, buf + len) into *out: Ok(0), or the error recorded with out untouched, as
+# BjComplex_from_json. Any ε_r, μ_r and σ are read as written, as serde's derive reads Rust's public fields. Mirrors
+# `serde_json::from_str::<Material>`.
+#must_use
+public fn BjMaterial_from_json(buf, len, out: *BjMaterial): Result {
+    var w: f64[3];
+    var code = _bj_jr_read(buf, len, &_bj_jr_material, &w);
+    if (code != 0) { return Err(code); }
+    out.eps_r = w[0];
+    out.mu_r = w[1];
+    out.conductivity = w[2];
     return Ok(0);
 }

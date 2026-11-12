@@ -189,8 +189,20 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
   multipoles' chains (the origin test exact, an azimuth below 2^-1022 as y/x), and each field-line step's direction
   and h·F/|F|. A 204-row edge grid maps 166 rows.
 
+- **Cyrius port, M2 part 1a — material** (`src/material.cyr`): material.rs's dielectric and magnetic relations,
+  Clausius–Mossotti, the Curie laws, `bj_classify_magnetic` with `BjMagneticType`, and `BjMaterial` with its methods
+  (`try_reflectance_at`; the deprecated `reflectance_at` is not carried, ADR 0002 row 1), plus `BjMaterial`'s JSON
+  (`BjMaterial_to_json` / `_from_json`, D5). `material.tsv` holds 51,814 class-A rows; 39 of material.rs's 42 tests
+  are ported, and 5 bench twins added.
+- **material** (ADR 0002 row 21): `bj_classify_magnetic` returns a Result, so a NaN susceptibility can be refused.
+
 ### Fixed
 
+- **material** (ADR 0002 rows 19–21, M2 part 1a, the user's answers of 2026-11-12): `curie_law` and `curie_weiss`
+  returned Ok(NaN) for a NaN temperature (`T <= 0` let it through), and now refuse it with their InvalidParameter;
+  `Material::wave_speed` refused a bad ε_r or μ_r as InvalidParameter and accepted ∞ (a speed of 0), and now validates
+  as `impedance` does (InvalidPermittivity / InvalidPermeability with the value); `classify_magnetic(NaN)` was
+  Paramagnetic, and is now InvalidParameter.
 - **field** (ADR 0002 row 18, 5d-5): the stress tensor of E = (1e155, 1e155, 0) was NaN in all but one element (E²
   overflowed, and its off-diagonal 0·∞); a force row whose products cancel past DBL_MAX was NaN for +0; E × B past
   DBL_MAX made the Poynting flux ∞ where n̂ and ΔA bring it back to 7.96e5 W; a 1e300 C charge at z = 1e-170 had a

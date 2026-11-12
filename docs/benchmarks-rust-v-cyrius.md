@@ -6,7 +6,7 @@
 
 **Rust column**: rust-old/bench-history.csv, run `2026-11-12T03:15:21Z` at `c95fd30` (the 1.2.0 tag's source), criterion medians. Taken under load (kimiya's gates ran beside it: load average about 2.6, median CI width 0.8 %, p90 4.2 %, max 13 %), so a ratio within the Rust row's own noise is read as parity (port plan §5 P4).
 
-**80 Rust benches:** 17 twinned, 0 not applicable, 63 pending.
+**80 Rust benches:** 22 twinned, 0 not applicable, 58 pending.
 
 | Rust bench | Rust | Cyrius twin | Cyrius | Cyrius / Rust |
 |---|---:|---|---:|---:|
@@ -54,11 +54,11 @@
 | `circuit/rlc_impedance` | 1.53 ns | pending (M2) | — | — |
 | `circuit/resonant_frequency` | 1.31 ns | pending (M2) | — | — |
 | `circuit/resistance_parallel` | 7.09 ns | pending (M2) | — | — |
-| `material/polarization` | 1.00 ns | pending (M2) | — | — |
-| `material/displacement_field` | 0.99 ns | pending (M2) | — | — |
-| `material/h_field_from_b` | 5.51 ns | pending (M2) | — | — |
-| `material/clausius_mossotti` | 1.24 ns | pending (M2) | — | — |
-| `material/curie_weiss` | 1.24 ns | pending (M2) | — | — |
+| `material/polarization` | 1.00 ns | `material/polarization` | 25.00 ns | 25.1× |
+| `material/displacement_field` | 0.99 ns | `material/displacement_field` | 23.00 ns | 23.2× |
+| `material/h_field_from_b` | 5.51 ns | `material/h_field_from_b` | 22.00 ns | 4.0× |
+| `material/clausius_mossotti` | 1.24 ns | `material/clausius_mossotti` | 26.00 ns | 20.9× |
+| `material/curie_weiss` | 1.24 ns | `material/curie_weiss` | 8.00 ns | 6.5× |
 | `relativity/lorentz_factor` | 1.24 ns | pending (M2) | — | — |
 | `relativity/em_tensor_from_fields` | 8.11 ns | pending (M2) | — | — |
 | `relativity/lorentz_transform_x` | 5.91 ns | pending (M2) | — | — |

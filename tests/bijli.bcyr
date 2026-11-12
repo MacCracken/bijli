@@ -354,6 +354,59 @@ fn main(): i64 {
     bench_report(b17);
     if (fsum == 7.0) { println("."); }
 
+    # material/* (M2 part 1a): rust-old/benches/benchmarks.rs's material_benchmarks.
+    var me = BjFieldVector_new(1000.0, 0.0, 0.0);
+    var msum: f64 = 0.0;
+    var b21 = bench_new("material/polarization");
+    bench_batch_start(b21);
+    for (var k = 0; k < 1000000; k = k + 1) {
+        var mp = bj_polarization(4.0, me);
+        msum = msum + mp.x;
+    }
+    bench_batch_stop(b21, 1000000);
+    bench_report(b21);
+
+    var b22 = bench_new("material/displacement_field");
+    bench_batch_start(b22);
+    for (var k = 0; k < 1000000; k = k + 1) {
+        var md = bj_displacement_field(4.0, me);
+        msum = msum + md.x;
+    }
+    bench_batch_stop(b22, 1000000);
+    bench_report(b22);
+
+    var mbf = BjFieldVector_new(0.0, 0.0, 1.0);
+    var mh: BjFieldVector;
+    var b23 = bench_new("material/h_field_from_b");
+    bench_batch_start(b23);
+    for (var k = 0; k < 1000000; k = k + 1) {
+        var t23, v23 = bj_h_field_from_b(1000.0, mbf, &mh);
+        msum = msum + mh.z;
+    }
+    bench_batch_stop(b23, 1000000);
+    bench_report(b23);
+
+    var cma: f64 = 0.0000000000000000000000000000000000000001;
+    var cmn: f64 = 10000000000000000000000000000.0;
+    var b24 = bench_new("material/clausius_mossotti");
+    bench_batch_start(b24);
+    for (var k = 0; k < 1000000; k = k + 1) {
+        var t24, v24 = bj_clausius_mossotti(cma, cmn);
+        keep = keep + v24;
+    }
+    bench_batch_stop(b24, 1000000);
+    bench_report(b24);
+
+    var b25 = bench_new("material/curie_weiss");
+    bench_batch_start(b25);
+    for (var k = 0; k < 1000000; k = k + 1) {
+        var t25, v25 = bj_curie_weiss(1.0, 1000.0, 770.0);
+        keep = keep + v25;
+    }
+    bench_batch_stop(b25, 1000000);
+    bench_report(b25);
+    if (msum == 7.0) { println("."); }
+
     # The JSON (src/json.cyr): a FieldVector written into one builder, emptied each time through its length word
     # (lib/str.cyr's layout: buf, len, cap), and serde_json's documents read back.
     var jv = BjFieldVector_new(1.5, -0.25, BJ_SPEED_OF_LIGHT);

@@ -1283,6 +1283,193 @@ def field_3b(fn, v, ins, P, K, EPS0, MU0):
     return None
 
 
+# ── material (M2 part 1a): rust-old/src/material.rs ───────────────────────────────────────────────────────────────
+def material_rust(fn, v, EPS0, MU0):
+    """material.rs transcribed in its order of operations (class A: + − × ÷ and sqrt), its checks and error texts;
+    None for another name."""
+    def perm_e(e):
+        return [("E", "InvalidPermittivity"), ("s", f"invalid permittivity: {rust_display(e)} (must be > 0)")]
+
+    def perm_m(m):
+        return [("E", "InvalidPermeability"), ("s", f"invalid permeability: {rust_display(m)} (must be > 0)")]
+
+    def lossless(e, m, s):
+        if not (math.isfinite(e) and e > 0.0):
+            return perm_e(e), None
+        if not (math.isfinite(m) and m > 0.0):
+            return perm_m(m), None
+        if s != 0.0:
+            return ip_err(f"Fresnel coefficients from Material are lossless-only; conductivity σ = {rust_display(s)} "
+                          "S/m needs a frequency-dependent complex refractive index"), None
+        return None, fsqrt(fdiv(m, e))
+
+    if fn == "material::electric_susceptibility" or fn == "material::magnetic_susceptibility":
+        return [("f", v[0] - 1.0)]
+    if fn == "material::relative_permittivity" or fn == "material::relative_permeability":
+        return [("f", 1.0 + v[0])]
+    if fn == "material::absolute_permittivity":
+        return [("f", v[0] * EPS0)]
+    if fn == "material::absolute_permeability":
+        return [("f", v[0] * MU0)]
+    if fn in ("material::polarization", "material::displacement_field", "material::magnetization",
+              "material::b_field_from_h", "material::h_field_from_b"):
+        x, w = v[0], v[1:4]
+        if fn == "material::polarization":
+            k = (x - 1.0) * EPS0
+        elif fn == "material::displacement_field":
+            k = x * EPS0
+        elif fn == "material::magnetization":
+            k = x - 1.0
+        elif fn == "material::b_field_from_h":
+            k = x * MU0
+        else:
+            if abs(x) < 1e-30:
+                return dz_err("relative permeability cannot be zero")
+            k = fdiv(1.0, x * MU0)
+        return ok3(tuple(w[i] * k for i in range(3)))
+    if fn == "material::bound_surface_charge":
+        a, b = v[0:3], v[3:6]
+        return [("f", a[0] * b[0] + a[1] * b[1] + a[2] * b[2])]
+    if fn == "material::bound_surface_current":
+        a, b = v[0:3], v[3:6]
+        return ok3((a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]))
+    if fn == "material::bound_volume_charge":
+        return [("f", -(v[0] + v[1] + v[2]))]
+    if fn == "material::dielectric_energy_density":
+        return [("f", 0.5 * v[0] * EPS0 * v[1] * v[1])]
+    if fn == "material::clausius_mossotti":
+        a, n = v[0], v[1]
+        if not math.isfinite(a) or not math.isfinite(n) or n < 0.0:
+            return ip_err("polarizability and number density must be finite with N ≥ 0, got α = "
+                          f"{rust_display(a)}, N = {rust_display(n)}")
+        chi = fdiv(n * a, 3.0 * EPS0)
+        if math.isnan(chi) or chi >= 1.0:
+            return ip_err(f"Nα/(3ε₀) = {rust_display(chi)} ≥ 1: Clausius-Mossotti diverges (polarization "
+                          "catastrophe), no physical ε_r")
+        eps = fdiv(1.0 + 2.0 * chi, 1.0 - chi)
+        if math.isnan(eps) or eps <= 0.0:
+            return perm_e(eps)
+        return [("f", eps)]
+    if fn == "material::magnetic_energy_density_material":
+        mu = v[0] * MU0
+        if abs(mu) < 1e-30:
+            return dz_err("permeability cannot be zero for energy density")
+        return [("f", fdiv(v[1] * v[1], 2.0 * mu))]
+    if fn == "material::curie_law":
+        if v[1] <= 0.0:
+            return ip_err(f"temperature must be positive, got {rust_display(v[1])} K")
+        return [("f", fdiv(v[0], v[1]))]
+    if fn == "material::curie_weiss":
+        d = v[1] - v[2]
+        if d <= 0.0:
+            return ip_err(f"temperature ({rust_display(v[1])} K) must be above Curie temperature "
+                          f"({rust_display(v[2])} K)")
+        return [("f", fdiv(v[0], d))]
+    if fn == "material::classify_magnetic":
+        x = v[0]
+        name = "Diamagnetic" if x < -1e-15 else "Ferromagnetic" if x > 1.0 else "Paramagnetic"
+        return [("e", "MagneticType." + name)]
+    if fn in ("Material::vacuum", "Material::default"):
+        return [("f", 1.0), ("f", 1.0), ("f", 0.0)]
+    if fn == "Material::dielectric":
+        return [("f", v[0]), ("f", 1.0), ("f", 0.0)]
+    if fn == "Material::conductor":
+        return [("f", 1.0), ("f", 1.0), ("f", v[0])]
+    if fn == "Material::new":
+        return [("f", v[0]), ("f", v[1]), ("f", v[2])]
+    e, m, s = v[0:3] if len(v) >= 3 else (None, None, None)
+    if fn == "Material::refractive_index":
+        return [("f", fsqrt(e * m))]
+    if fn == "Material::permittivity":
+        return [("f", e * EPS0)]
+    if fn == "Material::permeability":
+        return [("f", m * MU0)]
+    if fn == "Material::impedance":
+        if not (math.isfinite(e) and e > 0.0):
+            return perm_e(e)
+        if not (math.isfinite(m) and m > 0.0):
+            return perm_m(m)
+        return [("f", fsqrt(fdiv(m * MU0, e * EPS0)))]
+    if fn == "Material::wave_speed":
+        if not (e > 0.0 and m > 0.0):
+            return ip_err("ε_r and μ_r must be positive")
+        return [("f", fdiv(1.0, fsqrt(e * EPS0 * m * MU0)))]
+    if fn == "Material::is_lossy":
+        return [("i", 1 if s > 0.0 else 0)]
+    if fn == "Material::try_reflectance_at":
+        r1, eta1 = lossless(*v[0:3])
+        if r1 is not None:
+            return r1
+        r2, eta2 = lossless(*v[3:6])
+        if r2 is not None:
+            return r2
+        r = fdiv(eta2 - eta1, eta2 + eta1)
+        return [("f", r * r)]
+    return None
+
+
+def validate_material(root: Path, path: Path) -> list:
+    c = golden_consts(root)
+    EPS0, MU0 = c["field::EPSILON_0"], c["field::MU_0"]
+    _header, rows = read_tsv(path)
+    errs = []
+    for n, (fn, _cls, ins, outs) in enumerate(rows, 1):
+        v = [b for _k, b in ins]
+        want = material_rust(fn, v, EPS0, MU0)
+        if want is None:
+            errs.append(f"material row {n}: no transcription for {fn}")
+            continue
+        rows_agree(fn, v, outs, want, "material", n, errs)
+    return errs
+
+
+# ADR 0002 rows 19–21 (M2 part 1a, the user's 2026-11-12 answers): the port's material.rs, where it differs from
+# Rust's (and row 18 through FieldVector's dot and cross). Row 19: the Curie laws refuse a NaN temperature (`!(T > 0)`, `!(T − T_c > 0)`) with their own texts. Row 20:
+# Material::wave_speed validates as Material::impedance does (ε_r, then μ_r, positive and finite; InvalidPermittivity /
+# InvalidPermeability with the value). Row 21: classify_magnetic returns a Result, InvalidParameter for NaN.
+def material_port(fn, v, EPS0, MU0):
+    """The port's outputs for a material row an ADR 0002 row changes, else None."""
+    if fn == "material::curie_law" and math.isnan(v[1]):
+        return 19, ip_err(f"temperature must be positive, got {rust_display(v[1])} K")
+    if fn == "material::curie_weiss" and math.isnan(v[1] - v[2]):
+        return 19, ip_err(f"temperature ({rust_display(v[1])} K) must be above Curie temperature "
+                          f"({rust_display(v[2])} K)")
+    if fn == "Material::wave_speed":
+        e, m = v[0], v[1]
+        if not (math.isfinite(e) and e > 0.0):
+            return 20, [("E", "InvalidPermittivity"), ("s", f"invalid permittivity: {rust_display(e)} (must be > 0)")]
+        if not (math.isfinite(m) and m > 0.0):
+            return 20, [("E", "InvalidPermeability"), ("s", f"invalid permeability: {rust_display(m)} (must be > 0)")]
+        return None
+    if fn == "material::classify_magnetic" and math.isnan(v[0]):
+        return 21, ip_err("magnetic susceptibility must not be NaN, got NaN")
+    if fn in ("material::bound_surface_charge", "material::bound_surface_current"):
+        # P·n̂ and M × n̂ are FieldVector::dot and ::cross, whose range edges row 18 already fixes (M1 part 5d-2).
+        g = "FieldVector::dot" if fn.endswith("charge") else "FieldVector::cross"
+        if all(math.isfinite(x) for x in v[0:6]) and fv_governed(g, v[0:6]) == 18:
+            return 18, fv_model(g, v[0:6])
+    return None
+
+
+def material_adr_rows(root: Path, path: Path) -> list:
+    c = golden_consts(root)
+    EPS0, MU0 = c["field::EPSILON_0"], c["field::MU_0"]
+    out = []
+    for line in path.read_text().splitlines():
+        if line.startswith("#"):
+            continue
+        fn, _cls, ins, outs, _note = line.split("\t")
+        toks = [] if ins == "-" else [parse_tok(t) for t in ins.split(" ")]
+        r = material_port(fn, [b for _k, b in toks], EPS0, MU0)
+        if r is None:
+            continue
+        row, model = r
+        old = [(k, tok_text(b) if k == "s" else b) for k, b in (parse_tok(t) for t in outs.split(" "))]
+        if not toks_same(model, old):
+            out.append((fn, ins, wire(model), str(row), f"oracle {outs}; ADR 0002 row {row}"))
+    return out
+
+
 # ── maxwell: rust-old/src/maxwell.rs ──────────────────────────────────────────────────────────
 def validate_maxwell(root: Path, path: Path) -> list:
     """maxwell.rs transcribed in its order of operations (class A: + − × ÷ and sqrt), its checks and error texts."""
@@ -1485,6 +1672,7 @@ JSON_FIELDS = {
     "Complex": [("re", False), ("im", False)],
     "FieldVector": [("x", False), ("y", False), ("z", False)],
     "PointCharge": [("charge", False), ("mass", False), ("position", True), ("velocity", True)],
+    "Material": [("eps_r", False), ("mu_r", False), ("conductivity", False)],
 }
 
 
@@ -2802,6 +2990,8 @@ def adr_rows(root: Path, module: str, path: Path) -> list:
     """(fn, raw inputs, outputs, ADR 0002 row, note) for each golden row of `module` an ADR 0002 row changes."""
     if module == "complex":
         return cx_rows(path)[0]
+    if module == "material":
+        return material_adr_rows(root, path)
     maps = {13: adr13(root)}
     out = adr17_rows(root, module, path) if module in ("field", "charge") else []
     if module in ("field", "charge"):
@@ -3157,6 +3347,7 @@ def main() -> int:
         "fmtf": validate_fmtf,
         "json": validate_json,
         "math": validate_math,
+        "material": lambda p: validate_material(root, p),
         "maxwell": lambda p: validate_maxwell(root, p),
     }
     listed = [l for l in (golden / "modules.txt").read_text().splitlines() if l and not l.startswith("#")]
@@ -3179,7 +3370,7 @@ def main() -> int:
     errs += check_corrections(root, "json", golden / "json.tsv", json_corrections, "Python's float",
                               "the document read with every number correctly rounded; note: the oracle's outputs, "
                               "then why they differ")
-    for mod in ("charge", "complex", "field", "maxwell"):
+    for mod in ("charge", "complex", "field", "material", "maxwell"):
         errs += check_adr(root, mod, golden / f"{mod}.tsv")
     errs += cx_rows(golden / "complex.tsv")[1]
     errs += fv_rows(root, "field", golden / "field.tsv")[1] + fv_rows(root, "charge", golden / "charge.tsv")[1]

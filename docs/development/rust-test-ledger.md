@@ -6,7 +6,7 @@
 > (`tests/golden/`) checks every ported function on its grid besides; this ledger is about the oracle's own
 > assertions.
 
-**858 Rust tests:** 160 ported, 0 not applicable, 698 pending.
+**858 Rust tests:** 199 ported, 3 not applicable, 656 pending.
 
 | Rust file | Milestone | Cyrius tests | Rust tests | Ported | N/A | Pending |
 |---|---|---|---:|---:|---:|---:|
@@ -21,7 +21,7 @@
 | `src/field.rs` | M1 | `tests/field.tcyr` | 105 | 105 | 0 | 0 |
 | `src/integration/soorat.rs` | M7 | `tests/soorat.tcyr` | 14 | 0 | 0 | 14 |
 | `src/logging.rs` | M1 | `tests/log.tcyr` | 1 | 1 | 0 | 0 |
-| `src/material.rs` | M2 | `tests/material.tcyr` | 42 | 0 | 0 | 42 |
+| `src/material.rs` | M2 | `tests/material.tcyr` | 42 | 39 | 3 | 0 |
 | `src/maxwell.rs` | M1 | `tests/maxwell.tcyr` | 18 | 18 | 0 | 0 |
 | `src/polarization.rs` | M3 | `tests/polarization.tcyr` | 69 | 0 | 0 | 69 |
 | `src/relativity.rs` | M2 | `tests/relativity.tcyr` | 48 | 0 | 0 | 48 |
@@ -29,3 +29,11 @@
 | `src/scattering.rs` | M3 | `tests/scattering.tcyr` | 32 | 0 | 0 | 32 |
 | `src/wave.rs` | M2 | `tests/wave.tcyr` | 63 | 0 | 0 | 63 |
 | `tests/integration.rs` | M8 | `tests/integration.tcyr` | 26 | 0 | 0 | 26 |
+
+## Not applicable
+
+| Rust test | Reason |
+|---|---|
+| `src/material.rs::test_material_reflectance_air_glass` | deprecated reflectance_at (ADR 0002 row 1); its 0.04 is checked through try_reflectance_at |
+| `src/material.rs::test_material_reflectance_same` | Material::reflectance_at is deprecated in 1.2.0 and not carried (ADR 0002 row 1); tests/material.tcyr's cyrius_reflectance_via_try checks the same value through try_reflectance_at |
+| `src/material.rs::test_reflectance_at_deprecated_never_wrong` | deprecated reflectance_at (ADR 0002 row 1): the port has no NaN-returning form; try_reflectance_at refuses the conductor (cyrius_reflectance_via_try) |

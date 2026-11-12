@@ -53,7 +53,16 @@ DONE = set()
 
 # (Rust file, test name) -> why it has no Cyrius port. Added at the milestone that decides it (the ADR 0002 #1
 # deprecations, #2 the per-step layout check, ...).
-REASONS = {}
+REASONS = {
+    ("src/material.rs", "test_material_reflectance_same"):
+        "Material::reflectance_at is deprecated in 1.2.0 and not carried (ADR 0002 row 1); tests/material.tcyr's "
+        "cyrius_reflectance_via_try checks the same value through try_reflectance_at",
+    ("src/material.rs", "test_material_reflectance_air_glass"):
+        "deprecated reflectance_at (ADR 0002 row 1); its 0.04 is checked through try_reflectance_at",
+    ("src/material.rs", "test_reflectance_at_deprecated_never_wrong"):
+        "deprecated reflectance_at (ADR 0002 row 1): the port has no NaN-returning form; try_reflectance_at refuses "
+        "the conductor (cyrius_reflectance_via_try)",
+}
 
 
 def cyrius_groups(files):

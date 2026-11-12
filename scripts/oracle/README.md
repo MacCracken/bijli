@@ -55,7 +55,8 @@ port's harness reads the same files. This README records what is specific to bij
 | `error` | M1 | 1,635 | `src/m_error.rs` | — |
 | `field` | M1 (parts 3a–3c, 5d-1 to 5d-5) | 26,770 | `src/m_field.rs` | — |
 | `fmtf` | M1 (+ Debug, part 3c) | 56,364 | `src/m_fmtf.rs` (impetus's grid) | — |
-| `json` | M1 (part 4) | 14,758 (+ 6,390 corrected) | `src/m_json.rs` (serde_json 1.0.154 on `Complex`, `FieldVector`, `PointCharge`) | — |
+| `json` | M1 (part 4), M2 (part 1a: `Material`) | 19,489 (+ 8,899 corrected) | `src/m_json.rs` (serde_json 1.0.154 on `Complex`, `FieldVector`, `PointCharge`, `Material`) | — |
+| `material` | M2 (part 1a) | 51,814 | `src/m_material.rs` (field.rs's vectors) | — |
 | `math` | M0 (+ sinh, cosh and 125 corrected, M1) | 36,522 | `src/m_math.rs` | — |
 | `maxwell` | M1 (part 3d) | 20,349 | `src/m_maxwell.rs` | — |
 | (correctly rounded tables) | M1 | — | — | `src/crmath_data.cyr` (`crtables.py`, written and checked by `validate.py`) |

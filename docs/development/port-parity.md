@@ -1344,3 +1344,60 @@ Language facts the probes found, beyond plan §2:
   the spherical 2.63 → 3.24 µs. The force's and the flux's first guards re-ran every product through a check
   (172 and 645 ns); the band made them a test per sum. The multipoles' cost is the per-product check, about 20 a
   charge. Speed is measured, not gated.
+
+## 25. M2 part 1a: material (2026-11-12)
+
+- **`src/material.cyr`**: material.rs's 21 free functions, `BjMagneticType` (append-only values 0–2) and `BjMaterial`
+  (24 bytes, by value: `BjMaterial_new` / `vacuum` / `dielectric` / `conductor` / `default`, and the methods with
+  Rust's names). Every formula is Rust's in Rust's order. Rust's `pub(crate) lossless_optical_constants` is the
+  public internal `_bj_material_lossless_optical_constants`, for wave.cyr's Fresnel functions (part 1b): a file's
+  non-public functions are private to it in the tests' build. The deprecated `reflectance_at` is not carried (ADR
+  0002 row 1).
+- **ADR 0002 rows 19–21**, the user's answers of 2026-11-12:
+  - **19**: the Curie laws refuse a NaN temperature (`!(T > 0)`, `!(T − T_c > 0)`); Rust's `<= 0` let NaN through as
+    `Ok(NaN)`. 597 rows mapped.
+  - **20**: `BjMaterial.wave_speed` validates as `impedance` does: InvalidPermittivity / InvalidPermeability with the
+    value, for a non-finite or non-positive ε_r or μ_r (Rust: InvalidParameter, and ∞ accepted). 1,421 rows mapped.
+  - **21**: `bj_classify_magnetic` returns a Result: InvalidParameter for NaN (Rust: Paramagnetic). 1 row mapped.
+
+  The fourth question, the two zero-permeability guards (|μ_r| < 1e-30 for H, |μ_r·μ₀| < 1e-30 for the energy), stays
+  as Rust's: each guards its own division.
+- **Row 18 through FieldVector**: the bound surface charge and current are `dot` and `cross`, so their range edges
+  are 5d-2's: 29 rows mapped from `fv_model`.
+- **The JSON**: `BjMaterial_to_json` / `BjMaterial_from_json` (D5) on json.cyr's shared reader. `json.tsv` grows by
+  4,731 Material rows; `json.cr.tsv` by 2,509 rows serde_json's best-effort parse misreads (gated at 0 ulp, as the
+  other readers).
+- **New golden file `material.tsv`, 51,814 rows, class A**: the one-argument relations over 69 values (specials, the
+  1e-15, 1e-30 and 1 thresholds with their neighbours, ε₀, μ₀, binades, seeded), crossed in pairs for the energy
+  densities, Clausius–Mossotti and Curie's law; triples for Curie–Weiss and ρ_b; the Clausius–Mossotti edges X → 1 and
+  X → −1/2 and the permeability threshold ulp by ulp; scale factors over a stride of field.rs's vectors; 2,268
+  materials through every method; 31² material pairs for `try_reflectance_at`. Each value appears once: a row's
+  (function, inputs) is its key in the mapping files. `validate.py`'s independent transcription agreed with every row
+  on its first run.
+- **Rust tests**: 39 of material.rs's 42 ported (`tests/material.tcyr`, 75 assertions with the Cyrius-only groups).
+  The three `reflectance_at` tests are n/a in the ledger (ADR 0002 row 1); `cyrius_reflectance_via_try` checks their
+  values through the replacement. The ledger: 199 ported, 3 n/a, 656 pending of 858.
+- **Surface parity**: 6 modules ported, 151 items matched (44 new), 0 problems. The API snapshot gains 27 public fns.
+- **Benchmarks** (the five material twins; 22 of 80 now twinned; load average 2.5–3.5, each the lower of two runs):
+
+  | Bench | Rust | Cyrius | Ratio |
+  |---|---|---|---|
+  | `material/polarization` | 1.00 ns | 25 ns | 25.1× |
+  | `material/displacement_field` | 0.99 ns | 23 ns | 23.2× |
+  | `material/h_field_from_b` | 5.51 ns | 22 ns | 4.0× |
+  | `material/clausius_mossotti` | 1.24 ns | 26 ns | 20.9× |
+  | `material/curie_weiss` | 1.24 ns | 8 ns | 6.5× |
+
+  Rust's arguments are constants that LLVM folds; the port pays a call, a by-value struct and the Result.
+- **For M2's range-edge Part** (§0.1), from the audit:
+  - `classify_magnetic`'s `x < −1e-15`: the double nearest 1e-15 lies 0.39 ulp above 10^-15, so x = −D is
+    paramagnetic where the exact test says diamagnetic (an exact threshold, as row 17). `|μ_r| < 1e-30` on an input
+    agrees with the exact test (D(1e-30) lies above 10^-30), but `|μ_r·μ₀| < 1e-30` tests a rounded product;
+  - Clausius–Mossotti: N·α past DBL_MAX (X = −∞ gives Rust's ε_r = NaN where the limit is −2), and `X ≥ 1`, `ε_r ≤ 0`
+    on the rounded X;
+  - one-product chains to round once (row 13): the dielectric energy density, B²/(2μ), the scale factors times E or H,
+    and BjMaterial's √(ε_r μ_r), impedance and wave speed (maxwell's twins round once since M1 part 5b).
+- **Result, every target** (x86_64 ELF, x86_64 PE, aarch64): **10 modules, 0 failing; 241,003 ok, 0 failed, 0
+  measured, 0 pending, 16,398 accepted (ADR 01: 8,996; ADR 0002: 7,402)** over 257,401 rows; **all 179 digests
+  equal**, the 145 of M1 unchanged.
+
