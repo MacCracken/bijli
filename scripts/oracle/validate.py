@@ -737,22 +737,75 @@ R2_MIN = 1e-30
 MIN_POSITIVE = 2.2250738585072014e-308
 
 
+def ok3(v):
+    return [("f", v[0]), ("f", v[1]), ("f", v[2])]
+
+
+def point_e_k(K, q, a, b):
+    """field::electric_field_point_charge: SINGULAR, or (its tokens, the vector)."""
+    dx, dy, dz = b[0] - a[0], b[1] - a[1], b[2] - a[2]
+    r_sq = dx * dx + dy * dy + dz * dz
+    if r_sq < R2_MIN:
+        return SINGULAR
+    inv_r = fdiv(1.0, fsqrt(r_sq))
+    fct = K * q * inv_r * inv_r * inv_r
+    return ok3((fct * dx, fct * dy, fct * dz)), (fct * dx, fct * dy, fct * dz)
+
+
+def point_v_k(K, q, a, b):
+    """field::electric_potential_point_charge's tokens."""
+    dx, dy, dz = b[0] - a[0], b[1] - a[1], b[2] - a[2]
+    r_sq = dx * dx + dy * dy + dz * dz
+    return SINGULAR if r_sq < R2_MIN else [("f", fdiv(K * q, fsqrt(r_sq)))]
+
+
+def moving_b_k(MU0, q, a, vel, b):
+    """field::magnetic_field_moving_charge's tokens."""
+    d = [b[i] - a[i] for i in range(3)]
+    r_sq = d[0] * d[0] + d[1] * d[1] + d[2] * d[2]
+    if r_sq < R2_MIN:
+        return SINGULAR
+    inv_r = fdiv(1.0, fsqrt(r_sq))
+    r = [d[i] * inv_r for i in range(3)]
+    cx = vel[1] * r[2] - vel[2] * r[1]
+    cy = vel[2] * r[0] - vel[0] * r[2]
+    cz = vel[0] * r[1] - vel[1] * r[0]
+    fct = fdiv(MU0, 4.0 * PI) * q * inv_r * inv_r
+    return ok3((fct * cx, fct * cy, fct * cz))
+
+
+def ip_err(reason):
+    return [("E", "InvalidParameter"), ("s", "invalid parameter: " + reason)]
+
+
+def dz_err(context):
+    return [("E", "DivisionByZero"), ("s", "division by zero in EM calculation: " + context)]
+
+
+def radial_check(d):
+    """field::check_radial_distance: its error's tokens, or None."""
+    if math.isnan(d) or d < 0.0:
+        return ip_err("distance must be non-negative, got " + rust_display(d))
+    if d < R2_MIN:
+        return SINGULAR
+    return None
+
+
+def rows_agree(fn, v, outs, want, label, n, errs):
+    got = [(k, tok_text(b) if k == "s" else b) for k, b in outs]
+    good = len(got) == len(want) and all(
+        gk == wk and (same(gb, wb) if gk == "f" else gb == wb) for (gk, gb), (wk, wb) in zip(got, want))
+    if not good:
+        errs.append(f"{label} row {n}: {fn}{tuple(v)} recorded {got}, transcription {want}")
+
+
 def validate_field(root: Path, path: Path) -> list:
     c = golden_consts(root)
     K, EPS0, MU0 = c["field::COULOMB_K"], c["field::EPSILON_0"], c["field::MU_0"]
     _header, rows = read_tsv(path)
 
-    def ok3(v):
-        return [("f", v[0]), ("f", v[1]), ("f", v[2])]
-
     def point_e(q, a, b):
-        dx, dy, dz = b[0] - a[0], b[1] - a[1], b[2] - a[2]
-        r_sq = dx * dx + dy * dy + dz * dz
-        if r_sq < R2_MIN:
-            return SINGULAR
-        inv_r = fdiv(1.0, fsqrt(r_sq))
-        fct = K * q * inv_r * inv_r * inv_r
-        return ok3((fct * dx, fct * dy, fct * dz)), (fct * dx, fct * dy, fct * dz)
+        return point_e_k(K, q, a, b)
 
     def rhat(p):
         r_sq = p[0] * p[0] + p[1] * p[1] + p[2] * p[2]
@@ -895,23 +948,9 @@ def validate_field(root: Path, path: Path) -> list:
                 r = point_e(q, a, b)
                 want = r if r is SINGULAR else r[0]
             else:
-                dx, dy, dz = b[0] - a[0], b[1] - a[1], b[2] - a[2]
-                r_sq = dx * dx + dy * dy + dz * dz
-                want = SINGULAR if r_sq < R2_MIN else [("f", fdiv(K * q, fsqrt(r_sq)))]
+                want = point_v_k(K, q, a, b)
         elif fn == "field::magnetic_field_moving_charge":
-            q, a, vel, b = v[0], v[1:4], v[4:7], v[7:10]
-            d = [b[i] - a[i] for i in range(3)]
-            r_sq = d[0] * d[0] + d[1] * d[1] + d[2] * d[2]
-            if r_sq < R2_MIN:
-                want = SINGULAR
-            else:
-                inv_r = fdiv(1.0, fsqrt(r_sq))
-                r = [d[i] * inv_r for i in range(3)]
-                cx = vel[1] * r[2] - vel[2] * r[1]
-                cy = vel[2] * r[0] - vel[0] * r[2]
-                cz = vel[0] * r[1] - vel[1] * r[0]
-                fct = fdiv(MU0, 4.0 * PI) * q * inv_r * inv_r
-                want = ok3((fct * cx, fct * cy, fct * cz))
+            want = moving_b_k(MU0, v[0], v[1:4], v[4:7], v[7:10])
         elif fn == "field::electric_dipole_field":
             want = dipole(V, W, False)
         elif fn == "field::magnetic_dipole_field":
@@ -945,29 +984,18 @@ def validate_field(root: Path, path: Path) -> list:
         else:
             errs.append(f"field row {n}: no transcription for {fn}")
             continue
-        got = [(k, tok_text(b) if k == "s" else b) for k, b in outs]
-        good = len(got) == len(want) and all(
-            gk == wk and (same(gb, wb) if gk == "f" else gb == wb) for (gk, gb), (wk, wb) in zip(got, want))
-        if not good:
-            errs.append(f"field row {n}: {fn}{tuple(v)} recorded {got}, transcription {want}")
+        rows_agree(fn, v, outs, want, "field", n, errs)
     return errs
 
 
 def field_3b(fn, v, ins, P, K, EPS0, MU0):
     """Part 3b's functions transcribed from field.rs (None for another name), with the primitives P (glibc's or
     MPFR's) for the class-C ones."""
-    def ip(reason):
-        return [("E", "InvalidParameter"), ("s", "invalid parameter: " + reason)]
+    ip = ip_err
+    radial = radial_check
 
     def okf(x):
         return [("f", x)]
-
-    def radial(d):
-        if math.isnan(d) or d < 0.0:
-            return ip("distance must be non-negative, got " + rust_display(d))
-        if d < R2_MIN:
-            return SINGULAR
-        return None
 
     def coords(p):
         rho_sq = p[0] * p[0] + p[1] * p[1]
@@ -1183,6 +1211,155 @@ def field_3b(fn, v, ins, P, K, EPS0, MU0):
     return None
 
 
+# ── maxwell: rust-old/src/maxwell.rs ──────────────────────────────────────────────────────────
+def validate_maxwell(root: Path, path: Path) -> list:
+    """maxwell.rs transcribed in its order of operations (class A: + − × ÷ and sqrt), its checks and error texts."""
+    c = golden_consts(root)
+    EPS0, MU0 = c["field::EPSILON_0"], c["field::MU_0"]
+    _header, rows = read_tsv(path)
+
+    def material(e, m):
+        if math.isnan(e) or e <= 0.0:
+            return [("E", "InvalidPermittivity"), ("s", f"invalid permittivity: {rust_display(e)} (must be > 0)")]
+        if math.isnan(m) or m <= 0.0:
+            return [("E", "InvalidPermeability"), ("s", f"invalid permeability: {rust_display(m)} (must be > 0)")]
+        return None
+
+    def positive(name, x, tail=""):
+        if math.isnan(x) or x <= 0.0:
+            return ip_err(f"{name} must be positive{tail}, got {rust_display(x)}")
+        return None
+
+    errs = []
+    for n, (fn, _cls, ins, outs) in enumerate(rows, 1):
+        v = [b for _k, b in ins]
+        if fn == "maxwell::gauss_electric_divergence":
+            want = [("f", fdiv(v[0], EPS0))]
+        elif fn == "maxwell::gauss_magnetic_divergence":
+            want = [("f", 0.0)]
+        elif fn == "maxwell::free_space_impedance":
+            want = [("f", fsqrt(fdiv(MU0, EPS0)))]
+        elif fn == "maxwell::displacement_current":
+            want = ok3((v[0] * EPS0, v[1] * EPS0, v[2] * EPS0))
+        elif fn in ("maxwell::wave_speed", "maxwell::refractive_index", "maxwell::impedance"):
+            want = material(v[0], v[1])
+            if want is None:
+                if fn == "maxwell::wave_speed":
+                    want = [("f", fdiv(1.0, fsqrt(v[0] * v[1])))]
+                elif fn == "maxwell::refractive_index":
+                    want = [("f", fsqrt(v[0] * v[1]))]
+                else:
+                    want = [("f", fsqrt(fdiv(v[1], v[0])))]
+        elif fn in ("maxwell::wavelength", "maxwell::frequency"):
+            first = "frequency" if fn == "maxwell::wavelength" else "wavelength"
+            want = positive(first, v[0]) or positive("velocity", v[1]) or [("f", fdiv(v[1], v[0]))]
+        elif fn == "maxwell::skin_depth":
+            want = (positive("angular frequency", v[0], " for skin depth")
+                    or positive("permeability", v[1], " for skin depth")
+                    or positive("conductivity", v[2], " for skin depth"))
+            if want is None:
+                denom = v[0] * v[1] * v[2]
+                want = [("f", fsqrt(fdiv(2.0, denom)))]
+        else:
+            errs.append(f"maxwell row {n}: no transcription for {fn}")
+            continue
+        rows_agree(fn, v, outs, want, "maxwell", n, errs)
+    return errs
+
+
+# ── charge: rust-old/src/charge.rs ────────────────────────────────────────────────────────────
+def validate_charge(root: Path, path: Path) -> list:
+    """charge.rs transcribed in its order of operations (class A), its checks and error texts; the PointCharge
+    methods through field.rs's transcriptions above."""
+    c = golden_consts(root)
+    K, MU0 = c["field::COULOMB_K"], c["field::MU_0"]
+    E, ME, MP = c["charge::ELEMENTARY_CHARGE"], c["charge::ELECTRON_MASS"], c["charge::PROTON_MASS"]
+    _header, rows = read_tsv(path)
+
+    def pc(q, mass, pos, vel):
+        return [("f", x) for x in [q, mass, *pos, *vel]]
+
+    def cross(a, b):
+        return (a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0])
+
+    def lorentz(q, vel, e, b):
+        vb = cross(vel, b)
+        return ok3(tuple((e[i] + vb[i]) * q for i in range(3)))
+
+    def check_mass(mass, what):
+        if mass == 0.0:
+            return dz_err(f"mass cannot be zero for {what}")
+        if math.isnan(mass) or mass <= 0.0:
+            return ip_err(f"mass must be positive for {what}, got {rust_display(mass)}")
+        return None
+
+    errs = []
+    for n, (fn, _cls, ins, outs) in enumerate(rows, 1):
+        v = [b for _k, b in ins]
+        if fn == "PointCharge::new":
+            mass = v[1]
+            if math.isnan(mass) or mass <= 0.0:
+                want = ip_err("mass must be positive, got " + rust_display(mass))
+            else:
+                want = pc(v[0], mass, v[2:5], v[5:8])
+        elif fn == "PointCharge::electron":
+            want = pc(-E, ME, v[0:3], (0.0, 0.0, 0.0))
+        elif fn == "PointCharge::proton":
+            want = pc(E, MP, v[0:3], (0.0, 0.0, 0.0))
+        elif fn == "PointCharge::electric_field_at":
+            r = point_e_k(K, v[0], v[2:5], v[8:11])
+            want = r if r is SINGULAR else r[0]
+        elif fn == "PointCharge::electric_potential_at":
+            want = point_v_k(K, v[0], v[2:5], v[8:11])
+        elif fn == "PointCharge::magnetic_field_at":
+            want = moving_b_k(MU0, v[0], v[2:5], v[5:8], v[8:11])
+        elif fn == "PointCharge::lorentz_force_in":
+            want = lorentz(v[0], v[5:8], v[8:11], v[11:14])
+        elif fn == "charge::coulomb_force":
+            q1, a, q2, b = v[0], v[2:5], v[8], v[10:13]
+            dx, dy, dz = a[0] - b[0], a[1] - b[1], a[2] - b[2]
+            r_sq = dx * dx + dy * dy + dz * dz
+            if r_sq < R2_MIN:
+                want = SINGULAR
+            else:
+                inv_r = fdiv(1.0, fsqrt(r_sq))
+                fct = K * q1 * q2 * inv_r * inv_r * inv_r
+                want = ok3((fct * dx, fct * dy, fct * dz))
+        elif fn == "charge::lorentz_force":
+            want = lorentz(v[0], v[1:4], v[4:7], v[7:10])
+        elif fn in ("charge::dipole_moment", "charge::potential_energy"):
+            want = [("f", v[0] * v[1])]
+        elif fn == "charge::coulomb_potential_energy":
+            want = radial_check(v[2]) or [("f", fdiv(K * v[0] * v[1], v[2]))]
+        elif fn == "charge::cyclotron_frequency":
+            q, mass, bm = v
+            want = check_mass(mass, "cyclotron frequency")
+            if want is None and math.isnan(q):
+                want = ip_err("charge must not be NaN")
+            if want is None and (math.isnan(bm) or bm < 0.0):
+                want = ip_err("|B| must be non-negative, got " + rust_display(bm))
+            if want is None:
+                want = [("f", fdiv(abs(q) * bm, mass))]
+        elif fn == "charge::larmor_radius":
+            mass, vp, q, bm = v
+            want = check_mass(mass, "Larmor radius")
+            if want is None and (math.isnan(vp) or math.isnan(q)):
+                want = ip_err("v_perp and charge must not be NaN")
+            if want is None and q == 0.0:
+                want = dz_err("charge cannot be zero for Larmor radius")
+            if want is None and bm == 0.0:
+                want = dz_err("|B| cannot be zero for Larmor radius")
+            if want is None and (math.isnan(bm) or bm <= 0.0):
+                want = ip_err("|B| must be positive, got " + rust_display(bm))
+            if want is None:
+                want = [("f", fdiv(fdiv(mass * abs(vp), abs(q)), bm))]
+        else:
+            errs.append(f"charge row {n}: no transcription for {fn}")
+            continue
+        rows_agree(fn, v, outs, want, "charge", n, errs)
+    return errs
+
+
 def field_corrections(root: Path):
     """The field rows whose class-C outputs change when the primitives are correctly rounded (MPFR)."""
     c = golden_consts(root)
@@ -1216,12 +1393,14 @@ def main() -> int:
     root = Path(sys.argv[1] if len(sys.argv) > 1 else ".").resolve()
     golden = root / "tests/golden"
     checks = {
+        "charge": lambda p: validate_charge(root, p),
         "complex": validate_complex,
         "constants": lambda p: validate_constants(root, p),
         "error": validate_error,
         "field": lambda p: validate_field(root, p),
         "fmtf": validate_fmtf,
         "math": validate_math,
+        "maxwell": lambda p: validate_maxwell(root, p),
     }
     listed = [l for l in (golden / "modules.txt").read_text().splitlines() if l and not l.startswith("#")]
     errs, total = [], 0

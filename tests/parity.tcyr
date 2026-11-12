@@ -831,6 +831,207 @@ public fn _par_field(fp, fl): i64 {
     return 0;
 }
 
+# `maxwell::*` rows: src/maxwell.cyr (M1 part 3d). Inputs are f64 tokens; a vector is three.
+public fn _par_maxwell(fp, fl): i64 {
+    if (_par_eq(fp, fl, "maxwell::gauss_magnetic_divergence") == 1) {
+        var g0: f64 = bj_gauss_magnetic_divergence();
+        _par_got_f(g0);
+        return 1;
+    }
+    if (_par_eq(fp, fl, "maxwell::free_space_impedance") == 1) {
+        var z0: f64 = bj_free_space_impedance();
+        _par_got_f(z0);
+        return 1;
+    }
+    if (_par_eq(fp, fl, "maxwell::displacement_current") == 1) {
+        var dv: BjFieldVector = _par_in_fv(0);
+        _par_got_fv(bj_displacement_current(dv));
+        return 1;
+    }
+    var a: f64 = _par_in(0);
+    if (_par_eq(fp, fl, "maxwell::gauss_electric_divergence") == 1) {
+        var g1: f64 = bj_gauss_electric_divergence(a);
+        _par_got_f(g1);
+        return 1;
+    }
+    var b: f64 = _par_in(1);
+    if (_par_eq(fp, fl, "maxwell::wave_speed") == 1) {
+        var tw, vw = bj_wave_speed(a, b);
+        _par_got_res_f(tw, vw);
+        return 1;
+    }
+    if (_par_eq(fp, fl, "maxwell::refractive_index") == 1) {
+        var tr, vr = bj_refractive_index(a, b);
+        _par_got_res_f(tr, vr);
+        return 1;
+    }
+    if (_par_eq(fp, fl, "maxwell::impedance") == 1) {
+        var ti, vi = bj_impedance(a, b);
+        _par_got_res_f(ti, vi);
+        return 1;
+    }
+    if (_par_eq(fp, fl, "maxwell::wavelength") == 1) {
+        var tl, vl = bj_wavelength(a, b);
+        _par_got_res_f(tl, vl);
+        return 1;
+    }
+    if (_par_eq(fp, fl, "maxwell::frequency") == 1) {
+        var tf, vf = bj_frequency(a, b);
+        _par_got_res_f(tf, vf);
+        return 1;
+    }
+    if (_par_eq(fp, fl, "maxwell::skin_depth") == 1) {
+        var c: f64 = _par_in(2);
+        var ts, vs = bj_skin_depth(a, b, c);
+        _par_got_res_f(ts, vs);
+        return 1;
+    }
+    return 0;
+}
+
+# A BjPointCharge to the got list: charge, mass, the position's three, the velocity's three.
+fn _par_got_pc(p: BjPointCharge) {
+    var q: f64 = p.charge;
+    var m: f64 = p.mass;
+    _par_got_f(q);
+    _par_got_f(m);
+    var x: f64 = p.position.0;
+    var y: f64 = p.position.1;
+    var z: f64 = p.position.2;
+    _par_got_f(x);
+    _par_got_f(y);
+    _par_got_f(z);
+    var vx: f64 = p.velocity.0;
+    var vy: f64 = p.velocity.1;
+    var vz: f64 = p.velocity.2;
+    _par_got_f(vx);
+    _par_got_f(vy);
+    _par_got_f(vz);
+    return 0;
+}
+
+# The point charge of input tokens k … k + 7, built field by field (Rust's struct literal; no mass check).
+fn _par_in_pc(k): BjPointCharge {
+    var p: BjPointCharge;
+    var q: f64 = _par_in(k);
+    var m: f64 = _par_in(k + 1);
+    var x: f64 = _par_in(k + 2);
+    var y: f64 = _par_in(k + 3);
+    var z: f64 = _par_in(k + 4);
+    var vx: f64 = _par_in(k + 5);
+    var vy: f64 = _par_in(k + 6);
+    var vz: f64 = _par_in(k + 7);
+    p.charge = q;
+    p.mass = m;
+    p.position = (x, y, z);
+    p.velocity = (vx, vy, vz);
+    return p;
+}
+
+# `PointCharge::*` and `charge::*` rows: src/charge.cyr (M1 part 3d). A point charge is eight tokens.
+public fn _par_charge(fp, fl): i64 {
+    var a: f64[3];
+    var b: f64[3];
+    var e: BjFieldVector;
+    if (_par_eq(fp, fl, "PointCharge::new") == 1) {
+        var q0: f64 = _par_in(0);
+        var m0: f64 = _par_in(1);
+        _par_in3(2, &a);
+        _par_in3(5, &b);
+        var np: BjPointCharge;
+        var tn, vn = BjPointCharge_new(q0, m0, &a, &b, &np);
+        if (is_err_result(tn) == 1) {
+            _par_got_error(vn);
+            return 1;
+        }
+        _par_got_pc(np);
+        return 1;
+    }
+    if (_par_eq(fp, fl, "PointCharge::electron") == 1) {
+        _par_in3(0, &a);
+        _par_got_pc(BjPointCharge_electron(&a));
+        return 1;
+    }
+    if (_par_eq(fp, fl, "PointCharge::proton") == 1) {
+        _par_in3(0, &a);
+        _par_got_pc(BjPointCharge_proton(&a));
+        return 1;
+    }
+    if (_par_eq(fp, fl, "PointCharge::electric_field_at") == 1) {
+        var p1: BjPointCharge = _par_in_pc(0);
+        _par_in3(8, &a);
+        var te, ve = p1.electric_field_at(&a, &e);
+        _par_got_res_v(te, ve, e);
+        return 1;
+    }
+    if (_par_eq(fp, fl, "PointCharge::electric_potential_at") == 1) {
+        var p2: BjPointCharge = _par_in_pc(0);
+        _par_in3(8, &a);
+        var tp, vp = p2.electric_potential_at(&a);
+        _par_got_res_f(tp, vp);
+        return 1;
+    }
+    if (_par_eq(fp, fl, "PointCharge::magnetic_field_at") == 1) {
+        var p3: BjPointCharge = _par_in_pc(0);
+        _par_in3(8, &a);
+        var tb, vb = p3.magnetic_field_at(&a, &e);
+        _par_got_res_v(tb, vb, e);
+        return 1;
+    }
+    if (_par_eq(fp, fl, "PointCharge::lorentz_force_in") == 1) {
+        var p4: BjPointCharge = _par_in_pc(0);
+        var e4: BjFieldVector = _par_in_fv(8);
+        var b4: BjFieldVector = _par_in_fv(11);
+        _par_got_fv(p4.lorentz_force_in(e4, b4));
+        return 1;
+    }
+    if (_par_eq(fp, fl, "charge::coulomb_force") == 1) {
+        var c1: BjPointCharge = _par_in_pc(0);
+        var c2: BjPointCharge = _par_in_pc(8);
+        var tc, vc = bj_coulomb_force(c1, c2, &e);
+        _par_got_res_v(tc, vc, e);
+        return 1;
+    }
+    if (_par_eq(fp, fl, "charge::lorentz_force") == 1) {
+        var q5: f64 = _par_in(0);
+        var v5: BjFieldVector = _par_in_fv(1);
+        var e5: BjFieldVector = _par_in_fv(4);
+        var b5: BjFieldVector = _par_in_fv(7);
+        _par_got_fv(bj_lorentz_force(q5, v5, e5, b5));
+        return 1;
+    }
+    var x0: f64 = _par_in(0);
+    var x1: f64 = _par_in(1);
+    if (_par_eq(fp, fl, "charge::dipole_moment") == 1) {
+        var dm: f64 = bj_dipole_moment(x0, x1);
+        _par_got_f(dm);
+        return 1;
+    }
+    if (_par_eq(fp, fl, "charge::potential_energy") == 1) {
+        var pe: f64 = bj_potential_energy(x0, x1);
+        _par_got_f(pe);
+        return 1;
+    }
+    var x2: f64 = _par_in(2);
+    if (_par_eq(fp, fl, "charge::coulomb_potential_energy") == 1) {
+        var tu, vu = bj_coulomb_potential_energy(x0, x1, x2);
+        _par_got_res_f(tu, vu);
+        return 1;
+    }
+    if (_par_eq(fp, fl, "charge::cyclotron_frequency") == 1) {
+        var tw, vw = bj_cyclotron_frequency(x0, x1, x2);
+        _par_got_res_f(tw, vw);
+        return 1;
+    }
+    if (_par_eq(fp, fl, "charge::larmor_radius") == 1) {
+        var x3: f64 = _par_in(3);
+        var tl, vl = bj_larmor_radius(x0, x1, x2, x3);
+        _par_got_res_f(tl, vl);
+        return 1;
+    }
+    return 0;
+}
+
 # `f64::fmt_display` and `serde_json::f64` rows: src/fmtf.cyr's two layouts, into a bounded BjText.
 fn _par_fmtf(fp, fl): i64 {
     var x: f64 = _par_in(0);
@@ -853,12 +1054,14 @@ fn _par_fmtf(fp, fl): i64 {
 
 public fn _par_dispatch(mp, ml, fp, fl): i64 {
     _par_got_n = 0;
+    if (_par_eq(mp, ml, "charge") == 1) { return _par_charge(fp, fl); }
     if (_par_eq(mp, ml, "complex") == 1) { return _par_complex(fp, fl); }
     if (_par_eq(mp, ml, "constants") == 1) { return _par_constants(fp, fl); }
     if (_par_eq(mp, ml, "error") == 1) { return _par_error(fp, fl); }
     if (_par_eq(mp, ml, "field") == 1) { return _par_field(fp, fl); }
     if (_par_eq(mp, ml, "fmtf") == 1) { return _par_fmtf(fp, fl); }
     if (_par_eq(mp, ml, "math") == 1) { return _par_math(fp, fl); }
+    if (_par_eq(mp, ml, "maxwell") == 1) { return _par_maxwell(fp, fl); }
     return 0;
 }
 

@@ -108,6 +108,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
   caller-owned buffer that grows and is reused. `fmtf` gains Rust's f64 Debug form (18,788 golden rows), for the
   positions in the tracer's error messages. `BJ_ERR_ALLOCATION` is appended (ADR 0002 row 9), returned where Rust
   would abort on a failed allocation. All of field.rs's 105 tests are ported, and 12 of the 80 Rust benches are twinned.
+- **Cyrius port, M1 part 3d — maxwell and charge**: `src/maxwell.cyr` (the divergences, the displacement current,
+  wave speed, refractive index, impedance, wavelength, frequency and skin depth) and `src/charge.cyr` (`BjPointCharge`,
+  Coulomb's force, the Lorentz force, the dipole moment and energies, cyclotron frequency and Larmor radius), each
+  with Rust's checks, order of operations and error texts. `BjPointCharge` keeps Rust's field names: its
+  `position` and `velocity` are `(f64, f64, f64)` tuples stored inline (probe p15). New golden files:
+  `maxwell.tsv` (20,349 rows) and `charge.tsv` (12,277 rows), all class A. The 18 + 26 Rust tests are ported, and 17
+  of the 80 Rust benches are twinned.
 - **Parity harness**: digest v2. The v1 fold could not see sign-bit differences that came in pairs, and a generated
   NaN differs in sign between x86 and ARM. v2 folds each NaN as one quiet NaN and mixes every bit through. ADR 0002
   row 6 now states that a NaN's bits are the hardware's.

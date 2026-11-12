@@ -49,12 +49,14 @@ port's harness reads the same files. This README records what is specific to bij
 
 | Module | Milestone | Golden rows | Golden emitter | Generated Cyrius |
 |---|---|---|---|---|
+| `charge` | M1 (part 3d) | 12,277 | `src/m_charge.rs` (field.rs's grids) | — |
 | `complex` | M1 | 30,767 (+ 8 corrected) | `src/m_complex.rs` | — |
 | `constants` | M0 | 12 | `src/m_constants.rs` | `src/constants.cyr` (`src/t_constants.rs`, with the completeness proof) |
 | `error` | M1 | 1,635 | `src/m_error.rs` | — |
 | `field` | M1 (parts 3a–3c) | 22,361 | `src/m_field.rs` | — |
 | `fmtf` | M1 (+ Debug, part 3c) | 56,364 | `src/m_fmtf.rs` (impetus's grid) | — |
 | `math` | M0 (+ sinh, cosh and 125 corrected, M1) | 36,522 | `src/m_math.rs` | — |
+| `maxwell` | M1 (part 3d) | 20,349 | `src/m_maxwell.rs` | — |
 | (correctly rounded tables) | M1 | — | — | `src/crmath_data.cyr` (`crtables.py`, written and checked by `validate.py`) |
 | (correctly rounded tables, kimiya's) | M1 | — | — | `src/crmath_k_data.cyr` (`crtables_k.py`, written and checked by `validate.py`) |
 

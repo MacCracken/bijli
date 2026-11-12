@@ -1,7 +1,9 @@
 # bijli golden corpus: one module per line; tests/parity.tcyr replays each
+charge
 complex
 constants
 error
 field
 fmtf
 math
+maxwell

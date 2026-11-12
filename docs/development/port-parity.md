@@ -635,3 +635,81 @@ Language facts the probes found, beyond plan §2:
 |---|---|
 | field::trace_field_line | `382668389d61f92e` |
 | f64::fmt_debug | `708dfd83398d149f` |
+
+## 14. M1 part 3d: maxwell and charge (2026-11-11)
+
+- **`src/maxwell.cyr`**: maxwell.rs's ten functions, free and by value. The material checks run in Rust's order, ε
+  before μ, and refuse NaN and every value ≤ 0. Skin depth checks ω, μ and σ one at a time, so a pair of negatives
+  whose product is positive is still refused. The error texts are Rust's (`"{name} must be positive for skin depth,
+  got {value}"`).
+- **`src/charge.cyr`**: `BjPointCharge` and charge.rs's eleven functions.
+  - **The struct keeps Rust's field names.** Rust's `position: [f64; 3]` and `velocity: [f64; 3]` are
+    `(f64, f64, f64)` tuples stored inline, so `q.position[0]` is `q.position.0`. Probe **p15** checks the
+    typed element reads, a literal store, a struct copy, by-value passing and `&x + offset` as a `*f64` (the
+    language review: a field can't be a fixed array, and `&x.f` is refused by name). The struct is 64 bytes.
+  - **Methods.** The methods copy the tuple into a local `f64[3]` for the field functions, which take a `*f64`.
+  - **Constructors.** `BjPointCharge_new(charge, mass, position, velocity, out)` writes `out` only on Ok;
+    `electron` and `proton` return the struct.
+  - **Errors.** charge.rs's private `check_mass` keeps its two kinds: DivisionByZero for ±0, InvalidParameter for
+    NaN or a negative mass. `PointCharge::new` refuses a zero mass as InvalidParameter, as Rust does: it divides by
+    nothing, so the two kinds are not an inconsistency to fix.
+- **New golden files, class A throughout:**
+  - **`maxwell.tsv`, 20,349 rows.** The material and wave values (specials, both zeros, negatives, ε₀, μ₀, c, copper's
+    σ, every 131st binade, seeded) are crossed in pairs for the five two-argument functions. Skin depth is crossed
+    over a 16-value list (16³ triples, the paired negatives among them) plus 300 seeded conductor cases.
+  - **`charge.tsv`, 12,277 rows.** It reuses field.rs's grids (`m_field.rs`'s are now `pub(crate)`): its (source,
+    field point) pairs, the r² = 1e-30 cutoff on both sides among them, for the methods and Coulomb's force; its
+    vectors for the Lorentz force; its distances for the Coulomb energy. The masses cross field.rs's charges for
+    `new`, and the cyclotron and Larmor arguments cross the specials and SI scales (4,800 Larmor rows).
+  - **`validate.py`.** It transcribes both modules independently. The point-charge field, potential and
+    moving-charge B are now module-level helpers, which the field and charge checks share.
+- **Rust tests**: maxwell.rs's 18 (`tests/maxwell.tcyr`, 39 assertions) and charge.rs's 26 (`tests/charge.tcyr`, 62
+  assertions) are all ported. Cyrius-only checks join them: the recorded error codes and Display texts, the tuple
+  fields read back, and `out` untouched on an error. The ledger stands at 160 of 858.
+- **Surface parity**: 5 modules ported, 101 items matched (32 new), 0 problems; the struct fields match by name.
+- **Benchmarks** (17 of 80 Rust benches now twinned; the part 3c rows are within 3 % of §13's run):
+
+  | Bench | Rust | Cyrius | Ratio |
+  |---|---|---|---|
+  | `maxwell/wave_speed` | 1.24 ns | 15 ns | 12.1× |
+  | `maxwell/impedance` | 1.24 ns | 13 ns | 10.5× |
+  | `maxwell/skin_depth` | 1.29 ns | 27 ns | 21.0× |
+  | `charge/coulomb_force` | 5.54 ns | 43 ns | 7.8× |
+  | `charge/lorentz_force` | 1.51 ns | 61 ns | 40.5× |
+
+  Rust's bench arguments are constants, so LLVM inlines the whole call and folds most of it. The port pays a call
+  and the Result. `lorentz_force` composes three by-value `BjFieldVector` operations (cross, add, scale), each
+  copying 24-byte structs: probe p8's struct cost (2.2–2.7× over f64 locals), three times over. It is a finding
+  with its numbers, not a change (speed is measured, not gated).
+- **For the JSON Part**: `#derive(Serialize)` takes neither a tuple field nor a fixed array (guide, *Derive Serialize
+  on a struct*), and serde writes `"position":[x,y,z]`. So `BjPointCharge`'s writer will write the two arrays by
+  hand. A flat `px, py, pz` would have needed that too.
+- **Result, every target** (x86_64 ELF, x86_64 PE, aarch64): **8 modules, 0 failing; 180,154 ok, 0 failed, 0
+  measured, 0 pending, 133 accepted (ADR 01)**; **all 139 digests equal**, the 115 of §13 unchanged.
+
+| Function | Digest v2, every target |
+|---|---|
+| PointCharge::new | `5f66f64b93dd8d79` |
+| PointCharge::electron | `7f928a29355c790e` |
+| PointCharge::proton | `33a0a40bc641ec6c` |
+| PointCharge::electric_field_at | `55439647304ccf15` |
+| PointCharge::electric_potential_at | `5d0051c79b612c87` |
+| PointCharge::magnetic_field_at | `30d35891a8cab153` |
+| PointCharge::lorentz_force_in | `3be703a9d6e419cf` |
+| charge::coulomb_force | `3ffc7fb063fb41f6` |
+| charge::lorentz_force | `150d626b3dbf856a` |
+| charge::dipole_moment | `4015cfd9c418ec4` |
+| charge::potential_energy | `4015cfd9c418ec4` (the same products as dipole_moment over the same grid) |
+| charge::coulomb_potential_energy | `282e990e5a1d44fa` |
+| charge::cyclotron_frequency | `70307729c72e9591` |
+| charge::larmor_radius | `275b8f2d129dd7d6` |
+| maxwell::gauss_electric_divergence | `86dcc5146508918` |
+| maxwell::gauss_magnetic_divergence | `509c42b1fd1c5dbb` |
+| maxwell::displacement_current | `6cc785941eed9fa3` |
+| maxwell::wave_speed | `22eae1326a0af53f` |
+| maxwell::refractive_index | `2f12f45c2d468080` |
+| maxwell::impedance | `33ab6cf945d39235` |
+| maxwell::free_space_impedance | `53335ce0be4f5134` |
+| maxwell::wavelength | `2a51a212b9db5c1` |
+| maxwell::frequency | `4d7f9c82d5504df7` |
+| maxwell::skin_depth | `46c2da50c032dc3d` |

@@ -1,0 +1,136 @@
+# maxwell.cyr — Maxwell's equations: the divergences, the displacement current, wave speed, refractive index,
+# impedance, wavelength and frequency, skin depth (port of rust-old/src/maxwell.rs, M1 part 3d).
+#
+# SI units throughout. Every formula is Rust's in Rust's order (the golden rows compare bit for bit, class A); a
+# fallible function returns a value-form Result with its f64 payload, the error in the last-error record
+# (src/error.cyr). No harmonic quantity appears here, so no time convention (src/complex.cyr) is involved.
+
+private
+
+# The InvalidPermittivity or InvalidPermeability of a medium's ε and μ (NaN or not positive, ε first), or 0.
+fn _bj_check_eps_mu(permittivity: f64, permeability: f64): i64 {
+    if (permittivity != permittivity || permittivity <= 0.0) { return _bj_err_invalid_permittivity(permittivity); }
+    if (permeability != permeability || permeability <= 0.0) { return _bj_err_invalid_permeability(permeability); }
+    return 0;
+}
+
+# The InvalidParameter "<name> must be positive, got <value>" for a NaN or non-positive value, or 0.
+fn _bj_check_positive(name, value: f64): i64 {
+    if (value != value || value <= 0.0) {
+        var t = _bj_err_reason(BJ_ERR_INVALID_PARAMETER);
+        _bj_tx_cstr(t, name);
+        _bj_tx_cstr(t, " must be positive, got ");
+        _bj_fmt_f64_display(t, value);
+        return BJ_ERR_INVALID_PARAMETER;
+    }
+    return 0;
+}
+
+# ∇·E = ρ/ε₀ (V/m²) for a charge density ρ (C/m³). Mirrors `maxwell::gauss_electric_divergence`.
+#must_use
+#pure
+public fn bj_gauss_electric_divergence(charge_density: f64): f64 {
+    var d: f64 = charge_density / BJ_EPSILON_0;
+    return d;
+}
+
+# ∇·B = 0: there are no magnetic monopoles. Mirrors `maxwell::gauss_magnetic_divergence`.
+#must_use
+#pure
+public fn bj_gauss_magnetic_divergence(): f64 {
+    var z: f64 = 0.0;
+    return z;
+}
+
+# J_d = ε₀·∂E/∂t (A/m²). Mirrors `maxwell::displacement_current`.
+#must_use
+#pure
+public fn bj_displacement_current(de_dt: BjFieldVector): BjFieldVector {
+    var j: BjFieldVector = de_dt.scale(BJ_EPSILON_0);
+    return j;
+}
+
+# v = 1/√(εμ) (m/s). InvalidPermittivity, then InvalidPermeability, for a NaN or non-positive ε or μ. Mirrors
+# `maxwell::wave_speed`.
+public fn bj_wave_speed(permittivity: f64, permeability: f64): Result {
+    var c = _bj_check_eps_mu(permittivity, permeability);
+    if (c != 0) { return Err(c); }
+    var p: f64 = permittivity * permeability;
+    var s: f64 = f64_sqrt(p);
+    var v: f64 = 1.0 / s;
+    return Ok(v);
+}
+
+# n = √(ε_r·μ_r). Errors as wave_speed's. Mirrors `maxwell::refractive_index`.
+public fn bj_refractive_index(relative_permittivity: f64, relative_permeability: f64): Result {
+    var c = _bj_check_eps_mu(relative_permittivity, relative_permeability);
+    if (c != 0) { return Err(c); }
+    var p: f64 = relative_permittivity * relative_permeability;
+    var n: f64 = f64_sqrt(p);
+    return Ok(n);
+}
+
+# η = √(μ/ε) (ohms). Errors as wave_speed's. Mirrors `maxwell::impedance`.
+public fn bj_impedance(permittivity: f64, permeability: f64): Result {
+    var c = _bj_check_eps_mu(permittivity, permeability);
+    if (c != 0) { return Err(c); }
+    var q: f64 = permeability / permittivity;
+    var eta: f64 = f64_sqrt(q);
+    return Ok(eta);
+}
+
+# η₀ = √(μ₀/ε₀) ≈ 376.73 Ω. Mirrors `maxwell::free_space_impedance`.
+#must_use
+#pure
+public fn bj_free_space_impedance(): f64 {
+    var q: f64 = BJ_MU_0 / BJ_EPSILON_0;
+    var eta: f64 = f64_sqrt(q);
+    return eta;
+}
+
+# λ = v/f (m). InvalidParameter for a NaN or non-positive frequency, then velocity. Mirrors `maxwell::wavelength`.
+public fn bj_wavelength(frequency: f64, velocity: f64): Result {
+    var c = _bj_check_positive("frequency", frequency);
+    if (c != 0) { return Err(c); }
+    c = _bj_check_positive("velocity", velocity);
+    if (c != 0) { return Err(c); }
+    var l: f64 = velocity / frequency;
+    return Ok(l);
+}
+
+# f = v/λ (Hz). InvalidParameter for a NaN or non-positive wavelength, then velocity. Mirrors `maxwell::frequency`.
+public fn bj_frequency(wavelength_m: f64, velocity: f64): Result {
+    var c = _bj_check_positive("wavelength", wavelength_m);
+    if (c != 0) { return Err(c); }
+    c = _bj_check_positive("velocity", velocity);
+    if (c != 0) { return Err(c); }
+    var f: f64 = velocity / wavelength_m;
+    return Ok(f);
+}
+
+# The InvalidParameter "<name> must be positive for skin depth, got <value>", or 0.
+fn _bj_check_skin(name, value: f64): i64 {
+    if (value != value || value <= 0.0) {
+        var t = _bj_err_reason(BJ_ERR_INVALID_PARAMETER);
+        _bj_tx_cstr(t, name);
+        _bj_tx_cstr(t, " must be positive for skin depth, got ");
+        _bj_fmt_f64_display(t, value);
+        return BJ_ERR_INVALID_PARAMETER;
+    }
+    return 0;
+}
+
+# δ = √(2/(ωμσ)) (m), how far an EM wave reaches into a good conductor (σ ≫ ωε). InvalidParameter unless ω, μ and σ
+# are each positive (checked in that order; NaN refused). Mirrors `maxwell::skin_depth`.
+public fn bj_skin_depth(angular_freq: f64, permeability: f64, conductivity: f64): Result {
+    var c = _bj_check_skin("angular frequency", angular_freq);
+    if (c != 0) { return Err(c); }
+    c = _bj_check_skin("permeability", permeability);
+    if (c != 0) { return Err(c); }
+    c = _bj_check_skin("conductivity", conductivity);
+    if (c != 0) { return Err(c); }
+    var denom: f64 = angular_freq * permeability * conductivity;
+    var q: f64 = 2.0 / denom;
+    var d: f64 = f64_sqrt(q);
+    return Ok(d);
+}

@@ -6,27 +6,27 @@
 
 **Rust column**: rust-old/bench-history.csv, run `2026-11-12T03:15:21Z` at `c95fd30` (the 1.2.0 tag's source), criterion medians. Taken under load (kimiya's gates ran beside it: load average about 2.6, median CI width 0.8 %, p90 4.2 %, max 13 %), so a ratio within the Rust row's own noise is read as parity (port plan §5 P4).
 
-**80 Rust benches:** 12 twinned, 0 not applicable, 68 pending.
+**80 Rust benches:** 17 twinned, 0 not applicable, 63 pending.
 
 | Rust bench | Rust | Cyrius twin | Cyrius | Cyrius / Rust |
 |---|---:|---|---:|---:|
 | `field/electric_field_point` | 1.52 ns | `field/electric_field_point` | 31.00 ns | 20.4× |
-| `field/electric_potential_point` | 1.23 ns | `field/electric_potential_point` | 19.00 ns | 15.5× |
-| `field/magnetic_field_moving` | 1.73 ns | `field/magnetic_field_moving` | 43.00 ns | 24.9× |
-| `field/superposition_10` | 39.79 ns | `field/superposition_10` | 549.00 ns | 13.8× |
+| `field/electric_potential_point` | 1.23 ns | `field/electric_potential_point` | 18.00 ns | 14.6× |
+| `field/magnetic_field_moving` | 1.73 ns | `field/magnetic_field_moving` | 42.00 ns | 24.3× |
+| `field/superposition_10` | 39.79 ns | `field/superposition_10` | 541.00 ns | 13.6× |
 | `field/vector_magnitude` | 0.50 ns | `field/vector_magnitude` | 9.00 ns | 18.0× |
-| `field/vector_cross` | 0.99 ns | `field/vector_cross` | 18.00 ns | 18.2× |
-| `field/electric_dipole_field` | 5.53 ns | `field/electric_dipole_field` | 85.00 ns | 15.4× |
-| `field/magnetic_dipole_field` | 5.52 ns | `field/magnetic_dipole_field` | 86.00 ns | 15.6× |
+| `field/vector_cross` | 0.99 ns | `field/vector_cross` | 19.00 ns | 19.3× |
+| `field/electric_dipole_field` | 5.53 ns | `field/electric_dipole_field` | 84.00 ns | 15.2× |
+| `field/magnetic_dipole_field` | 5.52 ns | `field/magnetic_dipole_field` | 85.00 ns | 15.4× |
 | `field/charged_sphere` | 1.23 ns | `field/charged_sphere` | 15.00 ns | 12.1× |
-| `field/ring_axis` | 1.23 ns | `field/ring_axis` | 26.00 ns | 21.1× |
-| `field/disk_axis` | 1.23 ns | `field/disk_axis` | 39.00 ns | 31.6× |
-| `field/trace_field_line_10` | 317.87 ns | `field/trace_field_line_10` | 1.09 µs | 3.4× |
-| `maxwell/wave_speed` | 1.24 ns | pending (M1) | — | — |
-| `maxwell/impedance` | 1.24 ns | pending (M1) | — | — |
-| `maxwell/skin_depth` | 1.29 ns | pending (M1) | — | — |
-| `charge/coulomb_force` | 5.54 ns | pending (M1) | — | — |
-| `charge/lorentz_force` | 1.51 ns | pending (M1) | — | — |
+| `field/ring_axis` | 1.23 ns | `field/ring_axis` | 25.00 ns | 20.2× |
+| `field/disk_axis` | 1.23 ns | `field/disk_axis` | 38.00 ns | 30.8× |
+| `field/trace_field_line_10` | 317.87 ns | `field/trace_field_line_10` | 1.08 µs | 3.4× |
+| `maxwell/wave_speed` | 1.24 ns | `maxwell/wave_speed` | 15.00 ns | 12.1× |
+| `maxwell/impedance` | 1.24 ns | `maxwell/impedance` | 13.00 ns | 10.5× |
+| `maxwell/skin_depth` | 1.29 ns | `maxwell/skin_depth` | 27.00 ns | 21.0× |
+| `charge/coulomb_force` | 5.54 ns | `charge/coulomb_force` | 43.00 ns | 7.8× |
+| `charge/lorentz_force` | 1.51 ns | `charge/lorentz_force` | 61.00 ns | 40.5× |
 | `wave/poynting_vector` | 0.98 ns | pending (M2) | — | — |
 | `wave/plane_wave_intensity` | 0.52 ns | pending (M2) | — | — |
 | `wave/plane_wave_e` | 0.51 ns | pending (M2) | — | — |

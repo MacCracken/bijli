@@ -277,6 +277,60 @@ fn main(): i64 {
     bench_batch_stop(b12, 100000);
     bench_report(b12);
     BjPolyline_free(&tpoly);
+
+    # maxwell/* and charge/* (M1 part 3d): rust-old/benches/benchmarks.rs's maxwell_benchmarks and charge_benchmarks.
+    var b13 = bench_new("maxwell/wave_speed");
+    bench_batch_start(b13);
+    for (var k = 0; k < 1000000; k = k + 1) {
+        var t13, v13 = bj_wave_speed(BJ_EPSILON_0, BJ_MU_0);
+        keep = keep + v13;
+    }
+    bench_batch_stop(b13, 1000000);
+    bench_report(b13);
+
+    var b14 = bench_new("maxwell/impedance");
+    bench_batch_start(b14);
+    for (var k = 0; k < 1000000; k = k + 1) {
+        var t14, v14 = bj_impedance(BJ_EPSILON_0, BJ_MU_0);
+        keep = keep + v14;
+    }
+    bench_batch_stop(b14, 1000000);
+    bench_report(b14);
+
+    var mw60: f64 = 2.0 * _BJ_PI * 60.0;
+    var b15 = bench_new("maxwell/skin_depth");
+    bench_batch_start(b15);
+    for (var k = 0; k < 1000000; k = k + 1) {
+        var t15, v15 = bj_skin_depth(mw60, BJ_MU_0, 59600000.0);
+        keep = keep + v15;
+    }
+    bench_batch_stop(b15, 1000000);
+    bench_report(b15);
+
+    var cq1: BjPointCharge;
+    var cq2: BjPointCharge;
+    var tc1, vc1 = BjPointCharge_new(fq, 1.0, &fo, &fo, &cq1);
+    var tc2, vc2 = BjPointCharge_new(fq, 1.0, &fx, &fo, &cq2);
+    var b16 = bench_new("charge/coulomb_force");
+    bench_batch_start(b16);
+    for (var k = 0; k < 1000000; k = k + 1) {
+        var t16, v16 = bj_coulomb_force(cq1, cq2, &fe);
+        fsum = fsum + fe.x;
+    }
+    bench_batch_stop(b16, 1000000);
+    bench_report(b16);
+
+    var lv = BjFieldVector_new(1000000.0, 0.0, 0.0);
+    var le = BjFieldVector_new(1000.0, 0.0, 0.0);
+    var lb = BjFieldVector_new(0.0, 0.0, 1.0);
+    var b17 = bench_new("charge/lorentz_force");
+    bench_batch_start(b17);
+    for (var k = 0; k < 1000000; k = k + 1) {
+        var lf = bj_lorentz_force(BJ_ELEMENTARY_CHARGE, lv, le, lb);
+        fsum = fsum + lf.y;
+    }
+    bench_batch_stop(b17, 1000000);
+    bench_report(b17);
     if (fsum == 7.0) { println("."); }
 
     var ar: f64 = acc.re;

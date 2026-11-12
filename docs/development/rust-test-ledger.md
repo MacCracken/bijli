@@ -6,14 +6,14 @@
 > (`tests/golden/`) checks every ported function on its grid besides; this ledger is about the oracle's own
 > assertions.
 
-**858 Rust tests:** 116 ported, 0 not applicable, 742 pending.
+**858 Rust tests:** 160 ported, 0 not applicable, 698 pending.
 
 | Rust file | Milestone | Cyrius tests | Rust tests | Ported | N/A | Pending |
 |---|---|---|---:|---:|---:|---:|
 | `src/ai.rs` | M7 | `tests/ai.tcyr` | 10 | 0 | 0 | 10 |
 | `src/beam.rs` | M3 | `tests/beam.tcyr` | 60 | 0 | 0 | 60 |
 | `src/bridge.rs` | M7 | `tests/bridge.tcyr` | 18 | 0 | 0 | 18 |
-| `src/charge.rs` | M1 | `tests/charge.tcyr` | 26 | 0 | 0 | 26 |
+| `src/charge.rs` | M1 | `tests/charge.tcyr` | 26 | 26 | 0 | 0 |
 | `src/circuit.rs` | M2 | `tests/circuit.tcyr` | 51 | 0 | 0 | 51 |
 | `src/compute.rs` | M6 | `tests/compute.tcyr` | 18 | 0 | 0 | 18 |
 | `src/error.rs` | M1 | `tests/error.tcyr` | 10 | 10 | 0 | 0 |
@@ -22,7 +22,7 @@
 | `src/integration/soorat.rs` | M7 | `tests/soorat.tcyr` | 14 | 0 | 0 | 14 |
 | `src/logging.rs` | M1 | `tests/log.tcyr` | 1 | 1 | 0 | 0 |
 | `src/material.rs` | M2 | `tests/material.tcyr` | 42 | 0 | 0 | 42 |
-| `src/maxwell.rs` | M1 | `tests/maxwell.tcyr` | 18 | 0 | 0 | 18 |
+| `src/maxwell.rs` | M1 | `tests/maxwell.tcyr` | 18 | 18 | 0 | 0 |
 | `src/polarization.rs` | M3 | `tests/polarization.tcyr` | 69 | 0 | 0 | 69 |
 | `src/relativity.rs` | M2 | `tests/relativity.tcyr` | 48 | 0 | 0 | 48 |
 | `src/rf.rs` | M4 | `tests/rf.tcyr` | 80 | 0 | 0 | 80 |

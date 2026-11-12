@@ -1,0 +1,175 @@
+# maxwell.tcyr — src/maxwell.cyr (M1 part 3d): the divergences, the displacement current, wave speed, refractive
+# index, impedance, wavelength and frequency, skin depth.
+#
+# Every group named test_* is rust-old/src/maxwell.rs's test of that name, ported assertion for assertion (the ledger
+# matches them by name): all 18. tests/golden/maxwell.tsv pins every function over its grid against Rust besides.
+
+include "tests/lib.cyr"
+
+# |a − b| < tol.
+fn near(a: f64, b: f64, tol: f64): i64 {
+    var d: f64 = a - b;
+    var ad: f64 = f64_abs(d);
+    if (ad < tol) { return 1; }
+    return 0;
+}
+
+# |a − b|/|b| < tol.
+fn rel_near(a: f64, b: f64, tol: f64): i64 {
+    var d: f64 = a - b;
+    var ad: f64 = f64_abs(d);
+    var ab: f64 = f64_abs(b);
+    var r: f64 = ad / ab;
+    if (r < tol) { return 1; }
+    return 0;
+}
+
+# 1 when the C strings a and b are equal.
+fn text_is(a, b): i64 {
+    var n = strlen(a);
+    if (n != strlen(b)) { return 0; }
+    return memeq(a, b, n);
+}
+
+# Runs maxwell.rs's tests, then the Cyrius-only checks.
+fn main() {
+    alloc_init();
+    var e10: f64 = 0.0000000001;
+    var zero: f64 = 0.0;
+    var nan: f64 = zero / zero;
+    var c0: f64 = BJ_SPEED_OF_LIGHT;
+
+    test_group("test_gauss_electric");
+    var div: f64 = bj_gauss_electric_divergence(0.000001);
+    assert(div > 10000.0, "1 µC/m³ gives ∇·E > 1e4");
+
+    test_group("test_gauss_magnetic");
+    var gm: f64 = bj_gauss_magnetic_divergence();
+    assert(gm == 0.0, "∇·B = 0");
+
+    test_group("test_wave_speed_vacuum");
+    var t1, v1 = bj_wave_speed(BJ_EPSILON_0, BJ_MU_0);
+    assert(is_ok(t1) == 1, "ok");
+    var w1: f64 = v1;
+    assert(rel_near(w1, c0, 0.000001) == 1, "1/√(ε₀μ₀) = c");
+
+    test_group("test_refractive_index_vacuum");
+    var t2, v2 = bj_refractive_index(1.0, 1.0);
+    assert(is_ok(t2) == 1, "ok");
+    var n2: f64 = v2;
+    assert(near(n2, 1.0, e10) == 1, "n = 1");
+
+    test_group("test_refractive_index_glass");
+    var t3, v3 = bj_refractive_index(2.25, 1.0);
+    assert(is_ok(t3) == 1, "ok");
+    var n3: f64 = v3;
+    assert(near(n3, 1.5, e10) == 1, "ε_r 2.25 gives n 1.5");
+
+    test_group("test_refractive_index_negative_permittivity");
+    var t4, v4 = bj_refractive_index(-1.0, 1.0);
+    assert(is_err_result(t4) == 1, "ε_r < 0 refused");
+
+    test_group("test_wavelength_zero_velocity");
+    var t5, v5 = bj_wavelength(500000000000000.0, 0.0);
+    assert(is_err_result(t5) == 1, "v = 0 refused");
+
+    test_group("test_frequency_zero_velocity");
+    var t6, v6 = bj_frequency(0.00000053, 0.0);
+    assert(is_err_result(t6) == 1, "v = 0 refused");
+
+    test_group("test_free_space_impedance");
+    var z0: f64 = bj_free_space_impedance();
+    assert(near(z0, 376.73, 0.1) == 1, "η₀ ≈ 376.73 Ω");
+
+    test_group("test_wavelength_visible_light");
+    var t7, v7 = bj_wavelength(566000000000000.0, c0);
+    assert(is_ok(t7) == 1, "ok");
+    var l7: f64 = v7;
+    var nm7: f64 = l7 * 1000000000.0;
+    assert(near(nm7, 530.0, 1.0) == 1, "5.66e14 Hz is about 530 nm");
+
+    test_group("test_frequency_from_wavelength");
+    var t8, v8 = bj_frequency(0.00000053, c0);
+    assert(is_ok(t8) == 1, "ok");
+    var f8: f64 = v8;
+    assert(rel_near(f8, 566000000000000.0, 0.01) == 1, "530 nm is about 5.66e14 Hz");
+
+    test_group("test_skin_depth");
+    var w60: f64 = 2.0 * _BJ_PI * 60.0;
+    var t9, v9 = bj_skin_depth(w60, BJ_MU_0, 59600000.0);
+    assert(is_ok(t9) == 1, "ok");
+    var d9: f64 = v9;
+    var mm9: f64 = d9 * 1000.0;
+    assert(near(mm9, 8.5, 1.0) == 1, "copper at 60 Hz: about 8.5 mm");
+
+    test_group("test_displacement_current");
+    var de_dt = BjFieldVector_new(1000000.0, 0.0, 0.0);
+    var jd = bj_displacement_current(de_dt);
+    var jx: f64 = jd.x;
+    var want_jx: f64 = BJ_EPSILON_0 * 1000000.0;
+    assert(near(jx, want_jx, e10) == 1, "J_d = ε₀ ∂E/∂t");
+
+    test_group("test_invalid_permittivity");
+    var t10, v10 = bj_wave_speed(-1.0, BJ_MU_0);
+    assert(is_err_result(t10) == 1, "ε < 0 refused");
+
+    test_group("test_invalid_permeability");
+    var t11, v11 = bj_impedance(BJ_EPSILON_0, -1.0);
+    assert(is_err_result(t11) == 1, "μ < 0 refused");
+
+    test_group("test_skin_depth_rejects_paired_negatives");
+    var mmu: f64 = -BJ_MU_0;
+    var t12, v12 = bj_skin_depth(-1.0, mmu, 59600000.0);
+    assert(is_err_result(t12) == 1, "ω < 0 and μ < 0");
+    var t13, v13 = bj_skin_depth(-1.0, BJ_MU_0, -59600000.0);
+    assert(is_err_result(t13) == 1, "ω < 0 and σ < 0");
+    var t14, v14 = bj_skin_depth(1.0, mmu, -59600000.0);
+    assert(is_err_result(t14) == 1, "μ < 0 and σ < 0");
+    var t15, v15 = bj_skin_depth(nan, BJ_MU_0, 59600000.0);
+    assert(is_err_result(t15) == 1, "ω NaN");
+
+    test_group("test_skin_depth_copper_reference");
+    var w1m: f64 = 2.0 * _BJ_PI * 1000000.0;
+    var t16, v16 = bj_skin_depth(w1m, BJ_MU_0, 59600000.0);
+    assert(is_ok(t16) == 1, "ok");
+    var d16: f64 = v16;
+    var ref16: f64 = 0.00006519240483;
+    var a16: f64 = f64_abs(d16 - ref16);
+    var r16: f64 = a16 / d16;
+    assert(r16 < 0.000000001, "copper at 1 MHz: 6.519240483e-5 m");
+
+    test_group("test_nan_material_parameters_rejected");
+    var t17, v17 = bj_wave_speed(nan, BJ_MU_0);
+    assert(is_err_result(t17) == 1, "ε NaN");
+    var t18, v18 = bj_wave_speed(BJ_EPSILON_0, nan);
+    assert(is_err_result(t18) == 1, "μ NaN");
+    var t19, v19 = bj_impedance(nan, BJ_MU_0);
+    assert(is_err_result(t19) == 1, "impedance, ε NaN");
+    var t20, v20 = bj_refractive_index(nan, 1.0);
+    assert(is_err_result(t20) == 1, "refractive index, ε_r NaN");
+    var t21, v21 = bj_wavelength(nan, c0);
+    assert(is_err_result(t21) == 1, "wavelength, f NaN");
+    var t22, v22 = bj_frequency(0.00000053, nan);
+    assert(is_err_result(t22) == 1, "frequency, v NaN");
+
+    # ── Cyrius-only: the error each check records (the golden rows pin every text over the grid) ──
+    test_group("cyrius_maxwell_error_records");
+    var t23, v23 = bj_wave_speed(BJ_EPSILON_0, -2.0);
+    assert(is_err_result(t23) == 1 && v23 == BJ_ERR_INVALID_PERMEABILITY, "μ refused as InvalidPermeability");
+    var mu23: f64 = bj_last_error_value();
+    assert(mu23 == -2.0, "the record holds the value");
+    assert(text_is(bj_last_error_display(), "invalid permeability: -2 (must be > 0)") == 1, "its Display");
+    var t24, v24 = bj_skin_depth(1.0, BJ_MU_0, 0.0);
+    assert(is_err_result(t24) == 1 && v24 == BJ_ERR_INVALID_PARAMETER, "σ = 0 refused");
+    assert(text_is(bj_last_error_display(),
+        "invalid parameter: conductivity must be positive for skin depth, got 0") == 1, "names σ");
+    var t25, v25 = bj_frequency(nan, 1.0);
+    assert(text_is(bj_last_error_display(), "invalid parameter: wavelength must be positive, got NaN") == 1,
+      "names λ");
+
+    return assert_summary();
+}
+
+var exit_code = main();
+if (exit_code > 0) { exit_code = 1; }
+sys_exit_group(exit_code);

@@ -23,12 +23,14 @@
 mod cyr;
 mod glibc;
 mod grids;
+mod m_charge;
 mod m_complex;
 mod m_constants;
 mod m_error;
 mod m_field;
 mod m_fmtf;
 mod m_math;
+mod m_maxwell;
 mod t_constants;
 mod tsv;
 
@@ -40,12 +42,14 @@ use std::process::ExitCode;
 /// Every golden emitter, in file-name order.
 fn golden_modules() -> Vec<tsv::Module> {
     vec![
+        m_charge::emit(),
         m_complex::emit(),
         m_constants::emit(),
         m_error::emit(),
         m_field::emit(),
         m_fmtf::emit(),
         m_math::emit(),
+        m_maxwell::emit(),
     ]
 }
 

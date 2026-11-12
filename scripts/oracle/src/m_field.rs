@@ -30,22 +30,22 @@ use bijli::field::{
 };
 use std::hint::black_box;
 
-fn v3(v: FieldVector) -> Vec<Tok> {
+pub(crate) fn v3(v: FieldVector) -> Vec<Tok> {
     vec![f(v.x), f(v.y), f(v.z)]
 }
 
-fn p3(p: [f64; 3]) -> Vec<Tok> {
+pub(crate) fn p3(p: [f64; 3]) -> Vec<Tok> {
     vec![f(p[0]), f(p[1]), f(p[2])]
 }
 
-fn res_v(r: bijli::error::Result<FieldVector>) -> Vec<Tok> {
+pub(crate) fn res_v(r: bijli::error::Result<FieldVector>) -> Vec<Tok> {
     match r {
         Ok(v) => v3(v),
         Err(e) => vec![err(&e), s(e.to_string())],
     }
 }
 
-fn res_f(r: bijli::error::Result<f64>) -> Vec<Tok> {
+pub(crate) fn res_f(r: bijli::error::Result<f64>) -> Vec<Tok> {
     match r {
         Ok(x) => vec![f(x)],
         Err(e) => vec![err(&e), s(e.to_string())],
@@ -67,7 +67,7 @@ fn res_image(r: bijli::error::Result<(f64, [f64; 3])>) -> Vec<Tok> {
 }
 
 /// Distances and radii: the specials, negatives, the cutoff 1e-30 from both sides, binades, seeded.
-fn distances(rng: &mut Rng) -> Vec<f64> {
+pub(crate) fn distances(rng: &mut Rng) -> Vec<f64> {
     let mut ds = specials();
     ds.extend([
         -2.0, -1e-300, 0.99e-30, 1e-30, 1.01e-30, 1e-15, 0.25, 0.5, 1.0, 2.0, 1e8, 1e200,
@@ -114,7 +114,7 @@ fn charge_sets(rng: &mut Rng) -> Vec<Vec<(f64, [f64; 3])>> {
     sets
 }
 
-fn charges_tok(cs: &[(f64, [f64; 3])]) -> Vec<Tok> {
+pub(crate) fn charges_tok(cs: &[(f64, [f64; 3])]) -> Vec<Tok> {
     let mut v = vec![Tok::V(4 * cs.len())];
     for (q, p) in cs {
         v.push(f(*q));
@@ -123,12 +123,12 @@ fn charges_tok(cs: &[(f64, [f64; 3])]) -> Vec<Tok> {
     v
 }
 
-fn cat(parts: &[Vec<Tok>]) -> Vec<Tok> {
+pub(crate) fn cat(parts: &[Vec<Tok>]) -> Vec<Tok> {
     parts.iter().flatten().cloned().collect()
 }
 
 /// Vectors: the specials crossed (x, y, 0) and (0, y, z), every 37th binade, and seeded.
-fn vectors() -> Vec<FieldVector> {
+pub(crate) fn vectors() -> Vec<FieldVector> {
     let sp = specials();
     let mut vs = Vec::new();
     for &a in &sp {
@@ -166,7 +166,7 @@ fn vectors() -> Vec<FieldVector> {
 }
 
 /// (source, field point) pairs: a lattice, random points, the cutoff from both sides, specials.
-fn pairs(rng: &mut Rng) -> Vec<([f64; 3], [f64; 3])> {
+pub(crate) fn pairs(rng: &mut Rng) -> Vec<([f64; 3], [f64; 3])> {
     let mut ps = Vec::new();
     for i in -2..=2 {
         for j in -2..=2 {
@@ -205,7 +205,7 @@ fn pairs(rng: &mut Rng) -> Vec<([f64; 3], [f64; 3])> {
 }
 
 /// Charges: SI scales, zero, the specials.
-fn charges() -> Vec<f64> {
+pub(crate) fn charges() -> Vec<f64> {
     let mut qs = vec![1e-6, -1e-6, 1.602_176_634e-19, -3e-9, 1.0, 0.0, -0.0, 1e300];
     qs.extend([f64::NAN, f64::INFINITY]);
     qs

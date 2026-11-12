@@ -7714,3 +7714,363 @@ public fn bj_trace_field_line(start: *f64, step_size: f64, max_steps, field_fn, 
     }
     return Ok(0);
 }
+
+# --- maxwell.cyr ---
+
+# maxwell.cyr — Maxwell's equations: the divergences, the displacement current, wave speed, refractive index,
+# impedance, wavelength and frequency, skin depth (port of rust-old/src/maxwell.rs, M1 part 3d).
+#
+# SI units throughout. Every formula is Rust's in Rust's order (the golden rows compare bit for bit, class A); a
+# fallible function returns a value-form Result with its f64 payload, the error in the last-error record
+# (src/error.cyr). No harmonic quantity appears here, so no time convention (src/complex.cyr) is involved.
+
+private
+
+# The InvalidPermittivity or InvalidPermeability of a medium's ε and μ (NaN or not positive, ε first), or 0.
+fn _bj_check_eps_mu(permittivity: f64, permeability: f64): i64 {
+    if (permittivity != permittivity || permittivity <= 0.0) { return _bj_err_invalid_permittivity(permittivity); }
+    if (permeability != permeability || permeability <= 0.0) { return _bj_err_invalid_permeability(permeability); }
+    return 0;
+}
+
+# The InvalidParameter "<name> must be positive, got <value>" for a NaN or non-positive value, or 0.
+fn _bj_check_positive(name, value: f64): i64 {
+    if (value != value || value <= 0.0) {
+        var t = _bj_err_reason(BJ_ERR_INVALID_PARAMETER);
+        _bj_tx_cstr(t, name);
+        _bj_tx_cstr(t, " must be positive, got ");
+        _bj_fmt_f64_display(t, value);
+        return BJ_ERR_INVALID_PARAMETER;
+    }
+    return 0;
+}
+
+# ∇·E = ρ/ε₀ (V/m²) for a charge density ρ (C/m³). Mirrors `maxwell::gauss_electric_divergence`.
+#must_use
+#pure
+public fn bj_gauss_electric_divergence(charge_density: f64): f64 {
+    var d: f64 = charge_density / BJ_EPSILON_0;
+    return d;
+}
+
+# ∇·B = 0: there are no magnetic monopoles. Mirrors `maxwell::gauss_magnetic_divergence`.
+#must_use
+#pure
+public fn bj_gauss_magnetic_divergence(): f64 {
+    var z: f64 = 0.0;
+    return z;
+}
+
+# J_d = ε₀·∂E/∂t (A/m²). Mirrors `maxwell::displacement_current`.
+#must_use
+#pure
+public fn bj_displacement_current(de_dt: BjFieldVector): BjFieldVector {
+    var j: BjFieldVector = de_dt.scale(BJ_EPSILON_0);
+    return j;
+}
+
+# v = 1/√(εμ) (m/s). InvalidPermittivity, then InvalidPermeability, for a NaN or non-positive ε or μ. Mirrors
+# `maxwell::wave_speed`.
+public fn bj_wave_speed(permittivity: f64, permeability: f64): Result {
+    var c = _bj_check_eps_mu(permittivity, permeability);
+    if (c != 0) { return Err(c); }
+    var p: f64 = permittivity * permeability;
+    var s: f64 = f64_sqrt(p);
+    var v: f64 = 1.0 / s;
+    return Ok(v);
+}
+
+# n = √(ε_r·μ_r). Errors as wave_speed's. Mirrors `maxwell::refractive_index`.
+public fn bj_refractive_index(relative_permittivity: f64, relative_permeability: f64): Result {
+    var c = _bj_check_eps_mu(relative_permittivity, relative_permeability);
+    if (c != 0) { return Err(c); }
+    var p: f64 = relative_permittivity * relative_permeability;
+    var n: f64 = f64_sqrt(p);
+    return Ok(n);
+}
+
+# η = √(μ/ε) (ohms). Errors as wave_speed's. Mirrors `maxwell::impedance`.
+public fn bj_impedance(permittivity: f64, permeability: f64): Result {
+    var c = _bj_check_eps_mu(permittivity, permeability);
+    if (c != 0) { return Err(c); }
+    var q: f64 = permeability / permittivity;
+    var eta: f64 = f64_sqrt(q);
+    return Ok(eta);
+}
+
+# η₀ = √(μ₀/ε₀) ≈ 376.73 Ω. Mirrors `maxwell::free_space_impedance`.
+#must_use
+#pure
+public fn bj_free_space_impedance(): f64 {
+    var q: f64 = BJ_MU_0 / BJ_EPSILON_0;
+    var eta: f64 = f64_sqrt(q);
+    return eta;
+}
+
+# λ = v/f (m). InvalidParameter for a NaN or non-positive frequency, then velocity. Mirrors `maxwell::wavelength`.
+public fn bj_wavelength(frequency: f64, velocity: f64): Result {
+    var c = _bj_check_positive("frequency", frequency);
+    if (c != 0) { return Err(c); }
+    c = _bj_check_positive("velocity", velocity);
+    if (c != 0) { return Err(c); }
+    var l: f64 = velocity / frequency;
+    return Ok(l);
+}
+
+# f = v/λ (Hz). InvalidParameter for a NaN or non-positive wavelength, then velocity. Mirrors `maxwell::frequency`.
+public fn bj_frequency(wavelength_m: f64, velocity: f64): Result {
+    var c = _bj_check_positive("wavelength", wavelength_m);
+    if (c != 0) { return Err(c); }
+    c = _bj_check_positive("velocity", velocity);
+    if (c != 0) { return Err(c); }
+    var f: f64 = velocity / wavelength_m;
+    return Ok(f);
+}
+
+# The InvalidParameter "<name> must be positive for skin depth, got <value>", or 0.
+fn _bj_check_skin(name, value: f64): i64 {
+    if (value != value || value <= 0.0) {
+        var t = _bj_err_reason(BJ_ERR_INVALID_PARAMETER);
+        _bj_tx_cstr(t, name);
+        _bj_tx_cstr(t, " must be positive for skin depth, got ");
+        _bj_fmt_f64_display(t, value);
+        return BJ_ERR_INVALID_PARAMETER;
+    }
+    return 0;
+}
+
+# δ = √(2/(ωμσ)) (m), how far an EM wave reaches into a good conductor (σ ≫ ωε). InvalidParameter unless ω, μ and σ
+# are each positive (checked in that order; NaN refused). Mirrors `maxwell::skin_depth`.
+public fn bj_skin_depth(angular_freq: f64, permeability: f64, conductivity: f64): Result {
+    var c = _bj_check_skin("angular frequency", angular_freq);
+    if (c != 0) { return Err(c); }
+    c = _bj_check_skin("permeability", permeability);
+    if (c != 0) { return Err(c); }
+    c = _bj_check_skin("conductivity", conductivity);
+    if (c != 0) { return Err(c); }
+    var denom: f64 = angular_freq * permeability * conductivity;
+    var q: f64 = 2.0 / denom;
+    var d: f64 = f64_sqrt(q);
+    return Ok(d);
+}
+
+# --- charge.cyr ---
+
+# charge.cyr — point charges, Coulomb's law, the Lorentz force, cyclotron motion (port of rust-old/src/charge.rs,
+# M1 part 3d).
+#
+# SI units: coulombs, newtons, metres, seconds. Every formula is Rust's in Rust's order (the golden rows compare bit
+# for bit, class A). The constants (BJ_ELEMENTARY_CHARGE, BJ_ELECTRON_MASS, BJ_PROTON_MASS) are src/constants.cyr's.
+# Shapes as src/field.cyr's: a `[f64; 3]` is the address of three f64; a `Result<FieldVector>` writes through an out
+# pointer; a fallible constructor of a struct over 16 bytes writes through `out` too.
+
+private
+
+# A point charge with its position and velocity. Mirrors `charge::PointCharge`; Rust's `[f64; 3]` fields are
+# `(f64, f64, f64)` tuples stored inline (`q.position.0` for `q.position[0]`; probe p15), 64 bytes, by value.
+public struct BjPointCharge {
+    charge: f64;
+    mass: f64;
+    position: (f64, f64, f64);
+    velocity: (f64, f64, f64);
+}
+
+# A point charge into out; InvalidParameter when mass is NaN or not positive, out untouched. Mirrors
+# `PointCharge::new`.
+public fn BjPointCharge_new(charge: f64, mass: f64, position: *f64, velocity: *f64, out: *BjPointCharge): Result {
+    if (mass != mass || mass <= 0.0) {
+        var t = _bj_err_reason(BJ_ERR_INVALID_PARAMETER);
+        _bj_tx_cstr(t, "mass must be positive, got ");
+        _bj_fmt_f64_display(t, mass);
+        return Err(BJ_ERR_INVALID_PARAMETER);
+    }
+    out.charge = charge;
+    out.mass = mass;
+    out.position = (position[0], position[1], position[2]);
+    out.velocity = (velocity[0], velocity[1], velocity[2]);
+    return Ok(0);
+}
+
+# A particle of charge q and mass m at rest at `position`.
+#must_use
+fn _bj_particle_at(q: f64, m: f64, position: *f64): BjPointCharge {
+    var p: BjPointCharge;
+    p.charge = q;
+    p.mass = m;
+    p.position = (position[0], position[1], position[2]);
+    p.velocity = (0.0, 0.0, 0.0);
+    return p;
+}
+
+# An electron at rest at `position`: charge −e, the electron mass. Mirrors `PointCharge::electron`.
+#must_use
+public fn BjPointCharge_electron(position: *f64): BjPointCharge {
+    var q: f64 = -BJ_ELEMENTARY_CHARGE;
+    var p: BjPointCharge = _bj_particle_at(q, BJ_ELECTRON_MASS, position);
+    return p;
+}
+
+# A proton at rest at `position`: charge e, the proton mass. Mirrors `PointCharge::proton`.
+#must_use
+public fn BjPointCharge_proton(position: *f64): BjPointCharge {
+    var p: BjPointCharge = _bj_particle_at(BJ_ELEMENTARY_CHARGE, BJ_PROTON_MASS, position);
+    return p;
+}
+
+# Writes a `(f64, f64, f64)` tuple's elements to p[0..3]: the `[f64; 3]` the field functions take.
+fn _bj_tuple3_put(t: (f64, f64, f64), p: *f64): i64 {
+    p[0] = t.0;
+    p[1] = t.1;
+    p[2] = t.2;
+    return 0;
+}
+
+impl BjPointCharge {
+    # E at field_pos from this charge, into out: bj_electric_field_point_charge's value and errors. Mirrors
+    # `PointCharge::electric_field_at`.
+    public fn electric_field_at(self, field_pos: *f64, out: *BjFieldVector): Result {
+        var pos: f64[3];
+        _bj_tuple3_put(self.position, &pos);
+        return bj_electric_field_point_charge(self.charge, &pos, field_pos, out);
+    }
+
+    # V at field_pos from this charge: bj_electric_potential_point_charge's value and errors. Mirrors
+    # `PointCharge::electric_potential_at`.
+    public fn electric_potential_at(self, field_pos: *f64): Result {
+        var pos: f64[3];
+        _bj_tuple3_put(self.position, &pos);
+        return bj_electric_potential_point_charge(self.charge, &pos, field_pos);
+    }
+
+    # B at field_pos from this moving charge (Biot–Savart), into out: bj_magnetic_field_moving_charge's. Mirrors
+    # `PointCharge::magnetic_field_at`.
+    public fn magnetic_field_at(self, field_pos: *f64, out: *BjFieldVector): Result {
+        var pos: f64[3];
+        var vel: f64[3];
+        _bj_tuple3_put(self.position, &pos);
+        _bj_tuple3_put(self.velocity, &vel);
+        return bj_magnetic_field_moving_charge(self.charge, &pos, &vel, field_pos, out);
+    }
+
+    # The Lorentz force on this charge, moving with its velocity, in fields E and B: bj_lorentz_force's. Mirrors
+    # `PointCharge::lorentz_force_in`.
+    #must_use
+    public fn lorentz_force_in(self, electric_field: BjFieldVector, magnetic_field: BjFieldVector): BjFieldVector {
+        var v: BjFieldVector = BjFieldVector_new(self.velocity.0, self.velocity.1, self.velocity.2);
+        var f: BjFieldVector = bj_lorentz_force(self.charge, v, electric_field, magnetic_field);
+        return f;
+    }
+}
+
+# F = kq₁q₂/r²·r̂ (N) on q1 from q2, as k·q₁·q₂·(1/r)³ times the offset q1 − q2 (away from q2 when they repel).
+# Singularity when r² < 1e-30. Mirrors `charge::coulomb_force`.
+public fn bj_coulomb_force(q1: BjPointCharge, q2: BjPointCharge, out: *BjFieldVector): Result {
+    var dx: f64 = q1.position.0 - q2.position.0;
+    var dy: f64 = q1.position.1 - q2.position.1;
+    var dz: f64 = q1.position.2 - q2.position.2;
+    var r_sq: f64 = dx * dx + dy * dy + dz * dz;
+    if (r_sq < _BJ_FIELD_R2_MIN) { return Err(_bj_err_singularity()); }
+    var rt: f64 = f64_sqrt(r_sq);
+    var inv_r: f64 = 1.0 / rt;
+    var factor: f64 = BJ_COULOMB_K * q1.charge * q2.charge * inv_r * inv_r * inv_r;
+    out.x = factor * dx;
+    out.y = factor * dy;
+    out.z = factor * dz;
+    return Ok(0);
+}
+
+# F = q(E + v × B) (N), as (E + v × B)·q. Mirrors `charge::lorentz_force`.
+#must_use
+#pure
+public fn bj_lorentz_force(charge: f64, velocity: BjFieldVector, electric_field: BjFieldVector,
+  magnetic_field: BjFieldVector): BjFieldVector {
+    var vb: BjFieldVector = velocity.cross(magnetic_field);
+    var s: BjFieldVector = electric_field + vb;
+    var f: BjFieldVector = s * charge;
+    return f;
+}
+
+# p = qd (C·m). Mirrors `charge::dipole_moment`.
+#must_use
+#pure
+public fn bj_dipole_moment(charge: f64, separation: f64): f64 {
+    var p: f64 = charge * separation;
+    return p;
+}
+
+# U = qV (J). Mirrors `charge::potential_energy`.
+#must_use
+#pure
+public fn bj_potential_energy(charge: f64, potential: f64): f64 {
+    var u: f64 = charge * potential;
+    return u;
+}
+
+# U = kq₁q₂/r (J). InvalidParameter when r is NaN or negative, Singularity below 1e-30 m (field.rs's
+# check_radial_distance). Mirrors `charge::coulomb_potential_energy`.
+public fn bj_coulomb_potential_energy(q1: f64, q2: f64, distance: f64): Result {
+    var t, v = _bj_check_radial_distance(distance);
+    if (is_err_result(t) == 1) { return Err(v); }
+    var u: f64 = BJ_COULOMB_K * q1 * q2 / distance;
+    return Ok(u);
+}
+
+# A particle mass's error for `what`: DivisionByZero "mass cannot be zero for <what>" for 0, InvalidParameter "mass
+# must be positive for <what>, got <mass>" for NaN or negative; else 0. Mirrors charge.rs's private `check_mass`.
+fn _bj_check_mass(mass: f64, what): i64 {
+    if (mass == 0.0) {
+        var t = _bj_err_reason(BJ_ERR_DIVISION_BY_ZERO);
+        _bj_tx_cstr(t, "mass cannot be zero for ");
+        _bj_tx_cstr(t, what);
+        return BJ_ERR_DIVISION_BY_ZERO;
+    }
+    if (mass != mass || mass <= 0.0) {
+        var t2 = _bj_err_reason(BJ_ERR_INVALID_PARAMETER);
+        _bj_tx_cstr(t2, "mass must be positive for ");
+        _bj_tx_cstr(t2, what);
+        _bj_tx_cstr(t2, ", got ");
+        _bj_fmt_f64_display(t2, mass);
+        return BJ_ERR_INVALID_PARAMETER;
+    }
+    return 0;
+}
+
+# ω_c = |q|B/m (rad/s) for |B| ≥ 0 (T). DivisionByZero for a zero mass; InvalidParameter for a negative mass, a NaN
+# charge, or a negative or NaN |B| (in that order). Mirrors `charge::cyclotron_frequency`.
+public fn bj_cyclotron_frequency(charge: f64, mass: f64, b_magnitude: f64): Result {
+    var c = _bj_check_mass(mass, "cyclotron frequency");
+    if (c != 0) { return Err(c); }
+    if (charge != charge) { return Err(_bj_err_invalid_parameter("charge must not be NaN")); }
+    if (b_magnitude != b_magnitude || b_magnitude < 0.0) {
+        var t = _bj_err_reason(BJ_ERR_INVALID_PARAMETER);
+        _bj_tx_cstr(t, "|B| must be non-negative, got ");
+        _bj_fmt_f64_display(t, b_magnitude);
+        return Err(BJ_ERR_INVALID_PARAMETER);
+    }
+    var aq: f64 = f64_abs(charge);
+    var w: f64 = aq * b_magnitude / mass;
+    return Ok(w);
+}
+
+# r_L = m|v⊥|/(|q|B) (m) for |B| > 0, divided in two steps (m·|v⊥|/|q|/B) so a tiny |q|·B can't underflow.
+# DivisionByZero for a zero mass, charge or |B|; InvalidParameter for a negative mass or |B|, or a NaN argument (in
+# Rust's order). Mirrors `charge::larmor_radius`.
+public fn bj_larmor_radius(mass: f64, v_perp: f64, charge: f64, b_magnitude: f64): Result {
+    var c = _bj_check_mass(mass, "Larmor radius");
+    if (c != 0) { return Err(c); }
+    if (v_perp != v_perp || charge != charge) {
+        return Err(_bj_err_invalid_parameter("v_perp and charge must not be NaN"));
+    }
+    if (charge == 0.0) { return Err(_bj_err_division_by_zero("charge cannot be zero for Larmor radius")); }
+    if (b_magnitude == 0.0) { return Err(_bj_err_division_by_zero("|B| cannot be zero for Larmor radius")); }
+    if (b_magnitude != b_magnitude || b_magnitude <= 0.0) {
+        var t = _bj_err_reason(BJ_ERR_INVALID_PARAMETER);
+        _bj_tx_cstr(t, "|B| must be positive, got ");
+        _bj_fmt_f64_display(t, b_magnitude);
+        return Err(BJ_ERR_INVALID_PARAMETER);
+    }
+    var av: f64 = f64_abs(v_perp);
+    var aq: f64 = f64_abs(charge);
+    var r: f64 = mass * av / aq / b_magnitude;
+    return Ok(r);
+}

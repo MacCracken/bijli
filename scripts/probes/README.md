@@ -27,3 +27,4 @@ files are Rust references (`rustc -O`). Re-run them all at every Cyrius pin bump
 | `p12_text.cyr` + `p12_text_gen.py` + `p12_check.py` | `f64_parse_n` vs Python's (Rust's) parse, bayan's digits vs the shortest | `120018 lines \| parse mismatches vs float(): 0 \| bayan round-trip failures: 0 \| bayan longer than repr: 104, shorter: 0` |
 | `p13_cell_step.cyr` | one scalar 3D Yee cell-step, 30³ | ≈ 1,280 us/step (≈ 47 ns per cell-step; Rust 298 us/step) |
 | `p14_last_error.cyr` | the per-thread last-error record on two threads | `threads ok: 2 of 2 \| main's own record code 33` |
+| `p15_tuple_field.cyr` | `(f64, f64, f64)` tuple fields for Rust's `[f64; 3]` (`PointCharge`): typed element reads, a literal store, a struct copy, `&x + offset` as a `*f64`, by-value passing | `4008000000000000 4022000000000000 4018000000000000 3fec000000000000 40` |

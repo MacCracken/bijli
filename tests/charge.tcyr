@@ -1,0 +1,293 @@
+# charge.tcyr — src/charge.cyr (M1 part 3d): point charges, Coulomb's law, the Lorentz force, cyclotron motion.
+#
+# Every group named test_* is rust-old/src/charge.rs's test of that name, ported assertion for assertion (the ledger
+# matches them by name): all 26. tests/golden/charge.tsv pins every function over its grid against Rust besides.
+
+include "tests/lib.cyr"
+
+# p = (x, y, z), three f64 at p.
+fn at3(p: *f64, x: f64, y: f64, z: f64) {
+    p[0] = x;
+    p[1] = y;
+    p[2] = z;
+    return 0;
+}
+
+# |a − b| < tol.
+fn near(a: f64, b: f64, tol: f64): i64 {
+    var d: f64 = a - b;
+    var ad: f64 = f64_abs(d);
+    if (ad < tol) { return 1; }
+    return 0;
+}
+
+# |a − b|/|b| < tol.
+fn rel_near(a: f64, b: f64, tol: f64): i64 {
+    var d: f64 = a - b;
+    var ad: f64 = f64_abs(d);
+    var ab: f64 = f64_abs(b);
+    var r: f64 = ad / ab;
+    if (r < tol) { return 1; }
+    return 0;
+}
+
+# 1 when the C strings a and b are equal.
+fn text_is(a, b): i64 {
+    var n = strlen(a);
+    if (n != strlen(b)) { return 0; }
+    return memeq(a, b, n);
+}
+
+# Runs charge.rs's tests, then the Cyrius-only checks.
+fn main() {
+    alloc_init();
+    var o: f64[3];
+    var p: f64[3];
+    var vel: f64[3];
+    var e: BjFieldVector;
+    at3(&o, 0.0, 0.0, 0.0);
+    var zero: f64 = 0.0;
+    var nan: f64 = zero / zero;
+    var q6: f64 = 0.000001;
+    var mq6: f64 = -q6;
+    var qe: f64 = BJ_ELEMENTARY_CHARGE;
+    var mqe: f64 = -qe;
+    var me: f64 = BJ_ELECTRON_MASS;
+    var mme: f64 = -me;
+    var q1: BjPointCharge;
+    var q2: BjPointCharge;
+
+    test_group("test_coulomb_force_repulsion");
+    at3(&p, 1.0, 0.0, 0.0);
+    var t1, v1 = BjPointCharge_new(q6, 1.0, &o, &o, &q1);
+    var t2, v2 = BjPointCharge_new(q6, 1.0, &p, &o, &q2);
+    assert(is_ok(t1) == 1 && is_ok(t2) == 1, "both built");
+    var t3, v3 = bj_coulomb_force(q1, q2, &e);
+    assert(is_ok(t3) == 1, "ok");
+    var fx3: f64 = e.x;
+    assert(fx3 < 0.0, "like charges repel: q1 is pushed to −x");
+
+    test_group("test_coulomb_force_attraction");
+    var t4, v4 = BjPointCharge_new(mq6, 1.0, &p, &o, &q2);
+    var t5, v5 = bj_coulomb_force(q1, q2, &e);
+    assert(is_ok(t4) == 1 && is_ok(t5) == 1, "ok");
+    var fx5: f64 = e.x;
+    assert(fx5 > 0.0, "unlike charges attract: q1 is pulled to +x");
+
+    test_group("test_lorentz_force_electric_only");
+    var vz = BjFieldVector_zero();
+    var ef = BjFieldVector_new(1000.0, 0.0, 0.0);
+    var bz = BjFieldVector_zero();
+    var f6 = bj_lorentz_force(qe, vz, ef, bz);
+    var fx6: f64 = f6.x;
+    var want6: f64 = qe * 1000.0;
+    assert(near(fx6, want6, 0.0000000000000000000000001) == 1, "F = qE");
+
+    test_group("test_lorentz_force_magnetic_only");
+    var vx = BjFieldVector_new(1000000.0, 0.0, 0.0);
+    var ez = BjFieldVector_zero();
+    var bzh = BjFieldVector_new(0.0, 0.0, 1.0);
+    var f7 = bj_lorentz_force(qe, vx, ez, bzh);
+    var fy7: f64 = f7.y;
+    assert(fy7 < 0.0, "q v x̂ × B ẑ points to −ŷ");
+
+    test_group("test_electron_proton");
+    var el = BjPointCharge_electron(&o);
+    at3(&p, 0.0000000001, 0.0, 0.0);
+    var pr = BjPointCharge_proton(&p);
+    var t8, v8 = bj_coulomb_force(el, pr, &e);
+    assert(is_ok(t8) == 1, "ok");
+    var fx8: f64 = e.x;
+    assert(fx8 > 0.0, "the electron is pulled toward the proton");
+
+    test_group("test_cyclotron_frequency");
+    var t9, v9 = bj_cyclotron_frequency(qe, me, 1.0);
+    assert(is_ok(t9) == 1, "ok");
+    var w9: f64 = v9;
+    assert(rel_near(w9, 176000000000.0, 0.01) == 1, "an electron in 1 T: about 1.76e11 rad/s");
+
+    test_group("test_coulomb_potential_energy");
+    var t10, v10 = bj_coulomb_potential_energy(qe, mqe, 0.000000000053);
+    assert(is_ok(t10) == 1, "ok");
+    var u10: f64 = v10;
+    assert(u10 < 0.0, "hydrogen's pair is bound");
+
+    test_group("test_dipole_moment");
+    var dm: f64 = bj_dipole_moment(qe, 0.0000000001);
+    var want11: f64 = qe * 0.0000000001;
+    assert(near(dm, want11, 0.0000000000000000000000000000000000000001) == 1, "p = qd");
+
+    test_group("test_new_rejects_zero_mass");
+    var t12, v12 = BjPointCharge_new(q6, 0.0, &o, &o, &q1);
+    assert(is_err_result(t12) == 1, "mass 0 refused");
+
+    test_group("test_new_rejects_negative_mass");
+    var t13, v13 = BjPointCharge_new(q6, -1.0, &o, &o, &q1);
+    assert(is_err_result(t13) == 1, "mass −1 refused");
+
+    test_group("test_potential_energy");
+    var u14: f64 = bj_potential_energy(1.0, 1.0);
+    assert(near(u14, 1.0, 0.000000000000001) == 1, "U = qV");
+
+    test_group("test_larmor_radius");
+    var t15, v15 = bj_larmor_radius(me, 1000000.0, qe, 1.0);
+    assert(is_ok(t15) == 1, "ok");
+    var r15: f64 = v15;
+    assert(rel_near(r15, 0.00000569, 0.01) == 1, "an electron at 1e6 m/s in 1 T: about 5.69 µm");
+
+    test_group("test_larmor_radius_zero_b_fails");
+    var t16, v16 = bj_larmor_radius(me, 1000000.0, qe, 0.0);
+    assert(is_err_result(t16) == 1, "|B| = 0 refused");
+
+    test_group("test_cyclotron_frequency_zero_mass_fails");
+    var t17, v17 = bj_cyclotron_frequency(qe, 0.0, 1.0);
+    assert(is_err_result(t17) == 1, "mass 0 refused");
+
+    test_group("test_coulomb_potential_energy_singularity");
+    var t18, v18 = bj_coulomb_potential_energy(1.0, 1.0, 0.0);
+    assert(is_err_result(t18) == 1, "r = 0 refused");
+
+    test_group("test_coulomb_force_singularity");
+    var t19, v19 = BjPointCharge_new(q6, 1.0, &o, &o, &q1);
+    var t20, v20 = BjPointCharge_new(q6, 1.0, &o, &o, &q2);
+    assert(is_ok(t19) == 1 && is_ok(t20) == 1, "both built");
+    var t21, v21 = bj_coulomb_force(q1, q2, &e);
+    assert(is_err_result(t21) == 1, "coincident charges refused");
+
+    test_group("test_point_charge_electric_field_at");
+    var pq: BjPointCharge;
+    var t22, v22 = BjPointCharge_new(q6, 1.0, &o, &o, &pq);
+    at3(&p, 1.0, 0.0, 0.0);
+    var t23, v23 = pq.electric_field_at(&p, &e);
+    assert(is_ok(t22) == 1 && is_ok(t23) == 1, "ok");
+    var ex23: f64 = e.x;
+    assert(ex23 > 0.0, "a positive charge's field points away");
+
+    test_group("test_point_charge_electric_potential_at");
+    var t24, v24 = pq.electric_potential_at(&p);
+    assert(is_ok(t24) == 1, "ok");
+    var u24: f64 = v24;
+    assert(u24 > 0.0, "a positive charge's potential is positive");
+
+    test_group("test_point_charge_magnetic_field_at");
+    var mq: BjPointCharge;
+    at3(&vel, 1000000.0, 0.0, 0.0);
+    var t25, v25 = BjPointCharge_new(q6, 1.0, &o, &vel, &mq);
+    at3(&p, 0.0, 1.0, 0.0);
+    var t26, v26 = mq.magnetic_field_at(&p, &e);
+    assert(is_ok(t25) == 1 && is_ok(t26) == 1, "ok");
+    var bz26: f64 = e.z;
+    assert(bz26 > 0.0, "v × r̂ = x̂ × ŷ = ẑ");
+
+    test_group("test_point_charge_lorentz_force");
+    var lq: BjPointCharge;
+    var t27, v27 = BjPointCharge_new(qe, BJ_PROTON_MASS, &o, &vel, &lq);
+    assert(is_ok(t27) == 1, "ok");
+    var e27 = BjFieldVector_new(1000.0, 0.0, 0.0);
+    var b27 = BjFieldVector_zero();
+    var f27 = lq.lorentz_force_in(e27, b27);
+    var fx27: f64 = f27.x;
+    assert(fx27 > 0.0, "qE along +x");
+
+    test_group("test_point_charge_singularity");
+    var t28, v28 = pq.electric_field_at(&o, &e);
+    assert(is_err_result(t28) == 1, "the source point is singular");
+
+    test_group("test_larmor_radius_weak_field");
+    var t29, v29 = bj_larmor_radius(me, 1000.0, mqe, 0.000000000001);
+    assert(is_ok(t29) == 1, "ok");
+    var r29: f64 = v29;
+    var want29: f64 = 5685.630103877797;
+    var a29: f64 = f64_abs(r29 - want29);
+    var rel29: f64 = a29 / want29;
+    assert(rel29 < 0.000000001, "m|v|/|q|/B in two steps keeps 1 pT");
+
+    test_group("test_larmor_radius_rejects_invalid");
+    var t30, v30 = bj_larmor_radius(me, 1000000.0, 0.0, 1.0);
+    assert(is_err_result(t30) == 1, "q = 0");
+    var t31, v31 = bj_larmor_radius(me, 1000000.0, qe, -1.0);
+    assert(is_err_result(t31) == 1, "|B| < 0");
+    var t32, v32 = bj_larmor_radius(mme, 1000000.0, qe, 1.0);
+    assert(is_err_result(t32) == 1, "mass < 0");
+    var t33, v33 = bj_larmor_radius(me, nan, qe, 1.0);
+    assert(is_err_result(t33) == 1, "v NaN");
+    var t34, v34 = bj_larmor_radius(me, 1000000.0, nan, 1.0);
+    assert(is_err_result(t34) == 1, "q NaN");
+    var t35, v35 = bj_larmor_radius(me, 1000000.0, qe, nan);
+    assert(is_err_result(t35) == 1, "|B| NaN");
+
+    test_group("test_cyclotron_frequency_rejects_invalid");
+    var t36, v36 = bj_cyclotron_frequency(qe, mme, 1.0);
+    assert(is_err_result(t36) == 1, "mass < 0");
+    var t37, v37 = bj_cyclotron_frequency(qe, nan, 1.0);
+    assert(is_err_result(t37) == 1, "mass NaN");
+    var t38, v38 = bj_cyclotron_frequency(qe, me, -1.0);
+    assert(is_err_result(t38) == 1, "|B| < 0");
+    var t39, v39 = bj_cyclotron_frequency(nan, me, 1.0);
+    assert(is_err_result(t39) == 1, "q NaN");
+    var t40, v40 = bj_cyclotron_frequency(qe, me, 0.0);
+    assert(is_ok(t40) == 1, "|B| = 0 is allowed");
+    var w40: f64 = v40;
+    assert(w40 == 0.0, "and gives 0");
+
+    test_group("test_coulomb_potential_energy_rejects_negative_distance");
+    var t41, v41 = bj_coulomb_potential_energy(1.0, 1.0, -1.0);
+    assert(is_err_result(t41) == 1, "r < 0");
+    var t42, v42 = bj_coulomb_potential_energy(1.0, 1.0, nan);
+    assert(is_err_result(t42) == 1, "r NaN");
+
+    test_group("test_new_rejects_nan_mass");
+    var t43, v43 = BjPointCharge_new(q6, nan, &o, &o, &q1);
+    assert(is_err_result(t43) == 1, "mass NaN");
+
+    # ── Cyrius-only ──
+    test_group("cyrius_point_charge_fields");
+    at3(&p, 1.0, 2.0, 3.0);
+    at3(&vel, 4.0, 5.0, 6.0);
+    var fq: BjPointCharge;
+    var t44, v44 = BjPointCharge_new(-2.5, 7.0, &p, &vel, &fq);
+    assert(is_ok(t44) == 1, "ok");
+    var c44: f64 = fq.charge;
+    var m44: f64 = fq.mass;
+    var x44: f64 = fq.position.0;
+    var z44: f64 = fq.position.2;
+    var vy44: f64 = fq.velocity.1;
+    assert(c44 == -2.5 && m44 == 7.0, "charge and mass");
+    assert(x44 == 1.0 && z44 == 3.0 && vy44 == 5.0, "the position and velocity tuples");
+    var pe = BjPointCharge_electron(&p);
+    var pc: f64 = pe.charge;
+    var py: f64 = pe.position.1;
+    var pv: f64 = pe.velocity.0;
+    assert(pc == mqe && py == 2.0 && pv == 0.0, "an electron at rest at p");
+
+    test_group("cyrius_out_untouched_on_error");
+    var keep: BjPointCharge;
+    var t45, v45 = BjPointCharge_new(1.0, 1.0, &p, &vel, &keep);
+    var t46, v46 = BjPointCharge_new(9.0, 0.0, &o, &o, &keep);
+    var k46: f64 = keep.charge;
+    var kx46: f64 = keep.position.0;
+    assert(is_err_result(t46) == 1 && k46 == 1.0 && kx46 == 1.0, "a refused mass leaves out as it was");
+    assert(text_is(bj_last_error_display(), "invalid parameter: mass must be positive, got 0") == 1, "its Display");
+    e = BjFieldVector_new(7.0, 8.0, 9.0);
+    var t47, v47 = bj_coulomb_force(keep, keep, &e);
+    var ex47: f64 = e.x;
+    assert(is_err_result(t47) == 1 && v47 == BJ_ERR_SINGULARITY && ex47 == 7.0, "a singular force leaves out");
+
+    test_group("cyrius_charge_error_records");
+    var t48, v48 = bj_larmor_radius(0.0, 1.0, 1.0, 1.0);
+    assert(v48 == BJ_ERR_DIVISION_BY_ZERO, "mass 0 is DivisionByZero");
+    assert(text_is(bj_last_error_display(),
+        "division by zero in EM calculation: mass cannot be zero for Larmor radius") == 1, "its Display");
+    var t49, v49 = bj_cyclotron_frequency(1.0, -2.0, 1.0);
+    assert(v49 == BJ_ERR_INVALID_PARAMETER, "mass < 0 is InvalidParameter");
+    assert(text_is(bj_last_error_display(),
+        "invalid parameter: mass must be positive for cyclotron frequency, got -2") == 1, "its Display");
+    var t50, v50 = bj_larmor_radius(1.0, 1.0, 1.0, -0.0);
+    assert(v50 == BJ_ERR_DIVISION_BY_ZERO, "|B| = −0 is zero");
+
+    return assert_summary();
+}
+
+var exit_code = main();
+if (exit_code > 0) { exit_code = 1; }
+sys_exit_group(exit_code);
