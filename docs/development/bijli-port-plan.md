@@ -706,10 +706,10 @@ Every std f64 method in `src/` outside tests, at the `1.2.0` tag:
 | `atan2` (5) | `_bj_cr_atan2` (impetus) | class C |
 | `powf` (4) | `_bj_cr_pow` (impetus) | class C |
 | `hypot` (4) | `_bj_cr_hypot` (impetus) | class C |
-| `log10` (5) | `_bj_cr_log10` (from kimiya) | class C |
-| `acos` (3) | `_bj_cr_acos` (from kimiya) | class C |
+| `log10` (5) | `_bj_k_cr_log10` (from kimiya) | class C |
+| `acos` (3) | `_bj_k_cr_acos` (from kimiya) | class C |
 | `atan` (4) | `_bj_cr_atan2(y, 1.0)` | class C; exact, since both are the rounding of the same real |
-| `asin` (4), `tan` (2) | **new**: `_bj_cr_asin`, `_bj_cr_tan`, Ziv two-phase as kimiya's | class C; gated on ≥ 10⁶ MPFR pairs at M0 step 8 |
+| `asin` (4), `tan` (2) | **new**: `_bj_k_cr_asin` (on kimiya's atan core), `_bj_cr_tan` (on impetus's sin/cos phases, with a fixed-point slow path) | class C; gated on ≥ 10⁶ MPFR arguments each (M1 parts 1b, 1c) |
 | `cbrt` (2) | `ganita_f64_cbrt` (correctly rounded) | class C |
 | `powi` (3) | explicit products in LLVM's square-and-multiply order (as tanmatra) | class B |
 | `min` (40), `max` (18), `clamp` (8) | `_bj_min` / `_bj_max` / `_bj_clamp`, Rust's NaN-ignoring semantics | exact |
@@ -877,7 +877,7 @@ Each one gets an issue in the owning repo, with the probe or benchmark that show
 |---|---|---|---|---|---|
 | P Prep | ✅ | | | 80 (Rust, 2026-11-12T03:15, under load) | D1–D5 answered; 1.2.0 tagged and green; P3, P4, P5 done (2026-11-11); P6 is done at the scaffold; the commit remains |
 | M0 Initialize | ✅ | 34,746 (constants 12, math 34,734): 15,507 ok, 0 failed, 18,006 measured, 1,233 pending, on all three targets | | 80 Rust (pending twins) | done 2026-11-11: Parts 1–3. Baselines and probes in `port-parity.md` |
-| M1 Foundation | ◐ | math: 32,473 ok, 117 accepted (ADR 01), 2,156 measured (tan) | | | Part 1a (crmath, corrected oracle, cr_verify) and 1b (acos, log10, asin) done 2026-11-11; 1c (tan), parts 2–3 next |
+| M1 Foundation | ◐ | math: 34,621 ok, 125 accepted (ADR 01), 0 measured | | | Part 1 (the math) done 2026-11-11: 1a (crmath, corrected oracle, cr_verify), 1b (acos, log10, asin), 1c (tan); parts 2–3 next |
 | M2 Media, waves, circuits, relativity | ☐ | | | | |
 | M3 Optics | ☐ | | | | |
 | M4 RF | ☐ | | | | |

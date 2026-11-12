@@ -1,0 +1,187 @@
+# crmath_bijli.tcyr — Cyrius-only tests of bijli's own correctly rounded functions: tan (src/crmath.cyr's tan
+# section, M1 part 1c) and asin (src/crmath_k.cyr, M1 part 1b).
+#
+# Against the oracle, the golden math rows gate them at 0 ulp (tests/parity.tcyr, with the corrected oracle where
+# glibc misrounds), and scripts/oracle/cr_verify.py checks them against MPFR beyond the corpus. These check what
+# neither says directly: the IEEE special cases and thresholds, odd symmetry, that the fast and slow paths agree
+# wherever both run, and that phase 1 decides ordinary arguments. Every expected word is MPFR 4.2.2's correctly
+# rounded value. tests/crmath.tcyr (impetus's copy) covers the functions bijli shares with impetus.
+
+# 1 when a and b have the same bits.
+fn same(a: f64, b: f64): i64 {
+    if (_bj_cr_word(a) == _bj_cr_word(b)) { return 1; }
+    return 0;
+}
+
+# The xorshift state.
+var _seed = 88172645463325252;
+# A seeded xorshift64 step.
+fn next_word(): i64 {
+    var x = _seed;
+    x = x ^ (x << 13);
+    x = x ^ (x >> 7);
+    x = x ^ (x << 17);
+    _seed = x;
+    return x;
+}
+
+# A uniform double in [lo, hi).
+fn uniform(lo: f64, hi: f64): f64 {
+    var u = (next_word() >> 11) & 9007199254740991;
+    var uf: f64 = f64_from(u);
+    var t: f64 = uf * 0.00000000000000011102230246251565404236316680908203125;
+    var r: f64 = lo + (hi - lo) * t;
+    return r;
+}
+
+# 1 when tan x has the bits w (tan x = −that when neg is 1), and tan(−x) is its negation.
+fn tan_is(x: f64, w, neg): i64 {
+    var want: f64 = _bj_cr_from_word(w);
+    if (neg == 1) { want = -want; }
+    var t: f64 = _bj_cr_tan(x);
+    var tn: f64 = _bj_cr_tan(-x);
+    var nwant: f64 = -want;
+    if (same(t, want) == 1 && same(tn, nwant) == 1) { return 1; }
+    return 0;
+}
+
+# Runs the tests of bijli's correctly rounded functions.
+fn main() {
+    alloc_init();
+    var zero: f64 = 0.0;
+    var nan: f64 = zero / zero;
+    var inf: f64 = 1.0 / zero;
+    var ninf: f64 = -inf;
+    var nzero: f64 = -zero;
+    var tiny: f64 = _bj_cr_from_word(1);
+
+    test_group("tan_specials");
+    var t: f64 = _bj_cr_tan(nan);
+    assert(t != t, "tan(NaN) is NaN");
+    t = _bj_cr_tan(inf);
+    assert(t != t, "tan(+inf) is NaN");
+    t = _bj_cr_tan(ninf);
+    assert(t != t, "tan(-inf) is NaN");
+    t = _bj_cr_tan(zero);
+    assert(same(t, zero) == 1, "tan(+0) = +0");
+    t = _bj_cr_tan(nzero);
+    assert(same(t, nzero) == 1, "tan(-0) = -0");
+    t = _bj_cr_tan(tiny);
+    assert(same(t, tiny) == 1, "tan of the smallest subnormal is itself");
+    var below: f64 = _bj_cr_from_word(4485585228861014015);
+    assert(tan_is(below, 4485585228861014015, 0) == 1, "tan x = x just below 2^-27 (the shortcut)");
+    var at27: f64 = _bj_cr_from_word(4485585228861014016);
+    assert(tan_is(at27, 4485585228861014016, 0) == 1, "tan(2^-27) = 2^-27, through phase 1");
+
+    test_group("tan_values");
+    assert(tan_is(0.7853981633974483, 4607182418800017407, 0) == 1, "tan(fl(pi/4)) = 0.9999999999999999");
+    assert(tan_is(1.0, 4609692760021066662, 0) == 1, "tan(1) = 1.5574077246549023");
+    assert(tan_is(1.5707963267948966, 4849535219099880885, 0) == 1, "tan(fl(pi/2)) = 1.633123935319537e16");
+    assert(tan_is(3.141592653589793, 4368955796522032135, 1) == 1, "tan(fl(pi)) = -1.2246467991473532e-16");
+    assert(tan_is(355.0, 4539518267885800470, 0) == 1, "tan(355) = 3.0144353373184265e-05 (355 ~ 113 pi)");
+    assert(tan_is(1048576.0, 4599979717162508399, 0) == 1, "tan(2^20) = 0.350169740126609, the last phase-1 x");
+    var big: f64 = _bj_cr_pow2(1023);
+    assert(tan_is(big, 4604313154288943779, 1) == 1, "tan(2^1023) = -0.6814476476066215 (the slow path)");
+
+    test_group("tan_reduction_extremes");
+    # The double closest to a multiple of π/2 (6381956970095103·2^797): |tan| is about 2.1e18.
+    var m: f64 = 6381956970095103.0;
+    var p797: f64 = _bj_cr_pow2(797);
+    var hard: f64 = m * p797;
+    assert(tan_is(hard, 4881228724102977078, 1) == 1, "tan(6381956970095103*2^797) = -2.133485385753704e18");
+
+    test_group("tan_fast_and_slow_agree");
+    # Every argument where the fast path runs: its answer is the slow path's, on ordinary arguments and on the
+    # doubles next to k·π/2, where tan is near a zero or a pole.
+    var bad = 0;
+    for (var i = 0; i < 300; i = i + 1) {
+        var x: f64 = uniform(-1000.0, 1000.0);
+        var a: f64 = _bj_cr_tan(x);
+        var b: f64 = _bj_cr_tan_slow(x);
+        if (same(a, b) == 0) { bad = bad + 1; }
+    }
+    var pio2: f64 = 1.5707963267948966;
+    for (var k = 1; k <= 40; k = k + 1) {
+        var kf: f64 = f64_from(k);
+        var c: f64 = kf * pio2;
+        var cw = _bj_cr_word(c);
+        for (var d = 0 - 2; d <= 2; d = d + 1) {
+            var y: f64 = _bj_cr_from_word(cw + d);
+            var ya: f64 = _bj_cr_tan(y);
+            var yb: f64 = _bj_cr_tan_slow(y);
+            if (same(ya, yb) == 0) { bad = bad + 1; }
+        }
+    }
+    assert_eq(bad, 0, "fast = slow on 300 arguments and 200 next to k*pi/2");
+
+    test_group("tan_fast_path_decides");
+    var before = _bj_cr_tan_slow_calls;
+    var before2 = _bj_cr_tan_phase2_calls;
+    var keep = 0;
+    for (var i = 0; i < 4000; i = i + 1) {
+        var x2: f64 = uniform(-100000.0, 100000.0);
+        var r: f64 = _bj_cr_tan(x2);
+        keep = keep + _bj_cr_word(r);
+    }
+    if (keep == 1) { bad = bad + 1; }
+    var slow = _bj_cr_tan_slow_calls - before;
+    assert(slow < 5, "at most a handful of 4,000 ordinary results need the slow path");
+    var p2 = _bj_cr_tan_phase2_calls - before2;
+    assert(p2 < 100, "phase 1 decides over 97.5% of them (its 2^-60 bound fails about 1.1% of the time)");
+
+    test_group("asin_specials");
+    var s: f64 = _bj_k_cr_asin(nan);
+    assert(s != s, "asin(NaN) is NaN");
+    s = _bj_k_cr_asin(inf);
+    assert(s != s, "asin(+inf) is NaN");
+    s = _bj_k_cr_asin(2.0);
+    assert(s != s, "asin(2) is NaN");
+    var past: f64 = _bj_cr_from_word(4607182418800017409);
+    s = _bj_k_cr_asin(-past);
+    assert(s != s, "asin(-1.0000000000000002) is NaN");
+    s = _bj_k_cr_asin(zero);
+    assert(same(s, zero) == 1, "asin(+0) = +0");
+    s = _bj_k_cr_asin(nzero);
+    assert(same(s, nzero) == 1, "asin(-0) = -0");
+    s = _bj_k_cr_asin(tiny);
+    assert(same(s, tiny) == 1, "asin of the smallest subnormal is itself");
+    s = _bj_k_cr_asin(1.0);
+    assert_eq(_bj_cr_word(s), 4609753056924675352, "asin(1) = pi/2 rounded (0x3FF921FB54442D18)");
+    s = _bj_k_cr_asin(-1.0);
+    var hp: f64 = _bj_cr_from_word(4609753056924675352);
+    var nhp: f64 = -hp;
+    assert(same(s, nhp) == 1, "asin(-1) = -pi/2 rounded");
+    var t26: f64 = _bj_cr_from_word(4490088828488384512);
+    s = _bj_k_cr_asin(t26);
+    assert(same(s, t26) == 1, "asin(2^-26) = 2^-26, through the core");
+
+    test_group("asin_values");
+    s = _bj_k_cr_asin(0.5);
+    assert_eq(_bj_cr_word(s), 4602891378046628710, "asin(0.5) = 0.5235987755982989 (pi/6)");
+    s = _bj_k_cr_asin(0.7);
+    assert_eq(_bj_cr_word(s), 4605159379298876821, "asin(0.7), the |x| <= s octant's far side");
+    var n99: f64 = _bj_k_cr_asin(-0.99);
+    var p99: f64 = _bj_cr_from_word(4609115619805353245);
+    var np99: f64 = -p99;
+    assert(same(n99, np99) == 1, "asin(-0.99), the other octant, negated");
+
+    test_group("asin_fast_and_accurate_agree");
+    # Every argument where the fast core decides: its answer is the accurate path's.
+    var abad = 0;
+    for (var i = 0; i < 2000; i = i + 1) {
+        var ax: f64 = uniform(-1.0, 1.0);
+        var fa: f64 = _bj_k_cr_asin(ax);
+        var fb: f64 = _bj_k_cr_asin_acc(ax);
+        if (same(fa, fb) == 0) { abad = abad + 1; }
+        var nfa: f64 = _bj_k_cr_asin(-ax);
+        var mfa: f64 = -fa;
+        if (same(nfa, mfa) == 0) { abad = abad + 1; }
+    }
+    assert_eq(abad, 0, "fast = accurate, and asin odd, on 2,000 arguments");
+
+    return assert_summary();
+}
+
+var exit_code = main();
+if (exit_code > 0) { exit_code = 1; }
+sys_exit_group(exit_code);

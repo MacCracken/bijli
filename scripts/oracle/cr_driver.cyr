@@ -3,7 +3,8 @@
 # Input build/cr_in.txt, one call per line: `<fn> <x bits hex> [<y bits hex>]`. Output, one line per call: the
 # result's bits in hex. Built against the shipped bundle (dist/bijli.cyr, after `cyrius distlib`), so it checks what a
 # consumer links. scripts/oracle/cr_verify.py builds it, runs it natively and under qemu-aarch64, and compares every
-# result with MPFR.
+# result with MPFR. `tan_slow` calls tan's fixed-point path directly (finite |x| ≥ 2^-27 only), so the path the
+# rounding test rarely reaches is checked on arguments of its own.
 include "lib/syscalls.cyr"
 include "lib/string.cyr"
 include "lib/alloc.cyr"
@@ -46,6 +47,8 @@ fn _call(fp, fl, x: f64, y: f64): i64 {
     elif (_is(fp, fl, "acos") == 1) { r = _bj_acos(x); }
     elif (_is(fp, fl, "asin") == 1) { r = _bj_asin(x); }
     elif (_is(fp, fl, "log10") == 1) { r = _bj_log10(x); }
+    elif (_is(fp, fl, "tan") == 1) { r = _bj_tan(x); }
+    elif (_is(fp, fl, "tan_slow") == 1) { r = _bj_cr_tan_slow(x); }
     else { return 0 - 1; }
     var w = _bj_bits(r);
     return w;

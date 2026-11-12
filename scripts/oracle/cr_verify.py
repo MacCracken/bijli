@@ -90,7 +90,21 @@ def unary_args(name, rng, count):
         for k in range(-30, 31):
             xs += around(10.0 ** k)
         xs += [-rng.uniform(0.0, 10.0) for _ in range(500)]
+    elif name in ("tan", "tan_slow"):
+        xs += [rng.uniform(-7.0, 7.0) for _ in range(share)]
+        xs += [rng.uniform(-1e6, 1e6) for _ in range(share // 2)]
+        xs += [rng.uniform(-1.0, 1.0) * 2.0 ** rng.randint(-60, 1023) for _ in range(share // 2)]
+        pio2 = b2f(0x3FF921FB54442D18)
+        # The zeros and poles: the doubles around k·π/2 (k·fl(π/2) is within a few ulps), to |x| = 2^20 and past.
+        for k in range(1, 65):
+            xs += around(k * pio2) + around(-k * pio2)
+        xs += [b2f(f2b(rng.randint(1, 700000) * pio2) + rng.randint(-3, 3)) for _ in range(share // 4)]
+        xs += around(6381956970095103.0 * 2.0 ** 797)    # the double closest to a multiple of π/2
+        for e in (2.0 ** -27, 2.0 ** -24, 0.78, 2.0 ** 20):
+            xs += around(e) + around(-e)
     xs += [rand_double(rng) for _ in range(count - len(xs))]
+    if name == "tan_slow":    # the fixed-point path's domain: finite, |x| ≥ 2^-27
+        xs = [x for x in xs if x == x and 2.0 ** -27 <= abs(x) < float("inf")]
     return [(x,) for x in xs[:count]]
 
 
@@ -118,6 +132,7 @@ FUNCS = {
     "exp": (1, "exp"), "sin": (1, "sin"), "cos": (1, "cos"), "atan": (1, "atan"),
     "atan2": (2, "atan2"), "hypot": (2, "hypot"), "pow": (2, "pow"),
     "acos": (1, "acos"), "asin": (1, "asin"), "log10": (1, "log10"),
+    "tan": (1, "tan"), "tan_slow": (1, "tan"),
 }
 
 

@@ -691,10 +691,11 @@ fn _bj_cr_load() {
 
 # --- crmath.cyr ---
 
-# crmath.cyr — correctly rounded exp, sin, cos, hypot, pow and atan2 (impetus ADR 0011 and its amendments;
+# crmath.cyr — correctly rounded exp, sin, cos, tan, hypot, pow and atan2 (impetus ADR 0011 and its amendments;
 # hypot, pow and atan2 have their own sections after exp, sin and cos).
 # Copied from impetus's src/crmath.cyr (its ADR 0011) with the prefixes renamed (_im_cr_ → _bj_cr_, _IM_ → _BJ_);
-# bijli's ADR 0001 adopts it. Keep the two in step: a fix in one is a fix for the other.
+# bijli's ADR 0001 adopts it. Keep the two in step: a fix in one is a fix for the other. The tan section, after
+# cos, is bijli's own (M1 part 1c), built on impetus's sin and cos phases and reduction.
 #
 # Round-to-nearest-even of the exact mathematical value, on every input, the same bits on every
 # target: only + − × ÷, the f64 rounding builtins and integer operations, no x87 and no polyfill.
@@ -1676,6 +1677,104 @@ fn _bj_cr_sin(x: f64): f64 {
 fn _bj_cr_cos(x: f64): f64 {
     var s, c = _bj_cr_sc(x, 2);
     var r: f64 = c;
+    return r;
+}
+
+# ── tan (bijli's, M1 part 1c: not in impetus's file) ───────────────────────────────
+# tan x = sin x / cos x on the phases and the reduction above. A quotient of two rounded values is not
+# correctly rounded, so both are kept unrounded (double-double, or fixed point), divided, and rounded once.
+
+# Calls that phase 1 could not decide, and slow-path calls, since start (diagnostics, as for sin and cos).
+var _bj_cr_tan_phase2_calls = 0;
+var _bj_cr_tan_slow_calls = 0;
+
+# tan x, correctly rounded, in fixed point, for finite |x| ≥ 2^-27. Y = |x| reduced into [0, π/2) with its
+# quadrant q (Y = |x| below 0.78), S = sin Y and C = cos Y by the series; tan |x| is S/C for an even q and −C/S
+# for an odd one. The divisor M is scaled by 2^e into [2, 4) (e from its double estimate), its reciprocal taken
+# by Newton, and the quotient N/(M·2^e) < 1/2 rounded once at 2^e. No double is within 2^-61 of a multiple of
+# π/2, so M and N are at least about 2^-61, and their absolute error (a few 2^-360) stays below 2^-290
+# relative.
+#must_use
+fn _bj_cr_tan_slow(x: f64): f64 {
+    _bj_cr_load();
+    var Y[112];
+    var S[112];
+    var C[112];
+    var D[112];
+    var R[112];
+    var Q[112];
+    var ax: f64 = f64_abs(x);
+    var quad = 0;
+    if (ax < 0.78) {
+        _bj_cr_set(&Y, ax);
+    } else {
+        quad = _bj_cr_reduce(&Y, ax);
+    }
+    _bj_cr_sin_cos_series(&S, &Y, 1);
+    _bj_cr_sin_cos_series(&C, &Y, 0);
+    # tan(y + qπ/2) is tan y for an even q and −cot y for an odd one; tan is odd.
+    var num = &S;
+    var den = &C;
+    var neg = 0;
+    if ((quad & 1) == 1) {
+        num = &C;
+        den = &S;
+        neg = 1;
+    }
+    if (x < 0.0) { neg = 1 - neg; }
+    var md: f64 = _bj_cr_round(den, 0, 0);
+    var e = 1 - _bj_cr_ilogb(md);
+    _bj_cr_shift(&D, den, e);
+    var dd: f64 = _bj_cr_ldexp(md, e);
+    _bj_cr_recip(&R, &D, dd);
+    _bj_cr_mul(&Q, num, &R);
+    var r: f64 = _bj_cr_round(&Q, e, neg);
+    return r;
+}
+
+# tan x, correctly rounded. tan(±0) = ±0; NaN for NaN and ±∞; |x| < 2^-27 gives x itself (tan x − x is about
+# x³/3, below half an ulp of x). For |x| ≤ 2^20, Ziv's phases on sin and cos:
+# - phase 1 gives both within 2^-62 relative, so their double-double quotient is within 2^-60 (2^-62 + 2^-62
+#   + the division's 2^-100, rounded up);
+# - phase 2 gives them within es and ec (2^-74 and 2^-88, swapped by quadrant), the quotient within
+#   es + ec + 2^-98;
+# each returned only when the rounding test decides it. Then, or for |x| > 2^20, the slow path.
+#must_use
+fn _bj_cr_tan(x: f64): f64 {
+    if (x != x) { return x; }
+    var d0: f64 = x - x;
+    if (d0 != 0.0) {
+        var nan: f64 = d0 / d0;
+        return nan;
+    }
+    var ax: f64 = f64_abs(x);
+    if (ax < 0.000000007450580596923828125) { return x; }
+    if (ax <= 1048576.0) {
+        var o[48];
+        if (_bj_cr_sc_p1(x, ax, 3, &o) == 1) {
+            var h1, l1 = _bj_cr_dd_div(load64(&o), load64(&o + 8), load64(&o + 16), load64(&o + 24));
+            var t1: f64 = h1;
+            var u1: f64 = l1;
+            var a1: f64 = f64_abs(t1);
+            var e1: f64 = a1 * 0.000000000000000000867361737988403547205962240695953369140625;
+            if (_bj_cr_rounds_to(t1, u1, e1) == 1) { return t1; }
+        }
+        _bj_cr_tan_phase2_calls = _bj_cr_tan_phase2_calls + 1;
+        if (_bj_cr_sc_p2(x, ax, 3, &o) == 1) {
+            var h2, l2 = _bj_cr_dd_div(load64(&o), load64(&o + 8), load64(&o + 16), load64(&o + 24));
+            var t2: f64 = h2;
+            var u2: f64 = l2;
+            var es: f64 = load64(&o + 32);
+            var ec: f64 = load64(&o + 40);
+            var e98: f64 = _bj_cr_pow2(0 - 98);
+            var eb: f64 = (es + ec) + e98;
+            var a2: f64 = f64_abs(t2);
+            var e2: f64 = a2 * eb;
+            if (_bj_cr_rounds_to(t2, u2, e2) == 1) { return t2; }
+        }
+    }
+    _bj_cr_tan_slow_calls = _bj_cr_tan_slow_calls + 1;
+    var r: f64 = _bj_cr_tan_slow(x);
     return r;
 }
 
@@ -4381,9 +4480,9 @@ fn _bj_k_cr_asin(x: f64): f64 {
 # - to_radians and to_degrees are one multiply by Rust's folded constant;
 # - powi is compiler-rt's `__powidf2`, which Rust calls for bijli's run-time exponents.
 # - exp, sin, cos, sin_cos, hypot, pow, atan2 and atan are correctly rounded (src/crmath.cyr, impetus's ADR 0011
-#   adopted by bijli's ADR 0001), and so are acos, log10 (kimiya's) and asin (src/crmath_k.cyr): the same bits on
-#   every target, matching the corrected oracle. tan joins them in M1; cbrt is ganita's, already correctly
-#   rounded.
+#   adopted by bijli's ADR 0001), and so are tan (bijli's, on impetus's sin and cos), acos, log10 (kimiya's) and
+#   asin (src/crmath_k.cyr): the same bits on every target, matching the corrected oracle. cbrt is ganita's,
+#   already correctly rounded.
 # Adapted from impetus's src/mathx.cyr (its `_im_` helpers).
 
 # π/180 as Rust folds `consts::PI / 180.0`: the double nearest, pinned by the to_radians rows.
@@ -4558,6 +4657,13 @@ fn _bj_atan2(y: f64, x: f64): f64 {
 #must_use
 fn _bj_atan(x: f64): f64 {
     var r: f64 = _bj_cr_atan2(x, 1.0);
+    return r;
+}
+
+# tan x, correctly rounded (src/crmath.cyr's tan section, bijli's). Stands for `f64::tan`.
+#must_use
+fn _bj_tan(x: f64): f64 {
+    var r: f64 = _bj_cr_tan(x);
     return r;
 }
 

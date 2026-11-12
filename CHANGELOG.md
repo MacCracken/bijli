@@ -51,6 +51,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
   and aarch64: all equal. Their 3,401 golden rows now gate at 0 ulp, the 93 where glibc misrounds against the
   corrected oracle, and log10 is no longer pending. Every function's digest now agrees on x86_64 ELF, x86_64 PE and
   aarch64 (`docs/development/port-parity.md` §6).
+- **Cyrius port, M1 part 1c — the math primitives complete**: correctly rounded tan, bijli's, on impetus's sin and cos
+  phases (`src/crmath.cyr`'s tan section). sin and cos stay unrounded, are divided as double-doubles with proven
+  bounds, and fall back to a fixed-point slow path; the quotient is rounded once. `cr_verify.py` checks tan on
+  1,000,000 arguments and the slow path alone on 157,132 more against MPFR, on x86_64 and aarch64: all equal.
+  `tests/crmath_bijli.tcyr` tests bijli's own tan and asin (33 assertions). Every one of the corpus's 34,746 rows now
+  gates, none measured or pending, on all three targets (`docs/development/port-parity.md` §7).
 
 ## [1.2.0] — 2026-11-11
 
