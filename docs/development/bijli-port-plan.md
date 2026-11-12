@@ -397,7 +397,10 @@ initial-port commit.
   `CLAUDE.md`, `docs/development/roadmap.md`, `docs/development/state.md` and both workflows. It
   also pins `version = "0.1.0"`, leaves `bench` out of `[test] stdlib`, and its stubs fail
   `cyrius audit` (the open cyrius issue in §1). Everything is in git, so restore from `HEAD`
-  after the scaffold. Draft the merged CLAUDE.md now (§6 step 2) so the repair is a paste.
+  after the scaffold.
+  - ✅ *CLAUDE.md drafted 2026-11-11*: [`CLAUDE.cyrius.md`](CLAUDE.cyrius.md) merges bijli's
+    CLAUDE.md, the scaffold's `claude-md-port` template, impetus's translation and this plan's
+    rules. At M0 step 2 it is copied over `CLAUDE.md`, and the draft is deleted.
 - **P7. Draft ADRs 0001 and 0002.**
   - bijli has no `docs/adr/` yet, so start directly in the scaffold's four-digit form.
   - [0001 — Port to Cyrius with Rust 1.2.0 frozen as the oracle](../adr/0001-cyrius-port-with-rust-oracle.md)
@@ -420,8 +423,9 @@ plan commit landed.
      and `target/`.
    - The dry run doesn't list them all (cyrius issue item 5), so check with `git status` after.
 2. **Repair what the scaffold overwrites** (as impetus §4 step 2):
-   - **CLAUDE.md**: merge, keeping the identity, process, DO NOT list and documentation
-     structure. Translate the principles as impetus did:
+   - **CLAUDE.md**: `cp docs/development/CLAUDE.cyrius.md CLAUDE.md`, drop its draft note and
+     delete the draft (P6). It already keeps the identity, process, DO NOT list and documentation
+     structure, and translates the principles as impetus did:
      - `#[non_exhaustive]` → append-only enum values;
      - `#[must_use]` → `#must_use` / `#pure`;
      - no `unwrap`/`panic!` → no `+?`, `-?`, `*?`, `assert_fatal`, `result_unwrap` or `panic`
