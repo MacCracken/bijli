@@ -46,3 +46,44 @@ def rn_mono(num, den) -> float:
         neg = sum(math.copysign(1.0, x) < 0 for x in list(num) + list(den)) % 2
         return -0.0 if neg else 0.0
     return rn_frac(v)
+
+
+def _log2_floor(p: int, q: int) -> int:
+    """⌊log₂(p/q)⌋ for positive integers p and q."""
+    lf = p.bit_length() - q.bit_length()
+    if (p << max(0, -lf)) < (q << max(0, lf)):
+        lf -= 1
+    return lf
+
+
+def rnd53(v: Fraction) -> Fraction:
+    """v rounded to 53 significant bits, to nearest even, with an unbounded exponent (no subnormal, no overflow)."""
+    if v == 0:
+        return v
+    p, q = abs(v.numerator), v.denominator
+    k = _log2_floor(p, q) - 52
+    num, den = (p, q << k) if k >= 0 else (p << -k, q)
+    m, r = divmod(num, den)
+    if 2 * r > den or (2 * r == den and m % 2 == 1):
+        m += 1
+    out = Fraction(m) * Fraction(2) ** k
+    return out if v > 0 else -out
+
+
+def rnd53_sqrt(v: Fraction) -> Fraction:
+    """√v rounded to 53 significant bits, to nearest even, with an unbounded exponent, for v ≥ 0."""
+    if v == 0:
+        return v
+    p, q = v.numerator, v.denominator
+    k = _log2_floor(p, q) // 2 - 52
+    num, den = (p, q << (2 * k)) if k >= 0 else (p << (-2 * k), q)
+    m = math.isqrt(num // den)
+    lhs, rhs = 4 * num, (2 * m + 1) ** 2 * den
+    if lhs > rhs or (lhs == rhs and m % 2 == 1):
+        m += 1
+    return Fraction(m) * Fraction(2) ** k
+
+
+def binade(v: Fraction) -> int:
+    """⌊log₂|v|⌋ for v ≠ 0."""
+    return _log2_floor(abs(v.numerator), v.denominator)

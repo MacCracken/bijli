@@ -80,11 +80,12 @@ fn main() {
     var e160: f64 = _bj_from_bits(0x6126C2D4256FFCC3);        # 1e160
     var big = BjComplex_new(e160, 0.0);
     var ab: f64 = big.abs();
-    assert(same(ab, inf) == 1, "abs(1e160) overflows in re², as hisab's does (the range-edge part fixes it)");
+    assert(same(ab, e160) == 1, "abs(1e160) = 1e160: re² with an unbounded exponent (ADR 0002 row 14; hisab: ∞)");
     var em160: f64 = _bj_from_bits(0x1EB67E9C127B6E74);       # 1e-160
     var tiny = BjComplex_new(em160, 0.0);
     var tp = tiny.powf(2.0);
-    assert(is_c(tp, 0.0, 0.0) == 1, "powf of |z|² below 1e-300 is 0");
+    var e320: f64 = _bj_from_bits(0x00000000000007E8);       # 1e-320, RN((1e-160)²) on the subnormal grid
+    assert(is_c(tp, e320, 0.0) == 1, "(1e-160)² = 1e-320: no cutoff below |z|² = 1e-300 (ADR 0002 row 15; hisab: 0)");
     var nz = BjComplex_new(0.0, 0.0);
     assert_eq(nz.is_zero(0.0), 0, "0 is not below a zero tolerance");
     var zn = BjComplex_new(nan, 0.0);
@@ -120,6 +121,56 @@ fn main() {
     assert(is_c(bj_complex_zero(), 0.0, 0.0) == 1, "complex_zero");
     var fp = bj_complex_from_polar(2.0, 0.0);
     assert(is_c(fp, 2.0, 0.0) == 1, "complex_from_polar(2, 0)");
+
+    test_group("cyrius_range_edges (ADR 0002 rows 14 and 15)");
+    # At a range edge hisab's chain runs with an unbounded exponent, its last step rounded once; the expected bits are
+    # scripts/oracle/validate.py's model (exact values, MPFR's correctly rounded primitives).
+    var x160: f64 = _bj_from_bits(0x6126C2D4256FFCC3);       # 1e160
+    var x200: f64 = _bj_from_bits(0x6974E718D7D7625A);       # 1e200
+    var x201: f64 = _bj_from_bits(0x69AA20DF0DCD3AF1);       # 1e201
+    var x300: f64 = _bj_from_bits(0x7E37E43C8800759C);       # 1e300
+    var x160m: f64 = _bj_from_bits(0x1EB67E9C127B6E74);      # 1e-160
+    var x151m: f64 = _bj_from_bits(0x2094F31F8832DD2A);      # 1e-151
+    var e1 = BjComplex_new(x160, x160);
+    var a1: f64 = e1.abs();
+    assert(same(a1, _bj_from_bits(0x61301830A9572A89)) == 1, "|1e160 + j1e160| = 1.414213562373095e160 (hisab: ∞)");
+    var e2 = BjComplex_new(x200, x200);
+    var p2 = e2 * e2;
+    assert(is_c(p2, 0.0, _BJ_K_INF) == 1, "(1e200 + j1e200)²: re exactly 0 (hisab: ∞ − ∞ = NaN), im ∞");
+    var e3 = BjComplex_new(x160, 0.0);
+    var i3 = e3.inv();
+    assert(is_c(i3, _bj_from_bits(0x1EB67E9C127B6E75), -0.0) == 1, "1/1e160 rounded once (hisab: 0)");
+    var re_one = BjComplex_new(1.0, 0.0);
+    var q4 = re_one / e2;
+    assert(is_c(q4, _bj_from_bits(0x16587E92154EF7AC), _bj_from_bits(0x96587E92154EF7AC)) == 1,
+      "1/(1e200 + j1e200) = 5e-201 − j5e-201 (hisab: 0)");
+    var e5 = BjComplex_new(x200, 0.0);
+    assert_eq(e5.is_zero(x201), 1, "|1e200| < 1e201, compared unbounded (hisab: ∞ < ∞ is false)");
+    var e6 = BjComplex_new(x300, x300);
+    var s6 = e6.sqrt();
+    assert(is_c(s6, _bj_from_bits(0x5F157B2468F15C93), _bj_from_bits(0x5F01CBA37A2EACF6)) == 1,
+      "√(1e300 + j1e300) finite (hisab: ∞ + j∞)");
+    var l7 = e2.ln();
+    var l7r: f64 = l7.re;
+    assert(same(l7r, _bj_from_bits(0x407CCDD1460B1380)) == 1, "ln|1e200 + j1e200| = 460.8635921890891 (hisab: ∞)");
+    var e8 = BjComplex_new(x160m, 0.0);
+    var p8 = e8.powf(-1.0);
+    assert(is_c(p8, x160, -0.0) == 1, "(1e-160)⁻¹ = 1e160 (row 15; hisab's cutoff gave 0)");
+    var re_zero = BjComplex_new(0.0, 0.0);
+    var p9 = re_zero.powf(0.0);
+    assert(is_c(p9, 1.0, 0.0) == 1, "0⁰ = 1 (row 15; hisab: 0)");
+    var p10 = re_zero.powf(-1.0);
+    assert(is_c(p10, _BJ_K_INF, 0.0) == 1, "0⁻¹ = +∞ (row 15)");
+    var p11 = re_zero.powf(2.0);
+    assert(is_c(p11, 0.0, 0.0) == 1, "0² = 0, as hisab's");
+    var e12 = BjComplex_new(x151m, 0.0);
+    var p12 = e12.powf(2.0);
+    assert(is_c(p12, _bj_from_bits(0x013B6E3D22865633), 0.0) == 1, "(1e-151)² = 9.999999999999998e-303 (hisab: 0)");
+    var re_inf = _BJ_K_INF;
+    var e13 = BjComplex_new(re_inf, x200);
+    var p13 = e13 * e2;
+    var p13i: f64 = p13.im;
+    assert(p13i == re_inf, "a non-finite part keeps hisab's chain");
 
     return assert_summary();
 }

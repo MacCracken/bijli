@@ -712,6 +712,8 @@ def complex_corrections(rows) -> list:
         if cls != "C":
             continue
         v = [t[1] for t in ins]
+        if cx_governed(fn, v):
+            continue            # ADR 0002 rows 14 and 15 set this row's expectation (complex.adr.tsv)
         want = COMPLEX[fn](MPFR_P, v)
         old = [t[1] for t in outs]
         if all(same(a, b) for a, b in zip(want, old)):
@@ -1656,6 +1658,8 @@ def adr13(root: Path):
 
 def adr_rows(root: Path, module: str, path: Path) -> list:
     """(fn, raw inputs, outputs, ADR 0002 row, note) for each golden row of `module` an ADR 0002 row changes."""
+    if module == "complex":
+        return cx_rows(path)[0]
     maps = {13: adr13(root)}
     out = []
     for line in path.read_text().splitlines():
@@ -1676,6 +1680,181 @@ def adr_rows(root: Path, module: str, path: Path) -> list:
             if got != new:
                 out.append((fn, ins, new, str(row), f"oracle {outs}; ADR 0002 row {row}: rounded once"))
     return out
+
+
+# Rows 14 and 15 (M1 part 5c): BjComplex's range edges. At an edge (a finite, nonzero component outside
+# [2^-511, 2^511)) hisab's chain runs with an unbounded exponent, each operation rounded to 53 bits, the last one once
+# into binary64 (IEEE's signed zeros throughout); in range the chain IS hisab's, which cx_model checks row by row.
+# ln and powf take the unbounded |z| where it is a normal double. powf has no cutoff (row 15).
+from exact import binade, rn_frac, rn_sqrt, rnd53, rnd53_sqrt  # noqa: E402
+
+UX_LO, UX_HI = 2.0 ** -511, 2.0 ** 511
+
+
+def cx_ok(x: float) -> bool:
+    return x == 0 or UX_LO <= abs(x) < UX_HI
+
+
+def cx_plain(x: float, y: float) -> bool:
+    return not (math.isfinite(x) and math.isfinite(y)) or (cx_ok(x) and cx_ok(y))
+
+
+def ux(x: float):
+    """An exact value with its zero's sign: (Fraction, negative)."""
+    return Fraction(x), math.copysign(1.0, x) < 0
+
+
+def ux_mul(a, b, r=rnd53):
+    v = a[0] * b[0]
+    return r(v), (a[1] != b[1]) if v == 0 else v < 0
+
+
+def ux_div(a, b, r=rnd53):
+    if b[0] == 0:                                       # IEEE's x/±0: NaN for 0/0, else ±∞
+        if a[0] == 0:
+            return float("nan"), False
+        return (-math.inf if (a[0] < 0) != b[1] else math.inf), False
+    v = a[0] / b[0]
+    return r(v), (a[1] != b[1]) if v == 0 else v < 0
+
+
+def ux_add(a, b, r=rnd53):
+    v = a[0] + b[0]
+    if v == 0:
+        both = a[0] == 0 and b[0] == 0
+        return Fraction(0), (a[1] and b[1]) if both else False
+    return r(v), v < 0
+
+
+def ux_sub(a, b, r=rnd53):
+    return ux_add(a, (-b[0], not b[1]), r)
+
+
+def ux_sqrt(a):
+    return rnd53_sqrt(a[0]), a[1] if a[0] == 0 else False
+
+
+def ux_fin(a) -> float:
+    """The value rounded once into binary64, a zero keeping its sign."""
+    if isinstance(a[0], float):
+        return a[0]
+    if a[0] == 0:
+        return -0.0 if a[1] else 0.0
+    return rn_frac(a[0])
+
+
+def ux_fin_sqrt(a) -> float:
+    if a[0] == 0:
+        return -0.0 if a[1] else 0.0
+    return rn_sqrt(a[0])
+
+
+def ux_sumsq(x, y):
+    return ux_add(ux_mul(ux(x), ux(x)), ux_mul(ux(y), ux(y)))
+
+
+def cx_abs_for(re, im):
+    """|z| for ln and powf: hisab's where the components are in range or one isn't finite; else the unbounded |z|
+    where it is a normal double, else hisab's."""
+    if cx_plain(re, im):
+        return cx_abs(re, im)
+    a = ux_sqrt(ux_sumsq(re, im))
+    if a[0] != 0 and -1022 <= binade(a[0]) <= 1023:
+        return float(a[0])
+    return cx_abs(re, im)
+
+
+def cx_model(fn, v):
+    """The port's outputs for a complex row with finite inputs, under rows 14 and 15 (MPFR's correctly rounded
+    primitives for the transcendentals), or None for a function the rows don't touch."""
+    P = MPFR_P
+    if fn in ("Complex::abs", "ComplexExt::norm"):
+        return [ux_fin_sqrt(ux_sumsq(v[0], v[1]))]
+    if fn == "Complex::norm_sq":
+        return [ux_fin(ux_add(ux_mul(ux(v[0]), ux(v[0])), ux_mul(ux(v[1]), ux(v[1])), lambda t: t))]
+    if fn == "Complex::mul":
+        a, b, c, d = (ux(x) for x in v)
+        return [ux_fin(ux_sub(ux_mul(a, c), ux_mul(b, d), lambda t: t)),
+                ux_fin(ux_add(ux_mul(a, d), ux_mul(b, c), lambda t: t))]
+    if fn == "Complex::inv":
+        d = ux_sumsq(v[0], v[1])
+        return [ux_fin(ux_div(ux(v[0]), d, lambda t: t)), ux_fin(ux_div(ux(-v[1]), d, lambda t: t))]
+    if fn == "Complex::div":
+        a, b, c, dd = (ux(x) for x in v)
+        den = ux_sumsq(v[2], v[3])
+        nr = ux_add(ux_mul(a, c), ux_mul(b, dd))
+        ni = ux_sub(ux_mul(b, c), ux_mul(a, dd))
+        return [ux_fin(ux_div(nr, den, lambda t: t)), ux_fin(ux_div(ni, den, lambda t: t))]
+    if fn == "Complex::is_zero":
+        ns = ux_sumsq(v[0], v[1])[0]
+        t2 = ux_mul(ux(v[2]), ux(v[2]))[0]
+        return [int(ns < t2)]
+    if fn == "Complex::sqrt":
+        theta = P["atan2"](v[1], v[0]) / 2.0
+        if cx_plain(v[0], v[1]):
+            return cx_polar(P, fsqrt(cx_abs(v[0], v[1])), theta)
+        r = ux_sqrt(ux_sqrt(ux_sumsq(v[0], v[1])))
+        return [ux_fin(ux_mul(r, ux(P["cos"](theta)), lambda t: t)),
+                ux_fin(ux_mul(r, ux(P["sin"](theta)), lambda t: t))]
+    if fn == "Complex::ln":
+        return [P["log"](cx_abs_for(v[0], v[1])), P["atan2"](v[1], v[0])]
+    if fn == "Complex::powf":
+        re, im, n = v
+        if re == 0 and im == 0:
+            if n != n:
+                return [n, n]
+            return [0.0 if n > 0 else (1.0 if n == 0 else float("inf")), 0.0]
+        a = cx_abs_for(re, im)
+        return cx_polar(P, P["pow"](a, n), P["atan2"](im, re) * n)
+    return None
+
+
+def cx_governed(fn, v) -> int:
+    """The ADR 0002 row whose model sets this complex row's expectation (14 or 15), or 0 where hisab's chain (with
+    the corrected oracle's primitives) still does."""
+    if fn not in ("Complex::abs", "ComplexExt::norm", "Complex::norm_sq", "Complex::mul", "Complex::inv",
+                  "Complex::div", "Complex::is_zero", "Complex::sqrt", "Complex::ln", "Complex::powf"):
+        return 0
+    if not all(math.isfinite(x) for x in v):
+        return 0
+    if fn == "Complex::powf":
+        re, im, _n = v
+        if (re == 0 and im == 0) or re * re + im * im < TINY_300:
+            return 15
+        return 14 if cx_abs_for(re, im) != cx_abs(re, im) else 0
+    if fn in ("Complex::mul", "Complex::div"):
+        return 0 if all(cx_ok(x) for x in v) else 14
+    if fn == "Complex::is_zero":
+        return 0 if all(cx_ok(x) for x in v) else 14
+    if fn == "Complex::ln":
+        return 14 if cx_abs_for(v[0], v[1]) != cx_abs(v[0], v[1]) else 0
+    return 0 if cx_plain(v[0], v[1]) else 14
+
+
+def cx_rows(path: Path):
+    """(adr rows, problems) for complex.tsv: each governed row whose model differs from the oracle's outputs; and,
+    for every in-scope row with finite inputs that hisab's chain still sets, the check that the unbounded model gives
+    the same value (the guard's proof, row by row)."""
+    out, errs = [], []
+    for n, line in enumerate((l for l in path.read_text().splitlines() if not l.startswith("#")), 1):
+        fn, _cls, ins, outs, _note = line.split("\t")
+        v = [] if ins == "-" else [parse_tok(t)[1] for t in ins.split(" ")]
+        model = cx_model(fn, v) if all(isinstance(x, float) and math.isfinite(x) for x in v) else None
+        if model is None:
+            continue
+        row = cx_governed(fn, v)
+        old = [parse_tok(t)[1] for t in outs.split(" ")]
+        if row == 0:
+            want = COMPLEX[fn](MPFR_P, v)
+            if not all((a == b if isinstance(b, int) else same(a, b)) for a, b in zip(model, want)):
+                errs.append(f"complex row {n}: {fn}{tuple(v)}: the unbounded model {model} differs from hisab's "
+                            f"chain {want} where the port keeps the chain")
+            continue
+        if all((a == b if isinstance(b, int) else same(a, b)) for a, b in zip(model, old)):
+            continue
+        toks = " ".join(f"i:{x}" if isinstance(x, int) else f"f:{f_to_bits(x):016x}" for x in model)
+        out.append((fn, ins, toks, str(row), f"oracle {outs}; ADR 0002 row {row}"))
+    return out, errs
 
 
 def check_adr(root: Path, module: str, path: Path) -> list:
@@ -1743,8 +1922,9 @@ def main() -> int:
     errs += check_corrections(root, "json", golden / "json.tsv", json_corrections, "Python's float",
                               "the document read with every number correctly rounded; note: the oracle's outputs, "
                               "then why they differ")
-    for mod in ("charge", "field", "maxwell"):
+    for mod in ("charge", "complex", "field", "maxwell"):
         errs += check_adr(root, mod, golden / f"{mod}.tsv")
+    errs += cx_rows(golden / "complex.tsv")[1]
     errs += check_tables(root)
     for e in errs[:40]:
         print("  " + e)

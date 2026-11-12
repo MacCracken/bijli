@@ -8444,10 +8444,20 @@ public fn bj_error_message(code): i64 {
 # Port of Rust hisab 1.4.0's `num::Complex`, which bijli 1.2.0 re-exports (`bijli::polarization::Complex`), and of
 # polarization.rs's `complex_real` / `complex_zero` / `complex_from_polar` and `ComplexExt::norm`. Every operation
 # is hisab's formula in hisab's order of operations (port plan §9.2), so each golden row compares bit for bit:
-# no hypot rescue in `abs`, the textbook division, `sqrt` through polar form. The spurious overflow of re² + im²
-# past about 2^±511 is a range edge, fixed with the other range edges at the end of the milestone (plan §0.1), as
-# ADR 0002 rows. The transcendentals are bijli's correctly rounded ones (src/mathx.cyr), so the results are the
-# same on every target and match the corrected oracle where glibc misrounds.
+# no hypot rescue in `abs`, the textbook division, `sqrt` through polar form.
+#
+# Range edges (ADR 0002 row 14, the user's decision of 2026-11-12, kimiya ADR 0002 #20). Where a component leaves
+# [2^-511, 2^511), re², a cross product or their sum can over- or underflow although the result is representable:
+# abs(1e160, 1e160) is ∞, (1e200, 1e200)² has a real part ∞ − ∞ = NaN for 0, 1/(1e160, 0) is 0 for 1e-160. There hisab's
+# chain is evaluated with an unbounded exponent (src/crmath_kx.cyr's _bj_k_ux_*: every operation rounded to 53 bits,
+# nothing over- or underflowing) and its last operation rounded once into binary64 — abs, norm_sq, the product, inv, the
+# quotient, is_zero's comparison, and sqrt's root and polar products. When every nonzero component lies in [2^-511,
+# 2^511) no square or product leaves the normal range, so that evaluation IS hisab's in binary64, and the rows keep
+# Rust's bits; a NaN or infinite component keeps hisab's chain as it is. ln and powf take |z| from the same evaluation
+# where it is a normal double (ADR 0002 row 14); past DBL_MAX or below 2^-1022 their transcendental of an unbounded |z|
+# is M1 part 5c-2's. powf has no cutoff (ADR 0002 row 15): hisab returned 0 for every |z|² < 1e-300, whatever the
+# exponent. The transcendentals are bijli's correctly rounded ones (src/mathx.cyr), so the results are the same on every
+# target and match the corrected oracle where glibc misrounds.
 #
 # A BjComplex is a 16-byte struct value: returned in two registers, passed by address and copied on entry. Rust's
 # operators are the operator fns, `a + b`, `a - b`, `a * b`, `a / b`; with an f64 operand, `a.scale(s)` (Rust's
@@ -8461,6 +8471,121 @@ private
 public struct BjComplex {
     re: f64;
     im: f64;
+}
+
+# ── the range edges (ADR 0002 row 14) ─────────────────────────────────────────────────────────────────────────────
+
+# 1 when x is ±0 or 2^-511 ≤ |x| < 2^511: its square, and its product with any other such value, is normal (or
+# exactly 0), and so is a sum of two of them, unless it is past DBL_MAX: < 2^1023.
+#must_use
+fn _bj_cx_ok(x: f64): i64 {
+    var b = _bj_bits(x) & 0x7FFFFFFFFFFFFFFF;
+    if (b == 0) { return 1; }
+    var be = b >> 52;
+    if (be >= 512 && be < 1534) { return 1; }
+    return 0;
+}
+
+# 1 when hisab's chain on x and y is the unbounded one (both components in range), or must stay hisab's (one not
+# finite); 0 at a range edge.
+#must_use
+fn _bj_cx_plain(x: f64, y: f64): i64 {
+    var ex = (load64(&x) >> 52) & 0x7FF;
+    var ey = (load64(&y) >> 52) & 0x7FF;
+    if (((ex - 512) | (ey - 512) | (1533 - ex) | (1533 - ey)) >= 0) { return 1; }   # the common case: one test
+    if (ex == 2047 || ey == 2047) { return 1; }
+    if (_bj_cx_ok(x) == 1 && _bj_cx_ok(y) == 1) { return 1; }
+    return 0;
+}
+
+# _bj_cx_plain for an operation on two complex values: hisab's chain when any of the four parts is not finite, or
+# all are in range.
+#must_use
+fn _bj_cx_plain4(a: f64, b: f64, c: f64, d: f64): i64 {
+    var ea = (load64(&a) >> 52) & 0x7FF;
+    var eb = (load64(&b) >> 52) & 0x7FF;
+    var ec = (load64(&c) >> 52) & 0x7FF;
+    var ed = (load64(&d) >> 52) & 0x7FF;
+    # the common case, every biased exponent in [512, 1533]: each difference below is ≥ 0, so their OR is (one test)
+    var lo = (ea - 512) | (eb - 512) | (ec - 512) | (ed - 512);
+    var hi = (1533 - ea) | (1533 - eb) | (1533 - ec) | (1533 - ed);
+    if ((lo | hi) >= 0) { return 1; }
+    if (ea == 2047 || eb == 2047 || ec == 2047 || ed == 2047) { return 1; }
+    if (_bj_cx_ok(a) + _bj_cx_ok(b) + _bj_cx_ok(c) + _bj_cx_ok(d) == 4) { return 1; }
+    return 0;
+}
+
+# x·y with an unbounded exponent, rounded to 53 bits: (s, e).
+#must_use
+fn _bj_cx_ux_mul(x: f64, y: f64): (f64, i64) {
+    var xs, xe = _bj_k_ux_from(x);
+    var ys, ye = _bj_k_ux_from(y);
+    var s, e = _bj_k_ux_mul(xs, xe, ys, ye);
+    return (s, e);
+}
+
+# x² + y², each operation with an unbounded exponent and rounded to 53 bits: (s, e).
+#must_use
+fn _bj_cx_ux_sumsq(x: f64, y: f64): (f64, i64) {
+    var as2, ae2 = _bj_cx_ux_mul(x, x);
+    var bs2, be2 = _bj_cx_ux_mul(y, y);
+    var s, e = _bj_k_ux_add(as2, ae2, bs2, be2);
+    return (s, e);
+}
+
+# |x + jy| with an unbounded exponent, to 53 bits: (s, e).
+#must_use
+fn _bj_cx_ux_abs(x: f64, y: f64): (f64, i64) {
+    var s, e = _bj_cx_ux_sumsq(x, y);
+    var rs, re2 = _bj_k_ux_sqrt(s, e);
+    return (rs, re2);
+}
+
+# |z| as a double for ln and powf: hisab's abs where the components are in range (or one is not finite); at a range
+# edge the unbounded |z| when it is a normal double, else hisab's abs (∞ or a subnormal: M1 part 5c-2).
+#must_use
+fn _bj_cx_abs_for(x: f64, y: f64): f64 {
+    var plain: f64 = x * x + y * y;
+    var r: f64 = f64_sqrt(plain);
+    if (_bj_cx_plain(x, y) == 1) { return r; }
+    var s, e = _bj_cx_ux_abs(x, y);
+    if (e < 0 - 1022 || e > 1023) { return r; }
+    var a: f64 = _bj_k_ux_round(s, e, 0.0);
+    return a;
+}
+
+# The product (ar + j·ai)(br + j·bi) at a range edge: hisab's chain with an unbounded exponent, each sum rounded once.
+#must_use
+fn _bj_cx_mul_edge(ar: f64, ai: f64, br: f64, bi: f64): BjComplex {
+    var ps, pe = _bj_cx_ux_mul(ar, br);
+    var qs, qe = _bj_cx_ux_mul(ai, bi);
+    var r: f64 = _bj_k_ux_sub_f64(ps, pe, qs, qe);
+    var us, ue = _bj_cx_ux_mul(ar, bi);
+    var vs, ve = _bj_cx_ux_mul(ai, br);
+    var i: f64 = _bj_k_ux_add_f64(us, ue, vs, ve);
+    var z: BjComplex;
+    z.re = r;
+    z.im = i;
+    return z;
+}
+
+# The quotient (ar + j·ai)/(br + j·bi) at a range edge: hisab's chain with an unbounded exponent, each quotient rounded
+# once.
+#must_use
+fn _bj_cx_div_edge(ar: f64, ai: f64, br: f64, bi: f64): BjComplex {
+    var ds, de = _bj_cx_ux_sumsq(br, bi);
+    var ps, pe = _bj_cx_ux_mul(ar, br);
+    var qs, qe = _bj_cx_ux_mul(ai, bi);
+    var ns, ne = _bj_k_ux_add(ps, pe, qs, qe);
+    var us, ue = _bj_cx_ux_mul(ai, br);
+    var vs, ve = _bj_cx_ux_mul(ar, bi);
+    var ms, me = _bj_k_ux_sub(us, ue, vs, ve);
+    var r: f64 = _bj_k_ux_div_f64(ns, ne, ds, de);
+    var i: f64 = _bj_k_ux_div_f64(ms, me, ds, de);
+    var z: BjComplex;
+    z.re = r;
+    z.im = i;
+    return z;
 }
 
 # re + j·im. Mirrors `Complex::new` (and `From<(f64, f64)>`).
@@ -8526,21 +8651,30 @@ public fn BjComplex_sub(a: BjComplex, b: BjComplex): BjComplex {
 }
 
 # a·b = (a.re·b.re − a.im·b.im, a.re·b.im + a.im·b.re), each product rounded (no fused multiply-add, as rustc
-# compiles it). Mirrors `Mul for Complex` (and `*=`).
+# compiles it); at a range edge with an unbounded exponent, the sum rounded once (ADR 0002 row 14). Mirrors
+# `Mul for Complex` (and `*=`).
 #must_use
 #pure
 public fn BjComplex_mul(a: BjComplex, b: BjComplex): BjComplex {
+    if (_bj_cx_plain4(a.re, a.im, b.re, b.im) == 0) {
+        var w: BjComplex = _bj_cx_mul_edge(a.re, a.im, b.re, b.im);
+        return w;
+    }
     var z: BjComplex;
     z.re = a.re * b.re - a.im * b.im;
     z.im = a.re * b.im + a.im * b.re;
     return z;
 }
 
-# a / b by the textbook formula: ((a.re·b.re + a.im·b.im)/d, (a.im·b.re − a.re·b.im)/d), d = b.re² + b.im². Mirrors
-# `Div for Complex`.
+# a / b by the textbook formula: ((a.re·b.re + a.im·b.im)/d, (a.im·b.re − a.re·b.im)/d), d = b.re² + b.im²; at a
+# range edge with an unbounded exponent, each quotient rounded once (ADR 0002 row 14). Mirrors `Div for Complex`.
 #must_use
 #pure
 public fn BjComplex_div(a: BjComplex, b: BjComplex): BjComplex {
+    if (_bj_cx_plain4(a.re, a.im, b.re, b.im) == 0) {
+        var w: BjComplex = _bj_cx_div_edge(a.re, a.im, b.re, b.im);
+        return w;
+    }
     var d: f64 = b.re * b.re + b.im * b.im;
     var z: BjComplex;
     z.re = (a.re * b.re + a.im * b.im) / d;
@@ -8559,13 +8693,19 @@ public fn BjComplex_neg(a: BjComplex): BjComplex {
 }
 
 impl BjComplex {
-    # √(re² + im²), no rescaling (see the header). Mirrors `Complex::abs`.
+    # √(re² + im²), no rescaling; at a range edge with an unbounded exponent, the root rounded once (see the header,
+    # ADR 0002 row 14). Mirrors `Complex::abs`.
     #must_use
     #pure
     public fn abs(self): f64 {
-        var s: f64 = self.re * self.re + self.im * self.im;
-        var r: f64 = f64_sqrt(s);
-        return r;
+        if (_bj_cx_plain(self.re, self.im) == 1) {
+            var s: f64 = self.re * self.re + self.im * self.im;
+            var r: f64 = f64_sqrt(s);
+            return r;
+        }
+        var us, ue = _bj_cx_ux_sumsq(self.re, self.im);
+        var u: f64 = _bj_k_ux_sqrt_f64(us, ue);
+        return u;
     }
 
     # |z|, the same as abs. Mirrors bijli's `ComplexExt::norm`.
@@ -8586,12 +8726,19 @@ impl BjComplex {
         return z;
     }
 
-    # re² + im². Mirrors `Complex::norm_sq` (and `ComplexExt::norm_sq`).
+    # re² + im²; at a range edge with an unbounded exponent, the sum rounded once (ADR 0002 row 14). Mirrors
+    # `Complex::norm_sq` (and `ComplexExt::norm_sq`).
     #must_use
     #pure
     public fn norm_sq(self): f64 {
-        var r: f64 = self.re * self.re + self.im * self.im;
-        return r;
+        if (_bj_cx_plain(self.re, self.im) == 1) {
+            var r: f64 = self.re * self.re + self.im * self.im;
+            return r;
+        }
+        var as2, ae2 = _bj_cx_ux_mul(self.re, self.re);
+        var bs2, be2 = _bj_cx_ux_mul(self.im, self.im);
+        var u: f64 = _bj_k_ux_add_f64(as2, ae2, bs2, be2);
+        return u;
     }
 
     # atan2(im, re), in [−π, π]. Mirrors `Complex::arg` (and `ComplexExt::arg`).
@@ -8615,11 +8762,12 @@ impl BjComplex {
         return z;
     }
 
-    # (ln |z|, arg z), the principal branch. Mirrors `Complex::ln`.
+    # (ln |z|, arg z), the principal branch; |z| unbounded where it is a normal double (_bj_cx_abs_for, ADR 0002 row
+    # 14). Mirrors `Complex::ln`.
     #must_use
     #pure
     public fn ln(self): BjComplex {
-        var a: f64 = BjComplex_abs(self);
+        var a: f64 = _bj_cx_abs_for(self.re, self.im);
         var l: f64 = _bj_ln(a);
         var g: f64 = BjComplex_arg(self);
         var z: BjComplex;
@@ -8628,29 +8776,55 @@ impl BjComplex {
         return z;
     }
 
-    # from_polar(√|z|, arg z / 2), the principal branch. Mirrors `Complex::sqrt`.
+    # from_polar(√|z|, arg z / 2), the principal branch; at a range edge |z| and its root with an unbounded exponent,
+    # the polar products rounded once (ADR 0002 row 14). Mirrors `Complex::sqrt`.
     #must_use
     #pure
     public fn sqrt(self): BjComplex {
-        var a: f64 = BjComplex_abs(self);
-        var r: f64 = f64_sqrt(a);
         var g: f64 = BjComplex_arg(self);
         var theta: f64 = g / 2.0;
-        var z: BjComplex = BjComplex_from_polar(r, theta);
-        return z;
+        if (_bj_cx_plain(self.re, self.im) == 1) {
+            var a: f64 = BjComplex_abs(self);
+            var r: f64 = f64_sqrt(a);
+            var z: BjComplex = BjComplex_from_polar(r, theta);
+            return z;
+        }
+        var as2, ae2 = _bj_cx_ux_abs(self.re, self.im);
+        var rs, re2 = _bj_k_ux_sqrt(as2, ae2);
+        var c: f64 = _bj_cos(theta);
+        var sn: f64 = _bj_sin(theta);
+        var cs, ce = _bj_k_ux_from(c);
+        var ss, se = _bj_k_ux_from(sn);
+        var w: BjComplex;
+        var wr: f64 = _bj_k_ux_mul_f64(rs, re2, cs, ce);
+        var wi: f64 = _bj_k_ux_mul_f64(rs, re2, ss, se);
+        w.re = wr;
+        w.im = wi;
+        return w;
     }
 
-    # z^n = from_polar(|z|^n, n·arg z), or 0 when |z|² < 10^-300. Mirrors `Complex::powf`.
+    # z^n = from_polar(|z|^n, n·arg z) for every z ≠ 0, |z| unbounded where it is a normal double (ADR 0002 row 14).
+    # z = 0 follows pow's rules for a zero base: 0 for n > 0, 1 for n = 0, +∞ for n < 0 (each with im +0), NaN for a
+    # NaN n. hisab returned 0 for every |z|² < 1e-300 (ADR 0002 row 15: z⁰ was 0, z⁻¹ 0). Mirrors `Complex::powf`.
     #must_use
     #pure
     public fn powf(self, n: f64): BjComplex {
-        var ns: f64 = BjComplex_norm_sq(self);
-        var tiny: f64 = _bj_from_bits(0x01A56E1FC2F8F359);       # 1e-300
-        if (ns < tiny) {
-            var zero: BjComplex = BjComplex_default();
-            return zero;
+        if (self.re == 0.0 && self.im == 0.0) {
+            var zz: BjComplex;
+            zz.im = 0.0;
+            if (n != n) {
+                zz.re = n;
+                zz.im = n;
+            } elif (n > 0.0) {
+                zz.re = 0.0;
+            } elif (n == 0.0) {
+                zz.re = 1.0;
+            } else {
+                zz.re = _BJ_K_INF;
+            }
+            return zz;
         }
-        var a: f64 = BjComplex_abs(self);
+        var a: f64 = _bj_cx_abs_for(self.re, self.im);
         var r: f64 = _bj_powf(a, n);
         var g: f64 = BjComplex_arg(self);
         var theta: f64 = g * n;
@@ -8687,25 +8861,43 @@ impl BjComplex {
         return z;
     }
 
-    # 1/z = (re/d, −im/d), d = re² + im². Mirrors `Complex::inv`.
+    # 1/z = (re/d, −im/d), d = re² + im²; at a range edge d with an unbounded exponent and each quotient rounded once
+    # (ADR 0002 row 14). Mirrors `Complex::inv`.
     #must_use
     #pure
     public fn inv(self): BjComplex {
-        var d: f64 = BjComplex_norm_sq(self);
         var nim: f64 = -self.im;
         var z: BjComplex;
-        z.re = self.re / d;
-        z.im = nim / d;
+        if (_bj_cx_plain(self.re, self.im) == 1) {
+            var d: f64 = self.re * self.re + self.im * self.im;
+            z.re = self.re / d;
+            z.im = nim / d;
+            return z;
+        }
+        var ds, de = _bj_cx_ux_sumsq(self.re, self.im);
+        var xs, xe = _bj_k_ux_from(self.re);
+        var ys, ye = _bj_k_ux_from(nim);
+        var r: f64 = _bj_k_ux_div_f64(xs, xe, ds, de);
+        var i: f64 = _bj_k_ux_div_f64(ys, ye, ds, de);
+        z.re = r;
+        z.im = i;
         return z;
     }
 
-    # 1 when re² + im² < tol² (0 for NaN). Mirrors `Complex::is_zero`.
+    # 1 when re² + im² < tol² (0 for NaN); at a range edge both sides with an unbounded exponent, compared exactly
+    # (ADR 0002 row 14). Mirrors `Complex::is_zero`.
     #must_use
     #pure
     public fn is_zero(self, tol: f64): i64 {
-        var ns: f64 = BjComplex_norm_sq(self);
-        var t2: f64 = tol * tol;
-        if (ns < t2) { return 1; }
+        if (_bj_cx_plain4(self.re, self.im, tol, 0.0) == 1) {
+            var ns: f64 = self.re * self.re + self.im * self.im;
+            var t2: f64 = tol * tol;
+            if (ns < t2) { return 1; }
+            return 0;
+        }
+        var ns2, ne2 = _bj_cx_ux_sumsq(self.re, self.im);
+        var ts, te = _bj_cx_ux_mul(tol, tol);
+        if (_bj_k_ux_cmp(ns2, ne2, ts, te) == 0 - 1) { return 1; }
         return 0;
     }
 

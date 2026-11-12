@@ -142,8 +142,16 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
   calls exact on x86_64 and aarch64). The parity harness reads ADR 0002 mappings (`tests/golden/<module>.adr.tsv`,
   written by validate.py from exact values): 2,031 rows.
 
+- **Cyrius port, M1 part 5c-1 — BjComplex's range edges** (ADR 0002 rows 14, 15). Where a part leaves
+  [2^-511, 2^511), hisab's chain runs with an unbounded exponent and rounds its last step once. This covers `abs`,
+  `norm_sq`, the product, `inv`, the quotient, `is_zero` and `sqrt`, and `ln` and `powf` wherever the unbounded |z|
+  is a normal double. `powf` has no cutoff. `validate.py` gains an exact model of the chains, which writes
+  `complex.adr.tsv` (1,592 rows) and proves, row by row, that in-range rows keep hisab's bits.
+
 ### Fixed
 
+- **complex** (ADR 0002 rows 14, 15): `abs(1e160, 1e160)` was ∞, `(1e200 + j1e200)²`'s real part NaN, `1/1e160` 0,
+  `ln(1e200 + j1e200)` ∞, and `powf` returned 0 for every |z| < 1e-150 whatever the exponent (0⁰ was 0).
 - **maxwell, charge, field** (ADR 0002 row 13): Rust's two to four roundings missed the correctly rounded value by
   one ulp on about a quarter of inputs, and gave 0, ±∞ or NaN where the value is representable:
   `wave_speed(1e160, 1e160)` was 0, the skin depth of three 1e200 was 0, and the inside-sphere field at 1e300 was

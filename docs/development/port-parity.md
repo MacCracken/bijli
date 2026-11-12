@@ -931,3 +931,70 @@ Language facts the probes found, beyond plan §2:
   numbers are LLVM folding constant arguments. These are findings with their numbers (speed is measured, not
   gated). A shape-specific fast path for 1/√(x·y) and √(2/(x·y·z)), like kimiya's √(x/y), would close part of the
   gap.
+
+## 18. M1 part 5c-1: BjComplex's range edges and powf's cutoff (2026-11-12)
+
+- **ADR 0002 row 14**: hisab squares and multiplies raw parts, so past [2^-511, 2^511) a square, a cross product or
+  their sum leaves the normal range although the result is representable. At such an edge (every part finite, one
+  outside the range) `src/complex.cyr` evaluates hisab's chain with an unbounded exponent (kimiya's `_bj_k_ux_*`): every
+  operation is rounded to 53 bits and the last one once into binary64. This covers `abs`/`norm`, `norm_sq`, the product,
+  `inv`, the quotient, `is_zero`'s comparison, and `sqrt`'s two roots and its polar products. `ln` and `powf` take the
+  unbounded |z| where it is a normal double; past DBL_MAX or below 2^-1022 their transcendental of an unbounded |z|
+  waits for 5c-2, and those rows keep hisab's value.
+  - **The guard** (`_bj_cx_plain`, `_bj_cx_plain4` for the binary operations) is all or nothing. Any non-finite
+    part keeps hisab's chain. With every part zero or in [2^-511, 2^511), every square and product is normal and
+    every sum below 2^1023, so the unbounded evaluation IS hisab's in binary64 and the rows keep Rust's bits.
+  - A first version tested each operand on its own, so (1 − j∞)/(1e182 − j6.5e183) took the unbounded path with an
+    infinite part. The harness's 10 failures showed it.
+- **ADR 0002 row 15**: `powf` has no cutoff. hisab returned 0 for every |z|² < 1e-300, whatever the exponent. Now
+  every z ≠ 0 takes from_polar(|z|ⁿ, n·arg z), and z = 0 follows pow's rules: 0, 1, +∞ (im +0) and NaN for n > 0,
+  n = 0, n < 0 and a NaN n.
+- **The model** (`validate.py`'s `cx_model`; `exact.py` gains `rnd53` and `rnd53_sqrt`, 53-bit rounding with an
+  unbounded exponent) evaluates each in-scope function exactly, with IEEE's signed zeros through the products and
+  sums and MPFR's correctly rounded atan2, cos, sin, ln and pow. Where the port runs the unbounded chain, a row whose
+  model value differs from the oracle's goes to `tests/golden/complex.adr.tsv`, and the corrected oracle
+  (`complex.cr.tsv`) skips it. Where the port keeps hisab's chain, the model must agree with that chain, on every row:
+  the guard's proof.
+  - **1,592 mapped rows**: div 514, sqrt 181, abs and norm 180 each, inv 178, ln 169, mul 117, powf 31 (row 14) and 39
+    (row 15), norm_sq 2, is_zero 1, every one passed after the guard fix; before it, the port's ten mixed rows (a
+    non-finite part in one operand, an edge in the other) failed against hisab's chain.
+- **Tests**: `tests/complex.tcyr`'s `cyrius_range_edges (ADR 0002 rows 14 and 15)`, 13 assertions on the model's
+  values:
+  - |1e160 + j1e160| = 1.414213562373095e160;
+  - (1e200 + j1e200)² = (0, ∞), where hisab gives (NaN, ∞);
+  - 1/1e160 rounded once, and 1/(1e200 + j1e200) = 5e-201 − j5e-201;
+  - is_zero at 1e200 against 1e201;
+  - √(1e300 + j1e300) and ln|1e200 + j1e200| = 460.8635921890891;
+  - (1e-160)⁻¹ = 1e160, 0⁰ = 1, 0⁻¹ = +∞, (1e-151)² = 9.999999999999998e-303;
+  - a non-finite part keeping hisab's chain.
+
+  Two older assertions that pinned hisab's edge values (abs(1e160) = ∞, powf of |z|² below 1e-300 = 0) now pin the
+  fixed values.
+- **Result, every target**: 9 modules, 0 failing; **184,863 ok, 0 failed, 10,182 accepted (ADR 01: 6,505; ADR 0002:
+  3,677)**. All 145 digests are equal on x86_64 ELF, x86_64 PE and aarch64. Ten changed, those of the functions above;
+  `ComplexExt::norm`'s equals `abs`'s.
+
+| Function | Digest v2, every target |
+|---|---|
+| Complex::abs, ComplexExt::norm | `3dc86167dcf02563` |
+| Complex::norm_sq | `5d2fbc215ae7cb6c` |
+| Complex::mul | `47b801ceee8d67de` |
+| Complex::div | `510e32b88696b639` |
+| Complex::inv | `3de67cb534ca7167` |
+| Complex::is_zero | `1e4707ccf49d3a28` |
+| Complex::sqrt | `1443f1f8570fefbd` |
+| Complex::ln | `33c41c5da9de3624` |
+| Complex::powf | `78c102e1f284216d` |
+
+- **Benchmarks** (Cyrius-only; `cyrius bench` with no other bench running): `complex_mul_div` (a product and a
+  quotient by the operators) went from 36 ns to 84 ns, and `complex_exp` (386 ns) and `complex_sin` (837 ns) are
+  unchanged.
+  - **The guard costs about 9 ns per operation.** It reads the four biased exponents and folds the eight bound tests
+    into one sign test of an OR. Without the operators the same product and quotient take 53 ns, against 34 ns
+    without the guards (a scratch bench).
+  - **The remaining 31 ns are an open finding.** The operator expression `a * b / b` costs 90 ns where the
+    equivalent calls cost 53 ns in the same binary, a gap the old bodies didn't have. A two-field struct whose
+    operator fn has the same branch and side call shows no gap (11 ns either way), so the cause isn't yet isolated
+    enough to file.
+  - **Two attempts changed nothing:** moving the edge paths out of the operator fns, and reading the parts in place.
+  - Speed is measured, not gated.
