@@ -1239,3 +1239,50 @@ Language facts the probes found, beyond plan §2:
     then 98 ns inline); the branch-free fold with masked zeros gets 85. Cyrius spends about a nanosecond per integer
     operation here (every local is in memory), and the guard needs about 40. This is a finding with its numbers; speed
     is measured, not gated.
+
+## 23. M1 part 5d-4: the dipoles', the quadrupole's, the axes' and the sphere image's range edges (2026-11-12)
+
+- **ADR 0002 row 18, amended**: the electric and magnetic dipole fields, the dipole potential, the quadrupole potential,
+  the ring and disk axial fields and the sphere image run with an unbounded exponent at a range edge. Typical edges:
+  - a DBL_MAX dipole's E_z is −∞ where Rust had ∞ − ∞ = NaN;
+  - a subnormal dipole's potential is −1.2e-312 for Rust's −0;
+  - the ring axis at z = 2^361 is kQz/z³ where Rust's z³ overflowed to give 0;
+  - the disk axis at R = z = 2^-1022 is finite where Rust's was ∞;
+  - a quadrupole whose terms overflow and cancel is +∞ where Rust's was NaN.
+- **The guards** test Rust's own values.
+  - **The dipoles**: r̂, m·r̂ (in the band), (1/r)³, the factor, 3(m·r̂), k and each output component (in the band) in
+    one branch-free fold. An exact 0 passes: r̂ᵢ for pᵢ = 0, m·r̂, 3(m·r̂) and k when every product has a zero factor,
+    and an output when both its products do.
+  - **The quadrupole**: r², r⁵ and 8πε₀r⁵ (r⁴ lies between), each Qᵢⱼxᵢ and each term normal or an exact 0, and the
+    sum finite.
+  - **The ring**: z² + R² in the band, then (z² + R²)^(3/2), k·Q and k·Q·z.
+  - **The disk**: z² + R² in the band, r + |z| finite, then R/r, R/(r + |z|), their product and σ/(2ε₀).
+  - **The sphere image**: |r|² in the band (which makes Rust's |r|, and so its `|r| > R` decision, the unbounded
+    chain's), then R/|r| and its square. Outside the band the comparison itself runs on the unbounded |r|, and its
+    error reports |r| rounded once.
+- **Two slips on the way.**
+  - The first dipole guard read its values as `load64(h + 8)` on a typed `*f64`, which advances 8 elements, not 8
+    bytes. Every dipole took the unbounded path (819 ns to 1.2 µs on the bench) until a probe printed the fold.
+  - The guard then cost 143–150 ns as 18 small calls, and 118 ns inline in the shared dipole function.
+  - `fv_rows` also compared the model's decoded error text with the oracle's still-encoded `s:` token and wrote one
+    identical mapping; it decodes now.
+- **The edge grid** (`m_field.rs`'s `emit_5d4`), 88 rows:
+  - 4 moments over 5 field points through the three dipole functions;
+  - 3 quadrupole tensors over 4 points;
+  - 5 axis triples;
+  - 6 sphere images, among them a charge at 10^-200 outside a sphere of 10^-210, whose |r|² underflowed in Rust to
+    0, "inside".
+- **251 more mapped rows** (row 18: 796), all passed: disk axis 124, ring axis 45, the electric dipole field 29, the
+  magnetic 28, the dipole potential 13, the sphere image 6 (one Ok where Rust refused, two refused where it
+  accepted), the quadrupole 6.
+- **Tests**: `tests/field.tcyr`'s `cyrius_dipole_axis_image_edges (ADR 0002 row 18)`, 6 assertions on mapped rows'
+  values.
+- **Result, every target**: 9 modules, 0 failing; **188,977 ok, 0 failed, 11,675 accepted (ADR 01: 6,505; ADR 0002:
+  5,170)**. All 145 digests are equal on x86_64 ELF, x86_64 PE and aarch64, and field's 173 assertions pass on all
+  three.
+- **Benchmarks** (interleaved A/B against HEAD 1301d63, twice, load average 4.5 to 5.0):
+  - both dipole fields +18–20 ns (96/98 → 114/118 ns);
+  - `field/ring_axis` +8–9 ns (28 → 36/37) and `field/disk_axis` +10–14 ns (42/44 → 54/56);
+  - `trace_field_line_10` within noise.
+
+  The dipole guard reads eleven values and six zero bits, about 70 integer operations. Speed is measured, not gated.

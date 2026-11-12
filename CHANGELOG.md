@@ -177,8 +177,16 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
   edge. The guards test Rust's own values. The new generated `src/crmath_ux_data.cyr` holds 2,688 bits of 2/π for a
   Green's kR past DBL_MAX. A 263-row edge grid maps 251 rows.
 
+- **Cyrius port, M1 part 5d-4 — the dipoles', the quadrupole's, the axes' and the sphere image's range edges** (ADR 0002
+  row 18, amended). The electric and magnetic dipole fields, the dipole potential, the quadrupole potential, the ring
+  and disk axial fields and the sphere image run their chains with an unbounded exponent at a range edge. The sphere
+  image decides `|r| > R` on the unbounded |r|. An 88-row edge grid maps 251 rows.
+
 ### Fixed
 
+- **field** (ADR 0002 row 18, 5d-4): a DBL_MAX dipole's E_z was NaN (∞ − ∞) for −∞; the ring axis at z = 2^361 was 0
+  (z³ overflowed); the disk axis at R = z = 2^-1022 was ∞; a charge at 1e-200 outside a sphere of 1e-210 was refused as
+  inside (|r|² underflowed to 0).
 - **field, charge** (ADR 0002 row 18, 5d-3): E of 1.1e90 C at 1e200 m underflowed in Rust's kq/r³ (9.89e-301 is
   representable), k·q₁·q₂ of two 1e200 C charges overflowed (the force at 1e100 m is 8.99e209), superposed fields past
   DBL_MAX that cancel gave NaN, 1/(4π·1e308) gave 0, and the scalar Green's function with kR past DBL_MAX gave NaN.

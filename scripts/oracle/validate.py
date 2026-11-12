@@ -1776,9 +1776,12 @@ PC_FNS = ("field::electric_field_point_charge", "field::electric_potential_point
           "field::magnetic_field_moving_charge", "field::electric_field_superposition", "charge::coulomb_force",
           "PointCharge::electric_field_at", "PointCharge::electric_potential_at", "PointCharge::magnetic_field_at",
           "field::greens_function_static", "field::greens_function_scalar")
+D4_FNS = ("field::electric_dipole_field", "field::magnetic_dipole_field", "field::electric_dipole_potential",
+          "field::electric_quadrupole_potential", "field::electric_field_ring_axis", "field::electric_field_disk_axis",
+          "field::image_charge_sphere")
 FV_FNS = ("FieldVector::magnitude", "FieldVector::magnitude_sq", "FieldVector::dot", "FieldVector::cross",
           "FieldVector::normalized", "field::image_charge_plane", "field::image_charge_dielectric",
-          "charge::lorentz_force", "PointCharge::lorentz_force_in") + PC_FNS
+          "charge::lorentz_force", "PointCharge::lorentz_force_in") + PC_FNS + D4_FNS
 
 
 VX_LO, VX_HI = 2.0 ** -900, sys.float_info.max
@@ -1998,8 +2001,152 @@ def pc_model(fn, v):
     return ok3(tuple(ux_fin(ux_mul(fct, d[i], ident)) for i in range(3)))
 
 
+# M1 part 5d-4's chains: the dipoles, the quadrupole, the ring and disk axes, the sphere image. d4_plain mirrors
+# src/field.cyr's guards on Rust's binary64 values (rng: a biased exponent in [lo, 2046]); d4_model is the exact chain.
+def rng(x, lo) -> bool:
+    return (2.0 ** -1021 if lo == 2 else 2.0 ** -900) <= abs(x) <= VX_HI
+
+
+def d4_rust_dipole(M, W, magnetic, EPS0, MU0):
+    r_sq = W[0] * W[0] + W[1] * W[1] + W[2] * W[2]
+    inv = fdiv(1.0, fsqrt(r_sq))
+    h = [W[i] * inv for i in range(3)]
+    pd = M[0] * h[0] + M[1] * h[1] + M[2] * h[2]
+    inv3 = inv * inv * inv
+    fct = fdiv(MU0 * inv3, 4.0 * PI) if magnetic else fdiv(inv3, 4.0 * PI * EPS0)
+    return inv, h, pd, inv3, fct
+
+
+def d4_plain(fn, v) -> bool:
+    c0 = golden_consts_cached()
+    K, EPS0, MU0 = c0["field::COULOMB_K"], c0["field::EPSILON_0"], c0["field::MU_0"]
+    if fn in ("field::electric_dipole_field", "field::magnetic_dipole_field", "field::electric_dipole_potential"):
+        M, W = v[0:3], v[3:6]
+        inv, h, pd, inv3, fct = d4_rust_dipole(M, W, fn == "field::magnetic_dipole_field", EPS0, MU0)
+        zd = all(M[i] == 0.0 or W[i] == 0.0 for i in range(3))
+        units = all(rng(h[i], 2) or W[i] == 0.0 for i in range(3)) and (rng(pd, 123) or zd)
+        if fn == "field::electric_dipole_potential":
+            t2 = pd * inv * inv
+            return units and (rng(t2, 2) or zd)
+        t3 = 3.0 * pd
+        k = t3 * fct
+        e = [h[i] * k - M[i] * fct for i in range(3)]
+        return (units and rng(inv3, 2) and rng(fct, 2) and (rng(t3, 2) or zd) and (rng(k, 2) or zd)
+                and all(rng(e[i], 123) or ((W[i] == 0.0 or zd) and M[i] == 0.0) for i in range(3)))
+    if fn == "field::electric_quadrupole_potential":
+        qt, p = v[0:9], v[9:12]
+        r_sq = p[0] * p[0] + p[1] * p[1] + p[2] * p[2]
+        r = fsqrt(r_sq)
+        r5 = r_sq * r_sq * r
+        d = 8.0 * PI * EPS0 * r5
+        tot = 0.0
+        ok = rng(r_sq, 2) and rng(r5, 2) and rng(d, 2)
+        for i in range(3):
+            for j in range(3):
+                a = qt[3 * i + j] * p[i]
+                t = a * p[j]
+                tot += t
+                if qt[3 * i + j] != 0.0 and p[i] != 0.0 and not (rng(a, 2) and (p[j] == 0.0 or rng(t, 2))):
+                    ok = False
+        return ok and math.isfinite(tot)
+    q, rr, z = v[0], v[1], v[2]
+    if fn == "field::electric_field_ring_axis":
+        if not (rr >= 0.0 and math.isfinite(rr)) or not math.isfinite(z) or z == 0.0:
+            return True
+        d_sq = z * z + rr * rr
+        denom = d_sq * fsqrt(d_sq)
+        kq = K * q
+        return rng(d_sq, 123) and rng(denom, 2) and (q == 0.0 or (rng(kq, 2) and rng(kq * z, 2)))
+    if fn == "field::electric_field_disk_axis":
+        if not (rr > 0.0 and math.isfinite(rr)) or not math.isfinite(z):
+            return True
+        s2 = z * z + rr * rr
+        r = fsqrt(s2)
+        g1, rz = fdiv(rr, r), r + abs(z)
+        g2 = fdiv(rr, rz)
+        sd = fdiv(math.copysign(1.0, z) * q, 2.0 * EPS0)
+        return (rng(s2, 123) and rng(g1, 2) and rz <= VX_HI and rng(g2, 2) and rng(g1 * g2, 2)
+                and (q == 0.0 or rng(sd, 2)))
+    q, p, rr = v[0], v[1:4], v[4]
+    if not (rr > 0.0 and math.isfinite(rr)):
+        return True
+    d_sq = p[0] * p[0] + p[1] * p[1] + p[2] * p[2]
+    if not rng(d_sq, 123):
+        return False
+    d = fsqrt(d_sq)
+    if d <= rr:
+        return True
+    ratio = fdiv(rr, d)
+    return rng(ratio, 2) and rng(ratio * ratio, 2)
+
+
+def d4_model(fn, v):
+    """The port's outputs for a 5d-4 row with finite inputs."""
+    ident = lambda t: t                                  # noqa: E731
+    c0 = golden_consts_cached()
+    K, EPS0, MU0 = c0["field::COULOMB_K"], c0["field::EPSILON_0"], c0["field::MU_0"]
+    if fn in ("field::electric_dipole_field", "field::magnetic_dipole_field", "field::electric_dipole_potential"):
+        M, W = v[0:3], v[3:6]
+        if exact_sq(W, ORIGIN) < Fraction(1, 10 ** 30):
+            return SINGULAR
+        d, rt, inv = pc_offset_ux(ORIGIN, W)
+        h = [ux_mul(d[i], inv) for i in range(3)]
+        pd = ux_add(ux_add(ux_mul(ux(M[0]), h[0]), ux_mul(ux(M[1]), h[1])), ux_mul(ux(M[2]), h[2]))
+        if fn == "field::electric_dipole_potential":
+            t2 = ux_mul(ux_mul(pd, inv), inv)
+            return [("f", ux_fin(ux_div(t2, ux(4.0 * PI * EPS0), ident)))]
+        inv3 = ux_mul(ux_mul(inv, inv), inv)
+        if fn == "field::magnetic_dipole_field":
+            fct = ux_div(ux_mul(ux(MU0), inv3), ux(4.0 * PI))
+        else:
+            fct = ux_div(inv3, ux(4.0 * PI * EPS0))
+        k = ux_mul(ux_mul(ux(3.0), pd), fct)
+        return ok3(tuple(ux_fin(ux_sub(ux_mul(h[i], k), ux_mul(ux(M[i]), fct), ident)) for i in range(3)))
+    if fn == "field::electric_quadrupole_potential":
+        qt, p = v[0:9], v[9:12]
+        if exact_sq(p, ORIGIN) < Fraction(1, 10 ** 30):
+            return SINGULAR
+        r2 = fv_sumsq(*p)
+        r = ux_sqrt(r2)
+        r5 = ux_mul(ux_mul(r2, r2), r)
+        d = ux_mul(ux(8.0 * PI * EPS0), r5)
+        acc = (Fraction(0), False)
+        for i in range(3):
+            for j in range(3):
+                acc = ux_add(acc, ux_mul(ux_mul(ux(qt[3 * i + j]), ux(p[i])), ux(p[j])))
+        return [("f", ux_fin(ux_div(acc, d, ident)))]
+    if fn in ("field::electric_field_ring_axis", "field::electric_field_disk_axis"):
+        q, rr, z = v[0], v[1], v[2]
+        w = field_3b(fn, v, None, MPFR_P, K, EPS0, MU0)
+        if w[0][0] == "E" or (fn.endswith("ring_axis") and z == 0.0):
+            return w
+        r2 = ux_add(ux_mul(ux(z), ux(z)), ux_mul(ux(rr), ux(rr)))
+        r = ux_sqrt(r2)
+        if fn.endswith("ring_axis"):
+            num = ux_mul(ux_mul(ux(K), ux(q)), ux(z))
+            return [("f", ux_fin(ux_div(num, ux_mul(r2, r), ident)))]
+        geo = ux_mul(ux_div(ux(rr), r), ux_div(ux(rr), ux_add(r, ux(abs(z)))))
+        sd = ux_div(ux(math.copysign(1.0, z) * q), ux(2.0 * EPS0))
+        return [("f", ux_fin(ux_mul(sd, geo, ident)))]
+    q, p, rr = v[0], v[1:4], v[4]
+    w = field_3b(fn, v, None, MPFR_P, K, EPS0, MU0)
+    if not (rr > 0.0 and math.isfinite(rr)):
+        return w
+    d = ux_sqrt(fv_sumsq(*p))
+    if d[0] <= Fraction(rr):
+        dd = ux_fin(d)
+        return ip_err(f"charge must be outside the sphere (|r| = {rust_display(dd)} > R = {rust_display(rr)})")
+    ratio = ux_div(ux(rr), d)
+    sc = ux_mul(ratio, ratio)
+    return ([("f", ux_fin(ux_mul(ux(-q), ratio, ident)))]
+            + [("f", ux_fin(ux_mul(ux(p[i]), sc, ident))) for i in range(3)])
+
+
 def fv_args(fn, v):
     """The parts a row-18 function's chain reads (None for the images)."""
+    if fn in D4_FNS:
+        return list(v[0:12] if fn.endswith("quadrupole_potential") else v[0:6] if "dipole" in fn else
+                    v[0:5] if fn.endswith("sphere") else v[0:3])
     if fn == "charge::coulomb_force":
         return [v[0], v[8]] + v[2:5] + v[10:13]
     if fn == "field::electric_field_superposition":
@@ -2023,6 +2170,8 @@ def fv_governed(fn, v) -> int:
     src/field.cyr and src/charge.cyr, on Rust's binary64 values."""
     if fn in PC_FNS:
         return 0 if (pc_model(fn, v) is SINGULAR or pc_plain(fn, v)) else 18
+    if fn in D4_FNS:
+        return 0 if (d4_model(fn, v) is SINGULAR or d4_plain(fn, v)) else 18
     if fn == "field::image_charge_plane":
         pz, z = v[4], v[3]
         return 18 if math.isfinite(pz) and abs(pz) >= 2.0 ** 1023 and math.isfinite(z) else 0
@@ -2063,6 +2212,8 @@ def fv_model(fn, v):
     ident = lambda t: t                                  # noqa: E731
     if fn in PC_FNS:
         return pc_model(fn, v)
+    if fn in D4_FNS:
+        return d4_model(fn, v)
     if fn == "FieldVector::magnitude":
         return [("f", ux_fin_sqrt(fv_sumsq(*v[0:3])))]
     if fn == "FieldVector::magnitude_sq":
@@ -2142,7 +2293,7 @@ def fv_rows(root: Path, module: str, path: Path):
                                 f"from Rust's chain {want} where the port keeps the chain")
             continue
         model = fv_model(fn, v)
-        old = [parse_tok(t) for t in outs.split(" ")]
+        old = [(k, tok_text(b) if k == "s" else b) for k, b in (parse_tok(t) for t in outs.split(" "))]
         if toks_same(model, old):
             continue
         out.append((fn, ins, wire(model), "18", f"oracle {outs}; ADR 0002 row 18"))

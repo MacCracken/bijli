@@ -1286,6 +1286,43 @@ fn main() {
     assert(is_ok(pe_t6) == 1 && same_bits(pe_gr, 0x816B2151537ED1F0) == 1 && same_bits(pe_gi, 0x8137473EBCD84550) == 1,
       "e^{−jkR}/(4πR) with kR = 1e600, its cosine and sine past DBL_MAX (Rust: kR = ∞, NaN)");
     if (pe_v1 == 7 || pe_v3 == 7 || pe_v4 == 7 || pe_v6 == 7) { println("."); }
+
+    test_group("cyrius_dipole_axis_image_edges (ADR 0002 row 18)");
+    # The dipoles', the quadrupole's, the axes' and the sphere image's chains at a range edge; the expected bits are
+    # validate.py's model (rows of tests/golden/field.adr.tsv).
+    var dq_m = BjFieldVector_new(0.0, -0.0, fb(0x7FEFFFFFFFFFFFFF));
+    var dq_p: f64[3];
+    at3(&dq_p, -2.0, -1.0, -1.0);
+    var dq_e: BjFieldVector;
+    var dq_t1, dq_v1 = bj_electric_dipole_field(dq_m, &dq_p, &dq_e);
+    var dq_ez: f64 = dq_e.z;
+    assert(is_ok(dq_t1) == 1 && same_bits(dq_ez, 0xFFF0000000000000) == 1,
+      "a DBL_MAX dipole: E_z is −∞ (Rust: ∞ − ∞ = NaN)");
+    var dq_m2 = BjFieldVector_new(fb(1), fb(1), 0.0);
+    var dq_p2: f64[3];
+    at3(&dq_p2, -2.0, 1.0, 0.0);
+    var dq_t2, dq_v2 = bj_electric_dipole_potential(dq_m2, &dq_p2);
+    assert(ok_bits(dq_t2, dq_v2, 0x800000002FEA195E) == 1, "a subnormal dipole's potential, rounded once (Rust: −0)");
+    var dq_t3, dq_v3 = bj_electric_field_ring_axis(1.0, fb(0x0010000000000000), fb(0x5680000000000000));
+    assert(ok_bits(dq_t3, dq_v3, 0x14E0BD99418216E1) == 1, "the ring axis at z = 2^361: kQz/z³ (Rust: z³ = ∞, 0)");
+    var dq_t4, dq_v4 = bj_electric_field_disk_axis(1.0, fb(0x0010000000000000), fb(0x0010000000000000));
+    assert(ok_bits(dq_t4, dq_v4, 0x420ECECC1FB7FE42) == 1, "the disk axis at R = z = 2^-1022 (Rust: ∞)");
+    var dq_s: f64[3];
+    at3(&dq_s, fb(0x16687E92154EF7AC), 0.0, 0.0);              # (1e-200, 0, 0)
+    var dq_i: f64[3];
+    var dq_t5, dq_v5 = bj_image_charge_sphere(1.0, &dq_s, fb(0x14550A6110D6A9B8), &dq_i);   # R = 1e-210
+    var dq_ix: f64 = dq_i[0];
+    assert(ok_bits(dq_t5, dq_v5, 0xBDDB7CDFD9D7BDBB) == 1 && same_bits(dq_ix, 0x124212DD4DE70913) == 1,
+      "a charge at 1e-200 outside a sphere of 1e-210: Ok (Rust: |r|² underflowed to 0, InvalidParameter)");
+    var dq_m3 = BjFieldVector_new(0.0, 0.0, fb(1));
+    var dq_p3: f64[3];
+    at3(&dq_p3, -2.0, -2.0, 0.0);
+    var dq_b: BjFieldVector;
+    var dq_t6, dq_v6 = bj_magnetic_dipole_field(dq_m3, &dq_p3, &dq_b);
+    var dq_bz: f64 = dq_b.z;
+    assert(is_ok(dq_t6) == 1 && same_bits(dq_bz, 0x8000000000000000) == 1,
+      "a subnormal magnetic dipole: B_z is −0, the unbounded chain's sign (Rust: +0)");
+    if (dq_v1 == 7 || dq_v6 == 7) { println("."); }
     assert(is_ok(pe_tq1) == 1 && is_ok(pe_tq2) == 1 && pe_vq1 == 0 && pe_vq2 == 0, "the two charges are valid");
 
     return assert_summary();

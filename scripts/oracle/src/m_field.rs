@@ -415,7 +415,102 @@ pub fn emit() -> Module {
     emit_5d(&mut m);
     emit_5d2(&mut m);
     emit_5d3(&mut m);
+    emit_5d4(&mut m);
     m
+}
+
+/// The dipoles', the quadrupole's, the axes' and the sphere image's range edges (bijli ADR 0002 row 18, M1 part 5d-4),
+/// appended: moments and tensors past 2^±600 against near, far and subnormal-offset field points; axes with z and R
+/// past 2^±500; and sphere images whose |r|² over- or underflows (one where Rust's |r| of 0 says "inside").
+fn emit_5d4(m: &mut Module) {
+    let max = f64::MAX;
+    let moments = [
+        FieldVector::new(0.0, 0.0, 1e-30),
+        FieldVector::new(1e300, 0.0, 1e300),
+        FieldVector::new(1e-300, 2e-300, 0.0),
+        FieldVector::new(max, 0.0, 0.0),
+    ];
+    let points = [
+        [0.0, 0.0, 1.0],
+        [1e200, 0.0, 0.0],
+        [1e-14, 0.0, 2e-14],
+        [3.0, 4.0, 1e-320],
+        [1e150, 1e150, 1e150],
+    ];
+    for dm in moments {
+        for b in points {
+            let din = cat(&[v3(dm), p3(b)]);
+            m.row(
+                "field::electric_dipole_field",
+                Class::A,
+                &din,
+                &res_v(electric_dipole_field(&dm, black_box(b))),
+            );
+            m.row(
+                "field::electric_dipole_potential",
+                Class::A,
+                &din,
+                &res_f(electric_dipole_potential(&dm, black_box(b))),
+            );
+            m.row(
+                "field::magnetic_dipole_field",
+                Class::A,
+                &din,
+                &res_v(magnetic_dipole_field(&dm, black_box(b))),
+            );
+        }
+    }
+    for scale in [1e300, 1e-300, 1e-20] {
+        let qt = [[scale, 0.0, 0.0], [0.0, -0.5 * scale, 0.0], [0.0, 0.0, -0.5 * scale]];
+        for b in [[1e100, 0.0, 0.0], [1e-14, 0.0, 1e-14], [1e70, 1e70, 0.0], [2.0, 3.0, 1e-320]] {
+            let mut qin: Vec<Tok> = qt
+                .iter()
+                .flat_map(|row| row.iter().map(|&x| f(x)))
+                .collect();
+            qin.extend(p3(b));
+            m.row(
+                "field::electric_quadrupole_potential",
+                Class::A,
+                &qin,
+                &res_f(electric_quadrupole_potential(&qt, black_box(b))),
+            );
+        }
+    }
+    for (q, rr, z) in [
+        (1e300, 1e-200, 1e-200),
+        (1e-300, 1e200, 1e200),
+        (1.0, 1e154, 1e154),
+        (1e-6, 1e-170, 3e-170),
+        (max, 1.0, 1e-100),
+    ] {
+        m.row(
+            "field::electric_field_ring_axis",
+            Class::A,
+            &[f(q), f(rr), f(z)],
+            &res_f(electric_field_ring_axis(black_box(q), rr, z)),
+        );
+        m.row(
+            "field::electric_field_disk_axis",
+            Class::A,
+            &[f(q), f(rr), f(z)],
+            &res_f(electric_field_disk_axis(black_box(q), rr, z)),
+        );
+    }
+    for (q, p, rr) in [
+        (1.0, [1e200, 1e200, 0.0], 1.0),
+        (1e300, [max, max, 0.0], 1.0),
+        (1.0, [1e-200, 0.0, 0.0], 1e-210),
+        (1.0, [3e-170, 4e-170, 0.0], 4.9e-170),
+        (f64::from_bits(1), [1e300, 0.0, 0.0], 1e-300),
+        (1.0, [1e150, 0.0, 0.0], 1e-200),
+    ] {
+        m.row(
+            "field::image_charge_sphere",
+            Class::A,
+            &cat(&[vec![f(q)], p3(p), vec![f(rr)]]),
+            &res_image(image_charge_sphere(black_box(q), p, rr)),
+        );
+    }
 }
 
 /// The point charges' and Green's functions' range edges (bijli ADR 0002 row 18, M1 part 5d-3), appended: results

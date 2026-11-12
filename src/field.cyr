@@ -751,55 +751,272 @@ fn _bj_field_rhat(p: *f64, r_hat: *BjFieldVector): f64 {
     return inv_r;
 }
 
-# E = (1/4πε₀r³)·[3(p·r̂)r̂ − p] at field_pos from a dipole p at the origin, as r̂·(3(p·r̂)·f) − p·f with f =
-# (1/r)³/(4πε₀). Singularity when the exact r² < 10^-30. Mirrors `field::electric_dipole_field`.
-public fn bj_electric_dipole_field(dipole_moment: BjFieldVector, field_pos: *f64, out: *BjFieldVector): Result {
+# ── the dipoles at a range edge (ADR 0002 row 18, M1 part 5d-4) ───────────────────────────────────────────────
+#
+# The dipole fields' chain: r̂ = p·(1/r), m·r̂, (1/r)³, the factor f ((1/r)³/(4πε₀), or μ₀(1/r)³/(4π)), 3(m·r̂), k =
+# 3(m·r̂)·f, then each component r̂·k − m·f, the last operation. Rust's chain is the unbounded one when each of those is
+# normal and above 2^-1022 (r̂, (1/r)³, the factor, 3(m·r̂), k), m·r̂ lies in src/crmath_vx.cyr's band, and each output
+# component does; a value that is an exact 0 passes too: r̂ᵢ for pᵢ = 0, m·r̂ (and so 3(m·r̂) and k) when every product
+# has a zero factor, an output component when both its products do. One fold, branch-free; anything else takes the
+# unbounded chain, and a non-finite part keeps Rust's.
+
+# 1 when the dipole field Rust evaluated is the unbounded chain's (the section comment): m and p the moment and the
+# field point, h = r̂, and v = [m·r̂, (1/r)³, the factor, 3(m·r̂), k, then the three output components].
+#must_use
+fn _bj_fv_dipole_plain(m: *f64, p: *f64, h: *f64, v: *f64): i64 {
+    # Each value into a local, then its bits: z* = 1 for an exact 0, r* a range term (negative out of range).
+    var m0: f64 = m[0];
+    var zm0 = ((load64(&m0) & 0x7FFFFFFFFFFFFFFF) - 1) >> 63;
+    var m1: f64 = m[1];
+    var zm1 = ((load64(&m1) & 0x7FFFFFFFFFFFFFFF) - 1) >> 63;
+    var m2: f64 = m[2];
+    var zm2 = ((load64(&m2) & 0x7FFFFFFFFFFFFFFF) - 1) >> 63;
+    var p0: f64 = p[0];
+    var zp0 = ((load64(&p0) & 0x7FFFFFFFFFFFFFFF) - 1) >> 63;
+    var p1: f64 = p[1];
+    var zp1 = ((load64(&p1) & 0x7FFFFFFFFFFFFFFF) - 1) >> 63;
+    var p2: f64 = p[2];
+    var zp2 = ((load64(&p2) & 0x7FFFFFFFFFFFFFFF) - 1) >> 63;
+    var zd = (zm0 | zp0) & (zm1 | zp1) & (zm2 | zp2);
+    var h0: f64 = h[0];
+    var bh0 = (load64(&h0) >> 52) & 0x7FF;
+    var rh0 = (bh0 - 2) | (2046 - bh0);
+    var h1: f64 = h[1];
+    var bh1 = (load64(&h1) >> 52) & 0x7FF;
+    var rh1 = (bh1 - 2) | (2046 - bh1);
+    var h2: f64 = h[2];
+    var bh2 = (load64(&h2) >> 52) & 0x7FF;
+    var rh2 = (bh2 - 2) | (2046 - bh2);
+    var pd: f64 = v[0];
+    var bpd = (load64(&pd) >> 52) & 0x7FF;
+    var rpd = (bpd - 123) | (2046 - bpd);
+    var i3: f64 = v[1];
+    var bi3 = (load64(&i3) >> 52) & 0x7FF;
+    var ri3 = (bi3 - 2) | (2046 - bi3);
+    var fc: f64 = v[2];
+    var bfc = (load64(&fc) >> 52) & 0x7FF;
+    var rfc = (bfc - 2) | (2046 - bfc);
+    var t3: f64 = v[3];
+    var bt3 = (load64(&t3) >> 52) & 0x7FF;
+    var rt3 = (bt3 - 2) | (2046 - bt3);
+    var kk: f64 = v[4];
+    var bkk = (load64(&kk) >> 52) & 0x7FF;
+    var rkk = (bkk - 2) | (2046 - bkk);
+    var e0: f64 = v[5];
+    var be0 = (load64(&e0) >> 52) & 0x7FF;
+    var re0 = (be0 - 123) | (2046 - be0);
+    var e1: f64 = v[6];
+    var be1 = (load64(&e1) >> 52) & 0x7FF;
+    var re1 = (be1 - 123) | (2046 - be1);
+    var e2: f64 = v[7];
+    var be2 = (load64(&e2) >> 52) & 0x7FF;
+    var re2 = (be2 - 123) | (2046 - be2);
+    var w = (rh0 & (zp0 - 1)) | (rh1 & (zp1 - 1)) | (rh2 & (zp2 - 1)) | (rpd & (zd - 1)) | ri3 | rfc;
+    w = w | (rt3 & (zd - 1)) | (rkk & (zd - 1)) | (re0 & (((zp0 | zd) & zm0) - 1));
+    w = w | (re1 & (((zp1 | zd) & zm1) - 1)) | (re2 & (((zp2 | zd) & zm2) - 1));
+    if (w >= 0) { return 1; }
+    var q: f64[6];
+    for (var i = 0; i < 3; i = i + 1) {
+        q[i] = m[i];
+        q[3 + i] = p[i];
+    }
+    if (_bj_vx_finite_n(&q, 6) == 0) { return 1; }
+    return 0;
+}
+
+# The unbounded chain's r̂ (three pairs), m·r̂ and 1/r for a dipole m at the origin and the field point p: into s[0..2]
+# and e[0..2], s[3] and e[3], s[4] and e[4].
+fn _bj_fv_dipole_ux(m: *f64, p: *f64, s: *f64, e: *i64) {
+    var o: f64[5];
+    var oe: i64[5];
+    _bj_vx_offset_ux(p, &_bj_x_origin, &o, &oe);
+    for (var i = 0; i < 3; i = i + 1) {
+        var hs, he = _bj_k_ux_mul(o[i], oe[i], o[4], oe[4]);
+        s[i] = hs;
+        e[i] = he;
+    }
+    var m0s, m0e = _bj_k_ux_from(m[0]);
+    var m1s, m1e = _bj_k_ux_from(m[1]);
+    var m2s, m2e = _bj_k_ux_from(m[2]);
+    var a0s, a0e = _bj_k_ux_mul(m0s, m0e, s[0], e[0]);
+    var a1s, a1e = _bj_k_ux_mul(m1s, m1e, s[1], e[1]);
+    var a2s, a2e = _bj_k_ux_mul(m2s, m2e, s[2], e[2]);
+    var ps, pe = _bj_k_ux_add(a0s, a0e, a1s, a1e);
+    var ds, de = _bj_k_ux_add(ps, pe, a2s, a2e);
+    s[3] = ds;
+    e[3] = de;
+    s[4] = o[4];
+    e[4] = oe[4];
+    return 0;
+}
+
+# A dipole field at a range edge into out: r̂, m·r̂ and (1/r)³ with an unbounded exponent; the factor (1/r)³/(4πε₀), or
+# μ₀(1/r)³/(4π) (magnetic 1); 3(m·r̂), k; each component r̂·k − m·f rounded once.
+fn _bj_fv_dipole_edge(m: *f64, p: *f64, magnetic, out: *BjFieldVector) {
+    var s: f64[5];
+    var e: i64[5];
+    _bj_fv_dipole_ux(m, p, &s, &e);
+    var i2s, i2e = _bj_k_ux_mul(s[4], e[4], s[4], e[4]);
+    var i3s, i3e = _bj_k_ux_mul(i2s, i2e, s[4], e[4]);
+    var fs: f64 = 0.0;
+    var fe = 0;
+    if (magnetic == 1) {
+        var mus, mue = _bj_k_ux_from(BJ_MU_0);
+        var ns, ne = _bj_k_ux_mul(mus, mue, i3s, i3e);
+        var four_pi: f64 = 4.0 * _BJ_PI;
+        var cs, ce = _bj_k_ux_from(four_pi);
+        var gs, ge = _bj_k_ux_div(ns, ne, cs, ce);
+        fs = gs;
+        fe = ge;
+    } else {
+        var d: f64 = 4.0 * _BJ_PI * BJ_EPSILON_0;
+        var cs2, ce2 = _bj_k_ux_from(d);
+        var gs2, ge2 = _bj_k_ux_div(i3s, i3e, cs2, ce2);
+        fs = gs2;
+        fe = ge2;
+    }
+    var ts, te = _bj_k_ux_mul(3.0, 0, s[3], e[3]);
+    var ks, ke = _bj_k_ux_mul(ts, te, fs, fe);
+    var o: f64[3];
+    for (var i = 0; i < 3; i = i + 1) {
+        var as, ae = _bj_k_ux_mul(s[i], e[i], ks, ke);
+        var mis, mie = _bj_k_ux_from(m[i]);
+        var bs, be = _bj_k_ux_mul(mis, mie, fs, fe);
+        var r: f64 = _bj_k_ux_sub_f64(as, ae, bs, be);
+        o[i] = r;
+    }
+    out.x = o[0];
+    out.y = o[1];
+    out.z = o[2];
+    return 0;
+}
+
+# The shared dipole field: Rust's chain with the factor f, then its guard, then the unbounded chain at an edge.
+fn _bj_fv_dipole_field(moment: BjFieldVector, field_pos: *f64, magnetic, out: *BjFieldVector): Result {
     var r_hat: BjFieldVector;
     var inv_r: f64 = _bj_field_rhat(field_pos, &r_hat);
     if (inv_r < 0.0) { return Err(_bj_err_singularity()); }
     var inv_r3: f64 = inv_r * inv_r * inv_r;
-    var p_dot: f64 = _bj_fv_dot_rust(dipole_moment, r_hat);
-    var d: f64 = 4.0 * _BJ_PI * BJ_EPSILON_0;
-    var factor: f64 = inv_r3 / d;
-    var k: f64 = 3.0 * p_dot * factor;
-    var a: BjFieldVector = r_hat.scale(k);
-    var b: BjFieldVector = dipole_moment.scale(factor);
-    var e: BjFieldVector = a - b;
-    out.x = e.x;
-    out.y = e.y;
-    out.z = e.z;
+    var p_dot: f64 = _bj_fv_dot_rust(moment, r_hat);
+    var factor: f64 = 0.0;
+    if (magnetic == 1) {
+        var four_pi: f64 = 4.0 * _BJ_PI;
+        factor = BJ_MU_0 * inv_r3 / four_pi;
+    } else {
+        var d: f64 = 4.0 * _BJ_PI * BJ_EPSILON_0;
+        factor = inv_r3 / d;
+    }
+    var t3: f64 = 3.0 * p_dot;
+    var k: f64 = t3 * factor;
+    var hx: f64 = r_hat.x;
+    var hy: f64 = r_hat.y;
+    var hz: f64 = r_hat.z;
+    var m0: f64 = moment.x;
+    var m1: f64 = moment.y;
+    var m2: f64 = moment.z;
+    var e0: f64 = hx * k - m0 * factor;
+    var e1: f64 = hy * k - m1 * factor;
+    var e2: f64 = hz * k - m2 * factor;
+    out.x = e0;
+    out.y = e1;
+    out.z = e2;
+    # The guard (the section comment), inline: z* = 1 for an exact 0, r* a range term (negative out of range).
+    var p0: f64 = field_pos[0];
+    var p1: f64 = field_pos[1];
+    var p2: f64 = field_pos[2];
+    var zm0 = ((load64(&m0) & 0x7FFFFFFFFFFFFFFF) - 1) >> 63;
+    var zm1 = ((load64(&m1) & 0x7FFFFFFFFFFFFFFF) - 1) >> 63;
+    var zm2 = ((load64(&m2) & 0x7FFFFFFFFFFFFFFF) - 1) >> 63;
+    var zp0 = ((load64(&p0) & 0x7FFFFFFFFFFFFFFF) - 1) >> 63;
+    var zp1 = ((load64(&p1) & 0x7FFFFFFFFFFFFFFF) - 1) >> 63;
+    var zp2 = ((load64(&p2) & 0x7FFFFFFFFFFFFFFF) - 1) >> 63;
+    var zd = (zm0 | zp0) & (zm1 | zp1) & (zm2 | zp2);
+    var b_hx = (load64(&hx) >> 52) & 0x7FF;
+    var r_hx = (b_hx - 2) | (2046 - b_hx);
+    var b_hy = (load64(&hy) >> 52) & 0x7FF;
+    var r_hy = (b_hy - 2) | (2046 - b_hy);
+    var b_hz = (load64(&hz) >> 52) & 0x7FF;
+    var r_hz = (b_hz - 2) | (2046 - b_hz);
+    var b_p_dot = (load64(&p_dot) >> 52) & 0x7FF;
+    var r_p_dot = (b_p_dot - 123) | (2046 - b_p_dot);
+    var b_inv_r3 = (load64(&inv_r3) >> 52) & 0x7FF;
+    var r_inv_r3 = (b_inv_r3 - 2) | (2046 - b_inv_r3);
+    var b_factor = (load64(&factor) >> 52) & 0x7FF;
+    var r_factor = (b_factor - 2) | (2046 - b_factor);
+    var b_t3 = (load64(&t3) >> 52) & 0x7FF;
+    var r_t3 = (b_t3 - 2) | (2046 - b_t3);
+    var b_k = (load64(&k) >> 52) & 0x7FF;
+    var r_k = (b_k - 2) | (2046 - b_k);
+    var b_e0 = (load64(&e0) >> 52) & 0x7FF;
+    var r_e0 = (b_e0 - 123) | (2046 - b_e0);
+    var b_e1 = (load64(&e1) >> 52) & 0x7FF;
+    var r_e1 = (b_e1 - 123) | (2046 - b_e1);
+    var b_e2 = (load64(&e2) >> 52) & 0x7FF;
+    var r_e2 = (b_e2 - 123) | (2046 - b_e2);
+    var w = (r_hx & (zp0 - 1)) | (r_hy & (zp1 - 1)) | (r_hz & (zp2 - 1)) | (r_p_dot & (zd - 1)) | r_inv_r3 | r_factor;
+    w = w | (r_t3 & (zd - 1)) | (r_k & (zd - 1)) | (r_e0 & (((zp0 | zd) & zm0) - 1));
+    w = w | (r_e1 & (((zp1 | zd) & zm1) - 1)) | (r_e2 & (((zp2 | zd) & zm2) - 1));
+    if (w >= 0) { return Ok(0); }
+    var mm: f64[3];
+    mm[0] = m0;
+    mm[1] = m1;
+    mm[2] = m2;
+    if (_bj_vx_finite_n(&mm, 3) == 0 || _bj_vx_finite_n(field_pos, 3) == 0) { return Ok(0); }
+    _bj_fv_dipole_edge(&mm, field_pos, magnetic, out);
     return Ok(0);
 }
 
-# V = p·r̂/(4πε₀r²) at field_pos from a dipole p at the origin, as (p·r̂)·(1/r)·(1/r)/(4πε₀). Singularity when
-# the exact r² < 10^-30. Mirrors `field::electric_dipole_potential`.
+# E = (1/4πε₀r³)·[3(p·r̂)r̂ − p] at field_pos from a dipole p at the origin, as r̂·(3(p·r̂)·f) − p·f with f =
+# (1/r)³/(4πε₀); at a range edge with an unbounded exponent, each component rounded once (ADR 0002 row 18).
+# Singularity when the exact r² < 10^-30 (row 17). Mirrors `field::electric_dipole_field`.
+public fn bj_electric_dipole_field(dipole_moment: BjFieldVector, field_pos: *f64, out: *BjFieldVector): Result {
+    var t, v = _bj_fv_dipole_field(dipole_moment, field_pos, 0, out);
+    if (is_err_result(t) == 1) { return Err(v); }
+    return Ok(0);
+}
+
+# V = p·r̂/(4πε₀r²) at field_pos from a dipole p at the origin, as (p·r̂)·(1/r)·(1/r)/(4πε₀); at a range edge (r̂,
+# p·r̂ or (p·r̂)/r² outside the normal range) with an unbounded exponent, the quotient rounded once (ADR 0002 row 18).
+# Singularity when the exact r² < 10^-30 (row 17). Mirrors `field::electric_dipole_potential`.
 public fn bj_electric_dipole_potential(dipole_moment: BjFieldVector, field_pos: *f64): Result {
     var r_hat: BjFieldVector;
     var inv_r: f64 = _bj_field_rhat(field_pos, &r_hat);
     if (inv_r < 0.0) { return Err(_bj_err_singularity()); }
     var p_dot: f64 = _bj_fv_dot_rust(dipole_moment, r_hat);
     var d: f64 = 4.0 * _BJ_PI * BJ_EPSILON_0;
-    var v: f64 = p_dot * inv_r * inv_r / d;
-    return Ok(v);
+    var t2: f64 = p_dot * inv_r * inv_r;
+    var v: f64 = t2 / d;
+    # The guard as the field's (the section comment), with (p·r̂)/r² for its factor terms.
+    var w: f64[8];
+    w[0] = p_dot;
+    w[1] = 1.0;
+    w[2] = 1.0;
+    w[3] = t2;
+    w[4] = t2;
+    w[5] = 1.0;
+    w[6] = 1.0;
+    w[7] = 1.0;
+    var mm: f64[3];
+    mm[0] = dipole_moment.x;
+    mm[1] = dipole_moment.y;
+    mm[2] = dipole_moment.z;
+    if (_bj_fv_dipole_plain(&mm, field_pos, &r_hat, &w) == 1) { return Ok(v); }
+    var s: f64[5];
+    var e: i64[5];
+    _bj_fv_dipole_ux(&mm, field_pos, &s, &e);
+    var t1s, t1e = _bj_k_ux_mul(s[3], e[3], s[4], e[4]);
+    var t2s, t2e = _bj_k_ux_mul(t1s, t1e, s[4], e[4]);
+    var ds, de = _bj_k_ux_from(d);
+    var u: f64 = _bj_k_ux_div_f64(t2s, t2e, ds, de);
+    return Ok(u);
 }
 
 # B = (μ₀/4πr³)·[3(m·r̂)r̂ − m] at field_pos from a magnetic dipole m at the origin, as r̂·(3(m·r̂)·f) − m·f with
-# f = μ₀·(1/r)³/(4π). Singularity when the exact r² < 10^-30. Mirrors `field::magnetic_dipole_field`.
+# f = μ₀·(1/r)³/(4π); at a range edge with an unbounded exponent, each component rounded once (ADR 0002 row 18).
+# Singularity when the exact r² < 10^-30 (row 17). Mirrors `field::magnetic_dipole_field`.
 public fn bj_magnetic_dipole_field(magnetic_moment: BjFieldVector, field_pos: *f64, out: *BjFieldVector): Result {
-    var r_hat: BjFieldVector;
-    var inv_r: f64 = _bj_field_rhat(field_pos, &r_hat);
-    if (inv_r < 0.0) { return Err(_bj_err_singularity()); }
-    var inv_r3: f64 = inv_r * inv_r * inv_r;
-    var m_dot: f64 = _bj_fv_dot_rust(magnetic_moment, r_hat);
-    var four_pi: f64 = 4.0 * _BJ_PI;
-    var factor: f64 = BJ_MU_0 * inv_r3 / four_pi;
-    var k: f64 = 3.0 * m_dot * factor;
-    var a: BjFieldVector = r_hat.scale(k);
-    var b: BjFieldVector = magnetic_moment.scale(factor);
-    var e: BjFieldVector = a - b;
-    out.x = e.x;
-    out.y = e.y;
-    out.z = e.z;
+    var t, v = _bj_fv_dipole_field(magnetic_moment, field_pos, 1, out);
+    if (is_err_result(t) == 1) { return Err(v); }
     return Ok(0);
 }
 
@@ -922,7 +1139,8 @@ public fn bj_electric_field_inside_cylinder(volume_charge_density: f64, distance
 
 # E_z = kQz/(z² + R²)^(3/2) (V/m) on the axis of a ring of radius R in the plane z = 0, z signed; 0 at the centre,
 # Singularity there only for R = 0 (a point charge). InvalidParameter when R is negative, NaN or infinite, or z is not
-# finite. Mirrors `field::electric_field_ring_axis`.
+# finite. At a range edge the chain runs with an unbounded exponent, the quotient rounded once (ADR 0002 row 18).
+# Mirrors `field::electric_field_ring_axis`.
 public fn bj_electric_field_ring_axis(total_charge: f64, ring_radius: f64, axial_distance: f64): Result {
     if (!(ring_radius >= 0.0 && _bj_is_finite(ring_radius) == 1)) {
         var t = _bj_err_reason(BJ_ERR_INVALID_PARAMETER);
@@ -944,13 +1162,34 @@ public fn bj_electric_field_ring_axis(total_charge: f64, ring_radius: f64, axial
     var d_sq: f64 = axial_distance * axial_distance + ring_radius * ring_radius;
     var rt: f64 = f64_sqrt(d_sq);
     var denom: f64 = d_sq * rt;
-    var e: f64 = BJ_COULOMB_K * total_charge * axial_distance / denom;
-    return Ok(e);
+    var kq: f64 = BJ_COULOMB_K * total_charge;
+    var kqz: f64 = kq * axial_distance;
+    var e: f64 = kqz / denom;
+    # Rust's chain is the unbounded one when z² + R² lies in the band and the products (z² + R²)^(3/2), k·Q and k·Q·z
+    # are normal and above 2^-1022 (a zero charge makes the numerator an exact 0); ADR 0002 row 18.
+    var e1 = (load64(&d_sq) >> 52) & 0x7FF;
+    var e2 = (load64(&denom) >> 52) & 0x7FF;
+    var e3 = (load64(&kq) >> 52) & 0x7FF;
+    var e4 = (load64(&kqz) >> 52) & 0x7FF;
+    var w = (e1 - 123) | (2046 - e1) | (e2 - 2) | (2046 - e2);
+    if (total_charge != 0.0) { w = w | (e3 - 2) | (2046 - e3) | (e4 - 2) | (2046 - e4); }
+    if (w >= 0 || _bj_is_finite(total_charge) == 0) { return Ok(e); }
+    var ds, de = _bj_vx_sumsq(axial_distance, ring_radius, 0.0);
+    var rs, re = _bj_k_ux_sqrt(ds, de);
+    var ns, ne = _bj_k_ux_mul(ds, de, rs, re);
+    var ks, ke = _bj_k_ux_from(BJ_COULOMB_K);
+    var qs, qe = _bj_k_ux_from(total_charge);
+    var zs, ze = _bj_k_ux_from(axial_distance);
+    var ms, me = _bj_k_ux_mul(ks, ke, qs, qe);
+    var mzs, mze = _bj_k_ux_mul(ms, me, zs, ze);
+    var u: f64 = _bj_k_ux_div_f64(mzs, mze, ns, ne);
+    return Ok(u);
 }
 
 # E_z = sgn(z)·(σ/2ε₀)·(R/r)·(R/(r + |z|)), r = √(z² + R²), on the axis of a disk of radius R in the plane z = 0: the
 # cancellation-free form, the one-sided limit at z = ±0 by the sign bit. InvalidParameter when R is not positive and
-# finite, or z is not finite. Mirrors `field::electric_field_disk_axis`.
+# finite, or z is not finite. At a range edge the chain runs with an unbounded exponent, the last product rounded once
+# (ADR 0002 row 18). Mirrors `field::electric_field_disk_axis`.
 public fn bj_electric_field_disk_axis(surface_charge_density: f64, disk_radius: f64, axial_distance: f64): Result {
     if (!(disk_radius > 0.0 && _bj_is_finite(disk_radius) == 1)) {
         var t = _bj_err_reason(BJ_ERR_INVALID_PARAMETER);
@@ -973,15 +1212,51 @@ public fn bj_electric_field_disk_axis(surface_charge_density: f64, disk_radius: 
     var geometric: f64 = g1 * g2;
     var sign: f64 = _bj_copysign(1.0, axial_distance);
     var d: f64 = 2.0 * BJ_EPSILON_0;
-    var e: f64 = sign * surface_charge_density / d * geometric;
-    return Ok(e);
+    var sd: f64 = sign * surface_charge_density / d;
+    var e: f64 = sd * geometric;
+    # Rust's chain is the unbounded one when z² + R² lies in the band, r + |z| is finite, R/r, R/(r + |z|), their
+    # product and σ/(2ε₀) are normal and above 2^-1022 (σ = 0 makes the last an exact 0); ADR 0002 row 18.
+    var e1 = (load64(&s2) >> 52) & 0x7FF;
+    var e2 = (load64(&g1) >> 52) & 0x7FF;
+    var e3 = (load64(&rz) >> 52) & 0x7FF;
+    var e4 = (load64(&g2) >> 52) & 0x7FF;
+    var e5 = (load64(&geometric) >> 52) & 0x7FF;
+    var e6 = (load64(&sd) >> 52) & 0x7FF;
+    var w = (e1 - 123) | (2046 - e1) | (e2 - 2) | (2046 - e2) | (2046 - e3) | (e4 - 2) | (2046 - e4) | (e5 - 2);
+    w = w | (2046 - e5);
+    if (surface_charge_density != 0.0) { w = w | (e6 - 2) | (2046 - e6); }
+    if (w >= 0 || _bj_is_finite(surface_charge_density) == 0) { return Ok(e); }
+    var u: f64 = _bj_fv_disk_edge(surface_charge_density, disk_radius, axial_distance, sign, d);
+    return Ok(u);
+}
+
+# The disk's axial field at a range edge: r, R/r, r + |z|, R/(r + |z|), their product and sgn(z)·σ/(2ε₀) with an
+# unbounded exponent, the last product rounded once.
+#must_use
+fn _bj_fv_disk_edge(sigma: f64, rr: f64, z: f64, sign: f64, d: f64): f64 {
+    var ss, se = _bj_vx_sumsq(z, rr, 0.0);
+    var rs, re = _bj_k_ux_sqrt(ss, se);
+    var Rs, Re = _bj_k_ux_from(rr);
+    var g1s, g1e = _bj_k_ux_div(Rs, Re, rs, re);
+    var az: f64 = f64_abs(z);
+    var zs, ze = _bj_k_ux_from(az);
+    var ts, te = _bj_k_ux_add(rs, re, zs, ze);
+    var g2s, g2e = _bj_k_ux_div(Rs, Re, ts, te);
+    var gs, ge = _bj_k_ux_mul(g1s, g1e, g2s, g2e);
+    var sg: f64 = sign * sigma;
+    var as, ae = _bj_k_ux_from(sg);
+    var ds, de = _bj_k_ux_from(d);
+    var qs, qe = _bj_k_ux_div(as, ae, ds, de);
+    var u: f64 = _bj_k_ux_mul_f64(qs, qe, gs, ge);
+    return u;
 }
 
 # ── multipoles (M1 part 3b) ─────────────────────────────────────────────────────────────────────────────────────
 
 # V = (1/4πε₀)·½·Σᵢⱼ Qᵢⱼxᵢxⱼ/r⁵ (volts) at field_pos from a quadrupole at the origin: Σ in i-then-j order from 0, over
-# 8πε₀r⁵ with r⁵ = r²·r²·r. q_tensor is 9 f64, row-major (Rust's `[[f64; 3]; 3]`). Singularity when the exact
-# r² < 10^-30 (ADR 0002 row 17). Mirrors `field::electric_quadrupole_potential`.
+# 8πε₀r⁵ with r⁵ = r²·r²·r. q_tensor is 9 f64, row-major (Rust's `[[f64; 3]; 3]`). At a range edge the chain runs with
+# an unbounded exponent, the quotient rounded once (ADR 0002 row 18). Singularity when the exact r² < 10^-30 (row 17).
+# Mirrors `field::electric_quadrupole_potential`.
 public fn bj_electric_quadrupole_potential(q_tensor: *f64, field_pos: *f64): Result {
     var r_sq: f64 = field_pos[0] * field_pos[0] + field_pos[1] * field_pos[1] + field_pos[2] * field_pos[2];
     var band = _bj_x_band(r_sq, _BJ_FIELD_R2_MIN);
@@ -1000,7 +1275,74 @@ public fn bj_electric_quadrupole_potential(q_tensor: *f64, field_pos: *f64): Res
     }
     var d: f64 = 8.0 * _BJ_PI * BJ_EPSILON_0 * r5;
     var v: f64 = sum / d;
-    return Ok(v);
+    if (_bj_fv_quad_plain(q_tensor, field_pos, r_sq, r5, d, sum) == 1) { return Ok(v); }
+    var u: f64 = _bj_fv_quad_edge(q_tensor, field_pos);
+    return Ok(u);
+}
+
+# 1 when the quadrupole's binary64 chain is the unbounded one (ADR 0002 row 18): r², r⁵ and 8πε₀r⁵ normal and above
+# 2^-1022 (r⁴ lies between r² and r⁵), each Qᵢⱼ·xᵢ and each term Qᵢⱼ·xᵢ·xⱼ normal or an exact 0 (a zero factor), and the
+# sum finite (a sum of such terms rounds alike in both; an overflow shows as a non-finite sum); or a part not finite.
+#must_use
+fn _bj_fv_quad_plain(qt: *f64, p: *f64, r_sq: f64, r5: f64, d: f64, sum: f64): i64 {
+    var all: f64[12];
+    for (var k = 0; k < 9; k = k + 1) { all[k] = qt[k]; }
+    all[9] = p[0];
+    all[10] = p[1];
+    all[11] = p[2];
+    if (_bj_vx_finite_n(&all, 12) == 0) { return 1; }
+    var e1 = (load64(&r_sq) >> 52) & 0x7FF;
+    var e2 = (load64(&r5) >> 52) & 0x7FF;
+    var e3 = (load64(&d) >> 52) & 0x7FF;
+    var e4 = (load64(&sum) >> 52) & 0x7FF;
+    if (((e1 - 2) | (2046 - e1) | (e2 - 2) | (2046 - e2) | (e3 - 2) | (2046 - e3) | (2046 - e4)) < 0) { return 0; }
+    for (var i = 0; i < 3; i = i + 1) {
+        for (var j = 0; j < 3; j = j + 1) {
+            var qq: f64 = qt[i * 3 + j];
+            var xi: f64 = p[i];
+            var xj: f64 = p[j];
+            var a: f64 = qq * xi;
+            var t: f64 = a * xj;
+            if (qq != 0.0 && xi != 0.0) {
+                var ba = (load64(&a) >> 52) & 0x7FF;
+                if (ba < 2 || ba > 2046) { return 0; }
+                if (xj != 0.0) {
+                    var bt = (load64(&t) >> 52) & 0x7FF;
+                    if (bt < 2 || bt > 2046) { return 0; }
+                }
+            }
+        }
+    }
+    return 1;
+}
+
+# The quadrupole potential at a range edge: r², r, r⁵ and 8πε₀r⁵ with an unbounded exponent, the sum of the terms
+# (Qᵢⱼ·xᵢ)·xⱼ in i-then-j order from 0 with one, the quotient rounded once.
+#must_use
+fn _bj_fv_quad_edge(qt: *f64, p: *f64): f64 {
+    var r2s, r2e = _bj_vx_sumsq(p[0], p[1], p[2]);
+    var rs, re = _bj_k_ux_sqrt(r2s, r2e);
+    var r4s, r4e = _bj_k_ux_mul(r2s, r2e, r2s, r2e);
+    var r5s, r5e = _bj_k_ux_mul(r4s, r4e, rs, re);
+    var c8: f64 = 8.0 * _BJ_PI * BJ_EPSILON_0;
+    var cs, ce = _bj_k_ux_from(c8);
+    var ds, de = _bj_k_ux_mul(cs, ce, r5s, r5e);
+    var acs: f64[1];
+    var ace: i64[1];
+    acs[0] = 0.0;
+    ace[0] = 0;
+    for (var i = 0; i < 3; i = i + 1) {
+        for (var j = 0; j < 3; j = j + 1) {
+            var as, ae = _bj_vx_mul(qt[i * 3 + j], p[i]);
+            var js, je = _bj_k_ux_from(p[j]);
+            var ts, te = _bj_k_ux_mul(as, ae, js, je);
+            var ns, ne = _bj_k_ux_add(acs[0], ace[0], ts, te);
+            acs[0] = ns;
+            ace[0] = ne;
+        }
+    }
+    var u: f64 = _bj_k_ux_div_f64(acs[0], ace[0], ds, de);
+    return u;
 }
 
 # (r, cos θ, sin θ, φ) of a point into out (4 f64); 0 at the origin, else 1. cos θ = z/r and sin θ = ρ/r, clamped,
@@ -1230,7 +1572,8 @@ public fn bj_image_charge_plane(charge: f64, position: *f64, plane_z: f64, image
 
 # The image of a charge at `position` outside a grounded sphere of radius R at the origin: Ok(q' = −(R/d)·q), and the
 # position (R²/d²)·r into image_pos (Griffiths Ex. 3.2). InvalidParameter when R is not positive and finite, or the
-# charge is not strictly outside (a NaN position included). Mirrors `field::image_charge_sphere`.
+# charge is not strictly outside (a NaN position included). At a range edge the chain runs with an unbounded exponent,
+# the comparison with R included, each output rounded once (ADR 0002 row 18). Mirrors `field::image_charge_sphere`.
 public fn bj_image_charge_sphere(charge: f64, position: *f64, sphere_radius: f64, image_pos: *f64): Result {
     if (!(sphere_radius > 0.0 && _bj_is_finite(sphere_radius) == 1)) {
         var t = _bj_err_reason(BJ_ERR_INVALID_PARAMETER);
@@ -1240,15 +1583,17 @@ public fn bj_image_charge_sphere(charge: f64, position: *f64, sphere_radius: f64
     }
     var d_sq: f64 = position[0] * position[0] + position[1] * position[1] + position[2] * position[2];
     var d: f64 = f64_sqrt(d_sq);
-    if (d != d || d <= sphere_radius) {
-        var t2 = _bj_err_reason(BJ_ERR_INVALID_PARAMETER);
-        _bj_tx_cstr(t2, "charge must be outside the sphere (|r| = ");
-        _bj_fmt_f64_display(t2, d);
-        _bj_tx_cstr(t2, " > R = ");
-        _bj_fmt_f64_display(t2, sphere_radius);
-        _bj_tx_putc(t2, 41);
-        return Err(BJ_ERR_INVALID_PARAMETER);
+    # |r|² in the band makes Rust's |r| the unbounded chain's, and with it the comparison; outside it (a finite
+    # position) the whole chain, the comparison included, runs with an unbounded exponent (ADR 0002 row 18).
+    var e1 = (load64(&d_sq) >> 52) & 0x7FF;
+    if (e1 < 123 || e1 > 2046) {
+        if (_bj_vx_finite_n(position, 3) == 1 && _bj_is_finite(charge) == 1) {
+            var rt, rv = _bj_fv_sphere_edge(charge, position, sphere_radius, image_pos);
+            if (is_err_result(rt) == 1) { return Err(rv); }
+            return Ok(rv);
+        }
     }
+    if (d != d || d <= sphere_radius) { return Err(_bj_fv_sphere_err(d, sphere_radius)); }
     var ratio: f64 = sphere_radius / d;
     var nq: f64 = -charge;
     var q_image: f64 = nq * ratio;
@@ -1256,7 +1601,47 @@ public fn bj_image_charge_sphere(charge: f64, position: *f64, sphere_radius: f64
     image_pos[0] = position[0] * scale;
     image_pos[1] = position[1] * scale;
     image_pos[2] = position[2] * scale;
-    return Ok(q_image);
+    var e2 = (load64(&ratio) >> 52) & 0x7FF;
+    var e3 = (load64(&scale) >> 52) & 0x7FF;
+    var w = (e2 - 2) | (2046 - e2) | (e3 - 2) | (2046 - e3);
+    if (w >= 0 || _bj_is_finite(charge) == 0) { return Ok(q_image); }
+    var r2t, r2v = _bj_fv_sphere_edge(charge, position, sphere_radius, image_pos);
+    if (is_err_result(r2t) == 1) { return Err(r2v); }
+    return Ok(r2v);
+}
+
+# The sphere image's InvalidParameter, "charge must be outside the sphere (|r| = d > R = R)".
+fn _bj_fv_sphere_err(d: f64, rr: f64): i64 {
+    var t2 = _bj_err_reason(BJ_ERR_INVALID_PARAMETER);
+    _bj_tx_cstr(t2, "charge must be outside the sphere (|r| = ");
+    _bj_fmt_f64_display(t2, d);
+    _bj_tx_cstr(t2, " > R = ");
+    _bj_fmt_f64_display(t2, rr);
+    _bj_tx_putc(t2, 41);
+    return BJ_ERR_INVALID_PARAMETER;
+}
+
+# The sphere image at a range edge: |r| with an unbounded exponent, compared with R exactly (the error then reports
+# |r| rounded once), R/|r| and (R/|r|)² with one, each output product rounded once.
+fn _bj_fv_sphere_edge(charge: f64, p: *f64, rr: f64, image_pos: *f64): Result {
+    var ss, se = _bj_vx_sumsq(p[0], p[1], p[2]);
+    var ds, de = _bj_k_ux_sqrt(ss, se);
+    var Rs, Re = _bj_k_ux_from(rr);
+    if (_bj_k_ux_le(ds, de, Rs, Re) == 1) {
+        var dd: f64 = _bj_k_ux_round(ds, de, 0.0);
+        return Err(_bj_fv_sphere_err(dd, rr));
+    }
+    var qs, qe = _bj_k_ux_div(Rs, Re, ds, de);
+    var nq: f64 = -charge;
+    var ns, ne = _bj_k_ux_from(nq);
+    var qi: f64 = _bj_k_ux_mul_f64(ns, ne, qs, qe);
+    var cs, ce = _bj_k_ux_mul(qs, qe, qs, qe);
+    for (var i = 0; i < 3; i = i + 1) {
+        var xs, xe = _bj_k_ux_from(p[i]);
+        var o: f64 = _bj_k_ux_mul_f64(xs, xe, cs, ce);
+        image_pos[i] = o;
+    }
+    return Ok(qi);
 }
 
 # The image of a charge at height z > 0 over a dielectric half-space (Jackson §4.4): Ok(q' = −q(ε₂ − ε₁)/(ε₁ + ε₂)),
