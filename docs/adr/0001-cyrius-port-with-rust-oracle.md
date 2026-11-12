@@ -1,7 +1,8 @@
 # 0001 — Port to Cyrius, with Rust 1.3.0 frozen as the parity oracle
 
 **Status**: Proposed. It is accepted at M0 step 2 of the [port plan](../development/bijli-port-plan.md),
-once D1, D3 and D5 (plan §0.3) are answered.
+now that plan §0.3's decisions are answered (2026-11-11): D1 cut 1.3.0; D3 e^{+jωt} with IEEE
+handedness; D5 derive writers with hand-written readers.
 **Date**: 2026-11-11
 
 ## Context
@@ -54,6 +55,11 @@ and nothing in it is edited.
 - **Accuracy.** Every transcendental is correctly rounded and target-independent. The primitives
   are reused from impetus's `crmath.cyr` and kimiya's `mathx.cyr`; asin and tan are new. Inexact
   formulas and range edges are fixed within plan §0.1's scope, one ADR 0002 row each.
+- **One time convention.** Rust mixes e^{−iωt} (polarization, beam, field, the FDTD media) and
+  e^{+jωt} (scattering, rf, the FDTD phasors). The port uses **e^{+jωt} with IEEE handedness** in
+  every module (plan §4.4), the convention of the FDTD, RF, antenna and beam literature bijli
+  implements. Amplitudes are compared as `conj(oracle)` and phases as `−oracle`; observables are
+  compared directly. The port removes Rust's faults; it doesn't carry them.
 - **No production hisab dependency.** bijli owns a by-value `BjComplex` that transcribes Rust
   hisab 1.4.0's `Complex` operation for operation.
 - **Divergences.** A divergence from the oracle beyond its class is a defect, unless ADR 0002

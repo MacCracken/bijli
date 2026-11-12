@@ -61,8 +61,14 @@
   recorded per milestone in `docs/benchmarks-rust-v-cyrius.md`. impetus's median ratio was
   10× in 2D and 13× in 3D. A slow row is a finding to file with its numbers, not a reason to
   change the port.
-- **No Rust 2.0.** The roadmap's "2.0 cleanup (breaking)" items that change the API's shape
-  land in the Cyrius API only, accepted by ADR (§4.3). New physics stays out of the port.
+- **No Rust 2.0.** The roadmap's "2.0 cleanup (breaking)" items land in the Cyrius API only,
+  accepted by ADR (§4.3). New physics stays out of the port.
+- **The port removes Rust; it doesn't carry Rust's faults.** Parity with the oracle is
+  functional: the same physics, results, errors and branches. It is not a reason to keep an
+  inconsistency or a gap the Rust crate has. The time-convention split (§4.4) and the missing
+  transport error (§4.3 row 7) are fixed in the port, and each fix is an ADR 0002 row with its
+  oracle rows mapped exactly. "As Rust" is never a justification on its own; the oracle's
+  operation order is kept only where it is what makes a golden row comparable.
 - **Bit-identical across targets** for everything bijli computes: x86_64 ELF, x86_64 PE (wine)
   and aarch64 (qemu), as impetus.
 
@@ -89,15 +95,15 @@
 - **The FDTD solvers are compared over whole trajectories** (§3 item 2). Their updates are
   linear and use only `+ − × ÷`, so a whole run is class B.
 
-### 0.3 Decisions for the maintainer before §5 (recommendation first)
+### 0.3 Decisions for the maintainer before §5 (all answered 2026-11-11)
 
 | # | Question | Recommendation | Alternative |
 |---|---|---|---|
-| D1 | Which Rust version is the oracle? | **Cut 1.3.0**: the `[Unreleased]` 3D CPML adds API (`try_enable_cpml*`, `disable_cpml`, `cpml`), so it is a minor release | Port from 1.2.0 and carry the 3D CPML as Cyrius-only work. That loses the oracle for the newest and hardest code, so it is not recommended |
+| D1 | Which Rust version is the oracle? | ✅ **Accepted 2026-11-11: cut 1.3.0** (with the 3D CPML) | — |
 | D2 | ~~`bridge.rs`~~ | **Settled by §2: ported, all 8 (M7).** They are dependency-free functions, and two partners (prakash, tanmatra) are already in Cyrius | — |
-| D3 | Time conventions: polarization uses e^{−iωt}, scattering uses e^{+iωt} | **Carry both as in Rust** in 2.0.0. Unifying them changes physics, not API shape, and the earlier ports kept physics out. Track the unification as a 2.x item: new convention-explicit functions, then deprecations | Unify in 2.0.0 (the one breaking release). The harness maps each row by `conj`, which is exact; prakash's conventions have to be checked first |
+| D3 | Rust mixes two time conventions (§4.4). Which **one** does the port use everywhere? | ✅ **Accepted 2026-11-11: e^{+jωt} (engineering) with IEEE handedness, in every module, in 2.0.0** (§4.4). Keeping Rust's split was wrong: the port removes Rust's faults instead of carrying them | e^{−iωt} everywhere: rejected (§4.4) |
 | D4 | ~~`ai`~~ | **Settled by §2: ported, in a `[lib.ai]` profile (M7)**, on prakash's model (sandhi + bayan) | — |
-| D5 | JSON for the 36 serde types (§2 rows *serde*) | **`#derive(Serialize)` writers for every type, and hand-written readers on bayan's tree** (impetus's `json.cyr` pattern) until the three open reader defects are fixed upstream. Then switch the readers to the derive's scanner. The writer emits serde's shape with the same digits; JSON golden rows compare parsed bits, because the exponent notation differs (`1e+16` against `10000000000000000.0`). `BjComplex` serializes as `{"re":..,"im":..}`, as Rust hisab's does | (a) derive for both directions now, accepting the reader defects on untrusted input; or (b) impetus ADR 0010 in full: hand-written, text-identical serde codecs in both directions |
+| D5 | JSON for the 36 serde types (§2 rows *serde*) | ✅ **Accepted 2026-11-11:** **`#derive(Serialize)` writers for every type, and hand-written readers on bayan's tree** (impetus's `json.cyr` pattern) until the three open reader defects are fixed upstream. Then switch the readers to the derive's scanner. The writer emits serde's shape with the same digits; JSON golden rows compare parsed bits, because the exponent notation differs (`1e+16` against `10000000000000000.0`). `BjComplex` serializes as `{"re":..,"im":..}`, as Rust hisab's does | (a) derive for both directions now, accepting the reader defects on untrusted input; or (b) impetus ADR 0010 in full: hand-written, text-identical serde codecs in both directions |
 ---
 
 ## 1. Porting models and references
@@ -266,8 +272,56 @@ compares it, so no function leaves parity entirely.
 | 2 | public FDTD grid fields (`ex`, `ez`, `nx`, …), with a per-step layout check because callers can resize them | the buffers are fixed at construction and read through accessors (pointer + length); nothing can resize them, so the per-step layout check and its `tracing::error` path go | class T on the accessors. The Rust layout-mismatch tests are n/a |
 | 3 | `TfsfSource::new` and `Cpml::new` sanitize with a warning; `Fdtd2d::enable_cpml` warns and ignores | fallible only: the constructors return `Err`, and `enable_cpml` is the `try_` form | oracle sanitize-or-ignore rows ↔ `Err`, mapped by name |
 | 4 | `BijliError` variants carry data and `String`s | `BJ_ERR_*` codes (append-only) in `Result`; the payload in the per-thread last-error record (§2) | class A on the code **and** on the recorded payload |
-| 5 | the polarization/scattering time-convention split | **as Rust** (D3) | — |
+| 5 | two time conventions (polarization, beam, field and the FDTD media in e^{−iωt}; scattering, rf and the FDTD phasors in e^{+jωt}) | **e^{+jωt} everywhere**, IEEE handedness (D3, §4.4) | amplitudes ↔ `conj(oracle)`, phases ↔ `−oracle`, observables unchanged: all exact |
+| 7 | no transport error: the `ai` client maps network failures to `InvalidParameter` (roadmap backlog) | `BJ_ERR_TRANSPORT`, appended | oracle `InvalidParameter` rows from the `ai` client ↔ `BJ_ERR_TRANSPORT` |
 | 6 | results bit-identical only on the same platform | **bit-identical across targets** | measured on three targets, as impetus |
+
+### 4.4 One time convention (D3)
+
+Rust 1.3.0 mixes the two harmonic time conventions, module by module, and in `fdtd.rs` within one
+file:
+
+| Rust module | Convention | Where it shows |
+|---|---|---|
+| `polarization` | e^{−iωt}, Born & Wolf handedness | Jones vectors and matrices; the waveplate's fast axis at e^{−iδ/2}; `right_circular` = [1, −i]/√2; S₃ = 2 Im(E_x E_y*) |
+| `beam` | e^{−iωt} (field ∝ e^{+ikz}) | `hermite_gaussian_field`'s complex field and its Gouy phase |
+| `field` | e^{−iωt} | the Green's function e^{ikR}/(4πR) |
+| `fdtd` media | e^{−iωt} | Drude, Lorentz and Debye ε(ω) (the ADE update coefficients themselves are real) |
+| `fdtd` CW / NF2FF | e^{+jωt} | `CwAccumulator` (`imag −= f·sin ωt`), `nf2ff_2d_phasor`, the e^{+jω·dt/2} H rotation |
+| `scattering` | e^{+iωt} | Mie `a`/`b`; absorbing Im(m) < 0 |
+| `rf` | e^{+jωt} | +jωL, Γ, Smith chart, S-parameters, Touchstone |
+
+**The Cyrius 2.0.0 uses e^{+jωt} in every module** (written with `j`), with **IEEE handedness**
+(IEEE Std 145), so that one consistent engineering system runs through the library. The
+maintainer chose it on 2026-11-11 (D3). The reasons:
+- It is the convention of the literature bijli implements: FDTD (Taflove & Hagness), RF (Pozar),
+  antennas (Balanis) and Gaussian beams (Siegman). prakash's `wave_beam.cyr` uses it too.
+- `rf`, Mie and the FDTD phasors already use it. Touchstone files and Smith-chart coordinates need
+  no conversion: both are defined in e^{+jωt}.
+- The modules that change are `polarization`, `beam`, the Green's function and the media's ε(ω).
+  Absorbing indices are written n − jκ, as bijli's Mie already requires.
+
+**What changes and what doesn't**, with how the harness compares each (ADR 0002 row 5). Every
+mapping is exact, so no tolerance widens:
+
+| Quantity | Change | Golden comparison |
+|---|---|---|
+| complex amplitudes: Jones vectors and matrices, waveplates, the complex beam field, the Green's function, complex ε(ω) | conjugated | port = `conj(oracle)`: the imaginary part's sign bit flips |
+| phases (`arg` of an amplitude, the field's Gouy phase term) | negated | port = `−oracle` |
+| circular-state names (`right_circular`, `left_circular`, the circular polarizers) | named by IEEE handedness | mapped by physical state: each name is pinned by a convention-free test that samples the real field E(t) at two instants and checks its rotation sense against the propagation direction |
+| S₃ and the ellipticity angle's sign | keep their physical meaning under the IEEE names | the formula from a Jones vector changes sign; the rows map with the names |
+| intensities, \|Γ\|, VSWR, return, insertion and mismatch loss, Mie Q_ext/Q_sca/Q_abs and g, cross sections, Rayleigh, S₀–S₂, Mueller matrices, degree of polarization, orientation angle, array-factor magnitudes, NF2FF patterns, every real FDTD field | unchanged | class as before, against the oracle directly |
+
+**Rejected: e^{−iωt} everywhere** (Jackson, Born & Wolf, Bohren & Huffman). It would keep
+`polarization` and `beam` and let tabulated n + iκ go into Mie without conjugation. But `rf`,
+Mie and the FDTD phasors would change instead. Touchstone files would be conjugated at the file
+boundary, because their spec is e^{+jωt}, and Smith-chart coordinates would come out conjugated
+relative to every printed chart.
+
+The convention is stated once, in `src/complex.cyr`'s header and the README, and every module's doc
+points there instead of carrying its own. `docs/guides/migration-2.0.md` (M8) gives consumers the
+conversion: conjugate amplitudes from bijli 1.x's `polarization`, `beam`, Green's function and
+ε(ω). Circular-state names now follow IEEE.
 
 ---
 
@@ -277,7 +331,7 @@ These steps run on the Rust tree. They end in a Rust-side **"port plan" commit**
 tanmatra (`2febf11`), impetus (`a26296b`) and kimiya (`6281f19`) each landed before their
 initial-port commit.
 
-- **P0. Read this plan and settle D1, D3 and D5** (§0.3; D2 and D4 are settled by §2). Record the answers in ADR 0001 / 0002 drafts.
+- **P0. Read this plan and settle D1, D3 and D5** (§0.3; D2 and D4 are settled by §2). Done 2026-11-11: D1 1.3.0, D3 e^{+jωt}, D5 derive writers with hand-written readers. Record the answers in ADR 0001 / 0002 drafts.
 - **P1. Cut the oracle release.** *Maintainer action.*
   - Move `[Unreleased]` to `[1.3.0] — <date>`. Bump `VERSION` and `Cargo.toml` with
     `scripts/version-bump.sh`.
@@ -521,7 +575,7 @@ Rules:
   differ. Then find the operation order that differs (§9.3 FDTD kernels).
 - **Branch points on both sides:**
   - Fresnel total internal reflection and the `cos θ_i` 1e-6 clamp;
-  - the Mie limits (`MIE_MAX_SIZE_PARAMETER`, `MIE_MAX_MX`) and the Im(m) > 0 rejection;
+  - the Mie limits (`MIE_MAX_SIZE_PARAMETER`, `MIE_MAX_MX`) and the gain-index rejection (Im(m) > 0; absorbing indices are n − jκ);
   - the r² < 1e-30 m² singular cutoff;
   - the CPML fit check `2·t + 3 ≤ min(n)`;
   - `dt` at and just above the Courant limit;
@@ -559,7 +613,7 @@ Gate mechanics the siblings learned the hard way:
 |---|---|---|---|
 | **M1 Foundation** | error, constants, mathx, crmath, complex, log, field, maxwell, charge | `BijliError` → `BJ_ERR_*`. Rust hisab 1.4.0's `Complex` transcribed by value (§9.2), with `complex_real`/`zero`/`from_polar` and `norm`/`norm_sq`/`arg`. The correctly rounded primitives, including the new atan/asin/tan. `BjFieldVector` with operators. Point, line, ring, disk and sphere fields; dipoles; superposition; the `associated_legendre` multipoles; images; Green's functions; the stress tensor; `trace_field_line` with callbacks. Maxwell and charge functions | every function over seeded grids including 0, ±tiny, ±huge, NaN and ±∞; positions near the singular cutoff; multipoles l ≤ 10; field lines for point, dipole and quadrupole fields, with singular and escaping endings |
 | **M2 Media, waves, circuits, relativity** | material, wave, circuit, relativity | `MagneticType` as an enum. Clausius–Mossotti, Curie–Weiss and the Fresnel family (the trig-free `*_direct` forms, Schlick, TIR). RC/RL/RLC with the damping regimes. Lorentz factor, four-vectors, the EM tensor, boosts, Liénard–Wiechert, and `solve_retarded_time` with callbacks | each Fresnel function over θ ∈ [0, π/2] × n₁/n₂ including TIR and the clamp edge; the circuit regimes; β ∈ {0, 0.1, 0.9, 0.99, 1 − 1e-9}; retarded time for the five scenario trajectories |
-| **M3 Optics** | polarization, scattering, beam | Jones vectors and matrices, Stokes, Mueller (the e^{−iωt} convention, D3). Mie with its downward D_n recurrence and complex ψ/χ (e^{+iωt}); its `a`/`b` vectors are golden too. Rayleigh. Beams: q-parameter, ABCD, resonator stability, `hermite_polynomial`/`laguerre_polynomial`, HG/LG fields | Mie over x ∈ {1e-3 … 1e5} × m including high index, absorbing and the rejection limits; every Jones element over seeded angles; HG/LG up to order 10 at z ∈ {0, ±z_R, 10 z_R} |
+| **M3 Optics** | polarization, scattering, beam | Jones vectors and matrices, Stokes, Mueller, converted to the one convention with IEEE handedness names (§4.4), each circular state pinned by a rotation-sense test. Mie with its downward D_n recurrence and complex ψ/χ; its `a`/`b` vectors are golden too. Rayleigh. Beams: q-parameter, ABCD, resonator stability, `hermite_polynomial`/`laguerre_polynomial`, HG/LG fields, the complex field in the one convention | Mie over x ∈ {1e-3 … 1e5} × m including high index, absorbing and the rejection limits; every Jones element over seeded angles; HG/LG up to order 10 at z ∈ {0, ±z_R, 10 z_R} |
 | **M4 RF** | rf, touchstone, fmtf | Transmission lines, VSWR, Smith chart, S-parameters and cascades, stub matching, the array factor, `input_impedance_complex`. Touchstone read and write in the spec's `N11 N21 N12 N22` order: the rejection of malformed files and the scientific output, byte for byte | the 1.2.0 Touchstone tests as files; seeded round trips; every malformed case; stub matching including the matched load |
 | **M5 FDTD core** | fdtd1d, fdtd_source, fdtd_media, nf2ff, fdtd_util | `Fdtd1d` with the per-end Mur coefficient. Gaussian, Ricker, differentiated Gaussian and modulated pulses. `TfsfSource` (with Mur at both ends; fallible, §4.3 #3). Lossy, Drude, Lorentz and Debye ADE. Subpixel averages. NF2FF (J and M, complex accumulation) on `BjComplex`. `NonUniformGrid`, `fourth_order_derivative`, `CwAccumulator`, `find_eigenmodes` (DFT and half-power Q) | class T for 1D: vacuum, ε_r = 4, lossy, each dispersive model, at frames {1, 10, 100, 1000}; pulses over seeded t; NF2FF on 80 × 80 × 180 angles; eigenmodes on 4096 × 256 |
 | **M6 FDTD 2D/3D** | cpml, fdtd2d, fdtd3d, compute | Freelist grid storage (§2) and the kernels from probe 4. Roden–Gedney CPML in 2D (strips) and 3D (12 Ψ slabs, κ, b/c at the Yee positions) as post-loop corrections. TM/TE, conductivity C_a/C_b, `set_material` validation before any write, `total_energy`. `ComputeBackend` as a trait, `CpuBackend` as its impl, `GpuFdtd2d<B>` as a bounded generic struct, the `WgpuBackend` scaffold | class T: 2D TM and TE at 100 × 100, PEC/PMC, CPML 10 (classic, CFS), lossy; 3D at 30³, PEC and CPML 8; `GpuFdtd2d` against `Fdtd2d`. Class R: the −88 dB and −80 dB reflection tests and the energy decay to 2e-8, sized by probe 8 |
@@ -769,10 +823,9 @@ Each one gets an issue in the owning repo, with the probe or benchmark that show
 2. **A working mabda GPU backend**: `impl BjComputeBackend for BjMabdaBackend` behind the ported
    `BjWgpuBackend` scaffold's API, in a `[lib.gpu]` profile. It is new code in either language,
    so its parity is against `BjCpuBackend`, bit for bit where the device's f64 allows.
-3. **Unifying the time conventions** (D3), if it is not taken in 2.0.0.
-4. **Speed work with the ecosystem.** The benchmark columns and the §10 issues feed compiler,
+3. **Speed work with the ecosystem.** The benchmark columns and the §10 issues feed compiler,
    ganita and hisab tuning.
-5. **Removing `rust-old/`** once the test ledger is closed and the corpus and generators are
+4. **Removing `rust-old/`** once the test ledger is closed and the corpus and generators are
    archived. Nothing waits on a consumer, because nothing is deferred.
 
 ---
@@ -781,7 +834,7 @@ Each one gets an issue in the owning repo, with the probe or benchmark that show
 
 | Milestone | Status | Golden rows | Reference tests | Benches | Notes |
 |---|---|---|---|---|---|
-| P Prep | ☐ | | | | D1, D3, D5; 1.3.0 tag |
+| P Prep | ☐ | | | | D1–D5 answered 2026-11-11; the 1.3.0 tag, bench baseline and P2–P8 remain |
 | M0 Initialize | ☐ | | | | |
 | M1 Foundation | ☐ | | | | |
 | M2 Media, waves, circuits, relativity | ☐ | | | | |
