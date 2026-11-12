@@ -28,6 +28,29 @@ All milestones through V2.0 are shipped. See [CHANGELOG.md](/CHANGELOG.md) for d
 
 ---
 
+## Next — Cyrius port (2.0.0)
+
+Plan of record: [bijli-port-plan.md](bijli-port-plan.md). Decision: [ADR 0001](../adr/0001-cyrius-port-with-rust-oracle.md), proposed.
+
+- [ ] **Prep (plan §4)**:
+  - answer decisions D1–D5;
+  - cut and tag **1.3.0**, the last Rust feature release and the frozen oracle (with the 3D CPML);
+  - take a quiet bench baseline;
+  - land the port-plan commit.
+- [ ] **M0**: run `cyrius port`, which moves the Rust crate to `rust-old/`. Repair the scaffold. Build the oracle generator, the parity harness and the probes.
+- [ ] **M1–M8**:
+  - foundation;
+  - media, waves, circuits and relativity;
+  - optics;
+  - RF;
+  - FDTD core;
+  - FDTD 2D/3D;
+  - integration surfaces;
+  - release 2.0.0.
+- The "2.0 cleanup (breaking)" backlog item below lands in the Cyrius API only, as ADR 0002 (plan §3.3). There is no Rust 2.0.
+
+---
+
 ## Cross-Crate Bridges (shipped in 1.1.0)
 
 - [x] **`bridge.rs` module** — primitive-value conversions for cross-crate electromagnetism
