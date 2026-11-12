@@ -1,0 +1,57 @@
+include "lib/syscalls.cyr"
+include "lib/string.cyr"
+include "lib/alloc.cyr"
+include "lib/str.cyr"
+include "lib/fmt.cyr"
+include "lib/io.cyr"
+include "lib/math.cyr"
+
+struct C { re: f64; im: f64; }
+
+fn C_new(re: f64, im: f64): C { var z: C; z.re = re; z.im = im; return z; }
+fn C_add(a: C, b: C): C { var z: C; z.re = a.re + b.re; z.im = a.im + b.im; return z; }
+fn C_mul(a: C, b: C): C { var z: C; z.re = a.re * b.re - a.im * b.im; z.im = a.re * b.im + a.im * b.re; return z; }
+fn C_div(a: C, b: C): C {
+    var d: f64 = b.re * b.re + b.im * b.im;
+    var z: C; z.re = (a.re * b.re + a.im * b.im) / d; z.im = (a.im * b.re - a.re * b.im) / d; return z;
+}
+
+struct V3 { x: f64; y: f64; z: f64; }
+fn V3_add(a: V3, b: V3): V3 { var r: V3; r.x = a.x + b.x; r.y = a.y + b.y; r.z = a.z + b.z; return r; }
+fn V3_mul(a: V3, s: f64): V3 { var r: V3; r.x = a.x * s; r.y = a.y * s; r.z = a.z * s; return r; }
+fn V3_neg(a: V3): V3 { var r: V3; r.x = -a.x; r.y = -a.y; r.z = -a.z; return r; }
+
+fn bits(x: f64): i64 { var u = x; return u; }
+
+fn main(): i64 {
+    alloc_init();
+    var a = C_new(1.5, -2.25);
+    var b = C_new(0.5, 4.0);
+    var s = a + b;
+    var p = a * b;
+    var q = a / b;
+    fmt_hex0x(bits(s.re)); println(""); fmt_hex0x(bits(s.im)); println("");
+    fmt_hex0x(bits(p.re)); println(""); fmt_hex0x(bits(p.im)); println("");
+    fmt_hex0x(bits(q.re)); println(""); fmt_hex0x(bits(q.im)); println("");
+    # array of complex, pointer stepping
+    var arr: C[4];
+    var k = 0;
+    while (k < 4) { var w: *C = &arr + k * 16; w.re = f64_from(k); w.im = f64_from(k * 10); k = k + 1; }
+    var pc: *C = &arr;
+    var pc2: *C = pc + 3;
+    fmt_hex0x(bits(pc2.im)); println("");
+    # compare semantics on typed f64
+    var x: f64 = 0.0 - 0.0;
+    var nz: f64 = -0.0;
+    var nan: f64 = 0.0 / 0.0;
+    if (nz == x) { println("negzero == zero: 1"); } else { println("negzero == zero: 0"); }
+    if (nan == nan) { println("nan==nan: 1"); } else { println("nan==nan: 0"); }
+    if (nan < 1.0) { println("nan<1: 1"); } else { println("nan<1: 0"); }
+    # V3 ops incl scalar right operand and neg
+    var v = V3 { 1.0, 2.0, 3.0 };
+    var w2 = V3 { 0.5, 0.25, 0.125 };
+    var r = (v + w2) * 2.0;
+    var n = V3_neg(r);
+    fmt_hex0x(bits(n.z)); println("");
+    return 0;
+}

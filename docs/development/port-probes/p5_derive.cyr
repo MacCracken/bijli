@@ -1,0 +1,41 @@
+include "lib/syscalls.cyr"
+include "lib/string.cyr"
+include "lib/alloc.cyr"
+include "lib/str.cyr"
+include "lib/fmt.cyr"
+include "lib/io.cyr"
+include "lib/vec.cyr"
+include "lib/math.cyr"
+include "lib/bayan.cyr"
+
+#derive(Serialize)
+struct Complex { re: f64; im: f64; }
+
+#derive(Serialize)
+struct JonesVector { ex: Complex; ey: Complex; }
+
+#derive(Serialize)
+struct MieLike { q_sca: f64; q_ext: f64; a: Vec<Complex>; }
+
+fn main(): i64 {
+    alloc_init();
+    var j: JonesVector;
+    j.ex.re = 0.1; j.ex.im = 0.000000000001; j.ey.re = 1.0; j.ey.im = -299792458.0;
+    var sb = str_builder_new();
+    JonesVector_to_json(&j, sb);
+    println_str(str_builder_build(sb));
+    var m: MieLike;
+    m.q_sca = 0.0000000000088541878128; m.q_ext = 100000000000000000000.0;
+    m.a = vec_new();
+    var c1: *Complex = alloc(16); c1.re = 1.5; c1.im = -0.0;
+    vec_push(m.a, c1);
+    var sb2 = str_builder_new();
+    MieLike_to_json(&m, sb2);
+    var js = str_builder_build(sb2);
+    println_str(js);
+    var back: *MieLike = MieLike_from_json_str(str_data(js));
+    fmt_hex0x(back.q_sca); println("");
+    var e0: *Complex = vec_get(back.a, 0);
+    fmt_hex0x(e0.im); println("");
+    return 0;
+}

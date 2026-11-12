@@ -1,0 +1,16 @@
+include "lib/syscalls.cyr"
+include "lib/string.cyr"
+include "lib/alloc.cyr"
+include "lib/str.cyr"
+include "lib/fmt.cyr"
+include "lib/io.cyr"
+include "lib/vec.cyr"
+include "lib/math.cyr"
+include "lib/bayan.cyr"
+fn show(bits) { var buf: u8[64]; var n = bayan_f64_to_json(bits, &buf); store8(&buf + n, 0); println(&buf); return 0; }
+fn main(): i64 {
+    alloc_init();
+    show(10000000000000000.0); show(1000000000000000.0); show(123456789012345680.0);
+    show(0.000001); show(0.0000001); show(0x1); show(0x7FEFFFFFFFFFFFFF); show(0.00001); show(0.0001);
+    return 0;
+}

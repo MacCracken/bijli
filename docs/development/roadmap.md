@@ -33,7 +33,7 @@ All milestones through V2.0 are shipped. See [CHANGELOG.md](/CHANGELOG.md) for d
 Plan of record: [bijli-port-plan.md](bijli-port-plan.md). Decision: [ADR 0001](../adr/0001-cyrius-port-with-rust-oracle.md), proposed.
 
 - [ ] **Prep (plan §4)**:
-  - answer decisions D1–D5;
+  - answer decisions D1, D3 and D5 (D2 and D4 are settled: ported);
   - cut and tag **1.3.0**, the last Rust feature release and the frozen oracle (with the 3D CPML);
   - take a quiet bench baseline;
   - land the port-plan commit.

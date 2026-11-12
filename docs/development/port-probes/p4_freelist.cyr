@@ -1,0 +1,32 @@
+include "lib/syscalls.cyr"
+include "lib/string.cyr"
+include "lib/alloc.cyr"
+include "lib/fmt.cyr"
+include "lib/io.cyr"
+include "lib/mmap.cyr"
+include "lib/freelist.cyr"
+
+# a 30^3 grid, 6 components = 162000 f64 = 1.296 MB
+fn one_grid(n): i64 {
+    var comps: i64[6];
+    var c = 0;
+    while (c < 6) { var p: *f64 = fl_calloc(n * 8); if (p == 0) { return 0 - 1; } comps[c] = p; c = c + 1; }
+    var q: *f64 = comps[0];
+    var i = 0;
+    while (i < n) { q[i] = q[i] + 1.5; i = i + 1; }
+    var bad = 0;
+    c = 0;
+    while (c < 6) { if (fl_free(comps[c]) != 0) { bad = bad + 1; } c = c + 1; }
+    return bad;
+}
+
+fn main(): i64 {
+    alloc_init();
+    fl_init();
+    var b0 = alloc_used();
+    var k = 0; var bad = 0;
+    while (k < 1000) { bad = bad + one_grid(27000); k = k + 1; }
+    println_int(bad);
+    println_int(alloc_used() - b0);
+    return 0;
+}

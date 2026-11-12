@@ -1,0 +1,55 @@
+include "lib/syscalls.cyr"
+include "lib/string.cyr"
+include "lib/alloc.cyr"
+include "lib/fmt.cyr"
+include "lib/io.cyr"
+include "lib/math.cyr"
+include "lib/fnptr.cyr"
+include "lib/tagged.cyr"
+include "lib/result.cyr"
+
+const EPS0 = 0.0000000000088541878128;
+
+fn cap_local(): i64 {
+    var a: f64 = 1.5;
+    var f = |x| { var y: f64 = 2.0; return y * a; };
+    return callptr(f, 0);
+}
+fn cap_param(a: f64): i64 {
+    var f = |x| { var y: f64 = 2.0; return y * a; };
+    return callptr(f, 0);
+}
+fn cap_param_left(a: f64): i64 {
+    var f = |x| { return a * 2.0; };
+    return callptr(f, 0);
+}
+
+fn safe_div(a: f64, b: f64): Result {
+    if (b == 0.0) { return Err(3); }
+    return Ok(a / b);
+}
+fn use_div(a: f64, b: f64): Result {
+    var v = safe_div(a, b)?;
+    var y: f64 = v;
+    return Ok(y * 2.0);
+}
+
+fn cmul(ar: f64, ai: f64, br: f64, bi: f64): (f64, f64) {
+    return (ar * br - ai * bi, ar * bi + ai * br);
+}
+
+fn main(): i64 {
+    alloc_init();
+    fmt_hex0x(EPS0); println("");
+    fmt_hex0x(cap_local()); println("");
+    fmt_hex0x(cap_param(1.5)); println("");
+    fmt_hex0x(cap_param_left(1.5)); println("");
+    var t, v = use_div(3.0, 4.0);
+    println_int(is_ok(t)); fmt_hex0x(v); println("");
+    var t2, v2 = use_div(3.0, 0.0);
+    println_int(is_ok(t2)); println_int(v2);
+    var re, im = cmul(1.5, -2.25, 0.5, 4.0);
+    var s: f64 = re + im;
+    fmt_hex0x(re); println(""); fmt_hex0x(s); println("");
+    return 0;
+}

@@ -1,0 +1,61 @@
+include "lib/syscalls.cyr"
+include "lib/string.cyr"
+include "lib/alloc.cyr"
+include "lib/fmt.cyr"
+include "lib/io.cyr"
+
+trait Backend {
+    fn create_buffer(self, n): i64;
+    fn update_h(self, buf, nx, ny, k: f64): i64;
+    fn name_id(self): i64 { return 7; }
+}
+
+struct Cpu { calls; }
+struct Fake { calls; }
+
+impl Backend for Cpu {
+    fn create_buffer(self, n): i64 { self.calls = self.calls + 1; return alloc(n * 8); }
+    fn update_h(self, buf, nx, ny, k: f64): i64 {
+        var p: *f64 = buf;
+        var i = 0;
+        while (i < nx * ny) { p[i] = p[i] * k + 1.0; i = i + 1; }
+        self.calls = self.calls + 1;
+        return 0;
+    }
+}
+impl Backend for Fake {
+    fn create_buffer(self, n): i64 { return 0; }
+    fn update_h(self, buf, nx, ny, k: f64): i64 { return 0 - 1; }
+    fn name_id(self): i64 { return 9; }
+}
+
+struct Grid<B: Backend> { be: B; buf; nx; ny; t: f64; }
+
+fn run_grid<B: Backend>(g: *Grid<B>): i64 {
+    return g.be.update_h(g.buf, g.nx, g.ny, 0.5);
+}
+
+fn via_dyn(o: dyn Backend): i64 { return o.name_id(); }
+
+#inline
+fn add4(a, b, c, d): i64 { return a + b + c + d; }
+
+fn main(): i64 {
+    alloc_init();
+    var g: Grid<Cpu>;
+    g.be.calls = 0;
+    g.nx = 3; g.ny = 2;
+    g.buf = g.be.create_buffer(6);
+    var r = run_grid(&g);
+    var p: *f64 = g.buf;
+    println_int(r);
+    println_int(g.be.calls);
+    fmt_hex0x(p[5]); println("");
+    var c = Cpu { 0 };
+    var f = Fake { 0 };
+    var d1: dyn Backend = &c;
+    var d2: dyn Backend = &f;
+    println_int(via_dyn(d1) * 10 + via_dyn(d2));
+    println_int(add4(1, 2, 3, 4));
+    return 0;
+}

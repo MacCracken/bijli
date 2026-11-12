@@ -1,0 +1,63 @@
+include "lib/syscalls.cyr"
+include "lib/string.cyr"
+include "lib/alloc.cyr"
+include "lib/fmt.cyr"
+include "lib/io.cyr"
+include "lib/math.cyr"
+include "lib/fnptr.cyr"
+
+struct V3 { x: f64; y: f64; z: f64; }
+struct Charge { x: f64; y: f64; z: f64; q: f64; }
+
+fn trace(field_fn, start: *V3, steps, ds: f64, out: *V3): i64 {
+    var p: V3; p.x = start.x; p.y = start.y; p.z = start.z;
+    var e: V3;
+    var i = 0;
+    while (i < steps) {
+        var st = callptr(field_fn, &p, &e);
+        if (st != 0) { break; }
+        var m: f64 = f64_sqrt(e.x * e.x + e.y * e.y + e.z * e.z);
+        p.x = p.x + ds * e.x / m; p.y = p.y + ds * e.y / m; p.z = p.z + ds * e.z / m;
+        i = i + 1;
+    }
+    out.x = p.x; out.y = p.y; out.z = p.z;
+    return i;
+}
+
+# A: rebind captured f64 params as typed locals
+fn mk_a(qx: f64, q: f64): i64 {
+    return |pos, out| {
+        var pp: *V3 = pos; var oo: *V3 = out;
+        var cx: f64 = qx; var cq: f64 = q;
+        var dx: f64 = pp.x - cx; var dy: f64 = pp.y; var dz: f64 = pp.z;
+        var r2: f64 = dx * dx + dy * dy + dz * dz;
+        var r: f64 = f64_sqrt(r2);
+        var k: f64 = cq / (r2 * r);
+        oo.x = k * dx; oo.y = k * dy; oo.z = k * dz;
+        return 0;
+    };
+}
+# B: capture a struct value
+fn mk_b(c: Charge): i64 {
+    return |pos, out| {
+        var pp: *V3 = pos; var oo: *V3 = out;
+        var dx: f64 = pp.x - c.x; var dy: f64 = pp.y - c.y; var dz: f64 = pp.z - c.z;
+        var r2: f64 = dx * dx + dy * dy + dz * dz;
+        var r: f64 = f64_sqrt(r2);
+        var k: f64 = c.q / (r2 * r);
+        oo.x = k * dx; oo.y = k * dy; oo.z = k * dz;
+        return 0;
+    };
+}
+
+fn main(): i64 {
+    alloc_init();
+    var s = V3 { 1.0, 0.0, 0.0 };
+    var o: V3;
+    var fa = mk_a(0.0, 1.0);
+    println_int(trace(fa, &s, 1000, 0.01, &o)); fmt_hex0x(o.x); println("");
+    var ch = Charge { 0.0, 0.0, 0.0, 1.0 };
+    var fb = mk_b(ch);
+    println_int(trace(fb, &s, 1000, 0.01, &o)); fmt_hex0x(o.x); println("");
+    return 0;
+}

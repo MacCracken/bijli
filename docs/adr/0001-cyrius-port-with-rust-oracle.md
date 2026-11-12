@@ -1,7 +1,7 @@
 # 0001 — Port to Cyrius, with Rust 1.3.0 frozen as the parity oracle
 
 **Status**: Proposed. It is accepted at M0 step 2 of the [port plan](../development/bijli-port-plan.md),
-once D1–D5 (plan §0.3) are answered.
+once D1, D3 and D5 (plan §0.3) are answered.
 **Date**: 2026-11-11
 
 ## Context
@@ -39,9 +39,11 @@ and nothing in it is edited.
   Repair the files the scaffold overwrites, as the siblings did.
 - **Scope, milestones and parity policy** are those of
   [`bijli-port-plan.md`](../development/bijli-port-plan.md):
-  - physics first;
-  - soorat integration deferred until soorat ports;
-  - `WgpuBackend` not carried.
+  - **the whole crate is ported**: soorat integration, bridges, the `ai` client (a `[lib.ai]`
+    profile) and the `WgpuBackend` scaffold included;
+  - only the three functions bijli's own roadmap deprecates are dropped;
+  - nothing is deferred for want of a language feature. Plan §2 reviews Cyrius 6.7.18 against
+    every Rust construct bijli uses, with probe programs in `docs/development/port-probes/`.
 - **Parity classes:**
   - A: exact;
   - B: arithmetic;
@@ -55,7 +57,7 @@ and nothing in it is edited.
 - **No production hisab dependency.** bijli owns a by-value `BjComplex` that transcribes Rust
   hisab 1.4.0's `Complex` operation for operation.
 - **Divergences.** A divergence from the oracle beyond its class is a defect, unless ADR 0002
-  accepts it by name. ADR 0002 also holds the API changes of plan §3.3.
+  accepts it by name. ADR 0002 also holds the API changes of plan §4.3.
 
 ## Consequences
 
@@ -68,10 +70,13 @@ and nothing in it is edited.
 - **Negative**
   - Two toolchains are needed until the port completes: cargo for the oracle and its generator,
     cyrius for the library.
-  - `rust-old/` stays in the tree until soorat ports or is dropped.
-  - A third copy of the correctly rounded primitives exists until the shared module (plan §9 G1)
+  - `rust-old/` stays in the tree until the Rust-test ledger is closed and the corpus archived.
+  - A third copy of the correctly rounded primitives exists until the shared module (plan §10 G1)
     lands upstream.
-  - Large grids need explicit `*_free` calls: the Cyrius API isn't RAII.
+  - Large grids need explicit `*_free` calls: the Cyrius API isn't RAII. freelist returns their
+    memory (blocks over 4 KB are munmapped), and `defer` keeps tests tidy.
+  - Closure callbacks must rebind captured floats as typed locals (plan §2), a trap no sibling
+    met.
 - **Neutral**
   - The generator drives `rust-old/` by path from `scripts/oracle/`, so the oracle itself is never
     modified. A wrong oracle value is fixed in Rust 1.3.x and the corpus is regenerated.
@@ -81,6 +86,9 @@ and nothing in it is edited.
 
 - **Port and fix together, with no frozen oracle.** Rejected, as in every sibling: a translation
   error and a deliberate fix look the same.
+- **Defer the soorat integration and drop `WgpuBackend`, as the siblings deferred theirs.**
+  Rejected after the language review: the soorat module has no soorat dependency (goonj ported
+  its own), and the scaffold is one struct and one function.
 - **Port from 1.2.0 and carry the 3D CPML as Cyrius-only work.** Rejected: it leaves the newest
   and hardest code (12 Ψ slabs, edges and corners) without an oracle.
 - **Use Cyrius hisab's `cx_*` for complex values.** Rejected: its results differ from the
