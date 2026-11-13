@@ -232,6 +232,7 @@ pub fn emit() -> Module {
         slice_row(&mut m, &xs);
     }
     emit_inverse_edges(&mut m);
+    emit_fold_edges(&mut m);
     m
 }
 
@@ -318,5 +319,69 @@ fn emit_inverse_edges(m: &mut Module) {
         let mut near = alt.clone();
         near[n - 1] = -ulps(3.0, 1);
         inverse_rows(m, &near);
+    }
+}
+
+/// The three series folds on one slice.
+fn series_rows(m: &mut Module, xs: &[f64]) {
+    let ins = sl(xs);
+    let x = black_box(xs);
+    m.row("circuit::resistance_series", Class::A, &ins, &res_f(resistance_series(x)));
+    m.row("circuit::capacitance_parallel", Class::A, &ins, &res_f(capacitance_parallel(x)));
+    m.row("circuit::inductance_series", Class::A, &ins, &res_f(inductance_series(x)));
+}
+
+/// M2 part 2d-3a (bijli ADR 0002 row 18's rule): the series folds whose partial sums pass DBL_MAX (built, and drawn
+/// from a pool of values near DBL_MAX of both signs), with absorption and non-finite controls; and the impedance's
+/// chain at its range edges: a grid of R, L, C and ω from 0 and 2^-1074 to DBL_MAX, and exact resonances ωL = 1/(ωC)
+/// at scales 2^±100 to 2^±580 under tiny and vast R. Its own seed, after every older row.
+#[allow(clippy::cast_possible_truncation)]
+fn emit_fold_edges(m: &mut Module) {
+    let mut rng = Rng::new(0x0002_D3A5);
+    let big = f64::MAX;
+    let built = [
+        vec![big, big, -big],
+        vec![big, big, -big, -big],
+        vec![-big, -big, big],
+        vec![1e308, 1e308, -1e308, 5.0],
+        vec![big, big / 2.0, -big],
+        vec![big, big, -big, 1.0, -big / 2.0],
+        vec![1.5e308, 1.5e308, -1e308, -1e308, -1e308],
+        vec![big, 1.0, -big],
+        vec![big, big, f64::INFINITY],
+        vec![big, big, -big, f64::NAN],
+    ];
+    for xs in &built {
+        series_rows(m, xs);
+    }
+    let pool = [big, -big, big / 2.0, -big / 2.0, 1e308, -1e308, 1.5e308, -1.5e308, 1.0, -0.0, pow2(-1074)];
+    for _ in 0..60 {
+        let n = rng.int(2, 7) as usize;
+        let xs: Vec<f64> = (0..n).map(|_| pool[rng.int(0, 10) as usize]).collect();
+        series_rows(m, &xs);
+    }
+    let rs = [0.0, pow2(-1074), 1e-200, 1e-160, 10.0, 1e160, 1e200, big];
+    let ls = [0.0, 1e-300, 1e-3, 1e300, big];
+    let cs = [2e-30, 1e-6, 1e300, big];
+    let ws = [2e-30, 1e3, 1e160, 1e300, big, -1e3];
+    for &r in &rs {
+        for &l in &ls {
+            for &c in &cs {
+                for &w in &ws {
+                    let four = [f(r), f(l), f(c), f(w)];
+                    m.row("circuit::rlc_impedance", Class::A, &four, &res_f(rlc_impedance(black_box(r), l, c, w)));
+                }
+            }
+        }
+    }
+    for k in [100, 300, 500, 580] {
+        let (l, c, w) = (pow2(90 - 2 * k), pow2(-90), pow2(k));
+        for r in [0.0, 1e-200, 1e-160, 10.0, 1e160, 1e200] {
+            let four = [f(r), f(l), f(c), f(w)];
+            m.row("circuit::rlc_impedance", Class::A, &four, &res_f(rlc_impedance(black_box(r), l, c, w)));
+        }
+        let ln = ulps(l, 1);
+        let four = [f(0.0), f(ln), f(c), f(w)];
+        m.row("circuit::rlc_impedance", Class::A, &four, &res_f(rlc_impedance(black_box(0.0), ln, c, w)));
     }
 }

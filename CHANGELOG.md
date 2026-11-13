@@ -310,6 +310,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
   λ_c = 2^601); their root now runs unbounded at the edges, f_c and λ_c round once, and λ_c is refused only past
   DBL_MAX. The cost, the guards' range tests: `wave/rect_waveguide_cutoff` 46 → 51 ns,
   `wave/reflectance_at_interface` about 740 → 757 ns (`port-parity.md` §44).
+- **circuit** (ADR 0002 row 18 amended, M2 part 2d-3a): the series combinations (`resistance_series`,
+  `capacitance_parallel`, `inductance_series`) gave ±∞ or NaN where partial sums of finite values passed DBL_MAX
+  though the sum is representable (DBL_MAX + DBL_MAX − DBL_MAX = ∞); `rlc_impedance` gave ∞ for R = 10^200 or
+  ωL = 10^300 and 0 for R = 10^-200 at resonance. At those edges the fold and the impedance's chain now run with an
+  unbounded exponent and round once; elsewhere they are Rust's, bit for bit. The cost: `circuit/rlc_impedance`
+  16 → 17 ns (`port-parity.md` §45).
 - **relativity** (ADR 0002 row 13 amended, M2 part 2b-4): `retarded_scalar_potential`, `retarded_vector_potential`,
   `larmor_power` and `EmTensor::dual` rounded two to five times, and overflowed where the value is representable
   (Larmor with q² past DBL_MAX, the dual of B past DBL_MAX/c: ∞ each); they are now correctly rounded for finite

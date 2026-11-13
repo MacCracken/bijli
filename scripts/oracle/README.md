@@ -50,7 +50,7 @@ port's harness reads the same files. This README records what is specific to bij
 | Module | Milestone | Golden rows | Golden emitter | Generated Cyrius |
 |---|---|---|---|---|
 | `charge` | M1 (parts 3d, 5d-1 to 5d-3) | 12,769 | `src/m_charge.rs` (field.rs's grids) | — |
-| `circuit` | M2 (parts 1c, 2c-1, 2c-5) | 66,491 (+ 1 corrected) | `src/m_circuit.rs` | — |
+| `circuit` | M2 (parts 1c, 2c-1, 2c-5, 2d-3a) | 67,689 (+ 1 corrected) | `src/m_circuit.rs` | — |
 | `complex` | M1 (+ 5c-2's edge grid) | 31,677 (+ 8 corrected) | `src/m_complex.rs` | — |
 | `constants` | M0 | 12 | `src/m_constants.rs` | `src/constants.cyr` (`src/t_constants.rs`, with the completeness proof) |
 | `error` | M1 | 1,635 | `src/m_error.rs` | — |

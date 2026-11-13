@@ -2338,3 +2338,50 @@ waveguides.
 - **Result, every target** (x86_64 ELF, x86_64 PE, aarch64): **13 modules, 0 failing; 404,878 ok, 0 failed, 0
   measured, 0 pending, 44,619 accepted (ADR 01: 8,998; ADR 0002: 35,621)** over 449,497 rows; **all 276 digests
   equal**. Six changed: Γ, both normal-incidence reflectances, the interface and the two waveguide functions.
+
+## 45. M2 part 2d-3a: circuit's series folds and impedance at their range edges (2026-11-13)
+
+2d-3 takes §27–§29's remaining range-edge candidates in bites. The resonances, Q, ζ, ½CV², ½LI², μn²Al, ρL/A and
+εA/d were already rounded once on exact monomials (row 13, §34), which reach both ends of the range: the corpus maps
+L = C = 2^-1022 to f₀ = 7.2·10^306 where Rust gave ∞. The audit's other circuit items:
+
+- **ADR 0002 row 18, amended** (the rule of §42):
+  - **The series folds** (`_bj_circuit_sum`, under `resistance_series`, `capacitance_parallel` and
+    `inductance_series`): where partial sums of finite values pass DBL_MAX, Rust's left fold ends ±∞, or NaN from
+    ∞ − ∞, though the sum is representable. The fold then runs with an unbounded exponent, each step to 53 bits and
+    the last rounded once. The guard is Rust's own result: a finite fold had no partial past DBL_MAX, and a sum of
+    doubles loses nothing to the underflow (a sum below 2^-1022 is exact). Absorption stays as Rust's
+    (DBL_MAX + 1 − DBL_MAX = 0 in both chains), and a non-finite value keeps Rust's fold. Rust: DBL_MAX + DBL_MAX −
+    DBL_MAX = ∞ for DBL_MAX; 1.5·10^308 twice less 10^308 three times ∞ for +0.
+  - **The impedance** (`bj_rlc_impedance`): Rust's √(R² + (ωL − 1/(ωC))²) where its sum R² + X² lies in
+    [2^-900, DBL_MAX], src/crmath_vx.cyr's band. A product or quotient below 2^-1022 is then absorbed by its partner,
+    and X is the chain's wherever X² is not negligible. Otherwise, for finite operands, ωL, ωC, 1/(ωC), X, R², X² and
+    their sum run to 53 bits with an unbounded exponent and √ rounds once (`_bj_k_ux_sqrt_f64`). Rust: R = 10^200 and
+    ωL = 10^300 gave |Z| = ∞ (a square past DBL_MAX); R = 10^-200 at an exact resonance gave 0 (R² underflowed);
+    ωC past DBL_MAX left 1/(ωC) = 0, which the band absorbs wherever it does not matter.
+- **Rows** (`m_circuit.rs`'s `emit_fold_edges`, its own seed, after every older row): 1,198 more.
+  - 70 slices for the three series folds: ten built (cancelling partials past DBL_MAX, an absorption control, ∞ and
+    NaN controls) and 60 drawn from values near ±DBL_MAX, 1, −0 and 2^-1074.
+  - A 960-row impedance grid: R from 0 and 2^-1074 to DBL_MAX; L from 0 to DBL_MAX; C from 2·10^-30 to DBL_MAX;
+    ω from 2·10^-30 to DBL_MAX, and −10^3.
+  - 28 exact resonances: L = 2^(90−2k), C = 2^-90 and ω = 2^k for k = 100, 300, 500 and 580, under six R from 0 to
+    10^200, and L an ulp off.
+
+  `validate.py`'s transcription agreed with every row.
+- **Mappings** (`validate.py`'s `circuit_combo` and `circuit_rust` with `ux`, on exact.py's `rnd53`):
+  `circuit.adr.tsv` maps 886 row-18 rows: the impedance 844 (353 of them older rows) and each series fold 14. All
+  pass on the harness's first run.
+- **Guard audit** (a sampling check in Python, not a gate): on random operands of every binade, wherever a guard
+  keeps Rust's chain its result equals the unbounded chain's. That held for 44,613 impedances (half with ordinary R
+  and extreme L, C and ω) and 132,940 folds.
+- **Tests**: tests/circuit.tcyr gains a `cyrius_range_edges (ADR 0002 row 18)` group of 4 assertions: the two folds
+  above, R = 10^-200 at resonance, and R = 10^200.
+- **Benchmarks** (an interleaved A/B against HEAD, three rounds each, load 1.8–2.2, each figure the lower of the
+  three): `circuit/rlc_impedance` 16 → 17 ns, the band test on Rust's sum (the record's 17.00 ns stands). No bench
+  covers a series fold, whose guard adds one subtraction and one test. Every other row held within the noise.
+- **Result, every target** (x86_64 ELF, x86_64 PE, aarch64): **13 modules, 0 failing; 405,190 ok, 0 failed, 0
+  measured, 0 pending, 45,505 accepted (ADR 01: 8,998; ADR 0002: 36,507)** over 450,695 rows; **all 276 digests
+  equal**. Four changed: the three series folds and the impedance.
+- **Next (2d-3b)**: the transients' edges, a finding of this bite's review. τ = RC or L/R past DBL_MAX (Rust's t/τ is
+  then 0), t/τ below 2^-1022, e^x or expm1 past either end under an amplitude that brings the product back, and
+  V/R subnormal or past DBL_MAX.

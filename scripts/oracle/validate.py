@@ -2352,14 +2352,21 @@ def circuit_r(r):
     return None
 
 
-def circuit_combo(xs, what, parallel, which):
-    """The series/parallel combinations: a sum (Rust's Sum, a left fold from −0.0) or 1/Σ(1/x) with its two cuts."""
+def circuit_combo(xs, what, parallel, which, ux=False):
+    """The series/parallel combinations: a sum (Rust's Sum, a left fold from −0.0) or 1/Σ(1/x) with its two cuts; ux:
+    a fold of finite values past DBL_MAX runs with an unbounded exponent, each step to 53 bits (exact.py's rnd53), the
+    last rounded once (ADR 0002 row 18's rule, M2 part 2d-3a)."""
     if not xs:
         return ip_err(f"at least one {what} value is required")
     if not parallel:
         acc = -0.0
         for x in xs:
             acc = acc + x
+        if ux and not math.isfinite(acc) and all(math.isfinite(x) for x in xs):
+            a = Fraction(xs[0])
+            for x in xs[1:-1]:
+                a = rnd53(a + Fraction(x))
+            return okf(rn_frac(a + Fraction(xs[-1])))
         return okf(acc)
     s = 0.0
     for x in xs:
@@ -2371,16 +2378,17 @@ def circuit_combo(xs, what, parallel, which):
     return okf(fdiv(1.0, s))
 
 
-def circuit_rust(fn, v, P, expm1=False, exact=False):
+def circuit_rust(fn, v, P, expm1=False, exact=False, ux=False):
     """circuit.rs transcribed in its order of operations, its checks and error texts, on the primitives P; None for
-    another name."""
+    another name. ux: the port's range edges (ADR 0002 row 18's rule, M2 part 2d-3a), the series folds and the
+    impedance."""
     name = fn.split("::")[1]
     if name in ("resistance_series", "resistance_parallel", "capacitance_series", "capacitance_parallel",
                 "inductance_series", "inductance_parallel"):
         what, kind = name.split("_")
         sums = {"resistance": "parallel", "capacitance": "series", "inductance": "parallel"}
         parallel = kind == sums[what]
-        return circuit_combo(v, what, parallel, kind)
+        return circuit_combo(v, what, parallel, kind, ux)
     if name == "voltage" or name == "power" or name == "capacitor_charge" or name == "rc_time_constant":
         return okf(v[0] * v[1])
     if name == "current":
@@ -2456,7 +2464,14 @@ def circuit_rust(fn, v, P, expm1=False, exact=False):
         if abs(c) < 1e-30:
             return dz_err("capacitance cannot be zero for impedance")
         x = w * l - fdiv(1.0, w * c)
-        return okf(fsqrt(r * r + x * x))
+        sq = r * r + x * x
+        if ux and not 2.0 ** -900 <= sq <= DBL_MAX and _fin(r, l, c, w):
+            # The unbounded chain, each step to 53 bits, √ rounded once (src/circuit.cyr's band guard on Rust's sum).
+            F = Fraction
+            xx = rnd53(rnd53(F(w) * F(l)) - rnd53(1 / rnd53(F(w) * F(c))))
+            sv = rnd53(rnd53(F(r) * F(r)) + rnd53(xx * xx))
+            return okf(0.0 if sv == 0 else rn_sqrt(sv))
+        return okf(fsqrt(sq))
     return None
 
 
@@ -2565,7 +2580,14 @@ def circuit_inverse17(fn, xs):
     return okf(rn_frac(1 / s))
 
 
+CIRCUIT_SERIES = ("circuit::resistance_series", "circuit::capacitance_parallel", "circuit::inductance_series")
+
+
 def circuit_port(fn, v):
+    if fn in CIRCUIT_SERIES or fn == "circuit::rlc_impedance":
+        # Row 18 (M2 part 2d-3a) where the range edge's chain moves the row.
+        new = circuit_rust(fn, v, MPFR_P, ux=True)
+        return None if toks_same(new, circuit_rust(fn, v, MPFR_P)) else (18, new)
     if fn in CIRCUIT_INVERSE:
         m17 = circuit_inverse17(fn, v)
         return None if m17 is None else (17, m17)

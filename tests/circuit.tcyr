@@ -522,6 +522,40 @@ fn cyrius_tests(): i64 {
     var want: f64 = _bj_from_bits(0x418FFFFFEDD4C62C);
     assert(tz1 == 0 && tz2 == 0 && tz3 == 0 && tv1 == want && tv2 == want && tv3 == want,
       "1/S exactly on a midpoint (M₁ and 2^28 − M₁): ties to even, by all three tiers");
+
+    # ADR 0002 row 18's rule (M2 part 2d-3a): the series folds and the impedance at their range edges.
+    test_group("cyrius_range_edges (ADR 0002 row 18)");
+    var dmax: f64 = _bj_from_bits(0x7FEFFFFFFFFFFFFF);
+    var fx: f64[5];
+    fx[0] = dmax;
+    fx[1] = dmax;
+    fx[2] = -dmax;
+    var ts1, vs1 = bj_resistance_series(&fx, 3);
+    var s1: f64 = vs1;
+    assert(is_ok(ts1) == 1 && s1 == dmax, "DBL_MAX + DBL_MAX − DBL_MAX = DBL_MAX, its partial unbounded (Rust: ∞)");
+    var e15: f64 = _bj_from_bits(0x7FEAB36D48E1ACF0);                   # 1.5e308
+    var e1: f64 = _bj_from_bits(0x7FE1CCF385EBC8A0);                    # 1e308
+    fx[0] = e15;
+    fx[1] = e15;
+    fx[2] = -e1;
+    fx[3] = -e1;
+    fx[4] = -e1;
+    var ts2, vs2 = bj_inductance_series(&fx, 5);
+    var s2: f64 = vs2;
+    assert(is_ok(ts2) == 1 && _bj_bits(s2) == 0, "1.5e308 twice less 1e308 three times: +0 (Rust: ∞)");
+    var em200: f64 = _bj_from_bits(0x16687E92154EF7AC);                 # 1e-200
+    var l910: f64 = _bj_powi(2.0, 0 - 910);
+    var c90: f64 = _bj_powi(2.0, 0 - 90);
+    var w500: f64 = _bj_powi(2.0, 500);
+    var tz4, vz4 = bj_rlc_impedance(em200, l910, c90, w500);
+    var z4: f64 = vz4;
+    assert(is_ok(tz4) == 1 && z4 == em200, "R = 1e-200 at an exact resonance: |Z| = R, R² unbounded (Rust: 0)");
+    var e200: f64 = _bj_from_bits(0x6974E718D7D7625A);                  # 1e200
+    var mh: f64 = _bj_from_bits(0x3F50624DD2F1A9FC);                    # 1e-3
+    var mu: f64 = _bj_from_bits(0x3EB0C6F7A0B5ED8D);                    # 1e-6
+    var tz5, vz5 = bj_rlc_impedance(e200, mh, mu, 1000.0);
+    var z5: f64 = vz5;
+    assert(is_ok(tz5) == 1 && z5 == e200, "R = 1e200: |Z| = 1e200, R² past DBL_MAX run unbounded (Rust: ∞)");
     return 0;
 }
 
