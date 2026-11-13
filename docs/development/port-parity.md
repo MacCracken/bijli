@@ -1587,3 +1587,45 @@ relativity.rs is two bites: 1d-1, everything but the callbacks, and 1d-2, `solve
 - **Result, every target** (x86_64 ELF, x86_64 PE, aarch64): **13 modules, 0 failing; 401,768 ok, 0 failed, 0
   measured, 0 pending, 18,857 accepted (ADR 01: 8,999; ADR 0002: 9,858)** over 420,625 rows; **all 274 digests
   equal**, the 249 before unchanged.
+
+## 29. M2 part 1d-2: relativity, the retarded-time solver (2026-11-12)
+
+- **`bj_solve_retarded_time` and `bj_lienard_wiechert_fields`** in `src/relativity.cyr`: Rust's bracket-doubling and
+  safeguarded Newton/bisection on the delay τ, its stopping tests (4ε·max(|t|, τ), and |g| at its own rounding level
+  with one last Newton correction) and its errors, step for step. The trajectory is a closure called through `callptr`
+  as `trajectory_fn(t, out)`: t an f64 in a word, position and velocity (and for the fields the acceleration) written
+  through `out`, the return value ignored since Rust's trajectory can't fail. `max_iterations` is Rust's usize as a
+  word, −1 being usize::MAX. The fields call one solver core with the user's nine-value closure, so no wrapping
+  closure is allocated. The four `tracing::debug!` events and the fields' `trace!` are `_bj_log_text` lines in
+  tracing's `message key=value` form.
+- **Probe p18** (`scripts/probes/p18_trajectory_closure.cyr`): an f64 time passed through `callptr` and rebound inside
+  the closure, six f64 written through `out`.
+- **Scenarios** (the plan's closure inputs), the same in `m_relativity.rs`, `validate.py` and the harness: 0 a static
+  charge, 1 uniform motion, 2 a circular orbit (sin, cos: class C), 3 hyperbolic motion, 4 an oscillation along z
+  (class C), 5 a static charge with a given acceleration. **192 rows** in `relativity.tsv` (now 26,244): 102 solver
+  rows (the Rust tests' cases, speeds to (1 − 1e-9)c both ways, superluminal ones, the β = 0.99 orbit's observers and
+  seeded ones, budgets 0, 1, 2, 3 and usize::MAX, non-finite observers and states) and 90 fields rows. `validate.py`
+  transcribes the solver on the primitives P; glibc's sin and cos are correctly rounded on every trajectory call, so
+  there is no `relativity.cr.tsv`. Its transcription agreed with every row on its first run.
+- **Rust tests**: relativity.rs is complete, all 48 ported (`tests/relativity.tcyr`, 79 assertions). The ledger: 361
+  ported, 3 n/a, 494 pending of 858.
+- **Surface parity**: relativity ported, 257 items matched, 0 problems. **M2's four modules are ported.**
+- **Benchmarks** (the solver's two twins; 46 of 80 now twinned; load average 2.8–3.5, each the lower of two runs, the
+  A/B against HEAD unchanged):
+
+  | Bench | Rust | Cyrius |
+  |---|---|---|
+  | `relativity/solve_retarded_time_uniform_t1s` | 103.48 ns | 839 ns |
+  | `relativity/lienard_wiechert_fields_orbit_b099` | 319.92 ns | 5.44 µs |
+
+  The orbit's cost is its trajectory's sin and cos at every evaluation (crmath's fast path, about 200 ns each).
+- **For M2's range-edge Part** (§0.1), from the audit:
+  - a superluminal trajectory is reported as "trajectory returned a non-finite state" (its position overflows while τ
+    doubles), not as the bracket error Rust's docs give for it ("could not bracket the light-cone root (is the
+    trajectory faster than light?)"); with finite positions that error is unreachable, since cτ passes any distance
+    first;
+  - the light-cone function's |R| is a raw √(dx² + dy² + dz²): past DBL_MAX it is ∞ and g = ∞ − cτ turns NaN when cτ
+    overflows, which ends the bracket loop without an error.
+- **Result, every target** (x86_64 ELF, x86_64 PE, aarch64): **13 modules, 0 failing; 401,960 ok, 0 failed, 0
+  measured, 0 pending, 18,857 accepted (ADR 01: 8,999; ADR 0002: 9,858)** over 420,817 rows; **all 276 digests
+  equal**, the 274 before unchanged.

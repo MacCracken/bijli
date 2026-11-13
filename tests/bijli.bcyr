@@ -18,6 +18,48 @@ fn bench_fv(p): *BjFieldVector { return p; }
 # A no-op body that measures the harness's own per-iteration overhead.
 fn bench_noop(): i64 { return 0; }
 
+# The solver bench's trajectory: uniform motion at v along x through the origin at t = 1 (position, velocity at out).
+fn bench_uniform(v: f64): i64 {
+    return |t, out| {
+        var tt: f64 = t;
+        var vv: f64 = v;
+        var o: *f64 = bench_f64p(out);
+        var dt: f64 = tt - 1.0;
+        o[0] = vv * dt;
+        o[1] = 0.0;
+        o[2] = 0.0;
+        o[3] = vv;
+        o[4] = 0.0;
+        o[5] = 0.0;
+        return 0;
+    };
+}
+
+# The fields bench's: the circular orbit of radius 1 at angular frequency w (position, velocity, acceleration at out).
+fn bench_orbit(w: f64): i64 {
+    return |t, out| {
+        var tt: f64 = t;
+        var ww: f64 = w;
+        var o: *f64 = bench_f64p(out);
+        var wt: f64 = ww * tt;
+        var s: f64 = _bj_sin(wt);
+        var c: f64 = _bj_cos(wt);
+        var nw: f64 = -ww;
+        var a2: f64 = ww * ww;
+        var na2: f64 = -a2;
+        o[0] = c;
+        o[1] = s;
+        o[2] = 0.0;
+        o[3] = nw * s;
+        o[4] = ww * c;
+        o[5] = 0.0;
+        o[6] = na2 * c;
+        o[7] = na2 * s;
+        o[8] = 0.0;
+        return 0;
+    };
+}
+
 # Runs the bijli benchmarks and reports each. Beside the Rust twins (as their modules land), the Cyrius-only costs
 # of the port's own machinery: a log site with the gate off (Rust's tracing with no subscriber), making an error
 # (the last-error record, on the main thread's static record, with no syscall until a thread exists), the same with
@@ -638,6 +680,40 @@ fn main(): i64 {
     }
     bench_batch_stop(b47, 1000000);
     bench_report(b47);
+    if (rsum == 7.0) { println("."); }
+
+    # relativity/* (M2 part 1d-2): the solver's two benches, with their trajectories and arguments.
+    var hv: f64 = 0.5 * 299792458.0;
+    var uni = bench_uniform(hv);
+    var sobs: f64[3];
+    sobs[0] = 1.0;
+    sobs[1] = 1.0;
+    sobs[2] = 0.0;
+    var b48 = bench_new("relativity/solve_retarded_time_uniform_t1s");
+    bench_batch_start(b48);
+    for (var k = 0; k < 100000; k = k + 1) {
+        var t48, v48 = bj_solve_retarded_time(&sobs, 1.0, uni, 100);
+        keep = keep + v48;
+    }
+    bench_batch_stop(b48, 100000);
+    bench_report(b48);
+
+    var w99: f64 = 0.99 * 299792458.0;
+    var orb = bench_orbit(w99);
+    var fobs: f64[3];
+    fobs[0] = 0.89;
+    fobs[1] = 0.805;
+    fobs[2] = -0.081;
+    var lwe: BjFieldVector;
+    var lwb: BjFieldVector;
+    var b49 = bench_new("relativity/lienard_wiechert_fields_orbit_b099");
+    bench_batch_start(b49);
+    for (var k = 0; k < 100000; k = k + 1) {
+        var t49, v49 = bj_lienard_wiechert_fields(0.000000001, &fobs, 0.0000000693, orb, &lwe, &lwb);
+        rsum = rsum + lwe.x;
+    }
+    bench_batch_stop(b49, 100000);
+    bench_report(b49);
     if (rsum == 7.0) { println("."); }
 
     # The JSON (src/json.cyr): a FieldVector written into one builder, emptied each time through its length word

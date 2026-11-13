@@ -1600,8 +1600,111 @@ fn _par_four_vector(fp, fl): i64 {
     return 0;
 }
 
+# The solver's trajectories (m_relativity.rs's `trajectory`, by number), as closures over the row's parameters at pp:
+# they write position, velocity and acceleration (nine f64) at out.
+fn _par_traj(id, pp): i64 {
+    return |t, out| {
+        var tt: f64 = t;
+        var p: *f64 = _par_rel_f64p(pp);
+        var o: *f64 = _par_rel_f64p(out);
+        for (var k = 0; k < 9; k = k + 1) { o[k] = 0.0; }
+        if (id == 1) {
+            var dt: f64 = tt - p[6];
+            o[0] = p[0] + p[3] * dt;
+            o[1] = p[1] + p[4] * dt;
+            o[2] = p[2] + p[5] * dt;
+            o[3] = p[3];
+            o[4] = p[4];
+            o[5] = p[5];
+        } elif (id == 2) {
+            var r: f64 = p[0];
+            var w: f64 = p[1];
+            var wt: f64 = w * tt;
+            var s: f64 = _bj_sin(wt);
+            var c: f64 = _bj_cos(wt);
+            var nr: f64 = -r;
+            var a2: f64 = r * w * w;
+            var na2: f64 = -a2;
+            o[0] = r * c;
+            o[1] = r * s;
+            o[3] = nr * w * s;
+            o[4] = r * w * c;
+            o[6] = na2 * c;
+            o[7] = na2 * s;
+        } elif (id == 3) {
+            var a: f64 = p[0];
+            var at: f64 = a * tt;
+            var u: f64 = at / BJ_SPEED_OF_LIGHT;
+            var q: f64 = 1.0 + u * u;
+            var g: f64 = f64_sqrt(q);
+            var cc: f64 = BJ_SPEED_OF_LIGHT * BJ_SPEED_OF_LIGHT;
+            var ca: f64 = cc / a;
+            var gm: f64 = g - 1.0;
+            o[0] = ca * gm;
+            o[3] = at / g;
+            var g3: f64 = g * g * g;
+            o[6] = a / g3;
+        } elif (id == 4) {
+            var amp: f64 = p[0];
+            var w4: f64 = p[1];
+            var wt4: f64 = w4 * tt;
+            var s4: f64 = _bj_sin(wt4);
+            var c4: f64 = _bj_cos(wt4);
+            var aw: f64 = amp * w4;
+            var aww: f64 = aw * w4;
+            var naww: f64 = -aww;
+            o[2] = amp * s4;
+            o[5] = aw * c4;
+            o[8] = naww * s4;
+        } else {
+            o[0] = p[0];
+            o[1] = p[1];
+            o[2] = p[2];
+            if (id == 5) {
+                o[6] = p[3];
+                o[7] = p[4];
+                o[8] = p[5];
+            }
+        }
+        return 0;
+    };
+}
+
+# The solver's and the fields' rows: the trajectory from its number and parameters (`v:k` at token 6).
+fn _par_solver(fp, fl): i64 {
+    var ps: f64[8];
+    var k = _par_in(6);
+    for (var j = 0; j < k; j = j + 1) { ps[j] = _par_in(7 + j); }
+    var obs: f64[3];
+    if (_par_eq(fp, fl, "relativity::solve_retarded_time") == 1) {
+        var f = _par_traj(_par_in(0), &ps);
+        obs[0] = _par_in(1);
+        obs[1] = _par_in(2);
+        obs[2] = _par_in(3);
+        var t: f64 = _par_in(4);
+        var ts, vs = bj_solve_retarded_time(&obs, t, f, _par_in(5));
+        _par_got_res_f(ts, vs);
+        return 1;
+    }
+    var g = _par_traj(_par_in(1), &ps);
+    obs[0] = _par_in(2);
+    obs[1] = _par_in(3);
+    obs[2] = _par_in(4);
+    var q: f64 = _par_in(0);
+    var t2: f64 = _par_in(5);
+    var ev: BjFieldVector;
+    var bv: BjFieldVector;
+    var tf, vf = bj_lienard_wiechert_fields(q, &obs, t2, g, &ev, &bv);
+    if (is_err_result(tf) == 1) { return _par_got_error(vf) + 1; }
+    _par_got_fv(ev);
+    _par_got_fv(bv);
+    return 1;
+}
+
 # A `relativity::*` row by its function.
 public fn _par_relativity(fp, fl): i64 {
+    if (_par_eq(fp, fl, "relativity::solve_retarded_time") == 1) { return _par_solver(fp, fl); }
+    if (_par_eq(fp, fl, "relativity::lienard_wiechert_fields") == 1) { return _par_solver(fp, fl); }
     if (memeq(fp, "EmTensor::", 10) == 1) { return _par_tensor(fp, fl); }
     if (memeq(fp, "FourVector::", 12) == 1) { return _par_four_vector(fp, fl); }
     var a: f64 = _par_in(0);
@@ -2117,6 +2220,8 @@ public fn _par_c_bound(fp, fl): i64 {
     if (_par_eq(fp, fl, "field::spherical_multipole_moment") == 1) { return 0; }
     if (_par_eq(fp, fl, "field::greens_function_scalar") == 1) { return 0; }
     if (memeq(fp, "wave::", 6) == 1) { return 0; }
+    if (_par_eq(fp, fl, "relativity::solve_retarded_time") == 1) { return 0; }
+    if (_par_eq(fp, fl, "relativity::lienard_wiechert_fields") == 1) { return 0; }
     if (fl > 9 && memeq(fp, "circuit::", 9) == 1) { return 0; }
     # The JSON readers: every number correctly rounded (json.cr.tsv where serde_json's best-effort parse misrounds).
     if (_par_eq(fp, fl, "json::Complex::from_str") == 1) { return 0; }

@@ -1,8 +1,9 @@
 //! `relativity.tsv` — rust-old/src/relativity.rs (M2 part 1d-1): the Lorentz factor, the EM tensor, the field
-//! transforms, four-vectors, the retarded and Liénard–Wiechert potentials and fields, and the Larmor powers. The
-//! retarded-time solver and `lienard_wiechert_fields` (callbacks) are part 1d-2's.
+//! transforms, four-vectors, the retarded and Liénard–Wiechert potentials and fields, and the Larmor powers; and
+//! (part 1d-2) the retarded-time solver and `lienard_wiechert_fields` over named trajectories.
 //!
-//! Every row is class A: + − × ÷ and sqrt in Rust's order. A `Result` is its value, or `E:<Variant>` and the error's
+//! Every row is class A (+ − × ÷ and sqrt in Rust's order) but the solver's over the circular orbit and the
+//! oscillation, whose trajectories call sin and cos: class C. A `Result` is its value, or `E:<Variant>` and the error's
 //! Display text (ADR 0002 row 4). A vector is three `f:` tokens, a four-vector four (ct, x, y, z), an `EmTensor` its
 //! sixteen components row-major, a pair of vectors six.
 //!
@@ -18,9 +19,10 @@ use crate::m_material::{dedup, ulps};
 use crate::tsv::{Class, Module, Tok, err, f, s};
 use bijli::field::{FieldVector, SPEED_OF_LIGHT};
 use bijli::relativity::{
-    EmTensor, FourVector, beta, larmor_power, lienard_wiechert_b, lienard_wiechert_e, lienard_wiechert_scalar_potential,
-    lienard_wiechert_vector_potential, lorentz_factor, lorentz_transform_fields, lorentz_transform_x,
-    relativistic_larmor_power, retarded_scalar_potential, retarded_vector_potential,
+    EmTensor, FourVector, beta, larmor_power, lienard_wiechert_b, lienard_wiechert_e, lienard_wiechert_fields,
+    lienard_wiechert_scalar_potential, lienard_wiechert_vector_potential, lorentz_factor, lorentz_transform_fields,
+    lorentz_transform_x, relativistic_larmor_power, retarded_scalar_potential, retarded_vector_potential,
+    solve_retarded_time,
 };
 use std::hint::black_box;
 
@@ -107,6 +109,141 @@ fn four_vectors(rng: &mut Rng) -> Vec<FourVector> {
         out.push(FourVector::new(rng.uniform(-1e9, 1e9), rng.uniform(-10.0, 10.0), rng.uniform(-10.0, 10.0), rng.uniform(-10.0, 10.0)));
     }
     out
+}
+
+/// The solver's trajectories, by number, from their parameters; validate.py and the harness build the same ones.
+/// 0 a static charge at (x, y, z); 1 uniform motion r₀ + v(t − t₀) (r₀, v, t₀); 2 a circular orbit in the xy-plane,
+/// radius R and angular frequency ω, (R cos ωt, R sin ωt, 0); 3 hyperbolic motion along x at proper acceleration α,
+/// x = (c²/α)(√(1 + (αt/c)²) − 1); 4 an oscillation along z, A sin ωt; 5 a static charge at (x, y, z) with a given
+/// acceleration (aₓ, a_y, a_z). Each returns (position, velocity, acceleration).
+fn trajectory(id: i64, p: &[f64], t: f64) -> ([f64; 3], [f64; 3], [f64; 3]) {
+    match id {
+        0 => ([p[0], p[1], p[2]], [0.0; 3], [0.0; 3]),
+        1 => {
+            let dt = t - p[6];
+            ([p[0] + p[3] * dt, p[1] + p[4] * dt, p[2] + p[5] * dt], [p[3], p[4], p[5]], [0.0; 3])
+        }
+        2 => {
+            let (r, w) = (p[0], p[1]);
+            let (s, c) = (w * t).sin_cos();
+            let a2 = r * w * w;
+            ([r * c, r * s, 0.0], [-r * w * s, r * w * c, 0.0], [-a2 * c, -a2 * s, 0.0])
+        }
+        3 => {
+            let a = p[0];
+            let u = a * t / C;
+            let g = (1.0 + u * u).sqrt();
+            ([C * C / a * (g - 1.0), 0.0, 0.0], [a * t / g, 0.0, 0.0], [a / (g * g * g), 0.0, 0.0])
+        }
+        4 => {
+            let (amp, w) = (p[0], p[1]);
+            let (s, c) = (w * t).sin_cos();
+            ([0.0, 0.0, amp * s], [0.0, 0.0, amp * w * c], [0.0, 0.0, -(amp * w * w) * s])
+        }
+        _ => ([p[0], p[1], p[2]], [0.0; 3], [p[3], p[4], p[5]]),
+    }
+}
+
+/// One solver case: the trajectory, its parameters, the observer, the observation time and max_iterations.
+type SolveCase = (i64, Vec<f64>, [f64; 3], f64, usize);
+
+/// One fields case: the charge, the trajectory, its parameters, the observer and the observation time.
+type FieldsCase = (f64, i64, Vec<f64>, [f64; 3], f64);
+
+fn traj_class(id: i64) -> Class {
+    if id == 2 || id == 4 { Class::C } else { Class::A }
+}
+
+/// Part 1d-2: `solve_retarded_time` and `lienard_wiechert_fields` over the trajectories. A solver row's inputs are the
+/// trajectory number, the observer, the time, max_iterations as its 64-bit word (usize::MAX is `i:-1`) and the
+/// parameters (`v:<k>`); a fields row's the charge, the trajectory number, the observer, the time and the parameters.
+fn emit_solver(m: &mut Module, rng: &mut Rng) {
+    let mut cases: Vec<SolveCase> = Vec::new();
+    let origin = vec![0.0, 0.0, 0.0];
+    for t in [1e-8, 1e-3, 1.0, 10.0, 1e4, 0.0, -5.0, 1e300, f64::NAN, f64::INFINITY] {
+        cases.push((0, origin.clone(), [1.0, 0.0, 0.0], t, 50));
+    }
+    for (obs, k) in [([0.0, 1.0, 0.0], 50), ([3.0, -4.0, 12.0], 50), ([0.0, 0.0, 0.0], 50), ([f64::NAN, 0.0, 0.0], 50)] {
+        cases.push((0, origin.clone(), obs, 1e-8, k));
+    }
+    for k in [0, 1, 2, 3, usize::MAX] {
+        cases.push((0, vec![0.25, 0.0, 0.0], [1.0, 0.0, 0.0], 1e-6, k));
+    }
+    cases.push((0, vec![f64::NAN, 0.0, 0.0], [1.0, 0.0, 0.0], 1.0, 100));
+    // Uniform motion: the Rust tests' cases, speeds up to 1 − 1e-9 both ways, superluminal ones.
+    let vt = [0.8 * C, -0.3 * C, 0.1 * C];
+    for (t0, t) in [(0.0, 2e-9), (1.0, 1.0 + 3e-9), (-5.0, -5.0 + 1e-8)] {
+        cases.push((1, vec![0.1, -0.2, 0.05, vt[0], vt[1], vt[2], t0], [1.0, 0.5, 0.2], t, 50));
+    }
+    for b in [0.1, 0.5, 0.9, 0.99, 1.0 - 1e-9, -0.5, -0.99, -(1.0 - 1e-9)] {
+        for t in [1e-8, 1.0] {
+            cases.push((1, vec![0.0, 0.0, 0.0, b * C, 0.0, 0.0, 0.0], [2.0, 0.0, 0.0], t, 50));
+            cases.push((1, vec![0.0, 0.0, 0.0, b * C, 0.0, 0.0, t], [0.3, 0.8, -0.4], t, 50));
+        }
+    }
+    for k in [0, 1, 50] {
+        cases.push((1, vec![0.0, 0.0, 0.0, 0.5 * C, 0.0, 0.0, 0.0], [1.0, 0.3, 0.0], 1e-8, k));
+    }
+    cases.push((1, vec![0.0, 0.0, 0.0, 0.5 * C, 0.0, 0.0, 1.0], [1.0, 1.0, 0.0], 1.0, 100));
+    cases.push((1, vec![0.0, 0.0, 0.0, -2.0 * C, 0.0, 0.0, 0.0], [1.0, 0.0, 0.0], 1.0, 100));
+    cases.push((1, vec![0.0, 0.0, 0.0, 1.5 * C, 0.0, 0.0, 0.0], [10.0, 0.0, 0.0], 1e-8, 100));
+    // The β = 0.99 circular orbit (the Rust tests' three observers and the bench's), slower orbits, seeded observers.
+    let w99 = 0.99 * C;
+    for (obs, t) in [([0.48, -1.02, 0.0], 8.37e-8), ([1.23, -0.59, 0.01], 2e-10), ([0.89, 0.805, -0.081], 6.93e-8)] {
+        for k in [50, 5] {
+            cases.push((2, vec![1.0, w99], obs, t, k));
+        }
+    }
+    for b in [0.5, 0.9] {
+        cases.push((2, vec![1.0, b * C], [0.5, 2.0, 0.3], 1e-8, 50));
+    }
+    for _ in 0..12 {
+        let obs = [rng.uniform(-3.0, 3.0), rng.uniform(-3.0, 3.0), rng.uniform(-1.0, 1.0)];
+        cases.push((2, vec![1.0, w99], obs, rng.uniform(0.0, 1e-7), 50));
+    }
+    // Hyperbolic motion and the oscillation.
+    for a in [9.8, 1e10, 1e15] {
+        for t in [0.0, 1e-6, 1.0, 1e3] {
+            cases.push((3, vec![a], [1.0, 2.0, 0.0], t, 50));
+        }
+    }
+    for (amp, w) in [(1e-3, 1e9), (0.1, 2e9), (1e-6, 1e12)] {
+        for t in [0.0, 1e-9, 3.7e-8] {
+            cases.push((4, vec![amp, w], [0.5, 0.0, 0.2], t, 50));
+        }
+    }
+    for (id, ps, obs, t, k) in &cases {
+        let word = i64::from_ne_bytes(k.to_ne_bytes());
+        let mut ins = vec![crate::tsv::i(*id), f(obs[0]), f(obs[1]), f(obs[2]), f(*t), crate::tsv::i(word)];
+        ins.push(Tok::V(ps.len()));
+        ins.extend(ps.iter().map(|&x| f(x)));
+        let pp = ps.clone();
+        let idv = *id;
+        let r = solve_retarded_time(black_box(*obs), *t, move |tt| {
+            let (a, b, _) = trajectory(idv, &pp, tt);
+            (a, b)
+        }, *k);
+        m.row("relativity::solve_retarded_time", traj_class(*id), &ins, &res_f(r));
+    }
+    // lienard_wiechert_fields over the converging cases, the singular observer and an infinite acceleration.
+    let mut fields: Vec<FieldsCase> = Vec::new();
+    for (id, ps, obs, t, k) in &cases {
+        if *k == 50 && t.is_finite() && t.abs() < 1e5 {
+            fields.push((1.602_176_634e-19, *id, ps.clone(), *obs, *t));
+        }
+    }
+    fields.push((1e-6, 0, origin.clone(), [0.0, 1.0, 0.0], 1e-8));
+    fields.push((1e-6, 0, origin.clone(), [0.0, 0.0, 0.0], 1e-8));
+    fields.push((1e-9, 1, vec![0.0, 0.0, 0.0, 0.9 * C, 0.0, 0.0, 2.0], [0.3, 0.8, -0.4], 2.0));
+    fields.push((1.0, 5, vec![0.0, 0.0, 0.0, f64::INFINITY, 0.0, 0.0], [1.0, 0.0, 0.0], 1e-8));
+    fields.push((1.0, 5, vec![0.0, 0.0, 0.0, 1e20, -1e20, 0.0], [1.0, 2.0, 3.0], 1e-8));
+    for (q, id, ps, obs, t) in fields {
+        let mut ins = vec![f(q), crate::tsv::i(id), f(obs[0]), f(obs[1]), f(obs[2]), f(t)];
+        ins.push(Tok::V(ps.len()));
+        ins.extend(ps.iter().map(|&x| f(x)));
+        let r = lienard_wiechert_fields(black_box(q), obs, t, move |tt| trajectory(id, &ps, tt));
+        m.row("relativity::lienard_wiechert_fields", traj_class(id), &ins, &res_pair(r));
+    }
 }
 
 pub fn emit() -> Module {
@@ -295,5 +432,6 @@ pub fn emit() -> Module {
             }
         }
     }
+    emit_solver(&mut m, &mut rng);
     m
 }

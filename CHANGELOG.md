@@ -220,6 +220,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
   transforms, `BjFourVector`, `BjFourPotential`, the retarded and Liénard–Wiechert potentials and fields, and the
   Larmor powers. `relativity.tsv` holds 26,052 rows; 39 of relativity.rs's 48 tests are ported (the solver's nine
   are part 1d-2's), and 6 bench twins added.
+- **Cyrius port, M2 part 1d-2 — the retarded-time solver**: `bj_solve_retarded_time` and `bj_lienard_wiechert_fields`
+  in `src/relativity.cyr`, the trajectory a closure called as `trajectory_fn(t, out)` (probe p18). 192 rows over six
+  trajectory scenarios (static, uniform, the β = 0.99 circular orbit, hyperbolic, an oscillation, a given
+  acceleration); relativity.rs's 48 tests are all ported, and the solver's 2 bench twins added. M2's four modules are
+  ported.
 
 ### Fixed
 

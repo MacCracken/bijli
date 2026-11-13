@@ -1,0 +1,50 @@
+# p18 — the retarded-time solver's trajectory callback (M2 part 1d-2): a capturing closure `|t, out|` called through
+# callptr with an f64 time in a word (`t` passed as a typed f64, rebound inside as `var tt: f64 = t;`), writing a
+# position and a velocity (six f64) through `out`; and a capture of an f64 parameter rebound the same way (p3b).
+include "lib/syscalls.cyr"
+include "lib/string.cyr"
+include "lib/alloc.cyr"
+include "lib/fmt.cyr"
+include "lib/io.cyr"
+
+fn as_f64p(p): *f64 { return p; }
+
+# Uniform motion x = v·(t − t0) along x: the closure captures v and t0.
+fn make_uniform(v: f64, t0: f64): i64 {
+    return |t, out| {
+        var tt: f64 = t;
+        var vv: f64 = v;
+        var t00: f64 = t0;
+        var o: *f64 = as_f64p(out);
+        var dt: f64 = tt - t00;
+        o[0] = vv * dt;
+        o[1] = 0.0;
+        o[2] = 0.0;
+        o[3] = vv;
+        o[4] = 0.0;
+        o[5] = 0.0;
+        return 0;
+    };
+}
+
+fn hx(x) { fmt_hex(x); syscall(1, 1, " ", 1); return 0; }
+
+fn main() {
+    alloc_init();
+    var f = make_uniform(149896229.0, 1.0);        # 0.5c, through the origin at t = 1
+    var out: f64[6];
+    var t: f64 = 0.25;
+    callptr(f, t, &out);
+    var x: f64 = out[0];                           # 0.5c·(−0.75) = −112422171.75 = 0xc19acdb46f000000
+    hx(x);
+    var v: f64 = out[3];                           # 149896229 = 0x41a1de784a000000
+    hx(v);
+    var t2: f64 = -0.0;
+    callptr(f, t2, &out);
+    var x2: f64 = out[0];                          # 0.5c·(−1) = −149896229 = 0xc1a1de784a000000
+    hx(x2);
+    syscall(1, 1, "\n", 1);
+    return 0;
+}
+var r = main();
+sys_exit_group(r);

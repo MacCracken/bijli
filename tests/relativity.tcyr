@@ -2,12 +2,13 @@
 # four-vectors, the retarded and Liénard–Wiechert potentials and fields, and the Larmor powers.
 #
 # Every group named test_* is rust-old/src/relativity.rs's test of that name, ported assertion for assertion (the
-# ledger matches them by name): 39 of 48 here. The other nine test the retarded-time solver and
-# lienard_wiechert_fields, part 1d-2's. uniform_motion_delay is the Rust tests' closed-form delay, ported as they wrote
-# it. The cyrius_* groups check what the port adds: the recorded errors and their Display texts, ADR 0002 row 27, the
-# outs untouched on an error, the derived PartialEq, the tensor from its components and BjFourPotential.
+# ledger matches them by name): all 48. uniform_motion_delay is the Rust tests' closed-form delay, ported as they wrote
+# it; their trajectory closures are `traj`'s (the parity harness's scenarios). The cyrius_* groups check what the port
+# adds: the recorded errors and their Display texts, ADR 0002 row 27, the outs untouched on an error, the derived
+# PartialEq, the tensor from its components, BjFourPotential, and the solver's texts and usize::MAX budget.
 # tests/golden/relativity.tsv pins every function over its grid against Rust besides.
 
+include "lib/alloc.cyr"    # a capturing closure's heap environment (the compiler asks for it by name)
 include "tests/lib.cyr"
 
 # |a − b| < tol.
@@ -77,6 +78,59 @@ fn uniform_motion_delay(w: *f64, v: *f64): f64 {
     var b: f64 = s - wv;
     var r2: f64 = w2 / b;
     return r2;
+}
+
+# The parity harness's trajectories (m_relativity.rs's `trajectory`) over the parameters at pp: 0 static at p[0..3],
+# 1 uniform r₀ + v(t − t₀) (p[0..3], p[3..6], p[6]), 2 a circular orbit (R = p[0], ω = p[1]). They write position,
+# velocity and acceleration at out.
+fn traj(id, pp): i64 {
+    return |t, out| {
+        var tt: f64 = t;
+        var p: *f64 = as_f64p(pp);
+        var o: *f64 = as_f64p(out);
+        for (var k = 0; k < 9; k = k + 1) { o[k] = 0.0; }
+        if (id == 1) {
+            var dt: f64 = tt - p[6];
+            o[0] = p[0] + p[3] * dt;
+            o[1] = p[1] + p[4] * dt;
+            o[2] = p[2] + p[5] * dt;
+            o[3] = p[3];
+            o[4] = p[4];
+            o[5] = p[5];
+        } elif (id == 2) {
+            var r: f64 = p[0];
+            var w: f64 = p[1];
+            var wt: f64 = w * tt;
+            var s: f64 = _bj_sin(wt);
+            var c: f64 = _bj_cos(wt);
+            var nr: f64 = -r;
+            var a2: f64 = r * w * w;
+            var na2: f64 = -a2;
+            o[0] = r * c;
+            o[1] = r * s;
+            o[3] = nr * w * s;
+            o[4] = r * w * c;
+            o[6] = na2 * c;
+            o[7] = na2 * s;
+        } else {
+            o[0] = p[0];
+            o[1] = p[1];
+            o[2] = p[2];
+        }
+        return 0;
+    };
+}
+
+# p := the uniform trajectory's parameters (r₀, v, t₀).
+fn set_uniform(p: *f64, x: f64, y: f64, z: f64, vx: f64, vy: f64, vz: f64, t0: f64) {
+    p[0] = x;
+    p[1] = y;
+    p[2] = z;
+    p[3] = vx;
+    p[4] = vy;
+    p[5] = vz;
+    p[6] = t0;
+    return 0;
 }
 
 # The Lorentz factor, the tensor and the transforms.
@@ -529,6 +583,323 @@ fn rust_tests_c(): i64 {
     return 0;
 }
 
+# The retarded-time solver and lienard_wiechert_fields.
+fn rust_tests_d(): i64 {
+    var c: f64 = BJ_SPEED_OF_LIGHT;
+    var c2: f64 = BJ_SPEED_OF_LIGHT_SQ;
+    var pi: f64 = _BJ_PI;
+    var zero: f64 = 0.0;
+    var nan: f64 = zero / zero;
+    var eps: f64 = 0.0000000000000002220446049250313080847263336181640625;
+    var qe: f64 = 0.0000000000000000001602176634;
+    var p: f64[8];
+    var obs: f64[3];
+    var ev: BjFieldVector;
+    var bv: BjFieldVector;
+    for (var k = 0; k < 8; k = k + 1) { p[k] = 0.0; }
+    var still = traj(0, &p);
+
+    test_group("test_retarded_time_static_charge");
+    obs[0] = 1.0;
+    obs[1] = 0.0;
+    obs[2] = 0.0;
+    var t1, v1 = bj_solve_retarded_time(&obs, 0.00000001, still, 50);
+    var tr1: f64 = v1;
+    var ic: f64 = 1.0 / c;
+    var tw1: f64 = 0.00000001 - ic;
+    assert(is_ok(t1) == 1 && near(tr1, tw1, 0.000000000000000001) == 1, "t_r = t − r/c");
+
+    test_group("test_retarded_time_moving_charge");
+    var v01: f64 = 0.1 * c;
+    set_uniform(&p, 0.0, 0.0, 0.0, v01, 0.0, 0.0, 0.0);
+    var moving = traj(1, &p);
+    obs[0] = 2.0;
+    var t2, v2 = bj_solve_retarded_time(&obs, 0.00000001, moving, 50);
+    var tr2: f64 = v2;
+    var pr: f64 = v01 * tr2;
+    var rr: f64 = 2.0 - pr;
+    var ar: f64 = f64_abs(rr);
+    var dtt: f64 = 0.00000001 - tr2;
+    var cdt: f64 = c * dtt;
+    assert(is_ok(t2) == 1 && near(ar, cdt, 0.0000000001) == 1, "|obs − r(t_r)| = c(t − t_r)");
+
+    test_group("test_lw_fields_static");
+    for (var k2 = 0; k2 < 8; k2 = k2 + 1) { p[k2] = 0.0; }
+    obs[0] = 0.0;
+    obs[1] = 1.0;
+    var t3, v3 = bj_lienard_wiechert_fields(0.000001, &obs, 0.00000001, still, &ev, &bv);
+    var exa: f64 = f64_abs(ev.x);
+    var bm: f64 = bv.magnitude();
+    assert(is_ok(t3) == 1 && ev.y > 0.0 && exa < 0.001 && bm < 0.0000000001, "Coulomb along +y, B = 0");
+
+    test_group("test_retarded_time_static_charge_large_t");
+    obs[0] = 1.0;
+    obs[1] = 0.0;
+    var ts: f64[4];
+    ts[0] = 0.001;
+    ts[1] = 1.0;
+    ts[2] = 10.0;
+    ts[3] = 10000.0;
+    var bad = 0;
+    for (var i = 0; i < 4; i = i + 1) {
+        var to: f64 = ts[i];
+        var tl, vl = bj_solve_retarded_time(&obs, to, still, 50);
+        var trl: f64 = vl;
+        var ew: f64 = to - ic;
+        var d: f64 = trl - ew;
+        var ad: f64 = f64_abs(d);
+        var bound: f64 = 8.0 * eps * to;
+        if (is_ok(tl) != 1 || trl > to || ad > bound) { bad = bad + 1; }
+    }
+    assert(bad == 0, "converges at t = 1e-3 … 1e4 s, within 8ε·t");
+
+    test_group("test_retarded_time_uniform_motion_closed_form");
+    var vx: f64 = 0.8 * c;
+    var vy: f64 = -0.3 * c;
+    var vz: f64 = 0.1 * c;
+    var vv: f64[3];
+    vv[0] = vx;
+    vv[1] = vy;
+    vv[2] = vz;
+    obs[0] = 1.0;
+    obs[1] = 0.5;
+    obs[2] = 0.2;
+    var t0s: f64[3];
+    var tos: f64[3];
+    t0s[0] = 0.0;
+    tos[0] = 0.000000002;
+    t0s[1] = 1.0;
+    tos[1] = 1.0 + 0.000000003;
+    t0s[2] = -5.0;
+    tos[2] = -5.0 + 0.00000001;
+    var far = 0;
+    for (var j = 0; j < 3; j = j + 1) {
+        var t0: f64 = t0s[j];
+        var tob: f64 = tos[j];
+        set_uniform(&p, 0.1, -0.2, 0.05, vx, vy, vz, t0);
+        var u = traj(1, &p);
+        var tu, vu = bj_solve_retarded_time(&obs, tob, u, 50);
+        var tru: f64 = vu;
+        var st: f64[9];
+        callptr(u, tob, &st);
+        var w: f64[3];
+        w[0] = obs[0] - st[0];
+        w[1] = obs[1] - st[1];
+        w[2] = obs[2] - st[2];
+        var tau: f64 = uniform_motion_delay(&w, &vv);
+        var expected: f64 = tob - tau;
+        var dd: f64 = tru - expected;
+        var add: f64 = f64_abs(dd);
+        var atob: f64 = f64_abs(tob);
+        var lim: f64 = 0.0000000000001 * tau + 8.0 * eps * atob;
+        if (is_ok(tu) != 1 || tru > tob || add > lim) { far = far + 1; }
+    }
+    assert(far == 0, "the closed-form delay, small and large t");
+
+    test_group("test_retarded_time_max_iterations_respected");
+    var hc: f64 = 0.5 * c;
+    set_uniform(&p, 0.0, 0.0, 0.0, hc, 0.0, 0.0, 0.0);
+    var half = traj(1, &p);
+    obs[0] = 1.0;
+    obs[1] = 0.3;
+    obs[2] = 0.0;
+    var tm1, vm1 = bj_solve_retarded_time(&obs, 0.00000001, half, 0);
+    var tm2, vm2 = bj_solve_retarded_time(&obs, 0.00000001, half, 50);
+    assert(is_err_result(tm1) == 1 && is_ok(tm2) == 1, "0 iterations refused, 50 enough");
+
+    test_group("test_retarded_time_rejects_superluminal_and_nan");
+    var fvx: f64 = -2.0 * c;
+    set_uniform(&p, 0.0, 0.0, 0.0, fvx, 0.0, 0.0, 0.0);
+    var fast = traj(1, &p);
+    obs[0] = 1.0;
+    obs[1] = 0.0;
+    var tf1, vf1 = bj_solve_retarded_time(&obs, 1.0, fast, 100);
+    var q: f64[8];
+    for (var k3 = 0; k3 < 8; k3 = k3 + 1) { q[k3] = 0.0; }
+    q[0] = nan;
+    var badtraj = traj(0, &q);
+    var tf2, vf2 = bj_solve_retarded_time(&obs, 1.0, badtraj, 100);
+    for (var k4 = 0; k4 < 8; k4 = k4 + 1) { p[k4] = 0.0; }
+    var tf3, vf3 = bj_solve_retarded_time(&obs, nan, still, 100);
+    assert(is_err_result(tf1) == 1 && is_err_result(tf2) == 1 && is_err_result(tf3) == 1, "2c away, NaN, NaN t");
+
+    test_group("test_lw_fields_uniform_motion_heaviside");
+    var v9: f64 = 0.9 * c;
+    obs[0] = 0.3;
+    obs[1] = 0.8;
+    obs[2] = -0.4;
+    var tobs: f64[2];
+    tobs[0] = 0.000000003;
+    tobs[1] = 2.0;
+    var off = 0;
+    for (var m = 0; m < 2; m = m + 1) {
+        var th: f64 = tobs[m];
+        set_uniform(&p, 0.0, 0.0, 0.0, v9, 0.0, 0.0, th);
+        var hv = traj(1, &p);
+        var th1, vh1 = bj_lienard_wiechert_fields(0.000000001, &obs, th, hv, &ev, &bv);
+        var stn: f64[9];
+        callptr(hv, th, &stn);
+        var wv = BjFieldVector_new(obs[0] - stn[0], obs[1] - stn[1], obs[2] - stn[2]);
+        var wm: f64 = wv.magnitude();
+        var bc: f64 = v9 / c;
+        var beta2: f64 = _bj_powi(bc, 2);
+        var cos_t: f64 = wv.x / wm;
+        var sin2: f64 = 1.0 - cos_t * cos_t;
+        var fpe: f64 = 4.0 * pi * BJ_EPSILON_0;
+        var qf: f64 = 0.000000001 / fpe;
+        var ob2: f64 = 1.0 - beta2;
+        var num: f64 = qf * ob2;
+        var bs: f64 = 1.0 - beta2 * sin2;
+        var pw: f64 = _bj_powf(bs, 1.5);
+        var den: f64 = pw * wm * wm;
+        var mag: f64 = num / den;
+        var mw: f64 = mag / wm;
+        var e_ref: BjFieldVector = wv.scale(mw);
+        var vvec = BjFieldVector_new(v9, 0.0, 0.0);
+        var vxe: BjFieldVector = vvec.cross(e_ref);
+        var ic2: f64 = 1.0 / c2;
+        var b_ref: BjFieldVector = vxe.scale(ic2);
+        var de: f64 = vdist(ev, e_ref);
+        var me: f64 = e_ref.magnitude();
+        var db: f64 = vdist(bv, b_ref);
+        var mb: f64 = b_ref.magnitude();
+        var re: f64 = de / me;
+        var rb: f64 = db / mb;
+        if (is_ok(th1) != 1 || !(re < 0.000000001) || !(rb < 0.000000001)) { off = off + 1; }
+    }
+    assert(off == 0, "Griffiths 10.75/10.76: the present-position form, to 1e-9");
+
+    test_group("test_lw_fields_circular_orbit_beta_099");
+    p[0] = 1.0;
+    p[1] = 0.99 * c;
+    var orbit = traj(2, &p);
+    var cs: f64[33];
+    cs[0] = 0.48;
+    cs[1] = -1.02;
+    cs[2] = 0.0;
+    cs[3] = 0.0000000837;
+    cs[4] = 0.0000000822239923104945;
+    cs[5] = 0.0000000006227148912038439;
+    cs[6] = -0.0000000005141662384120919;
+    cs[7] = 0.0;
+    cs[8] = 0.0;
+    cs[9] = 0.0;
+    cs[10] = 0.0000000000000000026908622406850103;
+    cs[11] = 1.23;
+    cs[12] = -0.59;
+    cs[13] = 0.01;
+    cs[14] = 0.0000000002;
+    cs[15] = -0.0000000011021671779299383;
+    cs[16] = 0.0000000012661029569526494;
+    cs[17] = 0.0000000011961252554940406;
+    cs[18] = -0.00000000002799254661512416;
+    cs[19] = -0.00000000000000000003793853944382319;
+    cs[20] = 0.0000000000000000001758794283294848;
+    cs[21] = 0.000000000000000005799391223903531;
+    cs[22] = 0.89;
+    cs[23] = 0.805;
+    cs[24] = -0.081;
+    cs[25] = 0.0000000693;
+    cs[26] = 0.00000006751098042729196;
+    cs[27] = 0.00000000018260437467483168;
+    cs[28] = 0.0000000006531739882140894;
+    cs[29] = 0.000000000005759862144199076;
+    cs[30] = 0.0000000000000000003246628266085001;
+    cs[31] = -0.00000000000000000011046941768170587;
+    cs[32] = 0.000000000000000002234584329904851;
+    var miss = 0;
+    for (var n = 0; n < 3; n = n + 1) {
+        var b = 11 * n;
+        obs[0] = cs[b];
+        obs[1] = cs[b + 1];
+        obs[2] = cs[b + 2];
+        var to2: f64 = cs[b + 3];
+        var trw: f64 = cs[b + 4];
+        var tc, vc = bj_solve_retarded_time(&obs, to2, orbit, 50);
+        var trc: f64 = vc;
+        var dtr: f64 = trc - trw;
+        var adtr: f64 = f64_abs(dtr);
+        if (is_ok(tc) != 1 || trc > to2 || !(adtr < 0.000000000000000000001)) { miss = miss + 1; }
+        var tl2, vl2 = bj_lienard_wiechert_fields(qe, &obs, to2, orbit, &ev, &bv);
+        var er: BjFieldVector = BjFieldVector_from_array(&cs + 8 * (b + 5));
+        var br: BjFieldVector = BjFieldVector_from_array(&cs + 8 * (b + 8));
+        var de2: f64 = vdist(ev, er);
+        var me2: f64 = er.magnitude();
+        var db2: f64 = vdist(bv, br);
+        var mb2: f64 = br.magnitude();
+        var re2: f64 = de2 / me2;
+        var rb2: f64 = db2 / mb2;
+        if (is_ok(tl2) != 1 || !(re2 < 0.00000001) || !(rb2 < 0.00000001)) { miss = miss + 1; }
+    }
+    assert(miss == 0, "β = 0.99: t_r to 1e-21 s, E and B to 1e-8 (60-digit references)");
+
+    if (vm1 == 7 || vm2 == 7 || vf1 == 0 || vf2 == 0 || vf3 == 0 || v3 == 7) { println("."); }
+    return 0;
+}
+
+# The solver's errors, texts and budget.
+fn cyrius_solver_tests(): i64 {
+    var c: f64 = BJ_SPEED_OF_LIGHT;
+    var zero: f64 = 0.0;
+    var nan: f64 = zero / zero;
+    var p: f64[8];
+    var obs: f64[3];
+    var ev: BjFieldVector = BjFieldVector_new(7.0, 7.0, 7.0);
+    var bv: BjFieldVector = BjFieldVector_new(7.0, 7.0, 7.0);
+    for (var k = 0; k < 8; k = k + 1) { p[k] = 0.0; }
+    var still = traj(0, &p);
+
+    test_group("cyrius_solver_errors");
+    obs[0] = 1.0;
+    obs[1] = nan;
+    obs[2] = 0.0;
+    var t1, v1 = bj_solve_retarded_time(&obs, 2.0, still, 10);
+    assert(err_is(t1, v1, BJ_ERR_INVALID_PARAMETER,
+        "invalid parameter: observer position and time must be finite, got [1.0, NaN, 0.0] at t = 2") == 1,
+      "the observer's text, its position in Debug form");
+    obs[1] = 0.0;
+    var q: f64[8];
+    for (var k2 = 0; k2 < 8; k2 = k2 + 1) { q[k2] = 0.0; }
+    q[1] = nan;
+    var bad = traj(0, &q);
+    var t2, v2 = bj_solve_retarded_time(&obs, 0.5, bad, 10);
+    assert(err_is(t2, v2, BJ_ERR_INVALID_PARAMETER,
+        "invalid parameter: trajectory returned a non-finite state at t = 0.5") == 1, "the state's text");
+    var vx: f64 = -2.0 * c;
+    p[3] = vx;
+    var fast = traj(1, &p);
+    var t3, v3 = bj_solve_retarded_time(&obs, 1.0, fast, 100);
+    var pre3 = "invalid parameter: trajectory returned a non-finite state at t = ";
+    var d3 = bj_last_error_display();
+    var n3 = strlen(pre3);
+    assert(is_err_result(t3) == 1 && v3 == BJ_ERR_INVALID_PARAMETER && memeq(d3, pre3, n3) == 1,
+      "2c away: the position overflows while the bracket doubles (Rust's text, not its bracket error)");
+    var hc: f64 = 0.5 * c;
+    p[3] = hc;
+    obs[1] = 0.3;
+    var half = traj(1, &p);
+    var t4, v4 = bj_solve_retarded_time(&obs, 0.00000001, half, 0);
+    assert(err_is(t4, v4, BJ_ERR_INVALID_PARAMETER,
+        "invalid parameter: retarded time solver did not converge in 0 iterations") == 1, "the budget's text");
+    var t5, v5 = bj_solve_retarded_time(&obs, 0.00000001, half, 0 - 1);
+    var t6, v6 = bj_solve_retarded_time(&obs, 0.00000001, half, 50);
+    var r5: f64 = v5;
+    var r6: f64 = v6;
+    assert(is_ok(t5) == 1 && is_ok(t6) == 1 && r5 == r6, "−1 is usize::MAX: no budget, the same root");
+
+    test_group("cyrius_lw_fields_errors");
+    for (var k3 = 0; k3 < 8; k3 = k3 + 1) { p[k3] = 0.0; }
+    obs[0] = 0.0;
+    obs[1] = 0.0;
+    obs[2] = 0.0;
+    var t7, v7 = bj_lienard_wiechert_fields(1.0, &obs, 1.0, still, &ev, &bv);
+    assert(err_is(t7, v7, BJ_ERR_SINGULARITY, "singularity: field evaluation at source point (distance = 0)") == 1
+      && ev.x == 7.0 && bv.x == 7.0, "on the charge: Singularity, the outs untouched");
+
+    if (v1 == 0 || v2 == 0 || v3 == 0 || v4 == 0) { println("."); }
+    return 0;
+}
+
 # What the port adds: the error texts, ADR 0002 row 27, outs untouched, PartialEq, the tensor from components.
 fn cyrius_tests(): i64 {
     var c: f64 = BJ_SPEED_OF_LIGHT;
@@ -606,7 +977,9 @@ fn main(): i64 {
     rust_tests_a();
     rust_tests_b();
     rust_tests_c();
+    rust_tests_d();
     cyrius_tests();
+    cyrius_solver_tests();
     return assert_summary();
 }
 

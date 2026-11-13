@@ -1125,6 +1125,7 @@ relativity::bj_beta/1
 relativity::bj_larmor_power/2
 relativity::bj_lienard_wiechert_b/2
 relativity::bj_lienard_wiechert_e/5
+relativity::bj_lienard_wiechert_fields/6
 relativity::bj_lienard_wiechert_scalar_potential/3
 relativity::bj_lienard_wiechert_vector_potential/4
 relativity::bj_lorentz_factor/1
@@ -1133,6 +1134,7 @@ relativity::bj_lorentz_transform_x/5
 relativity::bj_relativistic_larmor_power/3
 relativity::bj_retarded_scalar_potential/2
 relativity::bj_retarded_vector_potential/4
+relativity::bj_solve_retarded_time/4
 result::err_code_of/2
 result::err_via/2
 result::is_err_result/1

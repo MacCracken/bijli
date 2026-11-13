@@ -2339,10 +2339,15 @@ def rel_rust(fn, v, O, K):
 def validate_relativity(root: Path, path: Path) -> list:
     _header, rows = read_tsv(path)
     K, O = rel_consts(root), rel_ops(False)
-    errs = []
+    errs = check_platform(_header)
+    if errs:
+        return errs
     for n, (fn, _cls, ins, outs) in enumerate(rows, 1):
         v = [b for _k, b in ins]
-        want = rel_rust(fn, v, O, K)
+        if fn in ("relativity::solve_retarded_time", "relativity::lienard_wiechert_fields"):
+            want = rel_solver_rust(fn, ins, GLIBC_P, O, K)
+        else:
+            want = rel_rust(fn, v, O, K)
         if want is None:
             errs.append(f"relativity row {n}: no transcription for {fn}")
             continue
@@ -2351,8 +2356,177 @@ def validate_relativity(root: Path, path: Path) -> list:
     return errs
 
 
+# ── relativity's solver (M2 part 1d-2): solve_retarded_time and lienard_wiechert_fields ──────────────────────────
+# The trajectories of m_relativity.rs's `trajectory`, by number, on the primitives P (sin and cos for 2 and 4).
+def rel_trajectory(tid, p, t, P, C):
+    if tid == 0:
+        return [p[0], p[1], p[2]], [0.0, 0.0, 0.0], [0.0, 0.0, 0.0]
+    if tid == 1:
+        dt = t - p[6]
+        return [p[0] + p[3] * dt, p[1] + p[4] * dt, p[2] + p[5] * dt], [p[3], p[4], p[5]], [0.0, 0.0, 0.0]
+    if tid == 2:
+        r, w = p[0], p[1]
+        s, c = P["sin"](w * t), P["cos"](w * t)
+        a2 = r * w * w
+        return [r * c, r * s, 0.0], [-r * w * s, r * w * c, 0.0], [-a2 * c, -a2 * s, 0.0]
+    if tid == 3:
+        a = p[0]
+        u = fdiv(a * t, C)
+        g = fsqrt(1.0 + u * u)
+        return [fdiv(C * C, a) * (g - 1.0), 0.0, 0.0], [fdiv(a * t, g), 0.0, 0.0], [fdiv(a, g * g * g), 0.0, 0.0]
+    if tid == 4:
+        amp, w = p[0], p[1]
+        s, c = P["sin"](w * t), P["cos"](w * t)
+        return [0.0, 0.0, amp * s], [0.0, 0.0, amp * w * c], [0.0, 0.0, -(amp * w * w) * s]
+    return [p[0], p[1], p[2]], [0.0, 0.0, 0.0], [p[3], p[4], p[5]]
+
+
+EPS52 = 2.0 ** -52
+MIN_NORMAL = 2.0 ** -1022
+
+
+def rel_solve(obs, t, traj, max_it, C):
+    """solve_retarded_time transcribed: ("ok", t_r) or ("err", tokens). traj(t) -> (pos, vel)."""
+    if not (math.isfinite(t) and all(math.isfinite(c) for c in obs)):
+        return "err", ip_err("observer position and time must be finite, got [" + ", ".join(rust_debug(c) for c in obs)
+                             + f"] at t = {rust_display(t)}")
+
+    def ev(tau):
+        t_r = t - tau
+        pos, vel = traj(t_r)
+        if not all(math.isfinite(c) for c in pos + vel):
+            return None, ip_err(f"trajectory returned a non-finite state at t = {rust_display(t_r)}")
+        dx, dy, dz = obs[0] - pos[0], obs[1] - pos[1], obs[2] - pos[2]
+        dist = fsqrt(dx * dx + dy * dy + dz * dz)
+        light = C * (t - t_r)
+        dg = fdiv(dx * vel[0] + dy * vel[1] + dz * vel[2], dist) - C if dist > 0.0 else -C
+
+        def mabs(v):
+            return rust_max(rust_max(abs(v[0]), abs(v[1])), abs(v[2]))
+        noise = 2.0 * EPS52 * rust_max(rust_max(rust_max(rust_max(dist, light), mabs(obs)), mabs(pos)),
+                                       mabs(vel) * abs(t_r))
+        return {"tau": tau, "g": dist - light, "dg": dg, "noise": noise}, None
+
+    def tol(tau):
+        return 4.0 * EPS52 * rust_max(abs(t), tau)
+
+    s0, e = ev(0.0)
+    if e:
+        return "err", e
+    if s0["g"] == 0.0:
+        return "ok", t
+    lo = s0
+    hi, e = ev(rust_max(fdiv(s0["g"], C), MIN_NORMAL))
+    if e:
+        return "err", e
+    expansions = 0
+    while hi["g"] > 0.0:
+        nxt = 2.0 * hi["tau"]
+        if expansions >= 2100 or not math.isfinite(nxt):
+            return "err", ip_err("retarded time solver could not bracket the light-cone root (is the trajectory "
+                                 "faster than light?)")
+        lo = hi
+        hi, e = ev(nxt)
+        if e:
+            return "err", e
+        expansions += 1
+    cur = lo if abs(lo["g"]) < abs(hi["g"]) else hi
+    last_step = hi["tau"] - lo["tau"]
+    it = 0
+    while True:
+        if cur["g"] == 0.0:
+            conv = cur["tau"]
+            break
+        if abs(cur["g"]) <= cur["noise"]:
+            if cur["dg"] < 0.0:
+                conv = rust_min(rust_max(cur["tau"] - fdiv(cur["g"], cur["dg"]), lo["tau"]), hi["tau"])
+            else:
+                conv = cur["tau"]
+            break
+        if it == max_it:
+            return "err", ip_err(f"retarded time solver did not converge in {max_it} iterations")
+        it += 1
+        newton = cur["tau"] - fdiv(cur["g"], cur["dg"])
+        use_newton = (cur["dg"] < 0.0 and newton >= lo["tau"] and newton <= hi["tau"]
+                      and abs(2.0 * cur["g"]) <= abs(last_step * cur["dg"]))
+        if use_newton:
+            nxt, step = newton, abs(fdiv(cur["g"], cur["dg"]))
+        else:
+            half = 0.5 * (hi["tau"] - lo["tau"])
+            nxt, step = lo["tau"] + half, half
+        if step <= tol(nxt) or nxt == cur["tau"]:
+            conv = nxt
+            break
+        last_step = step
+        cur, e = ev(nxt)
+        if e:
+            return "err", e
+        if cur["g"] > 0.0:
+            lo = cur
+        else:
+            hi = cur
+    return "ok", t - conv
+
+
+def rel_solver_rust(fn, ins, P, O, K):
+    """A solver or fields row's outputs, on the primitives P and vector operations O."""
+    C = K["C"]
+    if fn == "relativity::solve_retarded_time":
+        tid, obs, t, mx = ins[0][1], [ins[1][1], ins[2][1], ins[3][1]], ins[4][1], ins[5][1]
+        ps = [b for _k, b in ins[7:]]
+        max_it = mx if mx >= 0 else mx + (1 << 64)
+        kind, r = rel_solve(obs, t, lambda tt: rel_trajectory(tid, ps, tt, P, C)[0:2], max_it, C)
+        return okf(r) if kind == "ok" else r
+    q, tid, obs, t = ins[0][1], ins[1][1], [ins[2][1], ins[3][1], ins[4][1]], ins[5][1]
+    ps = [b for _k, b in ins[7:]]
+    kind, r = rel_solve(obs, t, lambda tt: rel_trajectory(tid, ps, tt, P, C)[0:2], 200, C)
+    if kind == "err":
+        return r
+    t_r = r
+    pos, vel, acc = rel_trajectory(tid, ps, t_r, P, C)
+    if not all(math.isfinite(a) for a in acc):
+        return ip_err(f"trajectory returned a non-finite acceleration at t = {rust_display(t_r)}")
+    rv = [obs[i] - pos[i] for i in range(3)]
+    r_mag = O["mag"](rv)
+    if r_mag < 1e-30:
+        return SINGULAR
+    inv = fdiv(1.0, r_mag)
+    n = [x * inv for x in rv]
+    bv = [fdiv(x, C) for x in vel]
+    bd = [fdiv(x, C) for x in acc]
+    e = rel_rust("relativity::lienard_wiechert_e", [q] + rv + bv + bd, O, K)
+    if e[0][0] == "E":
+        return e
+    ev3 = [b for _k, b in e]
+    b = rel_rust("relativity::lienard_wiechert_b", n + ev3, O, K)
+    return e + b
+
+
 # ADR 0002 row 27 (M2 part 1d-1, row 20's rule): lienard_wiechert_e refuses a NaN R as its sibling potentials do
 # ("R vector must not contain NaN"), where Rust's went on to Ok(NaN). Row 18 through FieldVector's operations.
+def relativity_corrections(root: Path, path: Path):
+    """The class-C solver rows (the circular orbit and the oscillation) whose outputs change when sin and cos are
+    correctly rounded (MPFR), on the port's vector operations (ADR 0002 row 18)."""
+    K, O = rel_consts(root), rel_ops(True)
+
+    def fixes(_rows):
+        out = []
+        for line in path.read_text().splitlines():
+            if line.startswith("#"):
+                continue
+            fn, cls, ins, outs, _note = line.split("\t")
+            if cls != "C":
+                continue
+            toks = [parse_tok(x) for x in ins.split(" ")]
+            want = rel_solver_rust(fn, toks, MPFR_P, O, K)
+            old = wave_toks([parse_tok(x) for x in outs.split(" ")])
+            if toks_same(want, old):
+                continue
+            out.append((fn, ins, wire(want), f"oracle {outs}; correctly rounded primitives give {wire(want)}"))
+        return out
+    return fixes
+
+
 def relativity_adr_rows(root: Path, path: Path) -> list:
     K, R, P = rel_consts(root), rel_ops(False), rel_ops(True)
     out = []
@@ -2362,7 +2536,12 @@ def relativity_adr_rows(root: Path, path: Path) -> list:
         fn, _cls, ins, outs, _note = line.split("\t")
         toks = [] if ins == "-" else [parse_tok(x) for x in ins.split(" ")]
         v = [b for _k, b in toks]
-        rust, port = rel_rust(fn, v, R, K), rel_rust(fn, v, P, K)
+        if fn in ("relativity::solve_retarded_time", "relativity::lienard_wiechert_fields"):
+            if _cls == "C":
+                continue                    # its trajectory's sin and cos: the corrected oracle's row
+            rust, port = rel_solver_rust(fn, toks, GLIBC_P, R, K), rel_solver_rust(fn, toks, GLIBC_P, P, K)
+        else:
+            rust, port = rel_rust(fn, v, R, K), rel_rust(fn, v, P, K)
         if toks_same(rust, port):
             continue
         row = 27 if (fn == "relativity::lienard_wiechert_e" and port[0] == ("E", "InvalidParameter")
@@ -4282,6 +4461,8 @@ def main() -> int:
                               "then why they differ")
     errs += check_corrections(root, "wave", golden / "wave.tsv", wave_corrections(root, golden / "wave.tsv"))
     errs += check_corrections(root, "circuit", golden / "circuit.tsv", circuit_corrections(golden / "circuit.tsv"))
+    errs += check_corrections(root, "relativity", golden / "relativity.tsv",
+                              relativity_corrections(root, golden / "relativity.tsv"))
     for mod in ("charge", "circuit", "complex", "field", "material", "maxwell", "relativity", "wave"):
         errs += check_adr(root, mod, golden / f"{mod}.tsv")
     errs += cx_rows(golden / "complex.tsv")[1]

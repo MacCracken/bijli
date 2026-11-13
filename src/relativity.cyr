@@ -542,3 +542,314 @@ public fn bj_relativistic_larmor_power(charge: f64, velocity: BjFieldVector, acc
     var p: f64 = pg * d;
     return Ok(p);
 }
+
+# ── the retarded-time solver ─────────────────────────────────────────────────────────────────────────────────────
+# A trajectory is a closure (or `&fn`) called through callptr as `trajectory_fn(t, out)`, t an f64 in a word (rebind it
+# inside as `var tt: f64 = t;`, probe p18): it writes the charge's position, then its velocity (six f64) at out, and for
+# bj_lienard_wiechert_fields its acceleration after them (nine). Its return value is ignored: Rust's trajectory can't
+# fail. The motion must be subluminal.
+
+# One light-cone sample g(τ) = |r_obs − r(t − τ)| − cτ into s: τ, g, dg/dτ = R̂⋅v − c (−c at R = 0) and the rounding
+# scale of g, 2ε·max(|R|, cτ, ‖r_obs‖∞, ‖r(t_r)‖∞, ‖v‖∞|t_r|). The light-travel term is c·(t − t_r) with the rounded
+# t_r. The trajectory's state is left in st. 0, or the InvalidParameter of a non-finite state.
+fn _bj_rel_sample(obs: *f64, t: f64, tau: f64, traj, st: *f64, s: *f64): i64 {
+    var t_r: f64 = t - tau;
+    callptr(traj, t_r, st);
+    for (var k = 0; k < 6; k = k + 1) {
+        var c: f64 = st[k];
+        if (_bj_is_finite(c) == 0) {
+            var e = _bj_err_reason(BJ_ERR_INVALID_PARAMETER);
+            _bj_tx_cstr(e, "trajectory returned a non-finite state at t = ");
+            _bj_fmt_f64_display(e, t_r);
+            return BJ_ERR_INVALID_PARAMETER;
+        }
+    }
+    var dx: f64 = obs[0] - st[0];
+    var dy: f64 = obs[1] - st[1];
+    var dz: f64 = obs[2] - st[2];
+    var d2: f64 = dx * dx + dy * dy + dz * dz;
+    var dist: f64 = f64_sqrt(d2);
+    var dt: f64 = t - t_r;
+    var light: f64 = BJ_SPEED_OF_LIGHT * dt;
+    var dg: f64 = -BJ_SPEED_OF_LIGHT;
+    if (dist > 0.0) {
+        var rv: f64 = dx * st[3] + dy * st[4] + dz * st[5];
+        var q: f64 = rv / dist;
+        dg = q - BJ_SPEED_OF_LIGHT;
+    }
+    var m_obs: f64 = _bj_rel_max_abs3(obs, 0);
+    var m_pos: f64 = _bj_rel_max_abs3(st, 0);
+    var m_vel: f64 = _bj_rel_max_abs3(st, 3);
+    var at: f64 = f64_abs(t_r);
+    var mvt: f64 = m_vel * at;
+    var m1: f64 = _bj_max(dist, light);
+    var m2: f64 = _bj_max(m1, m_obs);
+    var m3: f64 = _bj_max(m2, m_pos);
+    var m4: f64 = _bj_max(m3, mvt);
+    var two_eps: f64 = 2.0 * 0.0000000000000002220446049250313080847263336181640625;
+    var noise: f64 = two_eps * m4;
+    s[0] = tau;
+    s[1] = dist - light;
+    s[2] = dg;
+    s[3] = noise;
+    return 0;
+}
+
+# max(|p[k]|, |p[k + 1]|, |p[k + 2]|), Rust's f64::max fold.
+fn _bj_rel_max_abs3(p: *f64, k): f64 {
+    var a: f64 = f64_abs(p[k]);
+    var b: f64 = f64_abs(p[k + 1]);
+    var c: f64 = f64_abs(p[k + 2]);
+    var ab: f64 = _bj_max(a, b);
+    var m: f64 = _bj_max(ab, c);
+    return m;
+}
+
+# dst := src, a light-cone sample (four f64).
+fn _bj_rel_copy4(dst: *f64, src: *f64) {
+    for (var k = 0; k < 4; k = k + 1) { dst[k] = src[k]; }
+    return 0;
+}
+
+# The InvalidParameter of an observer that is not finite: "observer position and time must be finite, got [..] at
+# t = ..".
+fn _bj_rel_observer_error(obs: *f64, t: f64): i64 {
+    var e = _bj_err_reason(BJ_ERR_INVALID_PARAMETER);
+    _bj_tx_cstr(e, "observer position and time must be finite, got ");
+    _bj_fmt_f64x3_debug(e, obs);
+    _bj_tx_cstr(e, " at t = ");
+    _bj_fmt_f64_display(e, t);
+    return BJ_ERR_INVALID_PARAMETER;
+}
+
+# Logs one of the solver's debug events, a message and its fields: t_r and τ (`what` 1: converged, with the
+# iteration and expansion counts), t_r alone (2: the observer on the trajectory), or the budget and the bracket (3).
+fn _bj_rel_solve_log(what, a: f64, b: f64, n1, n2) {
+    if (_bj_log_on(4) == 0) { return 0; }
+    var lb[256];
+    var lt[24];
+    _bj_tx_init(&lt, &lb, 256);
+    if (what == 1) {
+        _bj_tx_cstr(&lt, "retarded time converged t_r=");
+        _bj_fmt_f64_debug(&lt, a);
+        _bj_tx_cstr(&lt, " tau=");
+        _bj_fmt_f64_debug(&lt, b);
+        _bj_tx_cstr(&lt, " iterations=");
+        _bj_tx_u64(&lt, n1);
+        _bj_tx_cstr(&lt, " expansions=");
+        _bj_tx_u64(&lt, n2);
+    } elif (what == 2) {
+        _bj_tx_cstr(&lt, "retarded time: observer on the trajectory t_r=");
+        _bj_fmt_f64_debug(&lt, a);
+    } else {
+        _bj_tx_cstr(&lt, "retarded time solver did not converge max_iterations=");
+        _bj_tx_u64(&lt, n1);
+        _bj_tx_cstr(&lt, " lo=");
+        _bj_fmt_f64_debug(&lt, a);
+        _bj_tx_cstr(&lt, " hi=");
+        _bj_fmt_f64_debug(&lt, b);
+    }
+    _bj_log_text(4, &lt);
+    return 0;
+}
+
+# The solver over traj into *out, the trajectory's state left in st (nine f64): the body of bj_solve_retarded_time.
+fn _bj_rel_solve(obs: *f64, t: f64, traj, max_iterations, st: *f64, out: *f64): Result {
+    if (!(_bj_is_finite(t) == 1 && _bj_is_finite(obs[0]) == 1 && _bj_is_finite(obs[1]) == 1
+        && _bj_is_finite(obs[2]) == 1)) {
+        return Err(_bj_rel_observer_error(obs, t));
+    }
+    if (_bj_log_on(4) == 1) {
+        var lb[256];
+        var lt[24];
+        _bj_tx_init(&lt, &lb, 256);
+        _bj_tx_cstr(&lt, "solving retarded time observer_pos=");
+        _bj_fmt_f64x3_debug(&lt, obs);
+        _bj_tx_cstr(&lt, " observation_time=");
+        _bj_fmt_f64_debug(&lt, t);
+        _bj_tx_cstr(&lt, " max_iterations=");
+        _bj_tx_u64(&lt, max_iterations);
+        _bj_log_text(4, &lt);
+    }
+    var lo: f64[4];
+    var hi: f64[4];
+    var cur: f64[4];
+    var c0 = _bj_rel_sample(obs, t, 0.0, traj, st, &lo);
+    if (c0 != 0) { return Err(c0); }
+    var g0: f64 = lo[1];
+    if (g0 == 0.0) {
+        _bj_rel_solve_log(2, t, 0.0, 0, 0);
+        out[0] = t;
+        return Ok(0);
+    }
+    var tau0: f64 = g0 / BJ_SPEED_OF_LIGHT;
+    var min_pos: f64 = _bj_from_bits(0x0010000000000000);
+    var tau1: f64 = _bj_max(tau0, min_pos);
+    var c1 = _bj_rel_sample(obs, t, tau1, traj, st, &hi);
+    if (c1 != 0) { return Err(c1); }
+    var expansions = 0;
+    while (hi[1] > 0.0) {
+        var ht: f64 = hi[0];
+        var next_tau: f64 = 2.0 * ht;
+        if (expansions >= 2100 || _bj_is_finite(next_tau) == 0) {
+            var be = _bj_err_reason(BJ_ERR_INVALID_PARAMETER);
+            _bj_tx_cstr(be, "retarded time solver could not bracket the light-cone root ");
+            _bj_tx_cstr(be, "(is the trajectory faster than light?)");
+            return Err(BJ_ERR_INVALID_PARAMETER);
+        }
+        _bj_rel_copy4(&lo, &hi);
+        var c2 = _bj_rel_sample(obs, t, next_tau, traj, st, &hi);
+        if (c2 != 0) { return Err(c2); }
+        expansions = expansions + 1;
+    }
+    var alo: f64 = f64_abs(lo[1]);
+    var ahi: f64 = f64_abs(hi[1]);
+    if (alo < ahi) { _bj_rel_copy4(&cur, &lo); } else { _bj_rel_copy4(&cur, &hi); }
+    var last_step: f64 = hi[0] - lo[0];
+    var iterations = 0;
+    var tau: f64 = 0.0;
+    while (1 == 1) {
+        var ct: f64 = cur[0];
+        var cg: f64 = cur[1];
+        var cd: f64 = cur[2];
+        var cn: f64 = cur[3];
+        if (cg == 0.0) {
+            tau = ct;
+            break;
+        }
+        var acg: f64 = f64_abs(cg);
+        if (acg <= cn) {
+            tau = ct;
+            if (cd < 0.0) {
+                var qd: f64 = cg / cd;
+                var pol: f64 = ct - qd;
+                var pl: f64 = _bj_max(pol, lo[0]);
+                tau = _bj_min(pl, hi[0]);
+            }
+            break;
+        }
+        if (iterations == max_iterations) {
+            _bj_rel_solve_log(3, lo[0], hi[0], max_iterations, 0);
+            var ne = _bj_err_reason(BJ_ERR_INVALID_PARAMETER);
+            _bj_tx_cstr(ne, "retarded time solver did not converge in ");
+            _bj_tx_u64(ne, max_iterations);
+            _bj_tx_cstr(ne, " iterations");
+            return Err(BJ_ERR_INVALID_PARAMETER);
+        }
+        iterations = iterations + 1;
+        var gd: f64 = cg / cd;
+        var newton: f64 = ct - gd;
+        var g2: f64 = 2.0 * cg;
+        var ag2: f64 = f64_abs(g2);
+        var ls: f64 = last_step * cd;
+        var als: f64 = f64_abs(ls);
+        var next: f64 = 0.0;
+        var step: f64 = 0.0;
+        if (cd < 0.0 && newton >= lo[0] && newton <= hi[0] && ag2 <= als) {
+            next = newton;
+            step = f64_abs(gd);
+        } else {
+            var w: f64 = hi[0] - lo[0];
+            var half: f64 = 0.5 * w;
+            next = lo[0] + half;
+            step = half;
+        }
+        var at: f64 = f64_abs(t);
+        var mt: f64 = _bj_max(at, next);
+        var four_eps: f64 = 4.0 * 0.0000000000000002220446049250313080847263336181640625;
+        var tol: f64 = four_eps * mt;
+        if (step <= tol || next == ct) {
+            tau = next;
+            break;
+        }
+        last_step = step;
+        var c3 = _bj_rel_sample(obs, t, next, traj, st, &cur);
+        if (c3 != 0) { return Err(c3); }
+        var ng: f64 = cur[1];
+        if (ng > 0.0) { _bj_rel_copy4(&lo, &cur); } else { _bj_rel_copy4(&hi, &cur); }
+    }
+    var t_r: f64 = t - tau;
+    _bj_rel_solve_log(1, t_r, tau, iterations, expansions);
+    out[0] = t_r;
+    return Ok(0);
+}
+
+# The retarded time t_r ≤ t with |r_obs − r(t_r)| = c(t − t_r), unique for a subluminal charge. On the delay τ = t − t_r
+# with g(τ) = |r_obs − r(t − τ)| − cτ (g(0) ≥ 0, g′ < 0): from the static estimate τ₀ = |r_obs − r(t)|/c a bracket
+# g(lo) > 0 ≥ g(hi) by doubling, then Newton steps safeguarded by bisection, until the step is at most 4ε·max(|t|, τ)
+# or |g| reaches its own rounding level (then one last Newton correction). `observer_pos` is three f64, the trajectory
+# a callback (above) writing position and velocity, `max_iterations` Rust's usize (−1 is usize::MAX) counting the
+# refinement steps (the bracket's doublings are not counted). InvalidParameter when the observer or the time is not
+# finite, the trajectory returns a non-finite state, no bracket exists (a superluminal trajectory), or the refinement
+# has not converged in max_iterations steps. Mirrors `relativity::solve_retarded_time`.
+public fn bj_solve_retarded_time(observer_pos: *f64, observation_time: f64, trajectory_fn, max_iterations): Result {
+    var st: f64[9];
+    var r: f64[1];
+    var t, v = _bj_rel_solve(observer_pos, observation_time, trajectory_fn, max_iterations, &st, &r);
+    if (is_err_result(t) == 1) { return Err(v); }
+    var t_r: f64 = r[0];
+    return Ok(t_r);
+}
+
+# (E, B) (V/m, T) at the observer, into e_out and b_out: bj_solve_retarded_time with a budget of 200 refinement steps,
+# then bj_lienard_wiechert_e and bj_lienard_wiechert_b at the retarded position, β = v/c and β̇ = a/c. The trajectory
+# writes position, velocity and acceleration (nine f64). The solver's errors; InvalidParameter for a non-finite
+# acceleration; Singularity when the observer sits on the retarded position; bj_lienard_wiechert_e's errors; the outs
+# untouched on an error. Mirrors `relativity::lienard_wiechert_fields`.
+public fn bj_lienard_wiechert_fields(charge: f64, observer_pos: *f64, observation_time: f64, trajectory_fn,
+  e_out: *BjFieldVector, b_out: *BjFieldVector): Result {
+    if (_bj_log_on(5) == 1) {
+        var lb[256];
+        var lt[24];
+        _bj_tx_init(&lt, &lb, 256);
+        _bj_tx_cstr(&lt, "Liénard-Wiechert fields charge=");
+        _bj_fmt_f64_debug(&lt, charge);
+        _bj_tx_cstr(&lt, " observer_pos=");
+        _bj_fmt_f64x3_debug(&lt, observer_pos);
+        _bj_tx_cstr(&lt, " observation_time=");
+        _bj_fmt_f64_debug(&lt, observation_time);
+        _bj_log_text(5, &lt);
+    }
+    var st: f64[9];
+    var r: f64[1];
+    var ts, vs = _bj_rel_solve(observer_pos, observation_time, trajectory_fn, 200, &st, &r);
+    if (is_err_result(ts) == 1) { return Err(vs); }
+    var t_r: f64 = r[0];
+    callptr(trajectory_fn, t_r, &st);
+    for (var k = 6; k < 9; k = k + 1) {
+        var a: f64 = st[k];
+        if (_bj_is_finite(a) == 0) {
+            var e = _bj_err_reason(BJ_ERR_INVALID_PARAMETER);
+            _bj_tx_cstr(e, "trajectory returned a non-finite acceleration at t = ");
+            _bj_fmt_f64_display(e, t_r);
+            return Err(BJ_ERR_INVALID_PARAMETER);
+        }
+    }
+    var rx: f64 = observer_pos[0] - st[0];
+    var ry: f64 = observer_pos[1] - st[1];
+    var rz: f64 = observer_pos[2] - st[2];
+    var r_vec: BjFieldVector = BjFieldVector_new(rx, ry, rz);
+    var r_mag: f64 = r_vec.magnitude();
+    if (r_mag < 0.000000000000000000000000000001) { return Err(_bj_err_singularity()); }
+    var inv: f64 = 1.0 / r_mag;
+    var n_hat: BjFieldVector = r_vec.scale(inv);
+    var bx: f64 = st[3] / BJ_SPEED_OF_LIGHT;
+    var by: f64 = st[4] / BJ_SPEED_OF_LIGHT;
+    var bz: f64 = st[5] / BJ_SPEED_OF_LIGHT;
+    var dx: f64 = st[6] / BJ_SPEED_OF_LIGHT;
+    var dy: f64 = st[7] / BJ_SPEED_OF_LIGHT;
+    var dz: f64 = st[8] / BJ_SPEED_OF_LIGHT;
+    var beta_vec: BjFieldVector = BjFieldVector_new(bx, by, bz);
+    var beta_dot: BjFieldVector = BjFieldVector_new(dx, dy, dz);
+    var e: BjFieldVector;
+    var te, ve = bj_lienard_wiechert_e(charge, r_vec, beta_vec, beta_dot, &e);
+    if (is_err_result(te) == 1) { return Err(ve); }
+    var b: BjFieldVector = bj_lienard_wiechert_b(n_hat, e);
+    e_out.x = e.x;
+    e_out.y = e.y;
+    e_out.z = e.z;
+    b_out.x = b.x;
+    b_out.y = b.y;
+    b_out.z = b.z;
+    return Ok(0);
+}
