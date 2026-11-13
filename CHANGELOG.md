@@ -215,9 +215,17 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
   combinations (a pointer and a count for Rust's slice), capacitance and inductance, the RC and RL transients and the
   series RLC relations. `circuit.tsv` holds 56,106 rows (class C for the four transients); all 51 of circuit.rs's
   tests are ported, and 5 bench twins added.
+- **Cyrius port, M2 part 1d-1 — relativity, the closed forms** (`src/relativity.cyr`): the Lorentz factor, the EM
+  field tensor `BjEmTensor` (Rust's `[[f64; 4]; 4]` as a 16-element tuple field, probe p17), the Lorentz field
+  transforms, `BjFourVector`, `BjFourPotential`, the retarded and Liénard–Wiechert potentials and fields, and the
+  Larmor powers. `relativity.tsv` holds 26,052 rows; 39 of relativity.rs's 48 tests are ported (the solver's nine
+  are part 1d-2's), and 6 bench twins added.
 
 ### Fixed
 
+- **relativity** (ADR 0002 row 27, M2 part 1d-1): `lienard_wiechert_e` returned Ok(NaN) for a NaN R, which the
+  Liénard–Wiechert potentials refuse, and now refuses it with their InvalidParameter ("R vector must not contain
+  NaN").
 - **circuit** (ADR 0002 row 26, M2 part 1c): `resistance_from_geometry` and `parallel_plate_capacitance` returned
   Ok(NaN) for a NaN area or separation (`<= 0` let it through), and now refuse it with their InvalidParameter.
 - **wave** (ADR 0002 rows 23–24, M2 part 1b, the user's answers of 2026-11-12): `effective_aperture` returned Ok(NaN)

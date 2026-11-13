@@ -2142,6 +2142,234 @@ def circuit_adr_rows(path: Path) -> list:
             out.append((fn, ins, wire(model), str(row), f"oracle {outs}; ADR 0002 row {row}"))
     return out
 
+# ── relativity (M2 part 1d-1): rust-old/src/relativity.rs ─────────────────────────────────────────────────────────
+# Each function transcribed in Rust's order on a set of vector operations: Rust's plain FieldVector chains (which must
+# reproduce the oracle), or the port's, where FieldVector's magnitude, magnitude_sq, dot and cross take ADR 0002 row
+# 18's unbounded chain at a range edge (fv_governed / fv_model, as material's and wave's). The port's model adds row 27.
+def rel_ops(port: bool):
+    def gov(fn, args, plain):
+        if port and all(math.isfinite(x) for x in args) and fv_governed(fn, args) == 18:
+            return [b for _k, b in fv_model(fn, args)]
+        return plain
+
+    def mag(a):
+        return gov("FieldVector::magnitude", list(a), [fsqrt(a[0] * a[0] + a[1] * a[1] + a[2] * a[2])])[0]
+
+    def mag_sq(a):
+        return gov("FieldVector::magnitude_sq", list(a), [a[0] * a[0] + a[1] * a[1] + a[2] * a[2]])[0]
+
+    def dot(a, b):
+        return gov("FieldVector::dot", list(a) + list(b), [a[0] * b[0] + a[1] * b[1] + a[2] * b[2]])[0]
+
+    def cross(a, b):
+        plain = [a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]]
+        return gov("FieldVector::cross", list(a) + list(b), plain)
+
+    return {"mag": mag, "mag_sq": mag_sq, "dot": dot, "cross": cross, "port": port}
+
+
+def rel_consts(root: Path) -> dict:
+    c = golden_consts(root)
+    C, C2 = c["field::SPEED_OF_LIGHT"], c["field::SPEED_OF_LIGHT_SQ"]
+    return {"C": C, "C2": C2, "C3": C * C2, "EPS0": c["field::EPSILON_0"], "MU0": c["field::MU_0"]}
+
+
+def rel_from_fields(e, b, K):
+    C = K["C"]
+    ex, ey, ez = fdiv(e[0], C), fdiv(e[1], C), fdiv(e[2], C)
+    return [0.0, -ex, -ey, -ez, ex, 0.0, -b[2], b[1], ey, b[2], 0.0, -b[0], ez, -b[1], b[0], 0.0]
+
+
+def rel_gamma(speed, K):
+    beta_sq = fdiv(speed * speed, K["C2"])
+    if math.isnan(beta_sq) or beta_sq >= 1.0:
+        return ip_err(f"speed ({rust_display(speed)} m/s) must be less than c"), None
+    return None, fdiv(1.0, fsqrt(1.0 - beta_sq))
+
+
+def rel_rust(fn, v, O, K):
+    """relativity.rs transcribed on the vector operations O; None for another name."""
+    C, C2, EPS0, MU0 = K["C"], K["C2"], K["EPS0"], K["MU0"]
+    if fn == "relativity::lorentz_factor":
+        e, g = rel_gamma(v[0], K)
+        return e or okf(g)
+    if fn == "relativity::beta":
+        return okf(fdiv(v[0], C))
+    if fn == "EmTensor::from_fields":
+        return [("f", x) for x in rel_from_fields(v[0:3], v[3:6], K)]
+    if fn.startswith("EmTensor::"):
+        c = v[0:16]
+        ef = [c[4] * C, c[8] * C, c[12] * C]
+        bf = [c[14], c[7], c[9]]
+        if fn == "EmTensor::electric_field":
+            return ok3(ef)
+        if fn == "EmTensor::magnetic_field":
+            return ok3(bf)
+        if fn == "EmTensor::first_invariant":
+            return okf(2.0 * (O["mag_sq"](bf) - fdiv(O["mag_sq"](ef), C2)))
+        if fn == "EmTensor::second_invariant":
+            return okf(fdiv(-O["dot"](ef, bf), C))
+        if fn == "EmTensor::dual":
+            inv = -fdiv(1.0, C)
+            return [("f", x) for x in rel_from_fields([x * C for x in bf], [x * inv for x in ef], K)]
+        if fn == "EmTensor::four_force":
+            q, u = v[16], v[17:21]
+            ul = [u[0], -u[1], -u[2], -u[3]]
+            out = []
+            for i in range(4):
+                r = c[4 * i:4 * i + 4]
+                out.append(("f", q * (r[0] * ul[0] + r[1] * ul[1] + r[2] * ul[2] + r[3] * ul[3])))
+            return out
+        return None
+    if fn == "relativity::lorentz_transform_fields":
+        e, b, w = v[0:3], v[3:6], v[6:9]
+        v_sq = O["mag_sq"](w)
+        if math.isnan(v_sq) or v_sq >= C2:
+            return ip_err("boost velocity must be less than c")
+        g = fdiv(1.0, fsqrt(1.0 - fdiv(v_sq, C2)))
+        k = fdiv(g * g, (g + 1.0) * C2)
+        vxb = O["cross"](w, b)
+        ke = k * O["dot"](w, e)
+        ep = [(e[i] + vxb[i]) * g - w[i] * ke for i in range(3)]
+        vxe = O["cross"](w, e)
+        inv = fdiv(1.0, C2)
+        kb = k * O["dot"](w, b)
+        bp = [(b[i] - vxe[i] * inv) * g - w[i] * kb for i in range(3)]
+        return ok3(ep) + ok3(bp)
+    if fn == "relativity::lorentz_transform_x":
+        e, b, s = v[0:3], v[3:6], v[6]
+        err, g = rel_gamma(s, K)
+        if err:
+            return err
+        ep = [e[0], g * (e[1] - s * b[2]), g * (e[2] + s * b[1])]
+        bp = [b[0], g * (b[1] + fdiv(s * e[2], C2)), g * (b[2] - fdiv(s * e[1], C2))]
+        return ok3(ep) + ok3(bp)
+    if fn == "FourVector::new":
+        return [("f", x) for x in v[0:4]]
+    if fn == "FourVector::from_time_position":
+        return [("f", C * v[0]), ("f", v[1]), ("f", v[2]), ("f", v[3])]
+    if fn == "FourVector::dot":
+        a, b = v[0:4], v[4:8]
+        return okf(-a[0] * b[0] + a[1] * b[1] + a[2] * b[2] + a[3] * b[3])
+    if fn == "FourVector::interval_sq":
+        a = v[0:4]
+        return okf(-a[0] * a[0] + a[1] * a[1] + a[2] * a[2] + a[3] * a[3])
+    if fn == "FourVector::spatial_magnitude":
+        a = v[0:4]
+        return okf(fsqrt(a[1] * a[1] + a[2] * a[2] + a[3] * a[3]))
+    if fn == "FourVector::boost_x":
+        a, s = v[0:4], v[4]
+        err, g = rel_gamma(s, K)
+        if err:
+            return err
+        bv = fdiv(s, C)
+        return [("f", g * (a[0] - bv * a[1])), ("f", g * (a[1] - bv * a[0])), ("f", a[2]), ("f", a[3])]
+    if fn == "relativity::retarded_scalar_potential":
+        q, d = v
+        return radial_check(d) or okf(fdiv(q, 4.0 * PI * EPS0 * d))
+    if fn == "relativity::retarded_vector_potential":
+        q, w, d = v[0], v[1:4], v[4]
+        e = radial_check(d)
+        if e:
+            return e
+        k = fdiv(MU0 * q, 4.0 * PI * d)
+        return ok3([x * k for x in w])
+    if fn in ("relativity::lienard_wiechert_scalar_potential", "relativity::lienard_wiechert_vector_potential"):
+        q, r, bv = v[0], v[1:4], v[4:7]
+        r_mag = O["mag"](r)
+        if math.isnan(r_mag):
+            return ip_err("R vector must not contain NaN")
+        if r_mag < 1e-30:
+            return SINGULAR
+        b_sq = O["mag_sq"](bv)
+        if math.isnan(b_sq) or b_sq >= 1.0:
+            return ip_err("β must be < 1")
+        r_eff = r_mag - O["dot"](r, bv)
+        if fn.endswith("scalar_potential"):
+            return okf(fdiv(q, 4.0 * PI * EPS0 * r_eff))
+        k = fdiv(MU0 * q * C, 4.0 * PI * r_eff)
+        return ok3([x * k for x in bv])
+    if fn == "relativity::lienard_wiechert_e":
+        q, r, bv, bd = v[0], v[1:4], v[4:7], v[7:10]
+        r_mag = O["mag"](r)
+        if O["port"] and math.isnan(r_mag):
+            return ip_err("R vector must not contain NaN")
+        if r_mag < 1e-30:
+            return SINGULAR
+        b_sq = O["mag_sq"](bv)
+        if math.isnan(b_sq) or b_sq >= 1.0:
+            return ip_err("β must be < 1")
+        inv = fdiv(1.0, r_mag)
+        n = [x * inv for x in r]
+        kappa = 1.0 - O["dot"](n, bv)
+        if abs(kappa) < 1e-30:
+            return dz_err("Liénard-Wiechert denominator (1 − n̂⋅β) is zero")
+        g2 = fdiv(1.0, 1.0 - b_sq)
+        k3 = kappa * kappa * kappa
+        pre = fdiv(q, 4.0 * PI * EPS0)
+        nmb = [n[i] - bv[i] for i in range(3)]
+        fv = fdiv(pre, g2 * k3 * r_mag * r_mag)
+        vt = [x * fv for x in nmb]
+        co = O["cross"](n, O["cross"](nmb, bd))
+        fa = fdiv(pre, k3 * r_mag * C)
+        at = [x * fa for x in co]
+        return ok3([vt[i] + at[i] for i in range(3)])
+    if fn == "relativity::lienard_wiechert_b":
+        cr = O["cross"](v[0:3], v[3:6])
+        inv = fdiv(1.0, C)
+        return ok3([x * inv for x in cr])
+    if fn == "relativity::larmor_power":
+        q, a = v
+        return okf(fdiv(q * q * a * a, 6.0 * PI * EPS0 * K["C3"]))
+    if fn == "relativity::relativistic_larmor_power":
+        q, w, a = v[0], v[1:4], v[4:7]
+        v_sq = O["mag_sq"](w)
+        if math.isnan(v_sq) or v_sq >= C2:
+            return ip_err("velocity must be less than c")
+        g = fdiv(1.0, fsqrt(1.0 - fdiv(v_sq, C2)))
+        g2 = g * g
+        g6 = g2 * g2 * g2
+        a_sq = O["mag_sq"](a)
+        vxa_sq = O["mag_sq"](O["cross"](w, a))
+        pre = fdiv(q * q, 6.0 * PI * EPS0 * K["C3"])
+        return okf(pre * g6 * (a_sq - fdiv(vxa_sq, C2)))
+    return None
+
+
+def validate_relativity(root: Path, path: Path) -> list:
+    _header, rows = read_tsv(path)
+    K, O = rel_consts(root), rel_ops(False)
+    errs = []
+    for n, (fn, _cls, ins, outs) in enumerate(rows, 1):
+        v = [b for _k, b in ins]
+        want = rel_rust(fn, v, O, K)
+        if want is None:
+            errs.append(f"relativity row {n}: no transcription for {fn}")
+            continue
+        if not toks_same(want, wave_toks(outs)):
+            errs.append(f"relativity row {n}: {fn}{tuple(v)} recorded {wave_toks(outs)}, transcription {want}")
+    return errs
+
+
+# ADR 0002 row 27 (M2 part 1d-1, row 20's rule): lienard_wiechert_e refuses a NaN R as its sibling potentials do
+# ("R vector must not contain NaN"), where Rust's went on to Ok(NaN). Row 18 through FieldVector's operations.
+def relativity_adr_rows(root: Path, path: Path) -> list:
+    K, R, P = rel_consts(root), rel_ops(False), rel_ops(True)
+    out = []
+    for line in path.read_text().splitlines():
+        if line.startswith("#"):
+            continue
+        fn, _cls, ins, outs, _note = line.split("\t")
+        toks = [] if ins == "-" else [parse_tok(x) for x in ins.split(" ")]
+        v = [b for _k, b in toks]
+        rust, port = rel_rust(fn, v, R, K), rel_rust(fn, v, P, K)
+        if toks_same(rust, port):
+            continue
+        row = 27 if (fn == "relativity::lienard_wiechert_e" and port[0] == ("E", "InvalidParameter")
+                     and rust[0][0] != "E") else 18
+        out.append((fn, ins, wire(port), str(row), f"oracle {outs}; ADR 0002 row {row}"))
+    return out
+
 
 # ── maxwell: rust-old/src/maxwell.rs ──────────────────────────────────────────────────────────
 def validate_maxwell(root: Path, path: Path) -> list:
@@ -3669,6 +3897,8 @@ def adr_rows(root: Path, module: str, path: Path) -> list:
         return wave_adr_rows(root, path)
     if module == "circuit":
         return circuit_adr_rows(path)
+    if module == "relativity":
+        return relativity_adr_rows(root, path)
     maps = {13: adr13(root)}
     out = adr17_rows(root, module, path) if module in ("field", "charge") else []
     if module in ("field", "charge"):
@@ -4027,6 +4257,7 @@ def main() -> int:
         "math": validate_math,
         "material": lambda p: validate_material(root, p),
         "maxwell": lambda p: validate_maxwell(root, p),
+        "relativity": lambda p: validate_relativity(root, p),
         "wave": lambda p: validate_wave(root, p),
     }
     listed = [l for l in (golden / "modules.txt").read_text().splitlines() if l and not l.startswith("#")]
@@ -4051,7 +4282,7 @@ def main() -> int:
                               "then why they differ")
     errs += check_corrections(root, "wave", golden / "wave.tsv", wave_corrections(root, golden / "wave.tsv"))
     errs += check_corrections(root, "circuit", golden / "circuit.tsv", circuit_corrections(golden / "circuit.tsv"))
-    for mod in ("charge", "circuit", "complex", "field", "material", "maxwell", "wave"):
+    for mod in ("charge", "circuit", "complex", "field", "material", "maxwell", "relativity", "wave"):
         errs += check_adr(root, mod, golden / f"{mod}.tsv")
     errs += cx_rows(golden / "complex.tsv")[1]
     errs += fv_rows(root, "field", golden / "field.tsv")[1] + fv_rows(root, "charge", golden / "charge.tsv")[1]

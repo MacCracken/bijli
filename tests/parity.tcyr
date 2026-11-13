@@ -1479,6 +1479,204 @@ public fn _par_circuit(fp, fl): i64 {
     return 0;
 }
 
+# `relativity::*`, `EmTensor::*` and `FourVector::*` rows: src/relativity.cyr (M2 part 1d-1). A tensor is its sixteen
+# components row-major, a four-vector (ct, x, y, z). An address as a *f64.
+fn _par_rel_f64p(p): *f64 {
+    return p;
+}
+
+# A BjEmTensor to the got list: its sixteen components, row-major.
+fn _par_got_tensor(m: BjEmTensor) {
+    var t: BjEmTensor = m;
+    var p: *f64 = _par_rel_f64p(&t);
+    for (var k = 0; k < 16; k = k + 1) { _par_got_f(p[k]); }
+    return 0;
+}
+
+fn _par_got_fv4(v: BjFourVector) {
+    var t: f64 = v.t;
+    var x: f64 = v.x;
+    var y: f64 = v.y;
+    var z: f64 = v.z;
+    _par_got_f(t);
+    _par_got_f(x);
+    _par_got_f(y);
+    _par_got_f(z);
+    return 0;
+}
+
+fn _par_in_fv4(k): BjFourVector {
+    var t: f64 = _par_in(k);
+    var x: f64 = _par_in(k + 1);
+    var y: f64 = _par_in(k + 2);
+    var z: f64 = _par_in(k + 3);
+    var v: BjFourVector = BjFourVector_new(t, x, y, z);
+    return v;
+}
+
+fn _par_in_tensor(k): BjEmTensor {
+    var c: f64[16];
+    for (var j = 0; j < 16; j = j + 1) { c[j] = _par_in(k + j); }
+    var m: BjEmTensor = BjEmTensor_from_components(&c);
+    return m;
+}
+
+# The EmTensor rows.
+fn _par_tensor(fp, fl): i64 {
+    if (_par_eq(fp, fl, "EmTensor::from_fields") == 1) {
+        _par_got_tensor(BjEmTensor_from_fields(_par_in_fv(0), _par_in_fv(3)));
+        return 1;
+    }
+    var m: BjEmTensor = _par_in_tensor(0);
+    if (_par_eq(fp, fl, "EmTensor::electric_field") == 1) {
+        _par_got_fv(m.electric_field());
+        return 1;
+    }
+    if (_par_eq(fp, fl, "EmTensor::magnetic_field") == 1) {
+        _par_got_fv(m.magnetic_field());
+        return 1;
+    }
+    if (_par_eq(fp, fl, "EmTensor::first_invariant") == 1) {
+        var i1: f64 = m.first_invariant();
+        _par_got_f(i1);
+        return 1;
+    }
+    if (_par_eq(fp, fl, "EmTensor::second_invariant") == 1) {
+        var i2: f64 = m.second_invariant();
+        _par_got_f(i2);
+        return 1;
+    }
+    if (_par_eq(fp, fl, "EmTensor::dual") == 1) {
+        _par_got_tensor(m.dual());
+        return 1;
+    }
+    if (_par_eq(fp, fl, "EmTensor::four_force") == 1) {
+        var q: f64 = _par_in(16);
+        _par_got_fv4(m.four_force(q, _par_in_fv4(17)));
+        return 1;
+    }
+    return 0;
+}
+
+# The FourVector rows.
+fn _par_four_vector(fp, fl): i64 {
+    var a: BjFourVector = _par_in_fv4(0);
+    if (_par_eq(fp, fl, "FourVector::new") == 1) {
+        _par_got_fv4(a);
+        return 1;
+    }
+    if (_par_eq(fp, fl, "FourVector::from_time_position") == 1) {
+        var pos: f64[3];
+        pos[0] = _par_in(1);
+        pos[1] = _par_in(2);
+        pos[2] = _par_in(3);
+        var tm: f64 = _par_in(0);
+        _par_got_fv4(BjFourVector_from_time_position(tm, &pos));
+        return 1;
+    }
+    if (_par_eq(fp, fl, "FourVector::interval_sq") == 1) {
+        var s: f64 = a.interval_sq();
+        _par_got_f(s);
+        return 1;
+    }
+    if (_par_eq(fp, fl, "FourVector::spatial_magnitude") == 1) {
+        var r: f64 = a.spatial_magnitude();
+        _par_got_f(r);
+        return 1;
+    }
+    if (_par_eq(fp, fl, "FourVector::dot") == 1) {
+        var d: f64 = a.dot(_par_in_fv4(4));
+        _par_got_f(d);
+        return 1;
+    }
+    if (_par_eq(fp, fl, "FourVector::boost_x") == 1) {
+        var out: BjFourVector;
+        var u: f64 = _par_in(4);
+        var tb, vb = a.boost_x(u, &out);
+        if (is_err_result(tb) == 1) { return _par_got_error(vb) + 1; }
+        _par_got_fv4(out);
+        return 1;
+    }
+    return 0;
+}
+
+# A `relativity::*` row by its function.
+public fn _par_relativity(fp, fl): i64 {
+    if (memeq(fp, "EmTensor::", 10) == 1) { return _par_tensor(fp, fl); }
+    if (memeq(fp, "FourVector::", 12) == 1) { return _par_four_vector(fp, fl); }
+    var a: f64 = _par_in(0);
+    var ev: BjFieldVector;
+    var bv: BjFieldVector;
+    if (_par_eq(fp, fl, "relativity::lorentz_factor") == 1) {
+        var t1, v1 = bj_lorentz_factor(a);
+        _par_got_res_f(t1, v1);
+        return 1;
+    }
+    if (_par_eq(fp, fl, "relativity::beta") == 1) {
+        var r1: f64 = bj_beta(a);
+        _par_got_f(r1);
+        return 1;
+    }
+    if (_par_eq(fp, fl, "relativity::lorentz_transform_fields") == 1) {
+        var t2, v2 = bj_lorentz_transform_fields(_par_in_fv(0), _par_in_fv(3), _par_in_fv(6), &ev, &bv);
+        if (is_err_result(t2) == 1) { return _par_got_error(v2) + 1; }
+        _par_got_fv(ev);
+        _par_got_fv(bv);
+        return 1;
+    }
+    if (_par_eq(fp, fl, "relativity::lorentz_transform_x") == 1) {
+        var sx: f64 = _par_in(6);
+        var t3, v3 = bj_lorentz_transform_x(_par_in_fv(0), _par_in_fv(3), sx, &ev, &bv);
+        if (is_err_result(t3) == 1) { return _par_got_error(v3) + 1; }
+        _par_got_fv(ev);
+        _par_got_fv(bv);
+        return 1;
+    }
+    if (_par_eq(fp, fl, "relativity::retarded_scalar_potential") == 1) {
+        var d4: f64 = _par_in(1);
+        var t4, v4 = bj_retarded_scalar_potential(a, d4);
+        _par_got_res_f(t4, v4);
+        return 1;
+    }
+    if (_par_eq(fp, fl, "relativity::retarded_vector_potential") == 1) {
+        var d5: f64 = _par_in(4);
+        var t5, v5 = bj_retarded_vector_potential(a, _par_in_fv(1), d5, &ev);
+        _par_got_res_v(t5, v5, ev);
+        return 1;
+    }
+    if (_par_eq(fp, fl, "relativity::lienard_wiechert_scalar_potential") == 1) {
+        var t6, v6 = bj_lienard_wiechert_scalar_potential(a, _par_in_fv(1), _par_in_fv(4));
+        _par_got_res_f(t6, v6);
+        return 1;
+    }
+    if (_par_eq(fp, fl, "relativity::lienard_wiechert_vector_potential") == 1) {
+        var t7, v7 = bj_lienard_wiechert_vector_potential(a, _par_in_fv(1), _par_in_fv(4), &ev);
+        _par_got_res_v(t7, v7, ev);
+        return 1;
+    }
+    if (_par_eq(fp, fl, "relativity::lienard_wiechert_e") == 1) {
+        var t8, v8 = bj_lienard_wiechert_e(a, _par_in_fv(1), _par_in_fv(4), _par_in_fv(7), &ev);
+        _par_got_res_v(t8, v8, ev);
+        return 1;
+    }
+    if (_par_eq(fp, fl, "relativity::lienard_wiechert_b") == 1) {
+        _par_got_fv(bj_lienard_wiechert_b(_par_in_fv(0), _par_in_fv(3)));
+        return 1;
+    }
+    if (_par_eq(fp, fl, "relativity::larmor_power") == 1) {
+        var ac: f64 = _par_in(1);
+        var r2: f64 = bj_larmor_power(a, ac);
+        _par_got_f(r2);
+        return 1;
+    }
+    if (_par_eq(fp, fl, "relativity::relativistic_larmor_power") == 1) {
+        var t9, v9 = bj_relativistic_larmor_power(a, _par_in_fv(1), _par_in_fv(4));
+        _par_got_res_f(t9, v9);
+        return 1;
+    }
+    return 0;
+}
+
 # `wave::*` rows: src/wave.cyr (M2 part 1b). A `Result<Option<f64>>` is the error, `n:` for Ok(None), or the value.
 fn _par_got_res_o(t, v, x: f64) {
     if (is_err_result(t) == 1) { return _par_got_error(v); }
@@ -1839,6 +2037,7 @@ public fn _par_dispatch(mp, ml, fp, fl): i64 {
     if (_par_eq(mp, ml, "material") == 1) { return _par_material(fp, fl); }
     if (_par_eq(mp, ml, "math") == 1) { return _par_math(fp, fl); }
     if (_par_eq(mp, ml, "maxwell") == 1) { return _par_maxwell(fp, fl); }
+    if (_par_eq(mp, ml, "relativity") == 1) { return _par_relativity(fp, fl); }
     if (_par_eq(mp, ml, "wave") == 1) { return _par_wave(fp, fl); }
     return 0;
 }

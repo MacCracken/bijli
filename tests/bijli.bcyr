@@ -568,6 +568,78 @@ fn main(): i64 {
     bench_report(b41);
     if (csum == 7.0) { println("."); }
 
+    # relativity/* (M2 part 1d-1): rust-old/benches/benchmarks.rs's relativity_benchmarks with its arguments; the
+    # retarded-time solver's two benches are part 1d-2's.
+    var rsum: f64 = 0.0;
+    var c09: f64 = 0.9 * BJ_SPEED_OF_LIGHT;
+    var b42 = bench_new("relativity/lorentz_factor");
+    bench_batch_start(b42);
+    for (var k = 0; k < 1000000; k = k + 1) {
+        var t42, v42 = bj_lorentz_factor(c09);
+        keep = keep + v42;
+    }
+    bench_batch_stop(b42, 1000000);
+    bench_report(b42);
+
+    var re = BjFieldVector_new(1000.0, 2000.0, 3000.0);
+    var rb = BjFieldVector_new(0.000001, 0.000002, 0.000003);
+    var b43 = bench_new("relativity/em_tensor_from_fields");
+    bench_batch_start(b43);
+    for (var k = 0; k < 1000000; k = k + 1) {
+        var rt: BjEmTensor = BjEmTensor_from_fields(re, rb);
+        rsum = rsum + rt.components.4;
+    }
+    bench_batch_stop(b43, 1000000);
+    bench_report(b43);
+
+    var c05: f64 = 0.5 * BJ_SPEED_OF_LIGHT;
+    var rep: BjFieldVector;
+    var rbp: BjFieldVector;
+    var b44 = bench_new("relativity/lorentz_transform_x");
+    bench_batch_start(b44);
+    for (var k = 0; k < 1000000; k = k + 1) {
+        var t44, v44 = bj_lorentz_transform_x(re, rb, c05, &rep, &rbp);
+        rsum = rsum + rep.y;
+    }
+    bench_batch_stop(b44, 1000000);
+    bench_report(b44);
+
+    var rr = BjFieldVector_new(1.0, 0.0, 0.0);
+    var rbeta = BjFieldVector_new(0.1, 0.0, 0.0);
+    var rbdot = BjFieldVector_new(0.0, 0.00001, 0.0);
+    var rlw: BjFieldVector;
+    var b45 = bench_new("relativity/lienard_wiechert_e");
+    bench_batch_start(b45);
+    for (var k = 0; k < 1000000; k = k + 1) {
+        var t45, v45 = bj_lienard_wiechert_e(0.000001, rr, rbeta, rbdot, &rlw);
+        rsum = rsum + rlw.x;
+    }
+    bench_batch_stop(b45, 1000000);
+    bench_report(b45);
+
+    var rv = BjFieldVector_new(1.0, 0.5, 0.0);
+    var rbv = BjFieldVector_new(0.5, 0.0, 0.0);
+    var b46 = bench_new("relativity/lienard_wiechert_scalar_potential");
+    bench_batch_start(b46);
+    for (var k = 0; k < 1000000; k = k + 1) {
+        var t46, v46 = bj_lienard_wiechert_scalar_potential(0.000000001, rv, rbv);
+        keep = keep + v46;
+    }
+    bench_batch_stop(b46, 1000000);
+    bench_report(b46);
+
+    var rfv: BjFourVector = BjFourVector_new(BJ_SPEED_OF_LIGHT, 1.0, 2.0, 3.0);
+    var rbo: BjFourVector;
+    var b47 = bench_new("relativity/four_vector_boost");
+    bench_batch_start(b47);
+    for (var k = 0; k < 1000000; k = k + 1) {
+        var t47, v47 = rfv.boost_x(c05, &rbo);
+        rsum = rsum + rbo.t;
+    }
+    bench_batch_stop(b47, 1000000);
+    bench_report(b47);
+    if (rsum == 7.0) { println("."); }
+
     # The JSON (src/json.cyr): a FieldVector written into one builder, emptied each time through its length word
     # (lib/str.cyr's layout: buf, len, cap), and serde_json's documents read back.
     var jv = BjFieldVector_new(1.5, -0.25, BJ_SPEED_OF_LIGHT);

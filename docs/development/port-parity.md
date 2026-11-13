@@ -1535,3 +1535,55 @@ Language facts the probes found, beyond plan §2:
 - **Result, every target** (x86_64 ELF, x86_64 PE, aarch64): **12 modules, 0 failing; 376,664 ok, 0 failed, 0
   measured, 0 pending, 17,909 accepted (ADR 01: 8,999; ADR 0002: 8,910)** over 394,573 rows; **all 249 digests
   equal**, the 222 before unchanged.
+
+## 28. M2 part 1d-1: relativity, the closed forms (2026-11-12)
+
+relativity.rs is two bites: 1d-1, everything but the callbacks, and 1d-2, `solve_retarded_time` and
+`lienard_wiechert_fields` over the plan's trajectories.
+
+- **`src/relativity.cyr`**: the Lorentz factor and β; `BjEmTensor` (`from_fields`, `electric_field`, `magnetic_field`,
+  both invariants, `dual`, `four_force`, `eq`) with Rust's `components: [[f64; 4]; 4]` as a 16-element tuple field,
+  row-major, and `BjEmTensor_from_components` for Rust's struct literal; the two field transforms (two out pointers);
+  `BjFourVector` (`new`, `from_time_position`, `dot`, `interval_sq`, `spatial_magnitude`, `boost_x`, `eq`);
+  `BjFourPotential` (a nested `a: BjFieldVector`); the retarded and Liénard–Wiechert potentials, `lienard_wiechert_e`
+  and `_b`, and both Larmor powers. Every formula is Rust's in Rust's order; the FieldVector operations are
+  BjFieldVector's.
+- **Probe p17** (`scripts/probes/p17_tensor_struct.cyr`): the 16-element tuple field, the 128-byte struct returned by
+  value and copied, and the nested struct field all work. A method's untyped `self` is a `*T`, so the struct's address
+  is `self` itself; `&self` is the slot that holds it, as the guide says of any pointer.
+- **ADR 0002 row 27**, row 20's rule: `bj_lienard_wiechert_e` refuses a NaN R as the potentials do, where Rust went on
+  to NaN. 228 rows mapped.
+- **Row 18 through FieldVector**: the chains on magnitude, magnitude_sq, dot and cross take 5d-2's unbounded chain at a
+  range edge. `validate.py` transcribes each function once on a set of vector operations: Rust's plain ones, which
+  reproduce the oracle, and the port's (`fv_governed` / `fv_model` per operation), which give the port's outputs. 720
+  rows mapped.
+- **New golden file `relativity.tsv`, 26,052 rows, class A**: speeds through c ulp by ulp; 841 field pairs and their
+  tensors plus arbitrary ones (specials in each slot, seeded); boosts at β ∈ {0, 0.1, 0.9, 0.99, 1 − 1e-9} along x, y
+  and the diagonal, at and past c; four-vectors; Liénard–Wiechert geometries with the 1e-30 cuts of R and β → 1.
+  `validate.py`'s transcription agreed with every row on its first run.
+- **Rust tests**: 39 of relativity.rs's 48 ported (`tests/relativity.tcyr`, 64 assertions with the Cyrius-only
+  groups); the other nine test the solver (1d-2). The ledger: 352 ported, 3 n/a, 503 pending of 858.
+- **Surface parity**: relativity in progress, 255 items matched (35 new), 0 problems; the solver's two functions
+  pending. The API snapshot gains 16 public fns.
+- **Benchmarks** (six of relativity's eight twins; 44 of 80 now twinned; load average 4.3–10.8, each the lower of two
+  runs; the first round ran at load 9–11 and doubled every row, the second agrees with HEAD):
+
+  | Bench | Rust | Cyrius |
+  |---|---|---|
+  | `relativity/lorentz_factor` | 1.24 ns | 13 ns |
+  | `relativity/em_tensor_from_fields` | 8.11 ns | 36 ns |
+  | `relativity/lorentz_transform_x` | 5.91 ns | 42 ns |
+  | `relativity/lienard_wiechert_e` | 21.64 ns | 227 ns |
+  | `relativity/lienard_wiechert_scalar_potential` | 1.74 ns | 64 ns |
+  | `relativity/four_vector_boost` | 5.45 ns | 33 ns |
+
+- **For M2's range-edge Part** (§0.1), from the audit:
+  - accuracy, a question for the user with §26's and §27's: γ = 1/√(1 − v²/c²) loses digits near c (1 − β² is a
+    cancellation, a relative error of about 2^-53/(1 − β²)), where 1/√((1 − β)(1 + β)) does not;
+  - FourVector's dot, interval_sq and spatial_magnitude and `four_force` are raw chains (no FieldVector), so they over-
+    and underflow where the result is representable, as FieldVector's did before row 18;
+  - `dual` round-trips B·c/c and E·(−1/c) (an ulp, and ∞ past DBL_MAX/c); an ∞ R in `lienard_wiechert_e` makes
+    n̂ = R·0 = NaN; the Larmor chains q²a².
+- **Result, every target** (x86_64 ELF, x86_64 PE, aarch64): **13 modules, 0 failing; 401,768 ok, 0 failed, 0
+  measured, 0 pending, 18,857 accepted (ADR 01: 8,999; ADR 0002: 9,858)** over 420,625 rows; **all 274 digests
+  equal**, the 249 before unchanged.

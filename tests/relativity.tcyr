@@ -1,0 +1,615 @@
+# relativity.tcyr — src/relativity.cyr (M2 part 1d-1): the Lorentz factor, the EM tensor, the field transforms,
+# four-vectors, the retarded and Liénard–Wiechert potentials and fields, and the Larmor powers.
+#
+# Every group named test_* is rust-old/src/relativity.rs's test of that name, ported assertion for assertion (the
+# ledger matches them by name): 39 of 48 here. The other nine test the retarded-time solver and
+# lienard_wiechert_fields, part 1d-2's. uniform_motion_delay is the Rust tests' closed-form delay, ported as they wrote
+# it. The cyrius_* groups check what the port adds: the recorded errors and their Display texts, ADR 0002 row 27, the
+# outs untouched on an error, the derived PartialEq, the tensor from its components and BjFourPotential.
+# tests/golden/relativity.tsv pins every function over its grid against Rust besides.
+
+include "tests/lib.cyr"
+
+# |a − b| < tol.
+fn near(a: f64, b: f64, tol: f64): i64 {
+    var d: f64 = a - b;
+    var ad: f64 = f64_abs(d);
+    if (ad < tol) { return 1; }
+    return 0;
+}
+
+# |a − b|/|b| < tol.
+fn rel(a: f64, b: f64, tol: f64): i64 {
+    var d: f64 = a - b;
+    var ad: f64 = f64_abs(d);
+    var ab: f64 = f64_abs(b);
+    var r: f64 = ad / ab;
+    if (r < tol) { return 1; }
+    return 0;
+}
+
+# 1 when the C strings a and b are equal.
+fn text_is(a, b): i64 {
+    var n = strlen(a);
+    if (n != strlen(b)) { return 0; }
+    return memeq(a, b, n);
+}
+
+# 1 when the Result (t, v) is an error with code `code` and the record's Display text is `want`.
+fn err_is(t, v, code, want): i64 {
+    if (is_err_result(t) != 1 || v != code) { return 0; }
+    return text_is(bj_last_error_display(), want);
+}
+
+# An address as a *f64.
+fn as_f64p(p): *f64 {
+    return p;
+}
+
+# F^{ij} of m.
+fn comp(m: BjEmTensor, i, j): f64 {
+    var c: BjEmTensor = m;
+    var p: *f64 = as_f64p(&c);
+    var x: f64 = p[4 * i + j];
+    return x;
+}
+
+# |a − b|.
+fn vdist(a: BjFieldVector, b: BjFieldVector): f64 {
+    var d: BjFieldVector = BjFieldVector_sub(a, b);
+    var m: f64 = d.magnitude();
+    return m;
+}
+
+# The Rust tests' closed-form delay τ of uniform motion: the root of |w + vτ| = cτ, τ ≥ 0, w = r − v·t.
+fn uniform_motion_delay(w: *f64, v: *f64): f64 {
+    var wv: f64 = w[0] * v[0] + w[1] * v[1] + w[2] * v[2];
+    var w2: f64 = w[0] * w[0] + w[1] * w[1] + w[2] * w[2];
+    var v2: f64 = v[0] * v[0] + v[1] * v[1] + v[2] * v[2];
+    var cv: f64 = BJ_SPEED_OF_LIGHT_SQ - v2;
+    var q: f64 = wv * wv + cv * w2;
+    var s: f64 = f64_sqrt(q);
+    if (wv >= 0.0) {
+        var a: f64 = wv + s;
+        var r1: f64 = a / cv;
+        return r1;
+    }
+    var b: f64 = s - wv;
+    var r2: f64 = w2 / b;
+    return r2;
+}
+
+# The Lorentz factor, the tensor and the transforms.
+fn rust_tests_a(): i64 {
+    var c: f64 = BJ_SPEED_OF_LIGHT;
+    var e6: f64 = 0.000001;
+    var e10: f64 = 0.0000000001;
+    var e12: f64 = 0.000000000001;
+    var e15: f64 = 0.000000000000001;
+    var zv: BjFieldVector = BjFieldVector_zero();
+    var ep: BjFieldVector;
+    var bp: BjFieldVector;
+
+    test_group("test_lorentz_factor_zero");
+    var t1, v1 = bj_lorentz_factor(0.0);
+    var g1: f64 = v1;
+    assert(is_ok(t1) == 1 && near(g1, 1.0, e15) == 1, "γ(0) = 1");
+
+    test_group("test_lorentz_factor_half_c");
+    var hc: f64 = 0.5 * c;
+    var t2, v2 = bj_lorentz_factor(hc);
+    var g2: f64 = v2;
+    var s75: f64 = f64_sqrt(0.75);
+    var g2w: f64 = 1.0 / s75;
+    assert(is_ok(t2) == 1 && near(g2, g2w, e10) == 1, "γ(c/2) = 1/√0.75");
+
+    test_group("test_lorentz_factor_superluminal");
+    var t3, v3 = bj_lorentz_factor(c);
+    var c11: f64 = 1.1 * c;
+    var t4, v4 = bj_lorentz_factor(c11);
+    assert(is_err_result(t3) == 1 && is_err_result(t4) == 1, "v = c and 1.1c refused");
+
+    test_group("test_beta");
+    var b1: f64 = bj_beta(c);
+    var b2: f64 = bj_beta(hc);
+    assert(near(b1, 1.0, e15) == 1 && near(b2, 0.5, e15) == 1, "β = v/c");
+
+    test_group("test_em_tensor_roundtrip");
+    var e = BjFieldVector_new(1000.0, 2000.0, 3000.0);
+    var b = BjFieldVector_new(0.001, 0.002, 0.003);
+    var f: BjEmTensor = BjEmTensor_from_fields(e, b);
+    var eb: BjFieldVector = f.electric_field();
+    var bb: BjFieldVector = f.magnetic_field();
+    assert(near(eb.x, e.x, e6) == 1 && near(eb.y, e.y, e6) == 1 && near(eb.z, e.z, e6) == 1, "E back");
+    assert(near(bb.x, b.x, e10) == 1 && near(bb.y, b.y, e10) == 1 && near(bb.z, b.z, e10) == 1, "B back");
+
+    test_group("test_em_tensor_antisymmetric");
+    var ea = BjFieldVector_new(1000.0, 0.0, 0.0);
+    var ba = BjFieldVector_new(0.0, 0.0, 0.001);
+    var fa: BjEmTensor = BjEmTensor_from_fields(ea, ba);
+    var bad = 0;
+    for (var mu = 0; mu < 4; mu = mu + 1) {
+        for (var nu = 0; nu < 4; nu = nu + 1) {
+            var x: f64 = comp(fa, mu, nu);
+            var y: f64 = comp(fa, nu, mu);
+            var s: f64 = x + y;
+            var sa: f64 = f64_abs(s);
+            if (!(sa < 0.00000000000000000001)) { bad = bad + 1; }
+        }
+    }
+    assert(bad == 0, "F^μν = −F^νμ");
+
+    test_group("test_first_invariant_radiation");
+    var er = BjFieldVector_new(0.0, c, 0.0);
+    var br = BjFieldVector_new(0.0, 0.0, 1.0);
+    var fr: BjEmTensor = BjEmTensor_from_fields(er, br);
+    var i1: f64 = fr.first_invariant();
+    var i1a: f64 = f64_abs(i1);
+    assert(i1a < e10, "|E| = c|B|: B² − E²/c² = 0");
+
+    test_group("test_second_invariant_radiation");
+    var i2: f64 = fr.second_invariant();
+    var i2a: f64 = f64_abs(i2);
+    assert(i2a < e10, "E ⊥ B: E⋅B = 0");
+
+    test_group("test_dual_tensor");
+    var ed = BjFieldVector_new(1000.0, 0.0, 0.0);
+    var bd = BjFieldVector_new(0.0, 0.001, 0.0);
+    var fd: BjEmTensor = BjEmTensor_from_fields(ed, bd);
+    var f1: BjEmTensor = fd.dual();
+    var f2: BjEmTensor = f1.dual();
+    var off = 0;
+    for (var m2 = 0; m2 < 4; m2 = m2 + 1) {
+        for (var n2 = 0; n2 < 4; n2 = n2 + 1) {
+            var p: f64 = comp(f2, m2, n2);
+            var q: f64 = comp(fd, m2, n2);
+            var pq: f64 = p + q;
+            var pqa: f64 = f64_abs(pq);
+            if (!(pqa < e10)) { off = off + 1; }
+        }
+    }
+    assert(off == 0, "dual(dual(F)) = −F");
+
+    test_group("test_lorentz_transform_zero_velocity");
+    var tx1, vx1 = bj_lorentz_transform_x(ea, ba, 0.0, &ep, &bp);
+    assert(is_ok(tx1) == 1 && near(ep.x, ea.x, e10) == 1 && near(bp.z, ba.z, e15) == 1, "v = 0: unchanged");
+
+    test_group("test_lorentz_transform_pure_e_creates_b");
+    var ey = BjFieldVector_new(0.0, 1000.0, 0.0);
+    var tx2, vx2 = bj_lorentz_transform_x(ey, zv, hc, &ep, &bp);
+    var bpz: f64 = f64_abs(bp.z);
+    assert(is_ok(tx2) == 1 && bpz > 0.0, "a boost of E_y makes B_z");
+
+    test_group("test_lorentz_transform_preserves_parallel");
+    var tx3, vx3 = bj_lorentz_transform_x(ea, zv, hc, &ep, &bp);
+    assert(is_ok(tx3) == 1 && near(ep.x, ea.x, e10) == 1, "E_∥ unchanged");
+
+    test_group("test_lorentz_transform_invariant_preserved");
+    var ei = BjFieldVector_new(1000.0, 2000.0, 3000.0);
+    var bi = BjFieldVector_new(0.000001, 0.000002, 0.000003);
+    var fi: BjEmTensor = BjEmTensor_from_fields(ei, bi);
+    var inv1: f64 = fi.first_invariant();
+    var c08: f64 = 0.8 * c;
+    var tx4, vx4 = bj_lorentz_transform_x(ei, bi, c08, &ep, &bp);
+    var fj: BjEmTensor = BjEmTensor_from_fields(ep, bp);
+    var inv2: f64 = fj.first_invariant();
+    var di: f64 = inv1 - inv2;
+    var dia: f64 = f64_abs(di);
+    var inv1a: f64 = f64_abs(inv1);
+    var den: f64 = inv1a + 0.000000000000000000000000000001;
+    var rr: f64 = dia / den;
+    assert(is_ok(tx4) == 1 && rr < e6, "F_μν F^μν is invariant");
+
+    test_group("test_general_lorentz_transform_x_matches_special");
+    var bz = BjFieldVector_new(0.0, 0.0, 0.001);
+    var c03: f64 = 0.3 * c;
+    var tx5, vx5 = bj_lorentz_transform_x(ey, bz, c03, &ep, &bp);
+    var vel = BjFieldVector_new(c03, 0.0, 0.0);
+    var ep2: BjFieldVector;
+    var bp2: BjFieldVector;
+    var tf5, vf5 = bj_lorentz_transform_fields(ey, bz, vel, &ep2, &bp2);
+    assert(is_ok(tx5) == 1 && is_ok(tf5) == 1, "both forms succeed");
+    assert(near(ep.x, ep2.x, e6) == 1 && near(ep.y, ep2.y, e6) == 1 && near(ep.z, ep2.z, e6) == 1, "E' agrees");
+    assert(near(bp.x, bp2.x, e12) == 1 && near(bp.y, bp2.y, e12) == 1 && near(bp.z, bp2.z, e12) == 1, "B' agrees");
+
+    test_group("test_lorentz_transform_superluminal");
+    var tx6, vx6 = bj_lorentz_transform_x(ea, zv, c, &ep, &bp);
+    assert(is_err_result(tx6) == 1 && vx6 == BJ_ERR_INVALID_PARAMETER, "v = c refused");
+
+    if (v3 == 0 || v4 == 0 || vx1 == 7 || vx2 == 7 || vx3 == 7 || vx4 == 7 || vx5 == 7 || vf5 == 7) { println("."); }
+    return 0;
+}
+
+# Four-vectors, the potentials, Liénard–Wiechert and Larmor.
+fn rust_tests_b(): i64 {
+    var c: f64 = BJ_SPEED_OF_LIGHT;
+    var pi: f64 = _BJ_PI;
+    var zero: f64 = 0.0;
+    var nan: f64 = zero / zero;
+    var inf: f64 = 1.0 / zero;
+    var e6: f64 = 0.000001;
+    var e10: f64 = 0.0000000001;
+    var e12: f64 = 0.000000000001;
+    var e15: f64 = 0.000000000000001;
+    var qe: f64 = 0.0000000000000000001602176634;
+    var zv: BjFieldVector = BjFieldVector_zero();
+    var ev: BjFieldVector;
+    var bv: BjFieldVector;
+    var out4: BjFourVector;
+
+    test_group("test_four_vector_lightlike");
+    var fl: BjFourVector = BjFourVector_new(c, c, 0.0, 0.0);
+    var sl: f64 = fl.interval_sq();
+    var sla: f64 = f64_abs(sl);
+    assert(sla < e10, "a photon: s² = 0");
+
+    test_group("test_four_vector_timelike");
+    var ft: BjFourVector = BjFourVector_new(c, 0.0, 0.0, 0.0);
+    var st: f64 = ft.interval_sq();
+    assert(st < 0.0, "at rest: s² < 0");
+
+    test_group("test_four_vector_boost_roundtrip");
+    var c1: f64 = c * 1.0;
+    var fb: BjFourVector = BjFourVector_new(c1, 1.0, 2.0, 3.0);
+    var hc: f64 = 0.5 * c;
+    var nhc: f64 = -hc;
+    var tb1, vb1 = fb.boost_x(hc, &out4);
+    var boosted: BjFourVector = out4;
+    var back: BjFourVector;
+    var tb2, vb2 = boosted.boost_x(nhc, &back);
+    assert(is_ok(tb1) == 1 && is_ok(tb2) == 1, "both boosts succeed");
+    assert(near(back.t, fb.t, e6) == 1 && near(back.x, fb.x, e6) == 1 && near(back.y, fb.y, e10) == 1, "back again");
+
+    test_group("test_four_vector_interval_invariant");
+    var c2: f64 = c * 2.0;
+    var fi: BjFourVector = BjFourVector_new(c2, 1.0, 1.0, 1.0);
+    var s0: f64 = fi.interval_sq();
+    var c06: f64 = 0.6 * c;
+    var tb3, vb3 = fi.boost_x(c06, &out4);
+    var s1: f64 = out4.interval_sq();
+    assert(is_ok(tb3) == 1 && near(s0, s1, e6) == 1, "s² is invariant");
+
+    test_group("test_retarded_scalar_coulomb");
+    var tr1, vr1 = bj_retarded_scalar_potential(0.000001, 1.0);
+    var phi1: f64 = vr1;
+    var d1: f64 = 4.0 * pi * BJ_EPSILON_0 * 1.0;
+    var phiw: f64 = 0.000001 / d1;
+    assert(is_ok(tr1) == 1 && rel(phi1, phiw, e10) == 1, "at rest: Coulomb");
+
+    test_group("test_retarded_scalar_singularity");
+    var tr2, vr2 = bj_retarded_scalar_potential(0.000001, 0.0);
+    assert(is_err_result(tr2) == 1 && vr2 == BJ_ERR_SINGULARITY, "d = 0 refused");
+
+    test_group("test_retarded_vector_potential");
+    var v6 = BjFieldVector_new(1000000.0, 0.0, 0.0);
+    var tr3, vr3 = bj_retarded_vector_potential(0.000001, v6, 1.0, &ev);
+    var aw: f64 = BJ_MU_0 * 0.000001 * 1000000.0 / (4.0 * pi * 1.0);
+    assert(is_ok(tr3) == 1 && rel(ev.x, aw, e10) == 1, "A = μ₀qv/(4πR)");
+
+    test_group("test_lw_static_charge_is_coulomb");
+    var rx = BjFieldVector_new(1.0, 0.0, 0.0);
+    var tl1, vl1 = bj_lienard_wiechert_e(0.000001, rx, zv, zv, &ev);
+    var ew: f64 = 0.000001 / (4.0 * pi * BJ_EPSILON_0);
+    var ey: f64 = f64_abs(ev.y);
+    var ez: f64 = f64_abs(ev.z);
+    assert(is_ok(tl1) == 1 && rel(ev.x, ew, e6) == 1 && ey < e6 && ez < e6, "at rest: Coulomb's field");
+
+    test_group("test_lw_b_perpendicular_to_e");
+    var b01 = BjFieldVector_new(0.1, 0.0, 0.0);
+    var tl2, vl2 = bj_lienard_wiechert_e(0.000001, rx, b01, zv, &ev);
+    var rm: f64 = rx.magnitude();
+    var ir: f64 = 1.0 / rm;
+    var nh: BjFieldVector = rx.scale(ir);
+    var bl: BjFieldVector = bj_lienard_wiechert_b(nh, ev);
+    var bn: f64 = bl.dot(nh);
+    var bna: f64 = f64_abs(bn);
+    assert(is_ok(tl2) == 1 && bna < e10, "B ⊥ n̂");
+
+    test_group("test_lw_singularity");
+    var tl3, vl3 = bj_lienard_wiechert_e(0.000001, zv, zv, zv, &ev);
+    assert(is_err_result(tl3) == 1 && vl3 == BJ_ERR_SINGULARITY, "R = 0 refused");
+
+    test_group("test_larmor_power_positive");
+    var p1: f64 = bj_larmor_power(0.000001, 10000000000.0);
+    assert(p1 > 0.0, "P > 0");
+
+    test_group("test_larmor_zero_acceleration");
+    var p0: f64 = bj_larmor_power(0.000001, 0.0);
+    var p0a: f64 = f64_abs(p0);
+    assert(p0a < 0.00000000000000000000000000000000000000000000000001, "a = 0: P = 0");
+
+    test_group("test_relativistic_larmor_rest_frame");
+    var acc = BjFieldVector_new(10000000000.0, 0.0, 0.0);
+    var tp1, vp1 = bj_relativistic_larmor_power(0.000001, zv, acc);
+    var pr: f64 = vp1;
+    assert(is_ok(tp1) == 1 && rel(pr, p1, e10) == 1, "v = 0: Larmor");
+
+    test_group("test_relativistic_larmor_exceeds_nonrelativistic");
+    var c09: f64 = 0.9 * c;
+    var v09 = BjFieldVector_new(c09, 0.0, 0.0);
+    var ay = BjFieldVector_new(0.0, 10000000000.0, 0.0);
+    var tp2, vp2 = bj_relativistic_larmor_power(0.000001, v09, ay);
+    var pr2: f64 = vp2;
+    assert(is_ok(tp2) == 1 && pr2 > p1, "γ⁶ wins at 0.9c");
+
+    test_group("test_relativistic_larmor_superluminal");
+    var vc = BjFieldVector_new(c, 0.0, 0.0);
+    var tp3, vp3 = bj_relativistic_larmor_power(0.000001, vc, ay);
+    assert(is_err_result(tp3) == 1 && vp3 == BJ_ERR_INVALID_PARAMETER, "v = c refused");
+
+    test_group("test_lorentz_factor_nan_rejected");
+    var tn1, vn1 = bj_lorentz_factor(nan);
+    var tn2, vn2 = bj_lorentz_factor(inf);
+    assert(is_err_result(tn1) == 1 && is_err_result(tn2) == 1, "NaN and ∞ refused");
+
+    test_group("test_lorentz_transform_fields_nan_rejected");
+    var e1 = BjFieldVector_new(1.0, 0.0, 0.0);
+    var vn = BjFieldVector_new(nan, 0.0, 0.0);
+    var tn3, vn3 = bj_lorentz_transform_fields(e1, zv, vn, &ev, &bv);
+    var c11: f64 = 1.1 * c;
+    var vf = BjFieldVector_new(c11, 0.0, 0.0);
+    var tn4, vn4 = bj_lorentz_transform_fields(e1, zv, vf, &ev, &bv);
+    assert(is_err_result(tn3) == 1 && is_err_result(tn4) == 1, "NaN and 1.1c refused");
+
+    test_group("test_lorentz_transform_fields_tiny_velocity");
+    var bz1 = BjFieldVector_new(0.0, 0.0, 1.0);
+    var vt = BjFieldVector_new(0.0, 0.0000000000000001, 0.0);
+    var tt1, vt1 = bj_lorentz_transform_fields(zv, bz1, vt, &ev, &bv);
+    var e30: f64 = 0.000000000000000000000000000001;
+    assert(is_ok(tt1) == 1 && near(ev.x, 0.0000000000000001, e30) == 1 && near(bv.z, 1.0, e15) == 1,
+      "v = 1e-16 ŷ, B = ẑ: E' = 1e-16 x̂");
+
+    test_group("test_lorentz_transform_fields_oblique_matches_rotated_x_boost");
+    var e3 = BjFieldVector_new(1000.0, -2000.0, 500.0);
+    var b3 = BjFieldVector_new(0.000002, 0.000001, -0.000003);
+    var speed: f64 = 0.75 * c;
+    var h: f64 = 0.7071067811865476;
+    var re3 = BjFieldVector_new(h * (e3.x + e3.y), h * (e3.y - e3.x), e3.z);
+    var rb3 = BjFieldVector_new(h * (b3.x + b3.y), h * (b3.y - b3.x), b3.z);
+    var tq1, vq1 = bj_lorentz_transform_x(re3, rb3, speed, &ev, &bv);
+    var eref = BjFieldVector_new(h * (ev.x - ev.y), h * (ev.x + ev.y), ev.z);
+    var bref = BjFieldVector_new(h * (bv.x - bv.y), h * (bv.x + bv.y), bv.z);
+    var hs: f64 = h * speed;
+    var vo = BjFieldVector_new(hs, hs, 0.0);
+    var eo: BjFieldVector;
+    var bo: BjFieldVector;
+    var tq2, vq2 = bj_lorentz_transform_fields(e3, b3, vo, &eo, &bo);
+    var de: f64 = vdist(eo, eref);
+    var me: f64 = eref.magnitude();
+    var db: f64 = vdist(bo, bref);
+    var mb: f64 = bref.magnitude();
+    var re: f64 = de / me;
+    var rb: f64 = db / mb;
+    assert(is_ok(tq1) == 1 && is_ok(tq2) == 1 && re < e12 && rb < e12, "along (1, 1, 0)/√2 = a rotated x boost");
+
+    test_group("test_relativistic_larmor_reference_value");
+    var v06 = BjFieldVector_new(c06, 0.0, 0.0);
+    var a18 = BjFieldVector_new(0.0, 1000000000000000000.0, 0.0);
+    var tp4, vp4 = bj_relativistic_larmor_power(qe, v06, a18);
+    var p4: f64 = vp4;
+    assert(is_ok(tp4) == 1 && rel(p4, 0.000000000000000013936344641185, e12) == 1, "1.3936344641185e-17 W");
+
+    if (vb1 == 7 || vb2 == 7 || vb3 == 7 || vr3 == 7 || vl1 == 7 || vl2 == 7 || vn1 == 0 || vn2 == 0) { println("."); }
+    if (vn3 == 0 || vn4 == 0 || vt1 == 7 || vq1 == 7 || vq2 == 7) { println("."); }
+    return 0;
+}
+
+# The four-force and the Liénard–Wiechert potentials.
+fn rust_tests_c(): i64 {
+    var c: f64 = BJ_SPEED_OF_LIGHT;
+    var c2: f64 = BJ_SPEED_OF_LIGHT_SQ;
+    var pi: f64 = _BJ_PI;
+    var zero: f64 = 0.0;
+    var nan: f64 = zero / zero;
+    var e12: f64 = 0.000000000001;
+    var qe: f64 = 0.0000000000000000001602176634;
+    var zv: BjFieldVector = BjFieldVector_zero();
+    var av: BjFieldVector;
+
+    test_group("test_four_force_matches_lorentz_force");
+    var q: f64 = -qe;
+    var e = BjFieldVector_new(30000.0, -10000.0, 20000.0);
+    var b = BjFieldVector_new(0.2, 0.5, -0.1);
+    var v = BjFieldVector_new(0.3 * c, -0.5 * c, 0.2 * c);
+    var vsq: f64 = v.magnitude_sq();
+    var w: f64 = 1.0 - vsq / c2;
+    var sw: f64 = f64_sqrt(w);
+    var gamma: f64 = 1.0 / sw;
+    var u: BjFourVector = BjFourVector_new(gamma * c, gamma * v.x, gamma * v.y, gamma * v.z);
+    var f: BjEmTensor = BjEmTensor_from_fields(e, b);
+    var f01: f64 = comp(f, 0, 1);
+    var f12: f64 = comp(f, 1, 2);
+    var f01w: f64 = -e.x / c;
+    var f12w: f64 = -b.z;
+    assert(f01 == f01w && f12 == f12w, "the layout: F^{01} = −E_x/c, F^{12} = −B_z");
+    var k: BjFourVector = f.four_force(q, u);
+    var vxb = BjFieldVector_new(v.y * b.z - v.z * b.y, v.z * b.x - v.x * b.z, v.x * b.y - v.y * b.x);
+    var s3: BjFieldVector = BjFieldVector_add(e, vxb);
+    var f3: BjFieldVector = s3.scale(q);
+    var f3m: f64 = f3.magnitude();
+    var scale: f64 = gamma * f3m;
+    var tol: f64 = e12 * scale;
+    var kx: f64 = gamma * f3.x;
+    var ky: f64 = gamma * f3.y;
+    var kz: f64 = gamma * f3.z;
+    assert(near(k.x, kx, tol) == 1 && near(k.y, ky, tol) == 1 && near(k.z, kz, tol) == 1, "K = γq(E + v × B)");
+    var ev: f64 = e.dot(v);
+    var k0: f64 = gamma * q * ev / c;
+    assert(near(k.t, k0, tol) == 1, "K⁰ = γq E⋅v/c");
+    var ku: f64 = k.dot(u);
+    var kua: f64 = f64_abs(ku);
+    var tol2: f64 = 0.000000001 * scale * u.t;
+    assert(kua < tol2, "η(K, u) = 0");
+
+    test_group("test_lienard_wiechert_potentials_uniform_motion_closed_form");
+    var qq: f64 = 0.000000001;
+    var vv: f64[3];
+    vv[0] = 0.6 * c;
+    vv[1] = 0.2 * c;
+    vv[2] = -0.1 * c;
+    var vvec: BjFieldVector = BjFieldVector_from_array(&vv);
+    var r: f64[3];
+    r[0] = 0.5;
+    r[1] = -0.3;
+    r[2] = 0.8;
+    var t: f64 = 0.000000004;
+    var rv: f64 = r[0] * vv[0] + r[1] * vv[1] + r[2] * vv[2];
+    var r2: f64 = r[0] * r[0] + r[1] * r[1] + r[2] * r[2];
+    var v2: f64 = vvec.magnitude_sq();
+    var a1: f64 = c2 * t - rv;
+    var a1s: f64 = _bj_powi(a1, 2);
+    var a2: f64 = (c2 - v2) * (r2 - c2 * t * t);
+    var rad: f64 = a1s + a2;
+    var srad: f64 = f64_sqrt(rad);
+    var fpe: f64 = 4.0 * pi * BJ_EPSILON_0;
+    var qc: f64 = qq * c;
+    var qcf: f64 = qc / fpe;
+    var v_ref: f64 = qcf / srad;
+    var vr_c2: f64 = v_ref / c2;
+    var a_ref: BjFieldVector = vvec.scale(vr_c2);
+    var wv: f64[3];
+    wv[0] = r[0] - vv[0] * t;
+    wv[1] = r[1] - vv[1] * t;
+    wv[2] = r[2] - vv[2] * t;
+    var tau: f64 = uniform_motion_delay(&wv, &vv);
+    var t_r: f64 = t - tau;
+    var r_vec = BjFieldVector_new(r[0] - vv[0] * t_r, r[1] - vv[1] * t_r, r[2] - vv[2] * t_r);
+    var ic: f64 = 1.0 / c;
+    var beta: BjFieldVector = vvec.scale(ic);
+    var tp1, vp1 = bj_lienard_wiechert_scalar_potential(qq, r_vec, beta);
+    var phi: f64 = vp1;
+    assert(is_ok(tp1) == 1 && rel(phi, v_ref, e12) == 1, "φ = Griffiths 10.4's closed form");
+    var tp2, vp2 = bj_lienard_wiechert_vector_potential(qq, r_vec, beta, &av);
+    var da: f64 = vdist(av, a_ref);
+    var ma: f64 = a_ref.magnitude();
+    var ra: f64 = da / ma;
+    assert(is_ok(tp2) == 1 && ra < e12, "A = (v/c²)φ");
+    var rm: f64 = r_vec.magnitude();
+    var rb: f64 = r_vec.dot(beta);
+    var r_eff: f64 = rm - rb;
+    var tp3, vp3 = bj_retarded_scalar_potential(qq, r_eff);
+    var phi_eff: f64 = vp3;
+    assert(is_ok(tp3) == 1 && rel(phi_eff, v_ref, e12) == 1, "the R_eff form agrees");
+    var tp4, vp4 = bj_retarded_vector_potential(qq, vvec, r_eff, &av);
+    var da2: f64 = vdist(av, a_ref);
+    var ra2: f64 = da2 / ma;
+    assert(is_ok(tp4) == 1 && ra2 < e12, "(vector)");
+    var tp5, vp5 = bj_retarded_scalar_potential(qq, rm);
+    var phi_plain: f64 = vp5;
+    var dpp: f64 = phi_plain - v_ref;
+    var dppa: f64 = f64_abs(dpp);
+    var rpp: f64 = dppa / v_ref;
+    assert(is_ok(tp5) == 1 && rpp > 0.01, "the plain |R| is off by 1 − n̂⋅β");
+
+    test_group("test_lienard_wiechert_potentials_errors");
+    var b5 = BjFieldVector_new(0.5, 0.0, 0.0);
+    var te1, ve1 = bj_lienard_wiechert_scalar_potential(1.0, zv, b5);
+    assert(is_err_result(te1) == 1 && ve1 == BJ_ERR_SINGULARITY, "R = 0: Singularity");
+    var rx = BjFieldVector_new(1.0, 0.0, 0.0);
+    var bx1 = BjFieldVector_new(1.0, 0.0, 0.0);
+    var te2, ve2 = bj_lienard_wiechert_scalar_potential(1.0, rx, bx1);
+    var bnan = BjFieldVector_new(nan, 0.0, 0.0);
+    var te3, ve3 = bj_lienard_wiechert_vector_potential(1.0, rx, bnan, &av);
+    var te4, ve4 = bj_lienard_wiechert_vector_potential(1.0, bnan, b5, &av);
+    assert(is_err_result(te2) == 1 && is_err_result(te3) == 1 && is_err_result(te4) == 1, "|β| = 1, NaN β, NaN R");
+    var te5, ve5 = bj_lienard_wiechert_scalar_potential(0.000000001, rx, zv);
+    var phi0: f64 = ve5;
+    var phi0w: f64 = 0.000000001 / fpe;
+    var e15: f64 = 0.000000000000001;
+    assert(is_ok(te5) == 1 && rel(phi0, phi0w, e15) == 1, "at rest: Coulomb's potential");
+
+    test_group("test_retarded_potentials_reject_negative_distance");
+    var tn1, vn1 = bj_retarded_scalar_potential(0.000001, -1.0);
+    var tn2, vn2 = bj_retarded_scalar_potential(0.000001, nan);
+    var v6 = BjFieldVector_new(1000000.0, 0.0, 0.0);
+    var tn3, vn3 = bj_retarded_vector_potential(0.000001, v6, -1.0, &av);
+    assert(is_err_result(tn1) == 1 && is_err_result(tn2) == 1 && is_err_result(tn3) == 1, "−1 and NaN refused");
+
+    if (vp2 == 7 || vp4 == 7 || ve2 == 0 || ve3 == 0 || ve4 == 0 || vn1 == 0 || vn2 == 0 || vn3 == 0) { println("."); }
+    return 0;
+}
+
+# What the port adds: the error texts, ADR 0002 row 27, outs untouched, PartialEq, the tensor from components.
+fn cyrius_tests(): i64 {
+    var c: f64 = BJ_SPEED_OF_LIGHT;
+    var zero: f64 = 0.0;
+    var nan: f64 = zero / zero;
+    var zv: BjFieldVector = BjFieldVector_zero();
+    var keep = BjFieldVector_new(7.0, 7.0, 7.0);
+    var ev: BjFieldVector = keep;
+    var bv: BjFieldVector = keep;
+
+    test_group("cyrius_relativity_errors");
+    var t1, v1 = bj_lorentz_factor(c);
+    assert(err_is(t1, v1, BJ_ERR_INVALID_PARAMETER,
+        "invalid parameter: speed (299792458 m/s) must be less than c") == 1, "γ at c");
+    var vc = BjFieldVector_new(c, 0.0, 0.0);
+    var t2, v2 = bj_lorentz_transform_fields(zv, zv, vc, &ev, &bv);
+    assert(err_is(t2, v2, BJ_ERR_INVALID_PARAMETER, "invalid parameter: boost velocity must be less than c") == 1
+      && ev.x == 7.0 && bv.z == 7.0, "the boost text, the outs untouched");
+    var rx = BjFieldVector_new(1.0, 0.0, 0.0);
+    var bx = BjFieldVector_new(1.0, 0.0, 0.0);
+    var t3, v3 = bj_lienard_wiechert_e(1.0, rx, bx, zv, &ev);
+    assert(err_is(t3, v3, BJ_ERR_INVALID_PARAMETER, "invalid parameter: β must be < 1") == 1 && ev.x == 7.0, "|β| = 1");
+    var t4, v4 = bj_retarded_scalar_potential(1.0, -2.0);
+    assert(err_is(t4, v4, BJ_ERR_INVALID_PARAMETER, "invalid parameter: distance must be non-negative, got -2") == 1,
+      "the radial distance's text");
+    var t5, v5 = bj_relativistic_larmor_power(1.0, vc, zv);
+    assert(err_is(t5, v5, BJ_ERR_INVALID_PARAMETER, "invalid parameter: velocity must be less than c") == 1, "v = c");
+
+    test_group("cyrius_adr_row_27");
+    var rn = BjFieldVector_new(nan, 1.0, 0.0);
+    var t6, v6 = bj_lienard_wiechert_e(1.0, rn, zv, zv, &ev);
+    assert(err_is(t6, v6, BJ_ERR_INVALID_PARAMETER, "invalid parameter: R vector must not contain NaN") == 1
+      && ev.x == 7.0, "a NaN R refused, as the potentials do");
+    var t7, v7 = bj_lienard_wiechert_scalar_potential(1.0, rn, zv);
+    assert(err_is(t7, v7, BJ_ERR_INVALID_PARAMETER, "invalid parameter: R vector must not contain NaN") == 1,
+      "the potentials' own check");
+
+    test_group("cyrius_tensor_and_four_vector");
+    var e = BjFieldVector_new(1.0, 2.0, 3.0);
+    var b = BjFieldVector_new(-1.0, 0.5, 0.25);
+    var f: BjEmTensor = BjEmTensor_from_fields(e, b);
+    var g: BjEmTensor = f;
+    var cs: f64[16];
+    var cp: *f64 = as_f64p(&g);
+    for (var k = 0; k < 16; k = k + 1) { cs[k] = cp[k]; }
+    var h: BjEmTensor = BjEmTensor_from_components(&cs);
+    assert(f.eq(h) == 1, "from_components round-trips the layout");
+    cs[5] = nan;
+    var hn: BjEmTensor = BjEmTensor_from_components(&cs);
+    assert(hn.eq(hn) == 0, "a NaN component equals nothing (IEEE)");
+    var a: BjFourVector = BjFourVector_new(1.0, -0.0, 2.0, 3.0);
+    var a2: BjFourVector = BjFourVector_new(1.0, 0.0, 2.0, 3.0);
+    assert(a.eq(a2) == 1, "−0 equals +0");
+    var pos: f64[3];
+    pos[0] = 1.0;
+    pos[1] = 2.0;
+    pos[2] = 3.0;
+    var fp: BjFourVector = BjFourVector_from_time_position(2.0, &pos);
+    var ct2: f64 = 2.0 * c;
+    assert(fp.t == ct2 && fp.z == 3.0, "(c·t, pos)");
+    var pot: BjFourPotential;
+    pot.phi_over_c = 0.5;
+    pot.a = e;
+    var pc: BjFourPotential = pot;
+    var ay: f64 = pc.a.y;
+    assert(pc.phi_over_c == 0.5 && ay == 2.0, "BjFourPotential holds φ/c and A");
+
+    if (v1 == 0 || v2 == 0 || v3 == 0 || v4 == 0 || v5 == 0 || v6 == 0 || v7 == 0) { println("."); }
+    return 0;
+}
+
+# Runs relativity.rs's tests, then the Cyrius-only checks.
+fn main(): i64 {
+    alloc_init();
+    rust_tests_a();
+    rust_tests_b();
+    rust_tests_c();
+    cyrius_tests();
+    return assert_summary();
+}
+
+var exit_code = main();
+if (exit_code > 0) { exit_code = 1; }
+sys_exit_group(exit_code);

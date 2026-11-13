@@ -35,4 +35,4 @@ modules = ["src/constants.cyr", "src/crmath_data.cyr", "src/crmath.cyr", "src/cr
            "src/crmath_cmp.cyr", "src/mathx.cyr", "src/crmath_vx.cyr", "src/fmtf.cyr", "src/log.cyr", "src/error.cyr",
            "src/complex.cyr", "src/field.cyr", "src/maxwell.cyr", "src/charge.cyr", "src/material.cyr",
            "src/wave_data.cyr", "src/wave.cyr", "src/circuit.cyr",
-           "src/json.cyr"]
+           "src/relativity.cyr", "src/json.cyr"]

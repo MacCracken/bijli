@@ -1,0 +1,544 @@
+# relativity.cyr — relativistic electrodynamics: the Lorentz factor, the EM field tensor, the Lorentz transformation
+# of fields, four-vectors, the retarded and Liénard–Wiechert potentials and fields, and the Larmor powers (port of
+# rust-old/src/relativity.rs, M2 part 1d-1; the retarded-time solver and lienard_wiechert_fields are part 1d-2's).
+#
+# SI units; indices 0 = ct, 1 = x, 2 = y, 3 = z. BjFourVector's dot and interval_sq use the (−,+,+,+) metric
+# η = diag(−1, 1, 1, 1). BjEmTensor stores F^μν in the Jackson/Griffiths layout (F^{0i} = −Eᵢ/c, F^{12} = −B_z), the
+# contravariant tensor of the (+,−,−,−) signature: contract it with g = diag(1, −1, −1, −1), as four_force does. Rust's
+# `components: [[f64; 4]; 4]` is a 16-element tuple field, row-major (probe p17), so `components.(4i + j)` is
+# F^{ij}. No complex phasor appears, so no time convention (src/complex.cyr) is involved.
+#
+# Every formula is Rust's in Rust's order (class A). The FieldVector operations Rust calls are BjFieldVector's, so their
+# range edges follow ADR 0002 row 18 (src/field.cyr). One of Rust's inconsistencies is fixed (ADR 0002 row 27, row 20's
+# rule): bj_lienard_wiechert_e refuses a NaN R as the Liénard–Wiechert potentials do. A fallible function returns a
+# value-form Result, the error in the last-error record (src/error.cyr); a vector, four-vector or pair of vectors
+# writes through out pointers.
+
+private
+
+# The 4×4 electromagnetic field tensor F^μν (contravariant, the (+,−,−,−) layout above), row-major. Mirrors
+# `relativity::EmTensor`.
+public struct BjEmTensor {
+    components: (f64, f64, f64, f64, f64, f64, f64, f64, f64, f64, f64, f64, f64, f64, f64, f64);
+}
+
+# A four-vector (ct, x, y, z). Mirrors `relativity::FourVector`.
+public struct BjFourVector {
+    t: f64;
+    x: f64;
+    y: f64;
+    z: f64;
+}
+
+# The four-potential A^μ = (φ/c, A_x, A_y, A_z): φ/c and the vector potential. Mirrors `relativity::FourPotential`.
+public struct BjFourPotential {
+    phi_over_c: f64;
+    a: BjFieldVector;
+}
+
+# An address as a *f64: a BjEmTensor's sixteen components, from `&t` of a local or an untyped `self` (a `*T`).
+fn _bj_rel_f64p(p): *f64 {
+    return p;
+}
+
+# ── the Lorentz factor ───────────────────────────────────────────────────────────────────────────────────────────
+
+# γ = 1/√(1 − v²/c²). InvalidParameter "speed (v m/s) must be less than c" when v²/c² is NaN or at least 1. Mirrors
+# `relativity::lorentz_factor`.
+public fn bj_lorentz_factor(speed: f64): Result {
+    var s2: f64 = speed * speed;
+    var beta_sq: f64 = s2 / BJ_SPEED_OF_LIGHT_SQ;
+    if (beta_sq != beta_sq || beta_sq >= 1.0) {
+        var t = _bj_err_reason(BJ_ERR_INVALID_PARAMETER);
+        _bj_tx_cstr(t, "speed (");
+        _bj_fmt_f64_display(t, speed);
+        _bj_tx_cstr(t, " m/s) must be less than c");
+        return Err(BJ_ERR_INVALID_PARAMETER);
+    }
+    var q: f64 = 1.0 - beta_sq;
+    var r: f64 = f64_sqrt(q);
+    var g: f64 = 1.0 / r;
+    return Ok(g);
+}
+
+# β = v/c. Mirrors `relativity::beta`.
+#must_use
+#pure
+public fn bj_beta(speed: f64): f64 {
+    var b: f64 = speed / BJ_SPEED_OF_LIGHT;
+    return b;
+}
+
+# ── the electromagnetic tensor ───────────────────────────────────────────────────────────────────────────────────
+
+# F^μν of (E, B): F^{i0} = Eᵢ/c, F^{0i} = −Eᵢ/c, F^{12} = −B_z, F^{13} = B_y, F^{23} = −B_x and their negatives below
+# the diagonal. Mirrors `EmTensor::from_fields`.
+#must_use
+public fn BjEmTensor_from_fields(e: BjFieldVector, b: BjFieldVector): BjEmTensor {
+    var t: BjEmTensor;
+    var p: *f64 = _bj_rel_f64p(&t);
+    var ex: f64 = e.x / BJ_SPEED_OF_LIGHT;
+    var ey: f64 = e.y / BJ_SPEED_OF_LIGHT;
+    var ez: f64 = e.z / BJ_SPEED_OF_LIGHT;
+    var bx: f64 = b.x;
+    var by: f64 = b.y;
+    var bz: f64 = b.z;
+    p[0] = 0.0;
+    p[1] = -ex;
+    p[2] = -ey;
+    p[3] = -ez;
+    p[4] = ex;
+    p[5] = 0.0;
+    p[6] = -bz;
+    p[7] = by;
+    p[8] = ey;
+    p[9] = bz;
+    p[10] = 0.0;
+    p[11] = -bx;
+    p[12] = ez;
+    p[13] = -by;
+    p[14] = bx;
+    p[15] = 0.0;
+    return t;
+}
+
+# A tensor of sixteen components from p, row-major (for `EmTensor { components }`, whose field is public in Rust).
+#must_use
+public fn BjEmTensor_from_components(p: *f64): BjEmTensor {
+    var t: BjEmTensor;
+    var q: *f64 = _bj_rel_f64p(&t);
+    for (var k = 0; k < 16; k = k + 1) { q[k] = p[k]; }
+    return t;
+}
+
+impl BjEmTensor {
+    # E = c·(F^{10}, F^{20}, F^{30}). Mirrors `EmTensor::electric_field`.
+    #must_use
+    public fn electric_field(self): BjFieldVector {
+        var p: *f64 = _bj_rel_f64p(self);
+        var x: f64 = p[4] * BJ_SPEED_OF_LIGHT;
+        var y: f64 = p[8] * BJ_SPEED_OF_LIGHT;
+        var z: f64 = p[12] * BJ_SPEED_OF_LIGHT;
+        var e: BjFieldVector = BjFieldVector_new(x, y, z);
+        return e;
+    }
+
+    # B = (F^{32}, F^{13}, F^{21}). Mirrors `EmTensor::magnetic_field`.
+    #must_use
+    public fn magnetic_field(self): BjFieldVector {
+        var p: *f64 = _bj_rel_f64p(self);
+        var x: f64 = p[14];
+        var y: f64 = p[7];
+        var z: f64 = p[9];
+        var b: BjFieldVector = BjFieldVector_new(x, y, z);
+        return b;
+    }
+
+    # F_μν F^μν = 2(B² − E²/c²), the first Lorentz invariant. Mirrors `EmTensor::first_invariant`.
+    #must_use
+    public fn first_invariant(self): f64 {
+        var e: BjFieldVector = self.electric_field();
+        var b: BjFieldVector = self.magnetic_field();
+        var b2: f64 = b.magnitude_sq();
+        var e2: f64 = e.magnitude_sq();
+        var ec: f64 = e2 / BJ_SPEED_OF_LIGHT_SQ;
+        var d: f64 = b2 - ec;
+        var i: f64 = 2.0 * d;
+        return i;
+    }
+
+    # ε_μνρσ F^μν F^ρσ/8 = −E⋅B/c, the second invariant (ε^{0123} = +1, Jackson's): 0 for radiation fields. Mirrors
+    # `EmTensor::second_invariant`.
+    #must_use
+    public fn second_invariant(self): f64 {
+        var e: BjFieldVector = self.electric_field();
+        var b: BjFieldVector = self.magnetic_field();
+        var d: f64 = e.dot(b);
+        var nd: f64 = -d;
+        var i: f64 = nd / BJ_SPEED_OF_LIGHT;
+        return i;
+    }
+
+    # The dual *F^μν, E → cB and B → −E/c. Mirrors `EmTensor::dual`.
+    #must_use
+    public fn dual(self): BjEmTensor {
+        var e: BjFieldVector = self.electric_field();
+        var b: BjFieldVector = self.magnetic_field();
+        var e_dual: BjFieldVector = b.scale(BJ_SPEED_OF_LIGHT);
+        var inv: f64 = 1.0 / BJ_SPEED_OF_LIGHT;
+        var ninv: f64 = -inv;
+        var b_dual: BjFieldVector = e.scale(ninv);
+        var d: BjEmTensor = BjEmTensor_from_fields(e_dual, b_dual);
+        return d;
+    }
+
+    # K^μ = q F^μν g_νλ u^λ = (γq E⋅v/c, γq(E + v × B)) (N), the Lorentz four-force on a charge with four-velocity
+    # u = γ(c, v): q (F^{μ0}u⁰ − F^{μ1}u¹ − F^{μ2}u² − F^{μ3}u³). Mirrors `EmTensor::four_force`.
+    #must_use
+    public fn four_force(self, charge: f64, four_velocity: BjFourVector): BjFourVector {
+        var p: *f64 = _bj_rel_f64p(self);
+        var u0: f64 = four_velocity.t;
+        var u1: f64 = -four_velocity.x;
+        var u2: f64 = -four_velocity.y;
+        var u3: f64 = -four_velocity.z;
+        var k: f64[4];
+        for (var i = 0; i < 4; i = i + 1) {
+            var r0: f64 = p[4 * i];
+            var r1: f64 = p[4 * i + 1];
+            var r2: f64 = p[4 * i + 2];
+            var r3: f64 = p[4 * i + 3];
+            var s: f64 = r0 * u0 + r1 * u1 + r2 * u2 + r3 * u3;
+            k[i] = charge * s;
+        }
+        var f: BjFourVector = BjFourVector_new(k[0], k[1], k[2], k[3]);
+        return f;
+    }
+
+    # 1 when every component equals o's (IEEE: −0 equals +0, NaN equals nothing). Mirrors the derived `PartialEq`.
+    #must_use
+    public fn eq(self, o: BjEmTensor): i64 {
+        var p: *f64 = _bj_rel_f64p(self);
+        var q: *f64 = _bj_rel_f64p(&o);
+        for (var k = 0; k < 16; k = k + 1) {
+            var a: f64 = p[k];
+            var b: f64 = q[k];
+            if (!(a == b)) { return 0; }
+        }
+        return 1;
+    }
+}
+
+# ── the Lorentz transformation of fields ─────────────────────────────────────────────────────────────────────────
+
+# (E', B') in a frame moving with velocity v, into e_out and b_out, in Jackson's normalization-free form (eq. 11.149):
+# E' = γ(E + v × B) − γ²/(γ + 1)·(v⋅E)v/c² and B' = γ(B − v × E/c²) − γ²/(γ + 1)·(v⋅B)v/c², exact for any small v ≠ 0.
+# InvalidParameter "boost velocity must be less than c" when v² is NaN or at least c²; the outs untouched. Mirrors
+# `relativity::lorentz_transform_fields`.
+public fn bj_lorentz_transform_fields(e: BjFieldVector, b: BjFieldVector, velocity: BjFieldVector,
+  e_out: *BjFieldVector, b_out: *BjFieldVector): Result {
+    var v_sq: f64 = velocity.magnitude_sq();
+    if (v_sq != v_sq || v_sq >= BJ_SPEED_OF_LIGHT_SQ) {
+        return Err(_bj_err_invalid_parameter("boost velocity must be less than c"));
+    }
+    var q: f64 = v_sq / BJ_SPEED_OF_LIGHT_SQ;
+    var w: f64 = 1.0 - q;
+    var r: f64 = f64_sqrt(w);
+    var gamma: f64 = 1.0 / r;
+    var g1: f64 = gamma + 1.0;
+    var den: f64 = g1 * BJ_SPEED_OF_LIGHT_SQ;
+    var gg: f64 = gamma * gamma;
+    var k: f64 = gg / den;
+    var vxb: BjFieldVector = velocity.cross(b);
+    var s1: BjFieldVector = BjFieldVector_add(e, vxb);
+    var s1g: BjFieldVector = BjFieldVector_mul(s1, gamma);
+    var vde: f64 = velocity.dot(e);
+    var ke: f64 = k * vde;
+    var t1: BjFieldVector = velocity.scale(ke);
+    var ep: BjFieldVector = BjFieldVector_sub(s1g, t1);
+    var vxe: BjFieldVector = velocity.cross(e);
+    var inv: f64 = 1.0 / BJ_SPEED_OF_LIGHT_SQ;
+    var vxes: BjFieldVector = vxe.scale(inv);
+    var s2: BjFieldVector = BjFieldVector_sub(b, vxes);
+    var s2g: BjFieldVector = BjFieldVector_mul(s2, gamma);
+    var vdb: f64 = velocity.dot(b);
+    var kb: f64 = k * vdb;
+    var t2: BjFieldVector = velocity.scale(kb);
+    var bp: BjFieldVector = BjFieldVector_sub(s2g, t2);
+    e_out.x = ep.x;
+    e_out.y = ep.y;
+    e_out.z = ep.z;
+    b_out.x = bp.x;
+    b_out.y = bp.y;
+    b_out.z = bp.z;
+    return Ok(0);
+}
+
+# (E', B') for a boost of speed v along x, into e_out and b_out: E'_x = E_x, E'_y = γ(E_y − vB_z), E'_z = γ(E_z + vB_y);
+# B'_x = B_x, B'_y = γ(B_y + vE_z/c²), B'_z = γ(B_z − vE_y/c²). bj_lorentz_factor's error, the outs untouched. Mirrors
+# `relativity::lorentz_transform_x`.
+public fn bj_lorentz_transform_x(e: BjFieldVector, b: BjFieldVector, speed: f64, e_out: *BjFieldVector,
+  b_out: *BjFieldVector): Result {
+    var tg, vg = bj_lorentz_factor(speed);
+    if (is_err_result(tg) == 1) { return Err(vg); }
+    var gamma: f64 = vg;
+    var ex: f64 = e.x;
+    var ey: f64 = e.y;
+    var ez: f64 = e.z;
+    var bx: f64 = b.x;
+    var by: f64 = b.y;
+    var bz: f64 = b.z;
+    var sbz: f64 = speed * bz;
+    var sby: f64 = speed * by;
+    var d1: f64 = ey - sbz;
+    var d2: f64 = ez + sby;
+    var sez: f64 = speed * ez;
+    var sey: f64 = speed * ey;
+    var q1: f64 = sez / BJ_SPEED_OF_LIGHT_SQ;
+    var q2: f64 = sey / BJ_SPEED_OF_LIGHT_SQ;
+    var d3: f64 = by + q1;
+    var d4: f64 = bz - q2;
+    var e1: f64 = gamma * d1;
+    var e2: f64 = gamma * d2;
+    var b1: f64 = gamma * d3;
+    var b2: f64 = gamma * d4;
+    e_out.x = ex;
+    e_out.y = e1;
+    e_out.z = e2;
+    b_out.x = bx;
+    b_out.y = b1;
+    b_out.z = b2;
+    return Ok(0);
+}
+
+# ── four-vectors ─────────────────────────────────────────────────────────────────────────────────────────────────
+
+# (ct, x, y, z). Mirrors `FourVector::new`.
+#must_use
+#pure
+public fn BjFourVector_new(ct: f64, x: f64, y: f64, z: f64): BjFourVector {
+    var v: BjFourVector;
+    v.t = ct;
+    v.x = x;
+    v.y = y;
+    v.z = z;
+    return v;
+}
+
+# The four-position (c·time, pos[0], pos[1], pos[2]). Mirrors `FourVector::from_time_position`.
+#must_use
+public fn BjFourVector_from_time_position(time: f64, pos: *f64): BjFourVector {
+    var ct: f64 = BJ_SPEED_OF_LIGHT * time;
+    var v: BjFourVector = BjFourVector_new(ct, pos[0], pos[1], pos[2]);
+    return v;
+}
+
+impl BjFourVector {
+    # η_μν A^μ B^ν = −A⁰B⁰ + A¹B¹ + A²B² + A³B³. Mirrors `FourVector::dot`.
+    #must_use
+    public fn dot(self, other: BjFourVector): f64 {
+        var t: f64 = self.t;
+        var nt: f64 = -t;
+        var x: f64 = self.x;
+        var y: f64 = self.y;
+        var z: f64 = self.z;
+        var d: f64 = nt * other.t + x * other.x + y * other.y + z * other.z;
+        return d;
+    }
+
+    # s² = −(ct)² + x² + y² + z². Mirrors `FourVector::interval_sq`.
+    #must_use
+    public fn interval_sq(self): f64 {
+        var t: f64 = self.t;
+        var nt: f64 = -t;
+        var x: f64 = self.x;
+        var y: f64 = self.y;
+        var z: f64 = self.z;
+        var s: f64 = nt * t + x * x + y * y + z * z;
+        return s;
+    }
+
+    # √(x² + y² + z²). Mirrors `FourVector::spatial_magnitude`.
+    #must_use
+    public fn spatial_magnitude(self): f64 {
+        var x: f64 = self.x;
+        var y: f64 = self.y;
+        var z: f64 = self.z;
+        var s: f64 = x * x + y * y + z * z;
+        var m: f64 = f64_sqrt(s);
+        return m;
+    }
+
+    # The boost of speed v along x, into out: ct' = γ(ct − βx), x' = γ(x − β·ct). bj_lorentz_factor's error, out
+    # untouched. Mirrors `FourVector::boost_x`.
+    public fn boost_x(self, speed: f64, out: *BjFourVector): Result {
+        var tg, vg = bj_lorentz_factor(speed);
+        if (is_err_result(tg) == 1) { return Err(vg); }
+        var gamma: f64 = vg;
+        var b: f64 = speed / BJ_SPEED_OF_LIGHT;
+        var t: f64 = self.t;
+        var x: f64 = self.x;
+        var bx: f64 = b * x;
+        var bt: f64 = b * t;
+        var d1: f64 = t - bx;
+        var d2: f64 = x - bt;
+        var t2: f64 = gamma * d1;
+        var x2: f64 = gamma * d2;
+        out.t = t2;
+        out.x = x2;
+        out.y = self.y;
+        out.z = self.z;
+        return Ok(0);
+    }
+
+    # 1 when every component equals o's (IEEE). Mirrors the derived `PartialEq`.
+    #must_use
+    public fn eq(self, o: BjFourVector): i64 {
+        var t: f64 = self.t;
+        var x: f64 = self.x;
+        var y: f64 = self.y;
+        var z: f64 = self.z;
+        if (t == o.t && x == o.x && y == o.y && z == o.z) { return 1; }
+        return 0;
+    }
+}
+
+# ── retarded and Liénard–Wiechert potentials ─────────────────────────────────────────────────────────────────────
+
+# φ = q/(4πε₀R_eff) (V), R_eff the Liénard–Wiechert effective distance |R| − R⋅β at the retarded time (for a charge at
+# rest |R|, and this is Coulomb's potential). The radial distance's errors (InvalidParameter when negative or NaN,
+# Singularity below 1e-30). Mirrors `relativity::retarded_scalar_potential`.
+public fn bj_retarded_scalar_potential(charge: f64, retarded_distance: f64): Result {
+    var tc, vc = _bj_check_radial_distance(retarded_distance);
+    if (is_err_result(tc) == 1) { return Err(vc); }
+    var d: f64 = 4.0 * _BJ_PI * BJ_EPSILON_0 * retarded_distance;
+    var phi: f64 = charge / d;
+    return Ok(phi);
+}
+
+# A = μ₀qv/(4πR_eff) (T⋅m) into out, v and R_eff at the retarded time. As bj_retarded_scalar_potential, out untouched on
+# an error. Mirrors `relativity::retarded_vector_potential`.
+public fn bj_retarded_vector_potential(charge: f64, velocity: BjFieldVector, retarded_distance: f64,
+  out: *BjFieldVector): Result {
+    var tc, vc = _bj_check_radial_distance(retarded_distance);
+    if (is_err_result(tc) == 1) { return Err(vc); }
+    var num: f64 = BJ_MU_0 * charge;
+    var den: f64 = 4.0 * _BJ_PI * retarded_distance;
+    var k: f64 = num / den;
+    var a: BjFieldVector = velocity.scale(k);
+    out.x = a.x;
+    out.y = a.y;
+    out.z = a.z;
+    return Ok(0);
+}
+
+# R_eff = |R| − R⋅β (> 0 for |β| < 1): InvalidParameter "R vector must not contain NaN", Singularity for |R| < 1e-30,
+# InvalidParameter "β must be < 1" when |β|² is NaN or at least 1.
+fn _bj_rel_effective_distance(r_vec: BjFieldVector, beta_vec: BjFieldVector): Result {
+    var r_mag: f64 = r_vec.magnitude();
+    if (r_mag != r_mag) { return Err(_bj_err_invalid_parameter("R vector must not contain NaN")); }
+    if (r_mag < 0.000000000000000000000000000001) { return Err(_bj_err_singularity()); }
+    var b_sq: f64 = beta_vec.magnitude_sq();
+    if (b_sq != b_sq || b_sq >= 1.0) { return Err(_bj_err_invalid_parameter("β must be < 1")); }
+    var rb: f64 = r_vec.dot(beta_vec);
+    var r_eff: f64 = r_mag - rb;
+    return Ok(r_eff);
+}
+
+# φ = q/(4πε₀(|R| − R⋅β)) (V), the Liénard–Wiechert scalar potential (Griffiths 10.46, Jackson 14.8): R = r − r'(t_r)
+# from the retarded position to the field point, β = v(t_r)/c. Singularity for R = 0; InvalidParameter for |β| ≥ 1 or
+# a NaN input. Mirrors `relativity::lienard_wiechert_scalar_potential`.
+public fn bj_lienard_wiechert_scalar_potential(charge: f64, r_vec: BjFieldVector, beta_vec: BjFieldVector): Result {
+    var t, v = _bj_rel_effective_distance(r_vec, beta_vec);
+    if (is_err_result(t) == 1) { return Err(v); }
+    var r_eff: f64 = v;
+    var d: f64 = 4.0 * _BJ_PI * BJ_EPSILON_0 * r_eff;
+    var phi: f64 = charge / d;
+    return Ok(phi);
+}
+
+# A = μ₀qcβ/(4π(|R| − R⋅β)) = (β/c)φ (T⋅m) into out (Griffiths 10.47). As bj_lienard_wiechert_scalar_potential, out
+# untouched on an error. Mirrors `relativity::lienard_wiechert_vector_potential`.
+public fn bj_lienard_wiechert_vector_potential(charge: f64, r_vec: BjFieldVector, beta_vec: BjFieldVector,
+  out: *BjFieldVector): Result {
+    var t, v = _bj_rel_effective_distance(r_vec, beta_vec);
+    if (is_err_result(t) == 1) { return Err(v); }
+    var r_eff: f64 = v;
+    var num: f64 = BJ_MU_0 * charge * BJ_SPEED_OF_LIGHT;
+    var den: f64 = 4.0 * _BJ_PI * r_eff;
+    var k: f64 = num / den;
+    var a: BjFieldVector = beta_vec.scale(k);
+    out.x = a.x;
+    out.y = a.y;
+    out.z = a.z;
+    return Ok(0);
+}
+
+# ── Liénard–Wiechert fields and the Larmor powers ────────────────────────────────────────────────────────────────
+
+# E = (q/4πε₀)(n̂ − β)/(γ²κ³R²) + (q/4πε₀c) n̂ × [(n̂ − β) × β̇]/(κ³R) (V/m) into out, κ = 1 − n̂⋅β: the velocity
+# (Coulomb, ∝ 1/R²) and acceleration (radiation, ∝ 1/R) fields; r_vec from the retarded position to the field point,
+# β = v/c and β̇ = a/c at the retarded time. InvalidParameter for a NaN R ("R vector must not contain NaN", as the
+# potentials: ADR 0002 row 27, where Rust went on to NaN), Singularity for |R| < 1e-30, InvalidParameter for |β| ≥ 1,
+# DivisionByZero for |κ| < 1e-30; out untouched on an error. Mirrors `relativity::lienard_wiechert_e`.
+public fn bj_lienard_wiechert_e(charge: f64, r_vec: BjFieldVector, beta_vec: BjFieldVector, beta_dot: BjFieldVector,
+  out: *BjFieldVector): Result {
+    var r_mag: f64 = r_vec.magnitude();
+    if (r_mag != r_mag) { return Err(_bj_err_invalid_parameter("R vector must not contain NaN")); }
+    if (r_mag < 0.000000000000000000000000000001) { return Err(_bj_err_singularity()); }
+    var b_sq: f64 = beta_vec.magnitude_sq();
+    if (b_sq != b_sq || b_sq >= 1.0) { return Err(_bj_err_invalid_parameter("β must be < 1")); }
+    var inv_r: f64 = 1.0 / r_mag;
+    var n_hat: BjFieldVector = r_vec.scale(inv_r);
+    var nb: f64 = n_hat.dot(beta_vec);
+    var kappa: f64 = 1.0 - nb;
+    var ak: f64 = f64_abs(kappa);
+    if (ak < 0.000000000000000000000000000001) {
+        return Err(_bj_err_division_by_zero("Liénard-Wiechert denominator (1 − n̂⋅β) is zero"));
+    }
+    var ob: f64 = 1.0 - b_sq;
+    var gamma_sq: f64 = 1.0 / ob;
+    var kappa3: f64 = kappa * kappa * kappa;
+    var four_pi_eps0: f64 = 4.0 * _BJ_PI * BJ_EPSILON_0;
+    var pre: f64 = charge / four_pi_eps0;
+    var n_minus_beta: BjFieldVector = BjFieldVector_sub(n_hat, beta_vec);
+    var dv: f64 = gamma_sq * kappa3 * r_mag * r_mag;
+    var fv: f64 = pre / dv;
+    var velocity_term: BjFieldVector = n_minus_beta.scale(fv);
+    var inner: BjFieldVector = n_minus_beta.cross(beta_dot);
+    var outer: BjFieldVector = n_hat.cross(inner);
+    var da: f64 = kappa3 * r_mag * BJ_SPEED_OF_LIGHT;
+    var fa: f64 = pre / da;
+    var accel_term: BjFieldVector = outer.scale(fa);
+    var e: BjFieldVector = BjFieldVector_add(velocity_term, accel_term);
+    out.x = e.x;
+    out.y = e.y;
+    out.z = e.z;
+    return Ok(0);
+}
+
+# B = n̂ × E/c (T), perpendicular to n̂ and E. Mirrors `relativity::lienard_wiechert_b`.
+#must_use
+public fn bj_lienard_wiechert_b(n_hat: BjFieldVector, e_field: BjFieldVector): BjFieldVector {
+    var c: BjFieldVector = n_hat.cross(e_field);
+    var inv: f64 = 1.0 / BJ_SPEED_OF_LIGHT;
+    var b: BjFieldVector = c.scale(inv);
+    return b;
+}
+
+# P = q²a²/(6πε₀c³) (W), Larmor's formula (non-relativistic). Mirrors `relativity::larmor_power`.
+#must_use
+#pure
+public fn bj_larmor_power(charge: f64, acceleration: f64): f64 {
+    var c3: f64 = BJ_SPEED_OF_LIGHT * BJ_SPEED_OF_LIGHT_SQ;
+    var num: f64 = charge * charge * acceleration * acceleration;
+    var den: f64 = 6.0 * _BJ_PI * BJ_EPSILON_0 * c3;
+    var p: f64 = num / den;
+    return p;
+}
+
+# P = q²γ⁶/(6πε₀c³)·[a² − |v × a|²/c²] (W), Liénard's relativistic Larmor formula. InvalidParameter "velocity must be
+# less than c" when v² is NaN or at least c². Mirrors `relativity::relativistic_larmor_power`.
+public fn bj_relativistic_larmor_power(charge: f64, velocity: BjFieldVector, acceleration: BjFieldVector): Result {
+    var v_sq: f64 = velocity.magnitude_sq();
+    if (v_sq != v_sq || v_sq >= BJ_SPEED_OF_LIGHT_SQ) {
+        return Err(_bj_err_invalid_parameter("velocity must be less than c"));
+    }
+    var q: f64 = v_sq / BJ_SPEED_OF_LIGHT_SQ;
+    var w: f64 = 1.0 - q;
+    var r: f64 = f64_sqrt(w);
+    var gamma: f64 = 1.0 / r;
+    var g2: f64 = gamma * gamma;
+    var g6: f64 = g2 * g2 * g2;
+    var a_sq: f64 = acceleration.magnitude_sq();
+    var vxa: BjFieldVector = velocity.cross(acceleration);
+    var vxa_sq: f64 = vxa.magnitude_sq();
+    var c3: f64 = BJ_SPEED_OF_LIGHT * BJ_SPEED_OF_LIGHT_SQ;
+    var qq: f64 = charge * charge;
+    var den: f64 = 6.0 * _BJ_PI * BJ_EPSILON_0 * c3;
+    var pre: f64 = qq / den;
+    var vc: f64 = vxa_sq / BJ_SPEED_OF_LIGHT_SQ;
+    var d: f64 = a_sq - vc;
+    var pg: f64 = pre * g6;
+    var p: f64 = pg * d;
+    return Ok(p);
+}

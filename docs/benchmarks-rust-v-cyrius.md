@@ -6,7 +6,7 @@
 
 **Rust column**: rust-old/bench-history.csv, run `2026-11-12T03:15:21Z` at `c95fd30` (the 1.2.0 tag's source), criterion medians. Taken under load (kimiya's gates ran beside it: load average about 2.6, median CI width 0.8 %, p90 4.2 %, max 13 %), so a ratio within the Rust row's own noise is read as parity (port plan §5 P4).
 
-**80 Rust benches:** 38 twinned, 0 not applicable, 42 pending.
+**80 Rust benches:** 44 twinned, 0 not applicable, 36 pending.
 
 | Rust bench | Rust | Cyrius twin | Cyrius | Cyrius / Rust |
 |---|---:|---|---:|---:|
@@ -59,14 +59,14 @@
 | `material/h_field_from_b` | 5.51 ns | `material/h_field_from_b` | 22.00 ns | 4.0× |
 | `material/clausius_mossotti` | 1.24 ns | `material/clausius_mossotti` | 26.00 ns | 20.9× |
 | `material/curie_weiss` | 1.24 ns | `material/curie_weiss` | 8.00 ns | 6.5× |
-| `relativity/lorentz_factor` | 1.24 ns | pending (M2) | — | — |
-| `relativity/em_tensor_from_fields` | 8.11 ns | pending (M2) | — | — |
-| `relativity/lorentz_transform_x` | 5.91 ns | pending (M2) | — | — |
-| `relativity/lienard_wiechert_e` | 21.64 ns | pending (M2) | — | — |
+| `relativity/lorentz_factor` | 1.24 ns | `relativity/lorentz_factor` | 13.00 ns | 10.5× |
+| `relativity/em_tensor_from_fields` | 8.11 ns | `relativity/em_tensor_from_fields` | 36.00 ns | 4.4× |
+| `relativity/lorentz_transform_x` | 5.91 ns | `relativity/lorentz_transform_x` | 42.00 ns | 7.1× |
+| `relativity/lienard_wiechert_e` | 21.64 ns | `relativity/lienard_wiechert_e` | 227.00 ns | 10.5× |
 | `relativity/solve_retarded_time_uniform_t1s` | 103.48 ns | pending (M2) | — | — |
 | `relativity/lienard_wiechert_fields_orbit_b099` | 319.92 ns | pending (M2) | — | — |
-| `relativity/lienard_wiechert_scalar_potential` | 1.74 ns | pending (M2) | — | — |
-| `relativity/four_vector_boost` | 5.45 ns | pending (M2) | — | — |
+| `relativity/lienard_wiechert_scalar_potential` | 1.74 ns | `relativity/lienard_wiechert_scalar_potential` | 64.00 ns | 36.8× |
+| `relativity/four_vector_boost` | 5.45 ns | `relativity/four_vector_boost` | 33.00 ns | 6.1× |
 | `polarization/jones_apply_polarizer` | 0.99 ns | pending (M3) | — | — |
 | `polarization/jones_qwp_apply` | 0.99 ns | pending (M3) | — | — |
 | `polarization/mueller_apply` | 0.99 ns | pending (M3) | — | — |

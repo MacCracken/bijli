@@ -1,0 +1,102 @@
+# p17 — relativity's struct shapes (M2 part 1d): EmTensor's `components: [[f64; 4]; 4]` as a 16-element tuple field
+# (row-major, read by `.k` and through a *f64 at the struct's address), the 128-byte struct returned by value from a
+# constructor and copied; a method's untyped `self`, which is a `*T` (the guide: so `self` is the struct's address,
+# while `&self` is the slot holding it, as `&p` of any pointer); FourPotential's nested struct field `a: V3`, assigned
+# whole, copied and read through `p.a.y`.
+include "lib/syscalls.cyr"
+include "lib/string.cyr"
+include "lib/alloc.cyr"
+include "lib/fmt.cyr"
+include "lib/io.cyr"
+
+struct V3 { x: f64; y: f64; z: f64; }
+
+struct T {
+    components: (f64, f64, f64, f64, f64, f64, f64, f64, f64, f64, f64, f64, f64, f64, f64, f64);
+}
+
+struct FP { phi_over_c: f64; a: V3; }
+
+fn as_f64p(p): *f64 { return p; }
+
+fn V3_new(x: f64, y: f64, z: f64): V3 {
+    var v: V3;
+    v.x = x;
+    v.y = y;
+    v.z = z;
+    return v;
+}
+
+# The tensor of (E, B) with F^{i0} = E_i, F^{12} = −B_z (the layout only: no physics here).
+fn T_from(e: V3, b: V3): T {
+    var t: T;
+    var p: *f64 = as_f64p(&t);
+    for (var k = 0; k < 16; k = k + 1) { p[k] = 0.0; }
+    var ex: f64 = e.x;
+    var ey: f64 = e.y;
+    var bz: f64 = b.z;
+    p[4] = ex;
+    p[8] = ey;
+    p[1] = -ex;
+    p[6] = -bz;
+    p[9] = bz;
+    return t;
+}
+
+impl T {
+    # F^{10} + F^{20} + F^{21} through the pointer `self` is.
+    fn probe_sum(self): f64 {
+        var p: *f64 = as_f64p(self);
+        var s: f64 = p[4] + p[8] + p[9];
+        return s;
+    }
+
+    # The same by the tuple field's elements.
+    fn probe_fields(self): f64 {
+        var a: f64 = self.components.4;
+        var b: f64 = self.components.8;
+        var c: f64 = self.components.9;
+        var s: f64 = a + b + c;
+        return s;
+    }
+
+    # ⚠ `&self` is the slot that holds the pointer, not the struct: this reads the stack.
+    fn probe_slot(self): i64 {
+        var w = load64(&self);
+        if (w == self) { return 1; }
+        return 0;
+    }
+}
+
+fn hx(x) { fmt_hex(x); syscall(1, 1, " ", 1); return 0; }
+
+fn main() {
+    alloc_init();
+    var e: V3 = V3_new(1.0, 2.0, 3.0);
+    var b: V3 = V3_new(0.5, 0.25, 0.125);
+    var t: T = T_from(e, b);
+    var u: T = t;                                  # a by-value copy of 128 bytes
+    var s: f64 = u.probe_sum();                    # 1 + 2 + 0.125 = 3.125 = 0x4009000000000000
+    hx(s);
+    var s2: f64 = u.probe_fields();                # 0x4009000000000000
+    hx(s2);
+    hx(u.probe_slot());                            # 1: load64(&self) is self, the struct's address
+    var k1: f64 = u.components.1;                  # −1 = 0xbff0000000000000
+    hx(k1);
+    var k6: f64 = u.components.6;                  # −0.125 = 0xbfc0000000000000
+    hx(k6);
+    hx(sizeof(T));                                 # 128 = 0x80
+    var fp: FP;
+    fp.phi_over_c = 7.0;
+    fp.a = b;                                      # a struct field assigned whole
+    var g: FP = fp;
+    var ay: f64 = g.a.y;                           # 0.25 = 0x3fd0000000000000
+    hx(ay);
+    var az: f64 = g.a.z;                           # 0.125 = 0x3fc0000000000000
+    hx(az);
+    hx(sizeof(FP));                                # 32 = 0x20
+    syscall(1, 1, "\n", 1);
+    return 0;
+}
+var r = main();
+sys_exit_group(r);
