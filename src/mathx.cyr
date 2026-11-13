@@ -138,6 +138,14 @@ fn _bj_exp(x: f64): f64 {
     return r;
 }
 
+# e^x − 1, correctly rounded (src/crmath_kx.cyr, kimiya's; M2's range-edge Part, ADR 0002 row 29). Stands for
+# `f64::exp_m1`.
+#must_use
+fn _bj_expm1(x: f64): f64 {
+    var r: f64 = _bj_k_cr_expm1(x);
+    return r;
+}
+
 # √(x² + y²), correctly rounded. Stands for `f64::hypot`.
 #must_use
 fn _bj_hypot(x: f64, y: f64): f64 {

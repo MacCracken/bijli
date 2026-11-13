@@ -231,6 +231,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
 - **relativity** (ADR 0002 row 27, M2 part 1d-1): `lienard_wiechert_e` returned Ok(NaN) for a NaN R, which the
   Liénard–Wiechert potentials refuse, and now refuses it with their InvalidParameter ("R vector must not contain
   NaN").
+- **wave** (ADR 0002 row 28, M2 part 2a-1, the user's answer of 2026-11-12): `half_wave_dipole_pattern` lost every
+  digit below θ ≈ 10^-8 (and near π) to cos((π/2)·cos θ)'s cancellation; its numerator is now sin(π·sin²(θ/2)), or
+  sin(π·cos²(θ/2)) where cos θ < 0.
+- **circuit** (ADR 0002 row 29, M2 part 2a-1): `rc_charging_voltage` and `rl_current_rise` cancelled in 1 − e^(−t/τ)
+  (8e-8 relative at t/τ = 10^-10, 0 below 1.1·10^-16); they now take −expm1(−t/τ), kimiya's correctly rounded expm1
+  (`src/crmath_kx.cyr`, with its exp tables in `src/crmath_k_data.cyr`; `cr_verify.py` checks it against MPFR).
 - **circuit** (ADR 0002 row 26, M2 part 1c): `resistance_from_geometry` and `parallel_plate_capacitance` returned
   Ok(NaN) for a NaN area or separation (`<= 0` let it through), and now refuse it with their InvalidParameter.
 - **wave** (ADR 0002 rows 23–24, M2 part 1b, the user's answers of 2026-11-12): `effective_aperture` returned Ok(NaN)
@@ -293,6 +299,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
   `field/vector_magnitude` +1–2 ns and `field/vector_cross` +4–7 ns.
 - **error** (Cyrius-only benches): making an error 960 ns → 122 ns (−87 %). It now skips the two syscalls that tell the
   Linux main thread while no thread exists, and `_bj_tx_cstr` copies in one loop. A disabled log site costs 3 ns.
+- **circuit** (an A/B against the previous commit, load 3.4–8, each the lower of two runs): `circuit/rc_charging`
+  123 → 70 ns (−43 %) and `circuit/rl_current_rise` 121 → 71 ns (−41 %): kimiya's expm1 (ADR 0002 row 29) costs less
+  than crmath's exp. Rust's rows, 0.50 and 2.03 ns, fold their constant arguments.
 
 ## [1.2.0] — 2026-11-11
 

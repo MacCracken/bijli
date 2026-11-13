@@ -1629,3 +1629,28 @@ relativity.rs is two bites: 1d-1, everything but the callbacks, and 1d-2, `solve
 - **Result, every target** (x86_64 ELF, x86_64 PE, aarch64): **13 modules, 0 failing; 401,960 ok, 0 failed, 0
   measured, 0 pending, 18,857 accepted (ADR 01: 8,999; ADR 0002: 9,858)** over 420,817 rows; **all 276 digests
   equal**, the 274 before unchanged.
+
+## 30. M2 part 2a-1: the pattern's and the transients' cancellations (2026-11-12)
+
+M2's range-edge Part (§0.1) runs as 2a–2d on the user's answers of 2026-11-12: 2a the three accuracy rows (2a-1 the
+dipole pattern and the transients, 2a-2 a correctly rounded γ), then M1's three rules over M2's candidates (§25–§29):
+2b round once, 2c exact thresholds, 2d an unbounded exponent at the edges.
+
+- **ADR 0002 row 28**: `bj_half_wave_dipole_pattern`'s numerator is sin(π·sin²(θ/2)), or sin(π·cos²(θ/2)) where
+  cos θ < 0: no cancellation near either axis. sin θ and cos θ come from one `_bj_sin_cos`, which keeps the bench at
+  HEAD's speed (504 and 483 ns against 508 and 511; the four separate calls cost 610). 661 rows mapped; the two
+  corrected-oracle rows of the old formula are among them, so `wave.cr.tsv` keeps 1 row.
+- **ADR 0002 row 29**: the charging transients take −expm1(−t/τ). kimiya's correctly rounded expm1 joins
+  `src/crmath_kx.cyr`: `scripts/port/kimiya_closure.py` gains the root, and its copy of kimiya's tests now stops at
+  kimiya's B10a group (the unbounded exp family, which bijli doesn't carry: kimiya's tests had moved on, and the
+  closure's check had gone stale). `scripts/oracle/crtables_k.py` renders kimiya's exp tables and limits into
+  `src/crmath_k_data.cyr`, and `cr_verify.py` gains an expm1 family: 400,000 arguments through its thresholds, all
+  equal to MPFR on x86_64 and aarch64. `_bj_expm1` in `src/mathx.cyr` stands for `f64::exp_m1`. 657 rows mapped.
+- **Tests**: `cyrius_adr_row_28` checks the pattern at θ = 10^-8, 10^-12 and π − 10^-10 to 10^-15 of 80-digit
+  references; `cyrius_adr_row_29` the transients at t/τ = 10^-20 and 10^-10.
+- **Benchmarks** (an A/B against HEAD, load 3.4–8, each the lower of two runs): `circuit/rc_charging` 123 → 70 ns
+  (−43 %), `circuit/rl_current_rise` 121 → 71 ns (−41 %): kimiya's expm1 is cheaper than crmath's exp; the other rows
+  unchanged.
+- **Result, every target** (x86_64 ELF, x86_64 PE, aarch64): **13 modules, 0 failing; 400,644 ok, 0 failed, 0
+  measured, 0 pending, 20,173 accepted (ADR 01: 8,997; ADR 0002: 11,176)**; **all 276 digests equal** (the pattern's
+  and the two transients' are row 28's and 29's).

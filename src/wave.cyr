@@ -11,7 +11,8 @@
 # (row 22, the constants in src/wave_data.cyr); bj_effective_aperture refuses a NaN wavelength (row 23);
 # bj_schlick_reflectance takes R₀ without reflectance_normal's |n₁ + n₂| < 1e-30 guard (row 24); and
 # bj_material_reflection_coefficient's Γ is on the relative impedances, so Γ² is bj_reflectance_normal_materials' R
-# (row 25).
+# (row 25). And bj_half_wave_dipole_pattern's numerator is computed with no cancellation near the axis (row 28, M2's
+# range-edge Part).
 #
 # A fallible function returns a value-form Result, the error in the last-error record (src/error.cyr). Rust's
 # `Result<Option<f64>>` is `Ok(Some)` with the value in *out, or `Ok(None)` under total internal reflection (out
@@ -633,17 +634,28 @@ public fn bj_hertzian_dipole_pattern(theta: f64): f64 {
 }
 
 # U(θ) = [cos((π/2) cos θ)/sin θ]², a half-wave dipole's normalized pattern; 0 where |sin θ| < 1e-15 (the axis nulls).
-# Mirrors `wave::half_wave_dipole_pattern`.
+# The numerator is sin(π·sin²(θ/2)), or sin(π·cos²(θ/2)) where cos θ < 0: the same real number with no cancellation
+# near either axis, where Rust's cos((π/2)·cos θ) lost every digit below θ ≈ 10^-8 (ADR 0002 row 28; a few ulps
+# everywhere). Mirrors `wave::half_wave_dipole_pattern`.
 #must_use
 #pure
 public fn bj_half_wave_dipole_pattern(theta: f64): f64 {
-    var s: f64 = _bj_sin(theta);
+    var sp, cp = _bj_sin_cos(theta);
+    var s: f64 = sp;
+    var c: f64 = cp;
     var a: f64 = f64_abs(s);
     if (a < 0.000000000000001) { return 0.0; }
-    var c: f64 = _bj_cos(theta);
-    var half_pi: f64 = 0.5 * _BJ_PI;
-    var arg: f64 = half_pi * c;
-    var num: f64 = _bj_cos(arg);
+    var h: f64 = 0.5 * theta;
+    var m: f64 = 0.0;
+    if (c >= 0.0) {
+        var sh: f64 = _bj_sin(h);
+        m = sh * sh;
+    } else {
+        var ch: f64 = _bj_cos(h);
+        m = ch * ch;
+    }
+    var arg: f64 = _BJ_PI * m;
+    var num: f64 = _bj_sin(arg);
     var f: f64 = num / s;
     var u: f64 = f * f;
     return u;

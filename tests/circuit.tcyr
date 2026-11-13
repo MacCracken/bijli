@@ -376,6 +376,17 @@ fn cyrius_tests(): i64 {
     assert(err_is(tb, vb, BJ_ERR_INVALID_PARAMETER,
         "invalid parameter: plate separation must be positive, got NaN") == 1, "a NaN separation refused");
 
+    test_group("cyrius_adr_row_29");
+    var vt: f64 = bj_rc_charging_voltage(10.0, 1.0, 1.0, 0.00000000000000000001);
+    var vtw: f64 = 10.0 * 0.00000000000000000001;
+    var tr2, vr2 = bj_rl_current_rise(10.0, 1.0, 1.0, 0.0000000001);
+    var ir: f64 = vr2;
+    var irw: f64 = 10.0 * 0.0000000001;
+    var dr: f64 = (ir - irw) / irw;
+    var adr: f64 = f64_abs(dr);
+    assert(vt == vtw, "t/RC = 1e-20: V₀·t/RC exactly (Rust's 1 − e^(−x) gave 0)");
+    assert(is_ok(tr2) == 1 && adr < 0.0000000001, "t/τ = 1e-10: (V/R)·t/τ to its next term (Rust's was 8e-8 off)");
+
     test_group("cyrius_series_fold");
     xs[0] = -0.0;
     var tf1, vf1 = bj_resistance_series(&xs, 1);

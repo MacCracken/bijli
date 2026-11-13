@@ -66,7 +66,8 @@ port's harness reads the same files. This README records what is specific to bij
 | (2/π for the angle past DBL_MAX, bijli's) | M1 (part 5d-3) | — | — | `src/crmath_ux_data.cyr` (`crtables.py`'s `render_ux`, from π to 2,800 bits checked against MPFR) |
 | (correctly rounded tables, kimiya's) | M1 | — | — | `src/crmath_k_data.cyr` (`crtables_k.py`, written and checked by `validate.py`) |
 
-Beyond the corpus, `cr_verify.py` checks each correctly rounded primitive against MPFR on seeded argument sets,
+Beyond the corpus, `cr_verify.py` checks each correctly rounded primitive (kimiya's expm1 among them since M2 part
+2a-1) against MPFR on seeded argument sets,
 natively and under qemu-aarch64 (`python3 -I -B scripts/oracle/cr_verify.py . --n 100000 --aarch64`, after
 `cyrius distlib`). `tan_slow` calls tan's fixed-point path directly, so the path the rounding test rarely reaches is
 checked on arguments of its own. Its exact families (`cr_verify.py . exact`) check src/crmath_kx.cyr's copy of kimiya's

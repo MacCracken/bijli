@@ -88,8 +88,237 @@ fn _bj_k_cr_finish(e, h: f64, m: f64, l: f64): f64 {
 }
 
 # ── exp ─────────────────────────────────────────────────────────────────────────────────────────
+
+# The fast core for e^(xh + xl), |xh| ≤ 745.2 and |xl| ≤ 2^-42: (hi, lo, E) with hi + lo = e^x/2^E within
+# 2^-70. exp passes xl = 0; exp10 passes x·ln 10 as xh + xl (xl folds into the K·L2 term).
+#must_use
+fn _bj_k_exp_core(xh: f64, xl: f64): (f64, f64, i64) {
+    var inv: f64 = _BJ_K_CR_EXP_INVLN2N;
+    var l1: f64 = _BJ_K_CR_EXP_L1;
+    var l2: f64 = _BJ_K_CR_EXP_L2;
+    var tt: f64 = (xh * inv) + 6755399441055744.0;   # 1.5·2^52: rounds x·512/ln 2 to an integer
+    var kd: f64 = tt - 6755399441055744.0;
+    var k = load64(&tt) - 0x4338000000000000;
+    var ti = (k & 511) * 32;
+    var e = k >>> 9;
+    var rh: f64 = xh - (kd * l1);
+    var s: f64 = (kd * l2) - xl;
+    var r: f64 = rh - s;
+    var rl: f64 = (rh - r) - s;
+    var c: f64 = r + 49152.0;                         # 1.5·2^15: rounds r to a multiple of 2^-37
+    var r1: f64 = c - 49152.0;
+    var r2: f64 = r - r1;
+    var p3: f64 = _BJ_K_CR_EXP_P3;
+    var p4: f64 = _BJ_K_CR_EXP_P4;
+    var p5: f64 = _BJ_K_CR_EXP_P5;
+    var z: f64 = r * r;                       # Estrin: the code is latency-bound, so keep chains short
+    var q: f64 = (z * (0.5 + (r * p3))) + ((z * z) * (p4 + (r * p5)));
+    var a: f64 = load64(&_BJ_K_CR_EXP_T + ti);
+    var b: f64 = load64(&_BJ_K_CR_EXP_T + ti + 8);
+    var p1: f64 = a * r1;
+    var hi: f64 = a + p1;
+    var e1: f64 = p1 - (hi - a);
+    var rlq: f64 = rl + q;
+    var lo: f64 = (e1 + b) + ((a * (r2 + rlq)) + (b * (r + rlq)));
+    return (hi, lo, e);
+}
+
+# The accurate core: e^(y0 + y1 + y2) = 2^E·(h + m + l), (h, m, l) stored at out[0..2], E returned. The same
+# K as the fast path; r = y − K·(L1 + L2 + L3 + L4) as a triple-double (K·L1 exact, K·L2 and K·L3
+# TwoProducts, K·L4 rounded: below 2^-186 of error); e^r − 1 by Horner in triple-double to r^11/11!
+# (truncation 2^-152); T_j = A + B + C + D renormalised (2^-159); h + m + l = T_j + T_j·(e^r − 1). Measured
+# relative error 2^-155 against 400-bit MPFR.
+#must_use
+fn _bj_k_exp_acc_core(y0: f64, y1: f64, y2: f64, out): i64 {
+    var inv: f64 = _BJ_K_CR_EXP_INVLN2N;
+    var l1: f64 = _BJ_K_CR_EXP_L1;
+    var l2: f64 = _BJ_K_CR_EXP_L2;
+    var l3: f64 = _BJ_K_CR_EXP_L3;
+    var l4: f64 = _BJ_K_CR_EXP_L4;
+    var tt: f64 = (y0 * inv) + 6755399441055744.0;
+    var kd: f64 = tt - 6755399441055744.0;
+    var k = load64(&tt) - 0x4338000000000000;
+    var ti = (k & 511) * 32;
+    var e = k >>> 9;
+    var rh: f64 = y0 - (kd * l1);
+    var a2, a2e = _bj_k_two_prod(kd, l2);
+    var a3, a3e = _bj_k_two_prod(kd, l3);
+    var a4: f64 = kd * l4;
+    var ra0, ra1, ra2 = _bj_k_td_add_d(rh, 0.0, 0.0, -a2);
+    var rb0, rb1, rb2 = _bj_k_td_add_d(ra0, ra1, ra2, y1);
+    var rc0, rc1, rc2 = _bj_k_td_add_d(rb0, rb1, rb2, -a2e);
+    var rd0, rd1, rd2 = _bj_k_td_add_d(rc0, rc1, rc2, -a3);
+    var re0, re1, re2 = _bj_k_td_add_d(rd0, rd1, rd2, y2);
+    var a34: f64 = a3e + a4;
+    var r0, r1, r2 = _bj_k_td_add_d(re0, re1, re2, -a34);
+    var sh: f64 = load64(&_BJ_K_CR_EXP_ACC + 216);    # 1/11! (index 3·(11 − 2))
+    var sm: f64 = load64(&_BJ_K_CR_EXP_ACC + 224);
+    var sl: f64 = load64(&_BJ_K_CR_EXP_ACC + 232);
+    var n = 10;
+    while (n >= 2) {
+        var th, tm, tl = _bj_k_td_mul(r0, r1, r2, sh, sm, sl);
+        var off = (n - 2) * 24;
+        var ch: f64 = load64(&_BJ_K_CR_EXP_ACC + off);
+        var cm: f64 = load64(&_BJ_K_CR_EXP_ACC + off + 8);
+        var cl: f64 = load64(&_BJ_K_CR_EXP_ACC + off + 16);
+        var uh, um, ul = _bj_k_td_add(ch, cm, cl, th, tm, tl);
+        sh = uh;
+        sm = um;
+        sl = ul;
+        n = n - 1;
+    }
+    var vh, vm, vl = _bj_k_td_mul(r0, r1, r2, sh, sm, sl);
+    var wh, wm, wl = _bj_k_td_add_d(vh, vm, vl, 1.0);
+    var ph, pm, pl = _bj_k_td_mul(r0, r1, r2, wh, wm, wl);     # e^r − 1
+    var ta: f64 = load64(&_BJ_K_CR_EXP_T + ti);
+    var tb: f64 = load64(&_BJ_K_CR_EXP_T + ti + 8);
+    var tc: f64 = load64(&_BJ_K_CR_EXP_T + ti + 16);
+    var td: f64 = load64(&_BJ_K_CR_EXP_T + ti + 24);
+    var t0, t1a = _bj_k_fast_two_sum(ta, tb);
+    var t1, t2a = _bj_k_fast_two_sum(t1a, tc);
+    var t2: f64 = t2a + td;
+    var qh, qm, ql = _bj_k_td_mul(t0, t1, t2, ph, pm, pl);
+    var zh, zm, zl = _bj_k_td_add(t0, t1, t2, qh, qm, ql);
+    store64(out, zh);
+    store64(out + 8, zm);
+    store64(out + 16, zl);
+    return e;
+}
+
 # ── exp10 ───────────────────────────────────────────────────────────────────────────────────────
 # ── expm1 ───────────────────────────────────────────────────────────────────────────────────────
+
+# expm1(x) = e^x − 1, correctly rounded. ±0 → ±0 and |x| < 2^-53 → x (x²/2 is then below half an ulp of x,
+# on the side that keeps x), +∞ → +∞, −∞ → −1, NaN for NaN; x above 709.782712893384 overflows, below
+# −37.42994775023704 (e^x < 2^-54) rounds to −1.
+#must_use
+fn _bj_k_cr_expm1(x: f64): f64 {
+    var y, ok = _bj_k_cr_expm1_fast(x);
+    if (ok == 1) { return y; }
+    var z: f64 = _bj_k_cr_expm1_acc(x);
+    return z;
+}
+
+# The fast path alone: (its result, 1), or (0, 0) when its test fails or x > 708 (left to the accurate path).
+#must_use
+fn _bj_k_cr_expm1_fast(x: f64): (f64, i64) {
+    var ax = load64(&x) & 0x7FFFFFFFFFFFFFFF;
+    if (ax < 0x3F90000000000000) {               # |x| < 2^-6
+        if (ax < 0x3CA0000000000000) { return (x, 1); }   # |x| < 2^-53, ±0, subnormals
+        var p: f64 = x * x;                      # x² = p + pe exactly (Dekker, inline)
+        var cx: f64 = 134217729.0 * x;
+        var x1: f64 = cx - (cx - x);
+        var x2: f64 = x - x1;
+        var pe: f64 = (((x1 * x1) - p) + (2.0 * (x1 * x2))) + (x2 * x2);
+        var k3: f64 = _BJ_K_CR_EXPM1_Q3;
+        var k4: f64 = _BJ_K_CR_EXPM1_Q4;
+        var k5: f64 = _BJ_K_CR_EXPM1_Q5;
+        var k6: f64 = _BJ_K_CR_EXPM1_Q6;
+        var k7: f64 = _BJ_K_CR_EXPM1_Q7;
+        var k8: f64 = _BJ_K_CR_EXPM1_Q8;
+        var k9: f64 = _BJ_K_CR_EXPM1_Q9;
+        var s: f64 = ((k3 + (x * k4)) + (p * (k5 + (x * k6)))) + ((p * p) * ((k7 + (x * k8)) + (p * k9)));
+        var x3: f64 = (x * p) * s;
+        var hp: f64 = p * 0.5;
+        var hs: f64 = x + hp;
+        var ht: f64 = hp - (hs - x);
+        var lo: f64 = (ht + (pe * 0.5)) + x3;
+        var ex3: f64 = f64_abs(x3);
+        var exa: f64 = f64_abs(x);
+        var c49: f64 = 0x3CE0000000000000;      # 2^-49
+        var c100: f64 = 0x39B0000000000000;     # 2^-100
+        var err: f64 = (ex3 * c49) + (exa * c100);
+        var u: f64 = hs + (lo - err);
+        var v: f64 = hs + (lo + err);
+        if (u == v) { return (u, 1); }
+        return (0.0, 0);
+    }
+    var m1b = _BJ_K_CR_EXPM1_M1 & 0x7FFFFFFFFFFFFFFF;
+    if (ax > m1b) {                              # |x| > 37.42994775023704
+        if (x < 0.0) { return (-1.0, 1); }       # x < EXPM1_M1 (−∞ included): e^x < 2^-54
+        if (ax > 0x4086200000000000) {           # x > 708, +∞, NaN: left to the accurate path (which returns
+            return (0.0, 0);                     # the specials at once)
+        }
+    }
+    var hi, lo2, e = _bj_k_exp_core(x, 0.0);
+    var hh: f64 = 0.0;
+    var ll: f64 = lo2;
+    var sc: f64 = 1.0;
+    if (e == 0) {
+        hh = hi - 1.0;                           # exact: hi in [0.9993, 1.9987]
+    } else {
+        sc = _bj_k_cr_pow2(e);
+        var hsc: f64 = hi * sc;
+        if (e > 0) {
+            hh = hsc - 1.0;
+            var t1: f64 = -1.0 - (hh - hsc);
+            ll = t1 + (lo2 * sc);
+        } else {
+            hh = -1.0 + hsc;
+            var t2: f64 = hsc - (hh + 1.0);
+            ll = t2 + (lo2 * sc);
+        }
+    }
+    var err2: f64 = 0x3BA0000000000000;      # 2^-69
+    var errs: f64 = err2 * sc;
+    var u2: f64 = hh + (ll - errs);
+    var v2: f64 = hh + (ll + errs);
+    if (u2 == v2) { return (u2, 1); }
+    return (0.0, 0);
+}
+
+# expm1 by the accurate path alone. |x| < 2^-6: x + x²/2 + … + x^17/17! by Horner in triple-double on the
+# exact x (truncation below 2^-154 of x; measured 2^-155). Otherwise e^x from exp's accurate core, scaled,
+# minus 1 in triple-double (|expm1(x)| ≥ 0.0155: at most 6.1 bits of cancellation; measured 2^-152); for
+# E ≥ 120 the −1 is below 2^-114 of e^x, inside exp's own worst-case distance (Lefèvre–Muller: 2^-113 for
+# |x| ≥ 2^-30), so it cannot move the rounding and expm1 rounds as exp does.
+#must_use
+fn _bj_k_cr_expm1_acc(x: f64): f64 {
+    if (x != x) { return x; }
+    var ax = load64(&x) & 0x7FFFFFFFFFFFFFFF;
+    if (ax < 0x3CA0000000000000) { return x; }
+    var ovf: f64 = _BJ_K_CR_EXPM1_OVF;
+    var m1: f64 = _BJ_K_CR_EXPM1_M1;
+    if (x > ovf) { return _BJ_K_INF; }
+    if (x < m1) { return -1.0; }
+    if (ax < 0x3F90000000000000) {
+        var sh: f64 = load64(&_BJ_K_CR_EXP_ACC + 360);   # 1/17! (index 3·(17 − 2))
+        var sm: f64 = load64(&_BJ_K_CR_EXP_ACC + 368);
+        var sl: f64 = load64(&_BJ_K_CR_EXP_ACC + 376);
+        var n = 16;
+        while (n >= 2) {
+            var th, tm, tl = _bj_k_td_mul_d(sh, sm, sl, x);
+            var off = (n - 2) * 24;
+            var ch: f64 = load64(&_BJ_K_CR_EXP_ACC + off);
+            var cm: f64 = load64(&_BJ_K_CR_EXP_ACC + off + 8);
+            var cl: f64 = load64(&_BJ_K_CR_EXP_ACC + off + 16);
+            var uh, um, ul = _bj_k_td_add(ch, cm, cl, th, tm, tl);
+            sh = uh;
+            sm = um;
+            sl = ul;
+            n = n - 1;
+        }
+        var vh, vm, vl = _bj_k_td_mul_d(sh, sm, sl, x);
+        var wh, wm, wl = _bj_k_td_add_d(vh, vm, vl, 1.0);
+        var ph, pm, pl = _bj_k_td_mul_d(wh, wm, wl, x);
+        var r: f64 = _bj_k_rn3(ph, pm, pl);
+        return r;
+    }
+    var buf: f64[3];
+    var e = _bj_k_exp_acc_core(x, 0.0, 0.0, &buf);
+    if (e >= 120) {
+        var big: f64 = _bj_k_cr_finish(e, buf[0], buf[1], buf[2]);
+        return big;
+    }
+    var sc: f64 = _bj_k_cr_pow2(e);
+    var bh: f64 = buf[0] * sc;
+    var bm: f64 = buf[1] * sc;
+    var bl: f64 = buf[2] * sc;
+    var dh, dm, dl = _bj_k_td_add_d(bh, bm, bl, -1.0);
+    var r2: f64 = _bj_k_rn3(dh, dm, dl);
+    return r2;
+}
+
 # ── ln and log10 ────────────────────────────────────────────────────────────────────────────────
 # ── pow (M3c-2b) ────────────────────────────────────────────────────────────────────────────────
 

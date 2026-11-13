@@ -1826,8 +1826,8 @@ def wave_corrections(root: Path, path: Path):
             if line.startswith("#"):
                 continue
             fn, cls, ins, outs, _note = line.split("\t")
-            if cls != "C":
-                continue
+            if cls != "C" or fn == "wave::half_wave_dipole_pattern":
+                continue                    # (the pattern's rows are ADR 0002 row 28's mappings)
             v = [b for _k, b in (parse_tok(t) for t in ins.split(" "))]
             want = wave_rust(fn, v, MPFR_P, K)
             old = wave_toks([parse_tok(t) for t in outs.split(" ")])
@@ -1907,9 +1907,30 @@ def check_wave_data(root: Path) -> list:
     return []
 
 
+def wave_half_wave_port(theta):
+    """ADR 0002 row 28 (M2's range-edge Part, the user's answer of 2026-11-12): the pattern's numerator
+    cos((π/2)cos θ) as sin(π·sin²(θ/2)), or sin(π·cos²(θ/2)) where cos θ < 0, on correctly rounded sin and cos."""
+    P = MPFR_P
+    s = P["sin"](theta)
+    if abs(s) < 1e-15:
+        return okf(0.0)
+    c = P["cos"](theta)
+    h = 0.5 * theta
+    if c >= 0.0:
+        sh = P["sin"](h)
+        m = sh * sh
+    else:
+        ch = P["cos"](h)
+        m = ch * ch
+    f = fdiv(P["sin"](PI * m), s)
+    return okf(f * f)
+
+
 def wave_port(fn, v, K, consts):
     """The port's outputs for a wave row an ADR 0002 row changes, else None."""
     d, r, kh = consts
+    if fn == "wave::half_wave_dipole_pattern":
+        return 28, wave_half_wave_port(v[0])
     if fn in ("wave::poynting_vector", "wave::momentum_density"):
         if all(math.isfinite(x) for x in v[0:6]) and fv_governed("FieldVector::cross", v[0:6]) == 18:
             cr = [b for _k, b in fv_model("FieldVector::cross", v[0:6])]
@@ -1992,7 +2013,7 @@ def circuit_combo(xs, what, parallel, which):
     return okf(fdiv(1.0, s))
 
 
-def circuit_rust(fn, v, P):
+def circuit_rust(fn, v, P, expm1=False):
     """circuit.rs transcribed in its order of operations, its checks and error texts, on the primitives P; None for
     another name."""
     name = fn.split("::")[1]
@@ -2027,7 +2048,10 @@ def circuit_rust(fn, v, P):
         tau = r * c
         if abs(tau) < 1e-30:
             return okf(v0 if name.startswith("rc_charging") else 0.0)
-        e = P["exp"](fdiv(-tt, tau))
+        x = fdiv(-tt, tau)
+        if expm1 and name.startswith("rc_charging"):
+            return okf(v0 * -mpfr_ref.cr("expm1", x))   # ADR 0002 row 29: −expm1(x), correctly rounded
+        e = P["exp"](x)
         return okf(v0 * (1.0 - e) if name.startswith("rc_charging") else v0 * e)
     if name == "rl_time_constant":
         if abs(v[1]) < 1e-30:
@@ -2041,7 +2065,10 @@ def circuit_rust(fn, v, P):
         tau = fdiv(l, r)
         if abs(tau) < 1e-30:
             return okf(fdiv(a, r) if name.endswith("rise") else 0.0)
-        e = P["exp"](fdiv(-tt, tau))
+        x = fdiv(-tt, tau)
+        if expm1 and name.endswith("rise"):
+            return okf(fdiv(a, r) * -mpfr_ref.cr("expm1", x))
+        e = P["exp"](x)
         return okf(fdiv(a, r) * (1.0 - e) if name.endswith("rise") else a * e)
     if name in ("resonant_frequency", "resonant_angular_frequency"):
         e = circuit_lc(v[0], v[1])
@@ -2104,8 +2131,8 @@ def circuit_corrections(path: Path):
             if line.startswith("#"):
                 continue
             fn, cls, ins, outs, _note = line.split("\t")
-            if cls != "C":
-                continue
+            if cls != "C" or fn in ("circuit::rc_charging_voltage", "circuit::rl_current_rise"):
+                continue                    # (their rows are ADR 0002 row 29's mappings)
             v = circuit_vals([parse_tok(x) for x in ins.split(" ")])
             want = circuit_rust(fn, v, MPFR_P)
             old = wave_toks([parse_tok(x) for x in outs.split(" ")])
@@ -2119,6 +2146,8 @@ def circuit_corrections(path: Path):
 # ADR 0002 row 26 (M2 part 1c, rows 19 and 23's rule): resistance_from_geometry and parallel_plate_capacitance test
 # `A <= 0` and `d <= 0`, so a NaN area or separation passed as Ok(NaN); the port refuses unless it is positive.
 def circuit_port(fn, v):
+    if fn in ("circuit::rc_charging_voltage", "circuit::rl_current_rise"):
+        return 29, circuit_rust(fn, v, MPFR_P, expm1=True)
     if fn == "circuit::resistance_from_geometry" and math.isnan(v[2]):
         return 26, ip_err("cross-section area must be positive, got NaN")
     if fn == "circuit::parallel_plate_capacitance" and math.isnan(v[2]):

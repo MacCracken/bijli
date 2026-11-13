@@ -49,8 +49,8 @@
 | `fdtd/3d_step_30x30x30_cpml8` | 494.96 µs | pending (M6) | — | — |
 | `fdtd/nf2ff_2d_80x80_180` | 193.01 µs | pending (M5) | — | — |
 | `fdtd/find_eigenmodes_4096x256` | 2.12 ms | pending (M5) | — | — |
-| `circuit/rc_charging` | 0.50 ns | `circuit/rc_charging` | 131.00 ns | 264.0× |
-| `circuit/rl_current_rise` | 2.03 ns | `circuit/rl_current_rise` | 125.00 ns | 61.5× |
+| `circuit/rc_charging` | 0.50 ns | `circuit/rc_charging` | 70.00 ns | 141.0× |
+| `circuit/rl_current_rise` | 2.03 ns | `circuit/rl_current_rise` | 71.00 ns | 34.9× |
 | `circuit/rlc_impedance` | 1.53 ns | `circuit/rlc_impedance` | 17.00 ns | 11.1× |
 | `circuit/resonant_frequency` | 1.31 ns | `circuit/resonant_frequency` | 30.00 ns | 22.9× |
 | `circuit/resistance_parallel` | 7.09 ns | `circuit/resistance_parallel` | 34.00 ns | 4.8× |

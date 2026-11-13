@@ -91,6 +91,13 @@ def unary_args(name, rng, count):
         for k in range(-30, 31):
             xs += around(10.0 ** k)
         xs += [-rng.uniform(0.0, 10.0) for _ in range(500)]
+    elif name == "expm1":
+        xs += [rng.uniform(-40.0, 709.8) for _ in range(share)]
+        xs += [rng.uniform(-1.0, 1.0) * 2.0 ** -rng.randint(0, 60) for _ in range(share)]
+        xs += [rng.uniform(-1.0, 1.0) * 2.0 ** -rng.randint(60, 1074) for _ in range(share // 4)]
+        # The thresholds: the tiny shortcut, the small-|x| fast path's end, overflow, the −1 saturation.
+        for e in (2.0 ** -54, 2.0 ** -27, 2.0 ** -9, 0.5, 1.0, 709.78, 710.0, 36.04, 37.43, 38.0):
+            xs += around(e) + around(-e)
     elif name in ("tan", "tan_slow"):
         xs += [rng.uniform(-7.0, 7.0) for _ in range(share)]
         xs += [rng.uniform(-1e6, 1e6) for _ in range(share // 2)]
@@ -146,6 +153,7 @@ FUNCS = {
     "acos": (1, "acos"), "asin": (1, "asin"), "log10": (1, "log10"),
     "tan": (1, "tan"), "tan_slow": (1, "tan"), "ln": (1, "log"),
     "sinh": (1, "sinh"), "cosh": (1, "cosh"), "sinh_slow": (1, "sinh"), "cosh_slow": (1, "cosh"),
+    "expm1": (1, "expm1"),
 }
 
 

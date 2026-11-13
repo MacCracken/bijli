@@ -734,6 +734,19 @@ fn cyrius_tests(): i64 {
     var gam2: f64 = gam * gam;
     assert(is_ok(tg) == 1 && is_ok(tr) == 1 && gam2 == refl, "row 25: Γ² is R bit for bit");
 
+    test_group("cyrius_adr_row_28");
+    var u8: f64 = bj_half_wave_dipole_pattern(0.00000001);
+    var u12: f64 = bj_half_wave_dipole_pattern(0.000000000001);
+    var upi: f64 = bj_half_wave_dipole_pattern(3.1415926535);
+    var r8: f64 = (u8 - 0.00000000000000006168502750680849) / 0.00000000000000006168502750680849;
+    var r12: f64 = (u12 - 0.0000000000000000000000006168502750680849) / 0.0000000000000000000000006168502750680849;
+    var rpi: f64 = (upi - 0.00000000000000000000497355023894436) / 0.00000000000000000000497355023894436;
+    var a8: f64 = f64_abs(r8);
+    var a12: f64 = f64_abs(r12);
+    var api: f64 = f64_abs(rpi);
+    assert(a8 < 0.000000000000001 && a12 < 0.000000000000001 && api < 0.000000000000001,
+      "near both axes: [cos((π/2)cos θ)/sin θ]² to 1e-15 of 80-digit references (Rust's lost every digit)");
+
     test_group("cyrius_waveguide_modes_u32");
     var tm1, vm1 = bj_rectangular_waveguide_cutoff(1.0, 1.0, 0 - 1, 0, 1.0);
     assert(err_is(tm1, vm1, BJ_ERR_INVALID_PARAMETER, "invalid parameter: m and n must be u32s, got m=-1, n=0") == 1,

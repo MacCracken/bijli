@@ -21,6 +21,8 @@ ROOTS = [
     "_km_ux_from", "_km_ux_neg", "_km_ux_add", "_km_ux_sub", "_km_ux_mul", "_km_ux_div", "_km_ux_sqrt",
     "_km_ux_cmp", "_km_ux_le", "_km_ux_max", "_km_ux_is_positive", "_km_ux_normal", "_km_ux_round",
     "_km_ux_add_f64", "_km_ux_sub_f64", "_km_ux_mul_f64", "_km_ux_div_f64", "_km_ux_sqrt_f64",
+    # M2's range-edge Part (ADR 0002 row 29): the correctly rounded expm1 of the RC and RL transients.
+    "_km_cr_expm1",
     # Not reached from the above but tested by kimiya's groups that tests/crmath_kx.tcyr copies.
     "_km_bn_add", "_km_bn_sub", "_km_bn_mul_small", "_km_dd_div_cr", "_km_dd_mul", "_km_max",
 ]
@@ -30,7 +32,9 @@ ROOTS = [
 # atan2: src/crmath.cyr's correctly rounded atan2 is scale-free and no bijli formula needs an unbounded one); each
 # drop is an exact text replacement below, refused when kimiya's text changes.
 TESTS_FROM = "# ── binary64 with an unbounded exponent (M4e-2): ADR 0002 #20"
-TESTS_TO = "\nfn main() {"
+# The copy stops at kimiya's B10a group (e^x, e^x − 1 and 10^x with an unbounded exponent): bijli carries no
+# unbounded exp family, only the correctly rounded expm1 (M2's range-edge Part).
+TESTS_TO = "\n# ── e^x, e^x − 1 and 10^x with an unbounded exponent (the overflow audit's B10a)"
 TEST_EDITS = [
     ("    var f: f64 = _km_ux_atan2_f64(s1, e1, s2, e2);\n    return f;",
      "    var f: f64 = 0.0 / 0.0;                        # bijli: op 4 (atan2) is not copied\n    return f;"),

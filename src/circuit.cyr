@@ -2,10 +2,11 @@
 # the series RLC relations (port of rust-old/src/circuit.rs, M2 part 1c).
 #
 # SI units: ohms, farads, henries, volts, amperes, seconds. Every formula is Rust's in Rust's order: the golden rows
-# compare bit for bit (class A), and the transients take bijli's correctly rounded exp (src/crmath.cyr, class C). A
-# series sum is Rust's `Sum`, a left fold from −0.0. Rust's `&[f64]` is a pointer and a count. One of Rust's
-# inconsistencies is fixed (ADR 0002 row 26, rows 19 and 23's rule): bj_resistance_from_geometry and
-# bj_parallel_plate_capacitance refuse a NaN area or separation, which Rust's `<= 0` let through. A fallible function
+# compare bit for bit (class A), and the transients take bijli's correctly rounded exp and expm1 (class C). A
+# series sum is Rust's `Sum`, a left fold from −0.0. Rust's `&[f64]` is a pointer and a count. Two of Rust's faults are
+# fixed: bj_resistance_from_geometry and bj_parallel_plate_capacitance refuse a NaN area or separation, which Rust's
+# `<= 0` let through (ADR 0002 row 26, rows 19 and 23's rule), and the charging transients take 1 − e^(−t/τ) as
+# −expm1(−t/τ), with no cancellation (row 29, the user's answer of 2026-11-12). A fallible function
 # returns a value-form Result, the error in the last-error record (src/error.cyr). The impedance here is a magnitude,
 # so no time convention (src/complex.cyr) is involved.
 
@@ -214,7 +215,9 @@ public fn bj_rc_time_constant(resistance: f64, capacitance: f64): f64 {
     return tau;
 }
 
-# V(t) = V₀(1 − e^(−t/RC)); V₀ when |RC| < 1e-30 (an instant charge). Mirrors `circuit::rc_charging_voltage`.
+# V(t) = V₀(1 − e^(−t/RC)); V₀ when |RC| < 1e-30 (an instant charge). 1 − e^(−t/RC) is −expm1(−t/RC), correctly
+# rounded (ADR 0002 row 29: Rust's subtraction cancelled for t ≪ RC, and gave 0 below t/RC ≈ 1.1e-16). Mirrors
+# `circuit::rc_charging_voltage`.
 #must_use
 #pure
 public fn bj_rc_charging_voltage(v0: f64, resistance: f64, capacitance: f64, t: f64): f64 {
@@ -222,8 +225,8 @@ public fn bj_rc_charging_voltage(v0: f64, resistance: f64, capacitance: f64, t: 
     var a: f64 = f64_abs(tau);
     if (a < 0.000000000000000000000000000001) { return v0; }
     var x: f64 = -t / tau;
-    var e: f64 = _bj_exp(x);
-    var w: f64 = 1.0 - e;
+    var em1: f64 = _bj_expm1(x);
+    var w: f64 = -em1;
     var v: f64 = v0 * w;
     return v;
 }
@@ -251,8 +254,8 @@ public fn bj_rl_time_constant(inductance: f64, resistance: f64): Result {
     return Ok(tau);
 }
 
-# I(t) = (V/R)(1 − e^(−tR/L)); V/R when |L/R| < 1e-30 (an instant rise). DivisionByZero when |R| < 1e-30. Mirrors
-# `circuit::rl_current_rise`.
+# I(t) = (V/R)(1 − e^(−tR/L)); V/R when |L/R| < 1e-30 (an instant rise), 1 − e^(−tR/L) as −expm1(−tR/L) (ADR 0002
+# row 29). DivisionByZero when |R| < 1e-30. Mirrors `circuit::rl_current_rise`.
 public fn bj_rl_current_rise(voltage: f64, resistance: f64, inductance: f64, t: f64): Result {
     var a: f64 = f64_abs(resistance);
     if (a < 0.000000000000000000000000000001) {
@@ -263,8 +266,8 @@ public fn bj_rl_current_rise(voltage: f64, resistance: f64, inductance: f64, t: 
     var at: f64 = f64_abs(tau);
     if (at < 0.000000000000000000000000000001) { return Ok(i_max); }
     var x: f64 = -t / tau;
-    var e: f64 = _bj_exp(x);
-    var w: f64 = 1.0 - e;
+    var em1: f64 = _bj_expm1(x);
+    var w: f64 = -em1;
     var i: f64 = i_max * w;
     return Ok(i);
 }
