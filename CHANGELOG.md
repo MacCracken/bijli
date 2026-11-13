@@ -237,6 +237,15 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
 - **circuit** (ADR 0002 row 29, M2 part 2a-1): `rc_charging_voltage` and `rl_current_rise` cancelled in 1 − e^(−t/τ)
   (8e-8 relative at t/τ = 10^-10, 0 below 1.1·10^-16); they now take −expm1(−t/τ), kimiya's correctly rounded expm1
   (`src/crmath_kx.cyr`, with its exp tables in `src/crmath_k_data.cyr`; `cr_verify.py` checks it against MPFR).
+- **material** (ADR 0002 row 13 amended, M2 part 2b-1, the user's "round once" decision of 2026-11-12):
+  `dielectric_energy_density`, `magnetic_energy_density_material`, `displacement_field`, `b_field_from_h`,
+  `h_field_from_b` (part by part) and `Material`'s `refractive_index`, `impedance`, `wave_speed` and lossless optical
+  constants rounded two to four times, an ulp off on many inputs, and over- or underflowed where the value is
+  representable (`Material::new(1e-200, 1e-200, 0).wave_speed()` was ∞ for 3.0e208, its n of 1e200 each ∞). They are
+  now correctly rounded for finite operands, and `refractive_index` of opposite-signed ε_r and μ_r is NaN (Rust's
+  product could underflow to −0). The Material-based `reflectance_at_interface`, `reflectance_normal_materials` and
+  `material_reflection_coefficient` take n and η rounded once. The cost: `material/displacement_field` 23 → 231 ns,
+  `material/h_field_from_b` 22 → 256 ns, `wave/reflectance_at_interface` 115 → 478 ns (`port-parity.md` §32).
 - **relativity** (ADR 0002 row 30, M2 part 2a-2, the user's answer of 2026-11-12): the Lorentz factor cancelled in
   1 − v²/c² near c (a relative error of about 2^-53/(1 − β²): 10 % one ulp below c) and tested validity on that rounded
   β², refusing some vectors just inside c. `lorentz_factor`, the field transforms, the relativistic Larmor power and

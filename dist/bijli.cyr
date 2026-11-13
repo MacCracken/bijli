@@ -14755,11 +14755,16 @@ public fn bj_larmor_radius(mass: f64, v_perp: f64, charge: f64, b_magnitude: f64
 # and currents, Clausius–Mossotti, the Curie laws, and the unified BjMaterial (port of rust-old/src/material.rs, M2
 # part 1a).
 #
-# SI units: C/m², A/m, F/m, H/m. Every formula is Rust's in Rust's order (the golden rows compare bit for bit, class A).
-# The bound surface charge and current are BjFieldVector's dot and cross, so their range edges follow ADR 0002 row 18
-# (src/field.cyr). Three of Rust's inconsistencies are fixed (ADR 0002, the user's answers of 2026-11-12): the Curie
-# laws refuse a NaN temperature (row 19), BjMaterial.wave_speed validates as impedance does (row 20), and
-# bj_classify_magnetic refuses a NaN susceptibility (row 21). A fallible function returns a value-form Result with its
+# SI units: C/m², A/m, F/m, H/m. Every formula is Rust's in Rust's order (the golden rows compare bit for bit, class A),
+# but for the products, quotients and roots of inputs and constants, which are rounded once (ADR 0002 row 13, M2 part
+# 2b-1): the dielectric and magnetic energy densities, D = ε_r·ε₀·E, B = μ_r·μ₀·H and H = B/(μ_r·μ₀) part by part, and
+# BjMaterial's refractive index, impedance, wave speed and lossless optical constants (src/crmath_kx.cyr's monomials,
+# src/crmath_mono.cyr's √ of one). A non-finite operand keeps Rust's chain; the formulas with a difference inside
+# (polarization, magnetization, Clausius–Mossotti, Curie–Weiss) are Rust's. The bound surface charge and current are
+# BjFieldVector's dot and cross, so their range edges follow ADR 0002 row 18 (src/field.cyr). Three of Rust's
+# inconsistencies are fixed (ADR 0002, the user's answers of 2026-11-12): the Curie laws refuse a NaN temperature (row
+# 19), BjMaterial.wave_speed validates as impedance does (row 20), and bj_classify_magnetic refuses a NaN
+# susceptibility (row 21). A fallible function returns a value-form Result with its
 # payload, the error in the last-error record (src/error.cyr); a `Result<FieldVector>` writes through an out pointer.
 # No harmonic quantity appears here, so no time convention (src/complex.cyr) is involved.
 
@@ -14808,13 +14813,44 @@ public fn bj_polarization(relative_permittivity: f64, electric_field: BjFieldVec
     return p;
 }
 
-# D = ε_r·ε₀·E (C/m²). Mirrors `material::displacement_field`.
+# x·c·w (mode 0) or w/(x·c) (mode 1), correctly rounded for a finite w (ADR 0002 row 13); Rust's w·k for a non-finite
+# one, k being Rust's rounded scale factor (x·c, or 1/(x·c)). x is finite and c a constant.
+#must_use
+fn _bj_mat_part(x: f64, c: f64, w: f64, k: f64, mode): f64 {
+    if (_bj_is_finite(w) == 0) {
+        var r: f64 = w * k;
+        return r;
+    }
+    if (mode == 0) {
+        var a: f64 = _bj_k_cr_mul3(x, c, w);
+        return a;
+    }
+    var b: f64 = _bj_k_cr_div2(w, x, c);
+    return b;
+}
+
+# v scaled part by part as _bj_mat_part (x finite): x·c·v (mode 0) or v/(x·c) (mode 1), k Rust's scale factor.
+#must_use
+fn _bj_mat_scale(x: f64, c: f64, v: BjFieldVector, k: f64, mode): BjFieldVector {
+    var px: f64 = _bj_mat_part(x, c, v.x, k, mode);
+    var py: f64 = _bj_mat_part(x, c, v.y, k, mode);
+    var pz: f64 = _bj_mat_part(x, c, v.z, k, mode);
+    var r: BjFieldVector = BjFieldVector_new(px, py, pz);
+    return r;
+}
+
+# D = ε_r·ε₀·E (C/m²), each part correctly rounded (ADR 0002 row 13; a non-finite ε_r keeps Rust's E·(ε_r·ε₀), and a
+# non-finite part its own). Mirrors `material::displacement_field`.
 #must_use
 #pure
 public fn bj_displacement_field(relative_permittivity: f64, electric_field: BjFieldVector): BjFieldVector {
     var k: f64 = relative_permittivity * BJ_EPSILON_0;
-    var d: BjFieldVector = electric_field.scale(k);
-    return d;
+    if (_bj_is_finite(relative_permittivity) == 0) {
+        var d: BjFieldVector = electric_field.scale(k);
+        return d;
+    }
+    var r: BjFieldVector = _bj_mat_scale(relative_permittivity, BJ_EPSILON_0, electric_field, k, 0);
+    return r;
 }
 
 # σ_b = P·n̂ (C/m²), n̂ the outward normal: BjFieldVector's dot (ADR 0002 row 18 at a range edge). Mirrors
@@ -14835,12 +14871,17 @@ public fn bj_bound_volume_charge(dp_dx: f64, dp_dy: f64, dp_dz: f64): f64 {
     return r;
 }
 
-# u = ε_r·ε₀·E²/2 (J/m³), as Rust's 0.5·ε_r·ε₀·E·E. Mirrors `material::dielectric_energy_density`.
+# u = ε_r·ε₀·E²/2 (J/m³), correctly rounded (ADR 0002 row 13; a non-finite ε_r or E keeps Rust's 0.5·ε_r·ε₀·E·E).
+# Mirrors `material::dielectric_energy_density`.
 #must_use
 #pure
 public fn bj_dielectric_energy_density(relative_permittivity: f64, e_magnitude: f64): f64 {
-    var u: f64 = 0.5 * relative_permittivity * BJ_EPSILON_0 * e_magnitude * e_magnitude;
-    return u;
+    if (_bj_is_finite(relative_permittivity) == 0 || _bj_is_finite(e_magnitude) == 0) {
+        var u: f64 = 0.5 * relative_permittivity * BJ_EPSILON_0 * e_magnitude * e_magnitude;
+        return u;
+    }
+    var cr: f64 = _bj_k_cr_mul5(0.5, relative_permittivity, BJ_EPSILON_0, e_magnitude, e_magnitude);
+    return cr;
 }
 
 # ε_r = (1 + 2X)/(1 − X) with X = Nα/(3ε₀), the Clausius–Mossotti relation, for a molecular polarizability α (F·m²)
@@ -14907,8 +14948,9 @@ public fn bj_magnetization(relative_permeability: f64, h_field: BjFieldVector): 
     return m;
 }
 
-# H = B/(μ_r·μ₀) (A/m), into out. DivisionByZero when |μ_r| < 1e-30 (a NaN μ_r passes, as Rust's test), out
-# untouched. Mirrors `material::h_field_from_b`.
+# H = B/(μ_r·μ₀) (A/m), into out, each part correctly rounded (ADR 0002 row 13; a non-finite μ_r keeps Rust's
+# B·(1/(μ_r·μ₀)), and a non-finite part its own). DivisionByZero when |μ_r| < 1e-30 (a NaN μ_r passes, as Rust's
+# test), out untouched. Mirrors `material::h_field_from_b`.
 public fn bj_h_field_from_b(relative_permeability: f64, b_field: BjFieldVector, out: *BjFieldVector): Result {
     var a: f64 = f64_abs(relative_permeability);
     if (a < 0.000000000000000000000000000001) {
@@ -14917,22 +14959,29 @@ public fn bj_h_field_from_b(relative_permeability: f64, b_field: BjFieldVector, 
     var mu: f64 = relative_permeability * BJ_MU_0;
     var k: f64 = 1.0 / mu;
     var h: BjFieldVector = b_field.scale(k);
+    if (_bj_is_finite(relative_permeability) == 1) { h = _bj_mat_scale(relative_permeability, BJ_MU_0, b_field, k, 1); }
     out.x = h.x;
     out.y = h.y;
     out.z = h.z;
     return Ok(0);
 }
 
-# B = μ_r·μ₀·H (T). Mirrors `material::b_field_from_h`.
+# B = μ_r·μ₀·H (T), each part correctly rounded (ADR 0002 row 13; a non-finite μ_r keeps Rust's H·(μ_r·μ₀), and a
+# non-finite part its own). Mirrors `material::b_field_from_h`.
 #must_use
 #pure
 public fn bj_b_field_from_h(relative_permeability: f64, h_field: BjFieldVector): BjFieldVector {
     var k: f64 = relative_permeability * BJ_MU_0;
-    var b: BjFieldVector = h_field.scale(k);
-    return b;
+    if (_bj_is_finite(relative_permeability) == 0) {
+        var b: BjFieldVector = h_field.scale(k);
+        return b;
+    }
+    var r: BjFieldVector = _bj_mat_scale(relative_permeability, BJ_MU_0, h_field, k, 0);
+    return r;
 }
 
-# u = B²/(2μ) (J/m³), μ = μ_r·μ₀. DivisionByZero when |μ| < 1e-30 (a NaN passes, as Rust's test). Mirrors
+# u = B²/(2μ) (J/m³), μ = μ_r·μ₀, correctly rounded (ADR 0002 row 13; a non-finite μ_r or B keeps Rust's B·B/(2μ)).
+# DivisionByZero when the rounded |μ_r·μ₀| < 1e-30 (a NaN passes, as Rust's test). Mirrors
 # `material::magnetic_energy_density_material`.
 public fn bj_magnetic_energy_density_material(relative_permeability: f64, b_magnitude: f64): Result {
     var mu: f64 = relative_permeability * BJ_MU_0;
@@ -14940,10 +14989,15 @@ public fn bj_magnetic_energy_density_material(relative_permeability: f64, b_magn
     if (a < 0.000000000000000000000000000001) {
         return Err(_bj_err_division_by_zero("permeability cannot be zero for energy density"));
     }
-    var b2: f64 = b_magnitude * b_magnitude;
-    var mu2: f64 = 2.0 * mu;
-    var u: f64 = b2 / mu2;
-    return Ok(u);
+    if (_bj_is_finite(relative_permeability) == 0 || _bj_is_finite(b_magnitude) == 0) {
+        var b2: f64 = b_magnitude * b_magnitude;
+        var mu2: f64 = 2.0 * mu;
+        var u: f64 = b2 / mu2;
+        return Ok(u);
+    }
+    var two_mu: f64 = 2.0 * BJ_MU_0;
+    var cr: f64 = _bj_k_cr_mul2_div2(b_magnitude, b_magnitude, relative_permeability, two_mu);
+    return Ok(cr);
 }
 
 # K_b = M × n̂ (A/m), n̂ the outward normal: BjFieldVector's cross (ADR 0002 row 18 at a range edge). Mirrors
@@ -15051,9 +15105,10 @@ public fn BjMaterial_default(): BjMaterial {
 }
 
 # The lossless optical constants of m into out: n = √(ε_r·μ_r) in out[0] and the relative impedance η/η₀ = √(μ_r/ε_r)
-# in out[1]. InvalidPermittivity, then InvalidPermeability, unless ε_r, μ_r are positive and finite; InvalidParameter
-# for σ ≠ 0 (a conductor's index depends on frequency). bijli-internal, for the Fresnel functions (Rust's
-# `pub(crate) Material::lossless_optical_constants`); public only so that src/wave.cyr can call it in the tests' build.
+# in out[1], each correctly rounded (ADR 0002 row 13). InvalidPermittivity, then InvalidPermeability, unless ε_r, μ_r
+# are positive and finite; InvalidParameter for σ ≠ 0 (a conductor's index depends on frequency). bijli-internal, for
+# the Fresnel functions (Rust's `pub(crate) Material::lossless_optical_constants`); public only so that src/wave.cyr
+# can call it in the tests' build.
 public fn _bj_material_lossless_optical_constants(m: BjMaterial, out: *f64): Result {
     var e: f64 = m.eps_r;
     var u: f64 = m.mu_r;
@@ -15067,23 +15122,37 @@ public fn _bj_material_lossless_optical_constants(m: BjMaterial, out: *f64): Res
         _bj_tx_cstr(t, " S/m needs a frequency-dependent complex refractive index");
         return Err(BJ_ERR_INVALID_PARAMETER);
     }
-    var eu: f64 = e * u;
-    var n: f64 = f64_sqrt(eu);
-    var q: f64 = u / e;
-    var eta: f64 = f64_sqrt(q);
+    var num: f64[2];
+    num[0] = e;
+    num[1] = u;
+    var n: f64 = _bj_cr_sqrt_mono(&num, 2, 0, 0);
+    var eta: f64 = _bj_k_cr_sqrt_div(u, e);
     out[0] = n;
     out[1] = eta;
     return Ok(0);
 }
 
 impl BjMaterial {
-    # n = √(ε_r·μ_r), the lossless refractive index. Mirrors `Material::refractive_index`.
+    # n = √(ε_r·μ_r), the lossless refractive index, correctly rounded for nonzero finite ε_r and μ_r (ADR 0002 row 13):
+    # NaN when their signs differ, the exact product being negative (Rust's −0 where it underflows). A zero or
+    # non-finite operand keeps Rust's √(ε_r·μ_r). Mirrors `Material::refractive_index`.
     #must_use
     #pure
     public fn refractive_index(self): f64 {
-        var p: f64 = self.eps_r * self.mu_r;
+        var e: f64 = self.eps_r;
+        var u: f64 = self.mu_r;
+        var p: f64 = e * u;
         var n: f64 = f64_sqrt(p);
-        return n;
+        if (_bj_is_finite(e) == 0 || _bj_is_finite(u) == 0 || e == 0.0 || u == 0.0) { return n; }
+        if ((e < 0.0) != (u < 0.0)) {
+            var nan: f64 = _bj_k_nan();
+            return nan;
+        }
+        var num: f64[2];
+        num[0] = f64_abs(e);
+        num[1] = f64_abs(u);
+        var cr: f64 = _bj_cr_sqrt_mono(&num, 2, 0, 0);
+        return cr;
     }
 
     # ε = ε_r·ε₀ (F/m). Mirrors `Material::permittivity`.
@@ -15102,31 +15171,38 @@ impl BjMaterial {
         return u;
     }
 
-    # η = √(μ/ε) (Ω), the lossless wave impedance; σ is ignored. InvalidPermittivity, then InvalidPermeability, unless
-    # ε_r, μ_r are positive and finite. Mirrors `Material::impedance`.
+    # η = √(μ/ε) (Ω), the lossless wave impedance, correctly rounded (ADR 0002 row 13); σ is ignored.
+    # InvalidPermittivity, then InvalidPermeability, unless ε_r, μ_r are positive and finite. Mirrors
+    # `Material::impedance`.
     public fn impedance(self): Result {
         var e: f64 = self.eps_r;
         var u: f64 = self.mu_r;
         if (!(_bj_is_finite(e) == 1 && e > 0.0)) { return Err(_bj_err_invalid_permittivity(e)); }
         if (!(_bj_is_finite(u) == 1 && u > 0.0)) { return Err(_bj_err_invalid_permeability(u)); }
-        var num: f64 = u * BJ_MU_0;
-        var den: f64 = e * BJ_EPSILON_0;
-        var q: f64 = num / den;
-        var z: f64 = f64_sqrt(q);
+        var num: f64[2];
+        var den: f64[2];
+        num[0] = u;
+        num[1] = BJ_MU_0;
+        den[0] = e;
+        den[1] = BJ_EPSILON_0;
+        var z: f64 = _bj_cr_sqrt_mono(&num, 2, &den, 2);
         return Ok(z);
     }
 
-    # v = 1/√(εμ) (m/s), as Rust's 1/√(ε_r·ε₀·μ_r·μ₀). InvalidPermittivity, then InvalidPermeability, unless ε_r, μ_r
-    # are positive and finite: impedance's validation (ADR 0002 row 20; Rust refused a non-positive or NaN value as
-    # InvalidParameter and accepted ∞). Mirrors `Material::wave_speed`.
+    # v = 1/√(ε_r·ε₀·μ_r·μ₀) (m/s), correctly rounded (ADR 0002 row 13). InvalidPermittivity, then
+    # InvalidPermeability, unless ε_r, μ_r are positive and finite: impedance's validation (ADR 0002 row 20; Rust
+    # refused a non-positive or NaN value as InvalidParameter and accepted ∞). Mirrors `Material::wave_speed`.
     public fn wave_speed(self): Result {
         var e: f64 = self.eps_r;
         var u: f64 = self.mu_r;
         if (!(_bj_is_finite(e) == 1 && e > 0.0)) { return Err(_bj_err_invalid_permittivity(e)); }
         if (!(_bj_is_finite(u) == 1 && u > 0.0)) { return Err(_bj_err_invalid_permeability(u)); }
-        var p: f64 = e * BJ_EPSILON_0 * u * BJ_MU_0;
-        var r: f64 = f64_sqrt(p);
-        var v: f64 = 1.0 / r;
+        var den: f64[4];
+        den[0] = e;
+        den[1] = BJ_EPSILON_0;
+        den[2] = u;
+        den[3] = BJ_MU_0;
+        var v: f64 = _bj_cr_sqrt_mono(0, 0, &den, 4);
         return Ok(v);
     }
 

@@ -1713,3 +1713,44 @@ dipole pattern and the transients, 2a-2 a correctly rounded γ), then M1's three
   measured, 0 pending, 21,478 accepted (ADR 01: 8,997; ADR 0002: 12,481)** over 420,817 rows; **all 276 digests
   equal**. Seven changed: `lorentz_factor`, `lorentz_transform_x`, `lorentz_transform_fields`, `FourVector::boost_x`,
   `relativistic_larmor_power`, `lienard_wiechert_e` and `lienard_wiechert_fields`, row 30's.
+
+## 32. M2 part 2b-1: material rounded once (2026-11-12)
+
+2b applies M1's round-once rule (ADR 0002 row 13) to M2's candidates (§25–§29), one module at a time; material first.
+
+- **ADR 0002 row 13, amended**: material's single products, quotients and roots of inputs and constants are correctly
+  rounded for finite operands, on kimiya's monomials (`src/crmath_kx.cyr`) and bijli's √ of one
+  (`src/crmath_mono.cyr`):
+  - `bj_dielectric_energy_density`, ε_r·ε₀·E²/2 (`mul5`, with 0.5 one of its factors: one bit of the exact path's
+    253);
+  - `bj_magnetic_energy_density_material`, B²/(2μ_rμ₀) (`mul2_div2` on 2μ₀, an exact doubling), after Rust's test of
+    the rounded |μ_r·μ₀| < 1e-30 (a threshold, 2c's);
+  - `bj_displacement_field`, `bj_b_field_from_h` and `bj_h_field_from_b`, part by part: ε_r·ε₀·Eᵢ and μ_r·μ₀·Hᵢ
+    (`mul3`), Bᵢ/(μ_r·μ₀) (`div2`). A non-finite ε_r or μ_r keeps Rust's whole chain, and a non-finite part its own
+    product by Rust's factor;
+  - `BjMaterial`'s `refractive_index` (√(ε_rμ_r)), `impedance` (√(μ_rμ₀/(ε_rε₀))), `wave_speed`
+    (1/√(ε_rε₀μ_rμ₀)) and the lossless optical constants n = √(ε_rμ_r) and η = √(μ_r/ε_r) (kimiya's √(x/y)), which
+    the Material-based Fresnel and reflectance functions use. `refractive_index` takes any operands: a zero or
+    non-finite one keeps Rust's √(ε_r·μ_r), both negative give √(|ε_r||μ_r|), and opposite signs give NaN, the exact
+    product being negative (Rust's −0 where it underflows).
+  - Out of row 13's scope, as M1's precedent (§17: a sum inside gets the edge treatment): `polarization`
+    ((ε_r − 1)·ε₀·E), `magnetization` ((μ_r − 1)·H), Clausius–Mossotti and Curie–Weiss.
+- **Mappings** (`validate.py`'s `material_port13`, from exact values): `material.adr.tsv` maps 3,414 row-13 rows
+  (dielectric energy 903, magnetic energy 690, wave speed 525, impedance 441, H 209, the index 189, B 168, D 166, the
+  reflectance 123) and `wave.adr.tsv` 509: `reflectance_at_interface` 493, `reflectance_normal_materials` 14 and
+  `material_reflection_coefficient`'s 2 that only the rounding moves; its 74 row-25 rows keep row 25 (the relative η
+  alone moves them), now with η rounded once. 3,931 rows failed before the mappings existed, and exactly those are
+  mapped. The harness passed every one on its first run.
+- **Tests**: `cyrius_round_once (ADR 0002 row 13)` in `tests/material.tcyr` (11 assertions) against exact
+  references: the energy densities at 1e-300 and 1e200 (Rust: …397905e-12, ∞), D and B with a subnormal ε_r·ε₀ or
+  μ_r (a NaN and an ∞ part kept), H one ulp off in Rust, n = 1e200 and DBL_MAX (Rust: ∞), the NaN of opposite signs,
+  v = 2.997924580000065e208 at 1e-200 (Rust: ∞), η = 3.77e-298 (Rust: 0); and in `tests/wave.tcyr`
+  `reflectance_at_interface` into a DBL_MAX/DBL_MAX material, R = 0 where Rust's n₂ = ∞ was an error.
+- **Benchmarks** (an interleaved A/B against HEAD, three rounds at load 1.6–2.0, the lowest of each):
+  `material/displacement_field` 23 → 231 ns and `material/h_field_from_b` 22 → 256 ns (three correctly rounded parts
+  each, about 70 ns a monomial), `wave/reflectance_at_interface` 115 → 478 ns (two materials' n and η); the rest
+  unchanged. **Finding**: the three parts share x·c, so one exact TwoProduct and a rounding test per part could serve
+  them, but that is a new proof, not taken here.
+- **Result, every target** (x86_64 ELF, x86_64 PE, aarch64): **13 modules, 0 failing; 395,416 ok, 0 failed, 0
+  measured, 0 pending, 25,401 accepted (ADR 01: 8,997; ADR 0002: 16,404)** over 420,817 rows; **all 276 digests
+  equal**. Twelve changed: the nine above and wave's three Material-based functions.

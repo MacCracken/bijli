@@ -34,7 +34,7 @@
 | `wave/snell_refraction` | 1.75 ns | `wave/snell_refraction` | 284.00 ns | 162.6× |
 | `wave/fresnel_rs_direct` | 1.73 ns | `wave/fresnel_rs_direct` | 58.00 ns | 33.6× |
 | `wave/reflectance_unpolarized` | 1.24 ns | `wave/reflectance_unpolarized` | 68.00 ns | 54.9× |
-| `wave/reflectance_at_interface` | 7.78 ns | `wave/reflectance_at_interface` | 117.00 ns | 15.0× |
+| `wave/reflectance_at_interface` | 7.78 ns | `wave/reflectance_at_interface` | 478.00 ns | 61.4× |
 | `wave/schlick_reflectance` | 1.24 ns | `wave/schlick_reflectance` | 44.00 ns | 35.6× |
 | `wave/half_wave_dipole_pattern` | 0.50 ns | `wave/half_wave_dipole_pattern` | 483.00 ns | 962.5× |
 | `wave/rect_waveguide_cutoff` | 1.24 ns | `wave/rect_waveguide_cutoff` | 47.00 ns | 38.0× |
@@ -55,8 +55,8 @@
 | `circuit/resonant_frequency` | 1.31 ns | `circuit/resonant_frequency` | 30.00 ns | 22.9× |
 | `circuit/resistance_parallel` | 7.09 ns | `circuit/resistance_parallel` | 34.00 ns | 4.8× |
 | `material/polarization` | 1.00 ns | `material/polarization` | 25.00 ns | 25.1× |
-| `material/displacement_field` | 0.99 ns | `material/displacement_field` | 23.00 ns | 23.2× |
-| `material/h_field_from_b` | 5.51 ns | `material/h_field_from_b` | 22.00 ns | 4.0× |
+| `material/displacement_field` | 0.99 ns | `material/displacement_field` | 231.00 ns | 233.3× |
+| `material/h_field_from_b` | 5.51 ns | `material/h_field_from_b` | 256.00 ns | 46.5× |
 | `material/clausius_mossotti` | 1.24 ns | `material/clausius_mossotti` | 26.00 ns | 20.9× |
 | `material/curie_weiss` | 1.24 ns | `material/curie_weiss` | 8.00 ns | 6.5× |
 | `relativity/lorentz_factor` | 1.24 ns | `relativity/lorentz_factor` | 153.00 ns | 123.4× |

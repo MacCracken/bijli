@@ -1441,6 +1441,78 @@ def validate_material(root: Path, path: Path) -> list:
 # Rust's (and row 18 through FieldVector's dot and cross). Row 19: the Curie laws refuse a NaN temperature (`!(T > 0)`, `!(T − T_c > 0)`) with their own texts. Row 20:
 # Material::wave_speed validates as Material::impedance does (ε_r, then μ_r, positive and finite; InvalidPermittivity /
 # InvalidPermeability with the value). Row 21: classify_magnetic returns a Result, InvalidParameter for NaN.
+# Row 13 (M2 part 2b-1, the user's "round once" decision of 2026-11-12): material.rs's products, quotients and roots of
+# inputs and constants, correctly rounded where the operands are finite (exact values: Fraction, an integer square
+# root); a non-finite operand keeps Rust's chain, and so does every error. D, B and H part by part.
+def mat_cr_part(x, c, w, k, mode):
+    """x·c·w (mode 0) or w/(x·c) (mode 1) rounded once for a finite w; Rust's w·k otherwise."""
+    if not math.isfinite(w):
+        return w * k
+    return rn_mono([x, c, w], []) if mode == 0 else rn_mono([w], [x, c])
+
+
+def mat_lossless_port(e, m, s):
+    """The port's lossless optical constants: (error tokens, None) or (None, (n, η)), n and η correctly rounded."""
+    err, _l = wave_lossless(e, m, s)
+    if err:
+        return err, None
+    F = Fraction
+    return None, (rn_sqrt(F(e) * F(m)), rn_sqrt(F(m) / F(e)))
+
+
+def mat_reflectance(v, lossless):
+    """Material::try_reflectance_at on a lossless-constants function."""
+    r1, l1 = lossless(*v[0:3])
+    if r1:
+        return r1
+    r2, l2 = lossless(*v[3:6])
+    if r2:
+        return r2
+    eta1, eta2 = l1[1], l2[1]
+    r = fdiv(eta2 - eta1, eta2 + eta1)
+    return [("f", r * r)]
+
+
+def material_port13(fn, v, EPS0, MU0):
+    """Row 13's port outputs for a material row, or None where Rust's result stands."""
+    F = Fraction
+    if fn in ("material::displacement_field", "material::b_field_from_h", "material::h_field_from_b"):
+        x, w = v[0], v[1:4]
+        if not math.isfinite(x):
+            return None
+        if fn == "material::h_field_from_b":
+            if abs(x) < 1e-30:
+                return None
+            k, c, mode = fdiv(1.0, x * MU0), MU0, 1
+        else:
+            c = EPS0 if fn == "material::displacement_field" else MU0
+            k, mode = x * c, 0
+        return ok3(tuple(mat_cr_part(x, c, w[i], k, mode) for i in range(3)))
+    if fn == "material::dielectric_energy_density":
+        return okf(rn_mono([0.5, v[0], EPS0, v[1], v[1]], [])) if _fin(v[0], v[1]) else None
+    if fn == "material::magnetic_energy_density_material":
+        if abs(v[0] * MU0) < 1e-30 or not _fin(v[0], v[1]):
+            return None
+        return okf(rn_mono([v[1], v[1]], [v[0], 2.0 * MU0]))
+    if fn == "Material::refractive_index":
+        e, m = v[0], v[1]
+        if not _fin(e, m) or e == 0.0 or m == 0.0:
+            return None
+        if (e < 0.0) != (m < 0.0):
+            return okf(math.nan)
+        return okf(rn_sqrt(F(abs(e)) * F(abs(m))))
+    if fn == "Material::impedance" or fn == "Material::wave_speed":
+        e, m = v[0], v[1]
+        if not (math.isfinite(e) and e > 0.0 and math.isfinite(m) and m > 0.0):
+            return None
+        if fn == "Material::impedance":
+            return okf(rn_sqrt(F(m) * F(MU0) / (F(e) * F(EPS0))))
+        return okf(rn_sqrt(1 / (F(e) * F(EPS0) * F(m) * F(MU0))))
+    if fn == "Material::try_reflectance_at":
+        return mat_reflectance(v, mat_lossless_port)
+    return None
+
+
 def material_port(fn, v, EPS0, MU0):
     """The port's outputs for a material row an ADR 0002 row changes, else None."""
     if fn == "material::curie_law" and math.isnan(v[1]):
@@ -1454,7 +1526,6 @@ def material_port(fn, v, EPS0, MU0):
             return 20, [("E", "InvalidPermittivity"), ("s", f"invalid permittivity: {rust_display(e)} (must be > 0)")]
         if not (math.isfinite(m) and m > 0.0):
             return 20, [("E", "InvalidPermeability"), ("s", f"invalid permeability: {rust_display(m)} (must be > 0)")]
-        return None
     if fn == "material::classify_magnetic" and math.isnan(v[0]):
         return 21, ip_err("magnetic susceptibility must not be NaN, got NaN")
     if fn in ("material::bound_surface_charge", "material::bound_surface_current"):
@@ -1462,7 +1533,9 @@ def material_port(fn, v, EPS0, MU0):
         g = "FieldVector::dot" if fn.endswith("charge") else "FieldVector::cross"
         if all(math.isfinite(x) for x in v[0:6]) and fv_governed(g, v[0:6]) == 18:
             return 18, fv_model(g, v[0:6])
-    return None
+        return None
+    m13 = material_port13(fn, v, EPS0, MU0)
+    return None if m13 is None else (13, m13)
 
 
 def material_adr_rows(root: Path, path: Path) -> list:
@@ -1510,6 +1583,26 @@ def wave_lossless(e, m, s):
         return ip_err(f"Fresnel coefficients from Material are lossless-only; conductivity σ = {rust_display(s)} "
                       "S/m needs a frequency-dependent complex refractive index"), None
     return None, (fsqrt(e * m), fsqrt(fdiv(m, e)))
+
+
+def wave_interface(v, lossless):
+    """reflectance_at_interface on a lossless-constants function (Rust's, or the port's rounded once)."""
+    e1, l1 = lossless(*v[0:3])
+    if e1:
+        return e1
+    e2, l2 = lossless(*v[3:6])
+    if e2:
+        return e2
+    (n1, eta1), (n2, eta2) = l1, l2
+    e, ci, ct = wave_cosines(n1, n2, v[6])
+    if e:
+        return e
+    if ct is None:
+        return okf(1.0)
+    if n1 == n2:
+        g = fdiv(eta2 - eta1, eta2 + eta1)
+        return okf(g * g)
+    return wave_unpolarized(eta2, eta1, ci, ct)
 
 
 def wave_cosines(n1, n2, c):
@@ -1698,22 +1791,7 @@ def wave_rust(fn, v, P, K):
     if direct is not None:
         return direct
     if fn == "wave::reflectance_at_interface":
-        e1, l1 = wave_lossless(*v[0:3])
-        if e1:
-            return e1
-        e2, l2 = wave_lossless(*v[3:6])
-        if e2:
-            return e2
-        (n1, eta1), (n2, eta2) = l1, l2
-        e, ci, ct = wave_cosines(n1, n2, v[6])
-        if e:
-            return e
-        if ct is None:
-            return okf(1.0)
-        if n1 == n2:
-            g = fdiv(eta2 - eta1, eta2 + eta1)
-            return okf(g * g)
-        return wave_unpolarized(eta2, eta1, ci, ct)
+        return wave_interface(v, wave_lossless)
     if fn == "wave::reflectance_normal_materials":
         return material_rust("Material::try_reflectance_at", v, EPS0, MU0)
     if fn == "wave::material_reflection_coefficient":
@@ -1955,11 +2033,21 @@ def wave_port(fn, v, K, consts):
             e, _l = wave_lossless(*part)
             if e:
                 return None
-        eta1, eta2 = wave_lossless(*v[0:3])[1][1], wave_lossless(*v[3:6])[1][1]
-        den = eta2 + eta1
-        if abs(den) < 1e-30:
-            return 25, dz_err("η₁ + η₂ = 0")
-        return 25, okf(fdiv(eta2 - eta1, den))
+
+        def gamma(eta1, eta2):
+            den = eta2 + eta1
+            if abs(den) < 1e-30:
+                return dz_err("η₁ + η₂ = 0")
+            return okf(fdiv(eta2 - eta1, den))
+        rust = wave_rust(fn, v, None, K)
+        old25 = gamma(wave_lossless(*v[0:3])[1][1], wave_lossless(*v[3:6])[1][1])
+        new = gamma(mat_lossless_port(*v[0:3])[1][1], mat_lossless_port(*v[3:6])[1][1])
+        # Row 25 where the relative η alone moves the row, else row 13 (η rounded once).
+        return (25 if not toks_same(old25, rust) else 13), new
+    if fn == "wave::reflectance_at_interface":
+        return 13, wave_interface(v, mat_lossless_port)
+    if fn == "wave::reflectance_normal_materials":
+        return 13, mat_reflectance(v, mat_lossless_port)
     return None
 
 

@@ -382,6 +382,69 @@ fn main(): i64 {
     var minus0: BjMaterial = BjMaterial_new(2.25, 1.0, -0.0);
     var to2, vo2 = _bj_material_lossless_optical_constants(minus0, &oc);
     assert(is_ok(to2) == 1, "σ = −0 is lossless (σ ≠ 0 is false)");
+    var r13_max: f64 = _bj_from_bits(0x7FEFFFFFFFFFFFFF);               # DBL_MAX
+    var r13_p300: f64 = _bj_from_bits(0x7E37E43C8800759C);              # 1e300
+    var r13_m300: f64 = _bj_from_bits(0x01A56E1FC2F8F359);              # 1e-300
+    var r13_p150: f64 = _bj_from_bits(0x5F138D352E5096AF);              # 1e150
+    var r13_3p299: f64 = _bj_from_bits(0xFE1CAB7BD666F388);             # −3e299
+    var r13_m310: f64 = _bj_from_bits(0x000012688B70E62B);              # 1e-310 (subnormal)
+    var r13_p200: f64 = _bj_from_bits(0x6974E718D7D7625A);              # 1e200
+    var r13_m200: f64 = _bj_from_bits(0x16687E92154EF7AC);              # 1e-200
+    var r13_u2: f64 = _bj_from_bits(0x55DBC1F0EE60039A);                # 3.978873575131381e105
+    var r13_v: f64 = _bj_from_bits(0x6B37582E03EECB39);                 # 2.997924580000065e208
+    var r13_eta: f64 = _bj_from_bits(0x022F89653DC2B057);               # 3.7673031366686167e-298
+    var r13_b: f64 = _bj_from_bits(0x3CA21C2C260E6A26);                 # 1.256637062119996e-16
+    var r13_d1: f64 = _bj_from_bits(0x3DA37876F1206634);                # 8.8541878128e-12
+    var r13_d3: f64 = _bj_from_bits(0xBD875D5B87C07AA5);                # −2.6562563438400003e-12
+    var r13_u1: f64 = _bj_from_bits(0x3D937876F1206634);                # 4.4270939064e-12
+    var r13_top: BjMaterial = BjMaterial_new(r13_max, r13_max, 0.0);
+    var to3, vo3 = _bj_material_lossless_optical_constants(r13_top, &oc);
+    var on3: f64 = oc[0];
+    var oe3: f64 = oc[1];
+    assert(is_ok(to3) == 1 && on3 == r13_max && oe3 == 1.0, "n = √(DBL_MAX²) = DBL_MAX (Rust: ∞)");
+
+    # ADR 0002 row 13 (M2 part 2b-1): the products, quotients and roots of inputs and constants rounded once, against
+    # exact references (Fraction, an integer square root).
+    test_group("cyrius_round_once (ADR 0002 row 13)");
+    var u1: f64 = bj_dielectric_energy_density(r13_m300, r13_p150);
+    assert(u1 == r13_u1, "0.5·ε_r·ε₀·E² at ε_r = 1e-300, E = 1e150 (Rust: …397905e-12)");
+    var r13_dv: BjFieldVector = bj_displacement_field(r13_m300, BjFieldVector_new(r13_p300, 0.0, r13_3p299));
+    var r13_dx: f64 = r13_dv.x;
+    var r13_dz: f64 = r13_dv.z;
+    assert(r13_dx == r13_d1 && r13_dz == r13_d3,
+      "D = ε_r·ε₀·E part by part, ε_r·ε₀ subnormal (Rust: …80075e-12, …402252e-12)");
+    var r13_bv: BjFieldVector = bj_b_field_from_h(r13_m310, BjFieldVector_new(r13_p300, nan, inf));
+    var bx: f64 = r13_bv.x;
+    var by: f64 = r13_bv.y;
+    var bz: f64 = r13_bv.z;
+    assert(bx == r13_b && by != by && bz == inf,
+      "B = μ_r·μ₀·H, a subnormal μ_r (Rust: 1.256637047…e-16); a NaN or ∞ part keeps Rust's");
+    var r13_hv: BjFieldVector;
+    var th, vh = bj_h_field_from_b(3.0, BjFieldVector_new(7.0, 0.1, r13_m300), &r13_hv);
+    var hx: f64 = r13_hv.x;
+    var hy: f64 = r13_hv.y;
+    assert(is_ok(th) == 1 && hx == 1856807.6683946447 && hy == 26525.82383420921,
+      "H = B/(μ_r·μ₀), rounded once (Rust: …6445, …209208)");
+    var tu2, vu2 = bj_magnetic_energy_density_material(r13_p300, r13_p200);
+    var u2: f64 = vu2;
+    assert(is_ok(tu2) == 1 && u2 == r13_u2, "B²/(2μ) at B = 1e200 (Rust: B² overflows, ∞)");
+    var r13_big: BjMaterial = BjMaterial_new(r13_p200, r13_p200, 0.0);
+    var nb: f64 = r13_big.refractive_index();
+    assert(nb == r13_p200, "n = √(ε_r μ_r) = 1e200 (Rust: ∞)");
+    var r13_mixed: BjMaterial = BjMaterial_new(-r13_m200, r13_m200, 0.0);
+    var nm: f64 = r13_mixed.refractive_index();
+    assert(nm != nm, "a negative exact ε_r μ_r gives NaN (Rust: −0, its product underflowing)");
+    var r13_both: BjMaterial = BjMaterial_new(-4.0, -9.0, 0.0);
+    var n6: f64 = r13_both.refractive_index();
+    assert(n6 == 6.0, "ε_r, μ_r both negative: √36 = 6");
+    var r13_tiny: BjMaterial = BjMaterial_new(r13_m200, r13_m200, 0.0);
+    var tw, vw = r13_tiny.wave_speed();
+    var wv: f64 = vw;
+    assert(is_ok(tw) == 1 && wv == r13_v, "v = 1/√(ε_r ε₀ μ_r μ₀) at 1e-200 each (Rust: ∞)");
+    var r13_lop: BjMaterial = BjMaterial_new(r13_p300, r13_m300, 0.0);
+    var tz, vz = r13_lop.impedance();
+    var zz: f64 = vz;
+    assert(is_ok(tz) == 1 && zz == r13_eta, "η = √(μ_r μ₀/(ε_r ε₀)) = 3.77e-298 (Rust: 0)");
 
     test_group("cyrius_material_json");
     var sbm = str_builder_new();

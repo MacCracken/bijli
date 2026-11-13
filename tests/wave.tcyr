@@ -747,6 +747,15 @@ fn cyrius_tests(): i64 {
     assert(a8 < 0.000000000000001 && a12 < 0.000000000000001 && api < 0.000000000000001,
       "near both axes: [cos((π/2)cos θ)/sin θ]² to 1e-15 of 80-digit references (Rust's lost every digit)");
 
+    test_group("cyrius_round_once (ADR 0002 row 13)");
+    var r13_max: f64 = _bj_from_bits(0x7FEFFFFFFFFFFFFF);                # DBL_MAX
+    var r13_top: BjMaterial = BjMaterial_new(r13_max, r13_max, 0.0);
+    var r13_air: BjMaterial = BjMaterial_vacuum();
+    var tr13, vr13 = bj_reflectance_at_interface(r13_air, r13_top, 1.0);
+    var rr13: f64 = vr13;
+    assert(is_ok(tr13) == 1 && rr13 == 0.0,
+      "ε_r = μ_r = DBL_MAX: n = DBL_MAX and η = 1 rounded once, R = 0 at normal incidence (Rust: n₂ = ∞, an error)");
+
     test_group("cyrius_waveguide_modes_u32");
     var tm1, vm1 = bj_rectangular_waveguide_cutoff(1.0, 1.0, 0 - 1, 0, 1.0);
     assert(err_is(tm1, vm1, BJ_ERR_INVALID_PARAMETER, "invalid parameter: m and n must be u32s, got m=-1, n=0") == 1,
