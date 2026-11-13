@@ -15271,7 +15271,10 @@ var _BJ_WAVE_HERTZ_K: f64 = 0x4088A82D4F472750;  # (2π/3)·η₀ = 789.02212386
 # bj_schlick_reflectance takes R₀ without reflectance_normal's |n₁ + n₂| < 1e-30 guard (row 24); and
 # bj_material_reflection_coefficient's Γ is on the relative impedances, so Γ² is bj_reflectance_normal_materials' R
 # (row 25). And bj_half_wave_dipole_pattern's numerator is computed with no cancellation near the axis (row 28, M2's
-# range-edge Part).
+# range-edge Part). The products and quotients of inputs and constants are rounded once (ADR 0002 row 13, M2 part 2b-2,
+# src/crmath_kx.cyr's monomials): the plane-wave intensity, the reflected radiation pressure, the wave number, the
+# circular cutoff, the Hertzian resistance, the effective aperture and Friis's ratio; a constant enters as its double
+# (2π and 4π as Rust's π times an exact power of two), and a non-finite operand keeps Rust's chain.
 #
 # A fallible function returns a value-form Result, the error in the last-error record (src/error.cyr). Rust's
 # `Result<Option<f64>>` is `Ok(Some)` with the value in *out, or `Ok(None)` under total internal reflection (out
@@ -15292,12 +15295,17 @@ public fn bj_poynting_vector(e: BjFieldVector, b: BjFieldVector): BjFieldVector 
     return s;
 }
 
-# I = c·ε₀·E₀²/2 (W/m²), a plane wave's time-averaged intensity. Mirrors `wave::plane_wave_intensity`.
+# I = c·ε₀·E₀²/2 (W/m²), a plane wave's time-averaged intensity, correctly rounded (ADR 0002 row 13; a non-finite E₀
+# keeps Rust's 0.5·c·ε₀·E₀·E₀). Mirrors `wave::plane_wave_intensity`.
 #must_use
 #pure
 public fn bj_plane_wave_intensity(e_amplitude: f64): f64 {
-    var i: f64 = 0.5 * BJ_SPEED_OF_LIGHT * BJ_EPSILON_0 * e_amplitude * e_amplitude;
-    return i;
+    if (_bj_is_finite(e_amplitude) == 0) {
+        var i: f64 = 0.5 * BJ_SPEED_OF_LIGHT * BJ_EPSILON_0 * e_amplitude * e_amplitude;
+        return i;
+    }
+    var cr: f64 = _bj_k_cr_mul5(0.5, BJ_SPEED_OF_LIGHT, BJ_EPSILON_0, e_amplitude, e_amplitude);
+    return cr;
 }
 
 # P = I/c (Pa), the radiation pressure on a perfect absorber. Mirrors `wave::radiation_pressure_absorbed`.
@@ -15308,10 +15316,19 @@ public fn bj_radiation_pressure_absorbed(intensity: f64): f64 {
     return p;
 }
 
-# P = 2I/c (Pa), on a perfect reflector. Mirrors `wave::radiation_pressure_reflected`.
+# P = 2I/c (Pa), on a perfect reflector, correctly rounded (ADR 0002 row 13): for |I| ≤ DBL_MAX/2 Rust's 2I is exact,
+# so 2I/c rounds once; above it Rust's 2I overflows, and RN(I/c)·2 is RN(2I/c) exactly (I/c is normal, the doubling
+# exact). Mirrors `wave::radiation_pressure_reflected`.
 #must_use
 #pure
 public fn bj_radiation_pressure_reflected(intensity: f64): f64 {
+    var half_max: f64 = _bj_from_bits(0x7FDFFFFFFFFFFFFF);    # DBL_MAX/2
+    var a: f64 = f64_abs(intensity);
+    if (a > half_max) {
+        var q: f64 = intensity / BJ_SPEED_OF_LIGHT;
+        var p2: f64 = q * 2.0;
+        return p2;
+    }
     var two_i: f64 = 2.0 * intensity;
     var p: f64 = two_i / BJ_SPEED_OF_LIGHT;
     return p;
@@ -15345,15 +15362,21 @@ public fn bj_plane_wave_e(e_amplitude: f64, k: f64, x: f64, omega: f64, t: f64, 
     return e;
 }
 
-# k = 2πf/v. DivisionByZero when |v| < 1e-30 (a NaN v passes, as Rust's test). Mirrors `wave::wave_number`.
+# k = 2πf/v, correctly rounded (ADR 0002 row 13; a non-finite f or v keeps Rust's (2π·f)/v). DivisionByZero when
+# |v| < 1e-30 (a NaN v passes, as Rust's test). Mirrors `wave::wave_number`.
 public fn bj_wave_number(frequency: f64, velocity: f64): Result {
     var a: f64 = f64_abs(velocity);
     if (a < 0.000000000000000000000000000001) {
         return Err(_bj_err_division_by_zero("velocity cannot be zero for wave number"));
     }
-    var w: f64 = 2.0 * _BJ_PI * frequency;
-    var k: f64 = w / velocity;
-    return Ok(k);
+    var two_pi: f64 = 2.0 * _BJ_PI;
+    if (_bj_is_finite(frequency) == 0 || _bj_is_finite(velocity) == 0) {
+        var w: f64 = two_pi * frequency;
+        var k: f64 = w / velocity;
+        return Ok(k);
+    }
+    var cr: f64 = _bj_k_cr_mul_div(two_pi, frequency, velocity);
+    return Ok(cr);
 }
 
 # ω = 2πf. Mirrors `wave::angular_frequency`.
@@ -15867,16 +15890,16 @@ public fn bj_guide_wavelength(free_space_wavelength: f64, cutoff_wavelength: f64
 
 # f_c = x·v/(2πa) (Hz), the cutoff of a circular waveguide's mode: a its radius, v the filling medium's phase velocity,
 # x the mode's root: x′_mn of J′_m for TE_mn (TE₁₁ 1.8412, the dominant mode; TE₂₁ 3.0542; TE₀₁ 3.8317), x_mn of J_m for
-# TM_mn (TM₀₁ 2.4048, TM₁₁ 3.8317). InvalidParameter unless the radius, then the root, then v is positive and finite.
+# TM_mn (TM₀₁ 2.4048, TM₁₁ 3.8317), correctly rounded (ADR 0002 row 13: Rust's x·v and 2πa over- or underflowed
+# where f_c is representable). InvalidParameter unless the radius, then the root, then v is positive and finite.
 # Mirrors `wave::cylindrical_waveguide_cutoff`.
 public fn bj_cylindrical_waveguide_cutoff(radius: f64, bessel_root: f64, velocity: f64): Result {
     var c = _bj_wave_check_positive("waveguide radius", radius);
     if (c == 0) { c = _bj_wave_check_positive("Bessel root", bessel_root); }
     if (c == 0) { c = _bj_wave_check_positive("wave velocity", velocity); }
     if (c != 0) { return Err(c); }
-    var num: f64 = bessel_root * velocity;
-    var den: f64 = 2.0 * _BJ_PI * radius;
-    var fc: f64 = num / den;
+    var two_pi: f64 = 2.0 * _BJ_PI;
+    var fc: f64 = _bj_k_cr_mul2_div2(bessel_root, velocity, two_pi, radius);
     return Ok(fc);
 }
 
@@ -15937,16 +15960,21 @@ public fn bj_half_wave_dipole_directivity(): f64 {
 }
 
 # R_rad = (2π/3)·η₀·(dl/λ)² (Ω), a Hertzian dipole's radiation resistance, η₀ = √(μ₀/ε₀) (bj_free_space_impedance):
-# (2π/3)·η₀ is the double nearest 789.0221 (ADR 0002 row 22; Rust's 80π² = 789.5684 assumed η₀ = 120π). DivisionByZero
-# when |λ| < 1e-30. Mirrors `wave::hertzian_dipole_radiation_resistance`.
+# (2π/3)·η₀ is the double nearest 789.0221 (ADR 0002 row 22; Rust's 80π² = 789.5684 assumed η₀ = 120π), and the
+# product with (dl/λ)² is rounded once on that double (row 13; a non-finite dl or λ keeps K·(dl/λ)·(dl/λ)).
+# DivisionByZero when |λ| < 1e-30. Mirrors `wave::hertzian_dipole_radiation_resistance`.
 public fn bj_hertzian_dipole_radiation_resistance(dipole_length: f64, wavelength: f64): Result {
     var a: f64 = f64_abs(wavelength);
     if (a < 0.000000000000000000000000000001) {
         return Err(_bj_err_division_by_zero("wavelength cannot be zero"));
     }
-    var ratio: f64 = dipole_length / wavelength;
-    var r: f64 = _BJ_WAVE_HERTZ_K * ratio * ratio;
-    return Ok(r);
+    if (_bj_is_finite(dipole_length) == 0 || _bj_is_finite(wavelength) == 0) {
+        var ratio: f64 = dipole_length / wavelength;
+        var r: f64 = _BJ_WAVE_HERTZ_K * ratio * ratio;
+        return Ok(r);
+    }
+    var cr: f64 = _bj_k_cr_mul3_div2(_BJ_WAVE_HERTZ_K, dipole_length, dipole_length, wavelength, wavelength);
+    return Ok(cr);
 }
 
 # R_rad = η₀·Cin(2π)/(4π) = 73.079 Ω, a half-wave dipole's radiation resistance on bijli's η₀ (bj_free_space_impedance):
@@ -15959,8 +15987,9 @@ public fn bj_half_wave_dipole_radiation_resistance(): f64 {
     return r;
 }
 
-# A_e = λ²D/(4π) (m²), an antenna's effective aperture. InvalidParameter unless λ ≥ 0: a NaN λ too (ADR 0002 row 23;
-# Rust's `λ < 0` let it through as NaN). Mirrors `wave::effective_aperture`.
+# A_e = λ²D/(4π) (m²), an antenna's effective aperture, correctly rounded (ADR 0002 row 13; a non-finite λ or D keeps
+# Rust's λ·λ·D/(4π)). InvalidParameter unless λ ≥ 0: a NaN λ too (row 23; Rust's `λ < 0` let it through as NaN).
+# Mirrors `wave::effective_aperture`.
 public fn bj_effective_aperture(wavelength: f64, directivity: f64): Result {
     if (!(wavelength >= 0.0)) {
         var t = _bj_err_reason(BJ_ERR_INVALID_PARAMETER);
@@ -15968,21 +15997,42 @@ public fn bj_effective_aperture(wavelength: f64, directivity: f64): Result {
         _bj_fmt_f64_display(t, wavelength);
         return Err(BJ_ERR_INVALID_PARAMETER);
     }
-    var l2d: f64 = wavelength * wavelength * directivity;
     var fp: f64 = 4.0 * _BJ_PI;
-    var ae: f64 = l2d / fp;
-    return Ok(ae);
+    if (_bj_is_finite(wavelength) == 0 || _bj_is_finite(directivity) == 0) {
+        var l2d: f64 = wavelength * wavelength * directivity;
+        var ae: f64 = l2d / fp;
+        return Ok(ae);
+    }
+    var cr: f64 = _bj_k_cr_mul3_div(wavelength, wavelength, directivity, fp);
+    return Ok(cr);
 }
 
-# P_r/P_t = G_t·G_r·(λ/(4πd))², Friis's transmission equation (a power ratio). Singularity when |d| < 1e-30. Mirrors
+# P_r/P_t = G_t·G_r·(λ/(4πd))², Friis's transmission equation (a power ratio), correctly rounded (ADR 0002 row 13; a
+# non-finite operand keeps Rust's G_t·G_r·ratio·ratio). Singularity when |d| < 1e-30. Mirrors
 # `wave::friis_transmission`.
 public fn bj_friis_transmission(gain_tx: f64, gain_rx: f64, wavelength: f64, distance: f64): Result {
     var a: f64 = f64_abs(distance);
     if (a < 0.000000000000000000000000000001) { return Err(_bj_err_singularity()); }
-    var d: f64 = 4.0 * _BJ_PI * distance;
-    var ratio: f64 = wavelength / d;
-    var p: f64 = gain_tx * gain_rx * ratio * ratio;
-    return Ok(p);
+    var fp: f64 = 4.0 * _BJ_PI;
+    if (_bj_is_finite(gain_tx) == 0 || _bj_is_finite(gain_rx) == 0 || _bj_is_finite(wavelength) == 0
+      || _bj_is_finite(distance) == 0) {
+        var d: f64 = fp * distance;
+        var ratio: f64 = wavelength / d;
+        var p: f64 = gain_tx * gain_rx * ratio * ratio;
+        return Ok(p);
+    }
+    var num: f64[4];
+    var den: f64[4];
+    num[0] = gain_tx;
+    num[1] = gain_rx;
+    num[2] = wavelength;
+    num[3] = wavelength;
+    den[0] = fp;
+    den[1] = fp;
+    den[2] = distance;
+    den[3] = distance;
+    var cr: f64 = _bj_k_cr_mono(&num, 4, &den, 4);
+    return Ok(cr);
 }
 
 # --- circuit.cyr ---

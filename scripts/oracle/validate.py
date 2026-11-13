@@ -2004,6 +2004,43 @@ def wave_half_wave_port(theta):
     return okf(f * f)
 
 
+# Row 13 (M2 part 2b-2, the user's "round once" decision of 2026-11-12): wave.rs's products and quotients of inputs and
+# constants, correctly rounded where the operands are finite (exact values); a constant enters as its double, 2π and
+# 4π as Rust's π times 2 and 4 (exact), the Hertzian factor as row 22's double; every error keeps Rust's result.
+def wave_port13(fn, v, K, kh):
+    """Row 13's port outputs for a wave row, or None where Rust's result stands."""
+    C, EPS0 = K["C"], K["EPS0"]
+    if fn == "wave::plane_wave_intensity":
+        return okf(rn_mono([0.5, C, EPS0, v[0], v[0]], [])) if _fin(v[0]) else None
+    if fn == "wave::radiation_pressure_reflected":
+        return okf(rn_mono([2.0, v[0]], [C])) if _fin(v[0]) else None
+    if fn == "wave::wave_number":
+        if abs(v[1]) < 1e-30 or not _fin(v[0], v[1]):
+            return None
+        return okf(rn_mono([2.0 * PI, v[0]], [v[1]]))
+    if fn == "wave::cylindrical_waveguide_cutoff":
+        r, x, vel = v
+        if (wave_positive("waveguide radius", r) or wave_positive("Bessel root", x)
+                or wave_positive("wave velocity", vel)):
+            return None
+        return okf(rn_mono([x, vel], [2.0 * PI, r]))
+    if fn == "wave::hertzian_dipole_radiation_resistance":
+        if abs(v[1]) < 1e-30 or not _fin(v[0], v[1]):
+            return None
+        return okf(rn_mono([kh, v[0], v[0]], [v[1], v[1]]))
+    if fn == "wave::effective_aperture":
+        lam, d = v
+        if not lam >= 0.0 or not _fin(lam, d):
+            return None
+        return okf(rn_mono([lam, lam, d], [4.0 * PI]))
+    if fn == "wave::friis_transmission":
+        gt, gr, lam, d = v
+        if abs(d) < 1e-30 or not _fin(gt, gr, lam, d):
+            return None
+        return okf(rn_mono([gt, gr, lam, lam], [4.0 * PI, 4.0 * PI, d, d]))
+    return None
+
+
 def wave_port(fn, v, K, consts):
     """The port's outputs for a wave row an ADR 0002 row changes, else None."""
     d, r, kh = consts
@@ -2023,7 +2060,10 @@ def wave_port(fn, v, K, consts):
         return 22, okf(r)
     if fn == "wave::hertzian_dipole_radiation_resistance" and not abs(v[1]) < 1e-30:
         ratio = fdiv(v[0], v[1])
-        return 22, okf(kh * ratio * ratio)
+        old22 = okf(kh * ratio * ratio)
+        new = wave_port13(fn, v, K, kh) or old22
+        # Row 22 where bijli's factor alone moves the row, else row 13 (the product rounded once).
+        return (22 if not toks_same(old22, wave_rust(fn, v, None, K)) else 13), new
     if fn == "wave::effective_aperture" and math.isnan(v[0]):
         return 23, ip_err("wavelength must be non-negative, got NaN")
     if fn == "wave::schlick_reflectance":
@@ -2048,7 +2088,8 @@ def wave_port(fn, v, K, consts):
         return 13, wave_interface(v, mat_lossless_port)
     if fn == "wave::reflectance_normal_materials":
         return 13, mat_reflectance(v, mat_lossless_port)
-    return None
+    m13 = wave_port13(fn, v, K, kh)
+    return None if m13 is None else (13, m13)
 
 
 def wave_adr_rows(root: Path, path: Path) -> list:

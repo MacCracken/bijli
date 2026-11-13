@@ -755,6 +755,36 @@ fn cyrius_tests(): i64 {
     var rr13: f64 = vr13;
     assert(is_ok(tr13) == 1 && rr13 == 0.0,
       "ε_r = μ_r = DBL_MAX: n = DBL_MAX and η = 1 rounded once, R = 0 at normal incidence (Rust: n₂ = ∞, an error)");
+    # M2 part 2b-2: wave's products and quotients rounded once, against exact references (Fraction).
+    var r13_p308: f64 = _bj_from_bits(0x7FE1CCF385EBC8A0);               # 1e308
+    var r13_p200: f64 = _bj_from_bits(0x6974E718D7D7625A);               # 1e200
+    var r13_p100: f64 = _bj_from_bits(0x54B249AD2594C37D);               # 1e100
+    var r13_m200: f64 = _bj_from_bits(0x16687E92154EF7AC);               # 1e-200
+    var r13_m100: f64 = _bj_from_bits(0x2B2BFF2EE48E0530);               # 1e-100
+    var w13_i: f64 = bj_plane_wave_intensity(1000.0);
+    assert(w13_i == 1327.209363996478, "I = c·ε₀·E₀²/2 at 1 kV/m (Rust: …4783)");
+    var w13_p: f64 = bj_radiation_pressure_reflected(r13_max);
+    var w13_pw: f64 = _bj_from_bits(0x7E3CA726EB25F9DA);                 # 1.1992917679485557e300
+    assert(w13_p == w13_pw, "2I/c at I = DBL_MAX (Rust: 2I overflows, ∞)");
+    var tk13, vk13 = bj_wave_number(r13_p308, 10.0);
+    var k13: f64 = vk13;
+    var k13w: f64 = _bj_from_bits(0x7FD65E6F105A304D);                   # 6.283185307179587e307
+    assert(is_ok(tk13) == 1 && k13 == k13w, "k = 2πf/v at f = 1e308 (Rust: 2πf overflows, ∞)");
+    var tf13, vf13 = bj_cylindrical_waveguide_cutoff(r13_p100, r13_p200, r13_p200);
+    var f13: f64 = vf13;
+    var f13w: f64 = _bj_from_bits(0x7E0E6B6F220DD8BD);                   # 1.5915494309189533e299
+    assert(is_ok(tf13) == 1 && f13 == f13w, "x·v/(2πa) with x·v = 1e400 (Rust: ∞)");
+    var th13, vh13 = bj_hertzian_dipole_radiation_resistance(0.01, 1.0);
+    var h13: f64 = vh13;
+    assert(is_ok(th13) == 1 && h13 == 0.07890221238669273, "K·(dl/λ)² rounded once on row 22's K (K·r·r: …275)");
+    var ta13, va13 = bj_effective_aperture(r13_p200, r13_m200);
+    var a13: f64 = va13;
+    var a13w: f64 = _bj_from_bits(0x693A9D3A760747A8);                   # 7.957747154594766e198
+    assert(is_ok(ta13) == 1 && a13 == a13w, "λ²D/(4π) with λ² = 1e400 (Rust: ∞)");
+    var tr213, vr213 = bj_friis_transmission(r13_p200, r13_p200, r13_m100, 1.0);
+    var fr13: f64 = vr213;
+    var fr13w: f64 = _bj_from_bits(0x6900F16F967A04EE);                  # 6.332573977646111e197
+    assert(is_ok(tr213) == 1 && fr13 == fr13w, "G_t·G_r·(λ/(4πd))² with G_t·G_r = 1e400 (Rust: ∞)");
 
     test_group("cyrius_waveguide_modes_u32");
     var tm1, vm1 = bj_rectangular_waveguide_cutoff(1.0, 1.0, 0 - 1, 0, 1.0);

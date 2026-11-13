@@ -1754,3 +1754,34 @@ dipole pattern and the transients, 2a-2 a correctly rounded γ), then M1's three
 - **Result, every target** (x86_64 ELF, x86_64 PE, aarch64): **13 modules, 0 failing; 395,416 ok, 0 failed, 0
   measured, 0 pending, 25,401 accepted (ADR 01: 8,997; ADR 0002: 16,404)** over 420,817 rows; **all 276 digests
   equal**. Twelve changed: the nine above and wave's three Material-based functions.
+
+## 33. M2 part 2b-2: wave rounded once (2026-11-12)
+
+- **ADR 0002 row 13, amended**: wave's products and quotients of inputs and constants are correctly rounded for
+  finite operands (kimiya's monomials, `src/crmath_kx.cyr`); a constant enters as its double, 2π and 4π as Rust's π
+  times 2 and 4 (exact), and a non-finite operand keeps Rust's chain:
+  - `bj_plane_wave_intensity`, c·ε₀·E₀²/2 (`mul5`, 0.5 a factor), Rust's four roundings an ulp off at 1 kV/m;
+  - `bj_radiation_pressure_reflected`, 2I/c: Rust's 2I is exact up to DBL_MAX/2, where its result already rounds
+    once; past it 2I overflowed, and RN(I/c)·2 is RN(2I/c) exactly (I/c normal, the doubling exact), so no monomial
+    is needed;
+  - `bj_wave_number`, 2πf/v (`mul_div`), after Rust's |v| < 1e-30 test;
+  - `bj_cylindrical_waveguide_cutoff`, x·v/(2πa) (`mul2_div2`): Rust's x·v and 2πa over- or underflowed;
+  - `bj_hertzian_dipole_radiation_resistance`, K·(dl/λ)² on row 22's double K = RN((2π/3)·η₀) (`mul3_div2`);
+  - `bj_effective_aperture`, λ²D/(4π) (`mul3_div`), after row 23's test;
+  - `bj_friis_transmission`, G_tG_rλ²/((4π)²d²) (kimiya's general monomial, four over four).
+  - Already rounded once: `radiation_pressure_absorbed`, `e_from_b`, `b_from_e`, `angular_frequency`. Out of row 13's
+    scope: the Poynting vector and momentum density (a cross product inside; their range edge, E × B past DBL_MAX
+    where S/c² is representable, is 2d's), the Fresnel, Snell and waveguide formulas (sums), and the patterns.
+- **Mappings** (`validate.py`'s `wave_port13`): `wave.adr.tsv` maps 459 more row-13 rows (friis 175, aperture 129,
+  wave number 99, the circular cutoff 40, intensity 15, the reflected pressure 1); the Hertzian resistance's 625 rows
+  keep row 22 (bijli's K alone moves them), their outputs now the product rounded once. Every one passed on the
+  harness's first run.
+- **Tests**: `cyrius_round_once (ADR 0002 row 13)` in `tests/wave.tcyr`, 7 more assertions against exact references:
+  the intensity at 1 kV/m (Rust: …4783), 2I/c at DBL_MAX, 2πf/v at 1e308, x·v = 1e400, λ² = 1e400 and G_tG_r = 1e400
+  (Rust: ∞ each), and K·(dl/λ)² at 0.01 (the chain: …275).
+- **Benchmarks** (an interleaved A/B against HEAD, three rounds at load 4–10, the lowest of each):
+  `wave/plane_wave_intensity` 7 → 148 ns (kimiya's five-factor product); the other wave rows within the load's noise
+  (±8 %). The other six functions have no Rust bench.
+- **Result, every target** (x86_64 ELF, x86_64 PE, aarch64): **13 modules, 0 failing; 394,957 ok, 0 failed, 0
+  measured, 0 pending, 25,860 accepted (ADR 01: 8,997; ADR 0002: 16,863)** over 420,817 rows; **all 276 digests
+  equal**. Seven changed: the seven above.

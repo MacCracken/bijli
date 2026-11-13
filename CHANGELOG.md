@@ -237,6 +237,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
 - **circuit** (ADR 0002 row 29, M2 part 2a-1): `rc_charging_voltage` and `rl_current_rise` cancelled in 1 − e^(−t/τ)
   (8e-8 relative at t/τ = 10^-10, 0 below 1.1·10^-16); they now take −expm1(−t/τ), kimiya's correctly rounded expm1
   (`src/crmath_kx.cyr`, with its exp tables in `src/crmath_k_data.cyr`; `cr_verify.py` checks it against MPFR).
+- **wave** (ADR 0002 row 13 amended, M2 part 2b-2): `plane_wave_intensity`, `radiation_pressure_reflected`,
+  `wave_number`, `cylindrical_waveguide_cutoff`, `hertzian_dipole_radiation_resistance`, `effective_aperture` and
+  `friis_transmission` rounded two to five times, and overflowed where the value is representable (2I/c at
+  I = DBL_MAX, 2πf/v at f = 1e308, λ²D/(4π) with λ² past DBL_MAX: ∞ each); they are now correctly rounded for finite
+  operands. The cost: `wave/plane_wave_intensity` 7 → 148 ns (`port-parity.md` §33).
 - **material** (ADR 0002 row 13 amended, M2 part 2b-1, the user's "round once" decision of 2026-11-12):
   `dielectric_energy_density`, `magnetic_energy_density_material`, `displacement_field`, `b_field_from_h`,
   `h_field_from_b` (part by part) and `Material`'s `refractive_index`, `impedance`, `wave_speed` and lossless optical
