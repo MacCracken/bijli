@@ -105,16 +105,6 @@ fn _bj_rel_parts(v: BjFieldVector, p: *f64) {
     return 0;
 }
 
-# 1 when the three doubles at p are finite, else 0.
-#must_use
-fn _bj_rel_finite3(p: *f64): i64 {
-    for (var i = 0; i < 3; i = i + 1) {
-        var x: f64 = p[i];
-        if (_bj_is_finite(x) == 0) { return 0; }
-    }
-    return 1;
-}
-
 # β = v/c. Mirrors `relativity::beta`.
 #must_use
 #pure
@@ -960,6 +950,9 @@ public fn bj_retarded_vector_potential(charge: f64, velocity: BjFieldVector, ret
 fn _bj_rel_effective_distance(r_vec: BjFieldVector, beta_vec: BjFieldVector): Result {
     var r_mag: f64 = r_vec.magnitude();
     if (r_mag != r_mag) { return Err(_bj_err_invalid_parameter("R vector must not contain NaN")); }
+    if (_bj_vx_finite4(r_vec.x, r_vec.y, r_vec.z, 0.0) == 0) {
+        return Err(_bj_err_invalid_parameter("R vector must be finite"));
+    }
     if (r_mag < 0.0000000000000000000000000000005) { return Err(_bj_err_singularity()); }
     if (r_mag <= 0.000000000000000000000000000002 && _bj_rel_r_below(r_vec, r_mag) == 1) {
         return Err(_bj_err_singularity());
@@ -969,44 +962,108 @@ fn _bj_rel_effective_distance(r_vec: BjFieldVector, beta_vec: BjFieldVector): Re
     if (_bj_cr_lorentz_ok(&bp, 3, 1.0) == 0) { return Err(_bj_err_invalid_parameter("β must be < 1")); }
     var rp: f64[3];
     _bj_rel_parts(r_vec, &rp);
-    if (_bj_rel_finite3(&rp) == 1) {
-        var o: f64[1];
-        var z = _bj_cr_lw(&rp, &bp, 0, 0, &o);
-        var re: f64 = o[0];
-        return Ok(re);
-    }
-    var rb: f64 = r_vec.dot(beta_vec);
-    var r_eff: f64 = r_mag - rb;
-    return Ok(r_eff);
+    var o: f64[1];
+    var z = _bj_cr_lw(&rp, &bp, 0, 0, &o);
+    var re: f64 = o[0];
+    return Ok(re);
+}
+
+# R_eff = |R| − R⋅β to 53 bits with an unbounded exponent (src/crmath_edge.cyr's _bj_cr_lw, mode 3), for a finite R the
+# effective-distance checks passed: (s, e). The potentials' range edge, an R_eff past DBL_MAX (M2 part 2d-3e).
+#must_use
+fn _bj_rel_reff_ux(r_vec: BjFieldVector, beta_vec: BjFieldVector): (f64, i64) {
+    var rp: f64[3];
+    var bp: f64[3];
+    _bj_rel_parts(r_vec, &rp);
+    _bj_rel_parts(beta_vec, &bp);
+    var o: f64[2];
+    var z = _bj_cr_lw(&rp, &bp, 3, 0, &o);
+    var y: f64 = o[0];
+    var kf: f64 = o[1];
+    var ys, ye = _bj_k_ux_from(y);
+    return (ys, ye + f64_to(kf));
 }
 
 # φ = q/(4πε₀(|R| − R⋅β)) (V), the Liénard–Wiechert scalar potential (Griffiths 10.46, Jackson 14.8): R = r − r'(t_r)
 # from the retarded position to the field point, β = v(t_r)/c. Singularity for R = 0; InvalidParameter for |β| ≥ 1 or
-# a NaN input. Mirrors `relativity::lienard_wiechert_scalar_potential`.
+# a NaN input, and for an R with an infinite part ("R vector must be finite": ADR 0002 row 27, amended in M2 part 2d-3e
+# on the user's answer of 2026-11-13; Rust went on to NaN). An R_eff past DBL_MAX runs to 53 bits with an unbounded
+# exponent and φ rounds once (row 18's rule). Mirrors `relativity::lienard_wiechert_scalar_potential`.
 public fn bj_lienard_wiechert_scalar_potential(charge: f64, r_vec: BjFieldVector, beta_vec: BjFieldVector): Result {
     var t, v = _bj_rel_effective_distance(r_vec, beta_vec);
     if (is_err_result(t) == 1) { return Err(v); }
     var r_eff: f64 = v;
     var d: f64 = 4.0 * _BJ_PI * BJ_EPSILON_0 * r_eff;
     var phi: f64 = charge / d;
-    return Ok(phi);
+    if (r_eff <= _BJ_VX_HI || _bj_is_finite(charge) == 0) { return Ok(phi); }
+    # R_eff past DBL_MAX (row 18's rule, M2 part 2d-3e): R_eff, 4πε₀R_eff to 53 bits, the quotient rounded once.
+    var rs, re = _bj_rel_reff_ux(r_vec, beta_vec);
+    var fpe: f64 = 4.0 * _BJ_PI * BJ_EPSILON_0;
+    var fs, fe = _bj_k_ux_from(fpe);
+    var ds, de = _bj_k_ux_mul(fs, fe, rs, re);
+    var qs, qe = _bj_k_ux_from(charge);
+    var u: f64 = _bj_k_ux_div_f64(qs, qe, ds, de);
+    return Ok(u);
 }
 
 # A = μ₀qcβ/(4π(|R| − R⋅β)) = (β/c)φ (T⋅m) into out (Griffiths 10.47). As bj_lienard_wiechert_scalar_potential, out
-# untouched on an error. Mirrors `relativity::lienard_wiechert_vector_potential`.
+# untouched on an error; where μ₀q, μ₀qc or their quotient by 4πR_eff leaves the normal range, or R_eff passes DBL_MAX,
+# the chain runs with an unbounded exponent and each part rounds once (row 18's rule, M2 part 2d-3e). Mirrors
+# `relativity::lienard_wiechert_vector_potential`.
 public fn bj_lienard_wiechert_vector_potential(charge: f64, r_vec: BjFieldVector, beta_vec: BjFieldVector,
   out: *BjFieldVector): Result {
     var t, v = _bj_rel_effective_distance(r_vec, beta_vec);
     if (is_err_result(t) == 1) { return Err(v); }
     var r_eff: f64 = v;
-    var num: f64 = BJ_MU_0 * charge * BJ_SPEED_OF_LIGHT;
+    var mq: f64 = BJ_MU_0 * charge;
+    var num: f64 = mq * BJ_SPEED_OF_LIGHT;
     var den: f64 = 4.0 * _BJ_PI * r_eff;
     var k: f64 = num / den;
-    var a: BjFieldVector = beta_vec.scale(k);
-    out.x = a.x;
-    out.y = a.y;
-    out.z = a.z;
+    var amq: f64 = f64_abs(mq);
+    var ank: f64 = f64_abs(num);
+    var ak: f64 = f64_abs(k);
+    var plain = 0;                                  # every product and quotient its 53-bit value, or an exact 0
+    if (r_eff <= _BJ_VX_HI && (charge == 0.0 || (amq > _BJ_VX_MN && ank > _BJ_VX_MN && ank <= _BJ_VX_HI))) {
+        if (charge == 0.0 || (ak > _BJ_VX_MN && ak <= _BJ_VX_HI)) { plain = 1; }
+    }
+    if (plain == 1 || _bj_is_finite(charge) == 0) {
+        var a: BjFieldVector = beta_vec.scale(k);
+        out.x = a.x;
+        out.y = a.y;
+        out.z = a.z;
+        return Ok(0);
+    }
+    _bj_rel_avec_edge(charge, r_vec, beta_vec, r_eff, out);
     return Ok(0);
+}
+
+# A = β·μ₀qc/(4πR_eff) at a range edge into out (row 18's rule, M2 part 2d-3e): μ₀q, μ₀qc, R_eff (past DBL_MAX by
+# _bj_rel_reff_ux), 4πR_eff and their quotient to 53 bits with an unbounded exponent, each part's product rounded once.
+fn _bj_rel_avec_edge(charge: f64, r_vec: BjFieldVector, beta_vec: BjFieldVector, r_eff: f64, out: *BjFieldVector) {
+    var c: f64 = BJ_SPEED_OF_LIGHT;
+    var ms, me = _bj_vx_mul(BJ_MU_0, charge);
+    var cs, ce = _bj_k_ux_from(c);
+    var ns, ne = _bj_k_ux_mul(ms, me, cs, ce);
+    var rs, re = _bj_k_ux_from(r_eff);
+    if (r_eff > _BJ_VX_HI) {
+        var us, ue = _bj_rel_reff_ux(r_vec, beta_vec);
+        rs = us;
+        re = ue;
+    }
+    var fp: f64 = 4.0 * _BJ_PI;
+    var fs, fe = _bj_k_ux_from(fp);
+    var ds, de = _bj_k_ux_mul(fs, fe, rs, re);
+    var ks, ke = _bj_k_ux_div(ns, ne, ds, de);
+    var bx, bxe = _bj_k_ux_from(beta_vec.x);
+    var by, bye = _bj_k_ux_from(beta_vec.y);
+    var bz, bze = _bj_k_ux_from(beta_vec.z);
+    var ax: f64 = _bj_k_ux_mul_f64(bx, bxe, ks, ke);
+    var ay: f64 = _bj_k_ux_mul_f64(by, bye, ks, ke);
+    var az: f64 = _bj_k_ux_mul_f64(bz, bze, ks, ke);
+    out.x = ax;
+    out.y = ay;
+    out.z = az;
+    return 0;
 }
 
 # ── Liénard–Wiechert fields and the Larmor powers ────────────────────────────────────────────────────────────────
@@ -1014,7 +1071,8 @@ public fn bj_lienard_wiechert_vector_potential(charge: f64, r_vec: BjFieldVector
 # E = (q/4πε₀)(n̂ − β)/(γ²κ³R²) + (q/4πε₀c) n̂ × [(n̂ − β) × β̇]/(κ³R) (V/m) into out, κ = 1 − n̂⋅β: the velocity
 # (Coulomb, ∝ 1/R²) and acceleration (radiation, ∝ 1/R) fields; r_vec from the retarded position to the field point,
 # β = v/c and β̇ = a/c at the retarded time. InvalidParameter for a NaN R ("R vector must not contain NaN", as the
-# potentials: ADR 0002 row 27, where Rust went on to NaN), Singularity for |R| < 10^-30 exactly, InvalidParameter
+# potentials: ADR 0002 row 27, where Rust went on to NaN) and for an infinite part ("R vector must be finite", row 27
+# amended, M2 part 2d-3e), Singularity for |R| < 10^-30 exactly, InvalidParameter
 # unless |β| < 1 exactly, DivisionByZero for κ < 10^-30 exactly; out untouched on an error. γ² = 1/(1 − |β|²) is
 # correctly rounded from the exact difference (ADR 0002 row 30). For a finite R, κ = (|R| − R⋅β)/|R| is rounded once
 # from the exact S and P, and its test decided on the exact κ (src/crmath_edge.cyr; ADR 0002 row 17, M2 part 2c-4):
@@ -1025,6 +1083,9 @@ public fn bj_lienard_wiechert_e(charge: f64, r_vec: BjFieldVector, beta_vec: BjF
   out: *BjFieldVector): Result {
     var r_mag: f64 = r_vec.magnitude();
     if (r_mag != r_mag) { return Err(_bj_err_invalid_parameter("R vector must not contain NaN")); }
+    if (_bj_vx_finite4(r_vec.x, r_vec.y, r_vec.z, 0.0) == 0) {
+        return Err(_bj_err_invalid_parameter("R vector must be finite"));
+    }
     if (r_mag < 0.0000000000000000000000000000005) { return Err(_bj_err_singularity()); }
     if (r_mag <= 0.000000000000000000000000000002 && _bj_rel_r_below(r_vec, r_mag) == 1) {
         return Err(_bj_err_singularity());
@@ -1035,24 +1096,14 @@ public fn bj_lienard_wiechert_e(charge: f64, r_vec: BjFieldVector, beta_vec: BjF
     if (_bj_cr_lorentz(&bp, 3, 1.0, 1, 0, &g2) == 0) { return Err(_bj_err_invalid_parameter("β must be < 1")); }
     var inv_r: f64 = 1.0 / r_mag;
     var n_hat: BjFieldVector = r_vec.scale(inv_r);
-    var nb: f64 = n_hat.dot(beta_vec);
-    var kappa: f64 = 1.0 - nb;
-    var n_minus_beta: BjFieldVector = BjFieldVector_sub(n_hat, beta_vec);
     var rp: f64[3];
     _bj_rel_parts(r_vec, &rp);
-    if (_bj_rel_finite3(&rp) == 1) {
-        var ko: f64[4];
-        if (_bj_cr_lw(&rp, &bp, 2, 0, &ko) == 1) {
-            return Err(_bj_err_division_by_zero("Liénard-Wiechert denominator (1 − n̂⋅β) is zero"));
-        }
-        kappa = ko[0];
-        n_minus_beta = BjFieldVector_new(ko[1], ko[2], ko[3]);
-    } else {
-        var ak: f64 = f64_abs(kappa);
-        if (ak < 0.000000000000000000000000000001) {
-            return Err(_bj_err_division_by_zero("Liénard-Wiechert denominator (1 − n̂⋅β) is zero"));
-        }
+    var ko: f64[4];
+    if (_bj_cr_lw(&rp, &bp, 2, 0, &ko) == 1) {
+        return Err(_bj_err_division_by_zero("Liénard-Wiechert denominator (1 − n̂⋅β) is zero"));
     }
+    var kappa: f64 = ko[0];
+    var n_minus_beta: BjFieldVector = BjFieldVector_new(ko[1], ko[2], ko[3]);
     var gamma_sq: f64 = g2[0];
     var kappa3: f64 = kappa * kappa * kappa;
     var four_pi_eps0: f64 = 4.0 * _BJ_PI * BJ_EPSILON_0;
@@ -1303,7 +1354,14 @@ fn _bj_rel_solve(obs: *f64, t: f64, traj, max_iterations, st: *f64, out: *f64): 
         }
         _bj_rel_copy4(&lo, &hi);
         var c2 = _bj_rel_sample(obs, t, next_tau, traj, st, &hi);
-        if (c2 != 0) { return Err(c2); }
+        if (c2 != 0) {
+            # A non-finite state while the bracket still expands: the doubling drove the trajectory past the range,
+            # so no bracket was found (ADR 0002 row 31, the user's answer of 2026-11-13; Rust reported the state).
+            var bf = _bj_err_reason(BJ_ERR_INVALID_PARAMETER);
+            _bj_tx_cstr(bf, "retarded time solver could not bracket the light-cone root ");
+            _bj_tx_cstr(bf, "(is the trajectory faster than light?)");
+            return Err(BJ_ERR_INVALID_PARAMETER);
+        }
         expansions = expansions + 1;
     }
     var alo: f64 = f64_abs(lo[1]);
@@ -1384,8 +1442,9 @@ fn _bj_rel_solve(obs: *f64, t: f64, traj, max_iterations, st: *f64, out: *f64): 
 # or |g| reaches its own rounding level (then one last Newton correction). `observer_pos` is three f64, the trajectory
 # a callback (above) writing position and velocity, `max_iterations` Rust's usize (−1 is usize::MAX) counting the
 # refinement steps (the bracket's doublings are not counted). InvalidParameter when the observer or the time is not
-# finite, the trajectory returns a non-finite state, no bracket exists (a superluminal trajectory), or the refinement
-# has not converged in max_iterations steps. Mirrors `relativity::solve_retarded_time`.
+# finite, the trajectory returns a non-finite state, no bracket exists (a superluminal trajectory: a non-finite state
+# met while the bracket expands reports this error, ADR 0002 row 31, the user's answer of 2026-11-13), or the
+# refinement has not converged in max_iterations steps. Mirrors `relativity::solve_retarded_time`.
 public fn bj_solve_retarded_time(observer_pos: *f64, observation_time: f64, trajectory_fn, max_iterations): Result {
     var st: f64[9];
     var r: f64[1];

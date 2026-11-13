@@ -2574,3 +2574,67 @@ power and an ∞ R in E are 2d-3d's.
 - **Result, every target** (x86_64 ELF, x86_64 PE, aarch64): **13 modules, 0 failing; 405,904 ok, 0 failed, 0
   measured, 0 pending, 47,070 accepted (ADR 01: 8,998; ADR 0002: 38,072)** over 452,974 rows; **all 276 digests
   equal**. Three changed: both transforms and the Larmor power.
+
+## 49. M2 part 2d-3e: an ∞ R refused, the solver's bracket error, the potentials' tails (2026-11-13)
+
+On the user's answers of 2026-11-13 (asked at the end of §48), and the potentials' range edges this bite's review found.
+E's own tail (γ²κ³R², pre/dv, κ³Rc) is 2d-3f's, with the solver's light-cone sample and `lienard_wiechert_fields`'
+R = r_obs − r(t_r) past DBL_MAX: their chains amplify an intermediate as the transforms' do.
+
+- **ADR 0002 row 27, amended** (the user's answer): the three Liénard–Wiechert functions refuse an R with an infinite
+  part, InvalidParameter "R vector must be finite", right after the NaN test (a NaN beside the ∞ keeps the NaN text).
+  Rust's |R| − R⋅β was ∞ − ∞ and R·(1/|R|) ∞·0: NaN, silently. With NaN and ∞ refused, R is always finite past the
+  checks, so the Rust-chain fallbacks for a non-finite R (E's κ = 1 − n̂⋅β with its |κ| < 10^-30 test, the effective
+  distance's |R| − R⋅β) are gone.
+- **ADR 0002 row 31, new** (the user's answer): `solve_retarded_time` reports its documented "could not bracket the
+  light-cone root (is the trajectory faster than light?)" for a non-finite state met while the bracket still expands.
+  The doubling drove the trajectory past the range, as a superluminal one does. The first two samples and the
+  refinement keep "trajectory returned a non-finite state at t = …", and `lienard_wiechert_fields` follows.
+- **ADR 0002 row 18, amended** (the rule of §42):
+  - **φ** keeps Rust's chain where R_eff (row 17's, rounded once) is finite: 4πε₀R_eff is then normal (R_eff ≥ 2^-367)
+    and the quotient rounds once.
+  - **R_eff past DBL_MAX** (|R| near DBL_MAX) is taken to 53 bits with an unbounded exponent: `_bj_cr_lw`'s new mode 3
+    returns its scaled R_eff′ = R_eff·2^-k (normal) and k, the value before mode 0's final `_bj_g_scale`. 4πε₀R_eff
+    then runs unbounded too and the quotient rounds once.
+  - **A** keeps Rust's chain where μ₀q, μ₀qc and their quotient by 4πR_eff are normal (or q = 0) and R_eff is finite;
+    otherwise the chain runs unbounded and each part's product by βᵢ rounds once.
+  - **Rust's results at these edges**:
+    - |R| = √3·DBL_MAX gave φ = 0 for 2.9·10^-299;
+    - q = 10^300 at |R| ≈ 2.5·10^308 gave 0 for 54.7;
+    - q = DBL_MAX gave A = (−∞, NaN, NaN) (0·∞ across β) for (−∞, 0, 0).
+- **Rows** (`m_relativity.rs`'s `emit_lw_inf_edges`, after every older row): 186 more.
+  - 60 rows of five R with an infinite part (one beside a NaN) against three β, through all three functions.
+  - 72 rows of R near DBL_MAX against two β under four charges.
+  - 54 rows of q = DBL_MAX, 10^-310 and 2^-1074 at three distances.
+
+  `validate.py`'s transcription agreed with every row.
+- **Mappings** (`exact.py`'s new `rnd53_lw`, rn_lw's method on the 53-bit grid with ties to even; the potentials'
+  tails on the `uz_*` chain): `relativity.adr.tsv` maps 160 more rows net.
+  - Row 27, 54: E 30, each potential 12.
+  - Row 18, 106: the scalar potential 52, the vector potential 48, E 6. 63 of them are older rows; 14 older row-17
+    rows are now labelled 18.
+  - Row 31, 2: the superluminal trajectories.
+
+  All pass.
+- **cr_verify** (`lw_reff_ux`, new: mode 3 as its significand and exponent, on lw_cases' pairs and on them scaled by
+  2^k toward DBL_MAX): 415,724 calls (207,862 values, each its significand and exponent) equal to the exact value
+  on x86_64 and aarch64. With them every older lw family ran again on the changed function (lw_reff, lw_kappa, lw_nb
+  and their slow paths), all equal: 1,390,706 calls on each target.
+- **Guard audit** (a sampling check in Python, not a gate): the vector potential's guard kept Rust's chain on
+  161,745 samples, all equal to the pure unbounded chain.
+- **Tests**: tests/relativity.tcyr gains 6 assertions:
+  - the two refusals of an ∞ R, and the NaN text beside an ∞;
+  - φ at √3·DBL_MAX and under q = 10^300;
+  - A under q = DBL_MAX.
+
+  The solver's superluminal case now asserts the bracket text.
+- **Benchmarks** (an interleaved A/B against HEAD, three rounds each, load 2.4–4.0 with this bite's cr_verify running
+  in the first two, each figure the lower of the three):
+  - `relativity/lienard_wiechert_e`: 705 → 662 ns. E no longer computes Rust's κ = 1 − n̂⋅β and n̂ − β only to
+    overwrite them with row 17's exact values; the ∞ R test costs less than they did. A focused A/B at load 1.0 (five
+    repetitions a round, three rounds) gave 679 → 653 ns (−4 %). The record's 763 ns, from 2d-1, becomes 662.
+  - `lienard_wiechert_scalar_potential` 303 → 297 ns, `solve_retarded_time_uniform_t1s` 812 → 808 ns,
+    `lienard_wiechert_fields_orbit_b099` 6,187 → 6,014 ns: within the noise. Every other row held too.
+- **Result, every target** (x86_64 ELF, x86_64 PE, aarch64): **13 modules, 0 failing; 405,930 ok, 0 failed, 0
+  measured, 0 pending, 47,230 accepted (ADR 01: 8,998; ADR 0002: 38,232)** over 453,160 rows; **all 276 digests
+  equal**. Four changed: E, both potentials and the solver.

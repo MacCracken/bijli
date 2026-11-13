@@ -145,6 +145,36 @@ def rn_lw(r, b, mode) -> float:
     raise AssertionError("rn_lw: the candidate did not settle")
 
 
+def rnd53_lw(r, b) -> Fraction:
+    """|R| − R⋅β rounded to 53 bits with an unbounded exponent, exactly, for a finite R ≠ 0 and |β| < 1 (the value lies
+    above 2^-367): rn_lw's method on the 53-bit grid, ties to even (src/crmath_edge.cyr's _bj_cr_lw, mode 3)."""
+    s = sum(Fraction(x) ** 2 for x in r)
+    p = sum(Fraction(x) * Fraction(y) for x, y in zip(r, b))
+    k = max(0, (1400 - binade(s)) // 2 + 1)
+    v = Fraction(math.isqrt(math.floor(s * 4 ** k)), 2 ** k) - p
+    y = rnd53(v)
+
+    def odd(z):
+        return (z / Fraction(2) ** (binade(z) - 52)).numerator % 2 == 1
+    for _ in range(4):
+        u = Fraction(2) ** (binade(y) - 52)
+        c = lw_sign(r, b, 0, y + u / 2)
+        if c > 0:
+            y = y + u
+            continue
+        if c == 0:
+            return y + u if odd(y) else y
+        d = u / 2 if y == Fraction(2) ** binade(y) else u
+        c = lw_sign(r, b, 0, y - d / 2)
+        if c < 0:
+            y = y - d
+            continue
+        if c == 0:
+            return y - d if not odd(y - d) else y
+        return y
+    raise AssertionError("rnd53_lw: the candidate did not settle")
+
+
 def lw_below(r, b) -> bool:
     """κ = 1 − R⋅β/|R| < 10^-30 exactly (lienard_wiechert_e's DivisionByZero)."""
     return lw_sign(r, b, 1, Fraction(1, 10 ** 30)) < 0

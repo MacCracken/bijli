@@ -347,6 +347,17 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
   Their chains amplify a subnormal intermediate (by γ and v), so they are guarded by a box on the inputs. Outside it
   the whole chain runs with an unbounded exponent and rounds once. The cost: `relativity/lorentz_transform_x`
   164 → 186 ns, `lorentz_transform_fields` 367 → 407 ns (`port-parity.md` §48).
+- **relativity** (ADR 0002 row 27 amended, M2 part 2d-3e, the user's answer of 2026-11-13): the Liénard–Wiechert
+  potentials and `lienard_wiechert_e` returned a silent NaN for an R with an infinite part. They now refuse it with
+  InvalidParameter "R vector must be finite", as they refuse a NaN R.
+- **relativity** (ADR 0002 row 31, new, the user's answer of 2026-11-13): `solve_retarded_time` reported a superluminal
+  trajectory as "trajectory returned a non-finite state" (its position overflowed as the bracket doubled), where Rust's
+  docs name "could not bracket the light-cone root (is the trajectory faster than light?)". A non-finite state met
+  while the bracket expands now reports that bracket error.
+- **relativity** (ADR 0002 row 18 amended, M2 part 2d-3e): the Liénard–Wiechert potentials gave φ = 0 and A = 0
+  where R_eff passed DBL_MAX (|R| = √3·DBL_MAX: φ = 2.9·10^-299), and A = NaN across β for q = DBL_MAX. Their tails
+  now run with an unbounded exponent at those edges and round once (src/crmath_edge.cyr's `_bj_cr_lw` gains mode 3,
+  R_eff to 53 bits); the other rows held within the noise (`port-parity.md` §49).
 - **relativity** (ADR 0002 row 13 amended, M2 part 2b-4): `retarded_scalar_potential`, `retarded_vector_potential`,
   `larmor_power` and `EmTensor::dual` rounded two to five times, and overflowed where the value is representable
   (Larmor with q² past DBL_MAX, the dual of B past DBL_MAX/c: ∞ each); they are now correctly rounded for finite
@@ -439,6 +450,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
 ### Performance
 
+- **relativity** (M2 part 2d-3e; a focused interleaved A/B, three rounds at load 1.0): `relativity/lienard_wiechert_e`
+  679 → 653 ns (−4 %). With a NaN and an ∞ R both refused, E no longer computes Rust's κ = 1 − n̂⋅β and n̂ − β only to
+  overwrite them with row 17's exact values (`port-parity.md` §49).
 - **charge** (interleaved A/B against the previous commit, both rounds): `charge/lorentz_force` 65/66 ns → 52/55 ns
   (−17 %). M1 part 5d-2's inline chain no longer calls three struct-valued methods. Its guard costs
   `field/vector_magnitude` +1–2 ns and `field/vector_cross` +4–7 ns.

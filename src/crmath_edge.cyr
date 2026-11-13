@@ -1100,10 +1100,14 @@ fn _bj_e_nb_exact(r: *f64, b: *f64, k, i, x: f64, qh: f64, z1: f64, z2: f64): f6
 
 # The Liénard–Wiechert R_eff (mode 0) or κ (mode 1), the section comment's, for a finite R ≠ 0 at r and |β| < 1
 # exactly at b. Mode 0: out[0] := RN(|R| − R⋅β), returning 0. Mode 1: 1 when κ < 10^-30 exactly; otherwise 0, with
-# out[0] := RN(1 − R⋅β/|R|). Mode 2: as mode 1, and out[1..3] := RN(R'ᵢ/|R'| − βᵢ), n̂ − β (M2 part 2d-1). slow = 1
-# skips the rounding tests, so the exact checks always run (cr_verify.py's lw_*_slow).
+# out[0] := RN(1 − R⋅β/|R|). Mode 2: as mode 1, and out[1..3] := RN(R'ᵢ/|R'| − βᵢ), n̂ − β (M2 part 2d-1). Mode 3:
+# R_eff to 53 bits with an unbounded exponent (M2 part 2d-3e: an R_eff past DBL_MAX, for the potentials): out[0] := the
+# rounded R_eff' = R_eff·2^-k (normal) and out[1] := k, so R_eff = out[0]·2^k. slow = 1 skips the rounding tests, so the
+# exact checks always run (cr_verify.py's lw_*_slow).
 #must_use
-fn _bj_cr_lw(r: *f64, b: *f64, mode, slow, out: *f64): i64 {
+fn _bj_cr_lw(r: *f64, b: *f64, mode_in, slow, out: *f64): i64 {
+    var mode = mode_in;
+    if (mode_in == 3) { mode = 0; }
     var w0 = _bj_bits(r[0]);
     var w1 = _bj_bits(r[1]);
     var w2 = _bj_bits(r[2]);
@@ -1269,6 +1273,11 @@ fn _bj_cr_lw(r: *f64, b: *f64, mode, slow, out: *f64): i64 {
         if (band == 0 && zz < lo_t) { return 1; }
     }
     if (slow == 1 || y != zz) { y = _bj_e_lw_settle(r, b, k, km, y); }
+    if (mode_in == 3) {
+        out[0] = y;                                 # R_eff' (normal), R_eff = y·2^k
+        out[1] = f64_from(k);
+        return 0;
+    }
     if (mode == 0) { y = _bj_g_scale(y, k); }
     out[0] = y;
     if (mode == 2) {

@@ -869,11 +869,11 @@ fn cyrius_solver_tests(): i64 {
     p[3] = vx;
     var fast = traj(1, &p);
     var t3, v3 = bj_solve_retarded_time(&obs, 1.0, fast, 100);
-    var pre3 = "invalid parameter: trajectory returned a non-finite state at t = ";
+    var pre3 = "invalid parameter: retarded time solver could not bracket the light-cone root";
     var d3 = bj_last_error_display();
     var n3 = strlen(pre3);
     assert(is_err_result(t3) == 1 && v3 == BJ_ERR_INVALID_PARAMETER && memeq(d3, pre3, n3) == 1,
-      "2c away: the position overflows while the bracket doubles (Rust's text, not its bracket error)");
+      "2c away: the position overflows while the bracket doubles: the bracket error (row 31; Rust: the state)");
     var hc: f64 = 0.5 * c;
     p[3] = hc;
     obs[1] = 0.3;
@@ -1208,6 +1208,37 @@ fn cyrius_tests(): i64 {
     var tl2, vl2 = bj_relativistic_larmor_power(0.0, v06, BjFieldVector_new(e300, em300, 0.0));
     var pl2: f64 = vl2;
     assert(is_ok(tl2) == 1 && _bj_bits(pl2) == 0, "q = 0 against a² past DBL_MAX: P = 0 (Rust: NaN, 0·∞)");
+    # M2 part 2d-3e: an ∞ R refused (row 27 amended, the user's answer of 2026-11-13); R_eff past DBL_MAX.
+    var pinf: f64 = 1.0 / 0.0;
+    var zb: BjFieldVector = BjFieldVector_new(0.0, 0.0, 0.0);
+    var rin: BjFieldVector = BjFieldVector_new(pinf, 1.0, 0.0);
+    var ti1, vi1 = bj_lienard_wiechert_scalar_potential(1.0, rin, zb);
+    assert(err_is(ti1, vi1, BJ_ERR_INVALID_PARAMETER, "invalid parameter: R vector must be finite") == 1,
+      "φ refuses an ∞ R (Rust: NaN)");
+    var ei: BjFieldVector;
+    var ti2, vi2 = bj_lienard_wiechert_e(1.0, rin, zb, zb, &ei);
+    assert(err_is(ti2, vi2, BJ_ERR_INVALID_PARAMETER, "invalid parameter: R vector must be finite") == 1,
+      "and so does E");
+    var rnn: BjFieldVector = BjFieldVector_new(pinf, nan, 0.0);
+    var ti3, vi3 = bj_lienard_wiechert_e(1.0, rnn, zb, zb, &ei);
+    assert(err_is(ti3, vi3, BJ_ERR_INVALID_PARAMETER, "invalid parameter: R vector must not contain NaN") == 1,
+      "a NaN beside the ∞ keeps the NaN text");
+    var dm: f64 = _bj_from_bits(0x7FEFFFFFFFFFFFFF);
+    var ti4, vi4 = bj_lienard_wiechert_scalar_potential(1.0, BjFieldVector_new(dm, dm, dm), zb);
+    var phi4: f64 = vi4;
+    assert(is_ok(ti4) == 1 && _bj_bits(phi4) == 0x01F354954469E210,
+      "R_eff = √3·DBL_MAX: φ = 2.9e-299 on R_eff to 53 bits (Rust: 0)");
+    var r5: BjFieldVector = BjFieldVector_new(dm, dm, 0.0);
+    var b5: BjFieldVector = BjFieldVector_new(0.0, 0.5, 0.0);
+    var ti5, vi5 = bj_lienard_wiechert_scalar_potential(e300, r5, b5);
+    var phi5: f64 = vi5;
+    assert(is_ok(ti5) == 1 && _bj_bits(phi5) == 0x404B57D7378A7CE1, "q = 1e300 at |R| ≈ 2.5e308: φ = 54.7 (Rust: 0)");
+    var av6: BjFieldVector;
+    var r6: BjFieldVector = BjFieldVector_new(1.0, 0.0, 0.0);
+    var b6: BjFieldVector = BjFieldVector_new(-0.9, 0.0, 0.0);
+    var ti6, vi6 = bj_lienard_wiechert_vector_potential(dm, r6, b6, &av6);
+    assert(is_ok(ti6) == 1 && av6.y == 0.0 && av6.z == 0.0 && _bj_bits(av6.x) == 0xFFF0000000000000,
+      "q = DBL_MAX: A = (−∞, 0, 0), μ₀qc past DBL_MAX run unbounded (Rust: 0·∞ = NaN across β)");
 
     if (v1 == 0 || v2 == 0 || v3 == 0 || v4 == 0 || v5 == 0 || v6 == 0 || v7 == 0) { println("."); }
     return 0;

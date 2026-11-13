@@ -462,6 +462,7 @@ pub fn emit() -> Module {
     emit_nb_edges(&mut m);
     emit_fv_edges(&mut m);
     emit_transform_edges(&mut m);
+    emit_lw_inf_edges(&mut m);
     m
 }
 
@@ -794,6 +795,46 @@ fn emit_transform_edges(m: &mut Module) {
                     &ins,
                     &res_f(relativistic_larmor_power(black_box(q), &v, &a)),
                 );
+            }
+        }
+    }
+}
+
+/// M2 part 2d-3e (bijli ADR 0002 rows 27, amended, and 18): the Liénard–Wiechert functions on an R with an infinite part
+/// (now refused, as a NaN R is; a NaN beside the ∞ keeps the NaN text) and the potentials where R_eff passes DBL_MAX
+/// (R near DBL_MAX against β, φ and A from the 53-bit R_eff) or μ₀qc leaves the range (q = DBL_MAX, subnormal q).
+/// After every older row.
+fn emit_lw_inf_edges(m: &mut Module) {
+    let inf = f64::INFINITY;
+    let big = f64::MAX;
+    let zero = FieldVector::new(0.0, 0.0, 0.0);
+    let betas = [zero, FieldVector::new(0.5, 0.0, 0.0), FieldVector::new(0.0, 0.9, 0.0)];
+    let infs = [
+        FieldVector::new(inf, 0.0, 0.0),
+        FieldVector::new(-inf, 1.0, 0.0),
+        FieldVector::new(inf, inf, 0.0),
+        FieldVector::new(1.0, -inf, 2.0),
+        FieldVector::new(inf, f64::NAN, 0.0),
+    ];
+    for &r in &infs {
+        for &bv in &betas {
+            lw_rows(m, 1.0, r, bv, zero, true);
+            lw_rows(m, 1.0, r, bv, FieldVector::new(1e10, 0.0, 0.0), false);
+        }
+    }
+    let bigs = [FieldVector::new(big, big, 0.0), FieldVector::new(1e308, 1e308, 1e308), FieldVector::new(-big, 0.0, 0.0)];
+    let bbs = [FieldVector::new(-0.9, 0.0, 0.0), FieldVector::new(0.0, 0.5, 0.0)];
+    for &r in &bigs {
+        for &bv in &bbs {
+            for q in [1.0, 1e300, 1e-300, 0.0] {
+                lw_rows(m, q, r, bv, zero, true);
+            }
+        }
+    }
+    for q in [big, 1e-310, pow2(-1074)] {
+        for r in [FieldVector::new(1.0, 0.0, 0.0), FieldVector::new(1e-20, 0.0, 0.0), FieldVector::new(1e300, 0.0, 0.0)] {
+            for &bv in &bbs {
+                lw_rows(m, q, r, bv, zero, true);
             }
         }
     }

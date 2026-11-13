@@ -162,7 +162,8 @@ FUNCS = {
 # division rounds once, to nearest even, onto the subnormal grid), an integer square root for the roots. A call line
 # carries words: an f64's bits, or an integer in two's complement.
 
-from exact import INF, binade, lw_below, lw_sign, rn_frac, rn_lw, rn_nb, rn_sqrt, rnd53, rnd53_sqrt  # noqa: E402
+from exact import (INF, binade, lw_below, lw_sign, rn_frac, rn_lw, rn_nb, rn_sqrt, rnd53,  # noqa: E402
+                   rnd53_lw, rnd53_sqrt)
 
 
 def w64(x) -> str:
@@ -531,7 +532,8 @@ EXACT = ["mono"] + list(SHAPES) + ["sqrt_div", "wsqrt", "sqrt_mono", "sqrt_mono_
          "ux_sub", "ux_sqrt", "r2_below", "gamma", "gamma_slow", "gamma2", "gamma2_slow", "gamma_ok", "prod5",
          "prod5_acc", "mono_wide", "mono_wide_acc", "below_prod", "below_quot", "below_sum", "cm", "cm_slow", "cos_t",
          "cos_t_slow", "lw_reff", "lw_reff_slow", "lw_kappa", "lw_kappa_slow", "par", "par_x", "par_slow",
-         "par_rep", "par_rep_x", "par_rep_slow", "lw_nb", "lw_nb_slow", "vx_sqrt", "vx_sqrt_e", "vx_gamma"]
+         "par_rep", "par_rep_x", "par_rep_slow", "lw_nb", "lw_nb_slow", "lw_reff_ux", "vx_sqrt", "vx_sqrt_e",
+         "vx_gamma"]
 UX = ["ux_exp", "ux_exp_w", "ux_cosh", "ux_sinh", "ux_ln", "ux_pow", "ux_sin", "ux_cos"]
 
 
@@ -1016,6 +1018,34 @@ def lw_families(rng, count):
     return out
 
 
+def lw_ux_families(rng, count):
+    """lw_reff_ux (M2 part 2d-3e): _bj_cr_lw's mode 3, R_eff to 53 bits with an unbounded exponent as its significand
+    (part 0) and exponent (part 1), against exact.py's rnd53_lw: on lw_cases' pairs and on them scaled by 2^k toward
+    DBL_MAX (R_eff past it), where R stays finite."""
+    out = []
+    M = (1 << 64) - 1
+    for i, (r, b) in enumerate(lw_cases(rng, count)):
+        rs = [r]
+        mx = max(abs(x) for x in r)
+        if mx > 0 and i % 2 == 0:
+            sh = 1023 - binade(Fraction(mx)) - rng.randint(0, 3)
+            if sh > 0:
+                try:
+                    rr = [math.ldexp(x, sh) for x in r]
+                except OverflowError:
+                    rr = []
+                if rr and all(Fraction(x) == Fraction(y) * Fraction(2) ** sh for x, y in zip(rr, r)):
+                    rs.append(rr)
+        for rv in rs:
+            if lw_below(rv, b) or all(x == 0 for x in rv):
+                continue
+            a = rnd53_lw(rv, b)
+            e = binade(a)
+            out.append(("lw_reff_ux", rv + b + [0], f2b(float(a / Fraction(2) ** e))))
+            out.append(("lw_reff_ux", rv + b + [1], e & M))
+    return out
+
+
 # ── the parallel combinations (src/crmath_edge.cyr, M2 part 2c-5, ADR 0002 row 17) ───────────────────────────────────
 PAR_BELOW = (1 << 64) - 1                   # |Σ 1/xᵢ| < 10^-30
 E30F = Fraction(1, 10 ** 30)
@@ -1255,6 +1285,9 @@ def main() -> int:
                   if "exact" in names or f in names]
         lrng = random.Random(0x1E_4A_2C4)
         calls += [(f, ref, ws) for f, ws, ref in lw_families(lrng, max(1, n // 10))
+                  if "exact" in names or f in names]
+        xrng = random.Random(0x2D_3E)
+        calls += [(f, ref, ws) for f, ws, ref in lw_ux_families(xrng, max(1, n // 10))
                   if "exact" in names or f in names]
         nrng = random.Random(0x2D_1B)
         calls += [(f, ref, ws) for f, ws, ref in nb_families(nrng, max(1, n // 30))

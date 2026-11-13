@@ -3040,6 +3040,8 @@ def rel_rust(fn, v, O, K):
         r_mag = O["mag"](r)
         if math.isnan(r_mag):
             return ip_err("R vector must not contain NaN")
+        if O["port"] and not _fin(*r):
+            return ip_err("R vector must be finite")    # row 27 amended (M2 part 2d-3e, the user's answer)
         if rel_r_below(r, [0.0, 0.0, 0.0], r_mag, O):
             return SINGULAR
         if O["gamma"]:
@@ -3054,14 +3056,28 @@ def rel_rust(fn, v, O, K):
         else:
             r_eff = r_mag - O["dot"](r, bv)
         if fn.endswith("scalar_potential"):
+            if O["ux"] and r_eff > DBL_MAX and math.isfinite(q):
+                # Row 18's rule (M2 part 2d-3e): R_eff past DBL_MAX to 53 bits, 4πε₀R_eff too, the quotient once.
+                d = uz_mul(uz(4.0 * PI * EPS0), rnd53_lw(r, bv))
+                return okf(uz_out(uz_div(uz(q), d, True)))
             return okf(fdiv(q, 4.0 * PI * EPS0 * r_eff))
-        k = fdiv(MU0 * q * C, 4.0 * PI * r_eff)
+        mq = MU0 * q
+        num = mq * C
+        k = fdiv(num, 4.0 * PI * r_eff)
+        plain = r_eff <= DBL_MAX and (q == 0 or (abs(mq) > VX_MN and VX_MN < abs(num) <= DBL_MAX
+                                                 and VX_MN < abs(k) <= DBL_MAX))
+        if O["ux"] and not plain and math.isfinite(q) and r_eff > 0:   # (R_eff ≥ 2^-367 in the port)
+            reff = uz(r_eff) if r_eff <= DBL_MAX else rnd53_lw(r, bv)
+            kk = uz_div(uz_mul(uz_mul(uz(MU0), uz(q)), uz(C)), uz_mul(uz(4.0 * PI), reff))
+            return ok3([uz_out(uz_mul(uz(x), kk, True)) for x in bv])
         return ok3([x * k for x in bv])
     if fn == "relativity::lienard_wiechert_e":
         q, r, bv, bd = v[0], v[1:4], v[4:7], v[7:10]
         r_mag = O["mag"](r)
         if O["port"] and math.isnan(r_mag):
             return ip_err("R vector must not contain NaN")
+        if O["port"] and not _fin(*r):
+            return ip_err("R vector must be finite")    # row 27 amended (M2 part 2d-3e)
         if rel_r_below(r, [0.0, 0.0, 0.0], r_mag, O):
             return SINGULAR
         if O["gamma"]:
@@ -3183,8 +3199,12 @@ EPS52 = 2.0 ** -52
 MIN_NORMAL = 2.0 ** -1022
 
 
-def rel_solve(obs, t, traj, max_it, C):
-    """solve_retarded_time transcribed: ("ok", t_r) or ("err", tokens). traj(t) -> (pos, vel)."""
+BRACKET_ERR = ip_err("retarded time solver could not bracket the light-cone root (is the trajectory faster than light?)")
+
+
+def rel_solve(obs, t, traj, max_it, C, port=False):
+    """solve_retarded_time transcribed: ("ok", t_r) or ("err", tokens). traj(t) -> (pos, vel). port: a non-finite state
+    met while the bracket expands reports the bracket error (ADR 0002 row 31, the user's answer of 2026-11-13)."""
     if not (math.isfinite(t) and all(math.isfinite(c) for c in obs)):
         return "err", ip_err("observer position and time must be finite, got [" + ", ".join(rust_debug(c) for c in obs)
                              + f"] at t = {rust_display(t)}")
@@ -3221,12 +3241,11 @@ def rel_solve(obs, t, traj, max_it, C):
     while hi["g"] > 0.0:
         nxt = 2.0 * hi["tau"]
         if expansions >= 2100 or not math.isfinite(nxt):
-            return "err", ip_err("retarded time solver could not bracket the light-cone root (is the trajectory "
-                                 "faster than light?)")
+            return "err", BRACKET_ERR
         lo = hi
         hi, e = ev(nxt)
         if e:
-            return "err", e
+            return "err", BRACKET_ERR if port else e
         expansions += 1
     cur = lo if abs(lo["g"]) < abs(hi["g"]) else hi
     last_step = hi["tau"] - lo["tau"]
@@ -3273,11 +3292,11 @@ def rel_solver_rust(fn, ins, P, O, K):
         tid, obs, t, mx = ins[0][1], [ins[1][1], ins[2][1], ins[3][1]], ins[4][1], ins[5][1]
         ps = [b for _k, b in ins[7:]]
         max_it = mx if mx >= 0 else mx + (1 << 64)
-        kind, r = rel_solve(obs, t, lambda tt: rel_trajectory(tid, ps, tt, P, C)[0:2], max_it, C)
+        kind, r = rel_solve(obs, t, lambda tt: rel_trajectory(tid, ps, tt, P, C)[0:2], max_it, C, O["port"])
         return okf(r) if kind == "ok" else r
     q, tid, obs, t = ins[0][1], ins[1][1], [ins[2][1], ins[3][1], ins[4][1]], ins[5][1]
     ps = [b for _k, b in ins[7:]]
-    kind, r = rel_solve(obs, t, lambda tt: rel_trajectory(tid, ps, tt, P, C)[0:2], 200, C)
+    kind, r = rel_solve(obs, t, lambda tt: rel_trajectory(tid, ps, tt, P, C)[0:2], 200, C, O["port"])
     if kind == "err":
         return r
     t_r = r
@@ -3366,6 +3385,11 @@ def relativity_adr_rows(root: Path, path: Path) -> list:
         if (fn == "relativity::lienard_wiechert_e" and port[0] == ("E", "InvalidParameter")
                 and port[1][1].endswith("must not contain NaN") and rust[0][0] != "E"):
             row = 27
+        elif port[0] == ("E", "InvalidParameter") and port[1][1].endswith("R vector must be finite"):
+            row = 27                                     # amended (M2 part 2d-3e): an ∞ R refused
+        elif (toks_same(port, BRACKET_ERR) and rust[0] == ("E", "InvalidParameter")
+              and "trajectory returned a non-finite state" in str(rust[1][1])):
+            row = 31                                     # M2 part 2d-3e, the user's answer of 2026-11-13
         elif not toks_same(port, r17):
             row = 17
         elif fn in REL13_FNS:
@@ -3798,7 +3822,7 @@ def json_corrections(rows) -> list:
 # Row 13 (the user's "round once" decision of 2026-11-12): one product, quotient or root of inputs and constants,
 # correctly rounded where its operands are finite; an infinite or NaN operand, and every error, keeps Rust's result.
 
-from exact import lw_below, rn_lw, rn_mono, rn_nb, rn_sqrt  # noqa: E402
+from exact import lw_below, rn_lw, rn_mono, rn_nb, rn_sqrt, rnd53_lw  # noqa: E402
 
 
 def _fin(*xs) -> bool:
