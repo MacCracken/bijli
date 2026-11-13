@@ -2349,7 +2349,7 @@ def rel_exact_gamma(vs, c, mode):
     return rn_sqrt(q) if mode == 0 else rn_frac(q)
 
 
-def rel_ops(port: bool, gamma=None):
+def rel_ops(port: bool, gamma=None, r13=None):
     def gov(fn, args, plain):
         if port and all(math.isfinite(x) for x in args) and fv_governed(fn, args) == 18:
             return [b for _k, b in fv_model(fn, args)]
@@ -2369,7 +2369,24 @@ def rel_ops(port: bool, gamma=None):
         return gov("FieldVector::cross", list(a) + list(b), plain)
 
     return {"mag": mag, "mag_sq": mag_sq, "dot": dot, "cross": cross, "port": port,
-            "gamma": port if gamma is None else gamma}
+            "gamma": port if gamma is None else gamma, "r13": port if r13 is None else r13}
+
+
+# Row 13 (M2 part 2b-4, the user's "round once" decision of 2026-11-12): relativity.rs's products and quotients of
+# inputs and constants, correctly rounded where the operands are finite (exact values; c³ of c's double, 4π and 6·π on
+# Rust's π); the dual tensor's components are F's own (a non-finite one keeps Rust's chain).
+REL13_FNS = ("EmTensor::dual", "relativity::retarded_scalar_potential", "relativity::retarded_vector_potential",
+             "relativity::larmor_power")
+
+
+def rel_dual13(c, rust):
+    """The port's dual: Rust's tensor with each component whose source in F is finite replaced by ±that source."""
+    out = [b for _k, b in rust]
+    for k, src, s in ((1, 14, -1), (2, 7, -1), (3, 9, -1), (4, 14, 1), (8, 7, 1), (12, 9, 1), (6, 12, 1),
+                      (7, 8, -1), (9, 12, -1), (11, 4, 1), (13, 8, 1), (14, 4, -1)):
+        if math.isfinite(c[src]):
+            out[k] = -c[src] if s < 0 else c[src]
+    return [("f", x) for x in out]
 
 
 def rel_consts(root: Path) -> dict:
@@ -2420,7 +2437,8 @@ def rel_rust(fn, v, O, K):
             return okf(fdiv(-O["dot"](ef, bf), C))
         if fn == "EmTensor::dual":
             inv = -fdiv(1.0, C)
-            return [("f", x) for x in rel_from_fields([x * C for x in bf], [x * inv for x in ef], K)]
+            rust = [("f", x) for x in rel_from_fields([x * C for x in bf], [x * inv for x in ef], K)]
+            return rel_dual13(c, rust) if O["r13"] else rust
         if fn == "EmTensor::four_force":
             q, u = v[16], v[17:21]
             ul = [u[0], -u[1], -u[2], -u[3]]
@@ -2480,13 +2498,20 @@ def rel_rust(fn, v, O, K):
         return [("f", g * (a[0] - bv * a[1])), ("f", g * (a[1] - bv * a[0])), ("f", a[2]), ("f", a[3])]
     if fn == "relativity::retarded_scalar_potential":
         q, d = v
-        return radial_check(d) or okf(fdiv(q, 4.0 * PI * EPS0 * d))
+        e = radial_check(d)
+        if e:
+            return e
+        if O["r13"] and _fin(q, d):
+            return okf(rn_mono([q], [4.0 * PI, EPS0, d]))
+        return okf(fdiv(q, 4.0 * PI * EPS0 * d))
     if fn == "relativity::retarded_vector_potential":
         q, w, d = v[0], v[1:4], v[4]
         e = radial_check(d)
         if e:
             return e
         k = fdiv(MU0 * q, 4.0 * PI * d)
+        if O["r13"] and _fin(q, d):
+            return ok3([rn_mono([MU0, q, x], [4.0 * PI, d]) if math.isfinite(x) else x * k for x in w])
         return ok3([x * k for x in w])
     if fn in ("relativity::lienard_wiechert_scalar_potential", "relativity::lienard_wiechert_vector_potential"):
         q, r, bv = v[0], v[1:4], v[4:7]
@@ -2543,6 +2568,8 @@ def rel_rust(fn, v, O, K):
         return ok3([x * inv for x in cr])
     if fn == "relativity::larmor_power":
         q, a = v
+        if O["r13"] and _fin(q, a):
+            return okf(rn_mono([q, q, a, a], [6.0, PI, EPS0, C, C, C]))
         return okf(fdiv(q * q * a * a, 6.0 * PI * EPS0 * K["C3"]))
     if fn == "relativity::relativistic_larmor_power":
         q, w, a = v[0], v[1:4], v[4:7]
@@ -2786,6 +2813,8 @@ def relativity_adr_rows(root: Path, path: Path) -> list:
         if (fn == "relativity::lienard_wiechert_e" and port[0] == ("E", "InvalidParameter")
                 and port[1][1].endswith("must not contain NaN") and rust[0][0] != "E"):
             row = 27
+        elif fn in REL13_FNS:
+            row = 13
         elif toks_same(port, r18):
             row = 18
         else:

@@ -989,6 +989,38 @@ fn cyrius_tests(): i64 {
     var hc: f64 = 2514841411518464.5;
     assert(_bj_cr_lorentz(&gv, 1, c, 1, 0, &go) == 1 && go[0] == hc, "an ulp below c: γ² = 2^23·c + 1/2 (just above)");
 
+    # ADR 0002 row 13 (M2 part 2b-4): relativity's products and quotients rounded once, against exact references.
+    test_group("cyrius_round_once (ADR 0002 row 13)");
+    var r_p305: f64 = _bj_from_bits(0x7F423A516E82D9BA);                 # 1e305
+    var r_p160: f64 = _bj_from_bits(0x6126C2D4256FFCC3);                 # 1e160
+    var r_m100: f64 = _bj_from_bits(0x2B2BFF2EE48E0530);                 # 1e-100
+    var r_m300: f64 = _bj_from_bits(0x01A56E1FC2F8F359);                 # 1e-300
+    var r_inf: f64 = _bj_from_bits(0x7FF0000000000000);                  # +∞
+    var t13: BjEmTensor = BjEmTensor_from_fields(zv, BjFieldVector_new(r_p305, 1.9948195629497427, nan));
+    var d13: BjEmTensor = t13.dual();
+    var dp: *f64 = as_f64p(&d13);
+    var d4: f64 = dp[4];
+    var d1: f64 = dp[1];
+    var d8: f64 = dp[8];
+    var d12: f64 = dp[12];
+    assert(d4 == r_p305 && d1 == -r_p305, "the dual's B part is F's own B: 1e305 (Rust: cB overflows, ∞)");
+    assert(d8 == 1.9948195629497427 && d12 != d12, "(cB)/c = B exactly (Rust: …425); a NaN part keeps Rust's");
+    var tp13, vp13 = bj_retarded_scalar_potential(0.0000000016059441656784626, 6.461215602767541);
+    var p13: f64 = vp13;
+    assert(is_ok(tp13) == 1 && p13 == 2.2338685553740874, "q/(4πε₀R) rounded once (Rust: …087)");
+    var av13: BjFieldVector;
+    var ta13, va13 = bj_retarded_vector_potential(r_m300, BjFieldVector_new(100000000.0, 0.0, r_inf), 10000000000.0,
+      &av13);
+    var ax13 = _bj_bits(av13.x);
+    var az13: f64 = av13.z;
+    assert(is_ok(ta13) == 1 && ax13 == 0x0000B815726AAC15 && az13 == r_inf,
+      "μ₀qv/(4πR) on the subnormal grid (Rust's factor subnormal: …0230692537e-309); an ∞ part keeps v·k = ∞");
+    var l13: f64 = bj_larmor_power(r_p160, r_m100);
+    var l13b = _bj_bits(l13);
+    assert(l13b == 0x5598D2536F7F3A09, "q²a²/(6πε₀c³) with q² = 1e320 (Rust: ∞)");
+    var l13u: f64 = bj_larmor_power(0.0000000000000000001581204017112003, 242544583229325020000.0);
+    assert(l13u == 0.00000000000032707474851909877, "the electron-scale Larmor power rounded once (Rust: …987e-13)");
+
     test_group("cyrius_tensor_and_four_vector");
     var e = BjFieldVector_new(1.0, 2.0, 3.0);
     var b = BjFieldVector_new(-1.0, 0.5, 0.25);

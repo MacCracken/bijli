@@ -1820,3 +1820,38 @@ dipole pattern and the transients, 2a-2 a correctly rounded γ), then M1's three
 - **Result, every target** (x86_64 ELF, x86_64 PE, aarch64): **13 modules, 0 failing; 393,219 ok, 0 failed, 0
   measured, 0 pending, 27,598 accepted (ADR 01: 8,997; ADR 0002: 18,601)** over 420,817 rows; **all 276 digests
   equal**. Nine changed: the nine above.
+
+## 35. M2 part 2b-4: relativity rounded once (2026-11-12)
+
+- **ADR 0002 row 13, amended**: relativity's products and quotients of inputs and constants are correctly rounded for
+  finite operands; a non-finite operand keeps Rust's chain:
+  - `bj_retarded_scalar_potential`, q/(4πε₀R) (`div3`), and `bj_retarded_vector_potential`, μ₀qvᵢ/(4πR) part by part
+    (`mul3_div2`), after Rust's radial-distance checks;
+  - `bj_larmor_power`, q²a²/(6πε₀c³) with c³ of c's double (c = 299792458 is exact; Rust's C3 = c·RN(c²) rounded
+    twice) and 6π on Rust's π. Six factors below, and none merge exactly to fewer than five (6c is a double; c², 6c²
+    and πε₀ are not), past kimiya's four: **`_bj_cr_mono_wide`** (`src/crmath_mono.cyr`) takes kimiya's steps with
+    six factors a side. Its fast path's two double-doubles carry at most 12.04u² each (3.01u² per significand past the
+    second), inside the rounding test's 32u²; its exact path is kimiya's (the integer significands' quotient rounded
+    by `_bj_k_cr_ratio`), with kimiya's 253-bit capacity a side (the Larmor power needs 212 over 192).
+    `cr_verify.py`'s `mono_wide` and `mono_wide_acc` families (up to six a side within the capacity, the Larmor shape
+    at SI scales and at the range ends, ties): **511,324 calls, all equal to the exact value on x86_64 and aarch64**.
+    They need fourteen words a call, so `cr_driver.cyr` now reads sixteen (it read twelve and silently dropped the
+    rest, which the first run caught as 114 mismatches), and `cr_verify.py` refuses a call longer than that. Every
+    exact family passes on the new driver (574,084 calls).
+  - `BjEmTensor.dual`: its components are (cB)/c = B and −(cF^{i0})/c = −F^{i0}, F's own exactly. With all six
+    sources finite the dual is built from them with no arithmetic (60 ns, Rust's chain 122); a non-finite source
+    keeps Rust's chain for its components.
+  - Out of row 13's scope (sums inside): the invariants, the four-vector dot, interval and magnitude, `four_force`,
+    the transforms, the Liénard–Wiechert potentials and fields, `lienard_wiechert_b` and the relativistic Larmor power.
+- **Mappings** (`validate.py`'s `REL13_FNS`, `rel_dual13`): `relativity.adr.tsv` maps 320 row-13 rows (the dual 273,
+  the vector potential 25, Larmor 20, the scalar potential 2), every one passing on the harness's first run.
+- **Tests**: `cyrius_round_once (ADR 0002 row 13)` in `tests/relativity.tcyr` (6 assertions): the dual of B = 1e305
+  (Rust: ∞) and of a B whose (cB)/c Rust rounds an ulp off, a NaN part kept; q/(4πε₀R) an ulp off in Rust;
+  μ₀qv/(4πR) on the subnormal grid with an ∞ part kept; Larmor with q² = 1e320 (Rust: ∞) and at the electron's
+  scale (Rust: an ulp off).
+- **Benchmarks**: no Rust bench covers the four, and the relativity rows of an interleaved A/B (load 4–5.6) are
+  unchanged. A probe, both trees in a row: `larmor_power` 9 → 359 ns (the six-factor monomial),
+  `retarded_vector_potential` 41 → 478 ns (three monomials), `dual` 122 → 60 ns.
+- **Result, every target** (x86_64 ELF, x86_64 PE, aarch64): **13 modules, 0 failing; 392,899 ok, 0 failed, 0
+  measured, 0 pending, 27,918 accepted (ADR 01: 8,997; ADR 0002: 18,921)** over 420,817 rows; **all 276 digests
+  equal**. Four changed: the four above. **2b is done**: row 13 now covers M2's four modules.

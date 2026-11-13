@@ -494,7 +494,7 @@ def run(target, lines):
 
 EXACT = ["mono"] + list(SHAPES) + ["sqrt_div", "wsqrt", "sqrt_mono", "sqrt_mono_acc", "ux_mul", "ux_div", "ux_add",
          "ux_sub", "ux_sqrt", "r2_below", "gamma", "gamma_slow", "gamma2", "gamma2_slow", "gamma_ok", "prod5",
-         "prod5_acc"]
+         "prod5_acc", "mono_wide", "mono_wide_acc"]
 UX = ["ux_exp", "ux_cosh", "ux_sinh", "ux_ln", "ux_pow", "ux_sin", "ux_cos"]
 
 
@@ -551,6 +551,52 @@ def gamma_cases(rng, count, c):
             vy = math.sqrt(c * c - vx * vx) * (1.0 - 2.0 ** -rng.randint(30, 53))
             vs = [vx, vy]
         out.append(vs)
+    return out
+
+
+# ── bijli's monomial of up to six factors a side (src/crmath_mono.cyr, M2 part 2b-4) ───────────────────────────────
+def odd_bits(x):
+    """The bit length of x's integer significand with its trailing zeros dropped (kimiya's capacity measure)."""
+    if x == 0 or not math.isfinite(x):
+        return 0
+    m = Fraction(abs(x))
+    p, q = m.numerator, m.denominator
+    while p % 2 == 0:
+        p //= 2
+    return p.bit_length()
+
+
+def mono_wide_families(rng, count):
+    """mono_wide (the full function) and mono_wide_acc (the exact path alone): up to six factors a side, at most four of
+    them full-precision doubles (any binade, near one, subnormal) and the rest small integers or powers of two, within
+    the exact path's 253 bits a side; the Larmor power's shape q·q·a·a/(6·π·ε₀·c·c·c) at SI scales and at the range
+    ends; exact ties (a 54-bit odd 3y). The reference is the exact quotient, rounded once (Fraction)."""
+    C, PI, EPS0 = 299792458.0, math.pi, 8.8541878128e-12
+    out = []
+    for i in range(count):
+        kind = i % 5
+        if kind == 4:
+            q = rng.uniform(1.0, 2.0) * 2.0 ** rng.randint(-100, 100) * rng.choice([1.0, -1.0])
+            a = rng.uniform(1.0, 2.0) * 2.0 ** rng.randint(-200, 200)
+            if i % 3 == 0:
+                q, a = 1.602176634e-19 * rng.uniform(0.5, 2.0), rng.uniform(1.0, 2.0) * 10.0 ** rng.randint(0, 25)
+            num, den = [q, q, a, a], [6.0, PI, EPS0, C, C, C]
+        else:
+            nn, nd = rng.randint(0, 6), rng.randint(0, 6)
+            pick = any_finite if kind in (0, 1) else near_one
+            num = [pick(rng) for _ in range(min(nn, 4))] + [float(rng.randint(1, 1 << 30)) * 2.0 ** rng.randint(-8, 8)
+                                                            for _ in range(nn - min(nn, 4))]
+            den = [pick(rng) or 1.0 for _ in range(min(nd, 4))] + [float(rng.randint(1, 1 << 30))
+                                                                   for _ in range(nd - min(nd, 4))]
+            if kind == 3 and nn >= 2:
+                num[0] = float(rng.getrandbits(52) | (1 << 52)) * 2.0 ** rng.randint(-30, 30)
+                num[1] = 3.0
+            rng.shuffle(num)
+            rng.shuffle(den)
+        if sum(odd_bits(x) for x in num) > 253 or sum(odd_bits(x) for x in den) > 253:
+            continue
+        fam = "mono_wide" if i % 2 == 0 else "mono_wide_acc"
+        out.append((fam, [len(num), len(den)] + num + den, mono_ref(num, den)))
     return out
 
 
@@ -620,6 +666,9 @@ def main() -> int:
         erng = random.Random(0xC0DE_5A)
         fams = exact_families(erng, max(1, n // 5))
         calls += [(f, f2b(ref), ws) for f, ws, ref in fams if "exact" in names or f in names]
+        wrng = random.Random(0x3_1D_E6)
+        calls += [(f, f2b(ref), ws) for f, ws, ref in mono_wide_families(wrng, 2 * max(1, n // 5))
+                  if "exact" in names or f in names]
         prng = random.Random(0x9_5D_57)
         calls += [(f, f2b(ref), ws) for f, ws, ref in prod5_families(prng, 2 * max(1, n // 5))
                   if "exact" in names or f in names]
@@ -630,6 +679,10 @@ def main() -> int:
         urng = random.Random(0x5C_2E_D6E)
         fams = ux_families(urng, max(1, n // 20))
         calls += [(f, want, ws) for f, ws, want in fams if "ux" in names or f in names]
+    too_long = [name for name, _, a in calls if len(a) > 16]
+    if too_long:                                # cr_driver.cyr reads at most sixteen words a call
+        print(f"cr_verify: {len(too_long)} calls pass more than sixteen words ({too_long[0]})")
+        return 1
     lines = [" ".join([name] + [w64(x) for x in a]) for name, _, a in calls]
     (root / "build/cr_in.txt").write_text("\n".join(lines) + "\n")
     targets = ["x86_64"] + (["aarch64"] if aarch64 else [])

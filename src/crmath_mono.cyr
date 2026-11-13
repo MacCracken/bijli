@@ -369,3 +369,110 @@ fn _bj_cr_mul5(a: f64, b: f64, c: f64, d: f64, f: f64): f64 {
     var g: f64 = _bj_cr_prod_acc(&nb, 5);
     return g;
 }
+
+# ── RN(Π num / Π den) for up to six factors a side (M2 part 2b-4) ──────────────────────────────────────────────────
+
+# kimiya's _bj_k_cr_mono takes at most six numerator and four denominator factors; relativity's Larmor power
+# q²a²/(6πε₀c³) has six below (6, π, ε₀ and c three times; no exact rewrite merges them to four: 6c is a double, but
+# c², 6c², πε₀ are not). These are kimiya's steps without the count limit:
+# - the fast path: _bj_k_mono_sig splits each side into its significands other than 1 (in [1, 2)) and the sum of
+#   exponents; _bj_k_mono_prod makes N and D normalised double-doubles (exact for up to two significands, then
+#   3.01u² relative per further one by _bj_k_dd_mul_d), so with six a side each is within 12.04u² and the two within
+#   24.08u², inside _bj_k_dd_div_ends's 32u² budget (N and D in [1, 2⁶), the quotient in (2⁻⁶, 2⁶)); z₁ = z₂ proves
+#   RN(N/D), and _bj_k_mono_fin scales it by 2^(Σe_num − Σe_den), exactly for a normal result, ±∞ past DBL_MAX,
+#   declining a possibly subnormal one. A failed test (a value within about 2⁻⁹⁸ of a midpoint) declines too.
+# - the exact path: each side's integer significands (kimiya's _bj_k_f64_int, trailing zeros dropped) multiplied in
+#   kimiya's multi-word integers, and _bj_k_cr_ratio rounds P/Q·2^E once. Its capacity is kimiya's: 253 bits a side
+#   (four full-precision doubles and a 41-bit integer, or the Larmor power's 212 over 192), NaN past it.
+# `cr_verify.py`'s mono_wide families check both against exact rationals.
+
+# The exact path alone: RN(Π num / Π den) for 0 ≤ nn, nd ≤ 6 finite doubles (a zero numerator factor gives IEEE's
+# signed zero), NaN outside the domain (a non-finite factor, a zero denominator factor, more than six a side, past
+# 253 bits a side).
+#must_use
+fn _bj_cr_mono_wide_acc(num, nn, den, nd): f64 {
+    var nan: f64 = _bj_k_nan();
+    if (nn < 0 || nd < 0 || nn > 6 || nd > 6) { return nan; }
+    var pb[64];
+    var qb[64];
+    var tb[64];
+    var rb[64];
+    var neg = 0;
+    var zero = 0;
+    var ee = 0;
+    var side = 0;
+    while (side < 2) {
+        var p = num;
+        var n = nn;
+        var acc = &pb;
+        if (side == 1) {
+            p = den;
+            n = nd;
+            acc = &qb;
+        }
+        _bj_k_bn_set(acc, 1);
+        var bits = 0;
+        var i = 0;
+        while (i < n) {
+            var b = load64(p + 8 * i);
+            neg = neg ^ (b >> 63);
+            var a = b & 0x7FFFFFFFFFFFFFFF;
+            if ((a >> 52) == 0x7FF) { return nan; }
+            if (a == 0) {
+                if (side == 1) { return nan; }
+                zero = 1;
+            } else {
+                var mm, e = _bj_k_f64_int(a);
+                while ((mm & 1) == 0) {
+                    mm = mm >> 1;
+                    e = e + 1;
+                }
+                var t = mm;
+                while (t != 0) {
+                    t = t >> 1;
+                    bits = bits + 1;
+                }
+                if (side == 0) { ee = ee + e; } else { ee = ee - e; }
+                _bj_k_bn_set(&tb, mm);
+                _bj_k_bn_mul(&rb, acc, &tb);
+                _bj_k_bn_copy(acc, &rb);
+            }
+            i = i + 1;
+        }
+        if (bits > 253) { return nan; }
+        side = side + 1;
+    }
+    var r: f64 = 0.0;
+    if (zero == 0) { r = _bj_k_cr_ratio(&pb, &qb, ee); }
+    if (neg == 1) { r = -r; }
+    return r;
+}
+
+# RN(Π num / Π den), correctly rounded, for 0 ≤ nn, nd ≤ 6 finite doubles within the exact path's capacity: the fast
+# path, then the exact path where it declines; NaN outside the domain.
+#must_use
+fn _bj_cr_mono_wide(num, nn, den, nd): f64 {
+    var nan: f64 = _bj_k_nan();
+    if (nn < 0 || nd < 0 || nn > 6 || nd > 6) { return nan; }
+    var sn: f64[6];
+    var sd: f64[6];
+    var gfn, cn, en = _bj_k_mono_sig(num, nn, &sn);
+    var gfd, cd, ed = _bj_k_mono_sig(den, nd, &sd);
+    if ((gfn >> 1) == 2 || (gfd >> 1) != 0) { return nan; }
+    var neg = (gfn ^ gfd) & 1;
+    if ((gfn >> 1) == 1) {
+        var z: f64 = 0.0;
+        if (neg == 1) { z = -z; }
+        return z;
+    }
+    var nh, nl = _bj_k_mono_prod(&sn, cn);
+    var dh, dl = _bj_k_mono_prod(&sd, cd);
+    var z1, z2 = _bj_k_dd_div_ends(nh, nl, dh, dl);
+    if (z1 == z2) {
+        var y: f64 = z1;
+        var r, ok = _bj_k_mono_fin(y, en - ed, neg);
+        if (ok == 1) { return r; }
+    }
+    var a: f64 = _bj_cr_mono_wide_acc(num, nn, den, nd);
+    return a;
+}

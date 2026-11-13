@@ -1,6 +1,6 @@
 # cr_driver.cyr — evaluates bijli's correctly rounded primitives on the arguments cr_verify.py writes.
 #
-# Input build/cr_in.txt, one call per line: `<fn> <word hex> …` (up to twelve 16-digit words: an f64's bits, or an
+# Input build/cr_in.txt, one call per line: `<fn> <word hex> …` (up to sixteen 16-digit words: an f64's bits, or an
 # integer in two's complement). Output, one line per call: the result's bits in hex. Beside the primitives: kimiya's
 # correctly rounded monomials, square roots of quotients and unbounded-exponent final operations (src/crmath_kx.cyr, M1
 # part 5), bijli's √ of a monomial (src/crmath_mono.cyr), which cr_verify.py checks against exact values (Python's
@@ -111,6 +111,13 @@ fn _call(fp, fl, w): i64 {
         var nd = load64(w + 8);
         r = _bj_k_cr_mono(w + 16, nn, w + 16 + nn * 8, nd);
     }
+    elif (_is(fp, fl, "mono_wide") == 1 || _is(fp, fl, "mono_wide_acc") == 1) {
+        # mono_wide nn nd f1 … d…: RN(Π f / Π d) up to six a side, the full function or the exact path alone
+        var wn = load64(w);
+        var wdn = load64(w + 8);
+        if (fl == 9) { r = _bj_cr_mono_wide(w + 16, wn, w + 16 + wn * 8, wdn); }
+        else { r = _bj_cr_mono_wide_acc(w + 16, wn, w + 16 + wn * 8, wdn); }
+    }
     elif (_is(fp, fl, "sqrt_mono") == 1 || _is(fp, fl, "sqrt_mono_acc") == 1) {
         # sqrt_mono nn nd f1 … d…: RN(√(Π f / Π d)), the full function or the exact path alone
         var sn = load64(w);
@@ -185,10 +192,10 @@ fn main(): i64 {
         while (end < len && load8(buf + end) != 10) { end = end + 1; }
         var sp = at;
         while (sp < end && load8(buf + sp) != 32) { sp = sp + 1; }
-        var words: i64[12];
+        var words: i64[16];
         var nw = 0;
         var p = sp + 1;
-        while (p + 16 <= end && nw < 12) {
+        while (p + 16 <= end && nw < 16) {
             words[nw] = _hexw(buf + p, 16);
             nw = nw + 1;
             p = p + 17;

@@ -11,7 +11,10 @@
 # Every formula is Rust's in Rust's order (class A). The FieldVector operations Rust calls are BjFieldVector's, so their
 # range edges follow ADR 0002 row 18 (src/field.cyr). Two of Rust's faults are fixed: bj_lienard_wiechert_e refuses a
 # NaN R as the Liénard–Wiechert potentials do (ADR 0002 row 27, row 20's rule), and every γ (γ² in Liénard–Wiechert's
-# E) is correctly rounded from the exact c² − |v|², the |v| < c tests exact (row 30, src/crmath_gamma.cyr). A fallible
+# E) is correctly rounded from the exact c² − |v|², the |v| < c tests exact (row 30, src/crmath_gamma.cyr). The
+# products and quotients of inputs and constants are rounded once (row 13, M2 part 2b-4): the retarded potentials,
+# Larmor's power (src/crmath_mono.cyr's six-factor monomial) and the dual tensor, whose components are F's own; a
+# non-finite operand keeps Rust's chain. A fallible
 # function returns a value-form Result, the error in the last-error record (src/error.cyr); a vector, four-vector or
 # pair of vectors writes through out pointers.
 
@@ -40,6 +43,19 @@ public struct BjFourPotential {
 # An address as a *f64: a BjEmTensor's sixteen components, from `&t` of a local or an untyped `self` (a `*T`).
 fn _bj_rel_f64p(p): *f64 {
     return p;
+}
+
+# g[k] := s·x (s = 1 or −1) for a finite x: a dual component rounded once is F's own (ADR 0002 row 13); a non-finite
+# x leaves Rust's.
+fn _bj_rel_dual_put(g: *f64, k, x: f64, s) {
+    if (_bj_is_finite(x) == 0) { return 0; }
+    if (s < 0) {
+        var nx: f64 = -x;
+        g[k] = nx;
+        return 0;
+    }
+    g[k] = x;
+    return 0;
 }
 
 # ── the Lorentz factor ───────────────────────────────────────────────────────────────────────────────────────────
@@ -169,9 +185,47 @@ impl BjEmTensor {
         return i;
     }
 
-    # The dual *F^μν, E → cB and B → −E/c. Mirrors `EmTensor::dual`.
+    # The dual *F^μν, E → cB and B → −E/c, rounded once (ADR 0002 row 13): its components (cB)/c = B and
+    # −(cF^{i0})/c = −F^{i0} are F's own, exactly, where Rust's ×c then ÷c rounded twice and overflowed past DBL_MAX/c;
+    # a non-finite component keeps Rust's chain. Mirrors `EmTensor::dual`.
     #must_use
     public fn dual(self): BjEmTensor {
+        var f: *f64 = _bj_rel_f64p(self);
+        var bx: f64 = f[14];                        # B = (F^{32}, F^{13}, F^{21}); E/c = (F^{10}, F^{20}, F^{30})
+        var by: f64 = f[7];
+        var bz: f64 = f[9];
+        var ex: f64 = f[4];
+        var ey: f64 = f[8];
+        var ez: f64 = f[12];
+        var all = _bj_is_finite(bx) + _bj_is_finite(by) + _bj_is_finite(bz) + _bj_is_finite(ex) + _bj_is_finite(ey)
+        + _bj_is_finite(ez);
+        if (all == 6) {                             # every component F's own: no arithmetic
+            var t: BjEmTensor;
+            var q: *f64 = _bj_rel_f64p(&t);
+            var nbx: f64 = -bx;
+            var nby: f64 = -by;
+            var nbz: f64 = -bz;
+            var nex: f64 = -ex;
+            var ney: f64 = -ey;
+            var nez: f64 = -ez;
+            q[0] = 0.0;
+            q[1] = nbx;
+            q[2] = nby;
+            q[3] = nbz;
+            q[4] = bx;
+            q[5] = 0.0;
+            q[6] = ez;
+            q[7] = ney;
+            q[8] = by;
+            q[9] = nez;
+            q[10] = 0.0;
+            q[11] = ex;
+            q[12] = bz;
+            q[13] = ey;
+            q[14] = nex;
+            q[15] = 0.0;
+            return t;
+        }
         var e: BjFieldVector = self.electric_field();
         var b: BjFieldVector = self.magnetic_field();
         var e_dual: BjFieldVector = b.scale(BJ_SPEED_OF_LIGHT);
@@ -179,6 +233,19 @@ impl BjEmTensor {
         var ninv: f64 = -inv;
         var b_dual: BjFieldVector = e.scale(ninv);
         var d: BjEmTensor = BjEmTensor_from_fields(e_dual, b_dual);
+        var g: *f64 = _bj_rel_f64p(&d);
+        _bj_rel_dual_put(g, 1, bx, 0 - 1);
+        _bj_rel_dual_put(g, 2, by, 0 - 1);
+        _bj_rel_dual_put(g, 3, bz, 0 - 1);
+        _bj_rel_dual_put(g, 4, bx, 1);
+        _bj_rel_dual_put(g, 8, by, 1);
+        _bj_rel_dual_put(g, 12, bz, 1);
+        _bj_rel_dual_put(g, 6, ez, 1);
+        _bj_rel_dual_put(g, 7, ey, 0 - 1);
+        _bj_rel_dual_put(g, 9, ez, 0 - 1);
+        _bj_rel_dual_put(g, 11, ex, 1);
+        _bj_rel_dual_put(g, 13, ey, 1);
+        _bj_rel_dual_put(g, 14, ex, 0 - 1);
         return d;
     }
 
@@ -394,26 +461,46 @@ impl BjFourVector {
 # ── retarded and Liénard–Wiechert potentials ─────────────────────────────────────────────────────────────────────
 
 # φ = q/(4πε₀R_eff) (V), R_eff the Liénard–Wiechert effective distance |R| − R⋅β at the retarded time (for a charge at
-# rest |R|, and this is Coulomb's potential). The radial distance's errors (InvalidParameter when negative or NaN,
-# Singularity below 1e-30). Mirrors `relativity::retarded_scalar_potential`.
+# rest |R|, and this is Coulomb's potential), correctly rounded (ADR 0002 row 13; a non-finite q or R_eff keeps Rust's
+# q/(4π·ε₀·R_eff)). The radial distance's errors (InvalidParameter when negative or NaN, Singularity below 1e-30).
+# Mirrors `relativity::retarded_scalar_potential`.
 public fn bj_retarded_scalar_potential(charge: f64, retarded_distance: f64): Result {
     var tc, vc = _bj_check_radial_distance(retarded_distance);
     if (is_err_result(tc) == 1) { return Err(vc); }
-    var d: f64 = 4.0 * _BJ_PI * BJ_EPSILON_0 * retarded_distance;
-    var phi: f64 = charge / d;
-    return Ok(phi);
+    var fp: f64 = 4.0 * _BJ_PI;
+    if (_bj_is_finite(charge) == 0 || _bj_is_finite(retarded_distance) == 0) {
+        var d: f64 = fp * BJ_EPSILON_0 * retarded_distance;
+        var phi: f64 = charge / d;
+        return Ok(phi);
+    }
+    var cr: f64 = _bj_k_cr_div3(charge, fp, BJ_EPSILON_0, retarded_distance);
+    return Ok(cr);
 }
 
-# A = μ₀qv/(4πR_eff) (T⋅m) into out, v and R_eff at the retarded time. As bj_retarded_scalar_potential, out untouched on
-# an error. Mirrors `relativity::retarded_vector_potential`.
+# A = μ₀qv/(4πR_eff) (T⋅m) into out, v and R_eff at the retarded time, each part correctly rounded (ADR 0002 row 13; a
+# non-finite q or R_eff keeps Rust's v·(μ₀q/(4πR_eff)), and a non-finite part its own). As
+# bj_retarded_scalar_potential, out untouched on an error. Mirrors `relativity::retarded_vector_potential`.
 public fn bj_retarded_vector_potential(charge: f64, velocity: BjFieldVector, retarded_distance: f64,
   out: *BjFieldVector): Result {
     var tc, vc = _bj_check_radial_distance(retarded_distance);
     if (is_err_result(tc) == 1) { return Err(vc); }
     var num: f64 = BJ_MU_0 * charge;
-    var den: f64 = 4.0 * _BJ_PI * retarded_distance;
+    var fp: f64 = 4.0 * _BJ_PI;
+    var den: f64 = fp * retarded_distance;
     var k: f64 = num / den;
     var a: BjFieldVector = velocity.scale(k);
+    if (_bj_is_finite(charge) == 1 && _bj_is_finite(retarded_distance) == 1) {
+        var vp: f64[3];
+        _bj_rel_parts(velocity, &vp);
+        var ap: f64[3];
+        for (var i = 0; i < 3; i = i + 1) {
+            var vi: f64 = vp[i];
+            var ai: f64 = vi * k;
+            if (_bj_is_finite(vi) == 1) { ai = _bj_k_cr_mul3_div2(BJ_MU_0, charge, vi, fp, retarded_distance); }
+            ap[i] = ai;
+        }
+        a = BjFieldVector_new(ap[0], ap[1], ap[2]);
+    }
     out.x = a.x;
     out.y = a.y;
     out.z = a.z;
@@ -517,15 +604,33 @@ public fn bj_lienard_wiechert_b(n_hat: BjFieldVector, e_field: BjFieldVector): B
     return b;
 }
 
-# P = q²a²/(6πε₀c³) (W), Larmor's formula (non-relativistic). Mirrors `relativity::larmor_power`.
+# P = q²a²/(6πε₀c³) (W), Larmor's formula (non-relativistic), correctly rounded (ADR 0002 row 13: c³ of c's double, π
+# Rust's; six factors below, src/crmath_mono.cyr's _bj_cr_mono_wide; a non-finite q or a keeps Rust's chain on
+# c·c² and 6π rounded). Mirrors `relativity::larmor_power`.
 #must_use
 #pure
 public fn bj_larmor_power(charge: f64, acceleration: f64): f64 {
-    var c3: f64 = BJ_SPEED_OF_LIGHT * BJ_SPEED_OF_LIGHT_SQ;
-    var num: f64 = charge * charge * acceleration * acceleration;
-    var den: f64 = 6.0 * _BJ_PI * BJ_EPSILON_0 * c3;
-    var p: f64 = num / den;
-    return p;
+    if (_bj_is_finite(charge) == 0 || _bj_is_finite(acceleration) == 0) {
+        var c3: f64 = BJ_SPEED_OF_LIGHT * BJ_SPEED_OF_LIGHT_SQ;
+        var num0: f64 = charge * charge * acceleration * acceleration;
+        var den0: f64 = 6.0 * _BJ_PI * BJ_EPSILON_0 * c3;
+        var p: f64 = num0 / den0;
+        return p;
+    }
+    var num: f64[4];
+    var den: f64[6];
+    num[0] = charge;
+    num[1] = charge;
+    num[2] = acceleration;
+    num[3] = acceleration;
+    den[0] = 6.0;
+    den[1] = _BJ_PI;
+    den[2] = BJ_EPSILON_0;
+    den[3] = BJ_SPEED_OF_LIGHT;
+    den[4] = BJ_SPEED_OF_LIGHT;
+    den[5] = BJ_SPEED_OF_LIGHT;
+    var cr: f64 = _bj_cr_mono_wide(&num, 4, &den, 6);
+    return cr;
 }
 
 # P = q²γ⁶/(6πε₀c³)·[a² − |v × a|²/c²] (W), Liénard's relativistic Larmor formula, γ correctly rounded from the exact

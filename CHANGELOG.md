@@ -237,6 +237,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
 - **circuit** (ADR 0002 row 29, M2 part 2a-1): `rc_charging_voltage` and `rl_current_rise` cancelled in 1 − e^(−t/τ)
   (8e-8 relative at t/τ = 10^-10, 0 below 1.1·10^-16); they now take −expm1(−t/τ), kimiya's correctly rounded expm1
   (`src/crmath_kx.cyr`, with its exp tables in `src/crmath_k_data.cyr`; `cr_verify.py` checks it against MPFR).
+- **relativity** (ADR 0002 row 13 amended, M2 part 2b-4): `retarded_scalar_potential`, `retarded_vector_potential`,
+  `larmor_power` and `EmTensor::dual` rounded two to five times, and overflowed where the value is representable
+  (Larmor with q² past DBL_MAX, the dual of B past DBL_MAX/c: ∞ each); they are now correctly rounded for finite
+  operands, the dual's components being exactly F's own (60 ns against 122). Larmor's six denominator factors take
+  bijli's new monomial of up to six factors a side (`src/crmath_mono.cyr`'s `_bj_cr_mono_wide`, checked by
+  `cr_verify.py`'s mono_wide families); a probe gives `larmor_power` 9 → 359 ns and `retarded_vector_potential`
+  41 → 478 ns (`port-parity.md` §35).
 - **circuit** (ADR 0002 row 13 amended, M2 part 2b-3): `resistance_from_geometry`, `parallel_plate_capacitance`,
   `capacitor_energy`, `inductor_energy`, `solenoid_inductance`, the two resonances, `quality_factor` and
   `damping_ratio` rounded two to five times, and over- or underflowed where the value is representable (the
