@@ -196,3 +196,113 @@ pub fn knife_edge(p60: bool) -> Vec<([f64; 3], [f64; 3])> {
     }
     out
 }
+
+/// The shape of a knife-edge pair for `knife_edge2`: the exact a·b, a/b or a + b against 10^-30.
+#[derive(Clone, Copy)]
+pub enum Edge2 {
+    Prod,
+    Quot,
+    Sum,
+}
+
+/// Knife-edge pairs for M2's tests against 10^-30 of one product, quotient or sum of two inputs (bijli ADR 0002 row
+/// 17's rule, M2 part 2c-1): for each base x, a = x stepped by up to `ka` ulps and b stepped by up to `kb` ulps from
+/// the partner that puts the exact a·b, a/b or a + b at 10^-30, kept where the exact value lies within an ulp of
+/// 10^-30 (and the same pairs negated: the product's or the quotient's first factor, both of the sum's). Rust's rounded value is within half an ulp of the exact one, so every
+/// row on which Rust's test and the exact one can disagree lies in that window.
+pub fn knife_edge2(kind: Edge2, bases: &[f64], ka: i64, kb: i64) -> Vec<(f64, f64)> {
+    let (th, tl) = ten_m30();
+    let tol = pow2(-152);
+    let step = |x: f64, k: i64| f64::from_bits(x.to_bits().wrapping_add_signed(k));
+    let mut out = Vec::new();
+    for &x in bases {
+        let partner = match kind {
+            Edge2::Prod => th / x,
+            Edge2::Quot => th * x,
+            Edge2::Sum => th - x,
+        };
+        for i in -ka..=ka {
+            let a = step(x, i);
+            for j in -kb..=kb {
+                let b = step(partner, j);
+                // the exact value minus 10^-30, as a double-double (its parts' sum to about 2^-104 relative)
+                let diff = match kind {
+                    Edge2::Prod => {
+                        let (p, pe) = two_prod(a, b);
+                        (p - th) + (pe - tl)
+                    }
+                    Edge2::Quot => {
+                        // a/b − 10^-30 = (a − 10^-30·b)/b, the numerator to about 2^-104
+                        let (p, pe) = two_prod(th, a);
+                        let (q, qe) = two_prod(tl, a);
+                        ((b - p) - (pe + q + qe)) / a
+                    }
+                    Edge2::Sum => {
+                        let (s, t) = two_sum(a, b);
+                        (s - th) + (t - tl)
+                    }
+                };
+                if diff.abs() <= tol {
+                    match kind {
+                        Edge2::Quot => out.push((b, a)), // (numerator, denominator)
+                        _ => out.push((a, b)),
+                    }
+                    match kind {
+                        Edge2::Quot => out.push((-b, a)),
+                        Edge2::Prod => out.push((-a, b)),
+                        Edge2::Sum => out.push((-a, -b)),
+                    }
+                }
+            }
+        }
+    }
+    out
+}
+
+/// The flipping band's pairs for `knife_edge2`'s product and quotient (bijli ADR 0002 row 17's rule, M2 part 2c-1): the
+/// double `1e-30` lies 0.476 ulp above 10^-30, so a rounded value decides differently from the exact one only when
+/// the exact value lies in [1e-30 − ulp/2, 10^-30), 0.024 ulp wide. For each base, a sweeps ±`ka` ulps and b takes the
+/// three doubles about its partner; the pairs whose exact value lies within [−0.05, 0.02] ulp of 10^-30 are kept
+/// (with a negated), the band and its two sides.
+pub fn knife_band2(kind: Edge2, bases: &[f64], ka: i64) -> Vec<(f64, f64)> {
+    let (th, tl) = ten_m30();
+    let ulp = pow2(-152);
+    let step = |x: f64, k: i64| f64::from_bits(x.to_bits().wrapping_add_signed(k));
+    let mut out = Vec::new();
+    for &x in bases {
+        for i in -ka..=ka {
+            let a = step(x, i);
+            let partner = match kind {
+                Edge2::Prod => th / a,
+                _ => th * a,
+            };
+            for j in -1..=1 {
+                let b = step(partner, j);
+                let diff = match kind {
+                    Edge2::Prod => {
+                        let (p, pe) = two_prod(a, b);
+                        (p - th) + (pe - tl)
+                    }
+                    _ => {
+                        let (p, pe) = two_prod(th, a);
+                        let (q, qe) = two_prod(tl, a);
+                        ((b - p) - (pe + q + qe)) / a
+                    }
+                };
+                if diff >= -0.05 * ulp && diff <= 0.02 * ulp {
+                    match kind {
+                        Edge2::Prod => {
+                            out.push((a, b));
+                            out.push((-a, b));
+                        }
+                        _ => {
+                            out.push((b, a));
+                            out.push((-b, a));
+                        }
+                    }
+                }
+            }
+        }
+    }
+    out
+}

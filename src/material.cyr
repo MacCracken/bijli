@@ -228,12 +228,14 @@ public fn bj_b_field_from_h(relative_permeability: f64, h_field: BjFieldVector):
 }
 
 # u = B²/(2μ) (J/m³), μ = μ_r·μ₀, correctly rounded (ADR 0002 row 13; a non-finite μ_r or B keeps Rust's B·B/(2μ)).
-# DivisionByZero when the rounded |μ_r·μ₀| < 1e-30 (a NaN passes, as Rust's test). Mirrors
-# `material::magnetic_energy_density_material`.
+# DivisionByZero when the exact |μ_r·μ₀| < 10^-30 (ADR 0002 row 17's rule, M2 part 2c-1: Rust tested the rounded
+# product; a NaN passes, as Rust's test). Mirrors `material::magnetic_energy_density_material`.
 public fn bj_magnetic_energy_density_material(relative_permeability: f64, b_magnitude: f64): Result {
     var mu: f64 = relative_permeability * BJ_MU_0;
     var a: f64 = f64_abs(mu);
-    if (a < 0.000000000000000000000000000001) {
+    var band = _bj_x_band(a, _BJ_FIELD_R2_MIN);
+    if (band == 2) { band = _bj_x_prod_below(relative_permeability, BJ_MU_0, 30); }
+    if (band == 1) {
         return Err(_bj_err_division_by_zero("permeability cannot be zero for energy density"));
     }
     if (_bj_is_finite(relative_permeability) == 0 || _bj_is_finite(b_magnitude) == 0) {
@@ -286,14 +288,16 @@ public fn bj_curie_weiss(curie_constant: f64, temperature: f64, curie_temperatur
     return Ok(chi);
 }
 
-# The magnetic class of a susceptibility: Ok(BJ_MAGNETIC_TYPE_DIAMAGNETIC) below −1e-15, FERROMAGNETIC above 1, else
-# PARAMAGNETIC. InvalidParameter for a NaN susceptibility (ADR 0002 row 21: Rust classifies NaN as paramagnetic).
-# Mirrors `material::classify_magnetic`.
+# The magnetic class of a susceptibility: Ok(BJ_MAGNETIC_TYPE_DIAMAGNETIC) below −10^-15 exactly, FERROMAGNETIC above
+# 1, else PARAMAGNETIC. InvalidParameter for a NaN susceptibility (ADR 0002 row 21: Rust classifies NaN as
+# paramagnetic). The exact test χ < −10^-15 is χ ≤ −1e-15 on doubles: the double 1e-15 lies 0.39 ulp above 10^-15,
+# and no double falls between them (ADR 0002 row 17's rule, the user's answer of 2026-11-12: Rust's χ < −1e-15 left
+# the double −1e-15 itself, which is below −10^-15, paramagnetic). Mirrors `material::classify_magnetic`.
 public fn bj_classify_magnetic(susceptibility: f64): Result {
     if (susceptibility != susceptibility) {
         return Err(_bj_err_invalid_parameter("magnetic susceptibility must not be NaN, got NaN"));
     }
-    if (susceptibility < -0.000000000000001) { return Ok(BJ_MAGNETIC_TYPE_DIAMAGNETIC); }
+    if (susceptibility <= -0.000000000000001) { return Ok(BJ_MAGNETIC_TYPE_DIAMAGNETIC); }
     if (susceptibility > 1.0) { return Ok(BJ_MAGNETIC_TYPE_FERROMAGNETIC); }
     return Ok(BJ_MAGNETIC_TYPE_PARAMAGNETIC);
 }

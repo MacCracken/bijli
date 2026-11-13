@@ -786,6 +786,14 @@ fn cyrius_tests(): i64 {
     var fr13w: f64 = _bj_from_bits(0x6900F16F967A04EE);                  # 6.332573977646111e197
     assert(is_ok(tr213) == 1 && fr13 == fr13w, "G_t·G_r·(λ/(4πd))² with G_t·G_r = 1e400 (Rust: ∞)");
 
+    # ADR 0002 row 17's rule (M2 part 2c-1): |n₁ + n₂| against 10^-30 exactly.
+    test_group("cyrius_exact_thresholds (ADR 0002 row 17)");
+    var ka17: f64 = _bj_from_bits(0x39A4484BFEEBC29A);
+    var kb17: f64 = _bj_from_bits(0x39A4484BFEEBC2A5);
+    var tn17, vn17 = bj_reflectance_normal(ka17, kb17);
+    assert(is_err_result(tn17) == 1 && vn17 == BJ_ERR_DIVISION_BY_ZERO,
+      "n₁ + n₂ below 10^-30 exactly, its rounding 1e-30: refused (Rust: accepted)");
+
     test_group("cyrius_waveguide_modes_u32");
     var tm1, vm1 = bj_rectangular_waveguide_cutoff(1.0, 1.0, 0 - 1, 0, 1.0);
     assert(err_is(tm1, vm1, BJ_ERR_INVALID_PARAMETER, "invalid parameter: m and n must be u32s, got m=-1, n=0") == 1,

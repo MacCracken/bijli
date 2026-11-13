@@ -1855,3 +1855,55 @@ dipole pattern and the transients, 2a-2 a correctly rounded γ), then M1's three
 - **Result, every target** (x86_64 ELF, x86_64 PE, aarch64): **13 modules, 0 failing; 392,899 ok, 0 failed, 0
   measured, 0 pending, 27,918 accepted (ADR 01: 8,997; ADR 0002: 18,921)** over 420,817 rows; **all 276 digests
   equal**. Four changed: the four above. **2b is done**: row 13 now covers M2's four modules.
+
+## 36. M2 part 2c-1: exact thresholds (2026-11-12)
+
+2c applies M1's exact-threshold rule (ADR 0002 row 17) to M2. The inventory (every comparison in the four modules) and
+the user's answers of 2026-11-12 split it five ways: 2c-1 the tests on one rounded product, quotient, sum or |R| and the
+literal readings; 2c-2 to 2c-5 the four tests at their value's own pole or zero, where an exact test needs an accurate
+value beside it (Clausius–Mossotti, the trig-free TIR boundary, Liénard–Wiechert's κ, the parallel combinations). A
+test on a sin or cos (Snell's |n₁ sin θᵢ/n₂| > 1, the angle-form Fresnel denominators, the half-wave pattern's
+|sin θ| < 1e-15) stays on bijli's correctly rounded value (the user's answer): its exact decision has no bounded
+precision. The comparisons of an input with a literal are exact already (no double lies between 10^-30 and the double
+1e-30), and so are critical_angle's n₂/n₁ ≥ 1, guide_wavelength's 1 − (λ/λ_c)² ≤ 0 (λ ≥ λ_c on doubles: RN(r²) < 1
+whenever r < 1) and Curie–Weiss's T − T_c ≤ 0.
+
+- **ADR 0002 row 17, amended**:
+  - the transients' |R·C| < 10^-30 (rc_charging and rc_discharging) and |L/R| < 10^-30 (rl_current_rise and decay),
+    `magnetic_energy_density_material`'s |μ_r·μ₀| < 10^-30 and `reflectance_normal`'s |n₁ + n₂| < 10^-30 (and so
+    `transmittance_normal`'s) on the exact value. The rounded value is within half an ulp, so it decides outside
+    `_bj_x_band`'s 64 ulps of the double 1e-30 (an inline pre-filter, 5e-31 and 2e-30, decides most inputs with no
+    call), and inside it `src/crmath_cmp.cyr`'s new `_bj_x_sign` does: the sign of a sum of ±c·m₁·m₂·2^k·10^q terms in
+    integers, as `_bj_x_r2_below` does for r², with `_bj_x_prod_below`, `_bj_x_quot_below` and `_bj_x_sum_below` (a
+    TwoSum first) on it. They hold for any finite operands (the widest alignment, a subnormal product against 10^60,
+    stays under about 2,250 of the 2,560 bits);
+  - the Liénard–Wiechert potentials' and E's |R| < 10^-30 (Σ Rᵢ² < 10^-60, M1's `_bj_x_r2_below`), and the fields' on
+    the observer and the trajectory's position, the inputs (their difference rounds);
+  - classify_magnetic's χ < −10^-15 is χ ≤ −1e-15 on doubles: the double 1e-15 lies 0.476 ulp above 10^-15 and no
+    double falls between, so χ = −1e-15 itself is diamagnetic (Rust: paramagnetic). The Fresnel family's cos θᵢ band
+    [−10^-6, 1 + 10^-6] already agrees with its doubles (the double 1e-6 lies below 10^-6, so c ≥ −1e-6 is c ≥ −10^-6;
+    RN(1 + 1e-6) is the double nearest 1.000001, below it, and the next lies above), contrary to the estimate in the
+    question put to the user, which said the band's edges would move by an ulp.
+- **Knife edges** (`scripts/oracle/src/grids.rs`): the double 1e-30 lies 0.476 ulp above 10^-30, so a rounded product
+  or quotient decides differently only when the exact value lies in [1e-30 − ulp/2, 10^-30), a band 0.024 ulp wide,
+  which the corpus's ulp-stepped rows never reached. `knife_edge2` (pairs within an ulp of ±10^-30: R·C, L/R, μ_r·μ₀,
+  n₁ + n₂, sums exact, rounded or cancelling) and `knife_band2` (a factor swept ±1,500 ulps, kept within
+  [−0.05, 0.02] ulp: the band and its two sides) add 9,996 rows: circuit 8,480 (2,120 a transient), wave 720 (360
+  a function), relativity 783 (261 a function, M1's `knife_edge(true)` points as R), material 13. μ_r·μ₀'s fixed μ₀
+  leaves only a few lattice points near 10^-30, none in the band, so its rows all agree.
+- **Mappings** (`validate.py`, Fraction): 1,420 row-17 rows: circuit 1,292 (`circuit_flip17`: rc 320 each, rl 326
+  each; a flipped transient is row 17's, not row 29's or the corrected oracle's), wave 84, relativity 42 (classified
+  before rows 13, 18 and 30), material 2 (classify at −1e-15). All passed on the harness's first run.
+- **`cr_verify.py`'s below_prod, below_quot and below_sum** (exact families): pairs within a few ulps of 10^-p (p = 30
+  mostly, every p to 60), sums that round or cancel, far ones: **895,656 calls, all equal to Fraction's verdict on
+  x86_64 and aarch64**, and r2_below's 300,000 still.
+- **Tests**: `cyrius_exact_thresholds (ADR 0002 row 17)` groups in tests/circuit.tcyr (R·C and L/R below 10^-30
+  exactly, rounded to 1e-30: instant), tests/wave.tcyr (n₁ + n₂ refused) and tests/relativity.tcyr (|R| at least
+  10^-30 exactly, computed where Rust gave Singularity, the potential and E); tests/material.tcyr's classify of
+  −1e-15 (diamagnetic) and of the double next to it toward zero (paramagnetic).
+- **Benchmarks** (an interleaved A/B against HEAD, load 2.2–2.9): the first draft called the band test on every input,
+  `circuit/rc_charging` 67 → 88 ns, `circuit/rl_current_rise` 66 → 85 ns, the LW potential 79 → 92 ns; with the
+  pre-filter, 69, 69 and 82 ns (HEAD 67–69, 66–69, 80–90 in the same runs): within the noise.
+- **Result, every target** (x86_64 ELF, x86_64 PE, aarch64): **13 modules, 0 failing; 399,374 ok, 0 failed, 0
+  measured, 0 pending, 31,439 accepted (ADR 01: 8,998; ADR 0002: 22,441)** over 430,813 rows; **all 276 digests
+  equal**. Eleven changed, the eleven functions with knife-edge rows.

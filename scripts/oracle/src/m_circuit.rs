@@ -10,7 +10,7 @@
 //! 0 to 3, with the parallel combinations' 1/Σ(1/x) cut at 1e-30 approached ulp by ulp and the transients' τ = RC and
 //! τ = L/R cut likewise; seeded physical circuits.
 
-use crate::grids::{Rng, pow2, specials};
+use crate::grids::{Edge2, Rng, knife_band2, knife_edge2, pow2, specials};
 use crate::m_field::res_f;
 use crate::m_material::{dedup, ulps};
 use crate::tsv::{Class, Module, Tok, f};
@@ -184,6 +184,21 @@ pub fn emit() -> Module {
         // τ = R·C about 1e-30 (R = 1e-15, C near 1e-15), and τ = L/R about 1e-30 (L near 1e-30, R = 1).
         transient_row(&mut m, 5.0, 1e-15, ulps(1e-15, k), 1e-31);
         transient_row(&mut m, 5.0, 1.0, ulps(1e-30, k), 1e-31);
+    }
+    // The knife edges of the exact τ tests (bijli ADR 0002 row 17's rule, M2 part 2c-1): R·C and L/R within an ulp of
+    // 10^-30, where Rust's rounded τ and the exact one can fall on either side.
+    for (r, c) in knife_edge2(Edge2::Prod, &[1e-15, 3e-16, 7e-11, 1.0, 1e10], 6, 24) {
+        transient_row(&mut m, 5.0, r, c, 1e-31);
+    }
+    for (l, r) in knife_edge2(Edge2::Quot, &[1.0, 3.0, 7.0, 0.1, 1e10], 0, 48) {
+        transient_row(&mut m, 5.0, r, l, 1e-31);
+    }
+    // And the band where they disagree, 0.024 ulp wide (grids.rs's knife_band2).
+    for (r, c) in knife_band2(Edge2::Prod, &[1.7e-15, 2.9e-11], 1500) {
+        transient_row(&mut m, 5.0, r, c, 1e-31);
+    }
+    for (l, r) in knife_band2(Edge2::Quot, &[3.3, 0.71], 1500) {
+        transient_row(&mut m, 5.0, r, l, 1e-31);
     }
     for _ in 0..300 {
         let (r, c) = (rng.log_uniform(0.0, 6.0), rng.log_uniform(-12.0, -3.0));

@@ -162,6 +162,15 @@ fn _call(fp, fl, w): i64 {
         if (load64(w + 8) == 1) { return se; }
         r = ss;
     }
+    elif (_is(fp, fl, "below_prod") == 1 || _is(fp, fl, "below_quot") == 1 || _is(fp, fl, "below_sum") == 1) {
+        # below_prod x y p (|x·y|), below_quot (|x/y|), below_sum (|x + y|): 1.0 when below 10^-p exactly, else 0.0
+        var bp = load64(w + 16);
+        var bb = 0;
+        if (load8(fp + 6) == 112) { bb = _bj_x_prod_below(x, y, bp); }
+        elif (load8(fp + 6) == 113) { bb = _bj_x_quot_below(x, y, bp); }
+        else { bb = _bj_x_sum_below(x, y, bp); }
+        if (bb == 1) { r = 1.0; }
+    }
     elif (_is(fp, fl, "r2_below") == 1) {
         # r2_below a0 a1 a2 b0 b1 b2 p: 1.0 when the exact Σ (aᵢ − bᵢ)² < 10^-p (src/crmath_cmp.cyr), else 0.0
         if (_bj_x_r2_below(w, w + 24, load64(w + 48)) == 1) { r = 1.0; }

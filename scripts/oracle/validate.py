@@ -1491,7 +1491,7 @@ def material_port13(fn, v, EPS0, MU0):
     if fn == "material::dielectric_energy_density":
         return okf(rn_mono([0.5, v[0], EPS0, v[1], v[1]], [])) if _fin(v[0], v[1]) else None
     if fn == "material::magnetic_energy_density_material":
-        if abs(v[0] * MU0) < 1e-30 or not _fin(v[0], v[1]):
+        if not _fin(v[0], v[1]) or below30(Fraction(v[0]) * Fraction(MU0)):
             return None
         return okf(rn_mono([v[1], v[1]], [v[0], 2.0 * MU0]))
     if fn == "Material::refractive_index":
@@ -1515,6 +1515,19 @@ def material_port13(fn, v, EPS0, MU0):
 
 def material_port(fn, v, EPS0, MU0):
     """The port's outputs for a material row an ADR 0002 row changes, else None."""
+    if fn == "material::classify_magnetic" and not math.isnan(v[0]):
+        x = v[0]
+        dia = Fraction(x) < -Fraction(1, 10 ** 15) if math.isfinite(x) else x < 0.0   # ±∞: Rust's test is exact
+        exact = "Diamagnetic" if dia else "Ferromagnetic" if x > 1.0 else "Paramagnetic"
+        return 17, [("e", "MagneticType." + exact)]
+    if fn == "material::magnetic_energy_density_material" and _fin(v[0]):
+        rust_below = abs(v[0] * MU0) < 1e-30
+        exact_below = below30(Fraction(v[0]) * Fraction(MU0))
+        if rust_below != exact_below:
+            if exact_below:
+                return 17, dz_err("permeability cannot be zero for energy density")
+            m13 = material_port13(fn, v, EPS0, MU0)
+            return 17, m13 if m13 is not None else okf(fdiv(v[1] * v[1], 2.0 * (v[0] * MU0)))
     if fn == "material::curie_law" and math.isnan(v[1]):
         return 19, ip_err(f"temperature must be positive, got {rust_display(v[1])} K")
     if fn == "material::curie_weiss" and math.isnan(v[1] - v[2]):
@@ -1676,9 +1689,9 @@ def wave_direct(fn, n1, n2, c):
     return None
 
 
-def wave_reflectance_normal(n1, n2):
+def wave_reflectance_normal(n1, n2, exact=False):
     den = n1 + n2
-    if abs(den) < 1e-30:
+    if (below30(Fraction(n1) + Fraction(n2)) if exact and _fin(n1, n2) else abs(den) < 1e-30):
         return dz_err("sum of refractive indices cannot be zero")
     r = fdiv(n1 - n2, den)
     return okf(r * r)
@@ -2088,6 +2101,11 @@ def wave_port(fn, v, K, consts):
         return 13, wave_interface(v, mat_lossless_port)
     if fn == "wave::reflectance_normal_materials":
         return 13, mat_reflectance(v, mat_lossless_port)
+    if fn in ("wave::reflectance_normal", "wave::transmittance_normal"):
+        new = wave_reflectance_normal(v[0], v[1], exact=True)
+        if fn == "wave::transmittance_normal" and new[0][0] == "f":
+            new = okf(1.0 - new[0][1])
+        return 17, new
     m13 = wave_port13(fn, v, K, kh)
     return None if m13 is None else (13, m13)
 
@@ -2142,7 +2160,7 @@ def circuit_combo(xs, what, parallel, which):
     return okf(fdiv(1.0, s))
 
 
-def circuit_rust(fn, v, P, expm1=False):
+def circuit_rust(fn, v, P, expm1=False, exact=False):
     """circuit.rs transcribed in its order of operations, its checks and error texts, on the primitives P; None for
     another name."""
     name = fn.split("::")[1]
@@ -2175,7 +2193,8 @@ def circuit_rust(fn, v, P, expm1=False):
     if name in ("rc_charging_voltage", "rc_discharging_voltage"):
         v0, r, c, tt = v
         tau = r * c
-        if abs(tau) < 1e-30:
+        instant = below30(Fraction(r) * Fraction(c)) if exact and _fin(r, c) else abs(tau) < 1e-30
+        if instant:
             return okf(v0 if name.startswith("rc_charging") else 0.0)
         x = fdiv(-tt, tau)
         if expm1 and name.startswith("rc_charging"):
@@ -2192,7 +2211,8 @@ def circuit_rust(fn, v, P, expm1=False):
             return dz_err("resistance cannot be zero for RL current" if name.endswith("rise")
                           else "resistance cannot be zero for RL decay")
         tau = fdiv(l, r)
-        if abs(tau) < 1e-30:
+        instant = below30(Fraction(l) / Fraction(r)) if exact and _fin(l, r) else abs(tau) < 1e-30
+        if instant:
             return okf(fdiv(a, r) if name.endswith("rise") else 0.0)
         x = fdiv(-tt, tau)
         if expm1 and name.endswith("rise"):
@@ -2263,6 +2283,8 @@ def circuit_corrections(path: Path):
             if cls != "C" or fn in ("circuit::rc_charging_voltage", "circuit::rl_current_rise"):
                 continue                    # (their rows are ADR 0002 row 29's mappings)
             v = circuit_vals([parse_tok(x) for x in ins.split(" ")])
+            if fn in CIRCUIT_TRANSIENTS and circuit_flip17(fn, v):
+                continue                    # (row 17's mappings: the exact τ test)
             want = circuit_rust(fn, v, MPFR_P)
             old = wave_toks([parse_tok(x) for x in outs.split(" ")])
             if toks_same(want, old):
@@ -2306,9 +2328,23 @@ def circuit_port13(fn, v):
     return None
 
 
+CIRCUIT_TRANSIENTS = ("circuit::rc_charging_voltage", "circuit::rc_discharging_voltage", "circuit::rl_current_rise",
+                      "circuit::rl_current_decay")
+
+
+def circuit_flip17(fn, v) -> bool:
+    """Whether the exact τ test (row 17's rule) decides a transient row differently from Rust's rounded one."""
+    return not toks_same(circuit_rust(fn, v, MPFR_P, expm1=True), circuit_rust(fn, v, MPFR_P, expm1=True, exact=True))
+
+
 def circuit_port(fn, v):
-    if fn in ("circuit::rc_charging_voltage", "circuit::rl_current_rise"):
-        return 29, circuit_rust(fn, v, MPFR_P, expm1=True)
+    if fn in CIRCUIT_TRANSIENTS:
+        model = circuit_rust(fn, v, MPFR_P, expm1=True, exact=True)
+        if circuit_flip17(fn, v):
+            return 17, model
+        if fn in ("circuit::rc_charging_voltage", "circuit::rl_current_rise"):
+            return 29, model
+        return None
     if fn == "circuit::resistance_from_geometry" and math.isnan(v[2]):
         return 26, ip_err("cross-section area must be positive, got NaN")
     if fn == "circuit::parallel_plate_capacitance" and math.isnan(v[2]):
@@ -2349,7 +2385,7 @@ def rel_exact_gamma(vs, c, mode):
     return rn_sqrt(q) if mode == 0 else rn_frac(q)
 
 
-def rel_ops(port: bool, gamma=None, r13=None):
+def rel_ops(port: bool, gamma=None, r13=None, r17=None):
     def gov(fn, args, plain):
         if port and all(math.isfinite(x) for x in args) and fv_governed(fn, args) == 18:
             return [b for _k, b in fv_model(fn, args)]
@@ -2369,7 +2405,16 @@ def rel_ops(port: bool, gamma=None, r13=None):
         return gov("FieldVector::cross", list(a) + list(b), plain)
 
     return {"mag": mag, "mag_sq": mag_sq, "dot": dot, "cross": cross, "port": port,
-            "gamma": port if gamma is None else gamma, "r13": port if r13 is None else r13}
+            "gamma": port if gamma is None else gamma, "r13": port if r13 is None else r13,
+            "r17": port if r17 is None else r17}
+
+
+def rel_r_below(a, b, r_mag, O) -> bool:
+    """The Singularity test |a − b| < 10^-30: exact on the inputs (Σ (aᵢ − bᵢ)² < 10^-60, row 17's rule) for the port,
+    Rust's r_mag < 1e-30 otherwise or for a non-finite input."""
+    if O["r17"] and _fin(*a, *b):
+        return sum((Fraction(a[i]) - Fraction(b[i])) ** 2 for i in range(3)) < E30 * E30
+    return r_mag < 1e-30
 
 
 # Row 13 (M2 part 2b-4, the user's "round once" decision of 2026-11-12): relativity.rs's products and quotients of
@@ -2518,7 +2563,7 @@ def rel_rust(fn, v, O, K):
         r_mag = O["mag"](r)
         if math.isnan(r_mag):
             return ip_err("R vector must not contain NaN")
-        if r_mag < 1e-30:
+        if rel_r_below(r, [0.0, 0.0, 0.0], r_mag, O):
             return SINGULAR
         if O["gamma"]:
             if rel_exact_gamma(bv, 1.0, 1) is None:
@@ -2537,7 +2582,7 @@ def rel_rust(fn, v, O, K):
         r_mag = O["mag"](r)
         if O["port"] and math.isnan(r_mag):
             return ip_err("R vector must not contain NaN")
-        if r_mag < 1e-30:
+        if rel_r_below(r, [0.0, 0.0, 0.0], r_mag, O):
             return SINGULAR
         if O["gamma"]:
             g2 = rel_exact_gamma(bv, 1.0, 1)
@@ -2743,7 +2788,7 @@ def rel_solver_rust(fn, ins, P, O, K):
         return ip_err(f"trajectory returned a non-finite acceleration at t = {rust_display(t_r)}")
     rv = [obs[i] - pos[i] for i in range(3)]
     r_mag = O["mag"](rv)
-    if r_mag < 1e-30:
+    if rel_r_below(obs, pos, r_mag, O):
         return SINGULAR
     inv = fdiv(1.0, r_mag)
     n = [x * inv for x in rv]
@@ -2762,8 +2807,9 @@ def rel_solver_rust(fn, ins, P, O, K):
 def relativity_corrections(root: Path, path: Path):
     """The class-C solver rows (the circular orbit and the oscillation) whose outputs change when sin and cos are
     correctly rounded (MPFR), on the port's vector operations (ADR 0002 row 18). A row whose γ² (row 30) changes it is
-    an ADR 0002 mapping instead (relativity_adr_rows)."""
-    K, O, O18 = rel_consts(root), rel_ops(True), rel_ops(True, gamma=False)
+    an ADR 0002 mapping instead (relativity_adr_rows), and so is one the exact |R| test (row 17) changes."""
+    K, O, O18 = rel_consts(root), rel_ops(True), rel_ops(True, gamma=False, r17=False)
+    O17 = rel_ops(True, r17=False)
 
     def fixes(_rows):
         out = []
@@ -2775,6 +2821,8 @@ def relativity_corrections(root: Path, path: Path):
                 continue
             toks = [parse_tok(x) for x in ins.split(" ")]
             want = rel_solver_rust(fn, toks, MPFR_P, O, K)
+            if not toks_same(want, rel_solver_rust(fn, toks, MPFR_P, O17, K)):
+                continue                    # row 17's
             if not toks_same(want, rel_solver_rust(fn, toks, MPFR_P, O18, K)):
                 continue                    # row 30's
             old = wave_toks([parse_tok(x) for x in outs.split(" ")])
@@ -2787,7 +2835,8 @@ def relativity_corrections(root: Path, path: Path):
 
 def relativity_adr_rows(root: Path, path: Path) -> list:
     K, R, P = rel_consts(root), rel_ops(False), rel_ops(True)
-    P18 = rel_ops(True, gamma=False)
+    P18 = rel_ops(True, gamma=False, r17=False)
+    P17 = rel_ops(True, r17=False)                   # the port without row 17's exact |R| test
     out = []
     for line in path.read_text().splitlines():
         if line.startswith("#"):
@@ -2797,22 +2846,30 @@ def relativity_adr_rows(root: Path, path: Path) -> list:
         v = [b for _k, b in toks]
         if fn in ("relativity::solve_retarded_time", "relativity::lienard_wiechert_fields"):
             if _cls == "C":
-                # its trajectory's sin and cos: on correctly rounded primitives, a mapping only where γ² (row 30)
-                # changes it; a change from the primitives alone is the corrected oracle's row
+                # its trajectory's sin and cos: on correctly rounded primitives, a mapping only where γ² (row 30) or
+                # the exact |R| test (row 17) changes it; a change from the primitives alone is the corrected
+                # oracle's row
                 full = rel_solver_rust(fn, toks, MPFR_P, P, K)
-                if not toks_same(full, rel_solver_rust(fn, toks, MPFR_P, P18, K)):
+                if not toks_same(full, rel_solver_rust(fn, toks, MPFR_P, P17, K)):
+                    out.append((fn, ins, wire(full), "17", f"oracle {outs}; ADR 0002 row 17"))
+                elif not toks_same(full, rel_solver_rust(fn, toks, MPFR_P, P18, K)):
                     out.append((fn, ins, wire(full), "30", f"oracle {outs}; ADR 0002 row 30"))
                 continue
             rust, port = rel_solver_rust(fn, toks, GLIBC_P, R, K), rel_solver_rust(fn, toks, GLIBC_P, P, K)
+            r17 = rel_solver_rust(fn, toks, GLIBC_P, P17, K)
             r18 = rel_solver_rust(fn, toks, GLIBC_P, P18, K)
         else:
-            rust, port, r18 = rel_rust(fn, v, R, K), rel_rust(fn, v, P, K), rel_rust(fn, v, P18, K)
+            rust, port = rel_rust(fn, v, R, K), rel_rust(fn, v, P, K)
+            r17, r18 = rel_rust(fn, v, P17, K), rel_rust(fn, v, P18, K)
         if toks_same(rust, port):
             continue
-        # 27: the NaN R; 30: γ alone (or with the vector operations); 18: the vector operations alone.
+        # 27: the NaN R; 17: the exact |R| test; 13: the round-once functions; 18: the vector operations alone; 30: γ
+        # (alone or with the vector operations).
         if (fn == "relativity::lienard_wiechert_e" and port[0] == ("E", "InvalidParameter")
                 and port[1][1].endswith("must not contain NaN") and rust[0][0] != "E"):
             row = 27
+        elif not toks_same(port, r17):
+            row = 17
         elif fn in REL13_FNS:
             row = 13
         elif toks_same(port, r18):
@@ -3248,6 +3305,17 @@ from exact import rn_mono, rn_sqrt  # noqa: E402
 
 def _fin(*xs) -> bool:
     return all(math.isfinite(x) for x in xs)
+
+
+# Row 17's rule over M2 (part 2c-1, the user's "exact thresholds" decision of 2026-11-12): a test against 10^-30 of one
+# rounded product, quotient or sum of two inputs, or of |R|, decided on the exact value (Fraction); a non-finite input
+# keeps Rust's test.
+E30 = Fraction(1, 10 ** 30)
+
+
+def below30(x) -> bool:
+    """|x| < 10^-30 exactly, for an exact rational x."""
+    return abs(x) < E30
 
 
 def adr13(root: Path):

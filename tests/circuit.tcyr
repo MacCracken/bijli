@@ -446,6 +446,21 @@ fn cyrius_tests(): i64 {
     var z0: f64 = vz0;
     var z0b = _bj_bits(z0);
     assert(is_ok(tz0) == 1 && z0 == 0.0 && z0b < 0, "a zero R keeps Rust's chain: −0 stays −0");
+
+    # ADR 0002 row 17's rule (M2 part 2c-1): the τ tests on the exact R·C and L/R against 10^-30.
+    test_group("cyrius_exact_thresholds (ADR 0002 row 17)");
+    var kr: f64 = _bj_from_bits(0x3CDE9FDDC1560C83);
+    var kc: f64 = _bj_from_bits(0x3CC531835188A58C);
+    var kt: f64 = _bj_from_bits(0x398039D665896880);                     # 1e-31
+    var kv1: f64 = bj_rc_discharging_voltage(5.0, kr, kc, kt);
+    var kv2: f64 = bj_rc_charging_voltage(5.0, kr, kc, kt);
+    assert(kv1 == 0.0 && kv2 == 5.0,
+      "R·C rounds to the double 1e-30, but lies below 10^-30 exactly: instant (Rust: not)");
+    var kl: f64 = _bj_from_bits(0x39D0BBA518B5B032);
+    var krl: f64 = _bj_from_bits(0x400A6666666660C5);
+    var tk17, vk17 = bj_rl_current_decay(5.0, krl, kl, kt);
+    var ik17: f64 = vk17;
+    assert(is_ok(tk17) == 1 && ik17 == 0.0, "L/R below 10^-30 exactly, rounded to 1e-30: instant (Rust: 4.52)");
     return 0;
 }
 

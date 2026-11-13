@@ -236,6 +236,26 @@ public fn bj_inductor_energy(inductance: f64, current: f64): f64 {
 
 # ── RC and RL transients ─────────────────────────────────────────────────────────────────────────────────────────
 
+# 1 when the exact |R·C| < 10^-30 (an instant transient), else 0: the rounded τ = RC decides outside 64 ulps of the
+# double nearest 10^-30, the exact product inside (src/crmath_cmp.cyr; ADR 0002 row 17's rule, M2 part 2c-1). A NaN τ
+# is not instant, as Rust's test.
+#must_use
+fn _bj_circuit_instant_rc(r: f64, c: f64, tau: f64): i64 {
+    var a: f64 = f64_abs(tau);
+    var band = _bj_x_band(a, _BJ_FIELD_R2_MIN);
+    if (band == 2) { band = _bj_x_prod_below(r, c, 30); }
+    return band;
+}
+
+# 1 when the exact |L/R| < 10^-30, else 0, as _bj_circuit_instant_rc (R nonzero: the callers refuse |R| < 1e-30).
+#must_use
+fn _bj_circuit_instant_rl(l: f64, r: f64, tau: f64): i64 {
+    var a: f64 = f64_abs(tau);
+    var band = _bj_x_band(a, _BJ_FIELD_R2_MIN);
+    if (band == 2) { band = _bj_x_quot_below(l, r, 30); }
+    return band;
+}
+
 # τ = RC (s). Mirrors `circuit::rc_time_constant`.
 #must_use
 #pure
@@ -244,15 +264,18 @@ public fn bj_rc_time_constant(resistance: f64, capacitance: f64): f64 {
     return tau;
 }
 
-# V(t) = V₀(1 − e^(−t/RC)); V₀ when |RC| < 1e-30 (an instant charge). 1 − e^(−t/RC) is −expm1(−t/RC), correctly
-# rounded (ADR 0002 row 29: Rust's subtraction cancelled for t ≪ RC, and gave 0 below t/RC ≈ 1.1e-16). Mirrors
-# `circuit::rc_charging_voltage`.
+# V(t) = V₀(1 − e^(−t/RC)); V₀ when the exact |RC| < 10^-30 (an instant charge; ADR 0002 row 17's rule, M2 part 2c-1:
+# Rust tested the rounded product). 1 − e^(−t/RC) is −expm1(−t/RC), correctly rounded (row 29: Rust's subtraction
+# cancelled for t ≪ RC, and gave 0 below t/RC ≈ 1.1e-16). Mirrors `circuit::rc_charging_voltage`.
 #must_use
 #pure
 public fn bj_rc_charging_voltage(v0: f64, resistance: f64, capacitance: f64, t: f64): f64 {
     var tau: f64 = resistance * capacitance;
-    var a: f64 = f64_abs(tau);
-    if (a < 0.000000000000000000000000000001) { return v0; }
+    var a: f64 = f64_abs(tau);                     # far from 1e-30 the rounded τ decides at once
+    if (a < 0.0000000000000000000000000000005) { return v0; }
+    if (a <= 0.000000000000000000000000000002 && _bj_circuit_instant_rc(resistance, capacitance, tau) == 1) {
+        return v0;
+    }
     var x: f64 = -t / tau;
     var em1: f64 = _bj_expm1(x);
     var w: f64 = -em1;
@@ -260,13 +283,17 @@ public fn bj_rc_charging_voltage(v0: f64, resistance: f64, capacitance: f64, t: 
     return v;
 }
 
-# V(t) = V₀e^(−t/RC); 0 when |RC| < 1e-30 (an instant discharge). Mirrors `circuit::rc_discharging_voltage`.
+# V(t) = V₀e^(−t/RC); 0 when the exact |RC| < 10^-30 (an instant discharge; row 17's rule). Mirrors
+# `circuit::rc_discharging_voltage`.
 #must_use
 #pure
 public fn bj_rc_discharging_voltage(v0: f64, resistance: f64, capacitance: f64, t: f64): f64 {
     var tau: f64 = resistance * capacitance;
     var a: f64 = f64_abs(tau);
-    if (a < 0.000000000000000000000000000001) { return 0.0; }
+    if (a < 0.0000000000000000000000000000005) { return 0.0; }
+    if (a <= 0.000000000000000000000000000002 && _bj_circuit_instant_rc(resistance, capacitance, tau) == 1) {
+        return 0.0;
+    }
     var x: f64 = -t / tau;
     var e: f64 = _bj_exp(x);
     var v: f64 = v0 * e;
@@ -283,8 +310,8 @@ public fn bj_rl_time_constant(inductance: f64, resistance: f64): Result {
     return Ok(tau);
 }
 
-# I(t) = (V/R)(1 − e^(−tR/L)); V/R when |L/R| < 1e-30 (an instant rise), 1 − e^(−tR/L) as −expm1(−tR/L) (ADR 0002
-# row 29). DivisionByZero when |R| < 1e-30. Mirrors `circuit::rl_current_rise`.
+# I(t) = (V/R)(1 − e^(−tR/L)); V/R when the exact |L/R| < 10^-30 (an instant rise; row 17's rule), 1 − e^(−tR/L) as
+# −expm1(−tR/L) (ADR 0002 row 29). DivisionByZero when |R| < 1e-30. Mirrors `circuit::rl_current_rise`.
 public fn bj_rl_current_rise(voltage: f64, resistance: f64, inductance: f64, t: f64): Result {
     var a: f64 = f64_abs(resistance);
     if (a < 0.000000000000000000000000000001) {
@@ -292,8 +319,11 @@ public fn bj_rl_current_rise(voltage: f64, resistance: f64, inductance: f64, t: 
     }
     var tau: f64 = inductance / resistance;
     var i_max: f64 = voltage / resistance;
-    var at: f64 = f64_abs(tau);
-    if (at < 0.000000000000000000000000000001) { return Ok(i_max); }
+    var at: f64 = f64_abs(tau);                    # far from 1e-30 the rounded τ decides at once
+    if (at < 0.0000000000000000000000000000005) { return Ok(i_max); }
+    if (at <= 0.000000000000000000000000000002 && _bj_circuit_instant_rl(inductance, resistance, tau) == 1) {
+        return Ok(i_max);
+    }
     var x: f64 = -t / tau;
     var em1: f64 = _bj_expm1(x);
     var w: f64 = -em1;
@@ -301,7 +331,8 @@ public fn bj_rl_current_rise(voltage: f64, resistance: f64, inductance: f64, t: 
     return Ok(i);
 }
 
-# I(t) = I₀e^(−tR/L); 0 when |L/R| < 1e-30. DivisionByZero when |R| < 1e-30. Mirrors `circuit::rl_current_decay`.
+# I(t) = I₀e^(−tR/L); 0 when the exact |L/R| < 10^-30 (row 17's rule). DivisionByZero when |R| < 1e-30. Mirrors
+# `circuit::rl_current_decay`.
 public fn bj_rl_current_decay(i0: f64, resistance: f64, inductance: f64, t: f64): Result {
     var a: f64 = f64_abs(resistance);
     if (a < 0.000000000000000000000000000001) {
@@ -309,7 +340,10 @@ public fn bj_rl_current_decay(i0: f64, resistance: f64, inductance: f64, t: f64)
     }
     var tau: f64 = inductance / resistance;
     var at: f64 = f64_abs(tau);
-    if (at < 0.000000000000000000000000000001) { return Ok(0.0); }
+    if (at < 0.0000000000000000000000000000005) { return Ok(0.0); }
+    if (at <= 0.000000000000000000000000000002 && _bj_circuit_instant_rl(inductance, resistance, tau) == 1) {
+        return Ok(0.0);
+    }
     var x: f64 = -t / tau;
     var e: f64 = _bj_exp(x);
     var i: f64 = i0 * e;

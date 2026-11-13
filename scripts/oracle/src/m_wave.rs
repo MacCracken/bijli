@@ -15,7 +15,7 @@
 //! materials of material.tsv's reflectance pairs; waveguide dimensions over the binades and the u32 mode edge; and the
 //! `{ratio:.4}` of `guide_wavelength`'s error over exact ties (odd multiples of 1/32) and 300-digit ratios.
 
-use crate::grids::{Rng, pow2, specials};
+use crate::grids::{Edge2, Rng, knife_edge2, pow2, specials};
 use crate::m_field::{cat, edge_vectors, res_f, v3, vectors};
 use crate::m_material::{dedup, ulps};
 use crate::tsv::{Class, Module, Tok, err, f, i, s};
@@ -391,6 +391,13 @@ fn emit_normal_antennas(m: &mut Module, xs: &[f64], sh: &[f64]) {
             m.row("wave::reflectance_normal", Class::A, &two, &res_f(reflectance_normal(black_box(a), bb)));
             m.row("wave::transmittance_normal", Class::A, &two, &res_f(transmittance_normal(black_box(a), bb)));
         }
+    }
+    // Its knife edge (bijli ADR 0002 row 17's rule, M2 part 2c-1): n₁ + n₂ within an ulp of ±10^-30, the sum exact
+    // (two halves) or rounded (a tiny n₂ against n₁ near 1e-30, or both near 1e-20 with cancellation).
+    for (a, bb) in knife_edge2(Edge2::Sum, &[5e-31, 3e-31, 1e-30, 1e-20, 1e-31], 6, 24) {
+        let two = [f(a), f(bb)];
+        m.row("wave::reflectance_normal", Class::A, &two, &res_f(reflectance_normal(black_box(a), bb)));
+        m.row("wave::transmittance_normal", Class::A, &two, &res_f(transmittance_normal(black_box(a), bb)));
     }
     m.row("wave::hertzian_dipole_directivity", Class::A, &[], &[f(black_box(hertzian_dipole_directivity()))]);
     m.row("wave::half_wave_dipole_directivity", Class::A, &[], &[f(black_box(half_wave_dipole_directivity()))]);

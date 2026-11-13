@@ -11,7 +11,7 @@
 //! factors over a stride of field.rs's vectors; and the Clausius–Mossotti and permeability thresholds approached ulp
 //! by ulp.
 
-use crate::grids::{Rng, pow2, specials};
+use crate::grids::{Edge2, Rng, knife_edge2, pow2, specials};
 use crate::m_field::{cat, res_f, res_v, v3, vectors};
 use crate::tsv::{Class, Module, Tok, b, e, f};
 use bijli::field::{EPSILON_0, FieldVector, MU_0};
@@ -136,6 +136,20 @@ pub fn emit() -> Module {
                 &res_f(magnetic_energy_density_material(black_box(mu), 1.5)),
             );
         }
+    }
+    // Its knife edge (bijli ADR 0002 row 17's rule, M2 part 2c-1): μ_r·μ₀ within an ulp of 10^-30.
+    for (_mu0, mu) in knife_edge2(Edge2::Prod, &[MU_0], 0, 400) {
+        m.row(
+            "material::magnetic_energy_density_material",
+            Class::A,
+            &[f(mu), f(1.5)],
+            &res_f(magnetic_energy_density_material(black_box(mu), 1.5)),
+        );
+    }
+    // classify_magnetic about −1e-15, ulp by ulp (the exact test χ < −10^-15).
+    for k in -3..=3 {
+        let x = -ulps(1e-15, k);
+        m.row("material::classify_magnetic", Class::A, &[f(x)], &[e("MagneticType", classify_magnetic(black_box(x)))]);
     }
 
     // Triples: Curie–Weiss and the bound volume charge.

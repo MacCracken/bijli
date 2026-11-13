@@ -8690,6 +8690,99 @@ fn _bj_x_band(v: f64, t: f64): i64 {
     return 2;
 }
 
+# ── M2's exact thresholds (M2 part 2c-1, ADR 0002 row 17's rule) ────────────────────────────────────────────────────
+
+# M2's tests against 10^-30 of one rounded product, quotient or sum of two inputs (|R·C|, |L/R|, |μ_r·μ₀|,
+# |n₁ + n₂|): that value is rounded once, within half an ulp of the exact one, so outside _bj_x_band's 64 ulps the
+# rounded comparison is the exact one, and inside it the exact sign below decides. In the band the terms lie within a
+# few hundred bits of each other (the value is near 10^-30, so its parts are), well inside the 2,560 bits.
+
+# The sign (−1, 0 or 1) of Σ ±cᵢ·m₁ᵢ·m₂ᵢ·2^(k₁ᵢ + k₂ᵢ)·10^(qᵢ) over the nt terms at tm, seven words each (m₁, k₁, m₂,
+# k₂, c, negative, q; m₁, m₂ < 2^53, c 1 or 2, 0 ≤ q ≤ 60), exactly: each term times 5^q in integers, aligned on the
+# least exponent of 2 (the callers keep the span inside the capacity).
+#must_use
+fn _bj_x_sign(tm: *i64, nt): i64 {
+    var base = 0;
+    for (var j = 0; j < nt; j = j + 1) {
+        var e = tm[j * 7 + 1] + tm[j * 7 + 3] + tm[j * 7 + 6];
+        if (j == 0 || e < base) { base = e; }
+    }
+    var P[640];
+    var N[640];
+    var T[640];
+    _bj_xn_zero(&P);
+    _bj_xn_zero(&N);
+    for (var u = 0; u < nt; u = u + 1) {
+        _bj_xn_term(&T, tm[u * 7], tm[u * 7 + 2], tm[u * 7 + 4], tm[u * 7 + 6]);
+        var sh = tm[u * 7 + 1] + tm[u * 7 + 3] + tm[u * 7 + 6] - base;
+        if (tm[u * 7 + 5] == 1) { _bj_xn_add_shl(&N, &T, sh); } else { _bj_xn_add_shl(&P, &T, sh); }
+    }
+    var r = _bj_xn_cmp(&P, &N);
+    return r;
+}
+
+# tm's term j := ±x·y·10^q for finite nonzero x and y (y = 1 for a single double), its sign flipped when flip is 1.
+fn _bj_x_put2(tm: *i64, j, x: f64, y: f64, q, flip) {
+    var sx: i64[2];
+    var sy: i64[2];
+    var nx = _bj_x_split(x, &sx);
+    var ny = _bj_x_split(y, &sy);
+    tm[j * 7] = sx[0];
+    tm[j * 7 + 1] = sx[1];
+    tm[j * 7 + 2] = sy[0];
+    tm[j * 7 + 3] = sy[1];
+    tm[j * 7 + 4] = 1;
+    tm[j * 7 + 5] = nx ^ ny ^ flip;
+    tm[j * 7 + 6] = q;
+    return 0;
+}
+
+# 1 when the exact |x·y| < 10^-p, else 0, for finite nonzero x and y (0 < p ≤ 60).
+#must_use
+fn _bj_x_prod_below(x: f64, y: f64, p): i64 {
+    var tm: i64[14];
+    var ax: f64 = f64_abs(x);
+    var ay: f64 = f64_abs(y);
+    _bj_x_put2(&tm, 0, ax, ay, p, 0);
+    _bj_x_put2(&tm, 1, 1.0, 1.0, 0, 1);
+    if (_bj_x_sign(&tm, 2) < 0) { return 1; }
+    return 0;
+}
+
+# 1 when the exact |x/y| < 10^-p (|x|·10^p < |y|), else 0, for finite nonzero x and y (0 < p ≤ 60).
+#must_use
+fn _bj_x_quot_below(x: f64, y: f64, p): i64 {
+    var tm: i64[14];
+    var ax: f64 = f64_abs(x);
+    var ay: f64 = f64_abs(y);
+    _bj_x_put2(&tm, 0, ax, 1.0, p, 0);
+    _bj_x_put2(&tm, 1, ay, 1.0, 0, 1);
+    if (_bj_x_sign(&tm, 2) < 0) { return 1; }
+    return 0;
+}
+
+# 1 when the exact |x + y| < 10^-p, else 0, for finite x and y (0 < p ≤ 60): x + y = s + t exactly (TwoSum), and
+# |s + t| = sign(s)·(s + t) since |t| ≤ half an ulp of s.
+#must_use
+fn _bj_x_sum_below(x: f64, y: f64, p): i64 {
+    var s, t = _bj_cr_two_sum(x, y);
+    var sv: f64 = s;
+    var tv: f64 = t;
+    if (sv == 0.0) { return 1; }
+    var tm: i64[21];
+    var flip = 0;
+    if (sv < 0.0) { flip = 1; }
+    _bj_x_put2(&tm, 0, sv, 1.0, p, flip);
+    var nt = 1;
+    if (tv != 0.0) {
+        _bj_x_put2(&tm, 1, tv, 1.0, p, flip);
+        nt = 2;
+    }
+    _bj_x_put2(&tm, nt, 1.0, 1.0, 0, 1);
+    if (_bj_x_sign(&tm, nt + 1) < 0) { return 1; }
+    return 0;
+}
+
 # --- mathx.cyr ---
 
 # mathx.cyr — bijli's math helpers: Rust std semantics on top of the Cyrius builtins.
@@ -15174,12 +15267,14 @@ public fn bj_b_field_from_h(relative_permeability: f64, h_field: BjFieldVector):
 }
 
 # u = B²/(2μ) (J/m³), μ = μ_r·μ₀, correctly rounded (ADR 0002 row 13; a non-finite μ_r or B keeps Rust's B·B/(2μ)).
-# DivisionByZero when the rounded |μ_r·μ₀| < 1e-30 (a NaN passes, as Rust's test). Mirrors
-# `material::magnetic_energy_density_material`.
+# DivisionByZero when the exact |μ_r·μ₀| < 10^-30 (ADR 0002 row 17's rule, M2 part 2c-1: Rust tested the rounded
+# product; a NaN passes, as Rust's test). Mirrors `material::magnetic_energy_density_material`.
 public fn bj_magnetic_energy_density_material(relative_permeability: f64, b_magnitude: f64): Result {
     var mu: f64 = relative_permeability * BJ_MU_0;
     var a: f64 = f64_abs(mu);
-    if (a < 0.000000000000000000000000000001) {
+    var band = _bj_x_band(a, _BJ_FIELD_R2_MIN);
+    if (band == 2) { band = _bj_x_prod_below(relative_permeability, BJ_MU_0, 30); }
+    if (band == 1) {
         return Err(_bj_err_division_by_zero("permeability cannot be zero for energy density"));
     }
     if (_bj_is_finite(relative_permeability) == 0 || _bj_is_finite(b_magnitude) == 0) {
@@ -15232,14 +15327,16 @@ public fn bj_curie_weiss(curie_constant: f64, temperature: f64, curie_temperatur
     return Ok(chi);
 }
 
-# The magnetic class of a susceptibility: Ok(BJ_MAGNETIC_TYPE_DIAMAGNETIC) below −1e-15, FERROMAGNETIC above 1, else
-# PARAMAGNETIC. InvalidParameter for a NaN susceptibility (ADR 0002 row 21: Rust classifies NaN as paramagnetic).
-# Mirrors `material::classify_magnetic`.
+# The magnetic class of a susceptibility: Ok(BJ_MAGNETIC_TYPE_DIAMAGNETIC) below −10^-15 exactly, FERROMAGNETIC above
+# 1, else PARAMAGNETIC. InvalidParameter for a NaN susceptibility (ADR 0002 row 21: Rust classifies NaN as
+# paramagnetic). The exact test χ < −10^-15 is χ ≤ −1e-15 on doubles: the double 1e-15 lies 0.39 ulp above 10^-15,
+# and no double falls between them (ADR 0002 row 17's rule, the user's answer of 2026-11-12: Rust's χ < −1e-15 left
+# the double −1e-15 itself, which is below −10^-15, paramagnetic). Mirrors `material::classify_magnetic`.
 public fn bj_classify_magnetic(susceptibility: f64): Result {
     if (susceptibility != susceptibility) {
         return Err(_bj_err_invalid_parameter("magnetic susceptibility must not be NaN, got NaN"));
     }
-    if (susceptibility < -0.000000000000001) { return Ok(BJ_MAGNETIC_TYPE_DIAMAGNETIC); }
+    if (susceptibility <= -0.000000000000001) { return Ok(BJ_MAGNETIC_TYPE_DIAMAGNETIC); }
     if (susceptibility > 1.0) { return Ok(BJ_MAGNETIC_TYPE_FERROMAGNETIC); }
     return Ok(BJ_MAGNETIC_TYPE_PARAMAGNETIC);
 }
@@ -15687,12 +15784,15 @@ public fn bj_reflectance_p(n1: f64, theta_i: f64, n2: f64, theta_t: f64): Result
     return Ok(rr);
 }
 
-# R = ((n₁ − n₂)/(n₁ + n₂))² at normal incidence. DivisionByZero when |n₁ + n₂| < 1e-30. Mirrors
-# `wave::reflectance_normal`.
+# R = ((n₁ − n₂)/(n₁ + n₂))² at normal incidence. DivisionByZero when the exact |n₁ + n₂| < 10^-30 (ADR 0002 row
+# 17's rule, M2 part 2c-1: the rounded sum decides outside 64 ulps of the double nearest 10^-30, src/crmath_cmp.cyr's
+# exact sum inside; a NaN sum passes, as Rust's test). Mirrors `wave::reflectance_normal`.
 public fn bj_reflectance_normal(n1: f64, n2: f64): Result {
     var den: f64 = n1 + n2;
     var m: f64 = f64_abs(den);
-    if (m < 0.000000000000000000000000000001) {
+    var band = _bj_x_band(m, _BJ_FIELD_R2_MIN);
+    if (band == 2) { band = _bj_x_sum_below(n1, n2, 30); }
+    if (band == 1) {
         return Err(_bj_err_division_by_zero("sum of refractive indices cannot be zero"));
     }
     var d: f64 = n1 - n2;
@@ -16468,6 +16568,26 @@ public fn bj_inductor_energy(inductance: f64, current: f64): f64 {
 
 # ── RC and RL transients ─────────────────────────────────────────────────────────────────────────────────────────
 
+# 1 when the exact |R·C| < 10^-30 (an instant transient), else 0: the rounded τ = RC decides outside 64 ulps of the
+# double nearest 10^-30, the exact product inside (src/crmath_cmp.cyr; ADR 0002 row 17's rule, M2 part 2c-1). A NaN τ
+# is not instant, as Rust's test.
+#must_use
+fn _bj_circuit_instant_rc(r: f64, c: f64, tau: f64): i64 {
+    var a: f64 = f64_abs(tau);
+    var band = _bj_x_band(a, _BJ_FIELD_R2_MIN);
+    if (band == 2) { band = _bj_x_prod_below(r, c, 30); }
+    return band;
+}
+
+# 1 when the exact |L/R| < 10^-30, else 0, as _bj_circuit_instant_rc (R nonzero: the callers refuse |R| < 1e-30).
+#must_use
+fn _bj_circuit_instant_rl(l: f64, r: f64, tau: f64): i64 {
+    var a: f64 = f64_abs(tau);
+    var band = _bj_x_band(a, _BJ_FIELD_R2_MIN);
+    if (band == 2) { band = _bj_x_quot_below(l, r, 30); }
+    return band;
+}
+
 # τ = RC (s). Mirrors `circuit::rc_time_constant`.
 #must_use
 #pure
@@ -16476,15 +16596,18 @@ public fn bj_rc_time_constant(resistance: f64, capacitance: f64): f64 {
     return tau;
 }
 
-# V(t) = V₀(1 − e^(−t/RC)); V₀ when |RC| < 1e-30 (an instant charge). 1 − e^(−t/RC) is −expm1(−t/RC), correctly
-# rounded (ADR 0002 row 29: Rust's subtraction cancelled for t ≪ RC, and gave 0 below t/RC ≈ 1.1e-16). Mirrors
-# `circuit::rc_charging_voltage`.
+# V(t) = V₀(1 − e^(−t/RC)); V₀ when the exact |RC| < 10^-30 (an instant charge; ADR 0002 row 17's rule, M2 part 2c-1:
+# Rust tested the rounded product). 1 − e^(−t/RC) is −expm1(−t/RC), correctly rounded (row 29: Rust's subtraction
+# cancelled for t ≪ RC, and gave 0 below t/RC ≈ 1.1e-16). Mirrors `circuit::rc_charging_voltage`.
 #must_use
 #pure
 public fn bj_rc_charging_voltage(v0: f64, resistance: f64, capacitance: f64, t: f64): f64 {
     var tau: f64 = resistance * capacitance;
-    var a: f64 = f64_abs(tau);
-    if (a < 0.000000000000000000000000000001) { return v0; }
+    var a: f64 = f64_abs(tau);                     # far from 1e-30 the rounded τ decides at once
+    if (a < 0.0000000000000000000000000000005) { return v0; }
+    if (a <= 0.000000000000000000000000000002 && _bj_circuit_instant_rc(resistance, capacitance, tau) == 1) {
+        return v0;
+    }
     var x: f64 = -t / tau;
     var em1: f64 = _bj_expm1(x);
     var w: f64 = -em1;
@@ -16492,13 +16615,17 @@ public fn bj_rc_charging_voltage(v0: f64, resistance: f64, capacitance: f64, t: 
     return v;
 }
 
-# V(t) = V₀e^(−t/RC); 0 when |RC| < 1e-30 (an instant discharge). Mirrors `circuit::rc_discharging_voltage`.
+# V(t) = V₀e^(−t/RC); 0 when the exact |RC| < 10^-30 (an instant discharge; row 17's rule). Mirrors
+# `circuit::rc_discharging_voltage`.
 #must_use
 #pure
 public fn bj_rc_discharging_voltage(v0: f64, resistance: f64, capacitance: f64, t: f64): f64 {
     var tau: f64 = resistance * capacitance;
     var a: f64 = f64_abs(tau);
-    if (a < 0.000000000000000000000000000001) { return 0.0; }
+    if (a < 0.0000000000000000000000000000005) { return 0.0; }
+    if (a <= 0.000000000000000000000000000002 && _bj_circuit_instant_rc(resistance, capacitance, tau) == 1) {
+        return 0.0;
+    }
     var x: f64 = -t / tau;
     var e: f64 = _bj_exp(x);
     var v: f64 = v0 * e;
@@ -16515,8 +16642,8 @@ public fn bj_rl_time_constant(inductance: f64, resistance: f64): Result {
     return Ok(tau);
 }
 
-# I(t) = (V/R)(1 − e^(−tR/L)); V/R when |L/R| < 1e-30 (an instant rise), 1 − e^(−tR/L) as −expm1(−tR/L) (ADR 0002
-# row 29). DivisionByZero when |R| < 1e-30. Mirrors `circuit::rl_current_rise`.
+# I(t) = (V/R)(1 − e^(−tR/L)); V/R when the exact |L/R| < 10^-30 (an instant rise; row 17's rule), 1 − e^(−tR/L) as
+# −expm1(−tR/L) (ADR 0002 row 29). DivisionByZero when |R| < 1e-30. Mirrors `circuit::rl_current_rise`.
 public fn bj_rl_current_rise(voltage: f64, resistance: f64, inductance: f64, t: f64): Result {
     var a: f64 = f64_abs(resistance);
     if (a < 0.000000000000000000000000000001) {
@@ -16524,8 +16651,11 @@ public fn bj_rl_current_rise(voltage: f64, resistance: f64, inductance: f64, t: 
     }
     var tau: f64 = inductance / resistance;
     var i_max: f64 = voltage / resistance;
-    var at: f64 = f64_abs(tau);
-    if (at < 0.000000000000000000000000000001) { return Ok(i_max); }
+    var at: f64 = f64_abs(tau);                    # far from 1e-30 the rounded τ decides at once
+    if (at < 0.0000000000000000000000000000005) { return Ok(i_max); }
+    if (at <= 0.000000000000000000000000000002 && _bj_circuit_instant_rl(inductance, resistance, tau) == 1) {
+        return Ok(i_max);
+    }
     var x: f64 = -t / tau;
     var em1: f64 = _bj_expm1(x);
     var w: f64 = -em1;
@@ -16533,7 +16663,8 @@ public fn bj_rl_current_rise(voltage: f64, resistance: f64, inductance: f64, t: 
     return Ok(i);
 }
 
-# I(t) = I₀e^(−tR/L); 0 when |L/R| < 1e-30. DivisionByZero when |R| < 1e-30. Mirrors `circuit::rl_current_decay`.
+# I(t) = I₀e^(−tR/L); 0 when the exact |L/R| < 10^-30 (row 17's rule). DivisionByZero when |R| < 1e-30. Mirrors
+# `circuit::rl_current_decay`.
 public fn bj_rl_current_decay(i0: f64, resistance: f64, inductance: f64, t: f64): Result {
     var a: f64 = f64_abs(resistance);
     if (a < 0.000000000000000000000000000001) {
@@ -16541,7 +16672,10 @@ public fn bj_rl_current_decay(i0: f64, resistance: f64, inductance: f64, t: f64)
     }
     var tau: f64 = inductance / resistance;
     var at: f64 = f64_abs(tau);
-    if (at < 0.000000000000000000000000000001) { return Ok(0.0); }
+    if (at < 0.0000000000000000000000000000005) { return Ok(0.0); }
+    if (at <= 0.000000000000000000000000000002 && _bj_circuit_instant_rl(inductance, resistance, tau) == 1) {
+        return Ok(0.0);
+    }
     var x: f64 = -t / tau;
     var e: f64 = _bj_exp(x);
     var i: f64 = i0 * e;
@@ -16709,6 +16843,20 @@ public struct BjFourPotential {
 # An address as a *f64: a BjEmTensor's sixteen components, from `&t` of a local or an untyped `self` (a `*T`).
 fn _bj_rel_f64p(p): *f64 {
     return p;
+}
+
+# 1 when the exact |R| < 10^-30 (Σ Rᵢ² < 10^-60), else 0: the rounded |R| decides outside 64 ulps of the double
+# nearest 10^-30, the exact sum of squares inside (src/crmath_cmp.cyr; ADR 0002 row 17, as the Green's functions'). A
+# NaN |R| is not below (Rust's test), and an ∞ one lies far above.
+#must_use
+fn _bj_rel_r_below(r_vec: BjFieldVector, r_mag: f64): i64 {
+    var band = _bj_x_band(r_mag, _BJ_FIELD_R2_MIN);
+    if (band == 2) {
+        var rp: f64[3];
+        _bj_rel_parts(r_vec, &rp);
+        band = _bj_x_r2_below(&rp, &_bj_x_origin, 60);
+    }
+    return band;
 }
 
 # g[k] := s·x (s = 1 or −1) for a finite x: a dual component rounded once is F's own (ADR 0002 row 13); a non-finite
@@ -17173,12 +17321,16 @@ public fn bj_retarded_vector_potential(charge: f64, velocity: BjFieldVector, ret
     return Ok(0);
 }
 
-# R_eff = |R| − R⋅β (> 0 for |β| < 1): InvalidParameter "R vector must not contain NaN", Singularity for |R| < 1e-30,
-# InvalidParameter "β must be < 1" unless |β| < 1 exactly (a NaN part refused; ADR 0002 row 30).
+# R_eff = |R| − R⋅β (> 0 for |β| < 1): InvalidParameter "R vector must not contain NaN", Singularity for
+# |R| < 10^-30 exactly (row 17's rule), InvalidParameter "β must be < 1" unless |β| < 1 exactly (a NaN part refused;
+# ADR 0002 row 30).
 fn _bj_rel_effective_distance(r_vec: BjFieldVector, beta_vec: BjFieldVector): Result {
     var r_mag: f64 = r_vec.magnitude();
     if (r_mag != r_mag) { return Err(_bj_err_invalid_parameter("R vector must not contain NaN")); }
-    if (r_mag < 0.000000000000000000000000000001) { return Err(_bj_err_singularity()); }
+    if (r_mag < 0.0000000000000000000000000000005) { return Err(_bj_err_singularity()); }
+    if (r_mag <= 0.000000000000000000000000000002 && _bj_rel_r_below(r_vec, r_mag) == 1) {
+        return Err(_bj_err_singularity());
+    }
     var bp: f64[3];
     _bj_rel_parts(beta_vec, &bp);
     if (_bj_cr_lorentz_ok(&bp, 3, 1.0) == 0) { return Err(_bj_err_invalid_parameter("β must be < 1")); }
@@ -17221,14 +17373,17 @@ public fn bj_lienard_wiechert_vector_potential(charge: f64, r_vec: BjFieldVector
 # E = (q/4πε₀)(n̂ − β)/(γ²κ³R²) + (q/4πε₀c) n̂ × [(n̂ − β) × β̇]/(κ³R) (V/m) into out, κ = 1 − n̂⋅β: the velocity
 # (Coulomb, ∝ 1/R²) and acceleration (radiation, ∝ 1/R) fields; r_vec from the retarded position to the field point,
 # β = v/c and β̇ = a/c at the retarded time. InvalidParameter for a NaN R ("R vector must not contain NaN", as the
-# potentials: ADR 0002 row 27, where Rust went on to NaN), Singularity for |R| < 1e-30, InvalidParameter unless |β| < 1
-# exactly, DivisionByZero for |κ| < 1e-30; out untouched on an error. γ² = 1/(1 − |β|²) is correctly rounded from the
-# exact difference (ADR 0002 row 30). Mirrors `relativity::lienard_wiechert_e`.
+# potentials: ADR 0002 row 27, where Rust went on to NaN), Singularity for |R| < 10^-30 exactly, InvalidParameter
+# unless |β| < 1 exactly, DivisionByZero for |κ| < 1e-30; out untouched on an error. γ² = 1/(1 − |β|²) is correctly
+# rounded from the exact difference (ADR 0002 row 30). Mirrors `relativity::lienard_wiechert_e`.
 public fn bj_lienard_wiechert_e(charge: f64, r_vec: BjFieldVector, beta_vec: BjFieldVector, beta_dot: BjFieldVector,
   out: *BjFieldVector): Result {
     var r_mag: f64 = r_vec.magnitude();
     if (r_mag != r_mag) { return Err(_bj_err_invalid_parameter("R vector must not contain NaN")); }
-    if (r_mag < 0.000000000000000000000000000001) { return Err(_bj_err_singularity()); }
+    if (r_mag < 0.0000000000000000000000000000005) { return Err(_bj_err_singularity()); }
+    if (r_mag <= 0.000000000000000000000000000002 && _bj_rel_r_below(r_vec, r_mag) == 1) {
+        return Err(_bj_err_singularity());
+    }
     var bp: f64[3];
     _bj_rel_parts(beta_vec, &bp);
     var g2: f64[1];
@@ -17613,7 +17768,9 @@ public fn bj_lienard_wiechert_fields(charge: f64, observer_pos: *f64, observatio
     var rz: f64 = observer_pos[2] - st[2];
     var r_vec: BjFieldVector = BjFieldVector_new(rx, ry, rz);
     var r_mag: f64 = r_vec.magnitude();
-    if (r_mag < 0.000000000000000000000000000001) { return Err(_bj_err_singularity()); }
+    var band = _bj_x_band(r_mag, _BJ_FIELD_R2_MIN);       # the exact |observer − position| (ADR 0002 row 17's rule)
+    if (band == 2) { band = _bj_x_r2_below(observer_pos, &st, 60); }
+    if (band == 1) { return Err(_bj_err_singularity()); }
     var inv: f64 = 1.0 / r_mag;
     var n_hat: BjFieldVector = r_vec.scale(inv);
     var bx: f64 = st[3] / BJ_SPEED_OF_LIGHT;

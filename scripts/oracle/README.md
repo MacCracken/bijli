@@ -82,7 +82,10 @@ src/crmath_mono.cyr's product of five full-precision doubles (`prod5`, and `prod
 Fractions, on any binade, products steered to the subnormal boundary, exact ties and signed zeros. Its mono_wide
 families (M2 part 2b-4) check src/crmath_mono.cyr's monomial of up to six factors a side (`mono_wide`, and
 `mono_wide_acc` its exact path alone), within the 253-bit capacity, the Larmor power's shape among them. `cr_driver.cyr`
-reads up to sixteen words a call, and `cr_verify.py` refuses a longer one. Its ux families (`cr_verify.py . ux`, M1 part 5c-2) check src/crmath_ux.cyr's
+reads up to sixteen words a call, and `cr_verify.py` refuses a longer one. Its below_prod, below_quot and below_sum
+families (M2 part 2c-1) check src/crmath_cmp.cyr's exact |x·y|, |x/y| and |x + y| < 10^-p against Fractions, and
+grids.rs's `knife_edge2` and `knife_band2` put the corpus's rows in the 0.024-ulp band where a rounding next to the
+double 1e-30 flips such a test. Its ux families (`cr_verify.py . ux`, M1 part 5c-2) check src/crmath_ux.cyr's
 e^x, cosh, sinh, ln(s·2^E), (s·2^E)^y and sin and cos past DBL_MAX against `mpfr_ref.wide`: MPFR at 53 bits with its
 widest exponent range, where nothing over- or underflows. Each (s, e) result is read in two calls, its significand
 and its exponent.

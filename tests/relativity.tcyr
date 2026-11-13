@@ -1021,6 +1021,19 @@ fn cyrius_tests(): i64 {
     var l13u: f64 = bj_larmor_power(0.0000000000000000001581204017112003, 242544583229325020000.0);
     assert(l13u == 0.00000000000032707474851909877, "the electron-scale Larmor power rounded once (Rust: …987e-13)");
 
+    # ADR 0002 row 17's rule (M2 part 2c-1): |R| against 10^-30 exactly (Σ Rᵢ² < 10^-60).
+    test_group("cyrius_exact_thresholds (ADR 0002 row 17)");
+    var kx17: f64 = _bj_from_bits(0x39A856C1984E1CB4);
+    var ky17: f64 = _bj_from_bits(0x39B039D665896884);
+    var kr17 = BjFieldVector_new(kx17, ky17, 0.0);
+    var kb17 = BjFieldVector_new(0.1, 0.0, 0.0);
+    var tp17, vp17 = bj_lienard_wiechert_scalar_potential(1.0, kr17, kb17);
+    assert(is_ok(tp17) == 1,
+      "|R| at least 10^-30 exactly, its rounding below the double 1e-30: computed (Rust: Singularity)");
+    var ke17: BjFieldVector;
+    var te17, ve17 = bj_lienard_wiechert_e(1.0, kr17, kb17, zv, &ke17);
+    assert(is_ok(te17) == 1, "the same R through E");
+
     test_group("cyrius_tensor_and_four_vector");
     var e = BjFieldVector_new(1.0, 2.0, 3.0);
     var b = BjFieldVector_new(-1.0, 0.5, 0.25);

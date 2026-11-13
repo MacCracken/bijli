@@ -237,6 +237,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
 - **circuit** (ADR 0002 row 29, M2 part 2a-1): `rc_charging_voltage` and `rl_current_rise` cancelled in 1 − e^(−t/τ)
   (8e-8 relative at t/τ = 10^-10, 0 below 1.1·10^-16); they now take −expm1(−t/τ), kimiya's correctly rounded expm1
   (`src/crmath_kx.cyr`, with its exp tables in `src/crmath_k_data.cyr`; `cr_verify.py` checks it against MPFR).
+- **M2's thresholds** (ADR 0002 row 17 amended, M2 part 2c-1, the user's answers of 2026-11-12): the RC and RL
+  transients tested the rounded R·C and L/R against 1e-30, `magnetic_energy_density_material` the rounded μ_r·μ₀,
+  `reflectance_normal` and `transmittance_normal` the rounded n₁ + n₂, and the Liénard–Wiechert potentials, E and
+  fields the rounded |R|, so a value just below 10^-30 that rounds to the double 1e-30 (which lies above it) passed,
+  and one just above could be refused; each is now exact (`src/crmath_cmp.cyr`'s exact sign of a sum of products,
+  checked by `cr_verify.py`'s below_* families). `classify_magnetic` reads its −1e-15 as −10^-15 exactly, so
+  χ = −1e-15 itself is diamagnetic (Rust: paramagnetic).
 - **relativity** (ADR 0002 row 13 amended, M2 part 2b-4): `retarded_scalar_potential`, `retarded_vector_potential`,
   `larmor_power` and `EmTensor::dual` rounded two to five times, and overflowed where the value is representable
   (Larmor with q² past DBL_MAX, the dual of B past DBL_MAX/c: ∞ each); they are now correctly rounded for finite

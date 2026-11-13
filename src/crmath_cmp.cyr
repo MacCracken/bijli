@@ -199,3 +199,96 @@ fn _bj_x_band(v: f64, t: f64): i64 {
     if (w < -64) { return 1; }
     return 2;
 }
+
+# ── M2's exact thresholds (M2 part 2c-1, ADR 0002 row 17's rule) ────────────────────────────────────────────────────
+
+# M2's tests against 10^-30 of one rounded product, quotient or sum of two inputs (|R·C|, |L/R|, |μ_r·μ₀|,
+# |n₁ + n₂|): that value is rounded once, within half an ulp of the exact one, so outside _bj_x_band's 64 ulps the
+# rounded comparison is the exact one, and inside it the exact sign below decides. In the band the terms lie within a
+# few hundred bits of each other (the value is near 10^-30, so its parts are), well inside the 2,560 bits.
+
+# The sign (−1, 0 or 1) of Σ ±cᵢ·m₁ᵢ·m₂ᵢ·2^(k₁ᵢ + k₂ᵢ)·10^(qᵢ) over the nt terms at tm, seven words each (m₁, k₁, m₂,
+# k₂, c, negative, q; m₁, m₂ < 2^53, c 1 or 2, 0 ≤ q ≤ 60), exactly: each term times 5^q in integers, aligned on the
+# least exponent of 2 (the callers keep the span inside the capacity).
+#must_use
+fn _bj_x_sign(tm: *i64, nt): i64 {
+    var base = 0;
+    for (var j = 0; j < nt; j = j + 1) {
+        var e = tm[j * 7 + 1] + tm[j * 7 + 3] + tm[j * 7 + 6];
+        if (j == 0 || e < base) { base = e; }
+    }
+    var P[640];
+    var N[640];
+    var T[640];
+    _bj_xn_zero(&P);
+    _bj_xn_zero(&N);
+    for (var u = 0; u < nt; u = u + 1) {
+        _bj_xn_term(&T, tm[u * 7], tm[u * 7 + 2], tm[u * 7 + 4], tm[u * 7 + 6]);
+        var sh = tm[u * 7 + 1] + tm[u * 7 + 3] + tm[u * 7 + 6] - base;
+        if (tm[u * 7 + 5] == 1) { _bj_xn_add_shl(&N, &T, sh); } else { _bj_xn_add_shl(&P, &T, sh); }
+    }
+    var r = _bj_xn_cmp(&P, &N);
+    return r;
+}
+
+# tm's term j := ±x·y·10^q for finite nonzero x and y (y = 1 for a single double), its sign flipped when flip is 1.
+fn _bj_x_put2(tm: *i64, j, x: f64, y: f64, q, flip) {
+    var sx: i64[2];
+    var sy: i64[2];
+    var nx = _bj_x_split(x, &sx);
+    var ny = _bj_x_split(y, &sy);
+    tm[j * 7] = sx[0];
+    tm[j * 7 + 1] = sx[1];
+    tm[j * 7 + 2] = sy[0];
+    tm[j * 7 + 3] = sy[1];
+    tm[j * 7 + 4] = 1;
+    tm[j * 7 + 5] = nx ^ ny ^ flip;
+    tm[j * 7 + 6] = q;
+    return 0;
+}
+
+# 1 when the exact |x·y| < 10^-p, else 0, for finite nonzero x and y (0 < p ≤ 60).
+#must_use
+fn _bj_x_prod_below(x: f64, y: f64, p): i64 {
+    var tm: i64[14];
+    var ax: f64 = f64_abs(x);
+    var ay: f64 = f64_abs(y);
+    _bj_x_put2(&tm, 0, ax, ay, p, 0);
+    _bj_x_put2(&tm, 1, 1.0, 1.0, 0, 1);
+    if (_bj_x_sign(&tm, 2) < 0) { return 1; }
+    return 0;
+}
+
+# 1 when the exact |x/y| < 10^-p (|x|·10^p < |y|), else 0, for finite nonzero x and y (0 < p ≤ 60).
+#must_use
+fn _bj_x_quot_below(x: f64, y: f64, p): i64 {
+    var tm: i64[14];
+    var ax: f64 = f64_abs(x);
+    var ay: f64 = f64_abs(y);
+    _bj_x_put2(&tm, 0, ax, 1.0, p, 0);
+    _bj_x_put2(&tm, 1, ay, 1.0, 0, 1);
+    if (_bj_x_sign(&tm, 2) < 0) { return 1; }
+    return 0;
+}
+
+# 1 when the exact |x + y| < 10^-p, else 0, for finite x and y (0 < p ≤ 60): x + y = s + t exactly (TwoSum), and
+# |s + t| = sign(s)·(s + t) since |t| ≤ half an ulp of s.
+#must_use
+fn _bj_x_sum_below(x: f64, y: f64, p): i64 {
+    var s, t = _bj_cr_two_sum(x, y);
+    var sv: f64 = s;
+    var tv: f64 = t;
+    if (sv == 0.0) { return 1; }
+    var tm: i64[21];
+    var flip = 0;
+    if (sv < 0.0) { flip = 1; }
+    _bj_x_put2(&tm, 0, sv, 1.0, p, flip);
+    var nt = 1;
+    if (tv != 0.0) {
+        _bj_x_put2(&tm, 1, tv, 1.0, p, flip);
+        nt = 2;
+    }
+    _bj_x_put2(&tm, nt, 1.0, 1.0, 0, 1);
+    if (_bj_x_sign(&tm, nt + 1) < 0) { return 1; }
+    return 0;
+}

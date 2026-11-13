@@ -323,6 +323,38 @@ def exact_families(rng, count):
             a = [x * 2.0 ** rng.randint(-60, 60) for x in a]
         ex = sum((Fraction(x) - Fraction(y)) ** 2 for x, y in zip(a, b)) < Fraction(1, 10 ** p)
         calls.append(("r2_below", a + b + [p], 1.0 if ex else 0.0))
+    # src/crmath_cmp.cyr's exact |x·y|, |x/y| and |x + y| < 10^-p (M2 part 2c-1): pairs whose exact value lies within a
+    # few ulps of 10^-p (p = 30 mostly, and every p up to 60), sums that round (a tiny or subnormal partner) or cancel,
+    # and far ones; any binade, either sign.
+    for i in range(3 * count):
+        op = ("below_prod", "below_quot", "below_sum")[i % 3]
+        p = 30 if i % 4 else rng.randint(1, 60)
+        target = Fraction(1, 10 ** p)
+        mode = (i // 3) % 5
+        x = rng.uniform(1.0, 2.0) * 2.0 ** rng.randint(-200, 200) * rng.choice([1.0, -1.0])
+        if op == "below_prod":
+            y = float(target / Fraction(abs(x)))
+        elif op == "below_quot":
+            y = float(Fraction(abs(x)) / target)
+            x, y = float(target * Fraction(abs(y))) * rng.choice([1.0, -1.0]), y
+        else:
+            x = float(target) * rng.uniform(0.0, 1.0) * rng.choice([1.0, -1.0])
+            y = float(target - Fraction(abs(x))) if x > 0 else -float(target - Fraction(abs(x)))
+            if mode == 2:
+                x, y = float(target), rng.choice([1.0, -1.0]) * [5e-324, 3e-321, 1e-300, 1e-47][rng.randint(0, 3)]
+            if mode == 3:
+                big = rng.uniform(1.0, 2.0) * 2.0 ** rng.randint(-60, 40)
+                x, y = big, -big + float(target) * rng.uniform(0.5, 1.5)
+        y = b2f(f2b(y) + rng.randint(-3, 3)) if y and mode != 4 else y
+        if mode == 4:
+            y = y * 2.0 ** rng.randint(-100, 100) if y else y
+        if op != "below_sum" and (x == 0.0 or y == 0.0 or not math.isfinite(x * 1.0) or not math.isfinite(y)):
+            continue
+        if not (math.isfinite(x) and math.isfinite(y)):
+            continue
+        fx, fy = Fraction(x), Fraction(y)
+        v = fx * fy if op == "below_prod" else fx / fy if op == "below_quot" else fx + fy
+        calls.append((op, [x, y, p], 1.0 if abs(v) < target else 0.0))
     return calls
 
 
@@ -494,7 +526,7 @@ def run(target, lines):
 
 EXACT = ["mono"] + list(SHAPES) + ["sqrt_div", "wsqrt", "sqrt_mono", "sqrt_mono_acc", "ux_mul", "ux_div", "ux_add",
          "ux_sub", "ux_sqrt", "r2_below", "gamma", "gamma_slow", "gamma2", "gamma2_slow", "gamma_ok", "prod5",
-         "prod5_acc", "mono_wide", "mono_wide_acc"]
+         "prod5_acc", "mono_wide", "mono_wide_acc", "below_prod", "below_quot", "below_sum"]
 UX = ["ux_exp", "ux_cosh", "ux_sinh", "ux_ln", "ux_pow", "ux_sin", "ux_cos"]
 
 

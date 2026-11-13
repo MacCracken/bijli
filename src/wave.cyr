@@ -235,12 +235,15 @@ public fn bj_reflectance_p(n1: f64, theta_i: f64, n2: f64, theta_t: f64): Result
     return Ok(rr);
 }
 
-# R = ((n₁ − n₂)/(n₁ + n₂))² at normal incidence. DivisionByZero when |n₁ + n₂| < 1e-30. Mirrors
-# `wave::reflectance_normal`.
+# R = ((n₁ − n₂)/(n₁ + n₂))² at normal incidence. DivisionByZero when the exact |n₁ + n₂| < 10^-30 (ADR 0002 row
+# 17's rule, M2 part 2c-1: the rounded sum decides outside 64 ulps of the double nearest 10^-30, src/crmath_cmp.cyr's
+# exact sum inside; a NaN sum passes, as Rust's test). Mirrors `wave::reflectance_normal`.
 public fn bj_reflectance_normal(n1: f64, n2: f64): Result {
     var den: f64 = n1 + n2;
     var m: f64 = f64_abs(den);
-    if (m < 0.000000000000000000000000000001) {
+    var band = _bj_x_band(m, _BJ_FIELD_R2_MIN);
+    if (band == 2) { band = _bj_x_sum_below(n1, n2, 30); }
+    if (band == 1) {
         return Err(_bj_err_division_by_zero("sum of refractive indices cannot be zero"));
     }
     var d: f64 = n1 - n2;

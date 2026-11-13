@@ -13,7 +13,7 @@
 //! four-vectors over the specials and physical events; Liénard–Wiechert geometries with the 1e-30 cuts of R and of
 //! 1 − n̂⋅β, and β → 1.
 
-use crate::grids::{Rng, pow2, specials};
+use crate::grids::{Rng, knife_edge, pow2, specials};
 use crate::m_field::{cat, edge_vectors, res_f, res_v, v3, vectors};
 use crate::m_material::{dedup, ulps};
 use crate::tsv::{Class, Module, Tok, err, f, s};
@@ -404,6 +404,31 @@ pub fn emit() -> Module {
                 }
             }
         }
+    }
+    // The |R| < 1e-30 cut's knife edge (bijli ADR 0002 row 17's rule, M2 part 2c-1): grids.rs's points whose exact |R|²
+    // lies within two ulps of 10^-60, through the potentials and E.
+    for (src, at) in knife_edge(true) {
+        if src != [0.0, 0.0, 0.0] {
+            continue;
+        }
+        let r = FieldVector::new(at[0], at[1], at[2]);
+        let bv = FieldVector::new(0.1, 0.0, 0.0);
+        let ins = cat(&[vec![f(1.0)], v3(r), v3(bv)]);
+        m.row(
+            "relativity::lienard_wiechert_scalar_potential",
+            Class::A,
+            &ins,
+            &res_f(lienard_wiechert_scalar_potential(black_box(1.0), &r, &bv)),
+        );
+        m.row(
+            "relativity::lienard_wiechert_vector_potential",
+            Class::A,
+            &ins,
+            &res_v(lienard_wiechert_vector_potential(black_box(1.0), &r, &bv)),
+        );
+        let bd = FieldVector::new(0.0, 0.0, 0.0);
+        let ins4 = cat(&[ins.clone(), v3(bd)]);
+        m.row("relativity::lienard_wiechert_e", Class::A, &ins4, &res_v(lienard_wiechert_e(black_box(1.0), &r, &bv, &bd)));
     }
     for &n in &vs {
         for &e in vs.iter().step_by(2) {

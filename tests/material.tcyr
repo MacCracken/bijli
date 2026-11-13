@@ -371,7 +371,11 @@ fn main(): i64 {
     assert(err_is2(tn5, vn5, BJ_ERR_INVALID_PARAMETER, "invalid parameter: magnetic susceptibility must not be NaN, ",
         "got NaN") == 1, "row 21: NaN is refused (Rust: Paramagnetic)");
     var tn6, vn6 = bj_classify_magnetic(-e15);
-    assert(is_ok(tn6) == 1 && vn6 == BJ_MAGNETIC_TYPE_PARAMAGNETIC, "χ = −1e-15 itself is paramagnetic (strict <)");
+    assert(is_ok(tn6) == 1 && vn6 == BJ_MAGNETIC_TYPE_DIAMAGNETIC,
+      "χ = −1e-15 (the double, 0.39 ulp below −10^-15) is diamagnetic: the exact χ < −10^-15 (Rust: paramagnetic)");
+    var e15n: f64 = _bj_from_bits(0xBCD203AF9EE75615);                   # −pred(1e-15), above −10^-15
+    var tn7, vn7 = bj_classify_magnetic(e15n);
+    assert(is_ok(tn7) == 1 && vn7 == BJ_MAGNETIC_TYPE_PARAMAGNETIC, "the double next to it toward 0 is paramagnetic");
 
     test_group("cyrius_lossless_optical_constants");
     var oc: f64[2];
