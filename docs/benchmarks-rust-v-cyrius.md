@@ -62,10 +62,10 @@
 | `relativity/lorentz_factor` | 1.24 ns | `relativity/lorentz_factor` | 153.00 ns | 123.4× |
 | `relativity/em_tensor_from_fields` | 8.11 ns | `relativity/em_tensor_from_fields` | 36.00 ns | 4.4× |
 | `relativity/lorentz_transform_x` | 5.91 ns | `relativity/lorentz_transform_x` | 177.00 ns | 29.9× |
-| `relativity/lienard_wiechert_e` | 21.64 ns | `relativity/lienard_wiechert_e` | 343.00 ns | 15.9× |
+| `relativity/lienard_wiechert_e` | 21.64 ns | `relativity/lienard_wiechert_e` | 582.00 ns | 26.9× |
 | `relativity/solve_retarded_time_uniform_t1s` | 103.48 ns | `relativity/solve_retarded_time_uniform_t1s` | 839.00 ns | 8.1× |
 | `relativity/lienard_wiechert_fields_orbit_b099` | 319.92 ns | `relativity/lienard_wiechert_fields_orbit_b099` | 6.26 µs | 19.6× |
-| `relativity/lienard_wiechert_scalar_potential` | 1.74 ns | `relativity/lienard_wiechert_scalar_potential` | 84.00 ns | 48.3× |
+| `relativity/lienard_wiechert_scalar_potential` | 1.74 ns | `relativity/lienard_wiechert_scalar_potential` | 292.00 ns | 167.8× |
 | `relativity/four_vector_boost` | 5.45 ns | `relativity/four_vector_boost` | 168.00 ns | 30.8× |
 | `polarization/jones_apply_polarizer` | 0.99 ns | pending (M3) | — | — |
 | `polarization/jones_qwp_apply` | 0.99 ns | pending (M3) | — | — |

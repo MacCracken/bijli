@@ -162,7 +162,7 @@ FUNCS = {
 # division rounds once, to nearest even, onto the subnormal grid), an integer square root for the roots. A call line
 # carries words: an f64's bits, or an integer in two's complement.
 
-from exact import INF, rn_frac, rn_sqrt  # noqa: E402  (shared with validate.py)
+from exact import INF, lw_below, lw_sign, rn_frac, rn_lw, rn_sqrt  # noqa: E402  (shared with validate.py)
 
 
 def w64(x) -> str:
@@ -527,7 +527,7 @@ def run(target, lines):
 EXACT = ["mono"] + list(SHAPES) + ["sqrt_div", "wsqrt", "sqrt_mono", "sqrt_mono_acc", "ux_mul", "ux_div", "ux_add",
          "ux_sub", "ux_sqrt", "r2_below", "gamma", "gamma_slow", "gamma2", "gamma2_slow", "gamma_ok", "prod5",
          "prod5_acc", "mono_wide", "mono_wide_acc", "below_prod", "below_quot", "below_sum", "cm", "cm_slow", "cos_t",
-         "cos_t_slow"]
+         "cos_t_slow", "lw_reff", "lw_reff_slow", "lw_kappa", "lw_kappa_slow"]
 UX = ["ux_exp", "ux_cosh", "ux_sinh", "ux_ln", "ux_pow", "ux_sin", "ux_cos"]
 
 
@@ -841,6 +841,177 @@ def cos_t_families(rng, count):
     return out
 
 
+# ── the Liénard–Wiechert R_eff and κ (src/crmath_edge.cyr, M2 part 2c-4, ADR 0002 row 17) ────────────────────────────
+LW_BELOW = (1 << 64) - 1                    # κ < 10^-30
+
+
+def lw_valid(r, b) -> bool:
+    """The callers' preconditions: finite, |R| ≥ 10^-30 and |β| < 1 exactly."""
+    if not all(math.isfinite(x) for x in list(r) + list(b)):
+        return False
+    return (sum(Fraction(x) ** 2 for x in r) >= Fraction(1, 10 ** 60)
+            and sum(Fraction(x) ** 2 for x in b) < 1)
+
+
+def lw_unit(rng):
+    """A random unit direction (doubles, not exactly unit)."""
+    while True:
+        v = [rng.gauss(0.0, 1.0) for _ in range(3)]
+        n = math.sqrt(sum(x * x for x in v))
+        if n > 1e-3:
+            return [x / n for x in v]
+
+
+def lw_knife(rng):
+    """(R, β) with κ on either side of 10^-30, within a lattice step: β₁ = 1 − m·2^-53, β₂ leaving
+    T₂ = 1 − β₁² − β₂² a little above D* = 2·10^-30, β₃ walked over its ulps (each moves κ by about 2^-54 of it) to
+    the last points on either side of κ = 10^-30, R = β·2^s along β (κ = 1 − |β|), the parts permuted."""
+    b1 = 1.0 - 2.0 ** -53 * rng.randint(1, 4)
+    t1 = 1 - Fraction(b1) ** 2
+    dstar = Fraction(2, 10 ** 30)
+    b2 = rn_sqrt(t1 - dstar - Fraction(rng.randint(10, 90), 10 ** 32))
+    t2 = t1 - Fraction(b2) ** 2
+    if t2 <= dstar:
+        return None
+    base = f2b(rn_sqrt(t2 - dstar))
+    s = 2.0 ** rng.randint(-60, 60)
+
+    def side(k):
+        bb = [b1, b2, b2f(base + k)]
+        return lw_sign([x * s for x in bb], bb, 1, Fraction(1, 10 ** 30))
+    lo, hi = -512, 512                          # κ falls as β₃ grows: side(lo) > 0 ≥ side(hi)
+    if side(lo) <= 0 or side(hi) > 0:
+        return None
+    while hi - lo > 1:
+        mid = (lo + hi) // 2
+        if side(mid) > 0:
+            lo = mid
+        else:
+            hi = mid
+    k = rng.choice([lo, hi, lo - 1, hi + 1])
+    bb = [b1, b2, b2f(base + k)]
+    perm = rng.choice([(0, 1, 2), (1, 2, 0), (2, 0, 1), (2, 1, 0)])
+    bb = [bb[j] for j in perm]
+    return [x * s for x in bb], bb
+
+
+def lw_tie(rng, mode):
+    """(R, β) with the value exactly on a midpoint: R along a Pythagorean direction (1, b, c) of norm d, β₂ and β₃ on a
+    coarse grid, and β₁ solving for the midpoint (None when β₁ would not be a double or |β| ≥ 1)."""
+    _a, bq, cq, d = rng.choice([(1, 2, 2, 3), (1, 4, 8, 9), (1, 12, 12, 17), (1, 6, 18, 19), (1, 8, 4, 9)])
+    sc = 2.0 ** rng.randint(-20, 20)
+    b2 = rng.randint(-64, 64) / 1024.0
+    b3 = rng.randint(-64, 64) / 1024.0
+    if mode == 1:
+        y = rng.uniform(0.05, 1.5)
+    else:
+        y = rng.uniform(0.05, 1.5) * d
+    ulp = math.ulp(y)
+    mu = Fraction(y) + Fraction(ulp) / 2
+    target = d * (1 - mu) if mode == 1 else d - mu      # P/|R| = 1 − μ, or P = d − μ (R before scaling)
+    b1 = target - bq * Fraction(b2) - cq * Fraction(b3)
+    if float(b1) != b1 or abs(b1) >= 1:
+        return None
+    r = [sc, bq * sc, cq * sc]                           # R_eff scales with R: its midpoint too
+    bb = [float(b1), b2, b3]
+    if not lw_valid(r, bb):
+        return None
+    return r, bb
+
+
+def lw_cases(rng, count):
+    """(R, β): generic directions and speeds; near the cone's edge (β along R within 2^-k, |β| = 1 − 2^-e); an
+    ultra-relativistic charge seen near its axis; κ's threshold knife edge; exact midpoints (ties); the near/far
+    region's edge P = |R|/2; extreme scales and spreads (R past DBL_MAX's root, R near 10^-30, subnormal and zero
+    parts); any finite parts."""
+    out = []
+    i = 0
+    while len(out) < count:
+        kind = i % 9
+        i += 1
+        r = b = None
+        if kind == 0:
+            r = [rng.uniform(-10.0, 10.0) for _ in range(3)]
+            u = lw_unit(rng)
+            sp = rng.random() ** 0.5
+            b = [x * sp for x in u]
+        elif kind == 1:
+            n = lw_unit(rng)
+            sc = 2.0 ** rng.randint(-90, 90)
+            r = [x * sc for x in n]
+            sp = 1.0 - 2.0 ** -rng.uniform(1.0, 52.0)
+            e = lw_unit(rng)
+            th = 2.0 ** -rng.uniform(0.0, 60.0)
+            b = [(n[j] + th * e[j]) * sp for j in range(3)]
+            m = math.sqrt(sum(x * x for x in b))
+            b = [x * sp / m for x in b]
+        elif kind == 2:
+            x = 2.0 ** -rng.uniform(20.0, 40.0)
+            y = 2.0 ** -rng.uniform(24.0, 30.0)
+            r = [rng.choice([1.0, 3.0, 1e-20, 1e20]), x * rng.choice([1.0, -1.0]), 0.0]
+            r[1] *= abs(r[0])
+            b = [1.0 - 2.0 ** -53 * rng.randint(1, 8), y, 0.0]
+            if rng.random() < 0.5:
+                r = [r[1], r[2], r[0]]
+                b = [b[1], b[2], b[0]]
+        elif kind == 3:
+            t = lw_knife(rng)
+            if t is None:
+                continue
+            r, b = t
+        elif kind == 4:
+            t = lw_tie(rng, rng.choice([0, 1]))
+            if t is None:
+                continue
+            r, b = t
+        elif kind == 5:
+            r = [rng.uniform(-3.0, 3.0) for _ in range(3)]
+            n = math.sqrt(sum(x * x for x in r))
+            f = 0.5 * (1.0 + rng.choice([1.0, -1.0]) * 2.0 ** -rng.uniform(1.0, 60.0))
+            b = [x / n * f for x in r]
+        elif kind == 6:
+            r = rng.choice([
+                [1e308, 1e308, -1e308], [1.7e308, 1.7e308, 1.7e308], [1e-30, 0.0, 0.0], [6e-31, 6e-31, 6e-31],
+                [1e300, 1e-300, 5e-324], [5e-324, 1.0, 0.0], [1.0, 5e-324, 5e-324], [2.0 ** -100, 2.0 ** 1000, 1.0]])
+            r = [x * rng.choice([1.0, -1.0]) for x in r]
+            b = rng.choice([[0.0, 0.0, 0.0], [5e-324, 0.0, -5e-324], [0.999, 1e-200, 0.0],
+                            [1.0 - 2.0 ** -53, 0.0, 0.0], [-0.6, 0.7, 0.3], [0.0, 1.0 - 2.0 ** -53, 2.0 ** -27]])
+            if rng.random() < 0.5:
+                b = [r[j] / math.sqrt(3.0) * 0.9 if 0 < abs(r[j]) < 1e300 else b[j] for j in range(3)]
+        elif kind == 7:
+            r = [any_finite(rng) for _ in range(3)]
+            u = lw_unit(rng)
+            sp = rng.random()
+            b = [x * sp for x in u]
+            if rng.random() < 0.3:
+                b[rng.randrange(3)] = any_finite(rng) % 0.5
+        else:
+            r = [any_finite(rng) for _ in range(3)]
+            n = math.sqrt(sum((x / 2.0 ** 600) ** 2 for x in r)) if max(abs(x) for x in r) > 1e200 else \
+                math.sqrt(sum(x * x for x in r))
+            if n == 0.0 or not math.isfinite(n):
+                continue
+            sp = 1.0 - 2.0 ** -rng.uniform(1.0, 50.0)
+            big = max(abs(x) for x in r) > 1e200
+            b = [(x / 2.0 ** 600 if big else x) / n * sp for x in r]
+        if r is not None and lw_valid(r, b):
+            out.append((r, b))
+    return out
+
+
+def lw_families(rng, count):
+    """lw_reff and lw_kappa (the full function) and their *_slow (the exact checks alone) on each of lw_cases' pairs."""
+    out = []
+    for r, b in lw_cases(rng, count):
+        reff = f2b(rn_lw(r, b, 0))
+        kap = LW_BELOW if lw_below(r, b) else f2b(rn_lw(r, b, 1))
+        out.append(("lw_reff", r + b, reff))
+        out.append(("lw_reff_slow", r + b, reff))
+        out.append(("lw_kappa", r + b, kap))
+        out.append(("lw_kappa_slow", r + b, kap))
+    return out
+
+
 def main() -> int:
     (root / "build").mkdir(exist_ok=True)
     names = wanted or list(FUNCS) + ["exact", "ux"]
@@ -871,6 +1042,9 @@ def main() -> int:
         trng = random.Random(0xC0_57)
         calls += [(f, ref, ws) for f, ws, ref in cos_t_families(trng, max(1, n // 5))
                   if "exact" in names or f in names]
+        lrng = random.Random(0x1E_4A_2C4)
+        calls += [(f, ref, ws) for f, ws, ref in lw_families(lrng, max(1, n // 10))
+                  if "exact" in names or f in names]
     if "ux" in names or any(x in UX for x in names):
         urng = random.Random(0x5C_2E_D6E)
         fams = ux_families(urng, max(1, n // 20))
@@ -888,7 +1062,7 @@ def main() -> int:
     for i, (name, want, a) in enumerate(calls):
         for t in targets:
             g = results[t][i]
-            any_nan = name not in UX and not name.startswith(("gamma", "cm", "cos_t"))  # "invalid" is a word
+            any_nan = name not in UX and not name.startswith(("gamma", "cm", "cos_t", "lw_"))  # "invalid" is a word
             ok = g == want or (any_nan and b2f(g) != b2f(g) and b2f(want) != b2f(want))
             per.setdefault((name, t), [0, 0])[0 if ok else 1] += 1
             if not ok:

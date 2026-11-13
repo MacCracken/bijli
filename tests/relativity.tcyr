@@ -4,8 +4,8 @@
 # Every group named test_* is rust-old/src/relativity.rs's test of that name, ported assertion for assertion (the
 # ledger matches them by name): all 48. uniform_motion_delay is the Rust tests' closed-form delay, ported as they wrote
 # it; their trajectory closures are `traj`'s (the parity harness's scenarios). The cyrius_* groups check what the port
-# adds: the recorded errors and their Display texts, ADR 0002 row 27, the outs untouched on an error, the derived
-# PartialEq, the tensor from its components, BjFourPotential, and the solver's texts and usize::MAX budget.
+# adds: the recorded errors and their Display texts, ADR 0002 rows 13, 17, 27 and 30, the outs untouched on an error,
+# the derived PartialEq, the tensor from its components, BjFourPotential, and the solver's texts and usize::MAX budget.
 # tests/golden/relativity.tsv pins every function over its grid against Rust besides.
 
 include "lib/alloc.cyr"    # a capturing closure's heap environment (the compiler asks for it by name)
@@ -1033,6 +1033,72 @@ fn cyrius_tests(): i64 {
     var ke17: BjFieldVector;
     var te17, ve17 = bj_lienard_wiechert_e(1.0, kr17, kb17, zv, &ke17);
     assert(is_ok(te17) == 1, "the same R through E");
+    # M2 part 2c-4: R_eff and κ rounded once from the exact S = Σ Rᵢ² and P = R⋅β, κ < 10^-30 decided exactly.
+    var ub53: f64 = _bj_from_bits(0x3FEFFFFFFFFFFFFF);    # 1 − 2^-53
+    var uby: f64 = _bj_from_bits(0x3E46A09E667F3BCD);     # about 2^-26.5
+    var urx: f64 = _bj_from_bits(0x3E40000000000000);     # 2^-27
+    var ur = BjFieldVector_new(1.0, urx, 0.0);
+    var ub = BjFieldVector_new(ub53, uby, 0.0);
+    var ue: BjFieldVector;
+    var tue, vue = bj_lienard_wiechert_e(1.0, ur, ub, zv, &ue);
+    assert(is_ok(tue) == 1 && _bj_bits(ue.x) == 0x457A27E39ED9081A && _bj_bits(ue.y) == 0xC705AB0E6277CEDF
+      && ue.z == 0.0, "κ = 6.0e-17 just off an ultra-relativistic charge's axis: E (Rust: DivisionByZero, κ 0)");
+    var kb1: f64 = _bj_from_bits(0x3FEFFFFFFFFFFFFE);
+    var kb2: f64 = _bj_from_bits(0x3E56A09E667F3BB9);
+    var kb3: f64 = _bj_from_bits(0x3CCDB05755AA4F69);
+    var kb3n: f64 = _bj_from_bits(0x3CCDB05755AA4F6A);
+    var ks: f64 = _bj_from_bits(0x3D20000000000000);      # 2^-45: R = β·2^-45, along β, so κ = 1 − |β|
+    var kbx: f64 = kb1 * ks;
+    var kby: f64 = kb2 * ks;
+    var kbz: f64 = kb3 * ks;
+    var kbzn: f64 = kb3n * ks;
+    var ke: BjFieldVector;
+    var tka, vka = bj_lienard_wiechert_e(1.0, BjFieldVector_new(kbx, kby, kbz), BjFieldVector_new(kb1, kb2, kb3), zv,
+      &ke);
+    assert(is_ok(tka) == 1, "κ just above 10^-30 exactly: E computed (Rust: InvalidParameter, its |β|² rounded to 1)");
+    var tkb, vkb = bj_lienard_wiechert_e(1.0, BjFieldVector_new(kbx, kby, kbzn), BjFieldVector_new(kb1, kb2, kb3n), zv,
+      &ke);
+    assert(is_err_result(tkb) == 1 && vkb == BJ_ERR_DIVISION_BY_ZERO, "β₃ an ulp up: κ under 10^-30, DivisionByZero");
+    var ab = BjFieldVector_new(ub53, 0.0, 0.0);
+    var tpa, vpa = bj_lienard_wiechert_scalar_potential(1.0, BjFieldVector_new(1000.0, 0.0, 0.0), ab);
+    assert(is_ok(tpa) == 1 && _bj_bits(vpa) == 0x44B12473F95A341A,
+      "on the axis at β = 1 − 2^-53: R_eff = 1000·2^-53 exactly (Rust: an ulp of 1000, φ 2.3 % low)");
+    var av: BjFieldVector;
+    var tva, vva = bj_lienard_wiechert_vector_potential(1.0, BjFieldVector_new(1000.0, 0.0, 0.0), ab, &av);
+    assert(is_ok(tva) == 1 && _bj_bits(av.x) == 0x42EEB2E1215BFEC8 && av.y == 0.0, "and A, from the same R_eff");
+    var ix: f64 = _bj_from_bits(0x3E4FEC7563C4CFDA);
+    var ibx: f64 = _bj_from_bits(0x3E3D40605EDF1C95);
+    var tpi, vpi = bj_lienard_wiechert_scalar_potential(1.0, BjFieldVector_new(ix, 0.0, 1.0),
+      BjFieldVector_new(ibx, 0.0, ub53));
+    assert(is_ok(tpi) == 1 && _bj_bits(vpi) == 0x454EE8113E99AC00,
+      "R_eff = 1.2e-16 near the axis: φ finite (Rust: ∞, its |R| − R⋅β 0)");
+    var big: f64 = _bj_from_bits(0x7FE1CCF385EBC8A0);     # 1e308
+    var tpb, vpb = bj_lienard_wiechert_scalar_potential(1.0, BjFieldVector_new(big, big, -big),
+      BjFieldVector_new(0.999, 0.0000000000000000000000000000001, 0.0));
+    var pbv: f64 = vpb;
+    assert(is_ok(tpb) == 1 && pbv > 0.0, "|R| past DBL_MAX: φ from R_eff, positive (Rust: 0)");
+    var tr: f64[3];
+    tr[0] = 1.0;
+    tr[1] = 2.0;
+    tr[2] = 2.0;
+    var tb: f64[3];
+    tb[0] = _bj_from_bits(0x3FDFFFFFFFFFFFFD);            # ½ − 3·2^-54
+    tb[1] = 0.5;
+    tb[2] = 0.0;
+    var to: f64[1];
+    var tk1 = _bj_cr_lw(&tr, &tb, 1, 0, &to);
+    var tkv: f64 = to[0];
+    var tk2 = _bj_cr_lw(&tr, &tb, 1, 1, &to);
+    var tks: f64 = to[0];
+    assert(tk1 == 0 && tk2 == 0 && tkv == 0.5 && tks == 0.5,
+      "κ exactly on the midpoint ½ + 2^-54 (R along (1, 2, 2)): ½, ties to even, both paths");
+    tb[0] = _bj_from_bits(0x3FDFFFFFFFFFFFFE);            # ½ − 2^-53
+    var tr1 = _bj_cr_lw(&tr, &tb, 0, 0, &to);
+    var trv: f64 = to[0];
+    var tr2 = _bj_cr_lw(&tr, &tb, 0, 1, &to);
+    var trs: f64 = to[0];
+    assert(tr1 == 0 && tr2 == 0 && trv == 1.5 && trs == 1.5,
+      "R_eff exactly on the midpoint 1.5 + 2^-53: 1.5, ties to even, both paths");
 
     test_group("cyrius_tensor_and_four_vector");
     var e = BjFieldVector_new(1.0, 2.0, 3.0);

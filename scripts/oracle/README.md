@@ -50,18 +50,18 @@ port's harness reads the same files. This README records what is specific to bij
 | Module | Milestone | Golden rows | Golden emitter | Generated Cyrius |
 |---|---|---|---|---|
 | `charge` | M1 (parts 3d, 5d-1 to 5d-3) | 12,769 | `src/m_charge.rs` (field.rs's grids) | — |
-| `circuit` | M2 (part 1c) | 56,106 | `src/m_circuit.rs` | — |
+| `circuit` | M2 (parts 1c, 2c-1) | 64,586 (+ 1 corrected) | `src/m_circuit.rs` | — |
 | `complex` | M1 (+ 5c-2's edge grid) | 31,677 (+ 8 corrected) | `src/m_complex.rs` | — |
 | `constants` | M0 | 12 | `src/m_constants.rs` | `src/constants.cyr` (`src/t_constants.rs`, with the completeness proof) |
 | `error` | M1 | 1,635 | `src/m_error.rs` | — |
 | `field` | M1 (parts 3a–3c, 5d-1 to 5d-5) | 26,770 | `src/m_field.rs` | — |
 | `fmtf` | M1 (+ Debug, part 3c; + fixed precision, M2 part 1b) | 70,740 | `src/m_fmtf.rs` (impetus's grid) | — |
 | `json` | M1 (part 4), M2 (part 1a: `Material`) | 19,489 (+ 8,899 corrected) | `src/m_json.rs` (serde_json 1.0.154 on `Complex`, `FieldVector`, `PointCharge`, `Material`) | — |
-| `material` | M2 (part 1a) | 51,814 | `src/m_material.rs` (field.rs's vectors) | — |
+| `material` | M2 (parts 1a, 2c-1, 2c-2) | 53,873 | `src/m_material.rs` (field.rs's vectors) | — |
 | `math` | M0 (+ sinh, cosh and 125 corrected, M1) | 36,522 | `src/m_math.rs` | — |
 | `maxwell` | M1 (part 3d) | 20,349 | `src/m_maxwell.rs` | — |
-| `relativity` | M2 (parts 1d-1, 1d-2: the solver over six trajectories) | 26,244 | `src/m_relativity.rs` (field.rs's vectors) | — |
-| `wave` | M2 (part 1b) | 66,690 (+ 3 corrected) | `src/m_wave.rs` (field.rs's vectors, material.tsv's materials) | `src/wave_data.cyr`, the dipole constants of ADR 0002 row 22 (`validate.py`'s `render_wave_data`: Cin(2π) by its series, π by Machin's formula checked against MPFR, η₀ from BJ_MU_0 and BJ_EPSILON_0, in rational arithmetic) |
+| `relativity` | M2 (parts 1d-1, 1d-2: the solver over six trajectories; 2c-1, 2c-4) | 29,591 | `src/m_relativity.rs` (field.rs's vectors) | — |
+| `wave` | M2 (parts 1b, 2c-1, 2c-3) | 71,216 (+ 1 corrected) | `src/m_wave.rs` (field.rs's vectors, material.tsv's materials) | `src/wave_data.cyr`, the dipole constants of ADR 0002 row 22 (`validate.py`'s `render_wave_data`: Cin(2π) by its series, π by Machin's formula checked against MPFR, η₀ from BJ_MU_0 and BJ_EPSILON_0, in rational arithmetic) |
 | (correctly rounded tables) | M1 | — | — | `src/crmath_data.cyr` (`crtables.py`, written and checked by `validate.py`) |
 | (2/π for the angle past DBL_MAX, bijli's) | M1 (part 5d-3) | — | — | `src/crmath_ux_data.cyr` (`crtables.py`'s `render_ux`, from π to 2,800 bits checked against MPFR) |
 | (correctly rounded tables, kimiya's) | M1 | — | — | `src/crmath_k_data.cyr` (`crtables_k.py`, written and checked by `validate.py`) |
@@ -91,7 +91,11 @@ against Fractions: physical pairs, X uniform in (−4, 1), both edges ulp by ulp
 region and shortcut edges, the exact pole and zero. Its cos_t and cos_t_slow families (M2 part 2c-3) check its
 trig-free Fresnel cosine the same way: TIR exactly and cos θ_t = √(n₂² − n₁²(1 − c²))/n₂ rounded once, on the
 critical cosine ulp by ulp, n₁ within ulps of n₂ near grazing incidence, any positive indices and the shortcuts'
-edges. Its ux families (`cr_verify.py . ux`, M1 part 5c-2) check src/crmath_ux.cyr's
+edges. Its lw_reff, lw_kappa, lw_reff_slow and lw_kappa_slow families (M2 part 2c-4) check its Liénard–Wiechert
+R_eff = |R| − R⋅β and κ = R_eff/|R|, rounded once (and κ < 10^-30 exactly, the slow ones always deciding it exactly),
+against `exact.py`'s `rn_lw` and `lw_below`: R along β as |β| → 1, a charge seen just off its axis, κ's knife edge
+bisected to the lattice points on either side of 10^-30, constructed ties along Pythagorean directions, the far/near
+edge n̂⋅β = ½, extreme scales and spreads. Its ux families (`cr_verify.py . ux`, M1 part 5c-2) check src/crmath_ux.cyr's
 e^x, cosh, sinh, ln(s·2^E), (s·2^E)^y and sin and cos past DBL_MAX against `mpfr_ref.wide`: MPFR at 53 bits with its
 widest exponent range, where nothing over- or underflows. Each (s, e) result is read in two calls, its significand
 and its exponent.

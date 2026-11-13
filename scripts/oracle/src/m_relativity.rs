@@ -11,7 +11,7 @@
 //! seeded); field pairs over a stride of field.rs's vectors and its edge vectors; tensors from those fields and
 //! arbitrary ones; boost velocities at β ∈ {0, 0.1, 0.9, 0.99, 1 − 1e-9} along x, y and the diagonal, at and past c;
 //! four-vectors over the specials and physical events; Liénard–Wiechert geometries with the 1e-30 cuts of R and of
-//! 1 − n̂⋅β, and β → 1.
+//! 1 − n̂⋅β, and β → 1; and (M2 part 2c-4) the geometries at κ = 1 − n̂⋅β's own zero (`emit_kappa_edges`).
 
 use crate::grids::{Rng, knife_edge, pow2, specials};
 use crate::m_field::{cat, edge_vectors, res_f, res_v, v3, vectors};
@@ -458,5 +458,184 @@ pub fn emit() -> Module {
         }
     }
     emit_solver(&mut m, &mut rng);
+    emit_kappa_edges(&mut m);
     m
+}
+
+/// A unit direction, uniform on the sphere (rejection in the cube; no transcendental).
+fn unit3(rng: &mut Rng) -> [f64; 3] {
+    loop {
+        let v = [rng.uniform(-1.0, 1.0), rng.uniform(-1.0, 1.0), rng.uniform(-1.0, 1.0)];
+        let n2 = v[0] * v[0] + v[1] * v[1] + v[2] * v[2];
+        if n2 > 0.01 && n2 <= 1.0 {
+            let n = n2.sqrt();
+            return [v[0] / n, v[1] / n, v[2] / n];
+        }
+    }
+}
+
+/// x = m·2^e exactly, for a positive finite x (m below 2^53).
+fn sig_exp(x: f64) -> (i128, i32) {
+    let b = x.to_bits();
+    #[allow(clippy::cast_possible_truncation, clippy::cast_possible_wrap)]
+    let ex = ((b >> 52) & 0x7ff) as i32;
+    let mant = i128::from(b & 0xf_ffff_ffff_ffff);
+    if ex == 0 { (mant, -1074) } else { (mant | (1 << 52), ex - 1075) }
+}
+
+/// The two potentials (when `pots`) and E at one geometry.
+fn lw_rows(m: &mut Module, q: f64, r: FieldVector, bv: FieldVector, bd: FieldVector, pots: bool) {
+    let ins = cat(&[vec![f(q)], v3(r), v3(bv)]);
+    if pots {
+        m.row(
+            "relativity::lienard_wiechert_scalar_potential",
+            Class::A,
+            &ins,
+            &res_f(lienard_wiechert_scalar_potential(black_box(q), &r, &bv)),
+        );
+        m.row(
+            "relativity::lienard_wiechert_vector_potential",
+            Class::A,
+            &ins,
+            &res_v(lienard_wiechert_vector_potential(black_box(q), &r, &bv)),
+        );
+    }
+    let ins4 = cat(&[ins, v3(bd)]);
+    m.row("relativity::lienard_wiechert_e", Class::A, &ins4, &res_v(lienard_wiechert_e(black_box(q), &r, &bv, &bd)));
+}
+
+/// An exact midpoint of κ (`kappa`) or of R_eff/s along the Pythagorean direction (1, b, c) of norm d: β₂ and β₃ on a
+/// 2^-10 grid, β₁ solving for the midpoint μ above y in units of 2^-64 (None unless β₁ is a double and |β| < 0.99).
+fn lw_tie(rng: &mut Rng, kappa: bool) -> Option<(FieldVector, FieldVector)> {
+    const DIRS: [(i128, i128, i128); 5] = [(2, 2, 3), (4, 8, 9), (12, 12, 17), (6, 18, 19), (8, 4, 9)];
+    #[allow(clippy::cast_sign_loss, clippy::cast_possible_truncation)]
+    let (bq, cq, d) = DIRS[rng.int(0, 4) as usize];
+    #[allow(clippy::cast_precision_loss)]
+    let df = d as f64;
+    let y = if kappa { rng.uniform(0.05, 1.5) } else { rng.uniform(0.05, 1.5) * df };
+    let one: i128 = 1 << 64;
+    let (ym, ye) = sig_exp(y);
+    let mu = (ym << (64 + ye)) + (1 << (63 + ye));  // (y + ulp/2)·2^64: y ≥ 2^-5, so ye ≥ −57
+    let b2i = i128::from(rng.int(-64, 64));
+    let b3i = i128::from(rng.int(-64, 64));
+    let target = if kappa { d * (one - mu) } else { d * one - mu };
+    let b1i = target - bq * (b2i << 54) - cq * (b3i << 54);
+    #[allow(clippy::cast_precision_loss)]
+    let b1 = b1i as f64 * pow2(-64);
+    #[allow(clippy::cast_possible_truncation)]
+    let back = (b1 * pow2(64)) as i128;
+    #[allow(clippy::cast_precision_loss)]
+    let (b2, b3) = (b2i as f64 * pow2(-10), b3i as f64 * pow2(-10));
+    if back != b1i || b1 * b1 + b2 * b2 + b3 * b3 >= 0.99 {
+        return None;
+    }
+    #[allow(clippy::cast_possible_truncation)]
+    let sc = pow2(rng.int(-20, 20) as i32);
+    #[allow(clippy::cast_precision_loss)]
+    let r = FieldVector::new(sc, bq as f64 * sc, cq as f64 * sc);
+    Some((r, FieldVector::new(b1, b2, b3)))
+}
+
+/// M2 part 2c-4 (bijli ADR 0002 row 17): Liénard–Wiechert geometries at κ = 1 − n̂⋅β's own zero, through both
+/// potentials and E. R along β within small angles as |β| → 1; an ultra-relativistic charge seen near its axis (κ
+/// about 6e-17, which Rust's 1 − n̂⋅β rounds to 0); κ's 1e-30 cut over a sweep of β₃'s ulps across 10^-30 (E alone;
+/// D = 1 − |β|² near 2·10^-30 built in integers); exact midpoints of κ and R_eff along Pythagorean directions; the
+/// near/far edge n̂⋅β = ½; extreme scales and spreads. Its own seed, after every older row.
+#[allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
+fn emit_kappa_edges(m: &mut Module) {
+    let mut rng = Rng::new(0x2C4_4A99_5EED);
+    let bdots = [FieldVector::new(0.0, 0.0, 0.0), FieldVector::new(1.0, -2.0, 0.5), FieldVector::new(0.0, 1e8, 0.0)];
+    let qs = [1.0, -1.602_176_634e-19];
+    // Near the cone: R along n̂ at 2^±90, β = |β|·(n̂ + θe)/|n̂ + θe|, |β| = 1 − u·2^-k.
+    for i in 0..400 {
+        let n = unit3(&mut rng);
+        let sc = pow2(rng.int(-90, 90) as i32);
+        let r = FieldVector::new(n[0] * sc, n[1] * sc, n[2] * sc);
+        let e = unit3(&mut rng);
+        let th = if i % 5 == 0 { 0.0 } else { pow2(-(rng.int(0, 60) as i32)) * rng.uniform(1.0, 2.0) };
+        let sp = 1.0 - pow2(-(rng.int(1, 52) as i32)) * rng.uniform(1.0, 2.0) * 0.5;
+        let w = [n[0] + th * e[0], n[1] + th * e[1], n[2] + th * e[2]];
+        let wn = (w[0] * w[0] + w[1] * w[1] + w[2] * w[2]).sqrt();
+        let bv = FieldVector::new(w[0] * sp / wn, w[1] * sp / wn, w[2] * sp / wn);
+        lw_rows(m, qs[i % 2], r, bv, bdots[i % 3], true);
+    }
+    // An ultra-relativistic charge (|β| = 1 − m·2^-53) seen just off its axis, the parts rotated.
+    for i in 0..100 {
+        let x = pow2(-(rng.int(20, 40) as i32)) * rng.uniform(1.0, 2.0);
+        let y = pow2(-(rng.int(24, 29) as i32)) * rng.uniform(1.0, 2.0);
+        let a = [1.0, 3.0, 1e-20, 1e20][i % 4];
+        let b1 = 1.0 - pow2(-53) * rng.int(1, 8) as f64;
+        let (rv, bv) = ([a, x * a, 0.0], [b1, y, 0.0]);
+        let k = i % 3;
+        let r = FieldVector::new(rv[k], rv[(k + 1) % 3], rv[(k + 2) % 3]);
+        let bvv = FieldVector::new(bv[k], bv[(k + 1) % 3], bv[(k + 2) % 3]);
+        lw_rows(m, qs[i % 2], r, bvv, bdots[i % 3], true);
+    }
+    // κ's 1e-30 cut: β₁ = 1 − m·2^-53 (T₁ = 1 − β₁² = (m·2^54 − m²)·2^-106), β₂ leaving T₂ = T₁ − β₂² a little above
+    // 2·10^-30 (exactly, in integers), β₃ = √(T₂ − 2·10^-30) within a few ulps of the crossing, swept ±32 ulps;
+    // R = β·2^s.
+    for j in 0..4 {
+        let m1 = rng.int(1, 4);
+        let b1 = 1.0 - pow2(-53) * m1 as f64;
+        let mi = i128::from(m1);
+        let t1 = (mi << 54) - mi * mi;
+        let gap = rng.uniform(3e-31, 9e-31);
+        let b2 = (t1 as f64 * pow2(-106) - 2e-30 - gap).sqrt();
+        let (m2, e2) = sig_exp(b2);
+        let t2 = (t1 << (-106 - 2 * e2)) - m2 * m2;
+        let b3 = (t2 as f64 * pow2(2 * e2) - 2e-30).sqrt();
+        let s = pow2(rng.int(-60, 60) as i32);
+        for k in -32..=32 {
+            let b3k = ulps(b3, k);
+            let bb = [[b1, b2, b3k], [b2, b3k, b1], [b3k, b1, b2], [b1, b3k, b2]][j];
+            let bv = FieldVector::new(bb[0], bb[1], bb[2]);
+            let r = FieldVector::new(bb[0] * s, bb[1] * s, bb[2] * s);
+            lw_rows(m, 1.0, r, bv, bdots[1], false);
+        }
+    }
+    // Exact midpoints: 60 of κ, 60 of R_eff.
+    for kappa in [true, false] {
+        let mut got = 0;
+        while got < 60 {
+            if let Some((r, bv)) = lw_tie(&mut rng, kappa) {
+                lw_rows(m, 1.0, r, bv, bdots[got % 3], true);
+                got += 1;
+            }
+        }
+    }
+    // The near/far edge: n̂⋅β = ½(1 ± 2^-k).
+    for i in 0..100 {
+        let r = [rng.uniform(-3.0, 3.0), rng.uniform(-3.0, 3.0), rng.uniform(-3.0, 3.0)];
+        let n = (r[0] * r[0] + r[1] * r[1] + r[2] * r[2]).sqrt();
+        let sg = if i % 2 == 0 { 1.0 } else { -1.0 };
+        let fr = 0.5 * (1.0 + sg * pow2(-(rng.int(1, 60) as i32)));
+        let bv = FieldVector::new(r[0] / n * fr, r[1] / n * fr, r[2] / n * fr);
+        lw_rows(m, 1.0, FieldVector::new(r[0], r[1], r[2]), bv, bdots[i % 3], true);
+    }
+    // Extremes: R past DBL_MAX's root, near 10^-30, wide exponent spreads, subnormal parts; β zero, subnormal, at
+    // 1 − ε.
+    let rx = [
+        [1e308, 1e308, -1e308],
+        [1.7e308, 1.7e308, 1.7e308],
+        [1e-30, 0.0, 0.0],
+        [6e-31, 6e-31, 6e-31],
+        [1e300, 1e-300, 5e-324],
+        [5e-324, 1.0, 0.0],
+        [1.0, 5e-324, -5e-324],
+        [pow2(-100), pow2(1000), 1.0],
+    ];
+    let bx = [
+        [0.0, 0.0, 0.0],
+        [5e-324, 0.0, -5e-324],
+        [0.999, 1e-200, 0.0],
+        [1.0 - pow2(-53), 0.0, 0.0],
+        [-0.6, 0.7, 0.3],
+        [0.0, 1.0 - pow2(-53), pow2(-27)],
+    ];
+    for (i, r) in rx.iter().enumerate() {
+        for (j, b) in bx.iter().enumerate() {
+            let rv = FieldVector::new(r[0], r[1], r[2]);
+            lw_rows(m, 1.0, rv, FieldVector::new(b[0], b[1], b[2]), bdots[(i + j) % 3], true);
+        }
+    }
 }

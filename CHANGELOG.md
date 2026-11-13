@@ -262,6 +262,15 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
   functions, `reflectance_unpolarized`, `transmittance_unpolarized`, `schlick_reflectance` and
   `reflectance_at_interface`. The cost: `wave/fresnel_rs_direct` 61 → 258 ns, `wave/schlick_reflectance` 47 → 244 ns
   (`port-parity.md` §38).
+- **relativity** (ADR 0002 row 17 amended, M2 part 2c-4, the user's answer of 2026-11-12): the Liénard–Wiechert
+  potentials' R_eff = |R| − R⋅β and `lienard_wiechert_e`'s κ = 1 − n̂⋅β cancelled as n̂⋅β → 1 (a relative error of
+  about 2^-53/κ): on the axis at β = 1 − 2^-53, φ came out 2.3 % low; just off it, κ = 6.0e-17 rounded to 0 and E
+  refused with DivisionByZero, or R_eff rounded to 0 and φ was ∞; near the light cone E was off by up to a factor of
+  10.8. R_eff and κ are now correctly rounded from the exact S = ΣRᵢ² and P = R⋅β (`src/crmath_edge.cyr`: Lagrange's
+  identity near the cone, an exact bignum check at the midpoints; `cr_verify.py`'s lw_* families), and κ < 10^-30 is
+  decided exactly, for both potentials, E and the fields. The cost: `relativity/lienard_wiechert_e` 327 → 582 ns,
+  `relativity/lienard_wiechert_scalar_potential` 80 → 292 ns, and near the cone (n̂⋅β > ½) E 575 → 1,402 ns
+  (`port-parity.md` §39).
 - **relativity** (ADR 0002 row 13 amended, M2 part 2b-4): `retarded_scalar_potential`, `retarded_vector_potential`,
   `larmor_power` and `EmTensor::dual` rounded two to five times, and overflowed where the value is representable
   (Larmor with q² past DBL_MAX, the dual of B past DBL_MAX/c: ∞ each); they are now correctly rounded for finite

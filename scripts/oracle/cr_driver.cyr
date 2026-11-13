@@ -6,8 +6,8 @@
 # part 5), bijli's √ of a monomial (src/crmath_mono.cyr), which cr_verify.py checks against exact values (Python's
 # Fraction and integer square root), and bijli's transcendentals with an unbounded exponent (src/crmath_ux.cyr, M1 part
 # 5c-2), checked against MPFR with its widest exponent range, and the exact Singularity threshold (src/crmath_cmp.cyr,
-# M1 part 5d-1), Clausius–Mossotti's ε_r and the trig-free Fresnel cosine (src/crmath_edge.cyr, M2 parts 2c-2 and
-# 2c-3), against Fractions. Built from the math
+# M1 part 5d-1), Clausius–Mossotti's ε_r, the trig-free Fresnel cosine and the Liénard–Wiechert R_eff and κ
+# (src/crmath_edge.cyr, M2 parts 2c-2 to 2c-4), against Fractions. Built from the math
 # sources the bundle carries (src/constants.cyr … src/mathx.cyr, in the manifest's order and byte for byte what
 # dist/bijli.cyr holds): the bundle is `private` and these entry points are bijli-internal, so a consumer of
 # dist/bijli.cyr can't call them, but a file of internals only has no marker and can be included on its own.
@@ -119,6 +119,18 @@ fn _call(fp, fl, w): i64 {
         var to: f64[1];
         if (_bj_cr_cos_t(x, y, _wf(w, 2), tslow, &to) == 1) { return 0 - 1; }
         r = to[0];
+    }
+    elif (_is(fp, fl, "lw_reff") == 1 || _is(fp, fl, "lw_reff_slow") == 1 || _is(fp, fl, "lw_kappa") == 1
+      || _is(fp, fl, "lw_kappa_slow") == 1) {
+        # lw_reff r1 r2 r3 b1 b2 b3: the Liénard–Wiechert R_eff, lw_kappa its κ, correctly rounded
+        # (src/crmath_edge.cyr), the exact checks alone for *_slow; −1 (all ones) when κ < 10^-30
+        var lmode = 0;
+        if (load8(fp + 3) == 107) { lmode = 1; }
+        var lslow = 0;
+        if (fl > 8) { lslow = 1; }
+        var lo: f64[1];
+        if (_bj_cr_lw(w, w + 24, lmode, lslow, &lo) == 1) { return 0 - 1; }
+        r = lo[0];
     }
     elif (_is(fp, fl, "sinh") == 1) { r = _bj_sinh(x); }
     elif (_is(fp, fl, "cosh") == 1) { r = _bj_cosh(x); }

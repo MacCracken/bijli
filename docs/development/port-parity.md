@@ -2004,3 +2004,65 @@ The second of 2c's boundary values (the user's answer of 2026-11-12: exact tests
 - **Result, every target** (x86_64 ELF, x86_64 PE, aarch64): **13 modules, 0 failing; 399,933 ok, 0 failed, 0
   measured, 0 pending, 36,732 accepted (ADR 01: 8,998; ADR 0002: 27,734)** over 436,665 rows; **all 276 digests
   equal**. Nine changed: the nine functions on the cosines.
+
+## 39. M2 part 2c-4: Liénard–Wiechert's κ and R_eff, exact tests and accurate values (2026-11-13)
+
+The third of 2c's boundary values (the user's answer of 2026-11-12: exact tests, accurate values).
+
+- **ADR 0002 row 17, amended**: the effective distance R_eff = |R| − R⋅β and κ = 1 − n̂⋅β = R_eff/|R| are each
+  rounded once from the exact S = ΣRᵢ² and P = R⋅β of a finite R, and `lienard_wiechert_e`'s DivisionByZero is
+  κ < 10^-30 exactly (the decimal, the user's literal reading). Both potentials take R_eff, E takes κ and the fields
+  take E's; each function's formula around them stays Rust's, and an ∞ part keeps Rust's chain. Rust's two differences
+  cancel as n̂⋅β → 1, a relative error of about 2^-53/κ:
+  - on the axis at β = 1 − 2^-53, R_eff = 1000·2^-53 rounded to an ulp of 1000, so φ came out 2.3 % low;
+  - just off the axis of an ultra-relativistic charge (R = (1, 2^-27, 0), β = (1 − 2^-53, 2^-26.5, 0)) κ = 6.0e-17
+    rounded to 0, a DivisionByZero, and nearby R_eff to 0 (φ = ∞);
+  - near the cone, E was off by up to a factor of 10.8 over the new rows;
+  - past DBL_MAX's root, Rust's |R| overflowed and φ came out 0 or NaN (the port's |R| was row 18's already; R_eff
+    now comes from the scaled S and P).
+- **`src/crmath_edge.cyr`**: D = 1 − |β|² ≥ 2^-266 for any doubles with |β| < 1 (a lattice argument in the section
+  comment), so κ lies in (2^-267, 2) and R_eff above 2^-367. R is scaled by its largest component's exponent; each part
+  is split once and every product is a TwoProduct on the halves. Far from the cone's edge (P ≤ |R|/2) R_eff = √S − P
+  in double-double (AccurateDWPlusDW, Joldes–Muller–Popescu 2017), within 51.3u²; near it Lagrange's identity gives
+  S − P² = S(1 − |β|²) + |R × β|², a sum of non-negative terms built from D's exact expansion and the exact cross
+  components, so R_eff = (S − P²)/(√S + P) is within 46.2u² and κ within 66.3u² however small. The rounding test is
+  kimiya's with ε = 2^-98 (operands to 239u²). When it fails, the candidate's neighbouring midpoints decide exactly on
+  bignums (S against (P + μ)², or (1 − μ)²S against P² by the signs), with src/fmtf.cyr's bignum and a product here, in
+  buffers of 216 words (values below 2^6,560). κ's cut is decided by the test's ends where they clear 10^-30 by 2^-40,
+  else as (10^30 − 1)²S < 10^60·P². Exact ties exist (κ = ½ + 2^-54 along (1, 2, 2)) and go to even.
+- **Rows** (`m_relativity.rs`'s `emit_kappa_edges`, on a seed of its own, after every older row): 2,564 more:
+  400 geometries along β within 2^-60…1 rad as |β| → 1 at scales 2^±90, 100 ultra-relativistic charges seen just off
+  their axis, 120 exact midpoints of κ and R_eff along five Pythagorean directions, 100 at the far/near edge
+  n̂⋅β = ½(1 ± 2^-k), and 48 extremes (R past DBL_MAX's root, near 10^-30, exponent spreads to 2^-1074; β zero,
+  subnormal, at 1 − 2^-53), each through both potentials and E; and κ's cut, four sweeps of β₃ over ±32 ulps across
+  10^-30 (D built in integers), through E. `validate.py`'s transcription agreed with every row on its first run.
+- **Mappings** (`validate.py`'s `rn_lw` and `lw_below`, scripts/oracle/exact.py: an integer square root to 2^-700,
+  then the exact signs at the neighbouring midpoints): `relativity.adr.tsv` grows from 2,615 rows to 4,718, row 17
+  labelling 2,140 (E 809, the scalar potential 673, the vector potential 638, the fields 20; 2c-1's were 42). 191 moved
+  from rows 18 (148) and 30 (43), because κ or R_eff changes them too; 205 older corpus rows are newly mapped. Of the
+  sweep's 260 E rows Rust refused all (InvalidParameter: its |β|² rounded to 1; row 30 makes them valid): 133 are
+  now computed and 127 refused as DivisionByZero, by the exact κ. All passed on the harness's first run.
+- **`cr_verify.py`'s lw_reff, lw_kappa and their *_slow** (exact families; the slow ones skip the rounding test and
+  always decide κ's cut exactly): generic directions and speeds, R along β as |β| → 1, the near-axis ultra-relativistic
+  charge, κ's knife edge (β₃ bisected to the last lattice points on either side of 10^-30, each step about 2^-54 of κ),
+  constructed ties, the far/near edge, extreme scales and spreads, any finite parts. **600,000 calls, all equal to the
+  exact value on x86_64 and aarch64.**
+- **Tests**: tests/relativity.tcyr's `cyrius_exact_thresholds (ADR 0002 row 17)` gains 9 assertions: E at κ = 6.0e-17
+  (Rust: DivisionByZero), the two sides of κ's cut an ulp of β₃ apart, φ and A on the axis at β = 1 − 2^-53, φ finite
+  where Rust's was ∞, φ past DBL_MAX's root, and `_bj_cr_lw` on a tie of κ and one of R_eff by both paths.
+- **For M2's range-edge review** (a finding, beside the η-sum guard question): E's velocity term multiplies 1/κ³ by
+  n̂ − β, which cancels in the same limit (|n̂ − β|² = 2κ − (1 − |β|²), between κ² and 2κ), and n̂ = R·(1/|R|) carries
+  Rust's roundings: off the axis its absolute error of about 2^-53 is a relative one of 2^-53/|n̂ − β|, up to the
+  2^-53/κ that κ's was. The agreed scope was κ; n̂ − β stays Rust's.
+- **Benchmarks** (an interleaved A/B against HEAD, three rounds each, load 1.5–2.1, another repository's verifier
+  running beside it; each figure the lower of the three): `relativity/lienard_wiechert_e` 327 → 582 ns,
+  `relativity/lienard_wiechert_scalar_potential` 80 → 292 ns, `relativity/lienard_wiechert_fields_orbit_b099` 5.61 →
+  5.83 µs (its trajectory's sin and cos dominate). Both twins sit far from the cone's edge (E on the axis at β = 0.1,
+  φ at n̂⋅β = 0.45). A probe near it (R = (1, 0.5, 0.25), β = (0.8, 0.41, 0.2), n̂⋅β = 0.89): E 575 → 1,402 ns, φ
+  338 → 1,130 ns, the cost of D's exact expansion, the three cross components and five double-double products. The
+  first draft cost more (E 693 ns, φ 447 ns): splitting each part once, forming the twelve products inline on the
+  halves, and summing S and P with plain TwoSums took `_bj_cr_lw`'s far path from 285 to 208 ns, with every result
+  unchanged. A finding, recorded (Rust 1.74–21.64 ns); the other rows held within the noise.
+- **Result, every target** (x86_64 ELF, x86_64 PE, aarch64): **13 modules, 0 failing; 400,394 ok, 0 failed, 0
+  measured, 0 pending, 38,835 accepted (ADR 01: 8,998; ADR 0002: 29,837)** over 439,229 rows; **all 276 digests
+  equal**. Four changed: both potentials, E and the fields.

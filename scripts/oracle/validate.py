@@ -2608,7 +2608,10 @@ def rel_rust(fn, v, O, K):
             b_sq = O["mag_sq"](bv)
             if math.isnan(b_sq) or b_sq >= 1.0:
                 return ip_err("β must be < 1")
-        r_eff = r_mag - O["dot"](r, bv)
+        if O["r17"] and _fin(*r):
+            r_eff = rn_lw(r, bv, 0)          # row 17 (M2 part 2c-4): R_eff from the exact S and P, rounded once
+        else:
+            r_eff = r_mag - O["dot"](r, bv)
         if fn.endswith("scalar_potential"):
             return okf(fdiv(q, 4.0 * PI * EPS0 * r_eff))
         k = fdiv(MU0 * q * C, 4.0 * PI * r_eff)
@@ -2631,9 +2634,14 @@ def rel_rust(fn, v, O, K):
             g2 = fdiv(1.0, 1.0 - b_sq)
         inv = fdiv(1.0, r_mag)
         n = [x * inv for x in r]
-        kappa = 1.0 - O["dot"](n, bv)
-        if abs(kappa) < 1e-30:
-            return dz_err("Liénard-Wiechert denominator (1 − n̂⋅β) is zero")
+        if O["r17"] and _fin(*r):
+            if lw_below(r, bv):              # row 17 (M2 part 2c-4): κ < 10^-30 exactly, κ rounded once
+                return dz_err("Liénard-Wiechert denominator (1 − n̂⋅β) is zero")
+            kappa = rn_lw(r, bv, 1)
+        else:
+            kappa = 1.0 - O["dot"](n, bv)
+            if abs(kappa) < 1e-30:
+                return dz_err("Liénard-Wiechert denominator (1 − n̂⋅β) is zero")
         k3 = kappa * kappa * kappa
         pre = fdiv(q, 4.0 * PI * EPS0)
         nmb = [n[i] - bv[i] for i in range(3)]
@@ -3336,7 +3344,7 @@ def json_corrections(rows) -> list:
 # Row 13 (the user's "round once" decision of 2026-11-12): one product, quotient or root of inputs and constants,
 # correctly rounded where its operands are finite; an infinite or NaN operand, and every error, keeps Rust's result.
 
-from exact import rn_mono, rn_sqrt  # noqa: E402
+from exact import lw_below, rn_lw, rn_mono, rn_sqrt  # noqa: E402
 
 
 def _fin(*xs) -> bool:

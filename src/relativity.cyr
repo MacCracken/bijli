@@ -101,6 +101,16 @@ fn _bj_rel_parts(v: BjFieldVector, p: *f64) {
     return 0;
 }
 
+# 1 when the three doubles at p are finite, else 0.
+#must_use
+fn _bj_rel_finite3(p: *f64): i64 {
+    for (var i = 0; i < 3; i = i + 1) {
+        var x: f64 = p[i];
+        if (_bj_is_finite(x) == 0) { return 0; }
+    }
+    return 1;
+}
+
 # β = v/c. Mirrors `relativity::beta`.
 #must_use
 #pure
@@ -523,7 +533,8 @@ public fn bj_retarded_vector_potential(charge: f64, velocity: BjFieldVector, ret
 
 # R_eff = |R| − R⋅β (> 0 for |β| < 1): InvalidParameter "R vector must not contain NaN", Singularity for
 # |R| < 10^-30 exactly (row 17's rule), InvalidParameter "β must be < 1" unless |β| < 1 exactly (a NaN part refused;
-# ADR 0002 row 30).
+# ADR 0002 row 30). For a finite R, R_eff is rounded once from the exact S and P (src/crmath_edge.cyr; ADR 0002 row
+# 17, M2 part 2c-4), where Rust's difference cancelled as n̂⋅β → 1; an ∞ part keeps Rust's |R| − R⋅β.
 fn _bj_rel_effective_distance(r_vec: BjFieldVector, beta_vec: BjFieldVector): Result {
     var r_mag: f64 = r_vec.magnitude();
     if (r_mag != r_mag) { return Err(_bj_err_invalid_parameter("R vector must not contain NaN")); }
@@ -534,6 +545,14 @@ fn _bj_rel_effective_distance(r_vec: BjFieldVector, beta_vec: BjFieldVector): Re
     var bp: f64[3];
     _bj_rel_parts(beta_vec, &bp);
     if (_bj_cr_lorentz_ok(&bp, 3, 1.0) == 0) { return Err(_bj_err_invalid_parameter("β must be < 1")); }
+    var rp: f64[3];
+    _bj_rel_parts(r_vec, &rp);
+    if (_bj_rel_finite3(&rp) == 1) {
+        var o: f64[1];
+        var z = _bj_cr_lw(&rp, &bp, 0, 0, &o);
+        var re: f64 = o[0];
+        return Ok(re);
+    }
     var rb: f64 = r_vec.dot(beta_vec);
     var r_eff: f64 = r_mag - rb;
     return Ok(r_eff);
@@ -574,8 +593,11 @@ public fn bj_lienard_wiechert_vector_potential(charge: f64, r_vec: BjFieldVector
 # (Coulomb, ∝ 1/R²) and acceleration (radiation, ∝ 1/R) fields; r_vec from the retarded position to the field point,
 # β = v/c and β̇ = a/c at the retarded time. InvalidParameter for a NaN R ("R vector must not contain NaN", as the
 # potentials: ADR 0002 row 27, where Rust went on to NaN), Singularity for |R| < 10^-30 exactly, InvalidParameter
-# unless |β| < 1 exactly, DivisionByZero for |κ| < 1e-30; out untouched on an error. γ² = 1/(1 − |β|²) is correctly
-# rounded from the exact difference (ADR 0002 row 30). Mirrors `relativity::lienard_wiechert_e`.
+# unless |β| < 1 exactly, DivisionByZero for κ < 10^-30 exactly; out untouched on an error. γ² = 1/(1 − |β|²) is
+# correctly rounded from the exact difference (ADR 0002 row 30). For a finite R, κ = (|R| − R⋅β)/|R| is rounded once
+# from the exact S and P, and its test decided on the exact κ (src/crmath_edge.cyr; ADR 0002 row 17, M2 part 2c-4):
+# Rust's 1 − n̂⋅β cancelled as n̂⋅β → 1, and refused a κ of 6e-17 as zero. An ∞ part keeps Rust's κ and its
+# |κ| < 1e-30. Mirrors `relativity::lienard_wiechert_e`.
 public fn bj_lienard_wiechert_e(charge: f64, r_vec: BjFieldVector, beta_vec: BjFieldVector, beta_dot: BjFieldVector,
   out: *BjFieldVector): Result {
     var r_mag: f64 = r_vec.magnitude();
@@ -592,9 +614,19 @@ public fn bj_lienard_wiechert_e(charge: f64, r_vec: BjFieldVector, beta_vec: BjF
     var n_hat: BjFieldVector = r_vec.scale(inv_r);
     var nb: f64 = n_hat.dot(beta_vec);
     var kappa: f64 = 1.0 - nb;
-    var ak: f64 = f64_abs(kappa);
-    if (ak < 0.000000000000000000000000000001) {
-        return Err(_bj_err_division_by_zero("Liénard-Wiechert denominator (1 − n̂⋅β) is zero"));
+    var rp: f64[3];
+    _bj_rel_parts(r_vec, &rp);
+    if (_bj_rel_finite3(&rp) == 1) {
+        var ko: f64[1];
+        if (_bj_cr_lw(&rp, &bp, 1, 0, &ko) == 1) {
+            return Err(_bj_err_division_by_zero("Liénard-Wiechert denominator (1 − n̂⋅β) is zero"));
+        }
+        kappa = ko[0];
+    } else {
+        var ak: f64 = f64_abs(kappa);
+        if (ak < 0.000000000000000000000000000001) {
+            return Err(_bj_err_division_by_zero("Liénard-Wiechert denominator (1 − n̂⋅β) is zero"));
+        }
     }
     var gamma_sq: f64 = g2[0];
     var kappa3: f64 = kappa * kappa * kappa;
