@@ -237,6 +237,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
 - **circuit** (ADR 0002 row 29, M2 part 2a-1): `rc_charging_voltage` and `rl_current_rise` cancelled in 1 − e^(−t/τ)
   (8e-8 relative at t/τ = 10^-10, 0 below 1.1·10^-16); they now take −expm1(−t/τ), kimiya's correctly rounded expm1
   (`src/crmath_kx.cyr`, with its exp tables in `src/crmath_k_data.cyr`; `cr_verify.py` checks it against MPFR).
+- **relativity** (ADR 0002 row 30, M2 part 2a-2, the user's answer of 2026-11-12): the Lorentz factor cancelled in
+  1 − v²/c² near c (a relative error of about 2^-53/(1 − β²): 10 % one ulp below c) and tested validity on that rounded
+  β², refusing some vectors just inside c. `lorentz_factor`, the field transforms, the relativistic Larmor power and
+  `lienard_wiechert_e`'s γ² are now correctly rounded from the exact c² − Σvᵢ², and validity (the Liénard–Wiechert
+  potentials' β included) is that difference > 0 exactly (`src/crmath_gamma.cyr`; `cr_verify.py`'s gamma families
+  check it against exact values on x86_64 and aarch64). The exact difference costs time: `relativity/lorentz_factor`
+  12 → 153 ns, `lienard_wiechert_e` 208 → 343 ns (an A/B against the previous commit; `port-parity.md` §31).
 - **circuit** (ADR 0002 row 26, M2 part 1c): `resistance_from_geometry` and `parallel_plate_capacitance` returned
   Ok(NaN) for a NaN area or separation (`<= 0` let it through), and now refuse it with their InvalidParameter.
 - **wave** (ADR 0002 rows 23–24, M2 part 1b, the user's answers of 2026-11-12): `effective_aperture` returned Ok(NaN)

@@ -31,6 +31,8 @@ include "src/crmath_ux_data.cyr"
 include "src/crmath_ux.cyr"
 include "src/crmath_cmp.cyr"
 include "src/mathx.cyr"
+include "src/fmtf.cyr"
+include "src/crmath_gamma.cyr"
 
 # The value of hex digit byte c (lowercase).
 fn _hexv(c): i64 {
@@ -78,6 +80,25 @@ fn _call(fp, fl, w): i64 {
     elif (_is(fp, fl, "log10") == 1) { r = _bj_log10(x); }
     elif (_is(fp, fl, "ln") == 1) { r = _bj_ln(x); }
     elif (_is(fp, fl, "expm1") == 1) { r = _bj_expm1(x); }
+    elif (_is(fp, fl, "gamma") == 1 || _is(fp, fl, "gamma_slow") == 1 || _is(fp, fl, "gamma2") == 1
+      || _is(fp, fl, "gamma2_slow") == 1) {
+        # gamma n c v1 … vn: the correctly rounded γ (gamma) or γ² (gamma2), the slow path alone for *_slow; −1 (all
+        # ones) when |v| ≥ c
+        var gn = load64(w);
+        var gc: f64 = _wf(w, 1);
+        var gmode = 0;
+        if (load8(fp + 5) == 50) { gmode = 1; }
+        var gslow = 0;
+        if (fl > 7) { gslow = 1; }
+        var go: f64[1];
+        if (_bj_cr_lorentz(w + 16, gn, gc, gmode, gslow, &go) == 1) { r = go[0]; } else { return 0 - 1; }
+    }
+    elif (_is(fp, fl, "gamma_ok") == 1) {
+        # gamma_ok n c v1 … vn: the validity test alone, 1 or 0 as a word
+        var on = load64(w);
+        var oc: f64 = _wf(w, 1);
+        return _bj_cr_lorentz_ok(w + 16, on, oc);
+    }
     elif (_is(fp, fl, "sinh") == 1) { r = _bj_sinh(x); }
     elif (_is(fp, fl, "cosh") == 1) { r = _bj_cosh(x); }
     elif (_is(fp, fl, "sinh_slow") == 1) { r = _bj_cr_sinh_slow(x); }

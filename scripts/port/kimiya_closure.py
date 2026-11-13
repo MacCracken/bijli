@@ -23,8 +23,10 @@ ROOTS = [
     "_km_ux_add_f64", "_km_ux_sub_f64", "_km_ux_mul_f64", "_km_ux_div_f64", "_km_ux_sqrt_f64",
     # M2's range-edge Part (ADR 0002 row 29): the correctly rounded expm1 of the RC and RL transients.
     "_km_cr_expm1",
+    # M2's range-edge Part (ADR 0002 row 30): src/crmath_gamma.cyr's rounding test and its slow path's candidate.
+    "_km_dd_div_cr", "_km_dd_div_ends",
     # Not reached from the above but tested by kimiya's groups that tests/crmath_kx.tcyr copies.
-    "_km_bn_add", "_km_bn_sub", "_km_bn_mul_small", "_km_dd_div_cr", "_km_dd_mul", "_km_max",
+    "_km_bn_add", "_km_bn_sub", "_km_bn_mul_small", "_km_dd_mul", "_km_max",
 ]
 
 # kimiya's tests/mathx.tcyr from this header to its main(): the ux, multi-word, ratio, monomial, B2 and B3 groups,

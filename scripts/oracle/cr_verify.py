@@ -493,8 +493,82 @@ def run(target, lines):
 
 
 EXACT = ["mono"] + list(SHAPES) + ["sqrt_div", "wsqrt", "sqrt_mono", "sqrt_mono_acc", "ux_mul", "ux_div", "ux_add",
-         "ux_sub", "ux_sqrt", "r2_below"]
+         "ux_sub", "ux_sqrt", "r2_below", "gamma", "gamma_slow", "gamma2", "gamma2_slow", "gamma_ok"]
 UX = ["ux_exp", "ux_cosh", "ux_sinh", "ux_ln", "ux_pow", "ux_sin", "ux_cos"]
+
+
+# ── the correctly rounded Lorentz factor (src/crmath_gamma.cyr, M2's range-edge Part, ADR 0002 row 30) ───────────────
+C_LIGHT = 299792458.0
+GAMMA_INVALID = (1 << 64) - 1
+GAMMA_C_LO = 2.0 ** -30                     # the range of c that _bj_cr_lorentz accepts
+GAMMA_C_HI = 2.0 ** 30
+
+
+def gamma_ref(vs, c, mode):
+    """RN(c/√(c² − Σv²)) (mode 0) or RN(c²/(c² − Σv²)) (mode 1) exactly, or the invalid marker (c outside
+    [2^-30, 2^30] too)."""
+    if not GAMMA_C_LO <= c <= GAMMA_C_HI:
+        return GAMMA_INVALID
+    if any(x != x or abs(x) >= c for x in vs):
+        return GAMMA_INVALID
+    d = Fraction(c) ** 2 - sum(Fraction(x) ** 2 for x in vs)
+    if d <= 0:
+        return GAMMA_INVALID
+    q = Fraction(c) ** 2 / d
+    return f2b(rn_sqrt(q) if mode == 0 else rn_frac(q))
+
+
+def gamma_cases(rng, count, c):
+    """Speeds and vectors: uniform in |v| < c, β = 1 − 2^-k, components of mixed binades, subnormal and tiny parts, the
+    c boundary ulp by ulp, and vectors whose squares nearly cancel c² (|v| within an ulp or two of c)."""
+    out = []
+    for i in range(count):
+        kind = i % 8
+        n = rng.randint(1, 3)
+        if kind == 0:
+            vs = [rng.uniform(-c, c) for _ in range(n)]
+            vs = [x / math.sqrt(n) for x in vs]
+        elif kind == 1:
+            b = 1.0 - rng.uniform(0.5, 1.0) * 2.0 ** -rng.randint(1, 52)
+            vs = [math.copysign(b * c, rng.uniform(-1, 1))]
+        elif kind == 2:
+            u = [rng.gauss(0, 1) for _ in range(3)]
+            s = math.sqrt(sum(x * x for x in u)) or 1.0
+            b = 1.0 - 2.0 ** -rng.randint(1, 50)
+            vs = [x / s * b * c for x in u]
+        elif kind == 3:
+            vs = [rng.uniform(-c, c) * 0.5, rng.uniform(-1, 1) * 2.0 ** -rng.randint(400, 1074), 0.0]
+        elif kind == 4:
+            x = b2f(f2b(c) - rng.randint(1, 8))
+            vs = [x] + [rng.uniform(-1, 1) * 2.0 ** -rng.randint(0, 40) for _ in range(n - 1)]
+        elif kind == 5:
+            vs = [rng.uniform(-1, 1) * c * 2.0 ** -rng.randint(20, 40) for _ in range(n)]
+        elif kind == 6:
+            vs = [b2f(f2b(c) + rng.randint(-2, 2)) * rng.choice([1.0, -1.0])]
+        else:
+            vx = rng.uniform(0.3, 0.9) * c
+            vy = math.sqrt(c * c - vx * vx) * (1.0 - 2.0 ** -rng.randint(30, 53))
+            vs = [vx, vy]
+        out.append(vs)
+    return out
+
+
+def gamma_families(rng, count):
+    """Each family over c = the speed of light, 1, the range's two edges and four random c in it (count/8 cases each),
+    plus c just outside the range, ∞ and NaN, which are refused. gamma_ok is the validity test alone
+    (_bj_cr_lorentz_ok): 1 when the value exists, else 0."""
+    fams = []
+    for name, mode in (("gamma", 0), ("gamma_slow", 0), ("gamma2", 1), ("gamma2_slow", 1), ("gamma_ok", 0)):
+        cs = [C_LIGHT, 1.0, GAMMA_C_HI, GAMMA_C_LO] + [2.0 ** rng.uniform(-30.0, 30.0) for _ in range(4)]
+        ref = gamma_ref
+        if name == "gamma_ok":
+            ref = lambda vs, c, mode: 0 if gamma_ref(vs, c, mode) == GAMMA_INVALID else 1
+        for c in cs:
+            for vs in gamma_cases(rng, max(1, count // len(cs)), c):
+                fams.append((name, [len(vs), c] + vs, ref(vs, c, mode)))
+        for c in (2.0 * GAMMA_C_HI, 0.5 * GAMMA_C_LO, math.inf, math.nan):
+            fams.append((name, [1, c, 0.0], ref([0.0], c, mode)))
+    return fams
 
 
 def main() -> int:
@@ -512,6 +586,9 @@ def main() -> int:
         erng = random.Random(0xC0DE_5A)
         fams = exact_families(erng, max(1, n // 5))
         calls += [(f, f2b(ref), ws) for f, ws, ref in fams if "exact" in names or f in names]
+        grng = random.Random(0x6A_77A)
+        calls += [(f, ref, ws) for f, ws, ref in gamma_families(grng, max(1, n // 5))
+                  if "exact" in names or f in names]
     if "ux" in names or any(x in UX for x in names):
         urng = random.Random(0x5C_2E_D6E)
         fams = ux_families(urng, max(1, n // 20))
@@ -525,7 +602,8 @@ def main() -> int:
     for i, (name, want, a) in enumerate(calls):
         for t in targets:
             g = results[t][i]
-            ok = g == want or (name not in UX and b2f(g) != b2f(g) and b2f(want) != b2f(want))
+            any_nan = name not in UX and not name.startswith("gamma")    # the gamma families' "invalid" is a word
+            ok = g == want or (any_nan and b2f(g) != b2f(g) and b2f(want) != b2f(want))
             per.setdefault((name, t), [0, 0])[0 if ok else 1] += 1
             if not ok:
                 bad += 1

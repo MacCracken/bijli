@@ -937,6 +937,58 @@ fn cyrius_tests(): i64 {
     assert(err_is(t7, v7, BJ_ERR_INVALID_PARAMETER, "invalid parameter: R vector must not contain NaN") == 1,
       "the potentials' own check");
 
+    test_group("cyrius_adr_row_30");
+    var tg1, vg1 = bj_lorentz_factor(299792457.70020753);
+    var g1: f64 = vg1;
+    assert(is_ok(tg1) == 1 && g1 == 22360.679387221862, "β = 1 − 1e-9: γ correctly rounded (Rust: …947056597)");
+    var tg2, vg2 = bj_lorentz_factor(299792457.99999994);
+    var g2: f64 = vg2;
+    assert(is_ok(tg2) == 1 && g2 == 50148194.49908904, "an ulp below c: 5.0148e7 exactly rounded (Rust: 10 % off)");
+    var tg3, vg3 = bj_lorentz_factor(c);
+    assert(is_err_result(tg3) == 1 && vg3 == BJ_ERR_INVALID_PARAMETER, "|v| = c refused");
+    var vv = BjFieldVector_new(179875474.79999998, 236836041.82000002, 0.0);
+    var tg4, vg4 = bj_relativistic_larmor_power(0.0, vv, zv);
+    assert(is_ok(tg4) == 1, "a vector at 0.991c accepted");
+    var bb = BjFieldVector_new(0.6, 0.79, 0.0);
+    var rx2 = BjFieldVector_new(1.0, 0.0, 0.0);
+    var tg5, vg5 = bj_lienard_wiechert_e(1.0, rx2, bb, zv, &ev);
+    assert(is_ok(tg5) == 1, "|β| = 0.991 accepted");
+    var bnear = BjFieldVector_new(0.2903717016735131, 0.9569139328420442, 0.0);
+    var tg6, vg6 = bj_lienard_wiechert_scalar_potential(1.0, rx2, bnear);
+    assert(is_ok(tg6) == 1, "Σβ² = 1 − 6.2e-17 exactly, rounded to 1: accepted (Rust refused it)");
+    var tg8, vg8 = bj_lienard_wiechert_e(1.0, rx2, BjFieldVector_new(0.6, 0.8, 0.0), zv, &ev);
+    assert(is_err_result(tg8) == 1 && vg8 == BJ_ERR_INVALID_PARAMETER, "(0.6, 0.8): Σβ² just above 1 exactly, refused");
+    var tg7, vg7 = bj_lienard_wiechert_scalar_potential(1.0, rx2, BjFieldVector_new(1.0, 0.0, 0.0));
+    assert(is_err_result(tg7) == 1, "|β| = 1 refused");
+    var gv: f64[3];
+    var go: f64[1];
+    gv[0] = 0.5;
+    gv[1] = 0.0;
+    gv[2] = 0.0;
+    var chi: f64 = 1073741824.0;
+    var clo: f64 = 0.000000000931322574615478515625;
+    var chi2: f64 = 2.0 * chi;
+    var clo2: f64 = 0.5 * clo;
+    assert(_bj_cr_lorentz(&gv, 1, chi2, 0, 0, &go) == 0 && _bj_cr_lorentz_ok(&gv, 1, chi2) == 0, "c = 2^31 refused");
+    assert(_bj_cr_lorentz(&gv, 1, clo2, 0, 0, &go) == 0 && _bj_cr_lorentz_ok(&gv, 1, clo2) == 0, "c = 2^-31 refused");
+    assert(_bj_cr_lorentz(&gv, 1, nan, 0, 0, &go) == 0, "c = NaN refused");
+    assert(_bj_cr_lorentz(&gv, 1, chi, 0, 0, &go) == 1 && go[0] == 1.0, "c = 2^30 accepted (|v| < 2^-28·c: γ = 1)");
+    gv[0] = 0.5 * clo;
+    var g13: f64 = 1.1547005383792515;
+    assert(_bj_cr_lorentz(&gv, 1, clo, 0, 0, &go) == 1 && go[0] == g13, "c = 2^-30 accepted: γ(c/2) = 2/√3");
+    # Values just above a midpoint, which fail the rounding test: the slow path decides them (its candidate once came
+    # from the test's verdict, 0 there, and these came out near 2^-1020).
+    gv[0] = 0.9999999999999996;
+    var h25: f64 = 33554432.00000001;
+    assert(_bj_cr_lorentz(&gv, 1, 1.0, 0, 0, &go) == 1 && go[0] == h25, "β = 1 − 2^-51: γ = 2^25 + 2^-27 (just above)");
+    assert(_bj_cr_lorentz(&gv, 1, 1.0, 0, 1, &go) == 1 && go[0] == h25, "the same on the slow path alone");
+    gv[0] = 0.9999999999999998;
+    var h51: f64 = 2251799813685248.5;
+    assert(_bj_cr_lorentz(&gv, 1, 1.0, 1, 0, &go) == 1 && go[0] == h51, "β = 1 − 2^-52: γ² = 2^51 + 1/2 (just above)");
+    gv[0] = 299792457.99999994;
+    var hc: f64 = 2514841411518464.5;
+    assert(_bj_cr_lorentz(&gv, 1, c, 1, 0, &go) == 1 && go[0] == hc, "an ulp below c: γ² = 2^23·c + 1/2 (just above)");
+
     test_group("cyrius_tensor_and_four_vector");
     var e = BjFieldVector_new(1.0, 2.0, 3.0);
     var b = BjFieldVector_new(-1.0, 0.5, 0.25);

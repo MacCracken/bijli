@@ -1654,3 +1654,62 @@ dipole pattern and the transients, 2a-2 a correctly rounded γ), then M1's three
 - **Result, every target** (x86_64 ELF, x86_64 PE, aarch64): **13 modules, 0 failing; 400,644 ok, 0 failed, 0
   measured, 0 pending, 20,173 accepted (ADR 01: 8,997; ADR 0002: 11,176)**; **all 276 digests equal** (the pattern's
   and the two transients' are row 28's and 29's).
+
+## 31. M2 part 2a-2: a correctly rounded γ (2026-11-12)
+
+- **ADR 0002 row 30** (the user's answer of 2026-11-12): `src/crmath_gamma.cyr`'s `_bj_cr_lorentz` gives
+  γ = c/√(c² − Σvᵢ²) or γ² = c²/(c² − Σvᵢ²), rounded once, from the exact difference D of the squares, and
+  `_bj_cr_lorentz_ok` its validity test alone (D > 0 exactly). c lies in [2^-30, 2^30]: bijli passes the speed of
+  light, or 1 for a β, and any other c is refused (the slow path's buffers and the fast paths' ranges assume it).
+  - One nonzero component a: D = (c − a)(c + a) as a double-double (two TwoSums and one product), within 2^-103.
+  - Several: D as Shewchuk's nonoverlapping expansion of c² and the −vᵢ² (exact), compressed to its top two
+    components (within 2^-104). Components below 2^-450 are left out and flagged.
+  - Both go through kimiya's rounding test (`_bj_k_dd_div_cr`) on c/√D (a double-double square root) or c²/D,
+    unscaled: in the c range every quantity is inside the test's ranges with no term subnormal, so a scaling by 4^j
+    would change no bit.
+  - The slow path, when the test fails (a value within about 2^-100 of a midpoint) or a flagged component leaves D
+    under 2^-790: D exact as a bignum in units of 2^K, the candidate the lower of the test's two ends
+    (`_bj_k_dd_div_ends`), then the exact signs of value − μ at the neighbouring midpoints, ties to even.
+- **Callers**: `bj_lorentz_factor` (and through it `bj_lorentz_transform_x` and `BjFourVector.boost_x`),
+  `bj_lorentz_transform_fields` and `bj_relativistic_larmor_power` take γ with c the speed of light;
+  `bj_lienard_wiechert_e` (and through it `bj_lienard_wiechert_fields`) takes γ² with c = 1; the Liénard–Wiechert
+  potentials test their β with `_bj_cr_lorentz_ok`. A β whose exact Σβ² lies just below 1 is accepted
+  ((0.2903717016735131, 0.9569139328420442, 0), Σβ² = 1 − 6.2·10^-17, which Rust refused); (0.6, 0.8), exactly just
+  above 1, is refused.
+- **Golden rows**: `validate.py`'s transcription takes the exact γ (`rel_exact_gamma`, on Fractions) where the port
+  does. `relativity.adr.tsv` maps 1,308 row-30 rows; row 18's 720 became 717, its three rows that γ also changes
+  being row 30's. The class-C rows that γ changes are row 30's too, never a correction and a mapping for one row.
+- **Verification**: `cr_verify.py`'s gamma families check `_bj_cr_lorentz` (both paths, and the exact path alone) and
+  `_bj_cr_lorentz_ok` against Fractions and an integer square root, over c = the speed of light, 1, 2^-30, 2^30 and
+  four random c between, with c outside the range, ∞ and NaN refused: **1,500,020 arguments, all equal to the exact
+  value on x86_64 and aarch64**. Widening the families to the whole c range found two defects before this Part
+  landed: the first γ² family scaled its β by 1/c twice, so every case fell under the 2^-28·c shortcut and the γ²
+  path went unchecked; and the slow path took its candidate from the rounding test's verdict, 0 exactly when that path
+  is needed, so the values just above a midpoint came out near 2^-1020 (β = 1 − 2^-52 gave `lienard_wiechert_e` a
+  γ² of 8.9·10^-308). The candidate is now the test's lower end; `cyrius_adr_row_30` keeps four such values.
+- **Tests**: `cyrius_adr_row_30` (relativity.tcyr, 96 assertions): γ at β = 1 − 10^-9 and one ulp below c against
+  exact references, |v| = c refused, a vector at 0.991c, the two potentials' β above, the c range's edges (2^±31 and
+  NaN refused), and four values just above a midpoint, on the fast path and on the slow path alone.
+- **Benchmarks** (an interleaved A/B against HEAD, three rounds, load 3.4–3.9 for the first and 8–10 for the third;
+  each the lowest of the three):
+
+  | Bench | HEAD | 2a-2 |
+  |---|---|---|
+  | `relativity/lorentz_factor` | 12 ns | 153 ns |
+  | `relativity/lorentz_transform_x` | 39 ns | 177 ns |
+  | `relativity/four_vector_boost` | 30 ns | 168 ns |
+  | `relativity/lienard_wiechert_e` | 208 ns | 343 ns |
+  | `relativity/lienard_wiechert_scalar_potential` | 58 ns | 84 ns |
+  | `relativity/lienard_wiechert_fields_orbit_b099` | 5.56 µs | 6.26 µs |
+
+  `em_tensor_from_fields` and the solver are unchanged. The first draft cost 330 ns for the factor; scaling D to
+  [1, 4) and back took 25 ns of it and is gone (exact in the c range, so no bit changed). **Finding**: the rest is the
+  arithmetic itself. A dependent f64 operation costs about 1 ns in cc5's code (every operand through the stack and a
+  general register) and a call about 3 ns; the one-component path is about 90 operations, two divisions and a
+  square root: D in double-double 39 ns, the square root's correction 54 ns, kimiya's quotient and test 52 ns. A
+  vector of two or three nonzero components builds and compresses an expansion first (about 115 ns more). A scheme
+  with one division (the residuals of c/√D taken together) would need a new error proof, not taken for about 20 %.
+- **Result, every target** (x86_64 ELF, x86_64 PE, aarch64): **13 modules, 0 failing; 399,339 ok, 0 failed, 0
+  measured, 0 pending, 21,478 accepted (ADR 01: 8,997; ADR 0002: 12,481)** over 420,817 rows; **all 276 digests
+  equal**. Seven changed: `lorentz_factor`, `lorentz_transform_x`, `lorentz_transform_fields`, `FourVector::boost_x`,
+  `relativistic_larmor_power`, `lienard_wiechert_e` and `lienard_wiechert_fields`, row 30's.

@@ -9,10 +9,11 @@
 # F^{ij}. No complex phasor appears, so no time convention (src/complex.cyr) is involved.
 #
 # Every formula is Rust's in Rust's order (class A). The FieldVector operations Rust calls are BjFieldVector's, so their
-# range edges follow ADR 0002 row 18 (src/field.cyr). One of Rust's inconsistencies is fixed (ADR 0002 row 27, row 20's
-# rule): bj_lienard_wiechert_e refuses a NaN R as the Liénard–Wiechert potentials do. A fallible function returns a
-# value-form Result, the error in the last-error record (src/error.cyr); a vector, four-vector or pair of vectors
-# writes through out pointers.
+# range edges follow ADR 0002 row 18 (src/field.cyr). Two of Rust's faults are fixed: bj_lienard_wiechert_e refuses a
+# NaN R as the Liénard–Wiechert potentials do (ADR 0002 row 27, row 20's rule), and every γ (γ² in Liénard–Wiechert's
+# E) is correctly rounded from the exact c² − |v|², the |v| < c tests exact (row 30, src/crmath_gamma.cyr). A fallible
+# function returns a value-form Result, the error in the last-error record (src/error.cyr); a vector, four-vector or
+# pair of vectors writes through out pointers.
 
 private
 
@@ -43,22 +44,31 @@ fn _bj_rel_f64p(p): *f64 {
 
 # ── the Lorentz factor ───────────────────────────────────────────────────────────────────────────────────────────
 
-# γ = 1/√(1 − v²/c²). InvalidParameter "speed (v m/s) must be less than c" when v²/c² is NaN or at least 1. Mirrors
+# γ = 1/√(1 − v²/c²), correctly rounded: c/√(c² − v²) from the exact difference (src/crmath_gamma.cyr; ADR 0002 row
+# 30: Rust's form cancelled near c, 1e-7 relative at β = 1 − 1e-9, and its rounded v²/c² ≥ 1 refused speeds an ulp
+# below c). InvalidParameter "speed (v m/s) must be less than c" unless |v| < c exactly (NaN refused). Mirrors
 # `relativity::lorentz_factor`.
 public fn bj_lorentz_factor(speed: f64): Result {
-    var s2: f64 = speed * speed;
-    var beta_sq: f64 = s2 / BJ_SPEED_OF_LIGHT_SQ;
-    if (beta_sq != beta_sq || beta_sq >= 1.0) {
+    var vv: f64[1];
+    vv[0] = speed;
+    var g: f64[1];
+    if (_bj_cr_lorentz(&vv, 1, BJ_SPEED_OF_LIGHT, 0, 0, &g) == 0) {
         var t = _bj_err_reason(BJ_ERR_INVALID_PARAMETER);
         _bj_tx_cstr(t, "speed (");
         _bj_fmt_f64_display(t, speed);
         _bj_tx_cstr(t, " m/s) must be less than c");
         return Err(BJ_ERR_INVALID_PARAMETER);
     }
-    var q: f64 = 1.0 - beta_sq;
-    var r: f64 = f64_sqrt(q);
-    var g: f64 = 1.0 / r;
-    return Ok(g);
+    var gamma: f64 = g[0];
+    return Ok(gamma);
+}
+
+# The three components of v into p.
+fn _bj_rel_parts(v: BjFieldVector, p: *f64) {
+    p[0] = v.x;
+    p[1] = v.y;
+    p[2] = v.z;
+    return 0;
 }
 
 # β = v/c. Mirrors `relativity::beta`.
@@ -212,18 +222,17 @@ impl BjEmTensor {
 
 # (E', B') in a frame moving with velocity v, into e_out and b_out, in Jackson's normalization-free form (eq. 11.149):
 # E' = γ(E + v × B) − γ²/(γ + 1)·(v⋅E)v/c² and B' = γ(B − v × E/c²) − γ²/(γ + 1)·(v⋅B)v/c², exact for any small v ≠ 0.
-# InvalidParameter "boost velocity must be less than c" when v² is NaN or at least c²; the outs untouched. Mirrors
-# `relativity::lorentz_transform_fields`.
+# γ is correctly rounded from the exact c² − |v|² (ADR 0002 row 30). InvalidParameter "boost velocity must be less than
+# c" unless |v| < c exactly (a NaN part refused); the outs untouched. Mirrors `relativity::lorentz_transform_fields`.
 public fn bj_lorentz_transform_fields(e: BjFieldVector, b: BjFieldVector, velocity: BjFieldVector,
   e_out: *BjFieldVector, b_out: *BjFieldVector): Result {
-    var v_sq: f64 = velocity.magnitude_sq();
-    if (v_sq != v_sq || v_sq >= BJ_SPEED_OF_LIGHT_SQ) {
+    var vp: f64[3];
+    _bj_rel_parts(velocity, &vp);
+    var g: f64[1];
+    if (_bj_cr_lorentz(&vp, 3, BJ_SPEED_OF_LIGHT, 0, 0, &g) == 0) {
         return Err(_bj_err_invalid_parameter("boost velocity must be less than c"));
     }
-    var q: f64 = v_sq / BJ_SPEED_OF_LIGHT_SQ;
-    var w: f64 = 1.0 - q;
-    var r: f64 = f64_sqrt(w);
-    var gamma: f64 = 1.0 / r;
+    var gamma: f64 = g[0];
     var g1: f64 = gamma + 1.0;
     var den: f64 = g1 * BJ_SPEED_OF_LIGHT_SQ;
     var gg: f64 = gamma * gamma;
@@ -412,13 +421,14 @@ public fn bj_retarded_vector_potential(charge: f64, velocity: BjFieldVector, ret
 }
 
 # R_eff = |R| − R⋅β (> 0 for |β| < 1): InvalidParameter "R vector must not contain NaN", Singularity for |R| < 1e-30,
-# InvalidParameter "β must be < 1" when |β|² is NaN or at least 1.
+# InvalidParameter "β must be < 1" unless |β| < 1 exactly (a NaN part refused; ADR 0002 row 30).
 fn _bj_rel_effective_distance(r_vec: BjFieldVector, beta_vec: BjFieldVector): Result {
     var r_mag: f64 = r_vec.magnitude();
     if (r_mag != r_mag) { return Err(_bj_err_invalid_parameter("R vector must not contain NaN")); }
     if (r_mag < 0.000000000000000000000000000001) { return Err(_bj_err_singularity()); }
-    var b_sq: f64 = beta_vec.magnitude_sq();
-    if (b_sq != b_sq || b_sq >= 1.0) { return Err(_bj_err_invalid_parameter("β must be < 1")); }
+    var bp: f64[3];
+    _bj_rel_parts(beta_vec, &bp);
+    if (_bj_cr_lorentz_ok(&bp, 3, 1.0) == 0) { return Err(_bj_err_invalid_parameter("β must be < 1")); }
     var rb: f64 = r_vec.dot(beta_vec);
     var r_eff: f64 = r_mag - rb;
     return Ok(r_eff);
@@ -458,15 +468,18 @@ public fn bj_lienard_wiechert_vector_potential(charge: f64, r_vec: BjFieldVector
 # E = (q/4πε₀)(n̂ − β)/(γ²κ³R²) + (q/4πε₀c) n̂ × [(n̂ − β) × β̇]/(κ³R) (V/m) into out, κ = 1 − n̂⋅β: the velocity
 # (Coulomb, ∝ 1/R²) and acceleration (radiation, ∝ 1/R) fields; r_vec from the retarded position to the field point,
 # β = v/c and β̇ = a/c at the retarded time. InvalidParameter for a NaN R ("R vector must not contain NaN", as the
-# potentials: ADR 0002 row 27, where Rust went on to NaN), Singularity for |R| < 1e-30, InvalidParameter for |β| ≥ 1,
-# DivisionByZero for |κ| < 1e-30; out untouched on an error. Mirrors `relativity::lienard_wiechert_e`.
+# potentials: ADR 0002 row 27, where Rust went on to NaN), Singularity for |R| < 1e-30, InvalidParameter unless |β| < 1
+# exactly, DivisionByZero for |κ| < 1e-30; out untouched on an error. γ² = 1/(1 − |β|²) is correctly rounded from the
+# exact difference (ADR 0002 row 30). Mirrors `relativity::lienard_wiechert_e`.
 public fn bj_lienard_wiechert_e(charge: f64, r_vec: BjFieldVector, beta_vec: BjFieldVector, beta_dot: BjFieldVector,
   out: *BjFieldVector): Result {
     var r_mag: f64 = r_vec.magnitude();
     if (r_mag != r_mag) { return Err(_bj_err_invalid_parameter("R vector must not contain NaN")); }
     if (r_mag < 0.000000000000000000000000000001) { return Err(_bj_err_singularity()); }
-    var b_sq: f64 = beta_vec.magnitude_sq();
-    if (b_sq != b_sq || b_sq >= 1.0) { return Err(_bj_err_invalid_parameter("β must be < 1")); }
+    var bp: f64[3];
+    _bj_rel_parts(beta_vec, &bp);
+    var g2: f64[1];
+    if (_bj_cr_lorentz(&bp, 3, 1.0, 1, 0, &g2) == 0) { return Err(_bj_err_invalid_parameter("β must be < 1")); }
     var inv_r: f64 = 1.0 / r_mag;
     var n_hat: BjFieldVector = r_vec.scale(inv_r);
     var nb: f64 = n_hat.dot(beta_vec);
@@ -475,8 +488,7 @@ public fn bj_lienard_wiechert_e(charge: f64, r_vec: BjFieldVector, beta_vec: BjF
     if (ak < 0.000000000000000000000000000001) {
         return Err(_bj_err_division_by_zero("Liénard-Wiechert denominator (1 − n̂⋅β) is zero"));
     }
-    var ob: f64 = 1.0 - b_sq;
-    var gamma_sq: f64 = 1.0 / ob;
+    var gamma_sq: f64 = g2[0];
     var kappa3: f64 = kappa * kappa * kappa;
     var four_pi_eps0: f64 = 4.0 * _BJ_PI * BJ_EPSILON_0;
     var pre: f64 = charge / four_pi_eps0;
@@ -516,17 +528,17 @@ public fn bj_larmor_power(charge: f64, acceleration: f64): f64 {
     return p;
 }
 
-# P = q²γ⁶/(6πε₀c³)·[a² − |v × a|²/c²] (W), Liénard's relativistic Larmor formula. InvalidParameter "velocity must be
-# less than c" when v² is NaN or at least c². Mirrors `relativity::relativistic_larmor_power`.
+# P = q²γ⁶/(6πε₀c³)·[a² − |v × a|²/c²] (W), Liénard's relativistic Larmor formula, γ correctly rounded from the exact
+# c² − |v|² (ADR 0002 row 30). InvalidParameter "velocity must be less than c" unless |v| < c exactly. Mirrors
+# `relativity::relativistic_larmor_power`.
 public fn bj_relativistic_larmor_power(charge: f64, velocity: BjFieldVector, acceleration: BjFieldVector): Result {
-    var v_sq: f64 = velocity.magnitude_sq();
-    if (v_sq != v_sq || v_sq >= BJ_SPEED_OF_LIGHT_SQ) {
+    var vp: f64[3];
+    _bj_rel_parts(velocity, &vp);
+    var gg: f64[1];
+    if (_bj_cr_lorentz(&vp, 3, BJ_SPEED_OF_LIGHT, 0, 0, &gg) == 0) {
         return Err(_bj_err_invalid_parameter("velocity must be less than c"));
     }
-    var q: f64 = v_sq / BJ_SPEED_OF_LIGHT_SQ;
-    var w: f64 = 1.0 - q;
-    var r: f64 = f64_sqrt(w);
-    var gamma: f64 = 1.0 / r;
+    var gamma: f64 = gg[0];
     var g2: f64 = gamma * gamma;
     var g6: f64 = g2 * g2 * g2;
     var a_sq: f64 = acceleration.magnitude_sq();

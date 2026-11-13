@@ -73,7 +73,11 @@ natively and under qemu-aarch64 (`python3 -I -B scripts/oracle/cr_verify.py . --
 checked on arguments of its own. Its exact families (`cr_verify.py . exact`) check src/crmath_kx.cyr's copy of kimiya's
 correctly rounded monomials, square roots and unbounded-exponent operations against exact values (Python's Fraction and
 an integer square root), not MPFR. Its `r2_below` family (an exact family, M1 part 5d-1) checks src/crmath_cmp.cyr's exact Σ (aᵢ − bᵢ)² < 10^-p
-against Fractions, on points crowded around 10^-30 and 10^-60. Its ux families (`cr_verify.py . ux`, M1 part 5c-2) check src/crmath_ux.cyr's
+against Fractions, on points crowded around 10^-30 and 10^-60. Its gamma families (exact families, M2 part 2a-2) check
+src/crmath_gamma.cyr's correctly rounded γ and γ² (`gamma`, `gamma2`), its exact path alone (`gamma_slow`,
+`gamma2_slow`: the rounding test sends a value there only within about 2^-100 of a midpoint) and its validity test
+(`gamma_ok`) against Fractions and an integer square root, over c = the speed of light, 1, 2^-30, 2^30 and four random
+c between, with c outside that range refused. Its ux families (`cr_verify.py . ux`, M1 part 5c-2) check src/crmath_ux.cyr's
 e^x, cosh, sinh, ln(s·2^E), (s·2^E)^y and sin and cos past DBL_MAX against `mpfr_ref.wide`: MPFR at 53 bits with its
 widest exponent range, where nothing over- or underflows. Each (s, e) result is read in two calls, its significand
 and its exponent.

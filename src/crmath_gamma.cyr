@@ -1,0 +1,564 @@
+# crmath_gamma.cyr — bijli's correctly rounded Lorentz factor (M2's range-edge Part, ADR 0002 row 30, the user's answer
+# of 2026-11-12): γ = c/√(c² − Σvᵢ²) (mode 0) and γ² = c²/(c² − Σvᵢ²) (mode 1), each rounded once (to nearest, ties to
+# even, +∞ past DBL_MAX), from the exact difference D = c² − Σvᵢ² of the inputs' squares. relativity.rs's
+# 1/√(1 − v²/c²) cancels near c, a relative error of about 2^-53/(1 − β²); here the validity test |v| < c is exact
+# too (D > 0).
+#
+# Fast path, one nonzero component a: D = (c − a)(c + a) in double-double, within 2^-103 (the common case: a speed,
+# or a velocity along an axis). Several: D as a nonoverlapping expansion of the eight doubles c² = C2H + C2L and
+# −vᵢ² = −(pᵢ + eᵢ) (TwoProduct, exact for |vᵢ| ≥ 2^-450; Shewchuk's Grow-Expansion, exact), its sign the largest
+# component's. Shewchuk's Compress makes it nonadjacent, so its top two components are D within 2^-104 relative (a
+# nonoverlapping expansion's lower components need not be small: 64 + (−7.43…) is one, which is why summing them in
+# double is not enough). c lies in [2^-30, 2^30] (bijli passes the speed of light, or 1; any other c is refused), so D
+# stays in [2^-790, 2^60], √D in [2^-395, 2^30], γ below 2^425 and γ² below 2^850: inside every range of TwoProduct
+# and kimiya's rounding test, with no term subnormal, so the fast paths work on D unscaled (a scaling by 4^j would
+# change no bit). γ = c/√D (the double-double square root adds 2^-103.4) or γ² = c²/D go through that test
+# (_bj_k_dd_div_cr, src/crmath_kx.cyr: an input error up to 32·2^-106). Slow path, when the test fails (a value within
+# about 2^-100 of a midpoint) or a component below 2^-450 leaves D under 2^-790: D exact as a bignum in units of 2^K,
+# K the smallest 2E of the inputs (src/fmtf.cyr's bignum, in buffers of 82 words: D_u ≤ 2^2208, the midpoint products
+# below 2^2320), normalised to D_n = D·2^-2j in [1, 4), the candidate from its top 104 bits, then the exact signs of
+# value − μ at the neighbouring midpoints μ (c² against μ²·D_n, or μ·D_n), ties to even. `cr_verify.py`'s gamma
+# families check both paths against Python's Fraction and an integer square root, on x86_64 and aarch64.
+
+# A bignum buffer's size in words (src/fmtf.cyr's layout: the limb count, then 32-bit limbs).
+var _BJ_G_WORDS = 82;
+
+# 2^k, for −1022 ≤ k ≤ 1023.
+#must_use
+fn _bj_g_pow2(k): f64 {
+    var x: f64 = _bj_from_bits((k + 1023) << 52);
+    return x;
+}
+
+# x·2^k for any k, by steps of at most 2^1000: exact unless the result overflows (+∞; every caller's x·2^k ≥ 1/4).
+#must_use
+fn _bj_g_scale(x: f64, k): f64 {
+    var r: f64 = x;
+    var left = k;
+    while (left > 1000) {
+        var p: f64 = _bj_g_pow2(1000);
+        r = r * p;
+        left = left - 1000;
+    }
+    while (left < 0 - 1000) {
+        var q: f64 = _bj_g_pow2(0 - 1000);
+        r = r * q;
+        left = left + 1000;
+    }
+    var s: f64 = _bj_g_pow2(left);
+    r = r * s;
+    return r;
+}
+
+# ⌊k/2⌋ for any integer k.
+#must_use
+fn _bj_g_half_floor(k): i64 {
+    if (k >= 0) { return k / 2; }
+    return 0 - ((1 - k) / 2);
+}
+
+# me[0], me[1] := (M, E) with |x| = M·2^E, for a finite nonzero x: 2^52 ≤ M < 2^53, or a subnormal's significand and
+# E = −1074.
+fn _bj_g_split(x: f64, me) {
+    var b = _bj_bits(x) & 0x7FFFFFFFFFFFFFFF;
+    var ex = b >> 52;
+    var m = b & 0xFFFFFFFFFFFFF;
+    if (ex == 0) {
+        store64(me, m);
+        store64(me + 8, 0 - 1074);
+        return 0;
+    }
+    store64(me, m | 0x10000000000000);
+    store64(me + 8, ex - 1075);
+    return 0;
+}
+
+# a := a·m for 0 ≤ m < 2^31, the count trimmed when m = 0 (src/fmtf.cyr's _bj_bn_mul_small keeps it).
+fn _bj_g_mul_small(a, m) {
+    if (m == 0) {
+        store64(a, 0);
+        return 0;
+    }
+    _bj_bn_mul_small(a, m);
+    return 0;
+}
+
+# a := a + b in place.
+fn _bj_g_add_to(a, b) {
+    var na = load64(a);
+    var nb = load64(b);
+    var n = na;
+    if (nb > n) { n = nb; }
+    var carry = 0;
+    for (var i = 0; i < n; i = i + 1) {
+        var x = 0;
+        var y = 0;
+        if (i < na) { x = load64(a + 8 + i * 8); }
+        if (i < nb) { y = load64(b + 8 + i * 8); }
+        var s = x + y + carry;
+        store64(a + 8 + i * 8, s & 0xFFFFFFFF);
+        carry = s >> 32;
+    }
+    if (carry != 0) {
+        store64(a + 8 + n * 8, carry);
+        n = n + 1;
+    }
+    store64(a, n);
+    return 0;
+}
+
+# a := a·m for 0 ≤ m < 2^62, in two 31-bit chunks; t a scratch bignum.
+fn _bj_g_mul(a, m, t) {
+    var hi = m >> 31;
+    var lo = m & 0x7FFFFFFF;
+    _bj_bn_copy(t, a);
+    _bj_g_mul_small(t, hi);
+    _bj_bn_shl(t, 31);
+    _bj_g_mul_small(a, lo);
+    _bj_g_add_to(a, t);
+    return 0;
+}
+
+# The bit length of a (0 for zero).
+#must_use
+fn _bj_g_bitlen(a): i64 {
+    var n = load64(a);
+    if (n == 0) { return 0; }
+    var top = load64(a + 8 + (n - 1) * 8);
+    var b = _bj_bitlen(top);
+    return (n - 1) * 32 + b;
+}
+
+# Limb i of a (0 past its count).
+#must_use
+fn _bj_g_limb(a, i): i64 {
+    if (i >= load64(a)) { return 0; }
+    return load64(a + 8 + i * 8);
+}
+
+# Adds b to the nonoverlapping expansion ex[0..k), increasing magnitude, exactly (Shewchuk's Grow-Expansion with zero
+# elimination); returns its new length.
+#must_use
+fn _bj_g_grow(ex: *f64, k, b: f64): i64 {
+    var q: f64 = b;
+    var m = 0;
+    for (var i = 0; i < k; i = i + 1) {
+        var e: f64 = ex[i];
+        var ss: f64 = q + e;                        # TwoSum, inline
+        var bb: f64 = ss - q;
+        var hh: f64 = (q - (ss - bb)) + (e - bb);
+        if (hh != 0.0) {
+            ex[m] = hh;
+            m = m + 1;
+        }
+        q = ss;
+    }
+    if (q != 0.0) {
+        ex[m] = q;
+        m = m + 1;
+    }
+    return m;
+}
+
+# (h, l) := the top two components of the nonoverlapping expansion ex[0..k) (k ≥ 1, increasing magnitude) after
+# Shewchuk's Compress, renormalised: within 2^-104 of the sum, relative (the rest of a nonadjacent expansion is below
+# ulp of its second component). ex is overwritten.
+#must_use
+fn _bj_g_compress(ex: *f64, k): (f64, f64) {
+    var g: f64[8];
+    var q0: f64 = ex[k - 1];
+    var bottom = k - 1;
+    var i = k - 2;
+    while (i >= 0) {
+        var e: f64 = ex[i];
+        var s, r = _bj_cr_fast_two_sum(q0, e);
+        var ss: f64 = s;
+        var rr: f64 = r;
+        if (rr != 0.0) {
+            g[bottom] = ss;
+            bottom = bottom - 1;
+            q0 = rr;
+        } else {
+            q0 = ss;
+        }
+        i = i - 1;
+    }
+    g[bottom] = q0;
+    var top = 0;
+    var q1: f64 = g[bottom];
+    for (var m = bottom + 1; m < k; m = m + 1) {
+        var gm: f64 = g[m];
+        var s2, r2 = _bj_cr_fast_two_sum(gm, q1);
+        var ss2: f64 = s2;
+        var rr2: f64 = r2;
+        if (rr2 != 0.0) {
+            ex[top] = rr2;
+            top = top + 1;
+        }
+        q1 = ss2;
+    }
+    var lo: f64 = 0.0;
+    if (top > 0) { lo = ex[top - 1]; }
+    var h, l = _bj_cr_fast_two_sum(q1, lo);
+    return (h, l);
+}
+
+# (h, l) ≈ √(dh + dl) as a double-double, for dh in [2^-800, 2^800]: one Newton correction on RN(√dh), within 2^-103.4
+# (the bound is scale-free: in that range no term is subnormal and TwoProduct is exact).
+#must_use
+fn _bj_g_sqrt_dd(dh: f64, dl: f64): (f64, f64) {
+    var sh: f64 = f64_sqrt(dh);
+    var p, e = _bj_cr_two_prod(sh, sh);
+    var pp: f64 = p;
+    var pe: f64 = e;
+    var r0: f64 = dh - pp;
+    var r1: f64 = r0 - pe;
+    var r: f64 = r1 + dl;
+    var den: f64 = 2.0 * sh;
+    var sl: f64 = r / den;
+    var h, l = _bj_cr_fast_two_sum(sh, sl);
+    return (h, l);
+}
+
+# The expansion of D = c² − Σvᵢ² into ex (eight f64), exact but for the components below 2^-450 (|vᵢ|² < 2^-900),
+# which are left out: their presence in *tiny (1). Returns its length (0 for D = 0).
+fn _bj_g_expansion(v: *f64, n, c: f64, ex: *f64, tiny): i64 {
+    var k = 0;
+    store64(tiny, 0);
+    var tiny_cut: f64 = _bj_g_pow2(0 - 450);
+    var c2h, c2l = _bj_cr_two_prod(c, c);
+    var ch: f64 = c2h;
+    var cl: f64 = c2l;
+    k = _bj_g_grow(ex, k, cl);
+    k = _bj_g_grow(ex, k, ch);
+    for (var i = 0; i < n; i = i + 1) {
+        var x: f64 = v[i];
+        var ax: f64 = f64_abs(x);
+        if (ax == 0.0) { continue; }
+        if (ax < tiny_cut) {
+            store64(tiny, 1);
+            continue;
+        }
+        var p, e = _bj_cr_two_prod(x, x);
+        var pp: f64 = p;
+        var pe: f64 = e;
+        var np: f64 = -pp;
+        var ne: f64 = -pe;
+        k = _bj_g_grow(ex, k, ne);
+        k = _bj_g_grow(ex, k, np);
+    }
+    return k;
+}
+
+# The fast path: 1 with the result in out[0], 0 when D ≤ 0 (|v| ≥ c), −1 when undecided (the slow path's).
+fn _bj_g_fast(v: *f64, n, c: f64, mode, out: *f64): i64 {
+    var ex: f64[8];
+    var tw[8];
+    var k = _bj_g_expansion(v, n, c, &ex, &tw);
+    if (k == 0) { return 0; }
+    var top: f64 = ex[k - 1];
+    if (top < 0.0) { return 0; }
+    var dh, dl = _bj_g_compress(&ex, k);
+    var d_h: f64 = dh;
+    var d_l: f64 = dl;
+    var floor_d: f64 = _bj_g_pow2(0 - 790);
+    if (d_h < floor_d) { return 0 - 1; }
+    if (mode == 0) {
+        var sh, sl = _bj_g_sqrt_dd(d_h, d_l);
+        var s_h: f64 = sh;
+        var s_l: f64 = sl;
+        var y, ok = _bj_k_dd_div_cr(c, 0.0, s_h, s_l);
+        if (ok == 0) { return 0 - 1; }
+        out[0] = y;
+        return 1;
+    }
+    var c2h, c2l = _bj_cr_two_prod(c, c);
+    var ch: f64 = c2h;
+    var cl: f64 = c2l;
+    var y2, ok2 = _bj_k_dd_div_cr(ch, cl, d_h, d_l);
+    if (ok2 == 0) { return 0 - 1; }
+    out[0] = y2;
+    return 1;
+}
+
+# The fast path for one nonzero component a = |v| (< c): D = (c − a)(c + a) from two exact TwoSums and one double-double
+# product (within 8.01·2^-106 relative, the product's bound in src/crmath_kx.cyr's _bj_k_dd_mul), then as _bj_g_fast.
+# 1 with the result in out[0], or −1 when the rounding test fails.
+fn _bj_g_fast1(a: f64, c: f64, mode, out: *f64): i64 {
+    var s1: f64 = c - a;                            # c − a = s1 + e1 and c + a = s2 + e2, TwoSum
+    var b1: f64 = s1 - c;
+    var na: f64 = -a;
+    var e1: f64 = (c - (s1 - b1)) + (na - b1);
+    var s2: f64 = c + a;
+    var b2: f64 = s2 - c;
+    var e2: f64 = (c - (s2 - b2)) + (a - b2);
+    var sp: f64 = 134217729.0;                      # (s1 + e1)(s2 + e2), the double-double product, TwoProduct inline
+    var p: f64 = s1 * s2;
+    var cs1: f64 = sp * s1;
+    var h1: f64 = cs1 - (cs1 - s1);
+    var l1: f64 = s1 - h1;
+    var cs2: f64 = sp * s2;
+    var h2: f64 = cs2 - (cs2 - s2);
+    var l2: f64 = s2 - h2;
+    var pe: f64 = (l1 * l2) - (((p - (h1 * h2)) - (l1 * h2)) - (h1 * l2));
+    var cross: f64 = (s1 * e2) + (e1 * s2);
+    var pe1: f64 = pe + cross;
+    var d_h: f64 = p + pe1;
+    var d_l: f64 = pe1 - (d_h - p);
+    if (mode == 0) {
+        var sh, sl = _bj_g_sqrt_dd(d_h, d_l);
+        var s_h: f64 = sh;
+        var s_l: f64 = sl;
+        var y, ok = _bj_k_dd_div_cr(c, 0.0, s_h, s_l);
+        if (ok == 0) { return 0 - 1; }
+        out[0] = y;
+        return 1;
+    }
+    var c2h, c2l = _bj_cr_two_prod(c, c);
+    var ch: f64 = c2h;
+    var cl: f64 = c2l;
+    var y2, ok2 = _bj_k_dd_div_cr(ch, cl, d_h, d_l);
+    if (ok2 == 0) { return 0 - 1; }
+    out[0] = y2;
+    return 1;
+}
+
+# me[0], me[1] := (mm, f) with (a + b)/2 = mm·2^f, for positive normal doubles a < b, adjacent.
+fn _bj_g_mid(a: f64, b: f64, me) {
+    var ab[16];
+    _bj_g_split(a, &ab);
+    var ma = load64(&ab);
+    var ea = load64(&ab + 8);
+    _bj_g_split(b, &ab);
+    var mb = load64(&ab);
+    var eb = load64(&ab + 8);
+    var e0 = ea;
+    if (eb < e0) { e0 = eb; }
+    var mm = (ma << (ea - e0)) + (mb << (eb - e0));
+    store64(me, mm);
+    store64(me + 8, e0 - 1);
+    return 0;
+}
+
+# The sign of value − μ in the normalised domain, μ = mm·2^f: value = c/√D_n (mode 0, against c² vs μ²·D_n) or
+# c²/D_n (mode 1, c² vs μ·D_n), D_n = D_u·2^(kmin − 2j), c² = mc²·2^(2ec). a, b, t: scratch bignums.
+#must_use
+fn _bj_g_cmp_mid(du, mc, ec, kmin, j, mode, mm, f, a, b, t): i64 {
+    _bj_bn_copy(b, du);
+    _bj_g_mul(b, mm, t);
+    var s = f + kmin - 2 * j - 2 * ec;
+    if (mode == 0) {
+        _bj_g_mul(b, mm, t);
+        s = s + f;
+    }
+    _bj_bn_set(a, mc);
+    _bj_g_mul(a, mc, t);
+    if (s >= 0) { _bj_bn_shl(b, s); } else { _bj_bn_shl(a, 0 - s); }
+    var r = _bj_bn_cmp(a, b);
+    return r;
+}
+
+# The double next to the positive normal y: up (dir 1) or down (dir −1).
+#must_use
+fn _bj_g_step(y: f64, dir): f64 {
+    var b = _bj_bits(y) + dir;
+    var r: f64 = _bj_from_bits(b);
+    return r;
+}
+
+# Of two adjacent doubles, the one with an even significand (ties to even).
+#must_use
+fn _bj_g_even(a: f64, b: f64): f64 {
+    if ((_bj_bits(a) & 1) == 0) { return a; }
+    return b;
+}
+
+# The slow path: 1 with the result in out[0], or 0 when D ≤ 0. Exact.
+fn _bj_g_slow(v: *f64, n, c: f64, mode, out: *f64): i64 {
+    var me[16];
+    _bj_g_split(c, &me);
+    var mc = load64(&me);
+    var ec = load64(&me + 8);
+    var kmin = 2 * ec;
+    for (var i = 0; i < n; i = i + 1) {
+        var x: f64 = v[i];
+        if (x == 0.0) { continue; }
+        _bj_g_split(x, &me);
+        var e2 = 2 * load64(&me + 8);
+        if (e2 < kmin) { kmin = e2; }
+    }
+    var cu[656];
+    var su[656];
+    var w[656];
+    var t[656];
+    var a[656];
+    _bj_bn_set(&cu, mc);
+    _bj_g_mul(&cu, mc, &t);
+    _bj_bn_shl(&cu, 2 * ec - kmin);
+    store64(&su, 0);
+    for (var i2 = 0; i2 < n; i2 = i2 + 1) {
+        var x2: f64 = v[i2];
+        if (x2 == 0.0) { continue; }
+        _bj_g_split(x2, &me);
+        var m2 = load64(&me);
+        var e22 = load64(&me + 8);
+        _bj_bn_set(&w, m2);
+        _bj_g_mul(&w, m2, &t);
+        _bj_bn_shl(&w, 2 * e22 - kmin);
+        _bj_g_add_to(&su, &w);
+    }
+    if (_bj_bn_cmp(&cu, &su) <= 0) { return 0; }
+    _bj_bn_sub(&cu, &su);
+    # D = D_u·2^kmin, D_u in cu: its top 104 bits, normalised to D_n in [1, 4).
+    var len = _bj_g_bitlen(&cu);
+    var sh = len - 104;
+    if (sh < 0) { sh = 0; }
+    _bj_bn_copy(&w, &cu);
+    _bj_bn_shr(&w, sh);
+    var l0 = _bj_g_limb(&w, 0);
+    var l1 = _bj_g_limb(&w, 1);
+    var l2 = _bj_g_limb(&w, 2);
+    var l3 = _bj_g_limb(&w, 3);
+    var xlo = l0 + ((l1 & 0xFFFFF) << 32);
+    var xhi = (l1 >> 20) + (l2 << 12) + (l3 << 44);
+    var j = _bj_g_half_floor(len - 1 + kmin);
+    var sc = sh + kmin - 2 * j;
+    var fh: f64 = f64_from(xhi);
+    var fl: f64 = f64_from(xlo);
+    var p52: f64 = _bj_g_pow2(52 + sc);
+    var p0: f64 = _bj_g_pow2(sc);
+    var hh: f64 = fh * p52;
+    var ll: f64 = fl * p0;
+    var dnh, dnl = _bj_cr_fast_two_sum(hh, ll);
+    var d_h: f64 = dnh;
+    var d_l: f64 = dnl;
+    # The candidate: z₁ of the double-double quotient's two ends (_bj_k_dd_div_ends, the rounding test's steps without
+    # its verdict, which would give 0 exactly when this path is needed): the value lies within 2^-98 of points that
+    # round to z₁ and z₂, so RN(value) is z₁ or the double above it, and the loop below moves it.
+    var y: f64 = 0.0;
+    if (mode == 0) {
+        var s_h, s_l = _bj_g_sqrt_dd(d_h, d_l);
+        var q1h: f64 = s_h;
+        var q1l: f64 = s_l;
+        var y1, z1 = _bj_k_dd_div_ends(c, 0.0, q1h, q1l);
+        y = y1;
+    } else {
+        var c2h, c2l = _bj_cr_two_prod(c, c);
+        var ch: f64 = c2h;
+        var cl: f64 = c2l;
+        var y2, z2 = _bj_k_dd_div_ends(ch, cl, d_h, d_l);
+        y = y2;
+    }
+    var mm[16];
+    for (var it = 0; it < 4; it = it + 1) {
+        var up: f64 = _bj_g_step(y, 1);
+        _bj_g_mid(y, up, &mm);
+        var c1 = _bj_g_cmp_mid(&cu, mc, ec, kmin, j, mode, load64(&mm), load64(&mm + 8), &a, &w, &t);
+        if (c1 > 0) {
+            y = up;
+            continue;
+        }
+        if (c1 == 0) {
+            y = _bj_g_even(y, up);
+            break;
+        }
+        var dn: f64 = _bj_g_step(y, 0 - 1);
+        _bj_g_mid(dn, y, &mm);
+        var c2 = _bj_g_cmp_mid(&cu, mc, ec, kmin, j, mode, load64(&mm), load64(&mm + 8), &a, &w, &t);
+        if (c2 < 0) {
+            y = dn;
+            continue;
+        }
+        if (c2 == 0) { y = _bj_g_even(dn, y); }
+        break;
+    }
+    var k = 0 - j;
+    if (mode == 1) { k = 0 - 2 * j; }
+    var r: f64 = _bj_g_scale(y, k);
+    out[0] = r;
+    return 1;
+}
+
+# 1 when c lies in [2^-30, 2^30], the range the fast paths' error bounds and the slow path's buffers allow (c² ≤ 2^60,
+# so D_u ≤ 2^2208), else 0 (NaN included).
+#must_use
+fn _bj_g_c_ok(c: f64): i64 {
+    var lo: f64 = 0.000000000931322574615478515625;
+    var hi: f64 = 1073741824.0;
+    if (c >= lo) {
+        if (c <= hi) { return 1; }
+    }
+    return 0;
+}
+
+# 1 when every vᵢ is a number and c² − Σvᵢ² > 0 exactly (|v| < c), else 0: the validity test of _bj_cr_lorentz alone,
+# for a Liénard–Wiechert potential's β (c = 1). c as _bj_cr_lorentz's.
+#must_use
+fn _bj_cr_lorentz_ok(v: *f64, n, c: f64): i64 {
+    if (_bj_g_c_ok(c) == 0) { return 0; }
+    var cut: f64 = c * 0.0000000037252902984619140625;
+    var small = 1;
+    for (var i = 0; i < n; i = i + 1) {
+        var x: f64 = v[i];
+        if (x != x) { return 0; }
+        var ax: f64 = f64_abs(x);
+        if (ax >= c) { return 0; }
+        if (ax >= cut) { small = 0; }
+    }
+    if (small == 1) { return 1; }
+    var nz = 0;
+    for (var i2 = 0; i2 < n; i2 = i2 + 1) {
+        var x2: f64 = v[i2];
+        if (x2 != 0.0) { nz = nz + 1; }
+    }
+    if (nz <= 1) { return 1; }                      # one component: |v| < c, tested exactly above
+    var ex: f64[8];
+    var tw[8];
+    var k = _bj_g_expansion(v, n, c, &ex, &tw);
+    if (k == 0) { return 0; }
+    var top: f64 = ex[k - 1];
+    if (top < 0.0) { return 0; }
+    if (load64(&tw) == 0) { return 1; }
+    var floor_d: f64 = _bj_g_pow2(0 - 790);
+    if (top >= floor_d) { return 1; }
+    var o: f64[1];
+    var s = _bj_g_slow(v, n, c, 1, &o);
+    return s;
+}
+
+# The correctly rounded γ = c/√(c² − Σvᵢ²) (mode 0) or γ² = c²/(c² − Σvᵢ²) (mode 1) of the n components at v (1 ≤ n ≤ 3)
+# into out[0]: 1, or 0 when some vᵢ is NaN or c² − Σvᵢ² ≤ 0 exactly (|v| ≥ c), out untouched. c lies in [2^-30, 2^30]
+# (bijli passes the speed of light, or 1 for a β; any other c gives 0). |vᵢ| < 2^-28·c for every i gives exactly 1.
+# `slow` 1 skips the fast path (for cr_verify.py).
+fn _bj_cr_lorentz(v: *f64, n, c: f64, mode, slow, out: *f64): i64 {
+    if (_bj_g_c_ok(c) == 0) { return 0; }
+    var cut: f64 = c * 0.0000000037252902984619140625;
+    var small = 1;
+    for (var i = 0; i < n; i = i + 1) {
+        var x: f64 = v[i];
+        if (x != x) { return 0; }
+        var ax: f64 = f64_abs(x);
+        if (ax >= c) { return 0; }
+        if (ax >= cut) { small = 0; }
+    }
+    if (small == 1) {
+        out[0] = 1.0;
+        return 1;
+    }
+    if (slow == 0) {
+        var nz = 0;
+        var one: f64 = 0.0;
+        for (var i2 = 0; i2 < n; i2 = i2 + 1) {
+            var x2: f64 = v[i2];
+            if (x2 != 0.0) {
+                nz = nz + 1;
+                one = f64_abs(x2);
+            }
+        }
+        var f = 0 - 1;
+        if (nz == 1) { f = _bj_g_fast1(one, c, mode, out); } else { f = _bj_g_fast(v, n, c, mode, out); }
+        if (f >= 0) { return f; }
+    }
+    var s = _bj_g_slow(v, n, c, mode, out);
+    return s;
+}

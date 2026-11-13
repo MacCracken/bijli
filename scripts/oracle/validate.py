@@ -2175,7 +2175,21 @@ def circuit_adr_rows(path: Path) -> list:
 # Each function transcribed in Rust's order on a set of vector operations: Rust's plain FieldVector chains (which must
 # reproduce the oracle), or the port's, where FieldVector's magnitude, magnitude_sq, dot and cross take ADR 0002 row
 # 18's unbounded chain at a range edge (fv_governed / fv_model, as material's and wave's). The port's model adds row 27.
-def rel_ops(port: bool):
+def rel_exact_gamma(vs, c, mode):
+    """ADR 0002 row 30: RN(c/√(c² − Σv²)) (mode 0) or RN(c²/(c² − Σv²)) (mode 1) from the exact difference, or None
+    unless |v| < c exactly (src/crmath_gamma.cyr's _bj_cr_lorentz)."""
+    if any(x != x or abs(x) >= c for x in vs):
+        return None
+    if all(abs(x) < c * 2.0 ** -28 for x in vs):
+        return 1.0
+    d = Fraction(c) ** 2 - sum(Fraction(x) ** 2 for x in vs)
+    if d <= 0:
+        return None
+    q = Fraction(c) ** 2 / d
+    return rn_sqrt(q) if mode == 0 else rn_frac(q)
+
+
+def rel_ops(port: bool, gamma=None):
     def gov(fn, args, plain):
         if port and all(math.isfinite(x) for x in args) and fv_governed(fn, args) == 18:
             return [b for _k, b in fv_model(fn, args)]
@@ -2194,7 +2208,8 @@ def rel_ops(port: bool):
         plain = [a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]]
         return gov("FieldVector::cross", list(a) + list(b), plain)
 
-    return {"mag": mag, "mag_sq": mag_sq, "dot": dot, "cross": cross, "port": port}
+    return {"mag": mag, "mag_sq": mag_sq, "dot": dot, "cross": cross, "port": port,
+            "gamma": port if gamma is None else gamma}
 
 
 def rel_consts(root: Path) -> dict:
@@ -2209,7 +2224,12 @@ def rel_from_fields(e, b, K):
     return [0.0, -ex, -ey, -ez, ex, 0.0, -b[2], b[1], ey, b[2], 0.0, -b[0], ez, -b[1], b[0], 0.0]
 
 
-def rel_gamma(speed, K):
+def rel_gamma(speed, K, exact=False):
+    if exact:
+        g = rel_exact_gamma([speed], K["C"], 0)
+        if g is None:
+            return ip_err(f"speed ({rust_display(speed)} m/s) must be less than c"), None
+        return None, g
     beta_sq = fdiv(speed * speed, K["C2"])
     if math.isnan(beta_sq) or beta_sq >= 1.0:
         return ip_err(f"speed ({rust_display(speed)} m/s) must be less than c"), None
@@ -2220,7 +2240,7 @@ def rel_rust(fn, v, O, K):
     """relativity.rs transcribed on the vector operations O; None for another name."""
     C, C2, EPS0, MU0 = K["C"], K["C2"], K["EPS0"], K["MU0"]
     if fn == "relativity::lorentz_factor":
-        e, g = rel_gamma(v[0], K)
+        e, g = rel_gamma(v[0], K, O["gamma"])
         return e or okf(g)
     if fn == "relativity::beta":
         return okf(fdiv(v[0], C))
@@ -2252,10 +2272,15 @@ def rel_rust(fn, v, O, K):
         return None
     if fn == "relativity::lorentz_transform_fields":
         e, b, w = v[0:3], v[3:6], v[6:9]
-        v_sq = O["mag_sq"](w)
-        if math.isnan(v_sq) or v_sq >= C2:
-            return ip_err("boost velocity must be less than c")
-        g = fdiv(1.0, fsqrt(1.0 - fdiv(v_sq, C2)))
+        if O["gamma"]:
+            g = rel_exact_gamma(w, C, 0)
+            if g is None:
+                return ip_err("boost velocity must be less than c")
+        else:
+            v_sq = O["mag_sq"](w)
+            if math.isnan(v_sq) or v_sq >= C2:
+                return ip_err("boost velocity must be less than c")
+            g = fdiv(1.0, fsqrt(1.0 - fdiv(v_sq, C2)))
         k = fdiv(g * g, (g + 1.0) * C2)
         vxb = O["cross"](w, b)
         ke = k * O["dot"](w, e)
@@ -2267,7 +2292,7 @@ def rel_rust(fn, v, O, K):
         return ok3(ep) + ok3(bp)
     if fn == "relativity::lorentz_transform_x":
         e, b, s = v[0:3], v[3:6], v[6]
-        err, g = rel_gamma(s, K)
+        err, g = rel_gamma(s, K, O["gamma"])
         if err:
             return err
         ep = [e[0], g * (e[1] - s * b[2]), g * (e[2] + s * b[1])]
@@ -2288,7 +2313,7 @@ def rel_rust(fn, v, O, K):
         return okf(fsqrt(a[1] * a[1] + a[2] * a[2] + a[3] * a[3]))
     if fn == "FourVector::boost_x":
         a, s = v[0:4], v[4]
-        err, g = rel_gamma(s, K)
+        err, g = rel_gamma(s, K, O["gamma"])
         if err:
             return err
         bv = fdiv(s, C)
@@ -2310,9 +2335,13 @@ def rel_rust(fn, v, O, K):
             return ip_err("R vector must not contain NaN")
         if r_mag < 1e-30:
             return SINGULAR
-        b_sq = O["mag_sq"](bv)
-        if math.isnan(b_sq) or b_sq >= 1.0:
-            return ip_err("β must be < 1")
+        if O["gamma"]:
+            if rel_exact_gamma(bv, 1.0, 1) is None:
+                return ip_err("β must be < 1")
+        else:
+            b_sq = O["mag_sq"](bv)
+            if math.isnan(b_sq) or b_sq >= 1.0:
+                return ip_err("β must be < 1")
         r_eff = r_mag - O["dot"](r, bv)
         if fn.endswith("scalar_potential"):
             return okf(fdiv(q, 4.0 * PI * EPS0 * r_eff))
@@ -2325,15 +2354,20 @@ def rel_rust(fn, v, O, K):
             return ip_err("R vector must not contain NaN")
         if r_mag < 1e-30:
             return SINGULAR
-        b_sq = O["mag_sq"](bv)
-        if math.isnan(b_sq) or b_sq >= 1.0:
-            return ip_err("β must be < 1")
+        if O["gamma"]:
+            g2 = rel_exact_gamma(bv, 1.0, 1)
+            if g2 is None:
+                return ip_err("β must be < 1")
+        else:
+            b_sq = O["mag_sq"](bv)
+            if math.isnan(b_sq) or b_sq >= 1.0:
+                return ip_err("β must be < 1")
+            g2 = fdiv(1.0, 1.0 - b_sq)
         inv = fdiv(1.0, r_mag)
         n = [x * inv for x in r]
         kappa = 1.0 - O["dot"](n, bv)
         if abs(kappa) < 1e-30:
             return dz_err("Liénard-Wiechert denominator (1 − n̂⋅β) is zero")
-        g2 = fdiv(1.0, 1.0 - b_sq)
         k3 = kappa * kappa * kappa
         pre = fdiv(q, 4.0 * PI * EPS0)
         nmb = [n[i] - bv[i] for i in range(3)]
@@ -2352,10 +2386,15 @@ def rel_rust(fn, v, O, K):
         return okf(fdiv(q * q * a * a, 6.0 * PI * EPS0 * K["C3"]))
     if fn == "relativity::relativistic_larmor_power":
         q, w, a = v[0], v[1:4], v[4:7]
-        v_sq = O["mag_sq"](w)
-        if math.isnan(v_sq) or v_sq >= C2:
-            return ip_err("velocity must be less than c")
-        g = fdiv(1.0, fsqrt(1.0 - fdiv(v_sq, C2)))
+        if O["gamma"]:
+            g = rel_exact_gamma(w, C, 0)
+            if g is None:
+                return ip_err("velocity must be less than c")
+        else:
+            v_sq = O["mag_sq"](w)
+            if math.isnan(v_sq) or v_sq >= C2:
+                return ip_err("velocity must be less than c")
+            g = fdiv(1.0, fsqrt(1.0 - fdiv(v_sq, C2)))
         g2 = g * g
         g6 = g2 * g2 * g2
         a_sq = O["mag_sq"](a)
@@ -2535,8 +2574,9 @@ def rel_solver_rust(fn, ins, P, O, K):
 # ("R vector must not contain NaN"), where Rust's went on to Ok(NaN). Row 18 through FieldVector's operations.
 def relativity_corrections(root: Path, path: Path):
     """The class-C solver rows (the circular orbit and the oscillation) whose outputs change when sin and cos are
-    correctly rounded (MPFR), on the port's vector operations (ADR 0002 row 18)."""
-    K, O = rel_consts(root), rel_ops(True)
+    correctly rounded (MPFR), on the port's vector operations (ADR 0002 row 18). A row whose γ² (row 30) changes it is
+    an ADR 0002 mapping instead (relativity_adr_rows)."""
+    K, O, O18 = rel_consts(root), rel_ops(True), rel_ops(True, gamma=False)
 
     def fixes(_rows):
         out = []
@@ -2548,6 +2588,8 @@ def relativity_corrections(root: Path, path: Path):
                 continue
             toks = [parse_tok(x) for x in ins.split(" ")]
             want = rel_solver_rust(fn, toks, MPFR_P, O, K)
+            if not toks_same(want, rel_solver_rust(fn, toks, MPFR_P, O18, K)):
+                continue                    # row 30's
             old = wave_toks([parse_tok(x) for x in outs.split(" ")])
             if toks_same(want, old):
                 continue
@@ -2558,6 +2600,7 @@ def relativity_corrections(root: Path, path: Path):
 
 def relativity_adr_rows(root: Path, path: Path) -> list:
     K, R, P = rel_consts(root), rel_ops(False), rel_ops(True)
+    P18 = rel_ops(True, gamma=False)
     out = []
     for line in path.read_text().splitlines():
         if line.startswith("#"):
@@ -2567,14 +2610,26 @@ def relativity_adr_rows(root: Path, path: Path) -> list:
         v = [b for _k, b in toks]
         if fn in ("relativity::solve_retarded_time", "relativity::lienard_wiechert_fields"):
             if _cls == "C":
-                continue                    # its trajectory's sin and cos: the corrected oracle's row
+                # its trajectory's sin and cos: on correctly rounded primitives, a mapping only where γ² (row 30)
+                # changes it; a change from the primitives alone is the corrected oracle's row
+                full = rel_solver_rust(fn, toks, MPFR_P, P, K)
+                if not toks_same(full, rel_solver_rust(fn, toks, MPFR_P, P18, K)):
+                    out.append((fn, ins, wire(full), "30", f"oracle {outs}; ADR 0002 row 30"))
+                continue
             rust, port = rel_solver_rust(fn, toks, GLIBC_P, R, K), rel_solver_rust(fn, toks, GLIBC_P, P, K)
+            r18 = rel_solver_rust(fn, toks, GLIBC_P, P18, K)
         else:
-            rust, port = rel_rust(fn, v, R, K), rel_rust(fn, v, P, K)
+            rust, port, r18 = rel_rust(fn, v, R, K), rel_rust(fn, v, P, K), rel_rust(fn, v, P18, K)
         if toks_same(rust, port):
             continue
-        row = 27 if (fn == "relativity::lienard_wiechert_e" and port[0] == ("E", "InvalidParameter")
-                     and rust[0][0] != "E") else 18
+        # 27: the NaN R; 30: γ alone (or with the vector operations); 18: the vector operations alone.
+        if (fn == "relativity::lienard_wiechert_e" and port[0] == ("E", "InvalidParameter")
+                and port[1][1].endswith("must not contain NaN") and rust[0][0] != "E"):
+            row = 27
+        elif toks_same(port, r18):
+            row = 18
+        else:
+            row = 30
         out.append((fn, ins, wire(port), str(row), f"oracle {outs}; ADR 0002 row {row}"))
     return out
 
