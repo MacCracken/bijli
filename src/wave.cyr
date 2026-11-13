@@ -187,21 +187,52 @@ public fn bj_brewster_angle(n1: f64, n2: f64): Result {
     return Ok(t);
 }
 
+# (a·x − b·y)/(a·x + b·y), the Fresnel ratios' and reflectance_normal's chain: Rust's, or at a range edge (a sum past
+# DBL_MAX, a product below 2^-1022 or 0 from nonzero factors) the unbounded one, each step to 53 bits and the quotient
+# rounded once (src/crmath_vx.cyr; ADR 0002 row 18's rule, M2 part 2d-2a: the ratio is scale-free, so Rust's 1/3 of
+# DBL_MAX and DBL_MAX/2 came out 0). DivisionByZero "Fresnel denominator is zero" when the chain's denominator has a
+# magnitude below 1e-30 (strict = 1, the angle forms) or is 0 (strict = 0, the trig-free family).
+fn _bj_wave_ratio_of(a: f64, x: f64, b: f64, y: f64, strict): Result {
+    var p: f64 = a * x;
+    var q: f64 = b * y;
+    var num: f64 = p - q;
+    var den: f64 = p + q;
+    var pa: f64 = f64_abs(p);                       # the common case, inline: both products normal and both sums
+    var qa: f64 = f64_abs(q);                       # finite (an ∞ product fails the sums' test, a NaN every test)
+    var na: f64 = f64_abs(num);
+    var da: f64 = f64_abs(den);
+    var plain = 0;
+    if (pa > _BJ_VX_MN && qa > _BJ_VX_MN && na <= _BJ_VX_HI && da <= _BJ_VX_HI) { plain = 1; }
+    if (plain == 0) { plain = _bj_vx_ratio_plain(a, x, b, y, p, q, num, den); }
+    if (plain == 0) {
+        var st: i64[1];
+        var ru: f64 = _bj_vx_ratio_ux(a, x, b, y, &st);
+        if (st[0] == 1 || (strict == 1 && st[0] == 2)) {
+            return Err(_bj_err_division_by_zero("Fresnel denominator is zero"));
+        }
+        return Ok(ru);
+    }
+    if (strict == 1) {
+        var m: f64 = f64_abs(den);
+        if (m < 0.000000000000000000000000000001) {
+            return Err(_bj_err_division_by_zero("Fresnel denominator is zero"));
+        }
+        var r: f64 = num / den;
+        return Ok(r);
+    }
+    var tr, vr = _bj_wave_ratio(num, den);
+    if (is_err_result(tr) == 1) { return Err(vr); }
+    return Ok(vr);
+}
+
 # (a cos θ_i − b cos θ_t)/(a cos θ_i + b cos θ_t): r_s with (a, b) = (n₁, n₂), r_p with (n₂, n₁). DivisionByZero when
-# the denominator's magnitude is below 1e-30.
+# the denominator's magnitude is below 1e-30; a range edge as _bj_wave_ratio_of.
 fn _bj_wave_fresnel_angles(a: f64, theta_i: f64, b: f64, theta_t: f64): Result {
     var ci: f64 = _bj_cos(theta_i);
     var ct: f64 = _bj_cos(theta_t);
-    var ai: f64 = a * ci;
-    var bt: f64 = b * ct;
-    var num: f64 = ai - bt;
-    var den: f64 = ai + bt;
-    var m: f64 = f64_abs(den);
-    if (m < 0.000000000000000000000000000001) {
-        return Err(_bj_err_division_by_zero("Fresnel denominator is zero"));
-    }
-    var r: f64 = num / den;
-    return Ok(r);
+    var t, v = _bj_wave_ratio_of(a, ci, b, ct, 1);
+    if (is_err_result(t) == 1) { return Err(v); }
+    return Ok(v);
 }
 
 # r_s = (n₁ cos θ_i − n₂ cos θ_t)/(n₁ cos θ_i + n₂ cos θ_t), TE. DivisionByZero when the denominator's magnitude is
@@ -239,7 +270,8 @@ public fn bj_reflectance_p(n1: f64, theta_i: f64, n2: f64, theta_t: f64): Result
 
 # R = ((n₁ − n₂)/(n₁ + n₂))² at normal incidence. DivisionByZero when the exact |n₁ + n₂| < 10^-30 (ADR 0002 row
 # 17's rule, M2 part 2c-1: the rounded sum decides outside 64 ulps of the double nearest 10^-30, src/crmath_cmp.cyr's
-# exact sum inside; a NaN sum passes, as Rust's test). Mirrors `wave::reflectance_normal`.
+# exact sum inside; a NaN sum passes, as Rust's test). The ratio as _bj_wave_ratio_of (a sum past DBL_MAX). Mirrors
+# `wave::reflectance_normal`.
 public fn bj_reflectance_normal(n1: f64, n2: f64): Result {
     var den: f64 = n1 + n2;
     var m: f64 = f64_abs(den);
@@ -248,8 +280,8 @@ public fn bj_reflectance_normal(n1: f64, n2: f64): Result {
     if (band == 1) {
         return Err(_bj_err_division_by_zero("sum of refractive indices cannot be zero"));
     }
-    var d: f64 = n1 - n2;
-    var r: f64 = d / den;
+    var tq, vq = _bj_wave_ratio_of(n1, 1.0, n2, 1.0, 0);
+    var r: f64 = vq;
     var rr: f64 = r * r;
     return Ok(rr);
 }
@@ -309,19 +341,12 @@ fn _bj_wave_ratio(num: f64, den: f64): Result {
 }
 
 # 0.5·(r_s² + r_p²), r_s = (a cos θ_i − b cos θ_t)/(a cos θ_i + b cos θ_t) and r_p the same with a and b swapped: the
-# index form passes (n₁, n₂), the material form (η₂, η₁).
+# index form passes (n₁, n₂), the material form (η₂, η₁). Each ratio as _bj_wave_ratio_of; r_s² + r_p² never nears the
+# underflow (r_s vanishes only for n₁ = n₂, a shortcut, so |r_s| ≳ 2^-53 for distinct doubles).
 fn _bj_wave_unpolarized(a: f64, b: f64, ci: f64, ct: f64): Result {
-    var ai: f64 = a * ci;
-    var bt: f64 = b * ct;
-    var n1: f64 = ai - bt;
-    var d1: f64 = ai + bt;
-    var t1, v1 = _bj_wave_ratio(n1, d1);
+    var t1, v1 = _bj_wave_ratio_of(a, ci, b, ct, 0);
     if (is_err_result(t1) == 1) { return Err(v1); }
-    var bi: f64 = b * ci;
-    var at: f64 = a * ct;
-    var n2: f64 = bi - at;
-    var d2: f64 = bi + at;
-    var t2, v2 = _bj_wave_ratio(n2, d2);
+    var t2, v2 = _bj_wave_ratio_of(b, ci, a, ct, 0);
     if (is_err_result(t2) == 1) { return Err(v2); }
     var rs: f64 = v1;
     var rp: f64 = v2;
@@ -348,11 +373,7 @@ fn _bj_wave_direct(n1: f64, n2: f64, cos_theta_i: f64, swap, out: *f64): Result 
     }
     var ci: f64 = cs[0];
     var ct: f64 = cs[1];
-    var ai: f64 = a * ci;
-    var bt: f64 = b * ct;
-    var num: f64 = ai - bt;
-    var den: f64 = ai + bt;
-    var tr, vr = _bj_wave_ratio(num, den);
+    var tr, vr = _bj_wave_ratio_of(a, ci, b, ct, 0);
     if (is_err_result(tr) == 1) { return Err(vr); }
     out[0] = vr;
     return Ok(Some);
@@ -433,7 +454,8 @@ public fn bj_transmittance_unpolarized(n1: f64, n2: f64, cos_theta_i: f64): Resu
 # Schlick's R ≈ R₀ + (1 − R₀)(1 − cos θ)⁵, R₀ = ((n₁ − n₂)/(n₁ + n₂))², with θ on the optically thinner side: θ_i for
 # n₁ ≤ n₂, θ_t for n₁ > n₂, and exactly 1 under total internal reflection (de Greve 2006). The errors of
 # bj_snell_cos_theta_t; R₀ needs no guard of its own, since the indices are positive and finite (ADR 0002 row 24: Rust
-# refused indices summing below 1e-30 through reflectance_normal). Mirrors `wave::schlick_reflectance`.
+# refused indices summing below 1e-30 through reflectance_normal), and its ratio is _bj_wave_ratio_of's (a sum past
+# DBL_MAX). Mirrors `wave::schlick_reflectance`.
 public fn bj_schlick_reflectance(n1: f64, n2: f64, cos_theta_i: f64): Result {
     var cs: f64[2];
     var t, v = _bj_wave_cosines(n1, n2, cos_theta_i, &cs);
@@ -443,9 +465,8 @@ public fn bj_schlick_reflectance(n1: f64, n2: f64, cos_theta_i: f64): Result {
         if (v == None) { return Ok(1.0); }
         c = cs[1];
     }
-    var d: f64 = n1 - n2;
-    var s: f64 = n1 + n2;
-    var r: f64 = d / s;
+    var tq, vq = _bj_wave_ratio_of(n1, 1.0, n2, 1.0, 0);
+    var r: f64 = vq;
     var r0: f64 = r * r;
     var omc: f64 = 1.0 - c;
     var omc2: f64 = omc * omc;

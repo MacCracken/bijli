@@ -288,6 +288,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
   1.1e-16 for 2.2e-17 and Eₓ five times too large, and just off an ultra-relativistic axis Eₓ was a third high with κ
   exact. Each part is now rounded once from κ's exact parts (`src/crmath_edge.cyr`, `cr_verify.py`'s lw_nb families).
   The cost: `relativity/lienard_wiechert_e` 639 → 763 ns, near the cone 1,521 → 1,822 ns (`port-parity.md` §41).
+- **wave** (ADR 0002 row 18 amended, M2 part 2d-2a): the ratio chains (a·x − b·y)/(a·x + b·y) of
+  `reflectance_normal`, `transmittance_normal`, Schlick's R₀, the angle-form Fresnel functions and the trig-free family
+  over- and underflowed where the ratio is representable: DBL_MAX and DBL_MAX/2 gave r = 0 for 1/3 and R = 0 for 1/9,
+  and subnormal products left r_s 227 ulps off. At a range edge the chain now runs with an unbounded exponent and its
+  quotient rounds once (src/crmath_vx.cyr); elsewhere it is Rust's, bit for bit. The cost: about 22 ns a ratio
+  (`wave/fresnel_rs_direct` 255 → 277 ns, `wave/reflectance_unpolarized` 264 → 301 ns; `port-parity.md` §42).
 - **relativity** (ADR 0002 row 13 amended, M2 part 2b-4): `retarded_scalar_potential`, `retarded_vector_potential`,
   `larmor_power` and `EmTensor::dual` rounded two to five times, and overflowed where the value is representable
   (Larmor with q² past DBL_MAX, the dual of B past DBL_MAX/c: ∞ each); they are now correctly rounded for finite

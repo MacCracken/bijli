@@ -1613,7 +1613,7 @@ def wave_lossless(e, m, s):
     return None, (fsqrt(e * m), fsqrt(fdiv(m, e)))
 
 
-def wave_interface(v, lossless, exact=False):
+def wave_interface(v, lossless, exact=False, ux=False):
     """reflectance_at_interface on a lossless-constants function (Rust's, or the port's rounded once), the cosines
     Rust's or (exact) the port's."""
     e1, l1 = lossless(*v[0:3])
@@ -1631,7 +1631,7 @@ def wave_interface(v, lossless, exact=False):
     if n1 == n2:
         g = fdiv(eta2 - eta1, eta2 + eta1)
         return okf(g * g)
-    return wave_unpolarized(eta2, eta1, ci, ct)
+    return wave_unpolarized(eta2, eta1, ci, ct, ux)
 
 
 def wave_cosines(n1, n2, c, exact=False):
@@ -1667,20 +1667,51 @@ def wave_ratio(num, den):
     return None, fdiv(num, den)
 
 
-def wave_unpolarized(a1, a2, ci, ct):
+VX_MN = 2.0 ** -1022
+DBL_MAX = sys.float_info.max
+
+
+def vx_exact_p(a, b, p) -> bool:
+    """src/crmath_vx.cyr's _bj_vx_exact: a zero factor, or |p| in (2^-1022, DBL_MAX]."""
+    return a == 0.0 or b == 0.0 or VX_MN < abs(p) <= DBL_MAX
+
+
+def wave_ratio_of(a, x, b, y, strict, ux):
+    """(error tokens, None) or (None, r) for (a·x − b·y)/(a·x + b·y): Rust's chain, or with ux (ADR 0002 row 18's rule,
+    M2 part 2d-2a) the unbounded one where Rust's is not (a product not exact for the chain, a sum past DBL_MAX): each
+    step to 53 bits (exact.py's rnd53), the quotient rounded once. The denominator test: |den| < 1e-30 (strict, the angle
+    forms; on the chain's den) or den = 0."""
+    p, q = a * x, b * y
+    num, den = p - q, p + q
+    plain = (not _fin(a, x, b, y) or (vx_exact_p(a, x, p) and vx_exact_p(b, y, q)
+                                      and abs(num) <= DBL_MAX and abs(den) <= DBL_MAX))
+    if not ux or plain:
+        if (strict and abs(den) < 1e-30) or den == 0.0:
+            return dz_err("Fresnel denominator is zero"), None
+        return None, fdiv(num, den)
+    P, Q = rnd53(Fraction(a) * Fraction(x)), rnd53(Fraction(b) * Fraction(y))
+    N, D = rnd53(P - Q), rnd53(P + Q)
+    if D == 0 or (strict and abs(D) < Fraction(1e-30)):
+        return dz_err("Fresnel denominator is zero"), None
+    if N == 0:
+        return None, (0.0 if D > 0 else -0.0)
+    return None, rn_frac(N / D)
+
+
+def wave_unpolarized(a1, a2, ci, ct, ux=False):
     """0.5·(r_s² + r_p²) with r_s = (a₁ cos θ_i − a₂ cos θ_t)/(a₁ cos θ_i + a₂ cos θ_t) and r_p the same with a₁, a₂
-    swapped: the index form takes (n₁, n₂), the material form (η₂, η₁)."""
-    e, rs = wave_ratio(a1 * ci - a2 * ct, a1 * ci + a2 * ct)
+    swapped: the index form takes (n₁, n₂), the material form (η₂, η₁); ux as wave_ratio_of."""
+    e, rs = wave_ratio_of(a1, ci, a2, ct, False, ux)
     if e:
         return e
-    e, rp = wave_ratio(a2 * ci - a1 * ct, a2 * ci + a1 * ct)
+    e, rp = wave_ratio_of(a2, ci, a1, ct, False, ux)
     if e:
         return e
     return okf(0.5 * (rs * rs + rp * rp))
 
 
-def wave_direct(fn, n1, n2, c, exact=False):
-    """The trig-free family, transcribed (exact: on the port's cosines)."""
+def wave_direct(fn, n1, n2, c, exact=False, ux=False):
+    """The trig-free family, transcribed (exact: on the port's cosines; ux: its ratios as wave_ratio_of)."""
     e, ci, ct = wave_cosines(n1, n2, c, exact)
     if e:
         return e
@@ -1694,7 +1725,7 @@ def wave_direct(fn, n1, n2, c, exact=False):
             r = 0.0
         else:
             a, b = (n1, n2) if "_s_" in fn or "rs" in fn else (n2, n1)
-            err, r = wave_ratio(a * ci - b * ct, a * ci + b * ct)
+            err, r = wave_ratio_of(a, ci, b, ct, False, ux)
             if err:
                 return err
         return okf(r) if "fresnel" in fn else okf(r * r)
@@ -1704,22 +1735,22 @@ def wave_direct(fn, n1, n2, c, exact=False):
         elif n1 == n2:
             out = okf(0.0)
         else:
-            out = wave_unpolarized(n1, n2, ci, ct)
+            out = wave_unpolarized(n1, n2, ci, ct, ux)
         if fn.startswith("wave::trans") and out[0][0] == "f":
             return okf(1.0 - out[0][1])
         return out
     return None
 
 
-def wave_reflectance_normal(n1, n2, exact=False):
+def wave_reflectance_normal(n1, n2, exact=False, ux=False):
     den = n1 + n2
     if (below30(Fraction(n1) + Fraction(n2)) if exact and _fin(n1, n2) else abs(den) < 1e-30):
         return dz_err("sum of refractive indices cannot be zero")
-    r = fdiv(n1 - n2, den)
+    _e, r = wave_ratio_of(n1, 1.0, n2, 1.0, False, ux)
     return okf(r * r)
 
 
-def wave_schlick(n1, n2, c, port=False, exact=False):
+def wave_schlick(n1, n2, c, port=False, exact=False, ux=False):
     """schlick_reflectance; with port, R₀ without reflectance_normal's |n₁ + n₂| < 1e-30 guard (ADR 0002 row 24);
     with exact, on the port's cosines (row 17)."""
     e, ci, ct = wave_cosines(n1, n2, c, exact)
@@ -1732,7 +1763,7 @@ def wave_schlick(n1, n2, c, port=False, exact=False):
     else:
         cos = ci
     if port:
-        r = fdiv(n1 - n2, n1 + n2)
+        _e, r = wave_ratio_of(n1, 1.0, n2, 1.0, False, ux)
         r0 = r * r
     else:
         r0t = wave_reflectance_normal(n1, n2)
@@ -1759,7 +1790,7 @@ def wave_positive(what, x):
     return None
 
 
-def wave_rust(fn, v, P, K):
+def wave_rust(fn, v, P, K, ux=False):
     """wave.rs transcribed in its order of operations, its checks and error texts, on the primitives P (glibc's for
     the oracle, MPFR's for the corrected oracle); None for another name."""
     EPS0, MU0, C = K["EPS0"], K["MU0"], K["C"]
@@ -1810,11 +1841,9 @@ def wave_rust(fn, v, P, K):
         n1, ti, n2, tt = v
         ci, ct = P["cos"](ti), P["cos"](tt)
         a, b = (n1, n2) if fn.endswith("s") else (n2, n1)
-        num = a * ci - b * ct
-        den = a * ci + b * ct
-        if abs(den) < 1e-30:
-            return dz_err("Fresnel denominator is zero")
-        r = fdiv(num, den)
+        e, r = wave_ratio_of(a, ci, b, ct, True, ux)
+        if e:
+            return e
         return okf(r) if "fresnel" in fn else okf(r * r)
     if fn == "wave::reflectance_normal":
         return wave_reflectance_normal(v[0], v[1])
@@ -1944,6 +1973,8 @@ def wave_corrections(root: Path, path: Path):
                 continue                    # (the pattern's rows are ADR 0002 row 28's mappings)
             v = [b for _k, b in (parse_tok(t) for t in ins.split(" "))]
             want = wave_rust(fn, v, MPFR_P, K)
+            if not toks_same(want, wave_rust(fn, v, MPFR_P, K, ux=True)):
+                continue                    # row 18's (M2 part 2d-2a): the range edge's chain moves it
             old = wave_toks([parse_tok(t) for t in outs.split(" ")])
             if toks_same(want, old):
                 continue
@@ -2107,13 +2138,23 @@ def wave_port(fn, v, K, consts):
         return (22 if not toks_same(old22, wave_rust(fn, v, None, K)) else 13), new
     if fn == "wave::effective_aperture" and math.isnan(v[0]):
         return 23, ip_err("wavelength must be non-negative, got NaN")
+    if fn in ("wave::fresnel_rs", "wave::fresnel_rp", "wave::reflectance_s", "wave::reflectance_p"):
+        # Row 18 (M2 part 2d-2a) where the range edge's chain moves the row, on correctly rounded cosines.
+        new = wave_rust(fn, v, MPFR_P, K, ux=True)
+        return (18, new) if not toks_same(new, wave_rust(fn, v, MPFR_P, K)) else None
     if fn == "wave::schlick_reflectance":
-        # Row 24 where R₀'s guard alone moves the row, else row 17 (the exact TIR and cos θ_t).
+        # Row 18 where the range edge's chain alone moves the row, else row 24 where R₀'s guard does, else row 17 (the
+        # exact TIR and cos θ_t).
         old24 = wave_schlick(v[0], v[1], v[2], port=True)
-        new = wave_schlick(v[0], v[1], v[2], port=True, exact=True)
+        old18 = wave_schlick(v[0], v[1], v[2], port=True, exact=True)
+        new = wave_schlick(v[0], v[1], v[2], port=True, exact=True, ux=True)
+        if not toks_same(new, old18):
+            return 18, new
         return (24 if not toks_same(old24, wave_rust(fn, v, None, K)) else 17), new
     if fn in WAVE_TRIG_FREE:
-        return 17, wave_direct(fn, v[0], v[1], v[2], exact=True)
+        old18 = wave_direct(fn, v[0], v[1], v[2], exact=True)
+        new = wave_direct(fn, v[0], v[1], v[2], exact=True, ux=True)
+        return (18 if not toks_same(new, old18) else 17), new
     if fn == "wave::material_reflection_coefficient":
         for part in (v[0:3], v[3:6]):
             e, _l = wave_lossless(*part)
@@ -2133,17 +2174,24 @@ def wave_port(fn, v, K, consts):
         # Row 25 where the relative η or the guard's removal alone moves the row, else row 13 (η rounded once).
         return (25 if not toks_same(old25, rust) or not toks_same(guarded, new) else 13), new
     if fn == "wave::reflectance_at_interface":
-        # Row 17 where the exact TIR and cos θ_t alone move the row, else row 13 (n and η rounded once).
+        # Row 18 where the range edge's chain alone moves the row, else row 17 where the exact TIR and cos θ_t do,
+        # else row 13 (n and η rounded once).
         old17 = wave_interface(v, wave_lossless, exact=True)
-        new = wave_interface(v, mat_lossless_port, exact=True)
+        old18 = wave_interface(v, mat_lossless_port, exact=True)
+        new = wave_interface(v, mat_lossless_port, exact=True, ux=True)
+        if not toks_same(new, old18):
+            return 18, new
         return (17 if not toks_same(old17, wave_rust(fn, v, None, K)) else 13), new
     if fn == "wave::reflectance_normal_materials":
         return 13, mat_reflectance(v, mat_lossless_port)
     if fn in ("wave::reflectance_normal", "wave::transmittance_normal"):
-        new = wave_reflectance_normal(v[0], v[1], exact=True)
-        if fn == "wave::transmittance_normal" and new[0][0] == "f":
-            new = okf(1.0 - new[0][1])
-        return 17, new
+        old18 = wave_reflectance_normal(v[0], v[1], exact=True)
+        new = wave_reflectance_normal(v[0], v[1], exact=True, ux=True)
+        if fn == "wave::transmittance_normal":
+            old18 = okf(1.0 - old18[0][1]) if old18[0][0] == "f" else old18
+            new = okf(1.0 - new[0][1]) if new[0][0] == "f" else new
+        # Row 18 where the range edge's chain moves the row, else row 17 (the exact |n₁ + n₂| test).
+        return (18 if not toks_same(new, old18) else 17), new
     m13 = wave_port13(fn, v, K, kh)
     return None if m13 is None else (13, m13)
 

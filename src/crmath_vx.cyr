@@ -2,8 +2,8 @@
 #
 # At a range edge field.rs's and charge.rs's chains run with an unbounded exponent, as BjComplex's do (ADR 0002 row
 # 14): every operation rounded to 53 bits (kimiya's _bj_k_ux_*, src/crmath_kx.cyr), the last one once into binary64.
-# These are the helpers field.cyr and charge.cyr share (both are `private` files, so the helpers live in a file of
-# internals).
+# These are the helpers field.cyr, charge.cyr and (M2 part 2d-2a, its ratio chains) wave.cyr share (all `private`
+# files, so the helpers live in a file of internals).
 #
 # The guard: Rust's chain, then a test of what it computed. A chain of products and sums of doubles differs from the
 # unbounded one only where a product leaves the normal range. One past DBL_MAX makes the sums it enters ±∞ or NaN. One
@@ -227,4 +227,47 @@ fn _bj_vx_coulomb_plain(rsq: f64, kq: f64, kq2: f64, fct: f64, q1: f64, q2: f64,
     if ((q1 == 0.0 || q2 == 0.0) && e1 <= 2046) { return 1; }               # an exact 0 factor, the offset exact
     if (_bj_vx_finite_n(p, n) == 0) { return 1; }
     return 0;
+}
+
+# ── ratio chains (M2 part 2d-2a) ─────────────────────────────────────────────────────────────────────────────────────
+# wave's Fresnel ratios (a·x − b·y)/(a·x + b·y), and reflectance_normal's and Schlick's (n₁ − n₂)/(n₁ + n₂) (x = y = 1):
+# Rust's p = a·x, q = b·y, num = p − q, den = p + q, then num/den. The file's guard: both products exact for the chain
+# (a zero factor, or normal) and both sums finite, since a sum or difference of normal values that lands below 2^-1022
+# is exact; then Rust's chain is the unbounded one, bit for bit. Otherwise (a sum past DBL_MAX, or a product below
+# 2^-1022 or 0 from nonzero factors) each step runs with an unbounded exponent to 53 bits, the quotient rounded once.
+# A ratio's square needs nothing more: a quotient rounded once into binary64 is its 53-bit value unless it lies below
+# 2^-1022, where its square underflows to 0 either way.
+
+# 1 when Rust's p = a·x, q = b·y, num = p − q and den = p + q are the unbounded chain's (the section comment), or an
+# operand is not finite (Rust's chain stays).
+#must_use
+fn _bj_vx_ratio_plain(a: f64, x: f64, b: f64, y: f64, p: f64, q: f64, num: f64, den: f64): i64 {
+    if (_bj_vx_finite4(a, x, b, y) == 0) { return 1; }
+    if (_bj_vx_exact(a, x, p) == 0 || _bj_vx_exact(b, y, q) == 0) { return 0; }
+    var an: f64 = f64_abs(num);
+    var ad: f64 = f64_abs(den);
+    if (an > _BJ_VX_HI || ad > _BJ_VX_HI) { return 0; }
+    return 1;
+}
+
+# (a·x − b·y)/(a·x + b·y) with an unbounded exponent (the section comment): the products, the difference and the sum
+# to 53 bits, the quotient rounded once into binary64 (a zero difference gives IEEE's ±0). st[0] := 1 when the sum is
+# 0, 2 when its magnitude lies below the double 1e-30 (the angle forms' test on this sum), else 0.
+#must_use
+fn _bj_vx_ratio_ux(a: f64, x: f64, b: f64, y: f64, st: *i64): f64 {
+    var ps, pe = _bj_vx_mul(a, x);
+    var qs, qe = _bj_vx_mul(b, y);
+    var ns, ne = _bj_k_ux_sub(ps, pe, qs, qe);
+    var ds, de = _bj_k_ux_add(ps, pe, qs, qe);
+    st[0] = 0;
+    if (ds == 0.0) {
+        st[0] = 1;
+        return 0.0;
+    }
+    var ads: f64 = f64_abs(ds);
+    var lim: f64 = 0.000000000000000000000000000001;
+    var ts, te = _bj_k_ux_from(lim);
+    if (_bj_k_ux_cmp(ads, de, ts, te) < 0) { st[0] = 2; }
+    var r: f64 = _bj_k_ux_div_f64(ns, ne, ds, de);
+    return r;
 }

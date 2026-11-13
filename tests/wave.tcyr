@@ -739,6 +739,29 @@ fn cyrius_tests(): i64 {
     var gam3: f64 = vg3;
     assert(is_ok(tg3) == 1 && gam3 == 0.6,
       "row 25, 2d-1: η₁ + η₂ = 9.6e-34, the guard gone: Γ = 3/5 (Rust: DivisionByZero)");
+    # Row 18's rule, M2 part 2d-2a: the ratio chains with an unbounded exponent at a range edge.
+    var dmax: f64 = _bj_from_bits(0x7FEFFFFFFFFFFFFF);
+    var dhalf: f64 = dmax * 0.5;
+    var trn, vrn = bj_reflectance_normal(dmax, dhalf);
+    assert(is_ok(trn) == 1 && _bj_bits(vrn) == 0x3FBC71C71C71C71E,
+      "row 18, 2d-2a: R of DBL_MAX and DBL_MAX/2 is 1/9, the sum past DBL_MAX run unbounded (Rust: 0)");
+    var tfa, vfa = bj_fresnel_rs(dmax, 0.0, dhalf, 0.0);
+    assert(is_ok(tfa) == 1 && _bj_bits(vfa) == 0x3FD5555555555556, "and the angle form's r_s, 1/3 (Rust: 0)");
+    var rdx: f64[1];
+    var tdx, vdx = bj_fresnel_rs_direct(dmax, dhalf, 1.0, &rdx);
+    var rd: f64 = rdx[0];
+    assert(is_ok(tdx) == 1 && vdx == Some && _bj_bits(rd) == 0x3FD5555555555556, "and the trig-free r_s (Rust: 0)");
+    var tsw2, vsw2 = bj_schlick_reflectance(dmax, dhalf, 0.95);
+    assert(is_ok(tsw2) == 1 && _bj_bits(vsw2) == 0x3FBC8F1B63B9CADB, "and Schlick's R₀ (Rust: 0, R 0.0005)");
+    var sn1: f64 = _bj_from_bits(0x000012688B70E62B);                     # 1e-310
+    var sn2: f64 = _bj_from_bits(0x00001B9CD1295941);                     # 1.5e-310
+    var rsb: f64[1];
+    var tsb, vsb = bj_fresnel_rs_direct(sn1, sn2, 0.5, &rsb);
+    var rsv: f64 = rsb[0];
+    assert(is_ok(tsb) == 1 && _bj_bits(rsv) == 0xBFDAE49FBFE2C9BC,
+      "subnormal indices: both products below 2^-1022, run unbounded (Rust: 227 ulps off)");
+    var tub, vub = bj_reflectance_unpolarized(sn1, sn2, 0.5);
+    assert(is_ok(tub) == 1 && _bj_bits(vub) == 0x3FB6D4F0BEB927F7, "and R (Rust: 309 ulps off)");
 
     test_group("cyrius_adr_row_28");
     var u8: f64 = bj_half_wave_dipole_pattern(0.00000001);

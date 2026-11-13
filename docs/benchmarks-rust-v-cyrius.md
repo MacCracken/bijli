@@ -30,12 +30,12 @@
 | `wave/poynting_vector` | 0.98 ns | `wave/poynting_vector` | 62.00 ns | 63.0× |
 | `wave/plane_wave_intensity` | 0.52 ns | `wave/plane_wave_intensity` | 148.00 ns | 284.6× |
 | `wave/plane_wave_e` | 0.51 ns | `wave/plane_wave_e` | 20.99 µs | 40928.2× |
-| `wave/fresnel_rs` | 1.25 ns | `wave/fresnel_rs` | 275.00 ns | 220.6× |
+| `wave/fresnel_rs` | 1.25 ns | `wave/fresnel_rs` | 304.00 ns | 243.2× |
 | `wave/snell_refraction` | 1.75 ns | `wave/snell_refraction` | 284.00 ns | 162.6× |
-| `wave/fresnel_rs_direct` | 1.73 ns | `wave/fresnel_rs_direct` | 258.00 ns | 149.1× |
-| `wave/reflectance_unpolarized` | 1.24 ns | `wave/reflectance_unpolarized` | 276.00 ns | 222.6× |
-| `wave/reflectance_at_interface` | 7.78 ns | `wave/reflectance_at_interface` | 714.00 ns | 91.8× |
-| `wave/schlick_reflectance` | 1.24 ns | `wave/schlick_reflectance` | 244.00 ns | 196.8× |
+| `wave/fresnel_rs_direct` | 1.73 ns | `wave/fresnel_rs_direct` | 277.00 ns | 160.1× |
+| `wave/reflectance_unpolarized` | 1.24 ns | `wave/reflectance_unpolarized` | 301.00 ns | 242.7× |
+| `wave/reflectance_at_interface` | 7.78 ns | `wave/reflectance_at_interface` | 747.00 ns | 96.0× |
+| `wave/schlick_reflectance` | 1.24 ns | `wave/schlick_reflectance` | 265.00 ns | 213.7× |
 | `wave/half_wave_dipole_pattern` | 0.50 ns | `wave/half_wave_dipole_pattern` | 483.00 ns | 962.5× |
 | `wave/rect_waveguide_cutoff` | 1.24 ns | `wave/rect_waveguide_cutoff` | 47.00 ns | 38.0× |
 | `fdtd/step_100_cells` | 64.09 ns | pending (M5) | — | — |

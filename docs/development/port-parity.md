@@ -2181,3 +2181,53 @@ The last of 2c's boundary values (the user's answer of 2026-11-12: exact tests, 
 - **Result, every target** (x86_64 ELF, x86_64 PE, aarch64): **13 modules, 0 failing; 400,686 ok, 0 failed, 0
   measured, 0 pending, 40,563 accepted (ADR 01: 8,998; ADR 0002: 31,565)** over 441,249 rows; **all 276 digests
   equal**. Three changed: E, the fields and the reflection coefficient.
+
+## 42. M2 part 2d-2a: wave's ratio chains at their range edges (2026-11-13)
+
+2d's rule is ADR 0002 row 18's (M1 part 5d): where Rust's chain over- or underflows an intermediate but the result is
+representable, the chain runs with an unbounded exponent and its last operation rounds once; a guard keeps Rust's
+chain, bit for bit, everywhere else. 2d-2 takes wave's chains in three bites: 2d-2a the ratio chains, 2d-2b the plane
+waves (Poynting, momentum density, `plane_wave_e`) and Snell's angle, 2d-2c the material interface, Γ and the
+waveguides.
+
+- **ADR 0002 row 18, amended**: every ratio (a·x − b·y)/(a·x + b·y) in wave: `reflectance_normal` and
+  `transmittance_normal` ((n₁ − n₂)/(n₁ + n₂)), Schlick's R₀, the four angle-form Fresnel functions, and the
+  trig-free family's ratios (`fresnel_rs_direct`, `fresnel_rp_direct`, the two reflectances, the unpolarized pair, and
+  through it `reflectance_at_interface`).
+  - **The guard** (`src/wave.cyr`'s `_bj_wave_ratio_of`): both products' magnitudes above 2^-1022 and both sums at
+    most DBL_MAX, inline; failing that, src/crmath_vx.cyr's full test (a zero factor makes a product exact; a
+    non-finite operand keeps Rust's chain). A sum or difference of normal values that lands below 2^-1022 is exact, so
+    then Rust's chain is the unbounded one.
+  - **The edge** (`_bj_vx_ratio_ux`): the products, the difference and the sum to 53 bits with an unbounded exponent,
+    the quotient rounded once; a zero difference gives IEEE's ±0. A ratio's square needs nothing more: a quotient
+    rounded once is its 53-bit value unless it lies below 2^-1022, where the square underflows to 0 either way. And
+    r_s² + r_p² never nears the underflow: r_s vanishes only for n₁ = n₂, a shortcut, so |r_s| ≳ 2^-53 for distinct
+    doubles.
+  - **The tests**: the angle forms' |den| < 1e-30 (on the chain's value, the user's 2c answer for trig tests) reads
+    the unbounded denominator at an edge, the trig-free family's den = 0 likewise; `reflectance_normal`'s exact
+    |n₁ + n₂| < 10^-30 (2c-1) comes first.
+  - Rust: DBL_MAX and DBL_MAX/2 gave r = 0 for 1/3 (the sum past DBL_MAX: num/∞) and R = 0 for 1/9; Schlick's R₀
+    came out 0 and its R 0.0005 for 0.111; at indices of 10^-310 both products are subnormal, and r_s was 227 ulps
+    off, R 309.
+- **Rows** (`m_wave.rs`'s `emit_ratio_edges`, after every older row): 2,872 more: `reflectance_normal` and
+  `transmittance_normal` over indices at DBL_MAX, its half and third, 10^308, 1.5·10^308 and 9·10^307, a mixed-sign
+  half, and over eight subnormal and tiny indices; the trig-free family at those indices with cosines 1, ½ and 10^-310
+  (big), 1, 0.3 and 10^-20 (small), and five ordinary pairs with five subnormal and tiny cosines; the angle forms at
+  five index pairs (DBL_MAX and its half, ±10^308, subnormal) and five angle pairs. `validate.py`'s transcription
+  agreed with every row.
+- **Mappings** (`validate.py`'s `wave_ratio_of`: the guard, then exact.py's `rnd53` at each step): `wave.adr.tsv`
+  grows from 6,215 rows to 6,876: row 18 labels 463 more (28 older rows; the rest new), and the new rows add 139
+  row-24 and 56 row-17 mappings (Schlick's guard, the exact cosines). Row 18 goes to a row only where the edge's chain
+  moves it; an angle-form row it moves leaves the corrected oracle for the mappings. All passed on the harness's first
+  run.
+- **Tests**: tests/wave.tcyr's `cyrius_adr_rows_22_to_25` group gains 6 assertions: R, the angle form's r_s, the
+  trig-free r_s and Schlick's R at DBL_MAX and DBL_MAX/2, and the trig-free r_s and R at subnormal indices.
+- **Benchmarks** (an interleaved A/B against HEAD, three rounds each, load 2.3–3.9, another repository's verifier
+  beside it; each figure the lower of the three): `wave/fresnel_rs` 283 → 304 ns, `wave/fresnel_rs_direct` 255 →
+  277 ns, `wave/reflectance_unpolarized` 264 → 301 ns, `wave/reflectance_at_interface` 705 → 747 ns,
+  `wave/schlick_reflectance` 243 → 265 ns: about 22 ns a ratio, the helper's call and its Result. The first draft
+  called crmath_vx's full test (three more calls) on every ratio, 45 to 95 ns; the inline common case took it down.
+  A finding, recorded; the other rows held within the noise.
+- **Result, every target** (x86_64 ELF, x86_64 PE, aarch64): **13 modules, 0 failing; 402,897 ok, 0 failed, 0
+  measured, 0 pending, 41,224 accepted (ADR 01: 8,998; ADR 0002: 32,226)** over 444,121 rows; **all 276 digests
+  equal**. Fourteen changed: the functions with new rows.

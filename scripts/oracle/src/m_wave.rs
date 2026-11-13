@@ -558,6 +558,7 @@ pub fn emit() -> Module {
     emit_normal_antennas(&mut m, &ps, &sh);
     emit_waveguides(&mut m, &mut rng, &ps, &sh);
     emit_eta_guard(&mut m);
+    emit_ratio_edges(&mut m);
     m
 }
 
@@ -577,6 +578,48 @@ fn emit_eta_guard(m: &mut Module) {
                 &two,
                 &res_f(material_reflection_coefficient(black_box(&a), &bm)),
             );
+        }
+    }
+}
+
+
+/// M2 part 2d-2a (bijli ADR 0002 row 18's rule): the ratio chains (a·x − b·y)/(a·x + b·y) at their range edges, where
+/// a sum passes DBL_MAX or a product falls below 2^-1022: `reflectance_normal` and `transmittance_normal`, the
+/// trig-free family and Schlick, the angle forms. Indices at DBL_MAX and its fractions, at 10^300, subnormal and
+/// tiny; cosines subnormal, tiny and ordinary. After every older row.
+fn emit_ratio_edges(m: &mut Module) {
+    let big = [f64::MAX, f64::MAX / 2.0, f64::MAX / 3.0, 1e308, 1.5e308, 9e307];
+    let small = [5e-324, 1e-323, 2.5e-322, 1e-310, 3e-310, 2.2250738585072014e-308, 1e-300, 3e-300];
+    for &a in &big {
+        for &b in &big {
+            let two = [f(a), f(b)];
+            m.row("wave::reflectance_normal", Class::A, &two, &res_f(reflectance_normal(black_box(a), b)));
+            m.row("wave::transmittance_normal", Class::A, &two, &res_f(transmittance_normal(black_box(a), b)));
+            let nb = -b * 0.5;
+            let mixed = [f(a), f(nb)];
+            m.row("wave::reflectance_normal", Class::A, &mixed, &res_f(reflectance_normal(black_box(a), nb)));
+            for c in [1.0, 0.5, 1e-310] {
+                trig_free(m, a, b, c);
+            }
+        }
+    }
+    for &a in &small {
+        for &b in &small {
+            let two = [f(a), f(b)];
+            m.row("wave::reflectance_normal", Class::A, &two, &res_f(reflectance_normal(black_box(a), b)));
+            for c in [1.0, 0.3, 1e-20] {
+                trig_free(m, a, b, c);
+            }
+        }
+    }
+    for (a, b) in [(1.0, 1.5), (1.5, 1.0), (3.0, 1.0), (1e-300, 2e-300), (1e300, 7e299)] {
+        for c in [5e-324, 1e-323, 1e-310, 2.2250738585072014e-308, 1e-160] {
+            trig_free(m, a, b, c);
+        }
+    }
+    for &(a, b) in &[(f64::MAX, f64::MAX / 2.0), (1e308, 1e308), (1e308, -1e308), (1e-310, 3e-310), (5e-324, 1e-323)] {
+        for &(ti, tt) in &[(0.0, 0.0), (0.3, 0.5), (1.2, 0.2), (2.5, 0.4), (FRAC_PI_2, 0.1)] {
+            fresnel_angles(m, a, ti, b, tt);
         }
     }
 }
