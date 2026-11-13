@@ -123,6 +123,8 @@ fn _call(fp, fl, w): i64 {
     elif (_is(fp, fl, "div2") == 1) { r = _bj_k_cr_div2(x, y, _wf(w, 2)); }
     elif (_is(fp, fl, "mul3_div") == 1) { r = _bj_k_cr_mul3_div(x, y, _wf(w, 2), _wf(w, 3)); }
     elif (_is(fp, fl, "mul5") == 1) { r = _bj_k_cr_mul5(x, y, _wf(w, 2), _wf(w, 3), _wf(w, 4)); }
+    elif (_is(fp, fl, "prod5") == 1) { r = _bj_cr_mul5(x, y, _wf(w, 2), _wf(w, 3), _wf(w, 4)); }
+    elif (_is(fp, fl, "prod5_acc") == 1) { r = _bj_cr_prod_acc(w, 5); }
     elif (_is(fp, fl, "mul2_div2") == 1) { r = _bj_k_cr_mul2_div2(x, y, _wf(w, 2), _wf(w, 3)); }
     elif (_is(fp, fl, "mul3_div2") == 1) { r = _bj_k_cr_mul3_div2(x, y, _wf(w, 2), _wf(w, 3), _wf(w, 4)); }
     elif (_is(fp, fl, "mul4") == 1) { r = _bj_k_cr_mul4(x, y, _wf(w, 2), _wf(w, 3)); }

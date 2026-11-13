@@ -237,6 +237,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
 - **circuit** (ADR 0002 row 29, M2 part 2a-1): `rc_charging_voltage` and `rl_current_rise` cancelled in 1 − e^(−t/τ)
   (8e-8 relative at t/τ = 10^-10, 0 below 1.1·10^-16); they now take −expm1(−t/τ), kimiya's correctly rounded expm1
   (`src/crmath_kx.cyr`, with its exp tables in `src/crmath_k_data.cyr`; `cr_verify.py` checks it against MPFR).
+- **circuit** (ADR 0002 row 13 amended, M2 part 2b-3): `resistance_from_geometry`, `parallel_plate_capacitance`,
+  `capacitor_energy`, `inductor_energy`, `solenoid_inductance`, the two resonances, `quality_factor` and
+  `damping_ratio` rounded two to five times, and over- or underflowed where the value is representable (the
+  resonances at L = C = 1e-200 or 1e200 gave ∞ and 0, ζ with C/L = 1e-600 gave 0); they are now correctly rounded for
+  finite operands. The solenoid's five full-precision factors take bijli's new exact product
+  (`src/crmath_mono.cyr`'s `_bj_cr_mul5`, checked by `cr_verify.py`'s prod5 families), since kimiya's exact path
+  holds four. The cost: `circuit/resonant_frequency` 29 → 217 ns (`port-parity.md` §34).
 - **wave** (ADR 0002 row 13 amended, M2 part 2b-2): `plane_wave_intensity`, `radiation_pressure_reflected`,
   `wave_number`, `cylindrical_waveguide_cutoff`, `hertzian_dipole_radiation_resistance`, `effective_aperture` and
   `friis_transmission` rounded two to five times, and overflowed where the value is representable (2I/c at

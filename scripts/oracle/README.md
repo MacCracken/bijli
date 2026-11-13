@@ -77,7 +77,9 @@ against Fractions, on points crowded around 10^-30 and 10^-60. Its gamma familie
 src/crmath_gamma.cyr's correctly rounded γ and γ² (`gamma`, `gamma2`), its exact path alone (`gamma_slow`,
 `gamma2_slow`: the rounding test sends a value there only within about 2^-100 of a midpoint) and its validity test
 (`gamma_ok`) against Fractions and an integer square root, over c = the speed of light, 1, 2^-30, 2^30 and four random
-c between, with c outside that range refused. Its ux families (`cr_verify.py . ux`, M1 part 5c-2) check src/crmath_ux.cyr's
+c between, with c outside that range refused. Its prod5 families (exact families, M2 part 2b-3) check
+src/crmath_mono.cyr's product of five full-precision doubles (`prod5`, and `prod5_acc` its exact path alone) against
+Fractions, on any binade, products steered to the subnormal boundary, exact ties and signed zeros. Its ux families (`cr_verify.py . ux`, M1 part 5c-2) check src/crmath_ux.cyr's
 e^x, cosh, sinh, ln(s·2^E), (s·2^E)^y and sin and cos past DBL_MAX against `mpfr_ref.wide`: MPFR at 53 bits with its
 widest exponent range, where nothing over- or underflows. Each (s, e) result is read in two calls, its significand
 and its exponent.

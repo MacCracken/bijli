@@ -1785,3 +1785,38 @@ dipole pattern and the transients, 2a-2 a correctly rounded γ), then M1's three
 - **Result, every target** (x86_64 ELF, x86_64 PE, aarch64): **13 modules, 0 failing; 394,957 ok, 0 failed, 0
   measured, 0 pending, 25,860 accepted (ADR 01: 8,997; ADR 0002: 16,863)** over 420,817 rows; **all 276 digests
   equal**. Seven changed: the seven above.
+
+## 34. M2 part 2b-3: circuit rounded once (2026-11-12)
+
+- **ADR 0002 row 13, amended**: circuit's products, quotients and roots of inputs and constants are correctly rounded
+  for finite operands; 2π is Rust's π doubled, and a non-finite operand keeps Rust's chain:
+  - `bj_resistance_from_geometry` (ρL/A) and `bj_parallel_plate_capacitance` (εA/d), `mul_div`, after row 26's tests;
+  - `bj_capacitor_energy` and `bj_inductor_energy` (CV²/2, LI²/2), `mul4`;
+  - `bj_solenoid_inductance` (μn²Al), five full-precision doubles: 265 significant bits, past the 253 of kimiya's
+    exact path (four doubles and a 41-bit integer per side, NaN beyond), which a subnormal result or a value within
+    2^-100 of a midpoint reaches. **`_bj_cr_mul5`** (`src/crmath_mono.cyr`) takes kimiya's fast path
+    (`_bj_k_mul5_fast`, whose error budget doesn't depend on the factors' sizes), then **`_bj_cr_prod_acc`**: the
+    integer significands' product in bijli's limbs, its top 60 bits and a sticky bit, rounded once by
+    `_bj_k_cr_from_int`. `cr_verify.py`'s new `prod5` and `prod5_acc` families (the full function and the exact path
+    alone: any binade, near one, products steered to the subnormal boundary, exact ties, signed zeros): **600,000
+    calls, all equal to the exact value on x86_64 and aarch64**. (The `mul5` calls of 2b-1 and 2b-2 carry 0.5, one bit,
+    so they stay inside kimiya's domain: 213 and 188 bits.)
+  - `bj_resonant_frequency` (√(1/((2π)²LC))), `bj_resonant_angular_frequency` (1/√(LC)) and `bj_quality_factor`
+    (√(L/(C·R²))), bijli's √ of a monomial;
+  - `bj_damping_ratio` (R·√(C/L)/2), kimiya's RN(w·√((x/y)·2^e)) for R > 0; a zero R keeps Rust's chain (±0).
+  - Already rounded once: Ohm's law, the power, the charge and the time constants. Out of row 13's scope (sums
+    inside): the combinations, the transients and `rlc_impedance`.
+- **Mappings** (`validate.py`'s `circuit_port13`): `circuit.adr.tsv` maps 1,738 row-13 rows (resonant frequency 398,
+  angular 292, damping 249, Q 192, the energies 135 each, the solenoid 133, ρL/A and εA/d 102 each), every one
+  passing on the harness's first run. `rel_exact_gamma` and `cr_verify.py`'s γ reference no longer copy the port's
+  |vᵢ| < 2^-28·c shortcut: they compute those values exactly too (the mappings are unchanged: the shortcut's bound
+  holds).
+- **Tests**: `cyrius_round_once (ADR 0002 row 13)` in `tests/circuit.tcyr` (11 assertions): ρL = 1e310 and
+  εA = 1e-400 (Rust: ∞, 0), the energies an ulp off in Rust at 4.7 nF and 230 V, the solenoid an ulp off in Rust and
+  on the subnormal grid (the exact path), the resonances at L = C = 1e-200 and 1e200 (Rust: ∞, 0), Q with L/C = 1e600
+  and ζ with C/L = 1e-600 (Rust: ∞, 0), and a −0 R keeping −0.
+- **Benchmarks** (an interleaved A/B against HEAD, three rounds at load 1.9–3.8, the lowest of each):
+  `circuit/resonant_frequency` 29 → 217 ns (the √ of a four-factor monomial); the other circuit rows unchanged.
+- **Result, every target** (x86_64 ELF, x86_64 PE, aarch64): **13 modules, 0 failing; 393,219 ok, 0 failed, 0
+  measured, 0 pending, 27,598 accepted (ADR 01: 8,997; ADR 0002: 18,601)** over 420,817 rows; **all 276 digests
+  equal**. Nine changed: the nine above.

@@ -398,6 +398,54 @@ fn cyrius_tests(): i64 {
     var f2: f64 = vf2;
     var b2 = _bj_bits(f2);
     assert(is_ok(tf2) == 1 && b2 == 0, "Σ[+0] = +0");
+
+    # ADR 0002 row 13 (M2 part 2b-3): circuit's products, quotients and roots rounded once, against exact references
+    # (Fraction, an integer square root).
+    test_group("cyrius_round_once (ADR 0002 row 13)");
+    var c_p300: f64 = _bj_from_bits(0x7E37E43C8800759C);                 # 1e300
+    var c_p200: f64 = _bj_from_bits(0x6974E718D7D7625A);                 # 1e200
+    var c_p100: f64 = _bj_from_bits(0x54B249AD2594C37D);                 # 1e100
+    var c_m100: f64 = _bj_from_bits(0x2B2BFF2EE48E0530);                 # 1e-100
+    var c_m200: f64 = _bj_from_bits(0x16687E92154EF7AC);                 # 1e-200
+    var c_m300: f64 = _bj_from_bits(0x01A56E1FC2F8F359);                 # 1e-300
+    var tg13, vg13 = bj_resistance_from_geometry(c_p300, 10000000000.0, c_p100);
+    var g13: f64 = vg13;
+    var g13w: f64 = _bj_from_bits(0x6B88557F31326BBC);                   # 1.0000000000000001e210
+    assert(is_ok(tg13) == 1 && g13 == g13w, "ρL/A with ρL = 1e310 (Rust: ∞)");
+    var tc13, vc13 = bj_parallel_plate_capacitance(c_m300, c_m100, c_m100);
+    var cc13: f64 = vc13;
+    assert(is_ok(tc13) == 1 && cc13 == c_m300, "εA/d with εA = 1e-400 (Rust: 0)");
+    var u13: f64 = bj_capacitor_energy(0.0000000047, 230.0);
+    assert(u13 == 0.000124315, "CV²/2 at 4.7 nF, 230 V (Rust: …4999999999998)");
+    var ui13: f64 = bj_inductor_energy(0.0000000047, 230.0);
+    assert(ui13 == 0.000124315, "LI²/2 the same");
+    var s13: f64 = bj_solenoid_inductance(0.03418311208669484, 3.78663408511527, 0.044773970872032914,
+      0.8479164333842217);
+    assert(s13 == 0.018607882006917528, "μn²Al, five full-precision doubles (Rust: …753)");
+    var sn: f64 = _bj_from_bits(0x2F5FA7273CB75A01);                     # 1.6684579245868525e-80
+    var sa: f64 = _bj_from_bits(0x306B699A531C32DA);                     # 1.89391252807156e-75
+    var sl: f64 = _bj_from_bits(0x3173BECE06BBB2BE);                     # 1.7880738275989538e-70
+    var ss13: f64 = bj_solenoid_inductance(BJ_MU_0, sn, sa, sl);
+    var ss13b = _bj_bits(ss13);
+    assert(ss13b == 0x000015CEA91EAA0C, "μ₀n²Al on the subnormal grid, the exact path (Rust: …833e-310)");
+    var tf13, vf13 = bj_resonant_frequency(c_m200, c_m200);
+    var f13: f64 = vf13;
+    var f13w: f64 = _bj_from_bits(0x694A9D3A760747A9);                   # 1.5915494309189534e199
+    assert(is_ok(tf13) == 1 && f13 == f13w, "1/(2π√(LC)) at L = C = 1e-200 (Rust: LC underflows, ∞)");
+    var tw13, vw13 = bj_resonant_angular_frequency(c_p200, c_p200);
+    var w13: f64 = vw13;
+    assert(is_ok(tw13) == 1 && w13 == c_m200, "1/√(LC) at L = C = 1e200 (Rust: LC overflows, 0)");
+    var tq13, vq13 = bj_quality_factor(c_p100, c_p300, c_m300);
+    var q13: f64 = vq13;
+    assert(is_ok(tq13) == 1 && q13 == c_p200, "√(L/C)/R with L/C = 1e600 (Rust: ∞)");
+    var tz13, vz13 = bj_damping_ratio(c_p200, c_p300, c_m300);
+    var z13: f64 = vz13;
+    var z13w: f64 = _bj_from_bits(0x2B1BFF2EE48E052F);                   # 4.9999999999999995e-101
+    assert(is_ok(tz13) == 1 && z13 == z13w, "(R/2)√(C/L) with C/L = 1e-600 (Rust: 0)");
+    var tz0, vz0 = bj_damping_ratio(-0.0, 1.0, 1.0);
+    var z0: f64 = vz0;
+    var z0b = _bj_bits(z0);
+    assert(is_ok(tz0) == 1 && z0 == 0.0 && z0b < 0, "a zero R keeps Rust's chain: −0 stays −0");
     return 0;
 }
 

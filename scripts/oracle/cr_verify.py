@@ -493,7 +493,8 @@ def run(target, lines):
 
 
 EXACT = ["mono"] + list(SHAPES) + ["sqrt_div", "wsqrt", "sqrt_mono", "sqrt_mono_acc", "ux_mul", "ux_div", "ux_add",
-         "ux_sub", "ux_sqrt", "r2_below", "gamma", "gamma_slow", "gamma2", "gamma2_slow", "gamma_ok"]
+         "ux_sub", "ux_sqrt", "r2_below", "gamma", "gamma_slow", "gamma2", "gamma2_slow", "gamma_ok", "prod5",
+         "prod5_acc"]
 UX = ["ux_exp", "ux_cosh", "ux_sinh", "ux_ln", "ux_pow", "ux_sin", "ux_cos"]
 
 
@@ -553,6 +554,39 @@ def gamma_cases(rng, count, c):
     return out
 
 
+# ── bijli's product of five full-precision doubles (src/crmath_mono.cyr, M2 part 2b-3) ────────────────────────────────
+def prod5_families(rng, count):
+    """prod5 (the full function: kimiya's fast path, then the exact one) and prod5_acc (the exact path alone): five
+    doubles of any binade (subnormal factors, products past DBL_MAX and on the subnormal grid), near one, products
+    steered into the subnormal range and its boundary, exact ties (a 54-bit odd integer over a power of two), and
+    signed zeros. The reference is the exact product, rounded once (Fraction)."""
+    out = []
+    for i in range(count):
+        kind = i % 6
+        if kind == 0:
+            xs = [any_finite(rng) for _ in range(5)]
+        elif kind == 1:
+            xs = [near_one(rng) for _ in range(5)]
+        elif kind == 2:
+            # the product's exponent T steered to the subnormal range and its boundary, spread over the five factors
+            t = rng.randint(-1080, -1015)
+            es = [t // 5 + rng.randint(-100, 100) for _ in range(4)]
+            es.append(t - sum(es))
+            xs = [rng.uniform(1.0, 2.0) * 2.0 ** e * rng.choice([1.0, -1.0]) for e in es]
+        elif kind == 3:
+            # an exact tie: q odd with 2^52 ≤ q < 2^54/3, so 3q is a 54-bit odd integer, times powers of two
+            q = rng.randrange((1 << 52) | 1, (1 << 54) // 3, 2)
+            xs = [float(q), 3.0] + [2.0 ** rng.randint(-200, 200) for _ in range(3)]
+        elif kind == 4:
+            xs = [any_finite(rng) for _ in range(5)]
+            xs[rng.randrange(5)] = rng.choice([0.0, -0.0])
+        else:
+            xs = [b2f(rng.getrandbits(52)) * rng.choice([1.0, -1.0])] + [near_one(rng) for _ in range(4)]
+        fam = "prod5" if i % 2 == 0 else "prod5_acc"
+        out.append((fam, xs, mono_ref(xs, [])))
+    return out
+
+
 def gamma_families(rng, count):
     """Each family over c = the speed of light, 1, the range's two edges and four random c in it (count/8 cases each),
     plus c just outside the range, ∞ and NaN, which are refused. gamma_ok is the validity test alone
@@ -586,6 +620,9 @@ def main() -> int:
         erng = random.Random(0xC0DE_5A)
         fams = exact_families(erng, max(1, n // 5))
         calls += [(f, f2b(ref), ws) for f, ws, ref in fams if "exact" in names or f in names]
+        prng = random.Random(0x9_5D_57)
+        calls += [(f, f2b(ref), ws) for f, ws, ref in prod5_families(prng, 2 * max(1, n // 5))
+                  if "exact" in names or f in names]
         grng = random.Random(0x6A_77A)
         calls += [(f, ref, ws) for f, ws, ref in gamma_families(grng, max(1, n // 5))
                   if "exact" in names or f in names]

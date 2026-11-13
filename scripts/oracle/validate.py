@@ -2274,6 +2274,38 @@ def circuit_corrections(path: Path):
 
 # ADR 0002 row 26 (M2 part 1c, rows 19 and 23's rule): resistance_from_geometry and parallel_plate_capacitance test
 # `A <= 0` and `d <= 0`, so a NaN area or separation passed as Ok(NaN); the port refuses unless it is positive.
+# Row 13 (M2 part 2b-3, the user's "round once" decision of 2026-11-12): circuit.rs's products, quotients and roots of
+# inputs and constants, correctly rounded where the operands are finite (exact values); 2π is Rust's π doubled; every
+# error, and a zero R in the damping ratio, keeps Rust's result.
+def circuit_port13(fn, v):
+    """Row 13's port outputs for a circuit row, or None where Rust's result stands."""
+    F = Fraction
+    if fn in ("circuit::resistance_from_geometry", "circuit::parallel_plate_capacitance"):
+        a, b, c = v
+        if not c > 0.0 or not _fin(a, b, c):
+            return None
+        return okf(rn_mono([a, b], [c]))
+    if fn in ("circuit::capacitor_energy", "circuit::inductor_energy"):
+        return okf(rn_mono([0.5, v[0], v[1], v[1]], [])) if _fin(v[0], v[1]) else None
+    if fn == "circuit::solenoid_inductance":
+        return okf(rn_mono([v[0], v[1], v[1], v[2], v[3]], [])) if _fin(*v) else None
+    if fn in ("circuit::resonant_frequency", "circuit::resonant_angular_frequency"):
+        l, c = v
+        if circuit_lc(l, c):
+            return None
+        if fn == "circuit::resonant_frequency":
+            return okf(rn_sqrt(1 / (F(2.0 * PI) ** 2 * F(l) * F(c))))
+        return okf(rn_sqrt(1 / (F(l) * F(c))))
+    if fn in ("circuit::quality_factor", "circuit::damping_ratio"):
+        r, l, c = v
+        if circuit_r(r) or circuit_lc(l, c):
+            return None
+        if fn == "circuit::quality_factor":
+            return None if r < 1e-30 else okf(rn_sqrt(F(l) / (F(c) * F(r) ** 2)))
+        return None if r == 0.0 else okf(rn_sqrt(F(r) ** 2 * F(c) / (4 * F(l))))
+    return None
+
+
 def circuit_port(fn, v):
     if fn in ("circuit::rc_charging_voltage", "circuit::rl_current_rise"):
         return 29, circuit_rust(fn, v, MPFR_P, expm1=True)
@@ -2281,7 +2313,8 @@ def circuit_port(fn, v):
         return 26, ip_err("cross-section area must be positive, got NaN")
     if fn == "circuit::parallel_plate_capacitance" and math.isnan(v[2]):
         return 26, ip_err("plate separation must be positive, got NaN")
-    return None
+    m13 = circuit_port13(fn, v)
+    return None if m13 is None else (13, m13)
 
 
 def circuit_adr_rows(path: Path) -> list:
@@ -2309,8 +2342,6 @@ def rel_exact_gamma(vs, c, mode):
     unless |v| < c exactly (src/crmath_gamma.cyr's _bj_cr_lorentz)."""
     if any(x != x or abs(x) >= c for x in vs):
         return None
-    if all(abs(x) < c * 2.0 ** -28 for x in vs):
-        return 1.0
     d = Fraction(c) ** 2 - sum(Fraction(x) ** 2 for x in vs)
     if d <= 0:
         return None

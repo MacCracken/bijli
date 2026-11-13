@@ -6,7 +6,11 @@
 # series sum is Rust's `Sum`, a left fold from −0.0. Rust's `&[f64]` is a pointer and a count. Two of Rust's faults are
 # fixed: bj_resistance_from_geometry and bj_parallel_plate_capacitance refuse a NaN area or separation, which Rust's
 # `<= 0` let through (ADR 0002 row 26, rows 19 and 23's rule), and the charging transients take 1 − e^(−t/τ) as
-# −expm1(−t/τ), with no cancellation (row 29, the user's answer of 2026-11-12). A fallible function
+# −expm1(−t/τ), with no cancellation (row 29, the user's answer of 2026-11-12). The products, quotients and roots of
+# inputs and constants are rounded once (ADR 0002 row 13, M2 part 2b-3): ρL/A, εA/d, the two energies, μn²Al (bijli's
+# exact product of five doubles, src/crmath_mono.cyr), the resonances, Q and ζ; a constant enters as its double (2π as
+# Rust's π doubled), and a non-finite operand keeps Rust's chain. The combinations, the transients and the impedance
+# (sums inside) are Rust's. A fallible function
 # returns a value-form Result, the error in the last-error record (src/error.cyr). The impedance here is a magnitude,
 # so no time convention (src/complex.cyr) is involved.
 
@@ -50,8 +54,8 @@ public fn bj_power(current: f64, voltage: f64): f64 {
     return p;
 }
 
-# R = ρL/A. InvalidParameter unless A > 0, a NaN area too (ADR 0002 row 26; Rust's `A <= 0` let it through). Mirrors
-# `circuit::resistance_from_geometry`.
+# R = ρL/A, correctly rounded (ADR 0002 row 13; a non-finite ρ, L or A keeps Rust's (ρ·L)/A). InvalidParameter unless
+# A > 0, a NaN area too (row 26; Rust's `A <= 0` let it through). Mirrors `circuit::resistance_from_geometry`.
 public fn bj_resistance_from_geometry(resistivity: f64, length: f64, cross_section_area: f64): Result {
     if (!(cross_section_area > 0.0)) {
         var t = _bj_err_reason(BJ_ERR_INVALID_PARAMETER);
@@ -59,9 +63,13 @@ public fn bj_resistance_from_geometry(resistivity: f64, length: f64, cross_secti
         _bj_fmt_f64_display(t, cross_section_area);
         return Err(BJ_ERR_INVALID_PARAMETER);
     }
-    var rl: f64 = resistivity * length;
-    var r: f64 = rl / cross_section_area;
-    return Ok(r);
+    if (_bj_is_finite(resistivity) == 0 || _bj_is_finite(length) == 0 || _bj_is_finite(cross_section_area) == 0) {
+        var rl: f64 = resistivity * length;
+        var r: f64 = rl / cross_section_area;
+        return Ok(r);
+    }
+    var cr: f64 = _bj_k_cr_mul_div(resistivity, length, cross_section_area);
+    return Ok(cr);
 }
 
 # ── series and parallel ──────────────────────────────────────────────────────────────────────────────────────────
@@ -159,8 +167,8 @@ public fn bj_inductance_parallel(inductances: *f64, n): Result {
 
 # ── capacitance and inductance ───────────────────────────────────────────────────────────────────────────────────
 
-# C = εA/d. InvalidParameter unless d > 0, a NaN separation too (ADR 0002 row 26; Rust's `d <= 0` let it through).
-# Mirrors `circuit::parallel_plate_capacitance`.
+# C = εA/d, correctly rounded (ADR 0002 row 13; a non-finite ε, A or d keeps Rust's (ε·A)/d). InvalidParameter unless
+# d > 0, a NaN separation too (row 26; Rust's `d <= 0` let it through). Mirrors `circuit::parallel_plate_capacitance`.
 public fn bj_parallel_plate_capacitance(permittivity: f64, area: f64, separation: f64): Result {
     if (!(separation > 0.0)) {
         var t = _bj_err_reason(BJ_ERR_INVALID_PARAMETER);
@@ -168,17 +176,26 @@ public fn bj_parallel_plate_capacitance(permittivity: f64, area: f64, separation
         _bj_fmt_f64_display(t, separation);
         return Err(BJ_ERR_INVALID_PARAMETER);
     }
-    var ea: f64 = permittivity * area;
-    var c: f64 = ea / separation;
-    return Ok(c);
+    if (_bj_is_finite(permittivity) == 0 || _bj_is_finite(area) == 0 || _bj_is_finite(separation) == 0) {
+        var ea: f64 = permittivity * area;
+        var c: f64 = ea / separation;
+        return Ok(c);
+    }
+    var cr: f64 = _bj_k_cr_mul_div(permittivity, area, separation);
+    return Ok(cr);
 }
 
-# U = CV²/2 (J). Mirrors `circuit::capacitor_energy`.
+# U = CV²/2 (J), correctly rounded (ADR 0002 row 13; a non-finite C or V keeps Rust's 0.5·C·V·V). Mirrors
+# `circuit::capacitor_energy`.
 #must_use
 #pure
 public fn bj_capacitor_energy(capacitance: f64, voltage: f64): f64 {
-    var u: f64 = 0.5 * capacitance * voltage * voltage;
-    return u;
+    if (_bj_is_finite(capacitance) == 0 || _bj_is_finite(voltage) == 0) {
+        var u: f64 = 0.5 * capacitance * voltage * voltage;
+        return u;
+    }
+    var cr: f64 = _bj_k_cr_mul4(0.5, capacitance, voltage, voltage);
+    return cr;
 }
 
 # Q = CV (C). Mirrors `circuit::capacitor_charge`.
@@ -189,20 +206,32 @@ public fn bj_capacitor_charge(capacitance: f64, voltage: f64): f64 {
     return q;
 }
 
-# L = μn²Al (H): n turns per unit length, A the cross-section, l the length. Mirrors `circuit::solenoid_inductance`.
+# L = μn²Al (H): n turns per unit length, A the cross-section, l the length; correctly rounded (ADR 0002 row 13: five
+# full-precision doubles, bijli's _bj_cr_mul5; a non-finite operand keeps Rust's μ·n·n·A·l). Mirrors
+# `circuit::solenoid_inductance`.
 #must_use
 #pure
 public fn bj_solenoid_inductance(permeability: f64, turns_per_length: f64, area: f64, length: f64): f64 {
-    var l: f64 = permeability * turns_per_length * turns_per_length * area * length;
-    return l;
+    if (_bj_is_finite(permeability) == 0 || _bj_is_finite(turns_per_length) == 0 || _bj_is_finite(area) == 0
+      || _bj_is_finite(length) == 0) {
+        var l: f64 = permeability * turns_per_length * turns_per_length * area * length;
+        return l;
+    }
+    var cr: f64 = _bj_cr_mul5(permeability, turns_per_length, turns_per_length, area, length);
+    return cr;
 }
 
-# U = LI²/2 (J). Mirrors `circuit::inductor_energy`.
+# U = LI²/2 (J), correctly rounded (ADR 0002 row 13; a non-finite L or I keeps Rust's 0.5·L·I·I). Mirrors
+# `circuit::inductor_energy`.
 #must_use
 #pure
 public fn bj_inductor_energy(inductance: f64, current: f64): f64 {
-    var u: f64 = 0.5 * inductance * current * current;
-    return u;
+    if (_bj_is_finite(inductance) == 0 || _bj_is_finite(current) == 0) {
+        var u: f64 = 0.5 * inductance * current * current;
+        return u;
+    }
+    var cr: f64 = _bj_k_cr_mul4(0.5, inductance, current, current);
+    return cr;
 }
 
 # ── RC and RL transients ─────────────────────────────────────────────────────────────────────────────────────────
@@ -312,28 +341,34 @@ fn _bj_circuit_check_r(resistance: f64): i64 {
     return BJ_ERR_INVALID_PARAMETER;
 }
 
-# f₀ = 1/(2π√(LC)) (Hz). InvalidParameter unless L and C are finite and positive. Mirrors `circuit::resonant_frequency`.
+# f₀ = 1/(2π√(LC)) (Hz), correctly rounded (ADR 0002 row 13: √(1/((2π)²LC)), 2π Rust's π doubled). InvalidParameter
+# unless L and C are finite and positive. Mirrors `circuit::resonant_frequency`.
 public fn bj_resonant_frequency(inductance: f64, capacitance: f64): Result {
     var c = _bj_circuit_check_lc(inductance, capacitance);
     if (c != 0) { return Err(c); }
-    var lc: f64 = inductance * capacitance;
-    var s: f64 = f64_sqrt(lc);
-    var d: f64 = 2.0 * _BJ_PI * s;
-    var f: f64 = 1.0 / d;
+    var den: f64[4];
+    den[0] = 2.0 * _BJ_PI;
+    den[1] = 2.0 * _BJ_PI;
+    den[2] = inductance;
+    den[3] = capacitance;
+    var f: f64 = _bj_cr_sqrt_mono(0, 0, &den, 4);
     return Ok(f);
 }
 
-# ω₀ = 1/√(LC) (rad/s). As bj_resonant_frequency. Mirrors `circuit::resonant_angular_frequency`.
+# ω₀ = 1/√(LC) (rad/s), correctly rounded (ADR 0002 row 13). As bj_resonant_frequency. Mirrors
+# `circuit::resonant_angular_frequency`.
 public fn bj_resonant_angular_frequency(inductance: f64, capacitance: f64): Result {
     var c = _bj_circuit_check_lc(inductance, capacitance);
     if (c != 0) { return Err(c); }
-    var lc: f64 = inductance * capacitance;
-    var s: f64 = f64_sqrt(lc);
-    var w: f64 = 1.0 / s;
+    var den: f64[2];
+    den[0] = inductance;
+    den[1] = capacitance;
+    var w: f64 = _bj_cr_sqrt_mono(0, 0, &den, 2);
     return Ok(w);
 }
 
-# Q = (1/R)√(L/C) = ω₀L/R, a series RLC's quality factor (a parallel tank's R√(C/L) is not this): Q = 1/(2ζ).
+# Q = (1/R)√(L/C) = ω₀L/R, a series RLC's quality factor (a parallel tank's R√(C/L) is not this): Q = 1/(2ζ),
+# correctly rounded (ADR 0002 row 13: √(L/(C·R²))).
 # InvalidParameter unless R is finite and non-negative; DivisionByZero for R < 1e-30; then InvalidParameter unless L
 # and C are finite and positive. Mirrors `circuit::quality_factor`.
 public fn bj_quality_factor(resistance: f64, inductance: f64, capacitance: f64): Result {
@@ -344,13 +379,18 @@ public fn bj_quality_factor(resistance: f64, inductance: f64, capacitance: f64):
     }
     var c = _bj_circuit_check_lc(inductance, capacitance);
     if (c != 0) { return Err(c); }
-    var q0: f64 = inductance / capacitance;
-    var s: f64 = f64_sqrt(q0);
-    var q: f64 = s / resistance;
+    var num: f64[1];
+    var den: f64[3];
+    num[0] = inductance;
+    den[0] = capacitance;
+    den[1] = resistance;
+    den[2] = resistance;
+    var q: f64 = _bj_cr_sqrt_mono(&num, 1, &den, 3);
     return Ok(q);
 }
 
 # ζ = (R/2)√(C/L), a series RLC's damping ratio: underdamped below 1, critical at 1, overdamped above; ζ = 1/(2Q).
+# Correctly rounded for R > 0 (ADR 0002 row 13: kimiya's RN(R·√((C/L)·2^-2))); a zero R keeps Rust's chain (±0).
 # InvalidParameter unless R is finite and non-negative, then unless L and C are finite and positive. Mirrors
 # `circuit::damping_ratio`.
 public fn bj_damping_ratio(resistance: f64, inductance: f64, capacitance: f64): Result {
@@ -358,11 +398,15 @@ public fn bj_damping_ratio(resistance: f64, inductance: f64, capacitance: f64): 
     if (cr != 0) { return Err(cr); }
     var c = _bj_circuit_check_lc(inductance, capacitance);
     if (c != 0) { return Err(c); }
-    var q0: f64 = capacitance / inductance;
-    var s: f64 = f64_sqrt(q0);
-    var half_r: f64 = resistance * 0.5;
-    var z: f64 = half_r * s;
-    return Ok(z);
+    if (resistance == 0.0) {
+        var q0: f64 = capacitance / inductance;
+        var s: f64 = f64_sqrt(q0);
+        var half_r: f64 = resistance * 0.5;
+        var z: f64 = half_r * s;
+        return Ok(z);
+    }
+    var zr: f64 = _bj_k_cr_mul_sqrt_ratio(resistance, capacitance, inductance, 0 - 2);
+    return Ok(zr);
 }
 
 # |Z| = √(R² + (ωL − 1/(ωC))²) (Ω), a series RLC's impedance magnitude at ω. DivisionByZero when |ω| < 1e-30, then
