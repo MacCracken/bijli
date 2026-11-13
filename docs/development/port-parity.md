@@ -2231,3 +2231,38 @@ waveguides.
 - **Result, every target** (x86_64 ELF, x86_64 PE, aarch64): **13 modules, 0 failing; 402,897 ok, 0 failed, 0
   measured, 0 pending, 41,224 accepted (ADR 01: 8,998; ADR 0002: 32,226)** over 444,121 rows; **all 276 digests
   equal**. Fourteen changed: the functions with new rows.
+
+## 43. M2 part 2d-2b: the plane waves' and Snell's chains at their range edges (2026-11-13)
+
+- **ADR 0002 row 18, amended** (the rule of §42):
+  - **The Poynting vector and the momentum density** (`src/wave.cyr`'s `_bj_wave_flux_part`, per part of the
+    cross): Rust's cᵢ·RN(1/μ₀) (then ·RN(1/c²)) where the part BjFieldVector's cross gives is normal (it is then the
+    chain's 53-bit value), an exact 0 (zero factors, or two normal products), or past DBL_MAX for S (k > 1: S is past
+    it too); and, for g, where S is finite. Otherwise the part runs from the products with an unbounded exponent and
+    its last product rounds once. A part below 2^-1022 had given S from a degraded value; a cross or S past DBL_MAX had
+    made g = ∞ where (E × B)ε₀ is representable: E = 10^159 x̂ and B = 10^160 ŷ give g_z = 8.85·10^307.
+  - **`plane_wave_e`**: the argument kx − ωt + φ with an unbounded exponent where a product leaves the normal range
+    or a sum passes DBL_MAX, its sine to 53 bits (`_bj_vx_sin53`: t itself below 2^-1022, Payne–Hanek past DBL_MAX),
+    and the product by E₀ rounded once. Rust's sin(±∞) was NaN where kx and ωt cancel exactly (10^200·10^200 twice and
+    φ = ½: sin ½) or pass DBL_MAX together (sin 10^400 = 0.18651); an underflowed kx left E₀ = 10^300 times sin 0,
+    where the value is 10^-100.
+  - **Snell's angle**: n₁ sin θ_i below 2^-1022 (or 0 by underflow) runs unbounded and its quotient by n₂ rounds once;
+    θ_t at n₁ = 10^-300, n₂ = 10^-29 and θ_i = 10^-20 had been off in its fifth digit. The |sin θ_t| > 1 test reads
+    that quotient (the user's 2c answer for trig tests: on the computed value).
+- **Rows** (`m_wave.rs`'s `emit_flux_edges`, after every older row): 49 more: 18 Poynting and momentum pairs (crosses
+  below 2^-1022 at two scales and mixed signs, S past DBL_MAX, the cross past DBL_MAX with g representable, DBL_MAX
+  against 10^-10), nine plane waves (kx and ωt past DBL_MAX cancelling or not, below 2^-1022 under large amplitudes)
+  and four Snell rows. `validate.py`'s transcription agreed with every row.
+- **Mappings** (`validate.py`'s `wave_flux_part`, and `ux` through the plane wave and Snell, on `rnd53` and
+  `mpfr_ref.wide`'s sine): `wave.adr.tsv` maps 88 more row-18 rows (the momentum density 48, the Poynting vector 26,
+  `plane_wave_e` 8, Snell 6; 65 older rows among them), all passing on the harness's first run. A class-C row the edge
+  moves leaves the corrected oracle for the mappings, as §42's angle forms.
+- **Tests**: tests/wave.tcyr's `cyrius_adr_rows_22_to_25` group gains 5 assertions: g past DBL_MAX's S, the three
+  plane waves above, and Snell's θ_t.
+- **Benchmarks** (an interleaved A/B against HEAD, three rounds each, load 2.6–3.1; each figure the lower of the
+  three): `wave/poynting_vector` 65 → 95 ns, the guard's call and its tests (a bench vector with zero parts: the
+  first draft's inline test took only normal parts, so it called the per-part function three times, 122 ns);
+  `wave/plane_wave_e` and `wave/snell_refraction` held within the noise, as every other row. A finding, recorded.
+- **Result, every target** (x86_64 ELF, x86_64 PE, aarch64): **13 modules, 0 failing; 402,858 ok, 0 failed, 0
+  measured, 0 pending, 41,312 accepted (ADR 01: 8,998; ADR 0002: 32,314)** over 444,170 rows; **all 276 digests
+  equal**. Four changed: the Poynting vector, the momentum density, the plane wave and Snell's angle.

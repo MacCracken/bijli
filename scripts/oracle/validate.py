@@ -1698,6 +1698,27 @@ def wave_ratio_of(a, x, b, y, strict, ux):
     return None, rn_frac(N / D)
 
 
+def wave_flux_part(a, b, c, d, ci, k, k2, mode):
+    """src/wave.cyr's _bj_wave_flux_part (ADR 0002 row 18's rule, M2 part 2d-2b): one part of S = cross·k (mode 0) or
+    g = S·k2 (mode 1) from the port's cross component ci: Rust's chain where ci is normal and (for g) S finite, where
+    ci is an exact 0 or past DBL_MAX for S, or an operand is not finite; else the chain from the products, each step
+    to 53 bits (rnd53), the last product rounded once."""
+    sv = ci * k
+    r = sv if mode == 0 else sv * k2
+    ac = abs(ci)
+    if VX_MN <= ac <= DBL_MAX and (mode == 0 or abs(sv) <= DBL_MAX):
+        return r
+    if not _fin(a, b, c, d) or (mode == 0 and ac > DBL_MAX):
+        return r
+    if ci == 0.0 and vx_exact_p(a, b, a * b) and vx_exact_p(c, d, c * d):
+        return r
+    cc = rnd53(rnd53(Fraction(a) * Fraction(b)) - rnd53(Fraction(c) * Fraction(d)))
+    if mode == 0:
+        return rn_frac(cc * Fraction(k)) if cc != 0 else 0.0
+    sw = rnd53(cc * Fraction(k))
+    return rn_frac(sw * Fraction(k2)) if sw != 0 else 0.0
+
+
 def wave_unpolarized(a1, a2, ci, ct, ux=False):
     """0.5·(r_s² + r_p²) with r_s = (a₁ cos θ_i − a₂ cos θ_t)/(a₁ cos θ_i + a₂ cos θ_t) and r_p the same with a₁, a₂
     swapped: the index form takes (n₁, n₂), the material form (η₂, η₁); ux as wave_ratio_of."""
@@ -1813,7 +1834,24 @@ def wave_rust(fn, v, P, K, ux=False):
         return okf(fdiv(v[0], C))
     if fn == "wave::plane_wave_e":
         e0, k, x, om, tt, ph = v
-        return okf(e0 * P["sin"](k * x - om * tt + ph))
+        kx, wt = k * x, om * tt
+        d = kx - wt
+        arg = d + ph
+        plain = ((VX_MN < abs(kx) and VX_MN < abs(wt) and abs(d) <= DBL_MAX and abs(arg) <= DBL_MAX)
+                 or not _fin(k, x, om, tt, ph, e0)
+                 or (vx_exact_p(k, x, kx) and vx_exact_p(om, tt, wt) and abs(d) <= DBL_MAX and abs(arg) <= DBL_MAX))
+        if not ux or plain:
+            return okf(e0 * P["sin"](arg))
+        # Row 18's rule (M2 part 2d-2b): the argument to 53 bits with an unbounded exponent, its sine to 53 bits
+        # (MPFR's widest range past DBL_MAX), the product by E₀ rounded once.
+        A = rnd53(rnd53(rnd53(Fraction(k) * Fraction(x)) - rnd53(Fraction(om) * Fraction(tt))) + Fraction(ph))
+        if A == 0:
+            return okf(e0 * 0.0)
+        if abs(A) < Fraction(VX_MN):
+            sn = A
+        else:
+            sn = mpfr_ref.wide("sin", A)
+        return okf(rn_frac(Fraction(e0) * sn))
     if fn == "wave::wave_number":
         if abs(v[1]) < 1e-30:
             return dz_err("velocity cannot be zero for wave number")
@@ -1824,7 +1862,11 @@ def wave_rust(fn, v, P, K, ux=False):
         n1, n2, th = v
         if abs(n2) < 1e-30:
             return dz_err("refractive index n₂ cannot be zero")
-        st = fdiv(n1 * P["sin"](th), n2)
+        sn = P["sin"](th)
+        pp = n1 * sn
+        st = fdiv(pp, n2)
+        if ux and not abs(pp) > VX_MN and _fin(n1, sn, n2) and not vx_exact_p(n1, sn, pp):
+            st = rn_frac(rnd53(Fraction(n1) * Fraction(sn)) / Fraction(n2))   # row 18's rule (M2 part 2d-2b)
         return [("n", "")] if abs(st) > 1.0 else okf(P["asin"](st))
     if fn == "wave::critical_angle":
         n1, n2 = v
@@ -2119,13 +2161,17 @@ def wave_port(fn, v, K, consts):
     if fn == "wave::half_wave_dipole_pattern":
         return 28, wave_half_wave_port(v[0])
     if fn in ("wave::poynting_vector", "wave::momentum_density"):
+        # Row 18 through FieldVector::cross, and (M2 part 2d-2b) the flux parts' own edges.
+        e, b = v[0:3], v[3:6]
         if all(math.isfinite(x) for x in v[0:6]) and fv_governed("FieldVector::cross", v[0:6]) == 18:
-            cr = [b for _k, b in fv_model("FieldVector::cross", v[0:6])]
-            s = [x * fdiv(1.0, K["MU0"]) for x in cr]
-            if fn == "wave::momentum_density":
-                s = [x * fdiv(1.0, K["C"] * K["C"]) for x in s]
-            return 18, ok3(s)
-        return None
+            cr = [x for _k, x in fv_model("FieldVector::cross", v[0:6])]
+        else:
+            cr = [e[1] * b[2] - e[2] * b[1], e[2] * b[0] - e[0] * b[2], e[0] * b[1] - e[1] * b[0]]
+        k, k2 = fdiv(1.0, K["MU0"]), fdiv(1.0, K["C"] * K["C"])
+        mode = 1 if fn == "wave::momentum_density" else 0
+        parts = [(e[1], b[2], e[2], b[1]), (e[2], b[0], e[0], b[2]), (e[0], b[1], e[1], b[0])]
+        out = ok3([wave_flux_part(*parts[i], cr[i], k, k2, mode) for i in range(3)])
+        return None if toks_same(out, wave_rust(fn, v, None, K)) else (18, out)
     if fn == "wave::half_wave_dipole_directivity":
         return 22, okf(d)
     if fn == "wave::half_wave_dipole_radiation_resistance":
@@ -2138,8 +2184,9 @@ def wave_port(fn, v, K, consts):
         return (22 if not toks_same(old22, wave_rust(fn, v, None, K)) else 13), new
     if fn == "wave::effective_aperture" and math.isnan(v[0]):
         return 23, ip_err("wavelength must be non-negative, got NaN")
-    if fn in ("wave::fresnel_rs", "wave::fresnel_rp", "wave::reflectance_s", "wave::reflectance_p"):
-        # Row 18 (M2 part 2d-2a) where the range edge's chain moves the row, on correctly rounded cosines.
+    if fn in ("wave::fresnel_rs", "wave::fresnel_rp", "wave::reflectance_s", "wave::reflectance_p",
+              "wave::plane_wave_e", "wave::snell_refraction_angle"):
+        # Row 18 (M2 parts 2d-2a, 2d-2b) where the range edge's chain moves the row, on correctly rounded primitives.
         new = wave_rust(fn, v, MPFR_P, K, ux=True)
         return (18, new) if not toks_same(new, wave_rust(fn, v, MPFR_P, K)) else None
     if fn == "wave::schlick_reflectance":

@@ -762,6 +762,29 @@ fn cyrius_tests(): i64 {
       "subnormal indices: both products below 2^-1022, run unbounded (Rust: 227 ulps off)");
     var tub, vub = bj_reflectance_unpolarized(sn1, sn2, 0.5);
     assert(is_ok(tub) == 1 && _bj_bits(vub) == 0x3FB6D4F0BEB927F7, "and R (Rust: 309 ulps off)");
+    # M2 part 2d-2b: the plane waves' and Snell's chains at their range edges.
+    var e159: f64 = _bj_from_bits(0x60F2357684599702);                    # 1e159
+    var e160: f64 = _bj_from_bits(0x6126C2D4256FFCC3);                    # 1e160
+    var gm: BjFieldVector = bj_momentum_density(BjFieldVector_new(e159, 0.0, 0.0), BjFieldVector_new(0.0, e160, 0.0));
+    assert(_bj_bits(gm.z) == 0x7FDF859ED6DA6B0E && gm.x == 0.0,
+      "row 18, 2d-2b: g = (E × B)ε₀ = 8.85e307 with the cross past DBL_MAX (Rust: ∞, its S overflowed)");
+    var e200: f64 = _bj_from_bits(0x6974E718D7D7625A);                    # 1e200
+    var pw1: f64 = bj_plane_wave_e(1.0, e200, e200, e200, e200, 0.5);
+    assert(_bj_bits(pw1) == 0x3FDEAEE8744B05F0, "kx = ωt past DBL_MAX, cancelling: sin 0.5 (Rust: NaN)");
+    var pw2: f64 = bj_plane_wave_e(1.0, e200, e200, 0.0, 0.0, 0.0);
+    assert(_bj_bits(pw2) == 0x3FC7DF8FBC85F3D5, "kx = 1e400: its sine by Payne–Hanek, 0.18651 (Rust: NaN)");
+    var e300: f64 = _bj_from_bits(0x7E37E43C8800759C);                    # 1e300
+    var em200: f64 = _bj_from_bits(0x16687E92154EF7AC);                   # 1e-200
+    var pw3: f64 = bj_plane_wave_e(e300, em200, em200, 0.0, 0.0, 0.0);
+    assert(_bj_bits(pw3) == 0x2B2BFF2EE48E0530, "kx = 1e-400 under E₀ = 1e300: 1e-100 (Rust: 0)");
+    var sno: f64[1];
+    var em300: f64 = _bj_from_bits(0x01A56E1FC2F8F359);                   # 1e-300
+    var em29: f64 = _bj_from_bits(0x39E95A5EFEA6B347);                    # 1e-29
+    var em20: f64 = _bj_from_bits(0x3BC79CA10C924223);                    # 1e-20
+    var tsn, vsn = bj_snell_refraction_angle(em300, em29, em20, &sno);
+    var snv: f64 = sno[0];
+    assert(is_ok(tsn) == 1 && vsn == Some && _bj_bits(snv) == 0x0383F559E7BEE6C1,
+      "n₁ sin θ_i = 1e-320 over n₂ = 1e-29: θ_t = 1e-291 (Rust: off in the fifth digit)");
 
     test_group("cyrius_adr_row_28");
     var u8: f64 = bj_half_wave_dipole_pattern(0.00000001);

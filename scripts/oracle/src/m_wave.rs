@@ -559,6 +559,7 @@ pub fn emit() -> Module {
     emit_waveguides(&mut m, &mut rng, &ps, &sh);
     emit_eta_guard(&mut m);
     emit_ratio_edges(&mut m);
+    emit_flux_edges(&mut m);
     m
 }
 
@@ -621,5 +622,51 @@ fn emit_ratio_edges(m: &mut Module) {
         for &(ti, tt) in &[(0.0, 0.0), (0.3, 0.5), (1.2, 0.2), (2.5, 0.4), (FRAC_PI_2, 0.1)] {
             fresnel_angles(m, a, ti, b, tt);
         }
+    }
+}
+
+/// M2 part 2d-2b (bijli ADR 0002 row 18's rule): the plane waves' chains at their range edges. The Poynting vector and
+/// the momentum density with a cross below 2^-1022 (S normal), with S past DBL_MAX and with the cross past it where g
+/// is representable; `plane_wave_e` with kx and ωt past DBL_MAX (cancelling, or not: a sine past DBL_MAX) and below
+/// 2^-1022 under a large E₀; Snell's n₁ sin θ_i below 2^-1022 over a small n₂. After every older row.
+fn emit_flux_edges(m: &mut Module) {
+    let pairs = [
+        ([pow2(-515), 0.0, 0.0], [0.0, 3.0 * pow2(-515), 0.0]),
+        ([1e-155, 2e-155, 0.0], [0.0, 3e-156, 5e-156]),
+        ([1.5e-160, -2.5e-160, 1e-161], [7e-161, 3e-162, -4e-160]),
+        ([pow2(-540), pow2(-541), 0.0], [pow2(-500), -pow2(-499), pow2(-520)]),
+        ([1e152, 0.0, 0.0], [0.0, 1e152, 0.0]),
+        ([1e159, 2e158, 0.0], [-3e159, 1e160, 7e158]),
+        ([1e159, 0.0, 0.0], [0.0, 1e160, 0.0]),
+        ([1e300, 0.0, 0.0], [0.0, 1e300, 0.0]),
+        ([f64::MAX, 0.0, 0.0], [0.0, 1e-10, 0.0]),
+    ];
+    for (e, b) in pairs {
+        for flip in [1.0, -1.0] {
+            let ev = FieldVector::new(e[0], e[1] * flip, e[2]);
+            let bv = FieldVector::new(b[0], b[1], b[2] * flip);
+            let ins = cat(&[v3(ev), v3(bv)]);
+            m.row("wave::poynting_vector", Class::A, &ins, &v3(poynting_vector(black_box(&ev), &bv)));
+            m.row("wave::momentum_density", Class::A, &ins, &v3(momentum_density(black_box(&ev), &bv)));
+        }
+    }
+    let waves = [
+        [1.0, 1e200, 1e200, 1e200, 1e200, 0.5],
+        [1.0, 1e200, 1e200, 0.0, 0.0, 0.0],
+        [2.0, -1e200, 3e200, 1e100, 1e100, 0.25],
+        [1.0, 1e200, 1e200, 1e200, 9e199, 0.0],
+        [1e300, 1e-200, 1e-200, 0.0, 0.0, 0.0],
+        [1e300, 1e-200, 3e-201, 1e-200, 1e-200, 0.0],
+        [1e250, 1e-170, 1e-150, 0.0, 1.0, 0.0],
+        [5.0, 1e-200, 1e-200, 2.0, 0.5, 1.0],
+        [1.0, 1e308, 10.0, 1e308, 10.0, 0.0],
+    ];
+    for c in waves {
+        let ins = [f(c[0]), f(c[1]), f(c[2]), f(c[3]), f(c[4]), f(c[5])];
+        m.row("wave::plane_wave_e", Class::C, &ins, &[f(plane_wave_e(black_box(c[0]), c[1], c[2], c[3], c[4], c[5]))]);
+    }
+    for (n1, n2, t) in [(1e-300, 1e-29, 1e-20), (3e-300, 2e-29, 1e-15), (1e-310, 1e-28, 0.5), (-2e-305, 1e-29, 1e-4)] {
+        let ins = [f(n1), f(n2), f(t)];
+        m.row("wave::snell_refraction_angle", Class::C, &ins, &res_o(snell_refraction_angle(black_box(n1), n2, t)));
     }
 }

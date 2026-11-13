@@ -27,7 +27,7 @@
 | `maxwell/skin_depth` | 1.29 ns | `maxwell/skin_depth` | 186.00 ns | 144.7× |
 | `charge/coulomb_force` | 5.54 ns | `charge/coulomb_force` | 42.00 ns | 7.6× |
 | `charge/lorentz_force` | 1.51 ns | `charge/lorentz_force` | 59.00 ns | 39.2× |
-| `wave/poynting_vector` | 0.98 ns | `wave/poynting_vector` | 62.00 ns | 63.0× |
+| `wave/poynting_vector` | 0.98 ns | `wave/poynting_vector` | 95.00 ns | 96.9× |
 | `wave/plane_wave_intensity` | 0.52 ns | `wave/plane_wave_intensity` | 148.00 ns | 284.6× |
 | `wave/plane_wave_e` | 0.51 ns | `wave/plane_wave_e` | 20.99 µs | 40928.2× |
 | `wave/fresnel_rs` | 1.25 ns | `wave/fresnel_rs` | 304.00 ns | 243.2× |

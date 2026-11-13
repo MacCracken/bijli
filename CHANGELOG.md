@@ -294,6 +294,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
   and subnormal products left r_s 227 ulps off. At a range edge the chain now runs with an unbounded exponent and its
   quotient rounds once (src/crmath_vx.cyr); elsewhere it is Rust's, bit for bit. The cost: about 22 ns a ratio
   (`wave/fresnel_rs_direct` 255 → 277 ns, `wave/reflectance_unpolarized` 264 → 301 ns; `port-parity.md` §42).
+- **wave** (ADR 0002 row 18 amended, M2 part 2d-2b): `poynting_vector` and `momentum_density` took a cross part below
+  2^-1022 as its degraded double and gave g = ∞ when S overflowed though (E × B)ε₀ is representable; `plane_wave_e`
+  gave NaN for sin(±∞) where kx and ωt cancel or pass DBL_MAX, and 0 for an underflowed kx under a large E₀;
+  `snell_refraction_angle` lost digits when n₁ sin θ_i underflowed. At those edges the chains now run with an unbounded
+  exponent (the sine past DBL_MAX by Payne–Hanek) and round once. The cost: `wave/poynting_vector` 65 → 95 ns, the
+  other rows within the noise (`port-parity.md` §43).
 - **relativity** (ADR 0002 row 13 amended, M2 part 2b-4): `retarded_scalar_potential`, `retarded_vector_potential`,
   `larmor_power` and `EmTensor::dual` rounded two to five times, and overflowed where the value is representable
   (Larmor with q² past DBL_MAX, the dual of B past DBL_MAX/c: ∞ each); they are now correctly rounded for finite

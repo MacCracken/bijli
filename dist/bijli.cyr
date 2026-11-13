@@ -17389,13 +17389,86 @@ private
 
 # ── plane waves ──────────────────────────────────────────────────────────────────────────────────────────────────
 
+# One part of S = (E × B)/μ₀ (mode 0) or of g = S/c² (mode 1), from the cross component ci = a·b − c·d as
+# BjFieldVector's cross gives it (src/crmath_vx.cyr's band, its unbounded fallback rounded once). Rust's ci·k (then ·k2)
+# where ci is normal (it is then the chain's 53-bit value) and, for g, S finite; an exact 0 (zero factors, or two
+# normal products) and a non-finite operand keep it, and so does S past DBL_MAX (k > 1: the cross is past it too).
+# Otherwise (ci below 2^-1022 or 0 by underflow, or g's S or cross past DBL_MAX where g is representable) the chain runs
+# with an unbounded exponent from the products, its last product rounded once (ADR 0002 row 18's rule, M2 part 2d-2b).
+#must_use
+fn _bj_wave_flux_part(a: f64, b: f64, c: f64, d: f64, ci: f64, k: f64, k2: f64, mode): f64 {
+    var s: f64 = ci * k;
+    var r: f64 = s;
+    if (mode == 1) { r = s * k2; }
+    var ac: f64 = f64_abs(ci);
+    var asv: f64 = f64_abs(s);
+    if (ac >= _BJ_VX_MN && ac <= _BJ_VX_HI && (mode == 0 || asv <= _BJ_VX_HI)) { return r; }
+    if (_bj_vx_finite4(a, b, c, d) == 0) { return r; }
+    if (mode == 0 && ac > _BJ_VX_HI) { return r; }
+    if (ci == 0.0) {
+        var pp: f64 = a * b;
+        var qq: f64 = c * d;
+        if (_bj_vx_exact(a, b, pp) == 1 && _bj_vx_exact(c, d, qq) == 1) { return r; }
+    }
+    var cs, ce = _bj_vx_cross1(a, b, c, d);
+    var ks, ke = _bj_k_ux_from(k);
+    if (mode == 0) {
+        var u0: f64 = _bj_k_ux_mul_f64(cs, ce, ks, ke);
+        return u0;
+    }
+    var ss, se = _bj_k_ux_mul(cs, ce, ks, ke);
+    var ts, te = _bj_k_ux_from(k2);
+    var u1: f64 = _bj_k_ux_mul_f64(ss, se, ts, te);
+    return u1;
+}
+
+# 1 when every part of the cross c = E × B is normal or an exact 0 through zero factors (and, mode 1, its product by k
+# finite): the common case, where every part's _bj_wave_flux_part is Rust's ci·k (·k2).
+#must_use
+fn _bj_wave_cross_plain(e: BjFieldVector, b: BjFieldVector, c: BjFieldVector, k: f64, mode): i64 {
+    var lo: f64 = _BJ_VX_MN;
+    var hi: f64 = _BJ_VX_HI;
+    var cx: f64 = c.x;
+    var cy: f64 = c.y;
+    var cz: f64 = c.z;
+    var ax: f64 = f64_abs(cx);
+    var ay: f64 = f64_abs(cy);
+    var az: f64 = f64_abs(cz);
+    var ox = 0;
+    var oy = 0;
+    var oz = 0;
+    if (ax >= lo && ax <= hi) { ox = 1; }
+    if (ay >= lo && ay <= hi) { oy = 1; }
+    if (az >= lo && az <= hi) { oz = 1; }
+    if (ox == 0 && cx == 0.0 && (e.y == 0.0 || b.z == 0.0) && (e.z == 0.0 || b.y == 0.0)) { ox = 1; }
+    if (oy == 0 && cy == 0.0 && (e.z == 0.0 || b.x == 0.0) && (e.x == 0.0 || b.z == 0.0)) { oy = 1; }
+    if (oz == 0 && cz == 0.0 && (e.x == 0.0 || b.y == 0.0) && (e.y == 0.0 || b.x == 0.0)) { oz = 1; }
+    if (ox == 0 || oy == 0 || oz == 0) { return 0; }
+    if (mode == 1) {
+        var m: f64 = ax;
+        if (ay > m) { m = ay; }
+        if (az > m) { m = az; }
+        var sm: f64 = m * k;
+        if (sm > hi) { return 0; }
+    }
+    return 1;
+}
+
 # S = E × B/μ₀ (W/m²), the energy flux: BjFieldVector's cross (ADR 0002 row 18 at a range edge), then each part by
-# 1/μ₀. Mirrors `wave::poynting_vector`.
+# 1/μ₀, with an unbounded exponent where a part of the cross falls below 2^-1022 (_bj_wave_flux_part). Mirrors
+# `wave::poynting_vector`.
 #must_use
 public fn bj_poynting_vector(e: BjFieldVector, b: BjFieldVector): BjFieldVector {
     var c: BjFieldVector = e.cross(b);
     var k: f64 = 1.0 / BJ_MU_0;
-    var s: BjFieldVector = c.scale(k);
+    if (_bj_wave_cross_plain(e, b, c, 0.0, 0) == 1) {
+        var s0: BjFieldVector = c.scale(k);
+        return s0;
+    }
+    var sx: f64 = _bj_wave_flux_part(e.y, b.z, e.z, b.y, c.x, k, 0.0, 0);
+    var sy: f64 = _bj_wave_flux_part(e.z, b.x, e.x, b.z, c.y, k, 0.0, 0);
+    var sz: f64 = _bj_wave_flux_part(e.x, b.y, e.y, b.x, c.z, k, 0.0, 0);
+    var s: BjFieldVector = BjFieldVector_new(sx, sy, sz);
     return s;
 }
 
@@ -17454,16 +17527,47 @@ public fn bj_b_from_e(e_amplitude: f64): f64 {
     return b;
 }
 
-# E(x, t) = E₀ sin(kx − ωt + φ), a plane wave along +x. Mirrors `wave::plane_wave_e`.
+# E(x, t) = E₀ sin(kx − ωt + φ), a plane wave along +x. Rust's chain, or at a range edge (a product below 2^-1022 or 0
+# by underflow, a sum past DBL_MAX) the unbounded one: kx, ωt and the sums to 53 bits, the sine of that argument to 53
+# bits (past DBL_MAX by Payne–Hanek, src/crmath_ux.cyr), the product by E₀ rounded once (ADR 0002 row 18's rule, M2
+# part 2d-2b: Rust's sin(±∞) was NaN for an argument whose sine exists). A non-finite operand keeps Rust's chain.
+# Mirrors `wave::plane_wave_e`.
 #must_use
 #pure
 public fn bj_plane_wave_e(e_amplitude: f64, k: f64, x: f64, omega: f64, t: f64, phase: f64): f64 {
     var kx: f64 = k * x;
     var wt: f64 = omega * t;
-    var arg: f64 = kx - wt + phase;
-    var s: f64 = _bj_sin(arg);
-    var e: f64 = e_amplitude * s;
-    return e;
+    var d: f64 = kx - wt;
+    var arg: f64 = d + phase;
+    var ak: f64 = f64_abs(kx);
+    var aw: f64 = f64_abs(wt);
+    var ad: f64 = f64_abs(d);
+    var aa: f64 = f64_abs(arg);
+    var plain = 0;
+    if (ak > _BJ_VX_MN && aw > _BJ_VX_MN && ad <= _BJ_VX_HI && aa <= _BJ_VX_HI) { plain = 1; }
+    if (plain == 0) {
+        var fin: f64 = (phase - phase) + (e_amplitude - e_amplitude);
+        if (_bj_vx_finite4(k, x, omega, t) == 0 || fin != 0.0) { plain = 1; }
+    }
+    if (plain == 0) {
+        if (_bj_vx_exact(k, x, kx) == 1 && _bj_vx_exact(omega, t, wt) == 1 && ad <= _BJ_VX_HI && aa <= _BJ_VX_HI) {
+            plain = 1;
+        }
+    }
+    if (plain == 1) {
+        var s: f64 = _bj_sin(arg);
+        var e: f64 = e_amplitude * s;
+        return e;
+    }
+    var ps, pe = _bj_vx_mul(k, x);
+    var qs, qe = _bj_vx_mul(omega, t);
+    var ds, de = _bj_k_ux_sub(ps, pe, qs, qe);
+    var fs, fe = _bj_k_ux_from(phase);
+    var as2, ae2 = _bj_k_ux_add(ds, de, fs, fe);
+    var ss, se = _bj_vx_sin53(as2, ae2);
+    var es, ee = _bj_k_ux_from(e_amplitude);
+    var u: f64 = _bj_k_ux_mul_f64(es, ee, ss, se);
+    return u;
 }
 
 # k = 2πf/v, correctly rounded (ADR 0002 row 13; a non-finite f or v keeps Rust's (2π·f)/v). DivisionByZero when
@@ -17491,14 +17595,24 @@ public fn bj_angular_frequency(frequency: f64): f64 {
     return w;
 }
 
-# g = S/c² (kg/(m²·s)), the momentum density: bj_poynting_vector, then each part by 1/c². Mirrors
-# `wave::momentum_density`.
+# g = S/c² (kg/(m²·s)), the momentum density: S as bj_poynting_vector's, then each part by 1/c²; with an unbounded
+# exponent where S or the cross passes DBL_MAX while g = (E × B)ε₀ is representable, or a part of the cross falls below
+# 2^-1022 (_bj_wave_flux_part). Mirrors `wave::momentum_density`.
 #must_use
 public fn bj_momentum_density(e: BjFieldVector, b: BjFieldVector): BjFieldVector {
-    var s: BjFieldVector = bj_poynting_vector(e, b);
+    var c: BjFieldVector = e.cross(b);
+    var k: f64 = 1.0 / BJ_MU_0;
     var c2: f64 = BJ_SPEED_OF_LIGHT * BJ_SPEED_OF_LIGHT;
-    var k: f64 = 1.0 / c2;
-    var g: BjFieldVector = s.scale(k);
+    var k2: f64 = 1.0 / c2;
+    if (_bj_wave_cross_plain(e, b, c, k, 1) == 1) {
+        var sv: BjFieldVector = c.scale(k);
+        var g0: BjFieldVector = sv.scale(k2);
+        return g0;
+    }
+    var gx: f64 = _bj_wave_flux_part(e.y, b.z, e.z, b.y, c.x, k, k2, 1);
+    var gy: f64 = _bj_wave_flux_part(e.z, b.x, e.x, b.z, c.y, k, k2, 1);
+    var gz: f64 = _bj_wave_flux_part(e.x, b.y, e.y, b.x, c.z, k, k2, 1);
+    var g: BjFieldVector = BjFieldVector_new(gx, gy, gz);
     return g;
 }
 
@@ -17506,7 +17620,9 @@ public fn bj_momentum_density(e: BjFieldVector, b: BjFieldVector): BjFieldVector
 # These take any index (a negative one refracts negatively) and any angle; only a zero divisor is refused.
 
 # θ_t = asin(n₁ sin θ_i/n₂), Snell's law: Ok(Some) with θ_t in *out, or Ok(None) when |n₁ sin θ_i/n₂| > 1 (total
-# internal reflection). DivisionByZero when |n₂| < 1e-30. Mirrors `wave::snell_refraction_angle`.
+# internal reflection). DivisionByZero when |n₂| < 1e-30. An n₁ sin θ_i below 2^-1022 (or 0 by underflow) runs with an
+# unbounded exponent, the quotient rounded once (ADR 0002 row 18's rule, M2 part 2d-2b). Mirrors
+# `wave::snell_refraction_angle`.
 public fn bj_snell_refraction_angle(n1: f64, n2: f64, theta_i: f64, out: *f64): Result {
     var a: f64 = f64_abs(n2);
     if (a < 0.000000000000000000000000000001) {
@@ -17515,6 +17631,12 @@ public fn bj_snell_refraction_angle(n1: f64, n2: f64, theta_i: f64, out: *f64): 
     var s: f64 = _bj_sin(theta_i);
     var p: f64 = n1 * s;
     var sin_t: f64 = p / n2;
+    var ap: f64 = f64_abs(p);
+    if (!(ap > _BJ_VX_MN) && _bj_vx_finite4(n1, s, n2, 0.0) == 1 && _bj_vx_exact(n1, s, p) == 0) {
+        var ps, pe = _bj_vx_mul(n1, s);             # n₁ sin θ_i below 2^-1022: unbounded, the quotient rounded once
+        var ns, ne = _bj_k_ux_from(n2);
+        sin_t = _bj_k_ux_div_f64(ps, pe, ns, ne);
+    }
     var m: f64 = f64_abs(sin_t);
     if (m > 1.0) { return Ok(None); }
     var t: f64 = _bj_asin(sin_t);
