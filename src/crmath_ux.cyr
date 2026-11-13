@@ -26,7 +26,8 @@
 # factors are doubles (cos and sin of a part), at least 2^-1074 in magnitude, and e^1500·2^-1074 > 2^1090. For a power
 # it is beyond |y·ln x| = 10000: its factor can be the sine of an angle n·arg z far below 2^-1074, but never below
 # 2^-2098·|n| (arg z ≥ 2^-1074/2^1024), and a power past e^1500 needs |n| ≥ 2 (|ln |z|| < 745), while e^10000 is
-# 2^14426. Every real exponent here stays below 2^15, far from the stand-in's 2^20.
+# 2^14426. Every real exponent here stays below 2^15, far from the stand-in's 2^20. The circuit transients (M2 part
+# 2d-3b) multiply e^x by an amplitude V/R that reaches 2^-2098, so _bj_ux_exp_lim takes e^x on to |x| = 2300.
 
 # The exponent of the stand-in for a value beyond every product's range (2^20).
 const _BJ_UX_HUGE = 1048576;
@@ -66,8 +67,18 @@ fn _bj_cr_round_ux(a, k, neg): (f64, i64) {
 # beyond |x| = 1500 (the section comment).
 #must_use
 fn _bj_ux_exp(x: f64): (f64, i64) {
-    if (x > 1500.0) { return (1.0, _BJ_UX_HUGE); }
-    if (x < -1500.0) { return (1.0, 0 - _BJ_UX_HUGE); }
+    var s, e = _bj_ux_exp_lim(x, 1500.0);
+    return (s, e);
+}
+
+# e^x as _bj_ux_exp, the stand-in beyond |x| = lim, for lim ≤ 2300 (M2 part 2d-3b: the transients' amplitude V/R
+# reaches 2^-2098, so a product with e^x is representable up to x ≈ 2147). The reduction holds there: k ≤ 3319 times
+# the fixed-point ln 2 errs below 2^-352, and e^2300 is about 2^3318, far from the stand-in's 2^20.
+#must_use
+fn _bj_ux_exp_lim(x: f64, lim: f64): (f64, i64) {
+    if (x > lim) { return (1.0, _BJ_UX_HUGE); }
+    var nl: f64 = -lim;
+    if (x < nl) { return (1.0, 0 - _BJ_UX_HUGE); }
     _bj_cr_load();
     var X[112];
     var S[112];

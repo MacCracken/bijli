@@ -316,6 +316,16 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
   ωL = 10^300 and 0 for R = 10^-200 at resonance. At those edges the fold and the impedance's chain now run with an
   unbounded exponent and round once; elsewhere they are Rust's, bit for bit. The cost: `circuit/rlc_impedance`
   16 → 17 ns (`port-parity.md` §45).
+- **circuit** (ADR 0002 row 18 amended, M2 part 2d-3b): the transients (`rc_charging_voltage`,
+  `rc_discharging_voltage`, `rl_current_rise`, `rl_current_decay`) broke where a step left the range:
+  - RC = 10^400 gave V = 0 for 10^200;
+  - a subnormal t/τ or e^(−t/τ) cost digits;
+  - 10^300·e^-800 gave 0 for 3.7·10^-48, and 10^-300·e^750 gave ∞ for 5.3·10^25;
+  - a V/R that underflowed, or V₀ = 0, against an e^x past DBL_MAX gave NaN (0·∞).
+
+  At those edges the chain now runs with an unbounded exponent and the product rounds once (src/circuit.cyr's
+  `_bj_circuit_edge`, e^x to |x| = 2300 by src/crmath_ux.cyr's new `_bj_ux_exp_lim`); elsewhere it is Rust's, bit for
+  bit. The cost: `circuit/rc_charging` 65 → 67 ns, `circuit/rl_current_rise` 65 → 72 ns (`port-parity.md` §46).
 - **relativity** (ADR 0002 row 13 amended, M2 part 2b-4): `retarded_scalar_potential`, `retarded_vector_potential`,
   `larmor_power` and `EmTensor::dual` rounded two to five times, and overflowed where the value is representable
   (Larmor with q² past DBL_MAX, the dual of B past DBL_MAX/c: ∞ each); they are now correctly rounded for finite

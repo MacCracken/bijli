@@ -233,6 +233,7 @@ pub fn emit() -> Module {
     }
     emit_inverse_edges(&mut m);
     emit_fold_edges(&mut m);
+    emit_transient_edges(&mut m);
     m
 }
 
@@ -383,5 +384,24 @@ fn emit_fold_edges(m: &mut Module) {
         let ln = ulps(l, 1);
         let four = [f(0.0), f(ln), f(c), f(w)];
         m.row("circuit::rlc_impedance", Class::A, &four, &res_f(rlc_impedance(black_box(0.0), ln, c, w)));
+    }
+}
+
+/// M2 part 2d-3b (bijli ADR 0002 row 18's rule): the four transients at their range edges. Each (a, R, C or L, t) feeds
+/// all four, so the pairs set both τ's: τ = RC past DBL_MAX (10^200 twice, 2^1000 twice) with τ = L/R = 1; τ = L/R
+/// past DBL_MAX with V/R past it too (R = 10^-29); τ = 10^10, where t = 10^-300 gives a subnormal t/τ; and 1. The
+/// times put e^(−t/τ) subnormal (720), below it (800), past DBL_MAX (−750, −800), past e^1500 (−2000: with V/R =
+/// 2^-2074 the product is 2^811), and t/τ past DBL_MAX (±10^300); the amplitudes span ±10^300, 10^-300, 2^-1074 and 0.
+/// After every older row.
+fn emit_transient_edges(m: &mut Module) {
+    let amps = [1.0, 1e300, -1e300, 1e-300, 0.0, pow2(-1074)];
+    let pairs = [(1.0, 1.0), (1e200, 1e200), (1e-29, 1e300), (1e10, 1e10), (pow2(1000), pow2(1000)), (1.0, 1e10)];
+    let ts = [1.0, -1.0, 1e-300, 720.0, 800.0, -750.0, -800.0, -2000.0, 1e300, -1e300, 1e-30];
+    for &a in &amps {
+        for &(r, c) in &pairs {
+            for &t in &ts {
+                transient_row(m, a, r, c, t);
+            }
+        }
     }
 }

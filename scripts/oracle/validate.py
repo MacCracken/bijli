@@ -2378,6 +2378,45 @@ def circuit_combo(xs, what, parallel, which, ux=False):
     return okf(fdiv(1.0, s))
 
 
+def circuit_plain(tau, x, w, t, mode) -> bool:
+    """src/circuit.cyr's _bj_circuit_plain: whether a transient's Rust chain is the unbounded one (M2 part 2d-3b)."""
+    if not abs(tau) <= DBL_MAX:
+        return False
+    if not VX_MN < abs(x) <= DBL_MAX and t != 0.0:
+        return False
+    if not abs(w) <= DBL_MAX:
+        return False
+    return mode == 0 or abs(w) > VX_MN
+
+
+def circuit_edge(av, asg, tau, t, mode):
+    """A transient at a range edge (ADR 0002 row 18's rule, M2 part 2d-3b): asg·av·w for x = −t/τ to 53 bits,
+    w = −expm1(x) (mode 0) or e^x (mode 1) at 53 bits in MPFR's widest range (mpfr_ref.wide), the product rounded once.
+    av ≥ 0 and tau are 53-bit Fractions, asg the amplitude's sign; a zero amplitude or t gives IEEE's signed zero."""
+    xsg = -math.copysign(1.0, t) * (1.0 if tau > 0 else -1.0)
+    if t == 0:
+        if mode == 1:
+            return asg * 0.0 if av == 0 else math.copysign(rn_frac(av), asg)
+        return asg * -xsg * 0.0
+    if av == 0:
+        return asg * (-xsg if mode == 0 else 1.0) * 0.0
+    x = rnd53(Fraction(-t) / tau)
+    if abs(x) > 100000:
+        # e^±10^5 lies past 2^±144000: a charge's w is 1 for x < 0; otherwise the product overflows or rounds to zero
+        # whatever the amplitude (between 2^-2098 and 2^1124). MPFR's widest range would hold e^x, but not as a Fraction.
+        if mode == 0 and x < 0:
+            return rn_frac(Fraction(asg) * av)
+        if mode == 1 and x < 0:
+            return asg * 0.0
+        return asg * (-math.inf if mode == 0 else math.inf)
+    w = mpfr_ref.wide("expm1" if mode == 0 else "exp", x)
+    if mode == 0:
+        w = -w
+    if isinstance(w, float):                    # past even MPFR's widest range: ±∞, or e^x = 0
+        return asg * w if w != 0 else asg * 0.0
+    return rn_frac(Fraction(asg) * av * w)
+
+
 def circuit_rust(fn, v, P, expm1=False, exact=False, ux=False):
     """circuit.rs transcribed in its order of operations, its checks and error texts, on the primitives P; None for
     another name. ux: the port's range edges (ADR 0002 row 18's rule, M2 part 2d-3a), the series folds and the
@@ -2416,10 +2455,17 @@ def circuit_rust(fn, v, P, expm1=False, exact=False, ux=False):
         if instant:
             return okf(v0 if name.startswith("rc_charging") else 0.0)
         x = fdiv(-tt, tau)
-        if expm1 and name.startswith("rc_charging"):
-            return okf(v0 * -mpfr_ref.cr("expm1", x))   # ADR 0002 row 29: −expm1(x), correctly rounded
-        e = P["exp"](x)
-        return okf(v0 * (1.0 - e) if name.startswith("rc_charging") else v0 * e)
+        charge = name.startswith("rc_charging")
+        if expm1 and charge:
+            w = -mpfr_ref.cr("expm1", x)                # ADR 0002 row 29: −expm1(x), correctly rounded
+        else:
+            e = P["exp"](x)
+            w = 1.0 - e if charge else e
+        mode = 0 if charge else 1
+        if ux and _fin(v0, r, c, tt) and not circuit_plain(tau, x, w, tt, mode):
+            return okf(circuit_edge(abs(Fraction(v0)), math.copysign(1.0, v0), rnd53(Fraction(r) * Fraction(c)),
+                                    tt, mode))
+        return okf(v0 * w)
     if name == "rl_time_constant":
         if abs(v[1]) < 1e-30:
             return dz_err("resistance cannot be zero for RL time constant")
@@ -2434,10 +2480,21 @@ def circuit_rust(fn, v, P, expm1=False, exact=False, ux=False):
         if instant:
             return okf(fdiv(a, r) if name.endswith("rise") else 0.0)
         x = fdiv(-tt, tau)
-        if expm1 and name.endswith("rise"):
-            return okf(fdiv(a, r) * -mpfr_ref.cr("expm1", x))
-        e = P["exp"](x)
-        return okf(fdiv(a, r) * (1.0 - e) if name.endswith("rise") else a * e)
+        rise = name.endswith("rise")
+        amp = fdiv(a, r) if rise else a
+        if expm1 and rise:
+            w = -mpfr_ref.cr("expm1", x)
+        else:
+            e = P["exp"](x)
+            w = 1.0 - e if rise else e
+        mode = 0 if rise else 1
+        amp_ok = not rise or a == 0.0 or VX_MN < abs(amp) <= DBL_MAX
+        if ux and _fin(a, r, l, tt) and not (amp_ok and circuit_plain(tau, x, w, tt, mode)):
+            F = Fraction
+            av = abs(rnd53(F(a) / F(r))) if rise else abs(F(a))
+            asg = math.copysign(1.0, a) * (math.copysign(1.0, r) if rise else 1.0)
+            return okf(circuit_edge(av, asg, rnd53(F(l) / F(r)), tt, mode))
+        return okf(amp * w)
     if name in ("resonant_frequency", "resonant_angular_frequency"):
         e = circuit_lc(v[0], v[1])
         if e:
@@ -2593,6 +2650,9 @@ def circuit_port(fn, v):
         return None if m17 is None else (17, m17)
     if fn in CIRCUIT_TRANSIENTS:
         model = circuit_rust(fn, v, MPFR_P, expm1=True, exact=True)
+        new = circuit_rust(fn, v, MPFR_P, expm1=True, exact=True, ux=True)
+        if not toks_same(new, model):
+            return 18, new                              # the range edge's chain (M2 part 2d-3b)
         if circuit_flip17(fn, v):
             return 17, model
         if fn in ("circuit::rc_charging_voltage", "circuit::rl_current_rise"):

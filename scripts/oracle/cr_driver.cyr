@@ -241,6 +241,12 @@ fn _call(fp, fl, w): i64 {
         if (load64(w + 8) == 1) { return ee; }
         r = es;
     }
+    elif (_is(fp, fl, "ux_exp_w") == 1) {
+        # ux_exp_w x part: e^x as ux_exp with the stand-in beyond |x| = 2300 (_bj_ux_exp_lim, M2 part 2d-3b)
+        var ws2, we2 = _bj_ux_exp_lim(x, 2300.0);
+        if (load64(w + 8) == 1) { return we2; }
+        r = ws2;
+    }
     elif (_is(fp, fl, "ux_cosh") == 1) {
         var cs, ce = _bj_ux_cosh(x);
         if (load64(w + 8) == 1) { return ce; }

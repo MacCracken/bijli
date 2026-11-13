@@ -50,7 +50,7 @@ port's harness reads the same files. This README records what is specific to bij
 | Module | Milestone | Golden rows | Golden emitter | Generated Cyrius |
 |---|---|---|---|---|
 | `charge` | M1 (parts 3d, 5d-1 to 5d-3) | 12,769 | `src/m_charge.rs` (field.rs's grids) | — |
-| `circuit` | M2 (parts 1c, 2c-1, 2c-5, 2d-3a) | 67,689 (+ 1 corrected) | `src/m_circuit.rs` | — |
+| `circuit` | M2 (parts 1c, 2c-1, 2c-5, 2d-3a, 2d-3b) | 69,273 (+ 1 corrected) | `src/m_circuit.rs` | — |
 | `complex` | M1 (+ 5c-2's edge grid) | 31,677 (+ 8 corrected) | `src/m_complex.rs` | — |
 | `constants` | M0 | 12 | `src/m_constants.rs` | `src/constants.cyr` (`src/t_constants.rs`, with the completeness proof) |
 | `error` | M1 | 1,635 | `src/m_error.rs` | — |
@@ -67,13 +67,13 @@ port's harness reads the same files. This README records what is specific to bij
 | (correctly rounded tables, kimiya's) | M1 | — | — | `src/crmath_k_data.cyr` (`crtables_k.py`, written and checked by `validate.py`) |
 
 Beyond the corpus, `cr_verify.py` checks each correctly rounded primitive (kimiya's expm1 among them since M2 part
-2a-1) against MPFR on seeded argument sets,
-natively and under qemu-aarch64 (`python3 -I -B scripts/oracle/cr_verify.py . --n 100000 --aarch64`, after
-`cyrius distlib`). `tan_slow` calls tan's fixed-point path directly, so the path the rounding test rarely reaches is
-checked on arguments of its own. Its exact families (`cr_verify.py . exact`) check src/crmath_kx.cyr's copy of kimiya's
-correctly rounded monomials, square roots and unbounded-exponent operations against exact values (Python's Fraction and
-an integer square root), not MPFR. Its `r2_below` family (an exact family, M1 part 5d-1) checks src/crmath_cmp.cyr's exact Σ (aᵢ − bᵢ)² < 10^-p
-against Fractions, on points crowded around 10^-30 and 10^-60. Its gamma families (exact families, M2 part 2a-2) check
+2a-1) against MPFR on seeded argument sets, natively and under qemu-aarch64 (`python3 -I -B
+scripts/oracle/cr_verify.py . --n 100000 --aarch64`, after `cyrius distlib`). `tan_slow` calls tan's fixed-point path
+directly, so the path the rounding test rarely reaches is checked on arguments of its own. Its exact families
+(`cr_verify.py . exact`) check src/crmath_kx.cyr's copy of kimiya's correctly rounded monomials, square roots and
+unbounded-exponent operations against exact values (Python's Fraction and an integer square root), not MPFR. Its
+`r2_below` family (an exact family, M1 part 5d-1) checks src/crmath_cmp.cyr's exact Σ (aᵢ − bᵢ)² < 10^-p against
+Fractions, on points crowded around 10^-30 and 10^-60. Its gamma families (exact families, M2 part 2a-2) check
 src/crmath_gamma.cyr's correctly rounded γ and γ² (`gamma`, `gamma2`), its exact path alone (`gamma_slow`,
 `gamma2_slow`: the rounding test sends a value there only within about 2^-100 of a midpoint) and its validity test
 (`gamma_ok`) against Fractions and an integer square root, over c = the speed of light, 1, 2^-30, 2^30 and four random
@@ -81,32 +81,33 @@ c between, with c outside that range refused. Its prod5 families (exact families
 src/crmath_mono.cyr's product of five full-precision doubles (`prod5`, and `prod5_acc` its exact path alone) against
 Fractions, on any binade, products steered to the subnormal boundary, exact ties and signed zeros. Its mono_wide
 families (M2 part 2b-4) check src/crmath_mono.cyr's monomial of up to six factors a side (`mono_wide`, and
-`mono_wide_acc` its exact path alone), within the 253-bit capacity, the Larmor power's shape among them. `cr_driver.cyr`
-reads up to sixteen words a call, and `cr_verify.py` refuses a longer one. Its below_prod, below_quot and below_sum
-families (M2 part 2c-1) check src/crmath_cmp.cyr's exact |x·y|, |x/y| and |x + y| < 10^-p against Fractions, and
-grids.rs's `knife_edge2` and `knife_band2` put the corpus's rows in the 0.024-ulp band where a rounding next to the
-double 1e-30 flips such a test. Its cm and cm_slow families (M2 part 2c-2) check src/crmath_edge.cyr's
+`mono_wide_acc` its exact path alone), within the 253-bit capacity, the Larmor power's shape among them.
+`cr_driver.cyr` reads up to sixteen words a call, and `cr_verify.py` refuses a longer one. Its below_prod, below_quot
+and below_sum families (M2 part 2c-1) check src/crmath_cmp.cyr's exact |x·y|, |x/y| and |x + y| < 10^-p against
+Fractions, and grids.rs's `knife_edge2` and `knife_band2` put the corpus's rows in the 0.024-ulp band where a rounding
+next to the double 1e-30 flips such a test. Its cm and cm_slow families (M2 part 2c-2) check src/crmath_edge.cyr's
 Clausius–Mossotti ε_r (`cm`, and `cm_slow` with the rounding test skipped, so the exact midpoint check always runs)
 against Fractions: physical pairs, X uniform in (−4, 1), both edges ulp by ulp, any finite pair, the exact ties, the
 region and shortcut edges, the exact pole and zero. Its cos_t and cos_t_slow families (M2 part 2c-3) check its
-trig-free Fresnel cosine the same way: TIR exactly and cos θ_t = √(n₂² − n₁²(1 − c²))/n₂ rounded once, on the
-critical cosine ulp by ulp, n₁ within ulps of n₂ near grazing incidence, any positive indices and the shortcuts'
-edges. Its lw_reff, lw_kappa, lw_reff_slow and lw_kappa_slow families (M2 part 2c-4) check its Liénard–Wiechert
-R_eff = |R| − R⋅β and κ = R_eff/|R|, rounded once (and κ < 10^-30 exactly, the slow ones always deciding it exactly),
-against `exact.py`'s `rn_lw` and `lw_below`: R along β as |β| → 1, a charge seen just off its axis, κ's knife edge
-bisected to the lattice points on either side of 10^-30, constructed ties along Pythagorean directions, the far/near
-edge n̂⋅β = ½, extreme scales and spreads; lw_nb and lw_nb_slow (M2 part 2d-1) each part of n̂ − β on those pairs and
-on Pythagorean directions with β at their own n̂'s doubles. Its par families (M2 part 2c-5) check its parallel combination
-1/Σ 1/xᵢ, rounded once with |Σ| < 10^-30 decided exactly, against Fractions: `par` through the three tiers, `par_x` from
-the expansion on, `par_slow` the exact path alone, and `par_rep*` the same over short patterns repeated up to 20,000
-times (`cr_driver.cyr` builds the list): knife edges at 10^-30, sums cancelling to 0 or to ulps, exact midpoints,
-±∞ among the values, any finite values. Its vx families (M2 part 2d-2c) check src/crmath_vx.cyr's √(x/y) and
-√(x·y) to 53 bits with an unbounded exponent (`vx_sqrt` its significand, `vx_sqrt_e` its exponent) and Γ between two
-lossless materials (`vx_gamma`) against Fractions and an integer square root, on positive doubles of any binade
-(subnormal, at both ends of the range): Γ against the unbounded chain alone, so the calls where `_bj_vx_gamma` takes
-Rust's quotient check its guard's claim too; η's an ulp or a few apart, and equal. Its ux families (`cr_verify.py . ux`, M1 part 5c-2) check src/crmath_ux.cyr's
-e^x, cosh, sinh, ln(s·2^E), (s·2^E)^y and sin and cos past DBL_MAX against `mpfr_ref.wide`: MPFR at 53 bits with its
-widest exponent range, where nothing over- or underflows. Each (s, e) result is read in two calls, its significand
+trig-free Fresnel cosine the same way: TIR exactly and cos θ_t = √(n₂² − n₁²(1 − c²))/n₂ rounded once, on the critical
+cosine ulp by ulp, n₁ within ulps of n₂ near grazing incidence, any positive indices and the shortcuts' edges. Its
+lw_reff, lw_kappa, lw_reff_slow and lw_kappa_slow families (M2 part 2c-4) check its Liénard–Wiechert R_eff = |R| − R⋅β
+and κ = R_eff/|R|, rounded once (and κ < 10^-30 exactly, the slow ones always deciding it exactly), against
+`exact.py`'s `rn_lw` and `lw_below`: R along β as |β| → 1, a charge seen just off its axis, κ's knife edge bisected to
+the lattice points on either side of 10^-30, constructed ties along Pythagorean directions, the far/near edge n̂⋅β =
+½, extreme scales and spreads; lw_nb and lw_nb_slow (M2 part 2d-1) each part of n̂ − β on those pairs and on
+Pythagorean directions with β at their own n̂'s doubles. Its par families (M2 part 2c-5) check its parallel
+combination 1/Σ 1/xᵢ, rounded once with |Σ| < 10^-30 decided exactly, against Fractions: `par` through the three
+tiers, `par_x` from the expansion on, `par_slow` the exact path alone, and `par_rep*` the same over short patterns
+repeated up to 20,000 times (`cr_driver.cyr` builds the list): knife edges at 10^-30, sums cancelling to 0 or to ulps,
+exact midpoints, ±∞ among the values, any finite values. Its vx families (M2 part 2d-2c) check src/crmath_vx.cyr's
+√(x/y) and √(x·y) to 53 bits with an unbounded exponent (`vx_sqrt` its significand, `vx_sqrt_e` its exponent) and Γ
+between two lossless materials (`vx_gamma`) against Fractions and an integer square root, on positive doubles of any
+binade (subnormal, at both ends of the range): Γ against the unbounded chain alone, so the calls where `_bj_vx_gamma`
+takes Rust's quotient check its guard's claim too; η's an ulp or a few apart, and equal. Its ux families
+(`cr_verify.py . ux`, M1 part 5c-2) check src/crmath_ux.cyr's e^x (`ux_exp`, and `ux_exp_w` to |x| = 2300, M2 part
+2d-3b), cosh, sinh, ln(s·2^E), (s·2^E)^y and sin and cos past DBL_MAX against `mpfr_ref.wide`: MPFR at 53 bits with
+its widest exponent range, where nothing over- or underflows. Each (s, e) result is read in two calls, its significand
 and its exponent.
 
 ## Format 1

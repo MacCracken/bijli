@@ -556,6 +556,29 @@ fn cyrius_tests(): i64 {
     var tz5, vz5 = bj_rlc_impedance(e200, mh, mu, 1000.0);
     var z5: f64 = vz5;
     assert(is_ok(tz5) == 1 && z5 == e200, "R = 1e200: |Z| = 1e200, R² past DBL_MAX run unbounded (Rust: ∞)");
+    # M2 part 2d-3b: the transients at their range edges.
+    var e300: f64 = _bj_from_bits(0x7E37E43C8800759C);                  # 1e300
+    var d1: f64 = bj_rc_discharging_voltage(e300, 1.0, 1.0, 720.0);
+    assert(_bj_bits(d1) == 0x3D4C99E21357581E, "1e300·e^-720 on e^x to 53 bits, not its subnormal double");
+    var d2: f64 = bj_rc_discharging_voltage(e300, 1.0, 1.0, 800.0);
+    assert(_bj_bits(d2) == 0x361571425C761700, "1e300·e^-800 = 3.7e-48 (Rust: 0, e^-800 underflowed)");
+    var c1: f64 = bj_rc_charging_voltage(e300, e200, e200, e300);
+    assert(_bj_bits(c1) == 0x6974E718D7D7625B, "RC = 1e400: V₀·t/RC = 1e200 on a 53-bit τ (Rust: 0, τ = ∞)");
+    var c2: f64 = bj_rc_charging_voltage(0.0, -1.0, 1.0, 1000.0);
+    assert(_bj_bits(c2) == 0x8000000000000000, "V₀ = 0 against e^1000: −0 (Rust: NaN, 0·∞)");
+    var e10: f64 = _bj_from_bits(0x4202A05F20000000);                   # 1e10
+    var em300: f64 = _bj_from_bits(0x01A56E1FC2F8F359);                 # 1e-300
+    var c3: f64 = bj_rc_charging_voltage(e300, 1.0, e10, em300);
+    assert(_bj_bits(c3) == 0x3DDB7CDFD9D7BDBB, "t/RC = 1e-310: V = 1e-10 exactly (Rust: off from the 13th digit)");
+    var tiny: f64 = _bj_from_bits(1);
+    var p1000: f64 = _bj_powi(2.0, 1000);
+    var tq1, vq1 = bj_rl_current_rise(tiny, p1000, p1000, -2000.0);
+    var q1: f64 = vq1;
+    assert(is_ok(tq1) == 1 && _bj_bits(q1) == 0xF2A4F7ACF675508C,
+      "V/R = 2^-2074 against e^2000: −1.8e244 (Rust: NaN, its V/R underflowed to 0)");
+    var tq2, vq2 = bj_rl_current_decay(em300, 1.0, 1.0, -750.0);
+    var q2: f64 = vq2;
+    assert(is_ok(tq2) == 1 && _bj_bits(q2) == 0x4545BFA5CD2C9F0B, "1e-300·e^750 = 5.3e25 (Rust: ∞)");
     return 0;
 }
 

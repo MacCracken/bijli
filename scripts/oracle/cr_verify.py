@@ -398,6 +398,9 @@ def ux_families(rng, count):
         else:
             x = rng.uniform(1500.001, 1e6) * sign()          # the stand-in
         pair("ux_exp", [x], (1.0, UX_HUGE if x > 0 else -UX_HUGE) if abs(x) > 1500 else split53(W("exp", x)))
+        # ux_exp_w (M2 part 2d-3b): the same with the stand-in beyond 2300, mostly between 1500 and 2300.
+        xw = rng.uniform(1500.0, 2300.0) * sign() if i % 3 else rng.choice([x, rng.uniform(2300.001, 1e5) * sign()])
+        pair("ux_exp_w", [xw], (1.0, UX_HUGE if xw > 0 else -UX_HUGE) if abs(xw) > 2300 else split53(W("exp", xw)))
         y = rng.uniform(710.000001, 1500.0) * sign() if i % 5 else rng.uniform(1500.001, 1e5) * sign()
         if abs(y) > 1500:
             ch, sh = (1.0, UX_HUGE), (math.copysign(1.0, y), UX_HUGE)
@@ -529,7 +532,7 @@ EXACT = ["mono"] + list(SHAPES) + ["sqrt_div", "wsqrt", "sqrt_mono", "sqrt_mono_
          "prod5_acc", "mono_wide", "mono_wide_acc", "below_prod", "below_quot", "below_sum", "cm", "cm_slow", "cos_t",
          "cos_t_slow", "lw_reff", "lw_reff_slow", "lw_kappa", "lw_kappa_slow", "par", "par_x", "par_slow",
          "par_rep", "par_rep_x", "par_rep_slow", "lw_nb", "lw_nb_slow", "vx_sqrt", "vx_sqrt_e", "vx_gamma"]
-UX = ["ux_exp", "ux_cosh", "ux_sinh", "ux_ln", "ux_pow", "ux_sin", "ux_cos"]
+UX = ["ux_exp", "ux_exp_w", "ux_cosh", "ux_sinh", "ux_ln", "ux_pow", "ux_sin", "ux_cos"]
 
 
 # ── the correctly rounded Lorentz factor (src/crmath_gamma.cyr, M2's range-edge Part, ADR 0002 row 30) ───────────────

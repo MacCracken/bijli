@@ -2385,3 +2385,68 @@ L = C = 2^-1022 to f₀ = 7.2·10^306 where Rust gave ∞. The audit's other cir
 - **Next (2d-3b)**: the transients' edges, a finding of this bite's review. τ = RC or L/R past DBL_MAX (Rust's t/τ is
   then 0), t/τ below 2^-1022, e^x or expm1 past either end under an amplitude that brings the product back, and
   V/R subnormal or past DBL_MAX.
+
+## 46. M2 part 2d-3b: the transients at their range edges (2026-11-13)
+
+A finding of §45's review: the four transients compute amp·w with x = −t/τ, w = −expm1(x) for a charge or rise and e^x
+for a discharge or decay, and each step can leave the range while the result stays representable.
+
+- **ADR 0002 row 18, amended** (the rule of §42):
+  - **The guard** (`_bj_circuit_plain`, a few tests on Rust's own values): τ finite (past the instant test it is above
+    10^-30), x in (2^-1022, DBL_MAX] or t = 0, w finite (for e^x, in (2^-1022, DBL_MAX]), and for the rise V/R in
+    (2^-1022, DBL_MAX] or V = 0. Each step is then its 53-bit value and the product rounds once in both chains. A
+    non-finite operand keeps Rust's chain.
+  - **The edge** (`_bj_circuit_edge`): τ = RC or L/R, x, V/R and w to 53 bits with an unbounded exponent, the product
+    rounded once.
+    - |x| below 2^-60: w = −x or 1.
+    - |x| from 4,096: a charge's w = 1 for x < 0. Otherwise the product overflows, or (a decay with x < 0) rounds to
+      zero, since the amplitude lies between 2^-2098 (V/R) and 2^1024 (an input).
+    - Between, x is a double: bijli's correctly rounded expm1 or exp where w is normal, else e^x by `_bj_ux_exp_lim`
+      (past 709, −expm1 and −e^x round alike).
+    - A zero amplitude gives IEEE's signed zero against w's sign (Rust's 0·∞ was NaN). t = 0 under a τ past DBL_MAX
+      gives the signed zero, or the amplitude.
+  - **`_bj_ux_exp_lim`** (src/crmath_ux.cyr): `_bj_ux_exp` with its stand-in beyond a chosen |x| (`_bj_ux_exp` keeps
+    1500). The transients use 2300, since V/R = 2^-2098 times e^x is representable up to x ≈ 2147. The reduction holds
+    there: k ≤ 3319 times the fixed-point ln 2 errs below 2^-352.
+  - **Rust's results at these edges**:
+    - RC = 10^400 gave V = 0 for 10^200 (τ = ∞, t/τ = 0).
+    - t/RC = 10^-310 left V a part in 10^13 off (a subnormal x).
+    - 10^300·e^-720 kept only the subnormal e^x's 36 bits.
+    - 10^300·e^-800 = 3.7·10^-48 underflowed to 0, and 10^-300·e^750 = 5.3·10^25 overflowed to ∞.
+    - V/R = 2^-2074 against e^2000 gave NaN (0·∞) for −1.8·10^244.
+    - V₀ = 0 against e^1000 gave NaN for −0.
+- **Rows** (`m_circuit.rs`'s `emit_transient_edges`, after every older row): 1,584 more, through all four transients.
+  The grid takes six amplitudes (±10^300, 1, 10^-300, 2^-1074, 0) and six (R, C or L) pairs:
+  - τ = RC past DBL_MAX with τ = L/R = 1 (10^200 twice, 2^1000 twice);
+  - τ = L/R and V/R past DBL_MAX (R = 10^-29);
+  - τ = 10^10;
+  - and 1.
+
+  It crosses them with eleven times, which put e^(−t/τ) subnormal, below it, past DBL_MAX and past e^1500, and t/τ
+  subnormal or past DBL_MAX. `validate.py`'s transcription agreed with every row.
+- **Mappings** (`validate.py`'s `circuit_plain` and `circuit_edge`: −expm1 and e^x from MPFR's widest range at every x,
+  not the port's shortcuts; past |x| = 10^5 the outcome is certain): `circuit.adr.tsv` maps 504 more rows.
+  - Row 18, 277: the rise 101, the charge 80, the decay 64, the discharge 32. 70 of them are older rows, mostly zero
+    amplitudes where Rust's 0·∞ was NaN; four of those had been row-29 rows.
+  - Row 29, 227 among the new (−expm1 alone moves them).
+
+  All pass on the harness's first run with the final model. Labels: row 18 where the edge moves the row, checked
+  before rows 17 and 29.
+- **Guard audit** (a sampling check in Python, not a gate): 102,528 transients on random operands of every binade,
+  98,678 of them on Rust's chain. The port's result equalled the pure unbounded chain on every one.
+- **cr_verify** (`ux_exp_w`, new): `_bj_ux_exp_lim` at 2300 on 200,000 arguments, two thirds between 1500 and 2300,
+  each read as its significand and exponent; with `ux_exp`, 800,000 calls equal to MPFR (widest range) on x86_64 and
+  aarch64.
+- **Tests**: tests/circuit.tcyr's `cyrius_range_edges` group gains 7 assertions, the cases above.
+- **Benchmarks** (an interleaved A/B against HEAD, three rounds each, load 0.8–1.0, each figure the lower of the
+  three): `circuit/rc_charging` 65 → 67 ns, `circuit/rl_current_rise` 65 → 72 ns. The other rows held, among them
+  `complex_exp_edge`, whose `_bj_ux_exp` now goes through `_bj_ux_exp_lim`.
+  - **A finding** (the pinned compiler): a function pays for each f64 local it declares, executed or not, about
+    0.6 ns a call. HEAD's rise with 16 dead f64 locals in an unreachable branch ran 65 → 75 ns; three dead tuple-binding
+    calls cost nothing.
+  - The first draft carried the guard and the edge inline and ran the rise at 85 ns. The four functions now keep only
+    the common test (three |·| locals against the bounds) and call one out-of-line slow path,
+    `_bj_circuit_slow`, which recomputes Rust's chain, applies the full test and then the edge.
+- **Result, every target** (x86_64 ELF, x86_64 PE, aarch64): **13 modules, 0 failing; 406,270 ok, 0 failed, 0
+  measured, 0 pending, 46,009 accepted (ADR 01: 8,998; ADR 0002: 37,011)** over 452,279 rows; **all 276 digests
+  equal**. Four changed: the four transients.

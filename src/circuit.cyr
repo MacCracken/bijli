@@ -12,9 +12,10 @@
 # Rust's π doubled), and a non-finite operand keeps Rust's chain. The parallel resistance and inductance and the series
 # capacitance are 1/Σ 1/xᵢ from the exact sum, rounded once, with its zero test exact (ADR 0002 row 17, M2 part 2c-5).
 # The series sums, the transients and the impedance (sums inside) are Rust's, except at a range edge: a series fold
-# past DBL_MAX and the impedance's chain run with an unbounded exponent (ADR 0002 row 18's rule, M2 part 2d-3a). A
-# fallible function returns a value-form Result, the error in the last-error record (src/error.cyr). The impedance here
-# is a magnitude, so no time convention (src/complex.cyr) is involved.
+# past DBL_MAX, the impedance's chain (M2 part 2d-3a) and the transients' τ, t/τ, V/R and e^x or expm1 (2d-3b) run with
+# an unbounded exponent (ADR 0002 row 18's rule). A fallible function returns a value-form Result, the error in the
+# last-error record (src/error.cyr). The impedance here is a magnitude, so no time convention (src/complex.cyr) is
+# involved.
 
 private
 
@@ -296,6 +297,154 @@ fn _bj_circuit_instant_rl(l: f64, r: f64, tau: f64): i64 {
     return band;
 }
 
+# ── the transients at a range edge (M2 part 2d-3b) ──────────────────────────────────────────────────────────────
+# amp·w for x = −t/τ, w = −expm1(x) (mode 0, a charge or rise) or e^x (mode 1, a discharge or decay), on the chain's
+# τ and amplitude given as 53-bit pairs, every step to 53 bits with an unbounded exponent and the product rounded once
+# (ADR 0002 row 18's rule). |x| below 2^-60: w = −x or 1. |x| from 4096: a charge's w = 1 for x < 0, and otherwise
+# the product overflows or (a decay's x < 0) rounds to zero, its amplitude being at least 2^-2098 (V/R) and at most
+# 2^1024 (an input).
+# Between, x is a double: bijli's correctly rounded expm1 or exp where w is normal, else e^x by _bj_ux_exp_lim (past
+# 709, −expm1 and −e^x round alike: e^x > 2^1023 lies nowhere near a rounding boundary). A zero amplitude gives IEEE's
+# signed zero against w's sign (Rust's 0·∞ was NaN), and t = 0 a signed zero (or the amplitude). τ and the
+# amplitude are finite.
+#must_use
+fn _bj_circuit_edge(as1: f64, ae, ts: f64, te, t: f64, mode): f64 {
+    var nt: f64 = -t;
+    var ns, ne = _bj_k_ux_from(nt);
+    var xs, xe = _bj_k_ux_div(ns, ne, ts, te);
+    if (xs == 0.0) {
+        # t = 0 (τ past DBL_MAX): x = ∓0, so w = −expm1(x) = ±0 exactly, or e^x = 1.
+        if (mode == 1) {
+            var r8: f64 = _bj_k_ux_mul_f64(as1, ae, 1.0, 0);
+            return r8;
+        }
+        var w0: f64 = -xs;
+        var z0: f64 = as1 * w0;
+        return z0;
+    }
+    var neg = 0;
+    if (xs < 0.0) { neg = 1; }
+    if (as1 == 0.0) {
+        var sg: f64 = 1.0;
+        if (mode == 0 && neg == 0) { sg = -1.0; }
+        var z: f64 = as1 * sg;
+        return z;
+    }
+    if (xe < 0 - 60) {
+        if (mode == 1) {
+            var r1: f64 = _bj_k_ux_mul_f64(as1, ae, 1.0, 0);
+            return r1;
+        }
+        var nx: f64 = -xs;
+        var r0: f64 = _bj_k_ux_mul_f64(as1, ae, nx, xe);
+        return r0;
+    }
+    if (xe > 11) {
+        if (mode == 0 && neg == 1) {
+            var r2: f64 = _bj_k_ux_mul_f64(as1, ae, 1.0, 0);
+            return r2;
+        }
+        var big = _BJ_UX_HUGE;
+        if (mode == 1 && neg == 1) { big = 0 - _BJ_UX_HUGE; }
+        var bs: f64 = 1.0;
+        if (mode == 0) { bs = -1.0; }
+        var r3: f64 = _bj_k_ux_mul_f64(as1, ae, bs, big);
+        return r3;
+    }
+    var p2: f64 = _bj_k_cr_pow2(xe);
+    var xf: f64 = xs * p2;                          # exact: |x| in [2^-60, 4096)
+    if (mode == 0) {
+        if (xf <= 709.0) {
+            var em: f64 = _bj_expm1(xf);
+            var w: f64 = -em;
+            var wss, wse = _bj_k_ux_from(w);
+            var r4: f64 = _bj_k_ux_mul_f64(as1, ae, wss, wse);
+            return r4;
+        }
+        var es, ee = _bj_ux_exp_lim(xf, 2300.0);
+        var nes: f64 = -es;
+        var r5: f64 = _bj_k_ux_mul_f64(as1, ae, nes, ee);
+        return r5;
+    }
+    if (xf >= -708.0 && xf <= 709.0) {
+        var ex: f64 = _bj_exp(xf);
+        var xxs, xxe = _bj_k_ux_from(ex);
+        var r6: f64 = _bj_k_ux_mul_f64(as1, ae, xxs, xxe);
+        return r6;
+    }
+    var fs, fe = _bj_ux_exp_lim(xf, 2300.0);
+    var r7: f64 = _bj_k_ux_mul_f64(as1, ae, fs, fe);
+    return r7;
+}
+
+# 1 when a transient's Rust chain is the unbounded one (row 18's rule): τ finite (past the instant test it is above
+# 10^-30), x = −t/τ in (2^-1022, DBL_MAX] or t = 0, and w (mode 0: −expm1(x), normal whenever x is) finite, or e^x
+# (mode 1) in (2^-1022, DBL_MAX]. Each is then its 53-bit value, and the product rounds once in both.
+#must_use
+fn _bj_circuit_plain(tau: f64, x: f64, w: f64, t: f64, mode): i64 {
+    var at: f64 = f64_abs(tau);
+    if (!(at <= _BJ_VX_HI)) { return 0; }
+    var ax: f64 = f64_abs(x);
+    if (!(ax > _BJ_VX_MN && ax <= _BJ_VX_HI) && t != 0.0) { return 0; }
+    var aw: f64 = f64_abs(w);
+    if (!(aw <= _BJ_VX_HI)) { return 0; }
+    if (mode == 1 && !(aw > _BJ_VX_MN)) { return 0; }
+    return 1;
+}
+
+# 1 when every operand of a transient is finite (a non-finite one keeps Rust's chain).
+#must_use
+fn _bj_circuit_fin4(a: f64, b: f64, c: f64, d: f64): i64 {
+    if (_bj_is_finite(a) == 1 && _bj_is_finite(b) == 1 && _bj_is_finite(c) == 1 && _bj_is_finite(d) == 1) { return 1; }
+    return 0;
+}
+
+# A transient whose common-case test failed (kind 0: RC charge, 1: RC discharge, 2: RL rise, 3: RL decay; a the
+# amplitude V₀, V or I₀, b and c the R and C, or R and L): Rust's chain again, the full test (_bj_circuit_plain, the
+# rise's V/R normal or V = 0), then for finite operands _bj_circuit_edge. Out of line: each f64 local a function holds
+# costs it time on every call (about 0.6 ns apiece, M2 part 2d-3b), so the fast functions keep only the common test.
+#must_use
+fn _bj_circuit_slow(a: f64, b: f64, c: f64, t: f64, kind): f64 {
+    var tau: f64 = b * c;
+    if (kind >= 2) { tau = c / b; }
+    var x: f64 = -t / tau;
+    var amp: f64 = a;
+    if (kind == 2) { amp = a / b; }
+    var mode = 0;
+    if (kind == 1 || kind == 3) { mode = 1; }
+    var w: f64 = 0.0;
+    if (mode == 0) {
+        var em1: f64 = _bj_expm1(x);
+        w = -em1;
+    } else {
+        w = _bj_exp(x);
+    }
+    var r: f64 = amp * w;
+    var amp_ok = 1;
+    if (kind == 2) {
+        var am: f64 = f64_abs(amp);
+        if (!(am > _BJ_VX_MN && am <= _BJ_VX_HI) && a != 0.0) { amp_ok = 0; }
+    }
+    if (amp_ok == 1 && _bj_circuit_plain(tau, x, w, t, mode) == 1) { return r; }
+    if (_bj_circuit_fin4(a, b, c, t) == 0) { return r; }
+    var as1, ae = _bj_k_ux_from(a);
+    var bs, be = _bj_k_ux_from(b);
+    var cs, ce = _bj_k_ux_from(c);
+    if (kind == 2) {
+        var qs, qe = _bj_k_ux_div(as1, ae, bs, be);
+        as1 = qs;
+        ae = qe;
+    }
+    var ts, te = _bj_k_ux_mul(bs, be, cs, ce);
+    if (kind >= 2) {
+        var ds, de = _bj_k_ux_div(cs, ce, bs, be);
+        ts = ds;
+        te = de;
+    }
+    var u: f64 = _bj_circuit_edge(as1, ae, ts, te, t, mode);
+    return u;
+}
+
 # τ = RC (s). Mirrors `circuit::rc_time_constant`.
 #must_use
 #pure
@@ -320,7 +469,11 @@ public fn bj_rc_charging_voltage(v0: f64, resistance: f64, capacitance: f64, t: 
     var em1: f64 = _bj_expm1(x);
     var w: f64 = -em1;
     var v: f64 = v0 * w;
-    return v;
+    var ax: f64 = f64_abs(x);
+    var aw: f64 = f64_abs(w);
+    if (a <= _BJ_VX_HI && ax > _BJ_VX_MN && ax <= _BJ_VX_HI && aw <= _BJ_VX_HI) { return v; }
+    var u: f64 = _bj_circuit_slow(v0, resistance, capacitance, t, 0);
+    return u;
 }
 
 # V(t) = V₀e^(−t/RC); 0 when the exact |RC| < 10^-30 (an instant discharge; row 17's rule). Mirrors
@@ -337,7 +490,10 @@ public fn bj_rc_discharging_voltage(v0: f64, resistance: f64, capacitance: f64, 
     var x: f64 = -t / tau;
     var e: f64 = _bj_exp(x);
     var v: f64 = v0 * e;
-    return v;
+    var ax: f64 = f64_abs(x);
+    if (a <= _BJ_VX_HI && ax > _BJ_VX_MN && ax <= _BJ_VX_HI && e > _BJ_VX_MN && e <= _BJ_VX_HI) { return v; }
+    var u: f64 = _bj_circuit_slow(v0, resistance, capacitance, t, 1);
+    return u;
 }
 
 # τ = L/R (s). DivisionByZero when |R| < 1e-30. Mirrors `circuit::rl_time_constant`.
@@ -368,7 +524,15 @@ public fn bj_rl_current_rise(voltage: f64, resistance: f64, inductance: f64, t: 
     var em1: f64 = _bj_expm1(x);
     var w: f64 = -em1;
     var i: f64 = i_max * w;
-    return Ok(i);
+    var am: f64 = f64_abs(i_max);
+    var ax: f64 = f64_abs(x);
+    var aw: f64 = f64_abs(w);
+    if (at <= _BJ_VX_HI && ax > _BJ_VX_MN && ax <= _BJ_VX_HI && aw <= _BJ_VX_HI && am > _BJ_VX_MN
+      && am <= _BJ_VX_HI) {
+        return Ok(i);
+    }
+    var u: f64 = _bj_circuit_slow(voltage, resistance, inductance, t, 2);
+    return Ok(u);
 }
 
 # I(t) = I₀e^(−tR/L); 0 when the exact |L/R| < 10^-30 (row 17's rule). DivisionByZero when |R| < 1e-30. Mirrors
@@ -387,7 +551,10 @@ public fn bj_rl_current_decay(i0: f64, resistance: f64, inductance: f64, t: f64)
     var x: f64 = -t / tau;
     var e: f64 = _bj_exp(x);
     var i: f64 = i0 * e;
-    return Ok(i);
+    var ax: f64 = f64_abs(x);
+    if (at <= _BJ_VX_HI && ax > _BJ_VX_MN && ax <= _BJ_VX_HI && e > _BJ_VX_MN && e <= _BJ_VX_HI) { return Ok(i); }
+    var u: f64 = _bj_circuit_slow(i0, resistance, inductance, t, 3);
+    return Ok(u);
 }
 
 # ── series RLC ───────────────────────────────────────────────────────────────────────────────────────────────────
