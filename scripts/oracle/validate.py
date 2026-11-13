@@ -2373,7 +2373,27 @@ def circuit_flip17(fn, v) -> bool:
     return not toks_same(circuit_rust(fn, v, MPFR_P, expm1=True), circuit_rust(fn, v, MPFR_P, expm1=True, exact=True))
 
 
+# Row 17 (M2 part 2c-5, the user's "exact tests, accurate values" decision of 2026-11-12): the inverse combinations
+# take 1/Σ 1/xᵢ from the exact sum (an ±∞ adds 0) rounded once, and refuse |Σ 1/xᵢ| < 10^-30 exactly; an empty slice,
+# a value refused by the element test and a NaN value keep Rust's result (src/crmath_edge.cyr's _bj_cr_parallel).
+CIRCUIT_INVERSE = ("circuit::resistance_parallel", "circuit::capacitance_series", "circuit::inductance_parallel")
+
+
+def circuit_inverse17(fn, xs):
+    """The port's result for an inverse combination row, or None where Rust's stands."""
+    if not xs or any(abs(x) < 1e-30 for x in xs) or any(math.isnan(x) for x in xs):
+        return None
+    what = fn.split("::")[1].split("_")[0]
+    s = sum(Fraction(1) / Fraction(x) for x in xs if math.isfinite(x))
+    if abs(s) < E30:
+        return dz_err(f"sum of inverse {what}s is zero")
+    return okf(rn_frac(1 / s))
+
+
 def circuit_port(fn, v):
+    if fn in CIRCUIT_INVERSE:
+        m17 = circuit_inverse17(fn, v)
+        return None if m17 is None else (17, m17)
     if fn in CIRCUIT_TRANSIENTS:
         model = circuit_rust(fn, v, MPFR_P, expm1=True, exact=True)
         if circuit_flip17(fn, v):

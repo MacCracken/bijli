@@ -6,8 +6,8 @@
 # part 5), bijli's √ of a monomial (src/crmath_mono.cyr), which cr_verify.py checks against exact values (Python's
 # Fraction and integer square root), and bijli's transcendentals with an unbounded exponent (src/crmath_ux.cyr, M1 part
 # 5c-2), checked against MPFR with its widest exponent range, and the exact Singularity threshold (src/crmath_cmp.cyr,
-# M1 part 5d-1), Clausius–Mossotti's ε_r, the trig-free Fresnel cosine and the Liénard–Wiechert R_eff and κ
-# (src/crmath_edge.cyr, M2 parts 2c-2 to 2c-4), against Fractions. Built from the math
+# M1 part 5d-1), Clausius–Mossotti's ε_r, the trig-free Fresnel cosine, the Liénard–Wiechert R_eff and κ and the
+# parallel combinations (src/crmath_edge.cyr, M2 parts 2c-2 to 2c-5), against Fractions. Built from the math
 # sources the bundle carries (src/constants.cyr … src/mathx.cyr, in the manifest's order and byte for byte what
 # dist/bijli.cyr holds): the bundle is `private` and these entry points are bijli-internal, so a consumer of
 # dist/bijli.cyr can't call them, but a file of internals only has no marker and can be included on its own.
@@ -17,6 +17,7 @@
 include "lib/syscalls.cyr"
 include "lib/string.cyr"
 include "lib/alloc.cyr"
+include "lib/freelist.cyr"
 include "lib/str.cyr"
 include "lib/fmt.cyr"
 include "lib/io.cyr"
@@ -131,6 +132,37 @@ fn _call(fp, fl, w): i64 {
         var lo: f64[1];
         if (_bj_cr_lw(w, w + 24, lmode, lslow, &lo) == 1) { return 0 - 1; }
         r = lo[0];
+    }
+    elif (_is(fp, fl, "par") == 1 || _is(fp, fl, "par_slow") == 1 || _is(fp, fl, "par_x") == 1) {
+        # par n x1 … xn: the parallel combination 1/Σ 1/xᵢ, correctly rounded (src/crmath_edge.cyr), the exact path
+        # alone for par_slow, the expansion then the exact path for par_x; −1 (all ones) when |Σ 1/xᵢ| < 10^-30, −2
+        # when its buffers are refused
+        var pn = load64(w);
+        var pslow = 0;
+        if (fl == 8) { pslow = 1; }
+        if (fl == 5) { pslow = 2; }
+        var po: f64[1];
+        var pz = _bj_cr_parallel(w + 8, pn, pslow, &po);
+        if (pz != 0) { return 0 - pz; }
+        r = po[0];
+    }
+    elif (_is(fp, fl, "par_rep") == 1 || _is(fp, fl, "par_rep_slow") == 1 || _is(fp, fl, "par_rep_x") == 1) {
+        # par_rep m k x1 … xk: the same over the k values repeated m times (k·m values, a heap buffer)
+        var rm = load64(w);
+        var rk = load64(w + 8);
+        var rslow = 0;
+        if (fl == 12) { rslow = 1; }
+        if (fl == 9) { rslow = 2; }
+        var rb = fl_calloc(8 * rm * rk);
+        if (rb == 0) { return 0 - 2; }
+        for (var ri = 0; ri < rm; ri = ri + 1) {
+            for (var rj = 0; rj < rk; rj = rj + 1) { store64(rb + 8 * (ri * rk + rj), load64(w + 16 + 8 * rj)); }
+        }
+        var ro: f64[1];
+        var rz = _bj_cr_parallel(rb, rm * rk, rslow, &ro);
+        fl_free(rb);
+        if (rz != 0) { return 0 - rz; }
+        r = ro[0];
     }
     elif (_is(fp, fl, "sinh") == 1) { r = _bj_sinh(x); }
     elif (_is(fp, fl, "cosh") == 1) { r = _bj_cosh(x); }

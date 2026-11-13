@@ -2066,3 +2066,71 @@ The third of 2c's boundary values (the user's answer of 2026-11-12: exact tests,
 - **Result, every target** (x86_64 ELF, x86_64 PE, aarch64): **13 modules, 0 failing; 400,394 ok, 0 failed, 0
   measured, 0 pending, 38,835 accepted (ADR 01: 8,998; ADR 0002: 29,837)** over 439,229 rows; **all 276 digests
   equal**. Four changed: both potentials, E and the fields.
+
+## 40. M2 part 2c-5: the inverse combinations, an exact zero test and an accurate 1/Σ(1/xᵢ) (2026-11-13)
+
+The last of 2c's boundary values (the user's answer of 2026-11-12: exact tests, accurate values). **2c is done.**
+
+- **ADR 0002 row 17, amended**: `resistance_parallel`, `capacitance_series` and `inductance_parallel` return
+  1/Σ 1/xᵢ from the exact sum, rounded once, and refuse |Σ 1/xᵢ| < 10^-30 exactly (DivisionByZero "sum of inverse
+  …s is zero"). Rust's element test (|xᵢ| < 1e-30, already exact on doubles) and its order stay; an ±∞ value adds
+  1/±∞ = ±0 exactly, as IEEE's; a NaN keeps Rust's chain. Rust's 1/(Σ RN(1/xᵢ)) rounds n + 1 times and cancels when
+  the signs differ:
+  - two values an ulp apart, 15.887776697373296 and −15.887776697373294, summed to 0 and were refused, where
+    1/S = −1.42e17;
+  - 1e-30, 3 and −1e-30: 1e30 absorbed the 1/3 and the sum came out 0 (refused), where the value is 3;
+  - two values near 2e30 gave 1e30, where Σ 1/x lies below 10^-30;
+  - over the new rows, per function, 28 refusals are now values, 7 values are now refused, 3 signs are corrected, and
+    189 values were more than 1,000 ulps off (the worst −1.34e8 for +7.06e8).
+- **`src/crmath_edge.cyr`**, three tiers, each with a rigorous bound E on |S − S_dd|, the first that decides
+  answering. Each 1/xᵢ is q + l, q = RN(1/xᵢ) and l = RN(r·q) from the exact remainder r = 1 − q·xᵢ (TwoProduct;
+  2.02u²|q|, exact when r = 0).
+  - T1, a compensated sum (TwoSums of the heads, their errors and the lows into one correction): E/|S| grows as
+    n²u²/2 for like-signed values.
+  - T2, when T1 cannot decide: the exact Shewchuk expansion of every q and l (at most 252 components), about 6u² of S
+    whatever n is, and exact when every reciprocal is (sums that cancel to 0 included).
+  - The verdict: |S| below or above 10^-30 by the bound against the doubles either side of it, then, with
+    E/|S| ≤ 2^-60, kimiya's quotient steps for 1/S with the rounding test's ε widened by E/|S|.
+  - T3, the exact path, for what neither decides (a sum near 10^-30, a cancellation below the bounds, a value within
+    about 2^-101 of a midpoint, ties among them): each finite xᵢ = ±Mᵢ·2^Eᵢ with Mᵢ odd, heapsorted by M, each group's
+    dyadic sum in integers, the groups folded into one fraction N/D on bignums, D the product of the distinct M
+    (so [3, −3, …] stays small). |S| < 10^-30 is X·5^30·2^30 < D·2^G; the candidate for 1/|S| = D·2^G/X comes from the
+    integers' top 62 bits, and the neighbouring midpoints decide, ties to even (they exist: M₁ and 2^28 − M₁ for odd
+    M₁ near 2^27 put 1/S on one). The buffers, sized from the group count, come from fl_calloc and go back by fl_free;
+    a refused allocation is the new Allocation error ("the exact … combination's buffers").
+  - **A finding, recorded**: T3 is quadratic in the number of distinct significands (D grows by 53 bits a group). Only
+    sums the bounds cannot decide reach it: knife edges, deep cancellation, or a value within about 2^-101 of a
+    midpoint, which T2 makes about a 2^-48 event for like-signed values at any n.
+- **Rows** (`m_circuit.rs`'s `emit_inverse_edges`, on a seed of its own, after every older row): 635 lists through the
+  three functions, 1,905 rows: one value near ±10^30 (±8 ulps), k equal values near k·10^30 (k = 2, 3, 7, 15), pairs
+  a and −(a + j ulps) whose 1/S crosses 10^-30 (a from 3e14 to 4e15), pairs cancelling to 1–4 ulps at scales 2^±60,
+  triples closing on a third value, 60 exact midpoints, 200 mixed-sign lists, 40 lists over ±DBL_MAX, ±1e-30, 1e300
+  and ±∞ (all ∞ among them), and lists of 64 and 200 values (positive, alternating ±3, and alternating with the last
+  an ulp off). `validate.py`'s transcription agreed with every row on its first run.
+- **The parity harness** read a slice into an `f64[8]`: the older rows held at most three values, and the new
+  64- and 200-value lists overran it (1,119 mapped rows failed and one went pending on the first run). It now takes
+  up to 512 and leaves a longer slice pending rather than read past its buffer.
+- **Mappings** (`validate.py`'s `circuit_inverse17`, Fraction): `circuit.adr.tsv` maps 1,293 more row-17 rows (431 a
+  function, 150 of them older rows), all passing once the harness was fixed.
+- **`cr_verify.py`'s par, par_x, par_slow** (the three tiers; from the expansion on; the exact path alone) over
+  lists of up to 15 values (physical, mixed signs, cancelling pairs and triples, knife edges at 10^-30, constructed
+  ties, extremes with ±∞, repeated values of alternating sign, any finite values), and **par_rep, par_rep_x,
+  par_rep_slow** over short patterns repeated up to 20,000 times (`cr_driver.cyr` builds the list on the heap):
+  **452,250 calls, all equal to the exact value on x86_64 and aarch64.** cr_driver now includes lib/freelist.cyr.
+- **Tests**: tests/circuit.tcyr's `cyrius_exact_thresholds (ADR 0002 row 17)` gains 9 assertions: the pair an ulp
+  apart (Rust: DivisionByZero), the two values near 2e30 (refused), ±1e-30 around 3, an ∞ resistance, fifty 3 and −3
+  (Σ = 0 exactly) and the same with the last an ulp off (Rust 11 % low), 64 values 1 + k/7 and the same alternating
+  in sign (Rust an ulp low), and a tie by all three tiers.
+- **Benchmarks** (an interleaved A/B against HEAD, three rounds each, load 2.9–5.5, another repository's benches
+  running beside it; each figure the lower of the three): `circuit/resistance_parallel` (five positive values, T1) 30
+  → 384 ns. Two probes: 64 values, 241 → 3,453 ns (54 ns a value against Rust's chain's 3.8); a pair cancelling to an
+  ulp ([3, −3 an ulp away from zero], decided only by T3), 25 → 3,554 ns. T1 costs about 38 f64 operations a value
+  (two TwoSums, a TwoProduct, two divisions' worth), at about 1.5 ns each on this compiler; T3's cost is its bignums
+  and buffers. A finding, recorded (Rust 7.09 ns); the other rows held within the noise.
+- **Result, every target** (x86_64 ELF, x86_64 PE, aarch64): **13 modules, 0 failing; 401,006 ok, 0 failed, 0
+  measured, 0 pending, 40,128 accepted (ADR 01: 8,998; ADR 0002: 31,130)** over 441,134 rows; **all 276 digests
+  equal**. Three changed: the three inverse combinations.
+- **The user's answers of 2026-11-13** (the end of 2c, the two findings held for it): `material_reflection_coefficient`
+  drops its |η₁ + η₂| < 1e-30 guard, since positive relative impedances never sum to zero and Γ depends only on their
+  ratio (row 24's rule, as for Schlick's R₀); and `lienard_wiechert_e`'s n̂ − β is rounded once from the exact parts,
+  as κ is (§39's finding). Both open 2d.

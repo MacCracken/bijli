@@ -3,8 +3,8 @@
 #
 # Every group named test_* is rust-old/src/circuit.rs's test of that name, ported assertion for assertion (the ledger
 # matches them by name): all 51. The cyrius_* groups check what the port adds: the recorded errors and their Display
-# texts, ADR 0002 row 26, and the series sums' fold from −0.0. tests/golden/circuit.tsv pins every function over its
-# grid against Rust besides.
+# texts, ADR 0002 rows 13, 17, 26 and 29, and the series sums' fold from −0.0. tests/golden/circuit.tsv pins every
+# function over its grid against Rust besides.
 
 include "tests/lib.cyr"
 
@@ -461,6 +461,67 @@ fn cyrius_tests(): i64 {
     var tk17, vk17 = bj_rl_current_decay(5.0, krl, kl, kt);
     var ik17: f64 = vk17;
     assert(is_ok(tk17) == 1 && ik17 == 0.0, "L/R below 10^-30 exactly, rounded to 1e-30: instant (Rust: 4.52)");
+    # M2 part 2c-5: the inverse combinations from the exact Σ 1/xᵢ, rounded once, |Σ| < 10^-30 exact.
+    var pa: f64[100];
+    pa[0] = _bj_from_bits(0x402FC68AAAD2BD07);
+    pa[1] = _bj_from_bits(0xC02FC68AAAD2BD06);
+    var tp1, vp1 = bj_resistance_parallel(&pa, 2);
+    assert(is_ok(tp1) == 1 && _bj_bits(vp1) == 0xC37F8D7C81532309,
+      "a pair an ulp apart: −1.42e17 from the exact sum (Rust: DivisionByZero, its sum 0)");
+    pa[0] = _bj_from_bits(0x46393E5939A08CE9);
+    pa[1] = _bj_from_bits(0x46393E5939A08CEB);
+    var tp2, vp2 = bj_inductance_parallel(&pa, 2);
+    assert(is_err_result(tp2) == 1 && vp2 == BJ_ERR_DIVISION_BY_ZERO,
+      "two values near 2e30: Σ 1/L below 10^-30 exactly, refused (Rust: 1e30)");
+    pa[0] = 0.000000000000000000000000000001;
+    pa[1] = 3.0;
+    pa[2] = -0.000000000000000000000000000001;
+    var tp3, vp3 = bj_capacitance_series(&pa, 3);
+    var cp3: f64 = vp3;
+    assert(is_ok(tp3) == 1 && cp3 == 3.0, "±1e-30 cancel exactly around 3: 3 (Rust: DivisionByZero, 1/3 absorbed)");
+    pa[0] = 10.0;
+    pa[1] = _bj_from_bits(0x7FF0000000000000);
+    var tp4, vp4 = bj_resistance_parallel(&pa, 2);
+    var rp4: f64 = vp4;
+    assert(is_ok(tp4) == 1 && rp4 == 10.0, "an ∞ resistance adds nothing: 10");
+    for (var k = 0; k < 100; k = k + 1) {
+        var av: f64 = 3.0;
+        if ((k & 1) == 1) { av = -3.0; }
+        pa[k] = av;
+    }
+    var tp5, vp5 = bj_resistance_parallel(&pa, 100);
+    assert(is_err_result(tp5) == 1 && vp5 == BJ_ERR_DIVISION_BY_ZERO, "3, −3, … fifty times: Σ = 0 exactly, refused");
+    pa[99] = _bj_from_bits(0xC008000000000001);                           # −3 an ulp away from zero
+    var tp6, vp6 = bj_resistance_parallel(&pa, 100);
+    assert(is_ok(tp6) == 1 && _bj_bits(vp6) == 0x4352000000000001,
+      "and the last an ulp off: 2.03e16 (Rust: 1.80e16, 11 % low)");
+    for (var k2 = 0; k2 < 64; k2 = k2 + 1) {
+        var fk: f64 = f64_from(k2);
+        var vk: f64 = 1.0 + fk / 7.0;
+        pa[k2] = vk;
+    }
+    var tp7, vp7 = bj_resistance_parallel(&pa, 64);
+    assert(is_ok(tp7) == 1 && _bj_bits(vp7) == 0x3FAEB219CDF2FFA4,
+      "64 values 1 + k/7: rounded once (Rust: an ulp low)");
+    for (var k3 = 1; k3 < 64; k3 = k3 + 2) {
+        var nk: f64 = pa[k3];
+        pa[k3] = -nk;
+    }
+    var tp8, vp8 = bj_resistance_parallel(&pa, 64);
+    assert(is_ok(tp8) == 1 && _bj_bits(vp8) == 0x4000786A353C0DAB, "and alternating in sign (Rust: an ulp low)");
+    var tr: f64[2];
+    tr[0] = 134242419.0;                                                  # M₁ = 2^27 + 24,691, odd
+    tr[1] = 134193037.0;                                                  # 2^28 − M₁
+    var to: f64[1];
+    var tz1 = _bj_cr_parallel(&tr, 2, 0, &to);
+    var tv1: f64 = to[0];
+    var tz2 = _bj_cr_parallel(&tr, 2, 1, &to);
+    var tv2: f64 = to[0];
+    var tz3 = _bj_cr_parallel(&tr, 2, 2, &to);
+    var tv3: f64 = to[0];
+    var want: f64 = _bj_from_bits(0x418FFFFFEDD4C62C);
+    assert(tz1 == 0 && tz2 == 0 && tz3 == 0 && tv1 == want && tv2 == want && tv3 == want,
+      "1/S exactly on a midpoint (M₁ and 2^28 − M₁): ties to even, by all three tiers");
     return 0;
 }
 

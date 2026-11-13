@@ -271,6 +271,15 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
   decided exactly, for both potentials, E and the fields. The cost: `relativity/lienard_wiechert_e` 327 → 582 ns,
   `relativity/lienard_wiechert_scalar_potential` 80 → 292 ns, and near the cone (n̂⋅β > ½) E 575 → 1,402 ns
   (`port-parity.md` §39).
+- **circuit** (ADR 0002 row 17 amended, M2 part 2c-5, the user's answer of 2026-11-12): `resistance_parallel`,
+  `capacitance_series` and `inductance_parallel` computed 1/(Σ RN(1/xᵢ)), rounded n + 1 times, and tested the rounded
+  sum, so mixed signs cancelled: two values an ulp apart were refused where 1/S = −1.42e17, 1e-30, 3 and −1e-30 were
+  refused (the 1/3 absorbed) where the value is 3, two values near 2e30 gave 1e30 where Σ 1/x lies below 10^-30, and
+  values came out thousands of ulps off or with the wrong sign. They now return 1/Σ 1/xᵢ correctly rounded from the
+  exact sum and refuse |Σ 1/xᵢ| < 10^-30 exactly (`src/crmath_edge.cyr`: a compensated sum, then the exact expansion,
+  then the exact fraction on bignums; `cr_verify.py`'s par families); an ∞ value adds 0. The exact path allocates, so
+  it can now return Allocation. The cost: `circuit/resistance_parallel` 30 → 384 ns, 64 values 241 → 3,453 ns, and a
+  pair cancelling to an ulp 25 → 3,554 ns (`port-parity.md` §40).
 - **relativity** (ADR 0002 row 13 amended, M2 part 2b-4): `retarded_scalar_potential`, `retarded_vector_potential`,
   `larmor_power` and `EmTensor::dual` rounded two to five times, and overflowed where the value is representable
   (Larmor with q² past DBL_MAX, the dual of B past DBL_MAX/c: ∞ each); they are now correctly rounded for finite

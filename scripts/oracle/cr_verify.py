@@ -527,7 +527,8 @@ def run(target, lines):
 EXACT = ["mono"] + list(SHAPES) + ["sqrt_div", "wsqrt", "sqrt_mono", "sqrt_mono_acc", "ux_mul", "ux_div", "ux_add",
          "ux_sub", "ux_sqrt", "r2_below", "gamma", "gamma_slow", "gamma2", "gamma2_slow", "gamma_ok", "prod5",
          "prod5_acc", "mono_wide", "mono_wide_acc", "below_prod", "below_quot", "below_sum", "cm", "cm_slow", "cos_t",
-         "cos_t_slow", "lw_reff", "lw_reff_slow", "lw_kappa", "lw_kappa_slow"]
+         "cos_t_slow", "lw_reff", "lw_reff_slow", "lw_kappa", "lw_kappa_slow", "par", "par_x", "par_slow",
+         "par_rep", "par_rep_x", "par_rep_slow"]
 UX = ["ux_exp", "ux_cosh", "ux_sinh", "ux_ln", "ux_pow", "ux_sin", "ux_cos"]
 
 
@@ -1012,6 +1013,119 @@ def lw_families(rng, count):
     return out
 
 
+# ── the parallel combinations (src/crmath_edge.cyr, M2 part 2c-5, ADR 0002 row 17) ───────────────────────────────────
+PAR_BELOW = (1 << 64) - 1                   # |Σ 1/xᵢ| < 10^-30
+E30F = Fraction(1, 10 ** 30)
+
+
+def par_ref(xs, rep=1):
+    """RN(1/Σ 1/xᵢ) exactly (an ±∞ adds 0), the values repeated rep times, or the marker when |Σ| < 10^-30."""
+    s = rep * sum(Fraction(1) / Fraction(x) for x in xs if math.isfinite(x))
+    if abs(s) < E30F:
+        return PAR_BELOW
+    return f2b(rn_frac(1 / s))
+
+
+def par_big(rng):
+    """A finite double with |x| ≥ 10^-30 (the callers' cut), any binade above it, either sign."""
+    while True:
+        x = any_finite(rng)
+        if math.isfinite(x) and abs(x) >= 1e-30:
+            return x
+
+
+def par_cases(rng, count):
+    """Value lists (n ≤ 15): physical positive values; mixed signs; pairs and triples that cancel to ulps; |Σ 1/x|
+    within ulps of 10^-30 (one value near 10^30, k equal values near k·10^30, a pair a, −(a + j ulps) near 3e14); exact
+    midpoints of 1/S (M₁ and 2^28 − M₁ for odd M₁ near 2^27, at scales 2^±s, either sign order); extremes (±DBL_MAX,
+    1e-30 itself, ±∞ among them, all ∞); repeated values with alternating signs; any finite values."""
+    out = []
+    i = 0
+    while len(out) < count:
+        kind = i % 8
+        i += 1
+        xs = None
+        if kind == 0:
+            xs = [rng.uniform(0.1, 1000.0) * 10.0 ** rng.randint(-6, 9) for _ in range(rng.randint(1, 15))]
+        elif kind == 1:
+            xs = [rng.uniform(0.1, 10.0) * rng.choice([1.0, -1.0]) for _ in range(rng.randint(2, 15))]
+        elif kind == 2:
+            a = rng.uniform(1.0, 2.0) * 2.0 ** rng.randint(-60, 60)
+            c = rng.choice([0, 1, 2])
+            if c == 0:
+                xs = [a, -cm_ulps(a, rng.randint(-4, 4))]
+            elif c == 1:
+                b = rng.uniform(1.0, 2.0) * 2.0 ** rng.randint(-60, 60)
+                t = -1.0 / (1.0 / a + 1.0 / b)
+                xs = [a, b, cm_ulps(abs(t), rng.randint(-4, 4)) * -1.0]
+            else:
+                xs = [a, -a, rng.uniform(1e29, 1e31)]
+        elif kind == 3:
+            c = rng.choice([0, 1, 2])
+            if c == 0:
+                xs = [cm_ulps(1e30, rng.randint(-8, 8)) * rng.choice([1.0, -1.0])]
+            elif c == 1:
+                k = rng.randint(2, 15)
+                xs = [cm_ulps(k * 1e30, rng.randint(-8, 8))] * k
+            else:
+                a = rng.uniform(1.0, 9.0) * 1e14
+                xs = [a, -cm_ulps(a, rng.randint(1, 40))]
+        elif kind == 4:
+            m1 = 2 * rng.randint(2 ** 25 + 2 ** 24, 2 ** 26 + 2 ** 25 - 1) + 1
+            sc = 2.0 ** rng.randint(-60, 60)
+            xs = [m1 * sc, (2 ** 28 - m1) * sc]
+            if rng.random() < 0.5:
+                xs = xs[::-1]
+            if rng.random() < 0.3:
+                xs = [-x for x in xs]
+        elif kind == 5:
+            pool = [1.7976931348623157e308, -1.7976931348623157e308, 1e-30, -1e-30, 1e300, math.inf, -math.inf,
+                    1.0, 3.0, -3.0]
+            xs = [rng.choice(pool) for _ in range(rng.randint(1, 6))]
+            if rng.random() < 0.1:
+                xs = [math.inf] * rng.randint(1, 4)
+        elif kind == 6:
+            v = rng.choice([3.0, 0.1, 7.0, 1e20, 5e-30])
+            xs = [v if j % 2 == 0 else -v for j in range(rng.randint(2, 15))]
+        else:
+            xs = [par_big(rng) for _ in range(rng.randint(1, 15))]
+        if xs and all(math.isinf(x) or abs(x) >= 1e-30 for x in xs):
+            out.append(xs)
+    return out
+
+
+def par_families(rng, count):
+    """par (the three tiers), par_x (the expansion, then the exact path) and par_slow (the exact path alone) on
+    par_cases' lists, and par_rep / par_rep_x / par_rep_slow on short patterns repeated up to 20,000 times (sums that
+    cancel to 0 or to ulps, knife edges at 10^-30)."""
+    out = []
+    for xs in par_cases(rng, count):
+        want = par_ref(xs)
+        ws = [len(xs)] + xs
+        out.append(("par", ws, want))
+        out.append(("par_x", ws, want))
+        out.append(("par_slow", ws, want))
+    for _ in range(max(1, count // 200)):
+        m = rng.choice([2, 10, 1000, 20000])
+        c = rng.randrange(5)
+        if c == 0:
+            pat = [3.0, -3.0]
+        elif c == 1:
+            pat = [10.0, 20.0, 30.0, 40.0, 50.0]
+        elif c == 2:
+            pat = [3.0, -cm_ulps(3.0, rng.randint(1, 3))]
+        elif c == 3:
+            pat = [cm_ulps(m * 1e30, rng.randint(-4, 4))]
+        else:
+            pat = [rng.uniform(1.0, 2.0) * rng.choice([1.0, -1.0]) for _ in range(rng.randint(1, 6))]
+        want = par_ref(pat, m)
+        ws = [m, len(pat)] + pat
+        out.append(("par_rep", ws, want))
+        out.append(("par_rep_x", ws, want))
+        out.append(("par_rep_slow", ws, want))
+    return out
+
+
 def main() -> int:
     (root / "build").mkdir(exist_ok=True)
     names = wanted or list(FUNCS) + ["exact", "ux"]
@@ -1045,6 +1159,9 @@ def main() -> int:
         lrng = random.Random(0x1E_4A_2C4)
         calls += [(f, ref, ws) for f, ws, ref in lw_families(lrng, max(1, n // 10))
                   if "exact" in names or f in names]
+        prng2 = random.Random(0x9A_2C5)
+        calls += [(f, ref, ws) for f, ws, ref in par_families(prng2, max(1, n // 10))
+                  if "exact" in names or f in names]
     if "ux" in names or any(x in UX for x in names):
         urng = random.Random(0x5C_2E_D6E)
         fams = ux_families(urng, max(1, n // 20))
@@ -1062,7 +1179,8 @@ def main() -> int:
     for i, (name, want, a) in enumerate(calls):
         for t in targets:
             g = results[t][i]
-            any_nan = name not in UX and not name.startswith(("gamma", "cm", "cos_t", "lw_"))  # "invalid" is a word
+            # "invalid" is a word for these
+            any_nan = name not in UX and not name.startswith(("gamma", "cm", "cos_t", "lw_", "par"))
             ok = g == want or (any_nan and b2f(g) != b2f(g) and b2f(want) != b2f(want))
             per.setdefault((name, t), [0, 0])[0 if ok else 1] += 1
             if not ok:

@@ -50,7 +50,7 @@ port's harness reads the same files. This README records what is specific to bij
 | Module | Milestone | Golden rows | Golden emitter | Generated Cyrius |
 |---|---|---|---|---|
 | `charge` | M1 (parts 3d, 5d-1 to 5d-3) | 12,769 | `src/m_charge.rs` (field.rs's grids) | — |
-| `circuit` | M2 (parts 1c, 2c-1) | 64,586 (+ 1 corrected) | `src/m_circuit.rs` | — |
+| `circuit` | M2 (parts 1c, 2c-1, 2c-5) | 66,491 (+ 1 corrected) | `src/m_circuit.rs` | — |
 | `complex` | M1 (+ 5c-2's edge grid) | 31,677 (+ 8 corrected) | `src/m_complex.rs` | — |
 | `constants` | M0 | 12 | `src/m_constants.rs` | `src/constants.cyr` (`src/t_constants.rs`, with the completeness proof) |
 | `error` | M1 | 1,635 | `src/m_error.rs` | — |
@@ -95,7 +95,11 @@ edges. Its lw_reff, lw_kappa, lw_reff_slow and lw_kappa_slow families (M2 part 2
 R_eff = |R| − R⋅β and κ = R_eff/|R|, rounded once (and κ < 10^-30 exactly, the slow ones always deciding it exactly),
 against `exact.py`'s `rn_lw` and `lw_below`: R along β as |β| → 1, a charge seen just off its axis, κ's knife edge
 bisected to the lattice points on either side of 10^-30, constructed ties along Pythagorean directions, the far/near
-edge n̂⋅β = ½, extreme scales and spreads. Its ux families (`cr_verify.py . ux`, M1 part 5c-2) check src/crmath_ux.cyr's
+edge n̂⋅β = ½, extreme scales and spreads. Its par families (M2 part 2c-5) check its parallel combination
+1/Σ 1/xᵢ, rounded once with |Σ| < 10^-30 decided exactly, against Fractions: `par` through the three tiers, `par_x` from
+the expansion on, `par_slow` the exact path alone, and `par_rep*` the same over short patterns repeated up to 20,000
+times (`cr_driver.cyr` builds the list): knife edges at 10^-30, sums cancelling to 0 or to ulps, exact midpoints,
+±∞ among the values, any finite values. Its ux families (`cr_verify.py . ux`, M1 part 5c-2) check src/crmath_ux.cyr's
 e^x, cosh, sinh, ln(s·2^E), (s·2^E)^y and sin and cos past DBL_MAX against `mpfr_ref.wide`: MPFR at 53 bits with its
 widest exponent range, where nothing over- or underflows. Each (s, e) result is read in two calls, its significand
 and its exponent.

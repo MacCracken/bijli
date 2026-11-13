@@ -53,7 +53,7 @@
 | `circuit/rl_current_rise` | 2.03 ns | `circuit/rl_current_rise` | 71.00 ns | 34.9× |
 | `circuit/rlc_impedance` | 1.53 ns | `circuit/rlc_impedance` | 17.00 ns | 11.1× |
 | `circuit/resonant_frequency` | 1.31 ns | `circuit/resonant_frequency` | 217.00 ns | 165.6× |
-| `circuit/resistance_parallel` | 7.09 ns | `circuit/resistance_parallel` | 34.00 ns | 4.8× |
+| `circuit/resistance_parallel` | 7.09 ns | `circuit/resistance_parallel` | 384.00 ns | 54.2× |
 | `material/polarization` | 1.00 ns | `material/polarization` | 25.00 ns | 25.1× |
 | `material/displacement_field` | 0.99 ns | `material/displacement_field` | 231.00 ns | 233.3× |
 | `material/h_field_from_b` | 5.51 ns | `material/h_field_from_b` | 256.00 ns | 46.5× |

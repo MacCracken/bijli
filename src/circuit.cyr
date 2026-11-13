@@ -9,10 +9,11 @@
 # −expm1(−t/τ), with no cancellation (row 29, the user's answer of 2026-11-12). The products, quotients and roots of
 # inputs and constants are rounded once (ADR 0002 row 13, M2 part 2b-3): ρL/A, εA/d, the two energies, μn²Al (bijli's
 # exact product of five doubles, src/crmath_mono.cyr), the resonances, Q and ζ; a constant enters as its double (2π as
-# Rust's π doubled), and a non-finite operand keeps Rust's chain. The combinations, the transients and the impedance
-# (sums inside) are Rust's. A fallible function
-# returns a value-form Result, the error in the last-error record (src/error.cyr). The impedance here is a magnitude,
-# so no time convention (src/complex.cyr) is involved.
+# Rust's π doubled), and a non-finite operand keeps Rust's chain. The parallel resistance and inductance and the series
+# capacitance are 1/Σ 1/xᵢ from the exact sum, rounded once, with its zero test exact (ADR 0002 row 17, M2 part 2c-5).
+# The series sums, the transients and the impedance (sums inside) are Rust's. A fallible function returns a
+# value-form Result, the error in the last-error record (src/error.cyr). The impedance here is a magnitude, so no time
+# convention (src/complex.cyr) is involved.
 
 private
 
@@ -92,10 +93,13 @@ fn _bj_circuit_sum(xs: *f64, n, what): Result {
 }
 
 # 1/(1/x₁ + 1/x₂ + …): InvalidParameter for n = 0; DivisionByZero "<what> cannot be zero in <kind> combination" for an
-# |xᵢ| < 1e-30, and "sum of inverse <what>s is zero" when |Σ 1/xᵢ| < 1e-30.
+# |xᵢ| < 1e-30 (the first, in order, as Rust's loop), and "sum of inverse <what>s is zero" when |Σ 1/xᵢ| < 10^-30
+# exactly. The combination is 1/Σ 1/xᵢ rounded once, from the exact sum (src/crmath_edge.cyr; ADR 0002 row 17, M2
+# part 2c-5): Rust's rounded sum cancelled when the signs differ. A NaN value keeps Rust's chain (its NaN); Allocation
+# when the exact path's buffers are refused.
 fn _bj_circuit_inverse(xs: *f64, n, what, kind): Result {
     if (n <= 0) { return Err(_bj_circuit_empty(what)); }
-    var s: f64 = 0.0;
+    var nan = 0;
     for (var i = 0; i < n; i = i + 1) {
         var x: f64 = xs[i];
         var a: f64 = f64_abs(x);
@@ -107,19 +111,36 @@ fn _bj_circuit_inverse(xs: *f64, n, what, kind): Result {
             _bj_tx_cstr(t, " combination");
             return Err(BJ_ERR_DIVISION_BY_ZERO);
         }
-        var inv: f64 = 1.0 / x;
-        s = s + inv;
+        if (x != x) { nan = 1; }
     }
-    var sa: f64 = f64_abs(s);
-    if (sa < 0.000000000000000000000000000001) {
+    if (nan == 1) {
+        var s: f64 = 0.0;
+        for (var i2 = 0; i2 < n; i2 = i2 + 1) {
+            var x2: f64 = xs[i2];
+            var inv: f64 = 1.0 / x2;
+            s = s + inv;
+        }
+        var r: f64 = 1.0 / s;
+        return Ok(r);
+    }
+    var o: f64[1];
+    var z = _bj_cr_parallel(xs, n, 0, &o);
+    if (z == 1) {
         var u = _bj_err_reason(BJ_ERR_DIVISION_BY_ZERO);
         _bj_tx_cstr(u, "sum of inverse ");
         _bj_tx_cstr(u, what);
         _bj_tx_cstr(u, "s is zero");
         return Err(BJ_ERR_DIVISION_BY_ZERO);
     }
-    var r: f64 = 1.0 / s;
-    return Ok(r);
+    if (z == 2) {
+        var w = _bj_err_reason(BJ_ERR_ALLOCATION);
+        _bj_tx_cstr(w, "the exact ");
+        _bj_tx_cstr(w, kind);
+        _bj_tx_cstr(w, " combination's buffers");
+        return Err(BJ_ERR_ALLOCATION);
+    }
+    var rv: f64 = o[0];
+    return Ok(rv);
 }
 
 # R = R₁ + R₂ + … over the n values at resistances. InvalidParameter for n = 0. Mirrors `circuit::resistance_series`.

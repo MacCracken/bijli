@@ -1314,9 +1314,11 @@ public fn _par_material(fp, fl): i64 {
     return 0;
 }
 
-# `circuit::*` rows: src/circuit.cyr (M2 part 1c). A combination's slice is `v:n` then its values.
+# `circuit::*` rows: src/circuit.cyr (M2 part 1c). A combination's slice is `v:n` then its values, up to 512 of them
+# (a longer one is left pending rather than read past the buffer).
 fn _par_circuit_slice(fp, fl): i64 {
-    var xs: f64[8];
+    var xs: f64[512];
+    if (_par_in(0) > 512) { return 0; }
     var n = _par_in_f64s(0, &xs);
     if (_par_eq(fp, fl, "circuit::resistance_series") == 1) {
         var t1, v1 = bj_resistance_series(&xs, n);

@@ -8,7 +8,8 @@
 //! The grids: circuit values (the specials, the 1e-30 threshold and 1 with their neighbours, SI-scale values, binades,
 //! seeded) crossed in pairs; a short list crossed in triples and an eight-value list in quadruples; slices of length
 //! 0 to 3, with the parallel combinations' 1/Σ(1/x) cut at 1e-30 approached ulp by ulp and the transients' τ = RC and
-//! τ = L/R cut likewise; seeded physical circuits.
+//! τ = L/R cut likewise; seeded physical circuits; and (M2 part 2c-5) the inverse combinations at Σ 1/x = 0 and at
+//! the 1e-30 cut (`emit_inverse_edges`).
 
 use crate::grids::{Edge2, Rng, knife_band2, knife_edge2, pow2, specials};
 use crate::m_field::res_f;
@@ -230,5 +231,92 @@ pub fn emit() -> Module {
         let xs: Vec<f64> = (0..n).map(|_| rng.log_uniform(-12.0, 6.0)).collect();
         slice_row(&mut m, &xs);
     }
+    emit_inverse_edges(&mut m);
     m
+}
+
+/// One list through the three inverse combinations (1/Σ 1/x).
+fn inverse_rows(m: &mut Module, xs: &[f64]) {
+    let ins = sl(xs);
+    let x = black_box(xs);
+    m.row("circuit::resistance_parallel", Class::A, &ins, &res_f(resistance_parallel(x)));
+    m.row("circuit::capacitance_series", Class::A, &ins, &res_f(capacitance_series(x)));
+    m.row("circuit::inductance_parallel", Class::A, &ins, &res_f(inductance_parallel(x)));
+}
+
+/// `x` moved `k` ulps away from zero (toward it for k < 0), either sign.
+fn ulps_signed(x: f64, k: i64) -> f64 {
+    if x < 0.0 { -ulps(-x, k) } else { ulps(x, k) }
+}
+
+/// M2 part 2c-5 (bijli ADR 0002 row 17): the inverse combinations at 1/Σ(1/x)'s own pole, Σ 1/x = 0, and at its cut.
+/// |Σ 1/x| within ulps of 10^-30 (one value near ±10^30, k equal values near k·10^30, a pair a, −(a + j ulps) whose
+/// difference lands on 10^-30·a²); sums that cancel (pairs ulps apart, triples closing on a third value); exact
+/// midpoints of 1/S (M₁·2^s and (2^28 − M₁)·2^s for odd M₁ near 2^27); mixed signs; ±DBL_MAX, 1e-30 and ±∞ among
+/// them; long lists. Its own seed, after every older row.
+#[allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
+fn emit_inverse_edges(m: &mut Module) {
+    let mut rng = Rng::new(0x2C5_1A7E);
+    for k in -8..=8 {
+        inverse_rows(m, &[ulps(1e30, k)]);
+        inverse_rows(m, &[-ulps(1e30, k)]);
+    }
+    for c in [2.0, 3.0, 7.0, 15.0] {
+        for j in -6..=6 {
+            let v = ulps(c * 1e30, j);
+            inverse_rows(m, &vec![v; c as usize]);
+        }
+    }
+    for a in [3e14, 7e14, 1.5e15, 4e15] {
+        let u = ulps(a, 1) - a;
+        let j0 = (1e-30 * a * a / u).round() as i64;
+        for j in (j0 - 6).max(1)..=j0 + 6 {
+            inverse_rows(m, &[a, -ulps(a, j)]);
+        }
+    }
+    for i in 0..100 {
+        let a = rng.uniform(1.0, 2.0) * pow2(rng.int(-60, 60) as i32);
+        let k = [1, 2, 3, 4, -1, -2][i % 6];
+        inverse_rows(m, &[a, -ulps(a, k)]);
+    }
+    for i in 0..100 {
+        let a = rng.uniform(1.0, 2.0) * pow2(rng.int(-40, 40) as i32);
+        let b = rng.uniform(1.0, 2.0) * pow2(rng.int(-40, 40) as i32);
+        let t = -1.0 / (1.0 / a + 1.0 / b);
+        inverse_rows(m, &[a, b, ulps_signed(t, [0, 1, -1, 2, -2][i % 5])]);
+    }
+    for i in 0..60 {
+        let m1 = 2 * rng.int((1 << 25) + (1 << 24), (1 << 26) + (1 << 25) - 1) + 1;
+        let sc = pow2(rng.int(-60, 60) as i32);
+        let (a, b) = (m1 as f64 * sc, ((1_i64 << 28) - m1) as f64 * sc);
+        match i % 3 {
+            0 => inverse_rows(m, &[a, b]),
+            1 => inverse_rows(m, &[b, a]),
+            _ => inverse_rows(m, &[-a, -b]),
+        }
+    }
+    for _ in 0..200 {
+        let n = rng.int(2, 15) as usize;
+        let xs: Vec<f64> = (0..n).map(|_| rng.signed_log_uniform(-3.0, 3.0)).collect();
+        inverse_rows(m, &xs);
+    }
+    let pool = [f64::MAX, -f64::MAX, 1e-30, -1e-30, 1e300, f64::INFINITY, f64::NEG_INFINITY, 1.0, 3.0, -3.0];
+    for i in 0..40 {
+        let n = rng.int(1, 6) as usize;
+        let xs: Vec<f64> = if i % 10 == 0 {
+            vec![f64::INFINITY; n]
+        } else {
+            (0..n).map(|_| pool[rng.int(0, 9) as usize]).collect()
+        };
+        inverse_rows(m, &xs);
+    }
+    for n in [64_usize, 200] {
+        let xs: Vec<f64> = (0..n).map(|_| rng.log_uniform(0.0, 4.0)).collect();
+        inverse_rows(m, &xs);
+        let alt: Vec<f64> = (0..n).map(|j| if j % 2 == 0 { 3.0 } else { -3.0 }).collect();
+        inverse_rows(m, &alt);
+        let mut near = alt.clone();
+        near[n - 1] = -ulps(3.0, 1);
+        inverse_rows(m, &near);
+    }
 }

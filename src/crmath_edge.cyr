@@ -2,8 +2,8 @@
 # 2026-11-12: exact tests, accurate values). A test that decides where its value has a pole or a zero is made on the
 # exact quantity, and the value beside it comes from exact differences, correctly rounded, so the two agree: an input
 # the exact test accepts never gets a value of ∞, 0 or NaN from a cancellation, and one it refuses carries the exact
-# value's sign. Clausius–Mossotti's ε_r (M2 part 2c-2), the trig-free Fresnel cosine (2c-3) and the Liénard–Wiechert
-# R_eff and κ (2c-4) are here.
+# value's sign. Clausius–Mossotti's ε_r (M2 part 2c-2), the trig-free Fresnel cosine (2c-3), the Liénard–Wiechert
+# R_eff and κ (2c-4) and the parallel combinations (2c-5) are here.
 #
 # Clausius–Mossotti (M2 part 2c-2). ε_r = (1 + 2X)/(1 − X) with X = Nα/(3ε₀) is (3ε₀ + 2P)/(3ε₀ − P), P = Nα exactly
 # and ε₀ its double. X ≥ 1 is 3ε₀ − P ≤ 0, and below it ε_r ≤ 0 is 3ε₀ + 2P ≤ 0. The value ε_r is rounded once (to
@@ -1009,4 +1009,472 @@ fn _bj_cr_lw(r: *f64, b: *f64, mode, slow, out: *f64): i64 {
     if (mode == 0) { y = _bj_g_scale(y, k); }
     out[0] = y;
     return 0;
+}
+
+# ── the parallel combinations (M2 part 2c-5) ─────────────────────────────────────────────────────────────────────────
+#
+# S = Σ 1/xᵢ exactly, for n values none of which is NaN, each finite one with |xᵢ| ≥ 10^-30 (the callers' checks; an
+# ±∞ adds 1/±∞ = ±0, exactly as IEEE's). |S| < 10^-30 (the DivisionByZero "sum of inverse … is zero") is decided
+# exactly, and the combination 1/S is rounded once. Rust's 1/(Σ RN(1/xᵢ)) rounds n + 1 times and cancels when the
+# values' signs differ, so it refused sums above 10^-30 and returned values far from 1/S.
+#
+# The terms (u = 2^-53). Each 1/xᵢ is q + l: q = RN(1/xᵢ), and below |xᵢ| = 2^900 the remainder r = 1 − q·xᵢ is exact
+# (TwoProduct, then (1 − p) − e: 1 − p by Sterbenz, and the remainder of a correctly rounded quotient is a double), so
+# l = RN(r·q) is within 2.01u|r/xᵢ| ≤ 2.02u²|q| of r/xᵢ (q's own error, then the product's: a multiplication where a
+# second division would do), and exactly it when r = 0. Above 2^900, l = 0 and the term is within u|q| + 2^-1074 of
+# 1/xᵢ (q may be subnormal).
+#
+# Three tiers, each with a rigorous bound E on |S − S_dd|; the first that decides answers.
+#   - T1, a compensated sum: TwoSums of the heads into σ, their errors t and the lows added into c (w = t + l, then
+#     c + w, each rounded once), S_dd = TwoSum(σ, c). E = 1.01u·Σ(|w| + |c|) + 2.03u²·Σ|q| (inexact l) +
+#     1.01(u·Σ|q| + k·2^-1074) (the k terms above 2^900); the hundredths cover the bounds' own roundings for n < 2^43.
+#     E/|S| grows as n²u²/2 for like-signed values (12.5u² at n = 5).
+#   - T2, the exact Shewchuk expansion of every q and l (Grow-Expansion, at most 252 components, else T3), compressed
+#     to a double-word within 2^-104: E = 2.03u²·Σ|q| + the same tail terms + 4.01u²·|S_dd|, about 6u² of S for
+#     like-signed values whatever n is, and exact when every reciprocal is (sums that cancel to 0 included).
+#   - A tier decides: |S| < 10^-30 when |S_dd| + E, rounded up, lies at or below the double below 1e-30; |S| > 10^-30
+#     when |S_dd| − E, rounded down, reaches the double 1e-30 (above 10^-30 by 0.476 ulp); then, with E/|S| ≤ 2^-60,
+#     1/S by kimiya's quotient steps (13.12u² on 1/S_dd), whose ends at ε = y₀·(E_rel·(1 + 2^-30) + 2^-101) bracket
+#     1/S: equal ends are RN(1/S). Otherwise the next tier runs.
+#   - T3, the exact path, takes what neither decides: a sum near 10^-30, a cancellation below the bounds, a value within
+#     about 2^-101 of a midpoint (ties among them), or slow = 1.
+#
+# Exact path. Each finite xᵢ is ±Mᵢ·2^Eᵢ with Mᵢ odd, so S = 2^-G·Σ ±2^(G−Eᵢ)/Mᵢ, G the largest Eᵢ. The terms are sorted
+# by M (a heapsort: the order is total, the result exact and so deterministic), each group's dyadic sum A_g (positive
+# and negative parts) is formed in integers, and the groups fold into one fraction N/D, D = Π M_g over the distinct
+# M_g: N/D + A_g/M_g = (N·M_g + A_g·D)/(D·M_g), N kept as its positive and negative parts. A group of equal Mᵢ adds
+# no factor, so [3, −3, 3, −3, …] stays small; n distinct significands make D 53n bits and the fold quadratic in n (a
+# finding, recorded; only sums the fast path cannot decide come here). |S| = X/(D·2^G) with X = |N|, so |S| < 10^-30
+# is X·5^30·2^30 < D·2^G, and the candidate for 1/|S| = D·2^G/X comes from the two integers' top 62 bits (within 3.1u);
+# the neighbouring midpoints μ = m·2^f then decide, D·2^G against m·X·2^f, ties to even. The buffers, sized from n and
+# the group count, come from fl_calloc and go back by fl_free; a refused allocation returns 2 (BJ_ERR_ALLOCATION).
+# cr_verify.py's par and par_slow families check both paths against Python's Fraction, on x86_64 and aarch64.
+
+# Word i of the sort's triples (M, E, sign) at t.
+#must_use
+fn _bj_e_par_key(t, i): i64 { return load64(t + 24 * i); }
+
+# Swaps triples i and j at t.
+fn _bj_e_par_swap(t, i, j) {
+    for (var k = 0; k < 3; k = k + 1) {
+        var a = load64(t + 24 * i + 8 * k);
+        store64(t + 24 * i + 8 * k, load64(t + 24 * j + 8 * k));
+        store64(t + 24 * j + 8 * k, a);
+    }
+    return 0;
+}
+
+# Sifts triple `root` down the max-heap t[0..end) on M.
+fn _bj_e_par_sift(t, root, end) {
+    var r = root;
+    while (2 * r + 1 < end) {
+        var c = 2 * r + 1;
+        if (c + 1 < end && _bj_e_par_key(t, c) < _bj_e_par_key(t, c + 1)) { c = c + 1; }
+        if (_bj_e_par_key(t, r) >= _bj_e_par_key(t, c)) { return 0; }
+        _bj_e_par_swap(t, r, c);
+        r = c;
+    }
+    return 0;
+}
+
+# Heapsorts the m triples at t by M, ascending.
+fn _bj_e_par_sort(t, m) {
+    var s = m / 2 - 1;
+    while (s >= 0) {
+        _bj_e_par_sift(t, s, m);
+        s = s - 1;
+    }
+    var e = m - 1;
+    while (e > 0) {
+        _bj_e_par_swap(t, 0, e);
+        _bj_e_par_sift(t, 0, e);
+        e = e - 1;
+    }
+    return 0;
+}
+
+# The top 62 bits of the nonzero bignum a as an integer, its shift into sh[0] (a = top·2^sh, truncated); t scratch.
+#must_use
+fn _bj_e_par_top(a, t, sh: *i64): i64 {
+    _bj_bn_copy(t, a);
+    var b = _bj_g_bitlen(t);
+    var s = 0;
+    if (b > 62) {
+        s = b - 62;
+        _bj_bn_shr(t, s);
+    }
+    sh[0] = s;
+    return _bj_g_limb(t, 0) + (_bj_g_limb(t, 1) << 32);
+}
+
+# The sign of D·2^G − m·2^f·X (the exact path's midpoint test); t1, t2 and t3 scratch bignums.
+#must_use
+fn _bj_e_par_mid(d, x, g, mm, f, t1, t2, t3): i64 {
+    _bj_bn_copy(t1, x);
+    _bj_g_mul(t1, mm, t3);
+    _bj_bn_copy(t2, d);
+    if (g >= f) { _bj_bn_shl(t2, g - f); } else { _bj_bn_shl(t1, f - g); }
+    var c = _bj_bn_cmp(t2, t1);
+    return c;
+}
+
+# The exact path (the section comment): 1 when |Σ 1/xᵢ| < 10^-30, 0 with out[0] := RN(1/Σ 1/xᵢ), 2 when a buffer is
+# refused.
+fn _bj_e_par_exact(xs: *f64, n, out: *f64): i64 {
+    var m = 0;
+    for (var i = 0; i < n; i = i + 1) {
+        var x: f64 = xs[i];
+        if (_bj_is_finite(x) == 1) { m = m + 1; }
+    }
+    if (m == 0) { return 1; }
+    var tr = fl_calloc(24 * m);
+    if (tr == 0) { return 2; }
+    var me[16];
+    var j = 0;
+    var gmax = 0 - 2000;
+    for (var i2 = 0; i2 < n; i2 = i2 + 1) {
+        var x2: f64 = xs[i2];
+        if (_bj_is_finite(x2) == 0) { continue; }
+        _bj_g_split(x2, &me);
+        var mm = load64(&me);
+        var ee = load64(&me + 8);
+        while ((mm & 1) == 0) {
+            mm = mm >> 1;
+            ee = ee + 1;
+        }
+        store64(tr + 24 * j, mm);
+        store64(tr + 24 * j + 8, ee);
+        store64(tr + 24 * j + 16, (_bj_bits(x2) >> 63) & 1);
+        if (ee > gmax) { gmax = ee; }
+        j = j + 1;
+    }
+    _bj_e_par_sort(tr, m);
+    var ng = 1;
+    for (var i3 = 1; i3 < m; i3 = i3 + 1) {
+        if (_bj_e_par_key(tr, i3) != _bj_e_par_key(tr, i3 - 1)) { ng = ng + 1; }
+    }
+    var wb = 8 * ((53 * ng + 3700) / 32 + 8);      # bytes of a big buffer: D, the parts, their shifts and products
+    var wa = 8 * (2300 / 32 + 8);                    # a group's dyadic sum (below 2^2100·n)
+    var pp = fl_calloc(wb);
+    var qq = fl_calloc(wb);
+    var dd = fl_calloc(wb);
+    var t1 = fl_calloc(wb);
+    var t2 = fl_calloc(wb);
+    var t3 = fl_calloc(wb);
+    var ap = fl_calloc(wa);
+    var an = fl_calloc(wa);
+    var w = fl_calloc(wa);
+    var res = 0;
+    if (pp == 0 || qq == 0 || dd == 0 || t1 == 0 || t2 == 0 || t3 == 0 || ap == 0 || an == 0 || w == 0) { res = 2; }
+    if (res == 0) {
+        _bj_bn_set(dd, 1);
+        store64(pp, 0);
+        store64(qq, 0);
+        var k = 0;
+        while (k < m) {
+            var mg = _bj_e_par_key(tr, k);
+            store64(ap, 0);
+            store64(an, 0);
+            while (k < m && _bj_e_par_key(tr, k) == mg) {
+                _bj_bn_set(w, 1);
+                _bj_bn_shl(w, gmax - load64(tr + 24 * k + 8));
+                if (load64(tr + 24 * k + 16) == 0) { _bj_g_add_to(ap, w); } else { _bj_g_add_to(an, w); }
+                k = k + 1;
+            }
+            _bj_g_mul(pp, mg, t1);                   # N/D + A/M = (N·M + A·D)/(D·M)
+            _bj_g_mul(qq, mg, t1);
+            if (load64(ap) != 0) {
+                _bj_e_bn_mul(t2, ap, dd);
+                _bj_g_add_to(pp, t2);
+            }
+            if (load64(an) != 0) {
+                _bj_e_bn_mul(t2, an, dd);
+                _bj_g_add_to(qq, t2);
+            }
+            _bj_g_mul(dd, mg, t1);
+        }
+        var c = _bj_bn_cmp(pp, qq);
+        var neg = 0;
+        var xx = pp;
+        if (c > 0) { _bj_bn_sub(pp, qq); }
+        if (c < 0) {
+            _bj_bn_sub(qq, pp);
+            xx = qq;
+            neg = 1;
+        }
+        if (c == 0) { res = 1; }
+        if (res == 0) {
+            _bj_bn_copy(t1, xx);                     # |S| < 10^-30: X·5^30·2^30 < D·2^G
+            _bj_g_mul(t1, 30517578125, t3);
+            _bj_g_mul(t1, 30517578125, t3);
+            _bj_bn_copy(t2, dd);
+            if (gmax >= 30) { _bj_bn_shl(t2, gmax - 30); } else { _bj_bn_shl(t1, 30 - gmax); }
+            if (_bj_bn_cmp(t1, t2) < 0) { res = 1; }
+        }
+        if (res == 0) {
+            var sd: i64[1];
+            var sx: i64[1];
+            var td = _bj_e_par_top(dd, t1, &sd);
+            var tx = _bj_e_par_top(xx, t1, &sx);
+            var fd: f64 = f64_from(td);
+            var fx: f64 = f64_from(tx);
+            var y0: f64 = fd / fx;
+            var y: f64 = _bj_g_scale(y0, gmax + sd[0] - sx[0]);
+            var mid[16];
+            for (var it = 0; it < 6; it = it + 1) {
+                var up: f64 = _bj_g_step(y, 1);
+                _bj_g_mid(y, up, &mid);
+                var c1 = _bj_e_par_mid(dd, xx, gmax, load64(&mid), load64(&mid + 8), t1, t2, t3);
+                if (c1 > 0) {
+                    y = up;
+                    continue;
+                }
+                if (c1 == 0) {
+                    y = _bj_g_even(y, up);
+                    break;
+                }
+                var dn: f64 = _bj_g_step(y, 0 - 1);
+                _bj_g_mid(dn, y, &mid);
+                var c2 = _bj_e_par_mid(dd, xx, gmax, load64(&mid), load64(&mid + 8), t1, t2, t3);
+                if (c2 < 0) {
+                    y = dn;
+                    continue;
+                }
+                if (c2 == 0) { y = _bj_g_even(dn, y); }
+                break;
+            }
+            if (neg == 1) { y = -y; }
+            out[0] = y;
+        }
+    }
+    if (pp != 0) { fl_free(pp); }
+    if (qq != 0) { fl_free(qq); }
+    if (dd != 0) { fl_free(dd); }
+    if (t1 != 0) { fl_free(t1); }
+    if (t2 != 0) { fl_free(t2); }
+    if (t3 != 0) { fl_free(t3); }
+    if (ap != 0) { fl_free(ap); }
+    if (an != 0) { fl_free(an); }
+    if (w != 0) { fl_free(w); }
+    fl_free(tr);
+    return res;
+}
+
+# (h, l) := the top two components of the nonoverlapping expansion ex[0..k) (k ≥ 1, increasing magnitude) after
+# Shewchuk's Compress, within 2^-104 of the sum, relative: src/crmath_gamma.cyr's _bj_g_compress with the caller's
+# scratch g (k doubles) in place of its sixteen. ex is overwritten.
+#must_use
+fn _bj_e_compress(ex: *f64, k, g: *f64): (f64, f64) {
+    var q0: f64 = ex[k - 1];
+    var bottom = k - 1;
+    var i = k - 2;
+    while (i >= 0) {
+        var e: f64 = ex[i];
+        var ss: f64 = q0 + e;                       # FastTwoSum(q0, e)
+        var rr: f64 = e - (ss - q0);
+        if (rr != 0.0) {
+            g[bottom] = ss;
+            bottom = bottom - 1;
+            q0 = rr;
+        } else {
+            q0 = ss;
+        }
+        i = i - 1;
+    }
+    g[bottom] = q0;
+    var top = 0;
+    var q1: f64 = g[bottom];
+    for (var m = bottom + 1; m < k; m = m + 1) {
+        var gm: f64 = g[m];
+        var s2: f64 = gm + q1;                      # FastTwoSum(gm, q1)
+        var r2: f64 = q1 - (s2 - gm);
+        if (r2 != 0.0) {
+            ex[top] = r2;
+            top = top + 1;
+        }
+        q1 = s2;
+    }
+    var lo: f64 = 0.0;
+    if (top > 0) { lo = ex[top - 1]; }
+    var h: f64 = q1 + lo;
+    var l: f64 = lo - (h - q1);
+    return (h, l);
+}
+
+# A tier's verdict from S_dd = s_h + s_l within E of S (the section comment): 1 when |S| < 10^-30, 0 with out[0] :=
+# RN(1/S), −1 when the bound cannot decide.
+#must_use
+fn _bj_e_par_decide(s_h: f64, s_l: f64, eab: f64, out: *f64): i64 {
+    var a: f64 = f64_abs(s_h);
+    var em: f64 = eab * 1.0000001;
+    var m48: f64 = 0x3CF0000000000000;              # 2^-48
+    var hiv: f64 = (a + em) * (1.0 + m48);
+    var lov: f64 = (a - em) * (1.0 - m48);
+    var c_lo: f64 = 0x39B4484BFEEBC29F;             # the double below 1e-30 (below 10^-30)
+    var c_hi: f64 = 0x39B4484BFEEBC2A0;             # 1e-30 (above 10^-30)
+    if (hiv <= c_lo) { return 1; }
+    if (lov < c_hi) { return 0 - 1; }
+    var erel: f64 = (em / lov) * (1.0 + m48);
+    var l60: f64 = 0x3C30000000000000;              # 2^-60
+    if (erel > l60) { return 0 - 1; }
+    var ah: f64 = a;                                # |S_dd| = a_h + a_l
+    var al: f64 = s_l;
+    if (s_h < 0.0) { al = -s_l; }
+    var sp: f64 = 134217729.0;
+    var y0: f64 = 1.0 / ah;                         # kimiya's quotient steps for 1/(a_h + a_l), inline
+    var pa: f64 = y0 * ah;
+    var cy: f64 = sp * y0;
+    var yh: f64 = cy - (cy - y0);
+    var yl: f64 = y0 - yh;
+    var ca: f64 = sp * ah;
+    var ahh: f64 = ca - (ca - ah);
+    var ahl: f64 = ah - ahh;
+    var pb: f64 = (yl * ahl) - (((pa - (yh * ahh)) - (yl * ahh)) - (yh * ahl));
+    var s0: f64 = 1.0 - pa;
+    var s1: f64 = s0 - pb;
+    var s3: f64 = y0 * al;
+    var rr: f64 = s1 - s3;
+    var d: f64 = rr / ah;
+    var g30: f64 = 0x3E10000000000000;              # 2^-30
+    var k101: f64 = 0x39A0000000000000;             # 2^-101
+    var eps: f64 = y0 * ((erel * (1.0 + g30)) + k101);
+    var lo: f64 = d - eps;
+    var hi: f64 = d + eps;
+    var z1: f64 = y0 + lo;
+    var z2: f64 = y0 + hi;
+    if (z1 != z2) { return 0 - 1; }
+    var res: f64 = z1;
+    if (s_h < 0.0) { res = -z1; }
+    out[0] = res;
+    return 0;
+}
+
+# The parallel combination (the section comment) of the n values at xs (none NaN; each finite one |xᵢ| ≥ 10^-30): 1
+# when |Σ 1/xᵢ| < 10^-30 exactly; 0 with out[0] := RN(1/Σ 1/xᵢ); 2 when the exact path's buffers are refused. slow = 1
+# runs the exact path alone, slow = 2 the expansion and then the exact path (cr_verify.py's par_slow and par_x).
+#must_use
+fn _bj_cr_parallel(xs: *f64, n, slow, out: *f64): i64 {
+    var sp: f64 = 134217729.0;                      # Veltkamp's 2^27 + 1
+    var big: f64 = 0x7830000000000000;              # 2^900
+    var u2: f64 = 0x3950000000000000;               # 2^-106
+    var u1: f64 = 0x3CA0000000000000;               # 2^-53
+    var tiny: f64 = _bj_from_bits(1);               # 2^-1074
+    if (slow == 0) {
+        var sg: f64 = 0.0;                          # Σ (qᵢ + lᵢ) = σ + c: TwoSums of the heads, their errors and the
+        var cc: f64 = 0.0;                          # lows added to c, g = Σ(|w| + |c|) bounding c's roundings
+        var gb: f64 = 0.0;
+        var lsum: f64 = 0.0;
+        var tsum: f64 = 0.0;
+        var tcnt = 0;
+        for (var i = 0; i < n; i = i + 1) {
+            var x: f64 = xs[i];
+            var dz: f64 = x - x;
+            if (dz != 0.0) { continue; }            # ±∞: 1/x = ±0
+            var q: f64 = 1.0 / x;
+            var ax: f64 = f64_abs(x);
+            var l: f64 = 0.0;
+            if (ax < big) {
+                var p: f64 = q * x;                 # q·x = p + e (TwoProduct, inline), r = (1 − p) − e exactly
+                var cq: f64 = sp * q;
+                var qh: f64 = cq - (cq - q);
+                var ql: f64 = q - qh;
+                var cx: f64 = sp * x;
+                var xh: f64 = cx - (cx - x);
+                var xl: f64 = x - xh;
+                var e: f64 = ((((qh * xh) - p) + (qh * xl)) + (ql * xh)) + (ql * xl);
+                var r0: f64 = 1.0 - p;
+                var r: f64 = r0 - e;
+                if (r != 0.0) {
+                    l = r * q;
+                    var aq: f64 = f64_abs(q);
+                    lsum = lsum + aq;
+                }
+            } else {
+                var aq2: f64 = f64_abs(q);
+                tsum = tsum + aq2;
+                tcnt = tcnt + 1;
+            }
+            var s1: f64 = sg + q;                   # TwoSum(σ, q)
+            var bb: f64 = s1 - sg;
+            var t: f64 = (sg - (s1 - bb)) + (q - bb);
+            sg = s1;
+            var w: f64 = t + l;
+            cc = cc + w;
+            var aw: f64 = f64_abs(w);
+            var ac: f64 = f64_abs(cc);
+            gb = (gb + aw) + ac;
+        }
+        var fh: f64 = sg + cc;                      # TwoSum(σ, c): S_dd
+        var fb: f64 = fh - sg;
+        var fl: f64 = (sg - (fh - fb)) + (cc - fb);
+        var tc: f64 = f64_from(tcnt);
+        var e1: f64 = 1.01 * u1 * gb;
+        var e2: f64 = 2.03 * u2 * lsum;
+        var e3: f64 = 1.01 * ((u1 * tsum) + (tc * tiny));
+        var eab: f64 = (e1 + e2) + e3;
+        var v1 = _bj_e_par_decide(fh, fl, eab, out);
+        if (v1 >= 0) { return v1; }
+    }
+    if (slow != 1) {
+        var ex: f64[256];                           # the expansion of every qᵢ and lᵢ, exact (Grow-Expansion)
+        var k = 0;
+        var lsum2: f64 = 0.0;
+        var tsum2: f64 = 0.0;
+        var tcnt2 = 0;
+        var room = 1;
+        for (var i2 = 0; i2 < n && room == 1; i2 = i2 + 1) {
+            var x2: f64 = xs[i2];
+            var dz2: f64 = x2 - x2;
+            if (dz2 != 0.0) { continue; }
+            var q2: f64 = 1.0 / x2;
+            var ax2: f64 = f64_abs(x2);
+            var l2: f64 = 0.0;
+            if (ax2 < big) {
+                var p2: f64 = q2 * x2;
+                var cq2: f64 = sp * q2;
+                var qh2: f64 = cq2 - (cq2 - q2);
+                var ql2: f64 = q2 - qh2;
+                var cx2: f64 = sp * x2;
+                var xh2: f64 = cx2 - (cx2 - x2);
+                var xl2: f64 = x2 - xh2;
+                var e2x: f64 = ((((qh2 * xh2) - p2) + (qh2 * xl2)) + (ql2 * xh2)) + (ql2 * xl2);
+                var r2: f64 = (1.0 - p2) - e2x;
+                if (r2 != 0.0) {
+                    l2 = r2 * q2;
+                    var aq3: f64 = f64_abs(q2);
+                    lsum2 = lsum2 + aq3;
+                }
+            } else {
+                var aq4: f64 = f64_abs(q2);
+                tsum2 = tsum2 + aq4;
+                tcnt2 = tcnt2 + 1;
+            }
+            if (k > 252) {
+                room = 0;
+                continue;
+            }
+            k = _bj_g_grow(&ex, k, q2);
+            if (l2 != 0.0) { k = _bj_g_grow(&ex, k, l2); }
+        }
+        if (room == 1) {
+            var gh: f64 = 0.0;
+            var gl: f64 = 0.0;
+            if (k > 0) {
+                var gs: f64[256];
+                var ch, cl = _bj_e_compress(&ex, k, &gs);
+                gh = ch;
+                gl = cl;
+            }
+            var tc2: f64 = f64_from(tcnt2);
+            var f2: f64 = 2.03 * u2 * lsum2;
+            var f3: f64 = 1.01 * ((u1 * tsum2) + (tc2 * tiny));
+            var agh: f64 = f64_abs(gh);
+            var f4: f64 = 4.01 * u2 * agh;          # Compress's 2^-104
+            var eab2: f64 = (f2 + f3) + f4;
+            var v2 = _bj_e_par_decide(gh, gl, eab2, out);
+            if (v2 >= 0) { return v2; }
+        }
+    }
+    var rx = _bj_e_par_exact(xs, n, out);
+    return rx;
 }
