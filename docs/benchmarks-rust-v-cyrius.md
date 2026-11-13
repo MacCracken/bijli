@@ -66,7 +66,7 @@
 | `relativity/solve_retarded_time_uniform_t1s` | 103.48 ns | `relativity/solve_retarded_time_uniform_t1s` | 839.00 ns | 8.1× |
 | `relativity/lienard_wiechert_fields_orbit_b099` | 319.92 ns | `relativity/lienard_wiechert_fields_orbit_b099` | 6.26 µs | 19.6× |
 | `relativity/lienard_wiechert_scalar_potential` | 1.74 ns | `relativity/lienard_wiechert_scalar_potential` | 292.00 ns | 167.8× |
-| `relativity/four_vector_boost` | 5.45 ns | `relativity/four_vector_boost` | 168.00 ns | 30.8× |
+| `relativity/four_vector_boost` | 5.45 ns | `relativity/four_vector_boost` | 161.00 ns | 29.5× |
 | `polarization/jones_apply_polarizer` | 0.99 ns | pending (M3) | — | — |
 | `polarization/jones_qwp_apply` | 0.99 ns | pending (M3) | — | — |
 | `polarization/mueller_apply` | 0.99 ns | pending (M3) | — | — |

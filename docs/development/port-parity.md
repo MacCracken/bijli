@@ -2450,3 +2450,65 @@ for a discharge or decay, and each step can leave the range while the result sta
 - **Result, every target** (x86_64 ELF, x86_64 PE, aarch64): **13 modules, 0 failing; 406,270 ok, 0 failed, 0
   measured, 0 pending, 46,009 accepted (ADR 01: 8,998; ADR 0002: 37,011)** over 452,279 rows; **all 276 digests
   equal**. Four changed: the four transients.
+
+## 47. M2 part 2d-3c: relativity's four-vector and tensor chains at their range edges (2026-11-13)
+
+§28's audit named FourVector's dot, `interval_sq`, `spatial_magnitude` and `four_force` as raw chains. Reviewing them
+turned up three more of the same kind: `boost_x` and the two invariants. The field transforms, the relativistic Larmor
+power and an ∞ R in E are 2d-3d's.
+
+- **ADR 0002 row 18, amended** (the rule of §42; each guard tests Rust's own values, the edge is out of line):
+  - **`dot` and `interval_sq`**: Rust's −a₀b₀ + a₁b₁ + a₂b₂ + a₃b₃ in the band, or an exact 0 of exact products, or a
+    non-finite operand. Otherwise `_bj_rel_dot4_edge`: the products and sums to 53 bits with an unbounded exponent,
+    the last sum rounded once.
+  - **`spatial_magnitude`**: BjFieldVector `magnitude`'s guard and edge (`_bj_vx_sumsq`, √ rounded once).
+  - **`boost_x`** (`_bj_rel_boost_edge`, per output): γ(p − β·q) keeps Rust's chain where β = v/c is normal or 0 and
+    β·q is exact or the difference lies in the band. Otherwise β, β·q and the difference run unbounded and the product
+    by γ rounds once. A subnormal β is coarse, and its product with a vast q is not negligible, so β must be exact.
+  - **`four_force`** (`_bj_rel_ff_edge`, per row): each row's sum in the band, else the products and sums unbounded,
+    the product by q rounded once.
+  - **The first invariant** 2(B² − E²/c²): Rust's difference in the band. A degraded E (from F·c) or B² is then
+    negligible: its square lies far below the difference. Otherwise E = c·F, E², B², E²/c² and the difference run
+    unbounded and the doubling rounds once (`_bj_rel_inv1_edge`).
+  - **The second invariant** −E⋅B/c: Rust's where each E = c·F is exact and E⋅B is normal. A degraded E is not
+    negligible here, since B multiplies it. Otherwise E⋅B runs unbounded and the quotient by c rounds once
+    (`_bj_rel_inv2_edge`). An exact 0 keeps IEEE's signs where every product is 0, or gives a cancellation's +0.
+  - **Rust's results at these edges**:
+    - a light-like four-vector at 10^300 gave s² = NaN (∞ − ∞) for 0;
+    - |(10^200, 10^200, 10^200)| = ∞ for 1.73·10^200;
+    - E⋅B = 10^309 gave −∞ for −3.3·10^300;
+    - a radiation field at B = 10^200 gave the first invariant NaN for 0;
+    - q = 10^-300 against four-force sums past DBL_MAX gave (0, ∞, NaN, −∞) for (0, 1.5·10^10, 5·10^9, −2·10^10).
+- **Rows** (`m_relativity.rs`'s `emit_fv_edges`, after every older row): 215 more.
+  - Ten four-vectors through `interval_sq`, `spatial_magnitude`, `dot` and `boost_x`: products past DBL_MAX that
+    cancel (light-like at 10^300, DBL_MAX parts), squares that overflow alone (10^155, 10^200), squares below 2^-1022
+    (10^-160, 10^-300). The boosts use speeds whose β is subnormal (10^-310, 2^-1074, 10^-300) as well as ±0.5c, −0.9c
+    and 0.
+  - Seven tensors through both invariants and the four-force (four-velocities at 10^300 and 10^10, the latter under
+    q = 10^-300): a radiation field at 10^200, E ∥ B at 10^150 and at 10^154/10^155, E/c subnormal under a vast B, a
+    subnormal B², DBL_MAX parts.
+
+  `validate.py`'s transcription agreed with every row.
+- **Mappings** (`validate.py`'s `rel_dot4`, `rel_boost_edge`, `rel_ff_row` and the invariants' chains under
+  `rel_ops`'s new `ux`, on exact.py's `rnd53`): `relativity.adr.tsv` maps 203 more rows net.
+  - Row 18, 194 net: the first invariant 88, the four-force 31, the second invariant 28, `dot` 28,
+    `spatial_magnitude` 13, `interval_sq` 8, `boost_x` 6. 144 are older rows, eight of them second-invariant rows
+    whose outputs changed: E⋅B past DBL_MAX had been ∞, and is now finite after the quotient.
+  - Row 30, 9 among the new (`boost_x`, its exact γ alone).
+
+  All pass. Labels: as §28's precedence, 27 → 17 → 13 → 18 → 30.
+- **Guard audit** (a sampling check in Python, not a gate): on random operands of every binade, wherever a guard keeps
+  Rust's chain its result equalled the pure unbounded chain's. Samples kept: dot 84,761, `boost_x` 80,946, the
+  four-force 77,782, the first invariant 18,190, the second 80,053.
+- **Tests**: tests/relativity.tcyr gains a `cyrius_range_edges (ADR 0002 row 18)` group of 5 assertions, the cases
+  above.
+- **A pointer note** (the pinned compiler): arithmetic on a typed pointer is scaled by the element size (a `*f64`
+  plus 4 is the next row of four), as field.cyr's `charges + i * 4` relies on.
+- **Benchmarks** (an interleaved A/B against HEAD, three rounds each, load 1.1–1.9, each figure the lower of the
+  three): `relativity/four_vector_boost` 155 → 161 ns, the guard's three tests (the record's 168 ns, from a noisier
+  run, becomes 161). `relativity/em_tensor_from_fields`, whose code is unchanged, read 31 → 34 ns within HEAD's own
+  31–35. Every other row held, `lienard_wiechert_e` among them. No bench covers `dot`, `interval_sq`, the invariants
+  or the four-force, whose guards are one band test on a value Rust already computed.
+- **Result, every target** (x86_64 ELF, x86_64 PE, aarch64): **13 modules, 0 failing; 406,282 ok, 0 failed, 0
+  measured, 0 pending, 46,212 accepted (ADR 01: 8,998; ADR 0002: 37,214)** over 452,494 rows; **all 276 digests
+  equal**. Seven changed: `dot`, `interval_sq`, `spatial_magnitude`, `boost_x`, the four-force and both invariants.

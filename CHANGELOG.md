@@ -326,6 +326,17 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
   At those edges the chain now runs with an unbounded exponent and the product rounds once (src/circuit.cyr's
   `_bj_circuit_edge`, e^x to |x| = 2300 by src/crmath_ux.cyr's new `_bj_ux_exp_lim`); elsewhere it is Rust's, bit for
   bit. The cost: `circuit/rc_charging` 65 → 67 ns, `circuit/rl_current_rise` 65 → 72 ns (`port-parity.md` §46).
+- **relativity** (ADR 0002 row 18 amended, M2 part 2d-3c): FourVector's `dot`, `interval_sq`, `spatial_magnitude` and
+  `boost_x`, `EmTensor::four_force` and both invariants ran raw chains that over- and underflowed where the result is
+  representable:
+  - a light-like four-vector at 10^300 gave s² = NaN for 0;
+  - |(10^200, 10^200, 10^200)| gave ∞;
+  - E⋅B = 10^309 gave the second invariant −∞ for −3.3·10^300;
+  - a radiation field at 10^200 gave the first invariant NaN for 0;
+  - q = 10^-300 against four-force sums past DBL_MAX gave ∞ and NaN.
+
+  At those edges the chains now run with an unbounded exponent and round once; elsewhere they are Rust's, bit for
+  bit. The cost: `relativity/four_vector_boost` 155 → 161 ns (`port-parity.md` §47).
 - **relativity** (ADR 0002 row 13 amended, M2 part 2b-4): `retarded_scalar_potential`, `retarded_vector_potential`,
   `larmor_power` and `EmTensor::dual` rounded two to five times, and overflowed where the value is representable
   (Larmor with q² past DBL_MAX, the dual of B past DBL_MAX/c: ∞ each); they are now correctly rounded for finite

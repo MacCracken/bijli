@@ -19166,9 +19166,11 @@ public fn bj_rlc_impedance(resistance: f64, inductance: f64, capacitance: f64, a
 # E) is correctly rounded from the exact c² − |v|², the |v| < c tests exact (row 30, src/crmath_gamma.cyr). The
 # products and quotients of inputs and constants are rounded once (row 13, M2 part 2b-4): the retarded potentials,
 # Larmor's power (src/crmath_mono.cyr's six-factor monomial) and the dual tensor, whose components are F's own; a
-# non-finite operand keeps Rust's chain. A fallible
-# function returns a value-form Result, the error in the last-error record (src/error.cyr); a vector, four-vector or
-# pair of vectors writes through out pointers.
+# non-finite operand keeps Rust's chain. The raw four-vector and tensor chains (BjFourVector's dot, interval_sq,
+# spatial_magnitude and boost_x, the four-force, both invariants) keep Rust's chain where its own values pass the
+# guards of src/crmath_vx.cyr, and otherwise run with an unbounded exponent and round once (row 18's rule, M2 part
+# 2d-3c). A fallible function returns a value-form Result, the error in the last-error record (src/error.cyr); a
+# vector, four-vector or pair of vectors writes through out pointers.
 
 private
 
@@ -19271,6 +19273,158 @@ public fn bj_beta(speed: f64): f64 {
     return b;
 }
 
+# ── the four-vector and tensor chains at a range edge (M2 part 2d-3c) ─────────────────────────────────────────────
+# Rust's chains of products and sums over- and underflow where the result is representable (ADR 0002 row 18's rule):
+# the guards are src/crmath_vx.cyr's band on Rust's own sums, and the edges run each step to 53 bits with an unbounded
+# exponent, the last operation rounded once. A non-finite operand keeps Rust's chain.
+
+# −a₀b₀ + a₁b₁ + a₂b₂ + a₃b₃ at a range edge, Rust's d where its chain is the unbounded one (an exact 0 from exact
+# products, or an operand not finite; the band test is the caller's).
+#must_use
+fn _bj_rel_dot4_edge(a: *f64, b: *f64, d: f64): f64 {
+    if (_bj_vx_finite4(a[0], a[1], a[2], a[3]) == 0 || _bj_vx_finite4(b[0], b[1], b[2], b[3]) == 0) { return d; }
+    var na: f64 = -a[0];
+    if (d == 0.0) {
+        var p0: f64 = na * b[0];
+        var p1: f64 = a[1] * b[1];
+        var p2: f64 = a[2] * b[2];
+        var p3: f64 = a[3] * b[3];
+        var e = _bj_vx_exact(na, b[0], p0) + _bj_vx_exact(a[1], b[1], p1) + _bj_vx_exact(a[2], b[2], p2)
+        + _bj_vx_exact(a[3], b[3], p3);
+        if (e == 4) { return d; }
+    }
+    var s0, e0 = _bj_vx_mul(na, b[0]);
+    var s1, e1 = _bj_vx_mul(a[1], b[1]);
+    var ss, se = _bj_k_ux_add(s0, e0, s1, e1);
+    var s2, e2 = _bj_vx_mul(a[2], b[2]);
+    var ts, te = _bj_k_ux_add(ss, se, s2, e2);
+    var s3, e3 = _bj_vx_mul(a[3], b[3]);
+    var w: f64 = _bj_k_ux_add_f64(ts, te, s3, e3);
+    return w;
+}
+
+# γ(p − β·q), β = v/c, at a range edge (boost_x's ct' with p = ct and q = x, its x' with them swapped): Rust's γ·d where
+# its chain is the unbounded one (β normal or 0 and β·q exact, or d in the band; p or q not finite), else β, β·q and
+# p − β·q to 53 bits with an unbounded exponent, the product by γ rounded once.
+#must_use
+fn _bj_rel_boost_edge(gamma: f64, speed: f64, p: f64, q: f64, d: f64): f64 {
+    var r: f64 = gamma * d;
+    if (_bj_vx_finite4(p, q, 0.0, 0.0) == 0) { return r; }
+    var c: f64 = BJ_SPEED_OF_LIGHT;
+    var b: f64 = speed / c;
+    var ab: f64 = f64_abs(b);
+    if (ab > _BJ_VX_MN || speed == 0.0) {
+        var bq: f64 = b * q;
+        if (_bj_vx_exact(b, q, bq) == 1 || _bj_vx_band(d) == 1) { return r; }
+    }
+    var vs, ve = _bj_k_ux_from(speed);
+    var cs, ce = _bj_k_ux_from(c);
+    var bs, be = _bj_k_ux_div(vs, ve, cs, ce);
+    var qs, qe = _bj_k_ux_from(q);
+    var ms, me = _bj_k_ux_mul(bs, be, qs, qe);
+    var ps, pe = _bj_k_ux_from(p);
+    var ds, de = _bj_k_ux_sub(ps, pe, ms, me);
+    var gs, ge = _bj_k_ux_from(gamma);
+    var u: f64 = _bj_k_ux_mul_f64(gs, ge, ds, de);
+    return u;
+}
+
+# q·(r₀u₀ + r₁u₁ + r₂u₂ + r₃u₃), one row of the four-force, at a range edge: Rust's k = q·s where its chain is the
+# unbounded one (an exact 0 sum of exact products, or an operand not finite; the band test is the caller's), else
+# the products and sums to 53 bits with an unbounded exponent, the product by q rounded once.
+#must_use
+fn _bj_rel_ff_edge(r: *f64, u: *f64, q: f64, s: f64): f64 {
+    var k: f64 = q * s;
+    if (_bj_vx_finite4(r[0], r[1], r[2], r[3]) == 0 || _bj_vx_finite4(u[0], u[1], u[2], u[3]) == 0
+      || _bj_vx_finite4(q, 0.0, 0.0, 0.0) == 0) {
+        return k;
+    }
+    if (s == 0.0) {
+        var p0: f64 = r[0] * u[0];
+        var p1: f64 = r[1] * u[1];
+        var p2: f64 = r[2] * u[2];
+        var p3: f64 = r[3] * u[3];
+        var e = _bj_vx_exact(r[0], u[0], p0) + _bj_vx_exact(r[1], u[1], p1) + _bj_vx_exact(r[2], u[2], p2)
+        + _bj_vx_exact(r[3], u[3], p3);
+        if (e == 4) { return k; }
+    }
+    var s0, e0 = _bj_vx_mul(r[0], u[0]);
+    var s1, e1 = _bj_vx_mul(r[1], u[1]);
+    var ss, se = _bj_k_ux_add(s0, e0, s1, e1);
+    var s2, e2 = _bj_vx_mul(r[2], u[2]);
+    var ts, te = _bj_k_ux_add(ss, se, s2, e2);
+    var s3, e3 = _bj_vx_mul(r[3], u[3]);
+    var ws, we = _bj_k_ux_add(ts, te, s3, e3);
+    var qs, qe = _bj_k_ux_from(q);
+    var w: f64 = _bj_k_ux_mul_f64(qs, qe, ws, we);
+    return w;
+}
+
+# 1 when every E component c·F^{i0} of the tensor at f is its exact product (F = 0, or |E| in (2^-1022, DBL_MAX]).
+#must_use
+fn _bj_rel_e_exact(f: *f64): i64 {
+    var c: f64 = BJ_SPEED_OF_LIGHT;
+    for (var k = 4; k <= 12; k = k + 4) {
+        var fk: f64 = f[k];
+        var ek: f64 = fk * c;
+        if (_bj_vx_exact(fk, c, ek) == 0) { return 0; }
+    }
+    return 1;
+}
+
+# 1 when the six field components of the tensor at f are finite.
+#must_use
+fn _bj_rel_fields_finite(f: *f64): i64 {
+    if (_bj_vx_finite4(f[4], f[8], f[12], f[14]) == 1 && _bj_vx_finite4(f[7], f[9], 0.0, 0.0) == 1) { return 1; }
+    return 0;
+}
+
+# 2(B² − E²/c²) at a range edge for the tensor at f: E = c·F^{i0}, E², B², E²/c² and their difference to 53 bits with
+# an unbounded exponent, the doubling rounded once; Rust's i for a non-finite component.
+#must_use
+fn _bj_rel_inv1_edge(f: *f64, i: f64): f64 {
+    if (_bj_rel_fields_finite(f) == 0) { return i; }
+    var c: f64 = BJ_SPEED_OF_LIGHT;
+    var c2: f64 = BJ_SPEED_OF_LIGHT_SQ;
+    var xs, xe = _bj_vx_mul(f[4], c);
+    var ys, ye = _bj_vx_mul(f[8], c);
+    var zs, ze = _bj_vx_mul(f[12], c);
+    var x2s, x2e = _bj_k_ux_mul(xs, xe, xs, xe);
+    var y2s, y2e = _bj_k_ux_mul(ys, ye, ys, ye);
+    var z2s, z2e = _bj_k_ux_mul(zs, ze, zs, ze);
+    var es, ee = _bj_k_ux_add(x2s, x2e, y2s, y2e);
+    var e2s, e2e = _bj_k_ux_add(es, ee, z2s, z2e);
+    var bs, be = _bj_vx_sumsq(f[14], f[7], f[9]);
+    var cs, ce = _bj_k_ux_from(c2);
+    var qs, qe = _bj_k_ux_div(e2s, e2e, cs, ce);
+    var ds, de = _bj_k_ux_sub(bs, be, qs, qe);
+    var u: f64 = _bj_k_ux_mul_f64(1.0, 1, ds, de);
+    return u;
+}
+
+# −E⋅B/c at a range edge for the tensor at f: E = c·F^{i0}, its products with B and their sums to 53 bits with an
+# unbounded exponent, the quotient by c rounded once; Rust's i for a non-finite component.
+#must_use
+fn _bj_rel_inv2_edge(f: *f64, i: f64): f64 {
+    if (_bj_rel_fields_finite(f) == 0) { return i; }
+    var c: f64 = BJ_SPEED_OF_LIGHT;
+    var xs, xe = _bj_vx_mul(f[4], c);
+    var ys, ye = _bj_vx_mul(f[8], c);
+    var zs, ze = _bj_vx_mul(f[12], c);
+    var bxs, bxe = _bj_k_ux_from(f[14]);
+    var bys, bye = _bj_k_ux_from(f[7]);
+    var bzs, bze = _bj_k_ux_from(f[9]);
+    var p0s, p0e = _bj_k_ux_mul(xs, xe, bxs, bxe);
+    var p1s, p1e = _bj_k_ux_mul(ys, ye, bys, bye);
+    var p2s, p2e = _bj_k_ux_mul(zs, ze, bzs, bze);
+    var ss, se = _bj_k_ux_add(p0s, p0e, p1s, p1e);
+    var ts, te = _bj_k_ux_add(ss, se, p2s, p2e);
+    var nts: f64 = -ts;
+    var cs, ce = _bj_k_ux_from(c);
+    var u: f64 = _bj_k_ux_div_f64(nts, te, cs, ce);
+    return u;
+}
+
 # ── the electromagnetic tensor ───────────────────────────────────────────────────────────────────────────────────
 
 # F^μν of (E, B): F^{i0} = Eᵢ/c, F^{0i} = −Eᵢ/c, F^{12} = −B_z, F^{13} = B_y, F^{23} = −B_x and their negatives below
@@ -19346,7 +19500,10 @@ impl BjEmTensor {
         var ec: f64 = e2 / BJ_SPEED_OF_LIGHT_SQ;
         var d: f64 = b2 - ec;
         var i: f64 = 2.0 * d;
-        return i;
+        var ad: f64 = f64_abs(d);
+        if (ad >= _BJ_VX_LO && ad <= _BJ_VX_HI) { return i; }
+        var u: f64 = _bj_rel_inv1_edge(_bj_rel_f64p(self), i);
+        return u;
     }
 
     # ε_μνρσ F^μν F^ρσ/8 = −E⋅B/c, the second invariant (ε^{0123} = +1, Jackson's): 0 for radiation fields. Mirrors
@@ -19358,7 +19515,11 @@ impl BjEmTensor {
         var d: f64 = e.dot(b);
         var nd: f64 = -d;
         var i: f64 = nd / BJ_SPEED_OF_LIGHT;
-        return i;
+        var ad: f64 = f64_abs(d);
+        var f: *f64 = _bj_rel_f64p(self);
+        if (ad > _BJ_VX_MN && ad <= _BJ_VX_HI && _bj_rel_e_exact(f) == 1) { return i; }
+        var u: f64 = _bj_rel_inv2_edge(f, i);
+        return u;
     }
 
     # The dual *F^μν, E → cB and B → −E/c, rounded once (ADR 0002 row 13): its components (cB)/c = B and
@@ -19435,6 +19596,11 @@ impl BjEmTensor {
         var u2: f64 = -four_velocity.y;
         var u3: f64 = -four_velocity.z;
         var k: f64[4];
+        var ul: f64[4];
+        ul[0] = u0;
+        ul[1] = u1;
+        ul[2] = u2;
+        ul[3] = u3;
         for (var i = 0; i < 4; i = i + 1) {
             var r0: f64 = p[4 * i];
             var r1: f64 = p[4 * i + 1];
@@ -19442,6 +19608,8 @@ impl BjEmTensor {
             var r3: f64 = p[4 * i + 3];
             var s: f64 = r0 * u0 + r1 * u1 + r2 * u2 + r3 * u3;
             k[i] = charge * s;
+            var as2: f64 = f64_abs(s);
+            if (!(as2 >= _BJ_VX_LO && as2 <= _BJ_VX_HI)) { k[i] = _bj_rel_ff_edge(p + 4 * i, &ul, charge, s); }
         }
         var f: BjFourVector = BjFourVector_new(k[0], k[1], k[2], k[3]);
         return f;
@@ -19574,7 +19742,10 @@ impl BjFourVector {
         var y: f64 = self.y;
         var z: f64 = self.z;
         var d: f64 = nt * other.t + x * other.x + y * other.y + z * other.z;
-        return d;
+        var ad: f64 = f64_abs(d);
+        if (ad >= _BJ_VX_LO && ad <= _BJ_VX_HI) { return d; }
+        var u: f64 = _bj_rel_dot4_edge(_bj_rel_f64p(self), _bj_rel_f64p(&other), d);
+        return u;
     }
 
     # s² = −(ct)² + x² + y² + z². Mirrors `FourVector::interval_sq`.
@@ -19586,7 +19757,11 @@ impl BjFourVector {
         var y: f64 = self.y;
         var z: f64 = self.z;
         var s: f64 = nt * t + x * x + y * y + z * z;
-        return s;
+        var as2: f64 = f64_abs(s);
+        if (as2 >= _BJ_VX_LO && as2 <= _BJ_VX_HI) { return s; }
+        var sp: *f64 = _bj_rel_f64p(self);
+        var u: f64 = _bj_rel_dot4_edge(sp, sp, s);
+        return u;
     }
 
     # √(x² + y² + z²). Mirrors `FourVector::spatial_magnitude`.
@@ -19596,8 +19771,13 @@ impl BjFourVector {
         var y: f64 = self.y;
         var z: f64 = self.z;
         var s: f64 = x * x + y * y + z * z;
-        var m: f64 = f64_sqrt(s);
-        return m;
+        if ((s >= _BJ_VX_LO && s <= _BJ_VX_HI) || _bj_vx_sumsq_plain(x, y, z, s) == 1) {
+            var m: f64 = f64_sqrt(s);
+            return m;
+        }
+        var us, ue = _bj_vx_sumsq(x, y, z);         # BjFieldVector.magnitude's edge
+        var u: f64 = _bj_k_ux_sqrt_f64(us, ue);
+        return u;
     }
 
     # The boost of speed v along x, into out: ct' = γ(ct − βx), x' = γ(x − β·ct). bj_lorentz_factor's error, out
@@ -19615,6 +19795,13 @@ impl BjFourVector {
         var d2: f64 = x - bt;
         var t2: f64 = gamma * d1;
         var x2: f64 = gamma * d2;
+        var ab: f64 = f64_abs(b);
+        var a1: f64 = f64_abs(d1);
+        var a2: f64 = f64_abs(d2);
+        if (!(ab > _BJ_VX_MN && a1 >= _BJ_VX_LO && a1 <= _BJ_VX_HI && a2 >= _BJ_VX_LO && a2 <= _BJ_VX_HI)) {
+            t2 = _bj_rel_boost_edge(gamma, speed, t, x, d1);
+            x2 = _bj_rel_boost_edge(gamma, speed, x, t, d2);
+        }
         out.t = t2;
         out.x = x2;
         out.y = self.y;

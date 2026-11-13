@@ -2698,6 +2698,54 @@ def rel_exact_gamma(vs, c, mode):
     return rn_sqrt(q) if mode == 0 else rn_frac(q)
 
 
+def rel_band(s) -> bool:
+    """src/crmath_vx.cyr's band: |s| in [2^-900, DBL_MAX]."""
+    return 2.0 ** -900 <= abs(s) <= DBL_MAX
+
+
+def rel_dot4(a, b, d):
+    """src/relativity.cyr's −a₀b₀ + a₁b₁ + a₂b₂ + a₃b₃ (M2 part 2d-3c): Rust's d in the band, for an exact 0 of exact
+    products or a non-finite operand; else each product and sum to 53 bits (rnd53), the last sum rounded once."""
+    fs = [-a[0]] + list(a[1:])
+    if rel_band(d) or not _fin(*a, *b):
+        return d
+    if d == 0 and all(vx_exact_p(x, y, x * y) for x, y in zip(fs, b)):
+        return d
+    F = Fraction
+    ps = [rnd53(F(x) * F(y)) for x, y in zip(fs, b)]
+    return rn_frac(rnd53(rnd53(ps[0] + ps[1]) + ps[2]) + ps[3])
+
+
+def rel_ff_row(r, u, q, sv):
+    """One row of the port's four-force, q·(r₀u₀ + r₁u₁ + r₂u₂ + r₃u₃) (M2 part 2d-3c), given Rust's sum sv."""
+    k = q * sv
+    if rel_band(sv) or not _fin(*r, *u, q):
+        return k
+    if sv == 0 and all(vx_exact_p(x, y, x * y) for x, y in zip(r, u)):
+        return k
+    F = Fraction
+    ps = [rnd53(F(x) * F(y)) for x, y in zip(r, u)]
+    S = rnd53(rnd53(rnd53(ps[0] + ps[1]) + ps[2]) + ps[3])
+    if S == 0:
+        return q * 0.0
+    if q == 0:
+        return q * (1.0 if S > 0 else -1.0)
+    return rn_frac(F(q) * S)
+
+
+def rel_boost_edge(g, sp, pv, qv, d, C):
+    """src/relativity.cyr's _bj_rel_boost_edge: γ(p − β·q) with β = v/c (M2 part 2d-3c)."""
+    r = g * d
+    if not _fin(pv, qv):
+        return r
+    b = fdiv(sp, C)
+    if (abs(b) > VX_MN or sp == 0) and (vx_exact_p(b, qv, b * qv) or rel_band(d)):
+        return r
+    F = Fraction
+    D = rnd53(F(pv) - rnd53(rnd53(F(sp) / F(C)) * F(qv)))
+    return g * 0.0 if D == 0 else rn_frac(F(g) * D)
+
+
 def rel_ops(port: bool, gamma=None, r13=None, r17=None):
     def gov(fn, args, plain):
         if port and all(math.isfinite(x) for x in args) and fv_governed(fn, args) == 18:
@@ -2717,7 +2765,7 @@ def rel_ops(port: bool, gamma=None, r13=None, r17=None):
         plain = [a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]]
         return gov("FieldVector::cross", list(a) + list(b), plain)
 
-    return {"mag": mag, "mag_sq": mag_sq, "dot": dot, "cross": cross, "port": port,
+    return {"mag": mag, "mag_sq": mag_sq, "dot": dot, "cross": cross, "port": port, "ux": port,
             "gamma": port if gamma is None else gamma, "r13": port if r13 is None else r13,
             "r17": port if r17 is None else r17}
 
@@ -2789,10 +2837,30 @@ def rel_rust(fn, v, O, K):
             return ok3(ef)
         if fn == "EmTensor::magnetic_field":
             return ok3(bf)
+        F = Fraction
+        fin = _fin(c[4], c[8], c[12], *bf)
         if fn == "EmTensor::first_invariant":
-            return okf(2.0 * (O["mag_sq"](bf) - fdiv(O["mag_sq"](ef), C2)))
+            d = O["mag_sq"](bf) - fdiv(O["mag_sq"](ef), C2)
+            if O["ux"] and fin and not rel_band(d):
+                # Row 18's rule (M2 part 2d-3c): E = c·F, E², B², E²/c² and the difference to 53 bits, 2D rounded once.
+                E = [rnd53(F(x) * F(C)) for x in (c[4], c[8], c[12])]
+                e2 = rnd53(rnd53(rnd53(E[0] ** 2) + rnd53(E[1] ** 2)) + rnd53(E[2] ** 2))
+                b2 = rnd53(rnd53(rnd53(F(bf[0]) ** 2) + rnd53(F(bf[1]) ** 2)) + rnd53(F(bf[2]) ** 2))
+                return okf(rn_frac(2 * rnd53(b2 - rnd53(e2 / F(C2)))))
+            return okf(2.0 * d)
         if fn == "EmTensor::second_invariant":
-            return okf(fdiv(-O["dot"](ef, bf), C))
+            d = O["dot"](ef, bf)
+            exact = all(vx_exact_p(x, C, x * C) for x in (c[4], c[8], c[12]))
+            if O["ux"] and fin and not (VX_MN < abs(d) <= DBL_MAX and exact):
+                # Row 18's rule: E = c·F, E⋅B to 53 bits, −E⋅B/c rounded once.
+                E = [rnd53(F(x) * F(C)) for x in (c[4], c[8], c[12])]
+                ps = [rnd53(E[k] * F(bf[k])) for k in range(3)]
+                S = rnd53(rnd53(ps[0] + ps[1]) + ps[2])
+                if S == 0:
+                    # an exact 0: IEEE's signs where every product is 0, else a cancellation's +0
+                    return okf(fdiv(-d, C)) if all(x == 0 for x in ps) else okf(-0.0)
+                return okf(rn_frac(-S / F(C)))
+            return okf(fdiv(-d, C))
         if fn == "EmTensor::dual":
             inv = -fdiv(1.0, C)
             rust = [("f", x) for x in rel_from_fields([x * C for x in bf], [x * inv for x in ef], K)]
@@ -2803,7 +2871,8 @@ def rel_rust(fn, v, O, K):
             out = []
             for i in range(4):
                 r = c[4 * i:4 * i + 4]
-                out.append(("f", q * (r[0] * ul[0] + r[1] * ul[1] + r[2] * ul[2] + r[3] * ul[3])))
+                sv = r[0] * ul[0] + r[1] * ul[1] + r[2] * ul[2] + r[3] * ul[3]
+                out.append(("f", rel_ff_row(r, ul, q, sv) if O["ux"] else q * sv))
             return out
         return None
     if fn == "relativity::lorentz_transform_fields":
@@ -2840,20 +2909,26 @@ def rel_rust(fn, v, O, K):
         return [("f", C * v[0]), ("f", v[1]), ("f", v[2]), ("f", v[3])]
     if fn == "FourVector::dot":
         a, b = v[0:4], v[4:8]
-        return okf(-a[0] * b[0] + a[1] * b[1] + a[2] * b[2] + a[3] * b[3])
+        d = -a[0] * b[0] + a[1] * b[1] + a[2] * b[2] + a[3] * b[3]
+        return okf(rel_dot4(a, b, d) if O["ux"] else d)
     if fn == "FourVector::interval_sq":
         a = v[0:4]
-        return okf(-a[0] * a[0] + a[1] * a[1] + a[2] * a[2] + a[3] * a[3])
+        d = -a[0] * a[0] + a[1] * a[1] + a[2] * a[2] + a[3] * a[3]
+        return okf(rel_dot4(a, a, d) if O["ux"] else d)
     if fn == "FourVector::spatial_magnitude":
         a = v[0:4]
-        return okf(fsqrt(a[1] * a[1] + a[2] * a[2] + a[3] * a[3]))
+        return okf(O["mag"](a[1:4]) if O["ux"] else fsqrt(a[1] * a[1] + a[2] * a[2] + a[3] * a[3]))
     if fn == "FourVector::boost_x":
         a, s = v[0:4], v[4]
         err, g = rel_gamma(s, K, O["gamma"])
         if err:
             return err
         bv = fdiv(s, C)
-        return [("f", g * (a[0] - bv * a[1])), ("f", g * (a[1] - bv * a[0])), ("f", a[2]), ("f", a[3])]
+        d1, d2 = a[0] - bv * a[1], a[1] - bv * a[0]
+        t2, x2 = g * d1, g * d2
+        if O["ux"] and not (abs(bv) > VX_MN and rel_band(d1) and rel_band(d2)):
+            t2, x2 = rel_boost_edge(g, s, a[0], a[1], d1, C), rel_boost_edge(g, s, a[1], a[0], d2, C)
+        return [("f", t2), ("f", x2), ("f", a[2]), ("f", a[3])]
     if fn == "relativity::retarded_scalar_potential":
         q, d = v
         e = radial_check(d)

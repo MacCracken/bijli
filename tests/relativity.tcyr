@@ -1153,6 +1153,36 @@ fn cyrius_tests(): i64 {
     var ay: f64 = pc.a.y;
     assert(pc.phi_over_c == 0.5 && ay == 2.0, "BjFourPotential holds φ/c and A");
 
+    # ADR 0002 row 18's rule (M2 part 2d-3c): the four-vector and tensor chains at their range edges.
+    test_group("cyrius_range_edges (ADR 0002 row 18)");
+    var e300: f64 = _bj_from_bits(0x7E37E43C8800759C);                  # 1e300
+    var e200: f64 = _bj_from_bits(0x6974E718D7D7625A);                  # 1e200
+    var ll: BjFourVector = BjFourVector_new(e300, e300, 0.0, 0.0);
+    var s1: f64 = ll.interval_sq();
+    assert(_bj_bits(s1) == 0, "a light-like four-vector at 1e300: s² = 0, its squares unbounded (Rust: NaN, ∞ − ∞)");
+    var sm: BjFourVector = BjFourVector_new(1.0, e200, e200, e200);
+    var m1: f64 = sm.spatial_magnitude();
+    assert(_bj_bits(m1) == 0x69821A2F9C3D2C96, "|(1e200, 1e200, 1e200)| = 1.73e200 (Rust: ∞)");
+    var e154: f64 = _bj_from_bits(0x5FE7DDDF6B095FF1);                  # 1e154
+    var e155: f64 = _bj_from_bits(0x601DD55745CBB7ED);                  # 1e155
+    var fe: BjEmTensor = BjEmTensor_from_fields(BjFieldVector_new(e154, 0.0, 0.0), BjFieldVector_new(e155, 0.0, 0.0));
+    var i2: f64 = fe.second_invariant();
+    assert(_bj_bits(i2) == 0xFE53EC6466D0C9C3, "E⋅B = 1e309: −E⋅B/c = −3.3e300 (Rust: −∞)");
+    var cey: f64 = c * e200;
+    var fr2: BjEmTensor = BjEmTensor_from_fields(BjFieldVector_new(0.0, cey, 0.0), BjFieldVector_new(0.0, 0.0, e200));
+    var i1: f64 = fr2.first_invariant();
+    assert(_bj_bits(i1) == 0, "a radiation field at B = 1e200: 2(B² − E²/c²) = 0 (Rust: NaN)");
+    var em303: f64 = _bj_from_bits(0x0105F1CA820511C3);                 # 1e-303
+    var e3a: BjFieldVector = BjFieldVector_new(em303, em303 * 2.0, 0.0);
+    var nb: f64 = -e300;
+    var b3a: BjFieldVector = BjFieldVector_new(e300, nb, e300 * 0.5);
+    var f3: BjEmTensor = BjEmTensor_from_fields(e3a, b3a);
+    var e10: f64 = _bj_from_bits(0x4202A05F20000000);                   # 1e10
+    var em300: f64 = _bj_from_bits(0x01A56E1FC2F8F359);                 # 1e-300
+    var k3: BjFourVector = f3.four_force(em300, BjFourVector_new(e10, e10, e10, e10));
+    assert(_bj_bits(k3.x) == 0x420BF08EB0000001 && _bj_bits(k3.y) == 0x41F2A05F20000000
+      && _bj_bits(k3.z) == 0xC212A05F20000000, "q = 1e-300 against sums past DBL_MAX: K = (0, 1.5e10, 5e9, −2e10)");
+
     if (v1 == 0 || v2 == 0 || v3 == 0 || v4 == 0 || v5 == 0 || v6 == 0 || v7 == 0) { println("."); }
     return 0;
 }

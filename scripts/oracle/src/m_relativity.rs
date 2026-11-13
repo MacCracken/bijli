@@ -460,6 +460,7 @@ pub fn emit() -> Module {
     emit_solver(&mut m, &mut rng);
     emit_kappa_edges(&mut m);
     emit_nb_edges(&mut m);
+    emit_fv_edges(&mut m);
     m
 }
 
@@ -665,6 +666,64 @@ fn emit_nb_edges(m: &mut Module) {
                 let bv = FieldVector::new(p[0] * fr, p[1] * fr, p[2] * fr);
                 lw_rows(m, 1.0, r, bv, bd, false);
             }
+        }
+    }
+}
+
+/// M2 part 2d-3c (bijli ADR 0002 row 18's rule): the four-vector and tensor chains at their range edges. Four-vectors
+/// whose products pass DBL_MAX and cancel (light-like at 10^300, DBL_MAX parts), whose squares overflow alone
+/// (10^155, 10^200) or fall below 2^-1022 (10^-160, 10^-300), through `interval_sq`, `spatial_magnitude`, `dot` and
+/// `boost_x` (with speeds whose β is subnormal: 10^-310, 2^-1074, 10^-300). Tensors from fields whose invariants'
+/// squares and products pass DBL_MAX and cancel (a radiation field at 10^200, E ∥ B at 10^150 and 10^154/10^155), whose
+/// E/c is subnormal under a vast B, whose B² is subnormal, and DBL_MAX parts, through both invariants and the
+/// four-force (four-velocities at 10^300 and 10^10, the latter under q = 10^-300). After every older row.
+fn emit_fv_edges(m: &mut Module) {
+    let big = f64::MAX;
+    let fvs = [
+        FourVector::new(1e300, 1e300, 0.0, 0.0),
+        FourVector::new(1e300, 0.6e300, 0.8e300, 0.0),
+        FourVector::new(big, big, 0.0, 0.0),
+        FourVector::new(-big, 0.5 * big, big, 0.25 * big),
+        FourVector::new(1e200, 1e200, 1e200, 1e200),
+        FourVector::new(1e155, 1e155, 0.0, 0.0),
+        FourVector::new(1e-160, 1e-161, 0.0, 0.0),
+        FourVector::new(3e-160, 1e-160, 2e-160, 2e-160),
+        FourVector::new(1e-300, 1e-300, 1e-300, 0.0),
+        FourVector::new(1.0, 1e-170, 1e-170, 1e-170),
+    ];
+    for &a in &fvs {
+        let ins = fv4(a);
+        m.row("FourVector::interval_sq", Class::A, &ins, &[f(black_box(a).interval_sq())]);
+        m.row("FourVector::spatial_magnitude", Class::A, &ins, &[f(black_box(a).spatial_magnitude())]);
+        for &b in &fvs {
+            m.row("FourVector::dot", Class::A, &cat(&[ins.clone(), fv4(b)]), &[f(black_box(a).dot(&b))]);
+        }
+        for u in [1e-310, pow2(-1074), 1e-300, 0.5 * C, -0.9 * C, 0.0] {
+            m.row("FourVector::boost_x", Class::A, &cat(&[ins.clone(), vec![f(u)]]), &res_4(black_box(a).boost_x(u)));
+        }
+    }
+    let fields = [
+        (FieldVector::new(0.0, C * 1e200, 0.0), FieldVector::new(0.0, 0.0, 1e200)),
+        (FieldVector::new(C * 1e150, 0.0, 0.0), FieldVector::new(1e150, 0.0, 0.0)),
+        (FieldVector::new(1e154, 0.0, 0.0), FieldVector::new(1e155, 0.0, 0.0)),
+        (FieldVector::new(1e-303, 2e-303, 0.0), FieldVector::new(1e300, -1e300, 5e299)),
+        (FieldVector::new(C * 1e-160, 0.0, 0.0), FieldVector::new(2e-160, 0.0, 0.0)),
+        (FieldVector::new(big, big, 0.0), FieldVector::new(big, 0.0, big)),
+        (FieldVector::new(1e300, -1e300, 1e300), FieldVector::new(1e300, 1e300, 0.0)),
+    ];
+    let us = [
+        (1.0, FourVector::new(1e300, 1e300, 0.0, 0.0)),
+        (1e-300, FourVector::new(1e10, 1e10, 1e10, 1e10)),
+        (-1.6e-19, FourVector::new(C / 0.6, 0.8 * C / 0.6, 0.0, 0.0)),
+    ];
+    for (e, b) in fields {
+        let t = EmTensor::from_fields(black_box(&e), &b);
+        let ins = tt(&t);
+        m.row("EmTensor::first_invariant", Class::A, &ins, &[f(black_box(&t).first_invariant())]);
+        m.row("EmTensor::second_invariant", Class::A, &ins, &[f(black_box(&t).second_invariant())]);
+        for (q, u) in us {
+            let ins4 = cat(&[ins.clone(), vec![f(q)], fv4(u)]);
+            m.row("EmTensor::four_force", Class::A, &ins4, &fv4(black_box(&t).four_force(q, &u)));
         }
     }
 }
