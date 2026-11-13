@@ -526,7 +526,7 @@ def run(target, lines):
 
 EXACT = ["mono"] + list(SHAPES) + ["sqrt_div", "wsqrt", "sqrt_mono", "sqrt_mono_acc", "ux_mul", "ux_div", "ux_add",
          "ux_sub", "ux_sqrt", "r2_below", "gamma", "gamma_slow", "gamma2", "gamma2_slow", "gamma_ok", "prod5",
-         "prod5_acc", "mono_wide", "mono_wide_acc", "below_prod", "below_quot", "below_sum"]
+         "prod5_acc", "mono_wide", "mono_wide_acc", "below_prod", "below_quot", "below_sum", "cm", "cm_slow"]
 UX = ["ux_exp", "ux_cosh", "ux_sinh", "ux_ln", "ux_pow", "ux_sin", "ux_cos"]
 
 
@@ -683,6 +683,88 @@ def gamma_families(rng, count):
     return fams
 
 
+
+# ── Clausius–Mossotti's ε_r (src/crmath_edge.cyr, M2 part 2c-2, ADR 0002 row 17) ──────────────────────────────────────
+CM_INVALID = (1 << 64) - 1                  # X ≥ 1
+CM_EPS0 = float(next(ln for ln in (root / "src/constants.cyr").read_text().splitlines()
+                     if ln.startswith("public const BJ_EPSILON_0 = ")).split("= ")[1].rstrip(";"))
+
+
+def cm_ref(a, nd):
+    """RN((3ε₀ + 2P)/(3ε₀ − P)) for P = Nα exactly, ε₀ its double, or the invalid marker when 3ε₀ − P ≤ 0."""
+    p = Fraction(nd) * Fraction(a)
+    t = 3 * Fraction(CM_EPS0)
+    if t - p <= 0:
+        return CM_INVALID
+    return f2b(rn_frac((t + 2 * p) / (t - p)))
+
+
+def cm_ulps(x, k):
+    """The double k steps from the positive double x."""
+    return b2f(f2b(x) + k)
+
+
+def cm_cases(rng, count):
+    """(α, N) pairs: physical ones; X uniform in (−4, 1) over N of every binade; X within a few ulps of 1 and of −1/2
+    (ε_r's pole and zero); any finite α and N ≥ 0; the exact ties (ε_r = 9e·2^-j − 2 near the pole and −2 + d·2^-53
+    below the zero, e ε₀'s odd significand and d = 3f for f dividing it), at scales 2^±s; the fast region's edges
+    (χ near −0.24 and 0.49) and the shortcuts' (|χ| near 2^-60 and 2^136); and the exact zero and pole (P = −1.5ε₀,
+    P = 3ε₀), zeros, Nα overflowing and underflowing."""
+    b = f2b(CM_EPS0)
+    m = (b & ((1 << 52) - 1)) | (1 << 52)
+    ex = ((b >> 52) & 0x7FF) - 1075
+    while m % 2 == 0:
+        m //= 2
+        ex += 1
+    divs = [f for f in range(1, 10000) if m % f == 0] + [m // f for f in range(1, 10000) if m % f == 0]
+    divs = sorted(set(f for f in divs if 3 * f <= 1 << 53))
+    out = []
+    for i in range(count):
+        kind = i % 8
+        if kind == 0:
+            out.append((rng.choice([1.0, -1.0]) * 10.0 ** rng.uniform(-42.0, -38.0), 10.0 ** rng.uniform(24.0, 29.0)))
+        elif kind == 1:
+            nd = 2.0 ** rng.uniform(-1000.0, 1000.0)
+            x = rng.uniform(-4.0, 1.0)
+            out.append((x * 3.0 * CM_EPS0 / nd, nd))
+        elif kind == 2:
+            nd = rng.choice([1.0, 2.0 ** rng.randint(-900, 900), 10.0 ** rng.uniform(-300.0, 300.0)])
+            out.append((cm_ulps(3.0 * CM_EPS0 / nd, rng.randint(-6, 6)), nd))
+        elif kind == 3:
+            nd = rng.choice([1.0, 2.0 ** rng.randint(-900, 900), 10.0 ** rng.uniform(-300.0, 300.0)])
+            out.append((-cm_ulps(1.5 * CM_EPS0 / nd, rng.randint(-6, 6)), nd))
+        elif kind == 4:
+            out.append((any_finite(rng), abs(any_finite(rng))))
+        elif kind == 5:
+            sc = 2.0 ** rng.randint(-400, 400)
+            if rng.random() < 0.5:
+                j = rng.randint(0, 50)
+                out.append((float((3 * m - (1 << j)) * Fraction(2) ** ex) / sc, sc))
+            else:
+                f = rng.choice(divs)
+                out.append((-float(3 * (m // f) * Fraction(2) ** ex) / sc, float((1 << 53) - f) * sc))
+        elif kind == 6:
+            x = rng.choice([-0.24, 0.49, 2.0 ** -60, -(2.0 ** -60), 2.0 ** 136, -(2.0 ** 136)])
+            nd = 2.0 ** rng.uniform(-200.0, 200.0)
+            out.append((cm_ulps(abs(x) * 3.0 * CM_EPS0 / nd, rng.randint(-4, 4)) * math.copysign(1.0, x), nd))
+        else:
+            sc = 2.0 ** rng.randint(-500, 500)
+            out.append(rng.choice([(-CM_EPS0 / sc, 1.5 * sc), (CM_EPS0 / sc, 3.0 * sc), (0.0, 1e28), (-0.0, 1e28),
+                                   (1e-40, 0.0), (-1e10, 1e300), (1e10, 1e300), (-1e-300, 1e-300),
+                                   (5e-324, 1e300), (-5e-324, 1e300), (-1.7976931348623157e308, 1e10)]))
+    return out
+
+
+def cm_families(rng, count):
+    """cm (the full function) and cm_slow (the exact check alone) on each of cm_cases' pairs, against cm_ref."""
+    out = []
+    for a, nd in cm_cases(rng, count):
+        want = cm_ref(a, nd)
+        out.append(("cm", [a, nd], want))
+        out.append(("cm_slow", [a, nd], want))
+    return out
+
+
 def main() -> int:
     (root / "build").mkdir(exist_ok=True)
     names = wanted or list(FUNCS) + ["exact", "ux"]
@@ -707,6 +789,9 @@ def main() -> int:
         grng = random.Random(0x6A_77A)
         calls += [(f, ref, ws) for f, ws, ref in gamma_families(grng, max(1, n // 5))
                   if "exact" in names or f in names]
+        crng = random.Random(0xC1_A05)
+        calls += [(f, ref, ws) for f, ws, ref in cm_families(crng, max(1, n // 5))
+                  if "exact" in names or f in names]
     if "ux" in names or any(x in UX for x in names):
         urng = random.Random(0x5C_2E_D6E)
         fams = ux_families(urng, max(1, n // 20))
@@ -724,7 +809,7 @@ def main() -> int:
     for i, (name, want, a) in enumerate(calls):
         for t in targets:
             g = results[t][i]
-            any_nan = name not in UX and not name.startswith("gamma")    # the gamma families' "invalid" is a word
+            any_nan = name not in UX and not name.startswith(("gamma", "cm"))  # their "invalid" is a word
             ok = g == want or (any_nan and b2f(g) != b2f(g) and b2f(want) != b2f(want))
             per.setdefault((name, t), [0, 0])[0 if ok else 1] += 1
             if not ok:

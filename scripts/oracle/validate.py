@@ -1513,6 +1513,19 @@ def material_port13(fn, v, EPS0, MU0):
     return None
 
 
+def material_cm_port(a, n, EPS0):
+    """Clausius–Mossotti in the port (M2 part 2c-2, row 17): X ≥ 1 and ε_r ≤ 0 decided on the exact P = Nα, ε_r =
+    (3ε₀ + 2P)/(3ε₀ − P) rounded once, and the catastrophe's X rounded once."""
+    p, t = Fraction(n) * Fraction(a), 3 * Fraction(EPS0)
+    if t - p <= 0:
+        return ip_err(f"Nα/(3ε₀) = {rust_display(rn_frac(p / t))} ≥ 1: Clausius-Mossotti diverges (polarization "
+                      "catastrophe), no physical ε_r")
+    eps = rn_frac((t + 2 * p) / (t - p))
+    if eps <= 0.0:
+        return [("E", "InvalidPermittivity"), ("s", f"invalid permittivity: {rust_display(eps)} (must be > 0)")]
+    return okf(eps)
+
+
 def material_port(fn, v, EPS0, MU0):
     """The port's outputs for a material row an ADR 0002 row changes, else None."""
     if fn == "material::classify_magnetic" and not math.isnan(v[0]):
@@ -1528,6 +1541,8 @@ def material_port(fn, v, EPS0, MU0):
                 return 17, dz_err("permeability cannot be zero for energy density")
             m13 = material_port13(fn, v, EPS0, MU0)
             return 17, m13 if m13 is not None else okf(fdiv(v[1] * v[1], 2.0 * (v[0] * MU0)))
+    if fn == "material::clausius_mossotti" and _fin(v[0], v[1]) and v[1] >= 0.0:
+        return 17, material_cm_port(v[0], v[1], EPS0)
     if fn == "material::curie_law" and math.isnan(v[1]):
         return 19, ip_err(f"temperature must be positive, got {rust_display(v[1])} K")
     if fn == "material::curie_weiss" and math.isnan(v[1] - v[2]):

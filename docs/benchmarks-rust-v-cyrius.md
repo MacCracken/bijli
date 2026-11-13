@@ -57,7 +57,7 @@
 | `material/polarization` | 1.00 ns | `material/polarization` | 25.00 ns | 25.1× |
 | `material/displacement_field` | 0.99 ns | `material/displacement_field` | 231.00 ns | 233.3× |
 | `material/h_field_from_b` | 5.51 ns | `material/h_field_from_b` | 256.00 ns | 46.5× |
-| `material/clausius_mossotti` | 1.24 ns | `material/clausius_mossotti` | 26.00 ns | 20.9× |
+| `material/clausius_mossotti` | 1.24 ns | `material/clausius_mossotti` | 128.00 ns | 103.2× |
 | `material/curie_weiss` | 1.24 ns | `material/curie_weiss` | 8.00 ns | 6.5× |
 | `relativity/lorentz_factor` | 1.24 ns | `relativity/lorentz_factor` | 153.00 ns | 123.4× |
 | `relativity/em_tensor_from_fields` | 8.11 ns | `relativity/em_tensor_from_fields` | 36.00 ns | 4.4× |

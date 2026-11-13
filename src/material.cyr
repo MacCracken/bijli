@@ -7,12 +7,14 @@
 # 2b-1): the dielectric and magnetic energy densities, D = ε_r·ε₀·E, B = μ_r·μ₀·H and H = B/(μ_r·μ₀) part by part, and
 # BjMaterial's refractive index, impedance, wave speed and lossless optical constants (src/crmath_kx.cyr's monomials,
 # src/crmath_mono.cyr's √ of one). A non-finite operand keeps Rust's chain; the formulas with a difference inside
-# (polarization, magnetization, Clausius–Mossotti, Curie–Weiss) are Rust's. The bound surface charge and current are
-# BjFieldVector's dot and cross, so their range edges follow ADR 0002 row 18 (src/field.cyr). Three of Rust's
-# inconsistencies are fixed (ADR 0002, the user's answers of 2026-11-12): the Curie laws refuse a NaN temperature (row
-# 19), BjMaterial.wave_speed validates as impedance does (row 20), and bj_classify_magnetic refuses a NaN
-# susceptibility (row 21). A fallible function returns a value-form Result with its
-# payload, the error in the last-error record (src/error.cyr); a `Result<FieldVector>` writes through an out pointer.
+# (polarization, magnetization, Curie–Weiss) are Rust's. Clausius–Mossotti decides its pole and zero on the exact Nα
+# and rounds ε_r once (ADR 0002 row 17, M2 part 2c-2, src/crmath_edge.cyr), and the thresholds against 10^-30 and
+# −10^-15 are exact (row 17, M2 part 2c-1). The bound surface charge and current are BjFieldVector's dot and cross, so
+# their range edges follow ADR 0002 row 18 (src/field.cyr). Three of Rust's inconsistencies are fixed (ADR 0002, the
+# user's answers of 2026-11-12): the Curie laws refuse a NaN temperature (row 19), BjMaterial.wave_speed validates as
+# impedance does (row 20), and bj_classify_magnetic refuses a NaN susceptibility (row 21). A fallible function returns
+# a value-form Result with its payload, the error in the last-error record (src/error.cyr); a `Result<FieldVector>`
+# writes through an out pointer.
 # No harmonic quantity appears here, so no time convention (src/complex.cyr) is involved.
 
 private
@@ -133,7 +135,9 @@ public fn bj_dielectric_energy_density(relative_permittivity: f64, e_magnitude: 
 
 # ε_r = (1 + 2X)/(1 − X) with X = Nα/(3ε₀), the Clausius–Mossotti relation, for a molecular polarizability α (F·m²)
 # and number density N (m⁻³). InvalidParameter for a non-finite α or N, N < 0, or X ≥ 1 (the polarization
-# catastrophe); InvalidPermittivity when ε_r ≤ 0 (X ≤ −1/2, a negative α). Mirrors `material::clausius_mossotti`.
+# catastrophe); InvalidPermittivity when ε_r ≤ 0 (X ≤ −1/2, a negative α). Both tests are exact, ε_r is
+# (3ε₀ + 2Nα)/(3ε₀ − Nα) correctly rounded, and the catastrophe reports X correctly rounded (ADR 0002 row 17,
+# src/crmath_edge.cyr). Mirrors `material::clausius_mossotti`.
 public fn bj_clausius_mossotti(polarizability: f64, number_density: f64): Result {
     if (_bj_is_finite(polarizability) == 0 || _bj_is_finite(number_density) == 0 || number_density < 0.0) {
         var t = _bj_err_reason(BJ_ERR_INVALID_PARAMETER);
@@ -143,20 +147,17 @@ public fn bj_clausius_mossotti(polarizability: f64, number_density: f64): Result
         _bj_fmt_f64_display(t, number_density);
         return Err(BJ_ERR_INVALID_PARAMETER);
     }
-    var na: f64 = number_density * polarizability;
-    var three: f64 = 3.0 * BJ_EPSILON_0;
-    var chi: f64 = na / three;
-    if (chi != chi || chi >= 1.0) {
+    var er: f64[1];
+    if (_bj_cr_clausius(polarizability, number_density, 0, &er) == 1) {
+        var chi: f64 = _bj_k_cr_mul2_div2(number_density, polarizability, 3.0, BJ_EPSILON_0);
         var t2 = _bj_err_reason(BJ_ERR_INVALID_PARAMETER);
         _bj_tx_cstr(t2, "Nα/(3ε₀) = ");
         _bj_fmt_f64_display(t2, chi);
         _bj_tx_cstr(t2, " ≥ 1: Clausius-Mossotti diverges (polarization catastrophe), no physical ε_r");
         return Err(BJ_ERR_INVALID_PARAMETER);
     }
-    var num: f64 = 1.0 + 2.0 * chi;
-    var den: f64 = 1.0 - chi;
-    var eps_r: f64 = num / den;
-    if (eps_r != eps_r || eps_r <= 0.0) { return Err(_bj_err_invalid_permittivity(eps_r)); }
+    var eps_r: f64 = er[0];
+    if (eps_r <= 0.0) { return Err(_bj_err_invalid_permittivity(eps_r)); }
     return Ok(eps_r);
 }
 

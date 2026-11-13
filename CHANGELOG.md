@@ -244,6 +244,15 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
   and one just above could be refused; each is now exact (`src/crmath_cmp.cyr`'s exact sign of a sum of products,
   checked by `cr_verify.py`'s below_* families). `classify_magnetic` reads its −1e-15 as −10^-15 exactly, so
   χ = −1e-15 itself is diamagnetic (Rust: paramagnetic).
+- **material** (ADR 0002 row 17 amended, M2 part 2c-2, the user's answer of 2026-11-12): `clausius_mossotti` tested
+  the rounded χ = Nα/(3ε₀) against 1 and the rounded ε_r against 0, and computed ε_r = (1 + 2χ)/(1 − χ), which
+  cancels at both edges: it refused inputs just below the polarization catastrophe (χ rounding to 1) and just above
+  ε_r = 0 (1 + 2χ rounding to 0 where ε_r is about 3e-17), was hundreds of ulps or more off near the pole, and gave
+  a NaN payload for a negative Nα past DBL_MAX (the value is −2). Both tests are now exact on Nα, ε_r =
+  (3ε₀ + 2Nα)/(3ε₀ − Nα) is correctly rounded, and so is the catastrophe's reported X (new `src/crmath_edge.cyr`:
+  double-double sums or exact expansions, kimiya's rounding test, an exact midpoint check; `cr_verify.py`'s cm
+  families). X = 1/3 now gives 2.5 exactly (Rust: 2.4999999999999996). The cost: `material/clausius_mossotti`
+  26 → 128 ns (`port-parity.md` §37).
 - **relativity** (ADR 0002 row 13 amended, M2 part 2b-4): `retarded_scalar_potential`, `retarded_vector_potential`,
   `larmor_power` and `EmTensor::dual` rounded two to five times, and overflowed where the value is representable
   (Larmor with q² past DBL_MAX, the dual of B past DBL_MAX/c: ∞ each); they are now correctly rounded for finite

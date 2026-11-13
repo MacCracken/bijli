@@ -10541,6 +10541,250 @@ fn _bj_cr_lorentz(v: *f64, n, c: f64, mode, slow, out: *f64): i64 {
     return s;
 }
 
+# --- crmath_edge.cyr ---
+
+# crmath_edge.cyr — bijli's values at their own pole or zero (M2 part 2c, ADR 0002 row 17, the user's answer of
+# 2026-11-12: exact tests, accurate values). A test that decides where its value has a pole or a zero is made on the
+# exact quantity, and the value beside it comes from exact differences, correctly rounded, so the two agree: an input
+# the exact test accepts never gets a value of ∞, 0 or NaN from a cancellation, and one it refuses carries the exact
+# value's sign.
+#
+# Clausius–Mossotti (M2 part 2c-2). ε_r = (1 + 2X)/(1 − X) with X = Nα/(3ε₀) is (3ε₀ + 2P)/(3ε₀ − P), P = Nα exactly
+# and ε₀ its double. X ≥ 1 is 3ε₀ − P ≤ 0, and below it ε_r ≤ 0 is 3ε₀ + 2P ≤ 0. The value ε_r is rounded once (to
+# nearest, ties to even). The parts: 3ε₀ = t_h + t_l (FastTwoSum(2ε₀, ε₀)) and P = b_h + b_l (TwoProduct) exactly, so
+# num = t_h + t_l + 2b_h + 2b_l and den = t_h + t_l − b_h − b_l, four doubles each.
+#
+# The rough X. χ = RN(RN(Nα)/RN(3ε₀)) is within 3.02u of X (u = 2^-53) when Nα doesn't under- or overflow. |χ| < 2^-60
+# (Nα underflowing included) puts |ε_r − 1| = 3|X|/(1 − X) below 2^-57, inside 1's rounding interval: ε_r rounds to
+# 1. |χ| ≥ 2^136 (Nα overflowing included) puts |X| above 2^135: X ≥ 1 for α > 0, and for α < 0 ε_r = −2 + 3/(1 − X)
+# lies within 2^-133 above −2, so it rounds to −2. Between, |P| lies in [2^-95.4, 2^101.6], so its exponent sum is in
+# [−97, 101], b_h in [2^-97, 2^103], and b_l a multiple of 2^-201: no part under- or overflows, and every step is
+# exact. With both exponents in [−500, 500], TwoProduct runs on α and N themselves (inline; Veltkamp's split doesn't
+# overflow, and every partial product's least bit is at least lsb(α)·lsb(N) = 2^(e_N + e_α − 104) ≥ 2^-201, so each
+# is exact); otherwise on α and N scaled to [1, 2), its parts then scaled by 2^(e_N + e_α). Both give the same
+# b_h = RN(P) and b_l.
+#
+# Fast region, χ ∈ [−0.24, 0.49] (X ∈ [−¼, ½], no cancellation): (s, e) = TwoSum(t_h, 2b_h) exactly, then
+# RN(RN(e + t_l) + 2b_l), then FastTwoSum: within 5.02u²·(|t_h| + 2|b_h|), relative 5.02u²·(1 + 2|X|)/(1 + 2X)
+# ≤ 15.06u²; likewise den within 5.02u²·(1 + |X|)/(1 − X) ≤ 15.06u², and the two together never above 20.1u² (at
+# X = −¼ or ½).
+# Elsewhere num and den are Shewchuk expansions of their four parts (src/crmath_gamma.cyr's _bj_g_grow, exact): the
+# largest component's sign is the sum's, which decides X ≥ 1 and ε_r ≤ 0 exactly, and Compress gives each within
+# 2^-104. kimiya's rounding test (_bj_k_dd_div_cr, src/crmath_kx.cyr: inputs within 32u² together) then rounds
+# |num|/den.
+#
+# The range. A nonzero num is a multiple of 2^min(−89, e − 103) and den of 2^min(−89, e − 104), e the exponent sum, and
+# they cancel only when |P| is near 1.5ε₀ or 3ε₀ (e in [−38, −35]), so a nonzero |ε_r| lies in [2^-109, 2^110].
+#
+# The exact check, when the test fails (a value within about 2^-99 of a midpoint, relative; or always, for slow = 1):
+# the candidate y = z₁ of _bj_k_dd_div_ends lies within an ulp of RN(v), v = |num|/den, so the signs of v − μ at the
+# midpoints μ = y ± ulp/2 decide it, ties to even. With den > 0, v − μ has the sign of |num| − y·den − h·den
+# (h = ±ulp/2, a power of two): sixteen doubles (num's four; y·dᵢ by TwoProduct, eight; h·dᵢ exactly, four), summed
+# exactly by kimiya's _bj_k_exp_sign. Their least bit is 2^-362 or above (y ≥ 2^-109, dᵢ a multiple of 2^-201), and
+# their sum below 2^215: no product under- or overflows. cr_verify.py's cm and cm_slow families check every path
+# against Python's Fraction, on x86_64 and aarch64.
+
+# (s, e) with x = s·2^e and 1 ≤ |s| < 2, s keeping x's sign, exactly, for a finite nonzero x (a subnormal is scaled by
+# 2^54 first).
+#must_use
+fn _bj_e_frexp(x: f64): (f64, i64) {
+    var b = _bj_bits(x);
+    var ex = (b >> 52) & 0x7FF;
+    var adj = 0;
+    if (ex == 0) {
+        var k54: f64 = 0x4350000000000000;          # 2^54
+        var y: f64 = x * k54;
+        b = _bj_bits(y);
+        ex = (b >> 52) & 0x7FF;
+        adj = 54;
+    }
+    var sg = b - (b & 0x7FFFFFFFFFFFFFFF);
+    var s: f64 = _bj_from_bits(sg | (b & 0xFFFFFFFFFFFFF) | 0x3FF0000000000000);
+    var e = ex - 1023 - adj;
+    return (s, e);
+}
+
+# The sign (−1, 0 or 1) of g·num − (y + h)·den, exactly, for the parts c = (t_h, t_l, b_h, b_l) (num = t_h + t_l + 2b_h
+# + 2b_l, den = t_h + t_l − b_h − b_l), g = ±1, y ≥ 2^-110 and h ±(a power of two) (the header's exact check).
+#must_use
+fn _bj_e_side(c: *f64, g: f64, y: f64, h: f64): i64 {
+    var t: f64[16];
+    var th: f64 = c[0];
+    var tl: f64 = c[1];
+    var bh: f64 = c[2];
+    var bl: f64 = c[3];
+    t[0] = g * th;
+    t[1] = g * tl;
+    var bh2: f64 = bh * 2.0;
+    var bl2: f64 = bl * 2.0;
+    t[2] = g * bh2;
+    t[3] = g * bl2;
+    var d: f64[4];
+    d[0] = th;
+    d[1] = tl;
+    d[2] = -bh;
+    d[3] = -bl;
+    for (var i = 0; i < 4; i = i + 1) {
+        var di: f64 = d[i];
+        var p, e = _bj_k_two_prod(y, di);
+        var pp: f64 = p;
+        var pe: f64 = e;
+        t[4 + 2 * i] = -pp;
+        t[5 + 2 * i] = -pe;
+        var hd: f64 = h * di;
+        t[12 + i] = -hd;
+    }
+    return _bj_k_exp_sign(&t, 16);
+}
+
+# RN(v) for v = g·num/den > 0, from a candidate y within an ulp of it (the header's exact check).
+#must_use
+fn _bj_e_settle(c: *f64, g: f64, y: f64): f64 {
+    var up: f64 = _bj_g_step(y, 1);
+    var hu: f64 = (up - y) * 0.5;
+    var su = _bj_e_side(c, g, y, hu);
+    if (su > 0) { return up; }
+    if (su == 0) {
+        var eu: f64 = _bj_g_even(y, up);
+        return eu;
+    }
+    var dn: f64 = _bj_g_step(y, 0 - 1);
+    var hd: f64 = (dn - y) * 0.5;
+    var sd = _bj_e_side(c, g, y, hd);
+    if (sd < 0) { return dn; }
+    if (sd == 0) {
+        var ed: f64 = _bj_g_even(dn, y);
+        return ed;
+    }
+    return y;
+}
+
+# Clausius–Mossotti (the header): 1 when X = Nα/(3ε₀) ≥ 1 exactly; otherwise 0, with out[0] := RN(ε_r) for
+# ε_r = (3ε₀ + 2Nα)/(3ε₀ − Nα), which is ≤ 0 exactly when ε_r is. For finite α and N ≥ 0. slow = 1 skips the rounding
+# test, so the exact check always runs (cr_verify.py's cm_slow).
+#must_use
+fn _bj_cr_clausius(alpha: f64, n: f64, slow, out: *f64): i64 {
+    var na: f64 = n * alpha;
+    var three: f64 = 3.0 * BJ_EPSILON_0;
+    var chi: f64 = na / three;
+    var ac: f64 = f64_abs(chi);
+    var lo60: f64 = 0x3C30000000000000;             # 2^-60
+    if (ac < lo60) {
+        out[0] = 1.0;
+        return 0;
+    }
+    var hi136: f64 = 0x4870000000000000;            # 2^136
+    if (ac >= hi136) {
+        if (chi > 0.0) { return 1; }
+        out[0] = -2.0;
+        return 0;
+    }
+    var t_h: f64 = three;
+    var two: f64 = 2.0 * BJ_EPSILON_0;
+    var t_l: f64 = BJ_EPSILON_0 - (three - two);   # FastTwoSum(2ε₀, ε₀)'s error: 3ε₀ = t_h + t_l
+    var bh: f64 = na;
+    var bl: f64 = 0.0;
+    var xn = (_bj_bits(n) >> 52) - 1023;            # n > 0 here
+    var xa = ((_bj_bits(alpha) >> 52) & 0x7FF) - 1023;
+    if (xn >= 0 - 500 && xn <= 500 && xa >= 0 - 500 && xa <= 500) {
+        var sp: f64 = 134217729.0;                  # n·α = b_h + b_l: TwoProduct, inline (Veltkamp's 2^27 + 1 split)
+        var cn: f64 = sp * n;
+        var nhh: f64 = cn - (cn - n);
+        var nhl: f64 = n - nhh;
+        var ca: f64 = sp * alpha;
+        var ahh: f64 = ca - (ca - alpha);
+        var ahl: f64 = alpha - ahh;
+        bl = (nhl * ahl) - (((na - (nhh * ahh)) - (nhl * ahh)) - (nhh * ahl));
+    } else {
+        var sn, en = _bj_e_frexp(n);
+        var sa, ea = _bj_e_frexp(alpha);
+        var fn1: f64 = sn;
+        var fa1: f64 = sa;
+        var ph, pl = _bj_k_two_prod(fn1, fa1);
+        var k: f64 = _bj_g_pow2(en + ea);
+        var p_h: f64 = ph;
+        var p_l: f64 = pl;
+        bh = p_h * k;
+        bl = p_l * k;
+    }
+    var c: f64[4];
+    c[0] = t_h;
+    c[1] = t_l;
+    c[2] = bh;
+    c[3] = bl;
+    var nh: f64 = 0.0;
+    var nl: f64 = 0.0;
+    var dh: f64 = 0.0;
+    var dl: f64 = 0.0;
+    var g: f64 = 1.0;
+    if (chi >= -0.24 && chi <= 0.49) {
+        var bh2: f64 = bh * 2.0;
+        var bl2: f64 = bl * 2.0;
+        var s1: f64 = t_h + bh2;                    # num: TwoSum(t_h, 2b_h), inline
+        var v1: f64 = s1 - t_h;
+        var e1: f64 = (t_h - (s1 - v1)) + (bh2 - v1);
+        var r1: f64 = (e1 + t_l) + bl2;
+        nh = s1 + r1;                               # FastTwoSum(s1, r1)
+        nl = r1 - (nh - s1);
+        var mbh: f64 = -bh;
+        var s2: f64 = t_h + mbh;                    # den: TwoSum(t_h, −b_h), inline
+        var v2: f64 = s2 - t_h;
+        var e2: f64 = (t_h - (s2 - v2)) + (mbh - v2);
+        var r2: f64 = (e2 + t_l) - bl;
+        dh = s2 + r2;                               # FastTwoSum(s2, r2)
+        dl = r2 - (dh - s2);
+    } else {
+        var de: f64[4];
+        var kd = 0;
+        var mbl: f64 = -bl;
+        var mbh2: f64 = -bh;
+        kd = _bj_g_grow(&de, kd, t_l);
+        kd = _bj_g_grow(&de, kd, t_h);
+        kd = _bj_g_grow(&de, kd, mbl);
+        kd = _bj_g_grow(&de, kd, mbh2);
+        if (kd == 0) { return 1; }
+        var dtop: f64 = de[kd - 1];
+        if (dtop < 0.0) { return 1; }
+        var ne: f64[4];
+        var kn = 0;
+        var nbl: f64 = bl * 2.0;
+        var nbh: f64 = bh * 2.0;
+        kn = _bj_g_grow(&ne, kn, t_l);
+        kn = _bj_g_grow(&ne, kn, t_h);
+        kn = _bj_g_grow(&ne, kn, nbl);
+        kn = _bj_g_grow(&ne, kn, nbh);
+        if (kn == 0) {
+            out[0] = 0.0;
+            return 0;
+        }
+        var ntop: f64 = ne[kn - 1];
+        if (ntop < 0.0) { g = -1.0; }
+        var ch, cl = _bj_g_compress(&ne, kn);
+        var c_h: f64 = ch;
+        var c_l: f64 = cl;
+        nh = g * c_h;
+        nl = g * c_l;
+        var gh, gl = _bj_g_compress(&de, kd);
+        dh = gh;
+        dl = gl;
+    }
+    if (slow == 0) {
+        var q, ok = _bj_k_dd_div_cr(nh, nl, dh, dl);
+        if (ok == 1) {
+            var qq: f64 = q;
+            var r: f64 = g * qq;
+            out[0] = r;
+            return 0;
+        }
+    }
+    var z1, z2 = _bj_k_dd_div_ends(nh, nl, dh, dl);
+    var zz: f64 = z1;
+    var y: f64 = _bj_e_settle(&c, g, zz);
+    var ry: f64 = g * y;
+    out[0] = ry;
+    return 0;
+}
+
 # --- log.cyr ---
 
 # log.cyr — bijli's logging: Rust's `tracing` sites and `logging::init` on sakshi (port of rust-old/src/logging.rs).
@@ -15046,12 +15290,14 @@ public fn bj_larmor_radius(mass: f64, v_perp: f64, charge: f64, b_magnitude: f64
 # 2b-1): the dielectric and magnetic energy densities, D = ε_r·ε₀·E, B = μ_r·μ₀·H and H = B/(μ_r·μ₀) part by part, and
 # BjMaterial's refractive index, impedance, wave speed and lossless optical constants (src/crmath_kx.cyr's monomials,
 # src/crmath_mono.cyr's √ of one). A non-finite operand keeps Rust's chain; the formulas with a difference inside
-# (polarization, magnetization, Clausius–Mossotti, Curie–Weiss) are Rust's. The bound surface charge and current are
-# BjFieldVector's dot and cross, so their range edges follow ADR 0002 row 18 (src/field.cyr). Three of Rust's
-# inconsistencies are fixed (ADR 0002, the user's answers of 2026-11-12): the Curie laws refuse a NaN temperature (row
-# 19), BjMaterial.wave_speed validates as impedance does (row 20), and bj_classify_magnetic refuses a NaN
-# susceptibility (row 21). A fallible function returns a value-form Result with its
-# payload, the error in the last-error record (src/error.cyr); a `Result<FieldVector>` writes through an out pointer.
+# (polarization, magnetization, Curie–Weiss) are Rust's. Clausius–Mossotti decides its pole and zero on the exact Nα
+# and rounds ε_r once (ADR 0002 row 17, M2 part 2c-2, src/crmath_edge.cyr), and the thresholds against 10^-30 and
+# −10^-15 are exact (row 17, M2 part 2c-1). The bound surface charge and current are BjFieldVector's dot and cross, so
+# their range edges follow ADR 0002 row 18 (src/field.cyr). Three of Rust's inconsistencies are fixed (ADR 0002, the
+# user's answers of 2026-11-12): the Curie laws refuse a NaN temperature (row 19), BjMaterial.wave_speed validates as
+# impedance does (row 20), and bj_classify_magnetic refuses a NaN susceptibility (row 21). A fallible function returns
+# a value-form Result with its payload, the error in the last-error record (src/error.cyr); a `Result<FieldVector>`
+# writes through an out pointer.
 # No harmonic quantity appears here, so no time convention (src/complex.cyr) is involved.
 
 private
@@ -15172,7 +15418,9 @@ public fn bj_dielectric_energy_density(relative_permittivity: f64, e_magnitude: 
 
 # ε_r = (1 + 2X)/(1 − X) with X = Nα/(3ε₀), the Clausius–Mossotti relation, for a molecular polarizability α (F·m²)
 # and number density N (m⁻³). InvalidParameter for a non-finite α or N, N < 0, or X ≥ 1 (the polarization
-# catastrophe); InvalidPermittivity when ε_r ≤ 0 (X ≤ −1/2, a negative α). Mirrors `material::clausius_mossotti`.
+# catastrophe); InvalidPermittivity when ε_r ≤ 0 (X ≤ −1/2, a negative α). Both tests are exact, ε_r is
+# (3ε₀ + 2Nα)/(3ε₀ − Nα) correctly rounded, and the catastrophe reports X correctly rounded (ADR 0002 row 17,
+# src/crmath_edge.cyr). Mirrors `material::clausius_mossotti`.
 public fn bj_clausius_mossotti(polarizability: f64, number_density: f64): Result {
     if (_bj_is_finite(polarizability) == 0 || _bj_is_finite(number_density) == 0 || number_density < 0.0) {
         var t = _bj_err_reason(BJ_ERR_INVALID_PARAMETER);
@@ -15182,20 +15430,17 @@ public fn bj_clausius_mossotti(polarizability: f64, number_density: f64): Result
         _bj_fmt_f64_display(t, number_density);
         return Err(BJ_ERR_INVALID_PARAMETER);
     }
-    var na: f64 = number_density * polarizability;
-    var three: f64 = 3.0 * BJ_EPSILON_0;
-    var chi: f64 = na / three;
-    if (chi != chi || chi >= 1.0) {
+    var er: f64[1];
+    if (_bj_cr_clausius(polarizability, number_density, 0, &er) == 1) {
+        var chi: f64 = _bj_k_cr_mul2_div2(number_density, polarizability, 3.0, BJ_EPSILON_0);
         var t2 = _bj_err_reason(BJ_ERR_INVALID_PARAMETER);
         _bj_tx_cstr(t2, "Nα/(3ε₀) = ");
         _bj_fmt_f64_display(t2, chi);
         _bj_tx_cstr(t2, " ≥ 1: Clausius-Mossotti diverges (polarization catastrophe), no physical ε_r");
         return Err(BJ_ERR_INVALID_PARAMETER);
     }
-    var num: f64 = 1.0 + 2.0 * chi;
-    var den: f64 = 1.0 - chi;
-    var eps_r: f64 = num / den;
-    if (eps_r != eps_r || eps_r <= 0.0) { return Err(_bj_err_invalid_permittivity(eps_r)); }
+    var eps_r: f64 = er[0];
+    if (eps_r <= 0.0) { return Err(_bj_err_invalid_permittivity(eps_r)); }
     return Ok(eps_r);
 }
 

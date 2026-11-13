@@ -1907,3 +1907,50 @@ whenever r < 1) and Curie–Weiss's T − T_c ≤ 0.
 - **Result, every target** (x86_64 ELF, x86_64 PE, aarch64): **13 modules, 0 failing; 399,374 ok, 0 failed, 0
   measured, 0 pending, 31,439 accepted (ADR 01: 8,998; ADR 0002: 22,441)** over 430,813 rows; **all 276 digests
   equal**. Eleven changed, the eleven functions with knife-edge rows.
+
+## 37. M2 part 2c-2: Clausius–Mossotti, exact tests and an accurate ε_r (2026-11-12)
+
+The first of 2c's four boundary values (the user's answer of 2026-11-12: exact tests, accurate values).
+
+- **ADR 0002 row 17, amended**: `clausius_mossotti` decides X ≥ 1 and ε_r ≤ 0 on the exact P = Nα (3ε₀ − P ≤ 0, and
+  below it 3ε₀ + 2P ≤ 0, ε₀ its double), returns ε_r = (3ε₀ + 2P)/(3ε₀ − P) rounded once, and reports the
+  catastrophe's X = Nα/(3ε₀) rounded once (kimiya's `_bj_k_cr_mul2_div2`). Rust's χ rounds twice, and 1 + 2χ and
+  1 − χ cancel at the edges: ε_r is many ulps off near the pole (578 at an exact tie below it) and 0 or negative near
+  the zero. ε₀'s significand is 4·1,370,119,201,102,221 and three times the odd part fits 53 bits, so 3ε₀ and 1.5ε₀ are
+  doubles and Rust's rounded tests are monotone against them: they only ever refuse inputs the exact tests accept (X
+  within half an ulp below 1, where χ rounds to 1; ε_r up to about 2^-53, where 1 + 2χ rounds to 0), never the
+  reverse. A negative Nα past DBL_MAX made χ = −∞ and ε_r = NaN where the value is −2.
+- **`src/crmath_edge.cyr`** (new: the boundary values, 2c-3 to 2c-5's to join it): the rough χ sends |χ| < 2^-60 to
+  ε_r = 1 and |χ| ≥ 2^136 to X ≥ 1 or ε_r = −2 (each inside its rounding interval); between, 3ε₀ = t_h + t_l and
+  P = b_h + b_l exactly (TwoProduct, α and N scaled to [1, 2) first), every part normal. For χ in [−0.24, 0.49]
+  (X in [−¼, ½]) num and den are double-doubles within 20.1u² together; elsewhere they are Shewchuk expansions of their
+  four parts, whose top components' signs decide both tests exactly, compressed to within 2^-104. kimiya's rounding
+  test rounds |num|/den; when it fails (within about 2^-99 of a midpoint), the candidate's two neighbouring midpoints
+  are checked exactly: |num| − y·den − h·den is sixteen doubles (TwoProducts, and the power-of-two h exactly), summed by
+  kimiya's `_bj_k_exp_sign`, ties to even. A nonzero ε_r lies in [2^-109, 2^110], so nothing under- or overflows.
+  Exact ties exist, and only here: a midpoint needs the odd part of its denominator to divide 9e (e = ε₀'s odd
+  significand = 3·71·6,432,484,512,217), which leaves ε_r = 9e·2^-j − 2 (j = 0 … 50, X just below 1) and
+  ε_r = −2 + 3f·2^-53 (f dividing e, X far below −½).
+- **Rows** (`m_material.rs`, on a seed of its own so the other rows stay put): 2,046 more: both edges ±6 ulps for 48 N
+  of every binade (1,248), the exact ties at three scales (177), the exact pole and zero (9), Nα past DBL_MAX, on the
+  subnormal grid and at the extremes (12), X uniform in (−4, 1) over N of every binade (600); 7,049 in all.
+- **Mappings** (`validate.py`'s `material_cm_port`, Fraction): 1,809 row-17 rows: 1,117 values an ulp or more off
+  (X = 1/3 exactly: 2.5, Rust 2.4999999999999996), 481 InvalidPermittivity values (X = −2/3: −0.2, Rust
+  −0.19999999999999998), 146 catastrophe texts (X rounded once), 29 NaN payloads now −2, and 36 refusals now accepted
+  (18 at the pole, ε_r up to 6.3e16; 18 at the zero, ε_r down to 3.2e-17). All passed on the harness's first run.
+- **`cr_verify.py`'s cm and cm_slow** (exact families; cm_slow skips the rounding test, so the exact check always
+  runs): physical pairs, X uniform, both edges ±6 ulps, any finite pair, the exact ties (41,301 of the 300,000
+  cases a midpoint), the region and shortcut edges, the exact pole and zero: **600,000 calls, all equal to Fraction's value on
+  x86_64 and aarch64**.
+- **Tests**: tests/material.tcyr's `cyrius_exact_boundaries (ADR 0002 row 17)`, 9 assertions: the 2.5 and −0.2, the
+  two refusals now accepted, the exact pole's text, the exact zero, Nα past −DBL_MAX, and a tie on each side.
+- **Benchmarks** (an interleaved A/B against HEAD, three rounds each, load 1.0–2.3): `material/clausius_mossotti`
+  (α = 1e-40, N = 1e28: the fast region) 26 → 152 ns as first written. Forming 3ε₀'s parts by FastTwoSum(2ε₀, ε₀)
+  instead of a TwoProduct call, and Nα's TwoProduct inline on α and N themselves when both exponents lie in
+  [−500, 500] (the scaled path stays for the rest; the same parts, so no result moves: every digest held), brings it
+  to 128–134 ns (HEAD 26–27 in the same runs). The rest is the double-double num and den and kimiya's rounding test,
+  about 80 dependent f64 operations on this compiler: a finding, recorded (Rust 1.24 ns), not a reason to round twice.
+  The other material rows held within the noise.
+- **Result, every target** (x86_64 ELF, x86_64 PE, aarch64): **13 modules, 0 failing; 399,611 ok, 0 failed, 0
+  measured, 0 pending, 33,248 accepted (ADR 01: 8,998; ADR 0002: 24,250)** over 432,859 rows; **all 276 digests
+  equal**. One changed: `material::clausius_mossotti`'s.

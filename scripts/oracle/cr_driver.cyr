@@ -6,12 +6,13 @@
 # part 5), bijli's √ of a monomial (src/crmath_mono.cyr), which cr_verify.py checks against exact values (Python's
 # Fraction and integer square root), and bijli's transcendentals with an unbounded exponent (src/crmath_ux.cyr, M1 part
 # 5c-2), checked against MPFR with its widest exponent range, and the exact Singularity threshold (src/crmath_cmp.cyr,
-# M1 part 5d-1), against Fractions. Built from the math sources the bundle carries
-# (src/constants.cyr … src/mathx.cyr, in the manifest's order and byte for byte what dist/bijli.cyr holds): the bundle
-# is `private` and these entry points are bijli-internal, so a consumer of dist/bijli.cyr can't call them, but a file of
-# internals only has no marker and can be included on its own. scripts/oracle/cr_verify.py builds it, runs it natively
-# and under qemu-aarch64, and compares every result with MPFR. `tan_slow` calls tan's fixed-point path directly (finite
-# |x| ≥ 2^-27 only), so the path the rounding test rarely reaches is checked on arguments of its own.
+# M1 part 5d-1) and Clausius–Mossotti's ε_r (src/crmath_edge.cyr, M2 part 2c-2), against Fractions. Built from the math
+# sources the bundle carries (src/constants.cyr … src/mathx.cyr, in the manifest's order and byte for byte what
+# dist/bijli.cyr holds): the bundle is `private` and these entry points are bijli-internal, so a consumer of
+# dist/bijli.cyr can't call them, but a file of internals only has no marker and can be included on its own.
+# scripts/oracle/cr_verify.py builds it, runs it natively and under qemu-aarch64, and compares every result with MPFR.
+# `tan_slow` calls tan's fixed-point path directly (finite |x| ≥ 2^-27 only), so the path the rounding test rarely
+# reaches is checked on arguments of its own.
 include "lib/syscalls.cyr"
 include "lib/string.cyr"
 include "lib/alloc.cyr"
@@ -33,6 +34,7 @@ include "src/crmath_cmp.cyr"
 include "src/mathx.cyr"
 include "src/fmtf.cyr"
 include "src/crmath_gamma.cyr"
+include "src/crmath_edge.cyr"
 
 # The value of hex digit byte c (lowercase).
 fn _hexv(c): i64 {
@@ -98,6 +100,15 @@ fn _call(fp, fl, w): i64 {
         var on = load64(w);
         var oc: f64 = _wf(w, 1);
         return _bj_cr_lorentz_ok(w + 16, on, oc);
+    }
+    elif (_is(fp, fl, "cm") == 1 || _is(fp, fl, "cm_slow") == 1) {
+        # cm alpha n: Clausius–Mossotti's correctly rounded ε_r (src/crmath_edge.cyr), the exact check alone for
+        # cm_slow; −1 (all ones) when X ≥ 1
+        var cslow = 0;
+        if (fl > 2) { cslow = 1; }
+        var co: f64[1];
+        if (_bj_cr_clausius(x, y, cslow, &co) == 1) { return 0 - 1; }
+        r = co[0];
     }
     elif (_is(fp, fl, "sinh") == 1) { r = _bj_sinh(x); }
     elif (_is(fp, fl, "cosh") == 1) { r = _bj_cosh(x); }

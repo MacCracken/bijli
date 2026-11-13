@@ -126,6 +126,72 @@ pub fn emit() -> Module {
         let n = rng.log_uniform(24.0, 29.0);
         m.row("material::clausius_mossotti", Class::A, &[f(alpha), f(n)], &res_f(clausius_mossotti(black_box(alpha), n)));
     }
+    // M2 part 2c-2 (ADR 0002 row 17: both tests exact, ε_r rounded once): both edges a few ulps each side for 48 more
+    // N of every binade; the exact ties (ε_r = 9e·2^-j − 2 near the pole and −2 + 3f·2^-53 below the zero, e ε₀'s odd
+    // significand and f a divisor of it) at three scales; the exact pole and zero (Nα = 3ε₀ and −1.5ε₀); Nα past
+    // DBL_MAX and on the subnormal grid; and X uniform in (−4, 1) over N of every binade. A seed of its own keeps the
+    // rows above and below as they were.
+    let mut crng = Rng::new(0xC1A0_5C2C);
+    let mut cm = |alpha: f64, n: f64| {
+        m.row("material::clausius_mossotti", Class::A, &[f(alpha), f(n)], &res_f(clausius_mossotti(black_box(alpha), n)));
+    };
+    for _ in 0..48 {
+        let n = pow2(i32::try_from(crng.int(-1000, 1000)).unwrap_or(0)) * crng.uniform(1.0, 2.0);
+        for k in -6..=6 {
+            cm(ulps(3.0 * EPSILON_0 / n, k), n);
+            cm(-ulps(1.5 * EPSILON_0 / n, k), n);
+        }
+    }
+    let eb = EPSILON_0.to_bits();
+    let mut em = (eb & ((1_u64 << 52) - 1)) | (1_u64 << 52);
+    let mut ee = i32::try_from((eb >> 52) & 0x7FF).unwrap_or(0) - 1075;
+    while em % 2 == 0 {
+        em /= 2;
+        ee += 1;
+    }
+    let mut divs: Vec<u64> = (1..10_000_u64).filter(|d| em % d == 0).flat_map(|d| [d, em / d]).collect();
+    divs.sort_unstable();
+    divs.dedup();
+    for s in [0, 300, -300] {
+        let sc = pow2(s);
+        for j in 0..=50 {
+            #[allow(clippy::cast_precision_loss)]
+            let a = (3 * em - (1_u64 << j)) as f64 * pow2(ee) / sc;
+            cm(a, sc);
+        }
+        for &d in divs.iter().filter(|&&d| 3 * d <= 1_u64 << 53) {
+            #[allow(clippy::cast_precision_loss)]
+            let (a, n) = (-((3 * (em / d)) as f64) * pow2(ee) / sc, ((1_u64 << 53) - d) as f64 * sc);
+            cm(a, n);
+        }
+    }
+    for s in [0, 200, -200] {
+        let sc = pow2(s);
+        cm(-EPSILON_0 / sc, 1.5 * sc);
+        cm(EPSILON_0 / sc, 3.0 * sc);
+        cm(-3.0 * EPSILON_0 / sc, 0.5 * sc);
+    }
+    for (alpha, n) in [
+        (-1e10, 1e300),
+        (1e10, 1e300),
+        (-f64::MAX, 1e10),
+        (-f64::MAX, f64::MAX),
+        (f64::MAX, f64::MIN_POSITIVE),
+        (-1e200, 1e200),
+        (-1e-300, 1e-300),
+        (1e-300, 1e-300),
+        (5e-324, 1e300),
+        (-5e-324, 1e300),
+        (-1e-20, 1e10),
+        (1e-20, 1e10),
+    ] {
+        cm(alpha, n);
+    }
+    for _ in 0..600 {
+        let n = pow2(i32::try_from(crng.int(-1000, 1000)).unwrap_or(0)) * crng.uniform(1.0, 2.0);
+        let x = crng.uniform(-4.0, 1.0);
+        cm(x * 3.0 * EPSILON_0 / n, n);
+    }
     // The permeability threshold |μ_r·μ₀| < 1e-30, ulp by ulp.
     for k in -3..=3 {
         for mu in [ulps(1e-30 / MU_0, k), -ulps(1e-30 / MU_0, k)] {
