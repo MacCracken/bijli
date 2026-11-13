@@ -461,6 +461,7 @@ pub fn emit() -> Module {
     emit_kappa_edges(&mut m);
     emit_nb_edges(&mut m);
     emit_fv_edges(&mut m);
+    emit_transform_edges(&mut m);
     m
 }
 
@@ -724,6 +725,76 @@ fn emit_fv_edges(m: &mut Module) {
         for (q, u) in us {
             let ins4 = cat(&[ins.clone(), vec![f(q)], fv4(u)]);
             m.row("EmTensor::four_force", Class::A, &ins4, &fv4(black_box(&t).four_force(q, &u)));
+        }
+    }
+}
+
+/// M2 part 2d-3d (bijli ADR 0002 row 18's rule): the field transforms and the relativistic Larmor power at their range
+/// edges. Boosts along x at γ = 2, 1.25 and near c, diagonal, and with subnormal or tiny parts; fields along the boost
+/// at 10^308 and DBL_MAX (E′∥ = E, where Rust's γE overflowed), past DBL_MAX/c across it, subnormal, tiny, ordinary
+/// and zero. lorentz_transform_x at speeds whose v·E/c² passes DBL_MAX or falls below 2^-1022. The Larmor power for
+/// charges from 0 and 10^-300 to 10^300 under accelerations whose a² passes DBL_MAX (10^170) or falls below 2^-1022.
+/// After every older row.
+fn emit_transform_edges(m: &mut Module) {
+    let big = f64::MAX;
+    let vs = [
+        FieldVector::new(0.866_025_403_784_438_6 * C, 0.0, 0.0),
+        FieldVector::new(0.6 * C, 0.0, 0.0),
+        FieldVector::new(0.5 * C, 0.5 * C, 0.0),
+        FieldVector::new(1e-310, 0.0, 0.0),
+        FieldVector::new(1e-100, 1e-100, 0.0),
+        FieldVector::new(C * (1.0 - 1e-15), 0.0, 0.0),
+    ];
+    let es = [
+        FieldVector::new(1e308, 0.0, 0.0),
+        FieldVector::new(big, 0.0, 0.0),
+        FieldVector::new(0.0, 1e301, 0.0),
+        FieldVector::new(1e-310, 5e-324, 0.0),
+        FieldVector::new(1e-160, 1e-160, 1e-160),
+        FieldVector::new(1.0, 2.0, 3.0),
+    ];
+    let bs = [
+        FieldVector::new(0.0, 0.0, 1e301),
+        FieldVector::new(1e-310, 0.0, 0.0),
+        FieldVector::new(1e300, 1e300, 0.0),
+        FieldVector::new(0.0, 0.0, 0.0),
+        FieldVector::new(1e-160, 0.0, 1e-160),
+    ];
+    for &e in &es {
+        for &b in &bs {
+            for &v in &vs {
+                let ins = cat(&[v3(e), v3(b), v3(v)]);
+                m.row(
+                    "relativity::lorentz_transform_fields",
+                    Class::A,
+                    &ins,
+                    &res_pair(lorentz_transform_fields(black_box(&e), &b, &v)),
+                );
+            }
+            for u in [0.8 * C, 0.5 * C, 1e-310, 1e-150, 2e8] {
+                let ins = cat(&[v3(e), v3(b), vec![f(u)]]);
+                m.row("relativity::lorentz_transform_x", Class::A, &ins, &res_pair(lorentz_transform_x(black_box(&e), &b, u)));
+            }
+        }
+    }
+    let accs = [
+        FieldVector::new(1e170, 0.0, 0.0),
+        FieldVector::new(1e150, 1e150, 0.0),
+        FieldVector::new(1e-200, 0.0, 0.0),
+        FieldVector::new(5e-324, 0.0, 1e-310),
+        FieldVector::new(1e300, 1e-300, 0.0),
+    ];
+    for q in [1.6e-19, 1e-200, 1e300, 0.0, 1e-300] {
+        for &v in &vs {
+            for &a in &accs {
+                let ins = cat(&[vec![f(q)], v3(v), v3(a)]);
+                m.row(
+                    "relativity::relativistic_larmor_power",
+                    Class::A,
+                    &ins,
+                    &res_f(relativistic_larmor_power(black_box(q), &v, &a)),
+                );
+            }
         }
     }
 }

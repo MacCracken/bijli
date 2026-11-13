@@ -2698,6 +2698,80 @@ def rel_exact_gamma(vs, c, mode):
     return rn_sqrt(q) if mode == 0 else rn_frac(q)
 
 
+# ── an unbounded-exponent chain with IEEE's signed zeros (M2 part 2d-3d) ──────────────────────────────────────────
+# A chain value is a Fraction (nonzero, 53 bits) or the float ±0, so that zeros keep IEEE's signs as kimiya's
+# _bj_k_ux_* do: a product's or quotient's zero takes the xor of the signs, x + ±0 = x, two zeros add as IEEE's,
+# and an exact cancellation is +0. final=True rounds the operation once into binary64 instead of to 53 bits.
+def uz(x):
+    return x if x == 0 else Fraction(x)
+
+
+def _uz_sign(a) -> float:
+    return math.copysign(1.0, a) if isinstance(a, float) else (1.0 if a > 0 else -1.0)
+
+
+def _uz_round(v, final):
+    return rn_frac(v) if final else rnd53(v)
+
+
+def uz_mul(a, b, final=False):
+    if isinstance(a, float) or isinstance(b, float):
+        return _uz_sign(a) * _uz_sign(b) * 0.0
+    return _uz_round(a * b, final)
+
+
+def uz_div(a, b, final=False):
+    if isinstance(a, float):
+        return _uz_sign(a) * _uz_sign(b) * 0.0
+    return _uz_round(a / b, final)
+
+
+def uz_add(a, b, final=False):
+    if isinstance(a, float) and isinstance(b, float):
+        return a + b
+    if isinstance(b, float):
+        return _uz_round(a, final) if final else a
+    if isinstance(a, float):
+        return _uz_round(b, final) if final else b
+    v = a + b
+    return 0.0 if v == 0 else _uz_round(v, final)
+
+
+def uz_sub(a, b, final=False):
+    return uz_add(a, -b, final)
+
+
+def uz_out(a) -> float:
+    """A chain value already rounded into binary64 (a final operation's result) as a float."""
+    return a if isinstance(a, float) else float(a)
+
+
+def uz_cross(a, b, i):
+    j, k = (i + 1) % 3, (i + 2) % 3
+    return uz_sub(uz_mul(uz(a[j]), uz(b[k])), uz_mul(uz(a[k]), uz(b[j])))
+
+
+def uz_dot3(a, b):
+    return uz_add(uz_add(uz_mul(uz(a[0]), uz(b[0])), uz_mul(uz(a[1]), uz(b[1]))), uz_mul(uz(a[2]), uz(b[2])))
+
+
+def uz_sumsq(a):
+    return uz_dot3(a, a)
+
+
+def rel_box(xs, lo, hi) -> bool:
+    """src/relativity.cyr's _bj_rel_box_n: each value ±0 or of biased exponent in [lo, hi] (NaN and ±∞ fail)."""
+    for x in xs:
+        if x == 0:
+            continue
+        if not math.isfinite(x):
+            return False
+        be = (struct.unpack("<Q", struct.pack("<d", abs(x)))[0] >> 52) & 0x7FF
+        if be < lo or be > hi:
+            return False
+    return True
+
+
 def rel_band(s) -> bool:
     """src/crmath_vx.cyr's band: |s| in [2^-900, DBL_MAX]."""
     return 2.0 ** -900 <= abs(s) <= DBL_MAX
@@ -2894,6 +2968,15 @@ def rel_rust(fn, v, O, K):
         inv = fdiv(1.0, C2)
         kb = k * O["dot"](w, b)
         bp = [(b[i] - vxe[i] * inv) * g - w[i] * kb for i in range(3)]
+        if O["ux"] and not (rel_box(e + b + w, 723, 1923) and g < 2.0 ** 27) and _fin(*e, *b, *w):
+            # Row 18's rule (M2 part 2d-3d): outside the box every step to 53 bits, each output's difference once.
+            G = uz(g)
+            kk = uz_div(uz_mul(G, G), uz_mul(uz_add(G, Fraction(1)), uz(C2)))
+            ke2, kb2, iv = uz_mul(kk, uz_dot3(w, e)), uz_mul(kk, uz_dot3(w, b)), uz(inv)
+            ep = [uz_out(uz_sub(uz_mul(uz_add(uz(e[i]), uz_cross(w, b, i)), G), uz_mul(uz(w[i]), ke2), True))
+                  for i in range(3)]
+            bp = [uz_out(uz_sub(uz_mul(uz_sub(uz(b[i]), uz_mul(uz_cross(w, e, i), iv)), G), uz_mul(uz(w[i]), kb2),
+                                True)) for i in range(3)]
         return ok3(ep) + ok3(bp)
     if fn == "relativity::lorentz_transform_x":
         e, b, s = v[0:3], v[3:6], v[6]
@@ -2902,6 +2985,12 @@ def rel_rust(fn, v, O, K):
             return err
         ep = [e[0], g * (e[1] - s * b[2]), g * (e[2] + s * b[1])]
         bp = [b[0], g * (b[1] + fdiv(s * e[2], C2)), g * (b[2] - fdiv(s * e[1], C2))]
+        if O["ux"] and not rel_box(e + b + [s], 723, 1923) and _fin(*e, *b):
+            G, S, c2 = uz(g), uz(s), uz(C2)
+            ep = [e[0], uz_out(uz_mul(G, uz_sub(uz(e[1]), uz_mul(S, uz(b[2]))), True)),
+                  uz_out(uz_mul(G, uz_add(uz(e[2]), uz_mul(S, uz(b[1]))), True))]
+            bp = [b[0], uz_out(uz_mul(G, uz_add(uz(b[1]), uz_div(uz_mul(S, uz(e[2])), c2)), True)),
+                  uz_out(uz_mul(G, uz_sub(uz(b[2]), uz_div(uz_mul(S, uz(e[1])), c2)), True))]
         return ok3(ep) + ok3(bp)
     if fn == "FourVector::new":
         return [("f", x) for x in v[0:4]]
@@ -3029,7 +3118,18 @@ def rel_rust(fn, v, O, K):
         g6 = g2 * g2 * g2
         a_sq = O["mag_sq"](a)
         vxa_sq = O["mag_sq"](O["cross"](w, a))
-        pre = fdiv(q * q, 6.0 * PI * EPS0 * K["C3"])
+        den = 6.0 * PI * EPS0 * K["C3"]
+        pre = fdiv(q * q, den)
+        if (O["ux"] and not (rel_box([q], 823, 1423) and rel_box(a, 823, 1503) and rel_box(w, 823, 2046)
+                             and g < 2.0 ** 27) and _fin(q, *a)):
+            G = uz(g)
+            g2u = uz_mul(G, G)
+            g6u = uz_mul(uz_mul(g2u, g2u), g2u)
+            x = [uz_cross(w, a, i) for i in range(3)]
+            x2 = uz_add(uz_add(uz_mul(x[0], x[0]), uz_mul(x[1], x[1])), uz_mul(x[2], x[2]))
+            pr = uz_div(uz_mul(uz(q), uz(q)), uz(den))
+            dd = uz_sub(uz_sumsq(a), uz_div(x2, uz(C2)))
+            return okf(uz_out(uz_mul(uz_mul(pr, g6u), dd, True)))
         return okf(pre * g6 * (a_sq - fdiv(vxa_sq, C2)))
     return None
 

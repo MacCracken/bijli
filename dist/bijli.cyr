@@ -19169,8 +19169,10 @@ public fn bj_rlc_impedance(resistance: f64, inductance: f64, capacitance: f64, a
 # non-finite operand keeps Rust's chain. The raw four-vector and tensor chains (BjFourVector's dot, interval_sq,
 # spatial_magnitude and boost_x, the four-force, both invariants) keep Rust's chain where its own values pass the
 # guards of src/crmath_vx.cyr, and otherwise run with an unbounded exponent and round once (row 18's rule, M2 part
-# 2d-3c). A fallible function returns a value-form Result, the error in the last-error record (src/error.cyr); a
-# vector, four-vector or pair of vectors writes through out pointers.
+# 2d-3c). The field transforms and the relativistic Larmor power, whose chains amplify a subnormal intermediate by γ and
+# v, keep Rust's chain inside a box on their inputs and otherwise run unbounded (part 2d-3d). A fallible function
+# returns a value-form Result, the error in the last-error record (src/error.cyr); a vector, four-vector or pair of
+# vectors writes through out pointers.
 
 private
 
@@ -19425,6 +19427,219 @@ fn _bj_rel_inv2_edge(f: *f64, i: f64): f64 {
     return u;
 }
 
+# 2^-300 as an f64: the transforms' box's lower bound for a scalar (a speed lies below c, far inside the upper one).
+var _BJ_REL_BOX_LO: f64 = 0x2D30000000000000;
+
+# The transforms' box on the BjFieldVector parts at the byte addresses e, b and v (untyped: a typed pointer would cost
+# a conversion call on the hot path): each part ±0 or of biased exponent in [723, 1923], i.e. |x| in [2^-300, 2^901),
+# on the bit patterns with the sign cleared (a NaN or ±∞ lies above the bound). Straight-line integer tests, one
+# helper per caller: on the pinned compiler a call per part, a loop or extra parameters cost more than the margin.
+#must_use
+fn _bj_rel_box_tf(e, b, v): i64 {
+    var m = 0x7FFFFFFFFFFFFFFF;
+    var lo = 723 << 52;
+    var hi = 1924 << 52;
+    var u = 0;
+    u = load64(e) & m;
+    if (u != 0 && (u < lo || u >= hi)) { return 0; }
+    u = load64(e + 8) & m;
+    if (u != 0 && (u < lo || u >= hi)) { return 0; }
+    u = load64(e + 16) & m;
+    if (u != 0 && (u < lo || u >= hi)) { return 0; }
+    u = load64(b) & m;
+    if (u != 0 && (u < lo || u >= hi)) { return 0; }
+    u = load64(b + 8) & m;
+    if (u != 0 && (u < lo || u >= hi)) { return 0; }
+    u = load64(b + 16) & m;
+    if (u != 0 && (u < lo || u >= hi)) { return 0; }
+    u = load64(v) & m;
+    if (u != 0 && (u < lo || u >= hi)) { return 0; }
+    u = load64(v + 8) & m;
+    if (u != 0 && (u < lo || u >= hi)) { return 0; }
+    u = load64(v + 16) & m;
+    if (u != 0 && (u < lo || u >= hi)) { return 0; }
+    return 1;
+}
+
+# lorentz_transform_x's box: the y and z parts of E and B at the byte addresses e and b, the ones it computes with
+# (E_x and B_x pass unchanged), tested as _bj_rel_box_tf does; the speed is the caller's (an f64 compare).
+#must_use
+fn _bj_rel_box_tx(e, b): i64 {
+    var m = 0x7FFFFFFFFFFFFFFF;
+    var lo = 723 << 52;
+    var hi = 1924 << 52;
+    var u = 0;
+    u = load64(e + 8) & m;
+    if (u != 0 && (u < lo || u >= hi)) { return 0; }
+    u = load64(e + 16) & m;
+    if (u != 0 && (u < lo || u >= hi)) { return 0; }
+    u = load64(b + 8) & m;
+    if (u != 0 && (u < lo || u >= hi)) { return 0; }
+    u = load64(b + 16) & m;
+    if (u != 0 && (u < lo || u >= hi)) { return 0; }
+    return 1;
+}
+
+# The Larmor power's box on the BjFieldVector parts at the byte addresses v and a: the acceleration's parts in
+# [2^-200, 2^481), the velocity's at least 2^-200 (each ±0 allowed), tested as _bj_rel_box_tf does; the charge is the
+# caller's (an f64 compare).
+#must_use
+fn _bj_rel_box_lar(v, a): i64 {
+    var m = 0x7FFFFFFFFFFFFFFF;
+    var lo = 823 << 52;
+    var ha = 1504 << 52;
+    var hv = 2047 << 52;
+    var u = 0;
+    u = load64(a) & m;
+    if (u != 0 && (u < lo || u >= ha)) { return 0; }
+    u = load64(a + 8) & m;
+    if (u != 0 && (u < lo || u >= ha)) { return 0; }
+    u = load64(a + 16) & m;
+    if (u != 0 && (u < lo || u >= ha)) { return 0; }
+    u = load64(v) & m;
+    if (u != 0 && (u < lo || u >= hv)) { return 0; }
+    u = load64(v + 8) & m;
+    if (u != 0 && (u < lo || u >= hv)) { return 0; }
+    u = load64(v + 16) & m;
+    if (u != 0 && (u < lo || u >= hv)) { return 0; }
+    return 1;
+}
+
+# 2^-200 and 2^401 as f64s: the Larmor power's bounds on the charge.
+var _BJ_REL_LAR_QLO: f64 = 0x3370000000000000;
+var _BJ_REL_LAR_QHI: f64 = 0x5900000000000000;
+
+# 1 when none of the n doubles at p is NaN or infinite.
+#must_use
+fn _bj_rel_finite_n(p: *f64, n): i64 {
+    for (var k = 0; k < n; k = k + 1) {
+        var x: f64 = p[k];
+        var d: f64 = x - x;
+        if (d != 0.0) { return 0; }
+    }
+    return 1;
+}
+
+# a⋅b = (a₀b₀ + a₁b₁) + a₂b₂ to 53 bits with an unbounded exponent: (s, e).
+#must_use
+fn _bj_rel_dot3_ux(a: *f64, b: *f64): (f64, i64) {
+    var s0, e0 = _bj_vx_mul(a[0], b[0]);
+    var s1, e1 = _bj_vx_mul(a[1], b[1]);
+    var ss, se = _bj_k_ux_add(s0, e0, s1, e1);
+    var s2, e2 = _bj_vx_mul(a[2], b[2]);
+    var ts, te = _bj_k_ux_add(ss, se, s2, e2);
+    return (ts, te);
+}
+
+# Component i of (a × b)·…: a_j b_k − a_k b_j to 53 bits with an unbounded exponent, for i = 0, 1, 2 (j, k cyclic).
+#must_use
+fn _bj_rel_cross_ux(a: *f64, b: *f64, i): (f64, i64) {
+    var j = (i + 1) % 3;
+    var k = (i + 2) % 3;
+    var s, e = _bj_vx_cross1(a[j], b[k], a[k], b[j]);
+    return (s, e);
+}
+
+# Jackson's E' and B' (bj_lorentz_transform_fields' chain) with an unbounded exponent, into e_out and b_out: every
+# step to 53 bits, each output's last difference rounded once (ADR 0002 row 18's rule, M2 part 2d-3c's section, part
+# 2d-3d). γ is the correctly rounded double; γ + 1, (γ + 1)c², γ² and k run unbounded too.
+fn _bj_rel_ltf_edge(e: *f64, b: *f64, v: *f64, gamma: f64, e_out: *f64, b_out: *f64) {
+    var c2: f64 = BJ_SPEED_OF_LIGHT_SQ;
+    var inv: f64 = 1.0 / c2;
+    var gs, ge = _bj_k_ux_from(gamma);
+    var g1s, g1e = _bj_k_ux_add(gs, ge, 1.0, 0);
+    var cs, ce = _bj_k_ux_from(c2);
+    var dns, dne = _bj_k_ux_mul(g1s, g1e, cs, ce);
+    var ggs, gge = _bj_k_ux_mul(gs, ge, gs, ge);
+    var ks, ke = _bj_k_ux_div(ggs, gge, dns, dne);
+    var des, dee = _bj_rel_dot3_ux(v, e);
+    var kes, kee = _bj_k_ux_mul(ks, ke, des, dee);
+    var dbs, dbe = _bj_rel_dot3_ux(v, b);
+    var kbs, kbe = _bj_k_ux_mul(ks, ke, dbs, dbe);
+    var is1, ie1 = _bj_k_ux_from(inv);
+    for (var i = 0; i < 3; i = i + 1) {
+        var xs, xe = _bj_rel_cross_ux(v, b, i);
+        var es, ee = _bj_k_ux_from(e[i]);
+        var s1s, s1e = _bj_k_ux_add(es, ee, xs, xe);
+        var s1gs, s1ge = _bj_k_ux_mul(s1s, s1e, gs, ge);
+        var vs, ve = _bj_k_ux_from(v[i]);
+        var t1s, t1e = _bj_k_ux_mul(vs, ve, kes, kee);
+        var ep: f64 = _bj_k_ux_sub_f64(s1gs, s1ge, t1s, t1e);
+        e_out[i] = ep;
+        var ys, ye = _bj_rel_cross_ux(v, e, i);
+        var qs, qe = _bj_k_ux_mul(ys, ye, is1, ie1);
+        var bs, be = _bj_k_ux_from(b[i]);
+        var s2s, s2e = _bj_k_ux_sub(bs, be, qs, qe);
+        var s2gs, s2ge = _bj_k_ux_mul(s2s, s2e, gs, ge);
+        var t2s, t2e = _bj_k_ux_mul(vs, ve, kbs, kbe);
+        var bp: f64 = _bj_k_ux_sub_f64(s2gs, s2ge, t2s, t2e);
+        b_out[i] = bp;
+    }
+    return 0;
+}
+
+# γ(E_y − vB_z), γ(E_z + vB_y), γ(B_y + vE_z/c²) and γ(B_z − vE_y/c²) (bj_lorentz_transform_x's chain) with an
+# unbounded exponent, each product by γ rounded once; E_x and B_x pass unchanged.
+fn _bj_rel_ltx_edge(e: *f64, b: *f64, speed: f64, gamma: f64, e_out: *f64, b_out: *f64) {
+    var c2: f64 = BJ_SPEED_OF_LIGHT_SQ;
+    var gs, ge = _bj_k_ux_from(gamma);
+    var cs, ce = _bj_k_ux_from(c2);
+    var p1s, p1e = _bj_vx_mul(speed, b[2]);
+    var y1s, y1e = _bj_k_ux_from(e[1]);
+    var d1s, d1e = _bj_k_ux_sub(y1s, y1e, p1s, p1e);
+    var p2s, p2e = _bj_vx_mul(speed, b[1]);
+    var z1s, z1e = _bj_k_ux_from(e[2]);
+    var d2s, d2e = _bj_k_ux_add(z1s, z1e, p2s, p2e);
+    var p3s, p3e = _bj_vx_mul(speed, e[2]);
+    var q1s, q1e = _bj_k_ux_div(p3s, p3e, cs, ce);
+    var y2s, y2e = _bj_k_ux_from(b[1]);
+    var d3s, d3e = _bj_k_ux_add(y2s, y2e, q1s, q1e);
+    var p4s, p4e = _bj_vx_mul(speed, e[1]);
+    var q2s, q2e = _bj_k_ux_div(p4s, p4e, cs, ce);
+    var z2s, z2e = _bj_k_ux_from(b[2]);
+    var d4s, d4e = _bj_k_ux_sub(z2s, z2e, q2s, q2e);
+    var r1: f64 = _bj_k_ux_mul_f64(gs, ge, d1s, d1e);
+    var r2: f64 = _bj_k_ux_mul_f64(gs, ge, d2s, d2e);
+    var r3: f64 = _bj_k_ux_mul_f64(gs, ge, d3s, d3e);
+    var r4: f64 = _bj_k_ux_mul_f64(gs, ge, d4s, d4e);
+    e_out[0] = e[0];
+    e_out[1] = r1;
+    e_out[2] = r2;
+    b_out[0] = b[0];
+    b_out[1] = r3;
+    b_out[2] = r4;
+    return 0;
+}
+
+# P = (q²/(6πε₀c³))·γ⁶·(a² − |v × a|²/c²) (bj_relativistic_larmor_power's chain) with an unbounded exponent, the last
+# product rounded once; 6πε₀c³ is Rust's double (a normal constant).
+#must_use
+fn _bj_rel_larmor_edge(charge: f64, v: *f64, a: *f64, gamma: f64, den: f64): f64 {
+    var c2: f64 = BJ_SPEED_OF_LIGHT_SQ;
+    var gs, ge = _bj_k_ux_from(gamma);
+    var g2s, g2e = _bj_k_ux_mul(gs, ge, gs, ge);
+    var g4s, g4e = _bj_k_ux_mul(g2s, g2e, g2s, g2e);
+    var g6s, g6e = _bj_k_ux_mul(g4s, g4e, g2s, g2e);
+    var a2s, a2e = _bj_vx_sumsq(a[0], a[1], a[2]);
+    var xs, xe = _bj_rel_cross_ux(v, a, 0);
+    var ys, ye = _bj_rel_cross_ux(v, a, 1);
+    var zs, ze = _bj_rel_cross_ux(v, a, 2);
+    var x2s, x2e = _bj_k_ux_mul(xs, xe, xs, xe);
+    var y2s, y2e = _bj_k_ux_mul(ys, ye, ys, ye);
+    var z2s, z2e = _bj_k_ux_mul(zs, ze, zs, ze);
+    var ws, we = _bj_k_ux_add(x2s, x2e, y2s, y2e);
+    var w2s, w2e = _bj_k_ux_add(ws, we, z2s, z2e);
+    var qqs, qqe = _bj_vx_mul(charge, charge);
+    var dns, dne = _bj_k_ux_from(den);
+    var prs, pre = _bj_k_ux_div(qqs, qqe, dns, dne);
+    var cs, ce = _bj_k_ux_from(c2);
+    var vcs, vce = _bj_k_ux_div(w2s, w2e, cs, ce);
+    var ds, de = _bj_k_ux_sub(a2s, a2e, vcs, vce);
+    var pgs, pge = _bj_k_ux_mul(prs, pre, g6s, g6e);
+    var u: f64 = _bj_k_ux_mul_f64(pgs, pge, ds, de);
+    return u;
+}
+
 # ── the electromagnetic tensor ───────────────────────────────────────────────────────────────────────────────────
 
 # F^μν of (E, B): F^{i0} = Eᵢ/c, F^{0i} = −Eᵢ/c, F^{12} = −B_z, F^{13} = B_y, F^{23} = −B_x and their negatives below
@@ -19664,6 +19879,17 @@ public fn bj_lorentz_transform_fields(e: BjFieldVector, b: BjFieldVector, veloci
     var kb: f64 = k * vdb;
     var t2: BjFieldVector = velocity.scale(kb);
     var bp: BjFieldVector = BjFieldVector_sub(s2g, t2);
+    var outside = 1;
+    if (gamma < 134217728.0) { outside = 1 - _bj_rel_box_tf(&e, &b, &velocity); }
+    if (outside == 1) {
+        var pe: *f64 = _bj_rel_f64p(&e);
+        var pb: *f64 = _bj_rel_f64p(&b);
+        var pv: *f64 = _bj_rel_f64p(&velocity);
+        if (_bj_rel_finite_n(pe, 3) + _bj_rel_finite_n(pb, 3) + _bj_rel_finite_n(pv, 3) == 3) {
+            _bj_rel_ltf_edge(pe, pb, pv, gamma, _bj_rel_f64p(e_out), _bj_rel_f64p(b_out));
+            return Ok(0);
+        }
+    }
     e_out.x = ep.x;
     e_out.y = ep.y;
     e_out.z = ep.z;
@@ -19701,6 +19927,15 @@ public fn bj_lorentz_transform_x(e: BjFieldVector, b: BjFieldVector, speed: f64,
     var e2: f64 = gamma * d2;
     var b1: f64 = gamma * d3;
     var b2: f64 = gamma * d4;
+    var asp: f64 = f64_abs(speed);
+    if (!(asp >= _BJ_REL_BOX_LO || speed == 0.0) || _bj_rel_box_tx(&e, &b) == 0) {
+        var pe: *f64 = _bj_rel_f64p(&e);
+        var pb: *f64 = _bj_rel_f64p(&b);
+        if (_bj_rel_finite_n(pe, 3) + _bj_rel_finite_n(pb, 3) == 2) {
+            _bj_rel_ltx_edge(pe, pb, speed, gamma, _bj_rel_f64p(e_out), _bj_rel_f64p(b_out));
+            return Ok(0);
+        }
+    }
     e_out.x = ex;
     e_out.y = e1;
     e_out.z = e2;
@@ -20051,7 +20286,17 @@ public fn bj_relativistic_larmor_power(charge: f64, velocity: BjFieldVector, acc
     var d: f64 = a_sq - vc;
     var pg: f64 = pre * g6;
     var p: f64 = pg * d;
-    return Ok(p);
+    var aq: f64 = f64_abs(charge);
+    if ((charge == 0.0 || (aq >= _BJ_REL_LAR_QLO && aq < _BJ_REL_LAR_QHI)) && gamma < 134217728.0
+      && _bj_rel_box_lar(&velocity, &acceleration) == 1) {
+        return Ok(p);
+    }
+    var pv: *f64 = _bj_rel_f64p(&velocity);
+    var pa: *f64 = _bj_rel_f64p(&acceleration);
+    var dq: f64 = charge - charge;
+    if (dq != 0.0 || _bj_rel_finite_n(pa, 3) == 0) { return Ok(p); }
+    var u: f64 = _bj_rel_larmor_edge(charge, pv, pa, gamma, den);
+    return Ok(u);
 }
 
 # ── the retarded-time solver ─────────────────────────────────────────────────────────────────────────────────────

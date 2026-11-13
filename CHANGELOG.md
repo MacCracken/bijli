@@ -337,6 +337,16 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
   At those edges the chains now run with an unbounded exponent and round once; elsewhere they are Rust's, bit for
   bit. The cost: `relativity/four_vector_boost` 155 → 161 ns (`port-parity.md` §47).
+- **relativity** (ADR 0002 row 18 amended, M2 part 2d-3d): `lorentz_transform_fields`, `lorentz_transform_x` and
+  `relativistic_larmor_power` over- and underflowed inside their chains:
+  - E = 10^308 along a γ = 2 boost gave E′ = NaN, where E′∥ = E;
+  - vE_z past DBL_MAX gave B′ = ∞ for 3·10^292;
+  - a = 10^170 gave the Larmor power ∞ for 2.2·10^287;
+  - q = 0 gave NaN, and a² − |v × a|²/c² of two infinities gave NaN or −∞ where P is +∞.
+
+  Their chains amplify a subnormal intermediate (by γ and v), so they are guarded by a box on the inputs. Outside it
+  the whole chain runs with an unbounded exponent and rounds once. The cost: `relativity/lorentz_transform_x`
+  164 → 186 ns, `lorentz_transform_fields` 367 → 407 ns (`port-parity.md` §48).
 - **relativity** (ADR 0002 row 13 amended, M2 part 2b-4): `retarded_scalar_potential`, `retarded_vector_potential`,
   `larmor_power` and `EmTensor::dual` rounded two to five times, and overflowed where the value is representable
   (Larmor with q² past DBL_MAX, the dual of B past DBL_MAX/c: ∞ each); they are now correctly rounded for finite

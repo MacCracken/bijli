@@ -2512,3 +2512,65 @@ power and an ∞ R in E are 2d-3d's.
 - **Result, every target** (x86_64 ELF, x86_64 PE, aarch64): **13 modules, 0 failing; 406,282 ok, 0 failed, 0
   measured, 0 pending, 46,212 accepted (ADR 01: 8,998; ADR 0002: 37,214)** over 452,494 rows; **all 276 digests
   equal**. Seven changed: `dot`, `interval_sq`, `spatial_magnitude`, `boost_x`, the four-force and both invariants.
+
+## 48. M2 part 2d-3d: the field transforms and the relativistic Larmor power at their range edges (2026-11-13)
+
+- **ADR 0002 row 18, amended** (the rule of §42), with a box guard instead of the band:
+  - **Why a box.** These chains multiply intermediates by γ (up to 2^27, or far more from a three-part v near c) and
+    by v (up to 2^28.2): (E + v × B)·γ, k·(v⋅E)·v, (B − (v × E)/c²)·γ, pre·γ⁶·(a² − |v × a|²/c²). A subnormal
+    intermediate is then amplified, not absorbed, so Rust's own result can sit in the band and still be wrong. The
+    guard bounds the inputs instead, as the stress tensor's does (§24).
+  - **The transforms** (`lorentz_transform_fields`, `lorentz_transform_x`): every nonzero E, B and v part (the speed)
+    has a biased exponent in [723, 1923], i.e. lies in [2^-300, 2^901), and γ < 2^27. Then every product and quotient
+    of the chain is normal or an exact 0: the smallest, v·k·(v⋅E), is at least 2^(-300-57.3-652) = 2^-1009.3; the
+    largest, γ(E + v × B), is at most 2^(27+930.3) = 2^957.3. A cancellation is an exact 0, or at least an ulp of its
+    operands (2^-952 for the smallest).
+  - **The Larmor power** (`relativistic_larmor_power`): q in [2^-200, 2^401), a in [2^-200, 2^481), the nonzero v parts
+    at least 2^-200, and γ < 2^27. The tightest are |v × a|² ≤ 2^1022 and (q²/(6πε₀c³))·γ⁶ ≤ 2^912.
+  - **Outside the box**, for finite operands, the whole chain runs with an unbounded exponent: γ + 1, (γ + 1)c², γ², k
+    and γ⁶ included, each output's last operation rounded once (`_bj_rel_ltf_edge`, `_bj_rel_ltx_edge`,
+    `_bj_rel_larmor_edge`). It agrees with Rust's chain wherever that is exact, so the box need only be sufficient.
+    A non-finite operand keeps Rust's chain.
+  - **Rust's results at these edges**:
+    - E = 10^308 along a γ = 2 boost gave E′ = NaN: γE and the γ²(v⋅E)v/((γ + 1)c²) term were both ∞, while E′∥ = E.
+      The port gives 10^308 less an ulp, each step rounded.
+    - vE_z past DBL_MAX gave B′ = ∞ where γ(B_y + vE_z/c²) = 3·10^292.
+    - a = 10^170 gave P = ∞ for 2.2·10^287 (a² past DBL_MAX).
+    - q = 0 against an a² past DBL_MAX gave NaN for 0.
+    - Many rows of a² − |v × a|²/c² with both terms ∞ gave NaN, or −∞, where P is +∞ (it is at least a²(1 − β²)·…).
+- **An ∞ R in `lienard_wiechert_e`** (§28's audit): the sibling potentials give NaN too (|R| − R⋅β is ∞ − ∞, or R·0),
+  and Rust refuses only a NaN R (`r_mag.is_nan()`). A non-finite operand keeps Rust's chain, so this bite leaves it.
+  The user's answer of 2026-11-13: all three refuse an ∞ R (InvalidParameter, a text of its own), in 2d-3e. With it,
+  the retarded-time solver reports its documented bracket error for a non-finite state met while the bracket expands
+  (a superluminal trajectory's position overflowing), not "trajectory returned a non-finite state".
+- **Rows** (`m_relativity.rs`'s `emit_transform_edges`, after every older row): 480 more.
+  - 180 `lorentz_transform_fields` rows: six boosts (γ = 2, 1.25, diagonal, near c, a subnormal v and tiny parts),
+    six E (10^308 and DBL_MAX along the boost, 10^301 across it, subnormal, tiny, ordinary) and five B.
+  - 150 `lorentz_transform_x` rows: the same fields at five speeds (0.8c, 0.5c, 2·10^8, 10^-150, 10^-310).
+  - 150 Larmor rows: five charges (1.6·10^-19, 10^-200, 10^300, 0, 10^-300), six velocities and five accelerations
+    (10^170, 10^150 twice, 10^-200, subnormal, mixed).
+
+  `validate.py`'s transcription agreed with every row.
+- **Mappings**: `validate.py`'s new `uz_*` chain keeps IEEE's signed zeros as kimiya's operations do: a product's
+  zero takes the xor of the signs, two zeros add as IEEE's, an exact cancellation is +0. `relativity.adr.tsv` maps:
+  - row 18, 706 more: the Larmor power 551, `lorentz_transform_fields` 107, `lorentz_transform_x` 48. 538 are older
+    rows, mostly the Larmor power's NaN and wrong-signed ∞.
+  - row 30, 152 more net: the γ-sensitive rows (port ≠ the vector-operations-only model), 58 of them older rows whose
+    outputs changed.
+
+  All pass.
+- **Box audit** (a sampling check in Python, not a gate): inside each box, weighted to its edges, Rust's chain equalled
+  the pure unbounded chain on every sample. `lorentz_transform_fields` 40,000, `lorentz_transform_x` 36,573, the
+  Larmor power 40,000.
+- **Tests**: tests/relativity.tcyr's `cyrius_range_edges` group gains 4 assertions, the cases above.
+- **Benchmarks** (interleaved A/B against HEAD, three rounds each, load 0.7–1.9, each figure the lower):
+  - `relativity/lorentz_transform_x`: 164 → 186 ns. A focused A/B of both transforms (five repetitions a round)
+    also gave `lorentz_transform_fields` 367 → 407 ns. It has no bench twin; the focused bench gave it the same fields
+    and a 0.5c boost along x.
+  - The first box, three looping calls and a one-element array on the hot path, cost 166 → 214 ns in the full A/B.
+    One straight-line integer test per caller, on untyped struct addresses (no pointer-conversion calls), with the
+    speed and the charge compared as f64s, brought it to 186. The remaining cost is the box's nine or five tests.
+  - Every other row held. No bench covers the Larmor power.
+- **Result, every target** (x86_64 ELF, x86_64 PE, aarch64): **13 modules, 0 failing; 405,904 ok, 0 failed, 0
+  measured, 0 pending, 47,070 accepted (ADR 01: 8,998; ADR 0002: 38,072)** over 452,974 rows; **all 276 digests
+  equal**. Three changed: both transforms and the Larmor power.

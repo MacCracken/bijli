@@ -1182,6 +1182,32 @@ fn cyrius_tests(): i64 {
     var k3: BjFourVector = f3.four_force(em300, BjFourVector_new(e10, e10, e10, e10));
     assert(_bj_bits(k3.x) == 0x420BF08EB0000001 && _bj_bits(k3.y) == 0x41F2A05F20000000
       && _bj_bits(k3.z) == 0xC212A05F20000000, "q = 1e-300 against sums past DBL_MAX: K = (0, 1.5e10, 5e9, −2e10)");
+    # M2 part 2d-3d: the field transforms and the relativistic Larmor power.
+    var e308: f64 = _bj_from_bits(0x7FE1CCF385EBC8A0);                  # 1e308
+    var v866: f64 = _bj_from_bits(0x41AEF336D8FB61A5);                  # 0.866c: γ = 2
+    var et: BjFieldVector;
+    var bt: BjFieldVector;
+    var zf: BjFieldVector = BjFieldVector_new(0.0, 0.0, 0.0);
+    var e8v: BjFieldVector = BjFieldVector_new(e308, 0.0, 0.0);
+    var v8v: BjFieldVector = BjFieldVector_new(v866, 0.0, 0.0);
+    var tt1, vt1 = bj_lorentz_transform_fields(e8v, zf, v8v, &et, &bt);
+    assert(is_ok(tt1) == 1 && _bj_bits(et.x) == 0x7FE1CCF385EBC89F && et.y == 0.0 && bt.x == 0.0,
+      "E = 1e308 along a γ = 2 boost: E′ = E to an ulp (Rust: NaN, γE and the γ²(v⋅E)v term past DBL_MAX)");
+    var e301: f64 = _bj_from_bits(0x7E6DDD4BAA009303);                  # 1e301
+    var tt2, vt2 = bj_lorentz_transform_x(BjFieldVector_new(0.0, 0.0, e301), zf, 200000000.0, &et, &bt);
+    assert(is_ok(tt2) == 1 && _bj_bits(bt.y) == 0x7CA7F28DE52DE8BC,
+      "vE_z/c² = 2.2e292 with vE_z past DBL_MAX (Rust: ∞)");
+    var c06: f64 = _bj_from_bits(0x41A5715D25999999);                   # 0.6c
+    var e170: f64 = _bj_from_bits(0x633A7F5245E5A2CF);                  # 1e170
+    var qe: f64 = _bj_from_bits(0x3C079CA10C924223);                    # 1.6e-19
+    var v06: BjFieldVector = BjFieldVector_new(c06, 0.0, 0.0);
+    var tl1, vl1 = bj_relativistic_larmor_power(qe, v06, BjFieldVector_new(e170, 0.0, 0.0));
+    var pl1: f64 = vl1;
+    assert(is_ok(tl1) == 1 && _bj_bits(pl1) == 0x7B96D19ACE9A29E7,
+      "a = 1e170: P = 2.2e287 with a² past DBL_MAX (Rust: ∞)");
+    var tl2, vl2 = bj_relativistic_larmor_power(0.0, v06, BjFieldVector_new(e300, em300, 0.0));
+    var pl2: f64 = vl2;
+    assert(is_ok(tl2) == 1 && _bj_bits(pl2) == 0, "q = 0 against a² past DBL_MAX: P = 0 (Rust: NaN, 0·∞)");
 
     if (v1 == 0 || v2 == 0 || v3 == 0 || v4 == 0 || v5 == 0 || v6 == 0 || v7 == 0) { println("."); }
     return 0;
