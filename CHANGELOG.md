@@ -253,6 +253,15 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
   double-double sums or exact expansions, kimiya's rounding test, an exact midpoint check; `cr_verify.py`'s cm
   families). X = 1/3 now gives 2.5 exactly (Rust: 2.4999999999999996). The cost: `material/clausius_mossotti`
   26 → 128 ns (`port-parity.md` §37).
+- **wave** (ADR 0002 row 17 amended, M2 part 2c-3, the user's answer of 2026-11-12): the trig-free Fresnel family
+  computed cos θ_t = √(1 − (n₁/n₂)²(1 − cos²θ_i)) in four roundings and tested the rounded sin²θ_t against 1, so near
+  the critical angle it returned cos θ_t = 0 just past it and TIR just short of it, lost cos θ_t near grazing incidence
+  for n₁ = n₂ (cos θ_i = 1e-200 gave 0), and gave NaN at normal incidence when n₁/n₂ overflowed. Total internal
+  reflection is now n₁²(1 − cos²θ_i) > n₂² exactly, and cos θ_t = √(n₂² − n₁²(1 − cos²θ_i))/n₂ is correctly rounded
+  (`src/crmath_edge.cyr`, `cr_verify.py`'s cos_t families), under `snell_cos_theta_t`, the four `*_direct`
+  functions, `reflectance_unpolarized`, `transmittance_unpolarized`, `schlick_reflectance` and
+  `reflectance_at_interface`. The cost: `wave/fresnel_rs_direct` 61 → 258 ns, `wave/schlick_reflectance` 47 → 244 ns
+  (`port-parity.md` §38).
 - **relativity** (ADR 0002 row 13 amended, M2 part 2b-4): `retarded_scalar_potential`, `retarded_vector_potential`,
   `larmor_power` and `EmTensor::dual` rounded two to five times, and overflowed where the value is representable
   (Larmor with q² past DBL_MAX, the dual of B past DBL_MAX/c: ∞ each); they are now correctly rounded for finite

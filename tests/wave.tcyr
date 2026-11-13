@@ -793,6 +793,40 @@ fn cyrius_tests(): i64 {
     var tn17, vn17 = bj_reflectance_normal(ka17, kb17);
     assert(is_err_result(tn17) == 1 && vn17 == BJ_ERR_DIVISION_BY_ZERO,
       "n₁ + n₂ below 10^-30 exactly, its rounding 1e-30: refused (Rust: accepted)");
+    # The trig-free family's total internal reflection (M2 part 2c-3): n₁²(1 − c²) > n₂² exactly, and cos θ_t =
+    # √(n₂² − n₁²(1 − c²))/n₂ rounded once. The inputs are tests/golden/wave.adr.tsv's rows, or exact by construction.
+    var oz: f64[1];
+    var tz1, vz1 = bj_snell_cos_theta_t(1.0, 1.0, 0.3, &oz);
+    var zq1: f64 = oz[0];
+    assert(is_ok(tz1) == 1 && vz1 == Some && zq1 == 0.3,
+      "n₁ = n₂: cos θ_t = cos θ_i exactly (Rust: 0.29999999999999993)");
+    var zden: f64 = _bj_from_bits(1);
+    var tz2, vz2 = bj_snell_cos_theta_t(1.0, 1.0, zden, &oz);
+    var zq2: f64 = oz[0];
+    assert(is_ok(tz2) == 1 && vz2 == Some && zq2 == zden, "n₁ = n₂ at cos θ_i = 2^-1074: the same (Rust: 0)");
+    var zc1: f64 = _bj_from_bits(0x3FE7D9F4CF754635);
+    var tz3, vz3 = bj_snell_cos_theta_t(1.5, 1.0, zc1, &oz);
+    assert(none_is(tz3, vz3) == 1, "just past the critical angle: TIR exactly (Rust: cos θ_t = 0, accepted)");
+    var tz4, vz4 = bj_reflectance_unpolarized(1.5, 1.0, zc1);
+    var zq4: f64 = vz4;
+    assert(is_ok(tz4) == 1 && zq4 == 1.0, "and its R = 1");
+    var zn1: f64 = _bj_from_bits(0x405ABB5837EB216A);
+    var zn2: f64 = _bj_from_bits(0x3FF661000BB539A8);
+    var zc2: f64 = _bj_from_bits(0x3FEFFF4C939390C2);
+    var tz5, vz5 = bj_snell_cos_theta_t(zn1, zn2, zc2, &oz);
+    var zq5: f64 = oz[0];
+    var zw5: f64 = _bj_from_bits(0x3E9D103A96AF2C5C);
+    assert(is_ok(tz5) == 1 && vz5 == Some && zq5 == zw5,
+      "just short of the critical angle: cos θ_t = 4.3307831870389057e-07 (Rust: TIR)");
+    var zbig: f64 = _bj_from_bits(0x7E37E43C8800759C);
+    var ztiny: f64 = _bj_from_bits(0x01A56E1FC2F8F359);
+    var tz6, vz6 = bj_snell_cos_theta_t(zbig, ztiny, 1.0, &oz);
+    var zq6: f64 = oz[0];
+    assert(is_ok(tz6) == 1 && vz6 == Some && zq6 == 1.0, "normal incidence with n₁/n₂ past DBL_MAX: 1 (Rust: NaN)");
+    var tz7, vz7 = bj_reflectance_unpolarized(1.0, 1.5, 0.375);
+    var zq7: f64 = vz7;
+    var zw7: f64 = _bj_from_bits(0x3FC2E58805FF1D4F);
+    assert(is_ok(tz7) == 1 && zq7 == zw7, "R on the correctly rounded cos θ_t (Rust: 2 ulps above)");
 
     test_group("cyrius_waveguide_modes_u32");
     var tm1, vm1 = bj_rectangular_waveguide_cutoff(1.0, 1.0, 0 - 1, 0, 1.0);

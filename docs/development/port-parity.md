@@ -1954,3 +1954,53 @@ The first of 2c's four boundary values (the user's answer of 2026-11-12: exact t
 - **Result, every target** (x86_64 ELF, x86_64 PE, aarch64): **13 modules, 0 failing; 399,611 ok, 0 failed, 0
   measured, 0 pending, 33,248 accepted (ADR 01: 8,998; ADR 0002: 24,250)** over 432,859 rows; **all 276 digests
   equal**. One changed: `material::clausius_mossotti`'s.
+
+## 38. M2 part 2c-3: the trig-free Fresnel TIR, exact, with an accurate cos θ_t (2026-11-12)
+
+The second of 2c's boundary values (the user's answer of 2026-11-12: exact tests, accurate values).
+
+- **ADR 0002 row 17, amended**: the trig-free family's cosines (wave.rs's `fresnel_cosines`, under
+  `snell_cos_theta_t`, the four `*_direct` functions, `reflectance_unpolarized`, `transmittance_unpolarized`,
+  `schlick_reflectance` and `reflectance_at_interface`) decide total internal reflection as n₁²(1 − c²) > n₂² exactly
+  and return cos θ_t = √(n₂² − n₁²(1 − c²))/n₂ rounded once; each function's own formula on top stays Rust's. Rust's
+  1 − (n₁/n₂)²(1 − c²) rounds four times and cancels near the critical angle: just past it cos θ_t came out 0 (accepted)
+  and just short of it TIR (cos θ_t = 4.3e-7 refused); n₁ = n₂ near grazing incidence gave 0 for cos θ_t = c
+  (cos θ_i = 1e-200, even 0.3 came out 0.29999999999999993); and normal incidence with n₁/n₂ past DBL_MAX gave NaN
+  (∞·0).
+- **`src/crmath_edge.cyr`**: n₁ and n₂ scaled by n₂'s exponent (exact); shortcuts for n₁ = n₂ (|c|), c = 1 (1), a
+  ratio past 2^27 (TIR, since 1 − c² ≥ 2^-52) and below 2^-61 (1). Where sin²θ_t ≤ ½, D = b² − a²(1 − c²) is a
+  double-double within 18.6u² (TwoProducts, FastTwoSum, kimiya's `_bj_k_dd_mul`), √D within 15.4u², then kimiya's
+  rounding test on √D/b. Near the critical angle D is the Shewchuk expansion of its ten parts, whose sign decides TIR;
+  compressed and rooted within 8.06u². When the test fails, the exact check compares D with (μb)² at the candidate's two
+  neighbouring midpoints: twenty-two doubles summed exactly. A c below 2^-300 is taken as 0, which provably moves
+  nothing: no dyadic μ makes D − μ²b² vanish at c = 0 (it would need a Pythagorean triple with an odd hypotenuse
+  dividing a leg), so D − μ²b² stays a multiple of 2^-442 while (ac)² < 2^-542. A nonzero D lies in [2^-620, 4] and
+  cos θ_t ≥ 2^-311, inside every helper's range. `_bj_g_compress`'s scratch grew from 8 components to 16 (D has ten).
+- **Rows** (`m_wave.rs`, on a seed of their own): 3,806 more: 463 for each of the eight trig-free functions (the
+  critical cosine ±8 ulps for 24 pairs, ratios of 1 to 3, within 2^-50 of 1 and up to 2^26, a third scaled by
+  2^±600; n₁ within 3 ulps of n₂ at seven grazing cosines down to 2^-700; ratios past DBL_MAX at three cosines; the
+  shortcuts' exponent differences) and 102 for `reflectance_at_interface` (six dielectric pairs' critical cosines
+  ±8 ulps).
+- **Mappings** (`validate.py`'s `wave_cosines(…, exact=True)`, Fraction and an integer square root): 3,420 more row-17
+  rows (`snell_cos_theta_t` 574, among them 50 values now TIR and 1 TIR now a value; `fresnel_rs_direct` 454,
+  `fresnel_rp_direct` 467, `reflectance_s_direct` 405, `reflectance_p_direct` 418, `reflectance_unpolarized` 417,
+  `transmittance_unpolarized` 330, `schlick_reflectance` 260, `reflectance_at_interface` 95), 68 more row-24 rows
+  (Schlick's R₀ on the indices scaled by 2^-600, whose sum Rust's guard refused), and 4 interface rows relabelled from
+  13 to 17; one interface row the port now matches Rust on (the exact cosine undoes row 13's ulp). The labels: Schlick
+  is row 24 where R₀'s guard alone moves the row, else 17; the interface is 17 where the exact cosines alone move it,
+  else 13. All passed once the n₁ = n₂ shortcut returned |c| (cos θ_i = −0 gives +0, √(c²)).
+- **`cr_verify.py`'s cos_t and cos_t_slow** (exact families; cos_t_slow skips the rounding tests): uniform indices and
+  angles, the critical cosine ±8 ulps at scales to 2^±990, n₁ within ulps of n₂ at small and tiny c, any positive
+  finite indices, the shortcuts' edges, the fast region's edge a²(1 − c²) = b²/2, c = 0, c = 1 and n₁ = n₂.
+- **Tests**: tests/wave.tcyr's `cyrius_exact_thresholds (ADR 0002 row 17)` gains 7 assertions: cos θ_t = c for n₁ = n₂
+  (0.3 and 2^-1074), the two flipped rows, R = 1 past the critical angle, normal incidence past DBL_MAX, and R on the
+  rounded-once cos θ_t.
+- **Benchmarks** (an interleaved A/B against HEAD, three rounds each, load 3.2–5.3: another repository's bench ran
+  beside it, so both columns are inflated alike): `wave/fresnel_rs_direct` 61 → 258 ns, `wave/reflectance_unpolarized`
+  72 → 276 ns, `wave/schlick_reflectance` 47 → 244 ns, `wave/reflectance_at_interface` 507 → 714 ns (HEAD's figures
+  from the same runs). Each bench is in the fast region (sin²θ_t ≤ ½), so the cost is the double-double D, its root and
+  kimiya's rounding test: about 130 dependent f64 operations and eight calls on this compiler, some 200 ns. A finding,
+  recorded (Rust 1.24–7.78 ns), as Clausius–Mossotti's was; the other wave rows held within the noise.
+- **Result, every target** (x86_64 ELF, x86_64 PE, aarch64): **13 modules, 0 failing; 399,933 ok, 0 failed, 0
+  measured, 0 pending, 36,732 accepted (ADR 01: 8,998; ADR 0002: 27,734)** over 436,665 rows; **all 276 digests
+  equal**. Nine changed: the nine functions on the cosines.

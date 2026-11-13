@@ -1613,8 +1613,9 @@ def wave_lossless(e, m, s):
     return None, (fsqrt(e * m), fsqrt(fdiv(m, e)))
 
 
-def wave_interface(v, lossless):
-    """reflectance_at_interface on a lossless-constants function (Rust's, or the port's rounded once)."""
+def wave_interface(v, lossless, exact=False):
+    """reflectance_at_interface on a lossless-constants function (Rust's, or the port's rounded once), the cosines
+    Rust's or (exact) the port's."""
     e1, l1 = lossless(*v[0:3])
     if e1:
         return e1
@@ -1622,7 +1623,7 @@ def wave_interface(v, lossless):
     if e2:
         return e2
     (n1, eta1), (n2, eta2) = l1, l2
-    e, ci, ct = wave_cosines(n1, n2, v[6])
+    e, ci, ct = wave_cosines(n1, n2, v[6], exact)
     if e:
         return e
     if ct is None:
@@ -1633,8 +1634,9 @@ def wave_interface(v, lossless):
     return wave_unpolarized(eta2, eta1, ci, ct)
 
 
-def wave_cosines(n1, n2, c):
-    """fresnel_cosines: (error tokens, None, None) or (None, cos θ_i, cos θ_t or None under TIR)."""
+def wave_cosines(n1, n2, c, exact=False):
+    """fresnel_cosines: (error tokens, None, None) or (None, cos θ_i, cos θ_t or None under TIR); with exact, the
+    port's (M2 part 2c-3, row 17): TIR when n₂² − n₁²(1 − c²) < 0 exactly, cos θ_t = √(that)/n₂ rounded once."""
     if n2 == 0.0:
         return dz_err("refractive index n₂ cannot be zero"), None, None
     if not (math.isfinite(n1) and n1 > 0.0 and math.isfinite(n2) and n2 > 0.0):
@@ -1647,6 +1649,11 @@ def wave_cosines(n1, n2, c):
     else:
         return ip_err("cos θ_i must lie in [0, 1] (measured against the incident-side normal), got "
                       + rust_display(c)), None, None
+    if exact:
+        d = Fraction(n2) ** 2 - Fraction(n1) ** 2 * (1 - Fraction(ci) ** 2)
+        if d < 0:
+            return None, ci, None
+        return None, ci, 0.0 if d == 0 else rn_sqrt(d / Fraction(n2) ** 2)
     ratio = n1 / n2
     sin2_t = ratio * ratio * (1.0 - ci * ci)
     if sin2_t > 1.0:
@@ -1672,9 +1679,9 @@ def wave_unpolarized(a1, a2, ci, ct):
     return okf(0.5 * (rs * rs + rp * rp))
 
 
-def wave_direct(fn, n1, n2, c):
-    """The trig-free family, transcribed."""
-    e, ci, ct = wave_cosines(n1, n2, c)
+def wave_direct(fn, n1, n2, c, exact=False):
+    """The trig-free family, transcribed (exact: on the port's cosines)."""
+    e, ci, ct = wave_cosines(n1, n2, c, exact)
     if e:
         return e
     if fn == "wave::snell_cos_theta_t":
@@ -1712,9 +1719,10 @@ def wave_reflectance_normal(n1, n2, exact=False):
     return okf(r * r)
 
 
-def wave_schlick(n1, n2, c, port=False):
-    """schlick_reflectance; with port, R₀ without reflectance_normal's |n₁ + n₂| < 1e-30 guard (ADR 0002 row 24)."""
-    e, ci, ct = wave_cosines(n1, n2, c)
+def wave_schlick(n1, n2, c, port=False, exact=False):
+    """schlick_reflectance; with port, R₀ without reflectance_normal's |n₁ + n₂| < 1e-30 guard (ADR 0002 row 24);
+    with exact, on the port's cosines (row 17)."""
+    e, ci, ct = wave_cosines(n1, n2, c, exact)
     if e:
         return e
     if n1 > n2:
@@ -2069,6 +2077,11 @@ def wave_port13(fn, v, K, kh):
     return None
 
 
+WAVE_TRIG_FREE = ("wave::snell_cos_theta_t", "wave::fresnel_rs_direct", "wave::fresnel_rp_direct",
+                  "wave::reflectance_s_direct", "wave::reflectance_p_direct", "wave::reflectance_unpolarized",
+                  "wave::transmittance_unpolarized")
+
+
 def wave_port(fn, v, K, consts):
     """The port's outputs for a wave row an ADR 0002 row changes, else None."""
     d, r, kh = consts
@@ -2095,7 +2108,12 @@ def wave_port(fn, v, K, consts):
     if fn == "wave::effective_aperture" and math.isnan(v[0]):
         return 23, ip_err("wavelength must be non-negative, got NaN")
     if fn == "wave::schlick_reflectance":
-        return 24, wave_schlick(v[0], v[1], v[2], port=True)
+        # Row 24 where R₀'s guard alone moves the row, else row 17 (the exact TIR and cos θ_t).
+        old24 = wave_schlick(v[0], v[1], v[2], port=True)
+        new = wave_schlick(v[0], v[1], v[2], port=True, exact=True)
+        return (24 if not toks_same(old24, wave_rust(fn, v, None, K)) else 17), new
+    if fn in WAVE_TRIG_FREE:
+        return 17, wave_direct(fn, v[0], v[1], v[2], exact=True)
     if fn == "wave::material_reflection_coefficient":
         for part in (v[0:3], v[3:6]):
             e, _l = wave_lossless(*part)
@@ -2113,7 +2131,10 @@ def wave_port(fn, v, K, consts):
         # Row 25 where the relative η alone moves the row, else row 13 (η rounded once).
         return (25 if not toks_same(old25, rust) else 13), new
     if fn == "wave::reflectance_at_interface":
-        return 13, wave_interface(v, mat_lossless_port)
+        # Row 17 where the exact TIR and cos θ_t alone move the row, else row 13 (n and η rounded once).
+        old17 = wave_interface(v, wave_lossless, exact=True)
+        new = wave_interface(v, mat_lossless_port, exact=True)
+        return (17 if not toks_same(old17, wave_rust(fn, v, None, K)) else 13), new
     if fn == "wave::reflectance_normal_materials":
         return 13, mat_reflectance(v, mat_lossless_port)
     if fn in ("wave::reflectance_normal", "wave::transmittance_normal"):

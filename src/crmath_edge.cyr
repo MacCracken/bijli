@@ -2,7 +2,7 @@
 # 2026-11-12: exact tests, accurate values). A test that decides where its value has a pole or a zero is made on the
 # exact quantity, and the value beside it comes from exact differences, correctly rounded, so the two agree: an input
 # the exact test accepts never gets a value of ∞, 0 or NaN from a cancellation, and one it refuses carries the exact
-# value's sign.
+# value's sign. Clausius–Mossotti's ε_r (M2 part 2c-2) and the trig-free Fresnel cosine (2c-3) are here.
 #
 # Clausius–Mossotti (M2 part 2c-2). ε_r = (1 + 2X)/(1 − X) with X = Nα/(3ε₀) is (3ε₀ + 2P)/(3ε₀ − P), P = Nα exactly
 # and ε₀ its double. X ≥ 1 is 3ε₀ − P ≤ 0, and below it ε_r ≤ 0 is 3ε₀ + 2P ≤ 0. The value ε_r is rounded once (to
@@ -237,5 +237,262 @@ fn _bj_cr_clausius(alpha: f64, n: f64, slow, out: *f64): i64 {
     var y: f64 = _bj_e_settle(&c, g, zz);
     var ry: f64 = g * y;
     out[0] = ry;
+    return 0;
+}
+
+# ── the trig-free Fresnel cosine (M2 part 2c-3) ──────────────────────────────────────────────────────────────────────
+#
+# cos θ_t = √(1 − (n₁/n₂)²(1 − c²)) for c = cos θ_i in [0, 1] is √D/b with D = b² − a²(1 − c²) = b² − a² + (ac)²,
+# where a = n₁·2^-k and b = n₂·2^-k ∈ [1, 2) (k n₂'s exponent: the scaling is exact and changes nothing). Total
+# internal reflection, sin²θ_t > 1, is D < 0 exactly, and cos θ_t is √D/b rounded once.
+#
+# Shortcuts. n₁ = n₂ gives D = (ac)², so cos θ_t = |c| exactly (+0 for c = −0); c = 1 gives cos θ_t = 1. Otherwise
+# c < 1, so 1 − c² ≥ 2^-52: a ratio n₁/n₂ above 2^27 (exponent difference d ≥ 28) is TIR, and one below 2^-61
+# (d ≤ −62) leaves cos θ_t within 2^-122 of 1, which rounds to 1. Between, a lies in (2^-62, 2^29), and every square
+# below is exact.
+#
+# A c below 2^-300 is taken as 0 in D. With c = 0, D = b² − a² is a nonzero multiple of 2^-228 (a ≠ b), and D − μ²b² is
+# never 0 at a dyadic μ: μb = p and a² + p² = b² would make a Pythagorean triple whose hypotenuse b·2^j has an odd part
+# dividing p's, so the odd part is 1 and a or p is 0. So D − μ²b² is a nonzero multiple of 2^-442 at every midpoint μ
+# (μ ≥ 2^-115 there), far above (ac)² < 2^-542: dropping c moves neither the sign of D nor any midpoint comparison.
+#
+# The range. A nonzero D lies in [2^-620, 4]: if (ac)² < 2^-229, |D| ≥ |b² − a²| − (ac)² ≥ 2^-229; otherwise
+# c ≥ 2^-143.5, and every part of D is a multiple of 2^-620. So cos θ_t ≥ 2^-311.
+#
+# Fast region, M = a²(1 − c²) ≤ b²/2 (sin²θ_t ≤ ½): 1 − c² = s_h + s_l from TwoProduct(c, c) and FastTwoSum(1, −c²)
+# (exact for c² ≥ ½, within 1.5u² relative below), M by kimiya's _bj_k_dd_mul (8.01u²), D = b² − M by TwoSum within
+# 9.05u², so 18.6u² with M's error carried (D ≥ M); √D by src/crmath_gamma.cyr's _bj_g_sqrt_dd (half of that, plus
+# 6.06u²): 15.4u², inside _bj_k_dd_div_cr's 32u². Near the critical angle (M > b²/2) D is the Shewchuk expansion of
+# its ten parts (b², −a², (ac)² = t_h² + 2t_h·t_l + t_l², TwoProducts), whose top component's sign decides TIR,
+# compressed to within 2^-104 (with the root's 6.06u²: 8.06u²). The exact check, when a rounding test fails (or always,
+# for slow = 1): at the candidate y's two neighbouring midpoints μ = y ± h, D − (μb)² is exactly the sum of D's ten
+# parts and the twelve of −(g₁ + g₂ + w)² (y·b = g₁ + g₂ by TwoProduct, w = h·b exactly: three squares and three
+# doubled products), whose least bits are at or above 2^-834 (y ≥ 2^-311), ties to even. cr_verify.py's cos_t and
+# cos_t_slow families check it against Python's Fraction and an integer square root, on x86_64 and aarch64.
+
+# D's parts into t (b², −a², and (ac)²'s six when c ≠ 0, each by TwoProduct); returns their count.
+#must_use
+fn _bj_e_dparts(a: f64, b: f64, c: f64, t: *f64): i64 {
+    var bh, bl = _bj_k_two_prod(b, b);
+    var ah, al = _bj_k_two_prod(a, a);
+    var b_h: f64 = bh;
+    var b_l: f64 = bl;
+    var a_h: f64 = ah;
+    var a_l: f64 = al;
+    t[0] = b_h;
+    t[1] = b_l;
+    t[2] = -a_h;
+    t[3] = -a_l;
+    if (c == 0.0) { return 4; }
+    var th, tl = _bj_k_two_prod(a, c);
+    var t_h: f64 = th;
+    var t_l: f64 = tl;
+    var p1, e1 = _bj_k_two_prod(t_h, t_h);
+    var p2, e2 = _bj_k_two_prod(t_h, t_l);
+    var p3, e3 = _bj_k_two_prod(t_l, t_l);
+    var q1: f64 = p1;
+    var r1: f64 = e1;
+    var q2: f64 = p2;
+    var r2: f64 = e2;
+    var q3: f64 = p3;
+    var r3: f64 = e3;
+    t[4] = q1;
+    t[5] = r1;
+    t[6] = q2 * 2.0;
+    t[7] = r2 * 2.0;
+    t[8] = q3;
+    t[9] = r3;
+    return 10;
+}
+
+# The sign (−1, 0 or 1) of the exact sum of the n ≤ 24 doubles at t (Shewchuk's Grow-Expansion: the top component's).
+#must_use
+fn _bj_e_sum_sign(t: *f64, n): i64 {
+    var ex: f64[24];
+    var k = 0;
+    for (var i = 0; i < n; i = i + 1) {
+        var ti: f64 = t[i];
+        k = _bj_g_grow(&ex, k, ti);
+    }
+    if (k == 0) { return 0; }
+    var top: f64 = ex[k - 1];
+    if (top > 0.0) { return 1; }
+    return 0 - 1;
+}
+
+# The sign of D − ((y + h)·b)², exactly (the section comment's exact check).
+#must_use
+fn _bj_e_cos_side(a: f64, b: f64, c: f64, y: f64, h: f64): i64 {
+    var t: f64[24];
+    var n = _bj_e_dparts(a, b, c, &t);
+    var g1, g2 = _bj_k_two_prod(y, b);
+    var x: f64[3];
+    var gg1: f64 = g1;
+    var gg2: f64 = g2;
+    x[0] = gg1;
+    x[1] = gg2;
+    x[2] = h * b;
+    for (var i = 0; i < 3; i = i + 1) {
+        for (var j = i; j < 3; j = j + 1) {
+            var xi: f64 = x[i];
+            var xj: f64 = x[j];
+            var p, e = _bj_k_two_prod(xi, xj);
+            var pp: f64 = p;
+            var pe: f64 = e;
+            if (j != i) {
+                pp = pp * 2.0;
+                pe = pe * 2.0;
+            }
+            t[n] = -pp;
+            t[n + 1] = -pe;
+            n = n + 2;
+        }
+    }
+    return _bj_e_sum_sign(&t, n);
+}
+
+# RN(√D/b) from a candidate y within an ulp of it (the section comment's exact check).
+#must_use
+fn _bj_e_cos_settle(a: f64, b: f64, c: f64, y: f64): f64 {
+    var up: f64 = _bj_g_step(y, 1);
+    var hu: f64 = (up - y) * 0.5;
+    var su = _bj_e_cos_side(a, b, c, y, hu);
+    if (su > 0) { return up; }
+    if (su == 0) {
+        var eu: f64 = _bj_g_even(y, up);
+        return eu;
+    }
+    var dn: f64 = _bj_g_step(y, 0 - 1);
+    var hd: f64 = (dn - y) * 0.5;
+    var sd = _bj_e_cos_side(a, b, c, y, hd);
+    if (sd < 0) { return dn; }
+    if (sd == 0) {
+        var ed: f64 = _bj_g_even(dn, y);
+        return ed;
+    }
+    return y;
+}
+
+# The trig-free Fresnel cosine (the section comment): 1 under total internal reflection (n₁²(1 − c²) > n₂² exactly);
+# otherwise 0, with out[0] := RN(cos θ_t), cos θ_t = √(n₂² − n₁²(1 − c²))/n₂. For positive finite n₁, n₂ and c in
+# [0, 1]. slow = 1 skips the rounding tests, so the exact check always runs (cr_verify.py's cos_t_slow).
+#must_use
+fn _bj_cr_cos_t(n1: f64, n2: f64, c: f64, slow, out: *f64): i64 {
+    if (n1 == n2) {
+        var ac: f64 = f64_abs(c);
+        out[0] = ac;
+        return 0;
+    }
+    if (c == 1.0) {
+        out[0] = 1.0;
+        return 0;
+    }
+    var w1 = _bj_bits(n1);
+    var w2 = _bj_bits(n2);
+    var f1 = w1 >> 52;
+    var f2 = w2 >> 52;
+    var a: f64 = 0.0;
+    var b: f64 = 0.0;
+    var d = 0;
+    if (f1 != 0 && f2 != 0) {
+        d = f1 - f2;
+        if (d >= 28) { return 1; }
+        if (d <= 0 - 62) {
+            out[0] = 1.0;
+            return 0;
+        }
+        b = _bj_from_bits((w2 & 0xFFFFFFFFFFFFF) | 0x3FF0000000000000);
+        a = _bj_from_bits(w1 - ((f2 - 1023) << 52));
+    } else {
+        var s1, x1 = _bj_e_frexp(n1);
+        var s2, x2 = _bj_e_frexp(n2);
+        d = x1 - x2;
+        if (d >= 28) { return 1; }
+        if (d <= 0 - 62) {
+            out[0] = 1.0;
+            return 0;
+        }
+        var ss1: f64 = s1;
+        var ss2: f64 = s2;
+        b = ss2;
+        a = _bj_from_bits(_bj_bits(ss1) + (d << 52));
+    }
+    var cc: f64 = c;
+    var lo300: f64 = 0x2D30000000000000;            # 2^-300
+    if (cc < lo300) { cc = 0.0; }
+    var sp: f64 = 134217729.0;                      # TwoProducts inline (Veltkamp's 2^27 + 1 split)
+    var p: f64 = cc * cc;
+    var kc: f64 = sp * cc;
+    var ch: f64 = kc - (kc - cc);
+    var cl: f64 = cc - ch;
+    var pe: f64 = (cl * cl) - (((p - (ch * ch)) - (cl * ch)) - (ch * cl));
+    var s1f: f64 = 1.0 - p;                         # 1 − c² = s_h + s_l: FastTwoSum(1, −p), then −pe
+    var zf: f64 = s1f - 1.0;
+    var mp: f64 = -p;
+    var er: f64 = mp - zf;
+    var sr: f64 = er - pe;
+    var s_h: f64 = s1f + sr;
+    var s_l: f64 = sr - (s_h - s1f);
+    var a2: f64 = a * a;
+    var ka: f64 = sp * a;
+    var ahh: f64 = ka - (ka - a);
+    var ahl: f64 = a - ahh;
+    var a2e: f64 = (ahl * ahl) - (((a2 - (ahh * ahh)) - (ahl * ahh)) - (ahh * ahl));
+    var b2: f64 = b * b;
+    var kb: f64 = sp * b;
+    var bhh: f64 = kb - (kb - b);
+    var bhl: f64 = b - bhh;
+    var b2e: f64 = (bhl * bhl) - (((b2 - (bhh * bhh)) - (bhl * bhh)) - (bhh * bhl));
+    var mh, ml = _bj_k_dd_mul(a2, a2e, s_h, s_l);
+    var m_h: f64 = mh;
+    var m_l: f64 = ml;
+    var half: f64 = 0.5 * b2;
+    var rh: f64 = 0.0;
+    var rl: f64 = 0.0;
+    if (m_h <= half) {
+        var mmh: f64 = -m_h;
+        var t0: f64 = b2 + mmh;                     # D = b² − M: TwoSum(b², −M_h), inline
+        var v0: f64 = t0 - b2;
+        var t1: f64 = (b2 - (t0 - v0)) + (mmh - v0);
+        var w0: f64 = (t1 + b2e) - m_l;
+        var dh: f64 = t0 + w0;                      # FastTwoSum(t0, w0)
+        var dl: f64 = w0 - (dh - t0);
+        var qh, ql = _bj_g_sqrt_dd(dh, dl);
+        rh = qh;
+        rl = ql;
+    } else {
+        var dp: f64[10];
+        var nd = _bj_e_dparts(a, b, cc, &dp);
+        var ex: f64[16];
+        var k = 0;
+        for (var i = 0; i < nd; i = i + 1) {
+            var di: f64 = dp[i];
+            k = _bj_g_grow(&ex, k, di);
+        }
+        if (k == 0) {
+            out[0] = 0.0;
+            return 0;
+        }
+        var top: f64 = ex[k - 1];
+        if (top < 0.0) { return 1; }
+        var gh, gl = _bj_g_compress(&ex, k);
+        var g_h: f64 = gh;
+        var g_l: f64 = gl;
+        var uh, ul = _bj_g_sqrt_dd(g_h, g_l);
+        rh = uh;
+        rl = ul;
+    }
+    if (slow == 0) {
+        var y, ok = _bj_k_dd_div_cr(rh, rl, b, 0.0);
+        if (ok == 1) {
+            var yy: f64 = y;
+            out[0] = yy;
+            return 0;
+        }
+    }
+    var z1, z2 = _bj_k_dd_div_ends(rh, rl, b, 0.0);
+    var zz: f64 = z1;
+    var r: f64 = _bj_e_cos_settle(a, b, cc, zz);
+    out[0] = r;
     return 0;
 }

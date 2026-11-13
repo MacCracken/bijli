@@ -318,6 +318,45 @@ fn emit_trig_free(m: &mut Module, rng: &mut Rng) {
         let n2 = rng.uniform(1.0, 3.0);
         trig_free(m, n1, n2, rng.unit());
     }
+    // M2 part 2c-3 (ADR 0002 row 17: TIR decided exactly, cos θ_t rounded once): the critical cosine ±8 ulps for 24
+    // more dense → rare pairs (ratios of 1 to 3, within 2^-50 of 1, and up to 2^26; some scaled by 2^±600); n₁ within a
+    // few ulps of n₂ with small and tiny cos θ_i (Rust's 1 − (1 − c²) cancels to 0); c = 1 with a ratio past DBL_MAX
+    // (Rust's ∞·0 = NaN); and ratios at the shortcuts' exponent differences. A seed of its own keeps the rest as it was.
+    let mut trng = Rng::new(0x0C05_72C3);
+    for j in 0..24 {
+        let n2 = trng.uniform(1.0, 3.0);
+        let q = match j % 3 {
+            0 => trng.uniform(1.0, 3.0),
+            1 => 1.0 + pow2(-i32::try_from(trng.int(1, 50)).unwrap_or(1)),
+            _ => pow2(i32::try_from(trng.int(1, 25)).unwrap_or(1)) * trng.uniform(1.0, 2.0),
+        };
+        let n1 = n2 * q;
+        let sc = match j % 4 {
+            2 => pow2(-600),
+            3 => pow2(600),
+            _ => 1.0,
+        };
+        let r = n2 / n1;
+        let cc = (1.0 - r * r).sqrt();
+        for k in (-8..=8).filter(|_| cc > 0.0) {
+            trig_free(m, n1 * sc, n2 * sc, ulps(cc, k).min(1.0));
+        }
+    }
+    for k in [-3, -1, 1, 3] {
+        for c in [pow2(-10), pow2(-27), pow2(-40), pow2(-200), pow2(-700), 1e-9, 1e-3] {
+            trig_free(m, ulps(1.5, k), 1.5, c);
+        }
+    }
+    for (n1, n2) in [(1e300, 1e-300), (f64::MAX, f64::from_bits(1)), (1e-300, 1e300)] {
+        for c in [1.0, 1.0 - f64::EPSILON / 2.0, 0.5] {
+            trig_free(m, n1, n2, c);
+        }
+    }
+    for d in [26, 27, 28, -60, -61, -62] {
+        for c in [1.0 - f64::EPSILON / 2.0, 1.0 - pow2(-40), 0.5] {
+            trig_free(m, 1.25 * pow2(d), 1.0, c);
+        }
+    }
 }
 
 fn emit_materials(m: &mut Module, rng: &mut Rng) {
@@ -364,6 +403,17 @@ fn emit_materials(m: &mut Module, rng: &mut Rng) {
                 let ins = cat(&[mt(a), mt(bm), vec![f(c)]]);
                 m.row("wave::reflectance_at_interface", Class::A, &ins, &res_f(reflectance_at_interface(black_box(&a), &bm, c)));
             }
+        }
+    }
+    // M2 part 2c-3: each dense → rare dielectric pair's critical cosine ±8 ulps, through the interface.
+    for (e1, e2) in [(2.25, 1.0), (4.0, 1.0), (1.7, 1.1), (5.3, 2.25), (1.0 + 4.0 * f64::EPSILON, 1.0), (80.0, 1.0)] {
+        let (a, bm) = (Material::dielectric(e1), Material::dielectric(e2));
+        let r = e2.sqrt() / e1.sqrt();
+        let cc = (1.0 - r * r).sqrt();
+        for k in (-8..=8).filter(|_| cc > 0.0) {
+            let c = ulps(cc, k).min(1.0);
+            let ins = cat(&[mt(a), mt(bm), vec![f(c)]]);
+            m.row("wave::reflectance_at_interface", Class::A, &ins, &res_f(reflectance_at_interface(black_box(&a), &bm, c)));
         }
     }
 }

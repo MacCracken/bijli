@@ -6,7 +6,8 @@
 # part 5), bijli's √ of a monomial (src/crmath_mono.cyr), which cr_verify.py checks against exact values (Python's
 # Fraction and integer square root), and bijli's transcendentals with an unbounded exponent (src/crmath_ux.cyr, M1 part
 # 5c-2), checked against MPFR with its widest exponent range, and the exact Singularity threshold (src/crmath_cmp.cyr,
-# M1 part 5d-1) and Clausius–Mossotti's ε_r (src/crmath_edge.cyr, M2 part 2c-2), against Fractions. Built from the math
+# M1 part 5d-1), Clausius–Mossotti's ε_r and the trig-free Fresnel cosine (src/crmath_edge.cyr, M2 parts 2c-2 and
+# 2c-3), against Fractions. Built from the math
 # sources the bundle carries (src/constants.cyr … src/mathx.cyr, in the manifest's order and byte for byte what
 # dist/bijli.cyr holds): the bundle is `private` and these entry points are bijli-internal, so a consumer of
 # dist/bijli.cyr can't call them, but a file of internals only has no marker and can be included on its own.
@@ -109,6 +110,15 @@ fn _call(fp, fl, w): i64 {
         var co: f64[1];
         if (_bj_cr_clausius(x, y, cslow, &co) == 1) { return 0 - 1; }
         r = co[0];
+    }
+    elif (_is(fp, fl, "cos_t") == 1 || _is(fp, fl, "cos_t_slow") == 1) {
+        # cos_t n1 n2 c: the trig-free Fresnel cosine, correctly rounded (src/crmath_edge.cyr), the exact check alone
+        # for cos_t_slow; −1 (all ones) under total internal reflection
+        var tslow = 0;
+        if (fl > 5) { tslow = 1; }
+        var to: f64[1];
+        if (_bj_cr_cos_t(x, y, _wf(w, 2), tslow, &to) == 1) { return 0 - 1; }
+        r = to[0];
     }
     elif (_is(fp, fl, "sinh") == 1) { r = _bj_sinh(x); }
     elif (_is(fp, fl, "cosh") == 1) { r = _bj_cosh(x); }

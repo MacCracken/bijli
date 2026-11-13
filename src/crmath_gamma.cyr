@@ -160,12 +160,12 @@ fn _bj_g_grow(ex: *f64, k, b: f64): i64 {
     return m;
 }
 
-# (h, l) := the top two components of the nonoverlapping expansion ex[0..k) (k ≥ 1, increasing magnitude) after
+# (h, l) := the top two components of the nonoverlapping expansion ex[0..k) (1 ≤ k ≤ 16, increasing magnitude) after
 # Shewchuk's Compress, renormalised: within 2^-104 of the sum, relative (the rest of a nonadjacent expansion is below
 # ulp of its second component). ex is overwritten.
 #must_use
 fn _bj_g_compress(ex: *f64, k): (f64, f64) {
-    var g: f64[8];
+    var g: f64[16];
     var q0: f64 = ex[k - 1];
     var bottom = k - 1;
     var i = k - 2;

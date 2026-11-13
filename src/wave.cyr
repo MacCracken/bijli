@@ -15,7 +15,9 @@
 # range-edge Part). The products and quotients of inputs and constants are rounded once (ADR 0002 row 13, M2 part 2b-2,
 # src/crmath_kx.cyr's monomials): the plane-wave intensity, the reflected radiation pressure, the wave number, the
 # circular cutoff, the Hertzian resistance, the effective aperture and Friis's ratio; a constant enters as its double
-# (2π and 4π as Rust's π times an exact power of two), and a non-finite operand keeps Rust's chain.
+# (2π and 4π as Rust's π times an exact power of two), and a non-finite operand keeps Rust's chain. The thresholds
+# are exact (ADR 0002 row 17): reflectance_normal's |n₁ + n₂| against 10^-30 (M2 part 2c-1), and the trig-free
+# family's total internal reflection, with its cos θ_t correctly rounded (2c-3, src/crmath_edge.cyr).
 #
 # A fallible function returns a value-form Result, the error in the last-error record (src/error.cyr). Rust's
 # `Result<Option<f64>>` is `Ok(Some)` with the value in *out, or `Ok(None)` under total internal reflection (out
@@ -266,7 +268,9 @@ public fn bj_transmittance_normal(n1: f64, n2: f64): Result {
 # Validated (cos θ_i, cos θ_t) into cs[0], cs[1]: Ok(Some), or Ok(None) under total internal reflection (cs[0] only).
 # DivisionByZero for n₂ = 0; InvalidParameter unless both indices are positive and finite, then unless cos θ_i is in
 # [0, 1] (a value within 1e-6 outside it is clamped). cos θ_t = √(1 − (n₁/n₂)²(1 − cos²θ_i)), None when the sine²
-# passes 1. Mirrors wave.rs's `check_indices`, `check_cos_theta_i` and `fresnel_cosines`.
+# passes 1: the test exact (n₁²(1 − cos²θ_i) > n₂²) and cos θ_t = √(n₂² − n₁²(1 − cos²θ_i))/n₂ correctly rounded (ADR
+# 0002 row 17, M2 part 2c-3, src/crmath_edge.cyr). Mirrors wave.rs's `check_indices`, `check_cos_theta_i` and
+# `fresnel_cosines`.
 fn _bj_wave_cosines(n1: f64, n2: f64, cos_theta_i: f64, cs: *f64): Result {
     if (n2 == 0.0) { return Err(_bj_err_division_by_zero("refractive index n₂ cannot be zero")); }
     if (!(_bj_is_finite(n1) == 1 && n1 > 0.0 && _bj_is_finite(n2) == 1 && n2 > 0.0)) {
@@ -290,14 +294,9 @@ fn _bj_wave_cosines(n1: f64, n2: f64, cos_theta_i: f64, cs: *f64): Result {
         }
     }
     cs[0] = ci;
-    var ratio: f64 = n1 / n2;
-    var r2: f64 = ratio * ratio;
-    var c2: f64 = ci * ci;
-    var s2: f64 = 1.0 - c2;
-    var sin2_t: f64 = r2 * s2;
-    if (sin2_t > 1.0) { return Ok(None); }
-    var q: f64 = 1.0 - sin2_t;
-    var ct: f64 = f64_sqrt(q);
+    var co: f64[1];
+    if (_bj_cr_cos_t(n1, n2, ci, 0, &co) == 1) { return Ok(None); }
+    var ct: f64 = co[0];
     cs[1] = ct;
     return Ok(Some);
 }

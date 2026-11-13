@@ -526,7 +526,8 @@ def run(target, lines):
 
 EXACT = ["mono"] + list(SHAPES) + ["sqrt_div", "wsqrt", "sqrt_mono", "sqrt_mono_acc", "ux_mul", "ux_div", "ux_add",
          "ux_sub", "ux_sqrt", "r2_below", "gamma", "gamma_slow", "gamma2", "gamma2_slow", "gamma_ok", "prod5",
-         "prod5_acc", "mono_wide", "mono_wide_acc", "below_prod", "below_quot", "below_sum", "cm", "cm_slow"]
+         "prod5_acc", "mono_wide", "mono_wide_acc", "below_prod", "below_quot", "below_sum", "cm", "cm_slow", "cos_t",
+         "cos_t_slow"]
 UX = ["ux_exp", "ux_cosh", "ux_sinh", "ux_ln", "ux_pow", "ux_sin", "ux_cos"]
 
 
@@ -765,6 +766,81 @@ def cm_families(rng, count):
     return out
 
 
+
+# ── the trig-free Fresnel cosine (src/crmath_edge.cyr, M2 part 2c-3, ADR 0002 row 17) ─────────────────────────────────
+COS_T_TIR = (1 << 64) - 1
+
+
+def cos_t_ref(n1, n2, c):
+    """RN(√(n₂² − n₁²(1 − c²))/n₂) exactly, or the TIR marker when that difference is negative."""
+    d = Fraction(n2) ** 2 - Fraction(n1) ** 2 * (1 - Fraction(c) ** 2)
+    if d < 0:
+        return COS_T_TIR
+    return f2b(0.0 if d == 0 else rn_sqrt(d / Fraction(n2) ** 2))
+
+
+def cos_t_cases(rng, count):
+    """(n₁, n₂, c): indices and angles of every kind; c within ulps of the critical cosine √(1 − (n₂/n₁)²), at scales
+    2^±s; n₁ within ulps of n₂ with small and tiny c (Rust's cancellation; c below 2^-300 among them); any positive
+    finite indices with any c in [0, 1]; ratios at the shortcuts' exponent differences (27, 28, −61, −62); the fast
+    region's edge a²(1 − c²) = b²/2; and c = 0, c = 1, n₁ = n₂."""
+    out = []
+    for i in range(count):
+        kind = i % 8
+        if kind == 0:
+            out.append((rng.uniform(1.0, 3.0), rng.uniform(1.0, 3.0), rng.random()))
+        elif kind == 1:
+            n2 = rng.uniform(1.0, 3.0)
+            n1 = n2 * rng.choice([rng.uniform(1.0, 3.0), 1.0 + 2.0 ** -rng.uniform(1.0, 50.0),
+                                  2.0 ** rng.uniform(0.0, 26.0)])
+            r = n2 / n1
+            cc = math.sqrt(1.0 - r * r)
+            sc = 2.0 ** rng.randint(-990, 990) if rng.random() < 0.3 else 1.0
+            if cc > 0.0:
+                out.append((n1 * sc, n2 * sc, min(1.0, cm_ulps(cc, rng.randint(-8, 8)))))
+        elif kind == 2:
+            n2 = rng.uniform(0.5, 4.0)
+            n1 = cm_ulps(n2, rng.randint(-6, 6))
+            c = rng.choice([2.0 ** -rng.uniform(0.0, 60.0), 2.0 ** -rng.uniform(60.0, 1074.0), rng.random() * 1e-8])
+            out.append((n1, n2, c))
+        elif kind == 3:
+            x1, x2 = abs(any_finite(rng)), abs(any_finite(rng))
+            if x1 > 0.0 and x2 > 0.0 and math.isfinite(x1) and math.isfinite(x2):
+                out.append((x1, x2, rng.choice([rng.random(), abs(any_finite(rng)) % 1.0, 1.0 - 2.0 ** -53])))
+        elif kind == 4:
+            d = rng.choice([27, 28, -61, -62, 26, -60])
+            n2 = rng.uniform(1.0, 2.0) * 2.0 ** rng.randint(-500, 500)
+            n1 = rng.uniform(1.0, 2.0) * n2 * 2.0 ** d
+            out.append((n1, n2, rng.choice([1.0 - 2.0 ** -53, 1.0 - 2.0 ** -40, rng.random(), 0.0])))
+        elif kind == 5:
+            n2 = rng.uniform(1.0, 2.0)
+            n1 = n2 * rng.uniform(0.75, 3.0)
+            q = 1.0 - (n2 * n2) / (2.0 * n1 * n1)
+            if q > 0.0:
+                out.append((n1, n2, min(1.0, cm_ulps(math.sqrt(q), rng.randint(-8, 8)))))
+        elif kind == 6:
+            n = rng.uniform(0.1, 10.0)
+            out.append(rng.choice([(n, n, rng.random()), (n, rng.uniform(0.1, 10.0), 0.0),
+                                   (n, rng.uniform(0.1, 10.0), 1.0), (1e300, 1e-300, 1.0), (5e-324, 1e308, 0.5)]))
+        else:
+            n2 = abs(any_finite(rng))
+            if n2 > 0.0 and math.isfinite(n2):
+                n1 = n2 * rng.uniform(0.5, 2.0)
+                if 0.0 < n1 < math.inf:
+                    out.append((n1, n2, rng.random()))
+    return out
+
+
+def cos_t_families(rng, count):
+    """cos_t (the full function) and cos_t_slow (the exact check alone) on each of cos_t_cases' triples."""
+    out = []
+    for n1, n2, c in cos_t_cases(rng, count):
+        want = cos_t_ref(n1, n2, c)
+        out.append(("cos_t", [n1, n2, c], want))
+        out.append(("cos_t_slow", [n1, n2, c], want))
+    return out
+
+
 def main() -> int:
     (root / "build").mkdir(exist_ok=True)
     names = wanted or list(FUNCS) + ["exact", "ux"]
@@ -792,6 +868,9 @@ def main() -> int:
         crng = random.Random(0xC1_A05)
         calls += [(f, ref, ws) for f, ws, ref in cm_families(crng, max(1, n // 5))
                   if "exact" in names or f in names]
+        trng = random.Random(0xC0_57)
+        calls += [(f, ref, ws) for f, ws, ref in cos_t_families(trng, max(1, n // 5))
+                  if "exact" in names or f in names]
     if "ux" in names or any(x in UX for x in names):
         urng = random.Random(0x5C_2E_D6E)
         fams = ux_families(urng, max(1, n // 20))
@@ -809,7 +888,7 @@ def main() -> int:
     for i, (name, want, a) in enumerate(calls):
         for t in targets:
             g = results[t][i]
-            any_nan = name not in UX and not name.startswith(("gamma", "cm"))  # their "invalid" is a word
+            any_nan = name not in UX and not name.startswith(("gamma", "cm", "cos_t"))  # "invalid" is a word
             ok = g == want or (any_nan and b2f(g) != b2f(g) and b2f(want) != b2f(want))
             per.setdefault((name, t), [0, 0])[0 if ok else 1] += 1
             if not ok:
