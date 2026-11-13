@@ -1,5 +1,6 @@
 # bijli golden corpus: one module per line; tests/parity.tcyr replays each
 charge
+circuit
 complex
 constants
 error

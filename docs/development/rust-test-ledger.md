@@ -6,7 +6,7 @@
 > (`tests/golden/`) checks every ported function on its grid besides; this ledger is about the oracle's own
 > assertions.
 
-**858 Rust tests:** 262 ported, 3 not applicable, 593 pending.
+**858 Rust tests:** 313 ported, 3 not applicable, 542 pending.
 
 | Rust file | Milestone | Cyrius tests | Rust tests | Ported | N/A | Pending |
 |---|---|---|---:|---:|---:|---:|
@@ -14,7 +14,7 @@
 | `src/beam.rs` | M3 | `tests/beam.tcyr` | 60 | 0 | 0 | 60 |
 | `src/bridge.rs` | M7 | `tests/bridge.tcyr` | 18 | 0 | 0 | 18 |
 | `src/charge.rs` | M1 | `tests/charge.tcyr` | 26 | 26 | 0 | 0 |
-| `src/circuit.rs` | M2 | `tests/circuit.tcyr` | 51 | 0 | 0 | 51 |
+| `src/circuit.rs` | M2 | `tests/circuit.tcyr` | 51 | 51 | 0 | 0 |
 | `src/compute.rs` | M6 | `tests/compute.tcyr` | 18 | 0 | 0 | 18 |
 | `src/error.rs` | M1 | `tests/error.tcyr` | 10 | 10 | 0 | 0 |
 | `src/fdtd.rs` | M6 | `tests/fdtd1d.tcyr`, `tests/fdtd_media.tcyr`, `tests/nf2ff.tcyr`, `tests/fdtd_util.tcyr`, `tests/cpml.tcyr`, `tests/fdtd2d.tcyr`, `tests/fdtd3d.tcyr` | 167 | 0 | 0 | 167 |

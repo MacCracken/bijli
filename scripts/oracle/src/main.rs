@@ -24,6 +24,7 @@ mod cyr;
 mod glibc;
 mod grids;
 mod m_charge;
+mod m_circuit;
 mod m_complex;
 mod m_constants;
 mod m_error;
@@ -46,6 +47,7 @@ use std::process::ExitCode;
 fn golden_modules() -> Vec<tsv::Module> {
     vec![
         m_charge::emit(),
+        m_circuit::emit(),
         m_complex::emit(),
         m_constants::emit(),
         m_error::emit(),

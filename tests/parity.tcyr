@@ -1314,6 +1314,171 @@ public fn _par_material(fp, fl): i64 {
     return 0;
 }
 
+# `circuit::*` rows: src/circuit.cyr (M2 part 1c). A combination's slice is `v:n` then its values.
+fn _par_circuit_slice(fp, fl): i64 {
+    var xs: f64[8];
+    var n = _par_in_f64s(0, &xs);
+    if (_par_eq(fp, fl, "circuit::resistance_series") == 1) {
+        var t1, v1 = bj_resistance_series(&xs, n);
+        _par_got_res_f(t1, v1);
+        return 1;
+    }
+    if (_par_eq(fp, fl, "circuit::resistance_parallel") == 1) {
+        var t2, v2 = bj_resistance_parallel(&xs, n);
+        _par_got_res_f(t2, v2);
+        return 1;
+    }
+    if (_par_eq(fp, fl, "circuit::capacitance_series") == 1) {
+        var t3, v3 = bj_capacitance_series(&xs, n);
+        _par_got_res_f(t3, v3);
+        return 1;
+    }
+    if (_par_eq(fp, fl, "circuit::capacitance_parallel") == 1) {
+        var t4, v4 = bj_capacitance_parallel(&xs, n);
+        _par_got_res_f(t4, v4);
+        return 1;
+    }
+    if (_par_eq(fp, fl, "circuit::inductance_series") == 1) {
+        var t5, v5 = bj_inductance_series(&xs, n);
+        _par_got_res_f(t5, v5);
+        return 1;
+    }
+    if (_par_eq(fp, fl, "circuit::inductance_parallel") == 1) {
+        var t6, v6 = bj_inductance_parallel(&xs, n);
+        _par_got_res_f(t6, v6);
+        return 1;
+    }
+    return 0;
+}
+
+# The two-argument circuit rows.
+fn _par_circuit2(fp, fl): i64 {
+    var a: f64 = _par_in(0);
+    var b: f64 = _par_in(1);
+    if (_par_eq(fp, fl, "circuit::voltage") == 1) {
+        var r1: f64 = bj_voltage(a, b);
+        _par_got_f(r1);
+        return 1;
+    }
+    if (_par_eq(fp, fl, "circuit::power") == 1) {
+        var r2: f64 = bj_power(a, b);
+        _par_got_f(r2);
+        return 1;
+    }
+    if (_par_eq(fp, fl, "circuit::capacitor_energy") == 1) {
+        var r3: f64 = bj_capacitor_energy(a, b);
+        _par_got_f(r3);
+        return 1;
+    }
+    if (_par_eq(fp, fl, "circuit::capacitor_charge") == 1) {
+        var r4: f64 = bj_capacitor_charge(a, b);
+        _par_got_f(r4);
+        return 1;
+    }
+    if (_par_eq(fp, fl, "circuit::inductor_energy") == 1) {
+        var r5: f64 = bj_inductor_energy(a, b);
+        _par_got_f(r5);
+        return 1;
+    }
+    if (_par_eq(fp, fl, "circuit::rc_time_constant") == 1) {
+        var r6: f64 = bj_rc_time_constant(a, b);
+        _par_got_f(r6);
+        return 1;
+    }
+    if (_par_eq(fp, fl, "circuit::current") == 1) {
+        var t1, v1 = bj_current(a, b);
+        _par_got_res_f(t1, v1);
+        return 1;
+    }
+    if (_par_eq(fp, fl, "circuit::resistance") == 1) {
+        var t2, v2 = bj_resistance(a, b);
+        _par_got_res_f(t2, v2);
+        return 1;
+    }
+    if (_par_eq(fp, fl, "circuit::rl_time_constant") == 1) {
+        var t3, v3 = bj_rl_time_constant(a, b);
+        _par_got_res_f(t3, v3);
+        return 1;
+    }
+    if (_par_eq(fp, fl, "circuit::resonant_frequency") == 1) {
+        var t4, v4 = bj_resonant_frequency(a, b);
+        _par_got_res_f(t4, v4);
+        return 1;
+    }
+    if (_par_eq(fp, fl, "circuit::resonant_angular_frequency") == 1) {
+        var t5, v5 = bj_resonant_angular_frequency(a, b);
+        _par_got_res_f(t5, v5);
+        return 1;
+    }
+    return 0;
+}
+
+# A `circuit::*` row: a slice, then by arity: pairs, the triples (geometry, the plate, Q, ζ), the quadruples (the
+# solenoid, the impedance and the four transients).
+public fn _par_circuit(fp, fl): i64 {
+    if (_par_in_n >= 1 && load64(_par_in_k) == 118) { return _par_circuit_slice(fp, fl); }
+    if (_par_in_n == 2) { return _par_circuit2(fp, fl); }
+    var a: f64 = _par_in(0);
+    var b: f64 = _par_in(1);
+    var c: f64 = _par_in(2);
+    if (_par_in_n == 3) {
+        if (_par_eq(fp, fl, "circuit::resistance_from_geometry") == 1) {
+            var t1, v1 = bj_resistance_from_geometry(a, b, c);
+            _par_got_res_f(t1, v1);
+            return 1;
+        }
+        if (_par_eq(fp, fl, "circuit::parallel_plate_capacitance") == 1) {
+            var t2, v2 = bj_parallel_plate_capacitance(a, b, c);
+            _par_got_res_f(t2, v2);
+            return 1;
+        }
+        if (_par_eq(fp, fl, "circuit::quality_factor") == 1) {
+            var t3, v3 = bj_quality_factor(a, b, c);
+            _par_got_res_f(t3, v3);
+            return 1;
+        }
+        if (_par_eq(fp, fl, "circuit::damping_ratio") == 1) {
+            var t4, v4 = bj_damping_ratio(a, b, c);
+            _par_got_res_f(t4, v4);
+            return 1;
+        }
+        return 0;
+    }
+    if (_par_in_n != 4) { return 0; }
+    var d: f64 = _par_in(3);
+    if (_par_eq(fp, fl, "circuit::solenoid_inductance") == 1) {
+        var r1: f64 = bj_solenoid_inductance(a, b, c, d);
+        _par_got_f(r1);
+        return 1;
+    }
+    if (_par_eq(fp, fl, "circuit::rc_charging_voltage") == 1) {
+        var r2: f64 = bj_rc_charging_voltage(a, b, c, d);
+        _par_got_f(r2);
+        return 1;
+    }
+    if (_par_eq(fp, fl, "circuit::rc_discharging_voltage") == 1) {
+        var r3: f64 = bj_rc_discharging_voltage(a, b, c, d);
+        _par_got_f(r3);
+        return 1;
+    }
+    if (_par_eq(fp, fl, "circuit::rl_current_rise") == 1) {
+        var t5, v5 = bj_rl_current_rise(a, b, c, d);
+        _par_got_res_f(t5, v5);
+        return 1;
+    }
+    if (_par_eq(fp, fl, "circuit::rl_current_decay") == 1) {
+        var t6, v6 = bj_rl_current_decay(a, b, c, d);
+        _par_got_res_f(t6, v6);
+        return 1;
+    }
+    if (_par_eq(fp, fl, "circuit::rlc_impedance") == 1) {
+        var t7, v7 = bj_rlc_impedance(a, b, c, d);
+        _par_got_res_f(t7, v7);
+        return 1;
+    }
+    return 0;
+}
+
 # `wave::*` rows: src/wave.cyr (M2 part 1b). A `Result<Option<f64>>` is the error, `n:` for Ok(None), or the value.
 fn _par_got_res_o(t, v, x: f64) {
     if (is_err_result(t) == 1) { return _par_got_error(v); }
@@ -1664,6 +1829,7 @@ public fn _par_json(fp, fl): i64 {
 public fn _par_dispatch(mp, ml, fp, fl): i64 {
     _par_got_n = 0;
     if (_par_eq(mp, ml, "charge") == 1) { return _par_charge(fp, fl); }
+    if (_par_eq(mp, ml, "circuit") == 1) { return _par_circuit(fp, fl); }
     if (_par_eq(mp, ml, "complex") == 1) { return _par_complex(fp, fl); }
     if (_par_eq(mp, ml, "constants") == 1) { return _par_constants(fp, fl); }
     if (_par_eq(mp, ml, "error") == 1) { return _par_error(fp, fl); }
@@ -1752,6 +1918,7 @@ public fn _par_c_bound(fp, fl): i64 {
     if (_par_eq(fp, fl, "field::spherical_multipole_moment") == 1) { return 0; }
     if (_par_eq(fp, fl, "field::greens_function_scalar") == 1) { return 0; }
     if (memeq(fp, "wave::", 6) == 1) { return 0; }
+    if (fl > 9 && memeq(fp, "circuit::", 9) == 1) { return 0; }
     # The JSON readers: every number correctly rounded (json.cr.tsv where serde_json's best-effort parse misrounds).
     if (_par_eq(fp, fl, "json::Complex::from_str") == 1) { return 0; }
     if (_par_eq(fp, fl, "json::FieldVector::from_str") == 1) { return 0; }

@@ -1492,3 +1492,46 @@ Language facts the probes found, beyond plan §2:
 - **Result, every target** (x86_64 ELF, x86_64 PE, aarch64): **11 modules, 0 failing; 321,070 ok, 0 failed, 0
   measured, 0 pending, 17,397 accepted (ADR 01: 8,999; ADR 0002: 8,398)** over 338,467 rows; **all 222 digests
   equal**, the 179 before unchanged.
+
+## 27. M2 part 1c: circuit (2026-11-12)
+
+- **`src/circuit.cyr`**: circuit.rs's 27 functions: Ohm's law, the series and parallel combinations, capacitance and
+  inductance, the RC and RL transients and the series RLC relations. Every formula is Rust's in Rust's order; the
+  transients take bijli's correctly rounded exp. Rust's `&[f64]` is a pointer and a count, and a series sum is Rust's
+  `Sum`, a left fold from −0.0 (Σ[−0] = −0, probe p11).
+- **ADR 0002 row 26**, rows 19 and 23's rule: `bj_resistance_from_geometry` and `bj_parallel_plate_capacitance` refuse
+  a NaN area or separation, which Rust's `<= 0` let through. 512 rows mapped. Reviewed and kept as Rust's: the zero
+  guards on inputs (the user's material.rs answer), and `rlc_impedance`'s lighter validation, since L = 0 (a series RC) and
+  R = 0 (an LC) are circuits it must accept, where `validate_lc` would refuse them.
+- **New golden file `circuit.tsv`, 56,106 rows (13 MB)**: class C for the four transients, class A for the rest; pairs
+  over 39 values, triples over 16, quadruples over 8 (the solenoid, the impedance, the transients with five source
+  values), slices of length 0 to 6, the 1e-30 cuts of Q's R, the impedance's ω and C, the transients' τ and the
+  parallel combinations' Σ 1/x approached ulp by ulp, and seeded physical circuits. glibc's exp is correctly rounded
+  on every class-C row, so there is no `circuit.cr.tsv`. `validate.py`'s independent transcription agreed with every
+  row on its first run.
+- **Rust tests**: all 51 of circuit.rs's tests ported (`tests/circuit.tcyr`, 69 assertions with the Cyrius-only
+  groups). The ledger: 313 ported, 3 n/a, 542 pending of 858.
+- **Surface parity**: 8 modules ported, 220 items matched (27 new), 0 problems. The API snapshot gains 27 public fns.
+- **Benchmarks** (the five circuit twins; 38 of 80 now twinned; load average 3.9–5.0 and rising, each the lower of
+  two runs; the A/B against HEAD shows the earlier rows unchanged within that drift, `error_record` the most, 128–130 →
+  141–142 ns with its code untouched):
+
+  | Bench | Rust | Cyrius |
+  |---|---|---|
+  | `circuit/rc_charging` | 0.50 ns | 131 ns |
+  | `circuit/rl_current_rise` | 2.03 ns | 125 ns |
+  | `circuit/rlc_impedance` | 1.53 ns | 17 ns |
+  | `circuit/resonant_frequency` | 1.31 ns | 30 ns |
+  | `circuit/resistance_parallel` | 7.09 ns | 34 ns |
+
+  Rust's arguments are constants that LLVM folds; the transients' cost is crmath's exp.
+- **For M2's range-edge Part** (§0.1), from the audit:
+  - accuracy, a question for the user with the half-wave pattern's (§26): `rc_charging_voltage` and `rl_current_rise`
+    compute 1 − e^(−t/τ) by cancellation, a relative error of about 2^-53·τ/t (8e-8 at t/τ = 10^-10), and 0 for
+    t/τ below 1.1·10^-16; −expm1(−t/τ), correctly rounded, has none;
+  - the |τ| < 1e-30 tests on the rounded RC and L/R, and |Σ 1/xᵢ| < 1e-30 on a rounded sum;
+  - chains that over- or underflow where the result is representable: √(LC) in the resonances (L = C = 10^-200 gives
+    f₀ = ∞), ωL − 1/(ωC) and R² + X² in the impedance (a hypot-style scaling), 0.5·C·V², μn²Al, ρL/A, εA/d.
+- **Result, every target** (x86_64 ELF, x86_64 PE, aarch64): **12 modules, 0 failing; 376,664 ok, 0 failed, 0
+  measured, 0 pending, 17,909 accepted (ADR 01: 8,999; ADR 0002: 8,910)** over 394,573 rows; **all 249 digests
+  equal**, the 222 before unchanged.

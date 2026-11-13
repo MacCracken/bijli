@@ -514,6 +514,60 @@ fn main(): i64 {
     bench_report(b36);
     if (wsum == 7.0) { println("."); }
 
+    # circuit/* (M2 part 1c): rust-old/benches/benchmarks.rs's circuit_benchmarks, with its arguments.
+    var csum: f64 = 0.0;
+    var b37 = bench_new("circuit/rc_charging");
+    bench_batch_start(b37);
+    for (var k = 0; k < 1000000; k = k + 1) {
+        var cv: f64 = bj_rc_charging_voltage(10.0, 1000.0, 0.000001, 0.0005);
+        csum = csum + cv;
+    }
+    bench_batch_stop(b37, 1000000);
+    bench_report(b37);
+
+    var b38 = bench_new("circuit/rl_current_rise");
+    bench_batch_start(b38);
+    for (var k = 0; k < 1000000; k = k + 1) {
+        var t38, v38 = bj_rl_current_rise(10.0, 1.0, 0.001, 0.0005);
+        keep = keep + v38;
+    }
+    bench_batch_stop(b38, 1000000);
+    bench_report(b38);
+
+    var b39 = bench_new("circuit/rlc_impedance");
+    bench_batch_start(b39);
+    for (var k = 0; k < 1000000; k = k + 1) {
+        var t39, v39 = bj_rlc_impedance(10.0, 0.001, 0.000001, 31416.0);
+        keep = keep + v39;
+    }
+    bench_batch_stop(b39, 1000000);
+    bench_report(b39);
+
+    var b40 = bench_new("circuit/resonant_frequency");
+    bench_batch_start(b40);
+    for (var k = 0; k < 1000000; k = k + 1) {
+        var t40, v40 = bj_resonant_frequency(0.001, 0.000001);
+        keep = keep + v40;
+    }
+    bench_batch_stop(b40, 1000000);
+    bench_report(b40);
+
+    var cr: f64[5];
+    cr[0] = 10.0;
+    cr[1] = 20.0;
+    cr[2] = 30.0;
+    cr[3] = 40.0;
+    cr[4] = 50.0;
+    var b41 = bench_new("circuit/resistance_parallel");
+    bench_batch_start(b41);
+    for (var k = 0; k < 1000000; k = k + 1) {
+        var t41, v41 = bj_resistance_parallel(&cr, 5);
+        keep = keep + v41;
+    }
+    bench_batch_stop(b41, 1000000);
+    bench_report(b41);
+    if (csum == 7.0) { println("."); }
+
     # The JSON (src/json.cyr): a FieldVector written into one builder, emptied each time through its length word
     # (lib/str.cyr's layout: buf, len, cap), and serde_json's documents read back.
     var jv = BjFieldVector_new(1.5, -0.25, BJ_SPEED_OF_LIGHT);

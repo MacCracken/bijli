@@ -1,0 +1,404 @@
+# circuit.tcyr — src/circuit.cyr (M2 part 1c): Ohm's law, the series and parallel combinations, capacitance and
+# inductance, the RC and RL transients and the series RLC relations.
+#
+# Every group named test_* is rust-old/src/circuit.rs's test of that name, ported assertion for assertion (the ledger
+# matches them by name): all 51. The cyrius_* groups check what the port adds: the recorded errors and their Display
+# texts, ADR 0002 row 26, and the series sums' fold from −0.0. tests/golden/circuit.tsv pins every function over its
+# grid against Rust besides.
+
+include "tests/lib.cyr"
+
+# |a − b| < tol.
+fn near(a: f64, b: f64, tol: f64): i64 {
+    var d: f64 = a - b;
+    var ad: f64 = f64_abs(d);
+    if (ad < tol) { return 1; }
+    return 0;
+}
+
+# 1 when the C strings a and b are equal.
+fn text_is(a, b): i64 {
+    var n = strlen(a);
+    if (n != strlen(b)) { return 0; }
+    return memeq(a, b, n);
+}
+
+# 1 when the Result (t, v) is an error with code `code` and the record's Display text is `want`.
+fn err_is(t, v, code, want): i64 {
+    if (is_err_result(t) != 1 || v != code) { return 0; }
+    return text_is(bj_last_error_display(), want);
+}
+
+# 1 when the Result (t, v) is Ok(x) with |x − want| < tol.
+fn ok_near(t, v, want: f64, tol: f64): i64 {
+    if (is_ok(t) != 1) { return 0; }
+    var x: f64 = v;
+    return near(x, want, tol);
+}
+
+# 1 when the Result (t, v) is Ok(x) with |x − want|/|want| < tol.
+fn ok_rel(t, v, want: f64, tol: f64): i64 {
+    if (is_ok(t) != 1) { return 0; }
+    var x: f64 = v;
+    var d: f64 = x - want;
+    var ad: f64 = f64_abs(d);
+    var aw: f64 = f64_abs(want);
+    var r: f64 = ad / aw;
+    if (r < tol) { return 1; }
+    return 0;
+}
+
+# Ohm's law, the combinations and the capacitance and inductance tests.
+fn rust_tests_a(): i64 {
+    var e10: f64 = 0.0000000001;
+    var e15: f64 = 0.000000000000001;
+    var e18: f64 = 0.000000000000000001;
+    var e20: f64 = 0.00000000000000000001;
+    var xs: f64[4];
+
+    test_group("test_voltage");
+    var v1: f64 = bj_voltage(2.0, 3.0);
+    assert(near(v1, 6.0, e15) == 1, "V = IR");
+
+    test_group("test_current");
+    var tc, vc = bj_current(6.0, 3.0);
+    assert(ok_near(tc, vc, 2.0, e15) == 1, "I = V/R");
+
+    test_group("test_current_zero_resistance");
+    var tc0, vc0 = bj_current(6.0, 0.0);
+    assert(is_err_result(tc0) == 1 && vc0 == BJ_ERR_DIVISION_BY_ZERO, "R = 0 refused");
+
+    test_group("test_resistance");
+    var tr, vr = bj_resistance(6.0, 2.0);
+    assert(ok_near(tr, vr, 3.0, e15) == 1, "R = V/I");
+
+    test_group("test_power");
+    var p: f64 = bj_power(2.0, 6.0);
+    assert(near(p, 12.0, e15) == 1, "P = IV");
+
+    test_group("test_resistance_from_geometry");
+    var tg, vg = bj_resistance_from_geometry(0.0000000168, 1.0, 0.000001);
+    assert(ok_near(tg, vg, 0.0168, 0.0001) == 1, "copper wire, 1 m of 1 mm²");
+
+    test_group("test_resistance_series");
+    xs[0] = 10.0;
+    xs[1] = 20.0;
+    xs[2] = 30.0;
+    var ts, vs = bj_resistance_series(&xs, 3);
+    assert(ok_near(ts, vs, 60.0, e15) == 1, "10 + 20 + 30");
+
+    test_group("test_resistance_parallel");
+    xs[0] = 10.0;
+    xs[1] = 10.0;
+    var tp, vp = bj_resistance_parallel(&xs, 2);
+    assert(ok_near(tp, vp, 5.0, e10) == 1, "two 10 Ω: 5 Ω");
+
+    test_group("test_resistance_parallel_zero");
+    xs[0] = 10.0;
+    xs[1] = 0.0;
+    var tp0, vp0 = bj_resistance_parallel(&xs, 2);
+    assert(is_err_result(tp0) == 1 && vp0 == BJ_ERR_DIVISION_BY_ZERO, "a zero resistance refused");
+
+    test_group("test_capacitance_series");
+    xs[0] = 0.00001;
+    xs[1] = 0.00001;
+    var tcs, vcs = bj_capacitance_series(&xs, 2);
+    assert(ok_rel(tcs, vcs, 0.000005, e10) == 1, "two 10 μF in series: 5 μF");
+
+    test_group("test_capacitance_parallel");
+    xs[0] = 0.00001;
+    xs[1] = 0.00002;
+    var tcp, vcp = bj_capacitance_parallel(&xs, 2);
+    assert(ok_near(tcp, vcp, 0.00003, e20) == 1, "10 + 20 μF");
+
+    test_group("test_inductance_series");
+    xs[0] = 0.001;
+    xs[1] = 0.002;
+    var tls, vls = bj_inductance_series(&xs, 2);
+    assert(ok_near(tls, vls, 0.003, e18) == 1, "1 + 2 mH");
+
+    test_group("test_inductance_parallel");
+    xs[0] = 0.002;
+    xs[1] = 0.002;
+    var tlp, vlp = bj_inductance_parallel(&xs, 2);
+    assert(ok_rel(tlp, vlp, 0.001, e10) == 1, "two 2 mH: 1 mH");
+
+    test_group("test_parallel_plate_capacitance");
+    var tpc, vpc = bj_parallel_plate_capacitance(BJ_EPSILON_0, 1.0, 0.001);
+    var cw: f64 = BJ_EPSILON_0 * 1000.0;
+    assert(ok_rel(tpc, vpc, cw, 0.000001) == 1, "1 m² plates 1 mm apart: 1000 ε₀");
+
+    test_group("test_capacitor_energy");
+    var ue: f64 = bj_capacitor_energy(1.0, 1.0);
+    assert(near(ue, 0.5, e15) == 1, "1 F at 1 V: 0.5 J");
+
+    test_group("test_capacitor_charge");
+    var q: f64 = bj_capacitor_charge(0.000001, 5.0);
+    assert(near(q, 0.000005, e20) == 1, "Q = CV");
+
+    test_group("test_solenoid_inductance");
+    var ls: f64 = bj_solenoid_inductance(BJ_MU_0, 1000.0, 0.0001, 0.1);
+    var lsd: f64 = ls - 0.00001257;
+    var lsr: f64 = f64_abs(lsd) / 0.00001257;
+    assert(lsr < 0.01, "1000 turns/m, 1 cm², 10 cm: L ≈ 1.257e-5 H");
+
+    test_group("test_inductor_energy");
+    var ui: f64 = bj_inductor_energy(1.0, 1.0);
+    assert(near(ui, 0.5, e15) == 1, "1 H at 1 A: 0.5 J");
+    return 0;
+}
+
+# The RC, RL and RLC tests.
+fn rust_tests_b(): i64 {
+    var zero: f64 = 0.0;
+    var nan: f64 = zero / zero;
+    var e: f64 = 2.718281828459045;
+    var pi: f64 = _BJ_PI;
+    var e10: f64 = 0.0000000001;
+    var e12: f64 = 0.000000000001;
+    var e14: f64 = 0.00000000000001;
+    var e15: f64 = 0.000000000000001;
+    var e18: f64 = 0.000000000000000001;
+    var xs: f64[4];
+
+    test_group("test_rc_time_constant");
+    var tau: f64 = bj_rc_time_constant(1000.0, 0.000001);
+    assert(near(tau, 0.001, e18) == 1, "τ = RC");
+
+    test_group("test_rc_charging_at_zero");
+    var vc0: f64 = bj_rc_charging_voltage(10.0, 1000.0, 0.000001, 0.0);
+    var vc0a: f64 = f64_abs(vc0);
+    assert(vc0a < e10, "V(0) = 0");
+
+    test_group("test_rc_charging_at_one_tau");
+    var vc1: f64 = bj_rc_charging_voltage(10.0, 1000.0, 0.000001, 0.001);
+    var vc1r: f64 = vc1 / 10.0;
+    assert(near(vc1r, 0.6321, 0.001) == 1, "V(τ) = V₀(1 − 1/e)");
+
+    test_group("test_rc_discharging_at_one_tau");
+    var vd1: f64 = bj_rc_discharging_voltage(10.0, 1000.0, 0.000001, 0.001);
+    var vd1w: f64 = 10.0 / e;
+    assert(near(vd1, vd1w, 0.01) == 1, "V(τ) = V₀/e");
+
+    test_group("test_rl_time_constant");
+    var tl, vl = bj_rl_time_constant(0.001, 1.0);
+    assert(ok_near(tl, vl, 0.001, e18) == 1, "τ = L/R");
+
+    test_group("test_rl_current_rise_at_one_tau");
+    var ti, vi = bj_rl_current_rise(10.0, 1.0, 0.001, 0.001);
+    var ir: f64 = vi;
+    var irr: f64 = ir / 10.0;
+    assert(is_ok(ti) == 1 && near(irr, 0.6321, 0.001) == 1, "I(τ) = (V/R)(1 − 1/e)");
+
+    test_group("test_rl_current_decay");
+    var tdc, vdc = bj_rl_current_decay(10.0, 1.0, 0.001, 0.001);
+    var idw: f64 = 10.0 / e;
+    assert(ok_near(tdc, vdc, idw, 0.01) == 1, "I(τ) = I₀/e");
+
+    test_group("test_resonant_frequency");
+    var tf, vf = bj_resonant_frequency(0.001, 0.000001);
+    assert(ok_near(tf, vf, 5032.9, 1.0) == 1, "1 mH, 1 μF: f₀ ≈ 5033 Hz");
+
+    test_group("test_resonant_angular_frequency");
+    var tw, vw = bj_resonant_angular_frequency(0.001, 0.000001);
+    var f0: f64 = vf;
+    var w2: f64 = 2.0 * pi * f0;
+    assert(ok_near(tw, vw, w2, 1.0) == 1, "ω₀ = 2πf₀");
+
+    test_group("test_quality_factor");
+    var tq, vq = bj_quality_factor(10.0, 0.001, 0.000001);
+    assert(ok_near(tq, vq, 3.162, 0.01) == 1, "Q = √(L/C)/R ≈ 3.162");
+
+    test_group("test_damping_ratio");
+    var tz, vz = bj_damping_ratio(10.0, 0.001, 0.000001);
+    assert(ok_near(tz, vz, 0.158, 0.01) == 1, "ζ = (R/2)√(C/L) ≈ 0.158");
+
+    test_group("test_rlc_impedance_at_resonance");
+    var w0: f64 = vw;
+    var tim, vim = bj_rlc_impedance(10.0, 0.001, 0.000001, w0);
+    assert(ok_near(tim, vim, 10.0, 0.01) == 1, "at resonance Z = R");
+
+    test_group("test_rlc_impedance_zero_freq");
+    var ti0, vi0 = bj_rlc_impedance(10.0, 0.001, 0.000001, 0.0);
+    assert(is_err_result(ti0) == 1 && vi0 == BJ_ERR_DIVISION_BY_ZERO, "ω = 0 refused");
+
+    test_group("test_resistance_series_empty");
+    var te1, ve1 = bj_resistance_series(&xs, 0);
+    assert(is_err_result(te1) == 1 && ve1 == BJ_ERR_INVALID_PARAMETER, "empty refused");
+
+    test_group("test_resistance_parallel_empty");
+    var te2, ve2 = bj_resistance_parallel(&xs, 0);
+    assert(is_err_result(te2) == 1 && ve2 == BJ_ERR_INVALID_PARAMETER, "empty refused");
+
+    test_group("test_capacitance_series_empty");
+    var te3, ve3 = bj_capacitance_series(&xs, 0);
+    assert(is_err_result(te3) == 1 && ve3 == BJ_ERR_INVALID_PARAMETER, "empty refused");
+
+    test_group("test_capacitance_parallel_empty");
+    var te4, ve4 = bj_capacitance_parallel(&xs, 0);
+    assert(is_err_result(te4) == 1 && ve4 == BJ_ERR_INVALID_PARAMETER, "empty refused");
+
+    test_group("test_inductance_series_empty");
+    var te5, ve5 = bj_inductance_series(&xs, 0);
+    assert(is_err_result(te5) == 1 && ve5 == BJ_ERR_INVALID_PARAMETER, "empty refused");
+
+    test_group("test_inductance_parallel_empty");
+    var te6, ve6 = bj_inductance_parallel(&xs, 0);
+    assert(is_err_result(te6) == 1 && ve6 == BJ_ERR_INVALID_PARAMETER, "empty refused");
+
+    test_group("test_resistance_series_single");
+    xs[0] = 47.0;
+    var ts1, vs1 = bj_resistance_series(&xs, 1);
+    assert(ok_near(ts1, vs1, 47.0, e15) == 1, "one resistor");
+
+    test_group("test_resistance_parallel_single");
+    var ts2, vs2 = bj_resistance_parallel(&xs, 1);
+    assert(ok_near(ts2, vs2, 47.0, e10) == 1, "one resistor");
+
+    test_group("test_capacitance_parallel_single");
+    xs[0] = 0.00001;
+    var ts3, vs3 = bj_capacitance_parallel(&xs, 1);
+    assert(ok_near(ts3, vs3, 0.00001, 0.00000000000000000001) == 1, "one capacitor");
+
+    test_group("test_rc_charging_zero_tau");
+    var vz1: f64 = bj_rc_charging_voltage(10.0, 0.0, 0.000001, 1.0);
+    assert(near(vz1, 10.0, e10) == 1, "τ ≈ 0: an instant charge");
+
+    test_group("test_rc_discharging_zero_tau");
+    var vz2: f64 = bj_rc_discharging_voltage(10.0, 0.0, 0.000001, 1.0);
+    var vz2a: f64 = f64_abs(vz2);
+    assert(vz2a < e10, "τ ≈ 0: an instant discharge");
+
+    test_group("test_resistance_from_geometry_zero_area");
+    var tga, vga = bj_resistance_from_geometry(0.0000000168, 1.0, 0.0);
+    assert(is_err_result(tga) == 1 && vga == BJ_ERR_INVALID_PARAMETER, "A = 0 refused");
+
+    test_group("test_parallel_plate_capacitance_zero_separation");
+    var tgs, vgs = bj_parallel_plate_capacitance(BJ_EPSILON_0, 1.0, 0.0);
+    assert(is_err_result(tgs) == 1 && vgs == BJ_ERR_INVALID_PARAMETER, "d = 0 refused");
+
+    test_group("test_quality_factor_zero_resistance");
+    var tq0, vq0 = bj_quality_factor(0.0, 0.001, 0.000001);
+    assert(is_err_result(tq0) == 1 && vq0 == BJ_ERR_DIVISION_BY_ZERO, "R = 0 refused");
+
+    test_group("test_damping_ratio_zero_inductance");
+    var tz0, vz0 = bj_damping_ratio(10.0, 0.0, 0.000001);
+    assert(is_err_result(tz0) == 1 && vz0 == BJ_ERR_INVALID_PARAMETER, "L = 0 refused");
+
+    test_group("test_resonant_frequency_negative_lc");
+    var tn1, vn1 = bj_resonant_frequency(-0.001, 0.000001);
+    assert(is_err_result(tn1) == 1 && vn1 == BJ_ERR_INVALID_PARAMETER, "L < 0 refused");
+
+    test_group("test_resonant_frequency_both_negative_or_nan");
+    var tn2, vn2 = bj_resonant_frequency(-0.001, -0.000001);
+    var tn3, vn3 = bj_resonant_angular_frequency(-0.001, -0.000001);
+    var tn4, vn4 = bj_resonant_frequency(nan, 0.000001);
+    var tn5, vn5 = bj_resonant_angular_frequency(0.001, nan);
+    assert(is_err_result(tn2) == 1 && is_err_result(tn3) == 1, "L, C both negative refused");
+    assert(is_err_result(tn4) == 1 && is_err_result(tn5) == 1, "a NaN L or C refused");
+
+    test_group("test_quality_factor_validates_inductance");
+    var tv1, vv1 = bj_quality_factor(10.0, -0.001, 0.000001);
+    var tv2, vv2 = bj_quality_factor(10.0, 0.0, 0.000001);
+    var tv3, vv3 = bj_quality_factor(10.0, nan, 0.000001);
+    var tv4, vv4 = bj_quality_factor(nan, 0.001, 0.000001);
+    var tv5, vv5 = bj_quality_factor(-10.0, 0.001, 0.000001);
+    assert(is_err_result(tv1) == 1 && is_err_result(tv2) == 1 && is_err_result(tv3) == 1, "L < 0, 0, NaN");
+    assert(is_err_result(tv4) == 1 && is_err_result(tv5) == 1, "R NaN or negative");
+
+    test_group("test_damping_ratio_validates_capacitance");
+    var tw1, vw1 = bj_damping_ratio(10.0, 0.001, -0.000001);
+    var tw2, vw2 = bj_damping_ratio(10.0, 0.001, 0.0);
+    var tw3, vw3 = bj_damping_ratio(10.0, 0.001, nan);
+    var tw4, vw4 = bj_damping_ratio(-10.0, 0.001, 0.000001);
+    assert(is_err_result(tw1) == 1 && is_err_result(tw2) == 1 && is_err_result(tw3) == 1, "C < 0, 0, NaN");
+    assert(is_err_result(tw4) == 1, "R < 0");
+    var tw5, vw5 = bj_damping_ratio(0.0, 0.001, 0.000001);
+    var zw5: f64 = vw5;
+    assert(is_ok(tw5) == 1 && zw5 == 0.0, "R = 0 is an undamped LC: ζ = 0");
+
+    test_group("test_series_rlc_q_zeta_closed_form");
+    var tq1, vq1 = bj_quality_factor(10.0, 0.001, 0.000001);
+    var tz1, vz1q = bj_damping_ratio(10.0, 0.001, 0.000001);
+    var q1: f64 = vq1;
+    var z1: f64 = vz1q;
+    assert(is_ok(tq1) == 1 && near(q1, 3.162277660168379, e12) == 1, "Q = ω₀L/R");
+    assert(is_ok(tz1) == 1 && near(z1, 0.15811388300841897, e14) == 1, "ζ = 1/(2Q)");
+    var q2z: f64 = q1 * 2.0 * z1;
+    assert(near(q2z, 1.0, e14) == 1, "2Qζ = 1");
+
+    if (vn2 == 0 || vn3 == 0 || vn4 == 0 || vn5 == 0 || vv1 == 0 || vv2 == 0 || vv3 == 0 || vv4 == 0) { println("."); }
+    if (vv5 == 0 || vw1 == 0 || vw2 == 0 || vw3 == 0 || vw4 == 0) { println("."); }
+    return 0;
+}
+
+# What the port adds: the error texts, ADR 0002 row 26, the −0.0 fold.
+fn cyrius_tests(): i64 {
+    var zero: f64 = 0.0;
+    var nan: f64 = zero / zero;
+    var xs: f64[4];
+
+    test_group("cyrius_circuit_errors");
+    var t1, v1 = bj_current(1.0, 0.0);
+    assert(err_is(t1, v1, BJ_ERR_DIVISION_BY_ZERO,
+        "division by zero in EM calculation: resistance cannot be zero for Ohm's law") == 1, "Ohm's law");
+    xs[0] = 1.0;
+    xs[1] = 0.0;
+    var t2, v2 = bj_capacitance_series(&xs, 2);
+    assert(err_is(t2, v2, BJ_ERR_DIVISION_BY_ZERO,
+        "division by zero in EM calculation: capacitance cannot be zero in series combination") == 1, "a zero C");
+    xs[0] = 1.0;
+    xs[1] = -1.0;
+    var t3, v3 = bj_inductance_parallel(&xs, 2);
+    assert(err_is(t3, v3, BJ_ERR_DIVISION_BY_ZERO,
+        "division by zero in EM calculation: sum of inverse inductances is zero") == 1, "1/L sums to 0");
+    var t4, v4 = bj_resistance_series(&xs, 0);
+    assert(err_is(t4, v4, BJ_ERR_INVALID_PARAMETER,
+        "invalid parameter: at least one resistance value is required") == 1, "empty");
+    var t5, v5 = bj_resonant_frequency(0.0, 1.0);
+    assert(err_is(t5, v5, BJ_ERR_INVALID_PARAMETER,
+        "invalid parameter: L and C must be finite and positive, got L=0, C=1") == 1, "L = 0");
+    var t6, v6 = bj_quality_factor(-1.0, 1.0, 1.0);
+    assert(err_is(t6, v6, BJ_ERR_INVALID_PARAMETER,
+        "invalid parameter: resistance must be finite and non-negative, got -1") == 1, "R < 0");
+    var t7, v7 = bj_rlc_impedance(1.0, 1.0, 0.0, 1.0);
+    assert(err_is(t7, v7, BJ_ERR_DIVISION_BY_ZERO,
+        "division by zero in EM calculation: capacitance cannot be zero for impedance") == 1, "C = 0");
+    var t8, v8 = bj_rl_current_decay(1.0, 0.0, 1.0, 1.0);
+    assert(err_is(t8, v8, BJ_ERR_DIVISION_BY_ZERO,
+        "division by zero in EM calculation: resistance cannot be zero for RL decay") == 1, "R = 0");
+
+    test_group("cyrius_adr_row_26");
+    var ta, va = bj_resistance_from_geometry(1.0, 1.0, nan);
+    assert(err_is(ta, va, BJ_ERR_INVALID_PARAMETER,
+        "invalid parameter: cross-section area must be positive, got NaN") == 1, "a NaN area refused");
+    var tb, vb = bj_parallel_plate_capacitance(1.0, 1.0, nan);
+    assert(err_is(tb, vb, BJ_ERR_INVALID_PARAMETER,
+        "invalid parameter: plate separation must be positive, got NaN") == 1, "a NaN separation refused");
+
+    test_group("cyrius_series_fold");
+    xs[0] = -0.0;
+    var tf1, vf1 = bj_resistance_series(&xs, 1);
+    var f1: f64 = vf1;
+    var b1 = _bj_bits(f1);
+    assert(is_ok(tf1) == 1 && b1 < 0 && f1 == 0.0, "Σ[−0] = −0: Rust's Sum folds from −0.0");
+    xs[0] = 0.0;
+    var tf2, vf2 = bj_inductance_series(&xs, 1);
+    var f2: f64 = vf2;
+    var b2 = _bj_bits(f2);
+    assert(is_ok(tf2) == 1 && b2 == 0, "Σ[+0] = +0");
+    return 0;
+}
+
+# Runs circuit.rs's tests, then the Cyrius-only checks.
+fn main(): i64 {
+    alloc_init();
+    rust_tests_a();
+    rust_tests_b();
+    cyrius_tests();
+    return assert_summary();
+}
+
+var exit_code = main();
+if (exit_code > 0) { exit_code = 1; }
+sys_exit_group(exit_code);

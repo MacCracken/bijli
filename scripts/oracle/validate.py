@@ -1960,6 +1960,188 @@ def wave_adr_rows(root: Path, path: Path) -> list:
             out.append((fn, ins, wire(model), str(row), f"oracle {outs}; ADR 0002 row {row}"))
     return out
 
+# ── circuit (M2 part 1c): rust-old/src/circuit.rs ─────────────────────────────────────────────────────────────────
+def circuit_lc(l, c):
+    if not (math.isfinite(l) and l > 0.0 and math.isfinite(c) and c > 0.0):
+        return ip_err(f"L and C must be finite and positive, got L={rust_display(l)}, C={rust_display(c)}")
+    return None
+
+
+def circuit_r(r):
+    if not (math.isfinite(r) and r >= 0.0):
+        return ip_err(f"resistance must be finite and non-negative, got {rust_display(r)}")
+    return None
+
+
+def circuit_combo(xs, what, parallel, which):
+    """The series/parallel combinations: a sum (Rust's Sum, a left fold from −0.0) or 1/Σ(1/x) with its two cuts."""
+    if not xs:
+        return ip_err(f"at least one {what} value is required")
+    if not parallel:
+        acc = -0.0
+        for x in xs:
+            acc = acc + x
+        return okf(acc)
+    s = 0.0
+    for x in xs:
+        if abs(x) < 1e-30:
+            return dz_err(f"{what} cannot be zero in {which} combination")
+        s += fdiv(1.0, x)
+    if abs(s) < 1e-30:
+        return dz_err(f"sum of inverse {what}s is zero")
+    return okf(fdiv(1.0, s))
+
+
+def circuit_rust(fn, v, P):
+    """circuit.rs transcribed in its order of operations, its checks and error texts, on the primitives P; None for
+    another name."""
+    name = fn.split("::")[1]
+    if name in ("resistance_series", "resistance_parallel", "capacitance_series", "capacitance_parallel",
+                "inductance_series", "inductance_parallel"):
+        what, kind = name.split("_")
+        sums = {"resistance": "parallel", "capacitance": "series", "inductance": "parallel"}
+        parallel = kind == sums[what]
+        return circuit_combo(v, what, parallel, kind)
+    if name == "voltage" or name == "power" or name == "capacitor_charge" or name == "rc_time_constant":
+        return okf(v[0] * v[1])
+    if name == "current":
+        return dz_err("resistance cannot be zero for Ohm's law") if abs(v[1]) < 1e-30 else okf(fdiv(v[0], v[1]))
+    if name == "resistance":
+        if abs(v[1]) < 1e-30:
+            return dz_err("current cannot be zero for resistance calculation")
+        return okf(fdiv(v[0], v[1]))
+    if name == "resistance_from_geometry":
+        if v[2] <= 0.0:
+            return ip_err(f"cross-section area must be positive, got {rust_display(v[2])}")
+        return okf(fdiv(v[0] * v[1], v[2]))
+    if name == "parallel_plate_capacitance":
+        if v[2] <= 0.0:
+            return ip_err(f"plate separation must be positive, got {rust_display(v[2])}")
+        return okf(fdiv(v[0] * v[1], v[2]))
+    if name in ("capacitor_energy", "inductor_energy"):
+        return okf(0.5 * v[0] * v[1] * v[1])
+    if name == "solenoid_inductance":
+        return okf(v[0] * v[1] * v[1] * v[2] * v[3])
+    if name in ("rc_charging_voltage", "rc_discharging_voltage"):
+        v0, r, c, tt = v
+        tau = r * c
+        if abs(tau) < 1e-30:
+            return okf(v0 if name.startswith("rc_charging") else 0.0)
+        e = P["exp"](fdiv(-tt, tau))
+        return okf(v0 * (1.0 - e) if name.startswith("rc_charging") else v0 * e)
+    if name == "rl_time_constant":
+        if abs(v[1]) < 1e-30:
+            return dz_err("resistance cannot be zero for RL time constant")
+        return okf(fdiv(v[0], v[1]))
+    if name in ("rl_current_rise", "rl_current_decay"):
+        a, r, l, tt = v
+        if abs(r) < 1e-30:
+            return dz_err("resistance cannot be zero for RL current" if name.endswith("rise")
+                          else "resistance cannot be zero for RL decay")
+        tau = fdiv(l, r)
+        if abs(tau) < 1e-30:
+            return okf(fdiv(a, r) if name.endswith("rise") else 0.0)
+        e = P["exp"](fdiv(-tt, tau))
+        return okf(fdiv(a, r) * (1.0 - e) if name.endswith("rise") else a * e)
+    if name in ("resonant_frequency", "resonant_angular_frequency"):
+        e = circuit_lc(v[0], v[1])
+        if e:
+            return e
+        s = fsqrt(v[0] * v[1])
+        return okf(fdiv(1.0, 2.0 * PI * s) if name == "resonant_frequency" else fdiv(1.0, s))
+    if name == "quality_factor":
+        r, l, c = v
+        e = circuit_r(r)
+        if e:
+            return e
+        if r < 1e-30:
+            return dz_err("resistance cannot be zero for quality factor")
+        e = circuit_lc(l, c)
+        return e or okf(fdiv(fsqrt(fdiv(l, c)), r))
+    if name == "damping_ratio":
+        r, l, c = v
+        e = circuit_r(r) or circuit_lc(l, c)
+        return e or okf(r * 0.5 * fsqrt(fdiv(c, l)))
+    if name == "rlc_impedance":
+        r, l, c, w = v
+        if abs(w) < 1e-30:
+            return dz_err("angular frequency cannot be zero for impedance")
+        if abs(c) < 1e-30:
+            return dz_err("capacitance cannot be zero for impedance")
+        x = w * l - fdiv(1.0, w * c)
+        return okf(fsqrt(r * r + x * x))
+    return None
+
+
+def circuit_vals(ins):
+    """A row's inputs as values; a `v:n` slice becomes its list."""
+    if ins and ins[0][0] == "v":
+        return [b for _k, b in ins[1:]]
+    return [b for _k, b in ins]
+
+
+def validate_circuit(path: Path) -> list:
+    header, rows = read_tsv(path)
+    errs = check_platform(header)
+    if errs:
+        return errs
+    for n, (fn, _cls, ins, outs) in enumerate(rows, 1):
+        v = circuit_vals(ins)
+        want = circuit_rust(fn, v, GLIBC_P)
+        if want is None:
+            errs.append(f"circuit row {n}: no transcription for {fn}")
+            continue
+        if not toks_same(want, wave_toks(outs)):
+            errs.append(f"circuit row {n}: {fn}{tuple(v)} recorded {wave_toks(outs)}, transcription {want}")
+    return errs
+
+
+def circuit_corrections(path: Path):
+    """The class-C circuit rows (the transients) whose outputs change when exp is correctly rounded (MPFR)."""
+    def fixes(_rows):
+        out = []
+        for line in path.read_text().splitlines():
+            if line.startswith("#"):
+                continue
+            fn, cls, ins, outs, _note = line.split("\t")
+            if cls != "C":
+                continue
+            v = circuit_vals([parse_tok(x) for x in ins.split(" ")])
+            want = circuit_rust(fn, v, MPFR_P)
+            old = wave_toks([parse_tok(x) for x in outs.split(" ")])
+            if toks_same(want, old):
+                continue
+            out.append((fn, ins, wire(want), f"oracle {outs}; correctly rounded primitives give {wire(want)}"))
+        return out
+    return fixes
+
+
+# ADR 0002 row 26 (M2 part 1c, rows 19 and 23's rule): resistance_from_geometry and parallel_plate_capacitance test
+# `A <= 0` and `d <= 0`, so a NaN area or separation passed as Ok(NaN); the port refuses unless it is positive.
+def circuit_port(fn, v):
+    if fn == "circuit::resistance_from_geometry" and math.isnan(v[2]):
+        return 26, ip_err("cross-section area must be positive, got NaN")
+    if fn == "circuit::parallel_plate_capacitance" and math.isnan(v[2]):
+        return 26, ip_err("plate separation must be positive, got NaN")
+    return None
+
+
+def circuit_adr_rows(path: Path) -> list:
+    out = []
+    for line in path.read_text().splitlines():
+        if line.startswith("#"):
+            continue
+        fn, _cls, ins, outs, _note = line.split("\t")
+        toks = [] if ins == "-" else [parse_tok(x) for x in ins.split(" ")]
+        r = circuit_port(fn, circuit_vals(toks))
+        if r is None:
+            continue
+        row, model = r
+        old = wave_toks([parse_tok(x) for x in outs.split(" ")])
+        if not toks_same(model, old):
+            out.append((fn, ins, wire(model), str(row), f"oracle {outs}; ADR 0002 row {row}"))
+    return out
+
 
 # ── maxwell: rust-old/src/maxwell.rs ──────────────────────────────────────────────────────────
 def validate_maxwell(root: Path, path: Path) -> list:
@@ -3485,6 +3667,8 @@ def adr_rows(root: Path, module: str, path: Path) -> list:
         return material_adr_rows(root, path)
     if module == "wave":
         return wave_adr_rows(root, path)
+    if module == "circuit":
+        return circuit_adr_rows(path)
     maps = {13: adr13(root)}
     out = adr17_rows(root, module, path) if module in ("field", "charge") else []
     if module in ("field", "charge"):
@@ -3833,6 +4017,7 @@ def main() -> int:
     golden = root / "tests/golden"
     checks = {
         "charge": lambda p: validate_charge(root, p),
+        "circuit": validate_circuit,
         "complex": validate_complex,
         "constants": lambda p: validate_constants(root, p),
         "error": validate_error,
@@ -3865,7 +4050,8 @@ def main() -> int:
                               "the document read with every number correctly rounded; note: the oracle's outputs, "
                               "then why they differ")
     errs += check_corrections(root, "wave", golden / "wave.tsv", wave_corrections(root, golden / "wave.tsv"))
-    for mod in ("charge", "complex", "field", "material", "maxwell", "wave"):
+    errs += check_corrections(root, "circuit", golden / "circuit.tsv", circuit_corrections(golden / "circuit.tsv"))
+    for mod in ("charge", "circuit", "complex", "field", "material", "maxwell", "wave"):
         errs += check_adr(root, mod, golden / f"{mod}.tsv")
     errs += cx_rows(golden / "complex.tsv")[1]
     errs += fv_rows(root, "field", golden / "field.tsv")[1] + fv_rows(root, "charge", golden / "charge.tsv")[1]

@@ -211,9 +211,15 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
   789.022·(dl/λ)² Ω (Rust: 80π² = 789.568). The constants are generated, each rounded once (`src/wave_data.cyr`).
 - **wave** (ADR 0002 row 25): `bj_material_reflection_coefficient` takes Γ on the relative impedances √(μ_r/ε_r), so
   Γ² equals `bj_reflectance_normal_materials`' R bit for bit; Rust's absolute impedances missed it in the last bits.
+- **Cyrius port, M2 part 1c — circuit** (`src/circuit.cyr`): circuit.rs's Ohm's law, the series and parallel
+  combinations (a pointer and a count for Rust's slice), capacitance and inductance, the RC and RL transients and the
+  series RLC relations. `circuit.tsv` holds 56,106 rows (class C for the four transients); all 51 of circuit.rs's
+  tests are ported, and 5 bench twins added.
 
 ### Fixed
 
+- **circuit** (ADR 0002 row 26, M2 part 1c): `resistance_from_geometry` and `parallel_plate_capacitance` returned
+  Ok(NaN) for a NaN area or separation (`<= 0` let it through), and now refuse it with their InvalidParameter.
 - **wave** (ADR 0002 rows 23–24, M2 part 1b, the user's answers of 2026-11-12): `effective_aperture` returned Ok(NaN)
   for a NaN wavelength (`λ < 0` let it through), and now refuses it; `schlick_reflectance` refused positive indices
   summing below 1e-30 with "sum of refractive indices cannot be zero" through `reflectance_normal`'s guard, and now

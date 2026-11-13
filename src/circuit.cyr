@@ -1,0 +1,384 @@
+# circuit.cyr — Ohm's law, series and parallel combinations, capacitance and inductance, the RC and RL transients and
+# the series RLC relations (port of rust-old/src/circuit.rs, M2 part 1c).
+#
+# SI units: ohms, farads, henries, volts, amperes, seconds. Every formula is Rust's in Rust's order: the golden rows
+# compare bit for bit (class A), and the transients take bijli's correctly rounded exp (src/crmath.cyr, class C). A
+# series sum is Rust's `Sum`, a left fold from −0.0. Rust's `&[f64]` is a pointer and a count. One of Rust's
+# inconsistencies is fixed (ADR 0002 row 26, rows 19 and 23's rule): bj_resistance_from_geometry and
+# bj_parallel_plate_capacitance refuse a NaN area or separation, which Rust's `<= 0` let through. A fallible function
+# returns a value-form Result, the error in the last-error record (src/error.cyr). The impedance here is a magnitude,
+# so no time convention (src/complex.cyr) is involved.
+
+private
+
+# ── Ohm's law ────────────────────────────────────────────────────────────────────────────────────────────────────
+
+# V = IR. Mirrors `circuit::voltage`.
+#must_use
+#pure
+public fn bj_voltage(current: f64, resistance: f64): f64 {
+    var v: f64 = current * resistance;
+    return v;
+}
+
+# I = V/R. DivisionByZero when |R| < 1e-30. Mirrors `circuit::current`.
+public fn bj_current(voltage: f64, resistance: f64): Result {
+    var a: f64 = f64_abs(resistance);
+    if (a < 0.000000000000000000000000000001) {
+        return Err(_bj_err_division_by_zero("resistance cannot be zero for Ohm's law"));
+    }
+    var i: f64 = voltage / resistance;
+    return Ok(i);
+}
+
+# R = V/I. DivisionByZero when |I| < 1e-30. Mirrors `circuit::resistance`.
+public fn bj_resistance(voltage: f64, current: f64): Result {
+    var a: f64 = f64_abs(current);
+    if (a < 0.000000000000000000000000000001) {
+        return Err(_bj_err_division_by_zero("current cannot be zero for resistance calculation"));
+    }
+    var r: f64 = voltage / current;
+    return Ok(r);
+}
+
+# P = IV (W). Mirrors `circuit::power`.
+#must_use
+#pure
+public fn bj_power(current: f64, voltage: f64): f64 {
+    var p: f64 = current * voltage;
+    return p;
+}
+
+# R = ρL/A. InvalidParameter unless A > 0, a NaN area too (ADR 0002 row 26; Rust's `A <= 0` let it through). Mirrors
+# `circuit::resistance_from_geometry`.
+public fn bj_resistance_from_geometry(resistivity: f64, length: f64, cross_section_area: f64): Result {
+    if (!(cross_section_area > 0.0)) {
+        var t = _bj_err_reason(BJ_ERR_INVALID_PARAMETER);
+        _bj_tx_cstr(t, "cross-section area must be positive, got ");
+        _bj_fmt_f64_display(t, cross_section_area);
+        return Err(BJ_ERR_INVALID_PARAMETER);
+    }
+    var rl: f64 = resistivity * length;
+    var r: f64 = rl / cross_section_area;
+    return Ok(r);
+}
+
+# ── series and parallel ──────────────────────────────────────────────────────────────────────────────────────────
+
+# The InvalidParameter of an empty combination: "at least one <what> value is required".
+fn _bj_circuit_empty(what): i64 {
+    var t = _bj_err_reason(BJ_ERR_INVALID_PARAMETER);
+    _bj_tx_cstr(t, "at least one ");
+    _bj_tx_cstr(t, what);
+    _bj_tx_cstr(t, " value is required");
+    return BJ_ERR_INVALID_PARAMETER;
+}
+
+# x₁ + x₂ + …, Rust's `Sum` (a left fold from −0.0); InvalidParameter for n = 0.
+fn _bj_circuit_sum(xs: *f64, n, what): Result {
+    if (n <= 0) { return Err(_bj_circuit_empty(what)); }
+    var acc: f64 = -0.0;
+    for (var i = 0; i < n; i = i + 1) { acc = acc + xs[i]; }
+    return Ok(acc);
+}
+
+# 1/(1/x₁ + 1/x₂ + …): InvalidParameter for n = 0; DivisionByZero "<what> cannot be zero in <kind> combination" for an
+# |xᵢ| < 1e-30, and "sum of inverse <what>s is zero" when |Σ 1/xᵢ| < 1e-30.
+fn _bj_circuit_inverse(xs: *f64, n, what, kind): Result {
+    if (n <= 0) { return Err(_bj_circuit_empty(what)); }
+    var s: f64 = 0.0;
+    for (var i = 0; i < n; i = i + 1) {
+        var x: f64 = xs[i];
+        var a: f64 = f64_abs(x);
+        if (a < 0.000000000000000000000000000001) {
+            var t = _bj_err_reason(BJ_ERR_DIVISION_BY_ZERO);
+            _bj_tx_cstr(t, what);
+            _bj_tx_cstr(t, " cannot be zero in ");
+            _bj_tx_cstr(t, kind);
+            _bj_tx_cstr(t, " combination");
+            return Err(BJ_ERR_DIVISION_BY_ZERO);
+        }
+        var inv: f64 = 1.0 / x;
+        s = s + inv;
+    }
+    var sa: f64 = f64_abs(s);
+    if (sa < 0.000000000000000000000000000001) {
+        var u = _bj_err_reason(BJ_ERR_DIVISION_BY_ZERO);
+        _bj_tx_cstr(u, "sum of inverse ");
+        _bj_tx_cstr(u, what);
+        _bj_tx_cstr(u, "s is zero");
+        return Err(BJ_ERR_DIVISION_BY_ZERO);
+    }
+    var r: f64 = 1.0 / s;
+    return Ok(r);
+}
+
+# R = R₁ + R₂ + … over the n values at resistances. InvalidParameter for n = 0. Mirrors `circuit::resistance_series`.
+public fn bj_resistance_series(resistances: *f64, n): Result {
+    var t, v = _bj_circuit_sum(resistances, n, "resistance");
+    if (is_err_result(t) == 1) { return Err(v); }
+    return Ok(v);
+}
+
+# 1/R = 1/R₁ + 1/R₂ + …. InvalidParameter for n = 0; DivisionByZero for an |Rᵢ| < 1e-30 or an |Σ 1/Rᵢ| < 1e-30.
+# Mirrors `circuit::resistance_parallel`.
+public fn bj_resistance_parallel(resistances: *f64, n): Result {
+    var t, v = _bj_circuit_inverse(resistances, n, "resistance", "parallel");
+    if (is_err_result(t) == 1) { return Err(v); }
+    return Ok(v);
+}
+
+# 1/C = 1/C₁ + 1/C₂ + …. As bj_resistance_parallel. Mirrors `circuit::capacitance_series`.
+public fn bj_capacitance_series(capacitances: *f64, n): Result {
+    var t, v = _bj_circuit_inverse(capacitances, n, "capacitance", "series");
+    if (is_err_result(t) == 1) { return Err(v); }
+    return Ok(v);
+}
+
+# C = C₁ + C₂ + …. InvalidParameter for n = 0. Mirrors `circuit::capacitance_parallel`.
+public fn bj_capacitance_parallel(capacitances: *f64, n): Result {
+    var t, v = _bj_circuit_sum(capacitances, n, "capacitance");
+    if (is_err_result(t) == 1) { return Err(v); }
+    return Ok(v);
+}
+
+# L = L₁ + L₂ + …. InvalidParameter for n = 0. Mirrors `circuit::inductance_series`.
+public fn bj_inductance_series(inductances: *f64, n): Result {
+    var t, v = _bj_circuit_sum(inductances, n, "inductance");
+    if (is_err_result(t) == 1) { return Err(v); }
+    return Ok(v);
+}
+
+# 1/L = 1/L₁ + 1/L₂ + …. As bj_resistance_parallel. Mirrors `circuit::inductance_parallel`.
+public fn bj_inductance_parallel(inductances: *f64, n): Result {
+    var t, v = _bj_circuit_inverse(inductances, n, "inductance", "parallel");
+    if (is_err_result(t) == 1) { return Err(v); }
+    return Ok(v);
+}
+
+# ── capacitance and inductance ───────────────────────────────────────────────────────────────────────────────────
+
+# C = εA/d. InvalidParameter unless d > 0, a NaN separation too (ADR 0002 row 26; Rust's `d <= 0` let it through).
+# Mirrors `circuit::parallel_plate_capacitance`.
+public fn bj_parallel_plate_capacitance(permittivity: f64, area: f64, separation: f64): Result {
+    if (!(separation > 0.0)) {
+        var t = _bj_err_reason(BJ_ERR_INVALID_PARAMETER);
+        _bj_tx_cstr(t, "plate separation must be positive, got ");
+        _bj_fmt_f64_display(t, separation);
+        return Err(BJ_ERR_INVALID_PARAMETER);
+    }
+    var ea: f64 = permittivity * area;
+    var c: f64 = ea / separation;
+    return Ok(c);
+}
+
+# U = CV²/2 (J). Mirrors `circuit::capacitor_energy`.
+#must_use
+#pure
+public fn bj_capacitor_energy(capacitance: f64, voltage: f64): f64 {
+    var u: f64 = 0.5 * capacitance * voltage * voltage;
+    return u;
+}
+
+# Q = CV (C). Mirrors `circuit::capacitor_charge`.
+#must_use
+#pure
+public fn bj_capacitor_charge(capacitance: f64, voltage: f64): f64 {
+    var q: f64 = capacitance * voltage;
+    return q;
+}
+
+# L = μn²Al (H): n turns per unit length, A the cross-section, l the length. Mirrors `circuit::solenoid_inductance`.
+#must_use
+#pure
+public fn bj_solenoid_inductance(permeability: f64, turns_per_length: f64, area: f64, length: f64): f64 {
+    var l: f64 = permeability * turns_per_length * turns_per_length * area * length;
+    return l;
+}
+
+# U = LI²/2 (J). Mirrors `circuit::inductor_energy`.
+#must_use
+#pure
+public fn bj_inductor_energy(inductance: f64, current: f64): f64 {
+    var u: f64 = 0.5 * inductance * current * current;
+    return u;
+}
+
+# ── RC and RL transients ─────────────────────────────────────────────────────────────────────────────────────────
+
+# τ = RC (s). Mirrors `circuit::rc_time_constant`.
+#must_use
+#pure
+public fn bj_rc_time_constant(resistance: f64, capacitance: f64): f64 {
+    var tau: f64 = resistance * capacitance;
+    return tau;
+}
+
+# V(t) = V₀(1 − e^(−t/RC)); V₀ when |RC| < 1e-30 (an instant charge). Mirrors `circuit::rc_charging_voltage`.
+#must_use
+#pure
+public fn bj_rc_charging_voltage(v0: f64, resistance: f64, capacitance: f64, t: f64): f64 {
+    var tau: f64 = resistance * capacitance;
+    var a: f64 = f64_abs(tau);
+    if (a < 0.000000000000000000000000000001) { return v0; }
+    var x: f64 = -t / tau;
+    var e: f64 = _bj_exp(x);
+    var w: f64 = 1.0 - e;
+    var v: f64 = v0 * w;
+    return v;
+}
+
+# V(t) = V₀e^(−t/RC); 0 when |RC| < 1e-30 (an instant discharge). Mirrors `circuit::rc_discharging_voltage`.
+#must_use
+#pure
+public fn bj_rc_discharging_voltage(v0: f64, resistance: f64, capacitance: f64, t: f64): f64 {
+    var tau: f64 = resistance * capacitance;
+    var a: f64 = f64_abs(tau);
+    if (a < 0.000000000000000000000000000001) { return 0.0; }
+    var x: f64 = -t / tau;
+    var e: f64 = _bj_exp(x);
+    var v: f64 = v0 * e;
+    return v;
+}
+
+# τ = L/R (s). DivisionByZero when |R| < 1e-30. Mirrors `circuit::rl_time_constant`.
+public fn bj_rl_time_constant(inductance: f64, resistance: f64): Result {
+    var a: f64 = f64_abs(resistance);
+    if (a < 0.000000000000000000000000000001) {
+        return Err(_bj_err_division_by_zero("resistance cannot be zero for RL time constant"));
+    }
+    var tau: f64 = inductance / resistance;
+    return Ok(tau);
+}
+
+# I(t) = (V/R)(1 − e^(−tR/L)); V/R when |L/R| < 1e-30 (an instant rise). DivisionByZero when |R| < 1e-30. Mirrors
+# `circuit::rl_current_rise`.
+public fn bj_rl_current_rise(voltage: f64, resistance: f64, inductance: f64, t: f64): Result {
+    var a: f64 = f64_abs(resistance);
+    if (a < 0.000000000000000000000000000001) {
+        return Err(_bj_err_division_by_zero("resistance cannot be zero for RL current"));
+    }
+    var tau: f64 = inductance / resistance;
+    var i_max: f64 = voltage / resistance;
+    var at: f64 = f64_abs(tau);
+    if (at < 0.000000000000000000000000000001) { return Ok(i_max); }
+    var x: f64 = -t / tau;
+    var e: f64 = _bj_exp(x);
+    var w: f64 = 1.0 - e;
+    var i: f64 = i_max * w;
+    return Ok(i);
+}
+
+# I(t) = I₀e^(−tR/L); 0 when |L/R| < 1e-30. DivisionByZero when |R| < 1e-30. Mirrors `circuit::rl_current_decay`.
+public fn bj_rl_current_decay(i0: f64, resistance: f64, inductance: f64, t: f64): Result {
+    var a: f64 = f64_abs(resistance);
+    if (a < 0.000000000000000000000000000001) {
+        return Err(_bj_err_division_by_zero("resistance cannot be zero for RL decay"));
+    }
+    var tau: f64 = inductance / resistance;
+    var at: f64 = f64_abs(tau);
+    if (at < 0.000000000000000000000000000001) { return Ok(0.0); }
+    var x: f64 = -t / tau;
+    var e: f64 = _bj_exp(x);
+    var i: f64 = i0 * e;
+    return Ok(i);
+}
+
+# ── series RLC ───────────────────────────────────────────────────────────────────────────────────────────────────
+
+# 0, or the InvalidParameter "L and C must be finite and positive, got L=…, C=…".
+fn _bj_circuit_check_lc(inductance: f64, capacitance: f64): i64 {
+    var l: f64 = inductance;
+    var c: f64 = capacitance;
+    if (_bj_is_finite(l) == 1 && l > 0.0 && _bj_is_finite(c) == 1 && c > 0.0) { return 0; }
+    var t = _bj_err_reason(BJ_ERR_INVALID_PARAMETER);
+    _bj_tx_cstr(t, "L and C must be finite and positive, got L=");
+    _bj_fmt_f64_display(t, l);
+    _bj_tx_cstr(t, ", C=");
+    _bj_fmt_f64_display(t, c);
+    return BJ_ERR_INVALID_PARAMETER;
+}
+
+# 0, or the InvalidParameter "resistance must be finite and non-negative, got …".
+fn _bj_circuit_check_r(resistance: f64): i64 {
+    var r: f64 = resistance;
+    if (_bj_is_finite(r) == 1 && r >= 0.0) { return 0; }
+    var t = _bj_err_reason(BJ_ERR_INVALID_PARAMETER);
+    _bj_tx_cstr(t, "resistance must be finite and non-negative, got ");
+    _bj_fmt_f64_display(t, r);
+    return BJ_ERR_INVALID_PARAMETER;
+}
+
+# f₀ = 1/(2π√(LC)) (Hz). InvalidParameter unless L and C are finite and positive. Mirrors `circuit::resonant_frequency`.
+public fn bj_resonant_frequency(inductance: f64, capacitance: f64): Result {
+    var c = _bj_circuit_check_lc(inductance, capacitance);
+    if (c != 0) { return Err(c); }
+    var lc: f64 = inductance * capacitance;
+    var s: f64 = f64_sqrt(lc);
+    var d: f64 = 2.0 * _BJ_PI * s;
+    var f: f64 = 1.0 / d;
+    return Ok(f);
+}
+
+# ω₀ = 1/√(LC) (rad/s). As bj_resonant_frequency. Mirrors `circuit::resonant_angular_frequency`.
+public fn bj_resonant_angular_frequency(inductance: f64, capacitance: f64): Result {
+    var c = _bj_circuit_check_lc(inductance, capacitance);
+    if (c != 0) { return Err(c); }
+    var lc: f64 = inductance * capacitance;
+    var s: f64 = f64_sqrt(lc);
+    var w: f64 = 1.0 / s;
+    return Ok(w);
+}
+
+# Q = (1/R)√(L/C) = ω₀L/R, a series RLC's quality factor (a parallel tank's R√(C/L) is not this): Q = 1/(2ζ).
+# InvalidParameter unless R is finite and non-negative; DivisionByZero for R < 1e-30; then InvalidParameter unless L
+# and C are finite and positive. Mirrors `circuit::quality_factor`.
+public fn bj_quality_factor(resistance: f64, inductance: f64, capacitance: f64): Result {
+    var cr = _bj_circuit_check_r(resistance);
+    if (cr != 0) { return Err(cr); }
+    if (resistance < 0.000000000000000000000000000001) {
+        return Err(_bj_err_division_by_zero("resistance cannot be zero for quality factor"));
+    }
+    var c = _bj_circuit_check_lc(inductance, capacitance);
+    if (c != 0) { return Err(c); }
+    var q0: f64 = inductance / capacitance;
+    var s: f64 = f64_sqrt(q0);
+    var q: f64 = s / resistance;
+    return Ok(q);
+}
+
+# ζ = (R/2)√(C/L), a series RLC's damping ratio: underdamped below 1, critical at 1, overdamped above; ζ = 1/(2Q).
+# InvalidParameter unless R is finite and non-negative, then unless L and C are finite and positive. Mirrors
+# `circuit::damping_ratio`.
+public fn bj_damping_ratio(resistance: f64, inductance: f64, capacitance: f64): Result {
+    var cr = _bj_circuit_check_r(resistance);
+    if (cr != 0) { return Err(cr); }
+    var c = _bj_circuit_check_lc(inductance, capacitance);
+    if (c != 0) { return Err(c); }
+    var q0: f64 = capacitance / inductance;
+    var s: f64 = f64_sqrt(q0);
+    var half_r: f64 = resistance * 0.5;
+    var z: f64 = half_r * s;
+    return Ok(z);
+}
+
+# |Z| = √(R² + (ωL − 1/(ωC))²) (Ω), a series RLC's impedance magnitude at ω. DivisionByZero when |ω| < 1e-30, then
+# when |C| < 1e-30. Mirrors `circuit::rlc_impedance`.
+public fn bj_rlc_impedance(resistance: f64, inductance: f64, capacitance: f64, angular_freq: f64): Result {
+    var w: f64 = angular_freq;
+    var aw: f64 = f64_abs(w);
+    if (aw < 0.000000000000000000000000000001) {
+        return Err(_bj_err_division_by_zero("angular frequency cannot be zero for impedance"));
+    }
+    var ac: f64 = f64_abs(capacitance);
+    if (ac < 0.000000000000000000000000000001) {
+        return Err(_bj_err_division_by_zero("capacitance cannot be zero for impedance"));
+    }
+    var wl: f64 = w * inductance;
+    var wc: f64 = w * capacitance;
+    var inv: f64 = 1.0 / wc;
+    var x: f64 = wl - inv;
+    var s: f64 = resistance * resistance + x * x;
+    var z: f64 = f64_sqrt(s);
+    return Ok(z);
+}
