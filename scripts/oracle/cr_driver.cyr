@@ -7,7 +7,8 @@
 # Fraction and integer square root), and bijli's transcendentals with an unbounded exponent (src/crmath_ux.cyr, M1 part
 # 5c-2), checked against MPFR with its widest exponent range, and the exact Singularity threshold (src/crmath_cmp.cyr,
 # M1 part 5d-1), Clausius–Mossotti's ε_r, the trig-free Fresnel cosine, the Liénard–Wiechert R_eff and κ and the
-# parallel combinations (src/crmath_edge.cyr, M2 parts 2c-2 to 2c-5), against Fractions. Built from the math
+# parallel combinations (src/crmath_edge.cyr, M2 parts 2c-2 to 2c-5), and the materials' 53-bit roots and Γ
+# (src/crmath_vx.cyr, M2 part 2d-2c), against Fractions. Built from the math
 # sources the bundle carries (src/constants.cyr … src/mathx.cyr, in the manifest's order and byte for byte what
 # dist/bijli.cyr holds): the bundle is `private` and these entry points are bijli-internal, so a consumer of
 # dist/bijli.cyr can't call them, but a file of internals only has no marker and can be included on its own.
@@ -34,6 +35,7 @@ include "src/crmath_ux_data.cyr"
 include "src/crmath_ux.cyr"
 include "src/crmath_cmp.cyr"
 include "src/mathx.cyr"
+include "src/crmath_vx.cyr"
 include "src/fmtf.cyr"
 include "src/crmath_gamma.cyr"
 include "src/crmath_edge.cyr"
@@ -142,6 +144,18 @@ fn _call(fp, fl, w): i64 {
         var no: f64[4];
         if (_bj_cr_lw(w + 8, w + 32, 2, nslow, &no) == 1) { return 0 - 1; }
         r = no[1 + ni];
+    }
+    elif (_is(fp, fl, "vx_sqrt") == 1 || _is(fp, fl, "vx_sqrt_e") == 1) {
+        # vx_sqrt x y mode: √(x/y) (mode 0) or √(x·y) (mode 1) to 53 bits with an unbounded exponent
+        # (src/crmath_vx.cyr, M2 part 2d-2c): its significand in [1, 2); vx_sqrt_e its exponent, a word
+        var vs, ve = _bj_vx_sqrt_ux(x, y, load64(w + 16));
+        if (fl > 7) { return ve; }
+        r = vs;
+    }
+    elif (_is(fp, fl, "vx_gamma") == 1) {
+        # vx_gamma eta1 eta2 e1 m1 e2 m2: Γ between two lossless materials from their correctly rounded η's and their
+        # ε_r and μ_r (src/crmath_vx.cyr, M2 part 2d-2c)
+        r = _bj_vx_gamma(x, y, _wf(w, 2), _wf(w, 3), _wf(w, 4), _wf(w, 5));
     }
     elif (_is(fp, fl, "par") == 1 || _is(fp, fl, "par_slow") == 1 || _is(fp, fl, "par_x") == 1) {
         # par n x1 … xn: the parallel combination 1/Σ 1/xᵢ, correctly rounded (src/crmath_edge.cyr), the exact path

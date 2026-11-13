@@ -2266,3 +2266,75 @@ waveguides.
 - **Result, every target** (x86_64 ELF, x86_64 PE, aarch64): **13 modules, 0 failing; 402,858 ok, 0 failed, 0
   measured, 0 pending, 41,312 accepted (ADR 01: 8,998; ADR 0002: 32,314)** over 444,170 rows; **all 276 digests
   equal**. Four changed: the Poynting vector, the momentum density, the plane wave and Snell's angle.
+
+## 44. M2 part 2d-2c: the material interface's roots and Γ, the waveguides' root (2026-11-13)
+
+- **ADR 0002 row 18, amended** (the rule of §42):
+  - **Γ** (`src/crmath_vx.cyr`'s `_bj_vx_gamma`, under `material_reflection_coefficient`,
+    `BjMaterial.try_reflectance_at` and so `reflectance_normal_materials`, and the interface's equal-index branch):
+    Rust's (η₂ − η₁)/(η₂ + η₁) where both correctly rounded η's lie in (2^-1022, DBL_MAX] and their sum is finite
+    (each is then its 53-bit value, and a difference of normal values below 2^-1022 is exact). Otherwise the η's are
+    taken to 53 bits with an unbounded exponent (`_bj_vx_sqrt_ux`: the correctly rounded root of the significands'
+    quotient, the exponents' difference made even first) and the chain's quotient rounds once. The lower bound is
+    strict: a root just below 2^-1022 rounds up to it in binary64 but not in 53 bits, and the corpus has that pair
+    (Γ = 2^-54 where the f64 η's are equal). Rust: an η of ∞ (ε_r = 2^-1074 under μ_r = DBL_MAX) made Γ NaN (∞ − ∞);
+    η's of 2^1023.5 and 2^1023 summed past DBL_MAX for Γ = −0 where it is −0.17157; subnormal η's were refused by
+    Rust's absolute guard, and the port's Γ on them had kept only their few bits.
+  - **The interface** (`bj_reflectance_at_interface`): an index at or below 2^-1022 sends the TIR test, cos θ_t and
+    the equal-index test to the 53-bit indices (`_bj_vx_sqrt_ux`'s √(ε_r μ_r)), scaled together into the normal range
+    by the larger's binade, the smaller clamped at 2^-200 below it. Those three depend only on n₁/n₂, and past a ratio
+    of 2^27 both decide alike (TIR below grazing incidence, or cos θ_t = 1). An η outside (2^-1022, DBL_MAX] sends
+    r_s and r_p to `_bj_vx_ratio_ux2`, the ratio chain on the 53-bit η's. Rust's n = √(ε_r·μ_r) underflowed to 0 for
+    every such pair and refused it (n₂ = 0). The port's correctly rounded n's (row 13) were equal for ε_r μ_r of
+    2^-2148 and 2^-2147, giving Γ² = 0.0294 at cos θ_i = 0.5 where R = 0.0745. An η of ∞ gave NaN where R = 1.
+  - **The rectangular waveguides** (`_bj_wave_rect_root`, which now also reports whether Rust's chain is the
+    unbounded one): each square above 2^-1022 or an exact 0, their sum finite and, for f_c, v/2 above 2^-1022.
+    Otherwise √((m/a)² + (n/b)²) runs with an unbounded exponent, f_c = (v/2)·r and λ_c = 2/r round once, and a λ_c
+    past DBL_MAX is refused with Rust's "not representable" text. Rust: b = 10^-300 gave f_c = ∞ for 1.5·10^308 and
+    λ_c = 0 for 2·10^-300; sides of 2^600 m (λ_c = 2^601) and 8·10^307 m (1.6·10^308) were refused; and
+    v = 2^-1021 − 2^-1074 had its half tie up to 2^-1022, moving f_c by an ulp (157 rows).
+- **Rows**: 5,327 more. `m_material.rs`'s `edge_materials` has 19 lossless materials: η past DBL_MAX three ways,
+  η's of 2^1023.5 and 2^1023, subnormal η's three ways, an η of 2^-1022 rounded up and one exactly, n subnormal four
+  ways, an n of 2^-1022 rounded up and one exactly, and vacuum, glass and a tiny normal pair as controls. Every ordered
+  pair gives:
+  - `try_reflectance_at`: 361 rows in material.tsv;
+  - `emit_material_edges` (m_wave.rs): 2,166 rows of Γ, R at normal incidence, and R at the interface at
+    cos θ_i = 1, 0.7, 0.2 and 0.
+
+  `emit_guide_edges` adds 2,800 waveguide rows:
+  - ten sides: 2^511 and its neighbours; 2^-512; 0.625·2^-511, whose squares' sum overflows; 0.75·2^-511, whose sum
+    stays finite; 8·10^307 and 10^308; and two ordinary sides;
+  - four modes;
+  - six velocities, among them 2^-1021 − 2^-1074 (its half ties to 2^-1022) and 2^-1021.
+
+  `validate.py`'s transcription agreed with every row.
+- **Mappings**: `validate.py`'s `wave_gamma_port`, `wave_scaled_indices`, `wave_ratio_ux` (wave_ratio_of's unbounded
+  chain, now on 53-bit values) and the waveguides' `ux` chain, all on exact.py's `rnd53` and `rnd53_sqrt`.
+  `wave.adr.tsv` maps 3,117 more rows:
+  - row 18, 2,000: the cutoff 1,200, λ_c 252, the interface 314, Γ 117, R at normal incidence 117;
+  - row 13, 1,012: the interface 881, R at normal incidence 73, Γ 58;
+  - row 25, 105.
+
+  `material.adr.tsv` maps 190 more (`try_reflectance_at`: row 18 117, row 13 73). 299 of the 3,307 are older
+  waveguide rows (the cutoff 168, λ_c 131). All pass. Labels: row 18 where the edge alone moves the row, checked
+  first, as in §42.
+- **cr_verify** (`vx_sqrt`, `vx_sqrt_e` and `vx_gamma`; `cr_driver.cyr` now includes src/crmath_vx.cyr): 750,000
+  calls equal to the exact value on x86_64 and aarch64. `vx_gamma`'s expected value is the unbounded chain alone, so
+  its 150,000 calls check the guard's claim wherever Rust's quotient is taken.
+- **Tests**:
+  - tests/wave.tcyr's `cyrius_adr_rows_22_to_25` gains 9 assertions: Γ past DBL_MAX and between subnormal η's;
+    Γ = 2^-54 at the rounded-up 2^-1022; R = 1 from an η past DBL_MAX; the subnormal indices' R; the rounded-up n at
+    grazing incidence; λ_c = 2^601 and 1.6·10^308; and f_c where Rust gave ∞. Its 2^600-side refusal became a
+    10^308-side one (λ_c = 2·10^308).
+  - tests/material.tcyr gains 1: `try_reflectance_at` with η's summing past DBL_MAX.
+- **Benchmarks**: an interleaved A/B against HEAD, three rounds each, load 1.9–3.4, each figure the lower of the
+  three.
+  - `wave/rect_waveguide_cutoff`: 46 → 51 ns, steady across the rounds. The cost is the guard's three tests and its
+    flag through a pointer (the guard shares the root's quotients and squares).
+  - `wave/reflectance_at_interface`: 715 → 755 ns. HEAD's three rounds spread over 715–755, so a focused A/B of the
+    two rows ran too (five repetitions a round, three rounds, load 2.7–3.0). It puts the cost at about 740 → 757 ns,
+    the six range tests on the indices and η's.
+  - Every other row held within the noise: untouched rows drifted 2–4 % with the load. A finding, recorded.
+- **Result, every target** (x86_64 ELF, x86_64 PE, aarch64): **13 modules, 0 failing; 404,878 ok, 0 failed, 0
+  measured, 0 pending, 44,619 accepted (ADR 01: 8,998; ADR 0002: 35,621)** over 449,497 rows; **all 276 digests
+  equal**. Six changed: Γ, both normal-incidence reflectances, the interface and the two waveguide functions.

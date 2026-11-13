@@ -57,11 +57,11 @@ port's harness reads the same files. This README records what is specific to bij
 | `field` | M1 (parts 3a–3c, 5d-1 to 5d-5) | 26,770 | `src/m_field.rs` | — |
 | `fmtf` | M1 (+ Debug, part 3c; + fixed precision, M2 part 1b) | 70,740 | `src/m_fmtf.rs` (impetus's grid) | — |
 | `json` | M1 (part 4), M2 (part 1a: `Material`) | 19,489 (+ 8,899 corrected) | `src/m_json.rs` (serde_json 1.0.154 on `Complex`, `FieldVector`, `PointCharge`, `Material`) | — |
-| `material` | M2 (parts 1a, 2c-1, 2c-2) | 53,873 | `src/m_material.rs` (field.rs's vectors) | — |
+| `material` | M2 (parts 1a, 2c-1, 2c-2, 2d-2c) | 54,234 | `src/m_material.rs` (field.rs's vectors) | — |
 | `math` | M0 (+ sinh, cosh and 125 corrected, M1) | 36,522 | `src/m_math.rs` | — |
 | `maxwell` | M1 (part 3d) | 20,349 | `src/m_maxwell.rs` | — |
 | `relativity` | M2 (parts 1d-1, 1d-2: the solver over six trajectories; 2c-1, 2c-4, 2d-1) | 29,671 | `src/m_relativity.rs` (field.rs's vectors) | — |
-| `wave` | M2 (parts 1b, 2c-1, 2c-3, 2d-1, 2d-2a, 2d-2b) | 74,172 (+ 1 corrected) | `src/m_wave.rs` (field.rs's vectors, material.tsv's materials) | `src/wave_data.cyr`, the dipole constants of ADR 0002 row 22 (`validate.py`'s `render_wave_data`: Cin(2π) by its series, π by Machin's formula checked against MPFR, η₀ from BJ_MU_0 and BJ_EPSILON_0, in rational arithmetic) |
+| `wave` | M2 (parts 1b, 2c-1, 2c-3, 2d-1, 2d-2a, 2d-2b, 2d-2c) | 79,138 (+ 1 corrected) | `src/m_wave.rs` (field.rs's vectors, material.tsv's materials) | `src/wave_data.cyr`, the dipole constants of ADR 0002 row 22 (`validate.py`'s `render_wave_data`: Cin(2π) by its series, π by Machin's formula checked against MPFR, η₀ from BJ_MU_0 and BJ_EPSILON_0, in rational arithmetic) |
 | (correctly rounded tables) | M1 | — | — | `src/crmath_data.cyr` (`crtables.py`, written and checked by `validate.py`) |
 | (2/π for the angle past DBL_MAX, bijli's) | M1 (part 5d-3) | — | — | `src/crmath_ux_data.cyr` (`crtables.py`'s `render_ux`, from π to 2,800 bits checked against MPFR) |
 | (correctly rounded tables, kimiya's) | M1 | — | — | `src/crmath_k_data.cyr` (`crtables_k.py`, written and checked by `validate.py`) |
@@ -100,7 +100,11 @@ on Pythagorean directions with β at their own n̂'s doubles. Its par families (
 1/Σ 1/xᵢ, rounded once with |Σ| < 10^-30 decided exactly, against Fractions: `par` through the three tiers, `par_x` from
 the expansion on, `par_slow` the exact path alone, and `par_rep*` the same over short patterns repeated up to 20,000
 times (`cr_driver.cyr` builds the list): knife edges at 10^-30, sums cancelling to 0 or to ulps, exact midpoints,
-±∞ among the values, any finite values. Its ux families (`cr_verify.py . ux`, M1 part 5c-2) check src/crmath_ux.cyr's
+±∞ among the values, any finite values. Its vx families (M2 part 2d-2c) check src/crmath_vx.cyr's √(x/y) and
+√(x·y) to 53 bits with an unbounded exponent (`vx_sqrt` its significand, `vx_sqrt_e` its exponent) and Γ between two
+lossless materials (`vx_gamma`) against Fractions and an integer square root, on positive doubles of any binade
+(subnormal, at both ends of the range): Γ against the unbounded chain alone, so the calls where `_bj_vx_gamma` takes
+Rust's quotient check its guard's claim too; η's an ulp or a few apart, and equal. Its ux families (`cr_verify.py . ux`, M1 part 5c-2) check src/crmath_ux.cyr's
 e^x, cosh, sinh, ln(s·2^E), (s·2^E)^y and sin and cos past DBL_MAX against `mpfr_ref.wide`: MPFR at 53 bits with its
 widest exponent range, where nothing over- or underflows. Each (s, e) result is read in two calls, its significand
 and its exponent.

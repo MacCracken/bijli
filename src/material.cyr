@@ -469,7 +469,9 @@ impl BjMaterial {
 
     # R = ((η₂ − η₁)/(η₂ + η₁))², the normal-incidence reflectance into `other`, η = √(μ_r/ε_r): right for magnetic
     # media too (ε_r = μ_r = 4 is matched to vacuum). Both materials must be lossless: the errors of
-    # _bj_material_lossless_optical_constants, this material's first. Mirrors `Material::try_reflectance_at`.
+    # _bj_material_lossless_optical_constants, this material's first. Γ as src/crmath_vx.cyr's _bj_vx_gamma (an η past
+    # DBL_MAX or subnormal runs with an unbounded exponent: ADR 0002 row 18's rule, M2 part 2d-2c). Mirrors
+    # `Material::try_reflectance_at`.
     public fn try_reflectance_at(self, other: BjMaterial): Result {
         var c1: f64[2];
         var c2: f64[2];
@@ -479,7 +481,7 @@ impl BjMaterial {
         if (is_err_result(t2) == 1) { return Err(v2); }
         var eta1: f64 = c1[1];
         var eta2: f64 = c2[1];
-        var r: f64 = (eta2 - eta1) / (eta2 + eta1);
+        var r: f64 = _bj_vx_gamma(eta1, eta2, self.eps_r, self.mu_r, other.eps_r, other.mu_r);
         var rr: f64 = r * r;
         return Ok(rr);
     }

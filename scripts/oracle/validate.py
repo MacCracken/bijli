@@ -1460,8 +1460,9 @@ def mat_lossless_port(e, m, s):
     return None, (rn_sqrt(F(e) * F(m)), rn_sqrt(F(m) / F(e)))
 
 
-def mat_reflectance(v, lossless):
-    """Material::try_reflectance_at on a lossless-constants function."""
+def mat_reflectance(v, lossless, ux=False):
+    """Material::try_reflectance_at on a lossless-constants function; ux: Γ as wave_gamma_port (row 18's rule, M2 part
+    2d-2c)."""
     r1, l1 = lossless(*v[0:3])
     if r1:
         return r1
@@ -1469,7 +1470,7 @@ def mat_reflectance(v, lossless):
     if r2:
         return r2
     eta1, eta2 = l1[1], l2[1]
-    r = fdiv(eta2 - eta1, eta2 + eta1)
+    r = wave_gamma_port(eta1, eta2, v[0:2], v[3:5]) if ux else fdiv(eta2 - eta1, eta2 + eta1)
     return [("f", r * r)]
 
 
@@ -1562,6 +1563,11 @@ def material_port(fn, v, EPS0, MU0):
         if all(math.isfinite(x) for x in v[0:6]) and fv_governed(g, v[0:6]) == 18:
             return 18, fv_model(g, v[0:6])
         return None
+    if fn == "Material::try_reflectance_at":
+        # Row 18 where the range edge's Γ (M2 part 2d-2c) moves the row, else row 13 (η rounded once).
+        old13 = mat_reflectance(v, mat_lossless_port)
+        new = mat_reflectance(v, mat_lossless_port, ux=True)
+        return (18 if not toks_same(new, old13) else 13), new
     m13 = material_port13(fn, v, EPS0, MU0)
     return None if m13 is None else (13, m13)
 
@@ -1613,9 +1619,36 @@ def wave_lossless(e, m, s):
     return None, (fsqrt(e * m), fsqrt(fdiv(m, e)))
 
 
+def wave_scaled_indices(v):
+    """src/wave.cyr's indices at an edge (M2 part 2d-2c): n = √(ε_r μ_r) to 53 bits with an unbounded exponent, both
+    scaled by the larger's binade into [1, 2), the smaller clamped at 2^-200 below it; and whether they are equal."""
+    F = Fraction
+    a1, a2 = rnd53_sqrt(F(v[0]) * F(v[1])), rnd53_sqrt(F(v[3]) * F(v[4]))
+    b1, b2 = binade(a1), binade(a2)
+    top = max(b1, b2)
+    n1 = float(a1 / F(2) ** b1 * F(2) ** max(b1 - top, -200))
+    n2 = float(a2 / F(2) ** b2 * F(2) ** max(b2 - top, -200))
+    return n1, n2, a1 == a2
+
+
+def wave_gamma_port(eta1, eta2, m1, m2):
+    """src/crmath_vx.cyr's _bj_vx_gamma (M2 part 2d-2c, row 18's rule): Rust's Γ where both η's lie in (2^-1022,
+    DBL_MAX] and their sum is finite; else on η = √(μ_r/ε_r) to 53 bits (m1, m2: (ε_r, μ_r)), the difference and
+    sum to 53 bits, the quotient rounded once."""
+    den = eta2 + eta1
+    if VX_MN < eta1 <= DBL_MAX and VX_MN < eta2 <= DBL_MAX and den <= DBL_MAX:
+        return fdiv(eta2 - eta1, den)
+    F = Fraction
+    h1, h2 = rnd53_sqrt(F(m1[1]) / F(m1[0])), rnd53_sqrt(F(m2[1]) / F(m2[0]))
+    num = rnd53(h2 - h1)
+    return 0.0 if num == 0 else rn_frac(num / rnd53(h2 + h1))
+
+
 def wave_interface(v, lossless, exact=False, ux=False):
     """reflectance_at_interface on a lossless-constants function (Rust's, or the port's rounded once), the cosines
-    Rust's or (exact) the port's."""
+    Rust's or (exact) the port's; ux: the port's range edges (M2 part 2d-2c, row 18's rule): indices at or below
+    2^-1022 as wave_scaled_indices, Γ as wave_gamma_port, the ratios on 53-bit η's where an η is outside (2^-1022,
+    DBL_MAX]."""
     e1, l1 = lossless(*v[0:3])
     if e1:
         return e1
@@ -1623,14 +1656,27 @@ def wave_interface(v, lossless, exact=False, ux=False):
     if e2:
         return e2
     (n1, eta1), (n2, eta2) = l1, l2
+    same = n1 == n2
+    if ux and not (n1 > VX_MN and n2 > VX_MN):
+        n1, n2, same = wave_scaled_indices(v)
     e, ci, ct = wave_cosines(n1, n2, v[6], exact)
     if e:
         return e
     if ct is None:
         return okf(1.0)
-    if n1 == n2:
-        g = fdiv(eta2 - eta1, eta2 + eta1)
+    if same:
+        g = wave_gamma_port(eta1, eta2, v[0:2], v[3:5]) if ux else fdiv(eta2 - eta1, eta2 + eta1)
         return okf(g * g)
+    if ux and not (VX_MN < eta1 <= DBL_MAX and VX_MN < eta2 <= DBL_MAX):
+        F = Fraction
+        h1, h2 = rnd53_sqrt(F(v[1]) / F(v[0])), rnd53_sqrt(F(v[4]) / F(v[3]))
+        e, rs = wave_ratio_ux(h2, ci, h1, ct, False)
+        if e:
+            return e
+        e, rp = wave_ratio_ux(h1, ci, h2, ct, False)
+        if e:
+            return e
+        return okf(0.5 * (rs * rs + rp * rp))
     return wave_unpolarized(eta2, eta1, ci, ct, ux)
 
 
@@ -1689,7 +1735,12 @@ def wave_ratio_of(a, x, b, y, strict, ux):
         if (strict and abs(den) < 1e-30) or den == 0.0:
             return dz_err("Fresnel denominator is zero"), None
         return None, fdiv(num, den)
-    P, Q = rnd53(Fraction(a) * Fraction(x)), rnd53(Fraction(b) * Fraction(y))
+    return wave_ratio_ux(Fraction(a), x, Fraction(b), y, strict)
+
+
+def wave_ratio_ux(a, x, b, y, strict):
+    """wave_ratio_of's unbounded chain for Fractions a and b (53-bit values) and doubles x and y."""
+    P, Q = rnd53(a * Fraction(x)), rnd53(b * Fraction(y))
     N, D = rnd53(P - Q), rnd53(P + Q)
     if D == 0 or (strict and abs(D) < Fraction(1e-30)):
         return dz_err("Fresnel denominator is zero"), None
@@ -1922,9 +1973,30 @@ def wave_rust(fn, v, P, K, ux=False):
             if e:
                 return e
         ma, nb = fdiv(float(m), a), fdiv(float(n), b)
-        root = fsqrt(ma * ma + nb * nb)
+        m2, n2 = ma * ma, nb * nb
+        root = fsqrt(m2 + n2)
+        # Row 18's rule (M2 part 2d-2c): where a square is at or below 2^-1022 (and not an exact 0) or their sum past
+        # DBL_MAX, or v/2 at or below 2^-1022, the root runs to 53 bits with an unbounded exponent, f_c and λ_c
+        # rounded once.
+        plain = m2 + n2 <= DBL_MAX and (m == 0 or m2 > VX_MN) and (n == 0 or n2 > VX_MN)
+        F = Fraction
+        R = None
+        if ux and not plain:
+            q, p = rnd53(F(m) / F(a)), rnd53(F(n) / F(b))
+            R = rnd53_sqrt(rnd53(rnd53(q * q) + rnd53(p * p)))
         if fn.endswith("cutoff"):
-            return okf(0.5 * v[4] * root)
+            hv = 0.5 * v[4]
+            if ux and not (plain and hv > VX_MN):
+                if R is None:
+                    q, p = rnd53(F(m) / F(a)), rnd53(F(n) / F(b))
+                    R = rnd53_sqrt(rnd53(rnd53(q * q) + rnd53(p * p)))
+                return okf(rn_frac(F(v[4]) / 2 * R))
+            return okf(hv * root)
+        if R is not None:
+            lam = rn_frac(2 / R)
+            if lam <= DBL_MAX:
+                return okf(lam)
+            root = 0.0
         if math.isnan(root) or root <= 0.0:
             return ip_err(f"cutoff wavelength not representable for a={rust_display(a)}, b={rust_display(b)}")
         return okf(fdiv(2.0, root))
@@ -2185,8 +2257,9 @@ def wave_port(fn, v, K, consts):
     if fn == "wave::effective_aperture" and math.isnan(v[0]):
         return 23, ip_err("wavelength must be non-negative, got NaN")
     if fn in ("wave::fresnel_rs", "wave::fresnel_rp", "wave::reflectance_s", "wave::reflectance_p",
-              "wave::plane_wave_e", "wave::snell_refraction_angle"):
-        # Row 18 (M2 parts 2d-2a, 2d-2b) where the range edge's chain moves the row, on correctly rounded primitives.
+              "wave::plane_wave_e", "wave::snell_refraction_angle", "wave::rectangular_waveguide_cutoff",
+              "wave::rectangular_waveguide_cutoff_wavelength"):
+        # Row 18 (M2 parts 2d-2a to 2d-2c) where the range edge's chain moves the row, on correctly rounded primitives.
         new = wave_rust(fn, v, MPFR_P, K, ux=True)
         return (18, new) if not toks_same(new, wave_rust(fn, v, MPFR_P, K)) else None
     if fn == "wave::schlick_reflectance":
@@ -2217,7 +2290,10 @@ def wave_port(fn, v, K, consts):
         old25 = gamma(wave_lossless(*v[0:3])[1][1], wave_lossless(*v[3:6])[1][1])
         p1, p2 = mat_lossless_port(*v[0:3])[1][1], mat_lossless_port(*v[3:6])[1][1]
         guarded = gamma(p1, p2)
-        new = okf(fdiv(p2 - p1, p2 + p1))               # row 25 amended (M2 part 2d-1): the guard is gone
+        old = okf(fdiv(p2 - p1, p2 + p1))               # row 25 amended (M2 part 2d-1): the guard is gone
+        new = okf(wave_gamma_port(p1, p2, v[0:2], v[3:5]))
+        if not toks_same(new, old):
+            return 18, new                              # the range edge's Γ (M2 part 2d-2c)
         # Row 25 where the relative η or the guard's removal alone moves the row, else row 13 (η rounded once).
         return (25 if not toks_same(old25, rust) or not toks_same(guarded, new) else 13), new
     if fn == "wave::reflectance_at_interface":
@@ -2230,7 +2306,9 @@ def wave_port(fn, v, K, consts):
             return 18, new
         return (17 if not toks_same(old17, wave_rust(fn, v, None, K)) else 13), new
     if fn == "wave::reflectance_normal_materials":
-        return 13, mat_reflectance(v, mat_lossless_port)
+        old13 = mat_reflectance(v, mat_lossless_port)
+        new = mat_reflectance(v, mat_lossless_port, ux=True)
+        return (18 if not toks_same(new, old13) else 13), new
     if fn in ("wave::reflectance_normal", "wave::transmittance_normal"):
         old18 = wave_reflectance_normal(v[0], v[1], exact=True)
         new = wave_reflectance_normal(v[0], v[1], exact=True, ux=True)

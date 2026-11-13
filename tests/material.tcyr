@@ -262,6 +262,16 @@ fn main(): i64 {
     var negmu: BjMaterial = BjMaterial_new(1.0, -1.0, 0.0);
     var tr7, vr7 = vac.try_reflectance_at(negmu);
     assert(is_err_result(tr7) == 1 && vr7 == BJ_ERR_INVALID_PERMEABILITY, "μ_r = −1: InvalidPermeability");
+    # M2 part 2d-2c (ADR 0002 row 18's rule): η's of 2^1023.5 and 2^1023, whose sum passes DBL_MAX.
+    var tny: f64 = _bj_from_bits(1);
+    var p973: f64 = _bj_powi(2.0, 973);
+    var p972: f64 = _bj_powi(2.0, 972);
+    var hb1: BjMaterial = BjMaterial_new(tny, p973, 0.0);
+    var hb2: BjMaterial = BjMaterial_new(tny, p972, 0.0);
+    var tr8, vr8 = hb1.try_reflectance_at(hb2);
+    var r8: f64 = vr8;
+    assert(is_ok(tr8) == 1 && _bj_bits(r8) == 0x3F9E24CC824C9A54,
+      "η₁ + η₂ past DBL_MAX: R = (3 − 2√2)² = 0.0294 on 53-bit η's (Rust: NaN; a plain quotient: 0)");
     var nanm: BjMaterial = BjMaterial_dielectric(nan);
     var tr8, vr8 = vac.try_reflectance_at(nanm);
     assert(is_err_result(tr8) == 1, "ε_r = NaN refused");

@@ -17,7 +17,7 @@
 
 use crate::grids::{Edge2, Rng, knife_edge2, pow2, specials};
 use crate::m_field::{cat, edge_vectors, res_f, v3, vectors};
-use crate::m_material::{dedup, ulps};
+use crate::m_material::{dedup, edge_materials, ulps};
 use crate::tsv::{Class, Module, Tok, err, f, i, s};
 use bijli::field::{FieldVector, SPEED_OF_LIGHT};
 use bijli::material::Material;
@@ -560,6 +560,8 @@ pub fn emit() -> Module {
     emit_eta_guard(&mut m);
     emit_ratio_edges(&mut m);
     emit_flux_edges(&mut m);
+    emit_material_edges(&mut m);
+    emit_guide_edges(&mut m);
     m
 }
 
@@ -668,5 +670,76 @@ fn emit_flux_edges(m: &mut Module) {
     for (n1, n2, t) in [(1e-300, 1e-29, 1e-20), (3e-300, 2e-29, 1e-15), (1e-310, 1e-28, 0.5), (-2e-305, 1e-29, 1e-4)] {
         let ins = [f(n1), f(n2), f(t)];
         m.row("wave::snell_refraction_angle", Class::C, &ins, &res_o(snell_refraction_angle(black_box(n1), n2, t)));
+    }
+}
+
+/// M2 part 2d-2c (bijli ADR 0002 row 18's rule): the material interface at its range edges, on m_material's edge
+/// materials: Γ, R at normal incidence and R at an interface (normal, oblique, steep and grazing incidence). After
+/// every older row.
+fn emit_material_edges(m: &mut Module) {
+    let es = edge_materials();
+    for &a in &es {
+        for &bm in &es {
+            let two = cat(&[mt(a), mt(bm)]);
+            m.row(
+                "wave::material_reflection_coefficient",
+                Class::A,
+                &two,
+                &res_f(material_reflection_coefficient(black_box(&a), &bm)),
+            );
+            m.row(
+                "wave::reflectance_normal_materials",
+                Class::A,
+                &two,
+                &res_f(reflectance_normal_materials(black_box(&a), &bm)),
+            );
+            for c in [1.0, 0.7, 0.2, 0.0] {
+                let ins = cat(&[mt(a), mt(bm), vec![f(c)]]);
+                m.row("wave::reflectance_at_interface", Class::A, &ins, &res_f(reflectance_at_interface(black_box(&a), &bm, c)));
+            }
+        }
+    }
+}
+
+/// M2 part 2d-2c (bijli ADR 0002 row 18's rule): the rectangular waveguides at their range edges: sides whose (m/a)²
+/// falls at or below 2^-1022 (2^511 and its neighbours) or passes DBL_MAX (2^-512; 0.625·2^-511, the sum of two finite
+/// squares; 0.75·2^-511, whose sum stays finite), λ_c = 2/r just inside and past DBL_MAX (8·10^307, 10^308), and
+/// phase velocities whose half is subnormal, 2^-1022 from a tie or exactly. After every older row.
+fn emit_guide_edges(m: &mut Module) {
+    let u = f64::EPSILON;
+    let dims = [
+        22.86e-3,
+        10.16e-3,
+        pow2(511),
+        pow2(511) * (1.0 + u),
+        pow2(511) * (1.0 - u / 2.0),
+        pow2(-512),
+        0.75 * pow2(-511),
+        0.625 * pow2(-511),
+        8e307,
+        1e308,
+    ];
+    let vels = [SPEED_OF_LIGHT, 1e-310, pow2(-1021) - pow2(-1074), pow2(-1021), pow2(-1074), 1e300];
+    for &a in &dims {
+        for &bb in &dims {
+            for (mm, nn) in [(1_u32, 0_u32), (1, 1), (0, 1), (3, 7)] {
+                let four = [f(a), f(bb), i(mm), i(nn)];
+                m.row(
+                    "wave::rectangular_waveguide_cutoff_wavelength",
+                    Class::A,
+                    &four,
+                    &res_f(rectangular_waveguide_cutoff_wavelength(black_box(a), bb, mm, nn)),
+                );
+                for &v in &vels {
+                    let five = [f(a), f(bb), i(mm), i(nn), f(v)];
+                    m.row(
+                        "wave::rectangular_waveguide_cutoff",
+                        Class::A,
+                        &five,
+                        &res_f(rectangular_waveguide_cutoff(black_box(a), bb, mm, nn, v)),
+                    );
+                }
+            }
+        }
     }
 }

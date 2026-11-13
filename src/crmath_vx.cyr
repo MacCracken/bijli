@@ -271,3 +271,79 @@ fn _bj_vx_ratio_ux(a: f64, x: f64, b: f64, y: f64, st: *i64): f64 {
     var r: f64 = _bj_k_ux_div_f64(ns, ne, ds, de);
     return r;
 }
+
+# ── the materials' roots and Γ (M2 part 2d-2c) ───────────────────────────────────────────────────────────────────────
+# A lossless material's η = √(μ_r/ε_r) and n = √(ε_r μ_r) are correctly rounded (ADR 0002 row 13), but η passes DBL_MAX
+# for μ_r/ε_r above about 2^2048 and both go subnormal (coarse) at the other end, while Γ = (η₂ − η₁)/(η₂ + η₁), the
+# Fresnel ratios and cos θ_t depend only on the ratios η₂/η₁ and n₁/n₂. At those edges the roots are taken to 53 bits
+# with an unbounded exponent and the chains run on them (row 18's rule).
+
+# √(x/y) (mode 0) or √(x·y) (mode 1) rounded to 53 bits with an unbounded exponent, for positive finite x and y: the
+# correctly rounded root of the significands' quotient or product (kimiya's _bj_k_cr_sqrt_div, src/crmath_mono.cyr's
+# _bj_cr_sqrt_mono), the exponents' difference or sum made even first (doubling one significand), half of it added back
+# exactly (rounding commutes with scaling by a power of two when the exponent is unbounded).
+#must_use
+fn _bj_vx_sqrt_ux(x: f64, y: f64, mode): (f64, i64) {
+    var xs, xe = _bj_k_ux_from(x);
+    var ys, ye = _bj_k_ux_from(y);
+    var d = xe - ye;
+    if (mode == 1) { d = xe + ye; }
+    var xv: f64 = xs;
+    if ((d & 1) != 0) {
+        xv = xs * 2.0;
+        d = d - 1;
+    }
+    var yv: f64 = ys;
+    var q: f64 = 0.0;
+    if (mode == 0) {
+        q = _bj_k_cr_sqrt_div(xv, yv);
+    } else {
+        var num: f64[2];
+        num[0] = xv;
+        num[1] = yv;
+        q = _bj_cr_sqrt_mono(&num, 2, 0, 0);
+    }
+    var qs, qe = _bj_k_ux_from(q);
+    return (qs, qe + d / 2);
+}
+
+# Γ = (η₂ − η₁)/(η₂ + η₁) between two lossless materials, from their correctly rounded η's and their ε_r and μ_r: Rust's
+# quotient where both η's lie in (2^-1022, DBL_MAX] and their sum is finite (each η is then its 53-bit value, and a
+# difference of normal values below 2^-1022 is exact; an η of exactly 2^-1022 may be a subnormal root rounded up, so it
+# takes the other branch); otherwise the chain on η's rounded to 53 bits with an unbounded exponent, the quotient
+# rounded once (an η of ∞ had made Γ NaN, a sum past DBL_MAX 0, a subnormal η coarse).
+#must_use
+fn _bj_vx_gamma(eta1: f64, eta2: f64, e1: f64, m1: f64, e2: f64, m2: f64): f64 {
+    var den: f64 = eta2 + eta1;
+    var lo: f64 = _BJ_VX_MN;
+    var hi: f64 = _BJ_VX_HI;
+    if (eta1 > lo && eta1 <= hi && eta2 > lo && eta2 <= hi && den <= hi) {
+        var d: f64 = eta2 - eta1;
+        var g: f64 = d / den;
+        return g;
+    }
+    var as1, ae1 = _bj_vx_sqrt_ux(m1, e1, 0);
+    var as2, ae2 = _bj_vx_sqrt_ux(m2, e2, 0);
+    var ns, ne = _bj_k_ux_sub(as2, ae2, as1, ae1);
+    var ds, de = _bj_k_ux_add(as2, ae2, as1, ae1);
+    var g2: f64 = _bj_k_ux_div_f64(ns, ne, ds, de);
+    return g2;
+}
+
+# (a·x − b·y)/(a·x + b·y) as _bj_vx_ratio_ux, for a = as·2^ae and b = bs·2^be given as 53-bit pairs.
+#must_use
+fn _bj_vx_ratio_ux2(as: f64, ae, x: f64, bs: f64, be, y: f64, st: *i64): f64 {
+    var xs, xe = _bj_k_ux_from(x);
+    var ys, ye = _bj_k_ux_from(y);
+    var ps, pe = _bj_k_ux_mul(as, ae, xs, xe);
+    var qs, qe = _bj_k_ux_mul(bs, be, ys, ye);
+    var ns, ne = _bj_k_ux_sub(ps, pe, qs, qe);
+    var ds, de = _bj_k_ux_add(ps, pe, qs, qe);
+    st[0] = 0;
+    if (ds == 0.0) {
+        st[0] = 1;
+        return 0.0;
+    }
+    var r: f64 = _bj_k_ux_div_f64(ns, ne, ds, de);
+    return r;
+}

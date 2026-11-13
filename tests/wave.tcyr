@@ -675,11 +675,11 @@ fn cyrius_tests(): i64 {
     var te4, ve4 = bj_rectangular_waveguide_cutoff_wavelength(1.0, 1.0, 0, 0);
     assert(err_is(te4, ve4, BJ_ERR_INVALID_PARAMETER,
         "invalid parameter: both m and n cannot be zero (no TE₀₀/TM₀₀ mode)") == 1, "the mode text");
-    var big: f64 = _bj_powi(2.0, 600);
+    var big: f64 = _bj_from_bits(0x7FE1CCF385EBC8A0);                    # 1e308
     var te5, ve5 = bj_rectangular_waveguide_cutoff_wavelength(big, big, 1, 0);
     assert(err_starts(te5, ve5, BJ_ERR_INVALID_PARAMETER,
-        "invalid parameter: cutoff wavelength not representable for a=4149515568880993000") == 1,
-      "2^600 m sides: (1/a)² underflows, refused");
+        "invalid parameter: cutoff wavelength not representable for a=1000000000000000000") == 1,
+      "10^308 m sides: λ_c = 2·10^308 is past DBL_MAX, refused");
     var te6, ve6 = bj_guide_wavelength(1.03125, 1.0);
     assert(err_is(te6, ve6, BJ_ERR_INVALID_PARAMETER,
         "invalid parameter: frequency below cutoff: λ/λ_c = 1.0312 (must be < 1)") == 1, "{:.4} rounds a tie to even");
@@ -785,6 +785,65 @@ fn cyrius_tests(): i64 {
     var snv: f64 = sno[0];
     assert(is_ok(tsn) == 1 && vsn == Some && _bj_bits(snv) == 0x0383F559E7BEE6C1,
       "n₁ sin θ_i = 1e-320 over n₂ = 1e-29: θ_t = 1e-291 (Rust: off in the fifth digit)");
+    # M2 part 2d-2c: the material interface's roots and Γ, and the waveguides' root, at their range edges.
+    var sub1: f64 = _bj_from_bits(1);
+    var sub2: f64 = _bj_from_bits(2);
+    var hinf1: BjMaterial = BjMaterial_new(sub1, dmax, 0.0);
+    var hinf2: BjMaterial = BjMaterial_new(sub2, dmax, 0.0);
+    var tg1, vg1 = bj_material_reflection_coefficient(hinf1, hinf2);
+    var g1: f64 = vg1;
+    assert(is_ok(tg1) == 1 && _bj_bits(g1) == 0xBFC5F619980C4336,
+      "row 18, 2d-2c: Γ = −0.1716 between η's past DBL_MAX, on 53-bit roots (Rust: NaN, ∞ − ∞)");
+    var hs1: BjMaterial = BjMaterial_new(dmax, sub1, 0.0);
+    var hs2: BjMaterial = BjMaterial_new(dmax * 0.5, sub1, 0.0);
+    var tg2, vg2 = bj_material_reflection_coefficient(hs1, hs2);
+    var g2: f64 = vg2;
+    assert(is_ok(tg2) == 1 && _bj_bits(g2) == 0x3FC5F619980C4339,
+      "and Γ = 0.1716 between subnormal η's (Rust: refused)");
+    var e15: f64 = _bj_from_bits(0x7FD8000000000000);                    # 1.5·2^1022
+    var m15: f64 = _bj_from_bits(0x0017FFFFFFFFFFFF);                    # (1.5 − 2^-52)·2^-1022
+    var he1: BjMaterial = BjMaterial_new(e15, m15, 0.0);
+    var e1022: f64 = _bj_from_bits(0x7FD0000000000000);
+    var m1022: f64 = _bj_from_bits(0x0010000000000000);
+    var he2: BjMaterial = BjMaterial_new(e1022, m1022, 0.0);
+    var tg3, vg3 = bj_material_reflection_coefficient(he1, he2);
+    var g3: f64 = vg3;
+    assert(is_ok(tg3) == 1 && _bj_bits(g3) == 0x3C90000000000000,
+      "η of 2^-1022 rounded up from a root 2^-1075 below it: Γ = 2^-54, not 0 (Rust: refused)");
+    var vac: BjMaterial = BjMaterial_new(1.0, 1.0, 0.0);
+    var ti1, vi1 = bj_reflectance_at_interface(hinf1, vac, 0.7);
+    var ri1: f64 = vi1;
+    assert(is_ok(ti1) == 1 && ri1 == 1.0, "R = 1 from an η past DBL_MAX into vacuum at cos θ_i = 0.7 (Rust: NaN)");
+    var hn1: BjMaterial = BjMaterial_new(sub1, sub1, 0.0);
+    var hn2: BjMaterial = BjMaterial_new(sub1, sub2, 0.0);
+    var ti2, vi2 = bj_reflectance_at_interface(hn1, hn2, 0.5);
+    var ri2: f64 = vi2;
+    assert(is_ok(ti2) == 1 && _bj_bits(ri2) == 0x3FB3128D3DF41D60,
+      "subnormal n's 2^-1074 and 2^-1073.5 (one double): R = 0.0745 on 53-bit n's, not Γ² = 0.0294 (Rust: refused)");
+    var ek: f64 = _bj_from_bits(0x000FFFFFFD000000);                     # (1 − 1.5·2^-27)·2^-1022
+    var mk: f64 = _bj_from_bits(0x0010000003000000);                     # (1 + 1.5·2^-27)·2^-1022
+    var hk: BjMaterial = BjMaterial_new(ek, mk, 0.0);
+    var hk2: BjMaterial = BjMaterial_new(m1022, m1022, 0.0);
+    var ti3, vi3 = bj_reflectance_at_interface(hk, hk2, 0.0);
+    var ri3: f64 = vi3;
+    assert(is_ok(ti3) == 1 && ri3 == 1.0,
+      "n of 2^-1022 rounded up against 2^-1022: distinct, R = 1 at grazing incidence");
+    var p600: f64 = _bj_powi(2.0, 600);
+    var tw1, vw1 = bj_rectangular_waveguide_cutoff_wavelength(p600, p600, 1, 0);
+    var w1: f64 = vw1;
+    assert(is_ok(tw1) == 1 && _bj_bits(w1) == 0x6580000000000000,
+      "2^600 m sides: λ_c = 2^601, (1/a)² = 2^-1200 run unbounded (Rust: refused, its square underflowed)");
+    var e8: f64 = _bj_from_bits(0x7FDC7B1F3CAC7433);                     # 8e307
+    var tw2, vw2 = bj_rectangular_waveguide_cutoff_wavelength(e8, e8, 1, 0);
+    var w2: f64 = vw2;
+    assert(is_ok(tw2) == 1 && _bj_bits(w2) == 0x7FEC7B1F3CAC7432, "8e307 m sides: λ_c = 1.6e308, representable");
+    var wa: f64 = _bj_from_bits(0x3F97689CA18BD662);                     # 0.02286
+    var em300w: f64 = _bj_from_bits(0x01A56E1FC2F8F359);                 # 1e-300
+    var cw: f64 = _bj_from_bits(0x41B1DE784A000000);                     # c
+    var tw3, vw3 = bj_rectangular_waveguide_cutoff(wa, em300w, 1, 1, cw);
+    var w3c: f64 = vw3;
+    assert(is_ok(tw3) == 1 && _bj_bits(w3c) == 0x7FEAAEB2B6A5174D,
+      "b = 1e-300: f_c = 1.5e308 with (1/b)² past DBL_MAX run unbounded (Rust: ∞)");
 
     test_group("cyrius_adr_row_28");
     var u8: f64 = bj_half_wave_dipole_pattern(0.00000001);

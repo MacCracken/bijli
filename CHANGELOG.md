@@ -300,6 +300,16 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
   `snell_refraction_angle` lost digits when n₁ sin θ_i underflowed. At those edges the chains now run with an unbounded
   exponent (the sine past DBL_MAX by Payne–Hanek) and round once. The cost: `wave/poynting_vector` 65 → 95 ns, the
   other rows within the noise (`port-parity.md` §43).
+- **wave, material** (ADR 0002 row 18 amended, M2 part 2d-2c): Γ (`material_reflection_coefficient`,
+  `Material::try_reflectance_at`, `reflectance_normal_materials`) and `reflectance_at_interface` broke at extreme ε_r
+  and μ_r. An η = √(μ_r/ε_r) of ∞ made Γ and R NaN; η's whose sum passes DBL_MAX gave Γ = 0 for −0.17157; subnormal
+  η's kept a few bits; and a subnormal index (Rust's n = √(ε_r·μ_r) underflowed to 0) refused the interface. Those
+  chains now run on η's and n's rounded to 53 bits with an unbounded exponent (src/crmath_vx.cyr's `_bj_vx_gamma`,
+  `cr_verify.py`'s vx families), and Γ's quotient rounds once. `rectangular_waveguide_cutoff` and
+  `_cutoff_wavelength` gave f_c = ∞, λ_c = 0 or a refusal where the value is representable (sides of 2^600 m:
+  λ_c = 2^601); their root now runs unbounded at the edges, f_c and λ_c round once, and λ_c is refused only past
+  DBL_MAX. The cost, the guards' range tests: `wave/rect_waveguide_cutoff` 46 → 51 ns,
+  `wave/reflectance_at_interface` about 740 → 757 ns (`port-parity.md` §44).
 - **relativity** (ADR 0002 row 13 amended, M2 part 2b-4): `retarded_scalar_potential`, `retarded_vector_potential`,
   `larmor_power` and `EmTensor::dual` rounded two to five times, and overflowed where the value is representable
   (Larmor with q² past DBL_MAX, the dual of B past DBL_MAX/c: ∞ each); they are now correctly rounded for finite

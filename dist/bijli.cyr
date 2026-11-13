@@ -9313,6 +9313,82 @@ fn _bj_vx_ratio_ux(a: f64, x: f64, b: f64, y: f64, st: *i64): f64 {
     return r;
 }
 
+# ── the materials' roots and Γ (M2 part 2d-2c) ───────────────────────────────────────────────────────────────────────
+# A lossless material's η = √(μ_r/ε_r) and n = √(ε_r μ_r) are correctly rounded (ADR 0002 row 13), but η passes DBL_MAX
+# for μ_r/ε_r above about 2^2048 and both go subnormal (coarse) at the other end, while Γ = (η₂ − η₁)/(η₂ + η₁), the
+# Fresnel ratios and cos θ_t depend only on the ratios η₂/η₁ and n₁/n₂. At those edges the roots are taken to 53 bits
+# with an unbounded exponent and the chains run on them (row 18's rule).
+
+# √(x/y) (mode 0) or √(x·y) (mode 1) rounded to 53 bits with an unbounded exponent, for positive finite x and y: the
+# correctly rounded root of the significands' quotient or product (kimiya's _bj_k_cr_sqrt_div, src/crmath_mono.cyr's
+# _bj_cr_sqrt_mono), the exponents' difference or sum made even first (doubling one significand), half of it added back
+# exactly (rounding commutes with scaling by a power of two when the exponent is unbounded).
+#must_use
+fn _bj_vx_sqrt_ux(x: f64, y: f64, mode): (f64, i64) {
+    var xs, xe = _bj_k_ux_from(x);
+    var ys, ye = _bj_k_ux_from(y);
+    var d = xe - ye;
+    if (mode == 1) { d = xe + ye; }
+    var xv: f64 = xs;
+    if ((d & 1) != 0) {
+        xv = xs * 2.0;
+        d = d - 1;
+    }
+    var yv: f64 = ys;
+    var q: f64 = 0.0;
+    if (mode == 0) {
+        q = _bj_k_cr_sqrt_div(xv, yv);
+    } else {
+        var num: f64[2];
+        num[0] = xv;
+        num[1] = yv;
+        q = _bj_cr_sqrt_mono(&num, 2, 0, 0);
+    }
+    var qs, qe = _bj_k_ux_from(q);
+    return (qs, qe + d / 2);
+}
+
+# Γ = (η₂ − η₁)/(η₂ + η₁) between two lossless materials, from their correctly rounded η's and their ε_r and μ_r: Rust's
+# quotient where both η's lie in (2^-1022, DBL_MAX] and their sum is finite (each η is then its 53-bit value, and a
+# difference of normal values below 2^-1022 is exact; an η of exactly 2^-1022 may be a subnormal root rounded up, so it
+# takes the other branch); otherwise the chain on η's rounded to 53 bits with an unbounded exponent, the quotient
+# rounded once (an η of ∞ had made Γ NaN, a sum past DBL_MAX 0, a subnormal η coarse).
+#must_use
+fn _bj_vx_gamma(eta1: f64, eta2: f64, e1: f64, m1: f64, e2: f64, m2: f64): f64 {
+    var den: f64 = eta2 + eta1;
+    var lo: f64 = _BJ_VX_MN;
+    var hi: f64 = _BJ_VX_HI;
+    if (eta1 > lo && eta1 <= hi && eta2 > lo && eta2 <= hi && den <= hi) {
+        var d: f64 = eta2 - eta1;
+        var g: f64 = d / den;
+        return g;
+    }
+    var as1, ae1 = _bj_vx_sqrt_ux(m1, e1, 0);
+    var as2, ae2 = _bj_vx_sqrt_ux(m2, e2, 0);
+    var ns, ne = _bj_k_ux_sub(as2, ae2, as1, ae1);
+    var ds, de = _bj_k_ux_add(as2, ae2, as1, ae1);
+    var g2: f64 = _bj_k_ux_div_f64(ns, ne, ds, de);
+    return g2;
+}
+
+# (a·x − b·y)/(a·x + b·y) as _bj_vx_ratio_ux, for a = as·2^ae and b = bs·2^be given as 53-bit pairs.
+#must_use
+fn _bj_vx_ratio_ux2(as: f64, ae, x: f64, bs: f64, be, y: f64, st: *i64): f64 {
+    var xs, xe = _bj_k_ux_from(x);
+    var ys, ye = _bj_k_ux_from(y);
+    var ps, pe = _bj_k_ux_mul(as, ae, xs, xe);
+    var qs, qe = _bj_k_ux_mul(bs, be, ys, ye);
+    var ns, ne = _bj_k_ux_sub(ps, pe, qs, qe);
+    var ds, de = _bj_k_ux_add(ps, pe, qs, qe);
+    st[0] = 0;
+    if (ds == 0.0) {
+        st[0] = 1;
+        return 0.0;
+    }
+    var r: f64 = _bj_k_ux_div_f64(ns, ne, ds, de);
+    return r;
+}
+
 # --- fmtf.cyr ---
 
 # fmtf.cyr — f64 to text: the shortest round-trip digits, in Rust's Display and serde_json's forms.
@@ -17319,7 +17395,9 @@ impl BjMaterial {
 
     # R = ((η₂ − η₁)/(η₂ + η₁))², the normal-incidence reflectance into `other`, η = √(μ_r/ε_r): right for magnetic
     # media too (ε_r = μ_r = 4 is matched to vacuum). Both materials must be lossless: the errors of
-    # _bj_material_lossless_optical_constants, this material's first. Mirrors `Material::try_reflectance_at`.
+    # _bj_material_lossless_optical_constants, this material's first. Γ as src/crmath_vx.cyr's _bj_vx_gamma (an η past
+    # DBL_MAX or subnormal runs with an unbounded exponent: ADR 0002 row 18's rule, M2 part 2d-2c). Mirrors
+    # `Material::try_reflectance_at`.
     public fn try_reflectance_at(self, other: BjMaterial): Result {
         var c1: f64[2];
         var c2: f64[2];
@@ -17329,7 +17407,7 @@ impl BjMaterial {
         if (is_err_result(t2) == 1) { return Err(v2); }
         var eta1: f64 = c1[1];
         var eta2: f64 = c2[1];
-        var r: f64 = (eta2 - eta1) / (eta2 + eta1);
+        var r: f64 = _bj_vx_gamma(eta1, eta2, self.eps_r, self.mu_r, other.eps_r, other.mu_r);
         var rr: f64 = r * r;
         return Ok(rr);
     }
@@ -17964,8 +18042,9 @@ public fn bj_schlick_reflectance(n1: f64, n2: f64, cos_theta_i: f64): Result {
 # R = (r_s² + r_p²)/2 between two lossless materials from cos θ_i, valid for magnetic media: Snell's law on
 # n = √(ε_r μ_r), the amplitudes on the relative impedance η = √(μ_r/ε_r), r_s = (η₂ cos θ_i − η₁ cos θ_t)/(η₂ cos θ_i +
 # η₁ cos θ_t) and r_p with η₁, η₂ swapped; 1 under total internal reflection, and Γ² = ((η₂ − η₁)/(η₂ + η₁))² for
-# n₁ = n₂. The errors of _bj_material_lossless_optical_constants (mat1's first), then of bj_snell_cos_theta_t. Mirrors
-# `wave::reflectance_at_interface`.
+# n₁ = n₂. The errors of _bj_material_lossless_optical_constants (mat1's first), then of bj_snell_cos_theta_t. A
+# subnormal n, or an η past DBL_MAX or subnormal, runs on the roots to 53 bits with an unbounded exponent (row 18's
+# rule, M2 part 2d-2c). Mirrors `wave::reflectance_at_interface`.
 public fn bj_reflectance_at_interface(mat1: BjMaterial, mat2: BjMaterial, cos_theta_i: f64): Result {
     var o1: f64[2];
     var o2: f64[2];
@@ -17977,20 +18056,58 @@ public fn bj_reflectance_at_interface(mat1: BjMaterial, mat2: BjMaterial, cos_th
     var eta1: f64 = o1[1];
     var n2: f64 = o2[0];
     var eta2: f64 = o2[1];
+    var lo: f64 = _BJ_VX_MN;
+    var hi: f64 = _BJ_VX_HI;
+    var same = 0;
+    if (n1 == n2) { same = 1; }
+    if (!(n1 > lo && n2 > lo)) {
+        # An index at or below 2^-1022 (coarse, or a subnormal root rounded up): the TIR test and cos θ_t depend only on
+        # n₁/n₂, so they run on the 53-bit indices scaled together into the normal range, the smaller clamped at
+        # 2^-200 below the larger (past a ratio of 2^27 both decide alike: TIR below grazing, or cos θ_t = 1).
+        var a1s, a1e = _bj_vx_sqrt_ux(mat1.eps_r, mat1.mu_r, 1);
+        var a2s, a2e = _bj_vx_sqrt_ux(mat2.eps_r, mat2.mu_r, 1);
+        var top = a1e;
+        if (a2e > top) { top = a2e; }
+        var d1 = a1e - top;
+        var d2 = a2e - top;
+        if (d1 < 0 - 200) { d1 = 0 - 200; }
+        if (d2 < 0 - 200) { d2 = 0 - 200; }
+        var s1: f64 = a1s;
+        var s2: f64 = a2s;
+        var p1: f64 = _bj_k_cr_pow2(d1);
+        var p2: f64 = _bj_k_cr_pow2(d2);
+        n1 = s1 * p1;
+        n2 = s2 * p2;
+        same = 0;
+        if (s1 == s2 && a1e == a2e) { same = 1; }
+    }
     var cs: f64[2];
     var t, v = _bj_wave_cosines(n1, n2, cos_theta_i, &cs);
     if (is_err_result(t) == 1) { return Err(v); }
     if (v == None) { return Ok(1.0); }
-    if (n1 == n2) {
-        var d: f64 = eta2 - eta1;
-        var s: f64 = eta2 + eta1;
-        var g: f64 = d / s;
+    if (same == 1) {
+        var g: f64 = _bj_vx_gamma(eta1, eta2, mat1.eps_r, mat1.mu_r, mat2.eps_r, mat2.mu_r);
         var gg: f64 = g * g;
         return Ok(gg);
     }
-    var tu, vu = _bj_wave_unpolarized(eta2, eta1, cs[0], cs[1]);
-    if (is_err_result(tu) == 1) { return Err(vu); }
-    return Ok(vu);
+    if (eta1 > lo && eta1 <= hi && eta2 > lo && eta2 <= hi) {
+        var tu, vu = _bj_wave_unpolarized(eta2, eta1, cs[0], cs[1]);
+        if (is_err_result(tu) == 1) { return Err(vu); }
+        return Ok(vu);
+    }
+    # An η past DBL_MAX or at or below 2^-1022: the ratios on η's rounded to 53 bits with an unbounded exponent.
+    var b1s, b1e = _bj_vx_sqrt_ux(mat1.mu_r, mat1.eps_r, 0);
+    var b2s, b2e = _bj_vx_sqrt_ux(mat2.mu_r, mat2.eps_r, 0);
+    var ci: f64 = cs[0];
+    var ct: f64 = cs[1];
+    var st: i64[1];
+    var rs: f64 = _bj_vx_ratio_ux2(b2s, b2e, ci, b1s, b1e, ct, &st);
+    if (st[0] == 1) { return Err(_bj_err_division_by_zero("Fresnel denominator is zero")); }
+    var rp: f64 = _bj_vx_ratio_ux2(b1s, b1e, ci, b2s, b2e, ct, &st);
+    if (st[0] == 1) { return Err(_bj_err_division_by_zero("Fresnel denominator is zero")); }
+    var sq: f64 = rs * rs + rp * rp;
+    var r: f64 = 0.5 * sq;
+    return Ok(r);
 }
 
 # R = ((η₂ − η₁)/(η₂ + η₁))² at normal incidence between two lossless materials: BjMaterial.try_reflectance_at.
@@ -18006,7 +18123,8 @@ public fn bj_reflectance_normal_materials(mat1: BjMaterial, mat2: BjMaterial): R
 # bj_reflectance_normal_materials' R in the last bits). The errors of _bj_material_lossless_optical_constants, mat1's
 # first. Rust's |η₁ + η₂| < 1e-30 guard is gone (row 25, amended in M2 part 2d-1, the user's answer of 2026-11-13):
 # both η are positive, so their sum never vanishes, and the guard refused only pairs of tiny impedances whose Γ is
-# well defined. Mirrors `wave::material_reflection_coefficient`.
+# well defined. An η past DBL_MAX or subnormal, or a sum past DBL_MAX, runs with an unbounded exponent
+# (src/crmath_vx.cyr's _bj_vx_gamma; row 18's rule, M2 part 2d-2c). Mirrors `wave::material_reflection_coefficient`.
 public fn bj_material_reflection_coefficient(mat1: BjMaterial, mat2: BjMaterial): Result {
     var o1: f64[2];
     var o2: f64[2];
@@ -18016,9 +18134,7 @@ public fn bj_material_reflection_coefficient(mat1: BjMaterial, mat2: BjMaterial)
     if (is_err_result(t2) == 1) { return Err(v2); }
     var eta1: f64 = o1[1];
     var eta2: f64 = o2[1];
-    var den: f64 = eta2 + eta1;
-    var d: f64 = eta2 - eta1;
-    var g: f64 = d / den;
+    var g: f64 = _bj_vx_gamma(eta1, eta2, mat1.eps_r, mat1.mu_r, mat2.eps_r, mat2.mu_r);
     return Ok(g);
 }
 
@@ -18057,38 +18173,82 @@ fn _bj_wave_check_positive(what, x: f64): i64 {
     return BJ_ERR_INVALID_PARAMETER;
 }
 
-# √((m/a)² + (n/b)²).
-fn _bj_wave_rect_root(a: f64, b: f64, m, n): f64 {
+# √((m/a)² + (n/b)²), and pl[0] = 1 when that is the unbounded chain's (row 18's rule, M2 part 2d-2c): each square
+# above 2^-1022 or an exact 0 (m or n = 0) and their sum finite, so every step is its 53-bit value; else 0.
+#must_use
+fn _bj_wave_rect_root(a: f64, b: f64, m, n, pl: *i64): f64 {
     var mf: f64 = f64_from(m);
     var nf: f64 = f64_from(n);
     var ma: f64 = mf / a;
     var nb: f64 = nf / b;
-    var s: f64 = ma * ma + nb * nb;
+    var m2: f64 = ma * ma;
+    var n2: f64 = nb * nb;
+    var s: f64 = m2 + n2;
     var r: f64 = f64_sqrt(s);
+    var ok = 1;
+    if (s > _BJ_VX_HI) { ok = 0; }
+    if (m != 0 && !(m2 > _BJ_VX_MN)) { ok = 0; }
+    if (n != 0 && !(n2 > _BJ_VX_MN)) { ok = 0; }
+    pl[0] = ok;
     return r;
+}
+
+# √((m/a)² + (n/b)²) with an unbounded exponent, each step to 53 bits: (s, e).
+#must_use
+fn _bj_wave_rect_root_ux(a: f64, b: f64, m, n): (f64, i64) {
+    var mf: f64 = f64_from(m);
+    var nf: f64 = f64_from(n);
+    var ms, me = _bj_k_ux_from(mf);
+    var ns, ne = _bj_k_ux_from(nf);
+    var as1, ae1 = _bj_k_ux_from(a);
+    var bs1, be1 = _bj_k_ux_from(b);
+    var qs, qe = _bj_k_ux_div(ms, me, as1, ae1);
+    var ps, pe = _bj_k_ux_div(ns, ne, bs1, be1);
+    var q2s, q2e = _bj_k_ux_mul(qs, qe, qs, qe);
+    var p2s, p2e = _bj_k_ux_mul(ps, pe, ps, pe);
+    var ss, se = _bj_k_ux_add(q2s, q2e, p2s, p2e);
+    var rs, re = _bj_k_ux_sqrt(ss, se);
+    return (rs, re);
 }
 
 # f_c = (v/2)√((m/a)² + (n/b)²) (Hz), the cutoff of a rectangular waveguide's TE_mn or TM_mn mode: a, b its sides
 # (a ≥ b by convention), v the filling medium's phase velocity (c for air), m and n u32s. The errors of the check
-# (m, n, then a, b, then m = n = 0), then InvalidParameter unless v is positive and finite. Mirrors
-# `wave::rectangular_waveguide_cutoff`.
+# (m, n, then a, b, then m = n = 0), then InvalidParameter unless v is positive and finite. Where the root's squares
+# under- or overflow, or v/2 is subnormal, the chain runs with an unbounded exponent and f_c rounds once (row 18's rule,
+# M2 part 2d-2c). Mirrors `wave::rectangular_waveguide_cutoff`.
 public fn bj_rectangular_waveguide_cutoff(a: f64, b: f64, m, n, velocity: f64): Result {
     var c = _bj_wave_check_rect(a, b, m, n);
     if (c != 0) { return Err(c); }
     var cv = _bj_wave_check_positive("wave velocity", velocity);
     if (cv != 0) { return Err(cv); }
-    var r: f64 = _bj_wave_rect_root(a, b, m, n);
+    var pl: i64[1];
+    var r: f64 = _bj_wave_rect_root(a, b, m, n, &pl);
     var hv: f64 = 0.5 * velocity;
     var fc: f64 = hv * r;
-    return Ok(fc);
+    var hm: f64 = _BJ_VX_MN;
+    if (pl[0] == 1 && hv > hm) { return Ok(fc); }
+    var rs, re = _bj_wave_rect_root_ux(a, b, m, n);
+    var vs, ve = _bj_k_ux_from(velocity);
+    var u: f64 = _bj_k_ux_mul_f64(vs, ve - 1, rs, re);
+    return Ok(u);
 }
 
-# λ_c = 2/√((m/a)² + (n/b)²) (m). The check's errors, then InvalidParameter when the root is 0 or NaN (not
-# representable). Mirrors `wave::rectangular_waveguide_cutoff_wavelength`.
+# λ_c = 2/√((m/a)² + (n/b)²) (m). The check's errors, then InvalidParameter when λ_c is not representable: Rust's root
+# 0 or NaN, and at a range edge (squares under- or overflowing) the unbounded chain's λ_c past DBL_MAX; there a
+# representable λ_c is computed and rounded once (row 18's rule, M2 part 2d-2c: Rust gave 0 for an ∞ root and refused
+# sides of 10^300 m). Mirrors `wave::rectangular_waveguide_cutoff_wavelength`.
 public fn bj_rectangular_waveguide_cutoff_wavelength(a: f64, b: f64, m, n): Result {
     var c = _bj_wave_check_rect(a, b, m, n);
     if (c != 0) { return Err(c); }
-    var r: f64 = _bj_wave_rect_root(a, b, m, n);
+    var pl: i64[1];
+    var r: f64 = _bj_wave_rect_root(a, b, m, n, &pl);
+    if (pl[0] == 0) {
+        # At a range edge: λ_c = 2/r rounded once from the unbounded root, "not representable" when it passes DBL_MAX.
+        var rs, re = _bj_wave_rect_root_ux(a, b, m, n);
+        var lu: f64 = _bj_k_ux_div_f64(1.0, 1, rs, re);
+        if (lu <= _BJ_VX_HI) { return Ok(lu); }
+        r = 0.0;
+    }
     if (r != r || r <= 0.0) {
         var t = _bj_err_reason(BJ_ERR_INVALID_PARAMETER);
         _bj_tx_cstr(t, "cutoff wavelength not representable for a=");

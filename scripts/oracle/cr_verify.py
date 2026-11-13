@@ -162,7 +162,7 @@ FUNCS = {
 # division rounds once, to nearest even, onto the subnormal grid), an integer square root for the roots. A call line
 # carries words: an f64's bits, or an integer in two's complement.
 
-from exact import INF, lw_below, lw_sign, rn_frac, rn_lw, rn_nb, rn_sqrt  # noqa: E402  (shared with validate.py)
+from exact import INF, binade, lw_below, lw_sign, rn_frac, rn_lw, rn_nb, rn_sqrt, rnd53, rnd53_sqrt  # noqa: E402
 
 
 def w64(x) -> str:
@@ -528,7 +528,7 @@ EXACT = ["mono"] + list(SHAPES) + ["sqrt_div", "wsqrt", "sqrt_mono", "sqrt_mono_
          "ux_sub", "ux_sqrt", "r2_below", "gamma", "gamma_slow", "gamma2", "gamma2_slow", "gamma_ok", "prod5",
          "prod5_acc", "mono_wide", "mono_wide_acc", "below_prod", "below_quot", "below_sum", "cm", "cm_slow", "cos_t",
          "cos_t_slow", "lw_reff", "lw_reff_slow", "lw_kappa", "lw_kappa_slow", "par", "par_x", "par_slow",
-         "par_rep", "par_rep_x", "par_rep_slow", "lw_nb", "lw_nb_slow"]
+         "par_rep", "par_rep_x", "par_rep_slow", "lw_nb", "lw_nb_slow", "vx_sqrt", "vx_sqrt_e", "vx_gamma"]
 UX = ["ux_exp", "ux_cosh", "ux_sinh", "ux_ln", "ux_pow", "ux_sin", "ux_cos"]
 
 
@@ -1163,6 +1163,63 @@ def nb_families(rng, count):
     return out
 
 
+VX_MN = 2.0 ** -1022
+DBL_MAX = sys.float_info.max
+
+
+def vx_pos(rng):
+    """A positive finite double: subnormal, a special, at either end of the exponent range, or anywhere."""
+    c = rng.random()
+    if c < 0.2:
+        return b2f(rng.randint(1, (1 << 52) - 1))
+    if c < 0.3:
+        return rng.choice([2.0 ** -1074, 2.0 ** -1073, VX_MN, DBL_MAX, DBL_MAX / 2.0, 1.0, 2.0 ** 1023])
+    if c < 0.6:
+        return b2f((rng.choice([rng.randint(1, 40), rng.randint(2006, 2046)]) << 52) | rng.getrandbits(52))
+    return b2f((rng.randint(1, 2046) << 52) | rng.getrandbits(52))
+
+
+def vx_near(x, k):
+    """x moved k ulps, kept positive and finite."""
+    b = min(max(f2b(x) + k, 1), f2b(DBL_MAX))
+    return b2f(b)
+
+
+def vx_families(rng, count):
+    """vx_sqrt, vx_sqrt_e and vx_gamma (M2 part 2d-2c): √(x/y) and √(x·y) to 53 bits with an unbounded exponent (the
+    exact root by isqrt, exact.py's rnd53_sqrt), and Γ against the unbounded chain alone: η = √(μ_r/ε_r) to 53 bits,
+    their difference and sum to 53 bits, the quotient rounded once. That Γ is the expected value everywhere, so the rows
+    where _bj_vx_gamma takes Rust's quotient check its guard's claim too. Pairs of materials independent, sharing ε_r
+    with μ_r a few ulps apart (η's within an ulp: cancellation), and scaled by a power of 4 (equal η's)."""
+    F = Fraction
+    out = []
+    for _ in range(count):
+        x, y = vx_pos(rng), vx_pos(rng)
+        for mode in (0, 1):
+            a = rnd53_sqrt(F(x) / F(y)) if mode == 0 else rnd53_sqrt(F(x) * F(y))
+            e = binade(a)
+            out.append(("vx_sqrt", [x, y, mode], f2b(float(a / F(2) ** e))))
+            out.append(("vx_sqrt_e", [x, y, mode], e & ((1 << 64) - 1)))
+    for j in range(count):
+        e1, m1 = vx_pos(rng), vx_pos(rng)
+        c = j % 3
+        if c == 0:
+            e2, m2 = vx_pos(rng), vx_pos(rng)
+        elif c == 1:
+            e2, m2 = e1, vx_near(m1, rng.randint(-3, 3))
+        else:
+            k = rng.randint(-8, 8)
+            e2, m2 = e1 * 4.0 ** k, m1 * 4.0 ** k
+            if not (0.0 < e2 <= DBL_MAX and 0.0 < m2 <= DBL_MAX):
+                e2, m2 = e1, m1
+        h1, h2 = rnd53_sqrt(F(m1) / F(e1)), rnd53_sqrt(F(m2) / F(e2))
+        num = rnd53(h2 - h1)
+        want = 0.0 if num == 0 else rn_frac(num / rnd53(h2 + h1))
+        eta1, eta2 = rn_sqrt(F(m1) / F(e1)), rn_sqrt(F(m2) / F(e2))
+        out.append(("vx_gamma", [eta1, eta2, e1, m1, e2, m2], f2b(want)))
+    return out
+
+
 def main() -> int:
     (root / "build").mkdir(exist_ok=True)
     names = wanted or list(FUNCS) + ["exact", "ux"]
@@ -1199,6 +1256,9 @@ def main() -> int:
         nrng = random.Random(0x2D_1B)
         calls += [(f, ref, ws) for f, ws, ref in nb_families(nrng, max(1, n // 30))
                   if "exact" in names or f in names]
+        vrng = random.Random(0x2D_2C)
+        calls += [(f, ref, ws) for f, ws, ref in vx_families(vrng, max(1, n // 10))
+                  if "exact" in names or f in names]
         prng2 = random.Random(0x9A_2C5)
         calls += [(f, ref, ws) for f, ws, ref in par_families(prng2, max(1, n // 10))
                   if "exact" in names or f in names]
@@ -1220,7 +1280,7 @@ def main() -> int:
         for t in targets:
             g = results[t][i]
             # "invalid" is a word for these
-            any_nan = name not in UX and not name.startswith(("gamma", "cm", "cos_t", "lw_", "par"))
+            any_nan = name not in UX and not name.startswith(("gamma", "cm", "cos_t", "lw_", "par", "vx_"))
             ok = g == want or (any_nan and b2f(g) != b2f(g) and b2f(want) != b2f(want))
             per.setdefault((name, t), [0, 0])[0 if ok else 1] += 1
             if not ok:

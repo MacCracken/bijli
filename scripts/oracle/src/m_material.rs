@@ -319,5 +319,51 @@ pub fn emit() -> Module {
             );
         }
     }
+     // M2 part 2d-2c (bijli ADR 0002 row 18's rule): Γ between materials whose η = √(μ_r/ε_r) passes DBL_MAX, is
+    // subnormal, sits at 2^-1022, or whose η's sum passes DBL_MAX. After every older row.
+    let es = edge_materials();
+    for &a in &es {
+        for &bm in &es {
+            m.row(
+                "Material::try_reflectance_at",
+                Class::A,
+                &cat(&[mt(a), mt(bm)]),
+                &res_f(black_box(a).try_reflectance_at(&bm)),
+            );
+        }
+    }
     m
+}
+
+/// M2 part 2d-2c: lossless materials at the range edges of η = √(μ_r/ε_r) and n = √(ε_r μ_r). η past DBL_MAX (an ε_r
+/// of 2^-1074 or 10^-320 under a vast μ_r), just below it in pairs whose sum passes DBL_MAX, subnormal, and of 2^-1022
+/// in f64 from a root just below it (rounded up) and exactly; n subnormal, of 2^-1022 rounded up and exactly; with
+/// vacuum, glass and a tiny normal pair as controls.
+pub fn edge_materials() -> Vec<Material> {
+    let u = f64::EPSILON;
+    let k = 1.5 * pow2(25);
+    [
+        (pow2(-1074), f64::MAX),
+        (pow2(-1073), f64::MAX),
+        (1e-320, 1e300),
+        (pow2(-1074), pow2(973)),
+        (pow2(-1074), pow2(972)),
+        (f64::MAX, pow2(-1074)),
+        (f64::MAX / 2.0, pow2(-1074)),
+        (1e300, 1e-316),
+        (1.5 * pow2(1022), (1.5 - u) * pow2(-1022)),
+        (pow2(1022), pow2(-1022)),
+        (1e-310, 1e-310),
+        (2e-310, 1e-310),
+        (pow2(-1074), pow2(-1074)),
+        (pow2(-1074), pow2(-1073)),
+        ((1.0 - k * u) * pow2(-1022), (1.0 + k * u) * pow2(-1022)),
+        (pow2(-1022), pow2(-1022)),
+        (1.0, 1.0),
+        (2.25, 1.0),
+        (1e-200, 1e-200),
+    ]
+    .iter()
+    .map(|&(e, mu)| Material::new(e, mu, 0.0))
+    .collect()
 }

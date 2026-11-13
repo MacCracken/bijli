@@ -34,10 +34,10 @@
 | `wave/snell_refraction` | 1.75 ns | `wave/snell_refraction` | 284.00 ns | 162.6× |
 | `wave/fresnel_rs_direct` | 1.73 ns | `wave/fresnel_rs_direct` | 277.00 ns | 160.1× |
 | `wave/reflectance_unpolarized` | 1.24 ns | `wave/reflectance_unpolarized` | 301.00 ns | 242.7× |
-| `wave/reflectance_at_interface` | 7.78 ns | `wave/reflectance_at_interface` | 747.00 ns | 96.0× |
+| `wave/reflectance_at_interface` | 7.78 ns | `wave/reflectance_at_interface` | 755.00 ns | 97.0× |
 | `wave/schlick_reflectance` | 1.24 ns | `wave/schlick_reflectance` | 265.00 ns | 213.7× |
 | `wave/half_wave_dipole_pattern` | 0.50 ns | `wave/half_wave_dipole_pattern` | 483.00 ns | 962.5× |
-| `wave/rect_waveguide_cutoff` | 1.24 ns | `wave/rect_waveguide_cutoff` | 47.00 ns | 38.0× |
+| `wave/rect_waveguide_cutoff` | 1.24 ns | `wave/rect_waveguide_cutoff` | 51.00 ns | 41.1× |
 | `fdtd/step_100_cells` | 64.09 ns | pending (M5) | — | — |
 | `fdtd/step_1000_cells` | 623.03 ns | pending (M5) | — | — |
 | `fdtd/run_100_steps_500_cells` | 32.23 µs | pending (M5) | — | — |
