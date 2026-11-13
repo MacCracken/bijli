@@ -162,7 +162,7 @@ FUNCS = {
 # division rounds once, to nearest even, onto the subnormal grid), an integer square root for the roots. A call line
 # carries words: an f64's bits, or an integer in two's complement.
 
-from exact import INF, lw_below, lw_sign, rn_frac, rn_lw, rn_sqrt  # noqa: E402  (shared with validate.py)
+from exact import INF, lw_below, lw_sign, rn_frac, rn_lw, rn_nb, rn_sqrt  # noqa: E402  (shared with validate.py)
 
 
 def w64(x) -> str:
@@ -528,7 +528,7 @@ EXACT = ["mono"] + list(SHAPES) + ["sqrt_div", "wsqrt", "sqrt_mono", "sqrt_mono_
          "ux_sub", "ux_sqrt", "r2_below", "gamma", "gamma_slow", "gamma2", "gamma2_slow", "gamma_ok", "prod5",
          "prod5_acc", "mono_wide", "mono_wide_acc", "below_prod", "below_quot", "below_sum", "cm", "cm_slow", "cos_t",
          "cos_t_slow", "lw_reff", "lw_reff_slow", "lw_kappa", "lw_kappa_slow", "par", "par_x", "par_slow",
-         "par_rep", "par_rep_x", "par_rep_slow"]
+         "par_rep", "par_rep_x", "par_rep_slow", "lw_nb", "lw_nb_slow"]
 UX = ["ux_exp", "ux_cosh", "ux_sinh", "ux_ln", "ux_pow", "ux_sin", "ux_cos"]
 
 
@@ -1126,6 +1126,43 @@ def par_families(rng, count):
     return out
 
 
+def nb_families(rng, count):
+    """lw_nb and lw_nb_slow (M2 part 2d-1): each component of n̂ − β on lw_cases' pairs, and on pairs built to cancel
+    (β along n̂ to 2^-k, a Pythagorean R with βᵢ its exact n̂ᵢ's double, zero parts)."""
+    out = []
+    cases = lw_cases(rng, count)
+    for j in range(max(1, count // 4)):
+        c = j % 3
+        if c == 0:
+            n = lw_unit(rng)
+            sc = 2.0 ** rng.randint(-60, 60)
+            sp = 1.0 - 2.0 ** -rng.uniform(1.0, 52.0)
+            r = [x * sc for x in n]
+            b = [cm_ulps(abs(x * sp), rng.randint(-3, 3)) * math.copysign(1.0, x) if x != 0.0 else 0.0 for x in n]
+        elif c == 1:
+            a, bq, cq, d = rng.choice([(3, 4, 0, 5), (1, 2, 2, 3), (2, 3, 6, 7), (1, 4, 8, 9)])
+            sc = 2.0 ** rng.randint(-30, 30)
+            r = [a * sc, bq * sc, cq * sc]
+            b = [a / d * 0.9, bq / d * 0.9, cq / d * 0.9] if rng.random() < 0.5 else [a / d, bq / d * 0.5, 0.0]
+        else:
+            r = [rng.uniform(-3.0, 3.0), 0.0, rng.choice([0.0, -0.0, rng.uniform(-3.0, 3.0)])]
+            b = [rng.uniform(-0.5, 0.5), rng.choice([0.0, -0.0, 0.3]), rng.uniform(-0.5, 0.5)]
+        if lw_valid(r, b):
+            cases.append((r, b))
+    for r, b in cases:
+        below = lw_below(r, b)
+        for i in range(3):
+            if below:
+                want = LW_BELOW
+            elif r[i] == 0.0:
+                want = f2b(r[i] - b[i])
+            else:
+                want = f2b(rn_nb(r, b, i))
+            out.append(("lw_nb", [i] + r + b, want))
+            out.append(("lw_nb_slow", [i] + r + b, want))
+    return out
+
+
 def main() -> int:
     (root / "build").mkdir(exist_ok=True)
     names = wanted or list(FUNCS) + ["exact", "ux"]
@@ -1158,6 +1195,9 @@ def main() -> int:
                   if "exact" in names or f in names]
         lrng = random.Random(0x1E_4A_2C4)
         calls += [(f, ref, ws) for f, ws, ref in lw_families(lrng, max(1, n // 10))
+                  if "exact" in names or f in names]
+        nrng = random.Random(0x2D_1B)
+        calls += [(f, ref, ws) for f, ws, ref in nb_families(nrng, max(1, n // 30))
                   if "exact" in names or f in names]
         prng2 = random.Random(0x9A_2C5)
         calls += [(f, ref, ws) for f, ws, ref in par_families(prng2, max(1, n // 10))

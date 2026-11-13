@@ -1041,7 +1041,7 @@ fn cyrius_tests(): i64 {
     var ub = BjFieldVector_new(ub53, uby, 0.0);
     var ue: BjFieldVector;
     var tue, vue = bj_lienard_wiechert_e(1.0, ur, ub, zv, &ue);
-    assert(is_ok(tue) == 1 && _bj_bits(ue.x) == 0x457A27E39ED9081A && _bj_bits(ue.y) == 0xC705AB0E6277CEDF
+    assert(is_ok(tue) == 1 && _bj_bits(ue.x) == 0x45739DEAB722C614 && _bj_bits(ue.y) == 0xC705AB0E6277CEDF
       && ue.z == 0.0, "κ = 6.0e-17 just off an ultra-relativistic charge's axis: E (Rust: DivisionByZero, κ 0)");
     var kb1: f64 = _bj_from_bits(0x3FEFFFFFFFFFFFFE);
     var kb2: f64 = _bj_from_bits(0x3E56A09E667F3BB9);
@@ -1099,6 +1099,29 @@ fn cyrius_tests(): i64 {
     var trs: f64 = to[0];
     assert(tr1 == 0 && tr2 == 0 && trv == 1.5 && trs == 1.5,
       "R_eff exactly on the midpoint 1.5 + 2^-53: 1.5, ties to even, both paths");
+    # M2 part 2d-1: n̂ − β rounded once, part by part (the user's answer of 2026-11-13).
+    var nr = BjFieldVector_new(3.0, 4.0, 0.0);
+    var nbv = BjFieldVector_new(0.6, 0.0, 0.0);
+    var ne: BjFieldVector;
+    var tne, vne = bj_lienard_wiechert_e(1.0, nr, nbv, zv, &ne);
+    assert(is_ok(tne) == 1 && _bj_bits(ne.x) == 0x3E54ECFF91E29C98 && _bj_bits(ne.y) == 0x41C4ECFF91E29C98
+      && ne.z == 0.0, "R along (3, 4, 0), β = 0.6 x̂: n̂ₓ − βₓ = 3/5 − RN(0.6) = 2.2e-17 (Rust: 1.1e-16, Eₓ 5× high)");
+    tr[0] = 3.0;
+    tr[1] = 4.0;
+    tr[2] = 0.0;
+    tb[0] = 0.6;
+    tb[1] = 0.0;
+    tb[2] = 0.0;
+    var no: f64[4];
+    var nz1 = _bj_cr_lw(&tr, &tb, 2, 0, &no);
+    var nd0: f64 = no[1];
+    var nd1: f64 = no[2];
+    var nd2: f64 = no[3];
+    var nz2 = _bj_cr_lw(&tr, &tb, 2, 1, &no);
+    var ns0: f64 = no[1];
+    var ns1: f64 = no[2];
+    assert(nz1 == 0 && nz2 == 0 && _bj_bits(nd0) == 0x3C7999999999999A && nd1 == 0.8 && _bj_bits(nd2) == 0
+      && ns0 == nd0 && ns1 == nd1, "the parts of n̂ − β by both paths, a zero part Rust's +0 − 0");
 
     test_group("cyrius_tensor_and_four_vector");
     var e = BjFieldVector_new(1.0, 2.0, 3.0);

@@ -557,5 +557,26 @@ pub fn emit() -> Module {
     emit_materials(&mut m, &mut rng);
     emit_normal_antennas(&mut m, &ps, &sh);
     emit_waveguides(&mut m, &mut rng, &ps, &sh);
+    emit_eta_guard(&mut m);
     m
+}
+
+/// M2 part 2d-1 (bijli ADR 0002 row 25 amended): `material_reflection_coefficient` between materials of tiny relative
+/// impedance η = √(μ_r/ε_r) (ε_r = 1, μ_r = η²), across Rust's cut (its absolute sum 376.7·(η₁ + η₂) < 1e-30) and the
+/// port's former one (η₁ + η₂ < 1e-30). After every older row.
+fn emit_eta_guard(m: &mut Module) {
+    let etas = [1e-34, 1e-33, 3e-33, 1e-31, 4e-31, 6e-31, 1e-29];
+    for &e1 in &etas {
+        for &e2 in &etas[2..] {
+            let a = Material::new(1.0, e1 * e1, 0.0);
+            let bm = Material::new(1.0, e2 * e2, 0.0);
+            let two = cat(&[mt(a), mt(bm)]);
+            m.row(
+                "wave::material_reflection_coefficient",
+                Class::A,
+                &two,
+                &res_f(material_reflection_coefficient(black_box(&a), &bm)),
+            );
+        }
+    }
 }

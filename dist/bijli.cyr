@@ -10548,7 +10548,7 @@ fn _bj_cr_lorentz(v: *f64, n, c: f64, mode, slow, out: *f64): i64 {
 # exact quantity, and the value beside it comes from exact differences, correctly rounded, so the two agree: an input
 # the exact test accepts never gets a value of ∞, 0 or NaN from a cancellation, and one it refuses carries the exact
 # value's sign. Clausius–Mossotti's ε_r (M2 part 2c-2), the trig-free Fresnel cosine (2c-3), the Liénard–Wiechert
-# R_eff and κ (2c-4) and the parallel combinations (2c-5) are here.
+# R_eff and κ (2c-4) and n̂ − β (2d-1), and the parallel combinations (2c-5) are here.
 #
 # Clausius–Mossotti (M2 part 2c-2). ε_r = (1 + 2X)/(1 − X) with X = Nα/(3ε₀) is (3ε₀ + 2P)/(3ε₀ − P), P = Nα exactly
 # and ε₀ its double. X ≥ 1 is 3ε₀ − P ≤ 0, and below it ε_r ≤ 0 is 3ε₀ + 2P ≤ 0. The value ε_r is rounded once (to
@@ -11382,10 +11382,271 @@ fn _bj_e_cross_dw(x1: f64, x1h: f64, x1l: f64, y2: f64, y2h: f64, y2l: f64, x2: 
     return (zh, zl);
 }
 
+# ── n̂ − β (M2 part 2d-1, the user's answer of 2026-11-13) ─────────────────────────────────────────────────────────
+#
+# dᵢ = n̂ᵢ − βᵢ = R'ᵢ/√S' − βᵢ, rounded once, for E's velocity term (|n̂ − β|² = 2κ − (1 − |β|²): it vanishes with κ).
+# A zero R'ᵢ keeps Rust's ±0 − βᵢ, exact. Otherwise, fast: R'ᵢ/(q_h + q_l) by kimiya's quotient steps (13.12u² on top
+# of √S' 's 12.08u²), βᵢ subtracted by TwoSum and the lows added once: within E = 27.4u²|n̂ᵢ| + 1.01u²|dᵢ| + 2^-1060
+# (an underflowing step's absolute error). Its ends at ε = (E + 2.02u²|d_h|)(1 + 2^-40) + 2^-1074 bracket dᵢ, so equal
+# nonzero ends are RN(dᵢ). Else exact (bignums, src/fmtf.cyr's with the products here): the sign of sg·dᵢ − μ is that
+# of R̃ − B√S', R̃ = sg·R'ᵢ, B = sg·βᵢ + μ, by the signs of R̃ and B or of R̃² − B²S'. The candidate is the fast
+# estimate when its ends are adjacent, otherwise (a cancellation, R'ᵢ and βᵢ of one sign) N/(√S'(|R'ᵢ| + |βᵢ|√S')) with
+# N = R'ᵢ² − βᵢ²S' exact; sg its sign. A tie would need R'ᵢ/√S' dyadic, which (x² + y² = (4^q − p²)w² has no solution,
+# 4^q − p² ≡ 3 mod 4) only an axis gives, where dᵢ = ±1 − βᵢ; the exact check handles it anyway, ties to even.
+
+# The fast dᵢ's ends (z₁, z₂) for x = R'ᵢ ≠ 0, √S' = q_h + q_l and y = βᵢ (the section comment).
+#must_use
+fn _bj_e_nb_fast(x: f64, qh: f64, ql: f64, y: f64): (f64, f64) {
+    var y0: f64 = x / qh;                           # x/(q_h + q_l): kimiya's steps, inline
+    var a: f64 = y0 * qh;
+    var sp: f64 = 134217729.0;
+    var cy: f64 = sp * y0;
+    var yh: f64 = cy - (cy - y0);
+    var yl: f64 = y0 - yh;
+    var cq: f64 = sp * qh;
+    var qhh: f64 = cq - (cq - qh);
+    var qhl: f64 = qh - qhh;
+    var bb: f64 = (yl * qhl) - (((a - (yh * qhh)) - (yl * qhh)) - (yh * qhl));
+    var s0: f64 = x - a;
+    var s1: f64 = s0 - bb;
+    var s3: f64 = y0 * ql;
+    var rr: f64 = s1 - s3;
+    var dd: f64 = rr / qh;
+    var nh: f64 = y0 + dd;                          # FastTwoSum(y0, dd)
+    var nl: f64 = dd - (nh - y0);
+    var my: f64 = -y;
+    var sh: f64 = nh + my;                          # TwoSum(n_h, −y)
+    var b1: f64 = sh - nh;
+    var st: f64 = (nh - (sh - b1)) + (my - b1);
+    var v: f64 = st + nl;
+    var dh: f64 = sh + v;                           # TwoSum(sh, v)
+    var b2: f64 = dh - sh;
+    var dl: f64 = (sh - (dh - b2)) + (v - b2);
+    var u2: f64 = 0x3950000000000000;               # 2^-106
+    var anh: f64 = f64_abs(nh);
+    var adh: f64 = f64_abs(dh);
+    var t60: f64 = _bj_from_bits(16384);            # 2^-1060
+    var eab: f64 = ((27.4 * u2 * anh) + (1.01 * u2 * adh)) + t60;
+    var g40: f64 = 0x3D70000000000000;              # 2^-40
+    var tiny: f64 = _bj_from_bits(1);               # 2^-1074
+    var eps: f64 = ((eab + (2.02 * u2 * adh)) * (1.0 + g40)) + tiny;
+    var lo: f64 = dl - eps;
+    var hi: f64 = dl + eps;
+    var z1: f64 = dh + lo;
+    var z2: f64 = dh + hi;
+    return (z1, z2);
+}
+
+# Bignum scratch for dᵢ's exact path: S' and |R'ᵢ| and |βᵢ| as integers (the parts at r and b, R scaled by 2^-k).
+# s := S_int with S' = S_int·2^u[0]; returns 0. w and t are scratch.
+fn _bj_e_nb_s(r: *f64, k, s, w, t, u: *i64) {
+    var me[16];
+    var us = 0;
+    var have = 0;
+    store64(s, 0);
+    for (var j = 0; j < 3; j = j + 1) {
+        var x: f64 = r[j];
+        if (x == 0.0) { continue; }
+        _bj_g_split(x, &me);
+        var e2 = 2 * (load64(&me + 8) - k);
+        if (have == 0 || e2 < us) {
+            us = e2;
+            have = 1;
+        }
+    }
+    for (var j2 = 0; j2 < 3; j2 = j2 + 1) {
+        var x2: f64 = r[j2];
+        if (x2 == 0.0) { continue; }
+        _bj_g_split(x2, &me);
+        var m = load64(&me);
+        _bj_bn_set(w, m);
+        _bj_g_mul(w, m, t);
+        _bj_bn_shl(w, 2 * (load64(&me + 8) - k) - us);
+        _bj_g_add_to(s, w);
+    }
+    u[0] = us;
+    return 0;
+}
+
+# The exact sign (−1, 0 or 1) of sg·dᵢ − μ, μ = mm·2^f ≥ 0 (mm = 0 for μ = 0), dᵢ = R'ᵢ/√S' − βᵢ with R'ᵢ ≠ 0 (the
+# section comment).
+#must_use
+fn _bj_e_nb_sign(r: *f64, b: *f64, k, i, sg, mm, f): i64 {
+    var s[1728];
+    var x[1728];
+    var y[1728];
+    var w[1728];
+    var t[1728];
+    var u: i64[1];
+    _bj_e_nb_s(r, k, &s, &w, &t, &u);
+    var us = u[0];
+    var me[16];
+    var ri: f64 = r[i];
+    _bj_g_split(ri, &me);
+    var rm = load64(&me);
+    var re = load64(&me + 8) - k;
+    var sr = sg;                                    # the sign of R̃ = sg·R'ᵢ
+    if (ri < 0.0) { sr = 0 - sg; }
+    var bi: f64 = b[i];
+    var ub = f;                                     # B = sg·βᵢ + μ in units of 2^ub: positive part x, negative part y
+    var be = 0;
+    var bm = 0;
+    if (bi != 0.0) {
+        _bj_g_split(bi, &me);
+        bm = load64(&me);
+        be = load64(&me + 8);
+        if (mm == 0 || be < ub) { ub = be; }
+    }
+    store64(&x, 0);
+    store64(&y, 0);
+    if (mm != 0) {
+        _bj_bn_set(&x, mm);
+        _bj_bn_shl(&x, f - ub);
+    }
+    if (bi != 0.0) {
+        _bj_bn_set(&w, bm);
+        _bj_bn_shl(&w, be - ub);
+        var sb = sg;
+        if (bi < 0.0) { sb = 0 - sg; }
+        if (sb > 0) { _bj_g_add_to(&x, &w); } else { _bj_g_add_to(&y, &w); }
+    }
+    var cb = _bj_bn_cmp(&x, &y);                    # the sign of B, and |B| into x
+    if (cb > 0) { _bj_bn_sub(&x, &y); }
+    if (cb < 0) {
+        _bj_bn_sub(&y, &x);
+        _bj_bn_copy(&x, &y);
+    }
+    if (sr > 0 && cb <= 0) { return 1; }
+    if (sr < 0 && cb >= 0) { return 0 - 1; }
+    _bj_e_bn_mul(&y, &x, &x);                       # B², 2^(2ub)
+    _bj_e_bn_mul(&w, &y, &s);                       # B²S', 2^(2ub + us)
+    _bj_bn_set(&y, rm);                             # R̃², 2^(2re)
+    _bj_g_mul(&y, rm, &t);
+    var d = 2 * re - 2 * ub - us;
+    if (d >= 0) { _bj_bn_shl(&y, d); } else { _bj_bn_shl(&w, 0 - d); }
+    var c = _bj_bn_cmp(&y, &w);
+    if (sr > 0) { return c; }
+    return 0 - c;
+}
+
+# A candidate for |dᵢ| with its sign into sg[0], for R'ᵢ ≠ 0 (q_h ≈ √S'), when the fast estimate's ends are not
+# adjacent (the section comment). Signs and magnitudes come from R itself, scaled through its exponent: R'ᵢ's double
+# may have underflowed.
+#must_use
+fn _bj_e_nb_cand(r: *f64, b: *f64, k, i, qh: f64, sg: *i64): f64 {
+    var y: f64 = b[i];
+    var ri: f64 = r[i];
+    var ay: f64 = f64_abs(y);
+    var ar: f64 = f64_abs(ri);
+    var rs, rex = _bj_e_frexp(ar);                  # |R'ᵢ| = rs·2^(rex − k), rs in [1, 2)
+    var rsv: f64 = rs;
+    var ex = rex - k;
+    sg[0] = 1;
+    if (ri < 0.0) { sg[0] = 0 - 1; }
+    if (y == 0.0 || (ri < 0.0) != (y < 0.0)) {
+        var q: f64 = rsv / qh;
+        var qn: f64 = _bj_g_scale(q, ex);
+        var c0: f64 = qn + ay;
+        return c0;
+    }
+    var s[1728];
+    var nn[1728];
+    var w[1728];
+    var t[1728];
+    var u: i64[1];
+    _bj_e_nb_s(r, k, &s, &w, &t, &u);
+    var us = u[0];
+    var me[16];
+    _bj_g_split(ri, &me);
+    var rm = load64(&me);
+    var re = load64(&me + 8) - k;
+    _bj_g_split(y, &me);
+    var bm = load64(&me);
+    var be = load64(&me + 8);
+    _bj_bn_set(&nn, rm);                            # R'ᵢ², 2^(2re)
+    _bj_g_mul(&nn, rm, &t);
+    _bj_bn_set(&w, bm);                             # βᵢ²S', 2^(2be + us)
+    _bj_g_mul(&w, bm, &t);
+    _bj_e_bn_mul(&t, &w, &s);
+    var un = 2 * re;
+    var d = 2 * re - 2 * be - us;
+    if (d >= 0) {
+        _bj_bn_shl(&nn, d);
+        un = 2 * be + us;
+    } else {
+        _bj_bn_shl(&t, 0 - d);
+    }
+    var c = _bj_bn_cmp(&nn, &t);                    # N = R'ᵢ² − βᵢ²S' = ±|N|·2^un
+    if (c < 0) {
+        sg[0] = 0 - sg[0];
+        _bj_bn_sub(&t, &nn);
+        _bj_bn_copy(&nn, &t);
+    } else {
+        _bj_bn_sub(&nn, &t);
+    }
+    if (load64(&nn) == 0) { return 0.0; }
+    var sh: i64[1];
+    var top = _bj_e_par_top(&nn, &w, &sh);
+    var ft: f64 = f64_from(top);
+    var yn: f64 = _bj_g_scale(ay, 0 - ex);          # |βᵢ| on R'ᵢ's scale
+    var den: f64 = qh * (rsv + (yn * qh));          # (√S'(|R'ᵢ| + |βᵢ|√S'))·2^-ex
+    var c1: f64 = ft / den;
+    var res: f64 = _bj_g_scale(c1, sh[0] + un - ex);
+    return res;
+}
+
+# RN(dᵢ) by the exact path, from the fast ends z₁, z₂ (the section comment).
+#must_use
+fn _bj_e_nb_exact(r: *f64, b: *f64, k, i, x: f64, qh: f64, z1: f64, z2: f64): f64 {
+    var sg: i64[1];
+    sg[0] = 1;
+    var y: f64 = 0.0;
+    var b1 = _bj_bits(z1);
+    var b2 = _bj_bits(z2);
+    var near = 0;
+    if (z1 != 0.0 && z2 != 0.0 && (z1 < 0.0) == (z2 < 0.0)) {
+        var dbits = b2 - b1;
+        if (dbits >= 0 - 1 && dbits <= 1) { near = 1; }
+    }
+    if (near == 1) {
+        if (z1 < 0.0) { sg[0] = 0 - 1; }
+        y = f64_abs(z1);
+    } else {
+        y = _bj_e_nb_cand(r, b, k, i, qh, &sg);
+    }
+    var g = sg[0];
+    var me[16];
+    for (var it = 0; it < 10; it = it + 1) {
+        var up: f64 = _bj_g_step(y, 1);
+        _bj_g_mid(y, up, &me);
+        var su = _bj_e_nb_sign(r, b, k, i, g, load64(&me), load64(&me + 8));
+        if (su > 0) {
+            y = up;
+            continue;
+        }
+        if (su == 0) {
+            y = _bj_g_even(y, up);
+            break;
+        }
+        if (y == 0.0) { break; }
+        var dn: f64 = _bj_g_step(y, 0 - 1);
+        _bj_g_mid(dn, y, &me);
+        var sd = _bj_e_nb_sign(r, b, k, i, g, load64(&me), load64(&me + 8));
+        if (sd < 0) {
+            y = dn;
+            continue;
+        }
+        if (sd == 0) { y = _bj_g_even(dn, y); }
+        break;
+    }
+    if (g < 0) { y = -y; }
+    return y;
+}
+
 # The Liénard–Wiechert R_eff (mode 0) or κ (mode 1), the section comment's, for a finite R ≠ 0 at r and |β| < 1
 # exactly at b. Mode 0: out[0] := RN(|R| − R⋅β), returning 0. Mode 1: 1 when κ < 10^-30 exactly; otherwise 0, with
-# out[0] := RN(1 − R⋅β/|R|). slow = 1 skips the rounding test, so the exact checks always run (cr_verify.py's
-# lw_*_slow).
+# out[0] := RN(1 − R⋅β/|R|). Mode 2: as mode 1, and out[1..3] := RN(R'ᵢ/|R'| − βᵢ), n̂ − β (M2 part 2d-1). slow = 1
+# skips the rounding tests, so the exact checks always run (cr_verify.py's lw_*_slow).
 #must_use
 fn _bj_cr_lw(r: *f64, b: *f64, mode, slow, out: *f64): i64 {
     var w0 = _bj_bits(r[0]);
@@ -11531,7 +11792,7 @@ fn _bj_cr_lw(r: *f64, b: *f64, mode, slow, out: *f64): i64 {
         var wh, wl = _bj_e_dw_add(q_h, q_l, p_h, p_l);
         var w_h: f64 = wh;
         var w_l: f64 = wl;
-        if (mode == 1) {
+        if (mode >= 1) {
             var th, tl = _bj_k_dd_mul(q_h, q_l, w_h, w_l);
             w_h = th;
             w_l = tl;
@@ -11540,7 +11801,9 @@ fn _bj_cr_lw(r: *f64, b: *f64, mode, slow, out: *f64): i64 {
         y = n1z;
         zz = n2z;
     }
-    if (mode == 1) {
+    var km = mode;
+    if (km > 1) { km = 1; }
+    if (km == 1) {
         var lo_t: f64 = 0x39B4484BFEEBAE57;          # 1e-30·(1 − 2^-40), rounded down
         var hi_t: f64 = 0x39B4484BFEEBD6E9;          # 1e-30·(1 + 2^-40), rounded up
         var band = slow;
@@ -11550,9 +11813,31 @@ fn _bj_cr_lw(r: *f64, b: *f64, mode, slow, out: *f64): i64 {
         }
         if (band == 0 && zz < lo_t) { return 1; }
     }
-    if (slow == 1 || y != zz) { y = _bj_e_lw_settle(r, b, k, mode, y); }
+    if (slow == 1 || y != zz) { y = _bj_e_lw_settle(r, b, k, km, y); }
     if (mode == 0) { y = _bj_g_scale(y, k); }
     out[0] = y;
+    if (mode == 2) {
+        var xv: f64[3];
+        xv[0] = x0;
+        xv[1] = x1;
+        xv[2] = x2;
+        for (var j = 0; j < 3; j = j + 1) {
+            var xj: f64 = xv[j];
+            var bj: f64 = b[j];
+            var rj: f64 = r[j];
+            if (rj == 0.0) {
+                var dz: f64 = rj - bj;              # Rust's ±0 − βᵢ, exact
+                out[1 + j] = dz;
+                continue;
+            }
+            var z1, z2 = _bj_e_nb_fast(xj, q_h, q_l, bj);
+            var zl: f64 = z1;
+            var zh: f64 = z2;
+            var dj: f64 = zl;
+            if (slow == 1 || zl != zh || zl == 0.0) { dj = _bj_e_nb_exact(r, b, k, j, xj, q_h, zl, zh); }
+            out[1 + j] = dj;
+        }
+    }
     return 0;
 }
 
@@ -17533,7 +17818,9 @@ public fn bj_reflectance_normal_materials(mat1: BjMaterial, mat2: BjMaterial): R
 # Γ = (η₂ − η₁)/(η₂ + η₁), the reflection coefficient between two lossless materials, on the relative impedances
 # η = √(μ_r/ε_r) (ADR 0002 row 25: Rust took the absolute √(μ_rμ₀/(ε_rε₀)), whose Γ² missed
 # bj_reflectance_normal_materials' R in the last bits). The errors of _bj_material_lossless_optical_constants, mat1's
-# first; DivisionByZero when |η₁ + η₂| < 1e-30. Mirrors `wave::material_reflection_coefficient`.
+# first. Rust's |η₁ + η₂| < 1e-30 guard is gone (row 25, amended in M2 part 2d-1, the user's answer of 2026-11-13):
+# both η are positive, so their sum never vanishes, and the guard refused only pairs of tiny impedances whose Γ is
+# well defined. Mirrors `wave::material_reflection_coefficient`.
 public fn bj_material_reflection_coefficient(mat1: BjMaterial, mat2: BjMaterial): Result {
     var o1: f64[2];
     var o2: f64[2];
@@ -17544,8 +17831,6 @@ public fn bj_material_reflection_coefficient(mat1: BjMaterial, mat2: BjMaterial)
     var eta1: f64 = o1[1];
     var eta2: f64 = o2[1];
     var den: f64 = eta2 + eta1;
-    var m: f64 = f64_abs(den);
-    if (m < 0.000000000000000000000000000001) { return Err(_bj_err_division_by_zero("η₁ + η₂ = 0")); }
     var d: f64 = eta2 - eta1;
     var g: f64 = d / den;
     return Ok(g);
@@ -18900,8 +19185,9 @@ public fn bj_lienard_wiechert_vector_potential(charge: f64, r_vec: BjFieldVector
 # unless |β| < 1 exactly, DivisionByZero for κ < 10^-30 exactly; out untouched on an error. γ² = 1/(1 − |β|²) is
 # correctly rounded from the exact difference (ADR 0002 row 30). For a finite R, κ = (|R| − R⋅β)/|R| is rounded once
 # from the exact S and P, and its test decided on the exact κ (src/crmath_edge.cyr; ADR 0002 row 17, M2 part 2c-4):
-# Rust's 1 − n̂⋅β cancelled as n̂⋅β → 1, and refused a κ of 6e-17 as zero. An ∞ part keeps Rust's κ and its
-# |κ| < 1e-30. Mirrors `relativity::lienard_wiechert_e`.
+# Rust's 1 − n̂⋅β cancelled as n̂⋅β → 1, and refused a κ of 6e-17 as zero. n̂ − β, which vanishes with κ, is rounded
+# once part by part from the same exact parts (row 17, M2 part 2d-1, the user's answer of 2026-11-13). An ∞ part
+# keeps Rust's κ, its |κ| < 1e-30 and its n̂ − β. Mirrors `relativity::lienard_wiechert_e`.
 public fn bj_lienard_wiechert_e(charge: f64, r_vec: BjFieldVector, beta_vec: BjFieldVector, beta_dot: BjFieldVector,
   out: *BjFieldVector): Result {
     var r_mag: f64 = r_vec.magnitude();
@@ -18918,14 +19204,16 @@ public fn bj_lienard_wiechert_e(charge: f64, r_vec: BjFieldVector, beta_vec: BjF
     var n_hat: BjFieldVector = r_vec.scale(inv_r);
     var nb: f64 = n_hat.dot(beta_vec);
     var kappa: f64 = 1.0 - nb;
+    var n_minus_beta: BjFieldVector = BjFieldVector_sub(n_hat, beta_vec);
     var rp: f64[3];
     _bj_rel_parts(r_vec, &rp);
     if (_bj_rel_finite3(&rp) == 1) {
-        var ko: f64[1];
-        if (_bj_cr_lw(&rp, &bp, 1, 0, &ko) == 1) {
+        var ko: f64[4];
+        if (_bj_cr_lw(&rp, &bp, 2, 0, &ko) == 1) {
             return Err(_bj_err_division_by_zero("Liénard-Wiechert denominator (1 − n̂⋅β) is zero"));
         }
         kappa = ko[0];
+        n_minus_beta = BjFieldVector_new(ko[1], ko[2], ko[3]);
     } else {
         var ak: f64 = f64_abs(kappa);
         if (ak < 0.000000000000000000000000000001) {
@@ -18936,7 +19224,6 @@ public fn bj_lienard_wiechert_e(charge: f64, r_vec: BjFieldVector, beta_vec: BjF
     var kappa3: f64 = kappa * kappa * kappa;
     var four_pi_eps0: f64 = 4.0 * _BJ_PI * BJ_EPSILON_0;
     var pre: f64 = charge / four_pi_eps0;
-    var n_minus_beta: BjFieldVector = BjFieldVector_sub(n_hat, beta_vec);
     var dv: f64 = gamma_sq * kappa3 * r_mag * r_mag;
     var fv: f64 = pre / dv;
     var velocity_term: BjFieldVector = n_minus_beta.scale(fv);

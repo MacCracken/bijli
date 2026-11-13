@@ -133,6 +133,16 @@ fn _call(fp, fl, w): i64 {
         if (_bj_cr_lw(w, w + 24, lmode, lslow, &lo) == 1) { return 0 - 1; }
         r = lo[0];
     }
+    elif (_is(fp, fl, "lw_nb") == 1 || _is(fp, fl, "lw_nb_slow") == 1) {
+        # lw_nb i r1 r2 r3 b1 b2 b3: component i of the Liénard–Wiechert n̂ − β, correctly rounded (src/crmath_edge.cyr,
+        # M2 part 2d-1), the exact check alone for lw_nb_slow; −1 (all ones) when κ < 10^-30
+        var ni = load64(w);
+        var nslow = 0;
+        if (fl > 5) { nslow = 1; }
+        var no: f64[4];
+        if (_bj_cr_lw(w + 8, w + 32, 2, nslow, &no) == 1) { return 0 - 1; }
+        r = no[1 + ni];
+    }
     elif (_is(fp, fl, "par") == 1 || _is(fp, fl, "par_slow") == 1 || _is(fp, fl, "par_x") == 1) {
         # par n x1 … xn: the parallel combination 1/Σ 1/xᵢ, correctly rounded (src/crmath_edge.cyr), the exact path
         # alone for par_slow, the expansion then the exact path for par_x; −1 (all ones) when |Σ 1/xᵢ| < 10^-30, −2

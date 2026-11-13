@@ -459,6 +459,7 @@ pub fn emit() -> Module {
     }
     emit_solver(&mut m, &mut rng);
     emit_kappa_edges(&mut m);
+    emit_nb_edges(&mut m);
     m
 }
 
@@ -636,6 +637,34 @@ fn emit_kappa_edges(m: &mut Module) {
         for (j, b) in bx.iter().enumerate() {
             let rv = FieldVector::new(r[0], r[1], r[2]);
             lw_rows(m, 1.0, rv, FieldVector::new(b[0], b[1], b[2]), bdots[(i + j) % 3], true);
+        }
+    }
+}
+
+/// M2 part 2d-1 (bijli ADR 0002 row 17, the user's answer of 2026-11-13): `lienard_wiechert_e` where n̂ − β cancels
+/// part by part: R along Pythagorean directions (a, b, c)/d at scales 2^s, β = f·RN(n̂) for f from ½ to 1 − 2^-52, the
+/// parts rotated, so each n̂ᵢ − βᵢ lands within ulps of 0 for f → 1. After every older row.
+#[allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
+fn emit_nb_edges(m: &mut Module) {
+    let dirs = [
+        (3.0, 4.0, 0.0, 5.0),
+        (1.0, 2.0, 2.0, 3.0),
+        (2.0, 3.0, 6.0, 7.0),
+        (1.0, 4.0, 8.0, 9.0),
+        (4.0, 4.0, 7.0, 9.0),
+    ];
+    let bd = FieldVector::new(1.0, -2.0, 0.5);
+    for (j, &(a, b, c, d)) in dirs.iter().enumerate() {
+        for s in [-40, 0, 7, 300] {
+            let sc = pow2(s);
+            for fr in [0.5, 0.9, 1.0 - pow2(-20), 1.0 - pow2(-52)] {
+                let n = [a / d, b / d, c / d];
+                let k = j % 3;
+                let p = [n[k], n[(k + 1) % 3], n[(k + 2) % 3]];
+                let r = FieldVector::new(p[0] * d * sc, p[1] * d * sc, p[2] * d * sc);
+                let bv = FieldVector::new(p[0] * fr, p[1] * fr, p[2] * fr);
+                lw_rows(m, 1.0, r, bv, bd, false);
+            }
         }
     }
 }

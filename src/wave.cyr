@@ -500,7 +500,9 @@ public fn bj_reflectance_normal_materials(mat1: BjMaterial, mat2: BjMaterial): R
 # Γ = (η₂ − η₁)/(η₂ + η₁), the reflection coefficient between two lossless materials, on the relative impedances
 # η = √(μ_r/ε_r) (ADR 0002 row 25: Rust took the absolute √(μ_rμ₀/(ε_rε₀)), whose Γ² missed
 # bj_reflectance_normal_materials' R in the last bits). The errors of _bj_material_lossless_optical_constants, mat1's
-# first; DivisionByZero when |η₁ + η₂| < 1e-30. Mirrors `wave::material_reflection_coefficient`.
+# first. Rust's |η₁ + η₂| < 1e-30 guard is gone (row 25, amended in M2 part 2d-1, the user's answer of 2026-11-13):
+# both η are positive, so their sum never vanishes, and the guard refused only pairs of tiny impedances whose Γ is
+# well defined. Mirrors `wave::material_reflection_coefficient`.
 public fn bj_material_reflection_coefficient(mat1: BjMaterial, mat2: BjMaterial): Result {
     var o1: f64[2];
     var o2: f64[2];
@@ -511,8 +513,6 @@ public fn bj_material_reflection_coefficient(mat1: BjMaterial, mat2: BjMaterial)
     var eta1: f64 = o1[1];
     var eta2: f64 = o2[1];
     var den: f64 = eta2 + eta1;
-    var m: f64 = f64_abs(den);
-    if (m < 0.000000000000000000000000000001) { return Err(_bj_err_division_by_zero("η₁ + η₂ = 0")); }
     var d: f64 = eta2 - eta1;
     var g: f64 = d / den;
     return Ok(g);

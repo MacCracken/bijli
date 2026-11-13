@@ -733,6 +733,12 @@ fn cyrius_tests(): i64 {
     var refl: f64 = vr;
     var gam2: f64 = gam * gam;
     assert(is_ok(tg) == 1 && is_ok(tr) == 1 && gam2 == refl, "row 25: Γ² is R bit for bit");
+    var mu1: f64 = _bj_from_bits(0x31F0000000000000);                    # 2^-224: η₁ = 2^-112
+    var mu2: f64 = _bj_from_bits(0x3230000000000000);                    # 2^-220: η₂ = 2^-110
+    var tg3, vg3 = bj_material_reflection_coefficient(BjMaterial_new(1.0, mu1, 0.0), BjMaterial_new(1.0, mu2, 0.0));
+    var gam3: f64 = vg3;
+    assert(is_ok(tg3) == 1 && gam3 == 0.6,
+      "row 25, 2d-1: η₁ + η₂ = 9.6e-34, the guard gone: Γ = 3/5 (Rust: DivisionByZero)");
 
     test_group("cyrius_adr_row_28");
     var u8: f64 = bj_half_wave_dipole_pattern(0.00000001);

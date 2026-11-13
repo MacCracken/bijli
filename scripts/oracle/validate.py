@@ -2127,9 +2127,11 @@ def wave_port(fn, v, K, consts):
             return okf(fdiv(eta2 - eta1, den))
         rust = wave_rust(fn, v, None, K)
         old25 = gamma(wave_lossless(*v[0:3])[1][1], wave_lossless(*v[3:6])[1][1])
-        new = gamma(mat_lossless_port(*v[0:3])[1][1], mat_lossless_port(*v[3:6])[1][1])
-        # Row 25 where the relative η alone moves the row, else row 13 (η rounded once).
-        return (25 if not toks_same(old25, rust) else 13), new
+        p1, p2 = mat_lossless_port(*v[0:3])[1][1], mat_lossless_port(*v[3:6])[1][1]
+        guarded = gamma(p1, p2)
+        new = okf(fdiv(p2 - p1, p2 + p1))               # row 25 amended (M2 part 2d-1): the guard is gone
+        # Row 25 where the relative η or the guard's removal alone moves the row, else row 13 (η rounded once).
+        return (25 if not toks_same(old25, rust) or not toks_same(guarded, new) else 13), new
     if fn == "wave::reflectance_at_interface":
         # Row 17 where the exact TIR and cos θ_t alone move the row, else row 13 (n and η rounded once).
         old17 = wave_interface(v, wave_lossless, exact=True)
@@ -2665,6 +2667,8 @@ def rel_rust(fn, v, O, K):
         k3 = kappa * kappa * kappa
         pre = fdiv(q, 4.0 * PI * EPS0)
         nmb = [n[i] - bv[i] for i in range(3)]
+        if O["r17"] and _fin(*r):                # row 17 (M2 part 2d-1): n̂ − β rounded once, part by part
+            nmb = [rn_nb(r, bv, i) if r[i] != 0.0 else nmb[i] for i in range(3)]
         fv = fdiv(pre, g2 * k3 * r_mag * r_mag)
         vt = [x * fv for x in nmb]
         co = O["cross"](n, O["cross"](nmb, bd))
@@ -3364,7 +3368,7 @@ def json_corrections(rows) -> list:
 # Row 13 (the user's "round once" decision of 2026-11-12): one product, quotient or root of inputs and constants,
 # correctly rounded where its operands are finite; an infinite or NaN operand, and every error, keeps Rust's result.
 
-from exact import lw_below, rn_lw, rn_mono, rn_sqrt  # noqa: E402
+from exact import lw_below, rn_lw, rn_mono, rn_nb, rn_sqrt  # noqa: E402
 
 
 def _fin(*xs) -> bool:

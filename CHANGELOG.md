@@ -280,6 +280,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
   then the exact fraction on bignums; `cr_verify.py`'s par families); an ∞ value adds 0. The exact path allocates, so
   it can now return Allocation. The cost: `circuit/resistance_parallel` 30 → 384 ns, 64 values 241 → 3,453 ns, and a
   pair cancelling to an ulp 25 → 3,554 ns (`port-parity.md` §40).
+- **wave** (ADR 0002 row 25 amended, M2 part 2d-1, the user's answer of 2026-11-13): `material_reflection_coefficient`
+  refused |η₁ + η₂| < 1e-30, though both relative impedances are positive and Γ depends only on their ratio; the
+  guard is gone, so pairs of tiny impedances (η = 2^-112 and 2^-110: Γ = 3/5) are computed where Rust refused them.
+- **relativity** (ADR 0002 row 17 amended, M2 part 2d-1, the user's answer of 2026-11-13): `lienard_wiechert_e`'s
+  n̂ − β, which vanishes with κ, kept Rust's n̂ = R·RN(1/|R|): along (3, 4, 0) with β = 0.6 x̂ its x part came out
+  1.1e-16 for 2.2e-17 and Eₓ five times too large, and just off an ultra-relativistic axis Eₓ was a third high with κ
+  exact. Each part is now rounded once from κ's exact parts (`src/crmath_edge.cyr`, `cr_verify.py`'s lw_nb families).
+  The cost: `relativity/lienard_wiechert_e` 639 → 763 ns, near the cone 1,521 → 1,822 ns (`port-parity.md` §41).
 - **relativity** (ADR 0002 row 13 amended, M2 part 2b-4): `retarded_scalar_potential`, `retarded_vector_potential`,
   `larmor_power` and `EmTensor::dual` rounded two to five times, and overflowed where the value is representable
   (Larmor with q² past DBL_MAX, the dual of B past DBL_MAX/c: ∞ each); they are now correctly rounded for finite

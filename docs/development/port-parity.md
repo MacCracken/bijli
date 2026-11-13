@@ -2134,3 +2134,50 @@ The last of 2c's boundary values (the user's answer of 2026-11-12: exact tests, 
   drops its |η₁ + η₂| < 1e-30 guard, since positive relative impedances never sum to zero and Γ depends only on their
   ratio (row 24's rule, as for Schlick's R₀); and `lienard_wiechert_e`'s n̂ − β is rounded once from the exact parts,
   as κ is (§39's finding). Both open 2d.
+
+## 41. M2 part 2d-1: the η-sum guard dropped, Liénard–Wiechert's n̂ − β rounded once (2026-11-13)
+
+2d opens with the user's answers of 2026-11-13 on the two findings held for the end of 2c.
+
+- **ADR 0002 row 25, amended**: `material_reflection_coefficient` no longer refuses |η₁ + η₂| < 1e-30. Both relative
+  impedances are positive (RN(√(μ_r/ε_r)) of positive finite values never rounds to 0), so their sum never vanishes,
+  and Γ = (η₂ − η₁)/(η₂ + η₁) depends only on their ratio: the guard refused only pairs of tiny impedances whose Γ is
+  well defined (row 24's rule, as for Schlick's R₀). Rust's guard sat on the absolute impedances' sum, 376.7 times the
+  relative one, so the port's had refused pairs Rust computed (η₁ + η₂ from about 2.7·10^-33 to 10^-30); now
+  neither refuses. Γ = 3/5 for η = 2^-112 and 2^-110 (Rust: DivisionByZero).
+- **ADR 0002 row 17, amended**: `lienard_wiechert_e`'s n̂ − β is rounded once part by part
+  (`src/crmath_edge.cyr`'s `_bj_cr_lw` mode 2, beside κ, sharing its scaling, splits and √S'). It vanishes with κ
+  (|n̂ − β|² = 2κ − (1 − |β|²)), and Rust's n̂ = R·RN(1/|R|) carried two roundings into the difference:
+  - along (3, 4, 0) with β = 0.6 x̂, n̂ₓ − βₓ = 3/5 − RN(0.6) = 2.2e-17 came out 1.1e-16, Eₓ five times too large;
+  - just off the ultra-relativistic axis of §39 (κ = 6.0e-17), n̂ₓ − βₓ is 0.75·2^-53, not 2^-53: Eₓ was a third
+    high even with κ exact;
+  - of the 903 E rows 2c-4 had mapped and this moves again, 118 move by more than 10^-6 relative, 32 by more than 1 %.
+- **The parts** (the section comment): dᵢ = R'ᵢ/√S' − βᵢ by kimiya's quotient steps on √S' 's double-word, βᵢ taken off
+  by TwoSum, within 27.4u²|n̂ᵢ| + 1.01u²|dᵢ| + 2^-1060 (an underflowing step); equal nonzero ends of the widened test
+  are RN(dᵢ). Otherwise the exact sign of sg·dᵢ − μ is that of R̃ − B√S' (R̃ = sg·R'ᵢ, B = sg·βᵢ + μ), by their signs or
+  R̃² − B²S' on bignums; the candidate is the fast estimate when its ends are adjacent, else N/(√S'(|R'ᵢ| + |βᵢ|√S'))
+  with N = R'ᵢ² − βᵢ²S' exact (R'ᵢ and βᵢ of one sign, the only cancelling case). Signs and scales come from R
+  itself: the first run returned +0 for 80 parts whose scaled R'ᵢ had underflowed to −0 (a tiny negative part, so
+  RN(dᵢ) = −0); fixed before any further run. A zero Rᵢ keeps Rust's ±0 − βᵢ, exact. Ties need R'ᵢ/√S' dyadic, which
+  only an axis gives.
+- **Rows**: `m_wave.rs`'s `emit_eta_guard`, 35 (η from 10^-34 to 10^-29 across both cuts), and `m_relativity.rs`'s
+  `emit_nb_edges`, 80 (five Pythagorean directions at scales 2^-40 to 2^300, β = f·RN(n̂) for f = ½, 0.9, 1 − 2^-20 and
+  1 − 2^-52, the parts rotated), each after every older row. `validate.py`'s transcription agreed with every row.
+- **Mappings**: `wave.adr.tsv` maps 22 more row-25 rows (the 4 older rows Rust refused, η = 10^-300 and 10^-200, and
+  18 new ones). `relativity.adr.tsv` grows from 4,718 rows to 5,131: row 17 labels 1,379 E rows (809 under 2c-4; 89
+  moved from row 18 and 83 from row 30, since n̂ − β changes them too) and 40 fields rows. All pass.
+- **`cr_verify.py`'s lw_nb and lw_nb_slow** (exact families; each part of n̂ − β, the slow one the exact check alone)
+  on lw_cases' pairs and on pairs built to cancel (β along n̂ to ulps, Pythagorean R with β at its own n̂'s doubles,
+  zero and signed-zero parts): **374,982 calls, all equal to the exact value on x86_64 and aarch64**, and the four lw
+  families rerun on the shared code, 600,000 calls, all equal.
+- **Tests**: tests/wave.tcyr's row-25 group gains Γ = 3/5 for η = 2^-112 and 2^-110 (Rust: DivisionByZero);
+  tests/relativity.tcyr's row-17 group gains E along (3, 4, 0) and the parts of n̂ − β by both paths, and §39's
+  near-axis E takes its new Eₓ.
+- **Benchmarks** (an interleaved A/B against HEAD, three rounds each, load 4.3–5.8: this bite's verifier and another
+  repository's tests ran beside it, so both columns are inflated alike; each figure the lower of the three):
+  `relativity/lienard_wiechert_e` 639 → 763 ns, the near-cone E probe (§39's) 1,521 → 1,822 ns: the three parts' fast
+  paths, about 40 dependent f64 operations each. The potentials and the other rows held within the noise
+  (`lienard_wiechert_fields_orbit_b099` 6.30 → 6.75 µs, its rounds spread over 6.3–7.3). A finding, recorded.
+- **Result, every target** (x86_64 ELF, x86_64 PE, aarch64): **13 modules, 0 failing; 400,686 ok, 0 failed, 0
+  measured, 0 pending, 40,563 accepted (ADR 01: 8,998; ADR 0002: 31,565)** over 441,249 rows; **all 276 digests
+  equal**. Three changed: E, the fields and the reflection coefficient.

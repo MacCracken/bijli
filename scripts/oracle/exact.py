@@ -4,7 +4,8 @@ rn_frac(v): RN(v) for a Fraction v, rounded once to nearest even onto binary64 (
 that, the subnormal grid included), ±∞ past DBL_MAX's rounding boundary. rn_sqrt(v): RN(√v) for a Fraction v > 0,
 exactly (an integer square root and an exact midpoint comparison). rn_mono(num, den): RN(Π num / Π den) for finite
 doubles, a zero factor giving IEEE's signed zero (the xor of the factors' signs). rn_lw(r, b, mode): the
-Liénard–Wiechert RN(|R| − R⋅β) (mode 0) or RN(1 − R⋅β/|R|) (mode 1) exactly, and lw_sign the exact signs it rests on.
+Liénard–Wiechert RN(|R| − R⋅β) (mode 0) or RN(1 − R⋅β/|R|) (mode 1) exactly, and lw_sign the exact signs it rests on;
+rn_nb(r, b, i): RN(Rᵢ/|R| − βᵢ), a component of n̂ − β, with nb_sign.
 """
 import math
 import struct
@@ -147,3 +148,54 @@ def rn_lw(r, b, mode) -> float:
 def lw_below(r, b) -> bool:
     """κ = 1 − R⋅β/|R| < 10^-30 exactly (lienard_wiechert_e's DivisionByZero)."""
     return lw_sign(r, b, 1, Fraction(1, 10 ** 30)) < 0
+
+
+def nb_sign(r, b, i, sg, mu) -> int:
+    """The sign (−1, 0 or 1), exactly, of sg·(Rᵢ/|R| − βᵢ) − μ for Rᵢ ≠ 0 and μ ≥ 0: that of R̃ − B·|R|, R̃ = sg·Rᵢ and
+    B = sg·βᵢ + μ, by their signs or by R̃² − B²·|R|²."""
+    s = sum(Fraction(x) ** 2 for x in r)
+    rt = sg * Fraction(r[i])
+    bb = sg * Fraction(b[i]) + mu
+    if rt > 0 and bb <= 0:
+        return 1
+    if rt < 0 and bb >= 0:
+        return -1
+    d = rt * rt - bb * bb * s
+    c = (d > 0) - (d < 0)
+    return c if rt > 0 else -c
+
+
+def rn_nb(r, b, i) -> float:
+    """RN(Rᵢ/|R| − βᵢ) exactly, for a finite R with Rᵢ ≠ 0 and |β| < 1: an approximation within 2^-699 of the value
+    (relative; through (Rᵢ² − βᵢ²|R|²)/(|R|(Rᵢ + βᵢ|R|)) when Rᵢ and βᵢ share a sign), rounded, then moved by the exact
+    signs at the neighbouring midpoints of its magnitude, ties to even."""
+    s = sum(Fraction(x) ** 2 for x in r)
+    x, y = Fraction(r[i]), Fraction(b[i])
+    k = max(0, (1400 - binade(s)) // 2 + 1)
+    sq = Fraction(math.isqrt(math.floor(s * 4 ** k)), 2 ** k)
+    if y == 0 or (x < 0) != (y < 0):
+        v = x / sq - y
+    else:
+        v = (x * x - y * y * s) / (sq * (x + y * sq))
+    sg = 1 if v > 0 else -1
+    a = abs(rn_frac(abs(v)))
+    for _ in range(12):
+        up = math.nextafter(a, INF)
+        c = nb_sign(r, b, i, sg, (Fraction(a) + Fraction(up)) / 2)
+        if c > 0:
+            a = up
+            continue
+        if c == 0:
+            a = up if (struct.unpack("<Q", struct.pack("<d", a))[0] & 1) else a
+            break
+        if a == 0.0:
+            break
+        dn = math.nextafter(a, -INF)
+        c = nb_sign(r, b, i, sg, (Fraction(a) + Fraction(dn)) / 2)
+        if c < 0:
+            a = dn
+            continue
+        if c == 0:
+            a = dn if (struct.unpack("<Q", struct.pack("<d", dn))[0] & 1) == 0 else a
+        break
+    return a if sg > 0 else -a

@@ -60,8 +60,8 @@ port's harness reads the same files. This README records what is specific to bij
 | `material` | M2 (parts 1a, 2c-1, 2c-2) | 53,873 | `src/m_material.rs` (field.rs's vectors) | — |
 | `math` | M0 (+ sinh, cosh and 125 corrected, M1) | 36,522 | `src/m_math.rs` | — |
 | `maxwell` | M1 (part 3d) | 20,349 | `src/m_maxwell.rs` | — |
-| `relativity` | M2 (parts 1d-1, 1d-2: the solver over six trajectories; 2c-1, 2c-4) | 29,591 | `src/m_relativity.rs` (field.rs's vectors) | — |
-| `wave` | M2 (parts 1b, 2c-1, 2c-3) | 71,216 (+ 1 corrected) | `src/m_wave.rs` (field.rs's vectors, material.tsv's materials) | `src/wave_data.cyr`, the dipole constants of ADR 0002 row 22 (`validate.py`'s `render_wave_data`: Cin(2π) by its series, π by Machin's formula checked against MPFR, η₀ from BJ_MU_0 and BJ_EPSILON_0, in rational arithmetic) |
+| `relativity` | M2 (parts 1d-1, 1d-2: the solver over six trajectories; 2c-1, 2c-4, 2d-1) | 29,671 | `src/m_relativity.rs` (field.rs's vectors) | — |
+| `wave` | M2 (parts 1b, 2c-1, 2c-3, 2d-1) | 71,251 (+ 1 corrected) | `src/m_wave.rs` (field.rs's vectors, material.tsv's materials) | `src/wave_data.cyr`, the dipole constants of ADR 0002 row 22 (`validate.py`'s `render_wave_data`: Cin(2π) by its series, π by Machin's formula checked against MPFR, η₀ from BJ_MU_0 and BJ_EPSILON_0, in rational arithmetic) |
 | (correctly rounded tables) | M1 | — | — | `src/crmath_data.cyr` (`crtables.py`, written and checked by `validate.py`) |
 | (2/π for the angle past DBL_MAX, bijli's) | M1 (part 5d-3) | — | — | `src/crmath_ux_data.cyr` (`crtables.py`'s `render_ux`, from π to 2,800 bits checked against MPFR) |
 | (correctly rounded tables, kimiya's) | M1 | — | — | `src/crmath_k_data.cyr` (`crtables_k.py`, written and checked by `validate.py`) |
@@ -95,7 +95,8 @@ edges. Its lw_reff, lw_kappa, lw_reff_slow and lw_kappa_slow families (M2 part 2
 R_eff = |R| − R⋅β and κ = R_eff/|R|, rounded once (and κ < 10^-30 exactly, the slow ones always deciding it exactly),
 against `exact.py`'s `rn_lw` and `lw_below`: R along β as |β| → 1, a charge seen just off its axis, κ's knife edge
 bisected to the lattice points on either side of 10^-30, constructed ties along Pythagorean directions, the far/near
-edge n̂⋅β = ½, extreme scales and spreads. Its par families (M2 part 2c-5) check its parallel combination
+edge n̂⋅β = ½, extreme scales and spreads; lw_nb and lw_nb_slow (M2 part 2d-1) each part of n̂ − β on those pairs and
+on Pythagorean directions with β at their own n̂'s doubles. Its par families (M2 part 2c-5) check its parallel combination
 1/Σ 1/xᵢ, rounded once with |Σ| < 10^-30 decided exactly, against Fractions: `par` through the three tiers, `par_x` from
 the expansion on, `par_slow` the exact path alone, and `par_rep*` the same over short patterns repeated up to 20,000
 times (`cr_driver.cyr` builds the list): knife edges at 10^-30, sums cancelling to 0 or to ulps, exact midpoints,
