@@ -1032,7 +1032,8 @@ public fn _par_charge(fp, fl): i64 {
     return 0;
 }
 
-# `f64::fmt_display` and `serde_json::f64` rows: src/fmtf.cyr's two layouts, into a bounded BjText.
+# `f64::fmt_display`, `f64::fmt_debug`, `serde_json::f64` and `f64::fmt_fixed` rows: src/fmtf.cyr's layouts, into a
+# bounded BjText.
 fn _par_fmtf(fp, fl): i64 {
     var x: f64 = _par_in(0);
     var buf[400];
@@ -1044,6 +1045,8 @@ fn _par_fmtf(fp, fl): i64 {
         _bj_fmt_f64_debug(&t, x);
     } elif (_par_eq(fp, fl, "serde_json::f64") == 1) {
         _bj_fmt_f64_json(&t, x);
+    } elif (_par_eq(fp, fl, "f64::fmt_fixed") == 1) {
+        _bj_fmt_f64_fixed(&t, x, _par_in(1));
     } else {
         return 0;
     }
@@ -1311,6 +1314,280 @@ public fn _par_material(fp, fl): i64 {
     return 0;
 }
 
+# `wave::*` rows: src/wave.cyr (M2 part 1b). A `Result<Option<f64>>` is the error, `n:` for Ok(None), or the value.
+fn _par_got_res_o(t, v, x: f64) {
+    if (is_err_result(t) == 1) { return _par_got_error(v); }
+    if (v == None) { return _par_got_none(); }
+    _par_got_f(x);
+    return 0;
+}
+
+# The one-argument and argument-free wave rows.
+fn _par_wave1(fp, fl): i64 {
+    if (_par_eq(fp, fl, "wave::hertzian_dipole_directivity") == 1) {
+        var d1: f64 = bj_hertzian_dipole_directivity();
+        _par_got_f(d1);
+        return 1;
+    }
+    if (_par_eq(fp, fl, "wave::half_wave_dipole_directivity") == 1) {
+        var d2: f64 = bj_half_wave_dipole_directivity();
+        _par_got_f(d2);
+        return 1;
+    }
+    if (_par_eq(fp, fl, "wave::half_wave_dipole_radiation_resistance") == 1) {
+        var d3: f64 = bj_half_wave_dipole_radiation_resistance();
+        _par_got_f(d3);
+        return 1;
+    }
+    var a: f64 = _par_in(0);
+    if (_par_eq(fp, fl, "wave::plane_wave_intensity") == 1) {
+        var r1: f64 = bj_plane_wave_intensity(a);
+        _par_got_f(r1);
+        return 1;
+    }
+    if (_par_eq(fp, fl, "wave::radiation_pressure_absorbed") == 1) {
+        var r2: f64 = bj_radiation_pressure_absorbed(a);
+        _par_got_f(r2);
+        return 1;
+    }
+    if (_par_eq(fp, fl, "wave::radiation_pressure_reflected") == 1) {
+        var r3: f64 = bj_radiation_pressure_reflected(a);
+        _par_got_f(r3);
+        return 1;
+    }
+    if (_par_eq(fp, fl, "wave::e_from_b") == 1) {
+        var r4: f64 = bj_e_from_b(a);
+        _par_got_f(r4);
+        return 1;
+    }
+    if (_par_eq(fp, fl, "wave::b_from_e") == 1) {
+        var r5: f64 = bj_b_from_e(a);
+        _par_got_f(r5);
+        return 1;
+    }
+    if (_par_eq(fp, fl, "wave::angular_frequency") == 1) {
+        var r6: f64 = bj_angular_frequency(a);
+        _par_got_f(r6);
+        return 1;
+    }
+    if (_par_eq(fp, fl, "wave::hertzian_dipole_pattern") == 1) {
+        var r7: f64 = bj_hertzian_dipole_pattern(a);
+        _par_got_f(r7);
+        return 1;
+    }
+    if (_par_eq(fp, fl, "wave::half_wave_dipole_pattern") == 1) {
+        var r8: f64 = bj_half_wave_dipole_pattern(a);
+        _par_got_f(r8);
+        return 1;
+    }
+    return 0;
+}
+
+# The two-argument wave rows.
+fn _par_wave2(fp, fl): i64 {
+    var a: f64 = _par_in(0);
+    var b: f64 = _par_in(1);
+    var o: f64[1];
+    if (_par_eq(fp, fl, "wave::wave_number") == 1) {
+        var t1, v1 = bj_wave_number(a, b);
+        _par_got_res_f(t1, v1);
+        return 1;
+    }
+    if (_par_eq(fp, fl, "wave::critical_angle") == 1) {
+        var t2, v2 = bj_critical_angle(a, b, &o);
+        _par_got_res_o(t2, v2, o[0]);
+        return 1;
+    }
+    if (_par_eq(fp, fl, "wave::brewster_angle") == 1) {
+        var t3, v3 = bj_brewster_angle(a, b);
+        _par_got_res_f(t3, v3);
+        return 1;
+    }
+    if (_par_eq(fp, fl, "wave::reflectance_normal") == 1) {
+        var t4, v4 = bj_reflectance_normal(a, b);
+        _par_got_res_f(t4, v4);
+        return 1;
+    }
+    if (_par_eq(fp, fl, "wave::transmittance_normal") == 1) {
+        var t5, v5 = bj_transmittance_normal(a, b);
+        _par_got_res_f(t5, v5);
+        return 1;
+    }
+    if (_par_eq(fp, fl, "wave::hertzian_dipole_radiation_resistance") == 1) {
+        var t6, v6 = bj_hertzian_dipole_radiation_resistance(a, b);
+        _par_got_res_f(t6, v6);
+        return 1;
+    }
+    if (_par_eq(fp, fl, "wave::effective_aperture") == 1) {
+        var t7, v7 = bj_effective_aperture(a, b);
+        _par_got_res_f(t7, v7);
+        return 1;
+    }
+    if (_par_eq(fp, fl, "wave::guide_wavelength") == 1) {
+        var t8, v8 = bj_guide_wavelength(a, b);
+        _par_got_res_f(t8, v8);
+        return 1;
+    }
+    return 0;
+}
+
+# The trig-free family's rows, (n₁, n₂, cos θ_i).
+fn _par_wave_direct(fp, fl): i64 {
+    var n1: f64 = _par_in(0);
+    var n2: f64 = _par_in(1);
+    var c: f64 = _par_in(2);
+    var o: f64[1];
+    if (_par_eq(fp, fl, "wave::snell_cos_theta_t") == 1) {
+        var t1, v1 = bj_snell_cos_theta_t(n1, n2, c, &o);
+        _par_got_res_o(t1, v1, o[0]);
+        return 1;
+    }
+    if (_par_eq(fp, fl, "wave::fresnel_rs_direct") == 1) {
+        var t2, v2 = bj_fresnel_rs_direct(n1, n2, c, &o);
+        _par_got_res_o(t2, v2, o[0]);
+        return 1;
+    }
+    if (_par_eq(fp, fl, "wave::fresnel_rp_direct") == 1) {
+        var t3, v3 = bj_fresnel_rp_direct(n1, n2, c, &o);
+        _par_got_res_o(t3, v3, o[0]);
+        return 1;
+    }
+    if (_par_eq(fp, fl, "wave::reflectance_s_direct") == 1) {
+        var t4, v4 = bj_reflectance_s_direct(n1, n2, c);
+        _par_got_res_f(t4, v4);
+        return 1;
+    }
+    if (_par_eq(fp, fl, "wave::reflectance_p_direct") == 1) {
+        var t5, v5 = bj_reflectance_p_direct(n1, n2, c);
+        _par_got_res_f(t5, v5);
+        return 1;
+    }
+    if (_par_eq(fp, fl, "wave::reflectance_unpolarized") == 1) {
+        var t6, v6 = bj_reflectance_unpolarized(n1, n2, c);
+        _par_got_res_f(t6, v6);
+        return 1;
+    }
+    if (_par_eq(fp, fl, "wave::transmittance_unpolarized") == 1) {
+        var t7, v7 = bj_transmittance_unpolarized(n1, n2, c);
+        _par_got_res_f(t7, v7);
+        return 1;
+    }
+    if (_par_eq(fp, fl, "wave::schlick_reflectance") == 1) {
+        var t8, v8 = bj_schlick_reflectance(n1, n2, c);
+        _par_got_res_f(t8, v8);
+        return 1;
+    }
+    if (_par_eq(fp, fl, "wave::snell_refraction_angle") == 1) {
+        var t9, v9 = bj_snell_refraction_angle(n1, n2, c, &o);
+        _par_got_res_o(t9, v9, o[0]);
+        return 1;
+    }
+    if (_par_eq(fp, fl, "wave::cylindrical_waveguide_cutoff") == 1) {
+        var ta, va = bj_cylindrical_waveguide_cutoff(n1, n2, c);
+        _par_got_res_f(ta, va);
+        return 1;
+    }
+    return 0;
+}
+
+# A `wave::*` row by its arity: 0 or 1 inputs, 2, the (n₁, n₂, cos θ_i) triples and the circular waveguide, the
+# angle-form Fresnel quadruples, Friis and the waveguide wavelength, the waveguide cutoff, then the vector, plane-wave
+# and material pairs, and the material interface.
+public fn _par_wave(fp, fl): i64 {
+    if (_par_in_n <= 1) { return _par_wave1(fp, fl); }
+    if (_par_in_n == 2) { return _par_wave2(fp, fl); }
+    if (_par_in_n == 3) { return _par_wave_direct(fp, fl); }
+    if (_par_in_n == 4) {
+        var a: f64 = _par_in(0);
+        var b: f64 = _par_in(1);
+        var c: f64 = _par_in(2);
+        var d: f64 = _par_in(3);
+        if (_par_eq(fp, fl, "wave::fresnel_rs") == 1) {
+            var t1, v1 = bj_fresnel_rs(a, b, c, d);
+            _par_got_res_f(t1, v1);
+            return 1;
+        }
+        if (_par_eq(fp, fl, "wave::fresnel_rp") == 1) {
+            var t2, v2 = bj_fresnel_rp(a, b, c, d);
+            _par_got_res_f(t2, v2);
+            return 1;
+        }
+        if (_par_eq(fp, fl, "wave::reflectance_s") == 1) {
+            var t3, v3 = bj_reflectance_s(a, b, c, d);
+            _par_got_res_f(t3, v3);
+            return 1;
+        }
+        if (_par_eq(fp, fl, "wave::reflectance_p") == 1) {
+            var t4, v4 = bj_reflectance_p(a, b, c, d);
+            _par_got_res_f(t4, v4);
+            return 1;
+        }
+        if (_par_eq(fp, fl, "wave::friis_transmission") == 1) {
+            var t5, v5 = bj_friis_transmission(a, b, c, d);
+            _par_got_res_f(t5, v5);
+            return 1;
+        }
+        if (_par_eq(fp, fl, "wave::rectangular_waveguide_cutoff_wavelength") == 1) {
+            var t6, v6 = bj_rectangular_waveguide_cutoff_wavelength(a, b, _par_in(2), _par_in(3));
+            _par_got_res_f(t6, v6);
+            return 1;
+        }
+        return 0;
+    }
+    if (_par_in_n == 5) {
+        if (_par_eq(fp, fl, "wave::rectangular_waveguide_cutoff") == 1) {
+            var a5: f64 = _par_in(0);
+            var b5: f64 = _par_in(1);
+            var v5: f64 = _par_in(4);
+            var t7, w7 = bj_rectangular_waveguide_cutoff(a5, b5, _par_in(2), _par_in(3), v5);
+            _par_got_res_f(t7, w7);
+            return 1;
+        }
+        return 0;
+    }
+    if (_par_in_n == 6) {
+        if (_par_eq(fp, fl, "wave::poynting_vector") == 1) {
+            _par_got_fv(bj_poynting_vector(_par_in_fv(0), _par_in_fv(3)));
+            return 1;
+        }
+        if (_par_eq(fp, fl, "wave::momentum_density") == 1) {
+            _par_got_fv(bj_momentum_density(_par_in_fv(0), _par_in_fv(3)));
+            return 1;
+        }
+        if (_par_eq(fp, fl, "wave::plane_wave_e") == 1) {
+            var e0: f64 = _par_in(0);
+            var k: f64 = _par_in(1);
+            var x: f64 = _par_in(2);
+            var w: f64 = _par_in(3);
+            var tt: f64 = _par_in(4);
+            var ph: f64 = _par_in(5);
+            var e: f64 = bj_plane_wave_e(e0, k, x, w, tt, ph);
+            _par_got_f(e);
+            return 1;
+        }
+        var m1: BjMaterial = _par_in_mat(0);
+        var m2: BjMaterial = _par_in_mat(3);
+        if (_par_eq(fp, fl, "wave::reflectance_normal_materials") == 1) {
+            var t8, v8 = bj_reflectance_normal_materials(m1, m2);
+            _par_got_res_f(t8, v8);
+            return 1;
+        }
+        if (_par_eq(fp, fl, "wave::material_reflection_coefficient") == 1) {
+            var t9, v9 = bj_material_reflection_coefficient(m1, m2);
+            _par_got_res_f(t9, v9);
+            return 1;
+        }
+        return 0;
+    }
+    if (_par_in_n == 7 && _par_eq(fp, fl, "wave::reflectance_at_interface") == 1) {
+        var c7: f64 = _par_in(6);
+        var t0, v0 = bj_reflectance_at_interface(_par_in_mat(0), _par_in_mat(3), c7);
+        _par_got_res_f(t0, v0);
+        return 1;
+    }
+    return 0;
+}
+
 # `json::<Type>::to_string` / `from_str` rows (the module's rules above): the port's document as tokens, or its reading.
 public fn _par_json(fp, fl): i64 {
     if (_par_eq(fp, fl, "json::Complex::to_string") == 1) {
@@ -1396,6 +1673,7 @@ public fn _par_dispatch(mp, ml, fp, fl): i64 {
     if (_par_eq(mp, ml, "material") == 1) { return _par_material(fp, fl); }
     if (_par_eq(mp, ml, "math") == 1) { return _par_math(fp, fl); }
     if (_par_eq(mp, ml, "maxwell") == 1) { return _par_maxwell(fp, fl); }
+    if (_par_eq(mp, ml, "wave") == 1) { return _par_wave(fp, fl); }
     return 0;
 }
 
@@ -1473,6 +1751,7 @@ public fn _par_c_bound(fp, fl): i64 {
     if (_par_eq(fp, fl, "field::multipole_moment") == 1) { return 0; }
     if (_par_eq(fp, fl, "field::spherical_multipole_moment") == 1) { return 0; }
     if (_par_eq(fp, fl, "field::greens_function_scalar") == 1) { return 0; }
+    if (memeq(fp, "wave::", 6) == 1) { return 0; }
     # The JSON readers: every number correctly rounded (json.cr.tsv where serde_json's best-effort parse misrounds).
     if (_par_eq(fp, fl, "json::Complex::from_str") == 1) { return 0; }
     if (_par_eq(fp, fl, "json::FieldVector::from_str") == 1) { return 0; }

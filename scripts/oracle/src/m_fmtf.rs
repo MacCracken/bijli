@@ -6,10 +6,11 @@
 //! value; they differ in layout (`src/fmtf.cyr`). The grid covers every binade and its neighbours,
 //! every power of ten from 1e-323 to 1e308 and its neighbours, the 2^53 integer edge, serde_json's
 //! −5/+15 exponent thresholds, short decimals, 300 exact ties (where the two printers differ: core
-//! rounds up, zmij to even), and seeded random bit patterns, each with both signs for part of the grid.
+//! rounds up, zmij to even), and seeded random bit patterns, each with both signs for part of the grid. bijli's second
+//! addition (M2 part 1b) is the fixed precision `{x:.p}`, for p ∈ {0, 1, 4}.
 
 use crate::grids::{Rng, pow2, specials};
-use crate::tsv::{Class, Module, f, s};
+use crate::tsv::{Class, Module, f, i, s};
 
 fn next_up(x: f64) -> f64 {
     if x.is_nan() || x == f64::INFINITY {
@@ -110,6 +111,23 @@ pub fn emit() -> Module {
         m.row("f64::fmt_debug", Class::A, &[f(x)], &[s(format!("{x:?}"))]);
         let json = serde_json::to_string(&x).unwrap_or_default();
         m.row("serde_json::f64", Class::A, &[f(x)], &[s(json)]);
+    }
+    // bijli's addition (M2 part 1b): Rust's fixed precision `{x:.p}` (wave.rs's and beam.rs's `{ratio:.4}`), exact and
+    // rounded half to even, over a stride of the grid, the ties at each precision (odd multiples of 2^-(p+1)) and the
+    // carries (9.99995 → "10.0000").
+    let mut fx: Vec<f64> = xs.iter().step_by(7).copied().collect();
+    for p in 0..=6 {
+        for j in (1..200).step_by(2) {
+            #[allow(clippy::cast_precision_loss)]
+            let x = f64::from(j) * pow2(-(p + 1));
+            fx.extend([x, -x, x + 1000.0]);
+        }
+    }
+    fx.extend([9.99995, 9.99996, 0.99995, 99999.99995, 0.00005, 0.00015, 123_456.789_05, -0.000_01]);
+    for &x in &fx {
+        for p in [0_i64, 1, 4] {
+            m.row("f64::fmt_fixed", Class::A, &[f(x), i(p)], &[s(format!("{x:.*}", usize::try_from(p).unwrap_or(0)))]);
+        }
     }
     m
 }

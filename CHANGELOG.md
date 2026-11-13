@@ -195,9 +195,29 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
   (`BjMaterial_to_json` / `_from_json`, D5). `material.tsv` holds 51,814 class-A rows; 39 of material.rs's 42 tests
   are ported, and 5 bench twins added.
 - **material** (ADR 0002 row 21): `bj_classify_magnetic` returns a Result, so a NaN susceptibility can be refused.
+- **Cyrius port, M2 part 1b — wave** (`src/wave.cyr`): wave.rs's 42 functions: the Poynting vector, momentum density
+  and plane-wave relations, Snell's law, the critical and Brewster angles and the angle-form Fresnel coefficients, the
+  trig-free family (`snell_cos_theta_t`, the `*_direct` coefficients and reflectances, unpolarized R and T, Schlick),
+  the material-based interface, the rectangular and circular waveguides, and the dipole antennas, effective aperture
+  and Friis. Rust's `Result<Option<f64>>` is `Ok(Some)` with the value through an out pointer, or `Ok(None)` under
+  total internal reflection; a waveguide's u32 mode indices get a Cyrius-only range check. `wave.tsv` holds 66,690
+  rows (class C for the ten functions that call sin, cos, asin or atan, 3 of them corrected in `wave.cr.tsv`); all
+  63 of wave.rs's tests are ported, and 11 bench twins added.
+- **fmtf**: Rust's fixed precision `{x:.p}` (`_bj_fmt_f64_fixed`, exact and rounded half to even), for
+  `guide_wavelength`'s `{ratio:.4}`; `fmtf.tsv` gains 14,376 rows.
+- **wave** (ADR 0002 row 22, M2 part 1b, the user's answer of 2026-11-12): the dipoles use bijli's η₀ = √(μ₀/ε₀)
+  and the exact Cin(2π) instead of η₀ = 120π: the half-wave directivity is 4/Cin(2π) = 1.6409224 (Rust: 1.6409), its
+  radiation resistance η₀·Cin(2π)/(4π) = 73.079 Ω (Rust: 73.1), and the Hertzian resistance (2π/3)·η₀·(dl/λ)² =
+  789.022·(dl/λ)² Ω (Rust: 80π² = 789.568). The constants are generated, each rounded once (`src/wave_data.cyr`).
+- **wave** (ADR 0002 row 25): `bj_material_reflection_coefficient` takes Γ on the relative impedances √(μ_r/ε_r), so
+  Γ² equals `bj_reflectance_normal_materials`' R bit for bit; Rust's absolute impedances missed it in the last bits.
 
 ### Fixed
 
+- **wave** (ADR 0002 rows 23–24, M2 part 1b, the user's answers of 2026-11-12): `effective_aperture` returned Ok(NaN)
+  for a NaN wavelength (`λ < 0` let it through), and now refuses it; `schlick_reflectance` refused positive indices
+  summing below 1e-30 with "sum of refractive indices cannot be zero" through `reflectance_normal`'s guard, and now
+  computes R₀ itself, as the rest of the trig-free family accepts those indices.
 - **material** (ADR 0002 rows 19–21, M2 part 1a, the user's answers of 2026-11-12): `curie_law` and `curie_weiss`
   returned Ok(NaN) for a NaN temperature (`T <= 0` let it through), and now refuse it with their InvalidParameter;
   `Material::wave_speed` refused a bad ε_r or μ_r as InvalidParameter and accepted ∞ (a speed of 0), and now validates

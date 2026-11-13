@@ -47,6 +47,7 @@ Plan of record: [bijli-port-plan.md](bijli-port-plan.md). Decision: [ADR 0001](.
   - FDTD 2D/3D;
   - integration surfaces;
   - release 2.0.0.
+- [ ] **crmath's sin and cos past 2^20**: a medium-range argument reduction (Cody–Waite with a longer π/2, or crmath_ux's Payne–Hanek) ahead of the fast path's polynomials. Today every |x| > 2^20 takes the multi-precision slow path, about 21 µs a call, which an optical plane wave reaches routinely (`wave/plane_wave_e`, port-parity §26). Performance only: the results stay correctly rounded.
 - The "2.0 cleanup (breaking)" backlog item below lands in the Cyrius API only, as ADR 0002 (plan §3.3). There is no Rust 2.0.
 
 ---

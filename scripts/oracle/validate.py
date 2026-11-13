@@ -499,6 +499,17 @@ def positional(ds: str, k: int, int_suffix: bool) -> str:
     return ds[:k] + "." + ds[k:]
 
 
+def rust_fixed(x: float, p: int) -> str:
+    """`format!("{x:.p}")` for an f64: the exact value rounded half to even at p decimals, as Python's `f` format
+    rounds it; Rust spells NaN and infinity its own way, and keeps the sign of a zero or of a value that rounds to
+    one."""
+    if math.isnan(x):
+        return "NaN"
+    if math.isinf(x):
+        return "inf" if x > 0 else "-inf"
+    return f"{x:.{p}f}"
+
+
 def rust_display(x: float) -> str:
     """`format!("{x}")` for an f64."""
     if math.isnan(x):
@@ -563,6 +574,8 @@ def validate_fmtf(path: Path) -> list:
             want = serde_json_f64(x)
         elif fn == "f64::fmt_debug":
             want = rust_debug(x)
+        elif fn == "f64::fmt_fixed":
+            want = rust_fixed(x, ins[1][1])
         else:
             errs.append(f"fmtf: unknown function {fn}")
             continue
@@ -633,10 +646,11 @@ def fsqrt(x: float) -> float:
 
 
 GLIBC_P = {"sin": LIBM.sin, "cos": LIBM.cos, "exp": LIBM.exp, "log": LIBM.log, "atan2": LIBM.atan2,
-           "pow": LIBM.pow, "sinh": LIBM.sinh, "cosh": LIBM.cosh}
+           "pow": LIBM.pow, "sinh": LIBM.sinh, "cosh": LIBM.cosh, "asin": LIBM.asin, "atan": LIBM.atan}
 MPFR_P = {"sin": mpfr_ref.sin, "cos": mpfr_ref.cos, "exp": mpfr_ref.exp, "log": lambda x: mpfr_ref.cr("log", x),
           "atan2": mpfr_ref.atan2, "pow": mpfr_ref.pow, "sinh": lambda x: mpfr_ref.cr("sinh", x),
-          "cosh": lambda x: mpfr_ref.cr("cosh", x)}
+          "cosh": lambda x: mpfr_ref.cr("cosh", x), "asin": lambda x: mpfr_ref.cr("asin", x),
+          "atan": lambda x: mpfr_ref.cr("atan", x)}
 TINY_300 = bits_to_f("01a56e1fc2f8f359")  # 1e-300
 
 
@@ -1465,6 +1479,483 @@ def material_adr_rows(root: Path, path: Path) -> list:
             continue
         row, model = r
         old = [(k, tok_text(b) if k == "s" else b) for k, b in (parse_tok(t) for t in outs.split(" "))]
+        if not toks_same(model, old):
+            out.append((fn, ins, wire(model), str(row), f"oracle {outs}; ADR 0002 row {row}"))
+    return out
+
+# ── wave (M2 part 1b): rust-old/src/wave.rs ───────────────────────────────────────────────────────────────────────
+FRAC_PI_2 = PI / 2.0          # core::f64::consts::FRAC_PI_2, the same double (a halving is exact)
+COS_TOL = 1e-6                # wave.rs's COS_THETA_TOLERANCE
+WAVE_C_FNS = ("wave::plane_wave_e", "wave::snell_refraction_angle", "wave::critical_angle", "wave::brewster_angle",
+              "wave::fresnel_rs", "wave::fresnel_rp", "wave::reflectance_s", "wave::reflectance_p",
+              "wave::hertzian_dipole_pattern", "wave::half_wave_dipole_pattern")
+
+
+def wave_consts(root: Path) -> dict:
+    c = golden_consts(root)
+    return {"EPS0": c["field::EPSILON_0"], "MU0": c["field::MU_0"], "C": c["field::SPEED_OF_LIGHT"]}
+
+
+def okf(x):
+    return [("f", x)]
+
+
+def wave_lossless(e, m, s):
+    """Material::lossless_optical_constants: (error tokens, None) or (None, (n, η))."""
+    if not (math.isfinite(e) and e > 0.0):
+        return [("E", "InvalidPermittivity"), ("s", f"invalid permittivity: {rust_display(e)} (must be > 0)")], None
+    if not (math.isfinite(m) and m > 0.0):
+        return [("E", "InvalidPermeability"), ("s", f"invalid permeability: {rust_display(m)} (must be > 0)")], None
+    if s != 0.0:
+        return ip_err(f"Fresnel coefficients from Material are lossless-only; conductivity σ = {rust_display(s)} "
+                      "S/m needs a frequency-dependent complex refractive index"), None
+    return None, (fsqrt(e * m), fsqrt(fdiv(m, e)))
+
+
+def wave_cosines(n1, n2, c):
+    """fresnel_cosines: (error tokens, None, None) or (None, cos θ_i, cos θ_t or None under TIR)."""
+    if n2 == 0.0:
+        return dz_err("refractive index n₂ cannot be zero"), None, None
+    if not (math.isfinite(n1) and n1 > 0.0 and math.isfinite(n2) and n2 > 0.0):
+        return ip_err(f"refractive indices must be positive and finite, got n₁={rust_display(n1)}, "
+                      f"n₂={rust_display(n2)}"), None, None
+    if 0.0 <= c <= 1.0:
+        ci = c
+    elif -COS_TOL <= c <= 1.0 + COS_TOL:
+        ci = 0.0 if c < 0.0 else 1.0
+    else:
+        return ip_err("cos θ_i must lie in [0, 1] (measured against the incident-side normal), got "
+                      + rust_display(c)), None, None
+    ratio = n1 / n2
+    sin2_t = ratio * ratio * (1.0 - ci * ci)
+    if sin2_t > 1.0:
+        return None, ci, None
+    return None, ci, fsqrt(1.0 - sin2_t)
+
+
+def wave_ratio(num, den):
+    if den == 0.0:
+        return dz_err("Fresnel denominator is zero"), None
+    return None, fdiv(num, den)
+
+
+def wave_unpolarized(a1, a2, ci, ct):
+    """0.5·(r_s² + r_p²) with r_s = (a₁ cos θ_i − a₂ cos θ_t)/(a₁ cos θ_i + a₂ cos θ_t) and r_p the same with a₁, a₂
+    swapped: the index form takes (n₁, n₂), the material form (η₂, η₁)."""
+    e, rs = wave_ratio(a1 * ci - a2 * ct, a1 * ci + a2 * ct)
+    if e:
+        return e
+    e, rp = wave_ratio(a2 * ci - a1 * ct, a2 * ci + a1 * ct)
+    if e:
+        return e
+    return okf(0.5 * (rs * rs + rp * rp))
+
+
+def wave_direct(fn, n1, n2, c):
+    """The trig-free family, transcribed."""
+    e, ci, ct = wave_cosines(n1, n2, c)
+    if e:
+        return e
+    if fn == "wave::snell_cos_theta_t":
+        return [("n", "")] if ct is None else okf(ct)
+    if fn in ("wave::fresnel_rs_direct", "wave::fresnel_rp_direct", "wave::reflectance_s_direct",
+              "wave::reflectance_p_direct"):
+        if ct is None:
+            return [("n", "")] if "fresnel" in fn else okf(1.0)
+        if n1 == n2:
+            r = 0.0
+        else:
+            a, b = (n1, n2) if "_s_" in fn or "rs" in fn else (n2, n1)
+            err, r = wave_ratio(a * ci - b * ct, a * ci + b * ct)
+            if err:
+                return err
+        return okf(r) if "fresnel" in fn else okf(r * r)
+    if fn in ("wave::reflectance_unpolarized", "wave::transmittance_unpolarized"):
+        if ct is None:
+            out = okf(1.0)
+        elif n1 == n2:
+            out = okf(0.0)
+        else:
+            out = wave_unpolarized(n1, n2, ci, ct)
+        if fn.startswith("wave::trans") and out[0][0] == "f":
+            return okf(1.0 - out[0][1])
+        return out
+    return None
+
+
+def wave_reflectance_normal(n1, n2):
+    den = n1 + n2
+    if abs(den) < 1e-30:
+        return dz_err("sum of refractive indices cannot be zero")
+    r = fdiv(n1 - n2, den)
+    return okf(r * r)
+
+
+def wave_schlick(n1, n2, c, port=False):
+    """schlick_reflectance; with port, R₀ without reflectance_normal's |n₁ + n₂| < 1e-30 guard (ADR 0002 row 24)."""
+    e, ci, ct = wave_cosines(n1, n2, c)
+    if e:
+        return e
+    if n1 > n2:
+        if ct is None:
+            return okf(1.0)
+        cos = ct
+    else:
+        cos = ci
+    if port:
+        r = fdiv(n1 - n2, n1 + n2)
+        r0 = r * r
+    else:
+        r0t = wave_reflectance_normal(n1, n2)
+        if r0t[0][0] != "f":
+            return r0t
+        r0 = r0t[0][1]
+    omc = 1.0 - cos
+    omc2 = omc * omc
+    omc5 = omc2 * omc2 * omc
+    return okf(r0 + (1.0 - r0) * omc5)
+
+
+def wave_rect_check(a, b, m, n):
+    if not (math.isfinite(a) and a > 0.0 and math.isfinite(b) and b > 0.0):
+        return ip_err(f"waveguide dimensions must be positive and finite, got a={rust_display(a)}, b={rust_display(b)}")
+    if m == 0 and n == 0:
+        return ip_err("both m and n cannot be zero (no TE₀₀/TM₀₀ mode)")
+    return None
+
+
+def wave_positive(what, x):
+    if not (math.isfinite(x) and x > 0.0):
+        return ip_err(f"{what} must be positive and finite, got {rust_display(x)}")
+    return None
+
+
+def wave_rust(fn, v, P, K):
+    """wave.rs transcribed in its order of operations, its checks and error texts, on the primitives P (glibc's for
+    the oracle, MPFR's for the corrected oracle); None for another name."""
+    EPS0, MU0, C = K["EPS0"], K["MU0"], K["C"]
+    if fn in ("wave::poynting_vector", "wave::momentum_density"):
+        a, b = v[0:3], v[3:6]
+        cr = (a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0])
+        s = [x * fdiv(1.0, MU0) for x in cr]
+        if fn == "wave::momentum_density":
+            s = [x * fdiv(1.0, C * C) for x in s]
+        return ok3(s)
+    if fn == "wave::plane_wave_intensity":
+        return okf(0.5 * C * EPS0 * v[0] * v[0])
+    if fn == "wave::radiation_pressure_absorbed":
+        return okf(fdiv(v[0], C))
+    if fn == "wave::radiation_pressure_reflected":
+        return okf(fdiv(2.0 * v[0], C))
+    if fn == "wave::e_from_b":
+        return okf(C * v[0])
+    if fn == "wave::b_from_e":
+        return okf(fdiv(v[0], C))
+    if fn == "wave::plane_wave_e":
+        e0, k, x, om, tt, ph = v
+        return okf(e0 * P["sin"](k * x - om * tt + ph))
+    if fn == "wave::wave_number":
+        if abs(v[1]) < 1e-30:
+            return dz_err("velocity cannot be zero for wave number")
+        return okf(fdiv(2.0 * PI * v[0], v[1]))
+    if fn == "wave::angular_frequency":
+        return okf(2.0 * PI * v[0])
+    if fn == "wave::snell_refraction_angle":
+        n1, n2, th = v
+        if abs(n2) < 1e-30:
+            return dz_err("refractive index n₂ cannot be zero")
+        st = fdiv(n1 * P["sin"](th), n2)
+        return [("n", "")] if abs(st) > 1.0 else okf(P["asin"](st))
+    if fn == "wave::critical_angle":
+        n1, n2 = v
+        if abs(n1) < 1e-30:
+            return dz_err("refractive index n₁ cannot be zero")
+        r = fdiv(n2, n1)
+        return [("n", "")] if r >= 1.0 else okf(P["asin"](r))
+    if fn == "wave::brewster_angle":
+        n1, n2 = v
+        if abs(n1) < 1e-30:
+            return dz_err("refractive index n₁ cannot be zero")
+        return okf(P["atan"](fdiv(n2, n1)))
+    if fn in ("wave::fresnel_rs", "wave::fresnel_rp", "wave::reflectance_s", "wave::reflectance_p"):
+        n1, ti, n2, tt = v
+        ci, ct = P["cos"](ti), P["cos"](tt)
+        a, b = (n1, n2) if fn.endswith("s") else (n2, n1)
+        num = a * ci - b * ct
+        den = a * ci + b * ct
+        if abs(den) < 1e-30:
+            return dz_err("Fresnel denominator is zero")
+        r = fdiv(num, den)
+        return okf(r) if "fresnel" in fn else okf(r * r)
+    if fn == "wave::reflectance_normal":
+        return wave_reflectance_normal(v[0], v[1])
+    if fn == "wave::transmittance_normal":
+        r = wave_reflectance_normal(v[0], v[1])
+        return okf(1.0 - r[0][1]) if r[0][0] == "f" else r
+    if fn == "wave::schlick_reflectance":
+        return wave_schlick(v[0], v[1], v[2])
+    direct = wave_direct(fn, *v) if fn.endswith(("_direct", "_unpolarized", "cos_theta_t")) else None
+    if direct is not None:
+        return direct
+    if fn == "wave::reflectance_at_interface":
+        e1, l1 = wave_lossless(*v[0:3])
+        if e1:
+            return e1
+        e2, l2 = wave_lossless(*v[3:6])
+        if e2:
+            return e2
+        (n1, eta1), (n2, eta2) = l1, l2
+        e, ci, ct = wave_cosines(n1, n2, v[6])
+        if e:
+            return e
+        if ct is None:
+            return okf(1.0)
+        if n1 == n2:
+            g = fdiv(eta2 - eta1, eta2 + eta1)
+            return okf(g * g)
+        return wave_unpolarized(eta2, eta1, ci, ct)
+    if fn == "wave::reflectance_normal_materials":
+        return material_rust("Material::try_reflectance_at", v, EPS0, MU0)
+    if fn == "wave::material_reflection_coefficient":
+        for part in (v[0:3], v[3:6]):
+            e, _l = wave_lossless(*part)
+            if e:
+                return e
+        eta1 = material_rust("Material::impedance", v[0:3], EPS0, MU0)[0][1]
+        eta2 = material_rust("Material::impedance", v[3:6], EPS0, MU0)[0][1]
+        den = eta2 + eta1
+        if abs(den) < 1e-30:
+            return dz_err("η₁ + η₂ = 0")
+        return okf(fdiv(eta2 - eta1, den))
+    if fn in ("wave::rectangular_waveguide_cutoff", "wave::rectangular_waveguide_cutoff_wavelength"):
+        a, b, m, n = v[0:4]
+        e = wave_rect_check(a, b, m, n)
+        if e:
+            return e
+        if fn.endswith("cutoff"):
+            e = wave_positive("wave velocity", v[4])
+            if e:
+                return e
+        ma, nb = fdiv(float(m), a), fdiv(float(n), b)
+        root = fsqrt(ma * ma + nb * nb)
+        if fn.endswith("cutoff"):
+            return okf(0.5 * v[4] * root)
+        if math.isnan(root) or root <= 0.0:
+            return ip_err(f"cutoff wavelength not representable for a={rust_display(a)}, b={rust_display(b)}")
+        return okf(fdiv(2.0, root))
+    if fn == "wave::guide_wavelength":
+        lam, lc = v
+        if lc == 0.0:
+            return dz_err("cutoff wavelength cannot be zero")
+        if math.isnan(lc) or lc < 0.0:
+            return ip_err(f"cutoff wavelength must be positive, got {rust_display(lc)}")
+        if not (math.isfinite(lam) and lam > 0.0):
+            return ip_err(f"wavelength must be positive and finite, got {rust_display(lam)}")
+        ratio = fdiv(lam, lc)
+        rad = 1.0 - ratio * ratio
+        if math.isnan(rad) or rad <= 0.0:
+            return ip_err(f"frequency below cutoff: λ/λ_c = {rust_fixed(ratio, 4)} (must be < 1)")
+        return okf(fdiv(lam, fsqrt(rad)))
+    if fn == "wave::cylindrical_waveguide_cutoff":
+        r, x, vel = v
+        e = (wave_positive("waveguide radius", r) or wave_positive("Bessel root", x)
+             or wave_positive("wave velocity", vel))
+        return e or okf(fdiv(x * vel, 2.0 * PI * r))
+    if fn == "wave::hertzian_dipole_pattern":
+        s = P["sin"](v[0])
+        return okf(s * s)
+    if fn == "wave::half_wave_dipole_pattern":
+        s = P["sin"](v[0])
+        if abs(s) < 1e-15:
+            return okf(0.0)
+        f = fdiv(P["cos"](FRAC_PI_2 * P["cos"](v[0])), s)
+        return okf(f * f)
+    if fn == "wave::hertzian_dipole_directivity":
+        return okf(1.5)
+    if fn == "wave::half_wave_dipole_directivity":
+        return okf(1.6409)
+    if fn == "wave::half_wave_dipole_radiation_resistance":
+        return okf(73.1)
+    if fn == "wave::hertzian_dipole_radiation_resistance":
+        if abs(v[1]) < 1e-30:
+            return dz_err("wavelength cannot be zero")
+        ratio = fdiv(v[0], v[1])
+        return okf(80.0 * PI * PI * ratio * ratio)
+    if fn == "wave::effective_aperture":
+        lam, d = v
+        if lam < 0.0:
+            return ip_err(f"wavelength must be non-negative, got {rust_display(lam)}")
+        return okf(fdiv(lam * lam * d, 4.0 * PI))
+    if fn == "wave::friis_transmission":
+        gt, gr, lam, d = v
+        if abs(d) < 1e-30:
+            return SINGULAR
+        ratio = fdiv(lam, 4.0 * PI * d)
+        return okf(gt * gr * ratio * ratio)
+    return None
+
+
+def wave_toks(outs):
+    return [(k, tok_text(b) if k == "s" else b) for k, b in outs]
+
+
+def validate_wave(root: Path, path: Path) -> list:
+    header, rows = read_tsv(path)
+    errs = check_platform(header)
+    if errs:
+        return errs
+    K = wave_consts(root)
+    for n, (fn, _cls, ins, outs) in enumerate(rows, 1):
+        v = [b for _k, b in ins]
+        want = wave_rust(fn, v, GLIBC_P, K)
+        if want is None:
+            errs.append(f"wave row {n}: no transcription for {fn}")
+            continue
+        if not toks_same(want, wave_toks(outs)):
+            errs.append(f"wave row {n}: {fn}{tuple(v)} recorded {wave_toks(outs)}, transcription {want}")
+    return errs
+
+
+def wave_corrections(root: Path, path: Path):
+    """The class-C wave rows whose outputs change when sin, cos, asin and atan are correctly rounded (MPFR)."""
+    K = wave_consts(root)
+
+    def fixes(_rows):
+        out = []
+        for line in path.read_text().splitlines():
+            if line.startswith("#"):
+                continue
+            fn, cls, ins, outs, _note = line.split("\t")
+            if cls != "C":
+                continue
+            v = [b for _k, b in (parse_tok(t) for t in ins.split(" "))]
+            want = wave_rust(fn, v, MPFR_P, K)
+            old = wave_toks([parse_tok(t) for t in outs.split(" ")])
+            if toks_same(want, old):
+                continue
+            out.append((fn, ins, wire(want), f"oracle {outs}; correctly rounded primitives give {wire(want)}"))
+        return out
+    return fixes
+
+
+# ADR 0002 rows 22–25 (M2 part 1b, the user's 2026-11-12 answers), and row 18 through FieldVector::cross. Row 22: the
+# dipoles on bijli's η₀ = √(μ₀/ε₀) (maxwell's free_space_impedance) with Cin(2π) exact, where Rust has 120π's textbook
+# figures: D = 4/Cin(2π), R = η₀·Cin(2π)/(4π), and the Hertzian (2π/3)·η₀·(dl/λ)² for 80π²(dl/λ)², each constant
+# rounded once (src/wave_data.cyr). Row 23: effective_aperture refuses a NaN wavelength (`!(λ ≥ 0)`), as row 19.
+# Row 24: Schlick's R₀ without reflectance_normal's |n₁ + n₂| < 1e-30 guard. Row 25: material_reflection_coefficient's
+# Γ on the relative impedances √(μ_r/ε_r) its validation computes, so Γ² is reflectance_normal_materials' R.
+def cin_2pi_frac(bits=700):
+    """Cin(2π) = Σ_{k ≥ 1} (−1)^(k+1) (2π)^(2k) / (2k·(2k)!) as a Fraction, with π = crtables.pi_bits(bits)/2^bits
+    (MPFR's const_bits must agree); its error is below 2^-(bits − 8)."""
+    pb = crtables.pi_bits(bits)
+    if pb != mpfr_ref.const_bits("pi", bits):
+        raise SystemExit("π: crtables and MPFR disagree")
+    x = 2 * Fraction(pb, 1 << bits)
+    x2, term, total = x * x, Fraction(1), Fraction(0)
+    for k in range(1, 120):
+        term = term * x2 / ((2 * k - 1) * (2 * k))
+        total += (term if k % 2 else -term) / (2 * k)
+    return total, Fraction(pb, 1 << bits)
+
+
+def frac_sqrt(q: Fraction, bits=700) -> Fraction:
+    return Fraction(math.isqrt(q.numerator * (1 << (2 * bits)) // q.denominator), 1 << bits)
+
+
+def frac_rn(q: Fraction, rel=Fraction(1, 1 << 600)) -> float:
+    """q rounded to the nearest double, refused if q's error bound (relative `rel`) straddles a rounding boundary."""
+    lo, hi = float(q * (1 - rel)), float(q * (1 + rel))
+    if lo != hi:
+        raise SystemExit(f"dipole constant {float(q)!r}: not decided at this precision")
+    return lo
+
+
+def dipole_consts(root: Path):
+    """(D, R, K) of row 22, each the double nearest the exact value."""
+    c = golden_consts(root)
+    cin, pi = cin_2pi_frac()
+    eta = frac_sqrt(Fraction(c["field::MU_0"]) / Fraction(c["field::EPSILON_0"]))
+    return frac_rn(4 / cin), frac_rn(eta * cin / (4 * pi)), frac_rn(2 * pi / 3 * eta)
+
+
+def render_wave_data(root: Path) -> str:
+    d, r, k = dipole_consts(root)
+    return "\n".join([
+        "# wave_data.cyr — the dipole constants of src/wave.cyr (ADR 0002 row 22). Generated by scripts/oracle/validate.py",
+        "# (python3 -I -B scripts/oracle/validate.py . --write) from π (Machin, checked against MPFR), Cin(2π) by its",
+        "# series and η₀ = √(μ₀/ε₀) of BJ_MU_0 and BJ_EPSILON_0, all in exact rational arithmetic; do not edit.",
+        "",
+        "# The doubles, as bit patterns in typed f64 globals.",
+        f"var _BJ_WAVE_HALF_WAVE_D: f64 = 0x{f_to_bits(d):016X};  # 4/Cin(2π) = {d!r}, nearest",
+        f"var _BJ_WAVE_HALF_WAVE_R: f64 = 0x{f_to_bits(r):016X};  # η₀·Cin(2π)/(4π) = {r!r} Ω, nearest",
+        f"var _BJ_WAVE_HERTZ_K: f64 = 0x{f_to_bits(k):016X};  # (2π/3)·η₀ = {k!r} Ω, nearest",
+        "",
+    ])
+
+
+def check_wave_data(root: Path) -> list:
+    path = root / "src/wave_data.cyr"
+    text = render_wave_data(root)
+    if WRITE:
+        if not path.exists() or path.read_text() != text:
+            path.write_text(text)
+            print("wrote src/wave_data.cyr")
+        return []
+    if not path.exists() or path.read_text() != text:
+        return ["src/wave_data.cyr: differs from its rendering (regenerate with --write)"]
+    print("ok   src/wave_data.cyr: the dipole constants")
+    return []
+
+
+def wave_port(fn, v, K, consts):
+    """The port's outputs for a wave row an ADR 0002 row changes, else None."""
+    d, r, kh = consts
+    if fn in ("wave::poynting_vector", "wave::momentum_density"):
+        if all(math.isfinite(x) for x in v[0:6]) and fv_governed("FieldVector::cross", v[0:6]) == 18:
+            cr = [b for _k, b in fv_model("FieldVector::cross", v[0:6])]
+            s = [x * fdiv(1.0, K["MU0"]) for x in cr]
+            if fn == "wave::momentum_density":
+                s = [x * fdiv(1.0, K["C"] * K["C"]) for x in s]
+            return 18, ok3(s)
+        return None
+    if fn == "wave::half_wave_dipole_directivity":
+        return 22, okf(d)
+    if fn == "wave::half_wave_dipole_radiation_resistance":
+        return 22, okf(r)
+    if fn == "wave::hertzian_dipole_radiation_resistance" and not abs(v[1]) < 1e-30:
+        ratio = fdiv(v[0], v[1])
+        return 22, okf(kh * ratio * ratio)
+    if fn == "wave::effective_aperture" and math.isnan(v[0]):
+        return 23, ip_err("wavelength must be non-negative, got NaN")
+    if fn == "wave::schlick_reflectance":
+        return 24, wave_schlick(v[0], v[1], v[2], port=True)
+    if fn == "wave::material_reflection_coefficient":
+        for part in (v[0:3], v[3:6]):
+            e, _l = wave_lossless(*part)
+            if e:
+                return None
+        eta1, eta2 = wave_lossless(*v[0:3])[1][1], wave_lossless(*v[3:6])[1][1]
+        den = eta2 + eta1
+        if abs(den) < 1e-30:
+            return 25, dz_err("η₁ + η₂ = 0")
+        return 25, okf(fdiv(eta2 - eta1, den))
+    return None
+
+
+def wave_adr_rows(root: Path, path: Path) -> list:
+    K = wave_consts(root)
+    consts = dipole_consts(root)
+    out = []
+    for line in path.read_text().splitlines():
+        if line.startswith("#"):
+            continue
+        fn, _cls, ins, outs, _note = line.split("\t")
+        toks = [] if ins == "-" else [parse_tok(t) for t in ins.split(" ")]
+        r = wave_port(fn, [b for _k, b in toks], K, consts)
+        if r is None:
+            continue
+        row, model = r
+        old = wave_toks([parse_tok(t) for t in outs.split(" ")])
         if not toks_same(model, old):
             out.append((fn, ins, wire(model), str(row), f"oracle {outs}; ADR 0002 row {row}"))
     return out
@@ -2992,6 +3483,8 @@ def adr_rows(root: Path, module: str, path: Path) -> list:
         return cx_rows(path)[0]
     if module == "material":
         return material_adr_rows(root, path)
+    if module == "wave":
+        return wave_adr_rows(root, path)
     maps = {13: adr13(root)}
     out = adr17_rows(root, module, path) if module in ("field", "charge") else []
     if module in ("field", "charge"):
@@ -3349,6 +3842,7 @@ def main() -> int:
         "math": validate_math,
         "material": lambda p: validate_material(root, p),
         "maxwell": lambda p: validate_maxwell(root, p),
+        "wave": lambda p: validate_wave(root, p),
     }
     listed = [l for l in (golden / "modules.txt").read_text().splitlines() if l and not l.startswith("#")]
     errs, total = [], 0
@@ -3370,11 +3864,13 @@ def main() -> int:
     errs += check_corrections(root, "json", golden / "json.tsv", json_corrections, "Python's float",
                               "the document read with every number correctly rounded; note: the oracle's outputs, "
                               "then why they differ")
-    for mod in ("charge", "complex", "field", "material", "maxwell"):
+    errs += check_corrections(root, "wave", golden / "wave.tsv", wave_corrections(root, golden / "wave.tsv"))
+    for mod in ("charge", "complex", "field", "material", "maxwell", "wave"):
         errs += check_adr(root, mod, golden / f"{mod}.tsv")
     errs += cx_rows(golden / "complex.tsv")[1]
     errs += fv_rows(root, "field", golden / "field.tsv")[1] + fv_rows(root, "charge", golden / "charge.tsv")[1]
     errs += check_tables(root)
+    errs += check_wave_data(root)
     for e in errs[:40]:
         print("  " + e)
     if len(errs) > 40:

@@ -6,7 +6,7 @@
 
 **Rust column**: rust-old/bench-history.csv, run `2026-11-12T03:15:21Z` at `c95fd30` (the 1.2.0 tag's source), criterion medians. Taken under load (kimiya's gates ran beside it: load average about 2.6, median CI width 0.8 %, p90 4.2 %, max 13 %), so a ratio within the Rust row's own noise is read as parity (port plan §5 P4).
 
-**80 Rust benches:** 22 twinned, 0 not applicable, 58 pending.
+**80 Rust benches:** 33 twinned, 0 not applicable, 47 pending.
 
 | Rust bench | Rust | Cyrius twin | Cyrius | Cyrius / Rust |
 |---|---:|---|---:|---:|
@@ -27,17 +27,17 @@
 | `maxwell/skin_depth` | 1.29 ns | `maxwell/skin_depth` | 186.00 ns | 144.7× |
 | `charge/coulomb_force` | 5.54 ns | `charge/coulomb_force` | 42.00 ns | 7.6× |
 | `charge/lorentz_force` | 1.51 ns | `charge/lorentz_force` | 59.00 ns | 39.2× |
-| `wave/poynting_vector` | 0.98 ns | pending (M2) | — | — |
-| `wave/plane_wave_intensity` | 0.52 ns | pending (M2) | — | — |
-| `wave/plane_wave_e` | 0.51 ns | pending (M2) | — | — |
-| `wave/fresnel_rs` | 1.25 ns | pending (M2) | — | — |
-| `wave/snell_refraction` | 1.75 ns | pending (M2) | — | — |
-| `wave/fresnel_rs_direct` | 1.73 ns | pending (M2) | — | — |
-| `wave/reflectance_unpolarized` | 1.24 ns | pending (M2) | — | — |
-| `wave/reflectance_at_interface` | 7.78 ns | pending (M2) | — | — |
-| `wave/schlick_reflectance` | 1.24 ns | pending (M2) | — | — |
-| `wave/half_wave_dipole_pattern` | 0.50 ns | pending (M2) | — | — |
-| `wave/rect_waveguide_cutoff` | 1.24 ns | pending (M2) | — | — |
+| `wave/poynting_vector` | 0.98 ns | `wave/poynting_vector` | 62.00 ns | 63.0× |
+| `wave/plane_wave_intensity` | 0.52 ns | `wave/plane_wave_intensity` | 6.00 ns | 11.6× |
+| `wave/plane_wave_e` | 0.51 ns | `wave/plane_wave_e` | 20.99 µs | 40928.2× |
+| `wave/fresnel_rs` | 1.25 ns | `wave/fresnel_rs` | 275.00 ns | 220.6× |
+| `wave/snell_refraction` | 1.75 ns | `wave/snell_refraction` | 284.00 ns | 162.6× |
+| `wave/fresnel_rs_direct` | 1.73 ns | `wave/fresnel_rs_direct` | 58.00 ns | 33.6× |
+| `wave/reflectance_unpolarized` | 1.24 ns | `wave/reflectance_unpolarized` | 68.00 ns | 54.9× |
+| `wave/reflectance_at_interface` | 7.78 ns | `wave/reflectance_at_interface` | 117.00 ns | 15.0× |
+| `wave/schlick_reflectance` | 1.24 ns | `wave/schlick_reflectance` | 44.00 ns | 35.6× |
+| `wave/half_wave_dipole_pattern` | 0.50 ns | `wave/half_wave_dipole_pattern` | 483.00 ns | 962.5× |
+| `wave/rect_waveguide_cutoff` | 1.24 ns | `wave/rect_waveguide_cutoff` | 47.00 ns | 38.0× |
 | `fdtd/step_100_cells` | 64.09 ns | pending (M5) | — | — |
 | `fdtd/step_1000_cells` | 623.03 ns | pending (M5) | — | — |
 | `fdtd/run_100_steps_500_cells` | 32.23 µs | pending (M5) | — | — |

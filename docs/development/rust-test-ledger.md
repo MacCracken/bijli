@@ -6,7 +6,7 @@
 > (`tests/golden/`) checks every ported function on its grid besides; this ledger is about the oracle's own
 > assertions.
 
-**858 Rust tests:** 199 ported, 3 not applicable, 656 pending.
+**858 Rust tests:** 262 ported, 3 not applicable, 593 pending.
 
 | Rust file | Milestone | Cyrius tests | Rust tests | Ported | N/A | Pending |
 |---|---|---|---:|---:|---:|---:|
@@ -27,7 +27,7 @@
 | `src/relativity.rs` | M2 | `tests/relativity.tcyr` | 48 | 0 | 0 | 48 |
 | `src/rf.rs` | M4 | `tests/rf.tcyr` | 80 | 0 | 0 | 80 |
 | `src/scattering.rs` | M3 | `tests/scattering.tcyr` | 32 | 0 | 0 | 32 |
-| `src/wave.rs` | M2 | `tests/wave.tcyr` | 63 | 0 | 0 | 63 |
+| `src/wave.rs` | M2 | `tests/wave.tcyr` | 63 | 63 | 0 | 0 |
 | `tests/integration.rs` | M8 | `tests/integration.tcyr` | 26 | 0 | 0 | 26 |
 
 ## Not applicable

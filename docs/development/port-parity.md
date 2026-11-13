@@ -1401,3 +1401,94 @@ Language facts the probes found, beyond plan §2:
   measured, 0 pending, 16,398 accepted (ADR 01: 8,996; ADR 0002: 7,402)** over 257,401 rows; **all 179 digests
   equal**, the 145 of M1 unchanged.
 
+
+## 26. M2 part 1b: wave (2026-11-12)
+
+- **`src/wave.cyr`**: wave.rs's 42 public functions: the Poynting vector and the plane-wave relations, Snell's law and
+  the angle-form Fresnel coefficients, the trig-free family (`*_direct`, unpolarized, Schlick), the material-based
+  interface, the rectangular and circular waveguides and the antennas. Every formula is Rust's in Rust's order. The
+  sin, cos, asin and atan are bijli's correctly rounded ones. Rust's `Result<Option<f64>>` (Snell, the critical angle,
+  cos θ_t, the direct r_s and r_p) is `Ok(Some)` with the value in `*out`, or `Ok(None)` under total internal
+  reflection, out untouched as on an error. A waveguide's `u32` mode indices are i64s with a Cyrius-only
+  InvalidParameter outside a u32 ("m and n must be u32s, got m=-1, n=0"), field.cyr's precedent for the multipoles.
+- **ADR 0002 rows 22–25**, the user's answers of 2026-11-12:
+  - **22**: the dipoles on bijli's η₀ = √(μ₀/ε₀) with Cin(2π) exact (Rust's 1.6409, 73.1 Ω and 80π² assume
+    η₀ = 120π): D = 1.640922376984585, R = 73.07901028545056 Ω, and (2π/3)·η₀ = 789.0221238669274 Ω in the
+    Hertzian resistance. The constants are generated (`src/wave_data.cyr`, by `validate.py` in rational arithmetic).
+    627 rows mapped.
+  - **23**: `bj_effective_aperture` refuses a NaN wavelength (`!(λ ≥ 0)`), as row 19. 39 rows mapped.
+  - **24**: `bj_schlick_reflectance` computes R₀ with no |n₁ + n₂| < 1e-30 guard: the index check already makes the sum
+    positive. 76 rows mapped.
+  - **25**: `bj_material_reflection_coefficient` takes Γ on the relative impedances √(μ_r/ε_r), so Γ² is
+    `bj_reflectance_normal_materials`' R bit for bit (Rust's absolute impedances missed it on about 68 % of pairs). 74
+    rows mapped.
+
+  Reviewed and kept as Rust's: the zero guards on an input (`wave_number`, Snell, the critical and Brewster angles,
+  the Hertzian resistance, Friis), as the user's material.rs answer; the angle forms' acceptance of any index (a
+  negative index refracts negatively, which is physical); check_indices' order (n₂ = 0 is DivisionByZero before any
+  other index check).
+- **Row 18 through FieldVector**: the Poynting vector and the momentum density are `cross` before their scale
+  factors: 180 rows mapped from `fv_model`.
+- **`{ratio:.4}`**: `guide_wavelength`'s below-cutoff error prints the ratio as Rust's fixed precision does: the exact
+  value rounded half to even (`1.03125` → `1.0312`), `-0.0000` for a negative zero, every integer digit of a ratio
+  past 10^300. `src/fmtf.cyr` gains `_bj_fmt_f64_fixed` (0 ≤ p ≤ 17) on its bignum, with shift-right, bit and
+  divide-by-small helpers; beam.rs's `{g:.4}` (M3) uses it too. `fmtf.tsv` gains 14,376 `f64::fmt_fixed` rows
+  (precisions 0, 1 and 4 over a stride of the grid, the ties at each precision and the carries).
+- **New golden file `wave.tsv`, 66,690 rows**: class C for the ten functions that call a transcendental (the plane
+  wave, Snell, the critical and Brewster angles, the four angle-form Fresnel functions, the two patterns), class A for
+  the rest. Pairs over 39 values (specials, the 1e-30 and 1 thresholds' neighbours, SI values, binades); Snell over
+  index pairs and angles; the Fresnel angle forms over index × angle pairs and Snell-consistent physical calls; the
+  trig-free family over valid index pairs × cosines through the clamp edges (−1e-6, 1 + 1e-6, each ± an ulp), invalid
+  indices on a short list, and each dense → rare pair's critical cosine ulp by ulp; the patterns over [0, π] in 720
+  steps with the 1e-15 axis cut ulp by ulp; the materials of material.tsv's reflectance pairs; the waveguides over
+  dimensions, the u32 edge and the ties of `{ratio:.4}`. A first cut was 51 MB, mostly long error texts in crossed
+  grids, so the grids are thinned to 19 MB with every edge kept. `wave.cr.tsv` holds the 3 rows where glibc
+  misrounds (one asin, two cos). `validate.py`'s independent transcription agreed with every row on its first run.
+- **Rust tests**: all 63 of wave.rs's tests ported (`tests/wave.tcyr`, 111 assertions with the Cyrius-only groups).
+  `test_hertzian_radiation_resistance` compares against (2π/3)·η₀·10⁻⁴ (row 22). The ledger: 262 ported, 3 n/a, 593
+  pending of 858.
+- **Surface parity**: 7 modules ported, 193 items matched (42 new), 0 problems. The API snapshot gains 42 public fns.
+- **Benchmarks** (the eleven wave twins; 33 of 80 now twinned; load average 2.3–3.3, each the lower of two runs, an
+  A/B against HEAD showing no change in the 22 earlier rows):
+
+  | Bench | Rust | Cyrius |
+  |---|---|---|
+  | `wave/poynting_vector` | 0.98 ns | 62 ns |
+  | `wave/plane_wave_intensity` | 0.52 ns | 6 ns |
+  | `wave/plane_wave_e` | 0.51 ns | **20.99 µs** |
+  | `wave/fresnel_rs` | 1.25 ns | 275 ns |
+  | `wave/snell_refraction` | 1.75 ns | 284 ns |
+  | `wave/fresnel_rs_direct` | 1.73 ns | 58 ns |
+  | `wave/reflectance_unpolarized` | 1.24 ns | 68 ns |
+  | `wave/reflectance_at_interface` | 7.78 ns | 117 ns |
+  | `wave/schlick_reflectance` | 1.24 ns | 44 ns |
+  | `wave/half_wave_dipole_pattern` | 0.50 ns | 483 ns |
+  | `wave/rect_waveguide_cutoff` | 1.24 ns | 47 ns |
+
+  Rust's arguments are constants that LLVM folds, so its column is near a clock tick. **Finding**: `plane_wave_e`'s
+  argument kx − ωt is about 5·10⁶ (k = 10⁷, x = 0.5), and crmath's sin and cos keep their fast path only for
+  |x| ≤ 2^20: past it every call takes the multi-precision slow path, about 21 µs. An optical plane wave lands there
+  routinely. Filed in the roadmap as a medium-range reduction (Cody–Waite with a longer π/2, or crmath_ux's
+  Payne–Hanek, then the fast path's polynomials). Speed is measured, not gated: the port is unchanged. The other
+  trigonometric rows (150–200 ns a call) are crmath's fast path.
+- **For M2's range-edge Part** (§0.1), from the audit:
+  - the trig-free family at extreme index ratios: (n₁/n₂)² past DBL_MAX gives sin²θ_t = ∞·0 = NaN at cos θ_i = 1, so
+    r_s = NaN for valid indices (`fresnel_rs_direct(10^200, 10^-100, 1)` is Some(NaN), where r_s ≈ 1); n₁ cos θ_i ±
+    n₂ cos θ_t past DBL_MAX gives ∞/∞. The ratios are scale-invariant, so a power-of-two scaling fixes both;
+  - `sin²θ_t > 1`, `|n₁ sin θ_i/n₂| > 1`, `n₂/n₁ ≥ 1` and `1 − (λ/λ_c)² ≤ 0` decided on rounded values (TIR or
+    cutoff within an ulp of the boundary; continuous in R, so low priority); the |den| < 1e-30 guards of the angle
+    forms and `reflectance_normal` on rounded sums;
+  - `reflectance_normal` and Schlick's R₀ with n₁ + n₂ past DBL_MAX (DBL_MAX and DBL_MAX/2 give R = 0 for 1/9);
+  - the material interface: √(ε_r μ_r) past DBL_MAX or below 2^-1074 turns valid materials into an index error
+    ("got n₁=1, n₂=inf"), and √(μ_r/ε_r) under- or overflows;
+  - the waveguides: (m/a)² + (n/b)² under- or overflows (sides of 10^300 m are "not representable" where
+    λ_c = 1.41·10^300 is; the cutoff frequency is 0 there), a hypot-style scaling; x·v and 2πa in the circular cutoff;
+  - round-once candidates (row 13): the Poynting vector's and momentum density's scale factors after the cross
+    (E × B past DBL_MAX makes g = ∞ where S/c² is representable), the plane-wave intensity, k = 2πf/v, the
+    effective aperture, the Hertzian resistance and Friis's chains;
+  - accuracy, not range: `half_wave_dipole_pattern` near the axis computes cos((π/2) cos θ) by cancellation, a relative
+    error of about 2^-53/(πθ²/4) (3 % at θ = 10^-7, O(1) below 10^-8); the identity cos((π/2) cos θ) =
+    sin(π sin²(θ/2)) has none. A question for the user in that Part.
+- **Result, every target** (x86_64 ELF, x86_64 PE, aarch64): **11 modules, 0 failing; 321,070 ok, 0 failed, 0
+  measured, 0 pending, 17,397 accepted (ADR 01: 8,999; ADR 0002: 8,398)** over 338,467 rows; **all 222 digests
+  equal**, the 179 before unchanged.

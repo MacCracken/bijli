@@ -1,0 +1,764 @@
+# wave.tcyr — src/wave.cyr (M2 part 1b): the plane-wave relations, Snell's law and the Fresnel coefficients (the angle
+# forms and the trig-free family), the material-based interface, the waveguides and the antennas.
+#
+# Every group named test_* is rust-old/src/wave.rs's test of that name, ported assertion for assertion (the ledger
+# matches them by name): all 63. test_hertzian_radiation_resistance compares against (2π/3)·η₀·10⁻⁴, ADR 0002 row 22's
+# value, where Rust's test has 80π²·10⁻⁴. The cyrius_* groups check what the port adds: the recorded errors and their
+# Display texts, Ok(None) and the errors leaving out untouched, ADR 0002 rows 22–25 and the Cyrius-only u32 check of a
+# waveguide's mode indices. tests/golden/wave.tsv pins every function over its grid against Rust besides.
+
+include "tests/lib.cyr"
+
+# |a − b| < tol.
+fn near(a: f64, b: f64, tol: f64): i64 {
+    var d: f64 = a - b;
+    var ad: f64 = f64_abs(d);
+    if (ad < tol) { return 1; }
+    return 0;
+}
+
+# 1 when the C strings a and b are equal.
+fn text_is(a, b): i64 {
+    var n = strlen(a);
+    if (n != strlen(b)) { return 0; }
+    return memeq(a, b, n);
+}
+
+# 1 when the Result (t, v) is an error with code `code` and the record's Display text is `want`.
+fn err_is(t, v, code, want): i64 {
+    if (is_err_result(t) != 1 || v != code) { return 0; }
+    return text_is(bj_last_error_display(), want);
+}
+
+# 1 when the Result (t, v) is an error with code `code` and the record's Display text is a followed by b (a literal
+# can't continue across lines).
+fn err_is2(t, v, code, a, b): i64 {
+    if (is_err_result(t) != 1 || v != code) { return 0; }
+    var d = bj_last_error_display();
+    var la = strlen(a);
+    var lb = strlen(b);
+    if (strlen(d) != la + lb) { return 0; }
+    if (memeq(d, a, la) != 1) { return 0; }
+    return memeq(d + la, b, lb);
+}
+
+# 1 when the Result (t, v) is an error with code `code` whose Display text starts with `prefix`.
+fn err_starts(t, v, code, prefix): i64 {
+    if (is_err_result(t) != 1 || v != code) { return 0; }
+    var d = bj_last_error_display();
+    var n = strlen(prefix);
+    if (strlen(d) < n) { return 0; }
+    return memeq(d, prefix, n);
+}
+
+# 1 when (t, v) is Ok(Some).
+fn some_is(t, v): i64 {
+    if (is_ok(t) == 1 && v == Some) { return 1; }
+    return 0;
+}
+
+# 1 when (t, v) is Ok(None).
+fn none_is(t, v): i64 {
+    if (is_ok(t) == 1 && v == None) { return 1; }
+    return 0;
+}
+
+# 1 when (t, v) is Ok(x) with 0 ≤ x ≤ 1.
+fn unit_is(t, v): i64 {
+    if (is_ok(t) != 1) { return 0; }
+    var x: f64 = v;
+    if (x >= 0.0 && x <= 1.0) { return 1; }
+    return 0;
+}
+
+# The plane-wave, refraction and waveguide tests.
+fn rust_tests_a(): i64 {
+    var pi: f64 = _BJ_PI;
+    var pi4: f64 = pi / 4.0;
+    var e6: f64 = 0.000001;
+    var e10: f64 = 0.0000000001;
+    var e15: f64 = 0.000000000000001;
+    var e30: f64 = 0.000000000000000000000000000001;
+    var o: f64[1];
+
+    test_group("test_poynting_vector");
+    var ey = BjFieldVector_new(0.0, 1000.0, 0.0);
+    var bz = BjFieldVector_new(0.0, 0.0, 0.000001);
+    var s: BjFieldVector = bj_poynting_vector(ey, bz);
+    var sx: f64 = s.x;
+    assert(sx > 0.0, "S = E × B/μ₀ along +x");
+
+    test_group("test_plane_wave_intensity");
+    var i1: f64 = bj_plane_wave_intensity(1000.0);
+    var i1w: f64 = 0.5 * BJ_SPEED_OF_LIGHT * BJ_EPSILON_0 * 1000000.0;
+    var i1d: f64 = i1 - i1w;
+    var i1r: f64 = f64_abs(i1d) / i1w;
+    assert(i1 > 0.0 && i1r < e6, "I = c·ε₀·E₀²/2");
+
+    test_group("test_radiation_pressure");
+    var pa: f64 = bj_radiation_pressure_absorbed(1000.0);
+    var pr: f64 = bj_radiation_pressure_reflected(1000.0);
+    var pa2: f64 = 2.0 * pa;
+    assert(near(pr, pa2, e15) == 1, "reflected = 2 × absorbed");
+
+    test_group("test_e_b_relationship");
+    var b0: f64 = bj_b_from_e(1000.0);
+    var eb: f64 = bj_e_from_b(b0);
+    assert(near(eb, 1000.0, e6) == 1, "E₀ = cB₀ round trip");
+
+    test_group("test_plane_wave");
+    var pw: f64 = bj_plane_wave_e(100.0, 1.0, 0.0, 1.0, 0.0, 0.0);
+    var pwa: f64 = f64_abs(pw);
+    assert(pwa < e10, "sin 0 = 0");
+
+    test_group("test_wave_number");
+    var tk, vk = bj_wave_number(500000000000000.0, BJ_SPEED_OF_LIGHT);
+    var k: f64 = vk;
+    var kd: f64 = k - 10470000.0;
+    var kr: f64 = f64_abs(kd) / 10470000.0;
+    assert(is_ok(tk) == 1 && kr < 0.01, "visible light: k ≈ 1.047e7 rad/m");
+
+    test_group("test_angular_frequency");
+    var w60: f64 = bj_angular_frequency(60.0);
+    var w60w: f64 = 120.0 * pi;
+    assert(near(w60, w60w, e10) == 1, "ω = 2πf");
+
+    test_group("test_wave_number_zero_velocity_fails");
+    var tk0, vk0 = bj_wave_number(500000000000000.0, 0.0);
+    assert(err_is(tk0, vk0, BJ_ERR_DIVISION_BY_ZERO,
+        "division by zero in EM calculation: velocity cannot be zero for wave number") == 1, "v = 0 refused");
+
+    test_group("test_momentum_density");
+    var g: BjFieldVector = bj_momentum_density(ey, bz);
+    var gx: f64 = g.x;
+    var gy: f64 = f64_abs(g.y);
+    var gz: f64 = f64_abs(g.z);
+    assert(gx > 0.0 && gy < e30 && gz < e30, "g = S/c² along +x");
+
+    test_group("test_radiation_pressure_absorbed_value");
+    var pv: f64 = bj_radiation_pressure_absorbed(1000.0);
+    var pvw: f64 = 1000.0 / BJ_SPEED_OF_LIGHT;
+    assert(near(pv, pvw, e15) == 1, "P = I/c");
+
+    test_group("test_snell_normal_incidence");
+    var ts0, vs0 = bj_snell_refraction_angle(1.0, 1.5, 0.0, &o);
+    var th0: f64 = f64_abs(o[0]);
+    assert(some_is(ts0, vs0) == 1 && th0 < e10, "normal incidence stays normal");
+
+    test_group("test_snell_air_to_glass");
+    var ts1, vs1 = bj_snell_refraction_angle(1.0, 1.5, pi4, &o);
+    var sin45: f64 = _bj_sin(pi4);
+    var sq: f64 = sin45 / 1.5;
+    var th1w: f64 = _bj_asin(sq);
+    var th1: f64 = o[0];
+    assert(some_is(ts1, vs1) == 1 && near(th1, th1w, e10) == 1, "45° in air → asin(sin 45°/1.5)");
+
+    test_group("test_total_internal_reflection");
+    var ts2, vs2 = bj_snell_refraction_angle(1.5, 1.0, 1.0, &o);
+    assert(none_is(ts2, vs2) == 1, "glass → air at 57°: total internal reflection");
+
+    test_group("test_critical_angle");
+    var tc1, vc1 = bj_critical_angle(1.5, 1.0, &o);
+    var r23: f64 = 1.0 / 1.5;
+    var tcw: f64 = _bj_asin(r23);
+    var tcg: f64 = o[0];
+    assert(some_is(tc1, vc1) == 1 && near(tcg, tcw, e10) == 1, "θ_c = asin(1/1.5)");
+
+    test_group("test_critical_angle_none_for_dense_medium");
+    var tc2, vc2 = bj_critical_angle(1.0, 1.5, &o);
+    assert(none_is(tc2, vc2) == 1, "air → glass: no critical angle");
+
+    test_group("test_brewster_angle");
+    var tb, vb = bj_brewster_angle(1.0, 1.5);
+    var thb: f64 = vb;
+    var thbw: f64 = _bj_atan(1.5);
+    assert(is_ok(tb) == 1 && near(thb, thbw, e10) == 1, "θ_B = atan 1.5");
+
+    test_group("test_fresnel_normal_incidence");
+    var trs, vrs = bj_fresnel_rs(1.0, 0.0, 1.5, 0.0);
+    var trp, vrp = bj_fresnel_rp(1.0, 0.0, 1.5, 0.0);
+    var rsn: f64 = vrs;
+    var rpn: f64 = vrp;
+    var expn: f64 = -0.5 / 2.5;
+    var nexpn: f64 = -expn;
+    assert(is_ok(trs) == 1 && near(rsn, expn, e10) == 1, "r_s = (n₁ − n₂)/(n₁ + n₂)");
+    assert(is_ok(trp) == 1 && near(rpn, nexpn, e10) == 1, "r_p has the opposite sign");
+
+    test_group("test_reflectance_normal");
+    var tr1, vr1 = bj_reflectance_normal(1.0, 1.5);
+    var rn1: f64 = vr1;
+    assert(is_ok(tr1) == 1 && near(rn1, 0.04, e10) == 1, "air → glass: R = 0.04");
+
+    test_group("test_transmittance_complement");
+    var tt1, vt1 = bj_transmittance_normal(1.0, 1.5);
+    var tn1: f64 = vt1;
+    var rt1: f64 = rn1 + tn1;
+    assert(is_ok(tt1) == 1 && near(rt1, 1.0, e10) == 1, "R + T = 1");
+
+    test_group("test_rectangular_waveguide_te10");
+    var ta, va = bj_rectangular_waveguide_cutoff(0.02286, 0.01016, 1, 0, BJ_SPEED_OF_LIGHT);
+    var fc10: f64 = va;
+    var fcg: f64 = fc10 / 1000000000.0;
+    assert(is_ok(ta) == 1 && near(fcg, 6.56, 0.01) == 1, "WR-90 TE₁₀: f_c ≈ 6.56 GHz");
+
+    test_group("test_rectangular_waveguide_cutoff_wavelength");
+    var tl, vl = bj_rectangular_waveguide_cutoff_wavelength(0.02286, 0.01016, 1, 0);
+    var lc10: f64 = vl;
+    var two_a: f64 = 2.0 * 0.02286;
+    assert(is_ok(tl) == 1 && near(lc10, two_a, e10) == 1, "TE₁₀: λ_c = 2a");
+
+    test_group("test_guide_wavelength");
+    var tg, vg = bj_guide_wavelength(0.03, two_a);
+    var lg: f64 = vg;
+    assert(is_ok(tg) == 1 && lg > 0.03, "the guide wavelength is longer");
+
+    test_group("test_guide_wavelength_below_cutoff");
+    var tgb, vgb = bj_guide_wavelength(0.05, 0.04);
+    assert(err_is(tgb, vgb, BJ_ERR_INVALID_PARAMETER,
+        "invalid parameter: frequency below cutoff: λ/λ_c = 1.2500 (must be < 1)") == 1, "λ > λ_c refused");
+
+    test_group("test_cylindrical_waveguide_cutoff");
+    var tcy, vcy = bj_cylindrical_waveguide_cutoff(0.01, 1.8412, BJ_SPEED_OF_LIGHT);
+    var fc11: f64 = vcy;
+    var fc11g: f64 = fc11 / 1000000000.0;
+    assert(is_ok(tcy) == 1 && near(fc11g, 8.79, 0.1) == 1, "TE₁₁ at a = 10 mm: f_c ≈ 8.79 GHz");
+
+    if (vs0 == 7 || vs1 == 7 || vs2 == 7 || vc1 == 7 || vc2 == 7) { println("."); }
+    return 0;
+}
+
+# The antenna and trig-free Fresnel tests.
+fn rust_tests_b(): i64 {
+    var pi: f64 = _BJ_PI;
+    var pi4: f64 = pi / 4.0;
+    var pi2: f64 = pi / 2.0;
+    var e6: f64 = 0.000001;
+    var e10: f64 = 0.0000000001;
+    var o: f64[1];
+    var o2: f64[1];
+
+    test_group("test_hertzian_dipole_pattern_peak");
+    var hp: f64 = bj_hertzian_dipole_pattern(pi2);
+    assert(near(hp, 1.0, e10) == 1, "peak 1 at θ = π/2");
+
+    test_group("test_hertzian_dipole_pattern_null");
+    var hn: f64 = bj_hertzian_dipole_pattern(0.0);
+    var hna: f64 = f64_abs(hn);
+    assert(hna < e10, "null on the axis");
+
+    test_group("test_half_wave_dipole_pattern_peak");
+    var wp: f64 = bj_half_wave_dipole_pattern(pi2);
+    assert(near(wp, 1.0, e10) == 1, "peak 1 at θ = π/2");
+
+    test_group("test_half_wave_dipole_pattern_null");
+    var wn: f64 = bj_half_wave_dipole_pattern(0.0);
+    var wna: f64 = f64_abs(wn);
+    assert(wna < e10, "null on the axis");
+
+    test_group("test_hertzian_radiation_resistance");
+    var th, vh = bj_hertzian_dipole_radiation_resistance(0.01, 1.0);
+    var rh: f64 = vh;
+    var eta0: f64 = bj_free_space_impedance();
+    var rhw: f64 = 2.0 * pi / 3.0 * eta0 * 0.0001;
+    assert(is_ok(th) == 1 && near(rh, rhw, e6) == 1, "dl/λ = 0.01: R = (2π/3)·η₀·10⁻⁴ ≈ 0.0789 Ω (row 22)");
+
+    test_group("test_effective_aperture");
+    var dhw: f64 = bj_half_wave_dipole_directivity();
+    var tae, vae = bj_effective_aperture(1.0, dhw);
+    var ae: f64 = vae;
+    assert(is_ok(tae) == 1 && near(ae, 0.1305, 0.001) == 1, "a half-wave dipole at λ = 1 m: A_e ≈ 0.1305 m²");
+
+    test_group("test_friis_inverse_square");
+    var tf1, vf1 = bj_friis_transmission(1.0, 1.0, 1.0, 1.0);
+    var tf2, vf2 = bj_friis_transmission(1.0, 1.0, 1.0, 2.0);
+    var p1: f64 = vf1;
+    var p2: f64 = vf2;
+    var p12: f64 = p1 / p2;
+    assert(is_ok(tf1) == 1 && is_ok(tf2) == 1 && near(p12, 4.0, e6) == 1, "twice the distance, a quarter the power");
+
+    test_group("test_friis_singularity");
+    var tfs, vfs = bj_friis_transmission(1.0, 1.0, 1.0, 0.0);
+    assert(err_is(tfs, vfs, BJ_ERR_SINGULARITY, "singularity: field evaluation at source point (distance = 0)") == 1,
+      "d = 0 refused");
+
+    test_group("test_snell_cos_theta_t_normal");
+    var tn, vn = bj_snell_cos_theta_t(1.0, 1.5, 1.0, &o);
+    var ctn: f64 = o[0];
+    assert(some_is(tn, vn) == 1 && near(ctn, 1.0, e10) == 1, "cos θ_i = 1 → cos θ_t = 1");
+
+    test_group("test_snell_cos_theta_t_45_deg");
+    var c45: f64 = _bj_cos(pi4);
+    var t45, v45 = bj_snell_cos_theta_t(1.0, 1.5, c45, &o);
+    var s45: f64 = _bj_sin(pi4);
+    var st: f64 = s45 / 1.5;
+    var q45: f64 = 1.0 - st * st;
+    var ct45w: f64 = f64_sqrt(q45);
+    var ct45: f64 = o[0];
+    assert(some_is(t45, v45) == 1 && near(ct45, ct45w, e10) == 1, "45°: √(1 − sin²θ_t) by trig");
+
+    test_group("test_snell_cos_theta_t_tir");
+    var ttir, vtir = bj_snell_cos_theta_t(1.5, 1.0, 0.3, &o);
+    assert(none_is(ttir, vtir) == 1, "glass → air, steep: total internal reflection");
+
+    test_group("test_fresnel_rs_direct_normal");
+    var tds, vds = bj_fresnel_rs_direct(1.0, 1.5, 1.0, &o);
+    var rds: f64 = o[0];
+    var exs: f64 = -0.5 / 2.5;
+    assert(some_is(tds, vds) == 1 && near(rds, exs, e10) == 1, "r_s = (n₁ − n₂)/(n₁ + n₂)");
+
+    test_group("test_fresnel_rp_direct_normal");
+    var tdp, vdp = bj_fresnel_rp_direct(1.0, 1.5, 1.0, &o);
+    var rdp: f64 = o[0];
+    var exp2: f64 = 0.5 / 2.5;
+    assert(some_is(tdp, vdp) == 1 && near(rdp, exp2, e10) == 1, "r_p = (n₂ − n₁)/(n₂ + n₁)");
+
+    test_group("test_fresnel_direct_matches_trig");
+    var t30: f64 = pi / 6.0;
+    var c30: f64 = _bj_cos(t30);
+    var tsn, vsn = bj_snell_refraction_angle(1.0, 1.5, t30, &o2);
+    var tt30: f64 = o2[0];
+    var tq1, vq1 = bj_fresnel_rs(1.0, t30, 1.5, tt30);
+    var tq2, vq2 = bj_fresnel_rs_direct(1.0, 1.5, c30, &o);
+    var rs_trig: f64 = vq1;
+    var rs_dir: f64 = o[0];
+    assert(some_is(tsn, vsn) == 1 && is_ok(tq1) == 1 && some_is(tq2, vq2) == 1 && near(rs_trig, rs_dir, e10) == 1,
+      "30°: r_s trig = trig-free");
+    var tq3, vq3 = bj_fresnel_rp(1.0, t30, 1.5, tt30);
+    var tq4, vq4 = bj_fresnel_rp_direct(1.0, 1.5, c30, &o);
+    var rp_trig: f64 = vq3;
+    var rp_dir: f64 = o[0];
+    assert(is_ok(tq3) == 1 && some_is(tq4, vq4) == 1 && near(rp_trig, rp_dir, e10) == 1, "30°: r_p trig = trig-free");
+
+    test_group("test_fresnel_direct_tir");
+    var tx1, vx1 = bj_fresnel_rs_direct(1.5, 1.0, 0.3, &o);
+    var tx2, vx2 = bj_fresnel_rp_direct(1.5, 1.0, 0.3, &o);
+    assert(none_is(tx1, vx1) == 1 && none_is(tx2, vx2) == 1, "TIR: None for both");
+
+    test_group("test_reflectance_s_direct_tir");
+    var tx3, vx3 = bj_reflectance_s_direct(1.5, 1.0, 0.3);
+    var rx3: f64 = vx3;
+    assert(is_ok(tx3) == 1 && near(rx3, 1.0, e10) == 1, "TIR: R_s = 1");
+
+    test_group("test_reflectance_p_direct_tir");
+    var tx4, vx4 = bj_reflectance_p_direct(1.5, 1.0, 0.3);
+    var rx4: f64 = vx4;
+    assert(is_ok(tx4) == 1 && near(rx4, 1.0, e10) == 1, "TIR: R_p = 1");
+
+    test_group("test_reflectance_unpolarized_normal");
+    var tu1, vu1 = bj_reflectance_unpolarized(1.0, 1.5, 1.0);
+    var tu2, vu2 = bj_reflectance_normal(1.0, 1.5);
+    var ru1: f64 = vu1;
+    var ru2: f64 = vu2;
+    assert(is_ok(tu1) == 1 && is_ok(tu2) == 1 && near(ru1, ru2, e10) == 1, "normal incidence: unpolarized = normal");
+
+    test_group("test_transmittance_unpolarized_complement");
+    var tu3, vu3 = bj_reflectance_unpolarized(1.0, 1.5, c45);
+    var tu4, vu4 = bj_transmittance_unpolarized(1.0, 1.5, c45);
+    var ru3: f64 = vu3;
+    var tu4v: f64 = vu4;
+    var rt: f64 = ru3 + tu4v;
+    assert(is_ok(tu3) == 1 && is_ok(tu4) == 1 && near(rt, 1.0, e10) == 1, "R + T = 1");
+
+    test_group("test_schlick_normal_matches_exact");
+    var tsc1, vsc1 = bj_schlick_reflectance(1.0, 1.5, 1.0);
+    var rsc1: f64 = vsc1;
+    assert(is_ok(tsc1) == 1 && near(rsc1, ru2, e10) == 1, "normal incidence: Schlick is exact");
+
+    test_group("test_schlick_grazing");
+    var tsc2, vsc2 = bj_schlick_reflectance(1.0, 1.5, 0.0);
+    var rsc2: f64 = vsc2;
+    assert(is_ok(tsc2) == 1 && near(rsc2, 1.0, e10) == 1, "grazing: Schlick → 1");
+
+    test_group("test_schlick_approximates_fresnel");
+    var tsc3, vsc3 = bj_schlick_reflectance(1.0, 1.5, c45);
+    var rsc3: f64 = vsc3;
+    assert(is_ok(tsc3) == 1 && near(rsc3, ru3, 0.02) == 1, "45°: within 0.02 of the exact R");
+
+    test_group("test_snell_cos_theta_t_zero_n2");
+    var tz, vz = bj_snell_cos_theta_t(1.0, 0.0, 0.5, &o);
+    assert(err_is(tz, vz, BJ_ERR_DIVISION_BY_ZERO,
+        "division by zero in EM calculation: refractive index n₂ cannot be zero") == 1, "n₂ = 0 refused");
+
+    if (vn == 7 || v45 == 7 || vtir == 7 || vds == 7 || vdp == 7 || vq2 == 7 || vq4 == 7) { println("."); }
+    if (vx1 == 7 || vx2 == 7 || vsn == 7) { println("."); }
+    return 0;
+}
+
+# The material-based interface and the regression tests.
+fn rust_tests_c(): i64 {
+    var pi: f64 = _BJ_PI;
+    var pi4: f64 = pi / 4.0;
+    var zero: f64 = 0.0;
+    var nan: f64 = zero / zero;
+    var inf: f64 = 1.0 / zero;
+    var e6: f64 = 0.000001;
+    var e10: f64 = 0.0000000001;
+    var e12: f64 = 0.000000000001;
+    var e14: f64 = 0.00000000000001;
+    var e15: f64 = 0.000000000000001;
+    var o: f64[1];
+    var air: BjMaterial = BjMaterial_vacuum();
+    var glass: BjMaterial = BjMaterial_dielectric(2.25);
+
+    test_group("test_reflectance_at_interface_normal");
+    var ti1, vi1 = bj_reflectance_at_interface(air, glass, 1.0);
+    var tn1, vn1 = bj_reflectance_normal(1.0, 1.5);
+    var ri1: f64 = vi1;
+    var rn1: f64 = vn1;
+    assert(is_ok(ti1) == 1 && is_ok(tn1) == 1 && near(ri1, rn1, e6) == 1, "air → glass at normal incidence");
+
+    test_group("test_reflectance_normal_materials_air_glass");
+    var tm1, vm1 = bj_reflectance_normal_materials(air, glass);
+    var rm1: f64 = vm1;
+    assert(is_ok(tm1) == 1 && near(rm1, 0.04, e6) == 1, "R = 0.04");
+
+    test_group("test_material_reflection_coefficient");
+    var tg1, vg1 = bj_material_reflection_coefficient(air, glass);
+    var g1: f64 = vg1;
+    assert(is_ok(tg1) == 1 && near(g1, -0.2, e6) == 1, "Γ = (1/1.5 − 1)/(1/1.5 + 1) = −0.2");
+
+    test_group("test_material_reflection_coefficient_same_material");
+    var m4: BjMaterial = BjMaterial_dielectric(4.0);
+    var tg2, vg2 = bj_material_reflection_coefficient(m4, m4);
+    var g2: f64 = vg2;
+    var g2a: f64 = f64_abs(g2);
+    assert(is_ok(tg2) == 1 && g2a < e10, "the same material: Γ = 0");
+
+    test_group("test_schlick_dense_to_rare_uses_cos_theta_t");
+    var ts1, vs1 = bj_schlick_reflectance(1.5, 1.0, 0.76);
+    var rs1: f64 = vs1;
+    assert(is_ok(ts1) == 1 && near(rs1, 0.30233831088147745, 0.02) == 1, "near the critical angle: R ≈ 0.302");
+    var ts2, vs2 = bj_schlick_reflectance(1.5, 1.0, 0.9);
+    var rs2: f64 = vs2;
+    assert(is_ok(ts2) == 1 && near(rs2, 0.04633264795403766, 0.01) == 1, "cos θ_i = 0.9: R ≈ 0.0463");
+    var ts3, vs3 = bj_schlick_reflectance(1.5, 1.0, 0.5);
+    var rs3: f64 = vs3;
+    assert(is_ok(ts3) == 1 && rs3 == 1.0, "under TIR exactly 1");
+    var tr0, vr0 = bj_reflectance_normal(1.0, 1.5);
+    var r0: f64 = vr0;
+    var h5: f64 = _bj_powi(0.5, 5);
+    var w0: f64 = 1.0 - r0;
+    var exp0: f64 = r0 + w0 * h5;
+    var ts4, vs4 = bj_schlick_reflectance(1.0, 1.5, 0.5);
+    var rs4: f64 = vs4;
+    assert(is_ok(tr0) == 1 && is_ok(ts4) == 1 && near(rs4, exp0, e15) == 1, "rare → dense: R₀ + (1 − R₀)·0.5⁵");
+
+    test_group("test_cos_theta_i_range_checked");
+    var tc1, vc1 = bj_reflectance_unpolarized(1.0, 1.5, -1.0);
+    var tc2, vc2 = bj_reflectance_unpolarized(1.0, 1.5, 1.5);
+    var tc3, vc3 = bj_reflectance_unpolarized(1.0, 1.5, nan);
+    var tc4, vc4 = bj_transmittance_unpolarized(1.0, 1.5, -0.5);
+    var tc5, vc5 = bj_schlick_reflectance(1.0, 1.5, -0.2);
+    var tc6, vc6 = bj_fresnel_rs_direct(1.0, 1.5, 2.0, &o);
+    var tc7, vc7 = bj_snell_cos_theta_t(1.0, 1.5, -0.1, &o);
+    assert(is_err_result(tc1) == 1 && is_err_result(tc2) == 1 && is_err_result(tc3) == 1, "−1, 1.5, NaN refused");
+    assert(is_err_result(tc4) == 1 && is_err_result(tc5) == 1 && is_err_result(tc6) == 1, "−0.5, −0.2, 2 refused");
+    assert(is_err_result(tc7) == 1 && vc7 == BJ_ERR_INVALID_PARAMETER, "−0.1 refused");
+    var tc8, vc8 = bj_reflectance_unpolarized(1.0, 1.5, 1.0);
+    var up: f64 = 1.0 + 0.000000001;
+    var tc9, vc9 = bj_reflectance_unpolarized(1.0, 1.5, up);
+    var rnor: f64 = vc8;
+    var rup: f64 = vc9;
+    assert(is_ok(tc8) == 1 && is_ok(tc9) == 1 && rup == rnor, "1 + 1e-9 clamps to 1");
+    var tca, vca = bj_reflectance_unpolarized(1.0, 1.5, 0.0);
+    var tcb, vcb = bj_reflectance_unpolarized(1.0, 1.5, -0.000000001);
+    var rgr: f64 = vca;
+    var rdn: f64 = vcb;
+    assert(is_ok(tca) == 1 && is_ok(tcb) == 1 && rdn == rgr && near(rgr, 1.0, e15) == 1, "−1e-9 clamps to 0; R → 1");
+
+    test_group("test_invalid_indices_rejected");
+    var tv1, vv1 = bj_reflectance_unpolarized(-1.0, 1.5, 0.5);
+    var tv2, vv2 = bj_reflectance_unpolarized(1.0, nan, 0.5);
+    var tv3, vv3 = bj_snell_cos_theta_t(inf, 1.5, 0.5, &o);
+    assert(is_err_result(tv1) == 1 && is_err_result(tv2) == 1 && is_err_result(tv3) == 1, "−1, NaN, ∞ refused");
+
+    test_group("test_reflectance_and_transmittance_in_unit_interval");
+    var pn1: f64[5];
+    var pn2: f64[5];
+    pn1[0] = 1.0;
+    pn2[0] = 1.5;
+    pn1[1] = 1.5;
+    pn2[1] = 1.0;
+    pn1[2] = 1.0;
+    pn2[2] = 3.5;
+    pn1[3] = 2.4;
+    pn2[3] = 1.0;
+    pn1[4] = 1.0;
+    pn2[4] = 1.0;
+    var bad = 0;
+    for (var p = 0; p < 5; p = p + 1) {
+        var a1: f64 = pn1[p];
+        var a2: f64 = pn2[p];
+        for (var i = 0; i <= 1000; i = i + 1) {
+            var c: f64 = f64_from(i) / 1000.0;
+            var tq1, vq1 = bj_reflectance_unpolarized(a1, a2, c);
+            var tq2, vq2 = bj_transmittance_unpolarized(a1, a2, c);
+            var tq3, vq3 = bj_schlick_reflectance(a1, a2, c);
+            if (unit_is(tq1, vq1) != 1 || unit_is(tq2, vq2) != 1 || unit_is(tq3, vq3) != 1) { bad = bad + 1; }
+        }
+    }
+    assert(bad == 0, "R, T and Schlick in [0, 1] over five pairs and 1001 cosines");
+
+    test_group("test_index_matched_grazing_is_zero");
+    var tg3, vg3 = bj_fresnel_rs_direct(1.0, 1.0, 0.0, &o);
+    var rg3: f64 = o[0];
+    assert(some_is(tg3, vg3) == 1 && rg3 == 0.0, "r_s = Some(0)");
+    var tg4, vg4 = bj_fresnel_rp_direct(1.0, 1.0, 0.0, &o);
+    var rg4: f64 = o[0];
+    assert(some_is(tg4, vg4) == 1 && rg4 == 0.0, "r_p = Some(0)");
+    var tg5, vg5 = bj_reflectance_unpolarized(1.33, 1.33, 0.0);
+    var tg6, vg6 = bj_transmittance_unpolarized(1.33, 1.33, 0.0);
+    var rg5: f64 = vg5;
+    var rg6: f64 = vg6;
+    assert(is_ok(tg5) == 1 && rg5 == 0.0 && is_ok(tg6) == 1 && rg6 == 1.0, "R = 0, T = 1");
+
+    test_group("test_reflectance_unpolarized_single_pass_matches_per_polarization");
+    var qn1: f64[4];
+    var qn2: f64[4];
+    qn1[0] = 1.0;
+    qn2[0] = 1.5;
+    qn1[1] = 1.5;
+    qn2[1] = 1.0;
+    qn1[2] = 1.0;
+    qn2[2] = 2.42;
+    qn1[3] = 1.33;
+    qn2[3] = 1.0;
+    var off = 0;
+    for (var q = 0; q < 4; q = q + 1) {
+        var b1: f64 = qn1[q];
+        var b2: f64 = qn2[q];
+        for (var j = 0; j <= 200; j = j + 1) {
+            var cj: f64 = f64_from(j) / 200.0;
+            var tw1, vw1 = bj_reflectance_unpolarized(b1, b2, cj);
+            var tw2, vw2 = bj_reflectance_s_direct(b1, b2, cj);
+            var tw3, vw3 = bj_reflectance_p_direct(b1, b2, cj);
+            var ru: f64 = vw1;
+            var rss: f64 = vw2;
+            var rpp: f64 = vw3;
+            var half: f64 = 0.5 * (rss + rpp);
+            if (is_ok(tw1) != 1 || is_ok(tw2) != 1 || is_ok(tw3) != 1 || ru != half) { off = off + 1; }
+        }
+    }
+    assert(off == 0, "R = (R_s + R_p)/2 exactly, over four pairs and 201 cosines");
+
+    test_group("test_reflectance_at_interface_magnetic_media");
+    var matched: BjMaterial = BjMaterial_new(4.0, 4.0, 0.0);
+    var tk1, vk1 = bj_reflectance_at_interface(air, matched, 1.0);
+    var rk1: f64 = f64_abs(vk1);
+    assert(is_ok(tk1) == 1 && rk1 < e15, "n = 4, η = η₀: matched at normal incidence");
+    var tk2, vk2 = bj_reflectance_at_interface(air, matched, 0.8);
+    var rk2: f64 = vk2;
+    assert(is_ok(tk2) == 1 && near(rk2, 0.011127846503534383, e12) == 1, "cos θ_i = 0.8");
+    var tk3, vk3 = bj_reflectance_at_interface(air, matched, 0.3);
+    var rk3: f64 = vk3;
+    assert(is_ok(tk3) == 1 && near(rk3, 0.2787682331150618, e12) == 1, "cos θ_i = 0.3");
+    var tk4, vk4 = bj_reflectance_at_interface(matched, air, 0.99);
+    var rk4: f64 = vk4;
+    assert(is_ok(tk4) == 1 && near(rk4, 0.008200057075464767, e12) == 1, "matched → vacuum, cos θ_i = 0.99");
+    var mag: BjMaterial = BjMaterial_new(1.0, 2.25, 0.0);
+    var c45: f64 = _bj_cos(pi4);
+    var tk5, vk5 = bj_reflectance_at_interface(air, mag, c45);
+    var rk5: f64 = vk5;
+    assert(is_ok(tk5) == 1 && near(rk5, 0.05023991101223595, e12) == 1, "ε_r = 1, μ_r = 2.25 at 45°");
+    var ma: BjMaterial = BjMaterial_new(4.0, 4.0, 0.0);
+    var mb: BjMaterial = BjMaterial_new(16.0, 1.0, 0.0);
+    var tk6, vk6 = bj_reflectance_at_interface(ma, mb, 0.0);
+    var rk6: f64 = vk6;
+    assert(is_ok(tk6) == 1 && near(rk6, 0.36, e15) == 1, "the same index, grazing: R = Γ² (no 0/0)");
+    var tk7, vk7 = bj_reflectance_normal_materials(air, matched);
+    var rk7: f64 = f64_abs(vk7);
+    assert(is_ok(tk7) == 1 && rk7 < e15, "the normal-incidence wrapper agrees");
+
+    test_group("test_reflectance_at_interface_dielectric_matches_index_form");
+    var far = 0;
+    for (var m = 0; m <= 50; m = m + 1) {
+        var cm: f64 = f64_from(m) / 50.0;
+        var ta1, va1 = bj_reflectance_at_interface(air, glass, cm);
+        var tb1, vb1 = bj_reflectance_unpolarized(1.0, 1.5, cm);
+        var ta2, va2 = bj_reflectance_at_interface(glass, air, cm);
+        var tb2, vb2 = bj_reflectance_unpolarized(1.5, 1.0, cm);
+        var x1: f64 = va1;
+        var y1: f64 = vb1;
+        var x2: f64 = va2;
+        var y2: f64 = vb2;
+        if (is_ok(ta1) != 1 || is_ok(tb1) != 1 || near(x1, y1, e14) != 1) { far = far + 1; }
+        if (is_ok(ta2) != 1 || is_ok(tb2) != 1 || near(x2, y2, e14) != 1) { far = far + 1; }
+    }
+    assert(far == 0, "η = 1/n for dielectrics: the index form, both ways, to 1e-14");
+
+    test_group("test_material_fresnel_rejects_conductors_and_invalid");
+    var cu: BjMaterial = BjMaterial_conductor(59600000.0);
+    var tx1, vx1 = bj_reflectance_at_interface(air, cu, 1.0);
+    var tx2, vx2 = bj_reflectance_normal_materials(air, cu);
+    var tx3, vx3 = bj_material_reflection_coefficient(air, cu);
+    assert(is_err_result(tx1) == 1 && is_err_result(tx2) == 1 && is_err_result(tx3) == 1, "a conductor refused");
+    var neg: BjMaterial = BjMaterial_dielectric(-2.0);
+    var tx4, vx4 = bj_reflectance_at_interface(air, neg, 1.0);
+    var tx5, vx5 = bj_reflectance_normal_materials(air, neg);
+    var tx6, vx6 = bj_material_reflection_coefficient(air, neg);
+    assert(is_err_result(tx4) == 1 && vx4 == BJ_ERR_INVALID_PERMITTIVITY, "ε_r < 0: InvalidPermittivity");
+    assert(is_err_result(tx5) == 1 && vx5 == BJ_ERR_INVALID_PERMITTIVITY, "(normal materials)");
+    assert(is_err_result(tx6) == 1 && vx6 == BJ_ERR_INVALID_PERMITTIVITY, "(reflection coefficient)");
+    var bad_mu: BjMaterial = BjMaterial_new(1.0, -1.0, 0.0);
+    var tx7, vx7 = bj_reflectance_at_interface(air, bad_mu, 1.0);
+    assert(is_err_result(tx7) == 1 && vx7 == BJ_ERR_INVALID_PERMEABILITY, "μ_r < 0: InvalidPermeability");
+    var tx8, vx8 = bj_reflectance_at_interface(air, glass, -0.5);
+    assert(is_err_result(tx8) == 1 && vx8 == BJ_ERR_INVALID_PARAMETER, "cos θ_i = −0.5 refused");
+
+    test_group("test_rectangular_waveguide_cutoff_validation");
+    var wa: f64 = 0.02286;
+    var wb: f64 = 0.01016;
+    var negc: f64 = -BJ_SPEED_OF_LIGHT;
+    var tw1, vw1 = bj_rectangular_waveguide_cutoff(wa, wb, 0, 0, BJ_SPEED_OF_LIGHT);
+    var tw2, vw2 = bj_rectangular_waveguide_cutoff(wa, wb, 1, 0, 0.0);
+    var tw3, vw3 = bj_rectangular_waveguide_cutoff(wa, wb, 1, 0, negc);
+    var tw4, vw4 = bj_rectangular_waveguide_cutoff(wa, wb, 1, 0, nan);
+    var tw5, vw5 = bj_rectangular_waveguide_cutoff(nan, wb, 1, 0, BJ_SPEED_OF_LIGHT);
+    var tw6, vw6 = bj_rectangular_waveguide_cutoff_wavelength(wa, nan, 1, 0);
+    assert(is_err_result(tw1) == 1 && is_err_result(tw2) == 1 && is_err_result(tw3) == 1, "m = n = 0, v ≤ 0 refused");
+    assert(is_err_result(tw4) == 1 && is_err_result(tw5) == 1 && is_err_result(tw6) == 1, "NaN v, a, b refused");
+    var tw7, vw7 = bj_rectangular_waveguide_cutoff(wa, wb, 1, 0, BJ_SPEED_OF_LIGHT);
+    var fc: f64 = vw7;
+    var fcw: f64 = BJ_SPEED_OF_LIGHT / (2.0 * wa);
+    var fcd: f64 = fc - fcw;
+    var fcr: f64 = f64_abs(fcd) / fc;
+    assert(is_ok(tw7) == 1 && fcr < e15, "TE₁₀: f_c = c/(2a)");
+
+    test_group("test_guide_wavelength_validation");
+    var tl1, vl1 = bj_guide_wavelength(nan, 0.05);
+    var tl2, vl2 = bj_guide_wavelength(0.03, nan);
+    var tl3, vl3 = bj_guide_wavelength(-0.03, 0.05);
+    var tl4, vl4 = bj_guide_wavelength(0.03, 0.0);
+    assert(is_err_result(tl1) == 1 && is_err_result(tl2) == 1 && is_err_result(tl3) == 1, "NaN λ, NaN λ_c, λ < 0");
+    assert(is_err_result(tl4) == 1 && vl4 == BJ_ERR_DIVISION_BY_ZERO, "λ_c = 0");
+    var tl5, vl5 = bj_guide_wavelength(0.03, inf);
+    var lg5: f64 = vl5;
+    assert(is_ok(tl5) == 1 && lg5 == 0.03, "a TEM line (λ_c = ∞): λ_g = λ");
+
+    test_group("test_cylindrical_waveguide_tm01_and_validation");
+    var ty1, vy1 = bj_cylindrical_waveguide_cutoff(0.01, 2.4048, BJ_SPEED_OF_LIGHT);
+    var f01: f64 = vy1;
+    var f01w: f64 = 2.4048 * BJ_SPEED_OF_LIGHT / (2.0 * pi * 0.01);
+    var f01d: f64 = f01 - f01w;
+    var f01r: f64 = f64_abs(f01d) / f01w;
+    var f01g: f64 = f01 / 1000000000.0;
+    assert(is_ok(ty1) == 1 && f01r < e15 && near(f01g, 11.474, 0.01) == 1, "TM₀₁: f_c = 2.4048c/(2πa) ≈ 11.474 GHz");
+    var ty2, vy2 = bj_cylindrical_waveguide_cutoff(nan, 1.8412, BJ_SPEED_OF_LIGHT);
+    var ty3, vy3 = bj_cylindrical_waveguide_cutoff(0.01, -1.8412, BJ_SPEED_OF_LIGHT);
+    var ty4, vy4 = bj_cylindrical_waveguide_cutoff(0.01, 1.8412, nan);
+    assert(is_err_result(ty2) == 1 && is_err_result(ty3) == 1 && is_err_result(ty4) == 1, "NaN a, x < 0, NaN v");
+
+    if (vc1 == 0 || vc2 == 0 || vc3 == 0 || vc4 == 0 || vc5 == 0 || vc6 == 0 || vv1 == 0 || vv2 == 0) { println("."); }
+    if (vv3 == 0 || vx1 == 0 || vx2 == 0 || vx3 == 0 || vw1 == 0 || vw2 == 0 || vw3 == 0 || vw4 == 0) { println("."); }
+    if (vw5 == 0 || vw6 == 0 || vl1 == 0 || vl2 == 0 || vl3 == 0 || vy2 == 0 || vy3 == 0 || vy4 == 0) { println("."); }
+    if (vg3 == 7 || vg4 == 7) { println("."); }
+    return 0;
+}
+
+# What the port adds: the error texts, out untouched, ADR 0002 rows 22–25, the u32 mode check.
+fn cyrius_tests(): i64 {
+    var zero: f64 = 0.0;
+    var nan: f64 = zero / zero;
+    var pi: f64 = _BJ_PI;
+    var o: f64[1];
+
+    test_group("cyrius_wave_errors");
+    var te1, ve1 = bj_snell_cos_theta_t(-1.0, 1.5, 0.5, &o);
+    assert(err_is(te1, ve1, BJ_ERR_INVALID_PARAMETER,
+        "invalid parameter: refractive indices must be positive and finite, got n₁=-1, n₂=1.5") == 1, "the index text");
+    var te2, ve2 = bj_schlick_reflectance(1.0, 1.5, 2.0);
+    assert(err_is2(te2, ve2, BJ_ERR_INVALID_PARAMETER, "invalid parameter: cos θ_i must lie in [0, 1] ",
+        "(measured against the incident-side normal), got 2") == 1, "the cosine text");
+    var te3, ve3 = bj_rectangular_waveguide_cutoff(0.0, 1.0, 1, 0, 1.0);
+    var w3 = "invalid parameter: waveguide dimensions must be positive and finite, got a=0, b=1";
+    assert(err_is(te3, ve3, BJ_ERR_INVALID_PARAMETER, w3) == 1, "the dimension text");
+    var te4, ve4 = bj_rectangular_waveguide_cutoff_wavelength(1.0, 1.0, 0, 0);
+    assert(err_is(te4, ve4, BJ_ERR_INVALID_PARAMETER,
+        "invalid parameter: both m and n cannot be zero (no TE₀₀/TM₀₀ mode)") == 1, "the mode text");
+    var big: f64 = _bj_powi(2.0, 600);
+    var te5, ve5 = bj_rectangular_waveguide_cutoff_wavelength(big, big, 1, 0);
+    assert(err_starts(te5, ve5, BJ_ERR_INVALID_PARAMETER,
+        "invalid parameter: cutoff wavelength not representable for a=4149515568880993000") == 1,
+      "2^600 m sides: (1/a)² underflows, refused");
+    var te6, ve6 = bj_guide_wavelength(1.03125, 1.0);
+    assert(err_is(te6, ve6, BJ_ERR_INVALID_PARAMETER,
+        "invalid parameter: frequency below cutoff: λ/λ_c = 1.0312 (must be < 1)") == 1, "{:.4} rounds a tie to even");
+    var te7, ve7 = bj_guide_wavelength(0.03, -1.0);
+    var w7 = "invalid parameter: cutoff wavelength must be positive, got -1";
+    assert(err_is(te7, ve7, BJ_ERR_INVALID_PARAMETER, w7) == 1, "the cutoff text");
+    var te8, ve8 = bj_cylindrical_waveguide_cutoff(0.01, 0.0, 1.0);
+    var w8 = "invalid parameter: Bessel root must be positive and finite, got 0";
+    assert(err_is(te8, ve8, BJ_ERR_INVALID_PARAMETER, w8) == 1, "the root text");
+    var te9, ve9 = bj_material_reflection_coefficient(BjMaterial_vacuum(), BjMaterial_new(1.0, nan, 0.0));
+    assert(err_is(te9, ve9, BJ_ERR_INVALID_PERMEABILITY, "invalid permeability: NaN (must be > 0)") == 1, "μ_r NaN");
+
+    test_group("cyrius_out_untouched");
+    o[0] = 7.0;
+    var tu1, vu1 = bj_snell_refraction_angle(1.5, 1.0, 1.0, &o);
+    var ou1: f64 = o[0];
+    assert(none_is(tu1, vu1) == 1 && ou1 == 7.0, "Ok(None) leaves out as it was");
+    var tu2, vu2 = bj_critical_angle(0.0, 1.0, &o);
+    var ou2: f64 = o[0];
+    assert(is_err_result(tu2) == 1 && vu2 == BJ_ERR_DIVISION_BY_ZERO && ou2 == 7.0, "an error too");
+    var tu3, vu3 = bj_fresnel_rp_direct(1.5, 1.0, 0.3, &o);
+    var ou3: f64 = o[0];
+    assert(none_is(tu3, vu3) == 1 && ou3 == 7.0, "TIR in the direct form");
+
+    test_group("cyrius_adr_rows_22_to_25");
+    var d: f64 = bj_half_wave_dipole_directivity();
+    var r: f64 = bj_half_wave_dipole_radiation_resistance();
+    assert(d == 1.640922376984585 && r == 73.07901028545056, "row 22: 4/Cin(2π) and η₀·Cin(2π)/(4π)");
+    var r_d: f64 = r * d;
+    var eta0: f64 = bj_free_space_impedance();
+    var eta_pi: f64 = eta0 / pi;
+    assert(near(r_d, eta_pi, 0.0000000000001) == 1, "R·D = η₀/π: the one Cin(2π) in both");
+    var th, vh = bj_hertzian_dipole_radiation_resistance(1.0, 1.0);
+    var kh: f64 = vh;
+    assert(is_ok(th) == 1 && kh == 789.0221238669274, "row 22: (2π/3)·η₀ for 80π²");
+    var ta, va = bj_effective_aperture(nan, 1.5);
+    assert(err_is(ta, va, BJ_ERR_INVALID_PARAMETER, "invalid parameter: wavelength must be non-negative, got NaN") == 1,
+      "row 23: a NaN wavelength refused");
+    var tiny: f64 = 0.0000000000000000000000000000001;
+    var tiny2: f64 = 2.0 * tiny;
+    var ts, vs = bj_schlick_reflectance(tiny, tiny2, 1.0);
+    var rs: f64 = vs;
+    var tsw, vsw = bj_schlick_reflectance(1.0, 2.0, 1.0);
+    var rsw: f64 = vsw;
+    assert(is_ok(ts) == 1 && is_ok(tsw) == 1 && rs == rsw, "row 24: indices below 1e-30 work, scale-free");
+    var m1: BjMaterial = BjMaterial_new(2.7, 1.3, 0.0);
+    var m2: BjMaterial = BjMaterial_new(11.9, 0.7, 0.0);
+    var tg, vg = bj_material_reflection_coefficient(m1, m2);
+    var tr, vr = bj_reflectance_normal_materials(m1, m2);
+    var gam: f64 = vg;
+    var refl: f64 = vr;
+    var gam2: f64 = gam * gam;
+    assert(is_ok(tg) == 1 && is_ok(tr) == 1 && gam2 == refl, "row 25: Γ² is R bit for bit");
+
+    test_group("cyrius_waveguide_modes_u32");
+    var tm1, vm1 = bj_rectangular_waveguide_cutoff(1.0, 1.0, 0 - 1, 0, 1.0);
+    assert(err_is(tm1, vm1, BJ_ERR_INVALID_PARAMETER, "invalid parameter: m and n must be u32s, got m=-1, n=0") == 1,
+      "m = −1 refused (Rust's u32)");
+    var tm2, vm2 = bj_rectangular_waveguide_cutoff_wavelength(1.0, 1.0, 0, 4294967296);
+    assert(is_err_result(tm2) == 1 && vm2 == BJ_ERR_INVALID_PARAMETER, "n = 2^32 refused");
+    var tm3, vm3 = bj_rectangular_waveguide_cutoff_wavelength(1.0, 1.0, 4294967295, 0);
+    var lm3: f64 = vm3;
+    var lm3w: f64 = 2.0 / 4294967295.0;
+    assert(is_ok(tm3) == 1 && lm3 == lm3w, "m = u32::MAX accepted");
+
+    if (vu1 == 7 || vu3 == 7) { println("."); }
+    return 0;
+}
+
+# Runs wave.rs's tests, then the Cyrius-only checks.
+fn main(): i64 {
+    alloc_init();
+    rust_tests_a();
+    rust_tests_b();
+    rust_tests_c();
+    cyrius_tests();
+    return assert_summary();
+}
+
+var exit_code = main();
+if (exit_code > 0) { exit_code = 1; }
+sys_exit_group(exit_code);

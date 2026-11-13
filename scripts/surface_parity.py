@@ -36,10 +36,10 @@ import rustsrc  # noqa: E402
 root = Path(sys.argv[1] if len(sys.argv) > 1 else ".").resolve()
 
 # Ported modules (their milestone done or in progress, item by item).
-MODULES = ["error", "logging", "field", "maxwell", "charge", "material"]
+MODULES = ["error", "logging", "field", "maxwell", "charge", "material", "wave"]
 # Rust module -> the milestone that ports it (port plan §4.1).
 PENDING_MODULES = {
-    "wave": "M2", "circuit": "M2", "relativity": "M2",
+    "circuit": "M2", "relativity": "M2",
     "polarization": "M3", "scattering": "M3", "beam": "M3",
     "rf": "M4",
     "fdtd": "M5–M6", "compute": "M6",

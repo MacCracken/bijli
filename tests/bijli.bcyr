@@ -407,6 +407,113 @@ fn main(): i64 {
     bench_report(b25);
     if (msum == 7.0) { println("."); }
 
+    # wave/* (M2 part 1b): rust-old/benches/benchmarks.rs's wave_benchmarks, with its arguments.
+    var we = BjFieldVector_new(0.0, 1000.0, 0.0);
+    var wb = BjFieldVector_new(0.0, 0.0, 0.000001);
+    var wsum: f64 = 0.0;
+    var wo: f64[1];
+    var b26 = bench_new("wave/poynting_vector");
+    bench_batch_start(b26);
+    for (var k = 0; k < 1000000; k = k + 1) {
+        var ws = bj_poynting_vector(we, wb);
+        wsum = wsum + ws.x;
+    }
+    bench_batch_stop(b26, 1000000);
+    bench_report(b26);
+
+    var b27 = bench_new("wave/plane_wave_intensity");
+    bench_batch_start(b27);
+    for (var k = 0; k < 1000000; k = k + 1) {
+        var wi: f64 = bj_plane_wave_intensity(1000.0);
+        wsum = wsum + wi;
+    }
+    bench_batch_stop(b27, 1000000);
+    bench_report(b27);
+
+    var b28 = bench_new("wave/plane_wave_e");
+    bench_batch_start(b28);
+    for (var k = 0; k < 1000000; k = k + 1) {
+        var wpe: f64 = bj_plane_wave_e(100.0, 10000000.0, 0.5, 3000000000000000.0, 0.000000000000001, 0.0);
+        wsum = wsum + wpe;
+    }
+    bench_batch_stop(b28, 1000000);
+    bench_report(b28);
+
+    var b29 = bench_new("wave/fresnel_rs");
+    bench_batch_start(b29);
+    for (var k = 0; k < 1000000; k = k + 1) {
+        var t29, v29 = bj_fresnel_rs(1.0, 0.5, 1.5, 0.33);
+        keep = keep + v29;
+    }
+    bench_batch_stop(b29, 1000000);
+    bench_report(b29);
+
+    var b30 = bench_new("wave/snell_refraction");
+    bench_batch_start(b30);
+    for (var k = 0; k < 1000000; k = k + 1) {
+        var t30, v30 = bj_snell_refraction_angle(1.0, 1.5, 0.5, &wo);
+        wsum = wsum + wo[0];
+    }
+    bench_batch_stop(b30, 1000000);
+    bench_report(b30);
+
+    var b31 = bench_new("wave/fresnel_rs_direct");
+    bench_batch_start(b31);
+    for (var k = 0; k < 1000000; k = k + 1) {
+        var t31, v31 = bj_fresnel_rs_direct(1.0, 1.5, 0.707, &wo);
+        wsum = wsum + wo[0];
+    }
+    bench_batch_stop(b31, 1000000);
+    bench_report(b31);
+
+    var b32 = bench_new("wave/reflectance_unpolarized");
+    bench_batch_start(b32);
+    for (var k = 0; k < 1000000; k = k + 1) {
+        var t32, v32 = bj_reflectance_unpolarized(1.0, 1.5, 0.707);
+        keep = keep + v32;
+    }
+    bench_batch_stop(b32, 1000000);
+    bench_report(b32);
+
+    var wair: BjMaterial = BjMaterial_vacuum();
+    var wglass: BjMaterial = BjMaterial_dielectric(2.25);
+    var b33 = bench_new("wave/reflectance_at_interface");
+    bench_batch_start(b33);
+    for (var k = 0; k < 1000000; k = k + 1) {
+        var t33, v33 = bj_reflectance_at_interface(wair, wglass, 0.707);
+        keep = keep + v33;
+    }
+    bench_batch_stop(b33, 1000000);
+    bench_report(b33);
+
+    var b34 = bench_new("wave/schlick_reflectance");
+    bench_batch_start(b34);
+    for (var k = 0; k < 1000000; k = k + 1) {
+        var t34, v34 = bj_schlick_reflectance(1.0, 1.5, 0.707);
+        keep = keep + v34;
+    }
+    bench_batch_stop(b34, 1000000);
+    bench_report(b34);
+
+    var b35 = bench_new("wave/half_wave_dipole_pattern");
+    bench_batch_start(b35);
+    for (var k = 0; k < 1000000; k = k + 1) {
+        var whp: f64 = bj_half_wave_dipole_pattern(1.0);
+        wsum = wsum + whp;
+    }
+    bench_batch_stop(b35, 1000000);
+    bench_report(b35);
+
+    var b36 = bench_new("wave/rect_waveguide_cutoff");
+    bench_batch_start(b36);
+    for (var k = 0; k < 1000000; k = k + 1) {
+        var t36, v36 = bj_rectangular_waveguide_cutoff(0.02286, 0.01016, 1, 0, BJ_SPEED_OF_LIGHT);
+        keep = keep + v36;
+    }
+    bench_batch_stop(b36, 1000000);
+    bench_report(b36);
+    if (wsum == 7.0) { println("."); }
+
     # The JSON (src/json.cyr): a FieldVector written into one builder, emptied each time through its length word
     # (lib/str.cyr's layout: buf, len, cap), and serde_json's documents read back.
     var jv = BjFieldVector_new(1.5, -0.25, BJ_SPEED_OF_LIGHT);

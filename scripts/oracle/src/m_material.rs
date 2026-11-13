@@ -24,14 +24,14 @@ use bijli::material::{
 use std::hint::black_box;
 
 /// `x` moved `k` ulps (k > 0 up, k < 0 down), for a positive finite x.
-fn ulps(x: f64, k: i64) -> f64 {
+pub(crate) fn ulps(x: f64, k: i64) -> f64 {
     let bits = x.to_bits();
     let moved = if k >= 0 { bits + k.unsigned_abs() } else { bits - k.unsigned_abs() };
     f64::from_bits(moved)
 }
 
 /// `xs` with each value (by bits) kept once, in order: a row's (function, inputs) is its key in the mapping files.
-fn dedup(xs: Vec<f64>) -> Vec<f64> {
+pub(crate) fn dedup(xs: Vec<f64>) -> Vec<f64> {
     let mut seen = std::collections::BTreeSet::new();
     xs.into_iter().filter(|x| seen.insert(x.to_bits())).collect()
 }

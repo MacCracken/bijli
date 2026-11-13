@@ -19,6 +19,9 @@
 # - `_bj_fmt_f64_display`: Rust's `{}` — always positional, no ".0" (`100`, `0.1`, `-0`), `NaN`, `inf`, `-inf`.
 # - `_bj_fmt_f64_json`: serde_json — positional while the decimal exponent is in −5..=15, with ".0" on an integer
 #   (`100.0`, `0.00001`); otherwise `d.ddde±x` (`1e+16`, `1.5e-7`); `null` for NaN and ±∞.
+# - `_bj_fmt_f64_fixed` (bijli's, M2 part 1b): Rust's `{:.p}` — not the shortest digits but the exact value rounded
+#   half to even at p decimals (`1.0312` for 1.03125), for wave.rs's and beam.rs's `{ratio:.4}`. Its digits come from
+#   the same bignum: x·10^p, shifted, rounded, then divided down by 10^9.
 
 # ── BjText: a bounded text buffer ───────────────────────────────────────────────────
 # Three words: the buffer's address, its capacity in bytes, and the length written so far. The text is kept
@@ -285,6 +288,66 @@ fn _bj_bn_sub(a, b) {
     return 0;
 }
 
+# a := ⌊a / 2^k⌋, for k >= 0 (bijli's, for _bj_fmt_f64_fixed).
+fn _bj_bn_shr(a, k) {
+    var n = load64(a);
+    var q = k / 32;
+    var b = k % 32;
+    if (q >= n) {
+        store64(a, 0);
+        return 0;
+    }
+    var m = n - q;
+    for (var i = 0; i < m; i = i + 1) {
+        var lo = load64(a + 8 + (i + q) * 8) >> b;
+        var hi = 0;
+        if (b != 0 && i + q + 1 < n) { hi = (load64(a + 8 + (i + q + 1) * 8) << (32 - b)) & 0xFFFFFFFF; }
+        store64(a + 8 + i * 8, lo | hi);
+    }
+    while (m > 0 && load64(a + m * 8) == 0) { m = m - 1; }
+    store64(a, m);
+    return 0;
+}
+
+# Bit i of a, 0 or 1 (bijli's).
+#must_use
+fn _bj_bn_bit(a, i): i64 {
+    var w = i / 32;
+    if (w >= load64(a)) { return 0; }
+    return (load64(a + 8 + w * 8) >> (i % 32)) & 1;
+}
+
+# 1 when a bit of a below bit i is set, else 0 (bijli's).
+#must_use
+fn _bj_bn_any_below(a, i): i64 {
+    var w = i / 32;
+    var n = load64(a);
+    for (var j = 0; j < w && j < n; j = j + 1) {
+        if (load64(a + 8 + j * 8) != 0) { return 1; }
+    }
+    if (w < n) {
+        var mask = (1 << (i % 32)) - 1;
+        if ((load64(a + 8 + w * 8) & mask) != 0) { return 1; }
+    }
+    return 0;
+}
+
+# a := ⌊a / d⌋, returning a mod d, for 0 < d < 2^31 (bijli's).
+fn _bj_bn_divmod_small(a, d): i64 {
+    var n = load64(a);
+    var rem = 0;
+    var i = n - 1;
+    while (i >= 0) {
+        var cur = (rem << 32) | load64(a + 8 + i * 8);
+        store64(a + 8 + i * 8, cur / d);
+        rem = cur % d;
+        i = i - 1;
+    }
+    while (n > 0 && load64(a + n * 8) == 0) { n = n - 1; }
+    store64(a, n);
+    return rem;
+}
+
 # The number of bits in x > 0.
 #must_use
 fn _bj_bitlen(x): i64 {
@@ -521,6 +584,78 @@ fn _bj_fmt_f64x3_debug(t, p: *f64) {
     _bj_tx_cstr(t, ", ");
     _bj_fmt_f64_debug(t, p[2]);
     _bj_tx_putc(t, 93);
+    return 0;
+}
+
+# Appends x as Rust's `{x:.p}` writes an f64 (core's `float_to_decimal_common_exact`), for 0 ≤ p ≤ 17: x = m·2^e
+# exactly, so N = m·10^p·2^e rounded half to even is an integer, written with a point p digits from its right and at
+# least one digit before it (`0.0001`, `10.0000`, `1000000000000000052504760255204420248704468581108159154915854115…`).
+# The sign stays on a zero and on a value that rounds to zero (`-0.0000`); `NaN`, `inf`, `-inf`. Mirrors
+# `format!("{x:.p}")`.
+fn _bj_fmt_f64_fixed(t, x: f64, prec) {
+    var bits = _bj_bits(x);
+    if (x != x) {
+        _bj_tx_cstr(t, "NaN");
+        return 0;
+    }
+    if (bits < 0) { _bj_tx_putc(t, 45); }
+    var mag = bits & 0x7FFFFFFFFFFFFFFF;
+    if (mag == 0x7FF0000000000000) {
+        _bj_tx_cstr(t, "inf");
+        return 0;
+    }
+    var be = mag >> 52;
+    var m = mag & 0xFFFFFFFFFFFFF;
+    var e = 0 - 1074;
+    if (be != 0) {
+        m = m | 0x10000000000000;
+        e = be - 1075;
+    }
+    var a[328];
+    _bj_bn_set(&a, m);
+    _bj_bn_mul_pow10(&a, prec);
+    if (e >= 0) { _bj_bn_shl(&a, e); }
+    if (e < 0) {
+        var s = 0 - e;
+        var half = _bj_bn_bit(&a, s - 1);
+        var below = _bj_bn_any_below(&a, s - 1);
+        _bj_bn_shr(&a, s);
+        if (half == 1 && (below == 1 || _bj_bn_bit(&a, 0) == 1)) {
+            var one[328];
+            var up[328];
+            _bj_bn_set(&one, 1);
+            _bj_bn_sum(&up, &a, &one);
+            _bj_bn_copy(&a, &up);
+        }
+    }
+    # N's digits, least significant first, at least p + 1 of them.
+    var rev[352];
+    var n = 0;
+    while (load64(&a) != 0) {
+        var r = _bj_bn_divmod_small(&a, 1000000000);
+        for (var j = 0; j < 9; j = j + 1) {
+            store8(&rev + n, 48 + r % 10);
+            r = r / 10;
+            n = n + 1;
+        }
+    }
+    while (n > 0 && load8(&rev + n - 1) == 48) { n = n - 1; }
+    while (n < prec + 1) {
+        store8(&rev + n, 48);
+        n = n + 1;
+    }
+    var i = n - 1;
+    while (i >= prec) {
+        _bj_tx_putc(t, load8(&rev + i));
+        i = i - 1;
+    }
+    if (prec > 0) {
+        _bj_tx_putc(t, 46);
+        while (i >= 0) {
+            _bj_tx_putc(t, load8(&rev + i));
+            i = i - 1;
+        }
+    }
     return 0;
 }
 
