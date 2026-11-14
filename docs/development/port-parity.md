@@ -2752,3 +2752,46 @@ g = |R| − c(t − t_r), dg = R̂⋅v − c and the noise 2ε·max(|R|, c(t −
 - **Result, every target** (x86_64 ELF, x86_64 PE, aarch64): **13 modules, 0 failing; 405,833 ok, 0 failed, 0
   measured, 0 pending, 47,445 accepted (ADR 01: 8,998; ADR 0002: 38,447)** over 453,278 rows; **all 276 digests
   equal**. One changed: `solve_retarded_time`.
+
+## 52. M2 part 2d-3h: lienard_wiechert_b at its range edges (2026-11-13)
+
+`lienard_wiechert_b` (B = n̂ × E/c) had no range-edge review: §35 left it outside row 13's scope, and the cross
+product's own row-18 guard (M1 part 5d-2) rounds each component once, which is the first of B's two roundings.
+`lienard_wiechert_fields`' chain is split in two bites:
+- **2d-3i**: per-part exponent offsets in the exact kernels `_bj_cr_lw` and `_bj_cr_lorentz`. An R past DBL_MAX
+  needs one more bit of exponent range than a double holds, and halving R would round an odd subnormal companion part.
+- **2d-3j**: the fields' chain itself: R past DBL_MAX; 1/|R| and n̂ for |R| > 2^1022; β = v/c and β̇ = a/c
+  subnormal; E and B from 53-bit values.
+
+- **ADR 0002 row 18, amended** (the rule of §42; a guard on Rust's own values):
+  - **The guard.** A cross component that is normal or ±0 is its 53-bit value: the cross rounds it once, correctly,
+    and a ±0 carries the sign of a value too small to matter. B's product with 1/c then rounds once. That is three
+    bit-pattern tests.
+  - **Outside it** (a component past DBL_MAX or subnormal, for finite n̂ and E), `_bj_rel_b_edge` takes that
+    component's n̂ⱼEₖ − n̂ₖEⱼ to 53 bits with an unbounded exponent (`_bj_vx_cross1`). Times 1/c, it rounds once. A
+    non-finite part keeps Rust's chain.
+  - **Rust's results at these edges**: n̂ = (0, 0.8, 0.6) against E = (0, −DBL_MAX, DBL_MAX) gave B_x = ∞ for
+    1.4·DBL_MAX/c = 8.4·10^299. The corpus's E = DBL_MAX·(1, 1, 1) against n̂ of norm about 12 gave ±∞ components for
+    about 10^300. A subnormal cross rounded twice; that differs only within about 10^-332 of a midpoint.
+- **Rows** (`m_relativity.rs`'s `emit_b_edges`, after every older row): 49 more, seven n̂ against seven E:
+  - crosses past DBL_MAX, and products past it;
+  - subnormal and cancelling crosses;
+  - a subnormal n̂ part against E near DBL_MAX.
+
+  `validate.py`'s transcription agreed with every row.
+- **Mappings** (`validate.py`'s B on `uz_cross`): `relativity.adr.tsv` maps 31 more row-18 rows, all among the new
+  rows (the other 18 are Rust's). Six older rows already on row 18 changed outputs, the E = DBL_MAX·(1, 1, 1) rows
+  above. All pass.
+- **Guard audit** (a sampling check in Python, not a gate): 60,000 random (n̂, E) pairs weighted to the edges.
+  155,104 components were kept on Rust's product, every one equal to the pure unbounded chain; 24,896 took the edge.
+- **Tests**: tests/relativity.tcyr gains 1 assertion, the 1.4·DBL_MAX cross above, with Rust's signed zeros.
+- **Benchmarks** (a focused interleaved A/B against HEAD, five repetitions a round, three rounds, load 1.6–1.8):
+  `relativity/lienard_wiechert_fields_orbit_b099` 5,966 → 5,956 ns and `relativity/solve_retarded_time_uniform_t1s`
+  620 → 620 ns. The guard costs nothing measurable, and the record stands.
+- **Toolchain**: stable rustc moved to 1.100.0 on 2026-11-13 (the corpus was built on 1.99.1). `oracle --check`
+  rebuilds the corpus byte for byte under it. Its clippy flags five new lints in `m_json.rs` and `m_material.rs` under
+  `-D warnings`: a hex literal's digit groups, a collapsible `if let`, a counter equal to the loop's index, and two
+  `is_multiple_of`. They are fixed without changing a row.
+- **Result, every target** (x86_64 ELF, x86_64 PE, aarch64): **13 modules, 0 failing; 405,851 ok, 0 failed, 0
+  measured, 0 pending, 47,476 accepted (ADR 01: 8,998; ADR 0002: 38,478)** over 453,327 rows; **all 276 digests
+  equal**. One changed: `lienard_wiechert_b`.

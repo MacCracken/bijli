@@ -368,6 +368,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
   t_r = t, "observer on the trajectory" (|R|² underflowed to 0). The sample keeps Rust's chain where its own values
   prove it equal to the unbounded chain; elsewhere it runs with an unbounded exponent, and the solver reads g's 53-bit
   pair where g or g/dg is not normal (`port-parity.md` §51).
+- **relativity** (ADR 0002 row 18 amended, M2 part 2d-3h): `lienard_wiechert_b` gave ∞ where n̂ × E passed DBL_MAX
+  and B = n̂ × E/c is representable (n̂ × E = 1.4·DBL_MAX: B = 8.4·10^299; E = DBL_MAX·(1, 1, 1) gave ±∞ components
+  for about 10^300), and rounded a subnormal cross twice. A cross component off the normal range now runs to 53 bits
+  with an unbounded exponent and B rounds once; the guard costs nothing measurable (`port-parity.md` §52).
 - **relativity** (ADR 0002 row 13 amended, M2 part 2b-4): `retarded_scalar_potential`, `retarded_vector_potential`,
   `larmor_power` and `EmTensor::dual` rounded two to five times, and overflowed where the value is representable
   (Larmor with q² past DBL_MAX, the dual of B past DBL_MAX/c: ∞ each); they are now correctly rounded for finite

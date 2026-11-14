@@ -3130,8 +3130,21 @@ def rel_rust(fn, v, O, K):
             return ok3(out)
         return ok3([vt[i] + at[i] for i in range(3)])
     if fn == "relativity::lienard_wiechert_b":
-        cr = O["cross"](v[0:3], v[3:6])
+        n, e = v[0:3], v[3:6]
+        cr = O["cross"](n, e)
         inv = fdiv(1.0, C)
+        if O["ux"] and _fin(*n, *e):
+            # Row 18 (M2 part 2d-3h): a cross component that is normal or ±0 is its 53-bit value, so B's product
+            # rounds once; one past DBL_MAX or subnormal takes the cross's 53-bit value (uz_cross), times 1/c, rounded
+            # once.
+            out = []
+            for i in range(3):
+                x = cr[i]
+                if x == 0 or (math.isfinite(x) and abs(x) >= MIN_NORMAL):
+                    out.append(x * inv)
+                else:
+                    out.append(uz_out(uz_mul(uz_cross(n, e, i), uz(inv), True)))
+            return ok3(out)
         return ok3([x * inv for x in cr])
     if fn == "relativity::larmor_power":
         q, a = v

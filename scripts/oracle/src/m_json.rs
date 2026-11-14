@@ -441,13 +441,13 @@ fn unchecked(doc: &str) -> i64 {
                 if lone {
                     flags |= 2;
                 }
-                if let Some(Some((keys, key_next))) = stack.last_mut() {
-                    if *key_next {
-                        if !keys.insert(units) {
-                            flags |= 1;
-                        }
-                        *key_next = false;
+                if let Some(Some((keys, key_next))) = stack.last_mut()
+                    && *key_next
+                {
+                    if !keys.insert(units) {
+                        flags |= 1;
                     }
+                    *key_next = false;
                 }
                 k = end;
             }
@@ -516,15 +516,13 @@ fn shapes(kind: Kind, rng: &mut Rng) -> Vec<String> {
 
     // Field values as written in `base`, by name, for reordering and repeating.
     let mut members: Vec<String> = Vec::new();
-    let mut at = 0;
     for (k, (name, arr)) in fields.iter().enumerate() {
         let val = if *arr {
             let j = 2 + 3 * (k - 2);
             format!("[{},{},{}]", v[j], v[j + 1], v[j + 2])
         } else {
-            v[at].clone()
+            v[k].clone()
         };
-        at += 1;
         members.push(format!("\"{name}\":{val}"));
     }
     let mut rev = members.clone();
@@ -679,7 +677,7 @@ impl Rows {
 pub fn emit() -> Module {
     let mut rows = Rows { m: Module::new("json"), seen: BTreeSet::new() };
     let m = &mut rows;
-    let mut rng = Rng::new(0x1503_d5);
+    let mut rng = Rng::new(0x15_03d5);
     let xs = values(&mut rng);
     let n = xs.len();
 

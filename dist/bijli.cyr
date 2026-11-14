@@ -20405,13 +20405,50 @@ fn _bj_rel_e_slow(charge: f64, r_vec: BjFieldVector, kappa: f64, gamma_sq: f64, 
     return 0;
 }
 
-# B = n̂ × E/c (T), perpendicular to n̂ and E. Mirrors `relativity::lienard_wiechert_b`.
+# B = n̂ × E/c (T), perpendicular to n̂ and E. A component keeps Rust's chain where its cross component is normal or
+# ±0: that double is then its 53-bit value, and B's product rounds once (ADR 0002 row 18's rule, M2 part 2d-3h). A
+# cross component past DBL_MAX or subnormal, for finite n̂ and E, runs to 53 bits with an unbounded exponent and B's
+# product rounds once; Rust gave ∞ for a cross past DBL_MAX, where B is representable. A non-finite part keeps Rust's
+# chain. Mirrors `relativity::lienard_wiechert_b`.
 #must_use
 public fn bj_lienard_wiechert_b(n_hat: BjFieldVector, e_field: BjFieldVector): BjFieldVector {
     var c: BjFieldVector = n_hat.cross(e_field);
     var inv: f64 = 1.0 / BJ_SPEED_OF_LIGHT;
     var b: BjFieldVector = c.scale(inv);
+    # Each cross component ±0 or normal: |bits| 0, or in [2^-1022, ∞) below ∞ (integer compares on the bit patterns).
+    var m = 0x7FFFFFFFFFFFFFFF;
+    var u = load64(&c) & m;
+    var bad = 0;
+    if (u != 0 && (u < 0x0010000000000000 || u >= 0x7FF0000000000000)) { bad = 1; }
+    u = load64(&c + 8) & m;
+    if (u != 0 && (u < 0x0010000000000000 || u >= 0x7FF0000000000000)) { bad = 1; }
+    u = load64(&c + 16) & m;
+    if (u != 0 && (u < 0x0010000000000000 || u >= 0x7FF0000000000000)) { bad = 1; }
+    if (bad == 1) { _bj_rel_b_edge(&n_hat, &e_field, &c, inv, &b); }
     return b;
+}
+
+# lienard_wiechert_b off its common case (M2 part 2d-3h), into out (Rust's B on entry): for finite n̂ and E (at the
+# byte addresses n and e, the cross at c), each component whose cross is past DBL_MAX or subnormal takes
+# n̂ⱼEₖ − n̂ₖEⱼ to 53 bits with an unbounded exponent (_bj_vx_cross1) times 1/c, rounded once.
+fn _bj_rel_b_edge(n, e, c, inv: f64, out) {
+    var np: *f64 = _bj_rel_f64p(n);
+    var ep: *f64 = _bj_rel_f64p(e);
+    var cp: *f64 = _bj_rel_f64p(c);
+    var op: *f64 = _bj_rel_f64p(out);
+    if (_bj_rel_finite_n(np, 3) == 0 || _bj_rel_finite_n(ep, 3) == 0) { return 0; }
+    var is, ie = _bj_k_ux_from(inv);
+    for (var i = 0; i < 3; i = i + 1) {
+        var x: f64 = cp[i];
+        var ax: f64 = f64_abs(x);
+        if (x == 0.0 || (ax >= _BJ_VX_MN && ax <= _BJ_VX_HI)) { continue; }
+        var j = (i + 1) % 3;
+        var k = (i + 2) % 3;
+        var ps, pe = _bj_vx_cross1(np[j], ep[k], np[k], ep[j]);
+        var bi: f64 = _bj_k_ux_mul_f64(ps, pe, is, ie);
+        op[i] = bi;
+    }
+    return 0;
 }
 
 # P = q²a²/(6πε₀c³) (W), Larmor's formula (non-relativistic), correctly rounded (ADR 0002 row 13: c³ of c's double, π

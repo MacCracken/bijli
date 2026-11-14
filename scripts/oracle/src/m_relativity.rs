@@ -465,6 +465,7 @@ pub fn emit() -> Module {
     emit_lw_inf_edges(&mut m);
     emit_e_tail_edges(&mut m);
     emit_solver_edges(&mut m);
+    emit_b_edges(&mut m);
     m
 }
 
@@ -870,7 +871,7 @@ fn emit_e_tail_edges(m: &mut Module) {
 /// static charges whose distance from the observer passes DBL_MAX (2·10^308 and 2·DBL_MAX: dx overflows, g and τ₀ from
 /// the 53-bit pair), a diagonal at 10^300 (|R|² past DBL_MAX, |R| finite), subnormal and tiny separations (Rust's |R|
 /// underflowed to 0: "observer on the trajectory"), and uniform motion across 2·10^308. Solver rows only: the fields'
-/// R past DBL_MAX is part 2d-3h's. After every older row.
+/// R past DBL_MAX is part 2d-3j's. After every older row.
 fn emit_solver_edges(m: &mut Module) {
     let big = f64::MAX;
     let cases: Vec<SolveCase> = vec![
@@ -897,5 +898,35 @@ fn emit_solver_edges(m: &mut Module) {
             (a, b)
         }, *k);
         m.row("relativity::solve_retarded_time", traj_class(*id), &ins, &res_f(r));
+    }
+}
+
+/// M2 part 2d-3h (bijli ADR 0002 row 18's rule): lienard_wiechert_b where n̂ × E leaves the range: cross components
+/// past DBL_MAX (Rust's B = ∞ where B is about 8·10^299), products past DBL_MAX, subnormal and cancelling crosses, and
+/// a subnormal n̂ part against E near DBL_MAX. After every older row.
+fn emit_b_edges(m: &mut Module) {
+    let big = f64::MAX;
+    let ns = [
+        FieldVector::new(0.0, 0.8, 0.6),
+        FieldVector::new(0.6, 0.0, 0.8),
+        FieldVector::new(0.0, 2.0, 2.0),
+        FieldVector::new(0.0, 1e-160, 1e-160),
+        FieldVector::new(1e-200, 1.0, 0.0),
+        FieldVector::new(0.0, big, 1.0),
+        FieldVector::new(0.0, pow2(-1074), 0.5),
+    ];
+    let es = [
+        FieldVector::new(0.0, -big, big),
+        FieldVector::new(big, 1e308, -1e308),
+        FieldVector::new(0.0, 1e-160, 3e-160),
+        FieldVector::new(1e-300, 1e-300, 0.0),
+        FieldVector::new(pow2(-1074), 0.0, 3e-310),
+        FieldVector::new(0.0, 1e-150, 1e-170),
+        FieldVector::new(1.0, 1.0, 1.0),
+    ];
+    for &n in &ns {
+        for &e in &es {
+            m.row("relativity::lienard_wiechert_b", Class::A, &cat(&[v3(n), v3(e)]), &v3(lienard_wiechert_b(black_box(&n), &e)));
+        }
     }
 }

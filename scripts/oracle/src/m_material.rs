@@ -145,11 +145,11 @@ pub fn emit() -> Module {
     let eb = EPSILON_0.to_bits();
     let mut em = (eb & ((1_u64 << 52) - 1)) | (1_u64 << 52);
     let mut ee = i32::try_from((eb >> 52) & 0x7FF).unwrap_or(0) - 1075;
-    while em % 2 == 0 {
+    while em.is_multiple_of(2) {
         em /= 2;
         ee += 1;
     }
-    let mut divs: Vec<u64> = (1..10_000_u64).filter(|d| em % d == 0).flat_map(|d| [d, em / d]).collect();
+    let mut divs: Vec<u64> = (1..10_000_u64).filter(|&d| em.is_multiple_of(d)).flat_map(|d| [d, em / d]).collect();
     divs.sort_unstable();
     divs.dedup();
     for s in [0, 300, -300] {

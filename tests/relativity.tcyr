@@ -1269,6 +1269,11 @@ fn cyrius_tests(): i64 {
     var te2, ve2 = bj_lienard_wiechert_e(1.0, BjFieldVector_new(dm, dm, dm), zb, bd8, &ef);
     assert(is_ok(te2) == 1 && _bj_bits(ef.x) == 0x01C131C9235E873A && _bj_bits(ef.y) == 0x81D131C9235E873A,
       "|R| past DBL_MAX: the radiation term 3.2e-300 (Rust: 0, its 1/|R| was 0)");
+    # M2 part 2d-3h: lienard_wiechert_b where n̂ × E passes DBL_MAX.
+    var ndm: f64 = -dm;
+    var bf: BjFieldVector = bj_lienard_wiechert_b(BjFieldVector_new(0.0, 0.8, 0.6), BjFieldVector_new(0.0, ndm, dm));
+    assert(_bj_bits(bf.x) == 0x7E340E9B3E342EE6 && _bj_bits(bf.y) == 0 && _bj_bits(bf.z) == 0x8000000000000000,
+      "n̂ × E = 1.4·DBL_MAX: B = 8.4e299 on the cross to 53 bits (Rust: ∞), the zeros' signs Rust's");
 
     if (v1 == 0 || v2 == 0 || v3 == 0 || v4 == 0 || v5 == 0 || v6 == 0 || v7 == 0) { println("."); }
     return 0;
