@@ -6,8 +6,9 @@
 # opposite sign, and says so; every other test reads real values that the convention leaves alone. The cyrius_*
 # groups pin the field's propagation sense, the reasons' exact text, out left alone on an error, and ADR 0002 row 32
 # (the LG power at l = i32::MIN), (M3 part 1c-2) the three structs' JSON: serde's text, round trips, both forms,
-# the bool's two literals, the reasons and the heap, and (M3 part 2a-2) ADR 0002 row 34: the resonators' exact
-# stability and their waist without cancellation. tests/golden/beam.tsv pins every function over its grid against
+# the bool's two literals, the reasons and the heap, (M3 part 2a-2) ADR 0002 row 34: the resonators' exact
+# stability and their waist without cancellation, and (M3 part 2a-3) ADR 0002 row 35: transform_beam on the exact
+# determinant. tests/golden/beam.tsv pins every function over its grid against
 # Rust besides, and tests/golden/json.tsv the JSON.
 
 include "tests/lib.cyr"
@@ -664,6 +665,48 @@ fn cyrius_row34(): i64 {
     return 0;
 }
 
+# ADR 0002 row 35 (M3 part 2a-3, the user's answer of 2026-11-14): transform_beam decides on the exact AD − BC, keeps λ
+# only when it is exactly 1 and otherwise takes λ·det rounded once; bits from validate.py's model (Fractions).
+fn cyrius_row35(): i64 {
+    test_group("cyrius_abcd_row35 (ADR 0002 row 35)");
+    var g: BjGaussianBeam;
+    lab_beam(&g);
+    var o: BjGaussianBeam;
+    # det = 1 + 1e-13 (two media within 10⁻¹² of each other): λ′ = λ·det, where Rust kept λ.
+    var m1: BjAbcdMatrix = BjAbcdMatrix_new(1.0, 0.0, 0.0, 1.0000000000001);
+    var t1, v1 = m1.transform_beam(&g, &o);
+    var l1: f64 = o.wavelength;
+    var w1: f64 = o.waist;
+    assert(is_ok(t1) == 1 && _bj_bits(l1) == 0x3EB1D9D85F385CED && _bj_bits(w1) == 0x3F1A36E2EB1C432C,
+      "det = 1 + 1e-13: λ′ = 1.0640000000001064e-6, rounded once (Rust: λ)");
+    # det exactly 1 from integers (2·2 − 3·1): λ kept bit for bit.
+    var m2: BjAbcdMatrix = BjAbcdMatrix_new(2.0, 3.0, 1.0, 2.0);
+    var t2, v2 = m2.transform_beam(&g, &o);
+    var l2: f64 = o.wavelength;
+    var gl: f64 = g.wavelength;
+    assert(is_ok(t2) == 1 && l2 == gl, "det = 1 exactly: λ kept");
+    # AD − BC = −2^-104 exactly, its rounded value 0: refused, the reason quoting the rounded det.
+    var m3: BjAbcdMatrix = BjAbcdMatrix_new(1.0, _bj_from_bits(0x3FF0000000000001), _bj_from_bits(0x3FF0000000000001),
+      _bj_from_bits(0x3FF0000000000002));
+    var t3, v3 = m3.transform_beam(&g, &o);
+    assert(is_err_result(t3) == 1
+      && reason_is2("invalid parameter: ABCD determinant must be positive and finite (det = n_in/n_out), got 0", "")
+      == 1, "det = −2^-104: refused, as Rust refused its rounded 0");
+    # AD − BC = +2^-104 exactly: the determinant passes, and z_R′ (propagate_beam's chain, which cancels in
+    # z·(AD − BC)) is refused instead.
+    var m4: BjAbcdMatrix = BjAbcdMatrix_new(_bj_from_bits(0x3FF0000000000001), _bj_from_bits(0x3FF0000000000002), 1.0,
+      _bj_from_bits(0x3FF0000000000001));
+    var keep: BjGaussianBeam = g;
+    var t4, v4 = m4.transform_beam(&g, &keep);
+    var kw: f64 = keep.waist;
+    var gw: f64 = g.waist;
+    assert(is_err_result(t4) == 1
+      && reason_is2("invalid parameter: transformed beam has non-physical Rayleigh range", "") == 1 && kw == gw,
+      "det = +2^-104: past the determinant, refused at z_R′; out untouched");
+    if (v1 == 99 || v2 == 99 || v3 == 99 || v4 == 99) { println("."); }
+    return 0;
+}
+
 # The three structs' JSON (M3 part 1c-2), as serde_json writes and reads them.
 fn cyrius_json(): i64 {
     test_group("cyrius_beam_json");
@@ -841,6 +884,7 @@ fn main(): i64 {
     rust_tests_d();
     cyrius_tests();
     cyrius_row34();
+    cyrius_row35();
     cyrius_json();
     return assert_summary();
 }

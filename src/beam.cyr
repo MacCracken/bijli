@@ -163,6 +163,165 @@ impl BjGaussianBeam {
 
 # ── ABCD matrices ───────────────────────────────────────────────────────────────────────────────────────────────
 
+# ── the exact determinant (ADR 0002 row 35, M3 part 2a-3) ──
+# transform_beam decides det > 0 and det = 1 on the exact AD − BC of finite entries, and takes λ·det rounded once from
+# it, where Rust tested the rounded AD − BC and kept λ within 10⁻¹² of 1. The products are integers (each a product of
+# two significands, at most 106 bits, times a power of two) in src/fmtf.cyr's bignums (word 0 the limb count, then
+# 32-bit limbs; 41 words, 1,280 bits). A product more than 220 bits below the other only decides roundings as a sticky
+# bit, so it becomes a unit 230 bits below the other: every shift stays under 330 bits and every value under 2^500.
+
+# |x₁·x₂| as a bignum into dst, for finite x₁, x₂ (t scratch): (its exponent, its sign −1, 0 or 1).
+fn _bj_beam_prod(x1: f64, x2: f64, dst, t): (i64, i64) {
+    if (x1 == 0.0 || x2 == 0.0) {
+        store64(dst, 0);
+        return (0, 0);
+    }
+    var me1: i64[2];
+    var me2: i64[2];
+    _bj_g_split(x1, &me1);
+    _bj_g_split(x2, &me2);
+    _bj_bn_set(dst, me1[0]);
+    _bj_g_mul(dst, me2[0], t);
+    var s = 1;
+    if (x1 < 0.0) { s = 0 - s; }
+    if (x2 < 0.0) { s = 0 - s; }
+    return (me1[1] + me2[1], s);
+}
+
+# 1 when x is 0 or 2^-450 ≤ |x| ≤ 2^450 (TwoProduct is exact on two such, and their product is 0 or at least 2^-900).
+#must_use
+fn _bj_beam_mid(x: f64): i64 {
+    var u = _bj_bits(x) & 0x7FFFFFFFFFFFFFFF;
+    if (u == 0) { return 1; }
+    if (u < 0x23D0000000000000 || u > 0x5C10000000000000) { return 0; }
+    return 1;
+}
+
+# _bj_beam_det35's fast path, for entries 0 or of magnitude in [2^-450, 2^450]: AD − BC as Shewchuk's exact expansion
+# of p₁ + e₁ − p₂ − e₂ (TwoProduct; crmath_gamma's _bj_g_grow), whose sign is its largest component's and which is 1
+# when it less 1 is empty. λ·det from the compressed top two components (within 2^-104) times |λ| (_bj_k_dd_mul_d,
+# 3.01u²): kimiya's rounding test (_bj_k_dd_round_ends, a 32u² budget) proves the correctly rounded value. The same
+# results as the exact path, which takes over (2, 0) where this declines: an entry outside the range, |λ·det| outside
+# [2^-900, 2^900], or a value within about 2^-100 of a midpoint.
+#must_use
+fn _bj_beam_det35_fast(a: f64, b: f64, c: f64, d: f64, lam: f64, out: *f64): (i64, i64) {
+    if (_bj_beam_mid(a) == 0 || _bj_beam_mid(b) == 0 || _bj_beam_mid(c) == 0 || _bj_beam_mid(d) == 0) {
+        return (2, 0);
+    }
+    var p1, e1 = _bj_cr_two_prod(a, d);
+    var p2, e2 = _bj_cr_two_prod(b, c);
+    var p1v: f64 = p1;
+    var e1v: f64 = e1;
+    var np2: f64 = -p2;
+    var ne2: f64 = -e2;
+    var ex: f64[8];
+    var k = _bj_g_grow(&ex, 0, e1v);
+    k = _bj_g_grow(&ex, k, ne2);
+    k = _bj_g_grow(&ex, k, p1v);
+    k = _bj_g_grow(&ex, k, np2);
+    if (k == 0) { return (0, 0); }
+    var top: f64 = ex[k - 1];
+    if (top < 0.0) { return (0 - 1, 0); }
+    var ey: f64[8];
+    for (var j = 0; j < k; j = j + 1) { ey[j] = ex[j]; }
+    if (_bj_g_grow(&ey, k, -1.0) == 0) { return (1, 1); }
+    var dl: f64 = lam - lam;
+    if (lam == 0.0 || dl != 0.0) { return (1, 0); }
+    var al: f64 = f64_abs(lam);
+    var dh, dlo = _bj_g_compress(&ex, k);
+    var dhv: f64 = dh;
+    var pp: f64 = dhv * al;
+    var pu = _bj_bits(pp) & 0x7FFFFFFFFFFFFFFF;
+    if (_bj_beam_mid(al) == 0 || pu < 0x07B0000000000000 || pu > 0x7830000000000000) { return (2, 0); }
+    var h, l = _bj_k_dd_mul_d(dhv, dlo, al);
+    var z1, z2 = _bj_k_dd_round_ends(h, l);
+    var z1v: f64 = z1;
+    var z2v: f64 = z2;
+    if (z1v != z2v) { return (2, 0); }
+    if (lam < 0.0) { z1v = -z1v; }
+    out[0] = z1v;
+    return (1, 0);
+}
+
+# The exact AD − BC of finite a, b, c, d: (its sign −1, 0 or 1; 1 when it is exactly 1), and, when it is positive and
+# not 1, RN(λ·(AD − BC)) into out[0] for a finite nonzero λ: λ's significand times the determinant, its top 60 bits
+# and a sticky bit for the rest, rounded once by kimiya's _bj_k_cr_from_int (the subnormal grid, ties to even, +∞
+# past DBL_MAX). out is untouched otherwise. The fast path (_bj_beam_det35_fast) answers first where it can.
+#must_use
+fn _bj_beam_det35(a: f64, b: f64, c: f64, d: f64, lam: f64, out: *f64): (i64, i64) {
+    var fs, fo = _bj_beam_det35_fast(a, b, c, d, lam, out);
+    if (fs != 2) { return (fs, fo); }
+    var xb: i64[41];
+    var yb: i64[41];
+    var tb: i64[41];
+    var vb: i64[41];
+    var ex, sx = _bj_beam_prod(a, d, &xb, &tb);
+    var ey, sy = _bj_beam_prod(b, c, &yb, &tb);
+    if (sx != 0 && sy != 0) {
+        var tx = ex + _bj_g_bitlen(&xb);
+        var ty = ey + _bj_g_bitlen(&yb);
+        if (tx - ty > 220) {
+            _bj_bn_set(&yb, 1);
+            ey = tx - 230;
+        } elif (ty - tx > 220) {
+            _bj_bn_set(&xb, 1);
+            ex = ty - 230;
+        }
+    }
+    if (sx == 0 && sy == 0) { return (0, 0); }
+    var k = ex;
+    if (sx == 0 || (sy != 0 && ey < ex)) { k = ey; }
+    if (sx != 0) { _bj_bn_shl(&xb, ex - k); }
+    if (sy != 0) { _bj_bn_shl(&yb, ey - k); }
+    var sgn = 0;
+    if (sy == 0) {
+        _bj_bn_copy(&vb, &xb);
+        sgn = sx;
+    } elif (sx == 0) {
+        _bj_bn_copy(&vb, &yb);
+        sgn = 0 - sy;
+    } elif (sx != sy) {
+        _bj_bn_sum(&vb, &xb, &yb);
+        sgn = sx;
+    } else {
+        var cm = _bj_bn_cmp(&xb, &yb);
+        if (cm == 0) { return (0, 0); }
+        if (cm > 0) {
+            _bj_bn_copy(&vb, &xb);
+            _bj_bn_sub(&vb, &yb);
+            sgn = sx;
+        } else {
+            _bj_bn_copy(&vb, &yb);
+            _bj_bn_sub(&vb, &xb);
+            sgn = 0 - sx;
+        }
+    }
+    if (sgn < 0) { return (0 - 1, 0); }
+    var nb = _bj_g_bitlen(&vb);
+    if (k <= 0 && nb == 1 - k && _bj_bn_any_below(&vb, 0 - k) == 0) { return (1, 1); }
+    var dl: f64 = lam - lam;
+    if (lam == 0.0 || dl != 0.0) { return (1, 0); }
+    var mel: i64[2];
+    _bj_g_split(lam, &mel);
+    _bj_g_mul(&vb, mel[0], &tb);
+    var e2 = k + mel[1];
+    var n = _bj_g_bitlen(&vb);
+    var mm = _bj_g_limb(&vb, 0) | (_bj_g_limb(&vb, 1) << 32);
+    var s = e2;
+    if (n > 61) {
+        var sh = n - 60;
+        _bj_bn_copy(&tb, &vb);
+        _bj_bn_shr(&tb, sh);
+        var top = _bj_g_limb(&tb, 0) | (_bj_g_limb(&tb, 1) << 32);
+        mm = 2 * top + _bj_bn_any_below(&vb, sh);
+        s = e2 + sh - 1;
+    }
+    var r: f64 = _bj_k_cr_from_int(mm, s);
+    if (lam < 0.0) { r = -r; }
+    out[0] = r;
+    return (1, 0);
+}
+
 # A paraxial ray transfer matrix acting on (y, θ): y' = A·y + B·θ, θ' = C·y + D·θ. Mirrors `AbcdMatrix`.
 public struct BjAbcdMatrix {
     a: f64;
@@ -336,15 +495,28 @@ impl BjAbcdMatrix {
 
     # The output beam into *out, and the signed distance from the output plane to its waist into *distance, for an
     # input beam whose waist lies at the input plane. q_out = (A·j z_R + B)/(C·j z_R + D); z_R′ = Im q_out;
-    # λ′ = λ·det (λ kept when |det − 1| ≤ 1e-12, so one medium preserves it bit for bit); w₀′ = √(z_R′λ′/π);
-    # distance = −Re q_out (positive downstream: a converging beam). InvalidParameter when det isn't positive and
-    # finite or z_R′ isn't, DivisionByZero when C·q + D = 0, and BjGaussianBeam_new's errors; out and distance
-    # untouched by an error. Mirrors `AbcdMatrix::transform_beam_with_waist_position`.
+    # λ′ = λ·det rounded once from the exact AD − BC (λ kept only when it is exactly 1; a zero, infinite or NaN λ as it
+    # is), w₀′ = √(z_R′λ′/π); distance = −Re q_out (positive downstream: a converging beam). InvalidParameter when the
+    # exact det of finite entries isn't positive (Rust's rounded det isn't positive and finite, for another), the
+    # reason quoting the rounded det, or when z_R′ isn't positive and finite; DivisionByZero when C·q + D = 0; and
+    # BjGaussianBeam_new's errors. out and distance are untouched by an error. ADR 0002 row 35: Rust tested the rounded
+    # det and kept λ within 10⁻¹² of 1. Mirrors `AbcdMatrix::transform_beam_with_waist_position`.
     #must_use
     public fn transform_beam_with_waist_position(self, beam: *BjGaussianBeam, out: *BjGaussianBeam,
       distance: *f64): Result {
         var det: f64 = self.determinant();
-        if (_bj_beam_pos(det) == 0) {
+        var pos = _bj_beam_pos(det);
+        var exact = _bj_vx_finite4(self.a, self.b, self.c, self.d);
+        var lx: f64[1];
+        lx[0] = beam.wavelength;
+        var one = 0;
+        if (exact == 1) {
+            var dsg, dn = _bj_beam_det35(self.a, self.b, self.c, self.d, beam.wavelength, &lx);
+            pos = 0;
+            if (dsg > 0) { pos = 1; }
+            one = dn;
+        }
+        if (pos == 0) {
             return Err(_bj_beam_bad("ABCD determinant must be positive and finite (det = n_in/n_out), got ", det, ""));
         }
         var qo: f64[2];
@@ -357,8 +529,12 @@ impl BjAbcdMatrix {
             return Err(BJ_ERR_INVALID_PARAMETER);
         }
         var lam: f64 = beam.wavelength;
-        var dd: f64 = f64_abs(det - 1.0);
-        if (dd > 0.000000000001) { lam = beam.wavelength * det; }
+        if (exact == 1) {
+            if (one == 0) { lam = lx[0]; }
+        } else {
+            var dd: f64 = f64_abs(det - 1.0);
+            if (dd > 0.000000000001) { lam = beam.wavelength * det; }
+        }
         var w0: f64 = f64_sqrt(zr2 * lam / _BJ_PI);
         var nb: BjGaussianBeam;
         var t2, v2 = BjGaussianBeam_new(lam, w0, &nb);

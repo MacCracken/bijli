@@ -3480,3 +3480,69 @@ E and B = n̂ × E/c.
 - **Result, every target** (x86_64 ELF, x86_64 PE, aarch64): **16 modules, 0 failing; 493,253 ok, 0 failed, 0
   measured, 0 pending, 71,417 accepted (ADR 01: 29,441; ADR 0002: 41,976)** over 564,670 rows; **all 380 digests
   equal**. The 377 outside the three resonator functions are unchanged. `beam.tcyr` passes on all three.
+
+## 63. M3 part 2a-3: transform_beam on the exact determinant (2026-11-14)
+
+- **ADR 0002 row 35, new** (the user's answer of 2026-11-14). beam.rs's `transform_beam` and
+  `transform_beam_with_waist_position` tested the rounded det = AD − BC for det > 0, and kept λ where
+  |det − 1| ≤ 10⁻¹², a tolerance Rust chose to absorb rounding noise.
+  - **The exact determinant** (`_bj_beam_det35`): X = AD and Y = BC are integers (two significands' product, at most
+    106 bits, times a power of two) in src/fmtf.cyr's bignums (41 words, 1,280 bits).
+    - A product more than 220 bits below the other only decides roundings as a sticky bit. It becomes a unit 230
+      bits below the other, so every shift stays under 330 bits and every value under 2^500.
+    - X − Y's sign decides det > 0.
+    - det = 1 exactly when its magnitude is 2^−K (one bit, no bit below it), K the alignment's exponent.
+  - **λ′**: λ is kept only where det is exactly 1. Otherwise λ′ = λ·det, rounded once: λ's significand times the
+    bignum, its top 60 bits and a sticky bit for the rest, rounded by kimiya's `_bj_k_cr_from_int` (the subnormal
+    grid, ties to even, +∞ past DBL_MAX). A zero, infinite or NaN λ (the beam's fields are public), which a positive
+    det leaves as it is, stays.
+  - **The fast path** (`_bj_beam_det35_fast`) answers first where it can, with the same results.
+    - It takes entries that are 0 or of magnitude in [2^-450, 2^450], where TwoProduct is exact. AD − BC is then
+      Shewchuk's exact expansion of p₁ + e₁ − p₂ − e₂ (crmath_gamma's `_bj_g_grow`): its sign is its largest
+      component's, and it is 1 when it less 1 is empty.
+    - λ·det comes from the compressed top two components (within 2^-104) times |λ| (`_bj_k_dd_mul_d`, 3.01u²), and
+      kimiya's rounding test (`_bj_k_dd_round_ends`, a 32u² budget) proves the correctly rounded value.
+    - It declines (to the bignums) for an entry outside the range, |λ·det| outside [2^-900, 2^900], or a value within
+      about 2^-100 of a midpoint.
+  - **Kept**: the reason quotes Rust's rounded det; `determinant` itself returns Rust's value; a non-finite entry
+    keeps Rust's test.
+- **The oracle**: `m_beam.rs` appends an 828-row edge grid (`abcd_det_edges`) after every earlier row, so the 40,947
+  earlier rows are an exact prefix of the new file. It has 139 matrices through both transforms, each with three
+  beams (the lab beam, and λ = 1e-300 and 1e300, so λ·det lands in range; 414 new rows a function, three pairs being
+  in the grid already):
+  - dets exactly 1 from integers and powers of two;
+  - within an ulp of 1, rounding to 1, and within 10⁻¹² of it;
+  - ±2^-104 exactly where the rounded det is 0;
+  - past DBL_MAX and below 2^-1074;
+  - 120 seeded near-singular matrices (D = RN(BC/A) and its next double).
+- **validate.py**: `bm_transform(port=True)` takes the exact determinant in Fractions and λ′ by `rn_frac` (Python's
+  correctly rounded integer division), independently of the port's bignums. `beam_adr_rows` attributes row 35. The
+  model agreed with every new row on its first run, and a one-bit flip of each new row's first output was caught on
+  all 828.
+- **Mappings**: `beam.adr.tsv` holds 1,423 rows: row 32's 366, row 34's 583 and row 35's 474 (237 for each function).
+  Of a function's 237:
+  - 90 have λ·det rounded once, an ulp from Rust's double rounding;
+  - 27 have a det within 10⁻¹² of 1 (but not 1) that now scales λ;
+  - 119 Rust refused at the determinant. Of those, 103 are now refused at z_R′, because `propagate_beam`'s
+    Im q_out = z·(AD − BC)/|Cq + D|² cancels in Rust's chain as the det did; 8 at its zero denominator; and 8 give a
+    beam;
+  - 1 is a beam with λ = DBL_MAX through det = 1 + 10⁻¹²: Rust's snap kept λ, and the port's λ·det overflows, which
+    `BjGaussianBeam_new` refuses.
+
+  The 8 new beams come from seeded near-singular matrices, and their z_R′ still comes from `propagate_beam`'s chain.
+  Its cancellation in z·(AD − BC) is `propagate_beam`'s own to settle, with its threshold and range edges (2c, 2d).
+- **Tests**: `cyrius_abcd_row35` in `tests/beam.tcyr` (4 assertions, 125 in the file) pins:
+  - det = 1 + 1e-13 scaling λ, its bits from the model;
+  - det = 1 from integers keeping λ;
+  - det = −2^-104 refused with the rounded det's reason;
+  - det = +2^-104 passing the determinant and refused at z_R′, out untouched.
+- **Benchmarks** (Rust benches no transform; a one-off bench, interleaved against 2a-2's tree, three rounds at load
+  1.1–2.0):
+  - `transform_beam` with det = 1.2666…: 96 → 300 ns;
+  - with a thin lens (det exactly 1): 94 → 221 ns.
+
+  The bignums alone took the first to 781 ns. The fast path, which gives the same bits (the digests are unchanged by
+  it), brought it to 300. Every other row is within this run's noise (median 2.6 %; the nanosecond rows move a tick).
+- **Result, every target** (x86_64 ELF, x86_64 PE, aarch64): **16 modules, 0 failing; 493,607 ok, 0 failed, 0
+  measured, 0 pending, 71,891 accepted (ADR 01: 29,441; ADR 0002: 42,450)** over 565,498 rows; **all 380 digests
+  equal**. The 378 outside the two transforms are unchanged. `beam.tcyr` passes on all three. **M3 Part 2a is done.**

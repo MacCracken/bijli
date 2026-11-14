@@ -530,6 +530,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
   and sums (Kogelnik's form, products with an unbounded exponent): within one ulp of the exact value on every golden
   row. Cost: `beam/resonator_stability` takes 39 ns for 26 (the exact test); the waist 159 ns for 60 (the compensated
   sums, the edge tests and the scaled chain they guard).
+- **beam** (ADR 0002 row 35, M3 part 2a-3, the user's answer of 2026-11-14): `transform_beam` tested the rounded
+  AD − BC and kept λ within 10⁻¹² of det = 1. Two media within 10⁻¹² of each other lost their index ratio, a positive
+  det that rounded to 0 or past DBL_MAX was refused, and λ·det rounded twice. det > 0 and det = 1 are now decided on
+  the exact determinant (bignums, with a fast path on Shewchuk's exact expansion), λ is kept only where it is
+  exactly 1, and λ·det is rounded once. Cost: `transform_beam` takes 300 ns for 96 (221 for 94 with det = 1).
 
 ### Performance
 

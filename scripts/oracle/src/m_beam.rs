@@ -21,6 +21,10 @@
 //! convex–concave edge L = R₁ + R₂ with R₁R₂ < 0), near-planar ones whose g rounds to 1, flat mirrors, lengths and
 //! radii past 2^1020 and a subnormal length, seeded stable cavities, and mode-spacing g pairs whose product rounds to
 //! 1 or underflows.
+//!
+//! M3 part 2a-3 (ADR 0002 row 35) appends the ABCD determinant's edge grid: determinants exactly 1, within an ulp of 1
+//! (rounding to 1) and within 10⁻¹² of it, exactly ±2⁻¹⁰⁴ where the rounded AD − BC is 0, past DBL_MAX and below
+//! 2^-1074, and seeded near-singular matrices, each through `transform_beam` with beams whose λ puts λ·det in range.
 
 use crate::grids::{Rng, specials};
 use crate::m_field::res_f;
@@ -443,7 +447,62 @@ pub fn emit() -> Module {
         });
     }
     resonator_edges(r);
+    abcd_det_edges(r);
     rows.m
+}
+
+/// M3 part 2a-3 (ADR 0002 row 35, the user's answer of 2026-11-14): `transform_beam` on the exact determinant.
+fn abcd_det_edges(r: &mut Rows) {
+    let e52 = 2f64.powi(-52);
+    let e53 = 2f64.powi(-53);
+    let mut mats: Vec<[f64; 4]> = vec![
+        [2.0, 3.0, 1.0, 2.0],
+        [4.0, 1.0, 3.0, 1.0],
+        [3.0, 5.0, 1.0, 2.0],
+        [0.5, 0.0, 0.0, 2.0],
+        [1.0 + e52, 0.0, 0.0, 1.0 - e53],
+        [1.0 - e53, 0.0, 0.0, 1.0 + e52],
+        [1.0 + e52, 0.0, 0.0, 1.0 + e52],
+        [1.0, 0.0, 0.0, 1.0 + 1e-15],
+        [1.0, 0.0, 0.0, 1.0 - 1e-14],
+        [1.0, 0.0, 0.0, 1.0 + 1e-13],
+        [1.0 + 1e-12, 0.0, 0.0, 1.0],
+        [1.0 + e52, 1.0 + 2.0 * e52, 1.0, 1.0 + e52],
+        [1.0 + 2.0 * e52, 1.0 + e52, 1.0 + e52, 1.0],
+        [1.0, 1.0 + e52, 1.0 + e52, 1.0 + 2.0 * e52],
+        [1e200, 0.0, 0.0, 1e200],
+        [1e200, 1.0, 0.0, 1e200],
+        [1e-200, 0.0, 0.0, 1e-200],
+        [1e-170, 0.0, 0.0, 1e-170],
+        [1.0, 0.0, 0.0, 5e-324],
+    ];
+    let mut rng = Rng::new(0xbea3_02a3);
+    for _ in 0..60 {
+        let a = rng.signed_log_uniform(-2.0, 2.0);
+        let b = rng.signed_log_uniform(-2.0, 2.0);
+        let c = rng.signed_log_uniform(-2.0, 2.0);
+        let d = b * c / a;
+        mats.push([a, b, c, d]);
+        mats.push([a, b, c, up(d)]);
+    }
+    let beams: [[f64; 3]; 3] = [[1064e-9, 100e-6, std::f64::consts::PI * 100e-6 * 100e-6 / 1064e-9], [1e-300, 1.0, 1.0],
+        [1e300, 1.0, 1.0]];
+    for v in &mats {
+        let m = mat_of(*v);
+        for bv in beams {
+            let g = beam_of(bv);
+            let mut ins = am(&m);
+            ins.extend(gb(&g));
+            r.row("AbcdMatrix::transform_beam", Class::A, &ins, || res(m.transform_beam(black_box(&g)), gb));
+            r.row("AbcdMatrix::transform_beam_with_waist_position", Class::A, &ins, || {
+                res(m.transform_beam_with_waist_position(black_box(&g)), |(o, d)| {
+                    let mut t = gb(o);
+                    t.push(f(*d));
+                    t
+                })
+            });
+        }
+    }
 }
 
 /// M3 part 2a-2 (ADR 0002 row 34, the user's answer of 2026-11-14): the resonators at their exact edges.

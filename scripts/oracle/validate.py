@@ -4248,7 +4248,8 @@ def scattering_adr_rows(path: Path) -> list:
 # part for part (ADR 0002 row 5, e^{+jωt}: (u·cos φ, −(u·sin φ))), and its Laguerre–Gaussian power for l = i32::MIN
 # is (2r²/w²)^{2³¹}, where Rust's `unsigned_abs() as i32` wraps to −2³¹ (ADR 0002 row 32). M3 part 2a-2 (ADR 0002 row
 # 34): the port decides a cavity's stability on the exact (1 − L/R₁)(1 − L/R₂) (bm_stable34, in Fractions) and the
-# mode spacing's on the exact g₁·g₂, and computes w₀ from the Kogelnik form (bm_waist34, the port's operations).
+# mode spacing's on the exact g₁·g₂, and computes w₀ from the Kogelnik form (bm_waist34, the port's operations). M3 part
+# 2a-3 (ADR 0002 row 35): its beam transforms decide on the exact determinant (bm_transform, in Fractions).
 BM_SQRT2 = bits_to_f("3ff6a09e667f3bcd")          # std::f64::consts::SQRT_2
 BM_RES34 = ("beam::resonator_stability", "beam::resonator_beam_waist", "beam::transverse_mode_spacing")
 BM_W_BIG = 2.0 ** 1020                             # inputs past it are scaled by 2^-4 for w₀'s sums
@@ -4344,10 +4345,15 @@ def bm_propagate(m, q0, q1):
     return [("f", fdiv(nr * dr + ni * di, dsq)), ("f", fdiv(ni * dr - nr * di, dsq))]
 
 
-def bm_transform(m, bm):
+def bm_transform(m, bm, port=False):
+    """AbcdMatrix::transform_beam_with_waist_position; port=True for ADR 0002 row 35: the exact AD − BC of finite
+    entries decides det > 0, keeps λ only when it is exactly 1, and gives λ·det rounded once (λ itself for a zero,
+    infinite or NaN λ, which det > 0 leaves as it is)."""
     a, b, c, d = m
     det = a * d - b * c
-    if not bm_pos(det):
+    exact = port and all(math.isfinite(x) for x in m)
+    D = Fraction(a) * Fraction(d) - Fraction(b) * Fraction(c) if exact else None
+    if not (D > 0 if exact else bm_pos(det)):
         return ip_err(f"ABCD determinant must be positive and finite (det = n_in/n_out), got {rust_display(det)}")
     q = bm_propagate(m, 0.0, bm[2])
     if q[0][0] == "E":
@@ -4355,7 +4361,10 @@ def bm_transform(m, bm):
     zr2 = q[1][1]
     if not bm_pos(zr2):
         return ip_err("transformed beam has non-physical Rayleigh range")
-    lam = bm[0] if abs(det - 1.0) <= 1e-12 else bm[0] * det
+    if exact:
+        lam = bm[0] if D == 1 or bm[0] == 0.0 or not math.isfinite(bm[0]) else rn_frac(Fraction(bm[0]) * D)
+    else:
+        lam = bm[0] if abs(det - 1.0) <= 1e-12 else bm[0] * det
     out = bm_new(lam, fsqrt(fdiv(zr2 * lam, SC_PI)))
     if out[0][0] == "E":
         return out
@@ -4546,9 +4555,9 @@ def bm_eval(fn, v, P, port=False):
         if name == "propagate_beam":
             return bm_propagate(v[:4], v[4], v[5])
         if name == "transform_beam_with_waist_position":
-            return bm_transform(v[:4], v[4:7])
+            return bm_transform(v[:4], v[4:7], port)
         if name == "transform_beam":
-            out = bm_transform(v[:4], v[4:7])
+            out = bm_transform(v[:4], v[4:7], port)
             return out if out[0][0] == "E" else out[:3]
         return None
     if fn == "beam::resonator_stability":
@@ -4673,7 +4682,8 @@ def beam_corrections(path: Path):
 def beam_adr_rows(path: Path) -> list:
     """ADR 0002 mappings for beam.tsv: each row whose harness reading (bm_harness, on the port's correctly rounded
     primitives) differs from Rust's (the corrected oracle for class C): row 32 for the LG power at l = i32::MIN, row 34
-    for the resonators (M3 part 2a-2), row 5 otherwise (the field's conjugation, should it fail to be exact)."""
+    for the resonators (M3 part 2a-2), row 35 for the transforms' exact determinant (M3 part 2a-3), row 5 otherwise
+    (the field's conjugation, should it fail to be exact)."""
     out = []
     for fn, cls, ins, outs, v in bm_lines(path):
         P = BM_P_MPFR if cls == "C" else BM_P_GLIBC
@@ -4683,6 +4693,8 @@ def beam_adr_rows(path: Path) -> list:
             continue
         if fn in BM_RES34:
             row = 34
+        elif fn in ("AbcdMatrix::transform_beam", "AbcdMatrix::transform_beam_with_waist_position"):
+            row = 35
         elif fn == "beam::laguerre_gaussian_intensity" and abs(int(v[4])) == 1 << 31:
             row = 32
         else:
