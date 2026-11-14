@@ -523,6 +523,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
   1 − cos δ was 0 for δ = 1e-8; it now takes 2·sin²(δ/2) where cos δ > 1/2, and keeps Rust's difference elsewhere.
   Cost: a Mueller waveplate with cos δ > 1/2 is built in 697 ns for 571 (one more sine); a Jones waveplate in 452 ns
   for 535 (one sin_cos for two calls).
+- **beam** (ADR 0002 row 34, M3 part 2a-2, the user's answer of 2026-11-14): the resonators worked on g = 1 − L/R
+  rounded. Two convex mirrors could be called stable (g rounded to 1); a near-planar cavity of finite radii was
+  refused as planar; at L = 0.5, R₁ = 0.4, R₂ = 0.1 the waist was 0 for 2.2e-8 m. Stability is now decided on the
+  exact (1 − L/R₁)(1 − L/R₂) (the mode spacing's on the exact g₁·g₂), and w₀ comes from the inputs' own differences
+  and sums (Kogelnik's form, products with an unbounded exponent): within one ulp of the exact value on every golden
+  row. Cost: `beam/resonator_stability` takes 39 ns for 26 (the exact test); the waist 159 ns for 60 (the compensated
+  sums, the edge tests and the scaled chain they guard).
 
 ### Performance
 

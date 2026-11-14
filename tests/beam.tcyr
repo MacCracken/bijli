@@ -5,8 +5,9 @@
 # conjugate of Rust's e^{−iωt} field, so `test_hermite_gaussian_field_closed_form` reads its imaginary parts with the
 # opposite sign, and says so; every other test reads real values that the convention leaves alone. The cyrius_*
 # groups pin the field's propagation sense, the reasons' exact text, out left alone on an error, and ADR 0002 row 32
-# (the LG power at l = i32::MIN), and (M3 part 1c-2) the three structs' JSON: serde's text, round trips, both forms,
-# the bool's two literals, the reasons and the heap. tests/golden/beam.tsv pins every function over its grid against
+# (the LG power at l = i32::MIN), (M3 part 1c-2) the three structs' JSON: serde's text, round trips, both forms,
+# the bool's two literals, the reasons and the heap, and (M3 part 2a-2) ADR 0002 row 34: the resonators' exact
+# stability and their waist without cancellation. tests/golden/beam.tsv pins every function over its grid against
 # Rust besides, and tests/golden/json.tsv the JSON.
 
 include "tests/lib.cyr"
@@ -621,6 +622,48 @@ fn cyrius_tests(): i64 {
     return 0;
 }
 
+# ADR 0002 row 34 (M3 part 2a-2, the user's answer of 2026-11-14): stability on the exact (1 − L/R₁)(1 − L/R₂) and the
+# exact g₁·g₂, and w₀ from the inputs' own sums, its bits from validate.py's model (within an ulp of the exact value).
+fn cyrius_row34(): i64 {
+    test_group("cyrius_resonator_row34 (ADR 0002 row 34)");
+    # Two convex mirrors are never stable: with L = 5e-324 and R = −0.5, g = 1 + 1e-323 exactly, which Rust rounds to 1
+    # (and calls stable). The rounded fields stay Rust's.
+    var st: BjResonatorStability;
+    var tiny: f64 = _bj_from_bits(1);
+    var t1, v1 = bj_resonator_stability(tiny, -0.5, -0.5, &st);
+    var sg: f64 = st.g_product;
+    assert(is_ok(t1) == 1 && st.is_stable == 0 && sg == 1.0, "convex–convex: unstable, g₁g₂ still Rust's 1.0");
+    # A near-planar cavity of finite radii has its finite waist: Rust's g rounded to 1 and reported the planar cavity.
+    var t2, v2 = bj_resonator_beam_waist(0.1, 100000000000000000.0, 100000000000000000.0, 0.000001064);
+    assert(is_ok(t2) == 1 && v2 == 0x40139329279B8BDC, "R = 1e17, L = 0.1: w₀ = 4.8937… m, correctly rounded");
+    # Where Rust was right the port agrees, and where its chain lost an ulp the port has the exact value's rounding.
+    var t3, v3 = bj_resonator_beam_waist(0.1, 0.2, 0.2, 0.000001064);
+    assert(is_ok(t3) == 1 && v3 == 0x3F267299FEAD59C2, "R = 2L: Rust's bits");
+    var big: f64 = _bj_from_bits(0x7FE1CCF385EBC8A0);
+    var t4, v4 = bj_resonator_beam_waist(_bj_from_bits(0x7FAC7B1F3CAC7433), big, big, 0.000001064);
+    assert(is_ok(t4) == 1 && v4 == 0x5F2A8F4187AD0389,
+      "L = 1e307, R = 1e308: scaled, w₀ rounded once (Rust: an ulp up)");
+    # The planar cavity (two flat mirrors) is still refused; the confocal one keeps Rust's limit.
+    var inf: f64 = 1.0 / 0.0;
+    var t5, v5 = bj_resonator_beam_waist(0.1, inf, inf, 0.000001064);
+    assert(is_err_result(t5) == 1 && v5 == BJ_ERR_DIVISION_BY_ZERO, "two flat mirrors: planar");
+    var t6, v6 = bj_resonator_beam_waist(0.5, 0.5, 0.5, 0.000001064);
+    var cf: f64 = f64_sqrt(0.5 * 0.000001064 / (2.0 * _BJ_PI));
+    assert(is_ok(t6) == 1 && v6 == _bj_bits(cf), "confocal: √(Lλ/2π)");
+    # The mode spacing decides on the exact g₁·g₂: (1 + 2^-52)(1 − 2^-53) rounds to 1 but exceeds it, and a negative
+    # product that underflows to −0 is still negative.
+    var t7, v7 = bj_transverse_mode_spacing(1500000000.0, _bj_from_bits(0x3FF0000000000001),
+      _bj_from_bits(0x3FEFFFFFFFFFFFFF));
+    assert(is_err_result(t7) == 1 && reason_is2("invalid parameter: cavity is unstable (g₁g₂ = 1.0000)", "") == 1,
+      "g₁g₂ = 1 + 2^-53 − 2^-105: unstable (Rust: 0 Hz)");
+    var t8, v8 = bj_transverse_mode_spacing(1500000000.0, _bj_from_bits(0x16687E92154EF7AC),
+      _bj_from_bits(0x96687E92154EF7AC));
+    assert(is_err_result(t8) == 1 && reason_is2("invalid parameter: cavity is unstable (g₁g₂ = -0.0000)", "") == 1,
+      "g₁g₂ = −1e-400: unstable (Rust: FSR/2)");
+    if (v1 == 99 || v5 == 99 || v7 == 99 || v8 == 99) { println("."); }
+    return 0;
+}
+
 # The three structs' JSON (M3 part 1c-2), as serde_json writes and reads them.
 fn cyrius_json(): i64 {
     test_group("cyrius_beam_json");
@@ -797,6 +840,7 @@ fn main(): i64 {
     rust_tests_c();
     rust_tests_d();
     cyrius_tests();
+    cyrius_row34();
     cyrius_json();
     return assert_summary();
 }

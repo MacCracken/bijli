@@ -3404,3 +3404,79 @@ E and B = n̂ × E/c.
 - **Result, every target** (x86_64 ELF, x86_64 PE, aarch64): **16 modules, 0 failing; 492,975 ok, 0 failed, 0
   measured, 0 pending, 70,834 accepted (ADR 01: 29,441; ADR 0002: 41,393)** over 563,809 rows; **all 380 digests
   equal**. The 374 outside the six waveplate functions are unchanged. `polarization.tcyr` passes on all three.
+
+## 62. M3 part 2a-2: the resonators' exact stability and their waist without cancellation (2026-11-14)
+
+- **ADR 0002 row 34, new** (the user's answer of 2026-11-14). beam.rs works on g = 1 − L/R rounded, which loses
+  L/R's digits near the planar edge, and then on the rounded g₁g₂.
+  - **Stability** (`_bj_beam_stable34`) is decided on the exact (1 − L/R₁)(1 − L/R₂):
+    - its sign comes from each factor's, the sign of R − L, or + for a convex (R < 0) or flat (±∞) mirror;
+    - ≤ 1 is ab ≤ a + b with a = L/R₁, b = L/R₂: always for two flat mirrors, R > 0 with one, and otherwise
+      L ≤ R₁ + R₂ (L ≥ R₁ + R₂ when R₁R₂ < 0). L is compared with RN(R₁ + R₂), and at equality with TwoSum's exact
+      error (`_bj_beam_cmp_sum`).
+
+    The returned g₁, g₂ and g₁g₂ stay Rust's rounded values, so `is_stable` can disagree with g₁g₂'s rounding at an
+    edge: two convex mirrors at L = 5e-324 have g = 1 + 1e-323 exactly, and are unstable though their g rounds to 1.
+  - **The mode spacing** decides on the exact product of its own g's (`_bj_beam_gg_ok`): the sign from the factors'
+    (a product that underflows to −0 is still negative), RN's side of 1, and at a rounded 1 the exact sign of
+    g₁g₂ − 1 (src/crmath_cmp.cyr's `_bj_x_sign`). Its value keeps Rust's chain.
+  - **The waist** (`_bj_beam_waist34`) comes from the Kogelnik form,
+    w₀² = (λ/π)·√(L(R₁ − L)(R₂ − L)(R₁ + R₂ − L))/|R₁ + R₂ − 2L|. That is Rust's g₁g₂(1 − g₁g₂) and g₁ + g₂ − 2g₁g₂
+    written in the inputs; with one flat mirror it is (λ/π)·√(L(R − L)), the limit as the other R → ∞.
+    - The factors are differences and compensated sums of the inputs (`_bj_beam_sum3`: two TwoSums, so a sum that
+      cancels is the exact sum rounded once), so none cancels.
+    - Past 2^1020 they are summed scaled by 2^-4, so no sum overflows; the form is homogeneous, and the scale comes
+      back exactly in the exponent.
+    - The products run with an unbounded exponent (kimiya's `_bj_k_ux_*`), and w₀ is rounded once.
+    - A fast path runs the same operations on doubles. Where every result is normal (kimiya's `_bj_k_ux_normal`, which
+      also excludes 2^-1022 itself), each is the same 53-bit rounding of the same exact value, so its bits are the
+      unbounded chain's; only an edge takes the slow path. The golden rows prove it: the digests are those of the
+      unbounded chain alone.
+    - The confocal limit √(Lλ/2π) at R₁ = R₂ = L and the planar refusal (two flat mirrors) keep Rust's branches. A
+      near-planar cavity of finite radii, which Rust refused as planar when its g rounded to 1, gets its finite waist.
+- **Accuracy**: on every golden row where the port computes a w₀, it is within one ulp of the exact value (538
+  correctly rounded, 185 one ulp off). `validate.py` checks a bound of four on every row, against the exact fourth
+  root (`bm_rn_root4`). Rust's w₀ is more than 1,000 ulps off on 170 rows. At L = 0.5, R₁ = 0.4, R₂ = 0.1 the rounded
+  g₁g₂ is exactly 1, so Rust's w₀ is 0 for 2.2e-8 m (the exact product is 0.99999999999999965).
+- **The oracle**: `m_beam.rs` appends an 861-row edge grid (`resonator_edges`) after every earlier row, so the 40,086
+  earlier rows are an exact prefix of the new file. The cavities:
+  - the confocal, half-confocal and concentric edges within ulps (L at R₁ + R₂ and its neighbours), and the
+    convex–concave edge L = R₁ + R₂ with R₁R₂ < 0;
+  - near-planar cavities of radii 10⁶ to DBL_MAX, concave, convex and mixed;
+  - flat mirrors;
+  - lengths and radii past 2^1020, and subnormal lengths;
+  - 120 seeded cavities;
+
+  each with three wavelengths, plus 16 mode-spacing g pairs (products that round to 1 or underflow).
+- **validate.py**:
+  - `bm_stable34` decides stability in Fractions, independently of the port's method;
+  - `bm_waist34` transcribes the port's operations (TwoSums, the unbounded-exponent products, `rn_sqrt` for the
+    last rounding);
+  - `beam_adr_rows` attributes row 34;
+  - `beam_corrections` skips a row a mapping holds.
+
+  The model agreed with every new row on its first run, and a one-bit flip of each new row's first output was caught
+  on all 861.
+- **Mappings**: `beam.adr.tsv` holds 949 rows: row 32's 366 and row 34's 583. Of row 34's 583:
+  - 432 waist values change;
+  - 99 near-planar cavities get a waist where Rust refused them as planar, and 3 where it called them unstable;
+  - 23 change their error (a convex–convex near-planar cavity is unstable, not planar);
+  - 11 stability verdicts become unstable and 1 stable;
+  - 14 mode spacings are refused (a product above 1 that rounds to 1, a negative one that underflows).
+- **Tests**: `cyrius_resonator_row34` in `tests/beam.tcyr` (8 assertions, 121 in the file) pins the convex–convex
+  verdict, a near-planar waist's correctly rounded bits, Rust's bits where they were right, the scaled path, the
+  planar and confocal branches, and both mode-spacing edges with their reasons.
+- **Benchmarks**: interleaved against 2a-1's tree, three rounds at load 0.5–1.2.
+  - `beam/resonator_stability`, the twin: 26 → 39 ns (Rust 6.48 ns, so 4.2× → 6.0×), for the exact test's comparisons
+    and TwoSum.
+  - A one-off bench of the rest (Rust benches neither): `bj_resonator_beam_waist(0.1, 0.2, 0.25, λ)` 60 → 159 ns; with
+    one flat mirror 59 → 96 ns; `bj_transverse_mode_spacing` 170 → 182 ns.
+  - The waist's first form ran the unbounded chain on every call (324 ns). The bit-identical fast path took it to
+    221 ns, and inlining the test and moving the slow chain into a helper of its own (the cost model: locals and calls
+    cost even when unused) to 159.
+
+  Every other row is within noise. Two A/B runs along the way ran beside another repo's benchmarks (load 3.4–8.7);
+  these numbers are from the quiet one.
+- **Result, every target** (x86_64 ELF, x86_64 PE, aarch64): **16 modules, 0 failing; 493,253 ok, 0 failed, 0
+  measured, 0 pending, 71,417 accepted (ADR 01: 29,441; ADR 0002: 41,976)** over 564,670 rows; **all 380 digests
+  equal**. The 377 outside the three resonator functions are unchanged. `beam.tcyr` passes on all three.

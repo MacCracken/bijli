@@ -80,7 +80,7 @@
 | `beam/abcd_propagate_beam` | 1.79 ns | `beam/abcd_propagate_beam` | 19.00 ns | 10.6× |
 | `beam/abcd_compose` | 0.99 ns | `beam/abcd_compose` | 20.00 ns | 20.2× |
 | `beam/hermite_gaussian_hg33` | 4.46 ns | `beam/hermite_gaussian_hg33` | 160.00 ns | 35.9× |
-| `beam/resonator_stability` | 6.48 ns | `beam/resonator_stability` | 27.00 ns | 4.2× |
+| `beam/resonator_stability` | 6.48 ns | `beam/resonator_stability` | 39.00 ns | 6.0× |
 | `beam/hermite_gaussian_field_hg33` | 30.33 ns | `beam/hermite_gaussian_field_hg33` | 669.00 ns | 22.1× |
 | `rf/reflection_coefficient` | 1.23 ns | pending (M4) | — | — |
 | `rf/vswr` | 1.23 ns | pending (M4) | — | — |

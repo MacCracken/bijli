@@ -22834,6 +22834,10 @@ public fn bj_rayleigh_angular_intensity(cross_section: f64, distance: f64, cos_t
 #   is already Siegman's form (1/q = 1/R − jλ/(πw²)), so q, its ABCD propagation and the transformed beams keep Rust's
 #   numbers, and the Gouy phase ζ(z) = arctan(z/z_R) is a geometric angle.
 #
+# The resonators decide their stability exactly and compute w₀ without cancellation (ADR 0002 row 34, M3 part 2a-2,
+# the user's answer of 2026-11-14): 0 ≤ (1 − L/R₁)(1 − L/R₂) ≤ 1 on the exact value, and w₀ from the inputs' own
+# differences and sums, where Rust's g = 1 − L/R rounded L/R's digits away near the planar edge.
+#
 # Mode indices are Rust's: m, n and p are u32 (0 ≤ m < 2³²) and l is an i32. The polynomials are their recurrences
 # in Rust's order; exp and atan are correctly rounded (src/crmath.cyr), and so are acos and sqrt.
 
@@ -23212,9 +23216,205 @@ public struct BjResonatorStability {
     is_stable;
 }
 
+# ── the exact edges (ADR 0002 row 34) ──
+
+# 1 when 0 ≤ (1 − L/R₁)(1 − L/R₂) ≤ 1 in exact value, else 0, for a positive finite L and radii neither NaN nor below
+# 1e-30 in magnitude (±∞ is a flat mirror, L/R = 0). With a = L/R₁, b = L/R₂:
+# - the product is ≥ 0 when its factors' signs don't differ: 1 − L/R is positive for a convex (R < 0) or flat mirror
+#   and for R > L, 0 at R = L, negative for 0 < R < L;
+# - it is ≤ 1 when ab ≤ a + b: always for two flat mirrors, for R > 0 with one, and otherwise L ≤ R₁ + R₂ where
+#   R₁R₂ > 0, L ≥ R₁ + R₂ where R₁R₂ < 0 (the inequality times R₁R₂/L). L is compared with s = RN(R₁ + R₂), and at
+#   L = s with TwoSum's exact error t: s is the double nearest R₁ + R₂, so a double L other than s lies on the same
+#   side of R₁ + R₂ as of s; an s past DBL_MAX is past every finite L.
+#must_use
+fn _bj_beam_stable34(length: f64, r1: f64, r2: f64): i64 {
+    var s1 = 1;
+    if (r1 > 0.0 && r1 < length) { s1 = 0 - 1; }
+    if (r1 == length) { s1 = 0; }
+    var s2 = 1;
+    if (r2 > 0.0 && r2 < length) { s2 = 0 - 1; }
+    if (r2 == length) { s2 = 0; }
+    if (s1 * s2 < 0) { return 0; }
+    var d1: f64 = r1 - r1;
+    var d2: f64 = r2 - r2;
+    if (d1 != 0.0 || d2 != 0.0) {
+        if (d1 != 0.0 && d2 != 0.0) { return 1; }
+        if (d1 != 0.0 && r2 > 0.0) { return 1; }
+        if (d2 != 0.0 && r1 > 0.0) { return 1; }
+        return 0;
+    }
+    var s: f64 = r1 + r2;
+    var c = 0;
+    if (s - s != 0.0) {
+        c = 1;
+        if (s > 0.0) { c = 0 - 1; }
+    } elif (length < s) { c = 0 - 1; }
+    elif (length > s) { c = 1; }
+    else {
+        var bb: f64 = s - r1;
+        var tt: f64 = (r1 - (s - bb)) + (r2 - bb);
+        if (tt > 0.0) { c = 0 - 1; }
+        if (tt < 0.0) { c = 1; }
+    }
+    if ((r1 > 0.0 && r2 > 0.0) || (r1 < 0.0 && r2 < 0.0)) {
+        if (c <= 0) { return 1; }
+        return 0;
+    }
+    if (c >= 0) { return 1; }
+    return 0;
+}
+
+# 1 when 0 ≤ g₁·g₂ ≤ 1 in exact value, else 0, for finite g₁, g₂ with gp = RN(g₁·g₂): the sign from the factors' (a
+# product that underflows keeps it), then gp's side of 1 (gp is the double nearest the product, and 1 is a double),
+# but at gp = 1, where the exact sign of g₁g₂ − 1 decides (src/crmath_cmp.cyr's _bj_x_sign).
+#must_use
+fn _bj_beam_gg_ok(g1: f64, g2: f64, gp: f64): i64 {
+    if ((g1 < 0.0 && g2 > 0.0) || (g1 > 0.0 && g2 < 0.0)) { return 0; }
+    if (gp > 1.0) { return 0; }
+    if (gp < 1.0) { return 1; }
+    var tm: i64[14];
+    _bj_x_put2(&tm, 0, g1, g2, 0, 0);
+    _bj_x_put2(&tm, 1, 1.0, 1.0, 0, 1);
+    if (_bj_x_sign(&tm, 2) > 0) { return 0; }
+    return 1;
+}
+
+# a + b + c, within about an ulp and a half, and the exact sum rounded once where it cancels: s₁ + t₁ = a + b and
+# s₂ + t₂ = s₁ + c exactly (TwoSum), then s₂ + (t₁ + t₂). Where s₁ and c cancel, s₁ + c is exact (Sterbenz), so t₂ = 0
+# and the result is RN(s₂ + t₁); elsewhere nothing cancels. The callers keep |a| + |b| + |c| below 2^1023.
+#must_use
+fn _bj_beam_sum3(a: f64, b: f64, c: f64): f64 {
+    var s1, t1 = _bj_k_two_sum(a, b);
+    var s1v: f64 = s1;
+    var t1v: f64 = t1;
+    var s2, t2 = _bj_k_two_sum(s1v, c);
+    var s2v: f64 = s2;
+    var t2v: f64 = t2;
+    var tt: f64 = t1v + t2v;
+    var r: f64 = s2v + tt;
+    return r;
+}
+
+# 2^1020: a cavity whose L or finite radius reaches it is scaled by 2^-4 for w₀'s sums.
+var _BJ_BEAM_2P1020: f64 = 0x7FB0000000000000;
+
+# w₀ for a stable cavity that is neither planar nor confocal: w₀² = (λ/π)·√(L(R₁ − L)(R₂ − L)(R₁ + R₂ − L))/
+# |R₁ + R₂ − 2L| (Kogelnik and Li: g₁g₂(1 − g₁g₂) and g₁ + g₂ − 2g₁g₂ written in the inputs), or (λ/π)·√(L(R − L)) with
+# one flat mirror (the limit as the other R → ∞). Each factor is a difference or a compensated sum of the inputs, so
+# none cancels; past 2^1020 they are summed scaled by 2^-4 (the form is homogeneous, and the scale comes back exactly
+# in the exponent). The products run with an unbounded exponent (kimiya's _bj_k_ux_*, _bj_beam_waist34_ux), and w₀ is
+# rounded once: within one ulp of the exact value on every golden row (validate.py's bound is four). The fast path
+# runs the same operations on doubles: where every result is normal (kimiya's _bj_k_ux_normal) each is the same
+# 53-bit rounding of the same exact value, so the bits are the unbounded chain's, and only an edge takes the slow
+# path. (w₀, 1), or (0, 0) where R₁ + R₂ − 2L is 0 (only the confocal and planar cavities, which the caller has taken).
+#must_use
+fn _bj_beam_waist34(length: f64, r1: f64, r2: f64, wavelength: f64): (f64, i64) {
+    var d1: f64 = r1 - r1;
+    var d2: f64 = r2 - r2;
+    var mx: f64 = length;
+    var x1: f64 = f64_abs(r1);
+    var x2: f64 = f64_abs(r2);
+    if (d1 == 0.0 && x1 > mx) { mx = x1; }
+    if (d2 == 0.0 && x2 > mx) { mx = x2; }
+    var k = 0;
+    var sc: f64 = 1.0;
+    if (mx >= _BJ_BEAM_2P1020) {
+        k = 4;
+        sc = 0.0625;
+    }
+    var l: f64 = length * sc;
+    var a: f64 = r1 * sc;
+    var b: f64 = r2 * sc;
+    var lp: f64 = wavelength / _BJ_PI;
+    if (d1 != 0.0 || d2 != 0.0) {
+        var rf: f64 = a;
+        if (d1 != 0.0) { rf = b; }
+        var fv: f64 = rf - l;
+        var fa: f64 = f64_abs(fv);
+        var p1: f64 = length * fa;
+        var q1: f64 = f64_sqrt(p1);
+        var w1: f64 = q1 * lp;
+        var okf = 0;
+        if (_bj_k_ux_normal(lp) == 1 && _bj_k_ux_normal(p1) == 1) { okf = 1; }
+        if (okf == 1 && _bj_k_ux_normal(q1) == 1 && _bj_k_ux_normal(w1) == 1) {
+            var r1v: f64 = f64_sqrt(w1);
+            if (k == 4) { r1v = 2.0 * r1v; }
+            return (r1v, 1);
+        }
+        var u1: f64 = _bj_beam_waist34_ux(length, fa, 1.0, 1.0, 1.0, wavelength, k, 1);
+        return (u1, 1);
+    }
+    var f1: f64 = a - l;
+    var f2: f64 = b - l;
+    var nl: f64 = -l;
+    var f3: f64 = _bj_beam_sum3(a, b, nl);
+    var l2: f64 = 2.0 * l;
+    var n2l: f64 = -l2;
+    var f4: f64 = _bj_beam_sum3(a, b, n2l);
+    if (f4 == 0.0) { return (0.0, 0); }
+    var a1: f64 = f64_abs(f1);
+    var a2: f64 = f64_abs(f2);
+    var a3: f64 = f64_abs(f3);
+    var a4: f64 = f64_abs(f4);
+    var m1: f64 = length * a1;
+    var m2: f64 = m1 * a2;
+    var m3: f64 = m2 * a3;
+    var rt: f64 = f64_sqrt(m3);
+    var nm: f64 = rt * lp;
+    var w2: f64 = nm / a4;
+    var ok = 0;
+    if (_bj_k_ux_normal(lp) == 1 && _bj_k_ux_normal(m1) == 1 && _bj_k_ux_normal(m2) == 1 && _bj_k_ux_normal(m3) == 1) {
+        ok = 1;
+    }
+    if (ok == 1 && _bj_k_ux_normal(rt) == 1 && _bj_k_ux_normal(nm) == 1 && _bj_k_ux_normal(w2) == 1) {
+        var r2v: f64 = f64_sqrt(w2);
+        if (k == 4) { r2v = 2.0 * r2v; }
+        return (r2v, 1);
+    }
+    var u2: f64 = _bj_beam_waist34_ux(length, a1, a2, a3, a4, wavelength, k, 0);
+    return (u2, 1);
+}
+
+# _bj_beam_waist34's slow path, its chain with an unbounded exponent for the factors' magnitudes f₁ … f₄ (sums scaled
+# by 2^-k): Q = √(L·f₁·f₂·f₃) (flat = 1: √(L·f₁)), W = Q·(λ/π) (/f₄ unless flat), w₀ = √(W·2^(k/2)) rounded once into
+# binary64; 0 for a zero factor.
+#must_use
+fn _bj_beam_waist34_ux(length: f64, f1: f64, f2: f64, f3: f64, f4: f64, wavelength: f64, k, flat): f64 {
+    var lms, lme = _bj_k_ux_from(wavelength);
+    var pis, pie = _bj_k_ux_from(_BJ_PI);
+    var lps, lpe = _bj_k_ux_div(lms, lme, pis, pie);
+    var lns, lne = _bj_k_ux_from(length);
+    var u1s, u1e = _bj_k_ux_from(f1);
+    var ps, pe = _bj_k_ux_mul(lns, lne, u1s, u1e);
+    if (flat == 0) {
+        var u2s, u2e = _bj_k_ux_from(f2);
+        var u3s, u3e = _bj_k_ux_from(f3);
+        var m2s, m2e = _bj_k_ux_mul(ps, pe, u2s, u2e);
+        var m3s, m3e = _bj_k_ux_mul(m2s, m2e, u3s, u3e);
+        ps = m3s;
+        pe = m3e;
+    }
+    var rts, rte = _bj_k_ux_sqrt(ps, pe);
+    var ws, we = _bj_k_ux_mul(rts, rte, lps, lpe);
+    if (flat == 0) {
+        var u4s, u4e = _bj_k_ux_from(f4);
+        var qs, qe = _bj_k_ux_div(ws, we, u4s, u4e);
+        ws = qs;
+        we = qe;
+    }
+    var wsv: f64 = ws;
+    if (wsv == 0.0) { return 0.0; }
+    var w0: f64 = _bj_k_ux_sqrt_f64(wsv, we + k / 2);
+    return w0;
+}
+
+# ── the resonator functions ──
+
 # The stability of a cavity of length L between mirrors of radii R₁ and R₂ (positive concave, ±∞ flat) into *out:
 # Ok(0), or with out untouched InvalidParameter for an L not positive and finite or a NaN radius, DivisionByZero when
-# |R₁| or |R₂| < 1e-30. Mirrors `resonator_stability`.
+# |R₁| or |R₂| < 1e-30. g₁, g₂ and g₁g₂ are Rust's rounded values; is_stable is decided on the exact
+# (1 − L/R₁)(1 − L/R₂) (ADR 0002 row 34), so it may disagree with g_product's rounding at the edges: two convex
+# mirrors are never stable, though their rounded g can be 1. Mirrors `resonator_stability`.
 #must_use
 public fn bj_resonator_stability(length: f64, r1: f64, r2: f64, out: *BjResonatorStability): Result {
     if (_bj_beam_pos(length) == 0) {
@@ -23232,8 +23432,7 @@ public fn bj_resonator_stability(length: f64, r1: f64, r2: f64, out: *BjResonato
     var g1: f64 = 1.0 - length / r1;
     var g2: f64 = 1.0 - length / r2;
     var gp: f64 = g1 * g2;
-    var st = 0;
-    if (gp >= 0.0 && gp <= 1.0) { st = 1; }
+    var st = _bj_beam_stable34(length, r1, r2);
     out.g1 = g1;
     out.g2 = g2;
     out.g_product = gp;
@@ -23251,9 +23450,11 @@ fn _bj_beam_unstable(gp: f64, tail): i64 {
 }
 
 # The fundamental mode's waist in a stable cavity, w₀ = √[(Lλ/π)·√(g₁g₂(1 − g₁g₂))/|g₁ + g₂ − 2g₁g₂|] (Siegman, ch. 19),
-# with the symmetric confocal limit w₀ = √(Lλ/2π) at g₁ = g₂ = 0. bj_resonator_stability's errors, then
-# InvalidParameter for an unstable cavity or a λ not positive and finite, DivisionByZero for the planar cavity
-# (g₁ = g₂ = 1). Mirrors `resonator_beam_waist`.
+# computed in the inputs without cancellation (_bj_beam_waist34, ADR 0002 row 34), with the symmetric confocal limit
+# w₀ = √(Lλ/2π) at R₁ = R₂ = L. bj_resonator_stability's errors, then InvalidParameter for an unstable cavity (on the
+# exact product; the reason quotes Rust's rounded g₁g₂) or a λ not positive and finite, DivisionByZero for the planar
+# cavity (two flat mirrors). A near-planar cavity of finite radii has its finite waist, where Rust's g rounded to 1.
+# Mirrors `resonator_beam_waist`.
 #must_use
 public fn bj_resonator_beam_waist(length: f64, r1: f64, r2: f64, wavelength: f64): Result {
     var st: BjResonatorStability;
@@ -23264,27 +23465,24 @@ public fn bj_resonator_beam_waist(length: f64, r1: f64, r2: f64, wavelength: f64
     if (_bj_beam_pos(wavelength) == 0) {
         return Err(_bj_beam_bad("wavelength must be positive and finite, got ", wavelength, ""));
     }
-    var g1: f64 = st.g1;
-    var g2: f64 = st.g2;
-    var s: f64 = g1 + g2 - 2.0 * gp;
-    if (s == 0.0) {
-        if (g1 == 0.0 && g2 == 0.0) {
-            var two_pi: f64 = 2.0 * _BJ_PI;
-            var c: f64 = f64_sqrt(length * wavelength / two_pi);
-            return Ok(c);
-        }
+    if (_bj_is_finite(r1) == 0 && _bj_is_finite(r2) == 0) {
         return Err(_bj_beam_dz("planar cavity (g₁ = g₂ = 1) has no confined mode"));
     }
-    var root: f64 = f64_sqrt(gp * (1.0 - gp));
-    var abs_s: f64 = f64_abs(s);
-    var w0_sq: f64 = length * wavelength / _BJ_PI * root / abs_s;
-    var w0: f64 = f64_sqrt(w0_sq);
-    return Ok(w0);
+    if (r1 == length && r2 == length) {
+        var two_pi: f64 = 2.0 * _BJ_PI;
+        var c: f64 = f64_sqrt(length * wavelength / two_pi);
+        return Ok(c);
+    }
+    var w0, ok = _bj_beam_waist34(length, r1, r2, wavelength);
+    if (ok == 0) { return Err(_bj_beam_dz("planar cavity (g₁ = g₂ = 1) has no confined mode")); }
+    var wv: f64 = w0;
+    return Ok(wv);
 }
 
 # Δν_T = (Δν_FSR/π)·arccos(±√(g₁g₂)), the frequency step per unit of m + n: + when g₁, g₂ ≥ 0, − when either is
 # negative (Siegman, ch. 19), so Δν_T ∈ [0, Δν_FSR]. InvalidParameter for an fsr not positive and finite or an
-# unstable (or NaN) g₁g₂. Mirrors `transverse_mode_spacing`.
+# unstable (or NaN) g₁g₂, decided on the exact product of finite g's (ADR 0002 row 34; Rust's rounded one otherwise).
+# Mirrors `transverse_mode_spacing`.
 #must_use
 public fn bj_transverse_mode_spacing(fsr: f64, g1: f64, g2: f64): Result {
     if (_bj_beam_pos(fsr) == 0) {
@@ -23293,6 +23491,7 @@ public fn bj_transverse_mode_spacing(fsr: f64, g1: f64, g2: f64): Result {
     var gp: f64 = g1 * g2;
     var stable = 0;
     if (gp >= 0.0 && gp <= 1.0) { stable = 1; }
+    if (_bj_is_finite(g1) == 1 && _bj_is_finite(g2) == 1) { stable = _bj_beam_gg_ok(g1, g2, gp); }
     if (stable == 0) { return Err(_bj_beam_unstable(gp, ")")); }
     var root: f64 = f64_sqrt(gp);
     var arg: f64 = root;

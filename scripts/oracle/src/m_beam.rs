@@ -15,6 +15,12 @@
 //! test and the |det − 1| ≤ 10⁻¹² wavelength rule on both sides; cavities across the stability diagram's interior,
 //! edges and outside, flat and zero-radius mirrors. Each value appears once per function: a row's (function, inputs)
 //! is its key in the mapping files.
+//!
+//! M3 part 2a-2 (ADR 0002 row 34) appends the resonators' edge grid after every earlier row: cavities within ulps of
+//! the stability diagram's edges (confocal, half-confocal, concentric with L at R₁ + R₂ and its neighbours, the
+//! convex–concave edge L = R₁ + R₂ with R₁R₂ < 0), near-planar ones whose g rounds to 1, flat mirrors, lengths and
+//! radii past 2^1020 and a subnormal length, seeded stable cavities, and mode-spacing g pairs whose product rounds to
+//! 1 or underflows.
 
 use crate::grids::{Rng, specials};
 use crate::m_field::res_f;
@@ -436,5 +442,99 @@ pub fn emit() -> Module {
             vec![f(laguerre_gaussian_intensity(&g, 1, 2, 50e-6, 0.01))]
         });
     }
+    resonator_edges(r);
     rows.m
+}
+
+/// M3 part 2a-2 (ADR 0002 row 34, the user's answer of 2026-11-14): the resonators at their exact edges.
+fn resonator_edges(r: &mut Rows) {
+    let big = f64::MAX;
+    let mut cav: Vec<[f64; 3]> = vec![
+        [0.5, 0.5, 0.5],
+        [0.5, up(0.5), 0.5],
+        [0.5, up(0.5), up(0.5)],
+        [0.5, down(0.5), down(0.5)],
+        [0.5, down(0.5), up(0.5)],
+        [0.3, 1.0, 0.3],
+        [0.3, -1.0, 0.3],
+        [0.3, f64::INFINITY, 0.3],
+        [0.3, 1e-30, 0.3],
+        [0.3, f64::INFINITY, 1.0],
+        [0.3, f64::NEG_INFINITY, 0.5],
+        [0.3, f64::INFINITY, f64::INFINITY],
+        [0.3, f64::INFINITY, -1.0],
+        [0.3, f64::INFINITY, down(0.3)],
+        [0.3, f64::INFINITY, up(0.3)],
+        [1e307, 1e308, 1e308],
+        [1e300, big, big],
+        [big, big, big],
+        [1e308, -big, big],
+        [big / 2.0, big, f64::INFINITY],
+        [1e300, 3e300, 4e300],
+        [5e-324, 1.0, 1.0],
+        [5e-324, 1e300, 2e300],
+        [1e-310, 1e-30, 1e-30],
+        [1e-31, 1e-30, 1e-30],
+        [2e-30, 1e-30, 1e-30],
+    ];
+    // Concentric: L at R₁ + R₂ (rounded) and its neighbours, and the convex–concave edge L = R₁ + R₂ with R₁R₂ < 0.
+    let pairs = [(0.1, 0.2), (0.5, 0.5), (0.25, 0.75), (1.0, 2f64.powi(-60)), (1e-20, 1e-20), (3.0, 7.0), (-0.5, 2.0)];
+    for (r1, r2) in pairs {
+        let s = r1 + r2;
+        for l in [s, up(s), down(s), up(up(s)), down(down(s))] {
+            cav.push([l, r1, r2]);
+        }
+    }
+    for l in [2.0, up(2.0), down(2.0)] {
+        cav.push([l, -0.5, 2.0]);
+    }
+    // Near-planar: g rounds to 1 (L/R below 2^-54), concave, convex and mixed.
+    for rr in [1e6, 1e10, 1e16, 1e17, 1e30, 1e100, 1e300, big] {
+        cav.push([0.1, rr, rr]);
+        cav.push([0.1, rr, -rr]);
+        cav.push([0.1, -rr, -rr]);
+        cav.push([0.1, rr, 0.2]);
+    }
+    let mut rng = Rng::new(0xbea3_02a2);
+    for _ in 0..120 {
+        let l = rng.log_uniform(-3.0, 1.0);
+        let s1 = if rng.int(0, 3) == 0 { -1.0 } else { 1.0 };
+        let s2 = if rng.int(0, 3) == 0 { -1.0 } else { 1.0 };
+        cav.push([l, s1 * l * rng.log_uniform(-0.5, 4.0), s2 * l * rng.log_uniform(-0.5, 4.0)]);
+    }
+    for c in &cav {
+        let [l, r1, r2] = *c;
+        r.row("beam::resonator_stability", Class::A, &[f(l), f(r1), f(r2)], || {
+            res(resonator_stability(black_box(l), black_box(r1), black_box(r2)), rs)
+        });
+        for lam in [1064e-9, 5e-324, 1e300] {
+            r.row("beam::resonator_beam_waist", Class::A, &[f(l), f(r1), f(r2), f(lam)], || {
+                res_f(resonator_beam_waist(black_box(l), black_box(r1), black_box(r2), black_box(lam)))
+            });
+        }
+    }
+    let third = 1.0 / 3.0;
+    let gs: [(f64, f64); 16] = [
+        (1e-200, -1e-200),
+        (1e-200, 1e-200),
+        (-1e-200, -1e-200),
+        (5e-324, 5e-324),
+        (-5e-324, 5e-324),
+        (-0.0, 0.5),
+        (up(1.0), down(1.0)),
+        (down(1.0), up(1.0)),
+        (up(1.0), up(1.0)),
+        (2.0, 0.5),
+        (3.0, third),
+        (3.0, up(third)),
+        (3.0, down(third)),
+        (-3.0, -third),
+        (1e200, 1e-200),
+        (1e300, 1e-300),
+    ];
+    for (g1, g2) in gs {
+        r.row("beam::transverse_mode_spacing", Class::C, &[f(1.5e9), f(g1), f(g2)], || {
+            res_f(transverse_mode_spacing(black_box(1.5e9), black_box(g1), black_box(g2)))
+        });
+    }
 }

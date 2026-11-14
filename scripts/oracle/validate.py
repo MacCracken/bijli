@@ -4246,8 +4246,13 @@ def scattering_adr_rows(path: Path) -> list:
 # Gaussian beams, ABCD matrices, resonators and the HG/LG modes, transcribed in Rust's order. One transcription
 # serves Rust and the port: they share every formula but two. The port's Hermite–Gaussian field is Rust's conjugated
 # part for part (ADR 0002 row 5, e^{+jωt}: (u·cos φ, −(u·sin φ))), and its Laguerre–Gaussian power for l = i32::MIN
-# is (2r²/w²)^{2³¹}, where Rust's `unsigned_abs() as i32` wraps to −2³¹ (ADR 0002 row 32).
+# is (2r²/w²)^{2³¹}, where Rust's `unsigned_abs() as i32` wraps to −2³¹ (ADR 0002 row 32). M3 part 2a-2 (ADR 0002 row
+# 34): the port decides a cavity's stability on the exact (1 − L/R₁)(1 − L/R₂) (bm_stable34, in Fractions) and the
+# mode spacing's on the exact g₁·g₂, and computes w₀ from the Kogelnik form (bm_waist34, the port's operations).
 BM_SQRT2 = bits_to_f("3ff6a09e667f3bcd")          # std::f64::consts::SQRT_2
+BM_RES34 = ("beam::resonator_stability", "beam::resonator_beam_waist", "beam::transverse_mode_spacing")
+BM_W_BIG = 2.0 ** 1020                             # inputs past it are scaled by 2^-4 for w₀'s sums
+BM_W_ULPS = 4                                      # w₀'s bound against the exact value (ADR 0002 row 34)
 BM_P_GLIBC = dict(GLIBC_P, acos=LIBM.acos)
 BM_P_MPFR = dict(MPFR_P, acos=lambda x: mpfr_ref.cr("acos", x))
 
@@ -4369,9 +4374,110 @@ def bm_stability(L, r1, r2):
     return (g1, g2, gp, 0.0 <= gp <= 1.0), None
 
 
+def bm_stable34(L, r1, r2) -> bool:
+    """ADR 0002 row 34: 0 ≤ (1 − L/R₁)(1 − L/R₂) ≤ 1 in exact arithmetic, a flat mirror's L/R being 0."""
+    def g(r):
+        return Fraction(1) if math.isinf(r) else 1 - Fraction(L) / Fraction(r)
+    p = g(r1) * g(r2)
+    return 0 <= p <= 1
+
+
+def bm_two_sum(a, b):
+    s = a + b
+    bb = s - a
+    return s, (a - (s - bb)) + (b - bb)
+
+
+def bm_sum3(a, b, c):
+    """The port's compensated a + b + c (_bj_beam_sum3): two TwoSums, their errors added, then to the sum."""
+    s1, t1 = bm_two_sum(a, b)
+    s2, t2 = bm_two_sum(s1, c)
+    return s2 + (t1 + t2)
+
+
+def bm_ux(x):
+    """kimiya's _bj_k_ux_from / _bj_k_ux_norm: (s, e), 1 ≤ |s| < 2, x = s·2^e; a zero or special as (x, 0)."""
+    return bm_ux_norm(x, 0)
+
+
+def bm_ux_norm(r, e):
+    if r == 0.0 or not math.isfinite(r):
+        return r, 0
+    m, x = math.frexp(r)
+    return m * 2.0, e + x - 1
+
+
+def bm_ux_mul(a, b):
+    return bm_ux_norm(a[0] * b[0], a[1] + b[1])
+
+
+def bm_ux_div(a, b):
+    return bm_ux_norm(fdiv(a[0], b[0]), a[1] - b[1])
+
+
+def bm_ux_sqrt(a):
+    s, e = a
+    if s <= 0.0 or not math.isfinite(s):
+        return fsqrt(s), 0
+    odd = e & 1
+    return bm_ux_norm(math.sqrt(s * 2.0 if odd else s), (e - odd) // 2)
+
+
+def bm_waist34(L, r1, r2, lam):
+    """The port's w₀ (ADR 0002 row 34) for a stable cavity, not planar nor confocal: w₀² = (λ/π)·√(L(R₁ − L)(R₂ − L)
+    (R₁ + R₂ − L))/|R₁ + R₂ − 2L|, or (λ/π)·√(L(R − L)) with one flat mirror; its sums of the inputs (scaled by 2^-4
+    past 2^1020) compensated, its products with an unbounded exponent, w₀ rounded once. None where R₁ + R₂ − 2L is 0."""
+    k = 4 if max(abs(x) for x in (L, r1, r2) if math.isfinite(x)) >= BM_W_BIG else 0
+    sc = 2.0 ** -k
+    l, a, b = L * sc, r1 * sc, r2 * sc
+    lp = bm_ux_div(bm_ux(lam), bm_ux(SC_PI))
+    if math.isinf(r1) or math.isinf(r2):
+        fv = (b if math.isinf(r1) else a) - l
+        w = bm_ux_mul(bm_ux_sqrt(bm_ux_mul(bm_ux(L), bm_ux(abs(fv)))), lp)
+    else:
+        f1, f2 = a - l, b - l
+        f3, f4 = bm_sum3(a, b, -l), bm_sum3(a, b, -(2.0 * l))
+        if f4 == 0.0:
+            return None
+        pr = bm_ux_mul(bm_ux_mul(bm_ux_mul(bm_ux(L), bm_ux(abs(f1))), bm_ux(abs(f2))), bm_ux(abs(f3)))
+        w = bm_ux_div(bm_ux_mul(bm_ux_sqrt(pr), lp), bm_ux(abs(f4)))
+    if w[0] == 0.0:
+        return 0.0
+    return rn_sqrt(Fraction(w[0]) * Fraction(2) ** (w[1] + k // 2))
+
+
+def bm_rn_root4(v: Fraction) -> float:
+    """RN(v^(1/4)) for a rational v > 0, exactly (rn_sqrt's method: the integer fourth root, then the midpoint test)."""
+    p, q = v.numerator, v.denominator
+    lf = p.bit_length() - q.bit_length()
+    if (p << max(0, -lf)) < (q << max(0, lf)):
+        lf -= 1
+    e = lf // 4
+    k = max(e - 52, -1074)
+    num, den = (p, q << (4 * k)) if k >= 0 else (p << (-4 * k), q)
+    m = math.isqrt(math.isqrt(num // den))
+    if 16 * num > (2 * m + 1) ** 4 * den or (16 * num == (2 * m + 1) ** 4 * den and m % 2 == 1):
+        m += 1
+    r = Fraction(m) * Fraction(2) ** k
+    return math.inf if r >= Fraction(2) ** 1024 else float(r)
+
+
+def bm_waist_exact(L, r1, r2, lam) -> float:
+    """w₀ of the Kogelnik form in exact arithmetic (π as Rust's double), rounded once."""
+    F = Fraction
+    lp2 = F(lam) ** 2 / F(SC_PI) ** 2
+    if math.isinf(r1) or math.isinf(r2):
+        r = r2 if math.isinf(r1) else r1
+        m4 = lp2 * F(L) * abs(F(r) - F(L))
+    else:
+        a, b, l = F(r1), F(r2), F(L)
+        m4 = lp2 * l * abs((a - l) * (b - l) * (a + b - l)) / (a + b - 2 * l) ** 2
+    return 0.0 if m4 == 0 else bm_rn_root4(m4)
+
+
 def bm_eval(fn, v, P, port=False):
-    """beam.rs's outputs for a row on the primitives P; port=True for the port's field (conjugated) and LG power
-    (row 32). None for another name."""
+    """beam.rs's outputs for a row on the primitives P; port=True for the port's field (conjugated), LG power
+    (row 32) and resonators (row 34). None for another name."""
     fl = lambda xs: [("f", x) for x in xs]                       # noqa: E731
     if fn == "GaussianBeam::new":
         return bm_new(v[0], v[1])
@@ -4447,17 +4553,28 @@ def bm_eval(fn, v, P, port=False):
         return None
     if fn == "beam::resonator_stability":
         st, bad = bm_stability(*v)
-        return bad or fl(st[:3]) + [("i", int(st[3]))]
+        if bad:
+            return bad
+        return fl(st[:3]) + [("i", int(bm_stable34(*v) if port else st[3]))]
     if fn == "beam::resonator_beam_waist":
         L, r1, r2, lam = v
         st, bad = bm_stability(L, r1, r2)
         if bad:
             return bad
         g1, g2, gp, ok = st
+        if port:
+            ok = bm_stable34(L, r1, r2)
         if not ok:
             return ip_err(f"cavity is unstable (g₁g₂ = {rust_fixed(gp, 4)}), no confined mode exists")
         if not bm_pos(lam):
             return ip_err(f"wavelength must be positive and finite, got {rust_display(lam)}")
+        if port:
+            if math.isinf(r1) and math.isinf(r2):
+                return dz_err("planar cavity (g₁ = g₂ = 1) has no confined mode")
+            if r1 == L and r2 == L:
+                return fl([fsqrt(fdiv(L * lam, 2.0 * SC_PI))])
+            w = bm_waist34(L, r1, r2, lam)
+            return dz_err("planar cavity (g₁ = g₂ = 1) has no confined mode") if w is None else fl([w])
         s = g1 + g2 - 2.0 * gp
         if s == 0.0:
             if g1 == 0.0 and g2 == 0.0:
@@ -4469,7 +4586,10 @@ def bm_eval(fn, v, P, port=False):
         if not bm_pos(fsr):
             return ip_err(f"free spectral range must be positive and finite, got {rust_display(fsr)}")
         gp = g1 * g2
-        if not 0.0 <= gp <= 1.0:
+        ok = 0.0 <= gp <= 1.0
+        if port and math.isfinite(g1) and math.isfinite(g2):
+            ok = 0 <= Fraction(g1) * Fraction(g2) <= 1          # ADR 0002 row 34: the exact product
+        if not ok:
             return ip_err(f"cavity is unstable (g₁g₂ = {rust_fixed(gp, 4)})")
         root = fsqrt(gp)
         arg = -root if (g1 < 0.0 or g2 < 0.0) else root
@@ -4502,7 +4622,8 @@ def bm_lines(path: Path):
 
 
 def validate_beam(path: Path) -> list:
-    """beam.rs transcribed (bm_eval, Rust's forms) on glibc's primitives, against every row."""
+    """beam.rs transcribed (bm_eval, Rust's forms) on glibc's primitives, against every row; and the port's w₀ (ADR
+    0002 row 34) within BM_W_ULPS of the exact value on every row it computes."""
     errs = []
     for n, (fn, _cls, _ins, outs, v) in enumerate(bm_lines(path), 1):
         want = bm_eval(fn, v, BM_P_GLIBC)
@@ -4511,7 +4632,24 @@ def validate_beam(path: Path) -> list:
             continue
         if not toks_same(want, wave_toks([parse_tok(x) for x in outs.split(" ")])):
             errs.append(f"beam row {n}: {fn}{tuple(v)} -> {wire(want)}, oracle {outs}")
+        if fn == "beam::resonator_beam_waist":
+            ulps = bm_waist_ulps(v)
+            if ulps is not None and ulps > BM_W_ULPS:
+                errs.append(f"beam row {n}: the port's w₀{tuple(v)} is {ulps} ulps from the exact value")
     return errs
+
+
+def bm_waist_ulps(v):
+    """The port's w₀ for a waist row against the exact one, in ulps (None where it computes no w₀: an error, the
+    confocal limit, or a value past the range)."""
+    L, r1, r2, lam = v
+    out = bm_eval("beam::resonator_beam_waist", v, BM_P_GLIBC, port=True)
+    if out[0][0] != "f" or (r1 == L and r2 == L) or not math.isfinite(out[0][1]):
+        return None
+    got, exact = out[0][1], bm_waist_exact(L, r1, r2, lam)
+    if not math.isfinite(exact):
+        return None
+    return abs(f_to_bits(got) - f_to_bits(exact))
 
 
 def beam_corrections(path: Path):
@@ -4522,6 +4660,8 @@ def beam_corrections(path: Path):
             if cls != "C":
                 continue
             want = bm_eval(fn, v, BM_P_MPFR)
+            if not toks_same(bm_harness(fn, v, BM_P_MPFR), want):
+                continue                    # an ADR 0002 mapping's (a row is in one file or the other)
             old = wave_toks([parse_tok(x) for x in outs.split(" ")])
             if toks_same(want, old):
                 continue
@@ -4532,8 +4672,8 @@ def beam_corrections(path: Path):
 
 def beam_adr_rows(path: Path) -> list:
     """ADR 0002 mappings for beam.tsv: each row whose harness reading (bm_harness, on the port's correctly rounded
-    primitives) differs from Rust's (the corrected oracle for class C): row 32 for the LG power at l = i32::MIN, row 5
-    otherwise (the field's conjugation, should it fail to be exact)."""
+    primitives) differs from Rust's (the corrected oracle for class C): row 32 for the LG power at l = i32::MIN, row 34
+    for the resonators (M3 part 2a-2), row 5 otherwise (the field's conjugation, should it fail to be exact)."""
     out = []
     for fn, cls, ins, outs, v in bm_lines(path):
         P = BM_P_MPFR if cls == "C" else BM_P_GLIBC
@@ -4541,7 +4681,12 @@ def beam_adr_rows(path: Path) -> list:
         port = bm_harness(fn, v, P)
         if toks_same(port, expect):
             continue
-        row = 32 if fn == "beam::laguerre_gaussian_intensity" and abs(int(v[4])) == 1 << 31 else 5
+        if fn in BM_RES34:
+            row = 34
+        elif fn == "beam::laguerre_gaussian_intensity" and abs(int(v[4])) == 1 << 31:
+            row = 32
+        else:
+            row = 5
         out.append((fn, ins, wire(port), str(row), f"oracle {outs}; ADR 0002 row {row}"))
     return out
 
