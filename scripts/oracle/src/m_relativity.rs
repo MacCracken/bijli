@@ -467,6 +467,7 @@ pub fn emit() -> Module {
     emit_solver_edges(&mut m);
     emit_b_edges(&mut m);
     emit_nb_spread_edges(&mut m);
+    emit_fields_edges(&mut m);
     m
 }
 
@@ -957,5 +958,35 @@ fn emit_nb_spread_edges(m: &mut Module) {
                 }
             }
         }
+    }
+}
+
+/// M2 part 2d-3j (bijli ADR 0002 row 18's rule): lienard_wiechert_fields where its own chain leaves the range: R past
+/// DBL_MAX (Rust: ∞, then NaN fields) along an axis, a diagonal, with an acceleration and beside a 2^-1074 part; |R|
+/// past 2^1022 (1/|R| subnormal); an n̂ part subnormal under a large E; β = v/c and β̇ = a/c subnormal; E past DBL_MAX
+/// with B representable; a non-finite charge across DBL_MAX; and a normal control. After every older row.
+fn emit_fields_edges(m: &mut Module) {
+    let big = f64::MAX;
+    let cases: Vec<FieldsCase> = vec![
+        (1e300, 0, vec![-1e308, 0.0, 0.0], [1e308, 0.0, 0.0], 0.0),
+        (big, 0, vec![-1e308, 1e308, 0.0], [1e308, -1e308, 0.0], 0.0),
+        (1e300, 5, vec![-1e308, 0.0, 0.0, 0.0, 1e300, 0.0], [1e308, 0.0, 0.0], 0.0),
+        (1e300, 5, vec![-1e308, 0.0, 0.0, 0.0, 1e300, 0.0], [1e308, pow2(-1074), 0.0], 0.0),
+        (1e300, 5, vec![0.0, 0.0, 0.0, 0.0, 1e300, 0.0], [1e308, 0.0, 0.0], 0.0),
+        (1e290, 5, vec![0.0, 0.0, 0.0, 0.0, 0.0, 1e10], [1.0, 1e-310, 0.0], 0.0),
+        (1e290, 1, vec![0.0, 0.0, 0.0, 1e-300, 0.0, 0.0, 0.0], [0.0, 1.0, 0.0], 0.0),
+        (1e300, 5, vec![0.0, 0.0, 0.0, 1e-300, 0.0, 0.0], [0.0, 1.0, 0.0], 0.0),
+        (1e300, 5, vec![0.0, 0.0, 0.0, 3e-310, -7e-309, 0.0], [0.0, 0.6, 0.8], 0.0),
+        (big, 1, vec![0.0, 0.0, 0.0, 0.5 * C, 0.0, 0.0, 0.0], [0.0, 4000.0, 0.0], 0.0),
+        (1e300, 1, vec![0.0, 0.0, 0.0, 0.5 * C, 0.0, 0.0, 0.0], [0.0, 4000.0, 0.0], 0.0),
+        (f64::INFINITY, 0, vec![-1e308, 0.0, 0.0], [1e308, 0.0, 0.0], 0.0),
+        (f64::NAN, 0, vec![-1e308, 0.0, 0.0], [1e308, 0.0, 0.0], 0.0),
+    ];
+    for (q, id, ps, obs, t) in cases {
+        let mut ins = vec![f(q), crate::tsv::i(id), f(obs[0]), f(obs[1]), f(obs[2]), f(t)];
+        ins.push(Tok::V(ps.len()));
+        ins.extend(ps.iter().map(|&x| f(x)));
+        let r = lienard_wiechert_fields(black_box(q), obs, t, move |tt| trajectory(id, &ps, tt));
+        m.row("relativity::lienard_wiechert_fields", traj_class(id), &ins, &res_pair(r));
     }
 }

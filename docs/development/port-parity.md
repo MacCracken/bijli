@@ -2858,3 +2858,63 @@ both kernels an offset form; 2d-3j uses it.
 - **Result, every target** (x86_64 ELF, x86_64 PE, aarch64): **13 modules, 0 failing; 405,851 ok, 0 failed, 0
   measured, 0 pending, 47,524 accepted (ADR 01: 8,998; ADR 0002: 38,526)** over 453,375 rows; **all 276 digests
   equal**. One changed: `lienard_wiechert_e`.
+
+## 54. M2 part 2d-3j: lienard_wiechert_fields' chain at its range edges (2026-11-13)
+
+The last of relativity's range edges. 2d-3i readied the exact kernels for values doubles cannot hold.
+`lienard_wiechert_fields`' own chain is R = r_obs − r(t_r), |R|, 1/|R|, n̂ = R·(1/|R|), β = v/c, β̇ = a/c, then
+E and B = n̂ × E/c.
+
+- **ADR 0002 row 18, amended** (the rule of §42, a guard on Rust's own values):
+  - **The guard** (`_bj_rel_fields_plain`). Rust's chain up to E is the unbounded one when:
+    - R is finite (a difference of finite doubles is otherwise its 53-bit value, and a subnormal one is exact);
+    - |R| ≤ 2^1022, so 1/|R| is normal;
+    - each part of n̂, β and β̇ is normal, or the exact zero of a zero part of R, v or a.
+  - **E's parts.** Each must be normal, or a zero of Rust's chain inside E's box (`_bj_rel_e_exact3`). Inside the box
+    every intermediate is normal or an exact 0, so a zero there is exact; outside it a zero may be an underflow.
+    `_bj_rel_e_impl`, E's body, reports which. The public E is now a tail call into it.
+  - **Within the guard** E's doubles are its 53-bit values and n̂'s are too, so B keeps Rust's chain (with its own
+    guard, §52).
+  - **Outside it** (a finite charge), `_bj_rel_fields_edge`:
+    - takes R, β and β̇ to 53 bits with an unbounded exponent, with an R past DBL_MAX and a β below 2^-1022 in 2d-3i's
+      offset forms;
+    - runs E's checks on them: |β| < 1 and γ² by `_bj_cr_lorentz`, κ < 10^-30 and n̂ − β by `_bj_cr_lw`;
+    - runs E's tail on the pairs (`_bj_rel_e_tail`), which keeps E's and n̂'s 53-bit values beside E's doubles;
+    - computes B from those, rounded once.
+  - **A non-finite charge** keeps Rust's chain. Where R passes DBL_MAX that gives NaN fields: Rust's ∞ R makes n̂ and κ
+    NaN.
+  - **E's tail moved onto pairs.** The public E converts its doubles first, so its results are unchanged: every E
+    digest stayed.
+- **Rust's results at these edges** (q = 10^300 unless named):
+  - a static charge 2·10^308 away: NaN fields, where E = 2.25·10^-307;
+  - the same with an acceleration of 10^300: NaN, where E_y = −5·10^284 and B_z = −1.67·10^276;
+  - q = DBL_MAX at 4000 m with β = 0.5: NaN, where E_y = ∞ (correctly rounded) and B_z = 1.9·10^302 from E's 53-bit
+    value;
+  - a β̇ below 2^-1022: E_x = −10^-7 (Rust: NaN);
+  - a β below 2^-1022: E_x = 0, where the exact n̂ − β gives −4.4·10^-24.
+- **Rows** (`m_relativity.rs`'s `emit_fields_edges`, after every older row): 13 more fields rows.
+  - R past DBL_MAX: along an axis, a diagonal, with an acceleration, and beside a 2^-1074 part.
+  - |R| past 2^1022, and an n̂ part subnormal under a large E.
+  - β and β̇ subnormal, and E past DBL_MAX.
+  - Two non-finite charges across DBL_MAX, and a control.
+
+  `validate.py`'s transcription agreed with every row.
+- **Mappings** (`validate.py`'s `rel_fields_plain` and `rel_fields_edge`, the latter on exact values and the `uz_*`
+  chain; E's model now `rel_lw_e`, returning its box): `relativity.adr.tsv` maps 10 more row-18 rows, all passing.
+  The other 3 are Rust's: the two non-finite charges, and the subnormal n̂ part, whose effect stays below B's last
+  bit. No older row changed.
+- **Guard audit** (a sampling check in Python, not a gate): 8,648 cases kept on Rust's chain over two seeds, weighted
+  to the edges. Every one equalled the pure unbounded chain; 27,027 took the edge.
+- **Tests**: tests/relativity.tcyr gains 2 assertions, the static 2·10^308 case and the DBL_MAX charge above.
+- **Benchmarks** (a focused interleaved A/B against HEAD over every relativity row, three rounds, load 1.0–1.7):
+  - `relativity/lienard_wiechert_e` 707 → 711 ns. A first cut that unpacked and re-wrapped the inner Result cost
+    14 ns.
+  - `relativity/lienard_wiechert_fields_orbit_b099` 5,968–5,972 → 6,028–6,075 ns (+1–2 %): the guard, E's exactness
+    test and the box flag. The record's 5.87 µs becomes 6.05.
+  - The other rows within the noise.
+- **Result, every target** (x86_64 ELF, x86_64 PE, aarch64): **13 modules, 0 failing; 405,854 ok, 0 failed, 0
+  measured, 0 pending, 47,534 accepted (ADR 01: 8,998; ADR 0002: 38,536)** over 453,388 rows; **all 276 digests
+  equal**. One changed: `lienard_wiechert_fields`.
+- **Relativity's range-edge review is complete**, every public function and method checked (`electric_field` is one
+  product, `magnetic_field` copies). With circuit's 2d-3a and 2d-3b, **2d-3 is done, so 2d is done: Part 2 is complete,
+  and with it M2.**

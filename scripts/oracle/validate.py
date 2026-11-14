@@ -2893,6 +2893,69 @@ def rel_gamma(speed, K, exact=False):
     return None, fdiv(1.0, fsqrt(1.0 - beta_sq))
 
 
+def rel_lw_e(v, O, K):
+    """relativity.rs's lienard_wiechert_e transcribed on the vector operations O, and whether the port kept Rust's chain
+    inside its box (its zeros exact there): (outputs, box)."""
+    C, EPS0 = K["C"], K["EPS0"]
+    q, r, bv, bd = v[0], v[1:4], v[4:7], v[7:10]
+    r_mag = O["mag"](r)
+    if O["port"] and math.isnan(r_mag):
+        return ip_err("R vector must not contain NaN"), False
+    if O["port"] and not _fin(*r):
+        return ip_err("R vector must be finite"), False     # row 27 amended (M2 part 2d-3e)
+    if rel_r_below(r, [0.0, 0.0, 0.0], r_mag, O):
+        return SINGULAR, False
+    if O["gamma"]:
+        g2 = rel_exact_gamma(bv, 1.0, 1)
+        if g2 is None:
+            return ip_err("β must be < 1"), False
+    else:
+        b_sq = O["mag_sq"](bv)
+        if math.isnan(b_sq) or b_sq >= 1.0:
+            return ip_err("β must be < 1"), False
+        g2 = fdiv(1.0, 1.0 - b_sq)
+    inv = fdiv(1.0, r_mag)
+    n = [x * inv for x in r]
+    if O["r17"] and _fin(*r):
+        if lw_below(r, bv):              # row 17 (M2 part 2c-4): κ < 10^-30 exactly, κ rounded once
+            return dz_err("Liénard-Wiechert denominator (1 − n̂⋅β) is zero"), False
+        kappa = rn_lw(r, bv, 1)
+    else:
+        kappa = 1.0 - O["dot"](n, bv)
+        if abs(kappa) < 1e-30:
+            return dz_err("Liénard-Wiechert denominator (1 − n̂⋅β) is zero"), False
+    k3 = kappa * kappa * kappa
+    pre = fdiv(q, 4.0 * PI * EPS0)
+    nmb = [n[i] - bv[i] for i in range(3)]
+    if O["r17"] and _fin(*r):                # row 17 (M2 part 2d-1): n̂ − β rounded once, part by part
+        nmb = [rn_nb(r, bv, i) if r[i] != 0.0 else nmb[i] for i in range(3)]
+    fv = fdiv(pre, g2 * k3 * r_mag * r_mag)
+    vt = [x * fv for x in nmb]
+    co = O["cross"](n, O["cross"](nmb, bd))
+    fa = fdiv(pre, k3 * r_mag * C)
+    at = [x * fa for x in co]
+    box = ((q == 0 or 2.0 ** -100 <= abs(q) < 2.0 ** 201) and g2 < 2.0 ** 100 and rel_box(r + bd, 923, 1223)
+           and rel_box(nmb, 923, 2046))
+    if O["ux"] and not box and _fin(q, *bd):
+        # Row 18's rule (M2 part 2d-3f): outside the box the whole tail to 53 bits, each part's sum rounded once.
+        M = rnd53_sqrt(uz_sumsq(r))
+        iv = uz_div(Fraction(1), M)
+        nn = [uz_mul(uz(x), iv) for x in r]
+        K = uz(kappa)
+        k3u = uz_mul(uz_mul(K, K), K)
+        pr = uz_div(uz(q), uz(4.0 * PI * EPS0))
+        fvu = uz_div(pr, uz_mul(uz_mul(uz_mul(uz(g2), k3u), M), M))
+        fau = uz_div(pr, uz_mul(uz_mul(k3u, M), uz(C)))
+        inner = [uz_cross(nmb, bd, i) for i in range(3)]
+        out = []
+        for i in range(3):
+            j, k = (i + 1) % 3, (i + 2) % 3
+            o = uz_sub(uz_mul(nn[j], inner[k]), uz_mul(nn[k], inner[j]))
+            out.append(uz_out(uz_add(uz_mul(uz(nmb[i]), fvu), uz_mul(o, fau), True)))
+        return ok3(out), False
+    return ok3([vt[i] + at[i] for i in range(3)]), box
+
+
 def rel_rust(fn, v, O, K):
     """relativity.rs transcribed on the vector operations O; None for another name."""
     C, C2, EPS0, MU0 = K["C"], K["C2"], K["EPS0"], K["MU0"]
@@ -3072,63 +3135,7 @@ def rel_rust(fn, v, O, K):
             return ok3([uz_out(uz_mul(uz(x), kk, True)) for x in bv])
         return ok3([x * k for x in bv])
     if fn == "relativity::lienard_wiechert_e":
-        q, r, bv, bd = v[0], v[1:4], v[4:7], v[7:10]
-        r_mag = O["mag"](r)
-        if O["port"] and math.isnan(r_mag):
-            return ip_err("R vector must not contain NaN")
-        if O["port"] and not _fin(*r):
-            return ip_err("R vector must be finite")    # row 27 amended (M2 part 2d-3e)
-        if rel_r_below(r, [0.0, 0.0, 0.0], r_mag, O):
-            return SINGULAR
-        if O["gamma"]:
-            g2 = rel_exact_gamma(bv, 1.0, 1)
-            if g2 is None:
-                return ip_err("β must be < 1")
-        else:
-            b_sq = O["mag_sq"](bv)
-            if math.isnan(b_sq) or b_sq >= 1.0:
-                return ip_err("β must be < 1")
-            g2 = fdiv(1.0, 1.0 - b_sq)
-        inv = fdiv(1.0, r_mag)
-        n = [x * inv for x in r]
-        if O["r17"] and _fin(*r):
-            if lw_below(r, bv):              # row 17 (M2 part 2c-4): κ < 10^-30 exactly, κ rounded once
-                return dz_err("Liénard-Wiechert denominator (1 − n̂⋅β) is zero")
-            kappa = rn_lw(r, bv, 1)
-        else:
-            kappa = 1.0 - O["dot"](n, bv)
-            if abs(kappa) < 1e-30:
-                return dz_err("Liénard-Wiechert denominator (1 − n̂⋅β) is zero")
-        k3 = kappa * kappa * kappa
-        pre = fdiv(q, 4.0 * PI * EPS0)
-        nmb = [n[i] - bv[i] for i in range(3)]
-        if O["r17"] and _fin(*r):                # row 17 (M2 part 2d-1): n̂ − β rounded once, part by part
-            nmb = [rn_nb(r, bv, i) if r[i] != 0.0 else nmb[i] for i in range(3)]
-        fv = fdiv(pre, g2 * k3 * r_mag * r_mag)
-        vt = [x * fv for x in nmb]
-        co = O["cross"](n, O["cross"](nmb, bd))
-        fa = fdiv(pre, k3 * r_mag * C)
-        at = [x * fa for x in co]
-        box = ((q == 0 or 2.0 ** -100 <= abs(q) < 2.0 ** 201) and g2 < 2.0 ** 100 and rel_box(r + bd, 923, 1223)
-               and rel_box(nmb, 923, 2046))
-        if O["ux"] and not box and _fin(q, *bd):
-            # Row 18's rule (M2 part 2d-3f): outside the box the whole tail to 53 bits, each part's sum rounded once.
-            M = rnd53_sqrt(uz_sumsq(r))
-            iv = uz_div(Fraction(1), M)
-            nn = [uz_mul(uz(x), iv) for x in r]
-            K = uz(kappa)
-            k3u = uz_mul(uz_mul(K, K), K)
-            pr = uz_div(uz(q), uz(4.0 * PI * EPS0))
-            fvu = uz_div(pr, uz_mul(uz_mul(uz_mul(uz(g2), k3u), M), M))
-            fau = uz_div(pr, uz_mul(uz_mul(k3u, M), uz(C)))
-            inner = [uz_cross(nmb, bd, i) for i in range(3)]
-            out = []
-            for i in range(3):
-                j, k = (i + 1) % 3, (i + 2) % 3
-                o = uz_sub(uz_mul(nn[j], inner[k]), uz_mul(nn[k], inner[j]))
-                out.append(uz_out(uz_add(uz_mul(uz(nmb[i]), fvu), uz_mul(o, fau), True)))
-            return ok3(out)
-        return ok3([vt[i] + at[i] for i in range(3)])
+        return rel_lw_e(v, O, K)[0]
     if fn == "relativity::lienard_wiechert_b":
         n, e = v[0:3], v[3:6]
         cr = O["cross"](n, e)
@@ -3424,12 +3431,93 @@ def rel_solver_rust(fn, ins, P, O, K):
     n = [x * inv for x in rv]
     bv = [fdiv(x, C) for x in vel]
     bd = [fdiv(x, C) for x in acc]
+    if O["ux"]:
+        # Row 18 (M2 part 2d-3j): Rust's chain where its own values are the unbounded chain's, else every step to 53
+        # bits; a non-finite charge keeps Rust's chain (NaN fields where R passes DBL_MAX: ∞ makes n̂ and κ NaN).
+        if not math.isfinite(q):
+            if not _fin(*rv):
+                return ok3([math.nan] * 3) + ok3([math.nan] * 3)
+        elif not rel_fields_plain(rv, n, bv, bd, vel, acc, r_mag):
+            return rel_fields_edge(q, obs, pos, vel, acc, K)
+        else:
+            e, box = rel_lw_e([q] + rv + bv + bd, O, K)
+            if e[0][0] == "E":
+                return e
+            if not all((x == 0 and box) or (x != 0 and math.isfinite(x) and abs(x) >= MIN_NORMAL)
+                       for _k, x in e):
+                return rel_fields_edge(q, obs, pos, vel, acc, K)
+            return e + rel_rust("relativity::lienard_wiechert_b", n + [x for _k, x in e], O, K)
     e = rel_rust("relativity::lienard_wiechert_e", [q] + rv + bv + bd, O, K)
     if e[0][0] == "E":
         return e
     ev3 = [b for _k, b in e]
     b = rel_rust("relativity::lienard_wiechert_b", n + ev3, O, K)
     return e + b
+
+
+def rel_fields_plain(rv, n, bv, bd, vel, acc, r_mag) -> bool:
+    """src/relativity.cyr's _bj_rel_fields_plain: R finite, |R| ≤ 2^1022 (1/|R| normal), each part of n̂, β and β̇
+    normal or the exact zero of a zero part of R, v or a."""
+    if not r_mag <= 2.0 ** 1022:
+        return False
+    for i in range(3):
+        if not abs(rv[i]) <= DBL_MAX:
+            return False
+        if not abs(n[i]) >= MIN_NORMAL and rv[i] != 0:
+            return False
+        if not abs(bv[i]) >= MIN_NORMAL and vel[i] != 0:
+            return False
+        if not abs(bd[i]) >= MIN_NORMAL and acc[i] != 0:
+            return False
+    return True
+
+
+def rel_fields_edge(q, obs, pos, vel, acc, K):
+    """src/relativity.cyr's _bj_rel_fields_edge, exactly: R, β and β̇ to 53 bits with an unbounded exponent; E's checks
+    (|β| < 1, κ < 10^-30) and its κ, n̂ − β and γ² from the exact kernels; E's tail on the uz chain, each part rounded
+    once (E's 53-bit values kept); B = n̂ × E/c from n̂'s and E's 53-bit values, rounded once."""
+    C, EPS0 = K["C"], K["EPS0"]
+
+    def d53(a, b):
+        x = a - b
+        return x if x == 0 else rnd53(Fraction(a) - Fraction(b))
+    r = [d53(obs[i], pos[i]) for i in range(3)]
+    bt = [uz_div(uz(x), uz(C)) for x in vel]
+    dt = [uz_div(uz(x), uz(C)) for x in acc]
+    g2 = rel_exact_gamma(bt, 1.0, 1)
+    if g2 is None:
+        return ip_err("β must be < 1")
+    rf, bf = [Fraction(x) for x in r], [Fraction(x) for x in bt]
+    if lw_below(rf, bf):
+        return dz_err("Liénard-Wiechert denominator (1 − n̂⋅β) is zero")
+    kappa = rn_lw(rf, bf, 1)
+    nmb = []
+    for i in range(3):
+        if r[i] != 0:
+            nmb.append(rn_nb(rf, bf, i))
+        elif bt[i] != 0:
+            nmb.append(-rn_frac(Fraction(bt[i])))
+        else:
+            nmb.append(r[i] - bt[i])
+    M = rnd53_sqrt(uz_sumsq(r))
+    iv = uz_div(Fraction(1), M)
+    nn = [uz_mul(uz(x), iv) for x in r]
+    ku = uz(kappa)
+    k3u = uz_mul(uz_mul(ku, ku), ku)
+    pr = uz_div(uz(q), uz(4.0 * PI * EPS0))
+    fvu = uz_div(pr, uz_mul(uz_mul(uz_mul(uz(g2), k3u), M), M))
+    fau = uz_div(pr, uz_mul(uz_mul(k3u, M), uz(C)))
+    inner = [uz_cross(nmb, dt, i) for i in range(3)]
+    e53, ed = [], []
+    for i in range(3):
+        j, k = (i + 1) % 3, (i + 2) % 3
+        o = uz_sub(uz_mul(nn[j], inner[k]), uz_mul(nn[k], inner[j]))
+        tv, ta = uz_mul(uz(nmb[i]), fvu), uz_mul(o, fau)
+        e53.append(uz_add(tv, ta))
+        ed.append(uz_out(uz_add(tv, ta, True)))
+    ic = uz(fdiv(1.0, C))
+    bo = [uz_out(uz_mul(uz_cross(nn, e53, i), ic, True)) for i in range(3)]
+    return ok3(ed) + ok3(bo)
 
 
 # ADR 0002 row 27 (M2 part 1d-1, row 20's rule): lienard_wiechert_e refuses a NaN R as its sibling potentials do

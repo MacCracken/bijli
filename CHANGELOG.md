@@ -379,6 +379,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
   behind κ, n̂ − β and γ² now also take an R past DBL_MAX and a β below 2^-1022 exactly, for `lienard_wiechert_fields`
   (part 2d-3j). Costs: `lienard_wiechert_scalar_potential` 290 → 300 ns and `lorentz_transform_x` 188 → 192
   (`port-parity.md` §53).
+- **relativity** (ADR 0002 row 18 amended, M2 part 2d-3j): `lienard_wiechert_fields` gave NaN fields wherever
+  R = r_obs − r(t_r) passed DBL_MAX: a charge 2·10^308 away, where E = 2.25·10^-307. It lost precision where 1/|R|, n̂,
+  β = v/c or β̇ = a/c fell below 2^-1022, and computed B from an E that had overflowed to ∞ (q = DBL_MAX at 4000 m:
+  B_z = 1.9·10^302). The fields now keep Rust's chain where its own values prove it exact; elsewhere every step runs
+  to 53 bits with an unbounded exponent and E and B each round once. The cost:
+  `relativity/lienard_wiechert_fields_orbit_b099` 5.97 → 6.03–6.08 µs (`port-parity.md` §54).
 - **relativity** (ADR 0002 row 13 amended, M2 part 2b-4): `retarded_scalar_potential`, `retarded_vector_potential`,
   `larmor_power` and `EmTensor::dual` rounded two to five times, and overflowed where the value is representable
   (Larmor with q² past DBL_MAX, the dual of B past DBL_MAX/c: ∞ each); they are now correctly rounded for finite

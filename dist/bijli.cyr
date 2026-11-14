@@ -19782,28 +19782,40 @@ fn _bj_rel_cross_pp(as: *f64, ae: *i64, bs: *f64, be: *i64, i): (f64, i64) {
     return (s, e);
 }
 
-# lienard_wiechert_e's tail outside its box (ADR 0002 row 18's rule, M2 part 2d-3f), into out: |R|, 1/|R|, n̂ = R/|R|,
-# κ³, q/(4πε₀), γ²κ³R², the velocity factor, (n̂ − β) × β̇, n̂ × that, κ³Rc, the acceleration factor and both terms to
-# 53 bits with an unbounded exponent, each part's sum rounded once. κ, n̂ − β (row 17) and γ² (row 30) enter as the
-# doubles their rows define; the cross products take Rust's order (BjFieldVector's cross).
-fn _bj_rel_e_edge(charge: f64, r: *f64, kappa: f64, gamma_sq: f64, nm: *f64, bd: *f64, out: *BjFieldVector) {
+# lienard_wiechert_e's tail outside its box (ADR 0002 row 18's rule, M2 part 2d-3f), on R and β̇ as 53-bit pairs (R at
+# rs and re, β̇ at bs and be; M2 part 2d-3j): |R|, 1/|R|, n̂ = R/|R|, κ³, q/(4πε₀), γ²κ³R², the velocity factor,
+# (n̂ − β) × β̇, n̂ × that, κ³Rc, the acceleration factor and both terms to 53 bits with an unbounded exponent. Into o
+# (fifteen f64): E's parts, each sum rounded once (o[0..2]); E's 53-bit pairs (o[3..5], their exponents o[6..8]); n̂'s
+# (o[9..11], o[12..14]), for lienard_wiechert_fields' B. κ, n̂ − β (row 17) and γ² (row 30) enter as the doubles their
+# rows define; the cross products take Rust's order (BjFieldVector's cross).
+fn _bj_rel_e_tail(charge: f64, rs: *f64, re: *i64, kappa: f64, gamma_sq: f64, nm: *f64, bs: *f64, be: *i64, o: *f64) {
     var c: f64 = BJ_SPEED_OF_LIGHT;
     var fpe: f64 = 4.0 * _BJ_PI * BJ_EPSILON_0;
-    var rs2, re2 = _bj_vx_sumsq(r[0], r[1], r[2]);
+    var q0s, q0e = _bj_k_ux_mul(rs[0], re[0], rs[0], re[0]);
+    var q1s, q1e = _bj_k_ux_mul(rs[1], re[1], rs[1], re[1]);
+    var q2s, q2e = _bj_k_ux_mul(rs[2], re[2], rs[2], re[2]);
+    var s1s, s1e = _bj_k_ux_add(q0s, q0e, q1s, q1e);
+    var rs2, re2 = _bj_k_ux_add(s1s, s1e, q2s, q2e);
     var ms, me = _bj_k_ux_sqrt(rs2, re2);
     var is1, ie1 = _bj_k_ux_div(1.0, 0, ms, me);
     var ns: f64[3];
     var ne: i64[3];
+    var ms3: f64[3];
+    var me3: i64[3];
     var ins: f64[3];
     var ine: i64[3];
     for (var i = 0; i < 3; i = i + 1) {
-        var xs, xe = _bj_k_ux_from(r[i]);
-        var ts, te = _bj_k_ux_mul(xs, xe, is1, ie1);
+        var ts, te = _bj_k_ux_mul(rs[i], re[i], is1, ie1);
         ns[i] = ts;
         ne[i] = te;
-        var cs1, ce1 = _bj_rel_cross_ux(nm, bd, i);
-        ins[i] = cs1;
-        ine[i] = ce1;
+        var xs, xe = _bj_k_ux_from(nm[i]);
+        ms3[i] = xs;
+        me3[i] = xe;
+    }
+    for (var i2 = 0; i2 < 3; i2 = i2 + 1) {
+        var cs1, ce1 = _bj_rel_cross_pp(&ms3, &me3, bs, be, i2);
+        ins[i2] = cs1;
+        ine[i2] = ce1;
     }
     var ks, ke = _bj_k_ux_from(kappa);
     var k2s, k2e = _bj_k_ux_mul(ks, ke, ks, ke);
@@ -19820,18 +19832,18 @@ fn _bj_rel_e_edge(charge: f64, r: *f64, kappa: f64, gamma_sq: f64, nm: *f64, bd:
     var cs, ce = _bj_k_ux_from(c);
     var a2s, a2e = _bj_k_ux_mul(a1s, a1e, cs, ce);
     var fas, fae = _bj_k_ux_div(ps, pe, a2s, a2e);
-    var eo: f64[3];
     for (var j = 0; j < 3; j = j + 1) {
-        var nms, nme = _bj_k_ux_from(nm[j]);
-        var vts, vte = _bj_k_ux_mul(nms, nme, fvs, fve);
+        var vts, vte = _bj_k_ux_mul(ms3[j], me3[j], fvs, fve);
         var os, oe = _bj_rel_cross_pp(&ns, &ne, &ins, &ine, j);
         var ats, ate = _bj_k_ux_mul(os, oe, fas, fae);
         var ej: f64 = _bj_k_ux_add_f64(vts, vte, ats, ate);
-        eo[j] = ej;
+        var es, ee = _bj_k_ux_add(vts, vte, ats, ate);
+        o[j] = ej;
+        o[3 + j] = es;
+        o[6 + j] = f64_from(ee);
+        o[9 + j] = ns[j];
+        o[12 + j] = f64_from(ne[j]);
     }
-    out.x = eo[0];
-    out.y = eo[1];
-    out.z = eo[2];
     return 0;
 }
 
@@ -20440,6 +20452,13 @@ fn _bj_rel_avec_edge(charge: f64, r_vec: BjFieldVector, beta_vec: BjFieldVector,
 # part 2d-3f). Mirrors `relativity::lienard_wiechert_e`.
 public fn bj_lienard_wiechert_e(charge: f64, r_vec: BjFieldVector, beta_vec: BjFieldVector, beta_dot: BjFieldVector,
   out: *BjFieldVector): Result {
+    return _bj_rel_e_impl(charge, r_vec, beta_vec, beta_dot, out, 0);
+}
+
+# bj_lienard_wiechert_e's body; *boxed (when boxed is not 0) := 1 when Rust's chain ran inside its box, so each part of
+# E is ±0 exactly or normal and its double is its 53-bit value (lienard_wiechert_fields' B needs that, M2 part 2d-3j).
+fn _bj_rel_e_impl(charge: f64, r_vec: BjFieldVector, beta_vec: BjFieldVector, beta_dot: BjFieldVector,
+  out: *BjFieldVector, boxed): Result {
     var r_mag: f64 = r_vec.magnitude();
     if (r_mag != r_mag) { return Err(_bj_err_invalid_parameter("R vector must not contain NaN")); }
     if (_bj_vx_finite4(r_vec.x, r_vec.y, r_vec.z, 0.0) == 0) {
@@ -20482,18 +20501,37 @@ public fn bj_lienard_wiechert_e(charge: f64, r_vec: BjFieldVector, beta_vec: BjF
         out.x = e.x;
         out.y = e.y;
         out.z = e.z;
+        if (boxed != 0) { store64(boxed, 1); }
         return Ok(0);
     }
     _bj_rel_e_slow(charge, r_vec, kappa, gamma_sq, n_minus_beta, beta_dot, e, out);
     return Ok(0);
 }
 
-# lienard_wiechert_e outside its box: _bj_rel_e_edge for a finite charge and β̇, else Rust's chain e (a non-finite
-# operand keeps it).
+# lienard_wiechert_e outside its box: _bj_rel_e_tail on R's and β̇'s pairs for a finite charge and β̇, else Rust's
+# chain e (a non-finite operand keeps it).
 fn _bj_rel_e_slow(charge: f64, r_vec: BjFieldVector, kappa: f64, gamma_sq: f64, nmb: BjFieldVector,
   beta_dot: BjFieldVector, e: BjFieldVector, out: *BjFieldVector) {
     if (_bj_vx_finite4(charge, beta_dot.x, beta_dot.y, beta_dot.z) == 1) {
-        _bj_rel_e_edge(charge, _bj_rel_f64p(&r_vec), kappa, gamma_sq, _bj_rel_f64p(&nmb), _bj_rel_f64p(&beta_dot), out);
+        var rp: *f64 = _bj_rel_f64p(&r_vec);
+        var dp: *f64 = _bj_rel_f64p(&beta_dot);
+        var rs: f64[3];
+        var re: i64[3];
+        var ds: f64[3];
+        var de: i64[3];
+        for (var i = 0; i < 3; i = i + 1) {
+            var xs, xe = _bj_k_ux_from(rp[i]);
+            rs[i] = xs;
+            re[i] = xe;
+            var ys, ye = _bj_k_ux_from(dp[i]);
+            ds[i] = ys;
+            de[i] = ye;
+        }
+        var o: f64[15];
+        _bj_rel_e_tail(charge, &rs, &re, kappa, gamma_sq, _bj_rel_f64p(&nmb), &ds, &de, &o);
+        out.x = o[0];
+        out.y = o[1];
+        out.z = o[2];
         return 0;
     }
     out.x = e.x;
@@ -21126,7 +21164,11 @@ public fn bj_solve_retarded_time(observer_pos: *f64, observation_time: f64, traj
 # then bj_lienard_wiechert_e and bj_lienard_wiechert_b at the retarded position, β = v/c and β̇ = a/c. The trajectory
 # writes position, velocity and acceleration (nine f64). The solver's errors; InvalidParameter for a non-finite
 # acceleration; Singularity when the observer sits on the retarded position; bj_lienard_wiechert_e's errors; the outs
-# untouched on an error. Mirrors `relativity::lienard_wiechert_fields`.
+# untouched on an error. Rust's chain is kept where its own values make it the unbounded one (_bj_rel_fields_plain,
+# and E's parts normal or exact zeros); otherwise R, β, β̇, E, n̂ and B run to 53 bits with an unbounded exponent and
+# each output rounds once (ADR 0002 row 18's rule, M2 part 2d-3j): an R past DBL_MAX (Rust: ∞, then NaN fields), a
+# 1/|R| or n̂ below 2^-1022, a β or β̇ below 2^-1022, or an E that B would see degraded. A non-finite charge keeps
+# Rust's chain (NaN fields where R passes DBL_MAX). Mirrors `relativity::lienard_wiechert_fields`.
 public fn bj_lienard_wiechert_fields(charge: f64, observer_pos: *f64, observation_time: f64, trajectory_fn,
   e_out: *BjFieldVector, b_out: *BjFieldVector): Result {
     if (_bj_log_on(5) == 1) {
@@ -21174,9 +21216,33 @@ public fn bj_lienard_wiechert_fields(charge: f64, observer_pos: *f64, observatio
     var dz: f64 = st[8] / BJ_SPEED_OF_LIGHT;
     var beta_vec: BjFieldVector = BjFieldVector_new(bx, by, bz);
     var beta_dot: BjFieldVector = BjFieldVector_new(dx, dy, dz);
+    var dq: f64 = charge - charge;
+    if (dq != 0.0) {
+        if (_bj_vx_finite4(rx, ry, rz, 0.0) == 0) {    # Rust's ∞ R makes n̂, κ and every part NaN
+            var nan: f64 = _BJ_REL_NAN;
+            e_out.x = nan;
+            e_out.y = nan;
+            e_out.z = nan;
+            b_out.x = nan;
+            b_out.y = nan;
+            b_out.z = nan;
+            return Ok(0);
+        }
+    } elif (_bj_rel_fields_plain(&r_vec, &n_hat, &beta_vec, &beta_dot, &st, r_mag) == 0) {
+        var t1, v1 = _bj_rel_fields_edge(charge, observer_pos, &st, e_out, b_out);
+        if (is_err_result(t1) == 1) { return Err(v1); }
+        return Ok(0);
+    }
     var e: BjFieldVector;
-    var te, ve = bj_lienard_wiechert_e(charge, r_vec, beta_vec, beta_dot, &e);
+    var boxed: i64[1];
+    boxed[0] = 0;
+    var te, ve = _bj_rel_e_impl(charge, r_vec, beta_vec, beta_dot, &e, &boxed);
     if (is_err_result(te) == 1) { return Err(ve); }
+    if (dq == 0.0 && _bj_rel_e_exact3(&e, boxed[0]) == 0) {
+        var t2, v2 = _bj_rel_fields_edge(charge, observer_pos, &st, e_out, b_out);
+        if (is_err_result(t2) == 1) { return Err(v2); }
+        return Ok(0);
+    }
     var b: BjFieldVector = bj_lienard_wiechert_b(n_hat, e);
     e_out.x = e.x;
     e_out.y = e.y;
@@ -21184,6 +21250,135 @@ public fn bj_lienard_wiechert_fields(charge: f64, observer_pos: *f64, observatio
     b_out.x = b.x;
     b_out.y = b.y;
     b_out.z = b.z;
+    return Ok(0);
+}
+
+# 2^1022: an |R| above it makes 1/|R| subnormal.
+var _BJ_REL_R_INV: f64 = 0x7FD0000000000000;
+
+# 1 when lienard_wiechert_fields' chain up to E is the unbounded one (ADR 0002 row 18's rule, M2 part 2d-3j), given R,
+# n̂ = R·(1/|R|), β = v/c and β̇ = a/c (at the byte addresses r, n, bv and bd), the trajectory's state st and |R|: R
+# finite (a difference of finite doubles is otherwise its 53-bit value, a subnormal one exact), |R| ≤ 2^1022 (1/|R|
+# normal), and each part of n̂, β and β̇ normal or an exact zero (of a zero part of R, v or a).
+#must_use
+fn _bj_rel_fields_plain(r, n, bv, bd, st: *f64, r_mag: f64): i64 {
+    if (!(r_mag <= _BJ_REL_R_INV)) { return 0; }
+    var rp: *f64 = _bj_rel_f64p(r);
+    var np: *f64 = _bj_rel_f64p(n);
+    var bp: *f64 = _bj_rel_f64p(bv);
+    var dp: *f64 = _bj_rel_f64p(bd);
+    for (var i = 0; i < 3; i = i + 1) {
+        var x: f64 = rp[i];
+        var ax: f64 = f64_abs(x);
+        if (!(ax <= _BJ_VX_HI)) { return 0; }
+        var an: f64 = f64_abs(np[i]);
+        if (!(an >= _BJ_VX_MN) && x != 0.0) { return 0; }
+        var ab: f64 = f64_abs(bp[i]);
+        if (!(ab >= _BJ_VX_MN) && st[3 + i] != 0.0) { return 0; }
+        var ad: f64 = f64_abs(dp[i]);
+        if (!(ad >= _BJ_VX_MN) && st[6 + i] != 0.0) { return 0; }
+    }
+    return 1;
+}
+
+# 1 when each part of E (at the byte address e) is its 53-bit value, as B needs it: normal and finite, or 0 where Rust's
+# chain ran inside E's box (its zeros exact there).
+#must_use
+fn _bj_rel_e_exact3(e, boxed): i64 {
+    var ep: *f64 = _bj_rel_f64p(e);
+    for (var i = 0; i < 3; i = i + 1) {
+        var x: f64 = ep[i];
+        var ax: f64 = f64_abs(x);
+        if (x == 0.0) {
+            if (boxed == 0) { return 0; }
+        } elif (!(ax >= _BJ_VX_MN && ax <= _BJ_VX_HI)) {
+            return 0;
+        }
+    }
+    return 1;
+}
+
+# lienard_wiechert_fields off its common case (ADR 0002 row 18's rule, M2 part 2d-3j), for a finite charge, into e_out
+# and b_out: R = r_obs − r(t_r), β = v/c and β̇ = a/c to 53 bits with an unbounded exponent (an R past DBL_MAX and a β
+# below 2^-1022 in the exact kernels' offset forms, M2 part 2d-3i); E's checks on them (|β| < 1 and γ² by
+# _bj_cr_lorentz, κ < 10^-30 and n̂ − β by _bj_cr_lw); E's tail on the pairs (_bj_rel_e_tail); B = n̂ × E/c from n̂'s
+# and E's 53-bit values, each part rounded once. The Singularity test is the caller's (exact on r_obs and r(t_r)); the
+# outs untouched on an error.
+fn _bj_rel_fields_edge(charge: f64, obs: *f64, st: *f64, e_out: *BjFieldVector, b_out: *BjFieldVector): Result {
+    var cs, ce = _bj_k_ux_from(BJ_SPEED_OF_LIGHT);
+    var rs: f64[3];
+    var re: i64[3];
+    var rd: f64[3];
+    var bv: f64[3];
+    var ds: f64[3];
+    var de: i64[3];
+    var xo: i64[6];
+    var bo: i64[3];
+    for (var i = 0; i < 3; i = i + 1) {
+        var os, oe = _bj_k_ux_from(obs[i]);
+        var ps, pe = _bj_k_ux_from(st[i]);
+        var xs, xe = _bj_k_ux_sub(os, oe, ps, pe);
+        rs[i] = xs;
+        re[i] = xe;
+        var x: f64 = obs[i] - st[i];                # Rust's double: the pair's value unless it passed DBL_MAX
+        var ax: f64 = f64_abs(x);
+        rd[i] = x;
+        xo[i] = 0;
+        if (!(ax <= _BJ_VX_HI)) {
+            rd[i] = xs;
+            xo[i] = xe;
+        }
+        var vs, ve = _bj_k_ux_from(st[3 + i]);
+        var qs, qe = _bj_k_ux_div(vs, ve, cs, ce);
+        var bq: f64 = _bj_k_ux_mul_f64(qs, qe, 1.0, 0);
+        bv[i] = bq;
+        bo[i] = 0;
+        if (qs != 0.0 && qe < 0 - 1022) {           # below 2^-1022: the offset form, its significand normal
+            bv[i] = qs;
+            bo[i] = qe;
+        }
+        xo[3 + i] = bo[i];
+        var as, ae = _bj_k_ux_from(st[6 + i]);
+        var us, ue = _bj_k_ux_div(as, ae, cs, ce);
+        ds[i] = us;
+        de[i] = ue;
+    }
+    var g2: f64[1];
+    if (_bj_cr_lorentz(&bv, &bo, 3, 1.0, 1, 0, &g2) == 0) { return Err(_bj_err_invalid_parameter("β must be < 1")); }
+    var ko: f64[4];
+    if (_bj_cr_lw(&rd, &bv, &xo, 2, 0, &ko) == 1) {
+        return Err(_bj_err_division_by_zero("Liénard-Wiechert denominator (1 − n̂⋅β) is zero"));
+    }
+    var nm: f64[3];
+    nm[0] = ko[1];
+    nm[1] = ko[2];
+    nm[2] = ko[3];
+    var o: f64[15];
+    _bj_rel_e_tail(charge, &rs, &re, ko[0], g2[0], &nm, &ds, &de, &o);
+    var es: f64[3];
+    var ee: i64[3];
+    var ns: f64[3];
+    var ne: i64[3];
+    for (var j = 0; j < 3; j = j + 1) {
+        es[j] = o[3 + j];
+        ee[j] = f64_to(o[6 + j]);
+        ns[j] = o[9 + j];
+        ne[j] = f64_to(o[12 + j]);
+    }
+    var inv: f64 = 1.0 / BJ_SPEED_OF_LIGHT;
+    var is, ie = _bj_k_ux_from(inv);
+    var bb: f64[3];
+    for (var j2 = 0; j2 < 3; j2 = j2 + 1) {
+        var cps, cpe = _bj_rel_cross_pp(&ns, &ne, &es, &ee, j2);
+        var bj: f64 = _bj_k_ux_mul_f64(cps, cpe, is, ie);
+        bb[j2] = bj;
+    }
+    e_out.x = o[0];
+    e_out.y = o[1];
+    e_out.z = o[2];
+    b_out.x = bb[0];
+    b_out.y = bb[1];
+    b_out.z = bb[2];
     return Ok(0);
 }
 

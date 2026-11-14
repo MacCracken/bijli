@@ -1286,6 +1286,26 @@ fn cyrius_tests(): i64 {
       BjFieldVector_new(e300, 0.0, 0.0), &esp);
     assert(is_ok(tsp) == 1 && _bj_bits(esp.x) == 0x0070AA3B9CE78408 && _bj_bits(esp.y) == 0xBCA9A2B7325C0389,
       "R = (1.5·2^1023, 2^-1074, 0), β_y = 1e-310: E_y = −1.78e-16 (n̂ − β's y part was −4.9e-323; Rust: NaN)");
+    # M2 part 2d-3j: lienard_wiechert_fields' chain on 53-bit values.
+    var lfe: BjFieldVector;
+    var lfb: BjFieldVector;
+    var fq9: f64[8];
+    for (var kf = 0; kf < 8; kf = kf + 1) { fq9[kf] = 0.0; }
+    fq9[0] = -e308;
+    var fobs: f64[3];
+    fobs[0] = e308;
+    fobs[1] = 0.0;
+    fobs[2] = 0.0;
+    var tf1, vf1 = bj_lienard_wiechert_fields(e300, &fobs, 0.0, traj(0, &fq9), &lfe, &lfb);
+    assert(is_ok(tf1) == 1 && _bj_bits(lfe.x) == 0x00443231FBE6FB09 && lfe.y == 0.0 && lfb.x == 0.0 && lfb.z == 0.0,
+      "a static charge 2e308 away: E = 2.25e-307 on R to 53 bits (Rust: NaN, its R = ∞)");
+    fq9[0] = 0.0;
+    fq9[3] = 0.5 * c;
+    fobs[0] = 0.0;
+    fobs[1] = 4000.0;
+    var tf2, vf2 = bj_lienard_wiechert_fields(dm, &fobs, 0.0, traj(1, &fq9), &lfe, &lfb);
+    assert(is_ok(tf2) == 1 && _bj_bits(lfe.y) == 0x7FF0000000000000 && _bj_bits(lfb.z) == 0x7EB22638D3405797,
+      "q = DBL_MAX at 4000 m, β = 0.5: E_y = ∞, B_z = 1.9e302 from E's 53-bit value (Rust: NaN)");
 
     if (v1 == 0 || v2 == 0 || v3 == 0 || v4 == 0 || v5 == 0 || v6 == 0 || v7 == 0) { println("."); }
     return 0;
