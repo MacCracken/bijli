@@ -8795,6 +8795,195 @@ fn _bj_x_sum_below(x: f64, y: f64, p): i64 {
     return 0;
 }
 
+# ── M3's exact thresholds (M3 part 2c, ADR 0002 row 17 amended) ─────────────────────────────────────────────────────
+
+# The sign of S − 10^p, S = (a·b + c)² + (e·f)², for finite doubles: Mie's |m|·x against 10⁷, squared (X = Re m·x,
+# Y = Im m·x), and the shape of propagate_beam's |C·q + D|² against 10^-60 (X = C·q₀ + D, Y = C·q₁).
+# - The band. The rounded X̃ = (a·b) + c and Ỹ = e·f lie within 2^-53·(|a·b| + |X̃|) + 2^-1075 and 2^-53·|Ỹ| + 2^-1075
+#   of X and Y (one rounding each, a subnormal one absolute), so bounds on |X| and |Y| widened by 2^-52·(|a·b| + |X̃|) +
+#   2^-1022 and 2^-52·|Ỹ| + 2^-1022 give S within a few roundings of [S_lo, S_hi]. S_lo above t·(1 + 2^-40) or S_hi
+#   below t·(1 − 2^-40), t the double nearest 10^p, decides; only inside that band, or after a cancellation in X̃, does
+#   the exact test below run.
+# - The exact test. X is exact as a signed bignum (src/fmtf.cyr's, 32-bit limbs; buffers of 160 words, 5,088 bits)
+#   aligned on its terms' least exponent of 2. An |X| or |Y| at or past 2^elim decides (the caller's 2^elim is at least
+#   2·√(10^p), and elim ≤ 52). Else X², Y² and 10^p = 5^p·2^p are compared as integers aligned on the least exponent:
+#   every term lies below 2^(2·elim + 1) and none has a bit under 2^-4296 (the square of a product of subnormals), so
+#   with 5^60 the integers stay under 4,600 bits. Near the threshold X's terms are both small, or within a factor of
+#   about 2 of each other (a cancellation), so X spans at most about 2,200 bits. Any finite operands keep X under 3,200
+#   bits, so the exact test is sound on its own too (cr_verify.py's `sumsq_exact` runs it alone).
+
+# The band's constants: DBL_MAX, 2^-52, 2^-1022 (an absolute bound above every subnormal rounding error), 2^-40.
+var _BJ_X_BIG: f64 = 0x7FEFFFFFFFFFFFFF;
+var _BJ_X_U52: f64 = 0x3CB0000000000000;
+var _BJ_X_TINY: f64 = 0x0010000000000000;
+var _BJ_X_U40: f64 = 0x3D70000000000000;
+
+# dst := a·b (dst distinct from a and b), schoolbook on b's 32-bit limbs through _bj_g_mul; t and u scratch.
+fn _bj_xq_mul(dst, a, b, t, u) {
+    store64(dst, 0);
+    var nb = load64(b);
+    for (var j = 0; j < nb; j = j + 1) {
+        var l = load64(b + 8 + j * 8);
+        if (l != 0) {
+            _bj_bn_copy(t, a);
+            _bj_g_mul(t, l, u);
+            _bj_bn_shl(t, 32 * j);
+            _bj_g_add_to(dst, t);
+        }
+    }
+    return 0;
+}
+
+# a := a·5^q for 0 ≤ q ≤ 60, in steps of 5^13 (below 2^31).
+fn _bj_xq_mul5(a, q) {
+    var left = q;
+    while (left >= 13) {
+        _bj_bn_mul_small(a, 1220703125);
+        left = left - 13;
+    }
+    var f = 1;
+    for (var i = 0; i < left; i = i + 1) { f = f * 5; }
+    if (f > 1) { _bj_bn_mul_small(a, f); }
+    return 0;
+}
+
+# |x·y| as a bignum into dst (t scratch), for finite nonzero x and y; returns its exponent of 2.
+fn _bj_xq_prod(x: f64, y: f64, dst, t): i64 {
+    var mx: i64[2];
+    var my: i64[2];
+    _bj_g_split(x, &mx);
+    _bj_g_split(y, &my);
+    _bj_bn_set(dst, mx[0]);
+    _bj_g_mul(dst, my[0], t);
+    return mx[1] + my[1];
+}
+
+# The exact sign (−1, 0 or 1) of (a·b + c)² + (e·f)² − 10^p for finite doubles, −60 ≤ p ≤ 60 and the caller's elim
+# (the section comment).
+#must_use
+fn _bj_x_sumsq_exact(a: f64, b: f64, c: f64, e: f64, f: f64, p, elim): i64 {
+    var pb: i64[160];
+    var cb: i64[160];
+    var xb: i64[160];
+    var yb: i64[160];
+    var tb: i64[160];
+    var ub: i64[160];
+    var sp = 0;
+    var ep = 0;
+    if (a != 0.0 && b != 0.0) {
+        ep = _bj_xq_prod(a, b, &pb, &tb);
+        sp = 1;
+        if (a < 0.0) { sp = 0 - sp; }
+        if (b < 0.0) { sp = 0 - sp; }
+    }
+    var sc = 0;
+    var ec = 0;
+    if (c != 0.0) {
+        var mc: i64[2];
+        _bj_g_split(c, &mc);
+        _bj_bn_set(&cb, mc[0]);
+        ec = mc[1];
+        sc = 1;
+        if (c < 0.0) { sc = 0 - 1; }
+    }
+    var sx = 0;
+    var kx = 0;
+    if (sp != 0 && sc != 0) {
+        kx = ep;
+        if (ec < kx) { kx = ec; }
+        _bj_bn_shl(&pb, ep - kx);
+        _bj_bn_shl(&cb, ec - kx);
+        if (sp == sc) {
+            _bj_bn_sum(&xb, &pb, &cb);
+            sx = 1;
+        } else {
+            var cm = _bj_bn_cmp(&pb, &cb);
+            if (cm > 0) {
+                _bj_bn_copy(&xb, &pb);
+                _bj_bn_sub(&xb, &cb);
+                sx = 1;
+            } elif (cm < 0) {
+                _bj_bn_copy(&xb, &cb);
+                _bj_bn_sub(&xb, &pb);
+                sx = 1;
+            }
+        }
+    } elif (sp != 0) {
+        _bj_bn_copy(&xb, &pb);
+        sx = 1;
+        kx = ep;
+    } elif (sc != 0) {
+        _bj_bn_copy(&xb, &cb);
+        sx = 1;
+        kx = ec;
+    }
+    if (sx != 0 && _bj_g_bitlen(&xb) + kx > elim) { return 1; }
+    var sy = 0;
+    var ky = 0;
+    if (e != 0.0 && f != 0.0) {
+        ky = _bj_xq_prod(e, f, &yb, &tb);
+        sy = 1;
+        if (_bj_g_bitlen(&yb) + ky > elim) { return 1; }
+    }
+    # X² into pb, Y² into cb, aligned on g, the least exponent of 2 among them and 10^p's.
+    var g = p;
+    store64(&pb, 0);
+    store64(&cb, 0);
+    if (sx != 0) {
+        _bj_xq_mul(&pb, &xb, &xb, &tb, &ub);
+        if (2 * kx < g) { g = 2 * kx; }
+    }
+    if (sy != 0) {
+        _bj_xq_mul(&cb, &yb, &yb, &tb, &ub);
+        if (2 * ky < g) { g = 2 * ky; }
+    }
+    if (sx != 0) { _bj_bn_shl(&pb, 2 * kx - g); }
+    if (sy != 0) { _bj_bn_shl(&cb, 2 * ky - g); }
+    _bj_bn_sum(&xb, &pb, &cb);
+    _bj_bn_set(&yb, 1);
+    if (p >= 0) {
+        _bj_xq_mul5(&yb, p);
+    } else {
+        _bj_xq_mul5(&xb, 0 - p);
+    }
+    _bj_bn_shl(&yb, p - g);
+    var r = _bj_bn_cmp(&xb, &yb);
+    return r;
+}
+
+# The sign (−1, 0 or 1) of (a·b + c)² + (e·f)² − 10^p for finite doubles, t the double nearest 10^p (−60 ≤ p ≤ 60),
+# and elim the caller's (the section comment): the band on the rounded values, then the exact test.
+#must_use
+fn _bj_x_sumsq_sign(a: f64, b: f64, c: f64, e: f64, f: f64, t: f64, p, elim): i64 {
+    var pr: f64 = a * b;
+    var xr: f64 = pr + c;
+    var yr: f64 = e * f;
+    var ax: f64 = f64_abs(xr);
+    var ay: f64 = f64_abs(yr);
+    var big: f64 = _BJ_X_BIG;
+    if (ax > big || ay > big) { return 1; }
+    var u: f64 = _BJ_X_U52;
+    var tiny: f64 = _BJ_X_TINY;
+    var ap: f64 = f64_abs(pr);
+    var ex: f64 = ap * u + ax * u + tiny;
+    var ey: f64 = ay * u + tiny;
+    var lx: f64 = ax - ex;
+    var ly: f64 = ay - ey;
+    if (lx < 0.0) { lx = 0.0; }
+    if (ly < 0.0) { ly = 0.0; }
+    var hx: f64 = ax + ex;
+    var hy: f64 = ay + ey;
+    var slo: f64 = lx * lx + ly * ly;
+    var shi: f64 = hx * hx + hy * hy;
+    var m: f64 = t * _BJ_X_U40;
+    var thi: f64 = t + m;
+    var tlo: f64 = t - m;
+    if (slo > thi) { return 1; }
+    if (shi < tlo) { return 0 - 1; }
+    var r = _bj_x_sumsq_exact(a, b, c, e, f, p, elim);
+    return r;
+}
+
 # --- mathx.cyr ---
 
 # mathx.cyr — bijli's math helpers: Rust std semantics on top of the Cyrius builtins.
@@ -22433,7 +22622,15 @@ fn _bj_sc_mie_check(x: f64, m: BjComplex, mx_abs: f64): i64 {
         _bj_tx_cstr(w, "(m = n − iκ); for an index written as n + iκ pass m.conj()");
         return BJ_ERR_INVALID_PARAMETER;
     }
-    if (mx_abs != mx_abs || mx_abs > limx) {
+    # |m|·x > 10⁷ exactly, as (Re m·x)² + (Im m·x)² > 10¹⁴ = BJ_MIE_MAX_MX² (ADR 0002 row 17; Rust tested the rounded
+    # hypot times x); 2^25 ≥ 2·10⁷ bounds the exact test's operands. The message quotes the rounded |m|·x, as Rust's.
+    var over = 0;
+    if (mx_abs != mx_abs) {
+        over = 1;
+    } elif (_bj_x_sumsq_sign(mre, x, 0.0, mim, x, 100000000000000.0, 14, 25) > 0) {
+        over = 1;
+    }
+    if (over == 1) {
         var y = _bj_err_reason(BJ_ERR_INVALID_PARAMETER);
         _bj_tx_cstr(y, "|m|·x = ");
         _bj_fmt_f64_display(y, mx_abs);
@@ -22653,7 +22850,7 @@ fn _bj_sc_drop(d, a, b) {
 # Q_abs = Q_ext − Q_sca, g = 2 Σ[..]/Σ(2n+1)(|aₙ|² + |bₙ|²) (0 when nothing scatters). out gets n_max new coefficients
 # of each kind; bj_mie never reads it, so free a previous result first (BjMieResult_free).
 # - x finite, 0 < x ≤ BJ_MIE_MAX_SIZE_PARAMETER; m finite, nonzero, Im(m) ≤ 0 (e^{+jωt}: absorbing m = n − jκ),
-#   |m|·x ≤ BJ_MIE_MAX_MX; else InvalidParameter;
+#   |m|·x ≤ BJ_MIE_MAX_MX exactly (ADR 0002 row 17); else InvalidParameter;
 # - InvalidParameter also when the series over- or underflows (only for vanishingly small x or m), DivisionByZero
 #   when mx underflows to zero, Allocation when a buffer can't be had.
 # Mirrors `scattering::mie`.

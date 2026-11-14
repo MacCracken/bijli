@@ -8,10 +8,11 @@
 # 5c-2), checked against MPFR with its widest exponent range, and the exact Singularity threshold (src/crmath_cmp.cyr,
 # M1 part 5d-1), Clausius–Mossotti's ε_r, the trig-free Fresnel cosine, the Liénard–Wiechert R_eff and κ and the
 # parallel combinations (src/crmath_edge.cyr, M2 parts 2c-2 to 2c-5), and the materials' 53-bit roots and Γ
-# (src/crmath_vx.cyr, M2 part 2d-2c), against Fractions. Built from the math
-# sources the bundle carries (src/constants.cyr … src/mathx.cyr, in the manifest's order and byte for byte what
-# dist/bijli.cyr holds): the bundle is `private` and these entry points are bijli-internal, so a consumer of
-# dist/bijli.cyr can't call them, but a file of internals only has no marker and can be included on its own.
+# (src/crmath_vx.cyr, M2 part 2d-2c), and M3's exact sum-of-squares threshold (src/crmath_cmp.cyr, M3 part 2c-1),
+# against Fractions. Built from the math sources the bundle carries (src/constants.cyr … src/mathx.cyr, in the
+# manifest's order and byte for byte what dist/bijli.cyr holds): the bundle is `private` and these entry points are
+# bijli-internal, so a consumer of dist/bijli.cyr can't call them, but a file of internals only has no marker and can
+# be included on its own.
 # scripts/oracle/cr_verify.py builds it, runs it natively and under qemu-aarch64, and compares every result with MPFR.
 # `tan_slow` calls tan's fixed-point path directly (finite |x| ≥ 2^-27 only), so the path the rounding test rarely
 # reaches is checked on arguments of its own.
@@ -322,6 +323,18 @@ fn _call(fp, fl, w): i64 {
     elif (_is(fp, fl, "r2_below") == 1) {
         # r2_below a0 a1 a2 b0 b1 b2 p: 1.0 when the exact Σ (aᵢ − bᵢ)² < 10^-p (src/crmath_cmp.cyr), else 0.0
         if (_bj_x_r2_below(w, w + 24, load64(w + 48)) == 1) { r = 1.0; }
+    }
+    elif (_is(fp, fl, "sumsq") == 1 || _is(fp, fl, "sumsq_exact") == 1) {
+        # sumsq a b c e f t p elim, sumsq_exact a b c e f p elim: the sign of (a·b + c)² + (e·f)² − 10^p as −1.0, 0.0
+        # or 1.0 (src/crmath_cmp.cyr's band then exact test, or the exact test alone)
+        var sg = 0;
+        if (fl == 5) {
+            sg = _bj_x_sumsq_sign(x, y, _wf(w, 2), _wf(w, 3), _wf(w, 4), _wf(w, 5), load64(w + 48), load64(w + 56));
+        } else {
+            sg = _bj_x_sumsq_exact(x, y, _wf(w, 2), _wf(w, 3), _wf(w, 4), load64(w + 40), load64(w + 48));
+        }
+        if (sg < 0) { r = -1.0; }
+        if (sg > 0) { r = 1.0; }
     }
     elif (_is(fp, fl, "ux_pow") == 1) {
         # ux_pow s e y part: (s·2^e)^y's s (part 0) or e (part 1)

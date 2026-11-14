@@ -196,7 +196,15 @@ fn _bj_sc_mie_check(x: f64, m: BjComplex, mx_abs: f64): i64 {
         _bj_tx_cstr(w, "(m = n − iκ); for an index written as n + iκ pass m.conj()");
         return BJ_ERR_INVALID_PARAMETER;
     }
-    if (mx_abs != mx_abs || mx_abs > limx) {
+    # |m|·x > 10⁷ exactly, as (Re m·x)² + (Im m·x)² > 10¹⁴ = BJ_MIE_MAX_MX² (ADR 0002 row 17; Rust tested the rounded
+    # hypot times x); 2^25 ≥ 2·10⁷ bounds the exact test's operands. The message quotes the rounded |m|·x, as Rust's.
+    var over = 0;
+    if (mx_abs != mx_abs) {
+        over = 1;
+    } elif (_bj_x_sumsq_sign(mre, x, 0.0, mim, x, 100000000000000.0, 14, 25) > 0) {
+        over = 1;
+    }
+    if (over == 1) {
         var y = _bj_err_reason(BJ_ERR_INVALID_PARAMETER);
         _bj_tx_cstr(y, "|m|·x = ");
         _bj_fmt_f64_display(y, mx_abs);
@@ -416,7 +424,7 @@ fn _bj_sc_drop(d, a, b) {
 # Q_abs = Q_ext − Q_sca, g = 2 Σ[..]/Σ(2n+1)(|aₙ|² + |bₙ|²) (0 when nothing scatters). out gets n_max new coefficients
 # of each kind; bj_mie never reads it, so free a previous result first (BjMieResult_free).
 # - x finite, 0 < x ≤ BJ_MIE_MAX_SIZE_PARAMETER; m finite, nonzero, Im(m) ≤ 0 (e^{+jωt}: absorbing m = n − jκ),
-#   |m|·x ≤ BJ_MIE_MAX_MX; else InvalidParameter;
+#   |m|·x ≤ BJ_MIE_MAX_MX exactly (ADR 0002 row 17); else InvalidParameter;
 # - InvalidParameter also when the series over- or underflows (only for vanishingly small x or m), DivisionByZero
 #   when mx underflows to zero, Allocation when a buffer can't be had.
 # Mirrors `scattering::mie`.

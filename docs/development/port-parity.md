@@ -3606,3 +3606,52 @@ E and B = n̂ × E/c.
   cross-section) are unchanged. `beam.tcyr` and `scattering.tcyr` pass on all three.
 - **A slip, caught by the audit**: the scattering test group went in between `cyrius_json`'s doc comment and its
   function, leaving `cyrius_json` undocumented; the comment is back on its function.
+
+## 65. M3 part 2c-1: Mie's exact |m|·x limit (2026-11-14)
+
+- **ADR 0002 row 17, amended for M3** (the user's "exact thresholds" decision of 2026-11-12). `mie` refused
+  |m|·x > 10⁷ on the rounded hypot(Re m, Im m)·x: two roundings, so the verdict followed them within an ulp of the
+  limit. m = (60 + ulp) − 80i at x = 10⁵ has |m|·x = 10⁷ + 4·10⁻¹⁰, and Rust's hypot rounds it back to 100, so it was
+  accepted (with a 10⁷-step recurrence). x = 4834.4, m = 367.9 − 2035.5i has (|m|·x)² 0.0019 below 10¹⁴, and its
+  rounded |m|·x is 10⁷ + 1 ulp, so it was refused. The port decides (Re m·x)² + (Im m·x)² > 10¹⁴ exactly; the
+  refusal still quotes the rounded |m|·x, which can read 10000000.
+- **src/crmath_cmp.cyr's sum-of-squares sign**, `_bj_x_sumsq_sign`: the sign of (a·b + c)² + (e·f)² − 10^p for finite
+  doubles. Bounds on |X| and |Y| from the rounded X̃ = a·b + c and Ỹ = e·f (each within 2^-53 of its operands, plus
+  2^-1022) decide outside a 2^-40 band around the double nearest 10^p; inside it, or after a cancellation in X̃,
+  `_bj_x_sumsq_exact` compares X², Y² and 5^p·2^p as integers (src/fmtf.cyr's bignums, 160-word buffers). It has
+  propagate_beam's shape too (X = C·q₀ + D, Y = C·q₁), which 2c-2 takes up.
+- **cr_verify.py's sumsq and sumsq_exact families** (the band then the exact test, and the exact test alone): sums
+  within ulps of 10^p for p = −60, 14 and any p in [−60, 30], X cancelling to its product's rounding error, subnormal
+  and tiny partners, Pythagorean ties (10^p = X² + Y² exactly) and their one-ulp neighbours, Mie- and
+  propagate-shaped operands, and far ones from any binade. **200,000 calls equal to the exact sign on both targets**;
+  two seeded mutations (the 10^p alignment off by one bit, the exact test replaced by the bounds' midpoint) were
+  caught on 30 % and 13 % of calls.
+- **The oracle**: `scattering.tsv` gains 77 rows after every earlier row (the old file an exact prefix): the knife edge
+  (60 − 80i)·10⁵, |m|·x = 10⁷ exactly (accepted; the port runs it in full), and the one-ulp neighbours above the
+  Pythagorean edges (60 − 80i)·10⁵, (6·10⁶ − 8·10⁶i)·1, (6·10⁵ − 8·10⁵i)·10 and (6·10³ − 8·10³i)·10³, then 60 seeded
+  spheres whose index lies two to six ulps outside |m| = 10⁷/x. A sphere the exact limit accepts and Rust's refused
+  runs a 10⁷-step recurrence that validate.py cannot transcribe, so the grid holds none (`scattering_adr_rows` stops
+  on one); `cyrius_mie_row17` pins one in the tests.
+- **validate.py**: `sc_mie_checks(port=True)` decides on Fractions; `sc_row17` names the rows the two verdicts split;
+  `scattering_adr_rows` maps them to the port's refusal, and `scattering_corrections` skips them. The model agreed with
+  every new row on its first run. A one-bit flip of each new row's first output was caught on the 68 refusals; the 9
+  value rows are past SC_PY_START, so validate checks their primitives, and parity checks the tie against the port's
+  own run.
+- **Mappings**: `scattering.adr.tsv` holds 101 rows: row 13's 93 and row 17's 8, the spheres Rust accepted an ulp
+  past the limit: (±(60 + ulp) − 80i)·10⁵; ±(6·10⁶ + ulp) − 8·10⁶i and 6·10⁶ − (8·10⁶ + ulp)i at x = 1; and the same
+  three scaled to x = 10³.
+- **Tests**: `cyrius_mie_row17` in `tests/scattering.tcyr` (2 assertions, 107 in the file): (60 + ulp − 80i)·10⁵
+  refused with the text quoting 10000000, and the 4834.4 sphere accepted with its 4,905 coefficients (its D_n
+  recurrence from 10⁷ costs about a second in the debug test).
+- **propagate_beam is not in this bite.** The exact test makes |C·q + D|² ≥ 10⁻⁶⁰ pass where Rust's rounded
+  denominator cancels to 0 (C = 0.1, q = 3, D = −0.30000000000000004: the exact C·q + D is −2.8·10⁻¹⁷), and Rust's
+  chain then gives 0/0 = NaN. Which value it should give goes to the user before 2c-2.
+- **Benchmarks** (interleaved against 2b's tree, three rounds at load 2.3–3.7, another repository's tests running):
+  `scattering/mie_x1_real` 1.98 → 1.99 µs, `mie_x10_real` 4.02 → 3.96 µs, `mie_x50_m3_5` 12.83 → 12.70 µs. The band
+  test is a few ns inside a µs-scale call, so the record keeps its rows. The median over the 81 rows is +0.8 %; the
+  largest moves (±5–8 %) are on code this bite does not touch (`field/electric_potential_point` 25 → 27 ns, the JSON
+  Mie readers −6 %): the load, and the bundle's layout.
+- **Result, every target** (x86_64 ELF, x86_64 PE, aarch64): **16 modules, 0 failing; 493,756 ok, 0 failed, 0
+  measured, 0 pending, 72,537 accepted (ADR 01: 29,441; ADR 0002: 43,096)** over 566,293 rows; **all 380 digests
+  equal**. Only `scattering::mie`'s changed (its 77 new rows); the other 379 are unchanged. `scattering.tcyr` passes
+  on all three.

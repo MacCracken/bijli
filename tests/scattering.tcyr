@@ -480,6 +480,23 @@ fn cyrius_row13(): i64 {
     return 0;
 }
 
+# ADR 0002 row 17 (M3 part 2c-1): mie's |m|·x ≤ 10⁷ decided on the exact (Re m·x)² + (Im m·x)² against 10¹⁴.
+fn cyrius_row17(): i64 {
+    test_group("cyrius_mie_row17 (ADR 0002 row 17)");
+    var up60: f64 = _bj_from_bits(0x404E000000000001);
+    assert(mie_refused(100000.0, up60, -80.0) == 1
+      && reason_is2("invalid parameter: |m|·x = 10000000 exceeds ", "the supported maximum 10000000") == 1,
+      "(60 + ulp − 80i)·10⁵: |m|·x above 10⁷ is refused, quoting the rounded 10⁷ (Rust accepted it)");
+    var x: f64 = _bj_from_bits(0x40B2E2658BED3FE3);
+    var re: f64 = _bj_from_bits(0x4076FDDD39637399);
+    var im: f64 = _bj_from_bits(0xC09FCE2596F51667);
+    var r: BjMieResult = BjMieResult_new();
+    assert(mie_ok(x, re, im, &r) == 1 && r.a_len == 4905,
+      "x = 4834.4, m = 367.9 − 2035.5i: (|m|·x)² is 0.0019 below 10¹⁴, accepted (its rounded |m|·x is 10⁷ + 1 ulp)");
+    BjMieResult_free(&r);
+    return 0;
+}
+
 # MieResult's JSON (src/json.cyr, M3 part 1b-2).
 fn cyrius_json(): i64 {
     test_group("cyrius_mie_result_json");
@@ -567,6 +584,7 @@ fn main(): i64 {
     rust_tests_c();
     cyrius_tests();
     cyrius_row13();
+    cyrius_row17();
     cyrius_json();
     return assert_summary();
 }

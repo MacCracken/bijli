@@ -63,7 +63,7 @@ port's harness reads the same files. This README records what is specific to bij
 | `maxwell` | M1 (part 3d) | 20,349 | `src/m_maxwell.rs` | — |
 | `polarization` | M3 (part 1a-1; 2a-1: the waveplates' edge grid) | 24,515 (+ 18 corrected) | `src/m_polarization.rs` | — |
 | `relativity` | M2 (parts 1d-1, 1d-2: the solver over six trajectories; 2c-1, 2c-4, 2d-1, 2d-3c–2d-3j) | 30,780 | `src/m_relativity.rs` (field.rs's vectors) | — |
-| `scattering` | M3 (parts 1b-1; its JSON in `json`; 2b: the round-once edge grid) | 4,112 (+ 6 corrected) | `src/m_scattering.rs` | — |
+| `scattering` | M3 (parts 1b-1; its JSON in `json`; 2b: the round-once edge grid; 2c-1: Mie's \|m\|·x limit) | 4,189 (+ 6 corrected) | `src/m_scattering.rs` | — |
 | `wave` | M2 (parts 1b, 2c-1, 2c-3, 2d-1, 2d-2a, 2d-2b, 2d-2c) | 79,138 (+ 1 corrected) | `src/m_wave.rs` (field.rs's vectors, material.tsv's materials) | `src/wave_data.cyr`, the dipole constants of ADR 0002 row 22 (`validate.py`'s `render_wave_data`: Cin(2π) by its series, π by Machin's formula checked against MPFR, η₀ from BJ_MU_0 and BJ_EPSILON_0, in rational arithmetic) |
 | (correctly rounded tables) | M1 | — | — | `src/crmath_data.cyr` (`crtables.py`, written and checked by `validate.py`) |
 | (2/π for the angle past DBL_MAX, bijli's) | M1 (part 5d-3) | — | — | `src/crmath_ux_data.cyr` (`crtables.py`'s `render_ux`, from π to 2,800 bits checked against MPFR) |
@@ -88,7 +88,10 @@ families (M2 part 2b-4) check src/crmath_mono.cyr's monomial of up to six factor
 `cr_driver.cyr` reads up to sixteen words a call, and `cr_verify.py` refuses a longer one. Its below_prod, below_quot
 and below_sum families (M2 part 2c-1) check src/crmath_cmp.cyr's exact |x·y|, |x/y| and |x + y| < 10^-p against
 Fractions, and grids.rs's `knife_edge2` and `knife_band2` put the corpus's rows in the 0.024-ulp band where a rounding
-next to the double 1e-30 flips such a test. Its cm and cm_slow families (M2 part 2c-2) check src/crmath_edge.cyr's
+next to the double 1e-30 flips such a test. Its sumsq and sumsq_exact families (M3 part 2c-1) check its exact sign of
+(a·b + c)² + (e·f)² − 10^p (the band on the rounded values then the exact test, and the exact test alone) against
+Fractions: sums within ulps of 10^p, X cancelling to its product's rounding error, subnormal partners, Pythagorean
+ties and their neighbours, Mie- and propagate-shaped operands, and far ones. Its cm and cm_slow families (M2 part 2c-2) check src/crmath_edge.cyr's
 Clausius–Mossotti ε_r (`cm`, and `cm_slow` with the rounding test skipped, so the exact midpoint check always runs)
 against Fractions: physical pairs, X uniform in (−4, 1), both edges ulp by ulp, any finite pair, the exact ties, the
 region and shortcut edges, the exact pole and zero. Its cos_t and cos_t_slow families (M2 part 2c-3) check its

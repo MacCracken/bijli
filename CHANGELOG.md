@@ -541,6 +541,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
   `new(1e10, 1e155)` was refused for z_R = 3e300, `new(5e-324, 1e-162)` gave z_R = 1.0 for 0.636, and Q = 1e308,
   r = 0.1 gave ∞ for 3.1e306. Cost (the monomial machinery, as M1's and M2's round-once functions pay):
   `cross_section_from_efficiency` 128 ns for 5, `divergence` 110 for 5, `GaussianBeam::new` 179 for 33.
+- **scattering** (ADR 0002 row 17 amended, M3 part 2c-1, exact thresholds): `mie` refused |m|·x > 10⁷ on the rounded
+  hypot(m)·x, so within an ulp of the limit the verdict followed two roundings: m = (60 + ulp) − 80i at x = 10⁵, whose
+  |m|·x is 4·10⁻¹⁰ past 10⁷, was accepted (and ran a 10⁷-step recurrence), and x = 4834.4, m = 367.9 − 2035.5i, 0.0019
+  inside the limit in (|m|·x)², was refused. The port decides (Re m·x)² + (Im m·x)² > 10¹⁴ exactly
+  (`src/crmath_cmp.cyr`: bounds on the rounded parts, bignums within 2⁻⁴⁰ of the limit); the refusal still quotes the
+  rounded |m|·x. Cost: none measurable (`scattering/mie_x1_real` 1.99 µs for 1.98, under load).
 
 ### Performance
 

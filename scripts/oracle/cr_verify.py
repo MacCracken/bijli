@@ -534,7 +534,7 @@ EXACT = ["mono"] + list(SHAPES) + ["sqrt_div", "wsqrt", "sqrt_mono", "sqrt_mono_
          "cos_t_slow", "lw_reff", "lw_reff_slow", "lw_kappa", "lw_kappa_slow", "par", "par_x", "par_slow",
          "par_rep", "par_rep_x", "par_rep_slow", "lw_nb", "lw_nb_slow", "lw_reff_ux", "vx_sqrt", "vx_sqrt_e",
          "vx_gamma", "lwo_reff", "lwo_reff_slow", "lwo_kappa", "lwo_kappa_slow", "lwo_nb", "lwo_nb_slow", "lwo_ux",
-         "gammao", "gammao_slow", "gammao2", "gammao2_slow"]
+         "gammao", "gammao_slow", "gammao2", "gammao2_slow", "sumsq", "sumsq_exact"]
 UX = ["ux_exp", "ux_exp_w", "ux_cosh", "ux_sinh", "ux_ln", "ux_pow", "ux_sin", "ux_cos"]
 
 
@@ -1160,6 +1160,120 @@ def par_families(rng, count):
     return out
 
 
+# ── M3's exact sum-of-squares threshold (src/crmath_cmp.cyr, M3 part 2c, ADR 0002 row 17 amended) ──────────────────
+def sumsq_ref(a, b, c, e, f, p):
+    """The sign of (a·b + c)² + (e·f)² − 10^p as the word of −1.0, 0.0 or 1.0, exactly."""
+    v = (Fraction(a) * Fraction(b) + Fraction(c)) ** 2 + (Fraction(e) * Fraction(f)) ** 2 - Fraction(10) ** p
+    return f2b(-1.0 if v < 0 else 1.0 if v > 0 else 0.0)
+
+
+def sumsq_elim(p):
+    """The least elim with 2^elim ≥ 2·√(10^p): the exact test's bound on |X| and |Y|."""
+    k = math.ceil(1 + p * math.log2(10) / 2) - 2
+    while Fraction(2) ** (2 * k) < 4 * Fraction(10) ** p:
+        k += 1
+    return k
+
+
+def sumsq_ulps(x, k):
+    return b2f(f2b(x) + k) if x != 0.0 else x
+
+
+def sumsq_families(rng, count):
+    """sumsq (the band on the rounded values, then the exact test) and sumsq_exact (the exact test alone): operands
+    whose sum of squares lies within a few ulps of 10^p (p = −60 and 14, propagate_beam's and Mie's, and any p in
+    [−60, 30]), X = a·b + c cancelling to its product's rounding error, subnormal and tiny partners, exact ties
+    (Pythagorean X and Y, 10^p = X² + Y²) and their one-ulp neighbours, Mie-shaped (a·x, e·x) and propagate-shaped
+    (C·q₀ + D, C·q₁) pairs, and far operands from any binade."""
+    out = []
+    for i in range(count):
+        mode = i % 7
+        p = (-60, 14)[i % 2] if i % 3 else rng.randint(-60, 30)
+        root = math.sqrt(10.0 ** p)
+        th = rng.uniform(0.0, math.pi / 2)
+        xt, yt = root * math.cos(th), root * math.sin(th)
+        sg = rng.choice([1.0, -1.0])
+        if mode == 0:                                   # near the threshold, no cancellation
+            a = rng.uniform(1.0, 2.0) * 2.0 ** rng.randint(-400, 400) * sg
+            b = sumsq_ulps(xt / a, rng.randint(-3, 3))
+            c = 0.0 if i % 4 else xt * 2.0 ** -rng.randint(1, 60) * rng.choice([1.0, -1.0])
+            e = rng.uniform(1.0, 2.0) * 2.0 ** rng.randint(-400, 400)
+            f = sumsq_ulps(yt / e, rng.randint(-3, 3)) if rng.random() < 0.8 else 0.0
+        elif mode == 1:                                 # X = a·b + c is the product's rounding error, near √(10^p)
+            j = rng.randint(0, 40)
+            a = rng.uniform(1.0, 2.0) * sg
+            b = rng.uniform(1.0, 2.0) * xt * 2.0 ** (52 + j) / a
+            h = a * b
+            c = sumsq_ulps(-h, rng.choice([0, 0, 0, 1, -1]))
+            lo = Fraction(a) * Fraction(b) + Fraction(c)
+            rest = Fraction(10) ** p - lo * lo
+            yv = math.sqrt(float(rest)) if rest > 0 else 0.0
+            e = rng.uniform(1.0, 2.0)
+            f = sumsq_ulps(yv / e, rng.randint(-2, 2)) if yv else 0.0
+        elif mode == 2:                                 # subnormal and tiny partners
+            tiny = [5e-324, 3e-321, 2.2250738585072014e-308, 1e-300, 1e-200]
+            c = sumsq_ulps(xt * sg, rng.randint(-3, 3))
+            a = rng.choice(tiny) * rng.randint(1, 9) * rng.choice([1.0, -1.0])
+            b = rng.choice([5e-324, 1e-310, 1e-160, 1.0, 1e100])
+            if rng.random() < 0.5:
+                e, f = rng.choice(tiny) * rng.randint(1, 9), rng.choice(tiny) * rng.randint(1, 9)
+                c = sumsq_ulps(root * sg, rng.randint(-3, 3))
+            else:
+                e = rng.uniform(1.0, 2.0) * 2.0 ** -1050
+                f = sumsq_ulps(yt / e, rng.randint(-2, 2)) if math.isfinite(yt / e) else 1.0
+        elif mode == 3:                                 # far: any binade, either sign
+            a, b, c, e, f = (any_finite(rng) for _ in range(5))
+        elif mode == 4:                                 # exact ties for p ≥ 0, and neighbours
+            p = rng.randint(0, 30)
+            h = p // 2
+            if p % 2:
+                xs, ys = 10.0 ** h, 3.0 * 10.0 ** h
+            elif p >= 2 and rng.random() < 0.6:
+                xs, ys = 6.0 * 10.0 ** (h - 1), 8.0 * 10.0 ** (h - 1)
+            else:
+                xs, ys = 10.0 ** h, 0.0
+            if rng.random() < 0.5:
+                xs, ys = ys, xs
+            b = 2.0 ** rng.randint(-20, 20)
+            a, c = xs / b * sg, 0.0
+            if rng.random() < 0.3:
+                a, c = xs / 2.0 / b * sg, xs / 2.0 * sg
+            f = 2.0 ** rng.randint(-20, 20)
+            e = ys / f * rng.choice([1.0, -1.0])
+            k = rng.choice([0, 0, 0, 1, -1])
+            if k:
+                which = rng.randrange(3)
+                if which == 0 and a:
+                    a = sumsq_ulps(a, k)
+                elif which == 1 and e:
+                    e = sumsq_ulps(e, k)
+                else:
+                    b = sumsq_ulps(b, k)
+        elif mode == 5:                                 # Mie: (Re m·x)² + (Im m·x)² against 10^14
+            p = 14
+            x = rng.choice([1e5, 1e5, rng.uniform(1.0, 1e5)])
+            mr, mi = 1e7 / x * math.cos(th), -1e7 / x * math.sin(th)
+            if rng.random() < 0.3:
+                mr, mi = 1e7 / x * 0.6, -1e7 / x * 0.8
+            a, b, c = sumsq_ulps(mr, rng.randint(-2, 2)), x, 0.0
+            e, f = sumsq_ulps(mi, rng.randint(-2, 2)), x
+        else:                                           # propagate_beam: X = C·q₀ + D, Y = C·q₁ against 10^-60
+            p = -60
+            cm = rng.uniform(1.0, 2.0) * 2.0 ** rng.randint(-60, 60) * sg
+            q0 = rng.uniform(-1.0, 1.0) * 2.0 ** rng.randint(-60, 60)
+            d = sumsq_ulps(-cm * q0 + xt * rng.choice([0.0, 1.0, -1.0]), rng.randint(-2, 2))
+            yv = 1e-30 if rng.random() < 0.5 else yt
+            a, b, c, e, f = cm, q0, d, cm, sumsq_ulps(yv / cm, rng.randint(-2, 2))
+        if not all(math.isfinite(v) for v in (a, b, c, e, f)):
+            continue
+        elim = sumsq_elim(p)
+        t = float(Fraction(10) ** p)
+        want = sumsq_ref(a, b, c, e, f, p)
+        out.append(("sumsq", [a, b, c, e, f, t, p, elim], want))
+        out.append(("sumsq_exact", [a, b, c, e, f, p, elim], want))
+    return out
+
+
 def nb_families(rng, count):
     """lw_nb and lw_nb_slow (M2 part 2d-1): each component of n̂ − β on lw_cases' pairs, and on pairs built to cancel
     (β along n̂ to 2^-k, a Pythagorean R with βᵢ its exact n̂ᵢ's double, zero parts)."""
@@ -1461,6 +1575,9 @@ def main() -> int:
                   if "exact" in names or f in names]
         grng2 = random.Random(0x2D_3F6)
         calls += [(f, ref, ws) for f, ws, ref in gammao_families(grng2, max(1, n // 10))
+                  if "exact" in names or f in names]
+        qrng = random.Random(0x3_2C)
+        calls += [(f, ref, ws) for f, ws, ref in sumsq_families(qrng, max(1, n // 5))
                   if "exact" in names or f in names]
         prng2 = random.Random(0x9A_2C5)
         calls += [(f, ref, ws) for f, ws, ref in par_families(prng2, max(1, n // 10))

@@ -21,6 +21,9 @@
 //!
 //! M3 part 2b (ADR 0002 row 13, amended) appends `cross_section_from_efficiency`'s round-once grid: q·π·r² where q·π or
 //! q·π·r over- or underflows though the value is representable, and seeded efficiencies and radii.
+//!
+//! M3 part 2c-1 (ADR 0002 row 17, amended) appends `mie`'s |m|·x limit grid: the exact knife edge and the neighbours
+//! above it that Rust's rounded |m|·x accepts, and seeded indices just outside the circle |m| = 10⁷/x.
 
 use crate::grids::{Rng, specials};
 use crate::m_field::res_f;
@@ -333,6 +336,7 @@ pub fn emit() -> Module {
         }
     }
     round_once_edges(r);
+    threshold_edges(r);
     rows.m
 }
 
@@ -350,3 +354,28 @@ fn round_once_edges(r: &mut Rows) {
         });
     }
 }
+
+/// M3 part 2c-1 (ADR 0002 row 17, amended): `mie`'s |m|·x ≤ 10⁷ decided exactly. The knife edge (60 − 80i)·10⁵ and
+/// (6·10⁶ − 8·10⁶i)·1, whose |m|·x is 10⁷ exactly, and their one-ulp neighbours above, which Rust's rounded hypot
+/// times x can bring back to 10⁷; then seeded spheres whose index lies two to six ulps outside the circle |m| = 10⁷/x,
+/// so the exact |m|·x exceeds 10⁷ while the rounded one may not. Only the tie runs the 10⁷-step recurrence in the port.
+fn threshold_edges(r: &mut Rows) {
+    let mut rng = Rng::new(0x5ca7_02c1);
+    r.mie(1e5, (60.0, -80.0));
+    for (x, re, im) in [(1e5, 60.0, -80.0), (1.0, 6e6, -8e6), (10.0, 6e5, -8e5), (1e3, 6e3, -8e3)] {
+        r.mie(x, (up(re), im));
+        r.mie(x, (re, down(im)));
+        r.mie(x, (down(-re), im));
+        r.mie(x, (up(re), down(im)));
+    }
+    for _ in 0..60 {
+        let x = if rng.int(0, 3) == 0 { 1e5 } else { rng.log_uniform(0.0, 5.0) };
+        let th = rng.uniform(0.0, 0.5 * PI);
+        let k = rng.int(2, 6) as u64;
+        let rad = MIE_MAX_MX / x;
+        let (re, im) = (rad * th.cos(), -(rad * th.sin()));
+        let out = |v: f64| if v == 0.0 { v } else { f64::from_bits(v.to_bits() + k) };
+        r.mie(x, (out(re), out(im)));
+    }
+}
+

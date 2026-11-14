@@ -4005,8 +4005,10 @@ def sc_digest(a, b) -> int:
     return h - (1 << 64) if h >= 1 << 63 else h
 
 
-def sc_mie_checks(x, mre, mim, P):
-    """mie's argument checks: an error's tokens, or (|m|·x, None)."""
+def sc_mie_checks(x, mre, mim, P, port=False):
+    """mie's argument checks: an error's tokens, or (|m|·x, None); port=True for the port's |m|·x > 10⁷ decided on the
+    exact (Re m·x)² + (Im m·x)² against 10¹⁴ (ADR 0002 row 17, M3 part 2c-1), its message still quoting the rounded
+    |m|·x."""
     if not (math.isfinite(x) and x > 0.0):
         return None, ip_err(f"size parameter x must be positive and finite, got {rust_display(x)}")
     if x > SC_MAX_X:
@@ -4019,7 +4021,10 @@ def sc_mie_checks(x, mre, mim, P):
     if mim > 0.0:
         return None, ip_err(SC_GAIN.format(rust_display(mim)))
     mx_abs = P["hypot"](mre, mim) * x
-    if math.isnan(mx_abs) or mx_abs > SC_MAX_MX:
+    over = math.isnan(mx_abs) or mx_abs > SC_MAX_MX
+    if port and not math.isnan(mx_abs):
+        over = (Fraction(mre) * Fraction(x)) ** 2 + (Fraction(mim) * Fraction(x)) ** 2 > Fraction(SC_MAX_MX) ** 2
+    if over:
         return None, ip_err(f"|m|·x = {rust_display(mx_abs)} exceeds the supported maximum {rust_display(SC_MAX_MX)}")
     return mx_abs, None
 
@@ -4031,9 +4036,9 @@ def sc_terms(x, mx_abs, P):
     return n_max, n_start
 
 
-def sc_mie(x, mre, mim, P):
-    """mie's outputs as a row writes them (m_scattering.rs's mie_toks)."""
-    mx_abs, bad = sc_mie_checks(x, mre, mim, P)
+def sc_mie(x, mre, mim, P, port=False):
+    """mie's outputs as a row writes them (m_scattering.rs's mie_toks); port=True for the exact |m|·x limit."""
+    mx_abs, bad = sc_mie_checks(x, mre, mim, P, port)
     if bad:
         return bad
     m = (mre, mim)
@@ -4121,10 +4126,10 @@ def sc_prims_agree(x, mre, mim) -> bool:
             and same(LIBM.hypot(mre, mim), mpfr_ref.cr2("hypot", mre, mim)))
 
 
-def sc_eval(fn, v, P, cx14=False, r13=False):
+def sc_eval(fn, v, P, cx14=False, r13=False, r17=False):
     """scattering.rs's outputs for a row on the primitives P; cx14=True for the port's BjComplex products and |z|² in
     Rayleigh (row 14 at a range edge), r13=True for its cross_section_from_efficiency rounded once (row 13, M3 part
-    2b). None for another name."""
+    2b), r17=True for mie's exact |m|·x limit (row 17, M3 part 2c-1). None for another name."""
     def mul(a, b):
         w = [a[0], a[1], b[0], b[1]]
         if cx14 and cx_governed("Complex::mul", w) == 14:
@@ -4148,7 +4153,7 @@ def sc_eval(fn, v, P, cx14=False, r13=False):
 
     dz = dz_err("complex division by zero in scattering computation")
     if fn == "scattering::mie":
-        return sc_mie(v[0], v[1], v[2], P)
+        return sc_mie(v[0], v[1], v[2], P, r17)
     if fn == "scattering::cross_section_from_efficiency":
         if r13 and math.isfinite(v[0]) and math.isfinite(v[1]):
             return [("f", rn_mono([v[0], SC_PI, v[1], v[1]], []))]
@@ -4187,6 +4192,11 @@ def sc_eval(fn, v, P, cx14=False, r13=False):
     return None
 
 
+def sc_row17(v) -> bool:
+    """A mie row whose checks the exact |m|·x limit decides otherwise than the rounded one (ADR 0002 row 17)."""
+    return sc_mie_checks(*v, SC_P_MPFR, port=True)[1] != sc_mie_checks(*v, SC_P_MPFR)[1]
+
+
 def sc_lines(path: Path):
     for line in path.read_text().splitlines():
         if line.startswith("#"):
@@ -4220,7 +4230,7 @@ def scattering_corrections(path: Path):
     def fixes(_rows):
         out = []
         for fn, cls, ins, outs, v in sc_lines(path):
-            if cls != "C" or (fn == "scattering::mie" and sc_big(*v)):
+            if cls != "C" or (fn == "scattering::mie" and (sc_big(*v) or sc_row17(v))):
                 continue
             want = sc_eval(fn, v, SC_P_MPFR)
             old = wave_toks([parse_tok(x) for x in outs.split(" ")])
@@ -4233,10 +4243,19 @@ def scattering_corrections(path: Path):
 
 def scattering_adr_rows(path: Path) -> list:
     """ADR 0002 mappings for scattering.tsv: row 14 where BjComplex's range edges change a Rayleigh row, row 13 for
-    cross_section_from_efficiency rounded once (M3 part 2b)."""
+    cross_section_from_efficiency rounded once (M3 part 2b), row 17 where mie's exact |m|·x limit refuses a sphere
+    that Rust's rounded |m|·x accepted (M3 part 2c-1). The other flip, a sphere the exact limit accepts and Rust's
+    refused, runs a 10⁷-step recurrence no transcription here can follow: the grid holds none, and one would fail."""
     out = []
     for fn, cls, ins, outs, v in sc_lines(path):
         if fn == "scattering::mie":
+            if not sc_row17(v):
+                continue
+            port = sc_mie_checks(*v, SC_P_MPFR, port=True)[1]
+            if port is None:
+                raise SystemExit(f"scattering: mie{tuple(v)} is accepted by the exact |m|·x limit and refused by "
+                                 "Rust's: no transcription can map it")
+            out.append((fn, ins, wire(port), "17", f"oracle {outs}; ADR 0002 row 17"))
             continue
         P = SC_P_MPFR if cls == "C" else SC_P_GLIBC
         expect, port = sc_eval(fn, v, P), sc_eval(fn, v, P, cx14=True, r13=True)
