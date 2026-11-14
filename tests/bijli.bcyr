@@ -66,7 +66,7 @@ fn bench_orbit(w: f64): i64 {
 # an f64 field (Rust's Display through src/fmtf.cyr), one Display, a complex multiply-and-divide (src/complex.cyr,
 # by value), a complex exp (three correctly rounded calls), a sinh and a cosh over [0, 70) (src/crmath.cyr's bijli
 # section), a complex sin (four calls), a complex exp and powf at the range edge (src/crmath_ux.cyr's slow paths), and
-# the JSON writer and readers (src/json.cyr).
+# the JSON writers and readers (src/json.cyr), the Mueller matrix's the largest document.
 fn main(): i64 {
     alloc_init();
     var b = bench_new("noop");
@@ -798,6 +798,33 @@ fn main(): i64 {
     }
     bench_batch_stop(b20, 200000);
     bench_report(b20);
+
+    # The largest document (M3 part 1a-2): a waveplate's Mueller matrix, sixteen numbers in four rows, written and
+    # read back.
+    var mw: BjMuellerMatrix = BjMuellerMatrix_waveplate(0.3, 1.1);
+    var bmt = bench_new("json/mueller_matrix_to_json");
+    bench_batch_start(bmt);
+    for (var k = 0; k < 200000; k = k + 1) {
+        store64(jsb + 8, 0);
+        var tmt, vmt = BjMuellerMatrix_to_json(&mw, jsb);
+        keep = keep + vmt;
+    }
+    bench_batch_stop(bmt, 200000);
+    bench_report(bmt);
+    var ms = str_builder_build(jsb);
+    var mdoc = str_data(ms);
+    var mlen = str_len(ms);
+    var mout: BjMuellerMatrix;
+    var bmf = bench_new("json/mueller_matrix_from_json");
+    bench_batch_start(bmf);
+    for (var k = 0; k < 100000; k = k + 1) {
+        var tmf, vmf = BjMuellerMatrix_from_json(mdoc, mlen, &mout);
+        fsum = fsum + mout.m.15;
+    }
+    bench_batch_stop(bmf, 100000);
+    bench_report(bmf);
+    var tmc, vmc = BjMuellerMatrix_from_json(mdoc, mlen, &mout);
+    if (is_err_result(tmc) == 1 || vmc != 0) { println("json/mueller_matrix_from_json: the document was refused"); }
     if (fsum == 7.0) { println("."); }
 
     var ar: f64 = acc.re;

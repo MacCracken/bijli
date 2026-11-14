@@ -3002,3 +3002,63 @@ E and B = n̂ × E/c.
 - **Result, every target** (x86_64 ELF, x86_64 PE, aarch64): **14 modules, 0 failing; 428,928 ok, 0 failed, 0
   measured, 0 pending, 47,595 accepted (ADR 01: 8,998; ADR 0002: 38,597)** over 476,523 rows; **all 329 digests
   equal**, the 276 of M1 and M2 unchanged.
+
+## 56. M3 part 1a-2: polarization's JSON (2026-11-13)
+
+- **`src/json.cyr`**: `BjJonesVector`, `BjJonesMatrix`, `BjStokesVector` and `BjMuellerMatrix` get `_to_json` and
+  `_from_json` (D5, amended), on the shared writer and reader. serde's shapes:
+  - a Jones vector is `{"x":<Complex>,"y":<Complex>}`;
+  - a Jones matrix is `{"m":[[<Complex>,<Complex>],[<Complex>,<Complex>]]}`, Rust's `m[r][c]` being the port's field
+    m<r><c>;
+  - a Stokes vector is `{"s":[S₀,S₁,S₂,S₃]}`;
+  - a Mueller matrix is `{"m":[[..],[..],[..],[..]]}`, row by row.
+
+  All four lie in memory in serde's field order. Each writer copies its struct to an f64 array and writes from it
+  (buffers of 160, 320, 128 and 512 bytes, sized for the longest numbers bayan prints). Each reader decodes into an
+  array and copies it to `out` only on success.
+- **The reader** applies serde's semantics at every level. An inner struct (a Complex) reads from an object or by
+  position. A Rust `[T; n]` reads from an array of exactly n T: `_bj_jr_f64x3` became `_bj_jr_array` and `_bj_jr_f64s`,
+  and PointCharge's arrays read through them. The whole-document checks (ADR 0002 row 12) are unchanged.
+- **The convention (ADR 0002 row 5, amended)**: a document holds the stored numbers, and the conjugation and the
+  renaming cancel on them. So a document bijli 1.x wrote keeps its handedness names: a named state, a polarizer and
+  a Stokes vector read back under the same names. A retarder's numbers are odd in δ where they differ, so a matrix
+  1.x wrote as waveplate(θ, δ) reads as 2.0's waveplate(θ, −δ). This holds in value on all 584 (θ, ±δ) waveplate
+  pairs of `polarization.tsv`, Jones and Mueller. The harness compares the JSON rows on the oracle's numbers
+  directly: no field changes its meaning in a document.
+- **`json.tsv` grows by 22,199 rows to 41,688.** The new rows:
+  - writers: 1,186 per type;
+  - readers: 3,798 JonesVector, 4,436 JonesMatrix, 3,695 StokesVector and 5,526 MuellerMatrix.
+
+  The generator appends the four kinds after Material, drawing a set as wide as the type (16 for a Mueller matrix).
+  The 19,489 earlier rows are an exact prefix of the new file, and their 329 digests are unchanged.
+  `nested` adds each inner Complex and array in every form serde reads or refuses:
+  - by position, reordered;
+  - a field missing, repeated or unknown, an escaped key;
+  - a lone surrogate in a key or an unknown string;
+  - short, long and wrong-typed arrays, an object in an array's place;
+  - mixed forms at each level.
+
+  `validate.py`'s model became a type grammar (`f64`, a struct, `("arr", n, T)`) and agreed with every new row on its
+  first run. `json.cr.tsv` grows by 12,157 rows, to 21,056: the readings serde_json's best-effort parse gets wrong,
+  gated at 0 ulp. 82 more rows are ADR 0002 row 12's (154 in all).
+- **Tests**: `cyrius_polarization_json` in `tests/polarization.tcyr` (19 assertions, 185 in the file):
+  - serde's exact text for one named element of each type;
+  - bit-for-bit round trips of a QWP and a waveplate, and of the longest numbers in every slot;
+  - both of serde's forms at every level, and any numbers read as written;
+  - the reasons (`invalid length 3, expected an array of length 4`, `missing field `im``), with out untouched.
+
+  `test_mie_result_serde` stays pending for scattering (part 1b). The ledger is unchanged: 429 ported, 3 n/a, 426
+  pending.
+- **Surface parity**: polarization is a ported module, 10 in all; 331 items matched, 0 in progress. The API snapshot
+  gains the 8 functions (2,002 public).
+- **Benchmarks** (Cyrius-only: rust-old benches no serde), interleaved against HEAD, three rounds at load 1.1–1.3:
+  - `json/mueller_matrix_to_json`: 9.21 µs;
+  - `json/mueller_matrix_from_json`: 8.78 µs (about 4.6 µs over a FieldVector's 1.88 µs, for 16 numbers in five
+    containers against 3 in one).
+
+  The shared-reader refactor costs nothing measurable: `json/point_charge_from_json` is 4.48 µs before and 4.47 µs
+  after (medians). The one row that moved, `relativity/em_tensor_from_fields`, is bimodal at 31 and 34 ns in both
+  builds.
+- **Result, every target** (x86_64 ELF, x86_64 PE, aarch64): **14 modules, 0 failing; 438,934 ok, 0 failed, 0
+  measured, 0 pending, 59,788 accepted (ADR 01: 21,109; ADR 0002: 38,679)** over 498,722 rows; **all 337 digests
+  equal**, the 329 before unchanged. `polarization.tcyr`, `json.tcyr` and `material.tcyr` pass on all three.

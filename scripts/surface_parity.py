@@ -36,7 +36,8 @@ import rustsrc  # noqa: E402
 root = Path(sys.argv[1] if len(sys.argv) > 1 else ".").resolve()
 
 # Ported modules (their milestone done or in progress, item by item).
-MODULES = ["error", "logging", "field", "maxwell", "charge", "material", "wave", "circuit", "relativity"]
+MODULES = ["error", "logging", "field", "maxwell", "charge", "material", "wave", "circuit", "relativity",
+           "polarization"]
 # Rust module -> the milestone that ports it (port plan §4.1).
 PENDING_MODULES = {
     "scattering": "M3", "beam": "M3",
@@ -47,13 +48,7 @@ PENDING_MODULES = {
 # Modules being ported Part by Part: module -> (the Parts that finish it, the Rust items still to come, by name). Their
 # other items are checked as a ported module's now; the listed ones count as pending, and one found ported is a
 # problem (drop it from the list).
-IN_PROGRESS = {
-    # M3 part 1a-1 ported the API; the four structs' JSON (their serde derives) is part 1a-2's.
-    "polarization": ("1a-2", {"impl Serialize for JonesVector", "impl Deserialize for JonesVector",
-                              "impl Serialize for JonesMatrix", "impl Deserialize for JonesMatrix",
-                              "impl Serialize for StokesVector", "impl Deserialize for StokesVector",
-                              "impl Serialize for MuellerMatrix", "impl Deserialize for MuellerMatrix"}),
-}
+IN_PROGRESS: dict = {}
 NOT_APPLICABLE_MODULES = {
     "lib": "crate root: module list and re-exports",
     "integration/mod": "module root of integration/ (no items)",

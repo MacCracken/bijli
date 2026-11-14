@@ -1055,7 +1055,7 @@ fn _par_fmtf(fp, fl): i64 {
     return 1;
 }
 
-# `json::<Type>::*` rows: src/json.cyr (M1 part 4).
+# `json::<Type>::*` rows: src/json.cyr (M1 part 4; M2 part 1a, Material; M3 part 1a-2, polarization's four structs).
 # - `to_string`: the port's document, tokenized as the oracle tokenizes serde_json's (scripts/oracle/src/m_json.rs):
 #   each number outside strings (a maximal run of `-0123456789.eE+`) an f: token, its correctly rounded parse, and
 #   every run between numbers an s: token. Equal tokens are the same text but for each number's notation (D5).
@@ -2091,6 +2091,36 @@ public fn _par_json(fp, fl): i64 {
         _par_got_json_res(t7, v7, sb4);
         return 1;
     }
+    # polarization's four structs (M3 part 1a-2): the fields as stored, compared directly (ADR 0002 row 5 changes no
+    # field's meaning in a document).
+    if (_par_eq(fp, fl, "json::JonesVector::to_string") == 1) {
+        var jv: BjJonesVector = _par_in_jv(0);
+        var sb5 = str_builder_new();
+        var t9, v9 = BjJonesVector_to_json(&jv, sb5);
+        _par_got_json_res(t9, v9, sb5);
+        return 1;
+    }
+    if (_par_eq(fp, fl, "json::JonesMatrix::to_string") == 1) {
+        var jm: BjJonesMatrix = _par_in_jm(0);
+        var sb6 = str_builder_new();
+        var t10, v10 = BjJonesMatrix_to_json(&jm, sb6);
+        _par_got_json_res(t10, v10, sb6);
+        return 1;
+    }
+    if (_par_eq(fp, fl, "json::StokesVector::to_string") == 1) {
+        var sv: BjStokesVector = _par_in_sv(0);
+        var sb7 = str_builder_new();
+        var t11, v11 = BjStokesVector_to_json(&sv, sb7);
+        _par_got_json_res(t11, v11, sb7);
+        return 1;
+    }
+    if (_par_eq(fp, fl, "json::MuellerMatrix::to_string") == 1) {
+        var mm: BjMuellerMatrix = _par_in_mm(0);
+        var sb8 = str_builder_new();
+        var t12, v12 = BjMuellerMatrix_to_json(&mm, sb8);
+        _par_got_json_res(t12, v12, sb8);
+        return 1;
+    }
     var lenw[8];
     var doc = _par_in_bytes(0, &lenw);
     if (doc == 0) { return 0 - 1; }
@@ -2124,6 +2154,34 @@ public fn _par_json(fp, fl): i64 {
         var t8, v8 = BjMaterial_from_json(doc, len, &rm);
         if (is_err_result(t8) == 1) { _par_got_err(v8); return 1; }
         _par_got_mat(rm);
+        return 1;
+    }
+    if (_par_eq(fp, fl, "json::JonesVector::from_str") == 1) {
+        var rjv: BjJonesVector;
+        var t13, v13 = BjJonesVector_from_json(doc, len, &rjv);
+        if (is_err_result(t13) == 1) { _par_got_err(v13); return 1; }
+        _par_got_jv(rjv);
+        return 1;
+    }
+    if (_par_eq(fp, fl, "json::JonesMatrix::from_str") == 1) {
+        var rjm: BjJonesMatrix;
+        var t14, v14 = BjJonesMatrix_from_json(doc, len, &rjm);
+        if (is_err_result(t14) == 1) { _par_got_err(v14); return 1; }
+        _par_got_jm(rjm, 0);
+        return 1;
+    }
+    if (_par_eq(fp, fl, "json::StokesVector::from_str") == 1) {
+        var rsv: BjStokesVector;
+        var t15, v15 = BjStokesVector_from_json(doc, len, &rsv);
+        if (is_err_result(t15) == 1) { _par_got_err(v15); return 1; }
+        _par_got_sv(rsv);
+        return 1;
+    }
+    if (_par_eq(fp, fl, "json::MuellerMatrix::from_str") == 1) {
+        var rmm: BjMuellerMatrix;
+        var t16, v16 = BjMuellerMatrix_from_json(doc, len, &rmm);
+        if (is_err_result(t16) == 1) { _par_got_err(v16); return 1; }
+        _par_got_mm(rmm, 0);
         return 1;
     }
     return 0;
@@ -2481,6 +2539,10 @@ public fn _par_c_bound(fp, fl): i64 {
     if (_par_eq(fp, fl, "json::FieldVector::from_str") == 1) { return 0; }
     if (_par_eq(fp, fl, "json::Material::from_str") == 1) { return 0; }
     if (_par_eq(fp, fl, "json::PointCharge::from_str") == 1) { return 0; }
+    if (_par_eq(fp, fl, "json::JonesVector::from_str") == 1) { return 0; }
+    if (_par_eq(fp, fl, "json::JonesMatrix::from_str") == 1) { return 0; }
+    if (_par_eq(fp, fl, "json::StokesVector::from_str") == 1) { return 0; }
+    if (_par_eq(fp, fl, "json::MuellerMatrix::from_str") == 1) { return 0; }
     return 0 - 1;
 }
 

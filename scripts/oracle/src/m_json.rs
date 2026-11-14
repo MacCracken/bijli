@@ -1,5 +1,6 @@
-//! `json.tsv` — serde_json 1.0.154 on the serializable types (port plan D5; M1 part 4, M2 part 1a): Rust hisab
-//! 1.4.0's `Complex`, `field::FieldVector`, `charge::PointCharge` and `material::Material`, written with
+//! `json.tsv` — serde_json 1.0.154 on the serializable types (port plan D5; M1 part 4, M2 part 1a, M3 part 1a-2):
+//! Rust hisab 1.4.0's `Complex`, `field::FieldVector`, `charge::PointCharge`, `material::Material` and
+//! polarization's `JonesVector`, `JonesMatrix`, `StokesVector` and `MuellerMatrix`, written with
 //! `serde_json::to_string` and read with `serde_json::from_str`.
 //!
 //! - **Writer rows** (`json::<Type>::to_string`, class A): the value's fields in, serde_json's text out as *parsed
@@ -20,28 +21,68 @@
 //! i64 and u64, overflow and underflow edges, half-way cases, long significands, refused spellings) in each field
 //! position; seeded random decimals of up to 40 digits; and the shapes: field order, whitespace, unknown keys of
 //! every JSON kind (deep, long, escaped, lone surrogates), missing and repeated fields, wrong types, the sequence
-//! form, every prefix of a document, trailing data, and nesting at serde's recursion limit.
+//! form, every prefix of a document, trailing data, and nesting at serde's recursion limit. The polarization types
+//! nest, so their documents add the nested forms (`nested`): each inner struct and array in each of serde's forms,
+//! short, long, of the wrong type, with its fields reordered, missing, repeated or unknown.
 
 use crate::grids::{Rng, pow2, specials};
 use crate::tsv::{Class, Module, Tok, f, i, s};
 use bijli::charge::{ELECTRON_MASS, ELEMENTARY_CHARGE, PROTON_MASS, PointCharge};
 use bijli::field::{EPSILON_0, FieldVector, MU_0, SPEED_OF_LIGHT};
 use bijli::material::Material;
-use bijli::polarization::Complex;
+use bijli::polarization::{Complex, JonesMatrix, JonesVector, MuellerMatrix, StokesVector};
 use std::collections::BTreeSet;
 use std::hint::black_box;
 
-/// The three types, by the name their rows carry.
+/// The types, by the name their rows carry. New ones go last: each type's rows draw on one seeded stream in turn.
 #[derive(Clone, Copy)]
 enum Kind {
     Complex,
     FieldVector,
     PointCharge,
     Material,
+    JonesVector,
+    JonesMatrix,
+    StokesVector,
+    MuellerMatrix,
+}
+
+/// `{"re":<a>,"im":<b>}`.
+fn cx(a: &str, b: &str) -> String {
+    format!("{{\"re\":{a},\"im\":{b}}}")
+}
+
+/// A Complex in serde's sequence form, `[<a>,<b>]`.
+fn cxs(a: &str, b: &str) -> String {
+    format!("[{a},{b}]")
+}
+
+/// `[<v0>,<v1>,..]`.
+fn arr(v: &[String]) -> String {
+    format!("[{}]", v.join(","))
+}
+
+/// A Jones matrix's `m` from eight spellings, its four Complex written by `c`.
+fn jm(v: &[String], c: fn(&str, &str) -> String) -> String {
+    format!("[[{},{}],[{},{}]]", c(&v[0], &v[1]), c(&v[2], &v[3]), c(&v[4], &v[5]), c(&v[6], &v[7]))
+}
+
+/// A Mueller matrix's `m` from sixteen spellings, row by row.
+fn mm(v: &[String]) -> String {
+    arr(&(0..4).map(|r| arr(&v[4 * r..4 * r + 4])).collect::<Vec<_>>())
 }
 
 impl Kind {
-    const ALL: [Kind; 4] = [Kind::Complex, Kind::FieldVector, Kind::PointCharge, Kind::Material];
+    const ALL: [Kind; 8] = [
+        Kind::Complex,
+        Kind::FieldVector,
+        Kind::PointCharge,
+        Kind::Material,
+        Kind::JonesVector,
+        Kind::JonesMatrix,
+        Kind::StokesVector,
+        Kind::MuellerMatrix,
+    ];
 
     fn name(self) -> &'static str {
         match self {
@@ -49,6 +90,10 @@ impl Kind {
             Kind::FieldVector => "FieldVector",
             Kind::PointCharge => "PointCharge",
             Kind::Material => "Material",
+            Kind::JonesVector => "JonesVector",
+            Kind::JonesMatrix => "JonesMatrix",
+            Kind::StokesVector => "StokesVector",
+            Kind::MuellerMatrix => "MuellerMatrix",
         }
     }
 
@@ -59,10 +104,18 @@ impl Kind {
             Kind::FieldVector => 3,
             Kind::PointCharge => 8,
             Kind::Material => 3,
+            Kind::JonesVector | Kind::StokesVector => 4,
+            Kind::JonesMatrix => 8,
+            Kind::MuellerMatrix => 16,
         }
     }
 
-    /// Its document with the eight number spellings `v` (the first `width()` used), as serde_json shapes it.
+    /// How many values a row's set holds: eight, or the width when wider (the first `width()` used).
+    fn draws(self) -> usize {
+        self.width().max(8)
+    }
+
+    /// Its document with the number spellings `v` (the first `width()` used), as serde_json shapes it.
     fn doc(self, v: &[String]) -> String {
         match self {
             Kind::Complex => format!("{{\"re\":{},\"im\":{}}}", v[0], v[1]),
@@ -72,10 +125,14 @@ impl Kind {
                 v[0], v[1], v[2], v[3], v[4], v[5], v[6], v[7]
             ),
             Kind::Material => format!("{{\"eps_r\":{},\"mu_r\":{},\"conductivity\":{}}}", v[0], v[1], v[2]),
+            Kind::JonesVector => format!("{{\"x\":{},\"y\":{}}}", cx(&v[0], &v[1]), cx(&v[2], &v[3])),
+            Kind::JonesMatrix => format!("{{\"m\":{}}}", jm(v, cx)),
+            Kind::StokesVector => format!("{{\"s\":{}}}", arr(&v[..4])),
+            Kind::MuellerMatrix => format!("{{\"m\":{}}}", mm(v)),
         }
     }
 
-    /// The same values in serde's sequence form.
+    /// The same values in serde's sequence form, at every level.
     fn seq(self, v: &[String]) -> String {
         match self {
             Kind::Complex => format!("[{},{}]", v[0], v[1]),
@@ -85,21 +142,27 @@ impl Kind {
                 v[0], v[1], v[2], v[3], v[4], v[5], v[6], v[7]
             ),
             Kind::Material => format!("[{},{},{}]", v[0], v[1], v[2]),
+            Kind::JonesVector => format!("[{},{}]", cxs(&v[0], &v[1]), cxs(&v[2], &v[3])),
+            Kind::JonesMatrix => format!("[{}]", jm(v, cxs)),
+            Kind::StokesVector => format!("[{}]", arr(&v[..4])),
+            Kind::MuellerMatrix => format!("[{}]", mm(v)),
         }
     }
 
-    /// Its top-level field names and, for each, whether it is a `[f64; 3]`.
-    fn fields(self) -> &'static [(&'static str, bool)] {
+    /// Its top-level fields with the spellings `v`: each name and its value's text, as `doc` writes them.
+    fn members(self, v: &[String]) -> Vec<(&'static str, String)> {
+        let a3 = |j: usize| format!("[{},{},{}]", v[j], v[j + 1], v[j + 2]);
         match self {
-            Kind::Complex => &[("re", false), ("im", false)],
-            Kind::FieldVector => &[("x", false), ("y", false), ("z", false)],
-            Kind::PointCharge => &[
-                ("charge", false),
-                ("mass", false),
-                ("position", true),
-                ("velocity", true),
-            ],
-            Kind::Material => &[("eps_r", false), ("mu_r", false), ("conductivity", false)],
+            Kind::Complex => vec![("re", v[0].clone()), ("im", v[1].clone())],
+            Kind::FieldVector => vec![("x", v[0].clone()), ("y", v[1].clone()), ("z", v[2].clone())],
+            Kind::PointCharge => {
+                vec![("charge", v[0].clone()), ("mass", v[1].clone()), ("position", a3(2)), ("velocity", a3(5))]
+            }
+            Kind::Material => vec![("eps_r", v[0].clone()), ("mu_r", v[1].clone()), ("conductivity", v[2].clone())],
+            Kind::JonesVector => vec![("x", cx(&v[0], &v[1])), ("y", cx(&v[2], &v[3]))],
+            Kind::JonesMatrix => vec![("m", jm(v, cx))],
+            Kind::StokesVector => vec![("s", arr(&v[..4]))],
+            Kind::MuellerMatrix => vec![("m", mm(v))],
         }
     }
 
@@ -117,6 +180,21 @@ impl Kind {
                 velocity: [black_box(v[5]), black_box(v[6]), black_box(v[7])],
             }),
             Kind::Material => serde_json::to_string(&Material::new(black_box(v[0]), black_box(v[1]), black_box(v[2]))),
+            Kind::JonesVector => serde_json::to_string(&JonesVector {
+                x: Complex::new(black_box(v[0]), black_box(v[1])),
+                y: Complex::new(black_box(v[2]), black_box(v[3])),
+            }),
+            Kind::JonesMatrix => {
+                let c = |k: usize| Complex::new(black_box(v[2 * k]), black_box(v[2 * k + 1]));
+                serde_json::to_string(&JonesMatrix { m: [[c(0), c(1)], [c(2), c(3)]] })
+            }
+            Kind::StokesVector => serde_json::to_string(&StokesVector {
+                s: [black_box(v[0]), black_box(v[1]), black_box(v[2]), black_box(v[3])],
+            }),
+            Kind::MuellerMatrix => {
+                let row = |r: usize| [0, 1, 2, 3].map(|c| black_box(v[4 * r + c]));
+                serde_json::to_string(&MuellerMatrix { m: [row(0), row(1), row(2), row(3)] })
+            }
         }
         .expect("serde_json writes every value")
     }
@@ -135,6 +213,13 @@ impl Kind {
             }),
             Kind::Material => {
                 serde_json::from_str::<Material>(doc).map(|m| vec![m.eps_r, m.mu_r, m.conductivity])
+            }
+            Kind::JonesVector => serde_json::from_str::<JonesVector>(doc).map(|j| vec![j.x.re, j.x.im, j.y.re, j.y.im]),
+            Kind::JonesMatrix => serde_json::from_str::<JonesMatrix>(doc)
+                .map(|j| j.m.iter().flatten().flat_map(|c| [c.re, c.im]).collect()),
+            Kind::StokesVector => serde_json::from_str::<StokesVector>(doc).map(|s| s.s.to_vec()),
+            Kind::MuellerMatrix => {
+                serde_json::from_str::<MuellerMatrix>(doc).map(|m| m.m.iter().flatten().copied().collect())
             }
         }
         .map_err(|e| e.to_string())
@@ -500,31 +585,22 @@ fn reader_row(m: &mut Module, kind: Kind, doc: &str) {
     }
 }
 
-/// The plain spellings of eight seeded values for a document's other fields.
-fn fillers(rng: &mut Rng) -> Vec<String> {
-    (0..8).map(|_| js(rng.signed_log_uniform(-20.0, 20.0))).collect()
+/// The plain spellings of a set of seeded values (`Kind::draws`) for a document's other fields.
+fn fillers(kind: Kind, rng: &mut Rng) -> Vec<String> {
+    (0..kind.draws()).map(|_| js(rng.signed_log_uniform(-20.0, 20.0))).collect()
 }
 
 /// The shapes: field order, whitespace, unknown keys, missing and repeated fields, wrong types, the sequence form,
 /// prefixes, trailing data, nesting.
 fn shapes(kind: Kind, rng: &mut Rng) -> Vec<String> {
-    let v = fillers(rng);
+    let v = fillers(kind, rng);
     let base = kind.doc(&v);
     let inner = &base[1..base.len() - 1];
-    let fields = kind.fields();
+    let fields = kind.members(&v);
     let mut docs = vec![base.clone(), kind.seq(&v)];
 
     // Field values as written in `base`, by name, for reordering and repeating.
-    let mut members: Vec<String> = Vec::new();
-    for (k, (name, arr)) in fields.iter().enumerate() {
-        let val = if *arr {
-            let j = 2 + 3 * (k - 2);
-            format!("[{},{},{}]", v[j], v[j + 1], v[j + 2])
-        } else {
-            v[k].clone()
-        };
-        members.push(format!("\"{name}\":{val}"));
-    }
+    let members: Vec<String> = fields.iter().map(|(name, val)| format!("\"{name}\":{val}")).collect();
     let mut rev = members.clone();
     rev.reverse();
     docs.push(format!("{{{}}}", rev.join(",")));
@@ -653,6 +729,161 @@ fn shapes(kind: Kind, rng: &mut Rng) -> Vec<String> {
     docs
 }
 
+/// Wrong values for an inner struct or array: every JSON kind, and arrays of every length to six.
+const INNER_BAD: [&str; 14] = [
+    "null", "true", "1", "\"1\"", "{}", "[]", "[1]", "[1,2]", "[1,2,3]", "[1,2,3,4]", "[1,2,3,4,5]", "[1,2,3,4,5,6]",
+    "[null,1]", "{\"0\":1,\"1\":2}",
+];
+
+/// An inner Complex holding (a, b) in every form serde reads or refuses: by position, reordered, a field missing,
+/// repeated, unknown, escaped or of the wrong type, a key or string with a lone surrogate, and the INNER_BAD values.
+fn complex_forms(a: &str, b: &str) -> Vec<String> {
+    let mut out = vec![
+        cxs(a, b),
+        format!("{{\"im\":{b},\"re\":{a}}}"),
+        format!("{{\"re\":{a}}}"),
+        format!("{{\"im\":{b}}}"),
+        format!("[{a}]"),
+        format!("[{a},{b},{a}]"),
+        format!("[[{a},{b}]]"),
+        format!("{{\"re\":{a},\"im\":{b},\"re\":{a}}}"),
+        format!("{{\"re\":{a},\"im\":{b},\"w\":1}}"),
+        format!("{{\"w\":[1,{{\"x\":2}}],\"re\":{a},\"im\":{b}}}"),
+        format!("{{\"re\":{a},\"im\":{b},\"w\":1,\"w\":2}}"),
+        format!("{{\"\\u0072\\u0065\":{a},\"im\":{b}}}"),
+        format!("{{\"\\ud800\":1,\"re\":{a},\"im\":{b}}}"),
+        format!("{{\"re\":{a},\"im\":{b},\"w\":\"\\udc00\"}}"),
+        format!("{{\"re\":\"{a}\",\"im\":{b}}}"),
+        format!("{{\"re\":{a},\"im\":null}}"),
+        format!("{{\"re\":{a},\"im\":[{b}]}}"),
+        format!("{{\"Re\":{a},\"im\":{b}}}"),
+    ];
+    out.extend(INNER_BAD.iter().map(|x| (*x).to_string()));
+    out
+}
+
+/// An inner `[f64; n]` holding v in every form serde reads or refuses: short, long, nested, an element of the wrong
+/// type, an object, spaced, and the INNER_BAD values.
+fn array_forms(v: &[String]) -> Vec<String> {
+    let n = v.len();
+    let head = v[..n - 1].join(",");
+    let keyed: Vec<String> = v.iter().enumerate().map(|(k, x)| format!("\"{k}\":{x}")).collect();
+    let mut out = vec![
+        arr(&v[..n - 1]),
+        format!("[{},{}]", v.join(","), v[0]),
+        format!("[{}]", arr(v)),
+        format!("[{head},null]"),
+        format!("[{head},\"{}\"]", v[n - 1]),
+        format!("[{head},[{}]]", v[n - 1]),
+        format!("{{{}}}", keyed.join(",")),
+        format!("[ {} ]", v.join(" , ")),
+    ];
+    out.extend(INNER_BAD.iter().map(|x| (*x).to_string()));
+    out
+}
+
+/// The nested forms of a polarization document with the spellings v (none for the flat types): each inner Complex,
+/// row and array in each of its forms and places, and the documents' mixed forms.
+fn nested(kind: Kind, v: &[String]) -> Vec<String> {
+    let mut docs = Vec::new();
+    match kind {
+        Kind::JonesVector => {
+            let (x, y) = (cx(&v[0], &v[1]), cx(&v[2], &v[3]));
+            docs.push(format!("{{\"x\":{},\"y\":{y}}}", cxs(&v[0], &v[1])));
+            docs.push(format!("[{x},{y}]"));
+            docs.push(format!("[{x},{}]", cxs(&v[2], &v[3])));
+            docs.push(format!("{{\"y\":{y},\"x\":{x}}}"));
+            for f in complex_forms(&v[0], &v[1]) {
+                docs.push(format!("{{\"x\":{f},\"y\":{y}}}"));
+                docs.push(format!("[{f},{y}]"));
+            }
+            for f in complex_forms(&v[2], &v[3]) {
+                docs.push(format!("{{\"x\":{x},\"y\":{f}}}"));
+            }
+            docs.push(format!("{{\"x\":{x},\"y\":{y},\"x\":{x}}}"));
+            docs.push(format!("{{\"x\":{x},\"y\":{y},\"z\":{x}}}"));
+            docs.push(format!("[{x},{y},{x}]"));
+        }
+        Kind::JonesMatrix => {
+            let c: Vec<String> = (0..4).map(|k| cx(&v[2 * k], &v[2 * k + 1])).collect();
+            let (r0, r1) = (format!("[{},{}]", c[0], c[1]), format!("[{},{}]", c[2], c[3]));
+            docs.push(format!("{{\"m\":{}}}", jm(v, cxs)));
+            docs.push(format!("[{}]", jm(v, cx)));
+            docs.push(format!("{{\"m\":[{r0},[{},{}]]}}", cxs(&v[4], &v[5]), c[3]));
+            for f in complex_forms(&v[0], &v[1]) {
+                docs.push(format!("{{\"m\":[[{f},{}],{r1}]}}", c[1]));
+            }
+            for f in complex_forms(&v[6], &v[7]) {
+                docs.push(format!("{{\"m\":[{r0},[{},{f}]]}}", c[2]));
+            }
+            for f in INNER_BAD {
+                docs.push(format!("{{\"m\":[{f},{r1}]}}"));
+                docs.push(format!("{{\"m\":[{r0},{f}]}}"));
+                docs.push(format!("{{\"m\":{f}}}"));
+            }
+            for bad in [
+                format!("[{r0}]"),
+                format!("[{r0},{r1},{r0}]"),
+                format!("[[{}],{r1}]", c[0]),
+                format!("[[{},{},{}],{r1}]", c[0], c[1], c[0]),
+                format!("[{r0},[{}]]", c[2]),
+                format!("[{},{},{},{}]", c[0], c[1], c[2], c[3]),
+                format!("[[{r0},{r1}]]"),
+                format!("{{\"0\":{r0},\"1\":{r1}}}"),
+                format!("[{r0},{{\"0\":{},\"1\":{}}}]", c[2], c[3]),
+                format!("[[{},null],{r1}]", c[0]),
+            ] {
+                docs.push(format!("{{\"m\":{bad}}}"));
+            }
+            docs.push(format!("{{\"m\":[{r0},{r1}],\"m\":[{r0},{r1}]}}"));
+            docs.push(format!("{{\"M\":[{r0},{r1}]}}"));
+            docs.push(format!("[[{r0},{r1}],1]"));
+        }
+        Kind::StokesVector => {
+            let s4 = arr(&v[..4]);
+            for f in array_forms(&v[..4]) {
+                docs.push(format!("{{\"s\":{f}}}"));
+                docs.push(format!("[{f}]"));
+            }
+            docs.push(format!("{{\"s\":{s4},\"s\":{s4}}}"));
+            docs.push(format!("{{\"S\":{s4}}}"));
+            docs.push(format!("[{s4},1]"));
+            docs.push(s4);
+        }
+        Kind::MuellerMatrix => {
+            let rows: Vec<String> = (0..4).map(|r| arr(&v[4 * r..4 * r + 4])).collect();
+            for at in [0, 3] {
+                for f in array_forms(&v[4 * at..4 * at + 4]) {
+                    let mut rs = rows.clone();
+                    rs[at] = f;
+                    docs.push(format!("{{\"m\":{}}}", arr(&rs)));
+                }
+            }
+            let keyed: Vec<String> = rows.iter().enumerate().map(|(k, r)| format!("\"{k}\":{r}")).collect();
+            for bad in [
+                arr(&rows[..3]),
+                format!("[{},{}]", rows.join(","), rows[0]),
+                arr(&v[..16]),
+                format!("[{}]", mm(v)),
+                format!("{{{}}}", keyed.join(",")),
+                format!("[{},null]", rows[..3].join(",")),
+            ] {
+                docs.push(format!("{{\"m\":{bad}}}"));
+                docs.push(format!("[{bad}]"));
+            }
+            for f in INNER_BAD {
+                docs.push(format!("{{\"m\":{f}}}"));
+            }
+            docs.push(format!("{{\"m\":{},\"m\":{}}}", mm(v), mm(v)));
+            docs.push(format!("{{\"M\":{}}}", mm(v)));
+            docs.push(format!("[{},1]", mm(v)));
+            docs.push(mm(v));
+        }
+        Kind::Complex | Kind::FieldVector | Kind::PointCharge | Kind::Material => {}
+    }
+    docs
+}
+
 /// The rows, each (function, inputs) once: a correction in `json.cr.tsv` keys on them.
 struct Rows {
     m: Module,
@@ -686,10 +917,10 @@ pub fn emit() -> Module {
         let w = kind.width();
         let mut sets: Vec<Vec<f64>> = Vec::new();
         for j in 0..n {
-            sets.push((0..8).map(|k| xs[(j + k * 37) % n]).collect());
+            sets.push((0..kind.draws()).map(|k| xs[(j + k * 37) % n]).collect());
         }
         for _ in 0..300 {
-            sets.push((0..8).map(|_| f64::from_bits(rng.bits())).collect());
+            sets.push((0..kind.draws()).map(|_| f64::from_bits(rng.bits())).collect());
         }
         for v in &sets {
             m.writer(kind, v);
@@ -714,7 +945,7 @@ pub fn emit() -> Module {
         }
         // Every spelling in each field position.
         let spell = spellings();
-        let base = fillers(&mut rng);
+        let base = fillers(kind, &mut rng);
         for pos in 0..w {
             for sp in &spell {
                 let mut v = base.clone();
@@ -729,6 +960,9 @@ pub fn emit() -> Module {
             m.reader(kind, &kind.doc(&v));
         }
         for doc in shapes(kind, &mut rng) {
+            m.reader(kind, &doc);
+        }
+        for doc in nested(kind, &base) {
             m.reader(kind, &doc);
         }
     }

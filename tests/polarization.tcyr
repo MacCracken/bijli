@@ -1,13 +1,13 @@
 # polarization.tcyr — src/polarization.cyr (M3 part 1a-1): Jones vectors and matrices, Stokes vectors and Mueller
-# matrices.
+# matrices, and (M3 part 1a-2) their JSON (src/json.cyr).
 #
 # Every group named test_* is rust-old/src/polarization.rs's test of that name, ported assertion for assertion (the
 # ledger matches them by name). The circular states, polarizers and S₃ follow IEEE handedness in e^{+jωt} (ADR 0002
 # row 5, src/complex.cyr's header): where a Rust test reads a Born & Wolf state, the port's test reads the same
-# physical light under its IEEE name, and says so. `test_mie_result_serde` is scattering's and the JSON's (parts 1b
-# and 1a-2). The cyrius_* groups pin each IEEE name by the rotation sense of its real field, the waveplates'
-# convention, the Jones and Mueller forms' agreement, the errors and the layouts. tests/golden/polarization.tsv pins
-# every function over its grid against Rust besides.
+# physical light under its IEEE name, and says so. `test_mie_result_serde` is scattering's (part 1b). The cyrius_*
+# groups pin each IEEE name by the rotation sense of its real field, the waveplates' convention, the Jones and Mueller
+# forms' agreement, the errors, the layouts and the JSON's exact text and reasons. tests/golden/polarization.tsv and
+# json.tsv pin every function over its grid against Rust besides.
 
 include "tests/lib.cyr"
 
@@ -45,6 +45,22 @@ fn ok_near(t, v, want: f64, tol: f64): i64 {
 
 # An address as a *f64.
 fn f64p(p): *f64 { return p; }
+
+# 1 when the builder sb holds exactly the C string want.
+fn built_is(sb, want): i64 {
+    var s = str_builder_build(sb);
+    if (str_len(s) != strlen(want)) { return 0; }
+    return memeq(str_data(s), want, str_len(s));
+}
+
+# 1 when the builder sb holds exactly the C string a followed by b (a literal can't continue across lines).
+fn built_is2(sb, a, b): i64 {
+    var s = str_builder_build(sb);
+    var la = strlen(a);
+    if (str_len(s) != la + strlen(b)) { return 0; }
+    if (memeq(str_data(s), a, la) != 1) { return 0; }
+    return memeq(str_data(s) + la, b, strlen(b));
+}
 
 # The rotation sense of a Jones vector's real field E(t) = Re{J·e^{+jωt}} at z = 0, between ωt = 0 and ωt = 0.1:
 # 1 when it turns counterclockwise about +z (from x̂ toward ŷ: right-hand circular, IEEE, for a wave along +z), −1
@@ -635,6 +651,142 @@ fn cyrius_tests(): i64 {
     return 0;
 }
 
+# The four structs' JSON (M3 part 1a-2): serde's text, round trips, both of serde's forms at every level, the reasons.
+fn cyrius_json(): i64 {
+    test_group("cyrius_polarization_json");
+    var rc: BjJonesVector = BjJonesVector_right_circular();
+    var sb1 = str_builder_new();
+    var t1, v1 = BjJonesVector_to_json(&rc, sb1);
+    assert(is_ok(t1) == 1 && built_is2(sb1, "{\"x\":{\"re\":0.7071067811865476,\"im\":0.0},",
+        "\"y\":{\"re\":0.0,\"im\":-0.7071067811865476}}") == 1, "a Jones vector: x and y as Complex objects");
+    var hp: BjJonesMatrix = BjJonesMatrix_horizontal_polarizer();
+    var sb2 = str_builder_new();
+    var t2, v2 = BjJonesMatrix_to_json(&hp, sb2);
+    assert(is_ok(t2) == 1 && built_is2(sb2, "{\"m\":[[{\"re\":1.0,\"im\":0.0},{\"re\":0.0,\"im\":0.0}],",
+        "[{\"re\":0.0,\"im\":0.0},{\"re\":0.0,\"im\":0.0}]]}") == 1,
+      "a Jones matrix: m as two rows of two Complex, m00 first");
+    var sh: BjStokesVector = BjStokesVector_horizontal(2.0);
+    var sb3 = str_builder_new();
+    var t3, v3 = BjStokesVector_to_json(&sh, sb3);
+    assert(is_ok(t3) == 1 && built_is(sb3, "{\"s\":[2.0,2.0,0.0,0.0]}") == 1, "a Stokes vector: s as an array");
+    var id: BjMuellerMatrix = BjMuellerMatrix_identity();
+    var sb4 = str_builder_new();
+    var t4, v4 = BjMuellerMatrix_to_json(&id, sb4);
+    assert(is_ok(t4) == 1
+      && built_is(sb4, "{\"m\":[[1.0,0.0,0.0,0.0],[0.0,1.0,0.0,0.0],[0.0,0.0,1.0,0.0],[0.0,0.0,0.0,1.0]]}") == 1,
+      "a Mueller matrix: m row by row");
+
+    # Round trips: a retarder of each form, and the longest numbers bayan writes in every slot.
+    var q: BjJonesMatrix = BjJonesMatrix_quarter_wave_plate(0.3);
+    var sb5 = str_builder_new();
+    var t5, v5 = BjJonesMatrix_to_json(&q, sb5);
+    var s5 = str_builder_build(sb5);
+    var qb: BjJonesMatrix;
+    var t6, v6 = BjJonesMatrix_from_json(str_data(s5), str_len(s5), &qb);
+    assert(is_ok(t6) == 1 && memeq(&qb, &q, 64) == 1, "a QWP's Jones matrix comes back bit for bit");
+    var wp: BjMuellerMatrix = BjMuellerMatrix_waveplate(0.3, 1.1);
+    var sb6 = str_builder_new();
+    var t7, v7 = BjMuellerMatrix_to_json(&wp, sb6);
+    var s6 = str_builder_build(sb6);
+    var wb: BjMuellerMatrix;
+    var t8, v8 = BjMuellerMatrix_from_json(str_data(s6), str_len(s6), &wb);
+    assert(is_ok(t8) == 1 && memeq(&wb, &wp, 128) == 1, "a waveplate's Mueller matrix too");
+    var longest: i64[16];
+    for (var k = 0; k < 2; k = k + 1) {
+        longest[k * 8] = 0xFFEFFFFFFFFFFFFF;
+        longest[k * 8 + 1] = 0x8000000000000001;
+        longest[k * 8 + 2] = 0xC4EB1DAC0B9F2FEB;
+        longest[k * 8 + 3] = 0x800FFFFFFFFFFFFF;
+        longest[k * 8 + 4] = 0x3EB4B6231ABFD271;
+        longest[k * 8 + 5] = 0xBEB4B6231ABFD271;
+        longest[k * 8 + 6] = 0x444B1AE4D6E2EF4F;
+        longest[k * 8 + 7] = 0xC3E0000000000001;
+    }
+    var lm: BjMuellerMatrix;
+    memcpy(&lm, &longest, 128);
+    var sb7 = str_builder_new();
+    var t9, v9 = BjMuellerMatrix_to_json(&lm, sb7);
+    var s7 = str_builder_build(sb7);
+    var lb: BjMuellerMatrix;
+    var t10, v10 = BjMuellerMatrix_from_json(str_data(s7), str_len(s7), &lb);
+    assert(is_ok(t9) == 1 && is_ok(t10) == 1 && memeq(&lb, &lm, 128) == 1,
+      "sixteen of the longest numbers fit the Mueller writer's buffer and come back");
+    var lj: BjJonesMatrix;
+    memcpy(&lj, &longest, 64);
+    var sb8 = str_builder_new();
+    var t11, v11 = BjJonesMatrix_to_json(&lj, sb8);
+    var s8 = str_builder_build(sb8);
+    var ljb: BjJonesMatrix;
+    var t12, v12 = BjJonesMatrix_from_json(str_data(s8), str_len(s8), &ljb);
+    assert(is_ok(t11) == 1 && is_ok(t12) == 1 && memeq(&ljb, &lj, 64) == 1, "eight in the Jones matrix's");
+    var lv: BjJonesVector;
+    memcpy(&lv, &longest, 32);
+    var sb9 = str_builder_new();
+    var t13, v13 = BjJonesVector_to_json(&lv, sb9);
+    var s9 = str_builder_build(sb9);
+    var lvb: BjJonesVector;
+    var t14, v14 = BjJonesVector_from_json(str_data(s9), str_len(s9), &lvb);
+    assert(is_ok(t13) == 1 && is_ok(t14) == 1 && memeq(&lvb, &lv, 32) == 1, "four in the Jones vector's");
+    var ls: BjStokesVector;
+    memcpy(&ls, &longest, 32);
+    var sb10 = str_builder_new();
+    var t15, v15 = BjStokesVector_to_json(&ls, sb10);
+    var s10 = str_builder_build(sb10);
+    var lsb: BjStokesVector;
+    var t16, v16 = BjStokesVector_from_json(str_data(s10), str_len(s10), &lsb);
+    assert(is_ok(t15) == 1 && is_ok(t16) == 1 && memeq(&lsb, &ls, 32) == 1, "and four in the Stokes vector's");
+
+    # Reading: serde's two forms at every level, and any numbers as written.
+    var jv: BjJonesVector;
+    var d1 = "{\"y\":[0,1],\"x\":{\"im\":-0,\"re\":1}}";
+    var t17, v17 = BjJonesVector_from_json(d1, strlen(d1), &jv);
+    var jp: *f64 = f64p(&jv);
+    assert(is_ok(t17) == 1 && jp[0] == 1.0 && _bj_bits(jp[1]) == 0x8000000000000000 && jp[2] == 0.0 && jp[3] == 1.0,
+      "fields in any order, an inner Complex as an object or by position");
+    var jm: BjJonesMatrix;
+    var d2 = "[[[[1,0],[0,0]],[[0,0],[0,-1]]]]";
+    var t18, v18 = BjJonesMatrix_from_json(d2, strlen(d2), &jm);
+    var m00: f64 = jm.m00.re;
+    var m11: f64 = jm.m11.im;
+    assert(is_ok(t18) == 1 && m00 == 1.0 && m11 == -1.0, "a Jones matrix by position at every level");
+    var su: BjStokesVector;
+    var d3 = "{\"s\":[-1,2e300,3,4],\"note\":\"not physical\"}";
+    var t19, v19 = BjStokesVector_from_json(d3, strlen(d3), &su);
+    var s0: f64 = su.s.0;
+    assert(is_ok(t19) == 1 && s0 == -1.0, "a Stokes vector read as written, as serde reads Rust's public field");
+
+    # The reasons, and out untouched.
+    var keep: BjMuellerMatrix = BjMuellerMatrix_identity();
+    var d4 = "{\"m\":[[1,0,0,0],[0,1,0,0],[0,0,1],[0,0,0,1]]}";
+    var t20, v20 = BjMuellerMatrix_from_json(d4, strlen(d4), &keep);
+    var k15: f64 = keep.m.15;
+    var w20 = "deserialization failed: invalid length 3, expected an array of length 4";
+    assert(err_is(t20, v20, BJ_ERR_DESERIALIZE, w20) == 1 && k15 == 1.0, "a short Mueller row refused, out untouched");
+    var d5 = "{\"s\":{\"0\":1,\"1\":0,\"2\":0,\"3\":0}}";
+    var t21, v21 = BjStokesVector_from_json(d5, strlen(d5), &su);
+    var w21 = "deserialization failed: invalid type: map, expected an array of length 4";
+    assert(err_is(t21, v21, BJ_ERR_DESERIALIZE, w21) == 1, "s must be an array");
+    var d6 = "{\"x\":{\"re\":1},\"y\":[0,0]}";
+    var t22, v22 = BjJonesVector_from_json(d6, strlen(d6), &jv);
+    assert(err_is(t22, v22, BJ_ERR_DESERIALIZE, "deserialization failed: missing field `im`") == 1,
+      "an inner Complex's missing field");
+    var d7 = "{\"m\":[[1,2],[3,4]]}";
+    var t23, v23 = BjJonesMatrix_from_json(d7, strlen(d7), &jm);
+    var w23 = "deserialization failed: invalid type: integer, expected struct Complex";
+    assert(err_is(t23, v23, BJ_ERR_DESERIALIZE, w23) == 1, "a Jones matrix's elements are Complex");
+    var d8 = "{\"m\":[[[1,2],[3,4]],[[5,6],[7,8]]],\"m\":[]}";
+    var t24, v24 = BjJonesMatrix_from_json(d8, strlen(d8), &jm);
+    assert(is_err_result(t24) == 1 && v24 == BJ_ERR_DESERIALIZE, "a repeated field");
+    var d9 = "{\"M\":[[1,0,0,0],[0,1,0,0],[0,0,1,0],[0,0,0,1]]}";
+    var t25, v25 = BjMuellerMatrix_from_json(d9, strlen(d9), &keep);
+    assert(err_is(t25, v25, BJ_ERR_DESERIALIZE, "deserialization failed: missing field `m`") == 1,
+      "field names are case-sensitive");
+    if (v1 == 7 || v2 == 7 || v3 == 7 || v4 == 7 || v5 == 7 || v6 == 7 || v7 == 7 || v8 == 7) { println("."); }
+    if (v9 == 7 || v10 == 7 || v11 == 7 || v12 == 7 || v13 == 7 || v14 == 7 || v15 == 7 || v16 == 7) { println("."); }
+    if (v17 == 7 || v18 == 7 || v19 == 7) { println("."); }
+    return 0;
+}
+
 # Runs polarization.rs's tests, then the Cyrius-only checks.
 fn main(): i64 {
     alloc_init();
@@ -642,6 +794,7 @@ fn main(): i64 {
     rust_tests_b();
     rust_tests_c();
     cyrius_tests();
+    cyrius_json();
     return assert_summary();
 }
 

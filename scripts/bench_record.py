@@ -57,6 +57,8 @@ EXTRA = {
     "json/field_vector_to_json": "a FieldVector's JSON (src/json.cyr); rust-old benches no serde",
     "json/field_vector_from_json": "a FieldVector read from serde_json's document (src/json.cyr)",
     "json/point_charge_from_json": "a PointCharge read from serde_json's document (src/json.cyr)",
+    "json/mueller_matrix_to_json": "a Mueller matrix's JSON, the largest document (src/json.cyr, M3 part 1a-2)",
+    "json/mueller_matrix_from_json": "a Mueller matrix read back from its document (src/json.cyr)",
 }
 
 

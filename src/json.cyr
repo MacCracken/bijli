@@ -1,19 +1,23 @@
 # json.cyr — JSON for the serializable types: BjComplex (Rust hisab 1.4.0's `Complex`), BjFieldVector,
-# BjPointCharge and (M2 part 1a) BjMaterial, as serde_json 1.0.154 writes and reads them (port plan D5, M1 part 4;
-# ADR 0002 rows 10–12).
+# BjPointCharge, (M2 part 1a) BjMaterial and (M3 part 1a-2) polarization's BjJonesVector, BjJonesMatrix,
+# BjStokesVector and BjMuellerMatrix, as serde_json 1.0.154 writes and reads them (port plan D5, M1 part 4; ADR 0002
+# rows 10–12).
 #
-# Writers append serde's document to a `str_builder`: the fields in Rust declaration order, no spaces, a `[f64; 3]`
-# as an array, every f64 through bayan's printer (`bayan_f64_to_json`, the printer `#derive(Serialize)` uses): the
-# shortest round-trip digits, `null` for NaN and ±∞ as serde_json writes them. The notation is bayan's, not ryu's
-# (`10000000000000000.0` where serde_json writes `1e16`); each parses to the same bits, which is what the golden rows
-# compare (D5). The document is built on the stack and appended in one grow, so a refused allocation leaves the
-# builder as it was and returns BJ_ERR_ALLOCATION (the builder's own grow would exit the process). Hand-written, not
-# derived: on cyrius 6.7.18 a `#derive(Serialize)` in a second `private` file fails to compile (the derive's shared
-# helper is private to the first one), and the derive would export its scanner decoders as bijli API (probe p16).
+# Writers append serde's document to a `str_builder`: the fields in Rust declaration order, no spaces, a Rust array
+# (`[f64; 3]`, a Jones matrix's `m: [[Complex; 2]; 2]`, a Mueller matrix's `m: [[f64; 4]; 4]`) as nested arrays row
+# by row, an inner Complex as its own object, every f64 through bayan's printer (`bayan_f64_to_json`, the printer
+# `#derive(Serialize)` uses): the shortest round-trip digits, `null` for NaN and ±∞ as serde_json writes them. The
+# notation is bayan's, not ryu's (`10000000000000000.0` where serde_json writes `1e16`); each parses to the same
+# bits, which is what the golden rows compare (D5). The document is built on the stack and appended in one grow, so
+# a refused allocation leaves the builder as it was and returns BJ_ERR_ALLOCATION (the builder's own grow would exit
+# the process). Hand-written, not derived: on cyrius 6.7.18 a `#derive(Serialize)` in a second `private` file fails
+# to compile (the derive's shared helper is private to the first one), and the derive would export its scanner
+# decoders as bijli API (probe p16).
 #
 # Readers parse the text with bayan's value tree and apply serde's derive semantics:
 # - a struct reads from an object, by field name, or from an array, by position (serde's sequence form), which must
-#   hold exactly its fields; a `[f64; 3]` reads from an array of exactly three numbers;
+#   hold exactly its fields, at every level (a Jones vector's x is a Complex in either form); a Rust `[T; n]` reads
+#   from an array of exactly n T;
 # - a field missing, a value of the wrong JSON type, or an array of the wrong length is BJ_ERR_DESERIALIZE;
 # - unknown fields are ignored, whatever their value (it must still be valid JSON);
 # - an f64 takes any JSON number, correctly rounded (ADR 0002 row 11: serde_json's default parse is best-effort, and
@@ -65,6 +69,27 @@ fn _bj_jw_triple(buf, n, a, b, c): i64 {
     m = _bj_jw_f64(buf, m + 1, b);
     store8(buf + m, 44);
     m = _bj_jw_f64(buf, m + 1, c);
+    store8(buf + m, 93);
+    return m + 1;
+}
+
+# Appends `{"re":<re>,"im":<im>}` for the two f64 at p; the new length.
+fn _bj_jw_cx(buf, n, p): i64 {
+    var m = _bj_jw_cstr(buf, n, "{\"re\":");
+    m = _bj_jw_f64(buf, m, load64(p));
+    m = _bj_jw_cstr(buf, m, ",\"im\":");
+    m = _bj_jw_f64(buf, m, load64(p + 8));
+    store8(buf + m, 125);
+    return m + 1;
+}
+
+# Appends `[a,b,c,d]` for the four f64 at p; the new length.
+fn _bj_jw_quad(buf, n, p): i64 {
+    var m = n;
+    for (var k = 0; k < 4; k = k + 1) {
+        if (k == 0) { store8(buf + m, 91); } else { store8(buf + m, 44); }
+        m = _bj_jw_f64(buf, m + 1, load64(p + k * 8));
+    }
     store8(buf + m, 93);
     return m + 1;
 }
@@ -145,6 +170,70 @@ public fn BjMaterial_to_json(m: *BjMaterial, sb): Result {
     n = _bj_jw_cstr(&buf, n, ",\"conductivity\":");
     n = _bj_jw_f64(&buf, n, m.conductivity);
     n = _bj_jw_cstr(&buf, n, "}");
+    return _bj_jw_put(sb, &buf, n);
+}
+
+# Appends `{"x":{"re":..,"im":..},"y":{"re":..,"im":..}}` to the builder sb: Ok(0), or Err(BJ_ERR_ALLOCATION) with sb
+# as it was. Mirrors `serde_json::to_string(&j)` for `polarization::JonesVector`.
+#must_use
+public fn BjJonesVector_to_json(j: *BjJonesVector, sb): Result {
+    var w: f64[4];
+    memcpy(&w, j, 32);
+    var buf[160];
+    var n = _bj_jw_cstr(&buf, 0, "{\"x\":");
+    n = _bj_jw_cx(&buf, n, &w);
+    n = _bj_jw_cstr(&buf, n, ",\"y\":");
+    n = _bj_jw_cx(&buf, n, &w + 16);
+    n = _bj_jw_cstr(&buf, n, "}");
+    return _bj_jw_put(sb, &buf, n);
+}
+
+# Appends `{"m":[[<m00>,<m01>],[<m10>,<m11>]]}`, each element a Complex object, to the builder sb: Ok(0), or
+# Err(BJ_ERR_ALLOCATION) with sb as it was. Rust's `m[r][c]` is BjJonesMatrix's field m<r><c>. Mirrors
+# `serde_json::to_string(&j)` for `polarization::JonesMatrix`.
+#must_use
+public fn BjJonesMatrix_to_json(j: *BjJonesMatrix, sb): Result {
+    var w: f64[8];
+    memcpy(&w, j, 64);
+    var buf[320];
+    var n = _bj_jw_cstr(&buf, 0, "{\"m\":[[");
+    n = _bj_jw_cx(&buf, n, &w);
+    n = _bj_jw_cstr(&buf, n, ",");
+    n = _bj_jw_cx(&buf, n, &w + 16);
+    n = _bj_jw_cstr(&buf, n, "],[");
+    n = _bj_jw_cx(&buf, n, &w + 32);
+    n = _bj_jw_cstr(&buf, n, ",");
+    n = _bj_jw_cx(&buf, n, &w + 48);
+    n = _bj_jw_cstr(&buf, n, "]]}");
+    return _bj_jw_put(sb, &buf, n);
+}
+
+# Appends `{"s":[<S₀>,<S₁>,<S₂>,<S₃>]}` to the builder sb: Ok(0), or Err(BJ_ERR_ALLOCATION) with sb as it was.
+# Mirrors `serde_json::to_string(&s)` for `polarization::StokesVector`.
+#must_use
+public fn BjStokesVector_to_json(s: *BjStokesVector, sb): Result {
+    var w: f64[4];
+    memcpy(&w, s, 32);
+    var buf[128];
+    var n = _bj_jw_cstr(&buf, 0, "{\"s\":");
+    n = _bj_jw_quad(&buf, n, &w);
+    n = _bj_jw_cstr(&buf, n, "}");
+    return _bj_jw_put(sb, &buf, n);
+}
+
+# Appends `{"m":[[..],[..],[..],[..]]}`, the matrix row by row, to the builder sb: Ok(0), or Err(BJ_ERR_ALLOCATION)
+# with sb as it was. Mirrors `serde_json::to_string(&m)` for `polarization::MuellerMatrix`.
+#must_use
+public fn BjMuellerMatrix_to_json(m: *BjMuellerMatrix, sb): Result {
+    var w: f64[16];
+    memcpy(&w, m, 128);
+    var buf[512];
+    var n = _bj_jw_cstr(&buf, 0, "{\"m\":[");
+    for (var r = 0; r < 4; r = r + 1) {
+        if (r > 0) { n = _bj_jw_cstr(&buf, n, ","); }
+        n = _bj_jw_quad(&buf, n, &w + r * 32);
+    }
+    n = _bj_jw_cstr(&buf, n, "]}");
     return _bj_jw_put(sb, &buf, n);
 }
 
@@ -500,13 +589,21 @@ fn _bj_jr_f64(v, out): i64 {
     return 0;
 }
 
-# Node v as a `[f64; 3]` into out[0..3]: an array of exactly three numbers. 0, or BJ_ERR_DESERIALIZE recorded.
-fn _bj_jr_f64x3(v, out): i64 {
-    if (bayan_json_v_tag(v) != JTAG_ARR) { return _bj_jr_type(v, "an array of length 3"); }
-    var n = bayan_json_v_arr_len(v);
-    if (n != 3) { return _bj_jr_length(n, "an array of length 3"); }
-    for (var k = 0; k < 3; k = k + 1) {
-        var c = _bj_jr_f64(bayan_json_v_arr_get(v, k), out + k * 8);
+# Node v as a Rust `[T; n]`: 0 when it is an array of exactly n elements, or BJ_ERR_DESERIALIZE recorded (`what` is
+# serde's "an array of length n").
+fn _bj_jr_array(v, n, what): i64 {
+    if (bayan_json_v_tag(v) != JTAG_ARR) { return _bj_jr_type(v, what); }
+    var k = bayan_json_v_arr_len(v);
+    if (k != n) { return _bj_jr_length(k, what); }
+    return 0;
+}
+
+# Node v as a `[f64; n]` into out[0..n]: an array of exactly n numbers. 0, or BJ_ERR_DESERIALIZE recorded.
+fn _bj_jr_f64s(v, n, what, out): i64 {
+    var c = _bj_jr_array(v, n, what);
+    if (c != 0) { return c; }
+    for (var k = 0; k < n; k = k + 1) {
+        c = _bj_jr_f64(bayan_json_v_arr_get(v, k), out + k * 8);
         if (c != 0) { return c; }
     }
     return 0;
@@ -607,11 +704,67 @@ fn _bj_jr_point_charge(v, w): i64 {
     if (c != 0) { return c; }
     f = _bj_jr_field(v, form, 2, "position");
     if (f == 0) { return BJ_ERR_DESERIALIZE; }
-    c = _bj_jr_f64x3(f, w + 16);
+    c = _bj_jr_f64s(f, 3, "an array of length 3", w + 16);
     if (c != 0) { return c; }
     f = _bj_jr_field(v, form, 3, "velocity");
     if (f == 0) { return BJ_ERR_DESERIALIZE; }
-    return _bj_jr_f64x3(f, w + 40);
+    return _bj_jr_f64s(f, 3, "an array of length 3", w + 40);
+}
+
+# The one field, named `name`, of struct node v (`what` names the struct): its node, or 0 with the reason recorded.
+fn _bj_jr_only(v, name, what): i64 {
+    var form = _bj_jr_form(v, 1, what);
+    if (form == 0) { return 0; }
+    return _bj_jr_field(v, form, 0, name);
+}
+
+fn _bj_jr_jones_vector(v, w): i64 {
+    var form = _bj_jr_form(v, 2, "struct JonesVector");
+    if (form == 0) { return BJ_ERR_DESERIALIZE; }
+    var f = _bj_jr_field(v, form, 0, "x");
+    if (f == 0) { return BJ_ERR_DESERIALIZE; }
+    var c = _bj_jr_complex(f, w);
+    if (c != 0) { return c; }
+    f = _bj_jr_field(v, form, 1, "y");
+    if (f == 0) { return BJ_ERR_DESERIALIZE; }
+    return _bj_jr_complex(f, w + 16);
+}
+
+# `m: [[Complex; 2]; 2]` into w row by row, as BjJonesMatrix's m00, m01, m10, m11.
+fn _bj_jr_jones_matrix(v, w): i64 {
+    var m = _bj_jr_only(v, "m", "struct JonesMatrix");
+    if (m == 0) { return BJ_ERR_DESERIALIZE; }
+    var c = _bj_jr_array(m, 2, "an array of length 2");
+    if (c != 0) { return c; }
+    for (var r = 0; r < 2; r = r + 1) {
+        var row = bayan_json_v_arr_get(m, r);
+        c = _bj_jr_array(row, 2, "an array of length 2");
+        if (c != 0) { return c; }
+        for (var k = 0; k < 2; k = k + 1) {
+            c = _bj_jr_complex(bayan_json_v_arr_get(row, k), w + (r * 2 + k) * 16);
+            if (c != 0) { return c; }
+        }
+    }
+    return 0;
+}
+
+fn _bj_jr_stokes(v, w): i64 {
+    var s = _bj_jr_only(v, "s", "struct StokesVector");
+    if (s == 0) { return BJ_ERR_DESERIALIZE; }
+    return _bj_jr_f64s(s, 4, "an array of length 4", w);
+}
+
+# `m: [[f64; 4]; 4]` into w row by row, as BjMuellerMatrix's row-major m.
+fn _bj_jr_mueller(v, w): i64 {
+    var m = _bj_jr_only(v, "m", "struct MuellerMatrix");
+    if (m == 0) { return BJ_ERR_DESERIALIZE; }
+    var c = _bj_jr_array(m, 4, "an array of length 4");
+    if (c != 0) { return c; }
+    for (var r = 0; r < 4; r = r + 1) {
+        c = _bj_jr_f64s(bayan_json_v_arr_get(m, r), 4, "an array of length 4", w + r * 32);
+        if (c != 0) { return c; }
+    }
+    return 0;
 }
 
 # ── readers ─────────────────────────────────────────────────────────────────────────
@@ -667,5 +820,52 @@ public fn BjMaterial_from_json(buf, len, out: *BjMaterial): Result {
     out.eps_r = w[0];
     out.mu_r = w[1];
     out.conductivity = w[2];
+    return Ok(0);
+}
+
+# Reads a `JonesVector` document from [buf, buf + len) into *out: Ok(0), or the error recorded with out untouched, as
+# BjComplex_from_json. Each of x and y is a Complex in either of serde's forms. Mirrors
+# `serde_json::from_str::<JonesVector>`.
+#must_use
+public fn BjJonesVector_from_json(buf, len, out: *BjJonesVector): Result {
+    var w: f64[4];
+    var code = _bj_jr_read(buf, len, &_bj_jr_jones_vector, &w);
+    if (code != 0) { return Err(code); }
+    memcpy(out, &w, 32);
+    return Ok(0);
+}
+
+# Reads a `JonesMatrix` document from [buf, buf + len) into *out: Ok(0), or the error recorded with out untouched, as
+# BjComplex_from_json. `m` is two rows of two Complex; Rust's `m[r][c]` is out's m<r><c>. Mirrors
+# `serde_json::from_str::<JonesMatrix>`.
+#must_use
+public fn BjJonesMatrix_from_json(buf, len, out: *BjJonesMatrix): Result {
+    var w: f64[8];
+    var code = _bj_jr_read(buf, len, &_bj_jr_jones_matrix, &w);
+    if (code != 0) { return Err(code); }
+    memcpy(out, &w, 64);
+    return Ok(0);
+}
+
+# Reads a `StokesVector` document from [buf, buf + len) into *out: Ok(0), or the error recorded with out untouched,
+# as BjComplex_from_json. Any four numbers are read as written, as serde's derive reads Rust's public field. Mirrors
+# `serde_json::from_str::<StokesVector>`.
+#must_use
+public fn BjStokesVector_from_json(buf, len, out: *BjStokesVector): Result {
+    var w: f64[4];
+    var code = _bj_jr_read(buf, len, &_bj_jr_stokes, &w);
+    if (code != 0) { return Err(code); }
+    memcpy(out, &w, 32);
+    return Ok(0);
+}
+
+# Reads a `MuellerMatrix` document from [buf, buf + len) into *out: Ok(0), or the error recorded with out untouched,
+# as BjComplex_from_json. `m` is four rows of four numbers. Mirrors `serde_json::from_str::<MuellerMatrix>`.
+#must_use
+public fn BjMuellerMatrix_from_json(buf, len, out: *BjMuellerMatrix): Result {
+    var w: f64[16];
+    var code = _bj_jr_read(buf, len, &_bj_jr_mueller, &w);
+    if (code != 0) { return Err(code); }
+    memcpy(out, &w, 128);
     return Ok(0);
 }

@@ -4108,33 +4108,55 @@ def field_corrections(root: Path):
     return fixes
 
 
-# ── json (M1 part 4): serde_json 1.0.154 on Complex, FieldVector and PointCharge ─────────────────────────────────
+# ── json (M1 part 4): serde_json 1.0.154 on the serializable types ──────────────────────────────────────────────
 # Recomputed from Python's json module and a transcription of serde's derive semantics, every number correctly
 # rounded (Python's float): the writer rows' shape and values, the reader rows' outcome, and their `unchecked` flags
 # (ADR 0002 row 12). Where serde_json's best-effort decimal parse misrounds a number, or judges an overflow on a
 # misrounded value, the correctly rounded reading goes to tests/golden/json.cr.tsv (ADR 0002 row 11).
 
+# Each struct's fields in declaration order, each of a type: "f64", another struct's name, or ("arr", n, type) for
+# Rust's `[type; n]`. M2 part 1a added Material, M3 part 1a-2 polarization's four structs.
 JSON_FIELDS = {
-    "Complex": [("re", False), ("im", False)],
-    "FieldVector": [("x", False), ("y", False), ("z", False)],
-    "PointCharge": [("charge", False), ("mass", False), ("position", True), ("velocity", True)],
-    "Material": [("eps_r", False), ("mu_r", False), ("conductivity", False)],
+    "Complex": [("re", "f64"), ("im", "f64")],
+    "FieldVector": [("x", "f64"), ("y", "f64"), ("z", "f64")],
+    "PointCharge": [("charge", "f64"), ("mass", "f64"), ("position", ("arr", 3, "f64")),
+                    ("velocity", ("arr", 3, "f64"))],
+    "Material": [("eps_r", "f64"), ("mu_r", "f64"), ("conductivity", "f64")],
+    "JonesVector": [("x", "Complex"), ("y", "Complex")],
+    "JonesMatrix": [("m", ("arr", 2, ("arr", 2, "Complex")))],
+    "StokesVector": [("s", ("arr", 4, "f64"))],
+    "MuellerMatrix": [("m", ("arr", 4, ("arr", 4, "f64")))],
 }
+
+
+def json_writer_parts(ty, xs: list, at: int, parts: list) -> int:
+    """serde_json's text of a value of type ty from the f64 xs[at..], as parts (text runs and f64), appended to
+    parts; the index past the values used."""
+    if ty == "f64":
+        parts.append(xs[at])
+        return at + 1
+    if isinstance(ty, tuple):
+        parts.append("[")
+        for k in range(ty[1]):
+            if k:
+                parts.append(",")
+            at = json_writer_parts(ty[2], xs, at, parts)
+        parts.append("]")
+        return at
+    parts.append("{")
+    for k, (name, fty) in enumerate(JSON_FIELDS[ty]):
+        parts.append(("," if k else "") + f'"{name}":')
+        at = json_writer_parts(fty, xs, at, parts)
+    parts.append("}")
+    return at
 
 
 def json_writer_tokens(kind: str, xs: list) -> list:
     """The parsed-token form of serde_json's document for the fields xs: `s:` runs and `f:` numbers, with `null`
     for NaN and ±∞ inside a run."""
-    parts, at = ["{"], 0
-    for k, (name, arr) in enumerate(JSON_FIELDS[kind]):
-        parts.append(("," if k else "") + f'"{name}":')
-        if arr:
-            parts += ["[", xs[at], ",", xs[at + 1], ",", xs[at + 2], "]"]
-            at += 3
-        else:
-            parts.append(xs[at])
-            at += 1
-    parts.append("}")
+    parts = []
+    if json_writer_parts(kind, xs, 0, parts) != len(xs):
+        raise ValueError(f"{kind}: {len(xs)} values")
     toks, run = [], ""
     for p in parts:
         if isinstance(p, str):
@@ -4197,10 +4219,24 @@ def json_f64(v) -> float:
     return x
 
 
+def json_value(ty, v) -> list:
+    """A value of type ty: an f64 (json_f64), a `[T; n]` an array of exactly n T, or a struct (json_read)."""
+    if ty == "f64":
+        return [json_f64(v)]
+    if isinstance(ty, tuple):
+        _arr, n, ety = ty
+        if isinstance(v, JsonObj) or not isinstance(v, list):
+            raise JsonRefused(f"invalid type, expected an array of length {n}")
+        if len(v) != n:
+            raise JsonRefused(f"invalid length, expected an array of length {n}")
+        return [x for e in v for x in json_value(ety, e)]
+    return json_read(ty, v)
+
+
 def json_read(kind: str, v) -> list:
     """serde's derive on a parsed document: an object by field name (unknown keys skipped unread, a repeated field
     refused, a key with a lone surrogate refused: serde_json parses every key it meets) or an array of exactly the
-    fields; a `[f64; 3]` an array of exactly three numbers."""
+    fields, each field read by its type (json_value)."""
     fields = JSON_FIELDS[kind]
     names = [n for n, _ in fields]
     if isinstance(v, JsonObj):
@@ -4222,17 +4258,7 @@ def json_read(kind: str, v) -> list:
         vals = v
     else:
         raise JsonRefused(f"invalid type, expected struct {kind}")
-    out = []
-    for (_name, arr), val in zip(fields, vals):
-        if not arr:
-            out.append(json_f64(val))
-            continue
-        if isinstance(val, JsonObj) or not isinstance(val, list):
-            raise JsonRefused("invalid type, expected an array of length 3")
-        if len(val) != 3:
-            raise JsonRefused("invalid length, expected an array of length 3")
-        out += [json_f64(e) for e in val]
-    return out
+    return [x for (_name, ty), val in zip(fields, vals) for x in json_value(ty, val)]
 
 
 def json_unchecked(tree) -> int:

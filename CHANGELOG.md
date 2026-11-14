@@ -232,6 +232,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
   (1, −j)/√2: Rust's `left_circular` state, under Rust's `right_circular` numbers. `tests/golden/polarization.tsv`
   (23,135 rows) matches bit for bit on all three targets through that mapping. 68 of polarization.rs's 69 tests are
   ported, and the 4 polarization bench twins added (50 of 80). The four structs' JSON is part 1a-2's.
+- **Cyrius port, M3 part 1a-2 — polarization's JSON** (`src/json.cyr`): `BjJonesVector`, `BjJonesMatrix`,
+  `BjStokesVector` and `BjMuellerMatrix` write and read serde_json's documents (D5), with every nested struct and
+  array in either of serde's forms. `tests/golden/json.tsv` grows by 22,199 rows, and `json.cr.tsv` by 12,157 rows
+  that serde_json's best-effort parse misreads; all of them match on all three targets. A document holds the stored
+  numbers, so one bijli 1.x wrote keeps its handedness names, and a 1.x retarder of retardance δ reads as −δ (ADR 0002
+  row 5, amended). polarization.rs is ported: its one pending test is scattering's.
 
 ### Fixed
 
