@@ -517,6 +517,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
 - **beam** (ADR 0002 row 32, new, M3 part 1c-1): `laguerre_gaussian_intensity` at l = i32::MIN raised 2r²/w² to
   −2³¹, since Rust's `l.unsigned_abs() as i32` wraps |l| = 2³¹, and so returned the reciprocal of the true power (∞
   where it underflows to 0). It now raises it to 2³¹; every other l keeps Rust's chain.
+- **polarization** (ADR 0002 row 33, M3 part 2a-1, the user's answer of 2026-11-14): the waveplates cancelled. The
+  Jones form's c² − s² lost every digit near a fast axis at 45° (a quarter-wave plate at π/4 had 2.2e-16 for
+  cos(π/2)'s 6.1e-17); it now takes cos 2θ and sin 2θ correctly rounded, past DBL_MAX/2 too. The Mueller form's
+  1 − cos δ was 0 for δ = 1e-8; it now takes 2·sin²(δ/2) where cos δ > 1/2, and keeps Rust's difference elsewhere.
+  Cost: a Mueller waveplate with cos δ > 1/2 is built in 697 ns for 571 (one more sine); a Jones waveplate in 452 ns
+  for 535 (one sin_cos for two calls).
 
 ### Performance
 

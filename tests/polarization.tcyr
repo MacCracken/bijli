@@ -6,8 +6,9 @@
 # row 5, src/complex.cyr's header): where a Rust test reads a Born & Wolf state, the port's test reads the same
 # physical light under its IEEE name, and says so. `test_mie_result_serde` reads scattering's BjMieResult. The cyrius_*
 # groups pin each IEEE name by the rotation sense of its real field, the waveplates' convention, the Jones and Mueller
-# forms' agreement, the errors, the layouts and the JSON's exact text and reasons. tests/golden/polarization.tsv and
-# json.tsv pin every function over its grid against Rust besides.
+# forms' agreement, the errors, the layouts and the JSON's exact text and reasons, and (M3 part 2a-1) the waveplates'
+# cancellation-free forms (ADR 0002 row 33). tests/golden/polarization.tsv and json.tsv pin every function over its
+# grid against Rust besides.
 
 include "tests/lib.cyr"
 
@@ -651,6 +652,39 @@ fn cyrius_tests(): i64 {
     return 0;
 }
 
+# ADR 0002 row 33 (M3 part 2a-1, the user's answer of 2026-11-14): the waveplates' cancellation-free forms, their
+# exact bits from MPFR.
+fn cyrius_row33(): i64 {
+    test_group("cyrius_waveplate_row33 (ADR 0002 row 33)");
+    # A QWP's fast axis at 45°: m00.im = sin(π/4)·cos(π/2) for the doubles π/4 and π/2. Rust's c² − s² gave
+    # 2.2e-16 for cos(π/2)'s 6.1e-17, so its m00.im was 3.6 times too large.
+    var q: BjJonesMatrix = BjJonesMatrix_quarter_wave_plate(_bj_from_bits(0x3FE921FB54442D18));
+    var qi: f64 = q.m00.im;
+    var qd: f64 = q.m11.im;
+    assert(_bj_bits(qi) == 0x3C88F5A0BE038ED5 && qi == -qd, "a QWP at 45°: sin(π/4)·cos 2θ, correctly rounded");
+    # A fast axis at DBL_MAX: 2θ passes DBL_MAX, and cos 2θ, sin 2θ come from the reduction past it (Rust's c² − s²
+    # was finite there; cos(2θ) of the overflowed double would be NaN).
+    var top: f64 = _bj_from_bits(0x7FEFFFFFFFFFFFFF);
+    var w: BjJonesMatrix = BjJonesMatrix_waveplate(top, PI_2);
+    var hs: f64 = _bj_sin(PI_2 / 2.0);
+    var wa: f64 = w.m00.im;
+    var wb: f64 = w.m01.im;
+    assert(wa == hs * 0.9999507580093402 && wb == hs * -0.009923787409350446,
+      "θ = DBL_MAX: cos 2θ = 0.99995…, sin 2θ = −0.00992… (MPFR's)");
+    # A small retardance: 1 − cos δ cancels to 0 in Rust for δ = 1e-8; 2·sin²(δ/2) keeps it.
+    var m: BjMuellerMatrix = BjMuellerMatrix_waveplate(0.3, 0.00000001);
+    var o: *f64 = f64p(&m);
+    var o6: f64 = o[6];
+    var o9: f64 = o[9];
+    assert(_bj_bits(o6) == 0x3C7ADD3C0E5DC720 && o9 == o6, "δ = 1e-8: CS(1 − cos δ) = 2.33e-17, not 0");
+    # Where cos δ ≤ 1/2 Rust's difference is kept, bit for bit.
+    var mq: BjMuellerMatrix = BjMuellerMatrix_quarter_wave_plate(0.3);
+    var oq: *f64 = f64p(&mq);
+    var oq6: f64 = oq[6];
+    assert(_bj_bits(oq6) == 0x3FDDD343A21A55C4, "a QWP: CS(1 − cos δ) as Rust's");
+    return 0;
+}
+
 # polarization.rs's `test_mie_result_serde` (M3 part 1b-2): a MieResult round trips through its JSON.
 fn rust_test_mie_serde(): i64 {
     test_group("test_mie_result_serde");
@@ -814,6 +848,7 @@ fn main(): i64 {
     rust_tests_c();
     rust_test_mie_serde();
     cyrius_tests();
+    cyrius_row33();
     cyrius_json();
     return assert_summary();
 }

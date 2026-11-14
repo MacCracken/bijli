@@ -13,6 +13,10 @@
 //! huge) and retardances; Stokes vectors from the specials, seeded values, the named states and the scales where
 //! S₁² + S₂² + S₃² under- and overflows; Mueller matrices from the named elements and seeded entries. Each value appears
 //! once per function: a row's (function, inputs) is its key in the mapping files.
+//!
+//! M3 part 2a-1 (ADR 0002 row 33) appends the waveplates' edge grid after every earlier row: fast axes within two ulps
+//! of the π/4 family (where c² − s² cancels), tiny ones, and at DBL_MAX/2 and 2^1023 (where 2θ overflows); retardances
+//! across cos δ = 1/2 (where 1 − cos δ starts to cancel) and down to 1e-300.
 
 use crate::grids::{Rng, pow2, specials};
 use crate::m_field::res_f;
@@ -410,6 +414,36 @@ pub fn emit() -> Module {
             m.row("MuellerMatrix::compose", Class::A, &[mm(x), mm(y)].concat(), &mm(black_box(x).compose(&y)));
         }
     }
-    let _ = pow2(0);
+    waveplate_edges(m);
     rows.m
+}
+
+/// M3 part 2a-1 (ADR 0002 row 33, the user's answer of 2026-11-14): the waveplates at their cancellation edges.
+fn waveplate_edges(m: &mut Rows) {
+    let mut ths = vec![0.0, -0.0, 5e-324, 1e-200, 1e-8, f64::MAX / 2.0, pow2(1023), 1.5 * pow2(1023)];
+    ths.extend([-f64::MAX, f64::MAX]);
+    for base in [FRAC_PI_4, 3.0 * FRAC_PI_4, -FRAC_PI_4, 5.0 * FRAC_PI_4, PI / 8.0] {
+        let b = base.to_bits();
+        for k in -2_i64..=2 {
+            ths.push(f64::from_bits(b.checked_add_signed(k).expect("a neighbour of a finite angle")));
+        }
+    }
+    let third = PI / 3.0;
+    let mut ds = vec![1e-300, 1e-160, 1e-20, 1e-10, 1e-5, 1e-3, 0.1, 1.0, -1e-8, -0.4, 6.0, 4.0 * PI];
+    ds.extend([FRAC_PI_2, PI, -PI]);
+    ds.extend([third.next_down(), third, third.next_up(), 2.0 * PI - 1e-8]);
+    for &t in &ths {
+        let jhw = JonesMatrix::half_wave_plate(black_box(t));
+        let jqw = JonesMatrix::quarter_wave_plate(black_box(t));
+        let mhw = MuellerMatrix::half_wave_plate(black_box(t));
+        let mqw = MuellerMatrix::quarter_wave_plate(black_box(t));
+        m.row("JonesMatrix::half_wave_plate", Class::C, &[f(t)], &jm(jhw));
+        m.row("JonesMatrix::quarter_wave_plate", Class::C, &[f(t)], &jm(jqw));
+        m.row("MuellerMatrix::half_wave_plate", Class::C, &[f(t)], &mm(mhw));
+        m.row("MuellerMatrix::quarter_wave_plate", Class::C, &[f(t)], &mm(mqw));
+        for &d in &ds {
+            m.row("JonesMatrix::waveplate", Class::C, &[f(t), f(d)], &jm(JonesMatrix::waveplate(black_box(t), d)));
+            m.row("MuellerMatrix::waveplate", Class::C, &[f(t), f(d)], &mm(MuellerMatrix::waveplate(black_box(t), d)));
+        }
+    }
 }

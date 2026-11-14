@@ -21405,7 +21405,10 @@ fn _bj_rel_fields_edge(charge: f64, obs: *f64, st: *f64, e_out: *BjFieldVector, 
 # The parity harness maps each oracle row to the same physical state (tests/parity.tcyr's _par_polarization).
 #
 # Complex arithmetic is BjComplex's (src/complex.cyr): hisab's formulas, each rounded once at a range edge (ADR 0002
-# row 14). Every other formula is Rust's in Rust's order. The JSON of the four structs is part 1a-2's.
+# row 14). The waveplates are cancellation-free (ADR 0002 row 33, M3 part 2a-1): the Jones form takes cos 2θ and
+# sin 2θ correctly rounded where Rust had c² − s² and 2cs (c² − s² loses every digit near a fast axis at 45°), and the
+# Mueller form takes 1 − cos δ as 2·sin²(δ/2) where cos δ > 1/2 (where 1 − cos δ cancels). Every other formula is
+# Rust's in Rust's order. The JSON of the four structs is part 1a-2's.
 
 private
 
@@ -21416,6 +21419,28 @@ var _BJ_POL_SAFE_MIN: f64 = 0x03B8F2B061AEA072;     # 1e-290
 # std::f64::consts::FRAC_1_SQRT_2 and FRAC_PI_2, by their bits.
 var _BJ_POL_SQRT1_2: f64 = 0x3FE6A09E667F3BCD;
 var _BJ_POL_PI_2: f64 = 0x3FF921FB54442D18;
+
+# 2^1023: where 2θ passes DBL_MAX, and the divisor that scales such a θ into [1, 2) exactly.
+var _BJ_POL_2P1023: f64 = 0x7FE0000000000000;
+
+# cos 2θ and sin 2θ, each correctly rounded (ADR 0002 row 33): one sin_cos of the exact double 2θ, or, where 2θ passes
+# DBL_MAX (|θ| ≥ 2^1023), the reduction of 2θ = (θ·2^-1023)·2^1024 past DBL_MAX (src/crmath_ux.cyr). NaN for a
+# non-finite θ, as cos θ and sin θ are.
+#must_use
+fn _bj_pol_cos_sin_2t(t: f64): (f64, f64) {
+    var a: f64 = f64_abs(t);
+    if (_bj_is_finite(t) == 1 && a >= _BJ_POL_2P1023) {
+        var ts: f64 = t / _BJ_POL_2P1023;
+        var cb: f64 = _bj_ux_sin_cos(ts, 1024, 0);
+        var sb: f64 = _bj_ux_sin_cos(ts, 1024, 1);
+        return (cb, sb);
+    }
+    var t2: f64 = 2.0 * t;
+    var s, c = _bj_sin_cos(t2);
+    var cv: f64 = c;
+    var sv: f64 = s;
+    return (cv, sv);
+}
 
 # ── Jones vector ─────────────────────────────────────────────────────────────────────────────────────────────────
 
@@ -21701,23 +21726,19 @@ public fn BjJonesMatrix_linear_polarizer(angle: f64): BjJonesMatrix {
 
 # The general waveplate (linear retarder) with fast axis at angle θ and retardance δ: R(−θ)·diag(e^{+jδ/2},
 # e^{−jδ/2})·R(θ), the slow axis lagging the fast by δ in e^{+jωt} (the module comment): [[cos(δ/2) + j sin(δ/2)·
-# (c² − s²), j sin(δ/2)·2cs], [the same, cos(δ/2) − j sin(δ/2)·(c² − s²)]], c = cos θ, s = sin θ. Rust's e^{−iωt}
-# matrix conjugated, each imaginary part the exact negative of Rust's (ADR 0002 row 5). Mirrors
-# `JonesMatrix::waveplate`.
+# cos 2θ, j sin(δ/2)·sin 2θ], [the same, cos(δ/2) − j sin(δ/2)·cos 2θ]]. Rust's e^{−iωt} matrix conjugated (ADR 0002
+# row 5), on cos 2θ and sin 2θ correctly rounded where Rust had c² − s² and 2cs (ADR 0002 row 33: c² − s² loses every
+# digit near a fast axis at 45°). Mirrors `JonesMatrix::waveplate`.
 #must_use
 public fn BjJonesMatrix_waveplate(fast_axis_angle: f64, retardance: f64): BjJonesMatrix {
-    var c: f64 = _bj_cos(fast_axis_angle);
-    var s: f64 = _bj_sin(fast_axis_angle);
+    var c2, s2 = _bj_pol_cos_sin_2t(fast_axis_angle);
     var half_d: f64 = retardance / 2.0;
     var cos_d: f64 = _bj_cos(half_d);
     var sin_d: f64 = _bj_sin(half_d);
-    var cc: f64 = c * c;
-    var ss: f64 = s * s;
-    var diff: f64 = cc - ss;
-    var ai: f64 = sin_d * diff;
-    var bi: f64 = sin_d * 2.0 * c * s;
+    var ai: f64 = sin_d * c2;
+    var bi: f64 = sin_d * s2;
     var nsd: f64 = -sin_d;
-    var di: f64 = nsd * diff;
+    var di: f64 = nsd * c2;
     var j: BjJonesMatrix = _bj_pol_jm_real(cos_d, 0.0, 0.0, cos_d);
     j.m00.im = ai;
     j.m01.im = bi;
@@ -22070,7 +22091,8 @@ public fn BjMuellerMatrix_linear_polarizer(angle: f64): BjMuellerMatrix {
 # The general waveplate with fast axis at angle θ and retardance δ: the Mueller form of BjJonesMatrix_waveplate.
 # C = cos 2θ, S = sin 2θ: [[1, 0, 0, 0], [0, C² + S²cos δ, CS(1 − cos δ), S sin δ], [0, CS(1 − cos δ), S² + C²cos δ,
 # −C sin δ], [0, −S sin δ, C sin δ, cos δ]]. The entries coupling S₃ are the exact negatives of Rust's (the module
-# comment, ADR 0002 row 5). Mirrors `MuellerMatrix::waveplate`.
+# comment, ADR 0002 row 5). 1 − cos δ is 2·sin²(δ/2) where cos δ > 1/2, where the difference cancels (ADR 0002
+# row 33), and Rust's difference elsewhere, where it is exact or nearly. Mirrors `MuellerMatrix::waveplate`.
 #must_use
 public fn BjMuellerMatrix_waveplate(fast_axis_angle: f64, retardance: f64): BjMuellerMatrix {
     var a2: f64 = 2.0 * fast_axis_angle;
@@ -22084,6 +22106,12 @@ public fn BjMuellerMatrix_waveplate(fast_axis_angle: f64, retardance: f64): BjMu
     var ss: f64 = s2 * s2;
     var cs: f64 = c2 * s2;
     var om: f64 = 1.0 - cd;
+    if (cd > 0.5) {
+        var hd: f64 = retardance / 2.0;
+        var hs: f64 = _bj_sin(hd);
+        var hh: f64 = hs * hs;
+        om = 2.0 * hh;
+    }
     var ssd: f64 = ss * cd;
     var ccd: f64 = cc * cd;
     var nc2: f64 = -c2;

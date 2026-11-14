@@ -3338,3 +3338,69 @@ E and B = n̂ × E/c.
   measured, 0 pending, 68,537 accepted (ADR 01: 29,423; ADR 0002: 39,114)** over 562,429 rows; **all 380 digests
   equal**, the 374 before unchanged. `beam.tcyr` and `json.tcyr` pass on all three. M3 Part 1 is done: polarization.rs,
   scattering.rs and beam.rs are ported.
+
+## 61. M3 part 2a-1: the waveplates cancellation-free (2026-11-14)
+
+- **The user's answers of 2026-11-14** open M3's range-edge Part (plan §0.1):
+  - the waveplates are cancellation-free (this bite);
+  - the resonators decide stability on the exact (1 − L/R₁)(1 − L/R₂) and compute w₀ without cancellation (2a-2);
+  - `transform_beam` decides on the exact determinant (2a-3);
+  - Mie keeps its documented limit below x ≈ 10⁻⁵⁰.
+
+  The Part runs as 2a–2d (plan §0.1). The HG field's phase keeps Rust's chain: rounding kz costs about ulp(kz),
+  which the input z's own rounding already costs.
+- **ADR 0002 row 33, new**:
+  - `BjJonesMatrix_waveplate`, and so the quarter- and half-wave plates, takes cos 2θ and sin 2θ, each correctly
+    rounded (`_bj_pol_cos_sin_2t`): one `_bj_sin_cos` of the exact double 2θ. Where |θ| ≥ 2^1023, 2θ passes
+    DBL_MAX, and they come from `_bj_ux_sin_cos` of 2θ = (θ/2^1023)·2^1024, since Rust's c² − s² was finite there.
+    Rust's c² − s² from cos θ and sin θ lost every digit near a fast axis at 45°: a quarter-wave plate at the double
+    π/4 had 2.2e-16 for cos(π/2)'s 6.1e-17, its m₀₀.im 1.57e-16 for 4.33e-17. sin 2θ replaces 2cs, which was
+    accurate, so the two come from one call.
+  - `BjMuellerMatrix_waveplate` takes 1 − cos δ as 2·sin²(δ/2) where cos δ > 1/2, and keeps Rust's 1 − cos δ
+    elsewhere. 2·sin²(δ/2) is within about 1.5 ulps everywhere. Rust's difference is within about an ulp where
+    cos δ ≤ 1/2 (the quarter- and half-wave plates sit there and keep Rust's bits), and loses 2^-53/(δ²/2)
+    relative above. At δ = 1e-8, Rust's CS(1 − cos δ) is 0 and the port's 2.33e-17.
+  - Kept: the Mueller form's C² + S²cos δ and S² + C²cos δ (an absolute error of about 2^-53, their zeros on
+    curves of (θ, δ)), and its angle 2θ past DBL_MAX, NaN in Rust and the port alike (2d-1's).
+- **The oracle**: `m_polarization.rs` appends a 1,380-row edge grid (`waveplate_edges`) after every earlier row, so
+  the 23,135 earlier rows are an exact prefix of the new file. The grid takes the Jones and Mueller waveplates over
+  35 fast axes × 19 retardances, and the quarter- and half-wave plates at each axis:
+  - fast axes within two ulps of the π/4 family (π/4, 3π/4, −π/4, 5π/4) and of π/8, tiny ones, and DBL_MAX/2 and
+    2^1023 on either side of the overflow;
+  - retardances across cos δ = 1/2 (π/3 and its neighbours) and down to 1e-300.
+- **validate.py**:
+  - `pol_eval` takes the port's forms under `r33`, cos 2θ and sin 2θ through `pol_cos_sin_2t` (MPFR with an
+    unbounded exponent past DBL_MAX/2);
+  - `polarization_adr_rows` attributes row 33 where the forms alone explain the difference;
+  - `polarization_corrections` skips a row an ADR 0002 mapping holds, as wave's does, so no row sits in both files
+    (the harness's rule).
+
+  The model agreed with every new row on its first run, and a one-bit flip of each new row's first output was caught
+  on all 1,380.
+- **glibc 2.44 misrounds cos(π/2 + 2 ulps)**: the new `polarization.cr.tsv` holds 18 rows, the Mueller retarders at
+  θ = ±(π/4 + 1 ulp), where 2θ = 1.5707963267948968. 20 more such rows are row 33's mappings. The port gives the
+  correctly rounded readings, gated at 0 ulp.
+- **Mappings**: `polarization.adr.tsv` holds 2,340 rows: row 33's 2,279 (Jones waveplate 1,393, half-wave plate 70,
+  quarter-wave plate 67, Mueller waveplate 749) and row 14's 61.
+- **Tests**: `cyrius_waveplate_row33` in `tests/polarization.tcyr` (4 assertions, 190 in the file) pins MPFR's exact
+  bits:
+  - a quarter-wave plate at 45°;
+  - a waveplate at θ = DBL_MAX;
+  - the Mueller entry at δ = 1e-8;
+  - a Mueller quarter-wave plate keeping Rust's bits.
+
+  `cyrius_waveplate_forms_agree` (Jones against Mueller on nine (θ, δ) pairs) passes unchanged.
+- **A trap** (cyrius 6.7.18): a hex f64 global whose exponent field is 0 (a subnormal, `0x0008…`) warns "an integer
+  stored into an f64 slot". The port divides by 2^1023 instead of multiplying by 2^-1023.
+- **Benchmarks**: Rust's benches build their waveplates outside the loop, and so do the port's twins. A one-off
+  bench of the construction, interleaved against 1c-2's tree over three rounds at load 0.9–1.5:
+  - `BjJonesMatrix_waveplate(0.3, 1.1)`: 535 → 452 ns (−16 %), one sin_cos of 2θ for Rust's cos θ and sin θ;
+  - `BjMuellerMatrix_waveplate(0.3, 0.4)`, where cos δ > 1/2: 571 → 697 ns (+22 %), the one sine more;
+  - `BjMuellerMatrix_waveplate(0.3, 1.1)`: 625 → 627 ns, unchanged.
+
+  Every recorded row is within noise. The nanosecond rows move by one tick either way, and
+  `json/mueller_matrix_from_json` by +4.2 % (8.77 → 9.14 µs), with no change to its code: a code-placement shift of
+  the kind §60 measured.
+- **Result, every target** (x86_64 ELF, x86_64 PE, aarch64): **16 modules, 0 failing; 492,975 ok, 0 failed, 0
+  measured, 0 pending, 70,834 accepted (ADR 01: 29,441; ADR 0002: 41,393)** over 563,809 rows; **all 380 digests
+  equal**. The 374 outside the six waveplate functions are unchanged. `polarization.tcyr` passes on all three.

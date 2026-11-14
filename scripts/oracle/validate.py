@@ -3607,7 +3607,9 @@ def relativity_adr_rows(root: Path, path: Path) -> list:
 # Jones vectors and matrices (hisab's Complex), Stokes vectors and Mueller matrices, transcribed in Rust's order. One
 # transcription serves Rust and the port: they share every formula but the retarders, whose port forms are Rust's
 # conjugated (Jones) and D·M·D (Mueller), each changed entry the exact negative of Rust's (ADR 0002 row 5, e^{+jωt});
-# the port's complex products and |z|² take row 14's unbounded chain at a range edge (src/complex.cyr).
+# the port's complex products and |z|² take row 14's unbounded chain at a range edge (src/complex.cyr). M3 part 2a-1
+# (ADR 0002 row 33): the port's waveplates are cancellation-free, the Jones form on cos 2θ and sin 2θ, the Mueller
+# form's 1 − cos δ as 2·sin²(δ/2) where cos δ > 1/2.
 POL_SQRT1_2 = bits_to_f("3fe6a09e667f3bcd")       # std::f64::consts::FRAC_1_SQRT_2
 POL_PI_2 = bits_to_f("3ff921fb54442d18")          # FRAC_PI_2
 POL_SAFE_MIN = 1e-290
@@ -3616,11 +3618,22 @@ POL_P_MPFR = dict(MPFR_P, hypot=lambda x, y: mpfr_ref.cr2("hypot", x, y))
 POL_CONJ = ("JonesMatrix::waveplate", "JonesMatrix::half_wave_plate", "JonesMatrix::quarter_wave_plate")
 POL_DMD = ("MuellerMatrix::waveplate", "MuellerMatrix::half_wave_plate", "MuellerMatrix::quarter_wave_plate")
 POL_DMD_IDX = (7, 11, 13, 14)          # D·M·D on a retarder: its four S₃-coupling entries
+POL_WAVEPLATES = POL_CONJ + POL_DMD
 
 
-def pol_eval(fn, v, P, wp=False, cx14=False):
+def pol_cos_sin_2t(t, P):
+    """cos 2θ and sin 2θ, correctly rounded (ADR 0002 row 33): P's on the exact double 2θ, or MPFR's with an unbounded
+    exponent where 2θ passes DBL_MAX (|θ| ≥ 2^1023)."""
+    if math.isfinite(t) and abs(t) >= 2.0 ** 1023:
+        a = 2 * Fraction(t)
+        return float(mpfr_ref.wide("cos", a)), float(mpfr_ref.wide("sin", a))
+    return P["cos"](2.0 * t), P["sin"](2.0 * t)
+
+
+def pol_eval(fn, v, P, wp=False, cx14=False, r33=True):
     """polarization.rs's outputs for a row on the primitives P; wp=True for the port's retarders (e^{+jωt}), cx14=True
-    for the port's complex products and |z|² (row 14 at a range edge). None for another name."""
+    for the port's complex products and |z|² (row 14 at a range edge), r33=False for the port's retarders without
+    row 33's cancellation-free forms. None for another name."""
     def mul(a, b):
         w = [a[0], a[1], b[0], b[1]]
         if cx14 and cx_governed("Complex::mul", w) == 14:
@@ -3680,6 +3693,9 @@ def pol_eval(fn, v, P, wp=False, cx14=False):
         half = d / 2.0
         cd, sd = P["cos"](half), P["sin"](half)
         diff = c * c - s * s
+        if wp and r33:
+            c2, s2 = pol_cos_sin_2t(t, P)
+            return [(cd, sd * c2), (0.0, sd * s2), (0.0, sd * s2), (cd, (-sd) * c2)]
         if wp:
             return [(cd, sd * diff), (0.0, sd * 2.0 * c * s), (0.0, sd * 2.0 * c * s), (cd, (-sd) * diff)]
         return [(cd, (-sd) * diff), (0.0, (-sd) * 2.0 * c * s), (0.0, (-sd) * 2.0 * c * s), (cd, sd * diff)]
@@ -3695,7 +3711,11 @@ def pol_eval(fn, v, P, wp=False, cx14=False):
         cd, sd = P["cos"](d), P["sin"](d)
         m = diag(1.0, 0.0, 0.0, cd)
         m[5] = c2 * c2 + s2 * s2 * cd
-        m[6] = m[9] = c2 * s2 * (1.0 - cd)
+        om = 1.0 - cd
+        if wp and r33 and cd > 0.5:
+            hs = P["sin"](d / 2.0)
+            om = 2.0 * (hs * hs)
+        m[6] = m[9] = c2 * s2 * om
         m[10] = s2 * s2 + c2 * c2 * cd
         if wp:
             m[7], m[11], m[13], m[14] = s2 * sd, (-c2) * sd, (-s2) * sd, c2 * sd
@@ -3851,10 +3871,10 @@ def pol_eval(fn, v, P, wp=False, cx14=False):
     return None
 
 
-def pol_harness(fn, v, P, cx14=True):
+def pol_harness(fn, v, P, cx14=True, r33=True):
     """The parity harness's reading of a row (tests/parity.tcyr's _par_polarization): the port's function on the row's
     numbers, a retarder's output mapped back to the oracle's convention (conjugated, or D·M·D)."""
-    out = pol_eval(fn, v, P, wp=True, cx14=cx14)
+    out = pol_eval(fn, v, P, wp=True, cx14=cx14, r33=r33)
     if fn in POL_CONJ:
         return [(k, -x if i % 2 == 1 else x) for i, (k, x) in enumerate(out)]
     if fn in POL_DMD:
@@ -3885,13 +3905,16 @@ def validate_polarization(path: Path) -> list:
 
 
 def polarization_corrections(path: Path):
-    """The class-C polarization rows whose outputs change when cos, sin, atan2 and hypot are correctly rounded."""
+    """The class-C polarization rows whose outputs change when cos, sin, atan2 and hypot are correctly rounded, but
+    those an ADR 0002 mapping holds (polarization_adr_rows: a row is in one file or the other, never both)."""
     def fixes(_rows):
         out = []
         for fn, cls, ins, outs, v in pol_lines(path):
             if cls != "C":
                 continue
             want = pol_eval(fn, v, POL_P_MPFR)
+            if not toks_same(pol_harness(fn, v, POL_P_MPFR), want):
+                continue                    # an ADR 0002 mapping's (row 33's since M3 part 2a-1)
             old = wave_toks([parse_tok(x) for x in outs.split(" ")])
             if toks_same(want, old):
                 continue
@@ -3902,8 +3925,9 @@ def polarization_corrections(path: Path):
 
 def polarization_adr_rows(path: Path) -> list:
     """ADR 0002 mappings for polarization.tsv: each row whose harness reading (pol_harness, on the port's correctly
-    rounded primitives) differs from Rust's (the corrected oracle for class C). Row 14 where src/complex.cyr's range
-    edges make the difference; row 5 otherwise (the retarders' mapping, should one fail to be exact)."""
+    rounded primitives) differs from Rust's (the corrected oracle for class C). Row 33 where the waveplates'
+    cancellation-free forms make the difference (M3 part 2a-1), row 14 where src/complex.cyr's range edges do; row 5
+    otherwise (the retarders' mapping, should one fail to be exact)."""
     out = []
     for fn, cls, ins, outs, v in pol_lines(path):
         P = POL_P_MPFR if cls == "C" else POL_P_GLIBC
@@ -3911,7 +3935,12 @@ def polarization_adr_rows(path: Path) -> list:
         port = pol_harness(fn, v, P)
         if toks_same(port, expect):
             continue
-        row = 14 if toks_same(pol_harness(fn, v, P, cx14=False), expect) else 5
+        if fn in POL_WAVEPLATES and toks_same(pol_harness(fn, v, P, r33=False), expect):
+            row = 33
+        elif toks_same(pol_harness(fn, v, P, cx14=False), expect):
+            row = 14
+        else:
+            row = 5
         out.append((fn, ins, wire(port), str(row), f"oracle {outs}; ADR 0002 row {row}"))
     return out
 
