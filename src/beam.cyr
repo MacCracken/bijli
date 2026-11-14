@@ -50,7 +50,9 @@ fn _bj_beam_pos(x: f64): i64 {
 }
 
 # A Gaussian beam of wavelength λ (in the medium) and waist w₀ into *out: Ok(0), or Err(InvalidParameter) with out
-# untouched unless both are positive and finite and z_R = πw₀²/λ is positive and finite. Mirrors `GaussianBeam::new`.
+# untouched unless both are positive and finite and z_R = πw₀²/λ is positive and finite. z_R is rounded once (ADR 0002
+# row 13, M3 part 2b): Rust's three roundings overflowed at λ = 1e10, w₀ = 1e155 for 3e300, and underflowed at
+# λ = 5e-324, w₀ = 1e-162 to 1.0 for 0.63. Mirrors `GaussianBeam::new`.
 #must_use
 public fn BjGaussianBeam_new(wavelength: f64, waist: f64, out: *BjGaussianBeam): Result {
     if (_bj_beam_pos(wavelength) == 0) {
@@ -59,7 +61,13 @@ public fn BjGaussianBeam_new(wavelength: f64, waist: f64, out: *BjGaussianBeam):
     if (_bj_beam_pos(waist) == 0) {
         return Err(_bj_beam_bad("beam waist must be positive and finite, got ", waist, ""));
     }
-    var zr: f64 = _BJ_PI * waist * waist / wavelength;
+    var zn: f64[3];
+    var zd: f64[1];
+    zn[0] = _BJ_PI;
+    zn[1] = waist;
+    zn[2] = waist;
+    zd[0] = wavelength;
+    var zr: f64 = _bj_cr_mono_wide(&zn, 3, &zd, 1);
     if (_bj_beam_pos(zr) == 0) {
         var t = _bj_err_reason(BJ_ERR_INVALID_PARAMETER);
         _bj_tx_cstr(t, "Rayleigh range πw₀²/λ = ");
@@ -130,10 +138,23 @@ impl BjGaussianBeam {
         return a;
     }
 
-    # θ = λ/(πw₀), the far-field half-angle divergence. Mirrors `GaussianBeam::divergence`.
+    # θ = λ/(πw₀), the far-field half-angle divergence, rounded once for finite fields and a nonzero waist (ADR 0002
+    # row 13; Rust's two roundings otherwise). Mirrors `GaussianBeam::divergence`.
     #must_use
     public fn divergence(self): f64 {
-        var d: f64 = self.wavelength / (_BJ_PI * self.waist);
+        var lam: f64 = self.wavelength;
+        var w0: f64 = self.waist;
+        var dl: f64 = (lam - lam) + (w0 - w0);
+        if (dl == 0.0 && w0 != 0.0) {
+            var dn: f64[1];
+            var dd: f64[2];
+            dn[0] = lam;
+            dd[0] = _BJ_PI;
+            dd[1] = w0;
+            var cr: f64 = _bj_cr_mono_wide(&dn, 1, &dd, 2);
+            return cr;
+        }
+        var d: f64 = lam / (_BJ_PI * w0);
         return d;
     }
 
@@ -804,10 +825,10 @@ fn _bj_beam_unstable(gp: f64, tail): i64 {
 
 # The fundamental mode's waist in a stable cavity, w₀ = √[(Lλ/π)·√(g₁g₂(1 − g₁g₂))/|g₁ + g₂ − 2g₁g₂|] (Siegman, ch. 19),
 # computed in the inputs without cancellation (_bj_beam_waist34, ADR 0002 row 34), with the symmetric confocal limit
-# w₀ = √(Lλ/2π) at R₁ = R₂ = L. bj_resonator_stability's errors, then InvalidParameter for an unstable cavity (on the
-# exact product; the reason quotes Rust's rounded g₁g₂) or a λ not positive and finite, DivisionByZero for the planar
-# cavity (two flat mirrors). A near-planar cavity of finite radii has its finite waist, where Rust's g rounded to 1.
-# Mirrors `resonator_beam_waist`.
+# w₀ = √(Lλ/2π) at R₁ = R₂ = L, rounded once (ADR 0002 row 13). bj_resonator_stability's errors, then InvalidParameter
+# for an unstable cavity (on the exact product; the reason quotes Rust's rounded g₁g₂) or a λ not positive and finite,
+# DivisionByZero for the planar cavity (two flat mirrors). A near-planar cavity of finite radii has its finite waist,
+# where Rust's g rounded to 1. Mirrors `resonator_beam_waist`.
 #must_use
 public fn bj_resonator_beam_waist(length: f64, r1: f64, r2: f64, wavelength: f64): Result {
     var st: BjResonatorStability;
@@ -822,8 +843,12 @@ public fn bj_resonator_beam_waist(length: f64, r1: f64, r2: f64, wavelength: f64
         return Err(_bj_beam_dz("planar cavity (g₁ = g₂ = 1) has no confined mode"));
     }
     if (r1 == length && r2 == length) {
-        var two_pi: f64 = 2.0 * _BJ_PI;
-        var c: f64 = f64_sqrt(length * wavelength / two_pi);
+        var cn: f64[2];
+        var cd: f64[1];
+        cn[0] = length;
+        cn[1] = wavelength;
+        cd[0] = 2.0 * _BJ_PI;
+        var c: f64 = _bj_cr_sqrt_mono(&cn, 2, &cd, 1);
         return Ok(c);
     }
     var w0, ok = _bj_beam_waist34(length, r1, r2, wavelength);

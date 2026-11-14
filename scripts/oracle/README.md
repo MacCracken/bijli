@@ -49,7 +49,7 @@ port's harness reads the same files. This README records what is specific to bij
 
 | Module | Milestone | Golden rows | Golden emitter | Generated Cyrius |
 |---|---|---|---|---|
-| `beam` | M3 (part 1c-1; its JSON, part 1c-2, in `json`; 2a-2, 2a-3: the resonators' and determinant's edge grids) | 41,775 | `src/m_beam.rs` | — |
+| `beam` | M3 (part 1c-1; its JSON, part 1c-2, in `json`; 2a-2, 2a-3, 2b: the resonators', determinant's and round-once edge grids) | 42,288 | `src/m_beam.rs` | — |
 | `charge` | M1 (parts 3d, 5d-1 to 5d-3) | 12,769 | `src/m_charge.rs` (field.rs's grids) | — |
 | `circuit` | M2 (parts 1c, 2c-1, 2c-5, 2d-3a, 2d-3b) | 69,273 (+ 1 corrected) | `src/m_circuit.rs` | — |
 | `complex` | M1 (+ 5c-2's edge grid) | 31,677 (+ 8 corrected) | `src/m_complex.rs` | — |
@@ -63,7 +63,7 @@ port's harness reads the same files. This README records what is specific to bij
 | `maxwell` | M1 (part 3d) | 20,349 | `src/m_maxwell.rs` | — |
 | `polarization` | M3 (part 1a-1; 2a-1: the waveplates' edge grid) | 24,515 (+ 18 corrected) | `src/m_polarization.rs` | — |
 | `relativity` | M2 (parts 1d-1, 1d-2: the solver over six trajectories; 2c-1, 2c-4, 2d-1, 2d-3c–2d-3j) | 30,780 | `src/m_relativity.rs` (field.rs's vectors) | — |
-| `scattering` | M3 (parts 1b-1; its JSON in `json`) | 3,907 (+ 6 corrected) | `src/m_scattering.rs` | — |
+| `scattering` | M3 (parts 1b-1; its JSON in `json`; 2b: the round-once edge grid) | 4,112 (+ 6 corrected) | `src/m_scattering.rs` | — |
 | `wave` | M2 (parts 1b, 2c-1, 2c-3, 2d-1, 2d-2a, 2d-2b, 2d-2c) | 79,138 (+ 1 corrected) | `src/m_wave.rs` (field.rs's vectors, material.tsv's materials) | `src/wave_data.cyr`, the dipole constants of ADR 0002 row 22 (`validate.py`'s `render_wave_data`: Cin(2π) by its series, π by Machin's formula checked against MPFR, η₀ from BJ_MU_0 and BJ_EPSILON_0, in rational arithmetic) |
 | (correctly rounded tables) | M1 | — | — | `src/crmath_data.cyr` (`crtables.py`, written and checked by `validate.py`) |
 | (2/π for the angle past DBL_MAX, bijli's) | M1 (part 5d-3) | — | — | `src/crmath_ux_data.cyr` (`crtables.py`'s `render_ux`, from π to 2,800 bits checked against MPFR) |

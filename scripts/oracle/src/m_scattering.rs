@@ -18,6 +18,9 @@
 //! rejection (non-finite, zero, gain, the limits); and seeded spheres. Rayleigh: radii, wavelengths and indices with
 //! the specials and the range edges where m² over- or underflows. Each value appears once per function: a row's
 //! (function, inputs) is its key in the mapping files.
+//!
+//! M3 part 2b (ADR 0002 row 13, amended) appends `cross_section_from_efficiency`'s round-once grid: q·π·r² where q·π or
+//! q·π·r over- or underflows though the value is representable, and seeded efficiencies and radii.
 
 use crate::grids::{Rng, specials};
 use crate::m_field::res_f;
@@ -329,5 +332,21 @@ pub fn emit() -> Module {
             }
         }
     }
+    round_once_edges(r);
     rows.m
+}
+
+/// M3 part 2b (ADR 0002 row 13, amended): q·π·r² at its range edges, and seeded values.
+fn round_once_edges(r: &mut Rows) {
+    let mut rng = Rng::new(0x5ca7_02b0);
+    let mut pairs: Vec<(f64, f64)> =
+        vec![(1e308, 0.1), (-1e308, 0.5), (1e-320, 1e10), (5e-324, 1e160), (1e-200, 1e-100), (1e200, 1e-180)];
+    for _ in 0..200 {
+        pairs.push((rng.uniform(0.01, 5.0), rng.log_uniform(-8.0, -3.0)));
+    }
+    for (q, a) in pairs {
+        r.row("scattering::cross_section_from_efficiency", Class::A, &[f(q), f(a)], || {
+            vec![f(cross_section_from_efficiency(black_box(q), black_box(a)))]
+        });
+    }
 }

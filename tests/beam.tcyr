@@ -3,13 +3,13 @@
 # Every group named test_* is rust-old/src/beam.rs's test of that name, ported assertion for assertion (the ledger
 # matches them by name). bijli's one convention is e^{+jωt} (ADR 0002 row 5): the Hermite–Gaussian field is the
 # conjugate of Rust's e^{−iωt} field, so `test_hermite_gaussian_field_closed_form` reads its imaginary parts with the
-# opposite sign, and says so; every other test reads real values that the convention leaves alone. The cyrius_*
-# groups pin the field's propagation sense, the reasons' exact text, out left alone on an error, and ADR 0002 row 32
-# (the LG power at l = i32::MIN), (M3 part 1c-2) the three structs' JSON: serde's text, round trips, both forms,
-# the bool's two literals, the reasons and the heap, (M3 part 2a-2) ADR 0002 row 34: the resonators' exact
-# stability and their waist without cancellation, and (M3 part 2a-3) ADR 0002 row 35: transform_beam on the exact
-# determinant. tests/golden/beam.tsv pins every function over its grid against
-# Rust besides, and tests/golden/json.tsv the JSON.
+# opposite sign, and says so; every other test reads real values that the convention leaves alone. The cyrius_* groups
+# pin the field's propagation sense, the reasons' exact text, out left alone on an error, and ADR 0002 row 32 (the LG
+# power at l = i32::MIN), (M3 part 1c-2) the three structs' JSON: serde's text, round trips, both forms, the bool's two
+# literals, the reasons and the heap, (M3 part 2a-2) ADR 0002 row 34: the resonators' exact stability and their waist
+# without cancellation, (M3 part 2a-3) ADR 0002 row 35: transform_beam on the exact determinant, and (M3 part 2b) ADR
+# 0002 row 13: z_R, the divergence and the confocal waist rounded once. tests/golden/beam.tsv pins every function over
+# its grid against Rust besides, and tests/golden/json.tsv the JSON.
 
 include "tests/lib.cyr"
 
@@ -677,7 +677,7 @@ fn cyrius_row35(): i64 {
     var t1, v1 = m1.transform_beam(&g, &o);
     var l1: f64 = o.wavelength;
     var w1: f64 = o.waist;
-    assert(is_ok(t1) == 1 && _bj_bits(l1) == 0x3EB1D9D85F385CED && _bj_bits(w1) == 0x3F1A36E2EB1C432C,
+    assert(is_ok(t1) == 1 && _bj_bits(l1) == 0x3EB1D9D85F385CED && _bj_bits(w1) == 0x3F1A36E2EB1C432D,
       "det = 1 + 1e-13: λ′ = 1.0640000000001064e-6, rounded once (Rust: λ)");
     # det exactly 1 from integers (2·2 − 3·1): λ kept bit for bit.
     var m2: BjAbcdMatrix = BjAbcdMatrix_new(2.0, 3.0, 1.0, 2.0);
@@ -704,6 +704,34 @@ fn cyrius_row35(): i64 {
       && reason_is2("invalid parameter: transformed beam has non-physical Rayleigh range", "") == 1 && kw == gw,
       "det = +2^-104: past the determinant, refused at z_R′; out untouched");
     if (v1 == 99 || v2 == 99 || v3 == 99 || v4 == 99) { println("."); }
+    return 0;
+}
+
+# ADR 0002 row 13 (M3 part 2b): z_R = πw₀²/λ, the divergence λ/(πw₀) and the confocal waist √(Lλ/2π) rounded once;
+# bits from validate.py's model (exact rationals).
+fn cyrius_row13(): i64 {
+    test_group("cyrius_beam_row13 (ADR 0002 row 13)");
+    var g: BjGaussianBeam;
+    var t1, v1 = BjGaussianBeam_new(_bj_from_bits(0x4202A05F20000000), _bj_from_bits(0x601DD55745CBB7ED), &g);
+    var z1: f64 = g.rayleigh_range;
+    assert(is_ok(t1) == 1 && _bj_bits(z1) == 0x7E52C3AE4DD16CAF, "λ = 1e10, w₀ = 1e155: z_R ≈ 3e300 (Rust: π·w₀² = ∞)");
+    var t2, v2 = BjGaussianBeam_new(_bj_from_bits(1), _bj_from_bits(0x1E4CCB0536608D61), &g);
+    var z2: f64 = g.rayleigh_range;
+    assert(is_ok(t2) == 1 && _bj_bits(z2) == 0x3FE45902766B625F, "λ = 5e-324, w₀ = 1e-162: z_R = 0.636… (Rust: 1.0)");
+    var t3, v3 = BjGaussianBeam_new(0.000001064, 0.0001, &g);
+    var z3: f64 = g.rayleigh_range;
+    assert(is_ok(t3) == 1 && _bj_bits(z3) == 0x3F9E3C20E08F9C43,
+      "the lab beam: z_R correctly rounded (Rust: an ulp low)");
+    var far: BjGaussianBeam;
+    far.wavelength = _bj_from_bits(0x3DDB7CDFD9D7BDBB);
+    far.waist = _bj_from_bits(0x7FE1CCF385EBC8A0);
+    far.rayleigh_range = 1.0;
+    var dv: f64 = far.divergence();
+    assert(_bj_bits(dv) == 0xFBAB, "λ = 1e-10, w₀ = 1e308: θ = 3.18e-319 (Rust: π·w₀ = ∞, θ = 0)");
+    var big: f64 = _bj_from_bits(0x6974E718D7D7625A);
+    var t4, v4 = bj_resonator_beam_waist(big, big, big, big);
+    assert(is_ok(t4) == 1 && v4 == 0x6960AD8EC65E17B8, "confocal, L = λ = 1e200: w₀ = 3.99e199 (Rust: L·λ = ∞)");
+    if (v1 == 99 || v2 == 99 || v3 == 99) { println("."); }
     return 0;
 }
 
@@ -885,6 +913,7 @@ fn main(): i64 {
     cyrius_tests();
     cyrius_row34();
     cyrius_row35();
+    cyrius_row13();
     cyrius_json();
     return assert_summary();
 }

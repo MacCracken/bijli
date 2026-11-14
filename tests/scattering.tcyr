@@ -4,8 +4,9 @@
 # ledger matches them by name). scattering.rs already used e^{+jωt} with absorbing Im(m) < 0, bijli's one convention
 # (ADR 0002 row 5), so no test changes its numbers. The cyrius_* groups pin what the corpus can't show: the reasons'
 # exact text, out left alone on an error, the coefficient buffers given back, the |m|·x limit accepted, and (M3 part
-# 1b-2) MieResult's JSON: its exact text, round trips, both of serde's forms, vectors of any length, the reasons.
-# tests/golden/scattering.tsv pins every function over its grid against Rust besides.
+# 1b-2) MieResult's JSON: its exact text, round trips, both of serde's forms, vectors of any length, the reasons, and
+# (M3 part 2b) ADR 0002 row 13: cross_section_from_efficiency rounded once. tests/golden/scattering.tsv pins every
+# function over its grid against Rust besides.
 
 include "tests/lib.cyr"
 
@@ -465,6 +466,20 @@ fn read_mie(doc, r: *BjMieResult): i64 {
     return t;
 }
 
+# ADR 0002 row 13 (M3 part 2b): σ = Q·π·r² rounded once; bits from validate.py's model (exact rationals).
+fn cyrius_row13(): i64 {
+    test_group("cyrius_cross_section_row13 (ADR 0002 row 13)");
+    var s1: f64 = bj_cross_section_from_efficiency(_bj_from_bits(0x7FE1CCF385EBC8A0), 0.1);
+    assert(_bj_bits(s1) == 0x7F91E525A6AE8D0B, "Q = 1e308, r = 0.1: σ = 3.14e306 (Rust: Q·π = ∞)");
+    var s2: f64 = bj_cross_section_from_efficiency(_bj_from_bits(0x7E8), 10000000000.0);
+    assert(_bj_bits(s2) == 0x01C0D4BE69994992,
+      "Q = 1e-320, r = 1e10: σ = 3.14158e-300 (Rust: 3.14176e-300, Q·π subnormal)");
+    var inf: f64 = 1.0 / 0.0;
+    var s3: f64 = bj_cross_section_from_efficiency(inf, 0.0);
+    assert(s3 != s3, "∞·0 keeps Rust's NaN");
+    return 0;
+}
+
 # MieResult's JSON (src/json.cyr, M3 part 1b-2).
 fn cyrius_json(): i64 {
     test_group("cyrius_mie_result_json");
@@ -551,6 +566,7 @@ fn main(): i64 {
     rust_tests_b();
     rust_tests_c();
     cyrius_tests();
+    cyrius_row13();
     cyrius_json();
     return assert_summary();
 }

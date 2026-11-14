@@ -3546,3 +3546,63 @@ E and B = n̂ × E/c.
 - **Result, every target** (x86_64 ELF, x86_64 PE, aarch64): **16 modules, 0 failing; 493,607 ok, 0 failed, 0
   measured, 0 pending, 71,891 accepted (ADR 01: 29,441; ADR 0002: 42,450)** over 565,498 rows; **all 380 digests
   equal**. The 378 outside the two transforms are unchanged. `beam.tcyr` passes on all three. **M3 Part 2a is done.**
+
+## 64. M3 part 2b: round once (2026-11-14)
+
+- **ADR 0002 row 13, amended for M3** (the user's "round once" decision of 2026-11-12: a formula that is one product,
+  quotient or root of inputs and constants is correctly rounded). M3 has four:
+  - beam's z_R = πw₀²/λ in `BjGaussianBeam_new` (`_bj_cr_mono_wide`). Its representability test now reads the
+    rounded-once value: λ = 1e10, w₀ = 1e155 was refused as ∞ for z_R = 3e300, and λ = 5e-324, w₀ = 1e-162 gave 1.0
+    for 0.636 (w₀² went subnormal);
+  - `divergence`, λ/(πw₀), for finite fields and a nonzero waist (`_bj_cr_mono_wide`): λ = 1e-10, w₀ = 1e308 gave 0
+    for 3.18e-319;
+  - the confocal waist √(Lλ/2π) in `bj_resonator_beam_waist` (`_bj_cr_sqrt_mono`): L = λ = 1e200 gave ∞ for 4e199;
+  - scattering's `bj_cross_section_from_efficiency`, Q·π·r², for finite operands (`_bj_cr_mul5` with a factor 1):
+    Q = 1e308, r = 0.1 gave ∞ for 3.1e306, and Q = 1e-320, r = 1e10 lost four digits to a subnormal Q·π.
+
+  An infinite or NaN operand keeps Rust's chain. `transform_beam` builds its output beam with `BjGaussianBeam_new`,
+  so its z_R rounds once too. M3's other formulas have a sum or a computed value inside (the spot size, the curvature,
+  the Rayleigh functions' |K|², the waveplates' and the Stokes sums) and are left to the range edges (2d).
+- **The oracle**: each grid gets a round-once edge grid after every earlier row, the old files exact prefixes.
+  - `beam.tsv` gains 513 rows: `new` where πw₀² over- or underflows though z_R is representable, `divergence` where
+    π·w₀ does, the confocal waist where Lλ does, and 200 seeded laser beams and 100 confocal cavities, where the
+    change is an ulp.
+  - `scattering.tsv` gains 205 rows: Q·π·r² where Q·π or Q·π·r over- or underflows, and 200 seeded efficiencies and
+    radii.
+- **validate.py**:
+  - `bm_new`, `divergence`, the confocal branch and `sc_eval` take the rounded-once forms under `port` (`rn_mono`,
+    `rn_sqrt`: exact rationals rounded once);
+  - `beam_adr_rows` attributes row 13 to them, and to a transform whose only change is its z_R (`r35=False` isolates
+    it from row 35);
+  - `scattering_adr_rows` attributes row 13 to the cross-section.
+
+  The model agreed with every new row on its first run, and a one-bit flip of each new row's first output was caught
+  on all 513 and all 205.
+- **Mappings**:
+  - `beam.adr.tsv` holds 1,968 rows. Row 13's 545 are `new` 115, `divergence` 60, the confocal waist 14 and the
+    transforms 356, whose only change is z_R. Rows 32, 34 and 35 keep their 366, 583 and 474.
+  - `scattering.adr.tsv` maps 93 rows, all row 13's.
+- **Tests**:
+  - `cyrius_beam_row13` in `tests/beam.tcyr` (5 assertions, 130 in the file) pins both `new` edges, the lab beam's z_R
+    (correctly rounded, where Rust's was an ulp low), the divergence's subnormal and the confocal waist past Lλ's
+    overflow.
+  - `cyrius_cross_section_row13` in `tests/scattering.tcyr` (3 assertions, 105 in the file) pins both edges and ∞·0's
+    NaN.
+  - `cyrius_abcd_row35`'s transform now expects the waist that the lab beam's rounded-once z_R gives (…432D for
+    …432C).
+- **Benchmarks** (none of the four has a Rust bench; a one-off bench, interleaved against 2a-3's tree, three rounds at
+  load 1.0–1.3):
+  - `cross_section_from_efficiency` 5 → 128 ns;
+  - `divergence` 5 → 110 ns;
+  - `BjGaussianBeam_new` 33 → 179 ns;
+  - the confocal waist 66 → 177 ns.
+
+  That is the monomial machinery's cost (significand splitting, double-double products, the rounding test), and M1's
+  and M2's round-once functions pay the same: `maxwell/wave_speed` 141 ns, `material/displacement_field` 231 ns.
+  Every other row is within noise (median 0.2 %).
+- **Result, every target** (x86_64 ELF, x86_64 PE, aarch64): **16 modules, 0 failing; 493,687 ok, 0 failed, 0
+  measured, 0 pending, 72,529 accepted (ADR 01: 29,441; ADR 0002: 43,088)** over 566,216 rows; **all 380 digests
+  equal**. The 374 outside the six changed functions (`new`, `divergence`, the waist, the two transforms, the
+  cross-section) are unchanged. `beam.tcyr` and `scattering.tcyr` pass on all three.
+- **A slip, caught by the audit**: the scattering test group went in between `cyrius_json`'s doc comment and its
+  function, leaving `cyrius_json` undocumented; the comment is back on its function.

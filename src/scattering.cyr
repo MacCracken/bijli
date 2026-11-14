@@ -488,11 +488,17 @@ public fn bj_mie(x: f64, m: BjComplex, out: *BjMieResult): Result {
     return Ok(0);
 }
 
-# σ = Q·π·r², a cross-section from its efficiency (Q·π, then ·r twice, as Rust's). Mirrors
-# `scattering::cross_section_from_efficiency`.
+# σ = Q·π·r², a cross-section from its efficiency, rounded once for finite Q and r (ADR 0002 row 13, M3 part 2b: Rust's
+# Q·π, then ·r twice, rounded three times and overflowed at Q = 1e308, r = 0.1 for 3.1e306); a non-finite operand keeps
+# Rust's chain. Mirrors `scattering::cross_section_from_efficiency`.
 #must_use
 #pure
 public fn bj_cross_section_from_efficiency(q: f64, radius: f64): f64 {
+    var dq: f64 = (q - q) + (radius - radius);
+    if (dq == 0.0) {
+        var cr: f64 = _bj_cr_mul5(q, _BJ_PI, radius, radius, 1.0);
+        return cr;
+    }
     var s: f64 = q * _BJ_PI * radius * radius;
     return s;
 }

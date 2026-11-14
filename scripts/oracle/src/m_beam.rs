@@ -25,6 +25,10 @@
 //! M3 part 2a-3 (ADR 0002 row 35) appends the ABCD determinant's edge grid: determinants exactly 1, within an ulp of 1
 //! (rounding to 1) and within 10⁻¹² of it, exactly ±2⁻¹⁰⁴ where the rounded AD − BC is 0, past DBL_MAX and below
 //! 2^-1074, and seeded near-singular matrices, each through `transform_beam` with beams whose λ puts λ·det in range.
+//!
+//! M3 part 2b (ADR 0002 row 13, amended) appends the round-once grid: `new` where πw₀² over- or underflows though z_R
+//! is representable, `divergence` where π·w₀ does, the confocal waist √(Lλ/2π) where Lλ does, and seeded laser beams
+//! and confocal cavities.
 
 use crate::grids::{Rng, specials};
 use crate::m_field::res_f;
@@ -448,7 +452,42 @@ pub fn emit() -> Module {
     }
     resonator_edges(r);
     abcd_det_edges(r);
+    round_once_edges(r);
     rows.m
+}
+
+/// M3 part 2b (ADR 0002 row 13, amended): the single-product functions at their range edges, and seeded values.
+fn round_once_edges(r: &mut Rows) {
+    let mut rng = Rng::new(0xbea3_02b0);
+    let mut pairs: Vec<(f64, f64)> =
+        vec![(1e10, 1e155), (1e-100, 1e-170), (1e300, 1e300), (5e-324, 1e-162), (1e-300, 1e-160), (1e-10, 1e154)];
+    for _ in 0..200 {
+        pairs.push((rng.log_uniform(-7.0, -4.0), rng.log_uniform(-6.0, -2.0)));
+    }
+    for (lam, w0) in pairs {
+        r.row("GaussianBeam::new", Class::A, &[f(lam), f(w0)], || {
+            res(GaussianBeam::new(black_box(lam), black_box(w0)), gb)
+        });
+    }
+    let mut fields: Vec<[f64; 3]> =
+        vec![[1e-10, 1e308, 1.0], [5e-324, 1e-300, 1.0], [1e300, 1e-10, 1.0], [-1e-6, 1e-4, 1.0], [1e-6, -1e-4, 1.0]];
+    for _ in 0..200 {
+        fields.push([rng.log_uniform(-7.0, -4.0), rng.log_uniform(-6.0, -2.0), 1.0]);
+    }
+    for v in &fields {
+        let g = beam_of(*v);
+        r.row("GaussianBeam::divergence", Class::A, &gb(&g), || vec![f(g.divergence())]);
+    }
+    let mut conf: Vec<(f64, f64)> =
+        vec![(1e200, 1e200), (1e-200, 1e-200), (1e300, 1e-300), (1e-300, 1e300), (0.5, 1e300)];
+    for _ in 0..100 {
+        conf.push((rng.log_uniform(-3.0, 1.0), rng.log_uniform(-7.0, -4.0)));
+    }
+    for (l, lam) in conf {
+        r.row("beam::resonator_beam_waist", Class::A, &[f(l), f(l), f(l), f(lam)], || {
+            res_f(resonator_beam_waist(black_box(l), black_box(l), black_box(l), black_box(lam)))
+        });
+    }
 }
 
 /// M3 part 2a-3 (ADR 0002 row 35, the user's answer of 2026-11-14): `transform_beam` on the exact determinant.

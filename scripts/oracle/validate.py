@@ -4121,9 +4121,10 @@ def sc_prims_agree(x, mre, mim) -> bool:
             and same(LIBM.hypot(mre, mim), mpfr_ref.cr2("hypot", mre, mim)))
 
 
-def sc_eval(fn, v, P, cx14=False):
+def sc_eval(fn, v, P, cx14=False, r13=False):
     """scattering.rs's outputs for a row on the primitives P; cx14=True for the port's BjComplex products and |z|² in
-    Rayleigh (row 14 at a range edge). None for another name."""
+    Rayleigh (row 14 at a range edge), r13=True for its cross_section_from_efficiency rounded once (row 13, M3 part
+    2b). None for another name."""
     def mul(a, b):
         w = [a[0], a[1], b[0], b[1]]
         if cx14 and cx_governed("Complex::mul", w) == 14:
@@ -4149,6 +4150,8 @@ def sc_eval(fn, v, P, cx14=False):
     if fn == "scattering::mie":
         return sc_mie(v[0], v[1], v[2], P)
     if fn == "scattering::cross_section_from_efficiency":
+        if r13 and math.isfinite(v[0]) and math.isfinite(v[1]):
+            return [("f", rn_mono([v[0], SC_PI, v[1], v[1]], []))]
         return [("f", v[0] * SC_PI * v[1] * v[1])]
     if fn == "scattering::rayleigh_cross_section":
         a, lam, mre, mim = v
@@ -4229,16 +4232,18 @@ def scattering_corrections(path: Path):
 
 
 def scattering_adr_rows(path: Path) -> list:
-    """ADR 0002 mappings for scattering.tsv: row 14 where BjComplex's range edges change a Rayleigh row."""
+    """ADR 0002 mappings for scattering.tsv: row 14 where BjComplex's range edges change a Rayleigh row, row 13 for
+    cross_section_from_efficiency rounded once (M3 part 2b)."""
     out = []
     for fn, cls, ins, outs, v in sc_lines(path):
         if fn == "scattering::mie":
             continue
         P = SC_P_MPFR if cls == "C" else SC_P_GLIBC
-        expect, port = sc_eval(fn, v, P), sc_eval(fn, v, P, cx14=True)
+        expect, port = sc_eval(fn, v, P), sc_eval(fn, v, P, cx14=True, r13=True)
         if toks_same(port, expect):
             continue
-        out.append((fn, ins, wire(port), "14", f"oracle {outs}; ADR 0002 row 14"))
+        row = "13" if fn == "scattering::cross_section_from_efficiency" else "14"
+        out.append((fn, ins, wire(port), row, f"oracle {outs}; ADR 0002 row {row}"))
     return out
 
 
@@ -4262,13 +4267,14 @@ def bm_pos(x: float) -> bool:
     return math.isfinite(x) and x > 0.0
 
 
-def bm_new(lam, w0):
-    """GaussianBeam::new: the three fields, or the error's tokens."""
+def bm_new(lam, w0, port=False):
+    """GaussianBeam::new: the three fields, or the error's tokens; port=True for z_R = πw₀²/λ rounded once (ADR 0002
+    row 13, M3 part 2b), which then decides the representability test."""
     if not bm_pos(lam):
         return ip_err(f"wavelength must be positive and finite, got {rust_display(lam)}")
     if not bm_pos(w0):
         return ip_err(f"beam waist must be positive and finite, got {rust_display(w0)}")
-    zr = fdiv(SC_PI * w0 * w0, lam)
+    zr = rn_mono([SC_PI, w0, w0], [lam]) if port else fdiv(SC_PI * w0 * w0, lam)
     if not bm_pos(zr):
         return ip_err(f"Rayleigh range πw₀²/λ = {rust_display(zr)} is not representable (w₀ = {rust_display(w0)}, "
                       f"λ = {rust_display(lam)})")
@@ -4345,13 +4351,14 @@ def bm_propagate(m, q0, q1):
     return [("f", fdiv(nr * dr + ni * di, dsq)), ("f", fdiv(ni * dr - nr * di, dsq))]
 
 
-def bm_transform(m, bm, port=False):
-    """AbcdMatrix::transform_beam_with_waist_position; port=True for ADR 0002 row 35: the exact AD − BC of finite
-    entries decides det > 0, keeps λ only when it is exactly 1, and gives λ·det rounded once (λ itself for a zero,
-    infinite or NaN λ, which det > 0 leaves as it is)."""
+def bm_transform(m, bm, port=False, r35=True):
+    """AbcdMatrix::transform_beam_with_waist_position; port=True for the port: ADR 0002 row 35 (unless r35=False), the
+    exact AD − BC of finite entries deciding det > 0, keeping λ only when it is exactly 1 and giving λ·det rounded
+    once (λ itself for a zero, infinite or NaN λ, which det > 0 leaves as it is); and row 13, the new beam's z_R
+    rounded once (bm_new)."""
     a, b, c, d = m
     det = a * d - b * c
-    exact = port and all(math.isfinite(x) for x in m)
+    exact = port and r35 and all(math.isfinite(x) for x in m)
     D = Fraction(a) * Fraction(d) - Fraction(b) * Fraction(c) if exact else None
     if not (D > 0 if exact else bm_pos(det)):
         return ip_err(f"ABCD determinant must be positive and finite (det = n_in/n_out), got {rust_display(det)}")
@@ -4365,7 +4372,7 @@ def bm_transform(m, bm, port=False):
         lam = bm[0] if D == 1 or bm[0] == 0.0 or not math.isfinite(bm[0]) else rn_frac(Fraction(bm[0]) * D)
     else:
         lam = bm[0] if abs(det - 1.0) <= 1e-12 else bm[0] * det
-    out = bm_new(lam, fsqrt(fdiv(zr2 * lam, SC_PI)))
+    out = bm_new(lam, fsqrt(fdiv(zr2 * lam, SC_PI)), port)
     if out[0][0] == "E":
         return out
     return out + [("f", -q[0][1])]
@@ -4489,7 +4496,7 @@ def bm_eval(fn, v, P, port=False):
     (row 32) and resonators (row 34). None for another name."""
     fl = lambda xs: [("f", x) for x in xs]                       # noqa: E731
     if fn == "GaussianBeam::new":
-        return bm_new(v[0], v[1])
+        return bm_new(v[0], v[1], port)
     if fn.startswith("GaussianBeam::"):
         bm, z = v[:3], (v[3] if len(v) > 3 else None)
         name = fn.split("::")[1]
@@ -4505,6 +4512,8 @@ def bm_eval(fn, v, P, port=False):
         if name == "gouy_phase":
             return fl([P["atan"](fdiv(z, bm[2]))])
         if name == "divergence":
+            if port and math.isfinite(bm[0]) and math.isfinite(bm[1]) and bm[1] != 0.0:
+                return fl([rn_mono([bm[0]], [SC_PI, bm[1]])])          # row 13: rounded once
             return fl([fdiv(bm[0], SC_PI * bm[1])])
         if name == "peak_intensity_factor":
             w = bm_spot(bm, z)
@@ -4581,7 +4590,7 @@ def bm_eval(fn, v, P, port=False):
             if math.isinf(r1) and math.isinf(r2):
                 return dz_err("planar cavity (g₁ = g₂ = 1) has no confined mode")
             if r1 == L and r2 == L:
-                return fl([fsqrt(fdiv(L * lam, 2.0 * SC_PI))])
+                return fl([rn_sqrt(Fraction(L) * Fraction(lam) / Fraction(2.0 * SC_PI))])   # row 13
             w = bm_waist34(L, r1, r2, lam)
             return dz_err("planar cavity (g₁ = g₂ = 1) has no confined mode") if w is None else fl([w])
         s = g1 + g2 - 2.0 * gp
@@ -4681,9 +4690,10 @@ def beam_corrections(path: Path):
 
 def beam_adr_rows(path: Path) -> list:
     """ADR 0002 mappings for beam.tsv: each row whose harness reading (bm_harness, on the port's correctly rounded
-    primitives) differs from Rust's (the corrected oracle for class C): row 32 for the LG power at l = i32::MIN, row 34
-    for the resonators (M3 part 2a-2), row 35 for the transforms' exact determinant (M3 part 2a-3), row 5 otherwise
-    (the field's conjugation, should it fail to be exact)."""
+    primitives) differs from Rust's (the corrected oracle for class C): row 13 for z_R, the divergence and the confocal
+    waist rounded once (M3 part 2b), row 32 for the LG power at l = i32::MIN, row 34 for the resonators (M3 part 2a-2),
+    row 35 for the transforms' exact determinant (M3 part 2a-3), or row 13 where a transform's new z_R rounded once
+    is the whole difference, row 5 otherwise (the field's conjugation, should it fail to be exact)."""
     out = []
     for fn, cls, ins, outs, v in bm_lines(path):
         P = BM_P_MPFR if cls == "C" else BM_P_GLIBC
@@ -4691,10 +4701,16 @@ def beam_adr_rows(path: Path) -> list:
         port = bm_harness(fn, v, P)
         if toks_same(port, expect):
             continue
-        if fn in BM_RES34:
+        if fn in ("GaussianBeam::new", "GaussianBeam::divergence") or (
+                fn == "beam::resonator_beam_waist" and v[1] == v[0] and v[2] == v[0]):
+            row = 13
+        elif fn in BM_RES34:
             row = 34
         elif fn in ("AbcdMatrix::transform_beam", "AbcdMatrix::transform_beam_with_waist_position"):
-            row = 35
+            alone13 = bm_transform(v[:4], v[4:7], port=True, r35=False)
+            if fn == "AbcdMatrix::transform_beam" and alone13[0][0] != "E":
+                alone13 = alone13[:3]
+            row = 13 if toks_same(alone13, port) else 35
         elif fn == "beam::laguerre_gaussian_intensity" and abs(int(v[4])) == 1 << 31:
             row = 32
         else:
