@@ -61,7 +61,7 @@ port's harness reads the same files. This README records what is specific to bij
 | `material` | M2 (parts 1a, 2c-1, 2c-2, 2d-2c) | 54,234 | `src/m_material.rs` (field.rs's vectors) | — |
 | `math` | M0 (+ sinh, cosh and 125 corrected, M1) | 36,522 | `src/m_math.rs` | — |
 | `maxwell` | M1 (part 3d) | 20,349 | `src/m_maxwell.rs` | — |
-| `polarization` | M3 (part 1a-1; 2a-1: the waveplates' edge grid) | 24,515 (+ 18 corrected) | `src/m_polarization.rs` | — |
+| `polarization` | M3 (part 1a-1; 2a-1: the waveplates' edge grid; 2d-1a: the Mueller matrices' edge grid) | 25,073 (+ 18 corrected) | `src/m_polarization.rs` | — |
 | `relativity` | M2 (parts 1d-1, 1d-2: the solver over six trajectories; 2c-1, 2c-4, 2d-1, 2d-3c–2d-3j) | 30,780 | `src/m_relativity.rs` (field.rs's vectors) | — |
 | `scattering` | M3 (parts 1b-1; its JSON in `json`; 2b: the round-once edge grid; 2c-1: Mie's \|m\|·x limit) | 4,189 (+ 6 corrected) | `src/m_scattering.rs` | — |
 | `wave` | M2 (parts 1b, 2c-1, 2c-3, 2d-1, 2d-2a, 2d-2b, 2d-2c) | 79,138 (+ 1 corrected) | `src/m_wave.rs` (field.rs's vectors, material.tsv's materials) | `src/wave_data.cyr`, the dipole constants of ADR 0002 row 22 (`validate.py`'s `render_wave_data`: Cin(2π) by its series, π by Machin's formula checked against MPFR, η₀ from BJ_MU_0 and BJ_EPSILON_0, in rational arithmetic) |
@@ -120,6 +120,12 @@ src/crmath_vx.cyr's √(x/y) and √(x·y) to 53 bits with an unbounded exponent
 its exponent) and Γ between two lossless materials (`vx_gamma`) against Fractions and an integer square root, on
 positive doubles of any binade (subnormal, at both ends of the range): Γ against the unbounded chain alone, so the
 calls where `_bj_vx_gamma` takes Rust's quotient check its guard's claim too; η's an ulp or a few apart, and equal.
+Its dot4 family (M3 part 2d-1a) checks the Mueller matrices' four-term sum from −0.0 with its guard (`cr_driver.cyr`'s
+`_drv_dot4`, the chain `apply` and `compose` inline, then src/crmath_vx.cyr's `_bj_vx_dot4_edge`), against the unbounded
+chain alone (each product and partial sum to 53 bits, the last sum rounded once), with b contiguous (`apply`'s) and at a
+stride of 4 (`compose`'s column): products anywhere in the range with zeros of both signs, near 2^-1022 beside normal
+terms, past DBL_MAX cancelling, cancelling to small sums that subnormal products then meet, and products just below
+2^-1022 that round up to it.
 Its ux families (`cr_verify.py . ux`, M1 part 5c-2) check src/crmath_ux.cyr's e^x (`ux_exp`, and `ux_exp_w` to |x| =
 2300, M2 part 2d-3b), cosh, sinh, ln(s·2^E), (s·2^E)^y and sin and cos past DBL_MAX against `mpfr_ref.wide`: MPFR at
 53 bits with its widest exponent range, where nothing over- or underflows. Each (s, e) result is read in two calls,

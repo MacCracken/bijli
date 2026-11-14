@@ -2,8 +2,9 @@
 #
 # At a range edge field.rs's and charge.rs's chains run with an unbounded exponent, as BjComplex's do (ADR 0002 row
 # 14): every operation rounded to 53 bits (kimiya's _bj_k_ux_*, src/crmath_kx.cyr), the last one once into binary64.
-# These are the helpers field.cyr, charge.cyr and (M2 part 2d-2a, its ratio chains) wave.cyr share (all `private`
-# files, so the helpers live in a file of internals).
+# These are the helpers field.cyr, charge.cyr, wave.cyr (M2 part 2d-2a, its ratio chains) and polarization.cyr (M3
+# part 2d-1a, the Mueller matrices' four-term sums) share. They are all `private` files, so the helpers live in a file
+# of internals, which scripts/oracle/cr_driver.cyr can include too.
 #
 # The guard: Rust's chain, then a test of what it computed. A chain of products and sums of doubles differs from the
 # unbounded one only where a product leaves the normal range. One past DBL_MAX makes the sums it enters ±∞ or NaN. One
@@ -346,4 +347,67 @@ fn _bj_vx_ratio_ux2(as: f64, ae, x: f64, bs: f64, be, y: f64, st: *i64): f64 {
     }
     var r: f64 = _bj_k_ux_div_f64(ns, ne, ds, de);
     return r;
+}
+
+# ── four-term sums (M3 part 2d-1a): the Mueller matrices' apply and compose (polarization.cyr) ────────────────────────
+# Rust's sum of four products from −0.0 (its f64 Sum), ((p₀ + p₁) + p₂) + p₃, is a Mueller output or entry. At a range
+# edge it runs with an unbounded exponent, each product and partial sum to 53 bits, the last sum rounded once into
+# binary64 (this file's rule). The guard reads Rust's sum r. A product below 2^-1022 (subnormal, 0 from nonzero factors,
+# or rounded up to 2^-1022) is within 2^-1075 of its 53-bit value and at most 2^-1022 in magnitude. Where it meets a
+# partial sum or a term of 2^-968 or more, both chains absorb it (the file's argument). Otherwise the partial sums the
+# two chains disagree on stay below 2^-967, then 2^-911, then 2^-855, as each later term fails to absorb them (a term
+# absorbs a partial 2^55 times smaller). So a finite r with |r| ≥ 2^-800 is the unbounded chain's. So is a finite r
+# whose four products are all exact (a zero factor, or normal): every sum of them is then the 53-bit one, since a sum
+# below 2^-1022 is exact. A product past DBL_MAX makes r ±∞ or NaN, and a non-finite input keeps Rust's chain.
+
+# 2^-800: the guard's lower bound (the section comment).
+var _BJ_VX_LO4: f64 = 0x0DF0000000000000;
+
+# −0.0: Rust's `Iterator::sum` of f64 starts from −0.0 (core's float Sum, since 1.81), so a sum of −0.0 terms stays −0.
+#must_use
+fn _bj_vx_neg0(): f64 {
+    var z: f64 = 0x8000000000000000;
+    return z;
+}
+
+# Σ a[ia + k·sa]·b[ib + k·sb], k = 0..3, from −0.0, with an unbounded exponent: each product and partial sum to 53 bits,
+# the last sum rounded once into binary64, IEEE's signed zeros throughout.
+#must_use
+fn _bj_vx_dot4_ux(a: *f64, ia, sa, b: *f64, ib, sb): f64 {
+    var s: f64 = _bj_vx_neg0();
+    var e = 0;
+    for (var k = 0; k < 3; k = k + 1) {
+        var ps, pe = _bj_vx_mul(a[ia + k * sa], b[ib + k * sb]);
+        var ns, ne = _bj_k_ux_add(s, e, ps, pe);
+        s = ns;
+        e = ne;
+    }
+    var qs, qe = _bj_vx_mul(a[ia + 3 * sa], b[ib + 3 * sb]);
+    var r: f64 = _bj_k_ux_add_f64(s, e, qs, qe);
+    return r;
+}
+
+# Rust's four-term sum r = Σ a[ia + k·sa]·b[ib + k·sb] from −0.0, which its caller found outside [2^-800, DBL_MAX] (or
+# NaN): r itself where it is the unbounded chain's (finite with every product exact, or an input not finite), else
+# _bj_vx_dot4_ux. A finite r has finite products and inputs: ∞·0 is NaN, and ∞ or NaN stays in the sum.
+#must_use
+fn _bj_vx_dot4_edge(a: *f64, ia, sa, b: *f64, ib, sb, r: f64): f64 {
+    var dr: f64 = r - r;
+    var keep = 1;
+    for (var k = 0; k < 4; k = k + 1) {
+        var x: f64 = a[ia + k * sa];
+        var y: f64 = b[ib + k * sb];
+        if (dr == 0.0) {
+            if (x != 0.0 && y != 0.0) {
+                var p: f64 = x * y;
+                var ap: f64 = f64_abs(p);
+                if (!(ap > _BJ_VX_MN)) { keep = 0; }
+            }
+        } elif (_bj_vx_finite4(x, y, 0.0, 0.0) == 0) {
+            return r;
+        }
+    }
+    if (dr == 0.0 && keep == 1) { return r; }
+    var u: f64 = _bj_vx_dot4_ux(a, ia, sa, b, ib, sb);
+    return u;
 }

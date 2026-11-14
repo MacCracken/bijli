@@ -69,7 +69,7 @@
 | `relativity/four_vector_boost` | 5.45 ns | `relativity/four_vector_boost` | 161.00 ns | 29.5× |
 | `polarization/jones_apply_polarizer` | 0.99 ns | `polarization/jones_apply_polarizer` | 213.00 ns | 215.2× |
 | `polarization/jones_qwp_apply` | 0.99 ns | `polarization/jones_qwp_apply` | 216.00 ns | 218.2× |
-| `polarization/mueller_apply` | 0.99 ns | `polarization/mueller_apply` | 86.00 ns | 86.9× |
+| `polarization/mueller_apply` | 0.99 ns | `polarization/mueller_apply` | 107.00 ns | 108.1× |
 | `polarization/stokes_from_jones` | 5.44 ns | `polarization/stokes_from_jones` | 117.00 ns | 21.5× |
 | `scattering/mie_x1_real` | 423.87 ns | `scattering/mie_x1_real` | 1.81 µs | 4.3× |
 | `scattering/mie_x10_real` | 859.83 ns | `scattering/mie_x10_real` | 3.62 µs | 4.2× |

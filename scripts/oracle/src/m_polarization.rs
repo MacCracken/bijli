@@ -17,6 +17,10 @@
 //! M3 part 2a-1 (ADR 0002 row 33) appends the waveplates' edge grid after every earlier row: fast axes within two ulps
 //! of the π/4 family (where c² − s² cancels), tiny ones, and at DBL_MAX/2 and 2^1023 (where 2θ overflows); retardances
 //! across cos δ = 1/2 (where 1 − cos δ starts to cancel) and down to 1e-300.
+//!
+//! M3 part 2d-1a (ADR 0002 row 18) appends the Mueller matrices' edge grid after that: fast axes where 2θ passes
+//! DBL_MAX and on either side, retardances where sin²(δ/2) falls below 2^-1022, and matrices and Stokes vectors whose
+//! four-term sums overflow and cancel or meet products below 2^-1022.
 
 use crate::grids::{Rng, pow2, specials};
 use crate::m_field::res_f;
@@ -415,6 +419,7 @@ pub fn emit() -> Module {
         }
     }
     waveplate_edges(m);
+    mueller_edges(m);
     rows.m
 }
 
@@ -444,6 +449,77 @@ fn waveplate_edges(m: &mut Rows) {
         for &d in &ds {
             m.row("JonesMatrix::waveplate", Class::C, &[f(t), f(d)], &jm(JonesMatrix::waveplate(black_box(t), d)));
             m.row("MuellerMatrix::waveplate", Class::C, &[f(t), f(d)], &mm(MuellerMatrix::waveplate(black_box(t), d)));
+        }
+    }
+}
+
+/// M3 part 2d-1a (ADR 0002 row 18): the Mueller matrices at their range edges.
+fn mueller_edges(m: &mut Rows) {
+    let big = pow2(1023);
+    let mut ths = vec![f64::MAX / 2.0, big, big.next_up(), 1.5 * big, 1e308, f64::MAX];
+    let neg: Vec<f64> = ths.iter().map(|t| -t).collect();
+    ths.extend(neg);
+    for &t in &ths {
+        let (lp, rot) = (MuellerMatrix::linear_polarizer(black_box(t)), MuellerMatrix::rotation(black_box(t)));
+        let (qw, hw) = (MuellerMatrix::quarter_wave_plate(black_box(t)), MuellerMatrix::half_wave_plate(black_box(t)));
+        m.row("MuellerMatrix::linear_polarizer", Class::C, &[f(t)], &mm(lp));
+        m.row("MuellerMatrix::rotation", Class::C, &[f(t)], &mm(rot));
+        m.row("MuellerMatrix::quarter_wave_plate", Class::C, &[f(t)], &mm(qw));
+        m.row("MuellerMatrix::half_wave_plate", Class::C, &[f(t)], &mm(hw));
+        for d in [0.4, 1e-3, 2.0, -1.0, 1e-155] {
+            m.row("MuellerMatrix::waveplate", Class::C, &[f(t), f(d)], &mm(MuellerMatrix::waveplate(black_box(t), d)));
+        }
+    }
+    // sin²(δ/2) below 2^-1022 for |δ| < 2^-510, and below 2^-1075 (Rust's 0) for |δ| < 2^-536.5
+    let ds = [pow2(-509), pow2(-510), 2.9e-154, 1e-154, 7e-155, 1e-155, 1e-160, 1e-162, pow2(-536), pow2(-537)];
+    for t in [0.3, PI / 8.0, 1e-200, -1.2, 2.0, big] {
+        for d in ds.iter().copied().chain([3.0 * pow2(-539), 1e-300, -1e-160]) {
+            m.row("MuellerMatrix::waveplate", Class::C, &[f(t), f(d)], &mm(MuellerMatrix::waveplate(black_box(t), d)));
+        }
+    }
+    // four-term sums: products past DBL_MAX that cancel (Rust's ∞ − ∞) or partial sums past it, products below
+    // 2^-1022 that round twice (a² = 2.25·2^-1074 rounds to 2, w·2^-1022 up to 2^-1022), a last sum below 2^-1022
+    // that rounding to 53 bits first would put on a midpoint (2^-1030 ± 2^-1075 ± 2^-1090), and small sums of exact
+    // products
+    let (mx, h, a, b, t) = (f64::MAX, 1e200, 1.5 * pow2(-537), 1e-160, pow2(-500));
+    let (w, sub) = (1.0_f64.next_down(), f64::from_bits(0x000f_ffff_ffff_ffff));
+    let mats = [
+        [[mx, mx, -mx, 0.0], [h, -h, 0.0, 0.0], [h, h, h, -h], [0.5, 0.5, -0.5, 0.25]],
+        [[a, a, a, 0.0], [a, -a, a, a], [b, 3.0 * b, -2.0 * b, b], [1.0, a, 0.0, 0.0]],
+        [[1.0, -1.0, t, 0.0], [t, t, -t, t], [pow2(-1000), 0.0, 0.0, 0.0], [-0.0; 4]],
+        [[h, h, 0.0, 0.0], [h, -h, 0.0, 0.0], [0.0, 0.0, h, h], [0.0, 0.0, -h, h]],
+        [[mx, -mx, 0.0, 0.0], [mx, mx, -mx, -mx], [1.0, 1.0, 1.0, 1.0], [a, a, a, a]],
+        [[w, -1.0, 0.0, 0.0], [w, -w, 0.0, 0.0], [-1.0, w, 0.0, 0.0], [0.0; 4]],
+        [[pow2(-515), pow2(-500), 0.0, pow2(-545)], [pow2(-515), -pow2(-500), 0.0, -pow2(-545)], [1.0; 4], [0.0; 4]],
+    ];
+    let mut ms: Vec<MuellerMatrix> = mats.iter().map(|&x| MuellerMatrix::new(x)).collect();
+    ms.extend([MuellerMatrix::attenuator(1e300), MuellerMatrix::attenuator(mx), MuellerMatrix::attenuator(1e-300)]);
+    ms.extend([MuellerMatrix::identity(), MuellerMatrix::horizontal_polarizer(), MuellerMatrix::linear_polarizer(0.3)]);
+    ms.push(MuellerMatrix::waveplate(0.3, 0.4));
+    let vs = [
+        [mx, mx, mx, mx],
+        [mx, mx, 1.0, 0.0],
+        [h, h, h, h],
+        [h, -h, h, 0.0],
+        [a, a, a, a],
+        [b, 3.0 * b, -2.0 * b, b],
+        [1.0, 1.0, 1.0, 1.0],
+        [pow2(-1000), 1.0, -1.0, 0.0],
+        [5e-324, 5e-324, 1.0, -1.0],
+        [-0.0; 4],
+        [1.0, -1.0, 1.0, -1.0],
+        [1e-300; 4],
+        [pow2(-1022), pow2(-1022), 0.0, 0.0],
+        [pow2(-1022), sub, 0.0, 0.0],
+        [pow2(-515), pow2(-575), 0.0, pow2(-545)],
+    ];
+    for &x in &ms {
+        for v in &vs {
+            let st = StokesVector::new(v[0], v[1], v[2], v[3]);
+            m.row("MuellerMatrix::apply", Class::A, &[mm(x), sv(st)].concat(), &sv(black_box(x).apply(&st)));
+        }
+        for &y in &ms {
+            m.row("MuellerMatrix::compose", Class::A, &[mm(x), mm(y)].concat(), &mm(black_box(x).compose(&y)));
         }
     }
 }

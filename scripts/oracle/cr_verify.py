@@ -534,7 +534,7 @@ EXACT = ["mono"] + list(SHAPES) + ["sqrt_div", "wsqrt", "sqrt_mono", "sqrt_mono_
          "cos_t_slow", "lw_reff", "lw_reff_slow", "lw_kappa", "lw_kappa_slow", "par", "par_x", "par_slow",
          "par_rep", "par_rep_x", "par_rep_slow", "lw_nb", "lw_nb_slow", "lw_reff_ux", "vx_sqrt", "vx_sqrt_e",
          "vx_gamma", "lwo_reff", "lwo_reff_slow", "lwo_kappa", "lwo_kappa_slow", "lwo_nb", "lwo_nb_slow", "lwo_ux",
-         "gammao", "gammao_slow", "gammao2", "gammao2_slow", "sumsq", "sumsq_exact", "abcd", "abcd_slow"]
+         "gammao", "gammao_slow", "gammao2", "gammao2_slow", "sumsq", "sumsq_exact", "abcd", "abcd_slow", "dot4"]
 UX = ["ux_exp", "ux_exp_w", "ux_cosh", "ux_sinh", "ux_ln", "ux_pow", "ux_sin", "ux_cos"]
 
 
@@ -1670,6 +1670,92 @@ def vx_families(rng, count):
     return out
 
 
+def dot4_ref(xs, ys) -> int:
+    """The bits of Σ xs[k]·ys[k] from −0.0 with an unbounded exponent (M3 part 2d-1a): each product and partial sum
+    rounded to 53 bits, the last sum once into binary64, IEEE's signed zeros throughout (finite inputs)."""
+    F = Fraction
+
+    def neg(x):
+        return math.copysign(1.0, x) < 0
+
+    def add(a, b, r=rnd53):
+        v = a[0] + b[0]
+        if v == 0:
+            return F(0), (a[1] and b[1]) if a[0] == 0 and b[0] == 0 else False
+        return r(v), v < 0
+
+    acc = (F(0), True)
+    for k in range(4):
+        v = F(xs[k]) * F(ys[k])
+        acc = add(acc, (rnd53(v), (neg(xs[k]) != neg(ys[k])) if v == 0 else v < 0), (lambda t: t) if k == 3 else rnd53)
+    if acc[0] == 0:
+        return f2b(-0.0 if acc[1] else 0.0)
+    return f2b(rn_frac(acc[0]))
+
+
+def dot4_cases(rng, count):
+    """Four products around the range edges: anywhere in the range (zeros of both signs among them); near 2^-1022,
+    some below it and some normal; past DBL_MAX, cancelling or not; cancelling to small sums that subnormal products
+    then meet; and products just below 2^-1022 that round up to it."""
+    def sig():
+        return 1.0 + rng.getrandbits(52) * 2.0 ** -52
+
+    def pm(x):
+        return -x if rng.random() < 0.5 else x
+
+    def at(e):                                  # a random double in [2^e, 2^(e + 1)), e within the normal range
+        return pm(sig() * 2.0 ** e)
+
+    def split(e):                               # a factor pair whose product lies near 2^e
+        ex = rng.randint(max(-1022, e - 1023), min(1023, e + 1022))
+        return at(ex), at(e - ex)
+
+    out = []
+    for j in range(count):
+        c = j % 5
+        xs, ys = [], []
+        for k in range(4):
+            if c == 0:
+                if rng.random() < 0.1:
+                    x, y = pm(0.0), at(rng.randint(-1022, 1023))
+                else:
+                    x, y = pm(vx_pos(rng)), pm(vx_pos(rng))
+            elif c == 1:
+                x, y = split(rng.randint(-1110, -1000) if rng.random() < 0.7 else rng.randint(-1000, -780))
+            elif c == 2:
+                x, y = split(rng.randint(990, 1030))
+                if k > 0 and rng.random() < 0.6:
+                    x, y = xs[0], -ys[0] * (1.0 + rng.randint(-4, 4) * 2.0 ** -52)
+            elif c == 3:
+                if k == 1:
+                    x, y = xs[0], -ys[0] * (1.0 + rng.randint(-3, 3) * 2.0 ** -52)
+                else:
+                    x, y = split(rng.randint(-1100, -900) if k > 1 else rng.randint(-1000, -850))
+            else:
+                if k % 2 == 0:
+                    x, y = pm(1.0 - rng.randint(1, 3) * 2.0 ** -53), VX_MN
+                else:
+                    x, y = pm(1.0), pm(VX_MN - rng.randint(0, 2) * 2.0 ** -1074)
+            if not (math.isfinite(x) and math.isfinite(y)):
+                x, y = 1.0, 1.0
+            xs.append(x)
+            ys.append(y)
+        out.append((xs, ys))
+    return out
+
+
+def dot4_families(rng, count):
+    """dot4 (M3 part 2d-1a): the Mueller sum and its guard (cr_driver.cyr's _drv_dot4) against the unbounded chain
+    alone, with b contiguous (mode 0) and at a stride of 4 (mode 1): the cases the guard keeps Rust's sum on check its
+    claim."""
+    out = []
+    for xs, ys in dot4_cases(rng, count):
+        ref = dot4_ref(xs, ys)
+        for mode in (0, 1):
+            out.append(("dot4", xs + ys + [mode], ref))
+    return out
+
+
 def main() -> int:
     (root / "build").mkdir(exist_ok=True)
     names = wanted or list(FUNCS) + ["exact", "ux"]
@@ -1724,6 +1810,9 @@ def main() -> int:
         arng = random.Random(0x3_2C2)
         calls += [(f, ref, ws) for f, ws, ref in abcd_families(arng, max(1, n // 20))
                   if "exact" in names or f in names]
+        drng = random.Random(0x3_2D1A)
+        calls += [(f, ref, ws) for f, ws, ref in dot4_families(drng, max(1, n // 2))
+                  if "exact" in names or f in names]
         prng2 = random.Random(0x9A_2C5)
         calls += [(f, ref, ws) for f, ws, ref in par_families(prng2, max(1, n // 10))
                   if "exact" in names or f in names]
@@ -1746,7 +1835,7 @@ def main() -> int:
             g = results[t][i]
             # "invalid" is a word for these
             any_nan = name not in UX and not name.startswith(("gamma", "cm", "cos_t", "lw_", "lwo_", "par", "vx_",
-                                                              "abcd"))
+                                                              "abcd", "dot4"))
             ok = g == want or (any_nan and b2f(g) != b2f(g) and b2f(want) != b2f(want))
             per.setdefault((name, t), [0, 0])[0 if ok else 1] += 1
             if not ok:

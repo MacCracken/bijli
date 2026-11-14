@@ -556,6 +556,15 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
   z_R′ and the waist distance from it, so a positive determinant no longer cancels to z_R′ = 0 (det = 2⁻¹⁰⁴ gives
   z_R′ = 1.45·10⁻³³). Cost: `propagate_beam` 94 ns for 22 in free space, 650 ns for 21 through a lens;
   `transform_beam` 1.2 µs for 0.58 (roadmap finding).
+- **polarization** (ADR 0002 row 18 amended, M3 part 2d-1a, range edges): the Mueller matrices over- and underflowed
+  where the result is representable. `linear_polarizer`, `rotation` and the waveplates at |θ| ≥ 2^1023 had 2θ = ∞
+  and NaN entries; they now take cos 2θ and sin 2θ from the reduction past DBL_MAX. `apply` and `compose` summed four
+  products as doubles: DBL_MAX + DBL_MAX − DBL_MAX gave ∞, 10^200·10^200 − 10^200·10^200 NaN for 0, and products
+  below 2^-1022 rounded twice (three of 2.25·2^-1074 summed to 6·2^-1074 for 7). At a range edge the sum now runs
+  with an unbounded exponent and rounds once (guarded by `src/crmath_vx.cyr`'s `_bj_vx_dot4_edge`, so in-range sums
+  keep Rust's bits), and the waveplate's 2·sin²(δ/2) below 2^-1022 rounds once too. Cost: `polarization/mueller_apply`
+  (a polarizer, two rows of zeros) 103 → 116 ns; a dense `apply` is unchanged, and `compose` takes 370 ns for 470
+  (−21 %: each row of the left matrix is read once, not once per column).
 
 ### Performance
 

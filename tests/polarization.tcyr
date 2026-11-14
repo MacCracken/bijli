@@ -685,6 +685,69 @@ fn cyrius_row33(): i64 {
     return 0;
 }
 
+# ADR 0002 row 18 (M3 part 2d-1a): the Mueller matrices at their range edges, MPFR's and the exact chain's bits.
+fn cyrius_row18(): i64 {
+    test_group("cyrius_mueller_row18 (ADR 0002 row 18)");
+    # 2θ past DBL_MAX: cos 2θ and sin 2θ from the reduction past it (Rust's were NaN).
+    var lp: BjMuellerMatrix = BjMuellerMatrix_linear_polarizer(_bj_from_bits(0x7FEFFFFFFFFFFFFF));
+    var ol: *f64 = f64p(&lp);
+    var l1: f64 = ol[1];
+    var l2: f64 = ol[2];
+    assert(_bj_bits(l1) == 0x3FDFFF98BB68563B && _bj_bits(l2) == 0xBF7452EC33014358,
+      "a linear polarizer at θ = DBL_MAX: ½cos 2θ and ½sin 2θ");
+    var ro: BjMuellerMatrix = BjMuellerMatrix_rotation(_bj_from_bits(0xFFE0000000000000));
+    var orr: *f64 = f64p(&ro);
+    var r5: f64 = orr[5];
+    var r6: f64 = orr[6];
+    var r9: f64 = orr[9];
+    assert(_bj_bits(r5) == 0x3FD768D838535D54 && _bj_bits(r6) == 0x3FEDC852F5986AC8 && r9 == -r6,
+      "a rotation by −2^1023: cos 2θ and sin 2θ");
+    # δ = 1e-155: sin²(δ/2) lies below 2^-1022, and CS·2·sin²(δ/2) rounds once from its 53-bit value (the subnormal
+    # square rounded twice, one unit above).
+    var wp: BjMuellerMatrix = BjMuellerMatrix_waveplate(0.3, _bj_from_bits(0x1FC1297872D9CBB5));
+    var ow: *f64 = f64p(&wp);
+    var w6: f64 = ow[6];
+    assert(_bj_bits(w6) == 0x0000044A11A77958, "δ = 1e-155: CS(1 − cos δ) = 2.330097714918e-311");
+    # Four-term sums: DBL_MAX + DBL_MAX − DBL_MAX (Rust's ∞), three products 2.25·2^-1074 (Rust rounded each to 2),
+    # and products past DBL_MAX that cancel (Rust's ∞ − ∞).
+    var mx: f64 = _bj_from_bits(0x7FEFFFFFFFFFFFFF);
+    var a: f64 = 1.5 * _bj_from_bits(0x1E60000000000000);
+    var e: f64[16];
+    for (var k = 0; k < 16; k = k + 1) { e[k] = 0.0; }
+    e[0] = mx;
+    e[1] = mx;
+    e[2] = -mx;
+    e[4] = a;
+    e[5] = a;
+    e[6] = a;
+    var em: BjMuellerMatrix = BjMuellerMatrix_new(&e);
+    var s1: BjStokesVector = em.apply(BjStokesVector_new(1.0, 1.0, 1.0, 0.0));
+    var s2: BjStokesVector = em.apply(BjStokesVector_new(a, a, a, a));
+    assert(_bj_bits(s1.s.0) == 0x7FEFFFFFFFFFFFFF, "DBL_MAX + DBL_MAX − DBL_MAX = DBL_MAX");
+    assert(_bj_bits(s2.s.1) == 7, "three products of 2.25·2^-1074: 7·2^-1074");
+    var hhh: f64 = _bj_from_bits(0x6974E718D7D7625A);  # 1e200
+    var g: f64[16];
+    for (var k2 = 0; k2 < 16; k2 = k2 + 1) { g[k2] = 0.0; }
+    g[0] = hhh;
+    g[1] = hhh;
+    g[4] = hhh;
+    g[5] = -hhh;
+    var gm: BjMuellerMatrix = BjMuellerMatrix_new(&g);
+    var gg: BjMuellerMatrix = gm.compose(gm);
+    var c1: f64 = gg.m.1;
+    assert(_bj_bits(c1) == 0, "1e200·1e200 − 1e200·1e200 = +0 (Rust's NaN)");
+    # w·2^-1022 rounds up to 2^-1022 in Rust (w = 1 − 2^-53): w·2^-1022 − 2^-1022 is −2^-1075, −0 once rounded.
+    var u: f64[16];
+    for (var k3 = 0; k3 < 16; k3 = k3 + 1) { u[k3] = 0.0; }
+    u[0] = _bj_from_bits(0x3FEFFFFFFFFFFFFF);
+    u[1] = -1.0;
+    var um: BjMuellerMatrix = BjMuellerMatrix_new(&u);
+    var mn: f64 = _bj_from_bits(0x0010000000000000);
+    var s3: BjStokesVector = um.apply(BjStokesVector_new(mn, mn, 0.0, 0.0));
+    assert(_bj_bits(s3.s.0) == 0x8000000000000000, "w·2^-1022 − 2^-1022 = −0 (Rust's +0)");
+    return 0;
+}
+
 # polarization.rs's `test_mie_result_serde` (M3 part 1b-2): a MieResult round trips through its JSON.
 fn rust_test_mie_serde(): i64 {
     test_group("test_mie_result_serde");
@@ -849,6 +912,7 @@ fn main(): i64 {
     rust_test_mie_serde();
     cyrius_tests();
     cyrius_row33();
+    cyrius_row18();
     cyrius_json();
     return assert_summary();
 }

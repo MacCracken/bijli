@@ -9227,8 +9227,9 @@ fn _bj_log10(x: f64): f64 {
 #
 # At a range edge field.rs's and charge.rs's chains run with an unbounded exponent, as BjComplex's do (ADR 0002 row
 # 14): every operation rounded to 53 bits (kimiya's _bj_k_ux_*, src/crmath_kx.cyr), the last one once into binary64.
-# These are the helpers field.cyr, charge.cyr and (M2 part 2d-2a, its ratio chains) wave.cyr share (all `private`
-# files, so the helpers live in a file of internals).
+# These are the helpers field.cyr, charge.cyr, wave.cyr (M2 part 2d-2a, its ratio chains) and polarization.cyr (M3
+# part 2d-1a, the Mueller matrices' four-term sums) share. They are all `private` files, so the helpers live in a file
+# of internals, which scripts/oracle/cr_driver.cyr can include too.
 #
 # The guard: Rust's chain, then a test of what it computed. A chain of products and sums of doubles differs from the
 # unbounded one only where a product leaves the normal range. One past DBL_MAX makes the sums it enters ±∞ or NaN. One
@@ -9571,6 +9572,69 @@ fn _bj_vx_ratio_ux2(as: f64, ae, x: f64, bs: f64, be, y: f64, st: *i64): f64 {
     }
     var r: f64 = _bj_k_ux_div_f64(ns, ne, ds, de);
     return r;
+}
+
+# ── four-term sums (M3 part 2d-1a): the Mueller matrices' apply and compose (polarization.cyr) ────────────────────────
+# Rust's sum of four products from −0.0 (its f64 Sum), ((p₀ + p₁) + p₂) + p₃, is a Mueller output or entry. At a range
+# edge it runs with an unbounded exponent, each product and partial sum to 53 bits, the last sum rounded once into
+# binary64 (this file's rule). The guard reads Rust's sum r. A product below 2^-1022 (subnormal, 0 from nonzero factors,
+# or rounded up to 2^-1022) is within 2^-1075 of its 53-bit value and at most 2^-1022 in magnitude. Where it meets a
+# partial sum or a term of 2^-968 or more, both chains absorb it (the file's argument). Otherwise the partial sums the
+# two chains disagree on stay below 2^-967, then 2^-911, then 2^-855, as each later term fails to absorb them (a term
+# absorbs a partial 2^55 times smaller). So a finite r with |r| ≥ 2^-800 is the unbounded chain's. So is a finite r
+# whose four products are all exact (a zero factor, or normal): every sum of them is then the 53-bit one, since a sum
+# below 2^-1022 is exact. A product past DBL_MAX makes r ±∞ or NaN, and a non-finite input keeps Rust's chain.
+
+# 2^-800: the guard's lower bound (the section comment).
+var _BJ_VX_LO4: f64 = 0x0DF0000000000000;
+
+# −0.0: Rust's `Iterator::sum` of f64 starts from −0.0 (core's float Sum, since 1.81), so a sum of −0.0 terms stays −0.
+#must_use
+fn _bj_vx_neg0(): f64 {
+    var z: f64 = 0x8000000000000000;
+    return z;
+}
+
+# Σ a[ia + k·sa]·b[ib + k·sb], k = 0..3, from −0.0, with an unbounded exponent: each product and partial sum to 53 bits,
+# the last sum rounded once into binary64, IEEE's signed zeros throughout.
+#must_use
+fn _bj_vx_dot4_ux(a: *f64, ia, sa, b: *f64, ib, sb): f64 {
+    var s: f64 = _bj_vx_neg0();
+    var e = 0;
+    for (var k = 0; k < 3; k = k + 1) {
+        var ps, pe = _bj_vx_mul(a[ia + k * sa], b[ib + k * sb]);
+        var ns, ne = _bj_k_ux_add(s, e, ps, pe);
+        s = ns;
+        e = ne;
+    }
+    var qs, qe = _bj_vx_mul(a[ia + 3 * sa], b[ib + 3 * sb]);
+    var r: f64 = _bj_k_ux_add_f64(s, e, qs, qe);
+    return r;
+}
+
+# Rust's four-term sum r = Σ a[ia + k·sa]·b[ib + k·sb] from −0.0, which its caller found outside [2^-800, DBL_MAX] (or
+# NaN): r itself where it is the unbounded chain's (finite with every product exact, or an input not finite), else
+# _bj_vx_dot4_ux. A finite r has finite products and inputs: ∞·0 is NaN, and ∞ or NaN stays in the sum.
+#must_use
+fn _bj_vx_dot4_edge(a: *f64, ia, sa, b: *f64, ib, sb, r: f64): f64 {
+    var dr: f64 = r - r;
+    var keep = 1;
+    for (var k = 0; k < 4; k = k + 1) {
+        var x: f64 = a[ia + k * sa];
+        var y: f64 = b[ib + k * sb];
+        if (dr == 0.0) {
+            if (x != 0.0 && y != 0.0) {
+                var p: f64 = x * y;
+                var ap: f64 = f64_abs(p);
+                if (!(ap > _BJ_VX_MN)) { keep = 0; }
+            }
+        } elif (_bj_vx_finite4(x, y, 0.0, 0.0) == 0) {
+            return r;
+        }
+    }
+    if (dr == 0.0 && keep == 1) { return r; }
+    var u: f64 = _bj_vx_dot4_ux(a, ia, sa, b, ib, sb);
+    return u;
 }
 
 # --- fmtf.cyr ---
@@ -22005,7 +22069,9 @@ fn _bj_rel_fields_edge(charge: f64, obs: *f64, st: *f64, e_out: *BjFieldVector, 
 # row 14). The waveplates are cancellation-free (ADR 0002 row 33, M3 part 2a-1): the Jones form takes cos 2θ and
 # sin 2θ correctly rounded where Rust had c² − s² and 2cs (c² − s² loses every digit near a fast axis at 45°), and the
 # Mueller form takes 1 − cos δ as 2·sin²(δ/2) where cos δ > 1/2 (where 1 − cos δ cancels). Every other formula is
-# Rust's in Rust's order. The JSON of the four structs is part 1a-2's.
+# Rust's in Rust's order, with an unbounded exponent at a range edge (ADR 0002 row 18, M3 part 2d-1a: the Mueller
+# matrices' angles 2θ past DBL_MAX, their four-term sums, the waveplate's subnormal sin²(δ/2)). The JSON of the four
+# structs is part 1a-2's.
 
 private
 
@@ -22663,13 +22729,12 @@ public fn BjMuellerMatrix_vertical_polarizer(): BjMuellerMatrix {
     return r;
 }
 
-# The linear polarizer at angle θ: ½[[1, C, S, 0], [C, C², CS, 0], [S, CS, S², 0], 0], C = cos 2θ, S = sin 2θ. Mirrors
+# The linear polarizer at angle θ: ½[[1, C, S, 0], [C, C², CS, 0], [S, CS, S², 0], 0], C = cos 2θ, S = sin 2θ, from the
+# reduction past DBL_MAX where 2θ passes it (ADR 0002 row 18; Rust's were NaN). Mirrors
 # `MuellerMatrix::linear_polarizer`.
 #must_use
 public fn BjMuellerMatrix_linear_polarizer(angle: f64): BjMuellerMatrix {
-    var a2: f64 = 2.0 * angle;
-    var c2: f64 = _bj_cos(a2);
-    var s2: f64 = _bj_sin(a2);
+    var c2, s2 = _bj_pol_cos_sin_2t(angle);
     var r: BjMuellerMatrix = _bj_pol_mm_diag(0.5, 0.0, 0.0, 0.0);
     var o: *f64 = _bj_pol_f64p(&r);
     var hc: f64 = 0.5 * c2;
@@ -22689,12 +22754,13 @@ public fn BjMuellerMatrix_linear_polarizer(angle: f64): BjMuellerMatrix {
 # C = cos 2θ, S = sin 2θ: [[1, 0, 0, 0], [0, C² + S²cos δ, CS(1 − cos δ), S sin δ], [0, CS(1 − cos δ), S² + C²cos δ,
 # −C sin δ], [0, −S sin δ, C sin δ, cos δ]]. The entries coupling S₃ are the exact negatives of Rust's (the module
 # comment, ADR 0002 row 5). 1 − cos δ is 2·sin²(δ/2) where cos δ > 1/2, where the difference cancels (ADR 0002
-# row 33), and Rust's difference elsewhere, where it is exact or nearly. Mirrors `MuellerMatrix::waveplate`.
+# row 33), and Rust's difference elsewhere, where it is exact or nearly. At the range edges (ADR 0002 row 18, M3 part
+# 2d-1a): C and S come from the reduction past DBL_MAX where 2θ passes it (Rust's were NaN), and where sin²(δ/2) falls
+# below 2^-1022 (δ below about 2^-510), CS(1 − cos δ) is CS·2·sin²(δ/2) rounded once from the 53-bit square (the
+# subnormal square had rounded twice). Mirrors `MuellerMatrix::waveplate`.
 #must_use
 public fn BjMuellerMatrix_waveplate(fast_axis_angle: f64, retardance: f64): BjMuellerMatrix {
-    var a2: f64 = 2.0 * fast_axis_angle;
-    var c2: f64 = _bj_cos(a2);
-    var s2: f64 = _bj_sin(a2);
+    var c2, s2 = _bj_pol_cos_sin_2t(fast_axis_angle);
     var cd: f64 = _bj_cos(retardance);
     var sd: f64 = _bj_sin(retardance);
     var r: BjMuellerMatrix = _bj_pol_mm_diag(1.0, 0.0, 0.0, cd);
@@ -22703,20 +22769,25 @@ public fn BjMuellerMatrix_waveplate(fast_axis_angle: f64, retardance: f64): BjMu
     var ss: f64 = s2 * s2;
     var cs: f64 = c2 * s2;
     var om: f64 = 1.0 - cd;
+    var hs: f64 = 0.0;
+    var edge = 0;
     if (cd > 0.5) {
         var hd: f64 = retardance / 2.0;
-        var hs: f64 = _bj_sin(hd);
+        hs = _bj_sin(hd);
         var hh: f64 = hs * hs;
         om = 2.0 * hh;
+        if (hh < _BJ_VX_MN && hs != 0.0) { edge = 1; }
     }
+    var csom: f64 = cs * om;
+    if (edge == 1) { csom = _bj_pol_cs_om(cs, hs); }
     var ssd: f64 = ss * cd;
     var ccd: f64 = cc * cd;
     var nc2: f64 = -c2;
     var ns2: f64 = -s2;
     o[5] = cc + ssd;
-    o[6] = cs * om;
+    o[6] = csom;
     o[7] = s2 * sd;
-    o[9] = cs * om;
+    o[9] = csom;
     o[10] = ss + ccd;
     o[11] = nc2 * sd;
     o[13] = ns2 * sd;
@@ -22740,13 +22811,11 @@ public fn BjMuellerMatrix_half_wave_plate(fast_axis_angle: f64): BjMuellerMatrix
 
 # The rotation of the coordinate frame by θ (passive): S₁′ = cos 2θ S₁ + sin 2θ S₂, S₂′ = −sin 2θ S₁ + cos 2θ S₂.
 # Re-expressing a state in axes rotated by +θ physically rotates it by −θ, so this is the Mueller form of
-# BjJonesMatrix_rotator(−θ); an element M rotated by θ is rotation(−θ)·M·rotation(θ). Mirrors
-# `MuellerMatrix::rotation`.
+# BjJonesMatrix_rotator(−θ); an element M rotated by θ is rotation(−θ)·M·rotation(θ). cos 2θ and sin 2θ come from the
+# reduction past DBL_MAX where 2θ passes it (ADR 0002 row 18; Rust's were NaN). Mirrors `MuellerMatrix::rotation`.
 #must_use
 public fn BjMuellerMatrix_rotation(angle: f64): BjMuellerMatrix {
-    var a2: f64 = 2.0 * angle;
-    var c2: f64 = _bj_cos(a2);
-    var s2: f64 = _bj_sin(a2);
+    var c2, s2 = _bj_pol_cos_sin_2t(angle);
     var ns2: f64 = -s2;
     var r: BjMuellerMatrix = _bj_pol_mm_diag(1.0, c2, c2, 1.0);
     var o: *f64 = _bj_pol_f64p(&r);
@@ -22779,20 +22848,31 @@ public fn BjMuellerMatrix_left_circular_polarizer(): BjMuellerMatrix {
 
 impl BjMuellerMatrix {
     # This matrix applied to a Stokes vector: each output the sum of a row's four products, left to right (Rust's
-    # iterator sum, from 0). Mirrors `MuellerMatrix::apply`.
+    # iterator sum, from −0.0), with an unbounded exponent at a range edge (ADR 0002 row 18, the section comment
+    # below). Mirrors `MuellerMatrix::apply`.
     #must_use
     public fn apply(self, s: BjStokesVector): BjStokesVector {
         var m: *f64 = _bj_pol_f64p(self);
         var v: *f64 = _bj_pol_f64p(&s);
         var r: BjStokesVector;
         var o: *f64 = _bj_pol_f64p(&r);
+        var v0: f64 = v[0];
+        var v1: f64 = v[1];
+        var v2: f64 = v[2];
+        var v3: f64 = v[3];
         for (var i = 0; i < 4; i = i + 1) {
-            var acc: f64 = _bj_pol_neg0();
-            for (var j = 0; j < 4; j = j + 1) {
-                var a: f64 = m[4 * i + j];
-                var b: f64 = v[j];
-                var p: f64 = a * b;
-                acc = acc + p;
+            var k = 4 * i;
+            var p0: f64 = m[k] * v0;
+            var p1: f64 = m[k + 1] * v1;
+            var p2: f64 = m[k + 2] * v2;
+            var p3: f64 = m[k + 3] * v3;
+            var acc: f64 = ((p0 + p1) + p2) + p3;           # Rust's −0.0 + p₀ is p₀, its zero's sign included
+            var aa: f64 = f64_abs(acc);
+            if (!(aa >= _BJ_VX_LO4 && aa <= _BJ_VX_HI)) {
+                # a row of zeros: every product has a zero factor, so the sum is the chain's
+                if (!(m[k] == 0.0 && m[k + 1] == 0.0 && m[k + 2] == 0.0 && m[k + 3] == 0.0)) {
+                    acc = _bj_vx_dot4_edge(m, k, 1, v, 0, 1, acc);
+                }
             }
             o[i] = acc;
         }
@@ -22800,7 +22880,8 @@ impl BjMuellerMatrix {
     }
 
     # self × other: self applied after other, each entry a sum of four products left to right (Rust's iterator
-    # sum). Mirrors `MuellerMatrix::compose`.
+    # sum), with an unbounded exponent at a range edge (ADR 0002 row 18, the section comment below). Mirrors
+    # `MuellerMatrix::compose`.
     #must_use
     public fn compose(self, other: BjMuellerMatrix): BjMuellerMatrix {
         var a: *f64 = _bj_pol_f64p(self);
@@ -22808,26 +22889,47 @@ impl BjMuellerMatrix {
         var r: BjMuellerMatrix;
         var o: *f64 = _bj_pol_f64p(&r);
         for (var i = 0; i < 4; i = i + 1) {
+            var k = 4 * i;
+            var a0: f64 = a[k];
+            var a1: f64 = a[k + 1];
+            var a2: f64 = a[k + 2];
+            var a3: f64 = a[k + 3];
+            var az = 0;
+            if (a0 == 0.0 && a1 == 0.0 && a2 == 0.0 && a3 == 0.0) { az = 1; }
             for (var j = 0; j < 4; j = j + 1) {
-                var acc: f64 = _bj_pol_neg0();
-                for (var k = 0; k < 4; k = k + 1) {
-                    var x: f64 = a[4 * i + k];
-                    var y: f64 = b[4 * k + j];
-                    var p: f64 = x * y;
-                    acc = acc + p;
+                var p0: f64 = a0 * b[j];
+                var p1: f64 = a1 * b[j + 4];
+                var p2: f64 = a2 * b[j + 8];
+                var p3: f64 = a3 * b[j + 12];
+                var acc: f64 = ((p0 + p1) + p2) + p3;       # Rust's −0.0 + p₀ is p₀
+                var aa: f64 = f64_abs(acc);
+                if (!(aa >= _BJ_VX_LO4 && aa <= _BJ_VX_HI) && az == 0) {
+                    # a column of zeros, like a row of them, makes every product's factor zero
+                    if (!(b[j] == 0.0 && b[j + 4] == 0.0 && b[j + 8] == 0.0 && b[j + 12] == 0.0)) {
+                        acc = _bj_vx_dot4_edge(a, k, 1, b, j, 4, acc);
+                    }
                 }
-                o[4 * i + j] = acc;
+                o[k + j] = acc;
             }
         }
         return r;
     }
 }
 
-# −0.0: Rust's `Iterator::sum` of f64 starts from −0.0 (core's float Sum, since 1.81), so a sum of −0.0 terms stays −0.
+# ── the Mueller matrices' range edges (M3 part 2d-1a, ADR 0002 row 18) ──────────────────────────────────────────────
+# apply and compose sum each output inline, as Rust does, test it against src/crmath_vx.cyr's band (_BJ_VX_LO4) and
+# call _bj_vx_dot4_edge outside it, unless a row or column of zeros makes every product exact (the common zeros of the
+# polarizers, met without a call). scripts/oracle/cr_driver.cyr's dot4 entry runs the same chain and test.
+
+# cs·2·sin²(δ/2) for the waveplate where Rust's square hs² falls below 2^-1022 (hs ≠ 0): hs² to 53 bits with an
+# unbounded exponent, doubled exactly, then the product by cs (its 53-bit value: C and S are at least about 2^-62 in
+# magnitude unless 2θ is tiny, where C = 1 and cs = S exactly) rounded once.
 #must_use
-fn _bj_pol_neg0(): f64 {
-    var z: f64 = 0x8000000000000000;
-    return z;
+fn _bj_pol_cs_om(cs: f64, hs: f64): f64 {
+    var hq, he = _bj_vx_mul(hs, hs);
+    var cq, ce = _bj_k_ux_from(cs);
+    var r: f64 = _bj_k_ux_mul_f64(cq, ce, hq, he + 1);
+    return r;
 }
 
 # --- scattering.cyr ---

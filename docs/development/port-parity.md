@@ -3718,3 +3718,98 @@ E and B = n̂ × E/c.
   measured, 0 pending, 75,597 accepted (ADR 01: 29,441; ADR 0002: 46,156)** over 567,079 rows; **all 380 digests
   equal**. `propagate_beam`'s and both transforms' changed; the other 377 are unchanged. `beam.tcyr` passes on all
   three.
+
+## 67. M3 part 2d-1a: the Mueller matrices at their range edges (2026-11-14)
+
+- **2d-1 runs as three bites** (plan §0.1): 2d-1a the Mueller matrices, 2d-1b the Jones vectors and matrices
+  (`intensity`, `normalized`, `inner`, `overlap`, `apply`, `compose`, `determinant`), 2d-1c the Stokes vectors
+  (`from_jones`, the degree of polarization, the ellipticity and orientation angles). The list is §55's candidates
+  and a second reading of polarization.rs against the rule: where an intermediate leaves the normal range and the
+  result is representable, Rust's chain runs with an unbounded exponent and its last step rounds once.
+- **ADR 0002 row 18, amended for the Mueller matrices**:
+  - `linear_polarizer`, `rotation` and `waveplate` (and through it the quarter- and half-wave plates) take cos 2θ
+    and sin 2θ from row 33's `_bj_pol_cos_sin_2t`: one `_bj_sin_cos` of the double 2θ (the bits of the two separate
+    calls), or the reduction past DBL_MAX where |θ| ≥ 2^1023. Rust's 2θ was ∞ there, and every entry it entered NaN.
+  - `waveplate`'s CS·2·sin²(δ/2), row 33's form where cos δ > 1/2, rounds once from the 53-bit square where
+    sin²(δ/2) falls below 2^-1022, |δ| below about 2^-510 (`_bj_pol_cs_om`). CS is always its 53-bit value: |C| and
+    |S| stay above about 2^-62 for any double 2θ, except where 2θ is tiny, and there C = 1 and CS = S exactly.
+  - `apply` and `compose` sum four products from −0.0, Rust's f64 Sum, inline and unrolled (−0.0 + p₀ is p₀), then
+    test the sum against a band. Outside it, unless a row or column of zeros makes every product exact,
+    `src/crmath_vx.cyr`'s `_bj_vx_dot4_edge` keeps a finite sum whose four products are exact, and otherwise
+    `_bj_vx_dot4_ux` runs the chain with an unbounded exponent (kimiya's `_bj_k_ux_add`, the last sum by
+    `_bj_k_ux_add_f64`). The helpers live in crmath_vx, a file of internals, so `cr_driver.cyr` can call them; its
+    `_drv_dot4` is the inline chain and test.
+- **The guard's argument** (crmath_vx's new section). A product below 2^-1022 is within 2^-1075 of its 53-bit value
+  and at most 2^-1022 in magnitude. A partial sum or term of 2^-968 or more absorbs it in both chains (5d-2's
+  argument). Otherwise the partial sums the two chains disagree on stay below 2^-967, then 2^-911, then 2^-855, as
+  each later term fails to absorb them. So a finite sum of at least 2^-800 is the chain's: 5d-2's three-term bound,
+  2^-900, is not enough for four terms. A finite sum whose products are all exact is the chain's at any size, since
+  a sum of normal values below 2^-1022 is exact.
+- **The oracle**: `polarization.tsv` gains 558 rows after every earlier row (`mueller_edges`; the old file an exact
+  prefix):
+  - the angle constructors at fast axes from DBL_MAX/2 to DBL_MAX of either sign (36 rows);
+  - the waveplate at six fast axes and 13 retardances around sin²(δ/2) = 2^-1022 and 2^-1075, and at the large
+    axes (124 in all);
+  - 14 Mueller matrices against 15 Stokes vectors (`apply`, 210 rows) and against each other (`compose`, 188). They
+    hold products past DBL_MAX that cancel, partial sums past it, products of 2.25·2^-1074, a product that rounds up
+    to 2^-1022 (w = 1 − 2^-53 times 2^-1022), a last sum that rounding to 53 bits first would put on a midpoint
+    (2^-1030 ± 2^-1075 ± 2^-1090), and small sums of exact products.
+- **validate.py**: `pol_eval` takes `r18`, the port's forms under `wp`: the angles through `pol_cos_sin_2t`, the
+  waveplate's square through `rnd53`, and every `apply` and `compose` sum with finite inputs through `pol_dot4`, the
+  unbounded chain itself. So the harness checks the port's guard on every row. `polarization_adr_rows` labels a row
+  18 where the range edges alone account for its change, before rows 33 and 14. The harness passed on its first run,
+  and a one-bit flip of each new row's first output was caught on 547 of 558; the other 11 are NaN outputs, whose
+  bits are not compared (row 6).
+- **cr_verify.py's dot4 family**: `_drv_dot4` on 50,000 cases, with b contiguous (`apply`'s) and at a stride of 4
+  (`compose`'s column), against exact.py's chain:
+  - products anywhere in the range, with zeros of both signs;
+  - products near 2^-1022, some below it, with normal terms among them;
+  - products past DBL_MAX, cancelling or not;
+  - sums cancelling to small values that subnormal products then meet;
+  - products just below 2^-1022 that round up to it.
+
+  **100,000 calls per target, 0 mismatches on x86_64 and aarch64.** 6,643 cases differ from Rust's sum, none of them
+  inside the band.
+- **Mutations**, each run through the parity harness, and the rows that caught it:
+  - the band dropped: 24;
+  - a product of 2^-1022 taken as exact: 1;
+  - an overflowed sum kept: 24;
+  - the exact-product test skipped: 24;
+  - the square not doubled: 54;
+  - the waveplate's edge switched off: 6;
+  - the last sum rounded to 53 bits first: 1, the midpoint row, added for it after no row caught it;
+  - the zero-row shortcut on two entries of the row: 5, and the zero-column one: 6.
+- **Mappings**: `polarization.adr.tsv` holds 2,619 rows:
+  - row 33's 2,321: 42 more Mueller waveplate rows from the new grid, 4 of which the 53-bit square changes
+    (δ = 1e-155 at θ = 0.3: 2.330097714918e-311 for 2.3300977149184e-311);
+  - row 18's 237: the waveplate 149 (all at |θ| ≥ 2^1023), `apply` 31, `compose` 17, and the linear polarizer, the
+    rotation and the two plates 10 each. 107 of them are older rows, NaN in Rust and the port alike before;
+  - row 14's 61.
+
+  Rust gave NaN for every entry that 2θ enters on the 189 angle rows. On the 48 sums it gave ±∞ or NaN for a finite
+  value (19 rows), NaN for ±∞ (7), the wrong zero sign (14), 0 for a nonzero value or the reverse (2), and a misrounded
+  subnormal (9); a row can show several.
+- **Tests**: `cyrius_mueller_row18` in `tests/polarization.tcyr` (7 assertions, 197 in the file):
+  - the linear polarizer at θ = DBL_MAX and the rotation by −2^1023 (MPFR's bits);
+  - the waveplate at δ = 1e-155, one unit below the twice-rounded square;
+  - DBL_MAX + DBL_MAX − DBL_MAX = DBL_MAX;
+  - three products of 2.25·2^-1074 summing to 7·2^-1074;
+  - 10^200·10^200 − 10^200·10^200 = +0;
+  - w·2^-1022 − 2^-1022 = −0.
+- **Benchmarks.** A first form called a shared `_bj_vx_dot4` for each output. A full bench interleaved against
+  2c-2's tree (three rounds, load 4.8 to 7.3) put `polarization/mueller_apply` at 177–190 ns for 91–97 in its two
+  quieter rounds: a 6-argument call per output, and the edge test's call for each of the polarizer's two zero rows. A micro-bench of three variants
+  settled the form: `apply` and `compose` sum inline and unrolled, and test a row (or column) of zeros before
+  calling the edge test. The final tree, interleaved with HEAD's three times (load 6.7):
+  - `mueller_apply` on the bench's polarizer: 99–106 → 116–122 ns, the band and zero-row tests;
+  - a dense `apply` (a waveplate on a general Stokes vector): 98–106 → 100–105 ns, unchanged;
+  - a dense `compose`: 449–487 → 359–376 ns (−21 %), each row of the left matrix read once, not once per column.
+
+  A second full bench, interleaved against 2c-2's tree as the load fell from 11 to 5.6, read `mueller_apply` 94 →
+  107 ns in its quietest round. The record takes that 107 ns (108× Rust's 0.99 ns, whose arguments LLVM folds); every
+  other row is within the load's drift (a median of +6 % over all 81, and within ±3 % in that round).
+- **Result, every target** (x86_64 ELF, x86_64 PE, aarch64): **16 modules, 0 failing; 491,761 ok, 0 failed, 0
+  measured, 0 pending, 75,876 accepted (ADR 01: 29,441; ADR 0002: 46,435)** over 567,637 rows; **all 380 digests
+  equal**. The seven Mueller constructors' and sums' digests changed (`linear_polarizer`, `rotation`, `waveplate`, the
+  two plates, `apply`, `compose`); the other 373 are unchanged. `polarization.tcyr` passes on all three. The gate is
+  clean (17 steps, no warnings; execution coverage 288 of 288 functions).
