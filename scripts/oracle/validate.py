@@ -4213,6 +4213,310 @@ def scattering_adr_rows(path: Path) -> list:
     return out
 
 
+# ── beam: rust-old/src/beam.rs (M3 part 1c-1) ──────────────────────────────────────────────────────────────────────
+# Gaussian beams, ABCD matrices, resonators and the HG/LG modes, transcribed in Rust's order. One transcription
+# serves Rust and the port: they share every formula but two. The port's Hermite–Gaussian field is Rust's conjugated
+# part for part (ADR 0002 row 5, e^{+jωt}: (u·cos φ, −(u·sin φ))), and its Laguerre–Gaussian power for l = i32::MIN
+# is (2r²/w²)^{2³¹}, where Rust's `unsigned_abs() as i32` wraps to −2³¹ (ADR 0002 row 32).
+BM_SQRT2 = bits_to_f("3ff6a09e667f3bcd")          # std::f64::consts::SQRT_2
+BM_P_GLIBC = dict(GLIBC_P, acos=LIBM.acos)
+BM_P_MPFR = dict(MPFR_P, acos=lambda x: mpfr_ref.cr("acos", x))
+
+
+def bm_pos(x: float) -> bool:
+    return math.isfinite(x) and x > 0.0
+
+
+def bm_new(lam, w0):
+    """GaussianBeam::new: the three fields, or the error's tokens."""
+    if not bm_pos(lam):
+        return ip_err(f"wavelength must be positive and finite, got {rust_display(lam)}")
+    if not bm_pos(w0):
+        return ip_err(f"beam waist must be positive and finite, got {rust_display(w0)}")
+    zr = fdiv(SC_PI * w0 * w0, lam)
+    if not bm_pos(zr):
+        return ip_err(f"Rayleigh range πw₀²/λ = {rust_display(zr)} is not representable (w₀ = {rust_display(w0)}, "
+                      f"λ = {rust_display(lam)})")
+    return [("f", lam), ("f", w0), ("f", zr)]
+
+
+def bm_spot(bm, z):
+    ratio = fdiv(z, bm[2])
+    return bm[1] * fsqrt(1.0 + ratio * ratio)
+
+
+def bm_hermite(n, x):
+    if n == 0:
+        return 1.0
+    if n == 1:
+        return 2.0 * x
+    hp, hc = 1.0, 2.0 * x
+    for k in range(2, n + 1):
+        hp, hc = hc, 2.0 * x * hc - 2.0 * float(k - 1) * hp
+    return hc
+
+
+def bm_laguerre(p, l, x):
+    if p == 0:
+        return 1.0
+    lf = float(l)
+    if p == 1:
+        return 1.0 + lf - x
+    lp, lc = 1.0, 1.0 + lf - x
+    for k in range(2, p + 1):
+        kf = float(k)
+        lp, lc = lc, fdiv((2.0 * kf + lf - 1.0 - x) * lc - (kf + lf - 1.0) * lp, kf)
+    return lc
+
+
+def bm_hg(bm, m, n, x, y, z, P):
+    w = bm_spot(bm, z)
+    hm = bm_hermite(m, fdiv(BM_SQRT2 * x, w))
+    hn = bm_hermite(n, fdiv(BM_SQRT2 * y, w))
+    env = P["exp"](fdiv(-(x * x + y * y), w * w))
+    return fdiv(bm[1], w) * hm * hn * env
+
+
+def bm_hgf(bm, m, n, x, y, z, P, port=False):
+    amp = bm_hg(bm, m, n, x, y, z, P)
+    k = fdiv(2.0 * SC_PI, bm[0])
+    zr = bm[2]
+    inv_r = fdiv(z, z * z + zr * zr)
+    order = float(m) + float(n) + 1.0
+    phase = k * z + 0.5 * k * (x * x + y * y) * inv_r - order * P["atan"](fdiv(z, zr))
+    re, im = amp * P["cos"](phase), amp * P["sin"](phase)
+    return [("f", re), ("f", -im if port else im)]
+
+
+def bm_lg(bm, p, l, r, z, P, port=False):
+    w = bm_spot(bm, z)
+    rho = fdiv(BM_SQRT2 * r, w)
+    rs = rho * rho
+    la = abs(l)
+    lpv = bm_laguerre(p, la, rs)
+    env = P["exp"](fdiv(-2.0 * r * r, w * w))
+    scale = fdiv(bm[1] * bm[1], w * w)
+    e = la if port or la < 1 << 31 else la - (1 << 32)   # Rust's `l.unsigned_abs() as i32`
+    return scale * powidf2_ieee(rs, e) * lpv * lpv * env
+
+
+def bm_propagate(m, q0, q1):
+    a, b, c, d = m
+    nr, ni = a * q0 + b, a * q1
+    dr, di = c * q0 + d, c * q1
+    dsq = dr * dr + di * di
+    if dsq < 1e-60:
+        return dz_err("ABCD beam propagation denominator is zero")
+    return [("f", fdiv(nr * dr + ni * di, dsq)), ("f", fdiv(ni * dr - nr * di, dsq))]
+
+
+def bm_transform(m, bm):
+    a, b, c, d = m
+    det = a * d - b * c
+    if not bm_pos(det):
+        return ip_err(f"ABCD determinant must be positive and finite (det = n_in/n_out), got {rust_display(det)}")
+    q = bm_propagate(m, 0.0, bm[2])
+    if q[0][0] == "E":
+        return q
+    zr2 = q[1][1]
+    if not bm_pos(zr2):
+        return ip_err("transformed beam has non-physical Rayleigh range")
+    lam = bm[0] if abs(det - 1.0) <= 1e-12 else bm[0] * det
+    out = bm_new(lam, fsqrt(fdiv(zr2 * lam, SC_PI)))
+    if out[0][0] == "E":
+        return out
+    return out + [("f", -q[0][1])]
+
+
+def bm_stability(L, r1, r2):
+    if not bm_pos(L):
+        return None, ip_err(f"cavity length must be positive and finite, got {rust_display(L)}")
+    if math.isnan(r1) or math.isnan(r2):
+        return None, ip_err("mirror radii must not be NaN")
+    if abs(r1) < 1e-30 or abs(r2) < 1e-30:
+        return None, dz_err("mirror radius of curvature cannot be zero")
+    g1, g2 = 1.0 - fdiv(L, r1), 1.0 - fdiv(L, r2)
+    gp = g1 * g2
+    return (g1, g2, gp, 0.0 <= gp <= 1.0), None
+
+
+def bm_eval(fn, v, P, port=False):
+    """beam.rs's outputs for a row on the primitives P; port=True for the port's field (conjugated) and LG power
+    (row 32). None for another name."""
+    fl = lambda xs: [("f", x) for x in xs]                       # noqa: E731
+    if fn == "GaussianBeam::new":
+        return bm_new(v[0], v[1])
+    if fn.startswith("GaussianBeam::"):
+        bm, z = v[:3], (v[3] if len(v) > 3 else None)
+        name = fn.split("::")[1]
+        if name == "q":
+            return fl([z, bm[2]])
+        if name == "spot_size":
+            return fl([bm_spot(bm, z)])
+        if name == "radius_of_curvature":
+            if abs(z) < 1e-30:
+                return ip_err("radius of curvature is infinite at the beam waist")
+            ratio = fdiv(bm[2], z)
+            return fl([z * (1.0 + ratio * ratio)])
+        if name == "gouy_phase":
+            return fl([P["atan"](fdiv(z, bm[2]))])
+        if name == "divergence":
+            return fl([fdiv(bm[0], SC_PI * bm[1])])
+        if name == "peak_intensity_factor":
+            w = bm_spot(bm, z)
+            return fl([fdiv(2.0, SC_PI * w * w)])
+        if name in ("confocal_parameter", "depth_of_focus"):
+            return fl([2.0 * bm[2]])
+        return None
+    if fn in ("AbcdMatrix::identity", "AbcdMatrix::default"):
+        return fl([1.0, 0.0, 0.0, 1.0])
+    if fn == "AbcdMatrix::new":
+        return fl(v[:4])
+    if fn == "AbcdMatrix::free_space":
+        return fl([1.0, v[0], 0.0, 1.0])
+    if fn in ("AbcdMatrix::thin_lens", "AbcdMatrix::curved_mirror"):
+        what, k = ("focal length", -1.0) if fn.endswith("thin_lens") else ("mirror radius", -2.0)
+        if math.isnan(v[0]):
+            return ip_err(f"{what} must not be NaN")
+        if abs(v[0]) < 1e-30:
+            return dz_err(f"{what} cannot be zero")
+        return fl([1.0, 0.0, fdiv(k, v[0]), 1.0])
+    if fn == "AbcdMatrix::flat_interface":
+        n1, n2 = v
+        if math.isnan(n1) or math.isnan(n2):
+            return ip_err("refractive indices must not be NaN")
+        if abs(n2) < 1e-30:
+            return dz_err("refractive index n₂ cannot be zero")
+        return fl([1.0, 0.0, 0.0, fdiv(n1, n2)])
+    if fn == "AbcdMatrix::curved_interface":
+        n1, n2, rad = v
+        if math.isnan(n1) or math.isnan(n2) or math.isnan(rad):
+            return ip_err("refractive indices and radius must not be NaN")
+        if abs(n2) < 1e-30:
+            return dz_err("refractive index n₂ cannot be zero")
+        if abs(rad) < 1e-30:
+            return dz_err("interface radius cannot be zero")
+        return fl([1.0, 0.0, fdiv(n1 - n2, n2 * rad), fdiv(n1, n2)])
+    if fn.startswith("AbcdMatrix::"):
+        a, b, c, d = v[:4]
+        name = fn.split("::")[1]
+        if name == "determinant":
+            return fl([a * d - b * c])
+        if name == "apply_ray":
+            y, th = v[4:6]
+            return fl([a * y + b * th, c * y + d * th])
+        if name == "compose":
+            e, f_, g, h = v[4:8]
+            return fl([a * e + b * g, a * f_ + b * h, c * e + d * g, c * f_ + d * h])
+        if name == "propagate_beam":
+            return bm_propagate(v[:4], v[4], v[5])
+        if name == "transform_beam_with_waist_position":
+            return bm_transform(v[:4], v[4:7])
+        if name == "transform_beam":
+            out = bm_transform(v[:4], v[4:7])
+            return out if out[0][0] == "E" else out[:3]
+        return None
+    if fn == "beam::resonator_stability":
+        st, bad = bm_stability(*v)
+        return bad or fl(st[:3]) + [("i", int(st[3]))]
+    if fn == "beam::resonator_beam_waist":
+        L, r1, r2, lam = v
+        st, bad = bm_stability(L, r1, r2)
+        if bad:
+            return bad
+        g1, g2, gp, ok = st
+        if not ok:
+            return ip_err(f"cavity is unstable (g₁g₂ = {rust_fixed(gp, 4)}), no confined mode exists")
+        if not bm_pos(lam):
+            return ip_err(f"wavelength must be positive and finite, got {rust_display(lam)}")
+        s = g1 + g2 - 2.0 * gp
+        if s == 0.0:
+            if g1 == 0.0 and g2 == 0.0:
+                return fl([fsqrt(fdiv(L * lam, 2.0 * SC_PI))])
+            return dz_err("planar cavity (g₁ = g₂ = 1) has no confined mode")
+        return fl([fsqrt(fdiv(fdiv(L * lam, SC_PI) * fsqrt(gp * (1.0 - gp)), abs(s)))])
+    if fn == "beam::transverse_mode_spacing":
+        fsr, g1, g2 = v
+        if not bm_pos(fsr):
+            return ip_err(f"free spectral range must be positive and finite, got {rust_display(fsr)}")
+        gp = g1 * g2
+        if not 0.0 <= gp <= 1.0:
+            return ip_err(f"cavity is unstable (g₁g₂ = {rust_fixed(gp, 4)})")
+        root = fsqrt(gp)
+        arg = -root if (g1 < 0.0 or g2 < 0.0) else root
+        return fl([fdiv(fsr, SC_PI) * P["acos"](arg)])
+    if fn == "beam::hermite_gaussian":
+        return fl([bm_hg(v[:3], int(v[3]), int(v[4]), v[5], v[6], v[7], P)])
+    if fn == "beam::hermite_gaussian_field":
+        return bm_hgf(v[:3], int(v[3]), int(v[4]), v[5], v[6], v[7], P, port)
+    if fn == "beam::laguerre_gaussian_intensity":
+        return fl([bm_lg(v[:3], int(v[3]), int(v[4]), v[5], v[6], P, port)])
+    return None
+
+
+def bm_harness(fn, v, P):
+    """The parity harness's reading of a row (tests/parity.tcyr's _par_beam): the port's function on the row's
+    numbers, the Hermite–Gaussian field conjugated back to the oracle's convention."""
+    out = bm_eval(fn, v, P, port=True)
+    if fn == "beam::hermite_gaussian_field":
+        return [out[0], ("f", -out[1][1])]
+    return out
+
+
+def bm_lines(path: Path):
+    for line in path.read_text().splitlines():
+        if line.startswith("#"):
+            continue
+        fn, cls, ins, outs, _note = line.split("\t")
+        toks = [] if ins == "-" else [parse_tok(x) for x in ins.split(" ")]
+        yield fn, cls, ins, outs, [b for _k, b in toks]
+
+
+def validate_beam(path: Path) -> list:
+    """beam.rs transcribed (bm_eval, Rust's forms) on glibc's primitives, against every row."""
+    errs = []
+    for n, (fn, _cls, _ins, outs, v) in enumerate(bm_lines(path), 1):
+        want = bm_eval(fn, v, BM_P_GLIBC)
+        if want is None:
+            errs.append(f"beam row {n}: no transcription for {fn}")
+            continue
+        if not toks_same(want, wave_toks([parse_tok(x) for x in outs.split(" ")])):
+            errs.append(f"beam row {n}: {fn}{tuple(v)} -> {wire(want)}, oracle {outs}")
+    return errs
+
+
+def beam_corrections(path: Path):
+    """The class-C beam rows whose outputs change when atan, acos, exp, cos and sin are correctly rounded."""
+    def fixes(_rows):
+        out = []
+        for fn, cls, ins, outs, v in bm_lines(path):
+            if cls != "C":
+                continue
+            want = bm_eval(fn, v, BM_P_MPFR)
+            old = wave_toks([parse_tok(x) for x in outs.split(" ")])
+            if toks_same(want, old):
+                continue
+            out.append((fn, ins, wire(want), f"oracle {outs}; correctly rounded primitives give {wire(want)}"))
+        return out
+    return fixes
+
+
+def beam_adr_rows(path: Path) -> list:
+    """ADR 0002 mappings for beam.tsv: each row whose harness reading (bm_harness, on the port's correctly rounded
+    primitives) differs from Rust's (the corrected oracle for class C): row 32 for the LG power at l = i32::MIN, row 5
+    otherwise (the field's conjugation, should it fail to be exact)."""
+    out = []
+    for fn, cls, ins, outs, v in bm_lines(path):
+        P = BM_P_MPFR if cls == "C" else BM_P_GLIBC
+        expect = bm_eval(fn, v, P)
+        port = bm_harness(fn, v, P)
+        if toks_same(port, expect):
+            continue
+        row = 32 if fn == "beam::laguerre_gaussian_intensity" and abs(int(v[4])) == 1 << 31 else 5
+        out.append((fn, ins, wire(port), str(row), f"oracle {outs}; ADR 0002 row {row}"))
+    return out
+
+
 # ── maxwell: rust-old/src/maxwell.rs ──────────────────────────────────────────────────────────
 def validate_maxwell(root: Path, path: Path) -> list:
     """maxwell.rs transcribed in its order of operations (class A: + − × ÷ and sqrt), its checks and error texts."""
@@ -5813,6 +6117,8 @@ def adr_rows(root: Path, module: str, path: Path) -> list:
         return polarization_adr_rows(path)
     if module == "scattering":
         return scattering_adr_rows(path)
+    if module == "beam":
+        return beam_adr_rows(path)
     maps = {13: adr13(root)}
     out = adr17_rows(root, module, path) if module in ("field", "charge") else []
     if module in ("field", "charge"):
@@ -6160,6 +6466,7 @@ def main() -> int:
     root = Path(sys.argv[1] if len(sys.argv) > 1 else ".").resolve()
     golden = root / "tests/golden"
     checks = {
+        "beam": validate_beam,
         "charge": lambda p: validate_charge(root, p),
         "circuit": validate_circuit,
         "complex": validate_complex,
@@ -6204,7 +6511,8 @@ def main() -> int:
                               polarization_corrections(golden / "polarization.tsv"))
     errs += check_corrections(root, "scattering", golden / "scattering.tsv",
                               scattering_corrections(golden / "scattering.tsv"))
-    for mod in ("charge", "circuit", "complex", "field", "material", "maxwell", "polarization", "relativity",
+    errs += check_corrections(root, "beam", golden / "beam.tsv", beam_corrections(golden / "beam.tsv"))
+    for mod in ("beam", "charge", "circuit", "complex", "field", "material", "maxwell", "polarization", "relativity",
                 "scattering", "wave"):
         errs += check_adr(root, mod, golden / f"{mod}.tsv")
     errs += cx_rows(golden / "complex.tsv")[1]

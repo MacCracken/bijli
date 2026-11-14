@@ -1,0 +1,586 @@
+# beam.cyr — beam.rs (M3 part 1c-1): Gaussian beams, ABCD ray transfer matrices, resonator stability, and the
+# higher-order Hermite–Gaussian and Laguerre–Gaussian modes. SI units: wavelengths and distances in metres.
+#
+# - BjGaussianBeam.wavelength is the wavelength in the medium the beam propagates in (λ₀/n). The complex beam
+#   parameter is q = (z − z_waist) + j·z_R with z_R = πw₀²/λ.
+# - ABCD matrices act on (height, actual ray angle), so a system that ends in another medium has det = n_in/n_out,
+#   and its output wavelength is λ_out = λ_in·det.
+# - The time convention is bijli's one, e^{+jωt} (src/complex.cyr's header; ADR 0002 row 5, D3): a mode field is
+#   ∝ e^{−jkz}, as Siegman's *Lasers* writes it. beam.rs wrote the complex field in e^{−iωt}, so
+#   bj_hermite_gaussian_field is its complex conjugate. Every other value here is real or convention-free: q = z + j·z_R
+#   is already Siegman's form (1/q = 1/R − jλ/(πw²)), so q, its ABCD propagation and the transformed beams keep Rust's
+#   numbers, and the Gouy phase ζ(z) = arctan(z/z_R) is a geometric angle.
+#
+# Mode indices are Rust's: m, n and p are u32 (0 ≤ m < 2³²) and l is an i32. The polynomials are their recurrences
+# in Rust's order; exp and atan are correctly rounded (src/crmath.cyr), and so are acos and sqrt.
+
+private
+
+# std::f64::consts::SQRT_2.
+var _BJ_BEAM_SQRT_2: f64 = 0x3FF6A09E667F3BCD;
+
+# ── the Gaussian beam ───────────────────────────────────────────────────────────────────────────────────────────
+
+# A fundamental Gaussian beam at a reference plane: its wavelength λ in the medium (m), its waist radius w₀ (the 1/e²
+# intensity radius at the focus, m) and its Rayleigh range z_R = πw₀²/λ (m). Mirrors `GaussianBeam`.
+public struct BjGaussianBeam {
+    wavelength: f64;
+    waist: f64;
+    rayleigh_range: f64;
+}
+
+# Records InvalidParameter "<head>{v}<tail>", v in Rust's Display form. Returns the code.
+fn _bj_beam_bad(head, v: f64, tail): i64 {
+    var t = _bj_err_reason(BJ_ERR_INVALID_PARAMETER);
+    _bj_tx_cstr(t, head);
+    _bj_fmt_f64_display(t, v);
+    _bj_tx_cstr(t, tail);
+    return BJ_ERR_INVALID_PARAMETER;
+}
+
+# 1 when x is finite and positive.
+#must_use
+fn _bj_beam_pos(x: f64): i64 {
+    if (_bj_is_finite(x) == 1 && x > 0.0) { return 1; }
+    return 0;
+}
+
+# A Gaussian beam of wavelength λ (in the medium) and waist w₀ into *out: Ok(0), or Err(InvalidParameter) with out
+# untouched unless both are positive and finite and z_R = πw₀²/λ is positive and finite. Mirrors `GaussianBeam::new`.
+#must_use
+public fn BjGaussianBeam_new(wavelength: f64, waist: f64, out: *BjGaussianBeam): Result {
+    if (_bj_beam_pos(wavelength) == 0) {
+        return Err(_bj_beam_bad("wavelength must be positive and finite, got ", wavelength, ""));
+    }
+    if (_bj_beam_pos(waist) == 0) {
+        return Err(_bj_beam_bad("beam waist must be positive and finite, got ", waist, ""));
+    }
+    var zr: f64 = _BJ_PI * waist * waist / wavelength;
+    if (_bj_beam_pos(zr) == 0) {
+        var t = _bj_err_reason(BJ_ERR_INVALID_PARAMETER);
+        _bj_tx_cstr(t, "Rayleigh range πw₀²/λ = ");
+        _bj_fmt_f64_display(t, zr);
+        _bj_tx_cstr(t, " is not representable (w₀ = ");
+        _bj_fmt_f64_display(t, waist);
+        _bj_tx_cstr(t, ", λ = ");
+        _bj_fmt_f64_display(t, wavelength);
+        _bj_tx_cstr(t, ")");
+        return Err(BJ_ERR_INVALID_PARAMETER);
+    }
+    if (_bj_log_on(4) == 1) {
+        var lb[200];
+        var lt[24];
+        _bj_tx_init(&lt, &lb, 200);
+        _bj_tx_cstr(&lt, "Gaussian beam created wavelength=");
+        _bj_fmt_f64_debug(&lt, wavelength);
+        _bj_tx_cstr(&lt, " waist=");
+        _bj_fmt_f64_debug(&lt, waist);
+        _bj_tx_cstr(&lt, " rayleigh_range=");
+        _bj_fmt_f64_debug(&lt, zr);
+        _bj_log_text(4, &lt);
+    }
+    out.wavelength = wavelength;
+    out.waist = waist;
+    out.rayleigh_range = zr;
+    return Ok(0);
+}
+
+impl BjGaussianBeam {
+    # The complex beam parameter q(z) = z + j·z_R, z the distance from the waist: (Re q, Im q). Mirrors
+    # `GaussianBeam::q`.
+    #must_use
+    public fn q(self, z: f64): (f64, f64) {
+        var zr: f64 = self.rayleigh_range;
+        return (z, zr);
+    }
+
+    # w(z) = w₀·√(1 + (z/z_R)²), the 1/e² intensity radius at distance z from the waist. Mirrors
+    # `GaussianBeam::spot_size`.
+    #must_use
+    public fn spot_size(self, z: f64): f64 {
+        var ratio: f64 = z / self.rayleigh_range;
+        var root: f64 = f64_sqrt(1.0 + ratio * ratio);
+        var w: f64 = self.waist * root;
+        return w;
+    }
+
+    # R(z) = z·(1 + (z_R/z)²), the wavefront's radius of curvature; InvalidParameter at the waist (|z| < 1e-30, where
+    # R is infinite). Mirrors `GaussianBeam::radius_of_curvature`.
+    #must_use
+    public fn radius_of_curvature(self, z: f64): Result {
+        var az: f64 = f64_abs(z);
+        if (az < 0.000000000000000000000000000001) {
+            _bj_tx_cstr(_bj_err_reason(BJ_ERR_INVALID_PARAMETER), "radius of curvature is infinite at the beam waist");
+            return Err(BJ_ERR_INVALID_PARAMETER);
+        }
+        var ratio: f64 = self.rayleigh_range / z;
+        var r: f64 = z * (1.0 + ratio * ratio);
+        return Ok(r);
+    }
+
+    # ζ(z) = arctan(z/z_R), the Gouy phase at distance z from the waist (a geometric angle, convention-free). Mirrors
+    # `GaussianBeam::gouy_phase`.
+    #must_use
+    public fn gouy_phase(self, z: f64): f64 {
+        var a: f64 = _bj_atan(z / self.rayleigh_range);
+        return a;
+    }
+
+    # θ = λ/(πw₀), the far-field half-angle divergence. Mirrors `GaussianBeam::divergence`.
+    #must_use
+    public fn divergence(self): f64 {
+        var d: f64 = self.wavelength / (_BJ_PI * self.waist);
+        return d;
+    }
+
+    # 2/(πw(z)²), the factor that multiplies the total power P to give the peak intensity I₀ = 2P/(πw²). Mirrors
+    # `GaussianBeam::peak_intensity_factor`.
+    #must_use
+    public fn peak_intensity_factor(self, z: f64): f64 {
+        var w: f64 = self.spot_size(z);
+        var f: f64 = 2.0 / (_BJ_PI * w * w);
+        return f;
+    }
+
+    # b = 2z_R, the confocal parameter. Mirrors `GaussianBeam::confocal_parameter`.
+    #must_use
+    public fn confocal_parameter(self): f64 {
+        var b: f64 = 2.0 * self.rayleigh_range;
+        return b;
+    }
+
+    # 2z_R, the depth of focus (where the spot grows by √2). Mirrors `GaussianBeam::depth_of_focus`.
+    #must_use
+    public fn depth_of_focus(self): f64 {
+        var d: f64 = 2.0 * self.rayleigh_range;
+        return d;
+    }
+}
+
+# ── ABCD matrices ───────────────────────────────────────────────────────────────────────────────────────────────
+
+# A paraxial ray transfer matrix acting on (y, θ): y' = A·y + B·θ, θ' = C·y + D·θ. Mirrors `AbcdMatrix`.
+public struct BjAbcdMatrix {
+    a: f64;
+    b: f64;
+    c: f64;
+    d: f64;
+}
+
+# The matrix (A, B; C, D). Mirrors `AbcdMatrix::new`.
+#must_use
+#pure
+public fn BjAbcdMatrix_new(a: f64, b: f64, c: f64, d: f64): BjAbcdMatrix {
+    var m: BjAbcdMatrix;
+    m.a = a;
+    m.b = b;
+    m.c = c;
+    m.d = d;
+    return m;
+}
+
+# The identity (no element). Mirrors `AbcdMatrix::identity`.
+#must_use
+#pure
+public fn BjAbcdMatrix_identity(): BjAbcdMatrix {
+    var m: BjAbcdMatrix = BjAbcdMatrix_new(1.0, 0.0, 0.0, 1.0);
+    return m;
+}
+
+# The identity. Mirrors `Default for AbcdMatrix`.
+#must_use
+#pure
+public fn BjAbcdMatrix_default(): BjAbcdMatrix {
+    var m: BjAbcdMatrix = BjAbcdMatrix_new(1.0, 0.0, 0.0, 1.0);
+    return m;
+}
+
+# Free space of length d: (1, d; 0, 1). Mirrors `AbcdMatrix::free_space`.
+#must_use
+#pure
+public fn BjAbcdMatrix_free_space(distance: f64): BjAbcdMatrix {
+    var m: BjAbcdMatrix = BjAbcdMatrix_new(1.0, distance, 0.0, 1.0);
+    return m;
+}
+
+# Records DivisionByZero with Rust's context. Returns the code.
+fn _bj_beam_dz(context): i64 {
+    return _bj_err_division_by_zero(context);
+}
+
+# A thin lens of focal length f (positive converging, negative diverging) into *out: (1, 0; −1/f, 1).
+# InvalidParameter for a NaN f, DivisionByZero when |f| < 1e-30. Mirrors `AbcdMatrix::thin_lens`.
+#must_use
+public fn BjAbcdMatrix_thin_lens(focal_length: f64, out: *BjAbcdMatrix): Result {
+    if (focal_length != focal_length) {
+        _bj_tx_cstr(_bj_err_reason(BJ_ERR_INVALID_PARAMETER), "focal length must not be NaN");
+        return Err(BJ_ERR_INVALID_PARAMETER);
+    }
+    var af: f64 = f64_abs(focal_length);
+    if (af < 0.000000000000000000000000000001) { return Err(_bj_beam_dz("focal length cannot be zero")); }
+    var c: f64 = -1.0 / focal_length;
+    out.a = 1.0;
+    out.b = 0.0;
+    out.c = c;
+    out.d = 1.0;
+    return Ok(0);
+}
+
+# A curved mirror of radius R (concave R > 0 focuses), a thin lens of f = R/2, into *out: (1, 0; −2/R, 1).
+# InvalidParameter for a NaN R, DivisionByZero when |R| < 1e-30. Mirrors `AbcdMatrix::curved_mirror`.
+#must_use
+public fn BjAbcdMatrix_curved_mirror(radius: f64, out: *BjAbcdMatrix): Result {
+    if (radius != radius) {
+        _bj_tx_cstr(_bj_err_reason(BJ_ERR_INVALID_PARAMETER), "mirror radius must not be NaN");
+        return Err(BJ_ERR_INVALID_PARAMETER);
+    }
+    var ar: f64 = f64_abs(radius);
+    if (ar < 0.000000000000000000000000000001) { return Err(_bj_beam_dz("mirror radius cannot be zero")); }
+    var c: f64 = -2.0 / radius;
+    out.a = 1.0;
+    out.b = 0.0;
+    out.c = c;
+    out.d = 1.0;
+    return Ok(0);
+}
+
+# A flat interface from index n₁ to n₂ into *out: (1, 0; 0, n₁/n₂). InvalidParameter for a NaN index,
+# DivisionByZero when |n₂| < 1e-30. Mirrors `AbcdMatrix::flat_interface`.
+#must_use
+public fn BjAbcdMatrix_flat_interface(n1: f64, n2: f64, out: *BjAbcdMatrix): Result {
+    if (n1 != n1 || n2 != n2) {
+        _bj_tx_cstr(_bj_err_reason(BJ_ERR_INVALID_PARAMETER), "refractive indices must not be NaN");
+        return Err(BJ_ERR_INVALID_PARAMETER);
+    }
+    var a2: f64 = f64_abs(n2);
+    if (a2 < 0.000000000000000000000000000001) { return Err(_bj_beam_dz("refractive index n₂ cannot be zero")); }
+    var d: f64 = n1 / n2;
+    out.a = 1.0;
+    out.b = 0.0;
+    out.c = 0.0;
+    out.d = d;
+    return Ok(0);
+}
+
+# A curved interface of radius R (R > 0 with the centre of curvature on the transmission side) from n₁ to n₂ into
+# *out: (1, 0; (n₁ − n₂)/(n₂R), n₁/n₂). InvalidParameter for a NaN input, DivisionByZero when |n₂| < 1e-30 or
+# |R| < 1e-30. Mirrors `AbcdMatrix::curved_interface`.
+#must_use
+public fn BjAbcdMatrix_curved_interface(n1: f64, n2: f64, radius: f64, out: *BjAbcdMatrix): Result {
+    if (n1 != n1 || n2 != n2 || radius != radius) {
+        _bj_tx_cstr(_bj_err_reason(BJ_ERR_INVALID_PARAMETER), "refractive indices and radius must not be NaN");
+        return Err(BJ_ERR_INVALID_PARAMETER);
+    }
+    var a2: f64 = f64_abs(n2);
+    if (a2 < 0.000000000000000000000000000001) { return Err(_bj_beam_dz("refractive index n₂ cannot be zero")); }
+    var ar: f64 = f64_abs(radius);
+    if (ar < 0.000000000000000000000000000001) { return Err(_bj_beam_dz("interface radius cannot be zero")); }
+    var c: f64 = (n1 - n2) / (n2 * radius);
+    var d: f64 = n1 / n2;
+    out.a = 1.0;
+    out.b = 0.0;
+    out.c = c;
+    out.d = d;
+    return Ok(0);
+}
+
+impl BjAbcdMatrix {
+    # (A·y + B·θ, C·y + D·θ), the ray (y, θ) after this element. Mirrors `AbcdMatrix::apply_ray`.
+    #must_use
+    public fn apply_ray(self, y: f64, theta: f64): (f64, f64) {
+        var y2: f64 = self.a * y + self.b * theta;
+        var t2: f64 = self.c * y + self.d * theta;
+        return (y2, t2);
+    }
+
+    # self × other: other first, then self. Mirrors `AbcdMatrix::compose`.
+    #must_use
+    public fn compose(self, other: *BjAbcdMatrix): BjAbcdMatrix {
+        var m: BjAbcdMatrix;
+        m.a = self.a * other.a + self.b * other.c;
+        m.b = self.a * other.b + self.b * other.d;
+        m.c = self.c * other.a + self.d * other.c;
+        m.d = self.c * other.b + self.d * other.d;
+        return m;
+    }
+
+    # AD − BC: 1 in one medium, n₁/n₂ across media. Mirrors `AbcdMatrix::determinant`.
+    #must_use
+    public fn determinant(self): f64 {
+        var det: f64 = self.a * self.d - self.b * self.c;
+        return det;
+    }
+
+    # q_out = (A·q + B)/(C·q + D) for q = q_re + j·q_im into out[0], out[1]: Ok(0), or DivisionByZero when
+    # |C·q + D|² < 1e-60 (a NaN passes, as Rust's test). Mirrors `AbcdMatrix::propagate_beam`.
+    #must_use
+    public fn propagate_beam(self, q_re: f64, q_im: f64, out: *f64): Result {
+        var num_re: f64 = self.a * q_re + self.b;
+        var num_im: f64 = self.a * q_im;
+        var den_re: f64 = self.c * q_re + self.d;
+        var den_im: f64 = self.c * q_im;
+        var den_sq: f64 = den_re * den_re + den_im * den_im;
+        if (den_sq < 0.000000000000000000000000000000000000000000000000000000000001) {
+            return Err(_bj_beam_dz("ABCD beam propagation denominator is zero"));
+        }
+        var r0: f64 = (num_re * den_re + num_im * den_im) / den_sq;
+        var r1: f64 = (num_im * den_re - num_re * den_im) / den_sq;
+        out[0] = r0;
+        out[1] = r1;
+        return Ok(0);
+    }
+
+    # The output beam into *out, and the signed distance from the output plane to its waist into *distance, for an
+    # input beam whose waist lies at the input plane. q_out = (A·j z_R + B)/(C·j z_R + D); z_R′ = Im q_out;
+    # λ′ = λ·det (λ kept when |det − 1| ≤ 1e-12, so one medium preserves it bit for bit); w₀′ = √(z_R′λ′/π);
+    # distance = −Re q_out (positive downstream: a converging beam). InvalidParameter when det isn't positive and
+    # finite or z_R′ isn't, DivisionByZero when C·q + D = 0, and BjGaussianBeam_new's errors; out and distance
+    # untouched by an error. Mirrors `AbcdMatrix::transform_beam_with_waist_position`.
+    #must_use
+    public fn transform_beam_with_waist_position(self, beam: *BjGaussianBeam, out: *BjGaussianBeam,
+      distance: *f64): Result {
+        var det: f64 = self.determinant();
+        if (_bj_beam_pos(det) == 0) {
+            return Err(_bj_beam_bad("ABCD determinant must be positive and finite (det = n_in/n_out), got ", det, ""));
+        }
+        var qo: f64[2];
+        var zr: f64 = beam.rayleigh_range;
+        var t, v = self.propagate_beam(0.0, zr, &qo);
+        if (is_err_result(t) == 1) { return Err(v); }
+        var zr2: f64 = qo[1];
+        if (_bj_beam_pos(zr2) == 0) {
+            _bj_tx_cstr(_bj_err_reason(BJ_ERR_INVALID_PARAMETER), "transformed beam has non-physical Rayleigh range");
+            return Err(BJ_ERR_INVALID_PARAMETER);
+        }
+        var lam: f64 = beam.wavelength;
+        var dd: f64 = f64_abs(det - 1.0);
+        if (dd > 0.000000000001) { lam = beam.wavelength * det; }
+        var w0: f64 = f64_sqrt(zr2 * lam / _BJ_PI);
+        var nb: BjGaussianBeam;
+        var t2, v2 = BjGaussianBeam_new(lam, w0, &nb);
+        if (is_err_result(t2) == 1) { return Err(v2); }
+        var d: f64 = -qo[0];
+        out.wavelength = nb.wavelength;
+        out.waist = nb.waist;
+        out.rayleigh_range = nb.rayleigh_range;
+        distance[0] = d;
+        return Ok(0);
+    }
+
+    # The output beam into *out for an input beam whose waist lies at the input plane, as
+    # transform_beam_with_waist_position without the waist's position. Mirrors `AbcdMatrix::transform_beam`.
+    #must_use
+    public fn transform_beam(self, beam: *BjGaussianBeam, out: *BjGaussianBeam): Result {
+        var d: f64[1];
+        var t, v = self.transform_beam_with_waist_position(beam, out, &d);
+        if (is_err_result(t) == 1) { return Err(v); }
+        return Ok(0);
+    }
+}
+
+# ── resonators ──────────────────────────────────────────────────────────────────────────────────────────────────
+
+# A two-mirror cavity's stability: g₁ = 1 − L/R₁, g₂ = 1 − L/R₂, their product, and whether 0 ≤ g₁g₂ ≤ 1 (1 stable,
+# 0 not). Mirrors `ResonatorStability`.
+public struct BjResonatorStability {
+    g1: f64;
+    g2: f64;
+    g_product: f64;
+    is_stable;
+}
+
+# The stability of a cavity of length L between mirrors of radii R₁ and R₂ (positive concave, ±∞ flat) into *out:
+# Ok(0), or with out untouched InvalidParameter for an L not positive and finite or a NaN radius, DivisionByZero when
+# |R₁| or |R₂| < 1e-30. Mirrors `resonator_stability`.
+#must_use
+public fn bj_resonator_stability(length: f64, r1: f64, r2: f64, out: *BjResonatorStability): Result {
+    if (_bj_beam_pos(length) == 0) {
+        return Err(_bj_beam_bad("cavity length must be positive and finite, got ", length, ""));
+    }
+    if (r1 != r1 || r2 != r2) {
+        _bj_tx_cstr(_bj_err_reason(BJ_ERR_INVALID_PARAMETER), "mirror radii must not be NaN");
+        return Err(BJ_ERR_INVALID_PARAMETER);
+    }
+    var a1: f64 = f64_abs(r1);
+    var a2: f64 = f64_abs(r2);
+    if (a1 < 0.000000000000000000000000000001 || a2 < 0.000000000000000000000000000001) {
+        return Err(_bj_beam_dz("mirror radius of curvature cannot be zero"));
+    }
+    var g1: f64 = 1.0 - length / r1;
+    var g2: f64 = 1.0 - length / r2;
+    var gp: f64 = g1 * g2;
+    var st = 0;
+    if (gp >= 0.0 && gp <= 1.0) { st = 1; }
+    out.g1 = g1;
+    out.g2 = g2;
+    out.g_product = gp;
+    out.is_stable = st;
+    return Ok(0);
+}
+
+# Records InvalidParameter "<head>{gp:.4}<tail>", Rust's four-decimal form of g₁g₂. Returns the code.
+fn _bj_beam_unstable(gp: f64, tail): i64 {
+    var t = _bj_err_reason(BJ_ERR_INVALID_PARAMETER);
+    _bj_tx_cstr(t, "cavity is unstable (g₁g₂ = ");
+    _bj_fmt_f64_fixed(t, gp, 4);
+    _bj_tx_cstr(t, tail);
+    return BJ_ERR_INVALID_PARAMETER;
+}
+
+# The fundamental mode's waist in a stable cavity, w₀ = √[(Lλ/π)·√(g₁g₂(1 − g₁g₂))/|g₁ + g₂ − 2g₁g₂|] (Siegman, ch. 19),
+# with the symmetric confocal limit w₀ = √(Lλ/2π) at g₁ = g₂ = 0. bj_resonator_stability's errors, then
+# InvalidParameter for an unstable cavity or a λ not positive and finite, DivisionByZero for the planar cavity
+# (g₁ = g₂ = 1). Mirrors `resonator_beam_waist`.
+#must_use
+public fn bj_resonator_beam_waist(length: f64, r1: f64, r2: f64, wavelength: f64): Result {
+    var st: BjResonatorStability;
+    var t, v = bj_resonator_stability(length, r1, r2, &st);
+    if (is_err_result(t) == 1) { return Err(v); }
+    var gp: f64 = st.g_product;
+    if (st.is_stable == 0) { return Err(_bj_beam_unstable(gp, "), no confined mode exists")); }
+    if (_bj_beam_pos(wavelength) == 0) {
+        return Err(_bj_beam_bad("wavelength must be positive and finite, got ", wavelength, ""));
+    }
+    var g1: f64 = st.g1;
+    var g2: f64 = st.g2;
+    var s: f64 = g1 + g2 - 2.0 * gp;
+    if (s == 0.0) {
+        if (g1 == 0.0 && g2 == 0.0) {
+            var two_pi: f64 = 2.0 * _BJ_PI;
+            var c: f64 = f64_sqrt(length * wavelength / two_pi);
+            return Ok(c);
+        }
+        return Err(_bj_beam_dz("planar cavity (g₁ = g₂ = 1) has no confined mode"));
+    }
+    var root: f64 = f64_sqrt(gp * (1.0 - gp));
+    var abs_s: f64 = f64_abs(s);
+    var w0_sq: f64 = length * wavelength / _BJ_PI * root / abs_s;
+    var w0: f64 = f64_sqrt(w0_sq);
+    return Ok(w0);
+}
+
+# Δν_T = (Δν_FSR/π)·arccos(±√(g₁g₂)), the frequency step per unit of m + n: + when g₁, g₂ ≥ 0, − when either is
+# negative (Siegman, ch. 19), so Δν_T ∈ [0, Δν_FSR]. InvalidParameter for an fsr not positive and finite or an
+# unstable (or NaN) g₁g₂. Mirrors `transverse_mode_spacing`.
+#must_use
+public fn bj_transverse_mode_spacing(fsr: f64, g1: f64, g2: f64): Result {
+    if (_bj_beam_pos(fsr) == 0) {
+        return Err(_bj_beam_bad("free spectral range must be positive and finite, got ", fsr, ""));
+    }
+    var gp: f64 = g1 * g2;
+    var stable = 0;
+    if (gp >= 0.0 && gp <= 1.0) { stable = 1; }
+    if (stable == 0) { return Err(_bj_beam_unstable(gp, ")")); }
+    var root: f64 = f64_sqrt(gp);
+    var arg: f64 = root;
+    if (g1 < 0.0 || g2 < 0.0) { arg = -root; }
+    var ac: f64 = _bj_acos(arg);
+    var s: f64 = fsr / _BJ_PI * ac;
+    return Ok(s);
+}
+
+# ── the modes ───────────────────────────────────────────────────────────────────────────────────────────────────
+
+# H_n(x) by the recurrence H₀ = 1, H₁ = 2x, H_k = 2x·H_{k−1} − 2(k − 1)·H_{k−2}, n ≥ 0 (Rust's u32). Mirrors beam.rs's
+# `hermite_polynomial` (bijli-internal; its tests reach it).
+#must_use
+public fn _bj_hermite_polynomial(n, x: f64): f64 {
+    if (n == 0) { return 1.0; }
+    var two_x: f64 = 2.0 * x;
+    if (n == 1) { return two_x; }
+    var h_prev: f64 = 1.0;
+    var h_curr: f64 = two_x;
+    for (var k = 2; k <= n; k = k + 1) {
+        var km: f64 = f64_from(k - 1);
+        var h_next: f64 = two_x * h_curr - 2.0 * km * h_prev;
+        h_prev = h_curr;
+        h_curr = h_next;
+    }
+    return h_curr;
+}
+
+# L_p^l(x) by the recurrence L₀ = 1, L₁ = 1 + l − x, L_k = ((2k + l − 1 − x)·L_{k−1} − (k + l − 1)·L_{k−2})/k, p and
+# l ≥ 0 (Rust's u32). Mirrors beam.rs's `laguerre_polynomial` (bijli-internal; its tests reach it).
+#must_use
+public fn _bj_laguerre_polynomial(p, l, x: f64): f64 {
+    if (p == 0) { return 1.0; }
+    var lf: f64 = f64_from(l);
+    var l1: f64 = 1.0 + lf - x;
+    if (p == 1) { return l1; }
+    var l_prev: f64 = 1.0;
+    var l_curr: f64 = l1;
+    for (var k = 2; k <= p; k = k + 1) {
+        var kf: f64 = f64_from(k);
+        var l_next: f64 = ((2.0 * kf + lf - 1.0 - x) * l_curr - (kf + lf - 1.0) * l_prev) / kf;
+        l_prev = l_curr;
+        l_curr = l_next;
+    }
+    return l_curr;
+}
+
+# The Hermite–Gaussian envelope u_mn(x, y, z) = (w₀/w)·H_m(√2x/w)·H_n(√2y/w)·e^{−(x² + y²)/w²}, the field with every
+# propagation phase removed (|u_mn| = |E|, u_mn² the intensity), the lobes' signs kept. The TEM₀₀ prefactor serves
+# every mode (HG₀₀(0, 0, 0) = 1): HG_mn carries 2^{m+n}·m!·n! times TEM₀₀'s power. m, n ≥ 0 (Rust's u32). Mirrors
+# `hermite_gaussian`.
+#must_use
+public fn bj_hermite_gaussian(beam: *BjGaussianBeam, m, n, x: f64, y: f64, z: f64): f64 {
+    var w: f64 = beam.spot_size(z);
+    var w0: f64 = beam.waist;
+    var sx: f64 = _BJ_BEAM_SQRT_2 * x / w;
+    var sy: f64 = _BJ_BEAM_SQRT_2 * y / w;
+    var hm: f64 = _bj_hermite_polynomial(m, sx);
+    var hn: f64 = _bj_hermite_polynomial(n, sy);
+    var r_sq: f64 = x * x + y * y;
+    var e: f64 = _bj_exp(-r_sq / (w * w));
+    var scale: f64 = w0 / w;
+    var u: f64 = scale * hm * hn * e;
+    return u;
+}
+
+# The complex Hermite–Gaussian field E_mn = u_mn·e^{−j[kz + k(x² + y²)/(2R(z)) − (m + n + 1)ζ(z)]} in e^{+jωt} (field
+# ∝ e^{−jkz}, Siegman's), u_mn = bj_hermite_gaussian, k = 2π/λ, 1/R(z) = z/(z² + z_R²) (finite at the waist),
+# ζ(z) = arctan(z/z_R). The conjugate of beam.rs's e^{−iωt} field, part for part: Rust's phase, then (u·cos φ,
+# −(u·sin φ)) (ADR 0002 row 5). Normalization as bj_hermite_gaussian's. Mirrors `hermite_gaussian_field`.
+#must_use
+public fn bj_hermite_gaussian_field(beam: *BjGaussianBeam, m, n, x: f64, y: f64, z: f64): BjComplex {
+    var amp: f64 = bj_hermite_gaussian(beam, m, n, x, y, z);
+    var two_pi: f64 = 2.0 * _BJ_PI;
+    var k: f64 = two_pi / beam.wavelength;
+    var zr: f64 = beam.rayleigh_range;
+    var inv_r: f64 = z / (z * z + zr * zr);
+    var mf: f64 = f64_from(m);
+    var nf: f64 = f64_from(n);
+    var order: f64 = mf + nf + 1.0;
+    var gouy: f64 = beam.gouy_phase(z);
+    var phase: f64 = k * z + 0.5 * k * (x * x + y * y) * inv_r - order * gouy;
+    # Complex::from_polar's (u·cos φ, u·sin φ), with one sincos as Rust's compiles it (correctly rounded, so the
+    # bits of separate cos and sin), then conjugated.
+    var sp, cp = _bj_sin_cos(phase);
+    var sv: f64 = sp;
+    var cv: f64 = cp;
+    var e: BjComplex;
+    e.re = amp * cv;
+    e.im = -(amp * sv);
+    return e;
+}
+
+# The Laguerre–Gaussian intensity I_pl(r, z) = (w₀/w)²·(2r²/w²)^|l|·[L_p^|l|(2r²/w²)]²·e^{−2r²/w²}, |E|² (the vortex
+# phase e^{jlφ} and the Gouy phase drop out). The TEM₀₀ prefactor serves every mode (LG₀₀(0, 0) = 1): LG_pl carries
+# (p + |l|)!/p! times TEM₀₀'s power. p ≥ 0 (Rust's u32), l Rust's i32. For l = i32::MIN the power is (2r²/w²)^{2³¹}
+# (ADR 0002 row 32: Rust's `l.unsigned_abs() as i32` wraps to −2³¹, the reciprocal). Mirrors
+# `laguerre_gaussian_intensity`.
+#must_use
+public fn bj_laguerre_gaussian_intensity(beam: *BjGaussianBeam, p, l, r: f64, z: f64): f64 {
+    var w: f64 = beam.spot_size(z);
+    var w0: f64 = beam.waist;
+    var rho: f64 = _BJ_BEAM_SQRT_2 * r / w;
+    var rho_sq: f64 = rho * rho;
+    var la = l;
+    if (la < 0) { la = 0 - la; }
+    var lp: f64 = _bj_laguerre_polynomial(p, la, rho_sq);
+    var e: f64 = _bj_exp(-2.0 * r * r / (w * w));
+    var scale: f64 = w0 * w0 / (w * w);
+    var pw: f64 = _bj_powi(rho_sq, la);
+    var i: f64 = scale * pw * lp * lp * e;
+    return i;
+}

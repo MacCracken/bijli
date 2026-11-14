@@ -1,0 +1,622 @@
+# beam.tcyr — src/beam.cyr (M3 part 1c-1): Gaussian beams, ABCD matrices, resonators and the HG/LG modes.
+#
+# Every group named test_* is rust-old/src/beam.rs's test of that name, ported assertion for assertion (the ledger
+# matches them by name). bijli's one convention is e^{+jωt} (ADR 0002 row 5): the Hermite–Gaussian field is the
+# conjugate of Rust's e^{−iωt} field, so `test_hermite_gaussian_field_closed_form` reads its imaginary parts with the
+# opposite sign, and says so; every other test reads real values that the convention leaves alone. The cyrius_*
+# groups pin the field's propagation sense, the reasons' exact text, out left alone on an error, and ADR 0002 row 32
+# (the LG power at l = i32::MIN). tests/golden/beam.tsv pins every function over its grid against Rust besides.
+
+include "tests/lib.cyr"
+
+var TOL: f64 = 0.000001;
+
+# |a − b| < tol.
+fn near(a: f64, b: f64, tol: f64): i64 {
+    var d: f64 = f64_abs(a - b);
+    if (d < tol) { return 1; }
+    return 0;
+}
+
+# |(a − b)/b|.
+fn rel(a: f64, b: f64): f64 {
+    var r: f64 = f64_abs((a - b) / b);
+    return r;
+}
+
+# The value of an Ok(f64) Result (the caller tests is_ok first).
+fn ok_f(t, v): f64 {
+    var x: f64 = v;
+    return x;
+}
+
+# 1 when the last error's Display text is a followed by b (a literal can't continue across lines).
+fn reason_is2(a, b): i64 {
+    var d = bj_last_error_display();
+    var la = strlen(a);
+    if (strlen(d) != la + strlen(b)) { return 0; }
+    if (memeq(d, a, la) != 1) { return 0; }
+    return memeq(d + la, b, strlen(b));
+}
+
+# The test beams' λ = 1064 nm, w₀ = 100 µm into *g: 1 on Ok.
+fn lab_beam(g: *BjGaussianBeam): i64 {
+    var t, v = BjGaussianBeam_new(0.000001064, 0.0001, g);
+    if (is_ok(t) == 1) { return 1; }
+    return 0;
+}
+
+# 1 when BjGaussianBeam_new(λ, w₀) is refused.
+fn beam_refused(lam: f64, w0: f64): i64 {
+    var g: BjGaussianBeam;
+    var t, v = BjGaussianBeam_new(lam, w0, &g);
+    if (is_err_result(t) == 1) { return 1; }
+    return 0;
+}
+
+# 1 when bj_resonator_stability(L, R₁, R₂) is refused.
+fn stab_refused(l: f64, r1: f64, r2: f64): i64 {
+    var st: BjResonatorStability;
+    var t, v = bj_resonator_stability(l, r1, r2, &st);
+    if (is_err_result(t) == 1) { return 1; }
+    return 0;
+}
+
+# 1 when bj_resonator_beam_waist(L, R₁, R₂, λ) is refused.
+fn waist_refused(l: f64, r1: f64, r2: f64, lam: f64): i64 {
+    var t, v = bj_resonator_beam_waist(l, r1, r2, lam);
+    if (is_err_result(t) == 1) { return 1; }
+    return 0;
+}
+
+# beam.rs's Gaussian beam and ABCD tests.
+fn rust_tests_a(): i64 {
+    var g: BjGaussianBeam;
+    test_group("test_beam_creation");
+    assert(lab_beam(&g) == 1, "Ok");
+    var w2: f64 = _bj_powi(0.0001, 2);
+    var expected_zr: f64 = _BJ_PI * w2 / 0.000001064;
+    var dz: f64 = f64_abs(g.rayleigh_range - expected_zr) / expected_zr;
+    assert(dz < TOL, "z_R = πw₀²/λ ≈ 0.0295 m");
+
+    test_group("test_beam_invalid");
+    assert(beam_refused(0.0, 0.0001) == 1 && beam_refused(0.000001064, -1.0) == 1, "λ = 0, w₀ < 0");
+
+    test_group("test_spot_size_at_waist");
+    var w0: f64 = g.spot_size(0.0);
+    assert(near(w0, g.waist, 0.00000000000000000001) == 1, "w(0) = w₀");
+
+    test_group("test_spot_size_at_rayleigh");
+    var sqrt2: f64 = _bj_from_bits(0x3FF6A09E667F3BCD);
+    var wzr: f64 = g.spot_size(g.rayleigh_range);
+    assert(near(wzr / g.waist, sqrt2, TOL) == 1, "w(z_R) = w₀√2");
+
+    test_group("test_spot_size_symmetric");
+    var wp: f64 = g.spot_size(0.01);
+    var wm: f64 = g.spot_size(-0.01);
+    assert(near(wp, wm, 0.00000000000000000001) == 1, "w(z) = w(−z)");
+
+    test_group("test_radius_of_curvature_far_field");
+    var zf: f64 = 100.0 * g.rayleigh_range;
+    var t1, v1 = g.radius_of_curvature(zf);
+    var rf: f64 = ok_f(t1, v1);
+    assert(is_ok(t1) == 1 && near(rf / zf, 1.0, 0.01) == 1, "R(z) ≈ z for z ≫ z_R");
+
+    test_group("test_radius_of_curvature_at_waist_fails");
+    var t2, v2 = g.radius_of_curvature(0.0);
+    assert(is_err_result(t2) == 1, "R is infinite at the waist");
+
+    test_group("test_gouy_phase_at_rayleigh");
+    var gz: f64 = g.gouy_phase(g.rayleigh_range);
+    assert(near(gz, _BJ_PI / 4.0, TOL) == 1, "ζ(z_R) = π/4");
+
+    test_group("test_divergence");
+    var th: f64 = g.divergence();
+    var ex: f64 = 0.000001064 / (_BJ_PI * 0.0001);
+    assert(f64_abs(th - ex) / ex < TOL, "θ = λ/(πw₀)");
+
+    test_group("test_confocal_equals_dof");
+    var cp: f64 = g.confocal_parameter();
+    var dof: f64 = g.depth_of_focus();
+    assert(near(cp, dof, 0.000000000000000000000000000001) == 1, "b = DOF = 2z_R");
+
+    test_group("test_identity_ray");
+    var id: BjAbcdMatrix = BjAbcdMatrix_identity();
+    var y1, a1 = id.apply_ray(1.0, 0.1);
+    assert(near(y1, 1.0, TOL) == 1 && near(a1, 0.1, TOL) == 1, "unchanged");
+
+    test_group("test_free_space_propagation");
+    var fs: BjAbcdMatrix = BjAbcdMatrix_free_space(1.0);
+    var y2, a2 = fs.apply_ray(0.0, 0.1);
+    assert(near(y2, 0.1, TOL) == 1 && near(a2, 0.1, TOL) == 1, "y = 0 + 1.0·0.1, θ unchanged");
+
+    test_group("test_thin_lens_focuses");
+    var lens: BjAbcdMatrix;
+    var t3, v3 = BjAbcdMatrix_thin_lens(0.1, &lens);
+    var y3, a3 = lens.apply_ray(1.0, 0.0);
+    assert(is_ok(t3) == 1 && near(y3, 1.0, TOL) == 1 && near(a3, -10.0, TOL) == 1, "(1, 0) → (1, −10)");
+
+    test_group("test_thin_lens_zero_focal");
+    var o: BjAbcdMatrix;
+    var t4, v4 = BjAbcdMatrix_thin_lens(0.0, &o);
+    assert(is_err_result(t4) == 1, "f = 0");
+
+    test_group("test_curved_mirror_equiv_lens");
+    var l5: BjAbcdMatrix;
+    var m5: BjAbcdMatrix;
+    var t5, v5 = BjAbcdMatrix_thin_lens(0.5, &l5);
+    var t6, v6 = BjAbcdMatrix_curved_mirror(1.0, &m5);
+    assert(near(l5.c, m5.c, TOL) == 1, "R = 2f is the lens of f");
+
+    test_group("test_flat_interface");
+    var fi: BjAbcdMatrix;
+    var t7, v7 = BjAbcdMatrix_flat_interface(1.0, 1.5, &fi);
+    var y7, a7 = fi.apply_ray(0.0, 0.3);
+    assert(f64_abs(y7) < TOL && near(a7, 0.3 / 1.5, TOL) == 1, "θ₂ = (n₁/n₂)θ₁");
+
+    test_group("test_compose_free_space");
+    var m1: BjAbcdMatrix = BjAbcdMatrix_free_space(1.0);
+    var m2: BjAbcdMatrix = BjAbcdMatrix_free_space(2.0);
+    var comp: BjAbcdMatrix = m2.compose(&m1);
+    var direct: BjAbcdMatrix = BjAbcdMatrix_free_space(3.0);
+    assert(near(comp.b, direct.b, TOL) == 1, "two propagations are one");
+
+    test_group("test_determinant_free_space");
+    var d1: f64 = m1.determinant();
+    assert(near(d1, 1.0, TOL) == 1, "det = 1");
+
+    test_group("test_determinant_interface");
+    var d2: f64 = fi.determinant();
+    assert(near(d2, 1.0 / 1.5, TOL) == 1, "det = n₁/n₂");
+
+    test_group("test_beam_propagation_free_space");
+    var fs2: BjAbcdMatrix = BjAbcdMatrix_free_space(0.01);
+    var q0, q1 = g.q(0.0);
+    var qo: f64[2];
+    var t8, v8 = fs2.propagate_beam(q0, q1, &qo);
+    var qr: f64 = qo[0];
+    var qi: f64 = qo[1];
+    assert(is_ok(t8) == 1 && f64_abs(qi - g.rayleigh_range) / g.rayleigh_range < TOL, "Im q = z_R unchanged");
+    assert(near(qr, 0.01, TOL) == 1, "Re q = 0.01");
+
+    test_group("test_beam_transform_through_lens");
+    var nb: BjGaussianBeam;
+    var t9, v9 = lens.transform_beam(&g, &nb);
+    var nw: f64 = nb.waist;
+    var nl: f64 = nb.wavelength;
+    var gl: f64 = g.wavelength;
+    assert(is_ok(t9) == 1 && nw > 0.0 && nl == gl, "a positive waist, the wavelength kept");
+    if (v1 == 7 || v2 == 7 || v3 == 7 || v4 == 7 || v5 == 7 || v6 == 7 || v7 == 7 || v8 == 7 || v9 == 7) {
+        println(".");
+    }
+    if (t5 == 7 || t6 == 7 || t7 == 7) { println("."); }
+    return 0;
+}
+
+# beam.rs's resonator and mode tests.
+fn rust_tests_b(): i64 {
+    var st: BjResonatorStability;
+    test_group("test_symmetric_confocal");
+    var t1, v1 = bj_resonator_stability(0.5, 0.5, 0.5, &st);
+    var g1: f64 = st.g1;
+    assert(is_ok(t1) == 1 && f64_abs(g1) < TOL && st.is_stable == 1, "g₁ = g₂ = 0, marginally stable");
+
+    test_group("test_planar_cavity");
+    var t2, v2 = bj_resonator_stability(0.1, 10000000000.0, 10000000000.0, &st);
+    var gp2: f64 = st.g_product;
+    assert(is_ok(t2) == 1 && near(gp2, 1.0, TOL) == 1 && st.is_stable == 1, "g₁g₂ = 1, marginally stable");
+
+    test_group("test_concentric_unstable");
+    var t3, v3 = bj_resonator_stability(1.0, 0.4, 0.4, &st);
+    assert(is_ok(t3) == 1 && st.is_stable == 0, "just past concentric");
+
+    test_group("test_stable_cavity");
+    var t4, v4 = bj_resonator_stability(0.1, 0.2, 0.2, &st);
+    var gp4: f64 = st.g_product;
+    assert(is_ok(t4) == 1 && near(gp4, 0.25, TOL) == 1 && st.is_stable == 1, "g₁ = g₂ = 0.5");
+
+    test_group("test_resonator_beam_waist");
+    var t5, v5 = bj_resonator_beam_waist(0.1, 0.2, 0.2, 0.000001064);
+    var w5: f64 = ok_f(t5, v5);
+    assert(is_ok(t5) == 1 && w5 > 0.0 && w5 < 0.001, "sub-millimetre");
+
+    test_group("test_resonator_beam_waist_unstable_fails");
+    assert(waist_refused(1.0, 0.4, 0.4, 0.000001064) == 1, "unstable");
+
+    test_group("test_transverse_mode_spacing");
+    var fsr: f64 = 1500000000.0;
+    var t6, v6 = bj_transverse_mode_spacing(fsr, 0.5, 0.5);
+    var s6: f64 = ok_f(t6, v6);
+    assert(is_ok(t6) == 1 && f64_abs(s6 - fsr / 3.0) / fsr < TOL, "arccos(0.5) = π/3: FSR/3");
+
+    test_group("test_transverse_mode_spacing_unstable_fails");
+    var t7, v7 = bj_transverse_mode_spacing(fsr, -2.0, -2.0);
+    assert(is_err_result(t7) == 1, "g₁g₂ = 4");
+
+    test_group("test_resonator_invalid_length");
+    assert(stab_refused(0.0, 1.0, 1.0) == 1 && stab_refused(-1.0, 1.0, 1.0) == 1, "L ≤ 0");
+
+    test_group("test_hermite_polynomial_values");
+    var h0: f64 = _bj_hermite_polynomial(0, 1.0);
+    var h1: f64 = _bj_hermite_polynomial(1, 1.0);
+    var h2: f64 = _bj_hermite_polynomial(2, 1.0);
+    var h3: f64 = _bj_hermite_polynomial(3, 1.0);
+    assert(near(h0, 1.0, TOL) == 1 && near(h1, 2.0, TOL) == 1, "H₀ = 1, H₁(1) = 2");
+    assert(near(h2, 2.0, TOL) == 1 && near(h3, -4.0, TOL) == 1, "H₂(1) = 4 − 2, H₃(1) = 8 − 12");
+
+    test_group("test_laguerre_polynomial_values");
+    var l0: f64 = _bj_laguerre_polynomial(0, 0, 1.0);
+    var l1: f64 = _bj_laguerre_polynomial(1, 0, 0.5);
+    var l2: f64 = _bj_laguerre_polynomial(2, 0, 1.0);
+    var l3: f64 = _bj_laguerre_polynomial(1, 1, 1.0);
+    assert(near(l0, 1.0, TOL) == 1 && near(l1, 0.5, TOL) == 1, "L₀⁰ = 1, L₁⁰(0.5) = 0.5");
+    assert(near(l2, -0.5, TOL) == 1 && near(l3, 1.0, TOL) == 1, "L₂⁰(1) = −0.5, L₁¹(1) = 1");
+
+    var g: BjGaussianBeam;
+    lab_beam(&g);
+    test_group("test_hg00_is_gaussian");
+    var peak: f64 = bj_hermite_gaussian(&g, 0, 0, 0.0, 0.0, 0.0);
+    var off: f64 = bj_hermite_gaussian(&g, 0, 0, 0.00005, 0.0, 0.0);
+    assert(near(peak, 1.0, TOL) == 1 && off < peak && off > 0.0, "1 at the centre of the waist, less off axis");
+
+    test_group("test_hg10_has_node_at_center");
+    var c10: f64 = bj_hermite_gaussian(&g, 1, 0, 0.0, 0.0, 0.0);
+    assert(f64_abs(c10) < TOL, "a node at x = 0");
+
+    test_group("test_lg00_is_gaussian");
+    var lg0: f64 = bj_laguerre_gaussian_intensity(&g, 0, 0, 0.0, 0.0);
+    assert(near(lg0, 1.0, TOL) == 1, "LG₀₀(0, 0) = 1");
+
+    test_group("test_lg_donut_mode");
+    var on: f64 = bj_laguerre_gaussian_intensity(&g, 0, 1, 0.0, 0.0);
+    var ring: f64 = bj_laguerre_gaussian_intensity(&g, 0, 1, 0.00007, 0.0);
+    assert(f64_abs(on) < TOL && ring > 0.0, "zero on axis, nonzero on the ring");
+
+    test_group("test_abcd_default_is_identity");
+    var dm: BjAbcdMatrix = BjAbcdMatrix_default();
+    var da: f64 = dm.a;
+    var dd: f64 = dm.d;
+    var db: f64 = dm.b;
+    var dc: f64 = dm.c;
+    assert(near(da, 1.0, TOL) == 1 && near(dd, 1.0, TOL) == 1 && f64_abs(db) < TOL && f64_abs(dc) < TOL, "I");
+    if (v1 == 7 || v2 == 7 || v3 == 7 || v4 == 7 || v7 == 7) { println("."); }
+    return 0;
+}
+
+# beam.rs's audit-driven edge cases.
+fn rust_tests_c(): i64 {
+    var g: BjGaussianBeam;
+    lab_beam(&g);
+    var o: BjAbcdMatrix;
+    test_group("test_curved_interface");
+    var t1, v1 = BjAbcdMatrix_curved_interface(1.0, 1.5, 0.1, &o);
+    var d1: f64 = o.determinant();
+    var c1: f64 = o.c;
+    assert(is_ok(t1) == 1 && near(d1, 1.0 / 1.5, TOL) == 1 && near(c1, -10.0 / 3.0, TOL) == 1,
+      "det = n₁/n₂, C = (n₁ − n₂)/(n₂R)");
+
+    test_group("test_curved_interface_zero_n2");
+    var t2, v2 = BjAbcdMatrix_curved_interface(1.0, 0.0, 0.1, &o);
+    assert(is_err_result(t2) == 1, "n₂ = 0");
+
+    test_group("test_curved_interface_zero_radius");
+    var t3, v3 = BjAbcdMatrix_curved_interface(1.0, 1.5, 0.0, &o);
+    assert(is_err_result(t3) == 1, "R = 0");
+
+    test_group("test_curved_mirror_zero_radius");
+    var t4, v4 = BjAbcdMatrix_curved_mirror(0.0, &o);
+    assert(is_err_result(t4) == 1, "R = 0");
+
+    test_group("test_flat_interface_zero_n2");
+    var t5, v5 = BjAbcdMatrix_flat_interface(1.0, 0.0, &o);
+    assert(is_err_result(t5) == 1, "n₂ = 0");
+
+    test_group("test_peak_intensity_at_waist_vs_far");
+    var iw: f64 = g.peak_intensity_factor(0.0);
+    var ifar: f64 = g.peak_intensity_factor(10.0 * g.rayleigh_range);
+    assert(iw > ifar, "the peak falls away from the waist");
+
+    test_group("test_gouy_phase_limits");
+    var big: f64 = 10000000000.0 * g.rayleigh_range;
+    var far: f64 = g.gouy_phase(big);
+    var nfar: f64 = g.gouy_phase(-big);
+    assert(near(far, _BJ_PI / 2.0, 0.0001) == 1 && near(nfar, -_BJ_PI / 2.0, 0.0001) == 1, "ζ → ±π/2");
+
+    test_group("test_radius_of_curvature_at_rayleigh");
+    var t6, v6 = g.radius_of_curvature(g.rayleigh_range);
+    var r6: f64 = ok_f(t6, v6);
+    assert(is_ok(t6) == 1 && f64_abs(r6 - 2.0 * g.rayleigh_range) / r6 < TOL, "R(z_R) = 2z_R");
+
+    test_group("test_lens_imaging_condition");
+    var lens: BjAbcdMatrix;
+    var t7, v7 = BjAbcdMatrix_thin_lens(0.1, &lens);
+    var fa: BjAbcdMatrix = BjAbcdMatrix_free_space(0.2);
+    var s1: BjAbcdMatrix = fa.compose(&lens);
+    var sys: BjAbcdMatrix = s1.compose(&fa);
+    var sa: f64 = sys.a;
+    var sb: f64 = sys.b;
+    assert(near(sa, -1.0, TOL) == 1 && f64_abs(sb) < TOL, "2f–2f imaging: A = −1, B = 0");
+
+    test_group("test_resonator_beam_waist_invalid_wavelength");
+    assert(waist_refused(0.1, 0.2, 0.2, 0.0) == 1 && waist_refused(0.1, 0.2, 0.2, -1.0) == 1, "λ ≤ 0");
+
+    test_group("test_hg_higher_order_symmetry");
+    var pos: f64 = bj_hermite_gaussian(&g, 2, 0, 0.00005, 0.0, 0.0);
+    var neg: f64 = bj_hermite_gaussian(&g, 2, 0, -0.00005, 0.0, 0.0);
+    assert(near(pos, neg, 0.000000000000001) == 1, "HG₂₀(x) = HG₂₀(−x)");
+
+    test_group("test_lg_radial_symmetry");
+    var i1: f64 = bj_laguerre_gaussian_intensity(&g, 1, 0, 0.00005, 0.0);
+    var i2: f64 = bj_laguerre_gaussian_intensity(&g, 1, 0, 0.00005, 0.01);
+    assert(i1 > 0.0 && i2 > 0.0, "positive at both z");
+    if (v1 == 7 || v2 == 7 || v3 == 7 || v4 == 7 || v5 == 7 || v7 == 7 || t7 == 7) { println("."); }
+    return 0;
+}
+
+# beam.rs's closed-form regression tests.
+fn rust_tests_d(): i64 {
+    var lam: f64 = 0.000001064;
+    test_group("test_resonator_beam_waist_symmetric_confocal");
+    var t1, v1 = bj_resonator_beam_waist(0.5, 0.5, 0.5, lam);
+    var w1: f64 = ok_f(t1, v1);
+    var e1: f64 = f64_sqrt(0.5 * lam / (2.0 * _BJ_PI));
+    assert(is_ok(t1) == 1 && rel(w1, e1) < 0.000000000001, "w₀ = √(Lλ/2π) (Siegman; the old code refused it)");
+
+    test_group("test_resonator_beam_waist_symmetric_closed_form");
+    var t2, v2 = bj_resonator_beam_waist(0.1, 0.2, 0.2, lam);
+    var w2: f64 = ok_f(t2, v2);
+    var s3: f64 = f64_sqrt(3.0);
+    var e2: f64 = f64_sqrt(0.1 * lam / (2.0 * _BJ_PI) * s3);
+    assert(is_ok(t2) == 1 && rel(w2, e2) < 0.000000000001, "w₀² = (Lλ/2π)·√((1 + g)/(1 − g)), g = 0.5");
+    var rn: f64 = 0.5 * (1.0 + 0.000000001);
+    var t3, v3 = bj_resonator_beam_waist(0.5, rn, rn, lam);
+    var near_c: f64 = ok_f(t3, v3);
+    var t4, v4 = bj_resonator_beam_waist(0.5, 0.5, 0.5, lam);
+    var conf: f64 = ok_f(t4, v4);
+    assert(is_ok(t3) == 1 && rel(near_c, conf) < 0.000001, "near-confocal continuous with the confocal limit");
+
+    test_group("test_resonator_beam_waist_planar_errs");
+    var inf: f64 = 1.0 / 0.0;
+    assert(waist_refused(0.1, inf, inf, lam) == 1, "flat–flat: no confined mode");
+    var st: BjResonatorStability;
+    var t5, v5 = bj_resonator_stability(0.1, inf, inf, &st);
+    var gp: f64 = st.g_product;
+    assert(is_ok(t5) == 1 && near(gp, 1.0, 0.000000000000001) == 1, "g = 1");
+
+    test_group("test_transverse_mode_spacing_negative_g");
+    var fsr: f64 = 1500000000.0;
+    var t6, v6 = bj_transverse_mode_spacing(fsr, -0.5, -0.5);
+    var s6: f64 = ok_f(t6, v6);
+    assert(is_ok(t6) == 1 && f64_abs(s6 - 2.0 * fsr / 3.0) / fsr < 0.000000000001, "arccos(−0.5) = 2π/3");
+    var t7, v7 = bj_transverse_mode_spacing(fsr, -1.0, -1.0);
+    var s7: f64 = ok_f(t7, v7);
+    var t8, v8 = bj_transverse_mode_spacing(fsr, 1.0, 1.0);
+    var s8: f64 = ok_f(t8, v8);
+    var t9, v9 = bj_transverse_mode_spacing(fsr, 0.0, 0.0);
+    var s9: f64 = ok_f(t9, v9);
+    assert(f64_abs(s7 - fsr) / fsr < 0.000000000001 && f64_abs(s8) < 0.001, "near-concentric → FSR, near-planar → 0");
+    assert(f64_abs(s9 - fsr / 2.0) / fsr < 0.000000000001, "confocal: FSR/2");
+
+    test_group("test_transverse_mode_spacing_invalid");
+    var nan: f64 = 0.0 / 0.0;
+    var ta, va = bj_transverse_mode_spacing(nan, 0.5, 0.5);
+    var tb, vb = bj_transverse_mode_spacing(0.0, 0.5, 0.5);
+    var tc, vc = bj_transverse_mode_spacing(-1.0, 0.5, 0.5);
+    var td, vd = bj_transverse_mode_spacing(1000000000.0, nan, 0.5);
+    assert(is_err_result(ta) == 1 && is_err_result(tb) == 1 && is_err_result(tc) == 1 && is_err_result(td) == 1,
+      "fsr NaN, 0, −1; a NaN g");
+
+    var g: BjGaussianBeam;
+    lab_beam(&g);
+    var sqrt2: f64 = _bj_from_bits(0x3FF6A09E667F3BCD);
+    var inv_sqrt2: f64 = _bj_from_bits(0x3FE6A09E667F3BCD);
+    test_group("test_hg_envelope_at_rayleigh_range");
+    var zr: f64 = g.rayleigh_range;
+    var hv: f64 = bj_hermite_gaussian(&g, 1, 0, g.waist, 0.0, zr);
+    var eh: f64 = _bj_exp(-0.5);
+    var he: f64 = sqrt2 * eh;
+    assert(near(hv, he, 0.000000000001) == 1, "HG₁₀ at x = w₀: √2·e^{−1/2} (the old cos factor gave 0)");
+    var h0: f64 = bj_hermite_gaussian(&g, 0, 0, 0.0, 0.0, zr);
+    assert(near(h0, inv_sqrt2, 0.000000000001) == 1, "HG₀₀ on axis: w₀/w = 1/√2");
+
+    test_group("test_hermite_gaussian_field_closed_form");
+    # λ = 1, w₀ = 1: z_R = π, k = 2π; at z = z_R, w² = 2, R = 2z_R, ζ = π/4. bijli's field is e^{+jωt}, the conjugate
+    # of Rust's: each imaginary part below is Rust's with its sign flipped (ADR 0002 row 5).
+    var u: BjGaussianBeam;
+    var tu, vu = BjGaussianBeam_new(1.0, 1.0, &u);
+    var pi: f64 = _BJ_PI;
+    var e: BjComplex = bj_hermite_gaussian_field(&u, 0, 0, 0.5, 0.0, pi);
+    var ea: f64 = _bj_exp(-0.125);
+    var amp: f64 = inv_sqrt2 * ea;
+    var ph: f64 = 2.0 * pi * pi + 0.125 - pi / 4.0;
+    var cp: f64 = _bj_cos(ph);
+    var sp: f64 = _bj_sin(ph);
+    var er: f64 = e.re;
+    var ei: f64 = e.im;
+    assert(is_ok(tu) == 1 && near(er, amp * cp, 0.000000000001) == 1 && near(ei, -(amp * sp), 0.000000000001) == 1,
+      "HG₀₀ at x = 0.5: u·e^{−jφ}, φ = kz + kx²/(2R) − ζ");
+    var ef2: BjComplex = bj_hermite_gaussian_field(&u, 2, 0, 0.0, 0.0, pi);
+    var ph2: f64 = 2.0 * pi * pi - 3.0 * pi / 4.0;
+    var c2: f64 = _bj_cos(ph2);
+    var s2: f64 = _bj_sin(ph2);
+    var e2r: f64 = ef2.re;
+    var e2i: f64 = ef2.im;
+    assert(near(e2r + sqrt2 * c2, 0.0, 0.000000000001) == 1 && near(e2i - sqrt2 * s2, 0.0, 0.000000000001) == 1,
+      "HG₂₀ on axis: amplitude −√2, Gouy factor 3ζ");
+    var e3: BjComplex = bj_hermite_gaussian_field(&u, 1, 1, 0.3, -0.2, 0.0);
+    var u3: f64 = bj_hermite_gaussian(&u, 1, 1, 0.3, -0.2, 0.0);
+    var e3r: f64 = e3.re;
+    var e3i: f64 = e3.im;
+    assert(near(e3r, u3, 0.000000000000001) == 1 && f64_abs(e3i) < 0.000000000000001, "real at the waist");
+    var e4: BjComplex = bj_hermite_gaussian_field(&u, 3, 1, 0.4, 0.7, 2.3);
+    var u4: f64 = bj_hermite_gaussian(&u, 3, 1, 0.4, 0.7, 2.3);
+    var e4a: f64 = e4.abs();
+    assert(near(e4a, f64_abs(u4), 0.000000000001) == 1, "|E| = |u| everywhere");
+
+    test_group("test_transform_beam_flat_interface");
+    var fi: BjAbcdMatrix;
+    var tf, vf = BjAbcdMatrix_flat_interface(1.0, 1.5, &fi);
+    var ob: BjGaussianBeam;
+    var to, vo = fi.transform_beam(&g, &ob);
+    var ow: f64 = ob.waist;
+    var ol: f64 = ob.wavelength;
+    var oz: f64 = ob.rayleigh_range;
+    assert(is_ok(to) == 1 && rel(ow, g.waist) < 0.000000000001, "w₀ continuous (the old code gave √1.5·w₀)");
+    assert(f64_abs(ol - lam / 1.5) / ol < 0.000000000001 && f64_abs(oz - 1.5 * zr) / oz < 0.000000000001,
+      "λ′ = λ/1.5, z_R′ = 1.5z_R");
+
+    test_group("test_transform_beam_lens_waist_position");
+    var f: f64 = 0.1;
+    var lens: BjAbcdMatrix;
+    var tl, vl = BjAbcdMatrix_thin_lens(f, &lens);
+    var lb: BjGaussianBeam;
+    var dpos: f64[1];
+    var tw, vw = lens.transform_beam_with_waist_position(&g, &lb, &dpos);
+    var d: f64 = dpos[0];
+    var d_exp: f64 = f * zr * zr / (zr * zr + f * f);
+    var w_exp: f64 = g.waist * f / f64_sqrt(f * f + zr * zr);
+    var lw: f64 = lb.waist;
+    var ll: f64 = lb.wavelength;
+    var gl: f64 = g.wavelength;
+    assert(is_ok(tw) == 1 && rel(d, d_exp) < 0.000000000001 && rel(lw, w_exp) < 0.000000000001 && ll == gl,
+      "Self (1983): d = f z_R²/(z_R² + f²), w₀′ = w₀ f/√(f² + z_R²), λ kept");
+    var fs: BjAbcdMatrix = BjAbcdMatrix_free_space(0.25);
+    var tg, vg = fs.transform_beam_with_waist_position(&g, &lb, &dpos);
+    var d2: f64 = dpos[0];
+    var lw2: f64 = lb.waist;
+    assert(is_ok(tg) == 1 && f64_abs(d2 + 0.25) < 0.000000000000001 && rel(lw2, g.waist) < 0.000000000001,
+      "free space: the waist 0.25 behind the output plane");
+
+    test_group("test_transform_beam_invalid_determinant");
+    var bad1: BjAbcdMatrix = BjAbcdMatrix_new(1.0, 0.0, 0.0, -1.0);
+    var bad2: BjAbcdMatrix = BjAbcdMatrix_new(1.0, 0.0, 0.0, nan);
+    var t10, v10 = bad1.transform_beam(&g, &ob);
+    var t11, v11 = bad2.transform_beam(&g, &ob);
+    assert(is_err_result(t10) == 1 && is_err_result(t11) == 1, "det ≤ 0 and NaN");
+
+    test_group("test_nan_inputs_rejected");
+    var tiny: f64 = _bj_from_bits(0x16687E92154EF7AC);
+    assert(beam_refused(nan, 0.0001) == 1 && beam_refused(lam, nan) == 1 && beam_refused(inf, 0.0001) == 1,
+      "a NaN or ∞ beam");
+    assert(beam_refused(lam, tiny) == 1, "w₀ = 1e-200: z_R underflows to 0");
+    assert(stab_refused(nan, 1.0, 1.0) == 1 && stab_refused(0.1, nan, 1.0) == 1 && stab_refused(inf, 1.0, 1.0) == 1,
+      "a NaN or ∞ cavity");
+    assert(waist_refused(0.1, 0.2, 0.2, nan) == 1, "a NaN wavelength");
+    var o: BjAbcdMatrix;
+    var tn1, vn1 = BjAbcdMatrix_thin_lens(nan, &o);
+    var tn2, vn2 = BjAbcdMatrix_curved_mirror(nan, &o);
+    var tn3, vn3 = BjAbcdMatrix_flat_interface(nan, 1.0, &o);
+    var tn4, vn4 = BjAbcdMatrix_curved_interface(1.0, 1.5, nan, &o);
+    assert(is_err_result(tn1) == 1 && is_err_result(tn2) == 1 && is_err_result(tn3) == 1 && is_err_result(tn4) == 1,
+      "NaN elements");
+    if (v1 == 7 || v2 == 7 || v3 == 7 || v4 == 7 || v5 == 7 || v6 == 7 || v7 == 7 || v8 == 7 || v9 == 7) {
+        println(".");
+    }
+    if (va == 7 || vb == 7 || vc == 7 || vd == 7 || vu == 7 || vf == 7 || vo == 7 || vl == 7 || vw == 7) {
+        println(".");
+    }
+    if (vg == 7 || v10 == 7 || v11 == 7 || vn1 == 7 || vn2 == 7 || vn3 == 7 || vn4 == 7 || tf == 7 || tl == 7) {
+        println(".");
+    }
+    if (t4 == 7 || t8 == 7 || t9 == 7) { println("."); }
+    return 0;
+}
+
+# The Cyrius-only checks.
+fn cyrius_tests(): i64 {
+    test_group("cyrius_beam_convention (ADR 0002 row 5)");
+    # e^{+jωt}: the field is ∝ e^{−jkz}, so its phase falls along +z. HG₀₀ on axis just past the waist of a unit beam
+    # (k = 2π, z_R = π): φ = kz − ζ > 0 at z = 1/8, and the field is u·e^{−jφ}, below the real axis.
+    var u: BjGaussianBeam;
+    var tu, vu = BjGaussianBeam_new(1.0, 1.0, &u);
+    var e: BjComplex = bj_hermite_gaussian_field(&u, 0, 0, 0.0, 0.0, 0.125);
+    var er: f64 = e.re;
+    var ei: f64 = e.im;
+    var a: f64 = e.arg();
+    var gz: f64 = u.gouy_phase(0.125);
+    var want: f64 = -(2.0 * _BJ_PI * 0.125 - gz);
+    assert(is_ok(tu) == 1 && er > 0.0 && ei < 0.0 && near(a, want, 0.000000000001) == 1,
+      "arg E = −(kz − ζ): the phase falls along +z");
+    var q0, q1 = u.q(0.5);
+    var qi: f64 = q1;
+    assert(qi > 0.0 && q0 == 0.5, "q = z + j·z_R: Siegman's e^{+jωt} form, as Rust's numbers");
+
+    test_group("cyrius_beam_reasons");
+    var g: BjGaussianBeam;
+    var tiny: f64 = _bj_from_bits(0x16687E92154EF7AC);
+    var t1, v1 = BjGaussianBeam_new(0.000001064, tiny, &g);
+    var d = bj_last_error_display();
+    var head = "invalid parameter: Rayleigh range πw₀²/λ = 0 is not representable (w₀ = 0.0000";
+    var tail = "1, λ = 0.000001064)";
+    assert(memeq(d, head, strlen(head)) == 1 && memeq(d + strlen(d) - strlen(tail), tail, strlen(tail)) == 1,
+      "z_R underflowed, in Rust's Display form");
+    var st: BjResonatorStability;
+    var t2, v2 = bj_resonator_beam_waist(1.0, 0.4, 0.4, 0.000001064);
+    assert(reason_is2("invalid parameter: cavity is unstable (g₁g₂ = 2.2500), no confined mode exists", "") == 1,
+      "Rust's {:.4}");
+    var t3, v3 = bj_transverse_mode_spacing(1.0, -2.0, -2.0);
+    assert(reason_is2("invalid parameter: cavity is unstable (g₁g₂ = 4.0000)", "") == 1, "the same, without the tail");
+    var m: BjAbcdMatrix = BjAbcdMatrix_new(1.0, 0.0, 0.0, -1.0);
+    var t4, v4 = m.transform_beam(&u, &g);
+    assert(reason_is2("invalid parameter: ABCD determinant must be positive and finite (det = n_in/n_out), got -1", "")
+      == 1, "the determinant");
+    var t5, v5 = bj_resonator_beam_waist(0.1, 1.0 / 0.0, 1.0 / 0.0, 0.000001064);
+    assert(is_err_result(t5) == 1 && v5 == BJ_ERR_DIVISION_BY_ZERO
+      && reason_is2("division by zero in EM calculation: planar cavity (g₁ = g₂ = 1) has no confined mode", "") == 1,
+      "the planar cavity");
+    var z: BjAbcdMatrix = BjAbcdMatrix_new(1.0, 0.0, 0.0, 0.0);
+    var qo: f64[2];
+    var t6, v6 = z.propagate_beam(0.0, 1.0, &qo);
+    assert(reason_is2("division by zero in EM calculation: ABCD beam propagation denominator is zero", "") == 1,
+      "C·q + D = 0");
+
+    test_group("cyrius_beam_out_untouched");
+    var keep: BjAbcdMatrix = BjAbcdMatrix_new(5.0, 6.0, 7.0, 8.0);
+    var t7, v7 = BjAbcdMatrix_thin_lens(0.0, &keep);
+    var kc: f64 = keep.c;
+    assert(is_err_result(t7) == 1 && kc == 7.0, "a refused element leaves out as it was");
+    var kb: BjGaussianBeam;
+    kb.wavelength = 9.0;
+    kb.waist = 9.0;
+    kb.rayleigh_range = 9.0;
+    var dd: f64[1];
+    dd[0] = 9.0;
+    var t8, v8 = m.transform_beam_with_waist_position(&u, &kb, &dd);
+    var kw: f64 = kb.waist;
+    var kd: f64 = dd[0];
+    assert(is_err_result(t8) == 1 && kw == 9.0 && kd == 9.0, "a refused transform leaves both outs as they were");
+
+    test_group("cyrius_lg_i32_min (ADR 0002 row 32)");
+    # (2r²/w²)^|l| with |l| = 2³¹ for l = i32::MIN: Rust's `l.unsigned_abs() as i32` wraps to −2³¹ and returned the
+    # reciprocal (∞ where the power underflows to 0).
+    var lab: BjGaussianBeam;
+    lab_beam(&lab);
+    var r: f64 = 0.5 * lab.waist;
+    var i_min: f64 = bj_laguerre_gaussian_intensity(&lab, 0, 0 - 2147483648, r, 0.0);
+    var i_max: f64 = bj_laguerre_gaussian_intensity(&lab, 0, 2147483647, r, 0.0);
+    var big: f64 = 2.0 * lab.waist;
+    var i_big: f64 = bj_laguerre_gaussian_intensity(&lab, 0, 0 - 2147483648, big, 0.0);
+    assert(i_min == 0.0 && i_max == 0.0, "2r²/w² = 0.5: 0.5^{2³¹} underflows to 0, as 0.5^{2³¹−1} does");
+    var top: f64 = _bj_from_bits(0x7FEFFFFFFFFFFFFF);
+    assert(i_big > top, "2r²/w² = 8: 8^{2³¹} = ∞, times e^{−8} (Rust: 8^{−2³¹} = 0)");
+    if (vu == 7 || v1 == 7 || v2 == 7 || v3 == 7 || v4 == 7 || v5 == 7 || v6 == 7 || v7 == 7 || v8 == 7) {
+        println(".");
+    }
+    if (t1 == 7 || t2 == 7 || t3 == 7 || t4 == 7 || t6 == 7) { println("."); }
+    return 0;
+}
+
+# Runs beam.rs's tests, then the Cyrius-only checks.
+fn main(): i64 {
+    alloc_init();
+    rust_tests_a();
+    rust_tests_b();
+    rust_tests_c();
+    rust_tests_d();
+    cyrius_tests();
+    return assert_summary();
+}
+
+var exit_code = main();
+if (exit_code > 0) { exit_code = 1; }
+sys_exit_group(exit_code);

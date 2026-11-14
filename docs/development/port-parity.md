@@ -3198,3 +3198,80 @@ E and B = n̂ × E/c.
 - **Result, every target** (x86_64 ELF, x86_64 PE, aarch64): **15 modules, 0 failing; 445,069 ok, 0 failed, 0
   measured, 0 pending, 62,858 accepted (ADR 01: 24,164; ADR 0002: 38,694)** over 507,927 rows; **all 345 digests
   equal**, the 343 before unchanged. `scattering.tcyr`, `polarization.tcyr` and `json.tcyr` pass on all three.
+
+## 59. M3 part 1c-1: beam (2026-11-13)
+
+- **`src/beam.cyr`**: beam.rs under Rust's names.
+  - `BjGaussianBeam` (wavelength, waist, Rayleigh range) and its methods; `q` returns (Re q, Im q).
+  - `BjAbcdMatrix`: its constructors, the refusing ones into `out`; `apply_ray`, `compose`, `determinant`,
+    `propagate_beam` (into `out[0..2]`) and the two beam transforms (into `out` and the waist distance).
+  - `BjResonatorStability` (`is_stable` 1 or 0), `bj_resonator_stability`, `bj_resonator_beam_waist` and
+    `bj_transverse_mode_spacing`, whose unstable-cavity reasons keep Rust's `{:.4}` (`_bj_fmt_f64_fixed`).
+  - `bj_hermite_gaussian`, `bj_hermite_gaussian_field` and `bj_laguerre_gaussian_intensity`.
+  - The private polynomials are `public fn _bj_hermite_polynomial` and `_bj_laguerre_polynomial`, as
+    `_bj_associated_legendre` is, because their Rust tests reach them.
+
+  The mode indices are Rust's u32 and i32, as documented, and every formula runs in Rust's order of operations.
+- **The convention (ADR 0002 row 5, amended)**:
+  - **The field**: only `hermite_gaussian_field` carries a phase. The port's is Rust's conjugated part for part,
+    (u·cos φ, −(u·sin φ)) from Rust's own phase, a field ∝ e^{−jkz} as Siegman writes it.
+  - **q keeps its numbers**: q = z + j·z_R is already Siegman's e^{+jωt} form (1/q = 1/R − jλ/(πw²)). Rust's ABCD
+    law used it beside an e^{−iωt} field, so the port makes the two agree with no change.
+  - **Everything else is convention-free**: the Gouy phase ζ = arctan(z/z_R) is a geometric angle, and every other
+    value is real.
+  - **The harness** compares the 3,325 field rows as port = conj(oracle), exactly, and every other row on the
+    oracle's numbers.
+  - **Pinned by tests**: `cyrius_beam_convention` checks the phase falling along +z (arg E = −(kz − ζ)).
+    `test_hermite_gaussian_field_closed_form` reads its imaginary parts with the opposite sign, and says so.
+  - **One sincos**: Rust's `Complex::from_polar` compiles to one sincos, and the port calls `_bj_sin_cos` once (the
+    correctly rounded bits of separate calls; the field's digest is unchanged by the switch). That made the field
+    bench 669 ns, from 789 with `BjComplex_from_polar`'s two reductions.
+- **ADR 0002 row 32, new**: `laguerre_gaussian_intensity` raised 2r²/w² to `l.unsigned_abs() as i32`. For
+  l = i32::MIN the cast wraps |l| = 2³¹ to −2³¹, so Rust returned the reciprocal power (∞ where the true power
+  underflows to 0). The port raises it to 2³¹ through the same `__powidf2` loop. `beam.adr.tsv` maps 366 rows (every
+  LG row at l = i32::MIN that the wrap changes), all passing. `cyrius_lg_i32_min` pins 0 and ∞.
+- **New golden file `beam.tsv`, 40,086 rows over 29 functions.** Class C, 13,516 rows, is `gouy_phase`,
+  `transverse_mode_spacing` and the three mode functions; the rest is class A. A beam row holds the beam's three
+  public fields, so the methods also see fields `new` would refuse (zero, negative, NaN, ∞). The grids:
+  - laser wavelengths and waists, and the range edges where z_R under- or overflows;
+  - distances at the waist, the 10⁻³⁰ test on both sides, ±z_R, the far field and the specials;
+  - mode orders to 10 at nine transverse points and five planes, orders 50–200 where H overflows, and l in ±1, ±2,
+    ±5, 3, 10, i32::MIN and i32::MAX;
+  - every ABCD constructor over its grid, 2f imaging, seeded and special matrices, the 10⁻⁶⁰ denominator test, and
+    the |det − 1| ≤ 10⁻¹² wavelength rule on both sides;
+  - cavities across the stability diagram's interior, edges and outside, with flat and zero-radius mirrors.
+
+  `validate.py`'s independent transcription (`bm_eval`) agreed with every row on its first run, and a one-bit
+  perturbation of every row's first output was caught. Glibc's atan, acos, exp, cos and sin equal MPFR's on every
+  class-C row, so there is no `beam.cr.tsv`.
+- **Rust tests**: all 60 of beam.rs's are ported (`tests/beam.tcyr`, 90 assertions with the Cyrius-only groups:
+  the convention, the reasons' exact text, out untouched by a refusal, row 32). The ledger: 522 ported, 3 n/a, 333
+  pending of 858.
+- **Surface parity**: beam is in progress, 43 items matched (391 in all), with the three structs' six serde items
+  pending for part 1c-2. The API snapshot gains 15 public functions (2,027).
+- **Benchmarks** (the 6 beam twins, so 61 of 80 are twinned). The recorded run was at load 1.13, and an interleaved
+  A/B against HEAD (three rounds, load 1.4–1.9) agreed within 1 ns and left every other row within noise (±3.6 %):
+
+  | Bench | Rust | Cyrius | Ratio |
+  |---|---|---|---|
+  | `beam/spot_size` | 0.49 ns | 10 ns | 20× |
+  | `beam/abcd_propagate_beam` | 1.79 ns | 19 ns | 11× |
+  | `beam/abcd_compose` | 0.99 ns | 20 ns | 20× |
+  | `beam/hermite_gaussian_hg33` | 4.46 ns | 160 ns | 36× |
+  | `beam/resonator_stability` | 6.48 ns | 27 ns | 4.2× |
+  | `beam/hermite_gaussian_field_hg33` | 30.33 ns | 669 ns | 22× |
+
+  Rust's constant arguments fold, the HG ones nearly whole. The port pays the calls (exp, atan, sincos, the
+  recurrences) and by-value matrices. A finding: the field costs about 510 ns over the envelope's 160 ns, in the
+  Gouy atan and the sincos of a phase near 5.9·10⁴ rad (kz at z = 1 cm); the split between the two is not measured.
+- **For M3's range-edge Part** (§0.1), candidates from writing the port:
+  - `propagate_beam`'s |C·q + D|² < 10⁻⁶⁰, on a rounded sum of squares (row 17's exact-threshold question);
+  - `transform_beam`'s |det − 1| ≤ 10⁻¹² wavelength rule, a tolerance Rust chose (it keeps λ for a det just off 1
+    that two real media could give);
+  - `resonator_beam_waist`'s exact s = 0 test and its g₁g₂(1 − g₁g₂) near the stability edges;
+  - the products of many factors (z_R = πw₀²/λ, the envelope's scale, the LG power and its prefactors) past either
+    end of the range (rows 13 and 18);
+  - the phase kz + k(x² + y²)/(2R) − (m + n + 1)ζ, which loses its digits where kz is large.
+- **Result, every target** (x86_64 ELF, x86_64 PE, aarch64): **16 modules, 0 failing; 484,789 ok, 0 failed, 0
+  measured, 0 pending, 63,224 accepted (ADR 01: 24,164; ADR 0002: 39,060)** over 548,013 rows; **all 374 digests
+  equal**, the 345 before unchanged. `beam.tcyr` passes on all three.

@@ -811,6 +811,67 @@ fn main(): i64 {
     bench_report(b58);
     if (ssum == 7.0) { println("."); }
 
+    # beam (M3 part 1c-1): the laboratory beam (λ = 1064 nm, w₀ = 100 µm).
+    var gb: BjGaussianBeam;
+    var tgb, vgb = BjGaussianBeam_new(0.000001064, 0.0001, &gb);
+    var bsum: f64 = 0.0;
+    var b59 = bench_new("beam/spot_size");
+    bench_batch_start(b59);
+    for (var k = 0; k < 1000000; k = k + 1) {
+        var w59: f64 = gb.spot_size(0.01);
+        bsum = bsum + w59;
+    }
+    bench_batch_stop(b59, 1000000);
+    bench_report(b59);
+    var fs60: BjAbcdMatrix = BjAbcdMatrix_free_space(0.01);
+    var q60a, q60b = gb.q(0.0);
+    var qo60: f64[2];
+    var b60 = bench_new("beam/abcd_propagate_beam");
+    bench_batch_start(b60);
+    for (var k = 0; k < 1000000; k = k + 1) {
+        var t60, v60 = fs60.propagate_beam(q60a, q60b, &qo60);
+        bsum = bsum + qo60[0];
+    }
+    bench_batch_stop(b60, 1000000);
+    bench_report(b60);
+    var m61a: BjAbcdMatrix = BjAbcdMatrix_free_space(0.05);
+    var m61b: BjAbcdMatrix;
+    var t61l, v61l = BjAbcdMatrix_thin_lens(0.1, &m61b);
+    var b61 = bench_new("beam/abcd_compose");
+    bench_batch_start(b61);
+    for (var k = 0; k < 1000000; k = k + 1) {
+        var c61: BjAbcdMatrix = m61b.compose(&m61a);
+        bsum = bsum + c61.c;
+    }
+    bench_batch_stop(b61, 1000000);
+    bench_report(b61);
+    var b62 = bench_new("beam/hermite_gaussian_hg33");
+    bench_batch_start(b62);
+    for (var k = 0; k < 1000000; k = k + 1) {
+        var h62: f64 = bj_hermite_gaussian(&gb, 3, 3, 0.00005, 0.00005, 0.01);
+        bsum = bsum + h62;
+    }
+    bench_batch_stop(b62, 1000000);
+    bench_report(b62);
+    var st63: BjResonatorStability;
+    var b63 = bench_new("beam/resonator_stability");
+    bench_batch_start(b63);
+    for (var k = 0; k < 1000000; k = k + 1) {
+        var t63, v63 = bj_resonator_stability(0.1, 0.2, 0.2, &st63);
+        bsum = bsum + st63.g_product;
+    }
+    bench_batch_stop(b63, 1000000);
+    bench_report(b63);
+    var b64 = bench_new("beam/hermite_gaussian_field_hg33");
+    bench_batch_start(b64);
+    for (var k = 0; k < 1000000; k = k + 1) {
+        var e64: BjComplex = bj_hermite_gaussian_field(&gb, 3, 3, 0.00005, 0.00005, 0.01);
+        bsum = bsum + e64.re;
+    }
+    bench_batch_stop(b64, 1000000);
+    bench_report(b64);
+    if (bsum == 7.0 || is_err_result(tgb) == 1 || is_err_result(t61l) == 1) { println("."); }
+
     # The JSON (src/json.cyr): a FieldVector written into one builder, emptied each time through its length word
     # (lib/str.cyr's layout: buf, len, cap), and serde_json's documents read back.
     var jv = BjFieldVector_new(1.5, -0.25, BJ_SPEED_OF_LIGHT);

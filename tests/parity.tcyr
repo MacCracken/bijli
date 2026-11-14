@@ -2587,8 +2587,225 @@ public fn _par_scattering(fp, fl): i64 {
     return 0;
 }
 
+# ── beam (M3 part 1c-1): src/beam.cyr ───────────────────────────────────────────────────────────────────────────
+# ADR 0002 row 5 in beam: only the Hermite–Gaussian field carries a phase, and the port's is Rust's conjugated part
+# for part (field ∝ e^{−jkz} in e^{+jωt}), so its rows compare as port = conj(oracle); every other function is real
+# and compares on the oracle's numbers. A beam is its three fields, an ABCD matrix its four.
+
+# Hermite–Gaussian field rows compared through the conjugation (ADR 0002 row 5), counted per module run.
+var _par_map5_beam = 0;
+
+# Input tokens k … k + 2 as a beam's three fields.
+fn _par_in_gb(k): BjGaussianBeam {
+    var g: BjGaussianBeam;
+    var l: f64 = _par_in(k);
+    var w: f64 = _par_in(k + 1);
+    var z: f64 = _par_in(k + 2);
+    g.wavelength = l;
+    g.waist = w;
+    g.rayleigh_range = z;
+    return g;
+}
+
+# Input tokens k … k + 3 as an ABCD matrix.
+fn _par_in_am(k): BjAbcdMatrix {
+    var m: BjAbcdMatrix = BjAbcdMatrix_new(_par_in(k), _par_in(k + 1), _par_in(k + 2), _par_in(k + 3));
+    return m;
+}
+
+fn _par_got_gb(g: *BjGaussianBeam) {
+    var l: f64 = g.wavelength;
+    var w: f64 = g.waist;
+    var z: f64 = g.rayleigh_range;
+    _par_got_f(l);
+    _par_got_f(w);
+    _par_got_f(z);
+    return 0;
+}
+
+fn _par_got_am(m: BjAbcdMatrix) {
+    var a: f64 = m.a;
+    var b: f64 = m.b;
+    var c: f64 = m.c;
+    var d: f64 = m.d;
+    _par_got_f(a);
+    _par_got_f(b);
+    _par_got_f(c);
+    _par_got_f(d);
+    return 0;
+}
+
+# A Result whose value is the ABCD matrix at m: the matrix, or the error.
+fn _par_got_res_am(t, v, m: *BjAbcdMatrix) {
+    if (is_err_result(t) == 1) { return _par_got_error(v); }
+    return _par_got_am(*m);
+}
+
+fn _par_gaussian(fp, fl): i64 {
+    if (_par_eq(fp, fl, "GaussianBeam::new") == 1) {
+        var lam: f64 = _par_in(0);
+        var w0: f64 = _par_in(1);
+        var nb: BjGaussianBeam;
+        var t, v = BjGaussianBeam_new(lam, w0, &nb);
+        if (is_err_result(t) == 1) { return _par_got_error(v) + 1; }
+        return _par_got_gb(&nb) + 1;
+    }
+    var g: BjGaussianBeam = _par_in_gb(0);
+    if (_par_eq(fp, fl, "GaussianBeam::divergence") == 1) { _par_got_f(g.divergence()); return 1; }
+    if (_par_eq(fp, fl, "GaussianBeam::confocal_parameter") == 1) { _par_got_f(g.confocal_parameter()); return 1; }
+    if (_par_eq(fp, fl, "GaussianBeam::depth_of_focus") == 1) { _par_got_f(g.depth_of_focus()); return 1; }
+    var z: f64 = _par_in(3);
+    if (_par_eq(fp, fl, "GaussianBeam::q") == 1) {
+        var q0, q1 = g.q(z);
+        _par_got_f(q0);
+        _par_got_f(q1);
+        return 1;
+    }
+    if (_par_eq(fp, fl, "GaussianBeam::spot_size") == 1) { _par_got_f(g.spot_size(z)); return 1; }
+    if (_par_eq(fp, fl, "GaussianBeam::gouy_phase") == 1) { _par_got_f(g.gouy_phase(z)); return 1; }
+    if (_par_eq(fp, fl, "GaussianBeam::peak_intensity_factor") == 1) {
+        _par_got_f(g.peak_intensity_factor(z));
+        return 1;
+    }
+    if (_par_eq(fp, fl, "GaussianBeam::radius_of_curvature") == 1) {
+        var t2, v2 = g.radius_of_curvature(z);
+        _par_got_res_f(t2, v2);
+        return 1;
+    }
+    return 0;
+}
+
+fn _par_abcd(fp, fl): i64 {
+    if (_par_eq(fp, fl, "AbcdMatrix::identity") == 1) { return _par_got_am(BjAbcdMatrix_identity()) + 1; }
+    if (_par_eq(fp, fl, "AbcdMatrix::default") == 1) { return _par_got_am(BjAbcdMatrix_default()) + 1; }
+    var x: f64 = _par_in(0);
+    if (_par_eq(fp, fl, "AbcdMatrix::free_space") == 1) { return _par_got_am(BjAbcdMatrix_free_space(x)) + 1; }
+    var o: BjAbcdMatrix;
+    if (_par_eq(fp, fl, "AbcdMatrix::thin_lens") == 1) {
+        var t1, v1 = BjAbcdMatrix_thin_lens(x, &o);
+        return _par_got_res_am(t1, v1, &o) + 1;
+    }
+    if (_par_eq(fp, fl, "AbcdMatrix::curved_mirror") == 1) {
+        var t2, v2 = BjAbcdMatrix_curved_mirror(x, &o);
+        return _par_got_res_am(t2, v2, &o) + 1;
+    }
+    var y: f64 = _par_in(1);
+    if (_par_eq(fp, fl, "AbcdMatrix::flat_interface") == 1) {
+        var t3, v3 = BjAbcdMatrix_flat_interface(x, y, &o);
+        return _par_got_res_am(t3, v3, &o) + 1;
+    }
+    var rr: f64 = _par_in(2);
+    if (_par_eq(fp, fl, "AbcdMatrix::curved_interface") == 1) {
+        var t4, v4 = BjAbcdMatrix_curved_interface(x, y, rr, &o);
+        return _par_got_res_am(t4, v4, &o) + 1;
+    }
+    var m: BjAbcdMatrix = _par_in_am(0);
+    if (_par_eq(fp, fl, "AbcdMatrix::new") == 1) { return _par_got_am(m) + 1; }
+    if (_par_eq(fp, fl, "AbcdMatrix::determinant") == 1) { _par_got_f(m.determinant()); return 1; }
+    var e4: f64 = _par_in(4);
+    if (_par_eq(fp, fl, "AbcdMatrix::compose") == 1) {
+        var w: BjAbcdMatrix = _par_in_am(4);
+        return _par_got_am(m.compose(&w)) + 1;
+    }
+    var e5: f64 = _par_in(5);
+    if (_par_eq(fp, fl, "AbcdMatrix::apply_ray") == 1) {
+        var ay, at = m.apply_ray(e4, e5);
+        _par_got_f(ay);
+        _par_got_f(at);
+        return 1;
+    }
+    if (_par_eq(fp, fl, "AbcdMatrix::propagate_beam") == 1) {
+        var q: f64[2];
+        var t5, v5 = m.propagate_beam(e4, e5, &q);
+        if (is_err_result(t5) == 1) { return _par_got_error(v5) + 1; }
+        var q0: f64 = q[0];
+        var q1: f64 = q[1];
+        _par_got_f(q0);
+        _par_got_f(q1);
+        return 1;
+    }
+    var g: BjGaussianBeam = _par_in_gb(4);
+    var nb: BjGaussianBeam;
+    if (_par_eq(fp, fl, "AbcdMatrix::transform_beam") == 1) {
+        var t6, v6 = m.transform_beam(&g, &nb);
+        if (is_err_result(t6) == 1) { return _par_got_error(v6) + 1; }
+        return _par_got_gb(&nb) + 1;
+    }
+    if (_par_eq(fp, fl, "AbcdMatrix::transform_beam_with_waist_position") == 1) {
+        var d: f64[1];
+        var t7, v7 = m.transform_beam_with_waist_position(&g, &nb, &d);
+        if (is_err_result(t7) == 1) { return _par_got_error(v7) + 1; }
+        _par_got_gb(&nb);
+        var dd: f64 = d[0];
+        _par_got_f(dd);
+        return 1;
+    }
+    return 0;
+}
+
+fn _par_beam_fns(fp, fl): i64 {
+    var a: f64 = _par_in(0);
+    var b: f64 = _par_in(1);
+    var c: f64 = _par_in(2);
+    if (_par_eq(fp, fl, "beam::resonator_stability") == 1) {
+        var st: BjResonatorStability;
+        var t1, v1 = bj_resonator_stability(a, b, c, &st);
+        if (is_err_result(t1) == 1) { return _par_got_error(v1) + 1; }
+        var g1: f64 = st.g1;
+        var g2: f64 = st.g2;
+        var gp: f64 = st.g_product;
+        _par_got_f(g1);
+        _par_got_f(g2);
+        _par_got_f(gp);
+        _par_got_i(st.is_stable);
+        return 1;
+    }
+    if (_par_eq(fp, fl, "beam::transverse_mode_spacing") == 1) {
+        var t2, v2 = bj_transverse_mode_spacing(a, b, c);
+        _par_got_res_f(t2, v2);
+        return 1;
+    }
+    if (_par_eq(fp, fl, "beam::resonator_beam_waist") == 1) {
+        var d: f64 = _par_in(3);
+        var t3, v3 = bj_resonator_beam_waist(a, b, c, d);
+        _par_got_res_f(t3, v3);
+        return 1;
+    }
+    var g: BjGaussianBeam = _par_in_gb(0);
+    var m = _par_in(3);
+    var n = _par_in(4);
+    var x: f64 = _par_in(5);
+    var y: f64 = _par_in(6);
+    if (_par_eq(fp, fl, "beam::laguerre_gaussian_intensity") == 1) {
+        _par_got_f(bj_laguerre_gaussian_intensity(&g, m, n, x, y));
+        return 1;
+    }
+    var z: f64 = _par_in(7);
+    if (_par_eq(fp, fl, "beam::hermite_gaussian") == 1) {
+        _par_got_f(bj_hermite_gaussian(&g, m, n, x, y, z));
+        return 1;
+    }
+    if (_par_eq(fp, fl, "beam::hermite_gaussian_field") == 1) {
+        var e: BjComplex = bj_hermite_gaussian_field(&g, m, n, x, y, z);
+        var re: f64 = e.re;
+        var im: f64 = -e.im;
+        _par_got_f(re);
+        _par_got_f(im);
+        _par_map5_beam = _par_map5_beam + 1;
+        return 1;
+    }
+    return 0;
+}
+
+public fn _par_beam(fp, fl): i64 {
+    if (memeq(fp, "GaussianBeam::", 14) == 1) { return _par_gaussian(fp, fl); }
+    if (memeq(fp, "AbcdMatrix::", 12) == 1) { return _par_abcd(fp, fl); }
+    return _par_beam_fns(fp, fl);
+}
+
 public fn _par_dispatch(mp, ml, fp, fl): i64 {
     _par_got_n = 0;
+    if (_par_eq(mp, ml, "beam") == 1) { return _par_beam(fp, fl); }
     if (_par_eq(mp, ml, "charge") == 1) { return _par_charge(fp, fl); }
     if (_par_eq(mp, ml, "circuit") == 1) { return _par_circuit(fp, fl); }
     if (_par_eq(mp, ml, "complex") == 1) { return _par_complex(fp, fl); }
@@ -2689,6 +2906,8 @@ public fn _par_c_bound(fp, fl): i64 {
     # Mie's sin and cos of x, hypot of m and cbrt (M3 part 1b-1): src/crmath.cyr's and ganita's correctly rounded
     # primitives.
     if (_par_eq(fp, fl, "scattering::mie") == 1) { return 0; }
+    # beam's atan, acos, exp, cos and sin (M3 part 1c-1): src/crmath.cyr's correctly rounded primitives.
+    if (memeq(fp, "beam::", 6) == 1 || _par_eq(fp, fl, "GaussianBeam::gouy_phase") == 1) { return 0; }
     if (_par_eq(fp, fl, "relativity::solve_retarded_time") == 1) { return 0; }
     if (_par_eq(fp, fl, "relativity::lienard_wiechert_fields") == 1) { return 0; }
     if (fl > 9 && memeq(fp, "circuit::", 9) == 1) { return 0; }
@@ -2736,6 +2955,12 @@ public fn _par_module_done(mp, ml) {
         print("  ADR 0002 row 5 (e^{+jωt}): ", 30);
         fmt_int(_par_map5_greens);
         println(" field::greens_function_scalar rows compared as port = conj(oracle)");
+    }
+    if (_par_eq(mp, ml, "beam") == 1) {
+        print("  ADR 0002 row 5 (e^{+jωt}): ", 30);
+        fmt_int(_par_map5_beam);
+        println(" beam::hermite_gaussian_field rows compared as port = conj(oracle)");
+        _par_map5_beam = 0;
     }
     if (_par_eq(mp, ml, "polarization") == 1) {
         print("  ADR 0002 row 5 (e^{+jωt}): ", 30);

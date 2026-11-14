@@ -6,7 +6,7 @@
 
 **Rust column**: rust-old/bench-history.csv, run `2026-11-12T03:15:21Z` at `c95fd30` (the 1.2.0 tag's source), criterion medians. Taken under load (kimiya's gates ran beside it: load average about 2.6, median CI width 0.8 %, p90 4.2 %, max 13 %), so a ratio within the Rust row's own noise is read as parity (port plan §5 P4).
 
-**80 Rust benches:** 55 twinned, 0 not applicable, 25 pending.
+**80 Rust benches:** 61 twinned, 0 not applicable, 19 pending.
 
 | Rust bench | Rust | Cyrius twin | Cyrius | Cyrius / Rust |
 |---|---:|---|---:|---:|
@@ -76,12 +76,12 @@
 | `scattering/mie_x50_m3_5` | 3.44 µs | `scattering/mie_x50_m3_5` | 11.74 µs | 3.4× |
 | `scattering/rayleigh_cross_section` | 1.74 ns | `scattering/rayleigh_cross_section` | 129.00 ns | 74.1× |
 | `scattering/rayleigh_phase_function` | 0.50 ns | `scattering/rayleigh_phase_function` | 4.00 ns | 8.0× |
-| `beam/spot_size` | 0.49 ns | pending (M3) | — | — |
-| `beam/abcd_propagate_beam` | 1.79 ns | pending (M3) | — | — |
-| `beam/abcd_compose` | 0.99 ns | pending (M3) | — | — |
-| `beam/hermite_gaussian_hg33` | 4.46 ns | pending (M3) | — | — |
-| `beam/resonator_stability` | 6.48 ns | pending (M3) | — | — |
-| `beam/hermite_gaussian_field_hg33` | 30.33 ns | pending (M3) | — | — |
+| `beam/spot_size` | 0.49 ns | `beam/spot_size` | 10.00 ns | 20.4× |
+| `beam/abcd_propagate_beam` | 1.79 ns | `beam/abcd_propagate_beam` | 19.00 ns | 10.6× |
+| `beam/abcd_compose` | 0.99 ns | `beam/abcd_compose` | 20.00 ns | 20.2× |
+| `beam/hermite_gaussian_hg33` | 4.46 ns | `beam/hermite_gaussian_hg33` | 160.00 ns | 35.9× |
+| `beam/resonator_stability` | 6.48 ns | `beam/resonator_stability` | 27.00 ns | 4.2× |
+| `beam/hermite_gaussian_field_hg33` | 30.33 ns | `beam/hermite_gaussian_field_hg33` | 669.00 ns | 22.1× |
 | `rf/reflection_coefficient` | 1.23 ns | pending (M4) | — | — |
 | `rf/vswr` | 1.23 ns | pending (M4) | — | — |
 | `rf/linear_array_factor_8` | 0.55 ns | pending (M4) | — | — |

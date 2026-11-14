@@ -23,6 +23,7 @@
 mod cyr;
 mod glibc;
 mod grids;
+mod m_beam;
 mod m_charge;
 mod m_circuit;
 mod m_complex;
@@ -49,6 +50,7 @@ use std::process::ExitCode;
 /// Every golden emitter, in file-name order.
 fn golden_modules() -> Vec<tsv::Module> {
     vec![
+        m_beam::emit(),
         m_charge::emit(),
         m_circuit::emit(),
         m_complex::emit(),

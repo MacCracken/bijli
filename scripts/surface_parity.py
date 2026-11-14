@@ -40,7 +40,6 @@ MODULES = ["error", "logging", "field", "maxwell", "charge", "material", "wave",
            "polarization", "scattering"]
 # Rust module -> the milestone that ports it (port plan §4.1).
 PENDING_MODULES = {
-    "beam": "M3",
     "rf": "M4",
     "fdtd": "M5–M6", "compute": "M6",
     "integration/soorat": "M7", "bridge": "M7", "ai": "M7",
@@ -48,7 +47,12 @@ PENDING_MODULES = {
 # Modules being ported Part by Part: module -> (the Parts that finish it, the Rust items still to come, by name). Their
 # other items are checked as a ported module's now; the listed ones count as pending, and one found ported is a
 # problem (drop it from the list).
-IN_PROGRESS: dict = {}
+IN_PROGRESS = {
+    # M3 part 1c-1 ported the API; the three structs' JSON (their serde derives) is part 1c-2's.
+    "beam": ("1c-2", {"impl Serialize for GaussianBeam", "impl Deserialize for GaussianBeam",
+                      "impl Serialize for AbcdMatrix", "impl Deserialize for AbcdMatrix",
+                      "impl Serialize for ResonatorStability", "impl Deserialize for ResonatorStability"}),
+}
 NOT_APPLICABLE_MODULES = {
     "lib": "crate root: module list and re-exports",
     "integration/mod": "module root of integration/ (no items)",

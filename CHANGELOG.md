@@ -251,6 +251,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
   grows by 5,298 rows, and `json.cr.tsv` by 3,060 rows that serde_json's best-effort parse misreads; all of them match
   on all three targets. polarization.rs's last test, `test_mie_result_serde`, is ported, and scattering.rs is
   ported.
+- **Cyrius port, M3 part 1c-1 — beam** (`src/beam.cyr`): beam.rs's Gaussian beams, ABCD matrices, resonator
+  stability and the Hermite–Gaussian and Laguerre–Gaussian modes, in bijli's one convention, e^{+jωt} (ADR 0002 row 5).
+  Only `bj_hermite_gaussian_field` changes its numbers: it is Rust's field conjugated, ∝ e^{−jkz} as Siegman writes it.
+  q = z + j·z_R was already Siegman's form and keeps its numbers. `tests/golden/beam.tsv` (40,086 rows) matches bit
+  for bit on all three targets through that mapping, and through ADR 0002 row 32 (see Fixed). All 60 of beam.rs's
+  tests are ported, and the 6 beam bench twins added (61 of 80). The three structs' JSON is part 1c-2's.
 
 ### Fixed
 
@@ -500,6 +506,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
 - **Parity harness**: digest v2. The v1 fold could not see sign-bit differences that came in pairs, and a generated
   NaN differs in sign between x86 and ARM. v2 folds each NaN as one quiet NaN and mixes every bit through. ADR 0002
   row 6 now states that a NaN's bits are the hardware's.
+- **beam** (ADR 0002 row 32, new, M3 part 1c-1): `laguerre_gaussian_intensity` at l = i32::MIN raised 2r²/w² to
+  −2³¹, since Rust's `l.unsigned_abs() as i32` wraps |l| = 2³¹, and so returned the reciprocal of the true power (∞
+  where it underflows to 0). It now raises it to 2³¹; every other l keeps Rust's chain.
 
 ### Performance
 
