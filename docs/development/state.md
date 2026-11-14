@@ -13,6 +13,9 @@ checks both against the tag. The last Rust release is **1.2.0**, tag `1.2.0` at 
 
 ## Port progress
 
+> **Handoff (2026-11-13):** the port changed hands mid-M3. Read [`handoff.md`](handoff.md) first: the per-bite
+> workflow, the gate and A/B scripts, and the Cyrius traps found in M3. Drop it, and this note, once it has served.
+
 Plan of record: [`bijli-port-plan.md`](bijli-port-plan.md). Decisions:
 [ADR 0001](../adr/0001-cyrius-port-with-rust-oracle.md) (the port) and
 [ADR 0002](../adr/0002-port-api-divergences.md) (the 2.0 API changes).
