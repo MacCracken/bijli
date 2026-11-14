@@ -1056,7 +1056,7 @@ fn _par_fmtf(fp, fl): i64 {
 }
 
 # `json::<Type>::*` rows: src/json.cyr (M1 part 4; M2 part 1a, Material; M3 part 1a-2, polarization's four structs;
-# M3 part 1b-2, MieResult).
+# M3 part 1b-2, MieResult; M3 part 1c-2, beam's three structs, ResonatorStability's is_stable an i:0 or i:1).
 # - `to_string`: the port's document, tokenized as the oracle tokenizes serde_json's (scripts/oracle/src/m_json.rs):
 #   each number outside strings (a maximal run of `-0123456789.eE+`) an f: token, its correctly rounded parse, and
 #   every run between numbers an s: token. Equal tokens are the same text but for each number's notation (D5).
@@ -2177,6 +2177,28 @@ public fn _par_json(fp, fl): i64 {
         _par_got_json_res(t12, v12, sb8);
         return 1;
     }
+    # beam's three structs (M3 part 1c-2): real fields, so ADR 0002 row 5 changes nothing in a document.
+    if (_par_eq(fp, fl, "json::GaussianBeam::to_string") == 1) {
+        var gb: BjGaussianBeam = _par_in_gb(0);
+        var sb10 = str_builder_new();
+        var t19, v19 = BjGaussianBeam_to_json(&gb, sb10);
+        _par_got_json_res(t19, v19, sb10);
+        return 1;
+    }
+    if (_par_eq(fp, fl, "json::AbcdMatrix::to_string") == 1) {
+        var am: BjAbcdMatrix = _par_in_am(0);
+        var sb11 = str_builder_new();
+        var t20, v20 = BjAbcdMatrix_to_json(&am, sb11);
+        _par_got_json_res(t20, v20, sb11);
+        return 1;
+    }
+    if (_par_eq(fp, fl, "json::ResonatorStability::to_string") == 1) {
+        var rs: BjResonatorStability = _par_in_rs(0);
+        var sb12 = str_builder_new();
+        var t21, v21 = BjResonatorStability_to_json(&rs, sb12);
+        _par_got_json_res(t21, v21, sb12);
+        return 1;
+    }
     var lenw[8];
     var doc = _par_in_bytes(0, &lenw);
     if (doc == 0) { return 0 - 1; }
@@ -2246,6 +2268,27 @@ public fn _par_json(fp, fl): i64 {
         var t16, v16 = BjMuellerMatrix_from_json(doc, len, &rmm);
         if (is_err_result(t16) == 1) { _par_got_err(v16); return 1; }
         _par_got_mm(rmm, 0);
+        return 1;
+    }
+    if (_par_eq(fp, fl, "json::GaussianBeam::from_str") == 1) {
+        var rgb: BjGaussianBeam;
+        var t22, v22 = BjGaussianBeam_from_json(doc, len, &rgb);
+        if (is_err_result(t22) == 1) { _par_got_err(v22); return 1; }
+        _par_got_gb(&rgb);
+        return 1;
+    }
+    if (_par_eq(fp, fl, "json::AbcdMatrix::from_str") == 1) {
+        var ram: BjAbcdMatrix;
+        var t23, v23 = BjAbcdMatrix_from_json(doc, len, &ram);
+        if (is_err_result(t23) == 1) { _par_got_err(v23); return 1; }
+        _par_got_am(ram);
+        return 1;
+    }
+    if (_par_eq(fp, fl, "json::ResonatorStability::from_str") == 1) {
+        var rrs: BjResonatorStability;
+        var t24, v24 = BjResonatorStability_from_json(doc, len, &rrs);
+        if (is_err_result(t24) == 1) { _par_got_err(v24); return 1; }
+        _par_got_rs(&rrs);
         return 1;
     }
     return 0;
@@ -2613,6 +2656,31 @@ fn _par_in_am(k): BjAbcdMatrix {
     return m;
 }
 
+# Input tokens k … k + 3 as a ResonatorStability: g1, g2, g_product, then is_stable's i:0 or i:1.
+fn _par_in_rs(k): BjResonatorStability {
+    var s: BjResonatorStability;
+    var g1: f64 = _par_in(k);
+    var g2: f64 = _par_in(k + 1);
+    var gp: f64 = _par_in(k + 2);
+    s.g1 = g1;
+    s.g2 = g2;
+    s.g_product = gp;
+    s.is_stable = _par_in(k + 3);
+    return s;
+}
+
+# A ResonatorStability to the got list: its three f64, then is_stable as i:.
+fn _par_got_rs(s: *BjResonatorStability) {
+    var g1: f64 = s.g1;
+    var g2: f64 = s.g2;
+    var gp: f64 = s.g_product;
+    _par_got_f(g1);
+    _par_got_f(g2);
+    _par_got_f(gp);
+    _par_got_i(s.is_stable);
+    return 0;
+}
+
 fn _par_got_gb(g: *BjGaussianBeam) {
     var l: f64 = g.wavelength;
     var w: f64 = g.waist;
@@ -2751,14 +2819,7 @@ fn _par_beam_fns(fp, fl): i64 {
         var st: BjResonatorStability;
         var t1, v1 = bj_resonator_stability(a, b, c, &st);
         if (is_err_result(t1) == 1) { return _par_got_error(v1) + 1; }
-        var g1: f64 = st.g1;
-        var g2: f64 = st.g2;
-        var gp: f64 = st.g_product;
-        _par_got_f(g1);
-        _par_got_f(g2);
-        _par_got_f(gp);
-        _par_got_i(st.is_stable);
-        return 1;
+        return _par_got_rs(&st) + 1;
     }
     if (_par_eq(fp, fl, "beam::transverse_mode_spacing") == 1) {
         var t2, v2 = bj_transverse_mode_spacing(a, b, c);
@@ -2921,6 +2982,9 @@ public fn _par_c_bound(fp, fl): i64 {
     if (_par_eq(fp, fl, "json::StokesVector::from_str") == 1) { return 0; }
     if (_par_eq(fp, fl, "json::MuellerMatrix::from_str") == 1) { return 0; }
     if (_par_eq(fp, fl, "json::MieResult::from_str") == 1) { return 0; }
+    if (_par_eq(fp, fl, "json::GaussianBeam::from_str") == 1) { return 0; }
+    if (_par_eq(fp, fl, "json::AbcdMatrix::from_str") == 1) { return 0; }
+    if (_par_eq(fp, fl, "json::ResonatorStability::from_str") == 1) { return 0; }
     return 0 - 1;
 }
 

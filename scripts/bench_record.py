@@ -61,6 +61,8 @@ EXTRA = {
     "json/mueller_matrix_from_json": "a Mueller matrix read back from its document (src/json.cyr)",
     "json/mie_result_to_json": "a Mie result's JSON, 21 + 21 coefficients (src/json.cyr, M3 part 1b-2)",
     "json/mie_result_from_json": "a Mie result read back from its document, its blocks freed (src/json.cyr)",
+    "json/resonator_stability_to_json": "a ResonatorStability's JSON, the first with a bool (src/json.cyr, M3 1c-2)",
+    "json/resonator_stability_from_json": "a ResonatorStability read back, its bool a JSON literal (src/json.cyr)",
 }
 
 

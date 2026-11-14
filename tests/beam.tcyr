@@ -5,7 +5,9 @@
 # conjugate of Rust's e^{−iωt} field, so `test_hermite_gaussian_field_closed_form` reads its imaginary parts with the
 # opposite sign, and says so; every other test reads real values that the convention leaves alone. The cyrius_*
 # groups pin the field's propagation sense, the reasons' exact text, out left alone on an error, and ADR 0002 row 32
-# (the LG power at l = i32::MIN). tests/golden/beam.tsv pins every function over its grid against Rust besides.
+# (the LG power at l = i32::MIN), and (M3 part 1c-2) the three structs' JSON: serde's text, round trips, both forms,
+# the bool's two literals, the reasons and the heap. tests/golden/beam.tsv pins every function over its grid against
+# Rust besides, and tests/golden/json.tsv the JSON.
 
 include "tests/lib.cyr"
 
@@ -67,6 +69,19 @@ fn waist_refused(l: f64, r1: f64, r2: f64, lam: f64): i64 {
     var t, v = bj_resonator_beam_waist(l, r1, r2, lam);
     if (is_err_result(t) == 1) { return 1; }
     return 0;
+}
+
+# 1 when the builder sb holds exactly the C string want.
+fn built_is(sb, want): i64 {
+    var s = str_builder_build(sb);
+    if (str_len(s) != strlen(want)) { return 0; }
+    return memeq(str_data(s), want, str_len(s));
+}
+
+# 1 when the Result (t, v) is an error with code `code` and the record's Display text is `want`.
+fn err_is(t, v, code, want): i64 {
+    if (is_err_result(t) != 1 || v != code) { return 0; }
+    return reason_is2(want, "");
 }
 
 # beam.rs's Gaussian beam and ABCD tests.
@@ -606,6 +621,174 @@ fn cyrius_tests(): i64 {
     return 0;
 }
 
+# The three structs' JSON (M3 part 1c-2), as serde_json writes and reads them.
+fn cyrius_json(): i64 {
+    test_group("cyrius_beam_json");
+    # serde's exact text.
+    var u: BjGaussianBeam;
+    var tu, vu = BjGaussianBeam_new(1.0, 1.0, &u);
+    var sb1 = str_builder_new();
+    var t1, v1 = BjGaussianBeam_to_json(&u, sb1);
+    assert(is_ok(tu) == 1 && is_ok(t1) == 1
+      && built_is(sb1, "{\"wavelength\":1.0,\"waist\":1.0,\"rayleigh_range\":3.141592653589793}") == 1,
+      "a Gaussian beam: its three fields, z_R = π");
+    var lens: BjAbcdMatrix;
+    var tl, vl = BjAbcdMatrix_thin_lens(0.5, &lens);
+    var sb2 = str_builder_new();
+    var t2, v2 = BjAbcdMatrix_to_json(&lens, sb2);
+    assert(is_ok(t2) == 1 && built_is(sb2, "{\"a\":1.0,\"b\":0.0,\"c\":-2.0,\"d\":1.0}") == 1,
+      "an ABCD matrix: a thin lens, f = 0.5");
+    var st: BjResonatorStability;
+    var ts, vs = bj_resonator_stability(0.1, 0.2, 0.2, &st);
+    var sb3 = str_builder_new();
+    var t3, v3 = BjResonatorStability_to_json(&st, sb3);
+    assert(is_ok(ts) == 1 && is_ok(t3) == 1
+      && built_is(sb3, "{\"g1\":0.5,\"g2\":0.5,\"g_product\":0.25,\"is_stable\":true}") == 1,
+      "a stable cavity: is_stable as the literal true");
+    var un: BjResonatorStability;
+    var tn, vn = bj_resonator_stability(1.0, 0.4, 0.4, &un);
+    var sb4 = str_builder_new();
+    var t4, v4 = BjResonatorStability_to_json(&un, sb4);
+    assert(is_ok(tn) == 1 && is_ok(t4) == 1
+      && built_is(sb4, "{\"g1\":-1.5,\"g2\":-1.5,\"g_product\":2.25,\"is_stable\":false}") == 1,
+      "an unstable one: false");
+    var odd: BjResonatorStability = st;
+    odd.is_stable = 5;
+    var sb5 = str_builder_new();
+    var t5, v5 = BjResonatorStability_to_json(&odd, sb5);
+    assert(is_ok(t5) == 1
+      && built_is(sb5, "{\"g1\":0.5,\"g2\":0.5,\"g_product\":0.25,\"is_stable\":true}") == 1,
+      "any is_stable but 0 is written true, as bj_resonator_beam_waist reads it");
+
+    # Round trips, bit for bit, with the longest number bayan writes (25 bytes) in every slot.
+    var lg = 0xBEB4B6231ABFD271;
+    var words: i64[4];
+    for (var k = 0; k < 4; k = k + 1) { words[k] = lg; }
+    var lb: BjGaussianBeam;
+    memcpy(&lb, &words, 24);
+    var sb6 = str_builder_new();
+    var t6, v6 = BjGaussianBeam_to_json(&lb, sb6);
+    var s6 = str_builder_build(sb6);
+    var lbb: BjGaussianBeam;
+    var t7, v7 = BjGaussianBeam_from_json(str_data(s6), str_len(s6), &lbb);
+    assert(is_ok(t6) == 1 && is_ok(t7) == 1 && memeq(&lbb, &lb, 24) == 1, "three of the longest numbers in a beam's");
+    var lm: BjAbcdMatrix;
+    memcpy(&lm, &words, 32);
+    var sb7 = str_builder_new();
+    var t8, v8 = BjAbcdMatrix_to_json(&lm, sb7);
+    var s7 = str_builder_build(sb7);
+    var lmb: BjAbcdMatrix;
+    var t9, v9 = BjAbcdMatrix_from_json(str_data(s7), str_len(s7), &lmb);
+    assert(is_ok(t8) == 1 && is_ok(t9) == 1 && memeq(&lmb, &lm, 32) == 1, "four in an ABCD matrix's");
+    var ls: BjResonatorStability;
+    memcpy(&ls, &words, 24);
+    ls.is_stable = 0;
+    var sb8 = str_builder_new();
+    var t10, v10 = BjResonatorStability_to_json(&ls, sb8);
+    var s8 = str_builder_build(sb8);
+    var lsb: BjResonatorStability;
+    lsb.is_stable = 9;
+    var t11, v11 = BjResonatorStability_from_json(str_data(s8), str_len(s8), &lsb);
+    assert(is_ok(t10) == 1 && is_ok(t11) == 1 && memeq(&lsb, &ls, 32) == 1 && lsb.is_stable == 0,
+      "three and false in a ResonatorStability's, read back as 0");
+    var lens2: BjAbcdMatrix;
+    var sb9 = str_builder_new();
+    var t12, v12 = BjAbcdMatrix_to_json(&lens, sb9);
+    var s9 = str_builder_build(sb9);
+    var t13, v13 = BjAbcdMatrix_from_json(str_data(s9), str_len(s9), &lens2);
+    var st2: BjResonatorStability;
+    var s3 = str_builder_build(sb3);
+    var t14, v14 = BjResonatorStability_from_json(str_data(s3), str_len(s3), &st2);
+    assert(is_ok(t13) == 1 && memeq(&lens2, &lens, 32) == 1 && is_ok(t14) == 1 && memeq(&st2, &st, 32) == 1,
+      "a thin lens and a stable cavity come back as they were, true as 1");
+
+    # Reading: both of serde's forms, fields in any order, any values as written.
+    var rb: BjGaussianBeam;
+    var d1 = "[0.000001064,0,7.5]";
+    var t15, v15 = BjGaussianBeam_from_json(d1, strlen(d1), &rb);
+    var rw: f64 = rb.waist;
+    var rz: f64 = rb.rayleigh_range;
+    assert(is_ok(t15) == 1 && rw == 0.0 && rz == 7.5,
+      "by position; a zero waist and a z_R that isn't πw₀²/λ read as written (serde calls no constructor)");
+    var rm: BjAbcdMatrix;
+    var d2 = "{\"d\":4,\"c\":3,\"note\":[true,null],\"b\":2,\"a\":1}";
+    var t16, v16 = BjAbcdMatrix_from_json(d2, strlen(d2), &rm);
+    var ra: f64 = rm.a;
+    var rd: f64 = rm.d;
+    assert(is_ok(t16) == 1 && ra == 1.0 && rd == 4.0, "fields in any order, an unknown key skipped");
+    var rs: BjResonatorStability;
+    var d3 = "[0.5,0.5,0.25,false]";
+    var t17, v17 = BjResonatorStability_from_json(d3, strlen(d3), &rs);
+    var rgp: f64 = rs.g_product;
+    assert(is_ok(t17) == 1 && rgp == 0.25 && rs.is_stable == 0,
+      "by position; an is_stable that disagrees with g₁g₂ is kept, as Rust's public field is");
+    var d4 = "{\"is_stable\" : true , \"g_product\":9,\"g2\":-3,\"g1\":-3}";
+    var t18, v18 = BjResonatorStability_from_json(d4, strlen(d4), &rs);
+    assert(is_ok(t18) == 1 && rs.is_stable == 1, "true reads as 1");
+
+    # The reasons, and out untouched: a bool is only JSON's true or false.
+    var keep: BjResonatorStability = st;
+    var d5 = "{\"g1\":0.5,\"g2\":0.5,\"g_product\":0.25,\"is_stable\":1}";
+    var t19, v19 = BjResonatorStability_from_json(d5, strlen(d5), &keep);
+    var kg: f64 = keep.g1;
+    var w19 = "deserialization failed: invalid type: integer, expected a boolean";
+    assert(err_is(t19, v19, BJ_ERR_DESERIALIZE, w19) == 1 && kg == 0.5 && keep.is_stable == 1,
+      "1 is not true; out untouched");
+    var d6 = "[0.5,0.5,0.25,\"true\"]";
+    var t20, v20 = BjResonatorStability_from_json(d6, strlen(d6), &keep);
+    var w20 = "deserialization failed: invalid type: string, expected a boolean";
+    assert(err_is(t20, v20, BJ_ERR_DESERIALIZE, w20) == 1, "nor is the string \"true\"");
+    var d7 = "[0.5,0.5,0.25,null]";
+    var t21, v21 = BjResonatorStability_from_json(d7, strlen(d7), &keep);
+    var w21 = "deserialization failed: invalid type: null, expected a boolean";
+    assert(err_is(t21, v21, BJ_ERR_DESERIALIZE, w21) == 1, "nor null");
+    var d8 = "[0.5,0.5,0.25,True]";
+    var t22, v22 = BjResonatorStability_from_json(d8, strlen(d8), &keep);
+    assert(is_err_result(t22) == 1 && v22 == BJ_ERR_DESERIALIZE && keep.is_stable == 1, "nor True (not JSON)");
+    var d9 = "{\"g1\":0.5,\"g2\":0.5,\"g_product\":0.25}";
+    var t23, v23 = BjResonatorStability_from_json(d9, strlen(d9), &keep);
+    var w23 = "deserialization failed: missing field `is_stable`";
+    assert(err_is(t23, v23, BJ_ERR_DESERIALIZE, w23) == 1, "is_stable is required");
+    var kb: BjGaussianBeam = u;
+    var d10 = "{\"wavelength\":1,\"waist\":1}";
+    var t24, v24 = BjGaussianBeam_from_json(d10, strlen(d10), &kb);
+    var kz: f64 = kb.rayleigh_range;
+    var w24 = "deserialization failed: missing field `rayleigh_range`";
+    assert(err_is(t24, v24, BJ_ERR_DESERIALIZE, w24) == 1 && kz == u.rayleigh_range,
+      "z_R is required, not recomputed; out untouched");
+    var km: BjAbcdMatrix = lens;
+    var d11 = "[1,0,-2]";
+    var t25, v25 = BjAbcdMatrix_from_json(d11, strlen(d11), &km);
+    var w25 = "deserialization failed: invalid length 3, expected struct AbcdMatrix with 4 elements";
+    var kc: f64 = km.c;
+    assert(err_is(t25, v25, BJ_ERR_DESERIALIZE, w25) == 1 && kc == -2.0, "a short sequence; out untouched");
+    var d12 = "{\"a\":1,\"b\":0,\"c\":0,\"d\":false}";
+    var t26, v26 = BjAbcdMatrix_from_json(d12, strlen(d12), &km);
+    var w26 = "deserialization failed: invalid type: boolean, expected f64";
+    assert(err_is(t26, v26, BJ_ERR_DESERIALIZE, w26) == 1, "a bool is not a number either");
+
+    # The heap: 2,000 reads, half refused, leave the freelist's arena and the bump heap as they were.
+    var fl0 = _fl_arena_pos;
+    var bump0 = alloc_used();
+    for (var j = 0; j < 500; j = j + 1) {
+        var ta, va = BjResonatorStability_from_json(d4, strlen(d4), &rs);
+        var tb, vb = BjResonatorStability_from_json(d5, strlen(d5), &keep);
+        var tc, vc = BjGaussianBeam_from_json(d1, strlen(d1), &rb);
+        var td, vd = BjAbcdMatrix_from_json(d11, strlen(d11), &km);
+        if (va == 7 || vb == 7 || vc == 7 || vd == 7) { println("."); }
+    }
+    assert_eq(_fl_arena_pos, fl0, "the freelist's arena did not grow");
+    assert_eq(alloc_used(), bump0, "nothing on the bump heap");
+    if (vu == 7 || v1 == 7 || v2 == 7 || v3 == 7 || v4 == 7 || v5 == 7 || v6 == 7 || v7 == 7 || v8 == 7) {
+        println(".");
+    }
+    if (v9 == 7 || v10 == 7 || v11 == 7 || v12 == 7 || v13 == 7 || v14 == 7 || v15 == 7 || v16 == 7 || v17 == 7) {
+        println(".");
+    }
+    if (v18 == 7 || vl == 7 || vs == 7 || vn == 7 || tl == 7 || t12 == 7) { println("."); }
+    return 0;
+}
+
 # Runs beam.rs's tests, then the Cyrius-only checks.
 fn main(): i64 {
     alloc_init();
@@ -614,6 +797,7 @@ fn main(): i64 {
     rust_tests_c();
     rust_tests_d();
     cyrius_tests();
+    cyrius_json();
     return assert_summary();
 }
 

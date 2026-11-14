@@ -1,7 +1,8 @@
-//! `json.tsv` — serde_json 1.0.154 on the serializable types (port plan D5; M1 part 4, M2 part 1a, M3 parts 1a-2 and
-//! 1b-2): Rust hisab 1.4.0's `Complex`, `field::FieldVector`, `charge::PointCharge`, `material::Material`,
-//! polarization's `JonesVector`, `JonesMatrix`, `StokesVector` and `MuellerMatrix`, and scattering's `MieResult`,
-//! written with `serde_json::to_string` and read with `serde_json::from_str`.
+//! `json.tsv` — serde_json 1.0.154 on the serializable types (port plan D5; M1 part 4, M2 part 1a, M3 parts 1a-2,
+//! 1b-2 and 1c-2): Rust hisab 1.4.0's `Complex`, `field::FieldVector`, `charge::PointCharge`, `material::Material`,
+//! polarization's `JonesVector`, `JonesMatrix`, `StokesVector` and `MuellerMatrix`, scattering's `MieResult`, and
+//! beam's `GaussianBeam`, `AbcdMatrix` and `ResonatorStability`, written with `serde_json::to_string` and read with
+//! `serde_json::from_str`.
 //!
 //! - **Writer rows** (`json::<Type>::to_string`, class A): the value's fields in, serde_json's text out as *parsed
 //!   tokens*: each number in the text (outside strings, a maximal run of `-0123456789.eE+`) is an `f:` token, the
@@ -30,9 +31,15 @@
 //! values: real Mie results, seeded and special parts with every pair of lengths to 7, and 500-element vectors; the
 //! documents add arrays of every length and element form, a `Vec` given as an object, and a deep unknown value inside
 //! an element.
+//!
+//! Beam's three structs (M3 part 1c-2) are `Kind`s emitted after MieResult (`Kind::BEAM`). `ResonatorStability`'s
+//! `is_stable` is the first bool: in a value it is 0.0 or 1.0 (false, true), in a row's tokens `i:0` or `i:1`, and in
+//! a document `false` or `true`. Its position takes its own spellings (`bool_spellings`: serde reads only the two
+//! literals, never 0, 1 or a string), and the number spellings go to the f64 positions only.
 
 use crate::grids::{Rng, pow2, specials};
-use crate::tsv::{Class, Module, Tok, f, i, s};
+use crate::tsv::{Class, Module, Tok, b, f, i, s};
+use bijli::beam::{AbcdMatrix, GaussianBeam, ResonatorStability};
 use bijli::charge::{ELECTRON_MASS, ELEMENTARY_CHARGE, PROTON_MASS, PointCharge};
 use bijli::field::{EPSILON_0, FieldVector, MU_0, SPEED_OF_LIGHT};
 use bijli::material::Material;
@@ -52,6 +59,9 @@ enum Kind {
     JonesMatrix,
     StokesVector,
     MuellerMatrix,
+    GaussianBeam,
+    AbcdMatrix,
+    ResonatorStability,
 }
 
 /// `{"re":<a>,"im":<b>}`.
@@ -91,6 +101,9 @@ impl Kind {
         Kind::MuellerMatrix,
     ];
 
+    /// Beam's three structs (M3 part 1c-2), emitted after MieResult's rows.
+    const BEAM: [Kind; 3] = [Kind::GaussianBeam, Kind::AbcdMatrix, Kind::ResonatorStability];
+
     fn name(self) -> &'static str {
         match self {
             Kind::Complex => "Complex",
@@ -101,20 +114,46 @@ impl Kind {
             Kind::JonesMatrix => "JonesMatrix",
             Kind::StokesVector => "StokesVector",
             Kind::MuellerMatrix => "MuellerMatrix",
+            Kind::GaussianBeam => "GaussianBeam",
+            Kind::AbcdMatrix => "AbcdMatrix",
+            Kind::ResonatorStability => "ResonatorStability",
         }
     }
 
-    /// How many f64 the type holds.
+    /// How many values the type holds: its f64, and its bool if any (`is_bool`).
     fn width(self) -> usize {
         match self {
             Kind::Complex => 2,
-            Kind::FieldVector => 3,
+            Kind::FieldVector | Kind::Material | Kind::GaussianBeam => 3,
             Kind::PointCharge => 8,
-            Kind::Material => 3,
-            Kind::JonesVector | Kind::StokesVector => 4,
+            Kind::JonesVector | Kind::StokesVector | Kind::AbcdMatrix | Kind::ResonatorStability => 4,
             Kind::JonesMatrix => 8,
             Kind::MuellerMatrix => 16,
         }
+    }
+
+    /// Whether value k is a bool (0.0 false, 1.0 true in a value; `i:0` or `i:1` in a row): ResonatorStability's
+    /// `is_stable`.
+    fn is_bool(self, k: usize) -> bool {
+        matches!(self, Kind::ResonatorStability) && k == 3
+    }
+
+    /// The row tokens of the values v: `f:` each f64, `i:` each bool.
+    fn toks(self, v: &[f64]) -> Vec<Tok> {
+        v.iter().enumerate().map(|(k, &x)| if self.is_bool(k) { b(x != 0.0) } else { f(x) }).collect()
+    }
+
+    /// The spellings of the values v: each f64 by `g`, each bool as `true` or `false`.
+    fn spell(self, v: &[f64], g: impl Fn(f64) -> String) -> Vec<String> {
+        v.iter()
+            .enumerate()
+            .map(|(k, &x)| if self.is_bool(k) { (x != 0.0).to_string() } else { g(x) })
+            .collect()
+    }
+
+    /// The values v for a note: each f64 in Debug form, each bool as `true` or `false`.
+    fn show(self, v: &[f64]) -> Vec<String> {
+        self.spell(v, |x| format!("{x:?}"))
     }
 
     /// How many values a row's set holds: eight, or the width when wider (the first `width()` used).
@@ -136,6 +175,14 @@ impl Kind {
             Kind::JonesMatrix => format!("{{\"m\":{}}}", jm(v, cx)),
             Kind::StokesVector => format!("{{\"s\":{}}}", arr(&v[..4])),
             Kind::MuellerMatrix => format!("{{\"m\":{}}}", mm(v)),
+            Kind::GaussianBeam => {
+                format!("{{\"wavelength\":{},\"waist\":{},\"rayleigh_range\":{}}}", v[0], v[1], v[2])
+            }
+            Kind::AbcdMatrix => format!("{{\"a\":{},\"b\":{},\"c\":{},\"d\":{}}}", v[0], v[1], v[2], v[3]),
+            Kind::ResonatorStability => format!(
+                "{{\"g1\":{},\"g2\":{},\"g_product\":{},\"is_stable\":{}}}",
+                v[0], v[1], v[2], v[3]
+            ),
         }
     }
 
@@ -153,6 +200,8 @@ impl Kind {
             Kind::JonesMatrix => format!("[{}]", jm(v, cxs)),
             Kind::StokesVector => format!("[{}]", arr(&v[..4])),
             Kind::MuellerMatrix => format!("[{}]", mm(v)),
+            Kind::GaussianBeam => format!("[{},{},{}]", v[0], v[1], v[2]),
+            Kind::AbcdMatrix | Kind::ResonatorStability => format!("[{},{},{},{}]", v[0], v[1], v[2], v[3]),
         }
     }
 
@@ -170,10 +219,23 @@ impl Kind {
             Kind::JonesMatrix => vec![("m", jm(v, cx))],
             Kind::StokesVector => vec![("s", arr(&v[..4]))],
             Kind::MuellerMatrix => vec![("m", mm(v))],
+            Kind::GaussianBeam => {
+                vec![("wavelength", v[0].clone()), ("waist", v[1].clone()), ("rayleigh_range", v[2].clone())]
+            }
+            Kind::AbcdMatrix => {
+                vec![("a", v[0].clone()), ("b", v[1].clone()), ("c", v[2].clone()), ("d", v[3].clone())]
+            }
+            Kind::ResonatorStability => vec![
+                ("g1", v[0].clone()),
+                ("g2", v[1].clone()),
+                ("g_product", v[2].clone()),
+                ("is_stable", v[3].clone()),
+            ],
         }
     }
 
-    /// The value, from up to eight f64.
+    /// The value, from its `width()` values (a bool as 0.0 or 1.0). serde's derive never calls a constructor, so every
+    /// field is set as given.
     fn write(self, v: &[f64]) -> String {
         match self {
             Kind::Complex => serde_json::to_string(&Complex::new(black_box(v[0]), black_box(v[1]))),
@@ -202,11 +264,28 @@ impl Kind {
                 let row = |r: usize| [0, 1, 2, 3].map(|c| black_box(v[4 * r + c]));
                 serde_json::to_string(&MuellerMatrix { m: [row(0), row(1), row(2), row(3)] })
             }
+            Kind::GaussianBeam => serde_json::to_string(&GaussianBeam {
+                wavelength: black_box(v[0]),
+                waist: black_box(v[1]),
+                rayleigh_range: black_box(v[2]),
+            }),
+            Kind::AbcdMatrix => serde_json::to_string(&AbcdMatrix::new(
+                black_box(v[0]),
+                black_box(v[1]),
+                black_box(v[2]),
+                black_box(v[3]),
+            )),
+            Kind::ResonatorStability => serde_json::to_string(&ResonatorStability {
+                g1: black_box(v[0]),
+                g2: black_box(v[1]),
+                g_product: black_box(v[2]),
+                is_stable: black_box(v[3] != 0.0),
+            }),
         }
         .expect("serde_json writes every value")
     }
 
-    /// serde_json's reading of `doc`: the f64 in field order, or its error's message.
+    /// serde_json's reading of `doc`: the values in field order (a bool as 0.0 or 1.0), or its error's message.
     fn read(self, doc: &str) -> Result<Vec<f64>, String> {
         let doc = black_box(doc);
         match self {
@@ -228,6 +307,11 @@ impl Kind {
             Kind::MuellerMatrix => {
                 serde_json::from_str::<MuellerMatrix>(doc).map(|m| m.m.iter().flatten().copied().collect())
             }
+            Kind::GaussianBeam => serde_json::from_str::<GaussianBeam>(doc)
+                .map(|g| vec![g.wavelength, g.waist, g.rayleigh_range]),
+            Kind::AbcdMatrix => serde_json::from_str::<AbcdMatrix>(doc).map(|m| vec![m.a, m.b, m.c, m.d]),
+            Kind::ResonatorStability => serde_json::from_str::<ResonatorStability>(doc)
+                .map(|r| vec![r.g1, r.g2, r.g_product, f64::from(u8::from(r.is_stable))]),
         }
         .map_err(|e| e.to_string())
     }
@@ -402,6 +486,21 @@ fn spellings() -> Vec<String> {
     out
 }
 
+/// Spellings for a bool field (M3 part 1c-2): serde reads only the literals `true` and `false`, and refuses every
+/// other JSON value (numbers 0 and 1, strings, null, containers) and every near miss of the literals.
+fn bool_spellings() -> Vec<String> {
+    [
+        "true", "false", " true ", "\t\nfalse\r ", "True", "TRUE", "False", "FALSE", "tru", "t", "f", "fals", "truee",
+        "true1", "true0", "true.0", "falsee", "false0", "trUe", "\\u0074rue", "1", "0", "-0", "1.0", "0.0", "1e0", "-1",
+        "2", "01", "1e400", "18446744073709551616", "-", "null", "nul", "\"true\"", "\"false\"", "\"\"",
+        "\"\\u0074rue\"", "\"\\ud800\"", "[]", "[true]", "[false]", "{}", "{\"x\":true}", "yes", "on", "NaN",
+        "Infinity",
+    ]
+    .iter()
+    .map(|x| (*x).to_string())
+    .collect()
+}
+
 /// Seeded decimal spellings of up to 40 digits with exponents across the f64 range (correct rounding's hard cases).
 fn random_decimals(rng: &mut Rng, n: usize) -> Vec<String> {
     let mut out = Vec::with_capacity(n);
@@ -553,7 +652,7 @@ fn unchecked(doc: &str) -> i64 {
 
 fn writer_row(m: &mut Module, kind: Kind, v: &[f64]) {
     let text = kind.write(v);
-    let ins: Vec<Tok> = v[..kind.width()].iter().map(|&x| f(x)).collect();
+    let ins = kind.toks(&v[..kind.width()]);
     m.row_noted(
         &format!("json::{}::to_string", kind.name()),
         Class::A,
@@ -581,8 +680,8 @@ fn reader_row(m: &mut Module, kind: Kind, doc: &str) {
     let head = format!("{func}({}, unchecked {d})", preview(doc));
     match read {
         Ok(v) => {
-            let outs: Vec<Tok> = v.iter().map(|&x| f(x)).collect();
-            let vals: Vec<String> = v.iter().map(|x| format!("{x:?}")).collect();
+            let outs = kind.toks(&v);
+            let vals = kind.show(&v);
             m.row_with_note(&func, Class::C, &ins, &outs, &format!("{head} -> Ok({})", vals.join(", ")));
         }
         Err(msg) => {
@@ -592,9 +691,15 @@ fn reader_row(m: &mut Module, kind: Kind, doc: &str) {
     }
 }
 
-/// The plain spellings of a set of seeded values (`Kind::draws`) for a document's other fields.
+/// The plain spellings of a set of seeded values (`Kind::draws`) for a document's other fields; a bool field is `true`.
 fn fillers(kind: Kind, rng: &mut Rng) -> Vec<String> {
-    (0..kind.draws()).map(|_| js(rng.signed_log_uniform(-20.0, 20.0))).collect()
+    let mut v: Vec<String> = (0..kind.draws()).map(|_| js(rng.signed_log_uniform(-20.0, 20.0))).collect();
+    for (k, x) in v.iter_mut().enumerate().take(kind.width()) {
+        if kind.is_bool(k) {
+            *x = "true".to_string();
+        }
+    }
+    v
 }
 
 /// Unknown values of every JSON kind (deep, long, escaped, lone surrogates, refused spellings), for unknown keys.
@@ -891,7 +996,13 @@ fn nested(kind: Kind, v: &[String]) -> Vec<String> {
             docs.push(format!("[{},1]", mm(v)));
             docs.push(mm(v));
         }
-        Kind::Complex | Kind::FieldVector | Kind::PointCharge | Kind::Material => {}
+        Kind::Complex
+        | Kind::FieldVector
+        | Kind::PointCharge
+        | Kind::Material
+        | Kind::GaussianBeam
+        | Kind::AbcdMatrix
+        | Kind::ResonatorStability => {}
     }
     docs
 }
@@ -922,64 +1033,80 @@ pub fn emit() -> Module {
     let m = &mut rows;
     let mut rng = Rng::new(0x15_03d5);
     let xs = values(&mut rng);
-    let n = xs.len();
-
     for kind in Kind::ALL {
-        // Writer rows: each value, beside others from the list.
-        let w = kind.width();
-        let mut sets: Vec<Vec<f64>> = Vec::new();
-        for j in 0..n {
-            sets.push((0..kind.draws()).map(|k| xs[(j + k * 37) % n]).collect());
-        }
-        for _ in 0..300 {
-            sets.push((0..kind.draws()).map(|_| f64::from_bits(rng.bits())).collect());
-        }
-        for v in &sets {
-            m.writer(kind, v);
-        }
-        // Reader rows: serde's own text, and the same values in other notations (finite ones: `null` is refused, and
-        // the shape rows cover it).
-        for v in &sets {
-            m.reader(kind, &kind.write(v));
-            let finite = v[..w].iter().all(|x| x.is_finite());
-            if finite {
-                let d: Vec<String> = v.iter().map(|&x| js(x)).collect();
-                m.reader(kind, &kind.doc(&d));
-            }
-        }
-        for v in sets.iter().take(250) {
-            if v[..w].iter().all(|x| x.is_finite()) {
-                let plain: Vec<String> = v.iter().map(|x| format!("{x}")).collect();
-                m.reader(kind, &kind.doc(&plain));
-                let exp: Vec<String> = v.iter().map(|x| format!("{x:e}")).collect();
-                m.reader(kind, &kind.doc(&exp));
-            }
-        }
-        // Every spelling in each field position.
-        let spell = spellings();
-        let base = fillers(kind, &mut rng);
-        for pos in 0..w {
-            for sp in &spell {
-                let mut v = base.clone();
-                v[pos] = sp.clone();
-                m.reader(kind, &kind.doc(&v));
-            }
-        }
-        // Seeded decimals, a few in each position.
-        for (k, d) in random_decimals(&mut rng, 1200).into_iter().enumerate() {
-            let mut v = base.clone();
-            v[k % w] = d;
-            m.reader(kind, &kind.doc(&v));
-        }
-        for doc in shapes(kind, &mut rng) {
-            m.reader(kind, &doc);
-        }
-        for doc in nested(kind, &base) {
-            m.reader(kind, &doc);
-        }
+        emit_kind(m, kind, &mut rng, &xs);
     }
     emit_mie(m, &mut rng, &xs);
+    // M3 part 1c-2: beam's three structs, after MieResult, so the earlier rows and their seeded stream are unchanged.
+    for kind in Kind::BEAM {
+        emit_kind(m, kind, &mut rng, &xs);
+    }
     rows.m
+}
+
+/// One type's writer and reader rows: the value sets, serde's documents and the other notations, every spelling in
+/// each position, seeded decimals, the shapes and the nested forms.
+fn emit_kind(m: &mut Rows, kind: Kind, rng: &mut Rng, xs: &[f64]) {
+    let n = xs.len();
+    // Writer rows: each value, beside others from the list.
+    let w = kind.width();
+    let mut sets: Vec<Vec<f64>> = Vec::new();
+    for j in 0..n {
+        sets.push((0..kind.draws()).map(|k| xs[(j + k * 37) % n]).collect());
+    }
+    for _ in 0..300 {
+        sets.push((0..kind.draws()).map(|_| f64::from_bits(rng.bits())).collect());
+    }
+    // A bool field alternates false, true over the sets.
+    for (j, v) in sets.iter_mut().enumerate() {
+        for (k, x) in v.iter_mut().enumerate().take(w) {
+            if kind.is_bool(k) {
+                *x = f64::from(u8::from(j % 2 == 1));
+            }
+        }
+    }
+    for v in &sets {
+        m.writer(kind, v);
+    }
+    // Reader rows: serde's own text, and the same values in other notations (finite ones: `null` is refused, and
+    // the shape rows cover it).
+    for v in &sets {
+        m.reader(kind, &kind.write(v));
+        let finite = v[..w].iter().all(|x| x.is_finite());
+        if finite {
+            m.reader(kind, &kind.doc(&kind.spell(v, js)));
+        }
+    }
+    for v in sets.iter().take(250) {
+        if v[..w].iter().all(|x| x.is_finite()) {
+            m.reader(kind, &kind.doc(&kind.spell(v, |x| format!("{x}"))));
+            m.reader(kind, &kind.doc(&kind.spell(v, |x| format!("{x:e}"))));
+        }
+    }
+    // Every spelling in each field position: a number's in an f64 position, a bool's in a bool position.
+    let spell = spellings();
+    let bool_spell = bool_spellings();
+    let base = fillers(kind, rng);
+    for pos in 0..w {
+        for sp in if kind.is_bool(pos) { &bool_spell } else { &spell } {
+            let mut v = base.clone();
+            v[pos] = sp.clone();
+            m.reader(kind, &kind.doc(&v));
+        }
+    }
+    // Seeded decimals, a few in each f64 position.
+    let nums: Vec<usize> = (0..w).filter(|&k| !kind.is_bool(k)).collect();
+    for (k, d) in random_decimals(rng, 1200).into_iter().enumerate() {
+        let mut v = base.clone();
+        v[nums[k % nums.len()]] = d;
+        m.reader(kind, &kind.doc(&v));
+    }
+    for doc in shapes(kind, rng) {
+        m.reader(kind, &doc);
+    }
+    for doc in nested(kind, &base) {
+        m.reader(kind, &doc);
+    }
 }
 
 // ── MieResult (M3 part 1b-2) ──────────────────────────────────────────────────────────

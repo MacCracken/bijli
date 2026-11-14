@@ -967,6 +967,35 @@ fn main(): i64 {
     if (is_err_result(tmr) == 1 || is_err_result(tmk) == 1) { println("json/mie_result: the document was refused"); }
     BjMieResult_free(&mrout);
     BjMieResult_free(&mres);
+
+    # beam's ResonatorStability (M3 part 1c-2), the first document with a bool: a stable cavity written and read back.
+    var rsw: BjResonatorStability;
+    var trs, vrs = bj_resonator_stability(0.1, 0.2, 0.25, &rsw);
+    var brw = bench_new("json/resonator_stability_to_json");
+    bench_batch_start(brw);
+    for (var k = 0; k < 200000; k = k + 1) {
+        store64(jsb + 8, 0);
+        var trw, vrw = BjResonatorStability_to_json(&rsw, jsb);
+        keep = keep + vrw;
+    }
+    bench_batch_stop(brw, 200000);
+    bench_report(brw);
+    var rss = str_builder_build(jsb);
+    var rsdoc = str_data(rss);
+    var rslen = str_len(rss);
+    var rsout: BjResonatorStability;
+    var brr = bench_new("json/resonator_stability_from_json");
+    bench_batch_start(brr);
+    for (var k = 0; k < 200000; k = k + 1) {
+        var trr, vrr = BjResonatorStability_from_json(rsdoc, rslen, &rsout);
+        fsum = fsum + rsout.g_product;
+    }
+    bench_batch_stop(brr, 200000);
+    bench_report(brr);
+    var trk, vrk = BjResonatorStability_from_json(rsdoc, rslen, &rsout);
+    if (is_err_result(trs) == 1 || is_err_result(trk) == 1 || rsout.is_stable != 1) {
+        println("json/resonator_stability: the document was refused");
+    }
     if (fsum == 7.0) { println("."); }
 
     var ar: f64 = acc.re;

@@ -3275,3 +3275,66 @@ E and B = n̂ × E/c.
 - **Result, every target** (x86_64 ELF, x86_64 PE, aarch64): **16 modules, 0 failing; 484,789 ok, 0 failed, 0
   measured, 0 pending, 63,224 accepted (ADR 01: 24,164; ADR 0002: 39,060)** over 548,013 rows; **all 374 digests
   equal**, the 345 before unchanged. `beam.tcyr` passes on all three.
+
+## 60. M3 part 1c-2: beam's JSON (2026-11-14)
+
+- **`src/json.cyr`**: `BjGaussianBeam`, `BjAbcdMatrix` and `BjResonatorStability` get `_to_json` and `_from_json`
+  (D5, amended), on the shared writer and reader. serde's shapes:
+  - a beam is `{"wavelength":..,"waist":..,"rayleigh_range":..}`;
+  - an ABCD matrix is `{"a":..,"b":..,"c":..,"d":..}`;
+  - a stability is `{"g1":..,"g2":..,"g_product":..,"is_stable":true}`.
+
+  Each writer builds its document in a 128-byte buffer: at most 122 bytes with the longest numbers bayan prints
+  (25 bytes, `-0.0000012345678901234567`). Each reader decodes into words and copies them to `out` only on success.
+- **The bool**: `is_stable` is the port's first JSON bool.
+  - The writer writes `true` for any value but 0, as `bj_resonator_beam_waist` reads it, and `false` for 0.
+  - The reader (`_bj_jr_bool`) takes only JSON's two literals, as serde's `deserialize_bool` does: `true` is 1,
+    `false` is 0. The oracle's rows show serde_json refusing everything else in that position: `1`, `0`, `-0`,
+    `1.0`, `"true"`, `null`, `[true]`, `{}`, and every near miss of the literals (`True`, `tru`, `true1`, `trUe`).
+    The port refuses each, with serde's wording (`invalid type: integer, expected a boolean`).
+- **The convention**: the three structs hold real numbers (q is computed, not stored), so ADR 0002 row 5 changes
+  nothing in their documents, and the harness compares every row on the oracle's numbers. No ADR 0002 row is
+  needed: the readers and writers are serde's, bit for bit.
+- **Read as written**: serde's derive calls no constructor, so a beam `BjGaussianBeam_new` would refuse (a zero
+  waist), a z_R that isn't πw₀²/λ, and an `is_stable` that disagrees with g₁g₂ are all read as the document holds
+  them, as Rust's public fields are.
+- **`json.tsv` grows by 14,416 rows, to 61,402**: 1,186 writer rows per type, and 3,549 GaussianBeam, 3,702
+  AbcdMatrix and 3,607 ResonatorStability reader rows.
+  - `m_json.rs`'s per-type loop became `emit_kind`, and the three new `Kind`s (`Kind::BEAM`) are emitted after
+    MieResult. So the 46,986 earlier rows are an exact prefix of the new file, and their 374 digests are unchanged.
+  - A `Kind` value may now be a bool (`is_bool`): 0.0 or 1.0 in a value, `i:0` or `i:1` in a row (as `beam.tsv`'s
+    `resonator_stability` rows), `false` or `true` in a document. It alternates over the value sets, and its position
+    takes its own 48 spellings (`bool_spellings`); the number spellings and the seeded decimals go to the f64
+    positions only.
+
+  `validate.py`'s JSON grammar gained `"bool"` (`JsonBool`, an `i:` token) and agreed with every new row on its first
+  run. Flipping each new row's first output (a bit of its first f64, or its outcome) was caught on all 14,416 rows,
+  and flipping `is_stable` on all 4,380 rows that carry it. `json.cr.tsv` grows by 5,295 rows, to 29,411: the
+  readings serde_json's best-effort parse gets wrong, gated at 0 ulp. 54 more rows are ADR 0002 row 12's (223 in
+  all).
+- **Tests**: `cyrius_beam_json` in `tests/beam.tcyr` (23 assertions, 113 in the file) covers:
+  - serde's exact text for a beam (z_R = π), a thin lens and a stable and an unstable cavity, and `true` for any
+    `is_stable` but 0;
+  - bit-for-bit round trips with the longest number in every slot;
+  - both of serde's forms, fields in any order, and values read as written;
+  - the bool's refusals (`1`, `"true"`, `null`, `True`), the reasons, and out untouched;
+  - 2,000 reads, half of them refused, leaving the freelist arena and the bump heap as they were.
+
+  beam.rs has no serde test of its own, so the ledger is unchanged: 522 ported, 3 n/a, 333 pending of 858.
+- **Surface parity**: beam is a ported module (12 in all), 397 items matched, 0 in progress. The API snapshot gains
+  the 6 functions (2,033 public).
+- **Benchmarks** (Cyrius-only; rust-old benches no serde), medians of five rounds interleaved against HEAD at load
+  0.8–1.9:
+  - `json/resonator_stability_to_json`: 2.28 µs;
+  - `json/resonator_stability_from_json`: 2.45 µs, a FieldVector's 1.86 µs and one more field.
+
+  Every other row is within noise (±2.9 %) but two readers whose code is unchanged: `json/point_charge_from_json`
+  4.56 → 4.74 µs (+4.0 %) and `json/field_vector_from_json` 1.857 → 1.905 µs (+2.6 %). It is code layout. A variant
+  with the ten new functions appended at `src/json.cyr`'s end, so that no existing function moves, read 4.40–4.59 and
+  1.86–1.87 µs, HEAD's numbers, in three rounds interleaved with this build's 4.70–4.77 and 1.90–1.92 µs; the
+  Mueller and Mie readers were equal in both. The file keeps its sections (writers, decoders, readers): any later
+  edit would move the readers again. `material/curie_weiss` sits at 7 or 8 ns in both builds.
+- **Result, every target** (x86_64 ELF, x86_64 PE, aarch64): **16 modules, 0 failing; 493,892 ok, 0 failed, 0
+  measured, 0 pending, 68,537 accepted (ADR 01: 29,423; ADR 0002: 39,114)** over 562,429 rows; **all 380 digests
+  equal**, the 374 before unchanged. `beam.tcyr` and `json.tcyr` pass on all three. M3 Part 1 is done: polarization.rs,
+  scattering.rs and beam.rs are ported.

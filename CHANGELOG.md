@@ -257,6 +257,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
   q = z + j·z_R was already Siegman's form and keeps its numbers. `tests/golden/beam.tsv` (40,086 rows) matches bit
   for bit on all three targets through that mapping, and through ADR 0002 row 32 (see Fixed). All 60 of beam.rs's
   tests are ported, and the 6 beam bench twins added (61 of 80). The three structs' JSON is part 1c-2's.
+- **Cyrius port, M3 part 1c-2 — beam's JSON** (`src/json.cyr`): `BjGaussianBeam`, `BjAbcdMatrix` and
+  `BjResonatorStability` get `_to_json` and `_from_json`, serde_json's documents (D5). Their fields are real, so ADR
+  0002 row 5 changes nothing in a document. `is_stable` is the first bool: it is written `true` or `false` (`true` for
+  any value but 0), and read only from those two literals, never from 0, 1 or a string, as serde reads a bool. Every
+  field is read as written, as serde's derive reads Rust's public fields: a beam `BjGaussianBeam_new` would refuse,
+  a z_R that isn't πw₀²/λ, an `is_stable` that disagrees with g₁g₂. `json.tsv` grows by 14,416 rows, and
+  `json.cr.tsv` by 5,295 that serde_json's best-effort parse misreads; all of them match on all three targets.
+  beam.rs is ported.
 
 ### Fixed
 

@@ -23384,20 +23384,21 @@ public fn bj_laguerre_gaussian_intensity(beam: *BjGaussianBeam, p, l, r: f64, z:
 
 # json.cyr — JSON for the serializable types: BjComplex (Rust hisab 1.4.0's `Complex`), BjFieldVector,
 # BjPointCharge, (M2 part 1a) BjMaterial, (M3 part 1a-2) polarization's BjJonesVector, BjJonesMatrix,
-# BjStokesVector and BjMuellerMatrix, and (M3 part 1b-2) scattering's BjMieResult, as serde_json 1.0.154 writes and
-# reads them (port plan D5, M1 part 4; ADR 0002 rows 10–12).
+# BjStokesVector and BjMuellerMatrix, (M3 part 1b-2) scattering's BjMieResult, and (M3 part 1c-2) beam's
+# BjGaussianBeam, BjAbcdMatrix and BjResonatorStability, as serde_json 1.0.154 writes and reads them (port plan D5,
+# M1 part 4; ADR 0002 rows 10–12).
 #
 # Writers append serde's document to a `str_builder`: the fields in Rust declaration order, no spaces, a Rust array
-# (`[f64; 3]`, a Jones matrix's `m: [[Complex; 2]; 2]`, a Mueller matrix's `m: [[f64; 4]; 4]`) as nested arrays row
-# by row, an inner Complex as its own object, every f64 through bayan's printer (`bayan_f64_to_json`, the printer
-# `#derive(Serialize)` uses): the shortest round-trip digits, `null` for NaN and ±∞ as serde_json writes them. The
-# notation is bayan's, not ryu's (`10000000000000000.0` where serde_json writes `1e16`); each parses to the same
-# bits, which is what the golden rows compare (D5). The document is built on the stack (a BjMieResult's, whose two
-# `Vec<Complex>` have any length, in one fl_alloc block sized for the longest numbers) and appended in one grow, so a
-# refused allocation leaves the builder as it was and returns BJ_ERR_ALLOCATION (the builder's own grow would exit
-# the process). Hand-written, not derived: on cyrius 6.7.18 a `#derive(Serialize)` in a second `private` file fails
-# to compile (the derive's shared helper is private to the first one), and the derive would export its scanner
-# decoders as bijli API (probe p16).
+# (`[f64; 3]`, a Jones matrix's `m: [[Complex; 2]; 2]`, a Mueller matrix's `m: [[f64; 4]; 4]`) as nested arrays row by
+# row, an inner Complex as its own object, a bool (BjResonatorStability's `is_stable`, 1 or 0) as `true` or `false`,
+# every f64 through bayan's printer (`bayan_f64_to_json`, the printer `#derive(Serialize)` uses): the shortest
+# round-trip digits, `null` for NaN and ±∞ as serde_json writes them. The notation is bayan's, not ryu's
+# (`10000000000000000.0` where serde_json writes `1e16`); each parses to the same bits, which is what the golden rows
+# compare (D5). The document is built on the stack (a BjMieResult's, whose two `Vec<Complex>` have any length, in one
+# fl_alloc block sized for the longest numbers) and appended in one grow, so a refused allocation leaves the builder as
+# it was and returns BJ_ERR_ALLOCATION (the builder's own grow would exit the process). Hand-written, not derived: on
+# cyrius 6.7.18 a `#derive(Serialize)` in a second `private` file fails to compile (the derive's shared helper is
+# private to the first one), and the derive would export its scanner decoders as bijli API (probe p16).
 #
 # Readers parse the text with bayan's value tree and apply serde's derive semantics:
 # - a struct reads from an object, by field name, or from an array, by position (serde's sequence form), which must
@@ -23405,6 +23406,7 @@ public fn bj_laguerre_gaussian_intensity(beam: *BjGaussianBeam, p, l, r: f64, z:
 #   from an array of exactly n T, a `Vec<T>` from an array of any length;
 # - a field missing, a value of the wrong JSON type, or an array of the wrong length is BJ_ERR_DESERIALIZE;
 # - unknown fields are ignored, whatever their value (it must still be valid JSON);
+# - a bool takes only JSON's `true` or `false`, as serde reads one: never a number (0 or 1), a string or null;
 # - an f64 takes any JSON number, correctly rounded (ADR 0002 row 11: serde_json's default parse is best-effort, and
 #   the golden rows compare against the correctly rounded value), and never `null` (serde_json writes NaN and ±∞ as
 #   `null` and can't read them back, nor can the port); a number whose correctly rounded value overflows is refused,
@@ -23412,8 +23414,10 @@ public fn bj_laguerre_gaussian_intensity(beam: *BjGaussianBeam, p, l, r: f64, z:
 # - the whole document is checked, unknown values included (ADR 0002 row 12): a key repeated in any object, a lone
 #   surrogate escape in any string, or containers nested past 128 levels refuse it. serde_json checks only what it
 #   deserializes: it refuses those in the struct's own fields and keys, and skips an unknown value unchecked;
-# - a mass that `BjPointCharge_new` would refuse is read as written: Rust's fields are public, and the readers read
-#   back every document the writers write.
+# - a mass that `BjPointCharge_new` would refuse is read as written, and so are a beam that `BjGaussianBeam_new`
+#   would refuse (its z_R as given, not recomputed) and a ResonatorStability whose `is_stable` disagrees with its
+#   g₁g₂: Rust's fields are public, serde's derive calls no constructor, and the readers read back every document
+#   the writers write.
 # Where bayan reads the text otherwise than serde_json, one pass before bayan sees it puts that right: the integer
 # `-0` (an integer 0 in bayan's tree, so an f64 field would lose the sign; serde_json reads -0.0) and an integer
 # outside i64 (refused by bayan; a number to serde_json) each get `.0` appended, which bayan reads as a float,
@@ -23665,6 +23669,55 @@ fn _bj_jw_cvec(buf, n, p, k): i64 {
         m = _bj_jw_cx(buf, m, p + j * 16);
     }
     return m;
+}
+
+# Appends `{"wavelength":<λ>,"waist":<w₀>,"rayleigh_range":<z_R>}` to the builder sb: Ok(0), or Err(BJ_ERR_ALLOCATION)
+# with sb as it was. Mirrors `serde_json::to_string(&b)` for `beam::GaussianBeam`.
+#must_use
+public fn BjGaussianBeam_to_json(b: *BjGaussianBeam, sb): Result {
+    var buf[128];
+    var n = _bj_jw_cstr(&buf, 0, "{\"wavelength\":");
+    n = _bj_jw_f64(&buf, n, b.wavelength);
+    n = _bj_jw_cstr(&buf, n, ",\"waist\":");
+    n = _bj_jw_f64(&buf, n, b.waist);
+    n = _bj_jw_cstr(&buf, n, ",\"rayleigh_range\":");
+    n = _bj_jw_f64(&buf, n, b.rayleigh_range);
+    n = _bj_jw_cstr(&buf, n, "}");
+    return _bj_jw_put(sb, &buf, n);
+}
+
+# Appends `{"a":<A>,"b":<B>,"c":<C>,"d":<D>}` to the builder sb: Ok(0), or Err(BJ_ERR_ALLOCATION) with sb as it was.
+# Mirrors `serde_json::to_string(&m)` for `beam::AbcdMatrix`.
+#must_use
+public fn BjAbcdMatrix_to_json(m: *BjAbcdMatrix, sb): Result {
+    var buf[128];
+    var n = _bj_jw_cstr(&buf, 0, "{\"a\":");
+    n = _bj_jw_f64(&buf, n, m.a);
+    n = _bj_jw_cstr(&buf, n, ",\"b\":");
+    n = _bj_jw_f64(&buf, n, m.b);
+    n = _bj_jw_cstr(&buf, n, ",\"c\":");
+    n = _bj_jw_f64(&buf, n, m.c);
+    n = _bj_jw_cstr(&buf, n, ",\"d\":");
+    n = _bj_jw_f64(&buf, n, m.d);
+    n = _bj_jw_cstr(&buf, n, "}");
+    return _bj_jw_put(sb, &buf, n);
+}
+
+# Appends `{"g1":<g₁>,"g2":<g₂>,"g_product":<g₁g₂>,"is_stable":<true|false>}` to the builder sb: Ok(0), or
+# Err(BJ_ERR_ALLOCATION) with sb as it was. `is_stable` is written `true` when it is not 0, as
+# bj_resonator_beam_waist reads it. Mirrors `serde_json::to_string(&s)` for `beam::ResonatorStability`.
+#must_use
+public fn BjResonatorStability_to_json(s: *BjResonatorStability, sb): Result {
+    var buf[128];
+    var n = _bj_jw_cstr(&buf, 0, "{\"g1\":");
+    n = _bj_jw_f64(&buf, n, s.g1);
+    n = _bj_jw_cstr(&buf, n, ",\"g2\":");
+    n = _bj_jw_f64(&buf, n, s.g2);
+    n = _bj_jw_cstr(&buf, n, ",\"g_product\":");
+    n = _bj_jw_f64(&buf, n, s.g_product);
+    if (s.is_stable != 0) { n = _bj_jw_cstr(&buf, n, ",\"is_stable\":true}"); }
+    else { n = _bj_jw_cstr(&buf, n, ",\"is_stable\":false}"); }
+    return _bj_jw_put(sb, &buf, n);
 }
 
 # ── the decode region ───────────────────────────────────────────────────────────────
@@ -24244,6 +24297,50 @@ fn _bj_jr_mueller(v, w): i64 {
     return 0;
 }
 
+fn _bj_jr_gaussian_beam(v, w): i64 {
+    var names: i64[3];
+    names[0] = "wavelength";
+    names[1] = "waist";
+    names[2] = "rayleigh_range";
+    return _bj_jr_f64_struct(v, &names, 3, "struct GaussianBeam", w);
+}
+
+fn _bj_jr_abcd(v, w): i64 {
+    var names: i64[4];
+    names[0] = "a";
+    names[1] = "b";
+    names[2] = "c";
+    names[3] = "d";
+    return _bj_jr_f64_struct(v, &names, 4, "struct AbcdMatrix", w);
+}
+
+# Node v as a bool into *out, 1 for `true` and 0 for `false`: JSON's two literals only, as serde reads a bool (never
+# a number, a string or null). 0, or BJ_ERR_DESERIALIZE recorded.
+fn _bj_jr_bool(v, out): i64 {
+    if (bayan_json_v_tag(v) != JTAG_BOOL) { return _bj_jr_type(v, "a boolean"); }
+    store64(out, bayan_json_v_bool(v));
+    return 0;
+}
+
+# A ResonatorStability into w: g1, g2, g_product, then is_stable as 1 or 0.
+fn _bj_jr_resonator(v, w): i64 {
+    var form = _bj_jr_form(v, 4, "struct ResonatorStability");
+    if (form == 0) { return BJ_ERR_DESERIALIZE; }
+    var names: i64[3];
+    names[0] = "g1";
+    names[1] = "g2";
+    names[2] = "g_product";
+    for (var k = 0; k < 3; k = k + 1) {
+        var f = _bj_jr_field(v, form, k, names[k]);
+        if (f == 0) { return BJ_ERR_DESERIALIZE; }
+        var c = _bj_jr_f64(f, w + k * 8);
+        if (c != 0) { return c; }
+    }
+    var fs = _bj_jr_field(v, form, 3, "is_stable");
+    if (fs == 0) { return BJ_ERR_DESERIALIZE; }
+    return _bj_jr_bool(fs, w + 24);
+}
+
 # ── readers ─────────────────────────────────────────────────────────────────────────
 
 # Reads a `Complex` document from [buf, buf + len) into *out: Ok(0), or Err(BJ_ERR_DESERIALIZE) (BJ_ERR_ALLOCATION
@@ -24366,5 +24463,42 @@ public fn BjMieResult_from_json(buf, len, out: *BjMieResult): Result {
         return Err(code);
     }
     memcpy(out, &w, 64);
+    return Ok(0);
+}
+
+# Reads a `GaussianBeam` document from [buf, buf + len) into *out: Ok(0), or the error recorded with out untouched, as
+# BjComplex_from_json. The three fields are read as written, as serde's derive reads Rust's public fields: a beam
+# BjGaussianBeam_new would refuse is read, and z_R is the document's, not recomputed from λ and w₀. Mirrors
+# `serde_json::from_str::<GaussianBeam>`.
+#must_use
+public fn BjGaussianBeam_from_json(buf, len, out: *BjGaussianBeam): Result {
+    var w: f64[3];
+    var code = _bj_jr_read(buf, len, &_bj_jr_gaussian_beam, &w);
+    if (code != 0) { return Err(code); }
+    memcpy(out, &w, 24);
+    return Ok(0);
+}
+
+# Reads an `AbcdMatrix` document from [buf, buf + len) into *out: Ok(0), or the error recorded with out untouched, as
+# BjComplex_from_json. Any four numbers are read as written. Mirrors `serde_json::from_str::<AbcdMatrix>`.
+#must_use
+public fn BjAbcdMatrix_from_json(buf, len, out: *BjAbcdMatrix): Result {
+    var w: f64[4];
+    var code = _bj_jr_read(buf, len, &_bj_jr_abcd, &w);
+    if (code != 0) { return Err(code); }
+    memcpy(out, &w, 32);
+    return Ok(0);
+}
+
+# Reads a `ResonatorStability` document from [buf, buf + len) into *out: Ok(0), or the error recorded with out
+# untouched, as BjComplex_from_json. `is_stable` must be `true` (read as 1) or `false` (0); the fields are read as
+# written, so an `is_stable` that disagrees with g₁g₂ is kept, as serde's derive keeps Rust's public fields. Mirrors
+# `serde_json::from_str::<ResonatorStability>`.
+#must_use
+public fn BjResonatorStability_from_json(buf, len, out: *BjResonatorStability): Result {
+    var w: i64[4];
+    var code = _bj_jr_read(buf, len, &_bj_jr_resonator, &w);
+    if (code != 0) { return Err(code); }
+    memcpy(out, &w, 32);
     return Ok(0);
 }
