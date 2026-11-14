@@ -13,6 +13,7 @@ include "lib/freelist.cyr"
 include "lib/io.cyr"
 include "lib/sakshi.cyr"
 include "lib/result.cyr"
+include "lib/ganita.cyr"
 include "lib/bayan.cyr"
 include "lib/str.cyr"
 include "lib/alloc.cyr"
@@ -22202,6 +22203,592 @@ impl BjMuellerMatrix {
 fn _bj_pol_neg0(): f64 {
     var z: f64 = 0x8000000000000000;
     return z;
+}
+
+# --- scattering.cyr ---
+
+# scattering.cyr — scattering.rs (M3 part 1b-1): Mie scattering by a homogeneous sphere, and the Rayleigh limit.
+#
+# Size parameter x = 2πr/λ, with r the sphere's radius and λ the wavelength in the surrounding medium; m is the
+# sphere's index relative to that medium.
+#
+# The time convention is bijli's one, e^{+jωt} (src/complex.cyr's header; ADR 0002 row 5). scattering.rs already used
+# it, so nothing here changes: the outgoing Riccati–Hankel function is ξₙ(x) = ψₙ(x) + jχₙ(x) = x·hₙ⁽²⁾(x), so
+# ξ₀(x) = sin x + j cos x, and an absorbing sphere has Im(m) < 0 (m = n − jκ). bj_mie refuses Im(m) > 0, a gain
+# medium or, far more often, an index written in the other convention: for an index quoted as n + jκ (Bohren &
+# Huffman's e^{−jωt}) pass m.conj(). The efficiencies and g are convention-free; the coefficients a and b are the
+# complex conjugates of Bohren & Huffman's aₙ and bₙ. polarization and beam now share the convention (2.0).
+#
+# Mie follows Bohren & Huffman (1983, App. A), with Wiscombe's n_max = ⌈x + 4x^{1/3} + 2⌉ (at least 4) terms and
+# Dₙ(mx) by downward recurrence from max(n_max, |mx| + 4|mx|^{1/3}) + 15. Its recurrences run on f64 locals (probe p8:
+# a struct-valued step is 2.2× slower) in Rust's exact order of operations, hisab's Complex products and sums written
+# out; the reciprocal and Smith's division are scattering.rs's own, ported as written. sin, cos and hypot are
+# correctly rounded (src/crmath.cyr), and cbrt is ganita's, correctly rounded as Rust's (CORE-MATH's).
+#
+# A BjMieResult owns its coefficient buffers (Rust's `Vec<Complex>`, port plan §9.5): bj_mie writes new ones into
+# `out` and never reads it, so give a result back with BjMieResult_free before reusing it.
+
+private
+
+# Below this size parameter ψ₁(x) is its power series, avoiding the cancellation in sin x / x − cos x. Mirrors
+# `PSI1_SERIES_THRESHOLD`.
+var _BJ_SC_PSI1_SERIES: f64 = 0.1;
+
+# The smallest normal f64 and the largest finite one: |z|² is normal between them.
+var _BJ_SC_MIN_NORMAL: f64 = 0x0010000000000000;
+var _BJ_SC_MAX_FINITE: f64 = 0x7FEFFFFFFFFFFFFF;
+
+# ── the result ──────────────────────────────────────────────────────────────────────────────────────────────────
+
+# Mie scattering by a homogeneous sphere: the efficiencies, the asymmetry parameter and the coefficients. `a` and
+# `b` are the addresses of a_len and b_len BjComplex (16 bytes each) from fl_alloc, 0 while empty: aₙ and bₙ for
+# n = 1…n_max at indices 0…n_max − 1, in the e^{+jωt} convention (the complex conjugates of Bohren & Huffman's).
+# Mirrors `MieResult`.
+public struct BjMieResult {
+    q_sca: f64;
+    q_ext: f64;
+    q_abs: f64;
+    g: f64;
+    a;
+    a_len;
+    b;
+    b_len;
+}
+
+# An empty result: zero efficiencies, no coefficients.
+#must_use
+public fn BjMieResult_new(): BjMieResult {
+    var r: BjMieResult;
+    r.q_sca = 0.0;
+    r.q_ext = 0.0;
+    r.q_abs = 0.0;
+    r.g = 0.0;
+    r.a = 0;
+    r.a_len = 0;
+    r.b = 0;
+    r.b_len = 0;
+    return r;
+}
+
+# Frees r's coefficient buffers and empties them (its efficiencies are kept).
+public fn BjMieResult_free(r: *BjMieResult): i64 {
+    if (r.a != 0) { fl_free(r.a); }
+    if (r.b != 0) { fl_free(r.b); }
+    r.a = 0;
+    r.a_len = 0;
+    r.b = 0;
+    r.b_len = 0;
+    return 0;
+}
+
+# The address a as a *f64 (an untyped word stored into a typed pointer warns; a typed return does not).
+#must_use
+fn _bj_sc_f64p(a): *f64 {
+    return a;
+}
+
+# The BjComplex at address p.
+#must_use
+fn _bj_sc_load(p): BjComplex {
+    var z: BjComplex;
+    z.re = load64(p);
+    z.im = load64(p + 8);
+    return z;
+}
+
+impl BjMieResult {
+    # aₖ₊₁, the coefficient at index k (0 ≤ k < a_len). Mirrors `result.a[k]`.
+    #must_use
+    public fn a_at(self, k): BjComplex {
+        var z: BjComplex = _bj_sc_load(self.a + k * 16);
+        return z;
+    }
+
+    # bₖ₊₁, the coefficient at index k (0 ≤ k < b_len). Mirrors `result.b[k]`.
+    #must_use
+    public fn b_at(self, k): BjComplex {
+        var z: BjComplex = _bj_sc_load(self.b + k * 16);
+        return z;
+    }
+}
+
+# ── the module's complex helpers ────────────────────────────────────────────────────────────────────────────────
+
+# Records scattering.rs's DivisionByZero ("complex division by zero in scattering computation"); its code.
+fn _bj_sc_dz(): i64 {
+    return _bj_err_division_by_zero("complex division by zero in scattering computation");
+}
+
+# a / b by Smith's algorithm (no intermediate |b|², so no spurious over- or underflow), b ≠ 0: the caller tests for
+# zero (_bj_sc_dz). Mirrors scattering.rs's `complex_div`.
+#must_use
+fn _bj_sc_div(ar: f64, ai: f64, br: f64, bi: f64): (f64, f64) {
+    var abr: f64 = f64_abs(br);
+    var abi: f64 = f64_abs(bi);
+    if (abr >= abi) {
+        var r: f64 = bi / br;
+        var den: f64 = br + bi * r;
+        var qr: f64 = (ar + ai * r) / den;
+        var qi: f64 = (ai - ar * r) / den;
+        return (qr, qi);
+    }
+    var r2: f64 = br / bi;
+    var den2: f64 = br * r2 + bi;
+    var pr: f64 = (ar * r2 + ai) / den2;
+    var pi: f64 = (ai * r2 - ar) / den2;
+    return (pr, pi);
+}
+
+# 1/z into out[0], out[1]: one division when |z|² is a normal f64, Smith's algorithm otherwise. 0, or the
+# DivisionByZero code recorded (z = 0). Mirrors scattering.rs's `complex_recip`.
+fn _bj_sc_recip(zr: f64, zi: f64, out: *f64): i64 {
+    var d: f64 = zr * zr + zi * zi;
+    var lo: f64 = _BJ_SC_MIN_NORMAL;
+    var hi: f64 = _BJ_SC_MAX_FINITE;
+    if (d >= lo && d <= hi) {
+        var inv: f64 = 1.0 / d;
+        out[0] = zr * inv;
+        out[1] = -zi * inv;
+        return 0;
+    }
+    if (zr == 0.0 && zi == 0.0) { return _bj_sc_dz(); }
+    var qr, qi = _bj_sc_div(1.0, 0.0, zr, zi);
+    out[0] = qr;
+    out[1] = qi;
+    return 0;
+}
+
+# ── Mie ─────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+# Records InvalidParameter "size parameter x must be positive and finite, got {x}" and the like: the head, x in
+# Rust's Display form, the tail. Returns the code.
+fn _bj_sc_bad(head, x: f64, tail): i64 {
+    var t = _bj_err_reason(BJ_ERR_INVALID_PARAMETER);
+    _bj_tx_cstr(t, head);
+    _bj_fmt_f64_display(t, x);
+    _bj_tx_cstr(t, tail);
+    return BJ_ERR_INVALID_PARAMETER;
+}
+
+# mie's argument checks: 0, or the InvalidParameter code recorded with Rust's reason.
+fn _bj_sc_mie_check(x: f64, m: BjComplex, mx_abs: f64): i64 {
+    var mre: f64 = m.re;
+    var mim: f64 = m.im;
+    var lim: f64 = BJ_MIE_MAX_SIZE_PARAMETER;
+    var limx: f64 = BJ_MIE_MAX_MX;
+    if (_bj_is_finite(x) == 0 || x <= 0.0) {
+        return _bj_sc_bad("size parameter x must be positive and finite, got ", x, "");
+    }
+    if (x > lim) {
+        var t = _bj_err_reason(BJ_ERR_INVALID_PARAMETER);
+        _bj_tx_cstr(t, "size parameter x = ");
+        _bj_fmt_f64_display(t, x);
+        _bj_tx_cstr(t, " exceeds the supported maximum ");
+        _bj_fmt_f64_display(t, lim);
+        return BJ_ERR_INVALID_PARAMETER;
+    }
+    if (_bj_is_finite(mre) == 0 || _bj_is_finite(mim) == 0) {
+        var u = _bj_err_reason(BJ_ERR_INVALID_PARAMETER);
+        _bj_tx_cstr(u, "refractive index must be finite, got ");
+        m.display(u);
+        return BJ_ERR_INVALID_PARAMETER;
+    }
+    if (mre == 0.0 && mim == 0.0) {
+        _bj_tx_cstr(_bj_err_reason(BJ_ERR_INVALID_PARAMETER), "refractive index cannot be zero");
+        return BJ_ERR_INVALID_PARAMETER;
+    }
+    if (mim > 0.0) {
+        var w = _bj_err_reason(BJ_ERR_INVALID_PARAMETER);
+        _bj_tx_cstr(w, "Im(m) = ");
+        _bj_fmt_f64_display(w, mim);
+        _bj_tx_cstr(w, " > 0: bijli's Mie solver uses the e^{+iωt} convention, where absorbing media have Im(m) < 0 ");
+        _bj_tx_cstr(w, "(m = n − iκ); for an index written as n + iκ pass m.conj()");
+        return BJ_ERR_INVALID_PARAMETER;
+    }
+    if (mx_abs != mx_abs || mx_abs > limx) {
+        var y = _bj_err_reason(BJ_ERR_INVALID_PARAMETER);
+        _bj_tx_cstr(y, "|m|·x = ");
+        _bj_fmt_f64_display(y, mx_abs);
+        _bj_tx_cstr(y, " exceeds the supported maximum ");
+        _bj_fmt_f64_display(y, limx);
+        return BJ_ERR_INVALID_PARAMETER;
+    }
+    return 0;
+}
+
+# ψ₁(x) = sin x / x − cos x, by its Maclaurin series below x = 0.1 where the direct form cancels (relative error
+# about 3ε/x²): x²/3 − x⁴/30 + x⁶/840 − x⁸/45360 + x¹⁰/3991680. Mirrors scattering.rs's `psi1`.
+#must_use
+fn _bj_sc_psi1(x: f64, sin_x: f64, cos_x: f64): f64 {
+    var th: f64 = _BJ_SC_PSI1_SERIES;
+    if (x < th) {
+        var x2: f64 = x * x;
+        var r: f64 = x2 / 3.0 * (1.0 - x2 / 10.0 * (1.0 - x2 / 28.0 * (1.0 - x2 / 54.0 * (1.0 - x2 / 88.0))));
+        return r;
+    }
+    var d: f64 = sin_x / x - cos_x;
+    return d;
+}
+
+# Wiscombe's n_max = max(⌈x + 4·∛x + 2⌉, 4), and the D_n recurrence's start ⌈max(n_max, |mx| + 4·∛|mx|) + 15⌉. x ≤ 10⁵
+# and |mx| ≤ 10⁷, so both are exact integers.
+fn _bj_sc_terms(x: f64, mx_abs: f64): (i64, i64) {
+    var cx: f64 = ganita_f64_cbrt(x);
+    var t: f64 = x + 4.0 * cx + 2.0;
+    var tc: f64 = f64_ceil(t);
+    var n_max = f64_to(tc);
+    if (n_max < 4) { n_max = 4; }
+    var cm: f64 = ganita_f64_cbrt(mx_abs);
+    var s: f64 = mx_abs + 4.0 * cm;
+    var nf: f64 = f64_from(n_max);
+    var top: f64 = _bj_max(nf, s);
+    var u: f64 = top + 15.0;
+    var uc: f64 = f64_ceil(u);
+    var n_start = f64_to(uc);
+    return (n_max, n_start);
+}
+
+# Dₙ(mx) = ψₙ′(mx)/ψₙ(mx) for n = 0…n_max into d (n_max + 1 BjComplex), by the downward recurrence
+# D_{n−1} = n/z − 1/(Dₙ + n/z) from D_{n_start} = 0, z = mx, on f64 locals. 0, or the DivisionByZero code recorded.
+fn _bj_sc_lderiv(imr: f64, imi: f64, n_max, n_start, d): i64 {
+    var lo: f64 = _BJ_SC_MIN_NORMAL;
+    var hi: f64 = _BJ_SC_MAX_FINITE;
+    var dr: f64 = 0.0;
+    var di: f64 = 0.0;
+    for (var n = n_start; n >= 1; n = n - 1) {
+        var nf: f64 = f64_from(n);
+        var rr: f64 = imr * nf;
+        var ri: f64 = imi * nf;
+        var sr: f64 = dr + rr;
+        var si: f64 = di + ri;
+        var q: f64 = sr * sr + si * si;
+        var qr: f64 = 0.0;
+        var qi: f64 = 0.0;
+        if (q >= lo && q <= hi) {
+            var inv: f64 = 1.0 / q;
+            qr = sr * inv;
+            qi = -si * inv;
+        } else {
+            if (sr == 0.0 && si == 0.0) { return _bj_sc_dz(); }
+            var vr, vi = _bj_sc_div(1.0, 0.0, sr, si);
+            qr = vr;
+            qi = vi;
+        }
+        dr = rr - qr;
+        di = ri - qi;
+        if (n - 1 <= n_max) {
+            var p: *f64 = _bj_sc_f64p(d + (n - 1) * 16);
+            p[0] = dr;
+            p[1] = di;
+        }
+    }
+    return 0;
+}
+
+# The Riccati–Bessel loop: aₙ and bₙ for n = 1…n_max into a and b (n_max BjComplex each), and the sums for Q_sca,
+# Q_ext and g into sums[0..3]. ψₙ(x) = x·jₙ(x) and χₙ(x) = −x·yₙ(x) by upward recurrence, ξₙ = ψₙ + jχₙ; Rust's
+# order of operations throughout (Bohren & Huffman eq. 4.88: aₙ uses Dₙ/m + n/x, bₙ uses m·Dₙ + n/x). 0, or the
+# DivisionByZero code recorded.
+fn _bj_sc_series(x: f64, m: *f64, d, n_max, a, b, sums: *f64): i64 {
+    var sin_x, cos_x = _bj_sin_cos(x);
+    var sx: f64 = sin_x;
+    var cx: f64 = cos_x;
+    var psi_prev: f64 = sx;
+    var psi_curr: f64 = _bj_sc_psi1(x, sx, cx);
+    var chi_prev: f64 = cx;
+    var chi_curr: f64 = cx / x + sx;
+    var mr: f64 = m[0];
+    var mi: f64 = m[1];
+    var im: f64[2];
+    var c = _bj_sc_recip(mr, mi, &im);
+    if (c != 0) { return c; }
+    var imr: f64 = im[0];
+    var imi: f64 = im[1];
+    var sca: f64 = 0.0;
+    var ext: f64 = 0.0;
+    var gs: f64 = 0.0;
+    var apr: f64 = 0.0;
+    var api: f64 = 0.0;
+    var bpr: f64 = 0.0;
+    var bpi: f64 = 0.0;
+    for (var n = 1; n <= n_max; n = n + 1) {
+        var dp: *f64 = _bj_sc_f64p(d + n * 16);
+        var dnr: f64 = dp[0];
+        var dni: f64 = dp[1];
+        if (n > 1) {
+            var tw: f64 = f64_from(2 * n - 1);
+            var f: f64 = tw / x;
+            var psi_next: f64 = f * psi_curr - psi_prev;
+            psi_prev = psi_curr;
+            psi_curr = psi_next;
+            var chi_next: f64 = f * chi_curr - chi_prev;
+            chi_prev = chi_curr;
+            chi_curr = chi_next;
+        }
+        var nf: f64 = f64_from(n);
+        var nox: f64 = nf / x;
+        # a_factor = Dₙ·(1/m) + n/x; its numerator a_factor·ψₙ − ψₙ₋₁ (Rust subtracts complex_real(ψₙ₋₁): the
+        # imaginary part's − 0.0 is the identity), its denominator a_factor·ξₙ − ξₙ₋₁.
+        var afr: f64 = dnr * imr - dni * imi + nox;
+        var afi0: f64 = dnr * imi + dni * imr;
+        var afi: f64 = afi0 + 0.0;
+        var anr: f64 = afr * psi_curr - psi_prev;
+        var ani: f64 = afi * psi_curr;
+        var adr: f64 = afr * psi_curr - afi * chi_curr - psi_prev;
+        var adi: f64 = afr * chi_curr + afi * psi_curr - chi_prev;
+        if (adr == 0.0 && adi == 0.0) { return _bj_sc_dz(); }
+        var ar, ai = _bj_sc_div(anr, ani, adr, adi);
+        var a_r: f64 = ar;
+        var a_i: f64 = ai;
+        var bfr: f64 = mr * dnr - mi * dni + nox;
+        var bfi0: f64 = mr * dni + mi * dnr;
+        var bfi: f64 = bfi0 + 0.0;
+        var bnr: f64 = bfr * psi_curr - psi_prev;
+        var bni: f64 = bfi * psi_curr;
+        var bdr: f64 = bfr * psi_curr - bfi * chi_curr - psi_prev;
+        var bdi: f64 = bfr * chi_curr + bfi * psi_curr - chi_prev;
+        if (bdr == 0.0 && bdi == 0.0) { return _bj_sc_dz(); }
+        var br, bi = _bj_sc_div(bnr, bni, bdr, bdi);
+        var b_r: f64 = br;
+        var b_i: f64 = bi;
+        var w: f64 = 2.0 * nf + 1.0;
+        sca = sca + w * (a_r * a_r + a_i * a_i + (b_r * b_r + b_i * b_i));
+        ext = ext + w * (a_r + b_r);
+        # (2n+1)/(n(n+1)) Re(aₙb*ₙ) for every n, and (n−1)(n+1)/n Re(aₙ₋₁a*ₙ + bₙ₋₁b*ₙ) for n > 1.
+        gs = gs + w / (nf * (nf + 1.0)) * (a_r * b_r + a_i * b_i);
+        if (n > 1) {
+            gs = gs + (nf - 1.0) * (nf + 1.0) / nf * (apr * a_r + api * a_i + bpr * b_r + bpi * b_i);
+        }
+        apr = a_r;
+        api = a_i;
+        bpr = b_r;
+        bpi = b_i;
+        var pa: *f64 = _bj_sc_f64p(a + (n - 1) * 16);
+        pa[0] = a_r;
+        pa[1] = a_i;
+        var pb: *f64 = _bj_sc_f64p(b + (n - 1) * 16);
+        pb[0] = b_r;
+        pb[1] = b_i;
+    }
+    sums[0] = sca;
+    sums[1] = ext;
+    sums[2] = gs;
+    return 0;
+}
+
+# Logs the start of a Mie computation at debug, as Rust's `tracing::debug!(x, m_re, m_im, n_max, n_start, ..)`.
+fn _bj_sc_log_start(x: f64, mre: f64, mim: f64, n_max, n_start) {
+    if (_bj_log_on(4) == 0) { return 0; }
+    var lb[240];
+    var lt[24];
+    _bj_tx_init(&lt, &lb, 240);
+    _bj_tx_cstr(&lt, "computing Mie scattering x=");
+    _bj_fmt_f64_debug(&lt, x);
+    _bj_tx_cstr(&lt, " m_re=");
+    _bj_fmt_f64_debug(&lt, mre);
+    _bj_tx_cstr(&lt, " m_im=");
+    _bj_fmt_f64_debug(&lt, mim);
+    _bj_tx_cstr(&lt, " n_max=");
+    _bj_tx_u64(&lt, n_max);
+    _bj_tx_cstr(&lt, " n_start=");
+    _bj_tx_u64(&lt, n_start);
+    _bj_log_text(4, &lt);
+    return 0;
+}
+
+# Logs the result at debug, as Rust's `tracing::debug!(q_ext, q_sca, g, "Mie scattering computed")`.
+fn _bj_sc_log_done(q_ext: f64, q_sca: f64, g: f64) {
+    if (_bj_log_on(4) == 0) { return 0; }
+    var lb[200];
+    var lt[24];
+    _bj_tx_init(&lt, &lb, 200);
+    _bj_tx_cstr(&lt, "Mie scattering computed q_ext=");
+    _bj_fmt_f64_debug(&lt, q_ext);
+    _bj_tx_cstr(&lt, " q_sca=");
+    _bj_fmt_f64_debug(&lt, q_sca);
+    _bj_tx_cstr(&lt, " g=");
+    _bj_fmt_f64_debug(&lt, g);
+    _bj_log_text(4, &lt);
+    return 0;
+}
+
+# Gives back the three buffers of a Mie computation that failed (each 0 or from fl_alloc).
+fn _bj_sc_drop(d, a, b) {
+    if (d != 0) { fl_free(d); }
+    if (a != 0) { fl_free(a); }
+    if (b != 0) { fl_free(b); }
+    return 0;
+}
+
+# Mie scattering by a homogeneous sphere of size parameter x and relative index m, into *out: Ok(0), or Err with
+# the reason recorded and out untouched. Q_sca = (2/x²) Σ (2n+1)(|aₙ|² + |bₙ|²), Q_ext = (2/x²) Σ (2n+1) Re(aₙ + bₙ),
+# Q_abs = Q_ext − Q_sca, g = 2 Σ[..]/Σ(2n+1)(|aₙ|² + |bₙ|²) (0 when nothing scatters). out gets n_max new coefficients
+# of each kind; bj_mie never reads it, so free a previous result first (BjMieResult_free).
+# - x finite, 0 < x ≤ BJ_MIE_MAX_SIZE_PARAMETER; m finite, nonzero, Im(m) ≤ 0 (e^{+jωt}: absorbing m = n − jκ),
+#   |m|·x ≤ BJ_MIE_MAX_MX; else InvalidParameter;
+# - InvalidParameter also when the series over- or underflows (only for vanishingly small x or m), DivisionByZero
+#   when mx underflows to zero, Allocation when a buffer can't be had.
+# Mirrors `scattering::mie`.
+#must_use
+public fn bj_mie(x: f64, m: BjComplex, out: *BjMieResult): Result {
+    var mre: f64 = m.re;
+    var mim: f64 = m.im;
+    var h: f64 = 0.0;
+    if (_bj_is_finite(mre) == 1 && _bj_is_finite(mim) == 1) { h = _bj_hypot(mre, mim); }
+    var mx_abs: f64 = h * x;
+    var c = _bj_sc_mie_check(x, m, mx_abs);
+    if (c != 0) { return Err(c); }
+    var n_max, n_start = _bj_sc_terms(x, mx_abs);
+    _bj_sc_log_start(x, mre, mim, n_max, n_start);
+    var d = fl_alloc((n_max + 1) * 16);
+    var a = fl_alloc(n_max * 16);
+    var b = fl_alloc(n_max * 16);
+    if (d == 0 || a == 0 || b == 0) {
+        _bj_sc_drop(d, a, b);
+        _bj_tx_cstr(_bj_err_reason(BJ_ERR_ALLOCATION), "Mie coefficient buffers");
+        return Err(BJ_ERR_ALLOCATION);
+    }
+    # Dₙ(0) is never read, but its slot is defined.
+    var d0: *f64 = _bj_sc_f64p(d);
+    d0[0] = 0.0;
+    d0[1] = 0.0;
+    var mxr: f64 = mre * x;
+    var mxi: f64 = mim * x;
+    var imx: f64[2];
+    c = _bj_sc_recip(mxr, mxi, &imx);
+    if (c == 0) { c = _bj_sc_lderiv(imx[0], imx[1], n_max, n_start, d); }
+    var mv: f64[2];
+    mv[0] = mre;
+    mv[1] = mim;
+    var sums: f64[3];
+    if (c == 0) { c = _bj_sc_series(x, &mv, d, n_max, a, b, &sums); }
+    fl_free(d);
+    if (c != 0) {
+        _bj_sc_drop(0, a, b);
+        return Err(c);
+    }
+    var sca: f64 = sums[0];
+    var ext: f64 = sums[1];
+    var gs: f64 = sums[2];
+    var scale: f64 = 2.0 / (x * x);
+    var q_sca: f64 = scale * sca;
+    var q_ext: f64 = scale * ext;
+    var q_abs: f64 = q_ext - q_sca;
+    var g: f64 = 0.0;
+    if (sca > 0.0) { g = 2.0 * gs / sca; }
+    if (_bj_is_finite(q_sca) == 0 || _bj_is_finite(q_ext) == 0 || _bj_is_finite(g) == 0) {
+        _bj_sc_drop(0, a, b);
+        var t = _bj_err_reason(BJ_ERR_INVALID_PARAMETER);
+        _bj_tx_cstr(t, "Mie series over/underflowed for x = ");
+        _bj_fmt_f64_display(t, x);
+        _bj_tx_cstr(t, ", m = ");
+        m.display(t);
+        return Err(BJ_ERR_INVALID_PARAMETER);
+    }
+    _bj_sc_log_done(q_ext, q_sca, g);
+    out.q_sca = q_sca;
+    out.q_ext = q_ext;
+    out.q_abs = q_abs;
+    out.g = g;
+    out.a = a;
+    out.a_len = n_max;
+    out.b = b;
+    out.b_len = n_max;
+    return Ok(0);
+}
+
+# σ = Q·π·r², a cross-section from its efficiency (Q·π, then ·r twice, as Rust's). Mirrors
+# `scattering::cross_section_from_efficiency`.
+#must_use
+#pure
+public fn bj_cross_section_from_efficiency(q: f64, radius: f64): f64 {
+    var s: f64 = q * _BJ_PI * radius * radius;
+    return s;
+}
+
+# ── Rayleigh ────────────────────────────────────────────────────────────────────────────────────────────────────
+
+# |K|², K = (m² − 1)/(m² + 2), with BjComplex's m·m and |K|² (row 14 at a range edge) and scattering.rs's Smith
+# division into k2[0]. 0, or the DivisionByZero code recorded (m² = −2).
+fn _bj_sc_k2(m: BjComplex, k2: *f64): i64 {
+    var m2: BjComplex = BjComplex_mul(m, m);
+    var nr: f64 = m2.re - 1.0;
+    var ni: f64 = m2.im - 0.0;
+    var dr: f64 = m2.re + 2.0;
+    var di: f64 = m2.im + 0.0;
+    if (dr == 0.0 && di == 0.0) { return _bj_sc_dz(); }
+    var kr, ki = _bj_sc_div(nr, ni, dr, di);
+    var k: BjComplex = BjComplex_new(kr, ki);
+    var s: f64 = k.norm_sq();
+    k2[0] = s;
+    return 0;
+}
+
+# Records InvalidParameter "<name> must be positive and finite, got {v}" when v isn't finite and positive: its code,
+# else 0.
+fn _bj_sc_positive(name, v: f64): i64 {
+    if (_bj_is_finite(v) == 1 && v > 0.0) { return 0; }
+    var t = _bj_err_reason(BJ_ERR_INVALID_PARAMETER);
+    _bj_tx_cstr(t, name);
+    _bj_tx_cstr(t, " must be positive and finite, got ");
+    _bj_fmt_f64_display(t, v);
+    return BJ_ERR_INVALID_PARAMETER;
+}
+
+# σ = (8π/3)(2πr/λ)⁴ r² |K|², K = (m² − 1)/(m² + 2), for a sphere with x = 2πr/λ ≪ 1. |K|² is convention-free.
+# InvalidParameter for a radius or wavelength not finite and positive. Mirrors `scattering::rayleigh_cross_section`.
+#must_use
+public fn bj_rayleigh_cross_section(radius: f64, wavelength: f64, m: BjComplex): Result {
+    var c = _bj_sc_positive("radius", radius);
+    if (c == 0) { c = _bj_sc_positive("wavelength", wavelength); }
+    if (c != 0) { return Err(c); }
+    var x: f64 = 2.0 * _BJ_PI * radius / wavelength;
+    var k: f64[1];
+    c = _bj_sc_k2(m, &k);
+    if (c != 0) { return Err(c); }
+    var k2: f64 = k[0];
+    var x4: f64 = x * x * x * x;
+    var s: f64 = 8.0 / 3.0 * _BJ_PI * radius * radius * x4 * k2;
+    return Ok(s);
+}
+
+# Q_sca = σ/(πr²) = (8/3)x⁴|K|². InvalidParameter for an x not finite and positive. Mirrors
+# `scattering::rayleigh_efficiency`.
+#must_use
+public fn bj_rayleigh_efficiency(x: f64, m: BjComplex): Result {
+    var c = _bj_sc_positive("size parameter", x);
+    if (c != 0) { return Err(c); }
+    var k: f64[1];
+    c = _bj_sc_k2(m, &k);
+    if (c != 0) { return Err(c); }
+    var k2: f64 = k[0];
+    var q: f64 = 8.0 / 3.0 * x * x * x * x * k2;
+    return Ok(q);
+}
+
+# P(θ) = (3/4)(1 + cos²θ), normalized to 4π over the sphere. Mirrors `scattering::rayleigh_phase_function`.
+#must_use
+#pure
+#inline
+public fn bj_rayleigh_phase_function(cos_theta: f64): f64 {
+    return 0.75 * (1.0 + cos_theta * cos_theta);
+}
+
+# I/I₀ = (σ/r²)·P(θ)/(4π) = 3σ(1 + cos²θ)/(16πr²) at distance r for unpolarized light; σ the total cross-section (m²),
+# for instance from bj_rayleigh_cross_section. InvalidParameter for a NaN distance, Singularity when |r| < 1e-30.
+# Mirrors `scattering::rayleigh_angular_intensity`.
+#must_use
+public fn bj_rayleigh_angular_intensity(cross_section: f64, distance: f64, cos_theta: f64): Result {
+    if (distance != distance) {
+        _bj_tx_cstr(_bj_err_reason(BJ_ERR_INVALID_PARAMETER), "distance must not be NaN");
+        return Err(BJ_ERR_INVALID_PARAMETER);
+    }
+    var ad: f64 = f64_abs(distance);
+    if (ad < 0.000000000000000000000000000001) { return Err(_bj_err_singularity()); }
+    var p: f64 = bj_rayleigh_phase_function(cos_theta);
+    var four_pi: f64 = 4.0 * _BJ_PI;
+    var r: f64 = cross_section / (distance * distance) * p / four_pi;
+    return Ok(r);
 }
 
 # --- json.cyr ---

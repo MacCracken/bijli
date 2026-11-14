@@ -1237,6 +1237,14 @@ sakshi::sakshi_trace_id_lo/0
 sakshi::sakshi_trace_set/1
 sakshi::sakshi_trace_set_128/2
 sakshi::sakshi_warn/2
+scattering::BjMieResult_free/1
+scattering::BjMieResult_new/0
+scattering::bj_cross_section_from_efficiency/2
+scattering::bj_mie/3
+scattering::bj_rayleigh_angular_intensity/3
+scattering::bj_rayleigh_cross_section/3
+scattering::bj_rayleigh_efficiency/2
+scattering::bj_rayleigh_phase_function/1
 slice::slice_copy/2
 slice::slice_copy_bytes/2
 slice::slice_eq/2

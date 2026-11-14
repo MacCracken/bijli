@@ -761,6 +761,56 @@ fn main(): i64 {
     bench_report(b53);
     if (psum == 7.0) { println("."); }
 
+    # scattering (M3 part 1b-1): each Mie result's buffers given back every time through, as Rust drops its Vecs.
+    var mr: BjMieResult = BjMieResult_new();
+    var ssum: f64 = 0.0;
+    var b54 = bench_new("scattering/mie_x1_real");
+    bench_batch_start(b54);
+    for (var k = 0; k < 100000; k = k + 1) {
+        var t54, v54 = bj_mie(1.0, BjComplex_new(1.5, 0.0), &mr);
+        ssum = ssum + mr.q_ext;
+        BjMieResult_free(&mr);
+    }
+    bench_batch_stop(b54, 100000);
+    bench_report(b54);
+    var b55 = bench_new("scattering/mie_x10_real");
+    bench_batch_start(b55);
+    for (var k = 0; k < 20000; k = k + 1) {
+        var t55, v55 = bj_mie(10.0, BjComplex_new(1.33, 0.0), &mr);
+        ssum = ssum + mr.q_ext;
+        BjMieResult_free(&mr);
+    }
+    bench_batch_stop(b55, 20000);
+    bench_report(b55);
+    var b56 = bench_new("scattering/mie_x50_m3_5");
+    bench_batch_start(b56);
+    for (var k = 0; k < 5000; k = k + 1) {
+        var t56, v56 = bj_mie(50.0, BjComplex_new(3.5, 0.0), &mr);
+        ssum = ssum + mr.q_ext;
+        BjMieResult_free(&mr);
+    }
+    bench_batch_stop(b56, 5000);
+    bench_report(b56);
+    var rm: BjComplex = BjComplex_new(1.5, 0.0);
+    var b57 = bench_new("scattering/rayleigh_cross_section");
+    bench_batch_start(b57);
+    for (var k = 0; k < 1000000; k = k + 1) {
+        var t57, v57 = bj_rayleigh_cross_section(0.00000001, 0.0000005, rm);
+        var s57: f64 = v57;
+        ssum = ssum + s57;
+    }
+    bench_batch_stop(b57, 1000000);
+    bench_report(b57);
+    var b58 = bench_new("scattering/rayleigh_phase_function");
+    bench_batch_start(b58);
+    for (var k = 0; k < 1000000; k = k + 1) {
+        var p58: f64 = bj_rayleigh_phase_function(0.5);
+        ssum = ssum + p58;
+    }
+    bench_batch_stop(b58, 1000000);
+    bench_report(b58);
+    if (ssum == 7.0) { println("."); }
+
     # The JSON (src/json.cyr): a FieldVector written into one builder, emptied each time through its length word
     # (lib/str.cyr's layout: buf, len, cap), and serde_json's documents read back.
     var jv = BjFieldVector_new(1.5, -0.25, BJ_SPEED_OF_LIGHT);

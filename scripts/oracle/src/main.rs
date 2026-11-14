@@ -36,6 +36,7 @@ mod m_math;
 mod m_maxwell;
 mod m_polarization;
 mod m_relativity;
+mod m_scattering;
 mod m_wave;
 mod t_constants;
 mod tsv;
@@ -61,6 +62,7 @@ fn golden_modules() -> Vec<tsv::Module> {
         m_maxwell::emit(),
         m_polarization::emit(),
         m_relativity::emit(),
+        m_scattering::emit(),
         m_wave::emit(),
     ]
 }

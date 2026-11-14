@@ -3062,3 +3062,85 @@ E and B = n̂ × E/c.
 - **Result, every target** (x86_64 ELF, x86_64 PE, aarch64): **14 modules, 0 failing; 438,934 ok, 0 failed, 0
   measured, 0 pending, 59,788 accepted (ADR 01: 21,109; ADR 0002: 38,679)** over 498,722 rows; **all 337 digests
   equal**, the 329 before unchanged. `polarization.tcyr`, `json.tcyr` and `material.tcyr` pass on all three.
+
+## 57. M3 part 1b-1: scattering (2026-11-13)
+
+- **`src/scattering.cyr`**: scattering.rs's Mie and Rayleigh functions under Rust's names (`bj_mie`,
+  `bj_cross_section_from_efficiency`, `bj_rayleigh_*`), with the limits `BJ_MIE_MAX_SIZE_PARAMETER` and
+  `BJ_MIE_MAX_MX` (already in the generated `src/constants.cyr`).
+  - **`BjMieResult`** holds Q_sca, Q_ext, Q_abs and g, and owns `a` and `b` (Rust's `Vec<Complex>`) as fl_alloc
+    buffers with their lengths (`a_len`, `b_len`; equal from `bj_mie`, apart only for a document part 1b-2 reads).
+    `a_at(k)` and `b_at(k)` read them. `bj_mie` writes new buffers into `out` and never reads it, so a stale `out`
+    can't be freed by mistake. `BjMieResult_free` gives them back. On an error, `out` is untouched and the call's
+    buffers are freed.
+  - **The convention**: scattering.rs already used e^{+jωt} with absorbing Im(m) < 0, so ADR 0002 row 5 changes no
+    number here and the harness compares every row on the oracle's numbers. The gain-index reason keeps Rust's
+    words ("e^{+iωt}", "n − iκ"): error rows carry the Display text (ADR 0002 row 4).
+  - **Mie's recurrences** (the downward Dₙ(mx), the upward ψₙ and χₙ, the coefficient loop and its three sums) run
+    on f64 locals, as probe p8 found (a struct-valued step is 2.2× slower). They follow Rust's order of operations,
+    with hisab's complex products and sums written out. The module's own `complex_recip` (one division when |z|² is
+    normal) and Smith `complex_div` are ported as written, the zero test at each call. A `+ 0.0` that Rust's
+    `complex_real` adds to an imaginary part is kept (it turns −0 into +0); the `− 0.0` it subtracts is the identity
+    and is dropped. sin and cos are src/crmath.cyr's, hypot is bijli's, and cbrt is ganita's, correctly rounded as
+    Rust's is (CORE-MATH's, port plan P3). It is the bundle's first direct ganita call, so `dist/bijli.deps` now
+    lists ganita, a dependency `cyrius.cyml` already declares.
+  - **Rayleigh** is cold, so it uses BjComplex: `BjComplex_mul` for m·m and `norm_sq` for |K|², with row 14 at a
+    range edge. 138 rows reach the m² edge (m = 10²⁰⁰ + 10²⁰⁰j, 10¹⁶⁰, 10⁻²⁰⁰ + 10⁻²⁰⁰j and the like), and every
+    one ends in the same NaN under both chains, so no mapping is needed.
+- **New golden file `scattering.tsv`, 3,907 rows.** `mie` (1,027 rows) is class C; the rest is class A. A `mie`
+  row's outputs are Q_sca, Q_ext, Q_abs, g and the count n, then (aₖ, bₖ) at every k when n ≤ 128. Above that, the
+  row takes 128 indices k_j = j·(n − 1)/127 and the FNV-1a fold of all 4n words, which keeps the 100,188-term row
+  small and still pins every coefficient bit. The grids:
+  - **Mie's cross**: 26 sizes (the ψ₁ threshold and its neighbours, the perfect cubes where Wiscombe's count is an
+    integer, Bohren & Huffman's sample, the Rust tests' cases) × 26 indices (real low and high contrast, matched,
+    below 1, negative, absorbing, metal-like, pure imaginary, signed zeros);
+  - **Mie's limits**:
+    - large spheres to x = 10⁵;
+    - |m|·x = 10⁷ accepted (the D_n start at about 10⁷ + 877) and its next double refused;
+    - tiny x, where the series overflows somewhere between x = 10⁻⁵⁰ (computed) and 10⁻¹⁰⁰ (refused);
+    - tiny m, and mx underflowing to zero (DivisionByZero);
+    - every rejection, and 240 seeded spheres;
+  - **Rayleigh**: radii, wavelengths and indices with the specials and the range edges of m², the 10⁻³⁰ singularity
+    test on both sides, and the phase function.
+
+  `validate.py`'s independent transcription (`sc_eval`) agreed with every row on its first run. One row is past its
+  2·10⁶-step limit (|m|·x = 10⁷); validate checks it through its primitives, whose agreement with MPFR's makes the
+  oracle's reading the corrected one. `scattering.cr.tsv` holds 6 rows, every x = 200 sphere: **glibc 2.44's
+  cos(200) misrounds**, and the port gives the correctly rounded readings (0 ulp). No ADR 0002 mapping is needed.
+- **Rust tests**: all 32 of scattering.rs's are ported (`tests/scattering.tcyr`, 90 assertions with the Cyrius-only
+  groups). The Cyrius-only groups cover:
+  - every reason's exact text in Rust's Display forms;
+  - out untouched by each refusal;
+  - 2,000 calls leaving the freelist arena and the bump heap as they were;
+  - |m|·x = 10⁷ and x = 10⁵ accepted.
+
+  The ledger: 461 ported, 3 n/a, 394 pending of 858.
+- **Surface parity**: scattering is in progress, 15 items matched (346 in all); MieResult's two serde items are part
+  1b-2's. The API snapshot gains 8 public functions (2,010).
+- **Benchmarks** (the 5 scattering twins: 55 of 80 twinned). The recorded run was at load 1.06; an interleaved A/B
+  against HEAD, three rounds at load 1.5–1.9 beside another repo's `cr_verify.py`, gave medians within 2 % of it,
+  and left every other row within noise:
+
+  | Bench | Rust | Cyrius | Ratio |
+  |---|---|---|---|
+  | `scattering/mie_x1_real` | 423.87 ns | 1.81 µs | 4.3× |
+  | `scattering/mie_x10_real` | 859.83 ns | 3.62 µs | 4.2× |
+  | `scattering/mie_x50_m3_5` | 3.44 µs | 11.74 µs | 3.4× |
+  | `scattering/rayleigh_cross_section` | 1.74 ns | 129 ns | 74× |
+  | `scattering/rayleigh_phase_function` | 0.50 ns | 4 ns | 8× |
+
+  Mie is 3.4–4.3× Rust's: two Smith divisions a term out of line, and three buffers allocated and freed a call, as
+  Rust's Vecs are. Rayleigh's constant arguments fold in Rust; the port pays BjComplex_mul and norm_sq with their
+  range tests, the Smith division and the Result.
+- **For M3's range-edge Part** (§0.1), candidates from writing the port:
+  - Mie's complex products in the recurrences (hisab's plain chain on f64 locals), reachable with a tiny or huge m;
+  - the tiny-x refusals: between x = 10⁻⁵⁰ and 10⁻¹⁰⁰, χₙ ≈ (2n − 1)!!/xⁿ overflows, so the series is refused
+    although Q is a representable (or zero) value;
+  - |m|·x > 10⁷ decided on the rounded product hypot(m)·x (row 17's exact-threshold question);
+  - the products of many factors in Rayleigh's σ and Q, `cross_section_from_efficiency` and
+    `rayleigh_angular_intensity` (row 13);
+  - x⁴ and m² past either end of the range in Rayleigh. For |m| past about 10¹⁵⁴, m² overflows and K = (m² − 1)/(m² + 2)
+    is NaN, though K → 1 and σ is finite; row 14's unbounded m² still ends in ∞/∞.
+- **Result, every target** (x86_64 ELF, x86_64 PE, aarch64): **15 modules, 0 failing; 442,835 ok, 0 failed, 0
+  measured, 0 pending, 59,794 accepted (ADR 01: 21,115; ADR 0002: 38,679)** over 502,629 rows; **all 343 digests
+  equal**, the 337 before unchanged. `scattering.tcyr` passes on all three.

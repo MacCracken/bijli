@@ -12,4 +12,5 @@ math
 maxwell
 polarization
 relativity
+scattering
 wave

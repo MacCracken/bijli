@@ -238,6 +238,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
   that serde_json's best-effort parse misreads; all of them match on all three targets. A document holds the stored
   numbers, so one bijli 1.x wrote keeps its handedness names, and a 1.x retarder of retardance δ reads as −δ (ADR 0002
   row 5, amended). polarization.rs is ported: its one pending test is scattering's.
+- **Cyrius port, M3 part 1b-1 — scattering** (`src/scattering.cyr`): Mie scattering by a homogeneous sphere
+  (`bj_mie` into a `BjMieResult` that owns its coefficient buffers, `BjMieResult_free`) and the Rayleigh limit.
+  scattering.rs already used e^{+jωt} with absorbing Im(m) < 0, so no number changes. Mie's recurrences run on f64
+  locals in Rust's order of operations. `tests/golden/scattering.tsv` (3,907 rows; a long Mie row samples its
+  coefficients and digests all of them) matches bit for bit on all three targets. Its six corrected rows are where
+  glibc's cos(200) misrounds. All 32 of scattering.rs's tests are ported, and the 5 scattering bench twins added
+  (55 of 80). MieResult's JSON is part 1b-2's.
 
 ### Fixed
 

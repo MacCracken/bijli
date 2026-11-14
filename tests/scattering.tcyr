@@ -1,0 +1,466 @@
+# scattering.tcyr — src/scattering.cyr (M3 part 1b-1): Mie scattering by a homogeneous sphere, and Rayleigh.
+#
+# Every group named test_* is rust-old/src/scattering.rs's test of that name, ported assertion for assertion (the
+# ledger matches them by name). scattering.rs already used e^{+jωt} with absorbing Im(m) < 0, bijli's one convention
+# (ADR 0002 row 5), so no test changes its numbers. The cyrius_* groups pin what the corpus can't show: the reasons'
+# exact text, out left alone on an error, the coefficient buffers given back, and the |m|·x limit accepted.
+# tests/golden/scattering.tsv pins every function over its grid against Rust besides.
+
+include "tests/lib.cyr"
+
+# |a − b| < tol.
+fn near(a: f64, b: f64, tol: f64): i64 {
+    var d: f64 = f64_abs(a - b);
+    if (d < tol) { return 1; }
+    return 0;
+}
+
+# |(a − b)/b|, the reference tests' relative error. Mirrors their `rel`.
+fn rel(a: f64, b: f64): f64 {
+    var r: f64 = f64_abs((a - b) / b);
+    return r;
+}
+
+# 1 when the C strings a and b are equal.
+fn text_is(a, b): i64 {
+    if (strlen(a) != strlen(b)) { return 0; }
+    return memeq(a, b, strlen(a));
+}
+
+# 1 when the last error's Display text is a followed by b (a literal can't continue across lines).
+fn reason_is2(a, b): i64 {
+    var d = bj_last_error_display();
+    var la = strlen(a);
+    if (strlen(d) != la + strlen(b)) { return 0; }
+    if (memeq(d, a, la) != 1) { return 0; }
+    return memeq(d + la, b, strlen(b));
+}
+
+# 1 when the last error's Display text starts with a and ends with b.
+fn reason_ends(a, b): i64 {
+    var d = bj_last_error_display();
+    var n = strlen(d);
+    var la = strlen(a);
+    var lb = strlen(b);
+    if (n < la + lb) { return 0; }
+    if (memeq(d, a, la) != 1) { return 0; }
+    return memeq(d + n - lb, b, lb);
+}
+
+# Mie of (x, re + j·im) into *r: 1 on Ok, 0 on Err.
+fn mie_ok(x: f64, re: f64, im: f64, r: *BjMieResult): i64 {
+    var t, v = bj_mie(x, BjComplex_new(re, im), r);
+    if (is_ok(t) == 1) { return 1; }
+    return 0;
+}
+
+# 1 when Mie of (x, re + j·im) is refused.
+fn mie_refused(x: f64, re: f64, im: f64): i64 {
+    var r: BjMieResult = BjMieResult_new();
+    var t, v = bj_mie(x, BjComplex_new(re, im), &r);
+    if (is_err_result(t) == 1) { return 1; }
+    BjMieResult_free(&r);
+    return 0;
+}
+
+# The value of an Ok(f64) Result (the caller tests is_ok first).
+fn ok_f(t, v): f64 {
+    var x: f64 = v;
+    return x;
+}
+
+# scattering.rs's Mie tests.
+fn rust_tests_a(): i64 {
+    var r: BjMieResult = BjMieResult_new();
+    test_group("test_mie_nmax_dominated_large_x_matches_reference");
+    # Low-contrast large spheres (|mx| < n_max): the D_n start is set by the n_max branch. References: 40-digit
+    # mpmath evaluation from Bessel functions.
+    assert(mie_ok(100.0, 1.05, 0.0, &r) == 1, "x = 100, m = 1.05");
+    var e1: f64 = rel(r.q_ext, 2.379520657428609);
+    var g1: f64 = rel(r.g, 0.9861939534912167);
+    assert(e1 < 0.000000000001 && g1 < 0.000000000001, "Q_ext and g within 1e-12");
+    BjMieResult_free(&r);
+    assert(mie_ok(60.0, 1.02, 0.0, &r) == 1, "x = 60, m = 1.02");
+    var e2: f64 = rel(r.q_ext, 2.120134468004568);
+    var g2: f64 = rel(r.g, 0.998148563737599);
+    assert(e2 < 0.000000000001 && g2 < 0.000000000001, "Q_ext and g within 1e-12");
+    BjMieResult_free(&r);
+
+    test_group("test_mie_small_sphere_approaches_rayleigh");
+    assert(mie_ok(0.01, 1.5, 0.0, &r) == 1, "Ok");
+    var tq, vq = bj_rayleigh_efficiency(0.01, BjComplex_new(1.5, 0.0));
+    var ray_q: f64 = ok_f(tq, vq);
+    var dq: f64 = f64_abs(r.q_sca - ray_q) / ray_q;
+    assert(is_ok(tq) == 1 && dq < 0.01, "Mie Q_sca within 1% of Rayleigh's");
+    BjMieResult_free(&r);
+
+    test_group("test_mie_nonabsorbing_q_ext_equals_q_sca");
+    assert(mie_ok(1.0, 1.5, 0.0, &r) == 1, "Ok");
+    var qa: f64 = f64_abs(r.q_abs);
+    assert(qa < 0.0000000001, "Q_abs = 0 for a real index");
+    BjMieResult_free(&r);
+
+    test_group("test_mie_absorbing_sphere");
+    assert(mie_ok(1.0, 1.5, -0.1, &r) == 1, "Ok (Im(m) < 0 absorbs in e^{+jωt})");
+    var qe: f64 = r.q_ext;
+    var qs: f64 = r.q_sca;
+    var qb: f64 = r.q_abs;
+    assert(qe > 0.0 && qs > 0.0 && qb > 0.0, "Q_ext, Q_sca and Q_abs > 0");
+    BjMieResult_free(&r);
+
+    test_group("test_mie_extinction_positive");
+    assert(mie_ok(2.0, 1.33, 0.0, &r) == 1, "Ok");
+    qe = r.q_ext;
+    qs = r.q_sca;
+    assert(qe > 0.0 && qs > 0.0, "Q_ext, Q_sca > 0");
+    BjMieResult_free(&r);
+
+    test_group("test_mie_asymmetry_small_sphere");
+    assert(mie_ok(0.01, 1.5, 0.0, &r) == 1, "Ok");
+    var ga: f64 = f64_abs(r.g);
+    assert(ga < 0.01, "g ≈ 0 (isotropic)");
+    BjMieResult_free(&r);
+
+    test_group("test_mie_asymmetry_large_sphere");
+    assert(mie_ok(10.0, 1.5, 0.0, &r) == 1, "Ok");
+    var gl: f64 = r.g;
+    assert(gl > 0.0, "g > 0 (forward scattering)");
+    BjMieResult_free(&r);
+
+    test_group("test_mie_invalid_x");
+    assert(mie_refused(0.0, 1.5, 0.0) == 1, "x = 0");
+    assert(mie_refused(-1.0, 1.5, 0.0) == 1, "x = −1");
+
+    test_group("test_mie_water_droplet");
+    # x = 2πr/λ, r = 1 µm, λ = 0.5 µm → x ≈ 12.57
+    var xw: f64 = 2.0 * _BJ_PI * 1.0 / 0.5;
+    assert(mie_ok(xw, 1.33, 0.0, &r) == 1, "Ok");
+    qe = r.q_ext;
+    assert(qe > 1.0 && qe < 5.0, "Q_ext about 2 (the extinction paradox)");
+    BjMieResult_free(&r);
+
+    test_group("test_mie_coefficients_count");
+    assert(mie_ok(5.0, 1.5, 0.0, &r) == 1, "Ok");
+    assert(r.a_len >= 4 && r.a_len == r.b_len, "at least 4 coefficients, as many b as a");
+    BjMieResult_free(&r);
+    return 0;
+}
+
+# scattering.rs's Rayleigh tests, and the cross-section from an efficiency.
+fn rust_tests_b(): i64 {
+    var m15: BjComplex = BjComplex_new(1.5, 0.0);
+    test_group("test_rayleigh_cross_section_lambda4");
+    var t1, v1 = bj_rayleigh_cross_section(0.00000001, 0.0000005, m15);
+    var t2, v2 = bj_rayleigh_cross_section(0.00000001, 0.00000025, m15);
+    var s1: f64 = ok_f(t1, v1);
+    var s2: f64 = ok_f(t2, v2);
+    assert(is_ok(t1) == 1 && is_ok(t2) == 1 && near(s2 / s1, 16.0, 0.1) == 1, "σ ∝ λ⁻⁴");
+
+    test_group("test_rayleigh_cross_section_r6");
+    var t3, v3 = bj_rayleigh_cross_section(0.00000001, 0.0000005, m15);
+    var t4, v4 = bj_rayleigh_cross_section(0.00000002, 0.0000005, m15);
+    var s3: f64 = ok_f(t3, v3);
+    var s4: f64 = ok_f(t4, v4);
+    assert(is_ok(t3) == 1 && is_ok(t4) == 1 && near(s4 / s3, 64.0, 0.1) == 1, "σ ∝ r⁶");
+
+    test_group("test_rayleigh_phase_function_forward_backward_equal");
+    var pf: f64 = bj_rayleigh_phase_function(0.5);
+    var pb: f64 = bj_rayleigh_phase_function(-0.5);
+    assert(near(pf, pb, 0.000001) == 1, "P(θ) = P(π − θ)");
+
+    test_group("test_rayleigh_phase_function_90_deg");
+    var p90: f64 = bj_rayleigh_phase_function(0.0);
+    assert(near(p90, 0.75, 0.000001) == 1, "P(90°) = 3/4");
+
+    test_group("test_rayleigh_phase_function_forward");
+    var p0: f64 = bj_rayleigh_phase_function(1.0);
+    assert(near(p0, 1.5, 0.000001) == 1, "P(0°) = 3/2");
+
+    test_group("test_rayleigh_efficiency_positive");
+    var t5, v5 = bj_rayleigh_efficiency(0.1, m15);
+    var q5: f64 = ok_f(t5, v5);
+    assert(is_ok(t5) == 1 && q5 > 0.0, "Q > 0");
+
+    test_group("test_rayleigh_invalid_params");
+    var t6, v6 = bj_rayleigh_cross_section(0.0, 0.0000005, m15);
+    var t7, v7 = bj_rayleigh_cross_section(0.00000001, 0.0, m15);
+    var t8, v8 = bj_rayleigh_efficiency(0.0, m15);
+    assert(is_err_result(t6) == 1 && is_err_result(t7) == 1 && is_err_result(t8) == 1, "r = 0, λ = 0, x = 0");
+
+    test_group("test_rayleigh_angular_intensity_inverse_square");
+    var t9, v9 = bj_rayleigh_angular_intensity(0.00000000000000000001, 1.0, 0.5);
+    var t10, v10 = bj_rayleigh_angular_intensity(0.00000000000000000001, 2.0, 0.5);
+    var i1: f64 = ok_f(t9, v9);
+    var i2: f64 = ok_f(t10, v10);
+    assert(is_ok(t9) == 1 && is_ok(t10) == 1 && near(i1 / i2, 4.0, 0.000001) == 1, "I ∝ 1/r²");
+
+    test_group("test_rayleigh_angular_intensity_singularity");
+    var t11, v11 = bj_rayleigh_angular_intensity(0.00000000000000000001, 0.0, 0.5);
+    assert(is_err_result(t11) == 1, "r = 0");
+
+    test_group("test_cross_section_from_efficiency");
+    var sg: f64 = bj_cross_section_from_efficiency(2.0, 0.000001);
+    var want: f64 = 2.0 * _BJ_PI * 0.000001 * 0.000001;
+    assert(near(sg, want, 0.000000000000000000000000000001) == 1, "σ = Q·πr²");
+
+    test_group("test_mie_rayleigh_cross_section_consistency");
+    var a: f64 = 0.00000001;
+    var lam: f64 = 0.0000005;
+    var x: f64 = 2.0 * _BJ_PI * a / lam;
+    var r: BjMieResult = BjMieResult_new();
+    assert(mie_ok(x, 1.5, 0.0, &r) == 1, "Ok");
+    var mie_sigma: f64 = bj_cross_section_from_efficiency(r.q_sca, a);
+    BjMieResult_free(&r);
+    var t12, v12 = bj_rayleigh_cross_section(a, lam, m15);
+    var ray_sigma: f64 = ok_f(t12, v12);
+    var dr: f64 = f64_abs(mie_sigma - ray_sigma) / ray_sigma;
+    assert(is_ok(t12) == 1 && dr < 0.01, "Mie σ within 1% of Rayleigh's");
+
+    test_group("test_rayleigh_angular_intensity_closed_form");
+    # I/I₀ = 8π⁴ α_v² (1 + cos²θ)/(λ⁴ r²), α_v = a³ (m²−1)/(m²+2)
+    var dist: f64 = 2.0;
+    var cos_t: f64 = 0.3;
+    var k_fac: f64 = (1.5 * 1.5 - 1.0) / (1.5 * 1.5 + 2.0);
+    var alpha_v: f64 = a * a * a * k_fac;
+    var pi4: f64 = _bj_powi(_BJ_PI, 4);
+    var lam4: f64 = _bj_powi(lam, 4);
+    var expected: f64 = 8.0 * pi4 * alpha_v * alpha_v * (1.0 + cos_t * cos_t) / (lam4 * dist * dist);
+    var t13, v13 = bj_rayleigh_cross_section(a, lam, m15);
+    var sigma: f64 = ok_f(t13, v13);
+    var t14, v14 = bj_rayleigh_angular_intensity(sigma, dist, cos_t);
+    var got: f64 = ok_f(t14, v14);
+    var rg: f64 = rel(got, expected);
+    assert(is_ok(t14) == 1 && rg < 0.000000000001, "the closed form within 1e-12");
+
+    test_group("test_rayleigh_nan_inputs_rejected");
+    var nan: f64 = 0.0 / 0.0;
+    var t15, v15 = bj_rayleigh_cross_section(nan, 0.0000005, m15);
+    var t16, v16 = bj_rayleigh_cross_section(0.00000001, nan, m15);
+    var t17, v17 = bj_rayleigh_efficiency(nan, m15);
+    var t18, v18 = bj_rayleigh_angular_intensity(0.00000000000000000001, nan, 0.5);
+    assert(is_err_result(t15) == 1 && is_err_result(t16) == 1 && is_err_result(t17) == 1 && is_err_result(t18) == 1,
+      "a NaN radius, wavelength, x or distance");
+    if (v1 == 7 || v2 == 7 || v3 == 7 || v4 == 7 || v6 == 7 || v7 == 7 || v8 == 7 || v11 == 7 || v15 == 7) {
+        println(".");
+    }
+    if (v16 == 7 || v17 == 7 || v18 == 7) { println("."); }
+    return 0;
+}
+
+# scattering.rs's reference-value regression tests (40-digit mpmath references in Bohren & Huffman's e^{−jωt}
+# convention: bijli's input is the conjugate of B&H's m) and its rejection tests.
+fn rust_tests_c(): i64 {
+    var r: BjMieResult = BjMieResult_new();
+    test_group("test_mie_bohren_huffman_sample");
+    # Bohren & Huffman App. A: r = 0.525 µm, λ = 0.6328 µm, m = 1.55; tabulated Q_ext = Q_sca = 3.10543, g = 0.63314.
+    var xb: f64 = 2.0 * _BJ_PI * 0.525 / 0.6328;
+    assert(mie_ok(xb, 1.55, 0.0, &r) == 1, "Ok");
+    assert(near(r.q_ext, 3.10543, 0.000005) == 1 && near(r.g, 0.63314, 0.000005) == 1, "B&H's table");
+    var b1: f64 = rel(r.q_ext, 3.10542553146588);
+    var b2: f64 = rel(r.q_sca, 3.10542553146588);
+    var b3: f64 = rel(r.g, 0.633136758040895);
+    assert(b1 < 0.00000000001 && b2 < 0.00000000001 && b3 < 0.00000000001, "the 40-digit reference within 1e-11");
+    BjMieResult_free(&r);
+
+    test_group("test_mie_high_index_large_mx");
+    # |mx| = 80 ≫ n_max ≈ 33: the old D_n start (n_max + 15) gave Q_ext = 2.0758, g = 0.4230.
+    assert(mie_ok(20.0, 4.0, 0.0, &r) == 1, "x = 20, m = 4");
+    var h1: f64 = rel(r.q_ext, 2.089041014033205);
+    var h2: f64 = rel(r.g, 0.500862780527793);
+    assert(h1 < 0.0000000001 && h2 < 0.0000000001, "within 1e-10");
+    BjMieResult_free(&r);
+    # |mx| = 175: the old code gave Q_ext = 2.2122.
+    assert(mie_ok(50.0, 3.5, 0.0, &r) == 1, "x = 50, m = 3.5");
+    var h3: f64 = rel(r.q_ext, 2.08068506720263);
+    var h4: f64 = rel(r.g, 0.5149783103907131);
+    assert(h3 < 0.0000000001 && h4 < 0.0000000001, "within 1e-10");
+    BjMieResult_free(&r);
+
+    test_group("test_mie_large_sphere");
+    # x = 200, |mx| = 300: the old code gave Q_ext = 2.0150.
+    assert(mie_ok(200.0, 1.5, 0.0, &r) == 1, "Ok");
+    var l1: f64 = rel(r.q_ext, 2.09209268753017);
+    var l2: f64 = rel(r.g, 0.8219566423162336);
+    assert(l1 < 0.0000000001 && l2 < 0.0000000001, "within 1e-10");
+    BjMieResult_free(&r);
+
+    test_group("test_mie_absorbing_reference");
+    # B&H m = 1.33 + 0.1i ↔ bijli m = 1.33 − 0.1j
+    assert(mie_ok(10.0, 1.33, -0.1, &r) == 1, "Ok");
+    var a1: f64 = rel(r.q_ext, 2.398526237960563);
+    var a2: f64 = rel(r.q_sca, 1.18734628369599);
+    var a3: f64 = rel(r.q_abs, 1.211179954264573);
+    var a4: f64 = rel(r.g, 0.919321731299517);
+    assert(a1 < 0.0000000001 && a2 < 0.0000000001 && a3 < 0.0000000001 && a4 < 0.0000000001, "within 1e-10");
+    BjMieResult_free(&r);
+    # Metal-like, strongly absorbing: B&H m = 0.2 + 3i
+    assert(mie_ok(5.0, 0.2, -3.0, &r) == 1, "Ok");
+    var a5: f64 = rel(r.q_ext, 3.19133926825132);
+    var a6: f64 = rel(r.q_sca, 2.98293741202367);
+    var a7: f64 = rel(r.g, 0.5515688860293158);
+    assert(a5 < 0.0000000001 && a6 < 0.0000000001 && a7 < 0.0000000001, "within 1e-10");
+    BjMieResult_free(&r);
+
+    test_group("test_mie_coefficients_are_bh_conjugates");
+    # B&H (m = 1.5 + 0.1i, x = 1): a₁ = 0.0682287821494085 − 0.17068948273117i,
+    #                               b₁ = 0.00864512703725183 − 0.0272424021476631i
+    assert(mie_ok(1.0, 1.5, -0.1, &r) == 1, "Ok");
+    var a0: BjComplex = r.a_at(0);
+    var bz: BjComplex = r.b_at(0);
+    assert(near(a0.re, 0.0682287821494085, 0.0000000000001) == 1
+      && near(a0.im, 0.17068948273117, 0.0000000000001) == 1, "a₁ is the conjugate of B&H's");
+    assert(near(bz.re, 0.00864512703725183, 0.0000000000001) == 1
+      && near(bz.im, 0.0272424021476631, 0.0000000000001) == 1, "b₁ too");
+    var c1: f64 = rel(r.q_abs, 0.27363043803215);
+    assert(c1 < 0.0000000001, "Q_abs within 1e-10");
+    BjMieResult_free(&r);
+
+    test_group("test_mie_tiny_sphere_matches_series");
+    # x = 1e-8: ψ₁ = sin x/x − cos x cancels completely; the old code returned Q_sca ≈ 1.17e-31 (50× the true value).
+    assert(mie_ok(0.00000001, 1.5, 0.0, &r) == 1, "Ok");
+    var ts1: f64 = rel(r.q_sca, 0.00000000000000000000000000000000230680507497117);
+    var ts2: f64 = rel(r.q_ext, 0.00000000000000000000000000000000230680507497117);
+    var tg: f64 = f64_abs(r.g);
+    assert(ts1 < 0.000000000001 && ts2 < 0.000000000001 && tg < 0.000000000000001, "the series to O(x²)");
+    var tr, vr = bj_rayleigh_efficiency(0.00000001, BjComplex_new(1.5, 0.0));
+    var ray: f64 = ok_f(tr, vr);
+    var ts3: f64 = rel(r.q_sca, ray);
+    assert(is_ok(tr) == 1 && ts3 < 0.000000000001, "and Rayleigh's");
+    BjMieResult_free(&r);
+    # Small absorbing sphere: B&H m = 1.5 + 0.01i, x = 1e-3
+    assert(mie_ok(0.001, 1.5, -0.01, &r) == 1, "Ok");
+    var ts4: f64 = rel(r.q_ext, 0.000019930752067133);
+    var ts5: f64 = rel(r.q_sca, 0.0000000000002307758494063458);
+    assert(ts4 < 0.0000000001 && ts5 < 0.0000000001, "within 1e-10");
+    BjMieResult_free(&r);
+
+    test_group("test_mie_psi1_series_continuity");
+    # Smooth across the ψ₁ series threshold (x = 0.1).
+    assert(mie_ok(0.0999, 1.5, 0.0, &r) == 1, "x = 0.0999");
+    var p1: f64 = rel(r.q_sca, 0.00002299186415536038);
+    BjMieResult_free(&r);
+    assert(mie_ok(0.1001, 1.5, 0.0, &r) == 1, "x = 0.1001");
+    var p2: f64 = rel(r.q_sca, 0.00002317660029332435);
+    BjMieResult_free(&r);
+    assert(p1 < 0.000000000001 && p2 < 0.000000000001, "within 1e-12 either side");
+
+    test_group("test_mie_rejects_gain_convention");
+    # Im(m) > 0 is gain in e^{+jωt}: almost always a convention mix-up.
+    assert(mie_refused(1.0, 1.5, 0.1) == 1, "Im(m) > 0 refused");
+    var cj: BjComplex = BjComplex_new(1.5, 0.1).conj();
+    assert(mie_ok(1.0, cj.re, cj.im, &r) == 1, "its conjugate accepted");
+    BjMieResult_free(&r);
+
+    test_group("test_mie_rejects_non_finite_and_huge");
+    var nan: f64 = 0.0 / 0.0;
+    var inf: f64 = 1.0 / 0.0;
+    var lim: f64 = BJ_MIE_MAX_SIZE_PARAMETER;
+    var over: f64 = lim * 1.0001;
+    var tiny: f64 = _bj_from_bits(0x00000000000007E8);
+    assert(mie_refused(nan, 1.5, 0.0) == 1 && mie_refused(inf, 1.5, 0.0) == 1, "x NaN, ∞");
+    assert(mie_refused(10000000000.0, 1.5, 0.0) == 1 && mie_refused(over, 1.5, 0.0) == 1, "x past the maximum");
+    assert(mie_refused(1.0, nan, 0.0) == 1 && mie_refused(1.0, 1.5, nan) == 1 && mie_refused(1.0, inf, 0.0) == 1,
+      "m NaN or ∞");
+    assert(mie_refused(1.0, 0.0, 0.0) == 1, "m = 0");
+    assert(mie_refused(10.0, 2000000.0, 0.0) == 1, "|mx| > BJ_MIE_MAX_MX");
+    assert(mie_refused(tiny, 1.5, 0.0) == 1, "x = 1e-320: the series overflows (Err, not NaN)");
+    return 0;
+}
+
+# The Cyrius-only checks.
+fn cyrius_tests(): i64 {
+    test_group("cyrius_scattering_reasons");
+    var r: BjMieResult = BjMieResult_new();
+    var nan: f64 = 0.0 / 0.0;
+    var t1, v1 = bj_mie(-1.0, BjComplex_new(1.5, 0.0), &r);
+    assert(reason_is2("invalid parameter: size parameter x must be positive and finite, got -1", "") == 1, "x ≤ 0");
+    var t2, v2 = bj_mie(200000.0, BjComplex_new(1.5, 0.0), &r);
+    assert(reason_is2("invalid parameter: size parameter x = 200000 exceeds the supported maximum ", "100000") == 1,
+      "x past the maximum, in Rust's Display form");
+    var t3, v3 = bj_mie(1.0, BjComplex_new(nan, -0.0), &r);
+    assert(reason_is2("invalid parameter: refractive index must be finite, got NaN+-0i", "") == 1,
+      "a non-finite m in hisab's Display form");
+    var t4, v4 = bj_mie(1.0, BjComplex_new(-0.0, 0.0), &r);
+    assert(reason_is2("invalid parameter: refractive index cannot be zero", "") == 1, "−0 is zero");
+    var t5, v5 = bj_mie(1.0, BjComplex_new(1.5, 0.25), &r);
+    assert(reason_is2("invalid parameter: Im(m) = 0.25 > 0: bijli's Mie solver uses the e^{+iωt} convention, where ",
+        "absorbing media have Im(m) < 0 (m = n − iκ); for an index written as n + iκ pass m.conj()") == 1,
+      "the gain index, in Rust's words");
+    var t6, v6 = bj_mie(10.0, BjComplex_new(2000000.0, 0.0), &r);
+    assert(reason_is2("invalid parameter: |m|·x = 20000000 exceeds the supported maximum 10000000", "") == 1,
+      "|m|·x past the maximum");
+    var x100: f64 = _bj_from_bits(0x2B2BFF2EE48E0530);
+    var t7, v7 = bj_mie(x100, BjComplex_new(1.5, 0.0), &r);
+    assert(reason_ends("invalid parameter: Mie series over/underflowed for x = 0.0000000000", "01, m = 1.5+0i") == 1,
+      "the series overflows at x = 1e-100, x written out in Rust's Display form");
+    var sub: f64 = _bj_from_bits(0x00000000000007E8);
+    var t8, v8 = bj_mie(0.0000000001, BjComplex_new(sub, 0.0), &r);
+    assert(is_err_result(t8) == 1 && v8 == BJ_ERR_DIVISION_BY_ZERO
+      && reason_is2("division by zero in EM calculation: complex division by zero in scattering computation", "") == 1,
+      "mx underflows to zero");
+    assert(r.a == 0 && r.a_len == 0 && r.b == 0, "out untouched by every refusal");
+    var t9, v9 = bj_rayleigh_cross_section(-1.0, 0.0000005, BjComplex_new(1.5, 0.0));
+    assert(reason_is2("invalid parameter: radius must be positive and finite, got -1", "") == 1, "a radius");
+    var t10, v10 = bj_rayleigh_efficiency(nan, BjComplex_new(1.5, 0.0));
+    assert(reason_is2("invalid parameter: size parameter must be positive and finite, got NaN", "") == 1, "an x");
+    var t11, v11 = bj_rayleigh_angular_intensity(1.0, nan, 0.5);
+    assert(reason_is2("invalid parameter: distance must not be NaN", "") == 1, "a NaN distance");
+    var d30: f64 = 0.000000000000000000000000000001;
+    var t12, v12 = bj_rayleigh_angular_intensity(1.0, d30, 0.5);
+    assert(is_ok(t12) == 1, "|r| = 1e-30 is no singularity (the test is |r| < 1e-30)");
+
+    test_group("cyrius_mie_coefficients");
+    # out gets its own buffers each call; BjMieResult_free gives them back, and 2000 calls leave the heap as it was.
+    assert(mie_ok(1.0, 1.5, -0.1, &r) == 1, "Ok");
+    var a0: BjComplex = r.a_at(0);
+    var b6: BjComplex = r.b_at(r.b_len - 1);
+    var a0r: f64 = a0.re;
+    var b6r: f64 = b6.re;
+    assert(r.a_len == 7 && r.b_len == 7 && a0r > 0.0 && f64_abs(b6r) < 0.000000001,
+      "n_max = ⌈1 + 4 + 2⌉ = 7 coefficients, the last tiny");
+    BjMieResult_free(&r);
+    assert(r.a == 0 && r.a_len == 0, "freed and emptied");
+    mie_ok(10.0, 1.33, -0.1, &r);
+    BjMieResult_free(&r);
+    var fl0 = _fl_arena_pos;
+    var bump0 = alloc_used();
+    var bad = 0;
+    for (var k = 0; k < 1000; k = k + 1) {
+        if (mie_ok(5.0, 1.5, -0.01, &r) != 1) { bad = bad + 1; }
+        BjMieResult_free(&r);
+        if (mie_refused(0.0000000001, sub, 0.0) != 1) { bad = bad + 1; }
+    }
+    assert_eq(bad, 0, "2000 calls, each as expected");
+    assert_eq(_fl_arena_pos, fl0, "the freelist's arena did not grow");
+    assert_eq(alloc_used(), bump0, "nothing on the bump heap");
+
+    test_group("cyrius_mie_limits");
+    # |m|·x = 10⁷ exactly is accepted: the D_n recurrence starts at about 10⁷ + 877.
+    assert(mie_ok(10.0, 1000000.0, 0.0, &r) == 1 && r.a_len == 21, "x = 10, m = 10⁶");
+    BjMieResult_free(&r);
+    var lim: f64 = BJ_MIE_MAX_SIZE_PARAMETER;
+    assert(mie_ok(lim, 1.0001, 0.0, &r) == 1 && r.a_len == 100188, "x = 10⁵: 100,188 terms");
+    BjMieResult_free(&r);
+    if (v1 == 7 || v2 == 7 || v3 == 7 || v4 == 7 || v5 == 7 || v6 == 7 || v7 == 7 || v9 == 7 || v10 == 7) {
+        println(".");
+    }
+    if (v11 == 7 || v12 == 7 || t1 == 7 || t2 == 7 || t3 == 7 || t4 == 7 || t5 == 7 || t6 == 7 || t7 == 7) {
+        println(".");
+    }
+    if (t9 == 7 || t10 == 7 || t11 == 7) { println("."); }
+    return 0;
+}
+
+# Runs scattering.rs's tests, then the Cyrius-only checks.
+fn main(): i64 {
+    alloc_init();
+    rust_tests_a();
+    rust_tests_b();
+    rust_tests_c();
+    cyrius_tests();
+    return assert_summary();
+}
+
+var exit_code = main();
+if (exit_code > 0) { exit_code = 1; }
+sys_exit_group(exit_code);

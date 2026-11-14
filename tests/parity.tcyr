@@ -2433,6 +2433,96 @@ public fn _par_polarization(fp, fl): i64 {
     return 0;
 }
 
+# ── scattering (M3 part 1b-1): src/scattering.cyr ───────────────────────────────────────────────────────────────
+# scattering.rs already used e^{+jωt}, so every row compares on the oracle's numbers directly. A `mie` row's outputs
+# are Q_sca, Q_ext, Q_abs, g, n, then (aₖ.re, aₖ.im, bₖ.re, bₖ.im) at each sampled k (all when n ≤ 128, else
+# k_j = j·(n − 1)/127 for j = 0…127, then the FNV-1a fold of all 4n words; scripts/oracle/src/m_scattering.rs).
+
+# A Mie result to the got list as a row writes it.
+fn _par_got_mie(r: *BjMieResult) {
+    var n = r.a_len;
+    var q1: f64 = r.q_sca;
+    var q2: f64 = r.q_ext;
+    var q3: f64 = r.q_abs;
+    var q4: f64 = r.g;
+    _par_got_f(q1);
+    _par_got_f(q2);
+    _par_got_f(q3);
+    _par_got_f(q4);
+    _par_got_i(n);
+    var cnt = n;
+    if (n > 128) { cnt = 128; }
+    for (var j = 0; j < cnt; j = j + 1) {
+        var k = j;
+        if (n > 128) { k = j * (n - 1) / 127; }
+        var pa = r.a + k * 16;
+        var pb = r.b + k * 16;
+        _par_got_f(load64(pa));
+        _par_got_f(load64(pa + 8));
+        _par_got_f(load64(pb));
+        _par_got_f(load64(pb + 8));
+    }
+    if (n > 128) {
+        var h = 0xcbf29ce484222325;
+        for (var i = 0; i < n; i = i + 1) {
+            h = (h ^ load64(r.a + i * 16)) * 0x100000001b3;
+            h = (h ^ load64(r.a + i * 16 + 8)) * 0x100000001b3;
+            h = (h ^ load64(r.b + i * 16)) * 0x100000001b3;
+            h = (h ^ load64(r.b + i * 16 + 8)) * 0x100000001b3;
+        }
+        _par_got_i(h);
+    }
+    return 0;
+}
+
+public fn _par_scattering(fp, fl): i64 {
+    if (_par_eq(fp, fl, "scattering::mie") == 1) {
+        var x: f64 = _par_in(0);
+        var m: BjComplex = BjComplex_new(_par_in(1), _par_in(2));
+        var r: BjMieResult = BjMieResult_new();
+        var t, v = bj_mie(x, m, &r);
+        if (is_err_result(t) == 1) { return _par_got_error(v) + 1; }
+        _par_got_mie(&r);
+        BjMieResult_free(&r);
+        return 1;
+    }
+    if (_par_eq(fp, fl, "scattering::cross_section_from_efficiency") == 1) {
+        var q: f64 = _par_in(0);
+        var a: f64 = _par_in(1);
+        var s1: f64 = bj_cross_section_from_efficiency(q, a);
+        _par_got_f(s1);
+        return 1;
+    }
+    if (_par_eq(fp, fl, "scattering::rayleigh_cross_section") == 1) {
+        var ra: f64 = _par_in(0);
+        var rl: f64 = _par_in(1);
+        var t2, v2 = bj_rayleigh_cross_section(ra, rl, BjComplex_new(_par_in(2), _par_in(3)));
+        _par_got_res_f(t2, v2);
+        return 1;
+    }
+    if (_par_eq(fp, fl, "scattering::rayleigh_efficiency") == 1) {
+        var ex: f64 = _par_in(0);
+        var t3, v3 = bj_rayleigh_efficiency(ex, BjComplex_new(_par_in(1), _par_in(2)));
+        _par_got_res_f(t3, v3);
+        return 1;
+    }
+    if (_par_eq(fp, fl, "scattering::rayleigh_phase_function") == 1) {
+        var c: f64 = _par_in(0);
+        var p: f64 = bj_rayleigh_phase_function(c);
+        _par_got_f(p);
+        return 1;
+    }
+    if (_par_eq(fp, fl, "scattering::rayleigh_angular_intensity") == 1) {
+        var cs: f64 = _par_in(0);
+        var d: f64 = _par_in(1);
+        var ct: f64 = _par_in(2);
+        var t4, v4 = bj_rayleigh_angular_intensity(cs, d, ct);
+        _par_got_res_f(t4, v4);
+        return 1;
+    }
+    return 0;
+}
+
 public fn _par_dispatch(mp, ml, fp, fl): i64 {
     _par_got_n = 0;
     if (_par_eq(mp, ml, "charge") == 1) { return _par_charge(fp, fl); }
@@ -2448,6 +2538,7 @@ public fn _par_dispatch(mp, ml, fp, fl): i64 {
     if (_par_eq(mp, ml, "maxwell") == 1) { return _par_maxwell(fp, fl); }
     if (_par_eq(mp, ml, "polarization") == 1) { return _par_polarization(fp, fl); }
     if (_par_eq(mp, ml, "relativity") == 1) { return _par_relativity(fp, fl); }
+    if (_par_eq(mp, ml, "scattering") == 1) { return _par_scattering(fp, fl); }
     if (_par_eq(mp, ml, "wave") == 1) { return _par_wave(fp, fl); }
     return 0;
 }
@@ -2531,6 +2622,9 @@ public fn _par_c_bound(fp, fl): i64 {
     if (memeq(fp, "Jones", 5) == 1 || memeq(fp, "StokesVector::", 14) == 1 || memeq(fp, "MuellerMatrix::", 15) == 1) {
         return 0;
     }
+    # Mie's sin and cos of x, hypot of m and cbrt (M3 part 1b-1): src/crmath.cyr's and ganita's correctly rounded
+    # primitives.
+    if (_par_eq(fp, fl, "scattering::mie") == 1) { return 0; }
     if (_par_eq(fp, fl, "relativity::solve_retarded_time") == 1) { return 0; }
     if (_par_eq(fp, fl, "relativity::lienard_wiechert_fields") == 1) { return 0; }
     if (fl > 9 && memeq(fp, "circuit::", 9) == 1) { return 0; }

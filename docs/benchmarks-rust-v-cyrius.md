@@ -6,7 +6,7 @@
 
 **Rust column**: rust-old/bench-history.csv, run `2026-11-12T03:15:21Z` at `c95fd30` (the 1.2.0 tag's source), criterion medians. Taken under load (kimiya's gates ran beside it: load average about 2.6, median CI width 0.8 %, p90 4.2 %, max 13 %), so a ratio within the Rust row's own noise is read as parity (port plan §5 P4).
 
-**80 Rust benches:** 50 twinned, 0 not applicable, 30 pending.
+**80 Rust benches:** 55 twinned, 0 not applicable, 25 pending.
 
 | Rust bench | Rust | Cyrius twin | Cyrius | Cyrius / Rust |
 |---|---:|---|---:|---:|
@@ -71,11 +71,11 @@
 | `polarization/jones_qwp_apply` | 0.99 ns | `polarization/jones_qwp_apply` | 216.00 ns | 218.2× |
 | `polarization/mueller_apply` | 0.99 ns | `polarization/mueller_apply` | 86.00 ns | 86.9× |
 | `polarization/stokes_from_jones` | 5.44 ns | `polarization/stokes_from_jones` | 117.00 ns | 21.5× |
-| `scattering/mie_x1_real` | 423.87 ns | pending (M3) | — | — |
-| `scattering/mie_x10_real` | 859.83 ns | pending (M3) | — | — |
-| `scattering/mie_x50_m3_5` | 3.44 µs | pending (M3) | — | — |
-| `scattering/rayleigh_cross_section` | 1.74 ns | pending (M3) | — | — |
-| `scattering/rayleigh_phase_function` | 0.50 ns | pending (M3) | — | — |
+| `scattering/mie_x1_real` | 423.87 ns | `scattering/mie_x1_real` | 1.81 µs | 4.3× |
+| `scattering/mie_x10_real` | 859.83 ns | `scattering/mie_x10_real` | 3.62 µs | 4.2× |
+| `scattering/mie_x50_m3_5` | 3.44 µs | `scattering/mie_x50_m3_5` | 11.74 µs | 3.4× |
+| `scattering/rayleigh_cross_section` | 1.74 ns | `scattering/rayleigh_cross_section` | 129.00 ns | 74.1× |
+| `scattering/rayleigh_phase_function` | 0.50 ns | `scattering/rayleigh_phase_function` | 4.00 ns | 8.0× |
 | `beam/spot_size` | 0.49 ns | pending (M3) | — | — |
 | `beam/abcd_propagate_beam` | 1.79 ns | pending (M3) | — | — |
 | `beam/abcd_compose` | 0.99 ns | pending (M3) | — | — |

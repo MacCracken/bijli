@@ -3916,6 +3916,303 @@ def polarization_adr_rows(path: Path) -> list:
     return out
 
 
+# ── scattering: rust-old/src/scattering.rs (M3 part 1b-1) ──────────────────────────────────────────────────────────
+# Mie (Bohren & Huffman's recurrences) and Rayleigh, transcribed in Rust's order: hisab's Complex products and sums,
+# the module's own reciprocal and Smith division, sin and cos of x, hypot of m, and cbrt, Rust's being CORE-MATH's
+# correctly rounded one (port plan P3). The port runs Mie's recurrences on f64 locals in the same order (probe p8),
+# so one transcription serves both; Rayleigh's m·m and |K|² are BjComplex's, which take row 14's unbounded chain at a
+# range edge (src/complex.cyr).
+SC_P_GLIBC = dict(GLIBC_P, hypot=LIBM.hypot, cbrt=lambda x: mpfr_ref.cr("cbrt", x))
+SC_P_MPFR = dict(MPFR_P, hypot=lambda x, y: mpfr_ref.cr2("hypot", x, y), cbrt=lambda x: mpfr_ref.cr("cbrt", x))
+SC_MAX_X, SC_MAX_MX = 1e5, 1e7
+SC_SAMPLE = 128
+SC_PI = bits_to_f("400921fb54442d18")
+# A Mie row whose D_n recurrence starts past this many terms is checked through its primitives alone (sc_prims): its
+# corrected reading equals the oracle's when sin, cos, hypot and cbrt agree at its arguments.
+SC_PY_START = 2_000_000
+SC_GAIN = ("Im(m) = {} > 0: bijli's Mie solver uses the e^{{+iωt}} convention, where absorbing media have Im(m) < 0 "
+           "(m = n − iκ); for an index written as n + iκ pass m.conj()")
+
+
+class ScDivZero(Exception):
+    """scattering.rs's complex_div by an exact zero."""
+
+
+def sc_normal(d: float) -> bool:
+    return math.isfinite(d) and abs(d) >= 2.2250738585072014e-308
+
+
+def sc_div(a, b):
+    """scattering.rs's complex_div: Smith's algorithm."""
+    if b[0] == 0.0 and b[1] == 0.0:
+        raise ScDivZero
+    if abs(b[0]) >= abs(b[1]):
+        r = fdiv(b[1], b[0])
+        den = b[0] + b[1] * r
+        return (fdiv(a[0] + a[1] * r, den), fdiv(a[1] - a[0] * r, den))
+    r = fdiv(b[0], b[1])
+    den = b[0] * r + b[1]
+    return (fdiv(a[0] * r + a[1], den), fdiv(a[1] * r - a[0], den))
+
+
+def sc_recip(z):
+    """scattering.rs's complex_recip: one division when |z|² is normal, complex_div otherwise."""
+    d = z[0] * z[0] + z[1] * z[1]
+    if sc_normal(d):
+        inv = fdiv(1.0, d)
+        return (z[0] * inv, -z[1] * inv)
+    return sc_div((1.0, 0.0), z)
+
+
+def sc_mul(a, b):
+    return (a[0] * b[0] - a[1] * b[1], a[0] * b[1] + a[1] * b[0])
+
+
+def sc_digest(a, b) -> int:
+    h = 0xCBF29CE484222325
+    for (ar, ai), (br, bi) in zip(a, b):
+        for w in (ar, ai, br, bi):
+            h = ((h ^ f_to_bits(w)) * 0x100000001B3) & 0xFFFFFFFFFFFFFFFF
+    return h - (1 << 64) if h >= 1 << 63 else h
+
+
+def sc_mie_checks(x, mre, mim, P):
+    """mie's argument checks: an error's tokens, or (|m|·x, None)."""
+    if not (math.isfinite(x) and x > 0.0):
+        return None, ip_err(f"size parameter x must be positive and finite, got {rust_display(x)}")
+    if x > SC_MAX_X:
+        return None, ip_err(f"size parameter x = {rust_display(x)} exceeds the supported maximum "
+                            f"{rust_display(SC_MAX_X)}")
+    if not (math.isfinite(mre) and math.isfinite(mim)):
+        return None, ip_err(f"refractive index must be finite, got {cx_fmt(mre, mim)}")
+    if mre == 0.0 and mim == 0.0:
+        return None, ip_err("refractive index cannot be zero")
+    if mim > 0.0:
+        return None, ip_err(SC_GAIN.format(rust_display(mim)))
+    mx_abs = P["hypot"](mre, mim) * x
+    if math.isnan(mx_abs) or mx_abs > SC_MAX_MX:
+        return None, ip_err(f"|m|·x = {rust_display(mx_abs)} exceeds the supported maximum {rust_display(SC_MAX_MX)}")
+    return mx_abs, None
+
+
+def sc_terms(x, mx_abs, P):
+    """(n_max, n_start): Wiscombe's count and the start of the D_n recurrence."""
+    n_max = max(int(math.ceil(x + 4.0 * P["cbrt"](x) + 2.0)), 4)
+    n_start = int(math.ceil(rust_max(float(n_max), mx_abs + 4.0 * P["cbrt"](mx_abs)) + 15.0))
+    return n_max, n_start
+
+
+def sc_mie(x, mre, mim, P):
+    """mie's outputs as a row writes them (m_scattering.rs's mie_toks)."""
+    mx_abs, bad = sc_mie_checks(x, mre, mim, P)
+    if bad:
+        return bad
+    m = (mre, mim)
+    mx = (mre * x, mim * x)
+    n_max, n_start = sc_terms(x, mx_abs, P)
+    dz = dz_err("complex division by zero in scattering computation")
+    try:
+        inv_mx = sc_recip(mx)
+        d_mx = [(0.0, 0.0)] * (n_max + 1)
+        d = (0.0, 0.0)
+        for n in range(n_start, 0, -1):
+            ratio = (inv_mx[0] * n, inv_mx[1] * n)
+            q = sc_recip((d[0] + ratio[0], d[1] + ratio[1]))
+            d = (ratio[0] - q[0], ratio[1] - q[1])
+            if n - 1 <= n_max:
+                d_mx[n - 1] = d
+        sin_x, cos_x = P["sin"](x), P["cos"](x)
+        psi_prev = sin_x
+        if x < 0.1:
+            x2 = x * x
+            psi_curr = fdiv(x2, 3.0) * (1.0 - fdiv(x2, 10.0) * (1.0 - fdiv(x2, 28.0) * (1.0 - fdiv(x2, 54.0)
+                                                                                     * (1.0 - fdiv(x2, 88.0)))))
+        else:
+            psi_curr = fdiv(sin_x, x) - cos_x
+        chi_prev = cos_x
+        chi_curr = fdiv(cos_x, x) + sin_x
+        inv_m = sc_recip(m)
+        a_c, b_c = [], []
+        sca = ext = gs = 0.0
+        a_prev = b_prev = (0.0, 0.0)
+        for n in range(1, n_max + 1):
+            dn = d_mx[n]
+            if n > 1:
+                fct = fdiv(float(2 * n - 1), x)
+                psi_prev, psi_curr = psi_curr, fct * psi_curr - psi_prev
+                chi_prev, chi_curr = chi_curr, fct * chi_curr - chi_prev
+            xi_c, xi_p = (psi_curr, chi_curr), (psi_prev, chi_prev)
+            nox = fdiv(float(n), x)
+            af = sc_mul(dn, inv_m)
+            af = (af[0] + nox, af[1] + 0.0)
+            ax = sc_mul(af, xi_c)
+            a_n = sc_div((af[0] * psi_curr - psi_prev, af[1] * psi_curr - 0.0), (ax[0] - xi_p[0], ax[1] - xi_p[1]))
+            bf = sc_mul(m, dn)
+            bf = (bf[0] + nox, bf[1] + 0.0)
+            bx = sc_mul(bf, xi_c)
+            b_n = sc_div((bf[0] * psi_curr - psi_prev, bf[1] * psi_curr - 0.0), (bx[0] - xi_p[0], bx[1] - xi_p[1]))
+            nf = float(n)
+            w = 2.0 * nf + 1.0
+            sca = sca + w * ((a_n[0] * a_n[0] + a_n[1] * a_n[1]) + (b_n[0] * b_n[0] + b_n[1] * b_n[1]))
+            ext = ext + w * (a_n[0] + b_n[0])
+            gs = gs + fdiv(w, nf * (nf + 1.0)) * (a_n[0] * b_n[0] + a_n[1] * b_n[1])
+            if n > 1:
+                gs = gs + fdiv((nf - 1.0) * (nf + 1.0), nf) * (a_prev[0] * a_n[0] + a_prev[1] * a_n[1]
+                                                               + b_prev[0] * b_n[0] + b_prev[1] * b_n[1])
+            a_prev, b_prev = a_n, b_n
+            a_c.append(a_n)
+            b_c.append(b_n)
+    except ScDivZero:
+        return dz
+    scale = fdiv(2.0, x * x)
+    q_sca, q_ext = scale * sca, scale * ext
+    q_abs = q_ext - q_sca
+    g = fdiv(2.0 * gs, sca) if sca > 0.0 else 0.0
+    if not (math.isfinite(q_sca) and math.isfinite(q_ext) and math.isfinite(g)):
+        return ip_err(f"Mie series over/underflowed for x = {rust_display(x)}, m = {cx_fmt(mre, mim)}")
+    n = len(a_c)
+    out = [("f", q_sca), ("f", q_ext), ("f", q_abs), ("f", g), ("i", n)]
+    ks = range(n) if n <= SC_SAMPLE else [j * (n - 1) // (SC_SAMPLE - 1) for j in range(SC_SAMPLE)]
+    for k in ks:
+        out += [("f", a_c[k][0]), ("f", a_c[k][1]), ("f", b_c[k][0]), ("f", b_c[k][1])]
+    if n > SC_SAMPLE:
+        out.append(("i", sc_digest(a_c, b_c)))
+    return out
+
+
+def sc_big(x, mre, mim) -> bool:
+    """A Mie row too long for the transcription: its checks pass and its D_n recurrence starts past SC_PY_START."""
+    mx_abs, bad = sc_mie_checks(x, mre, mim, SC_P_GLIBC)
+    return not bad and sc_terms(x, mx_abs, SC_P_GLIBC)[1] > SC_PY_START
+
+
+def sc_prims_agree(x, mre, mim) -> bool:
+    """sin and cos of x and hypot of m equal MPFR's (cbrt is correctly rounded in both)."""
+    return (same(LIBM.sin(x), mpfr_ref.sin(x)) and same(LIBM.cos(x), mpfr_ref.cos(x))
+            and same(LIBM.hypot(mre, mim), mpfr_ref.cr2("hypot", mre, mim)))
+
+
+def sc_eval(fn, v, P, cx14=False):
+    """scattering.rs's outputs for a row on the primitives P; cx14=True for the port's BjComplex products and |z|² in
+    Rayleigh (row 14 at a range edge). None for another name."""
+    def mul(a, b):
+        w = [a[0], a[1], b[0], b[1]]
+        if cx14 and cx_governed("Complex::mul", w) == 14:
+            r = cx_model("Complex::mul", w)
+            return (r[0], r[1])
+        return sc_mul(a, b)
+
+    def nsq(a):
+        if cx14 and cx_governed("Complex::norm_sq", [a[0], a[1]]) == 14:
+            return cx_model("Complex::norm_sq", [a[0], a[1]])[0]
+        return a[0] * a[0] + a[1] * a[1]
+
+    def k2(mre, mim):
+        m2 = mul((mre, mim), (mre, mim))
+        return nsq(sc_div((m2[0] - 1.0, m2[1] - 0.0), (m2[0] + 2.0, m2[1] + 0.0)))
+
+    def positive(name, x):
+        if not (math.isfinite(x) and x > 0.0):
+            return ip_err(f"{name} must be positive and finite, got {rust_display(x)}")
+        return None
+
+    dz = dz_err("complex division by zero in scattering computation")
+    if fn == "scattering::mie":
+        return sc_mie(v[0], v[1], v[2], P)
+    if fn == "scattering::cross_section_from_efficiency":
+        return [("f", v[0] * SC_PI * v[1] * v[1])]
+    if fn == "scattering::rayleigh_cross_section":
+        a, lam, mre, mim = v
+        bad = positive("radius", a) or positive("wavelength", lam)
+        if bad:
+            return bad
+        x = fdiv(2.0 * SC_PI * a, lam)
+        try:
+            k = k2(mre, mim)
+        except ScDivZero:
+            return dz
+        x4 = x * x * x * x
+        return [("f", fdiv(8.0, 3.0) * SC_PI * a * a * x4 * k)]
+    if fn == "scattering::rayleigh_efficiency":
+        x, mre, mim = v
+        bad = positive("size parameter", x)
+        if bad:
+            return bad
+        try:
+            k = k2(mre, mim)
+        except ScDivZero:
+            return dz
+        return [("f", fdiv(8.0, 3.0) * x * x * x * x * k)]
+    if fn == "scattering::rayleigh_phase_function":
+        return [("f", 0.75 * (1.0 + v[0] * v[0]))]
+    if fn == "scattering::rayleigh_angular_intensity":
+        cs, d, c = v
+        if math.isnan(d):
+            return ip_err("distance must not be NaN")
+        if abs(d) < 1e-30:
+            return [("E", "Singularity"), ("s", "singularity: field evaluation at source point (distance = 0)")]
+        return [("f", fdiv(fdiv(cs, d * d) * (0.75 * (1.0 + c * c)), 4.0 * SC_PI))]
+    return None
+
+
+def sc_lines(path: Path):
+    for line in path.read_text().splitlines():
+        if line.startswith("#"):
+            continue
+        fn, cls, ins, outs, _note = line.split("\t")
+        toks = [] if ins == "-" else [parse_tok(x) for x in ins.split(" ")]
+        yield fn, cls, ins, outs, [b for _k, b in toks]
+
+
+def validate_scattering(path: Path) -> list:
+    """scattering.rs transcribed (sc_eval) on Rust's primitives, against every row; a Mie row past SC_PY_START is
+    checked by its primitives alone (sc_prims_agree), as its correction would be."""
+    errs = []
+    for n, (fn, _cls, _ins, outs, v) in enumerate(sc_lines(path), 1):
+        if fn == "scattering::mie" and sc_big(*v):
+            if not sc_prims_agree(*v):
+                errs.append(f"scattering row {n}: {fn}{tuple(v)} is past SC_PY_START and its primitives differ "
+                            "from MPFR's: transcribe it")
+            continue
+        want = sc_eval(fn, v, SC_P_GLIBC)
+        if want is None:
+            errs.append(f"scattering row {n}: no transcription for {fn}")
+            continue
+        if not toks_same(want, wave_toks([parse_tok(x) for x in outs.split(" ")])):
+            errs.append(f"scattering row {n}: {fn}{tuple(v)} -> {wire(want)[:300]}, oracle {outs[:300]}")
+    return errs
+
+
+def scattering_corrections(path: Path):
+    """The class-C scattering rows (mie) whose outputs change when sin, cos and hypot are correctly rounded."""
+    def fixes(_rows):
+        out = []
+        for fn, cls, ins, outs, v in sc_lines(path):
+            if cls != "C" or (fn == "scattering::mie" and sc_big(*v)):
+                continue
+            want = sc_eval(fn, v, SC_P_MPFR)
+            old = wave_toks([parse_tok(x) for x in outs.split(" ")])
+            if toks_same(want, old):
+                continue
+            out.append((fn, ins, wire(want), f"oracle {outs}; correctly rounded primitives give {wire(want)}"))
+        return out
+    return fixes
+
+
+def scattering_adr_rows(path: Path) -> list:
+    """ADR 0002 mappings for scattering.tsv: row 14 where BjComplex's range edges change a Rayleigh row."""
+    out = []
+    for fn, cls, ins, outs, v in sc_lines(path):
+        if fn == "scattering::mie":
+            continue
+        P = SC_P_MPFR if cls == "C" else SC_P_GLIBC
+        expect, port = sc_eval(fn, v, P), sc_eval(fn, v, P, cx14=True)
+        if toks_same(port, expect):
+            continue
+        out.append((fn, ins, wire(port), "14", f"oracle {outs}; ADR 0002 row 14"))
+    return out
+
+
 # ── maxwell: rust-old/src/maxwell.rs ──────────────────────────────────────────────────────────
 def validate_maxwell(root: Path, path: Path) -> list:
     """maxwell.rs transcribed in its order of operations (class A: + − × ÷ and sqrt), its checks and error texts."""
@@ -5483,6 +5780,8 @@ def adr_rows(root: Path, module: str, path: Path) -> list:
         return relativity_adr_rows(root, path)
     if module == "polarization":
         return polarization_adr_rows(path)
+    if module == "scattering":
+        return scattering_adr_rows(path)
     maps = {13: adr13(root)}
     out = adr17_rows(root, module, path) if module in ("field", "charge") else []
     if module in ("field", "charge"):
@@ -5843,6 +6142,7 @@ def main() -> int:
         "maxwell": lambda p: validate_maxwell(root, p),
         "polarization": validate_polarization,
         "relativity": lambda p: validate_relativity(root, p),
+        "scattering": validate_scattering,
         "wave": lambda p: validate_wave(root, p),
     }
     listed = [l for l in (golden / "modules.txt").read_text().splitlines() if l and not l.startswith("#")]
@@ -5871,7 +6171,10 @@ def main() -> int:
                               relativity_corrections(root, golden / "relativity.tsv"))
     errs += check_corrections(root, "polarization", golden / "polarization.tsv",
                               polarization_corrections(golden / "polarization.tsv"))
-    for mod in ("charge", "circuit", "complex", "field", "material", "maxwell", "polarization", "relativity", "wave"):
+    errs += check_corrections(root, "scattering", golden / "scattering.tsv",
+                              scattering_corrections(golden / "scattering.tsv"))
+    for mod in ("charge", "circuit", "complex", "field", "material", "maxwell", "polarization", "relativity",
+                "scattering", "wave"):
         errs += check_adr(root, mod, golden / f"{mod}.tsv")
     errs += cx_rows(golden / "complex.tsv")[1]
     errs += fv_rows(root, "field", golden / "field.tsv")[1] + fv_rows(root, "charge", golden / "charge.tsv")[1]
