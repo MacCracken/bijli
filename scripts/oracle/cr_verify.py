@@ -533,7 +533,8 @@ EXACT = ["mono"] + list(SHAPES) + ["sqrt_div", "wsqrt", "sqrt_mono", "sqrt_mono_
          "prod5_acc", "mono_wide", "mono_wide_acc", "below_prod", "below_quot", "below_sum", "cm", "cm_slow", "cos_t",
          "cos_t_slow", "lw_reff", "lw_reff_slow", "lw_kappa", "lw_kappa_slow", "par", "par_x", "par_slow",
          "par_rep", "par_rep_x", "par_rep_slow", "lw_nb", "lw_nb_slow", "lw_reff_ux", "vx_sqrt", "vx_sqrt_e",
-         "vx_gamma"]
+         "vx_gamma", "lwo_reff", "lwo_reff_slow", "lwo_kappa", "lwo_kappa_slow", "lwo_nb", "lwo_nb_slow", "lwo_ux",
+         "gammao", "gammao_slow", "gammao2", "gammao2_slow"]
 UX = ["ux_exp", "ux_exp_w", "ux_cosh", "ux_sinh", "ux_ln", "ux_pow", "ux_sin", "ux_cos"]
 
 
@@ -1165,8 +1166,17 @@ def nb_families(rng, count):
     out = []
     cases = lw_cases(rng, count)
     for j in range(max(1, count // 4)):
-        c = j % 3
-        if c == 0:
+        c = j % 4
+        if c == 3:
+            # the widest spread on doubles (M2 part 2d-3i's regression): R'ᵢ near 2^-2096 beside R near DBL_MAX, βᵢ
+            # subnormal or tiny of Rᵢ's sign, where the exact path's candidate overflowed on R'ᵢ's scale
+            sg = rng.choice([1.0, -1.0])
+            r = [rng.uniform(1.0, 2.0) * 2.0 ** rng.randint(1015, 1023) * rng.choice([1.0, -1.0]),
+                 sg * b2f(rng.getrandbits(rng.randint(1, 20)) | 1), rng.choice([0.0, rng.uniform(-1.0, 1.0)])]
+            b = [rng.uniform(-0.9, 0.9), sg * b2f(rng.getrandbits(rng.randint(1, 52)) | 1), rng.uniform(-0.3, 0.3)]
+            if rng.random() < 0.3:
+                b[1] = sg * rng.uniform(1.0, 2.0) * 2.0 ** -rng.randint(1000, 1022)
+        elif c == 0:
             n = lw_unit(rng)
             sc = 2.0 ** rng.randint(-60, 60)
             sp = 1.0 - 2.0 ** -rng.uniform(1.0, 52.0)
@@ -1193,6 +1203,157 @@ def nb_families(rng, count):
                 want = f2b(rn_nb(r, b, i))
             out.append(("lw_nb", [i] + r + b, want))
             out.append(("lw_nb_slow", [i] + r + b, want))
+    return out
+
+
+# ── the offset forms of _bj_cr_lw and _bj_cr_lorentz (M2 part 2d-3i, for lienard_wiechert_fields' chain) ──────────
+OFF_BIG = 2.0 - 2.0 ** -52                  # 2·DBL_MAX = OFF_BIG·2^1024
+
+
+def off_big(rng):
+    """A part past DBL_MAX in the offset form, |R| in (DBL_MAX, 2·DBL_MAX]: (significand in [1, 2), 1024)."""
+    m = rng.choice([1.0, OFF_BIG, rng.uniform(1.0, OFF_BIG), 1.0 + 2.0 ** -52])
+    return m * rng.choice([1.0, -1.0]), 1024
+
+
+def off_tiny(rng):
+    """A β part on the 53-bit grid below 2^-1022 (a quotient v/c), in the offset form: (significand, exponent) with
+    the value in [2^-1110, 2^-1022)."""
+    m = rng.choice([1.0, rng.uniform(1.0, 2.0), 2.0 - 2.0 ** -52, b2f(f2b(1.0) | rng.getrandbits(52) | 1)])
+    return m * rng.choice([1.0, -1.0]), rng.randint(-1110, -1023)
+
+
+def off_val(x, o):
+    return Fraction(x) * Fraction(2) ** o
+
+
+def lwo_cases(rng, count):
+    """(r, b, offsets) in _bj_cr_lw's offset form, with R and β exact: R with one to three parts past DBL_MAX beside
+    any finite parts (odd subnormals among them); lw_cases' pairs scaled by 2^k so their largest part passes DBL_MAX
+    (the knife edges and ties carried along); ordinary pairs written with offsets; β with parts below 2^-1022 on the
+    53-bit grid, near the cone's edge too; the widest exponent spreads (R past DBL_MAX beside 2^-1074, β at 2^-1110)."""
+    out = []
+    base = lw_cases(rng, count)
+    i = 0
+    while len(out) < count:
+        kind = i % 6
+        i += 1
+        r, b, o = [0.0] * 3, [0.0] * 3, [0] * 6
+        if kind == 0:
+            r = [any_finite(rng) for _ in range(3)]
+            j = rng.randrange(3)
+            r[j], o[j] = off_big(rng)
+            u = lw_unit(rng)
+            sp = rng.uniform(0.0, 0.999)
+            b = [x * sp for x in u]
+        elif kind == 1:
+            u = lw_unit(rng)
+            for j in range(3):
+                if rng.random() < 0.6:
+                    r[j], o[j] = abs(u[j]) * 1.5 * rng.choice([1.0, 1.0 + 2.0 ** -52]) or 1.0, 1024
+                    r[j] = math.copysign(min(r[j], OFF_BIG), u[j])
+                else:
+                    r[j] = u[j] * 2.0 ** 1000
+            if all(x == 0 for x in o[:3]):
+                r[0], o[0] = off_big(rng)
+            sp = 1.0 - 2.0 ** -rng.uniform(1.0, 52.0)
+            b = [x * sp for x in u]
+        elif kind == 2:
+            rv, bv = base[i % len(base)]
+            mx = max(abs(x) for x in rv)
+            if mx == 0:
+                continue
+            sh = 1024 - binade(Fraction(mx))       # the largest part in [2^1024, 2^1025)
+            if max(abs(off_val(x, sh)) for x in rv) > Fraction(sys.float_info.max) * 2:
+                sh -= 1
+            r, b, o = list(rv), list(bv), [sh, sh, sh, 0, 0, 0]
+        elif kind == 3:
+            rv, bv = base[i % len(base)]
+            sh = rng.randint(-40, 40)
+            try:
+                r = [math.ldexp(x, -sh) for x in rv]
+            except OverflowError:
+                continue
+            if any(Fraction(y) * Fraction(2) ** sh != Fraction(x) for x, y in zip(rv, r)):
+                continue
+            b, o = list(bv), [sh, sh, sh, 0, 0, 0]
+        elif kind == 4:
+            r = [any_finite(rng), rng.choice([0.0, -0.0, b2f(rng.getrandbits(52) | 1)]), any_finite(rng)]
+            r[0], o[0] = off_big(rng)
+            b = [rng.uniform(-0.99, 0.99), 0.0, rng.choice([0.0, rng.uniform(-0.1, 0.1)])]
+        else:
+            r = [0.0, b2f(1), 0.0]
+            r[0], o[0] = off_big(rng)
+            r[2] = rng.choice([0.0, b2f(rng.getrandbits(52) | 1), -1e-300])
+            b = [math.copysign(1.0 - 2.0 ** -rng.randint(1, 53), r[0]), 0.0, 0.0]
+        for j in range(3):
+            if kind in (0, 1, 4, 5) and ((b[j] == 0.0 and rng.random() < 0.8) or rng.random() < 0.15):
+                b[j], o[3 + j] = off_tiny(rng)
+        rt = [off_val(x, e) for x, e in zip(r, o[:3])]
+        bt = [off_val(x, e) for x, e in zip(b, o[3:])]
+        if not all(math.isfinite(x) for x in r + b):
+            continue
+        if any(abs(x) > Fraction(sys.float_info.max) * 2 for x in rt):
+            continue
+        if sum(x * x for x in rt) < Fraction(1, 10 ** 60) or sum(x * x for x in bt) >= 1:
+            continue
+        out.append((r, b, o, rt, bt))
+    return out
+
+
+def lwo_families(rng, count):
+    """lwo_reff, lwo_kappa and lwo_nb (each with its *_slow) and lwo_ux on lwo_cases, against exact.py's rn_lw, rn_nb
+    and rnd53_lw on the exact R and β: n̂ − β of a zero Rᵢ is RN(±0 − βᵢ), signed zeros included."""
+    out = []
+    M = (1 << 64) - 1
+    for r, b, o, rt, bt in lwo_cases(rng, count):
+        below = lw_below(rt, bt)
+        reff = f2b(rn_lw(rt, bt, 0))
+        kap = LW_BELOW if below else f2b(rn_lw(rt, bt, 1))
+        ws = r + b + o
+        out.append(("lwo_reff", [0] + ws, reff))
+        out.append(("lwo_reff_slow", [0] + ws, reff))
+        out.append(("lwo_kappa", [0] + ws, kap))
+        out.append(("lwo_kappa_slow", [0] + ws, kap))
+        for i in range(3):
+            if below:
+                want = LW_BELOW
+            elif rt[i] == 0:
+                want = f2b(-rn_frac(bt[i])) if bt[i] != 0 else f2b(r[i] - b[i])
+            else:
+                want = f2b(rn_nb(rt, bt, i))
+            out.append(("lwo_nb", [i] + ws, want))
+            out.append(("lwo_nb_slow", [i] + ws, want))
+        if not below:
+            a = rnd53_lw(rt, bt)
+            e = binade(a)
+            out.append(("lwo_ux", [0] + ws, f2b(float(a / Fraction(2) ** e))))
+            out.append(("lwo_ux", [1] + ws, e & M))
+    return out
+
+
+def gammao_families(rng, count):
+    """gammao and gammao2 (γ and γ², each with its *_slow) on _bj_cr_lorentz's offset form, c = 1 (a β) or the speed
+    of light: one or two normal parts (near c, nearly cancelling c², random) beside parts below 2^-1022 on the 53-bit
+    grid, or those parts alone (γ = 1), against gamma_ref on the exact values."""
+    out = []
+    for i in range(count):
+        kind = i % 4
+        c = 1.0 if i % 2 == 0 else C_LIGHT
+        v, o = [0.0, 0.0, 0.0], [0, 0, 0]
+        if kind == 0:
+            v[0] = math.copysign(c * (1.0 - rng.uniform(0.5, 1.0) * 2.0 ** -rng.randint(1, 52)), rng.uniform(-1, 1))
+        elif kind == 1:
+            vx = rng.uniform(0.3, 0.9) * c
+            v[0], v[1] = vx, math.sqrt(c * c - vx * vx) * (1.0 - 2.0 ** -rng.randint(30, 53))
+        elif kind == 2:
+            v[0], v[1] = rng.uniform(-c, c) * 0.6, rng.uniform(-c, c) * 0.6
+        for j in range(3):
+            if v[j] == 0.0 and (kind == 3 or rng.random() < 0.7):
+                v[j], o[j] = off_tiny(rng)
+        vt = [off_val(x, e) for x, e in zip(v, o)]
+        for name, mode in (("gammao", 0), ("gammao_slow", 0), ("gammao2", 1), ("gammao2_slow", 1)):
+            out.append((name, [3, c] + v + o, gamma_ref(vt, c, mode)))
     return out
 
 
@@ -1295,6 +1456,12 @@ def main() -> int:
         vrng = random.Random(0x2D_2C)
         calls += [(f, ref, ws) for f, ws, ref in vx_families(vrng, max(1, n // 10))
                   if "exact" in names or f in names]
+        orng = random.Random(0x2D_3F)
+        calls += [(f, ref, ws) for f, ws, ref in lwo_families(orng, max(1, n // 20))
+                  if "exact" in names or f in names]
+        grng2 = random.Random(0x2D_3F6)
+        calls += [(f, ref, ws) for f, ws, ref in gammao_families(grng2, max(1, n // 10))
+                  if "exact" in names or f in names]
         prng2 = random.Random(0x9A_2C5)
         calls += [(f, ref, ws) for f, ws, ref in par_families(prng2, max(1, n // 10))
                   if "exact" in names or f in names]
@@ -1316,7 +1483,7 @@ def main() -> int:
         for t in targets:
             g = results[t][i]
             # "invalid" is a word for these
-            any_nan = name not in UX and not name.startswith(("gamma", "cm", "cos_t", "lw_", "par", "vx_"))
+            any_nan = name not in UX and not name.startswith(("gamma", "cm", "cos_t", "lw_", "lwo_", "par", "vx_"))
             ok = g == want or (any_nan and b2f(g) != b2f(g) and b2f(want) != b2f(want))
             per.setdefault((name, t), [0, 0])[0 if ok else 1] += 1
             if not ok:

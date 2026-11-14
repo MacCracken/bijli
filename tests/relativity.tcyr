@@ -990,25 +990,29 @@ fn cyrius_tests(): i64 {
     var clo: f64 = 0.000000000931322574615478515625;
     var chi2: f64 = 2.0 * chi;
     var clo2: f64 = 0.5 * clo;
-    assert(_bj_cr_lorentz(&gv, 1, chi2, 0, 0, &go) == 0 && _bj_cr_lorentz_ok(&gv, 1, chi2) == 0, "c = 2^31 refused");
-    assert(_bj_cr_lorentz(&gv, 1, clo2, 0, 0, &go) == 0 && _bj_cr_lorentz_ok(&gv, 1, clo2) == 0, "c = 2^-31 refused");
-    assert(_bj_cr_lorentz(&gv, 1, nan, 0, 0, &go) == 0, "c = NaN refused");
-    assert(_bj_cr_lorentz(&gv, 1, chi, 0, 0, &go) == 1 && go[0] == 1.0, "c = 2^30 accepted (|v| < 2^-28·c: γ = 1)");
+    assert(_bj_cr_lorentz(&gv, 0, 1, chi2, 0, 0, &go) == 0 && _bj_cr_lorentz_ok(&gv, 1, chi2) == 0, "c = 2^31 refused");
+    assert(_bj_cr_lorentz(&gv, 0, 1, clo2, 0, 0, &go) == 0 && _bj_cr_lorentz_ok(&gv, 1, clo2) == 0,
+      "c = 2^-31 refused");
+    assert(_bj_cr_lorentz(&gv, 0, 1, nan, 0, 0, &go) == 0, "c = NaN refused");
+    assert(_bj_cr_lorentz(&gv, 0, 1, chi, 0, 0, &go) == 1 && go[0] == 1.0, "c = 2^30 accepted (|v| < 2^-28·c: γ = 1)");
     gv[0] = 0.5 * clo;
     var g13: f64 = 1.1547005383792515;
-    assert(_bj_cr_lorentz(&gv, 1, clo, 0, 0, &go) == 1 && go[0] == g13, "c = 2^-30 accepted: γ(c/2) = 2/√3");
+    assert(_bj_cr_lorentz(&gv, 0, 1, clo, 0, 0, &go) == 1 && go[0] == g13, "c = 2^-30 accepted: γ(c/2) = 2/√3");
     # Values just above a midpoint, which fail the rounding test: the slow path decides them (its candidate once came
     # from the test's verdict, 0 there, and these came out near 2^-1020).
     gv[0] = 0.9999999999999996;
     var h25: f64 = 33554432.00000001;
-    assert(_bj_cr_lorentz(&gv, 1, 1.0, 0, 0, &go) == 1 && go[0] == h25, "β = 1 − 2^-51: γ = 2^25 + 2^-27 (just above)");
-    assert(_bj_cr_lorentz(&gv, 1, 1.0, 0, 1, &go) == 1 && go[0] == h25, "the same on the slow path alone");
+    assert(_bj_cr_lorentz(&gv, 0, 1, 1.0, 0, 0, &go) == 1 && go[0] == h25,
+      "β = 1 − 2^-51: γ = 2^25 + 2^-27 (just above)");
+    assert(_bj_cr_lorentz(&gv, 0, 1, 1.0, 0, 1, &go) == 1 && go[0] == h25, "the same on the slow path alone");
     gv[0] = 0.9999999999999998;
     var h51: f64 = 2251799813685248.5;
-    assert(_bj_cr_lorentz(&gv, 1, 1.0, 1, 0, &go) == 1 && go[0] == h51, "β = 1 − 2^-52: γ² = 2^51 + 1/2 (just above)");
+    assert(_bj_cr_lorentz(&gv, 0, 1, 1.0, 1, 0, &go) == 1 && go[0] == h51,
+      "β = 1 − 2^-52: γ² = 2^51 + 1/2 (just above)");
     gv[0] = 299792457.99999994;
     var hc: f64 = 2514841411518464.5;
-    assert(_bj_cr_lorentz(&gv, 1, c, 1, 0, &go) == 1 && go[0] == hc, "an ulp below c: γ² = 2^23·c + 1/2 (just above)");
+    assert(_bj_cr_lorentz(&gv, 0, 1, c, 1, 0, &go) == 1 && go[0] == hc,
+      "an ulp below c: γ² = 2^23·c + 1/2 (just above)");
 
     # ADR 0002 row 13 (M2 part 2b-4): relativity's products and quotients rounded once, against exact references.
     test_group("cyrius_round_once (ADR 0002 row 13)");
@@ -1107,16 +1111,16 @@ fn cyrius_tests(): i64 {
     tb[1] = 0.5;
     tb[2] = 0.0;
     var to: f64[1];
-    var tk1 = _bj_cr_lw(&tr, &tb, 1, 0, &to);
+    var tk1 = _bj_cr_lw(&tr, &tb, 0, 1, 0, &to);
     var tkv: f64 = to[0];
-    var tk2 = _bj_cr_lw(&tr, &tb, 1, 1, &to);
+    var tk2 = _bj_cr_lw(&tr, &tb, 0, 1, 1, &to);
     var tks: f64 = to[0];
     assert(tk1 == 0 && tk2 == 0 && tkv == 0.5 && tks == 0.5,
       "κ exactly on the midpoint ½ + 2^-54 (R along (1, 2, 2)): ½, ties to even, both paths");
     tb[0] = _bj_from_bits(0x3FDFFFFFFFFFFFFE);            # ½ − 2^-53
-    var tr1 = _bj_cr_lw(&tr, &tb, 0, 0, &to);
+    var tr1 = _bj_cr_lw(&tr, &tb, 0, 0, 0, &to);
     var trv: f64 = to[0];
-    var tr2 = _bj_cr_lw(&tr, &tb, 0, 1, &to);
+    var tr2 = _bj_cr_lw(&tr, &tb, 0, 0, 1, &to);
     var trs: f64 = to[0];
     assert(tr1 == 0 && tr2 == 0 && trv == 1.5 && trs == 1.5,
       "R_eff exactly on the midpoint 1.5 + 2^-53: 1.5, ties to even, both paths");
@@ -1134,11 +1138,11 @@ fn cyrius_tests(): i64 {
     tb[1] = 0.0;
     tb[2] = 0.0;
     var no: f64[4];
-    var nz1 = _bj_cr_lw(&tr, &tb, 2, 0, &no);
+    var nz1 = _bj_cr_lw(&tr, &tb, 0, 2, 0, &no);
     var nd0: f64 = no[1];
     var nd1: f64 = no[2];
     var nd2: f64 = no[3];
-    var nz2 = _bj_cr_lw(&tr, &tb, 2, 1, &no);
+    var nz2 = _bj_cr_lw(&tr, &tb, 0, 2, 1, &no);
     var ns0: f64 = no[1];
     var ns1: f64 = no[2];
     assert(nz1 == 0 && nz2 == 0 && _bj_bits(nd0) == 0x3C7999999999999A && nd1 == 0.8 && _bj_bits(nd2) == 0
@@ -1274,6 +1278,14 @@ fn cyrius_tests(): i64 {
     var bf: BjFieldVector = bj_lienard_wiechert_b(BjFieldVector_new(0.0, 0.8, 0.6), BjFieldVector_new(0.0, ndm, dm));
     assert(_bj_bits(bf.x) == 0x7E340E9B3E342EE6 && _bj_bits(bf.y) == 0 && _bj_bits(bf.z) == 0x8000000000000000,
       "n̂ × E = 1.4·DBL_MAX: B = 8.4e299 on the cross to 53 bits (Rust: ∞), the zeros' signs Rust's");
+    # M2 part 2d-3i: n̂ − β's exact path at the widest spread, where its candidate overflowed on R'ᵢ's scale.
+    var esp: BjFieldVector;
+    var big3: f64 = _bj_from_bits(0x7FE8000000000000);                 # 1.5·2^1023
+    var bsp: BjFieldVector = BjFieldVector_new(0.5, _bj_from_bits(0x000012688B70E62B), 0.0);
+    var tsp, vsp = bj_lienard_wiechert_e(e300, BjFieldVector_new(big3, _bj_from_bits(1), 0.0), bsp,
+      BjFieldVector_new(e300, 0.0, 0.0), &esp);
+    assert(is_ok(tsp) == 1 && _bj_bits(esp.x) == 0x0070AA3B9CE78408 && _bj_bits(esp.y) == 0xBCA9A2B7325C0389,
+      "R = (1.5·2^1023, 2^-1074, 0), β_y = 1e-310: E_y = −1.78e-16 (n̂ − β's y part was −4.9e-323; Rust: NaN)");
 
     if (v1 == 0 || v2 == 0 || v3 == 0 || v4 == 0 || v5 == 0 || v6 == 0 || v7 == 0) { println("."); }
     return 0;

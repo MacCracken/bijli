@@ -23,6 +23,13 @@
 # A bignum buffer's size in words (src/fmtf.cyr's layout: the limb count, then 32-bit limbs).
 var _BJ_G_WORDS = 82;
 
+# The exponent offset of part i in _bj_cr_lorentz's offset form, 0 without one (M2 part 2d-3i).
+#must_use
+fn _bj_g_off(vo, i): i64 {
+    if (vo == 0) { return 0; }
+    return load64(vo + 8 * i);
+}
+
 # 2^k, for −1022 ≤ k ≤ 1023.
 #must_use
 fn _bj_g_pow2(k): f64 {
@@ -221,8 +228,9 @@ fn _bj_g_sqrt_dd(dh: f64, dl: f64): (f64, f64) {
 }
 
 # The expansion of D = c² − Σvᵢ² into ex (eight f64), exact but for the components below 2^-450 (|vᵢ|² < 2^-900),
-# which are left out: their presence in *tiny (1). Returns its length (0 for D = 0).
-fn _bj_g_expansion(v: *f64, n, c: f64, ex: *f64, tiny): i64 {
+# which are left out: their presence in *tiny (1). An offset part (vo, _bj_cr_lorentz's) is one of them. Returns its
+# length (0 for D = 0).
+fn _bj_g_expansion(v: *f64, vo, n, c: f64, ex: *f64, tiny): i64 {
     var k = 0;
     store64(tiny, 0);
     var tiny_cut: f64 = _bj_g_pow2(0 - 450);
@@ -235,7 +243,9 @@ fn _bj_g_expansion(v: *f64, n, c: f64, ex: *f64, tiny): i64 {
         var x: f64 = v[i];
         var ax: f64 = f64_abs(x);
         if (ax == 0.0) { continue; }
-        if (ax < tiny_cut) {
+        var off = 0;
+        if (vo != 0) { off = load64(vo + 8 * i); }
+        if (ax < tiny_cut || off != 0) {
             store64(tiny, 1);
             continue;
         }
@@ -251,10 +261,10 @@ fn _bj_g_expansion(v: *f64, n, c: f64, ex: *f64, tiny): i64 {
 }
 
 # The fast path: 1 with the result in out[0], 0 when D ≤ 0 (|v| ≥ c), −1 when undecided (the slow path's).
-fn _bj_g_fast(v: *f64, n, c: f64, mode, out: *f64): i64 {
+fn _bj_g_fast(v: *f64, vo, n, c: f64, mode, out: *f64): i64 {
     var ex: f64[8];
     var tw[8];
-    var k = _bj_g_expansion(v, n, c, &ex, &tw);
+    var k = _bj_g_expansion(v, vo, n, c, &ex, &tw);
     if (k == 0) { return 0; }
     var top: f64 = ex[k - 1];
     if (top < 0.0) { return 0; }
@@ -373,8 +383,8 @@ fn _bj_g_even(a: f64, b: f64): f64 {
     return b;
 }
 
-# The slow path: 1 with the result in out[0], or 0 when D ≤ 0. Exact.
-fn _bj_g_slow(v: *f64, n, c: f64, mode, out: *f64): i64 {
+# The slow path: 1 with the result in out[0], or 0 when D ≤ 0. Exact, each part's exponent with its offset (vo).
+fn _bj_g_slow(v: *f64, vo, n, c: f64, mode, out: *f64): i64 {
     var me[16];
     _bj_g_split(c, &me);
     var mc = load64(&me);
@@ -384,7 +394,7 @@ fn _bj_g_slow(v: *f64, n, c: f64, mode, out: *f64): i64 {
         var x: f64 = v[i];
         if (x == 0.0) { continue; }
         _bj_g_split(x, &me);
-        var e2 = 2 * load64(&me + 8);
+        var e2 = 2 * (load64(&me + 8) + _bj_g_off(vo, i));
         if (e2 < kmin) { kmin = e2; }
     }
     var cu[656];
@@ -401,7 +411,7 @@ fn _bj_g_slow(v: *f64, n, c: f64, mode, out: *f64): i64 {
         if (x2 == 0.0) { continue; }
         _bj_g_split(x2, &me);
         var m2 = load64(&me);
-        var e22 = load64(&me + 8);
+        var e22 = load64(&me + 8) + _bj_g_off(vo, i2);
         _bj_bn_set(&w, m2);
         _bj_g_mul(&w, m2, &t);
         _bj_bn_shl(&w, 2 * e22 - kmin);
@@ -514,7 +524,7 @@ fn _bj_cr_lorentz_ok(v: *f64, n, c: f64): i64 {
     if (nz <= 1) { return 1; }                      # one component: |v| < c, tested exactly above
     var ex: f64[8];
     var tw[8];
-    var k = _bj_g_expansion(v, n, c, &ex, &tw);
+    var k = _bj_g_expansion(v, 0, n, c, &ex, &tw);
     if (k == 0) { return 0; }
     var top: f64 = ex[k - 1];
     if (top < 0.0) { return 0; }
@@ -522,16 +532,49 @@ fn _bj_cr_lorentz_ok(v: *f64, n, c: f64): i64 {
     var floor_d: f64 = _bj_g_pow2(0 - 790);
     if (top >= floor_d) { return 1; }
     var o: f64[1];
-    var s = _bj_g_slow(v, n, c, 1, &o);
+    var s = _bj_g_slow(v, 0, n, c, 1, &o);
+    return s;
+}
+
+# _bj_cr_lorentz's offset form (M2 part 2d-3i), c in range: an offset part is tiny, below c and every cut, so the
+# validity and γ = 1 tests skip it, the fast path's expansion leaves it out (it marks the expansion inexact) and the
+# slow path takes it exactly.
+fn _bj_g_offset(v: *f64, vo, n, c: f64, mode, slow, out: *f64): i64 {
+    var cut: f64 = c * 0.0000000037252902984619140625;
+    var small = 1;
+    for (var i = 0; i < n; i = i + 1) {
+        var x: f64 = v[i];
+        if (x != x) { return 0; }
+        if (load64(vo + 8 * i) != 0) { continue; }
+        var ax: f64 = f64_abs(x);
+        if (ax >= c) { return 0; }
+        if (ax >= cut) { small = 0; }
+    }
+    if (small == 1) {
+        out[0] = 1.0;
+        return 1;
+    }
+    if (slow == 0) {
+        var f = _bj_g_fast(v, vo, n, c, mode, out);
+        if (f >= 0) { return f; }
+    }
+    var s = _bj_g_slow(v, vo, n, c, mode, out);
     return s;
 }
 
 # The correctly rounded γ = c/√(c² − Σvᵢ²) (mode 0) or γ² = c²/(c² − Σvᵢ²) (mode 1) of the n components at v (1 ≤ n ≤ 3)
 # into out[0]: 1, or 0 when some vᵢ is NaN or c² − Σvᵢ² ≤ 0 exactly (|v| ≥ c), out untouched. c lies in [2^-30, 2^30]
 # (bijli passes the speed of light, or 1 for a β; any other c gives 0). |vᵢ| < 2^-28·c for every i gives exactly 1.
-# `slow` 1 skips the fast path (for cr_verify.py).
-fn _bj_cr_lorentz(v: *f64, n, c: f64, mode, slow, out: *f64): i64 {
+# `slow` 1 skips the fast path (for cr_verify.py). vo is 0, or the offset form's n exponents (M2 part 2d-3i, for
+# lienard_wiechert_fields' β = v/c on the 53-bit grid): vᵢ = v[i]·2^vo[i], an offset part's double normal and its
+# value in [2^-1110, 2^-1022). Such a part is below every cut, so only the slow path sees it: there 2E ≥ −2324 widens
+# K by 176 bits, D_u ≤ 2^2384 and the midpoint products below 2^2496, inside the 81 limbs (2,592 bits).
+fn _bj_cr_lorentz(v: *f64, vo, n, c: f64, mode, slow, out: *f64): i64 {
     if (_bj_g_c_ok(c) == 0) { return 0; }
+    if (vo != 0) {
+        var r = _bj_g_offset(v, vo, n, c, mode, slow, out);
+        return r;
+    }
     var cut: f64 = c * 0.0000000037252902984619140625;
     var small = 1;
     for (var i = 0; i < n; i = i + 1) {
@@ -556,9 +599,9 @@ fn _bj_cr_lorentz(v: *f64, n, c: f64, mode, slow, out: *f64): i64 {
             }
         }
         var f = 0 - 1;
-        if (nz == 1) { f = _bj_g_fast1(one, c, mode, out); } else { f = _bj_g_fast(v, n, c, mode, out); }
+        if (nz == 1) { f = _bj_g_fast1(one, c, mode, out); } else { f = _bj_g_fast(v, 0, n, c, mode, out); }
         if (f >= 0) { return f; }
     }
-    var s = _bj_g_slow(v, n, c, mode, out);
+    var s = _bj_g_slow(v, 0, n, c, mode, out);
     return s;
 }

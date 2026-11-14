@@ -466,6 +466,7 @@ pub fn emit() -> Module {
     emit_e_tail_edges(&mut m);
     emit_solver_edges(&mut m);
     emit_b_edges(&mut m);
+    emit_nb_spread_edges(&mut m);
     m
 }
 
@@ -927,6 +928,34 @@ fn emit_b_edges(m: &mut Module) {
     for &n in &ns {
         for &e in &es {
             m.row("relativity::lienard_wiechert_b", Class::A, &cat(&[v3(n), v3(e)]), &v3(lienard_wiechert_b(black_box(&n), &e)));
+        }
+    }
+}
+
+/// M2 part 2d-3i: lienard_wiechert_e where a part of R sits near 2^-1074 beside one near DBL_MAX and β's part there is
+/// subnormal or tiny (n̂ − β's exact path, whose candidate overflowed on R'ᵢ's scale for a βᵢ of Rᵢ's sign); β̇ along
+/// x carries (n̂ − β)_y into E_y's radiation term. After every older row.
+fn emit_nb_spread_edges(m: &mut Module) {
+    let tiny = pow2(-1074);
+    let rs = [
+        FieldVector::new(1.5 * pow2(1023), tiny, 0.0),
+        FieldVector::new(-1.25 * pow2(1022), -3.0 * tiny, 1.0),
+        FieldVector::new(1.0e308, 7.0 * tiny, -2.0e300),
+    ];
+    let betas = [
+        FieldVector::new(0.5, 1e-310, 0.0),
+        FieldVector::new(-0.3, -2.5e-320, 0.1),
+        FieldVector::new(0.9, 3.0e-308, 0.0),
+        FieldVector::new(0.0, 1e-315, 0.0),
+    ];
+    let bds = [FieldVector::new(1e300, 0.0, 0.0), FieldVector::new(0.0, 0.0, 1e300)];
+    for q in [1e300, f64::MAX] {
+        for &r in &rs {
+            for &bv in &betas {
+                for &bd in &bds {
+                    lw_rows(m, q, r, bv, bd, false);
+                }
+            }
         }
     }
 }

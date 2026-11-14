@@ -86,7 +86,7 @@ public fn bj_lorentz_factor(speed: f64): Result {
     var vv: f64[1];
     vv[0] = speed;
     var g: f64[1];
-    if (_bj_cr_lorentz(&vv, 1, BJ_SPEED_OF_LIGHT, 0, 0, &g) == 0) {
+    if (_bj_cr_lorentz(&vv, 0, 1, BJ_SPEED_OF_LIGHT, 0, 0, &g) == 0) {
         var t = _bj_err_reason(BJ_ERR_INVALID_PARAMETER);
         _bj_tx_cstr(t, "speed (");
         _bj_fmt_f64_display(t, speed);
@@ -792,7 +792,7 @@ public fn bj_lorentz_transform_fields(e: BjFieldVector, b: BjFieldVector, veloci
     var vp: f64[3];
     _bj_rel_parts(velocity, &vp);
     var g: f64[1];
-    if (_bj_cr_lorentz(&vp, 3, BJ_SPEED_OF_LIGHT, 0, 0, &g) == 0) {
+    if (_bj_cr_lorentz(&vp, 0, 3, BJ_SPEED_OF_LIGHT, 0, 0, &g) == 0) {
         return Err(_bj_err_invalid_parameter("boost velocity must be less than c"));
     }
     var gamma: f64 = g[0];
@@ -1062,7 +1062,7 @@ fn _bj_rel_effective_distance(r_vec: BjFieldVector, beta_vec: BjFieldVector): Re
     var rp: f64[3];
     _bj_rel_parts(r_vec, &rp);
     var o: f64[1];
-    var z = _bj_cr_lw(&rp, &bp, 0, 0, &o);
+    var z = _bj_cr_lw(&rp, &bp, 0, 0, 0, &o);
     var re: f64 = o[0];
     return Ok(re);
 }
@@ -1076,7 +1076,7 @@ fn _bj_rel_reff_ux(r_vec: BjFieldVector, beta_vec: BjFieldVector): (f64, i64) {
     _bj_rel_parts(r_vec, &rp);
     _bj_rel_parts(beta_vec, &bp);
     var o: f64[2];
-    var z = _bj_cr_lw(&rp, &bp, 3, 0, &o);
+    var z = _bj_cr_lw(&rp, &bp, 0, 3, 0, &o);
     var y: f64 = o[0];
     var kf: f64 = o[1];
     var ys, ye = _bj_k_ux_from(y);
@@ -1194,13 +1194,13 @@ public fn bj_lienard_wiechert_e(charge: f64, r_vec: BjFieldVector, beta_vec: BjF
     var bp: f64[3];
     _bj_rel_parts(beta_vec, &bp);
     var g2: f64[1];
-    if (_bj_cr_lorentz(&bp, 3, 1.0, 1, 0, &g2) == 0) { return Err(_bj_err_invalid_parameter("β must be < 1")); }
+    if (_bj_cr_lorentz(&bp, 0, 3, 1.0, 1, 0, &g2) == 0) { return Err(_bj_err_invalid_parameter("β must be < 1")); }
     var inv_r: f64 = 1.0 / r_mag;
     var n_hat: BjFieldVector = r_vec.scale(inv_r);
     var rp: f64[3];
     _bj_rel_parts(r_vec, &rp);
     var ko: f64[4];
-    if (_bj_cr_lw(&rp, &bp, 2, 0, &ko) == 1) {
+    if (_bj_cr_lw(&rp, &bp, 0, 2, 0, &ko) == 1) {
         return Err(_bj_err_division_by_zero("Liénard-Wiechert denominator (1 − n̂⋅β) is zero"));
     }
     var kappa: f64 = ko[0];
@@ -1326,7 +1326,7 @@ public fn bj_relativistic_larmor_power(charge: f64, velocity: BjFieldVector, acc
     var vp: f64[3];
     _bj_rel_parts(velocity, &vp);
     var gg: f64[1];
-    if (_bj_cr_lorentz(&vp, 3, BJ_SPEED_OF_LIGHT, 0, 0, &gg) == 0) {
+    if (_bj_cr_lorentz(&vp, 0, 3, BJ_SPEED_OF_LIGHT, 0, 0, &gg) == 0) {
         return Err(_bj_err_invalid_parameter("velocity must be less than c"));
     }
     var gamma: f64 = gg[0];

@@ -2795,3 +2795,66 @@ product's own row-18 guard (M1 part 5d-2) rounds each component once, which is t
 - **Result, every target** (x86_64 ELF, x86_64 PE, aarch64): **13 modules, 0 failing; 405,851 ok, 0 failed, 0
   measured, 0 pending, 47,476 accepted (ADR 01: 8,998; ADR 0002: 38,478)** over 453,327 rows; **all 276 digests
   equal**. One changed: `lienard_wiechert_b`.
+
+## 53. M2 part 2d-3i: the exact kernels' offset forms (2026-11-13)
+
+`lienard_wiechert_fields`' chain (2d-3j) hands E an R and a β that doubles cannot hold:
+- R = r_obs − r(t_r) to 53 bits can pass DBL_MAX, up to 2·DBL_MAX. That is one bit more exponent range than a double
+  has. Halving R would round an odd subnormal part beside it, so R/2 is not exact.
+- β = v/c on the 53-bit grid can fall below 2^-1022, to 2^-1103.
+
+Row 17's κ and n̂ − β (`_bj_cr_lw`) and row 30's γ² (`_bj_cr_lorentz`) must stay exact on those values. This bite gives
+both kernels an offset form; 2d-3j uses it.
+
+- **The offset form.**
+  - `_bj_cr_lw(r, b, xo, …)` takes Rᵢ = r[i]·2^xo[i] and βᵢ = b[i]·2^xo[3 + i]. An offset part's double is normal,
+    |Rᵢ| ≤ 2·DBL_MAX, and an offset βᵢ lies in [2^-1110, 2^-1022).
+  - `_bj_cr_lorentz(v, vo, …)` takes vᵢ = v[i]·2^vo[i] for such tiny parts.
+  - Every existing caller passes 0, the old form.
+- **`_bj_cr_lw`, how it works.**
+  - k is the largest ⌊log₂|Rᵢ|⌋, now up to 1023, so the largest |R'ᵢ| stays in [1, 4).
+  - The fast path takes R' = R·2^-k and β rounded (`_bj_g_scale`). An underflowing part's absolute error stays below
+    2^-1074, inside the section comment's 2^-1060.
+  - The exact checks take each part's significand, and its exponent with its offset: `_bj_e_lw_parts`, `_bj_e_nb_s`,
+    `_bj_e_nb_sign`, `_bj_e_nb_cand`.
+  - The bignums widen: R' down to 2^-2097 and β down to 2^-1162 in their last bit take P'² about 180 bits higher, below
+    2^6,740 against the buffers' 6,880 bits.
+  - A zero Rᵢ's n̂ᵢ − βᵢ is now −RN(βᵢ) for a nonzero βᵢ, so an offset βᵢ that rounds to 0 keeps −βᵢ's sign. For
+    doubles this is Rust's ±0 − βᵢ.
+- **`_bj_cr_lorentz`.** An offset part is below every cut (2^-28·c, 2^-450), so only the slow path sees it. There 2E
+  reaches −2324, D_u stays at most 2^2384 and the midpoint products below 2^2496, inside the 81 limbs (2,592 bits).
+- **A port defect found on the way** (2d-1's n̂ − β, on ordinary doubles):
+  - **Where.** R'ᵢ near 2^-2096 beside R near DBL_MAX, with a subnormal βᵢ of Rᵢ's sign.
+  - **What went wrong.** The fast ends straddle many subnormal ulps there, and the exact path's candidate puts |βᵢ| on
+    R'ᵢ's scale, |βᵢ|·2^2096, which overflowed. The candidate came out 0, and the ten-step settle loop stopped ten ulps
+    above it.
+  - **Example.** R = (1.5·2^1023, 2^-1074, 0) with β = (0.5, 10^-310, 0): n̂ − β's y part came out −4.9·10^-323 for
+    −10^-310. With β̇ = (10^300, 0, 0), E_y was −8.7·10^-29 for −1.78·10^-16.
+  - **The fix.** When |βᵢ| > 2^59·|R'ᵢ| nothing cancels, so RN(|βᵢ|) − RN(|n̂ᵢ|) is within an ulp of |dᵢ| and is the
+    candidate.
+  - **How it was found.** The offset families caught it first: they reach the same spread through an offset R.
+    `cr_verify.py`'s `nb_families` now carries the doubles' case as a regression.
+- **Verification** (`cr_verify.py`, exact references from Python's Fraction):
+  - `lwo_reff`, `lwo_kappa`, `lwo_nb` (each with its `*_slow`) and `lwo_ux`, on 5,000 cases: R with one to three parts
+    past DBL_MAX beside odd subnormals; `lw_cases`' pairs (their knife edges and ties) scaled past DBL_MAX; ordinary
+    pairs in the offset form; β parts on the 53-bit grid down to 2^-1110; the widest spreads.
+  - `gammao`, `gammao2` and their `*_slow`, on 10,000 cases (c = 1 and the speed of light).
+  - The whole exact suite: **986,385 calls on x86_64 and aarch64, all equal to the exact value**.
+- **Rows** (`m_relativity.rs`'s `emit_nb_spread_edges`, after every older row): 48 more E rows over three spread R,
+  four β (subnormal and tiny parts of R's sign or not, and a normal control), two β̇ and two charges.
+  `validate.py`'s transcription agreed with every row.
+- **Mappings**: `relativity.adr.tsv` maps all 48: row 17 24 (n̂ − β) and row 18 24 (the tail). No older row changed.
+  All pass. The 2d-3h sources fail 20 of them (errors past 2^57 ulps).
+- **Tests**: tests/relativity.tcyr gains 1 assertion, the E_y case above (Rust: NaN).
+- **Benchmarks**: (a focused interleaved A/B against HEAD over every relativity row, five repetitions a
+  round, three rounds, load 1.5–2.1; medians):
+  - `lienard_wiechert_e` 705 → 704 ns, `lorentz_factor` 145 → 146 and `four_vector_boost` 165 → 167;
+  - `lorentz_transform_x` 188 → 192 and `lienard_wiechert_scalar_potential` 290 → 300, which run one more argument
+    and one test, likely the kernels' code layout;
+  - `lienard_wiechert_fields_orbit_b099` 5,922 → 5,974 and the solver 616 → 610.
+
+  A first cut, testing the offsets part by part in `_bj_cr_lorentz`'s loop and copying β in mode 2, cost E 14 ns.
+  The offset form now has its own function (`_bj_g_offset`), entered on one test. The record stands.
+- **Result, every target** (x86_64 ELF, x86_64 PE, aarch64): **13 modules, 0 failing; 405,851 ok, 0 failed, 0
+  measured, 0 pending, 47,524 accepted (ADR 01: 8,998; ADR 0002: 38,526)** over 453,375 rows; **all 276 digests
+  equal**. One changed: `lienard_wiechert_e`.

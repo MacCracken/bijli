@@ -97,7 +97,7 @@ fn _call(fp, fl, w): i64 {
         var gslow = 0;
         if (fl > 7) { gslow = 1; }
         var go: f64[1];
-        if (_bj_cr_lorentz(w + 16, gn, gc, gmode, gslow, &go) == 1) { r = go[0]; } else { return 0 - 1; }
+        if (_bj_cr_lorentz(w + 16, 0, gn, gc, gmode, gslow, &go) == 1) { r = go[0]; } else { return 0 - 1; }
     }
     elif (_is(fp, fl, "gamma_ok") == 1) {
         # gamma_ok n c v1 … vn: the validity test alone, 1 or 0 as a word
@@ -132,14 +132,14 @@ fn _call(fp, fl, w): i64 {
         var lslow = 0;
         if (fl > 8) { lslow = 1; }
         var lo: f64[1];
-        if (_bj_cr_lw(w, w + 24, lmode, lslow, &lo) == 1) { return 0 - 1; }
+        if (_bj_cr_lw(w, w + 24, 0, lmode, lslow, &lo) == 1) { return 0 - 1; }
         r = lo[0];
     }
     elif (_is(fp, fl, "lw_reff_ux") == 1) {
         # lw_reff_ux r1 r2 r3 b1 b2 b3 part: R_eff to 53 bits with an unbounded exponent (_bj_cr_lw's mode 3, M2 part
         # 2d-3e): its significand in [1, 2) (part 0) or its exponent (part 1)
         var xo: f64[2];
-        var xz = _bj_cr_lw(w, w + 24, 3, 0, &xo);
+        var xz = _bj_cr_lw(w, w + 24, 0, 3, 0, &xo);
         var xy: f64 = xo[0];
         var xk: f64 = xo[1];
         var xs, xe = _bj_k_ux_from(xy);
@@ -153,8 +153,50 @@ fn _call(fp, fl, w): i64 {
         var nslow = 0;
         if (fl > 5) { nslow = 1; }
         var no: f64[4];
-        if (_bj_cr_lw(w + 8, w + 32, 2, nslow, &no) == 1) { return 0 - 1; }
+        if (_bj_cr_lw(w + 8, w + 32, 0, 2, nslow, &no) == 1) { return 0 - 1; }
         r = no[1 + ni];
+    }
+    elif (_is(fp, fl, "lwo_reff") == 1 || _is(fp, fl, "lwo_reff_slow") == 1 || _is(fp, fl, "lwo_kappa") == 1
+      || _is(fp, fl, "lwo_kappa_slow") == 1 || _is(fp, fl, "lwo_nb") == 1 || _is(fp, fl, "lwo_nb_slow") == 1
+      || _is(fp, fl, "lwo_ux") == 1) {
+        # lwo_* i r1 r2 r3 b1 b2 b3 o1 … o6 (M2 part 2d-3i): _bj_cr_lw on its offset form, Rᵢ = rᵢ·2^oᵢ and
+        # βᵢ = bᵢ·2^o₃₊ᵢ: R_eff (lwo_reff), κ (lwo_kappa) or component i of n̂ − β (lwo_nb), the exact checks alone
+        # for *_slow, −1 (all ones) when κ < 10^-30; lwo_ux R_eff to 53 bits, its significand (i = 0) or exponent (1)
+        var oi = load64(w);
+        var omode = 0;
+        if (load8(fp + 4) == 107) { omode = 1; }
+        if (load8(fp + 4) == 110) { omode = 2; }
+        if (load8(fp + 4) == 117) { omode = 3; }
+        var oslow = 0;
+        if (load8(fp + fl - 1) == 119) { oslow = 1; }
+        var oo: f64[4];
+        var oz = _bj_cr_lw(w + 8, w + 32, w + 56, omode, oslow, &oo);
+        if (omode == 3) {
+            var oy: f64 = oo[0];
+            var ok: f64 = oo[1];
+            var os, oe = _bj_k_ux_from(oy);
+            if (oi == 1) { return oe + f64_to(ok); }
+            r = os;
+        } elif (oz == 1) {
+            return 0 - 1;
+        } elif (omode == 2) {
+            r = oo[1 + oi];
+        } else {
+            r = oo[0];
+        }
+    }
+    elif (_is(fp, fl, "gammao") == 1 || _is(fp, fl, "gammao_slow") == 1 || _is(fp, fl, "gammao2") == 1
+      || _is(fp, fl, "gammao2_slow") == 1) {
+        # gammao n c v1 v2 v3 o1 o2 o3 (M2 part 2d-3i): _bj_cr_lorentz on its offset form vᵢ = vᵢ·2^oᵢ, γ (gammao) or γ²
+        # (gammao2), the slow path alone for *_slow; −1 (all ones) when |v| ≥ c
+        var gon = load64(w);
+        var goc: f64 = _wf(w, 1);
+        var gom = 0;
+        if (fl == 7 || fl == 12) { gom = 1; }
+        var gos = 0;
+        if (fl > 7) { gos = 1; }
+        var gg: f64[1];
+        if (_bj_cr_lorentz(w + 16, w + 40, gon, goc, gom, gos, &gg) == 1) { r = gg[0]; } else { return 0 - 1; }
     }
     elif (_is(fp, fl, "vx_sqrt") == 1 || _is(fp, fl, "vx_sqrt_e") == 1) {
         # vx_sqrt x y mode: √(x/y) (mode 0) or √(x·y) (mode 1) to 53 bits with an unbounded exponent

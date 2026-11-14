@@ -372,6 +372,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
   and B = n̂ × E/c is representable (n̂ × E = 1.4·DBL_MAX: B = 8.4·10^299; E = DBL_MAX·(1, 1, 1) gave ±∞ components
   for about 10^300), and rounded a subnormal cross twice. A cross component off the normal range now runs to 53 bits
   with an unbounded exponent and B rounds once; the guard costs nothing measurable (`port-parity.md` §52).
+- **relativity** (ADR 0002 row 17 amended, M2 part 2d-3i): `lienard_wiechert_e`'s n̂ − β missed its correctly
+  rounded value where a part of R near 2^-1074 sat beside one near DBL_MAX and β's part there was subnormal of the
+  same sign. The exact path's candidate overflowed: for R = (1.5·2^1023, 2^-1074, 0) and β = (0.5, 10^-310, 0), n̂ − β's
+  y part came out −4.9·10^-323 for −10^-310, and E_y −8.7·10^-29 for −1.78·10^-16 with β̇ = (10^300, 0, 0). The kernels
+  behind κ, n̂ − β and γ² now also take an R past DBL_MAX and a β below 2^-1022 exactly, for `lienard_wiechert_fields`
+  (part 2d-3j). Costs: `lienard_wiechert_scalar_potential` 290 → 300 ns and `lorentz_transform_x` 188 → 192
+  (`port-parity.md` §53).
 - **relativity** (ADR 0002 row 13 amended, M2 part 2b-4): `retarded_scalar_potential`, `retarded_vector_potential`,
   `larmor_power` and `EmTensor::dual` rounded two to five times, and overflowed where the value is representable
   (Larmor with q² past DBL_MAX, the dual of B past DBL_MAX/c: ∞ each); they are now correctly rounded for finite

@@ -640,7 +640,7 @@ fn _bj_e_bn_mul(d, a, b) {
 
 # The exact parts as bignums (the section comment), for R' = R·2^-k: s := S_int and pa := |P|_int, with
 # S' = S_int·2^u[0] and P' = sgn·|P|_int·2^u[1]; returns sgn (−1, 0 or 1). ng, w and t are scratch bignums.
-fn _bj_e_lw_parts(r: *f64, b: *f64, k, s, pa, ng, w, t, u: *i64): i64 {
+fn _bj_e_lw_parts(r: *f64, b: *f64, xo, k, s, pa, ng, w, t, u: *i64): i64 {
     var me[16];
     var rm: i64[3];
     var re: i64[3];
@@ -654,7 +654,7 @@ fn _bj_e_lw_parts(r: *f64, b: *f64, k, s, pa, ng, w, t, u: *i64): i64 {
         if (x == 0.0) { continue; }
         _bj_g_split(x, &me);
         rm[i] = load64(&me);
-        re[i] = load64(&me + 8) - k;
+        re[i] = load64(&me + 8) - k + _bj_e_off(xo, i);
         if (have == 0 || 2 * re[i] < us) {
             us = 2 * re[i];
             have = 1;
@@ -666,7 +666,7 @@ fn _bj_e_lw_parts(r: *f64, b: *f64, k, s, pa, ng, w, t, u: *i64): i64 {
         if (y == 0.0) { continue; }
         _bj_g_split(y, &me);
         bm[i2] = load64(&me);
-        be[i2] = load64(&me + 8);
+        be[i2] = load64(&me + 8) + _bj_e_off(xo, 3 + i2);
     }
     store64(s, 0);
     for (var i3 = 0; i3 < 3; i3 = i3 + 1) {
@@ -711,7 +711,7 @@ fn _bj_e_lw_parts(r: *f64, b: *f64, k, s, pa, ng, w, t, u: *i64): i64 {
 # The exact sign (−1, 0 or 1), for R' = R·2^-k and μ = mm·2^f > 0 (the section comment): of R_eff' − μ (mode 0), of
 # κ − μ (mode 1, f < 0), or of κ − 10^-30 (mode 2; mm and f unused).
 #must_use
-fn _bj_e_lw_sign(r: *f64, b: *f64, k, mode, mm, f): i64 {
+fn _bj_e_lw_sign(r: *f64, b: *f64, xo, k, mode, mm, f): i64 {
     var s[1728];
     var pa[1728];
     var x[1728];
@@ -719,7 +719,7 @@ fn _bj_e_lw_sign(r: *f64, b: *f64, k, mode, mm, f): i64 {
     var w[1728];
     var t[1728];
     var u: i64[2];
-    var sp = _bj_e_lw_parts(r, b, k, &s, &pa, &x, &w, &t, &u);
+    var sp = _bj_e_lw_parts(r, b, xo, k, &s, &pa, &x, &w, &t, &u);
     var us = u[0];
     var up = u[1];
     if (mode == 0) {
@@ -781,11 +781,11 @@ fn _bj_e_lw_sign(r: *f64, b: *f64, k, mode, mm, f): i64 {
 
 # RN of R_eff' (mode 0) or κ (mode 1) from a candidate y within an ulp of it (the section comment's exact check).
 #must_use
-fn _bj_e_lw_settle(r: *f64, b: *f64, k, mode, y: f64): f64 {
+fn _bj_e_lw_settle(r: *f64, b: *f64, xo, k, mode, y: f64): f64 {
     var me[16];
     var up: f64 = _bj_g_step(y, 1);
     _bj_g_mid(y, up, &me);
-    var su = _bj_e_lw_sign(r, b, k, mode, load64(&me), load64(&me + 8));
+    var su = _bj_e_lw_sign(r, b, xo, k, mode, load64(&me), load64(&me + 8));
     if (su > 0) { return up; }
     if (su == 0) {
         var eu: f64 = _bj_g_even(y, up);
@@ -793,7 +793,7 @@ fn _bj_e_lw_settle(r: *f64, b: *f64, k, mode, y: f64): f64 {
     }
     var dn: f64 = _bj_g_step(y, 0 - 1);
     _bj_g_mid(dn, y, &me);
-    var sd = _bj_e_lw_sign(r, b, k, mode, load64(&me), load64(&me + 8));
+    var sd = _bj_e_lw_sign(r, b, xo, k, mode, load64(&me), load64(&me + 8));
     if (sd < 0) { return dn; }
     if (sd == 0) {
         var ed: f64 = _bj_g_even(dn, y);
@@ -894,7 +894,7 @@ fn _bj_e_nb_fast(x: f64, qh: f64, ql: f64, y: f64): (f64, f64) {
 
 # Bignum scratch for dᵢ's exact path: S' and |R'ᵢ| and |βᵢ| as integers (the parts at r and b, R scaled by 2^-k).
 # s := S_int with S' = S_int·2^u[0]; returns 0. w and t are scratch.
-fn _bj_e_nb_s(r: *f64, k, s, w, t, u: *i64) {
+fn _bj_e_nb_s(r: *f64, xo, k, s, w, t, u: *i64) {
     var me[16];
     var us = 0;
     var have = 0;
@@ -903,7 +903,7 @@ fn _bj_e_nb_s(r: *f64, k, s, w, t, u: *i64) {
         var x: f64 = r[j];
         if (x == 0.0) { continue; }
         _bj_g_split(x, &me);
-        var e2 = 2 * (load64(&me + 8) - k);
+        var e2 = 2 * (load64(&me + 8) - k + _bj_e_off(xo, j));
         if (have == 0 || e2 < us) {
             us = e2;
             have = 1;
@@ -916,7 +916,7 @@ fn _bj_e_nb_s(r: *f64, k, s, w, t, u: *i64) {
         var m = load64(&me);
         _bj_bn_set(w, m);
         _bj_g_mul(w, m, t);
-        _bj_bn_shl(w, 2 * (load64(&me + 8) - k) - us);
+        _bj_bn_shl(w, 2 * (load64(&me + 8) - k + _bj_e_off(xo, j2)) - us);
         _bj_g_add_to(s, w);
     }
     u[0] = us;
@@ -926,20 +926,20 @@ fn _bj_e_nb_s(r: *f64, k, s, w, t, u: *i64) {
 # The exact sign (−1, 0 or 1) of sg·dᵢ − μ, μ = mm·2^f ≥ 0 (mm = 0 for μ = 0), dᵢ = R'ᵢ/√S' − βᵢ with R'ᵢ ≠ 0 (the
 # section comment).
 #must_use
-fn _bj_e_nb_sign(r: *f64, b: *f64, k, i, sg, mm, f): i64 {
+fn _bj_e_nb_sign(r: *f64, b: *f64, xo, k, i, sg, mm, f): i64 {
     var s[1728];
     var x[1728];
     var y[1728];
     var w[1728];
     var t[1728];
     var u: i64[1];
-    _bj_e_nb_s(r, k, &s, &w, &t, &u);
+    _bj_e_nb_s(r, xo, k, &s, &w, &t, &u);
     var us = u[0];
     var me[16];
     var ri: f64 = r[i];
     _bj_g_split(ri, &me);
     var rm = load64(&me);
-    var re = load64(&me + 8) - k;
+    var re = load64(&me + 8) - k + _bj_e_off(xo, i);
     var sr = sg;                                    # the sign of R̃ = sg·R'ᵢ
     if (ri < 0.0) { sr = 0 - sg; }
     var bi: f64 = b[i];
@@ -949,7 +949,7 @@ fn _bj_e_nb_sign(r: *f64, b: *f64, k, i, sg, mm, f): i64 {
     if (bi != 0.0) {
         _bj_g_split(bi, &me);
         bm = load64(&me);
-        be = load64(&me + 8);
+        be = load64(&me + 8) + _bj_e_off(xo, 3 + i);
         if (mm == 0 || be < ub) { ub = be; }
     }
     store64(&x, 0);
@@ -988,14 +988,16 @@ fn _bj_e_nb_sign(r: *f64, b: *f64, k, i, sg, mm, f): i64 {
 # adjacent (the section comment). Signs and magnitudes come from R itself, scaled through its exponent: R'ᵢ's double
 # may have underflowed.
 #must_use
-fn _bj_e_nb_cand(r: *f64, b: *f64, k, i, qh: f64, sg: *i64): f64 {
+fn _bj_e_nb_cand(r: *f64, b: *f64, xo, k, i, qh: f64, sg: *i64): f64 {
     var y: f64 = b[i];
     var ri: f64 = r[i];
-    var ay: f64 = f64_abs(y);
+    var yb: f64 = f64_abs(y);
+    var bo = _bj_e_off(xo, 3 + i);
+    var ay: f64 = _bj_g_scale(yb, bo);              # |βᵢ| (rounded, for the estimate)
     var ar: f64 = f64_abs(ri);
     var rs, rex = _bj_e_frexp(ar);                  # |R'ᵢ| = rs·2^(rex − k), rs in [1, 2)
     var rsv: f64 = rs;
-    var ex = rex - k;
+    var ex = rex - k + _bj_e_off(xo, i);
     sg[0] = 1;
     if (ri < 0.0) { sg[0] = 0 - 1; }
     if (y == 0.0 || (ri < 0.0) != (y < 0.0)) {
@@ -1004,20 +1006,30 @@ fn _bj_e_nb_cand(r: *f64, b: *f64, k, i, qh: f64, sg: *i64): f64 {
         var c0: f64 = qn + ay;
         return c0;
     }
+    var yn: f64 = _bj_g_scale(yb, bo - ex);         # |βᵢ| on R'ᵢ's scale
+    if (!(yn < 1152921504606846976.0)) {
+        # |βᵢ| above 2^59·|R'ᵢ| ≥ 2^59·|n̂ᵢ| (√S' ≥ 1): nothing cancels, so |dᵢ| = |βᵢ| − |n̂ᵢ| lies within an ulp of
+        # RN(|βᵢ|) − RN(|n̂ᵢ|), of −βᵢ's sign. (On R'ᵢ's scale |βᵢ| would overflow: R'ᵢ near 2^-2097, M2 part 2d-3i.)
+        var q2: f64 = rsv / qh;
+        var qn2: f64 = _bj_g_scale(q2, ex);
+        sg[0] = 0 - sg[0];
+        var c2: f64 = ay - qn2;
+        return c2;
+    }
     var s[1728];
     var nn[1728];
     var w[1728];
     var t[1728];
     var u: i64[1];
-    _bj_e_nb_s(r, k, &s, &w, &t, &u);
+    _bj_e_nb_s(r, xo, k, &s, &w, &t, &u);
     var us = u[0];
     var me[16];
     _bj_g_split(ri, &me);
     var rm = load64(&me);
-    var re = load64(&me + 8) - k;
+    var re = load64(&me + 8) - k + _bj_e_off(xo, i);
     _bj_g_split(y, &me);
     var bm = load64(&me);
-    var be = load64(&me + 8);
+    var be = load64(&me + 8) + bo;
     _bj_bn_set(&nn, rm);                            # R'ᵢ², 2^(2re)
     _bj_g_mul(&nn, rm, &t);
     _bj_bn_set(&w, bm);                             # βᵢ²S', 2^(2be + us)
@@ -1043,7 +1055,6 @@ fn _bj_e_nb_cand(r: *f64, b: *f64, k, i, qh: f64, sg: *i64): f64 {
     var sh: i64[1];
     var top = _bj_e_par_top(&nn, &w, &sh);
     var ft: f64 = f64_from(top);
-    var yn: f64 = _bj_g_scale(ay, 0 - ex);          # |βᵢ| on R'ᵢ's scale
     var den: f64 = qh * (rsv + (yn * qh));          # (√S'(|R'ᵢ| + |βᵢ|√S'))·2^-ex
     var c1: f64 = ft / den;
     var res: f64 = _bj_g_scale(c1, sh[0] + un - ex);
@@ -1052,7 +1063,7 @@ fn _bj_e_nb_cand(r: *f64, b: *f64, k, i, qh: f64, sg: *i64): f64 {
 
 # RN(dᵢ) by the exact path, from the fast ends z₁, z₂ (the section comment).
 #must_use
-fn _bj_e_nb_exact(r: *f64, b: *f64, k, i, x: f64, qh: f64, z1: f64, z2: f64): f64 {
+fn _bj_e_nb_exact(r: *f64, b: *f64, xo, k, i, x: f64, qh: f64, z1: f64, z2: f64): f64 {
     var sg: i64[1];
     sg[0] = 1;
     var y: f64 = 0.0;
@@ -1067,14 +1078,14 @@ fn _bj_e_nb_exact(r: *f64, b: *f64, k, i, x: f64, qh: f64, z1: f64, z2: f64): f6
         if (z1 < 0.0) { sg[0] = 0 - 1; }
         y = f64_abs(z1);
     } else {
-        y = _bj_e_nb_cand(r, b, k, i, qh, &sg);
+        y = _bj_e_nb_cand(r, b, xo, k, i, qh, &sg);
     }
     var g = sg[0];
     var me[16];
     for (var it = 0; it < 10; it = it + 1) {
         var up: f64 = _bj_g_step(y, 1);
         _bj_g_mid(y, up, &me);
-        var su = _bj_e_nb_sign(r, b, k, i, g, load64(&me), load64(&me + 8));
+        var su = _bj_e_nb_sign(r, b, xo, k, i, g, load64(&me), load64(&me + 8));
         if (su > 0) {
             y = up;
             continue;
@@ -1086,7 +1097,7 @@ fn _bj_e_nb_exact(r: *f64, b: *f64, k, i, x: f64, qh: f64, z1: f64, z2: f64): f6
         if (y == 0.0) { break; }
         var dn: f64 = _bj_g_step(y, 0 - 1);
         _bj_g_mid(dn, y, &me);
-        var sd = _bj_e_nb_sign(r, b, k, i, g, load64(&me), load64(&me + 8));
+        var sd = _bj_e_nb_sign(r, b, xo, k, i, g, load64(&me), load64(&me + 8));
         if (sd < 0) {
             y = dn;
             continue;
@@ -1098,14 +1109,46 @@ fn _bj_e_nb_exact(r: *f64, b: *f64, k, i, x: f64, qh: f64, z1: f64, z2: f64): f6
     return y;
 }
 
+# The exponent offset of part i (R's 0 to 2, β's 3 to 5) in _bj_cr_lw's offset form, 0 without one (M2 part 2d-3i).
+#must_use
+fn _bj_e_off(xo, i): i64 {
+    if (xo == 0) { return 0; }
+    return load64(xo + 8 * i);
+}
+
+# The offset form's k: the largest ⌊log₂|Rᵢ|⌋ (each part's significand bits and exponent with its offset), at most
+# 1023, so the largest |R'ᵢ| lies in [1, 4) for |Rᵢ| ≤ 2·DBL_MAX. R ≠ 0.
+#must_use
+fn _bj_e_lw_k(r: *f64, xo): i64 {
+    var me[16];
+    var k = 0;
+    var have = 0;
+    for (var i = 0; i < 3; i = i + 1) {
+        var x: f64 = r[i];
+        if (x == 0.0) { continue; }
+        _bj_g_split(x, &me);
+        var e = load64(&me + 8) + _bj_bitlen(load64(&me)) - 1 + load64(xo + 8 * i);
+        if (have == 0 || e > k) {
+            k = e;
+            have = 1;
+        }
+    }
+    if (k > 1023) { k = 1023; }
+    return k;
+}
+
 # The Liénard–Wiechert R_eff (mode 0) or κ (mode 1), the section comment's, for a finite R ≠ 0 at r and |β| < 1
 # exactly at b. Mode 0: out[0] := RN(|R| − R⋅β), returning 0. Mode 1: 1 when κ < 10^-30 exactly; otherwise 0, with
 # out[0] := RN(1 − R⋅β/|R|). Mode 2: as mode 1, and out[1..3] := RN(R'ᵢ/|R'| − βᵢ), n̂ − β (M2 part 2d-1). Mode 3:
 # R_eff to 53 bits with an unbounded exponent (M2 part 2d-3e: an R_eff past DBL_MAX, for the potentials): out[0] := the
 # rounded R_eff' = R_eff·2^-k (normal) and out[1] := k, so R_eff = out[0]·2^k. slow = 1 skips the rounding tests, so the
-# exact checks always run (cr_verify.py's lw_*_slow).
+# exact checks always run (cr_verify.py's lw_*_slow). xo is 0, or the offset form's six exponents (M2 part 2d-3i, for
+# lienard_wiechert_fields' chain): Rᵢ = r[i]·2^xo[i] and βᵢ = b[i]·2^xo[3 + i], each offset part's double normal, with
+# |Rᵢ| ≤ 2·DBL_MAX (a difference of two doubles) and an offset βᵢ in [2^-1110, 2^-1022) (a quotient v/c on the 53-bit
+# grid). The fast path takes R' and β rounded (an underflowing part's absolute error below 2^-1074, inside the section
+# comment's 2^-1060), and the exact checks take each part's significand and exponent with its offset.
 #must_use
-fn _bj_cr_lw(r: *f64, b: *f64, mode_in, slow, out: *f64): i64 {
+fn _bj_cr_lw(r: *f64, b: *f64, xo, mode_in, slow, out: *f64): i64 {
     var mode = mode_in;
     if (mode_in == 3) { mode = 0; }
     var w0 = _bj_bits(r[0]);
@@ -1129,6 +1172,15 @@ fn _bj_cr_lw(r: *f64, b: *f64, mode_in, slow, out: *f64): i64 {
     var y0: f64 = b[0];
     var y1: f64 = b[1];
     var y2: f64 = b[2];
+    if (xo != 0) {
+        k = _bj_e_lw_k(r, xo);
+        x0 = _bj_g_scale(rr0, load64(xo) - k);
+        x1 = _bj_g_scale(rr1, load64(xo + 8) - k);
+        x2 = _bj_g_scale(rr2, load64(xo + 16) - k);
+        y0 = _bj_g_scale(y0, load64(xo + 24));
+        y1 = _bj_g_scale(y1, load64(xo + 32));
+        y2 = _bj_g_scale(y2, load64(xo + 40));
+    }
     var cx0: f64 = sp * x0;
     var x0h: f64 = cx0 - (cx0 - x0);
     var x0l: f64 = x0 - x0h;
@@ -1268,11 +1320,11 @@ fn _bj_cr_lw(r: *f64, b: *f64, mode_in, slow, out: *f64): i64 {
         var band = slow;
         if (zz >= lo_t && y <= hi_t) { band = 1; }
         if (band == 1) {
-            if (_bj_e_lw_sign(r, b, k, 2, 0, 0) < 0) { return 1; }
+            if (_bj_e_lw_sign(r, b, xo, k, 2, 0, 0) < 0) { return 1; }
         }
         if (band == 0 && zz < lo_t) { return 1; }
     }
-    if (slow == 1 || y != zz) { y = _bj_e_lw_settle(r, b, k, km, y); }
+    if (slow == 1 || y != zz) { y = _bj_e_lw_settle(r, b, xo, k, km, y); }
     if (mode_in == 3) {
         out[0] = y;                                 # R_eff' (normal), R_eff = y·2^k
         out[1] = f64_from(k);
@@ -1288,9 +1340,11 @@ fn _bj_cr_lw(r: *f64, b: *f64, mode_in, slow, out: *f64): i64 {
         for (var j = 0; j < 3; j = j + 1) {
             var xj: f64 = xv[j];
             var bj: f64 = b[j];
+            if (xo != 0) { bj = _bj_g_scale(bj, load64(xo + 24 + 8 * j)); }     # βᵢ rounded once
             var rj: f64 = r[j];
             if (rj == 0.0) {
                 var dz: f64 = rj - bj;              # Rust's ±0 − βᵢ, exact
+                if (b[j] != 0.0) { dz = -bj; }      # −RN(βᵢ): an offset βᵢ that rounds to 0 keeps −βᵢ's sign
                 out[1 + j] = dz;
                 continue;
             }
@@ -1298,7 +1352,7 @@ fn _bj_cr_lw(r: *f64, b: *f64, mode_in, slow, out: *f64): i64 {
             var zl: f64 = z1;
             var zh: f64 = z2;
             var dj: f64 = zl;
-            if (slow == 1 || zl != zh || zl == 0.0) { dj = _bj_e_nb_exact(r, b, k, j, xj, q_h, zl, zh); }
+            if (slow == 1 || zl != zh || zl == 0.0) { dj = _bj_e_nb_exact(r, b, xo, k, j, xj, q_h, zl, zh); }
             out[1 + j] = dj;
         }
     }
