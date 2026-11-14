@@ -49,7 +49,7 @@ port's harness reads the same files. This README records what is specific to bij
 
 | Module | Milestone | Golden rows | Golden emitter | Generated Cyrius |
 |---|---|---|---|---|
-| `beam` | M3 (part 1c-1; its JSON, part 1c-2, in `json`; 2a-2, 2a-3, 2b: the resonators', determinant's and round-once edge grids) | 42,288 | `src/m_beam.rs` | — |
+| `beam` | M3 (part 1c-1; its JSON, part 1c-2, in `json`; 2a-2, 2a-3, 2b, 2c-2: the resonators', determinant's, round-once and q_out edge grids) | 43,074 | `src/m_beam.rs` | — |
 | `charge` | M1 (parts 3d, 5d-1 to 5d-3) | 12,769 | `src/m_charge.rs` (field.rs's grids) | — |
 | `circuit` | M2 (parts 1c, 2c-1, 2c-5, 2d-3a, 2d-3b) | 69,273 (+ 1 corrected) | `src/m_circuit.rs` | — |
 | `complex` | M1 (+ 5c-2's edge grid) | 31,677 (+ 8 corrected) | `src/m_complex.rs` | — |
@@ -91,7 +91,11 @@ Fractions, and grids.rs's `knife_edge2` and `knife_band2` put the corpus's rows 
 next to the double 1e-30 flips such a test. Its sumsq and sumsq_exact families (M3 part 2c-1) check its exact sign of
 (a·b + c)² + (e·f)² − 10^p (the band on the rounded values then the exact test, and the exact test alone) against
 Fractions: sums within ulps of 10^p, X cancelling to its product's rounding error, subnormal partners, Pythagorean
-ties and their neighbours, Mie- and propagate-shaped operands, and far ones. Its cm and cm_slow families (M2 part 2c-2) check src/crmath_edge.cyr's
+ties and their neighbours, Mie- and propagate-shaped operands, and far ones. Its abcd and abcd_slow families (M3 part 2c-2) check
+src/crmath_edge.cyr's q_out = (A·q + B)/(C·q + D), each part rounded once, and its exact threshold (every path, and the
+exact one alone) against Fractions: composed optical systems, free space and interfaces (C = 0) with ties, C·q₀ + D
+cancelling at every depth, the 10^-60 threshold, midpoints of Im q_out, exact zeros, a lens followed by the distance
+to its focus, near-singular matrices, the fast path's box edges, scaled systems and any finite values. Its cm and cm_slow families (M2 part 2c-2) check src/crmath_edge.cyr's
 Clausius–Mossotti ε_r (`cm`, and `cm_slow` with the rounding test skipped, so the exact midpoint check always runs)
 against Fractions: physical pairs, X uniform in (−4, 1), both edges ulp by ulp, any finite pair, the exact ties, the
 region and shortcut edges, the exact pole and zero. Its cos_t and cos_t_slow families (M2 part 2c-3) check its

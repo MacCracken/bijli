@@ -29,6 +29,10 @@
 //! M3 part 2b (ADR 0002 row 13, amended) appends the round-once grid: `new` where πw₀² over- or underflows though z_R
 //! is representable, `divergence` where π·w₀ does, the confocal waist √(Lλ/2π) where Lλ does, and seeded laser beams
 //! and confocal cavities.
+//!
+//! M3 part 2c-2 (ADR 0002 row 17, amended) appends `propagate_beam`'s grid: |C·q + D|² ulp by ulp around 10⁻⁶⁰,
+//! C·q₀ + D cancelling to its rounding error, a lens and the distance to its focus, near-singular matrices, exact zeros,
+//! the range ends and scaled systems; and the transforms at the threshold, at a focus and through seeded systems.
 
 use crate::grids::{Rng, specials};
 use crate::m_field::res_f;
@@ -453,7 +457,151 @@ pub fn emit() -> Module {
     resonator_edges(r);
     abcd_det_edges(r);
     round_once_edges(r);
+    q_out_edges(r);
     rows.m
+}
+
+/// A `propagate_beam` row.
+fn prop_row(r: &mut Rows, v: [f64; 4], q0: f64, q1: f64) {
+    let m = mat_of(v);
+    let mut ins = am(&m);
+    ins.extend([f(q0), f(q1)]);
+    r.row("AbcdMatrix::propagate_beam", Class::A, &ins, || {
+        res(m.propagate_beam(black_box([q0, q1])), |q| vec![f(q[0]), f(q[1])])
+    });
+}
+
+/// The two transform rows of a matrix and a beam.
+fn transform_rows(r: &mut Rows, v: [f64; 4], bv: [f64; 3]) {
+    let m = mat_of(v);
+    let g = beam_of(bv);
+    let mut ins = am(&m);
+    ins.extend(gb(&g));
+    r.row("AbcdMatrix::transform_beam", Class::A, &ins, || res(m.transform_beam(black_box(&g)), gb));
+    r.row("AbcdMatrix::transform_beam_with_waist_position", Class::A, &ins, || {
+        res(m.transform_beam_with_waist_position(black_box(&g)), |(o, d)| {
+            let mut t = gb(o);
+            t.push(f(*d));
+            t
+        })
+    });
+}
+
+/// M3 part 2c-2 (ADR 0002 row 17, amended; the user's answer of 2026-11-14): `propagate_beam` on the exact
+/// |C·q + D|² against 10⁻⁶⁰ with q_out rounded once from the exact quotient, and the transforms through it.
+fn q_out_edges(r: &mut Rows) {
+    let mut rng = Rng::new(0xbea3_02c2);
+    let e52 = 2f64.powi(-52);
+    // The threshold without cancellation: X = D alone, then X and Y together, ulp by ulp around 10⁻⁶⁰.
+    for d in [1e-30, up(1e-30), down(1e-30), up(up(1e-30)), down(down(1e-30)), -1e-30, -down(1e-30)] {
+        prop_row(r, [1.0, 0.5, 0.0, d], 0.25, 2.0);
+        prop_row(r, [2.0, -1.0, 1.0, d], 0.0, 0.0);
+    }
+    for (x, y) in [(6e-31, 8e-31), (up(6e-31), 8e-31), (6e-31, down(8e-31)), (down(6e-31), down(8e-31))] {
+        prop_row(r, [1.0, 1.0, 1.0, x], 0.0, y);
+        prop_row(r, [1.0, 1.0, 2.0, x], 0.0, 0.5 * y);
+    }
+    // C·q₀ + D cancelling: Rust's rounded denominator 0 where the exact one is 2^(k − 104) (k = 4: below 10⁻⁶⁰, refused
+    // by both; k = 5 and up: above it), and C = 0.1, q₀ = 3, D = −RN(0.3·…): −2.8·10⁻¹⁷.
+    for k in 0..12 {
+        let c = (1.0 + e52) * 2f64.powi(k / 2);
+        let q0 = (1.0 + e52) * 2f64.powi(k - k / 2);
+        for q1 in [0.0, 1e-40, 1e-31] {
+            prop_row(r, [1.0, 0.25, c, -(c * q0)], q0, q1);
+            prop_row(r, [-3.0, 0.5, -c, c * q0], q0, q1);
+        }
+    }
+    for q1 in [0.0, 1e-20, 2.0] {
+        prop_row(r, [1.0, 0.0, 0.1, -(0.1 * 3.0)], 3.0, q1);
+        prop_row(r, [2.0, -0.5, 0.1, -(0.1 * 3.0)], 3.0, q1);
+    }
+    for _ in 0..120 {
+        let c = rng.signed_log_uniform(-3.0, 3.0);
+        let q0 = rng.signed_log_uniform(-3.0, 3.0);
+        let k = rng.int(-3, 3);
+        let p = c * q0;
+        let d = if k == 0 { -p } else { f64::from_bits(((-p).to_bits() as i64 + k) as u64) };
+        let q1 = if rng.int(0, 2) == 0 { 0.0 } else { rng.log_uniform(-40.0, -10.0) };
+        prop_row(r, [rng.signed_log_uniform(-1.0, 1.0), rng.signed_log_uniform(-1.0, 1.0), c, d], q0, q1);
+    }
+    // U·X + V·Y cancelling: a lens, then the distance to its focus (Re q_out near 0); near-singular matrices
+    // (AD − BC a few ulps of AD); exact zeros and their signs; and the range ends, where Rust's chain over- or
+    // underflows while q_out is a double.
+    for _ in 0..80 {
+        let f0 = rng.signed_log_uniform(-2.0, 0.0);
+        let q0 = if rng.int(0, 1) == 0 { 0.0 } else { rng.uniform(-0.5, 0.5) };
+        let q1 = rng.log_uniform(-4.0, 0.0);
+        let lens = AbcdMatrix::new(1.0, 0.0, -1.0 / f0, 1.0);
+        let qq = lens.propagate_beam([q0, q1]).unwrap_or([0.0, 0.0]);
+        let dist = -qq[0];
+        let m = AbcdMatrix::free_space(dist).compose(&lens);
+        prop_row(r, [m.a, m.b, m.c, m.d], q0, q1);
+    }
+    for _ in 0..80 {
+        let a = rng.signed_log_uniform(-2.0, 2.0);
+        let b = rng.signed_log_uniform(-2.0, 2.0);
+        let c = rng.signed_log_uniform(-2.0, 2.0);
+        let d = b * c / a;
+        let k = rng.int(-3, 3);
+        let d = if d == 0.0 || k == 0 { d } else { f64::from_bits((d.to_bits() as i64 + k) as u64) };
+        prop_row(r, [a, b, c, d], rng.uniform(-1.0, 1.0), rng.log_uniform(-3.0, 0.0));
+    }
+    for (m, q0, q1) in [
+        ([2.0, 6.0, 1.0, 1.0], -3.0, 0.0),
+        ([2.0, -0.0, 1.0, 1.0], -0.0, 0.0),
+        ([2.0, -0.0, 1.0, 1.0], -0.0, -0.0),
+        ([-2.0, 0.0, 1.0, 1.0], 0.0, -0.0),
+        ([1.0, 2.0, 2.0, 4.0], 1.0, 3.0),
+        ([1.0, 2.0, 2.0, 4.0], 1.0, -0.0),
+        ([0.0, 0.0, 1.0, 1.0], 1.0, 1.0),
+        ([-0.0, -0.0, 1.0, 1.0], 1.0, -1.0),
+    ] {
+        prop_row(r, m, q0, q1);
+    }
+    for (m, q0, q1) in [
+        ([1e200, 1e200, 1e200, 1e200], 1e200, 1e200),
+        ([1e300, 1e-300, 1e300, 1e300], 1e10, 1e10),
+        ([1.0, 0.0, 1e-300, 1e-300], 1e-20, 1e-20),
+        ([1e-300, 1e-300, 1e-300, 1e-300], 1.0, 1.0),
+        ([5e-324, 5e-324, 1.0, 1e-300], 5e-324, 1e-200),
+        ([f64::MAX, f64::MAX, f64::MAX, f64::MAX], f64::MAX, f64::MAX),
+        ([1.0, f64::MAX, 1e-300, 1.0], 1.0, 1.0),
+        ([1.0, 0.5, 2f64.powi(-200), 2f64.powi(200)], 2f64.powi(201), 2f64.powi(-201)),
+    ] {
+        prop_row(r, m, q0, q1);
+    }
+    for _ in 0..60 {
+        let s = rng.int(-1000, 1000) as i32;
+        let m = [rng.uniform(0.5, 2.0), rng.uniform(-1.0, 1.0) * 2f64.powi(s), rng.uniform(-1.0, 1.0) * 2f64.powi(-s),
+            rng.uniform(0.5, 2.0)];
+        prop_row(r, m, rng.uniform(-1.0, 1.0) * 2f64.powi(s), rng.uniform(0.0, 1.0) * 2f64.powi(s));
+    }
+    // The transforms (q = j·z_R): |C·z_R|² around 10⁻⁶⁰ with D = 0 (det = −BC), a lens and the distance to its focus,
+    // and seeded systems of free space, lenses and interfaces, on the lab beam.
+    let lab = [1064e-9, 100e-6, std::f64::consts::PI * 100e-6 * 100e-6 / 1064e-9];
+    let c0 = 1e-30 / lab[2];
+    for c in [c0, up(c0), down(c0), up(up(c0)), down(down(c0))] {
+        transform_rows(r, [1.0, -1.0 / c, c, 0.0], lab);
+    }
+    for _ in 0..40 {
+        let f0 = rng.log_uniform(-2.0, 0.0);
+        let lens = AbcdMatrix::thin_lens(f0).unwrap();
+        let qq = lens.propagate_beam([0.0, lab[2]]).unwrap_or([0.0, 0.0]);
+        let m = AbcdMatrix::free_space(-qq[0]).compose(&lens);
+        transform_rows(r, [m.a, m.b, m.c, m.d], lab);
+    }
+    for _ in 0..120 {
+        let mut m = AbcdMatrix::identity();
+        for _ in 0..rng.int(1, 4) {
+            let e = match rng.int(0, 2) {
+                0 => AbcdMatrix::free_space(rng.log_uniform(-3.0, 0.5)),
+                1 => AbcdMatrix::thin_lens(rng.signed_log_uniform(-2.0, 0.0)).unwrap(),
+                _ => AbcdMatrix::flat_interface(1.0, rng.uniform(1.0, 2.5)).unwrap(),
+            };
+            m = e.compose(&m);
+        }
+        transform_rows(r, [m.a, m.b, m.c, m.d], lab);
+    }
 }
 
 /// M3 part 2b (ADR 0002 row 13, amended): the single-product functions at their range edges, and seeded values.

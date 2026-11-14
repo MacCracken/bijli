@@ -496,7 +496,11 @@ impl BjAbcdMatrix {
     }
 
     # q_out = (A·q + B)/(C·q + D) for q = q_re + j·q_im into out[0], out[1]: Ok(0), or DivisionByZero when
-    # |C·q + D|² < 1e-60 (a NaN passes, as Rust's test). Mirrors `AbcdMatrix::propagate_beam`.
+    # |C·q + D|² < 10^-60. ADR 0002 row 17 (M3 part 2c-2): for finite entries and q the test is on the exact |C·q + D|²
+    # and each part of q_out is rounded once from the exact quotient (src/crmath_edge.cyr's _bj_cr_abcd), where Rust
+    # rounded C·q₀ + D first and could divide by a cancelled 0 or lose every digit; a part exactly 0 keeps Rust's zero
+    # where Rust's chain gives one (+0 otherwise). A non-finite entry or q keeps Rust's test and chain (a NaN passes).
+    # Mirrors `AbcdMatrix::propagate_beam`.
     #must_use
     public fn propagate_beam(self, q_re: f64, q_im: f64, out: *f64): Result {
         var num_re: f64 = self.a * q_re + self.b;
@@ -504,6 +508,33 @@ impl BjAbcdMatrix {
         var den_re: f64 = self.c * q_re + self.d;
         var den_im: f64 = self.c * q_im;
         var den_sq: f64 = den_re * den_re + den_im * den_im;
+        var fm: f64 = (self.a - self.a) + (self.b - self.b) + (self.c - self.c) + (self.d - self.d);
+        var fin: f64 = fm + (q_re - q_re) + (q_im - q_im);
+        if (fin == 0.0) {
+            var v: f64[6];
+            v[0] = self.a;
+            v[1] = self.b;
+            v[2] = self.c;
+            v[3] = self.d;
+            v[4] = q_re;
+            v[5] = q_im;
+            var o: f64[2];
+            var f = _bj_cr_abcd(&v, 0, &o);
+            if (f == 0) { return Err(_bj_beam_dz("ABCD beam propagation denominator is zero")); }
+            var e0: f64 = o[0];
+            var e1: f64 = o[1];
+            if ((f & 2) != 0) {
+                var z0: f64 = (num_re * den_re + num_im * den_im) / den_sq;
+                if (z0 == 0.0) { e0 = z0; }
+            }
+            if ((f & 4) != 0) {
+                var z1: f64 = (num_im * den_re - num_re * den_im) / den_sq;
+                if (z1 == 0.0) { e1 = z1; }
+            }
+            out[0] = e0;
+            out[1] = e1;
+            return Ok(0);
+        }
         if (den_sq < 0.000000000000000000000000000000000000000000000000000000000001) {
             return Err(_bj_beam_dz("ABCD beam propagation denominator is zero"));
         }
@@ -521,7 +552,9 @@ impl BjAbcdMatrix {
     # exact det of finite entries isn't positive (Rust's rounded det isn't positive and finite, for another), the
     # reason quoting the rounded det, or when z_R′ isn't positive and finite; DivisionByZero when C·q + D = 0; and
     # BjGaussianBeam_new's errors. out and distance are untouched by an error. ADR 0002 row 35: Rust tested the rounded
-    # det and kept λ within 10⁻¹² of 1. Mirrors `AbcdMatrix::transform_beam_with_waist_position`.
+    # det and kept λ within 10⁻¹² of 1. Row 17 (M3 part 2c-2): q_out is propagate_beam's, each part rounded once, so
+    # z_R′ = z·(AD − BC)/|C·q + D|² no longer cancels to 0 for a positive det. Mirrors
+    # `AbcdMatrix::transform_beam_with_waist_position`.
     #must_use
     public fn transform_beam_with_waist_position(self, beam: *BjGaussianBeam, out: *BjGaussianBeam,
       distance: *f64): Result {

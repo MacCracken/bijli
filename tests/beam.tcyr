@@ -692,17 +692,16 @@ fn cyrius_row35(): i64 {
     assert(is_err_result(t3) == 1
       && reason_is2("invalid parameter: ABCD determinant must be positive and finite (det = n_in/n_out), got 0", "")
       == 1, "det = −2^-104: refused, as Rust refused its rounded 0");
-    # AD − BC = +2^-104 exactly: the determinant passes, and z_R′ (propagate_beam's chain, which cancels in
-    # z·(AD − BC)) is refused instead.
+    # AD − BC = +2^-104 exactly: the determinant passes, and z_R′ = Im q_out is rounded once from the exact
+    # z·(AD − BC)/|C·q + D|² (ADR 0002 row 17, M3 part 2c-2), 1.45e-33 where Rust's chain cancelled to 0 and refused.
     var m4: BjAbcdMatrix = BjAbcdMatrix_new(_bj_from_bits(0x3FF0000000000001), _bj_from_bits(0x3FF0000000000002), 1.0,
       _bj_from_bits(0x3FF0000000000001));
-    var keep: BjGaussianBeam = g;
-    var t4, v4 = m4.transform_beam(&g, &keep);
-    var kw: f64 = keep.waist;
-    var gw: f64 = g.waist;
-    assert(is_err_result(t4) == 1
-      && reason_is2("invalid parameter: transformed beam has non-physical Rayleigh range", "") == 1 && kw == gw,
-      "det = +2^-104: past the determinant, refused at z_R′; out untouched");
+    var o4: BjGaussianBeam;
+    var t4, v4 = m4.transform_beam(&g, &o4);
+    var w4: f64 = o4.waist;
+    var l4: f64 = o4.wavelength;
+    assert(is_ok(t4) == 1 && _bj_bits(l4) == 0x3831D9D85F385AF7 && _bj_bits(w4) == 0x389A33F689B00241,
+      "det = +2^-104: λ′ = 5.2e-38 and w₀′ = 4.9e-36 from z_R′ = 1.45e-33 (Rust: z_R′ = 0, refused)");
     if (v1 == 99 || v2 == 99 || v3 == 99 || v4 == 99) { println("."); }
     return 0;
 }
@@ -732,6 +731,44 @@ fn cyrius_row13(): i64 {
     var t4, v4 = bj_resonator_beam_waist(big, big, big, big);
     assert(is_ok(t4) == 1 && v4 == 0x6960AD8EC65E17B8, "confocal, L = λ = 1e200: w₀ = 3.99e199 (Rust: L·λ = ∞)");
     if (v1 == 99 || v2 == 99 || v3 == 99) { println("."); }
+    return 0;
+}
+
+# ADR 0002 row 17 (M3 part 2c-2): propagate_beam decides |C·q + D|² < 10^-60 exactly and rounds each part of q_out
+# once from the exact quotient; bits from validate.py's model (Fractions).
+fn cyrius_row17(): i64 {
+    test_group("cyrius_abcd_row17 (ADR 0002 row 17)");
+    var q: f64[2];
+    var m1: BjAbcdMatrix = BjAbcdMatrix_new(1.0, 0.0, 0.1, _bj_from_bits(0xBFD3333333333334));
+    var t1, v1 = m1.propagate_beam(3.0, 0.0, &q);
+    var r0: f64 = q[0];
+    var r1: f64 = q[1];
+    assert(is_ok(t1) == 1 && _bj_bits(r0) == 0xC378000000000000 && _bj_bits(r1) == 0,
+      "C·q₀ + D = 0.1·3 − 0.30000000000000004, exactly −2.8e-17: q_out = −1.08e17 (Rust: denominator 0, refused)");
+    var dlo: f64 = _bj_from_bits(0x39B4484BFEEBC2A0 - 1);
+    var m2: BjAbcdMatrix = BjAbcdMatrix_new(1.0, 0.5, 0.0, dlo);
+    var t2, v2 = m2.propagate_beam(0.25, 2.0, &q);
+    assert(is_err_result(t2) == 1, "|D| one ulp below 1e-30: |C·q + D|² below 10^-60, refused");
+    var m3: BjAbcdMatrix = BjAbcdMatrix_new(1.0, 0.5, 0.0, 0.000000000000000000000000000001);
+    var t3, v3 = m3.propagate_beam(0.25, 2.0, &q);
+    var r3: f64 = q[1];
+    assert(is_ok(t3) == 1 && _bj_bits(r3) == 0x46393E5939A08CE9,
+      "D = 1e-30: accepted, Im q_out = 2/1e-30 rounded once, 1.9999999999999998e30 (Rust: 2e30, an ulp high)");
+    var big: f64 = _bj_from_bits(0x6974E718D7D7625A);
+    var m4: BjAbcdMatrix = BjAbcdMatrix_new(big, big, big, big);
+    var t4, v4 = m4.propagate_beam(big, big, &q);
+    var r4: f64 = q[0];
+    var r5: f64 = q[1];
+    assert(is_ok(t4) == 1 && r4 == 1.0 && _bj_bits(r5) == 0,
+      "every entry and q 1e200: q_out = 1 (Rust: ∞/∞ = NaN in both parts)");
+    var nz: f64 = -0.0;
+    var m5: BjAbcdMatrix = BjAbcdMatrix_new(2.0, nz, 1.0, 1.0);
+    var t5, v5 = m5.propagate_beam(nz, nz, &q);
+    var r6: f64 = q[0];
+    var r7: f64 = q[1];
+    assert(is_ok(t5) == 1 && _bj_bits(r6) == 0 && _bj_bits(r7) == 0x8000000000000000,
+      "exact zeros keep Rust's signs: (+0, −0)");
+    if (v1 == 99 || v2 == 99 || v3 == 99 || v4 == 99 || v5 == 99) { println("."); }
     return 0;
 }
 
@@ -914,6 +951,7 @@ fn main(): i64 {
     cyrius_row34();
     cyrius_row35();
     cyrius_row13();
+    cyrius_row17();
     cyrius_json();
     return assert_summary();
 }

@@ -4360,28 +4360,43 @@ def bm_lg(bm, p, l, r, z, P, port=False):
     return scale * powidf2_ieee(rs, e) * lpv * lpv * env
 
 
-def bm_propagate(m, q0, q1):
+def bm_propagate(m, q0, q1, port=False):
+    """AbcdMatrix::propagate_beam; port=True for the port's (ADR 0002 row 17, M3 part 2c-2): for finite entries and
+    q, |C·q + D|² < 10^-60 decided exactly and each part of q_out rounded once from the exact quotient, a part exactly
+    0 keeping Rust's zero where Rust's chain gives one (+0 otherwise)."""
     a, b, c, d = m
     nr, ni = a * q0 + b, a * q1
     dr, di = c * q0 + d, c * q1
     dsq = dr * dr + di * di
+    if port and all(math.isfinite(x) for x in (a, b, c, d, q0, q1)):
+        A, B, C, D, Q0, Q1 = (Fraction(x) for x in (a, b, c, d, q0, q1))
+        X, Y = C * Q0 + D, C * Q1
+        den = X * X + Y * Y
+        if den < Fraction(1, 10 ** 60):
+            return dz_err("ABCD beam propagation denominator is zero")
+        er = (A * Q0 + B) * X + (A * Q1) * Y
+        ei = Q1 * (A * D - B * C)
+        z0, z1 = fdiv(nr * dr + ni * di, dsq), fdiv(ni * dr - nr * di, dsq)
+        re = (z0 if z0 == 0.0 else 0.0) if er == 0 else rn_frac(er / den)
+        im = (z1 if z1 == 0.0 else 0.0) if ei == 0 else rn_frac(ei / den)
+        return [("f", re), ("f", im)]
     if dsq < 1e-60:
         return dz_err("ABCD beam propagation denominator is zero")
     return [("f", fdiv(nr * dr + ni * di, dsq)), ("f", fdiv(ni * dr - nr * di, dsq))]
 
 
-def bm_transform(m, bm, port=False, r35=True):
+def bm_transform(m, bm, port=False, r35=True, r17=True):
     """AbcdMatrix::transform_beam_with_waist_position; port=True for the port: ADR 0002 row 35 (unless r35=False), the
     exact AD − BC of finite entries deciding det > 0, keeping λ only when it is exactly 1 and giving λ·det rounded
-    once (λ itself for a zero, infinite or NaN λ, which det > 0 leaves as it is); and row 13, the new beam's z_R
-    rounded once (bm_new)."""
+    once (λ itself for a zero, infinite or NaN λ, which det > 0 leaves as it is); row 17 (unless r17=False), q_out
+    from the port's propagate_beam (bm_propagate); and row 13, the new beam's z_R rounded once (bm_new)."""
     a, b, c, d = m
     det = a * d - b * c
     exact = port and r35 and all(math.isfinite(x) for x in m)
     D = Fraction(a) * Fraction(d) - Fraction(b) * Fraction(c) if exact else None
     if not (D > 0 if exact else bm_pos(det)):
         return ip_err(f"ABCD determinant must be positive and finite (det = n_in/n_out), got {rust_display(det)}")
-    q = bm_propagate(m, 0.0, bm[2])
+    q = bm_propagate(m, 0.0, bm[2], port and r17)
     if q[0][0] == "E":
         return q
     zr2 = q[1][1]
@@ -4581,7 +4596,7 @@ def bm_eval(fn, v, P, port=False):
             e, f_, g, h = v[4:8]
             return fl([a * e + b * g, a * f_ + b * h, c * e + d * g, c * f_ + d * h])
         if name == "propagate_beam":
-            return bm_propagate(v[:4], v[4], v[5])
+            return bm_propagate(v[:4], v[4], v[5], port)
         if name == "transform_beam_with_waist_position":
             return bm_transform(v[:4], v[4:7], port)
         if name == "transform_beam":
@@ -4711,8 +4726,10 @@ def beam_adr_rows(path: Path) -> list:
     """ADR 0002 mappings for beam.tsv: each row whose harness reading (bm_harness, on the port's correctly rounded
     primitives) differs from Rust's (the corrected oracle for class C): row 13 for z_R, the divergence and the confocal
     waist rounded once (M3 part 2b), row 32 for the LG power at l = i32::MIN, row 34 for the resonators (M3 part 2a-2),
-    row 35 for the transforms' exact determinant (M3 part 2a-3), or row 13 where a transform's new z_R rounded once
-    is the whole difference, row 5 otherwise (the field's conjugation, should it fail to be exact)."""
+    row 17 for propagate_beam's exact threshold and q_out (M3 part 2c-2), and for a transform the first of row 13
+    (its new z_R rounded once), row 35 (its exact determinant, M3 part 2a-3) and row 17 (its q_out) that accounts for
+    the whole difference on its own, row 35 where only both together do; row 5 otherwise (the field's conjugation,
+    should it fail to be exact)."""
     out = []
     for fn, cls, ins, outs, v in bm_lines(path):
         P = BM_P_MPFR if cls == "C" else BM_P_GLIBC
@@ -4725,11 +4742,20 @@ def beam_adr_rows(path: Path) -> list:
             row = 13
         elif fn in BM_RES34:
             row = 34
+        elif fn == "AbcdMatrix::propagate_beam":
+            row = 17
         elif fn in ("AbcdMatrix::transform_beam", "AbcdMatrix::transform_beam_with_waist_position"):
-            alone13 = bm_transform(v[:4], v[4:7], port=True, r35=False)
-            if fn == "AbcdMatrix::transform_beam" and alone13[0][0] != "E":
-                alone13 = alone13[:3]
-            row = 13 if toks_same(alone13, port) else 35
+            def alone(r35, r17):
+                o = bm_transform(v[:4], v[4:7], port=True, r35=r35, r17=r17)
+                return o[:3] if fn == "AbcdMatrix::transform_beam" and o[0][0] != "E" else o
+            if toks_same(alone(False, False), port):
+                row = 13
+            elif toks_same(alone(True, False), port):
+                row = 35
+            elif toks_same(alone(False, True), port):
+                row = 17
+            else:
+                row = 35
         elif fn == "beam::laguerre_gaussian_intensity" and abs(int(v[4])) == 1 << 31:
             row = 32
         else:

@@ -534,7 +534,7 @@ EXACT = ["mono"] + list(SHAPES) + ["sqrt_div", "wsqrt", "sqrt_mono", "sqrt_mono_
          "cos_t_slow", "lw_reff", "lw_reff_slow", "lw_kappa", "lw_kappa_slow", "par", "par_x", "par_slow",
          "par_rep", "par_rep_x", "par_rep_slow", "lw_nb", "lw_nb_slow", "lw_reff_ux", "vx_sqrt", "vx_sqrt_e",
          "vx_gamma", "lwo_reff", "lwo_reff_slow", "lwo_kappa", "lwo_kappa_slow", "lwo_nb", "lwo_nb_slow", "lwo_ux",
-         "gammao", "gammao_slow", "gammao2", "gammao2_slow", "sumsq", "sumsq_exact"]
+         "gammao", "gammao_slow", "gammao2", "gammao2_slow", "sumsq", "sumsq_exact", "abcd", "abcd_slow"]
 UX = ["ux_exp", "ux_exp_w", "ux_cosh", "ux_sinh", "ux_ln", "ux_pow", "ux_sin", "ux_cos"]
 
 
@@ -1274,6 +1274,148 @@ def sumsq_families(rng, count):
     return out
 
 
+# ── M3's ABCD propagation (src/crmath_edge.cyr, M3 part 2c-2, ADR 0002 row 17 amended) ──────────────────────────────
+ABCD_REFUSED = (1 << 64) - 1                # parts 0 and 1 when |C·q + D|² < 10^-60
+
+
+def abcd_ref(v):
+    """(RN(Re q_out), RN(Im q_out), flags) as words for q_out = (A·q + B)/(C·q + D), exactly; the refused marker for
+    |C·q + D|² < 10^-60."""
+    a, b, c, d, q0, q1 = (Fraction(x) for x in v)
+    x, y = c * q0 + d, c * q1
+    den = x * x + y * y
+    if den < Fraction(1, 10 ** 60):
+        return ABCD_REFUSED, ABCD_REFUSED, 0
+    nr = (a * q0 + b) * x + (a * q1) * y
+    ni = q1 * (a * d - b * c)
+    re = 0.0 if nr == 0 else rn_frac(nr / den)
+    im = 0.0 if ni == 0 else rn_frac(ni / den)
+    return f2b(re), f2b(im), 1 + (2 if nr == 0 else 0) + (4 if ni == 0 else 0)
+
+
+def abcd_compose(m, n):
+    """m·n as Rust's compose rounds it (n first)."""
+    return [m[0] * n[0] + m[1] * n[2], m[0] * n[1] + m[1] * n[3], m[2] * n[0] + m[3] * n[2],
+            m[2] * n[1] + m[3] * n[3]]
+
+
+def abcd_cases(rng, count):
+    """(A, B, C, D, q₀, q₁): composed optical systems and Gaussian q's, free space with sums that tie, cancellations
+    at the pole C·q₀ + D → 0 at every depth, the 10^-60 threshold, constructed midpoints of Im q_out = det/q₁ and their
+    neighbours, exact zeros, entries at the fast path's box edges, scaled systems, any finite values, a lens followed
+    by the distance to its focus (Re q_out cancelling in U·X + V·Y), near-singular matrices (AD − BC cancelling) and
+    C = 0 (free space and interfaces: any D, A = ±1, q₀ = 0, ties)."""
+    out = []
+    for i in range(count):
+        mode = i % 12
+        sg = rng.choice([1.0, -1.0])
+        if mode == 0:                                   # optical systems
+            m = [1.0, 0.0, 0.0, 1.0]
+            for _ in range(rng.randint(1, 4)):
+                k = rng.randrange(3)
+                if k == 0:
+                    e = [1.0, rng.uniform(1e-3, 2.0), 0.0, 1.0]
+                elif k == 1:
+                    e = [1.0, 0.0, -1.0 / (rng.uniform(0.01, 1.0) * rng.choice([1.0, -1.0])), 1.0]
+                else:
+                    e = [1.0, 0.0, 0.0, rng.uniform(0.5, 2.0)]
+                m = abcd_compose(e, m)
+            q = [rng.uniform(-2.0, 2.0) if rng.random() < 0.7 else 0.0, rng.uniform(1e-4, 10.0)]
+            v = m + q
+        elif mode == 1:                                 # free space: Re q_out = (A·q₀ + B)/D, ties included
+            j = rng.randint(-60, 60)
+            q0 = rng.choice([1.0, 3.0, rng.uniform(1.0, 2.0)]) * 2.0 ** j
+            b = rng.choice([2.0 ** (j - 53), 3 * 2.0 ** (j - 54),
+                            rng.uniform(-1.0, 1.0) * 2.0 ** (j - rng.randint(0, 60))])
+            a = rng.choice([1.0, 2.0, 0.5, rng.uniform(0.5, 2.0)])
+            d = rng.choice([1.0, 2.0, 0.25, rng.uniform(0.5, 2.0)])
+            v = [a, b * sg, 0.0, d, q0, rng.uniform(1e-3, 10.0)]
+        elif mode == 2:                                 # C·q₀ + D cancelling to its rounding error or a few ulps
+            c = rng.uniform(1.0, 2.0) * 2.0 ** rng.randint(-30, 30) * sg
+            q0 = rng.uniform(1.0, 2.0) * 2.0 ** rng.randint(-30, 30) * rng.choice([1.0, -1.0])
+            d = b2f(f2b(-(c * q0)) + rng.randint(-4, 4)) if c * q0 != 0 else 1.0
+            q1 = rng.uniform(1.0, 2.0) * 2.0 ** rng.randint(-120, 0)
+            v = [rng.uniform(-2.0, 2.0), rng.uniform(-2.0, 2.0), c, d, q0, q1]
+        elif mode == 3:                                 # |C·q + D|² near 10^-60
+            th = rng.uniform(0.0, math.pi / 2)
+            xt, yt = 1e-30 * math.cos(th), 1e-30 * math.sin(th)
+            c = rng.uniform(1.0, 2.0) * 2.0 ** rng.randint(-20, 20)
+            q0 = rng.uniform(-1.0, 1.0)
+            d = b2f(f2b(xt - c * q0) + rng.randint(-2, 2)) if xt - c * q0 else xt
+            q1 = b2f(f2b(yt / c) + rng.randint(-2, 2))
+            v = [rng.uniform(-2.0, 2.0), rng.uniform(-2.0, 2.0), c, d, q0, q1]
+        elif mode == 4:                                 # Im q_out = det/q₁ at or near a midpoint (X = 0, C = 1)
+            j = rng.randint(-40, 40)
+            k = rng.choice([0, 0, 1, -1, 2])
+            bb = -2.0 ** -53 * rng.choice([1.0, 3.0, 5.0])
+            v = [1.0, b2f(f2b(bb) + k), 1.0, 1.0, -1.0, 2.0 ** j * sg]
+        elif mode == 5:                                 # any finite values
+            v = [any_finite(rng) for _ in range(6)]
+        elif mode == 6:                                 # a system and q scaled past the box, toward the range ends
+            m = [rng.uniform(0.5, 2.0), rng.uniform(-1.0, 1.0), rng.uniform(-1.0, 1.0), rng.uniform(0.5, 2.0)]
+            s1, s2 = rng.randint(-1100, 1000), rng.randint(-1100, 1000)
+            v = [m[0], m[1] * 2.0 ** s1 if s1 > -1074 else m[1], m[2] * 2.0 ** -s1 if -s1 < 1000 else m[2], m[3],
+                 rng.uniform(-1.0, 1.0) * 2.0 ** max(s2, -1074), rng.uniform(0.0, 1.0) * 2.0 ** max(s2, -1074)]
+            if rng.random() < 0.3:
+                v[rng.randrange(6)] = rng.choice([2.0 ** 200, 2.0 ** -200, 2.0 ** 201, 2.0 ** -201, 5e-324,
+                                                  1.7976931348623157e308])
+        elif mode == 7:                                 # exact zeros: U = 0, AD = BC, q₁ = 0
+            a = float(rng.randint(1, 9)) * sg
+            q0 = float(rng.randint(-9, 9)) * 2.0 ** rng.randint(-4, 4)
+            c = float(rng.randint(-9, 9))
+            d = float(rng.randint(1, 9))
+            b = -a * q0
+            z = rng.randrange(3)
+            if z == 1:
+                b = a * d / c if c else 1.0
+            q1 = 0.0 if z == 2 else float(rng.randint(1, 9)) * rng.choice([1.0, -1.0, 0.0])
+            v = [a, b, c, d, q0, q1]
+        elif mode == 9:                                 # Re q_out at a waist: a lens, then the distance to the focus
+            f = rng.uniform(0.01, 1.0) * rng.choice([1.0, -1.0])
+            q = [rng.uniform(-0.5, 0.5) if rng.random() < 0.5 else 0.0, rng.uniform(1e-4, 1.0)]
+            lens = [1.0, 0.0, -1.0 / f, 1.0]
+            mq = abcd_ref(lens + q)
+            dist = -b2f(mq[0]) if mq[2] else 0.0
+            dist = b2f(f2b(dist) + rng.randint(-3, 3)) if dist else dist
+            v = abcd_compose([1.0, dist, 0.0, 1.0], lens) + q
+        elif mode == 11:                                # C = 0: free space and interfaces, any D, A = ±1, ties
+            j = rng.randint(-50, 50)
+            q0 = rng.choice([0.0, 1.0, rng.uniform(1.0, 2.0), 3.0]) * 2.0 ** j * rng.choice([1.0, -1.0])
+            a = rng.choice([1.0, -1.0, rng.uniform(0.25, 4.0) * sg])
+            b = rng.choice([2.0 ** (j - 53), -(2.0 ** (j - 54)) * 3, rng.uniform(-1.0, 1.0) * 2.0 ** j,
+                            -a * q0, 0.0])
+            d = rng.choice([1.0, -1.0, 2.0, 1.5, rng.uniform(-3.0, 3.0), 1e-30, 9.999999999999999e-31])
+            q1 = rng.choice([0.0, rng.uniform(-2.0, 2.0) * 2.0 ** rng.randint(-60, 60)])
+            v = [a, b, 0.0, d, q0, q1]
+        elif mode == 10:                                # near-singular: AD − BC cancelling to a few ulps of AD
+            a = rng.uniform(0.5, 2.0) * 2.0 ** rng.randint(-20, 20) * sg
+            b = rng.uniform(-2.0, 2.0) * 2.0 ** rng.randint(-20, 20)
+            c = rng.uniform(-2.0, 2.0) * 2.0 ** rng.randint(-20, 20)
+            d = b * c / a
+            d = b2f(f2b(d) + rng.randint(-3, 3)) if d else d
+            v = [a, b, c, d, rng.uniform(-1.0, 1.0), rng.uniform(1e-3, 2.0)]
+        else:                                           # a cancellation factor of 2^k in X, around the fast budget
+            c = rng.uniform(1.0, 2.0)
+            q0 = rng.uniform(1.0, 2.0)
+            kk = rng.randint(0, 30)
+            d = -(c * q0) * (1.0 - 2.0 ** -kk * rng.uniform(0.5, 1.0))
+            v = [rng.uniform(-2.0, 2.0), rng.uniform(-2.0, 2.0), c, d, q0, rng.uniform(1e-6, 1.0) * 2.0 ** -kk]
+        if all(math.isfinite(x) for x in v):
+            out.append(v)
+    return out
+
+
+def abcd_families(rng, count):
+    """abcd (the fast path, then the exact one) and abcd_slow (the exact path alone): each case's three parts."""
+    out = []
+    for v in abcd_cases(rng, count):
+        ref = abcd_ref(v)
+        for part in range(3):
+            out.append(("abcd", v + [part], ref[part]))
+            out.append(("abcd_slow", v + [part], ref[part]))
+    return out
+
+
 def nb_families(rng, count):
     """lw_nb and lw_nb_slow (M2 part 2d-1): each component of n̂ − β on lw_cases' pairs, and on pairs built to cancel
     (β along n̂ to 2^-k, a Pythagorean R with βᵢ its exact n̂ᵢ's double, zero parts)."""
@@ -1579,6 +1721,9 @@ def main() -> int:
         qrng = random.Random(0x3_2C)
         calls += [(f, ref, ws) for f, ws, ref in sumsq_families(qrng, max(1, n // 5))
                   if "exact" in names or f in names]
+        arng = random.Random(0x3_2C2)
+        calls += [(f, ref, ws) for f, ws, ref in abcd_families(arng, max(1, n // 20))
+                  if "exact" in names or f in names]
         prng2 = random.Random(0x9A_2C5)
         calls += [(f, ref, ws) for f, ws, ref in par_families(prng2, max(1, n // 10))
                   if "exact" in names or f in names]
@@ -1600,7 +1745,8 @@ def main() -> int:
         for t in targets:
             g = results[t][i]
             # "invalid" is a word for these
-            any_nan = name not in UX and not name.startswith(("gamma", "cm", "cos_t", "lw_", "lwo_", "par", "vx_"))
+            any_nan = name not in UX and not name.startswith(("gamma", "cm", "cos_t", "lw_", "lwo_", "par", "vx_",
+                                                              "abcd"))
             ok = g == want or (any_nan and b2f(g) != b2f(g) and b2f(want) != b2f(want))
             per.setdefault((name, t), [0, 0])[0 if ok else 1] += 1
             if not ok:

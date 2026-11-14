@@ -77,7 +77,7 @@
 | `scattering/rayleigh_cross_section` | 1.74 ns | `scattering/rayleigh_cross_section` | 129.00 ns | 74.1× |
 | `scattering/rayleigh_phase_function` | 0.50 ns | `scattering/rayleigh_phase_function` | 4.00 ns | 8.0× |
 | `beam/spot_size` | 0.49 ns | `beam/spot_size` | 10.00 ns | 20.4× |
-| `beam/abcd_propagate_beam` | 1.79 ns | `beam/abcd_propagate_beam` | 19.00 ns | 10.6× |
+| `beam/abcd_propagate_beam` | 1.79 ns | `beam/abcd_propagate_beam` | 89.00 ns | 49.7× |
 | `beam/abcd_compose` | 0.99 ns | `beam/abcd_compose` | 20.00 ns | 20.2× |
 | `beam/hermite_gaussian_hg33` | 4.46 ns | `beam/hermite_gaussian_hg33` | 160.00 ns | 35.9× |
 | `beam/resonator_stability` | 6.48 ns | `beam/resonator_stability` | 39.00 ns | 6.0× |

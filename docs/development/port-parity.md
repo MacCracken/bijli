@@ -3655,3 +3655,66 @@ E and B = n̂ × E/c.
   measured, 0 pending, 72,537 accepted (ADR 01: 29,441; ADR 0002: 43,096)** over 566,293 rows; **all 380 digests
   equal**. Only `scattering::mie`'s changed (its 77 new rows); the other 379 are unchanged. `scattering.tcyr` passes
   on all three.
+
+## 66. M3 part 2c-2: propagate_beam on the exact quotient (2026-11-14)
+
+- **ADR 0002 row 17, amended for `propagate_beam`** (the user's answer of 2026-11-14: accurate q_out). The exact
+  threshold alone would have accepted inputs where Rust's rounded C·q₀ + D cancels to 0, and Rust's chain would then
+  give 0/0. So `propagate_beam` decides |C·q + D|² < 10⁻⁶⁰ exactly and rounds each part of q_out once from the exact
+  quotient: Re = (U·X + V·Y)/(X² + Y²) and Im = q₁·(AD − BC)/(X² + Y²), with U = A·q₀ + B, V = A·q₁, X = C·q₀ + D and
+  Y = C·q₁. A part exactly 0 keeps Rust's zero where Rust's chain gives one (+0 otherwise); a non-finite entry or q
+  keeps Rust's test and chain.
+- **src/crmath_edge.cyr's `_bj_cr_abcd`**, three paths:
+  - C = 0 (free space, interfaces): the threshold is |D| < 1e-30 (no double lies between 10⁻³⁰ and it), Re is B/D,
+    RN(A·q₀ + B) by TwoProduct and kimiya's `_bj_k_rn3`, or a double-double over D; Im is q₁·A, q₁/D or
+    TwoProduct(q₁, A) over D;
+  - otherwise, for entries and q in [2^-200, 2^200] or 0: X, U and AD − BC as double-doubles with error bounds,
+    kimiya's products and AccurateDWPlusDW sums, the bounds carried to each quotient, and `_bj_e_div_ends`'s test
+    when they total at most 200u²; the threshold first, by 2c-1's `_bj_x_sumsq_sign`;
+  - the exact path: signed bignums with an exponent (302 words: any finite input spans at most 8,393 bits), and a
+    restoring division to 55 bits and a sticky bit, rounded by `_bj_k_cr_from_int` (subnormals and ±∞ included).
+
+  `_bj_x_sumsq_exact` now squares with `_bj_e_bn_mul`, and 2c-1's `_bj_xq_mul`, its duplicate, is gone.
+- **cr_verify.py's abcd and abcd_slow families** (every path, and the exact one alone; each case's Re, Im and flags):
+  composed systems, free space and interfaces with ties, cancellations at every depth, the threshold, midpoints of
+  Im q_out, exact zeros, a lens followed by the distance to its focus, near-singular matrices, the box edges, scaled
+  systems and any finite values. **150,000 calls equal to the exact value on both targets**, and the sumsq families'
+  200,000 again. Seeded mutations caught: the fast rounding test skipped (200 calls of 15,000), the budget
+  unbounded or Re's error bound zeroed (48), the sticky bit dropped (822; 1,069 on the exact path alone), C = 0's
+  `_bj_k_rn3` replaced by p + B (10) and its Im low part dropped (17). Zeroing the bound on X, U, AD − BC, Im or the
+  denominator alone changed nothing: under a cancellation those double-doubles come out exact (Sterbenz), and without
+  one their error stays far inside `_bj_e_div_ends`'s 239u², so those bounds are the proof's, not the cases'.
+- **The oracle**: `beam.tsv` gains 786 rows after every earlier row (the old file an exact prefix): 456
+  `propagate_beam` rows (|C·q + D|² ulp by ulp around 10⁻⁶⁰ without and with cancellation, C·q₀ + D cancelling to
+  2^(k − 104), 120 seeded cancellations, 80 lenses followed by the distance to their focus, 80 near-singular matrices,
+  exact zeros and their signs, the range ends, 60 scaled systems) and 165 of each transform (|C·z_R|² around 10⁻⁶⁰
+  with D = 0, 40 lenses to their focus, 120 seeded systems on the lab beam).
+- **validate.py**: `bm_propagate(port=True)` decides and divides in Fractions (`rn_frac`), with the zero rule;
+  `bm_transform` takes it unless `r17=False`; `beam_adr_rows` labels `propagate_beam` row 17, and a transform the
+  first of rows 13, 35 and 17 whose fix alone accounts for its change (row 35 where only two together do). The model
+  agreed with every new row on its first run; a one-bit flip of each new row's first output was caught on 783 of 786.
+  The 3 others are NaN outputs, whose bits are not compared (row 6).
+- **Mappings**: `beam.adr.tsv` holds 5,028 rows: row 17's 2,987 (`propagate_beam` 2,589, `transform_beam` 154, the
+  waist-position form 244), row 13's 564, row 35's 528, rows 32 and 34 as before. Of the 2,589: Rust was an ulp off
+  on 1,154 and more on 255, had the wrong sign or a zero on 562 (Re q_out at a focus, subnormal parts), gave NaN or ±∞
+  for a finite value on 550, had one part past DBL_MAX beside a misrounded or NaN other part on 20, and refused 48 the
+  exact threshold accepts.
+- **Tests**:
+  - `cyrius_abcd_row17` in `tests/beam.tcyr` (5 assertions, 135 in the file): the cancelled denominator
+    (−1.08·10¹⁷, where Rust refused), |D| an ulp below 1e-30 refused, D = 1e-30's Im q_out an ulp below Rust's, 1e200
+    everywhere giving 1 (Rust: NaN), and exact zeros keeping Rust's signs.
+  - `cyrius_abcd_row35`'s det = 2^-104 transform now passes with z_R′ = 1.45·10⁻³³ (λ′ and w₀′ pinned), where it was
+    refused at Rust's z_R′ = 0.
+- **Benchmarks** (interleaved against 2c-1's tree, three rounds; the load fell from 21 to 4 during the run, another
+  repository's gate finishing, so rows that didn't change moved with it, the median −11 %):
+  - `beam/abcd_propagate_beam` (free space, the C = 0 path) 19 → 89 ns, 49.7× Rust's 1.79 ns (the record updated);
+  - a one-off bench at load 5.7: `propagate_beam` through a lens (the double-double path) 21 → 650 ns, and
+    `transform_beam` through it 575 → 1,210 ns.
+
+  The general path is the call overhead of six TwoProducts, five double-double products and two quotient tests
+  (`_bj_k_two_prod` alone takes 17 ns here): a roadmap finding, with inlining as its first step. Mie's rows are
+  unchanged (within 2 %).
+- **Result, every target** (x86_64 ELF, x86_64 PE, aarch64): **16 modules, 0 failing; 491,482 ok, 0 failed, 0
+  measured, 0 pending, 75,597 accepted (ADR 01: 29,441; ADR 0002: 46,156)** over 567,079 rows; **all 380 digests
+  equal**. `propagate_beam`'s and both transforms' changed; the other 377 are unchanged. `beam.tcyr` passes on all
+  three.

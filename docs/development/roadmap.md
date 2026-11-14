@@ -48,6 +48,7 @@ Plan of record: [bijli-port-plan.md](bijli-port-plan.md). Decision: [ADR 0001](.
   - integration surfaces;
   - release 2.0.0.
 - [ ] **crmath's sin and cos past 2^20**: a medium-range argument reduction (Cody–Waite with a longer π/2, or crmath_ux's Payne–Hanek) ahead of the fast path's polynomials. Today every |x| > 2^20 takes the multi-precision slow path, about 21 µs a call, which an optical plane wave reaches routinely (`wave/plane_wave_e`, port-parity §26). Performance only: the results stay correctly rounded.
+- [ ] **`propagate_beam`'s general fast path**: with C ≠ 0 (a lens in the system) q_out rounded once takes about 650 ns for Rust's 1.8 ns, the call overhead of its six TwoProducts, five double-double products and two quotient tests on this toolchain; C = 0 (free space, interfaces) takes 94 ns, and `transform_beam` 1.2 µs for 0.58. Inlining TwoProduct and deciding the threshold on the fast path's own denominator are the first steps (port-parity §66). Performance only: the results stay correctly rounded.
 - The "2.0 cleanup (breaking)" backlog item below lands in the Cyrius API only, as ADR 0002 (plan §3.3). There is no Rust 2.0.
 
 ---

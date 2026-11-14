@@ -8,11 +8,11 @@
 # 5c-2), checked against MPFR with its widest exponent range, and the exact Singularity threshold (src/crmath_cmp.cyr,
 # M1 part 5d-1), Clausius–Mossotti's ε_r, the trig-free Fresnel cosine, the Liénard–Wiechert R_eff and κ and the
 # parallel combinations (src/crmath_edge.cyr, M2 parts 2c-2 to 2c-5), and the materials' 53-bit roots and Γ
-# (src/crmath_vx.cyr, M2 part 2d-2c), and M3's exact sum-of-squares threshold (src/crmath_cmp.cyr, M3 part 2c-1),
-# against Fractions. Built from the math sources the bundle carries (src/constants.cyr … src/mathx.cyr, in the
-# manifest's order and byte for byte what dist/bijli.cyr holds): the bundle is `private` and these entry points are
-# bijli-internal, so a consumer of dist/bijli.cyr can't call them, but a file of internals only has no marker and can
-# be included on its own.
+# (src/crmath_vx.cyr, M2 part 2d-2c), M3's exact sum-of-squares threshold (src/crmath_cmp.cyr, M3 part 2c-1) and ABCD
+# propagation (src/crmath_edge.cyr, M3 part 2c-2), against Fractions. Built from the math sources the bundle carries
+# (src/constants.cyr … src/mathx.cyr, in the manifest's order and byte for byte what dist/bijli.cyr holds): the bundle
+# is `private` and these entry points are bijli-internal, so a consumer of dist/bijli.cyr can't call them, but a file of
+# internals only has no marker and can be included on its own.
 # scripts/oracle/cr_verify.py builds it, runs it natively and under qemu-aarch64, and compares every result with MPFR.
 # `tan_slow` calls tan's fixed-point path directly (finite |x| ≥ 2^-27 only), so the path the rounding test rarely
 # reaches is checked on arguments of its own.
@@ -335,6 +335,19 @@ fn _call(fp, fl, w): i64 {
         }
         if (sg < 0) { r = -1.0; }
         if (sg > 0) { r = 1.0; }
+    }
+    elif (_is(fp, fl, "abcd") == 1 || _is(fp, fl, "abcd_slow") == 1) {
+        # abcd A B C D q0 q1 part, abcd_slow …: RN(Re q_out) (part 0), RN(Im q_out) (part 1) or the flags (part 2) of
+        # src/crmath_edge.cyr's ABCD propagation (the fast path then the exact one, or the exact one alone); parts 0
+        # and 1 are all ones when the threshold refuses
+        var qo: f64[2];
+        var qs = 0;
+        if (fl > 4) { qs = 1; }
+        var qf = _bj_cr_abcd(w, qs, &qo);
+        var qp = load64(w + 48);
+        if (qp == 2) { return qf; }
+        if (qf == 0) { return 0 - 1; }
+        if (qp == 1) { r = qo[1]; } else { r = qo[0]; }
     }
     elif (_is(fp, fl, "ux_pow") == 1) {
         # ux_pow s e y part: (s·2^e)^y's s (part 0) or e (part 1)

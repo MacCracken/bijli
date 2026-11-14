@@ -8818,22 +8818,6 @@ var _BJ_X_U52: f64 = 0x3CB0000000000000;
 var _BJ_X_TINY: f64 = 0x0010000000000000;
 var _BJ_X_U40: f64 = 0x3D70000000000000;
 
-# dst := a·b (dst distinct from a and b), schoolbook on b's 32-bit limbs through _bj_g_mul; t and u scratch.
-fn _bj_xq_mul(dst, a, b, t, u) {
-    store64(dst, 0);
-    var nb = load64(b);
-    for (var j = 0; j < nb; j = j + 1) {
-        var l = load64(b + 8 + j * 8);
-        if (l != 0) {
-            _bj_bn_copy(t, a);
-            _bj_g_mul(t, l, u);
-            _bj_bn_shl(t, 32 * j);
-            _bj_g_add_to(dst, t);
-        }
-    }
-    return 0;
-}
-
 # a := a·5^q for 0 ≤ q ≤ 60, in steps of 5^13 (below 2^31).
 fn _bj_xq_mul5(a, q) {
     var left = q;
@@ -8867,7 +8851,6 @@ fn _bj_x_sumsq_exact(a: f64, b: f64, c: f64, e: f64, f: f64, p, elim): i64 {
     var xb: i64[160];
     var yb: i64[160];
     var tb: i64[160];
-    var ub: i64[160];
     var sp = 0;
     var ep = 0;
     if (a != 0.0 && b != 0.0) {
@@ -8930,11 +8913,11 @@ fn _bj_x_sumsq_exact(a: f64, b: f64, c: f64, e: f64, f: f64, p, elim): i64 {
     store64(&pb, 0);
     store64(&cb, 0);
     if (sx != 0) {
-        _bj_xq_mul(&pb, &xb, &xb, &tb, &ub);
+        _bj_e_bn_mul(&pb, &xb, &xb);
         if (2 * kx < g) { g = 2 * kx; }
     }
     if (sy != 0) {
-        _bj_xq_mul(&cb, &yb, &yb, &tb, &ub);
+        _bj_e_bn_mul(&cb, &yb, &yb);
         if (2 * ky < g) { g = 2 * ky; }
     }
     if (sx != 0) { _bj_bn_shl(&pb, 2 * kx - g); }
@@ -12733,6 +12716,431 @@ fn _bj_cr_parallel(xs: *f64, n, slow, out: *f64): i64 {
     }
     var rx = _bj_e_par_exact(xs, n, out);
     return rx;
+}
+
+# ── the ABCD beam propagation (M3 part 2c-2, ADR 0002 row 17, the user's answer of 2026-11-14) ────────────────────────
+#
+# q_out = (A·q + B)/(C·q + D) for q = q₀ + j·q₁. With U = A·q₀ + B, V = A·q₁, X = C·q₀ + D and Y = C·q₁:
+# Re q_out = (U·X + V·Y)/(X² + Y²) and Im q_out = q₁·(AD − BC)/(X² + Y²), each rounded once (to nearest, ties to even)
+# from the exact values, once X² + Y² < 10^-60 is decided exactly (src/crmath_cmp.cyr's sum-of-squares sign). Where
+# Rust's rounded C·q₀ + D cancelled, its quotient was 0/0 or lost every digit.
+#
+# The fast path, for A … q₁ each 0 or of magnitude in [2^-200, 2^200]: X, U and AD − BC are double-doubles from
+# TwoProduct and TwoSum, within 4u²·(|C·q₀| + |D|), 4u²·(|A·q₀| + |B|) and 4u²·(|AD| + |BC|) (one rounding of the low
+# parts, at most 2.01u², 2.01u² and 3.03u² of those; u = 2^-53); V and Y are exact. kimiya's _bj_k_dd_mul (8.01u²) and
+# _bj_k_dd_mul_d (3.01u²) give the products, AccurateDWPlusDW (3.01u² of the sum) the sums, so the denominator is within
+# (2|X̃| + e_X)·e_X + 12u²·(X̃² + Y²) and Re's numerator within |Ũ|·e_X + (|X̃| + e_X)·e_U + 12u²·(|ŨX̃| + |VY|), Im's
+# within |q₁|·e_det + 4u²·|q₁·d̃et|. When a numerator's and the denominator's relative bounds total at most 200u² and
+# each lies in [2^-900, 2^900], _bj_e_div_ends (inputs within 239u²) rounds the quotient, or its test fails. A numerator
+# 0 with a zero bound is exactly 0. In the box every product lies in [2^-880, 2^806] once X, U and AD − BC are 0 or at
+# least 2^-440, so TwoProduct is exact and no step under- or overflows.
+#
+# The exact path (a failed test, a part outside the box, a cancellation past the budget, or slow = 1): X, U, V, Y,
+# AD − BC, X² + Y² and both numerators as signed bignums with an exponent of 2 (sign, exponent, then src/fmtf.cyr's
+# bignum, 302 words: a value spans at most 8,393 bits, from 2^-4296, four subnormals' least bits, to 2^4097), then each
+# quotient by restoring division to 55 bits and a sticky bit, rounded by kimiya's _bj_k_cr_from_int (subnormal results
+# on the 2^-1074 grid, ±∞ past DBL_MAX). cr_verify.py's abcd and abcd_slow families check both paths against Fractions.
+
+# A signed scaled bignum's size in words (sign, exponent, then a bignum of up to 299 limbs).
+const _BJ_E_QW = 302;
+
+# The fast path's constants: 2^200, 2^-200, 2^-440, 2^-900, 2^900, 2^-104 and u² = 2^-106.
+var _BJ_E_Q_BOX_HI: f64 = 0x4C70000000000000;
+var _BJ_E_Q_BOX_LO: f64 = 0x3370000000000000;
+var _BJ_E_Q_TINY: f64 = 0x2470000000000000;
+var _BJ_E_Q_RLO: f64 = 0x07B0000000000000;
+var _BJ_E_Q_RHI: f64 = 0x7830000000000000;
+var _BJ_E_Q_E104: f64 = 0x3970000000000000;
+var _BJ_E_Q_U2: f64 = 0x3950000000000000;
+
+# z := x for a finite x, as a signed scaled bignum.
+fn _bj_e_q_set(z, x: f64) {
+    store64(z + 16, 0);
+    if (x == 0.0) {
+        store64(z, 0);
+        store64(z + 8, 0);
+        return 0;
+    }
+    var me: i64[2];
+    _bj_g_split(x, &me);
+    store64(z, 1);
+    if (x < 0.0) { store64(z, 0 - 1); }
+    store64(z + 8, me[1]);
+    _bj_bn_set(z + 16, me[0]);
+    return 0;
+}
+
+# z := a.
+fn _bj_e_q_copy(z, a) {
+    store64(z, load64(a));
+    store64(z + 8, load64(a + 8));
+    _bj_bn_copy(z + 16, a + 16);
+    return 0;
+}
+
+# z := a·b, z distinct from a and b.
+fn _bj_e_q_mul(z, a, b) {
+    var s = load64(a) * load64(b);
+    store64(z, s);
+    if (s == 0) {
+        store64(z + 8, 0);
+        store64(z + 16, 0);
+        return 0;
+    }
+    store64(z + 8, load64(a + 8) + load64(b + 8));
+    _bj_e_bn_mul(z + 16, a + 16, b + 16);
+    return 0;
+}
+
+# z := a + b·sb (sb = 1 or −1), exactly, on the least exponent of the two; z and the scratch t distinct from a and b.
+fn _bj_e_q_add(z, a, b, sb, t) {
+    var sa = load64(a);
+    var sbb = load64(b) * sb;
+    if (sbb == 0) {
+        _bj_e_q_copy(z, a);
+        return 0;
+    }
+    if (sa == 0) {
+        _bj_e_q_copy(z, b);
+        store64(z, sbb);
+        return 0;
+    }
+    var ka = load64(a + 8);
+    var kb = load64(b + 8);
+    var k = ka;
+    if (kb < k) { k = kb; }
+    _bj_bn_copy(z + 16, a + 16);
+    _bj_bn_shl(z + 16, ka - k);
+    _bj_bn_copy(t + 16, b + 16);
+    _bj_bn_shl(t + 16, kb - k);
+    store64(z + 8, k);
+    if (sa == sbb) {
+        _bj_g_add_to(z + 16, t + 16);
+        store64(z, sa);
+        return 0;
+    }
+    var c = _bj_bn_cmp(z + 16, t + 16);
+    if (c == 0) {
+        store64(z, 0);
+        store64(z + 8, 0);
+        store64(z + 16, 0);
+        return 0;
+    }
+    if (c > 0) {
+        _bj_bn_sub(z + 16, t + 16);
+        store64(z, sa);
+        return 0;
+    }
+    _bj_bn_sub(t + 16, z + 16);
+    _bj_bn_copy(z + 16, t + 16);
+    store64(z, sbb);
+    return 0;
+}
+
+# RN(|n|/|d|) for nonzero signed scaled bignums n and d: both aligned to one bit length, then 55 steps of restoring
+# division (the quotient's first bit is 1) and a sticky bit, rounded by _bj_k_cr_from_int. nn and dd are scratch
+# bignums.
+#must_use
+fn _bj_e_q_ratio(n, d, nn, dd): f64 {
+    _bj_bn_copy(nn, n + 16);
+    _bj_bn_copy(dd, d + 16);
+    var t = _bj_g_bitlen(nn) - _bj_g_bitlen(dd);
+    if (t >= 0) {
+        _bj_bn_shl(dd, t);
+    } else {
+        _bj_bn_shl(nn, 0 - t);
+    }
+    if (_bj_bn_cmp(nn, dd) < 0) {
+        _bj_bn_shl(nn, 1);
+        t = t - 1;
+    }
+    var qq = 0;
+    for (var i = 0; i < 55; i = i + 1) {
+        qq = qq << 1;
+        if (_bj_bn_cmp(nn, dd) >= 0) {
+            _bj_bn_sub(nn, dd);
+            qq = qq + 1;
+        }
+        _bj_bn_shl(nn, 1);
+    }
+    var sticky = 0;
+    if (load64(nn) != 0) { sticky = 1; }
+    var r: f64 = _bj_k_cr_from_int(2 * qq + sticky, load64(n + 8) - load64(d + 8) + t - 55);
+    return r;
+}
+
+# out[0], out[1] := RN(Re q_out), RN(Im q_out) by the exact path (the section comment) for finite
+# v = (A, B, C, D, q₀, q₁) whose X² + Y² is nonzero; returns 1, plus 2 when Re's numerator is 0 and 4 when Im's is (each
+# output then +0).
+fn _bj_e_abcd_exact(v: *f64, out: *f64): i64 {
+    var ia: i64[6];
+    var ib: i64[6];
+    var ic: i64[6];
+    var id: i64[6];
+    var i0: i64[6];
+    var i1: i64[6];
+    _bj_e_q_set(&ia, v[0]);
+    _bj_e_q_set(&ib, v[1]);
+    _bj_e_q_set(&ic, v[2]);
+    _bj_e_q_set(&id, v[3]);
+    _bj_e_q_set(&i0, v[4]);
+    _bj_e_q_set(&i1, v[5]);
+    var x: i64[302];
+    var u: i64[302];
+    var w: i64[302];
+    var y: i64[302];
+    var dt: i64[302];
+    var t1: i64[302];
+    var t2: i64[302];
+    var tm: i64[302];
+    var den: i64[302];
+    var nr: i64[302];
+    var ni: i64[302];
+    _bj_e_q_mul(&t1, &ic, &i0);
+    _bj_e_q_add(&x, &t1, &id, 1, &tm);                    # X = C·q₀ + D
+    _bj_e_q_mul(&t1, &ia, &i0);
+    _bj_e_q_add(&u, &t1, &ib, 1, &tm);                    # U = A·q₀ + B
+    _bj_e_q_mul(&w, &ia, &i1);                            # V = A·q₁
+    _bj_e_q_mul(&y, &ic, &i1);                            # Y = C·q₁
+    _bj_e_q_mul(&t1, &ia, &id);
+    _bj_e_q_mul(&t2, &ib, &ic);
+    _bj_e_q_add(&dt, &t1, &t2, 0 - 1, &tm);               # AD − BC
+    _bj_e_q_mul(&t1, &x, &x);
+    _bj_e_q_mul(&t2, &y, &y);
+    _bj_e_q_add(&den, &t1, &t2, 1, &tm);                  # X² + Y²
+    _bj_e_q_mul(&t1, &u, &x);
+    _bj_e_q_mul(&t2, &w, &y);
+    _bj_e_q_add(&nr, &t1, &t2, 1, &tm);                   # U·X + V·Y
+    _bj_e_q_mul(&ni, &i1, &dt);                           # q₁·(AD − BC)
+    var f = 1;
+    var r0: f64 = 0.0;
+    var r1: f64 = 0.0;
+    if (load64(&nr) == 0) {
+        f = f + 2;
+    } else {
+        r0 = _bj_e_q_ratio(&nr, &den, &t1 + 16, &t2 + 16);
+        if (load64(&nr) < 0) { r0 = -r0; }
+    }
+    if (load64(&ni) == 0) {
+        f = f + 4;
+    } else {
+        r1 = _bj_e_q_ratio(&ni, &den, &t1 + 16, &t2 + 16);
+        if (load64(&ni) < 0) { r1 = -r1; }
+    }
+    out[0] = r0;
+    out[1] = r1;
+    return f;
+}
+
+# RN(|n|/d)·sign for the fast path: the quotient into *r and 1, or 0 when the range or the rounding test fails, for a
+# normalised double-double numerator n (nonzero) and denominator d > 0 whose relative bounds total rel.
+fn _bj_e_abcd_quot(nh: f64, nl: f64, dh: f64, dl: f64, rel: f64, r: *f64): i64 {
+    var bud: f64 = 200.0 * _BJ_E_Q_U2;
+    if (rel > bud) { return 0; }
+    var ah: f64 = f64_abs(nh);
+    var al: f64 = nl;
+    if (nh < 0.0) { al = -nl; }
+    var y: f64 = ah / dh;
+    var lo: f64 = _BJ_E_Q_RLO;
+    var hi: f64 = _BJ_E_Q_RHI;
+    if (ah < lo || ah > hi || dh < lo || dh > hi || y < lo || y > hi) { return 0; }
+    var z1, z2 = _bj_e_div_ends(ah, al, dh, dl);
+    var a1: f64 = z1;
+    var a2: f64 = z2;
+    if (a1 != a2) { return 0; }
+    if (nh < 0.0) { a1 = -a1; }
+    r[0] = a1;
+    return 1;
+}
+
+# The fast path (the section comment) for finite v = (A, B, C, D, q₀, q₁) that the threshold accepted:
+# _bj_e_abcd_exact's return and outputs, or 0 (outputs undefined) when the box, a range or a rounding test fails.
+fn _bj_e_abcd_fast(v: *f64, out: *f64): i64 {
+    var bhi: f64 = _BJ_E_Q_BOX_HI;
+    var blo: f64 = _BJ_E_Q_BOX_LO;
+    for (var i = 0; i < 6; i = i + 1) {
+        var m: f64 = f64_abs(v[i]);
+        if (m > bhi || (m < blo && m != 0.0)) { return 0; }
+    }
+    var a: f64 = v[0];
+    var b: f64 = v[1];
+    var c: f64 = v[2];
+    var d: f64 = v[3];
+    var q0: f64 = v[4];
+    var q1: f64 = v[5];
+    var p1, e1 = _bj_k_two_prod(c, q0);
+    var s1, g1 = _bj_k_two_sum(p1, d);
+    var w1: f64 = g1 + e1;
+    var xh, xl = _bj_k_two_sum(s1, w1);
+    var p2, e2 = _bj_k_two_prod(a, q0);
+    var s2, g2 = _bj_k_two_sum(p2, b);
+    var w2: f64 = g2 + e2;
+    var uh, ul = _bj_k_two_sum(s2, w2);
+    var vh, vl = _bj_k_two_prod(a, q1);
+    var yh, yl = _bj_k_two_prod(c, q1);
+    var ad1, ad2 = _bj_k_two_prod(a, d);
+    var bc1, bc2 = _bj_k_two_prod(b, c);
+    var nbc: f64 = -bc1;
+    var s3, g3 = _bj_k_two_sum(ad1, nbc);
+    var r3: f64 = ad2 - bc2;
+    var w3: f64 = g3 + r3;
+    var dh, dl = _bj_k_two_sum(s3, w3);
+    var tiny: f64 = _BJ_E_Q_TINY;
+    var mx: f64 = f64_abs(xh) + f64_abs(xl);
+    var mu: f64 = f64_abs(uh) + f64_abs(ul);
+    var md: f64 = f64_abs(dh);
+    if ((mx < tiny && mx != 0.0) || (mu < tiny && mu != 0.0) || (md < tiny && md != 0.0)) { return 0; }
+    var k104: f64 = _BJ_E_Q_E104;
+    var u2: f64 = _BJ_E_Q_U2;
+    var ex: f64 = (f64_abs(p1) + f64_abs(d)) * k104;
+    var eu: f64 = (f64_abs(p2) + f64_abs(b)) * k104;
+    var ed: f64 = (f64_abs(ad1) + f64_abs(bc1)) * k104;
+    var x2h, x2l = _bj_k_dd_mul(xh, xl, xh, xl);
+    var y2h, y2l = _bj_k_dd_mul(yh, yl, yh, yl);
+    var dnh, dnl = _bj_e_dw_add(x2h, x2l, y2h, y2l);
+    var uxh, uxl = _bj_k_dd_mul(uh, ul, xh, xl);
+    var vyh, vyl = _bj_k_dd_mul(vh, vl, yh, yl);
+    var nrh, nrl = _bj_e_dw_add(uxh, uxl, vyh, vyl);
+    var nih, nil = _bj_k_dd_mul_d(dh, dl, q1);
+    if (dnh <= 0.0) { return 0; }
+    var u12: f64 = 12.0 * u2;
+    var u4: f64 = 4.0 * u2;
+    var erd: f64 = (2.0 * mx + ex) * ex + u12 * (x2h + y2h);
+    var ern: f64 = mu * ex + (mx + ex) * eu + u12 * (f64_abs(uxh) + f64_abs(vyh));
+    var eri: f64 = f64_abs(q1) * ed + u4 * f64_abs(nih);
+    var reld: f64 = erd / dnh;
+    var f = 1;
+    var o: f64[1];
+    if (nrh == 0.0) {
+        if (ern != 0.0) { return 0; }
+        f = f + 2;
+        out[0] = 0.0;
+    } else {
+        var rn: f64 = ern / f64_abs(nrh) + reld;
+        if (_bj_e_abcd_quot(nrh, nrl, dnh, dnl, rn, &o) == 0) { return 0; }
+        out[0] = o[0];
+    }
+    if (nih == 0.0) {
+        if (eri != 0.0) { return 0; }
+        f = f + 4;
+        out[1] = 0.0;
+    } else {
+        var ri: f64 = eri / f64_abs(nih) + reld;
+        if (_bj_e_abcd_quot(nih, nil, dnh, dnl, ri, &o) == 0) { return 0; }
+        out[1] = o[0];
+    }
+    return f;
+}
+
+# The C = 0 path (free space, flat interfaces and their products): X = D and Y = 0, so |C·q + D|² < 10^-60 is
+# |D| < 10^-30, which is |D| below the double 1e-30 (it lies 0.37 ulp above 10^-30, and no double between);
+# Re q_out = (A·q₀ + B)/D and Im q_out = q₁·A/D. Re is B/D (one IEEE division) when A·q₀ = 0, RN(A·q₀ + B) by
+# TwoProduct and kimiya's _bj_k_rn3 when D = 1, else U/D by _bj_e_div_ends (U a double-double within
+# 4u²·(|A·q₀| + |B|)); Im is q₁·A (one IEEE product) when D = ±1, q₁/D when A = ±1, else TwoProduct(q₁, A)/D (exact,
+# so within budget). TwoProduct and the quotients need A, q₀, q₁, B and D in the box (or 0); _bj_cr_abcd's return,
+# or −1 when they aren't or a test fails (the general paths then run).
+fn _bj_e_abcd_c0(v: *f64, out: *f64): i64 {
+    var a: f64 = v[0];
+    var b: f64 = v[1];
+    var d: f64 = v[3];
+    var q0: f64 = v[4];
+    var q1: f64 = v[5];
+    var cut: f64 = 0.000000000000000000000000000001;
+    var ad: f64 = f64_abs(d);
+    if (ad < cut) { return 0; }
+    var bhi: f64 = _BJ_E_Q_BOX_HI;
+    var blo: f64 = _BJ_E_Q_BOX_LO;
+    for (var i = 0; i < 6; i = i + 1) {
+        var m: f64 = f64_abs(v[i]);
+        if (m > bhi || (m < blo && m != 0.0)) { return 0 - 1; }
+    }
+    var f = 1;
+    var o: f64[1];
+    if (a == 0.0 || q0 == 0.0) {
+        if (b == 0.0) {
+            f = f + 2;
+            out[0] = 0.0;
+        } else {
+            var r1: f64 = b / d;
+            out[0] = r1;
+        }
+    } else {
+        var p, e = _bj_k_two_prod(a, q0);
+        if (d == 1.0) {
+            var r2: f64 = _bj_k_rn3(p, e, b);
+            if (r2 == 0.0) {
+                f = f + 2;
+                r2 = 0.0;
+            }
+            out[0] = r2;
+        } else {
+            var s, g = _bj_k_two_sum(p, b);
+            var w: f64 = g + e;
+            var uh, ul = _bj_k_two_sum(s, w);
+            if (uh == 0.0) { return 0 - 1; }
+            var k104: f64 = _BJ_E_Q_E104;
+            var rel: f64 = (f64_abs(p) + f64_abs(b)) * k104 / f64_abs(uh);
+            var dh: f64 = ad;
+            var nh: f64 = uh;
+            var nl: f64 = ul;
+            if (d < 0.0) {
+                nh = -uh;
+                nl = -ul;
+            }
+            if (_bj_e_abcd_quot(nh, nl, dh, 0.0, rel, &o) == 0) { return 0 - 1; }
+            out[0] = o[0];
+        }
+    }
+    if (q1 == 0.0 || a == 0.0) {
+        f = f + 4;
+        out[1] = 0.0;
+    } elif (d == 1.0) {
+        var r3: f64 = q1 * a;
+        out[1] = r3;
+    } elif (d == -1.0) {
+        var r4: f64 = q1 * a;
+        out[1] = -r4;
+    } elif (a == 1.0) {
+        var r5: f64 = q1 / d;
+        out[1] = r5;
+    } elif (a == -1.0) {
+        var r6: f64 = q1 / d;
+        out[1] = -r6;
+    } else {
+        var p2, e2 = _bj_k_two_prod(q1, a);
+        var nh2: f64 = p2;
+        var nl2: f64 = e2;
+        if (d < 0.0) {
+            nh2 = -p2;
+            nl2 = -e2;
+        }
+        if (_bj_e_abcd_quot(nh2, nl2, ad, 0.0, 0.0, &o) == 0) { return 0 - 1; }
+        out[1] = o[0];
+    }
+    return f;
+}
+
+# RN(Re q_out) and RN(Im q_out) into out[0], out[1] for finite A, B, C, D, q₀, q₁ at v (the section comment): 0 when
+# |C·q + D|² < 10^-60 exactly (out untouched), else 1, plus 2 when Re q_out is exactly 0 and 4 when Im q_out is (each
+# output then +0). slow = 1 takes the exact path alone.
+#must_use
+fn _bj_cr_abcd(v: *f64, slow, out: *f64): i64 {
+    var c: f64 = v[2];
+    var d: f64 = v[3];
+    var q0: f64 = v[4];
+    var q1: f64 = v[5];
+    if (slow == 0 && c == 0.0) {
+        var f0 = _bj_e_abcd_c0(v, out);
+        if (f0 >= 0) { return f0; }
+    }
+    var t: f64 = 0.000000000000000000000000000000000000000000000000000000000001;
+    if (_bj_x_sumsq_sign(c, q0, d, c, q1, t, 0 - 60, 0 - 98) < 0) { return 0; }
+    if (slow == 0) {
+        var f = _bj_e_abcd_fast(v, out);
+        if (f != 0) { return f; }
+    }
+    var g = _bj_e_abcd_exact(v, out);
+    return g;
 }
 
 # --- log.cyr ---
@@ -23522,7 +23930,11 @@ impl BjAbcdMatrix {
     }
 
     # q_out = (A·q + B)/(C·q + D) for q = q_re + j·q_im into out[0], out[1]: Ok(0), or DivisionByZero when
-    # |C·q + D|² < 1e-60 (a NaN passes, as Rust's test). Mirrors `AbcdMatrix::propagate_beam`.
+    # |C·q + D|² < 10^-60. ADR 0002 row 17 (M3 part 2c-2): for finite entries and q the test is on the exact |C·q + D|²
+    # and each part of q_out is rounded once from the exact quotient (src/crmath_edge.cyr's _bj_cr_abcd), where Rust
+    # rounded C·q₀ + D first and could divide by a cancelled 0 or lose every digit; a part exactly 0 keeps Rust's zero
+    # where Rust's chain gives one (+0 otherwise). A non-finite entry or q keeps Rust's test and chain (a NaN passes).
+    # Mirrors `AbcdMatrix::propagate_beam`.
     #must_use
     public fn propagate_beam(self, q_re: f64, q_im: f64, out: *f64): Result {
         var num_re: f64 = self.a * q_re + self.b;
@@ -23530,6 +23942,33 @@ impl BjAbcdMatrix {
         var den_re: f64 = self.c * q_re + self.d;
         var den_im: f64 = self.c * q_im;
         var den_sq: f64 = den_re * den_re + den_im * den_im;
+        var fm: f64 = (self.a - self.a) + (self.b - self.b) + (self.c - self.c) + (self.d - self.d);
+        var fin: f64 = fm + (q_re - q_re) + (q_im - q_im);
+        if (fin == 0.0) {
+            var v: f64[6];
+            v[0] = self.a;
+            v[1] = self.b;
+            v[2] = self.c;
+            v[3] = self.d;
+            v[4] = q_re;
+            v[5] = q_im;
+            var o: f64[2];
+            var f = _bj_cr_abcd(&v, 0, &o);
+            if (f == 0) { return Err(_bj_beam_dz("ABCD beam propagation denominator is zero")); }
+            var e0: f64 = o[0];
+            var e1: f64 = o[1];
+            if ((f & 2) != 0) {
+                var z0: f64 = (num_re * den_re + num_im * den_im) / den_sq;
+                if (z0 == 0.0) { e0 = z0; }
+            }
+            if ((f & 4) != 0) {
+                var z1: f64 = (num_im * den_re - num_re * den_im) / den_sq;
+                if (z1 == 0.0) { e1 = z1; }
+            }
+            out[0] = e0;
+            out[1] = e1;
+            return Ok(0);
+        }
         if (den_sq < 0.000000000000000000000000000000000000000000000000000000000001) {
             return Err(_bj_beam_dz("ABCD beam propagation denominator is zero"));
         }
@@ -23547,7 +23986,9 @@ impl BjAbcdMatrix {
     # exact det of finite entries isn't positive (Rust's rounded det isn't positive and finite, for another), the
     # reason quoting the rounded det, or when z_R′ isn't positive and finite; DivisionByZero when C·q + D = 0; and
     # BjGaussianBeam_new's errors. out and distance are untouched by an error. ADR 0002 row 35: Rust tested the rounded
-    # det and kept λ within 10⁻¹² of 1. Mirrors `AbcdMatrix::transform_beam_with_waist_position`.
+    # det and kept λ within 10⁻¹² of 1. Row 17 (M3 part 2c-2): q_out is propagate_beam's, each part rounded once, so
+    # z_R′ = z·(AD − BC)/|C·q + D|² no longer cancels to 0 for a positive det. Mirrors
+    # `AbcdMatrix::transform_beam_with_waist_position`.
     #must_use
     public fn transform_beam_with_waist_position(self, beam: *BjGaussianBeam, out: *BjGaussianBeam,
       distance: *f64): Result {

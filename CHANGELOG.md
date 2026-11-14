@@ -547,6 +547,15 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
   inside the limit in (|m|·x)², was refused. The port decides (Re m·x)² + (Im m·x)² > 10¹⁴ exactly
   (`src/crmath_cmp.cyr`: bounds on the rounded parts, bignums within 2⁻⁴⁰ of the limit); the refusal still quotes the
   rounded |m|·x. Cost: none measurable (`scattering/mie_x1_real` 1.99 µs for 1.98, under load).
+- **beam** (ADR 0002 row 17 amended, M3 part 2c-2, the user's answer of 2026-11-14: accurate q_out):
+  `propagate_beam` rounded C·q₀ + D first and divided by |C·q + D|² as Rust's chain computed it. Where that
+  cancelled, C = 0.1, q₀ = 3, D = −0.30000000000000004 was refused for a denominator of −2.8·10⁻¹⁷, at a lens's
+  focus Re q_out came out with the wrong sign, and on a quarter of the corpus's rows a part was an ulp or more off.
+  The threshold is now decided on the exact |C·q + D|², and each part of q_out is rounded once from the exact
+  quotient (`src/crmath_edge.cyr`: a C = 0 path, a double-double fast path, an exact bignum path). The transforms take
+  z_R′ and the waist distance from it, so a positive determinant no longer cancels to z_R′ = 0 (det = 2⁻¹⁰⁴ gives
+  z_R′ = 1.45·10⁻³³). Cost: `propagate_beam` 94 ns for 22 in free space, 650 ns for 21 through a lens;
+  `transform_beam` 1.2 µs for 0.58 (roadmap finding).
 
 ### Performance
 
