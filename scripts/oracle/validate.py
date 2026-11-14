@@ -3109,6 +3109,25 @@ def rel_rust(fn, v, O, K):
         co = O["cross"](n, O["cross"](nmb, bd))
         fa = fdiv(pre, k3 * r_mag * C)
         at = [x * fa for x in co]
+        box = ((q == 0 or 2.0 ** -100 <= abs(q) < 2.0 ** 201) and g2 < 2.0 ** 100 and rel_box(r + bd, 923, 1223)
+               and rel_box(nmb, 923, 2046))
+        if O["ux"] and not box and _fin(q, *bd):
+            # Row 18's rule (M2 part 2d-3f): outside the box the whole tail to 53 bits, each part's sum rounded once.
+            M = rnd53_sqrt(uz_sumsq(r))
+            iv = uz_div(Fraction(1), M)
+            nn = [uz_mul(uz(x), iv) for x in r]
+            K = uz(kappa)
+            k3u = uz_mul(uz_mul(K, K), K)
+            pr = uz_div(uz(q), uz(4.0 * PI * EPS0))
+            fvu = uz_div(pr, uz_mul(uz_mul(uz_mul(uz(g2), k3u), M), M))
+            fau = uz_div(pr, uz_mul(uz_mul(k3u, M), uz(C)))
+            inner = [uz_cross(nmb, bd, i) for i in range(3)]
+            out = []
+            for i in range(3):
+                j, k = (i + 1) % 3, (i + 2) % 3
+                o = uz_sub(uz_mul(nn[j], inner[k]), uz_mul(nn[k], inner[j]))
+                out.append(uz_out(uz_add(uz_mul(uz(nmb[i]), fvu), uz_mul(o, fau), True)))
+            return ok3(out)
         return ok3([vt[i] + at[i] for i in range(3)])
     if fn == "relativity::lienard_wiechert_b":
         cr = O["cross"](v[0:3], v[3:6])

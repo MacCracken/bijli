@@ -19639,6 +19639,105 @@ fn _bj_rel_larmor_edge(charge: f64, v: *f64, a: *f64, gamma: f64, den: f64): f64
     return u;
 }
 
+# lienard_wiechert_e's box: the parts of R, β̇ and n̂ − β at the byte addresses r, bd and nm, R's and β̇'s ±0 or in
+# [2^-100, 2^201) (biased exponents [923, 1223]), n̂ − β's ±0 or at least 2^-100 (row 17 bounds them by 2): the
+# bit-pattern tests of _bj_rel_box_tf. The charge and γ² are the caller's.
+#must_use
+fn _bj_rel_box_e(r, bd, nm): i64 {
+    var m = 0x7FFFFFFFFFFFFFFF;
+    var lo = 923 << 52;
+    var hi = 1224 << 52;
+    var u = 0;
+    u = load64(r) & m;
+    if (u != 0 && (u < lo || u >= hi)) { return 0; }
+    u = load64(r + 8) & m;
+    if (u != 0 && (u < lo || u >= hi)) { return 0; }
+    u = load64(r + 16) & m;
+    if (u != 0 && (u < lo || u >= hi)) { return 0; }
+    u = load64(bd) & m;
+    if (u != 0 && (u < lo || u >= hi)) { return 0; }
+    u = load64(bd + 8) & m;
+    if (u != 0 && (u < lo || u >= hi)) { return 0; }
+    u = load64(bd + 16) & m;
+    if (u != 0 && (u < lo || u >= hi)) { return 0; }
+    u = load64(nm) & m;
+    if (u != 0 && u < lo) { return 0; }
+    u = load64(nm + 8) & m;
+    if (u != 0 && u < lo) { return 0; }
+    u = load64(nm + 16) & m;
+    if (u != 0 && u < lo) { return 0; }
+    return 1;
+}
+
+# 2^-100 and 2^201 as f64s: the box's bounds on lienard_wiechert_e's charge.
+var _BJ_REL_E_QLO: f64 = 0x39B0000000000000;
+var _BJ_REL_E_QHI: f64 = 0x4C80000000000000;
+
+# (a × b)ᵢ for pairs: a_j b_k − a_k b_j to 53 bits with an unbounded exponent, a and b three (s, e) pairs each (s at
+# as[k], e at ae[k]).
+#must_use
+fn _bj_rel_cross_pp(as: *f64, ae: *i64, bs: *f64, be: *i64, i): (f64, i64) {
+    var j = (i + 1) % 3;
+    var k = (i + 2) % 3;
+    var ps, pe = _bj_k_ux_mul(as[j], ae[j], bs[k], be[k]);
+    var qs, qe = _bj_k_ux_mul(as[k], ae[k], bs[j], be[j]);
+    var s, e = _bj_k_ux_sub(ps, pe, qs, qe);
+    return (s, e);
+}
+
+# lienard_wiechert_e's tail outside its box (ADR 0002 row 18's rule, M2 part 2d-3f), into out: |R|, 1/|R|, n̂ = R/|R|,
+# κ³, q/(4πε₀), γ²κ³R², the velocity factor, (n̂ − β) × β̇, n̂ × that, κ³Rc, the acceleration factor and both terms to
+# 53 bits with an unbounded exponent, each part's sum rounded once. κ, n̂ − β (row 17) and γ² (row 30) enter as the
+# doubles their rows define; the cross products take Rust's order (BjFieldVector's cross).
+fn _bj_rel_e_edge(charge: f64, r: *f64, kappa: f64, gamma_sq: f64, nm: *f64, bd: *f64, out: *BjFieldVector) {
+    var c: f64 = BJ_SPEED_OF_LIGHT;
+    var fpe: f64 = 4.0 * _BJ_PI * BJ_EPSILON_0;
+    var rs2, re2 = _bj_vx_sumsq(r[0], r[1], r[2]);
+    var ms, me = _bj_k_ux_sqrt(rs2, re2);
+    var is1, ie1 = _bj_k_ux_div(1.0, 0, ms, me);
+    var ns: f64[3];
+    var ne: i64[3];
+    var ins: f64[3];
+    var ine: i64[3];
+    for (var i = 0; i < 3; i = i + 1) {
+        var xs, xe = _bj_k_ux_from(r[i]);
+        var ts, te = _bj_k_ux_mul(xs, xe, is1, ie1);
+        ns[i] = ts;
+        ne[i] = te;
+        var cs1, ce1 = _bj_rel_cross_ux(nm, bd, i);
+        ins[i] = cs1;
+        ine[i] = ce1;
+    }
+    var ks, ke = _bj_k_ux_from(kappa);
+    var k2s, k2e = _bj_k_ux_mul(ks, ke, ks, ke);
+    var k3s, k3e = _bj_k_ux_mul(k2s, k2e, ks, ke);
+    var qs, qe = _bj_k_ux_from(charge);
+    var fs, fe = _bj_k_ux_from(fpe);
+    var ps, pe = _bj_k_ux_div(qs, qe, fs, fe);
+    var gs, ge = _bj_k_ux_from(gamma_sq);
+    var d1s, d1e = _bj_k_ux_mul(gs, ge, k3s, k3e);
+    var d2s, d2e = _bj_k_ux_mul(d1s, d1e, ms, me);
+    var d3s, d3e = _bj_k_ux_mul(d2s, d2e, ms, me);
+    var fvs, fve = _bj_k_ux_div(ps, pe, d3s, d3e);
+    var a1s, a1e = _bj_k_ux_mul(k3s, k3e, ms, me);
+    var cs, ce = _bj_k_ux_from(c);
+    var a2s, a2e = _bj_k_ux_mul(a1s, a1e, cs, ce);
+    var fas, fae = _bj_k_ux_div(ps, pe, a2s, a2e);
+    var eo: f64[3];
+    for (var j = 0; j < 3; j = j + 1) {
+        var nms, nme = _bj_k_ux_from(nm[j]);
+        var vts, vte = _bj_k_ux_mul(nms, nme, fvs, fve);
+        var os, oe = _bj_rel_cross_pp(&ns, &ne, &ins, &ine, j);
+        var ats, ate = _bj_k_ux_mul(os, oe, fas, fae);
+        var ej: f64 = _bj_k_ux_add_f64(vts, vte, ats, ate);
+        eo[j] = ej;
+    }
+    out.x = eo[0];
+    out.y = eo[1];
+    out.z = eo[2];
+    return 0;
+}
+
 # ── the electromagnetic tensor ───────────────────────────────────────────────────────────────────────────────────
 
 # F^μν of (E, B): F^{i0} = Eᵢ/c, F^{0i} = −Eᵢ/c, F^{12} = −B_z, F^{13} = B_y, F^{23} = −B_x and their negatives below
@@ -20238,8 +20337,10 @@ fn _bj_rel_avec_edge(charge: f64, r_vec: BjFieldVector, beta_vec: BjFieldVector,
 # correctly rounded from the exact difference (ADR 0002 row 30). For a finite R, κ = (|R| − R⋅β)/|R| is rounded once
 # from the exact S and P, and its test decided on the exact κ (src/crmath_edge.cyr; ADR 0002 row 17, M2 part 2c-4):
 # Rust's 1 − n̂⋅β cancelled as n̂⋅β → 1, and refused a κ of 6e-17 as zero. n̂ − β, which vanishes with κ, is rounded
-# once part by part from the same exact parts (row 17, M2 part 2d-1, the user's answer of 2026-11-13). An ∞ part
-# keeps Rust's κ, its |κ| < 1e-30 and its n̂ − β. Mirrors `relativity::lienard_wiechert_e`.
+# once part by part from the same exact parts (row 17, M2 part 2d-1, the user's answer of 2026-11-13). The tail
+# (γ²κ³R², the two factors, the cross products) keeps Rust's chain inside a box on q, R, β̇, n̂ − β and γ², and
+# otherwise runs with an unbounded exponent, |R| and 1/|R| included, each part's sum rounded once (row 18's rule, M2
+# part 2d-3f). Mirrors `relativity::lienard_wiechert_e`.
 public fn bj_lienard_wiechert_e(charge: f64, r_vec: BjFieldVector, beta_vec: BjFieldVector, beta_dot: BjFieldVector,
   out: *BjFieldVector): Result {
     var r_mag: f64 = r_vec.magnitude();
@@ -20278,10 +20379,30 @@ public fn bj_lienard_wiechert_e(charge: f64, r_vec: BjFieldVector, beta_vec: BjF
     var fa: f64 = pre / da;
     var accel_term: BjFieldVector = outer.scale(fa);
     var e: BjFieldVector = BjFieldVector_add(velocity_term, accel_term);
+    var aq: f64 = f64_abs(charge);
+    if ((charge == 0.0 || (aq >= _BJ_REL_E_QLO && aq < _BJ_REL_E_QHI)) && gamma_sq < 1267650600228229401496703205376.0
+      && _bj_rel_box_e(&r_vec, &beta_dot, &n_minus_beta) == 1) {
+        out.x = e.x;
+        out.y = e.y;
+        out.z = e.z;
+        return Ok(0);
+    }
+    _bj_rel_e_slow(charge, r_vec, kappa, gamma_sq, n_minus_beta, beta_dot, e, out);
+    return Ok(0);
+}
+
+# lienard_wiechert_e outside its box: _bj_rel_e_edge for a finite charge and β̇, else Rust's chain e (a non-finite
+# operand keeps it).
+fn _bj_rel_e_slow(charge: f64, r_vec: BjFieldVector, kappa: f64, gamma_sq: f64, nmb: BjFieldVector,
+  beta_dot: BjFieldVector, e: BjFieldVector, out: *BjFieldVector) {
+    if (_bj_vx_finite4(charge, beta_dot.x, beta_dot.y, beta_dot.z) == 1) {
+        _bj_rel_e_edge(charge, _bj_rel_f64p(&r_vec), kappa, gamma_sq, _bj_rel_f64p(&nmb), _bj_rel_f64p(&beta_dot), out);
+        return 0;
+    }
     out.x = e.x;
     out.y = e.y;
     out.z = e.z;
-    return Ok(0);
+    return 0;
 }
 
 # B = n̂ × E/c (T), perpendicular to n̂ and E. Mirrors `relativity::lienard_wiechert_b`.

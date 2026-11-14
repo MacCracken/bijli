@@ -463,6 +463,7 @@ pub fn emit() -> Module {
     emit_fv_edges(&mut m);
     emit_transform_edges(&mut m);
     emit_lw_inf_edges(&mut m);
+    emit_e_tail_edges(&mut m);
     m
 }
 
@@ -835,6 +836,30 @@ fn emit_lw_inf_edges(m: &mut Module) {
         for r in [FieldVector::new(1.0, 0.0, 0.0), FieldVector::new(1e-20, 0.0, 0.0), FieldVector::new(1e300, 0.0, 0.0)] {
             for &bv in &bbs {
                 lw_rows(m, q, r, bv, zero, true);
+            }
+        }
+    }
+}
+
+/// M2 part 2d-3f (bijli ADR 0002 row 18's rule): lienard_wiechert_e's tail at its range edges, outside its box: charges
+/// of 10^300, 2^-1074 and 10^-200; R of 10^200 (R² past DBL_MAX) and just above 10^-30; β̇ of 10^300 and 10^-300 beside
+/// zero. After every older row.
+fn emit_e_tail_edges(m: &mut Module) {
+    let zero = FieldVector::new(0.0, 0.0, 0.0);
+    let rs = [
+        FieldVector::new(1e200, 0.0, 0.0),
+        FieldVector::new(1e200, 1e200, 0.0),
+        FieldVector::new(2e-30, 0.0, 0.0),
+        FieldVector::new(3e-30, 4e-30, 0.0),
+    ];
+    let betas = [zero, FieldVector::new(0.5, 0.0, 0.0), FieldVector::new(0.0, 0.9, 0.0)];
+    let bds = [zero, FieldVector::new(0.0, 1e300, 0.0), FieldVector::new(1e-300, 0.0, 0.0)];
+    for q in [1e300, pow2(-1074), 1e-200] {
+        for &r in &rs {
+            for &bv in &betas {
+                for &bd in &bds {
+                    lw_rows(m, q, r, bv, bd, false);
+                }
             }
         }
     }

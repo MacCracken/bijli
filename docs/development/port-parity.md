@@ -2638,3 +2638,50 @@ R = r_obs − r(t_r) past DBL_MAX: their chains amplify an intermediate as the t
 - **Result, every target** (x86_64 ELF, x86_64 PE, aarch64): **13 modules, 0 failing; 405,930 ok, 0 failed, 0
   measured, 0 pending, 47,230 accepted (ADR 01: 8,998; ADR 0002: 38,232)** over 453,160 rows; **all 276 digests
   equal**. Four changed: E, both potentials and the solver.
+
+## 50. M2 part 2d-3f: lienard_wiechert_e's tail at its range edges (2026-11-13)
+
+§49 left E's own tail: dv = γ²κ³R², fv = (q/(4πε₀))/dv, the velocity term (n̂ − β)·fv, the cross products
+n̂ × ((n̂ − β) × β̇), da = κ³Rc, fa = (q/(4πε₀))/da and the acceleration term. The solver's light-cone sample and
+`lienard_wiechert_fields`' R = r_obs − r(t_r) past DBL_MAX are 2d-3g's.
+
+- **ADR 0002 row 18, amended** (the rule of §42, with a box as §48's):
+  - **Why a box.** The chain multiplies by up to 1/(γ²κ³R²) (to 2^498) and by β̇ (to 2^201), so a subnormal
+    intermediate is amplified, not absorbed.
+  - **The box**: every nonzero q, R part and β̇ part has a biased exponent in [923, 1223], i.e. lies in
+    [2^-100, 2^201). Every nonzero n̂ − β part (row 17's, bounded by 2) is at least 2^-100, and γ² < 2^100. κ needs
+    nothing: past its 10^-30 test, κ³ ∈ [2^-299, 8].
+  - **Within the box** every intermediate is normal or an exact 0:
+    - n̂ = R·(1/|R|) ≥ 2^-301.8;
+    - (q/(4πε₀)) ∈ [2^-67, 2^234.1];
+    - the velocity factor ∈ [2^-573.6, 2^732.5];
+    - (n̂ − β) × β̇, a difference of normal products, is 0 or at least 2^-252, and n̂ × that at least 2^-605.8;
+    - the acceleration factor ∈ [2^-300, 2^604.6] and its term ≥ 2^-905.8.
+
+    Each term is then its 53-bit value and each part's sum rounds once in both chains.
+  - **Outside it**, for finite q and β̇, `_bj_rel_e_edge` runs the whole tail with an unbounded exponent: |R| (the
+    sum of squares and its root), 1/|R|, n̂, κ³, q/(4πε₀), γ²κ³R², both factors, both cross products (Rust's order)
+    and both terms. Each part's sum rounds once. κ, n̂ − β (row 17) and γ² (row 30) enter as the doubles their rows
+    define. A non-finite q or β̇ keeps Rust's chain.
+  - **Rust's results at these edges**:
+    - q = 10^300 at R = 10^200 gave E = NaN for 9·10^-91 (R² past DBL_MAX: dv = ∞, and pre past DBL_MAX too);
+    - |R| = √3·DBL_MAX gave 1/|R| = 0 and E = 0, where the radiation term is 3.2·10^-300.
+- **Rows** (`m_relativity.rs`'s `emit_e_tail_edges`, after every older row): 108 more. Charges of 10^300, 2^-1074 and
+  10^-200; R of 10^200 along an axis and diagonal, 2·10^-30 and (3, 4, 0)·10^-30; three β; β̇ of 0, 10^300 and
+  10^-300. `validate.py`'s transcription agreed with every row.
+- **Mappings** (the tail on the `uz_*` chain and `rnd53_sqrt`): `relativity.adr.tsv` maps 206 more rows net.
+  - Row 17, 121, and row 18, 83. The corpus's older E rows at extreme scales (lw_cases' R past 10^154 and near 10^-30,
+    subnormal parts) now take the unbounded tail; 88 of their outputs changed. Rows whose κ moves too keep row 17 by
+    precedence.
+  - Row 30, 2.
+
+  All pass.
+- **Box audit** (a sampling check in Python, not a gate): 16,364 samples inside the box, weighted to its edges, with
+  κ, n̂ − β and γ² from the exact references. Rust's chain equalled the pure unbounded chain on every one.
+- **Tests**: tests/relativity.tcyr gains 2 assertions, the two cases above.
+- **Benchmarks** (a focused interleaved A/B against HEAD, five repetitions a round, three rounds, load 1.9):
+  `relativity/lienard_wiechert_e` 672 → 711 ns, the box's nine bit-pattern tests and two compares. With §49's
+  −26 ns that is about +12 ns against 2d-3d's version. The record's 662 ns becomes 710.
+- **Result, every target** (x86_64 ELF, x86_64 PE, aarch64): **13 modules, 0 failing; 405,832 ok, 0 failed, 0
+  measured, 0 pending, 47,436 accepted (ADR 01: 8,998; ADR 0002: 38,438)** over 453,268 rows; **all 276 digests
+  equal**. One changed: E.

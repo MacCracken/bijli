@@ -1239,6 +1239,15 @@ fn cyrius_tests(): i64 {
     var ti6, vi6 = bj_lienard_wiechert_vector_potential(dm, r6, b6, &av6);
     assert(is_ok(ti6) == 1 && av6.y == 0.0 && av6.z == 0.0 && _bj_bits(av6.x) == 0xFFF0000000000000,
       "q = DBL_MAX: A = (−∞, 0, 0), μ₀qc past DBL_MAX run unbounded (Rust: 0·∞ = NaN across β)");
+    # M2 part 2d-3f: lienard_wiechert_e's tail outside its box.
+    var ef: BjFieldVector;
+    var te1, ve1 = bj_lienard_wiechert_e(e300, BjFieldVector_new(e200, 0.0, 0.0), zb, zb, &ef);
+    assert(is_ok(te1) == 1 && _bj_bits(ef.x) == 0x2D3D4AF1694A8C42 && ef.y == 0.0,
+      "q = 1e300 at R = 1e200: E = 9e-91, γ²κ³R² past DBL_MAX run unbounded (Rust: NaN)");
+    var bd8: BjFieldVector = BjFieldVector_new(0.0, 100000000.0, 0.0);
+    var te2, ve2 = bj_lienard_wiechert_e(1.0, BjFieldVector_new(dm, dm, dm), zb, bd8, &ef);
+    assert(is_ok(te2) == 1 && _bj_bits(ef.x) == 0x01C131C9235E873A && _bj_bits(ef.y) == 0x81D131C9235E873A,
+      "|R| past DBL_MAX: the radiation term 3.2e-300 (Rust: 0, its 1/|R| was 0)");
 
     if (v1 == 0 || v2 == 0 || v3 == 0 || v4 == 0 || v5 == 0 || v6 == 0 || v7 == 0) { println("."); }
     return 0;

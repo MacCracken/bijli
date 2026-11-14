@@ -358,6 +358,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
   where R_eff passed DBL_MAX (|R| = √3·DBL_MAX: φ = 2.9·10^-299), and A = NaN across β for q = DBL_MAX. Their tails
   now run with an unbounded exponent at those edges and round once (src/crmath_edge.cyr's `_bj_cr_lw` gains mode 3,
   R_eff to 53 bits); the other rows held within the noise (`port-parity.md` §49).
+- **relativity** (ADR 0002 row 18 amended, M2 part 2d-3f): `lienard_wiechert_e`'s tail over- and underflowed where E
+  is representable. q = 10^300 at R = 10^200 gave NaN for 9·10^-91, and an |R| past DBL_MAX gave 0 where the radiation
+  term is 3.2·10^-300. The tail keeps Rust's chain inside a box on q, R, β̇, n̂ − β and γ²; outside it the whole tail
+  runs with an unbounded exponent and rounds once. The cost: `relativity/lienard_wiechert_e` 672 → 711 ns
+  (`port-parity.md` §50).
 - **relativity** (ADR 0002 row 13 amended, M2 part 2b-4): `retarded_scalar_potential`, `retarded_vector_potential`,
   `larmor_power` and `EmTensor::dual` rounded two to five times, and overflowed where the value is representable
   (Larmor with q² past DBL_MAX, the dual of B past DBL_MAX/c: ∞ each); they are now correctly rounded for finite
