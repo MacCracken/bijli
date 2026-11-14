@@ -716,6 +716,51 @@ fn main(): i64 {
     bench_report(b49);
     if (rsum == 7.0) { println("."); }
 
+    # polarization/* (M3 part 1a-1): rust-old/benches/benchmarks.rs's polarization_benchmarks with its arguments.
+    var pol = BjJonesMatrix_horizontal_polarizer();
+    var pdiag = BjJonesVector_diagonal();
+    var psum: f64 = 0.0;
+    var b50 = bench_new("polarization/jones_apply_polarizer");
+    bench_batch_start(b50);
+    for (var k = 0; k < 1000000; k = k + 1) {
+        var r50: BjJonesVector = pol.apply(pdiag);
+        psum = psum + r50.x.re;
+    }
+    bench_batch_stop(b50, 1000000);
+    bench_report(b50);
+
+    var pqwp = BjJonesMatrix_quarter_wave_plate(0.7853981633974483);
+    var phor = BjJonesVector_horizontal();
+    var b51 = bench_new("polarization/jones_qwp_apply");
+    bench_batch_start(b51);
+    for (var k = 0; k < 1000000; k = k + 1) {
+        var r51: BjJonesVector = pqwp.apply(phor);
+        psum = psum + r51.y.im;
+    }
+    bench_batch_stop(b51, 1000000);
+    bench_report(b51);
+
+    var pmh = BjMuellerMatrix_horizontal_polarizer();
+    var punp = BjStokesVector_unpolarized(1.0);
+    var b52 = bench_new("polarization/mueller_apply");
+    bench_batch_start(b52);
+    for (var k = 0; k < 1000000; k = k + 1) {
+        var r52: BjStokesVector = pmh.apply(punp);
+        psum = psum + r52.s.0;
+    }
+    bench_batch_stop(b52, 1000000);
+    bench_report(b52);
+
+    var b53 = bench_new("polarization/stokes_from_jones");
+    bench_batch_start(b53);
+    for (var k = 0; k < 1000000; k = k + 1) {
+        var r53: BjStokesVector = BjStokesVector_from_jones(pdiag);
+        psum = psum + r53.s.2;
+    }
+    bench_batch_stop(b53, 1000000);
+    bench_report(b53);
+    if (psum == 7.0) { println("."); }
+
     # The JSON (src/json.cyr): a FieldVector written into one builder, emptied each time through its length word
     # (lib/str.cyr's layout: buf, len, cap), and serde_json's documents read back.
     var jv = BjFieldVector_new(1.5, -0.25, BJ_SPEED_OF_LIGHT);

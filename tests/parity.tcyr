@@ -2129,6 +2129,252 @@ public fn _par_json(fp, fl): i64 {
     return 0;
 }
 
+# ── polarization (M3 part 1a-1): src/polarization.cyr ───────────────────────────────────────────────────────────────
+# ADR 0002 row 5 in polarization: every function but the retarders is the same formula in both conventions, so it is
+# compared on the oracle's numbers directly; the circular states and polarizers carry Rust's numbers under the IEEE
+# names (the conjugation and the renaming cancel: (1, −j)/√2 is conj of Rust's left_circular, its right_circular's
+# numbers), compared by name, their handedness pinned by tests/polarization.tcyr's rotation-sense groups. The retarders
+# differ: a Jones waveplate is compared conjugated back (port = conj(oracle), each imaginary part negated exactly), a
+# Mueller one through D·M·D (D = diag(1, 1, 1, −1): the four S₃-coupling entries it computes negated exactly; its
+# m[0][3] and m[3][0] are zeros in both conventions). Counted per run.
+var _par_map5_pol = 0;
+
+# Input tokens k … k + 3 as a Jones vector (x.re, x.im, y.re, y.im).
+fn _par_in_jv(k): BjJonesVector {
+    var x: BjComplex = BjComplex_new(_par_in(k), _par_in(k + 1));
+    var y: BjComplex = BjComplex_new(_par_in(k + 2), _par_in(k + 3));
+    var v: BjJonesVector = BjJonesVector_new(x, y);
+    return v;
+}
+
+# Input tokens k … k + 7 as a Jones matrix (row-major, re before im).
+fn _par_in_jm(k): BjJonesMatrix {
+    var a: BjComplex = BjComplex_new(_par_in(k), _par_in(k + 1));
+    var b: BjComplex = BjComplex_new(_par_in(k + 2), _par_in(k + 3));
+    var c: BjComplex = BjComplex_new(_par_in(k + 4), _par_in(k + 5));
+    var d: BjComplex = BjComplex_new(_par_in(k + 6), _par_in(k + 7));
+    var j: BjJonesMatrix = BjJonesMatrix_new(a, b, c, d);
+    return j;
+}
+
+# Input tokens k … k + 3 as a Stokes vector.
+fn _par_in_sv(k): BjStokesVector {
+    var s: BjStokesVector = BjStokesVector_new(_par_in(k), _par_in(k + 1), _par_in(k + 2), _par_in(k + 3));
+    return s;
+}
+
+# Input tokens k … k + 15 as a Mueller matrix (row-major).
+fn _par_in_mm(k): BjMuellerMatrix {
+    var a: f64[16];
+    for (var i = 0; i < 16; i = i + 1) { a[i] = _par_in(k + i); }
+    var m: BjMuellerMatrix = BjMuellerMatrix_new(&a);
+    return m;
+}
+
+fn _par_got_jv(v: BjJonesVector) {
+    _par_got_c(v.x);
+    _par_got_c(v.y);
+    return 0;
+}
+
+# A Jones matrix to the got list, conjugated back when conj is 1 (a retarder, ADR 0002 row 5).
+fn _par_got_jm(j: BjJonesMatrix, conj) {
+    var p: *f64 = _par_f64p(&j);
+    for (var i = 0; i < 8; i = i + 1) {
+        var x: f64 = p[i];
+        if (conj == 1 && (i & 1) == 1) { x = -x; }
+        _par_got_f(x);
+    }
+    return 0;
+}
+
+fn _par_got_sv(s: BjStokesVector) {
+    var p: *f64 = _par_f64p(&s);
+    for (var i = 0; i < 4; i = i + 1) { _par_got_f(p[i]); }
+    return 0;
+}
+
+# A Mueller matrix to the got list, through D·M·D when dmd is 1 (a retarder, ADR 0002 row 5): its four S₃-coupling
+# entries m[1][3], m[2][3], m[3][1] and m[3][2] negated; m[0][3] and m[3][0] are a retarder's zeros in both conventions.
+fn _par_got_mm(m: BjMuellerMatrix, dmd) {
+    var p: *f64 = _par_f64p(&m);
+    for (var i = 0; i < 16; i = i + 1) {
+        var x: f64 = p[i];
+        if (dmd == 1 && (i == 7 || i == 11 || i == 13 || i == 14)) { x = -x; }
+        _par_got_f(x);
+    }
+    return 0;
+}
+
+# An address as a *f64.
+fn _par_f64p(p): *f64 {
+    return p;
+}
+
+fn _par_jones(fp, fl): i64 {
+    if (_par_eq(fp, fl, "JonesVector::horizontal") == 1) { return _par_got_jv(BjJonesVector_horizontal()) + 1; }
+    if (_par_eq(fp, fl, "JonesVector::vertical") == 1) { return _par_got_jv(BjJonesVector_vertical()) + 1; }
+    if (_par_eq(fp, fl, "JonesVector::diagonal") == 1) { return _par_got_jv(BjJonesVector_diagonal()) + 1; }
+    if (_par_eq(fp, fl, "JonesVector::anti_diagonal") == 1) { return _par_got_jv(BjJonesVector_anti_diagonal()) + 1; }
+    if (_par_eq(fp, fl, "JonesVector::right_circular") == 1) { return _par_got_jv(BjJonesVector_right_circular()) + 1; }
+    if (_par_eq(fp, fl, "JonesVector::left_circular") == 1) { return _par_got_jv(BjJonesVector_left_circular()) + 1; }
+    if (_par_eq(fp, fl, "JonesVector::default") == 1) { return _par_got_jv(BjJonesVector_default()) + 1; }
+    if (_par_eq(fp, fl, "JonesVector::linear") == 1) { return _par_got_jv(BjJonesVector_linear(_par_in(0))) + 1; }
+    var v: BjJonesVector = _par_in_jv(0);
+    if (_par_eq(fp, fl, "JonesVector::new") == 1) { return _par_got_jv(BjJonesVector_new(v.x, v.y)) + 1; }
+    if (_par_eq(fp, fl, "JonesVector::intensity") == 1) {
+        var i1: f64 = v.intensity();
+        _par_got_f(i1);
+        return 1;
+    }
+    if (_par_eq(fp, fl, "JonesVector::normalized") == 1) {
+        var nv: BjJonesVector;
+        var t1, v1 = v.normalized(&nv);
+        if (is_err_result(t1) == 1) { return _par_got_error(v1) + 1; }
+        return _par_got_jv(nv) + 1;
+    }
+    var w: BjJonesVector = _par_in_jv(4);
+    if (_par_eq(fp, fl, "JonesVector::inner") == 1) {
+        _par_got_c(v.inner(w));
+        return 1;
+    }
+    if (_par_eq(fp, fl, "JonesVector::overlap") == 1) {
+        var t2, v2 = v.overlap(w);
+        _par_got_res_f(t2, v2);
+        return 1;
+    }
+    if (_par_eq(fp, fl, "JonesMatrix::identity") == 1) { return _par_got_jm(BjJonesMatrix_identity(), 0) + 1; }
+    if (_par_eq(fp, fl, "JonesMatrix::horizontal_polarizer") == 1) {
+        return _par_got_jm(BjJonesMatrix_horizontal_polarizer(), 0) + 1;
+    }
+    if (_par_eq(fp, fl, "JonesMatrix::vertical_polarizer") == 1) {
+        return _par_got_jm(BjJonesMatrix_vertical_polarizer(), 0) + 1;
+    }
+    var a: f64 = _par_in(0);
+    if (_par_eq(fp, fl, "JonesMatrix::linear_polarizer") == 1) {
+        return _par_got_jm(BjJonesMatrix_linear_polarizer(a), 0) + 1;
+    }
+    if (_par_eq(fp, fl, "JonesMatrix::rotator") == 1) { return _par_got_jm(BjJonesMatrix_rotator(a), 0) + 1; }
+    if (_par_eq(fp, fl, "JonesMatrix::half_wave_plate") == 1) {
+        _par_map5_pol = _par_map5_pol + 1;
+        return _par_got_jm(BjJonesMatrix_half_wave_plate(a), 1) + 1;
+    }
+    if (_par_eq(fp, fl, "JonesMatrix::quarter_wave_plate") == 1) {
+        _par_map5_pol = _par_map5_pol + 1;
+        return _par_got_jm(BjJonesMatrix_quarter_wave_plate(a), 1) + 1;
+    }
+    if (_par_eq(fp, fl, "JonesMatrix::waveplate") == 1) {
+        _par_map5_pol = _par_map5_pol + 1;
+        return _par_got_jm(BjJonesMatrix_waveplate(a, _par_in(1)), 1) + 1;
+    }
+    var j: BjJonesMatrix = _par_in_jm(0);
+    if (_par_eq(fp, fl, "JonesMatrix::new") == 1) {
+        return _par_got_jm(BjJonesMatrix_new(j.m00, j.m01, j.m10, j.m11), 0) + 1;
+    }
+    if (_par_eq(fp, fl, "JonesMatrix::determinant") == 1) {
+        _par_got_c(j.determinant());
+        return 1;
+    }
+    if (_par_eq(fp, fl, "JonesMatrix::apply") == 1) { return _par_got_jv(j.apply(_par_in_jv(8))) + 1; }
+    if (_par_eq(fp, fl, "JonesMatrix::compose") == 1) { return _par_got_jm(j.compose(_par_in_jm(8)), 0) + 1; }
+    return 0;
+}
+
+fn _par_stokes(fp, fl): i64 {
+    if (_par_eq(fp, fl, "StokesVector::default") == 1) { return _par_got_sv(BjStokesVector_default()) + 1; }
+    var x: f64 = _par_in(0);
+    if (_par_eq(fp, fl, "StokesVector::unpolarized") == 1) { return _par_got_sv(BjStokesVector_unpolarized(x)) + 1; }
+    if (_par_eq(fp, fl, "StokesVector::horizontal") == 1) { return _par_got_sv(BjStokesVector_horizontal(x)) + 1; }
+    if (_par_eq(fp, fl, "StokesVector::vertical") == 1) { return _par_got_sv(BjStokesVector_vertical(x)) + 1; }
+    if (_par_eq(fp, fl, "StokesVector::right_circular") == 1) {
+        return _par_got_sv(BjStokesVector_right_circular(x)) + 1;
+    }
+    if (_par_eq(fp, fl, "StokesVector::left_circular") == 1) {
+        return _par_got_sv(BjStokesVector_left_circular(x)) + 1;
+    }
+    if (_par_eq(fp, fl, "StokesVector::from_jones") == 1) {
+        return _par_got_sv(BjStokesVector_from_jones(_par_in_jv(0))) + 1;
+    }
+    var s: BjStokesVector = _par_in_sv(0);
+    if (_par_eq(fp, fl, "StokesVector::new") == 1) {
+        return _par_got_sv(BjStokesVector_new(s.s.0, s.s.1, s.s.2, s.s.3)) + 1;
+    }
+    if (_par_eq(fp, fl, "StokesVector::intensity") == 1) {
+        var i1: f64 = s.intensity();
+        _par_got_f(i1);
+        return 1;
+    }
+    if (_par_eq(fp, fl, "StokesVector::degree_of_polarization") == 1) {
+        var t1, v1 = s.degree_of_polarization();
+        _par_got_res_f(t1, v1);
+        return 1;
+    }
+    if (_par_eq(fp, fl, "StokesVector::ellipticity_angle") == 1) {
+        var e1: f64 = s.ellipticity_angle();
+        _par_got_f(e1);
+        return 1;
+    }
+    if (_par_eq(fp, fl, "StokesVector::orientation_angle") == 1) {
+        var o1: f64 = s.orientation_angle();
+        _par_got_f(o1);
+        return 1;
+    }
+    if (_par_eq(fp, fl, "StokesVector::add") == 1) { return _par_got_sv(BjStokesVector_add(s, _par_in_sv(4))) + 1; }
+    return 0;
+}
+
+fn _par_mueller(fp, fl): i64 {
+    if (_par_eq(fp, fl, "MuellerMatrix::identity") == 1) { return _par_got_mm(BjMuellerMatrix_identity(), 0) + 1; }
+    if (_par_eq(fp, fl, "MuellerMatrix::horizontal_polarizer") == 1) {
+        return _par_got_mm(BjMuellerMatrix_horizontal_polarizer(), 0) + 1;
+    }
+    if (_par_eq(fp, fl, "MuellerMatrix::vertical_polarizer") == 1) {
+        return _par_got_mm(BjMuellerMatrix_vertical_polarizer(), 0) + 1;
+    }
+    if (_par_eq(fp, fl, "MuellerMatrix::depolarizer") == 1) {
+        return _par_got_mm(BjMuellerMatrix_depolarizer(), 0) + 1;
+    }
+    if (_par_eq(fp, fl, "MuellerMatrix::right_circular_polarizer") == 1) {
+        return _par_got_mm(BjMuellerMatrix_right_circular_polarizer(), 0) + 1;
+    }
+    if (_par_eq(fp, fl, "MuellerMatrix::left_circular_polarizer") == 1) {
+        return _par_got_mm(BjMuellerMatrix_left_circular_polarizer(), 0) + 1;
+    }
+    var a: f64 = _par_in(0);
+    if (_par_eq(fp, fl, "MuellerMatrix::attenuator") == 1) { return _par_got_mm(BjMuellerMatrix_attenuator(a), 0) + 1; }
+    if (_par_eq(fp, fl, "MuellerMatrix::linear_polarizer") == 1) {
+        return _par_got_mm(BjMuellerMatrix_linear_polarizer(a), 0) + 1;
+    }
+    if (_par_eq(fp, fl, "MuellerMatrix::rotation") == 1) { return _par_got_mm(BjMuellerMatrix_rotation(a), 0) + 1; }
+    if (_par_eq(fp, fl, "MuellerMatrix::quarter_wave_plate") == 1) {
+        _par_map5_pol = _par_map5_pol + 1;
+        return _par_got_mm(BjMuellerMatrix_quarter_wave_plate(a), 1) + 1;
+    }
+    if (_par_eq(fp, fl, "MuellerMatrix::half_wave_plate") == 1) {
+        _par_map5_pol = _par_map5_pol + 1;
+        return _par_got_mm(BjMuellerMatrix_half_wave_plate(a), 1) + 1;
+    }
+    if (_par_eq(fp, fl, "MuellerMatrix::waveplate") == 1) {
+        _par_map5_pol = _par_map5_pol + 1;
+        return _par_got_mm(BjMuellerMatrix_waveplate(a, _par_in(1)), 1) + 1;
+    }
+    var m: BjMuellerMatrix = _par_in_mm(0);
+    if (_par_eq(fp, fl, "MuellerMatrix::new") == 1) {
+        var p: *f64 = _par_f64p(&m);
+        return _par_got_mm(BjMuellerMatrix_new(p), 0) + 1;
+    }
+    if (_par_eq(fp, fl, "MuellerMatrix::apply") == 1) { return _par_got_sv(m.apply(_par_in_sv(16))) + 1; }
+    if (_par_eq(fp, fl, "MuellerMatrix::compose") == 1) { return _par_got_mm(m.compose(_par_in_mm(16)), 0) + 1; }
+    return 0;
+}
+
+public fn _par_polarization(fp, fl): i64 {
+    if (memeq(fp, "Jones", 5) == 1) { return _par_jones(fp, fl); }
+    if (memeq(fp, "StokesVector::", 14) == 1) { return _par_stokes(fp, fl); }
+    if (memeq(fp, "MuellerMatrix::", 15) == 1) { return _par_mueller(fp, fl); }
+    return 0;
+}
+
 public fn _par_dispatch(mp, ml, fp, fl): i64 {
     _par_got_n = 0;
     if (_par_eq(mp, ml, "charge") == 1) { return _par_charge(fp, fl); }
@@ -2142,6 +2388,7 @@ public fn _par_dispatch(mp, ml, fp, fl): i64 {
     if (_par_eq(mp, ml, "material") == 1) { return _par_material(fp, fl); }
     if (_par_eq(mp, ml, "math") == 1) { return _par_math(fp, fl); }
     if (_par_eq(mp, ml, "maxwell") == 1) { return _par_maxwell(fp, fl); }
+    if (_par_eq(mp, ml, "polarization") == 1) { return _par_polarization(fp, fl); }
     if (_par_eq(mp, ml, "relativity") == 1) { return _par_relativity(fp, fl); }
     if (_par_eq(mp, ml, "wave") == 1) { return _par_wave(fp, fl); }
     return 0;
@@ -2222,6 +2469,10 @@ public fn _par_c_bound(fp, fl): i64 {
     if (_par_eq(fp, fl, "field::spherical_multipole_moment") == 1) { return 0; }
     if (_par_eq(fp, fl, "field::greens_function_scalar") == 1) { return 0; }
     if (memeq(fp, "wave::", 6) == 1) { return 0; }
+    # polarization's cos, sin, atan2 and hypot chains (M3 part 1a-1): src/crmath.cyr's correctly rounded primitives.
+    if (memeq(fp, "Jones", 5) == 1 || memeq(fp, "StokesVector::", 14) == 1 || memeq(fp, "MuellerMatrix::", 15) == 1) {
+        return 0;
+    }
     if (_par_eq(fp, fl, "relativity::solve_retarded_time") == 1) { return 0; }
     if (_par_eq(fp, fl, "relativity::lienard_wiechert_fields") == 1) { return 0; }
     if (fl > 9 && memeq(fp, "circuit::", 9) == 1) { return 0; }
@@ -2264,6 +2515,12 @@ public fn _par_module_done(mp, ml) {
         print("  ADR 0002 row 5 (e^{+jωt}): ", 30);
         fmt_int(_par_map5_greens);
         println(" field::greens_function_scalar rows compared as port = conj(oracle)");
+    }
+    if (_par_eq(mp, ml, "polarization") == 1) {
+        print("  ADR 0002 row 5 (e^{+jωt}): ", 30);
+        fmt_int(_par_map5_pol);
+        println(" retarder rows compared as port = conj(oracle) (Jones) and D·oracle·D (Mueller)");
+        _par_map5_pol = 0;
     }
     if (_par_eq(mp, ml, "json") == 1) {
         print("  ADR 0002 row 12 (the whole document checked): ", 48);

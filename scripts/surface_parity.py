@@ -39,7 +39,7 @@ root = Path(sys.argv[1] if len(sys.argv) > 1 else ".").resolve()
 MODULES = ["error", "logging", "field", "maxwell", "charge", "material", "wave", "circuit", "relativity"]
 # Rust module -> the milestone that ports it (port plan §4.1).
 PENDING_MODULES = {
-    "polarization": "M3", "scattering": "M3", "beam": "M3",
+    "scattering": "M3", "beam": "M3",
     "rf": "M4",
     "fdtd": "M5–M6", "compute": "M6",
     "integration/soorat": "M7", "bridge": "M7", "ai": "M7",
@@ -47,7 +47,13 @@ PENDING_MODULES = {
 # Modules being ported Part by Part: module -> (the Parts that finish it, the Rust items still to come, by name). Their
 # other items are checked as a ported module's now; the listed ones count as pending, and one found ported is a
 # problem (drop it from the list).
-IN_PROGRESS = {}
+IN_PROGRESS = {
+    # M3 part 1a-1 ported the API; the four structs' JSON (their serde derives) is part 1a-2's.
+    "polarization": ("1a-2", {"impl Serialize for JonesVector", "impl Deserialize for JonesVector",
+                              "impl Serialize for JonesMatrix", "impl Deserialize for JonesMatrix",
+                              "impl Serialize for StokesVector", "impl Deserialize for StokesVector",
+                              "impl Serialize for MuellerMatrix", "impl Deserialize for MuellerMatrix"}),
+}
 NOT_APPLICABLE_MODULES = {
     "lib": "crate root: module list and re-exports",
     "integration/mod": "module root of integration/ (no items)",
@@ -61,7 +67,8 @@ FN_RENAMES = {"init": "bj_log_init", "init_with_level": "bj_log_init_with_level"
               # pub(crate): bijli-internal in the port
               "check_radial_distance": "_bj_check_radial_distance",
               "Material::lossless_optical_constants": "_bj_material_lossless_optical_constants"}
-FIELD_RENAMES = {}
+# Rust's `JonesMatrix.m: [[Complex; 2]; 2]` is four BjComplex fields (a tuple's slots are 8 bytes).
+FIELD_RENAMES = {("JonesMatrix", "m"): ["m00", "m01", "m10", "m11"]}
 EXCEPTIONS = {
     "field::impl From for FieldVector": "BjFieldVector_from_array(p); the other direction, From<FieldVector> for "
                                         "[f64; 3], is the method to_array(p)",
@@ -72,6 +79,8 @@ EXCEPTIONS = {
     "field::impl Mul for f64": "BjFieldVector_scale_left(s, v): an operator fn belongs to its left operand's type",
     "field::impl Display for FieldVector": "the method display(t), into a BjText (src/fmtf.cyr)",
     "material::Material::reflectance_at": "deprecated in 1.2.0, not carried (ADR 0002 row 1): try_reflectance_at",
+    "polarization::impl ComplexExt for Complex": "BjComplex's own methods norm_sq, norm and arg (src/complex.cyr): "
+                                                 "hisab 1.4 made them inherent, and the trait only delegates",
 }
 
 
@@ -301,6 +310,12 @@ def main() -> int:
             continue
         still = IN_PROGRESS.get(module, ("", set()))[1]
         for kind, owner, name, has_self in items:
+            if kind == "trait" and f"impl {name} for {owner}" in still:
+                pending_counts[module] = pending_counts.get(module, 0) + 1
+                where, want = expected(module, kind, owner, name, has_self)
+                if where == "fn" and want in fns:
+                    problems.append(f"{module}::impl {name} for {owner} is ported ({want}): drop it from IN_PROGRESS")
+                continue
             if name in still and kind == "fn":
                 pending_counts[module] = pending_counts.get(module, 0) + 1
                 where, want = expected(module, kind, owner, name, has_self)

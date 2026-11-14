@@ -2918,3 +2918,87 @@ E and B = n̂ × E/c.
 - **Relativity's range-edge review is complete**, every public function and method checked (`electric_field` is one
   product, `magnetic_field` copies). With circuit's 2d-3a and 2d-3b, **2d-3 is done, so 2d is done: Part 2 is complete,
   and with it M2.**
+
+## 55. M3 part 1a-1: polarization (2026-11-13)
+
+- **`src/polarization.cyr`**: polarization.rs's Jones vectors and matrices, Stokes vectors and Mueller matrices, with
+  all their constructors and methods under Rust's names.
+  - `BjJonesVector` holds two BjComplex. `BjJonesMatrix` holds Rust's `m: [[Complex; 2]; 2]` as four fields `m00` to
+    `m11`: a tuple's slots are 8 bytes, so it can't hold a BjComplex.
+  - `BjStokesVector` holds `s` as a 4-tuple. `BjMuellerMatrix` holds `m` as a row-major 16-tuple, as BjEmTensor does.
+  - The Default and Add traits are carried.
+  - Every formula is Rust's, in Rust's order, and complex arithmetic is BjComplex's (row 14 at a range edge).
+  - Mueller's row sums start from −0.0, as Rust's `f64` `Sum` does (checked on rustc 1.99.1).
+  - The four structs' JSON (their serde derives) is part 1a-2's. `test_mie_result_serde` waits for scattering
+    (part 1b).
+- **The one convention in polarization (ADR 0002 row 5, D3, amended)**:
+  - **The elements.** The port works in e^{+jωt} with IEEE handedness, so for one physical state or element its
+    complex amplitudes are Rust's conjugated. Only the retarders differ in their numbers:
+    - `BjJonesMatrix_waveplate` is Rust's matrix conjugated: the fast axis takes e^{+jδ/2}, the slow e^{−jδ/2}.
+    - `BjMuellerMatrix_waveplate` is D·M·D, D = diag(1, 1, 1, −1): its four S₃-coupling entries are the negatives
+      of Rust's.
+
+    Each changed entry is computed as the exact negative of Rust's expression.
+  - **The names.** `right_circular` is IEEE right-hand circular, (1, −j)/√2, turning from x̂ toward ŷ about +z.
+    It is Rust's `left_circular` (Born & Wolf's "left") conjugated, which has the numbers of Rust's
+    `right_circular`. So the circular Jones states, the circular Mueller polarizers and the circular Stokes states
+    carry Rust's numbers under the IEEE names.
+  - **S₃.** S₃ = 2 Im(E_x E_y*) keeps its meaning, +1 for right-hand (IEEE). For one physical state it is Rust's S₃
+    negated, and so is the ellipticity angle.
+  - **How the harness compares.**
+    - Every function but the retarders is the same formula in both conventions, so its rows compare on the
+      oracle's numbers directly, bit for bit. The named states compare by name, since their numbers coincide.
+    - The 4,104 retarder rows compare exactly: as port = conj(oracle) for Jones and D·oracle·D for Mueller.
+    - The D·M·D mapping negates only the entries a retarder computes. Its m[0][3] and m[3][0] are zeros in both
+      conventions; a first form negated them too, which mapped every Mueller retarder row for a zero's sign.
+    - A first form also conjugated every amplitude both ways. That is exact on values but not on IEEE's zero signs:
+      conj(1 + 0j) is 1 − 0j while the port's horizontal is 1 + 0j, and (+0) + (−0) = +0. It would have mapped most
+      Jones rows for a zero's sign alone.
+  - **Pinned by tests** (`tests/polarization.tcyr`):
+    - the rotation-sense group samples Re{J·e^{+jωt}} at two instants for each named state and for a QWP's output,
+      and checks the turn against +z;
+    - each circular polarizer passes its own state and blocks the other;
+    - S₃ and χ have the IEEE signs;
+    - the Jones and Mueller waveplates agree on nine (θ, δ) pairs.
+- **New golden file `polarization.tsv`, 23,135 rows over 53 functions.** Class C, 4,779 rows, is the cos, sin, atan2
+  and hypot chains; the rest is class A. The grids:
+  - complex amplitudes (the specials' pairs, the unit circle, seeded values, and the scales where |z|² under- and
+    overflows), paired into Jones vectors;
+  - the named elements at four angles, plus seeded and range-edge matrices;
+  - 76 angles and 25 retardances;
+  - Stokes vectors from the named states, the specials and seeded values, at the range edges;
+  - Mueller matrices from the named elements and seeded entries.
+
+  `validate.py`'s independent transcription (`pol_eval`) agreed with every row on its first run. Glibc's cos, sin,
+  atan2 and hypot equal MPFR's on every class-C row, so there is no `polarization.cr.tsv`. The class-C rows gate at
+  0 ulp.
+- **Mappings**: `polarization.adr.tsv` has 61 rows, all row 14 (BjComplex's products and |z|² at a range edge):
+  `from_jones` 40, `inner` 9, `apply` 6, `compose` 4, `determinant` 2.
+- **Rust tests**: 68 of polarization.rs's 69 are ported (`tests/polarization.tcyr`, 166 assertions with the
+  Cyrius-only groups). `test_waveplate_slow_axis_lags` reads the same light under the IEEE name: phase −π/2, the
+  port's `right_circular`, S₃ = +1. The ledger: 429 ported, 3 n/a, 426 pending of 858.
+- **Surface parity**: polarization is in progress, 66 items matched (323 in all), with the eight serde trait items
+  pending for part 1a-2. `surface_parity.py`'s in-progress list now takes owner-qualified trait keys. `ComplexExt`
+  is an exception: its methods are BjComplex's own `norm_sq`, `norm` and `arg`. The API snapshot gains 40 public fns.
+- **Benchmarks** (the four polarization twins, so 50 of 80 are twinned; load 1.1–1.3, medians of 30):
+
+  | Bench | Rust | Cyrius | Ratio |
+  |---|---|---|---|
+  | `polarization/jones_apply_polarizer` | 0.99 ns | 213 ns | 215× |
+  | `polarization/jones_qwp_apply` | 0.99 ns | 216 ns | 218× |
+  | `polarization/mueller_apply` | 0.99 ns | 86 ns | 87× |
+  | `polarization/stokes_from_jones` | 5.44 ns | 117 ns | 21.5× |
+
+  Rust's arguments are constants that LLVM folds. The port pays the by-value structs (a Jones matrix is 64 bytes) and
+  a call per complex product (`BjComplex_mul` and its range test). A finding: Jones `apply`'s four products are most
+  of its 213 ns.
+- **For M3's range-edge Part** (§0.1), candidates from writing the port:
+  - `from_jones`'s S₀ = |E_x|² + |E_y|², a sum of two rounded norms;
+  - the ellipticity angle's √(S₁² + S₂²), where S₁² overflows while χ is representable;
+  - the degree of polarization's two hypot roundings;
+  - the waveplate's c² − s² and 2cs chains near a fast axis at π/4 or 0;
+  - the products past DBL_MAX in Jones `apply`, `compose` and `determinant` (row 14 rounds each product once, not
+    the sums).
+- **Result, every target** (x86_64 ELF, x86_64 PE, aarch64): **14 modules, 0 failing; 428,928 ok, 0 failed, 0
+  measured, 0 pending, 47,595 accepted (ADR 01: 8,998; ADR 0002: 38,597)** over 476,523 rows; **all 329 digests
+  equal**, the 276 of M1 and M2 unchanged.

@@ -10,5 +10,6 @@ json
 material
 math
 maxwell
+polarization
 relativity
 wave

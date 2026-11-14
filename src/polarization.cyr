@@ -1,0 +1,819 @@
+# polarization.cyr — polarization.rs (M3 part 1a-1): Jones vectors and matrices for fully polarized coherent light,
+# Stokes vectors and Mueller matrices for partially polarized and incoherent light. Angles are in radians, measured
+# from +x (horizontal) toward +y.
+#
+# The time convention is bijli's one, e^{+jωt} with IEEE handedness (src/complex.cyr's header; ADR 0002 row 5, D3).
+# Rust's polarization.rs used e^{−iωt} with Born & Wolf handedness; for one physical state or element:
+# - a complex amplitude (a Jones vector's or matrix's entry, an inner product, a determinant) is the conjugate of
+#   Rust's, and a phase its negative. So a retarder's slow axis, which lags the fast axis by δ, takes e^{−jδ/2} and
+#   the fast axis e^{+jδ/2} (BjJonesMatrix_waveplate);
+# - the circular states and polarizers are named by IEEE handedness: BjJonesVector_right_circular() = (1, −j)/√2,
+#   whose field Re{J·e^{+jωt}} at z = 0 is x̂·cos ωt + ŷ·sin ωt, turning from x̂ toward ŷ: the right-hand rule about the
+#   propagation direction +z. It is Rust's left_circular, Born & Wolf's "left" ([1, +i]/√2 in e^{−iωt}). Under these
+#   names the circular states and polarizers carry Rust's numbers: the two changes cancel;
+# - S₃ = 2 Im(E_x E_y*) keeps its meaning under the IEEE names, +1 for right-hand circular. For one physical state it
+#   is the negative of Rust's S₃, and so is the ellipticity angle; a Mueller matrix's entries that couple S₃ to S₁ or
+#   S₂ are the negatives of Rust's (D·M·D, D = diag(1, 1, 1, −1)), so the Mueller retarders change sign there.
+# Intensities, overlaps, the degree of polarization, the orientation angle and the linear elements are unchanged.
+# The parity harness maps each oracle row to the same physical state (tests/parity.tcyr's _par_polarization).
+#
+# Complex arithmetic is BjComplex's (src/complex.cyr): hisab's formulas, each rounded once at a range edge (ADR 0002
+# row 14). Every other formula is Rust's in Rust's order. The JSON of the four structs is part 1a-2's.
+
+private
+
+# Intensities at or above this are computed without loss of precision to underflow; smaller (or non-finite) values
+# take the rescaling path. Mirrors polarization.rs's SAFE_MIN_INTENSITY.
+var _BJ_POL_SAFE_MIN: f64 = 0x03B8F2B061AEA072;     # 1e-290
+
+# std::f64::consts::FRAC_1_SQRT_2 and FRAC_PI_2, by their bits.
+var _BJ_POL_SQRT1_2: f64 = 0x3FE6A09E667F3BCD;
+var _BJ_POL_PI_2: f64 = 0x3FF921FB54442D18;
+
+# ── Jones vector ─────────────────────────────────────────────────────────────────────────────────────────────────
+
+# A Jones vector: the complex amplitudes [E_x, E_y] of a fully polarized state. Mirrors `polarization::JonesVector`.
+public struct BjJonesVector {
+    x: BjComplex;
+    y: BjComplex;
+}
+
+# A Jones vector from its components. Mirrors `JonesVector::new`.
+#must_use
+#pure
+public fn BjJonesVector_new(x: BjComplex, y: BjComplex): BjJonesVector {
+    var v: BjJonesVector;
+    v.x = x;
+    v.y = y;
+    return v;
+}
+
+# (a, b) as a Jones vector of two real amplitudes.
+#must_use
+#pure
+fn _bj_pol_jv_real(a: f64, b: f64): BjJonesVector {
+    var v: BjJonesVector;
+    v.x.re = a;
+    v.x.im = 0.0;
+    v.y.re = b;
+    v.y.im = 0.0;
+    return v;
+}
+
+# Horizontal linear polarization [1, 0]. Mirrors `JonesVector::horizontal`.
+#must_use
+#pure
+public fn BjJonesVector_horizontal(): BjJonesVector {
+    var v: BjJonesVector = _bj_pol_jv_real(1.0, 0.0);
+    return v;
+}
+
+# The default Jones vector: horizontal. Mirrors `Default for JonesVector`.
+#must_use
+#pure
+public fn BjJonesVector_default(): BjJonesVector {
+    var v: BjJonesVector = _bj_pol_jv_real(1.0, 0.0);
+    return v;
+}
+
+# Vertical linear polarization [0, 1]. Mirrors `JonesVector::vertical`.
+#must_use
+#pure
+public fn BjJonesVector_vertical(): BjJonesVector {
+    var v: BjJonesVector = _bj_pol_jv_real(0.0, 1.0);
+    return v;
+}
+
+# Diagonal (+45°) linear polarization [1, 1]/√2. Mirrors `JonesVector::diagonal`.
+#must_use
+#pure
+public fn BjJonesVector_diagonal(): BjJonesVector {
+    var s: f64 = _BJ_POL_SQRT1_2;
+    var v: BjJonesVector = _bj_pol_jv_real(s, s);
+    return v;
+}
+
+# Anti-diagonal (−45°) linear polarization [1, −1]/√2. Mirrors `JonesVector::anti_diagonal`.
+#must_use
+#pure
+public fn BjJonesVector_anti_diagonal(): BjJonesVector {
+    var s: f64 = _BJ_POL_SQRT1_2;
+    var ns: f64 = -s;
+    var v: BjJonesVector = _bj_pol_jv_real(s, ns);
+    return v;
+}
+
+# Right-hand circular polarization (IEEE) [1, −j]/√2: the field turns from x̂ toward ŷ (the module comment). Rust's
+# `JonesVector::left_circular` is the same state in e^{−iωt} (ADR 0002 row 5).
+#must_use
+#pure
+public fn BjJonesVector_right_circular(): BjJonesVector {
+    var s: f64 = _BJ_POL_SQRT1_2;
+    var ns: f64 = -s;
+    var v: BjJonesVector = _bj_pol_jv_real(s, 0.0);
+    v.y.im = ns;
+    return v;
+}
+
+# Left-hand circular polarization (IEEE) [1, +j]/√2: the field turns from x̂ toward −ŷ. Rust's
+# `JonesVector::right_circular` is the same state in e^{−iωt} (ADR 0002 row 5).
+#must_use
+#pure
+public fn BjJonesVector_left_circular(): BjJonesVector {
+    var s: f64 = _BJ_POL_SQRT1_2;
+    var v: BjJonesVector = _bj_pol_jv_real(s, 0.0);
+    v.y.im = s;
+    return v;
+}
+
+# Linear polarization at angle θ from horizontal: [cos θ, sin θ]. Mirrors `JonesVector::linear`.
+#must_use
+public fn BjJonesVector_linear(angle: f64): BjJonesVector {
+    var c: f64 = _bj_cos(angle);
+    var s: f64 = _bj_sin(angle);
+    var v: BjJonesVector = _bj_pol_jv_real(c, s);
+    return v;
+}
+
+impl BjJonesVector {
+    # The intensity |E_x|² + |E_y|². Mirrors `JonesVector::intensity`.
+    #must_use
+    public fn intensity(self): f64 {
+        var a: f64 = self.x.norm_sq();
+        var b: f64 = self.y.norm_sq();
+        var i: f64 = a + b;
+        return i;
+    }
+
+    # This vector scaled to unit intensity, into out: for any nonzero finite amplitude scale, a vector whose
+    # intensity under- or overflows first rescaled by its largest part. DivisionByZero for the zero vector,
+    # InvalidParameter for a non-finite part; out untouched on an error. Mirrors `JonesVector::normalized`.
+    public fn normalized(self, out: *BjJonesVector): Result {
+        var i: f64 = self.intensity();
+        var v: BjJonesVector = *self;
+        if (!(_bj_is_finite(i) == 1 && i >= _BJ_POL_SAFE_MIN)) {
+            var t, e = _bj_pol_rescaled(self, &v);
+            if (is_err_result(t) == 1) { return Err(e); }
+        }
+        var vi: f64 = v.intensity();
+        var r: f64 = f64_sqrt(vi);
+        var s: f64 = 1.0 / r;
+        var nx: BjComplex = v.x.scale(s);
+        var ny: BjComplex = v.y.scale(s);
+        out.x = nx;
+        out.y = ny;
+        return Ok(0);
+    }
+
+    # The inner product ⟨J₁|J₂⟩ = x₁*·x₂ + y₁*·y₂, conjugate-linear in the first. Mirrors `JonesVector::inner`.
+    #must_use
+    public fn inner(self, other: BjJonesVector): BjComplex {
+        var cx: BjComplex = self.x.conj();
+        var cy: BjComplex = self.y.conj();
+        var p: BjComplex = BjComplex_mul(cx, other.x);
+        var q: BjComplex = BjComplex_mul(cy, other.y);
+        var z: BjComplex = BjComplex_add(p, q);
+        return z;
+    }
+
+    # The degree of overlap |⟨J₁|J₂⟩|²/(I₁·I₂): 0 for orthogonal states, 1 for parallel ones, whatever the two
+    # amplitude scales (rescaled when the product of the intensities under- or overflows). DivisionByZero when either
+    # vector is zero, InvalidParameter for a non-finite part. Mirrors `JonesVector::overlap`.
+    public fn overlap(self, other: BjJonesVector): Result {
+        var ia: f64 = self.intensity();
+        var ib: f64 = other.intensity();
+        var den: f64 = ia * ib;
+        if (_bj_is_finite(den) == 1 && den >= _BJ_POL_SAFE_MIN) {
+            var z: BjComplex = self.inner(other);
+            var n: f64 = z.norm_sq();
+            var o: f64 = n / den;
+            return Ok(o);
+        }
+        var a: BjJonesVector;
+        var ta, ea = _bj_pol_rescaled(self, &a);
+        if (is_err_result(ta) == 1) { return Err(ea); }
+        var b: BjJonesVector;
+        var tb, eb = _bj_pol_rescaled(&other, &b);
+        if (is_err_result(tb) == 1) { return Err(eb); }
+        var w: BjComplex = a.inner(b);
+        var n2: f64 = w.norm_sq();
+        var i1: f64 = a.intensity();
+        var i2: f64 = b.intensity();
+        var d2: f64 = i1 * i2;
+        var o2: f64 = n2 / d2;
+        return Ok(o2);
+    }
+}
+
+# The vector at v scaled so that its largest real or imaginary part has magnitude 1 (its intensity in [1, 4]), into
+# out. InvalidParameter "Jones vector components must be finite", DivisionByZero "zero Jones vector has no
+# polarization state". Mirrors polarization.rs's private `JonesVector::rescaled`.
+fn _bj_pol_rescaled(v: *BjJonesVector, out: *BjJonesVector): Result {
+    var a: f64 = v.x.re;
+    var b: f64 = v.x.im;
+    var c: f64 = v.y.re;
+    var d: f64 = v.y.im;
+    if (_bj_is_finite(a) == 0 || _bj_is_finite(b) == 0 || _bj_is_finite(c) == 0 || _bj_is_finite(d) == 0) {
+        return Err(_bj_err_invalid_parameter("Jones vector components must be finite"));
+    }
+    var aa: f64 = f64_abs(a);                       # Rust's fold of f64::max from 0, over finite parts
+    var ab: f64 = f64_abs(b);
+    var ac: f64 = f64_abs(c);
+    var ad: f64 = f64_abs(d);
+    var m: f64 = _bj_max(0.0, aa);
+    m = _bj_max(m, ab);
+    m = _bj_max(m, ac);
+    m = _bj_max(m, ad);
+    if (m == 0.0) { return Err(_bj_err_division_by_zero("zero Jones vector has no polarization state")); }
+    var s: f64 = 1.0 / m;
+    var vx: BjComplex = v.x;
+    var vy: BjComplex = v.y;
+    var nx: BjComplex = vx.scale(s);
+    var ny: BjComplex = vy.scale(s);
+    out.x = nx;
+    out.y = ny;
+    return Ok(0);
+}
+
+# ── Jones matrix ─────────────────────────────────────────────────────────────────────────────────────────────────
+
+# A Jones matrix: the 2×2 complex matrix [[m00, m01], [m10, m11]] of an optical element, acting as
+# [E_x', E_y'] = [[m00, m01], [m10, m11]]·[E_x, E_y]. Rust's `m: [[Complex; 2]; 2]` is the four fields, `m[i][j]` as
+# `mij`. Mirrors `polarization::JonesMatrix`.
+public struct BjJonesMatrix {
+    m00: BjComplex;
+    m01: BjComplex;
+    m10: BjComplex;
+    m11: BjComplex;
+}
+
+# A Jones matrix from its entries [[a, b], [c, d]]. Mirrors `JonesMatrix::new`.
+#must_use
+#pure
+public fn BjJonesMatrix_new(a: BjComplex, b: BjComplex, c: BjComplex, d: BjComplex): BjJonesMatrix {
+    var j: BjJonesMatrix;
+    j.m00 = a;
+    j.m01 = b;
+    j.m10 = c;
+    j.m11 = d;
+    return j;
+}
+
+# [[a, b], [c, d]] as a Jones matrix of real entries.
+#must_use
+#pure
+fn _bj_pol_jm_real(a: f64, b: f64, c: f64, d: f64): BjJonesMatrix {
+    var j: BjJonesMatrix;
+    j.m00.re = a;
+    j.m00.im = 0.0;
+    j.m01.re = b;
+    j.m01.im = 0.0;
+    j.m10.re = c;
+    j.m10.im = 0.0;
+    j.m11.re = d;
+    j.m11.im = 0.0;
+    return j;
+}
+
+# The identity: no effect on the polarization. Mirrors `JonesMatrix::identity`.
+#must_use
+#pure
+public fn BjJonesMatrix_identity(): BjJonesMatrix {
+    var j: BjJonesMatrix = _bj_pol_jm_real(1.0, 0.0, 0.0, 1.0);
+    return j;
+}
+
+# The horizontal linear polarizer [[1, 0], [0, 0]]. Mirrors `JonesMatrix::horizontal_polarizer`.
+#must_use
+#pure
+public fn BjJonesMatrix_horizontal_polarizer(): BjJonesMatrix {
+    var j: BjJonesMatrix = _bj_pol_jm_real(1.0, 0.0, 0.0, 0.0);
+    return j;
+}
+
+# The vertical linear polarizer [[0, 0], [0, 1]]. Mirrors `JonesMatrix::vertical_polarizer`.
+#must_use
+#pure
+public fn BjJonesMatrix_vertical_polarizer(): BjJonesMatrix {
+    var j: BjJonesMatrix = _bj_pol_jm_real(0.0, 0.0, 0.0, 1.0);
+    return j;
+}
+
+# The linear polarizer at angle θ from horizontal: [[c², cs], [cs, s²]], c = cos θ, s = sin θ. Mirrors
+# `JonesMatrix::linear_polarizer`.
+#must_use
+public fn BjJonesMatrix_linear_polarizer(angle: f64): BjJonesMatrix {
+    var c: f64 = _bj_cos(angle);
+    var s: f64 = _bj_sin(angle);
+    var cc: f64 = c * c;
+    var cs: f64 = c * s;
+    var ss: f64 = s * s;
+    var j: BjJonesMatrix = _bj_pol_jm_real(cc, cs, cs, ss);
+    return j;
+}
+
+# The general waveplate (linear retarder) with fast axis at angle θ and retardance δ: R(−θ)·diag(e^{+jδ/2},
+# e^{−jδ/2})·R(θ), the slow axis lagging the fast by δ in e^{+jωt} (the module comment): [[cos(δ/2) + j sin(δ/2)·
+# (c² − s²), j sin(δ/2)·2cs], [the same, cos(δ/2) − j sin(δ/2)·(c² − s²)]], c = cos θ, s = sin θ. Rust's e^{−iωt}
+# matrix conjugated, each imaginary part the exact negative of Rust's (ADR 0002 row 5). Mirrors
+# `JonesMatrix::waveplate`.
+#must_use
+public fn BjJonesMatrix_waveplate(fast_axis_angle: f64, retardance: f64): BjJonesMatrix {
+    var c: f64 = _bj_cos(fast_axis_angle);
+    var s: f64 = _bj_sin(fast_axis_angle);
+    var half_d: f64 = retardance / 2.0;
+    var cos_d: f64 = _bj_cos(half_d);
+    var sin_d: f64 = _bj_sin(half_d);
+    var cc: f64 = c * c;
+    var ss: f64 = s * s;
+    var diff: f64 = cc - ss;
+    var ai: f64 = sin_d * diff;
+    var bi: f64 = sin_d * 2.0 * c * s;
+    var nsd: f64 = -sin_d;
+    var di: f64 = nsd * diff;
+    var j: BjJonesMatrix = _bj_pol_jm_real(cos_d, 0.0, 0.0, cos_d);
+    j.m00.im = ai;
+    j.m01.im = bi;
+    j.m10.im = bi;
+    j.m11.im = di;
+    return j;
+}
+
+# The half-wave plate (δ = π) with fast axis at angle θ: it mirrors the polarization about the fast axis. Mirrors
+# `JonesMatrix::half_wave_plate`.
+#must_use
+public fn BjJonesMatrix_half_wave_plate(fast_axis_angle: f64): BjJonesMatrix {
+    var j: BjJonesMatrix = BjJonesMatrix_waveplate(fast_axis_angle, _BJ_PI);
+    return j;
+}
+
+# The quarter-wave plate (δ = π/2) with fast axis at angle θ: linear to circular at 45° and back. Mirrors
+# `JonesMatrix::quarter_wave_plate`.
+#must_use
+public fn BjJonesMatrix_quarter_wave_plate(fast_axis_angle: f64): BjJonesMatrix {
+    var j: BjJonesMatrix = BjJonesMatrix_waveplate(fast_axis_angle, _BJ_POL_PI_2);
+    return j;
+}
+
+# The Faraday rotator: actively rotates the polarization by θ, from +x toward +y: [[cos θ, −sin θ], [sin θ, cos θ]].
+# Its Mueller form is BjMuellerMatrix_rotation(−θ). Mirrors `JonesMatrix::rotator`.
+#must_use
+public fn BjJonesMatrix_rotator(angle: f64): BjJonesMatrix {
+    var c: f64 = _bj_cos(angle);
+    var s: f64 = _bj_sin(angle);
+    var ns: f64 = -s;
+    var j: BjJonesMatrix = _bj_pol_jm_real(c, ns, s, c);
+    return j;
+}
+
+impl BjJonesMatrix {
+    # This matrix applied to a Jones vector. Mirrors `JonesMatrix::apply`.
+    #must_use
+    public fn apply(self, v: BjJonesVector): BjJonesVector {
+        var p: BjComplex = BjComplex_mul(self.m00, v.x);
+        var q: BjComplex = BjComplex_mul(self.m01, v.y);
+        var r: BjComplex = BjComplex_mul(self.m10, v.x);
+        var u: BjComplex = BjComplex_mul(self.m11, v.y);
+        var x: BjComplex = BjComplex_add(p, q);
+        var y: BjComplex = BjComplex_add(r, u);
+        var o: BjJonesVector = BjJonesVector_new(x, y);
+        return o;
+    }
+
+    # self × other: self applied after other. Mirrors `JonesMatrix::compose`.
+    #must_use
+    public fn compose(self, other: BjJonesMatrix): BjJonesMatrix {
+        var a1: BjComplex = BjComplex_mul(self.m00, other.m00);
+        var a2: BjComplex = BjComplex_mul(self.m01, other.m10);
+        var b1: BjComplex = BjComplex_mul(self.m00, other.m01);
+        var b2: BjComplex = BjComplex_mul(self.m01, other.m11);
+        var c1: BjComplex = BjComplex_mul(self.m10, other.m00);
+        var c2: BjComplex = BjComplex_mul(self.m11, other.m10);
+        var d1: BjComplex = BjComplex_mul(self.m10, other.m01);
+        var d2: BjComplex = BjComplex_mul(self.m11, other.m11);
+        var a: BjComplex = BjComplex_add(a1, a2);
+        var b: BjComplex = BjComplex_add(b1, b2);
+        var c: BjComplex = BjComplex_add(c1, c2);
+        var d: BjComplex = BjComplex_add(d1, d2);
+        var j: BjJonesMatrix = BjJonesMatrix_new(a, b, c, d);
+        return j;
+    }
+
+    # The determinant m00·m11 − m01·m10. Mirrors `JonesMatrix::determinant`.
+    #must_use
+    public fn determinant(self): BjComplex {
+        var p: BjComplex = BjComplex_mul(self.m00, self.m11);
+        var q: BjComplex = BjComplex_mul(self.m01, self.m10);
+        var z: BjComplex = BjComplex_sub(p, q);
+        return z;
+    }
+}
+
+# ── Stokes vector ────────────────────────────────────────────────────────────────────────────────────────────────
+
+# A Stokes vector [S₀, S₁, S₂, S₃]: the total intensity, the horizontal-vertical, diagonal-antidiagonal and
+# right-left circular (IEEE, S₃ > 0 right-hand) preferences. Rust's `s: [f64; 4]` is a 4-element tuple field, `s[i]`
+# as `s.i`. Mirrors `polarization::StokesVector`.
+public struct BjStokesVector {
+    s: (f64, f64, f64, f64);
+}
+
+# A Stokes vector from its components. Mirrors `StokesVector::new`.
+#must_use
+#pure
+public fn BjStokesVector_new(s0: f64, s1: f64, s2: f64, s3: f64): BjStokesVector {
+    var v: BjStokesVector;
+    v.s.0 = s0;
+    v.s.1 = s1;
+    v.s.2 = s2;
+    v.s.3 = s3;
+    return v;
+}
+
+# The default Stokes vector: unpolarized light of zero intensity. Mirrors `Default for StokesVector`.
+#must_use
+#pure
+public fn BjStokesVector_default(): BjStokesVector {
+    var v: BjStokesVector = BjStokesVector_new(0.0, 0.0, 0.0, 0.0);
+    return v;
+}
+
+# The Stokes vector of a fully polarized Jones vector: S₀ = |E_x|² + |E_y|², S₁ = |E_x|² − |E_y|², S₂ = 2 Re(E_x E_y*)
+# and S₃ = 2 Im(E_x E_y*), +1 for right-hand circular light (the module comment). Mirrors `StokesVector::from_jones`.
+#must_use
+public fn BjStokesVector_from_jones(j: BjJonesVector): BjStokesVector {
+    var ix: f64 = j.x.norm_sq();
+    var iy: f64 = j.y.norm_sq();
+    var cy: BjComplex = j.y.conj();
+    var cr: BjComplex = BjComplex_mul(j.x, cy);
+    var s0: f64 = ix + iy;
+    var s1: f64 = ix - iy;
+    var s2: f64 = 2.0 * cr.re;
+    var s3: f64 = 2.0 * cr.im;
+    var v: BjStokesVector = BjStokesVector_new(s0, s1, s2, s3);
+    return v;
+}
+
+# Unpolarized light of the given intensity: [I, 0, 0, 0]. Mirrors `StokesVector::unpolarized`.
+#must_use
+#pure
+public fn BjStokesVector_unpolarized(intensity: f64): BjStokesVector {
+    var v: BjStokesVector = BjStokesVector_new(intensity, 0.0, 0.0, 0.0);
+    return v;
+}
+
+# Horizontal linear polarization: [I, I, 0, 0]. Mirrors `StokesVector::horizontal`.
+#must_use
+#pure
+public fn BjStokesVector_horizontal(intensity: f64): BjStokesVector {
+    var v: BjStokesVector = BjStokesVector_new(intensity, intensity, 0.0, 0.0);
+    return v;
+}
+
+# Vertical linear polarization: [I, −I, 0, 0]. Mirrors `StokesVector::vertical`.
+#must_use
+#pure
+public fn BjStokesVector_vertical(intensity: f64): BjStokesVector {
+    var ni: f64 = -intensity;
+    var v: BjStokesVector = BjStokesVector_new(intensity, ni, 0.0, 0.0);
+    return v;
+}
+
+# Right-hand circular polarization (IEEE): [I, 0, 0, I]. Rust's `StokesVector::left_circular` is the same state
+# (ADR 0002 row 5).
+#must_use
+#pure
+public fn BjStokesVector_right_circular(intensity: f64): BjStokesVector {
+    var v: BjStokesVector = BjStokesVector_new(intensity, 0.0, 0.0, intensity);
+    return v;
+}
+
+# Left-hand circular polarization (IEEE): [I, 0, 0, −I]. Rust's `StokesVector::right_circular` is the same state
+# (ADR 0002 row 5).
+#must_use
+#pure
+public fn BjStokesVector_left_circular(intensity: f64): BjStokesVector {
+    var ni: f64 = -intensity;
+    var v: BjStokesVector = BjStokesVector_new(intensity, 0.0, 0.0, ni);
+    return v;
+}
+
+# a + b, component by component (incoherent superposition). Mirrors `Add for StokesVector`.
+#must_use
+#pure
+public fn BjStokesVector_add(a: BjStokesVector, b: BjStokesVector): BjStokesVector {
+    var s0: f64 = a.s.0 + b.s.0;
+    var s1: f64 = a.s.1 + b.s.1;
+    var s2: f64 = a.s.2 + b.s.2;
+    var s3: f64 = a.s.3 + b.s.3;
+    var v: BjStokesVector = BjStokesVector_new(s0, s1, s2, s3);
+    return v;
+}
+
+impl BjStokesVector {
+    # The total intensity S₀. Mirrors `StokesVector::intensity`.
+    #must_use
+    #pure
+    public fn intensity(self): f64 {
+        var i: f64 = self.s.0;
+        return i;
+    }
+
+    # The degree of polarization √(S₁² + S₂² + S₃²)/S₀ (hypot's, so no square under- or overflows): 0 unpolarized, 1
+    # fully polarized, for any positive finite S₀. DivisionByZero for S₀ = 0; InvalidParameter "Stokes vector must be
+    # finite with S₀ > 0, got [..]" for S₀ < 0 or a non-finite part. Mirrors `StokesVector::degree_of_polarization`.
+    public fn degree_of_polarization(self): Result {
+        var s0: f64 = self.s.0;
+        if (s0 == 0.0) { return Err(_bj_err_division_by_zero("cannot compute DOP for zero-intensity light")); }
+        var p: *f64 = _bj_pol_f64p(self);
+        if (!(s0 > 0.0 && _bj_is_finite(p[0]) == 1 && _bj_is_finite(p[1]) == 1 && _bj_is_finite(p[2]) == 1
+            && _bj_is_finite(p[3]) == 1)) {
+            var t = _bj_err_reason(BJ_ERR_INVALID_PARAMETER);
+            _bj_tx_cstr(t, "Stokes vector must be finite with S₀ > 0, got ");
+            _bj_pol_fmt4(t, p);
+            return Err(BJ_ERR_INVALID_PARAMETER);
+        }
+        var h1: f64 = _bj_hypot(p[1], p[2]);
+        var h2: f64 = _bj_hypot(h1, p[3]);
+        var d: f64 = h2 / s0;
+        return Ok(d);
+    }
+
+    # The ellipticity angle χ, tan 2χ = S₃/√(S₁² + S₂²): 0 for linear light, +π/4 for right-hand circular (IEEE), −π/4
+    # for left. Mirrors `StokesVector::ellipticity_angle`.
+    #must_use
+    public fn ellipticity_angle(self): f64 {
+        var a: f64 = self.s.1;
+        var b: f64 = self.s.2;
+        var c: f64 = self.s.3;
+        var q: f64 = a * a + b * b;
+        var lin: f64 = f64_sqrt(q);
+        var t: f64 = _bj_atan2(c, lin);
+        var x: f64 = 0.5 * t;
+        return x;
+    }
+
+    # The orientation angle ψ of the polarization ellipse, tan 2ψ = S₂/S₁. Mirrors `StokesVector::orientation_angle`.
+    #must_use
+    public fn orientation_angle(self): f64 {
+        var a: f64 = self.s.1;
+        var b: f64 = self.s.2;
+        var t: f64 = _bj_atan2(b, a);
+        var x: f64 = 0.5 * t;
+        return x;
+    }
+}
+
+# An address as a *f64: a BjStokesVector's four components or a BjMuellerMatrix's sixteen.
+#must_use
+fn _bj_pol_f64p(p): *f64 {
+    return p;
+}
+
+# Appends the four f64 at p as Rust's `{:?}` writes an [f64; 4]: [a, b, c, d].
+fn _bj_pol_fmt4(t, p: *f64) {
+    _bj_tx_putc(t, 91);
+    _bj_fmt_f64_debug(t, p[0]);
+    _bj_tx_cstr(t, ", ");
+    _bj_fmt_f64_debug(t, p[1]);
+    _bj_tx_cstr(t, ", ");
+    _bj_fmt_f64_debug(t, p[2]);
+    _bj_tx_cstr(t, ", ");
+    _bj_fmt_f64_debug(t, p[3]);
+    _bj_tx_putc(t, 93);
+    return 0;
+}
+
+# ── Mueller matrix ───────────────────────────────────────────────────────────────────────────────────────────────
+
+# A Mueller matrix: the 4×4 real matrix acting on Stokes vectors (partially polarized and incoherent light). Rust's
+# `m: [[f64; 4]; 4]` is a 16-element tuple field, row-major, `m[i][j]` as `m.(4i + j)` (probe p17, as BjEmTensor).
+# Mirrors `polarization::MuellerMatrix`.
+public struct BjMuellerMatrix {
+    m: (f64, f64, f64, f64, f64, f64, f64, f64, f64, f64, f64, f64, f64, f64, f64, f64);
+}
+
+# A Mueller matrix from its sixteen entries at m, row-major. Mirrors `MuellerMatrix::new`.
+#must_use
+public fn BjMuellerMatrix_new(m: *f64): BjMuellerMatrix {
+    var r: BjMuellerMatrix;
+    var o: *f64 = _bj_pol_f64p(&r);
+    for (var k = 0; k < 16; k = k + 1) { o[k] = m[k]; }
+    return r;
+}
+
+# The matrix with diagonal (a, b, c, d) and every other entry 0.
+#must_use
+fn _bj_pol_mm_diag(a: f64, b: f64, c: f64, d: f64): BjMuellerMatrix {
+    var r: BjMuellerMatrix;
+    var o: *f64 = _bj_pol_f64p(&r);
+    for (var k = 0; k < 16; k = k + 1) { o[k] = 0.0; }
+    o[0] = a;
+    o[5] = b;
+    o[10] = c;
+    o[15] = d;
+    return r;
+}
+
+# The identity Mueller matrix. Mirrors `MuellerMatrix::identity`.
+#must_use
+public fn BjMuellerMatrix_identity(): BjMuellerMatrix {
+    var r: BjMuellerMatrix = _bj_pol_mm_diag(1.0, 1.0, 1.0, 1.0);
+    return r;
+}
+
+# The ideal depolarizer: the output is unpolarized whatever the input. Mirrors `MuellerMatrix::depolarizer`.
+#must_use
+public fn BjMuellerMatrix_depolarizer(): BjMuellerMatrix {
+    var r: BjMuellerMatrix = _bj_pol_mm_diag(1.0, 0.0, 0.0, 0.0);
+    return r;
+}
+
+# The attenuator (a neutral density filter): every component scaled by the transmission. Mirrors
+# `MuellerMatrix::attenuator`.
+#must_use
+public fn BjMuellerMatrix_attenuator(transmission: f64): BjMuellerMatrix {
+    var t: f64 = transmission;
+    var r: BjMuellerMatrix = _bj_pol_mm_diag(t, t, t, t);
+    return r;
+}
+
+# The horizontal linear polarizer ½[[1, 1, 0, 0], [1, 1, 0, 0], 0, 0]. Mirrors `MuellerMatrix::horizontal_polarizer`.
+#must_use
+public fn BjMuellerMatrix_horizontal_polarizer(): BjMuellerMatrix {
+    var r: BjMuellerMatrix = _bj_pol_mm_diag(0.5, 0.5, 0.0, 0.0);
+    var o: *f64 = _bj_pol_f64p(&r);
+    o[1] = 0.5;
+    o[4] = 0.5;
+    return r;
+}
+
+# The vertical linear polarizer ½[[1, −1, 0, 0], [−1, 1, 0, 0], 0, 0]. Mirrors `MuellerMatrix::vertical_polarizer`.
+#must_use
+public fn BjMuellerMatrix_vertical_polarizer(): BjMuellerMatrix {
+    var r: BjMuellerMatrix = _bj_pol_mm_diag(0.5, 0.5, 0.0, 0.0);
+    var o: *f64 = _bj_pol_f64p(&r);
+    o[1] = -0.5;
+    o[4] = -0.5;
+    return r;
+}
+
+# The linear polarizer at angle θ: ½[[1, C, S, 0], [C, C², CS, 0], [S, CS, S², 0], 0], C = cos 2θ, S = sin 2θ. Mirrors
+# `MuellerMatrix::linear_polarizer`.
+#must_use
+public fn BjMuellerMatrix_linear_polarizer(angle: f64): BjMuellerMatrix {
+    var a2: f64 = 2.0 * angle;
+    var c2: f64 = _bj_cos(a2);
+    var s2: f64 = _bj_sin(a2);
+    var r: BjMuellerMatrix = _bj_pol_mm_diag(0.5, 0.0, 0.0, 0.0);
+    var o: *f64 = _bj_pol_f64p(&r);
+    var hc: f64 = 0.5 * c2;
+    var hs: f64 = 0.5 * s2;
+    o[1] = hc;
+    o[2] = hs;
+    o[4] = hc;
+    o[5] = hc * c2;
+    o[6] = hc * s2;
+    o[8] = hs;
+    o[9] = hc * s2;
+    o[10] = hs * s2;
+    return r;
+}
+
+# The general waveplate with fast axis at angle θ and retardance δ: the Mueller form of BjJonesMatrix_waveplate.
+# C = cos 2θ, S = sin 2θ: [[1, 0, 0, 0], [0, C² + S²cos δ, CS(1 − cos δ), S sin δ], [0, CS(1 − cos δ), S² + C²cos δ,
+# −C sin δ], [0, −S sin δ, C sin δ, cos δ]]. The entries coupling S₃ are the exact negatives of Rust's (the module
+# comment, ADR 0002 row 5). Mirrors `MuellerMatrix::waveplate`.
+#must_use
+public fn BjMuellerMatrix_waveplate(fast_axis_angle: f64, retardance: f64): BjMuellerMatrix {
+    var a2: f64 = 2.0 * fast_axis_angle;
+    var c2: f64 = _bj_cos(a2);
+    var s2: f64 = _bj_sin(a2);
+    var cd: f64 = _bj_cos(retardance);
+    var sd: f64 = _bj_sin(retardance);
+    var r: BjMuellerMatrix = _bj_pol_mm_diag(1.0, 0.0, 0.0, cd);
+    var o: *f64 = _bj_pol_f64p(&r);
+    var cc: f64 = c2 * c2;
+    var ss: f64 = s2 * s2;
+    var cs: f64 = c2 * s2;
+    var om: f64 = 1.0 - cd;
+    var ssd: f64 = ss * cd;
+    var ccd: f64 = cc * cd;
+    var nc2: f64 = -c2;
+    var ns2: f64 = -s2;
+    o[5] = cc + ssd;
+    o[6] = cs * om;
+    o[7] = s2 * sd;
+    o[9] = cs * om;
+    o[10] = ss + ccd;
+    o[11] = nc2 * sd;
+    o[13] = ns2 * sd;
+    o[14] = c2 * sd;
+    return r;
+}
+
+# The quarter-wave plate (δ = π/2) with fast axis at angle θ. Mirrors `MuellerMatrix::quarter_wave_plate`.
+#must_use
+public fn BjMuellerMatrix_quarter_wave_plate(fast_axis_angle: f64): BjMuellerMatrix {
+    var r: BjMuellerMatrix = BjMuellerMatrix_waveplate(fast_axis_angle, _BJ_POL_PI_2);
+    return r;
+}
+
+# The half-wave plate (δ = π) with fast axis at angle θ. Mirrors `MuellerMatrix::half_wave_plate`.
+#must_use
+public fn BjMuellerMatrix_half_wave_plate(fast_axis_angle: f64): BjMuellerMatrix {
+    var r: BjMuellerMatrix = BjMuellerMatrix_waveplate(fast_axis_angle, _BJ_PI);
+    return r;
+}
+
+# The rotation of the coordinate frame by θ (passive): S₁′ = cos 2θ S₁ + sin 2θ S₂, S₂′ = −sin 2θ S₁ + cos 2θ S₂.
+# Re-expressing a state in axes rotated by +θ physically rotates it by −θ, so this is the Mueller form of
+# BjJonesMatrix_rotator(−θ); an element M rotated by θ is rotation(−θ)·M·rotation(θ). Mirrors
+# `MuellerMatrix::rotation`.
+#must_use
+public fn BjMuellerMatrix_rotation(angle: f64): BjMuellerMatrix {
+    var a2: f64 = 2.0 * angle;
+    var c2: f64 = _bj_cos(a2);
+    var s2: f64 = _bj_sin(a2);
+    var ns2: f64 = -s2;
+    var r: BjMuellerMatrix = _bj_pol_mm_diag(1.0, c2, c2, 1.0);
+    var o: *f64 = _bj_pol_f64p(&r);
+    o[6] = s2;
+    o[9] = ns2;
+    return r;
+}
+
+# The right-hand circular polarizer (IEEE): ½[[1, 0, 0, 1], 0, 0, [1, 0, 0, 1]], passing BjStokesVector_right_circular.
+# Rust's `MuellerMatrix::left_circular_polarizer` is the same element (ADR 0002 row 5).
+#must_use
+public fn BjMuellerMatrix_right_circular_polarizer(): BjMuellerMatrix {
+    var r: BjMuellerMatrix = _bj_pol_mm_diag(0.5, 0.0, 0.0, 0.5);
+    var o: *f64 = _bj_pol_f64p(&r);
+    o[3] = 0.5;
+    o[12] = 0.5;
+    return r;
+}
+
+# The left-hand circular polarizer (IEEE): ½[[1, 0, 0, −1], 0, 0, [−1, 0, 0, 1]]. Rust's
+# `MuellerMatrix::right_circular_polarizer` is the same element (ADR 0002 row 5).
+#must_use
+public fn BjMuellerMatrix_left_circular_polarizer(): BjMuellerMatrix {
+    var r: BjMuellerMatrix = _bj_pol_mm_diag(0.5, 0.0, 0.0, 0.5);
+    var o: *f64 = _bj_pol_f64p(&r);
+    o[3] = -0.5;
+    o[12] = -0.5;
+    return r;
+}
+
+impl BjMuellerMatrix {
+    # This matrix applied to a Stokes vector: each output the sum of a row's four products, left to right (Rust's
+    # iterator sum, from 0). Mirrors `MuellerMatrix::apply`.
+    #must_use
+    public fn apply(self, s: BjStokesVector): BjStokesVector {
+        var m: *f64 = _bj_pol_f64p(self);
+        var v: *f64 = _bj_pol_f64p(&s);
+        var r: BjStokesVector;
+        var o: *f64 = _bj_pol_f64p(&r);
+        for (var i = 0; i < 4; i = i + 1) {
+            var acc: f64 = _bj_pol_neg0();
+            for (var j = 0; j < 4; j = j + 1) {
+                var a: f64 = m[4 * i + j];
+                var b: f64 = v[j];
+                var p: f64 = a * b;
+                acc = acc + p;
+            }
+            o[i] = acc;
+        }
+        return r;
+    }
+
+    # self × other: self applied after other, each entry a sum of four products left to right (Rust's iterator
+    # sum). Mirrors `MuellerMatrix::compose`.
+    #must_use
+    public fn compose(self, other: BjMuellerMatrix): BjMuellerMatrix {
+        var a: *f64 = _bj_pol_f64p(self);
+        var b: *f64 = _bj_pol_f64p(&other);
+        var r: BjMuellerMatrix;
+        var o: *f64 = _bj_pol_f64p(&r);
+        for (var i = 0; i < 4; i = i + 1) {
+            for (var j = 0; j < 4; j = j + 1) {
+                var acc: f64 = _bj_pol_neg0();
+                for (var k = 0; k < 4; k = k + 1) {
+                    var x: f64 = a[4 * i + k];
+                    var y: f64 = b[4 * k + j];
+                    var p: f64 = x * y;
+                    acc = acc + p;
+                }
+                o[4 * i + j] = acc;
+            }
+        }
+        return r;
+    }
+}
+
+# −0.0: Rust's `Iterator::sum` of f64 starts from −0.0 (core's float Sum, since 1.81), so a sum of −0.0 terms stays −0.
+#must_use
+fn _bj_pol_neg0(): f64 {
+    var z: f64 = 0x8000000000000000;
+    return z;
+}

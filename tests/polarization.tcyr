@@ -1,0 +1,650 @@
+# polarization.tcyr — src/polarization.cyr (M3 part 1a-1): Jones vectors and matrices, Stokes vectors and Mueller
+# matrices.
+#
+# Every group named test_* is rust-old/src/polarization.rs's test of that name, ported assertion for assertion (the
+# ledger matches them by name). The circular states, polarizers and S₃ follow IEEE handedness in e^{+jωt} (ADR 0002
+# row 5, src/complex.cyr's header): where a Rust test reads a Born & Wolf state, the port's test reads the same
+# physical light under its IEEE name, and says so. `test_mie_result_serde` is scattering's and the JSON's (parts 1b
+# and 1a-2). The cyrius_* groups pin each IEEE name by the rotation sense of its real field, the waveplates'
+# convention, the Jones and Mueller forms' agreement, the errors and the layouts. tests/golden/polarization.tsv pins
+# every function over its grid against Rust besides.
+
+include "tests/lib.cyr"
+
+var TOL: f64 = 0.0000000001;
+var PI_2: f64 = 0x3FF921FB54442D18;                  # std::f64::consts::FRAC_PI_2
+var SQRT1_2: f64 = 0x3FE6A09E667F3BCD;               # FRAC_1_SQRT_2
+
+# |a − b| < tol.
+fn near(a: f64, b: f64, tol: f64): i64 {
+    var d: f64 = a - b;
+    var ad: f64 = f64_abs(d);
+    if (ad < tol) { return 1; }
+    return 0;
+}
+
+# 1 when the C strings a and b are equal.
+fn text_is(a, b): i64 {
+    var n = strlen(a);
+    if (n != strlen(b)) { return 0; }
+    return memeq(a, b, n);
+}
+
+# 1 when the Result (t, v) is an error with code `code` and the record's Display text is `want`.
+fn err_is(t, v, code, want): i64 {
+    if (is_err_result(t) != 1 || v != code) { return 0; }
+    return text_is(bj_last_error_display(), want);
+}
+
+# 1 when the Result (t, v) is Ok(x) with |x − want| < tol.
+fn ok_near(t, v, want: f64, tol: f64): i64 {
+    if (is_ok(t) != 1) { return 0; }
+    var x: f64 = v;
+    return near(x, want, tol);
+}
+
+# An address as a *f64.
+fn f64p(p): *f64 { return p; }
+
+# The rotation sense of a Jones vector's real field E(t) = Re{J·e^{+jωt}} at z = 0, between ωt = 0 and ωt = 0.1:
+# 1 when it turns counterclockwise about +z (from x̂ toward ŷ: right-hand circular, IEEE, for a wave along +z), −1
+# when clockwise, 0 when neither (linear).
+fn rotation_sense(j: BjJonesVector): i64 {
+    var c: f64 = _bj_cos(0.1);
+    var s: f64 = _bj_sin(0.1);
+    var x0: f64 = j.x.re;
+    var y0: f64 = j.y.re;
+    var x1: f64 = j.x.re * c - j.x.im * s;
+    var y1: f64 = j.y.re * c - j.y.im * s;
+    var cr: f64 = x0 * y1 - y0 * x1;
+    if (cr > 0.000001) { return 1; }
+    if (cr < -0.000001) { return 0 - 1; }
+    return 0;
+}
+
+# polarization.rs's Complex, Jones vector and Jones matrix tests.
+fn rust_tests_a(): i64 {
+    test_group("test_complex_mul");
+    var a: BjComplex = BjComplex_new(1.0, 2.0);
+    var b: BjComplex = BjComplex_new(3.0, 4.0);
+    var c: BjComplex = BjComplex_mul(a, b);
+    assert(near(c.re, -5.0, TOL) == 1, "(1+2i)(3+4i) re = −5");
+    assert(near(c.im, 10.0, TOL) == 1, "im = 10");
+
+    test_group("test_complex_conj");
+    var z: BjComplex = BjComplex_new(3.0, 4.0);
+    var zc: BjComplex = z.conj();
+    assert(near(zc.im, -4.0, TOL) == 1, "conj im = −4");
+
+    test_group("test_complex_norm");
+    var zn: f64 = z.norm();
+    assert(near(zn, 5.0, TOL) == 1, "|3+4i| = 5");
+
+    test_group("test_complex_from_polar");
+    var zp: BjComplex = bj_complex_from_polar(1.0, PI_2);
+    var zpr: f64 = f64_abs(zp.re);
+    assert(zpr < TOL, "re = 0");
+    assert(near(zp.im, 1.0, TOL) == 1, "im = 1");
+
+    test_group("test_standard_states_normalized");
+    var ik0: f64 = BjJonesVector_horizontal().intensity();
+    var ik1: f64 = BjJonesVector_vertical().intensity();
+    var ik2: f64 = BjJonesVector_diagonal().intensity();
+    var ik3: f64 = BjJonesVector_anti_diagonal().intensity();
+    var ik4: f64 = BjJonesVector_right_circular().intensity();
+    var ik5: f64 = BjJonesVector_left_circular().intensity();
+    assert(near(ik0, 1.0, TOL) == 1 && near(ik1, 1.0, TOL) == 1 && near(ik2, 1.0, TOL) == 1, "state not normalized");
+    assert(near(ik3, 1.0, TOL) == 1 && near(ik4, 1.0, TOL) == 1 && near(ik5, 1.0, TOL) == 1, "state not normalized");
+
+    test_group("test_hv_orthogonal");
+    var h: BjJonesVector = BjJonesVector_horizontal();
+    var v: BjJonesVector = BjJonesVector_vertical();
+    var hv: BjComplex = h.inner(v);
+    var hvn: f64 = hv.norm();
+    assert(hvn < TOL, "⟨H|V⟩ = 0");
+    var t1, o1 = h.overlap(v);
+    var o1f: f64 = o1;
+    var o1a: f64 = f64_abs(o1f);
+    assert(is_ok(t1) == 1 && o1a < TOL, "overlap(H, V) = 0");
+
+    test_group("test_da_orthogonal");
+    var d: BjJonesVector = BjJonesVector_diagonal();
+    var ad: BjJonesVector = BjJonesVector_anti_diagonal();
+    var da: BjComplex = d.inner(ad);
+    var dan: f64 = da.norm();
+    assert(dan < TOL, "⟨D|A⟩ = 0");
+
+    test_group("test_rl_orthogonal");
+    var r: BjJonesVector = BjJonesVector_right_circular();
+    var l: BjJonesVector = BjJonesVector_left_circular();
+    var rl: BjComplex = r.inner(l);
+    var rln: f64 = rl.norm();
+    assert(rln < TOL, "⟨R|L⟩ = 0");
+
+    test_group("test_linear_at_zero_is_horizontal");
+    var l0: BjJonesVector = BjJonesVector_linear(0.0);
+    assert(near(l0.x.re, h.x.re, TOL) == 1 && near(l0.y.re, h.y.re, TOL) == 1, "linear(0) = H");
+
+    test_group("test_linear_at_90_is_vertical");
+    var l90: BjJonesVector = BjJonesVector_linear(PI_2);
+    assert(near(l90.x.re, v.x.re, TOL) == 1 && near(l90.y.re, v.y.re, TOL) == 1, "linear(π/2) = V");
+
+    test_group("test_normalize_zero_fails");
+    var zero: BjComplex = bj_complex_zero();
+    var zv: BjJonesVector = BjJonesVector_new(zero, zero);
+    var nz: BjJonesVector;
+    var t2, v2 = zv.normalized(&nz);
+    assert(is_err_result(t2) == 1, "the zero vector has no normalization");
+
+    test_group("test_identity_preserves");
+    var ih: BjJonesVector = BjJonesMatrix_identity().apply(h);
+    assert(near(ih.x.re, h.x.re, TOL) == 1 && near(ih.y.re, h.y.re, TOL) == 1, "identity·H = H");
+
+    test_group("test_h_polarizer_passes_h");
+    var hp: BjJonesMatrix = BjJonesMatrix_horizontal_polarizer();
+    var hph: BjJonesVector = hp.apply(h);
+    var i3: f64 = hph.intensity();
+    assert(near(i3, 1.0, TOL) == 1, "H passes");
+
+    test_group("test_h_polarizer_blocks_v");
+    var hpv: BjJonesVector = hp.apply(v);
+    var i4: f64 = hpv.intensity();
+    assert(i4 < TOL, "V blocked");
+
+    test_group("test_v_polarizer_passes_v");
+    var vp: BjJonesMatrix = BjJonesMatrix_vertical_polarizer();
+    var vpv: BjJonesVector = vp.apply(v);
+    var i5: f64 = vpv.intensity();
+    assert(near(i5, 1.0, TOL) == 1, "V passes");
+
+    test_group("test_v_polarizer_blocks_h");
+    var vph: BjJonesVector = vp.apply(h);
+    var i6: f64 = vph.intensity();
+    assert(i6 < TOL, "H blocked");
+
+    test_group("test_linear_polarizer_malus_law");
+    var ang: f64 = _BJ_PI / 6.0;
+    var lp: BjJonesMatrix = BjJonesMatrix_linear_polarizer(ang);
+    var lph: BjJonesVector = lp.apply(h);
+    var ca: f64 = _bj_cos(ang);
+    var i7: f64 = lph.intensity();
+    assert(near(i7, ca * ca, TOL) == 1, "Malus: I = cos²θ");
+
+    test_group("test_crossed_polarizers_block");
+    var sys: BjJonesMatrix = vp.compose(hp);
+    var sh: BjJonesVector = sys.apply(h);
+    var i8: f64 = sh.intensity();
+    assert(i8 < TOL, "crossed polarizers block");
+
+    test_group("test_qwp_h_to_circular");
+    var q45: BjJonesMatrix = BjJonesMatrix_quarter_wave_plate(_BJ_PI / 4.0);
+    var qh: BjJonesVector = q45.apply(h);
+    var nx: f64 = qh.x.norm();
+    var ny: f64 = qh.y.norm();
+    assert(near(nx, ny, TOL) == 1, "|E_x| = |E_y|");
+    var py: f64 = qh.y.arg();
+    var px: f64 = qh.x.arg();
+    var pd: f64 = py - px;
+    var apd: f64 = f64_abs(pd);
+    assert(near(apd, PI_2, TOL) == 1, "|Δφ| = π/2");
+
+    test_group("test_hwp_flips_polarization");
+    var hw: BjJonesMatrix = BjJonesMatrix_half_wave_plate(_BJ_PI / 8.0);
+    var hwh: BjJonesVector = hw.apply(h);
+    var hn: BjJonesVector;
+    var t3, v3 = hwh.normalized(&hn);
+    var t4, o4 = hn.overlap(d);
+    assert(is_ok(t3) == 1 && ok_near(t4, o4, 1.0, TOL) == 1, "HWP at 22.5° takes H to D");
+
+    test_group("test_hwp_preserves_intensity");
+    var hw0: BjJonesVector = BjJonesMatrix_half_wave_plate(0.0).apply(d);
+    var i9: f64 = hw0.intensity();
+    var id: f64 = d.intensity();
+    assert(near(i9, id, TOL) == 1, "HWP preserves I");
+
+    test_group("test_qwp_preserves_intensity");
+    var qw0: BjJonesVector = BjJonesMatrix_quarter_wave_plate(0.0).apply(d);
+    var i10: f64 = qw0.intensity();
+    assert(near(i10, id, TOL) == 1, "QWP preserves I");
+
+    test_group("test_rotator");
+    var rot: BjJonesVector = BjJonesMatrix_rotator(PI_2).apply(h);
+    var rxn: f64 = rot.x.norm();
+    assert(rxn < TOL && near(rot.y.re, 1.0, TOL) == 1, "rotator(π/2)·H = V");
+
+    test_group("test_compose_associative");
+    var ma: BjJonesMatrix = BjJonesMatrix_linear_polarizer(0.3);
+    var mb: BjJonesMatrix = BjJonesMatrix_quarter_wave_plate(0.5);
+    var mc: BjJonesMatrix = BjJonesMatrix_rotator(0.7);
+    var mab: BjJonesMatrix = ma.compose(mb);
+    var ab_c: BjJonesMatrix = mab.compose(mc);
+    var mbc: BjJonesMatrix = mb.compose(mc);
+    var a_bc: BjJonesMatrix = ma.compose(mbc);
+    var r1: BjJonesVector = ab_c.apply(d);
+    var r2: BjJonesVector = a_bc.apply(d);
+    assert(near(r1.x.re, r2.x.re, TOL) == 1 && near(r1.x.im, r2.x.im, TOL) == 1, "(AB)C = A(BC): x");
+    assert(near(r1.y.re, r2.y.re, TOL) == 1 && near(r1.y.im, r2.y.im, TOL) == 1, "(AB)C = A(BC): y");
+
+    test_group("test_determinant_polarizer");
+    var dp: BjComplex = hp.determinant();
+    var dpn: f64 = dp.norm();
+    assert(dpn < TOL, "a polarizer is singular");
+
+    test_group("test_determinant_waveplate");
+    var dw: BjComplex = BjJonesMatrix_quarter_wave_plate(0.3).determinant();
+    var dwn: f64 = dw.norm();
+    assert(near(dwn, 1.0, TOL) == 1, "a waveplate is unitary");
+
+    test_group("test_determinant_rotator");
+    var dr: BjComplex = BjJonesMatrix_rotator(0.7).determinant();
+    var drn: f64 = dr.norm();
+    assert(near(drn, 1.0, TOL) == 1, "a rotator is unitary");
+
+    test_group("test_waveplate_zero_retardance_is_identity");
+    var w0: BjJonesVector = BjJonesMatrix_waveplate(0.5, 0.0).apply(h);
+    var w0y: f64 = w0.y.norm();
+    assert(near(w0.x.re, 1.0, TOL) == 1 && w0y < TOL, "δ = 0 is the identity");
+    return 0;
+}
+
+# polarization.rs's Stokes vector and Mueller matrix tests, and its Complex operator tests.
+fn rust_tests_b(): i64 {
+    var h: BjJonesVector = BjJonesVector_horizontal();
+    var d: BjJonesVector = BjJonesVector_diagonal();
+
+    test_group("test_stokes_from_jones_horizontal");
+    var sh: BjStokesVector = BjStokesVector_from_jones(h);
+    var a2: f64 = f64_abs(sh.s.2);
+    var a3: f64 = f64_abs(sh.s.3);
+    assert(near(sh.s.0, 1.0, TOL) == 1 && near(sh.s.1, 1.0, TOL) == 1 && a2 < TOL && a3 < TOL, "H: [1, 1, 0, 0]");
+
+    test_group("test_stokes_from_jones_vertical");
+    var sv: BjStokesVector = BjStokesVector_from_jones(BjJonesVector_vertical());
+    var b2: f64 = f64_abs(sv.s.2);
+    var b3: f64 = f64_abs(sv.s.3);
+    assert(near(sv.s.0, 1.0, TOL) == 1 && near(sv.s.1, -1.0, TOL) == 1 && b2 < TOL && b3 < TOL, "V: [1, −1, 0, 0]");
+
+    test_group("test_stokes_from_jones_diagonal");
+    var sd: BjStokesVector = BjStokesVector_from_jones(d);
+    var c1: f64 = f64_abs(sd.s.1);
+    var c3: f64 = f64_abs(sd.s.3);
+    assert(near(sd.s.0, 1.0, TOL) == 1 && c1 < TOL && near(sd.s.2, 1.0, TOL) == 1 && c3 < TOL, "D: [1, 0, 1, 0]");
+
+    test_group("test_stokes_from_jones_right_circular");
+    # S₃ = +1 for right-hand circular light: under the IEEE name (the port's right_circular) as under Rust's.
+    var sr: BjStokesVector = BjStokesVector_from_jones(BjJonesVector_right_circular());
+    var e1: f64 = f64_abs(sr.s.1);
+    var e2: f64 = f64_abs(sr.s.2);
+    assert(near(sr.s.0, 1.0, TOL) == 1 && e1 < TOL && e2 < TOL && near(sr.s.3, 1.0, TOL) == 1, "R: S₃ = +1");
+
+    test_group("test_stokes_fully_polarized_dop");
+    var t1, p1 = sh.degree_of_polarization();
+    assert(ok_near(t1, p1, 1.0, TOL) == 1, "fully polarized: DOP = 1");
+
+    test_group("test_stokes_unpolarized_dop");
+    var t2, p2 = BjStokesVector_unpolarized(1.0).degree_of_polarization();
+    assert(ok_near(t2, p2, 0.0, TOL) == 1, "unpolarized: DOP = 0");
+
+    test_group("test_stokes_partially_polarized");
+    var mix: BjStokesVector = BjStokesVector_add(BjStokesVector_horizontal(1.0), BjStokesVector_unpolarized(1.0));
+    var t3, p3 = mix.degree_of_polarization();
+    assert(ok_near(t3, p3, 0.5, TOL) == 1, "[2, 1, 0, 0]: DOP = 0.5");
+
+    test_group("test_stokes_orientation_horizontal");
+    var oh: f64 = BjStokesVector_horizontal(1.0).orientation_angle();
+    var aoh: f64 = f64_abs(oh);
+    assert(aoh < TOL, "ψ = 0 for horizontal");
+
+    test_group("test_stokes_ellipticity_linear");
+    var el: f64 = BjStokesVector_horizontal(1.0).ellipticity_angle();
+    var ael: f64 = f64_abs(el);
+    assert(ael < TOL, "χ = 0 for linear");
+
+    test_group("test_stokes_ellipticity_circular");
+    var ec: f64 = BjStokesVector_right_circular(1.0).ellipticity_angle();
+    assert(near(ec, _BJ_PI / 4.0, TOL) == 1, "χ = π/4 for right-hand circular");
+
+    test_group("test_stokes_zero_intensity_dop_fails");
+    var t4, p4 = BjStokesVector_new(0.0, 0.0, 0.0, 0.0).degree_of_polarization();
+    assert(is_err_result(t4) == 1, "S₀ = 0 has no DOP");
+
+    test_group("test_mueller_identity");
+    var shz: BjStokesVector = BjStokesVector_horizontal(1.0);
+    var mi: BjStokesVector = BjMuellerMatrix_identity().apply(shz);
+    assert(near(mi.s.0, shz.s.0, TOL) == 1 && near(mi.s.1, shz.s.1, TOL) == 1 && near(mi.s.2, shz.s.2, TOL) == 1
+      && near(mi.s.3, shz.s.3, TOL) == 1, "identity·S = S");
+
+    test_group("test_mueller_h_polarizer_passes_h");
+    var mhp: BjMuellerMatrix = BjMuellerMatrix_horizontal_polarizer();
+    var m1: f64 = mhp.apply(shz).intensity();
+    assert(near(m1, 1.0, TOL) == 1, "H passes");
+
+    test_group("test_mueller_h_polarizer_blocks_v");
+    var svz: BjStokesVector = BjStokesVector_vertical(1.0);
+    var m2: f64 = mhp.apply(svz).intensity();
+    assert(m2 < TOL, "V blocked");
+
+    test_group("test_mueller_v_polarizer_blocks_h");
+    var m3: f64 = BjMuellerMatrix_vertical_polarizer().apply(shz).intensity();
+    assert(m3 < TOL, "H blocked");
+
+    test_group("test_mueller_polarizer_halves_unpolarized");
+    var m4: f64 = mhp.apply(BjStokesVector_unpolarized(1.0)).intensity();
+    assert(near(m4, 0.5, TOL) == 1, "an unpolarized beam halves");
+
+    test_group("test_mueller_waveplate_preserves_intensity");
+    var m5: f64 = BjMuellerMatrix_quarter_wave_plate(0.3).apply(shz).intensity();
+    assert(near(m5, 1.0, TOL) == 1, "a waveplate preserves I");
+
+    test_group("test_mueller_depolarizer");
+    var dep: BjStokesVector = BjMuellerMatrix_depolarizer().apply(shz);
+    var g1: f64 = f64_abs(dep.s.1);
+    var g2: f64 = f64_abs(dep.s.2);
+    var g3: f64 = f64_abs(dep.s.3);
+    assert(near(dep.s.0, 1.0, TOL) == 1 && g1 < TOL && g2 < TOL && g3 < TOL, "depolarized: [1, 0, 0, 0]");
+
+    test_group("test_mueller_attenuator");
+    var m6: f64 = BjMuellerMatrix_attenuator(0.5).apply(shz).intensity();
+    assert(near(m6, 0.5, TOL) == 1, "I × 0.5");
+
+    test_group("test_mueller_rcp_polarizer");
+    var rcp: BjMuellerMatrix = BjMuellerMatrix_right_circular_polarizer();
+    var m7: f64 = rcp.apply(BjStokesVector_right_circular(1.0)).intensity();
+    assert(near(m7, 1.0, TOL) == 1, "R passes R");
+
+    test_group("test_mueller_rcp_blocks_lcp");
+    var m8: f64 = rcp.apply(BjStokesVector_left_circular(1.0)).intensity();
+    assert(m8 < TOL, "R blocks L");
+
+    test_group("test_mueller_crossed_polarizers");
+    var msys: BjMuellerMatrix = BjMuellerMatrix_vertical_polarizer().compose(mhp);
+    var m9: f64 = msys.apply(shz).intensity();
+    assert(m9 < TOL, "crossed polarizers block");
+
+    test_group("test_mueller_rotation_preserves_intensity");
+    var m10: f64 = BjMuellerMatrix_rotation(0.5).apply(shz).intensity();
+    assert(near(m10, 1.0, TOL) == 1, "a rotation preserves I");
+
+    test_group("test_jones_mueller_agreement_polarizer");
+    var jr: BjJonesVector = BjJonesMatrix_horizontal_polarizer().apply(d);
+    var js: BjStokesVector = BjStokesVector_from_jones(jr);
+    var sin1: BjStokesVector = BjStokesVector_from_jones(d);
+    var mr: BjStokesVector = mhp.apply(sin1);
+    assert(near(js.s.0, mr.s.0, TOL) == 1 && near(js.s.1, mr.s.1, TOL) == 1 && near(js.s.2, mr.s.2, TOL) == 1
+      && near(js.s.3, mr.s.3, TOL) == 1, "Jones and Mueller agree for a polarizer");
+
+    test_group("test_stokes_add_operator");
+    var hv: BjStokesVector = BjStokesVector_add(shz, svz);
+    var h1: f64 = f64_abs(hv.s.1);
+    var hi: f64 = hv.intensity();
+    assert(near(hi, 2.0, TOL) == 1 && h1 < TOL, "H + V: unpolarized, intensity 2");
+
+    test_group("test_complex_display");
+    var lb[64];
+    var lt[24];
+    _bj_tx_init(&lt, &lb, 64);
+    BjComplex_new(1.0, 2.0).display(&lt);
+    var n1 = _bj_tx_len(&lt);
+    assert(n1 == 4 && memeq(&lb, "1+2i", 4) == 1, "1+2i");
+    _bj_tx_init(&lt, &lb, 64);
+    BjComplex_new(1.0, -2.0).display(&lt);
+    var n2 = _bj_tx_len(&lt);
+    assert(n2 == 4 && memeq(&lb, "1-2i", 4) == 1, "1-2i");
+
+    test_group("test_complex_sub");
+    var cs: BjComplex = BjComplex_sub(BjComplex_new(5.0, 3.0), BjComplex_new(2.0, 1.0));
+    assert(near(cs.re, 3.0, TOL) == 1 && near(cs.im, 2.0, TOL) == 1, "(5+3i) − (2+i) = 3+2i");
+
+    test_group("test_complex_neg");
+    var cn: BjComplex = BjComplex_neg(BjComplex_new(3.0, -4.0));
+    assert(near(cn.re, -3.0, TOL) == 1 && near(cn.im, 4.0, TOL) == 1, "−(3−4i) = −3+4i");
+
+    test_group("test_complex_arg");
+    var carg: f64 = BjComplex_new(0.0, 1.0).arg();
+    assert(near(carg, PI_2, TOL) == 1, "arg(i) = π/2");
+
+    test_group("test_jones_mueller_agreement_waveplate");
+    var jw: BjJonesVector = BjJonesMatrix_quarter_wave_plate(0.3).apply(h);
+    var jws: BjStokesVector = BjStokesVector_from_jones(jw);
+    var mws: BjStokesVector = BjMuellerMatrix_quarter_wave_plate(0.3).apply(BjStokesVector_from_jones(h));
+    var tw: f64 = 0.00000001;
+    assert(near(jws.s.0, mws.s.0, tw) == 1 && near(jws.s.1, mws.s.1, tw) == 1 && near(jws.s.2, mws.s.2, tw) == 1
+      && near(jws.s.3, mws.s.3, tw) == 1, "Jones and Mueller agree for a QWP");
+
+    test_group("test_mueller_compose_identity");
+    var mc: BjMuellerMatrix = BjMuellerMatrix_identity().compose(mhp);
+    var q1: BjStokesVector = mhp.apply(shz);
+    var q2: BjStokesVector = mc.apply(shz);
+    assert(near(q1.s.0, q2.s.0, TOL) == 1 && near(q1.s.1, q2.s.1, TOL) == 1 && near(q1.s.2, q2.s.2, TOL) == 1
+      && near(q1.s.3, q2.s.3, TOL) == 1, "I·M = M");
+    return 0;
+}
+
+# polarization.rs's scale-robustness and convention regression tests.
+fn rust_tests_c(): i64 {
+    var s: f64 = SQRT1_2;
+
+    test_group("test_normalized_tiny_amplitude");
+    var e200: f64 = _bj_from_bits(0x16687E92154EF7AC);                 # 1e-200
+    var jt: BjJonesVector = BjJonesVector_new(BjComplex_new(e200, 0.0), BjComplex_new(0.0, e200));
+    var nt: BjJonesVector;
+    var t1, v1 = jt.normalized(&nt);
+    var ax: f64 = f64_abs(nt.x.im);
+    var ay: f64 = f64_abs(nt.y.re);
+    var it: f64 = nt.intensity();
+    assert(is_ok(t1) == 1 && near(nt.x.re, s, TOL) == 1 && ax < TOL, "x = 1/√2");
+    assert(ay < TOL && near(nt.y.im, s, TOL) == 1 && near(it, 1.0, TOL) == 1, "y = j/√2, unit intensity");
+
+    test_group("test_normalized_huge_amplitude");
+    var e3: f64 = _bj_from_bits(0x698F5AA543C31387);                   # 3e200
+    var e4: f64 = _bj_from_bits(0x6994E718D7D7625A);                   # 4e200
+    var jh: BjJonesVector = BjJonesVector_new(bj_complex_real(e3), bj_complex_real(e4));
+    var nh: BjJonesVector;
+    var t2, v2 = jh.normalized(&nh);
+    assert(is_ok(t2) == 1 && near(nh.x.re, 0.6, TOL) == 1 && near(nh.y.re, 0.8, TOL) == 1, "(3, 4)e200 → (0.6, 0.8)");
+
+    test_group("test_normalized_rejects_non_finite");
+    var zero: BjComplex = bj_complex_zero();
+    var nan: f64 = _bj_from_bits(0x7FF8000000000000);
+    var inf: f64 = _bj_from_bits(0x7FF0000000000000);
+    var nn: BjJonesVector;
+    var t3, v3 = BjJonesVector_new(bj_complex_real(nan), zero).normalized(&nn);
+    var t4, v4 = BjJonesVector_new(bj_complex_real(inf), zero).normalized(&nn);
+    assert(is_err_result(t3) == 1 && is_err_result(t4) == 1, "NaN and ∞ refused");
+
+    test_group("test_overlap_tiny_amplitude");
+    var e8: f64 = 0.00000001;
+    var oh: BjJonesVector = BjJonesVector_new(bj_complex_real(e8), zero);
+    var od: BjJonesVector = BjJonesVector_new(bj_complex_real(e8), bj_complex_real(e8));
+    var t5, o5 = oh.overlap(od);
+    assert(ok_near(t5, o5, 0.5, TOL) == 1, "Malus at 1e-8 V/m");
+    var lin: BjJonesVector = BjJonesVector_linear(0.3);
+    var e300: f64 = _bj_from_bits(0x7E37E43C8800759C);                 # 1e300
+    var em300: f64 = _bj_from_bits(0x01A56E1FC2F8F359);                # 1e-300
+    var tiny: BjJonesVector = BjJonesVector_new(lin.x.scale(em300), lin.y.scale(em300));
+    var huge: BjJonesVector = BjJonesVector_new(bj_complex_real(e300), zero);
+    var c3: f64 = _bj_cos(0.3);
+    var t6, o6 = tiny.overlap(huge);
+    assert(ok_near(t6, o6, c3 * c3, TOL) == 1, "1e-300 against 1e300: cos²0.3");
+
+    test_group("test_overlap_zero_and_nan");
+    var z: BjJonesVector = BjJonesVector_new(zero, zero);
+    var t7, o7 = z.overlap(BjJonesVector_horizontal());
+    var t8, o8 = BjJonesVector_new(bj_complex_real(nan), zero).overlap(BjJonesVector_horizontal());
+    assert(is_err_result(t7) == 1 && is_err_result(t8) == 1, "zero and NaN refused");
+
+    test_group("test_dop_tiny_intensity");
+    var e40: f64 = _bj_from_bits(0x37A16C262777579C);                  # 1e-40
+    var h40: f64 = e40 * 0.5;
+    var t9, p9 = BjStokesVector_new(e40, h40, 0.0, 0.0).degree_of_polarization();
+    assert(ok_near(t9, p9, 0.5, TOL) == 1, "S₀ = 1e-40: DOP = 0.5");
+    var e170: f64 = _bj_from_bits(0x1CA3529BA7D19EAF);                 # 1e-170
+    var s6: f64 = e170 * 0.6;
+    var s8: f64 = e170 * 0.8;
+    var t10, p10 = BjStokesVector_new(e170, s6, 0.0, s8).degree_of_polarization();
+    assert(ok_near(t10, p10, 1.0, TOL) == 1, "1e-170 parts: DOP = 1");
+    var t11, p11 = BjStokesVector_new(-1.0, 0.0, 0.0, 0.0).degree_of_polarization();
+    var t12, p12 = BjStokesVector_new(nan, 0.0, 0.0, 0.0).degree_of_polarization();
+    assert(is_err_result(t11) == 1 && is_err_result(t12) == 1, "S₀ < 0 and NaN refused");
+
+    test_group("test_mueller_rotation_is_jones_rotator_negative_angle");
+    var th: f64 = 0.3;
+    var phis: f64[4];
+    phis[0] = 0.0;
+    phis[1] = 0.4;
+    phis[2] = 1.1;
+    phis[3] = -0.7;
+    var mrot: BjMuellerMatrix = BjMuellerMatrix_rotation(th);
+    var nth: f64 = -th;
+    var jrot: BjJonesMatrix = BjJonesMatrix_rotator(nth);
+    for (var k2 = 0; k2 < 4; k2 = k2 + 1) {
+        var phi: f64 = phis[k2];
+        var sk: BjStokesVector = BjStokesVector_from_jones(BjJonesVector_linear(phi));
+        var out: BjStokesVector = mrot.apply(sk);
+        var pm: f64 = phi - th;
+        var ex: BjStokesVector = BjStokesVector_from_jones(BjJonesVector_linear(pm));
+        var vj: BjStokesVector = BjStokesVector_from_jones(jrot.apply(BjJonesVector_linear(phi)));
+        var op: *f64 = f64p(&out);
+        var ep: *f64 = f64p(&ex);
+        var vp: *f64 = f64p(&vj);
+        for (var i = 0; i < 4; i = i + 1) {
+            assert(near(op[i], ep[i], TOL) == 1 && near(op[i], vp[i], TOL) == 1, "rotation(θ) = rotator(−θ)");
+        }
+    }
+    var rc: BjStokesVector = BjStokesVector_from_jones(BjJonesVector_right_circular());
+    var rco: BjStokesVector = mrot.apply(rc);
+    assert(near(rco.s.3, 1.0, TOL) == 1, "S₃ untouched");
+
+    test_group("test_mueller_rotated_element_identity");
+    var th2: f64 = 0.37;
+    var nth2: f64 = -th2;
+    var built: BjMuellerMatrix = BjMuellerMatrix_rotation(nth2).compose(BjMuellerMatrix_horizontal_polarizer());
+    var built2: BjMuellerMatrix = built.compose(BjMuellerMatrix_rotation(th2));
+    var direct: BjMuellerMatrix = BjMuellerMatrix_linear_polarizer(th2);
+    var bp: *f64 = f64p(&built2);
+    var dp: *f64 = f64p(&direct);
+    for (var k3 = 0; k3 < 16; k3 = k3 + 1) {
+        assert(near(bp[k3], dp[k3], TOL) == 1, "linear_polarizer(θ) = R(−θ)·H·R(θ)");
+    }
+
+    test_group("test_waveplate_slow_axis_lags");
+    # Rust's test in e^{−iωt}: a QWP with fast axis horizontal on +45° light gives E_y lagging E_x, phase +π/2, its
+    # left_circular, S₃ = −1. The same light in e^{+jωt} has phase −π/2, and is right-hand circular under the IEEE
+    # name (the port's right_circular), S₃ = +1 (ADR 0002 row 5).
+    var qo: BjJonesVector = BjJonesMatrix_quarter_wave_plate(0.0).apply(BjJonesVector_diagonal());
+    var qy: f64 = qo.y.arg();
+    var qx: f64 = qo.x.arg();
+    var ph: f64 = qy - qx;
+    var nph: f64 = -PI_2;
+    assert(near(ph, nph, TOL) == 1, "the slow axis lags: Δφ = −π/2 in e^{+jωt}");
+    var t13, o13 = qo.overlap(BjJonesVector_right_circular());
+    assert(ok_near(t13, o13, 1.0, TOL) == 1, "right-hand circular (IEEE)");
+    var qs: BjStokesVector = BjStokesVector_from_jones(qo);
+    assert(near(qs.s.3, 1.0, TOL) == 1, "S₃ = +1");
+    var dsk: BjStokesVector = BjStokesVector_from_jones(BjJonesVector_diagonal());
+    var mq: BjStokesVector = BjMuellerMatrix_quarter_wave_plate(0.0).apply(dsk);
+    assert(near(mq.s.3, 1.0, TOL) == 1, "the Mueller form agrees: S₃ = +1");
+    return 0;
+}
+
+# What the port adds: the IEEE names' rotation sense, the waveplate forms, the errors and the layouts.
+fn cyrius_tests(): i64 {
+    test_group("cyrius_rotation_sense (ADR 0002 row 5)");
+    assert(rotation_sense(BjJonesVector_right_circular()) == 1, "right_circular turns x̂ → ŷ: right-hand about +z");
+    assert(rotation_sense(BjJonesVector_left_circular()) == 0 - 1, "left_circular turns x̂ → −ŷ: left-hand");
+    assert(rotation_sense(BjJonesVector_horizontal()) == 0 && rotation_sense(BjJonesVector_diagonal()) == 0,
+      "linear states do not turn");
+    var qo: BjJonesVector = BjJonesMatrix_quarter_wave_plate(0.0).apply(BjJonesVector_diagonal());
+    assert(rotation_sense(qo) == 1, "QWP, fast axis x̂, on +45°: the slow ŷ lags, right-hand");
+    var qa: BjJonesVector = BjJonesMatrix_quarter_wave_plate(PI_2).apply(BjJonesVector_diagonal());
+    assert(rotation_sense(qa) == 0 - 1, "fast axis ŷ: x̂ lags, left-hand");
+    var sr: BjStokesVector = BjStokesVector_from_jones(BjJonesVector_right_circular());
+    var sl: BjStokesVector = BjStokesVector_from_jones(BjJonesVector_left_circular());
+    assert(sr.s.3 > 0.5 && sl.s.3 < -0.5, "S₃ > 0 exactly for the right-hand state");
+    var srn: BjStokesVector = BjStokesVector_right_circular(1.0);
+    assert(srn.s.3 > 0.5 && BjStokesVector_left_circular(1.0).s.3 < -0.5, "the named Stokes states agree");
+    var rcp: BjMuellerMatrix = BjMuellerMatrix_right_circular_polarizer();
+    var lcp: BjMuellerMatrix = BjMuellerMatrix_left_circular_polarizer();
+    var i1: f64 = rcp.apply(sr).intensity();
+    var i2: f64 = rcp.apply(sl).intensity();
+    var i3: f64 = lcp.apply(sl).intensity();
+    var i4: f64 = lcp.apply(sr).intensity();
+    assert(near(i1, 1.0, TOL) == 1 && i2 < TOL && near(i3, 1.0, TOL) == 1 && i4 < TOL,
+      "each circular polarizer passes its own state and blocks the other");
+    var er: f64 = sr.ellipticity_angle();
+    var elf: f64 = sl.ellipticity_angle();
+    var q4: f64 = _BJ_PI / 4.0;
+    var nq4: f64 = -q4;
+    assert(near(er, q4, TOL) == 1 && near(elf, nq4, TOL) == 1, "χ = +π/4 right, −π/4 left");
+
+    test_group("cyrius_waveplate_forms_agree");
+    var ths: f64[3];
+    ths[0] = 0.0;
+    ths[1] = 0.37;
+    ths[2] = -1.2;
+    var ds: f64[3];
+    ds[0] = 0.4;
+    ds[1] = PI_2;
+    ds[2] = 2.9;
+    for (var a = 0; a < 3; a = a + 1) {
+        for (var b = 0; b < 3; b = b + 1) {
+            var jin: BjJonesVector = BjJonesVector_linear(0.2 + 0.5 * f64_from(a));
+            var jo: BjJonesVector = BjJonesMatrix_waveplate(ths[a], ds[b]).apply(jin);
+            var sj: BjStokesVector = BjStokesVector_from_jones(jo);
+            var sm: BjStokesVector = BjMuellerMatrix_waveplate(ths[a], ds[b]).apply(BjStokesVector_from_jones(jin));
+            var pj: *f64 = f64p(&sj);
+            var pm: *f64 = f64p(&sm);
+            for (var i = 0; i < 4; i = i + 1) {
+                assert(near(pj[i], pm[i], 0.000000001) == 1, "Mueller waveplate = the Jones waveplate's Stokes form");
+            }
+        }
+    }
+
+    test_group("cyrius_polarization_errors");
+    var zero: BjComplex = bj_complex_zero();
+    var z: BjJonesVector = BjJonesVector_new(zero, zero);
+    var nz: BjJonesVector;
+    var t1, v1 = z.normalized(&nz);
+    assert(err_is(t1, v1, BJ_ERR_DIVISION_BY_ZERO,
+        "division by zero in EM calculation: zero Jones vector has no polarization state") == 1, "the zero vector");
+    var nan: f64 = _bj_from_bits(0x7FF8000000000000);
+    var t2, v2 = BjJonesVector_new(bj_complex_real(nan), zero).overlap(z);
+    assert(err_is(t2, v2, BJ_ERR_INVALID_PARAMETER, "invalid parameter: Jones vector components must be finite") == 1,
+      "a NaN part");
+    var t3, v3 = BjStokesVector_new(0.0, 1.0, 0.0, 0.0).degree_of_polarization();
+    assert(err_is(t3, v3, BJ_ERR_DIVISION_BY_ZERO,
+        "division by zero in EM calculation: cannot compute DOP for zero-intensity light") == 1, "S₀ = 0");
+    var t4, v4 = BjStokesVector_new(-1.0, 0.0, 0.5, nan).degree_of_polarization();
+    assert(err_is(t4, v4, BJ_ERR_INVALID_PARAMETER,
+        "invalid parameter: Stokes vector must be finite with S₀ > 0, got [-1.0, 0.0, 0.5, NaN]") == 1, "S₀ < 0");
+
+    test_group("cyrius_polarization_layout");
+    var mm: f64[16];
+    for (var k = 0; k < 16; k = k + 1) { mm[k] = f64_from(k); }
+    var mu: BjMuellerMatrix = BjMuellerMatrix_new(&mm);
+    assert(mu.m.0 == 0.0 && mu.m.7 == 7.0 && mu.m.15 == 15.0, "m[i][j] is m.(4i + j)");
+    var sv: BjStokesVector = BjStokesVector_new(1.0, 2.0, 3.0, 4.0);
+    var sp: *f64 = f64p(&sv);
+    assert(sp[0] == 1.0 && sp[3] == 4.0 && sv.s.2 == 3.0, "s[i] is s.i");
+    var jm: BjJonesMatrix = BjJonesMatrix_new(BjComplex_new(1.0, 2.0), BjComplex_new(3.0, 4.0),
+      BjComplex_new(5.0, 6.0), BjComplex_new(7.0, 8.0));
+    assert(jm.m00.im == 2.0 && jm.m01.re == 3.0 && jm.m10.im == 6.0 && jm.m11.re == 7.0, "m[i][j] is mij");
+    var sum0: BjStokesVector = BjMuellerMatrix_depolarizer().apply(BjStokesVector_new(-1.0, -2.0, -3.0, -4.0));
+    assert(_bj_bits(sum0.s.3) == 0x8000000000000000 && _bj_bits(sum0.s.1) == 0x8000000000000000,
+      "a row of four −0 products sums to −0: Rust's f64 Sum starts from −0.0");
+    return 0;
+}
+
+# Runs polarization.rs's tests, then the Cyrius-only checks.
+fn main(): i64 {
+    alloc_init();
+    rust_tests_a();
+    rust_tests_b();
+    rust_tests_c();
+    cyrius_tests();
+    return assert_summary();
+}
+
+var exit_code = main();
+if (exit_code > 0) { exit_code = 1; }
+sys_exit_group(exit_code);

@@ -225,6 +225,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
   trajectory scenarios (static, uniform, the β = 0.99 circular orbit, hyperbolic, an oscillation, a given
   acceleration); relativity.rs's 48 tests are all ported, and the solver's 2 bench twins added. M2's four modules are
   ported.
+- **Cyrius port, M3 part 1a-1 — polarization** (`src/polarization.cyr`): polarization.rs's Jones vectors and matrices,
+  Stokes vectors and Mueller matrices, in bijli's one convention, e^{+jωt} with IEEE handedness (ADR 0002 row 5).
+  Only the retarders change their numbers: the Jones waveplate is Rust's conjugated (the fast axis takes e^{+jδ/2}),
+  and the Mueller waveplate's S₃-coupling entries are negated. `right_circular` is IEEE right-hand circular,
+  (1, −j)/√2: Rust's `left_circular` state, under Rust's `right_circular` numbers. `tests/golden/polarization.tsv`
+  (23,135 rows) matches bit for bit on all three targets through that mapping. 68 of polarization.rs's 69 tests are
+  ported, and the 4 polarization bench twins added (50 of 80). The four structs' JSON is part 1a-2's.
 
 ### Fixed
 

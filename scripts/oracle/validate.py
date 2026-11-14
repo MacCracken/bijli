@@ -3603,6 +3603,319 @@ def relativity_adr_rows(root: Path, path: Path) -> list:
     return out
 
 
+# ── polarization: rust-old/src/polarization.rs (M3 part 1a-1) ──────────────────────────────────────────────────────
+# Jones vectors and matrices (hisab's Complex), Stokes vectors and Mueller matrices, transcribed in Rust's order. One
+# transcription serves Rust and the port: they share every formula but the retarders, whose port forms are Rust's
+# conjugated (Jones) and D·M·D (Mueller), each changed entry the exact negative of Rust's (ADR 0002 row 5, e^{+jωt});
+# the port's complex products and |z|² take row 14's unbounded chain at a range edge (src/complex.cyr).
+POL_SQRT1_2 = bits_to_f("3fe6a09e667f3bcd")       # std::f64::consts::FRAC_1_SQRT_2
+POL_PI_2 = bits_to_f("3ff921fb54442d18")          # FRAC_PI_2
+POL_SAFE_MIN = 1e-290
+POL_P_GLIBC = dict(GLIBC_P, hypot=LIBM.hypot)
+POL_P_MPFR = dict(MPFR_P, hypot=lambda x, y: mpfr_ref.cr2("hypot", x, y))
+POL_CONJ = ("JonesMatrix::waveplate", "JonesMatrix::half_wave_plate", "JonesMatrix::quarter_wave_plate")
+POL_DMD = ("MuellerMatrix::waveplate", "MuellerMatrix::half_wave_plate", "MuellerMatrix::quarter_wave_plate")
+POL_DMD_IDX = (7, 11, 13, 14)          # D·M·D on a retarder: its four S₃-coupling entries
+
+
+def pol_eval(fn, v, P, wp=False, cx14=False):
+    """polarization.rs's outputs for a row on the primitives P; wp=True for the port's retarders (e^{+jωt}), cx14=True
+    for the port's complex products and |z|² (row 14 at a range edge). None for another name."""
+    def mul(a, b):
+        w = [a[0], a[1], b[0], b[1]]
+        if cx14 and cx_governed("Complex::mul", w) == 14:
+            r = cx_model("Complex::mul", w)
+            return (r[0], r[1])
+        return (a[0] * b[0] - a[1] * b[1], a[0] * b[1] + a[1] * b[0])
+
+    def nsq(a):
+        if cx14 and cx_governed("Complex::norm_sq", [a[0], a[1]]) == 14:
+            return cx_model("Complex::norm_sq", [a[0], a[1]])[0]
+        return a[0] * a[0] + a[1] * a[1]
+
+    def add(a, b):
+        return (a[0] + b[0], a[1] + b[1])
+
+    def conj(a):
+        return (a[0], -a[1])
+
+    def scale(a, s):
+        return (a[0] * s, a[1] * s)
+
+    def fl(xs):
+        return [("f", x) for x in xs]
+
+    def jv(x, y):
+        return fl([x[0], x[1], y[0], y[1]])
+
+    def jm(m):
+        return fl([z for c in m for z in c])
+
+    def vec(w, k=0):
+        return (w[k], w[k + 1]), (w[k + 2], w[k + 3])
+
+    def mat(w, k=0):
+        return [(w[k + 2 * i], w[k + 2 * i + 1]) for i in range(4)]
+
+    def inten(x, y):
+        return nsq(x) + nsq(y)
+
+    def rescaled(x, y):
+        parts = [x[0], x[1], y[0], y[1]]
+        if not all(math.isfinite(p) for p in parts):
+            return ip_err("Jones vector components must be finite")
+        m = 0.0
+        for p in parts:
+            m = max(m, abs(p))                       # f64::max over finite parts
+        if m == 0.0:
+            return dz_err("zero Jones vector has no polarization state")
+        s = 1.0 / m
+        return scale(x, s), scale(y, s)
+
+    def inner(x1, y1, x2, y2):
+        return add(mul(conj(x1), x2), mul(conj(y1), y2))
+
+    def waveplate(t, d):
+        c, s = P["cos"](t), P["sin"](t)
+        half = d / 2.0
+        cd, sd = P["cos"](half), P["sin"](half)
+        diff = c * c - s * s
+        if wp:
+            return [(cd, sd * diff), (0.0, sd * 2.0 * c * s), (0.0, sd * 2.0 * c * s), (cd, (-sd) * diff)]
+        return [(cd, (-sd) * diff), (0.0, (-sd) * 2.0 * c * s), (0.0, (-sd) * 2.0 * c * s), (cd, sd * diff)]
+
+    def diag(a, b, c, d):
+        m = [0.0] * 16
+        m[0], m[5], m[10], m[15] = a, b, c, d
+        return m
+
+    def mwaveplate(t, d):
+        a2 = 2.0 * t
+        c2, s2 = P["cos"](a2), P["sin"](a2)
+        cd, sd = P["cos"](d), P["sin"](d)
+        m = diag(1.0, 0.0, 0.0, cd)
+        m[5] = c2 * c2 + s2 * s2 * cd
+        m[6] = m[9] = c2 * s2 * (1.0 - cd)
+        m[10] = s2 * s2 + c2 * c2 * cd
+        if wp:
+            m[7], m[11], m[13], m[14] = s2 * sd, (-c2) * sd, (-s2) * sd, c2 * sd
+        else:
+            m[7], m[11], m[13], m[14] = (-s2) * sd, c2 * sd, s2 * sd, (-c2) * sd
+        return m
+
+    s = POL_SQRT1_2
+    named = {"JonesVector::horizontal": [1.0, 0.0, 0.0, 0.0], "JonesVector::default": [1.0, 0.0, 0.0, 0.0],
+             "JonesVector::vertical": [0.0, 0.0, 1.0, 0.0], "JonesVector::diagonal": [s, 0.0, s, 0.0],
+             "JonesVector::anti_diagonal": [s, 0.0, -s, 0.0], "JonesVector::right_circular": [s, 0.0, 0.0, -s],
+             "JonesVector::left_circular": [s, 0.0, 0.0, s],
+             "JonesMatrix::identity": [1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0],
+             "JonesMatrix::horizontal_polarizer": [1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
+             "JonesMatrix::vertical_polarizer": [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0],
+             "StokesVector::default": [0.0, 0.0, 0.0, 0.0]}
+    if fn in named:
+        return fl(named[fn])
+    if fn == "JonesVector::linear":
+        return fl([P["cos"](v[0]), 0.0, P["sin"](v[0]), 0.0])
+    if fn in ("JonesVector::new", "JonesMatrix::new", "StokesVector::new", "MuellerMatrix::new"):
+        return fl(v)
+    if fn == "JonesVector::intensity":
+        return fl([inten(*vec(v))])
+    if fn == "JonesVector::normalized":
+        x, y = vec(v)
+        i = inten(x, y)
+        if not (math.isfinite(i) and i >= POL_SAFE_MIN):
+            r = rescaled(x, y)
+            if isinstance(r, list):
+                return r
+            x, y = r
+        k = 1.0 / fsqrt(inten(x, y))
+        return jv(scale(x, k), scale(y, k))
+    if fn == "JonesVector::inner":
+        x1, y1 = vec(v)
+        x2, y2 = vec(v, 4)
+        return fl(list(inner(x1, y1, x2, y2)))
+    if fn == "JonesVector::overlap":
+        x1, y1 = vec(v)
+        x2, y2 = vec(v, 4)
+        den = inten(x1, y1) * inten(x2, y2)
+        if math.isfinite(den) and den >= POL_SAFE_MIN:
+            return okf(fdiv(nsq(inner(x1, y1, x2, y2)), den))
+        a = rescaled(x1, y1)
+        if isinstance(a, list):
+            return a
+        b = rescaled(x2, y2)
+        if isinstance(b, list):
+            return b
+        return okf(fdiv(nsq(inner(a[0], a[1], b[0], b[1])), inten(*a) * inten(*b)))
+    if fn == "JonesMatrix::linear_polarizer":
+        c, s2 = P["cos"](v[0]), P["sin"](v[0])
+        return jm([(c * c, 0.0), (c * s2, 0.0), (c * s2, 0.0), (s2 * s2, 0.0)])
+    if fn == "JonesMatrix::rotator":
+        c, s2 = P["cos"](v[0]), P["sin"](v[0])
+        return jm([(c, 0.0), (-s2, 0.0), (s2, 0.0), (c, 0.0)])
+    if fn == "JonesMatrix::waveplate":
+        return jm(waveplate(v[0], v[1]))
+    if fn == "JonesMatrix::half_wave_plate":
+        return jm(waveplate(v[0], math.pi))
+    if fn == "JonesMatrix::quarter_wave_plate":
+        return jm(waveplate(v[0], POL_PI_2))
+    if fn == "JonesMatrix::apply":
+        a, b, c, d = mat(v)
+        x, y = vec(v, 8)
+        return jv(add(mul(a, x), mul(b, y)), add(mul(c, x), mul(d, y)))
+    if fn == "JonesMatrix::compose":
+        a, b, c, d = mat(v)
+        e, f2, g, h = mat(v, 8)
+        return jm([add(mul(a, e), mul(b, g)), add(mul(a, f2), mul(b, h)), add(mul(c, e), mul(d, g)),
+                   add(mul(c, f2), mul(d, h))])
+    if fn == "JonesMatrix::determinant":
+        a, b, c, d = mat(v)
+        p, q = mul(a, d), mul(b, c)
+        return fl([p[0] - q[0], p[1] - q[1]])
+    if fn in ("StokesVector::unpolarized", "StokesVector::horizontal", "StokesVector::vertical",
+              "StokesVector::right_circular", "StokesVector::left_circular"):
+        i = v[0]
+        return fl({"StokesVector::unpolarized": [i, 0.0, 0.0, 0.0], "StokesVector::horizontal": [i, i, 0.0, 0.0],
+                   "StokesVector::vertical": [i, -i, 0.0, 0.0], "StokesVector::right_circular": [i, 0.0, 0.0, i],
+                   "StokesVector::left_circular": [i, 0.0, 0.0, -i]}[fn])
+    if fn == "StokesVector::from_jones":
+        x, y = vec(v)
+        ix, iy = nsq(x), nsq(y)
+        cr = mul(x, conj(y))
+        return fl([ix + iy, ix - iy, 2.0 * cr[0], 2.0 * cr[1]])
+    if fn == "StokesVector::intensity":
+        return fl([v[0]])
+    if fn == "StokesVector::degree_of_polarization":
+        s0 = v[0]
+        if s0 == 0.0:
+            return dz_err("cannot compute DOP for zero-intensity light")
+        if not (s0 > 0.0 and all(math.isfinite(x) for x in v)):
+            return ip_err("Stokes vector must be finite with S₀ > 0, got [" + ", ".join(rust_debug(x) for x in v) + "]")
+        return okf(fdiv(P["hypot"](P["hypot"](v[1], v[2]), v[3]), s0))
+    if fn == "StokesVector::ellipticity_angle":
+        return fl([0.5 * P["atan2"](v[3], fsqrt(v[1] * v[1] + v[2] * v[2]))])
+    if fn == "StokesVector::orientation_angle":
+        return fl([0.5 * P["atan2"](v[2], v[1])])
+    if fn == "StokesVector::add":
+        return fl([v[i] + v[4 + i] for i in range(4)])
+    if fn == "MuellerMatrix::identity":
+        return fl(diag(1.0, 1.0, 1.0, 1.0))
+    if fn == "MuellerMatrix::depolarizer":
+        return fl(diag(1.0, 0.0, 0.0, 0.0))
+    if fn == "MuellerMatrix::attenuator":
+        return fl(diag(v[0], v[0], v[0], v[0]))
+    if fn in ("MuellerMatrix::horizontal_polarizer", "MuellerMatrix::vertical_polarizer"):
+        m = diag(0.5, 0.5, 0.0, 0.0)
+        m[1] = m[4] = 0.5 if fn == "MuellerMatrix::horizontal_polarizer" else -0.5
+        return fl(m)
+    if fn in ("MuellerMatrix::right_circular_polarizer", "MuellerMatrix::left_circular_polarizer"):
+        m = diag(0.5, 0.0, 0.0, 0.5)
+        m[3] = m[12] = 0.5 if fn == "MuellerMatrix::right_circular_polarizer" else -0.5
+        return fl(m)
+    if fn == "MuellerMatrix::linear_polarizer":
+        a2 = 2.0 * v[0]
+        c2, s2 = P["cos"](a2), P["sin"](a2)
+        m = diag(0.5, 0.0, 0.0, 0.0)
+        hc, hs = 0.5 * c2, 0.5 * s2
+        m[1], m[2], m[4], m[5], m[6], m[8], m[9], m[10] = hc, hs, hc, hc * c2, hc * s2, hs, hc * s2, hs * s2
+        return fl(m)
+    if fn == "MuellerMatrix::rotation":
+        a2 = 2.0 * v[0]
+        c2, s2 = P["cos"](a2), P["sin"](a2)
+        m = diag(1.0, c2, c2, 1.0)
+        m[6], m[9] = s2, -s2
+        return fl(m)
+    if fn == "MuellerMatrix::waveplate":
+        return fl(mwaveplate(v[0], v[1]))
+    if fn == "MuellerMatrix::quarter_wave_plate":
+        return fl(mwaveplate(v[0], POL_PI_2))
+    if fn == "MuellerMatrix::half_wave_plate":
+        return fl(mwaveplate(v[0], math.pi))
+    if fn == "MuellerMatrix::apply":
+        out = []
+        for i in range(4):
+            acc = -0.0                               # Rust's f64 Sum starts from −0.0
+            for j in range(4):
+                acc = acc + v[4 * i + j] * v[16 + j]
+            out.append(acc)
+        return fl(out)
+    if fn == "MuellerMatrix::compose":
+        out = []
+        for i in range(4):
+            for j in range(4):
+                acc = -0.0
+                for k in range(4):
+                    acc = acc + v[4 * i + k] * v[16 + 4 * k + j]
+                out.append(acc)
+        return fl(out)
+    return None
+
+
+def pol_harness(fn, v, P, cx14=True):
+    """The parity harness's reading of a row (tests/parity.tcyr's _par_polarization): the port's function on the row's
+    numbers, a retarder's output mapped back to the oracle's convention (conjugated, or D·M·D)."""
+    out = pol_eval(fn, v, P, wp=True, cx14=cx14)
+    if fn in POL_CONJ:
+        return [(k, -x if i % 2 == 1 else x) for i, (k, x) in enumerate(out)]
+    if fn in POL_DMD:
+        return [(k, -x if i in POL_DMD_IDX else x) for i, (k, x) in enumerate(out)]
+    return out
+
+
+def pol_lines(path: Path):
+    for line in path.read_text().splitlines():
+        if line.startswith("#"):
+            continue
+        fn, cls, ins, outs, _note = line.split("\t")
+        toks = [] if ins == "-" else [parse_tok(x) for x in ins.split(" ")]
+        yield fn, cls, ins, outs, [b for _k, b in toks]
+
+
+def validate_polarization(path: Path) -> list:
+    """polarization.rs transcribed (pol_eval, Rust's forms) on glibc's primitives, against every row."""
+    errs = []
+    for n, (fn, _cls, _ins, outs, v) in enumerate(pol_lines(path), 1):
+        want = pol_eval(fn, v, POL_P_GLIBC)
+        if want is None:
+            errs.append(f"polarization row {n}: no transcription for {fn}")
+            continue
+        if not toks_same(want, wave_toks([parse_tok(x) for x in outs.split(" ")])):
+            errs.append(f"polarization row {n}: {fn}{tuple(v)} -> {wire(want)}, oracle {outs}")
+    return errs
+
+
+def polarization_corrections(path: Path):
+    """The class-C polarization rows whose outputs change when cos, sin, atan2 and hypot are correctly rounded."""
+    def fixes(_rows):
+        out = []
+        for fn, cls, ins, outs, v in pol_lines(path):
+            if cls != "C":
+                continue
+            want = pol_eval(fn, v, POL_P_MPFR)
+            old = wave_toks([parse_tok(x) for x in outs.split(" ")])
+            if toks_same(want, old):
+                continue
+            out.append((fn, ins, wire(want), f"oracle {outs}; correctly rounded primitives give {wire(want)}"))
+        return out
+    return fixes
+
+
+def polarization_adr_rows(path: Path) -> list:
+    """ADR 0002 mappings for polarization.tsv: each row whose harness reading (pol_harness, on the port's correctly
+    rounded primitives) differs from Rust's (the corrected oracle for class C). Row 14 where src/complex.cyr's range
+    edges make the difference; row 5 otherwise (the retarders' mapping, should one fail to be exact)."""
+    out = []
+    for fn, cls, ins, outs, v in pol_lines(path):
+        P = POL_P_MPFR if cls == "C" else POL_P_GLIBC
+        expect = pol_eval(fn, v, P)
+        port = pol_harness(fn, v, P)
+        if toks_same(port, expect):
+            continue
+        row = 14 if toks_same(pol_harness(fn, v, P, cx14=False), expect) else 5
+        out.append((fn, ins, wire(port), str(row), f"oracle {outs}; ADR 0002 row {row}"))
+    return out
+
+
 # ── maxwell: rust-old/src/maxwell.rs ──────────────────────────────────────────────────────────
 def validate_maxwell(root: Path, path: Path) -> list:
     """maxwell.rs transcribed in its order of operations (class A: + − × ÷ and sqrt), its checks and error texts."""
@@ -5142,6 +5455,8 @@ def adr_rows(root: Path, module: str, path: Path) -> list:
         return circuit_adr_rows(path)
     if module == "relativity":
         return relativity_adr_rows(root, path)
+    if module == "polarization":
+        return polarization_adr_rows(path)
     maps = {13: adr13(root)}
     out = adr17_rows(root, module, path) if module in ("field", "charge") else []
     if module in ("field", "charge"):
@@ -5500,6 +5815,7 @@ def main() -> int:
         "math": validate_math,
         "material": lambda p: validate_material(root, p),
         "maxwell": lambda p: validate_maxwell(root, p),
+        "polarization": validate_polarization,
         "relativity": lambda p: validate_relativity(root, p),
         "wave": lambda p: validate_wave(root, p),
     }
@@ -5527,7 +5843,9 @@ def main() -> int:
     errs += check_corrections(root, "circuit", golden / "circuit.tsv", circuit_corrections(golden / "circuit.tsv"))
     errs += check_corrections(root, "relativity", golden / "relativity.tsv",
                               relativity_corrections(root, golden / "relativity.tsv"))
-    for mod in ("charge", "circuit", "complex", "field", "material", "maxwell", "relativity", "wave"):
+    errs += check_corrections(root, "polarization", golden / "polarization.tsv",
+                              polarization_corrections(golden / "polarization.tsv"))
+    for mod in ("charge", "circuit", "complex", "field", "material", "maxwell", "polarization", "relativity", "wave"):
         errs += check_adr(root, mod, golden / f"{mod}.tsv")
     errs += cx_rows(golden / "complex.tsv")[1]
     errs += fv_rows(root, "field", golden / "field.tsv")[1] + fv_rows(root, "charge", golden / "charge.tsv")[1]

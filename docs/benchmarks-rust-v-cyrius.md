@@ -6,7 +6,7 @@
 
 **Rust column**: rust-old/bench-history.csv, run `2026-11-12T03:15:21Z` at `c95fd30` (the 1.2.0 tag's source), criterion medians. Taken under load (kimiya's gates ran beside it: load average about 2.6, median CI width 0.8 %, p90 4.2 %, max 13 %), so a ratio within the Rust row's own noise is read as parity (port plan §5 P4).
 
-**80 Rust benches:** 46 twinned, 0 not applicable, 34 pending.
+**80 Rust benches:** 50 twinned, 0 not applicable, 30 pending.
 
 | Rust bench | Rust | Cyrius twin | Cyrius | Cyrius / Rust |
 |---|---:|---|---:|---:|
@@ -67,10 +67,10 @@
 | `relativity/lienard_wiechert_fields_orbit_b099` | 319.92 ns | `relativity/lienard_wiechert_fields_orbit_b099` | 6.05 µs | 18.9× |
 | `relativity/lienard_wiechert_scalar_potential` | 1.74 ns | `relativity/lienard_wiechert_scalar_potential` | 292.00 ns | 167.8× |
 | `relativity/four_vector_boost` | 5.45 ns | `relativity/four_vector_boost` | 161.00 ns | 29.5× |
-| `polarization/jones_apply_polarizer` | 0.99 ns | pending (M3) | — | — |
-| `polarization/jones_qwp_apply` | 0.99 ns | pending (M3) | — | — |
-| `polarization/mueller_apply` | 0.99 ns | pending (M3) | — | — |
-| `polarization/stokes_from_jones` | 5.44 ns | pending (M3) | — | — |
+| `polarization/jones_apply_polarizer` | 0.99 ns | `polarization/jones_apply_polarizer` | 213.00 ns | 215.2× |
+| `polarization/jones_qwp_apply` | 0.99 ns | `polarization/jones_qwp_apply` | 216.00 ns | 218.2× |
+| `polarization/mueller_apply` | 0.99 ns | `polarization/mueller_apply` | 86.00 ns | 86.9× |
+| `polarization/stokes_from_jones` | 5.44 ns | `polarization/stokes_from_jones` | 117.00 ns | 21.5× |
 | `scattering/mie_x1_real` | 423.87 ns | pending (M3) | — | — |
 | `scattering/mie_x10_real` | 859.83 ns | pending (M3) | — | — |
 | `scattering/mie_x50_m3_5` | 3.44 µs | pending (M3) | — | — |
