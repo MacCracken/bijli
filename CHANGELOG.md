@@ -245,6 +245,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
   coefficients and digests all of them) matches bit for bit on all three targets. Its six corrected rows are where
   glibc's cos(200) misrounds. All 32 of scattering.rs's tests are ported, and the 5 scattering bench twins added
   (55 of 80). MieResult's JSON is part 1b-2's.
+- **Cyrius port, M3 part 1b-2 — MieResult's JSON** (`src/json.cyr`): `BjMieResult_to_json` and
+  `BjMieResult_from_json` write and read serde_json's document (D5). `a` and `b` are arrays of any length, each
+  element a Complex in either of serde's forms. A failed read gives back the coefficients it had read. `json.tsv`
+  grows by 5,298 rows, and `json.cr.tsv` by 3,060 rows that serde_json's best-effort parse misreads; all of them match
+  on all three targets. polarization.rs's last test, `test_mie_result_serde`, is ported, and scattering.rs is
+  ported.
 
 ### Fixed
 

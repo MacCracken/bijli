@@ -4,7 +4,7 @@
 # Every group named test_* is rust-old/src/polarization.rs's test of that name, ported assertion for assertion (the
 # ledger matches them by name). The circular states, polarizers and S₃ follow IEEE handedness in e^{+jωt} (ADR 0002
 # row 5, src/complex.cyr's header): where a Rust test reads a Born & Wolf state, the port's test reads the same
-# physical light under its IEEE name, and says so. `test_mie_result_serde` is scattering's (part 1b). The cyrius_*
+# physical light under its IEEE name, and says so. `test_mie_result_serde` reads scattering's BjMieResult. The cyrius_*
 # groups pin each IEEE name by the rotation sense of its real field, the waveplates' convention, the Jones and Mueller
 # forms' agreement, the errors, the layouts and the JSON's exact text and reasons. tests/golden/polarization.tsv and
 # json.tsv pin every function over its grid against Rust besides.
@@ -651,6 +651,25 @@ fn cyrius_tests(): i64 {
     return 0;
 }
 
+# polarization.rs's `test_mie_result_serde` (M3 part 1b-2): a MieResult round trips through its JSON.
+fn rust_test_mie_serde(): i64 {
+    test_group("test_mie_result_serde");
+    var mr: BjMieResult = BjMieResult_new();
+    var tm, vm = bj_mie(1.0, bj_complex_real(1.5), &mr);
+    var sbm = str_builder_new();
+    var tw, vw = BjMieResult_to_json(&mr, sbm);
+    var sm = str_builder_build(sbm);
+    var back: BjMieResult = BjMieResult_new();
+    var tb, vb = BjMieResult_from_json(str_data(sm), str_len(sm), &back);
+    var q1: f64 = back.q_ext;
+    var q0: f64 = mr.q_ext;
+    assert(is_ok(tm) == 1 && is_ok(tw) == 1 && is_ok(tb) == 1 && near(q1, q0, TOL) == 1, "Q_ext round trips");
+    BjMieResult_free(&mr);
+    BjMieResult_free(&back);
+    if (vm == 7 || vw == 7 || vb == 7) { println("."); }
+    return 0;
+}
+
 # The four structs' JSON (M3 part 1a-2): serde's text, round trips, both of serde's forms at every level, the reasons.
 fn cyrius_json(): i64 {
     test_group("cyrius_polarization_json");
@@ -793,6 +812,7 @@ fn main(): i64 {
     rust_tests_a();
     rust_tests_b();
     rust_tests_c();
+    rust_test_mie_serde();
     cyrius_tests();
     cyrius_json();
     return assert_summary();

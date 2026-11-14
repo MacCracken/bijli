@@ -3144,3 +3144,57 @@ E and B = n̂ × E/c.
 - **Result, every target** (x86_64 ELF, x86_64 PE, aarch64): **15 modules, 0 failing; 442,835 ok, 0 failed, 0
   measured, 0 pending, 59,794 accepted (ADR 01: 21,115; ADR 0002: 38,679)** over 502,629 rows; **all 343 digests
   equal**, the 337 before unchanged. `scattering.tcyr` passes on all three.
+
+## 58. M3 part 1b-2: MieResult's JSON (2026-11-13)
+
+- **`src/json.cyr`**: `BjMieResult_to_json` and `BjMieResult_from_json` (D5, amended), on the shared writer and
+  reader. serde's shape is `{"q_sca":..,"q_ext":..,"q_abs":..,"g":..,"a":[<Complex>,..],"b":[<Complex>,..]}`.
+  - **The writer** builds the document in one fl_alloc block: 160 bytes and 64 a coefficient, since an f64 is at
+    most 25 bytes and a Complex object with its comma at most 64. It appends the document in one grow, so a refused
+    allocation leaves the builder as it was.
+  - **The reader** takes `a` and `b` as arrays of any length (`_bj_jr_cvec`: serde's `Vec`, "invalid type: map,
+    expected a sequence" for anything else). Each element is a Complex in either of serde's forms, so the two
+    lengths may differ, as Rust's public fields may. Each vector's block is stored before its elements are read: a
+    read that fails later gives back what it took, and `out` is untouched. A successful read writes new blocks into
+    `out` and never reads it, as `bj_mie` does.
+- **`json.tsv` grows by 5,298 rows, to 46,986**: 1,029 writer rows and 4,269 reader rows. `m_json.rs` emits them
+  after the other types, so the 41,688 earlier rows are an exact prefix, and their 343 digests are unchanged. A row's
+  value is its four f64, then `i:` a's length and parts, then `i:` b's length and parts. The values:
+  - 21 real Mie results, to x = 200;
+  - the corpus's values with every pair of lengths up to 7, and 120 seeded bit patterns;
+  - two 500-element vectors.
+
+  The documents:
+  - serde's text, bayan's notation, Rust's `{}` and `{:e}`;
+  - every spelling in each number position of a two-and-two document, and 600 seeded decimals;
+  - the shapes: both forms at every level, unknown keys of every kind, each field missing, repeated or of the wrong
+    type, a `Vec` as an object or holding non-Complex elements, every inner Complex form, vectors of 3 to 300
+    elements, a deep unknown value inside an element at serde's nesting limit, every prefix, trailing data.
+
+  `validate.py`'s JSON grammar gained `("vec", T)` (a length, then the elements) and agreed with every row on its
+  first run. `json.cr.tsv` grows by 3,060 rows to 24,116: the readings serde_json's best-effort parse gets wrong. 15
+  more rows are ADR 0002 row 12's (169 in all).
+- **Tests**:
+  - **`test_mie_result_serde`**, polarization.rs's last test, is ported (`tests/polarization.tcyr`, 186 assertions),
+    so polarization.rs's 69 are all ported.
+  - **`cyrius_mie_result_json`** (`tests/scattering.tcyr`, 102 assertions) covers:
+    - serde's exact text, an empty `b` included;
+    - a real result's bit-for-bit round trip, all 42 coefficients;
+    - both forms at every level, and unequal lengths;
+    - the reasons, with out untouched;
+    - 2,000 reads, half of them refused after a vector was read, leaving the freelist arena and the bump heap as
+      they were.
+
+  The ledger: 462 ported, 3 n/a, 393 pending of 858.
+- **Surface parity**: scattering is a ported module (11 in all, 348 items matched, 0 in progress). The API snapshot
+  gains the 2 functions (2,012 public).
+- **Benchmarks** (Cyrius-only; rust-old benches no serde), on a Mie result with 21 + 21 coefficients, interleaved
+  against HEAD over three rounds at load 1.3–1.7:
+  - `json/mie_result_to_json`: 86.5 µs;
+  - `json/mie_result_from_json`: 86.1 µs, its blocks freed each time through.
+
+  That is 88 numbers at about 1 µs each, in line with FieldVector's 0.77 µs a number. Every other row is within
+  noise (±3.7 %).
+- **Result, every target** (x86_64 ELF, x86_64 PE, aarch64): **15 modules, 0 failing; 445,069 ok, 0 failed, 0
+  measured, 0 pending, 62,858 accepted (ADR 01: 24,164; ADR 0002: 38,694)** over 507,927 rows; **all 345 digests
+  equal**, the 343 before unchanged. `scattering.tcyr`, `polarization.tcyr` and `json.tcyr` pass on all three.

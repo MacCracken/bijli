@@ -22794,17 +22794,18 @@ public fn bj_rayleigh_angular_intensity(cross_section: f64, distance: f64, cos_t
 # --- json.cyr ---
 
 # json.cyr — JSON for the serializable types: BjComplex (Rust hisab 1.4.0's `Complex`), BjFieldVector,
-# BjPointCharge, (M2 part 1a) BjMaterial and (M3 part 1a-2) polarization's BjJonesVector, BjJonesMatrix,
-# BjStokesVector and BjMuellerMatrix, as serde_json 1.0.154 writes and reads them (port plan D5, M1 part 4; ADR 0002
-# rows 10–12).
+# BjPointCharge, (M2 part 1a) BjMaterial, (M3 part 1a-2) polarization's BjJonesVector, BjJonesMatrix,
+# BjStokesVector and BjMuellerMatrix, and (M3 part 1b-2) scattering's BjMieResult, as serde_json 1.0.154 writes and
+# reads them (port plan D5, M1 part 4; ADR 0002 rows 10–12).
 #
 # Writers append serde's document to a `str_builder`: the fields in Rust declaration order, no spaces, a Rust array
 # (`[f64; 3]`, a Jones matrix's `m: [[Complex; 2]; 2]`, a Mueller matrix's `m: [[f64; 4]; 4]`) as nested arrays row
 # by row, an inner Complex as its own object, every f64 through bayan's printer (`bayan_f64_to_json`, the printer
 # `#derive(Serialize)` uses): the shortest round-trip digits, `null` for NaN and ±∞ as serde_json writes them. The
 # notation is bayan's, not ryu's (`10000000000000000.0` where serde_json writes `1e16`); each parses to the same
-# bits, which is what the golden rows compare (D5). The document is built on the stack and appended in one grow, so
-# a refused allocation leaves the builder as it was and returns BJ_ERR_ALLOCATION (the builder's own grow would exit
+# bits, which is what the golden rows compare (D5). The document is built on the stack (a BjMieResult's, whose two
+# `Vec<Complex>` have any length, in one fl_alloc block sized for the longest numbers) and appended in one grow, so a
+# refused allocation leaves the builder as it was and returns BJ_ERR_ALLOCATION (the builder's own grow would exit
 # the process). Hand-written, not derived: on cyrius 6.7.18 a `#derive(Serialize)` in a second `private` file fails
 # to compile (the derive's shared helper is private to the first one), and the derive would export its scanner
 # decoders as bijli API (probe p16).
@@ -22812,7 +22813,7 @@ public fn bj_rayleigh_angular_intensity(cross_section: f64, distance: f64, cos_t
 # Readers parse the text with bayan's value tree and apply serde's derive semantics:
 # - a struct reads from an object, by field name, or from an array, by position (serde's sequence form), which must
 #   hold exactly its fields, at every level (a Jones vector's x is a Complex in either form); a Rust `[T; n]` reads
-#   from an array of exactly n T;
+#   from an array of exactly n T, a `Vec<T>` from an array of any length;
 # - a field missing, a value of the wrong JSON type, or an array of the wrong length is BJ_ERR_DESERIALIZE;
 # - unknown fields are ignored, whatever their value (it must still be valid JSON);
 # - an f64 takes any JSON number, correctly rounded (ADR 0002 row 11: serde_json's default parse is best-effort, and
@@ -23030,6 +23031,51 @@ public fn BjMuellerMatrix_to_json(m: *BjMuellerMatrix, sb): Result {
     }
     n = _bj_jw_cstr(&buf, n, "]}");
     return _bj_jw_put(sb, &buf, n);
+}
+
+# Appends `{"q_sca":..,"q_ext":..,"q_abs":..,"g":..,"a":[<Complex>,..],"b":[<Complex>,..]}` to the builder sb, each
+# coefficient a Complex object: Ok(0), or Err(BJ_ERR_ALLOCATION) with sb as it was. The document is built in one
+# fl_alloc block of 160 + 64 bytes a coefficient (an f64 is at most 25 bytes, a Complex with its comma at most 64).
+# Mirrors `serde_json::to_string(&r)` for `scattering::MieResult`.
+#must_use
+public fn BjMieResult_to_json(r: *BjMieResult, sb): Result {
+    var na = r.a_len;
+    var nb = r.b_len;
+    var buf = fl_alloc(160 + (na + nb) * 64);
+    if (buf == 0) {
+        _bj_tx_cstr(_bj_err_reason(BJ_ERR_ALLOCATION), "the JSON document's buffer");
+        return Err(BJ_ERR_ALLOCATION);
+    }
+    var n = _bj_jw_cstr(buf, 0, "{\"q_sca\":");
+    n = _bj_jw_f64(buf, n, r.q_sca);
+    n = _bj_jw_cstr(buf, n, ",\"q_ext\":");
+    n = _bj_jw_f64(buf, n, r.q_ext);
+    n = _bj_jw_cstr(buf, n, ",\"q_abs\":");
+    n = _bj_jw_f64(buf, n, r.q_abs);
+    n = _bj_jw_cstr(buf, n, ",\"g\":");
+    n = _bj_jw_f64(buf, n, r.g);
+    n = _bj_jw_cstr(buf, n, ",\"a\":[");
+    n = _bj_jw_cvec(buf, n, r.a, na);
+    n = _bj_jw_cstr(buf, n, "],\"b\":[");
+    n = _bj_jw_cvec(buf, n, r.b, nb);
+    n = _bj_jw_cstr(buf, n, "]}");
+    var t, v = _bj_jw_put(sb, buf, n);
+    fl_free(buf);
+    if (is_err_result(t) == 1) { return Err(v); }
+    return Ok(0);
+}
+
+# Appends the k Complex at p as objects separated by commas; the new length.
+fn _bj_jw_cvec(buf, n, p, k): i64 {
+    var m = n;
+    for (var j = 0; j < k; j = j + 1) {
+        if (j > 0) {
+            store8(buf + m, 44);
+            m = m + 1;
+        }
+        m = _bj_jw_cx(buf, m, p + j * 16);
+    }
+    return m;
 }
 
 # ── the decode region ───────────────────────────────────────────────────────────────
@@ -23549,6 +23595,53 @@ fn _bj_jr_stokes(v, w): i64 {
     return _bj_jr_f64s(s, 4, "an array of length 4", w);
 }
 
+# Node v as a `Vec<Complex>` into out[0] (the address of its elements, from fl_alloc; 0 when empty) and out[1] (its
+# length): an array of any length. The block is stored before its elements are read, so the caller frees it on a
+# failure. 0, or the code recorded (BJ_ERR_ALLOCATION when the block can't be had).
+fn _bj_jr_cvec(v, out): i64 {
+    if (bayan_json_v_tag(v) != JTAG_ARR) { return _bj_jr_type(v, "a sequence"); }
+    var n = bayan_json_v_arr_len(v);
+    var p = 0;
+    if (n > 0) {
+        p = fl_alloc(n * 16);
+        if (p == 0) {
+            _bj_tx_cstr(_bj_err_reason(BJ_ERR_ALLOCATION), "the Mie coefficients read");
+            return BJ_ERR_ALLOCATION;
+        }
+    }
+    store64(out, p);
+    store64(out + 8, n);
+    for (var k = 0; k < n; k = k + 1) {
+        var c = _bj_jr_complex(bayan_json_v_arr_get(v, k), p + k * 16);
+        if (c != 0) { return c; }
+    }
+    return 0;
+}
+
+# A MieResult into w: q_sca, q_ext, q_abs, g, then a's block and length, then b's (w[4] and w[6] are 0 on entry).
+fn _bj_jr_mie(v, w): i64 {
+    var form = _bj_jr_form(v, 6, "struct MieResult");
+    if (form == 0) { return BJ_ERR_DESERIALIZE; }
+    var names: i64[4];
+    names[0] = "q_sca";
+    names[1] = "q_ext";
+    names[2] = "q_abs";
+    names[3] = "g";
+    for (var k = 0; k < 4; k = k + 1) {
+        var f = _bj_jr_field(v, form, k, names[k]);
+        if (f == 0) { return BJ_ERR_DESERIALIZE; }
+        var c = _bj_jr_f64(f, w + k * 8);
+        if (c != 0) { return c; }
+    }
+    var fa = _bj_jr_field(v, form, 4, "a");
+    if (fa == 0) { return BJ_ERR_DESERIALIZE; }
+    var ca = _bj_jr_cvec(fa, w + 32);
+    if (ca != 0) { return ca; }
+    var fb = _bj_jr_field(v, form, 5, "b");
+    if (fb == 0) { return BJ_ERR_DESERIALIZE; }
+    return _bj_jr_cvec(fb, w + 48);
+}
+
 # `m: [[f64; 4]; 4]` into w row by row, as BjMuellerMatrix's row-major m.
 fn _bj_jr_mueller(v, w): i64 {
     var m = _bj_jr_only(v, "m", "struct MuellerMatrix");
@@ -23662,5 +23755,27 @@ public fn BjMuellerMatrix_from_json(buf, len, out: *BjMuellerMatrix): Result {
     var code = _bj_jr_read(buf, len, &_bj_jr_mueller, &w);
     if (code != 0) { return Err(code); }
     memcpy(out, &w, 128);
+    return Ok(0);
+}
+
+# Reads a `MieResult` document from [buf, buf + len) into *out: Ok(0), or the error recorded with out untouched, as
+# BjComplex_from_json (and any coefficients read so far given back). `a` and `b` are arrays of any length, each
+# element a Complex in either of serde's forms, so out's lengths may differ, as Rust's public fields may. out gets new
+# coefficient blocks and is never read: free a previous result first (BjMieResult_free). Mirrors
+# `serde_json::from_str::<MieResult>`.
+#must_use
+public fn BjMieResult_from_json(buf, len, out: *BjMieResult): Result {
+    var w: i64[8];
+    w[4] = 0;
+    w[5] = 0;
+    w[6] = 0;
+    w[7] = 0;
+    var code = _bj_jr_read(buf, len, &_bj_jr_mie, &w);
+    if (code != 0) {
+        if (w[4] != 0) { fl_free(w[4]); }
+        if (w[6] != 0) { fl_free(w[6]); }
+        return Err(code);
+    }
+    memcpy(out, &w, 64);
     return Ok(0);
 }

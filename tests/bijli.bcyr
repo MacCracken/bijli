@@ -875,6 +875,37 @@ fn main(): i64 {
     bench_report(bmf);
     var tmc, vmc = BjMuellerMatrix_from_json(mdoc, mlen, &mout);
     if (is_err_result(tmc) == 1 || vmc != 0) { println("json/mueller_matrix_from_json: the document was refused"); }
+
+    # A Mie result's JSON (M3 part 1b-2): x = 10, m = 1.33 − 0.1j, 21 + 21 coefficients, written and read back (each
+    # read's coefficient blocks given back).
+    var mres: BjMieResult = BjMieResult_new();
+    var tmr, vmr = bj_mie(10.0, BjComplex_new(1.33, -0.1), &mres);
+    var bjw = bench_new("json/mie_result_to_json");
+    bench_batch_start(bjw);
+    for (var k = 0; k < 20000; k = k + 1) {
+        store64(jsb + 8, 0);
+        var tjw, vjw = BjMieResult_to_json(&mres, jsb);
+        keep = keep + vjw;
+    }
+    bench_batch_stop(bjw, 20000);
+    bench_report(bjw);
+    var mrs = str_builder_build(jsb);
+    var mrdoc = str_data(mrs);
+    var mrlen = str_len(mrs);
+    var mrout: BjMieResult = BjMieResult_new();
+    var bjr = bench_new("json/mie_result_from_json");
+    bench_batch_start(bjr);
+    for (var k = 0; k < 10000; k = k + 1) {
+        var tjr, vjr = BjMieResult_from_json(mrdoc, mrlen, &mrout);
+        fsum = fsum + mrout.q_ext;
+        BjMieResult_free(&mrout);
+    }
+    bench_batch_stop(bjr, 10000);
+    bench_report(bjr);
+    var tmk, vmk = BjMieResult_from_json(mrdoc, mrlen, &mrout);
+    if (is_err_result(tmr) == 1 || is_err_result(tmk) == 1) { println("json/mie_result: the document was refused"); }
+    BjMieResult_free(&mrout);
+    BjMieResult_free(&mres);
     if (fsum == 7.0) { println("."); }
 
     var ar: f64 = acc.re;

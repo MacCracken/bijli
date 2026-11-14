@@ -59,6 +59,8 @@ EXTRA = {
     "json/point_charge_from_json": "a PointCharge read from serde_json's document (src/json.cyr)",
     "json/mueller_matrix_to_json": "a Mueller matrix's JSON, the largest document (src/json.cyr, M3 part 1a-2)",
     "json/mueller_matrix_from_json": "a Mueller matrix read back from its document (src/json.cyr)",
+    "json/mie_result_to_json": "a Mie result's JSON, 21 + 21 coefficients (src/json.cyr, M3 part 1b-2)",
+    "json/mie_result_from_json": "a Mie result read back from its document, its blocks freed (src/json.cyr)",
 }
 
 

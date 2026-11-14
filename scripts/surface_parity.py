@@ -37,7 +37,7 @@ root = Path(sys.argv[1] if len(sys.argv) > 1 else ".").resolve()
 
 # Ported modules (their milestone done or in progress, item by item).
 MODULES = ["error", "logging", "field", "maxwell", "charge", "material", "wave", "circuit", "relativity",
-           "polarization"]
+           "polarization", "scattering"]
 # Rust module -> the milestone that ports it (port plan §4.1).
 PENDING_MODULES = {
     "beam": "M3",
@@ -48,10 +48,7 @@ PENDING_MODULES = {
 # Modules being ported Part by Part: module -> (the Parts that finish it, the Rust items still to come, by name). Their
 # other items are checked as a ported module's now; the listed ones count as pending, and one found ported is a
 # problem (drop it from the list).
-IN_PROGRESS = {
-    # M3 part 1b-1 ported the API; MieResult's JSON (its serde derives) is part 1b-2's.
-    "scattering": ("1b-2", {"impl Serialize for MieResult", "impl Deserialize for MieResult"}),
-}
+IN_PROGRESS: dict = {}
 NOT_APPLICABLE_MODULES = {
     "lib": "crate root: module list and re-exports",
     "integration/mod": "module root of integration/ (no items)",

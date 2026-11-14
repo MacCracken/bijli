@@ -1,7 +1,7 @@
-//! `json.tsv` — serde_json 1.0.154 on the serializable types (port plan D5; M1 part 4, M2 part 1a, M3 part 1a-2):
-//! Rust hisab 1.4.0's `Complex`, `field::FieldVector`, `charge::PointCharge`, `material::Material` and
-//! polarization's `JonesVector`, `JonesMatrix`, `StokesVector` and `MuellerMatrix`, written with
-//! `serde_json::to_string` and read with `serde_json::from_str`.
+//! `json.tsv` — serde_json 1.0.154 on the serializable types (port plan D5; M1 part 4, M2 part 1a, M3 parts 1a-2 and
+//! 1b-2): Rust hisab 1.4.0's `Complex`, `field::FieldVector`, `charge::PointCharge`, `material::Material`,
+//! polarization's `JonesVector`, `JonesMatrix`, `StokesVector` and `MuellerMatrix`, and scattering's `MieResult`,
+//! written with `serde_json::to_string` and read with `serde_json::from_str`.
 //!
 //! - **Writer rows** (`json::<Type>::to_string`, class A): the value's fields in, serde_json's text out as *parsed
 //!   tokens*: each number in the text (outside strings, a maximal run of `-0123456789.eE+`) is an `f:` token, the
@@ -24,6 +24,12 @@
 //! form, every prefix of a document, trailing data, and nesting at serde's recursion limit. The polarization types
 //! nest, so their documents add the nested forms (`nested`): each inner struct and array in each of serde's forms,
 //! short, long, of the wrong type, with its fields reordered, missing, repeated or unknown.
+//!
+//! `MieResult` holds two `Vec<Complex>` of any length, so its rows have their own layout (`emit_mie`): a value is its
+//! four f64, then `i:` the length of `a` and its parts (re, im of each), then `i:` the length of `b` and its parts. The
+//! values: real Mie results, seeded and special parts with every pair of lengths to 7, and 500-element vectors; the
+//! documents add arrays of every length and element form, a `Vec` given as an object, and a deep unknown value inside
+//! an element.
 
 use crate::grids::{Rng, pow2, specials};
 use crate::tsv::{Class, Module, Tok, f, i, s};
@@ -31,6 +37,7 @@ use bijli::charge::{ELECTRON_MASS, ELEMENTARY_CHARGE, PROTON_MASS, PointCharge};
 use bijli::field::{EPSILON_0, FieldVector, MU_0, SPEED_OF_LIGHT};
 use bijli::material::Material;
 use bijli::polarization::{Complex, JonesMatrix, JonesVector, MuellerMatrix, StokesVector};
+use bijli::scattering::{MieResult, mie};
 use std::collections::BTreeSet;
 use std::hint::black_box;
 
@@ -590,29 +597,9 @@ fn fillers(kind: Kind, rng: &mut Rng) -> Vec<String> {
     (0..kind.draws()).map(|_| js(rng.signed_log_uniform(-20.0, 20.0))).collect()
 }
 
-/// The shapes: field order, whitespace, unknown keys, missing and repeated fields, wrong types, the sequence form,
-/// prefixes, trailing data, nesting.
-fn shapes(kind: Kind, rng: &mut Rng) -> Vec<String> {
-    let v = fillers(kind, rng);
-    let base = kind.doc(&v);
-    let inner = &base[1..base.len() - 1];
-    let fields = kind.members(&v);
-    let mut docs = vec![base.clone(), kind.seq(&v)];
-
-    // Field values as written in `base`, by name, for reordering and repeating.
-    let members: Vec<String> = fields.iter().map(|(name, val)| format!("\"{name}\":{val}")).collect();
-    let mut rev = members.clone();
-    rev.reverse();
-    docs.push(format!("{{{}}}", rev.join(",")));
-    docs.push(format!(" \t\n\r{{ \t\n\r{} \t\n\r}} \t\n\r", members.join(" \t\n\r, \t\n\r").replace(':', " \t\n\r: \t\n\r")));
-    for ws in ["\u{c}", "\u{b}", "\u{a0}", "\u{2028}", "\u{feff}"] {
-        docs.push(format!("{ws}{base}"));
-        docs.push(format!("{{{ws}{inner}}}"));
-    }
-    docs.push(format!("\u{feff}{base}"));
-
-    // Unknown keys of every kind, before, between and after the fields.
-    let unknown_values: Vec<String> = vec![
+/// Unknown values of every JSON kind (deep, long, escaped, lone surrogates, refused spellings), for unknown keys.
+fn unknown_values() -> Vec<String> {
+    vec![
         "null".into(),
         "true".into(),
         "false".into(),
@@ -642,7 +629,32 @@ fn shapes(kind: Kind, rng: &mut Rng) -> Vec<String> {
         format!("\"{}\"", "a".repeat(20_000)),
         format!("[{}]", (0..2000).map(|k| k.to_string()).collect::<Vec<_>>().join(",")),
         format!("{{{}}}", (0..100).map(|k| format!("\"k{k}\":{k}")).collect::<Vec<_>>().join(",")),
-    ];
+    ]
+}
+
+/// The shapes: field order, whitespace, unknown keys, missing and repeated fields, wrong types, the sequence form,
+/// prefixes, trailing data, nesting.
+fn shapes(kind: Kind, rng: &mut Rng) -> Vec<String> {
+    let v = fillers(kind, rng);
+    let base = kind.doc(&v);
+    let inner = &base[1..base.len() - 1];
+    let fields = kind.members(&v);
+    let mut docs = vec![base.clone(), kind.seq(&v)];
+
+    // Field values as written in `base`, by name, for reordering and repeating.
+    let members: Vec<String> = fields.iter().map(|(name, val)| format!("\"{name}\":{val}")).collect();
+    let mut rev = members.clone();
+    rev.reverse();
+    docs.push(format!("{{{}}}", rev.join(",")));
+    docs.push(format!(" \t\n\r{{ \t\n\r{} \t\n\r}} \t\n\r", members.join(" \t\n\r, \t\n\r").replace(':', " \t\n\r: \t\n\r")));
+    for ws in ["\u{c}", "\u{b}", "\u{a0}", "\u{2028}", "\u{feff}"] {
+        docs.push(format!("{ws}{base}"));
+        docs.push(format!("{{{ws}{inner}}}"));
+    }
+    docs.push(format!("\u{feff}{base}"));
+
+    // Unknown keys of every kind, before, between and after the fields.
+    let unknown_values = unknown_values();
     for u in &unknown_values {
         docs.push(format!("{{\"w\":{u},{inner}}}"));
         docs.push(format!("{{{inner},\"unknown\":{u}}}"));
@@ -966,5 +978,269 @@ pub fn emit() -> Module {
             m.reader(kind, &doc);
         }
     }
+    emit_mie(m, &mut rng, &xs);
     rows.m
+}
+
+// ── MieResult (M3 part 1b-2) ──────────────────────────────────────────────────────────
+
+/// A MieResult as its row tokens: the four f64, then each vector as `i:` its length and its parts.
+fn mie_toks(r: &MieResult) -> Vec<Tok> {
+    let mut out = vec![f(r.q_sca), f(r.q_ext), f(r.q_abs), f(r.g)];
+    for v in [&r.a, &r.b] {
+        out.push(i(i64::try_from(v.len()).expect("a length fits")));
+        for z in v {
+            out.extend([f(z.re), f(z.im)]);
+        }
+    }
+    out
+}
+
+/// A MieResult from four f64 and the parts of its vectors.
+fn mie_value(q: &[f64], a: &[f64], b: &[f64]) -> MieResult {
+    let cv = |p: &[f64]| p.chunks(2).map(|c| Complex::new(black_box(c[0]), black_box(c[1]))).collect::<Vec<_>>();
+    MieResult {
+        q_sca: black_box(q[0]),
+        q_ext: black_box(q[1]),
+        q_abs: black_box(q[2]),
+        g: black_box(q[3]),
+        a: cv(a),
+        b: cv(b),
+    }
+}
+
+/// Its document with the spellings q (four) and the vectors' spellings a and b (re, im pairs), each element written
+/// by `c`.
+fn mie_doc(q: &[String], a: &[String], b: &[String], c: fn(&str, &str) -> String) -> String {
+    let vec_of = |p: &[String]| arr(&p.chunks(2).map(|z| c(&z[0], &z[1])).collect::<Vec<_>>());
+    format!(
+        "{{\"q_sca\":{},\"q_ext\":{},\"q_abs\":{},\"g\":{},\"a\":{},\"b\":{}}}",
+        q[0], q[1], q[2], q[3], vec_of(a), vec_of(b)
+    )
+}
+
+impl Rows {
+    fn mie_writer(&mut self, r: &MieResult) {
+        let ins = mie_toks(r);
+        if !self.seen.insert(format!("wMieResult{ins:?}")) {
+            return;
+        }
+        let text = serde_json::to_string(r).expect("serde_json writes every MieResult");
+        let note = if text.len() <= 2000 { text.clone() } else { preview(&text) };
+        self.m.row_noted("json::MieResult::to_string", Class::A, &ins, &tokens(&text), &note);
+    }
+
+    fn mie_reader(&mut self, doc: &str) {
+        if !self.seen.insert(format!("rMieResult{doc}")) {
+            return;
+        }
+        let func = "json::MieResult::from_str";
+        let read = serde_json::from_str::<MieResult>(black_box(doc));
+        let d = if read.is_ok() { unchecked(doc) } else { 0 };
+        let ins = [s(doc), i(d)];
+        let head = format!("{func}({}, unchecked {d})", preview(doc));
+        match read {
+            Ok(r) => {
+                let outs = mie_toks(&r);
+                let n = r.a.len() + r.b.len();
+                let note = format!("{head} -> Ok(q_ext {:?}, {n} coefficients)", r.q_ext);
+                self.m.row_with_note(func, Class::C, &ins, &outs, &note);
+            }
+            Err(e) => {
+                let outs = [Tok::Err("Deserialize".to_string())];
+                self.m.row_with_note(func, Class::C, &ins, &outs, &format!("{head} -> Err({e})"));
+            }
+        }
+    }
+}
+
+/// MieResult's writer and reader rows: real results, seeded values with every pair of lengths to 7, the specials,
+/// 500-element vectors; then serde's documents and the shapes.
+fn emit_mie(m: &mut Rows, rng: &mut Rng, xs: &[f64]) {
+    let n = xs.len();
+    let mut values: Vec<MieResult> = Vec::new();
+    for &x in &[1e-3, 0.1, 1.0, 5.0, 4.0 * std::f64::consts::PI, 50.0, 200.0] {
+        for &(re, im) in &[(1.5, 0.0), (1.33, -0.1), (0.2, -3.0)] {
+            values.push(mie(x, Complex::new(re, im)).expect("the sample spheres compute"));
+        }
+    }
+    let lens: Vec<(usize, usize)> = (0..8).flat_map(|na| (0..8).map(move |nb| (na, nb))).collect();
+    for j in 0..n {
+        let pick = |k: usize| xs[(j + k * 37) % n];
+        let (na, nb) = lens[j % lens.len()];
+        let q: Vec<f64> = (0..4).map(pick).collect();
+        let a: Vec<f64> = (0..2 * na).map(|k| pick(4 + k)).collect();
+        let b: Vec<f64> = (0..2 * nb).map(|k| pick(4 + 2 * na + k)).collect();
+        values.push(mie_value(&q, &a, &b));
+    }
+    for _ in 0..120 {
+        let (na, nb) = lens[usize::try_from(rng.int(0, 63)).expect("an index")];
+        let mut bits = |k: usize| (0..k).map(|_| f64::from_bits(rng.bits())).collect::<Vec<_>>();
+        let q = bits(4);
+        let a = bits(2 * na);
+        let b = bits(2 * nb);
+        values.push(mie_value(&q, &a, &b));
+    }
+    let long: Vec<f64> = (0..1000).map(|k| xs[(k * 7) % n]).collect();
+    values.push(mie_value(&long[..4], &long[..1000], &[]));
+    values.push(mie_value(&long[..4], &long[..2], &long[..1000]));
+    for r in &values {
+        m.mie_writer(r);
+    }
+    // Reader rows: serde's own text of each value, and the finite ones in bayan's notation, Rust's `{}` and `{:e}`.
+    for (k, r) in values.iter().enumerate() {
+        m.mie_reader(&serde_json::to_string(r).expect("serde_json writes every MieResult"));
+        let toks = mie_toks(r);
+        let fs: Vec<f64> = toks.iter().filter_map(|t| if let Tok::F(x) = t { Some(*x) } else { None }).collect();
+        if !fs.iter().all(|x| x.is_finite()) {
+            continue;
+        }
+        let na = r.a.len();
+        let spell = |g: fn(f64) -> String| -> (Vec<String>, Vec<String>, Vec<String>) {
+            let all: Vec<String> = fs.iter().map(|&x| g(x)).collect();
+            (all[..4].to_vec(), all[4..4 + 2 * na].to_vec(), all[4 + 2 * na..].to_vec())
+        };
+        let (q, a, b) = spell(js);
+        m.mie_reader(&mie_doc(&q, &a, &b, cx));
+        if k < 200 {
+            let (q, a, b) = spell(|x| format!("{x}"));
+            m.mie_reader(&mie_doc(&q, &a, &b, cx));
+            let (q, a, b) = spell(|x| format!("{x:e}"));
+            m.mie_reader(&mie_doc(&q, &a, &b, cxs));
+        }
+    }
+    // Every spelling in each of a two-and-two document's twelve number positions; seeded decimals.
+    let base: Vec<String> = (0..12).map(|_| js(rng.signed_log_uniform(-20.0, 20.0))).collect();
+    let at = |v: &[String]| mie_doc(&v[..4], &v[4..8], &v[8..12], cx);
+    for pos in 0..12 {
+        for sp in &spellings() {
+            let mut v = base.clone();
+            v[pos] = sp.clone();
+            m.mie_reader(&at(&v));
+        }
+    }
+    for (k, d) in random_decimals(rng, 600).into_iter().enumerate() {
+        let mut v = base.clone();
+        v[k % 12] = d;
+        m.mie_reader(&at(&v));
+    }
+    for doc in mie_shapes(&base) {
+        m.mie_reader(&doc);
+    }
+}
+
+/// MieResult's shapes on the twelve spellings v: serde's two forms at every level, field order, whitespace, unknown
+/// keys, missing, repeated and wrong-typed fields, vectors of every length and element form, a vector as an object,
+/// deep unknown values inside an element, every prefix, trailing data.
+fn mie_shapes(v: &[String]) -> Vec<String> {
+    let (q, a, b) = (&v[..4], &v[4..8], &v[8..12]);
+    let base = mie_doc(q, a, b, cx);
+    let inner = base[1..base.len() - 1].to_string();
+    let av = arr(&a.chunks(2).map(|z| cx(&z[0], &z[1])).collect::<Vec<_>>());
+    let bv = arr(&b.chunks(2).map(|z| cx(&z[0], &z[1])).collect::<Vec<_>>());
+    let as_ = arr(&a.chunks(2).map(|z| cxs(&z[0], &z[1])).collect::<Vec<_>>());
+    let members = [
+        format!("\"q_sca\":{}", q[0]),
+        format!("\"q_ext\":{}", q[1]),
+        format!("\"q_abs\":{}", q[2]),
+        format!("\"g\":{}", q[3]),
+        format!("\"a\":{av}"),
+        format!("\"b\":{bv}"),
+    ];
+    let parts: Vec<String> = members.iter().map(|m| m.split_once(':').expect("a member").1.to_string()).collect();
+    let with = |k: usize, val: &str| {
+        let mut ms = members.to_vec();
+        ms[k] = format!("{}:{val}", members[k].split_once(':').expect("a member").0);
+        format!("{{{}}}", ms.join(","))
+    };
+    let mut docs = vec![
+        base.clone(),
+        mie_doc(q, a, b, cxs),
+        format!("[{}]", parts.join(",")),
+        format!("[{},{},{},{},{as_},{bv}]", q[0], q[1], q[2], q[3]),
+        {
+            let mut r = members.to_vec();
+            r.reverse();
+            format!("{{{}}}", r.join(","))
+        },
+        format!(" \t\n\r{{ {} }} \n", members.join(" ,\n ")),
+        mie_doc(q, &[], &[], cx),
+        mie_doc(q, &[], b, cx),
+        mie_doc(q, a, &[], cx),
+    ];
+    // Unknown keys of every kind, before and after the fields.
+    for u in &unknown_values() {
+        docs.push(format!("{{\"w\":{u},{inner}}}"));
+        docs.push(format!("{{{inner},\"unknown\":{u}}}"));
+    }
+    // Missing fields, each; repeated ones; the generic refusals.
+    for k in 0..members.len() {
+        let mut ms = members.to_vec();
+        ms.remove(k);
+        docs.push(format!("{{{}}}", ms.join(",")));
+        docs.push(format!("{{{inner},{}}}", members[k]));
+    }
+    for d in ["{}", "[]", "null", "true", "1", "\"x\"", "", " ", "{", "}", "[", "]"] {
+        docs.push(d.to_string());
+    }
+    // Wrong types: each f64 field, then each vector.
+    for k in 0..4 {
+        for bad in ["null", "true", "\"1\"", "{}", "[]", "[1]"] {
+            docs.push(with(k, bad));
+        }
+    }
+    let one = cx(&a[0], &a[1]);
+    for k in 4..6 {
+        for bad in [
+            "null".to_string(),
+            "true".to_string(),
+            "1".to_string(),
+            "\"1\"".to_string(),
+            "{}".to_string(),
+            format!("{{\"0\":{one}}}"),
+            "[1]".to_string(),
+            "[null]".to_string(),
+            "[[1,2,3]]".to_string(),
+            "[[1]]".to_string(),
+            "[[]]".to_string(),
+            "[{}]".to_string(),
+            "[[1,2]]".to_string(),
+            "[[1,2],{\"re\":3,\"im\":4}]".to_string(),
+            format!("[{one},]"),
+            format!("[{one},null]"),
+            format!("[[{one}]]"),
+        ] {
+            docs.push(with(k, &bad));
+        }
+        for f in complex_forms(&a[0], &a[1]) {
+            docs.push(with(k, &format!("[{f}]")));
+            docs.push(with(k, &format!("[{one},{f}]")));
+        }
+    }
+    // Vectors of many lengths, and long ones.
+    for len in [3usize, 17, 128, 300] {
+        let many = arr(&(0..len).map(|j| cx(&format!("{j}"), &format!("-{j}.5"))).collect::<Vec<_>>());
+        docs.push(with(4, &many));
+        docs.push(with(5, &many));
+    }
+    // A deep unknown value inside an element: the element is at depth 3 (the document, `a`, the element).
+    for depth in [124usize, 125, 126, 127, 128, 129] {
+        let d = depth - 3;
+        let deep = format!("{{\"w\":{}0{},\"re\":1,\"im\":2}}", "[".repeat(d), "]".repeat(d));
+        docs.push(with(4, &format!("[{deep}]")));
+    }
+    // Every prefix, and trailing data.
+    for k in 0..base.len() {
+        if base.is_char_boundary(k) {
+            docs.push(base[..k].to_string());
+        }
+    }
+    for tail in [" ", "x", "}", "]", ",", "{}", "//"] {
+        docs.push(format!("{base}{tail}"));
+    }
+    // The sequence form short, long, with a trailing comma.
+    docs.push(format!("[{}]", parts[..5].join(",")));
+    docs.push(format!("[{},1]", parts.join(",")));
+    docs.push(format!("[{},]", parts.join(",")));
+    docs
 }

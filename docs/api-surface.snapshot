@@ -1051,6 +1051,8 @@ json::BjJonesVector_from_json/3
 json::BjJonesVector_to_json/2
 json::BjMaterial_from_json/3
 json::BjMaterial_to_json/2
+json::BjMieResult_from_json/3
+json::BjMieResult_to_json/2
 json::BjMuellerMatrix_from_json/3
 json::BjMuellerMatrix_to_json/2
 json::BjPointCharge_from_json/3

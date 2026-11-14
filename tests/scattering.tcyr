@@ -3,7 +3,8 @@
 # Every group named test_* is rust-old/src/scattering.rs's test of that name, ported assertion for assertion (the
 # ledger matches them by name). scattering.rs already used e^{+jωt} with absorbing Im(m) < 0, bijli's one convention
 # (ADR 0002 row 5), so no test changes its numbers. The cyrius_* groups pin what the corpus can't show: the reasons'
-# exact text, out left alone on an error, the coefficient buffers given back, and the |m|·x limit accepted.
+# exact text, out left alone on an error, the coefficient buffers given back, the |m|·x limit accepted, and (M3 part
+# 1b-2) MieResult's JSON: its exact text, round trips, both of serde's forms, vectors of any length, the reasons.
 # tests/golden/scattering.tsv pins every function over its grid against Rust besides.
 
 include "tests/lib.cyr"
@@ -451,6 +452,98 @@ fn cyrius_tests(): i64 {
     return 0;
 }
 
+# 1 when the builder sb holds exactly the C string want.
+fn built_is(sb, want): i64 {
+    var s = str_builder_build(sb);
+    if (str_len(s) != strlen(want)) { return 0; }
+    return memeq(str_data(s), want, str_len(s));
+}
+
+# Reads the C string doc as a MieResult into *r: the Result's tag.
+fn read_mie(doc, r: *BjMieResult): i64 {
+    var t, v = BjMieResult_from_json(doc, strlen(doc), r);
+    return t;
+}
+
+# MieResult's JSON (src/json.cyr, M3 part 1b-2).
+fn cyrius_json(): i64 {
+    test_group("cyrius_mie_result_json");
+    var r: BjMieResult = BjMieResult_new();
+    r.q_sca = 1.0;
+    r.q_ext = 2.0;
+    r.q_abs = -0.0;
+    r.g = 0.5;
+    var blk = fl_alloc(16);
+    var one: f64 = 1.0;
+    var zero: f64 = 0.0;
+    store64(blk, one);
+    store64(blk + 8, zero);
+    r.a = blk;
+    r.a_len = 1;
+    var sb = str_builder_new();
+    var t1, v1 = BjMieResult_to_json(&r, sb);
+    var want = "{\"q_sca\":1.0,\"q_ext\":2.0,\"q_abs\":-0.0,\"g\":0.5,\"a\":[{\"re\":1.0,\"im\":0.0}],\"b\":[]}";
+    assert(is_ok(t1) == 1 && built_is(sb, want) == 1,
+      "serde's shape: the four f64, then a and b as arrays of Complex objects (b empty)");
+    BjMieResult_free(&r);
+
+    # A real result round trips bit for bit, every coefficient included.
+    var m: BjMieResult = BjMieResult_new();
+    assert(mie_ok(10.0, 1.33, -0.1, &m) == 1, "Mie, x = 10");
+    var sb2 = str_builder_new();
+    var t2, v2 = BjMieResult_to_json(&m, sb2);
+    var s2 = str_builder_build(sb2);
+    var back: BjMieResult = BjMieResult_new();
+    var t3, v3 = BjMieResult_from_json(str_data(s2), str_len(s2), &back);
+    assert(is_ok(t2) == 1 && is_ok(t3) == 1 && memeq(&back, &m, 32) == 1 && back.a_len == m.a_len
+      && back.b_len == m.b_len && memeq(back.a, m.a, m.a_len * 16) == 1 && memeq(back.b, m.b, m.b_len * 16) == 1,
+      "Q_sca, Q_ext, Q_abs, g and all 21 + 21 coefficients come back bit for bit");
+    BjMieResult_free(&m);
+    BjMieResult_free(&back);
+
+    # Both of serde's forms at every level, and vectors of any length, apart.
+    var d1 = "{\"b\":[],\"a\":[[1,2],{\"im\":4,\"re\":3}],\"g\":4,\"q_abs\":3,\"q_ext\":2,\"q_sca\":1}";
+    var t4 = read_mie(d1, &r);
+    var a1: BjComplex = r.a_at(1);
+    var a1i: f64 = a1.im;
+    var rq: f64 = r.q_sca;
+    assert(is_ok(t4) == 1 && r.a_len == 2 && r.b_len == 0 && r.b == 0 && a1i == 4.0 && rq == 1.0,
+      "any field order; an element as an array or an object; an empty b");
+    BjMieResult_free(&r);
+    var t5 = read_mie("[1,2,3,4,[],[[5,6]]]", &r);
+    var b0: BjComplex = r.b_at(0);
+    var b0r: f64 = b0.re;
+    assert(is_ok(t5) == 1 && r.a_len == 0 && r.a == 0 && r.b_len == 1 && b0r == 5.0, "the sequence form");
+    BjMieResult_free(&r);
+
+    # The reasons, and out untouched (any coefficients read before the failure given back).
+    var keep: BjMieResult = BjMieResult_new();
+    var t6 = read_mie("{\"q_sca\":1,\"q_ext\":2,\"q_abs\":3,\"g\":4,\"a\":{},\"b\":[]}", &keep);
+    var w6 = "deserialization failed: invalid type: map, expected a sequence";
+    assert(is_err_result(t6) == 1 && reason_is2(w6, "") == 1, "a Vec must be an array");
+    var t7 = read_mie("{\"q_sca\":1,\"q_ext\":2,\"q_abs\":3,\"g\":4,\"a\":[[1,2]],\"b\":[1]}", &keep);
+    assert(is_err_result(t7) == 1
+      && reason_is2("deserialization failed: invalid type: integer, expected struct Complex", "") == 1,
+      "its elements are Complex");
+    var t8 = read_mie("{\"q_sca\":1,\"q_ext\":2,\"q_abs\":3,\"g\":4,\"a\":[[1,2],[3,4]]}", &keep);
+    assert(is_err_result(t8) == 1 && reason_is2("deserialization failed: missing field `b`", "") == 1, "b missing");
+    assert(keep.a == 0 && keep.a_len == 0 && keep.b == 0, "out untouched by every refusal");
+    var fl0 = _fl_arena_pos;
+    var bump0 = alloc_used();
+    var bad = 0;
+    var d9 = "{\"q_sca\":1,\"q_ext\":2,\"q_abs\":3,\"g\":4,\"a\":[[1,2],[3,4]],\"b\":[0]}";
+    for (var k = 0; k < 1000; k = k + 1) {
+        if (is_ok(read_mie(d1, &r)) != 1) { bad = bad + 1; }
+        BjMieResult_free(&r);
+        if (is_err_result(read_mie(d9, &keep)) != 1) { bad = bad + 1; }
+    }
+    assert_eq(bad, 0, "2000 reads, each as expected");
+    assert_eq(_fl_arena_pos, fl0, "the freelist's arena did not grow: a failed read gives its blocks back");
+    assert_eq(alloc_used(), bump0, "nothing on the bump heap");
+    if (v1 == 7 || v2 == 7 || v3 == 7) { println("."); }
+    return 0;
+}
+
 # Runs scattering.rs's tests, then the Cyrius-only checks.
 fn main(): i64 {
     alloc_init();
@@ -458,6 +551,7 @@ fn main(): i64 {
     rust_tests_b();
     rust_tests_c();
     cyrius_tests();
+    cyrius_json();
     return assert_summary();
 }
 

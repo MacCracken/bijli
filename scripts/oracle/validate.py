@@ -4411,8 +4411,9 @@ def field_corrections(root: Path):
 # (ADR 0002 row 12). Where serde_json's best-effort decimal parse misrounds a number, or judges an overflow on a
 # misrounded value, the correctly rounded reading goes to tests/golden/json.cr.tsv (ADR 0002 row 11).
 
-# Each struct's fields in declaration order, each of a type: "f64", another struct's name, or ("arr", n, type) for
-# Rust's `[type; n]`. M2 part 1a added Material, M3 part 1a-2 polarization's four structs.
+# Each struct's fields in declaration order, each of a type: "f64", another struct's name, ("arr", n, type) for
+# Rust's `[type; n]`, or ("vec", type) for a `Vec<type>`, whose row tokens are `i:` its length, then its elements.
+# M2 part 1a added Material, M3 part 1a-2 polarization's four structs, M3 part 1b-2 MieResult.
 JSON_FIELDS = {
     "Complex": [("re", "f64"), ("im", "f64")],
     "FieldVector": [("x", "f64"), ("y", "f64"), ("z", "f64")],
@@ -4423,7 +4424,14 @@ JSON_FIELDS = {
     "JonesMatrix": [("m", ("arr", 2, ("arr", 2, "Complex")))],
     "StokesVector": [("s", ("arr", 4, "f64"))],
     "MuellerMatrix": [("m", ("arr", 4, ("arr", 4, "f64")))],
+    "MieResult": [("q_sca", "f64"), ("q_ext", "f64"), ("q_abs", "f64"), ("g", "f64"), ("a", ("vec", "Complex")),
+                  ("b", ("vec", "Complex"))],
 }
+
+
+class JsonCount(int):
+    """A `Vec`'s length among a reading's values: an `i:` token."""
+
 
 
 def json_writer_parts(ty, xs: list, at: int, parts: list) -> int:
@@ -4432,6 +4440,15 @@ def json_writer_parts(ty, xs: list, at: int, parts: list) -> int:
     if ty == "f64":
         parts.append(xs[at])
         return at + 1
+    if isinstance(ty, tuple) and ty[0] == "vec":
+        count, at = xs[at], at + 1
+        parts.append("[")
+        for k in range(count):
+            if k:
+                parts.append(",")
+            at = json_writer_parts(ty[1], xs, at, parts)
+        parts.append("]")
+        return at
     if isinstance(ty, tuple):
         parts.append("[")
         for k in range(ty[1]):
@@ -4520,6 +4537,10 @@ def json_value(ty, v) -> list:
     """A value of type ty: an f64 (json_f64), a `[T; n]` an array of exactly n T, or a struct (json_read)."""
     if ty == "f64":
         return [json_f64(v)]
+    if isinstance(ty, tuple) and ty[0] == "vec":
+        if isinstance(v, JsonObj) or not isinstance(v, list):
+            raise JsonRefused("invalid type, expected a sequence")
+        return [JsonCount(len(v))] + [x for e in v for x in json_value(ty[1], e)]
     if isinstance(ty, tuple):
         _arr, n, ety = ty
         if isinstance(v, JsonObj) or not isinstance(v, list):
@@ -4556,6 +4577,13 @@ def json_read(kind: str, v) -> list:
     else:
         raise JsonRefused(f"invalid type, expected struct {kind}")
     return [x for (_name, ty), val in zip(fields, vals) for x in json_value(ty, val)]
+
+
+def json_same(x, tok) -> bool:
+    """A reading's value against a row token: a length against `i:`, an f64 against `f:` bit for bit."""
+    if isinstance(x, JsonCount):
+        return tok[0] == "i" and tok[1] == x
+    return tok[0] == "f" and same(x, tok[1])
 
 
 def json_unchecked(tree) -> int:
@@ -4618,6 +4646,8 @@ def validate_json(path: Path) -> list:
                 errs.append(f"json row {n}: {fn} unchecked flags {flags}, Python's {extra}")
             if len(val) != len(outs):
                 errs.append(f"json row {n}: {fn} {len(outs)} outputs, Python's {len(val)}")
+            elif any(isinstance(x, JsonCount) and not json_same(x, t) for x, t in zip(val, outs)):
+                errs.append(f"json row {n}: {fn} a length differs from Python's")
         elif outcome == "err" and not row_ok:
             if flags != 0:
                 errs.append(f"json row {n}: {fn} flags {flags} on a refused document")
@@ -4641,8 +4671,9 @@ def json_corrections(rows) -> list:
         outcome, val, _extra = json_model(kind, doc)
         row_ok = not (outs and outs[0][0] == "E")
         old = " ".join(f"f:{f_to_bits(t[1]):016x}" if t[0] == "f" else f"{t[0]}:{t[1]}" for t in outs)
-        new = " ".join(f"f:{f_to_bits(x):016x}" for x in val) if outcome == "ok" else "E:Deserialize"
-        if outcome == "ok" and row_ok and all(same(a, b[1]) for a, b in zip(val, outs)):
+        new = (" ".join(f"i:{x}" if isinstance(x, JsonCount) else f"f:{f_to_bits(x):016x}" for x in val)
+               if outcome == "ok" else "E:Deserialize")
+        if outcome == "ok" and row_ok and all(json_same(a, b) for a, b in zip(val, outs)):
             continue
         if outcome == "err" and not row_ok:
             continue
