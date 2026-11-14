@@ -2685,3 +2685,70 @@ n̂ × ((n̂ − β) × β̇), da = κ³Rc, fa = (q/(4πε₀))/da and the accel
 - **Result, every target** (x86_64 ELF, x86_64 PE, aarch64): **13 modules, 0 failing; 405,832 ok, 0 failed, 0
   measured, 0 pending, 47,436 accepted (ADR 01: 8,998; ADR 0002: 38,438)** over 453,268 rows; **all 276 digests
   equal**. One changed: E.
+
+## 51. M2 part 2d-3g: the retarded-time solver's light-cone sample at its range edges (2026-11-13)
+
+§50 left the solver's light-cone sample: R = r_obs − r(t_r), |R|, the light-travel term c·(t − t_r),
+g = |R| − c(t − t_r), dg = R̂⋅v − c and the noise 2ε·max(|R|, c(t − t_r), ‖r_obs‖∞, ‖r(t_r)‖∞, ‖v‖∞|t_r|).
+`lienard_wiechert_fields`' R past DBL_MAX, which now meets row 27's refusal of an infinite R, is 2d-3h's.
+
+- **ADR 0002 row 18, amended** (the rule of §42; a guard on Rust's own values, not a box: the sample's chain
+  absorbs a degraded part rather than amplifying it):
+  - **The guard.** Rust's chain is the unbounded one when:
+    - dx, dy and dz are finite;
+    - dx² + dy² + dz² is in the band [2^-900, DBL_MAX], or every d is 0, so |R| is its 53-bit value;
+    - c·(t − t_r) is normal or 0;
+    - R⋅v is in the band, or 0 from exact products (or |R| = 0, where dg is −c), so R̂⋅v − c absorbs a degraded part;
+    - ‖v‖∞|t_r| is finite and the noise's maximum is at least 2^-900 (or every term is 0).
+
+    `_bj_rel_sample` tests the common case inline: |R|² and |R⋅v| in the band, c(t − t_r) 0 or normal, and ‖v‖∞|t_r|
+    finite. The noise's maximum is then at least |R| ≥ 2^-450. `_bj_rel_sample_edge` runs the full test out of line.
+  - **Outside it** `_bj_rel_sample_ux` runs the sample with an unbounded exponent: R part by part, |R|, c(t − t_r),
+    g (kept as its 53-bit pair and rounded once), R⋅v, dg and the noise (each rounded once).
+  - **The solver** reads g's pair for:
+    - g's sign (g = 0, the bracket's expansion, the lo/hi update);
+    - |g_lo| < |g_hi|, |g| ≤ the noise and |2g| ≤ |last_step·dg|;
+    - τ₀ = g/c, and the Newton point τ − g/dg with its step |g/dg|.
+
+    Rust's doubles are the chain's where g is normal with 2g finite and g/dg is normal. Then |2g| ≤ |last_step·dg|
+    is decided alike when the product underflows (both false: |2g| > 2^-1021) or overflows (both true). That is one
+    test per iteration; `_bj_rel_step_ux` and `_bj_rel_gabs_lt` run off it.
+  - **Rust's results at these edges**:
+    - a static charge 2·10^308 from the observer gave t_r = −∞ (|R| = ∞, so g and τ₀ = ∞); the port gives
+      −2·10^308/c = −6.67·10^299;
+    - one 10^-310 away gave t_r = t, "observer on the trajectory" (|R|² underflowed to 0); the port gives
+      t − |R|/c = −3.3·10^-319 at t = 0;
+    - uniform motion across 2·10^308 reported a non-finite state at t = −∞; the port reports it at the finite t where
+      the trajectory itself overflows (−6.67·10^299). That is the first refinement sample, not a doubling, so row 31's
+      bracket error does not apply.
+- **Rows** (`m_relativity.rs`'s `emit_solver_edges`, after every older row): 10 more solver rows.
+  - Static charges 2·10^308 and 2·DBL_MAX from the observer, at t = 0 and 1, and a diagonal at 10^300.
+  - Separations of 10^-310, 10^-160 and 5·10^-170, whose squares underflow.
+  - Three uniform motions across 2·10^308.
+
+  `validate.py`'s transcription agreed with every row.
+- **Mappings** (`validate.py`'s `rel_sample_plain`, `rel_sample_ux` and `rel_solve` on the `uz_*` chain, with exact
+  comparisons of g's pair): `relativity.adr.tsv` maps 9 more row-18 rows. 10^-160 apart, Rust's t_r = 1 is already
+  the unbounded chain's. No older row changed. All pass.
+- **Guard audit** (a sampling check in Python, not a gate): 34,946 samples kept on Rust's chain, weighted to the
+  guard's edges. Rust's chain equalled the pure unbounded chain on every one.
+- **Tests**: tests/relativity.tcyr gains 2 assertions, the static 2·10^308 and 10^-310 cases above.
+- **Benchmarks** (a focused interleaved A/B against HEAD, five repetitions a round, three rounds, load 1.2–1.4):
+  - **The first cut cost.** With a helper per pair operation it cost `relativity/solve_retarded_time_uniform_t1s`
+    812 → about 1,150 ns. Both benches run 5 and 6 samples a solve and never leave the common case.
+  - **The cost model.** A probe on the pinned compiler (20 million calls a construct, scratch only) put the cost at:
+    - each local, integer or f64, about 0.75 ns a call;
+    - each compare about 1 ns, integer and f64 alike (bit-pattern tests save nothing here);
+    - a call that never runs 2–3 ns.
+
+    HEAD's sample made four `_bj_max` calls and three `_bj_rel_max_abs3` calls (ten `_bj_max` in all), and six
+    `_bj_is_finite` calls.
+  - **The final shape.** The sample takes its maxima with compares (every operand is finite or +∞ and none is −0 or
+    NaN, so f64::max's fold is order-free), tests the state with one sum of x − x, and keeps its error and edge paths
+    in one few-argument call each. The loop keeps one test an iteration.
+  - **Final**: `relativity/solve_retarded_time_uniform_t1s` 804 → 612 ns (−24 %) and
+    `relativity/lienard_wiechert_fields_orbit_b099` 6.06 → 5.87 µs (−3 %). The record's 839 ns and 6.26 µs become
+    612 ns and 5.87 µs.
+- **Result, every target** (x86_64 ELF, x86_64 PE, aarch64): **13 modules, 0 failing; 405,833 ok, 0 failed, 0
+  measured, 0 pending, 47,445 accepted (ADR 01: 8,998; ADR 0002: 38,447)** over 453,278 rows; **all 276 digests
+  equal**. One changed: `solve_retarded_time`.

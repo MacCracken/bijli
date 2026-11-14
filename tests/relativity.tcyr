@@ -874,6 +874,27 @@ fn cyrius_solver_tests(): i64 {
     var n3 = strlen(pre3);
     assert(is_err_result(t3) == 1 && v3 == BJ_ERR_INVALID_PARAMETER && memeq(d3, pre3, n3) == 1,
       "2c away: the position overflows while the bracket doubles: the bracket error (row 31; Rust: the state)");
+    # M2 part 2d-3g: the light-cone sample at its range edges (row 18's rule).
+    var qe: f64[8];
+    for (var k3 = 0; k3 < 8; k3 = k3 + 1) { qe[k3] = 0.0; }
+    var e308: f64 = _bj_from_bits(0x7FE1CCF385EBC8A0);                  # 1e308
+    qe[0] = -e308;
+    var far = traj(0, &qe);
+    var oe: f64[3];
+    oe[0] = e308;
+    oe[1] = 0.0;
+    oe[2] = 0.0;
+    var t4, v4 = bj_solve_retarded_time(&oe, 0.0, far, 100);
+    var rt4: f64 = v4;
+    assert(is_ok(t4) == 1 && _bj_bits(rt4) == 0xFE2FE0A0A48142D2,
+      "2e308 apart: t_r = −6.67e299, g and τ₀ from their 53-bit pairs (Rust: −∞, |R| = ∞)");
+    qe[0] = 0.0;
+    var near = traj(0, &qe);
+    oe[0] = _bj_from_bits(0x000012688B70E62B);                          # 1e-310
+    var t5, v5 = bj_solve_retarded_time(&oe, 0.0, near, 100);
+    var rt5: f64 = v5;
+    assert(is_ok(t5) == 1 && _bj_bits(rt5) == 0x80000000000107BA,
+      "1e-310 apart: t_r = −3.3e-319 (Rust: 0, its |R|² underflowed: observer on the trajectory)");
     var hc: f64 = 0.5 * c;
     p[3] = hc;
     obs[1] = 0.3;

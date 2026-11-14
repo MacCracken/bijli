@@ -464,6 +464,7 @@ pub fn emit() -> Module {
     emit_transform_edges(&mut m);
     emit_lw_inf_edges(&mut m);
     emit_e_tail_edges(&mut m);
+    emit_solver_edges(&mut m);
     m
 }
 
@@ -862,5 +863,39 @@ fn emit_e_tail_edges(m: &mut Module) {
                 }
             }
         }
+    }
+}
+
+/// M2 part 2d-3g (bijli ADR 0002 row 18's rule): solve_retarded_time where its light-cone sample leaves the range:
+/// static charges whose distance from the observer passes DBL_MAX (2·10^308 and 2·DBL_MAX: dx overflows, g and τ₀ from
+/// the 53-bit pair), a diagonal at 10^300 (|R|² past DBL_MAX, |R| finite), subnormal and tiny separations (Rust's |R|
+/// underflowed to 0: "observer on the trajectory"), and uniform motion across 2·10^308. Solver rows only: the fields'
+/// R past DBL_MAX is part 2d-3h's. After every older row.
+fn emit_solver_edges(m: &mut Module) {
+    let big = f64::MAX;
+    let cases: Vec<SolveCase> = vec![
+        (0, vec![-1e308, 0.0, 0.0], [1e308, 0.0, 0.0], 0.0, 100),
+        (0, vec![-1e308, 0.0, 0.0], [1e308, 0.0, 0.0], 1.0, 100),
+        (0, vec![-big, 0.0, 0.0], [big, 0.0, 0.0], 1.0, 100),
+        (0, vec![1e300, 1e300, 1e300], [-1e300, -1e300, -1e300], 0.0, 100),
+        (0, vec![0.0, 0.0, 0.0], [1e-310, 0.0, 0.0], 0.0, 100),
+        (0, vec![1e-160, 0.0, 0.0], [0.0, 0.0, 0.0], 1.0, 100),
+        (0, vec![0.0, 0.0, 0.0], [3e-170, 4e-170, 0.0], 1e-300, 100),
+        (1, vec![-1e308, 0.0, 0.0, 0.5 * C, 0.0, 0.0, 0.0], [1e308, 0.0, 0.0], 0.0, 100),
+        (1, vec![1e308, 0.0, 0.0, -0.5 * C, 0.0, 0.0, 0.0], [-1e308, 0.0, 0.0], 0.0, 100),
+        (1, vec![-1e308, 1e308, 0.0, 0.3 * C, -0.3 * C, 0.0, 0.0], [1e308, -1e308, 0.0], 1e3, 100),
+    ];
+    for (id, ps, obs, t, k) in &cases {
+        let word = i64::from_ne_bytes(k.to_ne_bytes());
+        let mut ins = vec![crate::tsv::i(*id), f(obs[0]), f(obs[1]), f(obs[2]), f(*t), crate::tsv::i(word)];
+        ins.push(Tok::V(ps.len()));
+        ins.extend(ps.iter().map(|&x| f(x)));
+        let pp = ps.clone();
+        let idv = *id;
+        let r = solve_retarded_time(black_box(*obs), *t, move |tt| {
+            let (a, b, _) = trajectory(idv, &pp, tt);
+            (a, b)
+        }, *k);
+        m.row("relativity::solve_retarded_time", traj_class(*id), &ins, &res_f(r));
     }
 }

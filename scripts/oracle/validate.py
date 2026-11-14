@@ -3218,12 +3218,64 @@ EPS52 = 2.0 ** -52
 MIN_NORMAL = 2.0 ** -1022
 
 
+def rel_sample_plain(dx, dy, dz, d2, light, dt, vel, mvt, m4, at) -> bool:
+    """src/relativity.cyr's _bj_rel_sample_edge test (_bj_rel_sample's inline test is a case of it): whether the
+    light-cone sample's Rust chain is the unbounded one."""
+    if not _fin(dx, dy, dz):
+        return False
+    if not 2.0 ** -900 <= d2 <= DBL_MAX and not (dx == 0 and dy == 0 and dz == 0):
+        return False
+    if not (light <= DBL_MAX and (light > VX_MN or dt == 0)):
+        return False
+    if d2 > 0:
+        ps = [dx * vel[0], dy * vel[1], dz * vel[2]]
+        rv = ps[0] + ps[1] + ps[2]
+        if not 2.0 ** -900 <= abs(rv) <= DBL_MAX:
+            if rv != 0 or not all(vx_exact_p(a, b, a * b) for a, b in zip((dx, dy, dz), vel)):
+                return False
+    if not mvt <= DBL_MAX:
+        return False
+    if m4 >= 2.0 ** -900:
+        return True
+    return m4 == 0 and (at == 0 or max(abs(x) for x in vel) == 0)
+
+
+def rel_sample_ux(obs, t, tau, pos, vel, C):
+    """src/relativity.cyr's _bj_rel_sample_ux (M2 part 2d-3g): the light-cone sample with an unbounded exponent."""
+    t_r = t - tau
+    dt = t - t_r
+    d = [uz_sub(uz(o), uz(p)) for o, p in zip(obs, pos)]
+    s2 = uz_add(uz_add(uz_mul(d[0], d[0]), uz_mul(d[1], d[1])), uz_mul(d[2], d[2]))
+    m = 0.0 if isinstance(s2, float) else rnd53_sqrt(s2)
+    lt = uz_mul(uz(C), uz(dt))
+    gg = uz_sub(m, lt)
+    g = uz_out(uz_sub(m, lt, True))
+    if isinstance(m, float):
+        dg = -C
+    else:
+        rv = uz_add(uz_add(uz_mul(d[0], uz(vel[0])), uz_mul(d[1], uz(vel[1]))), uz_mul(d[2], uz(vel[2])))
+        dg = uz_out(uz_sub(uz_div(rv, m), uz(C), True))
+
+    def mabs(xs):
+        return max(abs(x) for x in xs)
+    cands = [m, lt, uz(mabs(obs)), uz(mabs(pos)), uz_mul(uz(mabs(vel)), uz(abs(t_r)))]
+    mx = max(cands, key=lambda z: Fraction(0) if isinstance(z, float) else z)
+    noise = uz_out(uz_mul(Fraction(1, 2 ** 51), mx, True)) if not isinstance(mx, float) else 0.0
+    return {"tau": tau, "g": g, "G": gg, "dg": dg, "noise": noise}
+
+
+def _gval(z):
+    return Fraction(0) if isinstance(z, float) else z
+
+
 BRACKET_ERR = ip_err("retarded time solver could not bracket the light-cone root (is the trajectory faster than light?)")
 
 
 def rel_solve(obs, t, traj, max_it, C, port=False):
     """solve_retarded_time transcribed: ("ok", t_r) or ("err", tokens). traj(t) -> (pos, vel). port: a non-finite state
-    met while the bracket expands reports the bracket error (ADR 0002 row 31, the user's answer of 2026-11-13)."""
+    met while the bracket expands reports the bracket error (ADR 0002 row 31, the user's answer of 2026-11-13), and
+    (row 18's rule, M2 part 2d-3g) the light-cone sample runs with an unbounded exponent outside its guard, every
+    decision on g taken on its 53-bit value G (τ₀ = G/c, the comparisons, the Newton point and step)."""
     if not (math.isfinite(t) and all(math.isfinite(c) for c in obs)):
         return "err", ip_err("observer position and time must be finite, got [" + ", ".join(rust_debug(c) for c in obs)
                              + f"] at t = {rust_display(t)}")
@@ -3234,30 +3286,60 @@ def rel_solve(obs, t, traj, max_it, C, port=False):
         if not all(math.isfinite(c) for c in pos + vel):
             return None, ip_err(f"trajectory returned a non-finite state at t = {rust_display(t_r)}")
         dx, dy, dz = obs[0] - pos[0], obs[1] - pos[1], obs[2] - pos[2]
-        dist = fsqrt(dx * dx + dy * dy + dz * dz)
-        light = C * (t - t_r)
+        d2 = dx * dx + dy * dy + dz * dz
+        dist = fsqrt(d2)
+        dt = t - t_r
+        light = C * dt
         dg = fdiv(dx * vel[0] + dy * vel[1] + dz * vel[2], dist) - C if dist > 0.0 else -C
 
         def mabs(v):
             return rust_max(rust_max(abs(v[0]), abs(v[1])), abs(v[2]))
-        noise = 2.0 * EPS52 * rust_max(rust_max(rust_max(rust_max(dist, light), mabs(obs)), mabs(pos)),
-                                       mabs(vel) * abs(t_r))
-        return {"tau": tau, "g": dist - light, "dg": dg, "noise": noise}, None
+        mvt = mabs(vel) * abs(t_r)
+        m4 = rust_max(rust_max(rust_max(rust_max(dist, light), mabs(obs)), mabs(pos)), mvt)
+        noise = 2.0 * EPS52 * m4
+        g = dist - light
+        if port and not rel_sample_plain(dx, dy, dz, d2, light, dt, vel, mvt, m4, abs(t_r)):
+            return rel_sample_ux(obs, t, tau, pos, vel, C), None
+        return {"tau": tau, "g": g, "G": uz(g) if port else None, "dg": dg, "noise": noise}, None
 
     def tol(tau):
         return 4.0 * EPS52 * rust_max(abs(t), tau)
 
+    def sign(s):
+        z = _gval(s["G"]) if port else s["g"]
+        return (z > 0) - (z < 0)
+
+    def abs_lt(a, b):
+        return abs(_gval(a["G"])) < abs(_gval(b["G"])) if port else abs(a["g"]) < abs(b["g"])
+
+    def le_noise(s):
+        return abs(_gval(s["G"])) <= Fraction(s["noise"]) if port else abs(s["g"]) <= s["noise"]
+
+    def newton_pt(s):
+        """(τ − g/dg, |g/dg|): Rust's doubles, or (port) g/dg to 53 bits and each rounded once."""
+        if not port:
+            gd = fdiv(s["g"], s["dg"])
+            return s["tau"] - gd, abs(gd)
+        q = uz_div(s["G"], uz(s["dg"]))
+        return uz_out(uz_sub(uz(s["tau"]), q, True)), abs(uz_out(uz_mul(q, Fraction(1), True)))
+
+    def g2_le(s, last_step):
+        if not port:
+            return abs(2.0 * s["g"]) <= abs(last_step * s["dg"])
+        return abs(2 * _gval(s["G"])) <= abs(_gval(uz_mul(uz(last_step), uz(s["dg"]))))
+
     s0, e = ev(0.0)
     if e:
         return "err", e
-    if s0["g"] == 0.0:
+    if sign(s0) == 0:
         return "ok", t
     lo = s0
-    hi, e = ev(rust_max(fdiv(s0["g"], C), MIN_NORMAL))
+    tau0 = uz_out(uz_div(s0["G"], uz(C), True)) if port else fdiv(s0["g"], C)
+    hi, e = ev(rust_max(tau0, MIN_NORMAL))
     if e:
         return "err", e
     expansions = 0
-    while hi["g"] > 0.0:
+    while sign(hi) > 0:
         nxt = 2.0 * hi["tau"]
         if expansions >= 2100 or not math.isfinite(nxt):
             return "err", BRACKET_ERR
@@ -3266,27 +3348,26 @@ def rel_solve(obs, t, traj, max_it, C, port=False):
         if e:
             return "err", BRACKET_ERR if port else e
         expansions += 1
-    cur = lo if abs(lo["g"]) < abs(hi["g"]) else hi
+    cur = lo if abs_lt(lo, hi) else hi
     last_step = hi["tau"] - lo["tau"]
     it = 0
     while True:
-        if cur["g"] == 0.0:
+        if sign(cur) == 0:
             conv = cur["tau"]
             break
-        if abs(cur["g"]) <= cur["noise"]:
+        if le_noise(cur):
             if cur["dg"] < 0.0:
-                conv = rust_min(rust_max(cur["tau"] - fdiv(cur["g"], cur["dg"]), lo["tau"]), hi["tau"])
+                conv = rust_min(rust_max(newton_pt(cur)[0], lo["tau"]), hi["tau"])
             else:
                 conv = cur["tau"]
             break
         if it == max_it:
             return "err", ip_err(f"retarded time solver did not converge in {max_it} iterations")
         it += 1
-        newton = cur["tau"] - fdiv(cur["g"], cur["dg"])
-        use_newton = (cur["dg"] < 0.0 and newton >= lo["tau"] and newton <= hi["tau"]
-                      and abs(2.0 * cur["g"]) <= abs(last_step * cur["dg"]))
+        newton, nstep = newton_pt(cur)
+        use_newton = (cur["dg"] < 0.0 and newton >= lo["tau"] and newton <= hi["tau"] and g2_le(cur, last_step))
         if use_newton:
-            nxt, step = newton, abs(fdiv(cur["g"], cur["dg"]))
+            nxt, step = newton, nstep
         else:
             half = 0.5 * (hi["tau"] - lo["tau"])
             nxt, step = lo["tau"] + half, half
@@ -3297,7 +3378,7 @@ def rel_solve(obs, t, traj, max_it, C, port=False):
         cur, e = ev(nxt)
         if e:
             return "err", e
-        if cur["g"] > 0.0:
+        if sign(cur) > 0:
             lo = cur
         else:
             hi = cur

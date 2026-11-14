@@ -1325,21 +1325,17 @@ public fn bj_relativistic_larmor_power(charge: f64, velocity: BjFieldVector, acc
 # bj_lienard_wiechert_fields its acceleration after them (nine). Its return value is ignored: Rust's trajectory can't
 # fail. The motion must be subluminal.
 
-# One light-cone sample g(τ) = |r_obs − r(t − τ)| − cτ into s: τ, g, dg/dτ = R̂⋅v − c (−c at R = 0) and the rounding
-# scale of g, 2ε·max(|R|, cτ, ‖r_obs‖∞, ‖r(t_r)‖∞, ‖v‖∞|t_r|). The light-travel term is c·(t − t_r) with the rounded
-# t_r. The trajectory's state is left in st. 0, or the InvalidParameter of a non-finite state.
+# One light-cone sample g(τ) = |r_obs − r(t − τ)| − cτ into s: τ, g, dg/dτ = R̂⋅v − c (−c at R = 0), the rounding
+# scale of g, 2ε·max(|R|, cτ, ‖r_obs‖∞, ‖r(t_r)‖∞, ‖v‖∞|t_r|), and g's 53-bit pair (s[4], s[5]; s[5] NaN when g is its
+# own). The light-travel term is c·(t − t_r) with the rounded t_r. The maxima are f64::max's folds: every operand is
+# finite or +∞ and none is −0 or NaN, so compares give the same value in any order. The trajectory's state is left in
+# st. 0, or the InvalidParameter of a non-finite state.
 fn _bj_rel_sample(obs: *f64, t: f64, tau: f64, traj, st: *f64, s: *f64): i64 {
     var t_r: f64 = t - tau;
     callptr(traj, t_r, st);
-    for (var k = 0; k < 6; k = k + 1) {
-        var c: f64 = st[k];
-        if (_bj_is_finite(c) == 0) {
-            var e = _bj_err_reason(BJ_ERR_INVALID_PARAMETER);
-            _bj_tx_cstr(e, "trajectory returned a non-finite state at t = ");
-            _bj_fmt_f64_display(e, t_r);
-            return BJ_ERR_INVALID_PARAMETER;
-        }
-    }
+    var z: f64 = (st[0] - st[0]) + (st[1] - st[1]) + (st[2] - st[2]);   # x − x: +0 when x is finite, else NaN
+    z = z + (st[3] - st[3]) + (st[4] - st[4]) + (st[5] - st[5]);
+    if (z != 0.0) { return _bj_rel_state_error(t_r); }
     var dx: f64 = obs[0] - st[0];
     var dy: f64 = obs[1] - st[1];
     var dz: f64 = obs[2] - st[2];
@@ -1347,28 +1343,240 @@ fn _bj_rel_sample(obs: *f64, t: f64, tau: f64, traj, st: *f64, s: *f64): i64 {
     var dist: f64 = f64_sqrt(d2);
     var dt: f64 = t - t_r;
     var light: f64 = BJ_SPEED_OF_LIGHT * dt;
+    # The common case of _bj_rel_sample_edge's test: d2 in [2^-900, DBL_MAX] (then the noise's maximum is at least
+    # |R| ≥ 2^-450), c·(t − t_r) 0 (then t − t_r is 0) or normal, |R⋅v| in the band and ‖v‖∞·|t_r| finite.
+    var ok = 1;
+    if (!(d2 >= _BJ_VX_LO && d2 <= _BJ_VX_HI)) { ok = 0; }
+    if (light != 0.0 && !(light > _BJ_VX_MN && light <= _BJ_VX_HI)) { ok = 0; }
     var dg: f64 = -BJ_SPEED_OF_LIGHT;
     if (dist > 0.0) {
         var rv: f64 = dx * st[3] + dy * st[4] + dz * st[5];
         var q: f64 = rv / dist;
         dg = q - BJ_SPEED_OF_LIGHT;
+        q = f64_abs(rv);
+        if (!(q >= _BJ_VX_LO && q <= _BJ_VX_HI)) { ok = 0; }
     }
-    var m_obs: f64 = _bj_rel_max_abs3(obs, 0);
-    var m_pos: f64 = _bj_rel_max_abs3(st, 0);
-    var m_vel: f64 = _bj_rel_max_abs3(st, 3);
-    var at: f64 = f64_abs(t_r);
-    var mvt: f64 = m_vel * at;
-    var m1: f64 = _bj_max(dist, light);
-    var m2: f64 = _bj_max(m1, m_obs);
-    var m3: f64 = _bj_max(m2, m_pos);
-    var m4: f64 = _bj_max(m3, mvt);
-    var two_eps: f64 = 2.0 * 0.0000000000000002220446049250313080847263336181640625;
-    var noise: f64 = two_eps * m4;
+    var m: f64 = f64_abs(obs[0]);                   # max(‖r_obs‖∞, ‖r(t_r)‖∞)
+    var w: f64 = f64_abs(obs[1]);
+    if (w > m) { m = w; }
+    w = f64_abs(obs[2]);
+    if (w > m) { m = w; }
+    w = f64_abs(st[0]);
+    if (w > m) { m = w; }
+    w = f64_abs(st[1]);
+    if (w > m) { m = w; }
+    w = f64_abs(st[2]);
+    if (w > m) { m = w; }
+    var mv: f64 = f64_abs(st[3]);                   # ‖v‖∞
+    w = f64_abs(st[4]);
+    if (w > mv) { mv = w; }
+    w = f64_abs(st[5]);
+    if (w > mv) { mv = w; }
+    w = f64_abs(t_r);
+    w = mv * w;
+    if (!(w <= _BJ_VX_HI)) { ok = 0; }
+    if (w > m) { m = w; }
+    if (dist > m) { m = dist; }
+    if (light > m) { m = light; }
     s[0] = tau;
     s[1] = dist - light;
     s[2] = dg;
-    s[3] = noise;
+    s[3] = 0.000000000000000444089209850062616169452667236328125 * m;   # 2ε = 2^-51
+    s[4] = 0.0;
+    s[5] = _BJ_REL_NAN;                             # g is its own 53-bit value
+    if (ok == 0) { _bj_rel_sample_edge(obs, t, st, s); }
     return 0;
+}
+
+# The InvalidParameter of a non-finite trajectory state: "trajectory returned a non-finite state at t = ..".
+fn _bj_rel_state_error(t_r: f64): i64 {
+    var e = _bj_err_reason(BJ_ERR_INVALID_PARAMETER);
+    _bj_tx_cstr(e, "trajectory returned a non-finite state at t = ");
+    _bj_fmt_f64_display(e, t_r);
+    return BJ_ERR_INVALID_PARAMETER;
+}
+
+# A quiet NaN, the marker of a sample whose g is its own 53-bit value.
+var _BJ_REL_NAN: f64 = 0x7FF8000000000000;
+
+# DBL_MAX/2 (the largest double below 2^1023): 2g is finite and exact up to it.
+var _BJ_REL_HALF_MAX: f64 = 0x7FDFFFFFFFFFFFFF;
+
+# The light-cone sample off its common case (M2 part 2d-3g): s holds Rust's sample at τ = s[0], kept where Rust's chain
+# is the unbounded one (ADR 0002 row 18's rule), else replaced by _bj_rel_sample_ux's. The chain is the unbounded one
+# when dx, dy and dz are finite (a difference of finite doubles is otherwise exact); dx² + dy² + dz² is in the band
+# [2^-900, DBL_MAX] or every d is 0, so |R| is its 53-bit value; c·(t − t_r) is normal or 0; R⋅v is in the band, or 0
+# from exact products (or |R| = 0, where dg is −c), so R̂⋅v − c absorbs a degraded part; ‖v‖·|t_r| is finite and the
+# noise's maximum at least 2^-900 (or all 0).
+fn _bj_rel_sample_edge(obs: *f64, t: f64, st: *f64, s: *f64) {
+    var tau: f64 = s[0];
+    var t_r: f64 = t - tau;
+    var dx: f64 = obs[0] - st[0];
+    var dy: f64 = obs[1] - st[1];
+    var dz: f64 = obs[2] - st[2];
+    var d2: f64 = dx * dx + dy * dy + dz * dz;
+    var dt: f64 = t - t_r;
+    var light: f64 = BJ_SPEED_OF_LIGHT * dt;
+    var at: f64 = f64_abs(t_r);
+    var mv: f64 = _bj_rel_max_abs3(st, 3);
+    var mvt: f64 = mv * at;
+    var plain = 1;
+    var dd: f64 = (dx - dx) + (dy - dy) + (dz - dz);
+    if (dd != 0.0) { plain = 0; }
+    if (!(d2 >= _BJ_VX_LO && d2 <= _BJ_VX_HI) && !(dx == 0.0 && dy == 0.0 && dz == 0.0)) { plain = 0; }
+    if (!(light <= _BJ_VX_HI && (light > _BJ_VX_MN || dt == 0.0))) { plain = 0; }
+    if (plain == 1 && d2 > 0.0) {
+        var p0: f64 = dx * st[3];
+        var p1: f64 = dy * st[4];
+        var p2: f64 = dz * st[5];
+        var rv: f64 = p0 + p1 + p2;
+        var arv: f64 = f64_abs(rv);
+        if (!(arv >= _BJ_VX_LO && arv <= _BJ_VX_HI)) {
+            if (rv != 0.0) { plain = 0; }
+            var ex = _bj_vx_exact(dx, st[3], p0) + _bj_vx_exact(dy, st[4], p1) + _bj_vx_exact(dz, st[5], p2);
+            if (ex != 3) { plain = 0; }
+        }
+    }
+    if (!(mvt <= _BJ_VX_HI)) { plain = 0; }
+    if (plain == 1) {
+        var dist: f64 = f64_sqrt(d2);
+        var m_obs: f64 = _bj_rel_max_abs3(obs, 0);
+        var m_pos: f64 = _bj_rel_max_abs3(st, 0);
+        var m: f64 = _bj_max(dist, light);
+        m = _bj_max(m, m_obs);
+        m = _bj_max(m, m_pos);
+        m = _bj_max(m, mvt);
+        if (m >= _BJ_VX_LO) { return 0; }
+        if (m == 0.0 && (at == 0.0 || mv == 0.0)) { return 0; }
+    }
+    _bj_rel_sample_ux(obs, t, tau, st, s);
+    return 0;
+}
+
+# The light-cone sample with an unbounded exponent into s (row 18's rule, M2 part 2d-3g): R = r_obs − r(t_r) part by
+# part, |R|, c·(t − t_r), g = |R| − c(t − t_r) (s[1] rounded once, s[4] and s[5] its 53-bit pair), R⋅v, dg = R̂⋅v − c
+# rounded once (−c at R = 0), and the noise 2ε·max(|R|, c(t − t_r), ‖r_obs‖∞, ‖r(t_r)‖∞, ‖v‖∞|t_r|) rounded once. The
+# trajectory's state is st's (finite).
+fn _bj_rel_sample_ux(obs: *f64, t: f64, tau: f64, st: *f64, s: *f64) {
+    var t_r: f64 = t - tau;
+    var dt: f64 = t - t_r;
+    var c: f64 = BJ_SPEED_OF_LIGHT;
+    var ds: f64[3];
+    var de: i64[3];
+    for (var i = 0; i < 3; i = i + 1) {
+        var os, oe = _bj_k_ux_from(obs[i]);
+        var ps, pe = _bj_k_ux_from(st[i]);
+        var xs, xe = _bj_k_ux_sub(os, oe, ps, pe);
+        ds[i] = xs;
+        de[i] = xe;
+    }
+    var q0s, q0e = _bj_k_ux_mul(ds[0], de[0], ds[0], de[0]);
+    var q1s, q1e = _bj_k_ux_mul(ds[1], de[1], ds[1], de[1]);
+    var q2s, q2e = _bj_k_ux_mul(ds[2], de[2], ds[2], de[2]);
+    var s1s, s1e = _bj_k_ux_add(q0s, q0e, q1s, q1e);
+    var s2s, s2e = _bj_k_ux_add(s1s, s1e, q2s, q2e);
+    var ms, me = _bj_k_ux_sqrt(s2s, s2e);
+    var cs, ce = _bj_k_ux_from(c);
+    var ts, te = _bj_k_ux_from(dt);
+    var ls, le = _bj_k_ux_mul(cs, ce, ts, te);
+    var gs, ge = _bj_k_ux_sub(ms, me, ls, le);
+    var g: f64 = _bj_k_ux_sub_f64(ms, me, ls, le);
+    var dg: f64 = -c;
+    if (ms != 0.0) {
+        var v0s, v0e = _bj_k_ux_from(st[3]);
+        var v1s, v1e = _bj_k_ux_from(st[4]);
+        var v2s, v2e = _bj_k_ux_from(st[5]);
+        var r0s, r0e = _bj_k_ux_mul(ds[0], de[0], v0s, v0e);
+        var r1s, r1e = _bj_k_ux_mul(ds[1], de[1], v1s, v1e);
+        var r2s, r2e = _bj_k_ux_mul(ds[2], de[2], v2s, v2e);
+        var u1s, u1e = _bj_k_ux_add(r0s, r0e, r1s, r1e);
+        var u2s, u2e = _bj_k_ux_add(u1s, u1e, r2s, r2e);
+        var qs, qe = _bj_k_ux_div(u2s, u2e, ms, me);
+        dg = _bj_k_ux_sub_f64(qs, qe, cs, ce);
+    }
+    var mxs, mxe = _bj_k_ux_max(ms, me, ls, le);
+    var mo: f64 = _bj_rel_max_abs3(obs, 0);
+    var mp: f64 = _bj_rel_max_abs3(st, 0);
+    var mv: f64 = _bj_rel_max_abs3(st, 3);
+    var at: f64 = f64_abs(t_r);
+    var mos, moe = _bj_k_ux_from(mo);
+    var mps, mpe = _bj_k_ux_from(mp);
+    var mvs, mve = _bj_k_ux_from(mv);
+    var ats, ate = _bj_k_ux_from(at);
+    var mts, mte = _bj_k_ux_mul(mvs, mve, ats, ate);
+    var a1s, a1e = _bj_k_ux_max(mxs, mxe, mos, moe);
+    var a2s, a2e = _bj_k_ux_max(a1s, a1e, mps, mpe);
+    var a3s, a3e = _bj_k_ux_max(a2s, a2e, mts, mte);
+    var noise: f64 = _bj_k_ux_mul_f64(1.0, 0 - 51, a3s, a3e);
+    s[0] = tau;
+    s[1] = g;
+    s[2] = dg;
+    s[3] = noise;
+    s[4] = gs;
+    s[5] = f64_from(ge);
+    return 0;
+}
+
+# The 53-bit pair of a sample's g: its own where the sample computed one, else g's (exact then).
+#must_use
+fn _bj_rel_gp(s: *f64): (f64, i64) {
+    var e5: f64 = s[5];
+    if (e5 != e5) {
+        var gs, ge = _bj_k_ux_from(s[1]);
+        return (gs, ge);
+    }
+    var s4: f64 = s[4];
+    return (s4, f64_to(e5));
+}
+
+# The sign of a sample's g (−1, 0 or 1), from its pair: an unbounded g below 2^-1074 still has its sign.
+#must_use
+fn _bj_rel_gsign(s: *f64): i64 {
+    var e5: f64 = s[5];
+    var x: f64 = s[1];
+    if (e5 == e5) { x = s[4]; }
+    if (x > 0.0) { return 1; }
+    if (x < 0.0) { return 0 - 1; }
+    return 0;
+}
+
+# 1 when |g_a| < |g_b| exactly for two samples (the solver calls it only where one g is not normal).
+#must_use
+fn _bj_rel_gabs_lt(a: *f64, b: *f64): i64 {
+    var xs, xe = _bj_rel_gp(a);
+    var ys, ye = _bj_rel_gp(b);
+    var ax: f64 = f64_abs(xs);
+    var ay: f64 = f64_abs(ys);
+    if (_bj_k_ux_cmp(ax, xe, ay, ye) == 0 - 1) { return 1; }
+    return 0;
+}
+
+# The solver's step tests on g's 53-bit pair for a sample (exact for every sample), as fl's flags: 1 when g = 0 (then
+# alone), else 2 when |g| ≤ the noise and 4 when |2g| ≤ |last_step·dg|; for dg < 0 the Newton point τ − g/dg into
+# out[0] and |g/dg| into out[1] (g/dg to 53 bits with an unbounded exponent, each rounded once).
+fn _bj_rel_step_ux(s: *f64, last_step: f64, out: *f64): i64 {
+    var gs, ge = _bj_rel_gp(s);
+    if (gs == 0.0) { return 1; }
+    var fl = 0;
+    var ag: f64 = f64_abs(gs);
+    var ns, ne = _bj_k_ux_from(s[3]);
+    if (_bj_k_ux_cmp(ag, ge, ns, ne) <= 0) { fl = 2; }
+    var cd: f64 = s[2];
+    var ds, de = _bj_k_ux_from(cd);
+    var ls1, le1 = _bj_k_ux_from(last_step);
+    var ps, pe = _bj_k_ux_mul(ls1, le1, ds, de);
+    var ap: f64 = f64_abs(ps);
+    if (_bj_k_ux_cmp(ag, ge + 1, ap, pe) <= 0) { fl = fl + 4; }
+    if (cd < 0.0) {
+        var qs, qe = _bj_k_ux_div(gs, ge, ds, de);
+        var ts, te = _bj_k_ux_from(s[0]);
+        var nu: f64 = _bj_k_ux_sub_f64(ts, te, qs, qe);
+        var aq: f64 = f64_abs(qs);
+        var st: f64 = _bj_k_ux_mul_f64(aq, qe, 1.0, 0);
+        out[0] = nu;
+        out[1] = st;
+    }
+    return fl;
 }
 
 # max(|p[k]|, |p[k + 1]|, |p[k + 2]|), Rust's f64::max fold.
@@ -1381,9 +1589,14 @@ fn _bj_rel_max_abs3(p: *f64, k): f64 {
     return m;
 }
 
-# dst := src, a light-cone sample (four f64).
-fn _bj_rel_copy4(dst: *f64, src: *f64) {
-    for (var k = 0; k < 4; k = k + 1) { dst[k] = src[k]; }
+# dst := src, a light-cone sample (six f64: τ, g, dg, noise and g's 53-bit pair, M2 part 2d-3g).
+fn _bj_rel_copy6(dst: *f64, src: *f64) {
+    dst[0] = src[0];
+    dst[1] = src[1];
+    dst[2] = src[2];
+    dst[3] = src[3];
+    dst[4] = src[4];
+    dst[5] = src[5];
     return 0;
 }
 
@@ -1447,24 +1660,39 @@ fn _bj_rel_solve(obs: *f64, t: f64, traj, max_iterations, st: *f64, out: *f64): 
         _bj_tx_u64(&lt, max_iterations);
         _bj_log_text(4, &lt);
     }
-    var lo: f64[4];
-    var hi: f64[4];
-    var cur: f64[4];
+    var lo: f64[6];
+    var hi: f64[6];
+    var cur: f64[6];
     var c0 = _bj_rel_sample(obs, t, 0.0, traj, st, &lo);
     if (c0 != 0) { return Err(c0); }
+    # g's sign, |g| and the Newton point come from Rust's doubles where g is normal (so its double is its 53-bit
+    # value) and from g's 53-bit pair otherwise (ADR 0002 row 18's rule, M2 part 2d-3g): the pair helpers run only
+    # off the normal case.
     var g0: f64 = lo[1];
     if (g0 == 0.0) {
-        _bj_rel_solve_log(2, t, 0.0, 0, 0);
-        out[0] = t;
-        return Ok(0);
+        if (_bj_rel_gsign(&lo) == 0) {
+            _bj_rel_solve_log(2, t, 0.0, 0, 0);
+            out[0] = t;
+            return Ok(0);
+        }
     }
     var tau0: f64 = g0 / BJ_SPEED_OF_LIGHT;
+    var ag0: f64 = f64_abs(g0);
+    if (!(ag0 > _BJ_VX_MN && ag0 <= _BJ_VX_HI)) {  # g past DBL_MAX or subnormal: τ₀ from its 53-bit pair
+        var g0s, g0e = _bj_rel_gp(&lo);
+        var cs, ce = _bj_k_ux_from(BJ_SPEED_OF_LIGHT);
+        tau0 = _bj_k_ux_div_f64(g0s, g0e, cs, ce);
+    }
     var min_pos: f64 = _bj_from_bits(0x0010000000000000);
     var tau1: f64 = _bj_max(tau0, min_pos);
     var c1 = _bj_rel_sample(obs, t, tau1, traj, st, &hi);
     if (c1 != 0) { return Err(c1); }
     var expansions = 0;
-    while (hi[1] > 0.0) {
+    while (1 == 1) {
+        var hg: f64 = hi[1];
+        if (!(hg > 0.0)) {
+            if (hg != 0.0 || _bj_rel_gsign(&hi) <= 0) { break; }
+        }
         var ht: f64 = hi[0];
         var next_tau: f64 = 2.0 * ht;
         if (expansions >= 2100 || _bj_is_finite(next_tau) == 0) {
@@ -1473,7 +1701,7 @@ fn _bj_rel_solve(obs: *f64, t: f64, traj, max_iterations, st: *f64, out: *f64): 
             _bj_tx_cstr(be, "(is the trajectory faster than light?)");
             return Err(BJ_ERR_INVALID_PARAMETER);
         }
-        _bj_rel_copy4(&lo, &hi);
+        _bj_rel_copy6(&lo, &hi);
         var c2 = _bj_rel_sample(obs, t, next_tau, traj, st, &hi);
         if (c2 != 0) {
             # A non-finite state while the bracket still expands: the doubling drove the trajectory past the range,
@@ -1487,26 +1715,51 @@ fn _bj_rel_solve(obs: *f64, t: f64, traj, max_iterations, st: *f64, out: *f64): 
     }
     var alo: f64 = f64_abs(lo[1]);
     var ahi: f64 = f64_abs(hi[1]);
-    if (alo < ahi) { _bj_rel_copy4(&cur, &lo); } else { _bj_rel_copy4(&cur, &hi); }
+    var lo_cur = 0;
+    if (alo > _BJ_VX_MN && alo <= _BJ_VX_HI && ahi > _BJ_VX_MN && ahi <= _BJ_VX_HI) {
+        if (alo < ahi) { lo_cur = 1; }
+    } else {
+        lo_cur = _bj_rel_gabs_lt(&lo, &hi);
+    }
+    if (lo_cur == 1) { _bj_rel_copy6(&cur, &lo); } else { _bj_rel_copy6(&cur, &hi); }
     var last_step: f64 = hi[0] - lo[0];
     var iterations = 0;
     var tau: f64 = 0.0;
+    var nw: f64[2];
+    var at: f64 = f64_abs(t);
     while (1 == 1) {
         var ct: f64 = cur[0];
         var cg: f64 = cur[1];
         var cd: f64 = cur[2];
-        var cn: f64 = cur[3];
-        if (cg == 0.0) {
+        var gd: f64 = cg / cd;
+        var newton: f64 = ct - gd;
+        var step_n: f64 = f64_abs(gd);
+        # Rust's doubles where g is normal with 2g finite and g/dg normal: g's double is its 53-bit value, g/dg's
+        # rounding is the chain's, and |2g| ≤ |last_step·dg| is decided alike for a product that underflows (both
+        # false, |2g| > 2^-1021) or overflows (both true). g's 53-bit pair otherwise. fl: 1 g = 0, 2 |g| ≤ noise,
+        # 4 |2g| ≤ |last_step·dg|.
+        var fl = 0;
+        var acg: f64 = f64_abs(cg);
+        if (acg > _BJ_VX_MN && acg <= _BJ_REL_HALF_MAX && step_n > _BJ_VX_MN && step_n <= _BJ_VX_HI) {
+            var cn: f64 = cur[3];
+            if (acg <= cn) { fl = 2; }
+            var g2: f64 = 2.0 * acg;
+            var ls: f64 = last_step * cd;
+            var als: f64 = f64_abs(ls);
+            if (g2 <= als) { fl = fl + 4; }
+        } else {
+            fl = _bj_rel_step_ux(&cur, last_step, &nw);
+            newton = nw[0];
+            step_n = nw[1];
+        }
+        if (fl == 1) {
             tau = ct;
             break;
         }
-        var acg: f64 = f64_abs(cg);
-        if (acg <= cn) {
+        if ((fl & 2) != 0) {
             tau = ct;
             if (cd < 0.0) {
-                var qd: f64 = cg / cd;
-                var pol: f64 = ct - qd;
-                var pl: f64 = _bj_max(pol, lo[0]);
+                var pl: f64 = _bj_max(newton, lo[0]);
                 tau = _bj_min(pl, hi[0]);
             }
             break;
@@ -1520,27 +1773,20 @@ fn _bj_rel_solve(obs: *f64, t: f64, traj, max_iterations, st: *f64, out: *f64): 
             return Err(BJ_ERR_INVALID_PARAMETER);
         }
         iterations = iterations + 1;
-        var gd: f64 = cg / cd;
-        var newton: f64 = ct - gd;
-        var g2: f64 = 2.0 * cg;
-        var ag2: f64 = f64_abs(g2);
-        var ls: f64 = last_step * cd;
-        var als: f64 = f64_abs(ls);
         var next: f64 = 0.0;
         var step: f64 = 0.0;
-        if (cd < 0.0 && newton >= lo[0] && newton <= hi[0] && ag2 <= als) {
+        if (cd < 0.0 && newton >= lo[0] && newton <= hi[0] && (fl & 4) != 0) {
             next = newton;
-            step = f64_abs(gd);
+            step = step_n;
         } else {
             var w: f64 = hi[0] - lo[0];
             var half: f64 = 0.5 * w;
             next = lo[0] + half;
             step = half;
         }
-        var at: f64 = f64_abs(t);
-        var mt: f64 = _bj_max(at, next);
-        var four_eps: f64 = 4.0 * 0.0000000000000002220446049250313080847263336181640625;
-        var tol: f64 = four_eps * mt;
+        var mt: f64 = next;                         # f64::max(|t|, next): neither is NaN
+        if (at > mt) { mt = at; }
+        var tol: f64 = 0.00000000000000088817841970012523233890533447265625 * mt;   # 4ε = 2^-50
         if (step <= tol || next == ct) {
             tau = next;
             break;
@@ -1549,7 +1795,13 @@ fn _bj_rel_solve(obs: *f64, t: f64, traj, max_iterations, st: *f64, out: *f64): 
         var c3 = _bj_rel_sample(obs, t, next, traj, st, &cur);
         if (c3 != 0) { return Err(c3); }
         var ng: f64 = cur[1];
-        if (ng > 0.0) { _bj_rel_copy4(&lo, &cur); } else { _bj_rel_copy4(&hi, &cur); }
+        var up = 0;
+        if (ng > 0.0) {
+            up = 1;
+        } elif (ng == 0.0) {
+            if (_bj_rel_gsign(&cur) > 0) { up = 1; }
+        }
+        if (up == 1) { _bj_rel_copy6(&lo, &cur); } else { _bj_rel_copy6(&hi, &cur); }
     }
     var t_r: f64 = t - tau;
     _bj_rel_solve_log(1, t_r, tau, iterations, expansions);

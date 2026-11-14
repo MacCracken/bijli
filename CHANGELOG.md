@@ -363,6 +363,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
   term is 3.2·10^-300. The tail keeps Rust's chain inside a box on q, R, β̇, n̂ − β and γ²; outside it the whole tail
   runs with an unbounded exponent and rounds once. The cost: `relativity/lienard_wiechert_e` 672 → 711 ns
   (`port-parity.md` §50).
+- **relativity** (ADR 0002 row 18 amended, M2 part 2d-3g): `solve_retarded_time` lost the light-cone root where its
+  sample left the range. A static charge 2·10^308 from the observer gave t_r = −∞ (|R| = ∞), and one 10^-310 away gave
+  t_r = t, "observer on the trajectory" (|R|² underflowed to 0). The sample keeps Rust's chain where its own values
+  prove it equal to the unbounded chain; elsewhere it runs with an unbounded exponent, and the solver reads g's 53-bit
+  pair where g or g/dg is not normal (`port-parity.md` §51).
 - **relativity** (ADR 0002 row 13 amended, M2 part 2b-4): `retarded_scalar_potential`, `retarded_vector_potential`,
   `larmor_power` and `EmTensor::dual` rounded two to five times, and overflowed where the value is representable
   (Larmor with q² past DBL_MAX, the dual of B past DBL_MAX/c: ∞ each); they are now correctly rounded for finite
@@ -455,6 +460,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
 ### Performance
 
+- **relativity** (M2 part 2d-3g; a focused interleaved A/B against HEAD, three rounds at load 1.2–1.4):
+  `relativity/solve_retarded_time_uniform_t1s` 804 → 612 ns (−24 %) and `relativity/lienard_wiechert_fields_orbit_b099`
+  6.06 → 5.87 µs (−3 %). The light-cone sample takes its maxima with compares instead of four `_bj_max` and three
+  `_bj_rel_max_abs3` calls (ten `_bj_max` in all), and tests the state's finiteness with one sum instead of six calls.
+  That more than pays for the range-edge guard (`port-parity.md` §51).
 - **relativity** (M2 part 2d-3e; a focused interleaved A/B, three rounds at load 1.0): `relativity/lienard_wiechert_e`
   679 → 653 ns (−4 %). With a NaN and an ∞ R both refused, E no longer computes Rust's κ = 1 − n̂⋅β and n̂ − β only to
   overwrite them with row 17's exact values (`port-parity.md` §49).
