@@ -54,6 +54,9 @@
 //!
 //! M4 part 2d-3a appends the Smith-division family's range edges (row 18): the reflection coefficients' Z_L ± Z₀ past
 //! DBL_MAX, Smith's internals below 2^-1022, the Smith chart near DBL_MAX and at its poles, the box, seeded values.
+//!
+//! M4 part 2d-3b appends the stub match's range edges (row 18): Z₀ subnormal and near DBL_MAX, |Z_in|² past either
+//! end, subnormal roots, the box, seeded wide loads.
 
 use crate::grids::{Edge2, Rng, knife_edge, knife_edge2, specials};
 use crate::m_field::res_f;
@@ -696,8 +699,36 @@ pub fn emit() -> Module {
     emit_2d1(r, &mut rng);
     emit_2d2(r, &mut rng);
     emit_2d3a(r, &mut rng);
+    emit_2d3b(r, &mut rng);
 
     rows.m
+}
+
+/// M4 part 2d-3b: the stub match end to end at its range edges (ADR 0002 row 18): Z₀ subnormal (1/Z₀ past DBL_MAX)
+/// and near DBL_MAX (2Z₀ past it in the band), loads whose |Z_in|² leaves the range, roots below 2^-1022 (d
+/// subnormal), the guard's 2^±100 box, seeded wide loads.
+fn emit_2d3b(r: &mut Rows, rng: &mut Rng) {
+    let m = f64::MAX;
+    for &z0 in &[5e-324, 1e-310, 2f64.powi(-1022), 1e-300, 1e300, m, m / 2.0, 2f64.powi(100), 2f64.powi(101),
+                 2f64.powi(-100), 2f64.powi(-101)] {
+        for &(a, b) in &[(1.0, 1.0), (2.0, 0.0), (0.5, -0.5), (1.0, 1e-300), (1.0, 300.0), (1e-3, 1.0)] {
+            r.stub_complex((a * z0, b * z0), z0);
+            r.stub_complex((a, b), z0);
+        }
+        r.stub(z0, z0);
+        r.stub(z0 * 2.0, z0);
+        r.stub(1.0, z0);
+    }
+    for &x in &[1e-310, 5e-324, 1e-300, 1e-200] {
+        r.stub_complex((50.0, x), 50.0);
+        r.stub_complex((50.0 * (1.0 + 1e-11), x), 50.0);
+        r.stub_complex((25.0, 25.0 + x), 50.0);
+    }
+    for _ in 0..200 {
+        let z0 = rng.log_uniform(-300.0, 300.0);
+        r.stub_complex((rng.log_uniform(-300.0, 300.0), rng.signed_log_uniform(-300.0, 300.0)), z0);
+        r.stub(rng.log_uniform(-300.0, 300.0), z0);
+    }
 }
 
 /// M4 part 2d-3a: the Smith-division family at its range edges (ADR 0002 row 18): the reflection coefficients where

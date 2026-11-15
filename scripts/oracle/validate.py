@@ -5597,8 +5597,17 @@ def rf_zin_ux(z0, zr, zi, beta, length):
     Rust's chain rounded to 53 bits (rnd53, MPFR's widest range for βl's sine and cosine), the last products by Z₀
     once into binary64; (re, im), or the DivisionByZero tokens."""
     ident = lambda v: v                                # noqa: E731
+    q = rf_zin_q_ux(z0, zr, zi, ux(beta), ux(length))
+    if isinstance(q, list):
+        return q
+    return (ux_fin(ux_mul(q[0], ux(z0), ident)), ux_fin(ux_mul(q[1], ux(z0), ident)))
+
+
+def rf_zin_q_ux(z0, zr, zi, beta, length):
+    """src/rf.cyr's _bj_rf_zin_q53: the input impedance's 53-bit chain up to Smith's quotient q (Z_in = q·Z₀), for
+    model pairs β and l; (q.re, q.im), or the DivisionByZero tokens."""
     r, x, z = ux(zr), ux(zi), ux(z0)
-    bl = ux_mul(ux(beta), ux(length))
+    bl = ux_mul(beta, length)
     s, c = w_trig("sin", bl), w_trig("cos", bl)
     nr, ni = ux_mul(r, c), ux_add(ux_mul(x, c), ux_mul(z, s))
     dr, di = ux_sub(ux_mul(z, c), ux_mul(x, s)), ux_mul(r, s)
@@ -5606,8 +5615,7 @@ def rf_zin_ux(z0, zr, zi, beta, length):
     dm = ux_sqrt(ux_add(ux_mul(dr, dr), ux_mul(di, di)))
     if dm[0] <= ux_mul(ux(1e-15), scale)[0]:
         return dz_err("transmission line input impedance is unbounded (Z₀cos βl + jZ_L sin βl = 0)")
-    qr, qi = rf_cdiv_ux(nr, ni, dr, di)
-    return (ux_fin(ux_mul(qr, z, ident)), ux_fin(ux_mul(qi, z, ident)))
+    return rf_cdiv_ux(nr, ni, dr, di)
 
 
 def rf_cdiv_ux(nr, ni, dr, di, fin=False):
@@ -5773,6 +5781,12 @@ def rf_stub_root(rl, xl, z0, disc):
     r, z, x, d = rl * s, z0 * s, xl * s, disc * s
     if r < RF_2M480 or z < RF_2M480 or abs(x) < RF_2M480:
         return math.nan
+    return rf_stub_root_core(r, z, x, d, xl)
+
+
+def rf_stub_root_core(r, z, x, d, xl):
+    """src/rf.cyr's _bj_rf_stub_root_core: N = r·z − r² − x² from TwoProduct's parts, grown and compressed, over
+    z·(x ± d)."""
     (a1, b1), (a2, b2), (a3, b3) = k_two_prod(r, z), k_two_prod(r, r), k_two_prod(x, x)
     ex = []
     for part in (a1, -a2, -a3, b1, -b2, -b3):
@@ -5782,6 +5796,22 @@ def rf_stub_root(rl, xl, z0, disc):
     return n / (z * w)
 
 
+def rf_stub_root_ux(rl, xl, z0, disc):
+    """src/rf.cyr's _bj_rf_stub_root_ux (M4 part 2d-3b): the region test on the 53-bit disc, the scaling by
+    max(Z₀, |X_L|)'s exponent, each scaled value rounded into binary64, the same core; NaN to keep the formula."""
+    if xl == 0.0:
+        return math.nan
+    ax = Fraction(abs(xl))
+    if 2 * disc[0] < ax or disc[0] > 2 * ax:
+        return math.nan
+    me = binade(max(Fraction(z0), ax))
+    sc = Fraction(2) ** -me
+    r, z, xa, d = (rn_frac(Fraction(v) * sc) for v in (rl, z0, ax, disc[0]))
+    if r < RF_2M480 or z < RF_2M480 or xa < RF_2M480:
+        return math.nan
+    return rf_stub_root_core(r, z, xa if xl > 0 else -xa, d, xl)
+
+
 def rf_stub_exact(rl, xl, z0):
     """The two roots (X_L ± disc)/(R_L − Z₀) to 200 digits, as Decimals: the accuracy check's reference."""
     with decimal.localcontext() as ctx:
@@ -5789,6 +5819,69 @@ def rf_stub_exact(rl, xl, z0):
         r, x, z = decimal.Decimal(rl), decimal.Decimal(xl), decimal.Decimal(z0)
         disc = (r * ((z - r) ** 2 + x * x) / z).sqrt()
         return (x + disc) / (r - z), (x - disc) / (r - z)
+
+
+def rf_atan53(t):
+    """src/crmath_vx.cyr's _bj_vx_bm_atan53 on a model pair: t itself below 2^-1022, ±RN(π/2) from 2^1024, else the
+    double t's correctly rounded arctangent."""
+    if t[0] == 0 or binade(t[0]) < -1022:
+        return t
+    if binade(t[0]) > 1023:
+        return ux(-math.pi / 2 if t[0] < 0 else math.pi / 2)
+    return ux(MPFR_P["atan"](float(t[0])))
+
+
+def rf_stub_d_ux(t):
+    """src/rf.cyr's _bj_rf_stub_d_ux: (d rounded once from its last operation, d's 53-bit value)."""
+    ident = lambda v: v                                # noqa: E731
+    a, tau, half = rf_atan53(t), ux(RF_TAU), ux(0.5)
+    d = ux_div(a, tau)
+    if d[0] < 0:
+        return ux_fin(ux_add(d, half, ident)), ux_add(d, half)
+    return ux_fin(ux_div(a, tau, ident)) + 0.0, (d[0], False) if d[0] == 0 else d
+
+
+def rf_stub_len_ux(rl, xl, z0, d):
+    """src/rf.cyr's _bj_rf_stub_len_ux: ℓ/λ for the 53-bit d, or the input impedance's DivisionByZero tokens."""
+    ident = lambda v: v                                # noqa: E731
+    q = rf_zin_q_ux(z0, rl, xl, ux(RF_TAU), d)
+    if isinstance(q, list):
+        return q
+    z = ux(z0)
+    zr, zi = ux_mul(q[0], z), ux_mul(q[1], z)
+    inv = ux_div(ux(1.0), ux_add(ux_mul(zr, zr), ux_mul(zi, zi)))
+    yim = ux_mul((-zi[0], not zi[1]), inv)
+    g = ux_atan2(ux_div(ux(1.0), z), yim)
+    return ux_fin(ux_div(g, ux(RF_TAU), ident))
+
+
+def rf_stub_ux(rl, xl, z0, port):
+    """The port's stub match with an unbounded exponent (ADR 0002 row 18, M4 part 2d-3b): [d₁, ℓ₁, d₂, ℓ₂] sorted by
+    d, or an error's tokens. port: 2a-1's cancellation-free root (row 39); RF17: the exact band."""
+    if rf_within12(rl, z0, z0):
+        sols = [rf_stub_d_ux(ux_div(ux(-xl), ux_mul(ux(2.0), ux(z0)))), (0.25, (Fraction(1, 4), False))]
+    else:
+        r, x, z = ux(rl), ux(xl), ux(z0)
+        zd = ux_sub(z, r)
+        disc = ux_sqrt(ux_div(ux_mul(r, ux_add(ux_mul(zd, zd), ux_mul(x, x))), z))
+        df = ux_sub(r, z)
+        ta, tb = ux_div(ux_add(x, disc), df), ux_div(ux_sub(x, disc), df)
+        tc = rf_stub_root_ux(rl, xl, z0, disc) if port else math.nan
+        if not math.isnan(tc):
+            if xl > 0.0:
+                tb = ux(tc)
+            else:
+                ta = ux(tc)
+        sols = [rf_stub_d_ux(ta), rf_stub_d_ux(tb)]
+    out = []
+    for dv, dc in sols:
+        lv = rf_stub_len_ux(rl, xl, z0, dc)
+        if isinstance(lv, list):
+            return lv
+        out.append((dv, lv))
+    if out[1][0] < out[0][0]:
+        out = [out[1], out[0]]
+    return [("f", out[0][0]), ("f", out[0][1]), ("f", out[1][0]), ("f", out[1][1])]
 
 
 def rf_stub(P, zr, zi, z0, port=False):
@@ -5801,6 +5894,8 @@ def rf_stub(P, zr, zi, z0, port=False):
     rl, xl = zr, zi
     if rl <= 0.0:
         return ip_err(f"load resistance must be positive for a stub match, got {rust_display(rl)}")
+    if RF18["on"]:
+        return rf_stub_ux(rl, xl, z0, port)
 
     def d_from_t(t):
         d = P["atan"](t) / RF_TAU
@@ -6579,8 +6674,9 @@ def rf_adr_rows(path: Path) -> list:
         row = "17"
         if toks_same(full, rf_eval17(False, lambda: rf_any_eval(fn, ins, v, True))):
             row = "13" if fn in RF_ROW13 else ("39" if fn == "rf::single_stub_match_complex" else "37")
-        elif toks_same(full, rf_eval17(False, lambda: rf_any_eval(fn, ins, v, False), on18=True)):
-            row = "18"
+        elif (toks_same(full, rf_eval17(False, lambda: rf_any_eval(fn, ins, v, False), on18=True))
+              or toks_same(full, rf_eval17(False, lambda: rf_any_eval(fn, ins, v, True), on18=True))):
+            row = "18"                                      # row 18's chain (with the port's 13, 37 or 39 too)
         out.append((fn, ins, wire(full), row, f"oracle {outs[:200]}; ADR 0002 row {row}"))
     return out
 

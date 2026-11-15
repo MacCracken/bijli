@@ -5129,3 +5129,38 @@ and stub length, with an unbounded exponent end to end).
   equal**, HEAD's unchanged but the reflections', the Smith chart's and the quarter-wave transformer's (new rows).
   `rf.tcyr` passes on all three (246). The gate is clean (no warnings; execution coverage 323 of 323 functions);
   validate.py 624,235 rows, 0 problems. Next, 2d-3b: the stub match.
+
+## 90. M4 part 2d-3b: the stub match end to end at its range edges (2026-11-15)
+
+- **The finding**: `single_stub_match_complex` (and so `single_stub_match`) refused a load of 10³⁰⁰(1 + j) on
+  10³⁰⁰ Ω, and the same load scaled to 2^-1074 Ω, as 1/Z₀ overflowed, though both have the unit case's solutions.
+  Where its discriminant overflowed (X_L = −3·10¹⁵², Z₀ = 10¹⁵⁰), both roots came out ±∞ and both d = λ/4, so the two
+  solutions collapsed into one; 2d-1's 26 refusals at such loads were the same overflowed discriminant.
+- **ADR 0002 row 18, amended** (`src/rf.cyr`): Rust's chain stays where R_L, X_L and Z₀ lie in 2^±100 and each Z_in
+  is normal with |Z_in|² within 2^±1000 (`_bj_rf_zin_norm`); elsewhere `_bj_rf_stub_ux` runs the whole chain on
+  53-bit values with an unbounded exponent:
+  - the discriminant and both roots, the cancelling one by row 39's cancellation-free form on the same scaled values
+    (`_bj_rf_stub_root_ux`; row 39's root split into `_bj_rf_stub_root_core`, which both chains share);
+  - arctan t and d (`_bj_rf_stub_d_ux`), d kept to 53 bits for the input impedance and rounded once as an output;
+  - the input impedance's 53-bit quotient times Z₀ (`_bj_rf_zin_q53`, split out of 2d-1's `_bj_rf_zin_ux`);
+  - crecip's 1/|Z_in|² branch, y₀ = 1/Z₀ and atan2(y₀, Im y), and ℓ rounded once (`_bj_rf_stub_len_ux`).
+- **The grid**: 550 rows appended to `rf.tsv` (29,382): Z₀ subnormal (1/Z₀ past DBL_MAX), at 2^±100 and 2^±101 (the
+  box's edges), 10^±300 and near DBL_MAX (2Z₀ past it), each with six loads scaled by Z₀ and the same six unscaled;
+  loads whose |Z_in|² leaves the range; roots below 2^-1022 (d subnormal); 200 seeded wide loads through each stub.
+- **validate.py** transcribes the chain (`rf_stub_ux`, `rf_stub_d_ux`, `rf_stub_len_ux`, with `rf_atan53`) under
+  `RF18`. `rf.adr.tsv` maps **2,415 stub rows** to row 18 (256 real, 2,159 complex; 241 at HEAD), all passing, most
+  on 2a-1's grid at Z₀ of 2^±400 and 10^±150; **405** of them (174 real, 231 complex) were refusals in Rust and are
+  computed now. A labeling fix: a row that differs only with both the port's row (13, 37 or 39) and row 18 on is
+  labeled 18, where it had fallen through to 17; the stubs keep 72 row-17 rows (24 real, 48 complex). One corrected
+  oracle row (a complex stub whose square root rf.cr.tsv corrected) is now a row-18 mapping: `rf.cr.tsv` 87 rows,
+  `rf.adr.tsv` 10,101.
+- **Tests**: `tests/rf.tcyr`'s `cyrius_stub_edges` (3 assertions, 249 in all): the 10³⁰⁰ and 2^-1074 loads give the
+  unit case's solutions bit for bit, and the overflowed discriminant's load two distinct ones.
+- **Benchmarks** (rf.rs benches neither stub at these values): a focused interleaved A/B against HEAD (three rounds,
+  load 8.1 to 8.6, so rough): `rf/single_stub_match` 2.50–2.76 → 2.56–2.83 µs and the complex one 2.43–2.62 →
+  2.48–2.59 µs, both within the noise; the guard is a box test on the inputs and a range test on each Z_in.
+- **Result, every target** (x86_64 ELF, x86_64 PE, aarch64): **17 modules, 0 failing; 534,962 ok, 0 failed, 0
+  measured, 0 pending, 89,823 accepted (ADR 01: 30,859; ADR 0002: 58,964)** over 624,785 rows; **all 416 digests
+  equal**, HEAD's unchanged but the two stubs'. `rf.tcyr` passes on all three (249). The gate is clean (no warnings;
+  execution coverage 323 of 323 functions); validate.py 624,785 rows, 0 problems; `cr_verify.py`'s cascade and S→Z
+  families 36,000 calls on x86_64 and aarch64, 0 mismatches. Next, 2d-4: Touchstone's MA and DB magnitudes.

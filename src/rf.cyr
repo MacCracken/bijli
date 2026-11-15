@@ -337,11 +337,26 @@ fn _bj_rf_ux_absless(xs: f64, xe, ys: f64, ye): i64 {
 # The input impedance's chain with an unbounded exponent (the section comment) into *out: 0, or 1 when
 # |den| ≤ 10⁻¹⁵·(Z₀ + |Z_L|) (DivisionByZero, out untouched), for finite inputs.
 fn _bj_rf_zin_ux(z0: f64, zr: f64, zi: f64, beta: f64, length: f64, out: *BjComplex): i64 {
+    var bs, be = _bj_k_ux_from(beta);
+    var ls, le = _bj_k_ux_from(length);
+    var q: f64[2];
+    var qe: i64[2];
+    if (_bj_rf_zin_q53(z0, zr, zi, bs, be, ls, le, &q, &qe) == 1) { return 1; }
+    var z0s, z0e = _bj_k_ux_from(z0);
+    var wr: f64 = _bj_k_ux_mul_f64(q[0], qe[0], z0s, z0e);
+    var wi: f64 = _bj_k_ux_mul_f64(q[1], qe[1], z0s, z0e);
+    out.re = wr;
+    out.im = wi;
+    return 0;
+}
+
+# The input impedance's 53-bit chain up to Smith's quotient q (Z_in = q·Z₀), for finite Z₀ and Z_L and a 53-bit β
+# and l: 0 with q[0], q[1] (exponents qe), or 1 when |den| ≤ 10⁻¹⁵·(Z₀ + |Z_L|). _bj_rf_zin_ux and the stub match's
+# chain (M4 part 2d-3b) share it.
+fn _bj_rf_zin_q53(z0: f64, zr: f64, zi: f64, bs: f64, be, ls: f64, le, q: *f64, qe: *i64): i64 {
     var z0s, z0e = _bj_k_ux_from(z0);
     var rs, re = _bj_k_ux_from(zr);
     var is, ie = _bj_k_ux_from(zi);
-    var bs, be = _bj_k_ux_from(beta);
-    var ls, le = _bj_k_ux_from(length);
     var ts, te = _bj_k_ux_mul(bs, be, ls, le);                      # βl
     var ss, se = _bj_vx_sin53(ts, te);
     var cs, ce = _bj_vx_cos53(ts, te);
@@ -375,17 +390,7 @@ fn _bj_rf_zin_ux(z0: f64, zr: f64, zi: f64, beta: f64, length: f64, out: *BjComp
     ve[2] = dre;
     v[3] = dis;
     ve[3] = die;
-    var q: f64[2];
-    var qe: i64[2];
-    _bj_rf_cdiv_ux(&v, &ve, &q, &qe, 0);
-    var qrs: f64 = q[0];
-    var qre = qe[0];
-    var qis: f64 = q[1];
-    var qie = qe[1];
-    var wr: f64 = _bj_k_ux_mul_f64(qrs, qre, z0s, z0e);
-    var wi: f64 = _bj_k_ux_mul_f64(qis, qie, z0s, z0e);
-    out.re = wr;
-    out.im = wi;
+    _bj_rf_cdiv_ux(&v, &ve, q, qe, 0);
     return 0;
 }
 
@@ -653,6 +658,15 @@ fn _bj_rf_stub_root(rl: f64, xl: f64, z0: f64, disc: f64): f64 {
     var d: f64 = disc * s;
     var axs: f64 = f64_abs(x);
     if (r < _BJ_RF_2M480 || z < _BJ_RF_2M480 || axs < _BJ_RF_2M480) { return _BJ_RF_NAN; }
+    var root: f64 = _bj_rf_stub_root_core(r, z, x, d, xl);
+    return root;
+}
+
+# The cancellation-free root from the scaled r = R_L·2^-k, z = Z₀·2^-k, x = X_L·2^-k and d = disc·2^-k (k putting
+# max(Z₀, |X_L|) into [1, 2)): N = r·z − r² − x² from TwoProduct's parts, grown and compressed, over z·(x ± d), the sign
+# X_L's (_bj_rf_stub_root and its 53-bit twin _bj_rf_stub_root_ux).
+#must_use
+fn _bj_rf_stub_root_core(r: f64, z: f64, x: f64, d: f64, xl: f64): f64 {
     var p1, e1 = _bj_k_two_prod(r, z);
     var p2, e2 = _bj_k_two_prod(r, r);
     var p3, e3 = _bj_k_two_prod(x, x);
@@ -705,6 +719,12 @@ public fn bj_single_stub_match_complex(z_load: BjComplex, z0: f64, out: *f64): R
     if (rl <= 0.0) {
         return Err(_bj_rf_bad("load resistance must be positive for a stub match, got ", rl, ""));
     }
+    if (_bj_rf_box100(z0, rl, xl) == 0) {                           # a range edge (ADR 0002 row 18, M4 part 2d-3b)
+        var ue = _bj_rf_stub_ux(rl, xl, z0, out);
+        if (ue != 0) { return Err(ue); }
+        _bj_rf_stub_log(z_load, z0, out);
+        return Ok(0);
+    }
     var d1: f64 = 0.25;
     var d2: f64 = 0.25;
     var df: f64 = rl - z0;
@@ -728,11 +748,19 @@ public fn bj_single_stub_match_complex(z_load: BjComplex, z0: f64, out: *f64): R
     var zin: BjComplex;
     var t1, v1 = bj_input_impedance_lossless_complex(z0, z_load, _BJ_RF_TAU, d1, &zin);
     if (is_err_result(t1) == 1) { return Err(v1); }
+    var ok = _bj_rf_zin_norm(zin.re, zin.im);
     var yr, yi = _bj_rf_recip(zin.re, zin.im);
     var g1: f64 = _bj_atan2(y0, yi);
     var l1: f64 = g1 / _BJ_RF_TAU;
     var t2, v2 = bj_input_impedance_lossless_complex(z0, z_load, _BJ_RF_TAU, d2, &zin);
     if (is_err_result(t2) == 1) { return Err(v2); }
+    ok = ok & _bj_rf_zin_norm(zin.re, zin.im);
+    if (ok == 0) {                                                  # crecip's |Z_in|² past its box: the edge chain
+        var ue2 = _bj_rf_stub_ux(rl, xl, z0, out);
+        if (ue2 != 0) { return Err(ue2); }
+        _bj_rf_stub_log(z_load, z0, out);
+        return Ok(0);
+    }
     var yr2, yi2 = _bj_rf_recip(zin.re, zin.im);
     var g2: f64 = _bj_atan2(y0, yi2);
     var l2: f64 = g2 / _BJ_RF_TAU;
@@ -747,6 +775,12 @@ public fn bj_single_stub_match_complex(z_load: BjComplex, z0: f64, out: *f64): R
         out[2] = d2;
         out[3] = l2;
     }
+    _bj_rf_stub_log(z_load, z0, out);
+    return Ok(0);
+}
+
+# The stub match's debug log line: Z_L, Z₀ and both sorted solutions, as Rust's `tracing::debug!`.
+fn _bj_rf_stub_log(z_load: BjComplex, z0: f64, out: *f64) {
     if (_bj_log_on(4) == 1) {
         var lb[320];
         var lt[24];
@@ -765,7 +799,17 @@ public fn bj_single_stub_match_complex(z_load: BjComplex, z0: f64, out: *f64): R
         _bj_fmt_f64_debug(&lt, out[3]);
         _bj_log_text(4, &lt);
     }
-    return Ok(0);
+    return 0;
+}
+
+# 1 when Z_in's parts are 0 or normal and |Z_in|² lies within [2^-1000, 2^1000] (the stub match's guard).
+#must_use
+fn _bj_rf_zin_norm(re: f64, im: f64): i64 {
+    if (_bj_rf_subn(re) == 1 || _bj_rf_subn(im) == 1) { return 0; }
+    var n2: f64 = re * re + im * im;
+    var en = (load64(&n2) >> 52) & 2047;
+    if (en < 23 || en > 2023) { return 0; }
+    return 1;
 }
 
 # The single shunt short-circuited stub match of a real load: (d, ℓ) in wavelengths into out[0], out[1], the
@@ -1732,4 +1776,170 @@ fn _bj_rf_refl_cx_ux(ar: f64, ai: f64, br: f64, bi: f64): (f64, f64) {
     var w0: f64 = q[0];
     var w1: f64 = q[1];
     return (w0, w1);
+}
+
+# ── the stub match at its range edges (ADR 0002 row 18, M4 part 2d-3b) ─────────────────────────────────────────────
+#
+# Rust's chain is kept where R_L, X_L (nonzero) and Z₀ lie in [2^-100, 2^101) (the discriminant's squares, the roots,
+# their arctangents and d are then normal, d at least 2^-263), and for each solution the input impedance's parts are
+# 0 or normal and its |Z_in|² within [2^-1000, 2^1000] (crecip's one-division branch, y and its arctangent normal).
+# Anything else runs the whole chain with an unbounded exponent (_bj_rf_stub_ux): the discriminant, the roots (the
+# cancelling one by 2a-1's form on the same scaled values, _bj_rf_stub_root_ux), arctan t (src/crmath_vx.cyr), d, the
+# input impedance's quotient times Z₀ (_bj_rf_zin_q53), crecip's 1/|Z_in|² branch (a 53-bit |Z_in|² is never
+# subnormal), y₀ = 1/Z₀, atan2(y₀, Im y) (_bj_rf_atan2_ux); each output rounded once from its last operation, d for
+# the input impedance kept to 53 bits.
+
+# The cancelling root for a 53-bit discriminant (ds, de) (_bj_rf_stub_root's twin): the same region test on the 53-bit
+# values, the same scaling (by max(Z₀, |X_L|)'s exponent, so normal inputs scale identically), the same core; NaN to
+# keep the 53-bit (X_L ∓ disc)/(R_L − Z₀).
+#must_use
+fn _bj_rf_stub_root_ux(rl: f64, xl: f64, z0: f64, ds: f64, de): f64 {
+    if (xl == 0.0) { return _BJ_RF_NAN; }
+    var ax: f64 = f64_abs(xl);
+    var xs, xe = _bj_k_ux_from(ax);
+    if (_bj_k_ux_cmp(ds, de + 1, xs, xe) < 0) { return _BJ_RF_NAN; }         # 2·disc < |X_L|
+    if (_bj_k_ux_cmp(ds, de, xs, xe + 1) > 0) { return _BJ_RF_NAN; }         # disc > 2|X_L|
+    var zs, ze = _bj_k_ux_from(z0);
+    var me = ze;
+    if (_bj_k_ux_cmp(xs, xe, zs, ze) > 0) { me = xe; }
+    var rs, re = _bj_k_ux_from(rl);
+    var r: f64 = _bj_k_ux_round(rs, re - me, 0.0);
+    var z: f64 = _bj_k_ux_round(zs, ze - me, 0.0);
+    var xa: f64 = _bj_k_ux_round(xs, xe - me, 0.0);
+    var d: f64 = _bj_k_ux_round(ds, de - me, 0.0);
+    if (r < _BJ_RF_2M480 || z < _BJ_RF_2M480 || xa < _BJ_RF_2M480) { return _BJ_RF_NAN; }
+    var x: f64 = xa;
+    if (xl < 0.0) { x = -xa; }
+    var root: f64 = _bj_rf_stub_root_core(r, z, x, d, xl);
+    return root;
+}
+
+# d from the 53-bit root t (rf.rs's d_from_t): arctan t / 2π, plus ½ when negative, + 0 otherwise. Its binary64 value,
+# rounded once from the last operation, into w[0]; its 53-bit value (for the input impedance) into ws[0], we[0].
+fn _bj_rf_stub_d_ux(ts: f64, te, w: *f64, ws: *f64, we: *i64) {
+    var as, ae = _bj_vx_bm_atan53(ts, te);
+    var tau: f64 = _BJ_RF_TAU;
+    var ks, ke = _bj_k_ux_from(tau);
+    var ds, de = _bj_k_ux_div(as, ae, ks, ke);
+    if (ds < 0.0) {
+        var hs, he = _bj_k_ux_from(0.5);
+        var vs, ve = _bj_k_ux_add(ds, de, hs, he);
+        var o: f64 = _bj_k_ux_add_f64(ds, de, hs, he);
+        w[0] = o;
+        ws[0] = vs;
+        we[0] = ve;
+        return 0;
+    }
+    var o2: f64 = _bj_k_ux_div_f64(as, ae, ks, ke);
+    var z2: f64 = o2 + 0.0;                                         # rf.rs's `+ 0.0`: −0 to +0
+    var d2: f64 = ds + 0.0;
+    w[0] = z2;
+    ws[0] = d2;
+    we[0] = de;
+    return 0;
+}
+
+# The stub length ℓ/λ for the 53-bit d (dsig, dexp): atan2(1/Z₀, Im crecip(Z_in(d)))/2π rounded once, into w[0];
+# 1 (DivisionByZero recorded) when the input impedance refuses.
+fn _bj_rf_stub_len_ux(rl: f64, xl: f64, z0: f64, dsig: f64, dexp, w: *f64): i64 {
+    var tau: f64 = _BJ_RF_TAU;
+    var ks, ke = _bj_k_ux_from(tau);
+    var q: f64[2];
+    var qe: i64[2];
+    if (_bj_rf_zin_q53(z0, rl, xl, ks, ke, dsig, dexp, &q, &qe) == 1) {
+        var context = "transmission line input impedance is unbounded (Z₀cos βl + jZ_L sin βl = 0)";
+        return _bj_err_division_by_zero(context);
+    }
+    var zs, ze = _bj_k_ux_from(z0);
+    var zr, zre = _bj_k_ux_mul(q[0], qe[0], zs, ze);                # Z_in = q·Z₀
+    var zi, zie = _bj_k_ux_mul(q[1], qe[1], zs, ze);
+    var a2, a2e = _bj_k_ux_mul(zr, zre, zr, zre);                    # crecip: 1/|Z_in|² (never subnormal here)
+    var b2, b2e = _bj_k_ux_mul(zi, zie, zi, zie);
+    var n2, n2e = _bj_k_ux_add(a2, a2e, b2, b2e);
+    var os, oe = _bj_k_ux_from(1.0);
+    var iv, ive = _bj_k_ux_div(os, oe, n2, n2e);
+    var nzi: f64 = -zi;
+    var ys, ye = _bj_k_ux_mul(nzi, zie, iv, ive);                    # Im y = −Im Z_in·inv
+    var y0, y0e = _bj_k_ux_div(os, oe, zs, ze);                      # y₀ = 1/Z₀
+    var gs, ge = _bj_rf_atan2_ux(y0, y0e, ys, ye);
+    var l: f64 = _bj_k_ux_div_f64(gs, ge, ks, ke);
+    w[0] = l;
+    return 0;
+}
+
+# The stub match's chain with an unbounded exponent (the section comment) for finite Z₀ > 0 and Z_L with R_L > 0, into
+# out[0..4] sorted by d: 0, or the error code (recorded) when an input impedance refuses.
+fn _bj_rf_stub_ux(rl: f64, xl: f64, z0: f64, out: *f64): i64 {
+    var rs, re = _bj_k_ux_from(rl);
+    var xs, xe = _bj_k_ux_from(xl);
+    var zs, ze = _bj_k_ux_from(z0);
+    var w: f64[1];
+    var ws: f64[1];
+    var we: i64[1];
+    var d1: f64 = 0.25;
+    var d2: f64 = 0.25;
+    var d1s: f64 = 1.0;
+    var d1e = 0 - 2;
+    var d2s: f64 = 1.0;
+    var d2e = 0 - 2;
+    if (_bj_rf_within12(rl, z0, z0) == 1) {                          # −X_L/(2Z₀) and λ/4
+        var nx: f64 = -xs;
+        var t2s, t2e = _bj_k_ux_mul(2.0, 0, zs, ze);
+        var ts, te = _bj_k_ux_div(nx, xe, t2s, t2e);
+        _bj_rf_stub_d_ux(ts, te, &w, &ws, &we);
+        d1 = w[0];
+        d1s = ws[0];
+        d1e = we[0];
+    } else {
+        var zds, zde = _bj_k_ux_sub(zs, ze, rs, re);                 # disc = √(R_L((Z₀ − R_L)² + X_L²)/Z₀)
+        var q1s, q1e = _bj_k_ux_mul(zds, zde, zds, zde);
+        var q2s, q2e = _bj_k_ux_mul(xs, xe, xs, xe);
+        var q3s, q3e = _bj_k_ux_add(q1s, q1e, q2s, q2e);
+        var q4s, q4e = _bj_k_ux_mul(rs, re, q3s, q3e);
+        var q5s, q5e = _bj_k_ux_div(q4s, q4e, zs, ze);
+        var dcs, dce = _bj_k_ux_sqrt(q5s, q5e);
+        var dfs, dfe = _bj_k_ux_sub(rs, re, zs, ze);                 # R_L − Z₀
+        var u1s, u1e = _bj_k_ux_add(xs, xe, dcs, dce);
+        var u2s, u2e = _bj_k_ux_sub(xs, xe, dcs, dce);
+        var tas, tae = _bj_k_ux_div(u1s, u1e, dfs, dfe);
+        var tbs, tbe = _bj_k_ux_div(u2s, u2e, dfs, dfe);
+        var tc: f64 = _bj_rf_stub_root_ux(rl, xl, z0, dcs, dce);
+        if (tc == tc) {
+            var cs, ce = _bj_k_ux_from(tc);
+            if (xl > 0.0) {
+                tbs = cs;
+                tbe = ce;
+            } else {
+                tas = cs;
+                tae = ce;
+            }
+        }
+        _bj_rf_stub_d_ux(tas, tae, &w, &ws, &we);
+        d1 = w[0];
+        d1s = ws[0];
+        d1e = we[0];
+        _bj_rf_stub_d_ux(tbs, tbe, &w, &ws, &we);
+        d2 = w[0];
+        d2s = ws[0];
+        d2e = we[0];
+    }
+    var l: f64[1];
+    var e1 = _bj_rf_stub_len_ux(rl, xl, z0, d1s, d1e, &l);
+    if (e1 != 0) { return e1; }
+    var l1: f64 = l[0];
+    var e2 = _bj_rf_stub_len_ux(rl, xl, z0, d2s, d2e, &l);
+    if (e2 != 0) { return e2; }
+    var l2: f64 = l[0];
+    if (d2 < d1) {
+        out[0] = d2;
+        out[1] = l2;
+        out[2] = d1;
+        out[3] = l1;
+    } else {
+        out[0] = d1;
+        out[1] = l1;
+        out[2] = d2;
+        out[3] = l2;
+    }
+    return 0;
 }

@@ -352,6 +352,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
 - **Cyrius port, M4 part 2d-3a — the reflection coefficients and the Smith chart at their range edges**
   (`src/rf.cyr`): Smith's division guarded, its 53-bit chain where it leaves the range (ADR 0002 row 18 amended, see
   Fixed). 2d-3 runs as 2d-3a and 2d-3b (the stub match). `rf.tsv` grows by 1,137 edge rows (28,832).
+- **Cyrius port, M4 part 2d-3b — the stub match at its range edges** (`src/rf.cyr`): its whole chain with an
+  unbounded exponent where it leaves the range (ADR 0002 row 18 amended, see Fixed); the input impedance's chain and
+  row 39's root split into cores the 53-bit chain shares; validate.py's labels name row 18 where it acts with the
+  port's rows 13, 37 or 39. `rf.tsv` grows by 550 edge rows (29,382).
 
 ### Fixed
 
@@ -782,6 +786,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
   division now run with an unbounded exponent there. Cost (measured at load 12, so rough): the guard, about +2 ns on
   `rf/reflection_coefficient`, +20–25 ns on the complex one (≈ 79 → 99 ns) and on `gamma_from_z` (≈ 48 → 70 ns)
   (`port-parity.md` §89).
+- **rf** (ADR 0002 row 18 amended, M4 part 2d-3b): `single_stub_match_complex` refused a load of 10³⁰⁰(1 + j) on
+  10³⁰⁰ Ω, and the same load scaled to 2^-1074 Ω (1/Z₀ overflowed), though both have the unit case's solutions; where
+  its discriminant overflowed, both roots came out ±∞ and both d = λ/4. The whole chain now runs with an unbounded
+  exponent there. Cost (measured at load 8, so rough): within the noise, `rf/single_stub_match` 2.50–2.76 µs at
+  HEAD against 2.56–2.83 µs, the complex one 2.43–2.62 against 2.48–2.59 µs (`port-parity.md` §90).
 
 ### Performance
 
