@@ -4782,3 +4782,20 @@ Part 1c runs as two bites: 1c-1 the reader, 1c-2 the writer (Rust's `{:e}` form)
   measured, 0 pending, 79,737 accepted (ADR 01: 30,858; ADR 0002: 48,879)** over 609,123 rows; **all 416 digests
   equal**, HEAD's 410 unchanged. `json.tcyr` and `rf.tcyr` pass on all three. The gate is clean (17 steps, no
   warnings; execution coverage 323 of 323 functions), and `cyrius fuzz` passes.
+
+## 81. The golden corpus under GitHub's 50 MiB advisory (2026-11-15)
+
+- **The finding**: pushing part 1d, GitHub warned that `tests/golden/json.tsv` was 50.53 MiB (52,982,029 bytes),
+  above its 50 MiB recommendation (it refuses a file above 100 MiB). The note column was 25 MB of it, and it repeated
+  what each row already holds: a writer row's note gave its inputs, its outputs and its whole document (10.3 MB over
+  15,277 rows), a reader row's its document's preview and every value read (15.0 MB over 51,343 rows).
+- **The notes are short now** (`scripts/oracle/src/m_json.rs`): a writer's note is a 160-character Debug-quoted
+  preview of its document, with its length when longer, and a reader's `unchecked <d> -> Ok` or
+  `unchecked <d> -> Err(<serde's message>)`. validate.py reads only that message (serde's "number out of range").
+  `json.tsv` is **31.0 MB** (31,006,749 bytes); all 66,620 rows keep their function, class, inputs and outputs byte
+  for byte, so `json.cr.tsv` and `json.adr.tsv` are unchanged.
+- **A guard**: the generator (`main.rs`) and validate.py fail on any file they write past 48 MiB
+  (`MAX_FILE_BYTES`), in both modes, naming the file. The largest now: `json.tsv` 31.0 MB, `json.cr.tsv` 22.5 MB,
+  `wave.tsv` 22.0 MB.
+- **Result, every target** (x86_64 ELF, x86_64 PE, aarch64): validate.py 609,123 rows, 0 problems; **17 modules,
+  0 failing; 529,386 ok, 79,737 accepted**, all 416 digests equal on all three. The gate is clean.

@@ -313,6 +313,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
   rows and `json.cr.tsv` by 1,331 that serde_json's best-effort parse misreads; all match on all three targets, 36
   through row 36. rf.rs is ported: 13 modules, its 80 tests all accounted for. M4's Part 2, the range-edge review,
   follows.
+- **Golden corpus: `json.tsv` under GitHub's 50 MiB advisory** (`scripts/oracle/`): a push warned that `json.tsv`
+  was 50.53 MiB. Its notes were 25 MB of the 53: each writer row repeated its inputs and its document, and each
+  reader row its document's preview and values, all already in the row's inputs and outputs. A writer's note is now
+  a 160-character preview of its document, and a reader's `unchecked <d> -> Ok` or `-> Err(<serde's message>)`.
+  `json.tsv` is 31.0 MB (66,620 rows; every row's function, class, inputs and outputs byte for byte as before). The
+  generator and validate.py fail on any file past 48 MiB, in both modes.
 
 ### Fixed
 

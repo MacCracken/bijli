@@ -127,17 +127,29 @@ fn oracle_provenance(root: &Path) -> Result<String, String> {
 }
 
 /// Write `text` to `root/rel`, or in check mode compare it. Returns false on a mismatch.
+/// The largest file the oracle writes: GitHub warns on a push above 50 MiB and refuses one above
+/// 100 MiB, so a file nearing the warning has its notes trimmed or its module split first.
+const MAX_FILE_BYTES: usize = 48 << 20;
+
 fn emit(root: &Path, check: bool, out: &Output) -> Result<bool, String> {
     let path: PathBuf = root.join(&out.rel);
+    let fits = out.text.len() <= MAX_FILE_BYTES;
+    if !fits {
+        println!(
+            "TOO BIG  {} ({} bytes, over {MAX_FILE_BYTES}): trim its notes or split the module",
+            out.rel,
+            out.text.len()
+        );
+    }
     if !check {
         fs::write(&path, &out.text).map_err(|e| format!("{}: {e}", path.display()))?;
         println!("wrote    {} ({})", out.rel, out.summary);
-        return Ok(true);
+        return Ok(fits);
     }
     match fs::read_to_string(&path) {
         Ok(old) if old == out.text => {
             println!("ok       {} ({})", out.rel, out.summary);
-            Ok(true)
+            Ok(fits)
         }
         Ok(_) => {
             println!("DIFFERS  {}", out.rel);

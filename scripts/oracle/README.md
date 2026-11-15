@@ -163,7 +163,12 @@ fn <TAB> class <TAB> inputs <TAB> outputs <TAB> note
     text (`s:`), which the port reads back from the last-error record (ADR 0002 row 4);
   - `v:<len>`: a sequence, its elements' tokens following.
 - **A complex value is two `f:` tokens**, the real part first.
-- The **note** column is a human-readable rendering for review; the harness ignores it.
+- The **note** column is a human-readable rendering for review; the harness ignores it. It stays short where the
+  inputs and outputs already carry the text: a JSON writer's note is a 160-character preview of its document, a
+  reader's `unchecked <d> -> Ok` or `-> Err(<serde's message>)` (validate.py reads that message).
+- **No file passes 48 MiB** (`MAX_FILE_BYTES` in `main.rs` and `validate.py`): GitHub warns on a push above
+  50 MiB and refuses one above 100 MiB. The generator and validate.py fail on a larger file, in both modes; trim
+  its notes or split the module.
 
 ## Classes and comparison (port plan §7)
 

@@ -338,11 +338,24 @@ def cr_text(module: str, header: list, rows, fixes_of=None, source=None, columns
     return "\n".join(head + ["\t".join(f) for f in fixes]) + "\n"
 
 
+# The largest file this script writes, as the oracle's (main.rs MAX_FILE_BYTES): GitHub warns on a push above
+# 50 MiB and refuses one above 100 MiB.
+MAX_FILE_BYTES = 48 << 20
+
+
+def too_big(rel: str, text: str) -> list:
+    n = len(text.encode())
+    if n <= MAX_FILE_BYTES:
+        return []
+    return [f"{rel}: {n} bytes, over {MAX_FILE_BYTES}: trim its notes or split the module"]
+
+
 def check_corrections(root: Path, module: str, path_tsv: Path, fixes_of=None, source=None, columns=None) -> list:
     header, rows = read_tsv(path_tsv)
     text = cr_text(module, header, rows, fixes_of, source, columns)
     path = path_tsv.with_name(f"{module}.cr.tsv")
     rel = f"tests/golden/{module}.cr.tsv"
+    big = too_big(rel, text)
     if WRITE:
         if text:
             path.write_text(text)
@@ -350,11 +363,13 @@ def check_corrections(root: Path, module: str, path_tsv: Path, fixes_of=None, so
         elif path.exists():
             path.unlink()
             print(f"removed {rel}")
-        return []
+        return big
     if not text:
         return [f"{rel}: no row needs a correction, but the file exists"] if path.exists() else []
     if not path.exists() or path.read_text() != text:
         return [f"{rel}: differs from the corrected oracle (regenerate with --write)"]
+    if big:
+        return big
     print(f"ok   {module}.cr.tsv: {text.count(chr(10)) - 5} corrected rows")
     return []
 
@@ -8167,6 +8182,7 @@ def check_adr(root: Path, module: str, path: Path) -> list:
             f"# rows: {len(fixes)}",
         ]
         text = "\n".join(head + ["\t".join(f) for f in fixes]) + "\n"
+    big = too_big(rel, text)
     if WRITE:
         if text:
             target.write_text(text)
@@ -8174,11 +8190,13 @@ def check_adr(root: Path, module: str, path: Path) -> list:
         elif target.exists():
             target.unlink()
             print(f"removed {rel}")
-        return []
+        return big
     if not text:
         return [f"{rel}: no row needs a mapping, but the file exists"] if target.exists() else []
     if not target.exists() or target.read_text() != text:
         return [f"{rel}: differs from the ADR 0002 mappings (regenerate with --write)"]
+    if big:
+        return big
     print(f"ok   {module}.adr.tsv: {len(fixes)} mapped rows")
     return []
 

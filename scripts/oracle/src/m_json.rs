@@ -159,11 +159,6 @@ impl Kind {
             .collect()
     }
 
-    /// The values v for a note: each f64 in Debug form, each bool as `true` or `false`.
-    fn show(self, v: &[f64]) -> Vec<String> {
-        self.spell(v, |x| format!("{x:?}"))
-    }
-
     /// How many values a row's set holds: eight, or the width when wider (the first `width()` used).
     fn draws(self) -> usize {
         self.width().max(8)
@@ -658,16 +653,12 @@ fn unchecked(doc: &str) -> i64 {
 
 // ── rows ────────────────────────────────────────────────────────────────────────────
 
+// The notes stay short: a row's inputs and outputs already carry its document and values, and
+// json.tsv must stay under GitHub's 50 MB file advisory (main.rs checks it).
 fn writer_row(m: &mut Module, kind: Kind, v: &[f64]) {
     let text = kind.write(v);
     let ins = kind.toks(&v[..kind.width()]);
-    m.row_noted(
-        &format!("json::{}::to_string", kind.name()),
-        Class::A,
-        &ins,
-        &tokens(&text),
-        &text,
-    );
+    m.row_with_note(&format!("json::{}::to_string", kind.name()), Class::A, &ins, &tokens(&text), &preview(&text));
 }
 
 /// A document for a note: its first 160 characters, Debug-quoted, and its length when longer.
@@ -685,13 +676,9 @@ fn reader_row(m: &mut Module, kind: Kind, doc: &str) {
     let read = kind.read(doc);
     let d = if read.is_ok() { unchecked(doc) } else { 0 };
     let ins = [s(doc), i(d)];
-    let head = format!("{func}({}, unchecked {d})", preview(doc));
+    let head = format!("unchecked {d}");
     match read {
-        Ok(v) => {
-            let outs = kind.toks(&v);
-            let vals = kind.show(&v);
-            m.row_with_note(&func, Class::C, &ins, &outs, &format!("{head} -> Ok({})", vals.join(", ")));
-        }
+        Ok(v) => m.row_with_note(&func, Class::C, &ins, &kind.toks(&v), &format!("{head} -> Ok")),
         Err(msg) => {
             let outs = [Tok::Err("Deserialize".to_string())];
             m.row_with_note(&func, Class::C, &ins, &outs, &format!("{head} -> Err({msg})"));
@@ -1163,8 +1150,7 @@ impl Rows {
             return;
         }
         let text = serde_json::to_string(r).expect("serde_json writes every MieResult");
-        let note = if text.len() <= 2000 { text.clone() } else { preview(&text) };
-        self.m.row_noted("json::MieResult::to_string", Class::A, &ins, &tokens(&text), &note);
+        self.m.row_with_note("json::MieResult::to_string", Class::A, &ins, &tokens(&text), &preview(&text));
     }
 
     fn mie_reader(&mut self, doc: &str) {
@@ -1175,14 +1161,9 @@ impl Rows {
         let read = serde_json::from_str::<MieResult>(black_box(doc));
         let d = if read.is_ok() { unchecked(doc) } else { 0 };
         let ins = [s(doc), i(d)];
-        let head = format!("{func}({}, unchecked {d})", preview(doc));
+        let head = format!("unchecked {d}");
         match read {
-            Ok(r) => {
-                let outs = mie_toks(&r);
-                let n = r.a.len() + r.b.len();
-                let note = format!("{head} -> Ok(q_ext {:?}, {n} coefficients)", r.q_ext);
-                self.m.row_with_note(func, Class::C, &ins, &outs, &note);
-            }
+            Ok(r) => self.m.row_with_note(func, Class::C, &ins, &mie_toks(&r), &format!("{head} -> Ok")),
             Err(e) => {
                 let outs = [Tok::Err("Deserialize".to_string())];
                 self.m.row_with_note(func, Class::C, &ins, &outs, &format!("{head} -> Err({e})"));
@@ -1442,8 +1423,7 @@ impl Rows {
         if !self.seen.insert(format!("w{name}{ins:?}")) {
             return;
         }
-        let note = if text.len() <= 2000 { text.to_string() } else { preview(text) };
-        self.m.row_noted(&format!("json::{name}::to_string"), Class::A, &ins, &tokens(text), &note);
+        self.m.row_with_note(&format!("json::{name}::to_string"), Class::A, &ins, &tokens(text), &preview(text));
     }
 
     fn rf_reader<T>(&mut self, name: &str, doc: &str, read: Result<T, String>, toks: impl Fn(&T) -> Vec<Tok>) {
@@ -1453,7 +1433,7 @@ impl Rows {
         let func = format!("json::{name}::from_str");
         let d = if read.is_ok() { unchecked(doc) } else { 0 };
         let ins = [s(doc), i(d)];
-        let head = format!("{func}({}, unchecked {d})", preview(doc));
+        let head = format!("unchecked {d}");
         match read {
             Ok(v) => self.m.row_with_note(&func, Class::C, &ins, &toks(&v), &format!("{head} -> Ok")),
             Err(e) => {
