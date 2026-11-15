@@ -9,8 +9,8 @@
 # M1 part 5d-1), Clausius–Mossotti's ε_r, the trig-free Fresnel cosine, the Liénard–Wiechert R_eff and κ and the
 # parallel combinations (src/crmath_edge.cyr, M2 parts 2c-2 to 2c-5), and the materials' 53-bit roots and Γ
 # (src/crmath_vx.cyr, M2 part 2d-2c), M3's exact sum-of-squares threshold (src/crmath_cmp.cyr, M3 part 2c-1), ABCD
-# propagation (src/crmath_edge.cyr, M3 part 2c-2), the Mueller matrices' four-term sums and the Jones chains
-# (src/crmath_vx.cyr, M3 parts 2d-1a and 2d-1b), against Fractions. Built from the math sources the bundle carries
+# propagation (src/crmath_edge.cyr, M3 part 2c-2), the Mueller, Jones and Stokes chains (src/crmath_vx.cyr, M3 parts
+# 2d-1a to 2d-1c), against Fractions and MPFR's widest exponent range. Built from the math sources the bundle carries
 # (src/constants.cyr … src/mathx.cyr, in the manifest's order and byte for byte what dist/bijli.cyr holds): the bundle
 # is `private` and these entry points are bijli-internal, so a consumer of dist/bijli.cyr can't call them, but a file of
 # internals only has no marker and can be included on its own.
@@ -413,6 +413,25 @@ fn _call(fp, fl, w): i64 {
         var jw: f64[1];
         if (_bj_vx_overlap(w, w + 32, &jw) != 0) { return 0 - 1; }
         r = jw[0];
+    }
+    elif (_is(fp, fl, "sjones") == 1) {
+        # sjones p0 p1 p2 p3 k: part k of the Stokes vector of a Jones vector (_bj_vx_stokes, M3 part 2d-1c); all ones
+        # when a part is not finite
+        var sj: f64[4];
+        if (_bj_vx_stokes(w, &sj) == 2) { return 0 - 1; }
+        r = sj[load64(w + 32)];
+    }
+    elif (_is(fp, fl, "sdop") == 1) {
+        # sdop s0 s1 s2 s3: the degree of polarization (_bj_vx_dop), for S₀ > 0 and finite parts
+        r = _bj_vx_dop(w);
+    }
+    elif (_is(fp, fl, "sellip") == 1) {
+        # sellip s0 s1 s2 s3: the ellipticity angle (_bj_vx_ellip)
+        r = _bj_vx_ellip(w);
+    }
+    elif (_is(fp, fl, "sorient") == 1) {
+        # sorient s0 s1 s2 s3: the orientation angle (_bj_vx_orient)
+        r = _bj_vx_orient(w);
     }
     elif (_is(fp, fl, "ux_pow") == 1) {
         # ux_pow s e y part: (s·2^e)^y's s (part 0) or e (part 1)

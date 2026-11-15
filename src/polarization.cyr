@@ -24,7 +24,8 @@
 # Rust's in Rust's order, with an unbounded exponent at a range edge (ADR 0002 row 18, M3 part 2d-1a: the Mueller
 # matrices' angles 2θ past DBL_MAX, their four-term sums, the waveplate's subnormal sin²(δ/2); 2d-1b: the Jones
 # vectors' and matrices' complex chains, src/crmath_vx.cyr's, polarization.rs's SAFE_MIN_INTENSITY of 1e-290 with
-# them). The JSON of the four structs is part 1a-2's.
+# them; 2d-1c: the Stokes vectors' from_jones, degree of polarization and angles). The JSON of the four structs is part
+# 1a-2's.
 
 private
 
@@ -447,9 +448,13 @@ public fn BjStokesVector_default(): BjStokesVector {
 }
 
 # The Stokes vector of a fully polarized Jones vector: S₀ = |E_x|² + |E_y|², S₁ = |E_x|² − |E_y|², S₂ = 2 Re(E_x E_y*)
-# and S₃ = 2 Im(E_x E_y*), +1 for right-hand circular light (the module comment). Mirrors `StokesVector::from_jones`.
+# and S₃ = 2 Im(E_x E_y*), +1 for right-hand circular light (the module comment). With an unbounded exponent at a range
+# edge (ADR 0002 row 18, src/crmath_vx.cyr's _bj_vx_stokes); a part that is not finite keeps BjComplex's chain. Mirrors
+# `StokesVector::from_jones`.
 #must_use
 public fn BjStokesVector_from_jones(j: BjJonesVector): BjStokesVector {
+    var w: BjStokesVector;
+    if (_bj_vx_stokes(_bj_pol_f64p(&j), _bj_pol_f64p(&w)) != 2) { return w; }
     var ix: f64 = j.x.norm_sq();
     var iy: f64 = j.y.norm_sq();
     var cy: BjComplex = j.y.conj();
@@ -528,8 +533,10 @@ impl BjStokesVector {
     }
 
     # The degree of polarization √(S₁² + S₂² + S₃²)/S₀ (hypot's, so no square under- or overflows): 0 unpolarized, 1
-    # fully polarized, for any positive finite S₀. DivisionByZero for S₀ = 0; InvalidParameter "Stokes vector must be
-    # finite with S₀ > 0, got [..]" for S₀ < 0 or a non-finite part. Mirrors `StokesVector::degree_of_polarization`.
+    # fully polarized, for any positive finite S₀; each hypot to 53 bits with an unbounded exponent where Rust's passes
+    # DBL_MAX or falls below 2^-1022 (ADR 0002 row 18, _bj_vx_dop). DivisionByZero for S₀ = 0; InvalidParameter
+    # "Stokes vector must be finite with S₀ > 0, got [..]" for S₀ < 0 or a non-finite part. Mirrors
+    # `StokesVector::degree_of_polarization`.
     public fn degree_of_polarization(self): Result {
         var s0: f64 = self.s.0;
         if (s0 == 0.0) { return Err(_bj_err_division_by_zero("cannot compute DOP for zero-intensity light")); }
@@ -541,33 +548,24 @@ impl BjStokesVector {
             _bj_pol_fmt4(t, p);
             return Err(BJ_ERR_INVALID_PARAMETER);
         }
-        var h1: f64 = _bj_hypot(p[1], p[2]);
-        var h2: f64 = _bj_hypot(h1, p[3]);
-        var d: f64 = h2 / s0;
+        var d: f64 = _bj_vx_dop(p);
         return Ok(d);
     }
 
     # The ellipticity angle χ, tan 2χ = S₃/√(S₁² + S₂²): 0 for linear light, +π/4 for right-hand circular (IEEE), −π/4
-    # for left. Mirrors `StokesVector::ellipticity_angle`.
+    # for left. With an unbounded exponent where S₁² or S₂² leaves the range or the angle falls below 2^-1022 (ADR 0002
+    # row 18, _bj_vx_ellip). Mirrors `StokesVector::ellipticity_angle`.
     #must_use
     public fn ellipticity_angle(self): f64 {
-        var a: f64 = self.s.1;
-        var b: f64 = self.s.2;
-        var c: f64 = self.s.3;
-        var q: f64 = a * a + b * b;
-        var lin: f64 = f64_sqrt(q);
-        var t: f64 = _bj_atan2(c, lin);
-        var x: f64 = 0.5 * t;
+        var x: f64 = _bj_vx_ellip(_bj_pol_f64p(self));
         return x;
     }
 
-    # The orientation angle ψ of the polarization ellipse, tan 2ψ = S₂/S₁. Mirrors `StokesVector::orientation_angle`.
+    # The orientation angle ψ of the polarization ellipse, tan 2ψ = S₂/S₁; an angle below 2^-1022 is taken to 53 bits
+    # and its half rounded once (ADR 0002 row 18, _bj_vx_orient). Mirrors `StokesVector::orientation_angle`.
     #must_use
     public fn orientation_angle(self): f64 {
-        var a: f64 = self.s.1;
-        var b: f64 = self.s.2;
-        var t: f64 = _bj_atan2(b, a);
-        var x: f64 = 0.5 * t;
+        var x: f64 = _bj_vx_orient(_bj_pol_f64p(self));
         return x;
     }
 }

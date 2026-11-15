@@ -3896,3 +3896,80 @@ E and B = n̂ × E/c.
   measured, 0 pending, 76,443 accepted (ADR 01: 29,441; ADR 0002: 47,002)** over 569,268 rows; **all 380 digests
   equal**. The seven Jones functions' digests changed; the other 373 are unchanged. `polarization.tcyr` passes on all
   three. The gate is clean (17 steps, no warnings; execution coverage 288 of 288 functions).
+
+## 69. M3 part 2d-1c: the Stokes vectors at their range edges (2026-11-14)
+
+- **ADR 0002 row 18, amended for the Stokes vectors.** This closes 2d-1, so every polarization chain now follows the
+  rule.
+  - **`from_jones`** is hisab's chain on a Jones vector's parts: |x|², |y|² and x·y*, then S₀ = |x|² + |y|²,
+    S₁ = |x|² − |y|², S₂ = 2 Re(x·y*) and S₃ = 2 Im(x·y*). It uses 2d-1b's box, and runs the chain with an unbounded
+    exponent where a finite part leaves the box, each output rounded once; the doubling is exact there
+    (`_bj_vx_stokes`). A part that is not finite keeps BjComplex's chain.
+  - **The degree of polarization** keeps Rust's hypot(hypot(S₁, S₂), S₃)/S₀ where both hypots are their 53-bit values:
+    an exact 0, or a finite value above 2^-1022 (`_bj_vx_sure`; a hypot rounded up to 2^-1022 may lie below it).
+    Otherwise each hypot runs to 53 bits with an unbounded exponent and the quotient rounds once (`_bj_vx_dop`).
+    `_bj_vx_hypot_ux` scales both operands by one power of two, the larger into [1, 2), and takes crmath's correctly
+    rounded hypot, since rounding commutes with that scaling. An operand 2^600 times smaller leaves the larger: it adds
+    less than 2^-1199 relative, and the larger is a 53-bit number.
+  - **The ellipticity angle** keeps Rust's 0.5·atan2(S₃, √(S₁² + S₂²)) where S₁ and S₂ are boxed (their squares
+    normal or 0, so the root is exact up to its rounding) and atan2's value is its 53-bit one. Otherwise S₁² + S₂², its
+    root and atan2 run to 53 bits unbounded and the half rounds once (`_bj_vx_ellip`). **The orientation angle** does
+    the same for an angle below 2^-1022 (`_bj_vx_orient`; S₁ > 0 there).
+  - **`_bj_vx_atan2_ux`** gives atan2(y, x) to 53 bits for x ≥ 0 with an unbounded exponent:
+    - where |y/x| < 2^-59, the 53-bit quotient y/x: atan2 = (y/x)(1 − δ) with δ < 2^-118, and a quotient of two 53-bit
+      numbers that is not one itself lies at least 2^-106 (relative) from a midpoint of the 53-bit grid;
+    - where |y/x| > 2^1000, ±π/2's;
+    - between, both scaled into binary64's range, where atan2 is correctly rounded.
+- **The oracle**: `polarization.tsv` gains 125 rows after every earlier row (`stokes_edges`; the old file an exact
+  prefix). 2d-1b's Jones edge vectors moved into `jones_edge_vectors`, unchanged, so `stokes_edges` can take them:
+  - `from_jones` on those 24 vectors (22 rows new);
+  - 26 Stokes vectors for the degree of polarization and both angles: hypots past DBL_MAX in either hypot, hypots
+    below 2^-1022, S₁² + S₂² past DBL_MAX and below 2^-1074, angles below 2^-1022, zeros and non-finite parts;
+  - angles below 2^-1022 off the subnormal grid, S₂/S₁ and S₃/S₁ for twelve odd S₁ (24 rows);
+  - a hypot whose operands lie 2^21.5 apart (S = (DBL_MAX, DBL_MAX, DBL_MAX, 2^-21·DBL_MAX)).
+- **validate.py**: `pol_eval` under `r18` takes `from_jones` with finite parts through the unbounded chain, and the
+  degree of polarization and the angles from MPFR at 53 bits with its widest exponent range (`mpfr_ref.wide`'s hypot
+  and atan2, independent of the port's scaling), halved by `pol_half`. The harness passed on its first run.
+- **cr_verify.py's sjones, sdop, sellip and sorient families**: each part of `from_jones` against exact.py's chain,
+  and the degree of polarization and both angles against `mpfr_ref.wide`, on parts around the box, near DBL_MAX and
+  subnormal, hypot operands 2^10 to 2^40 apart, and angles below 2^-1022. **70,000 calls per target, 0 mismatches on
+  x86_64 and aarch64**; Rust's chain differs from the exact one on 4,233 of them. The run that checked them also
+  checked dot4's and the Jones families' 180,000 again: 250,000 calls per target, 0 mismatches.
+- **Mutations**, each run through the parity harness:
+  - `from_jones` without its doubling: 575 failing rows; with S₁ as a sum: 493; without the conjugate: 991;
+  - the degree of polarization's guard off: 7;
+  - the ellipticity angle's box off: 19, and its 53-bit test off: 2;
+  - the orientation angle's guard off: 2;
+  - `_bj_vx_atan2_ux`'s small-quotient branch off: 34, and that quotient rounded into binary64 first: 4;
+  - `_bj_vx_hypot_ux` scaling by one power of two too many: 8;
+  - its far-ratio shortcut at 2^20 instead of 2^600: 1, the row added for it after no row caught it;
+  - the first hypot's test dropped: not caught. A subnormal first hypot moves a normal second one by less than
+    2^-1075, so only a near-tie could show it; the test stays, since the proof needs it.
+- **Mappings**: `polarization.adr.tsv` holds 3,318 rows: row 33's 2,321 and row 18's 997. Row 14 maps no
+  polarization row now: its 40 `from_jones` rows are row 18's. The Stokes 172 are `from_jones` 141, the ellipticity
+  angle 21, the degree of polarization 8 and the orientation angle 2; 141 are older rows. What Rust gave on them (a row
+  can show several):
+  - `from_jones`: NaN for ±∞ on 46 rows, NaN or ±∞ for a finite value on 25, the wrong zero sign on 31, 0 for a
+    nonzero value or the reverse on 4, an ulp off on 35 and 2 to 16 on 5;
+  - the degree of polarization: ∞ for a finite value on 4 (√2 at S = (DBL_MAX, DBL_MAX, DBL_MAX, 0)), more than 16 ulps
+    off on 3 (0.57724 for 1/√3 on subnormal parts), an ulp off on 1;
+  - the ellipticity angle: 0 for a nonzero value on 12 (S₁² past DBL_MAX: 0 for 0.3077), more than 16 ulps off on 7
+    (S₁² below 2^-1074: π/4 for π/8), an ulp off on 2;
+  - the orientation angle: an ulp off on 2 (halves of angles below 2^-1022).
+- **Tests**: `cyrius_stokes_row18` in `tests/polarization.tcyr` (6 assertions, 208 in the file):
+  - `from_jones`' S₀ of three squares of 2.25·2^-1074: 7·2^-1074;
+  - the degree of polarization √2 with hypot past DBL_MAX, and 1/√3 on subnormal parts;
+  - the ellipticity angle 0.3077 with S₁² past DBL_MAX, and π/8 with S₁² below 2^-1074;
+  - an orientation angle below 2^-1022 with its half rounded once.
+- **Benchmarks.** `from_jones` replaces BjComplex's calls (two `norm_sq`, a `conj` and a `mul`, each with its range
+  test) with the shared kernel's single box test:
+  - a full bench interleaved against 2d-1b's tree (three rounds, load 2.7 to 3.3): `polarization/stokes_from_jones`
+    120–147 → 56–59 ns (−55 %); every other row within the load's noise (median ratio 1.00 over 81). The record takes
+    59 ns;
+  - a micro-bench, interleaved with HEAD four times: the degree of polarization 345–394 → 362–399 ns and the
+    orientation angle 319–364 → 327–445 ns (both within about 4 % once the load settled), the ellipticity angle
+    291–329 → 320–341 ns (+5 to 10 %: its guard calls `_bj_vx_box1` twice and `_bj_vx_sure` once).
+- **Result, every target** (x86_64 ELF, x86_64 PE, aarch64): **16 modules, 0 failing; 492,818 ok, 0 failed, 0
+  measured, 0 pending, 76,575 accepted (ADR 01: 29,441; ADR 0002: 47,134)** over 569,393 rows; **all 380 digests
+  equal**. The four Stokes functions' digests changed; the other 376 are unchanged. `polarization.tcyr` passes on all
+  three. The gate is clean (17 steps, no warnings; execution coverage 288 of 288 functions).

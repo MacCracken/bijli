@@ -26,6 +26,10 @@
 //! 2^-1022 that round twice, products past DBL_MAX that cancel, intensities around polarization.rs's 1e-290 rescale
 //! threshold and past DBL_MAX, nearly orthogonal pairs whose |⟨J₁|J₂⟩|² underflows, and a non-finite row beside an
 //! edge.
+//!
+//! M3 part 2d-1c (ADR 0002 row 18) appends the Stokes vectors' edge grid: `from_jones` on 2d-1b's Jones vectors, and
+//! Stokes vectors whose hypots pass DBL_MAX or fall below 2^-1022, whose S₁² + S₂² leaves the range, and whose angles
+//! fall below 2^-1022.
 
 use crate::grids::{Rng, pow2, specials};
 use crate::m_field::res_f;
@@ -426,6 +430,7 @@ pub fn emit() -> Module {
     waveplate_edges(m);
     mueller_edges(m);
     jones_edges(m);
+    stokes_edges(m);
     rows.m
 }
 
@@ -530,11 +535,11 @@ fn mueller_edges(m: &mut Rows) {
     }
 }
 
-/// M3 part 2d-1b (ADR 0002 row 18): the Jones vectors and matrices at their range edges.
-fn jones_edges(m: &mut Rows) {
+/// M3 part 2d-1b's Jones vectors at the range edges (shared with 2d-1c's Stokes grid).
+fn jones_edge_vectors() -> Vec<JonesVector> {
     let (a, t, h, b, mx, nan) = (1.5 * pow2(-537), 1e-160, 1e200, 1e154, f64::MAX, f64::NAN);
     let jvec = |p: [f64; 4]| JonesVector::new(Complex::new(p[0], p[1]), Complex::new(p[2], p[3]));
-    let vs: Vec<JonesVector> = [
+    [
         [a, a, a, 0.0],
         [a, -a, a, a],
         [t, 3.0 * t, -2.0 * t, t],
@@ -564,7 +569,13 @@ fn jones_edges(m: &mut Rows) {
     ]
     .iter()
     .map(|&q| jvec(q))
-    .collect();
+    .collect()
+}
+
+/// M3 part 2d-1b (ADR 0002 row 18): the Jones vectors and matrices at their range edges.
+fn jones_edges(m: &mut Rows) {
+    let (a, t, h, b, mx, nan) = (1.5 * pow2(-537), 1e-160, 1e200, 1e154, f64::MAX, f64::NAN);
+    let vs = jones_edge_vectors();
     for &v in &vs {
         m.row("JonesVector::intensity", Class::A, &jv(v), &[f(black_box(v).intensity())]);
         m.row("JonesVector::normalized", Class::A, &jv(v), &res_jv(black_box(v).normalized()));
@@ -598,4 +609,63 @@ fn jones_edges(m: &mut Rows) {
             m.row("JonesMatrix::compose", Class::A, &[jm(j), jm(k)].concat(), &jm(black_box(j).compose(&k)));
         }
     }
+}
+
+/// M3 part 2d-1c (ADR 0002 row 18): the Stokes vectors at their range edges.
+fn stokes_edges(m: &mut Rows) {
+    for v in jones_edge_vectors() {
+        m.row("StokesVector::from_jones", Class::A, &jv(v), &sv(StokesVector::from_jones(black_box(&v))));
+    }
+    let (mx, h, nan) = (f64::MAX, 1e200, f64::NAN);
+    let ss = [
+        // hypot past DBL_MAX, in the first hypot or the second
+        [mx, mx, mx, 0.0],
+        [mx, 0.8 * mx, 0.6 * mx, 0.5 * mx],
+        [mx, 0.6 * mx, 0.8 * mx, 0.0],
+        [mx, -mx, 0.0, mx],
+        [1.0, mx, mx, mx],
+        // hypots below 2^-1022
+        [3e-320, 1e-320, 1e-320, 1e-320],
+        [1e-300, 1e-310, 2e-310, 3e-310],
+        [5e-324, 5e-324, 5e-324, 5e-324],
+        [1e-310, 3e-311, 4e-311, 0.0],
+        [2.0, 7e-321, -3e-321, 1e-321],
+        // S₁² + S₂² past DBL_MAX or below 2^-1022 (Rust's ellipticity 0 or ±π/4)
+        [1.0, h, h, h],
+        [1.0, h, 0.0, -1.0],
+        [1.0, 1e-200, 0.0, 1e-200],
+        [1.0, 1e-200, 1e-200, -3e-200],
+        [1.0, 1e-170, 2e-170, 0.0],
+        // angles below 2^-1022, whose halves Rust rounded twice
+        [1.0, 1.0, 0.0, 1e-310],
+        [1.0, 1e300, 0.0, 1e-20],
+        [1.0, 3.0, 0.0, 5e-324],
+        [1.0, 1.0, 1e-310, 0.0],
+        [1.0, 2.0, 3e-308, 0.0],
+        [1.0, 1e300, 1e-30, 0.0],
+        [1.0, 7.0, -2.2e-308, 1.0],
+        // in range, zeros and non-finite parts
+        [1.0, 0.3, -0.4, 0.5],
+        [1.0, -0.0, -0.0, -0.0],
+        [1.0, nan, h, h],
+        [1.0, h, h, f64::INFINITY],
+    ];
+    for x in ss {
+        let st = StokesVector::new(x[0], x[1], x[2], x[3]);
+        let dop = black_box(st).degree_of_polarization();
+        m.row("StokesVector::degree_of_polarization", Class::C, &sv(st), &res_f(dop));
+        m.row("StokesVector::ellipticity_angle", Class::C, &sv(st), &[f(black_box(st).ellipticity_angle())]);
+        m.row("StokesVector::orientation_angle", Class::C, &sv(st), &[f(black_box(st).orientation_angle())]);
+    }
+    // angles below 2^-1022 off the subnormal grid: S₂/S₁ and S₃/S₁ for odd S₁, whose halves can round twice
+    for k in 0..12_u32 {
+        let (d, y) = (f64::from(2 * k + 3), 1e-308 + f64::from(k) * 3.3e-311);
+        let st = StokesVector::new(1.0, d, y, 0.0);
+        m.row("StokesVector::orientation_angle", Class::C, &sv(st), &[f(black_box(st).orientation_angle())]);
+        let se = StokesVector::new(1.0, d, 0.0, -y);
+        m.row("StokesVector::ellipticity_angle", Class::C, &sv(se), &[f(black_box(se).ellipticity_angle())]);
+    }
+    // an unbounded hypot whose smaller operand is 2^-21.5 of the larger: it still moves the 53-bit result
+    let st = StokesVector::new(mx, mx, mx, mx * pow2(-21));
+    m.row("StokesVector::degree_of_polarization", Class::C, &sv(st), &res_f(black_box(st).degree_of_polarization()));
 }

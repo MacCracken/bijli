@@ -9872,6 +9872,185 @@ fn _bj_vx_overlap(p: *f64, q: *f64, out: *f64): i64 {
     return 0;
 }
 
+# ── Stokes vectors (M3 part 2d-1c): polarization.cyr's from_jones, degree of polarization and angles ─────────────────
+# from_jones is hisab's chain on a Jones vector's parts, boxed as the Jones section's (|x|², |y|², x·conj(y), then
+# sums and doubles). The other three read a Stokes vector: Rust's hypot(hypot(S₁, S₂), S₃)/S₀, 0.5·atan2(S₃,
+# √(S₁² + S₂²)) and 0.5·atan2(S₂, S₁). hypot and atan2 are correctly rounded (src/crmath.cyr), so with an unbounded
+# exponent each is rounded to 53 bits: a hypot past DBL_MAX or below 2^-1022, the squares of S₁ and S₂ outside the
+# box, and an angle below 2^-1022 (whose half then rounded twice) are the edges. Each guard reads Rust's values and
+# keeps them where they are the 53-bit ones (normal, or an exact 0); otherwise the chain runs unbounded and its last
+# operation rounds once. A part that is not finite keeps Rust's chain.
+
+# hypot(x, y) to 53 bits with an unbounded exponent, for x = xs·2^xe and y = ys·2^ye (normalised significands, or 0):
+# both scaled by the same power of two, the larger into [1, 2), and crmath's correctly rounded hypot of the scaled
+# pair (rounding commutes with that scaling). A part 2^600 times smaller than the other leaves the larger's value: it
+# adds less than 2^-1199 relative, and the larger is a 53-bit number. (s, e), s ≥ 0.
+#must_use
+fn _bj_vx_hypot_ux(xs: f64, xe, ys: f64, ye): (f64, i64) {
+    var ax: f64 = f64_abs(xs);
+    var ay: f64 = f64_abs(ys);
+    if (ay == 0.0) { return (ax, xe); }
+    if (ax == 0.0) { return (ay, ye); }
+    var e = xe;
+    var d = xe - ye;
+    if (ye > xe) {
+        e = ye;
+        d = ye - xe;
+        var t: f64 = ax;
+        ax = ay;
+        ay = t;
+    }
+    if (d > 600) { return (ax, e); }
+    var sc: f64 = _bj_k_cr_pow2(0 - d);
+    var by: f64 = ay * sc;                          # exact: at least 2^-600
+    var h: f64 = _bj_hypot(ax, by);
+    var hs, he = _bj_k_ux_norm(h, e);
+    return (hs, he);
+}
+
+# atan2(y, x) to 53 bits with an unbounded exponent, for a double y and x = xs·2^xe ≥ 0 (a normalised significand, or
+# +0): (s, e). Where |y/x| < 2^-59, atan2 = (y/x)(1 − δ) with δ < 2^-118, while y/x, a quotient of two 53-bit numbers
+# that is not one itself, lies at least 2^-106 (relative) from a midpoint of the 53-bit grid: so its 53-bit rounding is
+# y/x's. Past 2^1000 it is ±π/2's. Between, both scale into binary64's range, and atan2 is correctly rounded there.
+#must_use
+fn _bj_vx_atan2_ux(y: f64, xs: f64, xe): (f64, i64) {
+    if (y == 0.0 || xs == 0.0) {
+        var t0: f64 = _bj_atan2(y, xs);
+        var s0, e0 = _bj_k_ux_from(t0);
+        return (s0, e0);
+    }
+    var ys, ye = _bj_k_ux_from(y);
+    var d = ye - xe;
+    if (d < 0 - 60) {
+        var qs, qe = _bj_k_ux_div(ys, ye, xs, xe);
+        return (qs, qe);
+    }
+    if (d > 1000) {
+        var tp: f64 = _bj_atan2(y, 0.0);
+        var sp, ep = _bj_k_ux_from(tp);
+        return (sp, ep);
+    }
+    var sc: f64 = _bj_k_cr_pow2(d);
+    var yy: f64 = ys * sc;                          # exact: in [2^-60, 2^1001)
+    var t: f64 = _bj_atan2(yy, xs);
+    var s, e = _bj_k_ux_from(t);
+    return (s, e);
+}
+
+# 1 when the double x is its own 53-bit value as a result of a correctly rounded operation: an exact 0, or
+# 2^-1022 < |x| ≤ DBL_MAX (a result rounded up to 2^-1022 may lie below it).
+#must_use
+fn _bj_vx_sure(x: f64): i64 {
+    var a: f64 = f64_abs(x);
+    if (x == 0.0 || (a > _BJ_VX_MN && a <= _BJ_VX_HI)) { return 1; }
+    return 0;
+}
+
+# The Stokes vector of the Jones vector p (four parts) into out: S₀ = |x|² + |y|², S₁ = |x|² − |y|², S₂ = 2 Re(x·y*) and
+# S₃ = 2 Im(x·y*), hisab's chain; with an unbounded exponent where a finite part leaves the box, each output rounded
+# once (the doubling is exact there). Returns the class; for class 2, out is untouched and the caller keeps BjComplex's.
+#must_use
+fn _bj_vx_stokes(p: *f64, out: *f64): i64 {
+    var c = _bj_vx_cls4(p, 0, 2);
+    if (c == 2) { return 2; }
+    var a: f64 = p[0];
+    var b: f64 = p[1];
+    var x: f64 = p[2];
+    var y: f64 = p[3];
+    var ny: f64 = -y;
+    if (c == 0) {
+        var ix: f64 = a * a + b * b;
+        var iy: f64 = x * x + y * y;
+        var cr: f64 = a * x - b * ny;
+        var ci: f64 = a * ny + b * x;
+        out[0] = ix + iy;
+        out[1] = ix - iy;
+        out[2] = 2.0 * cr;
+        out[3] = 2.0 * ci;
+        return 0;
+    }
+    var as, ae = _bj_k_ux_from(a);
+    var bs, be = _bj_k_ux_from(b);
+    var xs, xe = _bj_k_ux_from(x);
+    var ys, ye = _bj_k_ux_from(y);
+    var ixs, ixe = _bj_vx_sq2(as, ae, bs, be);
+    var iys, iye = _bj_vx_sq2(xs, xe, ys, ye);
+    out[0] = _bj_k_ux_add_f64(ixs, ixe, iys, iye);
+    out[1] = _bj_k_ux_sub_f64(ixs, ixe, iys, iye);
+    var p1s, p1e = _bj_vx_mul(a, x);
+    var p2s, p2e = _bj_vx_mul(b, ny);
+    var rs, re = _bj_k_ux_sub(p1s, p1e, p2s, p2e);
+    var p3s, p3e = _bj_vx_mul(a, ny);
+    var p4s, p4e = _bj_vx_mul(b, x);
+    var is, ie = _bj_k_ux_add(p3s, p3e, p4s, p4e);
+    out[2] = _bj_k_ux_round(rs, re + 1, 0.0);
+    out[3] = _bj_k_ux_round(is, ie + 1, 0.0);
+    return 1;
+}
+
+# The degree of polarization hypot(hypot(S₁, S₂), S₃)/S₀ of the Stokes vector s, for a positive finite S₀ and finite
+# parts (the caller's checks): Rust's chain where both hypots are their 53-bit values (_bj_vx_sure), else each hypot
+# to 53 bits with an unbounded exponent and the quotient rounded once.
+#must_use
+fn _bj_vx_dop(s: *f64): f64 {
+    var s0: f64 = s[0];
+    var s1: f64 = s[1];
+    var s2: f64 = s[2];
+    var s3: f64 = s[3];
+    var h1: f64 = _bj_hypot(s1, s2);
+    var h2: f64 = _bj_hypot(h1, s3);
+    if (_bj_vx_sure(h1) == 1 && _bj_vx_sure(h2) == 1) {
+        var d: f64 = h2 / s0;
+        return d;
+    }
+    var as, ae = _bj_k_ux_from(s1);
+    var bs, be = _bj_k_ux_from(s2);
+    var cs, ce = _bj_k_ux_from(s3);
+    var hs, he = _bj_vx_hypot_ux(as, ae, bs, be);
+    var ks, ke = _bj_vx_hypot_ux(hs, he, cs, ce);
+    var zs, ze = _bj_k_ux_from(s0);
+    var u: f64 = _bj_k_ux_div_f64(ks, ke, zs, ze);
+    return u;
+}
+
+# The ellipticity angle 0.5·atan2(S₃, √(S₁² + S₂²)) of the Stokes vector s: Rust's chain where S₁ and S₂ are boxed
+# (their squares normal or 0) and atan2's value is its 53-bit one, or where a part is not finite; else the chain with
+# an unbounded exponent, the half rounded once.
+#must_use
+fn _bj_vx_ellip(s: *f64): f64 {
+    var s1: f64 = s[1];
+    var s2: f64 = s[2];
+    var s3: f64 = s[3];
+    var q: f64 = s1 * s1 + s2 * s2;
+    var lin: f64 = f64_sqrt(q);
+    var t: f64 = _bj_atan2(s3, lin);
+    var x: f64 = 0.5 * t;
+    if (_bj_vx_finite4(s1, s2, s3, 0.0) == 0) { return x; }
+    if (_bj_vx_box1(s1) == 1 && _bj_vx_box1(s2) == 1 && _bj_vx_sure(t) == 1) { return x; }
+    var as, ae = _bj_k_ux_from(s1);
+    var bs, be = _bj_k_ux_from(s2);
+    var qs, qe = _bj_vx_sq2(as, ae, bs, be);
+    var ls, le = _bj_k_ux_sqrt(qs, qe);
+    var ts, te = _bj_vx_atan2_ux(s3, ls, le);
+    var u: f64 = _bj_k_ux_round(ts, te - 1, 0.0);
+    return u;
+}
+
+# The orientation angle 0.5·atan2(S₂, S₁) of the Stokes vector s: Rust's where atan2's value is its 53-bit one (or a
+# part is not finite), else, for an angle below 2^-1022 (S₁ > 0 then), the angle to 53 bits and its half rounded once.
+#must_use
+fn _bj_vx_orient(s: *f64): f64 {
+    var s1: f64 = s[1];
+    var s2: f64 = s[2];
+    var t: f64 = _bj_atan2(s2, s1);
+    var x: f64 = 0.5 * t;
+    if (_bj_vx_sure(t) == 1 || _bj_vx_finite4(s1, s2, 0.0, 0.0) == 0) { return x; }
+    var as, ae = _bj_k_ux_from(s1);
+    var ts, te = _bj_vx_atan2_ux(s2, as, ae);
+    var u: f64 = _bj_k_ux_round(ts, te - 1, 0.0);
+    return u;
+}
+
 # --- fmtf.cyr ---
 
 # fmtf.cyr — f64 to text: the shortest round-trip digits, in Rust's Display and serde_json's forms.
@@ -22307,7 +22486,8 @@ fn _bj_rel_fields_edge(charge: f64, obs: *f64, st: *f64, e_out: *BjFieldVector, 
 # Rust's in Rust's order, with an unbounded exponent at a range edge (ADR 0002 row 18, M3 part 2d-1a: the Mueller
 # matrices' angles 2θ past DBL_MAX, their four-term sums, the waveplate's subnormal sin²(δ/2); 2d-1b: the Jones
 # vectors' and matrices' complex chains, src/crmath_vx.cyr's, polarization.rs's SAFE_MIN_INTENSITY of 1e-290 with
-# them). The JSON of the four structs is part 1a-2's.
+# them; 2d-1c: the Stokes vectors' from_jones, degree of polarization and angles). The JSON of the four structs is part
+# 1a-2's.
 
 private
 
@@ -22730,9 +22910,13 @@ public fn BjStokesVector_default(): BjStokesVector {
 }
 
 # The Stokes vector of a fully polarized Jones vector: S₀ = |E_x|² + |E_y|², S₁ = |E_x|² − |E_y|², S₂ = 2 Re(E_x E_y*)
-# and S₃ = 2 Im(E_x E_y*), +1 for right-hand circular light (the module comment). Mirrors `StokesVector::from_jones`.
+# and S₃ = 2 Im(E_x E_y*), +1 for right-hand circular light (the module comment). With an unbounded exponent at a range
+# edge (ADR 0002 row 18, src/crmath_vx.cyr's _bj_vx_stokes); a part that is not finite keeps BjComplex's chain. Mirrors
+# `StokesVector::from_jones`.
 #must_use
 public fn BjStokesVector_from_jones(j: BjJonesVector): BjStokesVector {
+    var w: BjStokesVector;
+    if (_bj_vx_stokes(_bj_pol_f64p(&j), _bj_pol_f64p(&w)) != 2) { return w; }
     var ix: f64 = j.x.norm_sq();
     var iy: f64 = j.y.norm_sq();
     var cy: BjComplex = j.y.conj();
@@ -22811,8 +22995,10 @@ impl BjStokesVector {
     }
 
     # The degree of polarization √(S₁² + S₂² + S₃²)/S₀ (hypot's, so no square under- or overflows): 0 unpolarized, 1
-    # fully polarized, for any positive finite S₀. DivisionByZero for S₀ = 0; InvalidParameter "Stokes vector must be
-    # finite with S₀ > 0, got [..]" for S₀ < 0 or a non-finite part. Mirrors `StokesVector::degree_of_polarization`.
+    # fully polarized, for any positive finite S₀; each hypot to 53 bits with an unbounded exponent where Rust's passes
+    # DBL_MAX or falls below 2^-1022 (ADR 0002 row 18, _bj_vx_dop). DivisionByZero for S₀ = 0; InvalidParameter
+    # "Stokes vector must be finite with S₀ > 0, got [..]" for S₀ < 0 or a non-finite part. Mirrors
+    # `StokesVector::degree_of_polarization`.
     public fn degree_of_polarization(self): Result {
         var s0: f64 = self.s.0;
         if (s0 == 0.0) { return Err(_bj_err_division_by_zero("cannot compute DOP for zero-intensity light")); }
@@ -22824,33 +23010,24 @@ impl BjStokesVector {
             _bj_pol_fmt4(t, p);
             return Err(BJ_ERR_INVALID_PARAMETER);
         }
-        var h1: f64 = _bj_hypot(p[1], p[2]);
-        var h2: f64 = _bj_hypot(h1, p[3]);
-        var d: f64 = h2 / s0;
+        var d: f64 = _bj_vx_dop(p);
         return Ok(d);
     }
 
     # The ellipticity angle χ, tan 2χ = S₃/√(S₁² + S₂²): 0 for linear light, +π/4 for right-hand circular (IEEE), −π/4
-    # for left. Mirrors `StokesVector::ellipticity_angle`.
+    # for left. With an unbounded exponent where S₁² or S₂² leaves the range or the angle falls below 2^-1022 (ADR 0002
+    # row 18, _bj_vx_ellip). Mirrors `StokesVector::ellipticity_angle`.
     #must_use
     public fn ellipticity_angle(self): f64 {
-        var a: f64 = self.s.1;
-        var b: f64 = self.s.2;
-        var c: f64 = self.s.3;
-        var q: f64 = a * a + b * b;
-        var lin: f64 = f64_sqrt(q);
-        var t: f64 = _bj_atan2(c, lin);
-        var x: f64 = 0.5 * t;
+        var x: f64 = _bj_vx_ellip(_bj_pol_f64p(self));
         return x;
     }
 
-    # The orientation angle ψ of the polarization ellipse, tan 2ψ = S₂/S₁. Mirrors `StokesVector::orientation_angle`.
+    # The orientation angle ψ of the polarization ellipse, tan 2ψ = S₂/S₁; an angle below 2^-1022 is taken to 53 bits
+    # and its half rounded once (ADR 0002 row 18, _bj_vx_orient). Mirrors `StokesVector::orientation_angle`.
     #must_use
     public fn orientation_angle(self): f64 {
-        var a: f64 = self.s.1;
-        var b: f64 = self.s.2;
-        var t: f64 = _bj_atan2(b, a);
-        var x: f64 = 0.5 * t;
+        var x: f64 = _bj_vx_orient(_bj_pol_f64p(self));
         return x;
     }
 }

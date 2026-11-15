@@ -61,7 +61,7 @@ port's harness reads the same files. This README records what is specific to bij
 | `material` | M2 (parts 1a, 2c-1, 2c-2, 2d-2c) | 54,234 | `src/m_material.rs` (field.rs's vectors) | — |
 | `math` | M0 (+ sinh, cosh and 125 corrected, M1) | 36,522 | `src/m_math.rs` | — |
 | `maxwell` | M1 (part 3d) | 20,349 | `src/m_maxwell.rs` | — |
-| `polarization` | M3 (part 1a-1; 2a-1: the waveplates' edge grid; 2d-1a and 2d-1b: the Mueller and Jones edge grids) | 26,704 (+ 18 corrected) | `src/m_polarization.rs` | — |
+| `polarization` | M3 (part 1a-1; 2a-1: the waveplates' edge grid; 2d-1a to 2d-1c: the Mueller, Jones and Stokes edge grids) | 26,829 (+ 18 corrected) | `src/m_polarization.rs` | — |
 | `relativity` | M2 (parts 1d-1, 1d-2: the solver over six trajectories; 2c-1, 2c-4, 2d-1, 2d-3c–2d-3j) | 30,780 | `src/m_relativity.rs` (field.rs's vectors) | — |
 | `scattering` | M3 (parts 1b-1; its JSON in `json`; 2b: the round-once edge grid; 2c-1: Mie's \|m\|·x limit) | 4,189 (+ 6 corrected) | `src/m_scattering.rs` | — |
 | `wave` | M2 (parts 1b, 2c-1, 2c-3, 2d-1, 2d-2a, 2d-2b, 2d-2c) | 79,138 (+ 1 corrected) | `src/m_wave.rs` (field.rs's vectors, material.tsv's materials) | `src/wave_data.cyr`, the dipole constants of ADR 0002 row 22 (`validate.py`'s `render_wave_data`: Cin(2π) by its series, π by Machin's formula checked against MPFR, η₀ from BJ_MU_0 and BJ_EPSILON_0, in rational arithmetic) |
@@ -129,7 +129,10 @@ terms, past DBL_MAX cancelling, cancelling to small sums that subnormal products
 kernels the same way, against the unbounded chain alone: `_bj_vx_cdot` (A·X ± B·Y, either part, conjugated or not), the
 intensity, each part of the normalized vector and the overlap, on parts inside row 14's box, at its edges, subnormal and
 huge, products cancelling, intensities near 1e-290 and past DBL_MAX, and nearly orthogonal pairs, boxed ones among them
-whose inner product lies below 2^-511.
+whose inner product lies below 2^-511. Its sjones, sdop, sellip and sorient families (M3 part 2d-1c) check the Stokes
+kernels: each part of `from_jones` against exact.py's chain, and the degree of polarization and both angles against MPFR
+at 53 bits with its widest exponent range (`mpfr_ref.wide`), on parts around the box, near DBL_MAX and subnormal, hypot
+operands 2^10 to 2^40 apart, and angles below 2^-1022.
 Its ux families (`cr_verify.py . ux`, M1 part 5c-2) check src/crmath_ux.cyr's e^x (`ux_exp`, and `ux_exp_w` to |x| =
 2300, M2 part 2d-3b), cosh, sinh, ln(s·2^E), (s·2^E)^y and sin and cos past DBL_MAX against `mpfr_ref.wide`: MPFR at
 53 bits with its widest exponent range, where nothing over- or underflows. Each (s, e) result is read in two calls,

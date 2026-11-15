@@ -800,6 +800,36 @@ fn cyrius_jones_row18(): i64 {
     return 0;
 }
 
+# ADR 0002 row 18 (M3 part 2d-1c): the Stokes vectors at their range edges, the exact chain's and MPFR's bits.
+fn cyrius_stokes_row18(): i64 {
+    test_group("cyrius_stokes_row18 (ADR 0002 row 18)");
+    # from_jones: S₀ of three squares of 2.25·2^-1074 is 7·2^-1074 (Rust 6).
+    var a: f64 = 1.5 * _bj_from_bits(0x1E60000000000000);
+    var sj: BjStokesVector = BjStokesVector_from_jones(BjJonesVector_new(BjComplex_new(a, a), BjComplex_new(a, 0.0)));
+    assert(_bj_bits(sj.s.0) == 7 && _bj_bits(sj.s.1) == 2, "from_jones: S₀ of subnormal squares, rounded once");
+    # The degree of polarization: hypot past DBL_MAX gives √2, not ∞; subnormal hypots 1/√3, not 0.57724.
+    var mx: f64 = _bj_from_bits(0x7FEFFFFFFFFFFFFF);
+    var t1, d1 = BjStokesVector_new(mx, mx, mx, 0.0).degree_of_polarization();
+    var dv1: f64 = d1;
+    var s3: f64 = _bj_from_bits(0x00000000000017B8);
+    var s1: f64 = _bj_from_bits(0x00000000000007E8);
+    var t2, d2 = BjStokesVector_new(s3, s1, s1, s1).degree_of_polarization();
+    var dv2: f64 = d2;
+    assert(is_ok(t1) == 1 && _bj_bits(dv1) == 0x3FF6A09E667F3BCD, "DOP with hypot past DBL_MAX: √2");
+    assert(is_ok(t2) == 1 && _bj_bits(dv2) == 0x3FE279A74590331C, "DOP with subnormal hypots: 1/√3");
+    # The ellipticity angle: S₁² past DBL_MAX (Rust's 0) and S₁² underflowing (Rust's π/4).
+    var h: f64 = _bj_from_bits(0x6974E718D7D7625A);
+    var e: f64 = _bj_from_bits(0x16687E92154EF7AC);
+    var x1: f64 = BjStokesVector_new(1.0, h, h, h).ellipticity_angle();
+    var x2: f64 = BjStokesVector_new(1.0, e, 0.0, e).ellipticity_angle();
+    assert(_bj_bits(x1) == 0x3FD3B2028082E8D4, "ellipticity with S₁² past DBL_MAX: 0.30774, not 0");
+    assert(_bj_bits(x2) == 0x3FD921FB54442D18, "ellipticity with S₁² below 2^-1074: π/8, not π/4");
+    # The orientation angle below 2^-1022: its half rounded once from the 53-bit angle (Rust one unit below).
+    var x3: f64 = BjStokesVector_new(1.0, 5.0, _bj_from_bits(0x000736E99BE07237), 0.0).orientation_angle();
+    assert(_bj_bits(x3) == 0x0000B8B0F5FCD839, "orientation below 2^-1022, rounded once");
+    return 0;
+}
+
 # polarization.rs's `test_mie_result_serde` (M3 part 1b-2): a MieResult round trips through its JSON.
 fn rust_test_mie_serde(): i64 {
     test_group("test_mie_result_serde");
@@ -966,6 +996,7 @@ fn main(): i64 {
     cyrius_row33();
     cyrius_row18();
     cyrius_jones_row18();
+    cyrius_stokes_row18();
     cyrius_json();
     return assert_summary();
 }

@@ -575,6 +575,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
   scale-invariant. Cost: the kernels replace BjComplex's per-product calls and are faster on the bench twins:
   `polarization/jones_apply_polarizer` 226 → 177 ns, `jones_qwp_apply` 232 → 183; `inner` 123 → 82 ns, `normalized`
   93 → 74, `overlap` 244 → 207, and `determinant` 80 → 92 (one call of eight arguments for two products).
+- **polarization** (ADR 0002 row 18 amended, M3 part 2d-1c, range edges): the Stokes vectors over- and underflowed
+  where the result is representable. `degree_of_polarization` was ∞ for √2 when hypot(S₁, S₂) passed DBL_MAX, and
+  0.57724 for 1/√3 on subnormal parts; `ellipticity_angle` was 0 for 0.3077 when S₁² passed DBL_MAX and π/4 for π/8
+  when it underflowed; an angle below 2^-1022 had its half rounded twice; `from_jones` gave NaN for ±∞ where
+  |x|² − |y|² overflows. Each hypot and angle is now taken to 53 bits with an unbounded exponent where Rust's left
+  the normal range, and the last operation rounds once; Rust's chain is kept wherever it was already exact. Cost:
+  `polarization/stokes_from_jones` 125 → 58 ns (the shared kernel replaces BjComplex's calls); the degree of
+  polarization and the orientation angle within 4 %, the ellipticity angle 310 → 333 ns (its guard).
 
 ### Performance
 

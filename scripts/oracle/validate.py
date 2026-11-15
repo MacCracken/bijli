@@ -3647,6 +3647,13 @@ def pol_dot4(xs, ys, ux_chain) -> float:
     return acc
 
 
+def pol_half(t) -> float:
+    """Half of an angle given to 53 bits (mpfr_ref.wide's Fraction, or a float ±0 or ±π/2), rounded once."""
+    if isinstance(t, float):
+        return 0.5 * t
+    return rn_frac(t / 2)
+
+
 def pol_eval(fn, v, P, wp=False, cx14=False, r33=True, r18=True):
     """polarization.rs's outputs for a row on the primitives P; wp=True for the port's retarders (e^{+jωt}), cx14=True
     for the port's complex products and |z|² (row 14 at a range edge), r33=False for the port's retarders without
@@ -3876,6 +3883,12 @@ def pol_eval(fn, v, P, wp=False, cx14=False, r33=True, r18=True):
         return fl({"StokesVector::unpolarized": [i, 0.0, 0.0, 0.0], "StokesVector::horizontal": [i, i, 0.0, 0.0],
                    "StokesVector::vertical": [i, -i, 0.0, 0.0], "StokesVector::right_circular": [i, 0.0, 0.0, i],
                    "StokesVector::left_circular": [i, 0.0, 0.0, -i]}[fn])
+    if fn == "StokesVector::from_jones" and e18 and finite(*vec(v)):
+        x, y = vec(v)                                  # row 18 (M3 part 2d-1c): the unbounded chain
+        ix, iy = ux_sumsq(x[0], x[1]), ux_sumsq(y[0], y[1])
+        re, im = ux_cprod(x, conj(y))
+        return fl([ux_fin(ux_add(ix, iy, lambda t: t)), ux_fin(ux_sub(ix, iy, lambda t: t)),
+                   ux_fin((2 * re[0], re[1])), ux_fin((2 * im[0], im[1]))])
     if fn == "StokesVector::from_jones":
         x, y = vec(v)
         ix, iy = nsq(x), nsq(y)
@@ -3889,9 +3902,18 @@ def pol_eval(fn, v, P, wp=False, cx14=False, r33=True, r18=True):
             return dz_err("cannot compute DOP for zero-intensity light")
         if not (s0 > 0.0 and all(math.isfinite(x) for x in v)):
             return ip_err("Stokes vector must be finite with S₀ > 0, got [" + ", ".join(rust_debug(x) for x in v) + "]")
+        if e18:                                        # each hypot to 53 bits, unbounded (row 18, M3 part 2d-1c)
+            h = mpfr_ref.wide("hypot", mpfr_ref.wide("hypot", v[1], v[2]), v[3])
+            return okf(0.0 if h == 0 else rn_frac(Fraction(h) / Fraction(s0)))
         return okf(fdiv(P["hypot"](P["hypot"](v[1], v[2]), v[3]), s0))
+    if fn == "StokesVector::ellipticity_angle" and e18 and finite(v[1:4]):
+        q = ux_sumsq(v[1], v[2])                       # √ and atan2 to 53 bits, unbounded; the half rounded once
+        lin = rnd53_sqrt(q[0]) if q[0] != 0 else 0.0
+        return fl([pol_half(mpfr_ref.wide("atan2", v[3], lin))])
     if fn == "StokesVector::ellipticity_angle":
         return fl([0.5 * P["atan2"](v[3], fsqrt(v[1] * v[1] + v[2] * v[2]))])
+    if fn == "StokesVector::orientation_angle" and e18 and finite(v[1:3]):
+        return fl([pol_half(mpfr_ref.wide("atan2", v[2], v[1]))])
     if fn == "StokesVector::orientation_angle":
         return fl([0.5 * P["atan2"](v[2], v[1])])
     if fn == "StokesVector::add":

@@ -535,7 +535,7 @@ EXACT = ["mono"] + list(SHAPES) + ["sqrt_div", "wsqrt", "sqrt_mono", "sqrt_mono_
          "par_rep", "par_rep_x", "par_rep_slow", "lw_nb", "lw_nb_slow", "lw_reff_ux", "vx_sqrt", "vx_sqrt_e",
          "vx_gamma", "lwo_reff", "lwo_reff_slow", "lwo_kappa", "lwo_kappa_slow", "lwo_nb", "lwo_nb_slow", "lwo_ux",
          "gammao", "gammao_slow", "gammao2", "gammao2_slow", "sumsq", "sumsq_exact", "abcd", "abcd_slow", "dot4", "jcdot", "jint", "jnorm",
-         "jover"]
+         "jover", "sjones", "sdop", "sellip", "sorient"]
 UX = ["ux_exp", "ux_exp_w", "ux_cosh", "ux_sinh", "ux_ln", "ux_pow", "ux_sin", "ux_cos"]
 
 
@@ -1915,6 +1915,75 @@ def jones_families(rng, count):
     return out
 
 
+# ── the Stokes kernels (src/crmath_vx.cyr, M3 part 2d-1c): exact references ───────────────────────────────────────
+# from_jones on exact.py's chain, the degree of polarization and the angles on MPFR at 53 bits with its widest exponent
+# range (mpfr_ref.wide), each last operation rounded once: the unbounded chain alone.
+
+def _whalf(t) -> float:
+    return 0.5 * t if isinstance(t, float) else rn_frac(t / 2)
+
+
+def sjones_ref(p):
+    def sq2(u, v):
+        return _jadd(_jmul(_jx(u), _jx(u)), _jmul(_jx(v), _jx(v)))
+    ix, iy = sq2(p[0], p[1]), sq2(p[2], p[3])
+    re, im = _jcprod((p[0], p[1]), (p[2], -p[3]))
+    return [_jfin(_jadd(ix, iy, lambda t: t)), _jfin(_jsub(ix, iy, lambda t: t)), _jfin((2 * re[0], re[1])),
+            _jfin((2 * im[0], im[1]))]
+
+
+def sdop_ref(s):
+    h = mpfr_ref.wide("hypot", mpfr_ref.wide("hypot", s[1], s[2]), s[3])
+    return 0.0 if h == 0 else rn_frac(Fraction(h) / Fraction(s[0]))
+
+
+def sellip_ref(s):
+    def sq(u):
+        return _jmul(_jx(u), _jx(u))
+    q = _jadd(sq(s[1]), sq(s[2]))
+    lin = rnd53_sqrt(q[0]) if q[0] != 0 else 0.0
+    return _whalf(mpfr_ref.wide("atan2", s[3], lin))
+
+
+def sorient_ref(s):
+    return _whalf(mpfr_ref.wide("atan2", s[2], s[1]))
+
+
+def spart(rng):
+    """A Stokes part: jpart's, or a double near DBL_MAX, or one whose quotient by a neighbour is tiny."""
+    c = rng.random()
+    if c < 0.15:
+        return (-1.0 if rng.random() < 0.5 else 1.0) * DBL_MAX * rng.uniform(0.5, 1.0)
+    return jpart(rng)
+
+
+def stokes_families(rng, count):
+    """sjones, sdop, sellip and sorient (M3 part 2d-1c): from_jones (each part), the degree of polarization and the two
+    angles against the unbounded chain: parts around the box, subnormal, near DBL_MAX, hypot operands 2^10 to 2^40
+    apart, and angles below 2^-1022 (S₂ or S₃ tiny against S₁)."""
+    out = []
+    for j in range(count):
+        part = jbox if j % 3 == 1 else jpart
+        pv = [part(rng) for _ in range(4)]
+        ref = sjones_ref(pv)
+        for k in range(4):
+            out.append(("sjones", pv + [k], f2b(ref[k])))
+    for j in range(count):
+        sv = [abs(spart(rng)) or 1.0, spart(rng), spart(rng), spart(rng)]
+        if j % 4 == 1:                          # the second hypot's operands 2^10 to 2^40 apart
+            sv[3] = sv[1] * 2.0 ** -rng.randint(10, 40) * rng.uniform(1.0, 2.0)
+        elif j % 4 == 2:                        # an angle below 2^-1022
+            sv[1] = rng.uniform(1.0, 2.0) * 2.0 ** rng.randint(-20, 300)
+            sv[2] = rng.uniform(-1.0, 1.0) * sv[1] * 2.0 ** -rng.randint(1023, 1100)
+            sv[3] = rng.uniform(-1.0, 1.0) * sv[1] * 2.0 ** -rng.randint(1023, 1100)
+        if not all(math.isfinite(t) for t in sv) or sv[0] <= 0:
+            sv = [1.0, jpart(rng), jpart(rng), jpart(rng)]
+        out.append(("sdop", sv, f2b(sdop_ref(sv))))
+        out.append(("sellip", sv, f2b(sellip_ref(sv))))
+        out.append(("sorient", sv, f2b(sorient_ref(sv))))
+    return out
+
+
 def main() -> int:
     (root / "build").mkdir(exist_ok=True)
     names = wanted or list(FUNCS) + ["exact", "ux"]
@@ -1972,6 +2041,9 @@ def main() -> int:
         jrng = random.Random(0x3_2D1B)
         calls += [(f, ref, ws) for f, ws, ref in jones_families(jrng, max(1, n // 10))
                   if "exact" in names or f in names]
+        srng = random.Random(0x3_2D1C)
+        calls += [(f, ref, ws) for f, ws, ref in stokes_families(srng, max(1, n // 10))
+                  if "exact" in names or f in names]
         drng = random.Random(0x3_2D1A)
         calls += [(f, ref, ws) for f, ws, ref in dot4_families(drng, max(1, n // 2))
                   if "exact" in names or f in names]
@@ -1997,7 +2069,7 @@ def main() -> int:
             g = results[t][i]
             # "invalid" is a word for these
             any_nan = name not in UX and not name.startswith(("gamma", "cm", "cos_t", "lw_", "lwo_", "par", "vx_",
-                                                              "abcd", "dot4", "j"))
+                                                              "abcd", "dot4", "j", "s"))
             ok = g == want or (any_nan and b2f(g) != b2f(g) and b2f(want) != b2f(want))
             per.setdefault((name, t), [0, 0])[0 if ok else 1] += 1
             if not ok:
