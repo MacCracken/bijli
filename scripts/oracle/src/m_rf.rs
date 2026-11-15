@@ -41,8 +41,11 @@
 //!
 //! M4 part 2b appends round once's grid (ADR 0002 row 13): √(L′/C′), 1/√(L′C′), √(Z₀·Z_L) and Z/Z₀ on seeded values,
 //! at the ranges' edges (an intermediate past DBL_MAX or below 2^-1022, 1/Z₀ subnormal), on exact roots.
+//!
+//! M4 part 2c appends the exact thresholds' knife edges (row 17): |Z_L + Z₀| at 10^-30, |Z_L + Z₀|² and |S21|² at
+//! 10^-60, and the 10^-12 relative tests of the stub's band and z0_equal exactly on their cut.
 
-use crate::grids::{Rng, specials};
+use crate::grids::{Edge2, Rng, knife_edge, knife_edge2, specials};
 use crate::m_field::res_f;
 use crate::tsv::{Class, Module, Tok, err, f, i, s};
 use bijli::polarization::Complex;
@@ -679,8 +682,69 @@ pub fn emit() -> Module {
     emit_2a2(r, &mut rng);
     emit_2a3(r, &mut rng);
     emit_2b(r, &mut rng);
+    emit_2c(r);
 
     rows.m
+}
+
+/// M4 part 2c: the exact thresholds (ADR 0002 row 17) on their knife edges. |Z_L + Z₀| against 10^-30
+/// (`knife_edge2`'s sums); |Z_L + Z₀|² and |S21|² against 10^-60 (`knife_edge`'s planar pairs at |d| ≈ 10^-30); the
+/// stub's |R_L − Z₀| ≤ 10^-12·Z₀ and z0_equal's |a − b| ≤ 10^-12·max(|a|, |b|). For normal values Rust's rounded test
+/// is already exact (|R_L − Z₀| is a multiple of ulp(Z₀), and RN(1e-12·Z₀) meets one only where it equals it): with
+/// Z₀ = k·10^12·2^-47, 10^-12·Z₀ is exactly k ulps and both agree. Below about 2^-970, where 1e-12·Z₀ rounds to the
+/// subnormal grid, they part: Z₀ = (j·10^12 − r)·2^-1042 and R_L = Z₀ ± j·2^-1042, r of both signs.
+fn emit_2c(r: &mut Rows) {
+    let z50 = [50.0, 50.0];
+    for (a, b) in knife_edge2(Edge2::Sum, &[5e-31, 3e-31, 1e-30, 1e-20, 1e-31, 50.0], 6, 24) {
+        r.gamma_real(a, b);
+    }
+    let pa = [(0.1, -0.05), (0.7, 0.2), (0.6, -0.3), (-0.2, 0.3)];
+    for (b, a) in knife_edge(true) {
+        if a[2] != 0.0 || b[2] != 0.0 {
+            continue;
+        }
+        r.gamma_complex((a[0], a[1]), (-b[0], -b[1]));
+        if b == [0.0, 0.0, 0.0] {
+            let s21 = (a[0], a[1]);
+            r.cascade(&tp([pa[0], pa[1], s21, pa[3]], z50), &tp(pa, z50));
+            r.cascade(&tp(pa, z50), &tp([pa[0], pa[1], s21, pa[3]], z50));
+        }
+    }
+    let ulp47 = 2f64.powi(-47);
+    for k in [4504_i64, 4505, 5000, 6011, 7393, 8191, 9007] {
+        let kf = i64_to_f64(k);
+        let z0 = kf * 1e12 * ulp47;
+        for dk in -1..=1_i64 {
+            let off = i64_to_f64(k + dk) * ulp47;
+            for &rl in &[z0 + off, z0 - off] {
+                for &x in &[0.0, 30.0, -12.5] {
+                    r.stub_complex((rl, x), z0);
+                }
+                r.stub(rl, z0);
+                r.cascade(&tp(pa, [z0, z0]), &tp(pa, [rl, rl]));
+                r.s_to_z(&tp(pa, [z0, rl]));
+            }
+        }
+    }
+    let u = 2f64.powi(-1042);
+    for j in [4504_i64, 5000, 7393, 9007] {
+        for rr in [-50_i64, -5, -1, 1, 5, 50] {
+            let z0 = i64_to_f64(j) * 1e12 * u - i64_to_f64(rr) * u; // (j·10^12 − r)·2^-1042, exactly
+            let off = i64_to_f64(j) * u;
+            for &rl in &[z0 + off, z0 - off] {
+                r.stub_complex((rl, 0.0), z0);
+                r.stub_complex((rl, 1e-300), z0);
+                r.stub(rl, z0);
+                r.cascade(&tp(pa, [z0, z0]), &tp(pa, [rl, rl]));
+                r.s_to_z(&tp(pa, [z0, rl]));
+            }
+        }
+    }
+}
+
+/// k as an f64, exactly for |k| < 2^53 (the grids' small counts).
+fn i64_to_f64(k: i64) -> f64 {
+    f64::from(i32::try_from(k).unwrap_or(0))
 }
 
 /// M4 part 2b: round once (ADR 0002 row 13): √(L′/C′), 1/√(L′C′), √(Z₀·Z_L) and Z/Z₀ on seeded values of every

@@ -337,6 +337,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
   `phase_velocity`, `quarter_wave_transformer` and `normalize_impedance` are correctly rounded (ADR 0002 row 13
   amended, see Fixed). `rf.tsv` grows by 3,135 rows (24,258): seeded values of every magnitude, the ranges' edges,
   exact roots; `rf.adr.tsv` maps 1,105 rows to row 13.
+- **Cyrius port, M4 part 2c — rf's exact thresholds** (`src/rf.cyr`): the tests against 10⁻³⁰, 10⁻⁶⁰ and 10⁻¹² are
+  decided exactly on the inputs (ADR 0002 row 17 amended, see Fixed), on src/crmath_cmp.cyr's band and exact tests and
+  a new `_bj_rf_within12`. `rf.tsv` grows by 1,974 knife-edge rows (26,232); validate.py's model takes row 17's exact
+  tests together (`RF17`), and a mapping names the first row that accounts for its whole change.
 
 ### Fixed
 
@@ -740,6 +744,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
   √ of a monomial, one division a part for Z/Z₀). Cost (no Rust benches): 25 → 88 ns, 28 → 140 ns and
   23 → 142 ns (maxwell's `wave_speed`, the same root, is 141 ns); `normalize_impedance` unchanged at 16 ns
   (`port-parity.md` §85).
+- **rf** (ADR 0002 row 17 amended, M4 part 2c): `reflection_coefficient` tested the rounded Z_L + Z₀ against the
+  double 1e-30, so a sum whose exact value lies below 10⁻³⁰ but rounds to 1e-30 was accepted (Γ = −1.2·10⁻¹⁵ where it
+  is a DivisionByZero); `reflection_coefficient_complex` and the cascade's S → T step tested rounded sums of squares
+  against 1e-60 likewise. `z0_equal` and the stub match's band compared |a − b| with RN(1e-12·m), which for m below
+  about 2^-970 lies on the subnormal grid: Z₀ values 10⁻¹² apart were taken as equal. All are now exact (the decimal
+  thresholds); for normal values the 10⁻¹² tests already were. Cost: the exact tests start below 2·10⁻³⁰ (2·10⁻⁶⁰),
+  so `rf/reflection_coefficient` stays at 15 ns (23 ns without that first compare); `rf/s_cascade` 3.48 → 3.52 µs
+  (the exact z0_equal); the rest unchanged (`port-parity.md` §86).
 
 ### Performance
 

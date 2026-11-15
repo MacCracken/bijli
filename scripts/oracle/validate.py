@@ -5729,7 +5729,7 @@ def rf_stub(P, zr, zi, z0, port=False):
         d = P["atan"](t) / RF_TAU
         return d + 0.5 if d < 0.0 else d + 0.0
 
-    if abs(rl - z0) <= 1e-12 * z0:
+    if rf_within12(rl, z0, z0):
         d1, d2 = d_from_t(fdiv(-xl, 2.0 * z0)), 0.25
     else:
         disc = fsqrt(fdiv(rl * ((z0 - rl) * (z0 - rl) + xl * xl), z0))
@@ -5807,7 +5807,10 @@ def rf_eval(fn, v, P, port=False):
         if not rf_fin(zl, z0):
             return ip_err(f"Z_L and Z₀ must be finite, got Z_L={rust_display(zl)}, Z₀={rust_display(z0)}")
         den = zl + z0
-        if abs(den) < 1e-30:
+        if RF17["on"]:                                      # ADR 0002 row 17 (M4 part 2c): exactly
+            if abs(Fraction(zl) + Fraction(z0)) < Fraction(1, 10 ** 30):
+                return dz_err("Z_L + Z₀ = 0")
+        elif abs(den) < 1e-30:
             return dz_err("Z_L + Z₀ = 0")
         return [("f", fdiv(zl - z0, den))]
     if fn == "rf::reflection_coefficient_complex":
@@ -5815,7 +5818,10 @@ def rf_eval(fn, v, P, port=False):
         if not rf_fin(a0, a1, b0, b1):
             return ip_err(f"Z_L and Z₀ must be finite, got Z_L={cx_fmt(a0, a1)}, Z₀={cx_fmt(b0, b1)}")
         den = (a0 + b0, a1 + b1)
-        if den[0] * den[0] + den[1] * den[1] < 1e-60:
+        if RF17["on"]:                                      # ADR 0002 row 17 (M4 part 2c): exactly
+            if (Fraction(a0) + Fraction(b0)) ** 2 + (Fraction(a1) + Fraction(b1)) ** 2 < Fraction(1, 10 ** 60):
+                return dz_err("Z_L + Z₀ = 0")
+        elif den[0] * den[0] + den[1] * den[1] < 1e-60:
             return dz_err("Z_L + Z₀ = 0")
         return rf_cx(rf_cdiv((a0 - b0, a1 - b1), den))
     if fn == "rf::vswr":
@@ -5948,10 +5954,20 @@ def rf_fmax(a, b):
 
 
 def rf_z0_equal(a, b, port):
-    """rf.rs's z0_equal; the port's also requires both values finite (ADR 0002 row 37)."""
+    """rf.rs's z0_equal; the port's also requires both values finite (ADR 0002 row 37), and decides exactly with row
+    17 on."""
     if port and not (math.isfinite(a) and math.isfinite(b)):
         return False
+    if RF17["on"] and math.isfinite(a) and math.isfinite(b):
+        return rf_within12(a, b, max(abs(a), abs(b)))
     return abs(a - b) <= 1e-12 * rf_fmax(abs(a), abs(b))
+
+
+def rf_within12(a, b, m):
+    """|a − b| ≤ 10⁻¹²·m: with row 17 on (M4 part 2c) exactly, the decimal 10⁻¹²; else Rust's rounded test."""
+    if RF17["on"]:
+        return abs(Fraction(a) - Fraction(b)) * 10 ** 12 <= Fraction(m)
+    return abs(a - b) <= 1e-12 * m
 
 
 def rf_uniform_z0(m, port):
@@ -5973,7 +5989,10 @@ def rf_two_port(s11, s12, s21, s22, z0):
 
 def rf_s_to_t(s):
     s11, s12, s21, s22 = s
-    if rf_nsq(s21) < 1e-60:
+    if RF17["on"] and rf_fin(*s21):                       # ADR 0002 row 17 (M4 part 2c): exactly
+        if Fraction(s21[0]) ** 2 + Fraction(s21[1]) ** 2 < Fraction(1, 10 ** 60):
+            return dz_err("S21 = 0, cannot convert to T-parameters")
+    elif rf_nsq(s21) < 1e-60:
         return dz_err("S21 = 0, cannot convert to T-parameters")
     inv = rf_crecip(s21)
     det = rf_csub(sc_mul(s11, s22), sc_mul(s12, s21))
@@ -6004,9 +6023,9 @@ def rf_cascade_exact(sa, sb):
             quot(mul(mul(a[3], b[1]), b[2]), b[3])]
 
 
-def rf_cascade(a, b, port, exact=True):
-    """SMatrix::cascade. port: the port's z0_equal (row 37) and, with exact, its star product for finite entries
-    (row 17, M4 part 2a-2)."""
+def rf_cascade(a, b, port):
+    """SMatrix::cascade. port: the port's z0_equal (row 37); with RF17 on, its star product for finite entries (row
+    17, M4 part 2a-2) and its exact tests (2c)."""
     if a["ports"] != 2 or b["ports"] != 2:
         return ip_err("cascade requires two 2-port networks")
     z0 = rf_uniform_z0(a, port)
@@ -6025,7 +6044,7 @@ def rf_cascade(a, b, port, exact=True):
     if isinstance(t2[0], tuple):
         return t2
     chain = rf_cascade_chain(t1, t2)
-    if port and exact and all(math.isfinite(x) for z in a["s"] + b["s"] for x in z):
+    if port and RF17["on"] and all(math.isfinite(x) for z in a["s"] + b["s"] for x in z):
         s = rf_cascade_exact(a["s"], b["s"])
         if s is None:
             return dz_err("T22 = 0, cannot convert to S-parameters")
@@ -6093,8 +6112,8 @@ def rf_s2z_exact(s, z0v):
     return out
 
 
-def rf_s_to_z(m, port, exact=True):
-    """rf::s_to_z. port: the port's z0_equal (row 37) and, with exact, its rounding once for finite entries (row 17,
+def rf_s_to_z(m, port):
+    """rf::s_to_z. port: the port's z0_equal (row 37); with RF17 on, its rounding once for finite entries (row 17,
     M4 part 2a-3)."""
     if m["ports"] != 2:
         return ip_err("S→Z conversion requires 2-port network")
@@ -6102,7 +6121,7 @@ def rf_s_to_z(m, port, exact=True):
     if isinstance(z0v, list):
         return z0v
     chain = rf_s2z_chain(m["s"], z0v)
-    if port and exact and all(math.isfinite(x) for z in m["s"] for x in z):
+    if port and RF17["on"] and all(math.isfinite(x) for z in m["s"] for x in z):
         parts = rf_s2z_exact(m["s"], z0v)
         if parts is None:
             return dz_err("singular S→Z conversion")
@@ -6122,9 +6141,9 @@ def rf_index_err(n, a, b):
     return None
 
 
-def rf_sm_eval(fn, toks, port=False, exact=True):
-    """The S-parameter rows (M4 part 1b) from their raw input tokens. None for another name. port: the port's (rows
-    37 and, with exact, 17's cascade)."""
+def rf_sm_eval(fn, toks, port=False):
+    """The S-parameter rows (M4 part 1b) from their raw input tokens. None for another name. port: the port's row 37
+    (row 17's with RF17 on)."""
     if fn == "SMatrix::new":
         n, z0 = toks[0][1] & RF_U64, toks[1][1]
         return rf_sm_toks({"ports": n, "s": [(0.0, 0.0)] * (n * n), "z0": [z0] * n})
@@ -6145,9 +6164,9 @@ def rf_sm_eval(fn, toks, port=False, exact=True):
     if fn == "SMatrix::cascade":
         a, k = rf_sm_read(toks, 0)
         b, _ = rf_sm_read(toks, k)
-        return rf_cascade(a, b, port, exact)
+        return rf_cascade(a, b, port)
     if fn == "rf::s_to_z":
-        return rf_s_to_z(rf_sm_read(toks, 0)[0], port, exact)
+        return rf_s_to_z(rf_sm_read(toks, 0)[0], port)
     return None
 
 
@@ -6424,41 +6443,59 @@ RF_ROW13 = ("rf::characteristic_impedance_lossless", "rf::phase_velocity", "rf::
             "rf::normalize_impedance")
 
 
+# M4 part 2c: ADR 0002 row 17's exact tests (and 2a-2's and 2a-3's rounding once) apply while RF17["on"]; Rust's
+# rounded ones otherwise. rf_adr_rows turns it on for the port's values.
+RF17 = {"on": False}
+
+
+def rf_eval17(on, f):
+    RF17["on"] = on
+    try:
+        return f()
+    finally:
+        RF17["on"] = False
+
+
+def rf_any_eval(fn, ins, v, port):
+    """A row's outputs on the corrected primitives: Rust's (port False) or the port's (rows 13, 37 and 39)."""
+    if fn == "rf::try_write_touchstone":
+        return rf_write_eval(RF_P_MPFR, ins, port=port)
+    out = rf_eval(fn, v, RF_P_MPFR, port=port)
+    if out is None:
+        out = rf_sm_eval(fn, [parse_tok(x) for x in ins.split(" ")], port=port)
+    return out
+
+
 def rf_adr_rows(path: Path) -> list:
-    """ADR 0002 mappings for rf.tsv: row 37 where an infinite Z₀, which Rust's z0_equal accepts as equal to the first
-    port's or the file's R (∞ ≤ 10⁻¹²·∞), is refused by the port's (M4 parts 1b, 1c-2). A writer's mapping takes the
-    corrected oracle's primitives, as its outputs then would. Row 13 where the four single-operation formulas
-    (RF_ROW13), rounded once, differ from Rust's two or three roundings (M4 part 2b). Row 39 where the stub match's
-    cancelling root, taken
-    without its cancellation, moves a (d, ℓ) (M4 part 2a-1), on the corrected primitives too. Row 17 where the
-    cascade's star product (M4 part 2a-2) or S → Z (2a-3), each part rounded once and its threshold exact, differs
-    from Rust's chain."""
+    """ADR 0002 mappings for rf.tsv, on the corrected primitives: row 13 where the four single-operation formulas
+    (RF_ROW13) are rounded once (M4 part 2b); row 37 where an infinite Z₀, which Rust's z0_equal accepts as equal to
+    the first port's or the file's R (∞ ≤ 10⁻¹²·∞), is refused by the port's (M4 parts 1b, 1c-2); row 39 where the
+    stub match's cancelling root, taken without its cancellation, moves a (d, ℓ) (M4 part 2a-1); row 17 where the
+    cascade's star product (2a-2) or S → Z (2a-3) rounded once with its threshold exact, or the exact tests of M4 part
+    2c (|Z_L + Z₀|, |S21|, the stub's band, z0_equal), change a row. A row takes the first of its rows that accounts
+    for its whole change."""
     out = []
     for fn, _cls, ins, outs, v in sc_lines(path):
-        if fn in RF_ROW13:
-            rust, port = rf_eval(fn, v, RF_P_MPFR), rf_eval(fn, v, RF_P_MPFR, port=True)
-            if not toks_same(rust, port):
-                out.append((fn, ins, wire(port), "13", f"oracle {outs[:200]}; ADR 0002 row 13"))
+        if fn in ("rf::parse_touchstone",):
             continue
-        if fn == "rf::single_stub_match_complex":
-            rust, port = rf_eval(fn, v, RF_P_MPFR), rf_eval(fn, v, RF_P_MPFR, port=True)
-            if not toks_same(rust, port):
-                out.append((fn, ins, wire(port), "39", f"oracle {outs[:200]}; ADR 0002 row 39"))
+        rust = rf_eval17(False, lambda: rf_any_eval(fn, ins, v, False))
+        if rust is None:
             continue
-        toks = [parse_tok(x) for x in ins.split(" ")]
-        row = "37"
-        if fn == "rf::try_write_touchstone":
-            rust, port = rf_write_eval(RF_P_MPFR, ins), rf_write_eval(RF_P_MPFR, ins, port=True)
-        else:
-            rust = rf_sm_eval(fn, toks)
-            if rust is None:
-                continue
-            port = rf_sm_eval(fn, toks, port=True)
-            if toks_same(rust, rf_sm_eval(fn, toks, port=True, exact=False)):
-                row = "17"
-        if not toks_same(rust, port):
-            out.append((fn, ins, wire(port), row, f"oracle {outs[:200]}; ADR 0002 row {row}"))
+        full = rf_eval17(True, lambda: rf_any_eval(fn, ins, v, True))
+        if toks_same(rust, full):
+            continue
+        row = "17"
+        if toks_same(full, rf_eval17(False, lambda: rf_any_eval(fn, ins, v, True))):
+            row = "13" if fn in RF_ROW13 else ("39" if fn == "rf::single_stub_match_complex" else "37")
+        out.append((fn, ins, wire(full), row, f"oracle {outs[:200]}; ADR 0002 row {row}"))
     return out
+
+
+def rf_port_differs(fn, ins, v) -> bool:
+    """True when ADR 0002 maps the row (rf_adr_rows' test), so rf.cr.tsv leaves it to rf.adr.tsv."""
+    rust = rf_eval17(False, lambda: rf_any_eval(fn, ins, v, False))
+    full = rf_eval17(True, lambda: rf_any_eval(fn, ins, v, True))
+    return rust is not None and not toks_same(rust, full)
 
 
 def validate_rf(path: Path) -> list:
@@ -6526,15 +6563,13 @@ def rf_corrections(path: Path):
         for fn, cls, ins, outs, v in sc_lines(path):
             if cls != "C":
                 continue
+            if fn != "rf::parse_touchstone" and rf_port_differs(fn, ins, v):
+                continue                                    # ADR 0002's: rf.adr.tsv maps it
             want = rf_eval(fn, v, RF_P_MPFR)
-            if fn == "rf::single_stub_match_complex" and not toks_same(want, rf_eval(fn, v, RF_P_MPFR, port=True)):
-                continue                                    # row 39's: rf.adr.tsv maps it
             if fn == "rf::parse_touchstone":
                 want = rf_parse_touchstone(path.parents[2], RF_P_MPFR, tok_text(v[0]), v[1] & RF_U64)
             if fn == "rf::try_write_touchstone":
-                want = rf_write_eval(RF_P_MPFR, ins, port=True)
-                if not toks_same(want, rf_write_eval(RF_P_MPFR, ins)):
-                    continue                                # row 37's: rf.adr.tsv maps it
+                want = rf_write_eval(RF_P_MPFR, ins)
             old = wave_toks([parse_tok(x) for x in outs.split(" ")])
             if toks_same(want, old):
                 continue

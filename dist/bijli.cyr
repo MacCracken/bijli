@@ -27136,12 +27136,18 @@ private
 
 # std::f64::consts::TAU.
 var _BJ_RF_TAU: f64 = 6.283185307179586;
-# rf.rs's thresholds: 10⁻³⁰ (a reference impedance, Z_L + Z₀), 10⁻⁶⁰ (|Z_L + Z₀|²), 10⁻¹⁵ (the unbounded input
-# impedance, relative to Z₀ + |Z_L|), 10⁻¹² (a matched stub, relative to Z₀).
+# rf.rs's thresholds: 10⁻³⁰ (a reference impedance, Z_L + Z₀), 10⁻⁶⁰ (|Z_L + Z₀|², |S21|²), 10⁻¹⁵ (the unbounded
+# input impedance, relative to Z₀ + |Z_L|), 10⁻¹² (a matched stub, relative to Z₀; z0_equal). The tests against
+# 10⁻³⁰, 10⁻⁶⁰ and 10⁻¹² are decided exactly on the inputs (ADR 0002 row 17, M4 part 2c), as decimals; the input
+# impedance's 10⁻¹⁵ stays on its rounded den (the user's answer of 2026-11-15).
 var _BJ_RF_TINY30: f64 = 0.000000000000000000000000000001;
 var _BJ_RF_TINY60: f64 = 0.000000000000000000000000000000000000000000000000000000000001;
 var _BJ_RF_REL15: f64 = 0.000000000000001;
 var _BJ_RF_REL12: f64 = 0.000000000001;
+# 2·10⁻³⁰ and 2·10⁻⁶⁰: a rounded |Z_L + Z₀| (or sum of squares) at or above them is far above 10⁻³⁰ (10⁻⁶⁰), so the
+# exact tests (ADR 0002 row 17) start below them.
+var _BJ_RF_TWO30: f64 = 0.000000000000000000000000000002;
+var _BJ_RF_TWO60: f64 = 0.000000000000000000000000000000000000000000000000000000000002;
 # The smallest normal double and the largest finite one: |z|² is a normal double between them.
 var _BJ_RF_MIN_NORMAL: f64 = 0x0010000000000000;
 var _BJ_RF_MAX_FINITE: f64 = 0x7FEFFFFFFFFFFFFF;
@@ -27361,7 +27367,7 @@ public fn bj_input_impedance_lossless_complex(z0: f64, z_load: BjComplex, beta: 
 # ── reflection and the losses ───────────────────────────────────────────────────────────────────────────────────
 
 # Γ = (Z_L − Z₀)/(Z_L + Z₀) for real impedances: Ok(Γ); Err(InvalidParameter) unless both are finite,
-# Err(DivisionByZero) when |Z_L + Z₀| < 10⁻³⁰. Mirrors `rf::reflection_coefficient`.
+# Err(DivisionByZero) when |Z_L + Z₀| < 10⁻³⁰, exactly (ADR 0002 row 17). Mirrors `rf::reflection_coefficient`.
 #must_use
 public fn bj_reflection_coefficient(z_load: f64, z0: f64): Result {
     if (_bj_is_finite(z_load) == 0 || _bj_is_finite(z0) == 0) {
@@ -27374,15 +27380,18 @@ public fn bj_reflection_coefficient(z_load: f64, z0: f64): Result {
     }
     var den: f64 = z_load + z0;
     var ad: f64 = f64_abs(den);
-    var tiny: f64 = _BJ_RF_TINY30;
-    if (ad < tiny) { return Err(_bj_err_division_by_zero("Z_L + Z₀ = 0")); }
+    if (ad < _BJ_RF_TWO30) {                                        # else far above: one compare on the common path
+        var band = _bj_x_band(ad, _BJ_RF_TINY30);                   # |Z_L + Z₀| < 10⁻³⁰ exactly (ADR 0002 row 17)
+        if (band == 2) { band = _bj_x_sum_below(z_load, z0, 30); }
+        if (band == 1) { return Err(_bj_err_division_by_zero("Z_L + Z₀ = 0")); }
+    }
     var g: f64 = (z_load - z0) / den;
     return Ok(g);
 }
 
 # Γ = (Z_L − Z₀)/(Z_L + Z₀) for complex impedances, into *out: Ok(0), or Err with out untouched;
-# Err(InvalidParameter) unless every part is finite, Err(DivisionByZero) when |Z_L + Z₀|² < 10⁻⁶⁰. Mirrors
-# `rf::reflection_coefficient_complex`.
+# Err(InvalidParameter) unless every part is finite, Err(DivisionByZero) when |Z_L + Z₀|² < 10⁻⁶⁰, exactly (ADR 0002
+# row 17). Mirrors `rf::reflection_coefficient_complex`.
 #must_use
 public fn bj_reflection_coefficient_complex(z_load: BjComplex, z0: BjComplex, out: *BjComplex): Result {
     var ar: f64 = z_load.re;
@@ -27400,8 +27409,9 @@ public fn bj_reflection_coefficient_complex(z_load: BjComplex, z0: BjComplex, ou
     var dr: f64 = ar + br;
     var di: f64 = ai + bi;
     var n2: f64 = dr * dr + di * di;
-    var tiny: f64 = _BJ_RF_TINY60;
-    if (n2 < tiny) { return Err(_bj_err_division_by_zero("Z_L + Z₀ = 0")); }
+    if (n2 < _BJ_RF_TWO60) {                                        # |Z_L + Z₀|² < 10⁻⁶⁰ exactly (ADR 0002 row 17)
+        if (_bj_rf_sq_below60(n2, ar, ai, -br, -bi) == 1) { return Err(_bj_err_division_by_zero("Z_L + Z₀ = 0")); }
+    }
     var nr: f64 = ar - br;
     var ni: f64 = ai - bi;
     var qr, qi = _bj_vx_cdiv(nr, ni, dr, di);
@@ -27660,9 +27670,7 @@ public fn bj_single_stub_match_complex(z_load: BjComplex, z0: f64, out: *f64): R
     var d1: f64 = 0.25;
     var d2: f64 = 0.25;
     var df: f64 = rl - z0;
-    var adf: f64 = f64_abs(df);
-    var tol: f64 = _BJ_RF_REL12 * z0;
-    if (adf <= tol) {
+    if (_bj_rf_within12(rl, z0, z0) == 1) {                         # |R_L − Z₀| ≤ 10⁻¹²·Z₀ exactly (row 17)
         var t0: f64 = -xl / (2.0 * z0);
         d1 = _bj_rf_d_from_t(t0);
     } else {
@@ -27904,17 +27912,87 @@ fn _bj_rf_index(ports, i, j): i64 {
 }
 
 # rf.rs's z0_equal, |a − b| ≤ 10⁻¹²·max(|a|, |b|), with both values finite: Rust's accepted an infinite impedance as
-# equal to any finite one (∞ ≤ 10⁻¹²·∞; ADR 0002 row 37). Public for src/touchstone.cyr's writer.
+# equal to any finite one (∞ ≤ 10⁻¹²·∞; ADR 0002 row 37). Decided exactly (_bj_rf_within12; row 17, M4 part 2c).
+# Public for src/touchstone.cyr's writer.
 #must_use
 public fn _bj_rf_z0_equal(a: f64, b: f64): i64 {
     if (_bj_rf_fin2(a, b) == 0) { return 0; }
-    var d: f64 = f64_abs(a - b);
     var aa: f64 = f64_abs(a);
     var ab: f64 = f64_abs(b);
     var mx: f64 = aa;
     if (ab > aa) { mx = ab; }
-    var lim: f64 = _BJ_RF_REL12 * mx;
-    if (d <= lim) { return 1; }
+    var w = _bj_rf_within12(a, b, mx);
+    return w;
+}
+
+# 1 when the exact (a₀ − b₀)² + (a₁ − b₁)² < 10⁻⁶⁰, else 0, for finite parts, given its rounded value n2 (NaN: 0):
+# src/crmath_cmp.cyr's band on n2, then the exact sum of squares (ADR 0002 row 17, M4 part 2c).
+#must_use
+fn _bj_rf_sq_below60(n2: f64, a0: f64, a1: f64, b0: f64, b1: f64): i64 {
+    var band = _bj_x_band(n2, _BJ_RF_TINY60);
+    if (band != 2) { return band; }
+    var pa: f64[3];
+    var pb: f64[3];
+    pa[0] = a0;
+    pa[1] = a1;
+    pa[2] = 0.0;
+    pb[0] = b0;
+    pb[1] = b1;
+    pb[2] = 0.0;
+    var r = _bj_x_r2_below(&pa, &pb, 60);
+    return r;
+}
+
+# 2^±600 and 2^±900: _bj_rf_within12's scaling.
+var _BJ_RF_2P600: f64 = 0x6570000000000000;
+var _BJ_RF_2M600: f64 = 0x1A70000000000000;
+var _BJ_RF_2P900: f64 = 0x7830000000000000;
+var _BJ_RF_2M900: f64 = 0x07B0000000000000;
+
+# 1 when |a − b| ≤ 10⁻¹²·m exactly, the decimal 10⁻¹² (ADR 0002 row 17's rule for a literal threshold, M4 part 2c),
+# for finite a and b and a finite m ≥ 0 that is |b| or max(|a|, |b|). With m scaled into [2^-900, 2^900] by 2^±600
+# (exact near the cut, where a and b agree to 39 bits), the rounded |a − b| against RN(RN(1e-12)·m) decides outside
+# ±0.1 % (their errors are below 2^-52). Inside, a − b is exact (Sterbenz), |a − b|·10^12 = p + e exactly (TwoProduct;
+# 10^12 is a double), and the sign of the exact m − p − e (Grow-Expansion) decides.
+#must_use
+fn _bj_rf_within12(a: f64, b: f64, m: f64): i64 {
+    if (m == 0.0) {
+        if (a == b) { return 1; }
+        return 0;
+    }
+    var x: f64 = a;
+    var y: f64 = b;
+    var z: f64 = m;
+    var lo2: f64 = _BJ_RF_2M900;
+    var hi2: f64 = _BJ_RF_2P900;
+    if (z < lo2) {
+        var up: f64 = _BJ_RF_2P600;
+        x = x * up;
+        y = y * up;
+        z = z * up;
+    } elif (z > hi2) {
+        var dn: f64 = _BJ_RF_2M600;
+        x = x * dn;
+        y = y * dn;
+        z = z * dn;
+    }
+    var d: f64 = x - y;
+    var ad: f64 = f64_abs(d);
+    var t: f64 = _BJ_RF_REL12 * z;
+    var near: f64 = t * 0.999;
+    var far: f64 = t * 1.001;
+    if (ad <= near) { return 1; }
+    if (ad >= far) { return 0; }
+    var p, e = _bj_k_two_prod(ad, 1000000000000.0);
+    var pv: f64 = p;
+    var ev: f64 = e;
+    var ex: f64[3];
+    var k = _bj_g_grow(&ex, 0, z);
+    k = _bj_g_grow(&ex, k, -pv);
+    k = _bj_g_grow(&ex, k, -ev);
+    if (k == 0) { return 1; }
+    var top: f64 = ex[k - 1];
+    if (top > 0.0) { return 1; }
     return 0;
 }
 
@@ -27961,11 +28039,14 @@ fn _bj_rf_cmul(ar: f64, ai: f64, br: f64, bi: f64): (f64, f64) {
 
 # A 2-port's T (transfer) parameters from s = [S11, S12, S21, S22] (re, im each) into t = [T11, T12, T21, T22], with
 # [b₁, a₁]ᵀ = T [a₂, b₂]ᵀ, T = (1/S21) [[−ΔS, S11], [−S22, 1]]: 0, or the DivisionByZero code recorded when
-# |S21|² < 10⁻⁶⁰. Mirrors rf.rs's `s_to_t`.
+# |S21|² < 10⁻⁶⁰, exactly for a finite S21 (ADR 0002 row 17). Mirrors rf.rs's `s_to_t`.
 fn _bj_rf_s_to_t(s: *f64, t: *f64): i64 {
     var n2: f64 = s[4] * s[4] + s[5] * s[5];
-    var tiny: f64 = _BJ_RF_TINY60;
-    if (n2 < tiny) { return _bj_err_division_by_zero("S21 = 0, cannot convert to T-parameters"); }
+    if (n2 < _BJ_RF_TWO60) {                                        # |S21|² < 10⁻⁶⁰ exactly (ADR 0002 row 17)
+        if (_bj_rf_sq_below60(n2, s[4], s[5], 0.0, 0.0) == 1) {
+            return _bj_err_division_by_zero("S21 = 0, cannot convert to T-parameters");
+        }
+    }
     var ir, ii = _bj_rf_recip(s[4], s[5]);
     var ar, ai = _bj_rf_cmul(s[0], s[1], s[6], s[7]);
     var br, bi = _bj_rf_cmul(s[2], s[3], s[4], s[5]);

@@ -4970,3 +4970,51 @@ stub's root, 2a-2 the cascade, 2a-3 S → Z), 2b round once, 2c the exact thresh
   equal**, HEAD's unchanged but the four functions' and `denormalize_impedance`'s (new rows). `rf.tcyr` passes on all
   three (228). The gate is clean (no warnings; execution coverage 323 of 323 functions); validate.py 619,661 rows, 0
   problems. Next, 2c: the exact thresholds.
+
+## 86. M4 part 2c: rf's exact thresholds (2026-11-15)
+
+- **ADR 0002 row 17, amended**: rf's remaining tests against a literal threshold are decided exactly on the inputs,
+  the threshold as its decimal value:
+  - `reflection_coefficient`'s |Z_L + Z₀| < 10⁻³⁰: `src/crmath_cmp.cyr`'s band (the rounded sum decides outside 64
+    ulps of the double 1e-30), then `_bj_x_sum_below` (TwoSum's exact parts), as wave's |n₁ + n₂|;
+  - `reflection_coefficient_complex`'s |Z_L + Z₀|² < 10⁻⁶⁰ and `s_to_t`'s |S21|² < 10⁻⁶⁰ for a finite S21 (the
+    cascade's first step): the band on the rounded sum of squares, then `_bj_x_r2_below` on the parts, as
+    relativity's |R|. A NaN or ∞ part keeps Rust's test (not refused);
+  - the stub match's |R_L − Z₀| ≤ 10⁻¹²·Z₀ and `z0_equal`'s |a − b| ≤ 10⁻¹²·max(|a|, |b|) (the cascade, S → Z,
+    `uniform_z0` and Touchstone's writer): `src/rf.cyr`'s new `_bj_rf_within12` scales m into [2^-900, 2^900] by
+    2^±600, lets the rounded comparison decide outside ±0.1 %, and inside it takes the exact |a − b| (Sterbenz),
+    |a − b|·10¹² = p + e by TwoProduct (10¹² is a double) and the sign of m − p − e by Grow-Expansion.
+
+  The input impedance's relative 10⁻¹⁵ stays on its rounded den (the user's answer of 2026-11-15).
+- **What Rust's tests got wrong**: the double 1e-30 lies 0.37 ulp above 10⁻³⁰, so a sum Z_L + Z₀ whose exact value is
+  below 10⁻³⁰ but rounds to 1e-30 was accepted (Γ = −1.2·10⁻¹⁵ for a DivisionByZero); the squared tests likewise.
+  For normal values the 10⁻¹² tests were already exact: |a − b| is a multiple of the smaller ulp, and RN(1e-12·m)
+  meets such a multiple only where it equals it exactly (with m = k·10¹²·2^-47, 10⁻¹²·m is exactly k ulps, and both
+  agree on the grid's rows). Below about 2^-970, 1e-12·m rounds to the subnormal grid: at m = (j·10¹² − r)·2^-1042
+  Rust took Z₀ values 10⁻¹² apart as equal.
+- **The grid**: 1,974 rows appended to `rf.tsv` (26,232): `knife_edge2`'s sums at 10⁻³⁰ (with 50 Ω among the
+  bases; the pair feeds `reflection_coefficient` and `quarter_wave_transformer`); `knife_edge`'s planar pairs at
+  |d| ≈ 10⁻³⁰ as Z_L + Z₀ and, from the origin, as S21 of either cascaded 2-port; the 10⁻¹² cut at m = k·10¹²·2^-47
+  (normal: no disagreement) and at m = (j·10¹² − r)·2^-1042 (subnormal 1e-12·m), each through the stub matches, a
+  cascade of two Z₀'s and S → Z of a mixed pair.
+- **validate.py**: row 17's exact tests (and 2a's rounding once) now apply together while `RF17["on"]`; a mapping
+  names the first of rows 13, 37 and 39 that accounts for its whole change, else 17. With the switch the old grids
+  map exactly as before (the files unchanged before the new rows). `rf.adr.tsv` maps 6,598 rows: of this bite's,
+  148 reflections now refused (42 real, 106 complex), 72 cascades refused for |S21|² < 10⁻⁶⁰, 12 cascades and 12
+  S → Z conversions refused for unequal Z₀; the grid's other cascade and S → Z rows are 2a's (282), its quarter-wave
+  rows 2b's (69), its stub rows 2a-1's (28).
+- **The stub's band shows in no row**: where its exact decision differs (Z₀ ≈ 2^-990), the input impedance's
+  |den|² underflows and refuses first. That range edge is part 2d's; the band's rows are in the grid for it.
+- **Tests**: `tests/rf.tcyr`'s `cyrius_exact_thresholds` (4 assertions, 232 in all).
+- **Benchmarks**: a full interleaved A/B against HEAD (three rounds, load 0.75 to 1.1) left every row unchanged
+  (median ratio 1.00 over 91 rows) but `rf/reflection_coefficient`, 15 → 23 ns: the band helper ran on every call.
+  A first compare now skips it for a rounded |Z_L + Z₀| at or above 2·10⁻³⁰ (|·|² at or above 2·10⁻⁶⁰), which cannot
+  lie below the threshold, and the squared tests' exact path is one helper (`_bj_rf_sq_below60`), so its locals stay
+  off the common path. A focused interleaved A/B (three rounds, load 0.6): `rf/reflection_coefficient` 14–16 → 14–15
+  ns, `reflection_coefficient_complex` 50–51 → 50–51 ns, `rf/s_cascade` 3.48 → 3.52 µs (+1.2 %: five exact
+  `z0_equal` calls).
+- **Result, every target** (x86_64 ELF, x86_64 PE, aarch64): **17 modules, 0 failing; 535,315 ok, 0 failed, 0
+  measured, 0 pending, 86,320 accepted (ADR 01: 30,859; ADR 0002: 55,461)** over 621,635 rows; **all 416 digests
+  equal**, HEAD's unchanged but those of the functions the grid grew (the reflections, the quarter-wave transformer,
+  the stub matches, the cascade, S → Z). `rf.tcyr` passes on all three (232). The gate is clean (no warnings;
+  execution coverage 323 of 323 functions); validate.py 621,635 rows, 0 problems. Next, 2d: the range edges.

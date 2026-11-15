@@ -10,7 +10,7 @@
 # shape fixed at construction: test_smatrix_inconsistent_does_not_panic is n/a), row 37 (z0_equal on finite values),
 # the S-parameter reasons and the heap; (2a-1) ADR 0002 row 39, the stub match's cancellation-free root; (2a-2) row
 # 17, the cascade's star product rounded once and its exact T22 test; (2a-3) row 17, S → Z rounded once; (2b) row
-# 13, round once.
+# 13, round once; (2c) row 17, the exact thresholds.
 # tests/golden/rf.tsv pins every function over its grid against Rust besides.
 
 include "tests/lib.cyr"
@@ -692,6 +692,46 @@ fn cyrius_round_once(): i64 {
     var wi: f64 = w.im;
     assert(is_ok(t6) == 1 && wr == 1.6666666666666667 && wi == 2.3333333333333335,
       "Z/Z₀ one division a part (Rust's 5·(1/3) = 1.6666666666666665 and 2.333333333333333)");
+    return 0;
+}
+
+# ADR 0002 row 17 (M4 part 2c): rf's tests against 10⁻³⁰, 10⁻⁶⁰ and 10⁻¹² decided exactly. Each case is one where
+# Rust's rounded test accepted.
+fn cyrius_exact_thresholds(): i64 {
+    test_group("cyrius_exact_thresholds");
+    var want = "division by zero in EM calculation: Z_L + Z₀ = 0";
+    var a: f64 = _bj_from_bits(0x39A4484BFEEBC29A);
+    var b: f64 = _bj_from_bits(0x39A4484BFEEBC2A5);
+    var t1, v1 = bj_reflection_coefficient(a, b);
+    assert(err_is(t1, v1, BJ_ERR_DIVISION_BY_ZERO, want) == 1,
+      "the exact Z_L + Z₀ lies below 10⁻³⁰, its rounding at the double 1e-30 (Rust's Γ = −1.2·10⁻¹⁵)");
+    var x: f64 = _bj_from_bits(0x39A856C1984E1CAD);
+    var y: f64 = _bj_from_bits(0x39B039D665896886);
+    var g: BjComplex;
+    var mz: f64 = -0.0;
+    var t2, v2 = bj_reflection_coefficient_complex(BjComplex_new(x, y), BjComplex_new(mz, mz), &g);
+    assert(err_is(t2, v2, BJ_ERR_DIVISION_BY_ZERO, want) == 1,
+      "|Z_L + Z₀|² < 10⁻⁶⁰ exactly (Rust's rounded sum isn't: Γ = 1)");
+    var m: BjSMatrix;
+    var c: BjSMatrix;
+    tp_real(0.1, 0.5, 0.0, 0.2, 50.0, &m);
+    sset(&m, 2, 1, BjComplex_new(x, y));
+    c.ports = 9;
+    var t3, v3 = m.cascade(&m, &c);
+    var want3 = "division by zero in EM calculation: S21 = 0, cannot convert to T-parameters";
+    assert(err_is(t3, v3, BJ_ERR_DIVISION_BY_ZERO, want3) == 1 && c.ports == 9,
+      "the same S21: |S21|² < 10⁻⁶⁰ exactly, refused, out untouched");
+    BjSMatrix_free(&m);
+    var z0: f64 = _bj_from_bits(0x0210005D38117FFF);
+    var z1: f64 = _bj_from_bits(0x0210005D38116E67);
+    var m2: BjSMatrix;
+    tp_real(0.1, 0.5, 0.5, 0.2, z0, &m);
+    tp_real(0.1, 0.5, 0.5, 0.2, z1, &m2);
+    var t4, v4 = m.cascade(&m2, &c);
+    assert(is_err_result(t4) == 1 && v4 == BJ_ERR_INVALID_PARAMETER,
+      "|Z₀ − Z₀′| just above 10⁻¹²·Z₀ at Z₀ ≈ 2^-990, where Rust's 1e-12·Z₀ rounds to the subnormal grid and accepted");
+    BjSMatrix_free(&m);
+    BjSMatrix_free(&m2);
     return 0;
 }
 
@@ -1560,6 +1600,7 @@ fn main(): i64 {
     cyrius_smatrix();
     cyrius_cascade_exact();
     cyrius_s_to_z_exact();
+    cyrius_exact_thresholds();
     rust_tests_e();
     cyrius_touchstone();
     rust_tests_f();
