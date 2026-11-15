@@ -5018,3 +5018,43 @@ stub's root, 2a-2 the cascade, 2a-3 S → Z), 2b round once, 2c the exact thresh
   equal**, HEAD's unchanged but those of the functions the grid grew (the reflections, the quarter-wave transformer,
   the stub matches, the cascade, S → Z). `rf.tcyr` passes on all three (232). The gate is clean (no warnings;
   execution coverage 323 of 323 functions); validate.py 621,635 rows, 0 problems. Next, 2d: the range edges.
+
+## 87. M4 part 2d-1: the input impedance at its range edges (2026-11-15)
+
+M4 part 2d, the range edges (ADR 0002 row 18), runs in five bites: 2d-1 the input impedance; 2d-2 the lossy Z₀ and
+the propagation constant (their complex chains into hisab's square root, which `BjComplex_sqrt` already carries at its
+edges); 2d-3 the reflection coefficients, the Smith chart's Γ and z, and the stub match's discriminant and roots; 2d-4
+Touchstone's MA and DB magnitudes; 2d-5 the array factors' ψ past DBL_MAX.
+
+- **The finding** (the user's answer of 2026-11-15 named the first): `input_impedance_lossless_complex` refused a load
+  past |Z_L| = 1.3·10¹⁵⁴, since Z₀ + |Z_L| overflowed and every |den| fell under 10⁻¹⁵·∞; refused finite β and l
+  whose product passed DBL_MAX ("βl must be finite"); and refused impedances near 10⁻²⁰⁰ Ω as unbounded, since |den|²
+  underflowed to 0. Where |den|² overflowed it passed the 10⁻¹⁵ test by accident: a λ/4 line of 10³⁰⁰ Ω on a 1 Ω
+  load (Z_in = 10⁶⁰⁰) was accepted.
+- **ADR 0002 row 18, amended** (`src/rf.cyr`): Rust's chain stays where every intermediate is normal, which the guard
+  checks cheaply: each nonzero input in [2^-100, 2^101) (βl, its sine and cosine, the products and |Z_L|² then lie
+  within 2^±400), the two cancelling sums X·c + Z₀·s and Z₀·c − X·s exactly 0 or at least 2^-400 (|den|², Smith's
+  ratio and its products then stay above 2^-910), and the quotient's parts 0 or normal. Elsewhere `_bj_rf_zin_ux`
+  runs the chain with an unbounded exponent: kimiya's 53-bit `_bj_k_ux_*`, βl's sine and cosine by src/crmath_vx.cyr
+  (Payne–Hanek past DBL_MAX), the 10⁻¹⁵ test on the 53-bit |den| and 10⁻¹⁵·scale, Smith's division, and the products
+  by Z₀ rounded once. A non-finite β or l is still refused (Rust's reason); a finite pair no longer is. The stub match
+  calls it for each solution, so its tiny-Z₀ rows now reach row 17's exact band (M4 part 2c): 48 of them.
+- **The grid**: 739 rows appended to `rf.tsv` (26,971): thirteen magnitudes from 10⁻³⁰⁰ to 10³⁰⁰ (the box's 2^±100
+  and 2^±101 among them) for the load, Z₀ or both, at βl = 0.7 and π/2; βl at 10⁴⁰⁰, DBL_MAX·2, 10⁻⁴⁰⁰, subnormal
+  and the like; 400 seeded wide values; the stub matches at each magnitude.
+- **validate.py** transcribes the unbounded chain (`rf_zin_ux`: rnd53 per operation, MPFR's widest range for the sine
+  and cosine) under `RF18`, so the whole chain is the model and the guard is proved on every row Rust's chain keeps.
+  `rf.adr.tsv` maps **303 input impedances** (222 refusals as unbounded and 37 for βl now computed, 44 values) and
+  **241 stub matches** (215 refusals now computed, 26 now refused: Rust's |den|² had overflowed at d = λ/4 against
+  Z₀ = 10³⁰⁰ or DBL_MAX), all passing; with 2c's 48, 592 rows.
+- **Tests**: `tests/rf.tcyr`'s `cyrius_zin_edges` (5 assertions, 237 in all).
+- **Benchmarks**: a focused interleaved A/B against HEAD (four rounds; the load rose from 1.1 to 2.6, other repos'
+  benches beside it): `rf/input_impedance_complex` 236–264 → 265–297 ns, about +30 ns for the guard, after inlining
+  its common case (six helper calls first cost +54 ns); `rf/single_stub_match` (two input impedances) about +0.1 µs.
+- **ADR 0002's table**: row 18 carried four unescaped |x|, |y| pipes from M3 part 2d-1c, which split it into extra
+  cells; escaped (every row now has its four cells).
+- **Result, every target** (x86_64 ELF, x86_64 PE, aarch64): **17 modules, 0 failing; 535,456 ok, 0 failed, 0
+  measured, 0 pending, 86,918 accepted (ADR 01: 30,860; ADR 0002: 56,058)** over 622,374 rows; **all 416 digests
+  equal**, HEAD's unchanged but the input impedance's and the stub matches'. `rf.tcyr` passes on all three (237). The
+  gate is clean (no warnings; execution coverage 323 of 323 functions); validate.py 622,374 rows, 0 problems. Next,
+  2d-2.

@@ -5592,15 +5592,43 @@ def rf_sqrt_polar(P, z):
     return rf_cx(cx_polar(P, fsqrt(cx_abs(z[0], z[1])), P["atan2"](z[1], z[0]) / 2.0))
 
 
+def rf_zin_ux(z0, zr, zi, beta, length):
+    """The port's input impedance with an unbounded exponent (ADR 0002 row 18, M4 part 2d-1): every operation of
+    Rust's chain rounded to 53 bits (rnd53, MPFR's widest range for βl's sine and cosine), the last products by Z₀
+    once into binary64; (re, im), or the DivisionByZero tokens."""
+    ident = lambda v: v                                # noqa: E731
+    r, x, z = ux(zr), ux(zi), ux(z0)
+    bl = ux_mul(ux(beta), ux(length))
+    s, c = w_trig("sin", bl), w_trig("cos", bl)
+    nr, ni = ux_mul(r, c), ux_add(ux_mul(x, c), ux_mul(z, s))
+    dr, di = ux_sub(ux_mul(z, c), ux_mul(x, s)), ux_mul(r, s)
+    scale = ux_add(z, ux_sqrt(ux_add(ux_mul(r, r), ux_mul(x, x))))
+    dm = ux_sqrt(ux_add(ux_mul(dr, dr), ux_mul(di, di)))
+    if dm[0] <= ux_mul(ux(1e-15), scale)[0]:
+        return dz_err("transmission line input impedance is unbounded (Z₀cos βl + jZ_L sin βl = 0)")
+    if abs(dr[0]) >= abs(di[0]):
+        q = ux_div(di, dr)
+        d = ux_add(dr, ux_mul(di, q))
+        qr, qi = ux_div(ux_add(nr, ux_mul(ni, q)), d), ux_div(ux_sub(ni, ux_mul(nr, q)), d)
+    else:
+        q = ux_div(dr, di)
+        d = ux_add(ux_mul(dr, q), di)
+        qr, qi = ux_div(ux_add(ux_mul(nr, q), ni), d), ux_div(ux_sub(ux_mul(ni, q), nr), d)
+    return (ux_fin(ux_mul(qr, z, ident)), ux_fin(ux_mul(qi, z, ident)))
+
+
 def rf_zin(P, z0, zr, zi, beta, length):
-    """input_impedance_lossless_complex: (re, im), or an error's tokens."""
+    """input_impedance_lossless_complex: (re, im), or an error's tokens. With RF18 on, the port's: Rust's chain at
+    an unbounded exponent (rf_zin_ux)."""
     if not (math.isfinite(z0) and z0 > 0.0):
         return ip_err(f"Z₀ must be finite and positive, got {rust_display(z0)}")
     if not rf_fin(zr, zi):
         return ip_err(f"Z_L must be finite, got {cx_fmt(zr, zi)}")
     bl = beta * length
-    if not math.isfinite(bl):
+    if not (rf_fin(beta, length) if RF18["on"] else math.isfinite(bl)):
         return ip_err(f"electrical length βl must be finite, got β={rust_display(beta)}, l={rust_display(length)}")
+    if RF18["on"]:
+        return rf_zin_ux(z0, zr, zi, beta, length)
     s, c = P["sin"](bl), P["cos"](bl)
     num = (zr * c, zi * c + z0 * s)
     den = (z0 * c - zi * s, zr * s)
@@ -6446,14 +6474,17 @@ RF_ROW13 = ("rf::characteristic_impedance_lossless", "rf::phase_velocity", "rf::
 # M4 part 2c: ADR 0002 row 17's exact tests (and 2a-2's and 2a-3's rounding once) apply while RF17["on"]; Rust's
 # rounded ones otherwise. rf_adr_rows turns it on for the port's values.
 RF17 = {"on": False}
+RF18 = {"on": False}                                    # row 18's unbounded chains (M4 part 2d)
 
 
-def rf_eval17(on, f):
+def rf_eval17(on, f, on18=None):
     RF17["on"] = on
+    RF18["on"] = on if on18 is None else on18
     try:
         return f()
     finally:
         RF17["on"] = False
+        RF18["on"] = False
 
 
 def rf_any_eval(fn, ins, v, port):
@@ -6472,8 +6503,8 @@ def rf_adr_rows(path: Path) -> list:
     the first port's or the file's R (∞ ≤ 10⁻¹²·∞), is refused by the port's (M4 parts 1b, 1c-2); row 39 where the
     stub match's cancelling root, taken without its cancellation, moves a (d, ℓ) (M4 part 2a-1); row 17 where the
     cascade's star product (2a-2) or S → Z (2a-3) rounded once with its threshold exact, or the exact tests of M4 part
-    2c (|Z_L + Z₀|, |S21|, the stub's band, z0_equal), change a row. A row takes the first of its rows that accounts
-    for its whole change."""
+    2c (|Z_L + Z₀|, |S21|, the stub's band, z0_equal), change a row; row 18 where a chain with an unbounded exponent
+    does (M4 part 2d). A row takes the first of its rows that accounts for its whole change."""
     out = []
     for fn, _cls, ins, outs, v in sc_lines(path):
         if fn in ("rf::parse_touchstone",):
@@ -6487,6 +6518,8 @@ def rf_adr_rows(path: Path) -> list:
         row = "17"
         if toks_same(full, rf_eval17(False, lambda: rf_any_eval(fn, ins, v, True))):
             row = "13" if fn in RF_ROW13 else ("39" if fn == "rf::single_stub_match_complex" else "37")
+        elif toks_same(full, rf_eval17(False, lambda: rf_any_eval(fn, ins, v, False), on18=True)):
+            row = "18"
         out.append((fn, ins, wire(full), row, f"oracle {outs[:200]}; ADR 0002 row {row}"))
     return out
 

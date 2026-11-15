@@ -341,6 +341,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
   decided exactly on the inputs (ADR 0002 row 17 amended, see Fixed), on src/crmath_cmp.cyr's band and exact tests and
   a new `_bj_rf_within12`. `rf.tsv` grows by 1,974 knife-edge rows (26,232); validate.py's model takes row 17's exact
   tests together (`RF17`), and a mapping names the first row that accounts for its whole change.
+- **Cyrius port, M4 part 2d-1 — the input impedance at its range edges** (`src/rf.cyr`): Rust's chain with an
+  unbounded exponent where it leaves the range (ADR 0002 row 18 amended, see Fixed). 2d runs in five bites: 2d-1 the
+  input impedance, 2d-2 the lossy Z₀ and the propagation constant, 2d-3 reflection, the Smith chart and the stub's
+  discriminant, 2d-4 Touchstone's MA and DB magnitudes, 2d-5 the array factors. `rf.tsv` grows by 739 edge rows
+  (26,971); validate.py's model of the unbounded chain runs under `RF18`.
 
 ### Fixed
 
@@ -752,6 +757,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
   thresholds); for normal values the 10⁻¹² tests already were. Cost: the exact tests start below 2·10⁻³⁰ (2·10⁻⁶⁰),
   so `rf/reflection_coefficient` stays at 15 ns (23 ns without that first compare); `rf/s_cascade` 3.48 → 3.52 µs
   (the exact z0_equal); the rest unchanged (`port-parity.md` §86).
+- **rf** (ADR 0002 row 18 amended, M4 part 2d-1, the user's answer of 2026-11-15): `input_impedance_lossless_complex`
+  refused a load past |Z_L| = 1.3·10¹⁵⁴ (Z₀ + |Z_L| overflowed, so every |den| fell under 10⁻¹⁵·∞), refused finite β
+  and l whose product passed DBL_MAX, and refused impedances near 10⁻²⁰⁰ Ω, whose |den|² underflowed; and where
+  |den|² overflowed it accepted a den that the test refuses (a λ/4 line of 10³⁰⁰ Ω on 1 Ω). Its chain now runs with
+  an unbounded exponent there, the 10⁻¹⁵ test on the 53-bit |den| and scale; the stub match follows. Cost: the
+  guard, about +30 ns on `rf/input_impedance_complex` (≈ 238 → 268 ns, measured at load 1.1–2.6) and about +0.1 µs
+  on `rf/single_stub_match` (two input impedances) (`port-parity.md` §87).
 
 ### Performance
 

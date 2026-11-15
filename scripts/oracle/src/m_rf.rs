@@ -44,6 +44,10 @@
 //!
 //! M4 part 2c appends the exact thresholds' knife edges (row 17): |Z_L + Z₀| at 10^-30, |Z_L + Z₀|² and |S21|² at
 //! 10^-60, and the 10^-12 relative tests of the stub's band and z0_equal exactly on their cut.
+//!
+//! M4 part 2d-1 appends the input impedance's range edges (row 18): |Z_L| past 1.3·10^154, βl past DBL_MAX and below
+//! 2^-1022, |den|² underflowing, magnitudes far apart, the guard's box, seeded wide values; and the stub match across
+//! magnitudes.
 
 use crate::grids::{Edge2, Rng, knife_edge, knife_edge2, specials};
 use crate::m_field::res_f;
@@ -683,8 +687,42 @@ pub fn emit() -> Module {
     emit_2a3(r, &mut rng);
     emit_2b(r, &mut rng);
     emit_2c(r);
+    emit_2d1(r, &mut rng);
 
     rows.m
+}
+
+/// M4 part 2d-1: the input impedance at its range edges (ADR 0002 row 18): |Z_L| past 1.3·10^154 (Rust's scale
+/// overflowed and refused), βl past DBL_MAX (refused) and below 2^-1022, impedances whose |den|² underflows (down to
+/// 10^-300), Z₀ and loads far apart in magnitude, the guard's 2^±100 box on either side, seeded wide values; and the
+/// stub match on loads of every magnitude, which takes it.
+fn emit_2d1(r: &mut Rows, rng: &mut Rng) {
+    let mags = [1e-300, 1e-200, 1e-160, 1e-120, 2f64.powi(-101), 2f64.powi(-100), 1.0, 2f64.powi(100),
+                2f64.powi(101), 1e120, 1e155, 1e200, 1e300];
+    for &m in &mags {
+        for &(a, b) in &[(1.0, 1.0), (0.6, -0.8), (1.0, 0.0), (0.0, 1.0), (2.0, 0.5)] {
+            r.zin(50.0, (a * m, b * m), 1.0, 0.7);
+            r.zin(m, (a * m, b * m), 1.0, 0.7);
+            r.zin(m, (a * 50.0, b * 50.0), 1.0, 0.7);
+            r.zin(m, (a * m, b * m), 2.0 * std::f64::consts::PI, 0.25);
+        }
+        r.stub_complex((m, m), m);
+        r.stub_complex((m * 0.3, -m), m);
+        r.stub(m * 2.0, m);
+    }
+    for &(beta, len) in &[(1e200, 1e200), (1e300, 10.0), (f64::MAX, 2.0), (1e-200, 1e-200), (1e-300, 1e-100),
+                          (5e-324, 1.0), (2f64.powi(-1023), 0.5), (1e154, 1e154), (3e-160, 1e-160), (1.5, 1e308)] {
+        for &zl in &[(75.0, 25.0), (0.0, 30.0), (50.0, 0.0), (1e-300, 0.0)] {
+            r.zin(50.0, zl, beta, len);
+        }
+    }
+    for _ in 0..200 {
+        let m = rng.log_uniform(-300.0, 300.0);
+        let zl = (m * rng.uniform(0.0, 2.0), m * rng.uniform(-2.0, 2.0));
+        let z0 = m * rng.log_uniform(-2.0, 2.0);
+        r.zin(z0, zl, rng.log_uniform(-3.0, 3.0), rng.uniform(0.0, 1.0));
+        r.zin(rng.log_uniform(-300.0, 300.0), zl, rng.log_uniform(-300.0, 300.0), rng.log_uniform(-300.0, 300.0));
+    }
 }
 
 /// M4 part 2c: the exact thresholds (ADR 0002 row 17) on their knife edges. |Z_L + Z₀| against 10^-30

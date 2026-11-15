@@ -218,7 +218,7 @@ public fn bj_input_impedance_lossless_complex(z0: f64, z_load: BjComplex, beta: 
     var zi: f64 = z_load.im;
     if (_bj_rf_fin2(zr, zi) == 0) { return Err(_bj_rf_bad_cx("Z_L must be finite, got ", zr, zi)); }
     var bl: f64 = beta * length;
-    if (_bj_is_finite(bl) == 0) {
+    if (_bj_rf_fin2(beta, length) == 0) {                           # βl past DBL_MAX is a range edge (row 18)
         var t = _bj_err_reason(BJ_ERR_INVALID_PARAMETER);
         _bj_tx_cstr(t, "electrical length βl must be finite, got β=");
         _bj_fmt_f64_display(t, beta);
@@ -226,25 +226,166 @@ public fn bj_input_impedance_lossless_complex(z0: f64, z_load: BjComplex, beta: 
         _bj_fmt_f64_display(t, length);
         return Err(BJ_ERR_INVALID_PARAMETER);
     }
-    var s, c = _bj_sin_cos(bl);
-    var nr: f64 = zr * c;
-    var ni: f64 = zi * c + z0 * s;
-    var dr: f64 = z0 * c - zi * s;
-    var di: f64 = zr * s;
-    var zm: f64 = f64_sqrt(zr * zr + zi * zi);
-    var scale: f64 = z0 + zm;
-    var dm: f64 = f64_sqrt(dr * dr + di * di);
-    var lim: f64 = _BJ_RF_REL15 * scale;
-    if (dm != dm || dm <= lim) {
-        var context = "transmission line input impedance is unbounded (Z₀cos βl + jZ_L sin βl = 0)";
-        return Err(_bj_err_division_by_zero(context));
+    var context = "transmission line input impedance is unbounded (Z₀cos βl + jZ_L sin βl = 0)";
+    # The guard (the section comment), its common case one test on the exponent fields.
+    var e1 = (load64(&z0) >> 52) & 2047;
+    var e2 = (load64(&zr) >> 52) & 2047;
+    var e3 = (load64(&zi) >> 52) & 2047;
+    var e4 = (load64(&beta) >> 52) & 2047;
+    var e5 = (load64(&length) >> 52) & 2047;
+    var lo = (e1 - 923) | (e2 - 923) | (e3 - 923) | (e4 - 923) | (e5 - 923);
+    var hi = (1123 - e1) | (1123 - e2) | (1123 - e3) | (1123 - e4) | (1123 - e5);
+    var box = 1;
+    if ((lo | hi) < 0) { box = _bj_rf_box100(z0, zr, zi) & _bj_rf_box100(beta, length, 0.0); }
+    if (box == 1) {
+        var s, c = _bj_sin_cos(bl);
+        var nr: f64 = zr * c;
+        var ni: f64 = zi * c + z0 * s;
+        var dr: f64 = z0 * c - zi * s;
+        var di: f64 = zr * s;
+        var en1 = (load64(&ni) >> 52) & 2047;
+        var en2 = (load64(&dr) >> 52) & 2047;
+        if ((en1 >= 623 && en2 >= 623) || (_bj_rf_tiny400(ni) == 0 && _bj_rf_tiny400(dr) == 0)) {
+            var zm: f64 = f64_sqrt(zr * zr + zi * zi);
+            var scale: f64 = z0 + zm;
+            var dm: f64 = f64_sqrt(dr * dr + di * di);
+            var lim: f64 = _BJ_RF_REL15 * scale;
+            if (dm != dm || dm <= lim) { return Err(_bj_err_division_by_zero(context)); }
+            var qr, qi = _bj_vx_cdiv(nr, ni, dr, di);
+            var eq = ((load64(&qr) >> 52) & 2047) - 1;
+            var eq2 = ((load64(&qi) >> 52) & 2047) - 1;
+            if (((eq | eq2 | (2045 - eq) | (2045 - eq2)) >= 0) || (_bj_rf_subn(qr) == 0 && _bj_rf_subn(qi) == 0)) {
+                var wr: f64 = qr * z0;
+                var wi: f64 = qi * z0;
+                out.re = wr;
+                out.im = wi;
+                return Ok(0);
+            }
+        }
     }
-    var qr, qi = _bj_vx_cdiv(nr, ni, dr, di);
-    var wr: f64 = qr * z0;
-    var wi: f64 = qi * z0;
+    if (_bj_rf_zin_ux(z0, zr, zi, beta, length, out) == 1) { return Err(_bj_err_division_by_zero(context)); }
+    return Ok(0);
+}
+
+# ── the input impedance at its range edges (ADR 0002 row 18, M4 part 2d-1) ─────────────────────────────────────────
+#
+# Rust's chain is kept where every intermediate stays normal: each nonzero input in [2^-100, 2^100] (so βl, its sine
+# and cosine, the products and |Z_L|² lie within 2^±400), Z_L cos βl + jZ₀ sin βl and Z₀cos βl − X_L sin βl (the two
+# cancelling sums) exactly 0 or at least 2^-400 (so |den|², Smith's ratio and its products stay above 2^-910), and the
+# quotient's parts 0 (an exact zero: a nonzero numerator gives at least 2^-1056) or normal. Anything else runs the
+# chain with an unbounded exponent (_bj_rf_zin_ux): every operation rounded to 53 bits (kimiya's _bj_k_ux_*), βl's
+# sine and cosine to 53 bits (src/crmath_vx.cyr, Payne–Hanek past DBL_MAX), the threshold on the 53-bit |den| and
+# 10⁻¹⁵·scale, the last products by Z₀ rounded once into binary64. So βl past DBL_MAX is no longer refused (β and l
+# finite), nor a load with |Z_L| past 1.3·10¹⁵⁴, nor impedances whose |den|² underflows.
+
+# 1 when x is 0 or 2^-100 ≤ |x| < 2^101, for each of a, b, c.
+#must_use
+fn _bj_rf_box100(a: f64, b: f64, c: f64): i64 {
+    var ea = (load64(&a) >> 52) & 2047;
+    var eb = (load64(&b) >> 52) & 2047;
+    var ec = (load64(&c) >> 52) & 2047;
+    if (((ea - 923) | (eb - 923) | (ec - 923) | (1123 - ea) | (1123 - eb) | (1123 - ec)) >= 0) { return 1; }
+    var ok = 1;
+    if (a != 0.0 && (ea < 923 || ea > 1123)) { ok = 0; }
+    if (b != 0.0 && (eb < 923 || eb > 1123)) { ok = 0; }
+    if (c != 0.0 && (ec < 923 || ec > 1123)) { ok = 0; }
+    return ok;
+}
+
+# 1 when x is nonzero and below 2^-400 in magnitude.
+#must_use
+fn _bj_rf_tiny400(x: f64): i64 {
+    var ex = (load64(&x) >> 52) & 2047;
+    if (x != 0.0 && ex < 623) { return 1; }
+    return 0;
+}
+
+# 1 when x is nonzero and not a normal finite double.
+#must_use
+fn _bj_rf_subn(x: f64): i64 {
+    var ex = (load64(&x) >> 52) & 2047;
+    if (x != 0.0 && (ex == 0 || ex == 2047)) { return 1; }
+    return 0;
+}
+
+# |x| < |y| for 53-bit values: 1, else 0.
+#must_use
+fn _bj_rf_ux_absless(xs: f64, xe, ys: f64, ye): i64 {
+    var ax: f64 = f64_abs(xs);
+    var ay: f64 = f64_abs(ys);
+    if (_bj_k_ux_cmp(ax, xe, ay, ye) == 0 - 1) { return 1; }
+    return 0;
+}
+
+# The input impedance's chain with an unbounded exponent (the section comment) into *out: 0, or 1 when
+# |den| ≤ 10⁻¹⁵·(Z₀ + |Z_L|) (DivisionByZero, out untouched), for finite inputs.
+fn _bj_rf_zin_ux(z0: f64, zr: f64, zi: f64, beta: f64, length: f64, out: *BjComplex): i64 {
+    var z0s, z0e = _bj_k_ux_from(z0);
+    var rs, re = _bj_k_ux_from(zr);
+    var is, ie = _bj_k_ux_from(zi);
+    var bs, be = _bj_k_ux_from(beta);
+    var ls, le = _bj_k_ux_from(length);
+    var ts, te = _bj_k_ux_mul(bs, be, ls, le);                      # βl
+    var ss, se = _bj_vx_sin53(ts, te);
+    var cs, ce = _bj_vx_cos53(ts, te);
+    var nrs, nre = _bj_k_ux_mul(rs, re, cs, ce);                    # num = (R·c, X·c + Z₀·s)
+    var p1s, p1e = _bj_k_ux_mul(is, ie, cs, ce);
+    var p2s, p2e = _bj_k_ux_mul(z0s, z0e, ss, se);
+    var nis, nie = _bj_k_ux_add(p1s, p1e, p2s, p2e);
+    var p3s, p3e = _bj_k_ux_mul(z0s, z0e, cs, ce);                  # den = (Z₀·c − X·s, R·s)
+    var p4s, p4e = _bj_k_ux_mul(is, ie, ss, se);
+    var drs, dre = _bj_k_ux_sub(p3s, p3e, p4s, p4e);
+    var dis, die = _bj_k_ux_mul(rs, re, ss, se);
+    var r2s, r2e = _bj_k_ux_mul(rs, re, rs, re);                    # scale = Z₀ + √(R² + X²)
+    var i2s, i2e = _bj_k_ux_mul(is, ie, is, ie);
+    var m2s, m2e = _bj_k_ux_add(r2s, r2e, i2s, i2e);
+    var zms, zme = _bj_k_ux_sqrt(m2s, m2e);
+    var scs, sce = _bj_k_ux_add(z0s, z0e, zms, zme);
+    var a2s, a2e = _bj_k_ux_mul(drs, dre, drs, dre);                # |den| = √(dr² + di²)
+    var b2s, b2e = _bj_k_ux_mul(dis, die, dis, die);
+    var d2s, d2e = _bj_k_ux_add(a2s, a2e, b2s, b2e);
+    var dms, dme = _bj_k_ux_sqrt(d2s, d2e);
+    var ks, ke = _bj_k_ux_from(_BJ_RF_REL15);
+    var lms, lme = _bj_k_ux_mul(ks, ke, scs, sce);
+    if (_bj_k_ux_le(dms, dme, lms, lme) == 1) { return 1; }
+    var qrs: f64 = 0.0;
+    var qre = 0;
+    var qis: f64 = 0.0;
+    var qie = 0;
+    if (_bj_rf_ux_absless(drs, dre, dis, die) == 0) {               # Smith: |dr| ≥ |di|
+        var rr, rre = _bj_k_ux_div(dis, die, drs, dre);
+        var t1, t1e = _bj_k_ux_mul(dis, die, rr, rre);
+        var dd, dde = _bj_k_ux_add(drs, dre, t1, t1e);
+        var t2, t2e = _bj_k_ux_mul(nis, nie, rr, rre);
+        var u1, u1e = _bj_k_ux_add(nrs, nre, t2, t2e);
+        var t3, t3e = _bj_k_ux_mul(nrs, nre, rr, rre);
+        var u2, u2e = _bj_k_ux_sub(nis, nie, t3, t3e);
+        var q1, q1e = _bj_k_ux_div(u1, u1e, dd, dde);
+        var q2, q2e = _bj_k_ux_div(u2, u2e, dd, dde);
+        qrs = q1;
+        qre = q1e;
+        qis = q2;
+        qie = q2e;
+    } else {
+        var rr2, rr2e = _bj_k_ux_div(drs, dre, dis, die);
+        var t4, t4e = _bj_k_ux_mul(drs, dre, rr2, rr2e);
+        var dd2, dd2e = _bj_k_ux_add(t4, t4e, dis, die);
+        var t5, t5e = _bj_k_ux_mul(nrs, nre, rr2, rr2e);
+        var u3, u3e = _bj_k_ux_add(t5, t5e, nis, nie);
+        var t6, t6e = _bj_k_ux_mul(nis, nie, rr2, rr2e);
+        var u4, u4e = _bj_k_ux_sub(t6, t6e, nrs, nre);
+        var q3, q3e = _bj_k_ux_div(u3, u3e, dd2, dd2e);
+        var q4, q4e = _bj_k_ux_div(u4, u4e, dd2, dd2e);
+        qrs = q3;
+        qre = q3e;
+        qis = q4;
+        qie = q4e;
+    }
+    var wr: f64 = _bj_k_ux_mul_f64(qrs, qre, z0s, z0e);
+    var wi: f64 = _bj_k_ux_mul_f64(qis, qie, z0s, z0e);
     out.re = wr;
     out.im = wi;
-    return Ok(0);
+    return 0;
 }
 
 # ── reflection and the losses ───────────────────────────────────────────────────────────────────────────────────

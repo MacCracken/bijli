@@ -10,7 +10,7 @@
 # shape fixed at construction: test_smatrix_inconsistent_does_not_panic is n/a), row 37 (z0_equal on finite values),
 # the S-parameter reasons and the heap; (2a-1) ADR 0002 row 39, the stub match's cancellation-free root; (2a-2) row
 # 17, the cascade's star product rounded once and its exact T22 test; (2a-3) row 17, S → Z rounded once; (2b) row
-# 13, round once; (2c) row 17, the exact thresholds.
+# 13, round once; (2c) row 17, the exact thresholds; (2d-1) row 18, the input impedance's range edges.
 # tests/golden/rf.tsv pins every function over its grid against Rust besides.
 
 include "tests/lib.cyr"
@@ -732,6 +732,33 @@ fn cyrius_exact_thresholds(): i64 {
       "|Z₀ − Z₀′| just above 10⁻¹²·Z₀ at Z₀ ≈ 2^-990, where Rust's 1e-12·Z₀ rounds to the subnormal grid and accepted");
     BjSMatrix_free(&m);
     BjSMatrix_free(&m2);
+    return 0;
+}
+
+# ADR 0002 row 18 (M4 part 2d-1): the input impedance at its range edges, Rust's chain with an unbounded exponent.
+# Each case is one Rust refused; the values are validate.py's model's.
+fn cyrius_zin_edges(): i64 {
+    test_group("cyrius_zin_edges");
+    var z: BjComplex;
+    var e200: f64 = _bj_from_bits(0x6974E718D7D7625A);
+    var em200: f64 = _bj_from_bits(0x16687E92154EF7AC);
+    var t1, v1 = bj_input_impedance_lossless_complex(50.0, BjComplex_new(e200, e200), 1.0, 0.7, &z);
+    var mz: f64 = -0.0;
+    assert(is_ok(t1) == 1 && same(z.re, mz) == 1 && z.im == -59.362091606333976,
+      "|Z_L| = 1.4·10²⁰⁰: −jZ₀cot βl (Rust's Z₀ + |Z_L| overflowed and refused it)");
+    var t2, v2 = bj_input_impedance_lossless_complex(50.0, BjComplex_new(75.0, 25.0), e200, e200, &z);
+    assert(is_ok(t2) == 1 && z.re == 60.708277492890204 && z.im == 29.95225230290311,
+      "βl = 10⁴⁰⁰: its sine and cosine past DBL_MAX (Rust refused a non-finite βl)");
+    var t3, v3 = bj_input_impedance_lossless_complex(em200, BjComplex_new(em200, em200), 1.0, 0.7, &z);
+    var wr: f64 = _bj_from_bits(0x167C82B7492D449A);
+    var wi: f64 = _bj_from_bits(0x9662676F1270F381);
+    assert(is_ok(t3) == 1 && z.re == wr && z.im == wi, "impedances of 10⁻²⁰⁰, where |den|² underflowed (Rust refused)");
+    var w: f64[4];
+    var t4, v4 = bj_single_stub_match_complex(BjComplex_new(em200, em200), em200, &w);
+    assert(is_ok(t4) == 1 && w[0] >= 0.0 && w[0] < 0.5 && w[2] >= w[0] && w[2] < 0.5,
+      "the stub match at 10⁻²⁰⁰ Ω, through the same input impedance");
+    var t5, v5 = bj_input_impedance_lossless_complex(50.0, BjComplex_new(75.0, 25.0), INF, 1.0, &z);
+    assert(is_err_result(t5) == 1 && v5 == BJ_ERR_INVALID_PARAMETER, "a non-finite β is still refused");
     return 0;
 }
 
@@ -1596,6 +1623,7 @@ fn main(): i64 {
     cyrius_values();
     cyrius_stub_root();
     cyrius_round_once();
+    cyrius_zin_edges();
     rust_tests_d();
     cyrius_smatrix();
     cyrius_cascade_exact();
