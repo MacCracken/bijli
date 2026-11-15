@@ -872,6 +872,56 @@ fn main(): i64 {
     bench_report(b64);
     if (bsum == 7.0 || is_err_result(tgb) == 1 || is_err_result(t61l) == 1) { println("."); }
 
+    # rf (M4 part 1a): rust-old's benches' inputs.
+    var rfsum: f64 = 0.0;
+    var b65 = bench_new("rf/reflection_coefficient");
+    bench_batch_start(b65);
+    for (var k = 0; k < 1000000; k = k + 1) {
+        var t65, v65 = bj_reflection_coefficient(75.0, 50.0);
+        var g65: f64 = v65;
+        rfsum = rfsum + g65;
+    }
+    bench_batch_stop(b65, 1000000);
+    bench_report(b65);
+    var b66 = bench_new("rf/vswr");
+    bench_batch_start(b66);
+    for (var k = 0; k < 1000000; k = k + 1) {
+        var t66, v66 = bj_vswr(0.333);
+        var s66: f64 = v66;
+        rfsum = rfsum + s66;
+    }
+    bench_batch_stop(b66, 1000000);
+    bench_report(b66);
+    var k67: f64 = 2.0 * _BJ_PI;
+    var b67 = bench_new("rf/linear_array_factor_8");
+    bench_batch_start(b67);
+    for (var k = 0; k < 1000000; k = k + 1) {
+        var a67: f64 = bj_linear_array_factor(8, 0.5, k67, 0.0, 0.7);
+        rfsum = rfsum + a67;
+    }
+    bench_batch_stop(b67, 1000000);
+    bench_report(b67);
+    var zl68: BjComplex = BjComplex_new(100.0, -25.0);
+    var z68: BjComplex;
+    var b68 = bench_new("rf/input_impedance_complex");
+    bench_batch_start(b68);
+    for (var k = 0; k < 1000000; k = k + 1) {
+        var t68, v68 = bj_input_impedance_lossless_complex(50.0, zl68, k67, 0.125, &z68);
+        rfsum = rfsum + z68.re;
+    }
+    bench_batch_stop(b68, 1000000);
+    bench_report(b68);
+    var w69: f64[2];
+    var b69 = bench_new("rf/single_stub_match");
+    bench_batch_start(b69);
+    for (var k = 0; k < 1000000; k = k + 1) {
+        var t69, v69 = bj_single_stub_match(100.0, 50.0, &w69);
+        rfsum = rfsum + w69[0];
+    }
+    bench_batch_stop(b69, 1000000);
+    bench_report(b69);
+    if (rfsum == 7.0) { println("."); }
+
     # The JSON (src/json.cyr): a FieldVector written into one builder, emptied each time through its length word
     # (lib/str.cyr's layout: buf, len, cap), and serde_json's documents read back.
     var jv = BjFieldVector_new(1.5, -0.25, BJ_SPEED_OF_LIGHT);

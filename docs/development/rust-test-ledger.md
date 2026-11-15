@@ -6,7 +6,7 @@
 > (`tests/golden/`) checks every ported function on its grid besides; this ledger is about the oracle's own
 > assertions.
 
-**858 Rust tests:** 522 ported, 3 not applicable, 333 pending.
+**858 Rust tests:** 567 ported, 6 not applicable, 285 pending.
 
 | Rust file | Milestone | Cyrius tests | Rust tests | Ported | N/A | Pending |
 |---|---|---|---:|---:|---:|---:|
@@ -25,7 +25,7 @@
 | `src/maxwell.rs` | M1 | `tests/maxwell.tcyr` | 18 | 18 | 0 | 0 |
 | `src/polarization.rs` | M3 | `tests/polarization.tcyr` | 69 | 69 | 0 | 0 |
 | `src/relativity.rs` | M2 | `tests/relativity.tcyr` | 48 | 48 | 0 | 0 |
-| `src/rf.rs` | M4 | `tests/rf.tcyr` | 80 | 0 | 0 | 80 |
+| `src/rf.rs` | M4 | `tests/rf.tcyr` | 80 | 45 | 3 | 32 |
 | `src/scattering.rs` | M3 | `tests/scattering.tcyr` | 32 | 32 | 0 | 0 |
 | `src/wave.rs` | M2 | `tests/wave.tcyr` | 63 | 63 | 0 | 0 |
 | `tests/integration.rs` | M8 | `tests/integration.tcyr` | 26 | 0 | 0 | 26 |
@@ -37,3 +37,6 @@
 | `src/material.rs::test_material_reflectance_air_glass` | deprecated reflectance_at (ADR 0002 row 1); its 0.04 is checked through try_reflectance_at |
 | `src/material.rs::test_material_reflectance_same` | Material::reflectance_at is deprecated in 1.2.0 and not carried (ADR 0002 row 1); tests/material.tcyr's cyrius_reflectance_via_try checks the same value through try_reflectance_at |
 | `src/material.rs::test_reflectance_at_deprecated_never_wrong` | deprecated reflectance_at (ADR 0002 row 1): the port has no NaN-returning form; try_reflectance_at refuses the conductor (cyrius_reflectance_via_try) |
+| `src/rf.rs::test_input_impedance_matched` | rf::input_impedance_lossless is deprecated in 1.2.0 and not carried (ADR 0002 row 1); tests/rf.tcyr's cyrius_input_impedance_real_loads checks the matched Z_in = Z₀ through input_impedance_lossless_complex |
+| `src/rf.rs::test_input_impedance_quarter_wave` | deprecated input_impedance_lossless (ADR 0002 row 1); its λ/4 value Z₀²/Z_L = 25 Ω is checked through input_impedance_lossless_complex |
+| `src/rf.rs::test_input_impedance_real_rejects_complex_result` | deprecated input_impedance_lossless (ADR 0002 row 1): the port has no real-valued form to refuse; its complex Z_in = 40 − j30 is checked through input_impedance_lossless_complex |

@@ -5518,6 +5518,278 @@ def validate_charge(root: Path, path: Path, sink=None, P=None) -> list:
     return errs
 
 
+# ── rf (M4 part 1a) ──────────────────────────────────────────────────────────────────────────────────────────────
+# rf.rs transcribed on the primitives P: hisab's Complex (√(re² + im²) for norm, atan2 for arg, from_polar as
+# r·cos θ, r·sin θ), the module's own Smith division and reciprocal, Rust's operation order. A usize input is its
+# 64-bit word.
+RF_P_GLIBC = dict(GLIBC_P, log10=LIBM.log10, acos=LIBM.acos)
+RF_P_MPFR = dict(MPFR_P, log10=mpfr_ref.log10, acos=lambda x: mpfr_ref.cr("acos", x))
+RF_TAU = 6.283185307179586
+
+
+def rf_cdiv(a, b):
+    """rf.rs's cdiv: Smith's algorithm (NaN for a zero divisor)."""
+    if abs(b[0]) >= abs(b[1]):
+        r = fdiv(b[1], b[0])
+        den = b[0] + b[1] * r
+        return (fdiv(a[0] + a[1] * r, den), fdiv(a[1] - a[0] * r, den))
+    r = fdiv(b[0], b[1])
+    den = b[0] * r + b[1]
+    return (fdiv(a[0] * r + a[1], den), fdiv(a[1] * r - a[0], den))
+
+
+def rf_crecip(z):
+    """rf.rs's crecip: one division when |z|² is a normal double, Smith's otherwise."""
+    d = z[0] * z[0] + z[1] * z[1]
+    if sc_normal(d):
+        inv = fdiv(1.0, d)
+        return (z[0] * inv, -z[1] * inv)
+    return rf_cdiv((1.0, 0.0), z)
+
+
+def rf_fin(*xs) -> bool:
+    return all(math.isfinite(x) for x in xs)
+
+
+def rf_cx(z):
+    return [("f", z[0]), ("f", z[1])]
+
+
+def rf_sqrt_polar(P, z):
+    """from_polar(√|z|, arg z / 2): hisab's Complex::sqrt, and the lossy impedance's and the propagation constant's
+    last step."""
+    return rf_cx(cx_polar(P, fsqrt(cx_abs(z[0], z[1])), P["atan2"](z[1], z[0]) / 2.0))
+
+
+def rf_zin(P, z0, zr, zi, beta, length):
+    """input_impedance_lossless_complex: (re, im), or an error's tokens."""
+    if not (math.isfinite(z0) and z0 > 0.0):
+        return ip_err(f"Z₀ must be finite and positive, got {rust_display(z0)}")
+    if not rf_fin(zr, zi):
+        return ip_err(f"Z_L must be finite, got {cx_fmt(zr, zi)}")
+    bl = beta * length
+    if not math.isfinite(bl):
+        return ip_err(f"electrical length βl must be finite, got β={rust_display(beta)}, l={rust_display(length)}")
+    s, c = P["sin"](bl), P["cos"](bl)
+    num = (zr * c, zi * c + z0 * s)
+    den = (z0 * c - zi * s, zr * s)
+    scale = z0 + cx_abs(zr, zi)
+    den_mag = cx_abs(den[0], den[1])
+    if math.isnan(den_mag) or den_mag <= 1e-15 * scale:
+        return dz_err("transmission line input impedance is unbounded (Z₀cos βl + jZ_L sin βl = 0)")
+    q = rf_cdiv(num, den)
+    return (q[0] * z0, q[1] * z0)
+
+
+def rf_insertion(P, g):
+    if g >= 1.0:
+        return ip_err("total reflection — infinite insertion loss")
+    if math.isnan(g) or g < 0.0:
+        return ip_err(f"|Γ| must be in [0, 1), got {rust_display(g)}")
+    return [("f", -10.0 * P["log10"](1.0 - g * g))]
+
+
+def rf_stub(P, zr, zi, z0):
+    """single_stub_match_complex: [d₁, ℓ₁, d₂, ℓ₂] sorted by d, or an error's tokens."""
+    if not (math.isfinite(z0) and z0 > 0.0):
+        return ip_err(f"Z₀ must be finite and positive, got {rust_display(z0)}")
+    if not rf_fin(zr, zi):
+        return ip_err(f"Z_L must be finite, got {cx_fmt(zr, zi)}")
+    rl, xl = zr, zi
+    if rl <= 0.0:
+        return ip_err(f"load resistance must be positive for a stub match, got {rust_display(rl)}")
+
+    def d_from_t(t):
+        d = P["atan"](t) / RF_TAU
+        return d + 0.5 if d < 0.0 else d + 0.0
+
+    if abs(rl - z0) <= 1e-12 * z0:
+        d1, d2 = d_from_t(fdiv(-xl, 2.0 * z0)), 0.25
+    else:
+        disc = fsqrt(fdiv(rl * ((z0 - rl) * (z0 - rl) + xl * xl), z0))
+        d1, d2 = d_from_t(fdiv(xl + disc, rl - z0)), d_from_t(fdiv(xl - disc, rl - z0))
+    y0 = fdiv(1.0, z0)
+    sols = []
+    for d in (d1, d2):
+        zin = rf_zin(P, z0, zr, zi, RF_TAU, d)
+        if isinstance(zin, list):
+            return zin
+        y = rf_crecip(zin)
+        sols.append((d, P["atan2"](y0, y[1]) / RF_TAU))
+    if sols[1][0] < sols[0][0]:
+        sols = [sols[1], sols[0]]
+    return [("f", sols[0][0]), ("f", sols[0][1]), ("f", sols[1][0]), ("f", sols[1][1])]
+
+
+def rf_linear(P, n, d, k, beta, theta) -> float:
+    n &= (1 << 64) - 1
+    if n == 0:
+        return 0.0
+    if n == 1:
+        return 1.0
+    psi = k * d * P["cos"](theta) + beta
+    half = psi / 2.0
+    nf = float(n)
+    s_n = P["sin"](nf * half)
+    s_h = P["sin"](half)
+    if abs(s_h) < 1e-15:
+        return 1.0
+    return abs(fdiv(s_n, nf * s_h))
+
+
+def rf_eval(fn, v, P):
+    """rf.rs's outputs for a row on the primitives P (M4 part 1a). None for another name."""
+    if fn in ("rf::characteristic_impedance_lossless", "rf::phase_velocity"):
+        l, c = v
+        if not (math.isfinite(l) and l > 0.0 and math.isfinite(c) and c > 0.0):
+            if fn == "rf::phase_velocity":
+                return ip_err("L' and C' must be finite and positive")
+            return ip_err(f"L' and C' must be finite and positive, got L'={rust_display(l)}, C'={rust_display(c)}")
+        if fn == "rf::phase_velocity":
+            return [("f", fdiv(1.0, fsqrt(l * c)))]
+        return [("f", fsqrt(fdiv(l, c)))]
+    if fn == "rf::characteristic_impedance_lossy":
+        r, l, g, c, w = v
+        num, den = (r, w * l), (g, w * c)
+        if den[0] == 0.0 and den[1] == 0.0:
+            if w == 0.0 and g == 0.0 and c > 0.0:
+                if r == 0.0:
+                    return rf_sqrt_polar(P, (fdiv(l, c), 0.0))
+                if r > 0.0:
+                    return [("f", math.inf), ("f", -math.inf)]
+            return [("f", math.nan), ("f", math.nan)]
+        return rf_sqrt_polar(P, rf_cdiv(num, den))
+    if fn == "rf::propagation_constant":
+        r, l, g, c, w = v
+        return rf_sqrt_polar(P, sc_mul((r, w * l), (g, w * c)))
+    if fn == "rf::input_impedance_lossless_complex":
+        z = rf_zin(P, *v)
+        return z if isinstance(z, list) else rf_cx(z)
+    if fn == "rf::reflection_coefficient":
+        zl, z0 = v
+        if not rf_fin(zl, z0):
+            return ip_err(f"Z_L and Z₀ must be finite, got Z_L={rust_display(zl)}, Z₀={rust_display(z0)}")
+        den = zl + z0
+        if abs(den) < 1e-30:
+            return dz_err("Z_L + Z₀ = 0")
+        return [("f", fdiv(zl - z0, den))]
+    if fn == "rf::reflection_coefficient_complex":
+        a0, a1, b0, b1 = v
+        if not rf_fin(a0, a1, b0, b1):
+            return ip_err(f"Z_L and Z₀ must be finite, got Z_L={cx_fmt(a0, a1)}, Z₀={cx_fmt(b0, b1)}")
+        den = (a0 + b0, a1 + b1)
+        if den[0] * den[0] + den[1] * den[1] < 1e-60:
+            return dz_err("Z_L + Z₀ = 0")
+        return rf_cx(rf_cdiv((a0 - b0, a1 - b1), den))
+    if fn == "rf::vswr":
+        g = v[0]
+        if g >= 1.0:
+            return ip_err(f"|Γ| must be < 1, got {rust_display(g)}")
+        if math.isnan(g) or g < 0.0:
+            return ip_err(f"|Γ| must be ≥ 0, got {rust_display(g)}")
+        return [("f", fdiv(1.0 + g, 1.0 - g))]
+    if fn == "rf::return_loss":
+        g = v[0]
+        if not (g > 0.0 and g <= 1.0):
+            return ip_err(f"|Γ| must be in (0, 1] for return loss, got {rust_display(g)}")
+        return [("f", -20.0 * P["log10"](g))]
+    if fn in ("rf::insertion_loss", "rf::mismatch_loss"):
+        return rf_insertion(P, v[0])
+    if fn == "rf::normalize_impedance":
+        zr, zi, z0 = v
+        if not math.isfinite(z0):
+            return ip_err(f"reference impedance Z₀ must be finite, got {rust_display(z0)}")
+        if abs(z0) < 1e-30:
+            return dz_err("reference impedance Z₀ cannot be zero")
+        s = fdiv(1.0, z0)
+        return rf_cx((zr * s, zi * s))
+    if fn == "rf::denormalize_impedance":
+        zr, zi, z0 = v
+        return rf_cx((zr * z0, zi * z0))
+    if fn in ("rf::gamma_from_z", "rf::z_from_gamma"):
+        re, im = v
+        if math.isnan(re) or math.isnan(im):
+            return rf_cx((math.nan, math.nan))
+        if math.isinf(re) or math.isinf(im):
+            return rf_cx((1.0, 0.0) if fn == "rf::gamma_from_z" else (-1.0, 0.0))
+        if fn == "rf::gamma_from_z":
+            den, num = (re + 1.0, im + 0.0), (re - 1.0, im - 0.0)
+        else:
+            den, num = (1.0 - re, 0.0 - im), (1.0 + re, 0.0 + im)
+        if den[0] == 0.0 and den[1] == 0.0:
+            return rf_cx((math.inf, 0.0))
+        return rf_cx(rf_cdiv(num, den))
+    if fn == "rf::quarter_wave_transformer":
+        z0, zl = v
+        if not (math.isfinite(z0) and z0 > 0.0 and math.isfinite(zl) and zl > 0.0):
+            return ip_err("Z₀ and Z_L must be finite and positive for a quarter-wave transformer, got "
+                          f"Z₀={rust_display(z0)}, Z_L={rust_display(zl)}")
+        return [("f", fsqrt(z0 * zl))]
+    if fn == "rf::single_stub_match":
+        zl, z0 = v
+        if not (math.isfinite(zl) and zl > 0.0):
+            return ip_err(f"Z_L must be finite and positive, got {rust_display(zl)}")
+        out = rf_stub(P, zl, 0.0, z0)
+        return out if out[0][0] != "f" else out[:2]
+    if fn == "rf::single_stub_match_complex":
+        return rf_stub(P, *v)
+    if fn == "rf::linear_array_factor":
+        return [("f", rf_linear(P, *v))]
+    if fn == "rf::planar_array_factor":
+        nx, ny, dx, dy, k, bx, by, theta, phi = v
+        st = P["sin"](theta)
+        af_x = rf_linear(P, nx, dx, k, bx, P["acos"](st * P["cos"](phi)))
+        af_y = rf_linear(P, ny, dy, k, by, P["acos"](st * P["sin"](phi)))
+        return [("f", af_x * af_y)]
+    if fn == "rf::circular_array_factor":
+        n, a, k, theta, phi, beta = v
+        n &= (1 << 64) - 1
+        if n == 0:
+            return [("f", 0.0)]
+        nf = float(n)
+        sr, si = 0.0, 0.0
+        for j in range(n):
+            fj = float(j)
+            phi_n = fdiv(2.0 * math.pi * fj, nf)
+            psi = k * a * P["sin"](theta) * P["cos"](phi - phi_n) + beta * fj
+            sr += P["cos"](psi)
+            si += P["sin"](psi)
+        return [("f", fdiv(fsqrt(sr * sr + si * si), nf))]
+    return None
+
+
+def validate_rf(path: Path) -> list:
+    """rf.rs transcribed (rf_eval) on Rust's primitives, against every row."""
+    header, _rows = read_tsv(path)
+    errs = check_platform(header)
+    if errs:
+        return errs
+    for n, (fn, _cls, _ins, outs, v) in enumerate(sc_lines(path), 1):
+        want = rf_eval(fn, v, RF_P_GLIBC)
+        if want is None:
+            errs.append(f"rf row {n}: no transcription for {fn}")
+            continue
+        if not toks_same(want, wave_toks([parse_tok(x) for x in outs.split(" ")])):
+            errs.append(f"rf row {n}: {fn}{tuple(v)} -> {wire(want)[:300]}, oracle {outs[:300]}")
+    return errs
+
+
+def rf_corrections(path: Path):
+    """The class-C rf rows whose outputs change when atan2, sin, cos, atan, log10 and acos are correctly rounded."""
+    def fixes(_rows):
+        out = []
+        for fn, cls, ins, outs, v in sc_lines(path):
+            if cls != "C":
+                continue
+            want = rf_eval(fn, v, RF_P_MPFR)
+            old = wave_toks([parse_tok(x) for x in outs.split(" ")])
+            if toks_same(want, old):
+                continue
+            out.append((fn, ins, wire(want), f"oracle {outs}; correctly rounded primitives give {wire(want)}"))
+        return out
+    return fixes
+
+
 def field_corrections(root: Path):
     """The field rows whose class-C outputs change when the primitives are correctly rounded (MPFR)."""
     c = golden_consts(root)
@@ -7345,6 +7617,7 @@ def main() -> int:
         "maxwell": lambda p: validate_maxwell(root, p),
         "polarization": validate_polarization,
         "relativity": lambda p: validate_relativity(root, p),
+        "rf": validate_rf,
         "scattering": validate_scattering,
         "wave": lambda p: validate_wave(root, p),
     }
@@ -7377,6 +7650,7 @@ def main() -> int:
     errs += check_corrections(root, "scattering", golden / "scattering.tsv",
                               scattering_corrections(golden / "scattering.tsv"))
     errs += check_corrections(root, "beam", golden / "beam.tsv", beam_corrections(golden / "beam.tsv"))
+    errs += check_corrections(root, "rf", golden / "rf.tsv", rf_corrections(golden / "rf.tsv"))
     for mod in ("beam", "charge", "circuit", "complex", "field", "material", "maxwell", "polarization", "relativity",
                 "scattering", "wave"):
         errs += check_adr(root, mod, golden / f"{mod}.tsv")

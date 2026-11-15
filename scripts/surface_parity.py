@@ -40,14 +40,22 @@ MODULES = ["error", "logging", "field", "maxwell", "charge", "material", "wave",
            "polarization", "scattering", "beam"]
 # Rust module -> the milestone that ports it (port plan §4.1).
 PENDING_MODULES = {
-    "rf": "M4",
     "fdtd": "M5–M6", "compute": "M6",
     "integration/soorat": "M7", "bridge": "M7", "ai": "M7",
 }
-# Modules being ported Part by Part: module -> (the Parts that finish it, the Rust items still to come, by name). Their
-# other items are checked as a ported module's now; the listed ones count as pending, and one found ported is a
+# Modules being ported Part by Part: module -> (the Parts that finish it, the Rust items still to come, by name: a free
+# fn, a method as `Owner::name`, a struct or enum (its fields or variants with it), a serde impl as `impl Trait for X`).
+# Their other items are checked as a ported module's now; the listed ones count as pending, and one found ported is a
 # problem (drop it from the list).
-IN_PROGRESS = {}
+IN_PROGRESS = {
+    "rf": ("M4 parts 1b–1d", {
+        "SMatrix", "SMatrix::new", "SMatrix::two_port", "SMatrix::get", "SMatrix::set", "SMatrix::cascade", "s_to_z",
+        "TouchstoneFormat", "TouchstoneData", "parse_touchstone", "try_write_touchstone",
+        "impl Serialize for SMatrix", "impl Deserialize for SMatrix", "impl Serialize for TouchstoneFormat",
+        "impl Deserialize for TouchstoneFormat", "impl Serialize for TouchstoneData",
+        "impl Deserialize for TouchstoneData",
+    }),
+}
 NOT_APPLICABLE_MODULES = {
     "lib": "crate root: module list and re-exports",
     "integration/mod": "module root of integration/ (no items)",
@@ -73,6 +81,9 @@ EXCEPTIONS = {
     "field::impl Mul for f64": "BjFieldVector_scale_left(s, v): an operator fn belongs to its left operand's type",
     "field::impl Display for FieldVector": "the method display(t), into a BjText (src/fmtf.cyr)",
     "material::Material::reflectance_at": "deprecated in 1.2.0, not carried (ADR 0002 row 1): try_reflectance_at",
+    "rf::input_impedance_lossless": "deprecated in 1.2.0, not carried (ADR 0002 row 1): "
+                                    "input_impedance_lossless_complex",
+    "rf::write_touchstone": "deprecated in 1.2.0, not carried (ADR 0002 row 1): try_write_touchstone",
     "polarization::impl ComplexExt for Complex": "BjComplex's own methods norm_sq, norm and arg (src/complex.cyr): "
                                                  "hisab 1.4 made them inherent, and the trait only delegates",
 }
@@ -310,11 +321,13 @@ def main() -> int:
                 if where == "fn" and want in fns:
                     problems.append(f"{module}::impl {name} for {owner} is ported ({want}): drop it from IN_PROGRESS")
                 continue
-            if name in still and kind == "fn":
+            qual = f"{owner}::{name}" if owner else name
+            if (kind == "fn" and (name in still or qual in still)) or (kind in ("struct", "enum") and name in still) \
+                    or (kind in ("field", "variant") and owner in still):
                 pending_counts[module] = pending_counts.get(module, 0) + 1
                 where, want = expected(module, kind, owner, name, has_self)
                 if where == "fn" and want in fns:
-                    problems.append(f"{module}::{name} is ported ({want}): drop it from IN_PROGRESS")
+                    problems.append(f"{module}::{qual} is ported ({want}): drop it from IN_PROGRESS")
                 continue
             label = f"{module}::{owner + '::' if owner else ''}{name}"
             key = label if kind != "trait" else f"{module}::impl {name} for {owner}"

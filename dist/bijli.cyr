@@ -26340,6 +26340,621 @@ public fn bj_laguerre_gaussian_intensity(beam: *BjGaussianBeam, p, l, r: f64, z:
     return i;
 }
 
+# --- rf.cyr ---
+
+# rf.cyr — rf.rs (M4 part 1a): transmission lines, the reflection coefficient, VSWR and the mismatch losses, the Smith
+# chart, matching, and the antenna array factors. SI units: impedances in ohms, admittances in siemens, frequencies
+# in Hz, lengths in metres, angles in radians.
+#
+# The time convention is bijli's one, e^{+jωt} (src/complex.cyr's header; ADR 0002 row 5). rf.rs already used it
+# (an inductive reactance is +jωL, a lossless line has γ = jβ), so nothing here changes.
+#
+# Complex values are BjComplex. Their arithmetic is hisab's, written out on f64 locals in Rust's order: |z| is
+# √(re² + im²), arg z is atan2(im, re), from_polar(r, θ) is (r·cos θ, r·sin θ). The division is rf.rs's own Smith
+# algorithm (src/crmath_vx.cyr's _bj_vx_cdiv, the same as scattering.rs's). sin, cos, atan, atan2, log10 and acos are
+# correctly rounded (src/crmath.cyr). An element count is Rust's usize: its 64-bit word read unsigned (−1 is
+# usize::MAX).
+#
+# The S-parameter matrices, s_to_z and Touchstone I/O follow in M4 part 1b and 1c.
+
+private
+
+# std::f64::consts::TAU.
+var _BJ_RF_TAU: f64 = 6.283185307179586;
+# rf.rs's thresholds: 10⁻³⁰ (a reference impedance, Z_L + Z₀), 10⁻⁶⁰ (|Z_L + Z₀|²), 10⁻¹⁵ (the unbounded input
+# impedance, relative to Z₀ + |Z_L|), 10⁻¹² (a matched stub, relative to Z₀).
+var _BJ_RF_TINY30: f64 = 0.000000000000000000000000000001;
+var _BJ_RF_TINY60: f64 = 0.000000000000000000000000000000000000000000000000000000000001;
+var _BJ_RF_REL15: f64 = 0.000000000000001;
+var _BJ_RF_REL12: f64 = 0.000000000001;
+# The smallest normal double and the largest finite one: |z|² is a normal double between them.
+var _BJ_RF_MIN_NORMAL: f64 = 0x0010000000000000;
+var _BJ_RF_MAX_FINITE: f64 = 0x7FEFFFFFFFFFFFFF;
+var _BJ_RF_INF: f64 = 0x7FF0000000000000;
+var _BJ_RF_NAN: f64 = 0x7FF8000000000000;
+
+# ── internal helpers ────────────────────────────────────────────────────────────────────────────────────────────
+
+# 1 when x is finite and positive.
+#must_use
+fn _bj_rf_pos(x: f64): i64 {
+    if (_bj_is_finite(x) == 1 && x > 0.0) { return 1; }
+    return 0;
+}
+
+# 1 when both parts are finite. Mirrors rf.rs's `is_finite_complex`.
+#must_use
+fn _bj_rf_fin2(re: f64, im: f64): i64 {
+    if (_bj_is_finite(re) == 1 && _bj_is_finite(im) == 1) { return 1; }
+    return 0;
+}
+
+# Records InvalidParameter "<head>{v}<tail>", v in Rust's Display form. Returns the code.
+fn _bj_rf_bad(head, v: f64, tail): i64 {
+    var t = _bj_err_reason(BJ_ERR_INVALID_PARAMETER);
+    _bj_tx_cstr(t, head);
+    _bj_fmt_f64_display(t, v);
+    _bj_tx_cstr(t, tail);
+    return BJ_ERR_INVALID_PARAMETER;
+}
+
+# Records InvalidParameter "<head>{z}", z = re + j·im in Rust's Display form. Returns the code.
+fn _bj_rf_bad_cx(head, re: f64, im: f64): i64 {
+    var t = _bj_err_reason(BJ_ERR_INVALID_PARAMETER);
+    _bj_tx_cstr(t, head);
+    var z: BjComplex = BjComplex_new(re, im);
+    z.display(t);
+    return BJ_ERR_INVALID_PARAMETER;
+}
+
+# 0 when value is finite and positive, else InvalidParameter "{name} must be finite and positive, got {value}"
+# recorded and its code returned. Mirrors rf.rs's `require_positive_finite`.
+fn _bj_rf_require(name, value: f64): i64 {
+    if (_bj_rf_pos(value) == 1) { return 0; }
+    var t = _bj_err_reason(BJ_ERR_INVALID_PARAMETER);
+    _bj_tx_cstr(t, name);
+    _bj_tx_cstr(t, " must be finite and positive, got ");
+    _bj_fmt_f64_display(t, value);
+    return BJ_ERR_INVALID_PARAMETER;
+}
+
+# Rust's `n as f64` for a usize: the 64-bit word read unsigned, rounded to nearest even. Above 2^63 the halved word
+# keeps its last bit as a sticky bit, so the one rounding is the conversion's, and doubling is exact.
+#must_use
+fn _bj_rf_u2f(n): f64 {
+    if (n >= 0) {
+        var r: f64 = f64_from(n);
+        return r;
+    }
+    var h: f64 = f64_from((n >> 1) | (n & 1));
+    var r2: f64 = h * 2.0;
+    return r2;
+}
+
+# 1/z: one division when |z|² is a normal double, Smith's algorithm otherwise (NaN parts for z = 0). Mirrors rf.rs's
+# `crecip`.
+#must_use
+fn _bj_rf_recip(re: f64, im: f64): (f64, f64) {
+    var d: f64 = re * re + im * im;
+    var lo: f64 = _BJ_RF_MIN_NORMAL;
+    var hi: f64 = _BJ_RF_MAX_FINITE;
+    if (d >= lo && d <= hi) {
+        var inv: f64 = 1.0 / d;
+        var r1: f64 = re * inv;
+        var i1: f64 = -im * inv;
+        return (r1, i1);
+    }
+    var qr, qi = _bj_vx_cdiv(1.0, 0.0, re, im);
+    return (qr, qi);
+}
+
+# from_polar(√|z|, arg z / 2), |z| = √(re² + im²): hisab's Complex::sqrt in Rust's order, and the last step of the
+# lossy impedance and the propagation constant.
+#must_use
+fn _bj_rf_sqrt_polar(re: f64, im: f64): BjComplex {
+    var n2: f64 = re * re + im * im;
+    var a: f64 = f64_sqrt(n2);
+    var mag: f64 = f64_sqrt(a);
+    var g: f64 = _bj_atan2(im, re);
+    var ph: f64 = g / 2.0;
+    var s, c = _bj_sin_cos(ph);
+    var z: BjComplex;
+    var zr: f64 = mag * c;
+    var zi: f64 = mag * s;
+    z.re = zr;
+    z.im = zi;
+    return z;
+}
+
+# ── transmission lines ──────────────────────────────────────────────────────────────────────────────────────────
+
+# Z₀ = √(L′/C′) of a lossless line, L′ in H/m and C′ in F/m: Ok(Z₀), or Err(InvalidParameter) unless both are finite
+# and positive. Mirrors `rf::characteristic_impedance_lossless`.
+#must_use
+public fn bj_characteristic_impedance_lossless(inductance_per_m: f64, capacitance_per_m: f64): Result {
+    if (_bj_rf_pos(inductance_per_m) == 0 || _bj_rf_pos(capacitance_per_m) == 0) {
+        var t = _bj_err_reason(BJ_ERR_INVALID_PARAMETER);
+        _bj_tx_cstr(t, "L' and C' must be finite and positive, got L'=");
+        _bj_fmt_f64_display(t, inductance_per_m);
+        _bj_tx_cstr(t, ", C'=");
+        _bj_fmt_f64_display(t, capacitance_per_m);
+        return Err(BJ_ERR_INVALID_PARAMETER);
+    }
+    var q: f64 = inductance_per_m / capacitance_per_m;
+    var z: f64 = f64_sqrt(q);
+    return Ok(z);
+}
+
+# Z₀ = √((R′ + jωL′)/(G′ + jωC′)) of a lossy line, the principal branch (Re Z₀ ≥ 0): R′ in Ω/m, L′ in H/m, G′ in
+# S/m, C′ in F/m, ω in rad/s. Where G′ + jωC′ = 0, the DC limit ω → 0⁺ for ω = 0, G′ = 0 and C′ > 0: √(L′/C′) when
+# R′ = 0, +∞ − j∞ when R′ > 0; NaN parts otherwise. Mirrors `rf::characteristic_impedance_lossy`.
+#must_use
+public fn bj_characteristic_impedance_lossy(r: f64, l: f64, g: f64, c: f64, omega: f64): BjComplex {
+    var ni: f64 = omega * l;
+    var di: f64 = omega * c;
+    if (g == 0.0 && di == 0.0) {
+        if (omega == 0.0 && g == 0.0 && c > 0.0) {
+            if (r == 0.0) {
+                var q: f64 = l / c;
+                var w: BjComplex = _bj_rf_sqrt_polar(q, 0.0);
+                return w;
+            }
+            if (r > 0.0) {
+                var inf: f64 = _BJ_RF_INF;
+                var ninf: f64 = -inf;
+                return BjComplex_new(inf, ninf);
+            }
+        }
+        var nan: f64 = _BJ_RF_NAN;
+        return BjComplex_new(nan, nan);
+    }
+    var qr, qi = _bj_vx_cdiv(r, ni, g, di);
+    var z: BjComplex = _bj_rf_sqrt_polar(qr, qi);
+    return z;
+}
+
+# γ = α + jβ = √((R′ + jωL′)(G′ + jωC′)), the principal branch (α ≥ 0, β ≥ 0 for a passive line at ω > 0): α in Np/m,
+# β in rad/m. Mirrors `rf::propagation_constant`.
+#must_use
+public fn bj_propagation_constant(r: f64, l: f64, g: f64, c: f64, omega: f64): BjComplex {
+    var ai: f64 = omega * l;
+    var bi: f64 = omega * c;
+    var pr: f64 = r * g - ai * bi;
+    var pi: f64 = r * bi + ai * g;
+    var z: BjComplex = _bj_rf_sqrt_polar(pr, pi);
+    return z;
+}
+
+# v_p = 1/√(L′C′) on a lossless line (m/s): Ok(v_p), or Err(InvalidParameter) unless both are finite and positive.
+# Mirrors `rf::phase_velocity`.
+#must_use
+public fn bj_phase_velocity(inductance_per_m: f64, capacitance_per_m: f64): Result {
+    if (_bj_rf_pos(inductance_per_m) == 0 || _bj_rf_pos(capacitance_per_m) == 0) {
+        return Err(_bj_err_invalid_parameter("L' and C' must be finite and positive"));
+    }
+    var p: f64 = inductance_per_m * capacitance_per_m;
+    var s: f64 = f64_sqrt(p);
+    var v: f64 = 1.0 / s;
+    return Ok(v);
+}
+
+# Z_in = Z₀(Z_L cos βl + jZ₀ sin βl)/(Z₀ cos βl + jZ_L sin βl) of a lossless line of characteristic impedance z0
+# terminated in z_load, into *out: Ok(0), or Err with out untouched. Only βl matters, so beta = 2π with length in
+# wavelengths works too. InvalidParameter unless z0 is finite and positive and z_load and βl are finite;
+# DivisionByZero where |Z₀ cos βl + jZ_L sin βl| ≤ 10⁻¹⁵·(Z₀ + |Z_L|), an unbounded Z_in (a shorted λ/4 line).
+# Mirrors `rf::input_impedance_lossless_complex`.
+#must_use
+public fn bj_input_impedance_lossless_complex(z0: f64, z_load: BjComplex, beta: f64, length: f64,
+  out: *BjComplex): Result {
+    var e = _bj_rf_require("Z₀", z0);
+    if (e != 0) { return Err(e); }
+    var zr: f64 = z_load.re;
+    var zi: f64 = z_load.im;
+    if (_bj_rf_fin2(zr, zi) == 0) { return Err(_bj_rf_bad_cx("Z_L must be finite, got ", zr, zi)); }
+    var bl: f64 = beta * length;
+    if (_bj_is_finite(bl) == 0) {
+        var t = _bj_err_reason(BJ_ERR_INVALID_PARAMETER);
+        _bj_tx_cstr(t, "electrical length βl must be finite, got β=");
+        _bj_fmt_f64_display(t, beta);
+        _bj_tx_cstr(t, ", l=");
+        _bj_fmt_f64_display(t, length);
+        return Err(BJ_ERR_INVALID_PARAMETER);
+    }
+    var s, c = _bj_sin_cos(bl);
+    var nr: f64 = zr * c;
+    var ni: f64 = zi * c + z0 * s;
+    var dr: f64 = z0 * c - zi * s;
+    var di: f64 = zr * s;
+    var zm: f64 = f64_sqrt(zr * zr + zi * zi);
+    var scale: f64 = z0 + zm;
+    var dm: f64 = f64_sqrt(dr * dr + di * di);
+    var lim: f64 = _BJ_RF_REL15 * scale;
+    if (dm != dm || dm <= lim) {
+        var context = "transmission line input impedance is unbounded (Z₀cos βl + jZ_L sin βl = 0)";
+        return Err(_bj_err_division_by_zero(context));
+    }
+    var qr, qi = _bj_vx_cdiv(nr, ni, dr, di);
+    var wr: f64 = qr * z0;
+    var wi: f64 = qi * z0;
+    out.re = wr;
+    out.im = wi;
+    return Ok(0);
+}
+
+# ── reflection and the losses ───────────────────────────────────────────────────────────────────────────────────
+
+# Γ = (Z_L − Z₀)/(Z_L + Z₀) for real impedances: Ok(Γ); Err(InvalidParameter) unless both are finite,
+# Err(DivisionByZero) when |Z_L + Z₀| < 10⁻³⁰. Mirrors `rf::reflection_coefficient`.
+#must_use
+public fn bj_reflection_coefficient(z_load: f64, z0: f64): Result {
+    if (_bj_is_finite(z_load) == 0 || _bj_is_finite(z0) == 0) {
+        var t = _bj_err_reason(BJ_ERR_INVALID_PARAMETER);
+        _bj_tx_cstr(t, "Z_L and Z₀ must be finite, got Z_L=");
+        _bj_fmt_f64_display(t, z_load);
+        _bj_tx_cstr(t, ", Z₀=");
+        _bj_fmt_f64_display(t, z0);
+        return Err(BJ_ERR_INVALID_PARAMETER);
+    }
+    var den: f64 = z_load + z0;
+    var ad: f64 = f64_abs(den);
+    var tiny: f64 = _BJ_RF_TINY30;
+    if (ad < tiny) { return Err(_bj_err_division_by_zero("Z_L + Z₀ = 0")); }
+    var g: f64 = (z_load - z0) / den;
+    return Ok(g);
+}
+
+# Γ = (Z_L − Z₀)/(Z_L + Z₀) for complex impedances, into *out: Ok(0), or Err with out untouched;
+# Err(InvalidParameter) unless every part is finite, Err(DivisionByZero) when |Z_L + Z₀|² < 10⁻⁶⁰. Mirrors
+# `rf::reflection_coefficient_complex`.
+#must_use
+public fn bj_reflection_coefficient_complex(z_load: BjComplex, z0: BjComplex, out: *BjComplex): Result {
+    var ar: f64 = z_load.re;
+    var ai: f64 = z_load.im;
+    var br: f64 = z0.re;
+    var bi: f64 = z0.im;
+    if (_bj_rf_fin2(ar, ai) == 0 || _bj_rf_fin2(br, bi) == 0) {
+        var t = _bj_err_reason(BJ_ERR_INVALID_PARAMETER);
+        _bj_tx_cstr(t, "Z_L and Z₀ must be finite, got Z_L=");
+        z_load.display(t);
+        _bj_tx_cstr(t, ", Z₀=");
+        z0.display(t);
+        return Err(BJ_ERR_INVALID_PARAMETER);
+    }
+    var dr: f64 = ar + br;
+    var di: f64 = ai + bi;
+    var n2: f64 = dr * dr + di * di;
+    var tiny: f64 = _BJ_RF_TINY60;
+    if (n2 < tiny) { return Err(_bj_err_division_by_zero("Z_L + Z₀ = 0")); }
+    var nr: f64 = ar - br;
+    var ni: f64 = ai - bi;
+    var qr, qi = _bj_vx_cdiv(nr, ni, dr, di);
+    out.re = qr;
+    out.im = qi;
+    return Ok(0);
+}
+
+# VSWR = (1 + |Γ|)/(1 − |Γ|): Ok(VSWR), or Err(InvalidParameter) unless 0 ≤ |Γ| < 1. Mirrors `rf::vswr`.
+#must_use
+public fn bj_vswr(gamma_mag: f64): Result {
+    if (gamma_mag >= 1.0) { return Err(_bj_rf_bad("|Γ| must be < 1, got ", gamma_mag, "")); }
+    if (gamma_mag != gamma_mag || gamma_mag < 0.0) {
+        return Err(_bj_rf_bad("|Γ| must be ≥ 0, got ", gamma_mag, ""));
+    }
+    var v: f64 = (1.0 + gamma_mag) / (1.0 - gamma_mag);
+    return Ok(v);
+}
+
+# Return loss RL = −20 log₁₀|Γ| in dB: Ok(RL), or Err(InvalidParameter) unless 0 < |Γ| ≤ 1 (a perfect match has an
+# infinite return loss). Mirrors `rf::return_loss`.
+#must_use
+public fn bj_return_loss(gamma_mag: f64): Result {
+    var ok = 0;
+    if (gamma_mag > 0.0 && gamma_mag <= 1.0) { ok = 1; }
+    if (ok == 0) { return Err(_bj_rf_bad("|Γ| must be in (0, 1] for return loss, got ", gamma_mag, "")); }
+    var lg: f64 = _bj_log10(gamma_mag);
+    var rl: f64 = -20.0 * lg;
+    return Ok(rl);
+}
+
+# Insertion loss from mismatch alone, IL = −10 log₁₀(1 − |Γ|²) in dB: Ok(IL), or Err(InvalidParameter) unless
+# 0 ≤ |Γ| < 1 (|Γ| = 1 is total reflection, an infinite loss). Mirrors `rf::insertion_loss`.
+#must_use
+public fn bj_insertion_loss(gamma_mag: f64): Result {
+    if (gamma_mag >= 1.0) {
+        return Err(_bj_err_invalid_parameter("total reflection — infinite insertion loss"));
+    }
+    if (gamma_mag != gamma_mag || gamma_mag < 0.0) {
+        return Err(_bj_rf_bad("|Γ| must be in [0, 1), got ", gamma_mag, ""));
+    }
+    var a: f64 = 1.0 - gamma_mag * gamma_mag;
+    var lg: f64 = _bj_log10(a);
+    var il: f64 = -10.0 * lg;
+    return Ok(il);
+}
+
+# Mismatch loss ML = −10 log₁₀(1 − |Γ|²) in dB, the insertion loss of a lossless network: as bj_insertion_loss.
+# Mirrors `rf::mismatch_loss`.
+#must_use
+public fn bj_mismatch_loss(gamma_mag: f64): Result {
+    return bj_insertion_loss(gamma_mag);
+}
+
+# ── the Smith chart ─────────────────────────────────────────────────────────────────────────────────────────────
+
+# z = Z/Z₀ (as Z·(1/Z₀)), into *out: Ok(0), or Err with out untouched; Err(InvalidParameter) for a non-finite Z₀,
+# Err(DivisionByZero) when |Z₀| < 10⁻³⁰. Mirrors `rf::normalize_impedance`.
+#must_use
+public fn bj_normalize_impedance(z: BjComplex, z0: f64, out: *BjComplex): Result {
+    if (_bj_is_finite(z0) == 0) {
+        return Err(_bj_rf_bad("reference impedance Z₀ must be finite, got ", z0, ""));
+    }
+    var a0: f64 = f64_abs(z0);
+    var tiny: f64 = _BJ_RF_TINY30;
+    if (a0 < tiny) { return Err(_bj_err_division_by_zero("reference impedance Z₀ cannot be zero")); }
+    var s: f64 = 1.0 / z0;
+    var wr: f64 = z.re * s;
+    var wi: f64 = z.im * s;
+    out.re = wr;
+    out.im = wi;
+    return Ok(0);
+}
+
+# Z = z·Z₀. Mirrors `rf::denormalize_impedance`.
+#must_use
+#pure
+public fn bj_denormalize_impedance(z_norm: BjComplex, z0: f64): BjComplex {
+    var w: BjComplex;
+    var wr: f64 = z_norm.re * z0;
+    var wi: f64 = z_norm.im * z0;
+    w.re = wr;
+    w.im = wi;
+    return w;
+}
+
+# Γ = (z − 1)/(z + 1) from a normalized impedance. z = −1 maps to complex infinity, +∞ + j0; an infinite z (an open
+# circuit, either part ±∞) to Γ = 1; a NaN part to NaN parts. The inverse of bj_z_from_gamma at their poles. Mirrors
+# `rf::gamma_from_z`.
+#must_use
+#pure
+public fn bj_gamma_from_z(z_norm: BjComplex): BjComplex {
+    var re: f64 = z_norm.re;
+    var im: f64 = z_norm.im;
+    if (re != re || im != im) {
+        var nan: f64 = _BJ_RF_NAN;
+        return BjComplex_new(nan, nan);
+    }
+    if (_bj_rf_fin2(re, im) == 0) { return BjComplex_new(1.0, 0.0); }
+    var dr: f64 = re + 1.0;
+    var di: f64 = im + 0.0;
+    if (dr == 0.0 && di == 0.0) {
+        var inf: f64 = _BJ_RF_INF;
+        return BjComplex_new(inf, 0.0);
+    }
+    var nr: f64 = re - 1.0;
+    var ni: f64 = im - 0.0;
+    var qr, qi = _bj_vx_cdiv(nr, ni, dr, di);
+    return BjComplex_new(qr, qi);
+}
+
+# z = (1 + Γ)/(1 − Γ) from a reflection coefficient. Γ = 1 (an open circuit) maps to complex infinity, +∞ + j0; an
+# infinite Γ to z = −1; a NaN part to NaN parts. Mirrors `rf::z_from_gamma`.
+#must_use
+#pure
+public fn bj_z_from_gamma(gamma: BjComplex): BjComplex {
+    var re: f64 = gamma.re;
+    var im: f64 = gamma.im;
+    if (re != re || im != im) {
+        var nan: f64 = _BJ_RF_NAN;
+        return BjComplex_new(nan, nan);
+    }
+    if (_bj_rf_fin2(re, im) == 0) { return BjComplex_new(-1.0, 0.0); }
+    var dr: f64 = 1.0 - re;
+    var di: f64 = 0.0 - im;
+    if (dr == 0.0 && di == 0.0) {
+        var inf: f64 = _BJ_RF_INF;
+        return BjComplex_new(inf, 0.0);
+    }
+    var nr: f64 = 1.0 + re;
+    var ni: f64 = 0.0 + im;
+    var qr, qi = _bj_vx_cdiv(nr, ni, dr, di);
+    return BjComplex_new(qr, qi);
+}
+
+# ── matching ────────────────────────────────────────────────────────────────────────────────────────────────────
+
+# The quarter-wave transformer's impedance Z_t = √(Z₀·Z_L), matching a real load to a line: Ok(Z_t), or
+# Err(InvalidParameter) unless both are finite and positive. Mirrors `rf::quarter_wave_transformer`.
+#must_use
+public fn bj_quarter_wave_transformer(z0: f64, z_load: f64): Result {
+    if (_bj_rf_pos(z0) == 0 || _bj_rf_pos(z_load) == 0) {
+        var t = _bj_err_reason(BJ_ERR_INVALID_PARAMETER);
+        _bj_tx_cstr(t, "Z₀ and Z_L must be finite and positive for a quarter-wave transformer, got Z₀=");
+        _bj_fmt_f64_display(t, z0);
+        _bj_tx_cstr(t, ", Z_L=");
+        _bj_fmt_f64_display(t, z_load);
+        return Err(BJ_ERR_INVALID_PARAMETER);
+    }
+    var p: f64 = z0 * z_load;
+    var zt: f64 = f64_sqrt(p);
+    return Ok(zt);
+}
+
+# d/λ from t = tan βd, wrapped into [0, ½): atan(t)/2π, plus ½ when negative; `+ 0.0` turns −0 into +0.
+#must_use
+fn _bj_rf_d_from_t(t: f64): f64 {
+    var a: f64 = _bj_atan(t);
+    var d: f64 = a / _BJ_RF_TAU;
+    if (d < 0.0) {
+        var w: f64 = d + 0.5;
+        return w;
+    }
+    var p: f64 = d + 0.0;
+    return p;
+}
+
+# The single shunt short-circuited stub match of a complex load (Pozar §5.2, eqs. 5.9–5.11): both (d, ℓ) solutions in
+# wavelengths, sorted by increasing d, into out[0] = d₁, out[1] = ℓ₁, out[2] = d₂, out[3] = ℓ₂: Ok(0), or Err with out
+# untouched. With Z_L = R_L + jX_L and t = tan βd: t = [X_L ± √(R_L((Z₀ − R_L)² + X_L²)/Z₀)]/(R_L − Z₀), or, when
+# |R_L − Z₀| ≤ 10⁻¹²·Z₀, t = −X_L/(2Z₀) and the t → ∞ solution d = λ/4. The stub cancels the line's susceptance B
+# there: ℓ/λ = atan2(Y₀, B)/2π ∈ (0, ½). InvalidParameter unless z0 is finite and positive and z_load is finite with
+# R_L > 0 (a lossless stub can't match a purely reactive or an active load). Mirrors `rf::single_stub_match_complex`.
+#must_use
+public fn bj_single_stub_match_complex(z_load: BjComplex, z0: f64, out: *f64): Result {
+    var e = _bj_rf_require("Z₀", z0);
+    if (e != 0) { return Err(e); }
+    var rl: f64 = z_load.re;
+    var xl: f64 = z_load.im;
+    if (_bj_rf_fin2(rl, xl) == 0) { return Err(_bj_rf_bad_cx("Z_L must be finite, got ", rl, xl)); }
+    if (rl <= 0.0) {
+        return Err(_bj_rf_bad("load resistance must be positive for a stub match, got ", rl, ""));
+    }
+    var d1: f64 = 0.25;
+    var d2: f64 = 0.25;
+    var df: f64 = rl - z0;
+    var adf: f64 = f64_abs(df);
+    var tol: f64 = _BJ_RF_REL12 * z0;
+    if (adf <= tol) {
+        var t0: f64 = -xl / (2.0 * z0);
+        d1 = _bj_rf_d_from_t(t0);
+    } else {
+        var zd: f64 = z0 - rl;
+        var inner: f64 = rl * (zd * zd + xl * xl) / z0;
+        var disc: f64 = f64_sqrt(inner);
+        var ta: f64 = (xl + disc) / df;
+        var tb: f64 = (xl - disc) / df;
+        d1 = _bj_rf_d_from_t(ta);
+        d2 = _bj_rf_d_from_t(tb);
+    }
+    var y0: f64 = 1.0 / z0;
+    var zin: BjComplex;
+    var t1, v1 = bj_input_impedance_lossless_complex(z0, z_load, _BJ_RF_TAU, d1, &zin);
+    if (is_err_result(t1) == 1) { return Err(v1); }
+    var yr, yi = _bj_rf_recip(zin.re, zin.im);
+    var g1: f64 = _bj_atan2(y0, yi);
+    var l1: f64 = g1 / _BJ_RF_TAU;
+    var t2, v2 = bj_input_impedance_lossless_complex(z0, z_load, _BJ_RF_TAU, d2, &zin);
+    if (is_err_result(t2) == 1) { return Err(v2); }
+    var yr2, yi2 = _bj_rf_recip(zin.re, zin.im);
+    var g2: f64 = _bj_atan2(y0, yi2);
+    var l2: f64 = g2 / _BJ_RF_TAU;
+    if (d2 < d1) {
+        out[0] = d2;
+        out[1] = l2;
+        out[2] = d1;
+        out[3] = l1;
+    } else {
+        out[0] = d1;
+        out[1] = l1;
+        out[2] = d2;
+        out[3] = l2;
+    }
+    if (_bj_log_on(4) == 1) {
+        var lb[320];
+        var lt[24];
+        _bj_tx_init(&lt, &lb, 320);
+        _bj_tx_cstr(&lt, "single shunt stub match z_load=");
+        z_load.display(&lt);
+        _bj_tx_cstr(&lt, " z0=");
+        _bj_fmt_f64_debug(&lt, z0);
+        _bj_tx_cstr(&lt, " d1=");
+        _bj_fmt_f64_debug(&lt, out[0]);
+        _bj_tx_cstr(&lt, " l1=");
+        _bj_fmt_f64_debug(&lt, out[1]);
+        _bj_tx_cstr(&lt, " d2=");
+        _bj_fmt_f64_debug(&lt, out[2]);
+        _bj_tx_cstr(&lt, " l2=");
+        _bj_fmt_f64_debug(&lt, out[3]);
+        _bj_log_text(4, &lt);
+    }
+    return Ok(0);
+}
+
+# The single shunt short-circuited stub match of a real load: (d, ℓ) in wavelengths into out[0], out[1], the
+# solution of bj_single_stub_match_complex with the smaller d: Ok(0), or Err with out untouched. A matched load
+# (z_load = z0) gives (0, 0.25): a λ/4 shorted stub presents zero admittance, the same as no stub. InvalidParameter
+# unless both are finite and positive. Mirrors `rf::single_stub_match`.
+#must_use
+public fn bj_single_stub_match(z_load: f64, z0: f64, out: *f64): Result {
+    var e = _bj_rf_require("Z_L", z_load);
+    if (e != 0) { return Err(e); }
+    var both: f64[4];
+    var t, v = bj_single_stub_match_complex(BjComplex_new(z_load, 0.0), z0, &both);
+    if (is_err_result(t) == 1) { return Err(v); }
+    out[0] = both[0];
+    out[1] = both[1];
+    return Ok(0);
+}
+
+# ── antenna arrays ──────────────────────────────────────────────────────────────────────────────────────────────
+
+# The uniform linear array factor |sin(Nψ/2)/(N sin(ψ/2))|, ψ = kd cos θ + β: n_elements elements (a usize), spacing
+# d (m), wavenumber k = 2π/λ, progressive phase β between elements (rad), observation angle θ from the array axis
+# (rad). 0 for no element, 1 for one, and 1 where |sin(ψ/2)| < 10⁻¹⁵ (the main beam and the grating lobes, by
+# L'Hôpital). Mirrors `rf::linear_array_factor`.
+#must_use
+public fn bj_linear_array_factor(n_elements, spacing: f64, wavenumber: f64, progressive_phase: f64,
+  theta: f64): f64 {
+    if (n_elements == 0) { return 0.0; }
+    if (n_elements == 1) { return 1.0; }
+    var ct: f64 = _bj_cos(theta);
+    var psi: f64 = wavenumber * spacing * ct + progressive_phase;
+    var half: f64 = psi / 2.0;
+    var n: f64 = _bj_rf_u2f(n_elements);
+    var sn: f64 = _bj_sin(n * half);
+    var sh: f64 = _bj_sin(half);
+    var ash: f64 = f64_abs(sh);
+    var lim: f64 = _BJ_RF_REL15;
+    if (ash < lim) { return 1.0; }
+    var q: f64 = sn / (n * sh);
+    var af: f64 = f64_abs(q);
+    return af;
+}
+
+# The rectangular planar array factor AF_x·AF_y: the linear factors of nx elements spaced dx with phase β_x, at the
+# angle acos(sin θ cos φ) from the x axis, and of ny spaced dy with β_y, at acos(sin θ sin φ) from the y axis.
+# Mirrors `rf::planar_array_factor`.
+#must_use
+public fn bj_planar_array_factor(nx, ny, dx: f64, dy: f64, wavenumber: f64, beta_x: f64, beta_y: f64, theta: f64,
+  phi: f64): f64 {
+    var st: f64 = _bj_sin(theta);
+    var cp: f64 = _bj_cos(phi);
+    var tx: f64 = _bj_acos(st * cp);
+    var afx: f64 = bj_linear_array_factor(nx, dx, wavenumber, beta_x, tx);
+    var sp: f64 = _bj_sin(phi);
+    var ty: f64 = _bj_acos(st * sp);
+    var afy: f64 = bj_linear_array_factor(ny, dy, wavenumber, beta_y, ty);
+    var af: f64 = afx * afy;
+    return af;
+}
+
+# The uniform circular array factor |Σₙ exp(j(ka sin θ cos(φ − φₙ) + nβ))|/N: n_elements elements (a usize) at
+# φₙ = 2πn/N on a circle of radius a (m), wavenumber k, observation angles θ and φ (rad), progressive phase β (rad).
+# 0 for no element. Mirrors `rf::circular_array_factor`.
+#must_use
+public fn bj_circular_array_factor(n_elements, radius: f64, wavenumber: f64, theta: f64, phi: f64,
+  progressive_phase: f64): f64 {
+    if (n_elements == 0) { return 0.0; }
+    var n: f64 = _bj_rf_u2f(n_elements);
+    var sr: f64 = 0.0;
+    var si: f64 = 0.0;
+    var two_pi: f64 = 2.0 * _BJ_PI;
+    var i = 0;
+    while (i != n_elements) {
+        var fi: f64 = _bj_rf_u2f(i);
+        var phi_n: f64 = two_pi * fi / n;
+        var st: f64 = _bj_sin(theta);
+        var cd: f64 = _bj_cos(phi - phi_n);
+        var psi: f64 = wavenumber * radius * st * cd + progressive_phase * fi;
+        var s, c = _bj_sin_cos(psi);
+        sr = sr + c;
+        si = si + s;
+        i = i + 1;
+    }
+    var m: f64 = f64_sqrt(sr * sr + si * si);
+    var af: f64 = m / n;
+    return af;
+}
+
 # --- json.cyr ---
 
 # json.cyr — JSON for the serializable types: BjComplex (Rust hisab 1.4.0's `Complex`), BjFieldVector,

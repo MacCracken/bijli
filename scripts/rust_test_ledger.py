@@ -62,6 +62,15 @@ REASONS = {
     ("src/material.rs", "test_reflectance_at_deprecated_never_wrong"):
         "deprecated reflectance_at (ADR 0002 row 1): the port has no NaN-returning form; try_reflectance_at refuses "
         "the conductor (cyrius_reflectance_via_try)",
+    ("src/rf.rs", "test_input_impedance_matched"):
+        "rf::input_impedance_lossless is deprecated in 1.2.0 and not carried (ADR 0002 row 1); tests/rf.tcyr's "
+        "cyrius_input_impedance_real_loads checks the matched Z_in = Z₀ through input_impedance_lossless_complex",
+    ("src/rf.rs", "test_input_impedance_quarter_wave"):
+        "deprecated input_impedance_lossless (ADR 0002 row 1); its λ/4 value Z₀²/Z_L = 25 Ω is checked through "
+        "input_impedance_lossless_complex",
+    ("src/rf.rs", "test_input_impedance_real_rejects_complex_result"):
+        "deprecated input_impedance_lossless (ADR 0002 row 1): the port has no real-valued form to refuse; its complex "
+        "Z_in = 40 − j30 is checked through input_impedance_lossless_complex",
 }
 
 

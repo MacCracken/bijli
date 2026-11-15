@@ -6,7 +6,7 @@
 
 **Rust column**: rust-old/bench-history.csv, run `2026-11-12T03:15:21Z` at `c95fd30` (the 1.2.0 tag's source), criterion medians. Taken under load (kimiya's gates ran beside it: load average about 2.6, median CI width 0.8 %, p90 4.2 %, max 13 %), so a ratio within the Rust row's own noise is read as parity (port plan §5 P4).
 
-**80 Rust benches:** 61 twinned, 0 not applicable, 19 pending.
+**80 Rust benches:** 66 twinned, 0 not applicable, 14 pending.
 
 | Rust bench | Rust | Cyrius twin | Cyrius | Cyrius / Rust |
 |---|---:|---|---:|---:|
@@ -82,11 +82,11 @@
 | `beam/hermite_gaussian_hg33` | 4.46 ns | `beam/hermite_gaussian_hg33` | 204.00 ns | 45.7× |
 | `beam/resonator_stability` | 6.48 ns | `beam/resonator_stability` | 47.00 ns | 7.3× |
 | `beam/hermite_gaussian_field_hg33` | 30.33 ns | `beam/hermite_gaussian_field_hg33` | 741.00 ns | 24.4× |
-| `rf/reflection_coefficient` | 1.23 ns | pending (M4) | — | — |
-| `rf/vswr` | 1.23 ns | pending (M4) | — | — |
-| `rf/linear_array_factor_8` | 0.55 ns | pending (M4) | — | — |
+| `rf/reflection_coefficient` | 1.23 ns | `rf/reflection_coefficient` | 14.00 ns | 11.4× |
+| `rf/vswr` | 1.23 ns | `rf/vswr` | 9.00 ns | 7.3× |
+| `rf/linear_array_factor_8` | 0.55 ns | `rf/linear_array_factor_8` | 439.00 ns | 798.2× |
 | `rf/s_cascade` | 100.25 ns | pending (M4) | — | — |
-| `rf/input_impedance_complex` | 7.43 ns | pending (M4) | — | — |
-| `rf/single_stub_match` | 128.46 ns | pending (M4) | — | — |
+| `rf/input_impedance_complex` | 7.43 ns | `rf/input_impedance_complex` | 221.00 ns | 29.7× |
+| `rf/single_stub_match` | 128.46 ns | `rf/single_stub_match` | 1.88 µs | 14.7× |
 | `rf/parse_touchstone_s2p_201` | 79.42 µs | pending (M4) | — | — |
 | `rf/write_touchstone_s2p_201` | 213.82 µs | pending (M4) | — | — |

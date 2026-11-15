@@ -2864,6 +2864,130 @@ public fn _par_beam(fp, fl): i64 {
     return _par_beam_fns(fp, fl);
 }
 
+# ── rf (M4 part 1a): src/rf.cyr ─────────────────────────────────────────────────────────────────────────────────
+# rf.rs was already in e^{+jωt} (ADR 0002 row 5), so every row compares on the oracle's numbers. A complex value is two
+# f64 tokens; an element count (a usize) is an `i:` token, its 64-bit word.
+
+# The lines, the reflection coefficients, the losses and the Smith chart.
+fn _par_rf_lines(fp, fl): i64 {
+    var z: BjComplex;
+    if (_par_eq(fp, fl, "rf::characteristic_impedance_lossless") == 1) {
+        var t1, v1 = bj_characteristic_impedance_lossless(_par_in(0), _par_in(1));
+        _par_got_res_f(t1, v1);
+        return 1;
+    }
+    if (_par_eq(fp, fl, "rf::phase_velocity") == 1) {
+        var t2, v2 = bj_phase_velocity(_par_in(0), _par_in(1));
+        _par_got_res_f(t2, v2);
+        return 1;
+    }
+    if (_par_eq(fp, fl, "rf::characteristic_impedance_lossy") == 1) {
+        _par_got_c(bj_characteristic_impedance_lossy(_par_in(0), _par_in(1), _par_in(2), _par_in(3), _par_in(4)));
+        return 1;
+    }
+    if (_par_eq(fp, fl, "rf::propagation_constant") == 1) {
+        _par_got_c(bj_propagation_constant(_par_in(0), _par_in(1), _par_in(2), _par_in(3), _par_in(4)));
+        return 1;
+    }
+    if (_par_eq(fp, fl, "rf::input_impedance_lossless_complex") == 1) {
+        var zl: BjComplex = BjComplex_new(_par_in(1), _par_in(2));
+        var t3, v3 = bj_input_impedance_lossless_complex(_par_in(0), zl, _par_in(3), _par_in(4), &z);
+        _par_got_res_c(t3, v3, z);
+        return 1;
+    }
+    if (_par_eq(fp, fl, "rf::reflection_coefficient") == 1) {
+        var t4, v4 = bj_reflection_coefficient(_par_in(0), _par_in(1));
+        _par_got_res_f(t4, v4);
+        return 1;
+    }
+    if (_par_eq(fp, fl, "rf::reflection_coefficient_complex") == 1) {
+        var a: BjComplex = BjComplex_new(_par_in(0), _par_in(1));
+        var b: BjComplex = BjComplex_new(_par_in(2), _par_in(3));
+        var t5, v5 = bj_reflection_coefficient_complex(a, b, &z);
+        _par_got_res_c(t5, v5, z);
+        return 1;
+    }
+    if (_par_eq(fp, fl, "rf::vswr") == 1) {
+        var t6, v6 = bj_vswr(_par_in(0));
+        _par_got_res_f(t6, v6);
+        return 1;
+    }
+    if (_par_eq(fp, fl, "rf::return_loss") == 1) {
+        var t7, v7 = bj_return_loss(_par_in(0));
+        _par_got_res_f(t7, v7);
+        return 1;
+    }
+    if (_par_eq(fp, fl, "rf::insertion_loss") == 1) {
+        var t8, v8 = bj_insertion_loss(_par_in(0));
+        _par_got_res_f(t8, v8);
+        return 1;
+    }
+    if (_par_eq(fp, fl, "rf::mismatch_loss") == 1) {
+        var t9, v9 = bj_mismatch_loss(_par_in(0));
+        _par_got_res_f(t9, v9);
+        return 1;
+    }
+    if (_par_eq(fp, fl, "rf::normalize_impedance") == 1) {
+        var zn: BjComplex = BjComplex_new(_par_in(0), _par_in(1));
+        var t10, v10 = bj_normalize_impedance(zn, _par_in(2), &z);
+        _par_got_res_c(t10, v10, z);
+        return 1;
+    }
+    if (_par_eq(fp, fl, "rf::denormalize_impedance") == 1) {
+        _par_got_c(bj_denormalize_impedance(BjComplex_new(_par_in(0), _par_in(1)), _par_in(2)));
+        return 1;
+    }
+    if (_par_eq(fp, fl, "rf::gamma_from_z") == 1) {
+        _par_got_c(bj_gamma_from_z(BjComplex_new(_par_in(0), _par_in(1))));
+        return 1;
+    }
+    if (_par_eq(fp, fl, "rf::z_from_gamma") == 1) {
+        _par_got_c(bj_z_from_gamma(BjComplex_new(_par_in(0), _par_in(1))));
+        return 1;
+    }
+    return 0;
+}
+
+# rf's rows: the lines and the Smith chart through _par_rf_lines, then matching and the array factors.
+public fn _par_rf(fp, fl): i64 {
+    if (_par_rf_lines(fp, fl) == 1) { return 1; }
+    var w: f64[4];
+    if (_par_eq(fp, fl, "rf::quarter_wave_transformer") == 1) {
+        var t1, v1 = bj_quarter_wave_transformer(_par_in(0), _par_in(1));
+        _par_got_res_f(t1, v1);
+        return 1;
+    }
+    if (_par_eq(fp, fl, "rf::single_stub_match") == 1) {
+        var t2, v2 = bj_single_stub_match(_par_in(0), _par_in(1), &w);
+        if (is_err_result(t2) == 1) { return _par_got_error(v2) + 1; }
+        _par_got_words(&w, 2);
+        return 1;
+    }
+    if (_par_eq(fp, fl, "rf::single_stub_match_complex") == 1) {
+        var t3, v3 = bj_single_stub_match_complex(BjComplex_new(_par_in(0), _par_in(1)), _par_in(2), &w);
+        if (is_err_result(t3) == 1) { return _par_got_error(v3) + 1; }
+        _par_got_words(&w, 4);
+        return 1;
+    }
+    if (_par_eq(fp, fl, "rf::linear_array_factor") == 1) {
+        var a: f64 = bj_linear_array_factor(_par_in(0), _par_in(1), _par_in(2), _par_in(3), _par_in(4));
+        _par_got_f(a);
+        return 1;
+    }
+    if (_par_eq(fp, fl, "rf::planar_array_factor") == 1) {
+        var p: f64 = bj_planar_array_factor(_par_in(0), _par_in(1), _par_in(2), _par_in(3), _par_in(4), _par_in(5),
+          _par_in(6), _par_in(7), _par_in(8));
+        _par_got_f(p);
+        return 1;
+    }
+    if (_par_eq(fp, fl, "rf::circular_array_factor") == 1) {
+        var c: f64 = bj_circular_array_factor(_par_in(0), _par_in(1), _par_in(2), _par_in(3), _par_in(4), _par_in(5));
+        _par_got_f(c);
+        return 1;
+    }
+    return 0;
+}
+
 public fn _par_dispatch(mp, ml, fp, fl): i64 {
     _par_got_n = 0;
     if (_par_eq(mp, ml, "beam") == 1) { return _par_beam(fp, fl); }
@@ -2880,6 +3004,7 @@ public fn _par_dispatch(mp, ml, fp, fl): i64 {
     if (_par_eq(mp, ml, "maxwell") == 1) { return _par_maxwell(fp, fl); }
     if (_par_eq(mp, ml, "polarization") == 1) { return _par_polarization(fp, fl); }
     if (_par_eq(mp, ml, "relativity") == 1) { return _par_relativity(fp, fl); }
+    if (_par_eq(mp, ml, "rf") == 1) { return _par_rf(fp, fl); }
     if (_par_eq(mp, ml, "scattering") == 1) { return _par_scattering(fp, fl); }
     if (_par_eq(mp, ml, "wave") == 1) { return _par_wave(fp, fl); }
     return 0;
@@ -2969,6 +3094,8 @@ public fn _par_c_bound(fp, fl): i64 {
     if (_par_eq(fp, fl, "scattering::mie") == 1) { return 0; }
     # beam's atan, acos, exp, cos and sin (M3 part 1c-1): src/crmath.cyr's correctly rounded primitives.
     if (memeq(fp, "beam::", 6) == 1 || _par_eq(fp, fl, "GaussianBeam::gouy_phase") == 1) { return 0; }
+    # rf's atan2, sin, cos, atan, log10 and acos (M4 part 1a): src/crmath.cyr's correctly rounded primitives.
+    if (memeq(fp, "rf::", 4) == 1) { return 0; }
     if (_par_eq(fp, fl, "relativity::solve_retarded_time") == 1) { return 0; }
     if (_par_eq(fp, fl, "relativity::lienard_wiechert_fields") == 1) { return 0; }
     if (fl > 9 && memeq(fp, "circuit::", 9) == 1) { return 0; }

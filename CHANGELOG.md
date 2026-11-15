@@ -265,6 +265,16 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
   a z_R that isn't πw₀²/λ, an `is_stable` that disagrees with g₁g₂. `json.tsv` grows by 14,416 rows, and
   `json.cr.tsv` by 5,295 that serde_json's best-effort parse misreads; all of them match on all three targets.
   beam.rs is ported.
+- **Cyrius port, M4 part 1a — rf's lines, reflection, Smith chart, matching and arrays** (`src/rf.cyr`): the
+  lossless and lossy characteristic impedances, the propagation constant, the phase velocity, the input impedance of
+  a terminated line; Γ (real and complex), VSWR, the return, insertion and mismatch losses; z ↔ Γ on the Smith chart
+  with its poles; the quarter-wave transformer and both single-stub matches; the linear, planar and circular array
+  factors. rf.rs already used e^{+jωt}, so no number changes. Complex arithmetic is hisab's in Rust's order, with
+  rf.rs's own Smith division; an element count is Rust's usize, its word read unsigned. `tests/golden/rf.tsv`
+  (11,323 rows) matches bit for bit on all three targets; its 62 corrected rows are where glibc's log10, sin and cos
+  misround. 45 of rf.rs's tests are ported and the deprecated `input_impedance_lossless`'s three are n/a (ADR 0002
+  row 1), checked through the complex form instead. 5 of the 8 rf bench twins are added (66 of 80). The S-parameter
+  matrices are part 1b's, Touchstone part 1c's.
 
 ### Fixed
 

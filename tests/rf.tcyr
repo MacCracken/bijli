@@ -1,0 +1,540 @@
+# rf.tcyr — src/rf.cyr (M4 part 1a): transmission lines, reflection and the losses, the Smith chart, matching and the
+# array factors.
+#
+# Every group named test_* is rust-old/src/rf.rs's test of that name, ported assertion for assertion (the ledger
+# matches them by name). rf.rs was already in bijli's one convention, e^{+jωt} (ADR 0002 row 5), so nothing changes
+# sign. The three tests of the deprecated input_impedance_lossless are n/a (ADR 0002 row 1):
+# cyrius_input_impedance_real_loads checks their values through input_impedance_lossless_complex. The other cyrius_*
+# groups pin the reasons' exact text, out left alone on an error, the lines' DC limits, the Smith chart's poles and
+# signed zeros, the stub match's sort and its matched branch, and usize::MAX elements.
+# tests/golden/rf.tsv pins every function over its grid against Rust besides.
+
+include "tests/lib.cyr"
+
+var TOL: f64 = 0.000001;
+var NAN: f64 = 0x7FF8000000000000;
+var INF: f64 = 0x7FF0000000000000;
+
+# |a − b| ≤ tol.
+fn near(a: f64, b: f64, tol: f64): i64 {
+    var d: f64 = f64_abs(a - b);
+    if (d <= tol) { return 1; }
+    return 0;
+}
+
+# Both parts of z within tol of (re, im). Mirrors the Rust tests' `close`.
+fn close(z: BjComplex, re: f64, im: f64, tol: f64): i64 {
+    if (near(z.re, re, tol) == 1 && near(z.im, im, tol) == 1) { return 1; }
+    return 0;
+}
+
+# The value of an Ok(f64) Result (the caller tests is_ok first).
+fn ok_f(t, v): f64 {
+    var x: f64 = v;
+    return x;
+}
+
+# 1 when the last error's Display text is a followed by b (a literal can't continue across lines).
+fn reason_is2(a, b): i64 {
+    var d = bj_last_error_display();
+    var la = strlen(a);
+    if (strlen(d) != la + strlen(b)) { return 0; }
+    if (memeq(d, a, la) != 1) { return 0; }
+    return memeq(d + la, b, strlen(b));
+}
+
+# 1 when (t, v) is Err(code) and the Display text is want.
+fn err_is(t, v, code, want): i64 {
+    if (is_err_result(t) != 1 || v != code) { return 0; }
+    return reason_is2(want, "");
+}
+
+# 1 when the bits of a and b are equal (signed zeros told apart).
+fn same(a: f64, b: f64): i64 {
+    if (_bj_bits(a) == _bj_bits(b)) { return 1; }
+    return 0;
+}
+
+# Z_in of a line into *z: 1 on Ok.
+fn zin(z0: f64, re: f64, im: f64, beta: f64, length: f64, z: *BjComplex): i64 {
+    var t, v = bj_input_impedance_lossless_complex(z0, BjComplex_new(re, im), beta, length, z);
+    if (is_ok(t) == 1) { return 1; }
+    return 0;
+}
+
+# 1 when bj_input_impedance_lossless_complex refuses.
+fn zin_refused(z0: f64, re: f64, im: f64, beta: f64, length: f64): i64 {
+    var z: BjComplex;
+    var t, v = bj_input_impedance_lossless_complex(z0, BjComplex_new(re, im), beta, length, &z);
+    if (is_err_result(t) == 1) { return 1; }
+    return 0;
+}
+
+# 1 when a one-argument Result fn refuses x (0 vswr, 1 return_loss, 2 insertion_loss, 3 mismatch_loss).
+fn loss_refused(which, x: f64): i64 {
+    if (which == 0) {
+        var t0, v0 = bj_vswr(x);
+        if (is_err_result(t0) == 1) { return 1; }
+        return 0;
+    }
+    if (which == 1) {
+        var t1, v1 = bj_return_loss(x);
+        if (is_err_result(t1) == 1) { return 1; }
+        return 0;
+    }
+    if (which == 2) {
+        var t2, v2 = bj_insertion_loss(x);
+        if (is_err_result(t2) == 1) { return 1; }
+        return 0;
+    }
+    var t3, v3 = bj_mismatch_loss(x);
+    if (is_err_result(t3) == 1) { return 1; }
+    return 0;
+}
+
+# 1 when bj_characteristic_impedance_lossless(l, c) refuses.
+fn z0_refused(l: f64, c: f64): i64 {
+    var t, v = bj_characteristic_impedance_lossless(l, c);
+    if (is_err_result(t) == 1) { return 1; }
+    return 0;
+}
+
+# 1 when bj_quarter_wave_transformer(z0, zl) refuses.
+fn qw_refused(z0: f64, zl: f64): i64 {
+    var t, v = bj_quarter_wave_transformer(z0, zl);
+    if (is_err_result(t) == 1) { return 1; }
+    return 0;
+}
+
+# 1 when bj_single_stub_match(zl, z0) refuses.
+fn stub_refused(zl: f64, z0: f64): i64 {
+    var w: f64[2];
+    var t, v = bj_single_stub_match(zl, z0, &w);
+    if (is_err_result(t) == 1) { return 1; }
+    return 0;
+}
+
+# The Rust tests' Y(d) + Y_stub(ℓ) = Y₀ check with the tan form, for a load (rl, xl) on z0 and one solution (d, ℓ): 1
+# when 0 ≤ d < ½, 0 < ℓ < ½ and both parts of Y are within 10⁻⁹ of (Y₀, 0).
+fn stub_matches(rl: f64, xl: f64, z0: f64, d: f64, l: f64): i64 {
+    if (d < 0.0 || d >= 0.5 || l <= 0.0 || l >= 0.5) { return 0; }
+    var y0: f64 = 1.0 / z0;
+    var tau: f64 = 2.0 * _BJ_PI;
+    var t: f64 = _bj_tan(tau * d);
+    var j: BjComplex = BjComplex_new(0.0, 1.0);
+    var zl: BjComplex = BjComplex_new(rl, xl);
+    var jt: BjComplex = j.scale(z0 * t);
+    var num: BjComplex = BjComplex_add(zl, jt);
+    var jz: BjComplex = BjComplex_mul(j, zl);
+    var jzt: BjComplex = jz.scale(t);
+    var den: BjComplex = BjComplex_add(BjComplex_from_real(z0), jzt);
+    var q: BjComplex = BjComplex_div(num, den);
+    var z_in: BjComplex = q.scale(z0);
+    var y_line: BjComplex = BjComplex_div(BjComplex_from_real(1.0), z_in);
+    var tl: f64 = _bj_tan(tau * l);
+    var y_stub: BjComplex = BjComplex_new(0.0, -y0 / tl);
+    var y: BjComplex = BjComplex_add(y_line, y_stub);
+    return close(y, y0, 0.0, 0.000000001);
+}
+
+# rf.rs's transmission-line tests.
+fn rust_tests_a(): i64 {
+    var z: BjComplex;
+    test_group("test_z0_lossless");
+    var t1, v1 = bj_characteristic_impedance_lossless(0.00000025, 0.0000000001);
+    var z0: f64 = ok_f(t1, v1);
+    assert(is_ok(t1) == 1 && near(z0, 50.0, 0.1) == 1, "coax L' = 250 nH/m, C' = 100 pF/m: Z₀ = 50 Ω");
+
+    test_group("test_z0_invalid");
+    assert(z0_refused(-1.0, 0.0000000001) == 1 && z0_refused(0.00000025, 0.0) == 1, "L' < 0, C' = 0");
+    var t2, v2 = bj_phase_velocity(NAN, 0.0000000001);
+    assert(z0_refused(NAN, 0.0000000001) == 1 && is_err_result(t2) == 1, "NaN L'");
+
+    test_group("test_phase_velocity");
+    var t3, v3 = bj_phase_velocity(0.00000025, 0.0000000001);
+    var vp: f64 = ok_f(t3, v3);
+    assert(is_ok(t3) == 1 && vp > 100000000.0 && vp < 300000000.0, "1/√(L'C') ≈ 2·10⁸ m/s");
+
+    test_group("test_input_impedance_complex_eighth_wave");
+    assert(zin(50.0, 100.0, 0.0, 1.0, _BJ_PI / 4.0, &z) == 1 && close(z, 40.0, -30.0, 0.000000001) == 1,
+      "Z₀ = 50, Z_L = 100, βl = π/4: 40 − j30");
+
+    test_group("test_input_impedance_complex_load");
+    var tau: f64 = 2.0 * _BJ_PI;
+    assert(zin(50.0, 30.0, 40.0, tau, 0.3, &z) == 1 && close(z, 20.404995607197357, -22.010650955158418,
+        0.000000001) == 1, "Z_L = 30 + j40, βl = 0.6π");
+
+    test_group("test_input_impedance_short_quarter_wave_is_unbounded");
+    var t4, v4 = bj_input_impedance_lossless_complex(50.0, bj_complex_zero(), tau, 0.25, &z);
+    assert(is_err_result(t4) == 1 && v4 == BJ_ERR_DIVISION_BY_ZERO, "a shorted λ/4 line: DivisionByZero");
+
+    test_group("test_input_impedance_complex_invalid");
+    assert(zin_refused(0.0, 50.0, 0.0, 1.0, 1.0) == 1 && zin_refused(NAN, 50.0, 0.0, 1.0, 1.0) == 1, "Z₀ = 0, NaN");
+    assert(zin_refused(50.0, NAN, 0.0, 1.0, 1.0) == 1 && zin_refused(50.0, 50.0, 0.0, INF, 1.0) == 1,
+      "a NaN load, an infinite β");
+
+    test_group("test_lossy_z0_dc_limits");
+    var w1: BjComplex = bj_characteristic_impedance_lossy(0.0, 0.00000025, 0.0, 0.0000000001, 0.0);
+    assert(close(w1, 50.0, 0.0, 0.000000001) == 1, "R = G = ω = 0: √(L/C) = 50 Ω");
+    var w2: BjComplex = bj_characteristic_impedance_lossy(1.0, 0.00000025, 0.0, 0.0000000001, 0.0);
+    var w2r: f64 = w2.re;
+    assert(w2r == INF, "R > 0, G = ω = 0: |Z₀| → ∞");
+    var w3: BjComplex = bj_characteristic_impedance_lossy(4.0, 0.00000025, 1.0, 0.0000000001, 0.0);
+    assert(close(w3, 2.0, 0.0, 0.000000000001) == 1, "G > 0 at DC: √(R/G)");
+
+    test_group("test_propagation_constant_lossless");
+    var g: BjComplex = bj_propagation_constant(0.0, 0.00000025, 0.0, 0.0000000001, 2000000000.0 * _BJ_PI);
+    var gr: f64 = f64_abs(g.re);
+    var gi: f64 = g.im;
+    assert(gr < 0.001 && gi > 0.0, "R = G = 0: γ = jω√(LC), α ≈ 0, β > 0");
+
+    test_group("test_characteristic_impedance_lossy_approaches_lossless");
+    var omega: f64 = 2000000000.0 * _BJ_PI;
+    var zy: BjComplex = bj_characteristic_impedance_lossy(0.001, 0.00000025, 0.000001, 0.0000000001, omega);
+    var t5, v5 = bj_characteristic_impedance_lossless(0.00000025, 0.0000000001);
+    var zll: f64 = ok_f(t5, v5);
+    var dre: f64 = f64_abs(zy.re - zll) / zll;
+    var zyi: f64 = f64_abs(zy.im);
+    assert(dre < 0.01 && zyi < 1.0, "tiny R and G: Z₀ ≈ √(L/C), a small imaginary part");
+    return 0;
+}
+
+# rf.rs's reflection, loss and Smith chart tests.
+fn rust_tests_b(): i64 {
+    var z: BjComplex;
+    test_group("test_reflection_matched");
+    var t1, v1 = bj_reflection_coefficient(50.0, 50.0);
+    var g1: f64 = ok_f(t1, v1);
+    assert(is_ok(t1) == 1 && near(g1, 0.0, TOL) == 1, "Γ = 0");
+
+    test_group("test_reflection_open");
+    var t2, v2 = bj_reflection_coefficient(1000000000000000.0, 50.0);
+    var g2: f64 = ok_f(t2, v2);
+    assert(is_ok(t2) == 1 && near(g2, 1.0, 0.001) == 1, "Z_L → ∞: Γ = 1");
+
+    test_group("test_reflection_short");
+    var t3, v3 = bj_reflection_coefficient(0.0, 50.0);
+    var g3: f64 = ok_f(t3, v3);
+    assert(is_ok(t3) == 1 && near(g3, -1.0, TOL) == 1, "Z_L = 0: Γ = −1");
+
+    test_group("test_reflection_nan_rejected");
+    var t4, v4 = bj_reflection_coefficient(NAN, 50.0);
+    var t5, v5 = bj_reflection_coefficient_complex(BjComplex_new(NAN, 0.0), bj_complex_real(50.0), &z);
+    assert(is_err_result(t4) == 1 && is_err_result(t5) == 1, "a NaN load is refused");
+
+    test_group("test_vswr_matched");
+    var t6, v6 = bj_vswr(0.0);
+    var s6: f64 = ok_f(t6, v6);
+    assert(is_ok(t6) == 1 && near(s6, 1.0, TOL) == 1, "|Γ| = 0: VSWR 1");
+
+    test_group("test_vswr_2_to_1");
+    var t7, v7 = bj_vswr(1.0 / 3.0);
+    var s7: f64 = ok_f(t7, v7);
+    assert(is_ok(t7) == 1 && near(s7, 2.0, TOL) == 1, "|Γ| = 1/3: VSWR 2");
+
+    test_group("test_vswr_invalid");
+    assert(loss_refused(0, 1.0) == 1 && loss_refused(0, -0.1) == 1 && loss_refused(0, NAN) == 1, "1, −0.1, NaN");
+
+    test_group("test_return_loss");
+    var t8, v8 = bj_return_loss(0.1);
+    var r8: f64 = ok_f(t8, v8);
+    var t9, v9 = bj_return_loss(1.0);
+    var r9: f64 = ok_f(t9, v9);
+    assert(is_ok(t8) == 1 && near(r8, 20.0, 0.01) == 1 && is_ok(t9) == 1 && near(r9, 0.0, TOL) == 1,
+      "|Γ| = 0.1: 20 dB; total reflection: 0 dB");
+
+    test_group("test_return_loss_invalid");
+    assert(loss_refused(1, NAN) == 1 && loss_refused(1, 1.5) == 1, "NaN, 1.5");
+
+    test_group("test_insertion_loss_matched");
+    var t10, v10 = bj_insertion_loss(0.0);
+    var i10: f64 = ok_f(t10, v10);
+    assert(is_ok(t10) == 1 && near(i10, 0.0, TOL) == 1, "0 dB for a perfect match");
+
+    test_group("test_insertion_loss_invalid");
+    assert(loss_refused(2, NAN) == 1 && loss_refused(2, -0.5) == 1 && loss_refused(3, NAN) == 1, "NaN, −0.5");
+
+    test_group("test_normalize_denormalize");
+    var zn: BjComplex = BjComplex_new(100.0, 50.0);
+    var t11, v11 = bj_normalize_impedance(zn, 50.0, &z);
+    var back: BjComplex = bj_denormalize_impedance(z, 50.0);
+    assert(is_ok(t11) == 1 && close(back, 100.0, 50.0, TOL) == 1, "Z/Z₀·Z₀ = Z");
+
+    test_group("test_gamma_z_roundtrip");
+    var gz: BjComplex = bj_gamma_from_z(BjComplex_new(2.0, 1.0));
+    var zb: BjComplex = bj_z_from_gamma(gz);
+    assert(close(zb, 2.0, 1.0, TOL) == 1, "z → Γ → z");
+
+    test_group("test_gamma_matched");
+    var gm: BjComplex = bj_gamma_from_z(bj_complex_real(1.0));
+    var gmn: f64 = gm.norm();
+    assert(gmn < TOL, "z = 1: Γ = 0");
+
+    test_group("test_smith_poles_are_infinite_not_nan");
+    var gp: BjComplex = bj_gamma_from_z(bj_complex_real(-1.0));
+    var gpr: f64 = gp.re;
+    var gpi: f64 = gp.im;
+    assert(gpr == INF && gpi == gpi, "z = −1: Γ = +∞, not NaN");
+    var zp: BjComplex = bj_z_from_gamma(bj_complex_real(1.0));
+    var zpr: f64 = zp.re;
+    var zpi: f64 = zp.im;
+    assert(zpr == INF && zpi == zpi, "Γ = 1: z = +∞, not NaN");
+    var gb: BjComplex = bj_gamma_from_z(zp);
+    var zg: BjComplex = bj_z_from_gamma(gp);
+    assert(close(gb, 1.0, 0.0, 0.0) == 1 && close(zg, -1.0, 0.0, 0.0) == 1, "z = ∞ ↔ Γ = 1, Γ = ∞ ↔ z = −1");
+
+    test_group("test_normalize_zero_z0");
+    var t12, v12 = bj_normalize_impedance(BjComplex_new(50.0, 0.0), 0.0, &z);
+    var t13, v13 = bj_normalize_impedance(BjComplex_new(50.0, 0.0), NAN, &z);
+    assert(is_err_result(t12) == 1 && is_err_result(t13) == 1, "Z₀ = 0, NaN");
+
+    test_group("test_reflection_coefficient_complex_matched");
+    var zz: BjComplex = BjComplex_new(50.0, 0.0);
+    var t14, v14 = bj_reflection_coefficient_complex(zz, zz, &z);
+    var zm: f64 = z.norm();
+    assert(is_ok(t14) == 1 && zm < TOL, "Z_L = Z₀: Γ = 0");
+
+    test_group("test_return_loss_zero_gamma");
+    assert(loss_refused(1, 0.0) == 1, "|Γ| = 0: an infinite return loss is refused");
+
+    test_group("test_insertion_loss_total_reflection");
+    assert(loss_refused(2, 1.0) == 1, "|Γ| = 1 is refused");
+
+    test_group("test_feature_gate_rf_compiles_alone");
+    var t15, v15 = bj_reflection_coefficient(75.0, 50.0);
+    assert(is_ok(t15) == 1, "rf's functions link alone");
+    return 0;
+}
+
+# rf.rs's matching and array tests.
+fn rust_tests_c(): i64 {
+    var w: f64[4];
+    test_group("test_quarter_wave_transformer");
+    var t1, v1 = bj_quarter_wave_transformer(50.0, 100.0);
+    var zt: f64 = ok_f(t1, v1);
+    assert(is_ok(t1) == 1 && near(zt, 70.71, 0.01) == 1, "√(50·100) ≈ 70.71 Ω");
+
+    test_group("test_quarter_wave_both_negative");
+    assert(qw_refused(-50.0, -100.0) == 1 && qw_refused(50.0, 0.0) == 1 && qw_refused(NAN, 100.0) == 1,
+      "negative, zero, NaN");
+
+    test_group("test_quarter_wave_negative");
+    assert(qw_refused(-50.0, 100.0) == 1, "Z₀ < 0");
+
+    test_group("test_single_stub_already_matched");
+    var t2, v2 = bj_single_stub_match(50.0, 50.0, &w);
+    assert(is_ok(t2) == 1 && near(w[0], 0.0, TOL) == 1 && near(w[1], 0.25, TOL) == 1, "(0, λ/4): no stub");
+
+    test_group("test_single_stub_real_load_reference");
+    var t3, v3 = bj_single_stub_match(100.0, 50.0, &w);
+    assert(is_ok(t3) == 1 && near(w[0], 0.1520433619923482, 0.000000001) == 1, "100 Ω on 50 Ω: d");
+    assert(near(w[1], 0.1520433619923482, 0.000000001) == 1, "100 Ω on 50 Ω: ℓ");
+    var t4, v4 = bj_single_stub_match(25.0, 50.0, &w);
+    assert(is_ok(t4) == 1 && near(w[0], 0.09795663800765184, 0.000000001) == 1, "25 Ω on 50 Ω: d");
+    assert(near(w[1], 0.3479566380076518, 0.000000001) == 1, "25 Ω on 50 Ω: ℓ");
+
+    test_group("test_single_stub_pozar_example");
+    var t5, v5 = bj_single_stub_match_complex(BjComplex_new(60.0, -80.0), 50.0, &w);
+    assert(is_ok(t5) == 1 && near(w[0], 0.11042321863830029, 0.000000001) == 1, "d₁ = 0.110λ");
+    assert(near(w[1], 0.09497462163589147, 0.000000001) == 1, "ℓ₁ = 0.095λ");
+    assert(near(w[2], 0.2594445306228258, 0.000000001) == 1, "d₂ = 0.260λ");
+    assert(near(w[3], 0.4050253783641085, 0.000000001) == 1, "ℓ₂ = 0.405λ");
+
+    test_group("test_single_stub_admittance_is_matched");
+    var loads: f64[10];
+    loads[0] = 100.0;
+    loads[1] = 0.0;
+    loads[2] = 25.0;
+    loads[3] = 0.0;
+    loads[4] = 60.0;
+    loads[5] = -80.0;
+    loads[6] = 50.0;
+    loads[7] = 50.0;
+    loads[8] = 10.0;
+    loads[9] = 120.0;
+    var good = 0;
+    for (var k = 0; k < 5; k = k + 1) {
+        var rl: f64 = loads[2 * k];
+        var xl: f64 = loads[2 * k + 1];
+        var t6, v6 = bj_single_stub_match_complex(BjComplex_new(rl, xl), 50.0, &w);
+        if (is_ok(t6) == 1 && stub_matches(rl, xl, 50.0, w[0], w[1]) == 1 && stub_matches(rl, xl, 50.0, w[2],
+            w[3]) == 1) {
+            good = good + 1;
+        }
+    }
+    assert(good == 5, "Y(d) + Y_stub(ℓ) = Y₀ for both solutions of five loads");
+
+    test_group("test_single_stub_invalid");
+    assert(stub_refused(-100.0, 50.0) == 1 && stub_refused(100.0, 0.0) == 1 && stub_refused(NAN, 50.0) == 1,
+      "a negative load, Z₀ = 0, a NaN load");
+    var t7, v7 = bj_single_stub_match_complex(BjComplex_new(0.0, 30.0), 50.0, &w);
+    assert(is_err_result(t7) == 1, "a purely reactive load");
+
+    test_group("test_linear_array_broadside");
+    var tau: f64 = 2.0 * _BJ_PI;
+    var a1: f64 = bj_linear_array_factor(4, 0.5, tau, 0.0, _BJ_PI / 2.0);
+    assert(near(a1, 1.0, TOL) == 1, "β = 0: the peak at θ = 90°");
+
+    test_group("test_linear_array_single_element");
+    var a2: f64 = bj_linear_array_factor(1, 0.5, 10.0, 0.0, 0.5);
+    assert(near(a2, 1.0, TOL) == 1, "one element: 1");
+
+    test_group("test_linear_array_zero_elements");
+    var a3: f64 = bj_linear_array_factor(0, 0.5, 10.0, 0.0, 0.5);
+    assert(near(a3, 0.0, TOL) == 1, "no element: 0");
+
+    test_group("test_circular_array_single");
+    var c1: f64 = bj_circular_array_factor(1, 0.5, 10.0, 0.5, 0.0, 0.0);
+    assert(near(c1, 1.0, TOL) == 1, "one element: 1");
+
+    test_group("test_circular_array_broadside_peak");
+    var c2: f64 = bj_circular_array_factor(8, 0.25, tau, 0.0, 0.0, 0.0);
+    assert(near(c2, 1.0, TOL) == 1, "β = 0: every element in phase at θ = 0");
+
+    test_group("test_planar_array_nonzero");
+    var p1: f64 = bj_planar_array_factor(4, 4, 0.5, 0.5, tau, 0.0, 0.0, 0.3, 0.5);
+    assert(p1 > 0.0 && p1 <= 1.0, "a finite value in (0, 1]");
+
+    test_group("test_linear_array_factor_bounded");
+    var inside = 0;
+    for (var i = 0; i < 100; i = i + 1) {
+        var th: f64 = f64_from(i) * _BJ_PI / 100.0;
+        var af: f64 = bj_linear_array_factor(8, 0.5, tau, 0.0, th);
+        if (af >= -TOL && af <= 1.0 + TOL) { inside = inside + 1; }
+    }
+    assert(inside == 100, "AF ∈ [0, 1] over θ ∈ [0, π)");
+    return 0;
+}
+
+# The deprecated input_impedance_lossless's three tests (n/a, ADR 0002 row 1), checked through the complex form.
+fn cyrius_deprecated(): i64 {
+    var z: BjComplex;
+    test_group("cyrius_input_impedance_real_loads (ADR 0002 row 1)");
+    var tau: f64 = 2.0 * _BJ_PI;
+    assert(zin(50.0, 50.0, 0.0, 10.0, 0.1, &z) == 1 && close(z, 50.0, 0.0, 0.01) == 1,
+      "a matched load: Z_in = Z₀ at any length (test_input_impedance_matched)");
+    assert(zin(50.0, 100.0, 0.0, tau, 0.25, &z) == 1 && close(z, 25.0, 0.0, 0.1) == 1,
+      "a λ/4 transformer: Z₀²/Z_L = 25 Ω (test_input_impedance_quarter_wave)");
+    var zi: f64 = f64_abs(z.im);
+    assert(zi < 0.0000001, "the λ/4 value is real to rounding");
+    assert(zin(50.0, 100.0, 0.0, 1.0, _BJ_PI / 4.0, &z) == 1 && close(z, 40.0, -30.0, 0.000000001) == 1,
+      "βl = π/4: 40 − j30, complex (test_input_impedance_real_rejects_complex_result)");
+    return 0;
+}
+
+# The reasons' exact text and out left alone on an error.
+fn cyrius_errors(): i64 {
+    var z: BjComplex = BjComplex_new(7.0, 8.0);
+    var w: f64[4];
+    test_group("cyrius_rf_reasons");
+    var t1, v1 = bj_characteristic_impedance_lossless(-1.0, 0.0000000001);
+    assert(err_is(t1, v1, BJ_ERR_INVALID_PARAMETER,
+        "invalid parameter: L' and C' must be finite and positive, got L'=-1, C'=0.0000000001") == 1, "Z₀'s values");
+    var t2, v2 = bj_phase_velocity(0.0, 1.0);
+    assert(err_is(t2, v2, BJ_ERR_INVALID_PARAMETER, "invalid parameter: L' and C' must be finite and positive") == 1,
+      "v_p's text has no values");
+    var t3, v3 = bj_input_impedance_lossless_complex(50.0, BjComplex_new(NAN, -1.0), 1.0, 1.0, &z);
+    assert(err_is(t3, v3, BJ_ERR_INVALID_PARAMETER, "invalid parameter: Z_L must be finite, got NaN-1i") == 1,
+      "Z_L in Complex's Display form");
+    var t4, v4 = bj_input_impedance_lossless_complex(50.0, bj_complex_real(1.0), INF, 0.0, &z);
+    assert(err_is(t4, v4, BJ_ERR_INVALID_PARAMETER,
+        "invalid parameter: electrical length βl must be finite, got β=inf, l=0") == 1, "∞·0 is NaN");
+    var t5, v5 = bj_input_impedance_lossless_complex(-0.0, bj_complex_real(1.0), 1.0, 1.0, &z);
+    assert(err_is(t5, v5, BJ_ERR_INVALID_PARAMETER, "invalid parameter: Z₀ must be finite and positive, got -0") == 1,
+      "require_positive_finite's text");
+    var t6, v6 = bj_input_impedance_lossless_complex(50.0, bj_complex_zero(), 2.0 * _BJ_PI, 0.25, &z);
+    assert(reason_is2("division by zero in EM calculation: transmission line input impedance is unbounded ",
+        "(Z₀cos βl + jZ_L sin βl = 0)") == 1 && v6 == BJ_ERR_DIVISION_BY_ZERO, "the unbounded Z_in");
+    var t7, v7 = bj_reflection_coefficient(5.0, -5.0);
+    assert(err_is(t7, v7, BJ_ERR_DIVISION_BY_ZERO, "division by zero in EM calculation: Z_L + Z₀ = 0") == 1,
+      "Z_L + Z₀ = 0");
+    var t8, v8 = bj_reflection_coefficient_complex(BjComplex_new(1.0, INF), bj_complex_real(50.0), &z);
+    assert(err_is(t8, v8, BJ_ERR_INVALID_PARAMETER,
+        "invalid parameter: Z_L and Z₀ must be finite, got Z_L=1+infi, Z₀=50+0i") == 1, "both in Display form");
+    var t9, v9 = bj_vswr(-0.5);
+    assert(err_is(t9, v9, BJ_ERR_INVALID_PARAMETER, "invalid parameter: |Γ| must be ≥ 0, got -0.5") == 1, "vswr");
+    var t10, v10 = bj_insertion_loss(1.0);
+    assert(err_is(t10, v10, BJ_ERR_INVALID_PARAMETER,
+        "invalid parameter: total reflection — infinite insertion loss") == 1, "insertion loss at |Γ| = 1");
+    var t11, v11 = bj_mismatch_loss(NAN);
+    assert(err_is(t11, v11, BJ_ERR_INVALID_PARAMETER, "invalid parameter: |Γ| must be in [0, 1), got NaN") == 1,
+      "mismatch loss is insertion loss");
+    var t12, v12 = bj_return_loss(0.0);
+    assert(err_is(t12, v12, BJ_ERR_INVALID_PARAMETER,
+        "invalid parameter: |Γ| must be in (0, 1] for return loss, got 0") == 1, "return loss");
+    var t13, v13 = bj_normalize_impedance(bj_complex_real(1.0), 0.000000000000000000000000000000999, &z);
+    assert(err_is(t13, v13, BJ_ERR_DIVISION_BY_ZERO,
+        "division by zero in EM calculation: reference impedance Z₀ cannot be zero") == 1, "|Z₀| < 10⁻³⁰");
+    var t14, v14 = bj_quarter_wave_transformer(50.0, -0.0);
+    assert(err_is(t14, v14, BJ_ERR_INVALID_PARAMETER,
+        "invalid parameter: Z₀ and Z_L must be finite and positive for a quarter-wave transformer, got Z₀=50, Z_L=-0")
+      == 1, "the transformer");
+    var t15, v15 = bj_single_stub_match(INF, 50.0, &w);
+    assert(err_is(t15, v15, BJ_ERR_INVALID_PARAMETER, "invalid parameter: Z_L must be finite and positive, got inf")
+      == 1, "the real stub checks Z_L first");
+    var t16, v16 = bj_single_stub_match_complex(BjComplex_new(-0.0, 30.0), 50.0, &w);
+    assert(err_is(t16, v16, BJ_ERR_INVALID_PARAMETER,
+        "invalid parameter: load resistance must be positive for a stub match, got -0") == 1, "R_L ≤ 0");
+    var zr: f64 = z.re;
+    var zi: f64 = z.im;
+    assert(zr == 7.0 && zi == 8.0, "out is untouched by every error");
+    return 0;
+}
+
+# The DC limits, the Smith chart's poles and signed zeros, the stub's matched branch and sort, usize::MAX elements.
+fn cyrius_values(): i64 {
+    var w: f64[4];
+    test_group("cyrius_rf_values");
+    var a: BjComplex = bj_characteristic_impedance_lossy(-1.0, 0.00000025, 0.0, 0.0000000001, 0.0);
+    var ar: f64 = a.re;
+    assert(ar != ar, "R < 0 at DC: NaN parts");
+    var b: BjComplex = bj_characteristic_impedance_lossy(1.0, 0.00000025, 0.0, 0.0000000001, 0.0);
+    var bi: f64 = b.im;
+    assert(bi == -INF, "R > 0 at DC: +∞ − j∞");
+    var c: BjComplex = bj_characteristic_impedance_lossy(0.0, 0.00000025, 0.0, 0.0, 0.0);
+    var cr: f64 = c.re;
+    assert(cr != cr, "C' = 0 at DC: NaN parts");
+    var g1: BjComplex = bj_gamma_from_z(BjComplex_new(INF, NAN));
+    var g1r: f64 = g1.re;
+    assert(g1r != g1r, "a NaN part wins over an infinite one");
+    var g2: BjComplex = bj_gamma_from_z(BjComplex_new(5.0, -INF));
+    assert(close(g2, 1.0, 0.0, 0.0) == 1, "an infinite part is an open circuit");
+    var g3: BjComplex = bj_z_from_gamma(BjComplex_new(1.0, -0.0));
+    var g3r: f64 = g3.re;
+    var g3i: f64 = g3.im;
+    assert(g3r == INF && same(g3i, 0.0) == 1, "Γ = 1 − j0: +∞ + j0 (the pole's im is +0)");
+    var g4: BjComplex = bj_gamma_from_z(BjComplex_new(0.0, -0.0));
+    var g4r: f64 = g4.re;
+    var g4i: f64 = g4.im;
+    assert(g4r == -1.0 && same(g4i, 0.0) == 1, "z = 0 − j0: Γ = −1 + j0 (Smith's −0 − (−1)·0 is +0, as Rust's)");
+    var dn: BjComplex = bj_denormalize_impedance(BjComplex_new(0.5, -0.25), 50.0);
+    assert(close(dn, 25.0, -12.5, 0.0) == 1, "denormalize: z·Z₀");
+
+    var t1, v1 = bj_single_stub_match_complex(BjComplex_new(50.0, 25.0), 50.0, &w);
+    var t0: f64 = -25.0 / 100.0;
+    var dw: f64 = _bj_atan(t0) / (2.0 * _BJ_PI) + 0.5;
+    assert(is_ok(t1) == 1 && w[0] == 0.25 && w[2] == dw, "R_L = Z₀: d = λ/4 and atan(−X/2Z₀)/2π + ½, sorted");
+    var t2, v2 = bj_single_stub_match_complex(BjComplex_new(50.0, -25.0), 50.0, &w);
+    var dw2: f64 = _bj_atan(0.25) / (2.0 * _BJ_PI);
+    assert(is_ok(t2) == 1 && w[0] == dw2 && w[2] == 0.25, "X < 0: the atan solution first");
+
+    var big: f64 = bj_linear_array_factor(0 - 1, 0.5, 2.0 * _BJ_PI, 0.0, 0.7);
+    assert(big >= 0.0 && big <= 1.0, "usize::MAX elements: N = 2^64 as an f64");
+    return 0;
+}
+
+# Runs rf.rs's tests, then the Cyrius-only checks.
+fn main(): i64 {
+    alloc_init();
+    rust_tests_a();
+    rust_tests_b();
+    rust_tests_c();
+    cyrius_deprecated();
+    cyrius_errors();
+    cyrius_values();
+    return assert_summary();
+}
+
+var exit_code = main();
+if (exit_code > 0) { exit_code = 1; }
+sys_exit_group(exit_code);

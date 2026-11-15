@@ -4438,3 +4438,88 @@ E and B = n̂ × E/c.
 - **M3 is done.** Part 1 ported polarization, scattering and beam in the one convention. Part 2, the range-edge
   review, took ADR 0002 rows 33–35 (2a), row 13 (2b), row 17 (2c) and row 18 (2d), in fifteen bites from 2a-1 to
   2d-3c.
+
+## 76. M4 part 1a: rf's lines, reflection, Smith chart, matching and arrays (2026-11-15)
+
+M4 ports rf.rs (1,378 lines with 80 tests; 2,345 with them) in Parts, as M3 did: Part 1 the API in bites (1a the
+functions below; 1b the S-parameter matrices, their cascade and S → Z; 1c Touchstone read and write; 1d the JSON of
+`SMatrix`, `TouchstoneFormat` and `TouchstoneData`), Part 2 the range-edge review.
+
+- **`src/rf.cyr`**: rf.rs's free functions under Rust's names:
+  - the lines: `bj_characteristic_impedance_lossless`, `bj_characteristic_impedance_lossy` (its DC branch: √(L′/C′)
+    for R′ = 0, +∞ − j∞ for R′ > 0, NaN parts otherwise), `bj_propagation_constant`, `bj_phase_velocity` and
+    `bj_input_impedance_lossless_complex` (into `out`);
+  - reflection and the losses: `bj_reflection_coefficient`, `bj_reflection_coefficient_complex` (into `out`),
+    `bj_vswr`, `bj_return_loss`, `bj_insertion_loss`, `bj_mismatch_loss`;
+  - the Smith chart: `bj_normalize_impedance` (into `out`), `bj_denormalize_impedance`, `bj_gamma_from_z` and
+    `bj_z_from_gamma` with their poles (+∞ + j0, and an infinite part to Γ = 1 or z = −1);
+  - matching: `bj_quarter_wave_transformer`, `bj_single_stub_match` (into `out[0..2]`) and
+    `bj_single_stub_match_complex` (both solutions into `out[0..4]`, sorted by d), with Rust's debug log line;
+  - the arrays: `bj_linear_array_factor`, `bj_planar_array_factor`, `bj_circular_array_factor`.
+
+  The deprecated `input_impedance_lossless` is not carried (ADR 0002 row 1).
+- **No convention change**: rf.rs already used e^{+jωt} (+jωL, γ = jβ), so ADR 0002 row 5 changes no number, and the
+  harness compares every row on the oracle's numbers.
+- **Rust's chains, as written**:
+  - Complex arithmetic is hisab's, written out on f64 locals in Rust's order: |z| = √(re² + im²) (hisab's `abs`, not
+    hypot), arg z = atan2(im, re), from_polar as r·cos θ, r·sin θ with one sincos.
+  - The division is rf.rs's Smith `cdiv`, the same as scattering.rs's (`_bj_vx_cdiv`); its `crecip` divides once when
+    |z|² is a normal double. rf's `cdiv` returns NaN for a zero divisor where scattering's refuses, so each caller
+    keeps its own test.
+  - `complex_real`'s `+ 0.0` and `− 0.0` stay: `gamma_from_z` and `z_from_gamma` build z ± 1 from them, and the
+    poles' tests and the signed zeros of Smith's quotient follow (z = 0 − j0 gives Γ = −1 + j0, as Rust's).
+  - An element count is Rust's usize: the word read unsigned, `n as f64` rounded to nearest even above 2^63 (the
+    halved word with a sticky bit, then doubled exactly). Rows at 2^63 + 1, + 0x400 and + 0xc00 (ties), + 0x401 and
+    + 0xc01 (a sticky bit), usize::MAX − 0x3ff and usize::MAX pin it.
+- **New golden file `rf.tsv`, 11,323 rows over 21 functions** (class C 6,940: every function that calls atan2, sin,
+  cos, atan, log10 or acos; class A 4,383; 1,820 error rows). The grids:
+  - each argument crossed with the specials; the Rust tests' cases; typical lines from DC to 10 GHz and the lossy
+    impedance's DC branch over every sign of R′, L′, G′ and C′;
+  - loads across the Smith chart and one ulp from its poles; every rejection;
+  - each threshold straddled ulp by ulp: |Z_L + Z₀| < 10⁻³⁰, |Z_L + Z₀|² < 10⁻⁶⁰, |Z₀| < 10⁻³⁰, the unbounded input
+    impedance's |den| ≤ 10⁻¹⁵·(Z₀ + |Z_L|) near βl = π/2, the stub match's |R_L − Z₀| ≤ 10⁻¹²·Z₀, the array factor's
+    |sin(ψ/2)| < 10⁻¹⁵ at the main beam and the grating lobe;
+  - element counts from 0 to usize::MAX, and seeded values over wide ranges (to 10^±300).
+
+  `validate.py`'s independent transcription (`rf_eval`) agreed with every row on its first run, and a one-bit
+  perturbation of every row's first output was caught (a NaN output matches any NaN, by class A's rule).
+  **`rf.cr.tsv`, 62 corrected rows**: glibc's log10 misrounds in 43 loss rows (return, insertion, mismatch), its
+  cos(π/6) in 12 linear-array rows, its sin or cos in 6 circular-array sums and its sincos in one input impedance.
+- **Rust tests**: 45 of rf.rs's 80 are ported (`tests/rf.tcyr`, 90 assertions with the Cyrius-only groups: the
+  reasons' exact text, out untouched by every refusal, the DC limits, the Smith chart's poles and signed zeros, the
+  stub match's matched branch and its sort). The deprecated function's three are n/a (ADR 0002 row 1), and
+  `cyrius_input_impedance_real_loads` checks their values through the complex form. The ledger: 567 ported, 6 n/a,
+  285 pending of 858.
+- **Surface parity**: rf is in progress, its 21 functions matched (420 items in all). `IN_PROGRESS` now names a
+  struct or enum still to come (its fields or variants with it) and a method as `Owner::name`: `SMatrix`,
+  `TouchstoneFormat`, `TouchstoneData`, their methods and serde impls, `s_to_z`, `parse_touchstone` and
+  `try_write_touchstone` are pending. The deprecated `input_impedance_lossless` and `write_touchstone` are
+  exceptions (ADR 0002 row 1). The API snapshot gains 21 public functions (2,054).
+- **Benchmarks** (the 5 twins of part 1a, so 66 of 80 are twinned). An interleaved A/B against HEAD (three rounds,
+  load 0.75 to 1.15) gave each twin's figure within 6 ns across the rounds, and left every other row unchanged
+  (median ratio 1.00 over 81 rows; three 1 to 4 ns faster, the bimodal rows):
+
+  | Bench | Rust | Cyrius | Ratio |
+  |---|---|---|---|
+  | `rf/reflection_coefficient` | 1.23 ns | 14 ns | 11× |
+  | `rf/vswr` | 1.23 ns | 9 ns | 7.3× |
+  | `rf/linear_array_factor_8` | 0.55 ns | 439 ns | 798× |
+  | `rf/input_impedance_complex` | 7.43 ns | 221 ns | 30× |
+  | `rf/single_stub_match` | 128.46 ns | 1.88 µs | 15× |
+
+  The Rust inputs are constants, and LLVM folds the array factor's cos and two sins at compile time (0.55 ns is a
+  load). A finding, with a one-off probe of the primitives on this tree (1M calls each, load about 1): atan 279 ns,
+  atan2 339, sincos 189, sin 150, cos 124, log10 83. The stub match is two atans, two sincos and two atan2s, about
+  1.6 µs of its 1.88; the input impedance is one sincos and two square roots. src/crmath.cyr's atan (as atan2(x, 1))
+  and atan2 cost about twice its sin, so they are the first place a faster correctly rounded path would pay off here.
+- **For M4's range-edge Part** (§0.1), candidates from writing the port:
+  - the thresholds on rounded values: |Z_L + Z₀| < 10⁻³⁰ and |Z₀| < 10⁻³⁰ (an exact sum or input), |Z_L + Z₀|² <
+    10⁻⁶⁰ (a rounded sum of squares, row 17's question), the unbounded input impedance's relative 10⁻¹⁵ test and the
+    stub match's |R_L − Z₀| ≤ 10⁻¹²·Z₀ (tolerances Rust chose);
+  - the complex chains past either end: |z|² in the lossy impedance, the propagation constant, the input impedance's
+    scale and |den|, crecip's normal test; the stub match's (Z₀ − R_L)² + X_L²; `normalize_impedance`'s Z·(1/Z₀),
+    rounded twice.
+- **Result, every target** (x86_64 ELF, x86_64 PE, aarch64): **17 modules, 0 failing; 504,400 ok, 0 failed, 0
+  measured, 0 pending, 78,320 accepted (ADR 01: 29,503; ADR 0002: 48,817)** over 582,720 rows; **all 401 digests
+  equal**, HEAD's 380 unchanged. `rf.tcyr` passes on all three. The gate is clean (17 steps, no warnings; execution
+  coverage 309 of 309 functions).
