@@ -4523,3 +4523,63 @@ functions below; 1b the S-parameter matrices, their cascade and S → Z; 1c Touc
   measured, 0 pending, 78,320 accepted (ADR 01: 29,503; ADR 0002: 48,817)** over 582,720 rows; **all 401 digests
   equal**, HEAD's 380 unchanged. `rf.tcyr` passes on all three. The gate is clean (17 steps, no warnings; execution
   coverage 309 of 309 functions).
+
+## 77. M4 part 1b: the S-parameter matrices (2026-11-15)
+
+- **`BjSMatrix`, fixed at construction (ADR 0002 row 36, the user's answer of 2026-11-15)**:
+  - Rust's `SMatrix` had public `s: Vec<Vec<Complex>>` and `z0: Vec<f64>`. A caller could reshape them, so
+    `check_shape`, `two_port_params` and `get`/`set` checked the shape on every call and could fail with "inconsistent
+    SMatrix".
+  - The port's matrix is `ports` plus one fl_alloc block: the ports² entries row-major (S_ij at (i − 1)·ports + j − 1,
+    16 bytes each), then the ports reference impedances. `s` and `z0` are the two addresses, both 0 for a 0-port.
+    Nothing can reshape it, so the shape errors are gone.
+  - `get` and `set` keep Rust's 1-based ports and their reason ("port indices must be 1..={n}, got ({i}, {j})"),
+    with usize indices: a word past 2^63 is refused and printed unsigned. `s_at(i, j)` (Rust's `s[i][j]`, 0-based)
+    and `z0_at(k)` and `set_z0(k, v)` (Rust's `z0[k]`) are new accessors. `set_z0` refuses an index past the last,
+    and leaves the value unchecked, as Rust's field is.
+  - `BjSMatrix_new`, `BjSMatrix_two_port` and `cascade` return Allocation when their block can't be had (row 9,
+    amended): Rust's `vec!` aborts. A refused `cascade` leaves `out` untouched and never reads it, and
+    `BjSMatrix_free` gives the block back.
+- **`cascade` and `bj_s_to_z`, in Rust's order**: the checks (2-ports, `uniform_z0` on each, the two equal), the
+  transfer matrices with |S21|² < 10⁻⁶⁰ refused, T = T₁·T₂, T22's |T22|² < 10⁻⁶⁰ refused (a lossless loop,
+  S22·S11′ = 1), and back to S; S → Z on Z₀(I + S)(I − S)⁻¹ with |det(I − S)|² < 10⁻⁶⁰ refused. hisab's products
+  run on f64 locals; z0 times a matrix entry is the full complex product (z0 + j0)·w, as Rust's is, so a NaN or ∞ part
+  meets 0·∞ exactly where Rust's did. The trace lines are Rust's ("cascading 2-port S-matrices z0=…").
+- **ADR 0002 row 37, new**: rf.rs's `z0_equal(a, b)` is |a − b| ≤ 10⁻¹²·max(|a|, |b|), and for b = ±∞ that is
+  ∞ ≤ ∞. So a 2-port whose second port's Z₀ was infinite passed `uniform_z0`, and its cascade and Z-parameters used
+  the first port's 50 Ω. The port's `z0_equal` also requires both values finite, so such a matrix is refused with
+  Rust's own reason ("all port reference impedances must be equal, got [50.0, inf]"). `rf.adr.tsv` maps the 12 rows
+  (9 cascades, 3 conversions), all passing. The Touchstone writer (part 1c) uses the same test.
+- **`rf.tsv` grows by 1,707 rows (13,030)**, appended after part 1a's (whose body is an exact prefix). A matrix is
+  `i:<ports>`, `v:<2n²>` and its entries, `v:<n>` and its impedances, consistent shapes only; `set` rows hold its
+  result and then the matrix after it. The grids:
+  - `new` over 0 to 8 ports and eight impedances, `two_port` over the Rust tests' networks and the specials;
+  - `get` and `set` on four matrices (0, 1, 2 and 3 ports) at every index from 0 to one past the last, 2^63 and
+    usize::MAX;
+  - the Rust tests' networks (the thru, the star product's pair, the attenuator, the shunt resistor, the bench's), and
+    non-2-ports on either side;
+  - every reference impedance rule: equal, mixed, within and just past z0_equal's 10⁻¹² on either side, zero,
+    negative, NaN and ±∞ on either port;
+  - |S21|² and |det(I − S)|² straddling 10⁻⁶⁰ ulp by ulp (det = k·2^-103 across 10⁻³⁰), and T22 = 0;
+  - the specials in each of the eight entries, and 210 seeded networks, passive and over 10^±300.
+
+  The transcription (`rf_sm_eval`) agreed with every row on its first run, and a one-bit (or one-integer) perturbation
+  of every row's first output was caught.
+- **Rust tests**: 12 more of rf.rs's are ported (57 of 80; `tests/rf.tcyr`, 132 assertions), and
+  `test_smatrix_inconsistent_does_not_panic` is n/a (row 36). The Cyrius-only groups pin the layout, the accessors'
+  refusals, Allocation at 2^40 ports, row 37, every reason's text, out untouched, and the heap (2,000 cascades, each
+  freed, leave the arena as it was). The ledger: 579 ported, 7 n/a, 272 pending of 858.
+- **Surface parity**: `SMatrix`, its fields and methods and `s_to_z` leave `IN_PROGRESS` (430 items matched). The API
+  snapshot gains 4 public functions (2,058).
+- **Benchmarks** (the `rf/s_cascade` twin, so 67 of 80 are twinned). An interleaved A/B against part 1a's tree (three
+  rounds, load 0.8 to 1.3) gave 523 or 524 ns in each round, for Rust's 100.25 ns (5.2×), and left every other row
+  unchanged (median ratio 1.00 over 86 rows; `relativity/em_tensor_from_fields` 31 → 34 ns, its known bimodal pair).
+  A one-off probe split the cascade's 540 ns: building the result is 124 ns (`BjSMatrix_two_port` with four BjComplex
+  by value, and freeing it; the block's `fl_calloc` and `fl_free` alone are 36 ns), and the arithmetic, 22 complex
+  products through `_bj_rf_cmul` and three reciprocals, is the rest, at about 8 ns per executed helper call (§72).
+  `bj_s_to_z` alone is 270 ns. The products written inline would trade the helper's call for
+  locals; speed is measured, not gated, so this is a finding, not a change.
+- **Result, every target** (x86_64 ELF, x86_64 PE, aarch64): **17 modules, 0 failing; 506,095 ok, 0 failed, 0
+  measured, 0 pending, 78,332 accepted (ADR 01: 29,503; ADR 0002: 48,829)** over 584,427 rows; **all 407 digests
+  equal**, HEAD's 401 unchanged. `rf.tcyr` passes on all three. The gate is clean (17 steps, no warnings; execution
+  coverage 313 of 313 functions).

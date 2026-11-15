@@ -71,6 +71,10 @@ REASONS = {
     ("src/rf.rs", "test_input_impedance_real_rejects_complex_result"):
         "deprecated input_impedance_lossless (ADR 0002 row 1): the port has no real-valued form to refuse; its complex "
         "Z_in = 40 − j30 is checked through input_impedance_lossless_complex",
+    ("src/rf.rs", "test_smatrix_inconsistent_does_not_panic"):
+        "BjSMatrix's shape is fixed at construction (ADR 0002 row 36): no matrix with too few rows, ragged rows or a "
+        "short z0 can be built, so the shape errors it checks are gone; tests/rf.tcyr's cyrius_smatrix_fixed_shape pins "
+        "the layout and the index refusals",
 }
 
 

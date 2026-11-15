@@ -13,6 +13,11 @@
 //! 10⁻³⁰ and 10⁻⁶⁰ divisors, the unbounded input impedance's 10⁻¹⁵ relative test, the stub match's |R_L − Z₀| ≤
 //! 10⁻¹²·Z₀, the array factor's |sin(ψ/2)| < 10⁻¹⁵), element counts to usize::MAX, and seeded values over wide ranges.
 //! Each value appears once per function: a row's (function, inputs) is its key in the mapping files.
+//!
+//! M4 part 1b appends the S-parameter matrices: `SMatrix::new`, `two_port`, `get`, `set` (its result, then the
+//! matrix after it), `cascade` and `s_to_z`. A matrix is `i:<ports>`, `v:<2n²>` and its entries row-major as (re,
+//! im), `v:<n>` and its reference impedances; only consistent shapes, since the port's BjSMatrix is fixed at
+//! construction (ADR 0002 row 36). Rows where a second port's Z₀ is ±∞ are mapped by ADR 0002 row 37.
 
 use crate::grids::{Rng, specials};
 use crate::m_field::res_f;
@@ -20,10 +25,10 @@ use crate::tsv::{Class, Module, Tok, err, f, i, s};
 use bijli::polarization::Complex;
 use bijli::rf::{
     characteristic_impedance_lossless, characteristic_impedance_lossy, circular_array_factor, denormalize_impedance,
-    gamma_from_z, input_impedance_lossless_complex, insertion_loss, linear_array_factor, mismatch_loss,
+    SMatrix, gamma_from_z, input_impedance_lossless_complex, insertion_loss, linear_array_factor, mismatch_loss,
     normalize_impedance, phase_velocity, planar_array_factor, propagation_constant, quarter_wave_transformer,
     reflection_coefficient, reflection_coefficient_complex, return_loss, single_stub_match, single_stub_match_complex,
-    vswr, z_from_gamma,
+    s_to_z, vswr, z_from_gamma,
 };
 use std::collections::BTreeSet;
 use std::f64::consts::{FRAC_PI_2, FRAC_PI_4, PI, TAU};
@@ -637,5 +642,252 @@ pub fn emit() -> Module {
         r.circular(n, v);
     }
 
+    emit_1b(r, &mut rng);
+
     rows.m
+}
+
+// ── M4 part 1b: the S-parameter matrices ─────────────────────────────────────────────────────────────────────────
+
+/// A matrix as tokens: `i:<ports>`, `v:<2n²>` and the entries row-major (re, im), `v:<n>` and the reference
+/// impedances. Only consistent shapes appear: the port's BjSMatrix is fixed at construction (ADR 0002 row 36).
+fn sm_toks(m: &SMatrix) -> Vec<Tok> {
+    let mut v = vec![i(word(m.ports)), Tok::V(2 * m.ports * m.ports)];
+    for row in &m.s {
+        for c in row {
+            v.push(f(c.re));
+            v.push(f(c.im));
+        }
+    }
+    v.push(Tok::V(m.z0.len()));
+    v.extend(m.z0.iter().map(|&x| f(x)));
+    v
+}
+
+/// An n-port from its entries, row-major as (re, im), and its reference impedances.
+fn sm_of(ports: usize, s: &[(f64, f64)], z0: &[f64]) -> SMatrix {
+    assert_eq!(s.len(), ports * ports, "a consistent matrix");
+    assert_eq!(z0.len(), ports, "one Z₀ per port");
+    let row = |r: usize| (0..ports).map(|c| Complex::new(s[r * ports + c].0, s[r * ports + c].1)).collect();
+    SMatrix { ports, s: (0..ports).map(row).collect(), z0: z0.to_vec() }
+}
+
+/// A 2-port [S11, S12, S21, S22] with reference impedances z0.
+fn tp(s: [(f64, f64); 4], z0: [f64; 2]) -> SMatrix {
+    sm_of(2, &s, &z0)
+}
+
+impl Rows {
+    fn sm_new(&mut self, ports: usize, z0: f64) {
+        let ins = [i(word(ports)), f(z0)];
+        self.row("SMatrix::new", Class::A, &ins, || sm_toks(&SMatrix::new(black_box(ports), black_box(z0))));
+    }
+
+    fn sm_two_port(&mut self, s: [(f64, f64); 4], z0: f64) {
+        let mut ins: Vec<Tok> = s.iter().flat_map(|&(a, b)| [f(a), f(b)]).collect();
+        ins.push(f(z0));
+        self.row("SMatrix::two_port", Class::A, &ins, || {
+            let c = |k: usize| black_box(Complex::new(s[k].0, s[k].1));
+            sm_toks(&SMatrix::two_port(c(0), c(1), c(2), c(3), black_box(z0)))
+        });
+    }
+
+    fn sm_get(&mut self, m: &SMatrix, a: usize, b: usize) {
+        let mut ins = sm_toks(m);
+        ins.extend([i(word(a)), i(word(b))]);
+        self.row("SMatrix::get", Class::A, &ins, || res(black_box(m).get(black_box(a), black_box(b)), |z| cx(*z)));
+    }
+
+    fn sm_set(&mut self, m: &SMatrix, a: usize, b: usize, v: (f64, f64)) {
+        let mut ins = sm_toks(m);
+        ins.extend([i(word(a)), i(word(b)), f(v.0), f(v.1)]);
+        self.row("SMatrix::set", Class::A, &ins, || {
+            let mut w = m.clone();
+            let mut out = res(w.set(black_box(a), black_box(b), black_box(Complex::new(v.0, v.1))), |_| vec![i(0)]);
+            out.extend(sm_toks(&w));
+            out
+        });
+    }
+
+    fn cascade(&mut self, a: &SMatrix, b: &SMatrix) {
+        let mut ins = sm_toks(a);
+        ins.extend(sm_toks(b));
+        self.row("SMatrix::cascade", Class::A, &ins, || res(black_box(a).cascade(black_box(b)), sm_toks));
+    }
+
+    fn s_to_z(&mut self, m: &SMatrix) {
+        let ins = sm_toks(m);
+        self.row("rf::s_to_z", Class::A, &ins, || {
+            res(s_to_z(black_box(m)), |z| {
+                let mut v = Vec::new();
+                for row in z {
+                    for c in row {
+                        v.extend([f(c.re), f(c.im)]);
+                    }
+                }
+                v
+            })
+        });
+    }
+
+    /// cascade(a, b), cascade(b, a) and s_to_z of each: the grids feed the three together.
+    fn two_ports(&mut self, a: &SMatrix, b: &SMatrix) {
+        self.cascade(a, b);
+        self.cascade(b, a);
+        self.s_to_z(a);
+        self.s_to_z(b);
+    }
+}
+
+/// Part 1b's grids: `new` and `two_port` over port counts and impedances; `get` and `set` on every index from 0 to
+/// one past the last and usize::MAX; the cascade and S → Z of the Rust tests' networks, of non-2-ports, of every
+/// reference impedance rule (equal, mixed, within and just outside z0_equal's 10⁻¹², zero, negative, NaN, ±∞ on
+/// either port), of S21's, T22's and det's 10⁻⁶⁰ tests straddled ulp by ulp, of the specials in each entry, and of
+/// seeded networks over wide ranges.
+fn emit_1b(r: &mut Rows, rng: &mut Rng) {
+    for &n in &[0, 1, 2, 3, 4, 8] {
+        for &z0 in &[50.0, 75.0, 0.0, -50.0, f64::NAN, f64::INFINITY, 5e-324, 1e300] {
+            r.sm_new(n, z0);
+        }
+    }
+    let star_a = [(0.1, 0.2), (0.3, -0.1), (0.8, 0.05), (-0.2, 0.1)];
+    let star_b = [(-0.15, 0.05), (0.6, 0.2), (0.7, -0.3), (0.25, -0.05)];
+    let thru = [(0.0, 0.0), (1.0, 0.0), (1.0, 0.0), (0.0, 0.0)];
+    for &s in &[star_a, star_b, thru, [(0.1, 0.0), (0.9, 0.0), (0.9, 0.0), (0.1, 0.0)]] {
+        for &z0 in &[50.0, f64::NAN, -0.0] {
+            r.sm_two_port(s, z0);
+        }
+    }
+    for &x in &specials() {
+        r.sm_two_port([(x, -x), (0.5, x), (x, 0.25), (-x, x)], 50.0);
+    }
+
+    // get and set on every index from 0 to one past the last, and usize::MAX and 2^63.
+    let mut three = Vec::new();
+    for k in 0..9_u32 {
+        three.push((f64::from(k) / 10.0, -f64::from(k) / 100.0));
+    }
+    let mats = [
+        SMatrix::new(0, 50.0),
+        sm_of(1, &[(0.5, 0.1)], &[75.0]),
+        tp(star_a, [50.0, 50.0]),
+        sm_of(3, &three, &[50.0, 50.0, 50.0]),
+    ];
+    let idx = [0, 1, 2, 3, 4, usize::MAX, 1 << 63];
+    for m in &mats {
+        for &a in &idx {
+            for &b in &idx {
+                r.sm_get(m, a, b);
+                r.sm_set(m, a, b, (-0.5, 0.125));
+            }
+        }
+    }
+    r.sm_set(&mats[2], 1, 2, (f64::NAN, f64::INFINITY));
+    r.sm_set(&mats[2], 2, 1, (-0.0, -0.0));
+
+    // The Rust tests' networks: thru, the star product's pair, the attenuator, the shunt resistor.
+    let z50 = [50.0, 50.0];
+    let h = std::f64::consts::FRAC_1_SQRT_2;
+    let atten = [(0.0, 0.0), (h, 0.0), (h, 0.0), (0.0, 0.0)];
+    let shunt = [(-0.2, 0.0), (0.8, 0.0), (0.8, 0.0), (-0.2, 0.0)];
+    let bench = [(0.1, 0.0), (0.9, 0.0), (0.9, 0.0), (0.1, 0.0)];
+    r.two_ports(&tp(thru, z50), &tp(thru, z50));
+    r.two_ports(&tp(star_a, z50), &tp(star_b, z50));
+    r.two_ports(&tp(atten, z50), &tp(shunt, z50));
+    r.two_ports(&tp(bench, z50), &tp(bench, z50));
+    r.two_ports(&tp(atten, z50), &tp(thru, z50));
+    // Non-2-ports on either side.
+    for m in [&mats[0], &mats[1], &mats[3], &SMatrix::new(3, 50.0), &SMatrix::new(4, 50.0)] {
+        r.two_ports(m, &tp(thru, z50));
+        r.cascade(m, m);
+    }
+    // The reference impedance rules: equal, mixed, within and just past z0_equal's 10⁻¹², invalid, ±∞ on the second
+    // port (Rust's ∞ ≤ 10⁻¹²·∞ accepts it: ADR 0002 row 37).
+    let lim = 50.0 * (1.0 + 1e-12);
+    let mut z0s = vec![
+        [50.0, 50.0],
+        [50.0, 75.0],
+        [75.0, 75.0],
+        [75.0, 50.0],
+        [0.0, 0.0],
+        [-50.0, -50.0],
+        [f64::NAN, 50.0],
+        [50.0, f64::NAN],
+        [f64::INFINITY, 50.0],
+        [50.0, f64::INFINITY],
+        [50.0, f64::NEG_INFINITY],
+        [1e300, f64::INFINITY],
+        [5e-324, 5e-324],
+        [1e300, 1e300],
+        [50.0, -50.0],
+        [-0.0, 50.0],
+    ];
+    for &x in &around(lim, 3) {
+        z0s.push([50.0, x]);
+        z0s.push([x, 50.0]);
+    }
+    for z in &z0s {
+        r.two_ports(&tp(star_a, *z), &tp(star_b, z50));
+        r.cascade(&tp(star_a, z50), &tp(star_b, *z));
+    }
+    for &x in &around(lim, 3) {
+        r.cascade(&tp(star_a, z50), &tp(star_b, [x, x]));
+        r.cascade(&tp(star_a, [x, x]), &tp(star_b, z50));
+    }
+    // S21's |S21|² < 10⁻⁶⁰ on either network: a real S21 at 10⁻³⁰ ± ulps, an equal-part one at 10⁻³⁰/√2.
+    for &x in &around(1e-30, 3) {
+        r.two_ports(&tp([(0.1, 0.0), (0.5, 0.0), (x, 0.0), (0.2, 0.0)], z50), &tp(star_b, z50));
+        r.cascade(&tp(star_a, z50), &tp([(0.1, 0.0), (0.5, 0.0), (0.0, -x), (0.2, 0.0)], z50));
+    }
+    for &x in &around(7.071_067_811_865_475e-31, 3) {
+        r.cascade(&tp([(0.1, 0.0), (0.5, 0.0), (x, x), (0.2, 0.0)], z50), &tp(star_b, z50));
+    }
+    // T22 = 0: S22 of the first times S11 of the second is 1 (a lossless loop), and nearly so.
+    let loop_pair = |s22: (f64, f64), s11: (f64, f64)| {
+        (tp([(0.0, 0.0), (1.0, 0.0), (1.0, 0.0), s22], z50), tp([s11, (1.0, 0.0), (1.0, 0.0), (0.0, 0.0)], z50))
+    };
+    for &(s22, s11) in &[(1.0, 1.0), (-1.0, -1.0), (0.5, 2.0), (0.0, 1.0), (1.0, 1.0 + f64::EPSILON)] {
+        let (a, b) = loop_pair((s22, 0.0), (s11, 0.0));
+        r.cascade(&a, &b);
+    }
+    let (a, b) = loop_pair((0.0, 1.0), (0.0, -1.0));
+    r.cascade(&a, &b);
+    // S → Z's |det(I − S)|² < 10⁻⁶⁰: S11 = 1 − 2⁻⁵⁰ and S22 = 1 − k·2⁻⁵³, det = k·2⁻¹⁰³ across 10⁻³⁰.
+    for k in 6..=14_u32 {
+        let s22 = 1.0 - f64::from(k) * f64::EPSILON / 2.0;
+        r.s_to_z(&tp([(1.0 - 4.0 * f64::EPSILON, 0.0), (0.0, 0.0), (0.0, 0.0), (s22, 0.0)], z50));
+        r.s_to_z(&tp([(1.0, 1e-15), (0.0, 0.0), (0.0, 0.0), (s22, 0.0)], z50));
+    }
+    // The specials in each entry, against the star product's pair.
+    for slot in 0..8 {
+        for &x in &specials() {
+            let mut s = star_a;
+            if slot % 2 == 0 {
+                s[slot / 2].0 = x;
+            } else {
+                s[slot / 2].1 = x;
+            }
+            r.two_ports(&tp(s, z50), &tp(star_b, z50));
+        }
+    }
+    // Seeded networks: passive ones, and parts over wide ranges.
+    for _ in 0..150 {
+        let mut s = [(0.0, 0.0); 4];
+        for e in &mut s {
+            *e = (rng.uniform(-1.0, 1.0), rng.uniform(-1.0, 1.0));
+        }
+        let mut t = [(0.0, 0.0); 4];
+        for e in &mut t {
+            *e = (rng.uniform(-1.0, 1.0), rng.uniform(-1.0, 1.0));
+        }
+        let z = rng.log_uniform(0.0, 3.0);
+        r.two_ports(&tp(s, [z, z]), &tp(t, [z, z]));
+    }
+    for _ in 0..60 {
+        let mut s = [(0.0, 0.0); 4];
+        for e in &mut s {
+            *e = (rng.signed_log_uniform(-300.0, 300.0), rng.signed_log_uniform(-300.0, 300.0));
+        }
+        r.two_ports(&tp(s, z50), &tp(star_b, z50));
+    }
 }

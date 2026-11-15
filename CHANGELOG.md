@@ -275,6 +275,16 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
   misround. 45 of rf.rs's tests are ported and the deprecated `input_impedance_lossless`'s three are n/a (ADR 0002
   row 1), checked through the complex form instead. 5 of the 8 rf bench twins are added (66 of 80). The S-parameter
   matrices are part 1b's, Touchstone part 1c's.
+- **Cyrius port, M4 part 1b — the S-parameter matrices** (`src/rf.cyr`): `BjSMatrix` with `BjSMatrix_new`,
+  `BjSMatrix_two_port`, `get`, `set`, `cascade` (through the transfer matrices) and `BjSMatrix_free`, and `bj_s_to_z`.
+  **Breaking** (ADR 0002 row 36, the user's answer of 2026-11-15): Rust's `SMatrix` had public, resizable `s` and `z0`
+  vectors, so every method checked the shape and could fail with "inconsistent SMatrix". `BjSMatrix`'s shape is fixed
+  at construction instead: one block of ports² entries and ports reference impedances, read through `get`, `s_at`
+  and `z0_at`, written through `set` and `set_z0`. Migration: build a matrix with `BjSMatrix_new` or
+  `BjSMatrix_two_port`, replace `m.s[i][j]` with `m.s_at(i, j)` and `m.z0[k] = x` with `m.set_z0(k, x)`, and free it
+  with `BjSMatrix_free`. The constructors and `cascade` return Allocation where Rust aborts. `rf.tsv` grows by 1,707
+  rows; all match on all three targets, 12 through ADR 0002 row 37 (see Fixed). 12 more of rf.rs's tests are ported,
+  and `test_smatrix_inconsistent_does_not_panic` is n/a (row 36). The `rf/s_cascade` twin is added (67 of 80).
 
 ### Fixed
 
@@ -643,6 +653,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
   reduction (`src/crmath_ux_data.cyr`) grows to 176 chunks for phases to 2^4199, as an initialized array: its old
   loader cost 64 bytes of static data a chunk and pushed two test binaries past the compiler's 128 KiB advisory. Cost:
   `beam/hermite_gaussian_field_hg33` 713 → 734 ns (`port-parity.md` §75). With this M3 is done.
+- **rf** (ADR 0002 row 37, M4 part 1b): `z0_equal` accepted an infinite reference impedance as equal to any finite
+  one (∞ ≤ 10⁻¹²·∞), so a 2-port whose second port's Z₀ was ±∞ cascaded and converted to Z on the first port's
+  50 Ω. Both values must now be finite, and such a matrix is refused with Rust's own reason ("all port reference
+  impedances must be equal, got [50.0, inf]").
 
 ### Performance
 

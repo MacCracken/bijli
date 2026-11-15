@@ -1,12 +1,14 @@
-# rf.tcyr — src/rf.cyr (M4 part 1a): transmission lines, reflection and the losses, the Smith chart, matching and the
-# array factors.
+# rf.tcyr — src/rf.cyr (M4 parts 1a, 1b): transmission lines, reflection and the losses, the Smith chart, matching,
+# the array factors and (1b) the S-parameter matrices.
 #
 # Every group named test_* is rust-old/src/rf.rs's test of that name, ported assertion for assertion (the ledger
 # matches them by name). rf.rs was already in bijli's one convention, e^{+jωt} (ADR 0002 row 5), so nothing changes
 # sign. The three tests of the deprecated input_impedance_lossless are n/a (ADR 0002 row 1):
 # cyrius_input_impedance_real_loads checks their values through input_impedance_lossless_complex. The other cyrius_*
 # groups pin the reasons' exact text, out left alone on an error, the lines' DC limits, the Smith chart's poles and
-# signed zeros, the stub match's sort and its matched branch, and usize::MAX elements.
+# signed zeros, the stub match's sort and its matched branch, and usize::MAX elements; (1b) ADR 0002 row 36 (BjSMatrix's
+# shape fixed at construction: test_smatrix_inconsistent_does_not_panic is n/a), row 37 (z0_equal on finite values),
+# the S-parameter reasons and the heap.
 # tests/golden/rf.tsv pins every function over its grid against Rust besides.
 
 include "tests/lib.cyr"
@@ -523,6 +525,284 @@ fn cyrius_values(): i64 {
     return 0;
 }
 
+# BjSMatrix_new into *m; its error code (0 on Ok).
+fn sm_new(n, z0: f64, m: *BjSMatrix): i64 {
+    var t, v = BjSMatrix_new(n, z0, m);
+    if (is_ok(t) == 1) { return 0; }
+    return v;
+}
+
+# m.set_z0(k, value); its error code (0 on Ok).
+fn zset(m: *BjSMatrix, k, value: f64): i64 {
+    var t, v = m.set_z0(k, value);
+    if (is_ok(t) == 1) { return 0; }
+    return v;
+}
+
+# m.set(i, j, value); its error code (0 on Ok).
+fn sset(m: *BjSMatrix, i, j, value: BjComplex): i64 {
+    var t, v = m.set(i, j, value);
+    if (is_ok(t) == 1) { return 0; }
+    return v;
+}
+
+# A 2-port [[S11, S12], [S21, S22]] of real entries with both impedances z0 into *m: 1 on Ok.
+fn tp_real(s11: f64, s12: f64, s21: f64, s22: f64, z0: f64, m: *BjSMatrix): i64 {
+    var t, v = BjSMatrix_two_port(bj_complex_real(s11), bj_complex_real(s12), bj_complex_real(s21),
+      bj_complex_real(s22), z0, m);
+    if (is_ok(t) == 1) { return 1; }
+    return 0;
+}
+
+# 1 when a.cascade(b) refuses (nothing is written).
+fn cascade_refused(a: *BjSMatrix, b: *BjSMatrix): i64 {
+    var c: BjSMatrix;
+    var t, v = a.cascade(b, &c);
+    if (is_err_result(t) == 1) { return 1; }
+    BjSMatrix_free(&c);
+    return 0;
+}
+
+# 1 when bj_s_to_z refuses.
+fn s_to_z_refused(m: *BjSMatrix): i64 {
+    var z: f64[8];
+    var t, v = bj_s_to_z(m, &z);
+    if (is_err_result(t) == 1) { return 1; }
+    return 0;
+}
+
+# rf.rs's S-parameter tests.
+fn rust_tests_d(): i64 {
+    var s: BjSMatrix;
+    var z: BjComplex;
+    test_group("test_smatrix_creation");
+    var t1, v1 = BjSMatrix_new(2, 50.0, &s);
+    var t2, v2 = s.get(1, 1, &z);
+    var zn: f64 = z.norm();
+    assert(is_ok(t1) == 1 && s.ports == 2 && is_ok(t2) == 1 && zn < TOL, "a zero 2-port");
+
+    test_group("test_smatrix_get_set");
+    var t3, v3 = s.set(1, 2, BjComplex_new(0.5, 0.1));
+    var t4, v4 = s.get(1, 2, &z);
+    assert(is_ok(t3) == 1 && is_ok(t4) == 1 && near(z.re, 0.5, TOL) == 1, "S12 set and read back");
+
+    test_group("test_smatrix_invalid_index");
+    var t5, v5 = s.get(0, 1, &z);
+    var t6, v6 = s.get(3, 1, &z);
+    assert(is_err_result(t5) == 1 && is_err_result(t6) == 1, "ports 0 and 3 of a 2-port");
+    BjSMatrix_free(&s);
+
+    var thru: BjSMatrix;
+    var c: BjSMatrix;
+    test_group("test_cascade_thru");
+    assert(tp_real(0.0, 1.0, 1.0, 0.0, 50.0, &thru) == 1, "the ideal thru");
+    var t7, v7 = thru.cascade(&thru, &c);
+    var c21: BjComplex = c.s_at(1, 0);
+    var c11: BjComplex = c.s_at(0, 0);
+    var c11n: f64 = c11.norm();
+    assert(is_ok(t7) == 1 && near(c21.re, 1.0, TOL) == 1 && c11n < TOL, "thru · thru = thru");
+    BjSMatrix_free(&c);
+
+    test_group("test_cascade_matches_star_product");
+    var a: BjSMatrix;
+    var b: BjSMatrix;
+    var ta, va = BjSMatrix_two_port(BjComplex_new(0.1, 0.2), BjComplex_new(0.3, -0.1), BjComplex_new(0.8, 0.05),
+      BjComplex_new(-0.2, 0.1), 50.0, &a);
+    var tb, vb = BjSMatrix_two_port(BjComplex_new(-0.15, 0.05), BjComplex_new(0.6, 0.2), BjComplex_new(0.7, -0.3),
+      BjComplex_new(0.25, -0.05), 50.0, &b);
+    var t8, v8 = a.cascade(&b, &c);
+    var tol: f64 = 0.000000000001;
+    assert(is_ok(t8) == 1 && close(c.s_at(0, 0), 0.06624178712220763, 0.22342969776609725, tol) == 1, "S11");
+    assert(close(c.s_at(0, 1), 0.20499342969776613, -0.005256241787122209, tol) == 1, "S12");
+    assert(close(c.s_at(1, 0), 0.5839684625492773, -0.2252299605781866, tol) == 1, "S21");
+    assert(close(c.s_at(1, 1), 0.15717477003942182, 0.009816031537450719, tol) == 1, "S22");
+    var cz0: f64 = c.z0_at(0);
+    var cz1: f64 = c.z0_at(1);
+    assert(cz0 == 50.0 && cz1 == 50.0, "z0 = [50, 50]");
+    BjSMatrix_free(&c);
+
+    test_group("test_cascade_requires_equal_z0");
+    var mixed: BjSMatrix;
+    tp_real(0.0, 1.0, 1.0, 0.0, 50.0, &mixed);
+    var t9, v9 = mixed.set_z0(1, 75.0);
+    assert(is_ok(t9) == 1 && cascade_refused(&mixed, &thru) == 1 && cascade_refused(&thru, &mixed) == 1,
+      "z0 = [50, 75] on either side");
+    var other: BjSMatrix;
+    tp_real(0.0, 1.0, 1.0, 0.0, 75.0, &other);
+    assert(cascade_refused(&thru, &other) == 1, "75 Ω against 50 Ω");
+
+    test_group("test_s_to_z_conversion");
+    var att: BjSMatrix;
+    var h: f64 = _bj_from_bits(0x3FE6A09E667F3BCD);
+    tp_real(0.0, h, h, 0.0, 50.0, &att);
+    var zz: f64[8];
+    var t10, v10 = bj_s_to_z(&att, &zz);
+    var z11n: f64 = f64_abs(zz[0]) + f64_abs(zz[1]);
+    assert(is_ok(t10) == 1 && z11n > 0.0 && near(zz[2], zz[4], TOL) == 1 && near(zz[3], zz[5], TOL) == 1,
+      "a 3 dB attenuator: finite, Z12 = Z21");
+
+    test_group("test_s_to_z_shunt_resistor");
+    var sh: BjSMatrix;
+    tp_real(-0.2, 0.8, 0.8, -0.2, 50.0, &sh);
+    var t11, v11 = bj_s_to_z(&sh, &zz);
+    var all = 0;
+    for (var k = 0; k < 4; k = k + 1) {
+        if (near(zz[2 * k], 100.0, 0.000000001) == 1 && near(zz[2 * k + 1], 0.0, 0.000000001) == 1) { all = all + 1; }
+    }
+    assert(is_ok(t11) == 1 && all == 4, "a 100 Ω shunt in 50 Ω: every Z-parameter is 100 Ω");
+
+    test_group("test_s_to_z_requires_equal_z0");
+    var t12, v12 = sh.set_z0(1, 75.0);
+    assert(is_ok(t12) == 1 && s_to_z_refused(&sh) == 1, "z0 = [50, 75]");
+
+    test_group("test_s_to_z_thru_is_singular");
+    assert(s_to_z_refused(&thru) == 1, "an ideal thru has no Z-parameters");
+
+    test_group("test_cascade_non_2port");
+    var s3: BjSMatrix;
+    var s2: BjSMatrix;
+    var n3 = sm_new(3, 50.0, &s3) + sm_new(2, 50.0, &s2);
+    assert(cascade_refused(&s3, &s2) == 1, "a 3-port");
+
+    test_group("test_s_to_z_non_2port");
+    assert(s_to_z_refused(&s3) == 1, "a 3-port");
+    var frees = 0;
+    frees = frees + BjSMatrix_free(&thru) + BjSMatrix_free(&a) + BjSMatrix_free(&b) + BjSMatrix_free(&mixed);
+    frees = frees + BjSMatrix_free(&other) + BjSMatrix_free(&att) + BjSMatrix_free(&sh) + BjSMatrix_free(&s3);
+    frees = frees + BjSMatrix_free(&s2);
+    if (frees == 7 || v1 == 7 || v2 == 7 || v3 == 7 || v4 == 7 || v5 == 7 || v6 == 7 || v7 == 7 || v8 == 7) {
+        println(".");
+    }
+    if (v9 == 7 || v10 == 7 || v11 == 7 || v12 == 7 || va == 7 || vb == 7 || is_err_result(ta) == 1) { println("."); }
+    if (is_err_result(tb) == 1 || n3 == 7) { println("."); }
+    return 0;
+}
+
+# ADR 0002 rows 36 (the fixed shape) and 37 (z0_equal on finite values), the reasons' text, out untouched, the heap.
+fn cyrius_smatrix(): i64 {
+    var s: BjSMatrix;
+    var c: BjSMatrix;
+    c.ports = 0;
+    c.s = 0;
+    c.z0 = 0;
+    var z: BjComplex = BjComplex_new(7.0, 8.0);
+    test_group("cyrius_smatrix_fixed_shape (ADR 0002 row 36)");
+    var t1, v1 = BjSMatrix_new(3, 50.0, &s);
+    var t2, v2 = s.set(2, 3, BjComplex_new(0.25, -0.5));
+    var e23: BjComplex = s.s_at(1, 2);
+    var raw: f64 = _bj_from_bits(load64(s.s + (1 * 3 + 2) * 16 + 8));
+    assert(is_ok(t1) == 1 && is_ok(t2) == 1 && close(e23, 0.25, -0.5, 0.0) == 1 && raw == -0.5,
+      "S23 at (i − 1)·ports + j − 1, row-major (re, im)");
+    var z2: f64 = s.z0_at(2);
+    var z3: f64 = s.z0_at(3);
+    var zm: f64 = s.z0_at(0 - 1);
+    assert(z2 == 50.0 && z3 != z3 && zm != zm && s.z0 == s.s + 3 * 3 * 16, "z0 after s in one block; NaN outside");
+    var t3, v3 = s.set_z0(3, 75.0);
+    var w3 = "invalid parameter: reference impedance index must be below 3, got 3";
+    assert(err_is(t3, v3, BJ_ERR_INVALID_PARAMETER, w3) == 1, "set_z0 refuses an index past the last");
+    BjSMatrix_free(&s);
+    assert(s.ports == 0 && s.s == 0 && s.z0 == 0, "freed and emptied");
+    var t4, v4 = BjSMatrix_new(0, 50.0, &s);
+    assert(is_ok(t4) == 1 && s.s == 0 && s.z0 == 0, "a 0-port holds no block");
+    var t5, v5 = s.get(1, 1, &z);
+    assert(err_is(t5, v5, BJ_ERR_INVALID_PARAMETER, "invalid parameter: port indices must be 1..=0, got (1, 1)") == 1,
+      "no entry to read");
+    var big: BjSMatrix;
+    big.ports = 5;
+    var t6, v6 = BjSMatrix_new(1099511627776, 50.0, &big);
+    assert(err_is(t6, v6, BJ_ERR_ALLOCATION, "allocation failed: an S-matrix of 1099511627776 ports") == 1 &&
+      big.ports == 5, "2^40 ports: Allocation, out untouched (Rust aborts)");
+
+    test_group("cyrius_z0_equal_finite (ADR 0002 row 37)");
+    var a: BjSMatrix;
+    var b: BjSMatrix;
+    tp_real(0.1, 0.9, 0.9, 0.1, 50.0, &a);
+    tp_real(0.1, 0.9, 0.9, 0.1, 50.0, &b);
+    zset(&a, 1, _bj_from_bits(0x7FF0000000000000));
+    var t7, v7 = a.cascade(&b, &c);
+    assert(err_is(t7, v7, BJ_ERR_INVALID_PARAMETER,
+        "invalid parameter: all port reference impedances must be equal, got [50.0, inf]") == 1,
+      "an infinite second Z₀ is no longer equal to 50 Ω (Rust: ∞ ≤ 10⁻¹²·∞)");
+    var zz: f64[8];
+    var t8, v8 = bj_s_to_z(&a, &zz);
+    assert(is_err_result(t8) == 1 && v8 == BJ_ERR_INVALID_PARAMETER, "s_to_z likewise");
+    zset(&a, 1, 50.00000000004);
+    var t9, v9 = a.cascade(&b, &c);
+    assert(is_ok(t9) == 1, "within 10⁻¹² of the first: equal");
+    BjSMatrix_free(&c);
+    zset(&a, 1, 50.0000000001);
+    var t10, v10 = a.cascade(&b, &c);
+    assert(is_err_result(t10) == 1, "2·10⁻¹² off: not equal");
+
+    test_group("cyrius_smatrix_reasons");
+    zset(&a, 1, 50.0);
+    var s3: BjSMatrix;
+    var n4 = sm_new(3, 50.0, &s3);
+    var t11, v11 = s3.cascade(&a, &c);
+    assert(err_is(t11, v11, BJ_ERR_INVALID_PARAMETER, "invalid parameter: cascade requires two 2-port networks") == 1,
+      "cascade of a 3-port");
+    var t12, v12 = bj_s_to_z(&s3, &zz);
+    assert(err_is(t12, v12, BJ_ERR_INVALID_PARAMETER, "invalid parameter: S→Z conversion requires 2-port network")
+      == 1, "s_to_z of a 3-port");
+    zset(&a, 0, 0.0);
+    var t13, v13 = a.cascade(&b, &c);
+    assert(err_is(t13, v13, BJ_ERR_INVALID_PARAMETER,
+        "invalid parameter: port reference impedance must be finite and positive, got 0") == 1, "a zero first Z₀");
+    zset(&a, 0, 75.0);
+    zset(&a, 1, 75.0);
+    var t14, v14 = a.cascade(&b, &c);
+    assert(err_is(t14, v14, BJ_ERR_INVALID_PARAMETER,
+        "invalid parameter: cascade requires equal reference impedances, got 75 Ω and 50 Ω") == 1, "75 against 50");
+    zset(&a, 0, 50.0);
+    zset(&a, 1, 50.0);
+    sset(&a, 2, 1, bj_complex_zero());
+    var t15, v15 = a.cascade(&b, &c);
+    assert(err_is(t15, v15, BJ_ERR_DIVISION_BY_ZERO,
+        "division by zero in EM calculation: S21 = 0, cannot convert to T-parameters") == 1, "S21 = 0");
+    var lp: BjSMatrix;
+    var lq: BjSMatrix;
+    tp_real(0.0, 1.0, 1.0, 1.0, 50.0, &lp);
+    tp_real(1.0, 1.0, 1.0, 0.0, 50.0, &lq);
+    var t16, v16 = lp.cascade(&lq, &c);
+    assert(err_is(t16, v16, BJ_ERR_DIVISION_BY_ZERO,
+        "division by zero in EM calculation: T22 = 0, cannot convert to S-parameters") == 1, "S22·S11′ = 1, a loop");
+    var thru: BjSMatrix;
+    tp_real(0.0, 1.0, 1.0, 0.0, 50.0, &thru);
+    var t17, v17 = bj_s_to_z(&thru, &zz);
+    assert(err_is(t17, v17, BJ_ERR_DIVISION_BY_ZERO, "division by zero in EM calculation: singular S→Z conversion")
+      == 1, "the thru");
+    var t18, v18 = thru.set(3, 1, bj_complex_real(1.0));
+    assert(err_is(t18, v18, BJ_ERR_INVALID_PARAMETER, "invalid parameter: port indices must be 1..=2, got (3, 1)") == 1,
+      "set past the last port");
+    var t19, v19 = thru.get(0 - 1, 1, &z);
+    assert(err_is(t19, v19, BJ_ERR_INVALID_PARAMETER,
+        "invalid parameter: port indices must be 1..=2, got (18446744073709551615, 1)") == 1, "usize::MAX");
+    var zr: f64 = z.re;
+    var zi: f64 = z.im;
+    var s21: BjComplex = thru.s_at(1, 0);
+    assert(zr == 7.0 && zi == 8.0 && c.ports == 0 && near(s21.re, 1.0, 0.0) == 1,
+      "out and the matrix untouched by every refusal");
+
+    test_group("cyrius_smatrix_heap");
+    var fl0 = _fl_arena_pos;
+    var bump0 = alloc_used();
+    var bad = 0;
+    for (var k = 0; k < 2000; k = k + 1) {
+        var tk, vk = thru.cascade(&thru, &c);
+        if (is_err_result(tk) == 1 || c.ports != 2) { bad = bad + 1; }
+        BjSMatrix_free(&c);
+    }
+    assert(bad == 0, "2000 cascades, each freed");
+    assert_eq(_fl_arena_pos, fl0, "the freelist's arena did not grow");
+    assert_eq(alloc_used(), bump0, "nothing on the bump heap");
+    var frees = BjSMatrix_free(&s) + BjSMatrix_free(&a) + BjSMatrix_free(&b) + BjSMatrix_free(&s3);
+    frees = frees + BjSMatrix_free(&lp) + BjSMatrix_free(&lq) + BjSMatrix_free(&thru);
+    if (frees == 7 || v1 == 7 || v2 == 7 || v4 == 7 || v9 == 7 || v10 == 7 || is_ok(t8) == 7 || n4 == 7) {
+        println(".");
+    }
+    return 0;
+}
+
 # Runs rf.rs's tests, then the Cyrius-only checks.
 fn main(): i64 {
     alloc_init();
@@ -532,6 +812,8 @@ fn main(): i64 {
     cyrius_deprecated();
     cyrius_errors();
     cyrius_values();
+    rust_tests_d();
+    cyrius_smatrix();
     return assert_summary();
 }
 

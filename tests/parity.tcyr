@@ -2948,9 +2948,94 @@ fn _par_rf_lines(fp, fl): i64 {
     return 0;
 }
 
+# The matrix at input token k (`i:<ports>`, `v:<2n²>` and the entries, `v:<n>` and the impedances) into *m, a fresh
+# block; returns the index of the token after it.
+fn _par_in_sm(k, m: *BjSMatrix): i64 {
+    var n = _par_in(k);
+    var t, v = BjSMatrix_new(n, 0.0, m);
+    var cnt = _par_in(k + 1);
+    for (var j = 0; j < cnt; j = j + 1) { store64(m.s + j * 8, _par_in(k + 2 + j)); }
+    var zk = k + 2 + cnt;
+    var nz = _par_in(zk);
+    for (var i = 0; i < nz; i = i + 1) { store64(m.z0 + i * 8, _par_in(zk + 1 + i)); }
+    return zk + 1 + nz;
+}
+
+# Appends a matrix's tokens, as _par_in_sm reads them.
+fn _par_got_sm(m: *BjSMatrix) {
+    var n = m.ports;
+    _par_got_i(n);
+    _par_got_seq(2 * n * n);
+    for (var j = 0; j < 2 * n * n; j = j + 1) { _par_got_f(load64(m.s + j * 8)); }
+    _par_got_seq(n);
+    for (var i = 0; i < n; i = i + 1) { _par_got_f(load64(m.z0 + i * 8)); }
+    return 0;
+}
+
+# The S-parameter matrices (M4 part 1b): every input matrix is read into a fresh block and freed after the row.
+fn _par_rf_sm(fp, fl): i64 {
+    var m: BjSMatrix;
+    var o: BjSMatrix;
+    if (_par_eq(fp, fl, "SMatrix::new") == 1) {
+        var t1, v1 = BjSMatrix_new(_par_in(0), _par_in(1), &m);
+        _par_got_sm(&m);
+        BjSMatrix_free(&m);
+        return 1;
+    }
+    if (_par_eq(fp, fl, "SMatrix::two_port") == 1) {
+        var a: BjComplex = BjComplex_new(_par_in(0), _par_in(1));
+        var b: BjComplex = BjComplex_new(_par_in(2), _par_in(3));
+        var c: BjComplex = BjComplex_new(_par_in(4), _par_in(5));
+        var d: BjComplex = BjComplex_new(_par_in(6), _par_in(7));
+        var t2, v2 = BjSMatrix_two_port(a, b, c, d, _par_in(8), &m);
+        _par_got_sm(&m);
+        BjSMatrix_free(&m);
+        return 1;
+    }
+    if (_par_eq(fp, fl, "SMatrix::get") == 1) {
+        var k = _par_in_sm(0, &m);
+        var z: BjComplex;
+        var t3, v3 = m.get(_par_in(k), _par_in(k + 1), &z);
+        _par_got_res_c(t3, v3, z);
+        BjSMatrix_free(&m);
+        return 1;
+    }
+    if (_par_eq(fp, fl, "SMatrix::set") == 1) {
+        var k2 = _par_in_sm(0, &m);
+        var t4, v4 = m.set(_par_in(k2), _par_in(k2 + 1), BjComplex_new(_par_in(k2 + 2), _par_in(k2 + 3)));
+        if (is_err_result(t4) == 1) { _par_got_error(v4); } else { _par_got_i(0); }
+        _par_got_sm(&m);
+        BjSMatrix_free(&m);
+        return 1;
+    }
+    if (_par_eq(fp, fl, "SMatrix::cascade") == 1) {
+        var m2: BjSMatrix;
+        var k3 = _par_in_sm(0, &m);
+        _par_in_sm(k3, &m2);
+        var t5, v5 = m.cascade(&m2, &o);
+        if (is_err_result(t5) == 1) { _par_got_error(v5); } else {
+            _par_got_sm(&o);
+            BjSMatrix_free(&o);
+        }
+        BjSMatrix_free(&m);
+        BjSMatrix_free(&m2);
+        return 1;
+    }
+    if (_par_eq(fp, fl, "rf::s_to_z") == 1) {
+        _par_in_sm(0, &m);
+        var w: f64[8];
+        var t6, v6 = bj_s_to_z(&m, &w);
+        if (is_err_result(t6) == 1) { _par_got_error(v6); } else { _par_got_words(&w, 8); }
+        BjSMatrix_free(&m);
+        return 1;
+    }
+    return 0;
+}
+
 # rf's rows: the lines and the Smith chart through _par_rf_lines, then matching and the array factors.
 public fn _par_rf(fp, fl): i64 {
     if (_par_rf_lines(fp, fl) == 1) { return 1; }
+    if (_par_rf_sm(fp, fl) == 1) { return 1; }
     var w: f64[4];
     if (_par_eq(fp, fl, "rf::quarter_wave_transformer") == 1) {
         var t1, v1 = bj_quarter_wave_transformer(_par_in(0), _par_in(1));

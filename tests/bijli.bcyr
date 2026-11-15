@@ -920,6 +920,24 @@ fn main(): i64 {
     }
     bench_batch_stop(b69, 1000000);
     bench_report(b69);
+    # M4 part 1b: Rust's bench thru (S11 = S22 = 0.1, S12 = S21 = 0.9) cascaded with itself; Rust drops each result,
+    # the twin frees it.
+    var th70: BjSMatrix;
+    var co70: BjSMatrix;
+    var t70a, v70a = BjSMatrix_two_port(bj_complex_real(0.1), bj_complex_real(0.9), bj_complex_real(0.9),
+      bj_complex_real(0.1), 50.0, &th70);
+    var b70 = bench_new("rf/s_cascade");
+    bench_batch_start(b70);
+    for (var k = 0; k < 1000000; k = k + 1) {
+        var t70, v70 = th70.cascade(&th70, &co70);
+        var e70: BjComplex = co70.s_at(1, 0);
+        rfsum = rfsum + e70.re;
+        BjSMatrix_free(&co70);
+    }
+    bench_batch_stop(b70, 1000000);
+    bench_report(b70);
+    BjSMatrix_free(&th70);
+    if (is_err_result(t70a) == 1 || v70a == 7) { println("."); }
     if (rfsum == 7.0) { println("."); }
 
     # The JSON (src/json.cyr): a FieldVector written into one builder, emptied each time through its length word

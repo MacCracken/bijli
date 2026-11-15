@@ -5758,14 +5758,198 @@ def rf_eval(fn, v, P):
     return None
 
 
+# M4 part 1b: the S-parameter matrices. A matrix is {"ports", "s" (row-major (re, im)), "z0"}; the tokens hold only
+# consistent shapes (ADR 0002 row 36). port=True for the port's z0_equal, which requires both values finite (row 37).
+RF_U64 = (1 << 64) - 1
+
+
+def rf_sm_read(toks, k):
+    """The matrix at token k, and the index after it."""
+    n = toks[k][1] & RF_U64
+    m = int(toks[k + 1][1])
+    ents = [toks[k + 2 + j][1] for j in range(m)]
+    zk = k + 2 + m
+    nz = int(toks[zk][1])
+    z0 = [toks[zk + 1 + j][1] for j in range(nz)]
+    return {"ports": n, "s": [(ents[2 * j], ents[2 * j + 1]) for j in range(m // 2)], "z0": z0}, zk + 1 + nz
+
+
+def rf_sm_toks(m):
+    out = [("i", m["ports"]), ("v", str(2 * len(m["s"])))]
+    for re, im in m["s"]:
+        out += [("f", re), ("f", im)]
+    return out + [("v", str(len(m["z0"])))] + [("f", z) for z in m["z0"]]
+
+
+def rf_cadd(a, b):
+    return (a[0] + b[0], a[1] + b[1])
+
+
+def rf_csub(a, b):
+    return (a[0] - b[0], a[1] - b[1])
+
+
+def rf_cneg(a):
+    return (-a[0], -a[1])
+
+
+def rf_nsq(a):
+    return a[0] * a[0] + a[1] * a[1]
+
+
+def rf_fmax(a, b):
+    """f64::max: a NaN operand is ignored."""
+    if math.isnan(a):
+        return b
+    if math.isnan(b):
+        return a
+    return a if a >= b else b
+
+
+def rf_z0_equal(a, b, port):
+    """rf.rs's z0_equal; the port's also requires both values finite (ADR 0002 row 37)."""
+    if port and not (math.isfinite(a) and math.isfinite(b)):
+        return False
+    return abs(a - b) <= 1e-12 * rf_fmax(abs(a), abs(b))
+
+
+def rf_uniform_z0(m, port):
+    """The common reference impedance (a float), or an error's tokens."""
+    if not m["z0"]:
+        return ip_err("SMatrix has no reference impedances")
+    first = m["z0"][0]
+    if not (math.isfinite(first) and first > 0.0):
+        return ip_err(f"port reference impedance must be finite and positive, got {rust_display(first)}")
+    if any(not rf_z0_equal(z, first, port) for z in m["z0"]):
+        return ip_err("all port reference impedances must be equal, got [" +
+                      ", ".join(rust_debug(z) for z in m["z0"]) + "]")
+    return first
+
+
+def rf_two_port(s11, s12, s21, s22, z0):
+    return {"ports": 2, "s": [s11, s12, s21, s22], "z0": [z0, z0]}
+
+
+def rf_s_to_t(s):
+    s11, s12, s21, s22 = s
+    if rf_nsq(s21) < 1e-60:
+        return dz_err("S21 = 0, cannot convert to T-parameters")
+    inv = rf_crecip(s21)
+    det = rf_csub(sc_mul(s11, s22), sc_mul(s12, s21))
+    return [[rf_cneg(sc_mul(det, inv)), sc_mul(s11, inv)], [rf_cneg(sc_mul(s22, inv)), inv]]
+
+
+def rf_cascade(a, b, port):
+    if a["ports"] != 2 or b["ports"] != 2:
+        return ip_err("cascade requires two 2-port networks")
+    z0 = rf_uniform_z0(a, port)
+    if isinstance(z0, list):
+        return z0
+    z0o = rf_uniform_z0(b, port)
+    if isinstance(z0o, list):
+        return z0o
+    if not rf_z0_equal(z0, z0o, port):
+        return ip_err(f"cascade requires equal reference impedances, got {rust_display(z0)} Ω and "
+                      f"{rust_display(z0o)} Ω")
+    t1 = rf_s_to_t(a["s"])
+    if isinstance(t1[0], tuple):
+        return t1
+    t2 = rf_s_to_t(b["s"])
+    if isinstance(t2[0], tuple):
+        return t2
+
+    def dot(r, c):
+        return rf_cadd(sc_mul(t1[r][0], t2[0][c]), sc_mul(t1[r][1], t2[1][c]))
+    t = [[dot(0, 0), dot(0, 1)], [dot(1, 0), dot(1, 1)]]
+    if rf_nsq(t[1][1]) < 1e-60:
+        return dz_err("T22 = 0, cannot convert to S-parameters")
+    inv = rf_crecip(t[1][1])
+    s11 = sc_mul(t[0][1], inv)
+    s12 = sc_mul(rf_csub(sc_mul(t[0][0], t[1][1]), sc_mul(t[0][1], t[1][0])), inv)
+    s22 = rf_cneg(sc_mul(t[1][0], inv))
+    return rf_sm_toks(rf_two_port(s11, s12, inv, s22, z0))
+
+
+def rf_s_to_z(m, port):
+    if m["ports"] != 2:
+        return ip_err("S→Z conversion requires 2-port network")
+    s11, s12, s21, s22 = m["s"]
+    z0v = rf_uniform_z0(m, port)
+    if isinstance(z0v, list):
+        return z0v
+    one, z0, two = (1.0, 0.0), (z0v, 0.0), (2.0, 0.0)
+    det = rf_csub(sc_mul(rf_csub(one, s11), rf_csub(one, s22)), sc_mul(s12, s21))
+    if rf_nsq(det) < 1e-60:
+        return dz_err("singular S→Z conversion")
+    inv = rf_crecip(det)
+    z11 = sc_mul(sc_mul(z0, rf_cadd(sc_mul(rf_cadd(one, s11), rf_csub(one, s22)), sc_mul(s12, s21))), inv)
+    z12 = sc_mul(sc_mul(sc_mul(z0, two), s12), inv)
+    z21 = sc_mul(sc_mul(sc_mul(z0, two), s21), inv)
+    z22 = sc_mul(sc_mul(z0, rf_cadd(sc_mul(rf_csub(one, s11), rf_cadd(one, s22)), sc_mul(s12, s21))), inv)
+    return rf_cx(z11) + rf_cx(z12) + rf_cx(z21) + rf_cx(z22)
+
+
+def rf_index_err(n, a, b):
+    """get's and set's index check: an error's tokens, or None."""
+    if a == 0 or b == 0 or a > n or b > n:
+        return ip_err(f"port indices must be 1..={n}, got ({a}, {b})")
+    return None
+
+
+def rf_sm_eval(fn, toks, port=False):
+    """The S-parameter rows (M4 part 1b) from their raw input tokens. None for another name."""
+    if fn == "SMatrix::new":
+        n, z0 = toks[0][1] & RF_U64, toks[1][1]
+        return rf_sm_toks({"ports": n, "s": [(0.0, 0.0)] * (n * n), "z0": [z0] * n})
+    if fn == "SMatrix::two_port":
+        v = [t[1] for t in toks]
+        return rf_sm_toks(rf_two_port((v[0], v[1]), (v[2], v[3]), (v[4], v[5]), (v[6], v[7]), v[8]))
+    if fn in ("SMatrix::get", "SMatrix::set"):
+        m, k = rf_sm_read(toks, 0)
+        a, b = toks[k][1] & RF_U64, toks[k + 1][1] & RF_U64
+        bad = rf_index_err(m["ports"], a, b)
+        if fn == "SMatrix::get":
+            return bad or rf_cx(m["s"][(a - 1) * m["ports"] + b - 1])
+        if bad:
+            return bad + rf_sm_toks(m)
+        s = list(m["s"])
+        s[(a - 1) * m["ports"] + b - 1] = (toks[k + 2][1], toks[k + 3][1])
+        return [("i", 0)] + rf_sm_toks(dict(m, s=s))
+    if fn == "SMatrix::cascade":
+        a, k = rf_sm_read(toks, 0)
+        b, _ = rf_sm_read(toks, k)
+        return rf_cascade(a, b, port)
+    if fn == "rf::s_to_z":
+        return rf_s_to_z(rf_sm_read(toks, 0)[0], port)
+    return None
+
+
+def rf_adr_rows(path: Path) -> list:
+    """ADR 0002 mappings for rf.tsv: row 37 where a second port's infinite Z₀, which Rust's z0_equal accepts as equal to
+    the first's (∞ ≤ 10⁻¹²·∞), is refused by the port's (M4 part 1b)."""
+    out = []
+    for fn, _cls, ins, outs, _v in sc_lines(path):
+        toks = [parse_tok(x) for x in ins.split(" ")]
+        rust = rf_sm_eval(fn, toks)
+        if rust is None:
+            continue
+        port = rf_sm_eval(fn, toks, port=True)
+        if not toks_same(rust, port):
+            out.append((fn, ins, wire(port), "37", f"oracle {outs[:200]}; ADR 0002 row 37"))
+    return out
+
+
 def validate_rf(path: Path) -> list:
-    """rf.rs transcribed (rf_eval) on Rust's primitives, against every row."""
+    """rf.rs transcribed (rf_eval, and rf_sm_eval for the S-parameter matrices) on Rust's primitives, against every
+    row."""
     header, _rows = read_tsv(path)
     errs = check_platform(header)
     if errs:
         return errs
-    for n, (fn, _cls, _ins, outs, v) in enumerate(sc_lines(path), 1):
+    for n, (fn, _cls, ins, outs, v) in enumerate(sc_lines(path), 1):
         want = rf_eval(fn, v, RF_P_GLIBC)
+        if want is None:
+            want = rf_sm_eval(fn, [parse_tok(x) for x in ins.split(" ")])
         if want is None:
             errs.append(f"rf row {n}: no transcription for {fn}")
             continue
@@ -7256,6 +7440,8 @@ def adr_rows(root: Path, module: str, path: Path) -> list:
         return scattering_adr_rows(path)
     if module == "beam":
         return beam_adr_rows(path)
+    if module == "rf":
+        return rf_adr_rows(path)
     maps = {13: adr13(root)}
     out = adr17_rows(root, module, path) if module in ("field", "charge") else []
     if module in ("field", "charge"):
@@ -7652,7 +7838,7 @@ def main() -> int:
     errs += check_corrections(root, "beam", golden / "beam.tsv", beam_corrections(golden / "beam.tsv"))
     errs += check_corrections(root, "rf", golden / "rf.tsv", rf_corrections(golden / "rf.tsv"))
     for mod in ("beam", "charge", "circuit", "complex", "field", "material", "maxwell", "polarization", "relativity",
-                "scattering", "wave"):
+                "rf", "scattering", "wave"):
         errs += check_adr(root, mod, golden / f"{mod}.tsv")
     errs += cx_rows(golden / "complex.tsv")[1]
     errs += fv_rows(root, "field", golden / "field.tsv")[1] + fv_rows(root, "charge", golden / "charge.tsv")[1]

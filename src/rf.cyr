@@ -11,7 +11,9 @@
 # correctly rounded (src/crmath.cyr). An element count is Rust's usize: its 64-bit word read unsigned (−1 is
 # usize::MAX).
 #
-# The S-parameter matrices, s_to_z and Touchstone I/O follow in M4 part 1b and 1c.
+# An S-parameter matrix (M4 part 1b) is a BjSMatrix whose shape is fixed at construction (ADR 0002 row 36): Rust's
+# public, resizable fields and their per-call shape checks are gone. Its reference impedances compare equal only when
+# both are finite (row 37). Touchstone I/O follows in M4 part 1c.
 
 private
 
@@ -609,4 +611,381 @@ public fn bj_circular_array_factor(n_elements, radius: f64, wavenumber: f64, the
     var m: f64 = f64_sqrt(sr * sr + si * si);
     var af: f64 = m / n;
     return af;
+}
+
+# ── the S-parameter matrices (M4 part 1b) ───────────────────────────────────────────────────────────────────────
+
+# An N-port network's S-parameter matrix. Its shape is fixed at construction (ADR 0002 row 36): `ports` (a usize);
+# `s`, the address of ports² BjComplex, row-major, S_ij at index (i − 1)·ports + j − 1; `z0`, the address of `ports`
+# reference impedances (Ω, f64), in the same fl_alloc block after s. Both are 0 for ports = 0. Read the entries with
+# get, s_at or the address, the impedances with z0_at; give the block back with BjSMatrix_free. Rust's public `s` and
+# `z0` vectors could be reshaped, so its methods checked the shape on every call; here nothing can reshape them.
+# Mirrors `SMatrix`.
+public struct BjSMatrix {
+    ports;
+    s;
+    z0;
+}
+
+# Allocates a ports-port matrix's block into *out (entries 0, every reference impedance z0): 0, or the Allocation code
+# recorded (out untouched) when the block can't be had.
+fn _bj_rf_sm_alloc(ports, z0: f64, out: *BjSMatrix): i64 {
+    if (ports == 0) {
+        out.ports = 0;
+        out.s = 0;
+        out.z0 = 0;
+        return 0;
+    }
+    var blk = 0;
+    if (ports > 0 && ports < 268435456) { blk = fl_calloc(ports * ports * 16 + ports * 8); }
+    if (blk == 0) {
+        var t = _bj_err_reason(BJ_ERR_ALLOCATION);
+        _bj_tx_cstr(t, "an S-matrix of ");
+        _bj_tx_u64(t, ports);
+        _bj_tx_cstr(t, " ports");
+        return BJ_ERR_ALLOCATION;
+    }
+    var zp = blk + ports * ports * 16;
+    for (var k = 0; k < ports; k = k + 1) { store64(zp + k * 8, _bj_bits(z0)); }
+    out.ports = ports;
+    out.s = blk;
+    out.z0 = zp;
+    return 0;
+}
+
+# An N-port matrix with every entry 0 and every reference impedance z0, into *out: Ok(0), or Err(Allocation) with out
+# untouched when its block can't be had (Rust aborts). Mirrors `SMatrix::new`.
+#must_use
+public fn BjSMatrix_new(ports, z0: f64, out: *BjSMatrix): Result {
+    var e = _bj_rf_sm_alloc(ports, z0, out);
+    if (e != 0) { return Err(e); }
+    return Ok(0);
+}
+
+# A 2-port matrix [[S11, S12], [S21, S22]] with both reference impedances z0, into *out: Ok(0), or Err(Allocation)
+# with out untouched. Mirrors `SMatrix::two_port`.
+#must_use
+public fn BjSMatrix_two_port(s11: BjComplex, s12: BjComplex, s21: BjComplex, s22: BjComplex, z0: f64,
+  out: *BjSMatrix): Result {
+    var m: BjSMatrix;
+    var e = _bj_rf_sm_alloc(2, z0, &m);
+    if (e != 0) { return Err(e); }
+    store64(m.s, _bj_bits(s11.re));
+    store64(m.s + 8, _bj_bits(s11.im));
+    store64(m.s + 16, _bj_bits(s12.re));
+    store64(m.s + 24, _bj_bits(s12.im));
+    store64(m.s + 32, _bj_bits(s21.re));
+    store64(m.s + 40, _bj_bits(s21.im));
+    store64(m.s + 48, _bj_bits(s22.re));
+    store64(m.s + 56, _bj_bits(s22.im));
+    out.ports = 2;
+    out.s = m.s;
+    out.z0 = m.z0;
+    return Ok(0);
+}
+
+# Gives m's block back and empties it (ports 0).
+public fn BjSMatrix_free(m: *BjSMatrix): i64 {
+    if (m.s != 0) { fl_free(m.s); }
+    m.ports = 0;
+    m.s = 0;
+    m.z0 = 0;
+    return 0;
+}
+
+# 0 when 1 ≤ i, j ≤ ports, else InvalidParameter "port indices must be 1..={ports}, got ({i}, {j})" recorded and its
+# code returned (i and j are usize words: one past 2^63 is negative here, and refused).
+fn _bj_rf_index(ports, i, j): i64 {
+    if (i > 0 && j > 0 && i <= ports && j <= ports) { return 0; }
+    var t = _bj_err_reason(BJ_ERR_INVALID_PARAMETER);
+    _bj_tx_cstr(t, "port indices must be 1..=");
+    _bj_tx_u64(t, ports);
+    _bj_tx_cstr(t, ", got (");
+    _bj_tx_u64(t, i);
+    _bj_tx_cstr(t, ", ");
+    _bj_tx_u64(t, j);
+    _bj_tx_cstr(t, ")");
+    return BJ_ERR_INVALID_PARAMETER;
+}
+
+# rf.rs's z0_equal, |a − b| ≤ 10⁻¹²·max(|a|, |b|), with both values finite: Rust's accepted an infinite impedance as
+# equal to any finite one (∞ ≤ 10⁻¹²·∞; ADR 0002 row 37).
+#must_use
+fn _bj_rf_z0_equal(a: f64, b: f64): i64 {
+    if (_bj_rf_fin2(a, b) == 0) { return 0; }
+    var d: f64 = f64_abs(a - b);
+    var aa: f64 = f64_abs(a);
+    var ab: f64 = f64_abs(b);
+    var mx: f64 = aa;
+    if (ab > aa) { mx = ab; }
+    var lim: f64 = _BJ_RF_REL12 * mx;
+    if (d <= lim) { return 1; }
+    return 0;
+}
+
+# The common reference impedance of m's ports into out[0]: 0, or the InvalidParameter code recorded unless the first
+# is finite and positive and every other equals it (z0_equal). Mirrors `SMatrix::uniform_z0`.
+fn _bj_rf_uniform_z0(m: *BjSMatrix, out: *f64): i64 {
+    var n = m.ports;
+    if (n == 0) { return _bj_err_invalid_parameter("SMatrix has no reference impedances"); }
+    var zp: *f64 = _bj_rf_f64p(m.z0);
+    var first: f64 = zp[0];
+    var e = _bj_rf_require("port reference impedance", first);
+    if (e != 0) { return e; }
+    var same = 1;
+    for (var k = 0; k < n; k = k + 1) {
+        if (_bj_rf_z0_equal(zp[k], first) == 0) { same = 0; }
+    }
+    if (same == 0) {
+        var t = _bj_err_reason(BJ_ERR_INVALID_PARAMETER);
+        _bj_tx_cstr(t, "all port reference impedances must be equal, got [");
+        for (var j = 0; j < n; j = j + 1) {
+            if (j > 0) { _bj_tx_cstr(t, ", "); }
+            _bj_fmt_f64_debug(t, zp[j]);
+        }
+        _bj_tx_cstr(t, "]");
+        return BJ_ERR_INVALID_PARAMETER;
+    }
+    out[0] = first;
+    return 0;
+}
+
+# The address a as a *f64 (an untyped word stored into a typed pointer warns; a typed return does not).
+#must_use
+fn _bj_rf_f64p(a): *f64 {
+    return a;
+}
+
+# (ar + j·ai)(br + j·bi), hisab's product in Rust's order.
+#must_use
+fn _bj_rf_cmul(ar: f64, ai: f64, br: f64, bi: f64): (f64, f64) {
+    var re: f64 = ar * br - ai * bi;
+    var im: f64 = ar * bi + ai * br;
+    return (re, im);
+}
+
+# A 2-port's T (transfer) parameters from s = [S11, S12, S21, S22] (re, im each) into t = [T11, T12, T21, T22], with
+# [b₁, a₁]ᵀ = T [a₂, b₂]ᵀ, T = (1/S21) [[−ΔS, S11], [−S22, 1]]: 0, or the DivisionByZero code recorded when
+# |S21|² < 10⁻⁶⁰. Mirrors rf.rs's `s_to_t`.
+fn _bj_rf_s_to_t(s: *f64, t: *f64): i64 {
+    var n2: f64 = s[4] * s[4] + s[5] * s[5];
+    var tiny: f64 = _BJ_RF_TINY60;
+    if (n2 < tiny) { return _bj_err_division_by_zero("S21 = 0, cannot convert to T-parameters"); }
+    var ir, ii = _bj_rf_recip(s[4], s[5]);
+    var ar, ai = _bj_rf_cmul(s[0], s[1], s[6], s[7]);
+    var br, bi = _bj_rf_cmul(s[2], s[3], s[4], s[5]);
+    var dr: f64 = ar - br;
+    var di: f64 = ai - bi;
+    var p0, p1 = _bj_rf_cmul(dr, di, ir, ii);
+    var q0, q1 = _bj_rf_cmul(s[0], s[1], ir, ii);
+    var r0, r1 = _bj_rf_cmul(s[6], s[7], ir, ii);
+    t[0] = -p0;
+    t[1] = -p1;
+    t[2] = q0;
+    t[3] = q1;
+    t[4] = -r0;
+    t[5] = -r1;
+    t[6] = ir;
+    t[7] = ii;
+    return 0;
+}
+
+# Entry (r, c) of the product of 2 × 2 complex matrices a and b, a[r][0]·b[0][c] + a[r][1]·b[1][c], into out[k],
+# out[k + 1] (each matrix 8 f64, row-major (re, im)).
+fn _bj_rf_tdot(a: *f64, b: *f64, r, c, out: *f64, k) {
+    var x0, x1 = _bj_rf_cmul(a[4 * r], a[4 * r + 1], b[2 * c], b[2 * c + 1]);
+    var y0, y1 = _bj_rf_cmul(a[4 * r + 2], a[4 * r + 3], b[4 + 2 * c], b[5 + 2 * c]);
+    out[k] = x0 + y0;
+    out[k + 1] = x1 + y1;
+    return 0;
+}
+
+impl BjSMatrix {
+    # S_ij (ports numbered from 1) into *out: Ok(0), or Err(InvalidParameter) with out untouched unless
+    # 1 ≤ i, j ≤ ports. Mirrors `SMatrix::get`.
+    #must_use
+    public fn get(self, i, j, out: *BjComplex): Result {
+        var e = _bj_rf_index(self.ports, i, j);
+        if (e != 0) { return Err(e); }
+        var p = self.s + ((i - 1) * self.ports + j - 1) * 16;
+        out.re = load64(p);
+        out.im = load64(p + 8);
+        return Ok(0);
+    }
+
+    # Sets S_ij (ports numbered from 1) to value: Ok(0), or Err(InvalidParameter) with the matrix untouched unless
+    # 1 ≤ i, j ≤ ports. Mirrors `SMatrix::set`.
+    #must_use
+    public fn set(self, i, j, value: BjComplex): Result {
+        var e = _bj_rf_index(self.ports, i, j);
+        if (e != 0) { return Err(e); }
+        var p = self.s + ((i - 1) * self.ports + j - 1) * 16;
+        store64(p, _bj_bits(value.re));
+        store64(p + 8, _bj_bits(value.im));
+        return Ok(0);
+    }
+
+    # Rust's `s[i][j]`, indices from 0 (0 ≤ i, j < ports; unchecked, as the entry's address is).
+    #must_use
+    public fn s_at(self, i, j): BjComplex {
+        var p = self.s + (i * self.ports + j) * 16;
+        var z: BjComplex;
+        z.re = load64(p);
+        z.im = load64(p + 8);
+        return z;
+    }
+
+    # Rust's `z0[k]`, the reference impedance of port k + 1 (Ω); NaN unless 0 ≤ k < ports.
+    #must_use
+    public fn z0_at(self, k): f64 {
+        if (k < 0 || k >= self.ports) {
+            var nan: f64 = _BJ_RF_NAN;
+            return nan;
+        }
+        var zp: *f64 = _bj_rf_f64p(self.z0);
+        var z: f64 = zp[k];
+        return z;
+    }
+
+    # Sets the reference impedance of port k + 1 (Rust's `z0[k] = value`): Ok(0), or Err(InvalidParameter) unless
+    # 0 ≤ k < ports. The value is not checked, as Rust's field isn't: cascade and s_to_z check it.
+    #must_use
+    public fn set_z0(self, k, value: f64): Result {
+        if (k < 0 || k >= self.ports) {
+            var t = _bj_err_reason(BJ_ERR_INVALID_PARAMETER);
+            _bj_tx_cstr(t, "reference impedance index must be below ");
+            _bj_tx_u64(t, self.ports);
+            _bj_tx_cstr(t, ", got ");
+            _bj_tx_u64(t, k);
+            return Err(BJ_ERR_INVALID_PARAMETER);
+        }
+        store64(self.z0 + k * 8, _bj_bits(value));
+        return Ok(0);
+    }
+
+    # The cascade of two 2-ports, self then other (self's port 2 to other's port 1), into a new matrix in *out: Ok(0),
+    # or Err with out untouched (and never read). Through the transfer matrices, T = T_self·T_other. InvalidParameter
+    # unless both are 2-ports whose reference impedances are all equal (finite, positive); DivisionByZero where S21 of
+    # either is 0 (|S21|² < 10⁻⁶⁰: no T-parameters) or T22 of the product is (a lossless loop, S22·S11′ = 1);
+    # Allocation when the result's block can't be had. Mirrors `SMatrix::cascade`.
+    #must_use
+    public fn cascade(self, other: *BjSMatrix, out: *BjSMatrix): Result {
+        if (self.ports != 2 || other.ports != 2) {
+            return Err(_bj_err_invalid_parameter("cascade requires two 2-port networks"));
+        }
+        var za: f64[1];
+        var zb: f64[1];
+        var e1 = _bj_rf_uniform_z0(self, &za);
+        if (e1 != 0) { return Err(e1); }
+        var e2 = _bj_rf_uniform_z0(other, &zb);
+        if (e2 != 0) { return Err(e2); }
+        var z0: f64 = za[0];
+        var z0o: f64 = zb[0];
+        if (_bj_rf_z0_equal(z0, z0o) == 0) {
+            var t = _bj_err_reason(BJ_ERR_INVALID_PARAMETER);
+            _bj_tx_cstr(t, "cascade requires equal reference impedances, got ");
+            _bj_fmt_f64_display(t, z0);
+            _bj_tx_cstr(t, " Ω and ");
+            _bj_fmt_f64_display(t, z0o);
+            _bj_tx_cstr(t, " Ω");
+            return Err(BJ_ERR_INVALID_PARAMETER);
+        }
+        if (_bj_log_on(5) == 1) {
+            var lb[96];
+            var lt[24];
+            _bj_tx_init(&lt, &lb, 96);
+            _bj_tx_cstr(&lt, "cascading 2-port S-matrices z0=");
+            _bj_fmt_f64_debug(&lt, z0);
+            _bj_log_text(5, &lt);
+        }
+        var t1: f64[8];
+        var t2: f64[8];
+        var e3 = _bj_rf_s_to_t(_bj_rf_f64p(self.s), &t1);
+        if (e3 != 0) { return Err(e3); }
+        var e4 = _bj_rf_s_to_t(_bj_rf_f64p(other.s), &t2);
+        if (e4 != 0) { return Err(e4); }
+        var tt: f64[8];
+        _bj_rf_tdot(&t1, &t2, 0, 0, &tt, 0);
+        _bj_rf_tdot(&t1, &t2, 0, 1, &tt, 2);
+        _bj_rf_tdot(&t1, &t2, 1, 0, &tt, 4);
+        _bj_rf_tdot(&t1, &t2, 1, 1, &tt, 6);
+        var n2: f64 = tt[6] * tt[6] + tt[7] * tt[7];
+        var tiny: f64 = _BJ_RF_TINY60;
+        if (n2 < tiny) { return Err(_bj_err_division_by_zero("T22 = 0, cannot convert to S-parameters")); }
+        var ir, ii = _bj_rf_recip(tt[6], tt[7]);
+        var a0, a1 = _bj_rf_cmul(tt[2], tt[3], ir, ii);
+        var b0, b1 = _bj_rf_cmul(tt[0], tt[1], tt[6], tt[7]);
+        var c0, c1 = _bj_rf_cmul(tt[2], tt[3], tt[4], tt[5]);
+        var d0: f64 = b0 - c0;
+        var d1: f64 = b1 - c1;
+        var e0, ee1 = _bj_rf_cmul(d0, d1, ir, ii);
+        var f0, f1 = _bj_rf_cmul(tt[4], tt[5], ir, ii);
+        var nf0: f64 = -f0;
+        var nf1: f64 = -f1;
+        return BjSMatrix_two_port(BjComplex_new(a0, a1), BjComplex_new(e0, ee1), BjComplex_new(ir, ii),
+          BjComplex_new(nf0, nf1), z0, out);
+    }
+}
+
+# A 2-port's Z-parameters (Ω), Z = Z₀(I + S)(I − S)⁻¹ for a common real reference impedance Z₀ (Pozar Table 4.2), into
+# out[0..4] as [[Z11, Z12], [Z21, Z22]], row-major BjComplex: Ok(0), or Err with out untouched. InvalidParameter
+# unless s is a 2-port whose reference impedances are all equal (finite, positive); DivisionByZero where I − S is
+# singular (|det(I − S)|² < 10⁻⁶⁰: an ideal thru has no Z-parameters). Mirrors `rf::s_to_z`.
+#must_use
+public fn bj_s_to_z(s: *BjSMatrix, out: *BjComplex): Result {
+    if (s.ports != 2) { return Err(_bj_err_invalid_parameter("S→Z conversion requires 2-port network")); }
+    var zw: f64[1];
+    var e = _bj_rf_uniform_z0(s, &zw);
+    if (e != 0) { return Err(e); }
+    var z0: f64 = zw[0];
+    if (_bj_log_on(5) == 1) {
+        var lb[96];
+        var lt[24];
+        _bj_tx_init(&lt, &lb, 96);
+        _bj_tx_cstr(&lt, "converting 2-port S-parameters to Z z0=");
+        _bj_fmt_f64_debug(&lt, z0);
+        _bj_log_text(5, &lt);
+    }
+    var p: *f64 = _bj_rf_f64p(s.s);
+    var m11r: f64 = 1.0 - p[0];
+    var m11i: f64 = 0.0 - p[1];
+    var m22r: f64 = 1.0 - p[6];
+    var m22i: f64 = 0.0 - p[7];
+    var u11r: f64 = 1.0 + p[0];
+    var u11i: f64 = 0.0 + p[1];
+    var u22r: f64 = 1.0 + p[6];
+    var u22i: f64 = 0.0 + p[7];
+    var ar, ai = _bj_rf_cmul(m11r, m11i, m22r, m22i);
+    var br, bi = _bj_rf_cmul(p[2], p[3], p[4], p[5]);
+    var dr: f64 = ar - br;
+    var di: f64 = ai - bi;
+    var n2: f64 = dr * dr + di * di;
+    var tiny: f64 = _BJ_RF_TINY60;
+    if (n2 < tiny) { return Err(_bj_err_division_by_zero("singular S→Z conversion")); }
+    var ir, ii = _bj_rf_recip(dr, di);
+    var cr, ci = _bj_rf_cmul(u11r, u11i, m22r, m22i);
+    var x1r: f64 = cr + br;
+    var x1i: f64 = ci + bi;
+    var gr, gi = _bj_rf_cmul(m11r, m11i, u22r, u22i);
+    var x2r: f64 = gr + br;
+    var x2i: f64 = gi + bi;
+    var h0, h1 = _bj_rf_cmul(z0, 0.0, x1r, x1i);
+    var z11r, z11i = _bj_rf_cmul(h0, h1, ir, ii);
+    var w0, w1 = _bj_rf_cmul(z0, 0.0, 2.0, 0.0);
+    var k0, k1 = _bj_rf_cmul(w0, w1, p[2], p[3]);
+    var z12r, z12i = _bj_rf_cmul(k0, k1, ir, ii);
+    var l0, l1 = _bj_rf_cmul(w0, w1, p[4], p[5]);
+    var z21r, z21i = _bj_rf_cmul(l0, l1, ir, ii);
+    var o0, o1 = _bj_rf_cmul(z0, 0.0, x2r, x2i);
+    var z22r, z22i = _bj_rf_cmul(o0, o1, ir, ii);
+    var q: *f64 = _bj_rf_f64p(out);
+    q[0] = z11r;
+    q[1] = z11i;
+    q[2] = z12r;
+    q[3] = z12i;
+    q[4] = z21r;
+    q[5] = z21i;
+    q[6] = z22r;
+    q[7] = z22i;
+    return Ok(0);
 }

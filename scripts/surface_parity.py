@@ -48,8 +48,7 @@ PENDING_MODULES = {
 # Their other items are checked as a ported module's now; the listed ones count as pending, and one found ported is a
 # problem (drop it from the list).
 IN_PROGRESS = {
-    "rf": ("M4 parts 1b–1d", {
-        "SMatrix", "SMatrix::new", "SMatrix::two_port", "SMatrix::get", "SMatrix::set", "SMatrix::cascade", "s_to_z",
+    "rf": ("M4 parts 1c–1d", {
         "TouchstoneFormat", "TouchstoneData", "parse_touchstone", "try_write_touchstone",
         "impl Serialize for SMatrix", "impl Deserialize for SMatrix", "impl Serialize for TouchstoneFormat",
         "impl Deserialize for TouchstoneFormat", "impl Serialize for TouchstoneData",
