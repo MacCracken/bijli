@@ -319,6 +319,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
   a 160-character preview of its document, and a reader's `unchecked <d> -> Ok` or `-> Err(<serde's message>)`.
   `json.tsv` is 31.0 MB (66,620 rows; every row's function, class, inputs and outputs byte for byte as before). The
   generator and validate.py fail on any file past 48 MiB, in both modes.
+- **Cyrius port, M4 part 2a-1 — the stub match's cancellation-free root** (`src/rf.cyr`): M4's Part 2, the
+  range-edge review, runs on the user's answers of 2026-11-15 (port plan §0.1). Its first bite takes the stub match's
+  cancelling root without its cancellation (ADR 0002 row 39, see Fixed). `rf.tsv` grows by 6,179 edge rows (19,899);
+  `rf.adr.tsv` maps 2,911 of them and 18 of part 1a's, and `rf.cr.tsv` gains one glibc misrounding.
 
 ### Fixed
 
@@ -692,6 +696,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
   values must now be finite, and such a matrix is refused with Rust's own reason ("all port reference impedances must be
   equal, got [50.0, inf]"). Touchstone's writer (M4 part 1c-2) uses the same test: a matrix whose impedance is ±∞ is
   refused ("S-matrix #k reference impedances [50.0, inf] differ from the file's R 50") where Rust wrote it.
+- **rf** (ADR 0002 row 39, M4 part 2a-1, the user's answer of 2026-11-15): `single_stub_match_complex`'s root
+  (X_L ∓ disc)/(R_L − Z₀) cancelled where disc ≈ |X_L|: as R_L → Z₀ just past the 10⁻¹²·Z₀ band (2.4·10⁻⁵ of the root
+  lost at R_L = Z₀(1 + 2·10⁻¹²)), and where R_L(Z₀ − R_L) = X_L², the root → 0, where it came out with the wrong sign.
+  Where disc lies within a factor 2 of |X_L| the root is now N/(Z₀(X_L ± disc)), N = R_L(Z₀ − R_L) − X_L² from exact
+  TwoProduct parts on power-of-two-scaled inputs: within 2 ulps of the exact root on all 3,775 golden rows that take
+  it, where Rust's was up to 8.7·10¹⁸ ulps off. The band, the other root, d and ℓ keep Rust's chain. Cost: about
+  0.3 µs on a load in the region; `rf/single_stub_match` (a real load) 1.90 → 1.91 µs (`port-parity.md` §82).
 
 ### Performance
 

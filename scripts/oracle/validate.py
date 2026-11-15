@@ -27,6 +27,7 @@ agrees and the generated files are current, 1 otherwise. Copied in spirit from i
 """
 
 import ctypes
+import decimal
 import json
 import math
 import os
@@ -5619,8 +5620,103 @@ def rf_insertion(P, g):
     return [("f", -10.0 * P["log10"](1.0 - g * g))]
 
 
-def rf_stub(P, zr, zi, z0):
-    """single_stub_match_complex: [d₁, ℓ₁, d₂, ℓ₂] sorted by d, or an error's tokens."""
+RF_2M480 = 2.0 ** -480
+
+
+def k_two_prod(a, b):
+    """src/crmath_k.cyr's _bj_k_two_prod, operation for operation (Dekker's TwoProduct, Veltkamp's split)."""
+    p = a * b
+    ca = 134217729.0 * a
+    ah = ca - (ca - a)
+    al = a - ah
+    cb = 134217729.0 * b
+    bh = cb - (cb - b)
+    bl = b - bh
+    return p, (al * bl) - (((p - (ah * bh)) - (al * bh)) - (ah * bl))
+
+
+def fast_two_sum(a, b):
+    s = a + b
+    return s, b - (s - a)
+
+
+def g_grow(ex, b):
+    """src/crmath_gamma.cyr's _bj_g_grow: Shewchuk's Grow-Expansion with zero elimination."""
+    q, out = b, []
+    for e in ex:
+        ss = q + e
+        bb = ss - q
+        hh = (q - (ss - bb)) + (e - bb)
+        if hh != 0.0:
+            out.append(hh)
+        q = ss
+    if q != 0.0:
+        out.append(q)
+    return out
+
+
+def g_compress(ex):
+    """src/crmath_gamma.cyr's _bj_g_compress: Shewchuk's Compress, then its top two components renormalised."""
+    k = len(ex)
+    g = [0.0] * 16
+    q0, bottom = ex[k - 1], k - 1
+    for i in range(k - 2, -1, -1):
+        s, r = fast_two_sum(q0, ex[i])
+        if r != 0.0:
+            g[bottom] = s
+            bottom -= 1
+            q0 = r
+        else:
+            q0 = s
+    g[bottom] = q0
+    q1, rs = g[bottom], []
+    for m in range(bottom + 1, k):
+        s2, r2 = fast_two_sum(g[m], q1)
+        if r2 != 0.0:
+            rs.append(r2)
+        q1 = s2
+    return fast_two_sum(q1, rs[-1] if rs else 0.0)
+
+
+def rf_stub_root(rl, xl, z0, disc):
+    """src/rf.cyr's _bj_rf_stub_root (ADR 0002 row 39): the cancelling root N/(Z₀(X_L ± disc)),
+    N = R_L(Z₀ − R_L) − X_L² from TwoProduct's parts in one expansion, on inputs scaled into max(Z₀, |X_L|) ∈ [1, 2);
+    NaN to keep Rust's."""
+    ax = abs(xl)
+    if xl > 0.0:
+        if 2.0 * disc < xl or disc > 2.0 * xl:
+            return math.nan
+    elif xl == 0.0 or 2.0 * disc < ax or disc > 2.0 * ax:
+        return math.nan
+    m = max(z0, ax)
+    be = (f_to_bits(m) >> 52) & 2047
+    if be < 1 or be > 2045:
+        return math.nan
+    s = struct.unpack("<d", struct.pack("<Q", (2046 - be) << 52))[0]
+    r, z, x, d = rl * s, z0 * s, xl * s, disc * s
+    if r < RF_2M480 or z < RF_2M480 or abs(x) < RF_2M480:
+        return math.nan
+    (a1, b1), (a2, b2), (a3, b3) = k_two_prod(r, z), k_two_prod(r, r), k_two_prod(x, x)
+    ex = []
+    for part in (a1, -a2, -a3, b1, -b2, -b3):
+        ex = g_grow(ex, part)
+    n = g_compress(ex)[0] if ex else 0.0
+    w = x - d if xl < 0.0 else x + d
+    return n / (z * w)
+
+
+def rf_stub_exact(rl, xl, z0):
+    """The two roots (X_L ± disc)/(R_L − Z₀) to 200 digits, as Decimals: the accuracy check's reference."""
+    with decimal.localcontext() as ctx:
+        ctx.prec = 200
+        r, x, z = decimal.Decimal(rl), decimal.Decimal(xl), decimal.Decimal(z0)
+        disc = (r * ((z - r) ** 2 + x * x) / z).sqrt()
+        return (x + disc) / (r - z), (x - disc) / (r - z)
+
+
+def rf_stub(P, zr, zi, z0, port=False):
+    """single_stub_match_complex: [d₁, ℓ₁, d₂, ℓ₂] sorted by d, or an error's tokens. port: the cancelling
+    root without its cancellation (ADR 0002 row 39)."""
     if not (math.isfinite(z0) and z0 > 0.0):
         return ip_err(f"Z₀ must be finite and positive, got {rust_display(z0)}")
     if not rf_fin(zr, zi):
@@ -5637,7 +5733,14 @@ def rf_stub(P, zr, zi, z0):
         d1, d2 = d_from_t(fdiv(-xl, 2.0 * z0)), 0.25
     else:
         disc = fsqrt(fdiv(rl * ((z0 - rl) * (z0 - rl) + xl * xl), z0))
-        d1, d2 = d_from_t(fdiv(xl + disc, rl - z0)), d_from_t(fdiv(xl - disc, rl - z0))
+        ta, tb = fdiv(xl + disc, rl - z0), fdiv(xl - disc, rl - z0)
+        tc = rf_stub_root(rl, xl, z0, disc) if port else math.nan
+        if not math.isnan(tc):
+            if xl > 0.0:
+                tb = tc
+            else:
+                ta = tc
+        d1, d2 = d_from_t(ta), d_from_t(tb)
     y0 = fdiv(1.0, z0)
     sols = []
     for d in (d1, d2):
@@ -5667,8 +5770,9 @@ def rf_linear(P, n, d, k, beta, theta) -> float:
     return abs(fdiv(s_n, nf * s_h))
 
 
-def rf_eval(fn, v, P):
-    """rf.rs's outputs for a row on the primitives P (M4 part 1a). None for another name."""
+def rf_eval(fn, v, P, port=False):
+    """rf.rs's outputs for a row on the primitives P (M4 part 1a). None for another name. port: the port's where ADR
+    0002 changes them (row 39, the stub match's cancelling root)."""
     if fn in ("rf::characteristic_impedance_lossless", "rf::phase_velocity"):
         l, c = v
         if not (math.isfinite(l) and l > 0.0 and math.isfinite(c) and c > 0.0):
@@ -5762,7 +5866,7 @@ def rf_eval(fn, v, P):
         out = rf_stub(P, zl, 0.0, z0)
         return out if out[0][0] != "f" else out[:2]
     if fn == "rf::single_stub_match_complex":
-        return rf_stub(P, *v)
+        return rf_stub(P, *v, port=port)
     if fn == "rf::linear_array_factor":
         return [("f", rf_linear(P, *v))]
     if fn == "rf::planar_array_factor":
@@ -6225,9 +6329,15 @@ def rf_write_eval(P, ins: str, port=False):
 def rf_adr_rows(path: Path) -> list:
     """ADR 0002 mappings for rf.tsv: row 37 where an infinite Z₀, which Rust's z0_equal accepts as equal to the first
     port's or the file's R (∞ ≤ 10⁻¹²·∞), is refused by the port's (M4 parts 1b, 1c-2). A writer's mapping takes the
-    corrected oracle's primitives, as its outputs then would."""
+    corrected oracle's primitives, as its outputs then would. Row 39 where the stub match's cancelling root, taken
+    without its cancellation, moves a (d, ℓ) (M4 part 2a-1), on the corrected primitives too."""
     out = []
-    for fn, _cls, ins, outs, _v in sc_lines(path):
+    for fn, _cls, ins, outs, v in sc_lines(path):
+        if fn == "rf::single_stub_match_complex":
+            rust, port = rf_eval(fn, v, RF_P_MPFR), rf_eval(fn, v, RF_P_MPFR, port=True)
+            if not toks_same(rust, port):
+                out.append((fn, ins, wire(port), "39", f"oracle {outs[:200]}; ADR 0002 row 39"))
+            continue
         toks = [parse_tok(x) for x in ins.split(" ")]
         if fn == "rf::try_write_touchstone":
             rust, port = rf_write_eval(RF_P_MPFR, ins), rf_write_eval(RF_P_MPFR, ins, port=True)
@@ -6248,6 +6358,7 @@ def validate_rf(path: Path) -> list:
     errs = check_platform(header)
     if errs:
         return errs
+    worst = [0, 0, 0]
     for n, (fn, _cls, ins, outs, v) in enumerate(sc_lines(path), 1):
         want = rf_eval(fn, v, RF_P_GLIBC)
         if want is None:
@@ -6261,7 +6372,41 @@ def validate_rf(path: Path) -> list:
             continue
         if not toks_same(want, wave_toks([parse_tok(x) for x in outs.split(" ")])):
             errs.append(f"rf row {n}: {fn}{tuple(v)} -> {wire(want)[:300]}, oracle {outs[:300]}")
+        if fn == "rf::single_stub_match_complex":
+            errs += rf_stub_accuracy(n, *v, worst)
+    print(f"     rf: the stub match's cancellation-free root (ADR 0002 row 39) on {worst[1]} rows, within "
+          f"{worst[0]} ulp of the exact root; Rust's root within {worst[2]}")
     return errs
+
+
+def rf_stub_accuracy(n, rl, xl, z0, worst) -> list:
+    """The port's cancelling root within RF_STUB_ULPS ulps of the exact one, Rust's measured beside it (worst: the
+    port's largest distance, the rows counted, Rust's largest)."""
+    if not (rf_fin(rl, xl) and math.isfinite(z0) and z0 > 0.0 and rl > 0.0) or abs(rl - z0) <= 1e-12 * z0:
+        return []
+    disc = fsqrt(fdiv(rl * ((z0 - rl) * (z0 - rl) + xl * xl), z0))
+    tc = rf_stub_root(rl, xl, z0, disc)
+    if math.isnan(tc):
+        return []
+    k = 1 if xl > 0.0 else 0
+    rust = fdiv(xl - disc, rl - z0) if k else fdiv(xl + disc, rl - z0)
+    ref = float(rf_stub_exact(rl, xl, z0)[k])
+    got, had = ulp_gap(tc, ref), ulp_gap(rust, ref)
+    worst[0], worst[1], worst[2] = max(worst[0], got), worst[1] + 1, max(worst[2], had)
+    if got > RF_STUB_ULPS:
+        return [f"rf row {n}: the stub root for ({rl!r}, {xl!r}, {z0!r}) is {got} ulps from the exact {ref!r}"]
+    return []
+
+
+RF_STUB_ULPS = 4
+
+
+def ulp_gap(a: float, b: float) -> int:
+    """The number of doubles between a and b (0 when equal; the two signs' zeros are one value)."""
+    def key(x):
+        w = f_to_bits(x)
+        return -(w & ~(1 << 63)) if w >> 63 else w
+    return abs(key(a) - key(b))
 
 
 def rf_corrections(path: Path):
@@ -6272,6 +6417,8 @@ def rf_corrections(path: Path):
             if cls != "C":
                 continue
             want = rf_eval(fn, v, RF_P_MPFR)
+            if fn == "rf::single_stub_match_complex" and not toks_same(want, rf_eval(fn, v, RF_P_MPFR, port=True)):
+                continue                                    # row 39's: rf.adr.tsv maps it
             if fn == "rf::parse_touchstone":
                 want = rf_parse_touchstone(path.parents[2], RF_P_MPFR, tok_text(v[0]), v[1] & RF_U64)
             if fn == "rf::try_write_touchstone":

@@ -4799,3 +4799,50 @@ Part 1c runs as two bites: 1c-1 the reader, 1c-2 the writer (Rust's `{:e}` form)
   `wave.tsv` 22.0 MB.
 - **Result, every target** (x86_64 ELF, x86_64 PE, aarch64): validate.py 609,123 rows, 0 problems; **17 modules,
   0 failing; 529,386 ok, 79,737 accepted**, all 416 digests equal on all three. The gate is clean.
+
+## 82. M4 part 2a-1: the stub match's cancellation-free root (2026-11-15)
+
+M4's Part 2, the range-edge review, runs on the user's answers of 2026-11-15 (plan §0.1): 2a the answers (2a-1 the
+stub's root, 2a-2 the cascade, 2a-3 S → Z), 2b round once, 2c the exact thresholds, 2d the range edges.
+
+- **The finding**: `single_stub_match_complex` takes t = (X_L ± disc)/(R_L − Z₀), disc = √(R_L((Z₀ − R_L)² +
+  X_L²)/Z₀), and one root cancels wherever disc ≈ |X_L| (X_L − disc for X_L > 0, X_L + disc for X_L < 0). That is
+  so in two places: as R_L → Z₀ (outside the 10⁻¹²·Z₀ band the root keeps about 2^-53·Z₀/|R_L − Z₀| of itself:
+  2.4·10⁻⁵ relative at R_L = Z₀(1 + 2·10⁻¹²)), and where R_L(Z₀ − R_L) = X_L², where the root → 0 and Rust's came
+  out with the wrong sign or orders of magnitude off.
+- **ADR 0002 row 39** (`src/rf.cyr`'s `_bj_rf_stub_root`): where disc lies within a factor 2 of |X_L| (the
+  difference's cancelling range; Rust's root is within an ulp or two outside it), the cancelling root is
+  N/(Z₀(X_L ± disc)) with N = R_L(Z₀ − R_L) − X_L², the same value, since X_L² − disc² = −(R_L − Z₀)(X_L² +
+  R_L(R_L − Z₀))/Z₀. Its denominator adds like signs. N would cancel too near the root's zero, so it is R_L·Z₀ − R_L²
+  − X_L² from TwoProduct's exact parts (`_bj_k_two_prod`), grown into one expansion (`_bj_g_grow`), compressed and
+  rounded (`_bj_g_compress`), on the inputs scaled by the power of two that brings max(Z₀, |X_L|) into [1, 2): exact,
+  and the root is scale-free. In the region R_L ≤ 4·Z₀, so the scaled values lie in [2^-480, 8] (every TwoProduct
+  exact) unless one falls below 2^-480; there, and for max(Z₀, |X_L|) outside [2^-1022, 2^1023), Rust's chain stays.
+  disc itself is Rust's, so its range edges (inner over- or underflowing) are part 2d's.
+- **The grid**: 6,179 rows appended to `rf.tsv` (19,899; the earlier body an exact prefix): R_L = Z₀(1 ± ρ) for ρ
+  from 10⁻¹ to 1.5·10⁻¹² on nine Z₀ (50, 75, 1, 10⁻³, 10⁶, 3·2^-400, 2^400, 10¹⁵⁰, 10⁻¹⁵⁰) against X_L = ±Z₀·10^k,
+  k from −11 to 6; the loads where R_L(Z₀ − R_L) = X_L² ulp by ulp and at relative offsets from 10⁻¹ to 10⁻¹⁵, with
+  five exact zeros (N = 0, d = +0); R_L/Z₀ at 2^-479, 2^-480 and 2^-481 (the guard); 600 seeded loads.
+- **validate.py** transcribes the port's chain (`rf_stub_root`: TwoProduct, Grow-Expansion and Compress operation for
+  operation) and maps **2,911 rows** to row 39 in `rf.adr.tsv` (18 of them part 1a's seeded loads), on MPFR's atan
+  and atan2. It also checks the root against the exact one (200 digits) on every row that takes it: **3,775 rows,
+  within 2 ulps**; Rust's root was up to 8.7·10¹⁸ ulps off on them. `rf.cr.tsv` gains one row (glibc's atan2
+  misrounding on a new row).
+- **Tests**: `tests/rf.tcyr`'s `cyrius_stub_root` (5 assertions, 210 in all): both signs of X_L near R_L = Z₀, the root
+  just past the band (−0.30000000000113747, Rust's −0.3), an exact zero of N, and the band's limit unchanged.
+- **Benchmarks**: the twin `rf/single_stub_match` (a real load, which never takes the new root) 1.90 → 1.91 µs. An
+  interleaved A/B against HEAD (three rounds, load 1.15 to 1.45, another repo's tests running) left every row unchanged
+  (median ratio 1.00 over 91 rows, all within ±4 % but `material/curie_weiss`'s 7 → 8 ns). A one-off probe of a complex
+  load in the region, Z_L = 50.0000005 + j30 on 50 Ω: 43.4 µs, HEAD's 43.1 µs, so the root costs about 0.3 µs.
+- **A finding, for the record** (not this bite's): that load costs 43 µs because its d₁ ≈ λ/4 puts the input
+  impedance's βl within 10⁻⁸ of π/2, where `src/crmath.cyr`'s sin and cos leave their fast path: about 20 µs each and
+  41 µs for `_bj_sin_cos`, against 150 to 200 ns elsewhere. Measured on this tree: π/2 − 10⁻⁶ takes 188 ns, π/2 −
+  10⁻⁸, π/2 − 10⁻¹⁰, the double π/2 and π − 10⁻⁸ take 41.2 µs, 10⁻⁸ takes 169 ns. RF hits that band often: every
+  matched stub's d = λ/4 (the band's second solution) and every quarter-wave line. A faster correctly rounded path near
+  the nonzero multiples of π/2 (the reduction there needs about 2^-60 more of π/2; CORE-MATH's sin and cos do it in
+  double-double) would pay off across rf.
+- **Result, every target** (x86_64 ELF, x86_64 PE, aarch64): **17 modules, 0 failing; 532,653 ok, 0 failed, 0
+  measured, 0 pending, 82,649 accepted (ADR 01: 30,859; ADR 0002: 51,790)** over 615,302 rows; **all 416 digests
+  equal**, HEAD's unchanged but `rf::single_stub_match_complex`'s (its new rows). `rf.tcyr` passes on all three
+  (210). The gate is clean (no warnings; execution coverage 323 of 323 functions); validate.py 615,302 rows, 0
+  problems.

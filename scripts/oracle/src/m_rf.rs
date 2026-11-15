@@ -26,6 +26,11 @@
 //! M4 part 1c-2 appends `try_write_touchstone`: its inputs are the data (as `parse_touchstone`'s outputs) and the
 //! format (`i:` 0 MagnitudeAngle, 1 RealImag, 2 DbAngle, the port's enum), its output the text (`s:`) or the error.
 //! Class C: MA and DB write √(re² + im²), atan2 in degrees and, for DB, log10.
+//!
+//! M4 part 2a-1 appends the stub match's cancellation edges (ADR 0002 row 39): R_L approaching Z₀ from 10⁻¹ to the
+//! 10⁻¹²·Z₀ band on both sides, against reactances from 10⁻¹¹·Z₀ to 10⁶·Z₀ of both signs; the loads where
+//! R_L(Z₀ − R_L) = X_L², ulp by ulp and at relative offsets, with their exact zeros; the scaled guard's 2^-480 on
+//! either side; and seeded loads in both regimes.
 
 use crate::grids::{Rng, specials};
 use crate::m_field::res_f;
@@ -654,8 +659,73 @@ pub fn emit() -> Module {
     emit_1b(r, &mut rng);
     emit_1c1(r, &mut rng);
     emit_1c2(r, &mut rng);
+    emit_2a1(r, &mut rng);
 
     rows.m
+}
+
+/// M4 part 2a-1: the loads where the stub match's root (X_L ∓ disc)/(R_L − Z₀) cancels, so ADR 0002 row 39 maps
+/// them: R_L → Z₀ (disc → |X_L|) and R_L(Z₀ − R_L) → X_L² (the root → 0).
+fn emit_2a1(r: &mut Rows, rng: &mut Rng) {
+    let z0s = [50.0, 75.0, 1.0, 1e-3, 1e6, 3.0 * 2f64.powi(-400), 2f64.powi(400), 1e150, 1e-150];
+    let rels = [1e-1, 1e-2, 1e-3, 1e-4, 1e-5, 1e-6, 1e-7, 1e-8, 1e-9, 1e-10, 1e-11, 3e-12, 1.5e-12];
+    let xs = [1e-11, 1e-9, 1e-6, 1e-3, 0.1, 1.0, 10.0, 1e3, 1e6];
+    for &z0 in &z0s {
+        for &rel in &rels {
+            for sr in [1.0, -1.0] {
+                let rl = z0 * (1.0 + sr * rel);
+                for &x in &xs {
+                    r.stub_complex((rl, z0 * x), z0);
+                    r.stub_complex((rl, -z0 * x), z0);
+                }
+            }
+        }
+    }
+    // R_L(Z₀ − R_L) = X_L²: exact zeros, then ulp neighbours and relative offsets of the root's X_L.
+    let zeros = [(25.0, 25.0, 50.0), (10.0, 20.0, 50.0), (40.0, 20.0, 50.0), (0.5, 0.5, 1.0), (18.0, 24.0, 50.0)];
+    for &(rl, x, z0) in &zeros {
+        for &xv in &around(x, 4) {
+            r.stub_complex((rl, xv), z0);
+            r.stub_complex((rl, -xv), z0);
+        }
+    }
+    for &z0 in &[50.0_f64, 1.0, 1e5, 1e-4] {
+        for &frac in &[0.001, 0.01, 0.1, 0.25, 0.5, 0.75, 0.9, 0.99] {
+            let rl = z0 * frac;
+            let x0 = (rl * (z0 - rl)).sqrt();
+            for &xv in &around(x0, 2) {
+                r.stub_complex((rl, xv), z0);
+                r.stub_complex((rl, -xv), z0);
+            }
+            for k in [-1.0, -3.0, -6.0, -9.0, -12.0, -15.0] {
+                for s in [1.0, -1.0] {
+                    let xv = x0 * (1.0 + s * 10f64.powf(k));
+                    r.stub_complex((rl, xv), z0);
+                    r.stub_complex((rl, -xv), z0);
+                }
+            }
+        }
+    }
+    // The scaled guard: R_L/Z₀ at 2^-479 (the cancellation-free root) and 2^-481 (Rust's chain), X_L = √(R_L·Z₀).
+    for e in [-479, -480, -481] {
+        let rl = 2f64.powi(e);
+        r.stub_complex((rl, rl.sqrt()), 1.0);
+        r.stub_complex((rl, -rl.sqrt()), 1.0);
+        r.stub_complex((rl * 50.0, (rl * 50.0 * 50.0).sqrt()), 50.0);
+    }
+    for _ in 0..400 {
+        let z0 = rng.log_uniform(-3.0, 6.0);
+        let rl = z0 * (1.0 + rng.signed_log_uniform(-11.9, -0.3));
+        let x = z0 * rng.signed_log_uniform(-6.0, 4.0);
+        r.stub_complex((rl, x), z0);
+    }
+    for _ in 0..200 {
+        let z0 = rng.log_uniform(-3.0, 6.0);
+        let rl = z0 * rng.uniform(0.001, 0.999);
+        let x = (rl * (z0 - rl)).sqrt() * (1.0 + rng.signed_log_uniform(-15.0, -1.0));
+        r.stub_complex((rl, x), z0);
+        r.stub_complex((rl, -x), z0);
+    }
 }
 
 // ── M4 part 1b: the S-parameter matrices ─────────────────────────────────────────────────────────────────────────

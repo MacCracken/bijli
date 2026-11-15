@@ -30,6 +30,8 @@ var _BJ_RF_MIN_NORMAL: f64 = 0x0010000000000000;
 var _BJ_RF_MAX_FINITE: f64 = 0x7FEFFFFFFFFFFFFF;
 var _BJ_RF_INF: f64 = 0x7FF0000000000000;
 var _BJ_RF_NAN: f64 = 0x7FF8000000000000;
+# 2^-480: the stub match's cancellation-free root (ADR 0002 row 39) needs its scaled inputs at or above it.
+var _BJ_RF_2M480: f64 = 0x21F0000000000000;
 
 # ── internal helpers ────────────────────────────────────────────────────────────────────────────────────────────
 
@@ -450,10 +452,79 @@ fn _bj_rf_d_from_t(t: f64): f64 {
     return p;
 }
 
+# The stub match's cancelling root without its cancellation (ADR 0002 row 39, M4 part 2a-1), or NaN to keep Rust's.
+# For X_L > 0 the root (X_L − disc)/(R_L − Z₀), for X_L < 0 the root (X_L + disc)/(R_L − Z₀), cancels where disc lies
+# within a factor 2 of |X_L|: as R_L → Z₀, and as R_L(Z₀ − R_L) → X_L² (the root → 0). Since
+# X_L² − disc² = −(R_L − Z₀)(X_L² + R_L(R_L − Z₀))/Z₀, the same root is N/(Z₀(X_L ± disc)), N = R_L(Z₀ − R_L) − X_L²,
+# whose denominator adds like signs. N is R_L·Z₀ − R_L² − X_L² from TwoProduct's exact parts grown into one expansion
+# (src/crmath_gamma.cyr), compressed and rounded, on the inputs scaled by the power of two that brings
+# max(Z₀, |X_L|) into [1, 2) (exact, and the root is scale-free). In the region R_L ≤ 4·Z₀, so the scaled values lie
+# in [2^-480, 8] unless one is below 2^-480: there, and for max(Z₀, |X_L|) outside [2^-1022, 2^1023), NaN (Rust's
+# chain). The root is within a few ulps of the exact one (validate.py checks every golden row).
+#must_use
+fn _bj_rf_stub_root(rl: f64, xl: f64, z0: f64, disc: f64): f64 {
+    var ax: f64 = f64_abs(xl);
+    if (xl > 0.0) {
+        var lo: f64 = 2.0 * disc;
+        var hi: f64 = 2.0 * xl;
+        if (lo < xl || disc > hi) { return _BJ_RF_NAN; }
+    } else {
+        if (xl == 0.0) { return _BJ_RF_NAN; }
+        var lo2: f64 = 2.0 * disc;
+        var hi2: f64 = 2.0 * ax;
+        if (lo2 < ax || disc > hi2) { return _BJ_RF_NAN; }
+    }
+    var m: f64 = z0;
+    if (ax > m) { m = ax; }
+    var be = (_bj_bits(m) >> 52) & 2047;
+    if (be < 1 || be > 2045) { return _BJ_RF_NAN; }
+    var s: f64 = _bj_from_bits((2046 - be) << 52);
+    var r: f64 = rl * s;
+    var z: f64 = z0 * s;
+    var x: f64 = xl * s;
+    var d: f64 = disc * s;
+    var axs: f64 = f64_abs(x);
+    if (r < _BJ_RF_2M480 || z < _BJ_RF_2M480 || axs < _BJ_RF_2M480) { return _BJ_RF_NAN; }
+    var p1, e1 = _bj_k_two_prod(r, z);
+    var p2, e2 = _bj_k_two_prod(r, r);
+    var p3, e3 = _bj_k_two_prod(x, x);
+    var a1: f64 = p1;
+    var b1: f64 = e1;
+    var a2: f64 = p2;
+    var b2: f64 = e2;
+    var a3: f64 = p3;
+    var b3: f64 = e3;
+    var parts: f64[6];
+    parts[0] = a1;
+    parts[1] = -a2;
+    parts[2] = -a3;
+    parts[3] = b1;
+    parts[4] = -b2;
+    parts[5] = -b3;
+    var ex: f64[6];
+    var k = 0;
+    for (var i = 0; i < 6; i = i + 1) {
+        var pv: f64 = parts[i];
+        k = _bj_g_grow(&ex, k, pv);
+    }
+    var n: f64 = 0.0;
+    if (k > 0) {
+        var h, l = _bj_g_compress(&ex, k);
+        var hv: f64 = h;
+        n = hv;
+    }
+    var w: f64 = x + d;
+    if (xl < 0.0) { w = x - d; }
+    var den: f64 = z * w;
+    var root: f64 = n / den;
+    return root;
+}
+
 # The single shunt short-circuited stub match of a complex load (Pozar §5.2, eqs. 5.9–5.11): both (d, ℓ) solutions in
 # wavelengths, sorted by increasing d, into out[0] = d₁, out[1] = ℓ₁, out[2] = d₂, out[3] = ℓ₂: Ok(0), or Err with out
-# untouched. With Z_L = R_L + jX_L and t = tan βd: t = [X_L ± √(R_L((Z₀ − R_L)² + X_L²)/Z₀)]/(R_L − Z₀), or, when
-# |R_L − Z₀| ≤ 10⁻¹²·Z₀, t = −X_L/(2Z₀) and the t → ∞ solution d = λ/4. The stub cancels the line's susceptance B
+# untouched. With Z_L = R_L + jX_L and t = tan βd: t = [X_L ± √(R_L((Z₀ − R_L)² + X_L²)/Z₀)]/(R_L − Z₀), the root
+# that cancels taken without its cancellation (_bj_rf_stub_root, ADR 0002 row 39), or, when |R_L − Z₀| ≤ 10⁻¹²·Z₀,
+# t = −X_L/(2Z₀) and the t → ∞ solution d = λ/4. The stub cancels the line's susceptance B
 # there: ℓ/λ = atan2(Y₀, B)/2π ∈ (0, ½). InvalidParameter unless z0 is finite and positive and z_load is finite with
 # R_L > 0 (a lossless stub can't match a purely reactive or an active load). Mirrors `rf::single_stub_match_complex`.
 #must_use
@@ -480,6 +551,10 @@ public fn bj_single_stub_match_complex(z_load: BjComplex, z0: f64, out: *f64): R
         var disc: f64 = f64_sqrt(inner);
         var ta: f64 = (xl + disc) / df;
         var tb: f64 = (xl - disc) / df;
+        var tc: f64 = _bj_rf_stub_root(rl, xl, z0, disc);
+        if (tc == tc) {
+            if (xl > 0.0) { tb = tc; } else { ta = tc; }
+        }
         d1 = _bj_rf_d_from_t(ta);
         d2 = _bj_rf_d_from_t(tb);
     }
