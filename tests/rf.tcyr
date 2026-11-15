@@ -11,8 +11,8 @@
 # the S-parameter reasons and the heap; (2a-1) ADR 0002 row 39, the stub match's cancellation-free root; (2a-2) row
 # 17, the cascade's star product rounded once and its exact T22 test; (2a-3) row 17, S → Z rounded once; (2b) row
 # 13, round once; (2c) row 17, the exact thresholds; (2d-1 to 2d-3a) row 18, the input impedance's, the lossy Z₀'s,
-# γ's, the reflection coefficients', the Smith chart's, (2d-3b) the stub match's and (2d-4a) the Touchstone
-# reader's range edges.
+# γ's, the reflection coefficients', the Smith chart's, (2d-3b) the stub match's and (2d-4a, 2d-4b) the
+# Touchstone reader's and writer's range edges.
 # tests/golden/rf.tsv pins every function over its grid against Rust besides.
 
 include "tests/lib.cyr"
@@ -809,6 +809,46 @@ fn cyrius_smith_edges(): i64 {
     var mx: f64 = _bj_from_bits(0x7FEFFFFFFFFFFFFF);
     var z: BjComplex = bj_gamma_from_z(BjComplex_new(mx, mx));
     assert(z.re == 1.0 && same(z.im, 0.0) == 1, "Γ of z = DBL_MAX(1 + j) is 1 (Rust's Smith d overflowed: NaN)");
+    return 0;
+}
+
+# A 1-port's single entry re + j·im at 1 GHz, R 50, written in the format: 1 when its record line is want (a C
+# string), 2 when the writer refuses it, 0 otherwise.
+fn ts_write1(re: f64, im: f64, format, want): i64 {
+    var d: BjTouchstoneData;
+    var code: i64[1];
+    if (ts_new(1, 50.0, 1, &d) != 0) { return 0; }
+    var r = 0;
+    if (ts_setf(&d, 0, 1000000000.0) + sset(d.matrix_at(0), 1, 1, BjComplex_new(re, im)) == 0) {
+        var txt = ts_write(&d, format, &code);
+        if (txt == 0 && code[0] == BJ_ERR_INVALID_PARAMETER) { r = 2; }
+        if (txt != 0 && str_has(txt, want) == 1) { r = 1; }
+    }
+    BjTouchstoneData_free(&d);
+    return r;
+}
+
+# ADR 0002 row 18 (M4 part 2d-4b): the Touchstone writer's |S|, its dB and arg S with an unbounded exponent at their
+# range edges. The values are validate.py's model's.
+fn cyrius_touchstone_write_edges(): i64 {
+    test_group("cyrius_touchstone_write_edges");
+    var m: f64 = _bj_from_bits(0x7FEFFFFFFFFFFFFF);
+    var e160: f64 = _bj_from_bits(0x6126C2D4256FFCC3);
+    var em200: f64 = _bj_from_bits(0x16687E92154EF7AC);
+    var em300: f64 = _bj_from_bits(0x01A56E1FC2F8F359);
+    var e300: f64 = _bj_from_bits(0x7E37E43C8800759C);
+    assert(ts_write1(m, m, BJ_TOUCHSTONE_FORMAT_DB_ANGLE, "\n1e0  6.168104611154975e3  4.5e1\n") == 1,
+      "DBL_MAX(1 + j) in DB: |S| past DBL_MAX, 6168.1 dB (Rust refused it)");
+    assert(ts_write1(m, m, BJ_TOUCHSTONE_FORMAT_MAGNITUDE_ANGLE, "") == 2, "the same in MA: |S| not representable");
+    assert(ts_write1(e160, 0.0, BJ_TOUCHSTONE_FORMAT_MAGNITUDE_ANGLE, "\n1e0  1e160  0e0\n") == 1,
+      "10¹⁶⁰ in MA: re² past DBL_MAX (Rust refused it)");
+    assert(ts_write1(em200, 0.0, BJ_TOUCHSTONE_FORMAT_MAGNITUDE_ANGLE, "\n1e0  1e-200  0e0\n") == 1,
+      "10⁻²⁰⁰ in MA: re² below 2^-1074 (Rust wrote 0)");
+    assert(ts_write1(em300, em300, BJ_TOUCHSTONE_FORMAT_DB_ANGLE, "\n1e0  -5.99698970004336e3  4.5e1\n") == 1,
+      "10⁻³⁰⁰(1 + j) in DB: −5997 dB (Rust clamped |S| to 2^-1022: −6153.05 dB)");
+    var w6 = "\n1e0  1e300  5.729577951308234e-309\n";
+    var a6 = ts_write1(e300, 0.0000000001, BJ_TOUCHSTONE_FORMAT_MAGNITUDE_ANGLE, w6);
+    assert(a6 == 1, "arg S = 10⁻³¹⁰ kept to 53 bits (Rust: 5.729577951308214e-309)");
     return 0;
 }
 
@@ -1693,8 +1733,18 @@ fn cyrius_touchstone_write(): i64 {
     sset(d.matrix_at(1), 2, 2, BjComplex_new(big, 1.0));
     var sb2 = str_builder_new();
     var t2, v2 = bj_try_write_touchstone(&d, BJ_TOUCHSTONE_FORMAT_DB_ANGLE, sb2);
-    var w2 = cat(cat("invalid parameter: S-parameter ", ten_pow(200)), "+1i cannot be written in DbAngle format");
-    assert(is_err_result(t2) == 1 && reason_is2(w2, "") == 1, "|S|² = 10⁴⁰⁰ past DBL_MAX: not writable in DB");
+    var db2 = str_builder_build(sb2);
+    assert(is_ok(t2) == 1 && str_has(db2, "  4e3  5.729577951308232e-199\n") == 1,
+      "|S|² = 10⁴⁰⁰ past DBL_MAX: 4000 dB in DB (ADR 0002 row 18; Rust refused it)");
+    var huge: f64 = _bj_from_bits(0x7FEAB36D48E1ACF0);
+    sset(d.matrix_at(1), 2, 2, BjComplex_new(huge, huge));
+    var sb2b = str_builder_new();
+    var t2b, v2b = bj_try_write_touchstone(&d, BJ_TOUCHSTONE_FORMAT_MAGNITUDE_ANGLE, sb2b);
+    var h15 = cat("15", ten_pow(307) + 1);
+    var w2 = cat(cat(cat(cat("invalid parameter: S-parameter ", h15), "+"), h15),
+      "i cannot be written in MagnitudeAngle format");
+    assert(is_err_result(t2b) == 1 && reason_is2(w2, "") == 1, "|S| = 2.1·10³⁰⁸ past DBL_MAX: not writable in MA");
+    sset(d.matrix_at(1), 2, 2, BjComplex_new(big, 1.0));
     var sb3 = str_builder_new();
     var t3, v3 = bj_try_write_touchstone(&d, BJ_TOUCHSTONE_FORMAT_REAL_IMAG, sb3);
     assert(is_ok(t3) == 1, "RI writes it");
@@ -1730,7 +1780,7 @@ fn cyrius_touchstone_write(): i64 {
     assert(bad == 0 && w0 != 0, "2000 writes into one builder");
     assert_eq(_fl_arena_pos, fl0, "the text's buffer is freed: the freelist's arena did not grow");
     BjTouchstoneData_free(&d);
-    if (v2 == 7 || v3 == 7) { println("."); }
+    if (v2 == 7 || v2b == 7 || v3 == 7) { println("."); }
     return 0;
 }
 
@@ -1750,6 +1800,7 @@ fn main(): i64 {
     cyrius_smith_edges();
     cyrius_stub_edges();
     cyrius_touchstone_read_edges();
+    cyrius_touchstone_write_edges();
     rust_tests_d();
     cyrius_smatrix();
     cyrius_cascade_exact();

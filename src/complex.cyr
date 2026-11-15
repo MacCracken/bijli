@@ -65,9 +65,9 @@ fn _bj_cx_ok(x: f64): i64 {
 }
 
 # 1 when hisab's chain on x and y is the unbounded one (both components in range), or must stay hisab's (one not
-# finite); 0 at a range edge.
+# finite); 0 at a range edge. Public for src/touchstone.cyr's writer.
 #must_use
-fn _bj_cx_plain(x: f64, y: f64): i64 {
+public fn _bj_cx_plain(x: f64, y: f64): i64 {
     var ex = (load64(&x) >> 52) & 0x7FF;
     var ey = (load64(&y) >> 52) & 0x7FF;
     if (((ex - 512) | (ey - 512) | (1533 - ex) | (1533 - ey)) >= 0) { return 1; }   # the common case: one test
@@ -102,9 +102,10 @@ fn _bj_cx_ux_mul(x: f64, y: f64): (f64, i64) {
     return (s, e);
 }
 
-# x² + y², each operation with an unbounded exponent and rounded to 53 bits: (s, e).
+# x² + y², each operation with an unbounded exponent and rounded to 53 bits: (s, e). Public for src/touchstone.cyr's
+# writer.
 #must_use
-fn _bj_cx_ux_sumsq(x: f64, y: f64): (f64, i64) {
+public fn _bj_cx_ux_sumsq(x: f64, y: f64): (f64, i64) {
     var as2, ae2 = _bj_cx_ux_mul(x, x);
     var bs2, be2 = _bj_cx_ux_mul(y, y);
     var s, e = _bj_k_ux_add(as2, ae2, bs2, be2);

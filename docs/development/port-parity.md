@@ -5199,3 +5199,43 @@ below 2^-1022).
   measured, 0 pending, 90,017 accepted (ADR 01: 30,859; ADR 0002: 59,158)** over 625,689 rows; **all 416 digests
   equal**, HEAD's unchanged but `parse_touchstone`'s. `rf.tcyr` passes on all three (254). The gate is clean (no
   warnings; execution coverage 323 of 323 functions); validate.py 625,689 rows, 0 problems. Next, 2d-4b: the writer.
+
+## 92. M4 part 2d-4b: the Touchstone writer at its range edges (2026-11-15)
+
+- **The finding**: `try_write_touchstone` writes MA's (|S|, arg S°) and DB's (20·log₁₀ max(|S|, 2^-1022), arg S°)
+  with |S| = √(re² + im²) squared raw, which is BjComplex's abs without its row-14 edge. It refused 10¹⁶⁰ in MA
+  (re² past DBL_MAX) and DBL_MAX(1 + j) in DB, where |S| = 2^1024.5 has a finite 6168.1 dB; it wrote 10⁻²⁰⁰ as 0 in
+  MA and 10⁻³⁰⁰(1 + j) at DB's clamp (−6153.05 dB for −5997 dB); and an argument below 2^-1022 lost bits before its
+  product by 180/π (10³⁰⁰ + j10⁻¹⁰: 5.729577951308214·10⁻³⁰⁹° for 5.729577951308234·10⁻³⁰⁹°).
+- **ADR 0002 row 18, amended** (`src/touchstone.cyr`): Rust's chain stays inside `_bj_cx_plain`'s box (each part 0
+  or within 2^±511); elsewhere `_bj_ts_mag_ux` takes |S| as BjComplex's abs at its edge (re² + im² to 53 bits with an
+  unbounded exponent, the root rounded once). In DB an |S| whose 53-bit root reaches 2^1024 has its log₁₀ to 53 bits
+  (`_bj_ux_log10`), then Rust's 20·; below DBL_MAX the rounded |S| takes Rust's clamp, log₁₀ and 20·. Where atan2(im,
+  re) is at most 2^-1022 with im ≠ 0, `_bj_ts_deg_ux` keeps it to 53 bits (`_bj_rf_atan2_ux`: im/re there) and
+  rounds its product by 180/π once. MA still refuses an |S| past DBL_MAX; DB now writes every finite entry.
+  `_bj_cx_plain`, `_bj_cx_ux_sumsq` and `_bj_rf_atan2_ux` are public for the writer, as `_bj_rf_require` is.
+- **log₁₀ with an unbounded exponent** (`src/crmath_ux.cyr`): `_bj_ux_log10(s, E)` multiplies `_bj_ux_log_fx`'s
+  |ln(s·2^E)| (364-bit fixed point) by 1/ln 10 (`_bj_ux_ivln10`, 14 limbs in `src/crmath_ux_data.cyr`) and rounds
+  once. The constant is generated: crtables.py computes ln 10 = 6·atanh(1/3) + 2·atanh(1/9) to 1,024 bits, validate.py
+  checks it against MPFR's (`mpfr_ref.log_bits`), and render_ux writes the truncated reciprocal. `cr_verify.py`'s
+  `ux_log10` family: 100,000 arguments (half of them in the writer's binade, s·2^1024 with s < √2) equal to MPFR's
+  widest-range log10 on x86_64 and aarch64.
+- **The grid**: 428 rows appended to `rf.tsv` (30,714), all `try_write_touchstone` in MA and DB: |S| past DBL_MAX in
+  each quadrant, squares past DBL_MAX or below 2^-1022 with |S| in range, subnormal parts, the box's 2^±510 to 2^±513,
+  arguments at most 2^-1022 with the knife edge of atan2 = 2^-1022 and of degrees = 2^-1022, a 2-port and a 3-port
+  mixing them, and 150 seeded entries.
+- **validate.py** models the writer's pair (`rf_ts_pair_ux`) under `RF18`. `rf.adr.tsv` maps **213 write rows** to
+  row 18 (10,508 in all), all passing: **165** were refusals in Rust, 48 had their text change, 18 of them on 1c-2's
+  edge grid. One corrected-oracle row, a 2-port in DB with an entry of 10⁻¹⁷⁰ (−3,400 dB, which Rust's underflowed
+  square put at the clamp), is now a row-18 mapping: `rf.cr.tsv` 86 rows.
+- **Tests**: `tests/rf.tcyr`'s `cyrius_touchstone_write_edges` (6 assertions) and `cyrius_touchstone_write_reasons`
+  amended: 10²⁰⁰ + j writes 4,000 dB, where it pinned Rust's refusal, and the refusal text is pinned on an |S| past
+  DBL_MAX in MA (261 in all).
+- **Benchmarks** (a focused interleaved A/B against HEAD, six rounds at load 2.9 to 3.8 with other repos' jobs and a
+  core dump running): `rf/write_touchstone_s2p_201` medians 4.22 → 4.24 ms in MA and 5.26 → 5.29 ms in DB, within
+  the noise; the guard is one exponent test per entry and one compare per argument.
+- **Result, every target** (x86_64 ELF, x86_64 PE, aarch64): **17 modules, 0 failing; 535,888 ok, 0 failed, 0
+  measured, 0 pending, 90,229 accepted (ADR 01: 30,858; ADR 0002: 59,371)** over 626,117 rows; **all 416 digests
+  equal**, HEAD's unchanged but `try_write_touchstone`'s. `rf.tcyr` passes on all three (261). The gate is clean (no
+  warnings; execution coverage 323 of 323 functions); validate.py 626,117 rows, 0 problems. **2d-4 is done.** Next,
+  2d-5: the array factors' ψ past DBL_MAX.

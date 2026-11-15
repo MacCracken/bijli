@@ -903,24 +903,66 @@ fn _bj_ts_validate(d: *BjTouchstoneData): i64 {
     return 0;
 }
 
+# MA's |S| or DB's 20·log₁₀ max(|S|, 2^-1022) for an entry whose squares leave the normal range (ADR 0002 row 18, M4
+# part 2d-4b): |S| as BjComplex's abs at its edge (row 14: re² + im² to 53 bits with an unbounded exponent, the root
+# rounded once); in DB past DBL_MAX, log₁₀ of the 53-bit |S| (src/crmath_ux.cyr), then Rust's 20·.
+fn _bj_ts_mag_ux(re: f64, im: f64, format): f64 {
+    var us, ue = _bj_cx_ux_sumsq(re, im);
+    if (format == BJ_TOUCHSTONE_FORMAT_DB_ANGLE) {
+        var ms, me = _bj_k_ux_sqrt(us, ue);
+        if (me >= 1024) {
+            var lu: f64 = _bj_ux_log10(ms, me);
+            var du: f64 = 20.0 * lu;
+            return du;
+        }
+    }
+    var nrm: f64 = _bj_k_ux_sqrt_f64(us, ue);
+    if (format == BJ_TOUCHSTONE_FORMAT_DB_ANGLE) {
+        if (nrm < _BJ_TS_MIN_NORMAL) { nrm = _BJ_TS_MIN_NORMAL; }
+        var lg: f64 = _bj_log10(nrm);
+        var db: f64 = 20.0 * lg;
+        return db;
+    }
+    return nrm;
+}
+
+# arg S in degrees where atan2(im, re) is at most 2^-1022 and im ≠ 0 (ADR 0002 row 18, M4 part 2d-4b): the angle to 53
+# bits with an unbounded exponent (src/rf.cyr's _bj_rf_atan2_ux: im/re itself there), its product by 180/π rounded
+# once.
+fn _bj_ts_deg_ux(re: f64, im: f64): f64 {
+    var ys, ye = _bj_k_ux_from(im);
+    var xs, xe = _bj_k_ux_from(re);
+    var gs, ge = _bj_rf_atan2_ux(ys, ye, xs, xe);
+    var ds, de = _bj_k_ux_from(_BJ_DEGS_PER_RAD);
+    var r: f64 = _bj_k_ux_mul_f64(gs, ge, ds, de);
+    return r;
+}
+
 # Writes the pair "  {v1:e}  {v2:e}" of the entry re + j·im in the format: (re, im) for RI; for MA (|S|, arg S in
 # degrees) and for DB (20 log₁₀ max(|S|, MIN_POSITIVE), arg S in degrees), |S| = √(re² + im²) and arg S = atan2(im,
-# re) as hisab's. 0, or InvalidParameter "S-parameter {S} cannot be written in {format:?} format" recorded when either
-# value isn't finite (|S|² past DBL_MAX). Mirrors rf.rs's `push_touchstone_pair` and `format_complex_pair`.
+# re) as hisab's. Where re² or im² leaves the normal range, |S| is BjComplex's abs at its edge and DB's logarithm takes
+# an |S| past DBL_MAX; where arg S is at most 2^-1022, it is kept to 53 bits for its degrees (ADR 0002 row 18, M4
+# part 2d-4b). 0, or InvalidParameter "S-parameter {S} cannot be written in {format:?} format" recorded when either
+# value isn't finite (MA's |S| past DBL_MAX). Mirrors rf.rs's `push_touchstone_pair` and `format_complex_pair`.
 fn _bj_ts_pair(t, re: f64, im: f64, format): i64 {
     var v1: f64 = re;
     var v2: f64 = im;
     if (format != BJ_TOUCHSTONE_FORMAT_REAL_IMAG) {
-        var nrm: f64 = f64_sqrt(re * re + im * im);
-        v1 = nrm;
-        if (format == BJ_TOUCHSTONE_FORMAT_DB_ANGLE) {
-            var mn: f64 = _bj_from_bits(0x0010000000000000);
-            if (nrm < mn) { nrm = mn; }
-            var lg: f64 = _bj_log10(nrm);
-            v1 = 20.0 * lg;
+        if (_bj_cx_plain(re, im) == 1) {
+            var nrm: f64 = f64_sqrt(re * re + im * im);
+            v1 = nrm;
+            if (format == BJ_TOUCHSTONE_FORMAT_DB_ANGLE) {
+                if (nrm < _BJ_TS_MIN_NORMAL) { nrm = _BJ_TS_MIN_NORMAL; }
+                var lg: f64 = _bj_log10(nrm);
+                v1 = 20.0 * lg;
+            }
+        } else {
+            v1 = _bj_ts_mag_ux(re, im, format);
         }
         var g: f64 = _bj_atan2(im, re);
         v2 = _bj_to_degrees(g);
+        var ag: f64 = f64_abs(g);
+        if (ag <= _BJ_TS_MIN_NORMAL && im != 0.0) { v2 = _bj_ts_deg_ux(re, im); }
     }
     if (_bj_is_finite(v1) == 0 || _bj_is_finite(v2) == 0) {
         var u = _bj_err_reason(BJ_ERR_INVALID_PARAMETER);

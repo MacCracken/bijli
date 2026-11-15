@@ -409,13 +409,16 @@ def check_tables(root: Path) -> list:
     utext = crtables.render_ux()
     if crtables.pi_bits(crtables.UX_PREC) != mpfr_ref.const_bits("pi", crtables.UX_PREC):
         errs.append(f"crtables: π to {crtables.UX_PREC} bits (crmath_ux_data's 2/π) differs from MPFR's")
+    if crtables.ln10_bits(crtables.UX_LN10_PREC) != mpfr_ref.log_bits(10, crtables.UX_LN10_PREC):
+        errs.append(f"crtables: ln 10 to {crtables.UX_LN10_PREC} bits (crmath_ux_data's 1/ln 10) differs from MPFR's")
     if WRITE:
         upath.write_text(utext)
         print(f"wrote src/crmath_ux_data.cyr ({len(utext.splitlines())} lines)")
     elif not upath.exists() or upath.read_text() != utext:
         errs.append("src/crmath_ux_data.cyr is not crtables.py's render_ux output (regenerate with --write)")
     else:
-        print(f"ok   crmath_ux_data: 2/π from π to {crtables.UX_PREC} bits, equal to MPFR's")
+        print(f"ok   crmath_ux_data: 2/π from π to {crtables.UX_PREC} bits and 1/ln 10 from ln 10 to "
+              f"{crtables.UX_LN10_PREC}, equal to MPFR's")
     kpath = root / "src/crmath_k_data.cyr"
     ktext = crtables_k.render()
     if WRITE:
@@ -6595,6 +6598,8 @@ def rf_write_touchstone(P, d, fmt, port=False):
     def pair(re, im):
         if fmt == 1:
             v1, v2 = re, im
+        elif RF18["on"]:
+            v1, v2 = rf_ts_pair_ux(P, re, im, fmt)
         else:
             nrm = cx_abs(re, im)
             v1 = nrm if fmt == 0 else 20.0 * P["log10"](rf_fmax(nrm, 2.2250738585072014e-308))
@@ -6625,6 +6630,24 @@ def rf_write_touchstone(P, d, fmt, port=False):
                         return bad
         out.append("\n")
     return [("s", "".join(out))]
+
+
+def rf_ts_pair_ux(P, re, im, fmt):
+    """A written entry's (|S| or its dB, arg S in degrees) with an unbounded exponent (row 18, M4 part 2d-4b): |S| as
+    complex abs's (re² + im² to 53 bits, the root rounded once), DB's log₁₀ of the 53-bit |S| past DBL_MAX (MPFR's
+    widest range) and of max(|S|, 2^-1022) below it, arg S to 53 bits, its degrees rounded once."""
+    ident = lambda t: t                                # noqa: E731
+    ss = ux_sumsq(re, im)
+    if fmt == 0:
+        v1 = ux_fin_sqrt(ss)
+    else:
+        mag = ux_sqrt(ss)
+        if mag[0] >= Fraction(2) ** 1024:
+            v1 = 20.0 * float(wv("log10", mag[0])[0])
+        else:
+            v1 = 20.0 * P["log10"](rf_fmax(ux_fin_sqrt(ss), 2.2250738585072014e-308))
+    g = ux_atan2(ux(im), ux(re))
+    return v1, ux_fin(ux_mul(g, ux(TO_DEGREES), ident))
 
 
 def rf_write_eval(P, ins: str, port=False):
@@ -6673,8 +6696,8 @@ def rf_adr_rows(path: Path) -> list:
     stub match's cancelling root, taken without its cancellation, moves a (d, ℓ) (M4 part 2a-1); row 17 where the
     cascade's star product (2a-2) or S → Z (2a-3) rounded once with its threshold exact, or the exact tests of M4 part
     2c (|Z_L + Z₀|, |S21|, the stub's band, z0_equal), change a row; row 18 where a chain with an unbounded exponent
-    does (M4 part 2d; the Touchstone reader's pairs from 2d-4a). A row takes the first of its rows that accounts for
-    its whole change."""
+    does (M4 part 2d; the Touchstone reader's pairs from 2d-4a, the writer's from 2d-4b). A row takes the first of its
+    rows that accounts for its whole change."""
     out, root = [], path.parents[2]
     for fn, _cls, ins, outs, v in sc_lines(path):
         rust = rf_eval17(False, lambda: rf_any_eval(fn, ins, v, False, root))

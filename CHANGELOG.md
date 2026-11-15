@@ -359,6 +359,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
 - **Cyrius port, M4 part 2d-4a — the Touchstone reader at its range edges** (`src/touchstone.cyr`): an MA or DB pair
   runs with an unbounded exponent where 10^(v₁/20) or θ leaves the normal range (ADR 0002 row 18 amended, see Fixed).
   2d-4 runs as 2d-4a (the reader) and 2d-4b (the writer). `rf.tsv` grows by 904 edge rows (30,286).
+- **Cyrius port, M4 part 2d-4b — the Touchstone writer at its range edges** (`src/touchstone.cyr`,
+  `src/crmath_ux.cyr`): |S| through BjComplex's abs at its edge, DB's log₁₀ of an |S| past DBL_MAX, arg S below
+  2^-1022 kept to 53 bits (ADR 0002 row 18 amended, see Fixed); a correctly rounded log₁₀ with an unbounded exponent
+  (`_bj_ux_log10`, on a generated 1/ln 10 checked against MPFR; `cr_verify.py`'s ux_log10 family). `rf.tsv` grows by
+  428 edge rows (30,714).
 
 ### Fixed
 
@@ -800,6 +805,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
   im 1.7453292519952424·10⁻³⁰² for 1.745329251994324·10⁻³⁰²). Such a pair now runs with an unbounded exponent, each
   product rounded once. Cost (load 3.6): within the noise, `rf/parse_touchstone_s2p_201` (MA) 568–584 µs at HEAD
   against 572–593 µs, the same file in DB 1.17–1.19 ms against 1.18–1.21 ms (`port-parity.md` §91).
+- **rf** (ADR 0002 row 18 amended, M4 part 2d-4b): `try_write_touchstone` squared an entry's parts raw, so it refused
+  10¹⁶⁰ in MA and DBL_MAX(1 + j) in DB (6168.1 dB) as not writable, wrote 10⁻²⁰⁰ as 0 in MA and 10⁻³⁰⁰(1 + j) at DB's
+  clamp (−6153.05 dB for −5997 dB), and lost bits of an argument below 2^-1022. |S| is now BjComplex's abs at its
+  edge, DB takes the logarithm of an |S| past DBL_MAX, and such an argument is kept to 53 bits; MA still refuses an
+  |S| past DBL_MAX. Cost (six interleaved rounds at load 2.9–3.8, other repos' jobs running): within the noise,
+  `rf/write_touchstone_s2p_201` medians 4.22 → 4.24 ms in MA and 5.26 → 5.29 ms in DB (`port-parity.md` §92).
 
 ### Performance
 

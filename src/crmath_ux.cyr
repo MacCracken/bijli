@@ -1,5 +1,6 @@
-# crmath_ux.cyr — e^x, cosh, sinh, ln(s·2^E), (s·2^E)^y, and sin and cos past DBL_MAX, each with an unbounded
-# exponent (bijli, M1 part 5c-2), for BjComplex's transcendental range edges (ADR 0002 row 16).
+# crmath_ux.cyr — e^x, cosh, sinh, ln(s·2^E), log₁₀(s·2^E), (s·2^E)^y, and sin and cos past DBL_MAX, each with an
+# unbounded exponent (bijli, M1 part 5c-2; log₁₀ M4 part 2d-4b), for BjComplex's transcendental range edges (ADR 0002
+# row 16) and the other modules' (row 18).
 #
 # At a range edge hisab's chain runs with an unbounded exponent (the user's decision of 2026-11-12, ADR 0002 rows 14 and
 # 16): every operation rounded to 53 bits, the last one once into binary64. The transcendental operations of that chain
@@ -244,6 +245,19 @@ fn _bj_ux_log_fx(L, s: f64, ex): i64 {
 fn _bj_ux_ln(s: f64, ex): f64 {
     var L[112];
     var sg = _bj_ux_log_fx(&L, s, ex);
+    var r: f64 = _bj_cr_round(&L, 0, sg);
+    return r;
+}
+
+# log₁₀(s·2^E), correctly rounded into binary64, for a positive normal double s and |E| < 2^26 (M4 part 2d-4b, the
+# Touchstone writer's dB past DBL_MAX): |ln| in fixed point times 1/ln 10 (src/crmath_ux_data.cyr, generated), rounded
+# once. The product's error stays below 2^-350 absolute, as ln's; the rounding needs no test for the section
+# comment's reason (log₁₀ of a rational other than a power of ten is transcendental, and 10^k's logarithm k is exact).
+#must_use
+fn _bj_ux_log10(s: f64, ex): f64 {
+    var L[112];
+    var sg = _bj_ux_log_fx(&L, s, ex);
+    _bj_cr_mul(&L, &L, &_bj_ux_ivln10);
     var r: f64 = _bj_cr_round(&L, 0, sg);
     return r;
 }

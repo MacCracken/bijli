@@ -60,6 +60,9 @@
 //!
 //! M4 part 2d-4a appends the Touchstone reader's range edges (row 18): DB magnitudes whose 10^(v/20) passes DBL_MAX or
 //! falls below 2^-1022, angles whose v·π/180 falls below 2^-1022, each with its knife edges, and seeded files.
+//!
+//! M4 part 2d-4b appends the Touchstone writer's range edges (row 18): entries whose squares leave the range, |S| past
+//! DBL_MAX in DB, arguments at most 2^-1022, the plain box's edges, and seeded entries.
 
 use crate::grids::{Edge2, Rng, knife_edge, knife_edge2, specials};
 use crate::m_field::res_f;
@@ -704,6 +707,7 @@ pub fn emit() -> Module {
     emit_2d3a(r, &mut rng);
     emit_2d3b(r, &mut rng);
     emit_2d4a(r, &mut rng);
+    emit_2d4b(r, &mut rng);
 
     rows.m
 }
@@ -756,6 +760,49 @@ fn emit_2d4a(r: &mut Rows, rng: &mut Rng) {
         one(r, "DB", v1, v2);
         let w2 = rng.signed_log_uniform(-323.0, -300.0);
         one(r, "MA", rng.log_uniform(-300.0, 308.0), w2);
+    }
+}
+
+/// M4 part 2d-4b: the Touchstone writer at its range edges (ADR 0002 row 18), each entry in MA and DB: |S| past
+/// DBL_MAX (DB writes it, MA refuses it), squares past DBL_MAX or below 2^-1022 with |S| in range, subnormal entries
+/// (DB's clamp), the 2^±511 box of the plain chain, arguments whose atan2 is at most 2^-1022 with its knife edge, a
+/// 2-port and a 3-port mixing them, and seeded entries.
+fn emit_2d4b(r: &mut Rows, rng: &mut Rng) {
+    let m = f64::MAX;
+    let one = |r: &mut Rows, e: (f64, f64)| {
+        let d = ts_data(1, 50.0, &[1e9], move |_, _| e, |_, _| 50.0);
+        r.write(&d, 0);
+        r.write(&d, 2);
+    };
+    let mut es = vec![
+        (m, m), (m, m / 2.0), (0.8 * m, 0.7 * m), (m, 0.0), (0.0, -m), (-m, m), (m, -m), (-m, -m), (-m, 0.0),
+        (0.75 * m, 0.75 * m), (0.7 * m, 0.7 * m), (1e200, 1e200), (1e160, 0.0), (1.3e154, 1.3e154), (1e300, -1e300),
+        (1e-200, 0.0), (1e-200, 1e-200), (1e-170, 3e-170), (5e-324, 0.0), (0.0, -5e-324), (1e-310, 1e-310),
+        (1e-300, 1e-300), (-1e-300, 2e-300), (1e-160, 1e-160), (1.0, 1e-200), (1e-200, 1.0),
+        (1.0, 1e-310), (1.0, 5e-324), (1.0, -1e-310), (1e10, 1e-300), (1e300, 1e-10), (1e300, 1e-30), (1e300, -1e-20),
+        (-1.0, 1e-310), (-1.0, -5e-324), (1e-300, 1e-320), (m, 1.0), (m, 1e-300),
+    ];
+    for k in 510..=513 {
+        let p = 2f64.powi(k);
+        es.extend([(p, 0.0), (p, p), (1.0 / p, 0.0), (1.0 / p, 1.0 / p), (0.5, p), (0.5, 1.0 / p)]);
+    }
+    for x in around(2f64.powi(-1022), 2) {
+        es.push((1.0, x));
+        es.push((1.0, x * (PI / 180.0)));
+    }
+    for &e in &es {
+        one(r, e);
+    }
+    let mix = [(m, m), (1e-200, 0.0), (1.0, 1e-310), (0.5, 0.25)];
+    let two = ts_data(2, 50.0, &[1e9], move |_, q| mix[q], |_, _| 50.0);
+    r.write(&two, 0);
+    r.write(&two, 2);
+    let three = ts_data(3, 50.0, &[1e9, 2e9], move |k, q| if q == 4 { (m, -m) } else { mix[(q + k) % 4] }, |_, _| 50.0);
+    r.write(&three, 0);
+    r.write(&three, 2);
+    for _ in 0..150 {
+        let e = (rng.signed_log_uniform(-320.0, 308.0), rng.signed_log_uniform(-320.0, 308.0));
+        one(r, e);
     }
 }
 

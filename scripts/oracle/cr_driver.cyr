@@ -398,6 +398,7 @@ fn _call(fp, fl, w): i64 {
     elif (_is(fp, fl, "ux_sub") == 1) { r = _bj_k_ux_sub_f64(x, load64(w + 8), _wf(w, 2), load64(w + 24)); }
     elif (_is(fp, fl, "ux_sqrt") == 1) { r = _bj_k_ux_sqrt_f64(x, load64(w + 8)); }
     elif (_is(fp, fl, "ux_ln") == 1) { r = _bj_ux_ln(x, load64(w + 8)); }
+    elif (_is(fp, fl, "ux_log10") == 1) { r = _bj_ux_log10(x, load64(w + 8)); }
     elif (_is(fp, fl, "ux_sin") == 1) { r = _bj_ux_sin_cos(x, load64(w + 8), 1); }
     elif (_is(fp, fl, "ux_cos") == 1) { r = _bj_ux_sin_cos(x, load64(w + 8), 0); }
     elif (_is(fp, fl, "ux_exp") == 1) {

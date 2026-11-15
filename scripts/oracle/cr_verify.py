@@ -446,6 +446,10 @@ def ux_families(rng, count):
         v = Fraction(s1) * Fraction(2) ** e1
         lv = W("log", v)
         calls.append(("ux_ln", [s1, e1], f2b(float(lv))))
+        # ux_log10 (M4 part 2d-4b): the same arguments, and the Touchstone writer's |S| just past DBL_MAX.
+        calls.append(("ux_log10", [s1, e1], f2b(float(W("log10", v)))))
+        s2 = rng.uniform(1.0, 1.4142135623730951)
+        calls.append(("ux_log10", [s2, 1024], f2b(float(W("log10", Fraction(s2) * Fraction(2) ** 1024)))))
     exact_y = [1.0, 2.0, -1.0, -2.0, 0.5, 1.5, 0.25, -0.5, 3.0, 0.75, -1.5, 1.25]
     i = 0
     while i < count:
@@ -560,7 +564,7 @@ EXACT = ["mono"] + list(SHAPES) + ["sqrt_div", "wsqrt", "sqrt_mono", "sqrt_mono_
          "cascade_slow", "s2z", "s2z_slow", "dot4", "jcdot", "jint", "jnorm",
          "jover", "sjones", "sdop", "sellip", "sorient", "rsig", "rq", "rphase", "rang", "bspot", "bpeak", "broc",
          "bgouy", "bci", "bdot2", "bw0", "bgp", "bfsr", "bhg", "blg", "bhgf"]
-UX = ["ux_exp", "ux_exp_w", "ux_exp_big", "ux_cosh", "ux_sinh", "ux_ln", "ux_pow", "ux_sin", "ux_cos"]
+UX = ["ux_exp", "ux_exp_w", "ux_exp_big", "ux_cosh", "ux_sinh", "ux_ln", "ux_log10", "ux_pow", "ux_sin", "ux_cos"]
 
 
 # ── the correctly rounded Lorentz factor (src/crmath_gamma.cyr, M2's range-edge Part, ADR 0002 row 30) ───────────────

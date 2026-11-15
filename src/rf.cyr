@@ -1520,9 +1520,9 @@ fn _bj_rf_cdiv_ux(v: *f64, ve: *i64, q: *f64, qe: *i64, fin) {
 # matter, so ±1 stands for the other. With exponents within 1000 of each other both scale by one power of two into
 # doubles, whose correctly rounded atan2 is normal. Further apart: |y/x| < 2^-999 gives y/x itself for x > 0 (atan t
 # lies within t³/3 of t, and a quotient of two 53-bit values is never a 54-bit midpoint, so both round alike) and
-# ±π for x < 0 (π − t rounds to π); |x/y| < 2^-999 gives ±π/2, y's sign.
+# ±π for x < 0 (π − t rounds to π); |x/y| < 2^-999 gives ±π/2, y's sign. Public for src/touchstone.cyr's writer.
 #must_use
-fn _bj_rf_atan2_ux(ys: f64, ye, xs: f64, xe): (f64, i64) {
+public fn _bj_rf_atan2_ux(ys: f64, ye, xs: f64, xe): (f64, i64) {
     if (ys == 0.0 || xs == 0.0) {
         var yy: f64 = ys;
         var xx: f64 = xs;

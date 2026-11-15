@@ -118,6 +118,23 @@ def const_bits(name, n):
     return mant << shift if shift >= 0 else mant >> -shift
 
 
+def log_bits(x, n):
+    """floor(ln x · 2^n) for an integer x ≥ 2, as a Python int: MPFR's log at n + 64 bits, rounded toward zero, read
+    back exactly in hexadecimal (M4 part 2d-4b: crtables' ln 10)."""
+    v = (ctypes.c_byte * 32)()
+    _m.mpfr_init2(ctypes.byref(v), n + 64)
+    _m.mpfr_set_ui(ctypes.byref(v), ctypes.c_ulong(x), _RNDZ)
+    _m.mpfr_log(ctypes.byref(v), ctypes.byref(v), _RNDZ)
+    e = ctypes.c_long(0)
+    sp = _m.mpfr_get_str(None, ctypes.byref(e), 16, 0, ctypes.byref(v), _RNDZ)
+    digits = ctypes.cast(sp, ctypes.c_char_p).value.decode()
+    _m.mpfr_free_str(sp)
+    _m.mpfr_clear(ctypes.byref(v))
+    mant = int(digits, 16)
+    shift = n + 4 * (e.value - len(digits))
+    return mant << shift if shift >= 0 else mant >> -shift
+
+
 # ── bijli's own: 53 bits with MPFR's widest exponent range (M1 part 5c-2, ADR 0002 row 16) ──────────────────
 _m.mpfr_get_emin_min.restype = ctypes.c_long
 _m.mpfr_get_emax_max.restype = ctypes.c_long
