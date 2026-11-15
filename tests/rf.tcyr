@@ -9,7 +9,7 @@
 # signed zeros, the stub match's sort and its matched branch, and usize::MAX elements; (1b) ADR 0002 row 36 (BjSMatrix's
 # shape fixed at construction: test_smatrix_inconsistent_does_not_panic is n/a), row 37 (z0_equal on finite values),
 # the S-parameter reasons and the heap; (2a-1) ADR 0002 row 39, the stub match's cancellation-free root; (2a-2) row
-# 17, the cascade's star product rounded once and its exact T22 test.
+# 17, the cascade's star product rounded once and its exact T22 test; (2a-3) row 17, S → Z rounded once.
 # tests/golden/rf.tsv pins every function over its grid against Rust besides.
 
 include "tests/lib.cyr"
@@ -612,6 +612,55 @@ fn cyrius_cascade_exact(): i64 {
         sset(&a, 1, 1, BjComplex_new(big, 0.0));
         var t5, v5 = a.cascade(&a, &c);
         if (is_ok(t5) == 1) { BjSMatrix_free(&c); }
+        BjSMatrix_free(&a);
+    }
+    assert_eq(_fl_arena_pos, fl0, "the freelist's arena did not grow over 20 exact paths");
+    assert_eq(alloc_used(), bump0, "nothing on the bump heap");
+    return 0;
+}
+
+# ADR 0002 row 17 (M4 part 2a-3): S → Z with each part rounded once from the exact value, and |det(I − S)|² < 10⁻⁶⁰
+# decided exactly. The values are validate.py's exact model's; Rust's are in the messages.
+fn cyrius_s_to_z_exact(): i64 {
+    test_group("cyrius_s_to_z_exact");
+    var a: BjSMatrix;
+    var z: BjComplex[4];
+    var zp: *f64 = &z;
+    tp_real(0.1, 0.9, 0.9, 0.1, 50.0, &a);
+    var t1, v1 = bj_s_to_z(&a, &z);
+    var big: f64 = -1801439850948198400.0;
+    assert(is_ok(t1) == 1 && zp[0] == big && zp[2] == big && zp[4] == big && zp[6] == big && zp[1] == 0.0,
+      "the bench network: its exact det is −5.0·10⁻¹⁷, Z = −1.8·10¹⁸ (Rust's rounded det cancelled to 0: refused)");
+    BjSMatrix_free(&a);
+    # A near-thru: S11 = −S22 = (2^-31, j2^-32), S12 = 1, S21 = 1 − 2^-31 + j2^-32.
+    var e1: f64 = 0.0000000004656612873077392578125;
+    var e2: f64 = 0.00000000023283064365386962890625;
+    tp_real(0.0, 1.0, 0.9999999995343387126922607421875, 0.0, 50.0, &a);
+    sset(&a, 1, 1, BjComplex_new(e1, e2));
+    sset(&a, 2, 1, BjComplex_new(0.9999999995343387126922607421875, e2));
+    sset(&a, 2, 2, BjComplex_new(-e1, e2));
+    var t2, v2 = bj_s_to_z(&a, &z);
+    assert(is_ok(t2) == 1 && zp[0] == 66076419927.51479 && zp[1] == 99114629973.9645 && zp[6] == 66076419865.97633,
+      "det ≈ 2^-31: Z11 and Z22 rounded once (Rust's Z11 66076419942.3077, 2.2·10⁻¹⁰ off)");
+    BjSMatrix_free(&a);
+    tp_real(0.0, 1.0, 1.0, 0.0, 50.0, &a);
+    zp[0] = 7.0;
+    var t3, v3 = bj_s_to_z(&a, &z);
+    assert(err_is(t3, v3, BJ_ERR_DIVISION_BY_ZERO, "division by zero in EM calculation: singular S→Z conversion") == 1
+      && zp[0] == 7.0, "an ideal thru: det = 0 exactly, refused, out untouched");
+    BjSMatrix_free(&a);
+    tp_real(0.0, 0.0, 0.0, 0.0, 50.0, &a);
+    var t4, v4 = bj_s_to_z(&a, &z);
+    assert(is_ok(t4) == 1 && zp[0] == 50.0 && same(zp[1], 0.0) == 1 && same(zp[2], 0.0) == 1 && zp[6] == 50.0,
+      "a matched 2-port: Z = Z₀·I, its zeros Rust's +0");
+    BjSMatrix_free(&a);
+    var fl0 = _fl_arena_pos;
+    var bump0 = alloc_used();
+    var huge: f64 = _bj_from_bits(0x4788000000000000);
+    for (var k = 0; k < 20; k = k + 1) {
+        tp_real(0.1, 0.5, 0.5, 0.2, 50.0, &a);
+        sset(&a, 1, 2, BjComplex_new(huge, 0.0));
+        var t5, v5 = bj_s_to_z(&a, &z);
         BjSMatrix_free(&a);
     }
     assert_eq(_fl_arena_pos, fl0, "the freelist's arena did not grow over 20 exact paths");
@@ -1482,6 +1531,7 @@ fn main(): i64 {
     rust_tests_d();
     cyrius_smatrix();
     cyrius_cascade_exact();
+    cyrius_s_to_z_exact();
     rust_tests_e();
     cyrius_touchstone();
     rust_tests_f();

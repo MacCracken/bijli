@@ -557,7 +557,7 @@ EXACT = ["mono"] + list(SHAPES) + ["sqrt_div", "wsqrt", "sqrt_mono", "sqrt_mono_
          "par_rep", "par_rep_x", "par_rep_slow", "lw_nb", "lw_nb_slow", "lw_reff_ux", "vx_sqrt", "vx_sqrt_e",
          "vx_gamma", "lwo_reff", "lwo_reff_slow", "lwo_kappa", "lwo_kappa_slow", "lwo_nb", "lwo_nb_slow", "lwo_ux",
          "gammao", "gammao_slow", "gammao2", "gammao2_slow", "sumsq", "sumsq_exact", "abcd", "abcd_slow", "cascade",
-         "cascade_slow", "dot4", "jcdot", "jint", "jnorm",
+         "cascade_slow", "s2z", "s2z_slow", "dot4", "jcdot", "jint", "jnorm",
          "jover", "sjones", "sdop", "sellip", "sorient", "rsig", "rq", "rphase", "rang", "bspot", "bpeak", "broc",
          "bgouy", "bci", "bdot2", "bw0", "bgp", "bfsr", "bhg", "blg", "bhgf"]
 UX = ["ux_exp", "ux_exp_w", "ux_exp_big", "ux_cosh", "ux_sinh", "ux_ln", "ux_pow", "ux_sin", "ux_cos"]
@@ -1541,6 +1541,99 @@ def cascade_families(rng, count):
         for part in range(9):
             out.append(("cascade", v + [part], ref[part]))
             out.append(("cascade_slow", v + [part], ref[part]))
+    return out
+
+
+# ── M4's S → Z conversion (src/crmath_edge.cyr, M4 part 2a-3, ADR 0002 row 17 amended) ────────────────────────────
+def s2z_ref(v):
+    """The eight parts of Z = Z₀(I + S)(I − S)⁻¹ for S = v[0:8] (S11, S12, S21, S22 as (re, im)) and Z₀ = v[8], each RN
+    of the exact value, then the return (1 + 4·m, bit k of m set where part k is exactly 0); the refused marker and 0
+    when |det(I − S)|² < 10^-60."""
+    f = [Fraction(x) for x in v]
+    a, b, c, d = [(f[2 * k], f[2 * k + 1]) for k in range(4)]
+    z0 = f[8]
+    ad, bc = _cmul(a, d), _cmul(b, c)
+    det = (1 - a[0] - d[0] + ad[0] - bc[0], -a[1] - d[1] + ad[1] - bc[1])
+    den = det[0] ** 2 + det[1] ** 2
+    if 10 ** 60 * den < 1:
+        return [CASC_REFUSED] * 8 + [0]
+    zeros = []
+
+    def quot(n):
+        nr = z0 * (n[0] * det[0] + n[1] * det[1])
+        ni = z0 * (n[1] * det[0] - n[0] * det[1])
+        zeros.extend([nr == 0, ni == 0])
+        return [f2b(0.0 if nr == 0 else rn_frac(nr / den)), f2b(0.0 if ni == 0 else rn_frac(ni / den))]
+    n11 = (1 + a[0] - d[0] - ad[0] + bc[0], a[1] - d[1] - ad[1] + bc[1])
+    n22 = (1 - a[0] + d[0] - ad[0] + bc[0], -a[1] + d[1] - ad[1] + bc[1])
+    out = quot(n11) + quot((2 * b[0], 2 * b[1])) + quot((2 * c[0], 2 * c[1])) + quot(n22)
+    return out + [1 + 4 * sum(1 << k for k, z in enumerate(zeros) if z)]
+
+
+def s2z_cases(rng, count):
+    """(S11, S12, S21, S22, Z₀): passive networks; near-thrus (det → 0 to 2^-70); |det| straddling 10^-30 ulp by ulp
+    (det = (1 − S11)(1 − S22) − S21 with S11 = S22 = 1 + 2^-52·k and S12 = 1); lossless networks (Re Z ≈ 0); exact
+    zeros; the box edges at 2^±120; any finite values; subnormals."""
+    def polar(r, th):
+        return [r * math.cos(th), r * math.sin(th)]
+    out = []
+    for i in range(count):
+        mode = i % 8
+        s = sum((polar(rng.uniform(0.0, 1.0), rng.uniform(-math.pi, math.pi)) for _ in range(4)), [])
+        z0 = rng.choice([50.0, 75.0, 1.0, rng.uniform(0.1, 1000.0)])
+        if mode == 1:                                       # near-thru: S12·S21 → (1 − S11)(1 − S22)
+            k = rng.randint(0, 70)
+            e = [rng.uniform(-1, 1) * 2.0 ** -k for _ in range(4)]
+            s = [e[0], e[1], 1.0, 0.0, 1.0 - abs(e[2]), e[3], -e[0], e[1]]
+        elif mode == 2:                                     # |det| at 10^-30: P − c with P = (2^-52·k)²
+            kk = rng.randint(1, 3000)
+            pv = Fraction(kk * kk, 2 ** 104)
+            c = float(pv - Fraction(1, 10 ** 30) * rng.choice([1, -1]))
+            for _ in range(rng.randint(0, 6)):
+                c = math.nextafter(c, math.inf if rng.random() < 0.5 else -math.inf)
+            g = 1.0 + kk * 2.0 ** -52
+            s = [g, 0.0, 1.0, 0.0, c, 0.0, g, 0.0]
+        elif mode == 3:                                     # lossless: Z = jX, S from it in floats
+            x11, x12, x22 = (rng.uniform(-200, 200) for _ in range(3))
+            zz = [[complex(0, x11), complex(0, x12)], [complex(0, x12), complex(0, x22)]]
+            a = [[zz[r][q] - (z0 if r == q else 0) for q in range(2)] for r in range(2)]
+            bm = [[zz[r][q] + (z0 if r == q else 0) for q in range(2)] for r in range(2)]
+            dt = bm[0][0] * bm[1][1] - bm[0][1] * bm[1][0]
+            inv = [[bm[1][1] / dt, -bm[0][1] / dt], [-bm[1][0] / dt, bm[0][0] / dt]]
+            sm = [[sum(a[r][m] * inv[m][q] for m in range(2)) for q in range(2)] for r in range(2)]
+            s = [sm[0][0].real, sm[0][0].imag, sm[0][1].real, sm[0][1].imag, sm[1][0].real, sm[1][0].imag,
+                 sm[1][1].real, sm[1][1].imag]
+        elif mode == 4:                                     # exact zeros
+            for j in rng.sample(range(8), rng.randint(1, 6)):
+                s[j] = 0.0
+        elif mode == 5:                                     # the box edges
+            for j in rng.sample(range(9), rng.randint(1, 3)):
+                x = rng.choice([1.0, -1.0, 1.5]) * 2.0 ** rng.choice([120, -120, 121, -121, 119, -119])
+                if j == 8:
+                    z0 = abs(x)
+                else:
+                    s[j] = x
+        elif mode == 6:                                     # any finite values
+            s = [rng.choice([1.0, -1.0]) * 10.0 ** rng.uniform(-300, 300) for _ in range(8)]
+            z0 = 10.0 ** rng.uniform(-300, 300)
+        elif mode == 7:                                     # subnormal parts
+            for j in rng.sample(range(8), rng.randint(1, 4)):
+                s[j] = rng.choice([1.0, -1.0]) * 2.0 ** rng.randint(-1074, -1000)
+        v = s + [z0]
+        assert len(v) == 9
+        if all(math.isfinite(x) for x in v):
+            out.append(v)
+    return out
+
+
+def s2z_families(rng, count):
+    """s2z (the fast path, then the exact one) and s2z_slow (the exact path alone): each case's nine parts."""
+    out = []
+    for v in s2z_cases(rng, count):
+        ref = s2z_ref(v)
+        for part in range(9):
+            out.append(("s2z", v + [part], ref[part]))
+            out.append(("s2z_slow", v + [part], ref[part]))
     return out
 
 
@@ -2704,6 +2797,9 @@ def main() -> int:
                   if "exact" in names or f in names]
         crng = random.Random(0x4_2A2)
         calls += [(f, ref, ws) for f, ws, ref in cascade_families(crng, max(1, n // 50))
+                  if "exact" in names or f in names]
+        zrng = random.Random(0x4_2A3)
+        calls += [(f, ref, ws) for f, ws, ref in s2z_families(zrng, max(1, n // 50))
                   if "exact" in names or f in names]
         jrng = random.Random(0x3_2D1B)
         calls += [(f, ref, ws) for f, ws, ref in jones_families(jrng, max(1, n // 10))

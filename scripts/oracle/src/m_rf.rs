@@ -35,6 +35,9 @@
 //! M4 part 2a-2 appends the cascade's edges (ADR 0002 row 17, its star product rounded once): resonances down to
 //! A22·B11 = 1 − 2^-70, the 10^-60 threshold straddled ulp by ulp, exact zeros and thrus, a cancelling S11, the
 //! fast path's box edges at 2^±120, wide and subnormal entries, and seeded networks.
+//!
+//! M4 part 2a-3 appends S → Z's edges (row 17, rounded once): near-thrus to 2^-70, |det(I − S)| straddling 10^-30 ulp
+//! by ulp, lossless networks (Re Z ≈ 0), exact zeros, the box edges, wide and subnormal entries, seeded networks.
 
 use crate::grids::{Rng, specials};
 use crate::m_field::res_f;
@@ -665,8 +668,110 @@ pub fn emit() -> Module {
     emit_1c2(r, &mut rng);
     emit_2a1(r, &mut rng);
     emit_2a2(r, &mut rng);
+    emit_2a3(r, &mut rng);
 
     rows.m
+}
+
+/// M4 part 2a-3: S → Z with each part rounded once from the exact value and |det(I − S)|² < 10^-60 decided exactly
+/// (ADR 0002 row 17): near-thrus, |det| straddling 10^-30, lossless networks (Re Z ≈ 0), zeros, the fast path's box
+/// edges, wide and subnormal entries, seeded networks.
+fn emit_2a3(r: &mut Rows, rng: &mut Rng) {
+    let z50 = [50.0, 50.0];
+    // Near-thrus: S12 = 1, S21 = 1 − δ, S11 = −S22 = ε, to 2^-70.
+    for k in (0..=70).step_by(5) {
+        let e = 2f64.powi(-k);
+        for &(a, b) in &[(0.5, 0.25), (-0.75, 0.0), (0.0, 0.5)] {
+            r.s_to_z(&tp([(a * e, b * e), (1.0, 0.0), (1.0 - e * 0.5, b * e), (-a * e, b * e)], z50));
+        }
+    }
+    // |det| at 10^-30: S11 = S22 = 1 + k·2^-52 (so (1 − S11)(1 − S22) = k²·2^-104 exactly), S12 = 1, S21 = c within
+    // three ulps of k²·2^-104 ∓ 10^-30, on both sides of the threshold.
+    for kk in [1_i32, 2, 10, 100, 1000, 2999] {
+        let g = 1.0 + f64::from(kk) * 2f64.powi(-52);
+        let pv = f64::from(kk * kk) * 2f64.powi(-104);
+        for sgn in [1.0, -1.0] {
+            let c0 = pv - sgn * 1e-30;
+            for j in -3..=3_i64 {
+                let c = if j >= 0 { up(c0, j.unsigned_abs()) } else { down(c0, j.unsigned_abs()) };
+                r.s_to_z(&tp([(g, 0.0), (1.0, 0.0), (c, 0.0), (g, 0.0)], z50));
+            }
+        }
+    }
+    // Lossless networks: Z = jX, S = (Z − Z₀)(Z + Z₀)⁻¹ in floats, so Re Z's exact value is tiny or 0.
+    for _ in 0..40 {
+        let x = [rng.uniform(-200.0, 200.0), rng.uniform(-200.0, 200.0), rng.uniform(-200.0, 200.0)];
+        let z0 = 50.0;
+        let am = [[(-z0, x[0]), (0.0, x[1])], [(0.0, x[1]), (-z0, x[2])]];
+        let bm = [[(z0, x[0]), (0.0, x[1])], [(0.0, x[1]), (z0, x[2])]];
+        let dt = {
+            let p = cm(bm[0][0], bm[1][1]);
+            let q = cm(bm[0][1], bm[1][0]);
+            (p.0 - q.0, p.1 - q.1)
+        };
+        let inv = [
+            [cq(bm[1][1], dt), cq((-bm[0][1].0, -bm[0][1].1), dt)],
+            [cq((-bm[1][0].0, -bm[1][0].1), dt), cq(bm[0][0], dt)],
+        ];
+        let mut s = [(0.0, 0.0); 4];
+        for row in 0..2 {
+            for col in 0..2 {
+                let p = cm(am[row][0], inv[0][col]);
+                let q = cm(am[row][1], inv[1][col]);
+                s[2 * row + col] = (p.0 + q.0, p.1 + q.1);
+            }
+        }
+        r.s_to_z(&tp(s, z50));
+    }
+    // Zeros: a matched load (S = 0, Z = Z₀), an exact 0 in every position.
+    r.s_to_z(&tp([(0.0, 0.0); 4], z50));
+    let base = [(0.1, -0.05), (0.7, 0.2), (0.6, -0.3), (-0.2, 0.3)];
+    for k in 0..8 {
+        let mut s = base;
+        if k % 2 == 0 {
+            s[k / 2].0 = 0.0;
+        } else {
+            s[k / 2].1 = 0.0;
+        }
+        r.s_to_z(&tp(s, z50));
+    }
+    // The fast path's box: one part, or Z₀, at 2^±119, 2^±120 or 2^±121.
+    for e in [119, 120, 121, -119, -120, -121] {
+        let x = 1.5 * 2f64.powi(e);
+        for k in 0..8 {
+            let mut s = base;
+            if k % 2 == 0 {
+                s[k / 2].0 = x;
+            } else {
+                s[k / 2].1 = -x;
+            }
+            r.s_to_z(&tp(s, z50));
+        }
+        r.s_to_z(&tp(base, [x, x]));
+    }
+    // Wide and subnormal entries.
+    for _ in 0..60 {
+        let mut s = [(0.0, 0.0); 4];
+        for e in &mut s {
+            *e = (rng.signed_log_uniform(-300.0, 300.0), rng.signed_log_uniform(-300.0, 300.0));
+        }
+        let z = rng.log_uniform(-300.0, 300.0);
+        r.s_to_z(&tp(s, [z, z]));
+    }
+    for k in 0..8 {
+        let mut s = base;
+        let x = 2f64.powi(-1060 + 4 * i32::try_from(k).unwrap_or(0));
+        if k % 2 == 0 {
+            s[k / 2].0 = x;
+        } else {
+            s[k / 2].1 = x;
+        }
+        r.s_to_z(&tp(s, z50));
+    }
+    for _ in 0..200 {
+        let s = rand_port(rng);
+        r.s_to_z(&tp(s, z50));
+    }
 }
 
 /// (re, im) of a/b, naively: the grids' constructions only.

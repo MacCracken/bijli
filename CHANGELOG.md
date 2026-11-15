@@ -328,6 +328,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
   decided exactly (ADR 0002 row 17 amended, see Fixed). `src/crmath_edge.cyr` gains the error-bounded double-double
   helpers (`_bj_e_ed_*`) and the cascade's fast and exact paths; `cr_verify.py` the cascade and cascade_slow families
   (and its driver 24 words a call). `rf.tsv` grows by 732 edge rows (20,631); `rf.adr.tsv` maps 1,068 cascade rows.
+- **Cyrius port, M4 part 2a-3 — S → Z rounded once** (`src/rf.cyr`, `src/crmath_edge.cyr`): `bj_s_to_z` of finite
+  entries rounds each part of Z once from the exact value, its |det(I − S)|² < 10⁻⁶⁰ decided exactly (ADR 0002 row 17
+  amended, see Fixed), on the cascade's helpers (`_bj_cr_s2z`); `cr_verify.py` gains the s2z and s2z_slow families.
+  `rf.tsv` grows by 492 edge rows (21,123); `rf.adr.tsv` maps 875 `s_to_z` rows. Part 2a, the user's three answers,
+  is done.
 
 ### Fixed
 
@@ -717,6 +722,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
   and the threshold is 10⁶⁰·|D|² < |A21|²·|B21|², exactly. A part exactly 0 keeps Rust's zero where Rust's chain gives
   one; a non-finite entry keeps Rust's chain. Cost: `rf/s_cascade` 523 ns → 3.47 µs (Rust 100 ns); the exact path,
   for entries past 2^±120 or an undecided rounding, 53 to 73 µs (`port-parity.md` §83).
+- **rf** (ADR 0002 row 17 amended, M4 part 2a-3): `s_to_z` rounded det = (1 − S11)(1 − S22) − S12·S21 first, which
+  cancels toward an ideal thru: Rust's own bench network (0.1, 0.9) was refused as singular, where the doubles' exact
+  det is −5.0·10⁻¹⁷ and Z = −1.8·10¹⁸; a near-thru at det ≈ 2^-31 came out 2.2·10⁻¹⁰ off; wide entries gave ±∞ or NaN
+  for finite values. For finite entries each part of Z = Z₀(I + S)(I − S)⁻¹ is now rounded once from the exact value
+  and the threshold decided exactly; a part exactly 0 keeps Rust's zero where its chain gives one. Cost (no Rust
+  bench): a 2-port attenuator 185 ns → 3.26 µs, complex entries 181 ns → 4.97 µs (`port-parity.md` §84).
 
 ### Performance
 

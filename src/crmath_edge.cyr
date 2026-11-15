@@ -2288,10 +2288,10 @@ var _BJ_E_C_BOX_LO: f64 = 0x3870000000000000;
 var _BJ_E_C_H60: f64 = 0x3379B604AAACA626;
 var _BJ_E_C_L60: f64 = 0x300B63792F412CB0;
 
-# z := the exact sum of the n ≤ 8 doubles at t as an ed value: Grow-Expansion, then Compress (within 2^-104, so the
+# z := the exact sum of the n ≤ 16 doubles at t as an ed value: Grow-Expansion, then Compress (within 2^-104, so the
 # bound is 4.04u²·|h|). Returns 0 when h is nonzero and below 2^-900.
 fn _bj_e_ed_exact(z: *f64, t: *f64, n): i64 {
-    var ex: f64[8];
+    var ex: f64[16];
     var k = 0;
     for (var i = 0; i < n; i = i + 1) {
         var ti: f64 = t[i];
@@ -2707,5 +2707,287 @@ fn _bj_cr_cascade(v: *f64, slow, out: *f64): i64 {
         if (f >= 0) { return f; }
     }
     var g = _bj_e_casc_exact(v, out);
+    return g;
+}
+
+# ── the S → Z conversion (M4 part 2a-3, ADR 0002 row 17, the user's answer of 2026-11-15) ────────────────────────────
+#
+# Z = Z₀(I + S)(I − S)⁻¹ for a 2-port S = [[a, b], [c, d]] and a real Z₀. With det = (1 − a)(1 − d) − b·c:
+#   Z11 = Z₀·((1 + a)(1 − d) + b·c)/det,  Z12 = Z₀·2b/det,  Z21 = Z₀·2c/det,  Z22 = Z₀·((1 − a)(1 + d) + b·c)/det,
+# each part rounded once from the exact value (Z₀·N·conj(det)/|det|²), and the DivisionByZero |det|² < 10^-60 decided
+# exactly, as 10^60·|det|² < 1. Rust's rounded det cancelled as S12·S21 → (1 − S11)(1 − S22), an ideal thru's.
+#
+# The fast path, for the eight parts and Z₀ each 0 or of magnitude in [2^-120, 2^120] (the cascade's box, so every
+# nonzero exact quantity, degree 5 at most, lies in [2^-860, 2^610]): det, N11 = 1 + a − d − a·d + b·c and N22 =
+# 1 − a + d − a·d + b·c are exact expansions of the 1, the parts and TwoProduct's parts of a·d and b·c (up to 11
+# doubles each), compressed to within 2^-104, so none carries a cancellation; 2b and 2c are exact. Then the cascade's
+# ed steps: N·conj(det) (_bj_e_ed_pdc), the product by Z₀, |det|², the threshold against 10^-60, and
+# _bj_e_abcd_quot's rounding test. The exact path: signed scaled bignums from fl_calloc (a degree-5 value at most, as
+# the cascade's). cr_verify.py's s2z and s2z_slow families check both against Python's Fraction.
+
+# t[k], t[k + 1] := s·pp[2i], s·pp[2i + 1] (one TwoProduct's parts, signed).
+fn _bj_e_put2(t: *f64, k, pp: *f64, i, s: f64) {
+    var h: f64 = pp[2 * i];
+    var l: f64 = pp[2 * i + 1];
+    t[k] = s * h;
+    t[k + 1] = s * l;
+    return 0;
+}
+
+# z := one part of det, N11 or N22 as an ed value: the exact sum c + x + y + Σ sⱼ·(TwoProduct j's parts) over the
+# four products of pp indexed by q[0..4], with signs q[4..8] (±1) (_bj_e_ed_exact).
+fn _bj_e_s2z_sum(z: *f64, c: f64, x: f64, y: f64, pp: *f64, q: *i64): i64 {
+    var t: f64[11];
+    t[0] = c;
+    t[1] = x;
+    t[2] = y;
+    for (var j = 0; j < 4; j = j + 1) {
+        var qs: f64 = f64_from(q[j + 4]);
+        _bj_e_put2(&t, 3 + 2 * j, pp, q[j], qs);
+    }
+    var g = _bj_e_ed_exact(z, &t, 11);
+    return g;
+}
+
+# The fast path (the section comment) for v = (a, b, c, d as (re, im), Z₀), finite: _bj_cr_s2z's return with
+# out[0..8] set, 0 when the threshold refuses (out untouched), or −1 when the box or a test fails.
+fn _bj_e_s2z_fast(v: *f64, out: *f64): i64 {
+    var bhi: f64 = _BJ_E_C_BOX_HI;
+    var blo: f64 = _BJ_E_C_BOX_LO;
+    for (var i = 0; i < 9; i = i + 1) {
+        var m: f64 = f64_abs(v[i]);
+        if (m > bhi || (m < blo && m != 0.0)) { return 0 - 1; }
+    }
+    var ar: f64 = v[0];
+    var ai: f64 = v[1];
+    var br: f64 = v[2];
+    var bi: f64 = v[3];
+    var cr: f64 = v[4];
+    var ci: f64 = v[5];
+    var dr: f64 = v[6];
+    var di: f64 = v[7];
+    var z0: f64 = v[8];
+    # TwoProduct's parts of ar·dr, ai·di, br·cr, bi·ci (Re a·d and Re b·c), ar·di, ai·dr, br·ci, bi·cr (the Im's).
+    var pp: f64[16];
+    var w: f64[9];
+    _bj_e_ed_set_prod(&w, ar, dr);
+    pp[0] = w[0];
+    pp[1] = w[1];
+    _bj_e_ed_set_prod(&w, ai, di);
+    pp[2] = w[0];
+    pp[3] = w[1];
+    _bj_e_ed_set_prod(&w, br, cr);
+    pp[4] = w[0];
+    pp[5] = w[1];
+    _bj_e_ed_set_prod(&w, bi, ci);
+    pp[6] = w[0];
+    pp[7] = w[1];
+    _bj_e_ed_set_prod(&w, ar, di);
+    pp[8] = w[0];
+    pp[9] = w[1];
+    _bj_e_ed_set_prod(&w, ai, dr);
+    pp[10] = w[0];
+    pp[11] = w[1];
+    _bj_e_ed_set_prod(&w, br, ci);
+    pp[12] = w[0];
+    pp[13] = w[1];
+    _bj_e_ed_set_prod(&w, bi, cr);
+    pp[14] = w[0];
+    pp[15] = w[1];
+    var q: i64[8];
+    var dd: f64[6];
+    var ok = 1;
+    _bj_e_s2z_q(&q, 0, 1, 2, 3, 1, 0 - 1, 0 - 1, 1);            # Re det: 1 − ar − dr + Re ad − Re bc
+    ok = ok & _bj_e_s2z_sum(&dd, 1.0, -ar, -dr, &pp, &q);
+    _bj_e_s2z_q(&q, 4, 5, 6, 7, 1, 1, 0 - 1, 0 - 1);            # Im det: −ai − di + Im ad − Im bc
+    ok = ok & _bj_e_s2z_sum(&dd + 24, 0.0, -ai, -di, &pp, &q);
+    if (ok == 0) { return 0 - 1; }
+    var den: f64[3];
+    ok = ok & _bj_e_ed_mul(&w, &dd, &dd);
+    ok = ok & _bj_e_ed_mul(&w + 24, &dd + 24, &dd + 24);
+    ok = ok & _bj_e_ed_add(&den, &w, &w + 24, 1.0);
+    if (ok == 0) { return 0 - 1; }
+    var dh: f64 = den[0];
+    if (dh == 0.0) { return 0; }                          # det = 0 exactly (its parts are exact expansions)
+    var c60: f64[3];
+    c60[0] = _BJ_E_C_H60;
+    c60[1] = _BJ_E_C_L60;
+    var u2: f64 = _BJ_E_Q_U2;
+    var h60: f64 = c60[0];
+    c60[2] = 2.0 * u2 * h60;
+    var g2: f64[3];
+    ok = ok & _bj_e_ed_add(&g2, &den, &c60, 0.0 - 1.0);   # |det|² − 10^-60
+    if (ok == 0) { return 0 - 1; }
+    var sh: f64 = g2[0];
+    var se: f64 = g2[2] * 1.01;
+    if (sh < 0.0 && -sh > se) { return 0; }
+    if (sh <= se) { return 0 - 1; }
+    var nn: f64[6];
+    var zm: i64[1];
+    zm[0] = 0;
+    var b2r: f64 = 2.0 * br;
+    var b2i: f64 = 2.0 * bi;
+    _bj_e_ed_set_prod(&nn, b2r, 1.0);                     # Z12: Z₀·2b/det
+    _bj_e_ed_set_prod(&nn + 24, b2i, 1.0);
+    if (_bj_e_s2z_out(&nn, &dd, &den, z0, out, 2, &zm, &w) == 0) { return 0 - 1; }
+    var c2r: f64 = 2.0 * cr;
+    var c2i: f64 = 2.0 * ci;
+    _bj_e_ed_set_prod(&nn, c2r, 1.0);                     # Z21: Z₀·2c/det
+    _bj_e_ed_set_prod(&nn + 24, c2i, 1.0);
+    if (_bj_e_s2z_out(&nn, &dd, &den, z0, out, 4, &zm, &w) == 0) { return 0 - 1; }
+    _bj_e_s2z_q(&q, 0, 1, 2, 3, 0 - 1, 1, 1, 0 - 1);            # Re N11: 1 + ar − dr − Re ad + Re bc
+    ok = ok & _bj_e_s2z_sum(&nn, 1.0, ar, -dr, &pp, &q);
+    _bj_e_s2z_q(&q, 4, 5, 6, 7, 0 - 1, 0 - 1, 1, 1);            # Im N11: ai − di − Im ad + Im bc
+    ok = ok & _bj_e_s2z_sum(&nn + 24, 0.0, ai, -di, &pp, &q);
+    if (ok == 0) { return 0 - 1; }
+    if (_bj_e_s2z_out(&nn, &dd, &den, z0, out, 0, &zm, &w) == 0) { return 0 - 1; }
+    _bj_e_s2z_q(&q, 0, 1, 2, 3, 0 - 1, 1, 1, 0 - 1);            # Re N22: 1 − ar + dr − Re ad + Re bc
+    ok = ok & _bj_e_s2z_sum(&nn, 1.0, -ar, dr, &pp, &q);
+    _bj_e_s2z_q(&q, 4, 5, 6, 7, 0 - 1, 0 - 1, 1, 1);            # Im N22: −ai + di − Im ad + Im bc
+    ok = ok & _bj_e_s2z_sum(&nn + 24, 0.0, -ai, di, &pp, &q);
+    if (ok == 0) { return 0 - 1; }
+    if (_bj_e_s2z_out(&nn, &dd, &den, z0, out, 6, &zm, &w) == 0) { return 0 - 1; }
+    return 1 + (zm[0] << 2);
+}
+
+# q[0..4] := the four product indices, q[4..8] := their signs (±1).
+fn _bj_e_s2z_q(q: *i64, i0, i1, i2, i3, s0, s1, s2, s3) {
+    q[0] = i0;
+    q[1] = i1;
+    q[2] = i2;
+    q[3] = i3;
+    q[4] = s0;
+    q[5] = s1;
+    q[6] = s2;
+    q[7] = s3;
+    return 0;
+}
+
+# out[k], out[k + 1] := RN of Z₀·N·conj(det)/|det|² for a complex ed N (re at n, im three doubles on), by the
+# cascade's steps; the exact-zero bits into zm[0]. w is 9 doubles of scratch. 1, or 0 when a step can't decide.
+fn _bj_e_s2z_out(n: *f64, dd: *f64, den: *f64, z0: f64, out: *f64, k, zm: *i64, w: *f64): i64 {
+    var nr: f64[3];
+    var ni: f64[3];
+    var ok = _bj_e_ed_pdc(&nr, &ni, n, dd, den, 0.0, 0.0, w);
+    ok = ok & _bj_e_ed_muld(&nr, &nr, z0);
+    ok = ok & _bj_e_ed_muld(&ni, &ni, z0);
+    if (ok == 0) { return 0; }
+    var g = _bj_e_casc_pair(&nr, &ni, den, out, k, zm);
+    return g;
+}
+
+# z := c + sx·x + sy·y + sp·p + sr·r for signed scaled bignums (signs ±1); t1, t2 and tm are scratch, all distinct.
+fn _bj_e_q_lin(z, c, x, sx, y, sy, p, sp, r, sr, t1, t2, tm) {
+    _bj_e_q_add(t1, c, x, sx, tm);
+    _bj_e_q_add(t2, t1, y, sy, tm);
+    _bj_e_q_add(t1, t2, p, sp, tm);
+    _bj_e_q_add(z, t1, r, sr, tm);
+    return 0;
+}
+
+# out[k], out[k + 1] := RN(Z₀·N·conj(det)/den)·sign for signed scaled bignums (N = (pr, pi), det = (dr, di)), +0 for
+# an exact 0; returns the exact-zero bits. The rest are scratch.
+fn _bj_e_q_s2z_out(pr, pi, dr, di, den, z0, zero, out: *f64, k, nr, ni, t1, t2, t3, tm): i64 {
+    _bj_e_q_pdc(nr, ni, pr, pi, dr, di, den, zero, zero, t1, t2, t3, tm);
+    _bj_e_q_mul(t3, nr, z0);
+    _bj_e_q_copy(nr, t3);
+    _bj_e_q_mul(t3, ni, z0);
+    _bj_e_q_copy(ni, t3);
+    var re: f64 = _bj_e_q_signed_ratio(nr, den, t1 + 16, t2 + 16);
+    var im: f64 = _bj_e_q_signed_ratio(ni, den, t1 + 16, t2 + 16);
+    out[k] = re;
+    out[k + 1] = im;
+    var z = _bj_e_q_zero_bits(nr, ni, k);
+    return z;
+}
+
+# The exact path (the section comment) for v = (a, b, c, d as (re, im), Z₀), finite: _bj_cr_s2z's return and outputs.
+fn _bj_e_s2z_exact(v: *f64, out: *f64): i64 {
+    var cw = _BJ_E_CW * 8;
+    var blk = fl_calloc(32 * cw);
+    if (blk == 0) { return 2; }
+    for (var i = 0; i < 9; i = i + 1) { _bj_e_q_set(blk + i * cw, v[i]); }
+    var ar = blk;
+    var ai = blk + cw;
+    var br = blk + 2 * cw;
+    var bi = blk + 3 * cw;
+    var cr = blk + 4 * cw;
+    var ci = blk + 5 * cw;
+    var dr = blk + 6 * cw;
+    var di = blk + 7 * cw;
+    var z0 = blk + 8 * cw;
+    var one = blk + 9 * cw;
+    var zero = blk + 10 * cw;
+    var adr = blk + 11 * cw;
+    var adi = blk + 12 * cw;
+    var bcr = blk + 13 * cw;
+    var bci = blk + 14 * cw;
+    var er = blk + 15 * cw;
+    var ei = blk + 16 * cw;
+    var den = blk + 17 * cw;
+    var t1 = blk + 18 * cw;
+    var t2 = blk + 19 * cw;
+    var t3 = blk + 20 * cw;
+    var tm = blk + 21 * cw;
+    var pr = blk + 22 * cw;
+    var pi = blk + 23 * cw;
+    var nr = blk + 24 * cw;
+    var ni = blk + 25 * cw;
+    var cc = blk + 26 * cw;
+    _bj_e_q_set(one, 1.0);
+    _bj_e_q_set(zero, 0.0);
+    _bj_e_q_cmul(adr, adi, ar, ai, dr, di, t1, t2, tm);                                 # a·d
+    _bj_e_q_cmul(bcr, bci, br, bi, cr, ci, t1, t2, tm);                                 # b·c
+    _bj_e_q_lin(er, one, ar, 0 - 1, dr, 0 - 1, adr, 1, bcr, 0 - 1, t1, t2, tm);         # det = 1 − a − d + a·d − b·c
+    _bj_e_q_lin(ei, zero, ai, 0 - 1, di, 0 - 1, adi, 1, bci, 0 - 1, t1, t2, tm);
+    _bj_e_q_mul(t1, er, er);
+    _bj_e_q_mul(t2, ei, ei);
+    _bj_e_q_add(den, t1, t2, 1, tm);                                                    # |det|²
+    var p20: f64 = 95367431640625.0;                                                    # 5^20
+    _bj_e_q_set(cc, p20);
+    _bj_e_q_mul(t1, cc, cc);
+    _bj_e_q_mul(t2, t1, cc);                                                            # 5^60
+    store64(t2 + 8, load64(t2 + 8) + 60);                                               # 10^60
+    _bj_e_q_mul(t1, den, t2);
+    _bj_e_q_add(t3, one, t1, 0 - 1, tm);                                                # 1 − 10^60·|det|²
+    var refused = 0;
+    if (load64(t3) > 0) { refused = 1; }
+    var zm = 0;
+    if (refused == 0) {
+        var o: f64[8];
+        _bj_e_q_copy(pr, br);                                                           # Z12: 2b
+        store64(pr + 8, load64(pr + 8) + 1);
+        _bj_e_q_copy(pi, bi);
+        store64(pi + 8, load64(pi + 8) + 1);
+        zm = zm | _bj_e_q_s2z_out(pr, pi, er, ei, den, z0, zero, &o, 2, nr, ni, t1, t2, t3, tm);
+        _bj_e_q_copy(pr, cr);                                                           # Z21: 2c
+        store64(pr + 8, load64(pr + 8) + 1);
+        _bj_e_q_copy(pi, ci);
+        store64(pi + 8, load64(pi + 8) + 1);
+        zm = zm | _bj_e_q_s2z_out(pr, pi, er, ei, den, z0, zero, &o, 4, nr, ni, t1, t2, t3, tm);
+        _bj_e_q_lin(pr, one, ar, 1, dr, 0 - 1, adr, 0 - 1, bcr, 1, t1, t2, tm);         # N11 = 1 + a − d − a·d + b·c
+        _bj_e_q_lin(pi, zero, ai, 1, di, 0 - 1, adi, 0 - 1, bci, 1, t1, t2, tm);
+        zm = zm | _bj_e_q_s2z_out(pr, pi, er, ei, den, z0, zero, &o, 0, nr, ni, t1, t2, t3, tm);
+        _bj_e_q_lin(pr, one, ar, 0 - 1, dr, 1, adr, 0 - 1, bcr, 1, t1, t2, tm);         # N22 = 1 − a + d − a·d + b·c
+        _bj_e_q_lin(pi, zero, ai, 0 - 1, di, 1, adi, 0 - 1, bci, 1, t1, t2, tm);
+        zm = zm | _bj_e_q_s2z_out(pr, pi, er, ei, den, z0, zero, &o, 6, nr, ni, t1, t2, t3, tm);
+        for (var k = 0; k < 8; k = k + 1) { out[k] = o[k]; }
+    }
+    fl_free(blk);
+    if (refused == 1) { return 0; }
+    return 1 + (zm << 2);
+}
+
+# Z = Z₀(I + S)(I − S)⁻¹ into out[0..8] (Z11, Z12, Z21, Z22, each (re, im)) for v = (S11, S12, S21, S22 as (re, im),
+# Z₀), finite, each part rounded once (the section comment): 1 + 4·m, m's bit k set where out[k] is exactly 0
+# (written +0); 0 when |det(I − S)|² < 10^-60 exactly (out untouched), or 2 when the exact path's buffers can't be had
+# (out untouched). slow = 1 takes the exact path alone.
+#must_use
+fn _bj_cr_s2z(v: *f64, slow, out: *f64): i64 {
+    if (slow == 0) {
+        var f = _bj_e_s2z_fast(v, out);
+        if (f >= 0) { return f; }
+    }
+    var g = _bj_e_s2z_exact(v, out);
     return g;
 }

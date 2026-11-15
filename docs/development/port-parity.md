@@ -4896,3 +4896,44 @@ stub's root, 2a-2 the cascade, 2a-3 S → Z), 2b round once, 2c the exact thresh
   measured, 0 pending, 83,717 accepted (ADR 01: 30,859; ADR 0002: 52,858)** over 616,034 rows; **all 416 digests
   equal**, HEAD's unchanged but `SMatrix::cascade`'s. `rf.tcyr` passes on all three (217). The gate is clean (no
   warnings; execution coverage 323 of 323 functions); validate.py 616,034 rows, 0 problems.
+
+## 84. M4 part 2a-3: S → Z rounded once; 2a done (2026-11-15)
+
+- **The finding**: Rust's `s_to_z` rounds det = (1 − S11)(1 − S22) − S12·S21 first, and it cancels toward an ideal
+  thru. Rust's own bench network (S11 = S22 = 0.1, S12 = S21 = 0.9) was refused as singular, since (1 − 0.1)² and
+  0.9² round alike; the doubles' exact det is −5.0·10⁻¹⁷, and Z = −1.8·10¹⁸ in all four entries. A near-thru at
+  det ≈ 2^-31 came out 2.2·10⁻¹⁰ off, and wide entries gave ±∞ or NaN for finite values.
+- **ADR 0002 row 17, amended** (the user's answer of 2026-11-15; `src/crmath_edge.cyr`'s `_bj_cr_s2z`): for finite
+  entries each part of Z11 = Z₀((1 + S11)(1 − S22) + S12·S21)/det, Z12 = 2Z₀·S12/det, Z21 = 2Z₀·S21/det and
+  Z22 = Z₀((1 − S11)(1 + S22) + S12·S21)/det is rounded once from the exact value, and |det|² < 10⁻⁶⁰ is decided
+  exactly (10⁶⁰·|det|² < 1):
+  - the fast path (the cascade's box): det, N11 = 1 + a − d − a·d + b·c and N22 = 1 − a + d − a·d + b·c as exact
+    expansions of the 1, the parts and the eight TwoProducts of a·d and b·c (up to 11 doubles, `_bj_e_ed_exact` now
+    takes 16), so none carries a cancellation; 2b and 2c exact; then the cascade's carried-bound steps
+    (`_bj_e_s2z_out`: N·conj(det), ×Z₀, the rounding test);
+  - the exact path: signed scaled bignums from fl_calloc; Allocation "the S→Z conversion's exact buffers".
+
+  A part exactly 0 keeps Rust's zero where Rust's chain gives one (`_bj_rf_s2z_chain`), +0 otherwise; a non-finite
+  entry keeps Rust's test and chain.
+- **Verified**: `cr_verify.py`'s s2z and s2z_slow families (passive networks, near-thrus to 2^-70, |det| straddling
+  10⁻³⁰ ulp by ulp, lossless networks, exact zeros, the box edges, 10^±300 entries, subnormals): **18,000 calls equal
+  to the exact value (Fraction) on x86_64 and aarch64**, with the cascade's 18,000 rerun beside them.
+- **The grid**: 492 rows appended to `rf.tsv` (21,123): near-thrus at 2^-k, k to 70; |det| within three ulps of
+  10⁻³⁰ either side (S11 = S22 = 1 + k·2^-52, S12 = 1, S21 = k²·2^-104 ∓ 10⁻³⁰); 40 lossless networks (S from a
+  reactance matrix in floats, so Re Z is tiny); a matched 2-port and an exact 0 in each place; one part or Z₀ at
+  2^±119, 2^±120, 2^±121; 60 wide and 8 subnormal; 200 seeded networks.
+- **validate.py** models the port on Fractions (`rf_s2z_exact`) and maps **875 rows** to row 17 (441 on earlier
+  grids): 874 values (of their 6,514 compared parts, 2,217 equal, 2,366 an ulp off, 1,473 within 1,000 ulps, 458 past
+  that, 35 of the wrong sign, 478 ±∞ or NaN for a finite value) and the bench network's refusal, now computed.
+- **Tests**: `tests/rf.tcyr`'s `cyrius_s_to_z_exact` (6 assertions, 223 in all): the bench network, the near-thru's
+  Z11 and Z22, an ideal thru refused with out untouched, a matched 2-port's Z₀·I with Rust's zeros, the heap over 20
+  exact paths.
+- **Benchmarks** (rf.rs has no S → Z bench): a focused interleaved A/B against HEAD (three rounds, load 0.75): a
+  2-port attenuator 185 ns → 3.26 µs (the fast path and, for its exact zeros' signs, Rust's chain), complex entries
+  181 ns → 4.97 µs.
+- **Result, every target** (x86_64 ELF, x86_64 PE, aarch64): **17 modules, 0 failing; 531,934 ok, 0 failed, 0
+  measured, 0 pending, 84,592 accepted (ADR 01: 30,859; ADR 0002: 53,733)** over 616,526 rows; **all 416 digests
+  equal**, HEAD's unchanged but `rf::s_to_z`'s. `rf.tcyr` passes on all three (223). The gate is clean (no warnings;
+  execution coverage 323 of 323 functions); validate.py 616,526 rows, 0 problems.
+- **2a is done**: the user's three answers. Next, 2b (round once: the lossless line's √(L′/C′), the phase velocity
+  1/√(L′C′), the quarter-wave transformer's √(Z₀Z_L) and `normalize_impedance`'s Z/Z₀).

@@ -6047,23 +6047,65 @@ def rf_cascade_chain(t1, t2):
     return [s11, s12, inv, s22]
 
 
-def rf_s_to_z(m, port):
-    if m["ports"] != 2:
-        return ip_err("S→Z conversion requires 2-port network")
-    s11, s12, s21, s22 = m["s"]
-    z0v = rf_uniform_z0(m, port)
-    if isinstance(z0v, list):
-        return z0v
+def rf_s2z_chain(s, z0v):
+    """Rust's S → Z: [Z11, Z12, Z21, Z22], or None when the rounded |det(I − S)|² < 10^-60."""
+    s11, s12, s21, s22 = s
     one, z0, two = (1.0, 0.0), (z0v, 0.0), (2.0, 0.0)
     det = rf_csub(sc_mul(rf_csub(one, s11), rf_csub(one, s22)), sc_mul(s12, s21))
     if rf_nsq(det) < 1e-60:
-        return dz_err("singular S→Z conversion")
+        return None
     inv = rf_crecip(det)
     z11 = sc_mul(sc_mul(z0, rf_cadd(sc_mul(rf_cadd(one, s11), rf_csub(one, s22)), sc_mul(s12, s21))), inv)
     z12 = sc_mul(sc_mul(sc_mul(z0, two), s12), inv)
     z21 = sc_mul(sc_mul(sc_mul(z0, two), s21), inv)
     z22 = sc_mul(sc_mul(z0, rf_cadd(sc_mul(rf_csub(one, s11), rf_cadd(one, s22)), sc_mul(s12, s21))), inv)
-    return rf_cx(z11) + rf_cx(z12) + rf_cx(z21) + rf_cx(z22)
+    return [z11, z12, z21, z22]
+
+
+def rf_s2z_exact(s, z0v):
+    """The port's S → Z for finite entries (ADR 0002 row 17, M4 part 2a-3): each part of Z = Z₀(I + S)(I − S)⁻¹ RN of
+    the exact value (None for an exact 0, whose sign the caller picks), as 8 values; None when |det(I − S)|² < 10^-60
+    exactly."""
+    a, b, c, d = [(Fraction(z[0]), Fraction(z[1])) for z in s]
+    z0 = Fraction(z0v)
+
+    def mul(x, y):
+        return x[0] * y[0] - x[1] * y[1], x[0] * y[1] + x[1] * y[0]
+    ad, bc = mul(a, d), mul(b, c)
+    det = (1 - a[0] - d[0] + ad[0] - bc[0], -a[1] - d[1] + ad[1] - bc[1])
+    den = det[0] ** 2 + det[1] ** 2
+    if 10 ** 60 * den < 1:
+        return None
+    out = []
+    n11 = (1 + a[0] - d[0] - ad[0] + bc[0], a[1] - d[1] - ad[1] + bc[1])
+    n22 = (1 - a[0] + d[0] - ad[0] + bc[0], -a[1] + d[1] - ad[1] + bc[1])
+    for n in (n11, (2 * b[0], 2 * b[1]), (2 * c[0], 2 * c[1]), n22):
+        nr = z0 * (n[0] * det[0] + n[1] * det[1])
+        ni = z0 * (n[1] * det[0] - n[0] * det[1])
+        out += [None if nr == 0 else rn_frac(nr / den), None if ni == 0 else rn_frac(ni / den)]
+    return out
+
+
+def rf_s_to_z(m, port, exact=True):
+    """rf::s_to_z. port: the port's z0_equal (row 37) and, with exact, its rounding once for finite entries (row 17,
+    M4 part 2a-3)."""
+    if m["ports"] != 2:
+        return ip_err("S→Z conversion requires 2-port network")
+    z0v = rf_uniform_z0(m, port)
+    if isinstance(z0v, list):
+        return z0v
+    chain = rf_s2z_chain(m["s"], z0v)
+    if port and exact and all(math.isfinite(x) for z in m["s"] for x in z):
+        parts = rf_s2z_exact(m["s"], z0v)
+        if parts is None:
+            return dz_err("singular S→Z conversion")
+        # A part exactly 0 keeps Rust's zero where Rust's chain gives one, +0 otherwise.
+        rust = [x for z in chain for x in z] if chain else [math.nan] * 8
+        parts = [(r if r == 0.0 else 0.0) if x is None else x for x, r in zip(parts, rust)]
+        return [("f", x) for x in parts]
+    if chain is None:
+        return dz_err("singular S→Z conversion")
+    return sum((rf_cx(z) for z in chain), [])
 
 
 def rf_index_err(n, a, b):
@@ -6098,7 +6140,7 @@ def rf_sm_eval(fn, toks, port=False, exact=True):
         b, _ = rf_sm_read(toks, k)
         return rf_cascade(a, b, port, exact)
     if fn == "rf::s_to_z":
-        return rf_s_to_z(rf_sm_read(toks, 0)[0], port)
+        return rf_s_to_z(rf_sm_read(toks, 0)[0], port, exact)
     return None
 
 
@@ -6375,8 +6417,8 @@ def rf_adr_rows(path: Path) -> list:
     port's or the file's R (∞ ≤ 10⁻¹²·∞), is refused by the port's (M4 parts 1b, 1c-2). A writer's mapping takes the
     corrected oracle's primitives, as its outputs then would. Row 39 where the stub match's cancelling root, taken
     without its cancellation, moves a (d, ℓ) (M4 part 2a-1), on the corrected primitives too. Row 17 where the
-    cascade's star product, each part rounded once and its T22 test exact, differs from Rust's chain (M4 part
-    2a-2)."""
+    cascade's star product (M4 part 2a-2) or S → Z (2a-3), each part rounded once and its threshold exact, differs
+    from Rust's chain."""
     out = []
     for fn, _cls, ins, outs, v in sc_lines(path):
         if fn == "rf::single_stub_match_complex":
