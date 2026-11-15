@@ -45,6 +45,11 @@
 //! `hermite_gaussian` and `hermite_gaussian_field`: high orders whose H_m·H_n passes DBL_MAX against a small envelope,
 //! envelopes below 2^-1022 (and past e^-2300) lifted back by a large H, √2x/w and the partial products below 2^-1022,
 //! w·w and x² + y² past either end, the far field where w passes DBL_MAX, and on-axis points with exact zeros.
+//!
+//! M3 part 2d-3b-2 (ADR 0002 row 18, amended) appends the Laguerre–Gaussian intensity's range edges: azimuthal orders
+//! ±(2³¹ − 1), i32::MIN and ±1000 at the radius where ρ²^|l| and the envelope balance (its envelope e^-5·10¹⁰), radial
+//! orders to 1000 whose L·L passes DBL_MAX or meets an envelope below 2^-1022, w₀·w₀, w·w and r·r past either end, the
+//! axis, the far stand-in, and one row for each of beam.cyr's tests failing alone.
 
 use crate::grids::{Rng, specials};
 use crate::m_field::res_f;
@@ -472,7 +477,58 @@ pub fn emit() -> Module {
     q_out_edges(r);
     chain_edges(r);
     hg_edges(r);
+    lg_edges(r);
     rows.m
+}
+
+/// A `laguerre_gaussian_intensity` row.
+fn lg_row(r: &mut Rows, v: [f64; 3], p: u32, l: i32, rr: f64, z: f64) {
+    let g = beam_of(v);
+    let ins = [f(v[0]), f(v[1]), f(v[2]), i(p), i(l), f(rr), f(z)];
+    let (pb, lb, rb, zb) = (black_box(p), black_box(l), black_box(rr), black_box(z));
+    r.row("beam::laguerre_gaussian_intensity", Class::C, &ins, || {
+        vec![f(laguerre_gaussian_intensity(&g, pb, lb, rb, zb))]
+    });
+}
+
+/// M3 part 2d-3b-2: the Laguerre–Gaussian intensity's range edges (ADR 0002 row 18).
+fn lg_edges(r: &mut Rows) {
+    let unit = [1.0, 1.0, std::f64::consts::PI];
+    let rt = |x: f64| (x / 2.0).sqrt();
+    // ρ²^|l| against e^{−ρ²} at their balance point x = |l|·ln x (the unit beam at its waist: ρ² = 2r²), and around it.
+    for rr in [162834.63426861665, 162834.63380802667, 162834.63472920662] {
+        lg_row(r, unit, 0, i32::MAX, rr, 0.0);
+        lg_row(r, unit, 2, i32::MAX, rr, 0.0);
+    }
+    for (p, l) in [(0, i32::MIN), (2, i32::MIN)] {
+        lg_row(r, unit, p, l, 162834.63430812964, 0.0);
+    }
+    for (p, l) in [(0, 1000), (2, 1000), (2, -1000), (5, 1000)] {
+        lg_row(r, unit, p, l, 67.52039125480071, 0.0);
+    }
+    // L·L or ρ²^|l| past DBL_MAX, an envelope below 2^-1022, at radial orders to 1000.
+    for (p, l, x) in [(100, 0, 1000.0), (0, 150, 400.0), (3, 150, 400.0), (500, 3, 1800.0), (60, 100, 450.0)] {
+        lg_row(r, unit, p, l, rt(x), 0.0);
+    }
+    // w₀·w₀, w·w and r·r past DBL_MAX; the axis; the far stand-in.
+    lg_row(r, [1.0, 1e160, 1.0], 2, 3, 1e160, 0.0);
+    lg_row(r, [1.0, 1e160, 1.0], 2, 3, 1e160 * 2f64.powi(-23), 0.0);
+    lg_row(r, [1.0, 1e-170, 1.0], 2, 3, 1e-170, 0.0);
+    lg_row(r, unit, 4, 7, 0.0, 0.0);
+    lg_row(r, unit, 0, 3, 0.0, 0.0);
+    lg_row(r, unit, 3, 2, 1e10, 0.0);
+    // Each of beam.cyr's tests the only one to fail: the envelope (|l| = 50 at ρ² = 720), w₀·w₀ (a waist below 2^-511
+    // in the far field), w₀²/w² (w/w₀ = 2^512·0.97), (−2r)·r below 2^-1022, the power (L(0.01) lifting a ρ²^200 that
+    // underflowed to 0), (w₀²/w²)·ρ²^|l| below 2^-1022 lifted back by L, and the last product past DBL_MAX.
+    lg_row(r, unit, 0, 50, rt(720.0), 0.0);
+    let w0 = 1.3 * 2f64.powi(-520);
+    lg_row(r, [1.0, w0, 1.3 * 2f64.powi(-530)], 1, 1, 1.3 * 2f64.powi(-510), 1000.0 * 1.3 * 2f64.powi(-530));
+    let w1 = 1.3 * 2f64.powi(-500);
+    lg_row(r, [1.0, w1, 1.0], 0, 30, w1 * 2f64.powi(512) * 0.97, 2f64.powi(512) * 0.97);
+    lg_row(r, [1.0, 1.5 * 2f64.powi(-511), 1.0], 1, 1, 1.3 * 2f64.powi(-515), 0.0);
+    lg_row(r, unit, 1000, 200, rt(0.01), 0.0);
+    lg_row(r, [1.0, 1.0, 1.0], 400, 300, 2f64.powi(300) * rt(2f64.powf(-500.0 / 300.0)), 2f64.powi(300));
+    lg_row(r, unit, 200, 30, rt(600.0), 0.0);
 }
 
 /// A `hermite_gaussian` and a `hermite_gaussian_field` row.

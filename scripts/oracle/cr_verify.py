@@ -556,7 +556,7 @@ EXACT = ["mono"] + list(SHAPES) + ["sqrt_div", "wsqrt", "sqrt_mono", "sqrt_mono_
          "vx_gamma", "lwo_reff", "lwo_reff_slow", "lwo_kappa", "lwo_kappa_slow", "lwo_nb", "lwo_nb_slow", "lwo_ux",
          "gammao", "gammao_slow", "gammao2", "gammao2_slow", "sumsq", "sumsq_exact", "abcd", "abcd_slow", "dot4", "jcdot", "jint", "jnorm",
          "jover", "sjones", "sdop", "sellip", "sorient", "rsig", "rq", "rphase", "rang", "bspot", "bpeak", "broc",
-         "bgouy", "bci", "bdot2", "bw0", "bgp", "bfsr", "bhg"]
+         "bgouy", "bci", "bdot2", "bw0", "bgp", "bfsr", "bhg", "blg"]
 UX = ["ux_exp", "ux_exp_w", "ux_exp_big", "ux_cosh", "ux_sinh", "ux_ln", "ux_pow", "ux_sin", "ux_cos"]
 
 
@@ -2133,7 +2133,7 @@ def rayleigh_families(rng, count):
 BM_PI = RAY_PI
 BM_MIN = Fraction(2) ** -1022
 BM_MAX = Fraction(sys.float_info.max)
-BM_FAMS = ("bspot", "bpeak", "broc", "bgouy", "bci", "bdot2", "bw0", "bgp", "bfsr", "bhg")
+BM_FAMS = ("bspot", "bpeak", "broc", "bgouy", "bci", "bdot2", "bw0", "bgp", "bfsr", "bhg", "blg")
 
 
 def _jdiv(a, b, r=rnd53):
@@ -2333,6 +2333,103 @@ def bhg_ref(w0, zr, z, m, n, x, y) -> int:
     return f2b(rn_frac(p2[0] * Fraction(es) * Fraction(2) ** ee))
 
 
+def _blag(p, l, x):
+    """L_p^l(x) by its recurrence, each operation to 53 bits (x a pair; the integer parts exact)."""
+    if p == 0:
+        return Fraction(1), False
+    lf = float(l)
+    lc = _jsub(_jx(1.0 + lf), x)
+    if p == 1:
+        return lc
+    lp = (Fraction(1), False)
+    for k in range(2, p + 1):
+        kf = float(k)
+        a = _jmul(_jsub(_jx(2.0 * kf + lf - 1.0), x), lc)
+        b = _jmul(_jx(kf + lf - 1.0), lp)
+        lp, lc = lc, _jdiv(_jsub(a, b), _jx(kf))
+    return lc
+
+
+def _bme(a):
+    """A pair as (m, e, negative) with 1 ≤ |m| < 2 (m = 0 for a zero), for products past what a Fraction holds."""
+    if a[0] == 0:
+        return Fraction(0), 0, a[1]
+    e = binade(a[0])
+    return a[0] / Fraction(2) ** e, e, a[0] < 0
+
+
+def _bme_mul(a, b):
+    m = a[0] * b[0]
+    if m == 0:
+        return Fraction(0), 0, a[2] != b[2]
+    m, e = rnd53(m), a[1] + b[1]
+    if abs(m) >= 2:
+        m, e = m / 2, e + 1
+    return m, e, m < 0
+
+
+def blg_ref(w0, zr, z, p, la, r) -> int:
+    """The Laguerre–Gaussian intensity's chain with an unbounded exponent (src/crmath_vx.cyr's _bj_vx_bm_lg): every
+    operation to 53 bits, the power in __powidf2's order and the products on (m, e) triples, e^{−q} from MPFR at 53 bits
+    with its widest exponent range (1 below 2^-60, the far stand-in from 2^47), the last product rounded once."""
+    o = _bone_sq(z, zr)
+    w = _jmul(_jx(w0), (rnd53_sqrt(o[0]), False))
+    rho = _jdiv(_jmul(_jx(BM_SQRT2), _jx(r)), w)
+    x = _jmul(rho, rho)
+    lpv = _bme(_blag(p, la, x))
+    q = _jdiv(_jmul((2 * Fraction(r), r < 0), _jx(r)), _jmul(w, w))
+    sc = _bme(_jdiv(_jmul(_jx(w0), _jx(w0)), _jmul(w, w)))
+    pw, a, n = (Fraction(1), 0, False), _bme(x), la
+    while n:
+        if n & 1:
+            pw = _bme_mul(pw, a)
+        n >>= 1
+        if n:
+            a = _bme_mul(a, a)
+    p3 = _bme_mul(_bme_mul(_bme_mul(sc, pw), lpv), lpv)
+    zero = f2b(-0.0 if p3[2] else 0.0)
+    if p3[0] == 0:
+        return zero
+    if q[0] < Fraction(2) ** -60:
+        es, ee = 1.0, 0
+    elif q[0] >= Fraction(2) ** 47:
+        return zero
+    else:
+        es, ee = mpfr_ref.wide_split("exp", -q[0])
+    e = p3[1] + ee
+    if e > 1100:
+        return f2b(-INF if p3[2] else INF)
+    if e < -1200:
+        return zero
+    return f2b(rn_frac(p3[0] * Fraction(es) * Fraction(2) ** e))
+
+
+def lg_families(rng, count):
+    """blg (M3 part 2d-3b-2): the LG intensity's unbounded chain on beams from 2^±600 (z_R independent of w₀), the
+    waist, near and far field, radial orders to 60 and some to 300, azimuthal ones to 60 and some to 2³¹ (the power's
+    squares), and radii from ρ² = 2^-120 to 2^80, envelopes past e^-2300 and past the stand-in among them."""
+    out = []
+    for i in range(count):
+        w0 = rng.uniform(1.0, 2.0) * 2.0 ** rng.randint(-600, 600)
+        zr = rng.uniform(1.0, 2.0) * 2.0 ** rng.randint(-600, 600)
+        z = rng.choice([0.0, zr * rng.uniform(-3.0, 3.0), zr * 2.0 ** rng.randint(0, 900)]) * rng.choice([1.0, -1.0])
+        if not math.isfinite(z):
+            z = zr
+        p = rng.choice([rng.randint(0, 12), rng.randint(0, 60), rng.randint(100, 300) if i % 9 == 0 else 2])
+        la = rng.choice([rng.randint(0, 12), rng.randint(0, 60), rng.randint(1, 1 << 31) if i % 11 == 0 else 1])
+        wv = abs(w0) * math.sqrt(1.0 + min((z / zr) ** 2, 1e300)) if abs(z / zr) < 1e150 else abs(w0)
+        c = rng.random()
+        if c < 0.08:
+            r = 0.0
+        else:
+            x = rng.uniform(1.0, 2.0) * 2.0 ** rng.randint(-120, 80 if c < 0.3 else 12)
+            r = math.sqrt(x / 2.0) * wv * rng.choice([1.0, -1.0])
+            if not math.isfinite(r) or r == 0.0:
+                r = 1.0
+        out.append(("blg", [w0, zr, z, p, la, r], blg_ref(w0, zr, z, p, la, r)))
+    return out
+
+
 def hg_families(rng, count):
     """bhg (M3 part 2d-3b-1): the HG amplitude's unbounded chain on beams from 2^±600 (z_R independent of w₀, as a
     hand-built beam's may be), the waist, the near and the far field (w past DBL_MAX), orders to 60 and some to 400,
@@ -2419,6 +2516,9 @@ def main() -> int:
                   if "exact" in names or f in names]
         rrng = random.Random(0x3_2D2A)
         calls += [(f, ref, ws) for f, ws, ref in rayleigh_families(rrng, max(1, n // 10))
+                  if "exact" in names or f in names]
+        lrng = random.Random(0x3_2D3B2)
+        calls += [(f, ref, ws) for f, ws, ref in lg_families(lrng, max(1, n // 50))
                   if "exact" in names or f in names]
         hrng = random.Random(0x3_2D3B1)
         calls += [(f, ref, ws) for f, ws, ref in hg_families(hrng, max(1, n // 50))

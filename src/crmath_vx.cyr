@@ -1367,3 +1367,117 @@ fn _bj_vx_bm_hg(w0: f64, zr: f64, z: f64, m, n, x: f64, y: f64, u: f64): f64 {
     var r: f64 = _bj_k_ux_mul_f64(p2s, p2e, es, ee);
     return r;
 }
+
+# ── the Laguerre–Gaussian intensity (M3 part 2d-3b-2): beam.cyr's bj_laguerre_gaussian_intensity ─────────────────────
+# Rust's ((((w₀·w₀)/(w·w))·ρ²^|l|)·L·L)·e^{−2r·r/(w·w)}, with ρ = √2r/w, ρ² = ρ·ρ and L = L_p^|l|(ρ²) by its recurrence,
+# over- and underflows where the mode is representable: L·L or ρ²^|l| past DBL_MAX against a small envelope, an envelope
+# below 2^-1022 lifted back, w·w, w₀·w₀ or r·r past either end. beam.cyr keeps Rust's chain where it is provably the
+# unbounded one: every Laguerre value from L₂ on at least 2^-900 (each step is two products and a difference, then a
+# quotient by k ≥ 2: the band argument at the top); for an r ≠ 0, (−2r)·r normal, and ρ²^|l| normal for |l| ≥ 1 (its
+# squares fall below 2^-1022 only below 1, where the power falls too); w₀·w₀, its quotient by w·w and the envelope
+# normal; and the first and last partial products normal or exact zeros (the middle one past DBL_MAX makes the last so
+# too, and below 2^-1022 makes it smaller still, where both chains round to the same signed 0). These imply the rest.
+# w ≥ w₀, so w·w past DBL_MAX makes the quotient 0, and below 2^-1022 makes w₀·w₀ so too. A normal ρ² means a normal ρ,
+# from a normal √2r unless w·w is below 2^-1022. A ρ² below 2^-1022 vanishes against every integer in L (its
+# coefficients (2k + |l| − 1) − ρ² and L₁ = (1 + |l|) − ρ² are exact or normal for a normal ρ²), and the power's test
+# sees it there. Elsewhere the chain runs with an unbounded exponent (_bj_vx_bm_lg), the envelope by _bj_ux_exp_wide,
+# its far stand-in exact here too: for p < 2^32 and |l| ≤ 2^31, L·L and ρ²^|l| stay below 2^(2^45.4).
+
+# L_p^l(x) by the recurrence L₀ = 1, L₁ = (1 + l) − x, L_k = (((2k + l) − 1 − x)·L_{k−1} − ((k + l) − 1)·L_{k−2})/k,
+# each operation to 53 bits with an unbounded exponent, for the 53-bit x = xs·2^xe: (s, e). The integer parts are exact
+# doubles, as in Rust.
+#must_use
+fn _bj_vx_bm_laguerre_ux(p, l, xs: f64, xe): (f64, i64) {
+    if (p == 0) { return (1.0, 0); }
+    var lf: f64 = f64_from(l);
+    var ol: f64 = 1.0 + lf;
+    var os, oe = _bj_k_ux_from(ol);
+    var cs, ce = _bj_k_ux_sub(os, oe, xs, xe);
+    if (p == 1) { return (cs, ce); }
+    var ps: f64 = 1.0;
+    var pe = 0;
+    for (var k = 2; k <= p; k = k + 1) {
+        var kf: f64 = f64_from(k);
+        var c1d: f64 = 2.0 * kf + lf - 1.0;
+        var c1s0, c1e0 = _bj_k_ux_from(c1d);
+        var c1s, c1e = _bj_k_ux_sub(c1s0, c1e0, xs, xe);
+        var as, ae = _bj_k_ux_mul(c1s, c1e, cs, ce);
+        var c2d: f64 = kf + lf - 1.0;
+        var c2s, c2e = _bj_k_ux_from(c2d);
+        var bs, be = _bj_k_ux_mul(c2s, c2e, ps, pe);
+        var ds, de = _bj_k_ux_sub(as, ae, bs, be);
+        var ks, ke = _bj_k_ux_from(kf);
+        var ns, ne = _bj_k_ux_div(ds, de, ks, ke);
+        ps = cs;
+        pe = ce;
+        cs = ns;
+        ce = ne;
+    }
+    return (cs, ce);
+}
+
+# a^n for n ≥ 0 by compiler-rt's __powidf2 order (_bj_powi's: the product taken at each set bit from the bottom, the
+# square between), each operation to 53 bits with an unbounded exponent: (s, e).
+#must_use
+fn _bj_vx_bm_powi_ux(as: f64, ae, n): (f64, i64) {
+    var ms: f64 = 1.0;
+    var me = 0;
+    var bs: f64 = as;
+    var be = ae;
+    var k = n;
+    while (k != 0) {
+        if ((k & 1) != 0) {
+            var ts, te = _bj_k_ux_mul(ms, me, bs, be);
+            ms = ts;
+            me = te;
+        }
+        k = k >> 1;
+        if (k != 0) {
+            var qs, qe = _bj_k_ux_mul(bs, be, bs, be);
+            bs = qs;
+            be = qe;
+        }
+    }
+    return (ms, me);
+}
+
+# The Laguerre–Gaussian intensity ((((w₀·w₀)/(w·w))·ρ²^|l|)·L·L)·e^{−2r·r/(w·w)} with an unbounded exponent (the section
+# comment), its last product rounded once, given Rust's u, for la = |l| (2³¹ for l = i32::MIN, ADR 0002 row 32): for
+# finite inputs, z_R ≠ 0 and w₀ ≠ 0; u otherwise (a zero waist or z_R makes the same NaN in both chains). The envelope
+# is 1 for 2r²/w² below 2^-60, and the far stand-in from 2^47 on.
+#must_use
+fn _bj_vx_bm_lg(w0: f64, zr: f64, z: f64, p, la, r: f64, u: f64): f64 {
+    var fin: f64 = (w0 - w0) + (zr - zr) + (z - z) + (r - r);
+    if (fin != 0.0 || zr == 0.0 || w0 == 0.0) { return u; }
+    var rts, rte = _bj_vx_bm_root_ux(z, zr);
+    var w0s, w0e = _bj_k_ux_from(w0);
+    var ws, we = _bj_k_ux_mul(w0s, w0e, rts, rte);
+    var rhs, rhe = _bj_vx_bm_sx(r, ws, we);
+    var xs, xe = _bj_k_ux_mul(rhs, rhe, rhs, rhe);
+    var ls, le = _bj_vx_bm_laguerre_ux(p, la, xs, xe);
+    var rs, re = _bj_k_ux_from(r);
+    var ts, te = _bj_k_ux_mul(rs, re + 1, rs, re);
+    var w2s, w2e = _bj_k_ux_mul(ws, we, ws, we);
+    var qs, qe = _bj_k_ux_div(ts, te, w2s, w2e);
+    var es: f64 = 1.0;
+    var ee = 0;
+    if (qs != 0.0 && qe >= 0 - 60) {
+        if (qe >= 47) {
+            ee = 0 - _BJ_UX_FAR;
+        } else {
+            var qd: f64 = _bj_k_ux_round(qs, qe, 0.0);
+            var nq: f64 = -qd;
+            var ys, ye = _bj_ux_exp_wide(nq);
+            es = ys;
+            ee = ye;
+        }
+    }
+    var w0qs, w0qe = _bj_k_ux_mul(w0s, w0e, w0s, w0e);
+    var scs, sce = _bj_k_ux_div(w0qs, w0qe, w2s, w2e);
+    var pws, pwe = _bj_vx_bm_powi_ux(xs, xe, la);
+    var p1s, p1e = _bj_k_ux_mul(scs, sce, pws, pwe);
+    var p2s, p2e = _bj_k_ux_mul(p1s, p1e, ls, le);
+    var p3s, p3e = _bj_k_ux_mul(p2s, p2e, ls, le);
+    var v: f64 = _bj_k_ux_mul_f64(p3s, p3e, es, ee);
+    return v;
+}

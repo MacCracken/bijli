@@ -618,6 +618,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
   runs with an unbounded exponent (`src/crmath_vx.cyr`'s `_bj_vx_bm_hg`), its envelope from a new e^x to |x| = 2^47
   (`src/crmath_ux.cyr`'s `_bj_ux_exp_wide`), and rounds its last product once; `hermite_gaussian_field` takes the new
   amplitude. Cost: the guard's tests, `beam/hermite_gaussian_hg33` 169 → 199 ns (`port-parity.md` §73).
+- **beam** (ADR 0002 row 18 amended, M3 part 2d-3b-2, range edges): `laguerre_gaussian_intensity` over- and underflowed
+  where the mode is representable. ρ²^|l| or L·L passed DBL_MAX against a small envelope (NaN for 1.0000047 at
+  l = 2³¹ − 1 where the power and the envelope balance, ∞ for 3.9·10²¹⁶ at l = 150), an envelope below 2^-1022 met a
+  large L (0 for 1.08·10⁻¹⁶⁰ at p = 100), and ρ²^|l| underflowed against a large L (0 for 3.6·10⁶⁶). Where Rust's
+  chain leaves the range it now runs with an unbounded exponent (`src/crmath_vx.cyr`'s `_bj_vx_bm_lg`, the power in
+  __powidf2's order) and rounds its last product once. Cost: the guard's tests, about 27 ns of a 158 ns call
+  (`port-parity.md` §74).
 
 ### Performance
 

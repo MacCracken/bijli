@@ -1146,23 +1146,72 @@ public fn bj_hermite_gaussian_field(beam: *BjGaussianBeam, m, n, x: f64, y: f64,
     return e;
 }
 
+# L_p^l(x) as _bj_laguerre_polynomial, with fl[0] set to 1 where its value may differ from the recurrence's with an
+# unbounded exponent (ADR 0002 row 18, M3 part 2d-3b-2): a value from L₂ on below 2^-900 (each step is two products
+# and a difference, then a quotient by k: src/crmath_vx.cyr's band argument). For x = 0 the values are at least 1. An ∞
+# or NaN stays one to the end, where the caller's test of the partial products sees it.
+#must_use
+fn _bj_beam_laguerre_fl(p, l, x: f64, fl: *i64): f64 {
+    if (p == 0) { return 1.0; }
+    var lf: f64 = f64_from(l);
+    var l_curr: f64 = 1.0 + lf - x;
+    if (p > 1) {
+        var l_prev: f64 = 1.0;
+        var lo = 0;
+        for (var k = 2; k <= p; k = k + 1) {
+            var kf: f64 = f64_from(k);
+            var l_next: f64 = ((2.0 * kf + lf - 1.0 - x) * l_curr - (kf + lf - 1.0) * l_prev) / kf;
+            var al: f64 = f64_abs(l_next);
+            if (al < _BJ_VX_LO) { lo = 1; }
+            l_prev = l_curr;
+            l_curr = l_next;
+        }
+        if (lo == 1) { fl[0] = 1; }
+    }
+    return l_curr;
+}
+
 # The Laguerre–Gaussian intensity I_pl(r, z) = (w₀/w)²·(2r²/w²)^|l|·[L_p^|l|(2r²/w²)]²·e^{−2r²/w²}, |E|² (the vortex
 # phase e^{jlφ} and the Gouy phase drop out). The TEM₀₀ prefactor serves every mode (LG₀₀(0, 0) = 1): LG_pl carries
 # (p + |l|)!/p! times TEM₀₀'s power. p ≥ 0 (Rust's u32), l Rust's i32. For l = i32::MIN the power is (2r²/w²)^{2³¹}
-# (ADR 0002 row 32: Rust's `l.unsigned_abs() as i32` wraps to −2³¹, the reciprocal). Mirrors
+# (ADR 0002 row 32: Rust's `l.unsigned_abs() as i32` wraps to −2³¹, the reciprocal). Rust's chain where every step of it
+# is provably the one with an unbounded exponent, else that chain, its last product rounded once (ADR 0002 row 18, M3
+# part 2d-3b-2; src/crmath_vx.cyr's _bj_vx_bm_lg, whose section comment lists the tests). Mirrors
 # `laguerre_gaussian_intensity`.
 #must_use
 public fn bj_laguerre_gaussian_intensity(beam: *BjGaussianBeam, p, l, r: f64, z: f64): f64 {
     var w: f64 = beam.spot_size(z);
     var w0: f64 = beam.waist;
-    var rho: f64 = _BJ_BEAM_SQRT_2 * r / w;
+    var tr: f64 = _BJ_BEAM_SQRT_2 * r;
+    var rho: f64 = tr / w;
     var rho_sq: f64 = rho * rho;
     var la = l;
     if (la < 0) { la = 0 - la; }
-    var lp: f64 = _bj_laguerre_polynomial(p, la, rho_sq);
-    var e: f64 = _bj_exp(-2.0 * r * r / (w * w));
-    var scale: f64 = w0 * w0 / (w * w);
+    var fl: i64[1];
+    fl[0] = 0;
+    var lp: f64 = _bj_beam_laguerre_fl(p, la, rho_sq, &fl);
+    var w2: f64 = w * w;
+    var t2: f64 = -2.0 * r * r;
+    var e: f64 = _bj_exp(t2 / w2);
+    var w0sq: f64 = w0 * w0;
+    var scale: f64 = w0sq / w2;
     var pw: f64 = _bj_powi(rho_sq, la);
-    var i: f64 = scale * pw * lp * lp * e;
+    var p1: f64 = scale * pw;
+    var p2: f64 = p1 * lp;
+    var p3: f64 = p2 * lp;
+    var i: f64 = p3 * e;
+    var ok = fl[0];
+    if (!(e > _BJ_VX_MN && w0sq > _BJ_VX_MN && w0sq <= _BJ_VX_HI)) { ok = 1; }
+    if (!(scale > _BJ_VX_MN && scale <= _BJ_VX_HI)) { ok = 1; }
+    var a: f64 = f64_abs(t2);
+    if (r != 0.0) {
+        if (!(a > _BJ_VX_MN && a <= _BJ_VX_HI)) { ok = 1; }
+        if (la > 0 && !(pw > _BJ_VX_MN && pw <= _BJ_VX_HI)) { ok = 1; }
+    }
+    a = f64_abs(p1);
+    if (!((a > _BJ_VX_MN && a <= _BJ_VX_HI) || pw == 0.0)) { ok = 1; }
+    a = f64_abs(p3);
+    if (!((a > _BJ_VX_MN && a <= _BJ_VX_HI) || p2 == 0.0)) { ok = 1; }
+    if (ok != 0) { i = _bj_vx_bm_lg(w0, beam.rayleigh_range, z, p, la, r, i); }
     return i;
 }

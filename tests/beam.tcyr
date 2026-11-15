@@ -906,6 +906,34 @@ fn cyrius_hg_row18(): i64 {
     return 0;
 }
 
+# ADR 0002 row 18 (M3 part 2d-3b-2): the Laguerre–Gaussian intensity's chain at its range edges, with an unbounded
+# exponent, the envelope from _bj_ux_exp_wide, the last product rounded once; bits from validate.py's model.
+fn cyrius_lg_row18(): i64 {
+    test_group("cyrius_lg_row18 (ADR 0002 row 18)");
+    var g: BjGaussianBeam;
+    g.wavelength = 1.0;
+    g.waist = 1.0;
+    g.rayleigh_range = _bj_from_bits(0x400921FB54442D18);
+    var u1: f64 = bj_laguerre_gaussian_intensity(&g, 0, 2147483647, _bj_from_bits(0x4103E09512FB6CAB), 0.0);
+    assert(_bj_bits(u1) == 0x3FF00004F7444A42, "l = 2³¹ − 1 where ρ²^|l| meets e^{−ρ²}: 1.0000047 (Rust: ∞·0 = NaN)");
+    var l2 = 0 - 2147483648;
+    var u2: f64 = bj_laguerre_gaussian_intensity(&g, 0, l2, _bj_from_bits(0x4103E09513102403), 0.0);
+    assert(_bj_bits(u2) == 0x3FF0000132CC2B0C, "l = i32::MIN there: 1.0000011, the power 2³¹ by row 32 (Rust: NaN)");
+    var u3: f64 = bj_laguerre_gaussian_intensity(&g, 0, 1000, _bj_from_bits(0x4050E14E171F1F95), 0.0);
+    assert(_bj_bits(u3) == 0x3FF0000000002C0F, "l = 1000 against e^-9118: 1.0000000000025 (Rust: NaN)");
+    var u4: f64 = bj_laguerre_gaussian_intensity(&g, 100, 0, _bj_from_bits(0x40365C55827DF1D2), 0.0);
+    assert(_bj_bits(u4) == 0x1EB84488CCBEA646, "p = 100 at ρ² = 1000: 1.08e-160 (Rust: e^-1000 = 0)");
+    var u5: f64 = bj_laguerre_gaussian_intensity(&g, 0, 150, _bj_from_bits(0x402C48C6001F0AC0), 0.0);
+    assert(_bj_bits(u5) == 0x6CE6A2460F251BFF, "l = 150 at ρ² = 400: 3.9e216 (Rust: 400^150 = ∞)");
+    var u6: f64 = bj_laguerre_gaussian_intensity(&g, 500, 3, 30.0, 0.0);
+    assert(_bj_bits(u6) == 0x40FDDB94F987729C, "p = 500 at ρ² = 1800: 122297.3 (Rust: L² = ∞ against 0, NaN)");
+    var u7: f64 = bj_laguerre_gaussian_intensity(&g, 1000, 200, _bj_from_bits(0x3FB21A1851FF630A), 0.0);
+    assert(_bj_bits(u7) == 0x4DC10AB99BC66CE9, "p = 1000, l = 200 at ρ² = 0.01: 3.6e66 (Rust: 0.01^200 = 0)");
+    var u8: f64 = bj_laguerre_gaussian_intensity(&g, 4, 7, 0.0, 0.0);
+    assert(_bj_bits(u8) == 0, "on the axis, l = 7: +0, ρ²^7 = 0 exactly (Rust's chain kept)");
+    return 0;
+}
+
 # The three structs' JSON (M3 part 1c-2), as serde_json writes and reads them.
 fn cyrius_json(): i64 {
     test_group("cyrius_beam_json");
@@ -1088,6 +1116,7 @@ fn main(): i64 {
     cyrius_row17();
     cyrius_row18();
     cyrius_hg_row18();
+    cyrius_lg_row18();
     cyrius_json();
     return assert_summary();
 }

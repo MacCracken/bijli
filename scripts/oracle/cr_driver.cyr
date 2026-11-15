@@ -580,6 +580,10 @@ fn _call(fp, fl, w): i64 {
         # bhg w0 zr z m n x y: the Hermite–Gaussian amplitude's unbounded chain itself (_bj_vx_bm_hg, M3 part 2d-3b-1)
         r = _bj_vx_bm_hg(x, y, _wf(w, 2), load64(w + 24), load64(w + 32), _wf(w, 5), _wf(w, 6), 0.0);
     }
+    elif (_is(fp, fl, "blg") == 1) {
+        # blg w0 zr z p la r: the Laguerre–Gaussian intensity's unbounded chain itself (_bj_vx_bm_lg, M3 part 2d-3b-2)
+        r = _bj_vx_bm_lg(x, y, _wf(w, 2), load64(w + 24), load64(w + 32), _wf(w, 5), 0.0);
+    }
     elif (_is(fp, fl, "ux_pow") == 1) {
         # ux_pow s e y part: (s·2^e)^y's s (part 0) or e (part 1)
         var ps, pe = _bj_ux_pow(x, load64(w + 8), _wf(w, 2));

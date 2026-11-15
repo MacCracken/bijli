@@ -4766,7 +4766,91 @@ def bm_hgf(bm, m, n, x, y, z, P, port=False, r18=True):
     return [("f", re), ("f", -im if port else im)]
 
 
-def bm_lg(bm, p, l, r, z, P, port=False):
+def bm_laguerre53(p, l, x):
+    """L_p^l(x) by its recurrence, each operation to 53 bits with an unbounded exponent (x a model pair; the integer
+    parts exact, as in Rust)."""
+    if p == 0:
+        return Fraction(1), False
+    lf = float(l)
+    lc = ux_sub(ux(1.0 + lf), x)
+    if p == 1:
+        return lc
+    lp = (Fraction(1), False)
+    for k in range(2, p + 1):
+        kf = float(k)
+        a = ux_mul(ux_sub(ux(2.0 * kf + lf - 1.0), x), lc)
+        b = ux_mul(ux(kf + lf - 1.0), lp)
+        lp, lc = lc, ux_div(ux_sub(a, b), ux(kf))
+    return lc
+
+
+def bm_me(a):
+    """A model pair (Fraction, negative) as (m, e, negative): its value m·2^e with 1 ≤ |m| < 2 (m = 0 for a zero), so
+    a product's exponent can pass what a Fraction holds (ρ²^(2³¹) has billions of bits)."""
+    if a[0] == 0:
+        return Fraction(0), 0, a[1]
+    e = binade(a[0])
+    return a[0] / Fraction(2) ** e, e, a[0] < 0
+
+
+def bm_me_mul(a, b):
+    """a·b to 53 bits with an unbounded exponent, on (m, e, negative) triples."""
+    m = a[0] * b[0]
+    if m == 0:
+        return Fraction(0), 0, a[2] != b[2]
+    m = rnd53(m)
+    e = a[1] + b[1]
+    if abs(m) >= 2:
+        m, e = m / 2, e + 1
+    return m, e, m < 0
+
+
+def bm_powi_me(a, n):
+    """a^n (n ≥ 0) in __powidf2's order, each product to 53 bits with an unbounded exponent, on triples."""
+    m = (Fraction(1), 0, False)
+    while n:
+        if n & 1:
+            m = bm_me_mul(m, a)
+        n >>= 1
+        if n:
+            a = bm_me_mul(a, a)
+    return m
+
+
+def bm_lg_ux(bm, p, la, r, z) -> float:
+    """bj_laguerre_gaussian_intensity with an unbounded exponent (row 18, M3 part 2d-3b-2), for la = |l| (2³¹ at
+    i32::MIN, row 32): w, ρ = √2r/w, ρ², L_p^la(ρ²) by its recurrence, (2r)·r, w·w, their quotient q, w₀·w₀ and its
+    quotient by w·w, ρ²^la in __powidf2's order and the partial products to 53 bits, e^{−q} at 53 bits from MPFR with
+    its widest exponent range (1 below 2^-60), the last product rounded once. The power and the products run on (m, e)
+    triples; a result whose binade lies past ±1200 is ±∞ or ±0 without its exact value."""
+    w = bm_spot53(bm, z)
+    rho = ux_div(ux_mul(ux(BM_SQRT2), ux(r)), w)
+    x = ux_mul(rho, rho)
+    lpv = bm_me(bm_laguerre53(p, la, x))
+    q = ux_div(ux_mul((2 * Fraction(r), r < 0), ux(r)), ux_mul(w, w))
+    sc = bm_me(ux_div(ux_mul(ux(bm[1]), ux(bm[1])), ux_mul(w, w)))
+    p3 = bm_me_mul(bm_me_mul(bm_me_mul(sc, bm_powi_me(bm_me(x), la)), lpv), lpv)
+    zero = -0.0 if p3[2] else 0.0
+    if p3[0] == 0:
+        return zero
+    big = -math.inf if p3[2] else math.inf
+    if q[0] < BM_ENV_ONE:
+        es, ee = 1.0, 0
+    elif q[0] >= BM_ENV_FAR:
+        return zero
+    else:
+        es, ee = mpfr_ref.wide_split("exp", -q[0])
+    e = p3[1] + ee
+    if e > 1100:
+        return big
+    if e < -1200:
+        return zero
+    return rn_frac(p3[0] * Fraction(es) * Fraction(2) ** e)
+
+
+def bm_lg(bm, p, l, r, z, P, port=False, r18=False):
+    if r18 and bm_fin(bm[1], bm[2], r, z) and bm[2] != 0 and bm[1] != 0:
+        return bm_lg_ux(bm, p, abs(l), r, z)
     w = bm_spot(bm, z)
     rho = fdiv(BM_SQRT2 * r, w)
     rs = rho * rho
@@ -5097,7 +5181,7 @@ def bm_eval(fn, v, P, port=False, r18=True):
     if fn == "beam::hermite_gaussian_field":
         return bm_hgf(v[:3], int(v[3]), int(v[4]), v[5], v[6], v[7], P, port, r18)
     if fn == "beam::laguerre_gaussian_intensity":
-        return fl([bm_lg(v[:3], int(v[3]), int(v[4]), v[5], v[6], P, port)])
+        return fl([bm_lg(v[:3], int(v[3]), int(v[4]), v[5], v[6], P, port, e18)])
     return None
 
 

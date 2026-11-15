@@ -4306,3 +4306,62 @@ E and B = n̂ × E/c.
   measured, 0 pending, 78,166 accepted (ADR 01: 29,441; ADR 0002: 48,725)** over 571,348 rows; **all 380 digests
   equal**. The amplitude's and the field's changed; the other 378 are unchanged. `beam.tcyr` passes on all three. The
   gate is clean (17 steps, no warnings; execution coverage 288 of 288 functions).
+
+## 74. M3 part 2d-3b-2: the Laguerre–Gaussian intensity at its range edges (2026-11-14)
+
+- **ADR 0002 row 18, amended.** Rust's ((((w₀·w₀)/(w·w))·ρ²^|l|)·L·L)·e^{−2r·r/(w·w)}, ρ = √2r/w, L = L_p^|l|(ρ²):
+  - NaN for 1.0000047 at l = 2³¹ − 1 where ρ²^|l| and the envelope balance (ρ² = |l|·ln ρ² ≈ 5.3·10¹⁰: the power
+    past DBL_MAX, the envelope e^-5.3·10¹⁰ far below 2^-1074); 1.0000011 at l = i32::MIN, its power 2³¹ by row 32;
+  - 0 for 1.08·10⁻¹⁶⁰ at p = 100, ρ² = 1000 (e^-1000 underflows, L² does not);
+  - ∞ for 3.9·10²¹⁶ at l = 150, ρ² = 400 (400^150 overflows); NaN for 122297 at p = 500, ρ² = 1800;
+  - 0 for 3.6·10⁶⁶ at p = 1000, l = 200, ρ² = 0.01 (ρ²^200 underflows to 0 against an L near 10²³³);
+  - NaN for 4.33 at w₀ = r = 10¹⁶⁰ (w₀·w₀, w·w and r·r past DBL_MAX).
+- **The guard** (beam.cyr): Rust's chain where it is provably the unbounded one, else `_bj_vx_bm_lg`:
+  - each Laguerre value from L₂ on at least 2^-900: each step is two products and a difference, then a quotient by
+    k ≥ 2, and L₁ and every coefficient (2k + |l| − 1) − ρ² is exact or normal for a normal ρ²;
+  - for r ≠ 0, (−2r)·r normal, and ρ²^|l| normal for |l| ≥ 1: its squares fall below 2^-1022 only below 1, where the
+    power falls too;
+  - w₀·w₀, its quotient by w·w, and the envelope normal;
+  - the first and last partial products normal or exact zeros.
+
+  A first draft also tested w·w, √2r, ρ, ρ² and the middle product. Each is implied by the rest:
+  - w ≥ w₀, so w·w past DBL_MAX makes w₀²/w² zero, and below 2^-1022 makes w₀·w₀ subnormal too;
+  - a normal ρ² means a normal ρ, which comes from a normal √2r unless w·w is below 2^-1022;
+  - a ρ² below 2^-1022 vanishes against every integer in L, and the power's test sees it there;
+  - the middle product past DBL_MAX makes the last ∞ too; below 2^-1022 it makes the last smaller still, where both
+    chains give the same signed 0.
+
+  Those tests went.
+- **The unbounded chain** (`src/crmath_vx.cyr`): w, ρ and ρ², the recurrence (`_bj_vx_bm_laguerre_ux`, its integer
+  parts exact as in Rust), (2r)·r, w·w and their quotient q, w₀·w₀ and its quotient by w·w, ρ²^|l| in compiler-rt's
+  __powidf2 order (`_bj_vx_bm_powi_ux`, the order `_bj_powi` already shares with Rust) and the partial products, each
+  to 53 bits; e^{−q} from §73's `_bj_ux_exp_wide`; the last product rounded once. The stand-in past 2^47 is exact here
+  too: for p < 2^32 and |l| ≤ 2^31, L·L and ρ²^|l| stay below 2^(2^45.4).
+- **The model** (`validate.py`'s `bm_laguerre53`, `bm_me_mul`, `bm_powi_me` and `bm_lg_ux`): the power and the products
+  run on (m, e) triples with the same 53-bit roundings, since ρ²^(2³¹) at ρ² = 2·10⁸ is a Fraction of 6·10¹⁰ bits; a
+  result past ±1200 in binade is ±∞ or ±0. It is the unbounded chain on every row with finite inputs, so the harness
+  checks the guard row by row.
+- **The oracle**: `beam.tsv` gains 29 rows after every earlier row (`lg_edges`):
+  - azimuthal orders ±(2³¹ − 1) and i32::MIN at the balance radius and two neighbours, ±1000 at theirs (the envelope
+    e^-9118, past e^-2300);
+  - radial orders to 1000 whose L·L or ρ²^|l| passes DBL_MAX or meets an envelope below 2^-1022;
+  - w₀·w₀, w·w and r·r past either end (one with q = 2^-45 on the unbounded path), the axis, and the far stand-in;
+  - one row for each of beam.cyr's seven remaining tests failing alone, found by a search that mirrors the guard on
+    Rust's doubles. With l = 0 the last product never fails alone: |L_p(x)| ≤ e^{x/2}, so L² passes DBL_MAX only
+    past x = 709, where the envelope's test fails too. The row uses l = 30, p = 200, ρ² = 600: Rust's ∞ for 3.2·10⁶⁶.
+- **Mappings**: `beam.adr.tsv` holds 6,284 rows, row 18's 1,422: 89 more LG rows, 62 of them older rows. 30 of those
+  were row 32's before: at l = i32::MIN the power 2³¹ now runs unbounded wherever it leaves the range. Row 32 keeps 336.
+  All passed on the harness's first run.
+- **cr_verify**: `blg` (`_bj_vx_bm_lg` itself on beams from 2^±600, radial orders to 300, powers to 2³¹, ρ² from
+  2^-120 to 2^80; 3,000 calls, 56 % normal results): 0 mismatches on x86_64 and aarch64.
+- **Mutations**: thirteen of fifteen caught, the envelope's 2^-60 cutoff after its row was added. The two left are the
+  per-step Laguerre test and the zero waist's return, as for HG (§73).
+- **Tests**: `cyrius_lg_row18` (8 assertions, 167 in tests/beam.tcyr).
+- **Benchmarks.** Rust has no LG bench, so the record has no row. A one-off bench interleaved against 2d-3b-1's tree
+  (three rounds, load 4.0 to 4.8):
+  - LG₁,₂ 158 → 185 ns (+17 %), LG₅,₋₃ 202 → 238 (+18 %), LG₀₀ on the axis 51 → 73;
+  - as for HG: the tests on the chain's values are what cost.
+- **Result, every target** (x86_64 ELF, x86_64 PE, aarch64): **16 modules, 0 failing; 493,152 ok, 0 failed, 0
+  measured, 0 pending, 78,225 accepted (ADR 01: 29,441; ADR 0002: 48,784)** over 571,377 rows; **all 380 digests
+  equal**. The LG intensity's changed; the other 379 are unchanged. `beam.tcyr` passes on all three. The gate is
+  clean (17 steps, no warnings; execution coverage 288 of 288 functions).
