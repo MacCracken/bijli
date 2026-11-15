@@ -31,6 +31,10 @@
 //! 10⁻¹²·Z₀ band on both sides, against reactances from 10⁻¹¹·Z₀ to 10⁶·Z₀ of both signs; the loads where
 //! R_L(Z₀ − R_L) = X_L², ulp by ulp and at relative offsets, with their exact zeros; the scaled guard's 2^-480 on
 //! either side; and seeded loads in both regimes.
+//!
+//! M4 part 2a-2 appends the cascade's edges (ADR 0002 row 17, its star product rounded once): resonances down to
+//! A22·B11 = 1 − 2^-70, the 10^-60 threshold straddled ulp by ulp, exact zeros and thrus, a cancelling S11, the
+//! fast path's box edges at 2^±120, wide and subnormal entries, and seeded networks.
 
 use crate::grids::{Rng, specials};
 use crate::m_field::res_f;
@@ -660,8 +664,128 @@ pub fn emit() -> Module {
     emit_1c1(r, &mut rng);
     emit_1c2(r, &mut rng);
     emit_2a1(r, &mut rng);
+    emit_2a2(r, &mut rng);
 
     rows.m
+}
+
+/// (re, im) of a/b, naively: the grids' constructions only.
+fn cq(a: (f64, f64), b: (f64, f64)) -> (f64, f64) {
+    let n = b.0 * b.0 + b.1 * b.1;
+    ((a.0 * b.0 + a.1 * b.1) / n, (a.1 * b.0 - a.0 * b.1) / n)
+}
+
+/// (re, im) of a·b.
+fn cm(a: (f64, f64), b: (f64, f64)) -> (f64, f64) {
+    (a.0 * b.0 - a.1 * b.1, a.0 * b.1 + a.1 * b.0)
+}
+
+/// A seeded passive-looking 2-port: four entries of magnitude below 1 and any phase.
+fn rand_port(rng: &mut Rng) -> [(f64, f64); 4] {
+    let mut s = [(0.0, 0.0); 4];
+    for e in &mut s {
+        let (m, th) = (rng.uniform(0.0, 1.0), rng.uniform(-std::f64::consts::PI, std::f64::consts::PI));
+        *e = (m * th.cos(), m * th.sin());
+    }
+    s
+}
+
+/// M4 part 2a-2: the cascade's star product, each part rounded once from the exact value, and its |T22|² < 10^-60
+/// decided exactly (ADR 0002 row 17): resonances, the threshold, zeros, a cancelling S11, the fast path's box edges,
+/// wide and subnormal entries, seeded networks.
+fn emit_2a2(r: &mut Rows, rng: &mut Rng) {
+    let z50 = [50.0, 50.0];
+    let pa = [(0.1, -0.05), (0.7, 0.2), (0.6, -0.3), (0.0, 0.0)];
+    let pb = [(0.0, 0.0), (0.5, 0.5), (0.4, 0.1), (-0.2, 0.3)];
+    // Resonances: A22·B11 = 1 − δ, δ = 2^-k·(1 + j)/2 and 2^-k, down to 2^-70 (D below Rust's resolution).
+    for &(m, th) in &[(0.5, 0.3), (0.9, -1.2), (0.999, 2.5), (1.0, 0.0)] {
+        let a22 = (m * f64::cos(th), m * f64::sin(th));
+        for k in (0..=70).step_by(5) {
+            for &dl in &[(1.0, 0.0), (0.5, 0.5), (0.0, -1.0)] {
+                let delta = (dl.0 * 2f64.powi(-k), dl.1 * 2f64.powi(-k));
+                let b11 = cq((1.0 - delta.0, -delta.1), a22);
+                let t21 = if m < 1.0 { (1.0 - m * m).sqrt() } else { 0.25 };
+                let a = [pa[0], pa[1], (t21, 0.0), a22];
+                let b = [b11, pb[1], (0.0, t21), pb[3]];
+                r.cascade(&tp(a, z50), &tp(b, z50));
+            }
+        }
+    }
+    // The threshold: D = d exactly (A22 = 1, B11 = 1 − d), A21 = 1, B21 = x within three ulps of d·10^30.
+    for kd in [1, 10, 20, 40, 60, 80] {
+        for &mul in &[1.0, 1.5] {
+            let d = mul * 2f64.powi(-kd);
+            let x0 = d * 1e30;
+            for j in -3..=3_i64 {
+                let x = if j >= 0 { up(x0, j.unsigned_abs()) } else { down(x0, j.unsigned_abs()) };
+                let a = [pa[0], pa[1], (1.0, 0.0), (1.0, 0.0)];
+                r.cascade(&tp(a, z50), &tp([(1.0 - d, 0.0), pb[1], (x, 0.0), pb[3]], z50));
+                r.cascade(&tp(a, z50), &tp([(1.0 - d, 0.0), pb[1], (0.0, -x), pb[3]], z50));
+            }
+        }
+    }
+    // Zeros and thrus: matched sections, an exact 0 in every position.
+    let thru = [(0.0, 0.0), (1.0, 0.0), (1.0, 0.0), (0.0, 0.0)];
+    r.cascade(&tp(thru, z50), &tp(pb, z50));
+    r.cascade(&tp(pa, z50), &tp(thru, z50));
+    for k in 0..8 {
+        let mut a = pa;
+        let mut b = pb;
+        if k < 4 {
+            a[k] = (0.0, 0.0);
+        } else {
+            b[k - 4] = (0.0, 0.0);
+        }
+        if a[2] != (0.0, 0.0) && b[2] != (0.0, 0.0) {
+            r.cascade(&tp(a, z50), &tp(b, z50));
+            r.cascade(&tp(b, z50), &tp(a, z50));
+        }
+    }
+    // S11's numerator cancelling: A11 = −A12·A21·B11/D, rounded.
+    for _ in 0..40 {
+        let (mut a, b) = (rand_port(rng), rand_port(rng));
+        let dd = (1.0 - cm(a[3], b[0]).0, -cm(a[3], b[0]).1);
+        let q = cq(cm(cm(a[1], a[2]), b[0]), dd);
+        a[0] = (-q.0, -q.1);
+        r.cascade(&tp(a, z50), &tp(b, z50));
+    }
+    // The fast path's box: one entry at 2^±119, 2^±120 or 2^±121.
+    for e in [119, 120, 121, -119, -120, -121] {
+        for k in 0..16 {
+            let (mut a, mut b) = (pa, pb);
+            let x = 1.5 * 2f64.powi(e);
+            let slot = if k < 8 { &mut a[k / 2] } else { &mut b[(k - 8) / 2] };
+            if k % 2 == 0 {
+                slot.0 = x;
+            } else {
+                slot.1 = -x;
+            }
+            r.cascade(&tp(a, z50), &tp(b, z50));
+        }
+    }
+    // Wide and subnormal entries.
+    for _ in 0..60 {
+        let mut s = [[(0.0, 0.0); 4]; 2];
+        for e in s.iter_mut().flatten() {
+            *e = (rng.signed_log_uniform(-300.0, 300.0), rng.signed_log_uniform(-300.0, 300.0));
+        }
+        r.cascade(&tp(s[0], z50), &tp(s[1], z50));
+    }
+    for k in 0..16 {
+        let (mut a, mut b) = (pa, pb);
+        let x = 2f64.powi(-1060 + 4 * i32::try_from(k).unwrap_or(0));
+        let slot = if k < 8 { &mut a[k / 2] } else { &mut b[(k - 8) / 2] };
+        if k % 2 == 0 {
+            slot.0 = x;
+        } else {
+            slot.1 = x;
+        }
+        r.cascade(&tp(a, z50), &tp(b, z50));
+    }
+    for _ in 0..200 {
+        let (a, b) = (rand_port(rng), rand_port(rng));
+        r.cascade(&tp(a, z50), &tp(b, z50));
+    }
 }
 
 /// M4 part 2a-1: the loads where the stub match's root (X_L ∓ disc)/(R_L − Z₀) cancels, so ADR 0002 row 39 maps

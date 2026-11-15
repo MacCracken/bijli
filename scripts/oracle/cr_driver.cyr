@@ -1,6 +1,6 @@
 # cr_driver.cyr — evaluates bijli's correctly rounded primitives on the arguments cr_verify.py writes.
 #
-# Input build/cr_in.txt, one call per line: `<fn> <word hex> …` (up to sixteen 16-digit words: an f64's bits, or an
+# Input build/cr_in.txt, one call per line: `<fn> <word hex> …` (up to twenty-four 16-digit words: an f64's bits, or an
 # integer in two's complement). Output, one line per call: the result's bits in hex. Beside the primitives: kimiya's
 # correctly rounded monomials, square roots of quotients and unbounded-exponent final operations (src/crmath_kx.cyr, M1
 # part 5), bijli's √ of a monomial (src/crmath_mono.cyr), which cr_verify.py checks against exact values (Python's
@@ -10,7 +10,8 @@
 # parallel combinations (src/crmath_edge.cyr, M2 parts 2c-2 to 2c-5), and the materials' 53-bit roots and Γ
 # (src/crmath_vx.cyr, M2 part 2d-2c), M3's exact sum-of-squares threshold (src/crmath_cmp.cyr, M3 part 2c-1), ABCD
 # propagation (src/crmath_edge.cyr, M3 part 2c-2), the Mueller, Jones and Stokes chains, Rayleigh's and the beam's
-# (src/crmath_vx.cyr, M3 parts 2d-1a to 2d-3a), against Fractions and MPFR's widest exponent range. Built from the math
+# (src/crmath_vx.cyr, M3 parts 2d-1a to 2d-3a), and the S-parameter cascade (src/crmath_edge.cyr, M4 part 2a-2), against
+# Fractions and MPFR's widest exponent range. Built from the math
 # sources the bundle carries (src/constants.cyr … src/mathx.cyr, in the manifest's order and byte for byte what
 # dist/bijli.cyr holds): the bundle is `private` and these entry points are bijli-internal, so a consumer of
 # dist/bijli.cyr can't call them, but a file of internals only has no marker and can be included on its own.
@@ -465,6 +466,19 @@ fn _call(fp, fl, w): i64 {
         if (qf == 0) { return 0 - 1; }
         if (qp == 1) { r = qo[1]; } else { r = qo[0]; }
     }
+    elif (_is(fp, fl, "cascade") == 1 || _is(fp, fl, "cascade_slow") == 1) {
+        # cascade v0 … v15 part, cascade_slow …: part k (0 to 7) of src/crmath_edge.cyr's S-parameter cascade (M4 part
+        # 2a-2: S11, S12, S21, S22 as (re, im); the fast path then the exact one, or the exact one alone), or its return
+        # (part 8: 1 + 4·m, m's bits the exact zeros); parts 0 to 7 are all ones when the threshold refuses
+        var co: f64[8];
+        var cs = 0;
+        if (fl > 7) { cs = 1; }
+        var cf = _bj_cr_cascade(w, cs, &co);
+        var cp = load64(w + 128);
+        if (cp == 8) { return cf; }
+        if ((cf & 1) == 0) { return 0 - 1; }
+        r = co[cp];
+    }
     elif (_is(fp, fl, "dot4") == 1) {
         # dot4 a0 a1 a2 a3 b0 b1 b2 b3 mode: Rust's Σ a_k·b_k from −0.0 at its range edges (_drv_dot4, M3 part
         # 2d-1a): b contiguous (mode 0, MuellerMatrix::apply's) or at a stride of 4 (mode 1, compose's column)
@@ -620,10 +634,10 @@ fn main(): i64 {
         while (end < len && load8(buf + end) != 10) { end = end + 1; }
         var sp = at;
         while (sp < end && load8(buf + sp) != 32) { sp = sp + 1; }
-        var words: i64[16];
+        var words: i64[24];
         var nw = 0;
         var p = sp + 1;
-        while (p + 16 <= end && nw < 16) {
+        while (p + 16 <= end && nw < 24) {
             words[nw] = _hexw(buf + p, 16);
             nw = nw + 1;
             p = p + 17;

@@ -4846,3 +4846,53 @@ stub's root, 2a-2 the cascade, 2a-3 S → Z), 2b round once, 2c the exact thresh
   equal**, HEAD's unchanged but `rf::single_stub_match_complex`'s (its new rows). `rf.tcyr` passes on all three
   (210). The gate is clean (no warnings; execution coverage 323 of 323 functions); validate.py 615,302 rows, 0
   problems.
+
+## 83. M4 part 2a-2: the cascade rounded once (2026-11-15)
+
+- **The finding**: Rust's `cascade` goes through the transfer matrices, T = T_a·T_b, and back, S = [T12/T22, det T/T22,
+  1/T22, −T21/T22], each step rounded. Its T22 = D/(A21·B21), D = 1 − A22·B11, cancels near a resonance: for a mirror
+  pair with A22·B11 = 1 − 2^-40 its S came out 4.6·10⁻⁶ off; Rust's own bench thru (0.1, 0.9) with itself gave 2/11
+  two ulps high and S12 ≠ S21; wide entries gave ±∞, NaN or the wrong sign for finite values; and its rounded
+  |T22|² < 10⁻⁶⁰ refused inputs the exact test accepts.
+- **ADR 0002 row 17, amended** (the user's answer of 2026-11-15; `src/crmath_edge.cyr`'s `_bj_cr_cascade`): for finite
+  entries the cascade is Redheffer's star product, S11 = A11 + A12·A21·B11/D, S12 = A12·B12/D, S21 = A21·B21/D,
+  S22 = B22 + A22·B12·B21/D, each part rounded once from the exact value, and the DivisionByZero is decided exactly
+  as 10⁶⁰·|D|² < |A21|²·|B21|²:
+  - the fast path (the 16 parts each 0 or in [2^±120]): D and the four complex products as exact expansions of
+    TwoProduct's parts, compressed (so D, the resonance's cancellation, carries none); the rest as double-doubles with
+    carried absolute bounds (`_bj_e_ed_*`: AccurateDWPlusDW, kimiya's dd products), the threshold decided where the
+    difference exceeds its bound, each quotient by `_bj_e_abcd_quot`'s rounding test;
+  - the exact path (outside the box, an undecided test): signed scaled bignums in 352-word buffers from fl_calloc (a
+    degree-5 value spans at most 10,495 bits), the quotients by restoring division; a refused allocation is Allocation
+    "the cascade's exact buffers".
+
+  A part exactly 0 keeps Rust's zero where Rust's chain gives one (+0 otherwise), as `propagate_beam`'s; a
+  non-finite entry keeps Rust's test and chain (`_bj_rf_cascade_chain`). The S21 tests stay Rust's until part 2c.
+- **Verified**: `cr_verify.py`'s cascade and cascade_slow families (passive networks, resonances to 2^-70, the
+  threshold ulp by ulp, zeros and thrus, a cancelling S11, the box edges, 10^±300 entries, subnormals; the driver
+  now reads 24 words a call): **18,000 calls equal to the exact value (Python's Fraction) on x86_64 and aarch64**,
+  the fast path and the exact path alone, with the exact-zero bits.
+- **The grid**: 732 rows appended to `rf.tsv` (20,631; the earlier body an exact prefix): resonances A22·B11 =
+  1 − 2^-k·(1, (1 + j)/2, −j) for k to 70 on four A22; D = 2^-k exactly against B21 within three ulps of
+  2^-k·10³⁰ (real and imaginary); thrus and an exact 0 in every position; a cancelling S11; one entry at 2^±119,
+  2^±120 and 2^±121 in each of the 16 places; 60 wide pairs, 16 subnormal entries, 200 seeded networks.
+- **validate.py** models the port's cascade on Fractions (`rf_cascade_exact`, independent of the Cyrius code) and maps
+  **1,068 rows** to row 17 in `rf.adr.tsv` (498 of them part 1b's): 1,025 values (of their 7,949 compared parts,
+  1,938 equal, 2,299 an ulp off, 2,708 within 1,000 ulps, 1,004 past that, 113 of the wrong sign, 251 ±∞ or NaN for
+  a finite value), 24 now refused and 19 refusals now computed.
+- **Tests**: `tests/rf.tcyr`'s `cyrius_cascade_exact` (7 assertions, 217 in all): the bench thru (2/11 and 9/11, S12
+  = S21, Rust's −0 kept), the resonance's S11 and S22, the threshold either side of 2^-40·10³⁰ with out untouched, and
+  the heap over 20 exact paths.
+- **Benchmarks**: `rf/s_cascade` (Rust's bench thru with itself) **523 ns → 3.47 µs** in a focused interleaved A/B
+  against HEAD (three rounds, 3.47 µs each, load 0.75), Rust's 100 ns: the cost of rounding once, which the user's
+  answer accepted ("a few µs"). A full interleaved A/B (three rounds, load 2.0 to 3.0, another repo's benches pinned
+  beside it) left the other 90 rows unchanged (median ratio 0.99). One-off probes of `_bj_cr_cascade` alone: the fast
+  path 2.84 µs (real entries) and 3.71 µs (complex), the exact path 53 µs and 73 µs; an "ed" product 47 ns, a 5-term
+  expansion compressed 131 ns. The complex products and Im D first took expansions too (3.0 and 4.4 µs); an
+  AccurateDWPlusDW of two exact TwoProducts is as cancellation-proof (its bound is relative to the exact sum) at half
+  the cost, so only Re D, with its 1, keeps the expansion. The cascade also runs Rust's chain (about 0.5 µs) when a part
+  is exactly 0, for that zero's sign.
+- **Result, every target** (x86_64 ELF, x86_64 PE, aarch64): **17 modules, 0 failing; 532,317 ok, 0 failed, 0
+  measured, 0 pending, 83,717 accepted (ADR 01: 30,859; ADR 0002: 52,858)** over 616,034 rows; **all 416 digests
+  equal**, HEAD's unchanged but `SMatrix::cascade`'s. `rf.tcyr` passes on all three (217). The gate is clean (no
+  warnings; execution coverage 323 of 323 functions); validate.py 616,034 rows, 0 problems.

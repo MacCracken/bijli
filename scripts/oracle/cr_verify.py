@@ -556,7 +556,8 @@ EXACT = ["mono"] + list(SHAPES) + ["sqrt_div", "wsqrt", "sqrt_mono", "sqrt_mono_
          "cos_t_slow", "lw_reff", "lw_reff_slow", "lw_kappa", "lw_kappa_slow", "par", "par_x", "par_slow",
          "par_rep", "par_rep_x", "par_rep_slow", "lw_nb", "lw_nb_slow", "lw_reff_ux", "vx_sqrt", "vx_sqrt_e",
          "vx_gamma", "lwo_reff", "lwo_reff_slow", "lwo_kappa", "lwo_kappa_slow", "lwo_nb", "lwo_nb_slow", "lwo_ux",
-         "gammao", "gammao_slow", "gammao2", "gammao2_slow", "sumsq", "sumsq_exact", "abcd", "abcd_slow", "dot4", "jcdot", "jint", "jnorm",
+         "gammao", "gammao_slow", "gammao2", "gammao2_slow", "sumsq", "sumsq_exact", "abcd", "abcd_slow", "cascade",
+         "cascade_slow", "dot4", "jcdot", "jint", "jnorm",
          "jover", "sjones", "sdop", "sellip", "sorient", "rsig", "rq", "rphase", "rang", "bspot", "bpeak", "broc",
          "bgouy", "bci", "bdot2", "bw0", "bgp", "bfsr", "bhg", "blg", "bhgf"]
 UX = ["ux_exp", "ux_exp_w", "ux_exp_big", "ux_cosh", "ux_sinh", "ux_ln", "ux_pow", "ux_sin", "ux_cos"]
@@ -1437,6 +1438,109 @@ def abcd_families(rng, count):
         for part in range(3):
             out.append(("abcd", v + [part], ref[part]))
             out.append(("abcd_slow", v + [part], ref[part]))
+    return out
+
+
+# ── M4's S-parameter cascade (src/crmath_edge.cyr, M4 part 2a-2, ADR 0002 row 17 amended) ──────────────────────────
+CASC_REFUSED = (1 << 64) - 1                # parts 0 to 7 when |T22|² < 10^-60
+
+
+def _cmul(x, y):
+    return x[0] * y[0] - x[1] * y[1], x[0] * y[1] + x[1] * y[0]
+
+
+def cascade_ref(v):
+    """The eight parts of Redheffer's star product of a = v[0:8] then b = v[8:16] (S11, S12, S21, S22 as (re, im)),
+    each RN of the exact value, then the return (1 + 4·m, bit k of m set where part k is exactly 0); the refused
+    marker and 0 when 10^60·|D|² < |A21|²·|B21|²."""
+    f = [Fraction(x) for x in v]
+    a = [(f[2 * k], f[2 * k + 1]) for k in range(4)]
+    b = [(f[8 + 2 * k], f[9 + 2 * k]) for k in range(4)]
+    p = _cmul(a[3], b[0])
+    d = (1 - p[0], -p[1])
+    den = d[0] * d[0] + d[1] * d[1]
+    if 10 ** 60 * den < (a[2][0] ** 2 + a[2][1] ** 2) * (b[2][0] ** 2 + b[2][1] ** 2):
+        return [CASC_REFUSED] * 8 + [0]
+
+    zeros = []
+
+    def quot(pp, a0=(0, 0)):
+        nr = a0[0] * den + pp[0] * d[0] + pp[1] * d[1]
+        ni = a0[1] * den + pp[1] * d[0] - pp[0] * d[1]
+        zeros.extend([nr == 0, ni == 0])
+        return [f2b(0.0 if nr == 0 else rn_frac(nr / den)), f2b(0.0 if ni == 0 else rn_frac(ni / den))]
+    out = quot(_cmul(_cmul(a[1], a[2]), b[0]), a[0]) + quot(_cmul(a[1], b[1])) + quot(_cmul(a[2], b[2]))
+    out += quot(_cmul(_cmul(a[3], b[1]), b[2]), b[3])
+    return out + [1 + 4 * sum(1 << k for k, z in enumerate(zeros) if z)]
+
+
+def cascade_cases(rng, count):
+    """Two 2-ports' 16 parts: passive networks; resonances (A22·B11 → 1 to 2^-60 and past); the 10^-60 threshold
+    straddled ulp by ulp; exact zeros and thrus; S11's numerator cancelling; the fast path's box edges at 2^±120;
+    any finite values (10^±300) and subnormals."""
+    def polar(r, th):
+        return [r * math.cos(th), r * math.sin(th)]
+
+    def port(mag=1.0):
+        return sum((polar(rng.uniform(0.0, mag), rng.uniform(-math.pi, math.pi)) for _ in range(4)), [])
+    out = []
+    for i in range(count):
+        mode = i % 8
+        a, b = port(), port()
+        if mode == 1:                                       # a resonance: A22·B11 = 1 − δ
+            r, th = rng.uniform(0.5, 1.0), rng.uniform(-math.pi, math.pi)
+            a[6:8] = polar(r, th)
+            k = rng.randint(0, 70)
+            z = complex(*a[6:8])
+            w = (1.0 - complex(rng.uniform(-1, 1), rng.uniform(-1, 1)) * 2.0 ** -k) / z
+            b[0:2] = [w.real, w.imag]
+            if rng.random() < 0.5:
+                a[4:6] = polar(math.sqrt(1 - r * r), rng.uniform(-math.pi, math.pi))
+        elif mode == 2:                                     # the threshold: D = d exactly against 10^-30·|S21·S21'|
+            kd = rng.randint(1, 80)
+            dv = 2.0 ** -kd * rng.choice([1.0, 1.5, 1.25])
+            a[6:8], b[0:2] = [1.0, 0.0], [1.0 - dv, 0.0]
+            x = float(Fraction(dv) * 10 ** 30)
+            for _ in range(rng.randint(-3, 3) + 3):
+                x = math.nextafter(x, math.inf if rng.random() < 0.5 else 0.0)
+            a[4:6], b[4:6] = [1.0, 0.0], [x, 0.0] if rng.random() < 0.5 else [0.0, x]
+        elif mode == 3:                                     # zeros and thrus
+            a = [0.0, 0.0, 1.0, 0.0, 1.0, 0.0, 0.0, 0.0] if rng.random() < 0.5 else a
+            for j in rng.sample(range(16), rng.randint(1, 8)):
+                (a if j < 8 else b)[j % 8] = 0.0
+            if a[4] == a[5] == 0.0:
+                a[4] = 0.5
+            if b[4] == b[5] == 0.0:
+                b[4] = 0.5
+        elif mode == 4:                                     # S11's numerator cancelling: A11 ≈ −A12·A21·B11/D
+            z = complex(*a[2:4]) * complex(*a[4:6]) * complex(*b[0:2]) / (1 - complex(*a[6:8]) * complex(*b[0:2]))
+            a[0:2] = [-z.real, -z.imag]
+        elif mode == 5:                                     # the box edges
+            for j in rng.sample(range(16), rng.randint(1, 4)):
+                e = rng.choice([120, -120, 121, -121, 119, -119])
+                s = rng.choice([1.0, -1.0, 1.5, -1.75])
+                (a if j < 8 else b)[j % 8] = s * 2.0 ** e
+        elif mode == 6:                                     # any finite values
+            for j in range(16):
+                (a if j < 8 else b)[j % 8] = rng.choice([1.0, -1.0]) * 10.0 ** rng.uniform(-300, 300)
+        elif mode == 7:                                     # subnormal and tiny parts
+            for j in rng.sample(range(16), rng.randint(1, 6)):
+                (a if j < 8 else b)[j % 8] = rng.choice([1.0, -1.0]) * 2.0 ** rng.randint(-1074, -1000)
+        v = a + b
+        assert len(v) == 16
+        if all(math.isfinite(x) for x in v):
+            out.append(v)
+    return out
+
+
+def cascade_families(rng, count):
+    """cascade (the fast path, then the exact one) and cascade_slow (the exact path alone): each case's nine parts."""
+    out = []
+    for v in cascade_cases(rng, count):
+        ref = cascade_ref(v)
+        for part in range(9):
+            out.append(("cascade", v + [part], ref[part]))
+            out.append(("cascade_slow", v + [part], ref[part]))
     return out
 
 
@@ -2598,6 +2702,9 @@ def main() -> int:
         arng = random.Random(0x3_2C2)
         calls += [(f, ref, ws) for f, ws, ref in abcd_families(arng, max(1, n // 20))
                   if "exact" in names or f in names]
+        crng = random.Random(0x4_2A2)
+        calls += [(f, ref, ws) for f, ws, ref in cascade_families(crng, max(1, n // 50))
+                  if "exact" in names or f in names]
         jrng = random.Random(0x3_2D1B)
         calls += [(f, ref, ws) for f, ws, ref in jones_families(jrng, max(1, n // 10))
                   if "exact" in names or f in names]
@@ -2629,9 +2736,9 @@ def main() -> int:
         urng = random.Random(0x5C_2E_D6E)
         fams = ux_families(urng, max(1, n // 20))
         calls += [(f, want, ws) for f, ws, want in fams if "ux" in names or f in names]
-    too_long = [name for name, _, a in calls if len(a) > 16]
-    if too_long:                                # cr_driver.cyr reads at most sixteen words a call
-        print(f"cr_verify: {len(too_long)} calls pass more than sixteen words ({too_long[0]})")
+    too_long = [name for name, _, a in calls if len(a) > 24]
+    if too_long:                                # cr_driver.cyr reads at most twenty-four words a call
+        print(f"cr_verify: {len(too_long)} calls pass more than twenty-four words ({too_long[0]})")
         return 1
     lines = [" ".join([name] + [w64(x) for x in a]) for name, _, a in calls]
     (root / "build/cr_in.txt").write_text("\n".join(lines) + "\n")
@@ -2644,7 +2751,7 @@ def main() -> int:
             g = results[t][i]
             # "invalid" is a word for these
             any_nan = name not in UX and not name.startswith(("gamma", "cm", "cos_t", "lw_", "lwo_", "par", "vx_",
-                                                              "abcd", "dot4", "j", "s", "r") + BM_FAMS)
+                                                              "abcd", "cascade", "dot4", "j", "s", "r") + BM_FAMS)
             ok = g == want or (any_nan and b2f(g) != b2f(g) and b2f(want) != b2f(want))
             per.setdefault((name, t), [0, 0])[0 if ok else 1] += 1
             if not ok:

@@ -5973,7 +5973,33 @@ def rf_s_to_t(s):
     return [[rf_cneg(sc_mul(det, inv)), sc_mul(s11, inv)], [rf_cneg(sc_mul(s22, inv)), inv]]
 
 
-def rf_cascade(a, b, port):
+def rf_cascade_exact(sa, sb):
+    """The port's cascade for finite entries (ADR 0002 row 17, M4 part 2a-2): Redheffer's star product, S11 = A11 +
+    A12·A21·B11/D, S12 = A12·B12/D, S21 = A21·B21/D, S22 = B22 + A22·B12·B21/D with D = 1 − A22·B11, each part RN of
+    the exact value (None for an exact 0, whose sign the caller picks); None when |T22|² < 10^-60 exactly
+    (10^60·|D|² < |A21|²·|B21|²)."""
+    a = [(Fraction(z[0]), Fraction(z[1])) for z in sa]
+    b = [(Fraction(z[0]), Fraction(z[1])) for z in sb]
+
+    def mul(x, y):
+        return x[0] * y[0] - x[1] * y[1], x[0] * y[1] + x[1] * y[0]
+    p = mul(a[3], b[0])
+    d = (1 - p[0], -p[1])
+    den = d[0] * d[0] + d[1] * d[1]
+    if 10 ** 60 * den < (a[2][0] ** 2 + a[2][1] ** 2) * (b[2][0] ** 2 + b[2][1] ** 2):
+        return None
+
+    def quot(pp, a0=(0, 0)):
+        nr = a0[0] * den + pp[0] * d[0] + pp[1] * d[1]
+        ni = a0[1] * den + pp[1] * d[0] - pp[0] * d[1]
+        return (None if nr == 0 else rn_frac(nr / den), None if ni == 0 else rn_frac(ni / den))
+    return [quot(mul(mul(a[1], a[2]), b[0]), a[0]), quot(mul(a[1], b[1])), quot(mul(a[2], b[2])),
+            quot(mul(mul(a[3], b[1]), b[2]), b[3])]
+
+
+def rf_cascade(a, b, port, exact=True):
+    """SMatrix::cascade. port: the port's z0_equal (row 37) and, with exact, its star product for finite entries
+    (row 17, M4 part 2a-2)."""
     if a["ports"] != 2 or b["ports"] != 2:
         return ip_err("cascade requires two 2-port networks")
     z0 = rf_uniform_z0(a, port)
@@ -5991,17 +6017,34 @@ def rf_cascade(a, b, port):
     t2 = rf_s_to_t(b["s"])
     if isinstance(t2[0], tuple):
         return t2
+    chain = rf_cascade_chain(t1, t2)
+    if port and exact and all(math.isfinite(x) for z in a["s"] + b["s"] for x in z):
+        s = rf_cascade_exact(a["s"], b["s"])
+        if s is None:
+            return dz_err("T22 = 0, cannot convert to S-parameters")
+        # A part exactly 0 keeps Rust's zero where Rust's chain gives one, +0 otherwise.
+        rust = [x for z in chain for x in z] if chain else [math.nan] * 8
+        parts = [x for z in s for x in z]
+        parts = [(r if r == 0.0 else 0.0) if x is None else x for x, r in zip(parts, rust)]
+        return rf_sm_toks(rf_two_port(*zip(parts[0::2], parts[1::2]), z0))
+    if chain is None:
+        return dz_err("T22 = 0, cannot convert to S-parameters")
+    return rf_sm_toks(rf_two_port(*chain, z0))
 
+
+def rf_cascade_chain(t1, t2):
+    """Rust's cascade from the transfer matrices: T = t1·t2, then [S11, S12, S21, S22], or None when the rounded
+    |T22|² < 10^-60."""
     def dot(r, c):
         return rf_cadd(sc_mul(t1[r][0], t2[0][c]), sc_mul(t1[r][1], t2[1][c]))
     t = [[dot(0, 0), dot(0, 1)], [dot(1, 0), dot(1, 1)]]
     if rf_nsq(t[1][1]) < 1e-60:
-        return dz_err("T22 = 0, cannot convert to S-parameters")
+        return None
     inv = rf_crecip(t[1][1])
     s11 = sc_mul(t[0][1], inv)
     s12 = sc_mul(rf_csub(sc_mul(t[0][0], t[1][1]), sc_mul(t[0][1], t[1][0])), inv)
     s22 = rf_cneg(sc_mul(t[1][0], inv))
-    return rf_sm_toks(rf_two_port(s11, s12, inv, s22, z0))
+    return [s11, s12, inv, s22]
 
 
 def rf_s_to_z(m, port):
@@ -6030,8 +6073,9 @@ def rf_index_err(n, a, b):
     return None
 
 
-def rf_sm_eval(fn, toks, port=False):
-    """The S-parameter rows (M4 part 1b) from their raw input tokens. None for another name."""
+def rf_sm_eval(fn, toks, port=False, exact=True):
+    """The S-parameter rows (M4 part 1b) from their raw input tokens. None for another name. port: the port's (rows
+    37 and, with exact, 17's cascade)."""
     if fn == "SMatrix::new":
         n, z0 = toks[0][1] & RF_U64, toks[1][1]
         return rf_sm_toks({"ports": n, "s": [(0.0, 0.0)] * (n * n), "z0": [z0] * n})
@@ -6052,7 +6096,7 @@ def rf_sm_eval(fn, toks, port=False):
     if fn == "SMatrix::cascade":
         a, k = rf_sm_read(toks, 0)
         b, _ = rf_sm_read(toks, k)
-        return rf_cascade(a, b, port)
+        return rf_cascade(a, b, port, exact)
     if fn == "rf::s_to_z":
         return rf_s_to_z(rf_sm_read(toks, 0)[0], port)
     return None
@@ -6330,7 +6374,9 @@ def rf_adr_rows(path: Path) -> list:
     """ADR 0002 mappings for rf.tsv: row 37 where an infinite Z₀, which Rust's z0_equal accepts as equal to the first
     port's or the file's R (∞ ≤ 10⁻¹²·∞), is refused by the port's (M4 parts 1b, 1c-2). A writer's mapping takes the
     corrected oracle's primitives, as its outputs then would. Row 39 where the stub match's cancelling root, taken
-    without its cancellation, moves a (d, ℓ) (M4 part 2a-1), on the corrected primitives too."""
+    without its cancellation, moves a (d, ℓ) (M4 part 2a-1), on the corrected primitives too. Row 17 where the
+    cascade's star product, each part rounded once and its T22 test exact, differs from Rust's chain (M4 part
+    2a-2)."""
     out = []
     for fn, _cls, ins, outs, v in sc_lines(path):
         if fn == "rf::single_stub_match_complex":
@@ -6339,6 +6385,7 @@ def rf_adr_rows(path: Path) -> list:
                 out.append((fn, ins, wire(port), "39", f"oracle {outs[:200]}; ADR 0002 row 39"))
             continue
         toks = [parse_tok(x) for x in ins.split(" ")]
+        row = "37"
         if fn == "rf::try_write_touchstone":
             rust, port = rf_write_eval(RF_P_MPFR, ins), rf_write_eval(RF_P_MPFR, ins, port=True)
         else:
@@ -6346,8 +6393,10 @@ def rf_adr_rows(path: Path) -> list:
             if rust is None:
                 continue
             port = rf_sm_eval(fn, toks, port=True)
+            if toks_same(rust, rf_sm_eval(fn, toks, port=True, exact=False)):
+                row = "17"
         if not toks_same(rust, port):
-            out.append((fn, ins, wire(port), "37", f"oracle {outs[:200]}; ADR 0002 row 37"))
+            out.append((fn, ins, wire(port), row, f"oracle {outs[:200]}; ADR 0002 row {row}"))
     return out
 
 

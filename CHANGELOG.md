@@ -323,6 +323,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
   range-edge review, runs on the user's answers of 2026-11-15 (port plan §0.1). Its first bite takes the stub match's
   cancelling root without its cancellation (ADR 0002 row 39, see Fixed). `rf.tsv` grows by 6,179 edge rows (19,899);
   `rf.adr.tsv` maps 2,911 of them and 18 of part 1a's, and `rf.cr.tsv` gains one glibc misrounding.
+- **Cyrius port, M4 part 2a-2 — the cascade rounded once** (`src/rf.cyr`, `src/crmath_edge.cyr`): `cascade` of
+  finite entries is Redheffer's star product with each part rounded once from the exact value, its |T22|² < 10⁻⁶⁰
+  decided exactly (ADR 0002 row 17 amended, see Fixed). `src/crmath_edge.cyr` gains the error-bounded double-double
+  helpers (`_bj_e_ed_*`) and the cascade's fast and exact paths; `cr_verify.py` the cascade and cascade_slow families
+  (and its driver 24 words a call). `rf.tsv` grows by 732 edge rows (20,631); `rf.adr.tsv` maps 1,068 cascade rows.
 
 ### Fixed
 
@@ -703,6 +708,15 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
   TwoProduct parts on power-of-two-scaled inputs: within 2 ulps of the exact root on all 3,775 golden rows that take
   it, where Rust's was up to 8.7·10¹⁸ ulps off. The band, the other root, d and ℓ keep Rust's chain. Cost: about
   0.3 µs on a load in the region; `rf/single_stub_match` (a real load) 1.90 → 1.91 µs (`port-parity.md` §82).
+- **rf** (ADR 0002 row 17 amended, M4 part 2a-2, the user's answer of 2026-11-15): `cascade` went through the rounded
+  transfer matrices, whose T22 = (1 − S22·S11′)/(S21·S21′) cancelled near a resonance: a pair with S22·S11′ =
+  1 − 2^-40 came out 4.6·10⁻⁶ off, Rust's bench thru with itself gave 2/11 two ulps high and S12 ≠ S21, wide entries
+  gave ±∞, NaN or the wrong sign for finite values, and its rounded |T22|² < 10⁻⁶⁰ refused inputs the exact test
+  accepts (and accepted some it refuses). For finite entries each part of S11 = A11 + A12·A21·B11/D, S12 =
+  A12·B12/D, S21 = A21·B21/D, S22 = B22 + A22·B12·B21/D (D = 1 − A22·B11) is now rounded once from the exact value,
+  and the threshold is 10⁶⁰·|D|² < |A21|²·|B21|², exactly. A part exactly 0 keeps Rust's zero where Rust's chain gives
+  one; a non-finite entry keeps Rust's chain. Cost: `rf/s_cascade` 523 ns → 3.47 µs (Rust 100 ns); the exact path,
+  for entries past 2^±120 or an undecided rounding, 53 to 73 µs (`port-parity.md` §83).
 
 ### Performance
 
