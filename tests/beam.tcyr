@@ -864,6 +864,48 @@ fn cyrius_row18(): i64 {
     return 0;
 }
 
+# ADR 0002 row 18 (M3 part 2d-3b-1): the Hermite–Gaussian amplitude's chain at its range edges, with an unbounded
+# exponent, the envelope from _bj_ux_exp_wide, the last product rounded once; bits from validate.py's model (Fractions
+# and MPFR with its widest exponent range).
+fn cyrius_hg_row18(): i64 {
+    test_group("cyrius_hg_row18 (ADR 0002 row 18)");
+    var g: BjGaussianBeam;
+    g.wavelength = 1.0;
+    g.waist = 1.0;
+    g.rayleigh_range = _bj_from_bits(0x400921FB54442D18);
+    var s2: f64 = _bj_from_bits(0x3FF6A09E667F3BCC);
+    var u1: f64 = bj_hermite_gaussian(&g, 150, 150, s2, s2, 0.0);
+    assert(_bj_bits(u1) == 0x7F9E497D73228DD0, "m = n = 150 at √2x/w = √2y/w = 2: 5.3e306 (Rust: H_m·H_n = ∞)");
+    var u2: f64 = bj_hermite_gaussian(&g, 200, 0, _bj_from_bits(0x403C48C6001F0ABF), 0.25, 0.0);
+    assert(_bj_bits(u2) == 0x463757E208931580, "m = 200 at √2x/w = 40: 1.85e30 (Rust: ∞·0 = NaN)");
+    var u3: f64 = bj_hermite_gaussian(&g, 4000, 0, _bj_from_bits(0x4063720820155763), 0.0, 0.0);
+    assert(_bj_bits(u3) == 0x456A655CB4A0827A, "m = 4000 at √2x/w = 220: 2.55e26, its envelope e^-24200 (Rust: NaN)");
+    var u4: f64 = bj_hermite_gaussian(&g, 3, 2, 0.0, 0.5, 0.0);
+    assert(_bj_bits(u4) == 0x8000000000000000, "on axis, m = 3: −0, H₃(0) = 0 exactly (Rust's chain kept)");
+    var lab: BjGaussianBeam;
+    lab.wavelength = _bj_from_bits(0x3EB1D9D85F385AF7);
+    lab.waist = _bj_from_bits(0x3F1A36E2EB1C432D);
+    lab.rayleigh_range = _bj_from_bits(0x3F9E3C20E08F9C42);
+    var u5: f64 = bj_hermite_gaussian(&lab, 1, 2, _bj_from_bits(1), 0.0, 0.0);
+    assert(_bj_bits(u5) == 0x800000000000DCF9, "x = 5e-324: −2.79e-319 (Rust: √2·x on the subnormal grid, −1.98e-319)");
+    var big: BjGaussianBeam;
+    var e160: f64 = _bj_from_bits(0x6126C2D4256FFCC3);
+    big.wavelength = 1.0;
+    big.waist = e160;
+    big.rayleigh_range = 1.0;
+    var u6: f64 = bj_hermite_gaussian(&big, 2, 2, e160, e160, 0.0);
+    assert(_bj_bits(u6) == 0x40137CFFF8377209, "w₀ = x = y = 1e160: 4.87 (Rust: w·w = ∞, NaN)");
+    var far: BjGaussianBeam;
+    far.wavelength = _bj_from_bits(0x3EB0C6F7A0B5ED8D);
+    far.waist = _bj_from_bits(0x2B2BFF2EE48E0530);
+    far.rayleigh_range = _bj_from_bits(0x01A56E1FC2F8F359);
+    var x7: f64 = _bj_from_bits(0x29180C903F7379F2);
+    var y7: f64 = _bj_from_bits(0x54CB6E83B85F253B);
+    var u7: f64 = bj_hermite_gaussian(&far, 1, 150, x7, y7, _bj_from_bits(0x2B2BFF2EE48E0530));
+    assert(_bj_bits(u7) == 0x0ABA0BA6F7DB4CAF, "(w₀/w)·H₁ below 2^-1022 lifted back by H₁₅₀: 5.4e-257 (Rust: −0)");
+    return 0;
+}
+
 # The three structs' JSON (M3 part 1c-2), as serde_json writes and reads them.
 fn cyrius_json(): i64 {
     test_group("cyrius_beam_json");
@@ -1045,6 +1087,7 @@ fn main(): i64 {
     cyrius_row13();
     cyrius_row17();
     cyrius_row18();
+    cyrius_hg_row18();
     cyrius_json();
     return assert_summary();
 }

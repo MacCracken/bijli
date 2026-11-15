@@ -1278,3 +1278,92 @@ fn _bj_vx_bm_fsr(fsr: f64, ac: f64): f64 {
     var u: f64 = _bj_k_ux_mul_f64(qs, qe, cs, ce);
     return u;
 }
+
+# ── the Hermite–Gaussian amplitude (M3 part 2d-3b-1): beam.cyr's bj_hermite_gaussian ──────────────────────────────────
+# Rust's ((w₀/w)·H_m(√2x/w))·H_n(√2y/w)·e^{−(x² + y²)/(w·w)} over- and underflows where the mode is representable:
+# H_m·H_n past DBL_MAX against a small envelope (Cramér's bound |H_m(s)|·e^{−s²/2} ≤ 1.09·√(2^m·m!) keeps their product
+# finite: at m = n = 150 and √2x/w = √2y/w = 2 Rust's ∞ is 5.3e306), an envelope below 2^-1022 lifted back by a large
+# H (Rust's NaN for 1.85e30 at m = 200, √2x/w = 40), and w·w or x·x past either end. beam.cyr keeps Rust's chain where
+# it is provably the unbounded one: every Hermite value from H₂ on at least 2^-900 for a nonzero argument (each step
+# is two products and a difference: the band argument at the top; an ∞ or NaN reaches the partial products), or exact
+# integers and zeros for a zero one; √2x and √2x/w normal or x = 0; w·w and the envelope normal (then so is w₀/w:
+# w = w₀·√(1 + (z/z_R)²) with the root below 2^512); x² + y² in [2^-900, DBL_MAX] or x = y = 0; and both partial
+# products normal or exact zeros. Elsewhere the chain runs with an unbounded exponent (_bj_vx_bm_hg), the envelope by
+# _bj_ux_exp_wide.
+
+# H_n(s) by the recurrence H₀ = 1, H₁ = 2s, H_k = 2s·H_{k−1} − 2(k − 1)·H_{k−2}, each operation to 53 bits with an
+# unbounded exponent, for the 53-bit s = ss·2^se: (s, e). 2s and 2(k − 1) are exact, as in Rust.
+#must_use
+fn _bj_vx_bm_hermite_ux(n, ss: f64, se): (f64, i64) {
+    if (n == 0) { return (1.0, 0); }
+    var ts: f64 = ss;
+    var te = se + 1;
+    if (ss == 0.0) { te = se; }
+    if (n == 1) { return (ts, te); }
+    var ps: f64 = 1.0;
+    var pe = 0;
+    var cs: f64 = ts;
+    var ce = te;
+    for (var k = 2; k <= n; k = k + 1) {
+        var as, ae = _bj_k_ux_mul(ts, te, cs, ce);
+        var kf: f64 = f64_from(k - 1);
+        var c2: f64 = 2.0 * kf;
+        var bs0, be0 = _bj_k_ux_from(c2);
+        var bs, be = _bj_k_ux_mul(bs0, be0, ps, pe);
+        var ns, ne = _bj_k_ux_sub(as, ae, bs, be);
+        ps = cs;
+        pe = ce;
+        cs = ns;
+        ce = ne;
+    }
+    return (cs, ce);
+}
+
+# x·√2/w to 53 bits with an unbounded exponent, for the 53-bit w = ws·2^we: (s, e).
+#must_use
+fn _bj_vx_bm_sx(x: f64, ws: f64, we): (f64, i64) {
+    var sq2: f64 = 0x3FF6A09E667F3BCD;
+    var ts, te = _bj_vx_mul(sq2, x);
+    var ss, se = _bj_k_ux_div(ts, te, ws, we);
+    return (ss, se);
+}
+
+# The Hermite–Gaussian amplitude ((w₀/w)·H_m(√2x/w))·H_n(√2y/w)·e^{−(x² + y²)/(w·w)} with an unbounded exponent (the
+# section comment), its last product rounded once, given Rust's u: for finite inputs, z_R ≠ 0 and w₀ ≠ 0; u otherwise
+# (a zero waist or z_R makes the same NaN in both chains). The envelope is 1 for (x² + y²)/w² below 2^-60, and the
+# far stand-in from 2^47 on.
+#must_use
+fn _bj_vx_bm_hg(w0: f64, zr: f64, z: f64, m, n, x: f64, y: f64, u: f64): f64 {
+    var fin: f64 = (w0 - w0) + (zr - zr) + (z - z) + (x - x) + (y - y);
+    if (fin != 0.0 || zr == 0.0 || w0 == 0.0) { return u; }
+    var rts, rte = _bj_vx_bm_root_ux(z, zr);
+    var w0s, w0e = _bj_k_ux_from(w0);
+    var ws, we = _bj_k_ux_mul(w0s, w0e, rts, rte);
+    var sxs, sxe = _bj_vx_bm_sx(x, ws, we);
+    var sys, sye = _bj_vx_bm_sx(y, ws, we);
+    var hms, hme = _bj_vx_bm_hermite_ux(m, sxs, sxe);
+    var hns, hne = _bj_vx_bm_hermite_ux(n, sys, sye);
+    var x2s, x2e = _bj_vx_mul(x, x);
+    var y2s, y2e = _bj_vx_mul(y, y);
+    var rs, re = _bj_k_ux_add(x2s, x2e, y2s, y2e);
+    var w2s, w2e = _bj_k_ux_mul(ws, we, ws, we);
+    var qs, qe = _bj_k_ux_div(rs, re, w2s, w2e);
+    var es: f64 = 1.0;
+    var ee = 0;
+    if (qs != 0.0 && qe >= 0 - 60) {
+        if (qe >= 47) {
+            ee = 0 - _BJ_UX_FAR;
+        } else {
+            var qd: f64 = _bj_k_ux_round(qs, qe, 0.0);
+            var nq: f64 = -qd;
+            var xs, xe = _bj_ux_exp_wide(nq);
+            es = xs;
+            ee = xe;
+        }
+    }
+    var scs, sce = _bj_k_ux_div(w0s, w0e, ws, we);
+    var p1s, p1e = _bj_k_ux_mul(scs, sce, hms, hme);
+    var p2s, p2e = _bj_k_ux_mul(p1s, p1e, hns, hne);
+    var r: f64 = _bj_k_ux_mul_f64(p2s, p2e, es, ee);
+    return r;
+}

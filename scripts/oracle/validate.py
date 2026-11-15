@@ -4706,7 +4706,48 @@ def bm_laguerre(p, l, x):
     return lc
 
 
-def bm_hg(bm, m, n, x, y, z, P):
+def bm_hermite53(n, s):
+    """H_n(s) by its recurrence, each operation to 53 bits with an unbounded exponent (s a model pair; 2s and 2(k − 1)
+    exact, as in Rust)."""
+    if n == 0:
+        return Fraction(1), False
+    t = (2 * s[0], s[1])
+    if n == 1:
+        return t
+    hp, hc = (Fraction(1), False), t
+    for k in range(2, n + 1):
+        hp, hc = hc, ux_sub(ux_mul(t, hc), ux_mul(ux(2.0 * float(k - 1)), hp))
+    return hc
+
+
+BM_ENV_ONE = Fraction(2) ** -60                    # below it e^{−q} is 1 at 53 bits
+BM_ENV_FAR = Fraction(2) ** 47                     # from it the port's envelope is the far stand-in
+
+
+def bm_hg_ux(bm, m, n, x, y, z) -> float:
+    """bj_hermite_gaussian with an unbounded exponent (row 18, M3 part 2d-3b-1): w, √2x/w, √2y/w, H_m and H_n by their
+    recurrences, x² + y², w·w, their quotient q, w₀/w and the partial products to 53 bits, e^{−q} at 53 bits from MPFR
+    with its widest exponent range (1 below 2^-60), and the last product rounded once. A product whose binade lies more
+    than 1200 below e^q's is ±0 without its envelope (whose Fraction could take billions of bits)."""
+    w = bm_spot53(bm, z)
+    sq = ux(BM_SQRT2)
+    hm = bm_hermite53(m, ux_div(ux_mul(sq, ux(x)), w))
+    hn = bm_hermite53(n, ux_div(ux_mul(sq, ux(y)), w))
+    q = ux_div(ux_add(ux_mul(ux(x), ux(x)), ux_mul(ux(y), ux(y))), ux_mul(w, w))
+    p2 = ux_mul(ux_mul(ux_div(ux(bm[1]), w), hm), hn)
+    if p2[0] == 0:
+        return -0.0 if p2[1] else 0.0
+    if q[0] < BM_ENV_ONE:
+        return rn_frac(p2[0])
+    if q[0] >= BM_ENV_FAR or binade(p2[0]) - 1.4426950408889634 * float(q[0]) < -1200:
+        return -0.0 if p2[0] < 0 else 0.0
+    es, ee = mpfr_ref.wide_split("exp", -q[0])
+    return rn_frac(p2[0] * Fraction(es) * Fraction(2) ** ee)
+
+
+def bm_hg(bm, m, n, x, y, z, P, r18=False):
+    if r18 and bm_fin(bm[1], bm[2], x, y, z) and bm[2] != 0 and bm[1] != 0:
+        return bm_hg_ux(bm, m, n, x, y, z)
     w = bm_spot(bm, z)
     hm = bm_hermite(m, fdiv(BM_SQRT2 * x, w))
     hn = bm_hermite(n, fdiv(BM_SQRT2 * y, w))
@@ -4714,8 +4755,8 @@ def bm_hg(bm, m, n, x, y, z, P):
     return fdiv(bm[1], w) * hm * hn * env
 
 
-def bm_hgf(bm, m, n, x, y, z, P, port=False):
-    amp = bm_hg(bm, m, n, x, y, z, P)
+def bm_hgf(bm, m, n, x, y, z, P, port=False, r18=True):
+    amp = bm_hg(bm, m, n, x, y, z, P, port and r18)
     k = fdiv(2.0 * SC_PI, bm[0])
     zr = bm[2]
     inv_r = fdiv(z, z * z + zr * zr)
@@ -5052,9 +5093,9 @@ def bm_eval(fn, v, P, port=False, r18=True):
             return fl([ux_fin(ux_mul(ux_div(ux(fsr), ux(SC_PI)), ux(ac), BM_EXACT))])
         return fl([fdiv(fsr, SC_PI) * P["acos"](arg)])
     if fn == "beam::hermite_gaussian":
-        return fl([bm_hg(v[:3], int(v[3]), int(v[4]), v[5], v[6], v[7], P)])
+        return fl([bm_hg(v[:3], int(v[3]), int(v[4]), v[5], v[6], v[7], P, e18)])
     if fn == "beam::hermite_gaussian_field":
-        return bm_hgf(v[:3], int(v[3]), int(v[4]), v[5], v[6], v[7], P, port)
+        return bm_hgf(v[:3], int(v[3]), int(v[4]), v[5], v[6], v[7], P, port, r18)
     if fn == "beam::laguerre_gaussian_intensity":
         return fl([bm_lg(v[:3], int(v[3]), int(v[4]), v[5], v[6], P, port)])
     return None

@@ -8267,6 +8267,115 @@ fn _bj_ux_exp_lim(x: f64, lim: f64): (f64, i64) {
     return (s, e);
 }
 
+# ── e^x to |x| = 2^47 (M3 part 2d-3b-1: beam's Hermite–Gaussian envelope) ──
+# The HG amplitude ((w₀/w)·H_m·H_n)·e^{−r²/w²} stays representable while e^{−r²/w²} lies far below 2^-1074: Cramér's
+# bound |H_m(s)|·e^{−s²/2} ≤ 1.09·√(2^m·m!) lets H_m·H_n lift it back. With m, n < 2^32 and |s| ≤ 2^2100 the factors
+# before it stay below 2^(2^44.1), so beyond |x| = 2^47 (an exponent past 2^47.5) every such product rounds to 0: there
+# the stand-in (1, ±_BJ_UX_FAR) is exact. Up to it, _bj_ux_exp_lim's reduction and series, the fixed point's integer
+# part held unmasked in limb 0 (its add, subtract and compare carry into it), and k·ln 2 formed by halves of 24 bits so
+# that no limb product passes 2^52. The reduction errs below 2^48·2^-364 = 2^-316, inside the slow path's 2^-290.
+
+# The far stand-in's exponent (2^62): beyond the HG chain's every product.
+const _BJ_UX_FAR = 4611686018427387904;
+
+# a = x in fixed point, for 0 ≤ x < 2^47 whose lowest set bit is at or above 2^-364: _bj_cr_set with limb 0 unmasked.
+fn _bj_ux_set_big(a, x: f64) {
+    _bj_cr_zero(a);
+    var w = _bj_cr_word(x);
+    var ef = (w >> 52) & 2047;
+    if (ef == 0) { return 0; }
+    var m = (w & 4503599627370495) | 4503599627370496;
+    var e = ef - 1075;
+    for (var j = 0; j < _BJ_CR_L; j = j + 1) {
+        var s = e + 28 * j;
+        var v = 0;
+        if (s >= 0) {
+            if (j == 0) {
+                v = m << s;
+            } elif (s < 28) {
+                v = (m << s) & _BJ_CR_MASK;
+            }
+        } elif (0 - s < 53) {
+            v = m >> (0 - s);
+            if (j > 0) { v = v & _BJ_CR_MASK; }
+        }
+        store64(a + j * 8, v);
+    }
+    return 0;
+}
+
+# a = k·ln 2 in fixed point, for 0 ≤ k < 2^48: (ln 2·⌊k/2^24⌋)·2^24 + ln 2·(k mod 2^24), each _bj_cr_mul_small's
+# limb product below 2^52 (it takes multipliers below 2^34 on its own).
+fn _bj_ux_ln2_k(a, k) {
+    var T[112];
+    var kh = k >> 24;
+    var kl = k & 16777215;
+    _bj_cr_mul_small(&T, &_bj_cr_ln2, kh);
+    _bj_cr_mul_small(&T, &T, 16777216);
+    _bj_cr_mul_small(a, &_bj_cr_ln2, kl);
+    _bj_cr_add(a, a, &T);
+    return 0;
+}
+
+# e^x rounded to 53 bits with an unbounded exponent, for finite x with |x| ≥ 2^-300: _bj_ux_exp_lim to |x| = 2300,
+# then the reduction above to 2^47, and (1, ±_BJ_UX_FAR) beyond (the section comment).
+#must_use
+fn _bj_ux_exp_wide(x: f64): (f64, i64) {
+    var ax: f64 = f64_abs(x);
+    if (ax <= 2300.0) {
+        var s0, e0 = _bj_ux_exp_lim(x, 2300.0);
+        return (s0, e0);
+    }
+    if (ax > 140737488355328.0) {
+        if (x > 0.0) { return (1.0, _BJ_UX_FAR); }
+        return (1.0, 0 - _BJ_UX_FAR);
+    }
+    _bj_cr_load();
+    var X[112];
+    var S[112];
+    var A[112];
+    var R[112];
+    var T[112];
+    _bj_ux_set_big(&X, ax);
+    var neg = 0;
+    if (x < 0.0) { neg = 1; }
+    var q: f64 = x * _BJ_CR_INVLN2;
+    var kf: f64 = f64_floor(q);
+    var k = f64_to(kf);
+    var tries = 0;
+    while (tries < 4) {
+        var kk = k;
+        if (kk < 0) { kk = 0 - kk; }
+        _bj_ux_ln2_k(&A, kk);
+        var lo = 0;
+        if (neg == 0) {
+            if (_bj_cr_cmp(&X, &A) < 0) { lo = 1; } else { _bj_cr_sub(&R, &X, &A); }
+        } else {
+            if (_bj_cr_cmp(&A, &X) < 0) { lo = 1; } else { _bj_cr_sub(&R, &A, &X); }
+        }
+        if (lo == 1) {
+            k = k - 1;
+        } elif (_bj_cr_cmp(&R, &_bj_cr_ln2) >= 0) {
+            k = k + 1;
+        } else {
+            tries = 4;
+        }
+        tries = tries + 1;
+    }
+    _bj_cr_zero(&S);
+    _bj_cr_zero(&T);
+    store64(&S, 1);
+    store64(&T, 1);
+    for (var n = 1; n < 200; n = n + 1) {
+        _bj_cr_mul(&T, &T, &R);
+        _bj_cr_div_small(&T, &T, n);
+        if (_bj_cr_is_zero(&T) == 1) { break; }
+        _bj_cr_add(&S, &S, &T);
+    }
+    var s, e = _bj_cr_round_ux(&S, k, 0);
+    return (s, e);
+}
+
 # cosh x rounded to 53 bits with an unbounded exponent, for finite |x| > 710: e^|x|/2. e^-|x| is below 2^-2048 of it,
 # so far below the fixed point's 2^-364 that the exact sum and e^|x| round alike (as _bj_cr_hyp_slow_exp truncates
 # it); (1, _BJ_UX_HUGE) beyond 1500.
@@ -10502,6 +10611,95 @@ fn _bj_vx_bm_fsr(fsr: f64, ac: f64): f64 {
     var cs, ce = _bj_k_ux_from(ac);
     var u: f64 = _bj_k_ux_mul_f64(qs, qe, cs, ce);
     return u;
+}
+
+# ── the Hermite–Gaussian amplitude (M3 part 2d-3b-1): beam.cyr's bj_hermite_gaussian ──────────────────────────────────
+# Rust's ((w₀/w)·H_m(√2x/w))·H_n(√2y/w)·e^{−(x² + y²)/(w·w)} over- and underflows where the mode is representable:
+# H_m·H_n past DBL_MAX against a small envelope (Cramér's bound |H_m(s)|·e^{−s²/2} ≤ 1.09·√(2^m·m!) keeps their product
+# finite: at m = n = 150 and √2x/w = √2y/w = 2 Rust's ∞ is 5.3e306), an envelope below 2^-1022 lifted back by a large
+# H (Rust's NaN for 1.85e30 at m = 200, √2x/w = 40), and w·w or x·x past either end. beam.cyr keeps Rust's chain where
+# it is provably the unbounded one: every Hermite value from H₂ on at least 2^-900 for a nonzero argument (each step
+# is two products and a difference: the band argument at the top; an ∞ or NaN reaches the partial products), or exact
+# integers and zeros for a zero one; √2x and √2x/w normal or x = 0; w·w and the envelope normal (then so is w₀/w:
+# w = w₀·√(1 + (z/z_R)²) with the root below 2^512); x² + y² in [2^-900, DBL_MAX] or x = y = 0; and both partial
+# products normal or exact zeros. Elsewhere the chain runs with an unbounded exponent (_bj_vx_bm_hg), the envelope by
+# _bj_ux_exp_wide.
+
+# H_n(s) by the recurrence H₀ = 1, H₁ = 2s, H_k = 2s·H_{k−1} − 2(k − 1)·H_{k−2}, each operation to 53 bits with an
+# unbounded exponent, for the 53-bit s = ss·2^se: (s, e). 2s and 2(k − 1) are exact, as in Rust.
+#must_use
+fn _bj_vx_bm_hermite_ux(n, ss: f64, se): (f64, i64) {
+    if (n == 0) { return (1.0, 0); }
+    var ts: f64 = ss;
+    var te = se + 1;
+    if (ss == 0.0) { te = se; }
+    if (n == 1) { return (ts, te); }
+    var ps: f64 = 1.0;
+    var pe = 0;
+    var cs: f64 = ts;
+    var ce = te;
+    for (var k = 2; k <= n; k = k + 1) {
+        var as, ae = _bj_k_ux_mul(ts, te, cs, ce);
+        var kf: f64 = f64_from(k - 1);
+        var c2: f64 = 2.0 * kf;
+        var bs0, be0 = _bj_k_ux_from(c2);
+        var bs, be = _bj_k_ux_mul(bs0, be0, ps, pe);
+        var ns, ne = _bj_k_ux_sub(as, ae, bs, be);
+        ps = cs;
+        pe = ce;
+        cs = ns;
+        ce = ne;
+    }
+    return (cs, ce);
+}
+
+# x·√2/w to 53 bits with an unbounded exponent, for the 53-bit w = ws·2^we: (s, e).
+#must_use
+fn _bj_vx_bm_sx(x: f64, ws: f64, we): (f64, i64) {
+    var sq2: f64 = 0x3FF6A09E667F3BCD;
+    var ts, te = _bj_vx_mul(sq2, x);
+    var ss, se = _bj_k_ux_div(ts, te, ws, we);
+    return (ss, se);
+}
+
+# The Hermite–Gaussian amplitude ((w₀/w)·H_m(√2x/w))·H_n(√2y/w)·e^{−(x² + y²)/(w·w)} with an unbounded exponent (the
+# section comment), its last product rounded once, given Rust's u: for finite inputs, z_R ≠ 0 and w₀ ≠ 0; u otherwise
+# (a zero waist or z_R makes the same NaN in both chains). The envelope is 1 for (x² + y²)/w² below 2^-60, and the
+# far stand-in from 2^47 on.
+#must_use
+fn _bj_vx_bm_hg(w0: f64, zr: f64, z: f64, m, n, x: f64, y: f64, u: f64): f64 {
+    var fin: f64 = (w0 - w0) + (zr - zr) + (z - z) + (x - x) + (y - y);
+    if (fin != 0.0 || zr == 0.0 || w0 == 0.0) { return u; }
+    var rts, rte = _bj_vx_bm_root_ux(z, zr);
+    var w0s, w0e = _bj_k_ux_from(w0);
+    var ws, we = _bj_k_ux_mul(w0s, w0e, rts, rte);
+    var sxs, sxe = _bj_vx_bm_sx(x, ws, we);
+    var sys, sye = _bj_vx_bm_sx(y, ws, we);
+    var hms, hme = _bj_vx_bm_hermite_ux(m, sxs, sxe);
+    var hns, hne = _bj_vx_bm_hermite_ux(n, sys, sye);
+    var x2s, x2e = _bj_vx_mul(x, x);
+    var y2s, y2e = _bj_vx_mul(y, y);
+    var rs, re = _bj_k_ux_add(x2s, x2e, y2s, y2e);
+    var w2s, w2e = _bj_k_ux_mul(ws, we, ws, we);
+    var qs, qe = _bj_k_ux_div(rs, re, w2s, w2e);
+    var es: f64 = 1.0;
+    var ee = 0;
+    if (qs != 0.0 && qe >= 0 - 60) {
+        if (qe >= 47) {
+            ee = 0 - _BJ_UX_FAR;
+        } else {
+            var qd: f64 = _bj_k_ux_round(qs, qe, 0.0);
+            var nq: f64 = -qd;
+            var xs, xe = _bj_ux_exp_wide(nq);
+            es = xs;
+            ee = xe;
+        }
+    }
+    var scs, sce = _bj_k_ux_div(w0s, w0e, ws, we);
+    var p1s, p1e = _bj_k_ux_mul(scs, sce, hms, hme);
+    var p2s, p2e = _bj_k_ux_mul(p1s, p1e, hns, hne);
+    var r: f64 = _bj_k_ux_mul_f64(p2s, p2e, es, ee);
+    return r;
 }
 
 # --- fmtf.cyr ---
@@ -25806,22 +26004,70 @@ public fn _bj_laguerre_polynomial(p, l, x: f64): f64 {
     return l_curr;
 }
 
+# H_n(x), x = t/w, as _bj_hermite_polynomial, with fl[0] set to 1 where its value may differ from the recurrence's with
+# an unbounded exponent (ADR 0002 row 18, M3 part 2d-3b-1): for n ≥ 1 and t ≠ 0, t or x below 2^-1022 (√2x or √2x/w
+# rounded on the subnormal grid), or a value from H₂ on below 2^-900 (each step is two products and a difference:
+# src/crmath_vx.cyr's band argument). For t = 0 the values are exact integers and zeros. An ∞ or NaN stays one to the
+# end, where the caller's test of (w₀/w)·H_n sees it. The flag goes through memory: a second return value cost the HG
+# amplitude more.
+#must_use
+fn _bj_beam_hermite_fl(n, t: f64, x: f64, fl: *i64): f64 {
+    if (n == 0) { return 1.0; }
+    if (t != 0.0) {
+        var at: f64 = f64_abs(t);
+        var ax: f64 = f64_abs(x);
+        if (!(at > _BJ_VX_MN && ax > _BJ_VX_MN)) { fl[0] = 1; }
+    }
+    var two_x: f64 = 2.0 * x;
+    var h_curr: f64 = two_x;
+    if (n > 1) {
+        var h_prev: f64 = 1.0;
+        var lo = 0;
+        for (var k = 2; k <= n; k = k + 1) {
+            var km: f64 = f64_from(k - 1);
+            var h_next: f64 = two_x * h_curr - 2.0 * km * h_prev;
+            var ah: f64 = f64_abs(h_next);
+            if (ah < _BJ_VX_LO) { lo = 1; }
+            h_prev = h_curr;
+            h_curr = h_next;
+        }
+        if (lo == 1 && x != 0.0) { fl[0] = 1; }
+    }
+    return h_curr;
+}
+
 # The Hermite–Gaussian envelope u_mn(x, y, z) = (w₀/w)·H_m(√2x/w)·H_n(√2y/w)·e^{−(x² + y²)/w²}, the field with every
 # propagation phase removed (|u_mn| = |E|, u_mn² the intensity), the lobes' signs kept. The TEM₀₀ prefactor serves
-# every mode (HG₀₀(0, 0, 0) = 1): HG_mn carries 2^{m+n}·m!·n! times TEM₀₀'s power. m, n ≥ 0 (Rust's u32). Mirrors
+# every mode (HG₀₀(0, 0, 0) = 1): HG_mn carries 2^{m+n}·m!·n! times TEM₀₀'s power. m, n ≥ 0 (Rust's u32). Rust's chain
+# where every step of it is provably the one with an unbounded exponent, else that chain, its last product rounded once
+# (ADR 0002 row 18, M3 part 2d-3b-1; src/crmath_vx.cyr's _bj_vx_bm_hg, whose section comment lists the tests). Mirrors
 # `hermite_gaussian`.
 #must_use
 public fn bj_hermite_gaussian(beam: *BjGaussianBeam, m, n, x: f64, y: f64, z: f64): f64 {
     var w: f64 = beam.spot_size(z);
     var w0: f64 = beam.waist;
-    var sx: f64 = _BJ_BEAM_SQRT_2 * x / w;
-    var sy: f64 = _BJ_BEAM_SQRT_2 * y / w;
-    var hm: f64 = _bj_hermite_polynomial(m, sx);
-    var hn: f64 = _bj_hermite_polynomial(n, sy);
+    var tx: f64 = _BJ_BEAM_SQRT_2 * x;
+    var ty: f64 = _BJ_BEAM_SQRT_2 * y;
+    var sx: f64 = tx / w;
+    var sy: f64 = ty / w;
+    var fl: i64[1];
+    fl[0] = 0;
+    var hm: f64 = _bj_beam_hermite_fl(m, tx, sx, &fl);
+    var hn: f64 = _bj_beam_hermite_fl(n, ty, sy, &fl);
     var r_sq: f64 = x * x + y * y;
-    var e: f64 = _bj_exp(-r_sq / (w * w));
-    var scale: f64 = w0 / w;
-    var u: f64 = scale * hm * hn * e;
+    var w2: f64 = w * w;
+    var e: f64 = _bj_exp(-r_sq / w2);
+    var p1: f64 = w0 / w * hm;
+    var p2: f64 = p1 * hn;
+    var u: f64 = p2 * e;
+    var ok = fl[0];
+    if (!(w2 > _BJ_VX_MN && w2 <= _BJ_VX_HI && e > _BJ_VX_MN)) { ok = 1; }
+    var a: f64 = f64_abs(p1);
+    if (!((a > _BJ_VX_MN && a <= _BJ_VX_HI) || hm == 0.0)) { ok = 1; }
+    a = f64_abs(p2);
+    if (!((a > _BJ_VX_MN && a <= _BJ_VX_HI) || p1 == 0.0 || hn == 0.0)) { ok = 1; }
+    if (!((r_sq >= _BJ_VX_LO && r_sq <= _BJ_VX_HI) || (x == 0.0 && y == 0.0))) { ok = 1; }
+    if (ok != 0) { u = _bj_vx_bm_hg(w0, beam.rayleigh_range, z, m, n, x, y, u); }
     return u;
 }
 

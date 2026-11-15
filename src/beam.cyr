@@ -1052,22 +1052,70 @@ public fn _bj_laguerre_polynomial(p, l, x: f64): f64 {
     return l_curr;
 }
 
+# H_n(x), x = t/w, as _bj_hermite_polynomial, with fl[0] set to 1 where its value may differ from the recurrence's with
+# an unbounded exponent (ADR 0002 row 18, M3 part 2d-3b-1): for n ≥ 1 and t ≠ 0, t or x below 2^-1022 (√2x or √2x/w
+# rounded on the subnormal grid), or a value from H₂ on below 2^-900 (each step is two products and a difference:
+# src/crmath_vx.cyr's band argument). For t = 0 the values are exact integers and zeros. An ∞ or NaN stays one to the
+# end, where the caller's test of (w₀/w)·H_n sees it. The flag goes through memory: a second return value cost the HG
+# amplitude more.
+#must_use
+fn _bj_beam_hermite_fl(n, t: f64, x: f64, fl: *i64): f64 {
+    if (n == 0) { return 1.0; }
+    if (t != 0.0) {
+        var at: f64 = f64_abs(t);
+        var ax: f64 = f64_abs(x);
+        if (!(at > _BJ_VX_MN && ax > _BJ_VX_MN)) { fl[0] = 1; }
+    }
+    var two_x: f64 = 2.0 * x;
+    var h_curr: f64 = two_x;
+    if (n > 1) {
+        var h_prev: f64 = 1.0;
+        var lo = 0;
+        for (var k = 2; k <= n; k = k + 1) {
+            var km: f64 = f64_from(k - 1);
+            var h_next: f64 = two_x * h_curr - 2.0 * km * h_prev;
+            var ah: f64 = f64_abs(h_next);
+            if (ah < _BJ_VX_LO) { lo = 1; }
+            h_prev = h_curr;
+            h_curr = h_next;
+        }
+        if (lo == 1 && x != 0.0) { fl[0] = 1; }
+    }
+    return h_curr;
+}
+
 # The Hermite–Gaussian envelope u_mn(x, y, z) = (w₀/w)·H_m(√2x/w)·H_n(√2y/w)·e^{−(x² + y²)/w²}, the field with every
 # propagation phase removed (|u_mn| = |E|, u_mn² the intensity), the lobes' signs kept. The TEM₀₀ prefactor serves
-# every mode (HG₀₀(0, 0, 0) = 1): HG_mn carries 2^{m+n}·m!·n! times TEM₀₀'s power. m, n ≥ 0 (Rust's u32). Mirrors
+# every mode (HG₀₀(0, 0, 0) = 1): HG_mn carries 2^{m+n}·m!·n! times TEM₀₀'s power. m, n ≥ 0 (Rust's u32). Rust's chain
+# where every step of it is provably the one with an unbounded exponent, else that chain, its last product rounded once
+# (ADR 0002 row 18, M3 part 2d-3b-1; src/crmath_vx.cyr's _bj_vx_bm_hg, whose section comment lists the tests). Mirrors
 # `hermite_gaussian`.
 #must_use
 public fn bj_hermite_gaussian(beam: *BjGaussianBeam, m, n, x: f64, y: f64, z: f64): f64 {
     var w: f64 = beam.spot_size(z);
     var w0: f64 = beam.waist;
-    var sx: f64 = _BJ_BEAM_SQRT_2 * x / w;
-    var sy: f64 = _BJ_BEAM_SQRT_2 * y / w;
-    var hm: f64 = _bj_hermite_polynomial(m, sx);
-    var hn: f64 = _bj_hermite_polynomial(n, sy);
+    var tx: f64 = _BJ_BEAM_SQRT_2 * x;
+    var ty: f64 = _BJ_BEAM_SQRT_2 * y;
+    var sx: f64 = tx / w;
+    var sy: f64 = ty / w;
+    var fl: i64[1];
+    fl[0] = 0;
+    var hm: f64 = _bj_beam_hermite_fl(m, tx, sx, &fl);
+    var hn: f64 = _bj_beam_hermite_fl(n, ty, sy, &fl);
     var r_sq: f64 = x * x + y * y;
-    var e: f64 = _bj_exp(-r_sq / (w * w));
-    var scale: f64 = w0 / w;
-    var u: f64 = scale * hm * hn * e;
+    var w2: f64 = w * w;
+    var e: f64 = _bj_exp(-r_sq / w2);
+    var p1: f64 = w0 / w * hm;
+    var p2: f64 = p1 * hn;
+    var u: f64 = p2 * e;
+    var ok = fl[0];
+    if (!(w2 > _BJ_VX_MN && w2 <= _BJ_VX_HI && e > _BJ_VX_MN)) { ok = 1; }
+    var a: f64 = f64_abs(p1);
+    if (!((a > _BJ_VX_MN && a <= _BJ_VX_HI) || hm == 0.0)) { ok = 1; }
+    a = f64_abs(p2);
+    if (!((a > _BJ_VX_MN && a <= _BJ_VX_HI) || p1 == 0.0 || hn == 0.0)) { ok = 1; }
+    if (!((r_sq >= _BJ_VX_LO && r_sq <= _BJ_VX_HI) || (x == 0.0 && y == 0.0))) { ok = 1; }
+    if (ok != 0) { u = _bj_vx_bm_hg(w0, beam.rayleigh_range, z, m, n, x, y, u); }
     return u;
 }
 

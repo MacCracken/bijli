@@ -151,6 +151,15 @@ def wide(name, *xs):
     exponent range: nothing over- or underflows. Each argument is a float or a Fraction of at most 53 bits; the result
     is a Fraction, or a float for ±0, ±∞ and NaN. The binary64 range is restored after the call."""
     from fractions import Fraction
+    r = wide_split(name, *xs)
+    if isinstance(r, float):
+        return r
+    return Fraction(r[0]) * Fraction(2) ** r[1]
+
+
+def wide_split(name, *xs):
+    """wide's value as (s, e) with s·2^e and 1 ≤ |s| < 2 (M3 part 2d-3b-1: e^x far past binary64, whose Fraction would
+    take billions of bits), or the float for ±0, ±∞ and NaN."""
     if name not in _UNARY + _BINARY or len(xs) != (1 if name in _UNARY else 2):
         raise ValueError(name)
     _m.mpfr_set_emin(_m.mpfr_get_emin_min())
@@ -169,7 +178,7 @@ def wide(name, *xs):
         _m.mpfr_set_emax(1024)
     if d == 0 or d != d or d in (float("inf"), float("-inf")):
         return d
-    return Fraction(d) * Fraction(2) ** e.value
+    return 2.0 * d, e.value - 1
 
 
 def bits(x):

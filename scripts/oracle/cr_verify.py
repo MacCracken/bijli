@@ -360,6 +360,8 @@ def exact_families(rng, count):
 
 
 UX_HUGE = 1 << 20      # src/crmath_ux.cyr's stand-in exponent for a value beyond every product's range
+UX_FAR = 1 << 62       # its far stand-in's, beyond |x| = 2^47 (_bj_ux_exp_wide, M3 part 2d-3b-1)
+UX_BIG = 2.0 ** 47
 
 
 def split53(v):
@@ -402,6 +404,24 @@ def ux_families(rng, count):
         # ux_exp_w (M2 part 2d-3b): the same with the stand-in beyond 2300, mostly between 1500 and 2300.
         xw = rng.uniform(1500.0, 2300.0) * sign() if i % 3 else rng.choice([x, rng.uniform(2300.001, 1e5) * sign()])
         pair("ux_exp_w", [xw], (1.0, UX_HUGE if xw > 0 else -UX_HUGE) if abs(xw) > 2300 else split53(W("exp", xw)))
+        # ux_exp_big (M3 part 2d-3b-1): to |x| = 2^47 by its own reduction, every binade from 2^11 up, integers and
+        # halves (k·ln 2 nowhere near them), around 2300 and 2^47, and the far stand-in beyond.
+        cb = i % 5
+        if cb == 0:
+            xb = rng.uniform(1.0, 2.0) * 2.0 ** rng.randint(11, 46) * sign()
+        elif cb == 1:
+            xb = float(rng.randint(2300, 1 << 46)) * sign() + rng.choice([0.0, 0.5])
+        elif cb == 2:
+            xb = rng.choice([rng.uniform(2200.0, 2400.0), UX_BIG - rng.randint(0, 4096) * 2.0 ** -5]) * sign()
+        elif cb == 3:
+            xb = rng.uniform(1.0, 2.0) * 2.0 ** rng.randint(47, 60) * sign()
+        else:
+            xb = rng.uniform(-2300.0, 2300.0)
+        if abs(xb) > UX_BIG:
+            want = (1.0, UX_FAR if xb > 0 else -UX_FAR)
+        else:
+            want = mpfr_ref.wide_split("exp", xb)
+        pair("ux_exp_big", [xb], want)
         y = rng.uniform(710.000001, 1500.0) * sign() if i % 5 else rng.uniform(1500.001, 1e5) * sign()
         if abs(y) > 1500:
             ch, sh = (1.0, UX_HUGE), (math.copysign(1.0, y), UX_HUGE)
@@ -536,8 +556,8 @@ EXACT = ["mono"] + list(SHAPES) + ["sqrt_div", "wsqrt", "sqrt_mono", "sqrt_mono_
          "vx_gamma", "lwo_reff", "lwo_reff_slow", "lwo_kappa", "lwo_kappa_slow", "lwo_nb", "lwo_nb_slow", "lwo_ux",
          "gammao", "gammao_slow", "gammao2", "gammao2_slow", "sumsq", "sumsq_exact", "abcd", "abcd_slow", "dot4", "jcdot", "jint", "jnorm",
          "jover", "sjones", "sdop", "sellip", "sorient", "rsig", "rq", "rphase", "rang", "bspot", "bpeak", "broc",
-         "bgouy", "bci", "bdot2", "bw0", "bgp", "bfsr"]
-UX = ["ux_exp", "ux_exp_w", "ux_cosh", "ux_sinh", "ux_ln", "ux_pow", "ux_sin", "ux_cos"]
+         "bgouy", "bci", "bdot2", "bw0", "bgp", "bfsr", "bhg"]
+UX = ["ux_exp", "ux_exp_w", "ux_exp_big", "ux_cosh", "ux_sinh", "ux_ln", "ux_pow", "ux_sin", "ux_cos"]
 
 
 # ── the correctly rounded Lorentz factor (src/crmath_gamma.cyr, M2's range-edge Part, ADR 0002 row 30) ───────────────
@@ -2113,7 +2133,7 @@ def rayleigh_families(rng, count):
 BM_PI = RAY_PI
 BM_MIN = Fraction(2) ** -1022
 BM_MAX = Fraction(sys.float_info.max)
-BM_FAMS = ("bspot", "bpeak", "broc", "bgouy", "bci", "bdot2", "bw0", "bgp", "bfsr")
+BM_FAMS = ("bspot", "bpeak", "broc", "bgouy", "bci", "bdot2", "bw0", "bgp", "bfsr", "bhg")
 
 
 def _jdiv(a, b, r=rnd53):
@@ -2277,6 +2297,69 @@ def beam_families(rng, count):
     return out
 
 
+BM_SQRT2 = struct.unpack("<d", bytes.fromhex("cd3b7f669ea0f63f"))[0]
+
+
+def _bherm(n, s):
+    """H_n(s) by its recurrence, each operation to 53 bits (s a pair; 2s and 2(k − 1) exact)."""
+    if n == 0:
+        return Fraction(1), False
+    t = (2 * s[0], s[1])
+    if n == 1:
+        return t
+    hp, hc = (Fraction(1), False), t
+    for k in range(2, n + 1):
+        hp, hc = hc, _jsub(_jmul(t, hc), _jmul(_jx(2.0 * (k - 1)), hp))
+    return hc
+
+
+def bhg_ref(w0, zr, z, m, n, x, y) -> int:
+    """The Hermite–Gaussian amplitude's chain with an unbounded exponent (src/crmath_vx.cyr's _bj_vx_bm_hg): every
+    operation to 53 bits, e^{−q} from MPFR at 53 bits with its widest exponent range (1 below 2^-60, the far stand-in
+    from 2^47: a product whose binade lies more than 1200 below e^q's is ±0), the last product rounded once."""
+    o = _bone_sq(z, zr)
+    w = _jmul(_jx(w0), (rnd53_sqrt(o[0]), False))
+    hm = _bherm(m, _jdiv(_jmul(_jx(BM_SQRT2), _jx(x)), w))
+    hn = _bherm(n, _jdiv(_jmul(_jx(BM_SQRT2), _jx(y)), w))
+    q = _jdiv(_jadd(_jmul(_jx(x), _jx(x)), _jmul(_jx(y), _jx(y))), _jmul(w, w))
+    p2 = _jmul(_jmul(_jdiv(_jx(w0), w), hm), hn)
+    if p2[0] == 0:
+        return f2b(-0.0 if p2[1] else 0.0)
+    if q[0] < Fraction(2) ** -60:
+        return f2b(rn_frac(p2[0]))
+    if q[0] >= Fraction(2) ** 47 or binade(p2[0]) - 1.4426950408889634 * float(q[0]) < -1200:
+        return f2b(-0.0 if p2[0] < 0 else 0.0)
+    es, ee = mpfr_ref.wide_split("exp", -q[0])
+    return f2b(rn_frac(p2[0] * Fraction(es) * Fraction(2) ** ee))
+
+
+def hg_families(rng, count):
+    """bhg (M3 part 2d-3b-1): the HG amplitude's unbounded chain on beams from 2^±600 (z_R independent of w₀, as a
+    hand-built beam's may be), the waist, the near and the far field (w past DBL_MAX), orders to 60 and some to 400,
+    and transverse points from √2x/w = 2^-60 to 2^40, envelopes past e^-2300 and past the stand-in among them."""
+    out = []
+    for i in range(count):
+        w0 = rng.uniform(1.0, 2.0) * 2.0 ** rng.randint(-600, 600)
+        zr = rng.uniform(1.0, 2.0) * 2.0 ** rng.randint(-600, 600)
+        z = rng.choice([0.0, zr * rng.uniform(-3.0, 3.0), zr * 2.0 ** rng.randint(0, 900)]) * rng.choice([1.0, -1.0])
+        if not math.isfinite(z):
+            z = zr
+        m = rng.choice([rng.randint(0, 12), rng.randint(0, 60), rng.randint(100, 400) if i % 7 == 0 else 3])
+        n = rng.choice([rng.randint(0, 12), rng.randint(0, 60), 0, 1])
+        wv = abs(w0) * math.sqrt(1.0 + min((z / zr) ** 2, 1e300)) if abs(z / zr) < 1e150 else abs(w0)
+
+        def pt():
+            c = rng.random()
+            if c < 0.1:
+                return 0.0
+            s = rng.uniform(1.0, 2.0) * 2.0 ** rng.randint(-60, 40 if c < 0.3 else 6)
+            v = s * wv / BM_SQRT2 * rng.choice([1.0, -1.0])
+            return v if math.isfinite(v) and v != 0.0 else 1.0
+        x, y = pt(), pt()
+        out.append(("bhg", [w0, zr, z, m, n, x, y], bhg_ref(w0, zr, z, m, n, x, y)))
+    return out
+
+
 def main() -> int:
     (root / "build").mkdir(exist_ok=True)
     names = wanted or list(FUNCS) + ["exact", "ux"]
@@ -2336,6 +2419,9 @@ def main() -> int:
                   if "exact" in names or f in names]
         rrng = random.Random(0x3_2D2A)
         calls += [(f, ref, ws) for f, ws, ref in rayleigh_families(rrng, max(1, n // 10))
+                  if "exact" in names or f in names]
+        hrng = random.Random(0x3_2D3B1)
+        calls += [(f, ref, ws) for f, ws, ref in hg_families(hrng, max(1, n // 50))
                   if "exact" in names or f in names]
         brng = random.Random(0x3_2D3A)
         calls += [(f, ref, ws) for f, ws, ref in beam_families(brng, max(1, n // 10))

@@ -411,6 +411,12 @@ fn _call(fp, fl, w): i64 {
         if (load64(w + 8) == 1) { return we2; }
         r = ws2;
     }
+    elif (_is(fp, fl, "ux_exp_big") == 1) {
+        # ux_exp_big x part: e^x to |x| = 2^47 with the far stand-in beyond (_bj_ux_exp_wide, M3 part 2d-3b-1)
+        var bs2, be2 = _bj_ux_exp_wide(x);
+        if (load64(w + 8) == 1) { return be2; }
+        r = bs2;
+    }
     elif (_is(fp, fl, "ux_cosh") == 1) {
         var cs, ce = _bj_ux_cosh(x);
         if (load64(w + 8) == 1) { return ce; }
@@ -569,6 +575,10 @@ fn _call(fp, fl, w): i64 {
     elif (_is(fp, fl, "bfsr") == 1) {
         # bfsr fsr g1 g2: the mode spacing, for a positive finite Δν_FSR and 0 ≤ g₁g₂ ≤ 1
         r = _drv_bfsr(x, y, _wf(w, 2));
+    }
+    elif (_is(fp, fl, "bhg") == 1) {
+        # bhg w0 zr z m n x y: the Hermite–Gaussian amplitude's unbounded chain itself (_bj_vx_bm_hg, M3 part 2d-3b-1)
+        r = _bj_vx_bm_hg(x, y, _wf(w, 2), load64(w + 24), load64(w + 32), _wf(w, 5), _wf(w, 6), 0.0);
     }
     elif (_is(fp, fl, "ux_pow") == 1) {
         # ux_pow s e y part: (s·2^e)^y's s (part 0) or e (part 1)

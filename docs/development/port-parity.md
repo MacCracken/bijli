@@ -4235,3 +4235,74 @@ E and B = n̂ × E/c.
   measured, 0 pending, 78,093 accepted (ADR 01: 29,441; ADR 0002: 48,652)** over 571,272 rows; **all 380 digests
   equal**. The thirteen functions this bite guards changed digests; the other 367 are unchanged. `beam.tcyr` passes
   on all three. The gate is clean (17 steps, no warnings; execution coverage 288 of 288 functions).
+
+## 73. M3 part 2d-3b-1: the Hermite–Gaussian amplitude at its range edges (2026-11-14)
+
+- **2d-3b runs in two bites.** The HG amplitude needs an e^x whose argument reaches far past 2300, so it goes first
+  (2d-3b-1); the LG intensity, its Laguerre recurrence and its power follow (2d-3b-2). The field's chain (its 53-bit
+  amplitude and its phase) is 2d-3c; here the field only takes the new amplitude, rounded as before.
+- **ADR 0002 row 18, amended.** Rust's ((w₀/w)·H_m(√2x/w))·H_n(√2y/w)·e^{−(x² + y²)/(w·w)}:
+  - ∞ for 5.3·10³⁰⁶ at m = n = 150, √2x/w = √2y/w = 2: H_m·H_n passes DBL_MAX, while Cramér's bound
+    |H_m(s)|·e^{−s²/2} ≤ 1.09·√(2^m·m!) keeps the mode finite;
+  - ∞·0 = NaN for 1.85·10³⁰ at m = 200, √2x/w = 40, and for 2.55·10²⁶ at m = 4000, √2x/w = 220 (envelope e^-24200);
+  - NaN for 4.87 at w₀ = x = y = 10¹⁶⁰ (w·w and x² + y² past DBL_MAX), and at 10⁻¹⁷⁰ (both 0);
+  - −0 for 5.4·10⁻²⁵⁷ where (w₀/w)·H₁ fell below 2^-1022 before H₁₅₀ lifted it back;
+  - −1.98·10⁻³¹⁹ for −2.79·10⁻³¹⁹ at x = 5·10⁻³²⁴, √2·x rounded onto the subnormal grid.
+- **The guard** (beam.cyr): Rust's chain where it is provably the unbounded one, else `_bj_vx_bm_hg`:
+  - each Hermite value from H₂ on at least 2^-900 for a nonzero argument (each step two products and a difference:
+    the band argument), or exact integers and zeros on the axis; an ∞ or NaN reaches the partial products;
+  - for an order from 1, √2x and √2x/w normal (tested inside the Hermite helper, so the TEM₀₀ case skips them);
+  - w·w and the envelope normal, which makes w₀/w normal too (w = w₀·√(1 + (z/z_R)²) with the root below 2^512): the
+    first draft's own test of w₀/w was implied, and so was a test of H's finiteness, and both went;
+  - x² + y² in [2^-900, DBL_MAX], or x = y = 0;
+  - both partial products normal or exact zeros.
+- **The unbounded chain** (`src/crmath_vx.cyr`): w, √2x/w and √2y/w, both recurrences (`_bj_vx_bm_hermite_ux`),
+  x² + y², w·w and their quotient q, w₀/w and the partial products, each to 53 bits; e^{−q} at 53 bits (1 below
+  2^-60, which is under 2^-54); the last product rounded once.
+- **e^x to |x| = 2^47** (`src/crmath_ux.cyr`'s `_bj_ux_exp_wide`). `_bj_ux_exp_lim` stopped at 2300. A product with the
+  envelope can stay representable far below e^-2300 (the m = 4000 row), so the reduction is stretched:
+  - the fixed point's integer part sits unmasked in limb 0, whose add, subtract and compare already carry into it;
+  - k·ln 2 is formed by halves of 24 bits, so no limb product passes 2^52;
+  - the error stays below 2^48·2^-364 = 2^-316, inside the slow path's 2^-290;
+  - beyond 2^47 the stand-in (1, ±2^62) is exact: for m, n < 2^32 and |√2x/w| ≤ 2^2100 the factors before the
+    envelope stay below 2^(2^44.1), so every product with e^{−2^47} rounds to 0.
+
+  `mpfr_ref.py` gained `wide_split`, the widest-range value as (s, e): e^(−10¹⁴)'s Fraction would take 10¹⁴ bits.
+- **The model** (`validate.py`'s `bm_hermite53` and `bm_hg_ux`): exact Fractions, the envelope from MPFR at 53 bits
+  with its widest exponent range. A product whose binade lies more than 1200 below e^q's is ±0 without building the
+  envelope. It is the unbounded chain on every row with finite inputs, so the harness checks the guard row by row.
+- **The oracle**: `beam.tsv` gains 76 rows after every earlier row (`hg_edges`, each through `hermite_gaussian` and
+  `hermite_gaussian_field`):
+  - H_m·H_n past DBL_MAX at m = n = 150 and five more order pairs, on both sides of the range;
+  - large H against envelopes below 2^-1022 and past e^-2300, to m = 4000;
+  - √2x below 2^-1022, √2x/w below it, w·w past either end, the far field (w past DBL_MAX), the partial product below
+    2^-1022 lifted back;
+  - on-axis exact zeros, and envelopes past the stand-in's 2^47;
+  - one row for each of beam.cyr's tests failing alone, the last two found by a search (subnormal roundings show only
+    for some significands: with x = (1 + k/512)·2^-512, x² lands exactly on the subnormal grid).
+- **Mappings**: `beam.adr.tsv` holds 6,225 rows, row 18's 1,333: 73 more, the amplitude 40 and the field 33 (12 of
+  them older rows). All passed on the harness's first run.
+- **cr_verify**: `ux_exp_big` (e^x to 2^47 by its own reduction, every binade from 2^11, integers and halves, around
+  2300 and 2^47, and the stand-in; 10,000 calls per target) and `bhg` (`_bj_vx_bm_hg` itself on beams from 2^±600,
+  orders to 400 and envelopes past the stand-in; 5,000 calls, about two thirds normal results): 0 mismatches on x86_64
+  and aarch64.
+- **Mutations**: eleven of fourteen caught. Six of them (the w·w, envelope, √2x, √2x/w and x² + y² tests, and the
+  envelope's 2^-60 cutoff) were caught only once rows were added that fail that test alone. The three left:
+  - the per-step Hermite test: for a tiny normal argument Rust's odd values are exact multiples of s and its even ones
+    absorb s², so it fires without changing a result. It stays as the proof's;
+  - the on-axis exemption, which only spares those points the unbounded path;
+  - the zero waist's return: both chains give NaN.
+- **Tests**: `cyrius_hg_row18` (7 assertions, 159 in tests/beam.tcyr).
+- **Benchmarks.** A full bench interleaved against 2d-3a's tree with a one-off bench of the amplitude (three rounds,
+  load 3.2 to 7.5, other repos' fuzzing, tests and benches beside it; each figure the lowest of three):
+  - `beam/hermite_gaussian_hg33` 169 → 199 ns (+18 %); the record takes the new median, 204 ns, and the field's,
+    753 ns (its lowest 706 → 716). Every other row within the load's noise (each round's median ratio 0.99 to 1.01).
+  - one-off: TEM₀₀ on the axis 44 → 69 ns, HG₃₁ on the x axis 154 → 191, HG₁₀,₁₀ 226 → 277.
+  - a finding, recorded: the tests cost about 30 ns. Removing them all left the amplitude within 3 ns of HEAD, and
+    the per-step check alone costs about 0.6 ns a step. The partial products' tests are the dearest (about 10 ns),
+    then x² + y², the axis tests, w·w and the envelope. A second return value for the Hermite flag cost more than
+    passing it through memory.
+- **Result, every target** (x86_64 ELF, x86_64 PE, aarch64): **16 modules, 0 failing; 493,182 ok, 0 failed, 0
+  measured, 0 pending, 78,166 accepted (ADR 01: 29,441; ADR 0002: 48,725)** over 571,348 rows; **all 380 digests
+  equal**. The amplitude's and the field's changed; the other 378 are unchanged. `beam.tcyr` passes on all three. The
+  gate is clean (17 steps, no warnings; execution coverage 288 of 288 functions).

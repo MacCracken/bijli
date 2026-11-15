@@ -611,6 +611,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
   rounding its last operation once (`src/crmath_vx.cyr`'s `_bj_vx_bm_*`). Cost: the tests, `beam/spot_size` 11 → 13
   ns, `beam/abcd_compose` 20 → 31 ns, `beam/resonator_stability` 42 → 47 ns, `apply_ray` 9 → 14 ns, and 46 ns for a
   ray that cancels to an exact 0 (`port-parity.md` §72).
+- **beam** (ADR 0002 row 18 amended, M3 part 2d-3b-1, range edges): `hermite_gaussian` over- and underflowed where the
+  mode is representable. H_m·H_n passed DBL_MAX against a small envelope (∞ for 5.3·10³⁰⁶ at m = n = 150), an envelope
+  below 2^-1022 met an overflowed H (NaN for 1.85·10³⁰ at m = 200), w·w left the range (NaN for 4.87 at
+  w₀ = x = y = 10¹⁶⁰), and √2·x or (w₀/w)·H_m rounded on the subnormal grid. Where Rust's chain leaves the range it now
+  runs with an unbounded exponent (`src/crmath_vx.cyr`'s `_bj_vx_bm_hg`), its envelope from a new e^x to |x| = 2^47
+  (`src/crmath_ux.cyr`'s `_bj_ux_exp_wide`), and rounds its last product once; `hermite_gaussian_field` takes the new
+  amplitude. Cost: the guard's tests, `beam/hermite_gaussian_hg33` 169 → 199 ns (`port-parity.md` §73).
 
 ### Performance
 

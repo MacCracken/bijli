@@ -40,6 +40,11 @@
 //! range, curved interfaces whose n₁ − n₂ or n₂·R passes DBL_MAX, two-term sums whose products over- or underflow
 //! (determinants, rays and products of matrices), transforms whose z_R′·λ′ leaves the range, cavities whose L/R passes
 //! DBL_MAX, and mode spacings for a free spectral range below π·2^-1022.
+//!
+//! M3 part 2d-3b-1 (ADR 0002 row 18, amended) appends the Hermite–Gaussian amplitude's range edges, each through
+//! `hermite_gaussian` and `hermite_gaussian_field`: high orders whose H_m·H_n passes DBL_MAX against a small envelope,
+//! envelopes below 2^-1022 (and past e^-2300) lifted back by a large H, √2x/w and the partial products below 2^-1022,
+//! w·w and x² + y² past either end, the far field where w passes DBL_MAX, and on-axis points with exact zeros.
 
 use crate::grids::{Rng, specials};
 use crate::m_field::res_f;
@@ -466,7 +471,67 @@ pub fn emit() -> Module {
     round_once_edges(r);
     q_out_edges(r);
     chain_edges(r);
+    hg_edges(r);
     rows.m
+}
+
+/// A `hermite_gaussian` and a `hermite_gaussian_field` row.
+fn hg_rows(r: &mut Rows, v: [f64; 3], m: u32, n: u32, x: f64, y: f64, z: f64) {
+    let g = beam_of(v);
+    let ins = [f(v[0]), f(v[1]), f(v[2]), i(m), i(n), f(x), f(y), f(z)];
+    let (mb, nb, xb, yb, zb) = (black_box(m), black_box(n), black_box(x), black_box(y), black_box(z));
+    r.row("beam::hermite_gaussian", Class::C, &ins, || vec![f(hermite_gaussian(&g, mb, nb, xb, yb, zb))]);
+    r.row("beam::hermite_gaussian_field", Class::C, &ins, || {
+        let e = hermite_gaussian_field(&g, mb, nb, xb, yb, zb);
+        vec![f(e.re), f(e.im)]
+    });
+}
+
+/// M3 part 2d-3b-1: the Hermite–Gaussian amplitude's range edges (ADR 0002 row 18).
+fn hg_edges(r: &mut Rows) {
+    let unit = [1.0, 1.0, std::f64::consts::PI];
+    let r2 = std::f64::consts::SQRT_2;
+    // H_m·H_n past DBL_MAX against the envelope (the unit beam at its waist: √2x/w = s), on both sides of the range.
+    for (m, n, s) in [(150, 150, 2.0), (150, 150, 3.0), (150, 150, 5.0), (150, 150, 8.0), (150, 150, 12.0)] {
+        hg_rows(r, unit, m, n, s / r2, s / r2, 0.0);
+    }
+    for (m, n, s) in [(160, 140, 4.0), (170, 170, 3.0), (200, 200, 3.0), (300, 300, 10.0), (120, 180, 6.0)] {
+        hg_rows(r, unit, m, n, s / r2, -s / r2, 0.0);
+    }
+    // A large H against an envelope below 2^-1022 and past e^-2300 (exp's own reduction), one order zero.
+    for (m, n, s) in [(200, 0, 30.0), (200, 0, 40.0), (200, 0, 50.0), (500, 0, 40.0), (500, 0, 70.0), (1000, 1, 60.0)] {
+        hg_rows(r, unit, m, n, s / r2, 0.25, 0.0);
+    }
+    for (m, s) in [(4000, 220.0), (3000, 200.0), (2500, 180.0)] {
+        hg_rows(r, unit, m, 0, s / r2, 0.0, 0.0);
+    }
+    // √2x below 2^-1022 or √2x/w below it, w·w past either end, the far field (w past DBL_MAX), the partial product
+    // (w₀/w)·H_m below 2^-1022 lifted back by H_n.
+    hg_rows(r, [1e-6, 1e-300, 1.0], 3, 3, 1e-310, 1e-310, 0.0);
+    hg_rows(r, [1e-6, 1e-300, 1.0], 3, 1, 5e-324, 2e-300, 0.0);
+    hg_rows(r, [1e-6, 1e200, 1.0], 1, 1, 1e-200, 1e-200, 0.0);
+    hg_rows(r, [1.0, 1e160, 1.0], 2, 2, 1e160, 1e160, 0.0);
+    hg_rows(r, [1.0, 1e-170, 1.0], 2, 2, 1e-170, 1e-170, 0.0);
+    hg_rows(r, [1.0, 1e-170, 1.0], 3, 0, 1e-170, 0.0, 0.0);
+    hg_rows(r, [1e-6, 1e10, 1e-10], 1, 1, 1e300, 1e300, 1e300);
+    hg_rows(r, [1e-6, 1e10, 1e-10], 0, 0, 0.0, 0.0, 1e300);
+    hg_rows(r, [1e-6, 1e-100, 1e-300], 1, 150, 1e-110, 3e100, 1e-100);
+    hg_rows(r, [1e-6, 1e-100, 1e-300], 1, 60, 1e-110, 1e100, 1e-100);
+    // Each of beam.cyr's tests the only one to fail: the envelope alone below 2^-1022 (m = 100 at √2x/w = 38), w·w
+    // alone past DBL_MAX (Rust's e = 1 where q = 0.0098, and where q = 2^-45), √2x alone subnormal (√2x/w normal),
+    // √2x/w alone just below 2^-1022 at m = 1, and x² + y² alone below 2^-1022 with q near 1.
+    hg_rows(r, unit, 100, 0, 38.0 / r2, 0.0, 0.0);
+    hg_rows(r, [1.0, 1e155, 1.0], 1, 1, 7e153, 7e153, 0.0);
+    hg_rows(r, [1.0, 1e155, 1.0], 1, 1, 1e155 * 2f64.powi(-23), 1e155 * 2f64.powi(-23), 0.0);
+    hg_rows(r, [1.0, 2f64.powi(-200), 1.0], 1, 0, 1.3 * 2f64.powi(-1030), 2f64.powi(-200), 0.0);
+    hg_rows(r, [1.0, 1.3 * 2f64.powi(123), 1.0], 1, 0, (1.0 + 1.0 / 512.0) * 2f64.powi(-900), 2f64.powi(-400), 0.0);
+    let xs = f64::from_bits(0x3ff1_b083_c6c0_b46a) * 2f64.powi(-512);
+    hg_rows(r, [1.0, 1.5 * 2f64.powi(-511), 1.0], 1, 1, xs, xs, 0.0);
+    // On axis: exact zeros of the odd orders (Rust's chain kept), and envelopes far past the stand-in's 2^47.
+    hg_rows(r, unit, 3, 2, 0.0, 0.5, 0.0);
+    hg_rows(r, unit, 2, 5, -0.5, 0.0, 0.0);
+    hg_rows(r, unit, 1, 1, 1e10, 1e10, 0.0);
+    hg_rows(r, unit, 40, 40, 1e8, -1e8, 0.0);
 }
 
 /// The Gaussian beam's methods at z (one row each).

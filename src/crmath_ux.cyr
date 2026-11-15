@@ -92,6 +92,115 @@ fn _bj_ux_exp_lim(x: f64, lim: f64): (f64, i64) {
     return (s, e);
 }
 
+# ── e^x to |x| = 2^47 (M3 part 2d-3b-1: beam's Hermite–Gaussian envelope) ──
+# The HG amplitude ((w₀/w)·H_m·H_n)·e^{−r²/w²} stays representable while e^{−r²/w²} lies far below 2^-1074: Cramér's
+# bound |H_m(s)|·e^{−s²/2} ≤ 1.09·√(2^m·m!) lets H_m·H_n lift it back. With m, n < 2^32 and |s| ≤ 2^2100 the factors
+# before it stay below 2^(2^44.1), so beyond |x| = 2^47 (an exponent past 2^47.5) every such product rounds to 0: there
+# the stand-in (1, ±_BJ_UX_FAR) is exact. Up to it, _bj_ux_exp_lim's reduction and series, the fixed point's integer
+# part held unmasked in limb 0 (its add, subtract and compare carry into it), and k·ln 2 formed by halves of 24 bits so
+# that no limb product passes 2^52. The reduction errs below 2^48·2^-364 = 2^-316, inside the slow path's 2^-290.
+
+# The far stand-in's exponent (2^62): beyond the HG chain's every product.
+const _BJ_UX_FAR = 4611686018427387904;
+
+# a = x in fixed point, for 0 ≤ x < 2^47 whose lowest set bit is at or above 2^-364: _bj_cr_set with limb 0 unmasked.
+fn _bj_ux_set_big(a, x: f64) {
+    _bj_cr_zero(a);
+    var w = _bj_cr_word(x);
+    var ef = (w >> 52) & 2047;
+    if (ef == 0) { return 0; }
+    var m = (w & 4503599627370495) | 4503599627370496;
+    var e = ef - 1075;
+    for (var j = 0; j < _BJ_CR_L; j = j + 1) {
+        var s = e + 28 * j;
+        var v = 0;
+        if (s >= 0) {
+            if (j == 0) {
+                v = m << s;
+            } elif (s < 28) {
+                v = (m << s) & _BJ_CR_MASK;
+            }
+        } elif (0 - s < 53) {
+            v = m >> (0 - s);
+            if (j > 0) { v = v & _BJ_CR_MASK; }
+        }
+        store64(a + j * 8, v);
+    }
+    return 0;
+}
+
+# a = k·ln 2 in fixed point, for 0 ≤ k < 2^48: (ln 2·⌊k/2^24⌋)·2^24 + ln 2·(k mod 2^24), each _bj_cr_mul_small's
+# limb product below 2^52 (it takes multipliers below 2^34 on its own).
+fn _bj_ux_ln2_k(a, k) {
+    var T[112];
+    var kh = k >> 24;
+    var kl = k & 16777215;
+    _bj_cr_mul_small(&T, &_bj_cr_ln2, kh);
+    _bj_cr_mul_small(&T, &T, 16777216);
+    _bj_cr_mul_small(a, &_bj_cr_ln2, kl);
+    _bj_cr_add(a, a, &T);
+    return 0;
+}
+
+# e^x rounded to 53 bits with an unbounded exponent, for finite x with |x| ≥ 2^-300: _bj_ux_exp_lim to |x| = 2300,
+# then the reduction above to 2^47, and (1, ±_BJ_UX_FAR) beyond (the section comment).
+#must_use
+fn _bj_ux_exp_wide(x: f64): (f64, i64) {
+    var ax: f64 = f64_abs(x);
+    if (ax <= 2300.0) {
+        var s0, e0 = _bj_ux_exp_lim(x, 2300.0);
+        return (s0, e0);
+    }
+    if (ax > 140737488355328.0) {
+        if (x > 0.0) { return (1.0, _BJ_UX_FAR); }
+        return (1.0, 0 - _BJ_UX_FAR);
+    }
+    _bj_cr_load();
+    var X[112];
+    var S[112];
+    var A[112];
+    var R[112];
+    var T[112];
+    _bj_ux_set_big(&X, ax);
+    var neg = 0;
+    if (x < 0.0) { neg = 1; }
+    var q: f64 = x * _BJ_CR_INVLN2;
+    var kf: f64 = f64_floor(q);
+    var k = f64_to(kf);
+    var tries = 0;
+    while (tries < 4) {
+        var kk = k;
+        if (kk < 0) { kk = 0 - kk; }
+        _bj_ux_ln2_k(&A, kk);
+        var lo = 0;
+        if (neg == 0) {
+            if (_bj_cr_cmp(&X, &A) < 0) { lo = 1; } else { _bj_cr_sub(&R, &X, &A); }
+        } else {
+            if (_bj_cr_cmp(&A, &X) < 0) { lo = 1; } else { _bj_cr_sub(&R, &A, &X); }
+        }
+        if (lo == 1) {
+            k = k - 1;
+        } elif (_bj_cr_cmp(&R, &_bj_cr_ln2) >= 0) {
+            k = k + 1;
+        } else {
+            tries = 4;
+        }
+        tries = tries + 1;
+    }
+    _bj_cr_zero(&S);
+    _bj_cr_zero(&T);
+    store64(&S, 1);
+    store64(&T, 1);
+    for (var n = 1; n < 200; n = n + 1) {
+        _bj_cr_mul(&T, &T, &R);
+        _bj_cr_div_small(&T, &T, n);
+        if (_bj_cr_is_zero(&T) == 1) { break; }
+        _bj_cr_add(&S, &S, &T);
+    }
+    var s, e = _bj_cr_round_ux(&S, k, 0);
+    return (s, e);
+}
+
 # cosh x rounded to 53 bits with an unbounded exponent, for finite |x| > 710: e^|x|/2. e^-|x| is below 2^-2048 of it,
 # so far below the fixed point's 2^-364 that the exact sum and e^|x| round alike (as _bj_cr_hyp_slow_exp truncates
 # it); (1, _BJ_UX_HUGE) beyond 1500.

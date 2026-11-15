@@ -79,9 +79,9 @@
 | `beam/spot_size` | 0.49 ns | `beam/spot_size` | 13.00 ns | 26.5× |
 | `beam/abcd_propagate_beam` | 1.79 ns | `beam/abcd_propagate_beam` | 89.00 ns | 49.7× |
 | `beam/abcd_compose` | 0.99 ns | `beam/abcd_compose` | 32.00 ns | 32.3× |
-| `beam/hermite_gaussian_hg33` | 4.46 ns | `beam/hermite_gaussian_hg33` | 160.00 ns | 35.9× |
+| `beam/hermite_gaussian_hg33` | 4.46 ns | `beam/hermite_gaussian_hg33` | 204.00 ns | 45.7× |
 | `beam/resonator_stability` | 6.48 ns | `beam/resonator_stability` | 47.00 ns | 7.3× |
-| `beam/hermite_gaussian_field_hg33` | 30.33 ns | `beam/hermite_gaussian_field_hg33` | 669.00 ns | 22.1× |
+| `beam/hermite_gaussian_field_hg33` | 30.33 ns | `beam/hermite_gaussian_field_hg33` | 753.00 ns | 24.8× |
 | `rf/reflection_coefficient` | 1.23 ns | pending (M4) | — | — |
 | `rf/vswr` | 1.23 ns | pending (M4) | — | — |
 | `rf/linear_array_factor_8` | 0.55 ns | pending (M4) | — | — |
