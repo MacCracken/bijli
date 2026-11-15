@@ -285,6 +285,16 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
   with `BjSMatrix_free`. The constructors and `cascade` return Allocation where Rust aborts. `rf.tsv` grows by 1,707
   rows; all match on all three targets, 12 through ADR 0002 row 37 (see Fixed). 12 more of rf.rs's tests are ported,
   and `test_smatrix_inconsistent_does_not_panic` is n/a (row 36). The `rf/s_cascade` twin is added (67 of 80).
+- **Cyrius port, M4 part 1c-1 — reading Touchstone** (`src/touchstone.cyr`): `bj_parse_touchstone` into a
+  `BjTouchstoneData` (its shape fixed at construction, ADR 0002 row 36 amended: `frequency_at`, `matrix_at`,
+  `BjTouchstoneData_free`), and `BjTouchstoneFormat`. The content is bytes read as UTF-8; bytes that are not UTF-8
+  are refused (ADR 0002 row 38), where Rust's `&str` can't hold them. The text follows Rust's str methods exactly:
+  Unicode's White_Space, `parse::<f64>`'s grammar with a correctly rounded value, and `{:?}` in the reasons. The
+  White_Space set and the characters `{:?}` escapes are generated from the oracle's compiler
+  (`src/touchstone_data.cyr`, which names it: rustc 1.99.1 and 1.100.0 differ by six escape ranges). `rf.tsv` grows
+  by 417 rows; all match on all three targets, 3 through the corrected oracle. 12 more of rf.rs's tests are ported,
+  and `tests/bijli.fcyr` is now a fuzz harness for the reader (20,000 mutants, replayed with no heap growth). The
+  `rf/parse_touchstone_s2p_201` twin is added (68 of 80). The writer is part 1c-2's.
 
 ### Fixed
 

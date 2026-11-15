@@ -2000,6 +2000,8 @@ thread_win::thread_create/2
 thread_win::thread_create_detached/2
 thread_win::thread_is_done/1
 thread_win::thread_join/1
+touchstone::BjTouchstoneData_free/1
+touchstone::bj_parse_touchstone/4
 vec::vec_cap/1
 vec::vec_find/2
 vec::vec_get/2

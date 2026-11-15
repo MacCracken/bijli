@@ -41,6 +41,7 @@ mod m_rf;
 mod m_scattering;
 mod m_wave;
 mod t_constants;
+mod t_touchstone;
 mod tsv;
 
 use std::collections::BTreeSet;
@@ -84,7 +85,10 @@ fn read(path: &Path) -> Result<String, String> {
 
 /// Every generated Cyrius source, in file-name order.
 fn cyrius_outputs(root: &Path, prov: &str) -> Result<Vec<Output>, String> {
-    let files = vec![("src/constants.cyr", t_constants::emit(root, prov)?)];
+    let files = vec![
+        ("src/constants.cyr", t_constants::emit(root, prov)?),
+        ("src/touchstone_data.cyr", t_touchstone::emit(prov)),
+    ];
     Ok(files
         .into_iter()
         .map(|(rel, text)| {

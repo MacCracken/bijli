@@ -4583,3 +4583,84 @@ functions below; 1b the S-parameter matrices, their cascade and S → Z; 1c Touc
   measured, 0 pending, 78,332 accepted (ADR 01: 29,503; ADR 0002: 48,829)** over 584,427 rows; **all 407 digests
   equal**, HEAD's 401 unchanged. `rf.tcyr` passes on all three. The gate is clean (17 steps, no warnings; execution
   coverage 313 of 313 functions).
+
+## 78. M4 part 1c-1: reading Touchstone (2026-11-15)
+
+Part 1c runs as two bites: 1c-1 the reader, 1c-2 the writer (Rust's `{:e}` form) with the round trips.
+
+- **`src/touchstone.cyr`**: `bj_parse_touchstone(content, len, ports, out)` into a `BjTouchstoneData`, and
+  `BjTouchstoneFormat` (MagnitudeAngle 0, RealImag 1, DbAngle 2).
+  - **The data's shape is fixed** (ADR 0002 row 36, amended): one fl_alloc block of the `points` frequencies, the
+    `points` matrix headers (each a `BjSMatrix`, so `get`, `cascade` and `bj_s_to_z` take it as it is) and their
+    entries and impedances. `frequency_at`, `matrix_at` and `BjTouchstoneData_free` replace Rust's vectors.
+  - **The reader buffers records** in a store that doubles (fl_alloc), then builds the block once at the end. A
+    refused parse frees both and leaves `out` untouched.
+  - **Rust's order and reasons**: the port count, the lines, the option line (only the first, before the data),
+    v2 keywords, each token's grammar and finiteness, the frequency (finite, non-negative, through the unit), the
+    2-port noise block, each pair's representability, a partial last record, no record at all. The three debug lines
+    are Rust's.
+- **Rust's text, measured first** (a probe on rustc 1.99.1, then the oracle):
+  - `{:?}` of a str escapes a character the same wherever it sits: 954,590 scalar values, as `\u{…}` unless one of
+    `\0 \t \n \r \" \\`. `char::is_whitespace` is White_Space's 25 code points.
+  - `parse::<f64>` takes `1.`, `.5`, `+.5`, `1.e5` and an exponent with any number of leading zeros, and refuses `.`,
+    `1e`, `e5`, `+-1`, `1_0`, `0x10`, `١` and a surrounding space. The stdlib's f64_parse_n gave Rust's value on every
+    such form tried (and on probe p12's 120,018 strings): the reader checks Rust's grammar, then calls it. It is the
+    bundle's first direct call into the stdlib's math, so `dist/bijli.deps` lists math, which `cyrius.cyml` declares.
+  - **The tables are generated** by the oracle (`t_touchstone.rs`) into `src/touchstone_data.cyr`: 916 escape ranges
+    (a binary search) and the 25 White_Space values. They are the compiler's own: rustc 1.99.1 has 910 ranges and
+    1.100.0, the oracle's toolchain since 2026-11-13, has 916 (a Unicode update). Every earlier output is the same on
+    both; this is the first that isn't. So `scripts/oracle/build.rs` records the compiler, the file's header names it,
+    and `--check` fails if another toolchain moves the tables.
+- **ADR 0002 row 38, new**: Rust's `&str` is UTF-8 by construction; the port takes bytes. Bytes that are not UTF-8
+  (`str::from_utf8`'s rules: no overlong forms, surrogates or values past U+10FFFF) are refused with InvalidParameter
+  "Touchstone content is not valid UTF-8 (an invalid sequence at byte {k})", after the port count. The oracle can't
+  make such a row; `cyrius_touchstone_utf8` and the fuzz harness cover it.
+- **`rf.tsv` grows by 417 rows (13,447)**, appended (the earlier body an exact prefix). A row's inputs are the content
+  (`s:`) and the port count; its outputs the data (`i:<ports> f:<z0> v:<points>`, the frequencies, each matrix) or the
+  error. Class C: MA and DB records take a sincos, DB a pow. The grids:
+  - the Rust tests' files, the five-port wrapped file as Rust builds it, and the bench's 201-point file;
+  - every option: the units, formats and parameter types in each case, R's values (empty, NaN, ∞, −0, 0, overflow,
+    the forms of 50), S repeated, R twice, unknown tokens, a second option line, one after the data, the noise block
+    or a partial record, v2 keywords after spaces and in comments;
+  - 54 tokens through Rust's grammar, each as an S11 and as a frequency in Hz, then the decimals a correctly rounded
+    parse needs: half the smallest subnormal written in full (a tie, to 0) and with one more digit (to 5·10⁻³²⁴), the
+    DBL_MAX tie, 2^53 + 1 with long tails, 350 leading zeros against e360, 400 ones against e-400;
+  - comments, blank lines, CRLF and a final bare '\r', and each White_Space character (with U+200B, U+FEFF and U+180E,
+    which aren't) around and between tokens;
+  - records across lines, partial ones, MA and DB pairs that overflow (dB = 6164 and 6165 straddle DBL_MAX) or
+    underflow, angles of 10²²; negative, −0, zero and overflowing frequencies; decreasing ones (a 1-port, a 3-port);
+  - the 2-port noise block: an equal frequency starts it, its tokens still parse, a record left open by it;
+  - error snippets of 32 and 33 characters, of multi-byte characters, combining marks, quotes, NUL, controls,
+    private-use and unassigned characters, emoji and regional indicators;
+  - 80 seeded files (1 to 4 ports, every format and unit, values in Rust's Display, `{:e}` and Debug forms).
+
+  The transcription (`rf_parse_touchstone`) restates Rust's text rules rather than borrowing Python's (`str.strip`
+  treats U+001C–U+001F as space; `float()` takes `1_0` and Arabic digits), and escapes with the generated table. It
+  agreed with every row on its first run; a perturbed first output was caught on every row, and a perturbed reason on
+  all 152 error rows. `rf.cr.tsv` gains 3 rows where glibc's sin, cos or pow misrounds a pair.
+- **Fuzzing** (`tests/bijli.fcyr`, the plan's §6 step 7 harness, until now a stub): six seed files mutated byte by
+  byte (bytes of the grammar, controls, and ones that break UTF-8) and parsed as 1 to 4 ports, 20,000 mutants
+  (about 1,070 accepted). Every parse returns, a refusal leaves `out` untouched, an accepted one has its ports, points
+  and finite values; the same 20,000 replayed don't grow the freelist's arena or the bump heap.
+- **Rust tests**: 12 more ported (69 of 80; `tests/rf.tcyr`, 182 assertions), the Cyrius-only groups pinning row 38,
+  the text rules (White_Space, `{:?}`, the 32-character cut), every reason's text, the layout and the heap. The
+  ledger: 591 ported, 7 n/a, 260 pending of 858.
+- **Surface parity**: `TouchstoneFormat` (and its variants), `TouchstoneData` (and its fields) and
+  `parse_touchstone` leave `IN_PROGRESS` (440 items matched); `try_write_touchstone` and the serde impls remain. The
+  API snapshot gains 2 public functions (2,060).
+- **Static data**: the escape table as an `i64[916]` cost every test binary 7.3 KB of static data and pushed
+  `tests/crmath_kx.tcyr` (kimiya's generated vectors) 584 bytes past the compiler's 128 KiB advisory (131,656
+  bytes). A probe showed a string literal isn't static data (12,000 characters of one added 16 bytes), so the table is
+  one multi-line literal of fixed-width records (12 hex digits a range, nine to a line, read by offset in the binary
+  search). The advisory is gone; the lookup runs only on a non-ASCII character in an error's quote.
+- **Benchmarks** (the `rf/parse_touchstone_s2p_201` twin, so 68 of 80 are twinned). An interleaved A/B against part
+  1b's tree (three rounds, load 0.2 to 1.1) gave 538, 538 and 546 µs, for Rust's 79.42 µs (6.8×), and left every other
+  row unchanged (median ratio 1.00 over 87 rows). A probe split the first cut's 582 µs: the 804 sincos of the MA pairs
+  are about 143 µs (the same file in RI took 438), and f64_parse_n on its 1,809 tokens about 99. The rest was the scan
+  at about 42 ns a byte, a decode and a White_Space call per character; ASCII tested inline and one pass for '\n'
+  and '!' brought it to 534 µs. What remains is the separate passes over each byte (UTF-8, the line, the token, the
+  grammar) and a call per token: a finding, with those numbers.
+- **Result, every target** (x86_64 ELF, x86_64 PE, aarch64): **17 modules, 0 failing; 506,509 ok, 0 failed, 0
+  measured, 0 pending, 78,335 accepted (ADR 01: 29,506; ADR 0002: 48,829)** over 584,844 rows; **all 408 digests
+  equal**, HEAD's 407 unchanged. `rf.tcyr` passes on all three. The gate is clean (17 steps, no warnings; execution
+  coverage 315 of 315 functions), and `cyrius fuzz` passes.

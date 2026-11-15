@@ -1,18 +1,144 @@
-# bijli fuzz harness
+# bijli fuzz harness: the Touchstone reader (port plan §6 step 7; M4 part 1c-1).
+#
+# Seed files (each format, unit and layout, a 2-port with its noise block, comments and Unicode White_Space) are mutated
+# byte by byte with a fixed xorshift stream (replace, insert, delete; bytes chosen to hit the grammar: digits, signs,
+# '.', 'e', '!', '#', '[', newlines, spaces, and bytes that break UTF-8), and each mutant is parsed as 1 to 4 ports.
+# Every parse must return; a refusal leaves `out` untouched; an accepted parse has its ports, at least one point,
+# finite non-negative frequencies and finite entries; and a replay of the same mutants doesn't grow the heap.
 
 include "tests/lib.cyr"
 
-# Fuzz entry: feeds one input buffer (`data`, `len` bytes) to the code under test.
-fn fuzz_main(data, len) {
-    if (len == 0) { return 0; }
+var _fz_state = 0x9E3779B97F4A7C15;
+
+# The next 64 bits of the stream.
+fn fz_next(): i64 {
+    var x = _fz_state;
+    x = x ^ (x << 13);
+    x = x ^ (x >> 7);
+    x = x ^ (x << 17);
+    _fz_state = x;
+    return x;
+}
+
+# A value in [0, n).
+fn fz_below(n): i64 {
+    var r = fz_next() >> 1;
+    return r % n;
+}
+
+# A mutation byte: the grammar's characters, controls, and bytes that break UTF-8.
+fn fz_byte(): i64 {
+    var pick = "0123456789+-.eE!#[ \t\r\nRrSsMmAaHhGgZzIiBbDdKk";
+    var k = fz_below(52);
+    if (k < 46) { return load8(pick + k); }
+    if (k == 46) { return 192; }
+    if (k == 47) { return 237; }
+    if (k == 48) { return 128; }
+    if (k == 49) { return 226; }
+    if (k == 50) { return 255; }
     return 0;
 }
 
-# Runs the fuzz harness once on a fixed input.
-fn main() {
+# 1 when the accepted data d is well-formed for `ports`.
+fn fz_sane(d: *BjTouchstoneData, ports): i64 {
+    if (d.ports != ports || d.points < 1) { return 0; }
+    for (var k = 0; k < d.points; k = k + 1) {
+        var f: f64 = d.frequency_at(k);
+        if (_bj_is_finite(f) == 0 || f < 0.0) { return 0; }
+        var m: *BjSMatrix = d.matrix_at(k);
+        if (m.ports != ports) { return 0; }
+        for (var j = 0; j < 2 * ports * ports; j = j + 1) {
+            var x: f64 = _bj_from_bits(load64(m.s + j * 8));
+            if (_bj_is_finite(x) == 0) { return 0; }
+        }
+    }
+    return 1;
+}
+
+# Fuzz entry: parses one input buffer (`data`, `len` bytes) as `ports` ports; 0 when every property holds.
+fn fuzz_main(data, len, ports): i64 {
+    var d: BjTouchstoneData;
+    d.ports = 0 - 7;
+    d.points = 0 - 7;
+    var t, v = bj_parse_touchstone(data, len, ports, &d);
+    if (is_err_result(t) == 1) {
+        if (d.ports != 0 - 7 || d.points != 0 - 7 || v == 0) { return 1; }
+        return 0;
+    }
+    var ok = fz_sane(&d, ports);
+    BjTouchstoneData_free(&d);
+    if (ok == 0) { return 1; }
+    return 0;
+}
+
+# One pass of 20,000 mutants from the stream's start; adds to counts = [runs, accepted, failures].
+fn fz_pass(seeds: *i64, counts: *i64) {
+    _fz_state = 0x9E3779B97F4A7C15;
+    var buf[512];
+    for (var it = 0; it < 20000; it = it + 1) {
+        var src = seeds[fz_below(6)];
+        var n = strlen(src);
+        memcpy(&buf, src, n);
+        var edits = 1 + fz_below(4);
+        for (var e = 0; e < edits; e = e + 1) {
+            var op = fz_below(3);
+            var at = fz_below(n + 1);
+            if (op == 0 && at < n) { store8(&buf + at, fz_byte()); }
+            if (op == 1 && n < 500) {
+                for (var q = n; q > at; q = q - 1) { store8(&buf + q, load8(&buf + q - 1)); }
+                store8(&buf + at, fz_byte());
+                n = n + 1;
+            }
+            if (op == 2 && at < n && n > 1) {
+                for (var r = at; r < n - 1; r = r + 1) { store8(&buf + r, load8(&buf + r + 1)); }
+                n = n - 1;
+            }
+        }
+        var ports = 1 + fz_below(4);
+        if (fuzz_main(&buf, n, ports) != 0) { counts[2] = counts[2] + 1; }
+        var d: BjTouchstoneData;
+        var t, v = bj_parse_touchstone(&buf, n, ports, &d);
+        if (is_ok(t) == 1) {
+            counts[1] = counts[1] + 1;
+            BjTouchstoneData_free(&d);
+        }
+        counts[0] = counts[0] + 1;
+    }
+    return 0;
+}
+
+# Runs the 20,000 mutants twice: the second pass, the same mutants, must leave the freelist's arena and the bump heap
+# as the first left them (the first may grow them once: the error record, the freelist's size classes). Prints the
+# counts and returns the failures.
+fn main(): i64 {
     alloc_init();
-    fuzz_main("test", 4);
-    println("fuzz: ok");
+    var seeds: i64[6];
+    seeds[0] = "# GHz S RI R 50\n1.0 0.5 0.1\n2.0 0.3 -0.2\n";
+    seeds[1] = "! 2-port\n# MHz S MA R 75\n1 0.5 10 0.9 -20 0.1 30 0.4 40\n2 0.6 11 0.8 -21 0.1 31 0.3 41\n";
+    seeds[2] = "# Hz S DB R 50\n1 -3 45 -20 0 -20 0 -3 -45\n2 -6 90 -10 0 -10 0 -6 -90\n";
+    seeds[3] = "# GHz S RI R 50\n1 1 0 2 0 3 0\n 4 0 5 0 6 0\n 7 0 8 0 9 0 ! row 3\n";
+    seeds[4] = "#\xE3\x80\x80kHz s ri r 25\r\n1.5\xC2\xA00.25 -0.5\r\n2.5 1e-3 .5\r\n";
+    seeds[5] = "1. .5 +1.e-0\n2 0.5 90\n";
+    var counts: i64[3];
+    counts[0] = 0;
+    counts[1] = 0;
+    counts[2] = 0;
+    fz_pass(&seeds, &counts);
+    var fl0 = _fl_arena_pos;
+    var bump0 = alloc_used();
+    fz_pass(&seeds, &counts);
+    var leaks = 0;
+    if (_fl_arena_pos != fl0 || alloc_used() != bump0) { leaks = 1; }
+    print("fuzz: ", 6);
+    fmt_int(counts[0]);
+    print(" parses, ", 9);
+    fmt_int(counts[1]);
+    print(" accepted, ", 11);
+    fmt_int(counts[2]);
+    print(" failures, ", 11);
+    fmt_int(leaks);
+    println(" heap growth on the replay");
+    if (counts[2] > 0 || leaks > 0) { return 1; }
     return 0;
 }
 

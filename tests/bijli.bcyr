@@ -938,6 +938,26 @@ fn main(): i64 {
     bench_report(b70);
     BjSMatrix_free(&th70);
     if (is_err_result(t70a) == 1 || v70a == 7) { println("."); }
+    # M4 part 1c-1: Rust's 201-point 2-port file (a typical VNA sweep), f = 1 + 0.01·i GHz in Display form, MA.
+    var sb71[16384];
+    var st71[24];
+    _bj_tx_init(&st71, &sb71, 16384);
+    _bj_tx_cstr(&st71, "! bench\n# GHz S MA R 50\n");
+    for (var i71 = 0; i71 < 201; i71 = i71 + 1) {
+        var f71: f64 = 1.0 + f64_from(i71) * 0.01;
+        _bj_fmt_f64_display(&st71, f71);
+        _bj_tx_cstr(&st71, " 0.1 -30 0.9 -45 0.01 60 0.2 15\n");
+    }
+    var td71: BjTouchstoneData;
+    var b71 = bench_new("rf/parse_touchstone_s2p_201");
+    bench_batch_start(b71);
+    for (var k = 0; k < 2000; k = k + 1) {
+        var t71, v71 = bj_parse_touchstone(_bj_tx_ptr(&st71), _bj_tx_len(&st71), 2, &td71);
+        rfsum = rfsum + td71.frequency_at(200);
+        BjTouchstoneData_free(&td71);
+    }
+    bench_batch_stop(b71, 2000);
+    bench_report(b71);
     if (rfsum == 7.0) { println("."); }
 
     # The JSON (src/json.cyr): a FieldVector written into one builder, emptied each time through its length word

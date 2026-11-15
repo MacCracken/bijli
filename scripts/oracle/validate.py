@@ -5924,6 +5924,195 @@ def rf_sm_eval(fn, toks, port=False):
     return None
 
 
+# M4 part 1c-1: parse_touchstone. Rust's text semantics are restated, not borrowed from Python's: `lines()` splits at
+# '\n' and drops one '\r' before it; `trim` and `split_whitespace` use Unicode's White_Space (PropList.txt: 25 code
+# points; Python's isspace adds U+001C–U+001F and the like); `parse::<f64>` has Rust's grammar (no '_', ASCII digits,
+# inf/infinity/nan in any case), its value Python's correctly rounded float(); `{:?}` of a str escapes per the oracle's
+# own table (src/touchstone_data.cyr, generated from the oracle's core: rustc's Unicode, not Python's).
+RF_WS = frozenset([0x9, 0xA, 0xB, 0xC, 0xD, 0x20, 0x85, 0xA0, 0x1680] + list(range(0x2000, 0x200B)) +
+                  [0x2028, 0x2029, 0x202F, 0x205F, 0x3000])
+RF_FLOAT = re.compile(r"[+-]?(?:[0-9]+\.?[0-9]*|\.[0-9]+)(?:[eE][+-]?[0-9]+)?")
+RF_SPECIAL = re.compile(r"[+-]?(?:inf|infinity|nan)", re.IGNORECASE)
+RF_ESC_CACHE = []
+
+
+def rf_esc_ranges(root: Path):
+    """The (start, end) ranges src/touchstone_data.cyr's _bj_ts_esc holds."""
+    if not RF_ESC_CACHE:
+        text = (root / "src/touchstone_data.cyr").read_text()
+        at = text.index('var _bj_ts_esc = "') + len('var _bj_ts_esc = "')
+        body = text[at:text.index('";', at)]
+        for w in re.findall(r"[0-9A-F]{12}", body):
+            RF_ESC_CACHE.append((int(w[:6], 16), int(w[6:], 16)))
+    return RF_ESC_CACHE
+
+
+def rf_debug_str(root: Path, s: str) -> str:
+    """`format!("{:?}", s)` for a str."""
+    out = ['"']
+    rng = rf_esc_ranges(root)
+    for ch in s:
+        u = ord(ch)
+        special = {0: "\\0", 9: "\\t", 10: "\\n", 13: "\\r", 0x22: '\\"', 0x5C: "\\\\"}
+        if u in special:
+            out.append(special[u])
+        elif any(a <= u <= b for a, b in rng):
+            out.append("\\u{%x}" % u)
+        else:
+            out.append(ch)
+    return "".join(out) + '"'
+
+
+def rf_snippet(s: str) -> str:
+    return s[:32] + "…" if len(s) > 32 else s
+
+
+def rf_trim(s: str) -> str:
+    a, b = 0, len(s)
+    while a < b and ord(s[a]) in RF_WS:
+        a += 1
+    while b > a and ord(s[b - 1]) in RF_WS:
+        b -= 1
+    return s[a:b]
+
+
+def rf_split_ws(s: str) -> list:
+    out, cur = [], []
+    for ch in s:
+        if ord(ch) in RF_WS:
+            if cur:
+                out.append("".join(cur))
+                cur = []
+        else:
+            cur.append(ch)
+    if cur:
+        out.append("".join(cur))
+    return out
+
+
+def rf_lines(s: str) -> list:
+    """`str::lines`: split after each '\\n', drop it and one '\\r' before it; no line after a final '\\n'."""
+    out, start = [], 0
+    while start < len(s):
+        nl = s.find("\n", start)
+        if nl < 0:
+            out.append(s[start:])
+            break
+        line = s[start:nl]
+        out.append(line[:-1] if line.endswith("\r") else line)
+        start = nl + 1
+    return out
+
+
+def rf_parse_f64(tok: str):
+    """`tok.parse::<f64>()`: the value, or None for an invalid token."""
+    if RF_FLOAT.fullmatch(tok):
+        return float(tok)
+    if RF_SPECIAL.fullmatch(tok):
+        return float(tok.replace("inity", "").replace("INITY", ""))
+    return None
+
+
+def rf_upper(s: str) -> str:
+    return "".join(chr(ord(c) - 32) if "a" <= c <= "z" else c for c in s)
+
+
+def rf_parse_touchstone(root: Path, P, content: str, ports: int):
+    """parse_touchstone: the data's tokens, or an error's."""
+    if ports == 0 or ports > 256:
+        return ip_err(f"Touchstone port count must be in 1..=256, got {ports}")
+    record_len = 1 + 2 * ports * ports
+    freqs, mats = [], []
+    z0, fmt, mult = 50.0, "MA", 1e9
+    seen_option, noise, record = False, False, []
+    for idx, raw in enumerate(rf_lines(content)):
+        line_no = idx + 1
+        line = rf_trim(raw.split("!")[0])
+        if not line:
+            continue
+        if line.startswith("#"):
+            if seen_option:
+                continue
+            if freqs or record or noise:
+                return ip_err(f"Touchstone line {line_no}: option line must precede the network data")
+            seen_option = True
+            toks = rf_split_ws(line[1:])
+            k = 0
+            while k < len(toks):
+                tok = toks[k]
+                up = rf_upper(tok)
+                k += 1
+                if up in ("HZ", "KHZ", "MHZ", "GHZ"):
+                    mult = {"HZ": 1.0, "KHZ": 1e3, "MHZ": 1e6, "GHZ": 1e9}[up]
+                elif up == "S":
+                    pass
+                elif up in ("Y", "Z", "H", "G"):
+                    return ip_err(f"Touchstone line {line_no}: only S-parameter data is supported, got parameter "
+                                  f"type {tok}")
+                elif up in ("MA", "RI", "DB"):
+                    fmt = up
+                elif up == "R":
+                    if k >= len(toks):
+                        return ip_err(f"Touchstone line {line_no}: option R must be followed by the reference "
+                                      "impedance")
+                    value = toks[k]
+                    k += 1
+                    r = rf_parse_f64(value)
+                    if r is None or not (math.isfinite(r) and r > 0.0):
+                        return ip_err(f"Touchstone line {line_no}: reference impedance must be a finite positive "
+                                      f"number, got {rf_debug_str(root, rf_snippet(value))}")
+                    z0 = r
+                else:
+                    return ip_err(f"Touchstone line {line_no}: unrecognized option "
+                                  f"{rf_debug_str(root, rf_snippet(tok))}")
+            continue
+        if line.startswith("["):
+            return ip_err(f"Touchstone line {line_no}: Touchstone 2.0 keywords are not supported (v1.1 only)")
+        for tok in rf_split_ws(line):
+            value = rf_parse_f64(tok)
+            if value is None or not math.isfinite(value):
+                return ip_err(f"Touchstone line {line_no}: expected a finite number, got "
+                              f"{rf_debug_str(root, rf_snippet(tok))}")
+            if noise:
+                continue
+            if not record:
+                freq = value * mult
+                if not (math.isfinite(freq) and freq >= 0.0):
+                    return ip_err(f"Touchstone line {line_no}: frequency must be finite and non-negative, got "
+                                  f"{rust_display(value)}")
+                if ports == 2 and freqs and freq <= freqs[-1]:
+                    noise = True
+                    continue
+            record.append(value)
+            if len(record) == record_len:
+                s = []
+                for k in range(ports * ports):
+                    v1, v2 = record[1 + 2 * k], record[2 + 2 * k]
+                    if fmt == "RI":
+                        c = (v1, v2)
+                    else:
+                        mag = v1 if fmt == "MA" else P["pow"](10.0, v1 / 20.0)
+                        c = tuple(cx_polar(P, mag, v2 * TO_RADIANS))
+                    if not rf_fin(*c):
+                        i, j = (k % 2, k // 2) if ports == 2 else (k // ports, k % ports)
+                        return ip_err(f"Touchstone record ending at line {line_no}: S{i + 1}{j + 1} = "
+                                      f"({rust_display(v1)}, {rust_display(v2)}) is not representable")
+                    s.append(c)
+                if ports == 2:
+                    s = [s[0], s[2], s[1], s[3]]
+                freqs.append(record[0] * mult)
+                mats.append({"ports": ports, "s": s, "z0": [z0] * ports})
+                record = []
+    if record:
+        return ip_err(f"Touchstone data ends with an incomplete record: {len(record)} of {record_len} values")
+    if not freqs:
+        return ip_err("no valid data found in Touchstone content")
+    out = [("i", ports), ("f", z0), ("v", str(len(freqs)))] + [("f", x) for x in freqs]
+    for m in mats:
+        out += rf_sm_toks(m)
+    return out
+
+
 def rf_adr_rows(path: Path) -> list:
     """ADR 0002 mappings for rf.tsv: row 37 where a second port's infinite Z₀, which Rust's z0_equal accepts as equal to
     the first's (∞ ≤ 10⁻¹²·∞), is refused by the port's (M4 part 1b)."""
@@ -5950,6 +6139,8 @@ def validate_rf(path: Path) -> list:
         want = rf_eval(fn, v, RF_P_GLIBC)
         if want is None:
             want = rf_sm_eval(fn, [parse_tok(x) for x in ins.split(" ")])
+        if want is None and fn == "rf::parse_touchstone":
+            want = rf_parse_touchstone(path.parents[2], RF_P_GLIBC, tok_text(v[0]), v[1] & RF_U64)
         if want is None:
             errs.append(f"rf row {n}: no transcription for {fn}")
             continue
@@ -5959,13 +6150,15 @@ def validate_rf(path: Path) -> list:
 
 
 def rf_corrections(path: Path):
-    """The class-C rf rows whose outputs change when atan2, sin, cos, atan, log10 and acos are correctly rounded."""
+    """The class-C rf rows whose outputs change when atan2, sin, cos, atan, log10, acos and pow are correctly rounded."""
     def fixes(_rows):
         out = []
         for fn, cls, ins, outs, v in sc_lines(path):
             if cls != "C":
                 continue
             want = rf_eval(fn, v, RF_P_MPFR)
+            if fn == "rf::parse_touchstone":
+                want = rf_parse_touchstone(path.parents[2], RF_P_MPFR, tok_text(v[0]), v[1] & RF_U64)
             old = wave_toks([parse_tok(x) for x in outs.split(" ")])
             if toks_same(want, old):
                 continue

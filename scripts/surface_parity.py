@@ -48,8 +48,8 @@ PENDING_MODULES = {
 # Their other items are checked as a ported module's now; the listed ones count as pending, and one found ported is a
 # problem (drop it from the list).
 IN_PROGRESS = {
-    "rf": ("M4 parts 1c–1d", {
-        "TouchstoneFormat", "TouchstoneData", "parse_touchstone", "try_write_touchstone",
+    "rf": ("M4 parts 1c-2 and 1d", {
+        "try_write_touchstone",
         "impl Serialize for SMatrix", "impl Deserialize for SMatrix", "impl Serialize for TouchstoneFormat",
         "impl Deserialize for TouchstoneFormat", "impl Serialize for TouchstoneData",
         "impl Deserialize for TouchstoneData",

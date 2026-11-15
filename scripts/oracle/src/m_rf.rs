@@ -18,17 +18,21 @@
 //! matrix after it), `cascade` and `s_to_z`. A matrix is `i:<ports>`, `v:<2n²>` and its entries row-major as (re,
 //! im), `v:<n>` and its reference impedances; only consistent shapes, since the port's BjSMatrix is fixed at
 //! construction (ADR 0002 row 36). Rows where a second port's Z₀ is ±∞ are mapped by ADR 0002 row 37.
+//!
+//! M4 part 1c-1 appends `parse_touchstone`: its inputs are the content (`s:`) and the port count, its outputs the
+//! data (`i:<ports>`, `f:<z0>`, `v:<points>` and the frequencies, then each matrix as above) or the error. It is class
+//! C: MA and DB records take a sine and cosine of the angle, and DB 10^(dB/20).
 
 use crate::grids::{Rng, specials};
 use crate::m_field::res_f;
 use crate::tsv::{Class, Module, Tok, err, f, i, s};
 use bijli::polarization::Complex;
 use bijli::rf::{
-    characteristic_impedance_lossless, characteristic_impedance_lossy, circular_array_factor, denormalize_impedance,
-    SMatrix, gamma_from_z, input_impedance_lossless_complex, insertion_loss, linear_array_factor, mismatch_loss,
-    normalize_impedance, phase_velocity, planar_array_factor, propagation_constant, quarter_wave_transformer,
-    reflection_coefficient, reflection_coefficient_complex, return_loss, single_stub_match, single_stub_match_complex,
-    s_to_z, vswr, z_from_gamma,
+    SMatrix, TouchstoneData, characteristic_impedance_lossless, characteristic_impedance_lossy, circular_array_factor,
+    denormalize_impedance, gamma_from_z, input_impedance_lossless_complex, insertion_loss, linear_array_factor,
+    mismatch_loss, normalize_impedance, parse_touchstone, phase_velocity, planar_array_factor, propagation_constant,
+    quarter_wave_transformer, reflection_coefficient, reflection_coefficient_complex, return_loss, s_to_z,
+    single_stub_match, single_stub_match_complex, vswr, z_from_gamma,
 };
 use std::collections::BTreeSet;
 use std::f64::consts::{FRAC_PI_2, FRAC_PI_4, PI, TAU};
@@ -57,6 +61,7 @@ fn key(name: &str, toks: &[Tok]) -> String {
         match t {
             Tok::F(x) => k.push_str(&format!(" {:016x}", x.to_bits())),
             Tok::I(n) => k.push_str(&format!(" i{n}")),
+            Tok::S(x) => k.push_str(&format!(" s{x:?}")),
             _ => {}
         }
     }
@@ -643,6 +648,7 @@ pub fn emit() -> Module {
     }
 
     emit_1b(r, &mut rng);
+    emit_1c1(r, &mut rng);
 
     rows.m
 }
@@ -889,5 +895,260 @@ fn emit_1b(r: &mut Rows, rng: &mut Rng) {
             *e = (rng.signed_log_uniform(-300.0, 300.0), rng.signed_log_uniform(-300.0, 300.0));
         }
         r.two_ports(&tp(s, z50), &tp(star_b, z50));
+    }
+}
+
+// ── M4 part 1c-1: reading Touchstone ─────────────────────────────────────────────────────────────────────────────
+
+/// A parse's tokens: `i:<ports>`, `f:<z0>`, `v:<points>` and the frequencies, then each matrix (`sm_toks`).
+fn ts_toks(d: &TouchstoneData) -> Vec<Tok> {
+    let mut v = vec![i(word(d.ports)), f(d.z0), Tok::V(d.frequencies.len())];
+    v.extend(d.frequencies.iter().map(|&x| f(x)));
+    for m in &d.s_matrices {
+        v.extend(sm_toks(m));
+    }
+    v
+}
+
+impl Rows {
+    fn parse(&mut self, content: &str, ports: usize) {
+        let ins = [s(content), i(word(ports))];
+        self.row("rf::parse_touchstone", Class::C, &ins, || {
+            res(parse_touchstone(black_box(content), black_box(ports)), ts_toks)
+        });
+    }
+}
+
+/// A token for the reader's number grammar, in an RI record of a 1-port (its value lands in S11's real part as
+/// parsed) and as a frequency in Hz.
+fn tok_rows(r: &mut Rows, tok: &str) {
+    r.parse(&format!("# Hz S RI R 50\n1 {tok} 0\n"), 1);
+    r.parse(&format!("# Hz S RI R 50\n{tok} 0.5 0\n"), 1);
+}
+
+/// Part 1c-1's grids: the Rust tests' files; every option (units, parameter types, formats, R and its values, case,
+/// order, unknown tokens, a second option line, one after the data or the noise block); Rust's float grammar token by
+/// token, with the long, tied and range-edge decimals that need a correctly rounded parse; comments, blank and
+/// whitespace-only lines, CRLF and the Unicode White_Space characters; records split across lines, partial and
+/// unrepresentable ones; negative, zero and overflowing frequencies; the 2-port noise block; the port limits; error
+/// snippets past 32 characters and with characters `{:?}` escapes; and seeded files in every format and unit.
+fn emit_1c1(r: &mut Rows, rng: &mut Rng) {
+    // The Rust tests' files.
+    let rust_files: [(&str, usize); 18] = [
+        ("# GHz S RI R 50\n1.0  0.5  0.1\n2.0  0.3  -0.2\n", 1),
+        ("! comment only\n", 1),
+        ("! 2-port\n# GHZ S RI R 50\n1.0  0.1 0.01  0.9 0.09  0.2 0.02  0.3 0.03\n", 2),
+        (
+            "# GHz S RI R 50\n1.0  0.11 -0.11  0.12 -0.12  0.13 -0.13\n     0.21 -0.21  0.22 -0.22  0.23 -0.23\n     \
+             0.31 -0.31  0.32 -0.32  0.33 -0.33 ! row 3\n2.0  0.11 0 0.12 0 0.13 0\n 0.21 0 0.22 0 0.23 0\n 0.31 0 \
+             0.32 0 0.33 0\n",
+            3,
+        ),
+        ("# GHz S RI R 50 ! options\n1.0 0.5 0.1 ! first\n", 1),
+        ("# GHz S RI R 50\n1.0 0.5 abc 0.1\n", 1),
+        ("# GHz S RI R 50\n1.0 nan 0.1\n", 1),
+        ("# GHz S RI R 50\n1.0 inf 0.1\n", 1),
+        ("# GHz S RI R 50\n-1.0 0.5 0.1\n", 1),
+        ("# GHz S DB R 50\n1.0 7000 0\n", 1),
+        ("# GHz S RI R 50\n1.0 0.5 0.1\n2.0 0.3\n", 1),
+        ("# GHz S RI R 50\n1.0 0.1 0 0.9 0 0.2 0\n", 2),
+        ("# GHz S RI R 50\n# MHz S MA R 75\n1.0 0.5 0.1\n", 1),
+        ("# GHz S RI XYZ R 50\n1.0 0.5 0.1\n", 1),
+        ("1.0 0.5 0.1\n# GHz S RI R 50\n2.0 0.5 0.1\n", 1),
+        ("[Version] 2.0\n# GHz S RI R 50\n1.0 0.5 0.1\n", 1),
+        ("1.0 0.5 90\n", 1),
+        ("# MHZ S RI R 75\n100.0  0.1  0.2\n", 1),
+    ];
+    for (c, n) in rust_files {
+        r.parse(c, n);
+    }
+    for p in ["Y", "Z", "H", "G", "y", "s", "S"] {
+        r.parse(&format!("# GHz {p} RI R 50\n1.0 0.5 0.1\n"), 1);
+    }
+    for v in ["", "abc", "-50", "0", "nan", "inf", "-0", "1e400", "5e-324", "50.0", "+50", "5e1", "1_0", "50 R 75"] {
+        r.parse(&format!("# GHz S RI R {v}\n1.0 0.5 0.1\n"), 1);
+    }
+    for n in [0, 100_000, usize::MAX, 257, 1 << 63] {
+        r.parse("1.0 0.5 0.1\n", n);
+    }
+    r.parse("1.0 0.5 0.1\n", 256);
+    r.parse(
+        "# GHZ S MA R 50\n1.0 0.5 10 0.9 -20 0.1 30 0.4 40\n2.0 0.6 11 0.8 -21 0.1 31 0.3 41\n! noise parameters\n\
+         1.0 1.5 0.3 45 0.2\n2.0 1.8 0.35 50 0.25\n",
+        2,
+    );
+    // The five-port wrapped file of test_parse_touchstone_five_port_wrapped, as Rust builds it.
+    let mut five = String::from("# MHz S MA R 75\n");
+    for (fi, fr) in [100.0_f64, 200.0].iter().enumerate() {
+        for row in 0..5_usize {
+            let pairs: Vec<String> = (0..5_usize)
+                .map(|j| format!("{} {}", f64::from(u32::try_from(10 * (row + 1) + j + 1).unwrap_or(0)) / 100.0, fi))
+                .collect();
+            let head = if row == 0 { format!("{fr}") } else { String::new() };
+            five.push_str(&format!("{head} {}\n", pairs[..4].join(" ")));
+            five.push_str(&format!("   {}\n", pairs[4]));
+        }
+    }
+    r.parse(&five, 5);
+    // The bench's 201-point 2-port file.
+    let mut s2p = String::from("! bench\n# GHz S MA R 50\n");
+    for k in 0..201_u32 {
+        let fr = 1.0 + f64::from(k) * 0.01;
+        s2p.push_str(&format!("{fr} 0.1 -30 0.9 -45 0.01 60 0.2 15\n"));
+    }
+    r.parse(&s2p, 2);
+
+    // Every option: units, formats, case and order, the defaults, S repeated, R anywhere.
+    for unit in ["Hz", "kHz", "MHz", "GHz", "hz", "KHZ", "mhz", "gHz"] {
+        for fmt in ["RI", "MA", "DB", "ri", "Ma", "db"] {
+            r.parse(&format!("# {unit} S {fmt} R 75\n1.5 0.25 -45\n2.5 -0.125 30\n"), 1);
+        }
+    }
+    for opts in [
+        "#", "# ", "#GHz S RI R 50", "# R 25 RI S MHz", "# S S S", "# RI MA DB", "# GHz GHz Hz", "# R 50 R 75",
+        "# r 75", "# R", "# S2P", "# GHz S RI R 50 extra", "#\tGHz\tS\tRI\tR\t50", "# GHz S RI R\u{a0}50",
+        "# GHz S RI R 50\u{3000}", "#! all comment", "# GHz # S RI", "# \u{1F600}", "# MHz\u{0}",
+    ] {
+        r.parse(&format!("{opts}\n1.0 0.5 0.1\n"), 1);
+    }
+    // Option lines after data, after a partial record, after the noise block, and repeated.
+    r.parse("1.0 0.5\n# GHz S RI R 50\n0.1\n", 1);
+    r.parse("# GHz S RI R 50\n1.0 0.5 0.1\n# MHz\n", 1);
+    r.parse("# GHz S RI R 50\n1 0.1 0 0.9 0 0.2 0 0.3 0\n1 0 0 0 0\n# MHz\n", 2);
+    r.parse("# GHz S RI R 50\n# bogus option\n1.0 0.5 0.1\n", 1);
+    r.parse("# GHz S RI R 50\n1.0 0.5 0.1\n[Network Data]\n", 1);
+    r.parse("   [Version] 2.0\n1.0 0.5 0.1\n", 1);
+    r.parse("! [Version] 2.0\n1.0 0.5 0.1\n", 1);
+    r.parse("1.0 0.5 0.1 [x]\n", 1);
+
+    // Rust's float grammar, token by token.
+    for tok in [
+        "1", "1.", ".5", "+1", "-0", "1.e5", "1E5", "1e+5", "-.5e-3", "00001.2500", "+.5",
+        "1e0000000000000000000000000001",
+        "1.0e-99999999999999999999", "0e0", "-0.0e-0", "9007199254740993", "9007199254740993.0000000000000000000001",
+        "1.7976931348623157e308", "1.7976931348623158e308", "1.7976931348623159e308", "2.2250738585072011e-308",
+        "4.9406564584124654e-324", "2.4703282292062328e-324", "2.4703282292062327e-324", "1e-325", "1e400", "-1e400",
+        ".", "e5", "1e", "1e+", "+-1", ".e5", "inf", "Infinity", "+inf", "-NaN", "nan", "infinit", "1_0", "0x10", "١",
+        "1,5", "1.5.5", "--1", "1e5.5", "+", "-", "1d5", "1e-", "0.5e", "\u{ff11}", "1\u{301}", "\u{feff}1",
+    ] {
+        tok_rows(r, tok);
+    }
+    // Long decimals: half of the smallest subnormal written out (a tie, to 0) and one digit past it (to 5e-324); a
+    // tie between DBL_MAX and the next binade; 2^53 + 1 with long tails; a leading-zero run against a large exponent.
+    let half_min = "\
+        2.470328229206232720882843964341106861825299013071623822127928412503377536351043759326499181808179961898982823\
+        47722858865463328355177969898199387398005390939063150356595155702263922908583924491051844359318028499365361525\
+        00319370457678249219365623669863658480757001585769269903706311928279558551332927834338409351978015531246597263\
+        57957462276646527282722005637400648549997709659947045402082816622623785739345073633900796776193057750674017632\
+        46736009689513405355374585166611342237666786041621596804619144672918403005300575308490487653917113865916462395\
+        24912623653881879636239373280423891018672348497668235089863388587925628302755995657524455507255189313690836254\
+        7791869486679949683240497058210285131854513962138377228261454376934125320985913276672363281255e-324";
+    tok_rows(r, half_min);
+    tok_rows(r, &half_min.replace("1255e-324", "125e-324"));
+    tok_rows(r, &format!("0.{}1e360", "0".repeat(350)));
+    tok_rows(r, &format!("{}e-400", "1".repeat(400)));
+    tok_rows(r, &format!("1{}e-300", "0".repeat(350)));
+    tok_rows(r, &format!("9007199254740992.{}1", "0".repeat(60)));
+    let max_tie = "\
+        17976931348623158079372897140530341507993413271003782693617377898044496829276475094664901797758720709633028641\
+        66928879109465555478519404026306574886715058206819089020007083836762738548458177115317644757302700698555713669\
+        59622842914819860834936475292719074168444365510704342711559699508093042880177904174497791";
+    tok_rows(r, &format!("{max_tie}.{}", "9".repeat(20)));
+    // Comments, blank lines, line endings and the Unicode White_Space characters around and between tokens.
+    for ws in [
+        "\t", "\u{b}", "\u{c}", "\r", "\u{85}", "\u{a0}", "\u{1680}", "\u{2000}", "\u{200a}", "\u{2028}",
+        "\u{2029}", "\u{202f}", "\u{205f}", "\u{3000}", "\u{200b}", "\u{feff}", "\u{180e}",
+    ] {
+        r.parse(&format!("#{ws}GHz S RI R 50{ws}\n{ws}1.0{ws}0.5{ws}0.1{ws}\n"), 1);
+    }
+    for c in [
+        "", "\n", "\n\n\n", "   \n\t\n", "!\n!!\n", "# GHz S RI R 50\n", "# GHz S RI R 50\r\n1.0 0.5 0.1\r\n",
+        "# GHz S RI R 50\r\n1.0 0.5 0.1\r", "1.0 0.5 0.1", "1.0 0.5 0.1\r\r\n", "1.0!0.5 0.1\n0.5 0.1\n",
+        "1.0 0.5!\n0.1\n", "\u{2028}1.0 0.5 0.1\n", "1.0\u{85}0.5\u{2029}0.1\n",
+    ] {
+        r.parse(c, 1);
+    }
+    // Records across lines, partial, too many values on the last line, unrepresentable entries.
+    for c in [
+        "# GHz S RI R 50\n1.0\n0.5\n0.1\n2.0 0.3 -0.2 3.0\n0.25 0.5\n",
+        "# GHz S RI R 50\n1.0 0.5 0.1 2.0\n",
+        "# GHz S DB R 50\n1.0 6200 0\n",
+        "# GHz S DB R 50\n1.0 6164 0\n2.0 6165 0\n",
+        "# GHz S DB R 50\n1.0 -6500 0\n",
+        "# GHz S DB R 50\n1.0 -400 45\n",
+        "# GHz S MA R 50\n1.0 1.7976931348623157e308 45\n",
+        "# GHz S MA R 50\n1.0 1.7976931348623157e308 1e300\n",
+        "# GHz S MA R 50\n1.0 -1e308 180\n",
+        "# GHz S MA R 50\n1.0 0.5 1e22\n",
+        "# GHz S RI R 50\n1.0 1e308 -1e308\n",
+    ] {
+        r.parse(c, 1);
+    }
+    r.parse("# GHz S DB R 50\n1 0 0 6200 0\n0 0 0 0\n", 2);
+    r.parse("# GHz S RI R 50\n1 0 0 0 0\n0 0 0 0\n1 0 0\n", 2);
+    // Frequencies: negative, −0, zero, overflowing through the unit, decreasing (1-port and 3-port: accepted).
+    for c in [
+        "# GHz S RI R 50\n-0.0 0.5 0.1\n", "# GHz S RI R 50\n0 0.5 0.1\n", "# GHz S RI R 50\n1e300 0.5 0.1\n",
+        "# Hz S RI R 50\n1.7976931348623157e308 0.5 0.1\n", "# kHz S RI R 50\n1.7976931348623157e305 0.5 0.1\n",
+        "# GHz S RI R 50\n2.0 0.5 0.1\n1.0 0.3 0.2\n1.0 0.1 0.1\n", "# GHz S RI R 50\n1.0 0.5 0.1\n-0.5 0.5 0.1\n",
+    ] {
+        r.parse(c, 1);
+    }
+    r.parse("# GHz S RI R 50\n2 1 0 2 0 3 0 4 0 5 0 6 0 7 0 8 0 9 0\n1 1 0 2 0 3 0 4 0 5 0 6 0 7 0 8 0 9 0\n", 3);
+    // The 2-port noise block: an equal frequency starts it, its tokens still parse, the record left open by it.
+    for c in [
+        "# GHz S RI R 50\n1 0.1 0 0.9 0 0.2 0 0.3 0\n1 0.1 0 0.9 0 0.2 0 0.3 0\n",
+        "# GHz S RI R 50\n1 0.1 0 0.9 0 0.2 0 0.3 0\n0.5 1 2 3\nabc\n",
+        "# GHz S RI R 50\n1 0.1 0 0.9 0 0.2 0 0.3 0\n0.5 1 2 3 inf\n",
+        "# GHz S RI R 50\n1 0.1 0 0.9 0 0.2 0 0.3 0\n0.5 1 2\n[Noise]\n",
+        "# GHz S RI R 50\n1 0.1 0 0.9 0 0.2 0 0.3 0\n2 0.1 0 0.9\n0 0.2 0 0.3 0\n1.5 0 0 0 0 0 0 0 0\n",
+        "# GHz S RI R 50\n-0.0 0.1 0 0.9 0 0.2 0 0.3 0\n0 0.1 0 0.9 0 0.2 0 0.3 0\n",
+        "# GHz S RI R 50\n1 0.1 0 0.9 0 0.2 0 0.3 0\n0.5 -1\n",
+    ] {
+        r.parse(c, 2);
+    }
+    // Error snippets: tokens past 32 characters (ASCII and multi-byte), and characters `{:?}` escapes.
+    for tok in [
+        "x".repeat(32), "x".repeat(33), "é".repeat(40), format!("{}\u{301}", "a".repeat(31)), "a\"b\\c".to_string(),
+        "\u{0}\u{1}\u{7f}\u{80}".to_string(), "\u{301}x".to_string(), "\u{200b}\u{e000}\u{10ffff}".to_string(),
+        "'quote'".to_string(), "\u{1F600}\u{1F1FA}\u{1F1F8}".to_string(), "\u{ad}\u{378}\u{fff9}".to_string(),
+    ] {
+        r.parse(&format!("1.0 {tok} 0.1\n"), 1);
+        r.parse(&format!("# GHz S RI R {tok}\n1.0 0.5 0.1\n"), 1);
+        r.parse(&format!("# GHz {tok}\n1.0 0.5 0.1\n"), 1);
+    }
+    // Seeded files: 1- to 4-port, every format and unit, values in Rust's three float forms.
+    for _ in 0..80 {
+        let n = usize::try_from(rng.int(1, 4)).unwrap_or(1);
+        let fmt = ["RI", "MA", "DB"][usize::try_from(rng.int(0, 2)).unwrap_or(0)];
+        let unit = ["Hz", "kHz", "MHz", "GHz"][usize::try_from(rng.int(0, 3)).unwrap_or(0)];
+        let z0 = rng.log_uniform(0.0, 3.0);
+        let mut c = format!("! seeded\n# {unit} S {fmt} R {z0}\n");
+        let mut fr = 0.0;
+        for _ in 0..usize::try_from(rng.int(1, 4)).unwrap_or(1) {
+            fr += rng.uniform(0.0, 10.0);
+            let mut vals = vec![fr];
+            for _ in 0..n * n {
+                match fmt {
+                    "RI" => vals.extend([rng.uniform(-1.0, 1.0), rng.uniform(-1.0, 1.0)]),
+                    "MA" => vals.extend([rng.uniform(0.0, 1.0), rng.uniform(-180.0, 180.0)]),
+                    _ => vals.extend([rng.uniform(-80.0, 0.0), rng.uniform(-180.0, 180.0)]),
+                }
+            }
+            let words: Vec<String> = vals
+                .iter()
+                .map(|&x| match rng.int(0, 2) {
+                    0 => format!("{x}"),
+                    1 => format!("{x:e}"),
+                    _ => format!("{x:?}"),
+                })
+                .collect();
+            for (k, w) in words.iter().enumerate() {
+                c.push_str(w);
+                c.push(if k % 9 == 8 { '\n' } else { ' ' });
+            }
+            c.push('\n');
+        }
+        r.parse(&c, n);
     }
 }

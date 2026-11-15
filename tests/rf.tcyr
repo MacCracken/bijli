@@ -803,6 +803,284 @@ fn cyrius_smatrix(): i64 {
     return 0;
 }
 
+# The C strings a and b joined, on the bump heap (test text only).
+fn cat(a, b): i64 {
+    var la = strlen(a);
+    var lb = strlen(b);
+    var out = alloc(la + lb + 1);
+    memcpy(out, a, la);
+    memcpy(out + la, b, lb);
+    store8(out + la + lb, 0);
+    return out;
+}
+
+# bj_parse_touchstone of the C string s into *d; its error code (0 on Ok).
+fn ts_parse(s, ports, d: *BjTouchstoneData): i64 {
+    var t, v = bj_parse_touchstone(s, strlen(s), ports, d);
+    if (is_ok(t) == 1) { return 0; }
+    return v;
+}
+
+# 1 when bj_parse_touchstone refuses s.
+fn ts_refused(s, ports): i64 {
+    var d: BjTouchstoneData;
+    if (ts_parse(s, ports, &d) != 0) { return 1; }
+    BjTouchstoneData_free(&d);
+    return 0;
+}
+
+# 1 when bj_parse_touchstone refuses s with the Display text want.
+fn ts_err(s, ports, want): i64 {
+    var d: BjTouchstoneData;
+    var e = ts_parse(s, ports, &d);
+    if (e == 0) {
+        BjTouchstoneData_free(&d);
+        return 0;
+    }
+    return reason_is2(want, "");
+}
+
+# Entry (i, j), 1-based, of matrix k of d.
+fn ts_s(d: *BjTouchstoneData, k, i, j): BjComplex {
+    var m: *BjSMatrix = d.matrix_at(k);
+    var z: BjComplex = m.s_at(i - 1, j - 1);
+    return z;
+}
+
+# rf.rs's Touchstone reader tests.
+fn rust_tests_e(): i64 {
+    var d: BjTouchstoneData;
+    test_group("test_parse_touchstone_ri");
+    var e1 = ts_parse("# GHz S RI R 50\n1.0  0.5  0.1\n2.0  0.3  -0.2\n", 1, &d);
+    var f0: f64 = d.frequency_at(0);
+    var s0: BjComplex = ts_s(&d, 0, 1, 1);
+    assert(e1 == 0 && d.points == 2 && near(f0, 1000000000.0, 1.0) == 1 && near(s0.re, 0.5, TOL) == 1, "RI in GHz");
+    BjTouchstoneData_free(&d);
+
+    test_group("test_parse_touchstone_empty");
+    assert(ts_refused("! comment only\n", 1) == 1, "no data");
+
+    test_group("test_parse_touchstone_two_port_order");
+    var e2 = ts_parse("! 2-port\n# GHZ S RI R 50\n1.0  0.1 0.01  0.9 0.09  0.2 0.02  0.3 0.03\n", 2, &d);
+    var tol: f64 = 0.000000000000001;
+    assert(e2 == 0 && close(ts_s(&d, 0, 1, 1), 0.1, 0.01, tol) == 1 && close(ts_s(&d, 0, 2, 1), 0.9, 0.09, tol) == 1,
+      "N11, then N21");
+    assert(close(ts_s(&d, 0, 1, 2), 0.2, 0.02, tol) == 1 && close(ts_s(&d, 0, 2, 2), 0.3, 0.03, tol) == 1,
+      "then N12, N22");
+    BjTouchstoneData_free(&d);
+
+    test_group("test_parse_touchstone_three_port_multiline");
+    var c3 = "# GHz S RI R 50\n1.0  0.11 -0.11  0.12 -0.12  0.13 -0.13\n";
+    c3 = cat(c3, "     0.21 -0.21  0.22 -0.22  0.23 -0.23\n     0.31 -0.31  0.32 -0.32  0.33 -0.33 ! row 3\n");
+    c3 = cat(c3, "2.0  0.11 0 0.12 0 0.13 0\n 0.21 0 0.22 0 0.23 0\n 0.31 0 0.32 0 0.33 0\n");
+    var e3 = ts_parse(c3, 3, &d);
+    var fa: f64 = d.frequency_at(0);
+    var fb: f64 = d.frequency_at(1);
+    var all = 0;
+    for (var i = 0; i < 3; i = i + 1) {
+        for (var j = 0; j < 3; j = j + 1) {
+            var x: f64 = 0.1 * f64_from(i + 1) + 0.01 * f64_from(j + 1);
+            if (close(ts_s(&d, 0, i + 1, j + 1), x, -x, 0.000000000001) == 1) { all = all + 1; }
+        }
+    }
+    assert(e3 == 0 && fa == 1000000000.0 && fb == 2000000000.0 && all == 9, "one matrix row per line");
+    BjTouchstoneData_free(&d);
+
+    test_group("test_parse_touchstone_five_port_wrapped");
+    var c5 = "# MHz S MA R 75\n100 0.11 0 0.12 0 0.13 0 0.14 0\n   0.15 0\n";
+    c5 = cat(c5, " 0.21 0 0.22 0 0.23 0 0.24 0\n   0.25 0\n 0.31 0 0.32 0 0.33 0 0.34 0\n   0.35 0\n");
+    c5 = cat(c5, " 0.41 0 0.42 0 0.43 0 0.44 0\n   0.45 0\n 0.51 0 0.52 0 0.53 0 0.54 0\n   0.55 0\n");
+    c5 = cat(c5, "200 0.11 1 0.12 1 0.13 1 0.14 1\n   0.15 1\n 0.21 1 0.22 1 0.23 1 0.24 1\n   0.25 1\n");
+    c5 = cat(c5, " 0.31 1 0.32 1 0.33 1 0.34 1\n   0.35 1\n 0.41 1 0.42 1 0.43 1 0.44 1\n   0.45 1\n");
+    c5 = cat(c5, " 0.51 1 0.52 1 0.53 1 0.54 1\n   0.55 1\n");
+    var e5 = ts_parse(c5, 5, &d);
+    var g0: f64 = d.frequency_at(0);
+    var g1: f64 = d.frequency_at(1);
+    var z5: f64 = d.z0;
+    assert(e5 == 0 && g0 == 100000000.0 && g1 == 200000000.0 && near(z5, 75.0, TOL) == 1, "two points at 75 Ω");
+    assert(close(ts_s(&d, 0, 3, 5), 0.35, 0.0, 0.000000000001) == 1 &&
+      close(ts_s(&d, 0, 5, 1), 0.51, 0.0, 0.000000000001) == 1, "each row wraps after four pairs");
+    BjTouchstoneData_free(&d);
+
+    test_group("test_parse_touchstone_inline_comment");
+    var e6 = ts_parse("# GHz S RI R 50 ! options\n1.0 0.5 0.1 ! first\n", 1, &d);
+    assert(e6 == 0 && close(ts_s(&d, 0, 1, 1), 0.5, 0.1, tol) == 1, "comments after the options and the data");
+    BjTouchstoneData_free(&d);
+
+    test_group("test_parse_touchstone_rejects_bad_tokens");
+    assert(ts_refused("# GHz S RI R 50\n1.0 0.5 abc 0.1\n", 1) == 1 && ts_refused("# GHz S RI R 50\n1.0 nan 0.1\n", 1)
+      == 1, "abc, nan");
+    assert(ts_refused("# GHz S RI R 50\n1.0 inf 0.1\n", 1) == 1 && ts_refused("# GHz S RI R 50\n-1.0 0.5 0.1\n", 1)
+      == 1, "inf, a negative frequency");
+    assert(ts_refused("# GHz S DB R 50\n1.0 7000 0\n", 1) == 1, "7000 dB is not representable");
+
+    test_group("test_parse_touchstone_partial_record");
+    assert(ts_refused("# GHz S RI R 50\n1.0 0.5 0.1\n2.0 0.3\n", 1) == 1 &&
+      ts_refused("# GHz S RI R 50\n1.0 0.1 0 0.9 0 0.2 0\n", 2) == 1, "a short last record");
+
+    test_group("test_parse_touchstone_option_line_rules");
+    var e7 = ts_parse("# GHz S RI R 50\n# MHz S MA R 75\n1.0 0.5 0.1\n", 1, &d);
+    var z7: f64 = d.z0;
+    var f7: f64 = d.frequency_at(0);
+    assert(e7 == 0 && near(z7, 50.0, TOL) == 1 && near(f7, 1000000000.0, 1.0) == 1 &&
+      close(ts_s(&d, 0, 1, 1), 0.5, 0.1, tol) == 1, "only the first option line counts");
+    BjTouchstoneData_free(&d);
+    assert(ts_refused("# GHz Y RI R 50\n1.0 0.5 0.1\n", 1) == 1 && ts_refused("# GHz Z RI R 50\n1.0 0.5 0.1\n", 1) == 1,
+      "Y, Z");
+    assert(ts_refused("# GHz H RI R 50\n1.0 0.5 0.1\n", 1) == 1 && ts_refused("# GHz G RI R 50\n1.0 0.5 0.1\n", 1) == 1,
+      "H, G");
+    var rbad = 0;
+    rbad = rbad + ts_refused("# GHz S RI R \n1.0 0.5 0.1\n", 1) + ts_refused("# GHz S RI R abc\n1.0 0.5 0.1\n", 1);
+    rbad = rbad + ts_refused("# GHz S RI R -50\n1.0 0.5 0.1\n", 1) + ts_refused("# GHz S RI R 0\n1.0 0.5 0.1\n", 1);
+    rbad = rbad + ts_refused("# GHz S RI R nan\n1.0 0.5 0.1\n", 1) + ts_refused("# GHz S RI R inf\n1.0 0.5 0.1\n", 1);
+    assert(rbad == 6, "R needs a finite positive number");
+    assert(ts_refused("# GHz S RI XYZ R 50\n1.0 0.5 0.1\n", 1) == 1, "an unknown option");
+    assert(ts_refused("1.0 0.5 0.1\n# GHz S RI R 50\n2.0 0.5 0.1\n", 1) == 1, "an option line after data");
+    assert(ts_refused("[Version] 2.0\n# GHz S RI R 50\n1.0 0.5 0.1\n", 1) == 1, "a v2 keyword");
+    var e8 = ts_parse("1.0 0.5 90\n", 1, &d);
+    var f8: f64 = d.frequency_at(0);
+    assert(e8 == 0 && near(f8, 1000000000.0, 1.0) == 1 && close(ts_s(&d, 0, 1, 1), 0.0, 0.5, 0.000000000001) == 1,
+      "defaults: GHz S MA R 50");
+    BjTouchstoneData_free(&d);
+
+    test_group("test_parse_touchstone_port_limits");
+    assert(ts_refused("1.0 0.5 0.1\n", 0) == 1 && ts_refused("1.0 0.5 0.1\n", 100000) == 1 &&
+      ts_refused("1.0 0.5 0.1\n", 0 - 1) == 1, "0, 100 000, usize::MAX");
+
+    test_group("test_parse_touchstone_two_port_noise_block_skipped");
+    var cn = "# GHZ S MA R 50\n1.0 0.5 10 0.9 -20 0.1 30 0.4 40\n2.0 0.6 11 0.8 -21 0.1 31 0.3 41\n";
+    cn = cat(cn, "! noise parameters\n1.0 1.5 0.3 45 0.2\n2.0 1.8 0.35 50 0.25\n");
+    var e9 = ts_parse(cn, 2, &d);
+    var s21: BjComplex = ts_s(&d, 0, 2, 1);
+    var s21n: f64 = s21.norm();
+    var s21a: f64 = _bj_to_degrees(s21.arg());
+    assert(e9 == 0 && d.points == 2 && near(s21n, 0.9, 0.000000000001) == 1 && near(s21a, -20.0, 0.000000001) == 1,
+      "the noise block skipped; S21 = 0.9∠−20°");
+    BjTouchstoneData_free(&d);
+
+    test_group("test_touchstone_parse_mhz");
+    var e10 = ts_parse("# MHZ S RI R 75\n100.0  0.1  0.2\n", 1, &d);
+    var z10: f64 = d.z0;
+    var f10: f64 = d.frequency_at(0);
+    assert(e10 == 0 && near(z10, 75.0, TOL) == 1 && near(f10, 100000000.0, 1.0) == 1, "MHz at 75 Ω");
+    BjTouchstoneData_free(&d);
+    return 0;
+}
+
+# ADR 0002 row 38 (UTF-8), Rust's text rules, the reasons' text, the layout and the heap.
+fn cyrius_touchstone(): i64 {
+    var d: BjTouchstoneData;
+    d.points = 7;
+    test_group("cyrius_touchstone_utf8 (ADR 0002 row 38)");
+    var raw[32];
+    memcpy(&raw, "1.0 0.5 0.1\n", 12);
+    store8(&raw + 4, 192);
+    var t1, v1 = bj_parse_touchstone(&raw, 12, 1, &d);
+    assert(is_err_result(t1) == 1 && reason_is2("invalid parameter: Touchstone content is not valid UTF-8 ",
+        "(an invalid sequence at byte 4)") == 1 && d.points == 7, "a lone lead byte: refused, out untouched");
+    var bad = 0;
+    store8(&raw + 4, 237);
+    store8(&raw + 5, 160);
+    store8(&raw + 6, 128);
+    var t2, v2 = bj_parse_touchstone(&raw, 12, 1, &d);
+    if (is_err_result(t2) == 1) { bad = bad + 1; }
+    store8(&raw + 4, 224);
+    store8(&raw + 5, 128);
+    var t3, v3 = bj_parse_touchstone(&raw, 12, 1, &d);
+    if (is_err_result(t3) == 1) { bad = bad + 1; }
+    store8(&raw + 4, 244);
+    store8(&raw + 5, 144);
+    store8(&raw + 6, 128);
+    store8(&raw + 7, 128);
+    var t4, v4 = bj_parse_touchstone(&raw, 12, 1, &d);
+    if (is_err_result(t4) == 1) { bad = bad + 1; }
+    var t5, v5 = bj_parse_touchstone("1.0 0.5 0.1\n\xE2\x80", 14, 1, &d);
+    if (is_err_result(t5) == 1) { bad = bad + 1; }
+    assert(bad == 4, "a surrogate, an overlong form, past U+10FFFF, a truncated sequence");
+
+    test_group("cyrius_touchstone_text");
+    var e1 = ts_parse("#\xE3\x80\x80GHz S RI R 50\xC2\xA0\r\n\xE2\x80\xA81.0\xC2\x850.5\t0.1\r\n", 1, &d);
+    assert(e1 == 0 && close(ts_s(&d, 0, 1, 1), 0.5, 0.1, 0.0) == 1, "U+3000, U+00A0, U+2028, U+0085 and CRLF split");
+    BjTouchstoneData_free(&d);
+    assert(ts_err("1.0 \xE2\x80\x8B0.5 0.1\n", 1,
+        "invalid parameter: Touchstone line 1: expected a finite number, got \"\\u{200b}0.5\"") == 1,
+      "U+200B is no White_Space, and {:?} escapes it");
+    assert(ts_err("1.0 1_0 0.1\n", 1, "invalid parameter: Touchstone line 1: expected a finite number, got \"1_0\"")
+      == 1, "no '_' in a number");
+    var wq = "invalid parameter: Touchstone line 1: expected a finite number, got \"a\\\"b\\\\c\"";
+    assert(ts_err("1.0 a\"b\\c 0.1\n", 1, wq) == 1, "quotes, backslash");
+    var wx = cat("invalid parameter: Touchstone line 1: expected a finite number, got ",
+      "\"xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx…\"");
+    assert(ts_err("1.0 xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx 0.1\n", 1, wx) == 1, "33 characters: the first 32 and '…'");
+    assert(ts_err("1.0 \xC3\xA9\xCC\x81 0.1\n", 1,
+        "invalid parameter: Touchstone line 1: expected a finite number, got \"é\\u{301}\"") == 1,
+      "a combining accent is escaped, é is not");
+    var e2 = ts_parse("1. .5 +1.e-0\n", 1, &d);
+    var f2: f64 = d.frequency_at(0);
+    assert(e2 == 0 && f2 == 1000000000.0 && close(ts_s(&d, 0, 1, 1), 0.0, 0.5, 0.0) == 0, "1., .5 and +1.e-0 parse");
+    BjTouchstoneData_free(&d);
+
+    test_group("cyrius_touchstone_reasons");
+    assert(ts_err("1 0 0\n", 257, "invalid parameter: Touchstone port count must be in 1..=256, got 257") == 1, "257");
+    assert(ts_err("1 0 0\n2 0\n", 1, "invalid parameter: Touchstone data ends with an incomplete record: 2 of 3 values")
+      == 1, "a partial record");
+    assert(ts_err("\n\n", 1, "invalid parameter: no valid data found in Touchstone content") == 1, "nothing");
+    var d300 = alloc(302);
+    store8(d300, 49);
+    for (var z = 1; z <= 300; z = z + 1) { store8(d300 + z, 48); }
+    store8(d300 + 301, 0);
+    var t300 = ts_parse("# GHz S RI R 50\n1e300 0 0\n", 1, &d);
+    var h300 = "invalid parameter: Touchstone line 2: frequency must be finite and non-negative, got ";
+    assert(t300 != 0 && reason_is2(h300, d300) == 1, "the frequency overflows through GHz, 1e300 in Display form");
+    assert(ts_err("# GHz S DB R 50\n1\n7000\n0\n", 1,
+        "invalid parameter: Touchstone record ending at line 4: S11 = (7000, 0) is not representable") == 1,
+      "the record's last line");
+    assert(ts_err("# GHz Z RI\n1 0 0\n", 1,
+        "invalid parameter: Touchstone line 1: only S-parameter data is supported, got parameter type Z") == 1, "Z");
+    assert(ts_err("# GHz S R\n1 0 0\n", 1,
+        "invalid parameter: Touchstone line 1: option R must be followed by the reference impedance") == 1, "R alone");
+    assert(ts_err("# R -0\n1 0 0\n", 1,
+        "invalid parameter: Touchstone line 1: reference impedance must be a finite positive number, got \"-0\"") == 1,
+      "R −0");
+    assert(ts_err("! x\n# GHz S2P\n1 0 0\n", 1, "invalid parameter: Touchstone line 2: unrecognized option \"S2P\"")
+      == 1, "an unknown option");
+    assert(ts_err("1 0 0\n#\n", 1,
+        "invalid parameter: Touchstone line 2: option line must precede the network data") == 1, "# after data");
+    var wv = "invalid parameter: Touchstone line 1: Touchstone 2.0 keywords are not supported (v1.1 only)";
+    assert(ts_err("  [Ports]\n", 1, wv) == 1, "[ after spaces");
+
+    test_group("cyrius_touchstone_layout (ADR 0002 row 36)");
+    var e3 = ts_parse("# Hz S RI R 25\n1 1 2 3 4 5 6 7 8\n3 0 0 0 0 0 0 0 0\n", 2, &d);
+    var m1: *BjSMatrix = d.matrix_at(1);
+    var m0: *BjSMatrix = d.matrix_at(0);
+    var fz: f64 = d.frequency_at(2);
+    var zz: f64 = m1.z0_at(1);
+    assert(e3 == 0 && d.points == 2 && d.ports == 2 && m1.ports == 2 && zz == 25.0 && fz != fz, "two 2-port matrices");
+    assert(d.matrix_at(2) == 0 && d.matrix_at(0 - 1) == 0 && m0.s == d.frequencies + 2 * 32, "headers, then data");
+    var s12: BjComplex = m0.s_at(0, 1);
+    assert(close(s12, 5.0, 6.0, 0.0) == 1, "N12 is the third pair");
+    BjTouchstoneData_free(&d);
+    assert(d.points == 0 && d.frequencies == 0, "freed and emptied");
+
+    test_group("cyrius_touchstone_heap");
+    var fl0 = _fl_arena_pos;
+    var bump0 = alloc_used();
+    var fails = 0;
+    var hp = "# MHz S MA R 50\n1 0.5 30 0.9 -45 0.9 -45 0.5 30\n2 0.5 30 0.9 -45 0.9 -45 0.5 30\n";
+    for (var k = 0; k < 2000; k = k + 1) {
+        if (ts_parse(hp, 2, &d) != 0) {
+            fails = fails + 1;
+        }
+        BjTouchstoneData_free(&d);
+        if (ts_refused("# MHz S MA R 50\n1 0.5 30 0.9\n", 2) == 0) { fails = fails + 1; }
+    }
+    assert(fails == 0, "2000 parses freed, 2000 refusals");
+    assert_eq(_fl_arena_pos, fl0, "the freelist's arena did not grow");
+    assert_eq(alloc_used(), bump0, "nothing on the bump heap");
+    if (v1 == 7 || v2 == 7 || v3 == 7 || v4 == 7 || v5 == 7 || is_ok(t1) == 7) { println("."); }
+    return 0;
+}
+
 # Runs rf.rs's tests, then the Cyrius-only checks.
 fn main(): i64 {
     alloc_init();
@@ -814,6 +1092,8 @@ fn main(): i64 {
     cyrius_values();
     rust_tests_d();
     cyrius_smatrix();
+    rust_tests_e();
+    cyrius_touchstone();
     return assert_summary();
 }
 

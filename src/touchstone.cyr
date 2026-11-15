@@ -1,0 +1,725 @@
+# touchstone.cyr — rf.rs's Touchstone v1.1 I/O (M4 part 1c-1: the reader, `parse_touchstone` into a
+# BjTouchstoneData, and the TouchstoneFormat names). The writer, try_write_touchstone, is M4 part 1c-2's.
+#
+# The content is bytes read as UTF-8, as Rust's `&str` is: bytes that are not UTF-8 are refused (ADR 0002 row 38).
+# Rust's str methods are followed exactly:
+# - a line ends at '\n', and one '\r' before it is dropped (`str::lines`); `!` starts a comment;
+# - `trim` and `split_whitespace` split on Unicode's White_Space (`char::is_whitespace`, src/touchstone_data.cyr);
+# - a number has `parse::<f64>`'s grammar: an optional sign, ASCII digits with an optional point (`1.` and `.5` but not
+#   `.`), an optional exponent with digits; no '_'. inf and nan are numbers there and not finite here, so the same
+#   error. Its value is the stdlib's correctly rounded f64_parse_n, as Rust's is;
+# - an error quotes a token as Rust's `{:?}` of a str, cut to 32 characters and '…' (`snippet`), escaping what Rust's
+#   core escapes (src/touchstone_data.cyr's ranges, computed by the oracle's compiler).
+#
+# A pair is (v₁, v₂) in RI; in MA and DB it is (r·cos θ, r·sin θ) with one correctly rounded sincos of θ = v₂·π/180
+# (Rust's folded to_radians), r = v₁ in MA and 10^(v₁/20) in DB (the correctly rounded pow, as `10.0_f64.powf`). 2-port
+# records are ordered N11 N21 N12 N22, every other port count row-major. For a 2-port, a record whose frequency does
+# not increase starts the noise-parameter block, which is skipped.
+#
+# A BjTouchstoneData's shape is fixed at construction (ADR 0002 row 36): `points` frequencies and as many ports-port
+# matrices in one fl_alloc block, given back by BjTouchstoneData_free.
+
+private
+
+# The S-parameter formats of a Touchstone file. Mirrors `TouchstoneFormat`.
+public enum BjTouchstoneFormat {
+    BJ_TOUCHSTONE_FORMAT_MAGNITUDE_ANGLE = 0;
+    BJ_TOUCHSTONE_FORMAT_REAL_IMAG = 1;
+    BJ_TOUCHSTONE_FORMAT_DB_ANGLE = 2;
+}
+
+# The most ports the reader and writer take: a record is 1 + 2n² values. Mirrors `MAX_TOUCHSTONE_PORTS`.
+const _BJ_TS_MAX_PORTS = 256;
+
+# An N-port network's S-parameters at `points` frequencies: `ports` (a usize, 1 to 256), `z0` (the option line's R,
+# Ω), `frequencies`, the address of `points` f64 (Hz), and `s_matrices`, the address of `points` BjSMatrix (24 bytes
+# each), every one a ports-port matrix whose entries and impedances lie in the same fl_alloc block. Read them with
+# frequency_at and matrix_at; never BjSMatrix_free a matrix of the data: BjTouchstoneData_free gives the block back.
+# Mirrors `TouchstoneData`.
+public struct BjTouchstoneData {
+    ports;
+    z0: f64;
+    points;
+    frequencies;
+    s_matrices;
+}
+
+# The address a as a *BjSMatrix (an untyped word stored into a typed pointer warns; a typed return does not).
+#must_use
+fn _bj_ts_smp(a): *BjSMatrix {
+    return a;
+}
+
+# The address a as a *f64.
+#must_use
+fn _bj_ts_f64p(a): *f64 {
+    return a;
+}
+
+# Allocates the data's block into *out: points frequencies (0), then the points matrix headers, then each matrix's
+# ports² entries (0) and ports impedances (z0). 0, or the Allocation code recorded (out untouched).
+fn _bj_ts_alloc(ports, z0: f64, points, out: *BjTouchstoneData): i64 {
+    var per = ports * ports * 16 + ports * 8;
+    var blk = 0;
+    if (points > 0 && points < 1099511627776 / (32 + per)) { blk = fl_calloc(points * (32 + per)); }
+    if (blk == 0 && points != 0) {
+        var t = _bj_err_reason(BJ_ERR_ALLOCATION);
+        _bj_tx_cstr(t, "Touchstone data of ");
+        _bj_tx_u64(t, points);
+        _bj_tx_cstr(t, " points");
+        return BJ_ERR_ALLOCATION;
+    }
+    var hdr = blk + points * 8;
+    var data = blk + points * 32;
+    for (var k = 0; k < points; k = k + 1) {
+        var s = data + k * per;
+        var zp = s + ports * ports * 16;
+        store64(hdr + k * 24, ports);
+        store64(hdr + k * 24 + 8, s);
+        store64(hdr + k * 24 + 16, zp);
+        for (var j = 0; j < ports; j = j + 1) { store64(zp + j * 8, _bj_bits(z0)); }
+    }
+    out.ports = ports;
+    out.z0 = z0;
+    out.points = points;
+    out.frequencies = blk;
+    out.s_matrices = 0;
+    if (points > 0) { out.s_matrices = hdr; }
+    return 0;
+}
+
+# Gives d's block back and empties it (no points).
+public fn BjTouchstoneData_free(d: *BjTouchstoneData): i64 {
+    if (d.frequencies != 0) { fl_free(d.frequencies); }
+    d.points = 0;
+    d.frequencies = 0;
+    d.s_matrices = 0;
+    return 0;
+}
+
+impl BjTouchstoneData {
+    # Rust's `frequencies[k]` (Hz); NaN unless 0 ≤ k < points.
+    #must_use
+    public fn frequency_at(self, k): f64 {
+        if (k < 0 || k >= self.points) {
+            var nan: f64 = _bj_from_bits(0x7FF8000000000000);
+            return nan;
+        }
+        var fp: *f64 = _bj_ts_f64p(self.frequencies);
+        var f: f64 = fp[k];
+        return f;
+    }
+
+    # Rust's `&s_matrices[k]`: the address of matrix k (in the data's block: read or set its entries, never free it),
+    # or 0 unless 0 ≤ k < points.
+    #must_use
+    public fn matrix_at(self, k): *BjSMatrix {
+        if (k < 0 || k >= self.points) { return _bj_ts_smp(0); }
+        return _bj_ts_smp(self.s_matrices + k * 24);
+    }
+}
+
+# ── the text: UTF-8, White_Space, Rust's {:?} ────────────────────────────────────────────────────────────────────
+
+# The offset of the first byte of c[0..n) that is not part of a well-formed UTF-8 sequence (Rust's `str::from_utf8`:
+# no overlong forms, no surrogates, nothing past U+10FFFF), or -1 when all of it is UTF-8.
+#must_use
+fn _bj_ts_utf8_bad(c, n): i64 {
+    var i = 0;
+    while (i < n) {
+        var b = load8(c + i);
+        if (b < 128) {
+            i = i + 1;
+        } else {
+            var need = 0;
+            var lo = 128;
+            var hi = 191;
+            if (b >= 194 && b <= 223) { need = 1; }
+            elif (b == 224) {
+                need = 2;
+                lo = 160;
+            } elif (b >= 225 && b <= 236) { need = 2; }
+            elif (b == 237) {
+                need = 2;
+                hi = 159;
+            } elif (b >= 238 && b <= 239) { need = 2; }
+            elif (b == 240) {
+                need = 3;
+                lo = 144;
+            } elif (b >= 241 && b <= 243) { need = 3; }
+            elif (b == 244) {
+                need = 3;
+                hi = 143;
+            } else { return i; }
+            if (i + need >= n) { return i; }
+            var b1 = load8(c + i + 1);
+            if (b1 < lo || b1 > hi) { return i; }
+            for (var k = 2; k <= need; k = k + 1) {
+                var bk = load8(c + i + k);
+                if (bk < 128 || bk > 191) { return i; }
+            }
+            i = i + need + 1;
+        }
+    }
+    return 0 - 1;
+}
+
+# The scalar value of the UTF-8 character at c + i and its byte count (c is valid UTF-8).
+#must_use
+fn _bj_ts_dec(c, i): (i64, i64) {
+    var b = load8(c + i);
+    if (b < 128) { return (b, 1); }
+    if (b < 224) { return (((b & 31) << 6) | (load8(c + i + 1) & 63), 2); }
+    if (b < 240) {
+        var u3 = ((b & 15) << 12) | ((load8(c + i + 1) & 63) << 6) | (load8(c + i + 2) & 63);
+        return (u3, 3);
+    }
+    var u4 = ((b & 7) << 18) | ((load8(c + i + 1) & 63) << 12) | ((load8(c + i + 2) & 63) << 6);
+    u4 = u4 | (load8(c + i + 3) & 63);
+    return (u4, 4);
+}
+
+# 1 when u is White_Space (`char::is_whitespace`).
+#must_use
+fn _bj_ts_is_ws(u): i64 {
+    if (u == 32 || (u >= 9 && u <= 13)) { return 1; }
+    if (u < 133) { return 0; }
+    for (var k = 6; k < _BJ_TS_WS_N; k = k + 1) {
+        if (_bj_ts_ws[k] == u) { return 1; }
+    }
+    return 0;
+}
+
+# The offset of the first character of c[i..e) that isn't White_Space, or e. ASCII is tested inline (the common case).
+#must_use
+fn _bj_ts_skip_ws(c, i, e): i64 {
+    var p = i;
+    while (p < e) {
+        var b = load8(c + p);
+        if (b < 128) {
+            if (b != 32 && (b < 9 || b > 13)) { return p; }
+            p = p + 1;
+        } else {
+            var u, l = _bj_ts_dec(c, p);
+            if (_bj_ts_is_ws(u) == 0) { return p; }
+            p = p + l;
+        }
+    }
+    return e;
+}
+
+# The end of c[a..e) with its trailing White_Space dropped (a starts a character).
+#must_use
+fn _bj_ts_trim_end(c, a, e): i64 {
+    var q = e;
+    while (q > a) {
+        var s = q - 1;
+        var b = load8(c + s);
+        if (b < 128) {
+            if (b != 32 && (b < 9 || b > 13)) { return q; }
+            q = s;
+            continue;
+        }
+        while (s > a && (load8(c + s) & 192) == 128) { s = s - 1; }
+        var u, l = _bj_ts_dec(c, s);
+        if (_bj_ts_is_ws(u) == 0) { return q; }
+        q = s;
+    }
+    return a;
+}
+
+# The end of the token that starts at c + i: the first White_Space character before e, or e. ASCII inline.
+#must_use
+fn _bj_ts_tok_end(c, i, e): i64 {
+    var p = i;
+    while (p < e) {
+        var b = load8(c + p);
+        if (b < 128) {
+            if (b == 32 || (b >= 9 && b <= 13)) { return p; }
+            p = p + 1;
+        } else {
+            var u, l = _bj_ts_dec(c, p);
+            if (_bj_ts_is_ws(u) == 1) { return p; }
+            p = p + l;
+        }
+    }
+    return e;
+}
+
+# The six uppercase hex digits at p as a number.
+#must_use
+fn _bj_ts_hex6(p): i64 {
+    var v = 0;
+    for (var k = 0; k < 6; k = k + 1) {
+        var d = load8(p + k);
+        if (d >= 65) { d = d - 55; } else { d = d - 48; }
+        v = v * 16 + d;
+    }
+    return v;
+}
+
+# 1 when Rust's `{:?}` of a str writes u as `\u{…}`: a binary search of src/touchstone_data.cyr's ranges (range r at
+# byte 1 + 109·(r / 9) + 12·(r % 9) of its literal).
+#must_use
+fn _bj_ts_escaped(u): i64 {
+    var lo = 0;
+    var hi = _BJ_TS_ESC_N - 1;
+    while (lo <= hi) {
+        var mid = (lo + hi) / 2;
+        var p = _bj_ts_esc + 1 + 109 * (mid / 9) + 12 * (mid % 9);
+        var a = _bj_ts_hex6(p);
+        var b = _bj_ts_hex6(p + 6);
+        if (u < a) { hi = mid - 1; }
+        elif (u > b) { lo = mid + 1; }
+        else { return 1; }
+    }
+    return 0;
+}
+
+# Writes u in lowercase hexadecimal, no leading zeros.
+fn _bj_ts_hex(t, u) {
+    var sh = 20;
+    while (sh > 0 && ((u >> sh) & 15) == 0) { sh = sh - 4; }
+    while (sh >= 0) {
+        var d = (u >> sh) & 15;
+        if (d < 10) { _bj_tx_putc(t, 48 + d); } else { _bj_tx_putc(t, 87 + d); }
+        sh = sh - 4;
+    }
+    return 0;
+}
+
+# Writes `{:?}` of the token c[i..e) cut to 32 characters with '…' appended past them (rf.rs's `snippet`).
+fn _bj_ts_quote(t, c, i, e) {
+    var chars = 0;
+    var lim = e;
+    var p = i;
+    while (p < e) {
+        if (chars == 32) {
+            lim = p;
+            p = e;
+        } else {
+            var u0, l0 = _bj_ts_dec(c, p);
+            chars = chars + 1;
+            p = p + l0;
+        }
+    }
+    _bj_tx_putc(t, 34);
+    p = i;
+    while (p < lim) {
+        var u, l = _bj_ts_dec(c, p);
+        if (u == 0) { _bj_tx_cstr(t, "\\0"); }
+        elif (u == 9) { _bj_tx_cstr(t, "\\t"); }
+        elif (u == 10) { _bj_tx_cstr(t, "\\n"); }
+        elif (u == 13) { _bj_tx_cstr(t, "\\r"); }
+        elif (u == 34) { _bj_tx_cstr(t, "\\\""); }
+        elif (u == 92) { _bj_tx_cstr(t, "\\\\"); }
+        elif (_bj_ts_escaped(u) == 1) {
+            _bj_tx_cstr(t, "\\u{");
+            _bj_ts_hex(t, u);
+            _bj_tx_putc(t, 125);
+        } else {
+            for (var k = 0; k < l; k = k + 1) { _bj_tx_putc(t, load8(c + p + k)); }
+        }
+        p = p + l;
+    }
+    if (lim < e) { _bj_tx_cstr(t, "…"); }
+    _bj_tx_putc(t, 34);
+    return 0;
+}
+
+# The value of the token c[i..e) into out[0] when it has `parse::<f64>`'s number grammar and its value is finite: 1,
+# else 0 (inf, infinity and nan are numbers to Rust, but not finite).
+#must_use
+fn _bj_ts_num(c, i, e, out: *f64): i64 {
+    var p = i;
+    if (p < e && (load8(c + p) == 43 || load8(c + p) == 45)) { p = p + 1; }
+    var d = 0;
+    while (p < e && load8(c + p) >= 48 && load8(c + p) <= 57) {
+        p = p + 1;
+        d = d + 1;
+    }
+    if (p < e && load8(c + p) == 46) {
+        p = p + 1;
+        while (p < e && load8(c + p) >= 48 && load8(c + p) <= 57) {
+            p = p + 1;
+            d = d + 1;
+        }
+    }
+    if (d == 0) { return 0; }
+    if (p < e && (load8(c + p) == 101 || load8(c + p) == 69)) {
+        p = p + 1;
+        if (p < e && (load8(c + p) == 43 || load8(c + p) == 45)) { p = p + 1; }
+        var x = 0;
+        while (p < e && load8(c + p) >= 48 && load8(c + p) <= 57) {
+            p = p + 1;
+            x = x + 1;
+        }
+        if (x == 0) { return 0; }
+    }
+    if (p != e) { return 0; }
+    var v: f64 = _bj_from_bits(f64_parse_n(c + i, e - i));
+    if (_bj_is_finite(v) == 0) { return 0; }
+    out[0] = v;
+    return 1;
+}
+
+# 1 when c[i..e) is lit (an uppercase ASCII word) once ASCII letters are uppercased (`to_ascii_uppercase() == lit`).
+#must_use
+fn _bj_ts_word(c, i, e, lit): i64 {
+    var n = strlen(lit);
+    if (e - i != n) { return 0; }
+    for (var k = 0; k < n; k = k + 1) {
+        var b = load8(c + i + k);
+        if (b >= 97 && b <= 122) { b = b - 32; }
+        if (b != load8(lit + k)) { return 0; }
+    }
+    return 1;
+}
+
+# ── the reader ──────────────────────────────────────────────────────────────────────────────────────────────────
+
+# Starts InvalidParameter "Touchstone line {line_no}: <head>" and returns its BjText.
+fn _bj_ts_line_err(line_no, head): i64 {
+    var t = _bj_err_reason(BJ_ERR_INVALID_PARAMETER);
+    _bj_tx_cstr(t, "Touchstone line ");
+    _bj_tx_u64(t, line_no);
+    _bj_tx_cstr(t, ": ");
+    _bj_tx_cstr(t, head);
+    return t;
+}
+
+# Applies an option line's text c[i..e) (after '#') to opt = [the frequency multiplier's bits, the format, Z₀'s bits]:
+# 0, or the InvalidParameter code recorded. Mirrors rf.rs's `parse_option_line`.
+fn _bj_ts_options(c, i, e, line_no, opt: *i64): i64 {
+    var p = _bj_ts_skip_ws(c, i, e);
+    while (p < e) {
+        var te = _bj_ts_tok_end(c, p, e);
+        if (_bj_ts_word(c, p, te, "HZ") == 1) { opt[0] = _bj_bits(1.0); }
+        elif (_bj_ts_word(c, p, te, "KHZ") == 1) { opt[0] = _bj_bits(1000.0); }
+        elif (_bj_ts_word(c, p, te, "MHZ") == 1) { opt[0] = _bj_bits(1000000.0); }
+        elif (_bj_ts_word(c, p, te, "GHZ") == 1) { opt[0] = _bj_bits(1000000000.0); }
+        elif (_bj_ts_word(c, p, te, "S") == 1) { te = te; }
+        elif (_bj_ts_word(c, p, te, "Y") == 1 || _bj_ts_word(c, p, te, "Z") == 1 || _bj_ts_word(c, p, te, "H") == 1
+          || _bj_ts_word(c, p, te, "G") == 1) {
+            var t = _bj_ts_line_err(line_no, "only S-parameter data is supported, got parameter type ");
+            for (var k = p; k < te; k = k + 1) { _bj_tx_putc(t, load8(c + k)); }
+            return BJ_ERR_INVALID_PARAMETER;
+        } elif (_bj_ts_word(c, p, te, "MA") == 1) { opt[1] = BJ_TOUCHSTONE_FORMAT_MAGNITUDE_ANGLE; }
+        elif (_bj_ts_word(c, p, te, "RI") == 1) { opt[1] = BJ_TOUCHSTONE_FORMAT_REAL_IMAG; }
+        elif (_bj_ts_word(c, p, te, "DB") == 1) { opt[1] = BJ_TOUCHSTONE_FORMAT_DB_ANGLE; }
+        elif (_bj_ts_word(c, p, te, "R") == 1) {
+            var vs = _bj_ts_skip_ws(c, te, e);
+            if (vs >= e) {
+                _bj_ts_line_err(line_no, "option R must be followed by the reference impedance");
+                return BJ_ERR_INVALID_PARAMETER;
+            }
+            var ve = _bj_ts_tok_end(c, vs, e);
+            var r: f64[1];
+            var ok = _bj_ts_num(c, vs, ve, &r);
+            var rv: f64 = r[0];
+            if (ok == 0 || rv <= 0.0) {
+                var u = _bj_ts_line_err(line_no, "reference impedance must be a finite positive number, got ");
+                _bj_ts_quote(u, c, vs, ve);
+                return BJ_ERR_INVALID_PARAMETER;
+            }
+            opt[2] = _bj_bits(rv);
+            te = ve;
+        } else {
+            var w = _bj_ts_line_err(line_no, "unrecognized option ");
+            _bj_ts_quote(w, c, p, te);
+            return BJ_ERR_INVALID_PARAMETER;
+        }
+        p = _bj_ts_skip_ws(c, te, e);
+    }
+    return 0;
+}
+
+# The store of complete records during a parse: st = [buffer, capacity, length] in words; a record is its frequency
+# then its ports² entries row-major (re, im). Grows st by `need` words: 0, or the Allocation code recorded.
+fn _bj_ts_grow(st: *i64, need): i64 {
+    if (st[2] + need <= st[1]) { return 0; }
+    var cap = st[1] * 2;
+    if (cap < st[2] + need) { cap = st[2] + need; }
+    if (cap < 64) { cap = 64; }
+    var nb = 0;
+    if (cap < 137438953472) { nb = fl_alloc(cap * 8); }
+    if (nb == 0) {
+        _bj_tx_cstr(_bj_err_reason(BJ_ERR_ALLOCATION), "Touchstone record buffer");
+        return BJ_ERR_ALLOCATION;
+    }
+    if (st[0] != 0) {
+        memcpy(nb, st[0], st[2] * 8);
+        fl_free(st[0]);
+    }
+    st[0] = nb;
+    st[1] = cap;
+    return 0;
+}
+
+# Appends the complete record rec = [f, v₁, v₂, …] to the store as its frequency f·mult and its S-matrix: 0, or the
+# code recorded (InvalidParameter for a pair that isn't representable, Allocation). Mirrors rf.rs's
+# `touchstone_record`.
+fn _bj_ts_record(rec: *f64, ports, fmt, mult: f64, line_no, st: *i64): i64 {
+    var nn = ports * ports;
+    var g = _bj_ts_grow(st, 1 + 2 * nn);
+    if (g != 0) { return g; }
+    var base: *f64 = _bj_ts_f64p(st[0] + st[2] * 8);
+    var f0: f64 = rec[0];
+    var fr: f64 = f0 * mult;
+    base[0] = fr;
+    for (var k = 0; k < nn; k = k + 1) {
+        var v1: f64 = rec[1 + 2 * k];
+        var v2: f64 = rec[2 + 2 * k];
+        var re: f64 = v1;
+        var im: f64 = v2;
+        if (fmt != BJ_TOUCHSTONE_FORMAT_REAL_IMAG) {
+            var mag: f64 = v1;
+            if (fmt == BJ_TOUCHSTONE_FORMAT_DB_ANGLE) { mag = _bj_powf(10.0, v1 / 20.0); }
+            var th: f64 = _bj_to_radians(v2);
+            var s, c = _bj_sin_cos(th);
+            re = mag * c;
+            im = mag * s;
+        }
+        var i = k / ports;
+        var j = k % ports;
+        if (ports == 2) {
+            i = k % 2;
+            j = k / 2;
+        }
+        if (_bj_is_finite(re) == 0 || _bj_is_finite(im) == 0) {
+            var t = _bj_err_reason(BJ_ERR_INVALID_PARAMETER);
+            _bj_tx_cstr(t, "Touchstone record ending at line ");
+            _bj_tx_u64(t, line_no);
+            _bj_tx_cstr(t, ": S");
+            _bj_tx_u64(t, i + 1);
+            _bj_tx_u64(t, j + 1);
+            _bj_tx_cstr(t, " = (");
+            _bj_fmt_f64_display(t, v1);
+            _bj_tx_cstr(t, ", ");
+            _bj_fmt_f64_display(t, v2);
+            _bj_tx_cstr(t, ") is not representable");
+            return BJ_ERR_INVALID_PARAMETER;
+        }
+        base[1 + 2 * (i * ports + j)] = re;
+        base[2 + 2 * (i * ports + j)] = im;
+    }
+    st[2] = st[2] + 1 + 2 * nn;
+    return 0;
+}
+
+# Emits a debug line "<head> line=N".
+fn _bj_ts_log_line(head, line_no) {
+    if (_bj_log_on(4) == 0) { return 0; }
+    var lb[96];
+    var lt[24];
+    _bj_tx_init(&lt, &lb, 96);
+    _bj_tx_cstr(&lt, head);
+    _bj_tx_cstr(&lt, " line=");
+    _bj_tx_u64(&lt, line_no);
+    _bj_log_text(4, &lt);
+    return 0;
+}
+
+# The parse proper into the store st and res = [Z₀'s bits, the format, the point count]: 0, or the code recorded.
+fn _bj_ts_parse(c, n, ports, rec: *f64, st: *i64, res: *i64): i64 {
+    var rlen = 1 + 2 * ports * ports;
+    var opt: i64[3];
+    opt[0] = _bj_bits(1000000000.0);
+    opt[1] = BJ_TOUCHSTONE_FORMAT_MAGNITUDE_ANGLE;
+    opt[2] = _bj_bits(50.0);
+    var seen = 0;
+    var noise = 0;
+    var rn = 0;
+    var points = 0;
+    var last: f64 = 0.0;
+    var line_no = 0;
+    var pos = 0;
+    var v: f64[1];
+    while (pos < n) {
+        var eol = pos;
+        var be = 0 - 1;
+        var ch = 0;
+        while (eol < n) {
+            ch = load8(c + eol);
+            if (ch == 10) { break; }
+            if (ch == 33 && be < 0) { be = eol; }
+            eol = eol + 1;
+        }
+        var le = eol;
+        if (eol < n && le > pos && load8(c + le - 1) == 13) { le = le - 1; }
+        line_no = line_no + 1;
+        if (be < 0 || be > le) { be = le; }
+        var a = _bj_ts_skip_ws(c, pos, be);
+        var b = _bj_ts_trim_end(c, a, be);
+        pos = eol + 1;
+        if (a < b && load8(c + a) == 35) {
+            if (seen == 1) {
+                _bj_ts_log_line("ignoring additional Touchstone option line", line_no);
+            } else {
+                if (points > 0 || rn > 0 || noise == 1) {
+                    _bj_ts_line_err(line_no, "option line must precede the network data");
+                    return BJ_ERR_INVALID_PARAMETER;
+                }
+                seen = 1;
+                var oe = _bj_ts_options(c, a + 1, b, line_no, &opt);
+                if (oe != 0) { return oe; }
+            }
+        } elif (a < b && load8(c + a) == 91) {
+            _bj_ts_line_err(line_no, "Touchstone 2.0 keywords are not supported (v1.1 only)");
+            return BJ_ERR_INVALID_PARAMETER;
+        } elif (a < b) {
+            var mult: f64 = _bj_from_bits(opt[0]);
+            var p = a;
+            while (p < b) {
+                var te = _bj_ts_tok_end(c, p, b);
+                if (_bj_ts_num(c, p, te, &v) == 0) {
+                    var t = _bj_ts_line_err(line_no, "expected a finite number, got ");
+                    _bj_ts_quote(t, c, p, te);
+                    return BJ_ERR_INVALID_PARAMETER;
+                }
+                var x: f64 = v[0];
+                var take = 1;
+                if (noise == 1) { take = 0; }
+                if (take == 1 && rn == 0) {
+                    var fq: f64 = x * mult;
+                    var ok = 0;
+                    if (_bj_is_finite(fq) == 1 && fq >= 0.0) { ok = 1; }
+                    if (ok == 0) {
+                        var u = _bj_ts_line_err(line_no, "frequency must be finite and non-negative, got ");
+                        _bj_fmt_f64_display(u, x);
+                        return BJ_ERR_INVALID_PARAMETER;
+                    }
+                    if (ports == 2 && points > 0 && fq <= last) {
+                        _bj_ts_log_line("skipping 2-port noise parameter block", line_no);
+                        noise = 1;
+                        take = 0;
+                    }
+                }
+                if (take == 1) {
+                    rec[rn] = x;
+                    rn = rn + 1;
+                    if (rn == rlen) {
+                        var re = _bj_ts_record(rec, ports, opt[1], mult, line_no, st);
+                        if (re != 0) { return re; }
+                        var f0: f64 = rec[0];
+                        last = f0 * mult;
+                        points = points + 1;
+                        rn = 0;
+                    }
+                }
+                p = _bj_ts_skip_ws(c, te, b);
+            }
+        }
+    }
+    if (rn > 0) {
+        var w = _bj_err_reason(BJ_ERR_INVALID_PARAMETER);
+        _bj_tx_cstr(w, "Touchstone data ends with an incomplete record: ");
+        _bj_tx_u64(w, rn);
+        _bj_tx_cstr(w, " of ");
+        _bj_tx_u64(w, rlen);
+        _bj_tx_cstr(w, " values");
+        return BJ_ERR_INVALID_PARAMETER;
+    }
+    if (points == 0) { return _bj_err_invalid_parameter("no valid data found in Touchstone content"); }
+    res[0] = opt[2];
+    res[1] = opt[1];
+    res[2] = points;
+    return 0;
+}
+
+# The format's Rust Debug name ("MagnitudeAngle", "RealImag", "DbAngle").
+#must_use
+fn _bj_ts_format_name(fmt): i64 {
+    if (fmt == BJ_TOUCHSTONE_FORMAT_REAL_IMAG) { return "RealImag"; }
+    if (fmt == BJ_TOUCHSTONE_FORMAT_DB_ANGLE) { return "DbAngle"; }
+    return "MagnitudeAngle";
+}
+
+# Parses Touchstone v1.1 (`.sNp`) S-parameter content, the len bytes at content, for a ports-port network into a new
+# BjTouchstoneData in *out: Ok(0), or Err with out untouched (and never read).
+# - The option line `# <unit> <param> <format> R <z0>` is case-insensitive, its defaults `GHz S MA R 50`. Only the
+#   first is used (later ones are ignored, as the spec says), and it must precede the data. Units Hz, kHz, MHz, GHz;
+#   formats RI, MA, DB (angles in degrees); parameter types other than S are refused.
+# - `!` starts a comment anywhere on a line. Values are a token stream, so a record may span lines (one matrix row per
+#   line for 3 ports and more); a record is 1 + 2n² numbers.
+# - 2-port records are `f N11 N21 N12 N22`, every other port count row-major. For a 2-port, a record whose frequency
+#   doesn't increase starts the noise-parameter block, which is skipped.
+# InvalidParameter unless ports is 1 to 256 and the content is UTF-8 (ADR 0002 row 38), and for an unknown or
+# malformed option (R missing, not finite and positive), a parameter type other than S, a Touchstone 2.0 keyword, a
+# token that isn't a finite number, a negative or non-finite frequency, a pair that isn't representable, a partial
+# last record, or no record at all; Allocation when the buffers can't be had. Mirrors `rf::parse_touchstone`.
+#must_use
+public fn bj_parse_touchstone(content, len, ports, out: *BjTouchstoneData): Result {
+    if (ports <= 0 || ports > _BJ_TS_MAX_PORTS) {
+        var t = _bj_err_reason(BJ_ERR_INVALID_PARAMETER);
+        _bj_tx_cstr(t, "Touchstone port count must be in 1..=256, got ");
+        _bj_tx_u64(t, ports);
+        return Err(BJ_ERR_INVALID_PARAMETER);
+    }
+    if (_bj_log_on(4) == 1) {
+        var lb[96];
+        var lt[24];
+        _bj_tx_init(&lt, &lb, 96);
+        _bj_tx_cstr(&lt, "parsing Touchstone data ports=");
+        _bj_tx_u64(&lt, ports);
+        _bj_tx_cstr(&lt, " bytes=");
+        _bj_tx_u64(&lt, len);
+        _bj_log_text(4, &lt);
+    }
+    var bad = _bj_ts_utf8_bad(content, len);
+    if (bad >= 0) {
+        var u = _bj_err_reason(BJ_ERR_INVALID_PARAMETER);
+        _bj_tx_cstr(u, "Touchstone content is not valid UTF-8 (an invalid sequence at byte ");
+        _bj_tx_u64(u, bad);
+        _bj_tx_cstr(u, ")");
+        return Err(BJ_ERR_INVALID_PARAMETER);
+    }
+    var rlen = 1 + 2 * ports * ports;
+    var rec = fl_alloc(rlen * 8);
+    if (rec == 0) {
+        _bj_tx_cstr(_bj_err_reason(BJ_ERR_ALLOCATION), "Touchstone record buffer");
+        return Err(BJ_ERR_ALLOCATION);
+    }
+    var st: i64[3];
+    st[0] = 0;
+    st[1] = 0;
+    st[2] = 0;
+    var res: i64[3];
+    var e = _bj_ts_parse(content, len, ports, _bj_ts_f64p(rec), &st, &res);
+    fl_free(rec);
+    if (e == 0) {
+        var d: BjTouchstoneData;
+        var z0: f64 = _bj_from_bits(res[0]);
+        e = _bj_ts_alloc(ports, z0, res[2], &d);
+        if (e == 0) {
+            var stride = 1 + 2 * ports * ports;
+            for (var k = 0; k < res[2]; k = k + 1) {
+                var src = st[0] + k * stride * 8;
+                store64(d.frequencies + k * 8, load64(src));
+                memcpy(load64(d.s_matrices + k * 24 + 8), src + 8, (stride - 1) * 8);
+            }
+            out.ports = d.ports;
+            out.z0 = d.z0;
+            out.points = d.points;
+            out.frequencies = d.frequencies;
+            out.s_matrices = d.s_matrices;
+            if (_bj_log_on(4) == 1) {
+                var mb[160];
+                var mt[24];
+                _bj_tx_init(&mt, &mb, 160);
+                _bj_tx_cstr(&mt, "parsed Touchstone data ports=");
+                _bj_tx_u64(&mt, ports);
+                _bj_tx_cstr(&mt, " points=");
+                _bj_tx_u64(&mt, res[2]);
+                _bj_tx_cstr(&mt, " z0=");
+                _bj_fmt_f64_debug(&mt, z0);
+                _bj_tx_cstr(&mt, " format=");
+                _bj_tx_cstr(&mt, _bj_ts_format_name(res[1]));
+                _bj_log_text(4, &mt);
+            }
+        }
+    }
+    if (st[0] != 0) { fl_free(st[0]); }
+    if (e != 0) { return Err(e); }
+    return Ok(0);
+}
