@@ -13,8 +13,11 @@
 # Mie follows Bohren & Huffman (1983, App. A), with Wiscombe's n_max = ⌈x + 4x^{1/3} + 2⌉ (at least 4) terms and
 # Dₙ(mx) by downward recurrence from max(n_max, |mx| + 4|mx|^{1/3}) + 15. Its recurrences run on f64 locals (probe p8:
 # a struct-valued step is 2.2× slower) in Rust's exact order of operations, hisab's Complex products and sums written
-# out; the reciprocal and Smith's division are scattering.rs's own, ported as written. sin, cos and hypot are
-# correctly rounded (src/crmath.cyr), and cbrt is ganita's, correctly rounded as Rust's (CORE-MATH's).
+# out; the reciprocal and Smith's division are scattering.rs's own, ported as written (the division in
+# src/crmath_vx.cyr, _bj_vx_cdiv, since M3 part 2d-2). sin, cos and hypot are correctly rounded (src/crmath.cyr), and
+# cbrt is ganita's, correctly rounded as Rust's (CORE-MATH's). Rayleigh's chains run with an unbounded exponent at a
+# range edge (ADR 0002 row 18, M3 part 2d-2: src/crmath_vx.cyr's Rayleigh section, a box on the inputs keeping Rust's
+# chain in range).
 #
 # A BjMieResult owns its coefficient buffers (Rust's `Vec<Complex>`, port plan §9.5): bj_mie writes new ones into
 # `out` and never reads it, so give a result back with BjMieResult_free before reusing it.
@@ -110,26 +113,6 @@ fn _bj_sc_dz(): i64 {
     return _bj_err_division_by_zero("complex division by zero in scattering computation");
 }
 
-# a / b by Smith's algorithm (no intermediate |b|², so no spurious over- or underflow), b ≠ 0: the caller tests for
-# zero (_bj_sc_dz). Mirrors scattering.rs's `complex_div`.
-#must_use
-fn _bj_sc_div(ar: f64, ai: f64, br: f64, bi: f64): (f64, f64) {
-    var abr: f64 = f64_abs(br);
-    var abi: f64 = f64_abs(bi);
-    if (abr >= abi) {
-        var r: f64 = bi / br;
-        var den: f64 = br + bi * r;
-        var qr: f64 = (ar + ai * r) / den;
-        var qi: f64 = (ai - ar * r) / den;
-        return (qr, qi);
-    }
-    var r2: f64 = br / bi;
-    var den2: f64 = br * r2 + bi;
-    var pr: f64 = (ar * r2 + ai) / den2;
-    var pi: f64 = (ai * r2 - ar) / den2;
-    return (pr, pi);
-}
-
 # 1/z into out[0], out[1]: one division when |z|² is a normal f64, Smith's algorithm otherwise. 0, or the
 # DivisionByZero code recorded (z = 0). Mirrors scattering.rs's `complex_recip`.
 fn _bj_sc_recip(zr: f64, zi: f64, out: *f64): i64 {
@@ -143,7 +126,7 @@ fn _bj_sc_recip(zr: f64, zi: f64, out: *f64): i64 {
         return 0;
     }
     if (zr == 0.0 && zi == 0.0) { return _bj_sc_dz(); }
-    var qr, qi = _bj_sc_div(1.0, 0.0, zr, zi);
+    var qr, qi = _bj_vx_cdiv(1.0, 0.0, zr, zi);
     out[0] = qr;
     out[1] = qi;
     return 0;
@@ -269,7 +252,7 @@ fn _bj_sc_lderiv(imr: f64, imi: f64, n_max, n_start, d): i64 {
             qi = -si * inv;
         } else {
             if (sr == 0.0 && si == 0.0) { return _bj_sc_dz(); }
-            var vr, vi = _bj_sc_div(1.0, 0.0, sr, si);
+            var vr, vi = _bj_vx_cdiv(1.0, 0.0, sr, si);
             qr = vr;
             qi = vi;
         }
@@ -336,7 +319,7 @@ fn _bj_sc_series(x: f64, m: *f64, d, n_max, a, b, sums: *f64): i64 {
         var adr: f64 = afr * psi_curr - afi * chi_curr - psi_prev;
         var adi: f64 = afr * chi_curr + afi * psi_curr - chi_prev;
         if (adr == 0.0 && adi == 0.0) { return _bj_sc_dz(); }
-        var ar, ai = _bj_sc_div(anr, ani, adr, adi);
+        var ar, ai = _bj_vx_cdiv(anr, ani, adr, adi);
         var a_r: f64 = ar;
         var a_i: f64 = ai;
         var bfr: f64 = mr * dnr - mi * dni + nox;
@@ -347,7 +330,7 @@ fn _bj_sc_series(x: f64, m: *f64, d, n_max, a, b, sums: *f64): i64 {
         var bdr: f64 = bfr * psi_curr - bfi * chi_curr - psi_prev;
         var bdi: f64 = bfr * chi_curr + bfi * psi_curr - chi_prev;
         if (bdr == 0.0 && bdi == 0.0) { return _bj_sc_dz(); }
-        var br, bi = _bj_sc_div(bnr, bni, bdr, bdi);
+        var br, bi = _bj_vx_cdiv(bnr, bni, bdr, bdi);
         var b_r: f64 = br;
         var b_i: f64 = bi;
         var w: f64 = 2.0 * nf + 1.0;
@@ -513,22 +496,6 @@ public fn bj_cross_section_from_efficiency(q: f64, radius: f64): f64 {
 
 # ── Rayleigh ────────────────────────────────────────────────────────────────────────────────────────────────────
 
-# |K|², K = (m² − 1)/(m² + 2), with BjComplex's m·m and |K|² (row 14 at a range edge) and scattering.rs's Smith
-# division into k2[0]. 0, or the DivisionByZero code recorded (m² = −2).
-fn _bj_sc_k2(m: BjComplex, k2: *f64): i64 {
-    var m2: BjComplex = BjComplex_mul(m, m);
-    var nr: f64 = m2.re - 1.0;
-    var ni: f64 = m2.im - 0.0;
-    var dr: f64 = m2.re + 2.0;
-    var di: f64 = m2.im + 0.0;
-    if (dr == 0.0 && di == 0.0) { return _bj_sc_dz(); }
-    var kr, ki = _bj_sc_div(nr, ni, dr, di);
-    var k: BjComplex = BjComplex_new(kr, ki);
-    var s: f64 = k.norm_sq();
-    k2[0] = s;
-    return 0;
-}
-
 # Records InvalidParameter "<name> must be positive and finite, got {v}" when v isn't finite and positive: its code,
 # else 0.
 fn _bj_sc_positive(name, v: f64): i64 {
@@ -540,48 +507,47 @@ fn _bj_sc_positive(name, v: f64): i64 {
     return BJ_ERR_INVALID_PARAMETER;
 }
 
-# σ = (8π/3)(2πr/λ)⁴ r² |K|², K = (m² − 1)/(m² + 2), for a sphere with x = 2πr/λ ≪ 1. |K|² is convention-free.
-# InvalidParameter for a radius or wavelength not finite and positive. Mirrors `scattering::rayleigh_cross_section`.
+# σ = (8π/3)(2πr/λ)⁴ r² |K|², K = (m² − 1)/(m² + 2), for a sphere with x = 2πr/λ ≪ 1. |K|² is convention-free. With an
+# unbounded exponent where x⁴, m² or the product leave the range (ADR 0002 row 18, _bj_vx_ray_sigma). InvalidParameter
+# for a radius or wavelength not finite and positive. Mirrors `scattering::rayleigh_cross_section`.
 #must_use
 public fn bj_rayleigh_cross_section(radius: f64, wavelength: f64, m: BjComplex): Result {
     var c = _bj_sc_positive("radius", radius);
     if (c == 0) { c = _bj_sc_positive("wavelength", wavelength); }
     if (c != 0) { return Err(c); }
-    var x: f64 = 2.0 * _BJ_PI * radius / wavelength;
-    var k: f64[1];
-    c = _bj_sc_k2(m, &k);
-    if (c != 0) { return Err(c); }
-    var k2: f64 = k[0];
-    var x4: f64 = x * x * x * x;
-    var s: f64 = 8.0 / 3.0 * _BJ_PI * radius * radius * x4 * k2;
+    var w: f64[1];
+    if (_bj_vx_ray_sigma(radius, wavelength, m.re, m.im, &w) != 0) { return Err(_bj_sc_dz()); }
+    var s: f64 = w[0];
     return Ok(s);
 }
 
-# Q_sca = σ/(πr²) = (8/3)x⁴|K|². InvalidParameter for an x not finite and positive. Mirrors
-# `scattering::rayleigh_efficiency`.
+# Q_sca = σ/(πr²) = (8/3)x⁴|K|², with an unbounded exponent at a range edge (ADR 0002 row 18, _bj_vx_ray_q).
+# InvalidParameter for an x not finite and positive. Mirrors `scattering::rayleigh_efficiency`.
 #must_use
 public fn bj_rayleigh_efficiency(x: f64, m: BjComplex): Result {
     var c = _bj_sc_positive("size parameter", x);
     if (c != 0) { return Err(c); }
-    var k: f64[1];
-    c = _bj_sc_k2(m, &k);
-    if (c != 0) { return Err(c); }
-    var k2: f64 = k[0];
-    var q: f64 = 8.0 / 3.0 * x * x * x * x * k2;
+    var w: f64[1];
+    if (_bj_vx_ray_q(x, m.re, m.im, &w) != 0) { return Err(_bj_sc_dz()); }
+    var q: f64 = w[0];
     return Ok(q);
 }
 
-# P(θ) = (3/4)(1 + cos²θ), normalized to 4π over the sphere. Mirrors `scattering::rayleigh_phase_function`.
+# P(θ) = (3/4)(1 + cos²θ), normalized to 4π over the sphere; past |cos θ| = 2^511 the sum 1 + cos²θ is taken to 53
+# bits with an unbounded exponent (ADR 0002 row 18, _bj_vx_ray_phase). Mirrors `scattering::rayleigh_phase_function`.
 #must_use
 #pure
-#inline
 public fn bj_rayleigh_phase_function(cos_theta: f64): f64 {
-    return 0.75 * (1.0 + cos_theta * cos_theta);
+    var p: f64 = 0.75 * (1.0 + cos_theta * cos_theta);
+    if (p <= _BJ_VX_HI) { return p; }               # finite: cos²θ was, so every step is its 53-bit value
+    var u: f64 = _bj_vx_ray_phase(cos_theta);
+    return u;
 }
 
 # I/I₀ = (σ/r²)·P(θ)/(4π) = 3σ(1 + cos²θ)/(16πr²) at distance r for unpolarized light; σ the total cross-section (m²),
-# for instance from bj_rayleigh_cross_section. InvalidParameter for a NaN distance, Singularity when |r| < 1e-30.
-# Mirrors `scattering::rayleigh_angular_intensity`.
+# for instance from bj_rayleigh_cross_section; with an unbounded exponent where r², σ/r² or its product by P leave the
+# range (ADR 0002 row 18, _bj_vx_ray_ang). InvalidParameter for a NaN distance, Singularity when |r| < 1e-30. Mirrors
+# `scattering::rayleigh_angular_intensity`.
 #must_use
 public fn bj_rayleigh_angular_intensity(cross_section: f64, distance: f64, cos_theta: f64): Result {
     if (distance != distance) {
@@ -590,8 +556,6 @@ public fn bj_rayleigh_angular_intensity(cross_section: f64, distance: f64, cos_t
     }
     var ad: f64 = f64_abs(distance);
     if (ad < 0.000000000000000000000000000001) { return Err(_bj_err_singularity()); }
-    var p: f64 = bj_rayleigh_phase_function(cos_theta);
-    var four_pi: f64 = 4.0 * _BJ_PI;
-    var r: f64 = cross_section / (distance * distance) * p / four_pi;
+    var r: f64 = _bj_vx_ray_ang(cross_section, distance, cos_theta);
     return Ok(r);
 }

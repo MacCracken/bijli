@@ -10051,6 +10051,249 @@ fn _bj_vx_orient(s: *f64): f64 {
     return u;
 }
 
+# ── Rayleigh scattering (M3 part 2d-2): scattering.cyr's σ, Q, phase function and angular intensity ───────────────────
+# Rust's σ = (8/3)·π·r·r·x⁴·|K|² with x = 2π·r/λ, Q = (8/3)·x·x·x·x·|K|², and K = (m² − 1)/(m² + 2) by Smith's division
+# are long products whose factors over- and underflow where σ is representable: x⁴ passes DBL_MAX for r = 10^-200 at λ =
+# 10^-300, and m² does for |m| > 10^154, where K is NaN for about 1. The guard is a box on the inputs:
+# - r and λ in [2^-100, 2^100] for σ: x lies in [2^-202.7, 2^202.7] and the product before |K|² in [2^-1007.5,
+#   2^1013.7]; x in [2^-200, 2^200] for Q, the product before |K|² in [2^-798.6, 2^801.4];
+# - each part of m ±0 or in [2^-40, 2^40]: m², m² − 1 and m² + 2 are then 0 or multiples of 2^-132, Smith's sums are 0
+#   or at least 2^-345 (a cancelling pair has terms at least 2^-79, a lone term at least 2^-345), its denominator lies
+#   in [2^-132, 2^82], so |K| lies in [2^-427, 2^214] and |K|², the chain's last factor, is normal.
+# Inside the box Rust's chain is the unbounded one; outside it, for a finite m, the chain runs with an unbounded
+# exponent and its last product rounds once. A non-finite m keeps Rust's chain (K is NaN). The phase function 0.75·(1 +
+# cos²θ) leaves the range only past |cos θ| = 2^511, where cos²θ passes 2^1022; the angular intensity's σ/d², its
+# product by P and the quotient by 4π are tested as Rust computed them.
+
+# 2^-100 and 2^100 (σ's box on r and λ), 2^-200 and 2^200 (Q's on x), 2^511 (the phase function's).
+var _BJ_VX_R_LO: f64 = 0x39B0000000000000;
+var _BJ_VX_R_HI: f64 = 0x4630000000000000;
+var _BJ_VX_X_LO: f64 = 0x3370000000000000;
+var _BJ_VX_X_HI: f64 = 0x4C70000000000000;
+var _BJ_VX_C511: f64 = 0x5FE0000000000000;
+
+# a / b by Smith's algorithm (no intermediate |b|², so no spurious over- or underflow), b ≠ 0: the caller tests for
+# zero. Mirrors scattering.rs's `complex_div` (scattering.cyr's Mie and Rayleigh; moved here in M3 part 2d-2).
+#must_use
+fn _bj_vx_cdiv(ar: f64, ai: f64, br: f64, bi: f64): (f64, f64) {
+    var abr: f64 = f64_abs(br);
+    var abi: f64 = f64_abs(bi);
+    if (abr >= abi) {
+        var r: f64 = bi / br;
+        var den: f64 = br + bi * r;
+        var qr: f64 = (ar + ai * r) / den;
+        var qi: f64 = (ai - ar * r) / den;
+        return (qr, qi);
+    }
+    var r2: f64 = br / bi;
+    var den2: f64 = br * r2 + bi;
+    var pr: f64 = (ar * r2 + ai) / den2;
+    var pi: f64 = (ai * r2 - ar) / den2;
+    return (pr, pi);
+}
+
+# 1 when each part of m is ±0 or 2^-40 ≤ |x| < 2^40 (the section comment's box).
+#must_use
+fn _bj_vx_ray_mbox(mre: f64, mim: f64): i64 {
+    var e1 = (load64(&mre) >> 52) & 0x7FF;
+    var e2 = (load64(&mim) >> 52) & 0x7FF;
+    if ((mre == 0.0 || (e1 >= 983 && e1 <= 1062)) && (mim == 0.0 || (e2 >= 983 && e2 <= 1062))) { return 1; }
+    return 0;
+}
+
+# |K|², K = (m² − 1)/(m² + 2), on Rust's chain (hisab's m·m, Smith's division, re² + im²) into out[0]: 0, or 1 for a
+# zero divisor.
+#must_use
+fn _bj_vx_ray_k2(mre: f64, mim: f64, out: *f64): i64 {
+    var m2r: f64 = mre * mre - mim * mim;
+    var m2i: f64 = mre * mim + mim * mre;
+    var nr: f64 = m2r - 1.0;
+    var ni: f64 = m2i - 0.0;
+    var dr: f64 = m2r + 2.0;
+    var di: f64 = m2i + 0.0;
+    if (dr == 0.0 && di == 0.0) { return 1; }
+    var kr, ki = _bj_vx_cdiv(nr, ni, dr, di);
+    out[0] = kr * kr + ki * ki;
+    return 0;
+}
+
+# |K|² with an unbounded exponent, each operation to 53 bits (Smith's branch decided on the exact |b.re| ≥ |b.im|), into
+# s[0] and e[0]: 0, or 1 for a zero divisor.
+#must_use
+fn _bj_vx_ray_k2_ux(mre: f64, mim: f64, s: *f64, e: *i64): i64 {
+    var p1s, p1e = _bj_vx_mul(mre, mre);
+    var p2s, p2e = _bj_vx_mul(mim, mim);
+    var rs, re = _bj_k_ux_sub(p1s, p1e, p2s, p2e);
+    var p3s, p3e = _bj_vx_mul(mre, mim);
+    var p4s, p4e = _bj_vx_mul(mim, mre);
+    var is, ie = _bj_k_ux_add(p3s, p3e, p4s, p4e);
+    var ones, onee = _bj_k_ux_from(1.0);
+    var twos, twoe = _bj_k_ux_from(2.0);
+    var ars, are = _bj_k_ux_sub(rs, re, ones, onee);
+    var ais, aie = _bj_k_ux_sub(is, ie, 0.0, 0);
+    var brs, bre = _bj_k_ux_add(rs, re, twos, twoe);
+    var bis, bie = _bj_k_ux_add(is, ie, 0.0, 0);
+    if (brs == 0.0 && bis == 0.0) { return 1; }
+    var krs: f64 = 0.0;
+    var kre = 0;
+    var kis: f64 = 0.0;
+    var kie = 0;
+    var abr: f64 = f64_abs(brs);
+    var abi: f64 = f64_abs(bis);
+    if (_bj_k_ux_cmp(abr, bre, abi, bie) >= 0) {
+        var qs, qe = _bj_k_ux_div(bis, bie, brs, bre);                # r = b.im/b.re
+        var ts, te = _bj_k_ux_mul(bis, bie, qs, qe);
+        var ds, de = _bj_k_ux_add(brs, bre, ts, te);                  # den = b.re + b.im·r
+        var us, ue = _bj_k_ux_mul(ais, aie, qs, qe);
+        var ns, ne = _bj_k_ux_add(ars, are, us, ue);                  # a.re + a.im·r
+        var vs, ve = _bj_k_ux_mul(ars, are, qs, qe);
+        var ms, me = _bj_k_ux_sub(ais, aie, vs, ve);                  # a.im − a.re·r
+        var x1s, x1e = _bj_k_ux_div(ns, ne, ds, de);
+        var y1s, y1e = _bj_k_ux_div(ms, me, ds, de);
+        krs = x1s;
+        kre = x1e;
+        kis = y1s;
+        kie = y1e;
+    } else {
+        var q2s, q2e = _bj_k_ux_div(brs, bre, bis, bie);              # r = b.re/b.im
+        var t2s, t2e = _bj_k_ux_mul(brs, bre, q2s, q2e);
+        var d2s, d2e = _bj_k_ux_add(t2s, t2e, bis, bie);              # den = b.re·r + b.im
+        var u2s, u2e = _bj_k_ux_mul(ars, are, q2s, q2e);
+        var n2s, n2e = _bj_k_ux_add(u2s, u2e, ais, aie);              # a.re·r + a.im
+        var v2s, v2e = _bj_k_ux_mul(ais, aie, q2s, q2e);
+        var m2s, m2e = _bj_k_ux_sub(v2s, v2e, ars, are);              # a.im·r − a.re
+        var x2s, x2e = _bj_k_ux_div(n2s, n2e, d2s, d2e);
+        var y2s, y2e = _bj_k_ux_div(m2s, m2e, d2s, d2e);
+        krs = x2s;
+        kre = x2e;
+        kis = y2s;
+        kie = y2e;
+    }
+    var hs, he = _bj_vx_sq2(krs, kre, kis, kie);
+    s[0] = hs;
+    e[0] = he;
+    return 0;
+}
+
+# σ = (8/3)·π·r·r·x⁴·|K|², x = 2π·r/λ, for r and λ positive and finite (the caller's checks), into out[0]: Rust's chain
+# inside the box (or for a non-finite m), else the unbounded one with its last product rounded once. 0, or 1 for
+# m² + 2 = 0.
+#must_use
+fn _bj_vx_ray_sigma(r: f64, lam: f64, mre: f64, mim: f64, out: *f64): i64 {
+    var fin: f64 = (mre - mre) + (mim - mim);
+    var inbox = 0;
+    if (r >= _BJ_VX_R_LO && r <= _BJ_VX_R_HI && lam >= _BJ_VX_R_LO && lam <= _BJ_VX_R_HI) { inbox = 1; }
+    if (fin != 0.0 || (inbox == 1 && _bj_vx_ray_mbox(mre, mim) == 1)) {
+        var x: f64 = 2.0 * _BJ_PI * r / lam;
+        var k: f64[1];
+        if (_bj_vx_ray_k2(mre, mim, &k) != 0) { return 1; }
+        var k2: f64 = k[0];
+        var x4: f64 = x * x * x * x;
+        out[0] = 8.0 / 3.0 * _BJ_PI * r * r * x4 * k2;
+        return 0;
+    }
+    var ks: f64[1];
+    var ke: i64[1];
+    if (_bj_vx_ray_k2_ux(mre, mim, &ks, &ke) != 0) { return 1; }
+    var tws, twe = _bj_k_ux_from(2.0 * _BJ_PI);
+    var rs, re = _bj_k_ux_from(r);
+    var ls, le = _bj_k_ux_from(lam);
+    var as, ae = _bj_k_ux_mul(tws, twe, rs, re);
+    var xs, xe = _bj_k_ux_div(as, ae, ls, le);
+    var x2s, x2e = _bj_k_ux_mul(xs, xe, xs, xe);
+    var x3s, x3e = _bj_k_ux_mul(x2s, x2e, xs, xe);
+    var x4s, x4e = _bj_k_ux_mul(x3s, x3e, xs, xe);
+    var cs, ce = _bj_k_ux_from(8.0 / 3.0);
+    var ps, pe = _bj_k_ux_from(_BJ_PI);
+    var c1s, c1e = _bj_k_ux_mul(cs, ce, ps, pe);
+    var c2s, c2e = _bj_k_ux_mul(c1s, c1e, rs, re);
+    var c3s, c3e = _bj_k_ux_mul(c2s, c2e, rs, re);
+    var c4s, c4e = _bj_k_ux_mul(c3s, c3e, x4s, x4e);
+    out[0] = _bj_k_ux_mul_f64(c4s, c4e, ks[0], ke[0]);
+    return 0;
+}
+
+# Q = (8/3)·x·x·x·x·|K|² for x positive and finite (the caller's check), into out[0]: Rust's chain inside the box (or
+# for a non-finite m), else the unbounded one with its last product rounded once. 0, or 1 for m² + 2 = 0.
+#must_use
+fn _bj_vx_ray_q(x: f64, mre: f64, mim: f64, out: *f64): i64 {
+    var fin: f64 = (mre - mre) + (mim - mim);
+    if (fin != 0.0 || (x >= _BJ_VX_X_LO && x <= _BJ_VX_X_HI && _bj_vx_ray_mbox(mre, mim) == 1)) {
+        var k: f64[1];
+        if (_bj_vx_ray_k2(mre, mim, &k) != 0) { return 1; }
+        var k2: f64 = k[0];
+        out[0] = 8.0 / 3.0 * x * x * x * x * k2;
+        return 0;
+    }
+    var ks: f64[1];
+    var ke: i64[1];
+    if (_bj_vx_ray_k2_ux(mre, mim, &ks, &ke) != 0) { return 1; }
+    var xs, xe = _bj_k_ux_from(x);
+    var cs, ce = _bj_k_ux_from(8.0 / 3.0);
+    var c1s, c1e = _bj_k_ux_mul(cs, ce, xs, xe);
+    var c2s, c2e = _bj_k_ux_mul(c1s, c1e, xs, xe);
+    var c3s, c3e = _bj_k_ux_mul(c2s, c2e, xs, xe);
+    var c4s, c4e = _bj_k_ux_mul(c3s, c3e, xs, xe);
+    out[0] = _bj_k_ux_mul_f64(c4s, c4e, ks[0], ke[0]);
+    return 0;
+}
+
+# 0.75·(1 + c²) with an unbounded exponent, each operation to 53 bits: (s, e).
+#must_use
+fn _bj_vx_ray_phase_ux(c: f64): (f64, i64) {
+    var c2s, c2e = _bj_vx_mul(c, c);
+    var ones, onee = _bj_k_ux_from(1.0);
+    var ss, se = _bj_k_ux_add(ones, onee, c2s, c2e);
+    var hs, he = _bj_k_ux_from(0.75);
+    var ps, pe = _bj_k_ux_mul(hs, he, ss, se);
+    return (ps, pe);
+}
+
+# The phase function 0.75·(1 + c²): Rust's for |c| < 2^511 or a non-finite c; past 2^511, where 1 + c² passes DBL_MAX
+# before the product by 0.75 (Rust's ∞ for c = 1.4e154, whose P is 1.47e308), the chain with an unbounded exponent and
+# its product rounded once.
+#must_use
+fn _bj_vx_ray_phase(c: f64): f64 {
+    var a: f64 = f64_abs(c);
+    if (!(a >= _BJ_VX_C511 && a <= _BJ_VX_HI)) {
+        var p: f64 = 0.75 * (1.0 + c * c);
+        return p;
+    }
+    var c2s, c2e = _bj_vx_mul(c, c);
+    var ones, onee = _bj_k_ux_from(1.0);
+    var ss, se = _bj_k_ux_add(ones, onee, c2s, c2e);
+    var hs, he = _bj_k_ux_from(0.75);
+    var u: f64 = _bj_k_ux_mul_f64(hs, he, ss, se);
+    return u;
+}
+
+# The angular intensity σ/(d·d)·P(c)/(4π) for a d that is not NaN with |d| ≥ 10^-30 (the caller's checks), with Rust's
+# P = 0.75·(1 + c²): Rust's chain where σ/d² and its product by P are normal (d², P and every input are then finite,
+# and each step its 53-bit value), or σ = 0 with d and P finite (exact zeros), or an input is not finite; else the
+# chain with an unbounded exponent, P's included, and its quotient by 4π rounded once.
+#must_use
+fn _bj_vx_ray_ang(cs: f64, d: f64, c: f64): f64 {
+    var dd: f64 = d * d;
+    var q: f64 = cs / dd;
+    var p: f64 = 0.75 * (1.0 + c * c);
+    var qp: f64 = q * p;
+    var four_pi: f64 = 4.0 * _BJ_PI;
+    var r: f64 = qp / four_pi;
+    var aq: f64 = f64_abs(q);
+    var ap: f64 = f64_abs(qp);
+    if (aq > _BJ_VX_MN && aq <= _BJ_VX_HI && ap > _BJ_VX_MN && ap <= _BJ_VX_HI) { return r; }
+    var fin: f64 = (cs - cs) + (d - d) + (c - c);
+    if (fin != 0.0 || (cs == 0.0 && p <= _BJ_VX_HI)) { return r; }
+    var d2s, d2e = _bj_vx_mul(d, d);
+    var css, cse = _bj_k_ux_from(cs);
+    var qs, qe = _bj_k_ux_div(css, cse, d2s, d2e);
+    var ps, pe = _bj_vx_ray_phase_ux(c);
+    var ts, te = _bj_k_ux_mul(qs, qe, ps, pe);
+    var fs, fe = _bj_k_ux_from(four_pi);
+    var u: f64 = _bj_k_ux_div_f64(ts, te, fs, fe);
+    return u;
+}
+
 # --- fmtf.cyr ---
 
 # fmtf.cyr — f64 to text: the shortest round-trip digits, in Rust's Display and serde_json's forms.
@@ -23346,8 +23589,11 @@ fn _bj_pol_cs_om(cs: f64, hs: f64): f64 {
 # Mie follows Bohren & Huffman (1983, App. A), with Wiscombe's n_max = ⌈x + 4x^{1/3} + 2⌉ (at least 4) terms and
 # Dₙ(mx) by downward recurrence from max(n_max, |mx| + 4|mx|^{1/3}) + 15. Its recurrences run on f64 locals (probe p8:
 # a struct-valued step is 2.2× slower) in Rust's exact order of operations, hisab's Complex products and sums written
-# out; the reciprocal and Smith's division are scattering.rs's own, ported as written. sin, cos and hypot are
-# correctly rounded (src/crmath.cyr), and cbrt is ganita's, correctly rounded as Rust's (CORE-MATH's).
+# out; the reciprocal and Smith's division are scattering.rs's own, ported as written (the division in
+# src/crmath_vx.cyr, _bj_vx_cdiv, since M3 part 2d-2). sin, cos and hypot are correctly rounded (src/crmath.cyr), and
+# cbrt is ganita's, correctly rounded as Rust's (CORE-MATH's). Rayleigh's chains run with an unbounded exponent at a
+# range edge (ADR 0002 row 18, M3 part 2d-2: src/crmath_vx.cyr's Rayleigh section, a box on the inputs keeping Rust's
+# chain in range).
 #
 # A BjMieResult owns its coefficient buffers (Rust's `Vec<Complex>`, port plan §9.5): bj_mie writes new ones into
 # `out` and never reads it, so give a result back with BjMieResult_free before reusing it.
@@ -23443,26 +23689,6 @@ fn _bj_sc_dz(): i64 {
     return _bj_err_division_by_zero("complex division by zero in scattering computation");
 }
 
-# a / b by Smith's algorithm (no intermediate |b|², so no spurious over- or underflow), b ≠ 0: the caller tests for
-# zero (_bj_sc_dz). Mirrors scattering.rs's `complex_div`.
-#must_use
-fn _bj_sc_div(ar: f64, ai: f64, br: f64, bi: f64): (f64, f64) {
-    var abr: f64 = f64_abs(br);
-    var abi: f64 = f64_abs(bi);
-    if (abr >= abi) {
-        var r: f64 = bi / br;
-        var den: f64 = br + bi * r;
-        var qr: f64 = (ar + ai * r) / den;
-        var qi: f64 = (ai - ar * r) / den;
-        return (qr, qi);
-    }
-    var r2: f64 = br / bi;
-    var den2: f64 = br * r2 + bi;
-    var pr: f64 = (ar * r2 + ai) / den2;
-    var pi: f64 = (ai * r2 - ar) / den2;
-    return (pr, pi);
-}
-
 # 1/z into out[0], out[1]: one division when |z|² is a normal f64, Smith's algorithm otherwise. 0, or the
 # DivisionByZero code recorded (z = 0). Mirrors scattering.rs's `complex_recip`.
 fn _bj_sc_recip(zr: f64, zi: f64, out: *f64): i64 {
@@ -23476,7 +23702,7 @@ fn _bj_sc_recip(zr: f64, zi: f64, out: *f64): i64 {
         return 0;
     }
     if (zr == 0.0 && zi == 0.0) { return _bj_sc_dz(); }
-    var qr, qi = _bj_sc_div(1.0, 0.0, zr, zi);
+    var qr, qi = _bj_vx_cdiv(1.0, 0.0, zr, zi);
     out[0] = qr;
     out[1] = qi;
     return 0;
@@ -23602,7 +23828,7 @@ fn _bj_sc_lderiv(imr: f64, imi: f64, n_max, n_start, d): i64 {
             qi = -si * inv;
         } else {
             if (sr == 0.0 && si == 0.0) { return _bj_sc_dz(); }
-            var vr, vi = _bj_sc_div(1.0, 0.0, sr, si);
+            var vr, vi = _bj_vx_cdiv(1.0, 0.0, sr, si);
             qr = vr;
             qi = vi;
         }
@@ -23669,7 +23895,7 @@ fn _bj_sc_series(x: f64, m: *f64, d, n_max, a, b, sums: *f64): i64 {
         var adr: f64 = afr * psi_curr - afi * chi_curr - psi_prev;
         var adi: f64 = afr * chi_curr + afi * psi_curr - chi_prev;
         if (adr == 0.0 && adi == 0.0) { return _bj_sc_dz(); }
-        var ar, ai = _bj_sc_div(anr, ani, adr, adi);
+        var ar, ai = _bj_vx_cdiv(anr, ani, adr, adi);
         var a_r: f64 = ar;
         var a_i: f64 = ai;
         var bfr: f64 = mr * dnr - mi * dni + nox;
@@ -23680,7 +23906,7 @@ fn _bj_sc_series(x: f64, m: *f64, d, n_max, a, b, sums: *f64): i64 {
         var bdr: f64 = bfr * psi_curr - bfi * chi_curr - psi_prev;
         var bdi: f64 = bfr * chi_curr + bfi * psi_curr - chi_prev;
         if (bdr == 0.0 && bdi == 0.0) { return _bj_sc_dz(); }
-        var br, bi = _bj_sc_div(bnr, bni, bdr, bdi);
+        var br, bi = _bj_vx_cdiv(bnr, bni, bdr, bdi);
         var b_r: f64 = br;
         var b_i: f64 = bi;
         var w: f64 = 2.0 * nf + 1.0;
@@ -23846,22 +24072,6 @@ public fn bj_cross_section_from_efficiency(q: f64, radius: f64): f64 {
 
 # ── Rayleigh ────────────────────────────────────────────────────────────────────────────────────────────────────
 
-# |K|², K = (m² − 1)/(m² + 2), with BjComplex's m·m and |K|² (row 14 at a range edge) and scattering.rs's Smith
-# division into k2[0]. 0, or the DivisionByZero code recorded (m² = −2).
-fn _bj_sc_k2(m: BjComplex, k2: *f64): i64 {
-    var m2: BjComplex = BjComplex_mul(m, m);
-    var nr: f64 = m2.re - 1.0;
-    var ni: f64 = m2.im - 0.0;
-    var dr: f64 = m2.re + 2.0;
-    var di: f64 = m2.im + 0.0;
-    if (dr == 0.0 && di == 0.0) { return _bj_sc_dz(); }
-    var kr, ki = _bj_sc_div(nr, ni, dr, di);
-    var k: BjComplex = BjComplex_new(kr, ki);
-    var s: f64 = k.norm_sq();
-    k2[0] = s;
-    return 0;
-}
-
 # Records InvalidParameter "<name> must be positive and finite, got {v}" when v isn't finite and positive: its code,
 # else 0.
 fn _bj_sc_positive(name, v: f64): i64 {
@@ -23873,48 +24083,47 @@ fn _bj_sc_positive(name, v: f64): i64 {
     return BJ_ERR_INVALID_PARAMETER;
 }
 
-# σ = (8π/3)(2πr/λ)⁴ r² |K|², K = (m² − 1)/(m² + 2), for a sphere with x = 2πr/λ ≪ 1. |K|² is convention-free.
-# InvalidParameter for a radius or wavelength not finite and positive. Mirrors `scattering::rayleigh_cross_section`.
+# σ = (8π/3)(2πr/λ)⁴ r² |K|², K = (m² − 1)/(m² + 2), for a sphere with x = 2πr/λ ≪ 1. |K|² is convention-free. With an
+# unbounded exponent where x⁴, m² or the product leave the range (ADR 0002 row 18, _bj_vx_ray_sigma). InvalidParameter
+# for a radius or wavelength not finite and positive. Mirrors `scattering::rayleigh_cross_section`.
 #must_use
 public fn bj_rayleigh_cross_section(radius: f64, wavelength: f64, m: BjComplex): Result {
     var c = _bj_sc_positive("radius", radius);
     if (c == 0) { c = _bj_sc_positive("wavelength", wavelength); }
     if (c != 0) { return Err(c); }
-    var x: f64 = 2.0 * _BJ_PI * radius / wavelength;
-    var k: f64[1];
-    c = _bj_sc_k2(m, &k);
-    if (c != 0) { return Err(c); }
-    var k2: f64 = k[0];
-    var x4: f64 = x * x * x * x;
-    var s: f64 = 8.0 / 3.0 * _BJ_PI * radius * radius * x4 * k2;
+    var w: f64[1];
+    if (_bj_vx_ray_sigma(radius, wavelength, m.re, m.im, &w) != 0) { return Err(_bj_sc_dz()); }
+    var s: f64 = w[0];
     return Ok(s);
 }
 
-# Q_sca = σ/(πr²) = (8/3)x⁴|K|². InvalidParameter for an x not finite and positive. Mirrors
-# `scattering::rayleigh_efficiency`.
+# Q_sca = σ/(πr²) = (8/3)x⁴|K|², with an unbounded exponent at a range edge (ADR 0002 row 18, _bj_vx_ray_q).
+# InvalidParameter for an x not finite and positive. Mirrors `scattering::rayleigh_efficiency`.
 #must_use
 public fn bj_rayleigh_efficiency(x: f64, m: BjComplex): Result {
     var c = _bj_sc_positive("size parameter", x);
     if (c != 0) { return Err(c); }
-    var k: f64[1];
-    c = _bj_sc_k2(m, &k);
-    if (c != 0) { return Err(c); }
-    var k2: f64 = k[0];
-    var q: f64 = 8.0 / 3.0 * x * x * x * x * k2;
+    var w: f64[1];
+    if (_bj_vx_ray_q(x, m.re, m.im, &w) != 0) { return Err(_bj_sc_dz()); }
+    var q: f64 = w[0];
     return Ok(q);
 }
 
-# P(θ) = (3/4)(1 + cos²θ), normalized to 4π over the sphere. Mirrors `scattering::rayleigh_phase_function`.
+# P(θ) = (3/4)(1 + cos²θ), normalized to 4π over the sphere; past |cos θ| = 2^511 the sum 1 + cos²θ is taken to 53
+# bits with an unbounded exponent (ADR 0002 row 18, _bj_vx_ray_phase). Mirrors `scattering::rayleigh_phase_function`.
 #must_use
 #pure
-#inline
 public fn bj_rayleigh_phase_function(cos_theta: f64): f64 {
-    return 0.75 * (1.0 + cos_theta * cos_theta);
+    var p: f64 = 0.75 * (1.0 + cos_theta * cos_theta);
+    if (p <= _BJ_VX_HI) { return p; }               # finite: cos²θ was, so every step is its 53-bit value
+    var u: f64 = _bj_vx_ray_phase(cos_theta);
+    return u;
 }
 
 # I/I₀ = (σ/r²)·P(θ)/(4π) = 3σ(1 + cos²θ)/(16πr²) at distance r for unpolarized light; σ the total cross-section (m²),
-# for instance from bj_rayleigh_cross_section. InvalidParameter for a NaN distance, Singularity when |r| < 1e-30.
-# Mirrors `scattering::rayleigh_angular_intensity`.
+# for instance from bj_rayleigh_cross_section; with an unbounded exponent where r², σ/r² or its product by P leave the
+# range (ADR 0002 row 18, _bj_vx_ray_ang). InvalidParameter for a NaN distance, Singularity when |r| < 1e-30. Mirrors
+# `scattering::rayleigh_angular_intensity`.
 #must_use
 public fn bj_rayleigh_angular_intensity(cross_section: f64, distance: f64, cos_theta: f64): Result {
     if (distance != distance) {
@@ -23923,9 +24132,7 @@ public fn bj_rayleigh_angular_intensity(cross_section: f64, distance: f64, cos_t
     }
     var ad: f64 = f64_abs(distance);
     if (ad < 0.000000000000000000000000000001) { return Err(_bj_err_singularity()); }
-    var p: f64 = bj_rayleigh_phase_function(cos_theta);
-    var four_pi: f64 = 4.0 * _BJ_PI;
-    var r: f64 = cross_section / (distance * distance) * p / four_pi;
+    var r: f64 = _bj_vx_ray_ang(cross_section, distance, cos_theta);
     return Ok(r);
 }
 

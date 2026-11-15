@@ -497,6 +497,35 @@ fn cyrius_row17(): i64 {
     return 0;
 }
 
+# ADR 0002 row 18 (M3 part 2d-2): Rayleigh's chains at their range edges, the exact chain's bits.
+fn cyrius_rayleigh_row18(): i64 {
+    test_group("cyrius_rayleigh_row18 (ADR 0002 row 18)");
+    # x⁴ past DBL_MAX while (8/3)π·r² underflows: Rust's 0·∞ = NaN; the chain gives 543.4 m².
+    var t1, s1 = bj_rayleigh_cross_section(_bj_from_bits(0x16687E92154EF7AC), _bj_from_bits(0x01A56E1FC2F8F359),
+      BjComplex_new(1.33, 0.0));
+    var v1: f64 = s1;
+    assert(is_ok(t1) == 1 && _bj_bits(v1) == 0x4080FB7D5AA833EF, "σ for r = 1e-200 at λ = 1e-300: 543.436 (Rust NaN)");
+    # m² past DBL_MAX, K = ∞/∞ in Rust; with an unbounded exponent K → 1.
+    var h: f64 = _bj_from_bits(0x6974E718D7D7625A);
+    var t2, s2 = bj_rayleigh_cross_section(_bj_from_bits(0x3E45798EE2308C3A), _bj_from_bits(0x3EA0C6F7A0B5ED8D),
+      BjComplex_new(h, -h));
+    var v2: f64 = s2;
+    assert(is_ok(t2) == 1 && _bj_bits(v2) == 0x3C0ED4601C220948, "σ for m = 1e200 − 1e200i: 2.089e-19 (Rust NaN)");
+    var m3: BjComplex = BjComplex_new(_bj_from_bits(0x5FF0B4E931535CC2), _bj_from_bits(0xDF138D352E5096AF));
+    var t3, q3 = bj_rayleigh_efficiency(0.1, m3);
+    var v3: f64 = q3;
+    assert(is_ok(t3) == 1 && _bj_bits(v3) == 0x3F3179EC9CBD821F, "Q for m = 1.4e154 − 1e150i: (8/3)·10⁻⁴ (Rust NaN)");
+    # The phase function where 1 + cos²θ passes DBL_MAX: 0.75·1.96e308 = 1.47e308 (Rust ∞).
+    var p4: f64 = bj_rayleigh_phase_function(_bj_from_bits(0x5FF0B4E931535CC2));
+    assert(_bj_bits(p4) == 0x7FEA2AB7E624D78E, "P(cos θ = 1.4e154) = 1.47e308");
+    # σ/d² below 2^-1022 lifted back by a large P: Rust's subnormal quotient lost its last digits.
+    var t5, i5 = bj_rayleigh_angular_intensity(_bj_from_bits(0x01A56E1FC2F8F359), 100000.0,
+      _bj_from_bits(0x5F138D352E5096AF));
+    var v5: f64 = i5;
+    assert(is_ok(t5) == 1 && _bj_bits(v5) == 0x3D9A3FB8577E0761, "the angular intensity through a subnormal σ/d²");
+    return 0;
+}
+
 # MieResult's JSON (src/json.cyr, M3 part 1b-2).
 fn cyrius_json(): i64 {
     test_group("cyrius_mie_result_json");
@@ -585,6 +614,7 @@ fn main(): i64 {
     cyrius_tests();
     cyrius_row13();
     cyrius_row17();
+    cyrius_rayleigh_row18();
     cyrius_json();
     return assert_summary();
 }

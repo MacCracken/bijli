@@ -3973,3 +3973,92 @@ E and B = n̂ × E/c.
   measured, 0 pending, 76,575 accepted (ADR 01: 29,441; ADR 0002: 47,134)** over 569,393 rows; **all 380 digests
   equal**. The four Stokes functions' digests changed; the other 376 are unchanged. `polarization.tcyr` passes on all
   three. The gate is clean (17 steps, no warnings; execution coverage 288 of 288 functions).
+
+## 70. M3 part 2d-2: Rayleigh scattering at its range edges (2026-11-14)
+
+- **ADR 0002 row 18, amended for Rayleigh.** σ = (8/3)·π·r·r·x⁴·|K|² (x = 2π·r/λ), Q = (8/3)·x·x·x·x·|K|² and
+  K = (m² − 1)/(m² + 2) by scattering.rs's Smith division are long products whose factors over- and underflow where σ
+  is representable. Rust's σ for r = 10⁻²⁰⁰ at λ = 10⁻³⁰⁰ was 0·∞ = NaN for 543.4 m², since (8/3)πr² underflowed
+  while x⁴ overflowed, and |m| past 10¹⁵⁴ made K = ∞/∞ = NaN where K → 1.
+  - **The guard is a box on the inputs**: r and λ in [2^-100, 2^100] for σ, x in [2^-200, 2^200] for Q, and each part
+    of m ±0 or in [2^-40, 2^40].
+    - x then lies in [2^-202.7, 2^202.7], and the product before |K|² in [2^-1007.5, 2^1013.7] (Q's in [2^-798.6,
+      2^801.4]).
+    - m², m² − 1 and m² + 2 are 0 or multiples of 2^-132. Smith's sums are 0 or at least 2^-345: a cancelling pair has
+      terms of at least 2^-79, a lone term is at least 2^-345. Its denominator lies in [2^-132, 2^82], so |K| lies in
+      [2^-427, 2^214] and |K|², the chain's last factor, is normal.
+    - A bound of 2^-50 on m was not enough. In Smith's second branch a sum can fall to 2^-405, which leaves |K|² only
+      eight binades above 2^-1022 in the worst case.
+  - Inside the box Rust's chain is the unbounded one up to its last product. Outside it, for a finite m, the chain runs
+    with an unbounded exponent (`_bj_vx_ray_k2_ux`: hisab's m·m, Smith's division on its branch decided by the exact
+    |b.re| ≥ |b.im|, then re² + im²) and its last product rounds once (`_bj_vx_ray_sigma`, `_bj_vx_ray_q`). A non-finite
+    m keeps Rust's chain: K is NaN either way. BjComplex's row-14 m·m no longer enters Rayleigh, and Smith's division
+    moved into `src/crmath_vx.cyr` as `_bj_vx_cdiv`; Mie calls it unchanged.
+  - **The phase function** 0.75·(1 + cos²θ) leaves the range only where cos²θ passes DBL_MAX, near |cos θ| = 2^512.
+    Rust's value is kept when it is finite (every step is then its 53-bit value); otherwise, for |cos θ| ≥ 2^511, the
+    sum runs to 53 bits and the product rounds once (`_bj_vx_ray_phase`). Rust gave ∞ for 1.47·10³⁰⁸ at cos θ =
+    1.4·10¹⁵⁴.
+  - **The angular intensity** σ/(d·d)·P/(4π) keeps Rust's chain where σ/d² and its product by P are normal (then d², P
+    and every input are finite, and each step is its 53-bit value), for σ = 0 with d and P finite, and for a
+    non-finite input. Otherwise it runs with an unbounded exponent, P's chain included (`_bj_vx_ray_ang`). A first
+    guard also bounded |d| and |cos θ| by 2^511; both bounds were redundant, and dropping them took the cost from 44
+    to 21 ns.
+- **The oracle**: `scattering.tsv` gains 856 rows after every earlier row (`rayleigh_edges`; the old file an exact
+  prefix):
+  - σ over 8 radii, 6 wavelengths and 13 indices (624 rows), at the boxes' edges and far past them;
+  - Q over 8 size parameters and the same indices (100);
+  - the phase function at 8 cosines around 2^511 and 2^512;
+  - the angular intensity over 6 cross-sections, 7 distances and 3 cosines, and 4 rows where σ/d² falls below 2^-1022
+    and a large P lifts it back (124).
+
+  The indices hold the box's edges (2^40 and just below, 2^-41, 3 − 2^-41 i), |m| past 10¹⁵⁴ and 10²⁰⁰, tiny ones,
+  m = 1 + ε and 1 − 10⁻¹⁷⁰ i (K cancelling), and −√2 i.
+- **validate.py**: `sc_eval(r18)` takes every Rayleigh row with finite inputs through the unbounded chain (`sc_k2_ux`,
+  `sc_phase_ux`), so the harness checks the boxes row by row; `scattering_adr_rows` labels those rows 18. The harness
+  passed on its first run.
+- **cr_verify.py's rsig, rq, rphase and rang families**: σ, Q, the phase function and the angular intensity against
+  exact.py's chain, on radii, wavelengths and size parameters around the boxes and far past them, indices around
+  theirs, cosines around 2^511, and cross-sections and distances whose σ/d² and its product by P leave the range.
+  **40,000 calls per target, 0 mismatches on x86_64 and aarch64**; Rust's chain differs from the exact one on 2,158.
+- **Mutations**, each run through the parity harness. Seven of sixteen were caught:
+  - σ's box on r and λ off: 9 failing rows; the box on m off: 50; Q's box off: 37;
+  - the angular intensity's test on σ·P/d² off: 19; its test on σ/d² off: 3, the rows added for it after no row
+    caught it; its σ = 0 case without the test on P: 14;
+  - the phase function's fast path taken for an infinite P: 2.
+
+  The nine others:
+  - slack bounds: σ's box at 2^-101, m's at 2^±60, the phase function's at 2^512, and the angular intensity's
+    distance bound;
+  - the σ = 0 shortcut, which only saves time;
+  - b.im = m².im ± 0, a zero's sign that |K|² squares away;
+  - Smith's branch at an exact tie |b.re| = |b.im|;
+  - the last product (σ's) and the phase function's last product rounded to 53 bits first. Those differ only where a
+    53-bit product lands on a subnormal midpoint or the overflow boundary: a search of 20,000 random Q's found none,
+    as expected for a chance near 2^-37 per case.
+- **Mappings**: `scattering.adr.tsv` holds 426 rows: row 18's 325 (σ 144, Q 95, the angular intensity 84, the phase
+  function 2; 106 are older rows), row 13's 93, row 17's 8. What Rust gave on them (a row can show several):
+  - NaN or ±∞ for a finite value: σ 103, Q 67, the angular intensity 65, the phase function 2;
+  - NaN for ±∞: σ 30, Q 12, the angular intensity 1;
+  - 0 for a nonzero value or the reverse: the angular intensity 15, σ 11, Q 2;
+  - misrounded: Q an ulp off on 9, 2 to 16 on 3, more on 2; the angular intensity 2 to 16 on 1, more on 2.
+- **Tests**: `cyrius_rayleigh_row18` in `tests/scattering.tcyr` (5 assertions, 112 in the file): σ = 543.4 m² for
+  r = 10⁻²⁰⁰ at λ = 10⁻³⁰⁰, σ for m = 10²⁰⁰ − 10²⁰⁰i, Q for m = 1.4·10¹⁵⁴ − 10¹⁵⁰i, P(1.4·10¹⁵⁴) = 1.47·10³⁰⁸, and
+  the angular intensity through a subnormal σ/d².
+- **Mie's tiny m**, found on the way and not changed here. The audit's candidate "Mie's complex products, reachable
+  with a tiny or huge m" was not in 2d's plan. Reading the recurrences against Rust's chain:
+  - at ordinary x, Rust refuses |m| below about 10⁻¹⁵⁵ ("Mie series over/underflowed": inv_m·Dₙ overflows), while the
+    m → 0 limit is finite (Q_ext = 0.2769 at x = 1; m = 10⁻¹⁰⁰ still gives it);
+  - a huge m is refused only below x = 10⁻⁵⁰, the limit the user kept on 2026-11-14.
+
+  The tiny m is the user's call.
+- **Benchmarks.** σ and Q no longer call BjComplex: their box test is a few compares on the inputs.
+  - A full bench interleaved against 2d-1c's tree (three rounds, load 4.4 to 6.3): `scattering/rayleigh_cross_section`
+    143–151 → 82–85 ns (−41 %), `rayleigh_phase_function` 4 → 6–13 ns (median 7), Mie's three rows within 2 %, and
+    every other row within the load's noise (median ratio 1.00 over 81). The record takes 85 and 7 ns.
+  - A micro-bench interleaved with HEAD twice: Q 90–91 → 67 ns, and the angular intensity 15–16 → 21 ns.
+  - The phase function can no longer be inlined into its caller: its edge needs a branch, and `#inline` ignores a body
+    with control flow. Its 2 to 3 ns more are that call.
+- **Result, every target** (x86_64 ELF, x86_64 PE, aarch64): **16 modules, 0 failing; 493,349 ok, 0 failed, 0
+  measured, 0 pending, 76,900 accepted (ADR 01: 29,441; ADR 0002: 47,459)** over 570,249 rows; **all 380 digests
+  equal**. The four Rayleigh functions' digests changed; the other 376 are unchanged. `scattering.tcyr` passes on all
+  three. The gate is clean (17 steps, no warnings; execution coverage 288 of 288 functions).

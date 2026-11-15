@@ -9,11 +9,11 @@
 # M1 part 5d-1), Clausius–Mossotti's ε_r, the trig-free Fresnel cosine, the Liénard–Wiechert R_eff and κ and the
 # parallel combinations (src/crmath_edge.cyr, M2 parts 2c-2 to 2c-5), and the materials' 53-bit roots and Γ
 # (src/crmath_vx.cyr, M2 part 2d-2c), M3's exact sum-of-squares threshold (src/crmath_cmp.cyr, M3 part 2c-1), ABCD
-# propagation (src/crmath_edge.cyr, M3 part 2c-2), the Mueller, Jones and Stokes chains (src/crmath_vx.cyr, M3 parts
-# 2d-1a to 2d-1c), against Fractions and MPFR's widest exponent range. Built from the math sources the bundle carries
-# (src/constants.cyr … src/mathx.cyr, in the manifest's order and byte for byte what dist/bijli.cyr holds): the bundle
-# is `private` and these entry points are bijli-internal, so a consumer of dist/bijli.cyr can't call them, but a file of
-# internals only has no marker and can be included on its own.
+# propagation (src/crmath_edge.cyr, M3 part 2c-2), the Mueller, Jones and Stokes chains and Rayleigh's
+# (src/crmath_vx.cyr, M3 parts 2d-1a to 2d-2), against Fractions and MPFR's widest exponent range. Built from the math
+# sources the bundle carries (src/constants.cyr … src/mathx.cyr, in the manifest's order and byte for byte what
+# dist/bijli.cyr holds): the bundle is `private` and these entry points are bijli-internal, so a consumer of
+# dist/bijli.cyr can't call them, but a file of internals only has no marker and can be included on its own.
 # scripts/oracle/cr_verify.py builds it, runs it natively and under qemu-aarch64, and compares every result with MPFR.
 # `tan_slow` calls tan's fixed-point path directly (finite |x| ≥ 2^-27 only), so the path the rounding test rarely
 # reaches is checked on arguments of its own.
@@ -432,6 +432,26 @@ fn _call(fp, fl, w): i64 {
     elif (_is(fp, fl, "sorient") == 1) {
         # sorient s0 s1 s2 s3: the orientation angle (_bj_vx_orient)
         r = _bj_vx_orient(w);
+    }
+    elif (_is(fp, fl, "rsig") == 1) {
+        # rsig r lam mre mim: Rayleigh's σ (_bj_vx_ray_sigma, M3 part 2d-2); all ones for m² + 2 = 0
+        var rw: f64[1];
+        if (_bj_vx_ray_sigma(x, y, _wf(w, 2), _wf(w, 3), &rw) != 0) { return 0 - 1; }
+        r = rw[0];
+    }
+    elif (_is(fp, fl, "rq") == 1) {
+        # rq x mre mim: Rayleigh's Q (_bj_vx_ray_q); all ones for m² + 2 = 0
+        var qw: f64[1];
+        if (_bj_vx_ray_q(x, y, _wf(w, 2), &qw) != 0) { return 0 - 1; }
+        r = qw[0];
+    }
+    elif (_is(fp, fl, "rphase") == 1) {
+        # rphase c: Rayleigh's phase function (_bj_vx_ray_phase)
+        r = _bj_vx_ray_phase(x);
+    }
+    elif (_is(fp, fl, "rang") == 1) {
+        # rang sigma d c: Rayleigh's angular intensity (_bj_vx_ray_ang), for |d| ≥ 10^-30 and not NaN
+        r = _bj_vx_ray_ang(x, y, _wf(w, 2));
     }
     elif (_is(fp, fl, "ux_pow") == 1) {
         # ux_pow s e y part: (s·2^e)^y's s (part 0) or e (part 1)

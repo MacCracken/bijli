@@ -535,7 +535,7 @@ EXACT = ["mono"] + list(SHAPES) + ["sqrt_div", "wsqrt", "sqrt_mono", "sqrt_mono_
          "par_rep", "par_rep_x", "par_rep_slow", "lw_nb", "lw_nb_slow", "lw_reff_ux", "vx_sqrt", "vx_sqrt_e",
          "vx_gamma", "lwo_reff", "lwo_reff_slow", "lwo_kappa", "lwo_kappa_slow", "lwo_nb", "lwo_nb_slow", "lwo_ux",
          "gammao", "gammao_slow", "gammao2", "gammao2_slow", "sumsq", "sumsq_exact", "abcd", "abcd_slow", "dot4", "jcdot", "jint", "jnorm",
-         "jover", "sjones", "sdop", "sellip", "sorient"]
+         "jover", "sjones", "sdop", "sellip", "sorient", "rsig", "rq", "rphase", "rang"]
 UX = ["ux_exp", "ux_exp_w", "ux_cosh", "ux_sinh", "ux_ln", "ux_pow", "ux_sin", "ux_cos"]
 
 
@@ -1984,6 +1984,130 @@ def stokes_families(rng, count):
     return out
 
 
+# ── the Rayleigh kernels (src/crmath_vx.cyr, M3 part 2d-2): exact references ───────────────────────────────────────
+# σ, Q, the phase function and the angular intensity on exact.py's chain: every operation (Smith's division on its
+# branch decided exactly) to 53 bits with an unbounded exponent, the last one rounded once. A zero divisor gives the
+# driver's all-ones word.
+RAY_DZ = (1 << 64) - 1
+RAY_PI = struct.unpack("<d", bytes.fromhex("182d4454fb210940"))[0]
+
+
+def _rk2(mre, mim):
+    """|K|² as a pair (Fraction, negative zero), or None for m² + 2 = 0."""
+    re = _jsub(_jmul(_jx(mre), _jx(mre)), _jmul(_jx(mim), _jx(mim)))
+    im = _jadd(_jmul(_jx(mre), _jx(mim)), _jmul(_jx(mim), _jx(mre)))
+    a = (_jsub(re, _jx(1.0)), _jsub(im, _jx(0.0)))
+    b = (_jadd(re, _jx(2.0)), _jadd(im, _jx(0.0)))
+    if b[0][0] == 0 and b[1][0] == 0:
+        return None
+
+    def div(u, v):
+        q = u[0] / v[0]
+        return rnd53(q), (u[1] != v[1]) if q == 0 else q < 0
+    if abs(b[0][0]) >= abs(b[1][0]):
+        r = div(b[1], b[0])
+        den = _jadd(b[0], _jmul(b[1], r))
+        kr = div(_jadd(a[0], _jmul(a[1], r)), den)
+        ki = div(_jsub(a[1], _jmul(a[0], r)), den)
+    else:
+        r = div(b[0], b[1])
+        den = _jadd(_jmul(b[0], r), b[1])
+        kr = div(_jadd(_jmul(a[0], r), a[1]), den)
+        ki = div(_jsub(_jmul(a[1], r), a[0]), den)
+    return _jadd(_jmul(kr, kr), _jmul(ki, ki))
+
+
+def rsig_ref(r, lam, mre, mim) -> int:
+    k = _rk2(mre, mim)
+    if k is None:
+        return RAY_DZ
+    x = _jx(0.0)
+    q = _jmul(_jx(2.0 * RAY_PI), _jx(r))[0] / Fraction(lam)
+    x = (rnd53(q), False)
+    x4 = _jmul(_jmul(_jmul(x, x), x), x)
+    c = _jmul(_jmul(_jmul(_jmul(_jx(8.0 / 3.0), _jx(RAY_PI)), _jx(r)), _jx(r)), x4)
+    return f2b(_jfin(_jmul(c, k, lambda t: t)))
+
+
+def rq_ref(x, mre, mim) -> int:
+    k = _rk2(mre, mim)
+    if k is None:
+        return RAY_DZ
+    c = _jmul(_jmul(_jmul(_jmul(_jx(8.0 / 3.0), _jx(x)), _jx(x)), _jx(x)), _jx(x))
+    return f2b(_jfin(_jmul(c, k, lambda t: t)))
+
+
+def _rphase(c):
+    return _jmul(_jx(0.75), _jadd(_jx(1.0), _jmul(_jx(c), _jx(c))))
+
+
+def rphase_ref(c) -> int:
+    return f2b(_jfin(_jmul(_jx(0.75), _jadd(_jx(1.0), _jmul(_jx(c), _jx(c))), lambda t: t)))
+
+
+def rang_ref(cs, d, c) -> int:
+    d2 = _jmul(_jx(d), _jx(d))
+    q = Fraction(cs) / d2[0]
+    qq = (rnd53(q), math.copysign(1.0, cs) < 0 if q == 0 else q < 0)
+    t = _jmul(qq, _rphase(c))
+    v = t[0] / Fraction(4.0 * RAY_PI)
+    return f2b(-0.0 if v == 0 and t[1] else (0.0 if v == 0 else rn_frac(v)))
+
+
+def rpos(rng):
+    """A positive double around σ's box (2^-100, 2^100), far past it, or ordinary."""
+    c = rng.random()
+    if c < 0.3:
+        e = rng.choice([rng.randint(-104, -96), rng.randint(96, 104)])
+    elif c < 0.6:
+        e = rng.randint(-330, 330)
+    else:
+        e = rng.randint(-40, 10)
+    return rng.uniform(1.0, 2.0) * 2.0 ** e
+
+
+def rindex(rng):
+    """An index m around the box (parts ±0 or in [2^-40, 2^40]): ordinary, at the box's edges, huge, tiny, near 1."""
+    c = rng.random()
+    if c < 0.3:
+        return rng.uniform(1.0, 3.0), -rng.choice([0.0, rng.uniform(0.0, 2.0)])
+    if c < 0.5:
+        e = rng.choice([rng.randint(-44, -36), rng.randint(36, 44)])
+        return rng.uniform(1.0, 2.0) * 2.0 ** e, -rng.choice([0.0, rng.uniform(0.0, 1.0) * 2.0 ** e])
+    if c < 0.7:
+        e = rng.randint(100, 520)
+        return rng.uniform(1.0, 2.0) * 2.0 ** e, -rng.uniform(0.0, 2.0) * 2.0 ** (e - rng.randint(0, 60))
+    if c < 0.85:
+        return rng.uniform(1.0, 2.0) * 2.0 ** rng.randint(-520, -100), -rng.choice([0.0, 2.0 ** rng.randint(-600, -100)])
+    return 1.0 + rng.randint(-8, 8) * 2.0 ** -52, -rng.choice([0.0, 2.0 ** rng.randint(-200, -20)])
+
+
+def rayleigh_families(rng, count):
+    """rsig, rq, rphase and rang (M3 part 2d-2): σ, Q, the phase function and the angular intensity against the
+    unbounded chain alone, so the calls the boxes keep on Rust's chain check that claim: radii, wavelengths and size
+    parameters around the boxes and far past them, indices around theirs, cosines around 2^511, and distances and
+    cross-sections whose σ/d² and its product by P leave the range."""
+    out = []
+    for _ in range(count):
+        r, lam = rpos(rng), rpos(rng)
+        mre, mim = rindex(rng)
+        out.append(("rsig", [r, lam, mre, mim], rsig_ref(r, lam, mre, mim)))
+        x = rpos(rng) * rng.choice([1.0, 2.0 ** -100, 2.0 ** 100])
+        out.append(("rq", [x, mre, mim], rq_ref(x, mre, mim)))
+        c = rng.choice([rng.uniform(-1.0, 1.0), rng.uniform(1.0, 2.0) * 2.0 ** rng.randint(505, 515),
+                        -rng.uniform(1.0, 2.0) * 2.0 ** rng.randint(505, 515), 2.0 ** rng.randint(-600, 600)])
+        if not math.isfinite(c):
+            c = 0.5
+        out.append(("rphase", [c], rphase_ref(c)))
+        cs = rng.choice([rng.uniform(0.0, 1.0) * 2.0 ** rng.randint(-1074, 1023), 0.0,
+                         -rng.uniform(1.0, 2.0) * 2.0 ** rng.randint(-1000, 0)])
+        d = rng.choice([1.0, 1e-30, rng.uniform(1.0, 2.0) * 2.0 ** rng.randint(-99, 515)]) * rng.choice([1.0, -1.0])
+        if not (math.isfinite(cs) and math.isfinite(d)):
+            cs, d = 1e-20, 1.0
+        out.append(("rang", [cs, d, c], rang_ref(cs, d, c)))
+    return out
+
+
 def main() -> int:
     (root / "build").mkdir(exist_ok=True)
     names = wanted or list(FUNCS) + ["exact", "ux"]
@@ -2041,6 +2165,9 @@ def main() -> int:
         jrng = random.Random(0x3_2D1B)
         calls += [(f, ref, ws) for f, ws, ref in jones_families(jrng, max(1, n // 10))
                   if "exact" in names or f in names]
+        rrng = random.Random(0x3_2D2A)
+        calls += [(f, ref, ws) for f, ws, ref in rayleigh_families(rrng, max(1, n // 10))
+                  if "exact" in names or f in names]
         srng = random.Random(0x3_2D1C)
         calls += [(f, ref, ws) for f, ws, ref in stokes_families(srng, max(1, n // 10))
                   if "exact" in names or f in names]
@@ -2069,7 +2196,7 @@ def main() -> int:
             g = results[t][i]
             # "invalid" is a word for these
             any_nan = name not in UX and not name.startswith(("gamma", "cm", "cos_t", "lw_", "lwo_", "par", "vx_",
-                                                              "abcd", "dot4", "j", "s"))
+                                                              "abcd", "dot4", "j", "s", "r"))
             ok = g == want or (any_nan and b2f(g) != b2f(g) and b2f(want) != b2f(want))
             per.setdefault((name, t), [0, 0])[0 if ok else 1] += 1
             if not ok:

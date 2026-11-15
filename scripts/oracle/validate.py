@@ -4216,10 +4216,39 @@ def sc_prims_agree(x, mre, mim) -> bool:
             and same(LIBM.hypot(mre, mim), mpfr_ref.cr2("hypot", mre, mim)))
 
 
-def sc_eval(fn, v, P, cx14=False, r13=False, r17=False):
+def sc_k2_ux(mre, mim):
+    """|K|², K = (m² − 1)/(m² + 2), with an unbounded exponent: hisab's m·m, Smith's division (its branch on the exact
+    |b.re| ≥ |b.im|) and re² + im², each operation to 53 bits (row 18, M3 part 2d-2). Raises ScDivZero for m² + 2 = 0."""
+    re = ux_sub(ux_mul(ux(mre), ux(mre)), ux_mul(ux(mim), ux(mim)))
+    im = ux_add(ux_mul(ux(mre), ux(mim)), ux_mul(ux(mim), ux(mre)))
+    a = (ux_sub(re, ux(1.0)), ux_sub(im, ux(0.0)))
+    b = (ux_add(re, ux(2.0)), ux_add(im, ux(0.0)))
+    if b[0][0] == 0 and b[1][0] == 0:
+        raise ScDivZero
+    if abs(b[0][0]) >= abs(b[1][0]):
+        r = ux_div(b[1], b[0])
+        den = ux_add(b[0], ux_mul(b[1], r))
+        kr = ux_div(ux_add(a[0], ux_mul(a[1], r)), den)
+        ki = ux_div(ux_sub(a[1], ux_mul(a[0], r)), den)
+    else:
+        r = ux_div(b[0], b[1])
+        den = ux_add(ux_mul(b[0], r), b[1])
+        kr = ux_div(ux_add(ux_mul(a[0], r), a[1]), den)
+        ki = ux_div(ux_sub(ux_mul(a[1], r), a[0]), den)
+    return ux_add(ux_mul(kr, kr), ux_mul(ki, ki))
+
+
+def sc_phase_ux(c):
+    """0.75·(1 + c²) with an unbounded exponent, each operation to 53 bits."""
+    return ux_mul(ux(0.75), ux_add(ux(1.0), ux_mul(ux(c), ux(c))))
+
+
+def sc_eval(fn, v, P, cx14=False, r13=False, r17=False, r18=False):
     """scattering.rs's outputs for a row on the primitives P; cx14=True for the port's BjComplex products and |z|² in
     Rayleigh (row 14 at a range edge), r13=True for its cross_section_from_efficiency rounded once (row 13, M3 part
-    2b), r17=True for mie's exact |m|·x limit (row 17, M3 part 2c-1). None for another name."""
+    2b), r17=True for mie's exact |m|·x limit (row 17, M3 part 2c-1), r18=True for Rayleigh's chains with an unbounded
+    exponent wherever the inputs are finite (row 18, M3 part 2d-2: the model is the chain itself, so the harness
+    checks the port's boxes row by row). None for another name."""
     def mul(a, b):
         w = [a[0], a[1], b[0], b[1]]
         if cx14 and cx_governed("Complex::mul", w) == 14:
@@ -4253,6 +4282,15 @@ def sc_eval(fn, v, P, cx14=False, r13=False, r17=False):
         bad = positive("radius", a) or positive("wavelength", lam)
         if bad:
             return bad
+        if r18 and math.isfinite(mre) and math.isfinite(mim):
+            try:
+                k = sc_k2_ux(mre, mim)
+            except ScDivZero:
+                return dz
+            x = ux_div(ux_mul(ux(2.0 * SC_PI), ux(a)), ux(lam))
+            x4 = ux_mul(ux_mul(ux_mul(x, x), x), x)
+            c = ux_mul(ux_mul(ux_mul(ux_mul(ux(fdiv(8.0, 3.0)), ux(SC_PI)), ux(a)), ux(a)), x4)
+            return [("f", ux_fin(ux_mul(c, k, lambda t: t)))]
         x = fdiv(2.0 * SC_PI * a, lam)
         try:
             k = k2(mre, mim)
@@ -4265,12 +4303,22 @@ def sc_eval(fn, v, P, cx14=False, r13=False, r17=False):
         bad = positive("size parameter", x)
         if bad:
             return bad
+        if r18 and math.isfinite(mre) and math.isfinite(mim):
+            try:
+                k = sc_k2_ux(mre, mim)
+            except ScDivZero:
+                return dz
+            c = ux_mul(ux_mul(ux_mul(ux_mul(ux(fdiv(8.0, 3.0)), ux(x)), ux(x)), ux(x)), ux(x))
+            return [("f", ux_fin(ux_mul(c, k, lambda t: t)))]
         try:
             k = k2(mre, mim)
         except ScDivZero:
             return dz
         return [("f", fdiv(8.0, 3.0) * x * x * x * x * k)]
     if fn == "scattering::rayleigh_phase_function":
+        if r18 and math.isfinite(v[0]):
+            c = v[0]
+            return [("f", ux_fin(ux_mul(ux(0.75), ux_add(ux(1.0), ux_mul(ux(c), ux(c))), lambda t: t)))]
         return [("f", 0.75 * (1.0 + v[0] * v[0]))]
     if fn == "scattering::rayleigh_angular_intensity":
         cs, d, c = v
@@ -4278,6 +4326,9 @@ def sc_eval(fn, v, P, cx14=False, r13=False, r17=False):
             return ip_err("distance must not be NaN")
         if abs(d) < 1e-30:
             return [("E", "Singularity"), ("s", "singularity: field evaluation at source point (distance = 0)")]
+        if r18 and math.isfinite(cs) and math.isfinite(d) and math.isfinite(c):
+            q = ux_div(ux(cs), ux_mul(ux(d), ux(d)))
+            return [("f", ux_fin(ux_div(ux_mul(q, sc_phase_ux(c)), ux(4.0 * SC_PI), lambda t: t)))]
         return [("f", fdiv(fdiv(cs, d * d) * (0.75 * (1.0 + c * c)), 4.0 * SC_PI))]
     return None
 
@@ -4332,10 +4383,11 @@ def scattering_corrections(path: Path):
 
 
 def scattering_adr_rows(path: Path) -> list:
-    """ADR 0002 mappings for scattering.tsv: row 14 where BjComplex's range edges change a Rayleigh row, row 13 for
-    cross_section_from_efficiency rounded once (M3 part 2b), row 17 where mie's exact |m|·x limit refuses a sphere
-    that Rust's rounded |m|·x accepted (M3 part 2c-1). The other flip, a sphere the exact limit accepts and Rust's
-    refused, runs a 10⁷-step recurrence no transcription here can follow: the grid holds none, and one would fail."""
+    """ADR 0002 mappings for scattering.tsv: row 18 where Rayleigh's chains with an unbounded exponent change a row (M3
+    part 2d-2; row 14's BjComplex edges held them before), row 13 for cross_section_from_efficiency rounded once (M3
+    part 2b), row 17 where mie's exact |m|·x limit refuses a sphere that Rust's rounded |m|·x accepted (M3 part
+    2c-1). The other flip, a sphere the exact limit accepts and Rust's refused, runs a 10⁷-step recurrence no
+    transcription here can follow: the grid holds none, and one would fail."""
     out = []
     for fn, cls, ins, outs, v in sc_lines(path):
         if fn == "scattering::mie":
@@ -4348,10 +4400,10 @@ def scattering_adr_rows(path: Path) -> list:
             out.append((fn, ins, wire(port), "17", f"oracle {outs}; ADR 0002 row 17"))
             continue
         P = SC_P_MPFR if cls == "C" else SC_P_GLIBC
-        expect, port = sc_eval(fn, v, P), sc_eval(fn, v, P, cx14=True, r13=True)
+        expect, port = sc_eval(fn, v, P), sc_eval(fn, v, P, cx14=True, r13=True, r18=True)
         if toks_same(port, expect):
             continue
-        row = "13" if fn == "scattering::cross_section_from_efficiency" else "14"
+        row = "13" if fn == "scattering::cross_section_from_efficiency" else "18"
         out.append((fn, ins, wire(port), row, f"oracle {outs}; ADR 0002 row {row}"))
     return out
 

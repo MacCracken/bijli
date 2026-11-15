@@ -583,6 +583,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
   the normal range, and the last operation rounds once; Rust's chain is kept wherever it was already exact. Cost:
   `polarization/stokes_from_jones` 125 → 58 ns (the shared kernel replaces BjComplex's calls); the degree of
   polarization and the orientation angle within 4 %, the ellipticity angle 310 → 333 ns (its guard).
+- **scattering** (ADR 0002 row 18 amended, M3 part 2d-2, range edges): Rayleigh's long products over- and underflowed
+  where the result is representable. `rayleigh_cross_section` gave NaN for 543.4 m² at r = 10⁻²⁰⁰, λ = 10⁻³⁰⁰
+  ((8/3)πr² underflowed while x⁴ overflowed), and K = (m² − 1)/(m² + 2) was ∞/∞ = NaN for |m| past 10¹⁵⁴, where
+  K → 1; `rayleigh_phase_function` was ∞ for 1.47·10³⁰⁸ at cos θ = 1.4·10¹⁵⁴; `rayleigh_angular_intensity` lost
+  digits through a subnormal σ/d². Inside a box on the inputs Rust's chain is kept, bit for bit; outside it each
+  chain runs with an unbounded exponent and rounds its last operation once (`src/crmath_vx.cyr`'s Rayleigh kernels).
+  Cost: σ 100 → 82 ns and Q 90 → 67 ns (no BjComplex calls); the phase function 4 → 6 ns (its edge test stops it
+  inlining) and the angular intensity 16 → 21 ns.
 
 ### Performance
 

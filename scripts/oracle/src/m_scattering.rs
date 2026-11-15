@@ -24,6 +24,11 @@
 //!
 //! M3 part 2c-1 (ADR 0002 row 17, amended) appends `mie`'s |m|·x limit grid: the exact knife edge and the neighbours
 //! above it that Rust's rounded |m|·x accepts, and seeded indices just outside the circle |m| = 10⁷/x.
+//!
+//! M3 part 2d-2 (ADR 0002 row 18, amended) appends Rayleigh's range-edge grid: radii, wavelengths and size parameters
+//! at the edges of the port's boxes and far past them, indices at the box's edges and where m² over- or underflows
+//! or K cancels, cosines where 1 + cos²θ passes DBL_MAX, and the angular intensity where d², σ/d² or its product by P
+//! leaves the range.
 
 use crate::grids::{Rng, specials};
 use crate::m_field::res_f;
@@ -337,6 +342,7 @@ pub fn emit() -> Module {
     }
     round_once_edges(r);
     threshold_edges(r);
+    rayleigh_edges(r);
     rows.m
 }
 
@@ -379,3 +385,66 @@ fn threshold_edges(r: &mut Rows) {
     }
 }
 
+
+/// M3 part 2d-2 (ADR 0002 row 18, amended): Rayleigh's chains at their range edges.
+fn rayleigh_edges(r: &mut Rows) {
+    let (p40, p100, p200) = (2.0_f64.powi(40), 2.0_f64.powi(100), 2.0_f64.powi(200));
+    let ms = [
+        (1.33, 0.0),
+        (1.5, -0.1),
+        (1.0 + f64::EPSILON, 0.0),
+        (1.0, -1e-170),
+        (p40, 0.0),
+        (p40.next_down(), -1.0),
+        (1.0 / (2.0 * p40), 0.0),
+        (1e154, 0.0),
+        (1.4e154, -1e150),
+        (1e200, -1e200),
+        (1e-200, 0.0),
+        (0.0, -std::f64::consts::SQRT_2),
+        (3.0, -1.0 / (2.0 * p40)),
+    ];
+    let radii = [1e-9, 1.0 / p100, 0.5 / p100, p100, 2.0 * p100, 1e-200, 1e-300, 1e150];
+    let lambdas = [5e-7, 1.0 / p100, 0.5 / p100, p100, 1e-300, 1e200];
+    for &a in &radii {
+        for &lam in &lambdas {
+            for &m in &ms {
+                let ins = [f(a), f(lam), f(m.0), f(m.1)];
+                r.row("scattering::rayleigh_cross_section", Class::A, &ins, || {
+                    res_f(rayleigh_cross_section(black_box(a), black_box(lam), black_box(Complex::new(m.0, m.1))))
+                });
+            }
+        }
+    }
+    for &x in &[0.1, 1.0 / p200, 0.5 / p200, p200, 2.0 * p200, 1e-300, 1e250, 5e-324] {
+        for &m in &ms {
+            let ins = [f(x), f(m.0), f(m.1)];
+            r.row("scattering::rayleigh_efficiency", Class::A, &ins, || {
+                res_f(rayleigh_efficiency(black_box(x), black_box(Complex::new(m.0, m.1))))
+            });
+        }
+    }
+    let c511 = 2.0_f64.powi(511);
+    for &c in &[c511, c511.next_down(), 1.3e154, 1.4e154, 1.55e154, 1.6e154, 1e200, f64::MAX, -1.45e154] {
+        r.row("scattering::rayleigh_phase_function", Class::A, &[f(c)], || {
+            vec![f(rayleigh_phase_function(black_box(c)))]
+        });
+    }
+    for &sg in &[1e-20, 1e308, 1e-300, 5e-324, 0.0, -1e-10] {
+        for &d in &[1.0, 1e-30, 1e200, 1.4e154, c511, 1e-15, 0.5] {
+            for &c in &[0.5, 1e200, 1.5e154] {
+                let ins = [f(sg), f(d), f(c)];
+                r.row("scattering::rayleigh_angular_intensity", Class::A, &ins, || {
+                    res_f(rayleigh_angular_intensity(black_box(sg), black_box(d), black_box(c)))
+                });
+            }
+        }
+    }
+    // σ/d² below 2^-1022 lifted back into the range by a large P
+    for &(sg, d, c) in &[(1e-300, 1e5, 1e150), (3e-301, 7e4, 2e150), (1e-305, 1.0, 1e154), (7e-302, 3e3, 4e151)] {
+        let ins = [f(sg), f(d), f(c)];
+        r.row("scattering::rayleigh_angular_intensity", Class::A, &ins, || {
+            res_f(rayleigh_angular_intensity(black_box(sg), black_box(d), black_box(c)))
+        });
+    }
+}
