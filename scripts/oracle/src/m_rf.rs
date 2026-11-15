@@ -38,6 +38,9 @@
 //!
 //! M4 part 2a-3 appends S → Z's edges (row 17, rounded once): near-thrus to 2^-70, |det(I − S)| straddling 10^-30 ulp
 //! by ulp, lossless networks (Re Z ≈ 0), exact zeros, the box edges, wide and subnormal entries, seeded networks.
+//!
+//! M4 part 2b appends round once's grid (ADR 0002 row 13): √(L′/C′), 1/√(L′C′), √(Z₀·Z_L) and Z/Z₀ on seeded values,
+//! at the ranges' edges (an intermediate past DBL_MAX or below 2^-1022, 1/Z₀ subnormal), on exact roots.
 
 use crate::grids::{Rng, specials};
 use crate::m_field::res_f;
@@ -140,6 +143,12 @@ impl Rows {
         self.row("rf::reflection_coefficient", Class::A, &ins, || {
             res_f(reflection_coefficient(black_box(zl), black_box(z0)))
         });
+        self.row("rf::quarter_wave_transformer", Class::A, &[f(z0), f(zl)], || {
+            res_f(quarter_wave_transformer(black_box(z0), black_box(zl)))
+        });
+    }
+
+    fn quarter(&mut self, z0: f64, zl: f64) {
         self.row("rf::quarter_wave_transformer", Class::A, &[f(z0), f(zl)], || {
             res_f(quarter_wave_transformer(black_box(z0), black_box(zl)))
         });
@@ -669,8 +678,64 @@ pub fn emit() -> Module {
     emit_2a1(r, &mut rng);
     emit_2a2(r, &mut rng);
     emit_2a3(r, &mut rng);
+    emit_2b(r, &mut rng);
 
     rows.m
+}
+
+/// M4 part 2b: round once (ADR 0002 row 13): √(L′/C′), 1/√(L′C′), √(Z₀·Z_L) and Z/Z₀ on seeded values of every
+/// magnitude, where Rust's intermediate over- or underflows while the value is representable, on perfect squares
+/// (exact roots), subnormals and the extremes.
+fn emit_2b(r: &mut Rows, rng: &mut Rng) {
+    for _ in 0..300 {
+        let (l, c) = (rng.log_uniform(-9.0, -5.0), rng.log_uniform(-13.0, -9.0));
+        r.lossless(l, c);
+        r.quarter(rng.log_uniform(0.0, 3.0), rng.log_uniform(0.0, 3.0));
+        let z = (rng.signed_log_uniform(-2.0, 4.0), rng.signed_log_uniform(-2.0, 4.0));
+        r.norm(z, rng.log_uniform(-1.0, 3.0) * if rng.unit() < 0.1 { -1.0 } else { 1.0 });
+    }
+    for _ in 0..200 {
+        let (a, b) = (rng.log_uniform(-307.0, 308.0), rng.log_uniform(-307.0, 308.0));
+        r.lossless(a, b);
+        r.quarter(a, b);
+        r.norm((rng.signed_log_uniform(-300.0, 300.0), rng.signed_log_uniform(-300.0, 300.0)), b);
+    }
+    // The ranges' edges: L′/C′, L′·C′ and Z₀·Z_L past DBL_MAX or below 2^-1022 with a representable root, and
+    // 1/Z₀ subnormal (Z₀ near DBL_MAX).
+    let big = [1e154, 1e200, 1e300, f64::MAX];
+    let small = [1e-154, 1e-200, 1e-300, f64::MIN_POSITIVE, 5e-324, 1.5e-320];
+    for &a in &big {
+        for &b in &small {
+            r.lossless(a, b);
+            r.lossless(b, a);
+            r.quarter(a, b);
+        }
+        for &b in &big {
+            r.lossless(a, b);
+            r.quarter(a, b);
+        }
+    }
+    for &a in &small {
+        for &b in &small {
+            r.lossless(a, b);
+            r.quarter(a, b);
+        }
+    }
+    for &z0 in &[f64::MAX, 1e308, 1.5e307, -f64::MAX, 2f64.powi(1023), 3e-30, 1.0000000000000002e-30] {
+        for &x in &[1.0, 3.0, -7.0, 1e-300, 5e-324, 1e300, f64::MAX, 0.1, -0.0] {
+            r.norm((x, 3.0), z0);
+            r.norm((0.5, x), z0);
+        }
+    }
+    // Perfect squares and exact quotients: the root is exact.
+    for k in 1..=20_i32 {
+        let kf = f64::from(k);
+        r.lossless(kf * kf * 1e-7, 1e-7);
+        r.lossless(kf * kf, 4.0);
+        r.quarter(kf * kf, 9.0);
+        r.lossless(1.0, kf * kf);
+        r.norm((kf * 50.0, -kf * 25.0), 50.0);
+    }
 }
 
 /// M4 part 2a-3: S → Z with each part rounded once from the exact value and |det(I − S)|² < 10^-60 decided exactly

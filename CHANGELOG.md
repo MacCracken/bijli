@@ -333,6 +333,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
   amended, see Fixed), on the cascade's helpers (`_bj_cr_s2z`); `cr_verify.py` gains the s2z and s2z_slow families.
   `rf.tsv` grows by 492 edge rows (21,123); `rf.adr.tsv` maps 875 `s_to_z` rows. Part 2a, the user's three answers,
   is done.
+- **Cyrius port, M4 part 2b — round once in rf** (`src/rf.cyr`): `characteristic_impedance_lossless`,
+  `phase_velocity`, `quarter_wave_transformer` and `normalize_impedance` are correctly rounded (ADR 0002 row 13
+  amended, see Fixed). `rf.tsv` grows by 3,135 rows (24,258): seeded values of every magnitude, the ranges' edges,
+  exact roots; `rf.adr.tsv` maps 1,105 rows to row 13.
 
 ### Fixed
 
@@ -728,6 +732,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
   for finite values. For finite entries each part of Z = Z₀(I + S)(I − S)⁻¹ is now rounded once from the exact value
   and the threshold decided exactly; a part exactly 0 keeps Rust's zero where its chain gives one. Cost (no Rust
   bench): a 2-port attenuator 185 ns → 3.26 µs, complex entries 181 ns → 4.97 µs (`port-parity.md` §84).
+- **rf** (ADR 0002 row 13 amended, M4 part 2b, the user's "round once" decision of 2026-11-12):
+  `characteristic_impedance_lossless` √(L′/C′), `phase_velocity` 1/√(L′C′) and `quarter_wave_transformer` √(Z₀·Z_L)
+  rounded two or three times, an ulp off on 12.8 %, 29.2 % and 12.5 % of typical inputs, and gave ∞ or 0 where the
+  quotient or product left the range though the root is representable (√(10³⁰⁰/10⁻³⁰⁰) = ∞ for 10³⁰⁰);
+  `normalize_impedance`'s Z·(1/Z₀) was an ulp off on 25.5 %. They are now correctly rounded (kimiya's √(x/y), bijli's
+  √ of a monomial, one division a part for Z/Z₀). Cost (no Rust benches): 25 → 88 ns, 28 → 140 ns and
+  23 → 142 ns (maxwell's `wave_speed`, the same root, is 141 ns); `normalize_impedance` unchanged at 16 ns
+  (`port-parity.md` §85).
 
 ### Performance
 

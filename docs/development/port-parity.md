@@ -4937,3 +4937,36 @@ stub's root, 2a-2 the cascade, 2a-3 S → Z), 2b round once, 2c the exact thresh
   execution coverage 323 of 323 functions); validate.py 616,526 rows, 0 problems.
 - **2a is done**: the user's three answers. Next, 2b (round once: the lossless line's √(L′/C′), the phase velocity
   1/√(L′C′), the quarter-wave transformer's √(Z₀Z_L) and `normalize_impedance`'s Z/Z₀).
+
+## 85. M4 part 2b: round once in rf (2026-11-15)
+
+- **ADR 0002 row 13, amended** (the user's "round once" decision of 2026-11-12): rf's formulas that are one product,
+  quotient or root of inputs are correctly rounded:
+  - `characteristic_impedance_lossless` √(L′/C′) by kimiya's √(x/y) (`_bj_k_cr_sqrt_div`, as maxwell's `impedance`);
+  - `phase_velocity` 1/√(L′C′) and `quarter_wave_transformer` √(Z₀·Z_L) by bijli's √ of a monomial
+    (`_bj_cr_sqrt_mono`, as maxwell's `wave_speed` and `refractive_index`);
+  - `normalize_impedance` Z/Z₀ by one IEEE division a part, where Rust took Z·(1/Z₀).
+
+  The inputs are refused unless finite and positive (Z₀ finite and not below 10⁻³⁰ for Z/Z₀), so no ∞ reaches the
+  roots; a non-finite part of Z divides as Rust's product did. `denormalize_impedance` (z·Z₀), the Smith chart, the
+  losses and the array factors have a sum or a transcendental inside, or were one IEEE operation already.
+- **The finding**: over 20,000 typical inputs each (L′ from 10⁻⁹ to 10⁻⁵ H/m, C′ from 10⁻¹³ to 10⁻⁹ F/m, impedances
+  from 1 to 1,000 Ω), Rust's value was an ulp off on 12.8 % (√(L′/C′)), 29.2 % (1/√(L′C′)), 12.5 % (√(Z₀·Z_L)) and
+  25.5 % (Z·(1/Z₀)). And its quotient or product left the range though the root is representable: √(10³⁰⁰/10⁻³⁰⁰)
+  was ∞ for 10³⁰⁰, 1/√(10²⁰⁰·10²⁰⁰) was 0 for 10⁻²⁰⁰, √(10²⁰⁰·10²⁰⁰) was ∞ for 10²⁰⁰.
+- **The grid**: 3,135 rows appended to `rf.tsv` (24,258): 300 typical seeded values of each kind (the line pair also
+  feeds both `characteristic_impedance_lossless` and `phase_velocity`, the impedance pair `normalize_impedance` and
+  `denormalize_impedance`), 200 over 10^±307, the ranges' edges (10^±154 to DBL_MAX and the subnormals crossed, Z₀ near
+  DBL_MAX so that 1/Z₀ is subnormal), and exact roots (k²·10⁻⁷/10⁻⁷, k²/4, k²·9).
+- **validate.py** rounds each exactly (`rn_sqrt` of the Fraction, Python's IEEE division) and maps **1,105 rows** to
+  row 13 in `rf.adr.tsv` (440 on earlier grids): `characteristic_impedance_lossless` 247, `phase_velocity` 413,
+  `quarter_wave_transformer` 198, `normalize_impedance` 247; 399 of them were ∞ or 0 for a finite value.
+- **Tests**: `tests/rf.tcyr`'s `cyrius_round_once` (5 assertions, 228 in all).
+- **Benchmarks** (rf.rs benches none of the four): a focused interleaved A/B against HEAD (three rounds, load 0.75):
+  `characteristic_impedance_lossless` 25 → 88 ns, `phase_velocity` 28 → 140 ns, `quarter_wave_transformer`
+  23 → 142 ns (maxwell's `wave_speed`, the same root, is 141 ns), `normalize_impedance` 17 → 16 ns.
+- **Result, every target** (x86_64 ELF, x86_64 PE, aarch64): **17 modules, 0 failing; 533,964 ok, 0 failed, 0
+  measured, 0 pending, 85,697 accepted (ADR 01: 30,859; ADR 0002: 54,838)** over 619,661 rows; **all 416 digests
+  equal**, HEAD's unchanged but the four functions' and `denormalize_impedance`'s (new rows). `rf.tcyr` passes on all
+  three (228). The gate is clean (no warnings; execution coverage 323 of 323 functions); validate.py 619,661 rows, 0
+  problems. Next, 2c: the exact thresholds.

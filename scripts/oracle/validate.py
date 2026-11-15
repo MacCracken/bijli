@@ -5779,6 +5779,9 @@ def rf_eval(fn, v, P, port=False):
             if fn == "rf::phase_velocity":
                 return ip_err("L' and C' must be finite and positive")
             return ip_err(f"L' and C' must be finite and positive, got L'={rust_display(l)}, C'={rust_display(c)}")
+        if port:                                            # ADR 0002 row 13 (M4 part 2b): rounded once
+            q = 1 / (Fraction(l) * Fraction(c)) if fn == "rf::phase_velocity" else Fraction(l) / Fraction(c)
+            return [("f", rn_sqrt(q))]
         if fn == "rf::phase_velocity":
             return [("f", fdiv(1.0, fsqrt(l * c)))]
         return [("f", fsqrt(fdiv(l, c)))]
@@ -5835,6 +5838,8 @@ def rf_eval(fn, v, P, port=False):
             return ip_err(f"reference impedance Z₀ must be finite, got {rust_display(z0)}")
         if abs(z0) < 1e-30:
             return dz_err("reference impedance Z₀ cannot be zero")
+        if port:                                            # ADR 0002 row 13 (M4 part 2b): one division a part
+            return rf_cx((zr / z0, zi / z0))
         s = fdiv(1.0, z0)
         return rf_cx((zr * s, zi * s))
     if fn == "rf::denormalize_impedance":
@@ -5858,6 +5863,8 @@ def rf_eval(fn, v, P, port=False):
         if not (math.isfinite(z0) and z0 > 0.0 and math.isfinite(zl) and zl > 0.0):
             return ip_err("Z₀ and Z_L must be finite and positive for a quarter-wave transformer, got "
                           f"Z₀={rust_display(z0)}, Z_L={rust_display(zl)}")
+        if port:                                            # ADR 0002 row 13 (M4 part 2b): rounded once
+            return [("f", rn_sqrt(Fraction(z0) * Fraction(zl)))]
         return [("f", fsqrt(z0 * zl))]
     if fn == "rf::single_stub_match":
         zl, z0 = v
@@ -6412,15 +6419,27 @@ def rf_write_eval(P, ins: str, port=False):
     return rf_write_touchstone(P, d, toks[k][1], port)
 
 
+# M4 part 2b, ADR 0002 row 13 (round once): the single root, product or quotient formulas.
+RF_ROW13 = ("rf::characteristic_impedance_lossless", "rf::phase_velocity", "rf::quarter_wave_transformer",
+            "rf::normalize_impedance")
+
+
 def rf_adr_rows(path: Path) -> list:
     """ADR 0002 mappings for rf.tsv: row 37 where an infinite Z₀, which Rust's z0_equal accepts as equal to the first
     port's or the file's R (∞ ≤ 10⁻¹²·∞), is refused by the port's (M4 parts 1b, 1c-2). A writer's mapping takes the
-    corrected oracle's primitives, as its outputs then would. Row 39 where the stub match's cancelling root, taken
+    corrected oracle's primitives, as its outputs then would. Row 13 where the four single-operation formulas
+    (RF_ROW13), rounded once, differ from Rust's two or three roundings (M4 part 2b). Row 39 where the stub match's
+    cancelling root, taken
     without its cancellation, moves a (d, ℓ) (M4 part 2a-1), on the corrected primitives too. Row 17 where the
     cascade's star product (M4 part 2a-2) or S → Z (2a-3), each part rounded once and its threshold exact, differs
     from Rust's chain."""
     out = []
     for fn, _cls, ins, outs, v in sc_lines(path):
+        if fn in RF_ROW13:
+            rust, port = rf_eval(fn, v, RF_P_MPFR), rf_eval(fn, v, RF_P_MPFR, port=True)
+            if not toks_same(rust, port):
+                out.append((fn, ins, wire(port), "13", f"oracle {outs[:200]}; ADR 0002 row 13"))
+            continue
         if fn == "rf::single_stub_match_complex":
             rust, port = rf_eval(fn, v, RF_P_MPFR), rf_eval(fn, v, RF_P_MPFR, port=True)
             if not toks_same(rust, port):

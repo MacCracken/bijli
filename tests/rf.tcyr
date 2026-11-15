@@ -9,7 +9,8 @@
 # signed zeros, the stub match's sort and its matched branch, and usize::MAX elements; (1b) ADR 0002 row 36 (BjSMatrix's
 # shape fixed at construction: test_smatrix_inconsistent_does_not_panic is n/a), row 37 (z0_equal on finite values),
 # the S-parameter reasons and the heap; (2a-1) ADR 0002 row 39, the stub match's cancellation-free root; (2a-2) row
-# 17, the cascade's star product rounded once and its exact T22 test; (2a-3) row 17, S → Z rounded once.
+# 17, the cascade's star product rounded once and its exact T22 test; (2a-3) row 17, S → Z rounded once; (2b) row
+# 13, round once.
 # tests/golden/rf.tsv pins every function over its grid against Rust besides.
 
 include "tests/lib.cyr"
@@ -665,6 +666,32 @@ fn cyrius_s_to_z_exact(): i64 {
     }
     assert_eq(_fl_arena_pos, fl0, "the freelist's arena did not grow over 20 exact paths");
     assert_eq(alloc_used(), bump0, "nothing on the bump heap");
+    return 0;
+}
+
+# ADR 0002 row 13 (M4 part 2b): √(L′/C′), 1/√(L′C′), √(Z₀·Z_L) and Z/Z₀ rounded once. Rust's values in the messages.
+fn cyrius_round_once(): i64 {
+    test_group("cyrius_round_once");
+    var t1, v1 = bj_characteristic_impedance_lossless(0.00000033499999999999997, 0.0000000000715);
+    var t2, v2 = bj_phase_velocity(0.00000033499999999999997, 0.0000000000715);
+    assert(is_ok(t1) == 1 && ok_f(t1, v1) == 68.4493585456773 && ok_f(t2, v2) == 204326443.41993225,
+      "a typical line: Z₀ and v_p correctly rounded (Rust's 68.44935854567728 and 204326443.41993222, an ulp low)");
+    var e300: f64 = _bj_from_bits(0x7E37E43C8800759C);
+    var em300: f64 = _bj_from_bits(0x01A56E1FC2F8F359);
+    var e200: f64 = _bj_from_bits(0x6974E718D7D7625A);
+    var em200: f64 = _bj_from_bits(0x16687E92154EF7AC);
+    var t3, v3 = bj_characteristic_impedance_lossless(e300, em300);
+    assert(ok_f(t3, v3) == e300, "√(10³⁰⁰/10⁻³⁰⁰) = 10³⁰⁰, where Rust's quotient overflowed to ∞");
+    var t4, v4 = bj_phase_velocity(e200, e200);
+    assert(ok_f(t4, v4) == em200, "1/√(10²⁰⁰·10²⁰⁰) = 10⁻²⁰⁰, where Rust's product overflowed (v_p = 0)");
+    var t5, v5 = bj_quarter_wave_transformer(e200, e200);
+    assert(ok_f(t5, v5) == e200, "√(10²⁰⁰·10²⁰⁰) = 10²⁰⁰ exactly (Rust's ∞)");
+    var w: BjComplex;
+    var t6, v6 = bj_normalize_impedance(BjComplex_new(5.0, 7.0), 3.0, &w);
+    var wr: f64 = w.re;
+    var wi: f64 = w.im;
+    assert(is_ok(t6) == 1 && wr == 1.6666666666666667 && wi == 2.3333333333333335,
+      "Z/Z₀ one division a part (Rust's 5·(1/3) = 1.6666666666666665 and 2.333333333333333)");
     return 0;
 }
 
@@ -1528,6 +1555,7 @@ fn main(): i64 {
     cyrius_errors();
     cyrius_values();
     cyrius_stub_root();
+    cyrius_round_once();
     rust_tests_d();
     cyrius_smatrix();
     cyrius_cascade_exact();

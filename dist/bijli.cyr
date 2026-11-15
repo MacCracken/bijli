@@ -27245,8 +27245,8 @@ fn _bj_rf_sqrt_polar(re: f64, im: f64): BjComplex {
 
 # ── transmission lines ──────────────────────────────────────────────────────────────────────────────────────────
 
-# Z₀ = √(L′/C′) of a lossless line, L′ in H/m and C′ in F/m: Ok(Z₀), or Err(InvalidParameter) unless both are finite
-# and positive. Mirrors `rf::characteristic_impedance_lossless`.
+# Z₀ = √(L′/C′) of a lossless line, L′ in H/m and C′ in F/m, correctly rounded (ADR 0002 row 13, M4 part 2b): Ok(Z₀),
+# or Err(InvalidParameter) unless both are finite and positive. Mirrors `rf::characteristic_impedance_lossless`.
 #must_use
 public fn bj_characteristic_impedance_lossless(inductance_per_m: f64, capacitance_per_m: f64): Result {
     if (_bj_rf_pos(inductance_per_m) == 0 || _bj_rf_pos(capacitance_per_m) == 0) {
@@ -27257,8 +27257,7 @@ public fn bj_characteristic_impedance_lossless(inductance_per_m: f64, capacitanc
         _bj_fmt_f64_display(t, capacitance_per_m);
         return Err(BJ_ERR_INVALID_PARAMETER);
     }
-    var q: f64 = inductance_per_m / capacitance_per_m;
-    var z: f64 = f64_sqrt(q);
+    var z: f64 = _bj_k_cr_sqrt_div(inductance_per_m, capacitance_per_m);   # kimiya's √(x/y)
     return Ok(z);
 }
 
@@ -27302,16 +27301,17 @@ public fn bj_propagation_constant(r: f64, l: f64, g: f64, c: f64, omega: f64): B
     return z;
 }
 
-# v_p = 1/√(L′C′) on a lossless line (m/s): Ok(v_p), or Err(InvalidParameter) unless both are finite and positive.
-# Mirrors `rf::phase_velocity`.
+# v_p = 1/√(L′C′) on a lossless line (m/s), correctly rounded (ADR 0002 row 13, M4 part 2b): Ok(v_p), or
+# Err(InvalidParameter) unless both are finite and positive. Mirrors `rf::phase_velocity`.
 #must_use
 public fn bj_phase_velocity(inductance_per_m: f64, capacitance_per_m: f64): Result {
     if (_bj_rf_pos(inductance_per_m) == 0 || _bj_rf_pos(capacitance_per_m) == 0) {
         return Err(_bj_err_invalid_parameter("L' and C' must be finite and positive"));
     }
-    var p: f64 = inductance_per_m * capacitance_per_m;
-    var s: f64 = f64_sqrt(p);
-    var v: f64 = 1.0 / s;
+    var den: f64[2];
+    den[0] = inductance_per_m;
+    den[1] = capacitance_per_m;
+    var v: f64 = _bj_cr_sqrt_mono(0, 0, &den, 2);
     return Ok(v);
 }
 
@@ -27458,8 +27458,9 @@ public fn bj_mismatch_loss(gamma_mag: f64): Result {
 
 # ── the Smith chart ─────────────────────────────────────────────────────────────────────────────────────────────
 
-# z = Z/Z₀ (as Z·(1/Z₀)), into *out: Ok(0), or Err with out untouched; Err(InvalidParameter) for a non-finite Z₀,
-# Err(DivisionByZero) when |Z₀| < 10⁻³⁰. Mirrors `rf::normalize_impedance`.
+# z = Z/Z₀, each part one IEEE division (ADR 0002 row 13, M4 part 2b: Rust's Z·(1/Z₀) rounded twice), into *out:
+# Ok(0), or Err with out untouched; Err(InvalidParameter) for a non-finite Z₀, Err(DivisionByZero) when
+# |Z₀| < 10⁻³⁰. Mirrors `rf::normalize_impedance`.
 #must_use
 public fn bj_normalize_impedance(z: BjComplex, z0: f64, out: *BjComplex): Result {
     if (_bj_is_finite(z0) == 0) {
@@ -27468,9 +27469,8 @@ public fn bj_normalize_impedance(z: BjComplex, z0: f64, out: *BjComplex): Result
     var a0: f64 = f64_abs(z0);
     var tiny: f64 = _BJ_RF_TINY30;
     if (a0 < tiny) { return Err(_bj_err_division_by_zero("reference impedance Z₀ cannot be zero")); }
-    var s: f64 = 1.0 / z0;
-    var wr: f64 = z.re * s;
-    var wi: f64 = z.im * s;
+    var wr: f64 = z.re / z0;
+    var wi: f64 = z.im / z0;
     out.re = wr;
     out.im = wi;
     return Ok(0);
@@ -27539,8 +27539,9 @@ public fn bj_z_from_gamma(gamma: BjComplex): BjComplex {
 
 # ── matching ────────────────────────────────────────────────────────────────────────────────────────────────────
 
-# The quarter-wave transformer's impedance Z_t = √(Z₀·Z_L), matching a real load to a line: Ok(Z_t), or
-# Err(InvalidParameter) unless both are finite and positive. Mirrors `rf::quarter_wave_transformer`.
+# The quarter-wave transformer's impedance Z_t = √(Z₀·Z_L), matching a real load to a line, correctly rounded (ADR 0002
+# row 13, M4 part 2b): Ok(Z_t), or Err(InvalidParameter) unless both are finite and positive. Mirrors
+# `rf::quarter_wave_transformer`.
 #must_use
 public fn bj_quarter_wave_transformer(z0: f64, z_load: f64): Result {
     if (_bj_rf_pos(z0) == 0 || _bj_rf_pos(z_load) == 0) {
@@ -27551,8 +27552,10 @@ public fn bj_quarter_wave_transformer(z0: f64, z_load: f64): Result {
         _bj_fmt_f64_display(t, z_load);
         return Err(BJ_ERR_INVALID_PARAMETER);
     }
-    var p: f64 = z0 * z_load;
-    var zt: f64 = f64_sqrt(p);
+    var num: f64[2];
+    num[0] = z0;
+    num[1] = z_load;
+    var zt: f64 = _bj_cr_sqrt_mono(&num, 2, 0, 0);
     return Ok(zt);
 }
 
