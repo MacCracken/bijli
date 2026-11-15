@@ -591,6 +591,15 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
   chain runs with an unbounded exponent and rounds its last operation once (`src/crmath_vx.cyr`'s Rayleigh kernels).
   Cost: σ 100 → 82 ns and Q 90 → 67 ns (no BjComplex calls); the phase function 4 → 6 ns (its edge test stops it
   inlining) and the angular intensity 16 → 21 ns.
+- **scattering** (ADR 0002 row 18 amended, M3 part 2d-2b, the user's answer of 2026-11-14): `mie` refused an index
+  |m| below about 10⁻¹⁵⁴ ("Mie series over/underflowed") or divided by an mx that underflowed to 0, though the m → 0
+  limit is finite, and just above that limit returned a silently wrong series: at x = 1, m = 10⁻¹⁵³, (Dₙ/m)·χ₄
+  overflowed, so a₄ came out 0 and Q_sca 0.2768511768752622 for 0.2768511783189432. For x ≥ 10⁻⁵⁰, where the fast
+  path shows an m-dependent range edge, the series now reruns with every m-dependent operation to 53 bits and an
+  unbounded exponent, each coefficient and output rounded once. The x-only Riccati–Bessel values stay Rust's, and
+  below x = 10⁻⁵⁰ Rust's chain, its refusals included, is unchanged (the tiny-x limit kept on 2026-11-14). Cost: the
+  cues' tests in the series, 7 to 9 % of a Mie call (`scattering/mie_x1_real` 1.92 → 2.06 µs, `mie_x10_real` 3.78 →
+  4.11, `mie_x50_m3_5` 12.07 → 12.86).
 
 ### Performance
 

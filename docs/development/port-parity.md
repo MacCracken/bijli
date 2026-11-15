@@ -4062,3 +4062,81 @@ E and B = n̂ × E/c.
   measured, 0 pending, 76,900 accepted (ADR 01: 29,441; ADR 0002: 47,459)** over 570,249 rows; **all 380 digests
   equal**. The four Rayleigh functions' digests changed; the other 376 are unchanged. `scattering.tcyr` passes on all
   three. The gate is clean (17 steps, no warnings; execution coverage 288 of 288 functions).
+
+## 71. M3 part 2d-2b: Mie's tiny m (2026-11-14)
+
+- **The user's answer of 2026-11-14: fix it in M3.** §70 found that Rust's `mie` refuses an index |m| below about
+  10⁻¹⁵⁵ at ordinary x, though the m → 0 limit is finite and Rust's own documentation says the series fails "only for
+  vanishingly small x". Reading the chain closer found more:
+  - mx underflows to 0 for a subnormal m and Rust divides by it (the old `cyrius_mie_errors` assertion);
+  - just above the refusal, the series is silently wrong. At x = 1, m = 10⁻¹⁵³, Dₙ/m is finite but (Dₙ/m)·χ₄ is not,
+    Smith's division by an infinite denominator gives a₄ = 0, and Q_sca comes out 0.2768511768752622 for
+    0.2768511783189432.
+- **ADR 0002 row 18, amended for Mie's m-dependent chain.**
+  - **The unbounded path** (`_bj_sc_mie_ux`) runs every m-dependent operation to 53 bits with an unbounded exponent:
+    m·x, 1/(mx), the Dₙ recurrence, 1/m, both factors, the coefficients' numerators, denominators and Smith
+    divisions, and the three sums. Each coefficient part and each output rounds once. complex_recip takes its first
+    branch, one division by |z|²: its Smith fallback only avoided the range's ends. The x-only ψₙ, χₙ, n/x, 2/x² and
+    the n-only weights stay Rust's doubles.
+  - **The cues**, read off Rust's fast path:
+    - a nonzero part of m outside [2^-511, 2^511), or |m|² or |mx|² not normal (checked before the fast path, which
+      is then skipped);
+    - a reciprocal in the Dₙ recurrence falling back to Smith's division;
+    - a denominator of aₙ or bₙ not finite: an infinite factor (Dₙ/m + n/x, m·Dₙ + n/x) or a numerator past DBL_MAX
+      makes its denominator non-finite too, and for x ≥ 10⁻⁵⁰ the x-only values are always finite. A first cut also
+      tested the factors, the numerators and the x-only values each step; dropping those took the cues' cost from
+      11–15 % of a Mie call to about 4 %;
+    - a coefficient part outside [2^-511, 2^511): its squares and products in the sums may leave the range (g's
+      aₙ·bₙ underflows below x ≈ 10⁻³⁸).
+  - **The boundary.** Below x = 10⁻⁵⁰ no cue counts and Rust's chain runs to its end, refusals included: the tiny-x
+    limit the user kept, made exact here. The double 1e-50 is 10⁻⁵⁰'s nearest double above it, with none between,
+    so `x >= 1e-50` is the exact test. At and above 10⁻⁵⁰ every x-only value is finite (χ₄ ≤ about 10²⁰²), so a
+    flagged overflow is m-driven. A first cut flagged x-driven overflows at x = 10⁻¹⁰⁰ and would have changed
+    Rust's tiny-x results; the boundary is what keeps them.
+  - **A bug found by the boundary rows.** Below 10⁻⁵⁰ the Dₙ loop's fallback still stopped the series from running,
+    and the flag was then cleared, so the port returned sums it had never computed (4 failing rows). The series now
+    skips only when the unbounded path will run.
+- **The model** (`validate.py`): `sc_mie_ux` is the unbounded path in exact Fractions with Rust's x-only doubles, and
+  `sc_mie(r18)` mirrors the cues on Rust's doubles and takes it where they fire. `validate_scattering` now proves the
+  cues: on every Mie row with x ≥ 10⁻⁵⁰ that they keep on Rust's chain and whose recurrence starts at most 300 terms up
+  (`SC_UX_PROOF`), the unbounded path must give Rust's reading, bit for bit. A one-off run without the 300 cap checked
+  all 957 such rows, 0 different. It first found two: x = 10⁻⁵⁰ with an ordinary m, where g's aₙ·bₙ underflowed. That
+  gave the coefficient cue. Mie rows go to the mapping file or the corrected oracle, never both.
+- **The oracle**: `scattering.tsv` gains 87 rows after every earlier row (`mie_tiny_m_edges`; the old file an exact
+  prefix):
+  - 13 indices at x = 10⁻¹⁰, 0.1, 1, 5 and 20: from 10⁻¹⁵⁰ down to 5·10⁻³²⁴, the silent zone (2·10⁻¹⁵⁴ to
+    1.6·10⁻¹⁵³), tiny imaginary parts (1.33 − 10⁻³⁰⁰ i, 0 − 10⁻²⁰⁰ i);
+  - 12 rows at x = 0.1, 0.01 and 0.001 where (Dₙ/m)·χ₄ passes DBL_MAX while the Dₙ recurrence stays in range, so
+    only the denominator cue sees them (at x = 1 the Dₙ recurrence overflows too);
+  - x = 10⁻⁵⁰, the double below it, 10⁻⁴⁰ and 10⁻⁶⁰ with tiny and ordinary indices.
+- **Mappings**: `scattering.adr.tsv` holds 495 rows: row 18's 394 (Rayleigh's 325 and Mie's 69), row 13's 93, row
+  17's 8. Of the 69 Mie rows Rust refused 40 ("over/underflowed"), divided by zero on 4, and computed 25 differently:
+  the silent zone at every x, and the tiny-x underflow of g at x = 10⁻⁵⁰.
+- **Mutations**, each run through the parity harness. Six of ten were caught:
+  - the coefficient cue off: 3 failing rows; the input cues off: 4; the boundary moved: 4;
+  - the denominator cue off: 11, once the rows only it sees were added (a first try at disabling it tested fd != fd,
+    which an infinite denominator's NaN still trips);
+  - g without its factor 2: 77; complex_recip's (−im) dropped: 21.
+
+  The four others:
+  - the Dₙ recurrence's fallback cue and m's box cue are redundant in practice: every row they would catch also
+    trips |mx|², an overflow or the coefficient cue. They stay as cheap insurance;
+  - Smith's branch differs from Rust's only at a tie |b.re| = |b.im|;
+  - q_abs from the rounded doubles equals the unbounded difference above 10⁻⁵⁰, where Q is normal.
+- **Tests**:
+  - `cyrius_mie_errors`: m = 10⁻³²⁰ at x = 10⁻¹⁰ now computes, Q_sca at its Rayleigh limit (8/3)x⁴|K|² with K → −1/2,
+    6.67·10⁻⁴¹ (Rust divided by zero); the leak check's refusal is x = 10⁻¹⁰⁰'s;
+  - `cyrius_mie_row18` (4 assertions, 116 in the file): x = 1 at m = 10⁻²⁰⁰ (Rust refused) and at m = 10⁻¹⁵³ (Rust's
+    silent a₄ = 0), x = 10⁻⁵⁰ at m = 10⁻²⁰⁰ computed, and the double below 10⁻⁵⁰ still refused.
+- **Benchmarks.** The cues cost each series step a few compares: four denominators' finiteness and the coefficients'
+  exponent fields.
+  - A full bench interleaved against 2d-2's tree (three rounds, load 1.6 to 2.2): `scattering/mie_x1_real` 1.92 →
+    2.06 µs (+7 %), `mie_x10_real` 3.78 → 4.11 µs (+9 %), `mie_x50_m3_5` 12.07 → 12.86 µs (+7 %); every other row
+    within the load's noise (median ratio 1.00 over 81). The record takes the three new medians.
+  - A first form, which also tested the factors, the numerators and the x-only values each step, cost 11 to 15 %.
+  - The unbounded path itself is about 8 times the fast one on the rows that take it: 15.8 µs at x = 1,
+    m = 10⁻²⁰⁰, for the fast path's 2.0 µs at m = 1.5.
+- **Result, every target** (x86_64 ELF, x86_64 PE, aarch64): **16 modules, 0 failing; 493,367 ok, 0 failed, 0
+  measured, 0 pending, 76,969 accepted (ADR 01: 29,441; ADR 0002: 47,528)** over 570,336 rows; **all 380 digests
+  equal**. Mie's digest changed; the other 379 are unchanged. `scattering.tcyr` passes on all three. The gate is clean
+  (17 steps, no warnings; execution coverage 288 of 288 functions).

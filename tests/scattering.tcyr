@@ -395,12 +395,14 @@ fn cyrius_tests(): i64 {
     var t7, v7 = bj_mie(x100, BjComplex_new(1.5, 0.0), &r);
     assert(reason_ends("invalid parameter: Mie series over/underflowed for x = 0.0000000000", "01, m = 1.5+0i") == 1,
       "the series overflows at x = 1e-100, x written out in Rust's Display form");
+    assert(r.a == 0 && r.a_len == 0 && r.b == 0, "out untouched by every refusal");
+    # m = 1e-320 at x = 1e-10: Rust's mx underflowed to 0 and divided by it; with an unbounded exponent (ADR 0002 row
+    # 18, M3 part 2d-2b) the sphere computes, Q_sca at its Rayleigh limit (8/3)x⁴|K|², K → −1/2.
     var sub: f64 = _bj_from_bits(0x00000000000007E8);
     var t8, v8 = bj_mie(0.0000000001, BjComplex_new(sub, 0.0), &r);
-    assert(is_err_result(t8) == 1 && v8 == BJ_ERR_DIVISION_BY_ZERO
-      && reason_is2("division by zero in EM calculation: complex division by zero in scattering computation", "") == 1,
-      "mx underflows to zero");
-    assert(r.a == 0 && r.a_len == 0 && r.b == 0, "out untouched by every refusal");
+    var q8: f64 = r.q_sca;
+    assert(is_ok(t8) == 1 && _bj_bits(q8) == 0x37973ADD89F474CE, "m = 1e-320: Q_sca = 6.67e-41 (Rust divided by 0)");
+    BjMieResult_free(&r);
     var t9, v9 = bj_rayleigh_cross_section(-1.0, 0.0000005, BjComplex_new(1.5, 0.0));
     assert(reason_is2("invalid parameter: radius must be positive and finite, got -1", "") == 1, "a radius");
     var t10, v10 = bj_rayleigh_efficiency(nan, BjComplex_new(1.5, 0.0));
@@ -430,7 +432,7 @@ fn cyrius_tests(): i64 {
     for (var k = 0; k < 1000; k = k + 1) {
         if (mie_ok(5.0, 1.5, -0.01, &r) != 1) { bad = bad + 1; }
         BjMieResult_free(&r);
-        if (mie_refused(0.0000000001, sub, 0.0) != 1) { bad = bad + 1; }
+        if (mie_refused(x100, 1.5, 0.0) != 1) { bad = bad + 1; }
     }
     assert_eq(bad, 0, "2000 calls, each as expected");
     assert_eq(_fl_arena_pos, fl0, "the freelist's arena did not grow");
@@ -494,6 +496,32 @@ fn cyrius_row17(): i64 {
     assert(mie_ok(x, re, im, &r) == 1 && r.a_len == 4905,
       "x = 4834.4, m = 367.9 − 2035.5i: (|m|·x)² is 0.0019 below 10¹⁴, accepted (its rounded |m|·x is 10⁷ + 1 ulp)");
     BjMieResult_free(&r);
+    return 0;
+}
+
+# ADR 0002 row 18 (M3 part 2d-2b, the user's answer of 2026-11-14): Mie's tiny m, its m-dependent chain with an
+# unbounded exponent; below x = 10⁻⁵⁰ Rust's chain stays.
+fn cyrius_mie_row18(): i64 {
+    test_group("cyrius_mie_row18 (ADR 0002 row 18)");
+    var r: BjMieResult = BjMieResult_new();
+    var e200: f64 = _bj_from_bits(0x16687E92154EF7AC);
+    var t1, v1 = bj_mie(1.0, BjComplex_new(e200, 0.0), &r);
+    var q1: f64 = r.q_sca;
+    assert(is_ok(t1) == 1 && _bj_bits(q1) == 0x3FD1B7EE012F4A8C, "x = 1, m = 1e-200: Q_sca = 0.27685 (Rust refused)");
+    BjMieResult_free(&r);
+    var t2, v2 = bj_mie(1.0, BjComplex_new(_bj_from_bits(0x202AD0CC33744E4B), 0.0), &r);
+    var q2: f64 = r.q_sca;
+    assert(is_ok(t2) == 1 && _bj_bits(q2) == 0x3FD1B7EE012F4A8D,
+      "x = 1, m = 1e-153: Q_sca = 0.2768511783189432 (Rust's (Dₙ/m)·χ₄ overflowed: a₄ = 0, Q_sca 0.2768511768752622)");
+    BjMieResult_free(&r);
+    var x50: f64 = _bj_from_bits(0x358DEE7A4AD4B81F);
+    var t3, v3 = bj_mie(x50, BjComplex_new(e200, 0.0), &r);
+    var q3: f64 = r.q_sca;
+    assert(is_ok(t3) == 1 && _bj_bits(q3) == 0x166054616389FA73, "x = 1e-50 (≥ 10⁻⁵⁰), m = 1e-200: computed");
+    BjMieResult_free(&r);
+    var below: f64 = _bj_from_bits(0x358DEE7A4AD4B81E);
+    assert(mie_refused(below, e200, 0.0) == 1, "x one ulp below 10⁻⁵⁰: Rust's chain and its refusal stay");
+    if (v1 == 7 || v2 == 7 || v3 == 7) { println("."); }
     return 0;
 }
 
@@ -615,6 +643,7 @@ fn main(): i64 {
     cyrius_row13();
     cyrius_row17();
     cyrius_rayleigh_row18();
+    cyrius_mie_row18();
     cyrius_json();
     return assert_summary();
 }

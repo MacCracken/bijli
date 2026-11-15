@@ -29,6 +29,10 @@
 //! at the edges of the port's boxes and far past them, indices at the box's edges and where m² over- or underflows
 //! or K cancels, cosines where 1 + cos²θ passes DBL_MAX, and the angular intensity where d², σ/d² or its product by P
 //! leaves the range.
+//!
+//! M3 part 2d-2b (ADR 0002 row 18, the user's answer of 2026-11-14) appends `mie`'s tiny-m grid: indices from 10⁻¹⁵⁰
+//! down to subnormal (where Dₙ/m or (Dₙ/m)·χₙ overflows, or mx underflows), tiny imaginary parts, at five sizes, and
+//! both sides of x = 10⁻⁵⁰, below which Rust's chain stays.
 
 use crate::grids::{Rng, specials};
 use crate::m_field::res_f;
@@ -343,6 +347,7 @@ pub fn emit() -> Module {
     round_once_edges(r);
     threshold_edges(r);
     rayleigh_edges(r);
+    mie_tiny_m_edges(r);
     rows.m
 }
 
@@ -446,5 +451,42 @@ fn rayleigh_edges(r: &mut Rows) {
         r.row("scattering::rayleigh_angular_intensity", Class::A, &ins, || {
             res_f(rayleigh_angular_intensity(black_box(sg), black_box(d), black_box(c)))
         });
+    }
+}
+
+/// M3 part 2d-2b (ADR 0002 row 18, the user's answer of 2026-11-14): `mie` where its m-dependent chain leaves the range.
+fn mie_tiny_m_edges(r: &mut Rows) {
+    let ms = [
+        (1e-150, 0.0),
+        (1e-154, 0.0),
+        (2e-154, 0.0),
+        (1e-153, 0.0),
+        (1.6e-153, 0.0),
+        (1e-160, 0.0),
+        (1e-200, -1e-200),
+        (1e-300, 0.0),
+        (5e-324, 0.0),
+        (0.0, -1e-200),
+        (1.33, -1e-300),
+        (1.33, -1e-160),
+        (1e-100, -1e-120),
+    ];
+    for &x in &[1e-10, 0.1, 1.0, 5.0, 20.0] {
+        for &m in &ms {
+            r.mie(x, m);
+        }
+    }
+    // (Dₙ/m)·χ₄ past DBL_MAX while the Dₙ recurrence stays in range: only the denominator cue sees these
+    for &x in &[0.1, 0.01, 0.001] {
+        for &m in &[(5e-151, 0.0), (1e-149, 0.0), (1e-148, 0.0), (1e-147, 0.0)] {
+            r.mie(x, m);
+        }
+    }
+    // both sides of x = 10⁻⁵⁰ (the double 1e-50 lies just above it): below, Rust's chain stays
+    let x50 = 1e-50_f64;
+    for &x in &[x50, x50.next_down(), 1e-40, 1e-60] {
+        for &m in &[(1e-200, 0.0), (1.5, 0.0), (1.5, -0.01), (1e-120, 0.0)] {
+            r.mie(x, m);
+        }
     }
 }

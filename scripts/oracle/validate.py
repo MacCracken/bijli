@@ -4126,8 +4126,132 @@ def sc_terms(x, mx_abs, P):
     return n_max, n_start
 
 
-def sc_mie(x, mre, mim, P, port=False):
-    """mie's outputs as a row writes them (m_scattering.rs's mie_toks); port=True for the exact |m|·x limit."""
+def sc_x_only(x, n_max, P):
+    """Mie's x-only doubles as Rust computes them: per n = 1…n_max, (ψₙ, χₙ, ψₙ₋₁, χₙ₋₁, n/x)."""
+    sin_x, cos_x = P["sin"](x), P["cos"](x)
+    psi_prev = sin_x
+    if x < 0.1:
+        x2 = x * x
+        psi_curr = fdiv(x2, 3.0) * (1.0 - fdiv(x2, 10.0) * (1.0 - fdiv(x2, 28.0) * (1.0 - fdiv(x2, 54.0)
+                                                                                 * (1.0 - fdiv(x2, 88.0)))))
+    else:
+        psi_curr = fdiv(sin_x, x) - cos_x
+    chi_prev = cos_x
+    chi_curr = fdiv(cos_x, x) + sin_x
+    out = []
+    for n in range(1, n_max + 1):
+        if n > 1:
+            fct = fdiv(float(2 * n - 1), x)
+            psi_prev, psi_curr = psi_curr, fct * psi_curr - psi_prev
+            chi_prev, chi_curr = chi_curr, fct * chi_curr - chi_prev
+        out.append((psi_curr, chi_curr, psi_prev, chi_prev, fdiv(float(n), x)))
+    return out
+
+
+class ScUnmodeled(Exception):
+    """A Mie row whose unbounded path meets a non-finite x-only double, which the model does not follow."""
+
+
+def sc_mie_ux(x, mre, mim, n_max, n_start, P):
+    """Mie's series with every m-dependent operation to 53 bits and an unbounded exponent (M3 part 2d-2b, row 18):
+    complex_recip's first branch, Smith's division on its branch decided exactly, the x-only ψₙ, χₙ, n/x, 2/x² and the
+    n-only weights as Rust's doubles. Returns (q_sca, q_ext, q_abs, g, a, b) as doubles, each rounded once, or raises
+    ScDivZero."""
+    def neg(a):
+        return -a[0], not a[1]
+
+    def umul(a, b):
+        return (ux_sub(ux_mul(a[0], b[0]), ux_mul(a[1], b[1])), ux_add(ux_mul(a[0], b[1]), ux_mul(a[1], b[0])))
+
+    def ureal(a, k):
+        return ux_mul(a[0], k), ux_mul(a[1], k)
+
+    def uadd(a, b, sub=False):
+        op = ux_sub if sub else ux_add
+        return op(a[0], b[0]), op(a[1], b[1])
+
+    def urecip(a):
+        d = ux_add(ux_mul(a[0], a[0]), ux_mul(a[1], a[1]))
+        if d[0] == 0:
+            raise ScDivZero
+        inv = ux_div(ux(1.0), d)
+        return ux_mul(a[0], inv), ux_mul(neg(a[1]), inv)
+
+    def udiv(a, b):
+        if b[0][0] == 0 and b[1][0] == 0:
+            raise ScDivZero
+        if abs(b[0][0]) >= abs(b[1][0]):
+            r = ux_div(b[1], b[0])
+            den = ux_add(b[0], ux_mul(b[1], r))
+            return (ux_div(ux_add(a[0], ux_mul(a[1], r)), den), ux_div(ux_sub(a[1], ux_mul(a[0], r)), den))
+        r = ux_div(b[0], b[1])
+        den = ux_add(ux_mul(b[0], r), b[1])
+        return (ux_div(ux_add(ux_mul(a[0], r), a[1]), den), ux_div(ux_sub(ux_mul(a[1], r), a[0]), den))
+
+    xo = sc_x_only(x, n_max, P)
+    if not all(math.isfinite(t) for row in xo for t in row) or not math.isfinite(fdiv(2.0, x * x)):
+        raise ScUnmodeled
+    m = (ux(mre), ux(mim))
+    iz = urecip(ureal(m, ux(x)))
+    d_mx = [None] * (n_max + 1)
+    d = (ux(0.0), ux(0.0))
+    for n in range(n_start, 0, -1):
+        ratio = ureal(iz, ux(float(n)))
+        d = uadd(ratio, urecip(uadd(d, ratio)), sub=True)
+        if n - 1 <= n_max:
+            d_mx[n - 1] = d
+    inv_m = urecip(m)
+    sca = ext = gs = (Fraction(0), False)
+    a_c, b_c = [], []
+    a_prev = b_prev = None
+    for n in range(1, n_max + 1):
+        psi_c, chi_c, psi_p, chi_p, nox = xo[n - 1]
+        dn = d_mx[n]
+        coefs = []
+        for f in (uadd(umul(dn, inv_m), (ux(nox), ux(0.0))), uadd(umul(m, dn), (ux(nox), ux(0.0)))):
+            num = (ux_sub(ux_mul(f[0], ux(psi_c)), ux(psi_p)), ux_sub(ux_mul(f[1], ux(psi_c)), ux(0.0)))
+            den = uadd(umul(f, (ux(psi_c), ux(chi_c))), (ux(psi_p), ux(chi_p)), sub=True)
+            coefs.append(udiv(num, den))
+        a_n, b_n = coefs
+        nf = float(n)
+        w = ux(2.0 * nf + 1.0)
+        sq = ux_add(ux_add(ux_mul(a_n[0], a_n[0]), ux_mul(a_n[1], a_n[1])),
+                    ux_add(ux_mul(b_n[0], b_n[0]), ux_mul(b_n[1], b_n[1])))
+        sca = ux_add(sca, ux_mul(w, sq))
+        ext = ux_add(ext, ux_mul(w, ux_add(a_n[0], b_n[0])))
+        c1 = ux(fdiv(2.0 * nf + 1.0, nf * (nf + 1.0)))
+        gs = ux_add(gs, ux_mul(c1, ux_add(ux_mul(a_n[0], b_n[0]), ux_mul(a_n[1], b_n[1]))))
+        if n > 1:
+            c2 = ux(fdiv((nf - 1.0) * (nf + 1.0), nf))
+            t = ux_add(ux_add(ux_add(ux_mul(a_prev[0], a_n[0]), ux_mul(a_prev[1], a_n[1])),
+                              ux_mul(b_prev[0], b_n[0])), ux_mul(b_prev[1], b_n[1]))
+            gs = ux_add(gs, ux_mul(c2, t))
+        a_prev, b_prev = a_n, b_n
+        a_c.append((ux_fin(a_n[0]), ux_fin(a_n[1])))
+        b_c.append((ux_fin(b_n[0]), ux_fin(b_n[1])))
+    sc = ux(fdiv(2.0, x * x))
+    q_sca = ux_fin(ux_mul(sc, sca, lambda t: t))
+    q_ext = ux_fin(ux_mul(sc, ext, lambda t: t))
+    q_abs = ux_fin(ux_sub(ux_mul(sc, ext), ux_mul(sc, sca), lambda t: t))
+    g = ux_fin(ux_div((2 * gs[0], gs[1]), sca, lambda t: t)) if sca[0] > 0 else 0.0
+    return q_sca, q_ext, q_abs, g, a_c, b_c
+
+
+def sc_mie_flag_inputs(x, mre, mim) -> bool:
+    """The port's input cues for Mie's unbounded path: a nonzero part of m outside [2^-511, 2^511), or |m|² or |mx|²
+    (Rust's doubles) not normal."""
+    def box(t):
+        return t == 0 or 2.0 ** -511 <= abs(t) < 2.0 ** 511
+    qm = mre * mre + mim * mim
+    mxr, mxi = mre * x, mim * x
+    qz = mxr * mxr + mxi * mxi
+    return not (box(mre) and box(mim) and sc_normal(qm) and sc_normal(qz))
+
+
+def sc_mie(x, mre, mim, P, port=False, r18=False, force=False):
+    """mie's outputs as a row writes them (m_scattering.rs's mie_toks); port=True for the exact |m|·x limit, r18=True
+    for the port's unbounded path where Rust's m-dependent chain leaves the range (M3 part 2d-2b), its cues mirrored
+    on Rust's doubles; force=True takes that path whatever the cues (the guard's proof)."""
     mx_abs, bad = sc_mie_checks(x, mre, mim, P, port)
     if bad:
         return bad
@@ -4135,16 +4259,25 @@ def sc_mie(x, mre, mim, P, port=False):
     mx = (mre * x, mim * x)
     n_max, n_start = sc_terms(x, mx_abs, P)
     dz = dz_err("complex division by zero in scattering computation")
+    r18 = r18 and x >= 1e-50                        # below 10⁻⁵⁰ Rust's chain stays (the user's tiny-x limit)
+    flag = r18 and (force or sc_mie_flag_inputs(x, mre, mim))
     try:
+        if flag:
+            raise ScDivZero                             # straight to the unbounded path
         inv_mx = sc_recip(mx)
         d_mx = [(0.0, 0.0)] * (n_max + 1)
         d = (0.0, 0.0)
         for n in range(n_start, 0, -1):
             ratio = (inv_mx[0] * n, inv_mx[1] * n)
-            q = sc_recip((d[0] + ratio[0], d[1] + ratio[1]))
+            sm = (d[0] + ratio[0], d[1] + ratio[1])
+            if r18 and not sc_normal(sm[0] * sm[0] + sm[1] * sm[1]) and not (sm[0] == 0.0 and sm[1] == 0.0):
+                flag = True
+            q = sc_recip(sm)
             d = (ratio[0] - q[0], ratio[1] - q[1])
             if n - 1 <= n_max:
                 d_mx[n - 1] = d
+        if flag:
+            raise ScDivZero
         sin_x, cos_x = P["sin"](x), P["cos"](x)
         psi_prev = sin_x
         if x < 0.1:
@@ -4170,11 +4303,19 @@ def sc_mie(x, mre, mim, P, port=False):
             af = sc_mul(dn, inv_m)
             af = (af[0] + nox, af[1] + 0.0)
             ax = sc_mul(af, xi_c)
-            a_n = sc_div((af[0] * psi_curr - psi_prev, af[1] * psi_curr - 0.0), (ax[0] - xi_p[0], ax[1] - xi_p[1]))
+            an, ad = (af[0] * psi_curr - psi_prev, af[1] * psi_curr - 0.0), (ax[0] - xi_p[0], ax[1] - xi_p[1])
             bf = sc_mul(m, dn)
             bf = (bf[0] + nox, bf[1] + 0.0)
             bx = sc_mul(bf, xi_c)
-            b_n = sc_div((bf[0] * psi_curr - psi_prev, bf[1] * psi_curr - 0.0), (bx[0] - xi_p[0], bx[1] - xi_p[1]))
+            bn, bd = (bf[0] * psi_curr - psi_prev, bf[1] * psi_curr - 0.0), (bx[0] - xi_p[0], bx[1] - xi_p[1])
+            if r18 and all(math.isfinite(t) for t in (psi_curr, psi_prev, chi_curr, chi_prev, nox)) and not all(
+                    math.isfinite(t) for t in (*af, *bf, *an, *ad, *bn, *bd)):
+                flag = True
+            a_n = sc_div(an, ad)
+            b_n = sc_div(bn, bd)
+            if r18 and all(math.isfinite(t) for t in (psi_curr, psi_prev, chi_curr, chi_prev, nox)) and not all(
+                    t == 0 or 2.0 ** -511 <= abs(t) < 2.0 ** 511 for t in (*a_n, *b_n)):
+                flag = True
             nf = float(n)
             w = 2.0 * nf + 1.0
             sca = sca + w * ((a_n[0] * a_n[0] + a_n[1] * a_n[1]) + (b_n[0] * b_n[0] + b_n[1] * b_n[1]))
@@ -4186,12 +4327,21 @@ def sc_mie(x, mre, mim, P, port=False):
             a_prev, b_prev = a_n, b_n
             a_c.append(a_n)
             b_c.append(b_n)
+        if flag:
+            raise ScDivZero
     except ScDivZero:
-        return dz
-    scale = fdiv(2.0, x * x)
-    q_sca, q_ext = scale * sca, scale * ext
-    q_abs = q_ext - q_sca
-    g = fdiv(2.0 * gs, sca) if sca > 0.0 else 0.0
+        if not flag:
+            return dz
+        try:
+            q_sca, q_ext, q_abs, g, a_c, b_c = sc_mie_ux(x, mre, mim, n_max, n_start, P)
+        except ScDivZero:
+            return dz
+        flag = "done"
+    if flag != "done":
+        scale = fdiv(2.0, x * x)
+        q_sca, q_ext = scale * sca, scale * ext
+        q_abs = q_ext - q_sca
+        g = fdiv(2.0 * gs, sca) if sca > 0.0 else 0.0
     if not (math.isfinite(q_sca) and math.isfinite(q_ext) and math.isfinite(g)):
         return ip_err(f"Mie series over/underflowed for x = {rust_display(x)}, m = {cx_fmt(mre, mim)}")
     n = len(a_c)
@@ -4272,7 +4422,7 @@ def sc_eval(fn, v, P, cx14=False, r13=False, r17=False, r18=False):
 
     dz = dz_err("complex division by zero in scattering computation")
     if fn == "scattering::mie":
-        return sc_mie(v[0], v[1], v[2], P, r17)
+        return sc_mie(v[0], v[1], v[2], P, r17, r18)
     if fn == "scattering::cross_section_from_efficiency":
         if r13 and math.isfinite(v[0]) and math.isfinite(v[1]):
             return [("f", rn_mono([v[0], SC_PI, v[1], v[1]], []))]
@@ -4333,6 +4483,20 @@ def sc_eval(fn, v, P, cx14=False, r13=False, r17=False, r18=False):
     return None
 
 
+SC_R18_CACHE = {}
+
+
+def sc_mie_r18(v):
+    """A mie row's port reading where its m-dependent chain leaves the range (the unbounded path, M3 part 2d-2b, on
+    MPFR's primitives), else None; cached, since the mapping and correction passes both ask."""
+    k = tuple(f_to_bits(t) for t in v)
+    if k not in SC_R18_CACHE:
+        base = sc_mie(v[0], v[1], v[2], SC_P_MPFR, True)
+        port = sc_mie(v[0], v[1], v[2], SC_P_MPFR, True, True)
+        SC_R18_CACHE[k] = None if toks_same(base, port) else port
+    return SC_R18_CACHE[k]
+
+
 def sc_row17(v) -> bool:
     """A mie row whose checks the exact |m|·x limit decides otherwise than the rounded one (ADR 0002 row 17)."""
     return sc_mie_checks(*v, SC_P_MPFR, port=True)[1] != sc_mie_checks(*v, SC_P_MPFR)[1]
@@ -4347,10 +4511,23 @@ def sc_lines(path: Path):
         yield fn, cls, ins, outs, [b for _k, b in toks]
 
 
+SC_UX_PROOF = 300         # the Mie rows whose D_n recurrence starts at most here are proved against the unbounded path
+
+
 def validate_scattering(path: Path) -> list:
     """scattering.rs transcribed (sc_eval) on Rust's primitives, against every row; a Mie row past SC_PY_START is
-    checked by its primitives alone (sc_prims_agree), as its correction would be."""
+    checked by its primitives alone (sc_prims_agree), as its correction would be. Mie's guard (M3 part 2d-2b): on
+    every row with x ≥ 10⁻⁵⁰ whose cues keep Rust's chain and whose recurrence starts at most SC_UX_PROOF terms up,
+    the unbounded path must give Rust's reading, bit for bit."""
     errs = []
+    for n, (fn, _cls, _ins, _outs, v) in enumerate(sc_lines(path), 1):
+        if fn != "scattering::mie" or sc_big(*v) or v[0] < 1e-50:
+            continue
+        mx_abs, bad = sc_mie_checks(*v, SC_P_MPFR, True)
+        if bad or sc_terms(v[0], mx_abs, SC_P_MPFR)[1] > SC_UX_PROOF or sc_mie_r18(v) is not None:
+            continue
+        if not toks_same(sc_mie(*v, SC_P_MPFR, True), sc_mie(*v, SC_P_MPFR, True, True, True)):
+            errs.append(f"scattering row {n}: mie{tuple(v)} keeps Rust's chain where the unbounded path differs")
     for n, (fn, _cls, _ins, outs, v) in enumerate(sc_lines(path), 1):
         if fn == "scattering::mie" and sc_big(*v):
             if not sc_prims_agree(*v):
@@ -4371,7 +4548,7 @@ def scattering_corrections(path: Path):
     def fixes(_rows):
         out = []
         for fn, cls, ins, outs, v in sc_lines(path):
-            if cls != "C" or (fn == "scattering::mie" and (sc_big(*v) or sc_row17(v))):
+            if cls != "C" or (fn == "scattering::mie" and (sc_big(*v) or sc_row17(v) or sc_mie_r18(v) is not None)):
                 continue
             want = sc_eval(fn, v, SC_P_MPFR)
             old = wave_toks([parse_tok(x) for x in outs.split(" ")])
@@ -4391,6 +4568,11 @@ def scattering_adr_rows(path: Path) -> list:
     out = []
     for fn, cls, ins, outs, v in sc_lines(path):
         if fn == "scattering::mie":
+            if not sc_big(*v) and not sc_row17(v):
+                port = sc_mie_r18(v)
+                if port is not None:
+                    out.append((fn, ins, wire(port), "18", f"oracle {outs[:200]}; ADR 0002 row 18"))
+                continue
             if not sc_row17(v):
                 continue
             port = sc_mie_checks(*v, SC_P_MPFR, port=True)[1]

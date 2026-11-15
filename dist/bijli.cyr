@@ -23808,7 +23808,9 @@ fn _bj_sc_terms(x: f64, mx_abs: f64): (i64, i64) {
 
 # Dₙ(mx) = ψₙ′(mx)/ψₙ(mx) for n = 0…n_max into d (n_max + 1 BjComplex), by the downward recurrence
 # D_{n−1} = n/z − 1/(Dₙ + n/z) from D_{n_start} = 0, z = mx, on f64 locals. 0, or the DivisionByZero code recorded.
-fn _bj_sc_lderiv(imr: f64, imi: f64, n_max, n_start, d): i64 {
+# fl[0] := 1 where a reciprocal falls back to Smith's division (|Dₙ + n/z|² not normal: a range edge, Mie's
+# unbounded path's cue).
+fn _bj_sc_lderiv(imr: f64, imi: f64, n_max, n_start, d, fl: *i64): i64 {
     var lo: f64 = _BJ_SC_MIN_NORMAL;
     var hi: f64 = _BJ_SC_MAX_FINITE;
     var dr: f64 = 0.0;
@@ -23831,6 +23833,7 @@ fn _bj_sc_lderiv(imr: f64, imi: f64, n_max, n_start, d): i64 {
             var vr, vi = _bj_vx_cdiv(1.0, 0.0, sr, si);
             qr = vr;
             qi = vi;
+            fl[0] = 1;
         }
         dr = rr - qr;
         di = ri - qi;
@@ -23846,8 +23849,11 @@ fn _bj_sc_lderiv(imr: f64, imi: f64, n_max, n_start, d): i64 {
 # The Riccati–Bessel loop: aₙ and bₙ for n = 1…n_max into a and b (n_max BjComplex each), and the sums for Q_sca,
 # Q_ext and g into sums[0..3]. ψₙ(x) = x·jₙ(x) and χₙ(x) = −x·yₙ(x) by upward recurrence, ξₙ = ψₙ + jχₙ; Rust's
 # order of operations throughout (Bohren & Huffman eq. 4.88: aₙ uses Dₙ/m + n/x, bₙ uses m·Dₙ + n/x). 0, or the
-# DivisionByZero code recorded.
-fn _bj_sc_series(x: f64, m: *f64, d, n_max, a, b, sums: *f64): i64 {
+# DivisionByZero code recorded. fl[0] := 1 at a range edge of the m-dependent chain: a denominator of aₙ or bₙ not
+# finite, or a coefficient part outside [2^-511, 2^511) and not 0 (Mie's unbounded path's cue, read only for
+# x ≥ 10⁻⁵⁰, where the x-only ψₙ, χₙ and n/x are finite; the x-only recurrences keep Rust's chain and its tiny-x
+# limit).
+fn _bj_sc_series(x: f64, m: *f64, d, n_max, a, b, sums: *f64, fl: *i64): i64 {
     var sin_x, cos_x = _bj_sin_cos(x);
     var sx: f64 = sin_x;
     var cx: f64 = cos_x;
@@ -23894,10 +23900,6 @@ fn _bj_sc_series(x: f64, m: *f64, d, n_max, a, b, sums: *f64): i64 {
         var ani: f64 = afi * psi_curr;
         var adr: f64 = afr * psi_curr - afi * chi_curr - psi_prev;
         var adi: f64 = afr * chi_curr + afi * psi_curr - chi_prev;
-        if (adr == 0.0 && adi == 0.0) { return _bj_sc_dz(); }
-        var ar, ai = _bj_vx_cdiv(anr, ani, adr, adi);
-        var a_r: f64 = ar;
-        var a_i: f64 = ai;
         var bfr: f64 = mr * dnr - mi * dni + nox;
         var bfi0: f64 = mr * dni + mi * dnr;
         var bfi: f64 = bfi0 + 0.0;
@@ -23905,10 +23907,29 @@ fn _bj_sc_series(x: f64, m: *f64, d, n_max, a, b, sums: *f64): i64 {
         var bni: f64 = bfi * psi_curr;
         var bdr: f64 = bfr * psi_curr - bfi * chi_curr - psi_prev;
         var bdi: f64 = bfr * chi_curr + bfi * psi_curr - chi_prev;
+        # a denominator not finite: a factor or a product past DBL_MAX (an infinite factor, or a numerator past it,
+        # makes its denominator non-finite too); the x-only values are finite for x ≥ 10⁻⁵⁰, the only x the cue serves
+        var fd: f64 = (adr - adr) + (adi - adi) + (bdr - bdr) + (bdi - bdi);
+        if (fd != 0.0) { fl[0] = 1; }
+        if (adr == 0.0 && adi == 0.0) { return _bj_sc_dz(); }
+        var ar, ai = _bj_vx_cdiv(anr, ani, adr, adi);
+        var a_r: f64 = ar;
+        var a_i: f64 = ai;
         if (bdr == 0.0 && bdi == 0.0) { return _bj_sc_dz(); }
         var br, bi = _bj_vx_cdiv(bnr, bni, bdr, bdi);
         var b_r: f64 = br;
         var b_i: f64 = bi;
+        # a coefficient part outside [2^-511, 2^511) (and not 0): its squares and products in the sums may leave the
+        # range (g's aₙ·bₙ underflows for x below about 10⁻³⁸)
+        var e1 = (load64(&a_r) >> 52) & 0x7FF;
+        var e2 = (load64(&a_i) >> 52) & 0x7FF;
+        var e3 = (load64(&b_r) >> 52) & 0x7FF;
+        var e4 = (load64(&b_i) >> 52) & 0x7FF;
+        var lo = (e1 - 512) | (e2 - 512) | (e3 - 512) | (e4 - 512);
+        var hi = (1533 - e1) | (1533 - e2) | (1533 - e3) | (1533 - e4);
+        if ((lo | hi) < 0) {
+            if (_bj_vx_box1(a_r) + _bj_vx_box1(a_i) + _bj_vx_box1(b_r) + _bj_vx_box1(b_i) != 4) { fl[0] = 1; }
+        }
         var w: f64 = 2.0 * nf + 1.0;
         sca = sca + w * (a_r * a_r + a_i * a_i + (b_r * b_r + b_i * b_i));
         ext = ext + w * (a_r + b_r);
@@ -23931,6 +23952,350 @@ fn _bj_sc_series(x: f64, m: *f64, d, n_max, a, b, sums: *f64): i64 {
     sums[0] = sca;
     sums[1] = ext;
     sums[2] = gs;
+    return 0;
+}
+
+# ── Mie with an unbounded exponent (M3 part 2d-2b, ADR 0002 row 18, the user's answer of 2026-11-14) ─────────────────
+# Where the m-dependent chain leaves the range, Rust's Mie overflows or falls back: for |m| below about 10⁻¹⁵⁴ at x = 1,
+# Dₙ/m passes DBL_MAX and the series is refused (or, just above, (Dₙ/m)·χₙ does and aₙ comes out 0), though the m → 0
+# limit is finite. There the port reruns the series with every m-dependent operation (m·x, 1/(mx), the Dₙ recurrence,
+# 1/m, both factors, the coefficients' numerators, denominators and Smith divisions, and the sums) rounded to 53 bits
+# with an unbounded exponent, each coefficient part and each output rounded once into binary64. complex_recip takes
+# its first branch, one division by |z|²: its Smith fallback only avoided the range's ends. The x-only ψₙ, χₙ, n/x,
+# 2/x² and the n-only weights stay Rust's doubles, so the tiny-x limit and the series' x-only tail are Rust's (the
+# user's answer of 2026-11-14). A complex value is two (significand, exponent) pairs: s[0], e[0] its real part and
+# s[1], e[1] its imaginary part.
+
+# 1e-50, just above 10⁻⁵⁰ (no double between): below it Rust's chain stays.
+var _BJ_SC_X_UX: f64 = 0x358DEE7A4AD4B81F;
+
+# The address a as a *i64.
+#must_use
+fn _bj_sc_i64p(a): *i64 {
+    return a;
+}
+
+# z = xr + j·xi into (s, e).
+fn _bj_sc_uset(s: *f64, e: *i64, xr: f64, xi: f64) {
+    var rs, rx = _bj_k_ux_from(xr);
+    var is, ix = _bj_k_ux_from(xi);
+    s[0] = rs;
+    e[0] = rx;
+    s[1] = is;
+    e[1] = ix;
+    return 0;
+}
+
+# a·b, hisab's re = ar·br − ai·bi and im = ar·bi + ai·br, each operation to 53 bits; o may be a or b.
+fn _bj_sc_umul(as: *f64, ae: *i64, bs: *f64, be: *i64, os: *f64, oe: *i64) {
+    var p1s, p1e = _bj_k_ux_mul(as[0], ae[0], bs[0], be[0]);
+    var p2s, p2e = _bj_k_ux_mul(as[1], ae[1], bs[1], be[1]);
+    var rs, rx = _bj_k_ux_sub(p1s, p1e, p2s, p2e);
+    var p3s, p3e = _bj_k_ux_mul(as[0], ae[0], bs[1], be[1]);
+    var p4s, p4e = _bj_k_ux_mul(as[1], ae[1], bs[0], be[0]);
+    var is, ix = _bj_k_ux_add(p3s, p3e, p4s, p4e);
+    os[0] = rs;
+    oe[0] = rx;
+    os[1] = is;
+    oe[1] = ix;
+    return 0;
+}
+
+# a·k for a real k = ks·2^ke (Rust's Complex * f64: each part times k).
+fn _bj_sc_ureal(as: *f64, ae: *i64, ks: f64, ke, os: *f64, oe: *i64) {
+    var rs, rx = _bj_k_ux_mul(as[0], ae[0], ks, ke);
+    var is, ix = _bj_k_ux_mul(as[1], ae[1], ks, ke);
+    os[0] = rs;
+    oe[0] = rx;
+    os[1] = is;
+    oe[1] = ix;
+    return 0;
+}
+
+# a + b (mode 0) or a − b (mode 1), part by part.
+fn _bj_sc_uadd(as: *f64, ae: *i64, bs: *f64, be: *i64, mode, os: *f64, oe: *i64) {
+    var bs0: f64 = bs[0];
+    var bs1: f64 = bs[1];
+    if (mode == 1) {
+        bs0 = -bs0;
+        bs1 = -bs1;
+    }
+    var rs, rx = _bj_k_ux_add(as[0], ae[0], bs0, be[0]);
+    var is, ix = _bj_k_ux_add(as[1], ae[1], bs1, be[1]);
+    os[0] = rs;
+    oe[0] = rx;
+    os[1] = is;
+    oe[1] = ix;
+    return 0;
+}
+
+# 1/a by complex_recip's first branch: |a|², its reciprocal, then (re·inv, (−im)·inv). 1 for a = 0.
+#must_use
+fn _bj_sc_urecip(as: *f64, ae: *i64, os: *f64, oe: *i64): i64 {
+    var ds, de = _bj_vx_sq2(as[0], ae[0], as[1], ae[1]);
+    if (ds == 0.0) { return 1; }
+    var vs, ve = _bj_k_ux_div(1.0, 0, ds, de);
+    var ni: f64 = -as[1];
+    var rs, rx = _bj_k_ux_mul(as[0], ae[0], vs, ve);
+    var is, ix = _bj_k_ux_mul(ni, ae[1], vs, ve);
+    os[0] = rs;
+    oe[0] = rx;
+    os[1] = is;
+    oe[1] = ix;
+    return 0;
+}
+
+# a/b by Smith's algorithm (scattering.rs's complex_div), its branch on the exact |b.re| ≥ |b.im|. 1 for b = 0.
+#must_use
+fn _bj_sc_udiv(as: *f64, ae: *i64, bs: *f64, be: *i64, os: *f64, oe: *i64): i64 {
+    var brs: f64 = bs[0];
+    var bre = be[0];
+    var bis: f64 = bs[1];
+    var bie = be[1];
+    if (brs == 0.0 && bis == 0.0) { return 1; }
+    var ars: f64 = as[0];
+    var are = ae[0];
+    var ais: f64 = as[1];
+    var aie = ae[1];
+    var abr: f64 = f64_abs(brs);
+    var abi: f64 = f64_abs(bis);
+    if (_bj_k_ux_cmp(abr, bre, abi, bie) >= 0) {
+        var qs, qe = _bj_k_ux_div(bis, bie, brs, bre);
+        var ts, te = _bj_k_ux_mul(bis, bie, qs, qe);
+        var ds, de = _bj_k_ux_add(brs, bre, ts, te);
+        var us, ue = _bj_k_ux_mul(ais, aie, qs, qe);
+        var ns, ne = _bj_k_ux_add(ars, are, us, ue);
+        var vs, ve = _bj_k_ux_mul(ars, are, qs, qe);
+        var ms, me = _bj_k_ux_sub(ais, aie, vs, ve);
+        var xs, xe = _bj_k_ux_div(ns, ne, ds, de);
+        var ys, ye = _bj_k_ux_div(ms, me, ds, de);
+        os[0] = xs;
+        oe[0] = xe;
+        os[1] = ys;
+        oe[1] = ye;
+        return 0;
+    }
+    var q2s, q2e = _bj_k_ux_div(brs, bre, bis, bie);
+    var t2s, t2e = _bj_k_ux_mul(brs, bre, q2s, q2e);
+    var d2s, d2e = _bj_k_ux_add(t2s, t2e, bis, bie);
+    var u2s, u2e = _bj_k_ux_mul(ars, are, q2s, q2e);
+    var n2s, n2e = _bj_k_ux_add(u2s, u2e, ais, aie);
+    var v2s, v2e = _bj_k_ux_mul(ais, aie, q2s, q2e);
+    var m2s, m2e = _bj_k_ux_sub(v2s, v2e, ars, are);
+    var x2s, x2e = _bj_k_ux_div(n2s, n2e, d2s, d2e);
+    var y2s, y2e = _bj_k_ux_div(m2s, m2e, d2s, d2e);
+    os[0] = x2s;
+    oe[0] = x2e;
+    os[1] = y2s;
+    oe[1] = y2e;
+    return 0;
+}
+
+# The coefficient a (or b) = (f·ψₙ − ψₙ₋₁) / (f·ξₙ − ξₙ₋₁) for the factor f, the x-only doubles ψₙ, χₙ, ψₙ₋₁, χₙ₋₁,
+# into (os, oe): Rust's (f·ψ − complex_real(ψₙ₋₁)) and (f·ξₙ − ξₙ₋₁) with an unbounded exponent. 1 for a zero
+# denominator.
+#must_use
+fn _bj_sc_ucoef(fs: *f64, fe: *i64, pc: f64, cc: f64, pp: f64, cp: f64, os: *f64, oe: *i64): i64 {
+    var ps, pe = _bj_k_ux_from(pc);
+    var ns: f64[2];
+    var ne: i64[2];
+    _bj_sc_ureal(fs, fe, ps, pe, &ns, &ne);
+    var rp: f64[2];
+    var rpe: i64[2];
+    _bj_sc_uset(&rp, &rpe, pp, 0.0);
+    _bj_sc_uadd(&ns, &ne, &rp, &rpe, 1, &ns, &ne);
+    var xc: f64[2];
+    var xce: i64[2];
+    _bj_sc_uset(&xc, &xce, pc, cc);
+    var dn: f64[2];
+    var dne: i64[2];
+    _bj_sc_umul(fs, fe, &xc, &xce, &dn, &dne);
+    var xp: f64[2];
+    var xpe: i64[2];
+    _bj_sc_uset(&xp, &xpe, pp, cp);
+    _bj_sc_uadd(&dn, &dne, &xp, &xpe, 1, &dn, &dne);
+    var r = _bj_sc_udiv(&ns, &ne, &dn, &dne, os, oe);
+    return r;
+}
+
+# Mie's series with every m-dependent operation to 53 bits and an unbounded exponent (the section comment): a and b
+# (n_max BjComplex each) receive the coefficients, each part rounded once; the three sums' 53-bit values go to
+# ss[0..3] and se[0..3]. 0, or the DivisionByZero or allocation code recorded.
+fn _bj_sc_mie_ux(x: f64, mre: f64, mim: f64, n_max, n_start, a, b, ss: *f64, se: *i64): i64 {
+    var ms: f64[2];
+    var me: i64[2];
+    _bj_sc_uset(&ms, &me, mre, mim);
+    var xs, xe = _bj_k_ux_from(x);
+    var zs: f64[2];
+    var ze: i64[2];
+    _bj_sc_ureal(&ms, &me, xs, xe, &zs, &ze);
+    var izs: f64[2];
+    var ize: i64[2];
+    if (_bj_sc_urecip(&zs, &ze, &izs, &ize) != 0) { return _bj_sc_dz(); }
+    var dsb = fl_alloc((n_max + 1) * 16);
+    var deb = fl_alloc((n_max + 1) * 16);
+    if (dsb == 0 || deb == 0) {
+        if (dsb != 0) { fl_free(dsb); }
+        if (deb != 0) { fl_free(deb); }
+        _bj_tx_cstr(_bj_err_reason(BJ_ERR_ALLOCATION), "Mie coefficient buffers");
+        return BJ_ERR_ALLOCATION;
+    }
+    var dsp: *f64 = _bj_sc_f64p(dsb);
+    var dep: *i64 = _bj_sc_i64p(deb);
+    var cs: f64[2];
+    var ce: i64[2];
+    cs[0] = 0.0;
+    cs[1] = 0.0;
+    ce[0] = 0;
+    ce[1] = 0;
+    var rs: f64[2];
+    var rx: i64[2];
+    var us: f64[2];
+    var ue: i64[2];
+    var qs: f64[2];
+    var qe: i64[2];
+    for (var n = n_start; n >= 1; n = n - 1) {
+        var nfs, nfe = _bj_k_ux_from(f64_from(n));
+        _bj_sc_ureal(&izs, &ize, nfs, nfe, &rs, &rx);
+        _bj_sc_uadd(&cs, &ce, &rs, &rx, 0, &us, &ue);
+        if (_bj_sc_urecip(&us, &ue, &qs, &qe) != 0) {
+            fl_free(dsb);
+            fl_free(deb);
+            return _bj_sc_dz();
+        }
+        _bj_sc_uadd(&rs, &rx, &qs, &qe, 1, &cs, &ce);
+        if (n - 1 <= n_max) {
+            var k = 2 * (n - 1);
+            dsp[k] = cs[0];
+            dsp[k + 1] = cs[1];
+            dep[k] = ce[0];
+            dep[k + 1] = ce[1];
+        }
+    }
+    var ims: f64[2];
+    var ime: i64[2];
+    if (_bj_sc_urecip(&ms, &me, &ims, &ime) != 0) {
+        fl_free(dsb);
+        fl_free(deb);
+        return _bj_sc_dz();
+    }
+    var sin_x, cos_x = _bj_sin_cos(x);
+    var sx: f64 = sin_x;
+    var cx: f64 = cos_x;
+    var psi_prev: f64 = sx;
+    var psi_curr: f64 = _bj_sc_psi1(x, sx, cx);
+    var chi_prev: f64 = cx;
+    var chi_curr: f64 = cx / x + sx;
+    var sums: f64[3];
+    var sume: i64[3];
+    for (var z = 0; z < 3; z = z + 1) {
+        sums[z] = 0.0;
+        sume[z] = 0;
+    }
+    var aps: f64[2];
+    var ape: i64[2];
+    var bps: f64[2];
+    var bpe: i64[2];
+    var dn: f64[2];
+    var dne: i64[2];
+    var fs: f64[2];
+    var fe: i64[2];
+    var ac: f64[2];
+    var ace: i64[2];
+    var bc: f64[2];
+    var bce: i64[2];
+    var c = 0;
+    for (var n2 = 1; n2 <= n_max && c == 0; n2 = n2 + 1) {
+        var j = 2 * n2;
+        dn[0] = dsp[j];
+        dn[1] = dsp[j + 1];
+        dne[0] = dep[j];
+        dne[1] = dep[j + 1];
+        if (n2 > 1) {
+            var tw: f64 = f64_from(2 * n2 - 1);
+            var f: f64 = tw / x;
+            var psi_next: f64 = f * psi_curr - psi_prev;
+            psi_prev = psi_curr;
+            psi_curr = psi_next;
+            var chi_next: f64 = f * chi_curr - chi_prev;
+            chi_prev = chi_curr;
+            chi_curr = chi_next;
+        }
+        var nf: f64 = f64_from(n2);
+        var nox: f64 = nf / x;
+        var nx: f64[2];
+        var nxe: i64[2];
+        _bj_sc_uset(&nx, &nxe, nox, 0.0);
+        _bj_sc_umul(&dn, &dne, &ims, &ime, &fs, &fe);
+        _bj_sc_uadd(&fs, &fe, &nx, &nxe, 0, &fs, &fe);               # Dₙ/m + n/x (its imaginary part + 0.0)
+        if (_bj_sc_ucoef(&fs, &fe, psi_curr, chi_curr, psi_prev, chi_prev, &ac, &ace) != 0) { c = _bj_sc_dz(); }
+        _bj_sc_umul(&ms, &me, &dn, &dne, &fs, &fe);
+        _bj_sc_uadd(&fs, &fe, &nx, &nxe, 0, &fs, &fe);               # m·Dₙ + n/x
+        if (c == 0 && _bj_sc_ucoef(&fs, &fe, psi_curr, chi_curr, psi_prev, chi_prev, &bc, &bce) != 0) {
+            c = _bj_sc_dz();
+        }
+        if (c == 0) {
+            var w: f64 = 2.0 * nf + 1.0;
+            var wss, wse = _bj_k_ux_from(w);
+            var a2s, a2e = _bj_vx_sq2(ac[0], ace[0], ac[1], ace[1]);
+            var b2s, b2e = _bj_vx_sq2(bc[0], bce[0], bc[1], bce[1]);
+            var t1s, t1e = _bj_k_ux_add(a2s, a2e, b2s, b2e);
+            var t2s, t2e = _bj_k_ux_mul(wss, wse, t1s, t1e);
+            var s0s, s0e = _bj_k_ux_add(sums[0], sume[0], t2s, t2e);
+            sums[0] = s0s;
+            sume[0] = s0e;
+            var t3s, t3e = _bj_k_ux_add(ac[0], ace[0], bc[0], bce[0]);
+            var t4s, t4e = _bj_k_ux_mul(wss, wse, t3s, t3e);
+            var s1s, s1e = _bj_k_ux_add(sums[1], sume[1], t4s, t4e);
+            sums[1] = s1s;
+            sume[1] = s1e;
+            var c1: f64 = w / (nf * (nf + 1.0));
+            var c1s, c1e = _bj_k_ux_from(c1);
+            var p1s, p1e = _bj_k_ux_mul(ac[0], ace[0], bc[0], bce[0]);
+            var p2s, p2e = _bj_k_ux_mul(ac[1], ace[1], bc[1], bce[1]);
+            var p3s, p3e = _bj_k_ux_add(p1s, p1e, p2s, p2e);
+            var p4s, p4e = _bj_k_ux_mul(c1s, c1e, p3s, p3e);
+            var s2s, s2e = _bj_k_ux_add(sums[2], sume[2], p4s, p4e);
+            sums[2] = s2s;
+            sume[2] = s2e;
+            if (n2 > 1) {
+                var c2: f64 = (nf - 1.0) * (nf + 1.0) / nf;
+                var c2s, c2e = _bj_k_ux_from(c2);
+                var q1s, q1e = _bj_k_ux_mul(aps[0], ape[0], ac[0], ace[0]);
+                var q2s, q2e = _bj_k_ux_mul(aps[1], ape[1], ac[1], ace[1]);
+                var q3s, q3e = _bj_k_ux_add(q1s, q1e, q2s, q2e);
+                var q4s, q4e = _bj_k_ux_mul(bps[0], bpe[0], bc[0], bce[0]);
+                var q5s, q5e = _bj_k_ux_add(q3s, q3e, q4s, q4e);
+                var q6s, q6e = _bj_k_ux_mul(bps[1], bpe[1], bc[1], bce[1]);
+                var q7s, q7e = _bj_k_ux_add(q5s, q5e, q6s, q6e);
+                var q8s, q8e = _bj_k_ux_mul(c2s, c2e, q7s, q7e);
+                var s3s, s3e = _bj_k_ux_add(sums[2], sume[2], q8s, q8e);
+                sums[2] = s3s;
+                sume[2] = s3e;
+            }
+            aps[0] = ac[0];
+            aps[1] = ac[1];
+            ape[0] = ace[0];
+            ape[1] = ace[1];
+            bps[0] = bc[0];
+            bps[1] = bc[1];
+            bpe[0] = bce[0];
+            bpe[1] = bce[1];
+            var pa: *f64 = _bj_sc_f64p(a + (n2 - 1) * 16);
+            pa[0] = _bj_k_ux_round(ac[0], ace[0], 0.0);
+            pa[1] = _bj_k_ux_round(ac[1], ace[1], 0.0);
+            var pb: *f64 = _bj_sc_f64p(b + (n2 - 1) * 16);
+            pb[0] = _bj_k_ux_round(bc[0], bce[0], 0.0);
+            pb[1] = _bj_k_ux_round(bc[1], bce[1], 0.0);
+        }
+    }
+    fl_free(dsb);
+    fl_free(deb);
+    if (c != 0) { return c; }
+    for (var z2 = 0; z2 < 3; z2 = z2 + 1) {
+        ss[z2] = sums[z2];
+        se[z2] = sume[z2];
+    }
     return 0;
 }
 
@@ -24012,28 +24377,67 @@ public fn bj_mie(x: f64, m: BjComplex, out: *BjMieResult): Result {
     d0[1] = 0.0;
     var mxr: f64 = mre * x;
     var mxi: f64 = mim * x;
-    var imx: f64[2];
-    c = _bj_sc_recip(mxr, mxi, &imx);
-    if (c == 0) { c = _bj_sc_lderiv(imx[0], imx[1], n_max, n_start, d); }
+    # The m-dependent range edges that inputs show (the unbounded section's): a nonzero part of m outside [2^-511,
+    # 2^511), or |mx|² or |m|² not normal (complex_recip's Smith fallback); the recurrences flag the rest. Below
+    # x = 10⁻⁵⁰ (the double 1e-50 is its nearest above, none between) Rust's chain stays whatever m is: its tiny-x
+    # limit, kept by the user on 2026-11-14.
+    var fl: i64[1];
+    fl[0] = 0;
+    var track = 0;
+    if (x >= _BJ_SC_X_UX) { track = 1; }
+    var qm: f64 = mre * mre + mim * mim;
+    var qz: f64 = mxr * mxr + mxi * mxi;
+    var cue = 0;
+    if (_bj_vx_box1(mre) == 0 || _bj_vx_box1(mim) == 0) { cue = 1; }
+    if (!(qm >= _BJ_SC_MIN_NORMAL && qm <= _BJ_SC_MAX_FINITE)) { cue = 1; }
+    if (!(qz >= _BJ_SC_MIN_NORMAL && qz <= _BJ_SC_MAX_FINITE)) { cue = 1; }
+    if (track == 1) { fl[0] = cue; }
     var mv: f64[2];
     mv[0] = mre;
     mv[1] = mim;
     var sums: f64[3];
-    if (c == 0) { c = _bj_sc_series(x, &mv, d, n_max, a, b, &sums); }
+    if (fl[0] == 0) {
+        var imx: f64[2];
+        c = _bj_sc_recip(mxr, mxi, &imx);
+        if (c == 0) { c = _bj_sc_lderiv(imx[0], imx[1], n_max, n_start, d, &fl); }
+        if (track == 0) { fl[0] = 0; }               # below 10⁻⁵⁰ no cue counts: Rust's chain runs to its end
+        if (c == 0 && fl[0] == 0) { c = _bj_sc_series(x, &mv, d, n_max, a, b, &sums, &fl); }
+        if (track == 0) { fl[0] = 0; }
+    }
     fl_free(d);
+    var scale: f64 = 2.0 / (x * x);
+    var q_sca: f64 = 0.0;
+    var q_ext: f64 = 0.0;
+    var q_abs: f64 = 0.0;
+    var g: f64 = 0.0;
+    if (fl[0] == 1) {
+        var us: f64[3];
+        var ue: i64[3];
+        c = _bj_sc_mie_ux(x, mre, mim, n_max, n_start, a, b, &us, &ue);
+        if (c == 0) {
+            var ks, ke = _bj_k_ux_from(scale);
+            q_sca = _bj_k_ux_mul_f64(ks, ke, us[0], ue[0]);
+            q_ext = _bj_k_ux_mul_f64(ks, ke, us[1], ue[1]);
+            var hs, he = _bj_k_ux_mul(ks, ke, us[0], ue[0]);
+            var es, ee = _bj_k_ux_mul(ks, ke, us[1], ue[1]);
+            q_abs = _bj_k_ux_sub_f64(es, ee, hs, he);
+            var u0: f64 = us[0];
+            if (u0 > 0.0) { g = _bj_k_ux_div_f64(us[2], ue[2] + 1, us[0], ue[0]); }
+        }
+    }
     if (c != 0) {
         _bj_sc_drop(0, a, b);
         return Err(c);
     }
-    var sca: f64 = sums[0];
-    var ext: f64 = sums[1];
-    var gs: f64 = sums[2];
-    var scale: f64 = 2.0 / (x * x);
-    var q_sca: f64 = scale * sca;
-    var q_ext: f64 = scale * ext;
-    var q_abs: f64 = q_ext - q_sca;
-    var g: f64 = 0.0;
-    if (sca > 0.0) { g = 2.0 * gs / sca; }
+    if (fl[0] == 0) {
+        var sca: f64 = sums[0];
+        var ext: f64 = sums[1];
+        var gs: f64 = sums[2];
+        q_sca = scale * sca;
+        q_ext = scale * ext;
+        q_abs = q_ext - q_sca;
+        if (sca > 0.0) { g = 2.0 * gs / sca; }
+    }
     if (_bj_is_finite(q_sca) == 0 || _bj_is_finite(q_ext) == 0 || _bj_is_finite(g) == 0) {
         _bj_sc_drop(0, a, b);
         var t = _bj_err_reason(BJ_ERR_INVALID_PARAMETER);
