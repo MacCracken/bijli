@@ -48,6 +48,9 @@
 //! M4 part 2d-1 appends the input impedance's range edges (row 18): |Z_L| past 1.3·10^154, βl past DBL_MAX and below
 //! 2^-1022, |den|² underflowing, magnitudes far apart, the guard's box, seeded wide values; and the stub match across
 //! magnitudes.
+//!
+//! M4 part 2d-2 appends the lossy Z₀'s and γ's range edges (row 18): ωL and ωC past either end, |z|² past either end,
+//! the DC branch's L/C, arguments far from the axes, the guard's box, seeded wide values.
 
 use crate::grids::{Edge2, Rng, knife_edge, knife_edge2, specials};
 use crate::m_field::res_f;
@@ -688,8 +691,63 @@ pub fn emit() -> Module {
     emit_2b(r, &mut rng);
     emit_2c(r);
     emit_2d1(r, &mut rng);
+    emit_2d2(r, &mut rng);
 
     rows.m
+}
+
+/// M4 part 2d-2: the lossy Z₀ and γ at their range edges (ADR 0002 row 18): ωL or ωC past DBL_MAX or below 2^-1022
+/// (Rust's DC branch on an underflowed ωC gave NaN), quotients and products whose |z|² leaves the range, the DC
+/// branch's L/C past either end, arguments far from the axes (|im/re| below 2^-1000, either sign of re, and the
+/// reverse), the guard's 2^±60 box, and seeded wide values.
+fn emit_2d2(r: &mut Rows, rng: &mut Rng) {
+    let p = |x: i32| 2f64.powi(x);
+    let cases: [[f64; 5]; 22] = [
+        [0.1, 1e200, 0.0, 1e-10, 1e200],
+        [0.1, 2.5e-7, 1e-6, 1e-10, 1e300],
+        [0.0, 2.5e-7, 0.0, 1e-200, 1e-200],
+        [1e-3, 2.5e-7, 0.0, 1e-200, 1e-200],
+        [1e300, 0.0, 1e-300, 0.0, 0.0],
+        [1e-300, 0.0, 1e300, 0.0, 0.0],
+        [0.0, 1e300, 0.0, 1e-300, 0.0],
+        [0.0, 1e-300, 0.0, 1e300, 0.0],
+        [1e-200, 1e-200, 1e-200, 1e-200, 1.0],
+        [1e200, 1e200, 1e200, 1e200, 1.0],
+        [1e300, 1e-300, 1.0, 0.0, 1.0],
+        [-1e300, 1e-300, 1.0, 0.0, 1.0],
+        [1e-300, 1e300, 1.0, 0.0, 1.0],
+        [1e154, 1e154, 1.0, 1.0, 1.0],
+        [3.0, 5.0, 7.0, 11.0, 1e-160],
+        [1e160, 1.0, 1e160, 1.0, 1.0],
+        [1e-160, 1.0, 1e-160, 1.0, 1e-170],
+        [5e-324, 2.5e-7, 5e-324, 1e-10, 1.0],
+        [0.1, 2.5e-7, 1e-6, 1e-10, 2e9],
+        [-0.0, 2.5e-7, -0.0, 1e-10, 2e9],
+        [0.1, -2.5e-7, 1e-6, 1e-10, -2e9],
+        [f64::MAX, f64::MAX, f64::MIN_POSITIVE, f64::MIN_POSITIVE, 1.0],
+    ];
+    for v in cases {
+        r.lossy(v);
+        r.propagation(v);
+    }
+    for e in [59, 60, 61, 62, -59, -60, -61, -62] {
+        for slot in 0..5 {
+            let mut v = [0.1, 2.5e-7, 1e-6, 1e-10, 2e9];
+            v[slot] = 1.5 * p(e);
+            r.lossy(v);
+            r.propagation(v);
+        }
+    }
+    for _ in 0..300 {
+        let mut v = [0.0; 5];
+        for x in &mut v {
+            *x = rng.signed_log_uniform(-300.0, 300.0);
+        }
+        v[1] = v[1].abs();
+        v[3] = v[3].abs();
+        r.lossy(v);
+        r.propagation(v);
+    }
 }
 
 /// M4 part 2d-1: the input impedance at its range edges (ADR 0002 row 18): |Z_L| past 1.3·10^154 (Rust's scale

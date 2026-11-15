@@ -27272,6 +27272,12 @@ public fn bj_characteristic_impedance_lossless(inductance_per_m: f64, capacitanc
 # R′ = 0, +∞ − j∞ when R′ > 0; NaN parts otherwise. Mirrors `rf::characteristic_impedance_lossy`.
 #must_use
 public fn bj_characteristic_impedance_lossy(r: f64, l: f64, g: f64, c: f64, omega: f64): BjComplex {
+    var fs: f64 = (r - r) + (l - l) + (g - g) + (c - c) + (omega - omega);
+    if (fs == 0.0 && _bj_rf_box60(r, l, g, c, omega) == 0) {       # a range edge (ADR 0002 row 18, M4 part 2d-2)
+        var ze: BjComplex;
+        _bj_rf_lossy_ux(r, l, g, c, omega, &ze);
+        return ze;
+    }
     var ni: f64 = omega * l;
     var di: f64 = omega * c;
     if (g == 0.0 && di == 0.0) {
@@ -27291,6 +27297,11 @@ public fn bj_characteristic_impedance_lossy(r: f64, l: f64, g: f64, c: f64, omeg
         return BjComplex_new(nan, nan);
     }
     var qr, qi = _bj_vx_cdiv(r, ni, g, di);
+    if (fs == 0.0 && _bj_rf_box500(qr, qi) == 0) {
+        var zq: BjComplex;
+        _bj_rf_lossy_ux(r, l, g, c, omega, &zq);
+        return zq;
+    }
     var z: BjComplex = _bj_rf_sqrt_polar(qr, qi);
     return z;
 }
@@ -27299,10 +27310,16 @@ public fn bj_characteristic_impedance_lossy(r: f64, l: f64, g: f64, c: f64, omeg
 # β in rad/m. Mirrors `rf::propagation_constant`.
 #must_use
 public fn bj_propagation_constant(r: f64, l: f64, g: f64, c: f64, omega: f64): BjComplex {
+    var fs: f64 = (r - r) + (l - l) + (g - g) + (c - c) + (omega - omega);
     var ai: f64 = omega * l;
     var bi: f64 = omega * c;
     var pr: f64 = r * g - ai * bi;
     var pi: f64 = r * bi + ai * g;
+    if (fs == 0.0 && (_bj_rf_box60(r, l, g, c, omega) == 0 || _bj_rf_box500(pr, pi) == 0)) {
+        var ze: BjComplex;
+        _bj_rf_gamma_ux(r, l, g, c, omega, &ze);                    # a range edge (ADR 0002 row 18, M4 part 2d-2)
+        return ze;
+    }
     var z: BjComplex = _bj_rf_sqrt_polar(pr, pi);
     return z;
 }
@@ -27465,39 +27482,23 @@ fn _bj_rf_zin_ux(z0: f64, zr: f64, zi: f64, beta: f64, length: f64, out: *BjComp
     var ks, ke = _bj_k_ux_from(_BJ_RF_REL15);
     var lms, lme = _bj_k_ux_mul(ks, ke, scs, sce);
     if (_bj_k_ux_le(dms, dme, lms, lme) == 1) { return 1; }
-    var qrs: f64 = 0.0;
-    var qre = 0;
-    var qis: f64 = 0.0;
-    var qie = 0;
-    if (_bj_rf_ux_absless(drs, dre, dis, die) == 0) {               # Smith: |dr| ≥ |di|
-        var rr, rre = _bj_k_ux_div(dis, die, drs, dre);
-        var t1, t1e = _bj_k_ux_mul(dis, die, rr, rre);
-        var dd, dde = _bj_k_ux_add(drs, dre, t1, t1e);
-        var t2, t2e = _bj_k_ux_mul(nis, nie, rr, rre);
-        var u1, u1e = _bj_k_ux_add(nrs, nre, t2, t2e);
-        var t3, t3e = _bj_k_ux_mul(nrs, nre, rr, rre);
-        var u2, u2e = _bj_k_ux_sub(nis, nie, t3, t3e);
-        var q1, q1e = _bj_k_ux_div(u1, u1e, dd, dde);
-        var q2, q2e = _bj_k_ux_div(u2, u2e, dd, dde);
-        qrs = q1;
-        qre = q1e;
-        qis = q2;
-        qie = q2e;
-    } else {
-        var rr2, rr2e = _bj_k_ux_div(drs, dre, dis, die);
-        var t4, t4e = _bj_k_ux_mul(drs, dre, rr2, rr2e);
-        var dd2, dd2e = _bj_k_ux_add(t4, t4e, dis, die);
-        var t5, t5e = _bj_k_ux_mul(nrs, nre, rr2, rr2e);
-        var u3, u3e = _bj_k_ux_add(t5, t5e, nis, nie);
-        var t6, t6e = _bj_k_ux_mul(nis, nie, rr2, rr2e);
-        var u4, u4e = _bj_k_ux_sub(t6, t6e, nrs, nre);
-        var q3, q3e = _bj_k_ux_div(u3, u3e, dd2, dd2e);
-        var q4, q4e = _bj_k_ux_div(u4, u4e, dd2, dd2e);
-        qrs = q3;
-        qre = q3e;
-        qis = q4;
-        qie = q4e;
-    }
+    var v: f64[4];
+    var ve: i64[4];
+    v[0] = nrs;
+    ve[0] = nre;
+    v[1] = nis;
+    ve[1] = nie;
+    v[2] = drs;
+    ve[2] = dre;
+    v[3] = dis;
+    ve[3] = die;
+    var q: f64[2];
+    var qe: i64[2];
+    _bj_rf_cdiv_ux(&v, &ve, &q, &qe);
+    var qrs: f64 = q[0];
+    var qre = qe[0];
+    var qis: f64 = q[1];
+    var qie = qe[1];
     var wr: f64 = _bj_k_ux_mul_f64(qrs, qre, z0s, z0e);
     var wi: f64 = _bj_k_ux_mul_f64(qis, qie, z0s, z0e);
     out.re = wr;
@@ -28500,6 +28501,211 @@ fn _bj_rf_s2z_chain(p: *f64, z0: f64, o: *f64): i64 {
     o[5] = z21i;
     o[6] = z22r;
     o[7] = z22i;
+    return 0;
+}
+
+# ── the lossy line's chains at their range edges (ADR 0002 row 18, M4 part 2d-2) ─────────────────────────────────────
+#
+# The lossy Z₀ = √((R + jωL)/(G + jωC)) and γ = √((R + jωL)(G + jωC)) end in hisab's square root, |z| = √(re² + im²)
+# and from_polar(√|z|, arg z / 2). Rust's chain is kept where each nonzero input lies in [2^-60, 2^61) (the products
+# by ω within 2^±122, Smith's ratio and its products within 2^±370) and the quotient's or product's parts are 0 or
+# within [2^-500, 2^501) (their squares, |z|, √|z|, arg z and its half then normal). Anything else runs it with an
+# unbounded exponent: kimiya's 53-bit operations, Smith's division (_bj_rf_cdiv_ux), arg z to 53 bits
+# (_bj_rf_atan2_ux), the half-angle's sine and cosine to 53 bits (src/crmath_vx.cyr), the polar products rounded once.
+# A non-finite input keeps Rust's chain.
+
+# q := a/b by Smith's algorithm (rf.rs's cdiv) on 53-bit values with an unbounded exponent: v = (a.re, a.im, b.re, b.im)
+# significands with exponents ve; q[0], q[1] and qe[0], qe[1] the quotient's parts.
+fn _bj_rf_cdiv_ux(v: *f64, ve: *i64, q: *f64, qe: *i64) {
+    var nrs: f64 = v[0];
+    var nre = ve[0];
+    var nis: f64 = v[1];
+    var nie = ve[1];
+    var drs: f64 = v[2];
+    var dre = ve[2];
+    var dis: f64 = v[3];
+    var die = ve[3];
+    if (_bj_rf_ux_absless(drs, dre, dis, die) == 0) {               # |b.re| ≥ |b.im|
+        var rr, rre = _bj_k_ux_div(dis, die, drs, dre);
+        var t1, t1e = _bj_k_ux_mul(dis, die, rr, rre);
+        var dd, dde = _bj_k_ux_add(drs, dre, t1, t1e);
+        var t2, t2e = _bj_k_ux_mul(nis, nie, rr, rre);
+        var u1, u1e = _bj_k_ux_add(nrs, nre, t2, t2e);
+        var t3, t3e = _bj_k_ux_mul(nrs, nre, rr, rre);
+        var u2, u2e = _bj_k_ux_sub(nis, nie, t3, t3e);
+        var q1, q1e = _bj_k_ux_div(u1, u1e, dd, dde);
+        var q2, q2e = _bj_k_ux_div(u2, u2e, dd, dde);
+        q[0] = q1;
+        qe[0] = q1e;
+        q[1] = q2;
+        qe[1] = q2e;
+        return 0;
+    }
+    var rr2, rr2e = _bj_k_ux_div(drs, dre, dis, die);
+    var t4, t4e = _bj_k_ux_mul(drs, dre, rr2, rr2e);
+    var dd2, dd2e = _bj_k_ux_add(t4, t4e, dis, die);
+    var t5, t5e = _bj_k_ux_mul(nrs, nre, rr2, rr2e);
+    var u3, u3e = _bj_k_ux_add(t5, t5e, nis, nie);
+    var t6, t6e = _bj_k_ux_mul(nis, nie, rr2, rr2e);
+    var u4, u4e = _bj_k_ux_sub(t6, t6e, nrs, nre);
+    var q3, q3e = _bj_k_ux_div(u3, u3e, dd2, dd2e);
+    var q4, q4e = _bj_k_ux_div(u4, u4e, dd2, dd2e);
+    q[0] = q3;
+    qe[0] = q3e;
+    q[1] = q4;
+    qe[1] = q4e;
+    return 0;
+}
+
+# atan2(y, x) to 53 bits for 53-bit values with an unbounded exponent: (s, e). A zero part leaves only the signs to
+# matter, so ±1 stands for the other. With exponents within 1000 of each other both scale by one power of two into
+# doubles, whose correctly rounded atan2 is normal. Further apart: |y/x| < 2^-999 gives y/x itself for x > 0 (atan t
+# lies within t³/3 of t, and a quotient of two 53-bit values is never a 54-bit midpoint, so both round alike) and
+# ±π for x < 0 (π − t rounds to π); |x/y| < 2^-999 gives ±π/2, y's sign.
+#must_use
+fn _bj_rf_atan2_ux(ys: f64, ye, xs: f64, xe): (f64, i64) {
+    if (ys == 0.0 || xs == 0.0) {
+        var yy: f64 = ys;
+        var xx: f64 = xs;
+        if (ys != 0.0) { yy = _bj_copysign(1.0, ys); }
+        if (xs != 0.0) { xx = _bj_copysign(1.0, xs); }
+        var g0: f64 = _bj_atan2(yy, xx);
+        var s0, e0 = _bj_k_ux_from(g0);
+        return (s0, e0);
+    }
+    var d = ye - xe;
+    if (d >= 0 - 1000 && d <= 1000) {
+        var m = ye;
+        if (xe > m) { m = xe; }
+        var y: f64 = _bj_k_ux_round(ys, ye - m, 0.0);
+        var x: f64 = _bj_k_ux_round(xs, xe - m, 0.0);
+        var g: f64 = _bj_atan2(y, x);
+        var s, e = _bj_k_ux_from(g);
+        return (s, e);
+    }
+    if (d < 0) {
+        if (xs > 0.0) {
+            var qs, qe = _bj_k_ux_div(ys, ye, xs, xe);
+            return (qs, qe);
+        }
+        var pi: f64 = _bj_copysign(_BJ_PI, ys);
+        var ps, pe = _bj_k_ux_from(pi);
+        return (ps, pe);
+    }
+    var h: f64 = _bj_copysign(_BJ_PI * 0.5, ys);
+    var hs, he = _bj_k_ux_from(h);
+    return (hs, he);
+}
+
+# hisab's z.sqrt() on 53-bit parts (re, im) with an unbounded exponent into *out: |z| = √(re² + im²), √|z|,
+# θ = arg z / 2 (exact), and √|z|·cos θ, √|z|·sin θ each rounded once.
+fn _bj_rf_sqrt_polar_ux(rs: f64, re, is: f64, ie, out: *BjComplex) {
+    var a2, a2e = _bj_k_ux_mul(rs, re, rs, re);
+    var b2, b2e = _bj_k_ux_mul(is, ie, is, ie);
+    var n2, n2e = _bj_k_ux_add(a2, a2e, b2, b2e);
+    var ab, abe = _bj_k_ux_sqrt(n2, n2e);
+    var mg, mge = _bj_k_ux_sqrt(ab, abe);
+    var gs, ge = _bj_rf_atan2_ux(is, ie, rs, re);
+    var hge = ge - 1;
+    if (gs == 0.0) { hge = ge; }
+    var cs, ce = _bj_vx_cos53(gs, hge);
+    var ss, se = _bj_vx_sin53(gs, hge);
+    var zr: f64 = _bj_k_ux_mul_f64(mg, mge, cs, ce);
+    var zi: f64 = _bj_k_ux_mul_f64(mg, mge, ss, se);
+    out.re = zr;
+    out.im = zi;
+    return 0;
+}
+
+# 1 when every nonzero one of the five inputs lies in [2^-60, 2^61) (the section comment's box).
+#must_use
+fn _bj_rf_box60(a: f64, b: f64, c: f64, d: f64, e: f64): i64 {
+    var ea = (load64(&a) >> 52) & 2047;
+    var eb = (load64(&b) >> 52) & 2047;
+    var ec = (load64(&c) >> 52) & 2047;
+    var ed = (load64(&d) >> 52) & 2047;
+    var ee = (load64(&e) >> 52) & 2047;
+    var lo = (ea - 963) | (eb - 963) | (ec - 963) | (ed - 963) | (ee - 963);
+    var hi = (1083 - ea) | (1083 - eb) | (1083 - ec) | (1083 - ed) | (1083 - ee);
+    if ((lo | hi) >= 0) { return 1; }
+    var ok = 1;
+    if (a != 0.0 && (ea < 963 || ea > 1083)) { ok = 0; }
+    if (b != 0.0 && (eb < 963 || eb > 1083)) { ok = 0; }
+    if (c != 0.0 && (ec < 963 || ec > 1083)) { ok = 0; }
+    if (d != 0.0 && (ed < 963 || ed > 1083)) { ok = 0; }
+    if (e != 0.0 && (ee < 963 || ee > 1083)) { ok = 0; }
+    return ok;
+}
+
+# 1 when x and y are each 0 or within [2^-500, 2^501) (the square root's input box).
+#must_use
+fn _bj_rf_box500(x: f64, y: f64): i64 {
+    var ex = (load64(&x) >> 52) & 2047;
+    var ey = (load64(&y) >> 52) & 2047;
+    if (((ex - 523) | (ey - 523) | (1523 - ex) | (1523 - ey)) >= 0) { return 1; }
+    if (x != 0.0 && (ex < 523 || ex > 1523)) { return 0; }
+    if (y != 0.0 && (ey < 523 || ey > 1523)) { return 0; }
+    return 1;
+}
+
+# The lossy Z₀ with an unbounded exponent (the section comment) for finite inputs, into *out.
+fn _bj_rf_lossy_ux(r: f64, l: f64, g: f64, c: f64, omega: f64, out: *BjComplex) {
+    var ws, we = _bj_k_ux_from(omega);
+    var ls, le = _bj_k_ux_from(l);
+    var cs, ce = _bj_k_ux_from(c);
+    var ns, ne = _bj_k_ux_mul(ws, we, ls, le);
+    var ds, de = _bj_k_ux_mul(ws, we, cs, ce);
+    if (g == 0.0 && ds == 0.0) {                                    # Rust's DC branch: G + jωC = 0 exactly
+        if (omega == 0.0 && c > 0.0 && r == 0.0) {
+            var qs, qe = _bj_k_ux_div(ls, le, cs, ce);
+            _bj_rf_sqrt_polar_ux(qs, qe, 0.0, 0, out);
+            return 0;
+        }
+        var wr: f64 = _BJ_RF_NAN;
+        var wi: f64 = _BJ_RF_NAN;
+        if (omega == 0.0 && c > 0.0 && r > 0.0) {
+            wr = _BJ_RF_INF;
+            wi = -wr;
+        }
+        out.re = wr;
+        out.im = wi;
+        return 0;
+    }
+    var rs, re = _bj_k_ux_from(r);
+    var gs, ge = _bj_k_ux_from(g);
+    var v: f64[4];
+    var ve: i64[4];
+    v[0] = rs;
+    ve[0] = re;
+    v[1] = ns;
+    ve[1] = ne;
+    v[2] = gs;
+    ve[2] = ge;
+    v[3] = ds;
+    ve[3] = de;
+    var q: f64[2];
+    var qe2: i64[2];
+    _bj_rf_cdiv_ux(&v, &ve, &q, &qe2);
+    _bj_rf_sqrt_polar_ux(q[0], qe2[0], q[1], qe2[1], out);
+    return 0;
+}
+
+# γ with an unbounded exponent (the section comment) for finite inputs, into *out.
+fn _bj_rf_gamma_ux(r: f64, l: f64, g: f64, c: f64, omega: f64, out: *BjComplex) {
+    var ws, we = _bj_k_ux_from(omega);
+    var ls, le = _bj_k_ux_from(l);
+    var cs, ce = _bj_k_ux_from(c);
+    var rs, re = _bj_k_ux_from(r);
+    var gs, ge = _bj_k_ux_from(g);
+    var as, ae = _bj_k_ux_mul(ws, we, ls, le);                      # ωL
+    var bs, be = _bj_k_ux_mul(ws, we, cs, ce);                      # ωC
+    var p1, p1e = _bj_k_ux_mul(rs, re, gs, ge);
+    var p2, p2e = _bj_k_ux_mul(as, ae, bs, be);
+    var pr, pre = _bj_k_ux_sub(p1, p1e, p2, p2e);                   # R·G − ωL·ωC
+    var p3, p3e = _bj_k_ux_mul(rs, re, bs, be);
+    var p4, p4e = _bj_k_ux_mul(as, ae, gs, ge);
+    var pi, pie = _bj_k_ux_add(p3, p3e, p4, p4e);                   # R·ωC + ωL·G
+    _bj_rf_sqrt_polar_ux(pr, pre, pi, pie, out);
     return 0;
 }
 

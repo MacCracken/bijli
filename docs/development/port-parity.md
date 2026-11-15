@@ -5058,3 +5058,40 @@ Touchstone's MA and DB magnitudes; 2d-5 the array factors' ψ past DBL_MAX.
   equal**, HEAD's unchanged but the input impedance's and the stub matches'. `rf.tcyr` passes on all three (237). The
   gate is clean (no warnings; execution coverage 323 of 323 functions); validate.py 622,374 rows, 0 problems. Next,
   2d-2.
+
+## 88. M4 part 2d-2: the lossy Z₀ and γ at their range edges (2026-11-15)
+
+- **The finding**: `characteristic_impedance_lossy` and `propagation_constant` end in hisab's square root,
+  |z| = √(re² + im²) and from_polar(√|z|, arg z / 2), after Smith's division of (R + jωL) by (G + jωC) or their
+  product. Rust gave NaN where ωL passed DBL_MAX (the true Z₀ is 10¹⁰⁵ at R = 0.1, L = 10²⁰⁰, C = 10⁻¹⁰, ω = 10²⁰⁰),
+  NaN where ωC underflowed to 0, which sent a lossy line into the DC branch and its "ω = 0" test (Z₀ = 5·10⁹⁶), ∞ +
+  jNaN where the DC branch's L′/C′ overflowed (Z₀ = 10³⁰⁰), and NaN where γ's product overflowed (γ = 10²⁰⁰(1 + j)).
+- **ADR 0002 row 18, amended** (`src/rf.cyr`): Rust's chain stays where each nonzero input lies in [2^-60, 2^61)
+  (ωL and ωC within 2^±122, Smith's ratio and its products within 2^±370) and the quotient's or product's parts are 0
+  or within [2^-500, 2^501) (so |z|², √|z|, arg z and its half are normal); a non-finite input keeps it too. Elsewhere
+  the chain runs on 53-bit values with an unbounded exponent (`_bj_rf_lossy_ux`, `_bj_rf_gamma_ux`):
+  - Smith's division, shared with 2d-1's input impedance (`_bj_rf_cdiv_ux`);
+  - arg z to 53 bits (`_bj_rf_atan2_ux`): a zero part leaves only the signs; parts whose exponents lie within 1,000
+    of each other scale by one power of two into doubles, whose correctly rounded atan2 is normal; further apart,
+    y/x for x > 0 (atan t lies within t³/3 of t, and a quotient of two 53-bit values is never a 54-bit midpoint),
+    ±π for x < 0, ±π/2 when |x| ≪ |y|;
+  - hisab's square root (`_bj_rf_sqrt_polar_ux`): √|z| to 53 bits, the exact half-angle, its sine and cosine to 53
+    bits (src/crmath_vx.cyr), the polar products rounded once.
+
+  The DC branch keeps Rust's outcomes (√(L′/C′) through the same square root, +∞ − j∞, NaN) on the exact zero of
+  ωC.
+- **The grid**: 724 rows appended to `rf.tsv` (27,695): 22 hand cases (ωL and ωC past either end, the DC branch's
+  L′/C′ both ways, |z|² past either end, arguments with |im/re| below 2^-1000 for either sign of re and the reverse,
+  subnormal and DBL_MAX inputs, negative ω), one input at 2^±59 to 2^±62 in each place, 300 seeded wide 5-tuples; each
+  through both functions.
+- **validate.py** transcribes the chains (`rf_lossy_ux`, `rf_gamma_ux`, `rf_sqrt_polar_ux`, `ux_atan2` on MPFR's
+  widest range) under `RF18`. `rf.adr.tsv` maps **294 lossy Z₀** (150 NaN or ∞ in Rust) and **321 γ** (260), all
+  passing; 2d-1's 303 input impedances are unchanged by the shared Smith division.
+- **Tests**: `tests/rf.tcyr`'s `cyrius_lossy_edges` (5 assertions, 242 in all).
+- **Benchmarks** (rf.rs benches neither): a focused interleaved A/B against HEAD (three rounds, load 6.3 to 7.4: other
+  repos' jobs): a typical lossy Z₀ 499–515 → 529–534 ns, about +33 ns for its two guards; γ 544–650 → 564–578 ns,
+  within the noise.
+- **Result, every target** (x86_64 ELF, x86_64 PE, aarch64): **17 modules, 0 failing; 535,565 ok, 0 failed, 0
+  measured, 0 pending, 87,533 accepted (ADR 01: 30,860; ADR 0002: 56,673)** over 623,098 rows; **all 416 digests
+  equal**, HEAD's unchanged but the two functions'. `rf.tcyr` passes on all three (242). The gate is clean (no
+  warnings; execution coverage 323 of 323 functions); validate.py 623,098 rows, 0 problems. Next, 2d-3.

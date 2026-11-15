@@ -346,6 +346,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
   input impedance, 2d-2 the lossy Z₀ and the propagation constant, 2d-3 reflection, the Smith chart and the stub's
   discriminant, 2d-4 Touchstone's MA and DB magnitudes, 2d-5 the array factors. `rf.tsv` grows by 739 edge rows
   (26,971); validate.py's model of the unbounded chain runs under `RF18`.
+- **Cyrius port, M4 part 2d-2 — the lossy Z₀ and γ at their range edges** (`src/rf.cyr`): their chains with an
+  unbounded exponent where they leave the range (ADR 0002 row 18 amended, see Fixed), on new 53-bit helpers for
+  Smith's division, atan2 and hisab's square root. `rf.tsv` grows by 724 edge rows (27,695).
 
 ### Fixed
 
@@ -764,6 +767,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
   an unbounded exponent there, the 10⁻¹⁵ test on the 53-bit |den| and scale; the stub match follows. Cost: the
   guard, about +30 ns on `rf/input_impedance_complex` (≈ 238 → 268 ns, measured at load 1.1–2.6) and about +0.1 µs
   on `rf/single_stub_match` (two input impedances) (`port-parity.md` §87).
+- **rf** (ADR 0002 row 18 amended, M4 part 2d-2): `characteristic_impedance_lossy` gave NaN where ωL passed DBL_MAX
+  (Z₀ = 10¹⁰⁵ there), NaN where ωC underflowed to 0 and sent a lossy line into the DC branch, and ∞ + jNaN where the
+  DC branch's L′/C′ overflowed (Z₀ = 10³⁰⁰); `propagation_constant` gave NaN where its product overflowed (γ =
+  10²⁰⁰(1 + j)). Both now run Rust's chain with an unbounded exponent there. Cost (no Rust benches; measured at load
+  6–7): the guards, about +33 ns on a typical lossy Z₀ (500 → 533 ns) and within the noise on γ (559 → 564 ns)
+  (`port-parity.md` §88).
 
 ### Performance
 

@@ -10,7 +10,8 @@
 # shape fixed at construction: test_smatrix_inconsistent_does_not_panic is n/a), row 37 (z0_equal on finite values),
 # the S-parameter reasons and the heap; (2a-1) ADR 0002 row 39, the stub match's cancellation-free root; (2a-2) row
 # 17, the cascade's star product rounded once and its exact T22 test; (2a-3) row 17, S → Z rounded once; (2b) row
-# 13, round once; (2c) row 17, the exact thresholds; (2d-1) row 18, the input impedance's range edges.
+# 13, round once; (2c) row 17, the exact thresholds; (2d-1, 2d-2) row 18, the input impedance's, the lossy Z₀'s and
+# γ's range edges.
 # tests/golden/rf.tsv pins every function over its grid against Rust besides.
 
 include "tests/lib.cyr"
@@ -759,6 +760,34 @@ fn cyrius_zin_edges(): i64 {
       "the stub match at 10⁻²⁰⁰ Ω, through the same input impedance");
     var t5, v5 = bj_input_impedance_lossless_complex(50.0, BjComplex_new(75.0, 25.0), INF, 1.0, &z);
     assert(is_err_result(t5) == 1 && v5 == BJ_ERR_INVALID_PARAMETER, "a non-finite β is still refused");
+    return 0;
+}
+
+# ADR 0002 row 18 (M4 part 2d-2): the lossy Z₀ and γ at their range edges, Rust's chain with an unbounded exponent.
+# Rust gave NaN or ∞ in each; the values are validate.py's model's.
+fn cyrius_lossy_edges(): i64 {
+    test_group("cyrius_lossy_edges");
+    var e300: f64 = _bj_from_bits(0x7E37E43C8800759C);
+    var em300: f64 = _bj_from_bits(0x01A56E1FC2F8F359);
+    var e200: f64 = _bj_from_bits(0x6974E718D7D7625A);
+    var em200: f64 = _bj_from_bits(0x16687E92154EF7AC);
+    var z1: BjComplex = bj_characteristic_impedance_lossy(0.1, e200, 0.0, 0.0000000001, e200);
+    var w1r: f64 = _bj_from_bits(0x55BBE7ABD3781ECA);
+    var w1i: f64 = _bj_from_bits(0x826A28EDC580E50E);
+    assert(z1.re == w1r && z1.im == w1i, "ωL = 10⁴⁰⁰: Z₀ = 10¹⁰⁵ (Rust's ωL overflowed: NaN)");
+    var z2: BjComplex = bj_characteristic_impedance_lossy(0.0, 0.00000025, 0.0, em200, em200);
+    var w2r: f64 = _bj_from_bits(0x5402BA095DC7701D);
+    assert(z2.re == w2r && same(z2.im, 0.0) == 1,
+      "ωC = 10⁻⁴⁰⁰ is not DC: Z₀ = 5·10⁹⁶ (Rust's ωC underflowed to 0: NaN)");
+    var z3: BjComplex = bj_characteristic_impedance_lossy(0.0, e300, 0.0, em300, 0.0);
+    assert(z3.re == e300 && same(z3.im, 0.0) == 1,
+      "DC, L′/C′ = 10⁶⁰⁰: √ = 10³⁰⁰ (Rust's quotient overflowed: ∞ + jNaN)");
+    var g4: BjComplex = bj_propagation_constant(e200, e200, e200, e200, 1.0);
+    var w4r: f64 = _bj_from_bits(0x6974E718D7D7625B);
+    assert(g4.re == w4r && g4.im == e200, "γ = 10²⁰⁰(1 + j) (Rust's product overflowed: NaN)");
+    var g5: BjComplex = bj_propagation_constant(0.1, 0.00000025, 0.000001, 0.0000000001, 2000000000.0);
+    var g6: BjComplex = BjComplex_sqrt(BjComplex_mul(BjComplex_new(0.1, 500.0), BjComplex_new(0.000001, 0.2)));
+    assert(g5.re == g6.re && g5.im == g6.im, "in range Rust's chain stays: hisab's √ of the product");
     return 0;
 }
 
@@ -1624,6 +1653,7 @@ fn main(): i64 {
     cyrius_stub_root();
     cyrius_round_once();
     cyrius_zin_edges();
+    cyrius_lossy_edges();
     rust_tests_d();
     cyrius_smatrix();
     cyrius_cascade_exact();

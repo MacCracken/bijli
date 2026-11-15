@@ -5606,15 +5606,62 @@ def rf_zin_ux(z0, zr, zi, beta, length):
     dm = ux_sqrt(ux_add(ux_mul(dr, dr), ux_mul(di, di)))
     if dm[0] <= ux_mul(ux(1e-15), scale)[0]:
         return dz_err("transmission line input impedance is unbounded (Z₀cos βl + jZ_L sin βl = 0)")
+    qr, qi = rf_cdiv_ux(nr, ni, dr, di)
+    return (ux_fin(ux_mul(qr, z, ident)), ux_fin(ux_mul(qi, z, ident)))
+
+
+def rf_cdiv_ux(nr, ni, dr, di):
+    """rf.rs's Smith division on model pairs, every operation rounded to 53 bits (row 18)."""
     if abs(dr[0]) >= abs(di[0]):
         q = ux_div(di, dr)
         d = ux_add(dr, ux_mul(di, q))
-        qr, qi = ux_div(ux_add(nr, ux_mul(ni, q)), d), ux_div(ux_sub(ni, ux_mul(nr, q)), d)
-    else:
-        q = ux_div(dr, di)
-        d = ux_add(ux_mul(dr, q), di)
-        qr, qi = ux_div(ux_add(ux_mul(nr, q), ni), d), ux_div(ux_sub(ux_mul(ni, q), nr), d)
-    return (ux_fin(ux_mul(qr, z, ident)), ux_fin(ux_mul(qi, z, ident)))
+        return ux_div(ux_add(nr, ux_mul(ni, q)), d), ux_div(ux_sub(ni, ux_mul(nr, q)), d)
+    q = ux_div(dr, di)
+    d = ux_add(ux_mul(dr, q), di)
+    return ux_div(ux_add(ux_mul(nr, q), ni), d), ux_div(ux_sub(ux_mul(ni, q), nr), d)
+
+
+def ux_atan2(y, x):
+    """atan2 of two model pairs to 53 bits (MPFR's widest range); a zero part leaves only the signs, as IEEE's."""
+    if y[0] == 0 or x[0] == 0:
+        def sgn(a):
+            if a[0] == 0:
+                return -0.0 if a[1] else 0.0
+            return 1.0 if a[0] > 0 else -1.0
+        return ux(math.atan2(sgn(y), sgn(x)))
+    return wv("atan2", y[0], x[0])
+
+
+def rf_sqrt_polar_ux(re, im):
+    """hisab's z.sqrt() on model pairs (row 18, M4 part 2d-2): |z| = √(re² + im²) and √|z| to 53 bits, arg z / 2
+    exactly, the polar products rounded once."""
+    ident = lambda t: t                                # noqa: E731
+    mag = ux_sqrt(ux_sqrt(ux_add(ux_mul(re, re), ux_mul(im, im))))
+    g = ux_atan2(im, re)
+    th = (g[0] / 2, g[1])
+    return [("f", ux_fin(ux_mul(mag, w_trig("cos", th), ident))),
+            ("f", ux_fin(ux_mul(mag, w_trig("sin", th), ident)))]
+
+
+def rf_lossy_ux(r, l, g, c, w):
+    """The port's lossy Z₀ for finite inputs with an unbounded exponent (row 18, M4 part 2d-2)."""
+    num, den = (ux(r), ux_mul(ux(w), ux(l))), (ux(g), ux_mul(ux(w), ux(c)))
+    if g == 0.0 and den[1][0] == 0:
+        if w == 0.0 and c > 0.0:
+            if r == 0.0:
+                return rf_sqrt_polar_ux(ux_div(ux(l), ux(c)), (Fraction(0), False))
+            if r > 0.0:
+                return [("f", math.inf), ("f", -math.inf)]
+        return [("f", math.nan), ("f", math.nan)]
+    return rf_sqrt_polar_ux(*rf_cdiv_ux(num[0], num[1], den[0], den[1]))
+
+
+def rf_gamma_ux(r, l, g, c, w):
+    """The port's propagation constant for finite inputs with an unbounded exponent (row 18, M4 part 2d-2)."""
+    a, b = (ux(r), ux_mul(ux(w), ux(l))), (ux(g), ux_mul(ux(w), ux(c)))
+    pr = ux_sub(ux_mul(a[0], b[0]), ux_mul(a[1], b[1]))
+    pi = ux_add(ux_mul(a[0], b[1]), ux_mul(a[1], b[0]))
+    return rf_sqrt_polar_ux(pr, pi)
 
 
 def rf_zin(P, z0, zr, zi, beta, length):
@@ -5815,6 +5862,8 @@ def rf_eval(fn, v, P, port=False):
         return [("f", fsqrt(fdiv(l, c)))]
     if fn == "rf::characteristic_impedance_lossy":
         r, l, g, c, w = v
+        if RF18["on"] and rf_fin(*v):
+            return rf_lossy_ux(*v)
         num, den = (r, w * l), (g, w * c)
         if den[0] == 0.0 and den[1] == 0.0:
             if w == 0.0 and g == 0.0 and c > 0.0:
@@ -5826,6 +5875,8 @@ def rf_eval(fn, v, P, port=False):
         return rf_sqrt_polar(P, rf_cdiv(num, den))
     if fn == "rf::propagation_constant":
         r, l, g, c, w = v
+        if RF18["on"] and rf_fin(*v):
+            return rf_gamma_ux(*v)
         return rf_sqrt_polar(P, sc_mul((r, w * l), (g, w * c)))
     if fn == "rf::input_impedance_lossless_complex":
         z = rf_zin(P, *v)
