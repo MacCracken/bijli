@@ -10,8 +10,8 @@
 # shape fixed at construction: test_smatrix_inconsistent_does_not_panic is n/a), row 37 (z0_equal on finite values),
 # the S-parameter reasons and the heap; (2a-1) ADR 0002 row 39, the stub match's cancellation-free root; (2a-2) row
 # 17, the cascade's star product rounded once and its exact T22 test; (2a-3) row 17, S → Z rounded once; (2b) row
-# 13, round once; (2c) row 17, the exact thresholds; (2d-1, 2d-2) row 18, the input impedance's, the lossy Z₀'s and
-# γ's range edges.
+# 13, round once; (2c) row 17, the exact thresholds; (2d-1 to 2d-3a) row 18, the input impedance's, the lossy Z₀'s,
+# γ's, the reflection coefficients' and the Smith chart's range edges.
 # tests/golden/rf.tsv pins every function over its grid against Rust besides.
 
 include "tests/lib.cyr"
@@ -788,6 +788,26 @@ fn cyrius_lossy_edges(): i64 {
     var g5: BjComplex = bj_propagation_constant(0.1, 0.00000025, 0.000001, 0.0000000001, 2000000000.0);
     var g6: BjComplex = BjComplex_sqrt(BjComplex_mul(BjComplex_new(0.1, 500.0), BjComplex_new(0.000001, 0.2)));
     assert(g5.re == g6.re && g5.im == g6.im, "in range Rust's chain stays: hisab's √ of the product");
+    return 0;
+}
+
+# ADR 0002 row 18 (M4 part 2d-3a): the reflection coefficients and the Smith chart at their range edges. Rust gave 0,
+# ∞ or NaN in each; the values are validate.py's model's.
+fn cyrius_smith_edges(): i64 {
+    test_group("cyrius_smith_edges");
+    var a: f64 = _bj_from_bits(0x7FEAB36D48E1ACF0);
+    var b: f64 = _bj_from_bits(0x7FE1CCF385EBC8A0);
+    var c: f64 = _bj_from_bits(0xFFE005419221015D);
+    var t1, v1 = bj_reflection_coefficient(a, b);
+    assert(ok_f(t1, v1) == 0.2, "Γ(1.5·10³⁰⁸, 10³⁰⁸) = 0.2 (Rust's Z_L + Z₀ overflowed: 0)");
+    var t2, v2 = bj_reflection_coefficient(b, c);
+    assert(ok_f(t2, v2) == 19.000000000000007, "Γ(10³⁰⁸, −0.9·10³⁰⁸) = 19 (Rust's Z_L − Z₀ overflowed: ∞)");
+    var g: BjComplex;
+    var t3, v3 = bj_reflection_coefficient_complex(BjComplex_new(b, b), BjComplex_new(b, -b), &g);
+    assert(is_ok(t3) == 1 && same(g.re, 0.0) == 1 && g.im == 1.0, "complex sums past DBL_MAX: Γ = j (Rust's NaN)");
+    var mx: f64 = _bj_from_bits(0x7FEFFFFFFFFFFFFF);
+    var z: BjComplex = bj_gamma_from_z(BjComplex_new(mx, mx));
+    assert(z.re == 1.0 && same(z.im, 0.0) == 1, "Γ of z = DBL_MAX(1 + j) is 1 (Rust's Smith d overflowed: NaN)");
     return 0;
 }
 
@@ -1654,6 +1674,7 @@ fn main(): i64 {
     cyrius_round_once();
     cyrius_zin_edges();
     cyrius_lossy_edges();
+    cyrius_smith_edges();
     rust_tests_d();
     cyrius_smatrix();
     cyrius_cascade_exact();

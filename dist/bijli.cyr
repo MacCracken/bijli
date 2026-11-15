@@ -27494,7 +27494,7 @@ fn _bj_rf_zin_ux(z0: f64, zr: f64, zi: f64, beta: f64, length: f64, out: *BjComp
     ve[3] = die;
     var q: f64[2];
     var qe: i64[2];
-    _bj_rf_cdiv_ux(&v, &ve, &q, &qe);
+    _bj_rf_cdiv_ux(&v, &ve, &q, &qe, 0);
     var qrs: f64 = q[0];
     var qre = qe[0];
     var qis: f64 = q[1];
@@ -27527,7 +27527,13 @@ public fn bj_reflection_coefficient(z_load: f64, z0: f64): Result {
         if (band == 2) { band = _bj_x_sum_below(z_load, z0, 30); }
         if (band == 1) { return Err(_bj_err_division_by_zero("Z_L + Z₀ = 0")); }
     }
-    var g: f64 = (z_load - z0) / den;
+    var num: f64 = z_load - z0;
+    var fs: f64 = (num - num) + (den - den);
+    if (fs != 0.0) {                                                # a sum past DBL_MAX (ADR 0002 row 18)
+        var ge: f64 = _bj_rf_refl_ux(z_load, z0);
+        return Ok(ge);
+    }
+    var g: f64 = num / den;
     return Ok(g);
 }
 
@@ -27556,7 +27562,14 @@ public fn bj_reflection_coefficient_complex(z_load: BjComplex, z0: BjComplex, ou
     }
     var nr: f64 = ar - br;
     var ni: f64 = ai - bi;
-    var qr, qi = _bj_vx_cdiv(nr, ni, dr, di);
+    var fs: f64 = (nr - nr) + (ni - ni) + (dr - dr) + (di - di);
+    if (fs != 0.0) {                                                # a sum past DBL_MAX (ADR 0002 row 18)
+        var er, ei = _bj_rf_refl_cx_ux(ar, ai, br, bi);
+        out.re = er;
+        out.im = ei;
+        return Ok(0);
+    }
+    var qr, qi = _bj_rf_cdiv_guard(nr, ni, dr, di);
     out.re = qr;
     out.im = qi;
     return Ok(0);
@@ -27661,7 +27674,7 @@ public fn bj_gamma_from_z(z_norm: BjComplex): BjComplex {
     }
     var nr: f64 = re - 1.0;
     var ni: f64 = im - 0.0;
-    var qr, qi = _bj_vx_cdiv(nr, ni, dr, di);
+    var qr, qi = _bj_rf_cdiv_guard(nr, ni, dr, di);                # its range edges (ADR 0002 row 18)
     return BjComplex_new(qr, qi);
 }
 
@@ -27685,7 +27698,7 @@ public fn bj_z_from_gamma(gamma: BjComplex): BjComplex {
     }
     var nr: f64 = 1.0 + re;
     var ni: f64 = 0.0 + im;
-    var qr, qi = _bj_vx_cdiv(nr, ni, dr, di);
+    var qr, qi = _bj_rf_cdiv_guard(nr, ni, dr, di);                # its range edges (ADR 0002 row 18)
     return BjComplex_new(qr, qi);
 }
 
@@ -28515,8 +28528,9 @@ fn _bj_rf_s2z_chain(p: *f64, z0: f64, o: *f64): i64 {
 # A non-finite input keeps Rust's chain.
 
 # q := a/b by Smith's algorithm (rf.rs's cdiv) on 53-bit values with an unbounded exponent: v = (a.re, a.im, b.re, b.im)
-# significands with exponents ve; q[0], q[1] and qe[0], qe[1] the quotient's parts.
-fn _bj_rf_cdiv_ux(v: *f64, ve: *i64, q: *f64, qe: *i64) {
+# significands with exponents ve; q[0], q[1] and qe[0], qe[1] the quotient's parts, or with fin = 1 the parts' last
+# divisions rounded once into binary64 (q[0], q[1]; qe zero).
+fn _bj_rf_cdiv_ux(v: *f64, ve: *i64, q: *f64, qe: *i64, fin) {
     var nrs: f64 = v[0];
     var nre = ve[0];
     var nis: f64 = v[1];
@@ -28533,6 +28547,15 @@ fn _bj_rf_cdiv_ux(v: *f64, ve: *i64, q: *f64, qe: *i64) {
         var u1, u1e = _bj_k_ux_add(nrs, nre, t2, t2e);
         var t3, t3e = _bj_k_ux_mul(nrs, nre, rr, rre);
         var u2, u2e = _bj_k_ux_sub(nis, nie, t3, t3e);
+        if (fin == 1) {
+            var f1: f64 = _bj_k_ux_div_f64(u1, u1e, dd, dde);
+            var f2: f64 = _bj_k_ux_div_f64(u2, u2e, dd, dde);
+            q[0] = f1;
+            q[1] = f2;
+            qe[0] = 0;
+            qe[1] = 0;
+            return 0;
+        }
         var q1, q1e = _bj_k_ux_div(u1, u1e, dd, dde);
         var q2, q2e = _bj_k_ux_div(u2, u2e, dd, dde);
         q[0] = q1;
@@ -28548,6 +28571,15 @@ fn _bj_rf_cdiv_ux(v: *f64, ve: *i64, q: *f64, qe: *i64) {
     var u3, u3e = _bj_k_ux_add(t5, t5e, nis, nie);
     var t6, t6e = _bj_k_ux_mul(nis, nie, rr2, rr2e);
     var u4, u4e = _bj_k_ux_sub(t6, t6e, nrs, nre);
+    if (fin == 1) {
+        var f3: f64 = _bj_k_ux_div_f64(u3, u3e, dd2, dd2e);
+        var f4: f64 = _bj_k_ux_div_f64(u4, u4e, dd2, dd2e);
+        q[0] = f3;
+        q[1] = f4;
+        qe[0] = 0;
+        qe[1] = 0;
+        return 0;
+    }
     var q3, q3e = _bj_k_ux_div(u3, u3e, dd2, dd2e);
     var q4, q4e = _bj_k_ux_div(u4, u4e, dd2, dd2e);
     q[0] = q3;
@@ -28685,7 +28717,7 @@ fn _bj_rf_lossy_ux(r: f64, l: f64, g: f64, c: f64, omega: f64, out: *BjComplex) 
     ve[3] = de;
     var q: f64[2];
     var qe2: i64[2];
-    _bj_rf_cdiv_ux(&v, &ve, &q, &qe2);
+    _bj_rf_cdiv_ux(&v, &ve, &q, &qe2, 0);
     _bj_rf_sqrt_polar_ux(q[0], qe2[0], q[1], qe2[1], out);
     return 0;
 }
@@ -28707,6 +28739,116 @@ fn _bj_rf_gamma_ux(r: f64, l: f64, g: f64, c: f64, omega: f64, out: *BjComplex) 
     var pi, pie = _bj_k_ux_add(p3, p3e, p4, p4e);                   # R·ωC + ωL·G
     _bj_rf_sqrt_polar_ux(pr, pre, pi, pie, out);
     return 0;
+}
+
+# ── Smith's division at its range edges (ADR 0002 row 18, M4 part 2d-3a) ───────────────────────────────────────────
+#
+# rf.rs's cdiv in the reflection coefficients and the Smith chart: Rust's where its four inputs are each 0 or within
+# [2^-250, 2^251) and the quotient's parts 0 or normal (every intermediate is then normal: Smith's ratio at least
+# 2^-501, its products 2^-751, a cancelling numerator 2^-804, a nonzero quotient 2^-1056); otherwise the 53-bit chain
+# (_bj_rf_cdiv_ux), its two last divisions rounded once. The reflection coefficients' sums Z_L ± Z₀ go into it as
+# 53-bit values too where they pass DBL_MAX; the Smith chart's z ± 1 and 1 ± Γ never do.
+
+# 1 when each of a, b, c, d is 0 or within [2^-250, 2^251).
+#must_use
+fn _bj_rf_box250(a: f64, b: f64, c: f64, d: f64): i64 {
+    var ok = 1;
+    var e1 = (load64(&a) >> 52) & 2047;
+    var e2 = (load64(&b) >> 52) & 2047;
+    var e3 = (load64(&c) >> 52) & 2047;
+    var e4 = (load64(&d) >> 52) & 2047;
+    if (a != 0.0 && (e1 < 773 || e1 > 1273)) { ok = 0; }
+    if (b != 0.0 && (e2 < 773 || e2 > 1273)) { ok = 0; }
+    if (c != 0.0 && (e3 < 773 || e3 > 1273)) { ok = 0; }
+    if (d != 0.0 && (e4 < 773 || e4 > 1273)) { ok = 0; }
+    return ok;
+}
+
+# a/b by rf.rs's cdiv at its range edges (the section comment) for finite parts.
+#must_use
+fn _bj_rf_cdiv_guard(ar: f64, ai: f64, br: f64, bi: f64): (f64, f64) {
+    var qr, qi = _bj_vx_cdiv(ar, ai, br, bi);
+    var q0: f64 = qr;
+    var q1: f64 = qi;
+    var e1 = (load64(&ar) >> 52) & 2047;
+    var e2 = (load64(&ai) >> 52) & 2047;
+    var e3 = (load64(&br) >> 52) & 2047;
+    var e4 = (load64(&bi) >> 52) & 2047;
+    var lo = (e1 - 773) | (e2 - 773) | (e3 - 773) | (e4 - 773);
+    var hi = (1273 - e1) | (1273 - e2) | (1273 - e3) | (1273 - e4);
+    var eq = ((load64(&q0) >> 52) & 2047) - 1;
+    var eq2 = ((load64(&q1) >> 52) & 2047) - 1;
+    if (((lo | hi | eq | eq2 | (2045 - eq) | (2045 - eq2)) >= 0)) { return (q0, q1); }   # the common case
+    if (_bj_rf_box250(ar, ai, br, bi) == 1 && _bj_rf_subn(q0) == 0 && _bj_rf_subn(q1) == 0) { return (q0, q1); }
+    var w0, w1 = _bj_rf_cdiv_edge(ar, ai, br, bi);
+    return (w0, w1);
+}
+
+# a/b by the 53-bit Smith division, its last divisions rounded once (_bj_rf_cdiv_guard's edge path).
+#must_use
+fn _bj_rf_cdiv_edge(ar: f64, ai: f64, br: f64, bi: f64): (f64, f64) {
+    var v: f64[4];
+    var ve: i64[4];
+    var s1, x1 = _bj_k_ux_from(ar);
+    var s2, x2 = _bj_k_ux_from(ai);
+    var s3, x3 = _bj_k_ux_from(br);
+    var s4, x4 = _bj_k_ux_from(bi);
+    v[0] = s1;
+    ve[0] = x1;
+    v[1] = s2;
+    ve[1] = x2;
+    v[2] = s3;
+    ve[2] = x3;
+    v[3] = s4;
+    ve[3] = x4;
+    var q: f64[2];
+    var qe: i64[2];
+    _bj_rf_cdiv_ux(&v, &ve, &q, &qe, 1);
+    var w0: f64 = q[0];
+    var w1: f64 = q[1];
+    return (w0, w1);
+}
+
+# (Z_L − Z₀)/(Z_L + Z₀) with an unbounded exponent for finite real impedances: the two sums to 53 bits, the quotient
+# rounded once.
+#must_use
+fn _bj_rf_refl_ux(zl: f64, z0: f64): f64 {
+    var as, ae = _bj_k_ux_from(zl);
+    var bs, be = _bj_k_ux_from(z0);
+    var ns, ne = _bj_k_ux_sub(as, ae, bs, be);
+    var ds, de = _bj_k_ux_add(as, ae, bs, be);
+    var g: f64 = _bj_k_ux_div_f64(ns, ne, ds, de);
+    return g;
+}
+
+# (Z_L − Z₀)/(Z_L + Z₀) with an unbounded exponent for finite complex impedances: the four sums to 53 bits, then the
+# 53-bit Smith division, its last divisions rounded once.
+#must_use
+fn _bj_rf_refl_cx_ux(ar: f64, ai: f64, br: f64, bi: f64): (f64, f64) {
+    var as, ae = _bj_k_ux_from(ar);
+    var bs, be = _bj_k_ux_from(ai);
+    var cs, ce = _bj_k_ux_from(br);
+    var ds, de = _bj_k_ux_from(bi);
+    var v: f64[4];
+    var ve: i64[4];
+    var n1, n1e = _bj_k_ux_sub(as, ae, cs, ce);
+    var n2, n2e = _bj_k_ux_sub(bs, be, ds, de);
+    var d1, d1e = _bj_k_ux_add(as, ae, cs, ce);
+    var d2, d2e = _bj_k_ux_add(bs, be, ds, de);
+    v[0] = n1;
+    ve[0] = n1e;
+    v[1] = n2;
+    ve[1] = n2e;
+    v[2] = d1;
+    ve[2] = d1e;
+    v[3] = d2;
+    ve[3] = d2e;
+    var q: f64[2];
+    var qe: i64[2];
+    _bj_rf_cdiv_ux(&v, &ve, &q, &qe, 1);
+    var w0: f64 = q[0];
+    var w1: f64 = q[1];
+    return (w0, w1);
 }
 
 # --- touchstone_data.cyr ---

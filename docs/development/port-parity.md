@@ -5095,3 +5095,37 @@ Touchstone's MA and DB magnitudes; 2d-5 the array factors' ψ past DBL_MAX.
   measured, 0 pending, 87,533 accepted (ADR 01: 30,860; ADR 0002: 56,673)** over 623,098 rows; **all 416 digests
   equal**, HEAD's unchanged but the two functions'. `rf.tcyr` passes on all three (242). The gate is clean (no
   warnings; execution coverage 323 of 323 functions); validate.py 623,098 rows, 0 problems. Next, 2d-3.
+
+## 89. M4 part 2d-3a: the reflection coefficients and the Smith chart at their range edges (2026-11-15)
+
+2d-3 runs in two bites: 2d-3a the Smith-division family here, 2d-3b the stub match (its discriminant, roots, crecip
+and stub length, with an unbounded exponent end to end).
+
+- **The finding**: `reflection_coefficient` gave 0 where Z_L + Z₀ passed DBL_MAX (Γ(1.5·10³⁰⁸, 10³⁰⁸) = 0.2) and ∞
+  where Z_L − Z₀ did (Γ(10³⁰⁸, −0.9·10³⁰⁸) = 19); `reflection_coefficient_complex` gave NaN for such sums (Γ = j for
+  Z_L = 10³⁰⁸(1 + j), Z₀ = 10³⁰⁸(1 − j)); `gamma_from_z` gave NaN for z = DBL_MAX(1 + j), where Γ = 1, as Smith's
+  d = b.re + b.im·r overflowed. Smith's division is otherwise robust: most of the new edge rows agree with Rust.
+- **ADR 0002 row 18, amended** (`src/rf.cyr`): `_bj_rf_cdiv_guard` keeps rf.rs's Smith division where its four
+  inputs are each 0 or within [2^-250, 2^251) and the quotient's parts 0 or normal (every intermediate is then normal:
+  the ratio at least 2^-501, its products 2^-751, a cancelling numerator 2^-804, a nonzero quotient 2^-1056); else
+  `_bj_rf_cdiv_edge` runs it on 53-bit values (2d-2's `_bj_rf_cdiv_ux`, now with its two last divisions rounded once).
+  The complex reflection and the Smith chart call it; the Smith chart's z ± 1 and 1 ± Γ never overflow. The reflection
+  coefficients take Z_L ± Z₀ to 53 bits where a binary64 sum is not finite (`_bj_rf_refl_ux`, `_bj_rf_refl_cx_ux`).
+- **The grid**: 1,137 rows appended to `rf.tsv` (28,832): ten real pairs near DBL_MAX of both signs (each through the
+  real reflection, three complex ones and the quarter-wave transformer), nine pairs of far-apart magnitudes (the box's
+  2^±250 and 2^±251 among them) through the complex reflection and the Smith chart, the Smith chart near DBL_MAX and at
+  its poles with subnormal imaginary parts, and 200 seeded wide values.
+- **validate.py** models the four with 53-bit sums and Smith's division (`rf_cdiv_ux(..., fin=True)`) under `RF18`;
+  `rf.adr.tsv` maps **66 rows** (8 real, 29 complex, 12 Γ, 17 z), all passing.
+- **Tests**: `tests/rf.tcyr`'s `cyrius_smith_edges` (4 assertions, 246 in all).
+- **Benchmarks** (a focused interleaved A/B against HEAD, three rounds at load 12.5 to 12.8, so rough):
+  `rf/reflection_coefficient` 19–24 → 22–27 ns; `reflection_coefficient_complex` 68–80 → 99–105 ns and
+  `gamma_from_z` 43–48 → 67–93 ns, about +20–25 ns: the guard is a function between the caller and Smith's division,
+  with its own locals. Splitting its edge path (four scratch arrays) into a separate helper and inlining its quotient
+  test took it from about +45 ns; inlining the guard into its three callers would likely save most of the rest (a
+  finding, left for now).
+- **Result, every target** (x86_64 ELF, x86_64 PE, aarch64): **17 modules, 0 failing; 536,609 ok, 0 failed, 0
+  measured, 0 pending, 87,626 accepted (ADR 01: 30,860; ADR 0002: 56,766)** over 624,235 rows; **all 416 digests
+  equal**, HEAD's unchanged but the reflections', the Smith chart's and the quarter-wave transformer's (new rows).
+  `rf.tcyr` passes on all three (246). The gate is clean (no warnings; execution coverage 323 of 323 functions);
+  validate.py 624,235 rows, 0 problems. Next, 2d-3b: the stub match.

@@ -349,6 +349,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
 - **Cyrius port, M4 part 2d-2 — the lossy Z₀ and γ at their range edges** (`src/rf.cyr`): their chains with an
   unbounded exponent where they leave the range (ADR 0002 row 18 amended, see Fixed), on new 53-bit helpers for
   Smith's division, atan2 and hisab's square root. `rf.tsv` grows by 724 edge rows (27,695).
+- **Cyrius port, M4 part 2d-3a — the reflection coefficients and the Smith chart at their range edges**
+  (`src/rf.cyr`): Smith's division guarded, its 53-bit chain where it leaves the range (ADR 0002 row 18 amended, see
+  Fixed). 2d-3 runs as 2d-3a and 2d-3b (the stub match). `rf.tsv` grows by 1,137 edge rows (28,832).
 
 ### Fixed
 
@@ -773,6 +776,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
   10²⁰⁰(1 + j)). Both now run Rust's chain with an unbounded exponent there. Cost (no Rust benches; measured at load
   6–7): the guards, about +33 ns on a typical lossy Z₀ (500 → 533 ns) and within the noise on γ (559 → 564 ns)
   (`port-parity.md` §88).
+- **rf** (ADR 0002 row 18 amended, M4 part 2d-3a): `reflection_coefficient` gave 0 where Z_L + Z₀ passed DBL_MAX
+  (Γ(1.5·10³⁰⁸, 10³⁰⁸) = 0.2) and ∞ where Z_L − Z₀ did (Γ(10³⁰⁸, −0.9·10³⁰⁸) = 19); the complex one gave NaN for such
+  sums; `gamma_from_z` gave NaN for z = DBL_MAX(1 + j), where Γ = 1, as Smith's d overflowed. The sums and Smith's
+  division now run with an unbounded exponent there. Cost (measured at load 12, so rough): the guard, about +2 ns on
+  `rf/reflection_coefficient`, +20–25 ns on the complex one (≈ 79 → 99 ns) and on `gamma_from_z` (≈ 48 → 70 ns)
+  (`port-parity.md` §89).
 
 ### Performance
 

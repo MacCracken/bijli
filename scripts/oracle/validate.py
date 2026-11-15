@@ -5610,15 +5610,17 @@ def rf_zin_ux(z0, zr, zi, beta, length):
     return (ux_fin(ux_mul(qr, z, ident)), ux_fin(ux_mul(qi, z, ident)))
 
 
-def rf_cdiv_ux(nr, ni, dr, di):
-    """rf.rs's Smith division on model pairs, every operation rounded to 53 bits (row 18)."""
+def rf_cdiv_ux(nr, ni, dr, di, fin=False):
+    """rf.rs's Smith division on model pairs, every operation rounded to 53 bits (row 18); with fin the two last
+    divisions rounded once into binary64 (floats)."""
+    last = (lambda a, b: ux_fin(ux_div(a, b, lambda v: v))) if fin else ux_div
     if abs(dr[0]) >= abs(di[0]):
         q = ux_div(di, dr)
         d = ux_add(dr, ux_mul(di, q))
-        return ux_div(ux_add(nr, ux_mul(ni, q)), d), ux_div(ux_sub(ni, ux_mul(nr, q)), d)
+        return last(ux_add(nr, ux_mul(ni, q)), d), last(ux_sub(ni, ux_mul(nr, q)), d)
     q = ux_div(dr, di)
     d = ux_add(ux_mul(dr, q), di)
-    return ux_div(ux_add(ux_mul(nr, q), ni), d), ux_div(ux_sub(ux_mul(ni, q), nr), d)
+    return last(ux_add(ux_mul(nr, q), ni), d), last(ux_sub(ux_mul(ni, q), nr), d)
 
 
 def ux_atan2(y, x):
@@ -5891,6 +5893,9 @@ def rf_eval(fn, v, P, port=False):
                 return dz_err("Z_L + Z₀ = 0")
         elif abs(den) < 1e-30:
             return dz_err("Z_L + Z₀ = 0")
+        if RF18["on"]:                                      # row 18 (M4 part 2d-3a): the sums to 53 bits
+            a, b = ux(zl), ux(z0)
+            return [("f", ux_fin(ux_div(ux_sub(a, b), ux_add(a, b), lambda q: q)))]
         return [("f", fdiv(zl - z0, den))]
     if fn == "rf::reflection_coefficient_complex":
         a0, a1, b0, b1 = v
@@ -5902,6 +5907,9 @@ def rf_eval(fn, v, P, port=False):
                 return dz_err("Z_L + Z₀ = 0")
         elif den[0] * den[0] + den[1] * den[1] < 1e-60:
             return dz_err("Z_L + Z₀ = 0")
+        if RF18["on"]:                                      # row 18 (M4 part 2d-3a)
+            a, b, c, d = ux(a0), ux(a1), ux(b0), ux(b1)
+            return rf_cx(rf_cdiv_ux(ux_sub(a, c), ux_sub(b, d), ux_add(a, c), ux_add(b, d), fin=True))
         return rf_cx(rf_cdiv((a0 - b0, a1 - b1), den))
     if fn == "rf::vswr":
         g = v[0]
@@ -5942,6 +5950,8 @@ def rf_eval(fn, v, P, port=False):
             den, num = (1.0 - re, 0.0 - im), (1.0 + re, 0.0 + im)
         if den[0] == 0.0 and den[1] == 0.0:
             return rf_cx((math.inf, 0.0))
+        if RF18["on"]:                                      # row 18 (M4 part 2d-3a): z ± 1 never overflow
+            return rf_cx(rf_cdiv_ux(ux(num[0]), ux(num[1]), ux(den[0]), ux(den[1]), fin=True))
         return rf_cx(rf_cdiv(num, den))
     if fn == "rf::quarter_wave_transformer":
         z0, zl = v

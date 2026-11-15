@@ -51,6 +51,9 @@
 //!
 //! M4 part 2d-2 appends the lossy Z₀'s and γ's range edges (row 18): ωL and ωC past either end, |z|² past either end,
 //! the DC branch's L/C, arguments far from the axes, the guard's box, seeded wide values.
+//!
+//! M4 part 2d-3a appends the Smith-division family's range edges (row 18): the reflection coefficients' Z_L ± Z₀ past
+//! DBL_MAX, Smith's internals below 2^-1022, the Smith chart near DBL_MAX and at its poles, the box, seeded values.
 
 use crate::grids::{Edge2, Rng, knife_edge, knife_edge2, specials};
 use crate::m_field::res_f;
@@ -692,8 +695,45 @@ pub fn emit() -> Module {
     emit_2c(r);
     emit_2d1(r, &mut rng);
     emit_2d2(r, &mut rng);
+    emit_2d3a(r, &mut rng);
 
     rows.m
+}
+
+/// M4 part 2d-3a: the Smith-division family at its range edges (ADR 0002 row 18): the reflection coefficients where
+/// Z_L ± Z₀ passes DBL_MAX, Smith's ratio, products and quotient below 2^-1022 (parts far apart, subnormal sums), the
+/// Smith chart near DBL_MAX and its poles with tiny imaginary parts, the guard's 2^±250 box, seeded wide values.
+fn emit_2d3a(r: &mut Rows, rng: &mut Rng) {
+    let m = f64::MAX;
+    for &(a, b) in &[(1.5e308, 1e308), (1e308, 1.5e308), (1e308, -0.9e308), (-1.7e308, 0.85e308), (m, m),
+                     (m, -m * 0.5), (-m, -1e308), (1e308, 1e308), (1.7e308, 1e292), (1e-320, 5e-324)] {
+        r.gamma_real(a, b);
+        r.gamma_complex((a, 0.0), (b, 0.0));
+        r.gamma_complex((a, a), (b, -b));
+        r.gamma_complex((0.5, a), (0.25, b));
+    }
+    let tiny = [(1e-300, 1e300), (1e300, 1e-300), (5e-324, 1e-310), (1e-310, 5e-324), (1e-200, 1e-200),
+                (1e200, 1e200), (2f64.powi(-250), 2f64.powi(250)), (2f64.powi(-251), 2f64.powi(251)), (1.0, 1e-308)];
+    for &(a, b) in &tiny {
+        r.gamma_complex((a, b), (a, -b));
+        r.gamma_complex((a, b), (b, a));
+        r.gamma_complex((b, a), (1e-300, 1e-300));
+        r.smith((a, b));
+        r.smith((-a, b));
+        r.smith((a, -b));
+    }
+    let n1 = -1.0 + f64::EPSILON;
+    for &z in &[(m, m), (m, -m), (-m, m), (n1, 1e-310), (n1, 5e-324), (-1.0, 1e-310), (1.0, 1e-310),
+                (1.0 - f64::EPSILON / 2.0, 1e-320), (1.0, 5e-324), (1e-310, 1e-310), (m, 5e-324)] {
+        r.smith(z);
+    }
+    for _ in 0..200 {
+        let z = (rng.signed_log_uniform(-300.0, 300.0), rng.signed_log_uniform(-300.0, 300.0));
+        let w = (rng.signed_log_uniform(-300.0, 300.0), rng.signed_log_uniform(-300.0, 300.0));
+        r.gamma_complex(z, w);
+        r.smith(z);
+        r.gamma_real(z.0, w.0);
+    }
 }
 
 /// M4 part 2d-2: the lossy Z₀ and γ at their range edges (ADR 0002 row 18): ωL or ωC past DBL_MAX or below 2^-1022
