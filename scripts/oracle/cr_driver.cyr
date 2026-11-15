@@ -9,8 +9,8 @@
 # M1 part 5d-1), Clausius–Mossotti's ε_r, the trig-free Fresnel cosine, the Liénard–Wiechert R_eff and κ and the
 # parallel combinations (src/crmath_edge.cyr, M2 parts 2c-2 to 2c-5), and the materials' 53-bit roots and Γ
 # (src/crmath_vx.cyr, M2 part 2d-2c), M3's exact sum-of-squares threshold (src/crmath_cmp.cyr, M3 part 2c-1), ABCD
-# propagation (src/crmath_edge.cyr, M3 part 2c-2), the Mueller, Jones and Stokes chains and Rayleigh's
-# (src/crmath_vx.cyr, M3 parts 2d-1a to 2d-2), against Fractions and MPFR's widest exponent range. Built from the math
+# propagation (src/crmath_edge.cyr, M3 part 2c-2), the Mueller, Jones and Stokes chains, Rayleigh's and the beam's
+# (src/crmath_vx.cyr, M3 parts 2d-1a to 2d-3a), against Fractions and MPFR's widest exponent range. Built from the math
 # sources the bundle carries (src/constants.cyr … src/mathx.cyr, in the manifest's order and byte for byte what
 # dist/bijli.cyr holds): the bundle is `private` and these entry points are bijli-internal, so a consumer of
 # dist/bijli.cyr can't call them, but a file of internals only has no marker and can be included on its own.
@@ -85,6 +85,99 @@ fn _drv_dot4(a: *f64, ia, sa, b: *f64, ib, sb): f64 {
     if (aa >= _BJ_VX_LO4 && aa <= _BJ_VX_HI) { return acc; }
     var r: f64 = _bj_vx_dot4_edge(a, ia, sa, b, ib, sb, acc);
     return r;
+}
+
+# The beam's chains (M3 part 2d-3a) as src/beam.cyr computes them: Rust's chain, its test, then src/crmath_vx.cyr's
+# _bj_vx_bm_* helper. The driver can't include beam.cyr (a file with public API), so these copy its few lines.
+#must_use
+fn _drv_bspot(w0: f64, z: f64, zr: f64): f64 {
+    var ratio: f64 = z / zr;
+    var root: f64 = f64_sqrt(1.0 + ratio * ratio);
+    var w: f64 = w0 * root;
+    if (w - w == 0.0) { return w; }
+    var u: f64 = _bj_vx_bm_spot(w0, z, zr, w);
+    return u;
+}
+
+#must_use
+fn _drv_broc(z: f64, zr: f64): f64 {
+    var ratio: f64 = zr / z;
+    var r: f64 = z * (1.0 + ratio * ratio);
+    if (r - r == 0.0) { return r; }
+    var u: f64 = _bj_vx_bm_roc(z, zr, r);
+    return u;
+}
+
+#must_use
+fn _drv_bgouy(z: f64, zr: f64): f64 {
+    var q: f64 = z / zr;
+    var a: f64 = _bj_atan(q);
+    var aq: f64 = f64_abs(q);
+    if (aq > _BJ_VX_MN || z == 0.0) { return a; }
+    var u: f64 = _bj_vx_bm_gouy(z, zr, a);
+    return u;
+}
+
+#must_use
+fn _drv_bpeak(w0: f64, z: f64, zr: f64): f64 {
+    var w: f64 = _drv_bspot(w0, z, zr);
+    var p: f64 = _BJ_PI * w * w;
+    var f: f64 = 2.0 / p;
+    var ap: f64 = f64_abs(p);
+    if (ap > _BJ_VX_MN && ap <= _BJ_VX_HI) { return f; }
+    var u: f64 = _bj_vx_bm_peak(w0, z, zr, f);
+    return u;
+}
+
+#must_use
+fn _drv_bci(n1: f64, n2: f64, rad: f64): f64 {
+    var dn: f64 = n1 - n2;
+    var pr: f64 = n2 * rad;
+    var c: f64 = dn / pr;
+    var fin: f64 = (dn - dn) + (pr - pr);
+    if (fin != 0.0) { c = _bj_vx_bm_ci(n1, n2, rad, c); }
+    return c;
+}
+
+#must_use
+fn _drv_bdot2(a: f64, x: f64, b: f64, y: f64): f64 {
+    var r: f64 = a * x + b * y;
+    var u: f64 = _bj_vx_bm_dot2(a, x, b, y, r);
+    return u;
+}
+
+#must_use
+fn _drv_bw0(zr2: f64, lam: f64): f64 {
+    var pz: f64 = zr2 * lam;
+    var pq: f64 = pz / _BJ_PI;
+    var w0: f64 = f64_sqrt(pq);
+    if (!(pz > _BJ_VX_MN && pz <= _BJ_VX_HI && pq > _BJ_VX_MN)) { w0 = _bj_vx_bm_w0(zr2, lam, w0); }
+    return w0;
+}
+
+#must_use
+fn _drv_bgp(length: f64, r1: f64, r2: f64): f64 {
+    var g1: f64 = 1.0 - length / r1;
+    var g2: f64 = 1.0 - length / r2;
+    var gp: f64 = g1 * g2;
+    if (gp - gp != 0.0) { gp = _bj_vx_bm_gp(length, r1, r2); }
+    return gp;
+}
+
+#must_use
+fn _drv_bfsr(fsr: f64, g1: f64, g2: f64): f64 {
+    var gp: f64 = g1 * g2;
+    var root: f64 = f64_sqrt(gp);
+    var arg: f64 = root;
+    if (g1 < 0.0 || g2 < 0.0) { arg = -root; }
+    var ac: f64 = _bj_acos(arg);
+    var q: f64 = fsr / _BJ_PI;
+    if (q > _BJ_VX_MN) {
+        var s: f64 = q * ac;
+        return s;
+    }
+    var u: f64 = _bj_vx_bm_fsr(fsr, ac);
+    return u;
 }
 
 # One call on the words at w: the result's bits (_unknown set, and 0, for an unknown function name).
@@ -452,6 +545,30 @@ fn _call(fp, fl, w): i64 {
     elif (_is(fp, fl, "rang") == 1) {
         # rang sigma d c: Rayleigh's angular intensity (_bj_vx_ray_ang), for |d| ≥ 10^-30 and not NaN
         r = _bj_vx_ray_ang(x, y, _wf(w, 2));
+    }
+    elif (_is(fp, fl, "bspot") == 1) {
+        # bspot w0 z zr: the beam's spot size (M3 part 2d-3a); bpeak the same words, its peak intensity factor
+        r = _drv_bspot(x, y, _wf(w, 2));
+    }
+    elif (_is(fp, fl, "bpeak") == 1) { r = _drv_bpeak(x, y, _wf(w, 2)); }
+    elif (_is(fp, fl, "broc") == 1) {
+        # broc z zr: the radius of curvature, for |z| ≥ 10^-30; bgouy z zr: the Gouy phase
+        r = _drv_broc(x, y);
+    }
+    elif (_is(fp, fl, "bgouy") == 1) { r = _drv_bgouy(x, y); }
+    elif (_is(fp, fl, "bci") == 1) {
+        # bci n1 n2 rad: the curved interface's C, for |n₂|, |R| ≥ 10^-30; bdot2 a x b y: a·x + b·y
+        r = _drv_bci(x, y, _wf(w, 2));
+    }
+    elif (_is(fp, fl, "bdot2") == 1) { r = _drv_bdot2(x, y, _wf(w, 2), _wf(w, 3)); }
+    elif (_is(fp, fl, "bw0") == 1) {
+        # bw0 zr2 lam: transform_beam's w₀′, for a positive finite z_R′; bgp L r1 r2: the stability's g₁g₂
+        r = _drv_bw0(x, y);
+    }
+    elif (_is(fp, fl, "bgp") == 1) { r = _drv_bgp(x, y, _wf(w, 2)); }
+    elif (_is(fp, fl, "bfsr") == 1) {
+        # bfsr fsr g1 g2: the mode spacing, for a positive finite Δν_FSR and 0 ≤ g₁g₂ ≤ 1
+        r = _drv_bfsr(x, y, _wf(w, 2));
     }
     elif (_is(fp, fl, "ux_pow") == 1) {
         # ux_pow s e y part: (s·2^e)^y's s (part 0) or e (part 1)

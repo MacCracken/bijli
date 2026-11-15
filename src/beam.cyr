@@ -106,18 +106,21 @@ impl BjGaussianBeam {
         return (z, zr);
     }
 
-    # w(z) = w₀·√(1 + (z/z_R)²), the 1/e² intensity radius at distance z from the waist. Mirrors
-    # `GaussianBeam::spot_size`.
+    # w(z) = w₀·√(1 + (z/z_R)²), the 1/e² intensity radius at distance z from the waist: where (z/z_R)² passes DBL_MAX
+    # the chain with an unbounded exponent, rounded once (ADR 0002 row 18, M3 part 2d-3a; src/crmath_vx.cyr's
+    # _bj_vx_bm_spot). Mirrors `GaussianBeam::spot_size`.
     #must_use
     public fn spot_size(self, z: f64): f64 {
         var ratio: f64 = z / self.rayleigh_range;
         var root: f64 = f64_sqrt(1.0 + ratio * ratio);
         var w: f64 = self.waist * root;
+        if (w - w != 0.0) { w = _bj_vx_bm_spot(self.waist, z, self.rayleigh_range, w); }
         return w;
     }
 
     # R(z) = z·(1 + (z_R/z)²), the wavefront's radius of curvature; InvalidParameter at the waist (|z| < 1e-30, where
-    # R is infinite). Mirrors `GaussianBeam::radius_of_curvature`.
+    # R is infinite). Where (z_R/z)² passes DBL_MAX the chain with an unbounded exponent, rounded once (ADR 0002 row 18,
+    # M3 part 2d-3a). Mirrors `GaussianBeam::radius_of_curvature`.
     #must_use
     public fn radius_of_curvature(self, z: f64): Result {
         var az: f64 = f64_abs(z);
@@ -127,14 +130,19 @@ impl BjGaussianBeam {
         }
         var ratio: f64 = self.rayleigh_range / z;
         var r: f64 = z * (1.0 + ratio * ratio);
+        if (r - r != 0.0) { r = _bj_vx_bm_roc(z, self.rayleigh_range, r); }
         return Ok(r);
     }
 
-    # ζ(z) = arctan(z/z_R), the Gouy phase at distance z from the waist (a geometric angle, convention-free). Mirrors
-    # `GaussianBeam::gouy_phase`.
+    # ζ(z) = arctan(z/z_R), the Gouy phase at distance z from the waist (a geometric angle, convention-free): where
+    # z/z_R falls below 2^-1022 from a nonzero z, arctan of its 53-bit value rounded once (ADR 0002 row 18, M3 part
+    # 2d-3a). Mirrors `GaussianBeam::gouy_phase`.
     #must_use
     public fn gouy_phase(self, z: f64): f64 {
-        var a: f64 = _bj_atan(z / self.rayleigh_range);
+        var q: f64 = z / self.rayleigh_range;
+        var a: f64 = _bj_atan(q);
+        var aq: f64 = f64_abs(q);
+        if (!(aq > _BJ_VX_MN || z == 0.0)) { a = _bj_vx_bm_gouy(z, self.rayleigh_range, a); }
         return a;
     }
 
@@ -158,12 +166,16 @@ impl BjGaussianBeam {
         return d;
     }
 
-    # 2/(πw(z)²), the factor that multiplies the total power P to give the peak intensity I₀ = 2P/(πw²). Mirrors
-    # `GaussianBeam::peak_intensity_factor`.
+    # 2/(πw(z)²), the factor that multiplies the total power P to give the peak intensity I₀ = 2P/(πw²): where π·w·w
+    # is not normal, the chain with an unbounded exponent from the 53-bit w, rounded once (ADR 0002 row 18, M3 part
+    # 2d-3a). Mirrors `GaussianBeam::peak_intensity_factor`.
     #must_use
     public fn peak_intensity_factor(self, z: f64): f64 {
         var w: f64 = self.spot_size(z);
-        var f: f64 = 2.0 / (_BJ_PI * w * w);
+        var p: f64 = _BJ_PI * w * w;
+        var f: f64 = 2.0 / p;
+        var ap: f64 = f64_abs(p);
+        if (!(ap > _BJ_VX_MN && ap <= _BJ_VX_HI)) { f = _bj_vx_bm_peak(self.waist, z, self.rayleigh_range, f); }
         return f;
     }
 
@@ -448,7 +460,8 @@ public fn BjAbcdMatrix_flat_interface(n1: f64, n2: f64, out: *BjAbcdMatrix): Res
 
 # A curved interface of radius R (R > 0 with the centre of curvature on the transmission side) from n₁ to n₂ into
 # *out: (1, 0; (n₁ − n₂)/(n₂R), n₁/n₂). InvalidParameter for a NaN input, DivisionByZero when |n₂| < 1e-30 or
-# |R| < 1e-30. Mirrors `AbcdMatrix::curved_interface`.
+# |R| < 1e-30. Where n₁ − n₂ or n₂R passes DBL_MAX, C is the chain with an unbounded exponent, rounded once (ADR 0002
+# row 18, M3 part 2d-3a). Mirrors `AbcdMatrix::curved_interface`.
 #must_use
 public fn BjAbcdMatrix_curved_interface(n1: f64, n2: f64, radius: f64, out: *BjAbcdMatrix): Result {
     if (n1 != n1 || n2 != n2 || radius != radius) {
@@ -459,7 +472,11 @@ public fn BjAbcdMatrix_curved_interface(n1: f64, n2: f64, radius: f64, out: *BjA
     if (a2 < 0.000000000000000000000000000001) { return Err(_bj_beam_dz("refractive index n₂ cannot be zero")); }
     var ar: f64 = f64_abs(radius);
     if (ar < 0.000000000000000000000000000001) { return Err(_bj_beam_dz("interface radius cannot be zero")); }
-    var c: f64 = (n1 - n2) / (n2 * radius);
+    var dn: f64 = n1 - n2;
+    var pr: f64 = n2 * radius;
+    var c: f64 = dn / pr;
+    var fin: f64 = (dn - dn) + (pr - pr);
+    if (fin != 0.0) { c = _bj_vx_bm_ci(n1, n2, radius, c); }
     var d: f64 = n1 / n2;
     out.a = 1.0;
     out.b = 0.0;
@@ -468,16 +485,76 @@ public fn BjAbcdMatrix_curved_interface(n1: f64, n2: f64, radius: f64, out: *BjA
     return Ok(0);
 }
 
+# compose's rare path: an entry of m = s × o is Rust's where it lies in [2^-900, DBL_MAX] or is a sum of two zero
+# products (a zero factor in each, common in ABCD products: a lens's B, free space's C); any other goes to
+# src/crmath_vx.cyr's _bj_vx_bm_dot2_ux (ADR 0002 row 18, M3 part 2d-3a). The tests are inline: a call each cost
+# about 8 ns.
+fn _bj_beam_compose_edge(s: *BjAbcdMatrix, o: *BjAbcdMatrix, m: *BjAbcdMatrix) {
+    var r: f64 = m.a;
+    var ar: f64 = f64_abs(r);
+    var kept = 0;
+    if (ar >= _BJ_VX_LO && ar <= _BJ_VX_HI) { kept = 1; }
+    if (r == 0.0 && (s.a == 0.0 || o.a == 0.0) && (s.b == 0.0 || o.c == 0.0)) { kept = 1; }
+    if (kept == 0) {
+        r = _bj_vx_bm_dot2_ux(s.a, o.a, s.b, o.c, r);
+        m.a = r;
+    }
+    r = m.b;
+    ar = f64_abs(r);
+    kept = 0;
+    if (ar >= _BJ_VX_LO && ar <= _BJ_VX_HI) { kept = 1; }
+    if (r == 0.0 && (s.a == 0.0 || o.b == 0.0) && (s.b == 0.0 || o.d == 0.0)) { kept = 1; }
+    if (kept == 0) {
+        r = _bj_vx_bm_dot2_ux(s.a, o.b, s.b, o.d, r);
+        m.b = r;
+    }
+    r = m.c;
+    ar = f64_abs(r);
+    kept = 0;
+    if (ar >= _BJ_VX_LO && ar <= _BJ_VX_HI) { kept = 1; }
+    if (r == 0.0 && (s.c == 0.0 || o.a == 0.0) && (s.d == 0.0 || o.c == 0.0)) { kept = 1; }
+    if (kept == 0) {
+        r = _bj_vx_bm_dot2_ux(s.c, o.a, s.d, o.c, r);
+        m.c = r;
+    }
+    r = m.d;
+    ar = f64_abs(r);
+    kept = 0;
+    if (ar >= _BJ_VX_LO && ar <= _BJ_VX_HI) { kept = 1; }
+    if (r == 0.0 && (s.c == 0.0 || o.b == 0.0) && (s.d == 0.0 || o.d == 0.0)) { kept = 1; }
+    if (kept == 0) {
+        r = _bj_vx_bm_dot2_ux(s.c, o.b, s.d, o.d, r);
+        m.d = r;
+    }
+}
+
+# apply_ray's rare path: (A·y + B·θ, C·y + D·θ) given Rust's (y₂, θ₂), each through src/crmath_vx.cyr's _bj_vx_bm_dot2
+# (ADR 0002 row 18, M3 part 2d-3a). One call from apply_ray, so its common case carries one dead call.
+#must_use
+fn _bj_beam_ray_edge(m: *BjAbcdMatrix, y: f64, theta: f64, y2: f64, t2: f64): (f64, f64) {
+    var u: f64 = _bj_vx_bm_dot2(m.a, y, m.b, theta, y2);
+    var v: f64 = _bj_vx_bm_dot2(m.c, y, m.d, theta, t2);
+    return (u, v);
+}
+
 impl BjAbcdMatrix {
-    # (A·y + B·θ, C·y + D·θ), the ray (y, θ) after this element. Mirrors `AbcdMatrix::apply_ray`.
+    # (A·y + B·θ, C·y + D·θ), the ray (y, θ) after this element. Each sum is Rust's where it lies in [2^-900, DBL_MAX],
+    # else _bj_beam_ray_edge (ADR 0002 row 18, M3 part 2d-3a: the chain with an unbounded exponent where a product left
+    # the normal range). Mirrors `AbcdMatrix::apply_ray`.
     #must_use
     public fn apply_ray(self, y: f64, theta: f64): (f64, f64) {
         var y2: f64 = self.a * y + self.b * theta;
         var t2: f64 = self.c * y + self.d * theta;
-        return (y2, t2);
+        var ay: f64 = f64_abs(y2);
+        var at: f64 = f64_abs(t2);
+        if (ay >= _BJ_VX_LO && ay <= _BJ_VX_HI && at >= _BJ_VX_LO && at <= _BJ_VX_HI) { return (y2, t2); }
+        var u, v = _bj_beam_ray_edge(self, y, theta, y2, t2);
+        return (u, v);
     }
 
-    # self × other: other first, then self. Mirrors `AbcdMatrix::compose`.
+    # self × other: other first, then self. Each entry's sum is Rust's where it lies in [2^-900, DBL_MAX] (one test of
+    # their magnitudes' sum against DBL_MAX, which a NaN or ∞ fails, and four of the lower bound), else
+    # _bj_beam_compose_edge (ADR 0002 row 18, M3 part 2d-3a). Mirrors `AbcdMatrix::compose`.
     #must_use
     public fn compose(self, other: *BjAbcdMatrix): BjAbcdMatrix {
         var m: BjAbcdMatrix;
@@ -485,14 +562,26 @@ impl BjAbcdMatrix {
         m.b = self.a * other.b + self.b * other.d;
         m.c = self.c * other.a + self.d * other.c;
         m.d = self.c * other.b + self.d * other.d;
+        var x1: f64 = f64_abs(m.a);
+        var x2: f64 = f64_abs(m.b);
+        var x3: f64 = f64_abs(m.c);
+        var x4: f64 = f64_abs(m.d);
+        var s: f64 = (x1 + x2) + (x3 + x4);
+        if (!(s <= _BJ_VX_HI && x1 >= _BJ_VX_LO && x2 >= _BJ_VX_LO && x3 >= _BJ_VX_LO && x4 >= _BJ_VX_LO)) {
+            _bj_beam_compose_edge(self, other, &m);
+        }
         return m;
     }
 
-    # AD − BC: 1 in one medium, n₁/n₂ across media. Mirrors `AbcdMatrix::determinant`.
+    # AD − BC: 1 in one medium, n₁/n₂ across media. Rust's where it lies in [2^-900, DBL_MAX], else _bj_vx_cross1_f64
+    # (ADR 0002 row 18, M3 part 2d-3a). Mirrors `AbcdMatrix::determinant`.
     #must_use
     public fn determinant(self): f64 {
         var det: f64 = self.a * self.d - self.b * self.c;
-        return det;
+        var ad: f64 = f64_abs(det);
+        if (ad >= _BJ_VX_LO && ad <= _BJ_VX_HI) { return det; }
+        var u: f64 = _bj_vx_cross1_f64(self.a, self.d, self.b, self.c, det);
+        return u;
     }
 
     # q_out = (A·q + B)/(C·q + D) for q = q_re + j·q_im into out[0], out[1]: Ok(0), or DivisionByZero when
@@ -553,8 +642,9 @@ impl BjAbcdMatrix {
     # reason quoting the rounded det, or when z_R′ isn't positive and finite; DivisionByZero when C·q + D = 0; and
     # BjGaussianBeam_new's errors. out and distance are untouched by an error. ADR 0002 row 35: Rust tested the rounded
     # det and kept λ within 10⁻¹² of 1. Row 17 (M3 part 2c-2): q_out is propagate_beam's, each part rounded once, so
-    # z_R′ = z·(AD − BC)/|C·q + D|² no longer cancels to 0 for a positive det. Mirrors
-    # `AbcdMatrix::transform_beam_with_waist_position`.
+    # z_R′ = z·(AD − BC)/|C·q + D|² no longer cancels to 0 for a positive det. Row 18 (M3 part 2d-3a): where z_R′·λ′ is
+    # not normal or its quotient by π falls below 2^-1022, w₀′ runs from the doubles z_R′ and λ′ with an unbounded
+    # exponent and rounds once. Mirrors `AbcdMatrix::transform_beam_with_waist_position`.
     #must_use
     public fn transform_beam_with_waist_position(self, beam: *BjGaussianBeam, out: *BjGaussianBeam,
       distance: *f64): Result {
@@ -589,7 +679,10 @@ impl BjAbcdMatrix {
             var dd: f64 = f64_abs(det - 1.0);
             if (dd > 0.000000000001) { lam = beam.wavelength * det; }
         }
-        var w0: f64 = f64_sqrt(zr2 * lam / _BJ_PI);
+        var pz: f64 = zr2 * lam;
+        var pq: f64 = pz / _BJ_PI;
+        var w0: f64 = f64_sqrt(pq);
+        if (!(pz > _BJ_VX_MN && pz <= _BJ_VX_HI && pq > _BJ_VX_MN)) { w0 = _bj_vx_bm_w0(zr2, lam, w0); }
         var nb: BjGaussianBeam;
         var t2, v2 = BjGaussianBeam_new(lam, w0, &nb);
         if (is_err_result(t2) == 1) { return Err(v2); }
@@ -819,8 +912,9 @@ fn _bj_beam_waist34_ux(length: f64, f1: f64, f2: f64, f3: f64, f4: f64, waveleng
 
 # The stability of a cavity of length L between mirrors of radii R₁ and R₂ (positive concave, ±∞ flat) into *out:
 # Ok(0), or with out untouched InvalidParameter for an L not positive and finite or a NaN radius, DivisionByZero when
-# |R₁| or |R₂| < 1e-30. g₁, g₂ and g₁g₂ are Rust's rounded values; is_stable is decided on the exact
-# (1 − L/R₁)(1 − L/R₂) (ADR 0002 row 34), so it may disagree with g_product's rounding at the edges: two convex
+# |R₁| or |R₂| < 1e-30. g₁ and g₂ are Rust's rounded values, and so is g₁g₂ but where a g is ±∞ (L/R past DBL_MAX):
+# there the product of the 53-bit g's, rounded once (ADR 0002 row 18, M3 part 2d-3a). is_stable is decided on the
+# exact (1 − L/R₁)(1 − L/R₂) (ADR 0002 row 34), so it may disagree with g_product's rounding at the edges: two convex
 # mirrors are never stable, though their rounded g can be 1. Mirrors `resonator_stability`.
 #must_use
 public fn bj_resonator_stability(length: f64, r1: f64, r2: f64, out: *BjResonatorStability): Result {
@@ -839,6 +933,7 @@ public fn bj_resonator_stability(length: f64, r1: f64, r2: f64, out: *BjResonato
     var g1: f64 = 1.0 - length / r1;
     var g2: f64 = 1.0 - length / r2;
     var gp: f64 = g1 * g2;
+    if (gp - gp != 0.0) { gp = _bj_vx_bm_gp(length, r1, r2); }
     var st = _bj_beam_stable34(length, r1, r2);
     out.g1 = g1;
     out.g2 = g2;
@@ -893,6 +988,7 @@ public fn bj_resonator_beam_waist(length: f64, r1: f64, r2: f64, wavelength: f64
 # Δν_T = (Δν_FSR/π)·arccos(±√(g₁g₂)), the frequency step per unit of m + n: + when g₁, g₂ ≥ 0, − when either is
 # negative (Siegman, ch. 19), so Δν_T ∈ [0, Δν_FSR]. InvalidParameter for an fsr not positive and finite or an
 # unstable (or NaN) g₁g₂, decided on the exact product of finite g's (ADR 0002 row 34; Rust's rounded one otherwise).
+# Where Δν_FSR/π falls below 2^-1022, its 53-bit value times the arccos, rounded once (ADR 0002 row 18, M3 part 2d-3a).
 # Mirrors `transverse_mode_spacing`.
 #must_use
 public fn bj_transverse_mode_spacing(fsr: f64, g1: f64, g2: f64): Result {
@@ -908,8 +1004,13 @@ public fn bj_transverse_mode_spacing(fsr: f64, g1: f64, g2: f64): Result {
     var arg: f64 = root;
     if (g1 < 0.0 || g2 < 0.0) { arg = -root; }
     var ac: f64 = _bj_acos(arg);
-    var s: f64 = fsr / _BJ_PI * ac;
-    return Ok(s);
+    var q: f64 = fsr / _BJ_PI;
+    if (q > _BJ_VX_MN) {
+        var s: f64 = q * ac;
+        return Ok(s);
+    }
+    var u: f64 = _bj_vx_bm_fsr(fsr, ac);
+    return Ok(u);
 }
 
 # ── the modes ───────────────────────────────────────────────────────────────────────────────────────────────────

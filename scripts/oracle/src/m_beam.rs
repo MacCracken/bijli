@@ -33,6 +33,13 @@
 //! M3 part 2c-2 (ADR 0002 row 17, amended) appends `propagate_beam`'s grid: |C·q + D|² ulp by ulp around 10⁻⁶⁰,
 //! C·q₀ + D cancelling to its rounding error, a lens and the distance to its focus, near-singular matrices, exact zeros,
 //! the range ends and scaled systems; and the transforms at the threshold, at a focus and through seeded systems.
+//!
+//! M3 part 2d-3a (ADR 0002 row 18, amended) appends the range edges of the beam's, the ABCD matrices' and the
+//! resonators' chains: spot sizes and radii of curvature whose square passes DBL_MAX, Gouy phases whose z/z_R falls
+//! below 2^-1022 (exact midpoints of the subnormal grid among them), peak intensity factors where π·w·w leaves the
+//! range, curved interfaces whose n₁ − n₂ or n₂·R passes DBL_MAX, two-term sums whose products over- or underflow
+//! (determinants, rays and products of matrices), transforms whose z_R′·λ′ leaves the range, cavities whose L/R passes
+//! DBL_MAX, and mode spacings for a free spectral range below π·2^-1022.
 
 use crate::grids::{Rng, specials};
 use crate::m_field::res_f;
@@ -458,7 +465,205 @@ pub fn emit() -> Module {
     abcd_det_edges(r);
     round_once_edges(r);
     q_out_edges(r);
+    chain_edges(r);
     rows.m
+}
+
+/// The Gaussian beam's methods at z (one row each).
+fn beam_rows(r: &mut Rows, v: [f64; 3], z: f64) {
+    let g = beam_of(v);
+    let ins = [f(v[0]), f(v[1]), f(v[2]), f(z)];
+    r.row("GaussianBeam::spot_size", Class::A, &ins, || vec![f(g.spot_size(black_box(z)))]);
+    r.row("GaussianBeam::radius_of_curvature", Class::A, &ins, || res_f(g.radius_of_curvature(black_box(z))));
+    r.row("GaussianBeam::gouy_phase", Class::C, &ins, || vec![f(g.gouy_phase(black_box(z)))]);
+    r.row("GaussianBeam::peak_intensity_factor", Class::A, &ins, || {
+        vec![f(g.peak_intensity_factor(black_box(z)))]
+    });
+}
+
+/// M3 part 2d-3a: the chains' range edges (ADR 0002 row 18).
+fn chain_edges(r: &mut Rows) {
+    let p2 = |k: i32| 2f64.powi(k);
+    // Spot sizes and radii of curvature: z/z_R around 2^512, where its square passes DBL_MAX, far past it, with a zero
+    // or negative waist; z_R/z the same for the radius, with |z| small enough that R is representable.
+    for (w0, zr) in [(1e-6, 1e-10), (0.0, 1e-10), (-1e-6, 1e-10), (1e-150, 1.0), (1.0, 1e-300), (5e-324, 1.0)] {
+        for z in [1e200, -1e200, p2(511) * zr, p2(512) * zr, up(p2(512)) * zr, 1e154 * zr, 1e300, f64::MAX] {
+            beam_rows(r, [1e-6, w0, zr], z);
+        }
+    }
+    for zr in [1e140, 1e160, 1e300, f64::MAX, p2(512), up(p2(512))] {
+        for z in [1e-20, -1e-20, 1e-30, 2e-15, 1.0, 1e5, 1e-10] {
+            beam_rows(r, [1e-6, 1e-3, zr], z);
+        }
+    }
+    // Gouy phases below 2^-1022: exact midpoints (2j + 1)·2^-1075 of the subnormal grid, either sign, and quotients
+    // near and off them, 2^-1022 itself and its neighbours.
+    let u = 1.375;
+    for j in [0.0, 1.0, 2.0, 3.0, 7.0, 1000.0, 1001.0] {
+        let z = (2.0 * j + 1.0) * p2(-75) * u;
+        for zz in [z, -z, up(z), down(z)] {
+            beam_rows(r, [1e-6, 1e-3, p2(1000) * u], zz);
+        }
+    }
+    for (z, zr) in [(1e-10, 1e300), (3e-15, 1e300), (5e-324, 1.0), (1e-20, 1e300), (p2(-22), p2(1000)), (1.0, 3e307)] {
+        beam_rows(r, [1e-6, 1e-3, zr], z);
+        beam_rows(r, [1e-6, 1e-3, zr], -z);
+    }
+    for z in [p2(-22), up(p2(-22)), down(p2(-22))] {
+        beam_rows(r, [1e-6, 1e-3, p2(1000)], z);
+    }
+    // Peak intensity factors: w past DBL_MAX's root (π·w·w past DBL_MAX, 2/(πw²) subnormal), w where π·w·w is
+    // subnormal and 2/(πw²) normal, and w from a ratio past 2^512.
+    for w0 in [7e153, 7.6e153, 8e153, 1e154, 1e155, 1e160, 3e161, 4e161, 1e162, 5.9e-155, 6e-155, 6.2e-155, 7e-155] {
+        beam_rows(r, [1e-6, w0, 1.0], 0.0);
+        beam_rows(r, [1e-6, w0, 1.0], 0.5);
+    }
+    for z in [1e144, 1e150, 1e154, 1e158, 1e165] {
+        beam_rows(r, [1e-6, 1.0, 1e-10], z);
+    }
+    // π·w·w rounds to 2^-1022 from a 53-bit 2^-1022 − 2^-1075, where 2/(πw²) rounds up past 2^1023.
+    beam_rows(r, [1e-6, f64::from_bits(0x1ff2_0dd7_5042_9b6d), 1.0], 0.0);
+    // Curved interfaces: n₁ − n₂ or n₂·R past DBL_MAX.
+    let ci = [
+        (1e300, 1e200, 1e200),
+        (1e300, -1e200, 1e200),
+        (1e308, -1e308, 1.0),
+        (-1.7e308, 1.7e308, 2.0),
+        (f64::MAX, -f64::MAX, -3.0),
+        (1e200, 1e300, 1e10),
+        (1.5, 1e300, 1e10),
+        (1.5, 1e-30, 1e-30),
+        (1e300, 1e300, 1e300),
+        (1e-300, 1e300, 1e300),
+        (2.0, f64::MAX, f64::MAX),
+    ];
+    for (n1, n2, rad) in ci {
+        r.row("AbcdMatrix::curved_interface", Class::A, &[f(n1), f(n2), f(rad)], || {
+            res(AbcdMatrix::curved_interface(black_box(n1), black_box(n2), black_box(rad)), am)
+        });
+    }
+    // Two-term sums: products past DBL_MAX that cancel, products below 2^-1022 whose sum is subnormal or normal, and
+    // mixed scales, through the determinant, a ray and a product of matrices.
+    let ms: [[f64; 4]; 12] = [
+        [1e200, 1e200, 1e200, 1e200],
+        [1e200, -1e200, -1e200, 1e200],
+        [p2(600), p2(600), p2(600), p2(600) * 1.5],
+        [1e-155, 3e-160, 7e-156, 1.5e-155],
+        [1.5e-155, 1e-155, 1e-155, 1.25e-155],
+        [3e-160, 1e-160, 2e-160, 1e-160],
+        [1e-155, -1e-155, 1e-155, 1e-155],
+        [1e-200, 1e-150, 1e150, 1e-200],
+        [1e300, 1e-300, 1e-300, 1e300],
+        [1e160, 1e-160, 1e160, 1e-160],
+        [1.0, 1e-160, 1e-160, 1.0],
+        [f64::MAX, 2.0, 2.0, f64::MAX],
+    ];
+    let rays = [(1e-155, 1e-155), (1e200, 1e200), (1e-160, -3e-161), (1e150, 1e-150), (1.5e-308, 2e-309)];
+    for (j, v) in ms.iter().enumerate() {
+        let m = mat_of(*v);
+        let mt = am(&m);
+        r.row("AbcdMatrix::determinant", Class::A, &mt, || vec![f(m.determinant())]);
+        for &(y, th) in &rays {
+            let mut ins = mt.clone();
+            ins.extend([f(y), f(th)]);
+            r.row("AbcdMatrix::apply_ray", Class::A, &ins, || {
+                let (a, c) = m.apply_ray(black_box(y), black_box(th));
+                vec![f(a), f(c)]
+            });
+        }
+        for w in [ms[(j + 3) % ms.len()], ms[(j + 7) % ms.len()], *v] {
+            let o = mat_of(w);
+            let mut ins = mt.clone();
+            ins.extend(am(&o));
+            r.row("AbcdMatrix::compose", Class::A, &ins, || am(&m.compose(black_box(&o))));
+        }
+    }
+    // A product past DBL_MAX meeting −DBL_MAX (Rust's ∞, for 2^1024 − DBL_MAX = 2^971), and two subnormal products
+    // that round alike and cancel ((5 ± 7/16)·2^-1074: Rust's 0, for 2^-1074), through each two-term sum.
+    let big = f64::MAX;
+    let (x1, x2, t) = (5.4375 * p2(-537), 4.5625 * p2(-537), p2(-537));
+    let pairs2: [([f64; 4], [f64; 4]); 2] =
+        [([p2(512), -big, 1.0, 1.0], [p2(512), 0.0, 1.0, 1.0]), ([x1, -x2, 1.0, 1.0], [1.0, t, 0.0, t])];
+    for (sv, ov) in pairs2 {
+        let (m, o) = (mat_of(sv), mat_of(ov));
+        let mut ins = am(&m);
+        ins.extend(am(&o));
+        r.row("AbcdMatrix::compose", Class::A, &ins, || am(&m.compose(black_box(&o))));
+    }
+    for (v, y, th) in [([p2(512), -big, 0.0, 1.0], p2(512), 1.0), ([x1, -x2, 1.0, 1.0], t, t)] {
+        let m = mat_of(v);
+        let mut ins = am(&m);
+        ins.extend([f(y), f(th)]);
+        r.row("AbcdMatrix::apply_ray", Class::A, &ins, || {
+            let (a, c) = m.apply_ray(black_box(y), black_box(th));
+            vec![f(a), f(c)]
+        });
+    }
+    for v in [[p2(512), big, 1.0, p2(512)], [x1, x2, t, t]] {
+        let m = mat_of(v);
+        r.row("AbcdMatrix::determinant", Class::A, &am(&m), || vec![f(m.determinant())]);
+    }
+    // Transforms: z_R′·λ′ past DBL_MAX, below 2^-1022 or 0, and its quotient by π below 2^-1022, through the identity,
+    // free space and a lens; and a determinant row 18 changes, quoted by the error.
+    let tb: [[f64; 3]; 7] = [
+        [1e200, 5.6e199, 1e200],
+        [1e-200, 5.6e-201, 1e-200],
+        [1e-160, 1e-155, 1e-150],
+        [3e-158, 1e-154, 1e-150],
+        [p2(-511), p2(-511), p2(-511)],
+        [f64::MAX, 1e154, 1e10],
+        [1e-300, 1e-160, 1e-20],
+    ];
+    let tm: [[f64; 4]; 5] = [
+        [1.0, 0.0, 0.0, 1.0],
+        [1.0, 0.25, 0.0, 1.0],
+        [1.0, 0.0, -1.0, 1.0],
+        [1e200, 1e200, 1e200, 1e200],
+        [1e-155, 0.0, 0.0, 1e-155],
+    ];
+    for v in tm {
+        let m = mat_of(v);
+        for bv in tb {
+            let g = beam_of(bv);
+            let mut ins = am(&m);
+            ins.extend(gb(&g));
+            r.row("AbcdMatrix::transform_beam", Class::A, &ins, || res(m.transform_beam(black_box(&g)), gb));
+            r.row("AbcdMatrix::transform_beam_with_waist_position", Class::A, &ins, || {
+                res(m.transform_beam_with_waist_position(black_box(&g)), |(o, d)| {
+                    let mut t = gb(o);
+                    t.push(f(*d));
+                    t
+                })
+            });
+        }
+    }
+    // Cavities whose L/R passes DBL_MAX: g = ±∞ against a g₂ of 0, an ulp of 1 off 0, ½, 1 (flat) and −1.
+    let l = 1e300;
+    for r1 in [1e-10, -1e-10, 1e-8] {
+        for r2 in [l, up(l), down(l), 2.0 * l, f64::INFINITY, -l, 1e-10] {
+            r.row("beam::resonator_stability", Class::A, &[f(l), f(r1), f(r2)], || {
+                res(resonator_stability(black_box(l), black_box(r1), black_box(r2)), rs)
+            });
+            r.row("beam::resonator_beam_waist", Class::A, &[f(l), f(r1), f(r2), f(1064e-9)], || {
+                res_f(resonator_beam_waist(black_box(l), black_box(r1), black_box(r2), black_box(1064e-9)))
+            });
+        }
+    }
+    // Mode spacings for Δν_FSR/π below 2^-1022 (Δν_FSR below π·2^-1022 ≈ 7.0e-308) and around it, and g₁g₂ below
+    // 2^-1022 with an ordinary Δν_FSR.
+    let pi_min = std::f64::consts::PI * p2(-1022);
+    for fsr in [5e-324, 1e-323, 1e-310, 3.3e-309, 2.2e-308, pi_min, up(pi_min), down(pi_min), 7e-308] {
+        for (g1, g2) in [(0.5, 0.5), (0.0, 0.0), (-0.5, -0.5), (1.0, 1.0), (0.3, 0.9), (-1.0, -1.0)] {
+            r.row("beam::transverse_mode_spacing", Class::C, &[f(fsr), f(g1), f(g2)], || {
+                res_f(transverse_mode_spacing(black_box(fsr), black_box(g1), black_box(g2)))
+            });
+        }
+    }
+    for (g1, g2) in [(1e-160, 1e-160), (-1e-160, -1e-160), (3e-170, 0.5), (1e-300, 1e-20)] {
+        r.row("beam::transverse_mode_spacing", Class::C, &[f(1.5e9), f(g1), f(g2)], || {
+            res_f(transverse_mode_spacing(black_box(1.5e9), black_box(g1), black_box(g2)))
+        });
+    }
 }
 
 /// A `propagate_beam` row.

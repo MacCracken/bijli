@@ -772,6 +772,98 @@ fn cyrius_row17(): i64 {
     return 0;
 }
 
+# ADR 0002 row 18 (M3 part 2d-3a): the beam's, the ABCD matrices' and the resonators' chains at their range edges, with
+# an unbounded exponent and their last operation rounded once; bits from validate.py's model (Fractions).
+fn cyrius_row18(): i64 {
+    test_group("cyrius_beam_row18 (ADR 0002 row 18)");
+    var g: BjGaussianBeam;
+    g.wavelength = _bj_from_bits(0x3EB0C6F7A0B5ED8D);
+    g.waist = _bj_from_bits(0x3EB0C6F7A0B5ED8D);
+    g.rayleigh_range = _bj_from_bits(0x3DDB7CDFD9D7BDBB);
+    var z1: f64 = _bj_from_bits(0x6974E718D7D7625A);
+    var w1: f64 = g.spot_size(z1);
+    assert(_bj_bits(w1) == 0x6A498419D37A6B8E, "w₀ = 1e-6, z/z_R = 1e210: w = 1e204 (Rust: ∞, the square overflows)");
+    g.waist = 0.0;
+    var w2: f64 = g.spot_size(z1);
+    assert(_bj_bits(w2) == 0, "w₀ = 0 there: w = 0 (Rust: 0·∞ = NaN)");
+    g.waist = _bj_from_bits(0x3F50624DD2F1A9FC);
+    g.rayleigh_range = _bj_from_bits(0x5D00CB70D24B7379);
+    var t3, v3 = g.radius_of_curvature(_bj_from_bits(0x3BC79CA10C924223));
+    assert(is_ok(t3) == 1 && v3 == 0x7E37E43C8800759E, "z_R = 1e140, z = 1e-20: R = 1e300 (Rust: ∞)");
+    g.rayleigh_range = _bj_from_bits(0x7E76000000000000);
+    var zg: f64 = _bj_from_bits(0x3B60800000000000);
+    var a4: f64 = g.gouy_phase(zg);
+    assert(_bj_bits(a4) == 1, "z/z_R = 3·2^-1075, a midpoint: ζ = 2^-1074, arctan's side (Rust: 2^-1073, to even)");
+    var nzg: f64 = -zg;
+    var a5: f64 = g.gouy_phase(nzg);
+    assert(_bj_bits(a5) == 0x8000000000000001, "and −2^-1074 for −3·2^-1075 (Rust: −2^-1073)");
+    g.waist = _bj_from_bits(0x601DD55745CBB7ED);
+    g.rayleigh_range = 1.0;
+    var f6: f64 = g.peak_intensity_factor(0.0);
+    assert(_bj_bits(f6) == 0xBB81960805F, "w = 1e155: 2/(πw²) = 6.37e-311 (Rust: π·w·w = ∞, 0)");
+    g.waist = _bj_from_bits(0x1FF20DD750429B6D);
+    var f7: f64 = g.peak_intensity_factor(0.0);
+    assert(_bj_bits(f7) == 0x7FE0000000000001,
+      "π·w·w = 2^-1022 rounded from a 53-bit 2^-1022 − 2^-1075: 2^1023 + an ulp (Rust: 2^1023)");
+    var m: BjAbcdMatrix;
+    var n8: f64 = _bj_from_bits(0x7FE1CCF385EBC8A0);
+    var nn8: f64 = -n8;
+    var t8, v8 = BjAbcdMatrix_curved_interface(n8, nn8, 1.0, &m);
+    var c8: f64 = m.c;
+    assert(is_ok(t8) == 1 && _bj_bits(c8) == 0xC000000000000000, "n₁ = 1e308, n₂ = −1e308, R = 1: C = −2 (Rust: −∞)");
+    var big: f64 = _bj_from_bits(0x6974E718D7D7625A);
+    var nbig: f64 = -big;
+    var t9, v9 = BjAbcdMatrix_curved_interface(_bj_from_bits(0x7E37E43C8800759C), big, big, &m);
+    var c9: f64 = m.c;
+    assert(is_ok(t9) == 1 && _bj_bits(c9) == 0x2B2BFF2EE48E0530, "n₁ = 1e300, n₂ = R = 1e200: C = 1e-100 (Rust: 0)");
+    var mb: BjAbcdMatrix = BjAbcdMatrix_new(big, big, big, big);
+    var d10: f64 = mb.determinant();
+    assert(_bj_bits(d10) == 0, "every entry 1e200: AD − BC = 0 (Rust: ∞ − ∞ = NaN)");
+    var y11, t11 = mb.apply_ray(big, nbig);
+    var yv: f64 = y11;
+    var tv: f64 = t11;
+    assert(_bj_bits(yv) == 0 && _bj_bits(tv) == 0, "and its ray (1e200, −1e200): (0, 0) (Rust: NaN, NaN)");
+    var mx: BjAbcdMatrix = BjAbcdMatrix_new(big, nbig, nbig, big);
+    var mc: BjAbcdMatrix = mb.compose(&mx);
+    var ca: f64 = mc.a;
+    var cd: f64 = mc.d;
+    assert(_bj_bits(ca) == 0 && _bj_bits(cd) == 0, "its product with (1e200, −1e200; −1e200, 1e200): 0s (Rust: NaN)");
+    var id: BjAbcdMatrix = BjAbcdMatrix_identity();
+    var gb: BjGaussianBeam;
+    gb.wavelength = big;
+    gb.waist = _bj_from_bits(0x6967693A8B57A15B);
+    gb.rayleigh_range = big;
+    var o: BjGaussianBeam;
+    var dz: f64[1];
+    var t12, v12 = id.transform_beam_with_waist_position(&gb, &o, &dz);
+    var ow: f64 = o.waist;
+    var oz: f64 = o.rayleigh_range;
+    assert(is_ok(t12) == 1 && _bj_bits(ow) == 0x69679611013A028F && _bj_bits(oz) == 0x6974E718D7D7625B,
+      "λ = z_R = 1e200 through the identity: w₀′ = 5.64e199 (Rust: z_R·λ = ∞, refused)");
+    var tiny: f64 = _bj_from_bits(0x16687E92154EF7AC);
+    gb.wavelength = tiny;
+    gb.waist = _bj_from_bits(0x165B6F0A0362AEFE);
+    gb.rayleigh_range = tiny;
+    var t13, v13 = id.transform_beam_with_waist_position(&gb, &o, &dz);
+    var ow2: f64 = o.waist;
+    assert(is_ok(t13) == 1 && _bj_bits(ow2) == 0x165BA394CE53F796,
+      "λ = z_R = 1e-200: w₀′ = 5.64e-201 (Rust: z_R·λ = 0, refused)");
+    var st: BjResonatorStability;
+    var l14: f64 = _bj_from_bits(0x7E37E43C8800759C);
+    var t14, v14 = bj_resonator_stability(l14, _bj_from_bits(0x3DDB7CDFD9D7BDBB), l14, &st);
+    var gp14: f64 = st.g_product;
+    assert(is_ok(t14) == 1 && _bj_bits(gp14) == 0x8000000000000000,
+      "L = R₂ = 1e300, R₁ = 1e-10: g₁g₂ = −0 (Rust: −∞·0 = NaN)");
+    var r15: f64 = _bj_from_bits(0x7E37E43C8800759D);
+    var t15, v15 = bj_resonator_stability(l14, _bj_from_bits(0x3DDB7CDFD9D7BDBB), r15, &st);
+    var gp15: f64 = st.g_product;
+    assert(is_ok(t15) == 1 && _bj_bits(gp15) == 0xFCFBD03C8140697A, "R₂ an ulp above L: g₁g₂ = −1.1e294 (Rust: −∞)");
+    var t16, v16 = bj_transverse_mode_spacing(_bj_from_bits(1), 0.0, 0.0);
+    assert(is_ok(t16) == 1 && v16 == 1, "Δν_FSR = 5e-324 at g₁ = g₂ = 0: Δν_T = 5e-324 (Rust: Δν_FSR/π = 0, so 0)");
+    if (v3 == 99 || v8 == 99 || v9 == 99 || v12 == 99 || v13 == 99 || v14 == 99 || v15 == 99) { println("."); }
+    return 0;
+}
+
 # The three structs' JSON (M3 part 1c-2), as serde_json writes and reads them.
 fn cyrius_json(): i64 {
     test_group("cyrius_beam_json");
@@ -952,6 +1044,7 @@ fn main(): i64 {
     cyrius_row35();
     cyrius_row13();
     cyrius_row17();
+    cyrius_row18();
     cyrius_json();
     return assert_summary();
 }

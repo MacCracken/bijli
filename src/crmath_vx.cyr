@@ -1068,3 +1068,213 @@ fn _bj_vx_ray_ang(cs: f64, d: f64, c: f64): f64 {
     var u: f64 = _bj_k_ux_div_f64(ts, te, fs, fe);
     return u;
 }
+
+# ── Gaussian beams, ABCD matrices and resonators (M3 part 2d-3a): beam.cyr's chains ──────────────────────────────────
+# Each is Rust's chain, a test of what it computed, and the chain with an unbounded exponent where an intermediate left
+# the normal range and the result may be representable. A non-finite input keeps Rust's chain.
+# - The spot size w₀·√(1 + (z/z_R)²) and the radius of curvature z·(1 + (z_R/z)²) leave it only where the square
+#   passes DBL_MAX, which makes Rust's result ±∞ or NaN: a ratio below 2^-511 adds less than 2^-1022 to 1, which both
+#   chains round away, so a finite result is the chain's.
+# - The Gouy phase arctan(z/z_R), where z/z_R is below 2^-1022 from a nonzero z: arctan t = t(1 − t²/3 + …) lies
+#   within |t|³ inside t, so it rounds as the 53-bit t does but for a midpoint of the subnormal grid, which goes toward
+#   0. Past DBL_MAX both chains give ±RN(π/2).
+# - The peak intensity factor 2/(π·w·w), where π·w·w is not in (2^-1022, DBL_MAX], from the 53-bit w (spot size's).
+# - The curved interface's (n₁ − n₂)/(n₂·R), where the difference or the product passes DBL_MAX (|n₂·R| ≥ 10^-60 is
+#   never below 2^-1022, and a difference below it is exact).
+# - The two-term sums outside [2^-900, DBL_MAX] (the section comment at the top): apply_ray's by _bj_vx_bm_dot2,
+#   compose's by beam.cyr's own tests and then _bj_vx_bm_dot2_ux, determinant's by _bj_vx_cross1_f64.
+# - transform_beam's w₀′ = √(z_R′·λ′/π), where z_R′·λ′ is not normal or its quotient by π is below 2^-1022, from the
+#   doubles z_R′ and λ′, each the exact value rounded once (rows 17 and 35) and the output beam's own.
+# - The stability's g₁·g₂, where a g is ±∞ (L/R past DBL_MAX, g itself not representable): the 53-bit g's product.
+# - The mode spacing's (Δν_FSR/π)·arccos(±√(g₁g₂)), where Δν_FSR/π is below 2^-1022. The root's own underflow is
+#   invisible: arccos of anything below 2^-511 in magnitude is RN(π/2), which lies more than 2^-55 from a midpoint.
+
+# 1 + (a/b)² with an unbounded exponent, each operation to 53 bits: (s, e), for finite a and a finite nonzero b.
+#must_use
+fn _bj_vx_bm_one_sq(a: f64, b: f64): (f64, i64) {
+    var as, ae = _bj_k_ux_from(a);
+    var bs, be = _bj_k_ux_from(b);
+    var qs, qe = _bj_k_ux_div(as, ae, bs, be);
+    var ss, se = _bj_k_ux_mul(qs, qe, qs, qe);
+    var ts, te = _bj_k_ux_add(1.0, 0, ss, se);
+    return (ts, te);
+}
+
+# √(1 + (z/z_R)²) with an unbounded exponent, each operation to 53 bits: (s, e), for finite z and a finite nonzero z_R.
+#must_use
+fn _bj_vx_bm_root_ux(z: f64, zr: f64): (f64, i64) {
+    var ts, te = _bj_vx_bm_one_sq(z, zr);
+    var us, ue = _bj_k_ux_sqrt(ts, te);
+    return (us, ue);
+}
+
+# 1 when z, z_R and the third input are finite and z_R ≠ 0, the inputs the spot size's unbounded chain takes.
+#must_use
+fn _bj_vx_bm_ok3(a: f64, z: f64, zr: f64): i64 {
+    var fin: f64 = (a - a) + (z - z) + (zr - zr);
+    if (fin != 0.0 || zr == 0.0) { return 0; }
+    return 1;
+}
+
+# The spot size w₀·√(1 + (z/z_R)²) given Rust's non-finite w: for finite inputs and z_R ≠ 0, the chain with an
+# unbounded exponent and its product rounded once (Rust's ∞ for w₀ = 10^-6, z = 10^200, z_R = 10^-10, whose w is
+# 10^204, and NaN for w₀ = 0, whose w is 0); w otherwise.
+#must_use
+fn _bj_vx_bm_spot(w0: f64, z: f64, zr: f64, w: f64): f64 {
+    if (_bj_vx_bm_ok3(w0, z, zr) == 0) { return w; }
+    var us, ue = _bj_vx_bm_root_ux(z, zr);
+    var ws, we = _bj_k_ux_from(w0);
+    var r: f64 = _bj_k_ux_mul_f64(ws, we, us, ue);
+    return r;
+}
+
+# The radius of curvature z·(1 + (z_R/z)²) given Rust's non-finite r, for |z| ≥ 10^-30 (the caller's test): for finite
+# inputs, the chain with an unbounded exponent and its product rounded once (Rust's ∞ for z = 10^-20, z_R = 10^140,
+# whose R is 10^300); r otherwise.
+#must_use
+fn _bj_vx_bm_roc(z: f64, zr: f64, r: f64): f64 {
+    var fin: f64 = (z - z) + (zr - zr);
+    if (fin != 0.0) { return r; }
+    var ts, te = _bj_vx_bm_one_sq(zr, z);
+    var zs, ze = _bj_k_ux_from(z);
+    var u: f64 = _bj_k_ux_mul_f64(zs, ze, ts, te);
+    return u;
+}
+
+# The Gouy phase arctan(z/z_R) given Rust's a, where |z/z_R| is at most 2^-1022 from a nonzero z: for finite inputs and
+# z_R ≠ 0, t = z/z_R to 53 bits with an unbounded exponent, then arctan t rounded once, which is t's rounding with a
+# midpoint of the subnormal grid broken toward 0 (a step of 2^-100 of t's significand: arctan's own step is below
+# 2^-2000 of it, and t's distance to a rounding boundary that it is not on is at least 2^-53 of it); a otherwise.
+#must_use
+fn _bj_vx_bm_gouy(z: f64, zr: f64, a: f64): f64 {
+    if (_bj_vx_bm_ok3(0.0, z, zr) == 0) { return a; }
+    var zs, ze = _bj_k_ux_from(z);
+    var rs, re = _bj_k_ux_from(zr);
+    var qs, qe = _bj_k_ux_div(zs, ze, rs, re);
+    var tn: f64 = 0x39B0000000000000;
+    if (qs > 0.0) { tn = -tn; }
+    var u: f64 = _bj_k_ux_round(qs, qe, tn);
+    return u;
+}
+
+# The peak intensity factor 2/(π·w·w) given Rust's f: for finite inputs and z_R ≠ 0, the chain with an unbounded
+# exponent from the 53-bit w = w₀·√(1 + (z/z_R)²), its quotient rounded once (Rust's 0 for w = 10^155, where π·w·w
+# passes DBL_MAX and f is 6.4e-311); f otherwise.
+#must_use
+fn _bj_vx_bm_peak(w0: f64, z: f64, zr: f64, f: f64): f64 {
+    if (_bj_vx_bm_ok3(w0, z, zr) == 0) { return f; }
+    var us, ue = _bj_vx_bm_root_ux(z, zr);
+    var w0s, w0e = _bj_k_ux_from(w0);
+    var ws, we = _bj_k_ux_mul(w0s, w0e, us, ue);
+    var ps, pe = _bj_k_ux_from(_BJ_PI);
+    var as, ae = _bj_k_ux_mul(ps, pe, ws, we);
+    var bs, be = _bj_k_ux_mul(as, ae, ws, we);
+    var u: f64 = _bj_k_ux_div_f64(1.0, 1, bs, be);
+    return u;
+}
+
+# The curved interface's C = (n₁ − n₂)/(n₂·R) given Rust's c, for |n₂| and |R| ≥ 10^-30 (the caller's tests): for
+# finite inputs, the chain with an unbounded exponent and its quotient rounded once (Rust's 0 for n₁ = 10^300 and
+# n₂ = R = 10^200, whose C is 10^-100); c otherwise.
+#must_use
+fn _bj_vx_bm_ci(n1: f64, n2: f64, rad: f64, c: f64): f64 {
+    var fin: f64 = (n1 - n1) + (n2 - n2) + (rad - rad);
+    if (fin != 0.0) { return c; }
+    var as, ae = _bj_k_ux_from(n1);
+    var bs, be = _bj_k_ux_from(n2);
+    var ds, de = _bj_k_ux_sub(as, ae, bs, be);
+    var ps, pe = _bj_vx_mul(n2, rad);
+    var u: f64 = _bj_k_ux_div_f64(ds, de, ps, pe);
+    return u;
+}
+
+# transform_beam's w₀′ = √(z_R′·λ′/π) given Rust's w, for a positive finite z_R′ (the caller's test): for a positive
+# finite λ′, the chain with an unbounded exponent from the doubles z_R′ and λ′ and its root rounded once (Rust's ∞ for
+# z_R′ = λ′ = 10^200, whose w₀′ is 5.6e199, and 0 for 10^-200, whose w₀′ is 5.6e-201); w otherwise.
+#must_use
+fn _bj_vx_bm_w0(zr: f64, lam: f64, w: f64): f64 {
+    if (!(lam > 0.0 && lam <= _BJ_VX_HI)) { return w; }
+    var ps, pe = _bj_vx_mul(zr, lam);
+    var pis, pie = _bj_k_ux_from(_BJ_PI);
+    var qs, qe = _bj_k_ux_div(ps, pe, pis, pie);
+    var u: f64 = _bj_k_ux_sqrt_f64(qs, qe);
+    return u;
+}
+
+# g = 1 − L/R to 53 bits with an unbounded exponent: (s, e), 1 for an infinite R (a flat mirror).
+#must_use
+fn _bj_vx_bm_g_ux(length: f64, r: f64): (f64, i64) {
+    if (r - r != 0.0) { return (1.0, 0); }
+    var ls, le = _bj_k_ux_from(length);
+    var rs, re = _bj_k_ux_from(r);
+    var qs, qe = _bj_k_ux_div(ls, le, rs, re);
+    var gs, ge = _bj_k_ux_sub(1.0, 0, qs, qe);
+    return (gs, ge);
+}
+
+# The stability's g₁·g₂ where Rust's is not finite, for a positive finite L and radii neither NaN nor below 10^-30 in
+# magnitude (the caller's tests): where g₁ or g₂ is ±∞, the product of the 53-bit g's rounded once (Rust's −∞ for
+# L = 10^300, R₁ = 10^-10 and g₂ = 2^-53, whose g₁g₂ is −1.1e294, and NaN for g₂ = 0, where it is −0); else Rust's
+# product, past DBL_MAX.
+#must_use
+fn _bj_vx_bm_gp(length: f64, r1: f64, r2: f64): f64 {
+    var g1: f64 = 1.0 - length / r1;
+    var g2: f64 = 1.0 - length / r2;
+    var fin: f64 = (g1 - g1) + (g2 - g2);
+    if (fin == 0.0) {
+        var gp: f64 = g1 * g2;
+        return gp;
+    }
+    var as, ae = _bj_vx_bm_g_ux(length, r1);
+    var bs, be = _bj_vx_bm_g_ux(length, r2);
+    var u: f64 = _bj_k_ux_mul_f64(as, ae, bs, be);
+    return u;
+}
+
+# _bj_vx_bm_dot2's rest, for an r outside [2^-900, DBL_MAX] that is not a sum of two zero products: r where it is 0 with
+# both products exact (a zero factor, or a normal product: a nonzero factor's product with a non-finite one would have
+# made r NaN or ±∞), or for a non-finite input; else each product to 53 bits with an unbounded exponent and their sum
+# rounded once.
+#must_use
+fn _bj_vx_bm_dot2_ux(a: f64, x: f64, b: f64, y: f64, r: f64): f64 {
+    if (r == 0.0) {
+        var p: f64 = a * x;
+        var q: f64 = b * y;
+        var ap: f64 = f64_abs(p);
+        var aq: f64 = f64_abs(q);
+        var ep = 0;
+        if (a == 0.0 || x == 0.0 || (ap > _BJ_VX_MN && ap <= _BJ_VX_HI)) { ep = 1; }
+        if (ep == 1 && (b == 0.0 || y == 0.0 || (aq > _BJ_VX_MN && aq <= _BJ_VX_HI))) { return r; }
+    }
+    var fin: f64 = (a - a) + (x - x) + (b - b) + (y - y);
+    if (fin != 0.0) { return r; }
+    var ps, pe = _bj_vx_mul(a, x);
+    var qs, qe = _bj_vx_mul(b, y);
+    var u: f64 = _bj_k_ux_add_f64(ps, pe, qs, qe);
+    return u;
+}
+
+# a·x + b·y given Rust's r: r where it lies in [2^-900, DBL_MAX] or is a sum of two zero products (a zero factor in
+# each), else _bj_vx_bm_dot2_ux. _bj_vx_cross1_f64's result for (a, x, −b, y), with its common cases first and its rest
+# in one helper (apply_ray's and compose's rare path: structural zeros are common in ABCD products).
+#must_use
+fn _bj_vx_bm_dot2(a: f64, x: f64, b: f64, y: f64, r: f64): f64 {
+    var ar: f64 = f64_abs(r);
+    if (ar >= _BJ_VX_LO && ar <= _BJ_VX_HI) { return r; }
+    if (r == 0.0 && (a == 0.0 || x == 0.0) && (b == 0.0 || y == 0.0)) { return r; }
+    var u: f64 = _bj_vx_bm_dot2_ux(a, x, b, y, r);
+    return u;
+}
+
+# The mode spacing (Δν_FSR/π)·ac for a positive finite Δν_FSR whose quotient by π is at most 2^-1022 (the caller's
+# test) and Rust's arccos ac (normal or 0): the quotient to 53 bits with an unbounded exponent, its product by ac
+# rounded once (Rust's 0 for Δν_FSR = 5e-324 at g₁g₂ = 0, where the spacing is 5e-324).
+#must_use
+fn _bj_vx_bm_fsr(fsr: f64, ac: f64): f64 {
+    var fs, fe = _bj_k_ux_from(fsr);
+    var pis, pie = _bj_k_ux_from(_BJ_PI);
+    var qs, qe = _bj_k_ux_div(fs, fe, pis, pie);
+    var cs, ce = _bj_k_ux_from(ac);
+    var u: f64 = _bj_k_ux_mul_f64(qs, qe, cs, ce);
+    return u;
+}

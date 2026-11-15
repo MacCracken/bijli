@@ -600,6 +600,17 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
   below x = 10⁻⁵⁰ Rust's chain, its refusals included, is unchanged (the tiny-x limit kept on 2026-11-14). Cost: the
   cues' tests in the series, 7 to 9 % of a Mie call (`scattering/mie_x1_real` 1.92 → 2.06 µs, `mie_x10_real` 3.78 →
   4.11, `mie_x50_m3_5` 12.07 → 12.86).
+- **beam** (ADR 0002 row 18 amended, M3 part 2d-3a, range edges): the Gaussian beam's, the ABCD matrices' and the
+  resonators' chains over- and underflowed where the result is representable. `spot_size` was ∞ for 10²⁰⁴ at
+  w₀ = 10⁻⁶, z = 10²⁰⁰, z_R = 10⁻¹⁰ (the square of z/z_R overflowed); `radius_of_curvature` ∞ for 10³⁰⁰;
+  `gouy_phase` rounded z/z_R onto the subnormal grid before its arctangent; `peak_intensity_factor` 0 for
+  6.37·10⁻³¹¹ at w = 10¹⁵⁵; `curved_interface`'s C −∞ for −2 and 0 for 10⁻¹⁰⁰; `determinant`, `apply_ray` and
+  `compose` ∞ − ∞ = NaN for 0; `transform_beam` refused a beam with λ = z_R = 10²⁰⁰ (w₀′ = ∞, for 5.64·10¹⁹⁹);
+  `resonator_stability`'s g₁g₂ NaN for −0 where L/R overflowed; `transverse_mode_spacing` 0 for 5·10⁻³²⁴ at
+  Δν_FSR = 5·10⁻³²⁴. Each keeps Rust's chain, tests what it computed and, at an edge, reruns with an unbounded exponent,
+  rounding its last operation once (`src/crmath_vx.cyr`'s `_bj_vx_bm_*`). Cost: the tests, `beam/spot_size` 11 → 13
+  ns, `beam/abcd_compose` 20 → 31 ns, `beam/resonator_stability` 42 → 47 ns, `apply_ray` 9 → 14 ns, and 46 ns for a
+  ray that cancels to an exact 0 (`port-parity.md` §72).
 
 ### Performance
 

@@ -535,7 +535,8 @@ EXACT = ["mono"] + list(SHAPES) + ["sqrt_div", "wsqrt", "sqrt_mono", "sqrt_mono_
          "par_rep", "par_rep_x", "par_rep_slow", "lw_nb", "lw_nb_slow", "lw_reff_ux", "vx_sqrt", "vx_sqrt_e",
          "vx_gamma", "lwo_reff", "lwo_reff_slow", "lwo_kappa", "lwo_kappa_slow", "lwo_nb", "lwo_nb_slow", "lwo_ux",
          "gammao", "gammao_slow", "gammao2", "gammao2_slow", "sumsq", "sumsq_exact", "abcd", "abcd_slow", "dot4", "jcdot", "jint", "jnorm",
-         "jover", "sjones", "sdop", "sellip", "sorient", "rsig", "rq", "rphase", "rang"]
+         "jover", "sjones", "sdop", "sellip", "sorient", "rsig", "rq", "rphase", "rang", "bspot", "bpeak", "broc",
+         "bgouy", "bci", "bdot2", "bw0", "bgp", "bfsr"]
 UX = ["ux_exp", "ux_exp_w", "ux_cosh", "ux_sinh", "ux_ln", "ux_pow", "ux_sin", "ux_cos"]
 
 
@@ -2108,6 +2109,174 @@ def rayleigh_families(rng, count):
     return out
 
 
+# ── the beam's chains at their range edges (src/crmath_vx.cyr's _bj_vx_bm_*, M3 part 2d-3a) ─────────────────────────
+BM_PI = RAY_PI
+BM_MIN = Fraction(2) ** -1022
+BM_MAX = Fraction(sys.float_info.max)
+BM_FAMS = ("bspot", "bpeak", "broc", "bgouy", "bci", "bdot2", "bw0", "bgp", "bfsr")
+
+
+def _jdiv(a, b, r=rnd53):
+    v = a[0] / b[0]
+    return r(v), (a[1] != b[1]) if v == 0 else v < 0
+
+
+def _bone_sq(a, b):
+    """1 + (a/b)², each operation to 53 bits."""
+    q = _jdiv(_jx(a), _jx(b))
+    return _jadd(_jx(1.0), _jmul(q, q))
+
+
+def _bw53(w0, z, zr):
+    """w = w₀·√(1 + (z/z_R)²) to 53 bits."""
+    o = _bone_sq(z, zr)
+    return _jmul(_jx(w0), (rnd53_sqrt(o[0]), False))
+
+
+def bspot_ref(w0, z, zr) -> int:
+    o = _bone_sq(z, zr)
+    return f2b(_jfin(_jmul(_jx(w0), (rnd53_sqrt(o[0]), False), lambda t: t)))
+
+
+def bpeak_ref(w0, z, zr) -> int:
+    w = _bw53(w0, z, zr)
+    return f2b(_jfin(_jdiv(_jx(2.0), _jmul(_jmul(_jx(BM_PI), w), w), lambda t: t)))
+
+
+def broc_ref(z, zr) -> int:
+    return f2b(_jfin(_jmul(_jx(z), _bone_sq(zr, z), lambda t: t)))
+
+
+def bgouy_ref(z, zr) -> int:
+    """arctan of the 53-bit z/z_R rounded once: below 2^-1022 it lies within |t|³ inside t."""
+    v = _jdiv(_jx(z), _jx(zr))
+    if v[0] == 0:
+        return f2b(-0.0 if v[1] else 0.0)
+    if abs(v[0]) < BM_MIN:
+        return f2b(rn_frac(v[0] * (1 - Fraction(2) ** -2000)))
+    if abs(v[0]) > BM_MAX:
+        return f2b(mpfr_ref.cr("atan", -INF if v[0] < 0 else INF))
+    return f2b(mpfr_ref.cr("atan", float(v[0])))
+
+
+def bci_ref(n1, n2, rad) -> int:
+    return f2b(_jfin(_jdiv(_jsub(_jx(n1), _jx(n2)), _jmul(_jx(n2), _jx(rad)), lambda t: t)))
+
+
+def bdot2_ref(a, x, b, y) -> int:
+    return f2b(_jfin(_jadd(_jmul(_jx(a), _jx(x)), _jmul(_jx(b), _jx(y)), lambda t: t)))
+
+
+def bw0_ref(zr2, lam) -> int:
+    return f2b(rn_sqrt(rnd53(rnd53(Fraction(zr2) * Fraction(lam)) / Fraction(BM_PI))))
+
+
+def _bg53(length, r):
+    if math.isinf(r):
+        return Fraction(1), False
+    return _jsub(_jx(1.0), _jdiv(_jx(length), _jx(r)))
+
+
+def bgp_ref(length, r1, r2) -> int:
+    return f2b(_jfin(_jmul(_bg53(length, r1), _bg53(length, r2), lambda t: t)))
+
+
+def bfsr_ref(fsr, g1, g2) -> int:
+    """(Δν_FSR/π)·arccos(±√(g₁g₂)) with each operation to 53 bits: a root below 2^-511 has arccos RN(π/2), as 0."""
+    r53 = rnd53_sqrt(rnd53(Fraction(g1) * Fraction(g2)))
+    arg = 0.0 if r53 < BM_MIN else float(r53)
+    if g1 < 0.0 or g2 < 0.0:
+        arg = -arg
+    ac = mpfr_ref.cr("acos", arg)
+    q = rnd53(Fraction(fsr) / Fraction(BM_PI))
+    return f2b(rn_frac(q * Fraction(ac)) if ac != 0.0 else 0.0)
+
+
+def _bsc(x, e):
+    """x·2^e, ±∞ past DBL_MAX (Python's float power raises there)."""
+    try:
+        return math.ldexp(x, e)
+    except OverflowError:
+        return INF if x > 0 else -INF
+
+
+def _bpos(rng, lo, hi):
+    """A positive double 2^e·[1, 2) with e uniform in [lo, hi] (at least 2^-1074)."""
+    e = rng.randint(lo, hi)
+    return max(rng.uniform(1.0, 2.0) * 2.0 ** e, 5e-324) if e >= -1074 else 5e-324
+
+
+def beam_families(rng, count):
+    """bspot, bpeak, broc, bgouy, bci, bdot2, bw0, bgp and bfsr (M3 part 2d-3a): beam.cyr's tests copied into
+    cr_driver.cyr, then the helpers, against the unbounded chain alone, so the calls the tests keep on Rust's chain
+    check that claim: ratios around 2^512 and far past it, waists around DBL_MAX's root, quotients below 2^-1022 (exact
+    midpoints of the subnormal grid among them), products past DBL_MAX cancelling and below 2^-1022, cavities whose
+    L/R passes DBL_MAX, and free spectral ranges below π·2^-1022."""
+    out = []
+    sg = lambda: rng.choice([1.0, -1.0])                    # noqa: E731
+    for i in range(count):
+        zr = _bpos(rng, -1074, 1023) * sg()
+        w0 = rng.choice([0.0, _bpos(rng, -1074, 1023), _bpos(rng, -560, -500), _bpos(rng, 500, 545)])
+        e = rng.choice([rng.randint(505, 520), rng.randint(-40, 40), rng.randint(500, 1100)])
+        z = _bsc(rng.uniform(1.0, 2.0) * abs(zr), e) * sg()
+        if not math.isfinite(z) or z == 0.0:
+            z = rng.uniform(-3.0, 3.0)
+        out.append(("bspot", [w0, z, zr], bspot_ref(w0, z, zr)))
+        if w0 != 0.0:
+            out.append(("bpeak", [w0, z, zr], bpeak_ref(w0, z, zr)))
+        zc = rng.choice([_bpos(rng, -99, 40), 1e-30, _bpos(rng, -99, -60)]) * sg()
+        zrc = _bsc(rng.uniform(1.0, 2.0) * abs(zc), rng.randint(500, 600)) * sg()
+        if not math.isfinite(zrc):
+            zrc = 1.0
+        out.append(("broc", [zc, zrc], broc_ref(zc, zrc)))
+        if i % 3 == 0:
+            j = rng.randint(0, 2000)
+            u = rng.randint(1 << 40, 1 << 41) / float(1 << 40)
+            zg, zrg = (2 * j + 1) * 2.0 ** -75 * u * sg(), 2.0 ** 1000 * u * sg()
+        else:
+            zrg = _bpos(rng, 900, 1023) * sg()
+            zg = _bsc(rng.uniform(1.0, 2.0) * abs(zrg), rng.randint(-1150, -1000)) * sg()
+            if not math.isfinite(zg) or zg == 0.0:
+                zg = 1e-300
+        out.append(("bgouy", [zg, zrg], bgouy_ref(zg, zrg)))
+        n2 = rng.choice([_bpos(rng, 900, 1023), _bpos(rng, -100, 100), 1.5]) * sg()
+        rad = rng.choice([_bpos(rng, 900, 1023), _bpos(rng, -99, 100)]) * sg()
+        n1 = rng.choice([_bpos(rng, 1000, 1023) * sg(), -n2 * rng.uniform(0.5, 1.0), _bpos(rng, -100, 100)])
+        out.append(("bci", [n1, n2, rad], bci_ref(n1, n2, rad)))
+        k = i % 4
+        if k == 0:
+            a, x = _bpos(rng, 500, 600) * sg(), _bpos(rng, 500, 600) * sg()
+            b, y = (-a, x) if rng.random() < 0.5 else (a * sg(), _bpos(rng, 500, 600))
+        elif k == 1:
+            a, x, b, y = (_bpos(rng, -560, -500) * sg() for _ in range(4))
+        elif k == 2:
+            a, x = _bpos(rng, -560, -480) * sg(), _bpos(rng, -560, -480) * sg()
+            b, y = rng.uniform(-2.0, 2.0), _bpos(rng, -1100, -900) * sg()
+        else:
+            a, x, b, y = (rng.uniform(-3.0, 3.0) for _ in range(4))
+        if not all(math.isfinite(t) for t in (a, x, b, y)):
+            a, x, b, y = 1.0, 2.0, 3.0, 4.0
+        out.append(("bdot2", [a, x, b, y], bdot2_ref(a, x, b, y)))
+        zr2 = rng.choice([_bpos(rng, 500, 1023), _bpos(rng, -1074, -500), _bpos(rng, -100, 100)])
+        lam = rng.choice([_bpos(rng, 500, 1023), _bpos(rng, -1074, -500), _bpos(rng, -100, 100)])
+        out.append(("bw0", [zr2, lam], bw0_ref(zr2, lam)))
+        ln = _bpos(rng, 950, 1023)
+        r1 = rng.uniform(1.0, 2.0) * 2.0 ** rng.randint(-99, -40) * sg()
+        r2 = rng.choice([ln, b2f(f2b(ln) + rng.randint(-3, 3)), 2.0 * ln, INF, -ln, r1, _bpos(rng, -99, 1023) * sg()])
+        if not math.isfinite(r2) and r2 != INF:
+            r2 = ln
+        out.append(("bgp", [ln, r1, r2], bgp_ref(ln, r1, r2)))
+        fsr = rng.choice([_bpos(rng, -1074, -1020), _bpos(rng, -1030, -1015), _bpos(rng, -100, 100)])
+        if rng.random() < 0.3:
+            g1 = rng.choice([1.0, -1.0]) * _bpos(rng, -1074, -100)
+            g2 = math.copysign(rng.uniform(0.0, 1.0), g1)
+        else:
+            g1 = rng.uniform(-1.0, 1.0)
+            g2 = math.copysign(rng.uniform(0.0, 1.0), g1)
+        out.append(("bfsr", [fsr, g1, g2], bfsr_ref(fsr, g1, g2)))
+    return out
+
+
 def main() -> int:
     (root / "build").mkdir(exist_ok=True)
     names = wanted or list(FUNCS) + ["exact", "ux"]
@@ -2168,6 +2337,9 @@ def main() -> int:
         rrng = random.Random(0x3_2D2A)
         calls += [(f, ref, ws) for f, ws, ref in rayleigh_families(rrng, max(1, n // 10))
                   if "exact" in names or f in names]
+        brng = random.Random(0x3_2D3A)
+        calls += [(f, ref, ws) for f, ws, ref in beam_families(brng, max(1, n // 10))
+                  if "exact" in names or f in names]
         srng = random.Random(0x3_2D1C)
         calls += [(f, ref, ws) for f, ws, ref in stokes_families(srng, max(1, n // 10))
                   if "exact" in names or f in names]
@@ -2196,7 +2368,7 @@ def main() -> int:
             g = results[t][i]
             # "invalid" is a word for these
             any_nan = name not in UX and not name.startswith(("gamma", "cm", "cos_t", "lw_", "lwo_", "par", "vx_",
-                                                              "abcd", "dot4", "j", "s", "r"))
+                                                              "abcd", "dot4", "j", "s", "r") + BM_FAMS)
             ok = g == want or (any_nan and b2f(g) != b2f(g) and b2f(want) != b2f(want))
             per.setdefault((name, t), [0, 0])[0 if ok else 1] += 1
             if not ok:

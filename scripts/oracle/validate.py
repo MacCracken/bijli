@@ -4629,6 +4629,59 @@ def bm_spot(bm, z):
     return bm[1] * fsqrt(1.0 + ratio * ratio)
 
 
+# M3 part 2d-3a (ADR 0002 row 18): the port's beam chains with an unbounded exponent, each operation to 53 bits and the
+# last rounded once, wherever their inputs are finite (and z_R ≠ 0 where it divides). The model is the chain itself,
+# so the harness checks the port's guards (src/crmath_vx.cyr's _bj_vx_bm_*) row by row.
+BM_EXACT = lambda t: t                                  # noqa: E731  (the last operation, before ux_fin)
+BM_MIN = Fraction(2) ** -1022
+
+
+def bm_fin(*xs) -> bool:
+    return all(math.isfinite(x) for x in xs)
+
+
+def bm_one_sq(a, b):
+    """1 + (a/b)², each operation to 53 bits with an unbounded exponent."""
+    q = ux_div(ux(a), ux(b))
+    return ux_add(ux(1.0), ux_mul(q, q))
+
+
+def bm_spot53(bm, z):
+    """w = w₀·√(1 + (z/z_R)²) to 53 bits."""
+    return ux_mul(ux(bm[1]), ux_sqrt(bm_one_sq(z, bm[2])))
+
+
+def bm_gouy_ux(z, zr, P) -> float:
+    """arctan(z/z_R) rounded once from the 53-bit z/z_R: below 2^-1022 arctan t lies within |t|³ inside t, so it is t's
+    rounding with a midpoint of the subnormal grid broken toward 0; past DBL_MAX it is ±RN(π/2)."""
+    v = ux_div(ux(z), ux(zr))
+    if v[0] == 0:
+        return -0.0 if v[1] else 0.0
+    if abs(v[0]) < BM_MIN:
+        return rn_frac(v[0] * (1 - Fraction(2) ** -2000))
+    if abs(v[0]) > Fraction(DBL_MAX):
+        return P["atan"](-math.inf if v[0] < 0 else math.inf)
+    return P["atan"](float(v[0]))
+
+
+def bm_dot2(a, x, b, y) -> float:
+    """a·x + b·y with each product to 53 bits, the sum rounded once."""
+    return ux_fin(ux_add(ux_mul(ux(a), ux(x)), ux_mul(ux(b), ux(y)), BM_EXACT))
+
+
+def bm_g53(L, r):
+    """g = 1 − L/R to 53 bits (1 for a flat mirror)."""
+    return (Fraction(1), False) if math.isinf(r) else ux_sub(ux(1.0), ux_div(ux(L), ux(r)))
+
+
+def bm_w0(zr2, lam, port) -> float:
+    """w₀′ = √(z_R′·λ′/π); port=True for row 18's chain from the doubles z_R′ > 0 and a positive finite λ′ with an
+    unbounded exponent, its root rounded once."""
+    if port and bm_pos(lam):
+        return ux_fin_sqrt(ux_div(ux_mul(ux(zr2), ux(lam)), ux(SC_PI)))
+    return fsqrt(fdiv(zr2 * lam, SC_PI))
+
+
 def bm_hermite(n, x):
     if n == 0:
         return 1.0
@@ -4709,13 +4762,16 @@ def bm_propagate(m, q0, q1, port=False):
     return [("f", fdiv(nr * dr + ni * di, dsq)), ("f", fdiv(ni * dr - nr * di, dsq))]
 
 
-def bm_transform(m, bm, port=False, r35=True, r17=True):
+def bm_transform(m, bm, port=False, r35=True, r17=True, r18=True):
     """AbcdMatrix::transform_beam_with_waist_position; port=True for the port: ADR 0002 row 35 (unless r35=False), the
     exact AD − BC of finite entries deciding det > 0, keeping λ only when it is exactly 1 and giving λ·det rounded
     once (λ itself for a zero, infinite or NaN λ, which det > 0 leaves as it is); row 17 (unless r17=False), q_out
-    from the port's propagate_beam (bm_propagate); and row 13, the new beam's z_R rounded once (bm_new)."""
+    from the port's propagate_beam (bm_propagate); row 13, the new beam's z_R rounded once (bm_new); and row 18
+    (unless r18=False), the reason's det and w₀′ with an unbounded exponent (bm_dot2, bm_w0)."""
     a, b, c, d = m
     det = a * d - b * c
+    if port and r18 and bm_fin(a, b, c, d):
+        det = bm_dot2(a, d, -b, c)
     exact = port and r35 and all(math.isfinite(x) for x in m)
     D = Fraction(a) * Fraction(d) - Fraction(b) * Fraction(c) if exact else None
     if not (D > 0 if exact else bm_pos(det)):
@@ -4730,13 +4786,15 @@ def bm_transform(m, bm, port=False, r35=True, r17=True):
         lam = bm[0] if D == 1 or bm[0] == 0.0 or not math.isfinite(bm[0]) else rn_frac(Fraction(bm[0]) * D)
     else:
         lam = bm[0] if abs(det - 1.0) <= 1e-12 else bm[0] * det
-    out = bm_new(lam, fsqrt(fdiv(zr2 * lam, SC_PI)), port)
+    out = bm_new(lam, bm_w0(zr2, lam, port and r18), port)
     if out[0][0] == "E":
         return out
     return out + [("f", -q[0][1])]
 
 
-def bm_stability(L, r1, r2):
+def bm_stability(L, r1, r2, r18=False):
+    """g₁, g₂, g₁g₂ and Rust's stability test, or the error; r18=True for the port's g₁g₂ (row 18, M3 part 2d-3a): the
+    53-bit g's product rounded once (Rust's own where both g are finite, which the harness checks)."""
     if not bm_pos(L):
         return None, ip_err(f"cavity length must be positive and finite, got {rust_display(L)}")
     if math.isnan(r1) or math.isnan(r2):
@@ -4745,6 +4803,8 @@ def bm_stability(L, r1, r2):
         return None, dz_err("mirror radius of curvature cannot be zero")
     g1, g2 = 1.0 - fdiv(L, r1), 1.0 - fdiv(L, r2)
     gp = g1 * g2
+    if r18:
+        gp = ux_fin(ux_mul(bm_g53(L, r1), bm_g53(L, r2), BM_EXACT))
     return (g1, g2, gp, 0.0 <= gp <= 1.0), None
 
 
@@ -4849,10 +4909,12 @@ def bm_waist_exact(L, r1, r2, lam) -> float:
     return 0.0 if m4 == 0 else bm_rn_root4(m4)
 
 
-def bm_eval(fn, v, P, port=False):
+def bm_eval(fn, v, P, port=False, r18=True):
     """beam.rs's outputs for a row on the primitives P; port=True for the port's field (conjugated), LG power
-    (row 32) and resonators (row 34). None for another name."""
+    (row 32), resonators (row 34) and, unless r18=False, its chains at their range edges (row 18, M3 part 2d-3a).
+    None for another name."""
     fl = lambda xs: [("f", x) for x in xs]                       # noqa: E731
+    e18 = port and r18
     if fn == "GaussianBeam::new":
         return bm_new(v[0], v[1], port)
     if fn.startswith("GaussianBeam::"):
@@ -4860,20 +4922,28 @@ def bm_eval(fn, v, P, port=False):
         name = fn.split("::")[1]
         if name == "q":
             return fl([z, bm[2]])
+        ok3 = e18 and z is not None and bm_fin(bm[1], z, bm[2]) and bm[2] != 0
         if name == "spot_size":
-            return fl([bm_spot(bm, z)])
+            return fl([ux_fin(bm_spot53(bm, z)) if ok3 else bm_spot(bm, z)])
         if name == "radius_of_curvature":
             if abs(z) < 1e-30:
                 return ip_err("radius of curvature is infinite at the beam waist")
+            if e18 and bm_fin(z, bm[2]):
+                return fl([ux_fin(ux_mul(ux(z), bm_one_sq(bm[2], z), BM_EXACT))])
             ratio = fdiv(bm[2], z)
             return fl([z * (1.0 + ratio * ratio)])
         if name == "gouy_phase":
+            if e18 and bm_fin(z, bm[2]) and bm[2] != 0:
+                return fl([bm_gouy_ux(z, bm[2], P)])
             return fl([P["atan"](fdiv(z, bm[2]))])
         if name == "divergence":
             if port and math.isfinite(bm[0]) and math.isfinite(bm[1]) and bm[1] != 0.0:
                 return fl([rn_mono([bm[0]], [SC_PI, bm[1]])])          # row 13: rounded once
             return fl([fdiv(bm[0], SC_PI * bm[1])])
         if name == "peak_intensity_factor":
+            if ok3:
+                w = bm_spot53(bm, z)
+                return fl([ux_fin(ux_div(ux(2.0), ux_mul(ux_mul(ux(SC_PI), w), w), BM_EXACT))])
             w = bm_spot(bm, z)
             return fl([fdiv(2.0, SC_PI * w * w)])
         if name in ("confocal_parameter", "depth_of_focus"):
@@ -4907,34 +4977,39 @@ def bm_eval(fn, v, P, port=False):
             return dz_err("refractive index n₂ cannot be zero")
         if abs(rad) < 1e-30:
             return dz_err("interface radius cannot be zero")
+        if e18 and bm_fin(n1, n2, rad):
+            c = ux_fin(ux_div(ux_sub(ux(n1), ux(n2)), ux_mul(ux(n2), ux(rad)), BM_EXACT))
+            return fl([1.0, 0.0, c, fdiv(n1, n2)])
         return fl([1.0, 0.0, fdiv(n1 - n2, n2 * rad), fdiv(n1, n2)])
     if fn.startswith("AbcdMatrix::"):
         a, b, c, d = v[:4]
         name = fn.split("::")[1]
+        def dot2(p, x, q, y):
+            return bm_dot2(p, x, q, y) if e18 and bm_fin(p, x, q, y) else p * x + q * y
         if name == "determinant":
-            return fl([a * d - b * c])
+            return fl([dot2(a, d, -b, c)])
         if name == "apply_ray":
             y, th = v[4:6]
-            return fl([a * y + b * th, c * y + d * th])
+            return fl([dot2(a, y, b, th), dot2(c, y, d, th)])
         if name == "compose":
             e, f_, g, h = v[4:8]
-            return fl([a * e + b * g, a * f_ + b * h, c * e + d * g, c * f_ + d * h])
+            return fl([dot2(a, e, b, g), dot2(a, f_, b, h), dot2(c, e, d, g), dot2(c, f_, d, h)])
         if name == "propagate_beam":
             return bm_propagate(v[:4], v[4], v[5], port)
         if name == "transform_beam_with_waist_position":
-            return bm_transform(v[:4], v[4:7], port)
+            return bm_transform(v[:4], v[4:7], port, r18=r18)
         if name == "transform_beam":
-            out = bm_transform(v[:4], v[4:7], port)
+            out = bm_transform(v[:4], v[4:7], port, r18=r18)
             return out if out[0][0] == "E" else out[:3]
         return None
     if fn == "beam::resonator_stability":
-        st, bad = bm_stability(*v)
+        st, bad = bm_stability(*v, r18=e18)
         if bad:
             return bad
         return fl(st[:3]) + [("i", int(bm_stable34(*v) if port else st[3]))]
     if fn == "beam::resonator_beam_waist":
         L, r1, r2, lam = v
-        st, bad = bm_stability(L, r1, r2)
+        st, bad = bm_stability(L, r1, r2, r18=e18)
         if bad:
             return bad
         g1, g2, gp, ok = st
@@ -4969,6 +5044,12 @@ def bm_eval(fn, v, P, port=False):
             return ip_err(f"cavity is unstable (g₁g₂ = {rust_fixed(gp, 4)})")
         root = fsqrt(gp)
         arg = -root if (g1 < 0.0 or g2 < 0.0) else root
+        if e18:
+            # The chain to 53 bits: √(g₁g₂) is then a normal double or 0, or below 2^-1022, where arccos(±r) is
+            # RN(π/2) as for 0 (more than 2^-55 from a midpoint), and Δν_FSR/π times it is rounded once.
+            r53 = ux_sqrt(ux_mul(ux(g1), ux(g2)))
+            ac = P["acos"](0.0) if abs(r53[0]) < BM_MIN else P["acos"](math.copysign(float(r53[0]), arg))
+            return fl([ux_fin(ux_mul(ux_div(ux(fsr), ux(SC_PI)), ux(ac), BM_EXACT))])
         return fl([fdiv(fsr, SC_PI) * P["acos"](arg)])
     if fn == "beam::hermite_gaussian":
         return fl([bm_hg(v[:3], int(v[3]), int(v[4]), v[5], v[6], v[7], P)])
@@ -4979,10 +5060,11 @@ def bm_eval(fn, v, P, port=False):
     return None
 
 
-def bm_harness(fn, v, P):
+def bm_harness(fn, v, P, r18=True):
     """The parity harness's reading of a row (tests/parity.tcyr's _par_beam): the port's function on the row's
-    numbers, the Hermite–Gaussian field conjugated back to the oracle's convention."""
-    out = bm_eval(fn, v, P, port=True)
+    numbers, the Hermite–Gaussian field conjugated back to the oracle's convention; r18=False without row 18's
+    range edges (M3 part 2d-3a)."""
+    out = bm_eval(fn, v, P, port=True, r18=r18)
     if fn == "beam::hermite_gaussian_field":
         return [out[0], ("f", -out[1][1])]
     return out
@@ -5052,8 +5134,9 @@ def beam_adr_rows(path: Path) -> list:
     waist rounded once (M3 part 2b), row 32 for the LG power at l = i32::MIN, row 34 for the resonators (M3 part 2a-2),
     row 17 for propagate_beam's exact threshold and q_out (M3 part 2c-2), and for a transform the first of row 13
     (its new z_R rounded once), row 35 (its exact determinant, M3 part 2a-3) and row 17 (its q_out) that accounts for
-    the whole difference on its own, row 35 where only both together do; row 5 otherwise (the field's conjugation,
-    should it fail to be exact)."""
+    the whole difference on its own, row 35 where only both together do; row 18 wherever the range edges' chains
+    (M3 part 2d-3a) change the reading, whatever else does; row 5 otherwise (the field's conjugation, should it fail
+    to be exact)."""
     out = []
     for fn, cls, ins, outs, v in bm_lines(path):
         P = BM_P_MPFR if cls == "C" else BM_P_GLIBC
@@ -5061,7 +5144,9 @@ def beam_adr_rows(path: Path) -> list:
         port = bm_harness(fn, v, P)
         if toks_same(port, expect):
             continue
-        if fn in ("GaussianBeam::new", "GaussianBeam::divergence") or (
+        if not toks_same(bm_harness(fn, v, P, r18=False), port):
+            row = 18
+        elif fn in ("GaussianBeam::new", "GaussianBeam::divergence") or (
                 fn == "beam::resonator_beam_waist" and v[1] == v[0] and v[2] == v[0]):
             row = 13
         elif fn in BM_RES34:
@@ -5070,7 +5155,7 @@ def beam_adr_rows(path: Path) -> list:
             row = 17
         elif fn in ("AbcdMatrix::transform_beam", "AbcdMatrix::transform_beam_with_waist_position"):
             def alone(r35, r17):
-                o = bm_transform(v[:4], v[4:7], port=True, r35=r35, r17=r17)
+                o = bm_transform(v[:4], v[4:7], port=True, r35=r35, r17=r17, r18=False)
                 return o[:3] if fn == "AbcdMatrix::transform_beam" and o[0][0] != "E" else o
             if toks_same(alone(False, False), port):
                 row = 13

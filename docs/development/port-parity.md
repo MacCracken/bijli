@@ -4140,3 +4140,98 @@ E and B = n̂ × E/c.
   measured, 0 pending, 76,969 accepted (ADR 01: 29,441; ADR 0002: 47,528)** over 570,336 rows; **all 380 digests
   equal**. Mie's digest changed; the other 379 are unchanged. `scattering.tcyr` passes on all three. The gate is clean
   (17 steps, no warnings; execution coverage 288 of 288 functions).
+
+## 72. M3 part 2d-3a: the beam's, ABCD and resonator chains at their range edges (2026-11-14)
+
+- **2d-3 runs in three bites.** beam's chains are more than one bite carries: 2d-3a (this one) the Gaussian beam's,
+  the ABCD matrices' and the resonators' chains; 2d-3b the HG and LG amplitudes, whose Hermite and Laguerre recurrences,
+  envelope and power over- and underflow where the mode's value is representable; 2d-3c the HG field's phase
+  kz + k(x² + y²)/(2R) − (m + n + 1)ζ, which passes 2^2054 (kz alone reaches 2^2100 at λ = 5·10⁻³²⁴), where the 2,688
+  bits of 2/π that `_bj_ux_reduce` reads end.
+- **ADR 0002 row 18, amended** (`src/crmath_vx.cyr`'s `_bj_vx_bm_*`). Each function keeps Rust's chain and tests what
+  it computed; where an intermediate left the normal range its chain runs with an unbounded exponent and the last
+  operation rounds once. A non-finite input keeps Rust's chain.
+  - **The spot size and the radius of curvature**, w₀·√(1 + (z/z_R)²) and z·(1 + (z_R/z)²): a square below 2^-1022 is
+    rounded away against 1 by both chains, so they differ only where the square passes DBL_MAX, and Rust's result is
+    then ±∞ or NaN. The test is one compare on the result. Rust: w = ∞ for 10²⁰⁴ at w₀ = 10⁻⁶, z = 10²⁰⁰,
+    z_R = 10⁻¹⁰, and NaN for 0 at w₀ = 0; R = ∞ for 10³⁰⁰ at z = 10⁻²⁰, z_R = 10¹⁴⁰.
+  - **The Gouy phase** arctan(z/z_R), where |z/z_R| is at most 2^-1022 from a nonzero z: the arctangent of the 53-bit
+    quotient, rounded once. arctan t lies within |t|³ inside t, so it is t's rounding, with a midpoint of the subnormal
+    grid broken toward 0 (a step of 2^-100 of t's significand into `_bj_k_ux_round`). Rust: ζ = 2^-1073 at
+    z/z_R = 3·2^-1075 (2^-1074). Past DBL_MAX both chains give ±RN(π/2).
+  - **The peak intensity factor** 2/(π·w·w), where π·w·w is not in (2^-1022, DBL_MAX], from the 53-bit w. Rust: 0
+    at w = 10¹⁵⁵ (6.37·10⁻³¹¹); and where π·w·w rounds to 2^-1022 from the 53-bit 2^-1022 − 2^-1075, 2^1023 for
+    2^1023 + an ulp.
+  - **The curved interface's** C = (n₁ − n₂)/(n₂R), where n₁ − n₂ or n₂R passes DBL_MAX (|n₂R| ≥ 10⁻⁶⁰ is never
+    below 2^-1022, and a difference below it is exact). Rust: −∞ for −2 at n₁ = 10³⁰⁸, n₂ = −10³⁰⁸, R = 1; 0 for
+    10⁻¹⁰⁰ at n₁ = 10³⁰⁰, n₂ = R = 10²⁰⁰.
+  - **`apply_ray`, `compose` and `determinant`**: each two-term sum outside [2^-900, DBL_MAX] that is not a sum of two
+    zero products (a zero factor in each, common in ABCD products: a lens's B, free space's C) runs unbounded:
+    `_bj_vx_bm_dot2` for a ray, beam.cyr's own tests and then `_bj_vx_bm_dot2_ux` for a product of matrices,
+    `_bj_vx_cross1_f64` for the determinant (all three `_bj_vx_cross1_f64`'s result, bit for bit). Rust: AD − BC =
+    ∞ − ∞ = NaN for 0 with every entry 10²⁰⁰; ∞ for 2^971 where a product past DBL_MAX meets −DBL_MAX; 0 for 2^-1074
+    where (5 ± 7/16)·2^-1074, two subnormal products, round alike. A lone product below 2^-1022 rounds twice there,
+    to 53 bits and then onto the subnormal grid, as in every row-18 chain: D = 0x0005555555555555 times θ = 0.1 gives
+    …888 where Rust's single rounding gave …889.
+  - **The transforms' w₀′** = √(z_R′λ′/π), where z_R′λ′ is not normal or its quotient by π falls below 2^-1022: the
+    chain from the doubles z_R′ and λ′, each the exact value rounded once (rows 17 and 35) and the output beam's own,
+    so its z_R stays consistent with them. Rust refused λ = z_R = 10²⁰⁰ through the identity (w₀′ = ∞, for
+    5.64·10¹⁹⁹) and 10⁻²⁰⁰ (w₀′ = 0, for 5.64·10⁻²⁰¹).
+  - **The stability's g₁g₂**, where a g is ±∞ (L/R past DBL_MAX): the 53-bit g's product, rounded once. g₁ and g₂ stay
+    ±∞, their true values being unrepresentable, and `resonator_beam_waist`'s "unstable" reason quotes the new
+    product. Rust: NaN for −0 at L = R₂ = 10³⁰⁰, R₁ = 10⁻¹⁰; −∞ for −1.1·10²⁹⁴ with R₂ an ulp above L.
+  - **The mode spacing** (Δν_FSR/π)·arccos(±√(g₁g₂)), where Δν_FSR/π falls below 2^-1022 (Δν_FSR below π·2^-1022,
+    7.0·10⁻³⁰⁸). The root's own underflow is invisible: arccos of anything below 2^-511 is RN(π/2), which lies more
+    than 2^-55 from a midpoint. Rust: 0 for 5·10⁻³²⁴ at Δν_FSR = 5·10⁻³²⁴, g₁ = g₂ = 0.
+- **The model** (`validate.py`'s `bm_eval(r18)`, with `bm_one_sq`, `bm_spot53`, `bm_gouy_ux`, `bm_dot2`, `bm_g53` and
+  `bm_w0`): the unbounded chain itself on every row with finite inputs (and z_R ≠ 0 where it divides), so the
+  harness checks the port's tests row by row. `beam_adr_rows` gives row 18 to every row whose reading row 18's chains
+  change, whatever else changes it.
+- **The oracle**: `beam.tsv` gains 936 rows after every earlier row (`chain_edges`; the old file an exact prefix):
+  - ratios z/z_R around 2^512 and far past it, with zero, negative and subnormal waists; z_R/z past 2^512 where R is
+    representable;
+  - Gouy quotients below 2^-1022: the exact midpoints (2j + 1)·2^-1075 for seven j, either sign and their
+    neighbours, and 2^-1022 itself;
+  - waists around DBL_MAX's root and where π·w·w is subnormal, and the one found by a search where π·w·w rounds to
+    2^-1022 from below;
+  - curved interfaces past DBL_MAX; twelve matrices whose products pass DBL_MAX (cancelling or not) or fall below
+    2^-1022, with five rays and three products each, and a product past DBL_MAX meeting −DBL_MAX and the two
+    subnormal products that cancel, each through a product, a ray and a determinant;
+  - seven beams whose z_R′λ′ leaves the range, through the identity, free space, a lens and two scaled matrices;
+  - cavities with L = 10³⁰⁰ and R₁ = ±10⁻¹⁰ or 10⁻⁸ against seven R₂;
+  - mode spacings for nine Δν_FSR around and below π·2^-1022, and four g pairs whose product is below 2^-1022.
+- **Mappings**: `beam.adr.tsv` holds 6,152 rows, row 18's 1,260: `spot_size` 589, `peak_intensity_factor` 314, each
+  transform 137, `compose` 19, `gouy_phase` 13, `transverse_mode_spacing` 13, `apply_ray` 11, `curved_interface` 9,
+  `resonator_stability` 6, `determinant` 5, `resonator_beam_waist` 4, `radius_of_curvature` 3. 1,068 of them are older
+  rows: the earlier grids' beams at the range edges (z_R near 10⁻³¹⁴ with z = 1 gives Rust's w = ∞ for 3.4·10¹⁵³), 141
+  of them another row's mapping before. All passed on the harness's first run.
+- **cr_verify** (`bspot`, `bpeak`, `broc`, `bgouy`, `bci`, `bdot2`, `bw0`, `bgp`, `bfsr`; `cr_driver.cyr` copies
+  beam.cyr's few lines of test before each helper): 87,550 calls per target against exact Fractions, 0 mismatches on
+  x86_64 and aarch64. The draws sit around the tests' bounds, so the calls kept on Rust's chain check that claim too.
+- **Mutations**, each run through the parity harness: twenty of twenty-two caught. Three were caught only after
+  rows were added for them: the peak factor's strict 2^-1022 bound (the searched waist), `compose`'s test against
+  DBL_MAX (an ∞ entry passes the lower bounds) and its zero test (the cancelling subnormal products). The two left:
+  - the z_R = 0 test in front of the unbounded chain: x/0 gives the same ±∞ or NaN in both chains, so it is cheap
+    insurance;
+  - the mode spacing's strict bound: π·2^-1022 is the only Δν_FSR whose quotient by π rounds to 2^-1022, and that
+    quotient is exact.
+- **Tests**: `cyrius_beam_row18` (17 assertions, 152 in tests/beam.tcyr): the examples above.
+- **Benchmarks.** A full bench interleaved against 2d-2b's tree, with a one-off bench of the guarded functions the
+  record has no twin for (three rounds, load 3.4 to 6.9; each figure the lowest of the three):
+  - `beam/spot_size` 11 → 13 ns, `beam/abcd_compose` 20 → 31 ns, `beam/resonator_stability` 42 → 47 ns; the HG
+    amplitude and field, `propagate_beam` and every other row within the load's noise (median ratio 1.00 over 89).
+    The record takes the three new medians (13, 32 and 47 ns);
+  - one-off: `radius_of_curvature` 8 → 12 ns, `determinant` 5 → 7, `curved_interface` 14 → 17,
+    `peak_intensity_factor` 21 → 23; `gouy_phase`, `transform_beam` and the mode spacing unchanged; `apply_ray` 8 →
+    46 ns on a ray the lens maps to an exact 0 by cancellation (−10·0.001 + 0.01), which takes the exactness test,
+    and 9 → 14 ns otherwise (a focused probe);
+  - a finding, recorded: in this compiler a band test costs about what the operations it guards do. `compose`'s
+    four magnitudes, their sum and five compares cost 11 ns over 20, and an executed five-argument helper call
+    about 8 ns. A first form called `_bj_vx_cross1_f64` per entry (`compose` 39 ns, a lens composed with itself
+    65 ns for a structural zero); testing structural zeros in the rare path took the lens to 54 ns. Moving the tests
+    inline into `compose`, or flagging entries for a single call, saved nothing: the dead code's locals cost the
+    common case more.
+- **Result, every target** (x86_64 ELF, x86_64 PE, aarch64): **16 modules, 0 failing; 493,179 ok, 0 failed, 0
+  measured, 0 pending, 78,093 accepted (ADR 01: 29,441; ADR 0002: 48,652)** over 571,272 rows; **all 380 digests
+  equal**. The thirteen functions this bite guards changed digests; the other 367 are unchanged. `beam.tcyr` passes
+  on all three. The gate is clean (17 steps, no warnings; execution coverage 288 of 288 functions).

@@ -76,11 +76,11 @@
 | `scattering/mie_x50_m3_5` | 3.44 µs | `scattering/mie_x50_m3_5` | 12.86 µs | 3.7× |
 | `scattering/rayleigh_cross_section` | 1.74 ns | `scattering/rayleigh_cross_section` | 85.00 ns | 48.9× |
 | `scattering/rayleigh_phase_function` | 0.50 ns | `scattering/rayleigh_phase_function` | 7.00 ns | 14.0× |
-| `beam/spot_size` | 0.49 ns | `beam/spot_size` | 10.00 ns | 20.4× |
+| `beam/spot_size` | 0.49 ns | `beam/spot_size` | 13.00 ns | 26.5× |
 | `beam/abcd_propagate_beam` | 1.79 ns | `beam/abcd_propagate_beam` | 89.00 ns | 49.7× |
-| `beam/abcd_compose` | 0.99 ns | `beam/abcd_compose` | 20.00 ns | 20.2× |
+| `beam/abcd_compose` | 0.99 ns | `beam/abcd_compose` | 32.00 ns | 32.3× |
 | `beam/hermite_gaussian_hg33` | 4.46 ns | `beam/hermite_gaussian_hg33` | 160.00 ns | 35.9× |
-| `beam/resonator_stability` | 6.48 ns | `beam/resonator_stability` | 39.00 ns | 6.0× |
+| `beam/resonator_stability` | 6.48 ns | `beam/resonator_stability` | 47.00 ns | 7.3× |
 | `beam/hermite_gaussian_field_hg33` | 30.33 ns | `beam/hermite_gaussian_field_hg33` | 669.00 ns | 22.1× |
 | `rf/reflection_coefficient` | 1.23 ns | pending (M4) | — | — |
 | `rf/vswr` | 1.23 ns | pending (M4) | — | — |
