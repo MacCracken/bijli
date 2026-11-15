@@ -356,6 +356,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
   unbounded exponent where it leaves the range (ADR 0002 row 18 amended, see Fixed); the input impedance's chain and
   row 39's root split into cores the 53-bit chain shares; validate.py's labels name row 18 where it acts with the
   port's rows 13, 37 or 39. `rf.tsv` grows by 550 edge rows (29,382).
+- **Cyrius port, M4 part 2d-4a — the Touchstone reader at its range edges** (`src/touchstone.cyr`): an MA or DB pair
+  runs with an unbounded exponent where 10^(v₁/20) or θ leaves the normal range (ADR 0002 row 18 amended, see Fixed).
+  2d-4 runs as 2d-4a (the reader) and 2d-4b (the writer). `rf.tsv` grows by 904 edge rows (30,286).
 
 ### Fixed
 
@@ -791,6 +794,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
   its discriminant overflowed, both roots came out ±∞ and both d = λ/4. The whole chain now runs with an unbounded
   exponent there. Cost (measured at load 8, so rough): within the noise, `rf/single_stub_match` 2.50–2.76 µs at
   HEAD against 2.56–2.83 µs, the complex one 2.43–2.62 against 2.48–2.59 µs (`port-parity.md` §90).
+- **rf** (ADR 0002 row 18 amended, M4 part 2d-4a): `parse_touchstone` refused a DB pair whose magnitude passed DBL_MAX
+  though both parts were representable (6166 dB at 45°: both 1.41·10³⁰⁸), read 10³⁰⁰ at 2^-1074° as 10³⁰⁰ + j0, as
+  θ = v·π/180 underflowed (8.6·10⁻²⁶ j), and lost digits where θ or 10^(v/20) was subnormal (10¹⁰ at 10⁻³¹⁰°:
+  im 1.7453292519952424·10⁻³⁰² for 1.745329251994324·10⁻³⁰²). Such a pair now runs with an unbounded exponent, each
+  product rounded once. Cost (load 3.6): within the noise, `rf/parse_touchstone_s2p_201` (MA) 568–584 µs at HEAD
+  against 572–593 µs, the same file in DB 1.17–1.19 ms against 1.18–1.21 ms (`port-parity.md` §91).
 
 ### Performance
 

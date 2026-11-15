@@ -5164,3 +5164,38 @@ and stub length, with an unbounded exponent end to end).
   equal**, HEAD's unchanged but the two stubs'. `rf.tcyr` passes on all three (249). The gate is clean (no warnings;
   execution coverage 323 of 323 functions); validate.py 624,785 rows, 0 problems; `cr_verify.py`'s cascade and S→Z
   families 36,000 calls on x86_64 and aarch64, 0 mismatches. Next, 2d-4: Touchstone's MA and DB magnitudes.
+
+## 91. M4 part 2d-4a: the Touchstone reader at its range edges (2026-11-15)
+
+2d-4 runs in two bites: 2d-4a the reader here, 2d-4b the writer (|S| through row 14's |z|, DB past DBL_MAX, angles
+below 2^-1022).
+
+- **The finding**: `parse_touchstone` reads an MA or DB pair as (r·cos θ, r·sin θ), r = v₁ or 10^(v₁/20), θ = v₂·π/180.
+  It refused a DB pair whose magnitude passed DBL_MAX though both parts were representable (6166 dB at 45°: |S| =
+  10^308.3, both parts 1.41·10³⁰⁸; a pair at 45° stays representable up to 20·log₁₀(√2·DBL_MAX) ≈ 6168.1 dB). It
+  read 10³⁰⁰ at 2^-1074° as 10³⁰⁰ + j0, as θ underflowed (8.6·10⁻²⁶ j), and lost digits where θ or 10^(v₁/20) was
+  subnormal (10¹⁰ at 10⁻³¹⁰°: im 1.7453292519952424·10⁻³⁰² for 1.745329251994324·10⁻³⁰²; −6200 dB at 30°).
+- **ADR 0002 row 18, amended** (`src/touchstone.cyr`): Rust's chain stays where DB's 10^(v₁/20) is a normal double
+  above 2^-1022 and θ is above 2^-1022 in magnitude or v₂ = 0 (a power rounded to 2^-1022 may have come from below
+  it); elsewhere `_bj_ts_polar_ux` runs the pair with an unbounded exponent: r = v₁, or 10^(v₁/20) to 53 bits
+  (src/crmath_ux.cyr's `_bj_ux_pow` of 1.25·2³, its stand-in past 10^4343 overflowing every product as the true value
+  does); θ to 53 bits where it is below 2^-1022, its sine to 53 bits θ itself (within θ³/6) and its cosine 1,
+  elsewhere the correctly rounded sine and cosine of Rust's θ; each product rounded once. A part past DBL_MAX is
+  still refused ("is not representable").
+- **The grid**: 904 rows appended to `rf.tsv` (30,286), all `parse_touchstone`: DB magnitudes from 6165 to 10⁶ dB and
+  −6150 to −10⁶ dB, with 20·log₁₀ DBL_MAX and 20·log₁₀ 2^-1022 and three doubles each side, at eleven angles; angles
+  from 10⁻³⁰⁰ down to 2^-1074 degrees of either sign, with v at θ's 2^-1022 and two doubles each side, under nine MA
+  and five DB magnitudes; one 2-port and one 3-port file mixing them; 240 seeded 1-port files.
+- **validate.py** models the pair's chain (`rf_ts_polar_ux`: MPFR's widest-range power, sine and cosine) under
+  `RF18`, and `rf_adr_rows` now evaluates `parse_touchstone` too. `rf.adr.tsv` maps **194 parse rows** to row 18
+  (10,295 in all), all passing, every one on the new grid; **45** were refusals in Rust and read now. `rf.cr.tsv`
+  is unchanged (87).
+- **Tests**: `tests/rf.tcyr`'s `cyrius_touchstone_read_edges` (5 assertions, 254 in all): the four pairs above to the
+  bit, and 6168.2 dB at 45° still refused.
+- **Benchmarks** (a focused interleaved A/B against HEAD, three rounds at load 3.6): `rf/parse_touchstone_s2p_201`
+  (MA) 568–584 → 572–593 µs, and the same file in DB 1.17–1.19 → 1.18–1.21 ms, both within the noise; the guard is
+  two compares per pair.
+- **Result, every target** (x86_64 ELF, x86_64 PE, aarch64): **17 modules, 0 failing; 535,672 ok, 0 failed, 0
+  measured, 0 pending, 90,017 accepted (ADR 01: 30,859; ADR 0002: 59,158)** over 625,689 rows; **all 416 digests
+  equal**, HEAD's unchanged but `parse_touchstone`'s. `rf.tcyr` passes on all three (254). The gate is clean (no
+  warnings; execution coverage 323 of 323 functions); validate.py 625,689 rows, 0 problems. Next, 2d-4b: the writer.

@@ -57,6 +57,9 @@
 //!
 //! M4 part 2d-3b appends the stub match's range edges (row 18): Z₀ subnormal and near DBL_MAX, |Z_in|² past either
 //! end, subnormal roots, the box, seeded wide loads.
+//!
+//! M4 part 2d-4a appends the Touchstone reader's range edges (row 18): DB magnitudes whose 10^(v/20) passes DBL_MAX or
+//! falls below 2^-1022, angles whose v·π/180 falls below 2^-1022, each with its knife edges, and seeded files.
 
 use crate::grids::{Edge2, Rng, knife_edge, knife_edge2, specials};
 use crate::m_field::res_f;
@@ -700,8 +703,60 @@ pub fn emit() -> Module {
     emit_2d2(r, &mut rng);
     emit_2d3a(r, &mut rng);
     emit_2d3b(r, &mut rng);
+    emit_2d4a(r, &mut rng);
 
     rows.m
+}
+
+/// The double `k` steps above `x` (below for a negative `k`), for a positive finite `x`.
+fn ulps_from(x: f64, k: i64) -> f64 {
+    f64::from_bits(x.to_bits().wrapping_add_signed(k))
+}
+
+/// M4 part 2d-4a: the Touchstone reader at its range edges (ADR 0002 row 18). DB magnitudes past DBL_MAX (at 45° a
+/// pair stays representable up to 20·log₁₀(√2·DBL_MAX) ≈ 6168.1 dB) and below 2^-1022, with the knife edges of
+/// 20·log₁₀ DBL_MAX and 20·log₁₀ 2^-1022; angles whose θ = v·π/180 is below 2^-1022, with v at θ's edge; magnitudes
+/// from 2^-1074 to DBL_MAX; one 2-port and one 3-port file; seeded files.
+fn emit_2d4a(r: &mut Rows, rng: &mut Rng) {
+    let one = |r: &mut Rows, fmt: &str, v1: f64, v2: f64| {
+        r.parse(&format!("# GHz S {fmt} R 50\n1.0 {v1:e} {v2:e}\n"), 1);
+    };
+    let top = 20.0 * f64::MAX.log10();
+    let bottom = 20.0 * 2f64.powi(-1022).log10();
+    let mut dbs = vec![6165.0, 6165.5, 6166.0, 6167.0, 6168.0, 6168.1, 6168.2, 6169.0, 86000.0, 87000.0, 1e6, -6150.0,
+                       -6155.0, -6160.0, -6170.0, -6200.0, -6300.0, -6400.0, -6440.0, -6460.0, -6467.0, -6470.0,
+                       -6480.0, -6500.0, -7000.0, -1e6];
+    for k in -3..=3 {
+        dbs.push(ulps_from(top, k));
+        dbs.push(-ulps_from(-bottom, k));
+    }
+    for &v1 in &dbs {
+        for v2 in [0.0, -0.0, 45.0, 30.0, 60.0, 90.0, 135.0, -45.0, 180.0, 89.99, 1e-300] {
+            one(r, "DB", v1, v2);
+        }
+    }
+    let edge = 2f64.powi(-1022) / (PI / 180.0);
+    let mut angs = vec![1e-300, 1e-305, 1e-306, 1e-307, 1e-308, 1e-310, 1e-320, 5e-324, -1e-307, -1e-310, -5e-324];
+    for k in -2..=2 {
+        angs.push(ulps_from(edge, k));
+    }
+    for &v2 in &angs {
+        for v1 in [1.0, -1.0, 1e10, 1e100, 1e300, f64::MAX, 1e-300, 5e-324, 0.0] {
+            one(r, "MA", v1, v2);
+        }
+        for v1 in [0.0, 6000.0, 6166.0, -6200.0, 100.0] {
+            one(r, "DB", v1, v2);
+        }
+    }
+    r.parse("# GHz S DB R 50\n1.0 6166 45 -6200 30 6000 1e-310 -1e6 0\n2.0 1 2 3 4 5 6 7 8\n", 2);
+    r.parse("# MHz S DB R 50\n1.0 6166 45 0 0 -6300 10\n 1 1e-308 2 2 3 3\n -6460 -45 6167 45 4 4\n", 3);
+    for _ in 0..120 {
+        let v1 = rng.uniform(-7000.0, 7000.0);
+        let v2 = rng.uniform(-180.0, 180.0);
+        one(r, "DB", v1, v2);
+        let w2 = rng.signed_log_uniform(-323.0, -300.0);
+        one(r, "MA", rng.log_uniform(-300.0, 308.0), w2);
+    }
 }
 
 /// M4 part 2d-3b: the stub match end to end at its range edges (ADR 0002 row 18): Z₀ subnormal (1/Z₀ past DBL_MAX)

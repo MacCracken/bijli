@@ -6520,6 +6520,8 @@ def rf_parse_touchstone(root: Path, P, content: str, ports: int):
                     v1, v2 = record[1 + 2 * k], record[2 + 2 * k]
                     if fmt == "RI":
                         c = (v1, v2)
+                    elif RF18["on"]:
+                        c = rf_ts_polar_ux(fmt, v1, v2)
                     else:
                         mag = v1 if fmt == "MA" else P["pow"](10.0, v1 / 20.0)
                         c = tuple(cx_polar(P, mag, v2 * TO_RADIANS))
@@ -6541,6 +6543,15 @@ def rf_parse_touchstone(root: Path, P, content: str, ports: int):
     for m in mats:
         out += rf_sm_toks(m)
     return out
+
+
+def rf_ts_polar_ux(fmt, v1, v2):
+    """A record's (r·cos θ, r·sin θ) with an unbounded exponent (row 18, M4 part 2d-4a): r = v₁ (MA) or 10^(v₁/20)
+    to 53 bits (DB), θ = v₂·π/180 to 53 bits, its sine and cosine to 53 bits, each product rounded once."""
+    ident = lambda t: t                                # noqa: E731
+    mag = ux(v1) if fmt == "MA" else wv_pow((Fraction(10), False), v1 / 20.0)
+    th = ux_mul(ux(v2), ux(TO_RADIANS))
+    return (ux_fin(ux_mul(mag, w_trig("cos", th), ident)), ux_fin(ux_mul(mag, w_trig("sin", th), ident)))
 
 
 # M4 part 1c-2: try_write_touchstone. The data's tokens are parse_touchstone's outputs; the format is the port's enum
@@ -6643,10 +6654,12 @@ def rf_eval17(on, f, on18=None):
         RF18["on"] = False
 
 
-def rf_any_eval(fn, ins, v, port):
+def rf_any_eval(fn, ins, v, port, root=None):
     """A row's outputs on the corrected primitives: Rust's (port False) or the port's (rows 13, 37 and 39)."""
     if fn == "rf::try_write_touchstone":
         return rf_write_eval(RF_P_MPFR, ins, port=port)
+    if fn == "rf::parse_touchstone":
+        return rf_parse_touchstone(root, RF_P_MPFR, tok_text(v[0]), v[1] & RF_U64)
     out = rf_eval(fn, v, RF_P_MPFR, port=port)
     if out is None:
         out = rf_sm_eval(fn, [parse_tok(x) for x in ins.split(" ")], port=port)
@@ -6660,31 +6673,30 @@ def rf_adr_rows(path: Path) -> list:
     stub match's cancelling root, taken without its cancellation, moves a (d, ℓ) (M4 part 2a-1); row 17 where the
     cascade's star product (2a-2) or S → Z (2a-3) rounded once with its threshold exact, or the exact tests of M4 part
     2c (|Z_L + Z₀|, |S21|, the stub's band, z0_equal), change a row; row 18 where a chain with an unbounded exponent
-    does (M4 part 2d). A row takes the first of its rows that accounts for its whole change."""
-    out = []
+    does (M4 part 2d; the Touchstone reader's pairs from 2d-4a). A row takes the first of its rows that accounts for
+    its whole change."""
+    out, root = [], path.parents[2]
     for fn, _cls, ins, outs, v in sc_lines(path):
-        if fn in ("rf::parse_touchstone",):
-            continue
-        rust = rf_eval17(False, lambda: rf_any_eval(fn, ins, v, False))
+        rust = rf_eval17(False, lambda: rf_any_eval(fn, ins, v, False, root))
         if rust is None:
             continue
-        full = rf_eval17(True, lambda: rf_any_eval(fn, ins, v, True))
+        full = rf_eval17(True, lambda: rf_any_eval(fn, ins, v, True, root))
         if toks_same(rust, full):
             continue
         row = "17"
-        if toks_same(full, rf_eval17(False, lambda: rf_any_eval(fn, ins, v, True))):
+        if toks_same(full, rf_eval17(False, lambda: rf_any_eval(fn, ins, v, True, root))):
             row = "13" if fn in RF_ROW13 else ("39" if fn == "rf::single_stub_match_complex" else "37")
-        elif (toks_same(full, rf_eval17(False, lambda: rf_any_eval(fn, ins, v, False), on18=True))
-              or toks_same(full, rf_eval17(False, lambda: rf_any_eval(fn, ins, v, True), on18=True))):
+        elif (toks_same(full, rf_eval17(False, lambda: rf_any_eval(fn, ins, v, False, root), on18=True))
+              or toks_same(full, rf_eval17(False, lambda: rf_any_eval(fn, ins, v, True, root), on18=True))):
             row = "18"                                      # row 18's chain (with the port's 13, 37 or 39 too)
         out.append((fn, ins, wire(full), row, f"oracle {outs[:200]}; ADR 0002 row {row}"))
     return out
 
 
-def rf_port_differs(fn, ins, v) -> bool:
+def rf_port_differs(fn, ins, v, root) -> bool:
     """True when ADR 0002 maps the row (rf_adr_rows' test), so rf.cr.tsv leaves it to rf.adr.tsv."""
-    rust = rf_eval17(False, lambda: rf_any_eval(fn, ins, v, False))
-    full = rf_eval17(True, lambda: rf_any_eval(fn, ins, v, True))
+    rust = rf_eval17(False, lambda: rf_any_eval(fn, ins, v, False, root))
+    full = rf_eval17(True, lambda: rf_any_eval(fn, ins, v, True, root))
     return rust is not None and not toks_same(rust, full)
 
 
@@ -6753,7 +6765,7 @@ def rf_corrections(path: Path):
         for fn, cls, ins, outs, v in sc_lines(path):
             if cls != "C":
                 continue
-            if fn != "rf::parse_touchstone" and rf_port_differs(fn, ins, v):
+            if rf_port_differs(fn, ins, v, path.parents[2]):
                 continue                                    # ADR 0002's: rf.adr.tsv maps it
             want = rf_eval(fn, v, RF_P_MPFR)
             if fn == "rf::parse_touchstone":

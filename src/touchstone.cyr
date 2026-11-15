@@ -13,9 +13,11 @@
 #   core escapes (src/touchstone_data.cyr's ranges, computed by the oracle's compiler).
 #
 # A pair is (v₁, v₂) in RI; in MA and DB it is (r·cos θ, r·sin θ) with one correctly rounded sincos of θ = v₂·π/180
-# (Rust's folded to_radians), r = v₁ in MA and 10^(v₁/20) in DB (the correctly rounded pow, as `10.0_f64.powf`). 2-port
-# records are ordered N11 N21 N12 N22, every other port count row-major. For a 2-port, a record whose frequency does
-# not increase starts the noise-parameter block, which is skipped.
+# (Rust's folded to_radians), r = v₁ in MA and 10^(v₁/20) in DB (the correctly rounded pow, as `10.0_f64.powf`). Where
+# 10^(v₁/20) or θ leaves the normal range, the chain runs with an unbounded exponent, each product rounded once (ADR
+# 0002 row 18, M4 part 2d-4a: _bj_ts_polar_ux). 2-port records are ordered N11 N21 N12 N22, every other port count
+# row-major. For a 2-port, a record whose frequency does not increase starts the noise-parameter block, which is
+# skipped.
 #
 # A BjTouchstoneData's shape is fixed at construction (ADR 0002 row 36): `points` frequencies and as many ports-port
 # matrices in one fl_alloc block, given back by BjTouchstoneData_free.
@@ -31,6 +33,10 @@ public enum BjTouchstoneFormat {
 
 # The most ports the reader and writer take: a record is 1 + 2n² values. Mirrors `MAX_TOUCHSTONE_PORTS`.
 const _BJ_TS_MAX_PORTS = 256;
+
+# The smallest normal double, 2^-1022, and +∞.
+var _BJ_TS_MIN_NORMAL: f64 = 0x0010000000000000;
+var _BJ_TS_INF: f64 = 0x7FF0000000000000;
 
 # An N-port network's S-parameters at `points` frequencies: `ports` (a usize, 1 to 256), `z0` (the option line's R,
 # Ω), `frequencies`, the address of `points` f64 (Hz), and `s_matrices`, the address of `points` BjSMatrix (24 bytes
@@ -493,6 +499,43 @@ fn _bj_ts_grow(st: *i64, need): i64 {
     return 0;
 }
 
+# A pair's (r·cos θ, r·sin θ) at a range edge (ADR 0002 row 18, M4 part 2d-4a), into out[0] and out[1]: rf.rs's chain
+# with an unbounded exponent, each product rounded once. r is v₁ in MA, 10^(v₁/20) to 53 bits in DB (where Rust's
+# power left the normal range); θ is v₂·π/180, and below 2^-1022 (Rust's θ not normal, v₂ ≠ 0) θ to 53 bits, whose
+# sine to 53 bits is θ itself (within θ³/6) and cosine 1; elsewhere the correctly rounded sine and cosine of Rust's θ.
+fn _bj_ts_polar_ux(fmt, v1: f64, v2: f64, out: *f64) {
+    var ms, me = _bj_k_ux_from(v1);
+    if (fmt == BJ_TOUCHSTONE_FORMAT_DB_ANGLE) {
+        var y: f64 = v1 / 20.0;
+        var ps, pe = _bj_ux_pow(1.25, 3, y);                # 10 = 1.25·2³
+        ms = ps;
+        me = pe;
+    }
+    var th: f64 = _bj_to_radians(v2);
+    var ath: f64 = f64_abs(th);
+    var cs: f64 = 1.0;
+    var ce = 0;
+    var ss: f64 = 0.0;
+    var se = 0;
+    if (ath <= _BJ_TS_MIN_NORMAL && v2 != 0.0) {
+        var vs, ve = _bj_k_ux_from(v2);
+        var rs, re0 = _bj_k_ux_from(_BJ_RADS_PER_DEG);
+        var ts, te = _bj_k_ux_mul(vs, ve, rs, re0);
+        ss = ts;
+        se = te;
+    } else {
+        var s, c = _bj_sin_cos(th);
+        var s2, e2 = _bj_k_ux_from(s);
+        var c2, f2 = _bj_k_ux_from(c);
+        ss = s2;
+        se = e2;
+        cs = c2;
+        ce = f2;
+    }
+    out[0] = _bj_k_ux_mul_f64(ms, me, cs, ce);
+    out[1] = _bj_k_ux_mul_f64(ms, me, ss, se);
+}
+
 # Appends the complete record rec = [f, v₁, v₂, …] to the store as its frequency f·mult and its S-matrix: 0, or the
 # code recorded (InvalidParameter for a pair that isn't representable, Allocation). Mirrors rf.rs's
 # `touchstone_record`.
@@ -511,11 +554,24 @@ fn _bj_ts_record(rec: *f64, ports, fmt, mult: f64, line_no, st: *i64): i64 {
         var im: f64 = v2;
         if (fmt != BJ_TOUCHSTONE_FORMAT_REAL_IMAG) {
             var mag: f64 = v1;
-            if (fmt == BJ_TOUCHSTONE_FORMAT_DB_ANGLE) { mag = _bj_powf(10.0, v1 / 20.0); }
+            var edge = 0;
+            if (fmt == BJ_TOUCHSTONE_FORMAT_DB_ANGLE) {
+                mag = _bj_powf(10.0, v1 / 20.0);
+                if (mag <= _BJ_TS_MIN_NORMAL || mag == _BJ_TS_INF) { edge = 1; }
+            }
             var th: f64 = _bj_to_radians(v2);
-            var s, c = _bj_sin_cos(th);
-            re = mag * c;
-            im = mag * s;
+            var ath: f64 = f64_abs(th);
+            if (ath <= _BJ_TS_MIN_NORMAL && v2 != 0.0) { edge = 1; }
+            if (edge == 0) {
+                var s, c = _bj_sin_cos(th);
+                re = mag * c;
+                im = mag * s;
+            } else {
+                var w: f64[2];
+                _bj_ts_polar_ux(fmt, v1, v2, &w);
+                re = w[0];
+                im = w[1];
+            }
         }
         var i = k / ports;
         var j = k % ports;

@@ -11,7 +11,8 @@
 # the S-parameter reasons and the heap; (2a-1) ADR 0002 row 39, the stub match's cancellation-free root; (2a-2) row
 # 17, the cascade's star product rounded once and its exact T22 test; (2a-3) row 17, S → Z rounded once; (2b) row
 # 13, round once; (2c) row 17, the exact thresholds; (2d-1 to 2d-3a) row 18, the input impedance's, the lossy Z₀'s,
-# γ's, the reflection coefficients', the Smith chart's and (2d-3b) the stub match's range edges.
+# γ's, the reflection coefficients', the Smith chart's, (2d-3b) the stub match's and (2d-4a) the Touchstone
+# reader's range edges.
 # tests/golden/rf.tsv pins every function over its grid against Rust besides.
 
 include "tests/lib.cyr"
@@ -808,6 +809,50 @@ fn cyrius_smith_edges(): i64 {
     var mx: f64 = _bj_from_bits(0x7FEFFFFFFFFFFFFF);
     var z: BjComplex = bj_gamma_from_z(BjComplex_new(mx, mx));
     assert(z.re == 1.0 && same(z.im, 0.0) == 1, "Γ of z = DBL_MAX(1 + j) is 1 (Rust's Smith d overflowed: NaN)");
+    return 0;
+}
+
+# ADR 0002 row 18 (M4 part 2d-4a): the Touchstone reader's DB power and angles with an unbounded exponent at their
+# range edges. The values are validate.py's model's.
+fn cyrius_touchstone_read_edges(): i64 {
+    test_group("cyrius_touchstone_read_edges");
+    var d: BjTouchstoneData;
+    var e1 = ts_parse("# GHz S DB R 50\n1.0 6166 45\n", 1, &d);
+    var z1: BjComplex = BjComplex_new(0.0, 0.0);
+    if (e1 == 0) {
+        z1 = ts_s(&d, 0, 1, 1);
+        BjTouchstoneData_free(&d);
+    }
+    var a1: f64 = _bj_from_bits(0x7FE91D3C7C0084CF);
+    var b1: f64 = _bj_from_bits(0x7FE91D3C7C0084CD);
+    assert(e1 == 0 && z1.re == a1 && z1.im == b1,
+      "6166 dB at 45°: |S| = 10^308.3 past DBL_MAX, both parts representable (Rust refused the pair)");
+    var e2 = ts_parse("# GHz S MA R 50\n1.0 1e10 1e-310\n", 1, &d);
+    var z2: BjComplex = BjComplex_new(0.0, 0.0);
+    if (e2 == 0) {
+        z2 = ts_s(&d, 0, 1, 1);
+        BjTouchstoneData_free(&d);
+    }
+    var b2: f64 = _bj_from_bits(0x0147F00F350A8DC8);
+    assert(e2 == 0 && z2.re == 10000000000.0 && z2.im == b2,
+      "10¹⁰ at 10^-310°: θ below 2^-1022 kept to 53 bits (Rust's im 1.7453292519952424e-302)");
+    var e3 = ts_parse("# GHz S MA R 50\n1.0 1e300 5e-324\n", 1, &d);
+    var z3: BjComplex = BjComplex_new(0.0, 0.0);
+    if (e3 == 0) {
+        z3 = ts_s(&d, 0, 1, 1);
+        BjTouchstoneData_free(&d);
+    }
+    var b3: f64 = _bj_from_bits(0x3ABAAFE6D51317BB);
+    assert(e3 == 0 && z3.im == b3, "10³⁰⁰ at 2^-1074°: im 8.6·10⁻²⁶ (Rust's θ underflowed to 0)");
+    var e4 = ts_parse("# GHz S DB R 50\n1.0 -6200 30\n", 1, &d);
+    var z4: BjComplex = BjComplex_new(0.0, 0.0);
+    if (e4 == 0) {
+        z4 = ts_s(&d, 0, 1, 1);
+        BjTouchstoneData_free(&d);
+    }
+    var b4: f64 = _bj_from_bits(0x0000093445B87316);
+    assert(e4 == 0 && z4.im == b4, "−6200 dB at 30°: 10^-310 to 53 bits, the product rounded once");
+    assert(ts_refused("# GHz S DB R 50\n1.0 6168.2 45\n", 1) == 1, "6168.2 dB at 45°: both parts past DBL_MAX");
     return 0;
 }
 
@@ -1704,6 +1749,7 @@ fn main(): i64 {
     cyrius_lossy_edges();
     cyrius_smith_edges();
     cyrius_stub_edges();
+    cyrius_touchstone_read_edges();
     rust_tests_d();
     cyrius_smatrix();
     cyrius_cascade_exact();
