@@ -1078,8 +1078,14 @@ json::BjPointCharge_from_json/3
 json::BjPointCharge_to_json/2
 json::BjResonatorStability_from_json/3
 json::BjResonatorStability_to_json/2
+json::BjSMatrix_from_json/3
+json::BjSMatrix_to_json/2
 json::BjStokesVector_from_json/3
 json::BjStokesVector_to_json/2
+json::BjTouchstoneData_from_json/3
+json::BjTouchstoneData_to_json/2
+json::BjTouchstoneFormat_from_json/3
+json::BjTouchstoneFormat_to_json/2
 log::bj_log_init/0
 log::bj_log_init_with_level/1
 log::bj_log_level/0

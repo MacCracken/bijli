@@ -304,6 +304,15 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
   its whole grid); all match on all three targets, 21 writer rows through the corrected oracle. The last 6 of rf.rs's
   tests are ported, and `test_write_touchstone_deprecated_matches_try` is n/a (row 1): rf.rs's 80 are all accounted
   for. The `rf/write_touchstone_s2p_201` twin is added (69 of 80). Part 1d, the JSON, ends Part 1.
+- **Cyrius port, M4 part 1d — rf's JSON; M4 Part 1 done** (`src/json.cyr`): `BjSMatrix`, `BjTouchstoneFormat` and
+  `BjTouchstoneData` get `_to_json` and `_from_json`, serde_json's documents (D5): a `usize` port count as an integer,
+  `s` as rows of Complex objects, a unit variant as its name, read from its name or a one-member object mapping it to
+  `null`. A read is checked whole (row 12) and then against the fixed shapes (ADR 0002 row 36, amended): what serde
+  reads into a ragged matrix, unequal frequency and matrix counts, a matrix of another port count, or a port count
+  past 2^63 − 1 is refused. A format value outside the three is refused by both writers. `json.tsv` grows by 5,218
+  rows and `json.cr.tsv` by 1,331 that serde_json's best-effort parse misreads; all match on all three targets, 36
+  through row 36. rf.rs is ported: 13 modules, its 80 tests all accounted for. M4's Part 2, the range-edge review,
+  follows.
 
 ### Fixed
 

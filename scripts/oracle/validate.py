@@ -6317,7 +6317,8 @@ def field_corrections(root: Path):
 # Each struct's fields in declaration order, each of a type: "f64", "bool" (`i:0` or `i:1` in a row, the literal
 # `false` or `true` in a document), another struct's name, ("arr", n, type) for Rust's `[type; n]`, or ("vec", type)
 # for a `Vec<type>`, whose row tokens are `i:` its length, then its elements. M2 part 1a added Material, M3 part 1a-2
-# polarization's four structs, M3 part 1b-2 MieResult, M3 part 1c-2 beam's three structs (and "bool").
+# polarization's four structs, M3 part 1b-2 MieResult, M3 part 1c-2 beam's three structs (and "bool"), M4 part 1d
+# rf's SMatrix and TouchstoneData (and "usize", `i:` its word) and TouchstoneFormat (JSON_ENUMS).
 JSON_FIELDS = {
     "Complex": [("re", "f64"), ("im", "f64")],
     "FieldVector": [("x", "f64"), ("y", "f64"), ("z", "f64")],
@@ -6333,7 +6334,13 @@ JSON_FIELDS = {
     "GaussianBeam": [("wavelength", "f64"), ("waist", "f64"), ("rayleigh_range", "f64")],
     "AbcdMatrix": [("a", "f64"), ("b", "f64"), ("c", "f64"), ("d", "f64")],
     "ResonatorStability": [("g1", "f64"), ("g2", "f64"), ("g_product", "f64"), ("is_stable", "bool")],
+    "SMatrix": [("ports", "usize"), ("s", ("vec", ("vec", "Complex"))), ("z0", ("vec", "f64"))],
+    "TouchstoneData": [("ports", "usize"), ("z0", "f64"), ("frequencies", ("vec", "f64")),
+                       ("s_matrices", ("vec", "SMatrix"))],
 }
+# M4 part 1d: a unit enum, written as its variant's name and read from it or from a one-key map to `null`; its row
+# token is `i:` the port's enum value.
+JSON_ENUMS = {"TouchstoneFormat": ["MagnitudeAngle", "RealImag", "DbAngle"]}
 
 
 class JsonCount(int):
@@ -6342,6 +6349,14 @@ class JsonCount(int):
 
 class JsonBool(int):
     """A bool among a reading's values: an `i:` token, 1 for true."""
+
+
+class JsonUsize(int):
+    """A usize among a reading's values (M4 part 1d): an `i:` token, its 64-bit word."""
+
+
+class JsonEnum(int):
+    """A unit enum's variant (M4 part 1d): an `i:` token, its index in JSON_ENUMS."""
 
 
 
@@ -6355,6 +6370,9 @@ def json_writer_parts(ty, xs: list, at: int, parts: list) -> int:
         if isinstance(xs[at], float) or xs[at] not in (0, 1):
             raise ValueError(f"a bool's token is i:0 or i:1, not {xs[at]!r}")
         parts.append("true" if xs[at] else "false")
+        return at + 1
+    if ty == "usize":
+        parts.append(float(xs[at] & 0xFFFFFFFFFFFFFFFF))
         return at + 1
     if isinstance(ty, tuple) and ty[0] == "vec":
         count, at = xs[at], at + 1
@@ -6384,6 +6402,8 @@ def json_writer_parts(ty, xs: list, at: int, parts: list) -> int:
 def json_writer_tokens(kind: str, xs: list) -> list:
     """The parsed-token form of serde_json's document for the fields xs: `s:` runs and `f:` numbers, with `null`
     for NaN and ±∞ inside a run."""
+    if kind in JSON_ENUMS:
+        return [("s", '"' + JSON_ENUMS[kind][xs[0]] + '"')]
     parts = []
     if json_writer_parts(kind, xs, 0, parts) != len(xs):
         raise ValueError(f"{kind}: {len(xs)} values")
@@ -6459,6 +6479,12 @@ def json_value(ty, v) -> list:
         if isinstance(v, bool):
             return [JsonBool(v)]
         raise JsonRefused("invalid type, expected a boolean")
+    if ty == "usize":
+        # serde_json reads a usize from an integer of ASCII digits up to u64::MAX: never a float (`2.0`, `2e0`), a
+        # sign (`-0` is the float −0.0, `-1` out of range) or a string.
+        if isinstance(v, tuple) and v[0] == "num" and re.fullmatch(r"\d+", v[1]) and int(v[1]) < 1 << 64:
+            return [JsonUsize(int(v[1]))]
+        raise JsonRefused("invalid type, expected usize")
     if isinstance(ty, tuple) and ty[0] == "vec":
         if isinstance(v, JsonObj) or not isinstance(v, list):
             raise JsonRefused("invalid type, expected a sequence")
@@ -6477,6 +6503,13 @@ def json_read(kind: str, v) -> list:
     """serde's derive on a parsed document: an object by field name (unknown keys skipped unread, a repeated field
     refused, a key with a lone surrogate refused: serde_json parses every key it meets) or an array of exactly the
     fields, each field read by its type (json_value)."""
+    if kind in JSON_ENUMS:
+        names = JSON_ENUMS[kind]
+        if isinstance(v, str) and v in names:
+            return [JsonEnum(names.index(v))]
+        if isinstance(v, JsonObj) and len(v) == 1 and v[0][0] in names and v[0][1] is None:
+            return [JsonEnum(names.index(v[0][0]))]
+        raise JsonRefused(f"invalid {kind}")
     fields = JSON_FIELDS[kind]
     names = [n for n, _ in fields]
     if isinstance(v, JsonObj):
@@ -6503,8 +6536,10 @@ def json_read(kind: str, v) -> list:
 
 def json_same(x, tok) -> bool:
     """A reading's value against a row token: a length or a bool against `i:`, an f64 against `f:` bit for bit."""
-    if isinstance(x, (JsonCount, JsonBool)):
+    if isinstance(x, (JsonCount, JsonBool, JsonEnum)):
         return tok[0] == "i" and tok[1] == x
+    if isinstance(x, JsonUsize):
+        return tok[0] == "i" and tok[1] & 0xFFFFFFFFFFFFFFFF == x
     return tok[0] == "f" and same(x, tok[1])
 
 
@@ -6568,7 +6603,8 @@ def validate_json(path: Path) -> list:
                 errs.append(f"json row {n}: {fn} unchecked flags {flags}, Python's {extra}")
             if len(val) != len(outs):
                 errs.append(f"json row {n}: {fn} {len(outs)} outputs, Python's {len(val)}")
-            elif any(isinstance(x, (JsonCount, JsonBool)) and not json_same(x, t) for x, t in zip(val, outs)):
+            elif any(isinstance(x, (JsonCount, JsonBool, JsonUsize, JsonEnum)) and not json_same(x, t)
+                     for x, t in zip(val, outs)):
                 errs.append(f"json row {n}: {fn} a length or a bool differs from Python's")
         elif outcome == "err" and not row_ok:
             if flags != 0:
@@ -6582,6 +6618,68 @@ def validate_json(path: Path) -> list:
     return errs
 
 
+def json_tok_text(x) -> str:
+    """A reading's value as its row token's text."""
+    if isinstance(x, JsonUsize):
+        return f"i:{x - (1 << 64) if x >= 1 << 63 else int(x)}"
+    if isinstance(x, (JsonCount, JsonBool, JsonEnum)):
+        return f"i:{int(x)}"
+    return f"f:{f_to_bits(x):016x}"
+
+
+def json_sm_shape(outs, k):
+    """The SMatrix at token k of a reading: (ports word, consistent: s is ports × ports and z0 ports long), and the
+    index after it."""
+    ports, nrows = outs[k][1], outs[k + 1][1]
+    ok = ports >= 0 and nrows == ports
+    k += 2
+    for _ in range(nrows):
+        n = outs[k][1]
+        ok = ok and n == ports
+        k += 1 + 2 * n
+    nz = outs[k][1]
+    return ports, ok and nz == ports, k + 1 + nz
+
+
+def json_row36(fn, outs, flags) -> bool:
+    """A reader row serde reads Ok whose value the port's fixed structs can't hold (ADR 0002 row 36): a matrix whose s
+    isn't ports × ports or whose z0 isn't ports long, data whose frequencies and matrices differ in number or whose
+    matrices aren't ports-port, or a port count past 2^63 − 1 (the port's i64 word). A row with row-12 flags is that
+    row's (the port refuses it whatever its shape)."""
+    if flags or not outs or outs[0][0] == "E":
+        return False
+    if fn == "json::SMatrix::from_str":
+        return not json_sm_shape(outs, 0)[1]
+    if fn != "json::TouchstoneData::from_str":
+        return False
+    ports, nf = outs[0][1], outs[2][1]
+    k = 3 + nf
+    nm = outs[k][1]
+    ok = ports >= 0 and nm == nf
+    k += 1
+    for _ in range(nm):
+        p, good, k = json_sm_shape(outs, k)
+        ok = ok and good and p == ports
+    return not ok
+
+
+def json_adr_rows(path: Path) -> list:
+    """ADR 0002 mappings for json.tsv: row 36's (M4 part 1d), each refused by the port as Deserialize."""
+    out = []
+    for line in path.read_text().splitlines():
+        if line.startswith("#"):
+            continue
+        fn, _cls, ins, outs, _note = line.split("\t")
+        if fn not in ("json::SMatrix::from_str", "json::TouchstoneData::from_str"):
+            continue
+        toks_in = [parse_tok(t) for t in ins.split(" ")]
+        toks_out = [parse_tok(t) for t in outs.split(" ")]
+        if json_row36(fn, toks_out, toks_in[1][1]):
+            out.append((fn, ins, "E:Deserialize", "36", f"oracle {outs[:120]}; ADR 0002 row 36: a shape the port's "
+                        "fixed structs can't hold"))
+    return out
+
+
 def json_corrections(rows) -> list:
     """The reader rows serde_json misread, each with its correctly rounded reading: a number misrounded by its
     best-effort parse, or an overflow judged (or missed) on a misrounded value."""
@@ -6590,11 +6688,12 @@ def json_corrections(rows) -> list:
         if cls != "C" or not fn.endswith("::from_str"):
             continue
         kind, doc, flags = json_row(fn, ins)
+        if json_row36(fn, outs, flags):
+            continue                                        # ADR 0002 row 36's: json.adr.tsv maps it
         outcome, val, _extra = json_model(kind, doc)
         row_ok = not (outs and outs[0][0] == "E")
         old = " ".join(f"f:{f_to_bits(t[1]):016x}" if t[0] == "f" else f"{t[0]}:{t[1]}" for t in outs)
-        new = (" ".join(f"i:{x}" if isinstance(x, (JsonCount, JsonBool)) else f"f:{f_to_bits(x):016x}" for x in val)
-               if outcome == "ok" else "E:Deserialize")
+        new = (" ".join(json_tok_text(x) for x in val) if outcome == "ok" else "E:Deserialize")
         if outcome == "ok" and row_ok and all(json_same(a, b) for a, b in zip(val, outs)):
             continue
         if outcome == "err" and not row_ok:
@@ -7739,6 +7838,8 @@ def adr_rows(root: Path, module: str, path: Path) -> list:
         return beam_adr_rows(path)
     if module == "rf":
         return rf_adr_rows(path)
+    if module == "json":
+        return json_adr_rows(path)
     maps = {13: adr13(root)}
     out = adr17_rows(root, module, path) if module in ("field", "charge") else []
     if module in ("field", "charge"):
@@ -8134,8 +8235,8 @@ def main() -> int:
                               scattering_corrections(golden / "scattering.tsv"))
     errs += check_corrections(root, "beam", golden / "beam.tsv", beam_corrections(golden / "beam.tsv"))
     errs += check_corrections(root, "rf", golden / "rf.tsv", rf_corrections(golden / "rf.tsv"))
-    for mod in ("beam", "charge", "circuit", "complex", "field", "material", "maxwell", "polarization", "relativity",
-                "rf", "scattering", "wave"):
+    for mod in ("beam", "charge", "circuit", "complex", "field", "json", "material", "maxwell", "polarization",
+                "relativity", "rf", "scattering", "wave"):
         errs += check_adr(root, mod, golden / f"{mod}.tsv")
     errs += cx_rows(golden / "complex.tsv")[1]
     errs += fv_rows(root, "field", golden / "field.tsv")[1] + fv_rows(root, "charge", golden / "charge.tsv")[1]

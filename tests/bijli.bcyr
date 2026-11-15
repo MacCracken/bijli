@@ -1098,6 +1098,33 @@ fn main(): i64 {
     if (is_err_result(trs) == 1 || is_err_result(trk) == 1 || rsout.is_stable != 1) {
         println("json/resonator_stability: the document was refused");
     }
+    # M4 part 1d: a 2-port SMatrix's JSON, written into one builder and read back into a matrix freed each time.
+    var smj: BjSMatrix;
+    var tsj, vsj = BjSMatrix_two_port(BjComplex_new(0.1, -0.2), bj_complex_real(0.9), bj_complex_real(0.9),
+      BjComplex_new(0.1, 0.3), 50.0, &smj);
+    var sbs = str_builder_new();
+    var bsw = bench_new("json/s_matrix_to_json");
+    bench_batch_start(bsw);
+    for (var k = 0; k < 200000; k = k + 1) {
+        store64(sbs + 8, 0);
+        var tsw, vsw = BjSMatrix_to_json(&smj, sbs);
+        keep = keep + vsw;
+    }
+    bench_batch_stop(bsw, 200000);
+    bench_report(bsw);
+    var sms = str_builder_build(sbs);
+    var smr: BjSMatrix;
+    var bsr = bench_new("json/s_matrix_from_json");
+    bench_batch_start(bsr);
+    for (var k = 0; k < 100000; k = k + 1) {
+        var tsr, vsr = BjSMatrix_from_json(str_data(sms), str_len(sms), &smr);
+        keep = keep + smr.ports;
+        BjSMatrix_free(&smr);
+    }
+    bench_batch_stop(bsr, 100000);
+    bench_report(bsr);
+    BjSMatrix_free(&smj);
+    if (is_err_result(tsj) == 1 || vsj == 7) { println("json/s_matrix: the matrix was refused"); }
     if (fsum == 7.0) { println("."); }
 
     var ar: f64 = acc.re;

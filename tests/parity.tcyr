@@ -2107,7 +2107,117 @@ fn _par_got_mie_all(r: *BjMieResult) {
 }
 
 # `json::<Type>::to_string` / `from_str` rows (the module's rules above): the port's document as tokens, or its reading.
+# ── rf's three types' JSON (M4 part 1d): validate.py's JSON_FIELDS layouts. An SMatrix is i:ports, i:rows, each row
+# as i:length and its entries' parts, i:the impedance count and the impedances; a TouchstoneData i:ports, f:z0, the
+# frequencies as i:count and values, the matrices as i:count and each matrix; a TouchstoneFormat i:its value. Writer
+# inputs are consistent shapes (the port's only ones), so a matrix's counts are all its ports.
+
+# The SMatrix at input token k into the matrix m (allocated, ports-port): fills its entries and impedances; returns
+# the token after it.
+fn _par_jin_sm(k, m: *BjSMatrix): i64 {
+    var p = _par_in(k);
+    var at = k + 2;
+    for (var r = 0; r < p; r = r + 1) {
+        for (var e = 0; e < 2 * p; e = e + 1) { store64(m.s + (r * p * 2 + e) * 8, _par_in(at + 1 + e)); }
+        at = at + 1 + 2 * p;
+    }
+    for (var z = 0; z < p; z = z + 1) { store64(m.z0 + z * 8, _par_in(at + 1 + z)); }
+    return at + 1 + p;
+}
+
+# A matrix to the got list in the layout _par_jin_sm reads.
+fn _par_jgot_sm(m: *BjSMatrix) {
+    var p = m.ports;
+    _par_got_i(p);
+    _par_got_i(p);
+    for (var r = 0; r < p; r = r + 1) {
+        _par_got_i(p);
+        for (var e = 0; e < 2 * p; e = e + 1) { _par_got_f(load64(m.s + (r * p * 2 + e) * 8)); }
+    }
+    _par_got_i(p);
+    for (var z = 0; z < p; z = z + 1) { _par_got_f(load64(m.z0 + z * 8)); }
+    return 0;
+}
+
+# Data to the got list in its layout.
+fn _par_jgot_td(d: *BjTouchstoneData) {
+    _par_got_i(d.ports);
+    var z0: f64 = d.z0;
+    _par_got_f(z0);
+    _par_got_i(d.points);
+    for (var k = 0; k < d.points; k = k + 1) { _par_got_f(load64(d.frequencies + k * 8)); }
+    _par_got_i(d.points);
+    for (var j = 0; j < d.points; j = j + 1) { _par_jgot_sm(d.matrix_at(j)); }
+    return 0;
+}
+
+# rf's three types' JSON rows; 0 for another name.
+fn _par_json_rf(fp, fl): i64 {
+    if (_par_eq(fp, fl, "json::SMatrix::to_string") == 1) {
+        var m: BjSMatrix;
+        var t1, v1 = BjSMatrix_new(_par_in(0), 0.0, &m);
+        _par_jin_sm(0, &m);
+        var sb = str_builder_new();
+        var t2, v2 = BjSMatrix_to_json(&m, sb);
+        _par_got_json_res(t2, v2, sb);
+        BjSMatrix_free(&m);
+        if (is_err_result(t1) == 1) { return 0 - 1; }
+        return 1;
+    }
+    if (_par_eq(fp, fl, "json::TouchstoneFormat::to_string") == 1) {
+        var sb2 = str_builder_new();
+        var t3, v3 = BjTouchstoneFormat_to_json(_par_in(0), sb2);
+        _par_got_json_res(t3, v3, sb2);
+        return 1;
+    }
+    if (_par_eq(fp, fl, "json::TouchstoneData::to_string") == 1) {
+        var d: BjTouchstoneData;
+        var np = _par_in(2);
+        var t4, v4 = BjTouchstoneData_new(_par_in(0), _par_in(1), np, &d);
+        for (var q = 0; q < np; q = q + 1) { store64(d.frequencies + q * 8, _par_in(3 + q)); }
+        var at = 4 + np;
+        for (var j = 0; j < np; j = j + 1) { at = _par_jin_sm(at, d.matrix_at(j)); }
+        var sb3 = str_builder_new();
+        var t5, v5 = BjTouchstoneData_to_json(&d, sb3);
+        _par_got_json_res(t5, v5, sb3);
+        BjTouchstoneData_free(&d);
+        if (is_err_result(t4) == 1) { return 0 - 1; }
+        return 1;
+    }
+    if (fl < 20 || _par_eq(fp + fl - 10, 10, "::from_str") != 1) { return 0; }
+    var lenw[8];
+    var doc = _par_in_bytes(0, &lenw);
+    if (doc == 0) { return 0; }
+    var len = load64(&lenw);
+    if (_par_eq(fp, fl, "json::SMatrix::from_str") == 1) {
+        var rm: BjSMatrix;
+        var t6, v6 = BjSMatrix_from_json(doc, len, &rm);
+        if (is_err_result(t6) == 1) { _par_got_err(v6); return 1; }
+        _par_jgot_sm(&rm);
+        BjSMatrix_free(&rm);
+        return 1;
+    }
+    if (_par_eq(fp, fl, "json::TouchstoneFormat::from_str") == 1) {
+        var fmt: i64[1];
+        var t7, v7 = BjTouchstoneFormat_from_json(doc, len, &fmt);
+        if (is_err_result(t7) == 1) { _par_got_err(v7); return 1; }
+        _par_got_i(fmt[0]);
+        return 1;
+    }
+    if (_par_eq(fp, fl, "json::TouchstoneData::from_str") == 1) {
+        var rd: BjTouchstoneData;
+        var t8, v8 = BjTouchstoneData_from_json(doc, len, &rd);
+        if (is_err_result(t8) == 1) { _par_got_err(v8); return 1; }
+        _par_jgot_td(&rd);
+        BjTouchstoneData_free(&rd);
+        return 1;
+    }
+    return 0;
+}
+
 public fn _par_json(fp, fl): i64 {
+    var rf = _par_json_rf(fp, fl);
+    if (rf != 0) { return rf; }
     if (_par_eq(fp, fl, "json::Complex::to_string") == 1) {
         var cr: f64 = _par_in(0);
         var ci: f64 = _par_in(1);
@@ -3251,6 +3361,9 @@ public fn _par_c_bound(fp, fl): i64 {
     if (_par_eq(fp, fl, "json::GaussianBeam::from_str") == 1) { return 0; }
     if (_par_eq(fp, fl, "json::AbcdMatrix::from_str") == 1) { return 0; }
     if (_par_eq(fp, fl, "json::ResonatorStability::from_str") == 1) { return 0; }
+    if (_par_eq(fp, fl, "json::SMatrix::from_str") == 1) { return 0; }
+    if (_par_eq(fp, fl, "json::TouchstoneFormat::from_str") == 1) { return 0; }
+    if (_par_eq(fp, fl, "json::TouchstoneData::from_str") == 1) { return 0; }
     return 0 - 1;
 }
 
@@ -3264,7 +3377,8 @@ var _par_map12 = 0;
 public fn _par_accepted(fp, fl, ip, il): i64 {
     if (fl < 16 || _par_eq(fp + fl - 10, 10, "::from_str") != 1 || memeq(fp, "json::", 6) != 1) { return 0; }
     if (_par_in_n != 2 || _par_in(1) == 0) { return 0; }
-    if (_par_want_n < 1 || load64(_par_want_k) != 102) { return 0; }
+    # An Ok reading: its first token an f: (most types) or an i: (rf's three types, M4 part 1d: a usize or an enum).
+    if (_par_want_n < 1 || (load64(_par_want_k) != 102 && load64(_par_want_k) != 105)) { return 0; }
     if (_par_got_n != 1 || load64(_par_got_k) != 69) { return 0; }
     if (_par_eq(load64(_par_got_v), load64(_par_got_l), "Deserialize") != 1) { return 0; }
     _par_map12 = _par_map12 + 1;

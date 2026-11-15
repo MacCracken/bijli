@@ -22,7 +22,7 @@
 
 private
 
-# The S-parameter formats of a Touchstone file. Mirrors `TouchstoneFormat`.
+# The S-parameter formats of a Touchstone file. Mirrors `TouchstoneFormat`; the writers refuse any other value.
 public enum BjTouchstoneFormat {
     BJ_TOUCHSTONE_FORMAT_MAGNITUDE_ANGLE = 0;
     BJ_TOUCHSTONE_FORMAT_REAL_IMAG = 1;
@@ -664,9 +664,10 @@ fn _bj_ts_parse(c, n, ports, rec: *f64, st: *i64, res: *i64): i64 {
     return 0;
 }
 
-# The format's Rust Debug name ("MagnitudeAngle", "RealImag", "DbAngle").
+# The format's Rust Debug name ("MagnitudeAngle", "RealImag", "DbAngle"), its serde name too (public for
+# src/json.cyr).
 #must_use
-fn _bj_ts_format_name(fmt): i64 {
+public fn _bj_ts_format_name(fmt): i64 {
     if (fmt == BJ_TOUCHSTONE_FORMAT_REAL_IMAG) { return "RealImag"; }
     if (fmt == BJ_TOUCHSTONE_FORMAT_DB_ANGLE) { return "DbAngle"; }
     return "MagnitudeAngle";
@@ -924,9 +925,16 @@ fn _bj_ts_records(t, d: *BjTouchstoneData, format): i64 {
 # DB |S| is clamped to MIN_POSITIVE, so a zero writes as a finite dB value. Ok(0), or Err with sb as it was:
 # InvalidParameter when d is inconsistent (ports not 1 to 256, R not finite and positive, frequencies not finite,
 # non-negative and strictly increasing, a matrix's impedances not R's, a non-finite entry) or an entry can't be written
-# in the format; Allocation when the text's buffer can't be had or sb can't grow. Mirrors `rf::try_write_touchstone`.
+# in the format; Allocation when the text's buffer can't be had or sb can't grow. A format value that is no
+# BjTouchstoneFormat (Rust's enum has no other) is refused first, InvalidParameter. Mirrors `rf::try_write_touchstone`.
 #must_use
 public fn bj_try_write_touchstone(d: *BjTouchstoneData, format, sb): Result {
+    if (format < 0 || format > 2) {
+        var u = _bj_err_reason(BJ_ERR_INVALID_PARAMETER);
+        _bj_tx_cstr(u, "unknown Touchstone format ");
+        _bj_tx_i64(u, format);
+        return Err(BJ_ERR_INVALID_PARAMETER);
+    }
     var e = _bj_ts_validate(d);
     if (e != 0) { return Err(e); }
     var n = d.ports;

@@ -1,8 +1,8 @@
 # json.cyr — JSON for the serializable types: BjComplex (Rust hisab 1.4.0's `Complex`), BjFieldVector,
 # BjPointCharge, (M2 part 1a) BjMaterial, (M3 part 1a-2) polarization's BjJonesVector, BjJonesMatrix,
-# BjStokesVector and BjMuellerMatrix, (M3 part 1b-2) scattering's BjMieResult, and (M3 part 1c-2) beam's
-# BjGaussianBeam, BjAbcdMatrix and BjResonatorStability, as serde_json 1.0.154 writes and reads them (port plan D5,
-# M1 part 4; ADR 0002 rows 10–12).
+# BjStokesVector and BjMuellerMatrix, (M3 part 1b-2) scattering's BjMieResult, (M3 part 1c-2) beam's
+# BjGaussianBeam, BjAbcdMatrix and BjResonatorStability, and (M4 part 1d) rf's BjSMatrix, BjTouchstoneFormat and
+# BjTouchstoneData, as serde_json 1.0.154 writes and reads them (port plan D5, M1 part 4; ADR 0002 rows 10–12, 36).
 #
 # Writers append serde's document to a `str_builder`: the fields in Rust declaration order, no spaces, a Rust array
 # (`[f64; 3]`, a Jones matrix's `m: [[Complex; 2]; 2]`, a Mueller matrix's `m: [[f64; 4]; 4]`) as nested arrays row by
@@ -334,6 +334,133 @@ public fn BjResonatorStability_to_json(s: *BjResonatorStability, sb): Result {
     if (s.is_stable != 0) { n = _bj_jw_cstr(&buf, n, ",\"is_stable\":true}"); }
     else { n = _bj_jw_cstr(&buf, n, ",\"is_stable\":false}"); }
     return _bj_jw_put(sb, &buf, n);
+}
+
+# ── rf's three types (M4 part 1d) ───────────────────────────────────────────────────────────────────────────────
+
+# Appends the unsigned decimal digits of the 64-bit word v (a usize); the new length.
+fn _bj_jw_u64(buf, n, v): i64 {
+    var d[24];
+    var k = 0;
+    var x = v;
+    if (x == 0) {
+        store8(buf + n, 48);
+        return n + 1;
+    }
+    # Above 2^63 the word is negative here: its first digit is the unsigned quotient by 10, taken via a halving.
+    if (x < 0) {
+        var q = ((x >> 1) / 5);
+        store8(&d, 48 + (x - q * 10));
+        k = 1;
+        x = q;
+    }
+    while (x > 0) {
+        store8(&d + k, 48 + x % 10);
+        x = x / 10;
+        k = k + 1;
+    }
+    for (var j = 0; j < k; j = j + 1) { store8(buf + n + j, load8(&d + k - 1 - j)); }
+    return n + k;
+}
+
+# Appends an SMatrix's object `{"ports":<n>,"s":[[<Complex>,..],..],"z0":[..]}`; the new length. The buffer holds
+# 64 bytes, 64 a Complex and 28 an impedance.
+fn _bj_jw_sm(buf, n, m: *BjSMatrix): i64 {
+    var p = m.ports;
+    var k = _bj_jw_cstr(buf, n, "{\"ports\":");
+    k = _bj_jw_u64(buf, k, p);
+    k = _bj_jw_cstr(buf, k, ",\"s\":[");
+    for (var r = 0; r < p; r = r + 1) {
+        if (r > 0) { k = _bj_jw_cstr(buf, k, ","); }
+        k = _bj_jw_cstr(buf, k, "[");
+        k = _bj_jw_cvec(buf, k, m.s + r * p * 16, p);
+        k = _bj_jw_cstr(buf, k, "]");
+    }
+    k = _bj_jw_cstr(buf, k, "],\"z0\":[");
+    for (var j = 0; j < p; j = j + 1) {
+        if (j > 0) { k = _bj_jw_cstr(buf, k, ","); }
+        k = _bj_jw_f64(buf, k, load64(m.z0 + j * 8));
+    }
+    return _bj_jw_cstr(buf, k, "]}");
+}
+
+# The bytes an SMatrix of p ports needs in _bj_jw_sm's buffer, or -1 past 2^40.
+#must_use
+fn _bj_jw_sm_size(p): i64 {
+    if (p < 0 || p > 131072) { return 0 - 1; }
+    return 64 + p * p * 64 + p * 28;
+}
+
+# Appends `{"ports":<n>,"s":[[<Complex>,..],..],"z0":[..]}` to the builder sb (ports as an integer, each entry a
+# Complex object, row by row): Ok(0), or Err(BJ_ERR_ALLOCATION) with sb as it was. Built in one fl_alloc block.
+# Mirrors `serde_json::to_string(&m)` for `rf::SMatrix`.
+#must_use
+public fn BjSMatrix_to_json(m: *BjSMatrix, sb): Result {
+    var size = _bj_jw_sm_size(m.ports);
+    var buf = 0;
+    if (size > 0) { buf = fl_alloc(size); }
+    if (buf == 0) {
+        _bj_tx_cstr(_bj_err_reason(BJ_ERR_ALLOCATION), "the JSON document's buffer");
+        return Err(BJ_ERR_ALLOCATION);
+    }
+    var n = _bj_jw_sm(buf, 0, m);
+    var t, v = _bj_jw_put(sb, buf, n);
+    fl_free(buf);
+    if (is_err_result(t) == 1) { return Err(v); }
+    return Ok(0);
+}
+
+# Appends the format's document, its variant's name in quotes (`"MagnitudeAngle"`, `"RealImag"`, `"DbAngle"`), to the
+# builder sb: Ok(0), Err(BJ_ERR_ALLOCATION) with sb as it was, or Err(BJ_ERR_INVALID_PARAMETER) for a value that is no
+# BjTouchstoneFormat (Rust's enum has no other). Mirrors `serde_json::to_string(&f)` for `rf::TouchstoneFormat`.
+#must_use
+public fn BjTouchstoneFormat_to_json(format, sb): Result {
+    if (format < 0 || format > 2) {
+        var t0 = _bj_err_reason(BJ_ERR_INVALID_PARAMETER);
+        _bj_tx_cstr(t0, "unknown Touchstone format ");
+        _bj_tx_i64(t0, format);
+        return Err(BJ_ERR_INVALID_PARAMETER);
+    }
+    var buf[24];
+    var n = _bj_jw_cstr(&buf, 0, "\"");
+    n = _bj_jw_cstr(&buf, n, _bj_ts_format_name(format));
+    n = _bj_jw_cstr(&buf, n, "\"");
+    return _bj_jw_put(sb, &buf, n);
+}
+
+# Appends `{"ports":<n>,"z0":<R>,"frequencies":[..],"s_matrices":[<SMatrix>,..]}` to the builder sb: Ok(0), or
+# Err(BJ_ERR_ALLOCATION) with sb as it was. Built in one fl_alloc block. Mirrors `serde_json::to_string(&d)` for
+# `rf::TouchstoneData`.
+#must_use
+public fn BjTouchstoneData_to_json(d: *BjTouchstoneData, sb): Result {
+    var per = _bj_jw_sm_size(d.ports);
+    var buf = 0;
+    if (per > 0 && d.points >= 0 && d.points < 1099511627776 / (per + 32)) {
+        buf = fl_alloc(128 + d.points * (per + 32));
+    }
+    if (buf == 0) {
+        _bj_tx_cstr(_bj_err_reason(BJ_ERR_ALLOCATION), "the JSON document's buffer");
+        return Err(BJ_ERR_ALLOCATION);
+    }
+    var n = _bj_jw_cstr(buf, 0, "{\"ports\":");
+    n = _bj_jw_u64(buf, n, d.ports);
+    n = _bj_jw_cstr(buf, n, ",\"z0\":");
+    n = _bj_jw_f64(buf, n, _bj_bits(d.z0));
+    n = _bj_jw_cstr(buf, n, ",\"frequencies\":[");
+    for (var k = 0; k < d.points; k = k + 1) {
+        if (k > 0) { n = _bj_jw_cstr(buf, n, ","); }
+        n = _bj_jw_f64(buf, n, load64(d.frequencies + k * 8));
+    }
+    n = _bj_jw_cstr(buf, n, "],\"s_matrices\":[");
+    for (var j = 0; j < d.points; j = j + 1) {
+        if (j > 0) { n = _bj_jw_cstr(buf, n, ","); }
+        n = _bj_jw_sm(buf, n, d.matrix_at(j));
+    }
+    n = _bj_jw_cstr(buf, n, "]}");
+    var t, v = _bj_jw_put(sb, buf, n);
+    fl_free(buf);
+    if (is_err_result(t) == 1) { return Err(v); }
+    return Ok(0);
 }
 
 # ── the decode region ───────────────────────────────────────────────────────────────
@@ -1116,5 +1243,220 @@ public fn BjResonatorStability_from_json(buf, len, out: *BjResonatorStability): 
     var code = _bj_jr_read(buf, len, &_bj_jr_resonator, &w);
     if (code != 0) { return Err(code); }
     memcpy(out, &w, 32);
+    return Ok(0);
+}
+
+# ── rf's three types (M4 part 1d) ───────────────────────────────────────────────────────────────────────────────
+
+# Node v as a usize into *out: an integer node, 0 or above. serde reads an integer of ASCII digits up to u64::MAX; the
+# port's word is an i64, so a count past 2^63 − 1 (a float node after the pre-pass) is refused with a float, which no
+# matrix could hold (ADR 0002 row 36). 0, or BJ_ERR_DESERIALIZE recorded.
+fn _bj_jr_usize(v, out): i64 {
+    if (bayan_json_v_tag(v) != JTAG_INT) { return _bj_jr_type(v, "usize"); }
+    var x = bayan_json_v_int(v);
+    if (x < 0) {
+        var t = _bj_err_reason(BJ_ERR_DESERIALIZE);
+        _bj_tx_cstr(t, "invalid value: integer `");
+        _bj_tx_i64(t, x);
+        _bj_tx_cstr(t, "`, expected usize");
+        return BJ_ERR_DESERIALIZE;
+    }
+    store64(out, x);
+    return 0;
+}
+
+# Records the ADR 0002 row 36 refusal: a shape the port's fixed structs can't hold. Returns BJ_ERR_DESERIALIZE.
+fn _bj_jr_shape(what): i64 {
+    var t = _bj_err_reason(BJ_ERR_DESERIALIZE);
+    _bj_tx_cstr(t, what);
+    _bj_tx_cstr(t, " (its shape is fixed: ADR 0002 row 36)");
+    return BJ_ERR_DESERIALIZE;
+}
+
+# An SMatrix node's port count and its `s` and `z0` nodes into w[0..3], with its shape checked: s an array of ports
+# arrays of ports elements, z0 an array of ports elements, and the port count `want` unless want is -1. 0, or
+# BJ_ERR_DESERIALIZE recorded (a wrong type, or row 36's shape).
+fn _bj_jr_sm_check(v, want, w: *i64): i64 {
+    var form = _bj_jr_form(v, 3, "struct SMatrix");
+    if (form == 0) { return BJ_ERR_DESERIALIZE; }
+    var fp = _bj_jr_field(v, form, 0, "ports");
+    if (fp == 0) { return BJ_ERR_DESERIALIZE; }
+    var c = _bj_jr_usize(fp, w);
+    if (c != 0) { return c; }
+    var fs = _bj_jr_field(v, form, 1, "s");
+    if (fs == 0) { return BJ_ERR_DESERIALIZE; }
+    var fz = _bj_jr_field(v, form, 2, "z0");
+    if (fz == 0) { return BJ_ERR_DESERIALIZE; }
+    if (bayan_json_v_tag(fs) != JTAG_ARR) { return _bj_jr_type(fs, "a sequence"); }
+    if (bayan_json_v_tag(fz) != JTAG_ARR) { return _bj_jr_type(fz, "a sequence"); }
+    var p = w[0];
+    var rows = bayan_json_v_arr_len(fs);
+    for (var r = 0; r < rows; r = r + 1) {
+        var row = bayan_json_v_arr_get(fs, r);
+        if (bayan_json_v_tag(row) != JTAG_ARR) { return _bj_jr_type(row, "a sequence"); }
+        if (bayan_json_v_arr_len(row) != p) { return _bj_jr_shape("an SMatrix row is not ports long"); }
+    }
+    if (rows != p) { return _bj_jr_shape("an SMatrix's s does not have ports rows"); }
+    if (bayan_json_v_arr_len(fz) != p) { return _bj_jr_shape("an SMatrix's z0 is not ports long"); }
+    if (want >= 0 && p != want) { return _bj_jr_shape("a TouchstoneData matrix's ports differ from the data's"); }
+    w[1] = fs;
+    w[2] = fz;
+    return 0;
+}
+
+# The entries and impedances of a checked SMatrix node (its s and z0 nodes) into the matrix m: 0, or the code
+# recorded.
+fn _bj_jr_sm_fill(fs, fz, m: *BjSMatrix): i64 {
+    var p = m.ports;
+    for (var r = 0; r < p; r = r + 1) {
+        var row = bayan_json_v_arr_get(fs, r);
+        for (var c = 0; c < p; c = c + 1) {
+            var e = _bj_jr_complex(bayan_json_v_arr_get(row, c), m.s + (r * p + c) * 16);
+            if (e != 0) { return e; }
+        }
+    }
+    for (var k = 0; k < p; k = k + 1) {
+        var e2 = _bj_jr_f64(bayan_json_v_arr_get(fz, k), m.z0 + k * 8);
+        if (e2 != 0) { return e2; }
+    }
+    return 0;
+}
+
+# A whole SMatrix document's node into a new matrix at w (a BjSMatrix): 0, or the code recorded with nothing kept.
+fn _bj_jr_smatrix(v, w): i64 {
+    var nodes: i64[3];
+    var c = _bj_jr_sm_check(v, 0 - 1, &nodes);
+    if (c != 0) { return c; }
+    var t, e = BjSMatrix_new(nodes[0], 0.0, w);
+    if (is_err_result(t) == 1) { return e; }
+    var f = _bj_jr_sm_fill(nodes[1], nodes[2], w);
+    if (f != 0) { BjSMatrix_free(w); }
+    return f;
+}
+
+# A TouchstoneFormat node into w[0]: a string, or a one-member object whose value is null (serde's two forms of a
+# unit variant), naming one of the three variants. 0, or BJ_ERR_DESERIALIZE recorded.
+fn _bj_jr_ts_format(v, w): i64 {
+    var tag = bayan_json_v_tag(v);
+    var name = 0;
+    if (tag == JTAG_STR) { name = bayan_json_v_str(v); }
+    elif (tag == JTAG_OBJ && bayan_json_v_obj_len(v) == 1) {
+        if (bayan_json_v_tag(bayan_json_v_obj_val(v, 0)) != JTAG_NULL) {
+            return _bj_jr_type(bayan_json_v_obj_val(v, 0), "unit");
+        }
+        name = bayan_json_v_obj_key(v, 0);
+    } else {
+        return _bj_jr_type(v, "enum TouchstoneFormat");
+    }
+    for (var k = 0; k < 3; k = k + 1) {
+        var lit = _bj_ts_format_name(k);
+        if (str_len(name) == strlen(lit) && memeq(str_data(name), lit, strlen(lit)) == 1) {
+            store64(w, k);
+            return 0;
+        }
+    }
+    var t = _bj_err_reason(BJ_ERR_DESERIALIZE);
+    _bj_tx_cstr(t, "unknown variant, expected one of `MagnitudeAngle`, `RealImag`, `DbAngle`");
+    return BJ_ERR_DESERIALIZE;
+}
+
+# The address a as a *BjTouchstoneData (an untyped word stored into a typed pointer warns; a typed return does not).
+#must_use
+fn _bj_jr_tdp(a): *BjTouchstoneData {
+    return a;
+}
+
+# A TouchstoneData document's node into new data at w (a BjTouchstoneData): its fields, then row 36's shape (as many
+# matrices as frequencies, each a checked ports-port matrix), then the block, filled. 0, or the code recorded with
+# nothing kept.
+fn _bj_jr_ts_data(v, w): i64 {
+    var form = _bj_jr_form(v, 4, "struct TouchstoneData");
+    if (form == 0) { return BJ_ERR_DESERIALIZE; }
+    var hdr: i64[1];
+    var fp = _bj_jr_field(v, form, 0, "ports");
+    if (fp == 0) { return BJ_ERR_DESERIALIZE; }
+    var c = _bj_jr_usize(fp, &hdr);
+    if (c != 0) { return c; }
+    var fz = _bj_jr_field(v, form, 1, "z0");
+    if (fz == 0) { return BJ_ERR_DESERIALIZE; }
+    var zb: i64[1];
+    c = _bj_jr_f64(fz, &zb);
+    if (c != 0) { return c; }
+    var ff = _bj_jr_field(v, form, 2, "frequencies");
+    if (ff == 0) { return BJ_ERR_DESERIALIZE; }
+    if (bayan_json_v_tag(ff) != JTAG_ARR) { return _bj_jr_type(ff, "a sequence"); }
+    var fm = _bj_jr_field(v, form, 3, "s_matrices");
+    if (fm == 0) { return BJ_ERR_DESERIALIZE; }
+    if (bayan_json_v_tag(fm) != JTAG_ARR) { return _bj_jr_type(fm, "a sequence"); }
+    var points = bayan_json_v_arr_len(ff);
+    var junk: f64[1];
+    for (var k = 0; k < points; k = k + 1) {
+        c = _bj_jr_f64(bayan_json_v_arr_get(ff, k), &junk);
+        if (c != 0) { return c; }
+    }
+    var nodes: i64[3];
+    var mats = bayan_json_v_arr_len(fm);
+    for (var j = 0; j < mats; j = j + 1) {
+        c = _bj_jr_sm_check(bayan_json_v_arr_get(fm, j), hdr[0], &nodes);
+        if (c != 0) { return c; }
+    }
+    if (mats != points) { return _bj_jr_shape("a TouchstoneData's frequencies and matrices differ in number"); }
+    var z0: f64 = _bj_from_bits(zb[0]);
+    var t, e = BjTouchstoneData_new(hdr[0], z0, points, w);
+    if (is_err_result(t) == 1) { return e; }
+    var d: *BjTouchstoneData = _bj_jr_tdp(w);
+    for (var q = 0; q < points; q = q + 1) {
+        _bj_jr_f64(bayan_json_v_arr_get(ff, q), d.frequencies + q * 8);
+        _bj_jr_sm_check(bayan_json_v_arr_get(fm, q), hdr[0], &nodes);
+        c = _bj_jr_sm_fill(nodes[1], nodes[2], d.matrix_at(q));
+        if (c != 0) {
+            BjTouchstoneData_free(d);
+            return c;
+        }
+    }
+    return 0;
+}
+
+# Reads an `SMatrix` document from [buf, buf + len) into a new matrix in *out: Ok(0), or Err with the reason recorded
+# and out untouched (and never read), as BjComplex_from_json. Its shape is fixed (ADR 0002 row 36): `s` must be
+# ports rows of ports entries and `z0` ports long, where serde reads any lengths (and a port count past 2^63 − 1, which
+# no matrix holds, is refused). Give the matrix back with BjSMatrix_free. Mirrors `serde_json::from_str::<SMatrix>`.
+#must_use
+public fn BjSMatrix_from_json(buf, len, out: *BjSMatrix): Result {
+    var m: BjSMatrix;
+    var code = _bj_jr_read(buf, len, &_bj_jr_smatrix, &m);
+    if (code != 0) { return Err(code); }
+    out.ports = m.ports;
+    out.s = m.s;
+    out.z0 = m.z0;
+    return Ok(0);
+}
+
+# Reads a `TouchstoneFormat` document from [buf, buf + len) into *out (BJ_TOUCHSTONE_FORMAT_*): Ok(0), or Err with
+# the reason recorded and out untouched. serde's two forms of a unit variant: its name as a string, or a one-member
+# object mapping the name to null. Mirrors `serde_json::from_str::<TouchstoneFormat>`.
+#must_use
+public fn BjTouchstoneFormat_from_json(buf, len, out: *i64): Result {
+    var w: i64[1];
+    var code = _bj_jr_read(buf, len, &_bj_jr_ts_format, &w);
+    if (code != 0) { return Err(code); }
+    out[0] = w[0];
+    return Ok(0);
+}
+
+# Reads a `TouchstoneData` document from [buf, buf + len) into new data in *out: Ok(0), or Err with the reason
+# recorded and out untouched (and never read), as BjComplex_from_json. Its shape is fixed (ADR 0002 row 36): as many
+# matrices as frequencies, each a ports-port SMatrix of the data's ports, where serde reads any. Give the data back
+# with BjTouchstoneData_free. Mirrors `serde_json::from_str::<TouchstoneData>`.
+#must_use
+public fn BjTouchstoneData_from_json(buf, len, out: *BjTouchstoneData): Result {
+    var d: BjTouchstoneData;
+    var code = _bj_jr_read(buf, len, &_bj_jr_ts_data, &d);
+    if (code != 0) { return Err(code); }
+    out.ports = d.ports;
+    out.z0 = d.z0;
+    out.points = d.points;
+    out.frequencies = d.frequencies;
+    out.s_matrices = d.s_matrices;
     return Ok(0);
 }

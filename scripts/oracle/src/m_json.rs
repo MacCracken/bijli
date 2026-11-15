@@ -36,6 +36,13 @@
 //! `is_stable` is the first bool: in a value it is 0.0 or 1.0 (false, true), in a row's tokens `i:0` or `i:1`, and in
 //! a document `false` or `true`. Its position takes its own spellings (`bool_spellings`: serde reads only the two
 //! literals, never 0, 1 or a string), and the number spellings go to the f64 positions only.
+//!
+//! rf's three types (M4 part 1d, `emit_rf`, after beam's) have their own layouts, validate.py's JSON_FIELDS ones: a
+//! `usize` is `i:` its word, a `Vec` is `i:` its length then its elements, so an `SMatrix` is `i:` ports, `i:` the
+//! row count, each row as `i:` its length and its entries' parts, `i:` the impedance count and the impedances; a
+//! `TouchstoneData` is `i:` ports, `f:` z0, the frequencies as a `Vec`, the matrices as a `Vec`; a `TouchstoneFormat`
+//! is `i:` the port's enum value (0 MagnitudeAngle, 1 RealImag, 2 DbAngle), written as its name. A read may be ragged:
+//! the documents include every shape serde reads and the port's fixed structs can't hold (ADR 0002 row 36).
 
 use crate::grids::{Rng, pow2, specials};
 use crate::tsv::{Class, Module, Tok, b, f, i, s};
@@ -44,6 +51,7 @@ use bijli::charge::{ELECTRON_MASS, ELEMENTARY_CHARGE, PROTON_MASS, PointCharge};
 use bijli::field::{EPSILON_0, FieldVector, MU_0, SPEED_OF_LIGHT};
 use bijli::material::Material;
 use bijli::polarization::{Complex, JonesMatrix, JonesVector, MuellerMatrix, StokesVector};
+use bijli::rf::{SMatrix, TouchstoneData, TouchstoneFormat};
 use bijli::scattering::{MieResult, mie};
 use std::collections::BTreeSet;
 use std::hint::black_box;
@@ -1041,6 +1049,8 @@ pub fn emit() -> Module {
     for kind in Kind::BEAM {
         emit_kind(m, kind, &mut rng, &xs);
     }
+    // M4 part 1d: rf's three types, after beam's.
+    emit_rf(m, &mut rng, &xs);
     rows.m
 }
 
@@ -1369,5 +1379,414 @@ fn mie_shapes(v: &[String]) -> Vec<String> {
     docs.push(format!("[{}]", parts[..5].join(",")));
     docs.push(format!("[{},1]", parts.join(",")));
     docs.push(format!("[{},]", parts.join(",")));
+    docs
+}
+
+// ── rf's three types (M4 part 1d) ──────────────────────────────────────────────────────
+
+/// A `usize` as its row token (its 64-bit word).
+fn usize_tok(n: usize) -> Tok {
+    i(i64::from_ne_bytes(n.to_ne_bytes()))
+}
+
+/// A length as its row token.
+fn count_tok(n: usize) -> Tok {
+    i(i64::try_from(n).expect("a length fits"))
+}
+
+/// An SMatrix as its row tokens (validate.py's JSON_FIELDS layout): `i:` ports, `i:` the row count, each row as `i:`
+/// its length then its entries' (re, im), `i:` the impedance count then the impedances. A read may be ragged.
+fn smj_toks(m: &SMatrix) -> Vec<Tok> {
+    let mut out = vec![usize_tok(m.ports), count_tok(m.s.len())];
+    for row in &m.s {
+        out.push(count_tok(row.len()));
+        for z in row {
+            out.extend([f(z.re), f(z.im)]);
+        }
+    }
+    out.push(count_tok(m.z0.len()));
+    out.extend(m.z0.iter().map(|&x| f(x)));
+    out
+}
+
+/// A TouchstoneData as its row tokens: `i:` ports, `f:` z0, `i:` the frequency count and the frequencies, `i:` the
+/// matrix count and each matrix (smj_toks).
+fn tdj_toks(d: &TouchstoneData) -> Vec<Tok> {
+    let mut out = vec![usize_tok(d.ports), f(d.z0), count_tok(d.frequencies.len())];
+    out.extend(d.frequencies.iter().map(|&x| f(x)));
+    out.push(count_tok(d.s_matrices.len()));
+    for m in &d.s_matrices {
+        out.extend(smj_toks(m));
+    }
+    out
+}
+
+const TS_FORMATS: [TouchstoneFormat; 3] =
+    [TouchstoneFormat::MagnitudeAngle, TouchstoneFormat::RealImag, TouchstoneFormat::DbAngle];
+
+/// A format as its row token: the port's enum value (0 MagnitudeAngle, 1 RealImag, 2 DbAngle).
+fn fmt_tok(t: TouchstoneFormat) -> Tok {
+    count_tok(TS_FORMATS.iter().position(|&x| x == t).expect("one of the three"))
+}
+
+/// A square ports-port matrix of the given entries (row-major (re, im)) and impedances.
+fn smj(ports: usize, e: &[f64], z0: &[f64]) -> SMatrix {
+    let s = (0..ports)
+        .map(|r| (0..ports).map(|c| Complex::new(e[2 * (r * ports + c)], e[2 * (r * ports + c) + 1])).collect())
+        .collect();
+    SMatrix { ports, s, z0: z0.to_vec() }
+}
+
+impl Rows {
+    fn rf_writer(&mut self, name: &str, ins: Vec<Tok>, text: &str) {
+        if !self.seen.insert(format!("w{name}{ins:?}")) {
+            return;
+        }
+        let note = if text.len() <= 2000 { text.to_string() } else { preview(text) };
+        self.m.row_noted(&format!("json::{name}::to_string"), Class::A, &ins, &tokens(text), &note);
+    }
+
+    fn rf_reader<T>(&mut self, name: &str, doc: &str, read: Result<T, String>, toks: impl Fn(&T) -> Vec<Tok>) {
+        if !self.seen.insert(format!("r{name}{doc}")) {
+            return;
+        }
+        let func = format!("json::{name}::from_str");
+        let d = if read.is_ok() { unchecked(doc) } else { 0 };
+        let ins = [s(doc), i(d)];
+        let head = format!("{func}({}, unchecked {d})", preview(doc));
+        match read {
+            Ok(v) => self.m.row_with_note(&func, Class::C, &ins, &toks(&v), &format!("{head} -> Ok")),
+            Err(e) => {
+                let outs = [Tok::Err("Deserialize".to_string())];
+                self.m.row_with_note(&func, Class::C, &ins, &outs, &format!("{head} -> Err({e})"));
+            }
+        }
+    }
+
+    fn sm_json(&mut self, doc: &str) {
+        let read = serde_json::from_str::<SMatrix>(black_box(doc)).map_err(|e| e.to_string());
+        self.rf_reader("SMatrix", doc, read, smj_toks);
+    }
+
+    fn td_json(&mut self, doc: &str) {
+        let read = serde_json::from_str::<TouchstoneData>(black_box(doc)).map_err(|e| e.to_string());
+        self.rf_reader("TouchstoneData", doc, read, tdj_toks);
+    }
+
+    fn tf_json(&mut self, doc: &str) {
+        let read = serde_json::from_str::<TouchstoneFormat>(black_box(doc)).map_err(|e| e.to_string());
+        self.rf_reader("TouchstoneFormat", doc, read, |&t| vec![fmt_tok(t)]);
+    }
+}
+
+/// A 2-port's document from its spellings: ports, the eight entry parts (row-major), the two impedances.
+fn sm_doc(p: &str, e: &[String], z: &[String], c: fn(&str, &str) -> String) -> String {
+    let row = |r: usize| arr(&[c(&e[4 * r], &e[4 * r + 1]), c(&e[4 * r + 2], &e[4 * r + 3])]);
+    format!("{{\"ports\":{p},\"s\":{},\"z0\":{}}}", arr(&[row(0), row(1)]), arr(z))
+}
+
+/// rf's three types, after beam's: values from the shared list and seeded bits; serde's text of each, read back in
+/// each notation; every spelling in each number position (`ports` among them, a usize); seeded decimals; and the shapes
+/// a fixed matrix can't hold, which serde reads (ADR 0002 row 36): too few or too many rows, a ragged row, an impedance
+/// list of another length, frequencies unlike the matrices in number, a matrix of another port count, a port count
+/// past 2^63 − 1.
+fn emit_rf(m: &mut Rows, rng: &mut Rng, xs: &[f64]) {
+    let n = xs.len();
+    // TouchstoneFormat: its three values, then every spelling of a variant and a near miss.
+    for t in TS_FORMATS {
+        let text = serde_json::to_string(&t).expect("serde_json writes a unit variant");
+        m.rf_writer("TouchstoneFormat", vec![fmt_tok(t)], &text);
+        m.tf_json(&text);
+    }
+    for d in [
+        "{\"MagnitudeAngle\":null}", "{\"RealImag\":null}", "{\"DbAngle\":null}", " \"RealImag\" ",
+        "{ \"DbAngle\" : null }", "\"\\u0052ealImag\"", "\"Real\\u0049mag\"", "{\"\\u0044bAngle\":null}",
+        "{\"RealImag\":[]}", "{\"RealImag\":{}}", "{\"RealImag\":0}", "{\"RealImag\":false}", "{\"RealImag\":\"\"}",
+        "{\"RealImag\":null,\"x\":1}", "{\"RealImag\":null,\"RealImag\":null}", "{\"x\":null}", "{}", "[\"RealImag\"]",
+        "[]", "\"realimag\"", "\"REALIMAG\"", "\"Real Imag\"", "\"RealImag \"", "\" RealImag\"", "\"\"", "\"RI\"",
+        "\"MA\"", "\"DB\"", "\"Magnitude\"", "\"\\ud800\"", "\"RealImag\\u0000\"", "0", "1", "2", "-0", "null",
+        "true", "", " ", "\"RealImag", "RealImag", "\"RealImag\"x", "\"RealImag\",", "{\"RealImag\"}",
+        "{\"RealImag\":}", "{\"RealImag\":null", "{\"RealImag\":null}}", "{\"RealImag\":nul}",
+    ] {
+        m.tf_json(d);
+    }
+
+    // SMatrix values: n-ports to 4 from the shared list, the Rust tests' 2-ports, seeded bits.
+    let mut mats: Vec<SMatrix> = vec![SMatrix::new(0, 50.0), SMatrix::new(2, 50.0)];
+    for j in 0..n {
+        let ports = j % 5;
+        let pick = |k: usize| xs[(j + k * 37) % n];
+        let e: Vec<f64> = (0..2 * ports * ports).map(pick).collect();
+        let z: Vec<f64> = (0..ports).map(|k| pick(2 * ports * ports + k)).collect();
+        mats.push(smj(ports, &e, &z));
+    }
+    for _ in 0..60 {
+        let ports = usize::try_from(rng.int(0, 4)).expect("0..=4");
+        let e: Vec<f64> = (0..2 * ports * ports).map(|_| f64::from_bits(rng.bits())).collect();
+        let z: Vec<f64> = (0..ports).map(|_| f64::from_bits(rng.bits())).collect();
+        mats.push(smj(ports, &e, &z));
+    }
+    for (k, sm) in mats.iter().enumerate() {
+        let text = serde_json::to_string(sm).expect("serde_json writes every SMatrix");
+        m.rf_writer("SMatrix", smj_toks(sm), &text);
+        m.sm_json(&text);
+        let fs: Vec<f64> = sm.s.iter().flatten().flat_map(|z| [z.re, z.im]).chain(sm.z0.iter().copied()).collect();
+        if k < 120 && fs.iter().all(|x| x.is_finite()) {
+            let p = sm.ports;
+            let spell = |g: &dyn Fn(f64) -> String, c: fn(&str, &str) -> String| {
+                let rows: Vec<String> = sm
+                    .s
+                    .iter()
+                    .map(|row| arr(&row.iter().map(|z| c(&g(z.re), &g(z.im))).collect::<Vec<_>>()))
+                    .collect();
+                let z: Vec<String> = sm.z0.iter().map(|&x| g(x)).collect();
+                format!("{{\"ports\":{p},\"s\":{},\"z0\":{}}}", arr(&rows), arr(&z))
+            };
+            m.sm_json(&spell(&js, cx));
+            m.sm_json(&spell(&|x| format!("{x}"), cx));
+            m.sm_json(&spell(&|x| format!("{x:e}"), cxs));
+        }
+    }
+    // Every spelling in each of a 2-port document's eleven number positions (ports, the eight parts, the two
+    // impedances); seeded decimals in the f64 positions.
+    let e: Vec<String> = (0..8).map(|_| js(rng.signed_log_uniform(-3.0, 1.0))).collect();
+    let z: Vec<String> = vec!["50.0".to_string(), "50.0".to_string()];
+    for sp in &spellings() {
+        m.sm_json(&sm_doc(sp, &e, &z, cx));
+        for k in 0..8 {
+            let mut v = e.clone();
+            v[k].clone_from(sp);
+            m.sm_json(&sm_doc("2", &v, &z, cx));
+        }
+        for k in 0..2 {
+            let mut v = z.clone();
+            v[k].clone_from(sp);
+            m.sm_json(&sm_doc("2", &e, &v, cx));
+        }
+    }
+    for (k, d) in random_decimals(rng, 300).into_iter().enumerate() {
+        let mut v = e.clone();
+        v[k % 8].clone_from(&d);
+        m.sm_json(&sm_doc("2", &v, &z, cx));
+    }
+    for doc in sm_shapes(&e) {
+        m.sm_json(&doc);
+    }
+
+    // TouchstoneData values: 0- to 3-ports with 0 to 3 points from the shared list, impedances per matrix.
+    let mut data: Vec<TouchstoneData> = Vec::new();
+    for j in 0..n / 2 {
+        let pick = |k: usize| xs[(j + k * 41) % n];
+        let ports = j % 4;
+        let points = (j / 4) % 4;
+        let mut at = 0;
+        let mut next = || {
+            at += 1;
+            pick(at)
+        };
+        let z0 = next();
+        let frequencies: Vec<f64> = (0..points).map(|_| next()).collect();
+        let s_matrices = (0..points)
+            .map(|_| {
+                let e: Vec<f64> = (0..2 * ports * ports).map(|_| next()).collect();
+                let z: Vec<f64> = (0..ports).map(|_| next()).collect();
+                smj(ports, &e, &z)
+            })
+            .collect();
+        data.push(TouchstoneData { ports, z0, frequencies, s_matrices });
+    }
+    for (k, d) in data.iter().enumerate() {
+        let text = serde_json::to_string(d).expect("serde_json writes every TouchstoneData");
+        m.rf_writer("TouchstoneData", tdj_toks(d), &text);
+        m.td_json(&text);
+        let all = tdj_toks(d);
+        let finite = all.iter().all(|t| if let Tok::F(x) = t { x.is_finite() } else { true });
+        if k < 60 && finite {
+            let doc = text.replace("\"z0\":", "\"z0\" : ").replace(',', " ,\n ");
+            m.td_json(&doc);
+        }
+    }
+    for doc in td_shapes(rng) {
+        m.td_json(&doc);
+    }
+}
+
+/// SMatrix's shapes on the 2-port spellings e: serde's two forms at every level, field order, unknown keys, missing,
+/// repeated and wrong-typed fields, every row-36 shape serde reads, port counts at usize's edges, every prefix,
+/// trailing data, deep unknown values.
+fn sm_shapes(e: &[String]) -> Vec<String> {
+    let z = ["50.0".to_string(), "75.0".to_string()];
+    let base = sm_doc("2", e, &z, cx);
+    let inner = base[1..base.len() - 1].to_string();
+    let c0 = cx(&e[0], &e[1]);
+    let row = |k: usize| format!("[{},{}]", cx(&e[4 * k], &e[4 * k + 1]), cx(&e[4 * k + 2], &e[4 * k + 3]));
+    let s2 = format!("[{},{}]", row(0), row(1));
+    let mut docs = vec![
+        base.clone(),
+        sm_doc("2", e, &z, cxs),
+        format!("[2,{s2},[50.0,75.0]]"),
+        format!("{{\"z0\":[50.0,75.0],\"s\":{s2},\"ports\":2}}"),
+        format!(" \t\n{{ \"ports\" : 2 ,\n\"s\" : {s2} , \"z0\" : [ 50.0 , 75.0 ] }}\r\n"),
+        "{\"ports\":0,\"s\":[],\"z0\":[]}".to_string(),
+        "[0,[],[]]".to_string(),
+        format!("{{\"ports\":1,\"s\":[[{c0}]],\"z0\":[50]}}"),
+        format!("{{\"ports\":3,\"s\":[[{c0},{c0},{c0}],[{c0},{c0},{c0}],[{c0},{c0},{c0}]],\"z0\":[1,2,3]}}"),
+    ];
+    // Row 36: shapes serde reads and a fixed matrix can't hold.
+    for d in [
+        "{\"ports\":2,\"s\":[],\"z0\":[50,50]}".to_string(),
+        format!("{{\"ports\":2,\"s\":[{}],\"z0\":[50,50]}}", row(0)),
+        format!("{{\"ports\":2,\"s\":[{},{},{}],\"z0\":[50,50]}}", row(0), row(1), row(0)),
+        format!("{{\"ports\":2,\"s\":[[{c0}],{}],\"z0\":[50,50]}}", row(1)),
+        format!("{{\"ports\":2,\"s\":[{},[{c0},{c0},{c0}]],\"z0\":[50,50]}}", row(0)),
+        "{\"ports\":2,\"s\":[[],[]],\"z0\":[50,50]}".to_string(),
+        format!("{{\"ports\":2,\"s\":{s2},\"z0\":[]}}"),
+        format!("{{\"ports\":2,\"s\":{s2},\"z0\":[50]}}"),
+        format!("{{\"ports\":2,\"s\":{s2},\"z0\":[50,50,50]}}"),
+        format!("{{\"ports\":1,\"s\":{s2},\"z0\":[50,50]}}"),
+        format!("{{\"ports\":3,\"s\":{s2},\"z0\":[50,50]}}"),
+        "{\"ports\":1,\"s\":[],\"z0\":[]}".to_string(),
+        "{\"ports\":0,\"s\":[[]],\"z0\":[]}".to_string(),
+        "{\"ports\":0,\"s\":[],\"z0\":[1]}".to_string(),
+        "{\"ports\":4611686018427387904,\"s\":[],\"z0\":[]}".to_string(),
+        "{\"ports\":9223372036854775807,\"s\":[],\"z0\":[]}".to_string(),
+        "{\"ports\":9223372036854775808,\"s\":[],\"z0\":[]}".to_string(),
+        "{\"ports\":18446744073709551615,\"s\":[],\"z0\":[]}".to_string(),
+        "{\"ports\":18446744073709551616,\"s\":[],\"z0\":[]}".to_string(),
+    ] {
+        docs.push(d);
+    }
+    // Unknown keys of every kind, before and after the fields.
+    for u in &unknown_values() {
+        docs.push(format!("{{\"w\":{u},{inner}}}"));
+        docs.push(format!("{{{inner},\"unknown\":{u}}}"));
+    }
+    // Missing fields, repeated ones, the generic refusals.
+    let members = ["\"ports\":2".to_string(), format!("\"s\":{s2}"), "\"z0\":[50.0,75.0]".to_string()];
+    for k in 0..3 {
+        let mut ms = members.to_vec();
+        ms.remove(k);
+        docs.push(format!("{{{}}}", ms.join(",")));
+        docs.push(format!("{{{inner},{}}}", members[k]));
+    }
+    for d in ["{}", "[]", "null", "true", "1", "\"x\"", "", " ", "{", "}", "[2,[],[]", "[2,[]]", "[2,[],[],1]"] {
+        docs.push(d.to_string());
+    }
+    // Wrong types: ports (a usize), s at each level, z0.
+    let with = |k: usize, val: &str| {
+        let mut ms = members.to_vec();
+        ms[k] = format!("{}:{val}", members[k].split_once(':').expect("a member").0);
+        format!("{{{}}}", ms.join(","))
+    };
+    for bad in ["null", "true", "\"2\"", "{}", "[]", "[2]", "2.0", "2e0", "-2", "-0", "02", "2.5", "1e400"] {
+        docs.push(with(0, bad));
+    }
+    for bad in [
+        "null".to_string(), "1".to_string(), "{}".to_string(), "[null,null]".to_string(), "[1,2]".to_string(),
+        format!("[{{}},{}]", row(1)), "[[1,2],[3,4]]".to_string(), "[[[1,2],[3,4]],[[5,6],[7,8]]]".to_string(),
+        format!("[[{c0},null],{}]", row(1)), format!("[[{c0},[1]],{}]", row(1)), format!("[[{c0},[1,2,3]],{}]", row(1)),
+        format!("[[{c0},{{\"re\":1}}],{}]", row(1)), format!("[[{c0},{{\"re\":1,\"im\":2,\"x\":3}}],{}]", row(1)),
+        format!("[[{c0},{c0},],{}]", row(1)),
+    ] {
+        docs.push(with(1, &bad));
+    }
+    for bad in ["null", "50", "{}", "[null,1]", "[\"50\",50]", "[[50],50]", "[50,]", "[1e400,50]"] {
+        docs.push(with(2, bad));
+    }
+    for f in complex_forms(&e[0], &e[1]) {
+        docs.push(with(1, &format!("[[{f},{c0}],{}]", row(1))));
+    }
+    // A deep unknown value inside an element (at depth 4: the document, s, a row, the element).
+    for depth in [124usize, 125, 126, 127, 128, 129] {
+        let d = depth - 4;
+        let deep = format!("{{\"w\":{}0{},\"re\":1,\"im\":2}}", "[".repeat(d), "]".repeat(d));
+        docs.push(with(1, &format!("[[{deep},{c0}],{}]", row(1))));
+    }
+    // Every prefix, trailing data.
+    for k in 0..base.len() {
+        if base.is_char_boundary(k) {
+            docs.push(base[..k].to_string());
+        }
+    }
+    for tail in [" ", "x", "}", "]", ",", "{}"] {
+        docs.push(format!("{base}{tail}"));
+    }
+    docs
+}
+
+/// TouchstoneData's documents beyond its writer's: a 1-port and a 2-port base, each field's wrong types, missing,
+/// repeated and unknown fields, the sequence form, row 36's shapes (frequencies and matrices unlike in number, a
+/// matrix of another port count or ragged, ports past 2^63 − 1 with no points), spellings in each number position,
+/// every prefix of the 1-port base.
+fn td_shapes(rng: &mut Rng) -> Vec<String> {
+    let one = "{\"ports\":1,\"s\":[[{\"re\":0.5,\"im\":0.1}]],\"z0\":[50.0]}";
+    let two = "{\"ports\":2,\"s\":[[{\"re\":0.1,\"im\":0.0},{\"re\":0.9,\"im\":0.0}],\
+               [{\"re\":0.9,\"im\":0.0},{\"re\":0.1,\"im\":0.0}]],\"z0\":[50.0,50.0]}";
+    let td = |p: &str, z: &str, f: &str, ms: &str| {
+        format!("{{\"ports\":{p},\"z0\":{z},\"frequencies\":{f},\"s_matrices\":{ms}}}")
+    };
+    let base = td("1", "50.0", "[1000000000.0,2000000000.0]", &format!("[{one},{one}]"));
+    let mut docs = vec![
+        base.clone(),
+        td("2", "50.0", "[1.0]", &format!("[{two}]")),
+        td("0", "50.0", "[]", "[]"),
+        td("3", "75.0", "[]", "[]"),
+        format!("[1,50.0,[1e9,2e9],[{one},[1,[[[0.5,0.1]]],[50.0]]]]"),
+        format!("{{\"s_matrices\":[{one}],\"frequencies\":[1],\"z0\":50,\"ports\":1}}"),
+    ];
+    // Row 36: shapes serde reads and fixed data can't hold.
+    for d in [
+        td("1", "50.0", "[1.0]", "[]"),
+        td("1", "50.0", "[]", &format!("[{one}]")),
+        td("1", "50.0", "[1.0,2.0]", &format!("[{one}]")),
+        td("1", "50.0", "[1.0]", &format!("[{two}]")),
+        td("2", "50.0", "[1.0,2.0]", &format!("[{two},{one}]")),
+        td("1", "50.0", "[1.0]", "[{\"ports\":1,\"s\":[],\"z0\":[50.0]}]"),
+        td("1", "50.0", "[1.0]", "[{\"ports\":1,\"s\":[[{\"re\":1,\"im\":0}]],\"z0\":[]}]"),
+        td("0", "50.0", "[1.0]", "[{\"ports\":0,\"s\":[],\"z0\":[]}]"),
+        td("4611686018427387904", "50.0", "[]", "[]"),
+        td("9223372036854775807", "50.0", "[]", "[]"),
+        td("9223372036854775808", "50.0", "[]", "[]"),
+        td("18446744073709551615", "50.0", "[]", "[]"),
+        td("18446744073709551616", "50.0", "[]", "[]"),
+    ] {
+        docs.push(d);
+    }
+    // Wrong types and missing, repeated, unknown fields.
+    for bad in ["null", "\"1\"", "1.0", "-1", "-0", "[]", "{}"] {
+        docs.push(td(bad, "50.0", "[1.0]", &format!("[{one}]")));
+    }
+    for bad in ["null", "\"50\"", "[]", "{}", "true"] {
+        docs.push(td("1", bad, "[1.0]", &format!("[{one}]")));
+    }
+    for bad in ["null", "1.0", "{}", "[null]", "[\"1\"]", "[[1]]"] {
+        docs.push(td("1", "50.0", bad, &format!("[{one}]")));
+    }
+    for bad in ["null", "{}", "[null]", "[1]", "[[]]", "[{}]", one] {
+        docs.push(td("1", "50.0", "[1.0]", bad));
+    }
+    let inner = &base[1..base.len() - 1];
+    for u in ["null", "[1,{\"a\":[]}]", "\"\\ud800\"", "1e400"] {
+        docs.push(format!("{{\"w\":{u},{inner}}}"));
+    }
+    for k in ["ports", "z0", "frequencies", "s_matrices"] {
+        docs.push(base.replacen(&format!("\"{k}\":"), "\"skip\":", 1));
+        docs.push(format!("{{{inner},\"{k}\":null}}"));
+    }
+    // Spellings in each number position: ports, z0, a frequency, an entry.
+    for sp in &spellings() {
+        docs.push(td(sp, "50.0", "[]", "[]"));
+        docs.push(td("1", sp, "[1.0]", &format!("[{one}]")));
+        docs.push(td("1", "50.0", &format!("[{sp}]"), &format!("[{one}]")));
+        docs.push(td("1", "50.0", "[1.0]", &format!("[{}]", one.replace("0.5", sp))));
+    }
+    for d in random_decimals(rng, 60) {
+        docs.push(td("1", &d, "[1.0]", &format!("[{one}]")));
+    }
+    for k in 0..base.len() {
+        if base.is_char_boundary(k) && k % 3 == 0 {
+            docs.push(base[..k].to_string());
+        }
+    }
     docs
 }

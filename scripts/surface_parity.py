@@ -37,7 +37,7 @@ root = Path(sys.argv[1] if len(sys.argv) > 1 else ".").resolve()
 
 # Ported modules (their milestone done or in progress, item by item).
 MODULES = ["error", "logging", "field", "maxwell", "charge", "material", "wave", "circuit", "relativity",
-           "polarization", "scattering", "beam"]
+           "polarization", "scattering", "beam", "rf"]
 # Rust module -> the milestone that ports it (port plan §4.1).
 PENDING_MODULES = {
     "fdtd": "M5–M6", "compute": "M6",
@@ -47,13 +47,7 @@ PENDING_MODULES = {
 # fn, a method as `Owner::name`, a struct or enum (its fields or variants with it), a serde impl as `impl Trait for X`).
 # Their other items are checked as a ported module's now; the listed ones count as pending, and one found ported is a
 # problem (drop it from the list).
-IN_PROGRESS = {
-    "rf": ("M4 part 1d", {
-        "impl Serialize for SMatrix", "impl Deserialize for SMatrix", "impl Serialize for TouchstoneFormat",
-        "impl Deserialize for TouchstoneFormat", "impl Serialize for TouchstoneData",
-        "impl Deserialize for TouchstoneData",
-    }),
-}
+IN_PROGRESS = {}
 NOT_APPLICABLE_MODULES = {
     "lib": "crate root: module list and re-exports",
     "integration/mod": "module root of integration/ (no items)",

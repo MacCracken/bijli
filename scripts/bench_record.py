@@ -63,6 +63,8 @@ EXTRA = {
     "json/mie_result_from_json": "a Mie result read back from its document, its blocks freed (src/json.cyr)",
     "json/resonator_stability_to_json": "a ResonatorStability's JSON, the first with a bool (src/json.cyr, M3 1c-2)",
     "json/resonator_stability_from_json": "a ResonatorStability read back, its bool a JSON literal (src/json.cyr)",
+    "json/s_matrix_to_json": "a 2-port SMatrix's JSON, ports a usize, s rows of Complex objects (M4 part 1d)",
+    "json/s_matrix_from_json": "a 2-port SMatrix read back into a new matrix, its shape checked (ADR 0002 row 36)",
 }
 
 

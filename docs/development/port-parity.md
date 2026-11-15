@@ -4727,3 +4727,58 @@ Part 1c runs as two bites: 1c-1 the reader, 1c-2 the writer (Rust's `{:e}` form)
   measured, 0 pending, 78,360 accepted (ADR 01: 29,527; ADR 0002: 48,833)** over 603,905 rows; **all 410 digests
   equal**, HEAD's 408 unchanged. `rf.tcyr` passes on all three. The gate is clean (17 steps, no warnings; execution
   coverage 317 of 317 functions), and `cyrius fuzz` passes.
+
+## 80. M4 part 1d: rf's JSON; M4 Part 1 done (2026-11-15)
+
+- **serde's forms, measured first** (a probe of serde_json 1.0.154 on the oracle):
+  - `SMatrix` writes `{"ports":2,"s":[[{"re":..,"im":..},..],..],"z0":[..]}`, `TouchstoneData`
+    `{"ports":..,"z0":..,"frequencies":[..],"s_matrices":[<SMatrix>,..]}`, `TouchstoneFormat` its variant's name;
+  - a `usize` reads from an integer of ASCII digits up to u64::MAX: `-0` is refused (the float −0.0), as are `-1`,
+    `2.0`, `2e0`, `18446744073709551616` (a float) and every non-number;
+  - a unit variant reads from its name, escapes decoded (`"DbAngle"`), or from a one-member object mapping the
+    name to `null` (`{"RealImag":null}`); a second member, a non-null value, an array or a wrong name is refused;
+  - serde reads any lengths: a matrix with no rows, a ragged row, a short `z0`, more matrices than frequencies.
+- **`src/json.cyr`** gains `BjSMatrix_to_json`/`_from_json`, `BjTouchstoneFormat_to_json`/`_from_json` and
+  `BjTouchstoneData_to_json`/`_from_json`. The writers build in one fl_alloc block (64 bytes a Complex) and append
+  once; a port count is written as its unsigned word. The readers use the decode region and the whole-document checks
+  (rows 11 and 12) as the others do, then:
+  - **ADR 0002 row 36, amended**: a shape the fixed structs can't hold is refused as Deserialize ("… (its shape is
+    fixed: ADR 0002 row 36)"), checked before anything is allocated: `s` not ports rows of ports entries, `z0` not ports
+    long, frequencies and matrices unequal in number, a matrix of another port count than the data's;
+  - **a port count past 2^63 − 1** is refused too. The port's word is an i64, and bayan's tree keeps no exact
+    integer past i64 (the pre-pass reads it as a float), so `9223372036854775808` and `9223372036854775808.0` can't
+    be told apart. A count that large fits no matrix, so only data with no points is touched; row 36 records it;
+  - a read matrix or data is a new block, freed on any later refusal, so `out` is untouched and the heap unchanged.
+- **The format's writers refuse a value outside the three**: `BjTouchstoneFormat_to_json` and, now first in its
+  checks, `bj_try_write_touchstone` (InvalidParameter "unknown Touchstone format 3"; Rust's enum has no other value).
+  `_bj_ts_format_name` becomes public for src/json.cyr.
+- **`json.tsv` grows by 5,218 rows (66,620)**, appended after beam's (the earlier body an exact prefix, the seeded
+  stream unchanged): 756 + 2,867 for `SMatrix`, 443 + 1,098 for `TouchstoneData`, 3 + 51 for `TouchstoneFormat`. The
+  layouts are validate.py's JSON_FIELDS ones (`i:` a usize's word or a length, then the elements; the enum `i:` its
+  value), and a read may be ragged. The grids: n-ports to 4 and data to 3 points from the shared value list and seeded
+  bits, serde's text of each read back in bayan's, Rust's `{}` and `{:e}` notations; every number spelling in each of
+  a 2-port's eleven positions (`ports` among them) and in data's port count, R, a frequency and an entry; seeded
+  decimals; the shapes (field order, whitespace, unknown keys of every kind, missing, repeated and wrong-typed fields
+  at each level, Complex's forms, deep unknown values inside an element, every prefix, trailing data); row 36's
+  shapes and port counts at usize's edges; 51 format documents.
+  - validate.py's model gains a `usize` (ASCII digits, < 2^64) and JSON_ENUMS; it agreed with every new row on its
+    first run. `json.cr.tsv` gains 1,331 rows serde_json's best-effort float parse misreads; `json.adr.tsv` (new) maps
+    row 36's 36 (27 matrices, 9 data sets); row 12's harness hook now takes a reading that starts with `i:`, so 10
+    more of its rows (233 in all) are counted.
+- **Tests**: `tests/json.tcyr`'s `cyrius_rf_json` groups (19 assertions, 73 in all): the text byte for byte, both
+  enum forms, the sequence forms, round trips bit for bit (−0 kept), row 36's refusals and reason, `out` untouched, a
+  2^62 port count with no points read, and the heap over 1,000 reads and refusals.
+- **Surface parity**: rf is ported (13 modules, 447 items matched, none in progress). The API snapshot gains 6 public
+  functions (2,068).
+- **M4 Part 1 is done**: rf.rs's API in five bites (1a lines to arrays, 1b the matrices, 1c-1 and 1c-2 Touchstone,
+  1d the JSON), its 80 tests ported or recorded, 8 of its 8 benches twinned. Part 2 is the range-edge review. Its
+  candidates: §76's (the thresholds on rounded values, the complex chains past either end), §79's (MA and DB refusing
+  an |S| whose square overflows), and the S-matrices': the 10⁻⁶⁰ tests on rounded |S21|², |T22|² and |det(I − S)|²,
+  and the cascade's and S → Z's complex products past either end.
+- **Benchmarks**: two Cyrius-only JSON rows (rust-old benches no serde): `json/s_matrix_to_json` 6.18 µs and
+  `json/s_matrix_from_json` 7.31 µs for a 2-port. An interleaved A/B against part 1c-2's tree (three rounds, load 0.8
+  to 1.2) left every other row unchanged (median ratio 1.00 over 89 rows, all within ±5 %).
+- **Result, every target** (x86_64 ELF, x86_64 PE, aarch64): **17 modules, 0 failing; 529,386 ok, 0 failed, 0
+  measured, 0 pending, 79,737 accepted (ADR 01: 30,858; ADR 0002: 48,879)** over 609,123 rows; **all 416 digests
+  equal**, HEAD's 410 unchanged. `json.tcyr` and `rf.tcyr` pass on all three. The gate is clean (17 steps, no
+  warnings; execution coverage 323 of 323 functions), and `cyrius fuzz` passes.
