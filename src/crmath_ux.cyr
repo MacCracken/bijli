@@ -366,11 +366,12 @@ fn _bj_ux_pow(s: f64, ex, y: f64): (f64, i64) {
 }
 
 # Y = (t·2/π mod 1)·π/2 in fixed point, and the quadrant floor(t·2/π) mod 4, for t = m·2^e with m < 2^54 and
-# e ≤ 2000 (a 53-bit value below 2^2054): _bj_cr_reduce's body with m and e given, for an angle past DBL_MAX (powf's
-# n·arg z, the Green's function's k·R), against src/crmath_ux_data.cyr's 96 chunks of 2/π (_bj_cr_reduce takes a
-# double and impetus's 56 chunks; src/crmath.cyr is impetus's copy). The chunks it reads end at index 88.
+# e ≤ 4400 (a 53-bit value below 2^4454): _bj_cr_reduce's body with m and e given, for an angle past DBL_MAX (powf's
+# n·arg z, the Green's function's k·R, the Hermite–Gaussian field's phase), against src/crmath_ux_data.cyr's 176 chunks
+# of 2/π (_bj_cr_reduce takes a double and impetus's 56 chunks; src/crmath.cyr is impetus's copy). The chunks it reads
+# end at index 173 (they ended at 88 for the 96 chunks M1 generated, angles below 2^2054; M3 part 2d-3c lengthened
+# the table for the field's phase, which reaches 2^4199).
 fn _bj_ux_reduce(Y, m, e): i64 {
-    _bj_ux_load();
     var u = ((e - 2) % 28 + 28) % 28;
     var t = e - 2 - u;
     var d = e - t;
@@ -390,7 +391,7 @@ fn _bj_ux_reduce(Y, m, e): i64 {
         for (var kk = 0; kk < 3; kk = kk + 1) {
             var jj = kk + f - 1;
             var idx = base + jj;
-            if (jj >= 0 && idx >= 0 && idx < 96) {
+            if (jj >= 0 && idx >= 0 && idx < 176) {
                 sum = sum + load64(&mk + kk * 8) * load64(&_bj_ux_2opi + idx * 8);
             }
         }
@@ -411,7 +412,7 @@ fn _bj_ux_reduce(Y, m, e): i64 {
 }
 
 # sin t (want_sin 1) or cos t (0), correctly rounded into binary64, for the 53-bit t = ts·2^te past DBL_MAX
-# (1 ≤ |ts| < 2, 1024 ≤ te ≤ 2052): _bj_cr_sin_cos_slow on _bj_ux_reduce.
+# (1 ≤ |ts| < 2, 1024 ≤ te ≤ 4452): _bj_cr_sin_cos_slow on _bj_ux_reduce.
 #must_use
 fn _bj_ux_sin_cos(ts: f64, te, want_sin): f64 {
     _bj_cr_load();

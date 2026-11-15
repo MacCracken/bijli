@@ -625,6 +625,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
   chain leaves the range it now runs with an unbounded exponent (`src/crmath_vx.cyr`'s `_bj_vx_bm_lg`, the power in
   __powidf2's order) and rounds its last product once. Cost: the guard's tests, about 27 ns of a 158 ns call
   (`port-parity.md` §74).
+- **beam** (ADR 0002 row 18 amended, M3 part 2d-3c, range edges): `hermite_gaussian_field` gave NaN where its phase
+  passed DBL_MAX (cos ∞: λ = 10⁻⁹, z = 10³⁰⁰, for a field of 3.5·10⁻¹¹) or k did (λ = 10⁻³¹⁰), lost its curvature term
+  where z² passed DBL_MAX, and rounded subnormal terms before using them. Where Rust's chain leaves the range it now
+  runs with an unbounded exponent (`src/crmath_vx.cyr`'s `_bj_vx_bm_hgf`): the amplitude's 53-bit value, the phase to
+  53 bits, its sine and cosine by Payne–Hanek past DBL_MAX, the two products rounded once. The 2/π table behind the
+  reduction (`src/crmath_ux_data.cyr`) grows to 176 chunks for phases to 2^4199, as an initialized array: its old
+  loader cost 64 bytes of static data a chunk and pushed two test binaries past the compiler's 128 KiB advisory. Cost:
+  `beam/hermite_gaussian_field_hg33` 713 → 734 ns (`port-parity.md` §75). With this M3 is done.
 
 ### Performance
 

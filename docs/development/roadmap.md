@@ -40,8 +40,8 @@ Plan of record: [bijli-port-plan.md](bijli-port-plan.md). Decision: [ADR 0001](.
 - [x] **M0** (done 2026-11-11): `cyrius port` moved the Rust crate to `rust-old/`; the scaffold is repaired; the oracle generator, the golden corpus (34,746 rows), the parity harness, the port tooling and the probes are in place, with baselines on three targets (`port-parity.md`).
 - [x] **M1** (done 2026-11-12): the foundation: the correctly rounded math, fmtf, log, error, complex, field, maxwell, charge and the JSON, then the range-edge review (Part 5, ADR 0002 rows 13–18); 189,015 rows ok on three targets (`port-parity.md`).
 - [x] **M2** (done 2026-11-13): media, waves, circuits and relativity: material, wave, circuit and relativity, the retarded-time solver and the Liénard–Wiechert fields, then the range-edge review (Part 2, ADR 0002 rows 13 and 17–31); 405,854 rows ok on three targets (`port-parity.md`).
-- [ ] **M3–M8**:
-  - optics;
+- [x] **M3** (done 2026-11-14): optics: polarization, scattering and beam, in the one convention, then the range-edge review (Part 2, ADR 0002 rows 13, 17 and 18, 33–35); 493,139 rows ok on three targets (`port-parity.md`).
+- [ ] **M4–M8**:
   - RF;
   - FDTD core;
   - FDTD 2D/3D;

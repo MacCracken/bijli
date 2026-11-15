@@ -50,6 +50,11 @@
 //! ±(2³¹ − 1), i32::MIN and ±1000 at the radius where ρ²^|l| and the envelope balance (its envelope e^-5·10¹⁰), radial
 //! orders to 1000 whose L·L passes DBL_MAX or meets an envelope below 2^-1022, w₀·w₀, w·w and r·r past either end, the
 //! axis, the far stand-in, and one row for each of beam.cyr's tests failing alone.
+//!
+//! M3 part 2d-3c (ADR 0002 row 18, amended) appends the Hermite–Gaussian field's range edges: phases past DBL_MAX and
+//! past 2^2054 (k·z), near 2^4141 (k(x² + y²)/(2R) at z = z_R = 5·10⁻³²⁴, where the amplitude is a signed zero and the
+//! reduction gives its signs), k past DBL_MAX, z² past it (Rust's 1/R = 0), and one row for each of beam.cyr's tests
+//! failing alone.
 
 use crate::grids::{Rng, specials};
 use crate::m_field::res_f;
@@ -478,7 +483,58 @@ pub fn emit() -> Module {
     chain_edges(r);
     hg_edges(r);
     lg_edges(r);
+    hgf_edges(r);
     rows.m
+}
+
+/// A `hermite_gaussian_field` row.
+fn hgf_row(r: &mut Rows, v: [f64; 3], m: u32, n: u32, x: f64, y: f64, z: f64) {
+    let g = beam_of(v);
+    let ins = [f(v[0]), f(v[1]), f(v[2]), i(m), i(n), f(x), f(y), f(z)];
+    let (mb, nb, xb, yb, zb) = (black_box(m), black_box(n), black_box(x), black_box(y), black_box(z));
+    r.row("beam::hermite_gaussian_field", Class::C, &ins, || {
+        let e = hermite_gaussian_field(&g, mb, nb, xb, yb, zb);
+        vec![f(e.re), f(e.im)]
+    });
+}
+
+/// M3 part 2d-3c: the Hermite–Gaussian field's range edges (ADR 0002 row 18).
+fn hgf_edges(r: &mut Rows) {
+    // k·z past DBL_MAX (k = 2π·10⁹, z = 10³⁰⁰) and past 2^2054 (λ = 5·10⁻³²⁴), the amplitude near 10⁻¹⁰.
+    for v in [[1e-9, 1e-3, 1e290], [5e-324, 1e-3, 1e290]] {
+        hgf_row(r, v, 0, 0, 1e6, 0.0, 1e300);
+        hgf_row(r, v, 2, 1, 3e6, -2e6, 1e300);
+        hgf_row(r, v, 2, 2, 3e6, 3e6, -1e300);
+    }
+    // k(x² + y²)/(2R) near 2^4141: a signed zero whose signs are the cosine's and sine's.
+    for (m, n, x, y) in [(0, 0, 1e300, 0.0), (2, 0, 1e300, 0.0), (1, 1, 1e300, -1e300)] {
+        hgf_row(r, [5e-324, 1e-170, 5e-324], m, n, x, y, 5e-324);
+    }
+    hgf_row(r, [5e-324, 1e-170, 1e-300], 0, 0, 1e300, 1e300, 1e-300);
+    // k past DBL_MAX (λ = 10⁻³¹⁰); z² past it, where Rust's 1/R = z/(z² + z_R²) is 0.
+    hgf_row(r, [1e-310, 1e-3, 1.0], 1, 1, 1e-4, 1e-4, 1e-300);
+    hgf_row(r, [1e-6, 1e-3, 1.0], 0, 0, 1e150, 0.0, 1e160);
+    hgf_row(r, [1e-6, 1e-3, 1.0], 2, 1, 3e150, 1e150, -1e160);
+    // Each of beam.cyr's tests the only one to fail, found by a search that mirrors the guard on the port's doubles:
+    // k/2 (k just below 2^-1021 with x² + y² near DBL_MAX), z² + z_R², k·z, 1/R, x² + y², (k/2)(x² + y²)/R and ζ.
+    let iso: [([f64; 3], u32, u32, f64, f64, f64); 7] = [
+        ([1.4756546411240687e308, 8.6752290104044e153, 1.6940923518200723], 0, 0, 1.1078489497831195e154,
+         -2.9225938173685774e153, 1.1269769001194656),
+        ([9.725866408880744e-6, 8.132754102095782e-56, 2.5216087473945993e-162], 0, 2, 4.115375980323152e-56,
+         1.0836664147244628e-56, -1.1028526004773383e-171),
+        ([7.395049896556857e307, 2.971815598944879e159, 1.2834491648696053e63], 0, 2, 4.834445955364282e152, 0.0,
+         1.0985947735081485e-98),
+        ([4.1482019296297574e30, 1.345507358855199e144, 4.520879948784588e36], 1, 0, 1.1933219426082562e144,
+         -4.906643792179216e143, -1.2099520312591756e-247),
+        ([9.280168063580651e-94, 1.5505494689255157e-165, 1.2974735477057933e-90], 1, 0, 8.210029217180309e-156,
+         -2.6921786883432223e-156, 5.65086145951324e-81),
+        ([1.427243150574803e266, 1.357244691075456e-13, 1.0392665410706261e-134], 0, 2, 8.24483171798497e-18, 0.0,
+         1.1925165772734415e109),
+        ([0.0005298609620750896, 1.1064411217503345, 0.00036162558257735937], 2, 2, 0.0, 0.0, 4.25254532618e-312),
+    ];
+    for (v, m, n, x, y, z) in iso {
+        hgf_row(r, v, m, n, x, y, z);
+    }
 }
 
 /// A `laguerre_gaussian_intensity` row.

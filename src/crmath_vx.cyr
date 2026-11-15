@@ -1328,14 +1328,10 @@ fn _bj_vx_bm_sx(x: f64, ws: f64, we): (f64, i64) {
     return (ss, se);
 }
 
-# The Hermite–Gaussian amplitude ((w₀/w)·H_m(√2x/w))·H_n(√2y/w)·e^{−(x² + y²)/(w·w)} with an unbounded exponent (the
-# section comment), its last product rounded once, given Rust's u: for finite inputs, z_R ≠ 0 and w₀ ≠ 0; u otherwise
-# (a zero waist or z_R makes the same NaN in both chains). The envelope is 1 for (x² + y²)/w² below 2^-60, and the
-# far stand-in from 2^47 on.
-#must_use
-fn _bj_vx_bm_hg(w0: f64, zr: f64, z: f64, m, n, x: f64, y: f64, u: f64): f64 {
-    var fin: f64 = (w0 - w0) + (zr - zr) + (z - z) + (x - x) + (y - y);
-    if (fin != 0.0 || zr == 0.0 || w0 == 0.0) { return u; }
+# The Hermite–Gaussian amplitude's two last factors with an unbounded exponent, for finite inputs, z_R ≠ 0 and w₀ ≠ 0:
+# ((w₀/w)·H_m(√2x/w))·H_n(√2y/w) to 53 bits into ps[0], pe[0], and the envelope e^{−(x² + y²)/(w·w)} into ps[1], pe[1]
+# (1 for (x² + y²)/w² below 2^-60, the far stand-in from 2^47 on).
+fn _bj_vx_bm_hg_ux(w0: f64, zr: f64, z: f64, m, n, x: f64, y: f64, ps: *f64, pe: *i64) {
     var rts, rte = _bj_vx_bm_root_ux(z, zr);
     var w0s, w0e = _bj_k_ux_from(w0);
     var ws, we = _bj_k_ux_mul(w0s, w0e, rts, rte);
@@ -1364,7 +1360,24 @@ fn _bj_vx_bm_hg(w0: f64, zr: f64, z: f64, m, n, x: f64, y: f64, u: f64): f64 {
     var scs, sce = _bj_k_ux_div(w0s, w0e, ws, we);
     var p1s, p1e = _bj_k_ux_mul(scs, sce, hms, hme);
     var p2s, p2e = _bj_k_ux_mul(p1s, p1e, hns, hne);
-    var r: f64 = _bj_k_ux_mul_f64(p2s, p2e, es, ee);
+    ps[0] = p2s;
+    pe[0] = p2e;
+    ps[1] = es;
+    pe[1] = ee;
+    return 0;
+}
+
+# The Hermite–Gaussian amplitude ((w₀/w)·H_m(√2x/w))·H_n(√2y/w)·e^{−(x² + y²)/(w·w)} with an unbounded exponent (the
+# section comment), its last product rounded once, given Rust's u: for finite inputs, z_R ≠ 0 and w₀ ≠ 0; u otherwise
+# (a zero waist or z_R makes the same NaN in both chains).
+#must_use
+fn _bj_vx_bm_hg(w0: f64, zr: f64, z: f64, m, n, x: f64, y: f64, u: f64): f64 {
+    var fin: f64 = (w0 - w0) + (zr - zr) + (z - z) + (x - x) + (y - y);
+    if (fin != 0.0 || zr == 0.0 || w0 == 0.0) { return u; }
+    var ps: f64[2];
+    var pe: i64[2];
+    _bj_vx_bm_hg_ux(w0, zr, z, m, n, x, y, &ps, &pe);
+    var r: f64 = _bj_k_ux_mul_f64(ps[0], pe[0], ps[1], pe[1]);
     return r;
 }
 
@@ -1480,4 +1493,82 @@ fn _bj_vx_bm_lg(w0: f64, zr: f64, z: f64, p, la, r: f64, u: f64): f64 {
     var p3s, p3e = _bj_k_ux_mul(p2s, p2e, ls, le);
     var v: f64 = _bj_k_ux_mul_f64(p3s, p3e, es, ee);
     return v;
+}
+
+# ── the Hermite–Gaussian field (M3 part 2d-3c): beam.cyr's bj_hermite_gaussian_field ──────────────────────────────────
+# Rust's (u·cos φ, u·sin φ), φ = k·z + ((k/2)·(x² + y²))·z/(z² + z_R²) − (m + n + 1)·ζ, k = 2π/λ, ζ = arctan(z/z_R), and
+# the port's conjugate (u·cos φ, −(u·sin φ)) (ADR 0002 row 5). k passes DBL_MAX for λ below 2π/DBL_MAX, and φ passes
+# it (Rust's cos ∞ = NaN) or underflows its terms where the field is representable. The unbounded chain takes the
+# amplitude's 53-bit value (not its binary64 rounding), every term of φ and ζ to 53 bits, and sin and cos of the
+# 53-bit φ (_bj_vx_cos53 and _bj_vx_sin53: Payne–Hanek past DBL_MAX); only the two last products round to binary64.
+# |φ| stays below 2^4199: k ≤ 2^1076.7, x² + y² ≤ 2^2049, and z/(z² + z_R²) ≤ 1/(2|z_R|) ≤ 2^1073, within the 2/π
+# table (src/crmath_ux_data.cyr, lengthened for it). beam.cyr keeps Rust's chain where it is provably the unbounded
+# one: the amplitude 0 or normal (a 0 that underflowed gives the same signed zeros), k and k/2 normal, each product
+# and quotient of φ normal or an exact zero, z² + z_R² and x² + y² in [2^-900, DBL_MAX] (or not needed: z = 0, or
+# x = y = 0), ζ normal or 0 at z = 0, and φ finite. A sum of two doubles the chains share rounds alike in both (below
+# 2^-1022 it is exact), and the cosine and sine of a finite double are normal. A non-finite input, a zero λ, z_R or w₀
+# keeps Rust's chain.
+
+# arctan t to 53 bits for the 53-bit t = ts·2^te: t itself below 2^-1022 (arctan t lies within |t|³ of it), ±RN(π/2)
+# past DBL_MAX, else the double t's correctly rounded arctangent (normal there).
+#must_use
+fn _bj_vx_bm_atan53(ts: f64, te): (f64, i64) {
+    if (ts == 0.0 || te < 0 - 1022) { return (ts, te); }
+    var inf: f64 = 0x7FF0000000000000;
+    var t: f64 = inf;
+    if (ts < 0.0) { t = -inf; }
+    if (te <= 1023) { t = _bj_k_ux_round(ts, te, 0.0); }
+    var a: f64 = _bj_atan(t);
+    var s, e = _bj_k_ux_from(a);
+    return (s, e);
+}
+
+# The Hermite–Gaussian field with an unbounded exponent (the section comment) into out[0], out[1] (the port's
+# conjugate), for v = (λ, w₀, z_R, x, y, z): 1, or 0 with out untouched for an input not finite or a zero λ, z_R or w₀.
+#must_use
+fn _bj_vx_bm_hgf(v: *f64, m, n, out: *f64): i64 {
+    var lam: f64 = v[0];
+    var w0: f64 = v[1];
+    var zr: f64 = v[2];
+    var x: f64 = v[3];
+    var y: f64 = v[4];
+    var z: f64 = v[5];
+    var fin: f64 = (lam - lam) + (w0 - w0) + (zr - zr) + (x - x) + (y - y) + (z - z);
+    if (fin != 0.0 || zr == 0.0 || w0 == 0.0 || lam == 0.0) { return 0; }
+    var ps: f64[2];
+    var pe: i64[2];
+    _bj_vx_bm_hg_ux(w0, zr, z, m, n, x, y, &ps, &pe);
+    var as, ae = _bj_k_ux_mul(ps[0], pe[0], ps[1], pe[1]);
+    var two_pi: f64 = 2.0 * _BJ_PI;
+    var tps, tpe = _bj_k_ux_from(two_pi);
+    var lms, lme = _bj_k_ux_from(lam);
+    var ks, ke = _bj_k_ux_div(tps, tpe, lms, lme);
+    var zs, ze = _bj_k_ux_from(z);
+    var t1s, t1e = _bj_k_ux_mul(ks, ke, zs, ze);
+    var zzs, zze = _bj_vx_mul(z, z);
+    var rrs, rre = _bj_vx_mul(zr, zr);
+    var s2s, s2e = _bj_k_ux_add(zzs, zze, rrs, rre);
+    var ivs, ive = _bj_k_ux_div(zs, ze, s2s, s2e);
+    var x2s, x2e = _bj_vx_mul(x, x);
+    var y2s, y2e = _bj_vx_mul(y, y);
+    var r2s, r2e = _bj_k_ux_add(x2s, x2e, y2s, y2e);
+    var t2as, t2ae = _bj_k_ux_mul(ks, ke - 1, r2s, r2e);
+    var t2s, t2e = _bj_k_ux_mul(t2as, t2ae, ivs, ive);
+    var rs, re = _bj_k_ux_from(zr);
+    var qs, qe = _bj_k_ux_div(zs, ze, rs, re);
+    var gs, ge = _bj_vx_bm_atan53(qs, qe);
+    var mf: f64 = f64_from(m);
+    var nf: f64 = f64_from(n);
+    var order: f64 = mf + nf + 1.0;
+    var os, oe = _bj_k_ux_from(order);
+    var t3s, t3e = _bj_k_ux_mul(os, oe, gs, ge);
+    var ss, se = _bj_k_ux_add(t1s, t1e, t2s, t2e);
+    var phs, phe = _bj_k_ux_sub(ss, se, t3s, t3e);
+    var cs, ce = _bj_vx_cos53(phs, phe);
+    var sn, sne = _bj_vx_sin53(phs, phe);
+    var re0: f64 = _bj_k_ux_mul_f64(as, ae, cs, ce);
+    var im0: f64 = _bj_k_ux_mul_f64(as, ae, sn, sne);
+    out[0] = re0;
+    out[1] = -im0;
+    return 1;
 }

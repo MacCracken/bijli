@@ -584,6 +584,16 @@ fn _call(fp, fl, w): i64 {
         # blg w0 zr z p la r: the Laguerre–Gaussian intensity's unbounded chain itself (_bj_vx_bm_lg, M3 part 2d-3b-2)
         r = _bj_vx_bm_lg(x, y, _wf(w, 2), load64(w + 24), load64(w + 32), _wf(w, 5), 0.0);
     }
+    elif (_is(fp, fl, "bhgf") == 1) {
+        # bhgf lam w0 zr x y z m n part: the Hermite–Gaussian field's unbounded chain itself (_bj_vx_bm_hgf, M3 part
+        # 2d-3c), its real part (0) or its imaginary part (1, the port's e^{+jωt} sign); all ones where it declines
+        var hv: f64[6];
+        for (var hi = 0; hi < 6; hi = hi + 1) { hv[hi] = _wf(w, hi); }
+        var ho: f64[2];
+        if (_bj_vx_bm_hgf(&hv, load64(w + 48), load64(w + 56), &ho) == 0) { return 0 - 1; }
+        r = ho[0];
+        if (load64(w + 64) == 1) { r = ho[1]; }
+    }
     elif (_is(fp, fl, "ux_pow") == 1) {
         # ux_pow s e y part: (s·2^e)^y's s (part 0) or e (part 1)
         var ps, pe = _bj_ux_pow(x, load64(w + 8), _wf(w, 2));

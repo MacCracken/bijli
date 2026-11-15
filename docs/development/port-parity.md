@@ -4365,3 +4365,76 @@ E and B = n̂ × E/c.
   measured, 0 pending, 78,225 accepted (ADR 01: 29,441; ADR 0002: 48,784)** over 571,377 rows; **all 380 digests
   equal**. The LG intensity's changed; the other 379 are unchanged. `beam.tcyr` passes on all three. The gate is
   clean (17 steps, no warnings; execution coverage 288 of 288 functions).
+
+## 75. M3 part 2d-3c: the Hermite–Gaussian field at its range edges; M3 done (2026-11-14)
+
+- **ADR 0002 row 18, amended.** Rust's field (u·cos φ, u·sin φ), with φ = k·z + ((k/2)·(x² + y²))·z/(z² + z_R²) −
+  (m + n + 1)·ζ, k = 2π/λ and ζ = arctan(z/z_R); the port gives the conjugate:
+  - NaN where φ passes DBL_MAX: at λ = 10⁻⁹, z = 10³⁰⁰, k·z = 6.3·10³⁰⁹, where the field is (3.5·10⁻¹¹, −9.2·10⁻¹¹);
+  - NaN where k does (λ = 10⁻³¹⁰), for (0.078, −1.5·10⁻⁵);
+  - the curvature term lost where z² passes DBL_MAX (z = 10¹⁶⁰: Rust's 1/R = 0 for 10⁻¹⁶⁰, a field of 9.3·10⁻¹⁶¹
+    given as 0);
+  - subnormal intermediates (k/2, z² + z_R², 1/R, ζ, the amplitude) rounded before use.
+- **The unbounded chain** (`src/crmath_vx.cyr`'s `_bj_vx_bm_hgf`):
+  - the amplitude's 53-bit value (`_bj_vx_bm_hg_ux`, split out of the HG chain), not its binary64 rounding;
+  - k, every term of φ, and ζ to 53 bits (`_bj_vx_bm_atan53`: t itself below 2^-1022, ±RN(π/2) past DBL_MAX);
+  - sin and cos of the 53-bit φ (`_bj_vx_sin53` and `_bj_vx_cos53`, Payne–Hanek past DBL_MAX);
+  - the two last products rounded once.
+
+  |φ| stays below 2^4199, since k ≤ 2^1076.7, x² + y² ≤ 2^2049 and z/(z² + z_R²) ≤ 2^1074 (1/(2|z_R|) at most, 1/z when
+  z_R = 0).
+- **The longer 2/π.** `src/crmath_ux_data.cyr`'s table grows from 96 chunks of 28 bits to 176 (from π to 5,100 bits,
+  checked against MPFR), and `_bj_ux_reduce` takes angles below 2^4454, its reads ending at chunk 173. A first form
+  kept M1's loader, one `store64` per chunk. Each such statement cost a test binary 64 bytes of static data, so the
+  table took two of them past the compiler's 128 KiB advisory and `cyrius test` warned. Bisecting by reverting one file
+  at a time found the cause. The table is now an initialized `i64` array, and the binaries are 4,752 bytes below
+  HEAD's.
+- **The guard** (beam.cyr): Rust's chain where it is provably the unbounded one:
+  - the amplitude 0 or normal (a 0 that underflowed gives the same signed zeros);
+  - k/2 normal;
+  - for z ≠ 0: z² + z_R² in [2^-900, DBL_MAX], and k·z, 1/R and ζ normal;
+  - for x or y ≠ 0: x² + y² in [2^-900, DBL_MAX], and (k/2)(x² + y²) and its product by 1/R normal;
+  - φ finite.
+
+  A sum of two doubles the chains share rounds alike in both (below 2^-1022 it is exact), and cos and sin of a finite
+  double are normal. Elsewhere the unbounded chain, which declines (keeping Rust's) for a non-finite input or a zero λ,
+  z_R or w₀.
+- **The model** (`validate.py`'s `bm_hg_amp53` and `bm_hgf_ux`): the amplitude to 53 bits, its binade past ∓1300
+  deciding ±0 or ±∞ alone; φ in exact Fractions; ζ, cos φ and sin φ from MPFR at 53 bits with its widest exponent
+  range. A first model gave ±∞ for a huge amplitude times sin 0. A finite amplitude times 0 is ±0, which the four
+  failing rows (orders 200 to 1000 at z = 0) showed.
+- **The oracle**: `beam.tsv` gains 20 field rows after every earlier row (`hgf_edges`):
+  - k·z past DBL_MAX (λ = 10⁻⁹) and past 2^2054 (λ = 5·10⁻³²⁴), at z = ±10³⁰⁰;
+  - φ near 2^4141 (z = z_R = 5·10⁻³²⁴, x = 10³⁰⁰), where the amplitude vanishes and the zeros' signs are cos φ's and
+    sin φ's;
+  - k past DBL_MAX, and z² past it;
+  - seven rows that each fail one of beam.cyr's tests alone. A search found them by mirroring the guard on the port's
+    doubles, against the chain the guard keeps (the port's amplitude with Rust's phase). A first search compared
+    against Rust's whole chain, and its rows differed through the amplitude, not the test. The k/2 row needed its own
+    search: k just below 2^-1021, x² + y² near DBL_MAX.
+- **Mappings**: `beam.adr.tsv` holds 6,317 rows, row 18's 1,455: 66 field rows (33 more; 13 of the new ones older rows,
+  and 3 older mappings with new values). All pass.
+- **cr_verify**: the `ux_sin` and `ux_cos` families now draw angles to 2^4452 (about 9,750 calls each per target), and
+  `bhgf` runs `_bj_vx_bm_hgf` itself (3,000 fields, both parts: 6,000 calls; 22 % of the phases past DBL_MAX, 3 %
+  past 2^2054, 70 % of the parts nonzero). 0 mismatches on x86_64 and aarch64.
+- **Mutations**: eleven of sixteen caught, four (k/2, z² + z_R², 1/R, ζ) once the searched rows were added. The five
+  left:
+  - k·z's and the curvature term's tests: their underflow moves φ by a few units of 2^-1075, visible only where φ
+    cancels to near 2^-1074;
+  - x² + y²'s and (k/2)(x² + y²)'s: their underflow shows only where z² + z_R²'s test fails too (60,000 draws found
+    none alone);
+  - a zero λ's return: k = ∞ gives NaN in both chains.
+- **Tests**: `cyrius_hgf_row18` (5 assertions, 172 in tests/beam.tcyr).
+- **Benchmarks.** A full bench interleaved against 2d-3b-2's tree with a one-off bench of the field (three rounds, load
+  1.3 to 2.5; each figure the lowest of three):
+  - `beam/hermite_gaussian_field_hg33` 713 → 734 ns (+3 %); the record takes the new median, 741 ns;
+  - one-off: a field off the axis 693 → 723 ns, TEM₀₀ on the axis 126 → 140;
+  - every other row unchanged (each round's median ratio 0.98 to 1.00).
+- **Result, every target** (x86_64 ELF, x86_64 PE, aarch64): **16 modules, 0 failing; 493,139 ok, 0 failed, 0
+  measured, 0 pending, 78,258 accepted (ADR 01: 29,441; ADR 0002: 48,817)** over 571,397 rows; **all 380 digests
+  equal**. The field's changed; the other 379 are unchanged, powf's and the Green's function's among them (they share
+  the reduction). `beam.tcyr` passes on all three. The gate is clean (17 steps, no warnings; execution coverage 288 of
+  288 functions).
+- **M3 is done.** Part 1 ported polarization, scattering and beam in the one convention. Part 2, the range-edge
+  review, took ADR 0002 rows 33–35 (2a), row 13 (2b), row 17 (2c) and row 18 (2d), in fifteen bites from 2a-1 to
+  2d-3c.

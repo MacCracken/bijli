@@ -20,7 +20,7 @@ It also writes and checks two generated outputs (`--write` writes them; a plain 
   whose glibc result is not correctly rounded, the correctly rounded outputs (MPFR), which the harness compares
   against instead of glibc's;
 - **src/crmath_data.cyr**, crtables.py's rendering, with its π and ln 2 and every table's hi checked against MPFR;
-  and **src/crmath_ux_data.cyr**, its render_ux (bijli's longer 2/π), from π checked to 2,800 bits.
+  and **src/crmath_ux_data.cyr**, its render_ux (bijli's longer 2/π), from π checked to 5,100 bits.
 
 Run with `python3 -I -B scripts/oracle/validate.py . [--write]` from the repo root. Exit status 0 when every row
 agrees and the generated files are current, 1 otherwise. Copied in spirit from impetus's and kimiya's validate.py.
@@ -4745,6 +4745,69 @@ def bm_hg_ux(bm, m, n, x, y, z) -> float:
     return rn_frac(p2[0] * Fraction(es) * Fraction(2) ** ee)
 
 
+def bm_hg_amp53(bm, m, n, x, y, z):
+    """The HG amplitude's 53-bit value (row 18, M3 part 2d-3c: the field's chain takes it unrounded): ("v", pair), or
+    ("tiny", negative) / ("huge", negative) for one whose binade lies past ∓1300, where every field part it makes is
+    ±0 or ±∞ (|cos φ| and |sin φ| exceed 2^-80 at every 53-bit φ but 0, where sin φ = ±0)."""
+    w = bm_spot53(bm, z)
+    sq = ux(BM_SQRT2)
+    hm = bm_hermite53(m, ux_div(ux_mul(sq, ux(x)), w))
+    hn = bm_hermite53(n, ux_div(ux_mul(sq, ux(y)), w))
+    q = ux_div(ux_add(ux_mul(ux(x), ux(x)), ux_mul(ux(y), ux(y))), ux_mul(w, w))
+    p2 = ux_mul(ux_mul(ux_div(ux(bm[1]), w), hm), hn)
+    if p2[0] == 0:
+        return "v", p2
+    if q[0] < BM_ENV_ONE:
+        return "v", p2
+    if q[0] >= BM_ENV_FAR:
+        return "tiny", p2[0] < 0
+    lb = binade(p2[0]) - 1.4426950408889634 * float(q[0])
+    if lb < -1300:
+        return "tiny", p2[0] < 0
+    if lb > 1300:
+        return "huge", p2[0] < 0
+    es, ee = mpfr_ref.wide_split("exp", -q[0])
+    return "v", ux_mul(p2, (Fraction(es) * Fraction(2) ** ee, False))
+
+
+def bm_hgf_ux(bm, m, n, x, y, z):
+    """bj_hermite_gaussian_field with an unbounded exponent (row 18, M3 part 2d-3c): the amplitude's 53-bit value, k =
+    2π/λ, every term of φ = k·z + ((k/2)·(x² + y²))·z/(z² + z_R²) − (m + n + 1)·ζ to 53 bits, ζ = arctan(z/z_R) and
+    cos φ, sin φ at 53 bits from MPFR with its widest exponent range, the two last products rounded once: the port's
+    (re, −im)."""
+    lam, w0, zr = bm
+    kind, amp = bm_hg_amp53(bm, m, n, x, y, z)
+    k = ux_div(ux(2.0 * SC_PI), ux(lam))
+    zp = ux(z)
+    t1 = ux_mul(k, zp)
+    inv = ux_div(zp, ux_add(ux_mul(zp, zp), ux_mul(ux(zr), ux(zr))))
+    r2 = ux_add(ux_mul(ux(x), ux(x)), ux_mul(ux(y), ux(y)))
+    t2 = ux_mul(ux_mul((k[0] / 2, k[1]), r2), inv)
+    q = ux_div(zp, ux(zr))
+    g = q if q[0] == 0 else (mpfr_ref.wide("atan", q[0]), q[0] < 0)
+    t3 = ux_mul(ux(float(m) + float(n) + 1.0), g)
+    ph = ux_sub(ux_add(t1, t2), t3)
+    if ph[0] == 0:
+        c, sn = (Fraction(1), False), ph
+    else:
+        c = (mpfr_ref.wide("cos", ph[0]), False)
+        c = (c[0], c[0] < 0)
+        sv = mpfr_ref.wide("sin", ph[0])
+        sn = (sv, sv < 0)
+    out = []
+    for f in (c, sn):
+        if kind == "v":
+            v = ux_fin(ux_mul(amp, f, BM_EXACT))
+        else:
+            neg = amp != f[1]
+            if kind == "huge" and f[0] != 0:
+                v = -math.inf if neg else math.inf
+            else:
+                v = -0.0 if neg else 0.0
+        out.append(v)
+    return [("f", out[0]), ("f", -out[1])]
+
+
 def bm_hg(bm, m, n, x, y, z, P, r18=False):
     if r18 and bm_fin(bm[1], bm[2], x, y, z) and bm[2] != 0 and bm[1] != 0:
         return bm_hg_ux(bm, m, n, x, y, z)
@@ -4756,6 +4819,8 @@ def bm_hg(bm, m, n, x, y, z, P, r18=False):
 
 
 def bm_hgf(bm, m, n, x, y, z, P, port=False, r18=True):
+    if port and r18 and bm_fin(*bm, x, y, z) and bm[0] != 0 and bm[1] != 0 and bm[2] != 0:
+        return bm_hgf_ux(bm, m, n, x, y, z)
     amp = bm_hg(bm, m, n, x, y, z, P, port and r18)
     k = fdiv(2.0 * SC_PI, bm[0])
     zr = bm[2]

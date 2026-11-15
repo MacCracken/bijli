@@ -491,11 +491,13 @@ def ux_families(rng, count):
             pe = split53(W("pow", Fraction(s1) * Fraction(2) ** e1, y))
         pair("ux_pow", [s1, e1, y], pe)
     for i in range(count):
-        if i % 4 == 1:
+        if i % 5 == 1:
             ts, te = rng.uniform(1.0, 2.0) * sign(), rng.choice([1024, 1025])
-        elif i % 4 == 3:                                      # the Green's function's k·R, up to 2^2052
+        elif i % 5 == 3:                                      # the Green's function's k·R, up to 2^2052
             ts, te = rng.uniform(1.0, 2.0) * sign(), rng.randint(1024, 2052)
-        elif i % 4 == 2:
+        elif i % 5 == 4:                                      # the HG field's phase, up to 2^4452 (M3 part 2d-3c)
+            ts, te = rng.uniform(1.0, 2.0) * sign(), rng.choice([rng.randint(2053, 4452), rng.randint(4400, 4452)])
+        elif i % 5 == 2:
             kk = rng.uniform(1.0, 2.0) * 2.0 ** rng.randint(500, 1023)
             rr = Fraction(rng.uniform(1.0, 2.0)) * Fraction(2) ** rng.randint(524, 1025)
             ts, te = split53(rnd53_frac(Fraction(kk) * rr))
@@ -556,7 +558,7 @@ EXACT = ["mono"] + list(SHAPES) + ["sqrt_div", "wsqrt", "sqrt_mono", "sqrt_mono_
          "vx_gamma", "lwo_reff", "lwo_reff_slow", "lwo_kappa", "lwo_kappa_slow", "lwo_nb", "lwo_nb_slow", "lwo_ux",
          "gammao", "gammao_slow", "gammao2", "gammao2_slow", "sumsq", "sumsq_exact", "abcd", "abcd_slow", "dot4", "jcdot", "jint", "jnorm",
          "jover", "sjones", "sdop", "sellip", "sorient", "rsig", "rq", "rphase", "rang", "bspot", "bpeak", "broc",
-         "bgouy", "bci", "bdot2", "bw0", "bgp", "bfsr", "bhg", "blg"]
+         "bgouy", "bci", "bdot2", "bw0", "bgp", "bfsr", "bhg", "blg", "bhgf"]
 UX = ["ux_exp", "ux_exp_w", "ux_exp_big", "ux_cosh", "ux_sinh", "ux_ln", "ux_pow", "ux_sin", "ux_cos"]
 
 
@@ -2133,7 +2135,7 @@ def rayleigh_families(rng, count):
 BM_PI = RAY_PI
 BM_MIN = Fraction(2) ** -1022
 BM_MAX = Fraction(sys.float_info.max)
-BM_FAMS = ("bspot", "bpeak", "broc", "bgouy", "bci", "bdot2", "bw0", "bgp", "bfsr", "bhg", "blg")
+BM_FAMS = ("bspot", "bpeak", "broc", "bgouy", "bci", "bdot2", "bw0", "bgp", "bfsr", "bhg", "blg", "bhgf")
 
 
 def _jdiv(a, b, r=rnd53):
@@ -2404,6 +2406,91 @@ def blg_ref(w0, zr, z, p, la, r) -> int:
     return f2b(rn_frac(p3[0] * Fraction(es) * Fraction(2) ** e))
 
 
+def bhgf_ref(lam, w0, zr, x, y, z, m, n):
+    """The Hermite–Gaussian field's chain with an unbounded exponent (src/crmath_vx.cyr's _bj_vx_bm_hgf): the amplitude
+    to 53 bits (an exponent past ∓1300 decides ±0 or ±∞ alone, |cos φ| and |sin φ| exceeding 2^-80 but at φ = 0), k,
+    each term of φ and ζ to 53 bits, cos φ and sin φ from MPFR at 53 bits with its widest exponent range, the two last
+    products rounded once: [re, −im] as bits."""
+    o = _bone_sq(z, zr)
+    w = _jmul(_jx(w0), (rnd53_sqrt(o[0]), False))
+    hm = _bherm(m, _jdiv(_jmul(_jx(BM_SQRT2), _jx(x)), w))
+    hn = _bherm(n, _jdiv(_jmul(_jx(BM_SQRT2), _jx(y)), w))
+    q = _jdiv(_jadd(_jmul(_jx(x), _jx(x)), _jmul(_jx(y), _jx(y))), _jmul(w, w))
+    p2 = _jmul(_jmul(_jdiv(_jx(w0), w), hm), hn)
+    kind, amp = "v", p2
+    if p2[0] != 0 and q[0] >= Fraction(2) ** -60:
+        if q[0] >= Fraction(2) ** 47:
+            kind, amp = "tiny", p2[0] < 0
+        else:
+            lb = binade(p2[0]) - 1.4426950408889634 * float(q[0])
+            if lb < -1300:
+                kind, amp = "tiny", p2[0] < 0
+            elif lb > 1300:
+                kind, amp = "huge", p2[0] < 0
+            else:
+                es, ee = mpfr_ref.wide_split("exp", -q[0])
+                amp = _jmul(p2, (Fraction(es) * Fraction(2) ** ee, False))
+    k = _jdiv(_jx(2.0 * BM_PI), _jx(lam))
+    zp = _jx(z)
+    t1 = _jmul(k, zp)
+    inv = _jdiv(zp, _jadd(_jmul(zp, zp), _jmul(_jx(zr), _jx(zr))))
+    r2 = _jadd(_jmul(_jx(x), _jx(x)), _jmul(_jx(y), _jx(y)))
+    t2 = _jmul(_jmul((k[0] / 2, k[1]), r2), inv)
+    qz = _jdiv(zp, _jx(zr))
+    g = qz if qz[0] == 0 else (mpfr_ref.wide("atan", qz[0]), qz[0] < 0)
+    t3 = _jmul(_jx(float(m) + float(n) + 1.0), g)
+    ph = _jsub(_jadd(t1, t2), t3)
+    if ph[0] == 0:
+        c, sn = (Fraction(1), False), ph
+    else:
+        cv, sv = mpfr_ref.wide("cos", ph[0]), mpfr_ref.wide("sin", ph[0])
+        c, sn = (cv, cv < 0), (sv, sv < 0)
+    out = []
+    for f in (c, sn):
+        if kind == "v":
+            v = _jfin(_jmul(amp, f, lambda t: t))
+        else:
+            neg = amp != f[1]
+            if kind == "huge" and f[0] != 0:
+                v = -INF if neg else INF
+            else:
+                v = -0.0 if neg else 0.0
+        out.append(v)
+    return [f2b(out[0]), f2b(-out[1])]
+
+
+def hgf_families(rng, count):
+    """bhgf (M3 part 2d-3c): the HG field's unbounded chain on beams from 2^±600 with wavelengths from 2^-1074 to
+    2^1023 (k past DBL_MAX), z from z_R·2^-40 to 2^1000 and to z_R·2^1000, points to √2x/w = 2^6, orders to 12: phases
+    past DBL_MAX and to 2^4100, envelopes to the stand-in, each part asked separately."""
+    out = []
+    for i in range(count):
+        lam = rng.uniform(1.0, 2.0) * 2.0 ** rng.randint(-1074, 1023)
+        if lam == 0.0 or not math.isfinite(lam):
+            lam = 1e-6
+        w0 = rng.uniform(1.0, 2.0) * 2.0 ** rng.randint(-600, 600)
+        zr = rng.uniform(1.0, 2.0) * 2.0 ** rng.randint(-1074, 600)
+        if zr == 0.0:
+            zr = 1.0
+        z = rng.choice([0.0, zr * rng.uniform(-3.0, 3.0), zr * 2.0 ** rng.randint(-40, 40),
+                        rng.uniform(1.0, 2.0) * 2.0 ** rng.randint(-1074, 1000)]) * rng.choice([1.0, -1.0])
+        if not math.isfinite(z):
+            z = zr
+        m, n = rng.randint(0, 12), rng.randint(0, 12)
+        wv = abs(w0) * math.sqrt(1.0 + min((z / zr) ** 2, 1e300)) if abs(z / zr) < 1e150 else abs(w0)
+
+        def pt():
+            if rng.random() < 0.2:
+                return 0.0
+            v = rng.uniform(1.0, 2.0) * 2.0 ** rng.randint(-30, 6) * wv / BM_SQRT2 * rng.choice([1.0, -1.0])
+            return v if math.isfinite(v) and v != 0.0 else 1.0
+        x, y = pt(), pt()
+        ref = bhgf_ref(lam, w0, zr, x, y, z, m, n)
+        for part in (0, 1):
+            out.append(("bhgf", [lam, w0, zr, x, y, z, m, n, part], ref[part]))
+    return out
+
+
 def lg_families(rng, count):
     """blg (M3 part 2d-3b-2): the LG intensity's unbounded chain on beams from 2^±600 (z_R independent of w₀), the
     waist, near and far field, radial orders to 60 and some to 300, azimuthal ones to 60 and some to 2³¹ (the power's
@@ -2516,6 +2603,9 @@ def main() -> int:
                   if "exact" in names or f in names]
         rrng = random.Random(0x3_2D2A)
         calls += [(f, ref, ws) for f, ws, ref in rayleigh_families(rrng, max(1, n // 10))
+                  if "exact" in names or f in names]
+        frng = random.Random(0x3_2D3C)
+        calls += [(f, ref, ws) for f, ws, ref in hgf_families(frng, max(1, n // 50))
                   if "exact" in names or f in names]
         lrng = random.Random(0x3_2D3B2)
         calls += [(f, ref, ws) for f, ws, ref in lg_families(lrng, max(1, n // 50))

@@ -934,6 +934,52 @@ fn cyrius_lg_row18(): i64 {
     return 0;
 }
 
+# The field at (x, y, z) on the beam (λ, w₀, z_R): 1 when its parts' bits are re and im.
+fn hgf_is(lam: f64, w0: f64, zr: f64, m, n, x: f64, y: f64, z: f64, re, im): i64 {
+    var g: BjGaussianBeam;
+    g.wavelength = lam;
+    g.waist = w0;
+    g.rayleigh_range = zr;
+    var e: BjComplex = bj_hermite_gaussian_field(&g, m, n, x, y, z);
+    var er: f64 = e.re;
+    var ei: f64 = e.im;
+    if (_bj_bits(er) == re && _bj_bits(ei) == im) { return 1; }
+    return 0;
+}
+
+# ADR 0002 row 18 (M3 part 2d-3c): the Hermite–Gaussian field's chain at its range edges, with an unbounded exponent:
+# the amplitude's 53-bit value, every term of the phase, sin and cos past DBL_MAX by Payne–Hanek; bits from
+# validate.py's model (the port's convention, e^{+jωt}).
+fn cyrius_hgf_row18(): i64 {
+    test_group("cyrius_hgf_row18 (ADR 0002 row 18)");
+    var mm: f64 = _bj_from_bits(0x3F50624DD2F1A9FC);
+    var zr1: f64 = _bj_from_bits(0x7C2485CE9E7A065F);
+    var z1: f64 = _bj_from_bits(0x7E37E43C8800759C);
+    var x1: f64 = 1000000.0;
+    var l1: f64 = _bj_from_bits(0x3E112E0BE826D695);
+    var k1 = hgf_is(l1, mm, zr1, 0, 0, x1, 0.0, z1, 0x3DC373226C4E9BBD, 0xBDD96ADA7E6BA7E4);
+    assert(k1 == 1, "λ = 1e-9, z = 1e300: k·z = 6.3e309 past DBL_MAX (Rust: cos ∞ = NaN)");
+    var t5: f64 = _bj_from_bits(1);
+    var k2 = hgf_is(t5, mm, zr1, 0, 0, x1, 0.0, z1, 0x3DDAAD54082494AA, 0xBDB585CAC406582D);
+    assert(k2 == 1, "λ = 5e-324: k·z = 1.3e624, past 2^2054, on the lengthened 2/π (Rust: NaN)");
+    var big: f64 = _bj_from_bits(0x7E37E43C8800759C);
+    var nbig: f64 = -big;
+    var w3: f64 = _bj_from_bits(0x1CA3529BA7D19EAF);
+    var k3 = hgf_is(t5, w3, t5, 1, 1, big, nbig, t5, 0x8000000000000000, 0x8000000000000000);
+    assert(k3 == 1, "phase near 2^4141, a vanishing amplitude: (−0, −0), the signs its cos and sin's");
+    var x4: f64 = _bj_from_bits(0x3F1A36E2EB1C432D);
+    var l4: f64 = _bj_from_bits(0x000012688B70E62B);
+    var z4: f64 = _bj_from_bits(0x01A56E1FC2F8F359);
+    var k4 = hgf_is(l4, mm, 1.0, 1, 1, x4, x4, z4, 0x3FB413105D87DF16, 0xBEEF4F3CD1CFD3E9);
+    assert(k4 == 1, "λ = 1e-310: k past DBL_MAX, the field 0.078 (Rust: NaN)");
+    var l5: f64 = _bj_from_bits(0x3EB0C6F7A0B5ED8D);
+    var x5: f64 = _bj_from_bits(0x5F138D352E5096AF);
+    var z5: f64 = _bj_from_bits(0x6126C2D4256FFCC3);
+    var k5 = hgf_is(l5, mm, 1.0, 0, 0, x5, 0.0, z5, 0x1EB4D831AF51509C, 0x1EA0E9B8365031AC);
+    assert(k5 == 1, "z = 1e160: z² past DBL_MAX, 1/R = 1e-160 (Rust: 0, the phase's k(x² + y²)/2R lost)");
+    return 0;
+}
+
 # The three structs' JSON (M3 part 1c-2), as serde_json writes and reads them.
 fn cyrius_json(): i64 {
     test_group("cyrius_beam_json");
@@ -1117,6 +1163,7 @@ fn main(): i64 {
     cyrius_row18();
     cyrius_hg_row18();
     cyrius_lg_row18();
+    cyrius_hgf_row18();
     cyrius_json();
     return assert_summary();
 }
