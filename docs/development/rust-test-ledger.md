@@ -6,7 +6,7 @@
 > (`tests/golden/`) checks every ported function on its grid besides; this ledger is about the oracle's own
 > assertions.
 
-**858 Rust tests:** 591 ported, 7 not applicable, 260 pending.
+**858 Rust tests:** 597 ported, 8 not applicable, 253 pending.
 
 | Rust file | Milestone | Cyrius tests | Rust tests | Ported | N/A | Pending |
 |---|---|---|---:|---:|---:|---:|
@@ -25,7 +25,7 @@
 | `src/maxwell.rs` | M1 | `tests/maxwell.tcyr` | 18 | 18 | 0 | 0 |
 | `src/polarization.rs` | M3 | `tests/polarization.tcyr` | 69 | 69 | 0 | 0 |
 | `src/relativity.rs` | M2 | `tests/relativity.tcyr` | 48 | 48 | 0 | 0 |
-| `src/rf.rs` | M4 | `tests/rf.tcyr` | 80 | 69 | 4 | 7 |
+| `src/rf.rs` | M4 | `tests/rf.tcyr` | 80 | 75 | 5 | 0 |
 | `src/scattering.rs` | M3 | `tests/scattering.tcyr` | 32 | 32 | 0 | 0 |
 | `src/wave.rs` | M2 | `tests/wave.tcyr` | 63 | 63 | 0 | 0 |
 | `tests/integration.rs` | M8 | `tests/integration.tcyr` | 26 | 0 | 0 | 26 |
@@ -41,3 +41,4 @@
 | `src/rf.rs::test_input_impedance_quarter_wave` | deprecated input_impedance_lossless (ADR 0002 row 1); its λ/4 value Z₀²/Z_L = 25 Ω is checked through input_impedance_lossless_complex |
 | `src/rf.rs::test_input_impedance_real_rejects_complex_result` | deprecated input_impedance_lossless (ADR 0002 row 1): the port has no real-valued form to refuse; its complex Z_in = 40 − j30 is checked through input_impedance_lossless_complex |
 | `src/rf.rs::test_smatrix_inconsistent_does_not_panic` | BjSMatrix's shape is fixed at construction (ADR 0002 row 36): no matrix with too few rows, ragged rows or a short z0 can be built, so the shape errors it checks are gone; tests/rf.tcyr's cyrius_smatrix_fixed_shape pins the layout and the index refusals |
+| `src/rf.rs::test_write_touchstone_deprecated_matches_try` | rf::write_touchstone is deprecated in 1.2.0 and not carried (ADR 0002 row 1); try_write_touchstone's text is pinned byte for byte by tests/golden/rf.tsv and tests/rf.tcyr's cyrius_touchstone_write_text |

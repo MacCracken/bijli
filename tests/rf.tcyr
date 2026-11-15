@@ -1,5 +1,5 @@
-# rf.tcyr — src/rf.cyr (M4 parts 1a, 1b): transmission lines, reflection and the losses, the Smith chart, matching,
-# the array factors and (1b) the S-parameter matrices.
+# rf.tcyr — src/rf.cyr and src/touchstone.cyr (M4 parts 1a–1c): transmission lines, reflection and the losses, the
+# Smith chart, matching, the array factors, (1b) the S-parameter matrices and (1c) Touchstone read and write.
 #
 # Every group named test_* is rust-old/src/rf.rs's test of that name, ported assertion for assertion (the ledger
 # matches them by name). rf.rs was already in bijli's one convention, e^{+jωt} (ADR 0002 row 5), so nothing changes
@@ -1081,6 +1081,300 @@ fn cyrius_touchstone(): i64 {
     return 0;
 }
 
+# A new BjTouchstoneData into *d; its error code (0 on Ok).
+fn ts_new(ports, z0: f64, points, d: *BjTouchstoneData): i64 {
+    var t, v = BjTouchstoneData_new(ports, z0, points, d);
+    if (is_ok(t) == 1) { return 0; }
+    return v;
+}
+
+# 1 when the Str s contains the C string needle.
+fn str_has(s, needle): i64 {
+    var n = strlen(needle);
+    for (var k = 0; k + n <= str_len(s); k = k + 1) {
+        if (memeq(str_data(s) + k, needle, n) == 1) { return 1; }
+    }
+    return 0;
+}
+
+# A fresh C string of a 1 and z zeros (an integer power of ten in Display form).
+fn ten_pow(z): i64 {
+    var p = alloc(z + 2);
+    store8(p, 49);
+    for (var k = 1; k <= z; k = k + 1) { store8(p + k, 48); }
+    store8(p + z + 1, 0);
+    return p;
+}
+
+# The Rust tests' one_port_data into *d: S11 = 0.5 + j0.1 at 1 GHz and 0.3 − j0.2 at 2 GHz, Z₀ = 50 Ω. 1 on Ok.
+fn one_port_data(d: *BjTouchstoneData): i64 {
+    if (ts_new(1, 50.0, 2, d) != 0) { return 0; }
+    var f0 = 0;
+    f0 = f0 + ts_setf(d, 0, 1000000000.0) + ts_setf(d, 1, 2000000000.0);
+    f0 = f0 + sset(d.matrix_at(0), 1, 1, BjComplex_new(0.5, 0.1));
+    f0 = f0 + sset(d.matrix_at(1), 1, 1, BjComplex_new(0.3, -0.2));
+    if (f0 == 0) { return 1; }
+    return 0;
+}
+
+# d.set_frequency(k, f); its error code (0 on Ok).
+fn ts_setf(d: *BjTouchstoneData, k, f: f64): i64 {
+    var t, v = d.set_frequency(k, f);
+    if (is_ok(t) == 1) { return 0; }
+    return v;
+}
+
+# bj_try_write_touchstone of d in the format into a fresh builder: the text (a Str) on Ok, else 0 with the code at
+# *code.
+fn ts_write(d: *BjTouchstoneData, format, code: *i64): i64 {
+    var sb = str_builder_new();
+    var t, v = bj_try_write_touchstone(d, format, sb);
+    code[0] = 0;
+    if (is_err_result(t) == 1) {
+        code[0] = v;
+        return 0;
+    }
+    return str_builder_build(sb);
+}
+
+# 1 when the Str s holds exactly the C string want.
+fn str_is(s, want): i64 {
+    if (s == 0 || str_len(s) != strlen(want)) { return 0; }
+    return memeq(str_data(s), want, str_len(s));
+}
+
+# rf.rs's Touchstone writer tests.
+fn rust_tests_f(): i64 {
+    var d: BjTouchstoneData;
+    var b: BjTouchstoneData;
+    var code: i64[1];
+    test_group("test_touchstone_roundtrip");
+    assert(one_port_data(&d) == 1, "the data");
+    var good = 0;
+    for (var f = 0; f < 3; f = f + 1) {
+        var txt = ts_write(&d, f, &code);
+        var hasopt = str_has(txt, "# GHz S");
+        var r50 = str_has(txt, "R 50\n");
+        var t1, v1 = bj_parse_touchstone(str_data(txt), str_len(txt), 1, &b);
+        var fb0: f64 = b.frequency_at(0);
+        var fb1: f64 = b.frequency_at(1);
+        var x0: BjComplex = ts_s(&b, 0, 1, 1);
+        var x1: BjComplex = ts_s(&b, 1, 1, 1);
+        if (v1 == 7) { println("."); }
+        if (hasopt == 1 && r50 == 1 && is_ok(t1) == 1 && fb0 == 1000000000.0 && fb1 == 2000000000.0 &&
+          close(x0, 0.5, 0.1, 0.000000000001) == 1 && close(x1, 0.3, -0.2, 0.000000000001) == 1) {
+            good = good + 1;
+        }
+        BjTouchstoneData_free(&b);
+    }
+    assert(good == 3, "RI, MA and DB read back to the data");
+
+    test_group("test_write_touchstone_inconsistent_does_not_panic");
+    # Rust's first two cases, a frequency count unlike the matrices' and a matrix of another port count, can't be
+    # built here (ADR 0002 row 36), and its deprecated write_touchstone isn't carried (row 1). The rest:
+    var m0: *BjSMatrix = d.matrix_at(0);
+    zset(m0, 0, 75.0);
+    assert(ts_write(&d, BJ_TOUCHSTONE_FORMAT_REAL_IMAG, &code) == 0, "a matrix's Z₀ unlike the file's R");
+    zset(m0, 0, 50.0);
+    var z0d: BjTouchstoneData;
+    ts_new(0, 50.0, 2, &z0d);
+    assert(ts_write(&z0d, BJ_TOUCHSTONE_FORMAT_REAL_IMAG, &code) == 0, "ports = 0");
+    BjTouchstoneData_free(&z0d);
+    sset(m0, 1, 1, BjComplex_new(_bj_from_bits(0x7FF8000000000000), 0.0));
+    assert(ts_write(&d, BJ_TOUCHSTONE_FORMAT_REAL_IMAG, &code) == 0, "a NaN entry");
+    sset(m0, 1, 1, BjComplex_new(0.5, 0.1));
+    ts_setf(&d, 0, 2000000000.0);
+    ts_setf(&d, 1, 1000000000.0);
+    assert(ts_write(&d, BJ_TOUCHSTONE_FORMAT_REAL_IMAG, &code) == 0, "decreasing frequencies");
+    BjTouchstoneData_free(&d);
+
+    test_group("test_write_touchstone_two_port_order");
+    ts_new(2, 50.0, 1, &d);
+    ts_setf(&d, 0, 1000000000.0);
+    var m2: *BjSMatrix = d.matrix_at(0);
+    sset(m2, 1, 1, bj_complex_real(0.1));
+    sset(m2, 1, 2, bj_complex_real(0.2));
+    sset(m2, 2, 1, bj_complex_real(0.9));
+    sset(m2, 2, 2, bj_complex_real(0.3));
+    var t2 = ts_write(&d, BJ_TOUCHSTONE_FORMAT_REAL_IMAG, &code);
+    var want2 = cat("! Touchstone file generated by bijli\n# GHz S RI R 50\n",
+      "1e0  1e-1  0e0  9e-1  0e0  2e-1  0e0  3e-1  0e0\n");
+    assert(str_is(t2, want2) == 1, "f, N11, N21, N12, N22");
+    BjTouchstoneData_free(&d);
+
+    test_group("test_touchstone_multiport_write_layout_and_roundtrip");
+    var laid = 0;
+    var ns: i64[4];
+    ns[0] = 3;
+    ns[1] = 4;
+    ns[2] = 5;
+    ns[3] = 9;
+    for (var w = 0; w < 4; w = w + 1) {
+        var n = ns[w];
+        ts_new(n, 50.0, 1, &d);
+        ts_setf(&d, 0, 1500000000.0);
+        var mm: *BjSMatrix = d.matrix_at(0);
+        for (var i = 0; i < n; i = i + 1) {
+            for (var j = 0; j < n; j = j + 1) {
+                sset(mm, i + 1, j + 1, BjComplex_new(0.01 * f64_from(i * n + j), -0.003 * f64_from(j)));
+            }
+        }
+        var tx = ts_write(&d, BJ_TOUCHSTONE_FORMAT_REAL_IMAG, &code);
+        var lines = 0;
+        var maxtok = 0;
+        var tok = 0;
+        var intok = 0;
+        var skip = 2;
+        for (var c = 0; c < str_len(tx); c = c + 1) {
+            var ch = load8(str_data(tx) + c);
+            if (ch == 10) {
+                if (skip > 0) { skip = skip - 1; } else {
+                    lines = lines + 1;
+                    if (tok > maxtok) { maxtok = tok; }
+                }
+                tok = 0;
+                intok = 0;
+            } elif (ch == 32) { intok = 0; }
+            elif (intok == 0) {
+                intok = 1;
+                if (skip == 0) { tok = tok + 1; }
+            }
+        }
+        var t3, v3 = bj_parse_touchstone(str_data(tx), str_len(tx), n, &b);
+        var back: *BjSMatrix = b.matrix_at(0);
+        var same = memeq(back.s, mm.s, n * n * 16);
+        if (v3 == 7) { println("."); }
+        if (lines == n * ((n + 3) / 4) && maxtok <= 9 && is_ok(t3) == 1 && same == 1) { laid = laid + 1; }
+        BjTouchstoneData_free(&b);
+        BjTouchstoneData_free(&d);
+    }
+    assert(laid == 4, "3, 4, 5, 9 ports: ⌈n/4⌉ lines a row, ≤ 9 tokens a line, read back bit for bit");
+
+    test_group("test_touchstone_write_precision");
+    ts_new(1, 50.0, 2, &d);
+    ts_setf(&d, 0, 1234.5);
+    ts_setf(&d, 1, 1000000.25);
+    sset(d.matrix_at(0), 1, 1, BjComplex_new(0.000000001, -0.000000000002));
+    sset(d.matrix_at(1), 1, 1, BjComplex_new(0.000000001, -0.000000000002));
+    var prec = 0;
+    for (var f2 = 0; f2 < 3; f2 = f2 + 1) {
+        var tp = ts_write(&d, f2, &code);
+        var t4, v4 = bj_parse_touchstone(str_data(tp), str_len(tp), 1, &b);
+        var p0: f64 = b.frequency_at(0);
+        var p1: f64 = b.frequency_at(1);
+        var sp: BjComplex = ts_s(&b, 0, 1, 1);
+        var e1: f64 = f64_abs(sp.re - 0.000000001);
+        var e2: f64 = f64_abs(sp.im + 0.000000000002);
+        var tiny: f64 = 0.000000000000000000001;
+        if (v4 == 7) { println("."); }
+        if (is_ok(t4) == 1 && f64_abs(p0 - 1234.5) <= 0.000000000001 * 1234.5 &&
+          f64_abs(p1 - 1000000.25) <= 0.000000000001 * 1000000.25 && e1 <= tiny && e2 <= tiny) {
+            prec = prec + 1;
+        }
+        BjTouchstoneData_free(&b);
+    }
+    assert(prec == 3, "low frequencies and tiny entries survive in every format");
+    BjTouchstoneData_free(&d);
+
+    test_group("test_touchstone_db_zero_magnitude_is_finite");
+    ts_new(1, 50.0, 1, &d);
+    ts_setf(&d, 0, 1000000000.0);
+    var tz = ts_write(&d, BJ_TOUCHSTONE_FORMAT_DB_ANGLE, &code);
+    var has_inf = 0;
+    for (var c2 = 0; c2 + 2 < str_len(tz); c2 = c2 + 1) {
+        if (memeq(str_data(tz) + c2, "inf", 3) == 1) { has_inf = 1; }
+    }
+    var t5, v5 = bj_parse_touchstone(str_data(tz), str_len(tz), 1, &b);
+    var zn: BjComplex = ts_s(&b, 0, 1, 1);
+    var zm: f64 = zn.norm();
+    assert(tz != 0 && has_inf == 0 && is_ok(t5) == 1 && zm < 0.000000000000000000000000000001, "|S| = 0 writes finite");
+    BjTouchstoneData_free(&b);
+    BjTouchstoneData_free(&d);
+    if (v5 == 7) { println("."); }
+    return 0;
+}
+
+# The text byte for byte, the reasons, row 37 in the writer, sb untouched by a refusal, and the heap.
+fn cyrius_touchstone_write(): i64 {
+    var d: BjTouchstoneData;
+    var code: i64[1];
+    test_group("cyrius_touchstone_write_text");
+    one_port_data(&d);
+    var ma = ts_write(&d, BJ_TOUCHSTONE_FORMAT_MAGNITUDE_ANGLE, &code);
+    var wm = cat("! Touchstone file generated by bijli\n# GHz S MA R 50\n",
+      "1e0  5.099019513592785e-1  1.1309932474020215e1\n");
+    wm = cat(wm,
+      "2e0  3.6055512754639896e-1  -3.369006752597979e1\n");
+    assert(str_is(ma, wm) == 1, "MA: |S| and arg S in degrees, in {:e} form");
+    var ri = ts_write(&d, BJ_TOUCHSTONE_FORMAT_REAL_IMAG, &code);
+    var wr = "! Touchstone file generated by bijli\n# GHz S RI R 50\n1e0  5e-1  1e-1\n2e0  3e-1  -2e-1\n";
+    assert(str_is(ri, wr) == 1, "RI");
+    BjTouchstoneData_free(&d);
+    var e0: BjTouchstoneData;
+    ts_new(3, 0.000000000001, 0, &e0);
+    var hdr = ts_write(&e0, BJ_TOUCHSTONE_FORMAT_DB_ANGLE, &code);
+    assert(str_is(hdr, "! Touchstone file generated by bijli\n# GHz S DB R 0.000000000001\n") == 1,
+      "no points: the header alone, R in Display form");
+    BjTouchstoneData_free(&e0);
+
+    test_group("cyrius_touchstone_write_reasons");
+    ts_new(2, 50.0, 2, &d);
+    ts_setf(&d, 0, 1.0);
+    ts_setf(&d, 1, 2.0);
+    zset(d.matrix_at(1), 1, _bj_from_bits(0x7FF0000000000000));
+    var sb = str_builder_new();
+    str_builder_add_cstr(sb, "kept");
+    var t1, v1 = bj_try_write_touchstone(&d, BJ_TOUCHSTONE_FORMAT_REAL_IMAG, sb);
+    var w1 = "invalid parameter: S-matrix #1 reference impedances [50.0, inf] differ from the file's R 50";
+    assert(err_is(t1, v1, BJ_ERR_INVALID_PARAMETER, w1) == 1, "an infinite Z₀ is not R's (ADR 0002 row 37)");
+    var kept = str_builder_build(sb);
+    assert(str_is(kept, "kept") == 1, "the builder untouched by a refusal");
+    zset(d.matrix_at(1), 1, 50.0);
+    var big: f64 = _bj_from_bits(0x6974E718D7D7625A);
+    sset(d.matrix_at(1), 2, 2, BjComplex_new(big, 1.0));
+    var sb2 = str_builder_new();
+    var t2, v2 = bj_try_write_touchstone(&d, BJ_TOUCHSTONE_FORMAT_DB_ANGLE, sb2);
+    var w2 = cat(cat("invalid parameter: S-parameter ", ten_pow(200)), "+1i cannot be written in DbAngle format");
+    assert(is_err_result(t2) == 1 && reason_is2(w2, "") == 1, "|S|² = 10⁴⁰⁰ past DBL_MAX: not writable in DB");
+    var sb3 = str_builder_new();
+    var t3, v3 = bj_try_write_touchstone(&d, BJ_TOUCHSTONE_FORMAT_REAL_IMAG, sb3);
+    assert(is_ok(t3) == 1, "RI writes it");
+    ts_setf(&d, 1, 1.0);
+    var t4 = ts_write(&d, BJ_TOUCHSTONE_FORMAT_REAL_IMAG, &code);
+    var w4 = "invalid parameter: Touchstone frequencies must be strictly increasing (#1: 1)";
+    assert(t4 == 0 && reason_is2(w4, "") == 1,
+      "equal frequencies");
+    ts_setf(&d, 0, -0.5);
+    var t5 = ts_write(&d, BJ_TOUCHSTONE_FORMAT_REAL_IMAG, &code);
+    assert(t5 == 0 && reason_is2("invalid parameter: frequency #0 must be finite and non-negative, got -0.5", "") == 1,
+      "a negative frequency");
+    d.z0 = 0.0;
+    var t6 = ts_write(&d, BJ_TOUCHSTONE_FORMAT_REAL_IMAG, &code);
+    assert(t6 == 0 && reason_is2("invalid parameter: Touchstone reference impedance must be finite and positive, got 0",
+        "") == 1, "R = 0");
+    var t7, v7 = d.set_frequency(2, 1.0);
+    assert(err_is(t7, v7, BJ_ERR_INVALID_PARAMETER, "invalid parameter: frequency index must be below 2, got 2") == 1,
+      "set_frequency past the last point");
+    BjTouchstoneData_free(&d);
+
+    test_group("cyrius_touchstone_write_heap");
+    one_port_data(&d);
+    var w0 = ts_write(&d, BJ_TOUCHSTONE_FORMAT_MAGNITUDE_ANGLE, &code);
+    var fl0 = _fl_arena_pos;
+    var bad = 0;
+    var sbh = str_builder_new();
+    for (var k = 0; k < 2000; k = k + 1) {
+        store64(sbh + 8, 0);
+        var th, vh = bj_try_write_touchstone(&d, BJ_TOUCHSTONE_FORMAT_MAGNITUDE_ANGLE, sbh);
+        if (is_err_result(th) == 1) { bad = bad + 1; }
+    }
+    assert(bad == 0 && w0 != 0, "2000 writes into one builder");
+    assert_eq(_fl_arena_pos, fl0, "the text's buffer is freed: the freelist's arena did not grow");
+    BjTouchstoneData_free(&d);
+    if (v2 == 7 || v3 == 7) { println("."); }
+    return 0;
+}
+
 # Runs rf.rs's tests, then the Cyrius-only checks.
 fn main(): i64 {
     alloc_init();
@@ -1094,6 +1388,8 @@ fn main(): i64 {
     cyrius_smatrix();
     rust_tests_e();
     cyrius_touchstone();
+    rust_tests_f();
+    cyrius_touchstone_write();
     return assert_summary();
 }
 

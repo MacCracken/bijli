@@ -295,6 +295,15 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
   by 417 rows; all match on all three targets, 3 through the corrected oracle. 12 more of rf.rs's tests are ported,
   and `tests/bijli.fcyr` is now a fuzz harness for the reader (20,000 mutants, replayed with no heap growth). The
   `rf/parse_touchstone_s2p_201` twin is added (68 of 80). The writer is part 1c-2's.
+- **Cyrius port, M4 part 1c-2 — writing Touchstone** (`src/touchstone.cyr`, `src/fmtf.cyr`):
+  `bj_try_write_touchstone` appends a `BjTouchstoneData` as Touchstone v1.1 text to a builder (left as it was on a
+  refusal), byte for byte Rust's: its header, its record layout (2-port `f N11 N21 N12 N22`, four pairs a line past
+  that) and every number in Rust's `{:e}` form, which `src/fmtf.cyr` gains (`_bj_fmt_f64_exp`, the shortest digits
+  as Display). `BjTouchstoneData_new` and `set_frequency` build data to write. Its validation keeps Rust's reachable
+  checks and uses row 37's `z0_equal` (see Fixed). `rf.tsv` grows by 273 rows and `fmtf.tsv` by 18,788 (`{:e}` over
+  its whole grid); all match on all three targets, 21 writer rows through the corrected oracle. The last 6 of rf.rs's
+  tests are ported, and `test_write_touchstone_deprecated_matches_try` is n/a (row 1): rf.rs's 80 are all accounted
+  for. The `rf/write_touchstone_s2p_201` twin is added (69 of 80). Part 1d, the JSON, ends Part 1.
 
 ### Fixed
 
@@ -663,10 +672,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
   reduction (`src/crmath_ux_data.cyr`) grows to 176 chunks for phases to 2^4199, as an initialized array: its old
   loader cost 64 bytes of static data a chunk and pushed two test binaries past the compiler's 128 KiB advisory. Cost:
   `beam/hermite_gaussian_field_hg33` 713 → 734 ns (`port-parity.md` §75). With this M3 is done.
-- **rf** (ADR 0002 row 37, M4 part 1b): `z0_equal` accepted an infinite reference impedance as equal to any finite
-  one (∞ ≤ 10⁻¹²·∞), so a 2-port whose second port's Z₀ was ±∞ cascaded and converted to Z on the first port's
-  50 Ω. Both values must now be finite, and such a matrix is refused with Rust's own reason ("all port reference
-  impedances must be equal, got [50.0, inf]").
+- **rf** (ADR 0002 row 37, M4 part 1b): `z0_equal` accepted an infinite reference impedance as equal to any finite one
+  (∞ ≤ 10⁻¹²·∞), so a 2-port whose second port's Z₀ was ±∞ cascaded and converted to Z on the first port's 50 Ω. Both
+  values must now be finite, and such a matrix is refused with Rust's own reason ("all port reference impedances must be
+  equal, got [50.0, inf]"). Touchstone's writer (M4 part 1c-2) uses the same test: a matrix whose impedance is ±∞ is
+  refused ("S-matrix #k reference impedances [50.0, inf] differ from the file's R 50") where Rust wrote it.
 
 ### Performance
 

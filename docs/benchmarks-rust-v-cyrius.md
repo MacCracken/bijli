@@ -6,7 +6,7 @@
 
 **Rust column**: rust-old/bench-history.csv, run `2026-11-12T03:15:21Z` at `c95fd30` (the 1.2.0 tag's source), criterion medians. Taken under load (kimiya's gates ran beside it: load average about 2.6, median CI width 0.8 %, p90 4.2 %, max 13 %), so a ratio within the Rust row's own noise is read as parity (port plan §5 P4).
 
-**80 Rust benches:** 68 twinned, 0 not applicable, 12 pending.
+**80 Rust benches:** 69 twinned, 0 not applicable, 11 pending.
 
 | Rust bench | Rust | Cyrius twin | Cyrius | Cyrius / Rust |
 |---|---:|---|---:|---:|
@@ -89,4 +89,4 @@
 | `rf/input_impedance_complex` | 7.43 ns | `rf/input_impedance_complex` | 221.00 ns | 29.7× |
 | `rf/single_stub_match` | 128.46 ns | `rf/single_stub_match` | 1.88 µs | 14.7× |
 | `rf/parse_touchstone_s2p_201` | 79.42 µs | `rf/parse_touchstone_s2p_201` | 538.21 µs | 6.8× |
-| `rf/write_touchstone_s2p_201` | 213.82 µs | pending (M4) | — | — |
+| `rf/write_touchstone_s2p_201` | 213.82 µs | `rf/write_touchstone_s2p_201` | 3.86 ms | 18.0× |

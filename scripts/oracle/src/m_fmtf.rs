@@ -7,7 +7,8 @@
 //! every power of ten from 1e-323 to 1e308 and its neighbours, the 2^53 integer edge, serde_json's
 //! −5/+15 exponent thresholds, short decimals, 300 exact ties (where the two printers differ: core
 //! rounds up, zmij to even), and seeded random bit patterns, each with both signs for part of the grid. bijli's second
-//! addition (M2 part 1b) is the fixed precision `{x:.p}`, for p ∈ {0, 1, 4}.
+//! addition (M2 part 1b) is the fixed precision `{x:.p}`, for p ∈ {0, 1, 4}, and its third (M4 part 1c-2) the
+//! exponential `{x:e}`, Touchstone's writer's form, over the whole grid.
 
 use crate::grids::{Rng, pow2, specials};
 use crate::tsv::{Class, Module, f, i, s};
@@ -128,6 +129,11 @@ pub fn emit() -> Module {
         for p in [0_i64, 1, 4] {
             m.row("f64::fmt_fixed", Class::A, &[f(x), i(p)], &[s(format!("{x:.*}", usize::try_from(p).unwrap_or(0)))]);
         }
+    }
+    // bijli's addition (M4 part 1c-2): Rust's `LowerExp` (`{x:e}`), Touchstone's writer's every number, over the whole
+    // grid (the ties among it: the same upper-rounded digits as Display).
+    for &x in &xs {
+        m.row("f64::fmt_exp", Class::A, &[f(x)], &[s(format!("{x:e}"))]);
     }
     m
 }

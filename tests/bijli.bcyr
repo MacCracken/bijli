@@ -958,6 +958,20 @@ fn main(): i64 {
     }
     bench_batch_stop(b71, 2000);
     bench_report(b71);
+    # M4 part 1c-2: the same file parsed once, then written in MA into one builder (emptied through its length word).
+    var t72a, v72a = bj_parse_touchstone(_bj_tx_ptr(&st71), _bj_tx_len(&st71), 2, &td71);
+    var sb72 = str_builder_new();
+    var b72 = bench_new("rf/write_touchstone_s2p_201");
+    bench_batch_start(b72);
+    for (var k = 0; k < 2000; k = k + 1) {
+        store64(sb72 + 8, 0);
+        var t72, v72 = bj_try_write_touchstone(&td71, BJ_TOUCHSTONE_FORMAT_MAGNITUDE_ANGLE, sb72);
+        rfsum = rfsum + f64_from(load64(sb72 + 8));
+    }
+    bench_batch_stop(b72, 2000);
+    bench_report(b72);
+    BjTouchstoneData_free(&td71);
+    if (is_err_result(t72a) == 1 || v72a == 7) { println("."); }
     if (rfsum == 7.0) { println("."); }
 
     # The JSON (src/json.cyr): a FieldVector written into one builder, emptied each time through its length word

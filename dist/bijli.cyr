@@ -15,9 +15,9 @@ include "lib/sakshi.cyr"
 include "lib/result.cyr"
 include "lib/ganita.cyr"
 include "lib/math.cyr"
-include "lib/bayan.cyr"
 include "lib/str.cyr"
 include "lib/alloc.cyr"
+include "lib/bayan.cyr"
 include "lib/fnptr.cyr"
 
 # --- constants.cyr ---
@@ -11405,6 +11405,38 @@ fn _bj_fmt_f64_debug(t, x: f64) {
         return 0;
     }
     _bj_tx_positional(t, &digits, n, k, 1);
+    return 0;
+}
+
+# Appends x as Rust's `LowerExp` (`{:e}`) writes an f64 (core's `float_to_exponential_common_shortest`): the shortest
+# digits as Display, always as d.ddd and `e` and the exponent, no `+` (`1e9`, `1.5e9`, `-2.5e-3`, `1.00000025e-3`,
+# `5e-324`); `0e0`, `-0e0`, `inf`, `-inf`, `NaN`. Touchstone's writer prints every number this way (M4 part 1c-2).
+# Mirrors `<f64 as LowerExp>::fmt`.
+fn _bj_fmt_f64_exp(t, x: f64) {
+    var bits = _bj_bits(x);
+    if (x != x) {
+        _bj_tx_cstr(t, "NaN");
+        return 0;
+    }
+    if (bits < 0) { _bj_tx_putc(t, 45); }
+    var mag = bits & 0x7FFFFFFFFFFFFFFF;
+    if (mag == 0x7FF0000000000000) {
+        _bj_tx_cstr(t, "inf");
+        return 0;
+    }
+    if (mag == 0) {
+        _bj_tx_cstr(t, "0e0");
+        return 0;
+    }
+    var digits[24];
+    var n, k = _bj_shortest(mag, &digits, 0);
+    _bj_tx_putc(t, load8(&digits));
+    if (n > 1) {
+        _bj_tx_putc(t, 46);
+        _bj_tx_digits(t, &digits, 1, n);
+    }
+    _bj_tx_putc(t, 101);
+    _bj_tx_i64(t, k - 1);
     return 0;
 }
 
@@ -26411,8 +26443,8 @@ fn _bj_rf_bad_cx(head, re: f64, im: f64): i64 {
 }
 
 # 0 when value is finite and positive, else InvalidParameter "{name} must be finite and positive, got {value}"
-# recorded and its code returned. Mirrors rf.rs's `require_positive_finite`.
-fn _bj_rf_require(name, value: f64): i64 {
+# recorded and its code returned. Mirrors rf.rs's `require_positive_finite` (public for src/touchstone.cyr).
+public fn _bj_rf_require(name, value: f64): i64 {
     if (_bj_rf_pos(value) == 1) { return 0; }
     var t = _bj_err_reason(BJ_ERR_INVALID_PARAMETER);
     _bj_tx_cstr(t, name);
@@ -27054,9 +27086,9 @@ fn _bj_rf_index(ports, i, j): i64 {
 }
 
 # rf.rs's z0_equal, |a − b| ≤ 10⁻¹²·max(|a|, |b|), with both values finite: Rust's accepted an infinite impedance as
-# equal to any finite one (∞ ≤ 10⁻¹²·∞; ADR 0002 row 37).
+# equal to any finite one (∞ ≤ 10⁻¹²·∞; ADR 0002 row 37). Public for src/touchstone.cyr's writer.
 #must_use
-fn _bj_rf_z0_equal(a: f64, b: f64): i64 {
+public fn _bj_rf_z0_equal(a: f64, b: f64): i64 {
     if (_bj_rf_fin2(a, b) == 0) { return 0; }
     var d: f64 = f64_abs(a - b);
     var aa: f64 = f64_abs(a);
@@ -27468,8 +27500,9 @@ var _bj_ts_ws: i64[25] = {
 
 # --- touchstone.cyr ---
 
-# touchstone.cyr — rf.rs's Touchstone v1.1 I/O (M4 part 1c-1: the reader, `parse_touchstone` into a
-# BjTouchstoneData, and the TouchstoneFormat names). The writer, try_write_touchstone, is M4 part 1c-2's.
+# touchstone.cyr — rf.rs's Touchstone v1.1 I/O: (M4 part 1c-1) the reader, `parse_touchstone` into a
+# BjTouchstoneData, and the TouchstoneFormat names; (M4 part 1c-2) the writer, `try_write_touchstone`, every number in
+# Rust's `{:e}` form (src/fmtf.cyr's _bj_fmt_f64_exp), and BjTouchstoneData_new for data to write.
 #
 # The content is bytes read as UTF-8, as Rust's `&str` is: bytes that are not UTF-8 are refused (ADR 0002 row 38).
 # Rust's str methods are followed exactly:
@@ -27531,7 +27564,9 @@ fn _bj_ts_f64p(a): *f64 {
 fn _bj_ts_alloc(ports, z0: f64, points, out: *BjTouchstoneData): i64 {
     var per = ports * ports * 16 + ports * 8;
     var blk = 0;
-    if (points > 0 && points < 1099511627776 / (32 + per)) { blk = fl_calloc(points * (32 + per)); }
+    if (ports >= 0 && ports < 1048576 && points > 0 && points < 1099511627776 / (32 + per)) {
+        blk = fl_calloc(points * (32 + per));
+    }
     if (blk == 0 && points != 0) {
         var t = _bj_err_reason(BJ_ERR_ALLOCATION);
         _bj_tx_cstr(t, "Touchstone data of ");
@@ -27558,6 +27593,24 @@ fn _bj_ts_alloc(ports, z0: f64, points, out: *BjTouchstoneData): i64 {
     return 0;
 }
 
+# A new BjTouchstoneData of `points` frequencies (0 Hz) and as many ports-port matrices (every entry 0, every
+# reference impedance z0) into *out, for bj_try_write_touchstone: Ok(0), or Err(Allocation) with out untouched. Nothing
+# is checked, as Rust's struct literal checks nothing: the writer does. Fill it with set_frequency and each matrix_at's
+# set and set_z0.
+#must_use
+public fn BjTouchstoneData_new(ports, z0: f64, points, out: *BjTouchstoneData): Result {
+    if (ports < 0 || points < 0) {
+        var t = _bj_err_reason(BJ_ERR_ALLOCATION);
+        _bj_tx_cstr(t, "Touchstone data of ");
+        _bj_tx_u64(t, points);
+        _bj_tx_cstr(t, " points");
+        return Err(BJ_ERR_ALLOCATION);
+    }
+    var e = _bj_ts_alloc(ports, z0, points, out);
+    if (e != 0) { return Err(e); }
+    return Ok(0);
+}
+
 # Gives d's block back and empties it (no points).
 public fn BjTouchstoneData_free(d: *BjTouchstoneData): i64 {
     if (d.frequencies != 0) { fl_free(d.frequencies); }
@@ -27578,6 +27631,22 @@ impl BjTouchstoneData {
         var fp: *f64 = _bj_ts_f64p(self.frequencies);
         var f: f64 = fp[k];
         return f;
+    }
+
+    # Sets frequency k (Rust's `frequencies[k] = f`, Hz): Ok(0), or Err(InvalidParameter) unless 0 ≤ k < points. The
+    # value is not checked, as Rust's field isn't: the writer checks it.
+    #must_use
+    public fn set_frequency(self, k, f: f64): Result {
+        if (k < 0 || k >= self.points) {
+            var t = _bj_err_reason(BJ_ERR_INVALID_PARAMETER);
+            _bj_tx_cstr(t, "frequency index must be below ");
+            _bj_tx_u64(t, self.points);
+            _bj_tx_cstr(t, ", got ");
+            _bj_tx_u64(t, k);
+            return Err(BJ_ERR_INVALID_PARAMETER);
+        }
+        store64(self.frequencies + k * 8, _bj_bits(f));
+        return Ok(0);
     }
 
     # Rust's `&s_matrices[k]`: the address of matrix k (in the data's block: read or set its entries, never free it),
@@ -28191,6 +28260,219 @@ public fn bj_parse_touchstone(content, len, ports, out: *BjTouchstoneData): Resu
     }
     if (st[0] != 0) { fl_free(st[0]); }
     if (e != 0) { return Err(e); }
+    return Ok(0);
+}
+
+# ── the writer (M4 part 1c-2) ───────────────────────────────────────────────────────────────────────────────────
+
+# Starts InvalidParameter "S-matrix #{k} <head>" and returns its BjText.
+fn _bj_ts_matrix_err(k, head): i64 {
+    var t = _bj_err_reason(BJ_ERR_INVALID_PARAMETER);
+    _bj_tx_cstr(t, "S-matrix #");
+    _bj_tx_u64(t, k);
+    _bj_tx_cstr(t, head);
+    return t;
+}
+
+# The consistency the writer needs: 0, or the InvalidParameter code recorded. The port count, R, then per point the
+# frequency (finite, non-negative, strictly increasing), the matrix's ports, its reference impedances (all equal to R:
+# z0_equal, both finite, ADR 0002 row 37) and its entries (finite). Rust's lengths can't disagree here (ADR 0002 row
+# 36). Mirrors rf.rs's `validate_touchstone`.
+fn _bj_ts_validate(d: *BjTouchstoneData): i64 {
+    var n = d.ports;
+    if (n <= 0 || n > _BJ_TS_MAX_PORTS) {
+        var t = _bj_err_reason(BJ_ERR_INVALID_PARAMETER);
+        _bj_tx_cstr(t, "Touchstone port count must be in 1..=256, got ");
+        _bj_tx_u64(t, n);
+        return BJ_ERR_INVALID_PARAMETER;
+    }
+    var r: f64 = d.z0;
+    var e = _bj_rf_require("Touchstone reference impedance", r);
+    if (e != 0) { return e; }
+    var prev: f64 = 0.0;
+    for (var k = 0; k < d.points; k = k + 1) {
+        var f: f64 = d.frequency_at(k);
+        var ok = 0;
+        if (_bj_is_finite(f) == 1 && f >= 0.0) { ok = 1; }
+        if (ok == 0) {
+            var u = _bj_err_reason(BJ_ERR_INVALID_PARAMETER);
+            _bj_tx_cstr(u, "frequency #");
+            _bj_tx_u64(u, k);
+            _bj_tx_cstr(u, " must be finite and non-negative, got ");
+            _bj_fmt_f64_display(u, f);
+            return BJ_ERR_INVALID_PARAMETER;
+        }
+        if (k > 0 && f <= prev) {
+            var w = _bj_err_reason(BJ_ERR_INVALID_PARAMETER);
+            _bj_tx_cstr(w, "Touchstone frequencies must be strictly increasing (#");
+            _bj_tx_u64(w, k);
+            _bj_tx_cstr(w, ": ");
+            _bj_fmt_f64_display(w, f);
+            _bj_tx_cstr(w, ")");
+            return BJ_ERR_INVALID_PARAMETER;
+        }
+        prev = f;
+        var m: *BjSMatrix = d.matrix_at(k);
+        if (m.ports != n) {
+            var x = _bj_ts_matrix_err(k, " has ");
+            _bj_tx_u64(x, m.ports);
+            _bj_tx_cstr(x, " ports, expected ");
+            _bj_tx_u64(x, n);
+            return BJ_ERR_INVALID_PARAMETER;
+        }
+        var zp: *f64 = _bj_ts_f64p(m.z0);
+        var same = 1;
+        for (var j = 0; j < n; j = j + 1) {
+            if (_bj_rf_z0_equal(zp[j], r) == 0) { same = 0; }
+        }
+        if (same == 0) {
+            var y = _bj_ts_matrix_err(k, " reference impedances [");
+            for (var i = 0; i < n; i = i + 1) {
+                if (i > 0) { _bj_tx_cstr(y, ", "); }
+                _bj_fmt_f64_debug(y, zp[i]);
+            }
+            _bj_tx_cstr(y, "] differ from the file's R ");
+            _bj_fmt_f64_display(y, r);
+            return BJ_ERR_INVALID_PARAMETER;
+        }
+        var sp: *f64 = _bj_ts_f64p(m.s);
+        var fin = 1;
+        for (var q = 0; q < 2 * n * n; q = q + 1) {
+            if (_bj_is_finite(sp[q]) == 0) { fin = 0; }
+        }
+        if (fin == 0) {
+            _bj_ts_matrix_err(k, " contains non-finite values");
+            return BJ_ERR_INVALID_PARAMETER;
+        }
+    }
+    return 0;
+}
+
+# Writes the pair "  {v1:e}  {v2:e}" of the entry re + j·im in the format: (re, im) for RI; for MA (|S|, arg S in
+# degrees) and for DB (20 log₁₀ max(|S|, MIN_POSITIVE), arg S in degrees), |S| = √(re² + im²) and arg S = atan2(im,
+# re) as hisab's. 0, or InvalidParameter "S-parameter {S} cannot be written in {format:?} format" recorded when either
+# value isn't finite (|S|² past DBL_MAX). Mirrors rf.rs's `push_touchstone_pair` and `format_complex_pair`.
+fn _bj_ts_pair(t, re: f64, im: f64, format): i64 {
+    var v1: f64 = re;
+    var v2: f64 = im;
+    if (format != BJ_TOUCHSTONE_FORMAT_REAL_IMAG) {
+        var nrm: f64 = f64_sqrt(re * re + im * im);
+        v1 = nrm;
+        if (format == BJ_TOUCHSTONE_FORMAT_DB_ANGLE) {
+            var mn: f64 = _bj_from_bits(0x0010000000000000);
+            if (nrm < mn) { nrm = mn; }
+            var lg: f64 = _bj_log10(nrm);
+            v1 = 20.0 * lg;
+        }
+        var g: f64 = _bj_atan2(im, re);
+        v2 = _bj_to_degrees(g);
+    }
+    if (_bj_is_finite(v1) == 0 || _bj_is_finite(v2) == 0) {
+        var u = _bj_err_reason(BJ_ERR_INVALID_PARAMETER);
+        _bj_tx_cstr(u, "S-parameter ");
+        var z: BjComplex = BjComplex_new(re, im);
+        z.display(u);
+        _bj_tx_cstr(u, " cannot be written in ");
+        _bj_tx_cstr(u, _bj_ts_format_name(format));
+        _bj_tx_cstr(u, " format");
+        return BJ_ERR_INVALID_PARAMETER;
+    }
+    _bj_tx_cstr(t, "  ");
+    _bj_fmt_f64_exp(t, v1);
+    _bj_tx_cstr(t, "  ");
+    _bj_fmt_f64_exp(t, v2);
+    return 0;
+}
+
+# The records of d, after the header, into t: 0, or a pair's code recorded.
+fn _bj_ts_records(t, d: *BjTouchstoneData, format): i64 {
+    var n = d.ports;
+    for (var k = 0; k < d.points; k = k + 1) {
+        var f: f64 = d.frequency_at(k);
+        var g: f64 = f / 1000000000.0;
+        _bj_fmt_f64_exp(t, g);
+        var m: *BjSMatrix = d.matrix_at(k);
+        var sp: *f64 = _bj_ts_f64p(m.s);
+        if (n == 2) {
+            for (var q = 0; q < 4; q = q + 1) {
+                var at = q;
+                if (q == 1) { at = 2; }
+                if (q == 2) { at = 1; }
+                var e = _bj_ts_pair(t, sp[2 * at], sp[2 * at + 1], format);
+                if (e != 0) { return e; }
+            }
+        } else {
+            var first = 1;
+            for (var i = 0; i < n; i = i + 1) {
+                for (var j = 0; j < n; j = j + 1) {
+                    if (j % 4 == 0) {
+                        if (first == 0) { _bj_tx_cstr(t, "\n "); }
+                        first = 0;
+                    }
+                    var e2 = _bj_ts_pair(t, sp[2 * (i * n + j)], sp[2 * (i * n + j) + 1], format);
+                    if (e2 != 0) { return e2; }
+                }
+            }
+        }
+        _bj_tx_putc(t, 10);
+    }
+    return 0;
+}
+
+# Appends d as Touchstone v1.1 text to the builder sb: `! Touchstone file generated by bijli`, `# GHz S <fmt> R <z0>`,
+# then one record per frequency, every number in Rust's `{:e}` form (the shortest digits that read back, so the text
+# parses with bj_parse_touchstone to the same values up to GHz ↔ Hz). 1- and 2-port records are one line (2-port
+# order `f N11 N21 N12 N22`); for 3 ports and more each matrix row starts a new line, at most four pairs to a line. In
+# DB |S| is clamped to MIN_POSITIVE, so a zero writes as a finite dB value. Ok(0), or Err with sb as it was:
+# InvalidParameter when d is inconsistent (ports not 1 to 256, R not finite and positive, frequencies not finite,
+# non-negative and strictly increasing, a matrix's impedances not R's, a non-finite entry) or an entry can't be written
+# in the format; Allocation when the text's buffer can't be had or sb can't grow. Mirrors `rf::try_write_touchstone`.
+#must_use
+public fn bj_try_write_touchstone(d: *BjTouchstoneData, format, sb): Result {
+    var e = _bj_ts_validate(d);
+    if (e != 0) { return Err(e); }
+    var n = d.ports;
+    if (_bj_log_on(4) == 1) {
+        var lb[128];
+        var lt[24];
+        _bj_tx_init(&lt, &lb, 128);
+        _bj_tx_cstr(&lt, "writing Touchstone data ports=");
+        _bj_tx_u64(&lt, n);
+        _bj_tx_cstr(&lt, " points=");
+        _bj_tx_u64(&lt, d.points);
+        _bj_tx_cstr(&lt, " format=");
+        _bj_tx_cstr(&lt, _bj_ts_format_name(format));
+        _bj_log_text(4, &lt);
+    }
+    var per = 32 + n * n * 60;
+    var buf = 0;
+    if (d.points < 1099511627776 / per) { buf = fl_alloc(512 + d.points * per + 1); }
+    if (buf == 0) {
+        _bj_tx_cstr(_bj_err_reason(BJ_ERR_ALLOCATION), "the Touchstone text's buffer");
+        return Err(BJ_ERR_ALLOCATION);
+    }
+    var t[24];
+    _bj_tx_init(&t, buf, 512 + d.points * per);
+    _bj_tx_cstr(&t, "! Touchstone file generated by bijli\n# GHz S ");
+    if (format == BJ_TOUCHSTONE_FORMAT_REAL_IMAG) { _bj_tx_cstr(&t, "RI"); }
+    elif (format == BJ_TOUCHSTONE_FORMAT_DB_ANGLE) { _bj_tx_cstr(&t, "DB"); }
+    else { _bj_tx_cstr(&t, "MA"); }
+    _bj_tx_cstr(&t, " R ");
+    var r: f64 = d.z0;
+    _bj_fmt_f64_display(&t, r);
+    _bj_tx_putc(&t, 10);
+    var e2 = _bj_ts_records(&t, d, format);
+    if (e2 != 0) {
+        fl_free(buf);
+        return Err(e2);
+    }
+    store8(buf + _bj_tx_len(&t), 0);
+    var full = str_builder_add_cstr_a(default_alloc(), sb, buf);
+    fl_free(buf);
+    if (full != 0) {
+        _bj_tx_cstr(_bj_err_reason(BJ_ERR_ALLOCATION), "the Touchstone text's builder can't grow");
+        return Err(BJ_ERR_ALLOCATION);
+    }
     return Ok(0);
 }
 

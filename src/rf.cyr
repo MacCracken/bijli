@@ -66,8 +66,8 @@ fn _bj_rf_bad_cx(head, re: f64, im: f64): i64 {
 }
 
 # 0 when value is finite and positive, else InvalidParameter "{name} must be finite and positive, got {value}"
-# recorded and its code returned. Mirrors rf.rs's `require_positive_finite`.
-fn _bj_rf_require(name, value: f64): i64 {
+# recorded and its code returned. Mirrors rf.rs's `require_positive_finite` (public for src/touchstone.cyr).
+public fn _bj_rf_require(name, value: f64): i64 {
     if (_bj_rf_pos(value) == 1) { return 0; }
     var t = _bj_err_reason(BJ_ERR_INVALID_PARAMETER);
     _bj_tx_cstr(t, name);
@@ -709,9 +709,9 @@ fn _bj_rf_index(ports, i, j): i64 {
 }
 
 # rf.rs's z0_equal, |a − b| ≤ 10⁻¹²·max(|a|, |b|), with both values finite: Rust's accepted an infinite impedance as
-# equal to any finite one (∞ ≤ 10⁻¹²·∞; ADR 0002 row 37).
+# equal to any finite one (∞ ≤ 10⁻¹²·∞; ADR 0002 row 37). Public for src/touchstone.cyr's writer.
 #must_use
-fn _bj_rf_z0_equal(a: f64, b: f64): i64 {
+public fn _bj_rf_z0_equal(a: f64, b: f64): i64 {
     if (_bj_rf_fin2(a, b) == 0) { return 0; }
     var d: f64 = f64_abs(a - b);
     var aa: f64 = f64_abs(a);

@@ -4664,3 +4664,66 @@ Part 1c runs as two bites: 1c-1 the reader, 1c-2 the writer (Rust's `{:e}` form)
   measured, 0 pending, 78,335 accepted (ADR 01: 29,506; ADR 0002: 48,829)** over 584,844 rows; **all 408 digests
   equal**, HEAD's 407 unchanged. `rf.tcyr` passes on all three. The gate is clean (17 steps, no warnings; execution
   coverage 315 of 315 functions), and `cyrius fuzz` passes.
+
+## 79. M4 part 1c-2: writing Touchstone (2026-11-15)
+
+- **`src/fmtf.cyr` gains `_bj_fmt_f64_exp`**, Rust's `LowerExp` (`{x:e}`): the shortest digits Display prints (core's
+  upper rounding of exact ties), always as `d.ddd` + `e` + the exponent with no `+` (`1e9`, `1.5e9`, `-2.5e-3`,
+  `1.00000025e-3`), and `0e0`, `-0e0`, `inf`, `-inf`, `NaN`. A probe on rustc 1.100.0 fixed the form first.
+  `fmtf.tsv` grows by 18,788 rows, the whole grid (every binade and power of ten with their neighbours, the 2^53
+  edge, the 751 exact ties, seeded bit patterns) through `{x:e}`, appended after the fixed-precision rows; the
+  transcription (`rust_exp`) agreed with each on its first run.
+- **`bj_try_write_touchstone(data, format, sb)`**, Rust's `try_write_touchstone`:
+  - the validation in Rust's order: the port count (1 to 256), R (finite, positive), then per point the frequency
+    (finite, non-negative, strictly increasing), the matrix's port count, its impedances against R (row 37's
+    `z0_equal`, now `public fn _bj_rf_z0_equal` beside `_bj_rf_require`, src/rf.cyr's helpers the writer shares) and
+    its entries (finite). Rust's frequency and matrix counts can't disagree here (ADR 0002 row 36);
+  - the text: the comment line, `# GHz S <fmt> R <z0>` (R in Display form), each record's frequency in GHz and its
+    pairs as `  {v1:e}  {v2:e}`. 2-port records are `f N11 N21 N12 N22` on one line; for 3 ports and more each row
+    starts a line and wraps after four pairs (`\n `). MA is (|S|, arg S in degrees), DB (20 log₁₀ max(|S|,
+    MIN_POSITIVE), arg S), with hisab's |S| = √(re² + im²): an entry whose |S|² passes DBL_MAX can't be written in MA
+    or DB, as in Rust (a range-edge candidate below);
+  - the text is built in one fl_alloc buffer sized for the data (60 bytes a pair is more than the longest), then
+    appended to the builder in one call, so a refusal (or a failed allocation) leaves the builder as it was.
+- **`BjTouchstoneData_new(ports, z0, points, out)` and `set_frequency(k, f)`** build data to write, checking nothing
+  (as Rust's struct literal), the writer checks it.
+- **ADR 0002 row 37 in the writer**: Rust's `z0_equal` took a matrix impedance of ±∞ for the file's R and wrote the
+  file; the port refuses it ("S-matrix #k reference impedances [50.0, inf] differ from the file's R 50"). `rf.adr.tsv`
+  now maps 16 rows, the 4 writes among them (their port outputs taken on MPFR's primitives).
+- **`rf.tsv` grows by 273 rows (13,720)**, appended. A row's inputs are the data, as `parse_touchstone`'s outputs, and
+  the format (`i:` 0 MA, 1 RI, 2 DB, the port's enum); its output the text (`s:`) or the error. The grids:
+  - the Rust tests' data (the one-port pair, the 2-port order, 3-, 4-, 5-, 8-, 9- and 16-port layouts, low
+    frequencies and tiny entries, a zero entry in DB) in each format;
+  - every rule of the validation: ports 0 and 257 (the latter with no points: a 257-port matrix would put 66,049
+    entries in the row, 3 MB), R at 0, −0, negative, NaN, ∞, 5·10⁻³²⁴ and 10³⁰⁰ (long Display forms), frequencies
+    at 0, −0, negative, NaN, ∞, 10³⁰⁰ and 5·10⁻³²⁴, equal and decreasing, a matrix's impedance at 75, ±∞, NaN, 0 and
+    within and past 10⁻¹² of R, a non-finite entry;
+  - entries at each format's edges: signed zeros in every combination and the four quadrants' angles, subnormals
+    and DB's clamp at MIN_POSITIVE, |S|² just under and past DBL_MAX;
+  - 60 seeded data sets (1 to 5 ports, 1 to 4 points, entries over 10^±12).
+
+  The transcription (`rf_write_touchstone`) agreed with every row on its first run, and a perturbed first output was
+  caught on each. `rf.cr.tsv` gains 21 rows where glibc's atan2 or log10 misrounds a written digit.
+- **Rust tests**: the last 6 of rf.rs's are ported (`tests/rf.tcyr`, 205 assertions), the round trips among them:
+  RI, MA and DB text read back by `bj_parse_touchstone`, the multi-port layouts bit for bit. In
+  `test_write_touchstone_inconsistent_does_not_panic` two cases can't be built (a frequency count unlike the
+  matrices', a matrix of another port count: row 36), and its deprecated `write_touchstone` isn't carried (row 1); the
+  other four are ported. `test_write_touchstone_deprecated_matches_try` is n/a (row 1). rf.rs's 80 tests are all
+  accounted for: 75 ported, 5 n/a. The ledger: 597 ported, 8 n/a, 253 pending of 858. The Cyrius-only groups pin
+  the MA and RI text byte for byte, the header alone for no points, the reasons, the builder untouched by a refusal,
+  and the freelist's arena over 2,000 writes.
+- **Surface parity**: `try_write_touchstone` leaves `IN_PROGRESS` (441 items matched); only rf's six serde impls
+  remain, for part 1d. The API snapshot gains 2 public functions (2,062).
+- **For M4's range-edge Part**: the writer's MA and DB refuse an entry whose |S| is representable but whose |S|²
+  isn't (hisab's √(re² + im²)), as Rust does: 10²⁰⁰ + j cannot be written in DB.
+- **Benchmarks** (the `rf/write_touchstone_s2p_201` twin, so 69 of 80 are twinned). An interleaved A/B against part
+  1c-1's tree (three rounds, load 0.7 to 1.1) gave 3.89, 3.86 and 3.86 ms, for Rust's 213.82 µs (18×), and left every
+  other row unchanged (median ratio 1.00 over 88 rows; the outliers 1 to 3 ns on the smallest rows). The write prints
+  1,809 numbers (the 201 frequencies and 804 pairs), and src/fmtf.cyr's shortest digits, Burger and Dybvig's
+  algorithm on bignums, cost about 1.8 µs a number (the `fmt_f64_display` row, 1.82 µs): about 3.3 ms of the 3.86.
+  The 804 atan2 for the angles are about 0.27. A finding: a faster shortest-digit generator (Ryu's or Grisu's with
+  this one as the fallback) would serve every writer, the JSON's and the error texts' among them.
+- **Result, every target** (x86_64 ELF, x86_64 PE, aarch64): **17 modules, 0 failing; 525,545 ok, 0 failed, 0
+  measured, 0 pending, 78,360 accepted (ADR 01: 29,527; ADR 0002: 48,833)** over 603,905 rows; **all 410 digests
+  equal**, HEAD's 408 unchanged. `rf.tcyr` passes on all three. The gate is clean (17 steps, no warnings; execution
+  coverage 317 of 317 functions), and `cyrius fuzz` passes.

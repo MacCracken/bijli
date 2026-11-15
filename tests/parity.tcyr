@@ -1047,6 +1047,8 @@ fn _par_fmtf(fp, fl): i64 {
         _bj_fmt_f64_json(&t, x);
     } elif (_par_eq(fp, fl, "f64::fmt_fixed") == 1) {
         _bj_fmt_f64_fixed(&t, x, _par_in(1));
+    } elif (_par_eq(fp, fl, "f64::fmt_exp") == 1) {
+        _bj_fmt_f64_exp(&t, x);
     } else {
         return 0;
     }
@@ -3051,6 +3053,33 @@ fn _par_rf_ts(fp, fl): i64 {
         }
         for (var j = 0; j < d.points; j = j + 1) { _par_got_sm(d.matrix_at(j)); }
         BjTouchstoneData_free(&d);
+        return 1;
+    }
+    if (_par_eq(fp, fl, "rf::try_write_touchstone") == 1) {
+        var w: BjTouchstoneData;
+        var points = _par_in(2);
+        var t2, v2 = BjTouchstoneData_new(_par_in(0), _par_in(1), points, &w);
+        var k2 = 3;
+        for (var q = 0; q < points; q = q + 1) {
+            store64(w.frequencies + q * 8, _par_in(k2));
+            k2 = k2 + 1;
+        }
+        for (var m = 0; m < points; m = m + 1) {
+            var mp: *BjSMatrix = w.matrix_at(m);
+            var cnt = _par_in(k2 + 1);
+            for (var e = 0; e < cnt; e = e + 1) { store64(mp.s + e * 8, _par_in(k2 + 2 + e)); }
+            var zk = k2 + 2 + cnt;
+            var nz = _par_in(zk);
+            for (var z = 0; z < nz; z = z + 1) { store64(mp.z0 + z * 8, _par_in(zk + 1 + z)); }
+            k2 = zk + 1 + nz;
+        }
+        var sb = str_builder_new();
+        var t3, v3 = bj_try_write_touchstone(&w, _par_in(k2), sb);
+        BjTouchstoneData_free(&w);
+        if (is_err_result(t3) == 1) { return _par_got_error(v3) + 1; }
+        var txt = str_builder_build(sb);
+        _par_got_text(str_data(txt), str_len(txt));
+        if (is_err_result(t2) == 1) { return 0 - 1; }
         return 1;
     }
     return 0;

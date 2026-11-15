@@ -22,17 +22,21 @@
 //! M4 part 1c-1 appends `parse_touchstone`: its inputs are the content (`s:`) and the port count, its outputs the
 //! data (`i:<ports>`, `f:<z0>`, `v:<points>` and the frequencies, then each matrix as above) or the error. It is class
 //! C: MA and DB records take a sine and cosine of the angle, and DB 10^(dB/20).
+//!
+//! M4 part 1c-2 appends `try_write_touchstone`: its inputs are the data (as `parse_touchstone`'s outputs) and the
+//! format (`i:` 0 MagnitudeAngle, 1 RealImag, 2 DbAngle, the port's enum), its output the text (`s:`) or the error.
+//! Class C: MA and DB write √(re² + im²), atan2 in degrees and, for DB, log10.
 
 use crate::grids::{Rng, specials};
 use crate::m_field::res_f;
 use crate::tsv::{Class, Module, Tok, err, f, i, s};
 use bijli::polarization::Complex;
 use bijli::rf::{
-    SMatrix, TouchstoneData, characteristic_impedance_lossless, characteristic_impedance_lossy, circular_array_factor,
-    denormalize_impedance, gamma_from_z, input_impedance_lossless_complex, insertion_loss, linear_array_factor,
-    mismatch_loss, normalize_impedance, parse_touchstone, phase_velocity, planar_array_factor, propagation_constant,
-    quarter_wave_transformer, reflection_coefficient, reflection_coefficient_complex, return_loss, s_to_z,
-    single_stub_match, single_stub_match_complex, vswr, z_from_gamma,
+    SMatrix, TouchstoneData, TouchstoneFormat, characteristic_impedance_lossless, characteristic_impedance_lossy,
+    circular_array_factor, denormalize_impedance, gamma_from_z, input_impedance_lossless_complex, insertion_loss,
+    linear_array_factor, mismatch_loss, normalize_impedance, parse_touchstone, phase_velocity, planar_array_factor,
+    propagation_constant, quarter_wave_transformer, reflection_coefficient, reflection_coefficient_complex,
+    return_loss, s_to_z, single_stub_match, single_stub_match_complex, try_write_touchstone, vswr, z_from_gamma,
 };
 use std::collections::BTreeSet;
 use std::f64::consts::{FRAC_PI_2, FRAC_PI_4, PI, TAU};
@@ -649,6 +653,7 @@ pub fn emit() -> Module {
 
     emit_1b(r, &mut rng);
     emit_1c1(r, &mut rng);
+    emit_1c2(r, &mut rng);
 
     rows.m
 }
@@ -1150,5 +1155,130 @@ fn emit_1c1(r: &mut Rows, rng: &mut Rng) {
             c.push('\n');
         }
         r.parse(&c, n);
+    }
+}
+
+// ── M4 part 1c-2: writing Touchstone ─────────────────────────────────────────────────────────────────────────────
+
+/// The formats in the port's enum order (BjTouchstoneFormat: MagnitudeAngle 0, RealImag 1, DbAngle 2).
+const FORMATS: [TouchstoneFormat; 3] =
+    [TouchstoneFormat::MagnitudeAngle, TouchstoneFormat::RealImag, TouchstoneFormat::DbAngle];
+
+/// Data of `ports` ports at the given frequencies, each matrix's entries `ent(point, row-major index)` and impedances
+/// `zs(point, port)`.
+fn ts_data(
+    ports: usize,
+    z0: f64,
+    freqs: &[f64],
+    ent: impl Fn(usize, usize) -> (f64, f64),
+    zs: impl Fn(usize, usize) -> f64,
+) -> TouchstoneData {
+    let s_matrices = (0..freqs.len())
+        .map(|k| {
+            let s: Vec<(f64, f64)> = (0..ports * ports).map(|q| ent(k, q)).collect();
+            let z: Vec<f64> = (0..ports).map(|p| zs(k, p)).collect();
+            sm_of(ports, &s, &z)
+        })
+        .collect();
+    TouchstoneData { ports, z0, frequencies: freqs.to_vec(), s_matrices }
+}
+
+impl Rows {
+    fn write(&mut self, d: &TouchstoneData, fmt: usize) {
+        let mut ins = ts_toks(d);
+        ins.push(i(i64::try_from(fmt).unwrap_or(0)));
+        self.row("rf::try_write_touchstone", Class::C, &ins, || {
+            res(try_write_touchstone(black_box(d), black_box(FORMATS[fmt])), |t| vec![s(t.clone())])
+        });
+    }
+
+    fn write_all(&mut self, d: &TouchstoneData) {
+        for fmt in 0..3 {
+            self.write(d, fmt);
+        }
+    }
+}
+
+/// Part 1c-2's grids: the Rust tests' data (the one-port pair, the 2-port order, 3-, 4-, 5- and 9-ports' layout, the
+/// precision of low frequencies and tiny entries, a zero entry in DB), in each format; every rule of the validation
+/// (the port count, R, each frequency, a matrix's impedances against R within and past 10⁻¹², ±∞ and NaN among them,
+/// a non-finite entry); entries at the edges of each format (zeros of either sign and the quadrants' angles,
+/// subnormals and DB's MIN_POSITIVE clamp, |S|² past DBL_MAX); R and frequencies whose Display and `{:e}` forms are
+/// long; and seeded data.
+fn emit_1c2(r: &mut Rows, rng: &mut Rng) {
+    let one = |e: [(f64, f64); 2]| ts_data(1, 50.0, &[1e9, 2e9], move |k, _| e[k], |_, _| 50.0);
+    r.write_all(&one([(0.5, 0.1), (0.3, -0.2)]));
+    let two = ts_data(2, 50.0, &[1e9], |_, q| [(0.1, 0.0), (0.2, 0.0), (0.9, 0.0), (0.3, 0.0)][q], |_, _| 50.0);
+    r.write_all(&two);
+    for n in [3_usize, 4, 5, 9, 8, 16] {
+        let d = ts_data(
+            n,
+            50.0,
+            &[1.5e9],
+            move |_, q| {
+                let (row, col) = (q / n, q % n);
+                let x = |v: usize| f64::from(u32::try_from(v).unwrap_or(0));
+                (0.01 * x(row * n + col), -0.003 * x(col))
+            },
+            |_, _| 50.0,
+        );
+        r.write_all(&d);
+    }
+    r.write_all(&ts_data(1, 50.0, &[1234.5, 1e6 + 0.25], |_, _| (1e-9, -2e-12), |_, _| 50.0));
+    r.write_all(&ts_data(1, 50.0, &[1e9], |_, _| (0.0, 0.0), |_, _| 50.0));
+    // The validation: the port count, R, the frequencies, a matrix's impedances, its entries.
+    r.write(&ts_data(0, 50.0, &[1e9], |_, _| (0.5, 0.0), |_, _| 50.0), 1);
+    r.write(&ts_data(257, 50.0, &[], |_, _| (0.5, 0.0), |_, _| 50.0), 1);
+    r.write(&ts_data(4, 50.0, &[], |_, _| (0.5, 0.0), |_, _| 50.0), 0);
+    for z0 in [0.0, -0.0, -50.0, f64::NAN, f64::INFINITY, 5e-324, 1e300, 1e-3, 1.0 / 3.0, 75.0, f64::MAX] {
+        r.write_all(&ts_data(1, z0, &[1e9], |_, _| (0.5, 0.1), move |_, _| z0));
+    }
+    for fr in [
+        vec![0.0], vec![-0.0], vec![-1.0], vec![f64::NAN], vec![f64::INFINITY], vec![2e9, 1e9], vec![1e9, 1e9],
+        vec![0.0, -0.0], vec![1e300], vec![5e-324, 1e-300], vec![1e9, 2e9, 2e9], vec![1.0, 2.0, 3.0, f64::NAN],
+        vec![123_456_789.012_345_6, 9_007_199_254_740_993.0], vec![],
+    ] {
+        r.write(&ts_data(1, 50.0, &fr, |_, _| (0.5, 0.1), |_, _| 50.0), 1);
+        r.write(&ts_data(2, 50.0, &fr, |_, q| (0.1 * f64::from(u32::try_from(q).unwrap_or(0)), 0.0), |_, _| 50.0), 0);
+    }
+    let lim = 50.0 * (1.0 + 1e-12);
+    let mut zv = vec![75.0, f64::INFINITY, f64::NEG_INFINITY, f64::NAN, 0.0, -50.0, 1e300];
+    zv.extend(around(lim, 3));
+    zv.extend(around(50.0 * (1.0 - 1e-12), 2));
+    for &z in &zv {
+        let second = move |k: usize, p: usize| if k == 1 && p == 1 { z } else { 50.0 };
+        r.write(&ts_data(2, 50.0, &[1e9, 2e9], |_, _| (0.5, 0.1), second), 1);
+        r.write(&ts_data(1, 50.0, &[1e9], |_, _| (0.5, 0.1), move |_, _| z), 0);
+    }
+    for &x in &[f64::NAN, f64::INFINITY, f64::NEG_INFINITY] {
+        let ent = move |k: usize, q: usize| if k == 1 && q == 7 { (0.0, x) } else { (0.1, 0.1) };
+        r.write(&ts_data(3, 50.0, &[1e9, 2e9], ent, |_, _| 50.0), 2);
+    }
+    // Entries at each format's edges.
+    let edges = [
+        (0.0, 0.0), (-0.0, 0.0), (0.0, -0.0), (-0.0, -0.0), (-1.0, 0.0), (-1.0, -0.0), (1.0, 0.0), (0.0, 1.0),
+        (0.0, -1.0), (-1.0, 1.0), (-1.0, -1.0), (5e-324, 0.0), (0.0, -5e-324), (2.2250738585072014e-308, 0.0),
+        (1e-160, 1e-160), (1e-170, 0.0), (1e154, 1e154), (1.3407807929942596e154, 0.0), (1e200, 1e200), (1e300, 0.0),
+        (f64::MAX, 0.0), (-f64::MAX, f64::MAX), (0.1, 0.2), (3.0, 4.0), (1e-9, -2e-12), (0.999_999_999_999_999_9, 0.0),
+    ];
+    for &e in &edges {
+        r.write_all(&ts_data(1, 50.0, &[1e9], move |_, _| e, |_, _| 50.0));
+    }
+    r.write_all(&ts_data(2, 50.0, &[1e9], |_, q| edges[q * 5], |_, _| 50.0));
+    // Seeded data: 1- to 5-port, passive entries, increasing frequencies over wide units.
+    for _ in 0..60 {
+        let n = usize::try_from(rng.int(1, 5)).unwrap_or(1);
+        let points = usize::try_from(rng.int(1, 4)).unwrap_or(1);
+        let z0 = rng.log_uniform(0.0, 3.0);
+        let mut fr = Vec::new();
+        let mut acc = rng.log_uniform(0.0, 12.0);
+        for _ in 0..points {
+            fr.push(acc);
+            acc += rng.log_uniform(0.0, 10.0);
+        }
+        let vals: Vec<(f64, f64)> =
+            (0..points * n * n).map(|_| (rng.uniform(-1.0, 1.0), rng.signed_log_uniform(-12.0, 0.0))).collect();
+        let d = ts_data(n, z0, &fr, move |k, q| vals[k * n * n + q], move |_, _| z0);
+        r.write(&d, usize::try_from(rng.int(0, 2)).unwrap_or(0));
     }
 }

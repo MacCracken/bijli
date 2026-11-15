@@ -71,6 +71,9 @@ REASONS = {
     ("src/rf.rs", "test_input_impedance_real_rejects_complex_result"):
         "deprecated input_impedance_lossless (ADR 0002 row 1): the port has no real-valued form to refuse; its complex "
         "Z_in = 40 − j30 is checked through input_impedance_lossless_complex",
+    ("src/rf.rs", "test_write_touchstone_deprecated_matches_try"):
+        "rf::write_touchstone is deprecated in 1.2.0 and not carried (ADR 0002 row 1); try_write_touchstone's text is "
+        "pinned byte for byte by tests/golden/rf.tsv and tests/rf.tcyr's cyrius_touchstone_write_text",
     ("src/rf.rs", "test_smatrix_inconsistent_does_not_panic"):
         "BjSMatrix's shape is fixed at construction (ADR 0002 row 36): no matrix with too few rows, ragged rows or a "
         "short z0 can be built, so the shape errors it checks are gone; tests/rf.tcyr's cyrius_smatrix_fixed_shape pins "

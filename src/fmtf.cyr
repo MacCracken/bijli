@@ -574,6 +574,38 @@ fn _bj_fmt_f64_debug(t, x: f64) {
     return 0;
 }
 
+# Appends x as Rust's `LowerExp` (`{:e}`) writes an f64 (core's `float_to_exponential_common_shortest`): the shortest
+# digits as Display, always as d.ddd and `e` and the exponent, no `+` (`1e9`, `1.5e9`, `-2.5e-3`, `1.00000025e-3`,
+# `5e-324`); `0e0`, `-0e0`, `inf`, `-inf`, `NaN`. Touchstone's writer prints every number this way (M4 part 1c-2).
+# Mirrors `<f64 as LowerExp>::fmt`.
+fn _bj_fmt_f64_exp(t, x: f64) {
+    var bits = _bj_bits(x);
+    if (x != x) {
+        _bj_tx_cstr(t, "NaN");
+        return 0;
+    }
+    if (bits < 0) { _bj_tx_putc(t, 45); }
+    var mag = bits & 0x7FFFFFFFFFFFFFFF;
+    if (mag == 0x7FF0000000000000) {
+        _bj_tx_cstr(t, "inf");
+        return 0;
+    }
+    if (mag == 0) {
+        _bj_tx_cstr(t, "0e0");
+        return 0;
+    }
+    var digits[24];
+    var n, k = _bj_shortest(mag, &digits, 0);
+    _bj_tx_putc(t, load8(&digits));
+    if (n > 1) {
+        _bj_tx_putc(t, 46);
+        _bj_tx_digits(t, &digits, 1, n);
+    }
+    _bj_tx_putc(t, 101);
+    _bj_tx_i64(t, k - 1);
+    return 0;
+}
+
 # Appends a Rust `[f64; 3]` as its Debug writes it: "[a, b, c]", each element in f64 Debug form. Mirrors
 # `<[f64; 3] as Debug>::fmt`.
 fn _bj_fmt_f64x3_debug(t, p: *f64) {

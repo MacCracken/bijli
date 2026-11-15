@@ -56,14 +56,14 @@ port's harness reads the same files. This README records what is specific to bij
 | `constants` | M0 | 12 | `src/m_constants.rs` | `src/constants.cyr` (`src/t_constants.rs`, with the completeness proof) |
 | `error` | M1 | 1,635 | `src/m_error.rs` | — |
 | `field` | M1 (parts 3a–3c, 5d-1 to 5d-5) | 26,770 | `src/m_field.rs` | — |
-| `fmtf` | M1 (+ Debug, part 3c; + fixed precision, M2 part 1b) | 70,740 | `src/m_fmtf.rs` (impetus's grid) | — |
+| `fmtf` | M1 (+ Debug, part 3c; + fixed precision, M2 part 1b; + `{:e}`, M4 part 1c-2) | 89,528 | `src/m_fmtf.rs` (impetus's grid) | — |
 | `json` | M1 (part 4), M2 (part 1a: `Material`), M3 (parts 1a-2: polarization's four structs; 1b-2: `MieResult`; 1c-2: beam's three structs) | 61,402 (+ 29,411 corrected) | `src/m_json.rs` (serde_json 1.0.154 on `Complex`, `FieldVector`, `PointCharge`, `Material`, `JonesVector`, `JonesMatrix`, `StokesVector`, `MuellerMatrix`, `MieResult`, `GaussianBeam`, `AbcdMatrix`, `ResonatorStability`) | — |
 | `material` | M2 (parts 1a, 2c-1, 2c-2, 2d-2c) | 54,234 | `src/m_material.rs` (field.rs's vectors) | — |
 | `math` | M0 (+ sinh, cosh and 125 corrected, M1) | 36,522 | `src/m_math.rs` | — |
 | `maxwell` | M1 (part 3d) | 20,349 | `src/m_maxwell.rs` | — |
 | `polarization` | M3 (part 1a-1; 2a-1: the waveplates' edge grid; 2d-1a to 2d-1c: the Mueller, Jones and Stokes edge grids) | 26,829 (+ 18 corrected) | `src/m_polarization.rs` | — |
 | `relativity` | M2 (parts 1d-1, 1d-2: the solver over six trajectories; 2c-1, 2c-4, 2d-1, 2d-3c–2d-3j) | 30,780 | `src/m_relativity.rs` (field.rs's vectors) | — |
-| `rf` | M4 (part 1a: the lines, reflection and the losses, the Smith chart, matching and the array factors; 1b: the S-parameter matrices, their cascade and S → Z; 1c-1: reading Touchstone) | 13,447 (+ 65 corrected) | `src/m_rf.rs` | `src/touchstone_data.cyr` (`src/t_touchstone.rs`: the White_Space set and the characters `{:?}` escapes, from the oracle's compiler, which `build.rs` records) |
+| `rf` | M4 (part 1a: the lines, reflection and the losses, the Smith chart, matching and the array factors; 1b: the S-parameter matrices, their cascade and S → Z; 1c-1, 1c-2: reading and writing Touchstone) | 13,720 (+ 86 corrected) | `src/m_rf.rs` | `src/touchstone_data.cyr` (`src/t_touchstone.rs`: the White_Space set and the characters `{:?}` escapes, from the oracle's compiler, which `build.rs` records) |
 | `scattering` | M3 (parts 1b-1; its JSON in `json`; 2b: the round-once edge grid; 2c-1: Mie's \|m\|·x limit; 2d-2: Rayleigh's edge grid; 2d-2b: Mie's tiny m) | 5,132 (+ 6 corrected) | `src/m_scattering.rs` | — |
 | `wave` | M2 (parts 1b, 2c-1, 2c-3, 2d-1, 2d-2a, 2d-2b, 2d-2c) | 79,138 (+ 1 corrected) | `src/m_wave.rs` (field.rs's vectors, material.tsv's materials) | `src/wave_data.cyr`, the dipole constants of ADR 0002 row 22 (`validate.py`'s `render_wave_data`: Cin(2π) by its series, π by Machin's formula checked against MPFR, η₀ from BJ_MU_0 and BJ_EPSILON_0, in rational arithmetic) |
 | (correctly rounded tables) | M1 | — | — | `src/crmath_data.cyr` (`crtables.py`, written and checked by `validate.py`) |
