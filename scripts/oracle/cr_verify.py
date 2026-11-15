@@ -534,7 +534,8 @@ EXACT = ["mono"] + list(SHAPES) + ["sqrt_div", "wsqrt", "sqrt_mono", "sqrt_mono_
          "cos_t_slow", "lw_reff", "lw_reff_slow", "lw_kappa", "lw_kappa_slow", "par", "par_x", "par_slow",
          "par_rep", "par_rep_x", "par_rep_slow", "lw_nb", "lw_nb_slow", "lw_reff_ux", "vx_sqrt", "vx_sqrt_e",
          "vx_gamma", "lwo_reff", "lwo_reff_slow", "lwo_kappa", "lwo_kappa_slow", "lwo_nb", "lwo_nb_slow", "lwo_ux",
-         "gammao", "gammao_slow", "gammao2", "gammao2_slow", "sumsq", "sumsq_exact", "abcd", "abcd_slow", "dot4"]
+         "gammao", "gammao_slow", "gammao2", "gammao2_slow", "sumsq", "sumsq_exact", "abcd", "abcd_slow", "dot4", "jcdot", "jint", "jnorm",
+         "jover"]
 UX = ["ux_exp", "ux_exp_w", "ux_cosh", "ux_sinh", "ux_ln", "ux_pow", "ux_sin", "ux_cos"]
 
 
@@ -1756,6 +1757,164 @@ def dot4_families(rng, count):
     return out
 
 
+# ── the Jones chains (src/crmath_vx.cyr, M3 part 2d-1b): exact references ─────────────────────────────────────────
+# Each value is a pair (Fraction, negative zero), every operation rounded to 53 bits with an unbounded exponent (IEEE's
+# signed zeros throughout), the last one once into binary64: the unbounded chain alone, so the calls the kernels'
+# boxes keep on Rust's chain check that claim.
+
+def _jx(x):
+    return Fraction(x), math.copysign(1.0, x) < 0
+
+
+def _jmul(a, b, r=rnd53):
+    v = a[0] * b[0]
+    return r(v), (a[1] != b[1]) if v == 0 else v < 0
+
+
+def _jadd(a, b, r=rnd53):
+    v = a[0] + b[0]
+    if v == 0:
+        return Fraction(0), (a[1] and b[1]) if a[0] == 0 and b[0] == 0 else False
+    return r(v), v < 0
+
+
+def _jsub(a, b, r=rnd53):
+    return _jadd(a, (-b[0], not b[1]), r)
+
+
+def _jfin(a) -> float:
+    if a[0] == 0:
+        return -0.0 if a[1] else 0.0
+    return rn_frac(a[0])
+
+
+def _jcprod(a, x):
+    """The parts of the complex product a·x, each operation to 53 bits."""
+    re = _jsub(_jmul(_jx(a[0]), _jx(x[0])), _jmul(_jx(a[1]), _jx(x[1])))
+    im = _jadd(_jmul(_jx(a[0]), _jx(x[1])), _jmul(_jx(a[1]), _jx(x[0])))
+    return re, im
+
+
+def _jinten(p):
+    def sq2(u, v):
+        return _jadd(_jmul(_jx(u), _jx(u)), _jmul(_jx(v), _jx(v)))
+    return _jadd(sq2(p[0], p[1]), sq2(p[2], p[3]))
+
+
+def jcdot_ref(a, x, b, y, mode):
+    """A·X ± B·Y (mode & 2: −; mode & 1: A and B conjugated), each part's last sum rounded once."""
+    if mode & 1:
+        a, b = (a[0], -a[1]), (b[0], -b[1])
+    p, q = _jcprod(a, x), _jcprod(b, y)
+    op = _jsub if mode & 2 else _jadd
+    return [_jfin(op(p[0], q[0], lambda t: t)), _jfin(op(p[1], q[1], lambda t: t))]
+
+
+def jint_ref(p):
+    def sq2(u, v):
+        return _jadd(_jmul(_jx(u), _jx(u)), _jmul(_jx(v), _jx(v)))
+    return _jfin(_jadd(sq2(p[0], p[1]), sq2(p[2], p[3]), lambda t: t))
+
+
+def jnorm_ref(p):
+    k = rnd53(1 / rnd53_sqrt(_jinten(p)[0]))
+    return [_jfin(_jmul(_jx(t), (k, False), lambda u: u)) for t in p]
+
+
+def jover_ref(p, q):
+    den = _jmul(_jinten(p), _jinten(q))
+    u, v = _jcprod((p[0], -p[1]), (q[0], q[1])), _jcprod((p[2], -p[3]), (q[2], q[3]))
+    wr, wi = _jadd(u[0], v[0]), _jadd(u[1], v[1])
+    n = _jadd(_jmul(wr, wr), _jmul(wi, wi))
+    return rn_frac(n[0] / den[0])
+
+
+def jpart(rng):
+    """A part around the kernels' box: ±0, inside [2^-511, 2^511), at its edges, tiny or subnormal, huge."""
+    c = rng.random()
+    sg = -1.0 if rng.random() < 0.5 else 1.0
+    if c < 0.12:
+        return sg * 0.0
+    if c < 0.2:
+        return sg * b2f(rng.randint(1, (1 << 52) - 1))
+    if c < 0.45:
+        e = rng.randint(-511, 510)
+    elif c < 0.65:
+        e = rng.choice([rng.randint(-530, -500), rng.randint(500, 520)])
+    elif c < 0.8:
+        e = rng.randint(-1022, -530)
+    elif c < 0.9:
+        e = rng.randint(520, 1023)
+    else:
+        e = rng.randint(-30, 30)
+    return sg * (1.0 + rng.getrandbits(52) * 2.0 ** -52) * 2.0 ** e
+
+
+def jbox(rng):
+    """A part inside the box: ±0, or 2^-511 ≤ |x| < 2^511, often of moderate size."""
+    sg = -1.0 if rng.random() < 0.5 else 1.0
+    if rng.random() < 0.12:
+        return sg * 0.0
+    e = rng.randint(-60, 60) if rng.random() < 0.5 else rng.randint(-511, 510)
+    return sg * (1.0 + rng.getrandbits(52) * 2.0 ** -52) * 2.0 ** e
+
+
+def jones_families(rng, count):
+    """jcdot, jint, jnorm and jover (M3 part 2d-1b): src/crmath_vx.cyr's Jones kernels against the unbounded chain:
+    parts around the box, products cancelling (B·Y near −A·X), intensities around 1e-290 and past DBL_MAX, and nearly
+    orthogonal pairs whose inner product lies below 2^-511."""
+    out = []
+    for j in range(count):
+        part = jbox if j % 6 in (1, 4) else jpart
+        a, x = (part(rng), part(rng)), (part(rng), part(rng))
+        if j % 3 == 0:
+            b = a
+            k = 1.0 + rng.randint(-4, 4) * 2.0 ** -52
+            y = (-x[0] * k, -x[1] * k)
+            if not all(math.isfinite(t) for t in y):
+                y = (jpart(rng), jpart(rng))
+        else:
+            b, y = (part(rng), part(rng)), (part(rng), part(rng))
+        mode = j % 4
+        ref = jcdot_ref(a, x, b, y, mode)
+        for part in (0, 1):
+            out.append(("jcdot", [a[0], a[1], x[0], x[1], b[0], b[1], y[0], y[1], mode, part], f2b(ref[part])))
+    for j in range(count):
+        if j % 3 == 0:                          # an intensity near 1e-290, or near DBL_MAX
+            base = 1e-145 if j % 2 == 0 else 1.0e154
+            pv = [base * rng.uniform(0.5, 1.2), base * rng.uniform(-0.3, 0.3), base * rng.uniform(-0.3, 0.3), 0.0]
+        else:
+            pv = [jpart(rng) for _ in range(4)]
+        if all(t == 0 for t in pv):
+            pv[0] = 1.0
+        out.append(("jint", pv, f2b(jint_ref(pv))))
+        ref = jnorm_ref(pv)
+        for k in range(4):
+            out.append(("jnorm", pv + [k], f2b(ref[k])))
+    for j in range(count):
+        part = jbox if j % 2 == 1 else jpart
+        pv = [part(rng) for _ in range(4)]
+        if j % 3 == 0:                          # q nearly orthogonal to p: (−p_y*, p_x*) scaled, one part nudged
+            sc = 2.0 ** (rng.randint(-40, 40) if part is jbox else rng.randint(-400, 400))
+            qv = [-pv[2] * sc, pv[3] * sc, pv[0] * sc, -pv[1] * sc]
+            i = rng.randrange(4)
+            qv[i] = qv[i] * (1.0 + rng.randint(-3, 3) * 2.0 ** -52) + part(rng) * 2.0 ** -60
+        elif j % 6 == 1:                        # boxed pairs with a small inner product, I_p·I_q near 1e-290
+            pv = [rng.uniform(1.0, 2.0) * 2.0 ** -19, 0.0, rng.uniform(1.0, 2.0) * 2.0 ** rng.randint(20, 60), 0.0]
+            qv = [rng.uniform(1.0, 2.0) * 2.0 ** rng.randint(-511, -480), rng.uniform(-1.0, 1.0) * 2.0 ** -500, 0.0,
+                  0.0]
+        else:
+            qv = [part(rng) for _ in range(4)]
+        if not all(math.isfinite(t) for t in qv):
+            qv = [jpart(rng) for _ in range(4)]
+        if all(t == 0 for t in pv):
+            pv[0] = 1.0
+        if all(t == 0 for t in qv):
+            qv[2] = 1.0
+        out.append(("jover", pv + qv, f2b(jover_ref(pv, qv))))
+    return out
+
+
 def main() -> int:
     (root / "build").mkdir(exist_ok=True)
     names = wanted or list(FUNCS) + ["exact", "ux"]
@@ -1810,6 +1969,9 @@ def main() -> int:
         arng = random.Random(0x3_2C2)
         calls += [(f, ref, ws) for f, ws, ref in abcd_families(arng, max(1, n // 20))
                   if "exact" in names or f in names]
+        jrng = random.Random(0x3_2D1B)
+        calls += [(f, ref, ws) for f, ws, ref in jones_families(jrng, max(1, n // 10))
+                  if "exact" in names or f in names]
         drng = random.Random(0x3_2D1A)
         calls += [(f, ref, ws) for f, ws, ref in dot4_families(drng, max(1, n // 2))
                   if "exact" in names or f in names]
@@ -1835,7 +1997,7 @@ def main() -> int:
             g = results[t][i]
             # "invalid" is a word for these
             any_nan = name not in UX and not name.startswith(("gamma", "cm", "cos_t", "lw_", "lwo_", "par", "vx_",
-                                                              "abcd", "dot4"))
+                                                              "abcd", "dot4", "j"))
             ok = g == want or (any_nan and b2f(g) != b2f(g) and b2f(want) != b2f(want))
             per.setdefault((name, t), [0, 0])[0 if ok else 1] += 1
             if not ok:

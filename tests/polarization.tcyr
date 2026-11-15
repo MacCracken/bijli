@@ -748,6 +748,58 @@ fn cyrius_row18(): i64 {
     return 0;
 }
 
+# ADR 0002 row 18 (M3 part 2d-1b): the Jones vectors and matrices at their range edges, the exact chain's bits.
+fn cyrius_jones_row18(): i64 {
+    test_group("cyrius_jones_row18 (ADR 0002 row 18)");
+    # Three squares of 2.25·2^-1074: 7·2^-1074 (Rust rounded each to 2).
+    var a: f64 = 1.5 * _bj_from_bits(0x1E60000000000000);
+    var va: BjJonesVector = BjJonesVector_new(BjComplex_new(a, a), BjComplex_new(a, 0.0));
+    var ia: f64 = va.intensity();
+    assert(_bj_bits(ia) == 7, "the intensity of three subnormal squares, rounded once");
+    # normalized is exactly scale-invariant: 2^-600·v, where Rust rescaled (one part an ulp off), gives v's bits.
+    var sc: f64 = _bj_from_bits(0x1A70000000000000);
+    var v1: BjJonesVector = BjJonesVector_new(BjComplex_new(0.3, 0.4), BjComplex_new(-0.5, 0.7));
+    var v2: BjJonesVector = BjJonesVector_new(BjComplex_new(0.3 * sc, 0.4 * sc), BjComplex_new(-0.5 * sc, 0.7 * sc));
+    var n1: BjJonesVector;
+    var n2: BjJonesVector;
+    var t1, e1 = v1.normalized(&n1);
+    var t2, e2 = v2.normalized(&n2);
+    assert(is_ok(t1) == 1 && is_ok(t2) == 1 && _bj_bits(n2.x.im) == 0x3FD9BA9DA6C73588 && n2.x.im == n1.x.im
+      && n2.x.re == n1.x.re && n2.y.re == n1.y.re && n2.y.im == n1.y.im, "normalized(2^-600·v) = normalized(v)");
+    # Products past DBL_MAX that cancel: ⟨(1e200, 1e200)|(1e200, −1e200)⟩ = +0 and det [[1e200, 1e200], [1e200,
+    # 1e200]] = +0 (Rust: ∞ − ∞ = NaN).
+    var h: f64 = _bj_from_bits(0x6974E718D7D7625A);
+    var hp: BjJonesVector = BjJonesVector_new(BjComplex_new(h, 0.0), BjComplex_new(h, 0.0));
+    var hm: BjJonesVector = BjJonesVector_new(BjComplex_new(h, 0.0), BjComplex_new(-h, 0.0));
+    var z: BjComplex = hp.inner(hm);
+    var hh: BjJonesMatrix = BjJonesMatrix_new(BjComplex_new(h, 0.0), BjComplex_new(h, 0.0), BjComplex_new(h, 0.0),
+      BjComplex_new(h, 0.0));
+    var d: BjComplex = hh.determinant();
+    assert(_bj_bits(z.re) == 0 && _bj_bits(d.re) == 0 && _bj_bits(d.im) == 0, "1e200·1e200 − 1e200·1e200 = +0");
+    # A boxed pair whose inner product lies below 2^-511: its square is subnormal in Rust (5.0856527…e-36, the sixth
+    # digit off); the chain gives 5.085658759397545e-36.
+    var pp: BjJonesVector = BjJonesVector_new(BjComplex_new(_bj_from_bits(0x3EC4CCCCCCCCCCCD), 0.0),
+      BjComplex_new(_bj_from_bits(0x4270000000000000), 0.0));
+    var qq: BjJonesVector = BjJonesVector_new(BjComplex_new(_bj_from_bits(0x200B333333333333), 0.0),
+      BjComplex_new(0.0, 0.0));
+    var to, vo = pp.overlap(qq);
+    var ov: f64 = vo;
+    assert(is_ok(to) == 1 && _bj_bits(ov) == 0x389B0A3D70A3D70B, "a small overlap of boxed vectors");
+    # apply's last sum rounded once: 2^-1030 + 2^-1075 + 2^-1090 is 2^-1030 + 2^-1074 (Rust: 2^-1030).
+    var e515: f64 = _bj_from_bits(0x1FC0000000000000);
+    var e500: f64 = _bj_from_bits(0x20B0000000000000);
+    var e545: f64 = _bj_from_bits(0x1DE0000000000000);
+    var n575: f64 = _bj_from_bits(0x9C00000000000000);
+    var ma: BjComplex = BjComplex_new(e515, e500);
+    var mb: BjComplex = BjComplex_new(e545, 0.0);
+    var m: BjJonesMatrix = BjJonesMatrix_new(ma, mb, BjComplex_new(1.0, 0.0), BjComplex_new(0.0, 0.0));
+    var x: BjJonesVector = BjJonesVector_new(BjComplex_new(e515, n575), BjComplex_new(e545, 0.0));
+    var y: BjJonesVector = m.apply(x);
+    assert(_bj_bits(y.x.re) == 0x0000100000000001, "apply: a last sum below 2^-1022 rounded once");
+    if (e1 == 7 || e2 == 7) { println("."); }
+    return 0;
+}
+
 # polarization.rs's `test_mie_result_serde` (M3 part 1b-2): a MieResult round trips through its JSON.
 fn rust_test_mie_serde(): i64 {
     test_group("test_mie_result_serde");
@@ -913,6 +965,7 @@ fn main(): i64 {
     cyrius_tests();
     cyrius_row33();
     cyrius_row18();
+    cyrius_jones_row18();
     cyrius_json();
     return assert_summary();
 }

@@ -565,6 +565,16 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
   keep Rust's bits), and the waveplate's 2·sin²(δ/2) below 2^-1022 rounds once too. Cost: `polarization/mueller_apply`
   (a polarizer, two rows of zeros) 103 → 116 ns; a dense `apply` is unchanged, and `compose` takes 370 ns for 470
   (−21 %: each row of the left matrix is read once, not once per column).
+- **polarization** (ADR 0002 row 18 amended, M3 part 2d-1b, range edges): the Jones vectors and matrices over- and
+  underflowed where the result is representable. `normalized` and `overlap` rescaled by the largest part, which for a
+  subnormal part is 1/5e-324 = ∞, so (5e-324, 0) normalized to NaN; elsewhere the rescale added two roundings.
+  `inner`, `apply`, `compose` and `determinant` cancelled products past DBL_MAX to NaN (⟨(1e200, 1e200)|(1e200,
+  −1e200)⟩ for 0) and rounded subnormal products twice. A finite input outside row 14's box now runs the chain with an
+  unbounded exponent and rounds each output's last operation once (`src/crmath_vx.cyr`'s Jones kernels), and
+  `normalized` and `overlap` take their first branch that way where Rust rescaled, so they are exactly
+  scale-invariant. Cost: the kernels replace BjComplex's per-product calls and are faster on the bench twins:
+  `polarization/jones_apply_polarizer` 226 → 177 ns, `jones_qwp_apply` 232 → 183; `inner` 123 → 82 ns, `normalized`
+  93 → 74, `overlap` 244 → 207, and `determinant` 80 → 92 (one call of eight arguments for two products).
 
 ### Performance
 

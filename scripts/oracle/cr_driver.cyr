@@ -9,8 +9,8 @@
 # M1 part 5d-1), Clausius–Mossotti's ε_r, the trig-free Fresnel cosine, the Liénard–Wiechert R_eff and κ and the
 # parallel combinations (src/crmath_edge.cyr, M2 parts 2c-2 to 2c-5), and the materials' 53-bit roots and Γ
 # (src/crmath_vx.cyr, M2 part 2d-2c), M3's exact sum-of-squares threshold (src/crmath_cmp.cyr, M3 part 2c-1), ABCD
-# propagation (src/crmath_edge.cyr, M3 part 2c-2) and the Mueller matrices' four-term sums (src/crmath_vx.cyr, M3 part
-# 2d-1a), against Fractions. Built from the math sources the bundle carries
+# propagation (src/crmath_edge.cyr, M3 part 2c-2), the Mueller matrices' four-term sums and the Jones chains
+# (src/crmath_vx.cyr, M3 parts 2d-1a and 2d-1b), against Fractions. Built from the math sources the bundle carries
 # (src/constants.cyr … src/mathx.cyr, in the manifest's order and byte for byte what dist/bijli.cyr holds): the bundle
 # is `private` and these entry points are bijli-internal, so a consumer of dist/bijli.cyr can't call them, but a file of
 # internals only has no marker and can be included on its own.
@@ -380,6 +380,39 @@ fn _call(fp, fl, w): i64 {
             }
             r = _drv_dot4(w, 0, 1, &db, 0, 4);
         }
+    }
+    elif (_is(fp, fl, "jcdot") == 1) {
+        # jcdot ar ai xr xi br bi yr yi mode part: src/crmath_vx.cyr's _bj_vx_cdot (M3 part 2d-1b), part 0 or 1 of
+        # A·X ± B·Y; all ones when an input is not finite
+        var ja: f64[4];
+        var jx: f64[4];
+        ja[0] = _wf(w, 0);
+        ja[1] = _wf(w, 1);
+        jx[0] = _wf(w, 2);
+        jx[1] = _wf(w, 3);
+        ja[2] = _wf(w, 4);
+        ja[3] = _wf(w, 5);
+        jx[2] = _wf(w, 6);
+        jx[3] = _wf(w, 7);
+        var jo: f64[2];
+        if (_bj_vx_cdot(&ja, 0, 2, &jx, 0, 2, load64(w + 64), &jo) == 2) { return 0 - 1; }
+        r = jo[load64(w + 72)];
+    }
+    elif (_is(fp, fl, "jint") == 1) {
+        # jint p0 p1 p2 p3: a Jones vector's intensity (_bj_vx_inten)
+        r = _bj_vx_inten(w);
+    }
+    elif (_is(fp, fl, "jnorm") == 1) {
+        # jnorm p0 p1 p2 p3 k: part k of the normalized vector (_bj_vx_jnorm); all ones on an error
+        var jn: f64[4];
+        if (_bj_vx_jnorm(w, &jn) != 0) { return 0 - 1; }
+        r = jn[load64(w + 32)];
+    }
+    elif (_is(fp, fl, "jover") == 1) {
+        # jover p0 p1 p2 p3 q0 q1 q2 q3: the overlap of two Jones vectors (_bj_vx_overlap); all ones on an error
+        var jw: f64[1];
+        if (_bj_vx_overlap(w, w + 32, &jw) != 0) { return 0 - 1; }
+        r = jw[0];
     }
     elif (_is(fp, fl, "ux_pow") == 1) {
         # ux_pow s e y part: (s·2^e)^y's s (part 0) or e (part 1)

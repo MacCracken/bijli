@@ -22,14 +22,11 @@
 # sin 2θ correctly rounded where Rust had c² − s² and 2cs (c² − s² loses every digit near a fast axis at 45°), and the
 # Mueller form takes 1 − cos δ as 2·sin²(δ/2) where cos δ > 1/2 (where 1 − cos δ cancels). Every other formula is
 # Rust's in Rust's order, with an unbounded exponent at a range edge (ADR 0002 row 18, M3 part 2d-1a: the Mueller
-# matrices' angles 2θ past DBL_MAX, their four-term sums, the waveplate's subnormal sin²(δ/2)). The JSON of the four
-# structs is part 1a-2's.
+# matrices' angles 2θ past DBL_MAX, their four-term sums, the waveplate's subnormal sin²(δ/2); 2d-1b: the Jones
+# vectors' and matrices' complex chains, src/crmath_vx.cyr's, polarization.rs's SAFE_MIN_INTENSITY of 1e-290 with
+# them). The JSON of the four structs is part 1a-2's.
 
 private
-
-# Intensities at or above this are computed without loss of precision to underflow; smaller (or non-finite) values
-# take the rescaling path. Mirrors polarization.rs's SAFE_MIN_INTENSITY.
-var _BJ_POL_SAFE_MIN: f64 = 0x03B8F2B061AEA072;     # 1e-290
 
 # std::f64::consts::FRAC_1_SQRT_2 and FRAC_PI_2, by their bits.
 var _BJ_POL_SQRT1_2: f64 = 0x3FE6A09E667F3BCD;
@@ -163,38 +160,41 @@ public fn BjJonesVector_linear(angle: f64): BjJonesVector {
 }
 
 impl BjJonesVector {
-    # The intensity |E_x|² + |E_y|². Mirrors `JonesVector::intensity`.
+    # The intensity |E_x|² + |E_y|², with an unbounded exponent at a range edge (ADR 0002 row 18, src/crmath_vx.cyr's
+    # _bj_vx_inten). Mirrors `JonesVector::intensity`.
     #must_use
     public fn intensity(self): f64 {
-        var a: f64 = self.x.norm_sq();
-        var b: f64 = self.y.norm_sq();
-        var i: f64 = a + b;
+        var i: f64 = _bj_vx_inten(_bj_pol_f64p(self));
         return i;
     }
 
-    # This vector scaled to unit intensity, into out: for any nonzero finite amplitude scale, a vector whose
-    # intensity under- or overflows first rescaled by its largest part. DivisionByZero for the zero vector,
-    # InvalidParameter for a non-finite part; out untouched on an error. Mirrors `JonesVector::normalized`.
+    # This vector scaled to unit intensity, into out, for any nonzero finite amplitude scale. Where Rust's intensity
+    # under- or overflowed it rescaled by the largest part (two more roundings); the port takes the first branch with an
+    # unbounded exponent there, so the result is exactly scale-invariant (ADR 0002 row 18, _bj_vx_jnorm). DivisionByZero
+    # "zero Jones vector has no polarization state" for the zero vector, InvalidParameter "Jones vector components must
+    # be finite" for a non-finite part; out untouched on an error. Mirrors `JonesVector::normalized`.
     public fn normalized(self, out: *BjJonesVector): Result {
-        var i: f64 = self.intensity();
-        var v: BjJonesVector = *self;
-        if (!(_bj_is_finite(i) == 1 && i >= _BJ_POL_SAFE_MIN)) {
-            var t, e = _bj_pol_rescaled(self, &v);
-            if (is_err_result(t) == 1) { return Err(e); }
-        }
-        var vi: f64 = v.intensity();
-        var r: f64 = f64_sqrt(vi);
-        var s: f64 = 1.0 / r;
-        var nx: BjComplex = v.x.scale(s);
-        var ny: BjComplex = v.y.scale(s);
-        out.x = nx;
-        out.y = ny;
+        var w: f64[4];
+        var t = _bj_vx_jnorm(_bj_pol_f64p(self), &w);
+        if (t == 2) { return Err(_bj_err_invalid_parameter("Jones vector components must be finite")); }
+        if (t == 1) { return Err(_bj_err_division_by_zero("zero Jones vector has no polarization state")); }
+        var o: *f64 = _bj_pol_f64p(out);
+        o[0] = w[0];
+        o[1] = w[1];
+        o[2] = w[2];
+        o[3] = w[3];
         return Ok(0);
     }
 
-    # The inner product ⟨J₁|J₂⟩ = x₁*·x₂ + y₁*·y₂, conjugate-linear in the first. Mirrors `JonesVector::inner`.
+    # The inner product ⟨J₁|J₂⟩ = x₁*·x₂ + y₁*·y₂, conjugate-linear in the first, with an unbounded exponent at a range
+    # edge (ADR 0002 row 18, _bj_vx_cdot). Mirrors `JonesVector::inner`.
     #must_use
     public fn inner(self, other: BjJonesVector): BjComplex {
+        var w: f64[2];
+        if (_bj_vx_cdot(_bj_pol_f64p(self), 0, 2, _bj_pol_f64p(&other), 0, 2, 1, &w) != 2) {
+            var r: BjComplex = BjComplex_new(w[0], w[1]);
+            return r;
+        }
         var cx: BjComplex = self.x.conj();
         var cy: BjComplex = self.y.conj();
         var p: BjComplex = BjComplex_mul(cx, other.x);
@@ -204,62 +204,17 @@ impl BjJonesVector {
     }
 
     # The degree of overlap |⟨J₁|J₂⟩|²/(I₁·I₂): 0 for orthogonal states, 1 for parallel ones, whatever the two
-    # amplitude scales (rescaled when the product of the intensities under- or overflows). DivisionByZero when either
-    # vector is zero, InvalidParameter for a non-finite part. Mirrors `JonesVector::overlap`.
+    # amplitude scales. Where Rust's squares under- or overflowed, or it rescaled both vectors, the port takes its first
+    # branch with an unbounded exponent (ADR 0002 row 18, _bj_vx_overlap). DivisionByZero when either vector is zero,
+    # InvalidParameter for a non-finite part, the first vector's error first. Mirrors `JonesVector::overlap`.
     public fn overlap(self, other: BjJonesVector): Result {
-        var ia: f64 = self.intensity();
-        var ib: f64 = other.intensity();
-        var den: f64 = ia * ib;
-        if (_bj_is_finite(den) == 1 && den >= _BJ_POL_SAFE_MIN) {
-            var z: BjComplex = self.inner(other);
-            var n: f64 = z.norm_sq();
-            var o: f64 = n / den;
-            return Ok(o);
-        }
-        var a: BjJonesVector;
-        var ta, ea = _bj_pol_rescaled(self, &a);
-        if (is_err_result(ta) == 1) { return Err(ea); }
-        var b: BjJonesVector;
-        var tb, eb = _bj_pol_rescaled(&other, &b);
-        if (is_err_result(tb) == 1) { return Err(eb); }
-        var w: BjComplex = a.inner(b);
-        var n2: f64 = w.norm_sq();
-        var i1: f64 = a.intensity();
-        var i2: f64 = b.intensity();
-        var d2: f64 = i1 * i2;
-        var o2: f64 = n2 / d2;
-        return Ok(o2);
+        var w: f64[1];
+        var t = _bj_vx_overlap(_bj_pol_f64p(self), _bj_pol_f64p(&other), &w);
+        if (t == 1 || t == 3) { return Err(_bj_err_invalid_parameter("Jones vector components must be finite")); }
+        if (t == 2 || t == 4) { return Err(_bj_err_division_by_zero("zero Jones vector has no polarization state")); }
+        var o: f64 = w[0];
+        return Ok(o);
     }
-}
-
-# The vector at v scaled so that its largest real or imaginary part has magnitude 1 (its intensity in [1, 4]), into
-# out. InvalidParameter "Jones vector components must be finite", DivisionByZero "zero Jones vector has no
-# polarization state". Mirrors polarization.rs's private `JonesVector::rescaled`.
-fn _bj_pol_rescaled(v: *BjJonesVector, out: *BjJonesVector): Result {
-    var a: f64 = v.x.re;
-    var b: f64 = v.x.im;
-    var c: f64 = v.y.re;
-    var d: f64 = v.y.im;
-    if (_bj_is_finite(a) == 0 || _bj_is_finite(b) == 0 || _bj_is_finite(c) == 0 || _bj_is_finite(d) == 0) {
-        return Err(_bj_err_invalid_parameter("Jones vector components must be finite"));
-    }
-    var aa: f64 = f64_abs(a);                       # Rust's fold of f64::max from 0, over finite parts
-    var ab: f64 = f64_abs(b);
-    var ac: f64 = f64_abs(c);
-    var ad: f64 = f64_abs(d);
-    var m: f64 = _bj_max(0.0, aa);
-    m = _bj_max(m, ab);
-    m = _bj_max(m, ac);
-    m = _bj_max(m, ad);
-    if (m == 0.0) { return Err(_bj_err_division_by_zero("zero Jones vector has no polarization state")); }
-    var s: f64 = 1.0 / m;
-    var vx: BjComplex = v.x;
-    var vy: BjComplex = v.y;
-    var nx: BjComplex = vx.scale(s);
-    var ny: BjComplex = vy.scale(s);
-    out.x = nx;
-    out.y = ny;
-    return Ok(0);
 }
 
 # ── Jones matrix ─────────────────────────────────────────────────────────────────────────────────────────────────
@@ -390,41 +345,71 @@ public fn BjJonesMatrix_rotator(angle: f64): BjJonesMatrix {
 }
 
 impl BjJonesMatrix {
-    # This matrix applied to a Jones vector. Mirrors `JonesMatrix::apply`.
+    # This matrix applied to a Jones vector, each output m_i0·x + m_i1·y with an unbounded exponent at a range edge
+    # (ADR 0002 row 18, src/crmath_vx.cyr's _bj_vx_cdot); an input part that is not finite keeps BjComplex's products.
+    # Mirrors `JonesMatrix::apply`.
     #must_use
     public fn apply(self, v: BjJonesVector): BjJonesVector {
-        var p: BjComplex = BjComplex_mul(self.m00, v.x);
-        var q: BjComplex = BjComplex_mul(self.m01, v.y);
-        var r: BjComplex = BjComplex_mul(self.m10, v.x);
-        var u: BjComplex = BjComplex_mul(self.m11, v.y);
-        var x: BjComplex = BjComplex_add(p, q);
-        var y: BjComplex = BjComplex_add(r, u);
-        var o: BjJonesVector = BjJonesVector_new(x, y);
+        var m: *f64 = _bj_pol_f64p(self);
+        var x: *f64 = _bj_pol_f64p(&v);
+        var o: BjJonesVector;
+        var op: *f64 = _bj_pol_f64p(&o);
+        var w: f64[2];
+        for (var i = 0; i < 2; i = i + 1) {
+            if (_bj_vx_cdot(m, 4 * i, 4 * i + 2, x, 0, 2, 0, &w) == 2) {
+                var a: BjComplex = BjComplex_new(m[4 * i], m[4 * i + 1]);
+                var b: BjComplex = BjComplex_new(m[4 * i + 2], m[4 * i + 3]);
+                var p: BjComplex = BjComplex_mul(a, v.x);
+                var q: BjComplex = BjComplex_mul(b, v.y);
+                var z: BjComplex = BjComplex_add(p, q);
+                w[0] = z.re;
+                w[1] = z.im;
+            }
+            op[2 * i] = w[0];
+            op[2 * i + 1] = w[1];
+        }
         return o;
     }
 
-    # self × other: self applied after other. Mirrors `JonesMatrix::compose`.
+    # self × other: self applied after other, each entry m_i0·n_0j + m_i1·n_1j with an unbounded exponent at a range
+    # edge (ADR 0002 row 18, _bj_vx_cdot); an input part that is not finite keeps BjComplex's products. Mirrors
+    # `JonesMatrix::compose`.
     #must_use
     public fn compose(self, other: BjJonesMatrix): BjJonesMatrix {
-        var a1: BjComplex = BjComplex_mul(self.m00, other.m00);
-        var a2: BjComplex = BjComplex_mul(self.m01, other.m10);
-        var b1: BjComplex = BjComplex_mul(self.m00, other.m01);
-        var b2: BjComplex = BjComplex_mul(self.m01, other.m11);
-        var c1: BjComplex = BjComplex_mul(self.m10, other.m00);
-        var c2: BjComplex = BjComplex_mul(self.m11, other.m10);
-        var d1: BjComplex = BjComplex_mul(self.m10, other.m01);
-        var d2: BjComplex = BjComplex_mul(self.m11, other.m11);
-        var a: BjComplex = BjComplex_add(a1, a2);
-        var b: BjComplex = BjComplex_add(b1, b2);
-        var c: BjComplex = BjComplex_add(c1, c2);
-        var d: BjComplex = BjComplex_add(d1, d2);
-        var j: BjJonesMatrix = BjJonesMatrix_new(a, b, c, d);
+        var m: *f64 = _bj_pol_f64p(self);
+        var n: *f64 = _bj_pol_f64p(&other);
+        var j: BjJonesMatrix;
+        var op: *f64 = _bj_pol_f64p(&j);
+        var w: f64[2];
+        for (var i = 0; i < 2; i = i + 1) {
+            for (var k = 0; k < 2; k = k + 1) {
+                if (_bj_vx_cdot(m, 4 * i, 4 * i + 2, n, 2 * k, 4 + 2 * k, 0, &w) == 2) {
+                    var a: BjComplex = BjComplex_new(m[4 * i], m[4 * i + 1]);
+                    var b: BjComplex = BjComplex_new(m[4 * i + 2], m[4 * i + 3]);
+                    var c: BjComplex = BjComplex_new(n[2 * k], n[2 * k + 1]);
+                    var d: BjComplex = BjComplex_new(n[4 + 2 * k], n[5 + 2 * k]);
+                    var p: BjComplex = BjComplex_mul(a, c);
+                    var q: BjComplex = BjComplex_mul(b, d);
+                    var z: BjComplex = BjComplex_add(p, q);
+                    w[0] = z.re;
+                    w[1] = z.im;
+                }
+                op[4 * i + 2 * k] = w[0];
+                op[4 * i + 2 * k + 1] = w[1];
+            }
+        }
         return j;
     }
 
-    # The determinant m00·m11 − m01·m10. Mirrors `JonesMatrix::determinant`.
+    # The determinant m00·m11 − m01·m10, with an unbounded exponent at a range edge (ADR 0002 row 18, _bj_vx_cdot); a
+    # part that is not finite keeps BjComplex's products. Mirrors `JonesMatrix::determinant`.
     #must_use
     public fn determinant(self): BjComplex {
+        var w: f64[2];
+        if (_bj_vx_cdot(_bj_pol_f64p(self), 0, 2, _bj_pol_f64p(self), 6, 4, 2, &w) != 2) {
+            var r: BjComplex = BjComplex_new(w[0], w[1]);
+            return r;
+        }
         var p: BjComplex = BjComplex_mul(self.m00, self.m11);
         var q: BjComplex = BjComplex_mul(self.m01, self.m10);
         var z: BjComplex = BjComplex_sub(p, q);

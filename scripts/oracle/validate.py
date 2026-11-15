@@ -3696,8 +3696,40 @@ def pol_eval(fn, v, P, wp=False, cx14=False, r33=True, r18=True):
     def mat(w, k=0):
         return [(w[k + 2 * i], w[k + 2 * i + 1]) for i in range(4)]
 
+    def finite(*zs):
+        return all(math.isfinite(t) for z in zs for t in z)
+
+    def ux_cprod(a, x):
+        """The parts of a·x with an unbounded exponent, each operation to 53 bits."""
+        re = ux_sub(ux_mul(ux(a[0]), ux(x[0])), ux_mul(ux(a[1]), ux(x[1])))
+        im = ux_add(ux_mul(ux(a[0]), ux(x[1])), ux_mul(ux(a[1]), ux(x[0])))
+        return re, im
+
+    def cdot(a, x, b, y, sub=False):
+        """a·x ± b·y: the port's unbounded chain for finite inputs (row 18, M3 part 2d-1b), each part's last sum
+        rounded once; else BjComplex's products."""
+        if e18 and finite(a, x, b, y):
+            p, q = ux_cprod(a, x), ux_cprod(b, y)
+            op = ux_sub if sub else ux_add
+            return ux_fin(op(p[0], q[0], lambda t: t)), ux_fin(op(p[1], q[1], lambda t: t))
+        p, q = mul(a, x), mul(b, y)
+        return (p[0] - q[0], p[1] - q[1]) if sub else add(p, q)
+
+    def inten_ux(x, y):
+        return ux_add(ux_sumsq(x[0], x[1]), ux_sumsq(y[0], y[1]))
+
     def inten(x, y):
+        if e18 and finite(x, y):
+            return ux_fin(ux_add(ux_sumsq(x[0], x[1]), ux_sumsq(y[0], y[1]), lambda t: t))
         return nsq(x) + nsq(y)
+
+    def jerr(x, y):
+        """Rust's rescale errors for one vector, or None."""
+        if not finite(x, y):
+            return ip_err("Jones vector components must be finite")
+        if x[0] == 0 and x[1] == 0 and y[0] == 0 and y[1] == 0:
+            return dz_err("zero Jones vector has no polarization state")
+        return None
 
     def rescaled(x, y):
         parts = [x[0], x[1], y[0], y[1]]
@@ -3712,7 +3744,7 @@ def pol_eval(fn, v, P, wp=False, cx14=False, r33=True, r18=True):
         return scale(x, s), scale(y, s)
 
     def inner(x1, y1, x2, y2):
-        return add(mul(conj(x1), x2), mul(conj(y1), y2))
+        return cdot(conj(x1), x2, conj(y1), y2)
 
     def waveplate(t, d):
         c, s = P["cos"](t), P["sin"](t)
@@ -3769,6 +3801,25 @@ def pol_eval(fn, v, P, wp=False, cx14=False, r33=True, r18=True):
         return fl(v)
     if fn == "JonesVector::intensity":
         return fl([inten(*vec(v))])
+    if fn == "JonesVector::normalized" and e18:
+        x, y = vec(v)                                  # the first branch with an unbounded exponent (row 18)
+        err = jerr(x, y)
+        if err is not None:
+            return err
+        k = rnd53(1 / rnd53_sqrt(inten_ux(x, y)[0]))
+        return fl([ux_fin(ux_mul(ux(t), (k, False), lambda u: u)) for t in v[:4]])
+    if fn == "JonesVector::overlap" and e18:
+        x1, y1 = vec(v)
+        x2, y2 = vec(v, 4)
+        for x, y in ((x1, y1), (x2, y2)):
+            err = jerr(x, y)
+            if err is not None:
+                return err
+        den = ux_mul(inten_ux(x1, y1), inten_ux(x2, y2))
+        p, q = ux_cprod(conj(x1), x2), ux_cprod(conj(y1), y2)
+        wr, wi = ux_add(p[0], q[0]), ux_add(p[1], q[1])
+        n = ux_add(ux_mul(wr, wr), ux_mul(wi, wi))
+        return okf(ux_fin(ux_div(n, den, lambda t: t)))
     if fn == "JonesVector::normalized":
         x, y = vec(v)
         i = inten(x, y)
@@ -3811,16 +3862,14 @@ def pol_eval(fn, v, P, wp=False, cx14=False, r33=True, r18=True):
     if fn == "JonesMatrix::apply":
         a, b, c, d = mat(v)
         x, y = vec(v, 8)
-        return jv(add(mul(a, x), mul(b, y)), add(mul(c, x), mul(d, y)))
+        return jv(cdot(a, x, b, y), cdot(c, x, d, y))
     if fn == "JonesMatrix::compose":
         a, b, c, d = mat(v)
         e, f2, g, h = mat(v, 8)
-        return jm([add(mul(a, e), mul(b, g)), add(mul(a, f2), mul(b, h)), add(mul(c, e), mul(d, g)),
-                   add(mul(c, f2), mul(d, h))])
+        return jm([cdot(a, e, b, g), cdot(a, f2, b, h), cdot(c, e, d, g), cdot(c, f2, d, h)])
     if fn == "JonesMatrix::determinant":
         a, b, c, d = mat(v)
-        p, q = mul(a, d), mul(b, c)
-        return fl([p[0] - q[0], p[1] - q[1]])
+        return fl(list(cdot(a, d, b, c, sub=True)))
     if fn in ("StokesVector::unpolarized", "StokesVector::horizontal", "StokesVector::vertical",
               "StokesVector::right_circular", "StokesVector::left_circular"):
         i = v[0]
@@ -3956,6 +4005,8 @@ def polarization_adr_rows(path: Path) -> list:
             row = 33
         elif toks_same(pol_harness(fn, v, P, cx14=False), expect):
             row = 14
+        elif toks_same(pol_harness(fn, v, P, cx14=False, r18=False), expect):
+            row = 18                                # row 14's products inside a chain row 18 now rounds once
         else:
             row = 5
         out.append((fn, ins, wire(port), str(row), f"oracle {outs}; ADR 0002 row {row}"))

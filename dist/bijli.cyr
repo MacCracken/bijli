@@ -9637,6 +9637,241 @@ fn _bj_vx_dot4_edge(a: *f64, ia, sa, b: *f64, ib, sb, r: f64): f64 {
     return u;
 }
 
+# ── Jones vectors and matrices (M3 part 2d-1b): polarization.cyr's complex chains ───────────────────────────────────
+# A Jones output is hisab's complex chain in Rust's order: products of two complex numbers (four real products, then a
+# difference and a sum), added or subtracted in pairs (`apply`, `compose`, `determinant`, `inner`), or squared and
+# summed (`intensity`). The guard is a box on the inputs, row 14's: with every part ±0 or 2^-511 ≤ |x| < 2^511, every
+# real product is normal or an exact 0 and each pair's sum lies below 2^1023, and a sum below 2^-1022 is exact, so
+# Rust's chain is the unbounded one up to its last operation (class 0). A finite part outside the box is an edge (class
+# 1): the chain runs with an unbounded exponent and its last operation rounds once. A part that is not finite (class 2)
+# leaves the chain to the caller: BjComplex's row-14 products, whose values the non-finite part decides.
+
+# 1e-290: polarization.rs's SAFE_MIN_INTENSITY, where Rust's normalized and overlap rescale below.
+var _BJ_VX_JSAFE: f64 = 0x03B8F2B061AEA072;
+
+# The class of the parts p[i], p[i + 1], p[j], p[j + 1] (two complex numbers): 0 when each is ±0 or 2^-511 ≤ |x| <
+# 2^511, 2 when one is not finite, else 1 (the section comment).
+#must_use
+fn _bj_vx_cls4(p: *f64, i, j): i64 {
+    var a: f64 = p[i];
+    var b: f64 = p[i + 1];
+    var c: f64 = p[j];
+    var d: f64 = p[j + 1];
+    var ea = (load64(&a) >> 52) & 0x7FF;
+    var eb = (load64(&b) >> 52) & 0x7FF;
+    var ec = (load64(&c) >> 52) & 0x7FF;
+    var ed = (load64(&d) >> 52) & 0x7FF;
+    var lo = (ea - 512) | (eb - 512) | (ec - 512) | (ed - 512);
+    var hi = (1533 - ea) | (1533 - eb) | (1533 - ec) | (1533 - ed);
+    if ((lo | hi) >= 0) { return 0; }
+    if (ea == 2047 || eb == 2047 || ec == 2047 || ed == 2047) { return 2; }
+    if ((a != 0.0 && (ea < 512 || ea > 1533)) || (b != 0.0 && (eb < 512 || eb > 1533))) { return 1; }
+    if ((c != 0.0 && (ec < 512 || ec > 1533)) || (d != 0.0 && (ed < 512 || ed > 1533))) { return 1; }
+    return 0;
+}
+
+# 1 when x is ±0 or 2^-511 ≤ |x| < 2^511 (its square is normal or 0).
+#must_use
+fn _bj_vx_box1(x: f64): i64 {
+    if (x == 0.0) { return 1; }
+    var e = (load64(&x) >> 52) & 0x7FF;
+    if (e >= 512 && e <= 1533) { return 1; }
+    return 0;
+}
+
+# x² + y², each operation with an unbounded exponent and rounded to 53 bits: (s, e).
+#must_use
+fn _bj_vx_sq2(xs: f64, xe, ys: f64, ye): (f64, i64) {
+    var as2, ae2 = _bj_k_ux_mul(xs, xe, xs, xe);
+    var bs2, be2 = _bj_k_ux_mul(ys, ye, ys, ye);
+    var s, e = _bj_k_ux_add(as2, ae2, bs2, be2);
+    return (s, e);
+}
+
+# The intensity (p[0]² + p[1]²) + (p[2]² + p[3]²) of a Jones vector's parts with an unbounded exponent, each operation
+# rounded to 53 bits: (s, e).
+#must_use
+fn _bj_vx_inten_ux(p: *f64): (f64, i64) {
+    var as, ae = _bj_k_ux_from(p[0]);
+    var bs, be = _bj_k_ux_from(p[1]);
+    var cs, ce = _bj_k_ux_from(p[2]);
+    var ds, de = _bj_k_ux_from(p[3]);
+    var xs, xe = _bj_vx_sq2(as, ae, bs, be);
+    var ys, ye = _bj_vx_sq2(cs, ce, ds, de);
+    var s, e = _bj_k_ux_add(xs, xe, ys, ye);
+    return (s, e);
+}
+
+# A Jones vector's intensity |E_x|² + |E_y|², hisab's (re² + im²) + (re² + im²): Rust's chain for a boxed or a
+# non-finite vector (where every value is the non-finite part's), else the unbounded chain, its last sum rounded once.
+#must_use
+fn _bj_vx_inten(p: *f64): f64 {
+    var a: f64 = p[0];
+    var b: f64 = p[1];
+    var c: f64 = p[2];
+    var d: f64 = p[3];
+    if (_bj_vx_cls4(p, 0, 2) != 1) {
+        var r: f64 = (a * a + b * b) + (c * c + d * d);
+        return r;
+    }
+    var as, ae = _bj_k_ux_from(a);
+    var bs, be = _bj_k_ux_from(b);
+    var cs, ce = _bj_k_ux_from(c);
+    var ds, de = _bj_k_ux_from(d);
+    var xs, xe = _bj_vx_sq2(as, ae, bs, be);
+    var ys, ye = _bj_vx_sq2(cs, ce, ds, de);
+    var u: f64 = _bj_k_ux_add_f64(xs, xe, ys, ye);
+    return u;
+}
+
+# The two complex products A·X and B·Y with an unbounded exponent, A = a[ia..], B = a[ib..] (each conjugated first
+# when mode & 1), X = x[ix..], Y = x[iy..]: hisab's re = ar·xr − ai·xi and im = ar·xi + ai·xr, each product, difference
+# and sum to 53 bits, into s[0..3] and e[0..3] as (A·X).re, (A·X).im, (B·Y).re, (B·Y).im.
+fn _bj_vx_cprod_ux(a: *f64, ia, ib, x: *f64, ix, iy, mode, s: *f64, e: *i64) {
+    for (var k = 0; k < 2; k = k + 1) {
+        var ja = ia;
+        var jx = ix;
+        if (k == 1) {
+            ja = ib;
+            jx = iy;
+        }
+        var ar: f64 = a[ja];
+        var ai: f64 = a[ja + 1];
+        if ((mode & 1) != 0) { ai = -ai; }
+        var xr: f64 = x[jx];
+        var xi: f64 = x[jx + 1];
+        var p1s, p1e = _bj_vx_mul(ar, xr);
+        var p2s, p2e = _bj_vx_mul(ai, xi);
+        var rs, re = _bj_k_ux_sub(p1s, p1e, p2s, p2e);
+        var p3s, p3e = _bj_vx_mul(ar, xi);
+        var p4s, p4e = _bj_vx_mul(ai, xr);
+        var is, ie = _bj_k_ux_add(p3s, p3e, p4s, p4e);
+        s[2 * k] = rs;
+        e[2 * k] = re;
+        s[2 * k + 1] = is;
+        e[2 * k + 1] = ie;
+    }
+    return 0;
+}
+
+# out[0..1] = A·X + B·Y, or A·X − B·Y when mode & 2, with A, B, X, Y as _bj_vx_cprod_ux's: hisab's chain in Rust's
+# order, the unbounded one at a range edge with its last sums rounded once. Returns the inputs' class (the section
+# comment); for class 2, out is untouched and the caller keeps BjComplex's products.
+#must_use
+fn _bj_vx_cdot(a: *f64, ia, ib, x: *f64, ix, iy, mode, out: *f64): i64 {
+    var c = _bj_vx_cls4(a, ia, ib);
+    var d = _bj_vx_cls4(x, ix, iy);
+    if (c == 2 || d == 2) { return 2; }
+    if (c == 0 && d == 0) {
+        var ar: f64 = a[ia];
+        var ai: f64 = a[ia + 1];
+        var br: f64 = a[ib];
+        var bi: f64 = a[ib + 1];
+        if ((mode & 1) != 0) {
+            ai = -ai;
+            bi = -bi;
+        }
+        var xr: f64 = x[ix];
+        var xi: f64 = x[ix + 1];
+        var yr: f64 = x[iy];
+        var yi: f64 = x[iy + 1];
+        var pr: f64 = ar * xr - ai * xi;
+        var pi: f64 = ar * xi + ai * xr;
+        var qr: f64 = br * yr - bi * yi;
+        var qi: f64 = br * yi + bi * yr;
+        if ((mode & 2) != 0) {
+            out[0] = pr - qr;
+            out[1] = pi - qi;
+        } else {
+            out[0] = pr + qr;
+            out[1] = pi + qi;
+        }
+        return 0;
+    }
+    var s: f64[4];
+    var e: i64[4];
+    _bj_vx_cprod_ux(a, ia, ib, x, ix, iy, mode, &s, &e);
+    if ((mode & 2) != 0) {
+        out[0] = _bj_k_ux_sub_f64(s[0], e[0], s[2], e[2]);
+        out[1] = _bj_k_ux_sub_f64(s[1], e[1], s[3], e[3]);
+    } else {
+        out[0] = _bj_k_ux_add_f64(s[0], e[0], s[2], e[2]);
+        out[1] = _bj_k_ux_add_f64(s[1], e[1], s[3], e[3]);
+    }
+    return 1;
+}
+
+# The Jones vector p scaled to unit intensity, into out (four parts): 0, or Rust's error, 1 for the zero vector, 2 for
+# a part that is not finite (out untouched). Rust's first branch where its intensity i lies in [1e-290, DBL_MAX]: i is
+# then the chain's (a part below 2^-511 adds a square under 2^-1022, which the larger one absorbs), and √i, 1/√i are
+# normal. Elsewhere Rust rescaled by its largest part, two more roundings; the port runs the first branch with an
+# unbounded exponent instead (row 18's normalized): i, √i and 1/√i to 53 bits, each product rounded once.
+#must_use
+fn _bj_vx_jnorm(p: *f64, out: *f64): i64 {
+    if (_bj_vx_cls4(p, 0, 2) == 2) { return 2; }
+    var i: f64 = _bj_vx_inten(p);
+    if (i >= _BJ_VX_JSAFE && i <= _BJ_VX_HI) {
+        var r: f64 = f64_sqrt(i);
+        var s: f64 = 1.0 / r;
+        for (var k = 0; k < 4; k = k + 1) {
+            var pk: f64 = p[k];
+            out[k] = pk * s;
+        }
+        return 0;
+    }
+    if (i == 0.0 && p[0] == 0.0 && p[1] == 0.0 && p[2] == 0.0 && p[3] == 0.0) { return 1; }
+    var is, ie = _bj_vx_inten_ux(p);
+    var rs, re = _bj_k_ux_sqrt(is, ie);
+    var ss, se = _bj_k_ux_div(1.0, 0, rs, re);
+    for (var k2 = 0; k2 < 4; k2 = k2 + 1) {
+        var ps, pe = _bj_k_ux_from(p[k2]);
+        out[k2] = _bj_k_ux_mul_f64(ps, pe, ss, se);
+    }
+    return 0;
+}
+
+# The overlap |⟨p|q⟩|²/(I_p·I_q) of Jones vectors p and q into out[0]: 0, or Rust's errors in Rust's order, 1 p not
+# finite, 2 p zero, 3 q not finite, 4 q zero (out untouched). Rust's first branch where it is the unbounded chain: both
+# vectors boxed, I_p·I_q in [1e-290, DBL_MAX], and ⟨p|q⟩'s parts boxed too, so its squares are normal or 0. Elsewhere,
+# where a square under- or overflowed or Rust rescaled both vectors, the first branch with an unbounded exponent: the
+# intensities, their product, ⟨p|q⟩ and its |·|² to 53 bits, the quotient rounded once.
+#must_use
+fn _bj_vx_overlap(p: *f64, q: *f64, out: *f64): i64 {
+    var cp = _bj_vx_cls4(p, 0, 2);
+    var cq = _bj_vx_cls4(q, 0, 2);
+    if (cp == 0 && cq == 0) {
+        var ia: f64 = _bj_vx_inten(p);
+        var ib: f64 = _bj_vx_inten(q);
+        var den: f64 = ia * ib;
+        if (den >= _BJ_VX_JSAFE && den <= _BJ_VX_HI) {
+            var w: f64[2];
+            var t = _bj_vx_cdot(p, 0, 2, q, 0, 2, 1, &w);
+            var wr: f64 = w[0];
+            var wi: f64 = w[1];
+            if (t == 0 && _bj_vx_box1(wr) == 1 && _bj_vx_box1(wi) == 1) {
+                var n: f64 = wr * wr + wi * wi;
+                out[0] = n / den;
+                return 0;
+            }
+        }
+    }
+    if (cp == 2) { return 1; }
+    if (p[0] == 0.0 && p[1] == 0.0 && p[2] == 0.0 && p[3] == 0.0) { return 2; }
+    if (cq == 2) { return 3; }
+    if (q[0] == 0.0 && q[1] == 0.0 && q[2] == 0.0 && q[3] == 0.0) { return 4; }
+    var as, ae = _bj_vx_inten_ux(p);
+    var bs, be = _bj_vx_inten_ux(q);
+    var ds, de = _bj_k_ux_mul(as, ae, bs, be);
+    var s: f64[4];
+    var e: i64[4];
+    _bj_vx_cprod_ux(p, 0, 2, q, 0, 2, 1, &s, &e);
+    var rs, re = _bj_k_ux_add(s[0], e[0], s[2], e[2]);
+    var is, ie = _bj_k_ux_add(s[1], e[1], s[3], e[3]);
+    var ns, ne = _bj_vx_sq2(rs, re, is, ie);
+    out[0] = _bj_k_ux_div_f64(ns, ne, ds, de);
+    return 0;
+}
+
 # --- fmtf.cyr ---
 
 # fmtf.cyr — f64 to text: the shortest round-trip digits, in Rust's Display and serde_json's forms.
@@ -22070,14 +22305,11 @@ fn _bj_rel_fields_edge(charge: f64, obs: *f64, st: *f64, e_out: *BjFieldVector, 
 # sin 2θ correctly rounded where Rust had c² − s² and 2cs (c² − s² loses every digit near a fast axis at 45°), and the
 # Mueller form takes 1 − cos δ as 2·sin²(δ/2) where cos δ > 1/2 (where 1 − cos δ cancels). Every other formula is
 # Rust's in Rust's order, with an unbounded exponent at a range edge (ADR 0002 row 18, M3 part 2d-1a: the Mueller
-# matrices' angles 2θ past DBL_MAX, their four-term sums, the waveplate's subnormal sin²(δ/2)). The JSON of the four
-# structs is part 1a-2's.
+# matrices' angles 2θ past DBL_MAX, their four-term sums, the waveplate's subnormal sin²(δ/2); 2d-1b: the Jones
+# vectors' and matrices' complex chains, src/crmath_vx.cyr's, polarization.rs's SAFE_MIN_INTENSITY of 1e-290 with
+# them). The JSON of the four structs is part 1a-2's.
 
 private
-
-# Intensities at or above this are computed without loss of precision to underflow; smaller (or non-finite) values
-# take the rescaling path. Mirrors polarization.rs's SAFE_MIN_INTENSITY.
-var _BJ_POL_SAFE_MIN: f64 = 0x03B8F2B061AEA072;     # 1e-290
 
 # std::f64::consts::FRAC_1_SQRT_2 and FRAC_PI_2, by their bits.
 var _BJ_POL_SQRT1_2: f64 = 0x3FE6A09E667F3BCD;
@@ -22211,38 +22443,41 @@ public fn BjJonesVector_linear(angle: f64): BjJonesVector {
 }
 
 impl BjJonesVector {
-    # The intensity |E_x|² + |E_y|². Mirrors `JonesVector::intensity`.
+    # The intensity |E_x|² + |E_y|², with an unbounded exponent at a range edge (ADR 0002 row 18, src/crmath_vx.cyr's
+    # _bj_vx_inten). Mirrors `JonesVector::intensity`.
     #must_use
     public fn intensity(self): f64 {
-        var a: f64 = self.x.norm_sq();
-        var b: f64 = self.y.norm_sq();
-        var i: f64 = a + b;
+        var i: f64 = _bj_vx_inten(_bj_pol_f64p(self));
         return i;
     }
 
-    # This vector scaled to unit intensity, into out: for any nonzero finite amplitude scale, a vector whose
-    # intensity under- or overflows first rescaled by its largest part. DivisionByZero for the zero vector,
-    # InvalidParameter for a non-finite part; out untouched on an error. Mirrors `JonesVector::normalized`.
+    # This vector scaled to unit intensity, into out, for any nonzero finite amplitude scale. Where Rust's intensity
+    # under- or overflowed it rescaled by the largest part (two more roundings); the port takes the first branch with an
+    # unbounded exponent there, so the result is exactly scale-invariant (ADR 0002 row 18, _bj_vx_jnorm). DivisionByZero
+    # "zero Jones vector has no polarization state" for the zero vector, InvalidParameter "Jones vector components must
+    # be finite" for a non-finite part; out untouched on an error. Mirrors `JonesVector::normalized`.
     public fn normalized(self, out: *BjJonesVector): Result {
-        var i: f64 = self.intensity();
-        var v: BjJonesVector = *self;
-        if (!(_bj_is_finite(i) == 1 && i >= _BJ_POL_SAFE_MIN)) {
-            var t, e = _bj_pol_rescaled(self, &v);
-            if (is_err_result(t) == 1) { return Err(e); }
-        }
-        var vi: f64 = v.intensity();
-        var r: f64 = f64_sqrt(vi);
-        var s: f64 = 1.0 / r;
-        var nx: BjComplex = v.x.scale(s);
-        var ny: BjComplex = v.y.scale(s);
-        out.x = nx;
-        out.y = ny;
+        var w: f64[4];
+        var t = _bj_vx_jnorm(_bj_pol_f64p(self), &w);
+        if (t == 2) { return Err(_bj_err_invalid_parameter("Jones vector components must be finite")); }
+        if (t == 1) { return Err(_bj_err_division_by_zero("zero Jones vector has no polarization state")); }
+        var o: *f64 = _bj_pol_f64p(out);
+        o[0] = w[0];
+        o[1] = w[1];
+        o[2] = w[2];
+        o[3] = w[3];
         return Ok(0);
     }
 
-    # The inner product ⟨J₁|J₂⟩ = x₁*·x₂ + y₁*·y₂, conjugate-linear in the first. Mirrors `JonesVector::inner`.
+    # The inner product ⟨J₁|J₂⟩ = x₁*·x₂ + y₁*·y₂, conjugate-linear in the first, with an unbounded exponent at a range
+    # edge (ADR 0002 row 18, _bj_vx_cdot). Mirrors `JonesVector::inner`.
     #must_use
     public fn inner(self, other: BjJonesVector): BjComplex {
+        var w: f64[2];
+        if (_bj_vx_cdot(_bj_pol_f64p(self), 0, 2, _bj_pol_f64p(&other), 0, 2, 1, &w) != 2) {
+            var r: BjComplex = BjComplex_new(w[0], w[1]);
+            return r;
+        }
         var cx: BjComplex = self.x.conj();
         var cy: BjComplex = self.y.conj();
         var p: BjComplex = BjComplex_mul(cx, other.x);
@@ -22252,62 +22487,17 @@ impl BjJonesVector {
     }
 
     # The degree of overlap |⟨J₁|J₂⟩|²/(I₁·I₂): 0 for orthogonal states, 1 for parallel ones, whatever the two
-    # amplitude scales (rescaled when the product of the intensities under- or overflows). DivisionByZero when either
-    # vector is zero, InvalidParameter for a non-finite part. Mirrors `JonesVector::overlap`.
+    # amplitude scales. Where Rust's squares under- or overflowed, or it rescaled both vectors, the port takes its first
+    # branch with an unbounded exponent (ADR 0002 row 18, _bj_vx_overlap). DivisionByZero when either vector is zero,
+    # InvalidParameter for a non-finite part, the first vector's error first. Mirrors `JonesVector::overlap`.
     public fn overlap(self, other: BjJonesVector): Result {
-        var ia: f64 = self.intensity();
-        var ib: f64 = other.intensity();
-        var den: f64 = ia * ib;
-        if (_bj_is_finite(den) == 1 && den >= _BJ_POL_SAFE_MIN) {
-            var z: BjComplex = self.inner(other);
-            var n: f64 = z.norm_sq();
-            var o: f64 = n / den;
-            return Ok(o);
-        }
-        var a: BjJonesVector;
-        var ta, ea = _bj_pol_rescaled(self, &a);
-        if (is_err_result(ta) == 1) { return Err(ea); }
-        var b: BjJonesVector;
-        var tb, eb = _bj_pol_rescaled(&other, &b);
-        if (is_err_result(tb) == 1) { return Err(eb); }
-        var w: BjComplex = a.inner(b);
-        var n2: f64 = w.norm_sq();
-        var i1: f64 = a.intensity();
-        var i2: f64 = b.intensity();
-        var d2: f64 = i1 * i2;
-        var o2: f64 = n2 / d2;
-        return Ok(o2);
+        var w: f64[1];
+        var t = _bj_vx_overlap(_bj_pol_f64p(self), _bj_pol_f64p(&other), &w);
+        if (t == 1 || t == 3) { return Err(_bj_err_invalid_parameter("Jones vector components must be finite")); }
+        if (t == 2 || t == 4) { return Err(_bj_err_division_by_zero("zero Jones vector has no polarization state")); }
+        var o: f64 = w[0];
+        return Ok(o);
     }
-}
-
-# The vector at v scaled so that its largest real or imaginary part has magnitude 1 (its intensity in [1, 4]), into
-# out. InvalidParameter "Jones vector components must be finite", DivisionByZero "zero Jones vector has no
-# polarization state". Mirrors polarization.rs's private `JonesVector::rescaled`.
-fn _bj_pol_rescaled(v: *BjJonesVector, out: *BjJonesVector): Result {
-    var a: f64 = v.x.re;
-    var b: f64 = v.x.im;
-    var c: f64 = v.y.re;
-    var d: f64 = v.y.im;
-    if (_bj_is_finite(a) == 0 || _bj_is_finite(b) == 0 || _bj_is_finite(c) == 0 || _bj_is_finite(d) == 0) {
-        return Err(_bj_err_invalid_parameter("Jones vector components must be finite"));
-    }
-    var aa: f64 = f64_abs(a);                       # Rust's fold of f64::max from 0, over finite parts
-    var ab: f64 = f64_abs(b);
-    var ac: f64 = f64_abs(c);
-    var ad: f64 = f64_abs(d);
-    var m: f64 = _bj_max(0.0, aa);
-    m = _bj_max(m, ab);
-    m = _bj_max(m, ac);
-    m = _bj_max(m, ad);
-    if (m == 0.0) { return Err(_bj_err_division_by_zero("zero Jones vector has no polarization state")); }
-    var s: f64 = 1.0 / m;
-    var vx: BjComplex = v.x;
-    var vy: BjComplex = v.y;
-    var nx: BjComplex = vx.scale(s);
-    var ny: BjComplex = vy.scale(s);
-    out.x = nx;
-    out.y = ny;
-    return Ok(0);
 }
 
 # ── Jones matrix ─────────────────────────────────────────────────────────────────────────────────────────────────
@@ -22438,41 +22628,71 @@ public fn BjJonesMatrix_rotator(angle: f64): BjJonesMatrix {
 }
 
 impl BjJonesMatrix {
-    # This matrix applied to a Jones vector. Mirrors `JonesMatrix::apply`.
+    # This matrix applied to a Jones vector, each output m_i0·x + m_i1·y with an unbounded exponent at a range edge
+    # (ADR 0002 row 18, src/crmath_vx.cyr's _bj_vx_cdot); an input part that is not finite keeps BjComplex's products.
+    # Mirrors `JonesMatrix::apply`.
     #must_use
     public fn apply(self, v: BjJonesVector): BjJonesVector {
-        var p: BjComplex = BjComplex_mul(self.m00, v.x);
-        var q: BjComplex = BjComplex_mul(self.m01, v.y);
-        var r: BjComplex = BjComplex_mul(self.m10, v.x);
-        var u: BjComplex = BjComplex_mul(self.m11, v.y);
-        var x: BjComplex = BjComplex_add(p, q);
-        var y: BjComplex = BjComplex_add(r, u);
-        var o: BjJonesVector = BjJonesVector_new(x, y);
+        var m: *f64 = _bj_pol_f64p(self);
+        var x: *f64 = _bj_pol_f64p(&v);
+        var o: BjJonesVector;
+        var op: *f64 = _bj_pol_f64p(&o);
+        var w: f64[2];
+        for (var i = 0; i < 2; i = i + 1) {
+            if (_bj_vx_cdot(m, 4 * i, 4 * i + 2, x, 0, 2, 0, &w) == 2) {
+                var a: BjComplex = BjComplex_new(m[4 * i], m[4 * i + 1]);
+                var b: BjComplex = BjComplex_new(m[4 * i + 2], m[4 * i + 3]);
+                var p: BjComplex = BjComplex_mul(a, v.x);
+                var q: BjComplex = BjComplex_mul(b, v.y);
+                var z: BjComplex = BjComplex_add(p, q);
+                w[0] = z.re;
+                w[1] = z.im;
+            }
+            op[2 * i] = w[0];
+            op[2 * i + 1] = w[1];
+        }
         return o;
     }
 
-    # self × other: self applied after other. Mirrors `JonesMatrix::compose`.
+    # self × other: self applied after other, each entry m_i0·n_0j + m_i1·n_1j with an unbounded exponent at a range
+    # edge (ADR 0002 row 18, _bj_vx_cdot); an input part that is not finite keeps BjComplex's products. Mirrors
+    # `JonesMatrix::compose`.
     #must_use
     public fn compose(self, other: BjJonesMatrix): BjJonesMatrix {
-        var a1: BjComplex = BjComplex_mul(self.m00, other.m00);
-        var a2: BjComplex = BjComplex_mul(self.m01, other.m10);
-        var b1: BjComplex = BjComplex_mul(self.m00, other.m01);
-        var b2: BjComplex = BjComplex_mul(self.m01, other.m11);
-        var c1: BjComplex = BjComplex_mul(self.m10, other.m00);
-        var c2: BjComplex = BjComplex_mul(self.m11, other.m10);
-        var d1: BjComplex = BjComplex_mul(self.m10, other.m01);
-        var d2: BjComplex = BjComplex_mul(self.m11, other.m11);
-        var a: BjComplex = BjComplex_add(a1, a2);
-        var b: BjComplex = BjComplex_add(b1, b2);
-        var c: BjComplex = BjComplex_add(c1, c2);
-        var d: BjComplex = BjComplex_add(d1, d2);
-        var j: BjJonesMatrix = BjJonesMatrix_new(a, b, c, d);
+        var m: *f64 = _bj_pol_f64p(self);
+        var n: *f64 = _bj_pol_f64p(&other);
+        var j: BjJonesMatrix;
+        var op: *f64 = _bj_pol_f64p(&j);
+        var w: f64[2];
+        for (var i = 0; i < 2; i = i + 1) {
+            for (var k = 0; k < 2; k = k + 1) {
+                if (_bj_vx_cdot(m, 4 * i, 4 * i + 2, n, 2 * k, 4 + 2 * k, 0, &w) == 2) {
+                    var a: BjComplex = BjComplex_new(m[4 * i], m[4 * i + 1]);
+                    var b: BjComplex = BjComplex_new(m[4 * i + 2], m[4 * i + 3]);
+                    var c: BjComplex = BjComplex_new(n[2 * k], n[2 * k + 1]);
+                    var d: BjComplex = BjComplex_new(n[4 + 2 * k], n[5 + 2 * k]);
+                    var p: BjComplex = BjComplex_mul(a, c);
+                    var q: BjComplex = BjComplex_mul(b, d);
+                    var z: BjComplex = BjComplex_add(p, q);
+                    w[0] = z.re;
+                    w[1] = z.im;
+                }
+                op[4 * i + 2 * k] = w[0];
+                op[4 * i + 2 * k + 1] = w[1];
+            }
+        }
         return j;
     }
 
-    # The determinant m00·m11 − m01·m10. Mirrors `JonesMatrix::determinant`.
+    # The determinant m00·m11 − m01·m10, with an unbounded exponent at a range edge (ADR 0002 row 18, _bj_vx_cdot); a
+    # part that is not finite keeps BjComplex's products. Mirrors `JonesMatrix::determinant`.
     #must_use
     public fn determinant(self): BjComplex {
+        var w: f64[2];
+        if (_bj_vx_cdot(_bj_pol_f64p(self), 0, 2, _bj_pol_f64p(self), 6, 4, 2, &w) != 2) {
+            var r: BjComplex = BjComplex_new(w[0], w[1]);
+            return r;
+        }
         var p: BjComplex = BjComplex_mul(self.m00, self.m11);
         var q: BjComplex = BjComplex_mul(self.m01, self.m10);
         var z: BjComplex = BjComplex_sub(p, q);

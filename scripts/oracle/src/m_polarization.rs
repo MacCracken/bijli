@@ -21,6 +21,11 @@
 //! M3 part 2d-1a (ADR 0002 row 18) appends the Mueller matrices' edge grid after that: fast axes where 2θ passes
 //! DBL_MAX and on either side, retardances where sin²(δ/2) falls below 2^-1022, and matrices and Stokes vectors whose
 //! four-term sums overflow and cancel or meet products below 2^-1022.
+//!
+//! M3 part 2d-1b (ADR 0002 row 18) appends the Jones vectors' and matrices' edge grid: squares and products below
+//! 2^-1022 that round twice, products past DBL_MAX that cancel, intensities around polarization.rs's 1e-290 rescale
+//! threshold and past DBL_MAX, nearly orthogonal pairs whose |⟨J₁|J₂⟩|² underflows, and a non-finite row beside an
+//! edge.
 
 use crate::grids::{Rng, pow2, specials};
 use crate::m_field::res_f;
@@ -420,6 +425,7 @@ pub fn emit() -> Module {
     }
     waveplate_edges(m);
     mueller_edges(m);
+    jones_edges(m);
     rows.m
 }
 
@@ -520,6 +526,76 @@ fn mueller_edges(m: &mut Rows) {
         }
         for &y in &ms {
             m.row("MuellerMatrix::compose", Class::A, &[mm(x), mm(y)].concat(), &mm(black_box(x).compose(&y)));
+        }
+    }
+}
+
+/// M3 part 2d-1b (ADR 0002 row 18): the Jones vectors and matrices at their range edges.
+fn jones_edges(m: &mut Rows) {
+    let (a, t, h, b, mx, nan) = (1.5 * pow2(-537), 1e-160, 1e200, 1e154, f64::MAX, f64::NAN);
+    let jvec = |p: [f64; 4]| JonesVector::new(Complex::new(p[0], p[1]), Complex::new(p[2], p[3]));
+    let vs: Vec<JonesVector> = [
+        [a, a, a, 0.0],
+        [a, -a, a, a],
+        [t, 3.0 * t, -2.0 * t, t],
+        [1.0, 0.0, t, 0.0],
+        [t, 0.0, 3.0, 0.0],
+        [h, 0.0, h, 0.0],
+        [h, 0.0, -h, 0.0],
+        [h, h, h, -h],
+        [b, b, b, b],
+        [1.5 * b, 0.0, 0.0, 0.0],
+        [1e-145, 0.0, 0.0, 0.0],
+        [0.9e-145, 0.0, 0.0, 0.0],
+        [7.1e-146, 0.0, 7.1e-146, 0.0],
+        [5e-324, 0.0, 0.0, 0.0],
+        [5e-324, 5e-324, 0.0, 1e-320],
+        [mx, 0.0, 0.0, 0.0],
+        [mx, mx, 0.0, 0.0],
+        [pow2(600), 0.0, pow2(-600), 0.0],
+        [-0.0, -0.0, -0.0, -0.0],
+        [nan, 0.0, h, 0.0],
+        // boxed pairs whose inner product lies below 2^-511 (its square subnormal) with I₁·I₂ near 2^-942
+        [1.3 * pow2(-19), 0.0, pow2(40), 0.0],
+        [1.3 * pow2(-19), 1.1 * pow2(-20), pow2(40), 0.0],
+        [1.7 * pow2(-511), 0.0, 0.0, 0.0],
+        // a last sum below 2^-1022 that rounding to 53 bits first puts on a midpoint (2^-1030 + 2^-1075 + 2^-1090)
+        [pow2(-515), -pow2(-575), pow2(-545), 0.0],
+    ]
+    .iter()
+    .map(|&q| jvec(q))
+    .collect();
+    for &v in &vs {
+        m.row("JonesVector::intensity", Class::A, &jv(v), &[f(black_box(v).intensity())]);
+        m.row("JonesVector::normalized", Class::A, &jv(v), &res_jv(black_box(v).normalized()));
+        for &w in &vs {
+            let ins = [jv(v), jv(w)].concat();
+            m.row("JonesVector::inner", Class::A, &ins, &cx(black_box(v).inner(&w)));
+            m.row("JonesVector::overlap", Class::A, &ins, &res_f(black_box(v).overlap(&w)));
+        }
+    }
+    let c = Complex::new;
+    let ms = [
+        JonesMatrix::new(c(h, 0.0), c(h, 0.0), c(h, 0.0), c(h, 0.0)),
+        JonesMatrix::new(c(h, 0.0), c(-h, 0.0), c(h, h), c(h, -h)),
+        JonesMatrix::new(c(a, a), c(a, 0.0), c(a, -a), c(t, t)),
+        JonesMatrix::new(c(1.0, 0.0), c(t, 0.0), c(-t, 0.0), c(1.0, 0.0)),
+        JonesMatrix::new(c(b, 0.0), c(b, 0.0), c(b, 0.0), c(-b, 0.0)),
+        JonesMatrix::new(c(mx, 0.0), c(mx, 0.0), c(1.0, 0.0), c(-1.0, 0.0)),
+        JonesMatrix::new(c(nan, 0.0), c(1.0, 0.0), c(h, 0.0), c(-h, 0.0)),
+        JonesMatrix::new(c(0.3, 0.1), c(-0.2, 0.7), c(0.5, -0.4), c(0.9, 0.2)),
+        JonesMatrix::new(c(pow2(-515), pow2(-500)), c(pow2(-545), 0.0), c(1.0, 0.0), c(0.0, 0.0)),
+        JonesMatrix::identity(),
+        JonesMatrix::horizontal_polarizer(),
+        JonesMatrix::quarter_wave_plate(FRAC_PI_4),
+    ];
+    for &j in &ms {
+        m.row("JonesMatrix::determinant", Class::A, &jm(j), &cx(black_box(j).determinant()));
+        for &v in &vs {
+            m.row("JonesMatrix::apply", Class::A, &[jm(j), jv(v)].concat(), &jv(black_box(j).apply(&v)));
+        }
+        for &k in &ms {
+            m.row("JonesMatrix::compose", Class::A, &[jm(j), jm(k)].concat(), &jm(black_box(j).compose(&k)));
         }
     }
 }

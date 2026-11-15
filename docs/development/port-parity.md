@@ -3796,11 +3796,11 @@ E and B = n̂ × E/c.
   - three products of 2.25·2^-1074 summing to 7·2^-1074;
   - 10^200·10^200 − 10^200·10^200 = +0;
   - w·2^-1022 − 2^-1022 = −0.
-- **Benchmarks.** A first form called a shared `_bj_vx_dot4` for each output. A full bench interleaved against
-  2c-2's tree (three rounds, load 4.8 to 7.3) put `polarization/mueller_apply` at 177–190 ns for 91–97 in its two
-  quieter rounds: a 6-argument call per output, and the edge test's call for each of the polarizer's two zero rows. A micro-bench of three variants
-  settled the form: `apply` and `compose` sum inline and unrolled, and test a row (or column) of zeros before
-  calling the edge test. The final tree, interleaved with HEAD's three times (load 6.7):
+- **Benchmarks.** A first form called a shared `_bj_vx_dot4` for each output. A full bench interleaved against 2c-2's
+  tree (three rounds, load 4.8 to 7.3) put `polarization/mueller_apply` at 177–190 ns for 91–97 in its two quieter
+  rounds: a 6-argument call per output, and the edge test's call for each of the polarizer's two zero rows. A
+  micro-bench of three variants settled the form: `apply` and `compose` sum inline and unrolled, and test a row (or
+  column) of zeros before calling the edge test. The final tree, interleaved with HEAD's three times (load 6.7):
   - `mueller_apply` on the bench's polarizer: 99–106 → 116–122 ns, the band and zero-row tests;
   - a dense `apply` (a waveplate on a general Stokes vector): 98–106 → 100–105 ns, unchanged;
   - a dense `compose`: 449–487 → 359–376 ns (−21 %), each row of the left matrix read once, not once per column.
@@ -3813,3 +3813,86 @@ E and B = n̂ × E/c.
   equal**. The seven Mueller constructors' and sums' digests changed (`linear_polarizer`, `rotation`, `waveplate`, the
   two plates, `apply`, `compose`); the other 373 are unchanged. `polarization.tcyr` passes on all three. The gate is
   clean (17 steps, no warnings; execution coverage 288 of 288 functions).
+
+## 68. M3 part 2d-1b: the Jones vectors and matrices at their range edges (2026-11-14)
+
+- **ADR 0002 row 18, amended for the Jones vectors and matrices.** Seven functions run hisab's complex chain in Rust's
+  order: `intensity` ((re² + im²) + (re² + im²)), `inner`, `apply`, `compose` and `determinant` (two complex products,
+  each four real products then a difference and a sum, added or subtracted in a pair), and `normalized` and `overlap`
+  through them.
+  - **The guard is row 14's box, on the inputs.** With every part ±0 or 2^-511 ≤ |x| < 2^511, every real product is
+    normal or an exact 0, each pair's sum lies below 2^1023, and a sum below 2^-1022 is exact, so Rust's chain is the
+    unbounded one up to its last operation (class 0). A finite part outside the box is an edge (class 1): the chain
+    runs with an unbounded exponent and each output's last operation rounds once. A part that is not finite (class 2)
+    leaves an output to BjComplex's row-14 products, as before, since the non-finite part decides its value.
+  - **`normalized`** keeps Rust's first branch where the intensity i lies in [1e-290, DBL_MAX]: i is then the chain's
+    (a part below 2^-511 adds a square under 2^-1022, which the larger square absorbs), and √i and 1/√i are normal.
+    Elsewhere Rust rescaled by its largest part; the port runs the first branch with an unbounded exponent there (i,
+    √i and 1/√i to 53 bits, each product rounded once), as row 18 did for `FieldVector::normalized` (§21). So the
+    result is exactly scale-invariant: 2^-600·v gives v's bits.
+  - **`overlap`** keeps Rust's first branch where both vectors are boxed, I₁·I₂ lies in [1e-290, DBL_MAX] and
+    ⟨J₁|J₂⟩'s parts are boxed too (its squares normal or 0). Elsewhere, where a square under- or overflowed or Rust
+    rescaled both vectors, the first branch runs with an unbounded exponent: the intensities, their product, ⟨J₁|J₂⟩
+    and its |·|² to 53 bits, the quotient rounded once. The I₁·I₂ bound is slack: by Cauchy–Schwarz,
+    |⟨J₁|J₂⟩|² ≤ I₁·I₂, so an I₁·I₂ below 2^-1022 forces ⟨J₁|J₂⟩ out of the box, and between 2^-1022 and 1e-290 Rust's
+    first branch is the chain's.
+  - Rust's errors are unchanged: a part not finite is InvalidParameter, a zero vector DivisionByZero, and `overlap`
+    checks the first vector before the second.
+- **src/crmath_vx.cyr's Jones section**: `_bj_vx_cls4` (the box, by exponent fields with one fast test),
+  `_bj_vx_cdot`, `_bj_vx_inten`, `_bj_vx_jnorm` and `_bj_vx_overlap` on the parts' addresses, and the unbounded
+  helpers `_bj_vx_cprod_ux`, `_bj_vx_inten_ux` and `_bj_vx_sq2`. polarization.cyr's methods call them; `apply`,
+  `compose`, `inner` and `determinant` keep BjComplex's products for an output with a non-finite input.
+  `_BJ_POL_SAFE_MIN` and `_bj_pol_rescaled` are gone.
+- **The oracle**: `polarization.tsv` gains 1,631 rows after every earlier row (`jones_edges`; the old file an exact
+  prefix): 24 Jones vectors and 12 matrices, each vector's intensity and normalization (22 rows each), every pair's
+  inner product and overlap (576 each), each matrix's determinant (9), and its products with every vector (`apply`,
+  288) and every matrix (`compose`, 138). They hold squares and products below 2^-1022 that round twice, products past
+  DBL_MAX that cancel, intensities around 1e-290 and past DBL_MAX, subnormal vectors, a NaN beside an edge row, boxed
+  pairs whose inner product lies below 2^-511, and a complex last sum that rounding to 53 bits first would put on a
+  midpoint.
+- **validate.py**: `pol_eval` under `r18` takes every Jones output with finite inputs through the unbounded chain
+  (`cdot`, `inten_ux`), `normalized` and `overlap` through their unbounded first branches after Rust's errors
+  (`jerr`), so the harness checks every box and fast path row by row. `polarization_adr_rows` labels a row 18 when
+  turning row 18 off, or rows 14 and 18 together, restores Rust's value: the 21 rows row 14 held for `inner`,
+  `apply`, `compose` and `determinant` are row 18's now. The harness passed on its first run.
+- **cr_verify.py's jcdot, jint, jnorm and jover families**: the four kernels against exact.py's chain, on parts inside
+  the box (7,438 of the 20,000 jcdot calls entirely), at its edges, subnormal and huge; products cancelling;
+  intensities near 1e-290 and past DBL_MAX; nearly orthogonal pairs, 2,228 of the 10,000 overlaps on Rust's first
+  branch. **80,000 calls per target, 0 mismatches on x86_64 and aarch64**, and dot4's 100,000 again.
+- **Mutations**, each run through the parity harness:
+  - the box's top at 2^1023: 22 failing rows; its bottom at 2^-1022: 6;
+  - `normalized`'s fast path below 1e-290: 21;
+  - `intensity` always on Rust's chain: 2;
+  - 1/√i rounded into binary64 first: 317; |⟨J₁|J₂⟩|² rounded into binary64 first: 534;
+  - the conjugate dropped from the unbounded inner product: 795;
+  - `overlap`'s box on ⟨J₁|J₂⟩ dropped: 4, and `cdot`'s last sum rounded to 53 bits first: 1. No row caught these two
+    at first; the boxed small-inner pairs and the complex midpoint row were added for them;
+  - `overlap`'s I₁·I₂ bound lowered to 0: not caught, and not catchable (the slack bound above).
+- **Mappings**: `polarization.adr.tsv` holds 3,186 rows: row 33's 2,321, row 18's 825 (the Mueller matrices' 237 and
+  the Jones vectors' and matrices' 588), row 14's 40 (`from_jones`, 2d-1c's). The 588: `overlap` 422, `normalized`
+  60, `inner` 47, `apply` 33, `compose` 19, `determinant` 5, `intensity` 2; 307 are older rows. What Rust gave on them
+  (a row can show several):
+  - NaN or ±∞ for a finite value: `overlap` 84, `inner` 23, `apply` 15, `compose` 14, `normalized` 5 (the rescale's
+    1/5e-324 = ∞: (5e-324, 0) normalized to NaN for (1, 0)), `determinant` 2;
+  - NaN for ±∞: 14 across the products;
+  - the wrong zero sign: `inner` 16, `apply` 7, `compose` 4;
+  - an ulp off: `overlap` 196, `normalized` 53, `inner` 6, `apply` 5, `intensity` 2, `compose` 1, `determinant` 1;
+    2 to 16 ulps: `overlap` 134, `normalized` 2; more than 16: `overlap` 4; 0 for a nonzero value: `overlap` 4.
+- **Tests**: `cyrius_jones_row18` in `tests/polarization.tcyr` (5 assertions, 202 in the file):
+  - the intensity of three squares of 2.25·2^-1074: 7·2^-1074;
+  - `normalized(2^-600·v)` = `normalized(v)` bit for bit, where Rust's rescale left a part an ulp off;
+  - ⟨(1e200, 1e200)|(1e200, −1e200)⟩ and det [[1e200, 1e200], [1e200, 1e200]] = +0;
+  - the overlap of a boxed pair whose inner product lies below 2^-511 (5.085658759397545e-36; Rust 5.0856527…e-36);
+  - `apply`'s last sum 2^-1030 + 2^-1075 + 2^-1090 rounded once to 2^-1030 + 2^-1074.
+- **Benchmarks.** The kernels replace BjComplex's per-product calls (four `BjComplex_mul` and two adds, each product
+  with its own range test) with one box test per pair of complex inputs and the arithmetic inline:
+  - a full bench interleaved against 2d-1a's tree (three rounds, load 3.6 to 5.4): `polarization/jones_apply_polarizer`
+    229–242 → 173–193 ns (−25 %), `jones_qwp_apply` 229–248 → 179–196 ns (−22 %); every other row within the load's
+    noise (median ratio 1.00 over 81). The record takes the medians, 175 and 183 ns;
+  - a micro-bench, interleaved with HEAD twice: `inner` 123 → 79–85 ns, `normalized` 93 → 72–75, `overlap` 242–246 →
+    201–213, `compose` 391–393 → 354–377, `intensity` unchanged (28 ns), and `determinant` 80 → 89–96 ns, one call of
+    eight arguments for two struct-valued products.
+- **Result, every target** (x86_64 ELF, x86_64 PE, aarch64): **16 modules, 0 failing; 492,825 ok, 0 failed, 0
+  measured, 0 pending, 76,443 accepted (ADR 01: 29,441; ADR 0002: 47,002)** over 569,268 rows; **all 380 digests
+  equal**. The seven Jones functions' digests changed; the other 373 are unchanged. `polarization.tcyr` passes on all
+  three. The gate is clean (17 steps, no warnings; execution coverage 288 of 288 functions).
