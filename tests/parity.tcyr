@@ -3464,7 +3464,123 @@ fn _par_fd_pulse(fp, fl): i64 {
     return 0;
 }
 
+# fdtd.rs's media (M5 part 1c): the constructors' fields or errors, the presets, the coefficient tuples.
+fn _par_fd_media(fp, fl): i64 {
+    var x0: f64 = _par_in(0);
+    var x1: f64 = _par_in(1);
+    var x2: f64 = _par_in(2);
+    var x3: f64 = _par_in(3);
+    var x4: f64 = _par_in(4);
+    if (_par_eq(fp, fl, "LossyMaterial::new") == 1) {
+        var ln: BjLossyMaterial = BjLossyMaterial_new(x0, x1);
+        _par_got_f(ln.eps_r);
+        _par_got_f(ln.conductivity);
+        return 1;
+    }
+    if (_par_eq(fp, fl, "LossyMaterial::try_new") == 1) {
+        var lt: BjLossyMaterial;
+        var t1, v1 = BjLossyMaterial_try_new(x0, x1, &lt);
+        if (is_err_result(t1) == 1) { return _par_got_error(v1) + 1; }
+        _par_got_f(lt.eps_r);
+        _par_got_f(lt.conductivity);
+        return 1;
+    }
+    if (_par_eq(fp, fl, "LossyMaterial::update_coefficients") == 1) {
+        var lc: BjLossyMaterial = BjLossyMaterial_new(x0, x1);
+        var ca, cb = lc.update_coefficients(x2, x3);
+        _par_got_f(ca);
+        _par_got_f(cb);
+        return 1;
+    }
+    var dm: BjDrudeMaterial = BjDrudeMaterial_new(x0, x1, x2);
+    if (_par_eq(fp, fl, "DrudeMaterial::gold") == 1) { dm = BjDrudeMaterial_gold(); }
+    if (_par_eq(fp, fl, "DrudeMaterial::silver") == 1) { dm = BjDrudeMaterial_silver(); }
+    if (_par_eq(fp, fl, "DrudeMaterial::try_new") == 1) {
+        var t2, v2 = BjDrudeMaterial_try_new(x0, x1, x2, &dm);
+        if (is_err_result(t2) == 1) { return _par_got_error(v2) + 1; }
+    }
+    if (_par_eq(fp, fl, "DrudeMaterial::ade_coefficients") == 1) {
+        var da, db, dk = dm.ade_coefficients(x3);
+        _par_got_f(da);
+        _par_got_f(db);
+        _par_got_f(dk);
+        return 1;
+    }
+    if (memeq(fp, "DrudeMaterial::", 15) == 1) {
+        _par_got_f(dm.eps_inf);
+        _par_got_f(dm.omega_p);
+        _par_got_f(dm.gamma);
+        return 1;
+    }
+    var om: BjLorentzMaterial = BjLorentzMaterial_new(x0, x1, x2, x3);
+    if (_par_eq(fp, fl, "LorentzMaterial::try_new") == 1) {
+        var t3, v3 = BjLorentzMaterial_try_new(x0, x1, x2, x3, &om);
+        if (is_err_result(t3) == 1) { return _par_got_error(v3) + 1; }
+    }
+    if (_par_eq(fp, fl, "LorentzMaterial::ade_coefficients") == 1) {
+        var oa, ob, og = om.ade_coefficients(x4);
+        _par_got_f(oa);
+        _par_got_f(ob);
+        _par_got_f(og);
+        return 1;
+    }
+    if (memeq(fp, "LorentzMaterial::", 17) == 1) {
+        _par_got_f(om.eps_inf);
+        _par_got_f(om.delta_eps);
+        _par_got_f(om.omega_0);
+        _par_got_f(om.gamma);
+        return 1;
+    }
+    var bm: BjDebyeMaterial = BjDebyeMaterial_new(x0, x1, x2);
+    if (_par_eq(fp, fl, "DebyeMaterial::water") == 1) { bm = BjDebyeMaterial_water(); }
+    if (_par_eq(fp, fl, "DebyeMaterial::try_new") == 1) {
+        var t4, v4 = BjDebyeMaterial_try_new(x0, x1, x2, &bm);
+        if (is_err_result(t4) == 1) { return _par_got_error(v4) + 1; }
+    }
+    if (_par_eq(fp, fl, "DebyeMaterial::ade_coefficients") == 1) {
+        var ba, bb = bm.ade_coefficients(x3);
+        _par_got_f(ba);
+        _par_got_f(bb);
+        return 1;
+    }
+    if (memeq(fp, "DebyeMaterial::", 15) == 1) {
+        _par_got_f(bm.eps_inf);
+        _par_got_f(bm.eps_s);
+        _par_got_f(bm.tau);
+        return 1;
+    }
+    return 0;
+}
+
+# fdtd.rs's subpixel averages (M5 part 1c).
+fn _par_fd_subpixel(fp, fl): i64 {
+    var e1: f64 = _par_in(0);
+    var e2: f64 = _par_in(1);
+    var fr: f64 = _par_in(2);
+    if (_par_eq(fp, fl, "fdtd::subpixel_permittivity_parallel") == 1) {
+        var t1, v1 = bj_subpixel_permittivity_parallel(e1, e2, fr);
+        _par_got_res_f(t1, v1);
+        return 1;
+    }
+    if (_par_eq(fp, fl, "fdtd::subpixel_permittivity_perpendicular") == 1) {
+        var p: f64 = bj_subpixel_permittivity_perpendicular(e1, e2, fr);
+        _par_got_f(p);
+        return 1;
+    }
+    if (_par_eq(fp, fl, "fdtd::subpixel_permittivity_perpendicular_checked") == 1) {
+        var t2, v2 = bj_subpixel_permittivity_perpendicular_checked(e1, e2, fr);
+        _par_got_res_f(t2, v2);
+        return 1;
+    }
+    return 0;
+}
+
 fn _par_fdtd(fp, fl): i64 {
+    if (fl > 14 && memeq(fp, "fdtd::subpixel", 14) == 1) { return _par_fd_subpixel(fp, fl); }
+    if (memeq(fp, "LossyMaterial::", 15) == 1 || memeq(fp, "DrudeMaterial::", 15) == 1
+      || memeq(fp, "LorentzMaterial::", 17) == 1 || memeq(fp, "DebyeMaterial::", 15) == 1) {
+        return _par_fd_media(fp, fl);
+    }
     if (fl > 8 && memeq(fp, "Fdtd1d::", 8) == 1) { return _par_fd1_script(); }
     if (fl > 12 && memeq(fp, "TfsfSource::", 12) == 1) { return _par_tf_script(fp, fl); }
     if (fl > 6 && memeq(fp, "fdtd::", 6) == 1) { return _par_fd_pulse(fp, fl); }

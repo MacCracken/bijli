@@ -67,6 +67,7 @@ EXTRA = {
     "json/s_matrix_from_json": "a 2-port SMatrix read back into a new matrix, its shape checked (ADR 0002 row 36)",
     "fdtd/gaussian_pulse": "a Gaussian pulse's value: one correctly rounded exp (src/fdtd_source.cyr, M5 part 1b)",
     "fdtd/tfsf_step_200": "one step of a 200-cell TF/SF auxiliary grid under a Gaussian drive (M5 part 1b)",
+    "fdtd/media_coefficients": "the lossy, Drude, Lorentz and Debye coefficient sets and a subpixel average (M5 1c)",
 }
 
 

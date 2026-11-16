@@ -55,7 +55,7 @@ port's harness reads the same files. This README records what is specific to bij
 | `complex` | M1 (+ 5c-2's edge grid) | 31,677 (+ 8 corrected) | `src/m_complex.rs` | — |
 | `constants` | M0 | 12 | `src/m_constants.rs` | `src/constants.cyr` (`src/t_constants.rs`, with the completeness proof) |
 | `error` | M1 | 1,635 | `src/m_error.rs` | — |
-| `fdtd` | M5 (part 1a: the 1D grid `Fdtd1d`, as scripts, class T; 1b: the pulses, class C, the Gaussian-driven grid and the TF/SF scripts) | 17,528 (+ 11 corrected, 105 mapped) | `src/m_fdtd.rs` | — |
+| `fdtd` | M5 (part 1a: the 1D grid `Fdtd1d`, as scripts, class T; 1b: the pulses, class C, the Gaussian-driven grid and the TF/SF scripts; 1c: the media and the subpixel averages, class A) | 85,909 (+ 11 corrected, 105 mapped) | `src/m_fdtd.rs` | `src/fdtd_media_data.cyr`, the gold, silver and water presets (`src/t_fdtd_media.rs`) |
 | `field` | M1 (parts 3a–3c, 5d-1 to 5d-5) | 26,770 | `src/m_field.rs` | — |
 | `fmtf` | M1 (+ Debug, part 3c; + fixed precision, M2 part 1b; + `{:e}`, M4 part 1c-2) | 89,528 | `src/m_fmtf.rs` (impetus's grid) | — |
 | `json` | M1 (part 4), M2 (part 1a: `Material`), M3 (parts 1a-2: polarization's four structs; 1b-2: `MieResult`; 1c-2: beam's three structs), M4 (part 1d: rf's `SMatrix`, `TouchstoneFormat`, `TouchstoneData`) | 66,620 (+ 30,742 corrected) | `src/m_json.rs` (serde_json 1.0.154 on `Complex`, `FieldVector`, `PointCharge`, `Material`, `JonesVector`, `JonesMatrix`, `StokesVector`, `MuellerMatrix`, `MieResult`, `GaussianBeam`, `AbcdMatrix`, `ResonatorStability`) | — |

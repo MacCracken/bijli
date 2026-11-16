@@ -8890,6 +8890,7 @@ class FdScripts:
     def __init__(self, root: Path, P):
         c = golden_consts(root)
         self.K = (c["field::SPEED_OF_LIGHT"], c["field::EPSILON_0"], c["field::MU_0"])
+        self.eps0 = c["field::EPSILON_0"]
         self.P = P
         self.prev, self.sim = None, None
 
@@ -8932,6 +8933,92 @@ class FdScripts:
             tf_apply(src, op, self.P)
         self.tf_prev = (raw, src, fn)
         return src.state()
+
+
+def fm_perm(x):
+    if fd_pos(x):
+        return None
+    return [("E", "InvalidPermittivity"), ("s", f"invalid permittivity: {rust_display(x)} (must be > 0)")]
+
+
+def fm_nonneg(name, x):
+    if x >= 0.0 and math.isfinite(x):
+        return None
+    return ip_err(f"{name} must be finite and non-negative, got {rust_display(x)}")
+
+
+def fm_positive(name, x):
+    return None if fd_pos(x) else ip_err(f"{name} must be finite and positive, got {rust_display(x)}")
+
+
+def fm_first(*checks):
+    """The first failing check's tokens, or None (each check a thunk, so later ones aren't evaluated)."""
+    for c in checks:
+        e = c()
+        if e is not None:
+            return e
+    return None
+
+
+def fm_eval(fn, v, EPS0):
+    """fdtd.rs's media and subpixel averages transcribed, on binary64: the outputs of a class-A row, or None."""
+    fl = lambda xs: [("f", x) for x in xs]  # noqa: E731
+    if fn in ("LossyMaterial::new", "DrudeMaterial::new", "LorentzMaterial::new", "DebyeMaterial::new"):
+        return fl(v)
+    if fn == "LossyMaterial::try_new":
+        return fm_first(lambda: fm_perm(v[0]), lambda: fm_nonneg("conductivity", v[1])) or fl(v)
+    if fn == "DrudeMaterial::try_new":
+        return fm_first(lambda: fm_perm(v[0]), lambda: fm_nonneg("plasma frequency omega_p", v[1]),
+                        lambda: fm_nonneg("damping gamma", v[2])) or fl(v)
+    if fn == "LorentzMaterial::try_new":
+        return fm_first(lambda: fm_perm(v[0]), lambda: fm_nonneg("oscillator strength delta_eps", v[1]),
+                        lambda: fm_positive("resonance frequency omega_0", v[2]),
+                        lambda: fm_nonneg("damping gamma", v[3])) or fl(v)
+    if fn == "DebyeMaterial::try_new":
+        msg = f"Debye eps_s ({rust_display(v[1])}) must be >= eps_inf ({rust_display(v[0])})"
+        order = lambda: ip_err(msg) if v[1] < v[0] else None  # noqa: E731
+        return fm_first(lambda: fm_perm(v[0]), lambda: fm_perm(v[1]), order,
+                        lambda: fm_positive("relaxation time tau", v[2])) or fl(v)
+    if fn == "DrudeMaterial::gold":
+        return fl([1.0, 1.37e16, 4.05e13])
+    if fn == "DrudeMaterial::silver":
+        return fl([1.0, 1.39e16, 2.73e13])
+    if fn == "DebyeMaterial::water":
+        return fl([4.9, 78.4, 8.27e-12])
+    if fn == "LossyMaterial::update_coefficients":
+        eps_r, sigma, dt, dx = v
+        eps = eps_r * EPS0
+        s = fdiv(sigma * dt, 2.0 * eps)
+        return fl([fdiv(1.0 - s, 1.0 + s), fdiv(fdiv(dt, eps * dx), 1.0 + s)])
+    if fn == "DrudeMaterial::ade_coefficients":
+        eps_inf, wp, g, dt = v
+        gdt = g * dt
+        return fl([fdiv(2.0 - gdt, 2.0 + gdt), fdiv(EPS0 * wp * wp * dt, 2.0 + gdt), fdiv(dt, EPS0 * eps_inf)])
+    if fn == "LorentzMaterial::ade_coefficients":
+        _eps_inf, de, w0, g, dt = v
+        gdt, w0dt = g * dt, w0 * dt
+        den = 1.0 + gdt / 2.0
+        return fl([fdiv(2.0 - w0dt * w0dt, den), fdiv(-(1.0 - gdt / 2.0), den), fdiv(EPS0 * de * w0dt * w0dt, den)])
+    if fn == "DebyeMaterial::ade_coefficients":
+        eps_inf, eps_s, tau, dt = v
+        tdt = fdiv(tau, dt)
+        return fl([fdiv(2.0 * tdt - 1.0, 2.0 * tdt + 1.0), fdiv(EPS0 * (eps_s - eps_inf), 2.0 * tdt + 1.0)])
+    if fn.startswith("fdtd::subpixel_permittivity_"):
+        e1, e2, f = v
+        bad_f = ip_err(f"fill_fraction must be in [0, 1], got {rust_display(f)}")
+        check = fm_first(lambda: fm_perm(e1), lambda: fm_perm(e2), lambda: None if 0.0 <= f <= 1.0 else bad_f)
+        if fn == "fdtd::subpixel_permittivity_parallel":
+            return check or fl([f * e2 + (1.0 - f) * e1])
+        if not (fd_pos(e1) and fd_pos(e2)):
+            perp = math.nan
+        else:
+            ff = 0.0 if math.isnan(f) else (0.0 if f < 0.0 else (1.0 if f > 1.0 else f))
+            perp = fdiv(1.0, fdiv(ff, e2) + fdiv(1.0 - ff, e1))
+        if fn == "fdtd::subpixel_permittivity_perpendicular":
+            return fl([perp])
+        if fn == "fdtd::subpixel_permittivity_perpendicular_checked":
+            return check or fl([perp])
+    return None
 
 
 def fd_injects(fn, ins_raw) -> bool:
@@ -9078,10 +9165,16 @@ def validate_fdtd(root: Path, path: Path) -> list:
         return errs
     fs = FdScripts(root, GLIBC_P)
     for n, (fn, _cls, ins, outs, _v) in enumerate(sc_lines(path), 1):
-        if not fn.startswith(("Fdtd1d::", "TfsfSource::", "fdtd::")):
+        if fn.startswith(("LossyMaterial::", "DrudeMaterial::", "LorentzMaterial::", "DebyeMaterial::",
+                          "fdtd::subpixel")):
+            want = fm_eval(fn, _v, fs.eps0)
+        elif fn.startswith(("Fdtd1d::", "TfsfSource::", "fdtd::")):
+            want = fs.eval(fn, ins)
+        else:
+            want = None
+        if want is None:
             errs.append(f"fdtd row {n}: no transcription for {fn}")
             continue
-        want = fs.eval(fn, ins)
         if not toks_same(want, wave_toks([parse_tok(x) for x in outs.split(" ")])):
             errs.append(f"fdtd row {n}: {fn}({ins[:200]}) -> {wire(want)[:300]}, oracle {outs[:300]}")
     return errs
@@ -9093,6 +9186,8 @@ def fdtd_corrections(root: Path, path: Path):
         out = []
         fs = FdScripts(root, MPFR_P)
         for fn, _cls, ins, outs, _v in sc_lines(path):
+            if not fn.startswith(("Fdtd1d::", "TfsfSource::", "fdtd::")) or fn.startswith("fdtd::subpixel"):
+                continue                                    # + − × ÷ only: no primitive to correct
             if fn == "TfsfSource::new" and fs.tf_eval(fn, ins, True) != fs.tf_eval(fn, ins):
                 continue                                    # ADR 0002 row 3's: fdtd.adr.tsv maps it
             want = fs.eval(fn, ins)

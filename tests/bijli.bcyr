@@ -1198,6 +1198,29 @@ fn main(): i64 {
     BjTfsfSource_free(&tfb);
     if (is_err_result(ttf) == 1 || gsum == 7.0 || tfe == 7.0) { println("."); }
 
+    # fdtd (M5 part 1c), Cyrius-only: one set of each material's update coefficients and a harmonic subpixel average a
+    # call, the time step varying (no Rust bench covers them).
+    var mls: BjLossyMaterial = BjLossyMaterial_new(4.0, 0.5);
+    var mdr: BjDrudeMaterial = BjDrudeMaterial_gold();
+    var mlo: BjLorentzMaterial = BjLorentzMaterial_new(2.0, 2.0, 1000000000000000.0, 100000000000000.0);
+    var mde: BjDebyeMaterial = BjDebyeMaterial_water();
+    var mcsum: f64 = 0.0;
+    var bm1 = bench_new("fdtd/media_coefficients");
+    bench_batch_start(bm1);
+    for (var k = 0; k < 1000000; k = k + 1) {
+        var kq: f64 = f64_from((k & 7) + 1);
+        var mdt: f64 = kq * 0.00000000000000001;
+        var lca, lcb = mls.update_coefficients(mdt, 0.0001);
+        var dra, drb, drk = mdr.ade_coefficients(mdt);
+        var loa, lob, log = mlo.ade_coefficients(mdt);
+        var dea, deb = mde.ade_coefficients(mdt);
+        var sbp: f64 = bj_subpixel_permittivity_perpendicular(2.0, 9.0, 0.3);
+        mcsum = mcsum + lca + lcb + dra + drb + drk + loa + lob + log + dea + deb + sbp;
+    }
+    bench_batch_stop(bm1, 1000000);
+    bench_report(bm1);
+    if (mcsum == 7.0) { println("."); }
+
     var ar: f64 = acc.re;
     if (ar == 7.0) { println("."); }
     if (keep == 7) { println("."); }

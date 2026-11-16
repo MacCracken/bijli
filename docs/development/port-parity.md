@@ -5458,3 +5458,50 @@ phasor form (`src/nf2ff.cyr`); 1f the JSON of the serde types. Part 2 is the ran
   (64) and `fdtd1d.tcyr` (70) pass on all three. The gate is clean (no warnings; execution coverage 332 of 332
   functions); validate.py 645,147 rows, 0 problems; the oracle's `--check` and clippy are clean. Next: 1c, the lossy
   and dispersive materials and the subpixel averages.
+
+## 96. M5 part 1c: the FDTD media and the subpixel averages (2026-11-15)
+
+- **`src/fdtd_media.cyr`**:
+  - **The materials**: `BjLossyMaterial`, `BjDrudeMaterial`, `BjLorentzMaterial` and `BjDebyeMaterial`, small structs
+    passed by value. Each has an unchecked `new` that stores what it is given, as Rust's does, and a validating
+    `try_new` into an out-pointer, with Rust's checks in Rust's order:
+    - ε_∞ (or ε_r) finite and positive;
+    - ω_p, γ, Δε and σ finite and non-negative (−0 passes, as Rust's `>= 0.0`);
+    - ω₀ and τ finite and positive;
+    - Debye's ε_s ≥ ε_∞, checked after both permittivities and before τ.
+  - **The coefficients**: `update_coefficients` (C_a, C_b) and the three `ade_coefficients` return Rust's tuples
+    (`: (f64, f64)` and `: (f64, f64, f64)`), each a chain of `+ − × ÷` written in Rust's order. For example
+    Lorentz's β is −(1 − γΔt/2) negated before the division, and Drude's β is ((ε₀·ω_p)·ω_p)·Δt/(2 + γΔt).
+  - **The presets**: `gold`, `silver` and `water` take their fields from the new generated `src/fdtd_media_data.cyr`
+    (`scripts/oracle/src/t_fdtd_media.rs`, the oracle's own values as positional decimals; the oracle's `--check`
+    regenerates it).
+  - **The subpixel averages**: the arithmetic mean (checked), the harmonic mean (unchecked: NaN for an invalid
+    permittivity; f clamped into [0, 1], NaN taken as 0, −0 kept as Rust's `clamp` keeps it), and its checked form.
+  - **ADR 0002 row 5, amended**: only Rust's docs stated the media's ε(ω), in e^{−iωt}. The port's docs state it in
+    e^{+jωt}, and no number changes, since the coefficients are time-domain. The ADE response tests already drove in
+    e^{+jωt}.
+- **The grid**: 68,381 class-A rows appended to `fdtd.tsv` (85,909, 23 MB):
+  - `new` and `try_new` over every special crossed (Lorentz's 10⁴ for `try_new`; its `new` at γ = 1), the Rust tests'
+    cases, Debye's ε_s ≥ ε_∞ straddled one ulp each way, and −0 for a non-negative field;
+  - the three presets;
+  - the four coefficient sets over every special for each argument (10⁴ each), the Rust tests' cases, gold, silver
+    and water across FDTD time steps, 1,000 seeded typical media and 500 seeded wide ones;
+  - the three subpixel averages over every special crossed, fill fractions at 0, −0, 1 and one ulp past each end,
+    the Rust tests' cases, and seeded media to 10^±300.
+
+  `validate.py`'s transcription (`fm_eval`) agreed with every row on its first run, and so did the port. No row needs
+  a correction or a mapping.
+- **Rust tests**: 12 of the 13 material tests and all 7 subpixel tests are ported in `tests/fdtd_media.tcyr`: 60
+  assertions with the Cyrius-only groups (the error records' text and order, the presets' fields, `new` storing
+  unchecked values and its κ = ∞ at ε_∞ = 0, the subpixel's −0). `test_lossy_material_serde` follows with the JSON
+  in part 1f. The ledger: 661 ported, 9 n/a, 188 pending of 858.
+- **Surface parity**: the four materials with their fields and methods, and the three subpixel functions, are matched
+  (512 items). Their serde impls stay listed for 1f. The API snapshot gains 14 functions (2,091).
+- **Benchmarks**: no Rust bench covers the media. A Cyrius-only `fdtd/media_coefficients` (`EXTRA`) takes one set of
+  each material's coefficients and a harmonic average in 83–84 ns. HEAD's 96 rows were unchanged against the new
+  tree, with median ratios of 1.01 and 1.01 over two interleaved rounds at load 0.7–2.8.
+- **Result, every target** (x86_64 ELF, x86_64 PE, aarch64): **18 modules, 0 failing; 622,099 ok, 0 failed, 0
+  measured, 0 pending, 91,429 accepted (ADR 01: 30,874; ADR 0002: 60,555)** over 713,528 rows; **all 448 digests
+  equal**, 1b's 430 unchanged and 18 new. `fdtd_media.tcyr` passes on all three (60). The gate is clean (no
+  warnings; execution coverage 346 of 346 functions); validate.py 713,528 rows, 0 problems; the oracle's `--check`
+  and clippy are clean. Next: 1d, `NonUniformGrid`, `fourth_order_derivative`, `CwAccumulator` and `find_eigenmodes`.

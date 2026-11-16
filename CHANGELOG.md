@@ -393,6 +393,15 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
   `tests/fdtd1d.tcyr` the two Mur absorption tests. The TF/SF step runs on the packed `f64v_*` verbs too (probe p19:
   `f64v_scale` writes past `dst` at an odd count, as `f64v_mul`): Cyrius-only benches, at load 1.7–2.7,
   `fdtd/tfsf_step_200` 2.37–2.45 µs → 846–852 ns (−65 %, with its Gaussian drive) and `fdtd/gaussian_pulse` 122–127 ns.
+- **Cyrius port, M5 part 1c — the FDTD media and the subpixel averages** (`src/fdtd_media.cyr`,
+  `src/fdtd_media_data.cyr`): `BjLossyMaterial` (`update_coefficients`), `BjDrudeMaterial`, `BjLorentzMaterial` and
+  `BjDebyeMaterial` (`ade_coefficients`), each with an unchecked `new` and a validating `try_new`, the gold, silver and
+  water presets (their fields generated from the oracle), and `bj_subpixel_permittivity_parallel`,
+  `bj_subpixel_permittivity_perpendicular` and `bj_subpixel_permittivity_perpendicular_checked`. The media's ε(ω) is
+  stated in e^{+jωt}; their coefficients are time-domain, so no number changes (ADR 0002 row 5 amended). `fdtd.tsv`
+  grows by 68,381 class-A rows (85,909). `tests/fdtd_media.tcyr` ports 12 of the 13 material tests (the serde one
+  follows with the JSON in part 1f) and the 7 subpixel tests (60 assertions). A Cyrius-only bench,
+  `fdtd/media_coefficients`, takes all four coefficient sets and a subpixel average in 83–84 ns.
 
 ### Fixed
 

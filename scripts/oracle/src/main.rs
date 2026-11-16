@@ -42,6 +42,7 @@ mod m_rf;
 mod m_scattering;
 mod m_wave;
 mod t_constants;
+mod t_fdtd_media;
 mod t_touchstone;
 mod tsv;
 
@@ -89,6 +90,7 @@ fn read(path: &Path) -> Result<String, String> {
 fn cyrius_outputs(root: &Path, prov: &str) -> Result<Vec<Output>, String> {
     let files = vec![
         ("src/constants.cyr", t_constants::emit(root, prov)?),
+        ("src/fdtd_media_data.cyr", t_fdtd_media::emit(prov)),
         ("src/touchstone_data.cyr", t_touchstone::emit(prov)),
     ];
     Ok(files

@@ -1,0 +1,386 @@
+# fdtd_media.tcyr — src/fdtd_media.cyr (M5 part 1c): the lossy, Drude, Lorentz and Debye materials and the subpixel
+# averages.
+#
+# Every group named test_* is rust-old/src/fdtd.rs's test of that name, ported assertion for assertion (the ledger
+# matches them by name): 12 of its 13 material tests and its 7 subpixel tests. `test_lossy_material_serde` follows
+# with the JSON in part 1f. The ADE response tests already drive in e^{+jωt}, bijli's one convention. The cyrius_*
+# groups pin the error records' text and order, the presets' fields, `new` storing unchecked values, and the subpixel
+# clamps and signed zeros. tests/golden/fdtd.tsv pins every function against Rust besides.
+
+include "tests/lib.cyr"
+
+# |a − b| < tol.
+fn near(a: f64, b: f64, tol: f64): i64 {
+    var d: f64 = a - b;
+    var ad: f64 = f64_abs(d);
+    if (ad < tol) { return 1; }
+    return 0;
+}
+
+# 1 when the C strings a and b are equal.
+fn text_is(a, b): i64 {
+    var n = strlen(a);
+    if (n != strlen(b)) { return 0; }
+    return memeq(a, b, n);
+}
+
+# A word as a *f64.
+fn f64p(a): *f64 {
+    return a;
+}
+
+# The Ok f64 of a Result (t, v); NaN for an Err.
+fn ok_f(t, v): f64 {
+    if (is_ok(t) != 1) {
+        var z: f64 = 0.0;
+        var nan: f64 = z / z;
+        return nan;
+    }
+    var x: f64 = v;
+    return x;
+}
+
+# The complex amplitude X of a steady-state x_n = Re[X·e^{jωnΔt}] over the last `periods` whole periods of the
+# n samples at x (DFT orthogonality), into out[0], out[1]. Rust's test helper `steady_state_phasor`.
+fn steady_state_phasor(x: *f64, n, samples_per_period, periods, out: *f64) {
+    var m = samples_per_period * periods;
+    var start = n - m;
+    var sp: f64 = f64_from(samples_per_period);
+    var w: f64 = 2.0 * 3.141592653589793 / sp;
+    var re: f64 = 0.0;
+    var im: f64 = 0.0;
+    for (var k = 0; k < m; k = k + 1) {
+        var kf: f64 = f64_from(start + k);
+        var th: f64 = w * kf;
+        var v: f64 = x[start + k];
+        var c: f64 = _bj_cos(th);
+        var s: f64 = _bj_sin(th);
+        re = re + v * c;
+        im = im - v * s;
+    }
+    var mf: f64 = f64_from(m);
+    out[0] = 2.0 * re / mf;
+    out[1] = 2.0 * im / mf;
+    return 0;
+}
+
+# |a − b|/|b| for complex a = (ar, ai), b = (br, bi).
+fn complex_rel_err(ar: f64, ai: f64, br: f64, bi: f64): f64 {
+    var dr: f64 = ar - br;
+    var di: f64 = ai - bi;
+    var num: f64 = _bj_hypot(dr, di);
+    var den: f64 = _bj_hypot(br, bi);
+    var r: f64 = num / den;
+    return r;
+}
+
+# (ar + j·ai)/(br + j·bi) into out[0], out[1], as Rust's test helper `complex_div`.
+fn complex_div(ar: f64, ai: f64, br: f64, bi: f64, out: *f64) {
+    var d: f64 = br * br + bi * bi;
+    out[0] = (ar * br + ai * bi) / d;
+    out[1] = (ai * br - ar * bi) / d;
+    return 0;
+}
+
+# cos(ω·n·Δt), the tests' drive E^n.
+fn drive(omega: f64, n, dt: f64): f64 {
+    var nf: f64 = f64_from(n);
+    var a: f64 = omega * nf;
+    var b: f64 = a * dt;
+    var c: f64 = _bj_cos(b);
+    return c;
+}
+
+# Runs fdtd.rs's media and subpixel tests, then the Cyrius-only checks.
+fn main() {
+    alloc_init();
+    var zero: f64 = 0.0;
+    var nan: f64 = zero / zero;
+    var inf: f64 = 1.0 / zero;
+    var pi: f64 = 3.141592653589793;
+
+    test_group("test_lossy_material_coefficients");
+    var l1: BjLossyMaterial = BjLossyMaterial_new(1.0, 0.0);
+    var ca1, cb1 = l1.update_coefficients(0.0000000000001, 0.0001);
+    assert(near(ca1, 1.0, 0.0000000001) == 1, "σ = 0: C_a = 1");
+    var ecb: f64 = 0.0000000000001 / (BJ_EPSILON_0 * 0.0001);
+    var rcb: f64 = f64_abs(cb1 - ecb) / ecb;
+    assert(rcb < 0.000001, "C_b = dt/(ε₀dx)");
+
+    test_group("test_lossy_material_damping");
+    var l2: BjLossyMaterial = BjLossyMaterial_new(1.0, 1.0);
+    var ca2, cb2 = l2.update_coefficients(0.0000000000001, 0.0001);
+    assert(ca2 < 1.0 && ca2 > 0.0, "σ = 1 S/m: 0 < C_a < 1");
+
+    test_group("test_drude_gold");
+    var gold: BjDrudeMaterial = BjDrudeMaterial_gold();
+    assert(gold.omega_p > 1000000000000000.0, "ω_p in the UV");
+    assert(gold.gamma > 0.0, "γ > 0");
+
+    test_group("test_drude_ade_coefficients");
+    var d4: BjDrudeMaterial = BjDrudeMaterial_new(1.0, 10000000000000000.0, 10000000000000.0);
+    var al4, be4, ka4 = d4.ade_coefficients(0.0000000000000001);
+    assert(al4 > 0.0 && al4 < 1.0, "0 < α < 1");
+    assert(be4 > 0.0 && ka4 > 0.0, "β, κ > 0");
+
+    test_group("test_lorentz_ade_coefficients");
+    var o5: BjLorentzMaterial = BjLorentzMaterial_new(1.0, 2.0, 1000000000000000.0, 10000000000000.0);
+    var al5, be5, gc5 = o5.ade_coefficients(0.0000000000000001);
+    assert(al5 > 1.0, "α ≈ 2");
+    assert(be5 < 0.0, "β ≈ −1");
+    assert(gc5 > 0.0, "γ_c > 0");
+
+    test_group("test_debye_water");
+    var water: BjDebyeMaterial = BjDebyeMaterial_water();
+    assert(near(water.eps_s, 78.4, 0.1) == 1, "ε_s = 78.4");
+    assert(water.tau > 0.000000000001, "τ > 1 ps");
+
+    test_group("test_debye_ade_coefficients");
+    var b7: BjDebyeMaterial = BjDebyeMaterial_new(2.0, 80.0, 0.00000000001);
+    var al7, be7 = b7.ade_coefficients(0.0000000000001);
+    assert(al7 > 0.9 && al7 < 1.0, "α ≈ 1 for τ ≫ dt");
+    assert(be7 > 0.0, "β > 0");
+
+    test_group("test_drude_ade_matches_analytic_response");
+    var dm: BjDrudeMaterial;
+    var td, vd = BjDrudeMaterial_try_new(1.0, 1000000000000000.0, 100000000000000.0, &dm);
+    var dt8: f64 = 0.00000000000000001;
+    var ppp8 = 3000;
+    var pf8: f64 = f64_from(ppp8);
+    var om8: f64 = 2.0 * pi / (pf8 * dt8);
+    var a8, b8, k8 = dm.ade_coefficients(dt8);
+    var steps8 = 12 * ppp8;
+    var j8: *f64 = f64p(alloc(steps8 * 8));
+    j8[0] = 0.0;
+    for (var n8 = 0; n8 < steps8 - 1; n8 = n8 + 1) {
+        var en1: f64 = drive(om8, n8 + 1, dt8);
+        var en0: f64 = drive(om8, n8, dt8);
+        j8[n8 + 1] = a8 * j8[n8] + b8 * (en1 + en0);
+    }
+    var got8: f64[2];
+    steady_state_phasor(j8, steps8, ppp8, 2, &got8);
+    var an8: f64[2];
+    var num8: f64 = BJ_EPSILON_0 * dm.omega_p * dm.omega_p;
+    complex_div(num8, 0.0, dm.gamma, om8, &an8);
+    var err8: f64 = complex_rel_err(got8[0], got8[1], an8[0], an8[1]);
+    assert(err8 < 0.0001, "J = ε₀ω_p²/(γ + jω)·E within 10⁻⁴");
+
+    test_group("test_lorentz_ade_matches_analytic_response");
+    var lm: BjLorentzMaterial;
+    var tl, vl = BjLorentzMaterial_try_new(2.0, 2.0, 1000000000000000.0, 100000000000000.0, &lm);
+    var dt9: f64 = 0.00000000000000001;
+    var ppp9 = 785;
+    var pf9: f64 = f64_from(ppp9);
+    var om9: f64 = 2.0 * pi / (pf9 * dt9);
+    var a9, b9, g9 = lm.ade_coefficients(dt9);
+    var steps9 = 110 * ppp9;
+    var p9: *f64 = f64p(alloc(steps9 * 8));
+    p9[0] = 0.0;
+    p9[1] = 0.0;
+    for (var n9 = 1; n9 < steps9 - 1; n9 = n9 + 1) {
+        var e9: f64 = drive(om9, n9, dt9);
+        p9[n9 + 1] = a9 * p9[n9] + b9 * p9[n9 - 1] + g9 * e9;
+    }
+    var got9: f64[2];
+    steady_state_phasor(p9, steps9, ppp9, 4, &got9);
+    var w0: f64 = lm.omega_0;
+    var num9: f64 = BJ_EPSILON_0 * lm.delta_eps * w0 * w0;
+    var an9: f64[2];
+    complex_div(num9, 0.0, w0 * w0 - om9 * om9, lm.gamma * om9, &an9);
+    var err9: f64 = complex_rel_err(got9[0], got9[1], an9[0], an9[1]);
+    assert(err9 < 0.001, "P = ε₀Δεω₀²/(ω₀² − ω² + jγω)·E within 10⁻³");
+
+    test_group("test_debye_ade_matches_analytic_response");
+    var bm: BjDebyeMaterial;
+    var tb, vb = BjDebyeMaterial_try_new(4.9, 78.4, 0.00000000001, &bm);
+    var dt10: f64 = 0.00000000000001;
+    var ppp10 = 6000;
+    var pf10: f64 = f64_from(ppp10);
+    var om10: f64 = 2.0 * pi / (pf10 * dt10);
+    var a10, b10 = bm.ade_coefficients(dt10);
+    var steps10 = 8 * ppp10;
+    var p10: *f64 = f64p(alloc(steps10 * 8));
+    p10[0] = 0.0;
+    for (var n10 = 0; n10 < steps10 - 1; n10 = n10 + 1) {
+        var f1: f64 = drive(om10, n10 + 1, dt10);
+        var f0: f64 = drive(om10, n10, dt10);
+        p10[n10 + 1] = a10 * p10[n10] + b10 * (f1 + f0);
+    }
+    var got10: f64[2];
+    steady_state_phasor(p10, steps10, ppp10, 2, &got10);
+    var num10: f64 = BJ_EPSILON_0 * (bm.eps_s - bm.eps_inf);
+    var an10: f64[2];
+    complex_div(num10, 0.0, 1.0, om10 * bm.tau, &an10);
+    var err10: f64 = complex_rel_err(got10[0], got10[1], an10[0], an10[1]);
+    assert(err10 < 0.0001, "P = ε₀(ε_s − ε_∞)/(1 + jωτ)·E within 10⁻⁴");
+
+    test_group("test_material_try_new_validation");
+    var dg: BjDrudeMaterial;
+    var t11a, v11a = BjDrudeMaterial_try_new(1.0, 13700000000000000.0, 40500000000000.0, &dg);
+    var g11: BjDrudeMaterial = BjDrudeMaterial_gold();
+    assert(is_ok(t11a) == 1 && dg.eps_inf == g11.eps_inf && dg.omega_p == g11.omega_p && dg.gamma == g11.gamma,
+      "try_new(1, 1.37e16, 4.05e13) is gold");
+    var t11b, v11b = BjDrudeMaterial_try_new(0.0, 10000000000000000.0, 10000000000000.0, &dg);
+    var t11c, v11c = BjDrudeMaterial_try_new(nan, 10000000000000000.0, 10000000000000.0, &dg);
+    var t11d, v11d = BjDrudeMaterial_try_new(1.0, -1.0, 10000000000000.0, &dg);
+    var t11e, v11e = BjDrudeMaterial_try_new(1.0, 10000000000000000.0, inf, &dg);
+    assert(is_err_result(t11b) == 1 && is_err_result(t11c) == 1, "Drude: ε_∞ = 0 and NaN refused");
+    assert(is_err_result(t11d) == 1 && is_err_result(t11e) == 1, "Drude: ω_p < 0 and γ = ∞ refused");
+    var lo: BjLorentzMaterial;
+    var t11f, v11f = BjLorentzMaterial_try_new(1.0, 2.0, 1000000000000000.0, 10000000000000.0, &lo);
+    assert(is_ok(t11f) == 1, "Lorentz: a valid one");
+    var t11g, v11g = BjLorentzMaterial_try_new(0.0, 2.0, 1000000000000000.0, 10000000000000.0, &lo);
+    var t11h, v11h = BjLorentzMaterial_try_new(1.0, -2.0, 1000000000000000.0, 10000000000000.0, &lo);
+    var t11i, v11i = BjLorentzMaterial_try_new(1.0, 2.0, 0.0, 10000000000000.0, &lo);
+    var t11j, v11j = BjLorentzMaterial_try_new(1.0, 2.0, 1000000000000000.0, nan, &lo);
+    assert(is_err_result(t11g) == 1 && is_err_result(t11h) == 1, "Lorentz: ε_∞ = 0 and Δε < 0 refused");
+    assert(is_err_result(t11i) == 1 && is_err_result(t11j) == 1, "Lorentz: ω₀ = 0 and γ = NaN refused");
+    var de: BjDebyeMaterial;
+    var t11k, v11k = BjDebyeMaterial_try_new(4.9, 78.4, 0.00000000000827, &de);
+    var w11: BjDebyeMaterial = BjDebyeMaterial_water();
+    assert(is_ok(t11k) == 1 && de.eps_inf == w11.eps_inf && de.eps_s == w11.eps_s && de.tau == w11.tau,
+      "try_new(4.9, 78.4, 8.27e-12) is water");
+    var t11l, v11l = BjDebyeMaterial_try_new(0.0, 80.0, 0.00000000001, &de);
+    var t11m, v11m = BjDebyeMaterial_try_new(80.0, 2.0, 0.00000000001, &de);
+    var t11n, v11n = BjDebyeMaterial_try_new(2.0, 80.0, 0.0, &de);
+    var t11o, v11o = BjDebyeMaterial_try_new(2.0, nan, 0.00000000001, &de);
+    assert(is_err_result(t11l) == 1 && is_err_result(t11m) == 1, "Debye: ε_∞ = 0 and ε_s < ε_∞ refused");
+    assert(is_err_result(t11n) == 1 && is_err_result(t11o) == 1, "Debye: τ = 0 and ε_s = NaN refused");
+    var ls: BjLossyMaterial;
+    var t11p, v11p = BjLossyMaterial_try_new(4.0, 0.5, &ls);
+    var t11q, v11q = BjLossyMaterial_try_new(-1.0, 0.5, &ls);
+    var t11r, v11r = BjLossyMaterial_try_new(4.0, -0.5, &ls);
+    var t11s, v11s = BjLossyMaterial_try_new(4.0, nan, &ls);
+    assert(is_ok(t11p) == 1 && is_err_result(t11q) == 1, "Lossy: valid; ε_r < 0 refused");
+    assert(is_err_result(t11r) == 1 && is_err_result(t11s) == 1, "Lossy: σ < 0 and NaN refused");
+
+    test_group("test_lossy_material_high_conductivity");
+    var l12: BjLossyMaterial = BjLossyMaterial_new(1.0, 10000000000.0);
+    var ca12, cb12 = l12.update_coefficients(0.0000000000001, 0.0001);
+    assert(ca12 < 0.0, "σ = 10¹⁰ S/m: C_a < 0");
+
+    test_group("test_subpixel_parallel_limits");
+    var ts1, vs1 = bj_subpixel_permittivity_parallel(1.0, 4.0, 0.0);
+    var ts2, vs2 = bj_subpixel_permittivity_parallel(1.0, 4.0, 1.0);
+    assert(near(ok_f(ts1, vs1), 1.0, 0.0000000001) == 1, "f = 0: ε₁");
+    assert(near(ok_f(ts2, vs2), 4.0, 0.0000000001) == 1, "f = 1: ε₂");
+
+    test_group("test_subpixel_perpendicular_limits");
+    var pp1: f64 = bj_subpixel_permittivity_perpendicular(1.0, 4.0, 0.0);
+    var pp2: f64 = bj_subpixel_permittivity_perpendicular(1.0, 4.0, 1.0);
+    assert(near(pp1, 1.0, 0.0000000001) == 1 && near(pp2, 4.0, 0.0000000001) == 1, "f = 0: ε₁; f = 1: ε₂");
+
+    test_group("test_subpixel_perpendicular_less_than_parallel");
+    var ts3, vs3 = bj_subpixel_permittivity_parallel(1.0, 4.0, 0.5);
+    var par3: f64 = ok_f(ts3, vs3);
+    var perp3: f64 = bj_subpixel_permittivity_perpendicular(1.0, 4.0, 0.5);
+    assert(perp3 <= par3, "harmonic ≤ arithmetic mean");
+
+    test_group("test_subpixel_half_fill");
+    assert(near(par3, 2.5, 0.0000000001) == 1, "arithmetic 2.5");
+    assert(near(perp3, 1.6, 0.0000000001) == 1, "harmonic 8/5");
+
+    test_group("test_subpixel_matches_layered_capacitor");
+    var e1: f64 = 2.0;
+    var e2: f64 = 9.0;
+    var ff: f64 = 0.3;
+    var area: f64 = 0.0002;
+    var gap: f64 = 0.001;
+    var c1: f64 = BJ_EPSILON_0 * e1 * area / ((1.0 - ff) * gap);
+    var c2: f64 = BJ_EPSILON_0 * e2 * area / (ff * gap);
+    var cs: f64 = 1.0 / (1.0 / c1 + 1.0 / c2);
+    var perp_ref: f64 = cs * gap / (BJ_EPSILON_0 * area);
+    var cp: f64 = BJ_EPSILON_0 * e1 * (1.0 - ff) * area / gap + BJ_EPSILON_0 * e2 * ff * area / gap;
+    var par_ref: f64 = cp * gap / (BJ_EPSILON_0 * area);
+    var ts5, vs5 = bj_subpixel_permittivity_parallel(e1, e2, ff);
+    var perp5: f64 = bj_subpixel_permittivity_perpendicular(e1, e2, ff);
+    assert(near(ok_f(ts5, vs5), par_ref, 0.000000000001) == 1, "E ∥: capacitors in parallel");
+    assert(near(perp5, perp_ref, 0.000000000001) == 1, "E ⊥: capacitors in series");
+    var ts6, vs6 = bj_subpixel_permittivity_perpendicular_checked(e1, e2, ff);
+    assert(near(ok_f(ts6, vs6), perp_ref, 0.000000000001) == 1, "the checked form agrees");
+
+    test_group("test_subpixel_fill_fraction_validation");
+    var fs: f64[5];
+    fs[0] = 2.0;
+    fs[1] = 4.0 / 3.0;
+    fs[2] = -0.1;
+    fs[3] = nan;
+    fs[4] = inf;
+    var bad6 = 0;
+    for (var i6 = 0; i6 < 5; i6 = i6 + 1) {
+        var ta, va = bj_subpixel_permittivity_parallel(1.0, 4.0, fs[i6]);
+        var tb2, vb2 = bj_subpixel_permittivity_perpendicular_checked(1.0, 4.0, fs[i6]);
+        if (is_err_result(ta) != 1 || is_err_result(tb2) != 1) { bad6 = bad6 + 1; }
+    }
+    assert(bad6 == 0, "f outside [0, 1], NaN and ∞ refused by both checked forms");
+    var ts7, vs7 = bj_subpixel_permittivity_parallel(nan, 4.0, 0.5);
+    var ts8, vs8 = bj_subpixel_permittivity_perpendicular_checked(1.0, -4.0, 0.5);
+    assert(is_err_result(ts7) == 1 && is_err_result(ts8) == 1, "ε₁ = NaN and ε₂ < 0 refused");
+    var u1: f64 = bj_subpixel_permittivity_perpendicular(1.0, 4.0, 4.0 / 3.0);
+    var u2: f64 = bj_subpixel_permittivity_perpendicular(1.0, 4.0, -3.0);
+    var u3: f64 = bj_subpixel_permittivity_perpendicular(1.0, 4.0, nan);
+    var u4: f64 = bj_subpixel_permittivity_perpendicular(0.0, 4.0, 0.5);
+    assert(near(u1, 4.0, 0.000000000001) == 1 && near(u2, 1.0, 0.000000000001) == 1, "unchecked: f clamped");
+    assert(near(u3, 1.0, 0.000000000001) == 1, "unchecked: f = NaN as 0");
+    assert(u4 != u4, "unchecked: ε₁ = 0 gives NaN");
+
+    test_group("test_subpixel_parallel_zero_eps_fails");
+    var tz1, vz1 = bj_subpixel_permittivity_parallel(0.0, 4.0, 0.5);
+    var tz2, vz2 = bj_subpixel_permittivity_parallel(1.0, 0.0, 0.5);
+    assert(is_err_result(tz1) == 1 && is_err_result(tz2) == 1, "a zero permittivity refused");
+
+    test_group("cyrius_media_error_records");
+    var ed: BjDrudeMaterial = BjDrudeMaterial_new(7.0, 7.0, 7.0);
+    var te1, ve1 = BjDrudeMaterial_try_new(1.0, 2.0, -0.5, &ed);
+    assert(ve1 == BJ_ERR_INVALID_PARAMETER && ed.eps_inf == 7.0, "γ < 0: out untouched");
+    var w1 = "invalid parameter: damping gamma must be finite and non-negative, got -0.5";
+    assert(text_is(bj_last_error_display(), w1) == 1, "its Display");
+    var te2, ve2 = BjDrudeMaterial_try_new(1.0, -0.0, 0.0, &ed);
+    assert(is_ok(te2) == 1, "ω_p = −0 is non-negative, as Rust's >= 0.0");
+    var el: BjLorentzMaterial;
+    var te3, ve3 = BjLorentzMaterial_try_new(-1.0, -2.0, 0.0, nan, &el);
+    assert(ve3 == BJ_ERR_INVALID_PERMITTIVITY, "ε_∞ checked first");
+    var te4, ve4 = BjLorentzMaterial_try_new(1.0, 2.0, -0.0, 1.0, &el);
+    var w4 = "invalid parameter: resonance frequency omega_0 must be finite and positive, got -0";
+    var m4 = text_is(bj_last_error_display(), w4);
+    assert(ve4 == BJ_ERR_INVALID_PARAMETER && m4 == 1, "ω₀ = −0 refused, named");
+    var eb: BjDebyeMaterial;
+    var te5, ve5 = BjDebyeMaterial_try_new(80.0, 2.5, 0.0, &eb);
+    assert(text_is(bj_last_error_display(), "invalid parameter: Debye eps_s (2.5) must be >= eps_inf (80)") == 1,
+      "ε_s < ε_∞ before τ");
+    var te6, ve6 = BjDebyeMaterial_try_new(2.0, 2.0, inf, &eb);
+    var w6 = "invalid parameter: relaxation time tau must be finite and positive, got inf";
+    var m6 = text_is(bj_last_error_display(), w6);
+    assert(m6 == 1, "τ = ∞ refused, named");
+    var es: BjLossyMaterial;
+    var te7, ve7 = BjLossyMaterial_try_new(0.0, 1.0, &es);
+    assert(text_is(bj_last_error_display(), "invalid permittivity: 0 (must be > 0)") == 1, "ε_r = 0");
+    var te8, ve8 = bj_subpixel_permittivity_parallel(1.0, 4.0, -0.25);
+    assert(text_is(bj_last_error_display(), "invalid parameter: fill_fraction must be in [0, 1], got -0.25") == 1,
+      "f = −0.25");
+
+    test_group("cyrius_media_presets");
+    var sv: BjDrudeMaterial = BjDrudeMaterial_silver();
+    assert(sv.eps_inf == 1.0 && sv.omega_p == 13900000000000000.0 && sv.gamma == 27300000000000.0, "silver");
+    assert(gold.eps_inf == 1.0 && gold.omega_p == 13700000000000000.0 && gold.gamma == 40500000000000.0, "gold");
+    assert(water.eps_inf == 4.9 && water.eps_s == 78.4 && water.tau == 0.00000000000827, "water");
+
+    test_group("cyrius_media_new_unchecked");
+    var nu: BjLorentzMaterial = BjLorentzMaterial_new(-1.0, nan, inf, -0.0);
+    assert(nu.eps_inf == -1.0 && nu.delta_eps != nu.delta_eps && nu.omega_0 == inf, "stored as given");
+    var nd: BjDrudeMaterial = BjDrudeMaterial_new(0.0, 1.0, 0.0);
+    var al, be, ka = nd.ade_coefficients(1.0);
+    assert(ka == inf, "ε_∞ = 0: κ = ∞, as Rust's");
+
+    test_group("cyrius_subpixel_signed_zero");
+    var sz: f64 = bj_subpixel_permittivity_perpendicular(2.0, 8.0, -0.0);
+    assert(sz == 2.0, "f = −0 stays −0 through the clamp: 1/(−0/8 + 1/2) = 2");
+    var tp, vp = bj_subpixel_permittivity_parallel(2.0, 8.0, -0.0);
+    assert(is_ok(tp) == 1 && ok_f(tp, vp) == 2.0, "−0 is in [0, 1]");
+
+    return assert_summary();
+}
+
+var exit_code = main();
+if (exit_code > 0) { exit_code = 1; }
+sys_exit_group(exit_code);

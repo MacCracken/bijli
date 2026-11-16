@@ -40,13 +40,23 @@
 //! The grid: every constructor case (nx below and at 3, the boundary at and past its range's ends, the specials for dx
 //! and dt, dt straddling dx·(1 + 10⁻¹²)/c ulp by ulp), the Rust tests' drives, a unit impulse and non-finite sources,
 //! the written fields, and seeded sources. Rust's `new` clamps what `try_new` refuses; ADR 0002 row 3 maps those rows.
+//!
+//! M5 part 1c appends the media and the subpixel averages, ordinary class-A rows (+ − × ÷ in Rust's order). A
+//! material's inputs are its fields (then dt, and dx for the lossy one), its outputs its fields, its error, or its
+//! coefficient tuple. The grid: `new` and `try_new` over every special crossed (Lorentz's `new` at γ = 1), the Rust
+//! tests' cases and Debye's ε_s ≥ ε_∞ straddled ulp by ulp; the three presets; the coefficients over every special
+//! for each argument (Lorentz's unread ε_∞ at 2), the Rust tests' cases, the presets across FDTD time steps, 1,000
+//! seeded typical media and 500 seeded wide ones; the subpixel averages over every special crossed, fill fractions at
+//! and one ulp past [0, 1]'s ends and at −0, and seeded media.
 
 use std::collections::BTreeSet;
 
 use crate::grids::{Rng, specials};
 use crate::tsv::{Class, Module, Tok, err, f, i, s};
 use bijli::fdtd::{
-    Fdtd1d, TfsfSource, differentiated_gaussian, gaussian_pulse, modulated_gaussian_pulse, ricker_wavelet,
+    DebyeMaterial, DrudeMaterial, Fdtd1d, LorentzMaterial, LossyMaterial, TfsfSource, differentiated_gaussian,
+    gaussian_pulse, modulated_gaussian_pulse, ricker_wavelet, subpixel_permittivity_parallel,
+    subpixel_permittivity_perpendicular, subpixel_permittivity_perpendicular_checked,
 };
 
 /// One operation of a script.
@@ -753,9 +763,202 @@ fn emit_1b(r: &mut Rows) {
     }
 }
 
+// ── part 1c: the media and the subpixel averages ──────────────────────────────────────────────────────────────────
+
+/// A `Result` of fields, or its error.
+fn res_fields(r: bijli::error::Result<Vec<f64>>) -> Vec<Tok> {
+    match r {
+        Ok(v) => v.into_iter().map(f).collect(),
+        Err(e) => vec![err(&e), s(e.to_string())],
+    }
+}
+
+fn floats(xs: &[f64]) -> Vec<Tok> {
+    xs.iter().map(|&x| f(x)).collect()
+}
+
+/// Every combination of `k` values from `vals`, in lexicographic order.
+fn cross(vals: &[f64], k: usize) -> Vec<Vec<f64>> {
+    let mut out = vec![Vec::new()];
+    for _ in 0..k {
+        out = out.into_iter().flat_map(|p| vals.iter().map(move |&v| [p.clone(), vec![v]].concat())).collect();
+    }
+    out
+}
+
+impl Rows {
+    /// A class-A row; a hand-picked case the crossed specials already hold is skipped (the same inputs give the same
+    /// outputs).
+    fn a(&mut self, func: &str, ins: &[f64], outs: &[Tok]) {
+        let toks = floats(ins);
+        if self.keys.contains(&format!("{func} {toks:?}")) {
+            return;
+        }
+        self.emit_toks(func, Class::A, &toks, outs);
+    }
+
+    fn lossy(&mut self, v: &[f64]) {
+        let m = LossyMaterial::new(v[0], v[1]);
+        let (ca, cb) = m.update_coefficients(v[2], v[3]);
+        self.a("LossyMaterial::update_coefficients", v, &[f(ca), f(cb)]);
+    }
+
+    fn drude(&mut self, v: &[f64]) {
+        let (a, b, k) = DrudeMaterial::new(v[0], v[1], v[2]).ade_coefficients(v[3]);
+        self.a("DrudeMaterial::ade_coefficients", v, &[f(a), f(b), f(k)]);
+    }
+
+    fn lorentz(&mut self, v: &[f64]) {
+        let (a, b, g) = LorentzMaterial::new(v[0], v[1], v[2], v[3]).ade_coefficients(v[4]);
+        self.a("LorentzMaterial::ade_coefficients", v, &[f(a), f(b), f(g)]);
+    }
+
+    fn debye(&mut self, v: &[f64]) {
+        let (a, b) = DebyeMaterial::new(v[0], v[1], v[2]).ade_coefficients(v[3]);
+        self.a("DebyeMaterial::ade_coefficients", v, &[f(a), f(b)]);
+    }
+
+    fn subpixel(&mut self, v: &[f64]) {
+        let (e1, e2, fr) = (v[0], v[1], v[2]);
+        let par = subpixel_permittivity_parallel(e1, e2, fr).map(|x| vec![x]);
+        self.a("fdtd::subpixel_permittivity_parallel", v, &res_fields(par));
+        self.a("fdtd::subpixel_permittivity_perpendicular", v, &[f(subpixel_permittivity_perpendicular(e1, e2, fr))]);
+        let chk = subpixel_permittivity_perpendicular_checked(e1, e2, fr).map(|x| vec![x]);
+        self.a("fdtd::subpixel_permittivity_perpendicular_checked", v, &res_fields(chk));
+    }
+}
+
+fn emit_1c(r: &mut Rows) {
+    let sp = specials();
+    // The constructors: `new` stores, `try_new` validates (its checks in order: every special crossed).
+    for v in cross(&sp, 2) {
+        let m = LossyMaterial::new(v[0], v[1]);
+        r.a("LossyMaterial::new", &v, &floats(&[m.eps_r, m.conductivity]));
+        let t = LossyMaterial::try_new(v[0], v[1]).map(|m| vec![m.eps_r, m.conductivity]);
+        r.a("LossyMaterial::try_new", &v, &res_fields(t));
+    }
+    for v in cross(&sp, 3) {
+        let m = DrudeMaterial::new(v[0], v[1], v[2]);
+        r.a("DrudeMaterial::new", &v, &floats(&[m.eps_inf, m.omega_p, m.gamma]));
+        let t = DrudeMaterial::try_new(v[0], v[1], v[2]).map(|m| vec![m.eps_inf, m.omega_p, m.gamma]);
+        r.a("DrudeMaterial::try_new", &v, &res_fields(t));
+        let m = DebyeMaterial::new(v[0], v[1], v[2]);
+        r.a("DebyeMaterial::new", &v, &floats(&[m.eps_inf, m.eps_s, m.tau]));
+        let t = DebyeMaterial::try_new(v[0], v[1], v[2]).map(|m| vec![m.eps_inf, m.eps_s, m.tau]);
+        r.a("DebyeMaterial::try_new", &v, &res_fields(t));
+    }
+    for v in cross(&sp, 4) {
+        let t = LorentzMaterial::try_new(v[0], v[1], v[2], v[3])
+            .map(|m| vec![m.eps_inf, m.delta_eps, m.omega_0, m.gamma]);
+        r.a("LorentzMaterial::try_new", &v, &res_fields(t));
+        if v[3].to_bits() == 1.0_f64.to_bits() {
+            let m = LorentzMaterial::new(v[0], v[1], v[2], v[3]);
+            r.a("LorentzMaterial::new", &v, &floats(&[m.eps_inf, m.delta_eps, m.omega_0, m.gamma]));
+        }
+    }
+    // The Rust tests' constructor cases, the presets, and Debye's ε_s ≥ ε_∞ straddled.
+    for v in [[1.0, 1.37e16, 4.05e13], [1.0, 1e16, 1e13], [0.0, 1e16, 1e13], [f64::NAN, 1e16, 1e13], [1.0, -1.0, 1e13],
+              [1.0, 1e16, f64::INFINITY], [1.0, 1e15, 1e14], [1.0, -0.0, 0.0]] {
+        let t = DrudeMaterial::try_new(v[0], v[1], v[2]).map(|m| vec![m.eps_inf, m.omega_p, m.gamma]);
+        r.a("DrudeMaterial::try_new", &v, &res_fields(t));
+    }
+    for v in [[1.0, 2.0, 1e15, 1e13], [0.0, 2.0, 1e15, 1e13], [1.0, -2.0, 1e15, 1e13], [1.0, 2.0, 0.0, 1e13],
+              [1.0, 2.0, 1e15, f64::NAN], [2.0, 2.0, 1e15, 1e14], [1.0, 2.0, -0.0, 1.0], [-1.0, -2.0, 0.0, f64::NAN]] {
+        let t = LorentzMaterial::try_new(v[0], v[1], v[2], v[3])
+            .map(|m| vec![m.eps_inf, m.delta_eps, m.omega_0, m.gamma]);
+        r.a("LorentzMaterial::try_new", &v, &res_fields(t));
+    }
+    let below = |x: f64| f64::from_bits(x.to_bits() - 1);
+    let above = |x: f64| f64::from_bits(x.to_bits() + 1);
+    for v in [[4.9, 78.4, 8.27e-12], [0.0, 80.0, 1e-11], [80.0, 2.0, 1e-11], [2.0, 80.0, 0.0], [2.0, f64::NAN, 1e-11],
+              [4.9, 78.4, 1e-11], [2.0, 80.0, 1e-11], [80.0, 2.5, 0.0], [2.0, 2.0, f64::INFINITY], [2.0, 2.0, 1e-11],
+              [2.0, below(2.0), 1e-11], [2.0, above(2.0), 1e-11], [below(2.0), 2.0, 1e-11]] {
+        let t = DebyeMaterial::try_new(v[0], v[1], v[2]).map(|m| vec![m.eps_inf, m.eps_s, m.tau]);
+        r.a("DebyeMaterial::try_new", &v, &res_fields(t));
+    }
+    for v in [[4.0, 0.5], [-1.0, 0.5], [4.0, -0.5], [4.0, f64::NAN], [1.0, 1e10], [0.0, 1.0], [4.0, -0.0]] {
+        let t = LossyMaterial::try_new(v[0], v[1]).map(|m| vec![m.eps_r, m.conductivity]);
+        r.a("LossyMaterial::try_new", &v, &res_fields(t));
+    }
+    let presets = [("DrudeMaterial::gold", DrudeMaterial::gold()), ("DrudeMaterial::silver", DrudeMaterial::silver())];
+    for (name, m) in presets {
+        r.a(name, &[], &floats(&[m.eps_inf, m.omega_p, m.gamma]));
+    }
+    let w = DebyeMaterial::water();
+    r.a("DebyeMaterial::water", &[], &floats(&[w.eps_inf, w.eps_s, w.tau]));
+
+    // The coefficients: every special for each argument (Lorentz's ε_∞, which its coefficients don't read, at 2).
+    for v in cross(&sp, 4) {
+        r.lossy(&v);
+        r.drude(&v);
+        r.lorentz(&[2.0, v[0], v[1], v[2], v[3]]);
+        r.debye(&v);
+    }
+    // The Rust tests' cases and the presets across FDTD time steps.
+    for v in [[1.0, 0.0, 1e-13, 1e-4], [1.0, 1.0, 1e-13, 1e-4], [1.0, 1e10, 1e-13, 1e-4], [4.0, 0.5, 1e-13, 1e-4]] {
+        r.lossy(&v);
+    }
+    let g = DrudeMaterial::gold();
+    let s = DrudeMaterial::silver();
+    for dt in [1e-19, 1e-18, 1e-17, 1e-16, 1e-15] {
+        r.drude(&[g.eps_inf, g.omega_p, g.gamma, dt]);
+        r.drude(&[s.eps_inf, s.omega_p, s.gamma, dt]);
+        r.debye(&[w.eps_inf, w.eps_s, w.tau, dt * 1000.0]);
+    }
+    r.drude(&[1.0, 1e16, 1e13, 1e-16]);
+    r.drude(&[1.0, 1e15, 1e14, 1e-17]);
+    r.lorentz(&[1.0, 2.0, 1e15, 1e13, 1e-16]);
+    r.lorentz(&[2.0, 2.0, 1e15, 1e14, 1e-17]);
+    r.debye(&[2.0, 80.0, 1e-11, 1e-13]);
+    r.debye(&[4.9, 78.4, 1e-11, 1e-14]);
+    // Seeded typical media and FDTD steps, then seeded wide values.
+    let mut rng = Rng::new(0x3d1a_0c0c);
+    for _ in 0..1000 {
+        r.lossy(&[rng.uniform(1.0, 20.0), rng.log_uniform(-6.0, 8.0), rng.log_uniform(-16.0, -10.0),
+                  rng.log_uniform(-6.0, -2.0)]);
+        r.drude(&[rng.uniform(1.0, 10.0), rng.log_uniform(14.0, 17.0), rng.log_uniform(11.0, 15.0),
+                  rng.log_uniform(-19.0, -15.0)]);
+        r.lorentz(&[rng.uniform(1.0, 10.0), rng.uniform(0.0, 10.0), rng.log_uniform(13.0, 16.0),
+                    rng.log_uniform(11.0, 15.0), rng.log_uniform(-19.0, -15.0)]);
+        let ei = rng.uniform(1.0, 10.0);
+        r.debye(&[ei, rng.uniform(ei, 100.0), rng.log_uniform(-13.0, -9.0), rng.log_uniform(-16.0, -12.0)]);
+    }
+    for _ in 0..500 {
+        let mut wide = || rng.signed_log_uniform(-300.0, 300.0);
+        let v = [wide(), wide(), wide(), wide(), wide()];
+        r.lossy(&v[..4]);
+        r.drude(&v[..4]);
+        r.lorentz(&v);
+        r.debye(&v[..4]);
+    }
+
+    // The subpixel averages: every special crossed, the fill fraction at and one ulp past [0, 1]'s ends and at −0,
+    // the Rust tests' cases, seeded media.
+    for v in cross(&sp, 3) {
+        r.subpixel(&v);
+    }
+    let fills = [0.0, -0.0, 1.0, below(1.0), above(1.0), f64::from_bits(1), -f64::from_bits(1), 0.5, 0.3, 4.0 / 3.0,
+                 -0.1, 2.0, -3.0, f64::NAN, f64::INFINITY];
+    for fr in fills {
+        for (e1, e2) in [(1.0, 4.0), (2.0, 9.0), (2.0, 8.0), (1e-300, 1e300), (f64::MAX, f64::MIN_POSITIVE)] {
+            r.subpixel(&[e1, e2, fr]);
+        }
+    }
+    for v in [[0.0, 4.0, 0.5], [1.0, 0.0, 0.5], [f64::NAN, 4.0, 0.5], [1.0, -4.0, 0.5]] {
+        r.subpixel(&v);
+    }
+    for _ in 0..1000 {
+        r.subpixel(&[rng.log_uniform(-1.0, 2.0), rng.log_uniform(-1.0, 2.0), rng.unit()]);
+    }
+    for _ in 0..300 {
+        r.subpixel(&[rng.log_uniform(-300.0, 300.0), rng.log_uniform(-300.0, 300.0), rng.unit()]);
+    }
+}
+
 pub fn emit() -> Module {
     let mut r = Rows { m: Module::new("fdtd"), keys: BTreeSet::new() };
     emit_1a(&mut r);
     emit_1b(&mut r);
+    emit_1c(&mut r);
     r.m
 }
