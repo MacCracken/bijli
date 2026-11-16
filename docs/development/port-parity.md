@@ -5878,3 +5878,43 @@ exact thresholds, 2d the range edges, the per-cell step updates among them (the 
 **Part 2a, the user's answers, is done** (§100–§103): the media and Mur coefficients (row 40), the subpixel means
 (row 41) and the grading (row 42). Next, 2b: round once (row 13) for the update coefficients dt/(ε₀ε_r·dx) and
 dt/(μ₀μ_r·dx), `courant_dt`'s d/(2√3·c) and `Fdtd1d::time`'s step·dt.
+
+## 104. M5 part 2b: round once (2026-11-16)
+
+- **ADR 0002 row 13, amended**: the standing "round once" decision for M5's single-quotient formulas:
+  - the update coefficients dt/(ε₀·dx) and dt/(μ₀·dx) in `Fdtd1d::new` and `TfsfSource::try_new`, and dt/(ε₀·dx·ε_r)
+    and dt/(μ₀·dx·μ_r) in `set_permittivity` and `set_permeability` (Rust's (dt/(k₀·dx))/m rounded three times), on
+    kimiya's monomial `_bj_k_cr_mono`. The 1D grid's reads its `dt` and `dx` fields (writable), so where either isn't
+    finite or dx is 0 Rust's chain stays (`_bj_fd1_coeff`);
+  - `NonUniformGrid::try_courant_dt` and `courant_dt`'s d/(2√3·c), √3 as Rust's correctly rounded double;
+  - `Fdtd1d::time`'s step·dt past 2⁵³, where Rust's `step as f64` rounds first: the step split exactly as
+    s_hi + s_lo (s_hi a multiple of 2¹¹), rounded once on part 2a-1a's engine (rational 14).
+
+  Rust was an ulp off on many grids (dx = 0.032: 188.36515683343495 for 188.36515683343492), and every 1D and TF/SF
+  trajectory reads the coefficients, so most change in their last bits. `dt = dx/(2c)` and the TF/SF's Courant
+  message dx/c were already one operation. Formulas with a sum, a computed value or a transcendental inside keep
+  their own treatment (the run's source t = step·dt and the CW phase are arguments of a sine, as M3's HG phase).
+- **A bug the mapping caught**: the 1D coefficient's first guard tested dt·dx for finiteness, which overflows at
+  dx = DBL_MAX and kept Rust's chain there; 11 rows failed against validate.py's exact values until each operand
+  was tested on its own.
+- **The grid**: 2,800 rows appended to `fdtd.tsv` (103,150; 36.6 MB): 200 seeded 1D grids (dx from 10⁻⁹ to 10), each
+  also through seeded `set_permittivity` and `set_permeability` media and a seeded TF/SF source, and 200 seeded
+  uniform and 200 seeded non-uniform grids through the Courant step and the grid queries.
+- **validate.py**: `Fd1` and `Tf` take the port's rows as a set (`FD_PORT`, rows 13 and 40); `fdtd_adr_rows` maps a
+  trajectory to row 40 when the Mur coefficient alone accounts for its change, else to row 13, and
+  `fu_courant_port` the Courant rows. **1,327 rows** map to row 13 (987 1D scripts, 218 TF/SF scripts, 122 Courant
+  steps); `fdtd.cr.tsv` loses 3 `Fdtd1d::run` rows to them (28; the corrected oracle 40,366 in all).
+- **Tests**: `cyrius_round_once` in `tests/fdtd1d.tcyr` (3 assertions, 76 in all: the coefficients at dx = 0.032, ε_r
+  = 6.63's, `time()` at a step of 2⁵³ + 1,120,445), `cyrius_tfsf_round_once` in `tests/fdtd_source.tcyr` (1, 66) and
+  `cyrius_courant_round_once` in `tests/fdtd_util.tcyr` (1, 78). The two-cell test now reads the grid's c_h.
+- **Benchmarks**: the step loops don't compute a coefficient. The interleaved A/B against HEAD (two rounds, load 2.9 to
+  9.6) left the FDTD rows within the noise: `fdtd/step_100_cells` 260–576 → 264–290 ns (HEAD's 576 an outlier),
+  `fdtd/run_100_steps_500_cells` 152–200 → 153–154 µs, `fdtd/tfsf_step_200` 855–1,079 → 888–929 ns (median ratios 1.06
+  and 0.99 over 101 rows). A one-off probe, this tree against HEAD at load 2.6: a 20-cell grid's `set_permittivity` 98 →
+  254 ns and a 2×2×2 grid's `courant_dt` 139 → 252 ns, the cost of the monomial rounding (about 0.1–0.16 µs), paid at
+  setup.
+- **Result, every target** (x86_64 ELF, x86_64 PE, aarch64): **18 modules, 0 failing; 640,428 ok, 0 failed, 0
+  measured, 0 pending, 115,677 accepted (ADR 01: 40,366; ADR 0002: 75,311)** over 756,105 rows; **all 475 digests
+  equal**. `fdtd1d.tcyr` (76), `fdtd_source.tcyr` (66) and `fdtd_util.tcyr` (78) pass on all three. The gate is clean
+  (no warnings; execution coverage 371 of 371 functions); validate.py 756,105 rows, 0 problems; the oracle's
+  `--check` and clippy clean. Next: 2c, the exact thresholds.

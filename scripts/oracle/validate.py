@@ -8773,6 +8773,7 @@ def fd_mur(dt, dx, eps_r, mu_r, c):
 
 
 FD_MUR_LO, FD_MUR_HI = 2.0 ** -400, 2.0 ** 400
+FD_PORT = frozenset({"40", "13"})           # the port's ADR 0002 rows in the 1D and TF/SF models
 FD_MUR_ULPS = 8                             # the cancellation-free form's accuracy gate against the exact coefficient
 FD_MUR_SEEN = {}                            # (dt, dx, ε_r, μ_r) -> its error in ulps, each band call measured once
 
@@ -8820,12 +8821,13 @@ class Fd1:
     """fdtd.rs's `Fdtd1d`, transcribed: every operation in Rust's order on binary64 (Python floats round each + − × ÷
     and √ correctly, as Rust's do)."""
 
-    def __init__(self, n, dx, K, port=False):
+    def __init__(self, n, dx, K, port=frozenset()):
         self.c, self.eps0, self.mu0 = K
-        self.mur = fd_mur_port if port else fd_mur
+        self.mur = fd_mur_port if "40" in port else fd_mur
+        self.r13 = "13" in port
         self.n, self.dx, self.step = n, dx, 0
         self.dt = dx / (2.0 * self.c)
-        ce, ch = fdiv(self.dt, self.eps0 * dx), fdiv(self.dt, self.mu0 * dx)
+        ce, ch = self.coeff(self.eps0, 1.0), self.coeff(self.mu0, 1.0)
         self.e, self.h = [0.0] * n, [0.0] * n
         self.eps, self.mu, self.ce, self.ch = [1.0] * n, [1.0] * n, [ce] * n, [ch] * n
         self.al = self.ar = self.mur(self.dt, dx, 1.0, 1.0, self.c)
@@ -8835,6 +8837,19 @@ class Fd1:
         o = Fd1.__new__(Fd1)
         o.__dict__.update({k: (list(v) if isinstance(v, list) else v) for k, v in self.__dict__.items()})
         return o
+
+    def coeff(self, k0, m):
+        """dt/(k₀·dx·m): Rust's (dt/(k₀·dx))/m, or rounded once (ADR 0002 row 13, M5 part 2b) where dt and dx are
+        finite and dx ≠ 0."""
+        if self.r13 and math.isfinite(self.dt) and math.isfinite(self.dx) and self.dx != 0.0:
+            return rn_mono([self.dt], [k0, self.dx, m])
+        return fdiv(fdiv(self.dt, k0 * self.dx), m)
+
+    def time(self):
+        """step·dt: Rust's `step as f64 * dt`, or rounded once past 2^53 (row 13) for a finite dt."""
+        if self.r13 and self.step > 1 << 53 and math.isfinite(self.dt):
+            return rn_frac(Fraction(self.step) * Fraction(self.dt))
+        return float(self.step) * self.dt
 
     def update_abc(self):
         n = self.n
@@ -8849,7 +8864,7 @@ class Fd1:
             return
         end = min(end & FD_U64, self.n)
         k0 = self.eps0 if which == 1 else self.mu0
-        coef = fdiv(fdiv(self.dt, k0 * self.dx), x)
+        coef = self.coeff(k0, x)
         arr, cs = (self.eps, self.ce) if which == 1 else (self.mu, self.ch)
         for i in range(start & FD_U64, end):
             arr[i] = x
@@ -8888,7 +8903,7 @@ class Fd1:
     def state(self):
         n = self.n
         out = list(self.errs)
-        out += [("i", self.step), ("f", self.dt), ("f", float(self.step) * self.dt), ("f", self.energy()),
+        out += [("i", self.step), ("f", self.dt), ("f", self.time()), ("f", self.energy()),
                 ("f", self.al), ("f", self.ar)]
         out += [("i", fd_digest(a)) for a in (self.e, self.h, self.eps, self.mu, self.ce, self.ch)]
         probes = (0, 1, n // 2, n - 2, n - 1)
@@ -8942,7 +8957,7 @@ class FdScripts:
     """Replays fdtd.tsv's scripts on primitives P. A row whose inputs extend the previous row's continues from that
     row's grid (the frames of one scenario), so each scenario runs once."""
 
-    def __init__(self, root: Path, P, port=False):
+    def __init__(self, root: Path, P, port=frozenset()):
         c = golden_consts(root)
         self.port = port
         self.K = (c["field::SPEED_OF_LIGHT"], c["field::EPSILON_0"], c["field::MU_0"])
@@ -9477,13 +9492,15 @@ def fd_pulse(name, v, P):
 class Tf:
     """fdtd.rs's `TfsfSource`, transcribed from already-validated arguments (its `build`)."""
 
-    def __init__(self, nx, bx, dx, dt, K, port=False):
+    def __init__(self, nx, bx, dx, dt, K, port=frozenset()):
         c, eps0, mu0 = K
         self.n, self.bx = nx, bx
         self.ec, self.hc = fdiv(dt, eps0 * dx), fdiv(dt, mu0 * dx)
+        if "13" in port:                            # ADR 0002 row 13 (M5 part 2b): rounded once
+            self.ec, self.hc = rn_mono([dt], [eps0, dx]), rn_mono([dt], [mu0, dx])
         s = fdiv(c * dt, dx)
         self.abc = fdiv(s - 1.0, s + 1.0)
-        if port:                                    # ADR 0002 row 40 (M5 part 2a-1b): rounded once
+        if "40" in port:                            # ADR 0002 row 40 (M5 part 2a-1b): rounded once
             F = Fraction
             num, den = F(c) * F(dt) - F(dx), F(c) * F(dt) + F(dx)
             self.abc = 0.0 if num == 0 else rn_frac(num / den)
@@ -9615,7 +9632,7 @@ def fdtd_corrections(root: Path, path: Path):
     def fixes(_rows):
         out = []
         fs = FdScripts(root, MPFR_P)
-        fsp = FdScripts(root, MPFR_P, port=True)
+        fsp = FdScripts(root, MPFR_P, port=FD_PORT)
         for fn, _cls, ins, outs, _v in sc_lines(path):
             if fn.startswith(("NonUniformGrid::graded", "CwAccumulator::", "fdtd::find_eigenmodes",
                               "fdtd::nf2ff_2d_phasor")):
@@ -9688,6 +9705,16 @@ def fu_graded_port(fn, ins, K, c12):
     return base[:1] + [("f", x) for x in cells] + [("f", d_max)], base
 
 
+def fu_courant_port(fn, ins, K, c12):
+    """The port's `try_courant_dt` and `courant_dt` (ADR 0002 row 13, M5 part 2b): d/(2√3·c) rounded once, √3 as the
+    double. Returns (the port's tokens, Rust's on correctly rounded primitives)."""
+    base = fu_eval(fn, ins, MPFR_P, K, c12)
+    dx, dy, dz, _k = fu_grid([parse_tok(x) for x in ins.split(" ")])
+    if fu_validate(dx, dy, dz) is not None:
+        return base, base
+    return [("f", rn_mono([fu_min_spacing(dx, dy, dz)], [2.0 * math.sqrt(3.0), K[0]]))], base
+
+
 def fm_rat(num, den, zneg=None):
     """RN(num/den) for exact rationals, or None for a zero den; an exact zero signed by zneg (None: a cancelled sum,
     +0) xor the den's sign."""
@@ -9744,7 +9771,8 @@ def fdtd_adr_rows(root: Path, path: Path) -> list:
     Mur coefficients change (on correctly rounded primitives, as the port runs)."""
     fs = FdScripts(root, GLIBC_P)
     fsb = FdScripts(root, MPFR_P)
-    fsp = FdScripts(root, MPFR_P, port=True)
+    fs40 = FdScripts(root, MPFR_P, port=frozenset({"40"}))
+    fsp = FdScripts(root, MPFR_P, port=FD_PORT)
     out = []
     eps0 = golden_consts(root)["field::EPSILON_0"]
     for fn, _cls, ins, outs, v in sc_lines(path):
@@ -9752,6 +9780,11 @@ def fdtd_adr_rows(root: Path, path: Path) -> list:
             want = fm_port(fn, v, eps0)
             if not toks_same(want, [parse_tok(x) for x in outs.split(" ")]):
                 out.append((fn, ins, wire(want), "40", f"oracle {outs}; ADR 0002 row 40: rounded once"))
+            continue
+        if fn in ("NonUniformGrid::try_courant_dt", "NonUniformGrid::courant_dt"):
+            want, base = fu_courant_port(fn, ins, fs.K, fs.c12)
+            if not toks_same(want, base) and not toks_same(want, wave_toks([parse_tok(x) for x in outs.split(" ")])):
+                out.append((fn, ins, wire(want), "13", f"oracle {outs[:120]}; ADR 0002 row 13: rounded once"))
             continue
         if fn == "NonUniformGrid::graded":
             want, base = fu_graded_port(fn, ins, fs.K, fs.c12)
@@ -9774,7 +9807,11 @@ def fdtd_adr_rows(root: Path, path: Path) -> list:
         want, base = fsp.eval(fn, ins), fsb.eval(fn, ins)
         if toks_same(want, base) or toks_same(want, wave_toks([parse_tok(x) for x in outs.split(" ")])):
             continue
-        out.append((fn, ins, wire(want), "40", f"oracle {outs[:120]}; ADR 0002 row 40: the Mur coefficient"))
+        if toks_same(want, fs40.eval(fn, ins)):
+            out.append((fn, ins, wire(want), "40", f"oracle {outs[:120]}; ADR 0002 row 40: the Mur coefficient"))
+        else:
+            out.append((fn, ins, wire(want), "13", f"oracle {outs[:120]}; ADR 0002 row 13: the update coefficients "
+                                                   "rounded once (and row 40's Mur coefficient)"))
     if FD_MUR_SEEN:
         worst = max(FD_MUR_SEEN.values())
         print(f"     fdtd: the 1D Mur coefficient's cancellation-free form (ADR 0002 row 40) on {len(FD_MUR_SEEN)} "

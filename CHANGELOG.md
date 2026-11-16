@@ -447,6 +447,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
   exactly d_max with no cell past it, and a cell index past 2³¹ no longer wraps (ADR 0002 row 42, see Fixed).
   `fdtd.tsv` grows by 620 rows (100,350); `fdtd.adr.tsv` maps 913 rows to row 42. This completes 2a, the user's
   answers.
+- **Cyrius port, M5 part 2b — round once** (`src/fdtd1d.cyr`, `src/fdtd_source.cyr`, `src/fdtd_util.cyr`): the update
+  coefficients, the Courant step and `time()` past 2⁵³ are rounded once (ADR 0002 row 13 amended, see Fixed).
+  validate.py's 1D and TF/SF models take the port's rows as a set (13, 40), and map a trajectory to the first row
+  that accounts for its whole change. `fdtd.tsv` grows by 2,800 seeded rows (103,150); `fdtd.adr.tsv` maps 1,327
+  rows to row 13.
 
 ### Fixed
 
@@ -929,6 +934,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
   d_max (`graded(10, 1, 1.000000000000001)` reached 1.000000000000002), so such cells are now held at d_max and the
   grading stays monotone; otherwise the interior is unchanged. Its power took the cell index as an i32, so past 2³¹
   cells the exponent wrapped and the cells shrank; the whole index is used now (`port-parity.md` §103).
+- **fdtd** (ADR 0002 row 13 amended, M5 part 2b): the FDTD update coefficients dt/(ε₀·dx), dt/(μ₀·dx) and, after
+  `set_permittivity`/`set_permeability`, dt/(ε₀·dx·ε_r) and dt/(μ₀·dx·μ_r), rounded two or three times in Rust (an ulp
+  off on many grids: dx = 0.032 gave 188.36515683343495 for 188.36515683343492), are rounded once, as are
+  `NonUniformGrid::courant_dt`'s d/(2√3·c) and `Fdtd1d::time`'s step·dt past 2⁵³. Every 1D and TF/SF trajectory reads
+  the coefficients, so most change in their last bits. Cost, at setup: `set_permittivity` 98 → 254 ns and
+  `courant_dt` 139 → 252 ns; the steps are unchanged (`port-parity.md` §104).
 
 ### Performance
 

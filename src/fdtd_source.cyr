@@ -217,10 +217,15 @@ public fn BjTfsfSource_try_new(nx, boundary_x, dx: f64, dt: f64, out: *BjTfsfSou
         _bj_tx_cstr(ta, " cells");
         return Err(BJ_ERR_ALLOCATION);
     }
-    var eps_dx: f64 = BJ_EPSILON_0 * dx;
-    var ec: f64 = dt / eps_dx;
-    var mu_dx: f64 = BJ_MU_0 * dx;
-    var hc: f64 = dt / mu_dx;
+    # dt/(ε₀dx) and dt/(μ₀dx), each rounded once (ADR 0002 row 13, M5 part 2b).
+    var mn: f64[1];
+    var md: f64[2];
+    mn[0] = dt;
+    md[0] = BJ_EPSILON_0;
+    md[1] = dx;
+    var ec: f64 = _bj_k_cr_mono(&mn, 1, &md, 2);
+    md[0] = BJ_MU_0;
+    var hc: f64 = _bj_k_cr_mono(&mn, 1, &md, 2);
     var s: f64 = cdt / dx;
     var sm: f64 = s - 1.0;
     var sp: f64 = s + 1.0;

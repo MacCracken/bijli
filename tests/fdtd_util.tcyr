@@ -553,6 +553,14 @@ fn main() {
     var big: f64 = _bj_fu_graded_cell(1.0, 1.0000000001, 2147483653);
     assert(big == 1.2395499649960704, "cell 2³¹ + 5: ratio^(2³¹ + 5) (Rust's i32 wrap gave ratio^-(2³¹ − 5), 0.8067)");
 
+    # ADR 0002 row 13 (M5 part 2b): d/(2√3·c) rounded once.
+    test_group("cyrius_courant_round_once");
+    var gc: BjNonUniformGrid;
+    var tgc, vgc = BjNonUniformGrid_uniform(2, 2, 2, 0.00000102, &gc);
+    var cd: f64 = gc.courant_dt();
+    assert(cd == 0.0000000000000009821749327886999, "Rust's 9.821749327887e-16");
+    BjNonUniformGrid_free(&gc);
+
     return assert_summary();
 }
 

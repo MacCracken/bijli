@@ -268,16 +268,20 @@ impl BjNonUniformGrid {
         return m2;
     }
 
-    # Half the 3D Courant limit, d_min/(2√3·c): Ok(dt), or validate's error. Mirrors `NonUniformGrid::try_courant_dt`.
+    # Half the 3D Courant limit, d_min/(2√3·c), rounded once (ADR 0002 row 13, M5 part 2b: Rust's d/((2√3)·c) rounded
+    # twice), √3 as Rust's correctly rounded double: Ok(dt), or validate's error. Mirrors
+    # `NonUniformGrid::try_courant_dt`.
     #must_use
     public fn try_courant_dt(self): Result {
         var t, v = self.validate();
         if (is_err_result(t) == 1) { return Err(v); }
-        var d: f64 = self.min_spacing();
+        var num: f64[1];
+        var den: f64[2];
+        num[0] = self.min_spacing();
         var s3: f64 = f64_sqrt(3.0);
-        var k: f64 = 2.0 * s3;
-        k = k * BJ_SPEED_OF_LIGHT;
-        var dt: f64 = d / k;
+        den[0] = 2.0 * s3;
+        den[1] = BJ_SPEED_OF_LIGHT;
+        var dt: f64 = _bj_k_cr_mono(&num, 1, &den, 2);
         return Ok(dt);
     }
 

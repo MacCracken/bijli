@@ -57,6 +57,28 @@ fn _bj_fd1_f64p(a): *f64 {
     return a;
 }
 
+# An update coefficient dt/(k₀·dx·m), m = ε_r or μ_r (1 at construction), rounded once (ADR 0002 row 13, M5 part 2b);
+# Rust's (dt/(k₀·dx))/m rounded three times. Rust's chain stays where dt or dx isn't finite or dx is 0 (both are
+# writable fields).
+#must_use
+fn _bj_fd1_coeff(dt: f64, k0: f64, dx: f64, m: f64): f64 {
+    var kd: f64 = k0 * dx;
+    var base: f64 = dt / kd;
+    var r: f64 = base / m;
+    var zt: f64 = dt * 0.0;
+    var zx: f64 = dx * 0.0;
+    if (zt == 0.0 && zx == 0.0 && dx != 0.0) {
+        var num: f64[1];
+        var den: f64[3];
+        num[0] = dt;
+        den[0] = k0;
+        den[1] = dx;
+        den[2] = m;
+        r = _bj_k_cr_mono(&num, 1, &den, 3);
+    }
+    return r;
+}
+
 # 1 when x is finite and strictly positive (NaN-safe). Mirrors fdtd.rs's `is_positive_finite`.
 #must_use
 fn _bj_fd1_pos(x: f64): i64 {
@@ -156,10 +178,8 @@ public fn BjFdtd1d_new(num_cells, dx: f64, out: *BjFdtd1d): Result {
     var c: f64 = BJ_SPEED_OF_LIGHT;
     var c2: f64 = 2.0 * c;
     var dt: f64 = dx / c2;
-    var eps_dx: f64 = BJ_EPSILON_0 * dx;
-    var ce: f64 = dt / eps_dx;
-    var mu_dx: f64 = BJ_MU_0 * dx;
-    var ch: f64 = dt / mu_dx;
+    var ce: f64 = _bj_fd1_coeff(dt, BJ_EPSILON_0, dx, 1.0);
+    var ch: f64 = _bj_fd1_coeff(dt, BJ_MU_0, dx, 1.0);
     var abc: f64 = _bj_fd1_mur(dt, dx, 1.0, 1.0);
     var n = num_cells;
     var eps: *f64 = _bj_fd1_f64p(map + 2 * n * 8);
@@ -253,10 +273,7 @@ impl BjFdtd1d {
     public fn set_permittivity(self, start, end, eps_r: f64): Result {
         if (_bj_fd1_pos(eps_r) == 0) { return Err(_bj_err_invalid_permittivity(eps_r)); }
         var hi = _bj_fd1_umin(end, self.num_cells);
-        var dt: f64 = self.dt;
-        var eps_dx: f64 = BJ_EPSILON_0 * self.dx;
-        var base: f64 = dt / eps_dx;
-        var ce: f64 = base / eps_r;
+        var ce: f64 = _bj_fd1_coeff(self.dt, BJ_EPSILON_0, self.dx, eps_r);
         var eps: *f64 = _bj_fd1_f64p(self.permittivity);
         var cep: *f64 = _bj_fd1_f64p(self.e_coeff);
         if (start >= 0) {
@@ -276,10 +293,7 @@ impl BjFdtd1d {
     public fn set_permeability(self, start, end, mu_r: f64): Result {
         if (_bj_fd1_pos(mu_r) == 0) { return Err(_bj_err_invalid_permeability(mu_r)); }
         var hi = _bj_fd1_umin(end, self.num_cells);
-        var dt: f64 = self.dt;
-        var mu_dx: f64 = BJ_MU_0 * self.dx;
-        var base: f64 = dt / mu_dx;
-        var ch: f64 = base / mu_r;
+        var ch: f64 = _bj_fd1_coeff(self.dt, BJ_MU_0, self.dx, mu_r);
         var mu: *f64 = _bj_fd1_f64p(self.permeability);
         var chp: *f64 = _bj_fd1_f64p(self.h_coeff);
         if (start >= 0) {
@@ -373,12 +387,25 @@ impl BjFdtd1d {
         return 0;
     }
 
-    # The simulation time step·dt (s). Mirrors `Fdtd1d::time`.
+    # The simulation time step·dt (s), rounded once: a step past 2^53 (a written field) is split exactly as
+    # s_hi + s_lo, where Rust's `step as f64` rounded first (ADR 0002 row 13, M5 part 2b). Mirrors `Fdtd1d::time`.
     #must_use
     public fn time(self): f64 {
-        var sf: f64 = f64_from(self.step);
+        var s = self.step;
         var dt: f64 = self.dt;
+        var sf: f64 = f64_from(s);
         var t: f64 = sf * dt;
+        var z: f64 = dt * 0.0;
+        if ((s < 0 || s > 9007199254740992) && z == 0.0) {
+            var hi = (s >> 11) << 11;
+            var rv: f64[3];
+            var hf: f64 = f64_from(hi >> 11);
+            rv[0] = hf * 2048.0;
+            rv[1] = dt;
+            rv[2] = f64_from(s & 2047);
+            var ro: f64[1];
+            if (_bj_cr_rat(&rv, 3, _bj_cr_rat_spec(14), 0, &ro) == 1) { t = ro[0]; }
+        }
         return t;
     }
 

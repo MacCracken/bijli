@@ -1829,6 +1829,31 @@ fn emit_2a3(r: &mut Rows) {
     }
 }
 
+// ── part 2b: round once (ADR 0002 row 13) ──────────────────────────────────────────────────────────────────────────
+
+/// The quantities the port rounds once (ADR 0002 row 13): seeded 1D grids (their update coefficients dt/(ε₀dx) and
+/// dt/(μ₀dx)), seeded media through `set_permittivity` and `set_permeability` (dt/(ε₀dx·ε_r)), seeded TF/SF sources
+/// (their dt/(ε₀dx), dt/(μ₀dx)), and seeded uniform and non-uniform grids for `courant_dt`'s d/(2√3·c).
+fn emit_2b(r: &mut Rows) {
+    let mut rng = Rng::new(0x2b_0013);
+    for _ in 0..200 {
+        let dx = rng.log_uniform(-9.0, 1.0);
+        r.one_new("Fdtd1d::new", 8, dx, &[]);
+        r.one_new("Fdtd1d::set_permittivity", 8, dx, &[Op::Eps(0, 8, rng.log_uniform(-1.0, 2.0))]);
+        r.one_new("Fdtd1d::set_permeability", 8, dx, &[Op::Mu(0, 8, rng.log_uniform(-1.0, 2.0))]);
+        let c = bijli::field::SPEED_OF_LIGHT;
+        let dt = dx / c * rng.uniform(0.1, 1.0);
+        r.tf_new("TfsfSource::try_new", &TfScript::new(true, 20, 10, dx, dt));
+    }
+    for _ in 0..200 {
+        let d = rng.log_uniform(-9.0, 1.0);
+        r.grid_rows(&NonUniformGrid::uniform(2, 3, 4, d));
+        let ax = |rng: &mut Rng| -> Vec<f64> { (0..3).map(|_| rng.log_uniform(-9.0, 1.0)).collect() };
+        let g = NonUniformGrid { dx: ax(&mut rng), dy: ax(&mut rng), dz: ax(&mut rng) };
+        r.grid_rows(&g);
+    }
+}
+
 pub fn emit() -> Module {
     let mut r = Rows { m: Module::new("fdtd"), keys: BTreeSet::new() };
     emit_1a(&mut r);
@@ -1842,5 +1867,6 @@ pub fn emit() -> Module {
     emit_2a1b(&mut r);
     emit_2a2(&mut r);
     emit_2a3(&mut r);
+    emit_2b(&mut r);
     r.m
 }

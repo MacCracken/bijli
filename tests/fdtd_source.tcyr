@@ -504,6 +504,14 @@ fn main() {
       "S = 1 in binary64: −7.812515403074754e-18 (Rust's 0)");
     BjTfsfSource_free(&sm);
 
+    # ADR 0002 row 13 (M5 part 2b): dt/(ε₀dx) and dt/(μ₀dx) rounded once.
+    test_group("cyrius_tfsf_round_once");
+    var so: BjTfsfSource;
+    var tso, vso = BjTfsfSource_try_new(20, 10, 0.000025, 0.0000000000000417, &so);
+    assert(so.e_coeff_1d == 188.3854324378196 && so.h_coeff_1d == 0.0013273522246638287,
+      "Rust's 188.38543243781956, 0.001327352224663829");
+    BjTfsfSource_free(&so);
+
     return assert_summary();
 }
 

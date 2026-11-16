@@ -402,7 +402,7 @@ fn main() {
     s2c.add_source(1, 1.0);
     s2c.step_once();
     var h0: f64 = at(s2c.h_field, 0);
-    var hc: f64 = s2c.dt / (BJ_MU_0 * s2c.dx);
+    var hc: f64 = at(s2c.h_coeff, 0);
     assert(h0 == hc, "H₀ = c_h·(E₁ − E₀), the one H node updated");
     var e0: f64 = at(s2c.e_field, 0);
     var e1: f64 = at(s2c.e_field, 1);
@@ -425,6 +425,23 @@ fn main() {
     var tq3, vq3 = mq.set_permittivity(0, 20, 0.3);
     assert(mq.abc_left == -0.0455488498966777, "ε_r = 0.3: −0.0455488498966777, exact (Rust's −0.045548849896677686)");
     BjFdtd1d_free(&mq);
+
+    # ADR 0002 row 13 (M5 part 2b): the update coefficients and time() rounded once.
+    test_group("cyrius_round_once");
+    var r1: BjFdtd1d;
+    var tr1, vr1 = BjFdtd1d_new(8, 0.032, &r1);
+    assert(at(r1.e_coeff, 0) == 188.36515683343492 && at(r1.h_coeff, 0) == 0.0013272093639965358,
+      "dt/(ε₀dx), dt/(μ₀dx) (Rust's 188.36515683343495, 0.0013272093639965356)");
+    BjFdtd1d_free(&r1);
+    var r2: BjFdtd1d;
+    var tr2, vr2 = BjFdtd1d_new(8, 0.001, &r2);
+    var tr3, vr3 = r2.set_permittivity(0, 8, 6.63);
+    assert(at(r2.e_coeff, 3) == 28.411034213187772, "dt/(ε₀dx·ε_r) (Rust's 28.411034213187776)");
+    r2.step = 9007199255861437;
+    r2.dt = 0.00000000000000678;
+    var tm2: f64 = r2.time();
+    assert(tm2 == 61.06881095474054, "step past 2^53: step·dt once (Rust's 61.068810954740535)");
+    BjFdtd1d_free(&r2);
 
     return assert_summary();
 }
