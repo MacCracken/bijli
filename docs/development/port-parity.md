@@ -5749,3 +5749,50 @@ exact thresholds, 2d the range edges, the per-cell step updates among them (the 
   equal**, HEAD's unchanged but the four media functions' (their new rows and values). `fdtd_media.tcyr` passes on all
   three (70). The gate is clean (no warnings; execution coverage 371 of 371 functions); validate.py 748,042 rows, 0
   problems; the oracle's `--check` and clippy clean. Next: 2a-1b, the Mur coefficients.
+
+## 101. M5 part 2a-1b: the Mur coefficients (2026-11-15)
+
+- **The finding**: both first-order Mur coefficients are (a − b)/(a + b) and cancel where the wave's step meets the
+  cell. `TfsfSource`'s (S − 1)/(S + 1), S = c·dt/dx rounded twice, gave 0 at the magic time step dt = dx/c (S = 1 in
+  binary64), where the exact (c·dt − dx)/(c·dt + dx) of the given doubles is −7.8·10⁻¹⁸ at dx = 10⁻⁴; near it the
+  value was rounding noise. `Fdtd1d`'s (v·dt − dx)/(v·dt + dx), v·dt = c·dt/√(ε_rμ_r), gave 0 at ε_rμ_r = 1/4 and
+  dt = dx/(2c) for 2.09·10⁻¹⁷, and over seeded inputs near it was up to 2.6·10²⁰ ulps off.
+- **ADR 0002 row 40, amended**:
+  - the TF/SF coefficient is rounded once from (c·dt − dx)/(c·dt + dx) (`_bj_cr_rat`'s rational 10; the arguments are
+    validated finite and positive, so its denominator is never 0);
+  - the 1D coefficient has √(ε_rμ_r) inside, so, as the user's answer has it, where it cancels it takes the
+    cancellation-free form (c²dt² − ε_rμ_r·dx²)/(c·dt + dx·√(ε_rμ_r))², the same value: the numerator rounded once
+    from the exact one (rational 11), the denominator on Rust's rounded c·dt and √(ε_rμ_r), whose sum has no
+    cancellation. "Where it cancels" is v·dt in (2dx/3, 2dx), where the difference at least doubles v·dt's rounding
+    error (the stub root's factor 2 would have reached the vacuum default at v·dt = dx/2, whose Rust chain is
+    accurate). Outside the band, and where c·dt or dx·√(ε_rμ_r) lies outside [2^-400, 2^400], Rust's chain stays;
+    its range edges are part 2d's.
+- **Accuracy**: validate.py measures the 1D form against the exact coefficient (80-digit Decimals) on every argument
+  set the golden scripts take it on, 119: within 3.21 ulps (gated at 8). A one-off sweep of 171,386 seeded band
+  inputs (ε_rμ_r near 1/4 by relative offsets 10⁻¹ to 10⁻¹⁶, across the band, at dt = dx/(2c) and other steps): within
+  5.67 ulps, where Rust's chain was up to 2.6·10²⁰; outside the band Rust's chain was within 4.74.
+- **cr_verify.py**: the rat families gain rationals 10 and 11 (twelve in all): 360,000 calls on x86_64 and on
+  aarch64, 0 mismatches.
+- **The grid**: 272 rows appended to `fdtd.tsv` (95,359): `TfsfSource::try_new` at dt = dx/c ulp by ulp and at
+  S = 1 − 10⁻ᵏ on five dx, with a Gaussian-driven scenario at S = 1 for each; `Fdtd1d` with ε_r, μ_r or both setting
+  ε_rμ_r = 1/4 at relative offsets 10⁻¹ to 10⁻¹⁵ either side and ulp by ulp, the band's edges 1/16 and 9/16 ulp by
+  ulp, and four Gaussian-driven scenarios. The generator skips a script an earlier part already emitted.
+- **validate.py**: `Fd1` and `Tf` take a `port` flag (the port's Mur coefficients); `fdtd_adr_rows` replays each 1D
+  and TF/SF script with and without it on correctly rounded primitives, and maps a row whose state the flag changes
+  to row 40 (the corrected oracle skips it): **311 rows** (78 `set_permittivity`, 40 `set_permeability`, 16
+  `step_once`, 119 `try_new`, 6 `new`, 52 `step`), part 1's among them. `fdtd.adr.tsv` maps 10,191 rows.
+- **Tests**: `tests/fdtd1d.tcyr`'s `cyrius_mur_cancellation_free` (3 assertions, 73 in all: the vacuum default kept,
+  ε_r = 1/4 and 0.3) and `tests/fdtd_source.tcyr`'s `cyrius_tfsf_mur_rounded_once` (1, 65 in all).
+- **Benchmarks**: the step loops don't read the coefficient, and the interleaved A/B against HEAD (two rounds, load 2.4
+  to 2.5; HEAD predates part 2a-1a, so `fdtd/media_coefficients` shows that part's cost again) left the FDTD rows
+  unchanged: `fdtd/tfsf_step_200` 862–948 → 871–872 ns, `fdtd/step_100_cells` 254–334 → 264–268 ns,
+  `fdtd/run_100_steps_500_cells` 150–156 → 151–153 µs (median ratios 1.01 and 0.99 over 101 rows). The band form is paid
+  at setup: a one-off probe of a 20-cell grid's `set_permittivity`, 108 ns on Rust's chain (ε_r = 4), 1.13 µs in the
+  band (ε_r = 0.3: two coefficients, the expansion tier) and 2.90 µs at ε_r = 1/4 (the exact path, where the numerator's
+  terms cancel past the tiers' budget).
+- **Result, every target** (x86_64 ELF, x86_64 PE, aarch64): **18 modules, 0 failing; 637,168 ok, 0 failed, 0
+  measured, 0 pending, 111,146 accepted (ADR 01: 40,369; ADR 0002: 70,777)** over 748,314 rows; **all 475 digests
+  equal**, part 2a-1a's unchanged but the 1D `set_permittivity`, `set_permeability` and `step_once` and the TF/SF
+  `try_new`, `new` and `step` (their new rows and values). `fdtd1d.tcyr` (73) and `fdtd_source.tcyr` (65) pass on all
+  three. The gate is clean (no warnings; execution coverage 371 of 371 functions); validate.py 748,314 rows, 0
+  problems; the oracle's `--check` and clippy clean. Next: 2a-2, the subpixel means.

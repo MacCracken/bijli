@@ -1643,13 +1643,15 @@ def s2z_families(rng, count):
 
 # ── M5's rationals of signed monomials (src/crmath_edge.cyr, M5 part 2a-1a, ADR 0002 row 40) ─────────────────────────
 RAT_EPS0 = 0.0000000000088541878128
-RAT_KINDS = 10
+RAT_C = 299792458.0
+RAT_KINDS = 12
 
 
 def rat_ref(k, v):
     """RN of rational k over v (src/crmath_edge.cyr's _bj_cr_rat_spec), from the coefficient's formula: the media's
-    C_a, C_b; Drude α, β, κ; Lorentz α, β, γ_c; Debye α, β. All ones when the denominator is exactly 0. An exact zero
-    takes IEEE's signs: a one-product numerator's factors' (and coefficient's), a cancelled sum +0, then D's."""
+    C_a, C_b; Drude α, β, κ; Lorentz α, β, γ_c; Debye α, β; the TF/SF Mur coefficient and the 1D one's numerator
+    (M5 part 2a-1b). All ones when the denominator is exactly 0. An exact zero takes IEEE's signs: a one-product
+    numerator's factors' (and coefficient's), a cancelled sum +0, then D's."""
     F = [Fraction(x) for x in v]
     sg = [math.copysign(1.0, x) < 0 for x in v]
     if k in (0, 1):
@@ -1665,10 +1667,16 @@ def rat_ref(k, v):
         _, b, c, d, e, f = F[:6]
         num, den, zs = [(4 - 2 * c * c * e * e, 2 + d * e, None), (d * e - 2, 2 + d * e, None),
                         (2 * f * b * c * c * e * e, 2 + d * e, sg[5] ^ sg[1])][k - 5]
-    else:
+    elif k in (8, 9):
         a, b, c, d, e = F[:5]
         num = 2 * c - d if k == 8 else e * b * d - e * a * d
         den, zs = 2 * c + d, None
+    elif k == 10:
+        dt, dx, c = F[:3]
+        num, den, zs = c * dt - dx, c * dt + dx, None
+    else:
+        c, dt, e, m, dx = F[:5]
+        num, den, zs = c * c * dt * dt - e * m * dx * dx, Fraction(1), None
     if den == 0:
         return (1 << 64) - 1
     if num == 0:
@@ -1687,7 +1695,14 @@ def rat_cases(rng, count):
         mode = (i // RAT_KINDS) % 7
         dt = 10.0 ** rng.uniform(-18, -10)
         e0 = RAT_EPS0
-        if k in (0, 1):
+        dxx = 10.0 ** rng.uniform(-6, -1)
+        if k == 10:                                 # the TF/SF Mur coefficient near S = 1
+            v = [dxx / RAT_C * (1 - 10.0 ** -rng.uniform(0, 16)), dxx, RAT_C, 0.0, 0.0, 0.0]
+        elif k == 11:                               # the 1D one's numerator near ε_rμ_r = 1/4 at dt = dx/2c
+            q = 0.25 * (1 + rng.choice([1.0, -1.0]) * 10.0 ** -rng.uniform(0, 16))
+            er = rng.uniform(0.3, 3)
+            v = [RAT_C, dxx / (2 * RAT_C), er, q / er, dxx, 0.0]
+        elif k in (0, 1):
             v = [rng.uniform(1, 20), 10.0 ** rng.uniform(-6, 8), dt, 10.0 ** rng.uniform(-6, -2), e0, 0.0]
         elif k in (2, 3, 4):
             v = [rng.uniform(1, 10), 10.0 ** rng.uniform(14, 17), 10.0 ** rng.uniform(11, 15), dt, e0, 0.0]
@@ -1696,7 +1711,11 @@ def rat_cases(rng, count):
         else:
             ei = rng.uniform(1, 10)
             v = [ei, rng.uniform(ei, 100), 10.0 ** rng.uniform(-13, -9), dt, e0, 0.0]
-        if mode in (1, 2):                          # the cancellation, by a relative offset or ulp by ulp
+        if k >= 10 and mode in (1, 2):              # already at their cancellation; walk an operand ulp by ulp
+            j = 0 if k == 10 else 3
+            for _ in range(rng.randint(0, 6)):
+                v[j] = math.nextafter(v[j], math.inf if rng.random() < 0.5 else 0.0)
+        elif mode in (1, 2):                        # the cancellation, by a relative offset or ulp by ulp
             rho = rng.choice([1.0, -1.0]) * 10.0 ** -rng.uniform(1, 16)
             if k in (0, 1):
                 x = 2 * e0 * v[0] / v[2]

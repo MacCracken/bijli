@@ -495,6 +495,15 @@ fn main() {
     var p5: f64 = bj_modulated_gaussian_pulse(0.25, 0.0, inf, 1.0);
     assert(p5 == 1.0, "τ = ∞: the bare carrier, sin(π/2) = 1");
 
+    # ADR 0002 row 40 (M5 part 2a-1b): (c·dt − dx)/(c·dt + dx) rounded once; at the magic time step dt = dx/c Rust's
+    # (S − 1)/(S + 1) gave 0.
+    test_group("cyrius_tfsf_mur_rounded_once");
+    var sm: BjTfsfSource;
+    var tsm, vsm = BjTfsfSource_try_new(100, 50, 0.0001, 0.00000000000033356409519815206, &sm);
+    assert(is_ok(tsm) == 1 && sm.abc_coeff == -0.000000000000000007812515403074754,
+      "S = 1 in binary64: −7.812515403074754e-18 (Rust's 0)");
+    BjTfsfSource_free(&sm);
+
     return assert_summary();
 }
 

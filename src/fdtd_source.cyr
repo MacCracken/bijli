@@ -141,7 +141,8 @@ fn _bj_fs_row(d: *f64, a: *f64, b: *f64, w: *f64, n, k: f64) {
 # time k·dt and H^inc at (k − ½)·dt. `boundary_x` is the first total-field column and `source_cell` the soft source's
 # node; both stay writable, as Rust's public fields, and step and the incident_* readers guard them. `e_coeff_1d`
 # dt/(ε₀dx), `h_coeff_1d` dt/(μ₀dx) and `abc_coeff` (S − 1)/(S + 1), S = c·dt/dx, are fixed. `work` is the update's
-# scratch row (no Rust counterpart) and `map_bytes` the mapping's length (0 once freed). Mirrors `TfsfSource`.
+# scratch row (no Rust counterpart) and `map_bytes` the mapping's length (0 once freed). `abc_coeff` is rounded once
+# from the exact (c·dt − dx)/(c·dt + dx) (ADR 0002 row 40). Mirrors `TfsfSource`.
 #
 # The left-edge recipe for a boundary at bx, with updates H[i] += c_h·(E[i + 1] − E[i]) and E[i] += c_e·(H[i] − H[i −
 # 1]) (BjFdtd1d's, and the 2D TM grid's H_y and E_z): update H, then H[bx − 1] −= c_h·incident_e(); call step(source);
@@ -224,6 +225,14 @@ public fn BjTfsfSource_try_new(nx, boundary_x, dx: f64, dt: f64, out: *BjTfsfSou
     var sm: f64 = s - 1.0;
     var sp: f64 = s + 1.0;
     var abc: f64 = sm / sp;
+    # (S − 1)/(S + 1) = (c·dt − dx)/(c·dt + dx), rounded once (ADR 0002 row 40, M5 part 2a-1b): Rust's cancelled at
+    # the magic time step S = 1. The arguments are finite and positive here, so the denominator isn't 0.
+    var rv: f64[3];
+    rv[0] = dt;
+    rv[1] = dx;
+    rv[2] = c;
+    var ro: f64[1];
+    if (_bj_cr_rat(&rv, 3, _bj_cr_rat_spec(10), 0, &ro) == 1) { abc = ro[0]; }
     var sc = boundary_x / 4;
     if (sc < 1) { sc = 1; }
     if (sc > nx - 2) { sc = nx - 2; }

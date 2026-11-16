@@ -15220,7 +15220,7 @@ fn _bj_cr_s2z(v: *f64, slow, out: *f64): i64 {
 
 # The spec of rational k (cr_driver.cyr's `rat` reads them by number). Operands: the lossy material's (ε_r, σ, dt, dx,
 # ε₀); the Drude model's (ε_∞, ω_p, γ, dt, ε₀); the Lorentz model's (unused, Δε, ω₀, γ, dt, ε₀); the Debye model's
-# (ε_∞, ε_s, τ, dt, ε₀).
+# (ε_∞, ε_s, τ, dt, ε₀); the TF/SF grid's (dt, dx, c); the 1D grid's (c, dt, ε_r, μ_r, dx) (M5 part 2a-1b).
 #must_use
 fn _bj_cr_rat_spec(k): i64 {
     if (k == 0) { return "+2ea-1bc/+2ea+1bc"; }           # the lossy C_a = (2ε − σΔt)/(2ε + σΔt)
@@ -15233,6 +15233,8 @@ fn _bj_cr_rat_spec(k): i64 {
     if (k == 7) { return "+2fbccee/+2+1de"; }              # Lorentz γ_c = 2ε₀Δεω₀²Δt²/(2 + γΔt)
     if (k == 8) { return "+2c-1d/+2c+1d"; }                # Debye α = (2τ − Δt)/(2τ + Δt)
     if (k == 9) { return "+1ebd-1ead/+2c+1d"; }            # Debye β = ε₀(ε_s − ε_∞)Δt/(2τ + Δt)
+    if (k == 10) { return "+1ca-1b/+1ca+1b"; }             # the TF/SF Mur (cΔt − Δx)/(cΔt + Δx)
+    if (k == 11) { return "+1aabb-1cdee/+1"; }             # the 1D Mur's numerator c²Δt² − ε_rμ_rΔx²
     return 0;
 }
 
@@ -30766,6 +30768,7 @@ public fn bj_try_write_touchstone(d: *BjTouchstoneData, format, sb): Result {
 # anonymous mmap, fixed at construction and given back by BjFdtd1d_free (port plan §9.5). Rust's public, resizable
 # `Vec` fields, and the per-step layout check that guarded them, are gone (ADR 0002 row 2): the fields `e_field` and
 # `h_field` are the arrays' addresses and `num_cells` their length, and nothing can resize them. No step allocates.
+# The Mur coefficients take a cancellation-free form where Rust's cancelled (`_bj_fd1_mur`, ADR 0002 row 40).
 # The updates run on the packed f64v_* verbs, each lane rounding Rust's three operations, so the bits are Rust's
 # (port plan §9.3, probe p10). The file is time-domain only; bijli's one harmonic convention, e^{+jωt}, is stated in
 # src/complex.cyr's header.
@@ -30838,8 +30841,16 @@ fn _bj_fd1_row(d: *f64, k: *f64, a: *f64, b: *f64, w: *f64, n) {
     return 0;
 }
 
-# The first-order Mur coefficient (v·dt − dx)/(v·dt + dx), v = c/√(ε_r μ_r): Rust's c·dt/√(ε_r μ_r). Mirrors
-# fdtd.rs's `mur_coefficient`.
+# 2^-400 and 2^400: the cancellation-free form's range (`_bj_fd1_mur`).
+var _BJ_FD1_LO: f64 = 0x26F0000000000000;
+var _BJ_FD1_HI: f64 = 0x58F0000000000000;
+
+# The first-order Mur coefficient (v·dt − dx)/(v·dt + dx), v = c/√(ε_r μ_r): Rust's c·dt/√(ε_r μ_r). Where v·dt lies in
+# (2dx/3, 2dx), its difference with dx at least doubles v·dt's rounding error, cancelling outright at ε_rμ_r = 1/4
+# (k = 0, perfect absorption at dt = dx/2c), so there it takes the cancellation-free form (c²dt² − ε_rμ_r·dx²)/(c·dt
+# + dx·√(ε_rμ_r))², the same value, its numerator rounded once from the exact one (ADR 0002 row 40, M5 part 2a-1b);
+# elsewhere, and where c·dt or dx·√(ε_rμ_r) lies outside [2^-400, 2^400], Rust's chain. Mirrors fdtd.rs's
+# `mur_coefficient`.
 #must_use
 fn _bj_fd1_mur(dt: f64, dx: f64, eps_r: f64, mu_r: f64): f64 {
     var em: f64 = eps_r * mu_r;
@@ -30850,6 +30861,28 @@ fn _bj_fd1_mur(dt: f64, dx: f64, eps_r: f64, mu_r: f64): f64 {
     var num: f64 = v_dt - dx;
     var den: f64 = v_dt + dx;
     var k: f64 = num / den;
+    var v3: f64 = 3.0 * v_dt;
+    var d2: f64 = 2.0 * dx;
+    if (v3 > d2 && v_dt < d2) {
+        var b: f64 = dx * root;
+        var lo: f64 = _BJ_FD1_LO;
+        var hi: f64 = _BJ_FD1_HI;
+        if (cdt >= lo && cdt <= hi && b >= lo && b <= hi) {
+            var rv: f64[5];
+            rv[0] = c;
+            rv[1] = dt;
+            rv[2] = eps_r;
+            rv[3] = mu_r;
+            rv[4] = dx;
+            var ro: f64[1];
+            if (_bj_cr_rat(&rv, 5, _bj_cr_rat_spec(11), 0, &ro) == 1) {
+                var s: f64 = cdt + b;
+                var s2: f64 = s * s;
+                var n: f64 = ro[0];
+                k = n / s2;
+            }
+        }
+    }
     return k;
 }
 
@@ -31283,7 +31316,8 @@ fn _bj_fs_row(d: *f64, a: *f64, b: *f64, w: *f64, n, k: f64) {
 # time k·dt and H^inc at (k − ½)·dt. `boundary_x` is the first total-field column and `source_cell` the soft source's
 # node; both stay writable, as Rust's public fields, and step and the incident_* readers guard them. `e_coeff_1d`
 # dt/(ε₀dx), `h_coeff_1d` dt/(μ₀dx) and `abc_coeff` (S − 1)/(S + 1), S = c·dt/dx, are fixed. `work` is the update's
-# scratch row (no Rust counterpart) and `map_bytes` the mapping's length (0 once freed). Mirrors `TfsfSource`.
+# scratch row (no Rust counterpart) and `map_bytes` the mapping's length (0 once freed). `abc_coeff` is rounded once
+# from the exact (c·dt − dx)/(c·dt + dx) (ADR 0002 row 40). Mirrors `TfsfSource`.
 #
 # The left-edge recipe for a boundary at bx, with updates H[i] += c_h·(E[i + 1] − E[i]) and E[i] += c_e·(H[i] − H[i −
 # 1]) (BjFdtd1d's, and the 2D TM grid's H_y and E_z): update H, then H[bx − 1] −= c_h·incident_e(); call step(source);
@@ -31366,6 +31400,14 @@ public fn BjTfsfSource_try_new(nx, boundary_x, dx: f64, dt: f64, out: *BjTfsfSou
     var sm: f64 = s - 1.0;
     var sp: f64 = s + 1.0;
     var abc: f64 = sm / sp;
+    # (S − 1)/(S + 1) = (c·dt − dx)/(c·dt + dx), rounded once (ADR 0002 row 40, M5 part 2a-1b): Rust's cancelled at
+    # the magic time step S = 1. The arguments are finite and positive here, so the denominator isn't 0.
+    var rv: f64[3];
+    rv[0] = dt;
+    rv[1] = dx;
+    rv[2] = c;
+    var ro: f64[1];
+    if (_bj_cr_rat(&rv, 3, _bj_cr_rat_spec(10), 0, &ro) == 1) { abc = ro[0]; }
     var sc = boundary_x / 4;
     if (sc < 1) { sc = 1; }
     if (sc > nx - 2) { sc = nx - 2; }

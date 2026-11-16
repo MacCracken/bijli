@@ -3017,7 +3017,7 @@ fn _bj_cr_s2z(v: *f64, slow, out: *f64): i64 {
 
 # The spec of rational k (cr_driver.cyr's `rat` reads them by number). Operands: the lossy material's (ε_r, σ, dt, dx,
 # ε₀); the Drude model's (ε_∞, ω_p, γ, dt, ε₀); the Lorentz model's (unused, Δε, ω₀, γ, dt, ε₀); the Debye model's
-# (ε_∞, ε_s, τ, dt, ε₀).
+# (ε_∞, ε_s, τ, dt, ε₀); the TF/SF grid's (dt, dx, c); the 1D grid's (c, dt, ε_r, μ_r, dx) (M5 part 2a-1b).
 #must_use
 fn _bj_cr_rat_spec(k): i64 {
     if (k == 0) { return "+2ea-1bc/+2ea+1bc"; }           # the lossy C_a = (2ε − σΔt)/(2ε + σΔt)
@@ -3030,6 +3030,8 @@ fn _bj_cr_rat_spec(k): i64 {
     if (k == 7) { return "+2fbccee/+2+1de"; }              # Lorentz γ_c = 2ε₀Δεω₀²Δt²/(2 + γΔt)
     if (k == 8) { return "+2c-1d/+2c+1d"; }                # Debye α = (2τ − Δt)/(2τ + Δt)
     if (k == 9) { return "+1ebd-1ead/+2c+1d"; }            # Debye β = ε₀(ε_s − ε_∞)Δt/(2τ + Δt)
+    if (k == 10) { return "+1ca-1b/+1ca+1b"; }             # the TF/SF Mur (cΔt − Δx)/(cΔt + Δx)
+    if (k == 11) { return "+1aabb-1cdee/+1"; }             # the 1D Mur's numerator c²Δt² − ε_rμ_rΔx²
     return 0;
 }
 

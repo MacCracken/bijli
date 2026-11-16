@@ -8772,6 +8772,46 @@ def fd_mur(dt, dx, eps_r, mu_r, c):
     return fdiv(v_dt - dx, v_dt + dx)
 
 
+FD_MUR_LO, FD_MUR_HI = 2.0 ** -400, 2.0 ** 400
+FD_MUR_ULPS = 8                             # the cancellation-free form's accuracy gate against the exact coefficient
+FD_MUR_SEEN = {}                            # (dt, dx, ε_r, μ_r) -> its error in ulps, each band call measured once
+
+
+def fd_mur_exact(dt, dx, eps_r, mu_r, c):
+    """(c·dt − dx·√(ε_rμ_r))/(c·dt + dx·√(ε_rμ_r)) to 80 digits, as a Decimal."""
+    with decimal.localcontext() as ctx:
+        ctx.prec = 80
+        D = decimal.Decimal
+        a, b = D(c) * D(dt), D(dx) * (D(eps_r) * D(mu_r)).sqrt()
+        return (a - b) / (a + b)
+
+
+def fd_mur_port(dt, dx, eps_r, mu_r, c):
+    """The port's Mur coefficient (ADR 0002 row 40, M5 part 2a-1b): Rust's chain, but where v·dt lies in (2dx/3, 2dx)
+    and c·dt and dx·√(ε_rμ_r) in [2^-400, 2^400], RN(c²dt² − ε_rμ_r·dx²)/(c·dt + dx·√(ε_rμ_r))² with Rust's rounded
+    c·dt and √(ε_rμ_r)."""
+    root = fsqrt(eps_r * mu_r)
+    cdt = c * dt
+    v_dt = fdiv(cdt, root)
+    k = fdiv(v_dt - dx, v_dt + dx)
+    if 3.0 * v_dt > 2.0 * dx and v_dt < 2.0 * dx:
+        b = dx * root
+        if FD_MUR_LO <= cdt <= FD_MUR_HI and FD_MUR_LO <= b <= FD_MUR_HI:
+            F = Fraction
+            n = rn_frac(F(c) ** 2 * F(dt) ** 2 - F(eps_r) * F(mu_r) * F(dx) ** 2)
+            s = cdt + b
+            k = n / (s * s)
+            key = (dt, dx, eps_r, mu_r)
+            if key not in FD_MUR_SEEN:
+                ex = fd_mur_exact(dt, dx, eps_r, mu_r, c)
+                with decimal.localcontext() as ctx:
+                    ctx.prec = 80
+                    u = math.ulp(float(ex)) if ex != 0 else 0.0
+                    FD_MUR_SEEN[key] = 0.0 if u == 0.0 and k == 0.0 else float(abs(decimal.Decimal(k) - ex)
+                                                                              / decimal.Decimal(u or 5e-324))
+    return k
+
+
 def fd_pos(x) -> bool:
     return x > 0.0 and math.isfinite(x)
 
@@ -8780,14 +8820,15 @@ class Fd1:
     """fdtd.rs's `Fdtd1d`, transcribed: every operation in Rust's order on binary64 (Python floats round each + − × ÷
     and √ correctly, as Rust's do)."""
 
-    def __init__(self, n, dx, K):
+    def __init__(self, n, dx, K, port=False):
         self.c, self.eps0, self.mu0 = K
+        self.mur = fd_mur_port if port else fd_mur
         self.n, self.dx, self.step = n, dx, 0
         self.dt = dx / (2.0 * self.c)
         ce, ch = fdiv(self.dt, self.eps0 * dx), fdiv(self.dt, self.mu0 * dx)
         self.e, self.h = [0.0] * n, [0.0] * n
         self.eps, self.mu, self.ce, self.ch = [1.0] * n, [1.0] * n, [ce] * n, [ch] * n
-        self.al = self.ar = fd_mur(self.dt, dx, 1.0, 1.0, self.c)
+        self.al = self.ar = self.mur(self.dt, dx, 1.0, 1.0, self.c)
         self.errs = []
 
     def copy(self):
@@ -8797,8 +8838,8 @@ class Fd1:
 
     def update_abc(self):
         n = self.n
-        self.al = fd_mur(self.dt, self.dx, self.eps[1], self.mu[0], self.c)
-        self.ar = fd_mur(self.dt, self.dx, self.eps[n - 2], self.mu[n - 2], self.c)
+        self.al = self.mur(self.dt, self.dx, self.eps[1], self.mu[0], self.c)
+        self.ar = self.mur(self.dt, self.dx, self.eps[n - 2], self.mu[n - 2], self.c)
 
     def set_material(self, which, start, end, x):
         if not fd_pos(x):
@@ -8901,8 +8942,9 @@ class FdScripts:
     """Replays fdtd.tsv's scripts on primitives P. A row whose inputs extend the previous row's continues from that
     row's grid (the frames of one scenario), so each scenario runs once."""
 
-    def __init__(self, root: Path, P):
+    def __init__(self, root: Path, P, port=False):
         c = golden_consts(root)
+        self.port = port
         self.K = (c["field::SPEED_OF_LIGHT"], c["field::EPSILON_0"], c["field::MU_0"])
         self.eps0 = c["field::EPSILON_0"]
         self.c12 = (c["fdtd::FOURTH_ORDER_C1"], c["fdtd::FOURTH_ORDER_C2"])
@@ -8925,7 +8967,7 @@ class FdScripts:
         if self.prev is not None and raw[:len(self.prev)] == self.prev and self.sim is not None:
             sim, done = self.sim.copy(), fd_ops(toks[2:len(self.prev)])
         else:
-            sim, done = Fd1(n, dx, self.K), []
+            sim, done = Fd1(n, dx, self.K, self.port), []
         for op in fd_ops(toks[2:])[len(done):]:
             fd_apply(sim, op, self.P)
         self.prev, self.sim = raw, sim
@@ -8943,7 +8985,7 @@ class FdScripts:
         if cached is not None and raw[:len(cached[0])] == cached[0] and cached[2] == fn:
             src, done = cached[1].copy(), len(tf_ops(toks[4:len(cached[0])]))
         else:
-            src, done = Tf(*tf_sanitize(nx, bx, dx, dt, self.K), self.K), 0
+            src, done = Tf(*tf_sanitize(nx, bx, dx, dt, self.K), self.K, self.port), 0
         for op in tf_ops(toks[4:])[done:]:
             tf_apply(src, op, self.P)
         self.tf_prev = (raw, src, fn)
@@ -9435,12 +9477,16 @@ def fd_pulse(name, v, P):
 class Tf:
     """fdtd.rs's `TfsfSource`, transcribed from already-validated arguments (its `build`)."""
 
-    def __init__(self, nx, bx, dx, dt, K):
+    def __init__(self, nx, bx, dx, dt, K, port=False):
         c, eps0, mu0 = K
         self.n, self.bx = nx, bx
         self.ec, self.hc = fdiv(dt, eps0 * dx), fdiv(dt, mu0 * dx)
         s = fdiv(c * dt, dx)
         self.abc = fdiv(s - 1.0, s + 1.0)
+        if port:                                    # ADR 0002 row 40 (M5 part 2a-1b): rounded once
+            F = Fraction
+            num, den = F(c) * F(dt) - F(dx), F(c) * F(dt) + F(dx)
+            self.abc = 0.0 if num == 0 else rn_frac(num / den)
         self.sc = min(max(bx // 4, 1), nx - 2)
         self.e, self.h = [0.0] * nx, [0.0] * nx
 
@@ -9569,6 +9615,7 @@ def fdtd_corrections(root: Path, path: Path):
     def fixes(_rows):
         out = []
         fs = FdScripts(root, MPFR_P)
+        fsp = FdScripts(root, MPFR_P, port=True)
         for fn, _cls, ins, outs, _v in sc_lines(path):
             if fn.startswith(("NonUniformGrid::graded", "CwAccumulator::", "fdtd::find_eigenmodes",
                               "fdtd::nf2ff_2d_phasor")):
@@ -9584,6 +9631,8 @@ def fdtd_corrections(root: Path, path: Path):
             if fn == "TfsfSource::new" and fs.tf_eval(fn, ins, True) != fs.tf_eval(fn, ins):
                 continue                                    # ADR 0002 row 3's: fdtd.adr.tsv maps it
             want = fs.eval(fn, ins)
+            if fn.startswith(("Fdtd1d::", "TfsfSource::")) and not toks_same(fsp.eval(fn, ins), want):
+                continue                                    # ADR 0002 row 40's: fdtd.adr.tsv maps it
             if not fd_injects(fn, ins):
                 continue
             old = wave_toks([parse_tok(x) for x in outs.split(" ")])
@@ -9655,8 +9704,11 @@ def fm_port(fn, v, EPS0):
 
 def fdtd_adr_rows(root: Path, path: Path) -> list:
     """ADR 0002 row 3: each `TfsfSource::new` row whose arguments Rust clamped, mapped to try_new's refusal. Row 40:
-    each media-coefficient row whose outputs rounding once changes."""
+    each media-coefficient row whose outputs rounding once changes, and each 1D or TF/SF script whose state the port's
+    Mur coefficients change (on correctly rounded primitives, as the port runs)."""
     fs = FdScripts(root, GLIBC_P)
+    fsb = FdScripts(root, MPFR_P)
+    fsp = FdScripts(root, MPFR_P, port=True)
     out = []
     eps0 = golden_consts(root)["field::EPSILON_0"]
     for fn, _cls, ins, outs, v in sc_lines(path):
@@ -9665,12 +9717,24 @@ def fdtd_adr_rows(root: Path, path: Path) -> list:
             if not toks_same(want, [parse_tok(x) for x in outs.split(" ")]):
                 out.append((fn, ins, wire(want), "40", f"oracle {outs}; ADR 0002 row 40: rounded once"))
             continue
-        if fn != "TfsfSource::new":
+        if not fn.startswith(("Fdtd1d::", "TfsfSource::")):
             continue
-        toks = [parse_tok(x) for x in ins.split(" ")[:4]]
-        bad = tf_check(toks[0][1] & FD_U64, toks[1][1] & FD_U64, toks[2][1], toks[3][1], fs.K)
-        if bad is not None:
-            out.append((fn, ins, wire(bad), "3", f"oracle {outs[:120]}; ADR 0002 row 3: refused as try_new"))
+        if fn == "TfsfSource::new":
+            toks = [parse_tok(x) for x in ins.split(" ")[:4]]
+            bad = tf_check(toks[0][1] & FD_U64, toks[1][1] & FD_U64, toks[2][1], toks[3][1], fs.K)
+            if bad is not None:
+                out.append((fn, ins, wire(bad), "3", f"oracle {outs[:120]}; ADR 0002 row 3: refused as try_new"))
+                continue
+        want, base = fsp.eval(fn, ins), fsb.eval(fn, ins)
+        if toks_same(want, base) or toks_same(want, wave_toks([parse_tok(x) for x in outs.split(" ")])):
+            continue
+        out.append((fn, ins, wire(want), "40", f"oracle {outs[:120]}; ADR 0002 row 40: the Mur coefficient"))
+    if FD_MUR_SEEN:
+        worst = max(FD_MUR_SEEN.values())
+        print(f"     fdtd: the 1D Mur coefficient's cancellation-free form (ADR 0002 row 40) on {len(FD_MUR_SEEN)} "
+              f"argument sets, within {worst:.2f} ulp of the exact coefficient")
+        if worst > FD_MUR_ULPS:
+            raise SystemExit(f"fdtd: the 1D Mur coefficient's cancellation-free form is {worst:.2f} ulp off")
     return out
 
 

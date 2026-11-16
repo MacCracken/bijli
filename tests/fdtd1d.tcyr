@@ -413,6 +413,19 @@ fn main() {
     assert(e1 == e1w, "E₁ = E₀ⁿ + k(E₀ − E₁), reading the E₀ just written, as Rust's order does");
     BjFdtd1d_free(&s2c);
 
+    # ADR 0002 row 40 (M5 part 2a-1b): where v·dt meets dx the Mur coefficient takes its cancellation-free form. The
+    # expectations are Python's (validate.py's fd_mur_port); the exact values beside them.
+    test_group("cyrius_mur_cancellation_free");
+    var mq: BjFdtd1d;
+    var tq, vq = BjFdtd1d_new(20, 0.001, &mq);
+    assert(is_ok(tq) == 1 && mq.abc_left == -0.3333333333333333, "vacuum: Rust's chain stays (v·dt = dx/2)");
+    var tq2, vq2 = mq.set_permittivity(0, 20, 0.25);
+    assert(mq.abc_left == 0.00000000000000002087566293995803 && mq.abc_right == mq.abc_left,
+      "ε_r = 1/4: 2.087566293995803e-17, the exact 2.0875662939958029e-17 (Rust's 0)");
+    var tq3, vq3 = mq.set_permittivity(0, 20, 0.3);
+    assert(mq.abc_left == -0.0455488498966777, "ε_r = 0.3: −0.0455488498966777, exact (Rust's −0.045548849896677686)");
+    BjFdtd1d_free(&mq);
+
     return assert_summary();
 }
 

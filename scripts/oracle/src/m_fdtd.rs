@@ -1702,6 +1702,65 @@ fn emit_2a1a(r: &mut Rows) {
     }
 }
 
+// ── part 2a-1b: the Mur coefficients where they cancel (ADR 0002 row 40) ──────────────────────────────────────────
+
+/// The Mur coefficients where Rust's cancel (the port rounds the TF/SF one once and gives the 1D one a
+/// cancellation-free form, ADR 0002 row 40): the TF/SF source at the magic time step S = c·dt/dx = 1 (dt = dx/c ulp by
+/// ulp and S = 1 − 10⁻ᵏ), and the 1D grid where v·dt = c·dt/√(ε_rμ_r) meets dx, ε_rμ_r = 1/4 at dt = dx/(2c) (relative
+/// offsets either side and ulp by ulp, through ε_r, μ_r or both), and at its band's edges ε_rμ_r = 1/16 and 9/16; each
+/// as constructor or setup rows and as Gaussian-driven scenarios.
+impl Rows {
+    /// As `tf`, skipping a (function, inputs) an earlier part emitted.
+    fn tf_new(&mut self, func: &str, sc: &TfScript) {
+        if !self.keys.contains(&format!("{func} {:?}", sc.ins)) {
+            self.tf(func, sc);
+        }
+    }
+
+    /// As `one`, skipping a (function, inputs) already emitted.
+    fn one_new(&mut self, func: &str, n: usize, dx: f64, setup: &[Op]) {
+        let mut sc = Script::new(n, dx);
+        for &op in setup {
+            sc.apply(op);
+        }
+        if !self.keys.contains(&format!("{func} {:?}", sc.ins)) {
+            self.emit(func, &sc);
+        }
+    }
+}
+
+fn emit_2a1b(r: &mut Rows) {
+    let c = bijli::field::SPEED_OF_LIGHT;
+    let offs: Vec<f64> = (1..=15).map(|k| 10f64.powi(-k)).collect();
+    for dx in [1e-4, 1e-3, 3e-7, 0.01, 2f64.powi(-20)] {
+        let m = dx / c;
+        let mut dts = ulp_walk(m, 8);
+        dts.extend(offs.iter().map(|&o| m * (1.0 - o)));
+        for dt in dts {
+            r.tf_new("TfsfSource::try_new", &TfScript::new(true, 100, 50, dx, dt));
+        }
+        r.tf_frames("TfsfSource::step", (200, 100, dx, m), &[], (40.0 * m, 10.0 * m), &[1, 60, 150, 400]);
+    }
+    let st = "Fdtd1d::step_once";
+    let sf = "Fdtd1d::set_permittivity";
+    let quarter: Vec<f64> = offs.iter().flat_map(|&o| [0.25 * (1.0 + o), 0.25 * (1.0 - o)]).chain(ulp_walk(0.25, 8))
+        .collect();
+    for &q in &quarter {
+        r.one_new(sf, 20, 1e-3, &[Op::Eps(0, 20, q)]);
+        r.one_new("Fdtd1d::set_permeability", 20, 1e-3, &[Op::Mu(0, 20, q)]);
+        r.one_new(sf, 20, 1e-3, &[Op::Mu(0, 20, 0.5), Op::Eps(0, 20, 2.0 * q)]);
+    }
+    for q in [0.25, 1.0 / 16.0, 9.0 / 16.0] {
+        for e in ulp_walk(q, 4) {
+            r.one_new(sf, 20, 1e-3, &[Op::Eps(0, 20, e)]);
+        }
+    }
+    for (dx, q) in [(1e-3, 0.25), (1e-4, 0.25 * (1.0 + 1e-9)), (2f64.powi(-12), 0.3), (0.05, 0.2)] {
+        let dt = Fdtd1d::new(200, dx).expect("a grid").dt;
+        r.frames(st, 200, dx, &[Op::Eps(0, 200, q)], &[1, 60, 200, 500], |k| Op::Pulse(k, 100, 40.0 * dt, 10.0 * dt));
+    }
+}
+
 pub fn emit() -> Module {
     let mut r = Rows { m: Module::new("fdtd"), keys: BTreeSet::new() };
     emit_1a(&mut r);
@@ -1712,5 +1771,6 @@ pub fn emit() -> Module {
     emit_1d_eigen(&mut r);
     emit_1e(&mut r);
     emit_2a1a(&mut r);
+    emit_2a1b(&mut r);
     r.m
 }

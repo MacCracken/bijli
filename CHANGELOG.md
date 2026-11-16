@@ -435,6 +435,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
   on a new engine for ratios of sums of products, `_bj_cr_rat` (two double-double tiers and an exact bignum path);
   `cr_verify.py` gains the rat, rat_x and rat_slow families. `fdtd.tsv` grows by 3,052 edge rows (95,087);
   `fdtd.adr.tsv` maps 9,775 rows to row 40.
+- **Cyrius port, M5 part 2a-1b — the Mur coefficients** (`src/fdtd_source.cyr`, `src/fdtd1d.cyr`): the TF/SF source's
+  Mur coefficient is rounded once and the 1D grid's takes a cancellation-free form where it cancels (ADR 0002 row 40
+  amended, see Fixed). validate.py's 1D and TF/SF models gain the port's Mur coefficients, and its 1D form is checked
+  against the exact coefficient on every row that takes it. `fdtd.tsv` grows by 272 rows (95,359); `fdtd.adr.tsv`
+  maps 311 trajectory rows more (10,191 in all).
 
 ### Fixed
 
@@ -897,6 +902,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
   an operand it reads isn't finite or Rust's formula divides by an exact zero. Cost, at setup: the Cyrius-only
   `fdtd/media_coefficients` (ten coefficients and a subpixel mean) 79 ns → 3.90–3.93 µs, about 0.4 µs a coefficient
   (`port-parity.md` §100).
+- **fdtd** (ADR 0002 row 40 amended, M5 part 2a-1b): the Mur coefficients cancelled where the wave's step meets the
+  cell. `TfsfSource`'s (S − 1)/(S + 1) gave 0 at the magic time step dt = dx/c (S = 1 in binary64), where the exact
+  (c·dt − dx)/(c·dt + dx) of the given doubles is −7.8·10⁻¹⁸ (at dx = 10⁻⁴); it is now rounded once. `Fdtd1d`'s
+  (v·dt − dx)/(v·dt + dx), v·dt = c·dt/√(ε_rμ_r), gave 0 at ε_rμ_r = 1/4 for 2.09·10⁻¹⁷ and was up to 2.6·10²⁰ ulps
+  off near it; where v·dt lies in (2dx/3, 2dx) it is now (c²dt² − ε_rμ_r·dx²)/(c·dt + dx·√(ε_rμ_r))², the same
+  value without the cancellation, within 6 ulps of the exact coefficient. The vacuum default (v·dt = dx/2) keeps
+  Rust's bits. Cost, at setup only: a `set_permittivity` in the band 1.1–2.9 µs (108 ns on Rust's chain); the steps
+  are unchanged (`port-parity.md` §101).
 
 ### Performance
 
