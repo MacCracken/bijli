@@ -366,6 +366,23 @@ fn main() {
     BjCwAccumulator_free(&cs);
     BjCwAccumulator_free(&cz);
 
+    # ADR 0002 row 17 (M5 part 2c): the accumulators' agreement on the decimal 10⁻¹². With dt = (4504·10¹² − 1)·2^-1042
+    # against dt − 4504·2^-1042, 1e-12·dt rounds up on the subnormal grid and Rust took them as equal.
+    test_group("cyrius_nf2ff_agreement_exact");
+    var qa: BjCwAccumulator;
+    var qb: BjCwAccumulator;
+    var tqa, vqa = BjCwAccumulator_new(400, 1000000000.0, _bj_from_bits(0x210005d38117fff), &qa);
+    var tqb, vqb = BjCwAccumulator_new(400, 1000000000.0, _bj_from_bits(0x210005d38116e67), &qb);
+    var r6: BjNf2ffResult;
+    var t6, v6 = bj_nf2ff_2d_phasor(&qa, &qb, &qa, 20, 20, 0.001, 3, 8, &r6);
+    assert(is_err_result(t6) == 1 && text_is(bj_last_error_display(), w5a) == 1,
+      "10⁻¹² apart by a hair more than 10⁻¹²: refused (Rust's rounded test accepted)");
+    var t6b, v6b = bj_nf2ff_2d_phasor(&qa, &qa, &qa, 20, 20, 0.001, 3, 8, &r6);
+    assert(is_ok(t6b) == 1, "the same dt still agrees");
+    BjNf2ffResult_free(&r6);
+    BjCwAccumulator_free(&qa);
+    BjCwAccumulator_free(&qb);
+
     return assert_summary();
 }
 

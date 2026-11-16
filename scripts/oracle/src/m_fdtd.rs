@@ -1854,6 +1854,41 @@ fn emit_2b(r: &mut Rows) {
     }
 }
 
+// ── part 2c: the exact thresholds (ADR 0002 row 17) ────────────────────────────────────────────────────────────────
+
+/// The tests the port decides exactly (ADR 0002 row 17): the TF/SF Courant limit c·dt ≤ dx·(1 + 10⁻¹²) straddled ulp
+/// by ulp on eleven dx (from the least subnormal to 10³⁰⁰), where the double 1 + 1e-12 lies above the decimal; and
+/// NF2FF's 10⁻¹² agreement of the accumulators' dt on M4's cut, dt = (j·10¹² − r)·2^-1042 against dt ± j·2^-1042,
+/// where 1e-12·dt rounds to the subnormal grid.
+fn emit_2c(r: &mut Rows) {
+    let c = bijli::field::SPEED_OF_LIGHT;
+    for dx in [1e-4, 1e-3, 3e-7, 0.01, 4.115e-6, 3.091e-7, 0.02886, 1e-300, 1e-310, 1e300, 0.5] {
+        let lim = dx * (1.0 + 1e-12) / c;
+        for dt in ulp_walk(lim, 24) {
+            r.tf_new("TfsfSource::try_new", &TfScript::new(true, 20, 10, dx, dt));
+            r.tf_new("TfsfSource::new", &TfScript::new(false, 20, 10, dx, dt));
+        }
+    }
+    let g1 = (3, 1, 13, 0.25, 1.5, 0.125, 0.75);
+    let fr = 1e9;
+    let u = 2f64.powi(-1042);
+    for j in [4504_i64, 5000, 7393, 9007] {
+        for rr in [-50_i64, -5, -1, 1, 5, 50] {
+            let a = i64_to_f64_2c(j) * 1e12 * u - i64_to_f64_2c(rr) * u; // (j·10^12 − r)·2^-1042, exactly
+            let off = i64_to_f64_2c(j) * u;
+            let pa = Phasors::new(400, fr, a, g1);
+            for b in [a + off, a - off] {
+                r.nf2ff(&pa, &Phasors::new(400, fr, b, g1), &pa, 20, 20, 1e-3, 3, 8);
+            }
+        }
+    }
+}
+
+/// k as an f64, exactly for |k| < 2^31 (the grid's small counts).
+fn i64_to_f64_2c(k: i64) -> f64 {
+    f64::from(i32::try_from(k).unwrap_or(0))
+}
+
 pub fn emit() -> Module {
     let mut r = Rows { m: Module::new("fdtd"), keys: BTreeSet::new() };
     emit_1a(&mut r);
@@ -1868,5 +1903,6 @@ pub fn emit() -> Module {
     emit_2a2(&mut r);
     emit_2a3(&mut r);
     emit_2b(&mut r);
+    emit_2c(&mut r);
     r.m
 }

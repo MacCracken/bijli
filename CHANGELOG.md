@@ -452,6 +452,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
   validate.py's 1D and TF/SF models take the port's rows as a set (13, 40), and map a trajectory to the first row
   that accounts for its whole change. `fdtd.tsv` grows by 2,800 seeded rows (103,150); `fdtd.adr.tsv` maps 1,327
   rows to row 13.
+- **Cyrius port, M5 part 2c — the exact thresholds** (`src/fdtd_source.cyr`, `src/nf2ff.cyr`, `src/fdtd_util.cyr`):
+  the TF/SF Courant test, NF2FF's agreement test and the Nyquist warning are decided exactly on their decimal
+  thresholds (ADR 0002 row 17 amended, see Fixed). `_bj_rf_within12` moves from `src/rf.cyr` into
+  `src/crmath_edge.cyr` as `_bj_e_within12`, shared by rf and NF2FF. `fdtd.tsv` grows by 576 rows (103,726);
+  `fdtd.adr.tsv` maps 28 rows to row 17.
 
 ### Fixed
 
@@ -940,6 +945,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
   `NonUniformGrid::courant_dt`'s d/(2√3·c) and `Fdtd1d::time`'s step·dt past 2⁵³. Every 1D and TF/SF trajectory reads
   the coefficients, so most change in their last bits. Cost, at setup: `set_permittivity` 98 → 254 ns and
   `courant_dt` 139 → 252 ns; the steps are unchanged (`port-parity.md` §104).
+- **fdtd** (ADR 0002 row 17 amended, M5 part 2c): `TfsfSource::try_new` (and `new`, which refuses as it does) took
+  dt up to an ulp past the Courant limit c·dt ≤ dx·(1 + 10⁻¹²), since the double 1 + 1e-12 lies above the decimal
+  (dx = 4.115·10⁻⁶ with dt = 1.3726162517417684·10⁻¹⁴ was accepted); the test is now exact. `nf2ff_2d_phasor`'s
+  10⁻¹² agreement of the accumulators' frequency and step is decided as `z0_equal`'s is (steps near 10⁻²⁹⁸ were taken
+  as equal 10⁻¹² apart), and `find_eigenmodes` warns of a frequency past Nyquist on the exact freq_max·dt > ½.
+  Cost: within the noise (`rf/s_cascade` 3.69 → 3.75–3.77 µs, NF2FF 1.48–1.59 → 1.55 ms) (`port-parity.md` §105).
 
 ### Performance
 

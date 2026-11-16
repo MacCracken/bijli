@@ -8773,7 +8773,7 @@ def fd_mur(dt, dx, eps_r, mu_r, c):
 
 
 FD_MUR_LO, FD_MUR_HI = 2.0 ** -400, 2.0 ** 400
-FD_PORT = frozenset({"40", "13"})           # the port's ADR 0002 rows in the 1D and TF/SF models
+FD_PORT = frozenset({"40", "13", "17"})     # the port's ADR 0002 rows in the 1D and TF/SF models
 FD_MUR_ULPS = 8                             # the cancellation-free form's accuracy gate against the exact coefficient
 FD_MUR_SEEN = {}                            # (dt, dx, ε_r, μ_r) -> its error in ulps, each band call measured once
 
@@ -8993,8 +8993,8 @@ class FdScripts:
         raw = ins_raw.split(" ")
         toks = [parse_tok(x) for x in raw]
         nx, bx, dx, dt = toks[0][1] & FD_U64, toks[1][1] & FD_U64, toks[2][1], toks[3][1]
-        bad = tf_check(nx, bx, dx, dt, self.K)
-        if bad is not None and (fn != "TfsfSource::new" or port):
+        bad = tf_check(nx, bx, dx, dt, self.K, "17" in self.port)
+        if bad is not None and (fn != "TfsfSource::new" or port or self.port):
             return bad
         cached = getattr(self, "tf_prev", None)
         if cached is not None and raw[:len(cached[0])] == cached[0] and cached[2] == fn:
@@ -9300,6 +9300,20 @@ def fu_eigen(toks, P):
     return fu_seq_toks(fr) + fu_seq_toks(qs) + fu_seq_toks(am)
 
 
+FU17 = {"on": False}                       # NF2FF's agreement test decided exactly (ADR 0002 row 17, M5 part 2c)
+
+
+def fu_nf2ff_port(fn, ins, K, c12):
+    """NF2FF on correctly rounded primitives with the exact agreement test, and without it."""
+    base = fu_eval(fn, ins, MPFR_P, K, c12)
+    FU17["on"] = True
+    try:
+        want = fu_eval(fn, ins, MPFR_P, K, c12)
+    finally:
+        FU17["on"] = False
+    return want, base
+
+
 def fu_eval(fn, ins_raw, P, K, C12):
     """fdtd.rs's part-1d functions transcribed on the primitives P: a row's outputs, or None."""
     toks = [parse_tok(x) for x in ins_raw.split(" ")] if ins_raw != "-" else []
@@ -9431,6 +9445,8 @@ def nf_eval(toks, P, K):
     margin, na = toks[k + 3][1] & FD_U64, toks[k + 4][1] & FD_U64
 
     def same(a, b):
+        if FU17["on"] and math.isfinite(a) and math.isfinite(b):   # ADR 0002 row 17 (M5 part 2c): the decimal 10⁻¹²
+            return abs(Fraction(a) - Fraction(b)) * 10 ** 12 <= max(abs(Fraction(a)), abs(Fraction(b)))
         return abs(a - b) <= 1e-12 * rust_max(abs(a), abs(b))
 
     if not (same(ez["omega"], hx["omega"]) and same(ez["omega"], hy["omega"]) and same(ez["dt"], hx["dt"])
@@ -9539,8 +9555,9 @@ class Tf:
         return [(k, v - (1 << 64) if k == "i" and v >= 1 << 63 else v) for k, v in out]
 
 
-def tf_check(nx, bx, dx, dt, K):
-    """`TfsfSource::try_new`'s refusal of its arguments, as tokens, or None."""
+def tf_check(nx, bx, dx, dt, K, exact=False):
+    """`TfsfSource::try_new`'s refusal of its arguments, as tokens, or None; exact=True for the port's Courant test
+    c·dt ≤ dx·(1 + 10⁻¹²) on the decimal 10⁻¹² (ADR 0002 row 17, M5 part 2c)."""
     c = K[0]
     if nx < 3:
         return [("E", "InsufficientResolution"),
@@ -9549,7 +9566,9 @@ def tf_check(nx, bx, dx, dt, K):
         return ip_err(f"TFSF boundary_x must be in 1..{nx}, got {bx}")
     if not fd_pos(dx):
         return ip_err(f"dx must be finite and positive, got {rust_display(dx)}")
-    if not fd_pos(dt) or c * dt > dx * (1.0 + 1e-12):
+    over = fd_pos(dt) and (Fraction(c) * Fraction(dt) * 10 ** 12 > (10 ** 12 + 1) * Fraction(dx) if exact
+                            else c * dt > dx * (1.0 + 1e-12))
+    if not fd_pos(dt) or over:
         return ip_err(f"dt must be in (0, dx/c] = (0, {rust_display(dx / c)}], got {rust_display(dt)}")
     return None
 
@@ -9639,6 +9658,8 @@ def fdtd_corrections(root: Path, path: Path):
                 want = fu_eval(fn, ins, MPFR_P, fs.K, fs.c12)
                 if fn == "NonUniformGrid::graded" and not toks_same(*fu_graded_port(fn, ins, fs.K, fs.c12)):
                     continue                                # ADR 0002 row 42's: fdtd.adr.tsv maps it
+                if fn == "fdtd::nf2ff_2d_phasor" and not toks_same(*fu_nf2ff_port(fn, ins, fs.K, fs.c12)):
+                    continue                                # ADR 0002 row 17's: fdtd.adr.tsv maps it
                 old = wave_toks([parse_tok(x) for x in outs.split(" ")])
                 if not toks_same(want, old):
                     out.append((fn, ins, wire(want), f"oracle {outs[:120]}; correctly rounded primitives give "
@@ -9772,6 +9793,7 @@ def fdtd_adr_rows(root: Path, path: Path) -> list:
     fs = FdScripts(root, GLIBC_P)
     fsb = FdScripts(root, MPFR_P)
     fs40 = FdScripts(root, MPFR_P, port=frozenset({"40"}))
+    fs13 = FdScripts(root, MPFR_P, port=frozenset({"40", "13"}))
     fsp = FdScripts(root, MPFR_P, port=FD_PORT)
     out = []
     eps0 = golden_consts(root)["field::EPSILON_0"]
@@ -9780,6 +9802,11 @@ def fdtd_adr_rows(root: Path, path: Path) -> list:
             want = fm_port(fn, v, eps0)
             if not toks_same(want, [parse_tok(x) for x in outs.split(" ")]):
                 out.append((fn, ins, wire(want), "40", f"oracle {outs}; ADR 0002 row 40: rounded once"))
+            continue
+        if fn == "fdtd::nf2ff_2d_phasor":
+            want, base = fu_nf2ff_port(fn, ins, fs.K, fs.c12)
+            if not toks_same(want, base) and not toks_same(want, wave_toks([parse_tok(x) for x in outs.split(" ")])):
+                out.append((fn, ins, wire(want), "17", f"oracle {outs[:120]}; ADR 0002 row 17: the agreement exact"))
             continue
         if fn in ("NonUniformGrid::try_courant_dt", "NonUniformGrid::courant_dt"):
             want, base = fu_courant_port(fn, ins, fs.K, fs.c12)
@@ -9809,9 +9836,11 @@ def fdtd_adr_rows(root: Path, path: Path) -> list:
             continue
         if toks_same(want, fs40.eval(fn, ins)):
             out.append((fn, ins, wire(want), "40", f"oracle {outs[:120]}; ADR 0002 row 40: the Mur coefficient"))
-        else:
+        elif toks_same(want, fs13.eval(fn, ins)):
             out.append((fn, ins, wire(want), "13", f"oracle {outs[:120]}; ADR 0002 row 13: the update coefficients "
                                                    "rounded once (and row 40's Mur coefficient)"))
+        else:
+            out.append((fn, ins, wire(want), "17", f"oracle {outs[:120]}; ADR 0002 row 17: the Courant test exact"))
     if FD_MUR_SEEN:
         worst = max(FD_MUR_SEEN.values())
         print(f"     fdtd: the 1D Mur coefficient's cancellation-free form (ADR 0002 row 40) on {len(FD_MUR_SEEN)} "

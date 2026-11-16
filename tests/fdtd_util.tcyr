@@ -561,6 +561,12 @@ fn main() {
     assert(cd == 0.0000000000000009821749327886999, "Rust's 9.821749327887e-16");
     BjNonUniformGrid_free(&gc);
 
+    # ADR 0002 row 17 (M5 part 2c): the Nyquist warning's freq_max > 1/(2dt) decided exactly.
+    test_group("cyrius_nyquist_exact");
+    assert(_bj_fu_over_nyquist(19157.088122605364, 0.0000261) == 1,
+      "freq_max·dt exactly above ½ (Rust's freq_max > RN(0.5/dt) said no)");
+    assert(_bj_fu_over_nyquist(19157.0, 0.0000261) == 0 && _bj_fu_over_nyquist(20000.0, 0.0000261) == 1, "either side");
+
     return assert_summary();
 }
 

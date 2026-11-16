@@ -352,9 +352,20 @@ fn _bj_nf_core(f: *i64, rot_r: f64, rot_i: f64, nx, ny, dx: f64, k: f64, margin,
     return 0;
 }
 
-# |a − b| ≤ 10⁻¹²·max(|a|, |b|) with Rust's NaN-ignoring max (a NaN difference fails).
+# |a − b| ≤ 10⁻¹²·max(|a|, |b|): for finite a and b decided exactly, the decimal 10⁻¹² (src/crmath_edge.cyr's
+# _bj_e_within12, z0_equal's: ADR 0002 row 17, M5 part 2c); otherwise Rust's test with its NaN-ignoring max (a NaN
+# difference fails, and ∞ against a finite value passes, refused afterwards as an invalid frequency or dt).
 #must_use
 fn _bj_nf_same(a: f64, b: f64): i64 {
+    var za: f64 = a * 0.0;
+    var zb: f64 = b * 0.0;
+    if (za == 0.0 && zb == 0.0) {
+        var fa: f64 = f64_abs(a);
+        var fb: f64 = f64_abs(b);
+        var fm: f64 = fa;
+        if (fb > fa) { fm = fb; }
+        return _bj_e_within12(a, b, fm);
+    }
     var d: f64 = a - b;
     var ad: f64 = f64_abs(d);
     var aa: f64 = f64_abs(a);

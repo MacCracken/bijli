@@ -21,12 +21,11 @@ private
 var _BJ_RF_TAU: f64 = 6.283185307179586;
 # rf.rs's thresholds: 10⁻³⁰ (a reference impedance, Z_L + Z₀), 10⁻⁶⁰ (|Z_L + Z₀|², |S21|²), 10⁻¹⁵ (the unbounded
 # input impedance, relative to Z₀ + |Z_L|), 10⁻¹² (a matched stub, relative to Z₀; z0_equal). The tests against
-# 10⁻³⁰, 10⁻⁶⁰ and 10⁻¹² are decided exactly on the inputs (ADR 0002 row 17, M4 part 2c), as decimals; the input
-# impedance's 10⁻¹⁵ stays on its rounded den (the user's answer of 2026-11-15).
+# 10⁻³⁰, 10⁻⁶⁰ and 10⁻¹² (src/crmath_edge.cyr's _bj_e_within12) are decided exactly on the inputs (ADR 0002 row 17,
+# M4 part 2c), as decimals; the input impedance's 10⁻¹⁵ stays on its rounded den (the user's answer of 2026-11-15).
 var _BJ_RF_TINY30: f64 = 0.000000000000000000000000000001;
 var _BJ_RF_TINY60: f64 = 0.000000000000000000000000000000000000000000000000000000000001;
 var _BJ_RF_REL15: f64 = 0.000000000000001;
-var _BJ_RF_REL12: f64 = 0.000000000001;
 # 2·10⁻³⁰ and 2·10⁻⁶⁰: a rounded |Z_L + Z₀| (or sum of squares) at or above them is far above 10⁻³⁰ (10⁻⁶⁰), so the
 # exact tests (ADR 0002 row 17) start below them.
 var _BJ_RF_TWO30: f64 = 0.000000000000000000000000000002;
@@ -728,7 +727,7 @@ public fn bj_single_stub_match_complex(z_load: BjComplex, z0: f64, out: *f64): R
     var d1: f64 = 0.25;
     var d2: f64 = 0.25;
     var df: f64 = rl - z0;
-    if (_bj_rf_within12(rl, z0, z0) == 1) {                         # |R_L − Z₀| ≤ 10⁻¹²·Z₀ exactly (row 17)
+    if (_bj_e_within12(rl, z0, z0) == 1) {                         # |R_L − Z₀| ≤ 10⁻¹²·Z₀ exactly (row 17)
         var t0: f64 = -xl / (2.0 * z0);
         d1 = _bj_rf_d_from_t(t0);
     } else {
@@ -1091,7 +1090,7 @@ fn _bj_rf_index(ports, i, j): i64 {
 }
 
 # rf.rs's z0_equal, |a − b| ≤ 10⁻¹²·max(|a|, |b|), with both values finite: Rust's accepted an infinite impedance as
-# equal to any finite one (∞ ≤ 10⁻¹²·∞; ADR 0002 row 37). Decided exactly (_bj_rf_within12; row 17, M4 part 2c).
+# equal to any finite one (∞ ≤ 10⁻¹²·∞; ADR 0002 row 37). Decided exactly (_bj_e_within12; row 17, M4 part 2c).
 # Public for src/touchstone.cyr's writer.
 #must_use
 public fn _bj_rf_z0_equal(a: f64, b: f64): i64 {
@@ -1100,7 +1099,7 @@ public fn _bj_rf_z0_equal(a: f64, b: f64): i64 {
     var ab: f64 = f64_abs(b);
     var mx: f64 = aa;
     if (ab > aa) { mx = ab; }
-    var w = _bj_rf_within12(a, b, mx);
+    var w = _bj_e_within12(a, b, mx);
     return w;
 }
 
@@ -1120,59 +1119,6 @@ fn _bj_rf_sq_below60(n2: f64, a0: f64, a1: f64, b0: f64, b1: f64): i64 {
     pb[2] = 0.0;
     var r = _bj_x_r2_below(&pa, &pb, 60);
     return r;
-}
-
-# 2^±600 and 2^±900: _bj_rf_within12's scaling.
-var _BJ_RF_2P600: f64 = 0x6570000000000000;
-var _BJ_RF_2M600: f64 = 0x1A70000000000000;
-var _BJ_RF_2P900: f64 = 0x7830000000000000;
-var _BJ_RF_2M900: f64 = 0x07B0000000000000;
-
-# 1 when |a − b| ≤ 10⁻¹²·m exactly, the decimal 10⁻¹² (ADR 0002 row 17's rule for a literal threshold, M4 part 2c),
-# for finite a and b and a finite m ≥ 0 that is |b| or max(|a|, |b|). With m scaled into [2^-900, 2^900] by 2^±600
-# (exact near the cut, where a and b agree to 39 bits), the rounded |a − b| against RN(RN(1e-12)·m) decides outside
-# ±0.1 % (their errors are below 2^-52). Inside, a − b is exact (Sterbenz), |a − b|·10^12 = p + e exactly (TwoProduct;
-# 10^12 is a double), and the sign of the exact m − p − e (Grow-Expansion) decides.
-#must_use
-fn _bj_rf_within12(a: f64, b: f64, m: f64): i64 {
-    if (m == 0.0) {
-        if (a == b) { return 1; }
-        return 0;
-    }
-    var x: f64 = a;
-    var y: f64 = b;
-    var z: f64 = m;
-    var lo2: f64 = _BJ_RF_2M900;
-    var hi2: f64 = _BJ_RF_2P900;
-    if (z < lo2) {
-        var up: f64 = _BJ_RF_2P600;
-        x = x * up;
-        y = y * up;
-        z = z * up;
-    } elif (z > hi2) {
-        var dn: f64 = _BJ_RF_2M600;
-        x = x * dn;
-        y = y * dn;
-        z = z * dn;
-    }
-    var d: f64 = x - y;
-    var ad: f64 = f64_abs(d);
-    var t: f64 = _BJ_RF_REL12 * z;
-    var near: f64 = t * 0.999;
-    var far: f64 = t * 1.001;
-    if (ad <= near) { return 1; }
-    if (ad >= far) { return 0; }
-    var p, e = _bj_k_two_prod(ad, 1000000000000.0);
-    var pv: f64 = p;
-    var ev: f64 = e;
-    var ex: f64[3];
-    var k = _bj_g_grow(&ex, 0, z);
-    k = _bj_g_grow(&ex, k, -pv);
-    k = _bj_g_grow(&ex, k, -ev);
-    if (k == 0) { return 1; }
-    var top: f64 = ex[k - 1];
-    if (top > 0.0) { return 1; }
-    return 0;
 }
 
 # The common reference impedance of m's ports into out[0]: 0, or the InvalidParameter code recorded unless the first
@@ -1979,7 +1925,7 @@ fn _bj_rf_stub_ux(rl: f64, xl: f64, z0: f64, out: *f64): i64 {
     var d1e = 0 - 2;
     var d2s: f64 = 1.0;
     var d2e = 0 - 2;
-    if (_bj_rf_within12(rl, z0, z0) == 1) {                          # −X_L/(2Z₀) and λ/4
+    if (_bj_e_within12(rl, z0, z0) == 1) {                          # −X_L/(2Z₀) and λ/4
         var nx: f64 = -xs;
         var t2s, t2e = _bj_k_ux_mul(2.0, 0, zs, ze);
         var ts, te = _bj_k_ux_div(nx, xe, t2s, t2e);

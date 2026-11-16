@@ -15222,7 +15222,8 @@ fn _bj_cr_s2z(v: *f64, slow, out: *f64): i64 {
 # ε₀); the Drude model's (ε_∞, ω_p, γ, dt, ε₀); the Lorentz model's (unused, Δε, ω₀, γ, dt, ε₀); the Debye model's
 # (ε_∞, ε_s, τ, dt, ε₀); the TF/SF grid's (dt, dx, c); the 1D grid's (c, dt, ε_r, μ_r, dx) (M5 part 2a-1b); the
 # subpixel means' (ε₁, ε₂, f) (M5 part 2a-2: ADR 0002 row 41); a step count past 2^53 split exactly as s_hi + s_lo
-# times dt (s_hi, dt, s_lo) (M5 part 2b: row 13).
+# times dt (s_hi, dt, s_lo) (M5 part 2b: row 13); the signs of 10¹²·c·dt − (10¹² + 1)·dx (10¹², c, dt, 10¹² + 1, dx)
+# and of f·dt − ½ (f, dt, ½) (M5 part 2c: row 17).
 #must_use
 fn _bj_cr_rat_spec(k): i64 {
     if (k == 0) { return "+2ea-1bc/+2ea+1bc"; }           # the lossy C_a = (2ε − σΔt)/(2ε + σΔt)
@@ -15240,6 +15241,8 @@ fn _bj_cr_rat_spec(k): i64 {
     if (k == 12) { return "+1a-1ca+1cb/+1"; }              # the parallel mean (1 − f)ε₁ + f·ε₂
     if (k == 13) { return "+1ab/+1b-1cb+1ca"; }            # the perpendicular mean ε₁ε₂/((1 − f)ε₂ + f·ε₁)
     if (k == 14) { return "+1ab+1cb/+1"; }                 # step·dt = s_hi·dt + s_lo·dt
+    if (k == 15) { return "+1abc-1de/+1"; }                # the TF/SF Courant test's 10¹²·c·dt − (10¹² + 1)·dx
+    if (k == 16) { return "+1ab-1c/+1"; }                  # the Nyquist warning's f·dt − ½
     return 0;
 }
 
@@ -15557,6 +15560,65 @@ fn _bj_cr_rat(v: *f64, n, sp, slow, out: *f64): i64 {
     }
     var g = _bj_e_rt_exactq(v, sp, out);
     return g;
+}
+
+# ── |a − b| ≤ 10⁻¹²·m exactly (M4 part 2c, shared since M5 part 2c) ──────────────────────────────────────────────────
+
+# 10⁻¹² as a double: _bj_e_within12's rounded first test.
+var _BJ_E_W_REL12: f64 = 0.000000000001;
+
+# 2^±600 and 2^±900: its scaling.
+var _BJ_E_W_2P600: f64 = 0x6570000000000000;
+var _BJ_E_W_2M600: f64 = 0x1A70000000000000;
+var _BJ_E_W_2P900: f64 = 0x7830000000000000;
+var _BJ_E_W_2M900: f64 = 0x07B0000000000000;
+
+# 1 when |a − b| ≤ 10⁻¹²·m exactly, the decimal 10⁻¹² (ADR 0002 row 17's rule for a literal threshold, M4 part 2c;
+# moved from src/rf.cyr in M5 part 2c, where NF2FF's agreement test joined rf's), for finite a and b and a finite
+# m ≥ 0 that is |b| or max(|a|, |b|). With m scaled into [2^-900, 2^900] by 2^±600 (exact near the cut, where a and b
+# agree to 39 bits), the rounded |a − b| against RN(RN(1e-12)·m) decides outside ±0.1 % (their errors are below
+# 2^-52). Inside, a − b is exact (Sterbenz), |a − b|·10^12 = p + e exactly (TwoProduct; 10^12 is a double), and the
+# sign of the exact m − p − e (Grow-Expansion) decides.
+#must_use
+fn _bj_e_within12(a: f64, b: f64, m: f64): i64 {
+    if (m == 0.0) {
+        if (a == b) { return 1; }
+        return 0;
+    }
+    var x: f64 = a;
+    var y: f64 = b;
+    var z: f64 = m;
+    var lo2: f64 = _BJ_E_W_2M900;
+    var hi2: f64 = _BJ_E_W_2P900;
+    if (z < lo2) {
+        var up: f64 = _BJ_E_W_2P600;
+        x = x * up;
+        y = y * up;
+        z = z * up;
+    } elif (z > hi2) {
+        var dn: f64 = _BJ_E_W_2M600;
+        x = x * dn;
+        y = y * dn;
+        z = z * dn;
+    }
+    var d: f64 = x - y;
+    var ad: f64 = f64_abs(d);
+    var t: f64 = _BJ_E_W_REL12 * z;
+    var near: f64 = t * 0.999;
+    var far: f64 = t * 1.001;
+    if (ad <= near) { return 1; }
+    if (ad >= far) { return 0; }
+    var p, e = _bj_k_two_prod(ad, 1000000000000.0);
+    var pv: f64 = p;
+    var ev: f64 = e;
+    var ex: f64[3];
+    var k = _bj_g_grow(&ex, 0, z);
+    k = _bj_g_grow(&ex, k, -pv);
+    k = _bj_g_grow(&ex, k, -ev);
+    if (k == 0) { return 1; }
+    var top: f64 = ex[k - 1];
+    if (top > 0.0) { return 1; }
+    return 0;
 }
 
 # --- log.cyr ---
@@ -27526,12 +27588,11 @@ private
 var _BJ_RF_TAU: f64 = 6.283185307179586;
 # rf.rs's thresholds: 10⁻³⁰ (a reference impedance, Z_L + Z₀), 10⁻⁶⁰ (|Z_L + Z₀|², |S21|²), 10⁻¹⁵ (the unbounded
 # input impedance, relative to Z₀ + |Z_L|), 10⁻¹² (a matched stub, relative to Z₀; z0_equal). The tests against
-# 10⁻³⁰, 10⁻⁶⁰ and 10⁻¹² are decided exactly on the inputs (ADR 0002 row 17, M4 part 2c), as decimals; the input
-# impedance's 10⁻¹⁵ stays on its rounded den (the user's answer of 2026-11-15).
+# 10⁻³⁰, 10⁻⁶⁰ and 10⁻¹² (src/crmath_edge.cyr's _bj_e_within12) are decided exactly on the inputs (ADR 0002 row 17,
+# M4 part 2c), as decimals; the input impedance's 10⁻¹⁵ stays on its rounded den (the user's answer of 2026-11-15).
 var _BJ_RF_TINY30: f64 = 0.000000000000000000000000000001;
 var _BJ_RF_TINY60: f64 = 0.000000000000000000000000000000000000000000000000000000000001;
 var _BJ_RF_REL15: f64 = 0.000000000000001;
-var _BJ_RF_REL12: f64 = 0.000000000001;
 # 2·10⁻³⁰ and 2·10⁻⁶⁰: a rounded |Z_L + Z₀| (or sum of squares) at or above them is far above 10⁻³⁰ (10⁻⁶⁰), so the
 # exact tests (ADR 0002 row 17) start below them.
 var _BJ_RF_TWO30: f64 = 0.000000000000000000000000000002;
@@ -28233,7 +28294,7 @@ public fn bj_single_stub_match_complex(z_load: BjComplex, z0: f64, out: *f64): R
     var d1: f64 = 0.25;
     var d2: f64 = 0.25;
     var df: f64 = rl - z0;
-    if (_bj_rf_within12(rl, z0, z0) == 1) {                         # |R_L − Z₀| ≤ 10⁻¹²·Z₀ exactly (row 17)
+    if (_bj_e_within12(rl, z0, z0) == 1) {                         # |R_L − Z₀| ≤ 10⁻¹²·Z₀ exactly (row 17)
         var t0: f64 = -xl / (2.0 * z0);
         d1 = _bj_rf_d_from_t(t0);
     } else {
@@ -28596,7 +28657,7 @@ fn _bj_rf_index(ports, i, j): i64 {
 }
 
 # rf.rs's z0_equal, |a − b| ≤ 10⁻¹²·max(|a|, |b|), with both values finite: Rust's accepted an infinite impedance as
-# equal to any finite one (∞ ≤ 10⁻¹²·∞; ADR 0002 row 37). Decided exactly (_bj_rf_within12; row 17, M4 part 2c).
+# equal to any finite one (∞ ≤ 10⁻¹²·∞; ADR 0002 row 37). Decided exactly (_bj_e_within12; row 17, M4 part 2c).
 # Public for src/touchstone.cyr's writer.
 #must_use
 public fn _bj_rf_z0_equal(a: f64, b: f64): i64 {
@@ -28605,7 +28666,7 @@ public fn _bj_rf_z0_equal(a: f64, b: f64): i64 {
     var ab: f64 = f64_abs(b);
     var mx: f64 = aa;
     if (ab > aa) { mx = ab; }
-    var w = _bj_rf_within12(a, b, mx);
+    var w = _bj_e_within12(a, b, mx);
     return w;
 }
 
@@ -28625,59 +28686,6 @@ fn _bj_rf_sq_below60(n2: f64, a0: f64, a1: f64, b0: f64, b1: f64): i64 {
     pb[2] = 0.0;
     var r = _bj_x_r2_below(&pa, &pb, 60);
     return r;
-}
-
-# 2^±600 and 2^±900: _bj_rf_within12's scaling.
-var _BJ_RF_2P600: f64 = 0x6570000000000000;
-var _BJ_RF_2M600: f64 = 0x1A70000000000000;
-var _BJ_RF_2P900: f64 = 0x7830000000000000;
-var _BJ_RF_2M900: f64 = 0x07B0000000000000;
-
-# 1 when |a − b| ≤ 10⁻¹²·m exactly, the decimal 10⁻¹² (ADR 0002 row 17's rule for a literal threshold, M4 part 2c),
-# for finite a and b and a finite m ≥ 0 that is |b| or max(|a|, |b|). With m scaled into [2^-900, 2^900] by 2^±600
-# (exact near the cut, where a and b agree to 39 bits), the rounded |a − b| against RN(RN(1e-12)·m) decides outside
-# ±0.1 % (their errors are below 2^-52). Inside, a − b is exact (Sterbenz), |a − b|·10^12 = p + e exactly (TwoProduct;
-# 10^12 is a double), and the sign of the exact m − p − e (Grow-Expansion) decides.
-#must_use
-fn _bj_rf_within12(a: f64, b: f64, m: f64): i64 {
-    if (m == 0.0) {
-        if (a == b) { return 1; }
-        return 0;
-    }
-    var x: f64 = a;
-    var y: f64 = b;
-    var z: f64 = m;
-    var lo2: f64 = _BJ_RF_2M900;
-    var hi2: f64 = _BJ_RF_2P900;
-    if (z < lo2) {
-        var up: f64 = _BJ_RF_2P600;
-        x = x * up;
-        y = y * up;
-        z = z * up;
-    } elif (z > hi2) {
-        var dn: f64 = _BJ_RF_2M600;
-        x = x * dn;
-        y = y * dn;
-        z = z * dn;
-    }
-    var d: f64 = x - y;
-    var ad: f64 = f64_abs(d);
-    var t: f64 = _BJ_RF_REL12 * z;
-    var near: f64 = t * 0.999;
-    var far: f64 = t * 1.001;
-    if (ad <= near) { return 1; }
-    if (ad >= far) { return 0; }
-    var p, e = _bj_k_two_prod(ad, 1000000000000.0);
-    var pv: f64 = p;
-    var ev: f64 = e;
-    var ex: f64[3];
-    var k = _bj_g_grow(&ex, 0, z);
-    k = _bj_g_grow(&ex, k, -pv);
-    k = _bj_g_grow(&ex, k, -ev);
-    if (k == 0) { return 1; }
-    var top: f64 = ex[k - 1];
-    if (top > 0.0) { return 1; }
-    return 0;
 }
 
 # The common reference impedance of m's ports into out[0]: 0, or the InvalidParameter code recorded unless the first
@@ -29484,7 +29492,7 @@ fn _bj_rf_stub_ux(rl: f64, xl: f64, z0: f64, out: *f64): i64 {
     var d1e = 0 - 2;
     var d2s: f64 = 1.0;
     var d2e = 0 - 2;
-    if (_bj_rf_within12(rl, z0, z0) == 1) {                          # −X_L/(2Z₀) and λ/4
+    if (_bj_e_within12(rl, z0, z0) == 1) {                          # −X_L/(2Z₀) and λ/4
         var nx: f64 = -xs;
         var t2s, t2e = _bj_k_ux_mul(2.0, 0, zs, ze);
         var ts, te = _bj_k_ux_div(nx, xe, t2s, t2e);
@@ -31235,6 +31243,36 @@ fn _bj_fs_f64p(a): *f64 {
     return a;
 }
 
+# 1 when c·dt > dx·(1 + 10⁻¹²) exactly, the decimal 10⁻¹² (ADR 0002 row 17, M5 part 2c), for finite dt, dx > 0: the
+# rounded c·dt against RN(dx·RN(1 + 1e-12)) decides outside ±10⁻⁶ (their errors are below 2^-51); inside, and where
+# either is ∞ or below DBL_MIN, the sign of the exact 10¹²·c·dt − (10¹² + 1)·dx (src/crmath_edge.cyr's rational 15).
+# Rust's rounded test accepted dt up to a few ulps past the limit (the double 1 + 1e-12 lies above 1 + 10⁻¹²).
+#must_use
+fn _bj_fs_courant_over(dt: f64, dx: f64): i64 {
+    var c: f64 = BJ_SPEED_OF_LIGHT;
+    var cdt: f64 = c * dt;
+    var tol: f64 = 1.0 + _BJ_FS_REL12;
+    var lim: f64 = dx * tol;
+    var dmin: f64 = 0x0010000000000000;
+    if (cdt < _BJ_FS_INF && lim < _BJ_FS_INF && cdt >= dmin && lim >= dmin) {
+        var lo: f64 = lim * 0.999999;
+        var hi: f64 = lim * 1.000001;
+        if (cdt < lo) { return 0; }
+        if (cdt > hi) { return 1; }
+    }
+    var rv: f64[5];
+    rv[0] = 1000000000000.0;
+    rv[1] = c;
+    rv[2] = dt;
+    rv[3] = 1000000000001.0;
+    rv[4] = dx;
+    var ro: f64[1];
+    var k = _bj_cr_rat(&rv, 5, _bj_cr_rat_spec(15), 0, &ro);
+    var s: f64 = ro[0];
+    if (s > 0.0) { return 1; }
+    return 0;
+}
+
 # 1 when x is finite and strictly positive (NaN-safe). Mirrors fdtd.rs's `is_positive_finite`.
 #must_use
 fn _bj_fs_pos(x: f64): i64 {
@@ -31383,7 +31421,7 @@ fn _bj_fs_bad_range(head, n, mid, m): i64 {
 # - Err(InvalidParameter) "TFSF boundary_x must be in 1..{nx}, got {boundary_x}" unless 1 ≤ boundary_x < nx;
 # - Err(InvalidParameter) "dx must be finite and positive, got {dx}";
 # - Err(InvalidParameter) "dt must be in (0, dx/c] = (0, {dx/c}], got {dt}" unless 0 < dt and c·dt ≤ dx·(1 + 10⁻¹²)
-#   (the 1D Courant limit);
+#   (the 1D Courant limit, decided exactly: ADR 0002 row 17);
 # - Err(Allocation) when the grid's mapping can't be had (Rust's vec! aborts; ADR 0002 row 9).
 # Give it back with BjTfsfSource_free. Mirrors `TfsfSource::try_new`.
 #must_use
@@ -31404,9 +31442,7 @@ public fn BjTfsfSource_try_new(nx, boundary_x, dx: f64, dt: f64, out: *BjTfsfSou
     }
     var c: f64 = BJ_SPEED_OF_LIGHT;
     var cdt: f64 = c * dt;
-    var tol: f64 = 1.0 + _BJ_FS_REL12;
-    var lim: f64 = dx * tol;
-    if (_bj_fs_pos(dt) == 0 || cdt > lim) {
+    if (_bj_fs_pos(dt) == 0 || _bj_fs_courant_over(dt, dx) == 1) {
         var td = _bj_err_reason(BJ_ERR_INVALID_PARAMETER);
         _bj_tx_cstr(td, "dt must be in (0, dx/c] = (0, ");
         var dxc: f64 = dx / c;
@@ -32680,6 +32716,27 @@ fn _bj_fu_quality(spec: *f64, n, i, f0: f64, df: f64): f64 {
     return 0.0;
 }
 
+# 1 when freq_max > 1/(2·dt) exactly, freq_max·dt > ½ (ADR 0002 row 17, M5 part 2c; Rust's freq_max > RN(0.5/dt)), for
+# finite freq_max ≥ 0 and dt > 0: the rounded product decides outside ±2^-50, the sign of the exact freq_max·dt − ½
+# inside (src/crmath_edge.cyr's rational 16). Public for tests/fdtd_util.tcyr: it only gates a warning.
+#must_use
+public fn _bj_fu_over_nyquist(freq_max: f64, dt: f64): i64 {
+    var p: f64 = freq_max * dt;
+    var lo: f64 = 0.4999999999999995;
+    var hi: f64 = 0.5000000000000005;
+    if (p < lo) { return 0; }
+    if (p > hi) { return 1; }
+    var rv: f64[3];
+    rv[0] = freq_max;
+    rv[1] = dt;
+    rv[2] = 0.5;
+    var ro: f64[1];
+    var k = _bj_cr_rat(&rv, 3, _bj_cr_rat_spec(16), 0, &ro);
+    var s: f64 = ro[0];
+    if (s > 0.0) { return 1; }
+    return 0;
+}
+
 # Records InvalidParameter with a fixed reason; returns its code.
 fn _bj_fu_bad(reason): i64 {
     _bj_tx_cstr(_bj_err_reason(BJ_ERR_INVALID_PARAMETER), reason);
@@ -32720,7 +32777,7 @@ public fn bj_find_eigenmodes(signal: *f64, n, dt: f64, freq_min: f64, freq_max: 
     for (var k = 0; k < n; k = k + 1) { fin = fin + signal[k] * 0.0; }
     if (fin != 0.0) { return Err(_bj_fu_bad("time signal contains non-finite values")); }
     var nyq: f64 = 0.5 / dt;
-    if (freq_max > nyq && _bj_log_on(2) == 1) {
+    if (_bj_log_on(2) == 1 && _bj_fu_over_nyquist(freq_max, dt) == 1) {
         var lb[256];
         var lt[24];
         _bj_tx_init(&lt, &lb, 256);
@@ -33165,9 +33222,20 @@ fn _bj_nf_core(f: *i64, rot_r: f64, rot_i: f64, nx, ny, dx: f64, k: f64, margin,
     return 0;
 }
 
-# |a − b| ≤ 10⁻¹²·max(|a|, |b|) with Rust's NaN-ignoring max (a NaN difference fails).
+# |a − b| ≤ 10⁻¹²·max(|a|, |b|): for finite a and b decided exactly, the decimal 10⁻¹² (src/crmath_edge.cyr's
+# _bj_e_within12, z0_equal's: ADR 0002 row 17, M5 part 2c); otherwise Rust's test with its NaN-ignoring max (a NaN
+# difference fails, and ∞ against a finite value passes, refused afterwards as an invalid frequency or dt).
 #must_use
 fn _bj_nf_same(a: f64, b: f64): i64 {
+    var za: f64 = a * 0.0;
+    var zb: f64 = b * 0.0;
+    if (za == 0.0 && zb == 0.0) {
+        var fa: f64 = f64_abs(a);
+        var fb: f64 = f64_abs(b);
+        var fm: f64 = fa;
+        if (fb > fa) { fm = fb; }
+        return _bj_e_within12(a, b, fm);
+    }
     var d: f64 = a - b;
     var ad: f64 = f64_abs(d);
     var aa: f64 = f64_abs(a);

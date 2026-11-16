@@ -5918,3 +5918,45 @@ dt/(μ₀μ_r·dx), `courant_dt`'s d/(2√3·c) and `Fdtd1d::time`'s step·dt.
   equal**. `fdtd1d.tcyr` (76), `fdtd_source.tcyr` (66) and `fdtd_util.tcyr` (78) pass on all three. The gate is clean
   (no warnings; execution coverage 371 of 371 functions); validate.py 756,105 rows, 0 problems; the oracle's
   `--check` and clippy clean. Next: 2c, the exact thresholds.
+
+## 105. M5 part 2c: the exact thresholds (2026-11-16)
+
+- **ADR 0002 row 17, amended**: fdtd's tests against a literal threshold on the inputs are decided exactly, the
+  threshold as its decimal value:
+  - `TfsfSource::try_new`'s Courant test c·dt ≤ dx·(1 + 10⁻¹²): Rust's rounded c·dt against RN(dx·RN(1 + 1e-12)),
+    where the double 1 + 1e-12 lies 8.9·10⁻¹⁷ above the decimal, so it accepted dt up to an ulp past the limit: dx =
+    4.115·10⁻⁶ with dt = 1.3726162517417684·10⁻¹⁴ (over 200,000 seeded walks around the limit, 54,345 decisions
+    disagreed). `_bj_fs_courant_over` lets the rounded values decide outside ±10⁻⁶ and otherwise takes the sign of
+    the exact 10¹²·c·dt − (10¹² + 1)·dx (rational 15); `TfsfSource::new` refuses as `try_new` does (row 3);
+  - `nf2ff_2d_phasor`'s agreement of the three accumulators' ω and dt, |a − b| ≤ 10⁻¹²·max(|a|, |b|), on z0_equal's
+    helper for finite values, Rust's test otherwise (an ∞ is refused afterwards as an invalid frequency or dt). The
+    helper moves from `src/rf.cyr` (whose file-private `_bj_rf_within12` NF2FF couldn't reach) into
+    `src/crmath_edge.cyr` as `_bj_e_within12`, byte for byte, and rf calls it there. As M4 found, the rounded test is
+    already exact for normal values, and parts only below about 2^-970, where 1e-12·m rounds to the subnormal grid;
+  - `find_eigenmodes`' Nyquist warning freq_max > 1/(2·dt), as freq_max·dt > ½ (`_bj_fu_over_nyquist`: the rounded
+    product outside ±2^-50, else the sign of the exact difference, rational 16). It only gates a log line, so no
+    golden row shows it: 48,505 of 200,000 seeded boundary cases disagreed with Rust's freq_max > RN(0.5/dt).
+
+  The tests on the computed spectrum (the 10 % floor, the half-power crossing) stay on the rounded values, as M4's
+  input impedance kept its test on the computed den (row 17's rule for a test on a computed value: the DFT's own
+  rounding moves the spectrum more than the test's).
+- **The grid**: 576 rows appended to `fdtd.tsv` (103,726): the Courant limit RN(dx·(1 + 1e-12)/c) walked 24 ulps on
+  eleven dx (10⁻⁴, 10⁻³, 3·10⁻⁷, 0.01, three from the seeded search, 10⁻³⁰⁰, 10⁻³¹⁰, 10³⁰⁰ and 0.5) through `try_new`
+  and `new`, and NF2FF with hx's dt on M4's cut: dt = (j·10¹² − r)·2^-1042 against dt ± j·2^-1042 for four j and six
+  r, 12 of the 48 pairs on the side where the rounded and exact tests part.
+- **validate.py**: `tf_check` takes the exact test under row 17, and in port mode the 1D and TF/SF models refuse
+  `TfsfSource::new` as `try_new`; a trajectory is named by the first port subset that accounts for its whole change
+  (40; 13 with 40; else 17). `fu_nf2ff_port` decides the agreement in Fractions. **28 rows** map to row 17 (8
+  `try_new`, 8 `new` and 12 NF2FF calls, each now refused); row 3 grows to 228 with the walks' clamped `new` rows.
+- **Tests**: `cyrius_tfsf_courant_exact` in `tests/fdtd_source.tcyr` (2 assertions, 68 in all), `cyrius_nyquist_exact`
+  in `tests/fdtd_util.tcyr` (2, 80) and `cyrius_nf2ff_agreement_exact` in `tests/nf2ff.tcyr` (2, 18). rf's 266 pass
+  on the moved helper.
+- **Benchmarks**: the interleaved A/B against HEAD (two rounds, load 1.7 to 9.2) left every row within the noise (median
+  ratios 1.02 and 1.02): the paths through the moved helper, `rf/s_cascade` 3.69–6.86 → 3.75–3.77 µs (HEAD's first run
+  under the load spike) and `rf/single_stub_match` 2.18–3.52 → 2.23–2.25 µs, and NF2FF's `fdtd/nf2ff_phasor_80x80_180`
+  1.48–1.59 → 1.55 ms. The exact tests run their slow step only near a threshold.
+- **Result, every target** (x86_64 ELF, x86_64 PE, aarch64): **18 modules, 0 failing; 640,587 ok, 0 failed, 0
+  measured, 0 pending, 116,094 accepted (ADR 01: 40,366; ADR 0002: 75,728)** over 756,681 rows; **all 475 digests
+  equal**. `fdtd_source.tcyr` (68), `fdtd_util.tcyr` (80), `nf2ff.tcyr` (18) and `rf.tcyr` (266) pass on all three.
+  The gate is clean (no warnings; execution coverage 371 of 371 functions); validate.py 756,681 rows, 0 problems; the
+  oracle's `--check` and clippy clean. Next: 2d, the range edges.

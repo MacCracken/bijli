@@ -657,6 +657,27 @@ fn _bj_fu_quality(spec: *f64, n, i, f0: f64, df: f64): f64 {
     return 0.0;
 }
 
+# 1 when freq_max > 1/(2·dt) exactly, freq_max·dt > ½ (ADR 0002 row 17, M5 part 2c; Rust's freq_max > RN(0.5/dt)), for
+# finite freq_max ≥ 0 and dt > 0: the rounded product decides outside ±2^-50, the sign of the exact freq_max·dt − ½
+# inside (src/crmath_edge.cyr's rational 16). Public for tests/fdtd_util.tcyr: it only gates a warning.
+#must_use
+public fn _bj_fu_over_nyquist(freq_max: f64, dt: f64): i64 {
+    var p: f64 = freq_max * dt;
+    var lo: f64 = 0.4999999999999995;
+    var hi: f64 = 0.5000000000000005;
+    if (p < lo) { return 0; }
+    if (p > hi) { return 1; }
+    var rv: f64[3];
+    rv[0] = freq_max;
+    rv[1] = dt;
+    rv[2] = 0.5;
+    var ro: f64[1];
+    var k = _bj_cr_rat(&rv, 3, _bj_cr_rat_spec(16), 0, &ro);
+    var s: f64 = ro[0];
+    if (s > 0.0) { return 1; }
+    return 0;
+}
+
 # Records InvalidParameter with a fixed reason; returns its code.
 fn _bj_fu_bad(reason): i64 {
     _bj_tx_cstr(_bj_err_reason(BJ_ERR_INVALID_PARAMETER), reason);
@@ -697,7 +718,7 @@ public fn bj_find_eigenmodes(signal: *f64, n, dt: f64, freq_min: f64, freq_max: 
     for (var k = 0; k < n; k = k + 1) { fin = fin + signal[k] * 0.0; }
     if (fin != 0.0) { return Err(_bj_fu_bad("time signal contains non-finite values")); }
     var nyq: f64 = 0.5 / dt;
-    if (freq_max > nyq && _bj_log_on(2) == 1) {
+    if (_bj_log_on(2) == 1 && _bj_fu_over_nyquist(freq_max, dt) == 1) {
         var lb[256];
         var lt[24];
         _bj_tx_init(&lt, &lb, 256);
