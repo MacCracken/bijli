@@ -421,6 +421,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
   Bessel references; 16 assertions). A Cyrius-only bench, `fdtd/nf2ff_phasor_80x80_180`, takes 1.52–1.54 ms, after
   skipping Rust's products of the structurally zero magnetic current, which can't reach the pattern (1.87–1.90 ms
   before, the same bits).
+- **Cyrius port, M5 part 1f — the FDTD types' JSON; M5 Part 1 done** (`src/json.cyr`): writers and readers of
+  `BjLossyMaterial`, `BjDrudeMaterial`, `BjLorentzMaterial`, `BjDebyeMaterial`, `BjNonUniformGrid` and
+  `BjEigenmodeResult`, with serde's derive semantics as for the earlier types. An eigenmode result's three vectors
+  share one count, so a document whose vectors differ in length is refused as Deserialize (ADR 0002 row 36 amended);
+  a grid's axes keep any lengths. `json.tsv` grows by 25,336 rows (91,956); `json.cr.tsv` by 9,515 where serde_json's
+  parse misrounds; `json.adr.tsv` maps 60 ragged eigenmode results to row 36. `test_lossy_material_serde` is ported,
+  and `tests/json.tcyr` gains `cyrius_fdtd_json`. Cyrius-only benches: `json/drude_material_to_json` 2.46–2.79 µs and
+  `json/nonuniform_grid_from_json` 9.07–11.2 µs (a 10 × 7 × 3 grid).
 
 ### Fixed
 

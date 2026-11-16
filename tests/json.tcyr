@@ -1,5 +1,6 @@
 # json.tcyr — src/json.cyr (M1 part 4): the JSON of BjComplex, BjFieldVector and BjPointCharge; (M4 part 1d) of
-# rf's BjSMatrix, BjTouchstoneFormat and BjTouchstoneData (cyrius_rf_json).
+# rf's BjSMatrix, BjTouchstoneFormat and BjTouchstoneData (cyrius_rf_json); (M5 part 1f) of the FDTD types
+# (cyrius_fdtd_json).
 #
 # rust-old has no test of these types' serde (its serde tests are of later modules' types), so every group here is
 # Cyrius-only. tests/golden/json.tsv pins the writers and readers against serde_json 1.0.154 besides; these groups
@@ -202,6 +203,92 @@ fn cyrius_rf_json(): i64 {
         println(".");
     }
     if (v11 == 7 || is_ok(tm) == 7 || is_ok(td) == 7 || is_ok(t10) == 7 || is_ok(tf) == 7 || vf == 7) { println("."); }
+    return 0;
+}
+
+# The FDTD types (M5 part 1f): the text of each, round trips, a grid's free lengths, an eigenmode result's equal ones
+# (ADR 0002 row 36), out left alone.
+fn cyrius_fdtd_json(): i64 {
+    test_group("cyrius_fdtd_json_text");
+    var lm: BjLossyMaterial = BjLossyMaterial_new(4.0, 0.5);
+    var sb1 = str_builder_new();
+    var t1, v1 = BjLossyMaterial_to_json(&lm, sb1);
+    assert(is_ok(t1) == 1 && built_is(sb1, "{\"eps_r\":4.0,\"conductivity\":0.5}") == 1, "LossyMaterial");
+    var dm: BjDrudeMaterial = BjDrudeMaterial_gold();
+    var sb2 = str_builder_new();
+    var t2, v2 = BjDrudeMaterial_to_json(&dm, sb2);
+    var w2 = "{\"eps_inf\":1.0,\"omega_p\":13700000000000000.0,\"gamma\":40500000000000.0}";
+    assert(is_ok(t2) == 1 && built_is(sb2, w2) == 1, "DrudeMaterial, bayan's notation");
+    var om: BjLorentzMaterial = BjLorentzMaterial_new(2.0, -0.0, 1.5, 0.25);
+    var sb3 = str_builder_new();
+    var t3, v3 = BjLorentzMaterial_to_json(&om, sb3);
+    var w3 = "{\"eps_inf\":2.0,\"delta_eps\":-0.0,\"omega_0\":1.5,\"gamma\":0.25}";
+    assert(is_ok(t3) == 1 && built_is(sb3, w3) == 1, "LorentzMaterial, −0 kept");
+    var bm: BjDebyeMaterial = BjDebyeMaterial_water();
+    var sb4 = str_builder_new();
+    var t4, v4 = BjDebyeMaterial_to_json(&bm, sb4);
+    var w4 = "{\"eps_inf\":4.9,\"eps_s\":78.4,\"tau\":8.27e-12}";
+    assert(is_ok(t4) == 1 && built_is(sb4, w4) == 1, "DebyeMaterial, a small τ in bayan's exponent form");
+    var g: BjNonUniformGrid;
+    var tg, vg = BjNonUniformGrid_uniform(2, 1, 0, 0.001, &g);
+    var sb5 = str_builder_new();
+    var t5, v5 = BjNonUniformGrid_to_json(&g, sb5);
+    assert(is_ok(t5) == 1 && built_is(sb5, "{\"dx\":[0.001,0.001],\"dy\":[0.001],\"dz\":[]}") == 1,
+      "NonUniformGrid, an empty axis as []");
+    BjNonUniformGrid_free(&g);
+    var er: BjEigenmodeResult;
+    er.frequencies = 0;
+    er.quality_factors = 0;
+    er.amplitudes = 0;
+    er.count = 0;
+    var sb6 = str_builder_new();
+    var t6, v6 = BjEigenmodeResult_to_json(&er, sb6);
+    assert(is_ok(t6) == 1 && built_is(sb6, "{\"frequencies\":[],\"quality_factors\":[],\"amplitudes\":[]}") == 1,
+      "an EigenmodeResult with no mode");
+
+    test_group("cyrius_fdtd_json_round_trip");
+    var s2 = str_builder_build(sb2);
+    var dm2: BjDrudeMaterial;
+    var t7, v7 = BjDrudeMaterial_from_json(str_data(s2), str_len(s2), &dm2);
+    assert(is_ok(t7) == 1 && dm2.omega_p == dm.omega_p && dm2.gamma == dm.gamma, "gold reads back");
+    var om2: BjLorentzMaterial;
+    var t8, v8 = BjLorentzMaterial_from_json("[2,-0,1.5,0.25]", 15, &om2);
+    assert(is_ok(t8) == 1 && _bj_bits(om2.delta_eps) == 0x8000000000000000, "the sequence form, -0 as −0.0");
+    var doc9 = "{\"dz\":[1e-3],\"dx\":[],\"dy\":[2.5e-4,1e-3,-1]}";
+    var g9: BjNonUniformGrid;
+    var t9, v9 = BjNonUniformGrid_from_json(doc9, strlen(doc9), &g9);
+    var y2: f64 = 0.0;
+    if (is_ok(t9) == 1) {
+        y2 = load64(g9.dy + 16);
+    }
+    assert(is_ok(t9) == 1 && g9.nx == 0 && g9.ny == 3 && g9.nz == 1 && y2 == -1.0,
+      "any lengths, fields in any order, an invalid width as written");
+    BjNonUniformGrid_free(&g9);
+    var doc10 = "{\"frequencies\":[3e9,7e9],\"quality_factors\":[47.1,0],\"amplitudes\":[1,0.5]}";
+    var r10: BjEigenmodeResult;
+    var t10, v10 = BjEigenmodeResult_from_json(doc10, strlen(doc10), &r10);
+    var f10: f64 = 0.0;
+    if (is_ok(t10) == 1) {
+        f10 = load64(r10.frequencies + 8);
+    }
+    assert(is_ok(t10) == 1 && r10.count == 2 && f10 == 7000000000.0, "two modes read");
+    BjEigenmodeResult_free(&r10);
+
+    test_group("cyrius_fdtd_json_row36 (ADR 0002 row 36)");
+    var r11: BjEigenmodeResult;
+    r11.count = 7;
+    var doc11 = "{\"frequencies\":[3e9,7e9],\"quality_factors\":[47.1],\"amplitudes\":[1,0.5]}";
+    var t11, v11 = BjEigenmodeResult_from_json(doc11, strlen(doc11), &r11);
+    var w11 = "an EigenmodeResult whose three arrays differ in length (its shape is fixed: ADR 0002 row 36)";
+    assert(is_err_result(t11) == 1 && v11 == BJ_ERR_DESERIALIZE && reason_is(w11) == 1 && r11.count == 7,
+      "arrays of different lengths refused, out untouched");
+    var doc12 = "{\"frequencies\":[1],\"quality_factors\":[1],\"amplitudes\":[null]}";
+    var t12, v12 = BjEigenmodeResult_from_json(doc12, strlen(doc12), &r11);
+    assert(is_err_result(t12) == 1 && r11.count == 7, "a null amplitude refused after the block is had, freed");
+    var g13: BjNonUniformGrid;
+    g13.nx = 5;
+    var t13, v13 = BjNonUniformGrid_from_json("{\"dx\":[1],\"dy\":{}}", 18, &g13);
+    assert(is_err_result(t13) == 1 && g13.nx == 5 && reason_is("missing field `dz`") == 0, "dy an object refused");
     return 0;
 }
 
@@ -444,6 +531,7 @@ fn main(): i64 {
       "four threads reading at once, 16,000 reads, each its own answer and its own reason");
 
     cyrius_rf_json();
+    cyrius_fdtd_json();
     return assert_summary();
 }
 

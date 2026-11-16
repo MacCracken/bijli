@@ -43,11 +43,18 @@
 //! `TouchstoneData` is `i:` ports, `f:` z0, the frequencies as a `Vec`, the matrices as a `Vec`; a `TouchstoneFormat`
 //! is `i:` the port's enum value (0 MagnitudeAngle, 1 RealImag, 2 DbAngle), written as its name. A read may be ragged:
 //! the documents include every shape serde reads and the port's fixed structs can't hold (ADR 0002 row 36).
+//!
+//! The FDTD types (M5 part 1f, after rf's): the four materials are `Kind`s, all-f64 structs (`LossyMaterial`,
+//! `DrudeMaterial`, `LorentzMaterial`, `DebyeMaterial`), and `NonUniformGrid` and `EigenmodeResult` hold three
+//! `Vec<f64>` each (`emit_fdtd_vecs`): a value is each vector as `i:` its length and its elements. Their documents add
+//! every triple of lengths to 3; an eigenmode result whose vectors differ in length is read by serde and refused by the
+//! port (ADR 0002 row 36), and its writer values are equal-length, the only ones the port can build.
 
 use crate::grids::{Rng, pow2, specials};
 use crate::tsv::{Class, Module, Tok, b, f, i, s};
 use bijli::beam::{AbcdMatrix, GaussianBeam, ResonatorStability};
 use bijli::charge::{ELECTRON_MASS, ELEMENTARY_CHARGE, PROTON_MASS, PointCharge};
+use bijli::fdtd::{DebyeMaterial, DrudeMaterial, EigenmodeResult, LorentzMaterial, LossyMaterial, NonUniformGrid};
 use bijli::field::{EPSILON_0, FieldVector, MU_0, SPEED_OF_LIGHT};
 use bijli::material::Material;
 use bijli::polarization::{Complex, JonesMatrix, JonesVector, MuellerMatrix, StokesVector};
@@ -70,6 +77,10 @@ enum Kind {
     GaussianBeam,
     AbcdMatrix,
     ResonatorStability,
+    LossyMaterial,
+    DrudeMaterial,
+    LorentzMaterial,
+    DebyeMaterial,
 }
 
 /// `{"re":<a>,"im":<b>}`.
@@ -112,6 +123,9 @@ impl Kind {
     /// Beam's three structs (M3 part 1c-2), emitted after MieResult's rows.
     const BEAM: [Kind; 3] = [Kind::GaussianBeam, Kind::AbcdMatrix, Kind::ResonatorStability];
 
+    /// The FDTD materials (M5 part 1f), emitted after rf's rows.
+    const FDTD: [Kind; 4] = [Kind::LossyMaterial, Kind::DrudeMaterial, Kind::LorentzMaterial, Kind::DebyeMaterial];
+
     fn name(self) -> &'static str {
         match self {
             Kind::Complex => "Complex",
@@ -125,14 +139,19 @@ impl Kind {
             Kind::GaussianBeam => "GaussianBeam",
             Kind::AbcdMatrix => "AbcdMatrix",
             Kind::ResonatorStability => "ResonatorStability",
+            Kind::LossyMaterial => "LossyMaterial",
+            Kind::DrudeMaterial => "DrudeMaterial",
+            Kind::LorentzMaterial => "LorentzMaterial",
+            Kind::DebyeMaterial => "DebyeMaterial",
         }
     }
 
     /// How many values the type holds: its f64, and its bool if any (`is_bool`).
     fn width(self) -> usize {
         match self {
-            Kind::Complex => 2,
-            Kind::FieldVector | Kind::Material | Kind::GaussianBeam => 3,
+            Kind::Complex | Kind::LossyMaterial => 2,
+            Kind::FieldVector | Kind::Material | Kind::GaussianBeam | Kind::DrudeMaterial | Kind::DebyeMaterial => 3,
+            Kind::LorentzMaterial => 4,
             Kind::PointCharge => 8,
             Kind::JonesVector | Kind::StokesVector | Kind::AbcdMatrix | Kind::ResonatorStability => 4,
             Kind::JonesMatrix => 8,
@@ -186,6 +205,13 @@ impl Kind {
                 "{{\"g1\":{},\"g2\":{},\"g_product\":{},\"is_stable\":{}}}",
                 v[0], v[1], v[2], v[3]
             ),
+            Kind::LossyMaterial => format!("{{\"eps_r\":{},\"conductivity\":{}}}", v[0], v[1]),
+            Kind::DrudeMaterial => format!("{{\"eps_inf\":{},\"omega_p\":{},\"gamma\":{}}}", v[0], v[1], v[2]),
+            Kind::LorentzMaterial => format!(
+                "{{\"eps_inf\":{},\"delta_eps\":{},\"omega_0\":{},\"gamma\":{}}}",
+                v[0], v[1], v[2], v[3]
+            ),
+            Kind::DebyeMaterial => format!("{{\"eps_inf\":{},\"eps_s\":{},\"tau\":{}}}", v[0], v[1], v[2]),
         }
     }
 
@@ -204,7 +230,11 @@ impl Kind {
             Kind::StokesVector => format!("[{}]", arr(&v[..4])),
             Kind::MuellerMatrix => format!("[{}]", mm(v)),
             Kind::GaussianBeam => format!("[{},{},{}]", v[0], v[1], v[2]),
-            Kind::AbcdMatrix | Kind::ResonatorStability => format!("[{},{},{},{}]", v[0], v[1], v[2], v[3]),
+            Kind::AbcdMatrix | Kind::ResonatorStability | Kind::LorentzMaterial => {
+                format!("[{},{},{},{}]", v[0], v[1], v[2], v[3])
+            }
+            Kind::LossyMaterial => format!("[{},{}]", v[0], v[1]),
+            Kind::DrudeMaterial | Kind::DebyeMaterial => format!("[{},{},{}]", v[0], v[1], v[2]),
         }
     }
 
@@ -234,6 +264,17 @@ impl Kind {
                 ("g_product", v[2].clone()),
                 ("is_stable", v[3].clone()),
             ],
+            Kind::LossyMaterial => vec![("eps_r", v[0].clone()), ("conductivity", v[1].clone())],
+            Kind::DrudeMaterial => {
+                vec![("eps_inf", v[0].clone()), ("omega_p", v[1].clone()), ("gamma", v[2].clone())]
+            }
+            Kind::LorentzMaterial => vec![
+                ("eps_inf", v[0].clone()),
+                ("delta_eps", v[1].clone()),
+                ("omega_0", v[2].clone()),
+                ("gamma", v[3].clone()),
+            ],
+            Kind::DebyeMaterial => vec![("eps_inf", v[0].clone()), ("eps_s", v[1].clone()), ("tau", v[2].clone())],
         }
     }
 
@@ -284,6 +325,19 @@ impl Kind {
                 g_product: black_box(v[2]),
                 is_stable: black_box(v[3] != 0.0),
             }),
+            Kind::LossyMaterial => serde_json::to_string(&LossyMaterial::new(black_box(v[0]), black_box(v[1]))),
+            Kind::DrudeMaterial => {
+                serde_json::to_string(&DrudeMaterial::new(black_box(v[0]), black_box(v[1]), black_box(v[2])))
+            }
+            Kind::LorentzMaterial => serde_json::to_string(&LorentzMaterial::new(
+                black_box(v[0]),
+                black_box(v[1]),
+                black_box(v[2]),
+                black_box(v[3]),
+            )),
+            Kind::DebyeMaterial => {
+                serde_json::to_string(&DebyeMaterial::new(black_box(v[0]), black_box(v[1]), black_box(v[2])))
+            }
         }
         .expect("serde_json writes every value")
     }
@@ -315,6 +369,13 @@ impl Kind {
             Kind::AbcdMatrix => serde_json::from_str::<AbcdMatrix>(doc).map(|m| vec![m.a, m.b, m.c, m.d]),
             Kind::ResonatorStability => serde_json::from_str::<ResonatorStability>(doc)
                 .map(|r| vec![r.g1, r.g2, r.g_product, f64::from(u8::from(r.is_stable))]),
+            Kind::LossyMaterial => serde_json::from_str::<LossyMaterial>(doc).map(|m| vec![m.eps_r, m.conductivity]),
+            Kind::DrudeMaterial => {
+                serde_json::from_str::<DrudeMaterial>(doc).map(|m| vec![m.eps_inf, m.omega_p, m.gamma])
+            }
+            Kind::LorentzMaterial => serde_json::from_str::<LorentzMaterial>(doc)
+                .map(|m| vec![m.eps_inf, m.delta_eps, m.omega_0, m.gamma]),
+            Kind::DebyeMaterial => serde_json::from_str::<DebyeMaterial>(doc).map(|m| vec![m.eps_inf, m.eps_s, m.tau]),
         }
         .map_err(|e| e.to_string())
     }
@@ -997,7 +1058,11 @@ fn nested(kind: Kind, v: &[String]) -> Vec<String> {
         | Kind::Material
         | Kind::GaussianBeam
         | Kind::AbcdMatrix
-        | Kind::ResonatorStability => {}
+        | Kind::ResonatorStability
+        | Kind::LossyMaterial
+        | Kind::DrudeMaterial
+        | Kind::LorentzMaterial
+        | Kind::DebyeMaterial => {}
     }
     docs
 }
@@ -1038,6 +1103,11 @@ pub fn emit() -> Module {
     }
     // M4 part 1d: rf's three types, after beam's.
     emit_rf(m, &mut rng, &xs);
+    // M5 part 1f: the FDTD materials, then the grid and the eigenmode result, after rf's.
+    for kind in Kind::FDTD {
+        emit_kind(m, kind, &mut rng, &xs);
+    }
+    emit_fdtd_vecs(m, &mut rng, &xs);
     rows.m
 }
 
@@ -1770,3 +1840,222 @@ fn td_shapes(rng: &mut Rng) -> Vec<String> {
     }
     docs
 }
+
+// ── the FDTD types with three Vec<f64> (M5 part 1f) ────────────────────────────────────────────────────────────────
+
+/// NonUniformGrid (`dx`, `dy`, `dz`) or EigenmodeResult (`frequencies`, `quality_factors`, `amplitudes`): three
+/// `Vec<f64>` fields. A value's row tokens are each vector as `i:` its length and its elements.
+#[derive(Clone, Copy)]
+enum Vecs {
+    Grid,
+    Eigen,
+}
+
+impl Vecs {
+    fn name(self) -> &'static str {
+        match self {
+            Vecs::Grid => "NonUniformGrid",
+            Vecs::Eigen => "EigenmodeResult",
+        }
+    }
+
+    fn keys(self) -> [&'static str; 3] {
+        match self {
+            Vecs::Grid => ["dx", "dy", "dz"],
+            Vecs::Eigen => ["frequencies", "quality_factors", "amplitudes"],
+        }
+    }
+
+    fn write(self, v: &[Vec<f64>; 3]) -> String {
+        let bx = |x: &Vec<f64>| x.iter().map(|&y| black_box(y)).collect::<Vec<f64>>();
+        match self {
+            Vecs::Grid => serde_json::to_string(&NonUniformGrid { dx: bx(&v[0]), dy: bx(&v[1]), dz: bx(&v[2]) }),
+            Vecs::Eigen => serde_json::to_string(&EigenmodeResult {
+                frequencies: bx(&v[0]),
+                quality_factors: bx(&v[1]),
+                amplitudes: bx(&v[2]),
+            }),
+        }
+        .expect("serde_json writes every value")
+    }
+
+    fn read(self, doc: &str) -> Result<[Vec<f64>; 3], String> {
+        let doc = black_box(doc);
+        match self {
+            Vecs::Grid => serde_json::from_str::<NonUniformGrid>(doc).map(|g| [g.dx, g.dy, g.dz]),
+            Vecs::Eigen => serde_json::from_str::<EigenmodeResult>(doc)
+                .map(|r| [r.frequencies, r.quality_factors, r.amplitudes]),
+        }
+        .map_err(|e| e.to_string())
+    }
+
+    /// Its document with the spellings of each vector, fields in declaration order.
+    fn doc(self, v: &[Vec<String>; 3]) -> String {
+        let k = self.keys();
+        format!("{{\"{}\":{},\"{}\":{},\"{}\":{}}}", k[0], arr(&v[0]), k[1], arr(&v[1]), k[2], arr(&v[2]))
+    }
+}
+
+fn vecs_toks(v: &[Vec<f64>; 3]) -> Vec<Tok> {
+    let mut out = Vec::new();
+    for x in v {
+        out.push(i(i64::try_from(x.len()).expect("a length fits")));
+        out.extend(x.iter().map(|&y| f(y)));
+    }
+    out
+}
+
+impl Rows {
+    fn vecs_writer(&mut self, kind: Vecs, v: &[Vec<f64>; 3]) {
+        let ins = vecs_toks(v);
+        if !self.seen.insert(format!("w{}{ins:?}", kind.name())) {
+            return;
+        }
+        let text = kind.write(v);
+        let func = format!("json::{}::to_string", kind.name());
+        self.m.row_with_note(&func, Class::A, &ins, &tokens(&text), &preview(&text));
+    }
+
+    fn vecs_reader(&mut self, kind: Vecs, doc: &str) {
+        if !self.seen.insert(format!("r{}{doc}", kind.name())) {
+            return;
+        }
+        let func = format!("json::{}::from_str", kind.name());
+        let read = kind.read(doc);
+        let d = if read.is_ok() { unchecked(doc) } else { 0 };
+        let ins = [s(doc), i(d)];
+        let head = format!("unchecked {d}");
+        match read {
+            Ok(v) => self.m.row_with_note(&func, Class::C, &ins, &vecs_toks(&v), &format!("{head} -> Ok")),
+            Err(e) => {
+                let outs = [Tok::Err("Deserialize".to_string())];
+                self.m.row_with_note(&func, Class::C, &ins, &outs, &format!("{head} -> Err({e})"));
+            }
+        }
+    }
+}
+
+/// The grid's and the eigenmode result's rows: values with every triple of lengths to 3 (the eigenmode result's equal
+/// lengths and, read back, unequal ones: ADR 0002 row 36), seeded and special values, 300-element vectors; serde's
+/// text and the other notations; every spelling in each position of a short document; seeded decimals; the shapes.
+fn emit_fdtd_vecs(m: &mut Rows, rng: &mut Rng, xs: &[f64]) {
+    let n = xs.len();
+    for kind in [Vecs::Grid, Vecs::Eigen] {
+        let mut values: Vec<[Vec<f64>; 3]> = Vec::new();
+        let lens: Vec<[usize; 3]> = match kind {
+            Vecs::Grid => (0..64).map(|j| [j % 4, (j / 4) % 4, j / 16]).collect(),
+            Vecs::Eigen => (0..4).map(|j| [j, j, j]).collect(),
+        };
+        for j in 0..n {
+            let ls = lens[j % lens.len()];
+            let mut at = j;
+            let mut pick = |k: usize| -> Vec<f64> {
+                (0..k).map(|_| { at += 37; xs[at % n] }).collect()
+            };
+            values.push([pick(ls[0]), pick(ls[1]), pick(ls[2])]);
+        }
+        for _ in 0..120 {
+            let ls = lens[usize::try_from(rng.int(0, i64::try_from(lens.len()).unwrap_or(1) - 1)).unwrap_or(0)];
+            let mut bits = |k: usize| (0..k).map(|_| f64::from_bits(rng.bits())).collect::<Vec<_>>();
+            let (a, b, c) = (bits(ls[0]), bits(ls[1]), bits(ls[2]));
+            values.push([a, b, c]);
+        }
+        let long: Vec<f64> = (0..300).map(|k| xs[(k * 7) % n]).collect();
+        // A value the port can build: the grid's axes any lengths, the eigenmode result's equal (ADR 0002 row 36).
+        match kind {
+            Vecs::Grid => values.push([long.clone(), long[..1].to_vec(), vec![]]),
+            Vecs::Eigen => values.push([long[..2].to_vec(), long[2..4].to_vec(), long[4..6].to_vec()]),
+        }
+        values.push([long.clone(), long.clone(), long.clone()]);
+        for v in &values {
+            m.vecs_writer(kind, v);
+        }
+        for (k, v) in values.iter().enumerate() {
+            m.vecs_reader(kind, &kind.write(v));
+            if v.iter().flatten().all(|x| x.is_finite()) {
+                let spell = |g: fn(f64) -> String| [0, 1, 2].map(|i2| v[i2].iter().map(|&x| g(x)).collect::<Vec<_>>());
+                m.vecs_reader(kind, &kind.doc(&spell(js)));
+                if k < 150 {
+                    m.vecs_reader(kind, &kind.doc(&spell(|x| format!("{x}"))));
+                    m.vecs_reader(kind, &kind.doc(&spell(|x| format!("{x:e}"))));
+                }
+            }
+        }
+        // Every spelling in each of a two-two-two document's positions; seeded decimals.
+        let base: Vec<String> = (0..6).map(|_| js(rng.signed_log_uniform(-20.0, 20.0))).collect();
+        let at = |v: &[String]| kind.doc(&[v[0..2].to_vec(), v[2..4].to_vec(), v[4..6].to_vec()]);
+        for pos in 0..6 {
+            for sp in &spellings() {
+                let mut v = base.clone();
+                v[pos] = sp.clone();
+                m.vecs_reader(kind, &at(&v));
+            }
+        }
+        for (k, d) in random_decimals(rng, 300).into_iter().enumerate() {
+            let mut v = base.clone();
+            v[k % 6] = d;
+            m.vecs_reader(kind, &at(&v));
+        }
+        for doc in vecs_shapes(kind, &base) {
+            m.vecs_reader(kind, &doc);
+        }
+    }
+}
+
+/// The shapes on six spellings: the sequence form at every level, field order, whitespace, unknown keys, missing,
+/// repeated and wrong-typed fields, vectors of every length to 4 (unequal ones among them), a vector given as an
+/// object, `null`, strings and nested arrays as elements, every prefix, trailing data.
+fn vecs_shapes(kind: Vecs, v: &[String]) -> Vec<String> {
+    let k = kind.keys();
+    let (a, b, c) = (arr(&v[0..2]), arr(&v[2..4]), arr(&v[4..6]));
+    let base = kind.doc(&[v[0..2].to_vec(), v[2..4].to_vec(), v[4..6].to_vec()]);
+    let inner = base[1..base.len() - 1].to_string();
+    let member = |j: usize, val: &str| format!("\"{}\":{val}", k[j]);
+    let mut docs = vec![
+        base.clone(),
+        format!("[{a},{b},{c}]"),
+        format!("{{{},{},{}}}", member(2, &c), member(0, &a), member(1, &b)),
+        format!(" \t\n\r{{ {} , {} , {} }} \n", member(0, &a), member(1, &b), member(2, &c)),
+        format!("{{{},{}}}", member(0, &a), member(1, &b)),
+        format!("{{{},{}}}", member(1, &b), member(2, &c)),
+        format!("{{{inner},{}}}", member(0, &a)),
+        format!("{{{},{inner}}}", member(2, "[]")),
+        format!("[{a},{b}]"),
+        format!("[{a},{b},{c},[]]"),
+        format!("[{a},{b},{c}] "),
+        format!("{base}x"),
+        format!("{base}{base}"),
+        "{}".to_string(),
+        "[]".to_string(),
+        "null".to_string(),
+        format!("{{\"{}\":{{}},\"{}\":{b},\"{}\":{c}}}", k[0], k[1], k[2]),
+        format!("{{\"{}\":{a},\"{}\":[null],\"{}\":{c}}}", k[0], k[1], k[2]),
+        format!("{{\"{}\":{a},\"{}\":[\"1\"],\"{}\":{c}}}", k[0], k[1], k[2]),
+        format!("{{\"{}\":{a},\"{}\":[[1]],\"{}\":{c}}}", k[0], k[1], k[2]),
+        format!("{{\"{}\":{a},\"{}\":1,\"{}\":{c}}}", k[0], k[1], k[2]),
+        format!("{{\"{}\":{a},\"{}\":\"x\",\"{}\":{c}}}", k[0], k[1], k[2]),
+        format!("{{\"{}\":{a},\"{}\":null,\"{}\":{c}}}", k[0], k[1], k[2]),
+    ];
+    for u in unknown_values().iter().take(12) {
+        docs.push(format!("{{\"w\":{u},{inner}}}"));
+        docs.push(format!("{{{inner},\"unknown\":{u}}}"));
+    }
+    // Every triple of lengths 0 to 3 (and one of 4): the eigenmode result's unequal ones serde reads, the port refuses.
+    for l0 in 0..4 {
+        for l1 in 0..4 {
+            for l2 in 0..4 {
+                let take = |l: usize, from: usize| arr(&(0..l).map(|q| v[(from + q) % 6].clone()).collect::<Vec<_>>());
+                let (m0, m1, m2) = (member(0, &take(l0, 0)), member(1, &take(l1, 2)), member(2, &take(l2, 4)));
+                docs.push(format!("{{{m0},{m1},{m2}}}"));
+            }
+        }
+    }
+    docs.push(format!("{{{},{},{}}}", member(0, &arr(&v[0..4])), member(1, &arr(&v[1..5])), member(2, &arr(&v[2..6]))));
+    for cut in (1..base.len()).step_by(3) {
+        if base.is_char_boundary(cut) {
+            docs.push(base[..cut].to_string());
+        }
+    }
+    docs
+}
+

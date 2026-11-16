@@ -6885,6 +6885,14 @@ JSON_FIELDS = {
     "SMatrix": [("ports", "usize"), ("s", ("vec", ("vec", "Complex"))), ("z0", ("vec", "f64"))],
     "TouchstoneData": [("ports", "usize"), ("z0", "f64"), ("frequencies", ("vec", "f64")),
                        ("s_matrices", ("vec", "SMatrix"))],
+    # M5 part 1f: the FDTD types.
+    "LossyMaterial": [("eps_r", "f64"), ("conductivity", "f64")],
+    "DrudeMaterial": [("eps_inf", "f64"), ("omega_p", "f64"), ("gamma", "f64")],
+    "LorentzMaterial": [("eps_inf", "f64"), ("delta_eps", "f64"), ("omega_0", "f64"), ("gamma", "f64")],
+    "DebyeMaterial": [("eps_inf", "f64"), ("eps_s", "f64"), ("tau", "f64")],
+    "NonUniformGrid": [("dx", ("vec", "f64")), ("dy", ("vec", "f64")), ("dz", ("vec", "f64"))],
+    "EigenmodeResult": [("frequencies", ("vec", "f64")), ("quality_factors", ("vec", "f64")),
+                        ("amplitudes", ("vec", "f64"))],
 }
 # M4 part 1d: a unit enum, written as its variant's name and read from it or from a one-key map to `null`; its row
 # token is `i:` the port's enum value.
@@ -7192,12 +7200,18 @@ def json_sm_shape(outs, k):
 def json_row36(fn, outs, flags) -> bool:
     """A reader row serde reads Ok whose value the port's fixed structs can't hold (ADR 0002 row 36): a matrix whose s
     isn't ports × ports or whose z0 isn't ports long, data whose frequencies and matrices differ in number or whose
-    matrices aren't ports-port, or a port count past 2^63 − 1 (the port's i64 word). A row with row-12 flags is that
+    matrices aren't ports-port, a port count past 2^63 − 1 (the port's i64 word), or (M5 part 1f) an eigenmode result
+    whose three vectors differ in length. A row with row-12 flags is that
     row's (the port refuses it whatever its shape)."""
     if flags or not outs or outs[0][0] == "E":
         return False
     if fn == "json::SMatrix::from_str":
         return not json_sm_shape(outs, 0)[1]
+    if fn == "json::EigenmodeResult::from_str":
+        n0 = outs[0][1]
+        n1 = outs[1 + n0][1]
+        n2 = outs[2 + n0 + n1][1]
+        return not n0 == n1 == n2
     if fn != "json::TouchstoneData::from_str":
         return False
     ports, nf = outs[0][1], outs[2][1]
@@ -7218,7 +7232,7 @@ def json_adr_rows(path: Path) -> list:
         if line.startswith("#"):
             continue
         fn, _cls, ins, outs, _note = line.split("\t")
-        if fn not in ("json::SMatrix::from_str", "json::TouchstoneData::from_str"):
+        if fn not in ("json::SMatrix::from_str", "json::TouchstoneData::from_str", "json::EigenmodeResult::from_str"):
             continue
         toks_in = [parse_tok(t) for t in ins.split(" ")]
         toks_out = [parse_tok(t) for t in outs.split(" ")]

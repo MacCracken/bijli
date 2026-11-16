@@ -5656,3 +5656,45 @@ phasor form (`src/nf2ff.cyr`); 1f the JSON of the serde types. Part 2 is the ran
   equal**, 1d's 462 unchanged and one new. `nf2ff.tcyr` passes on all three (16). The gate is clean (no warnings;
   execution coverage 359 of 359 functions); validate.py 719,654 rows, 0 problems; the oracle's `--check` and clippy
   are clean. Next: 1f, the JSON of the FDTD types.
+
+## 99. M5 part 1f: the FDTD types' JSON; M5 Part 1 done (2026-11-15)
+
+- **`src/json.cyr`**: writers and readers for the FDTD's six serde types. `CpmlParams` and `Mode2d` come with the CPML
+  in M6.
+  - **The four materials** (`BjLossyMaterial`, `BjDrudeMaterial`, `BjLorentzMaterial`, `BjDebyeMaterial`) are all-f64
+    structs, written and read as `Material` is: fields in declaration order, bayan's printer, serde's object and
+    sequence forms, every field as written (a Debye ε_s below ε_∞ too, as serde's derive calls no constructor).
+  - **`BjNonUniformGrid`** writes its three axes as arrays and reads arrays of any lengths into a new grid (its block
+    allocated once the lengths are known, and given back on any failure).
+  - **`BjEigenmodeResult`**: its three vectors share one count (part 1d), so a document whose vectors differ in length
+    is refused as Deserialize: "an EigenmodeResult whose three arrays differ in length (its shape is fixed: ADR 0002
+    row 36)". serde reads such a document; `json.adr.tsv` maps those rows to row 36 (amended).
+- **The grid** (`m_json.rs`): 25,336 rows appended to `json.tsv` (91,956, 38.7 MB).
+  - The four materials are new `Kind`s through `emit_kind`: seeded and special values, serde's text, Rust's `{}` and
+    `{:e}` and bayan's notations, every number spelling in each field position, seeded decimals, the shapes and
+    unknown values.
+  - The two three-vector types (`emit_fdtd_vecs`) cover every triple of lengths to 3, seeded, special and 300-element
+    vectors, the same notations and spellings, and their own shapes: the sequence form, a vector as an object, `null`,
+    string and nested-array elements, missing, repeated and wrong-typed fields, and prefixes.
+  - The first emitter wrote one ragged `EigenmodeResult` as a writer value, which Rust's public fields allow and the
+    port can't build. Writer values are now equal-length, as row 36 keeps the corpus to shapes the port holds.
+- **validate.py**: the six types join `JSON_FIELDS`, and `json_row36` learns the eigenmode result's equal lengths. The
+  model agreed with every row. `json.cr.tsv` gains 9,515 rows where serde_json's best-effort decimal parse misrounds
+  (40,257 in all); `json.adr.tsv` maps 60 ragged eigenmode results (96 in all). ADR 0002 row 12's count rises to 309
+  documents the port refuses whole.
+- **Tests**: `test_lossy_material_serde` is ported in `tests/fdtd_media.tcyr` (62 assertions), so all 13 material
+  tests are ported. `tests/json.tcyr` gains `cyrius_fdtd_json` (86 assertions in all): each type's exact text, round
+  trips, the grid's free lengths, the eigenmode result's refusal and its reason, and out left alone. The ledger: 691
+  ported, 9 n/a, 158 pending of 858.
+- **Surface parity**: the twelve serde impls are matched (556 items). What remains of fdtd.rs (`nf2ff_2d`, the CPML,
+  `Fdtd2d`, `Fdtd3d`, `CpmlParams`, `Mode2d`) is M6's. The API snapshot gains 12 functions (2,116).
+- **Benchmarks**: two Cyrius-only JSON benches (`EXTRA`, as earlier types had): `json/drude_material_to_json`
+  2.46–2.79 µs and `json/nonuniform_grid_from_json` 9.07–11.2 µs (a 10 × 7 × 3 grid). HEAD's 99 rows gave median
+  ratios of 1.02, 1.05 and 0.98 over three interleaved rounds. The load ran 1.1 to 4.4, with other repos' jobs
+  (`drishti-conform`, a checker) running; no existing path changed.
+- **A note for M6 and M7**: `json.tsv` is 38.7 MB against the 48 MiB per-file cap (§81). M6 (`CpmlParams`, `Mode2d`)
+  and M7 (the soorat structs) will add JSON rows, so the module will likely split by milestone before then.
+
+**M5 Part 1 is done**: the 1D grid, the sources, the media, the utilities, NF2FF's phasor form and their JSON, in six
+bites (§94–§99). fdtd.rs's M5 surface is ported, except what needs an `Fdtd2d` (`nf2ff_2d`, its six tests and its
+bench), which moves to M6. Next: Part 2, the range-edge review (§0.1) of the FDTD core.

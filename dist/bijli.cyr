@@ -32718,8 +32718,11 @@ public fn bj_nf2ff_2d_phasor(ez: *BjCwAccumulator, hx: *BjCwAccumulator, hy: *Bj
 # json.cyr — JSON for the serializable types: BjComplex (Rust hisab 1.4.0's `Complex`), BjFieldVector,
 # BjPointCharge, (M2 part 1a) BjMaterial, (M3 part 1a-2) polarization's BjJonesVector, BjJonesMatrix,
 # BjStokesVector and BjMuellerMatrix, (M3 part 1b-2) scattering's BjMieResult, (M3 part 1c-2) beam's
-# BjGaussianBeam, BjAbcdMatrix and BjResonatorStability, and (M4 part 1d) rf's BjSMatrix, BjTouchstoneFormat and
-# BjTouchstoneData, as serde_json 1.0.154 writes and reads them (port plan D5, M1 part 4; ADR 0002 rows 10–12, 36).
+# BjGaussianBeam, BjAbcdMatrix and BjResonatorStability, (M4 part 1d) rf's BjSMatrix, BjTouchstoneFormat and
+# BjTouchstoneData, and (M5 part 1f) the FDTD's BjLossyMaterial, BjDrudeMaterial, BjLorentzMaterial, BjDebyeMaterial,
+# BjNonUniformGrid and BjEigenmodeResult, as serde_json 1.0.154 writes and reads them (port plan D5, M1 part 4; ADR 0002
+# rows 10–12, 36). An EigenmodeResult's three vectors share one count, so a document whose vectors differ in length is
+# refused (row 36); a NonUniformGrid's axes have any lengths.
 #
 # Writers append serde's document to a `str_builder`: the fields in Rust declaration order, no spaces, a Rust array
 # (`[f64; 3]`, a Jones matrix's `m: [[Complex; 2]; 2]`, a Mueller matrix's `m: [[f64; 4]; 4]`) as nested arrays row by
@@ -34175,5 +34178,353 @@ public fn BjTouchstoneData_from_json(buf, len, out: *BjTouchstoneData): Result {
     out.points = d.points;
     out.frequencies = d.frequencies;
     out.s_matrices = d.s_matrices;
+    return Ok(0);
+}
+
+# ── the FDTD types (M5 part 1f) ──────────────────────────────────────────────────────────────────────────────────
+
+# Appends the n f64 at p as `[a,b,..]`; the new length.
+fn _bj_jw_f64_vec(buf, n, p, k): i64 {
+    var m = n;
+    store8(buf + m, 91);
+    m = m + 1;
+    for (var j = 0; j < k; j = j + 1) {
+        if (j > 0) {
+            store8(buf + m, 44);
+            m = m + 1;
+        }
+        m = _bj_jw_f64(buf, m, load64(p + j * 8));
+    }
+    store8(buf + m, 93);
+    return m + 1;
+}
+
+# Appends `{"<k0>":[..],"<k1>":[..],"<k2>":[..]}` (three Vec<f64>, the keys' text with their quotes and colons at
+# keys[0..3]) to sb, built in one fl_alloc block of 64 + 26 bytes a value (an f64 at most 25, and its comma): Ok(0), or
+# Err(BJ_ERR_ALLOCATION) with sb as it was.
+fn _bj_jw_three_vecs(sb, keys: *i64, p: *i64, k: *i64): Result {
+    var buf = fl_alloc(64 + (k[0] + k[1] + k[2]) * 26);
+    if (buf == 0) {
+        _bj_tx_cstr(_bj_err_reason(BJ_ERR_ALLOCATION), "the JSON document's buffer");
+        return Err(BJ_ERR_ALLOCATION);
+    }
+    var n = _bj_jw_cstr(buf, 0, "{");
+    for (var f = 0; f < 3; f = f + 1) {
+        if (f > 0) { n = _bj_jw_cstr(buf, n, ","); }
+        n = _bj_jw_cstr(buf, n, keys[f]);
+        n = _bj_jw_f64_vec(buf, n, p[f], k[f]);
+    }
+    n = _bj_jw_cstr(buf, n, "}");
+    var t, v = _bj_jw_put(sb, buf, n);
+    fl_free(buf);
+    if (is_err_result(t) == 1) { return Err(v); }
+    return Ok(0);
+}
+
+# Appends `{"eps_r":<ε_r>,"conductivity":<σ>}` to the builder sb: Ok(0), or Err(BJ_ERR_ALLOCATION) with sb as it was.
+# Mirrors `serde_json::to_string(&m)` for `fdtd::LossyMaterial`.
+#must_use
+public fn BjLossyMaterial_to_json(m: *BjLossyMaterial, sb): Result {
+    var buf[96];
+    var n = _bj_jw_cstr(&buf, 0, "{\"eps_r\":");
+    n = _bj_jw_f64(&buf, n, m.eps_r);
+    n = _bj_jw_cstr(&buf, n, ",\"conductivity\":");
+    n = _bj_jw_f64(&buf, n, m.conductivity);
+    n = _bj_jw_cstr(&buf, n, "}");
+    return _bj_jw_put(sb, &buf, n);
+}
+
+# Appends `{"eps_inf":<ε_∞>,"omega_p":<ω_p>,"gamma":<γ>}` to the builder sb: Ok(0), or Err(BJ_ERR_ALLOCATION) with sb
+# as it was. Mirrors `serde_json::to_string(&m)` for `fdtd::DrudeMaterial`.
+#must_use
+public fn BjDrudeMaterial_to_json(m: *BjDrudeMaterial, sb): Result {
+    var buf[128];
+    var n = _bj_jw_cstr(&buf, 0, "{\"eps_inf\":");
+    n = _bj_jw_f64(&buf, n, m.eps_inf);
+    n = _bj_jw_cstr(&buf, n, ",\"omega_p\":");
+    n = _bj_jw_f64(&buf, n, m.omega_p);
+    n = _bj_jw_cstr(&buf, n, ",\"gamma\":");
+    n = _bj_jw_f64(&buf, n, m.gamma);
+    n = _bj_jw_cstr(&buf, n, "}");
+    return _bj_jw_put(sb, &buf, n);
+}
+
+# Appends `{"eps_inf":<ε_∞>,"delta_eps":<Δε>,"omega_0":<ω₀>,"gamma":<γ>}` to the builder sb: Ok(0), or
+# Err(BJ_ERR_ALLOCATION) with sb as it was. Mirrors `serde_json::to_string(&m)` for `fdtd::LorentzMaterial`.
+#must_use
+public fn BjLorentzMaterial_to_json(m: *BjLorentzMaterial, sb): Result {
+    var buf[160];
+    var n = _bj_jw_cstr(&buf, 0, "{\"eps_inf\":");
+    n = _bj_jw_f64(&buf, n, m.eps_inf);
+    n = _bj_jw_cstr(&buf, n, ",\"delta_eps\":");
+    n = _bj_jw_f64(&buf, n, m.delta_eps);
+    n = _bj_jw_cstr(&buf, n, ",\"omega_0\":");
+    n = _bj_jw_f64(&buf, n, m.omega_0);
+    n = _bj_jw_cstr(&buf, n, ",\"gamma\":");
+    n = _bj_jw_f64(&buf, n, m.gamma);
+    n = _bj_jw_cstr(&buf, n, "}");
+    return _bj_jw_put(sb, &buf, n);
+}
+
+# Appends `{"eps_inf":<ε_∞>,"eps_s":<ε_s>,"tau":<τ>}` to the builder sb: Ok(0), or Err(BJ_ERR_ALLOCATION) with sb as it
+# was. Mirrors `serde_json::to_string(&m)` for `fdtd::DebyeMaterial`.
+#must_use
+public fn BjDebyeMaterial_to_json(m: *BjDebyeMaterial, sb): Result {
+    var buf[128];
+    var n = _bj_jw_cstr(&buf, 0, "{\"eps_inf\":");
+    n = _bj_jw_f64(&buf, n, m.eps_inf);
+    n = _bj_jw_cstr(&buf, n, ",\"eps_s\":");
+    n = _bj_jw_f64(&buf, n, m.eps_s);
+    n = _bj_jw_cstr(&buf, n, ",\"tau\":");
+    n = _bj_jw_f64(&buf, n, m.tau);
+    n = _bj_jw_cstr(&buf, n, "}");
+    return _bj_jw_put(sb, &buf, n);
+}
+
+# Appends `{"dx":[..],"dy":[..],"dz":[..]}` to the builder sb, each axis's widths in order: Ok(0), or
+# Err(BJ_ERR_ALLOCATION) with sb as it was. Mirrors `serde_json::to_string(&g)` for `fdtd::NonUniformGrid`.
+#must_use
+public fn BjNonUniformGrid_to_json(g: *BjNonUniformGrid, sb): Result {
+    var keys: i64[3];
+    var p: i64[3];
+    var k: i64[3];
+    keys[0] = "\"dx\":";
+    keys[1] = "\"dy\":";
+    keys[2] = "\"dz\":";
+    p[0] = g.dx;
+    p[1] = g.dy;
+    p[2] = g.dz;
+    k[0] = g.nx;
+    k[1] = g.ny;
+    k[2] = g.nz;
+    return _bj_jw_three_vecs(sb, &keys, &p, &k);
+}
+
+# Appends `{"frequencies":[..],"quality_factors":[..],"amplitudes":[..]}` to the builder sb, each of the result's count
+# values: Ok(0), or Err(BJ_ERR_ALLOCATION) with sb as it was. Mirrors `serde_json::to_string(&r)` for
+# `fdtd::EigenmodeResult`.
+#must_use
+public fn BjEigenmodeResult_to_json(r: *BjEigenmodeResult, sb): Result {
+    var keys: i64[3];
+    var p: i64[3];
+    var k: i64[3];
+    keys[0] = "\"frequencies\":";
+    keys[1] = "\"quality_factors\":";
+    keys[2] = "\"amplitudes\":";
+    p[0] = r.frequencies;
+    p[1] = r.quality_factors;
+    p[2] = r.amplitudes;
+    k[0] = r.count;
+    k[1] = r.count;
+    k[2] = r.count;
+    return _bj_jw_three_vecs(sb, &keys, &p, &k);
+}
+
+# The decoders of the four materials, each an all-f64 struct.
+fn _bj_jr_lossy(v, w): i64 {
+    var names: i64[2];
+    names[0] = "eps_r";
+    names[1] = "conductivity";
+    return _bj_jr_f64_struct(v, &names, 2, "struct LossyMaterial", w);
+}
+
+fn _bj_jr_drude(v, w): i64 {
+    var names: i64[3];
+    names[0] = "eps_inf";
+    names[1] = "omega_p";
+    names[2] = "gamma";
+    return _bj_jr_f64_struct(v, &names, 3, "struct DrudeMaterial", w);
+}
+
+fn _bj_jr_lorentz(v, w): i64 {
+    var names: i64[4];
+    names[0] = "eps_inf";
+    names[1] = "delta_eps";
+    names[2] = "omega_0";
+    names[3] = "gamma";
+    return _bj_jr_f64_struct(v, &names, 4, "struct LorentzMaterial", w);
+}
+
+fn _bj_jr_debye(v, w): i64 {
+    var names: i64[3];
+    names[0] = "eps_inf";
+    names[1] = "eps_s";
+    names[2] = "tau";
+    return _bj_jr_f64_struct(v, &names, 3, "struct DebyeMaterial", w);
+}
+
+# The three `Vec<f64>` fields, named names[0..3], of struct node v (`what` names it): their array nodes into
+# nodes[0..3], each checked to be an array. 0, or the code recorded.
+fn _bj_jr_three_vecs(v, names: *i64, what, nodes: *i64): i64 {
+    var form = _bj_jr_form(v, 3, what);
+    if (form == 0) { return BJ_ERR_DESERIALIZE; }
+    for (var f = 0; f < 3; f = f + 1) {
+        var node = _bj_jr_field(v, form, f, names[f]);
+        if (node == 0) { return BJ_ERR_DESERIALIZE; }
+        if (bayan_json_v_tag(node) != JTAG_ARR) { return _bj_jr_type(node, "a sequence"); }
+        nodes[f] = node;
+    }
+    return 0;
+}
+
+# Array node v's n numbers into out[0..n]. 0, or the code recorded.
+fn _bj_jr_f64_elems(v, n, out): i64 {
+    for (var k = 0; k < n; k = k + 1) {
+        var c = _bj_jr_f64(bayan_json_v_arr_get(v, k), out + k * 8);
+        if (c != 0) { return c; }
+    }
+    return 0;
+}
+
+# A NonUniformGrid into w (a BjNonUniformGrid, its block allocated here, so the caller frees it on a failure; w's
+# block is 0 on entry): three arrays of any lengths.
+fn _bj_jr_nonuniform(v, w): i64 {
+    var names: i64[3];
+    var nodes: i64[3];
+    names[0] = "dx";
+    names[1] = "dy";
+    names[2] = "dz";
+    var c = _bj_jr_three_vecs(v, &names, "struct NonUniformGrid", &nodes);
+    if (c != 0) { return c; }
+    var nx = bayan_json_v_arr_len(nodes[0]);
+    var ny = bayan_json_v_arr_len(nodes[1]);
+    var nz = bayan_json_v_arr_len(nodes[2]);
+    var g: BjNonUniformGrid;
+    var t, e = BjNonUniformGrid_uniform(nx, ny, nz, 0.0, &g);
+    if (is_err_result(t) == 1) { return e; }
+    memcpy(w, &g, 56);
+    c = _bj_jr_f64_elems(nodes[0], nx, g.dx);
+    if (c == 0) { c = _bj_jr_f64_elems(nodes[1], ny, g.dy); }
+    if (c == 0) { c = _bj_jr_f64_elems(nodes[2], nz, g.dz); }
+    return c;
+}
+
+# An EigenmodeResult into w (a BjEigenmodeResult, its block allocated here, so the caller frees it on a failure; w's
+# frequencies are 0 on entry): three arrays, which must be equally long (ADR 0002 row 36: the port's result has one
+# count, where serde reads any lengths).
+fn _bj_jr_eigen(v, w): i64 {
+    var names: i64[3];
+    var nodes: i64[3];
+    names[0] = "frequencies";
+    names[1] = "quality_factors";
+    names[2] = "amplitudes";
+    var c = _bj_jr_three_vecs(v, &names, "struct EigenmodeResult", &nodes);
+    if (c != 0) { return c; }
+    var n = bayan_json_v_arr_len(nodes[0]);
+    if (bayan_json_v_arr_len(nodes[1]) != n || bayan_json_v_arr_len(nodes[2]) != n) {
+        return _bj_jr_shape("an EigenmodeResult whose three arrays differ in length");
+    }
+    var b = 0;
+    if (n > 0) {
+        b = fl_alloc(n * 24);
+        if (b == 0) {
+            _bj_tx_cstr(_bj_err_reason(BJ_ERR_ALLOCATION), "the eigenmode result read");
+            return BJ_ERR_ALLOCATION;
+        }
+    }
+    store64(w, b);
+    store64(w + 8, b + n * 8);
+    store64(w + 16, b + n * 16);
+    store64(w + 24, n);
+    if (n == 0) {
+        store64(w + 8, 0);
+        store64(w + 16, 0);
+    }
+    for (var f = 0; f < 3; f = f + 1) {
+        c = _bj_jr_f64_elems(nodes[f], n, b + f * n * 8);
+        if (c != 0) { return c; }
+    }
+    return 0;
+}
+
+# Reads a `LossyMaterial` document from [buf, buf + len) into *out: Ok(0), or the error recorded with out untouched,
+# as BjComplex_from_json. The fields are read as written, as serde's derive reads Rust's public fields. Mirrors
+# `serde_json::from_str::<LossyMaterial>`.
+#must_use
+public fn BjLossyMaterial_from_json(buf, len, out: *BjLossyMaterial): Result {
+    var w: f64[2];
+    var code = _bj_jr_read(buf, len, &_bj_jr_lossy, &w);
+    if (code != 0) { return Err(code); }
+    out.eps_r = w[0];
+    out.conductivity = w[1];
+    return Ok(0);
+}
+
+# Reads a `DrudeMaterial` document from [buf, buf + len) into *out: Ok(0), or the error recorded with out untouched,
+# as BjComplex_from_json; the fields as written. Mirrors `serde_json::from_str::<DrudeMaterial>`.
+#must_use
+public fn BjDrudeMaterial_from_json(buf, len, out: *BjDrudeMaterial): Result {
+    var w: f64[3];
+    var code = _bj_jr_read(buf, len, &_bj_jr_drude, &w);
+    if (code != 0) { return Err(code); }
+    out.eps_inf = w[0];
+    out.omega_p = w[1];
+    out.gamma = w[2];
+    return Ok(0);
+}
+
+# Reads a `LorentzMaterial` document from [buf, buf + len) into *out: Ok(0), or the error recorded with out untouched,
+# as BjComplex_from_json; the fields as written. Mirrors `serde_json::from_str::<LorentzMaterial>`.
+#must_use
+public fn BjLorentzMaterial_from_json(buf, len, out: *BjLorentzMaterial): Result {
+    var w: f64[4];
+    var code = _bj_jr_read(buf, len, &_bj_jr_lorentz, &w);
+    if (code != 0) { return Err(code); }
+    out.eps_inf = w[0];
+    out.delta_eps = w[1];
+    out.omega_0 = w[2];
+    out.gamma = w[3];
+    return Ok(0);
+}
+
+# Reads a `DebyeMaterial` document from [buf, buf + len) into *out: Ok(0), or the error recorded with out untouched,
+# as BjComplex_from_json; the fields as written (an ε_s below ε_∞ too). Mirrors `serde_json::from_str::<DebyeMaterial>`.
+#must_use
+public fn BjDebyeMaterial_from_json(buf, len, out: *BjDebyeMaterial): Result {
+    var w: f64[3];
+    var code = _bj_jr_read(buf, len, &_bj_jr_debye, &w);
+    if (code != 0) { return Err(code); }
+    out.eps_inf = w[0];
+    out.eps_s = w[1];
+    out.tau = w[2];
+    return Ok(0);
+}
+
+# Reads a `NonUniformGrid` document from [buf, buf + len) into a new grid in *out: Ok(0), or the error recorded with
+# out untouched (and never read), as BjComplex_from_json; each axis an array of any length, its widths as written (a
+# grid validate refuses too). Give it back with BjNonUniformGrid_free. Mirrors `serde_json::from_str::<NonUniformGrid>`.
+#must_use
+public fn BjNonUniformGrid_from_json(buf, len, out: *BjNonUniformGrid): Result {
+    var g: BjNonUniformGrid;
+    g.block = 0;
+    g.nx = 0;
+    g.ny = 0;
+    g.nz = 0;
+    var code = _bj_jr_read(buf, len, &_bj_jr_nonuniform, &g);
+    if (code != 0) {
+        BjNonUniformGrid_free(&g);
+        return Err(code);
+    }
+    memcpy(out, &g, 56);
+    return Ok(0);
+}
+
+# Reads an `EigenmodeResult` document from [buf, buf + len) into a new result in *out: Ok(0), or the error recorded
+# with out untouched (and never read), as BjComplex_from_json. Its three arrays must be equally long (ADR 0002 row 36),
+# where serde reads any. Give it back with BjEigenmodeResult_free. Mirrors `serde_json::from_str::<EigenmodeResult>`.
+#must_use
+public fn BjEigenmodeResult_from_json(buf, len, out: *BjEigenmodeResult): Result {
+    var r: BjEigenmodeResult;
+    r.frequencies = 0;
+    r.count = 0;
+    var code = _bj_jr_read(buf, len, &_bj_jr_eigen, &r);
+    if (code != 0) {
+        BjEigenmodeResult_free(&r);
+        return Err(code);
+    }
+    out.frequencies = r.frequencies;
+    out.quality_factors = r.quality_factors;
+    out.amplitudes = r.amplitudes;
+    out.count = r.count;
     return Ok(0);
 }

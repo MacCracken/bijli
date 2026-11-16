@@ -2,8 +2,8 @@
 # averages.
 #
 # Every group named test_* is rust-old/src/fdtd.rs's test of that name, ported assertion for assertion (the ledger
-# matches them by name): 12 of its 13 material tests and its 7 subpixel tests. `test_lossy_material_serde` follows
-# with the JSON in part 1f. The ADE response tests already drive in e^{+jωt}, bijli's one convention. The cyrius_*
+# matches them by name): its 13 material tests (`test_lossy_material_serde` since part 1f, the JSON) and its 7
+# subpixel tests. The ADE response tests already drive in e^{+jωt}, bijli's one convention. The cyrius_*
 # groups pin the error records' text and order, the presets' fields, `new` storing unchecked values, and the subpixel
 # clamps and signed zeros. tests/golden/fdtd.tsv pins every function against Rust besides.
 
@@ -140,6 +140,17 @@ fn main() {
     var al7, be7 = b7.ade_coefficients(0.0000000000001);
     assert(al7 > 0.9 && al7 < 1.0, "α ≈ 1 for τ ≫ dt");
     assert(be7 > 0.0, "β > 0");
+
+    test_group("test_lossy_material_serde");
+    var ls8: BjLossyMaterial = BjLossyMaterial_new(4.0, 0.5);
+    var sbj = str_builder_new();
+    var tj, vj = BjLossyMaterial_to_json(&ls8, sbj);
+    var sj = str_builder_build(sbj);
+    var back: BjLossyMaterial;
+    var tb8, vb8 = BjLossyMaterial_from_json(str_data(sj), str_len(sj), &back);
+    assert(is_ok(tj) == 1 && is_ok(tb8) == 1, "written and read back");
+    assert(near(back.eps_r, 4.0, 0.000000000000001) == 1 && near(back.conductivity, 0.5, 0.000000000000001) == 1,
+      "ε_r and σ unchanged");
 
     test_group("test_drude_ade_matches_analytic_response");
     var dm: BjDrudeMaterial;

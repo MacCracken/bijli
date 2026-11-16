@@ -1286,6 +1286,38 @@ fn main(): i64 {
     BjCwAccumulator_free(&nfc);
     if (nsum == 7.0) { println("."); }
 
+    # json (M5 part 1f), Cyrius-only: a DrudeMaterial written, and a NonUniformGrid read back into a new grid.
+    var jdm: BjDrudeMaterial = BjDrudeMaterial_gold();
+    var sbd = str_builder_new();
+    var jdk = 0;
+    var bjd = bench_new("json/drude_material_to_json");
+    bench_batch_start(bjd);
+    for (var k = 0; k < 200000; k = k + 1) {
+        store64(sbd + 8, 0);
+        var tdj, vdj = BjDrudeMaterial_to_json(&jdm, sbd);
+        jdk = jdk + vdj;
+    }
+    bench_batch_stop(bjd, 200000);
+    bench_report(bjd);
+    var jg: BjNonUniformGrid;
+    var tjg, vjg = BjNonUniformGrid_uniform(10, 7, 3, 0.001, &jg);
+    var sbg = str_builder_new();
+    var tgw, vgw = BjNonUniformGrid_to_json(&jg, sbg);
+    var gdoc = str_builder_build(sbg);
+    var jgsum = 0;
+    var bjg = bench_new("json/nonuniform_grid_from_json");
+    bench_batch_start(bjg);
+    for (var k = 0; k < 20000; k = k + 1) {
+        var jg2: BjNonUniformGrid;
+        var tgr, vgr = BjNonUniformGrid_from_json(str_data(gdoc), str_len(gdoc), &jg2);
+        jgsum = jgsum + jg2.nx;
+        BjNonUniformGrid_free(&jg2);
+    }
+    bench_batch_stop(bjg, 20000);
+    bench_report(bjg);
+    BjNonUniformGrid_free(&jg);
+    if (jgsum == 7 || jdk == 7) { println("."); }
+
     var ar: f64 = acc.re;
     if (ar == 7.0) { println("."); }
     if (keep == 7) { println("."); }

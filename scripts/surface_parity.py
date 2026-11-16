@@ -48,8 +48,8 @@ PENDING_MODULES = {
 # Their other items are checked as a ported module's now; the listed ones count as pending, and one found ported is a
 # problem (drop it from the list).
 IN_PROGRESS = {
-    # M5 part 1a ported Fdtd1d, 1b the pulses and TfsfSource, 1c the media and the subpixel averages, 1d the
-    # utilities, 1e NF2FF's phasor form (the serde impls follow in 1f); nf2ff_2d, CPML, 2D and 3D follow in M6.
+    # M5 Part 1 ported the 1D grid, the sources, the media, the utilities, NF2FF's phasor form and their JSON;
+    # nf2ff_2d, CPML (CpmlParams and Mode2d's JSON with it), 2D and 3D follow in M6.
     "fdtd": ("M5–M6", {
         "CpmlParams", "Cpml", "Mode2d", "Fdtd2d", "Fdtd3d", "nf2ff_2d", "CpmlParams::new", "Cpml::new",
         "Cpml::with_params", "Cpml::attach", "Cpml::sigma_max", "Cpml::kappa_max", "Cpml::alpha_max",
@@ -60,12 +60,8 @@ IN_PROGRESS = {
         "Fdtd3d::set_permittivity", "Fdtd3d::set_permeability", "Fdtd3d::set_conductivity", "Fdtd3d::set_material",
         "Fdtd3d::add_source_ez", "Fdtd3d::try_enable_cpml", "Fdtd3d::try_enable_cpml_with", "Fdtd3d::disable_cpml",
         "Fdtd3d::cpml", "Fdtd3d::step_once", "Fdtd3d::run", "Fdtd3d::time", "Fdtd3d::total_energy",
-        "impl Deserialize for LossyMaterial", "impl Serialize for LossyMaterial", "impl Deserialize for DrudeMaterial",
-        "impl Serialize for DrudeMaterial", "impl Deserialize for LorentzMaterial",
-        "impl Serialize for LorentzMaterial", "impl Deserialize for DebyeMaterial", "impl Serialize for DebyeMaterial",
         "impl Deserialize for CpmlParams", "impl Serialize for CpmlParams", "impl Deserialize for Mode2d",
-        "impl Serialize for Mode2d", "impl Deserialize for NonUniformGrid", "impl Serialize for NonUniformGrid",
-        "impl Deserialize for EigenmodeResult", "impl Serialize for EigenmodeResult",
+        "impl Serialize for Mode2d",
     }),
 }
 NOT_APPLICABLE_MODULES = {

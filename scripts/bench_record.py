@@ -69,6 +69,8 @@ EXTRA = {
     "fdtd/tfsf_step_200": "one step of a 200-cell TF/SF auxiliary grid under a Gaussian drive (M5 part 1b)",
     "fdtd/media_coefficients": "the lossy, Drude, Lorentz and Debye coefficient sets and a subpixel average (M5 1c)",
     "fdtd/nf2ff_phasor_80x80_180": "NF2FF's phasor form on an 80 × 80 grid, margin 5, 180 angles (M5 part 1e)",
+    "json/drude_material_to_json": "a DrudeMaterial's JSON, gold's (src/json.cyr, M5 part 1f)",
+    "json/nonuniform_grid_from_json": "a 10 × 7 × 3 NonUniformGrid read back into a new grid, its block freed (M5 1f)",
 }
 
 

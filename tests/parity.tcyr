@@ -2215,9 +2215,161 @@ fn _par_json_rf(fp, fl): i64 {
     return 0;
 }
 
+# The three `i:<len>` vectors from token k into one fl_alloc block (freed by the caller), their addresses at p[0..3] and
+# lengths at n[0..3]: the block, or 0 when it can't be had.
+fn _par_json_vecs(k, p: *i64, n: *i64): i64 {
+    var a = k;
+    var total = 0;
+    for (var f = 0; f < 3; f = f + 1) {
+        n[f] = _par_in(a);
+        total = total + n[f];
+        a = a + 1 + n[f];
+    }
+    var b = fl_alloc(total * 8 + 8);
+    if (b == 0) { return 0; }
+    a = k;
+    var at = b;
+    for (var f2 = 0; f2 < 3; f2 = f2 + 1) {
+        p[f2] = at;
+        for (var j = 0; j < n[f2]; j = j + 1) { store64(at + j * 8, _par_in(a + 1 + j)); }
+        at = at + n[f2] * 8;
+        a = a + 1 + n[f2];
+    }
+    return b;
+}
+
+# The three vectors (n values each at p) to the got list as `i:<len>` and the values.
+fn _par_json_got_vecs(p0, n0, p1, n1, p2, n2) {
+    _par_got_i(n0);
+    for (var j = 0; j < n0; j = j + 1) { _par_got_f(load64(p0 + j * 8)); }
+    _par_got_i(n1);
+    for (var j1 = 0; j1 < n1; j1 = j1 + 1) { _par_got_f(load64(p1 + j1 * 8)); }
+    _par_got_i(n2);
+    for (var j2 = 0; j2 < n2; j2 = j2 + 1) { _par_got_f(load64(p2 + j2 * 8)); }
+    return 0;
+}
+
+# The FDTD types' JSON (M5 part 1f): 1 handled, 0 another type's row, -1 for unusable inputs.
+fn _par_json_fdtd(fp, fl): i64 {
+    if (_par_eq(fp, fl, "json::LossyMaterial::to_string") == 1) {
+        var lm: BjLossyMaterial = BjLossyMaterial_new(_par_in(0), _par_in(1));
+        var sb1 = str_builder_new();
+        var t1, v1 = BjLossyMaterial_to_json(&lm, sb1);
+        _par_got_json_res(t1, v1, sb1);
+        return 1;
+    }
+    if (_par_eq(fp, fl, "json::DrudeMaterial::to_string") == 1) {
+        var dm: BjDrudeMaterial = BjDrudeMaterial_new(_par_in(0), _par_in(1), _par_in(2));
+        var sb2 = str_builder_new();
+        var t2, v2 = BjDrudeMaterial_to_json(&dm, sb2);
+        _par_got_json_res(t2, v2, sb2);
+        return 1;
+    }
+    if (_par_eq(fp, fl, "json::LorentzMaterial::to_string") == 1) {
+        var om: BjLorentzMaterial = BjLorentzMaterial_new(_par_in(0), _par_in(1), _par_in(2), _par_in(3));
+        var sb3 = str_builder_new();
+        var t3, v3 = BjLorentzMaterial_to_json(&om, sb3);
+        _par_got_json_res(t3, v3, sb3);
+        return 1;
+    }
+    if (_par_eq(fp, fl, "json::DebyeMaterial::to_string") == 1) {
+        var bm: BjDebyeMaterial = BjDebyeMaterial_new(_par_in(0), _par_in(1), _par_in(2));
+        var sb4 = str_builder_new();
+        var t4, v4 = BjDebyeMaterial_to_json(&bm, sb4);
+        _par_got_json_res(t4, v4, sb4);
+        return 1;
+    }
+    var nug5 = _par_eq(fp, fl, "json::NonUniformGrid::to_string");
+    if (nug5 == 1 || _par_eq(fp, fl, "json::EigenmodeResult::to_string") == 1) {
+        var vp: i64[3];
+        var vn: i64[3];
+        var blk = _par_json_vecs(0, &vp, &vn);
+        if (blk == 0) { return 0 - 1; }
+        var sb5 = str_builder_new();
+        if (nug5 == 1) {
+            var g: BjNonUniformGrid;
+            var tg, vg = BjNonUniformGrid_from_axes(_par_fd_f64p(vp[0]), vn[0], _par_fd_f64p(vp[1]), vn[1],
+              _par_fd_f64p(vp[2]), vn[2], &g);
+            var t5, v5 = BjNonUniformGrid_to_json(&g, sb5);
+            _par_got_json_res(t5, v5, sb5);
+            BjNonUniformGrid_free(&g);
+        } else {
+            var er: BjEigenmodeResult;
+            er.frequencies = vp[0];
+            er.quality_factors = vp[1];
+            er.amplitudes = vp[2];
+            er.count = vn[0];
+            var t6, v6 = BjEigenmodeResult_to_json(&er, sb5);
+            _par_got_json_res(t6, v6, sb5);
+        }
+        fl_free(blk);
+        return 1;
+    }
+    if (memeq(fp + fl - 10, "::from_str", 10) != 1) { return 0; }
+    var lenw[8];
+    var doc = _par_in_bytes(0, &lenw);
+    if (doc == 0) { return 0 - 1; }
+    var len = load64(&lenw);
+    if (_par_eq(fp, fl, "json::LossyMaterial::from_str") == 1) {
+        var rl: BjLossyMaterial;
+        var r1, w1 = BjLossyMaterial_from_json(doc, len, &rl);
+        if (is_err_result(r1) == 1) { _par_got_err(w1); return 1; }
+        _par_got_f(rl.eps_r);
+        _par_got_f(rl.conductivity);
+        return 1;
+    }
+    if (_par_eq(fp, fl, "json::DrudeMaterial::from_str") == 1) {
+        var rd: BjDrudeMaterial;
+        var r2, w2 = BjDrudeMaterial_from_json(doc, len, &rd);
+        if (is_err_result(r2) == 1) { _par_got_err(w2); return 1; }
+        _par_got_f(rd.eps_inf);
+        _par_got_f(rd.omega_p);
+        _par_got_f(rd.gamma);
+        return 1;
+    }
+    if (_par_eq(fp, fl, "json::LorentzMaterial::from_str") == 1) {
+        var ro: BjLorentzMaterial;
+        var r3, w3 = BjLorentzMaterial_from_json(doc, len, &ro);
+        if (is_err_result(r3) == 1) { _par_got_err(w3); return 1; }
+        _par_got_f(ro.eps_inf);
+        _par_got_f(ro.delta_eps);
+        _par_got_f(ro.omega_0);
+        _par_got_f(ro.gamma);
+        return 1;
+    }
+    if (_par_eq(fp, fl, "json::DebyeMaterial::from_str") == 1) {
+        var rb: BjDebyeMaterial;
+        var r4, w4 = BjDebyeMaterial_from_json(doc, len, &rb);
+        if (is_err_result(r4) == 1) { _par_got_err(w4); return 1; }
+        _par_got_f(rb.eps_inf);
+        _par_got_f(rb.eps_s);
+        _par_got_f(rb.tau);
+        return 1;
+    }
+    if (_par_eq(fp, fl, "json::NonUniformGrid::from_str") == 1) {
+        var rg: BjNonUniformGrid;
+        var r5, w5 = BjNonUniformGrid_from_json(doc, len, &rg);
+        if (is_err_result(r5) == 1) { _par_got_err(w5); return 1; }
+        _par_json_got_vecs(rg.dx, rg.nx, rg.dy, rg.ny, rg.dz, rg.nz);
+        BjNonUniformGrid_free(&rg);
+        return 1;
+    }
+    if (_par_eq(fp, fl, "json::EigenmodeResult::from_str") == 1) {
+        var re: BjEigenmodeResult;
+        var r6, w6 = BjEigenmodeResult_from_json(doc, len, &re);
+        if (is_err_result(r6) == 1) { _par_got_err(w6); return 1; }
+        _par_json_got_vecs(re.frequencies, re.count, re.quality_factors, re.count, re.amplitudes, re.count);
+        BjEigenmodeResult_free(&re);
+        return 1;
+    }
+    return 0;
+}
+
 public fn _par_json(fp, fl): i64 {
     var rf = _par_json_rf(fp, fl);
     if (rf != 0) { return rf; }
+    var fd = _par_json_fdtd(fp, fl);
+    if (fd != 0) { return fd; }
     if (_par_eq(fp, fl, "json::Complex::to_string") == 1) {
         var cr: f64 = _par_in(0);
         var ci: f64 = _par_in(1);
@@ -4018,6 +4170,12 @@ public fn _par_c_bound(fp, fl): i64 {
     if (_par_eq(fp, fl, "json::SMatrix::from_str") == 1) { return 0; }
     if (_par_eq(fp, fl, "json::TouchstoneFormat::from_str") == 1) { return 0; }
     if (_par_eq(fp, fl, "json::TouchstoneData::from_str") == 1) { return 0; }
+    if (_par_eq(fp, fl, "json::LossyMaterial::from_str") == 1) { return 0; }
+    if (_par_eq(fp, fl, "json::DrudeMaterial::from_str") == 1) { return 0; }
+    if (_par_eq(fp, fl, "json::LorentzMaterial::from_str") == 1) { return 0; }
+    if (_par_eq(fp, fl, "json::DebyeMaterial::from_str") == 1) { return 0; }
+    if (_par_eq(fp, fl, "json::NonUniformGrid::from_str") == 1) { return 0; }
+    if (_par_eq(fp, fl, "json::EigenmodeResult::from_str") == 1) { return 0; }
     return 0 - 1;
 }
 
