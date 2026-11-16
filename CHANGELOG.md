@@ -364,6 +364,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
   2^-1022 kept to 53 bits (ADR 0002 row 18 amended, see Fixed); a correctly rounded log₁₀ with an unbounded exponent
   (`_bj_ux_log10`, on a generated 1/ln 10 checked against MPFR; `cr_verify.py`'s ux_log10 family). `rf.tsv` grows by
   428 edge rows (30,714).
+- **Cyrius port, M4 part 2d-5 — the array factors at their range edges** (`src/rf.cyr`): ψ and Nψ/2 past DBL_MAX
+  run with an unbounded exponent for finite inputs (ADR 0002 row 18 amended, see Fixed). `rf.tsv` grows by 1,502 edge
+  rows (32,216).
 
 ### Fixed
 
@@ -811,6 +814,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
   edge, DB takes the logarithm of an |S| past DBL_MAX, and such an argument is kept to 53 bits; MA still refuses an
   |S| past DBL_MAX. Cost (six interleaved rounds at load 2.9–3.8, other repos' jobs running): within the noise,
   `rf/write_touchstone_s2p_201` medians 4.22 → 4.24 ms in MA and 5.26 → 5.29 ms in DB (`port-parity.md` §92).
+- **rf** (ADR 0002 row 18 amended, M4 part 2d-5): the linear, planar and circular array factors returned NaN for
+  finite inputs whose ψ (or kd, kd·cos θ, Nψ/2, β·n) passed DBL_MAX, as Rust took the sine of ∞: k = 10³⁰⁰ and
+  d = 10²⁰ at θ = π/2, where ψ = 6.1·10³⁰³ itself is finite, gave NaN for 0.2674. The chains now run with an
+  unbounded exponent there, the sines past DBL_MAX by Payne–Hanek. Cost (three interleaved rounds at load 2.8):
+  within the noise for `rf/linear_array_factor_8` (459–464 → 460–471 ns) and the planar factor; the circular
+  factor 3.89–3.90 → 3.93 µs (+0.8 %, every round) (`port-parity.md` §93).
 
 ### Performance
 

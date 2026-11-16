@@ -41,8 +41,8 @@ Plan of record: [bijli-port-plan.md](bijli-port-plan.md). Decision: [ADR 0001](.
 - [x] **M1** (done 2026-11-12): the foundation: the correctly rounded math, fmtf, log, error, complex, field, maxwell, charge and the JSON, then the range-edge review (Part 5, ADR 0002 rows 13–18); 189,015 rows ok on three targets (`port-parity.md`).
 - [x] **M2** (done 2026-11-13): media, waves, circuits and relativity: material, wave, circuit and relativity, the retarded-time solver and the Liénard–Wiechert fields, then the range-edge review (Part 2, ADR 0002 rows 13 and 17–31); 405,854 rows ok on three targets (`port-parity.md`).
 - [x] **M3** (done 2026-11-14): optics: polarization, scattering and beam, in the one convention, then the range-edge review (Part 2, ADR 0002 rows 13, 17 and 18, 33–35); 493,139 rows ok on three targets (`port-parity.md`).
-- [ ] **M4–M8**:
-  - RF;
+- [x] **M4** (done 2026-11-15): RF: rf.rs's lines, reflection and losses, the Smith chart, matching, the array factors, the S-parameter matrices and Touchstone read and write, then the range-edge review (Part 2, ADR 0002 rows 13, 17, 18 and 36–39); 536,306 rows ok on three targets (`port-parity.md`).
+- [ ] **M5–M8**:
   - FDTD core;
   - FDTD 2D/3D;
   - integration surfaces;

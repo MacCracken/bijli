@@ -5935,6 +5935,15 @@ def rf_linear(P, n, d, k, beta, theta) -> float:
         return 0.0
     if n == 1:
         return 1.0
+    if RF18["on"] and rf_fin(d, k, beta, theta):          # row 18 (M4 part 2d-5): the whole chain unbounded
+        nf = float(n)
+        psi = ux_add(ux_mul(ux_mul(ux(k), ux(d)), ux(P["cos"](theta))), ux(beta))
+        half = (psi[0] / 2, psi[1])
+        s_n = ux_fin(w_trig("sin", ux_mul(ux(nf), half)))
+        s_h = ux_fin(w_trig("sin", half))
+        if abs(s_h) < 1e-15:
+            return 1.0
+        return abs(fdiv(s_n, nf * s_h))
     psi = k * d * P["cos"](theta) + beta
     half = psi / 2.0
     nf = float(n)
@@ -6082,9 +6091,16 @@ def rf_eval(fn, v, P, port=False):
             return [("f", 0.0)]
         nf = float(n)
         sr, si = 0.0, 0.0
+        wide = RF18["on"] and rf_fin(a, k, theta, phi, beta)   # row 18 (M4 part 2d-5): each ψₙ unbounded
         for j in range(n):
             fj = float(j)
             phi_n = fdiv(2.0 * math.pi * fj, nf)
+            if wide:
+                p = ux_mul(ux_mul(ux_mul(ux(k), ux(a)), ux(P["sin"](theta))), ux(P["cos"](phi - phi_n)))
+                t = ux_add(p, ux_mul(ux(beta), ux(fj)))
+                sr += ux_fin(w_trig("cos", t))
+                si += ux_fin(w_trig("sin", t))
+                continue
             psi = k * a * P["sin"](theta) * P["cos"](phi - phi_n) + beta * fj
             sr += P["cos"](psi)
             si += P["sin"](psi)
@@ -6696,8 +6712,8 @@ def rf_adr_rows(path: Path) -> list:
     stub match's cancelling root, taken without its cancellation, moves a (d, ℓ) (M4 part 2a-1); row 17 where the
     cascade's star product (2a-2) or S → Z (2a-3) rounded once with its threshold exact, or the exact tests of M4 part
     2c (|Z_L + Z₀|, |S21|, the stub's band, z0_equal), change a row; row 18 where a chain with an unbounded exponent
-    does (M4 part 2d; the Touchstone reader's pairs from 2d-4a, the writer's from 2d-4b). A row takes the first of its
-    rows that accounts for its whole change."""
+    does (M4 part 2d; the Touchstone reader's pairs from 2d-4a, the writer's from 2d-4b, the array factors from 2d-5).
+    A row takes the first of its rows that accounts for its whole change."""
     out, root = [], path.parents[2]
     for fn, _cls, ins, outs, v in sc_lines(path):
         rust = rf_eval17(False, lambda: rf_any_eval(fn, ins, v, False, root))

@@ -5239,3 +5239,41 @@ below 2^-1022).
   equal**, HEAD's unchanged but `try_write_touchstone`'s. `rf.tcyr` passes on all three (261). The gate is clean (no
   warnings; execution coverage 323 of 323 functions); validate.py 626,117 rows, 0 problems. **2d-4 is done.** Next,
   2d-5: the array factors' ψ past DBL_MAX.
+
+## 93. M4 part 2d-5: the array factors at their range edges; M4 done (2026-11-15)
+
+- **The finding**: the linear factor's ψ = kd·cos θ + β and Nψ/2, and the circular factor's ψₙ = ka·sin θ·cos(φ −
+  φₙ) + β·n, overflow to ±∞ where kd, a product, the sum or β·n passes DBL_MAX, and Rust takes the sine of ∞: NaN,
+  for finite inputs. k = 10³⁰⁰ and d = 10²⁰ at θ = π/2, where ψ = 6.1·10³⁰³ is itself finite, gave NaN for 0.2674;
+  N = 10¹⁰ with ψ = 10³⁰⁰ (Nψ/2 past DBL_MAX) NaN for 1.13·10⁻¹⁰. The planar factor inherits the linear one's.
+- **ADR 0002 row 18, amended** (`src/rf.cyr`): the guard is Rust's own NaN, tested once (sin(Nψ/2) in the linear
+  factor, Σ cos + Σ sin after the circular loop), with every input finite (a sum of x·0); then `_bj_rf_laf_ux` and
+  `_bj_rf_caf_ux` rerun the chain with an unbounded exponent: each product and sum to 53 bits, ψ/2 exact, the sines
+  and cosines by src/crmath_vx.cyr's `_bj_vx_sin53` and `_bj_vx_cos53` (Payne–Hanek past DBL_MAX; |Nψ/2| < 2^2112
+  and |ψₙ| < 2^2049, within the table's 2^4454), rounded into binary64, then Rust's 10⁻¹⁵ test, quotient, sums and
+  root. Below the range nothing changes: an intermediate under 2^-1022 either makes |ψ/2| < 10⁻¹⁵ (the factor is 1)
+  or lies under half an ulp of β, and a tiny ψₙ's sine is lost in the sum beside sr ≈ N. Non-finite inputs keep
+  Rust's NaN; the planar factor's cos(acos x) keeps Rust's chain (§0.1).
+- **The grid**: 1,502 rows appended to `rf.tsv` (32,216): the linear factor at N from 2 to usize::MAX over six
+  (k, d) pairs whose kd, kd·cos θ or ψ passes DBL_MAX (kd past it with ψ finite near θ = π/2 among them), six angles
+  and four β; Nψ/2 alone past it; non-finite inputs; the planar factor through it; the circular factor at N from 1
+  to 16 where ka·sin θ·cos(φ − φₙ), β·n or their sum passes DBL_MAX; 300 seeded wide values.
+- **validate.py** models both chains (`rf_linear` and the circular transcription, MPFR's widest-range sine and cosine)
+  under `RF18` for finite inputs. `rf.adr.tsv` maps **1,079 rows** to row 18 (793 linear, 52 planar, 234 circular;
+  11,587 in all), all passing and every one NaN in Rust; 9 of them on older grids. `rf.cr.tsv` gains 5 rows of the
+  new grid where the correctly rounded primitives differ from glibc's (91).
+- **Tests**: `tests/rf.tcyr`'s `cyrius_array_factor_edges` (5 assertions, 266 in all).
+- **Benchmarks** (a focused interleaved A/B against HEAD, three rounds at load 2.8): `rf/linear_array_factor_8`
+  459–464 → 460–471 ns and the planar factor (4 × 4) 1.66–1.69 → 1.66–1.71 µs, within the noise; the circular factor
+  (8 elements) 3.89–3.90 → 3.93 µs, +0.8 % in every round (the loop's end test and its locals).
+- **The record at M4's close**: the full suite ran at load 11.6, and the rf section three more times at load 17 to 24
+  (other repos' benches, an AV1 encoder and four core dumps): 1.5–4× this Part's A/B figures. So
+  `docs/benchmarks-rust-v-cyrius.md` keeps its Cyrius column, the rf rows from 1c-2. Part 2's A/Bs give their costs
+  since: `rf/s_cascade` 523 ns → 3.5 µs (2a-2's star product rounded once, §83), `input_impedance_complex` about
+  280 ns (§87), `reflection_coefficient` 22–27 ns (§89), `single_stub_match` 2.6–2.8 µs (§90), the parse 570–590 µs
+  (§91), the write about 4.2 ms (§92), `linear_array_factor_8` 460–470 ns (here).
+- **Result, every target** (x86_64 ELF, x86_64 PE, aarch64): **17 modules, 0 failing; 536,306 ok, 0 failed, 0
+  measured, 0 pending, 91,313 accepted (ADR 01: 30,863; ADR 0002: 60,450)** over 627,619 rows; **all 416 digests
+  equal**, HEAD's unchanged but the three array factors'. `rf.tcyr` passes on all three (266). The gate is clean (no
+  warnings; execution coverage 323 of 323 functions); validate.py 627,619 rows, 0 problems. **2d is done: Part 2 is
+  complete, and with it M4.** Next: M5, the FDTD core.

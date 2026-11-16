@@ -63,6 +63,9 @@
 //!
 //! M4 part 2d-4b appends the Touchstone writer's range edges (row 18): entries whose squares leave the range, |S| past
 //! DBL_MAX in DB, arguments at most 2^-1022, the plain box's edges, and seeded entries.
+//!
+//! M4 part 2d-5 appends the array factors' range edges (row 18): ψ, kd, kd·cos θ, ψ + β and Nψ/2 past DBL_MAX (Rust's
+//! sine of ∞), non-finite inputs beside them, and seeded wide values.
 
 use crate::grids::{Edge2, Rng, knife_edge, knife_edge2, specials};
 use crate::m_field::res_f;
@@ -708,6 +711,7 @@ pub fn emit() -> Module {
     emit_2d3b(r, &mut rng);
     emit_2d4a(r, &mut rng);
     emit_2d4b(r, &mut rng);
+    emit_2d5(r, &mut rng);
 
     rows.m
 }
@@ -760,6 +764,75 @@ fn emit_2d4a(r: &mut Rows, rng: &mut Rng) {
         one(r, "DB", v1, v2);
         let w2 = rng.signed_log_uniform(-323.0, -300.0);
         one(r, "MA", rng.log_uniform(-300.0, 308.0), w2);
+    }
+}
+
+/// M4 part 2d-5: the array factors at their range edges (ADR 0002 row 18). The linear factor where kd, kd·cos θ,
+/// ψ = kd·cos θ + β or Nψ/2 passes DBL_MAX (kd past it with a finite ψ near θ = π/2 among them), at element counts
+/// up to usize::MAX; the planar factor through it; the circular factor where ka·sin θ·cos(φ − φₙ), β·n or their sum
+/// does; non-finite inputs beside them (Rust's NaN stays); seeded wide values.
+fn emit_2d5(r: &mut Rows, rng: &mut Rng) {
+    let m = f64::MAX;
+    let ns = [2_usize, 3, 8, 100, 10_000_000_000, usize::MAX];
+    let kds = [(1e200, 1e200), (1e300, 1e20), (1.0, m), (m, 1.0), (1e300, 1e-10), (2.0, 0.6 * m)];
+    for &n in &ns {
+        for &(k, d) in &kds {
+            for th in [0.0, 0.3, 1.0, FRAC_PI_2, 2.5, PI] {
+                for beta in [0.0, 1.0, -1e300, m] {
+                    r.linear(n, d, k, beta, th);
+                }
+            }
+        }
+        r.linear(n, 1.0, 1e300, 0.0, 0.0);
+        r.linear(n, 1.0, m, -m, 0.0);
+        r.linear(n, 1.0, 0.5 * m, 0.0, 0.0);
+    }
+    let bad = [
+        (f64::INFINITY, 1.0, 0.0, 0.3),
+        (1e200, 1e200, f64::NAN, 0.3),
+        (1e200, 1e200, 0.0, f64::INFINITY),
+        (1e200, f64::INFINITY, 0.0, 0.3),
+        (1e200, 1e200, f64::NEG_INFINITY, 1.0),
+    ];
+    for &(k, d, beta, th) in &bad {
+        r.linear(4, d, k, beta, th);
+    }
+    for &(nx, ny) in &[(4_usize, 5_usize), (2, 2), (16, 1)] {
+        for v in [[1e200, 1e200, 1e200, 0.0, 1.0, 0.7, 0.3], [1.0, 0.5, m, 0.0, 0.0, 1.2, 2.0],
+                  [0.5 * m, 0.25, 4.0, m, -m, 0.1, 0.9], [1e300, 1e300, 1e10, 0.0, 0.0, FRAC_PI_2, 0.0]] {
+            r.planar((nx, ny), v);
+        }
+    }
+    for n in [1_usize, 2, 3, 8, 16] {
+        for (a, k) in [(1e200, 1e200), (m, 1.0), (1.0, 1.0), (0.5 * m, 4.0)] {
+            for th in [0.5, FRAC_PI_2, 1e-300] {
+                for (phi, beta) in [(0.0, 0.0), (1.0, 0.0), (0.0, 1e308), (0.3, -1e308), (0.0, m)] {
+                    r.circular(n, [a, k, th, phi, beta]);
+                }
+            }
+        }
+    }
+    r.circular(4, [f64::INFINITY, 1.0, 0.5, 0.0, 0.0]);
+    r.circular(4, [1e200, 1e200, 0.5, f64::NAN, 0.0]);
+    r.circular(4, [1e200, 1e200, 0.5, 0.0, f64::INFINITY]);
+    for _ in 0..200 {
+        let n = if rng.int(0, 9) == 0 { usize::MAX - usize::try_from(rng.int(0, 9)).unwrap_or(0) } else {
+            usize::try_from(rng.int(2, 1_000_000)).unwrap_or(2)
+        };
+        let beta = if rng.int(0, 2) == 0 { 0.0 } else { rng.signed_log_uniform(-10.0, 308.0) };
+        r.linear(n, rng.log_uniform(-10.0, 308.0), rng.log_uniform(-10.0, 308.0), beta, rng.uniform(0.0, PI));
+    }
+    for _ in 0..40 {
+        let v = [rng.log_uniform(-10.0, 308.0), rng.log_uniform(-10.0, 308.0), rng.log_uniform(100.0, 308.0),
+                 rng.signed_log_uniform(-10.0, 308.0), rng.signed_log_uniform(-10.0, 308.0), rng.uniform(0.0, PI),
+                 rng.uniform(-PI, PI)];
+        r.planar((usize::try_from(rng.int(2, 64)).unwrap_or(2), usize::try_from(rng.int(2, 64)).unwrap_or(2)), v);
+    }
+    for _ in 0..60 {
+        let n = usize::try_from(rng.int(1, 32)).unwrap_or(1);
+        let v = [rng.log_uniform(-10.0, 308.0), rng.log_uniform(-10.0, 308.0), rng.uniform(0.0, PI),
+                 rng.uniform(-PI, PI), rng.signed_log_uniform(-10.0, 308.0)];
+        r.circular(n, v);
     }
 }
 

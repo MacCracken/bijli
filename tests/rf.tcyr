@@ -11,8 +11,8 @@
 # the S-parameter reasons and the heap; (2a-1) ADR 0002 row 39, the stub match's cancellation-free root; (2a-2) row
 # 17, the cascade's star product rounded once and its exact T22 test; (2a-3) row 17, S → Z rounded once; (2b) row
 # 13, round once; (2c) row 17, the exact thresholds; (2d-1 to 2d-3a) row 18, the input impedance's, the lossy Z₀'s,
-# γ's, the reflection coefficients', the Smith chart's, (2d-3b) the stub match's and (2d-4a, 2d-4b) the
-# Touchstone reader's and writer's range edges.
+# γ's, the reflection coefficients', the Smith chart's, (2d-3b) the stub match's, (2d-4a, 2d-4b) the Touchstone
+# reader's and writer's and (2d-5) the array factors' range edges.
 # tests/golden/rf.tsv pins every function over its grid against Rust besides.
 
 include "tests/lib.cyr"
@@ -809,6 +809,32 @@ fn cyrius_smith_edges(): i64 {
     var mx: f64 = _bj_from_bits(0x7FEFFFFFFFFFFFFF);
     var z: BjComplex = bj_gamma_from_z(BjComplex_new(mx, mx));
     assert(z.re == 1.0 && same(z.im, 0.0) == 1, "Γ of z = DBL_MAX(1 + j) is 1 (Rust's Smith d overflowed: NaN)");
+    return 0;
+}
+
+# ADR 0002 row 18 (M4 part 2d-5): the array factors with an unbounded exponent where ψ or Nψ/2 passes DBL_MAX, where
+# Rust took the sine of ∞. The values are validate.py's model's.
+fn cyrius_array_factor_edges(): i64 {
+    test_group("cyrius_array_factor_edges");
+    var e300: f64 = _bj_from_bits(0x7E37E43C8800759C);
+    var e200: f64 = _bj_from_bits(0x6974E718D7D7625A);
+    var e20: f64 = 100000000000000000000.0;
+    var a1: f64 = bj_linear_array_factor(4, e20, e300, 0.0, 1.5707963267948966);
+    var w1: f64 = _bj_from_bits(0x3FD11D489315FC55);
+    assert(a1 == w1, "kd = 10³²⁰ past DBL_MAX, ψ = kd·cos(π/2) = 6.1·10³⁰³ (Rust: NaN)");
+    var a2: f64 = bj_linear_array_factor(10000000000, 1.0, e300, 0.0, 0.0);
+    var w2: f64 = _bj_from_bits(0x3DDEF448CA9C32DF);
+    assert(a2 == w2, "N = 10¹⁰, ψ = 10³⁰⁰: Nψ/2 past DBL_MAX (Rust: NaN)");
+    var a3: f64 = bj_linear_array_factor(4, e200, e200, 0.0, 0.3);
+    var w3: f64 = _bj_from_bits(0x3FE7097F81B21D11);
+    assert(a3 == w3, "ψ = 10⁴⁰⁰·cos 0.3 past DBL_MAX, its sine by Payne–Hanek (Rust: NaN)");
+    var e308: f64 = _bj_from_bits(0x7FE1CCF385EBC8A0);
+    var a4: f64 = bj_circular_array_factor(3, 1.0, 1.0, 1.5707963267948966, 0.0, e308);
+    var w4: f64 = _bj_from_bits(0x3FC71C4EB0B58633);
+    assert(a4 == w4, "circular, β·2 = 2·10³⁰⁸ past DBL_MAX (Rust: NaN)");
+    var inf: f64 = _bj_from_bits(0x7FF0000000000000);
+    var a5: f64 = bj_linear_array_factor(4, 1.0, inf, 0.0, 0.3);
+    assert(a5 != a5, "an infinite k keeps Rust's NaN");
     return 0;
 }
 
@@ -1801,6 +1827,7 @@ fn main(): i64 {
     cyrius_stub_edges();
     cyrius_touchstone_read_edges();
     cyrius_touchstone_write_edges();
+    cyrius_array_factor_edges();
     rust_tests_d();
     cyrius_smatrix();
     cyrius_cascade_exact();

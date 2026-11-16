@@ -830,10 +830,54 @@ public fn bj_single_stub_match(z_load: f64, z0: f64, out: *f64): Result {
 
 # ── antenna arrays ──────────────────────────────────────────────────────────────────────────────────────────────
 
+# sin t rounded into binary64, for the 53-bit t = ts·2^te with an unbounded exponent (src/crmath_vx.cyr's).
+#must_use
+fn _bj_rf_sin_ux(ts: f64, te): f64 {
+    var s, e = _bj_vx_sin53(ts, te);
+    var r: f64 = _bj_k_ux_round(s, e, 0.0);
+    return r;
+}
+
+# cos t rounded into binary64, for the 53-bit t = ts·2^te with an unbounded exponent (src/crmath_vx.cyr's).
+#must_use
+fn _bj_rf_cos_ux(ts: f64, te): f64 {
+    var s, e = _bj_vx_cos53(ts, te);
+    var r: f64 = _bj_k_ux_round(s, e, 0.0);
+    return r;
+}
+
+# The linear array factor where Rust's ψ = kd cos θ + β or Nψ/2 passed DBL_MAX, for finite inputs (ADR 0002 row 18,
+# M4 part 2d-5): the chain to 53 bits with an unbounded exponent, ψ/2 exact, the sines of ψ/2 and Nψ/2 by
+# src/crmath_vx.cyr (Payne–Hanek past DBL_MAX: |Nψ/2| < 2^2112), then Rust's 10⁻¹⁵ test and quotient on their
+# correctly rounded values. n is N as a double, ct Rust's cos θ.
+#must_use
+fn _bj_rf_laf_ux(n: f64, spacing: f64, wavenumber: f64, beta: f64, ct: f64): f64 {
+    var ks, ke = _bj_k_ux_from(wavenumber);
+    var ds, de = _bj_k_ux_from(spacing);
+    var cs, ce = _bj_k_ux_from(ct);
+    var bs, be = _bj_k_ux_from(beta);
+    var ns, ne = _bj_k_ux_from(n);
+    var kds, kde = _bj_k_ux_mul(ks, ke, ds, de);
+    var ps, pe = _bj_k_ux_mul(kds, kde, cs, ce);
+    var qs, qe = _bj_k_ux_add(ps, pe, bs, be);
+    var hs: f64 = qs;
+    var he = qe - 1;
+    var ms, me = _bj_k_ux_mul(ns, ne, hs, he);
+    var sn: f64 = _bj_rf_sin_ux(ms, me);
+    var sh: f64 = _bj_rf_sin_ux(hs, he);
+    var ash: f64 = f64_abs(sh);
+    var lim: f64 = _BJ_RF_REL15;
+    if (ash < lim) { return 1.0; }
+    var q: f64 = sn / (n * sh);
+    var af: f64 = f64_abs(q);
+    return af;
+}
+
 # The uniform linear array factor |sin(Nψ/2)/(N sin(ψ/2))|, ψ = kd cos θ + β: n_elements elements (a usize), spacing
 # d (m), wavenumber k = 2π/λ, progressive phase β between elements (rad), observation angle θ from the array axis
 # (rad). 0 for no element, 1 for one, and 1 where |sin(ψ/2)| < 10⁻¹⁵ (the main beam and the grating lobes, by
-# L'Hôpital). Mirrors `rf::linear_array_factor`.
+# L'Hôpital). Where ψ or Nψ/2 passes DBL_MAX for finite inputs (Rust's sine of ∞, NaN), the chain runs with an
+# unbounded exponent (ADR 0002 row 18, M4 part 2d-5). Mirrors `rf::linear_array_factor`.
 #must_use
 public fn bj_linear_array_factor(n_elements, spacing: f64, wavenumber: f64, progressive_phase: f64,
   theta: f64): f64 {
@@ -844,6 +888,13 @@ public fn bj_linear_array_factor(n_elements, spacing: f64, wavenumber: f64, prog
     var half: f64 = psi / 2.0;
     var n: f64 = _bj_rf_u2f(n_elements);
     var sn: f64 = _bj_sin(n * half);
+    if (sn != sn) {
+        var fin: f64 = spacing * 0.0 + wavenumber * 0.0 + progressive_phase * 0.0 + theta * 0.0;
+        if (fin == 0.0) {
+            var e: f64 = _bj_rf_laf_ux(n, spacing, wavenumber, progressive_phase, ct);
+            return e;
+        }
+    }
     var sh: f64 = _bj_sin(half);
     var ash: f64 = f64_abs(sh);
     var lim: f64 = _BJ_RF_REL15;
@@ -870,9 +921,47 @@ public fn bj_planar_array_factor(nx, ny, dx: f64, dy: f64, wavenumber: f64, beta
     return af;
 }
 
+# The circular array factor where a Rust ψₙ passed DBL_MAX, for finite inputs (ADR 0002 row 18, M4 part 2d-5): each
+# ψₙ = ((ka)·sin θ)·cos(φ − φₙ) + β·n to 53 bits with an unbounded exponent, its cosine and sine by src/crmath_vx.cyr
+# rounded into binary64, then Rust's sums, root and quotient.
+#must_use
+fn _bj_rf_caf_ux(n_elements, radius: f64, wavenumber: f64, theta: f64, phi: f64, beta: f64): f64 {
+    var n: f64 = _bj_rf_u2f(n_elements);
+    var ks, ke = _bj_k_ux_from(wavenumber);
+    var as0, ae = _bj_k_ux_from(radius);
+    var st: f64 = _bj_sin(theta);
+    var ss, se = _bj_k_ux_from(st);
+    var kas, kae = _bj_k_ux_mul(ks, ke, as0, ae);
+    var ws, we = _bj_k_ux_mul(kas, kae, ss, se);
+    var bs, be = _bj_k_ux_from(beta);
+    var sr: f64 = 0.0;
+    var si: f64 = 0.0;
+    var two_pi: f64 = 2.0 * _BJ_PI;
+    var i = 0;
+    while (i != n_elements) {
+        var fi: f64 = _bj_rf_u2f(i);
+        var phi_n: f64 = two_pi * fi / n;
+        var cd: f64 = _bj_cos(phi - phi_n);
+        var cs, ce = _bj_k_ux_from(cd);
+        var fs, fe = _bj_k_ux_from(fi);
+        var ps, pe = _bj_k_ux_mul(ws, we, cs, ce);
+        var qs, qe = _bj_k_ux_mul(bs, be, fs, fe);
+        var ts, te = _bj_k_ux_add(ps, pe, qs, qe);
+        var c: f64 = _bj_rf_cos_ux(ts, te);
+        var s: f64 = _bj_rf_sin_ux(ts, te);
+        sr = sr + c;
+        si = si + s;
+        i = i + 1;
+    }
+    var m: f64 = f64_sqrt(sr * sr + si * si);
+    var af: f64 = m / n;
+    return af;
+}
+
 # The uniform circular array factor |Σₙ exp(j(ka sin θ cos(φ − φₙ) + nβ))|/N: n_elements elements (a usize) at
 # φₙ = 2πn/N on a circle of radius a (m), wavenumber k, observation angles θ and φ (rad), progressive phase β (rad).
-# 0 for no element. Mirrors `rf::circular_array_factor`.
+# 0 for no element. Where a ψₙ passes DBL_MAX for finite inputs (Rust's cosine and sine of ∞, NaN), the chain runs
+# with an unbounded exponent (ADR 0002 row 18, M4 part 2d-5). Mirrors `rf::circular_array_factor`.
 #must_use
 public fn bj_circular_array_factor(n_elements, radius: f64, wavenumber: f64, theta: f64, phi: f64,
   progressive_phase: f64): f64 {
@@ -892,6 +981,14 @@ public fn bj_circular_array_factor(n_elements, radius: f64, wavenumber: f64, the
         sr = sr + c;
         si = si + s;
         i = i + 1;
+    }
+    var t: f64 = sr + si;
+    if (t != t) {
+        var fin: f64 = radius * 0.0 + wavenumber * 0.0 + theta * 0.0 + phi * 0.0 + progressive_phase * 0.0;
+        if (fin == 0.0) {
+            var e: f64 = _bj_rf_caf_ux(n_elements, radius, wavenumber, theta, phi, progressive_phase);
+            return e;
+        }
     }
     var m: f64 = f64_sqrt(sr * sr + si * si);
     var af: f64 = m / n;
