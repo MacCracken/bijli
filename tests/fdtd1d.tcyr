@@ -465,6 +465,59 @@ fn main() {
       "a 10⁻³⁰⁵ pulse: c_h·E₁₀ subnormal, rounded once (1.3272093639965355e-308; Rust's 1.327209363996536e-308)");
     assert(at(u2.e_field, 9) == _bj_from_bits(0x7c16c5c52536cb), "E₉ after it (2.500000000000108e-306; Rust's …109)");
     BjFdtd1d_free(&u2);
+    # M5 part 2d-3: a product of nonzero factors that rounds to −0, on a +0 field, is −0 (the exact sum's sign).
+    var u3: BjFdtd1d;
+    var tu3, vu3 = BjFdtd1d_new(20, 0.001, &u3);
+    u3.add_source(10, _bj_from_bits(1));
+    u3.step_once();
+    assert(_bj_bits(at(u3.h_field, 10)) == 0x8000000000000000 && _bj_bits(at(u3.h_field, 9)) == 0,
+      "2^-1074 at cell 10: H₁₀ = +0 + c_h·(0 − 2^-1074) = −0 (Rust's +0 + −0 = +0), H₉ = +0");
+    BjFdtd1d_free(&u3);
+
+    # The rule's zero products (M5 part 2d-3, src/crmath_edge.cyr): a product of nonzero factors that rounds to ±0 still
+    # moves d + k·(a − b) when it is −0 on a +0 field, or exactly ±2^-1075 at 53 bits against an odd field below
+    # 2^-1021 (a tie at the 2^-1074 grid), in the packed scan and the scalar tail alike.
+    test_group("cyrius_cell_rule");
+    var z1: f64 = _bj_from_bits(1);
+    var z2: f64 = _bj_from_bits(2);
+    var z3: f64 = _bj_from_bits(3);
+    var c1: f64 = _bj_e_cell_one(z1, 0.5, z1, 0.0);
+    assert(_bj_bits(c1) == 2, "2^-1074 + ½·2^-1074: the tie to even, 2^-1073 (Rust's product 0, so 2^-1074)");
+    var c2: f64 = _bj_e_cell_one(0.0, 0.5, 0.0, z1);
+    assert(_bj_bits(c2) == 0x8000000000000000, "+0 + ½·(0 − 2^-1074): −0 (Rust's +0 + −0 = +0)");
+    var c3: f64 = _bj_e_cell_one(z3, 0.5, 0.0, z1);
+    assert(_bj_bits(c3) == 2, "3·2^-1074 − 2^-1075: the tie to even, 2·2^-1074 (Rust's 3·2^-1074)");
+    var c4: f64 = _bj_e_cell_one(z2, 0.5, z1, 0.0);
+    assert(_bj_bits(c4) == 2, "2·2^-1074 + 2^-1075: the tie stays at the even 2·2^-1074, as Rust's");
+    var rd: f64[9];
+    var ra: f64[9];
+    var rb: f64[9];
+    var rw: f64[9];
+    var rk: f64[9];
+    for (var ri = 0; ri < 9; ri = ri + 1) {
+        rd[ri] = 0.0;
+        ra[ri] = 0.0;
+        rb[ri] = 0.0;
+        rk[ri] = 0.5;
+    }
+    for (var rs = 0; rs < 2; rs = rs + 1) {
+        rd[0] = z1;
+        ra[0] = z1;
+        rb[1] = z1;
+        rd[2] = z3;
+        rb[2] = z1;
+        rd[3] = 1.0;
+        ra[3] = 1.0;
+        rb[3] = 0.5;
+        rd[8] = z1;
+        ra[8] = z1;
+        rd[1] = 0.0;
+        _bj_e_cell_row(&rd, &rk, rs * 8, &ra, &rb, &rw, 9);
+        var rok = 0;
+        if (_bj_bits(rd[0]) == 2 && _bj_bits(rd[1]) == 0x8000000000000000 && _bj_bits(rd[2]) == 2) { rok = 1; }
+        if (rd[3] != 1.25 || _bj_bits(rd[4]) != 0 || _bj_bits(rd[7]) != 0 || _bj_bits(rd[8]) != 2) { rok = 0; }
+        assert(rok == 1, "a row of nine (eight packed, one in the tail), one coefficient and a row of them: the same");
+    }
 
     # ADR 0002 rows 18 and 40 (M5 part 2d-2b): the Mur coefficient, the energy and the source at their range edges.
     # The expectations are validate.py's model of the port.

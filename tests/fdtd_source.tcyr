@@ -544,6 +544,37 @@ fn main() {
     var nrsw: f64 = -rsw;
     assert(rs == nrsw, "u² = 730: e^-730 subnormal times −1459, rounded once (Rust's −1.3461193976e-314)");
 
+    # ADR 0002 row 18 (M5 part 2d-3): a cell whose update d + k·(a − b) leaves the normal range runs it with an
+    # unbounded exponent, rounded once (the 1D grid's rule). The expectations are validate.py's model of the port.
+    test_group("cyrius_tfsf_update_edges");
+    var dx1: f64 = _bj_from_bits(0x3fd1de784a000000);
+    var dt1: f64 = _bj_from_bits(0x3e10000000000000);
+    var bh15: f64 = _bj_from_bits(0x7feab36d48e1acf0);
+    var nbh15: f64 = _bj_from_bits(0x7feab36d48e1af7e);
+    nbh15 = -nbh15;
+    var u1: BjTfsfSource;
+    var tu1, vu1 = BjTfsfSource_try_new(40, 20, dx1, dt1, &u1);
+    assert(is_ok(tu1) == 1 && u1.abc_coeff == 0.0, "c·dt = dx exactly (dx = c·2^-30): S = 1, the Mur coefficient 0");
+    u1.step(bh15);
+    u1.step(0.0);
+    assert(at(u1.inc_e, 5) == nbh15, "1.5e308 at cell 5, a step on: c_e·ΔH = −3e308, E₅ = −1.5e308 (Rust's −∞)");
+    BjTfsfSource_free(&u1);
+    var u2: BjTfsfSource;
+    var tu2, vu2 = BjTfsfSource_try_new(40, 20, dx1, dt1, &u2);
+    u2.source_cell = 1;
+    u2.step(bh15);
+    u2.step(0.0);
+    assert(at(u2.inc_e, 0) == bh15, "beside the left Mur end: E₀ = E₁ⁿ + 0·(E₁ − E₀) = 1.5e308 (Rust's 0·−∞ = NaN)");
+    assert(at(u2.inc_e, 1) == nbh15, "E₁ = −1.5e308 (Rust's −∞)");
+    BjTfsfSource_free(&u2);
+    var u3: BjTfsfSource;
+    var tu3, vu3 = BjTfsfSource_try_new(40, 20, 0.001, _bj_from_bits(0x3d7d573217b4330e), &u3);
+    u3.step(_bj_from_bits(1));
+    u3.step(0.0);
+    assert(_bj_bits(at(u3.inc_h, 5)) == 0x8000000000000000 && _bj_bits(at(u3.inc_h, 4)) == 0,
+      "2^-1074 at cell 5, S = 1/2: c_h·(0 − 2^-1074) rounds to −0, and +0 + (−tiny) is −0 (Rust's +0 + −0 = +0)");
+    BjTfsfSource_free(&u3);
+
     return assert_summary();
 }
 

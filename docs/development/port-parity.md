@@ -6092,3 +6092,58 @@ M5's 2d, the range edges (row 18), runs in bites: the pulses, the 1D grid (its s
   equal**. `fdtd1d.tcyr` passes on all three (83). The gate is clean (no warnings; execution coverage 371 of 371
   functions); validate.py 759,125 rows, 0 problems; the oracle's `--check` and clippy clean. The 1D grid's range edges
   are done (2d-2a and 2d-2b). Next: 2d-3, the TF/SF grid's updates.
+
+## 109. M5 part 2d-3: the TF/SF grid's updates at their range edges; the per-cell rule completed (2026-11-16)
+
+- **The findings**:
+  - the TF/SF auxiliary grid's updates d + k·(a − b) (H from E, E from H, both Mur ends) ran Rust's three roundings at
+    any range, as the 1D grid's did before part 2d-2a. On a grid where c·dt = dx exactly (dx = c·2^-30, so S = 1 and the
+    Mur coefficient is 0), a drive of 1.5·10³⁰⁸ made c_e·ΔH = −3·10³⁰⁸ overflow a step later, so E₅ was −∞ for
+    −1.5000000000001305·10³⁰⁸; driven beside the left Mur end, E₀ = E₁ⁿ + 0·(E₁ − E₀) was 0·(−∞) = NaN for 1.5·10³⁰⁸;
+  - part 2d-2a's marker (the product ±∞, NaN or a nonzero subnormal) missed a product of nonzero factors that rounds to
+    ±0. That still moves RN(d + p) in two cases: −0 against a +0 field (the exact sum, a tiny negative, rounds to −0,
+    where Rust's +0 + −0 is +0), and a 53-bit product of exactly ±2^-1075 against a field below 2^-1021 with an odd
+    last bit (a tie at the 2^-1074 grid: 2^-1074 + ½·2^-1074 is 2^-1073, where Rust's product 0 left 2^-1074). The
+    first arises at any subnormal wavefront: a 1D source of 2^-1074 left 88 cells of 10 golden rows at +0 for −0 (H₁₀
+    after one step, for one), and the TF/SF grid's least-subnormal drive did the same. No golden row reaches the tie;
+    the tests pin it.
+- **ADR 0002 row 18, amended** (`src/crmath_edge.cyr`, `src/fdtd1d.cyr`, `src/fdtd_source.cyr`): the rule's third use
+  (the 1D grid's rows and Mur ends, now the TF/SF grid's) moves into the internals file: `_bj_e_cell_row` runs a row on
+  the packed verbs with a coefficient row (stride 8, `f64v_mul`) or one coefficient (stride 0, `f64v_scale`), its scan
+  `_bj_e_cell_fix` reruns each marked cell (`_bj_e_cell_at`, `_bj_e_cell`), and `_bj_e_cell_one` is one update (the Mur
+  ends and the scalar tail). The marker now also takes −0, and +0 against a nonzero field of at most 2^-1021 (one load
+  and one shift-and-compare on a zero product; ±2^-1021 itself is one more than the rule needs, and its rerun is Rust's
+  value). The TF/SF step takes it on both rows and both Mur ends; the soft source's x + v is one rounding already.
+- **validate.py**: `fd_cell18` is now the rule itself, not the port's marker: for finite operands Rust's float chain
+  where its product is normal or a zero from an exact zero (k = 0 or a = b), and the chain on Fractions everywhere else;
+  `Tf.step` takes it under row 18. The trajectory rows' row-18 note reads "the range edge" (it said "the pulse's").
+- **The grid**: 544 TF/SF scenario rows appended to `fdtd.tsv` (106,714; 38.2 MB, under the 48 MiB cap): drives of
+  9·10³⁰⁷ to DBL_MAX at S = 1 (the exact grid above), 0.9 and ½, at the default source cell and beside either Mur end;
+  seven subnormal or near-DBL_MIN drives (±2^-1074, 10⁻³¹⁰, DBL_MIN, 3·10⁻³⁰⁸, ±10⁻³⁰⁵) on the same; 10⁻³⁰⁵ and
+  10⁻³⁰⁷ pulses decaying over 3,000 steps on 200 cells; Courant numbers of 3·10⁻³⁰⁷ down to 1.5·10⁻³¹⁵, where c_h (and
+  at the least dt c_e too) is subnormal; dx = 10³⁰⁰ against dt = 10⁻³⁰⁰ (both coefficients 0, the Mur coefficient −1);
+  and 12 seeded scenarios of three drives from 10⁻³²³ to DBL_MAX. A long undriven run is one `Pulse` op:
+  gaussian_pulse(j, 10¹⁰, 1) = e^{−10²⁰} = +0, what step(0.0) adds (`tf_quiet_new`).
+- **The mapping**: **216 TF/SF trajectories** to row 18 (212 of the new rows, and 4 of part 1b's: its 10⁻³⁰⁰ and
+  least-subnormal drives), 202 new rows to row 13 and 96 to row 40 where only those change them, 34 equal to Rust's;
+  and 10 1D trajectories changed by the −0 cells (9 named row 13 before, now row 18; 120 1D trajectories in all), all
+  passing.
+- **Tests**: `tests/fdtd_source.tcyr`'s `cyrius_tfsf_update_edges` (5 assertions, 78 in all): E₅ and the Mur end above,
+  and the least-subnormal drive's H₅ = −0; `tests/fdtd1d.tcyr`'s `cyrius_update_edges` gains the 1D −0 (H₁₀), and
+  `cyrius_cell_rule` (6 assertions, 90 in all) pins the zero products on `_bj_e_cell_one` (the tie up, the tie down, −0,
+  a tie that stays) and on a nine-cell `_bj_e_cell_row`, packed and tail, with one coefficient and a row of them.
+- **Benchmarks**: the scan is the user's answer's cost, now on the TF/SF step. The interleaved A/B against HEAD
+  (three rounds: the first at load 1.2 to 3.3; the second's new run disturbed, every row 2–4× slower, and the third at
+  load 6.4 to 8.2, both by another session's Cyrius compiler test suite) gave `fdtd/tfsf_step_200` 0.89–1.18 →
+  1.79–2.02 µs and `fdtd/run_100_steps_500_cells` 542–580 → 582–610 µs; the first round left every other row
+  unchanged (median ratio 1.03). A focused interleaved A/B of the four step rows (three rounds, load 1.7 to 1.8):
+  `fdtd/tfsf_step_200` 842–925 ns → 1.70–1.75 µs (about 1.9×), `fdtd/run_100_steps_500_cells` 546–567 → 566–659 µs,
+  and the 1D steps no slower (`fdtd/step_1000_cells` 7.67–7.85 → 6.07–7.94 µs, `fdtd/step_100_cells` 812–1,018 →
+  724–753 ns). The zero path was tightened once in the bite: a first scan that held a flag in a local and tested a zero
+  product's field with two compares made the mostly-zero `run` grid 1.36–1.40× HEAD's; the marker's d test as one
+  shift-and-compare, and the rerun moved into `_bj_e_cell_at`, brought it to the numbers above.
+- **Result, every target** (x86_64 ELF, x86_64 PE, aarch64): **18 modules, 0 failing; 641,011 ok, 0 failed, 0
+  measured, 0 pending, 118,658 accepted (ADR 01: 40,366; ADR 0002: 78,292)** over 759,669 rows; **all 475 digests
+  equal**. `fdtd1d.tcyr` (90) and `fdtd_source.tcyr` (78) pass on all three. The gate is clean (no warnings; execution
+  coverage 371 of 371 functions); validate.py 759,669 rows, 0 problems; the oracle's `--check` and clippy clean. Next:
+  2d-4, the CW accumulator and the eigenmodes.

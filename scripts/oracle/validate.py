@@ -8778,13 +8778,15 @@ def fd_prod_ok(z, x, y) -> bool:
 
 
 def fd_cell18(d, k, a, b):
-    """d + k·(a − b) as the port updates a cell (ADR 0002 row 18, M5 part 2d-2a): Rust's chain, but where the product
-    k·(a − b) is ±∞, NaN or a nonzero subnormal and every operand is finite, a − b and the product to 53 bits with an
-    unbounded exponent and the sum rounded once."""
+    """d + k·(a − b) as the port updates a cell (ADR 0002 row 18, M5 parts 2d-2a and 2d-3): for finite operands, a − b
+    and the product to 53 bits with an unbounded exponent and the sum rounded once. Rust's binary64 chain is that one
+    wherever its product is normal, or 0 from an exact zero (k = 0 or a = b), so those cells take it; every other cell
+    (the product ±∞, NaN, subnormal, or ±0 from a nonzero exact product) runs on Fractions. A non-finite operand keeps
+    Rust's chain."""
     p = k * (a - b)
-    if math.isfinite(p) and (p == 0.0 or abs(p) >= 2.2250738585072014e-308):
-        return d + p
     if not (math.isfinite(d) and math.isfinite(k) and math.isfinite(a) and math.isfinite(b)):
+        return d + p
+    if math.isfinite(p) and (abs(p) >= 2.2250738585072014e-308 or (p == 0.0 and (k == 0.0 or a == b))):
         return d + p
     return ux_fin(ux_add(ux(d), ux_mul(ux(k), ux_sub(ux(a), ux(b))), r=lambda v: v))
 
@@ -9716,9 +9718,18 @@ class Tf:
     def step(self, v):
         n, e, h = self.n, self.e, self.h
         e_left, e_right = e[1], e[n - 2]
+        sc = min(max(self.sc, 1), n - 2)
+        if self.r18:                                # ADR 0002 row 18 (M5 part 2d-3): each cell at its range edge
+            for i in range(n - 1):
+                h[i] = fd_cell18(h[i], self.hc, e[i + 1], e[i])
+            e[sc] = e[sc] + v
+            for i in range(1, n - 1):
+                e[i] = fd_cell18(e[i], self.ec, h[i], h[i - 1])
+            e[0] = fd_cell18(e_left, self.abc, e[1], e[0])
+            e[n - 1] = fd_cell18(e_right, self.abc, e[n - 2], e[n - 1])
+            return
         for i in range(n - 1):
             h[i] = h[i] + self.hc * (e[i + 1] - e[i])
-        sc = min(max(self.sc, 1), n - 2)
         e[sc] = e[sc] + v
         for i in range(1, n - 1):
             e[i] = e[i] + self.ec * (h[i] - h[i - 1])
@@ -10038,7 +10049,7 @@ def fdtd_adr_rows(root: Path, path: Path) -> list:
         elif toks_same(want, fs17.eval(fn, ins)):
             out.append((fn, ins, wire(want), "17", f"oracle {outs[:120]}; ADR 0002 row 17: the Courant test exact"))
         else:
-            out.append((fn, ins, wire(want), "18", f"oracle {outs[:120]}; ADR 0002 row 18: the pulse's range edge"))
+            out.append((fn, ins, wire(want), "18", f"oracle {outs[:120]}; ADR 0002 row 18: the range edge"))
     if FD_MUR_SEEN:
         worst = max(FD_MUR_SEEN.values())
         print(f"     fdtd: the 1D Mur coefficient's cancellation-free form (ADR 0002 row 40) on {len(FD_MUR_SEEN)} "

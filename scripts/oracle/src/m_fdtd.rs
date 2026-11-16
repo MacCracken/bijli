@@ -2034,6 +2034,81 @@ fn emit_2d2b(r: &mut Rows) {
     }
 }
 
+// ── part 2d-3: the TF/SF grid's updates at their range edges (ADR 0002 row 18) ──────────────────────────────────
+
+impl Rows {
+    /// A TF/SF scenario (try_new): `setup`, then a frame after each of `quiet` undriven steps counted from it, skipping
+    /// a frame whose (function, inputs) an earlier part emitted. An undriven step is `TfOp::Pulse`'s
+    /// gaussian_pulse(j, 10¹⁰, 1) = e^{−10²⁰}, the +0 that step(0.0) adds, so a long run stays one short op.
+    fn tf_quiet_new(&mut self, g: (usize, usize, f64, f64), setup: &[TfOp], quiet: &[usize]) {
+        let (nx, bx, dx, dt) = g;
+        let mut sc = TfScript::new(true, nx, bx, dx, dt);
+        for &op in setup {
+            sc.apply(op);
+        }
+        let mut at = 0;
+        for &q in quiet {
+            if q > at {
+                sc.apply(TfOp::Pulse(q - at, 0, 1.0, 1e10, 1.0));
+            }
+            at = q;
+            self.tf_new("TfsfSource::step", &sc);
+        }
+    }
+}
+
+/// TF/SF scripts whose cell updates d + k·(a − b) leave the normal range (the port reruns those cells with an unbounded
+/// exponent, ADR 0002 row 18, the 1D grid's rule): drives near DBL_MAX that leave opposite fields side by side (at
+/// S = 1 on a grid where c·dt = dx exactly, so the Mur coefficient is 0 and Rust's 0·∞ gave NaN, at S = 0.9 and at
+/// S = 1/2), at the default source cell and beside either Mur end; subnormal and near-DBL_MIN drives; pulses of 10⁻³⁰⁵
+/// and 10⁻³⁰⁷ decaying through the subnormals over 3,000 steps; Courant numbers so small that c_h, or c_e too, is
+/// subnormal; a dx of 10³⁰⁰ against a dt of 10⁻³⁰⁰ (both coefficients 0, the Mur coefficient −1); and seeded drives
+/// from 10⁻³²³ to DBL_MAX.
+fn emit_2d3(r: &mut Rows) {
+    let c = bijli::field::SPEED_OF_LIGHT;
+    let p30 = 2f64.powi(-30);
+    let grids = [(40, 20, c * p30, p30), (40, 20, 1e-3, 0.9e-3 / c), (40, 20, 1e-3, 0.5e-3 / c)];
+    let tiny = [f64::from_bits(1), -f64::from_bits(1), 1e-310, 2.2250738585072014e-308, 3e-308, 1e-305, -1e-305];
+    for g in grids {
+        for at in [None, Some(1), Some(38)] {
+            let place: Vec<TfOp> = at.map(TfOp::SetSource).into_iter().collect();
+            for v in [1.5e308, f64::MAX, 1e308, 9e307] {
+                let setup = [place.clone(), vec![TfOp::Step(v)]].concat();
+                r.tf_quiet_new(g, &setup, &[0, 1, 2, 4, 19]);
+            }
+            for v in tiny {
+                let setup = [place.clone(), vec![TfOp::Step(v)]].concat();
+                r.tf_quiet_new(g, &setup, &[0, 1, 4, 99]);
+            }
+        }
+    }
+    for g in [(200, 100, 1e-3, 0.5e-3 / c), (200, 100, 1e-3, 0.9e-3 / c)] {
+        for v in [1e-305, 1e-307] {
+            r.tf_quiet_new(g, &[TfOp::Step(v)], &[0, 9, 99, 999, 2999]);
+        }
+    }
+    for dt in [1e-315, 1e-318, f64::from_bits(1)] {
+        for v in [1.0, 1e300, -1e-300] {
+            r.tf_quiet_new((40, 20, 1.0, dt), &[TfOp::Step(v)], &[0, 1, 9, 99]);
+        }
+    }
+    for at in [1, 38] {
+        r.tf_quiet_new((40, 20, 1e300, 1e-300), &[TfOp::SetSource(at), TfOp::Step(f64::MAX)], &[0, 1, 2, 9]);
+    }
+    let mut rng = Rng::new(0x2d3_7f5f);
+    for _ in 0..12 {
+        let g = match rng.int(0, 3) {
+            0..=2 => grids[usize::try_from(rng.int(0, 2)).unwrap_or(0)],
+            _ => (40, 20, 1.0, 1e-315),
+        };
+        let mut setup = vec![TfOp::SetSource(usize::try_from(rng.int(1, 38)).unwrap_or(1))];
+        for _ in 0..3 {
+            setup.push(TfOp::Step(rng.signed_log_uniform(-323.0, 308.2)));
+        }
+        r.tf_quiet_new(g, &setup, &[0, 2, 10, 50]);
+    }
+}
+
 pub fn emit() -> Module {
     let mut r = Rows { m: Module::new("fdtd"), keys: BTreeSet::new() };
     emit_1a(&mut r);
@@ -2052,5 +2127,6 @@ pub fn emit() -> Module {
     emit_2d1(&mut r);
     emit_2d2a(&mut r);
     emit_2d2b(&mut r);
+    emit_2d3(&mut r);
     r.m
 }

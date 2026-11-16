@@ -1,4 +1,4 @@
-# Handoff: the Cyrius port, mid-M5 Part 2 (2026-11-16)
+# Handoff: the Cyrius port, mid-M5 Part 2 (2026-11-16, after 2d-3)
 
 For the next agent picking up the port. **Read first:** `CLAUDE.md` (the rules), [`state.md`](state.md) (live state),
 [`bijli-port-plan.md`](bijli-port-plan.md) (§0.1 holds the user's M5 Part 2 answers; the tracking table is near the
@@ -9,7 +9,8 @@ bite is done, the machinery, the scripts and the traps. Delete it once it has se
 
 ## Where it stands
 
-- **Committed through `c7f86f5`** ("m5 2d-2b done"); the tree was clean when this was written.
+- **Committed through `c7f86f5`** ("m5 2d-2b done"); 2d-3 is in the working tree for the user to commit ("m5 2d-3
+  done").
 - **M5 Part 1 is done** (§94–§99): the 1D grid, the pulses and TF/SF, the media, the utilities, NF2FF's phasor form,
   their JSON.
 - **M5 Part 2, the range-edge review**, runs on the user's answers of 2026-11-15 (plan §0.1). Done:
@@ -22,34 +23,34 @@ bite is done, the machinery, the scripts and the traps. Delete it once it has se
   - 2d-1, the pulses' range edges (row 18, §106);
   - 2d-2a, the 1D grid's per-cell updates at their range edges (the user's answer; row 18, §107);
   - 2d-2b, the 1D Mur coefficient outside its band and its band at every scale, `total_energy`, `run`'s source
-    (rows 18 and 40, §108).
-- **Numbers at `c7f86f5`**: 18 modules, 640,981 ok, 0 failed, 118,144 accepted (ADR 01: 40,366; ADR 0002: 77,778)
-  over 759,125 rows; 475 digests equal on x86_64 ELF, x86_64 PE and aarch64. Ledger 691 ported, 9 n/a, 158 pending of
+    (rows 18 and 40, §108);
+  - 2d-3, the TF/SF grid's updates on the per-cell rule, which moved into `src/crmath_edge.cyr` and was completed for
+    products of nonzero factors that round to ±0 (−0 on a +0 field; a ±2^-1075 tie against an odd field below
+    2^-1021): 10 1D rows changed with it (row 18, §109).
+- **Numbers after 2d-3**: 18 modules, 641,011 ok, 0 failed, 118,658 accepted (ADR 01: 40,366; ADR 0002: 78,292)
+  over 759,669 rows; 475 digests equal on x86_64 ELF, x86_64 PE and aarch64. Ledger 691 ported, 9 n/a, 158 pending of
   858; API snapshot 2,116; benches 73 of 80 twinned; execution coverage 371 of 371.
-- **Next, 2d-3: the TF/SF grid's updates.** `BjTfsfSource_step` (`src/fdtd_source.cyr`) updates its two rows with
-  `_bj_fs_row(d, a, b, w, n, k)` (a scalar k) and its Mur ends with `abc_coeff`; give them 2d-2a's per-cell rule
-  (§107). This is the rule's **third** use, so extract it: `_bj_fd1_edge`, `_bj_fd1_cell` and `_bj_fd1_fix` live in
-  `src/fdtd1d.cyr`, a `private` file, so move them into an internals file with no marker (`src/crmath_edge.cyr`, as
-  `_bj_rf_within12` moved in 2c) and give the cell a scalar-k form. validate.py: `Tf.step` under row 18 with
-  `fd_cell18`. Grid: opposite near-DBL_MAX values side by side in the auxiliary grid (via `TfOp::Step` values), a
-  subnormal drive, a decaying run.
+- **Next, 2d-4: the CW accumulator and the eigenmodes.** `accumulate`'s per-cell sums are covered by the user's
+  answer: re += f·(c·dt) and im −= f·(s·dt), each a d + k·x update, so the shared rule's shape applies (a product row
+  scanned between the packed multiply and add; `_bj_e_cell_fix`'s marker is for d + k·(a − b), so check what a
+  one-operand product needs: there is no a − b to overflow). Its scalars: the phase ω·t (sine past DBL_MAX), c·dt and
+  s·dt subnormal. Then `amplitude`'s √(re² + im²), `dft_magnitude`'s ω·dt, ω·(1024b)·dt and its √(re² + im²)·dt, and
+  `find_eigenmodes`' ω = 2πf and Q = f₀/(bw·df).
 - **Then**:
-  - 2d-4, the CW accumulator and the eigenmodes. `accumulate`'s per-cell sums are covered by the user's answer: re +=
-    f·(c·dt) and im −= f·(s·dt). Its scalars: the phase ω·t (sine past DBL_MAX), c·dt and s·dt subnormal. Then
-    `amplitude`'s √(re² + im²), `dft_magnitude`'s ω·dt, ω·(1024b)·dt and its √(re² + im²)·dt, and `find_eigenmodes`'
-    ω = 2πf and Q = f₀/(bw·df);
   - 2d-5, the utilities: `graded`'s d_max/d_min and ratio^i out of range, `extents`' partial sums (an unchecked grid's
     mixed signs), and `fourth_order_derivative`'s 1/dx (subnormal dx), its differences and its c₁Δ + c₂Δ′;
   - 2d-6, NF2FF: k = 2πf/c (2πf past DBL_MAX), the samples' products and sums, √(k/8π)·|…| (`_bj_hypot` is already
     correctly rounded);
   - then M5 is done; M6 (`Fdtd2d`, `Fdtd3d`, the CPML, `nf2ff_2d`, `Mode2d`, `CpmlParams`) follows, under the same
     per-cell rule.
-- **Corpus size**: `fdtd.tsv` is 37.5 MB (106,170 rows) and `json.tsv` 38.7 MB, against the 48 MiB cap that
+- **Corpus size**: `fdtd.tsv` is 38.2 MB (106,714 rows) and `json.tsv` 38.7 MB, against the 48 MiB cap that
   validate.py's `too_big` guards (§81). M6 will need `fdtd.tsv` split (a second module file, e.g. by milestone), and 2d
   may: watch the size after each regeneration.
-- **A recorded cost**: the 1D step runs 3.5–3.8× HEAD's with 2d-2a's scan (§107). The user chose that fix; I had
-  estimated 1.5–2×. Cyrius 6.7.18 has no vector verb that classifies a lane (plan §10, listed as a gap). M6's
-  grids will pay the same. Don't argue the cost (memory: no cost argument); measure and record it.
+- **A recorded cost**: the 1D step runs 3.5–3.8× HEAD's with 2d-2a's scan (§107), and the TF/SF step about 2× with
+  2d-3's (§109). The user chose that fix; I had estimated 1.5–2×. Cyrius 6.7.18 has no vector verb that classifies a
+  lane (plan §10, listed as a gap). M6's grids will pay the same. Don't argue the cost (memory: no cost argument);
+  measure and record it. In a scan, every local and compare on the common path costs about a nanosecond a cell: keep
+  the common path to the fewest tests and move the rare work into a helper (§109's zero path).
 
 ## How a Part 2 bite is done
 
@@ -102,9 +103,13 @@ bite is done, the machinery, the scripts and the traps. Delete it once it has se
   `cr_verify.py`'s rat, rat_x and rat_slow families check every spec against Fractions. Add a spec there too, with an
   independent `rat_ref` formula.
 - **`_bj_e_within12(a, b, m)`** (`src/crmath_edge.cyr`): |a − b| ≤ 10⁻¹²·m exactly, shared by rf and NF2FF.
-- **The per-cell rule** (`src/fdtd1d.cyr`): `_bj_fd1_fix` scans the product row between the packed multiply and add,
-  `_bj_fd1_cell` reruns a cell, and the product slot is set to −0 so the packed add leaves the rerun value. The scan
-  takes untyped addresses on purpose (byte arithmetic).
+- **The per-cell rule** (`src/crmath_edge.cyr`, since 2d-3): `_bj_e_cell_row(d, k, ks, a, b, w, n)` runs d += k·(a − b)
+  on the packed verbs with a coefficient row (ks = 8) or one coefficient at k (ks = 0); `_bj_e_cell_fix` scans the
+  product row between the multiply and the add, `_bj_e_cell_at` reruns a marked cell (`_bj_e_cell`) and sets its
+  product slot to −0 so the packed add leaves the rerun value; `_bj_e_cell_one` is one update (Mur ends, the tail).
+  The marker: the product ±∞, NaN, a nonzero subnormal or −0, or +0 against a nonzero field of at most 2^-1021. The
+  scan takes untyped addresses on purpose (byte arithmetic). validate.py's `fd_cell18` is the rule itself (Fractions
+  wherever Rust's product isn't normal or an exact zero), not the port's marker.
 - **kimiya's unbounded exponent**:
   - `_bj_k_ux_from` comes **first**: `_bj_k_ux_mul` multiplies significands as doubles, so raw doubles overflow, or
     underflow into a "special".
@@ -225,6 +230,10 @@ exec(compile(src, "validate.py", "exec"), g)
   internals file with no marker (`src/crmath_edge.cyr`).
 - **Literals**: a small hex value stored in a local `f64` warns ("an integer stored into an f64 slot"); write
   `_bj_from_bits(0x…)`. There are no exponent literals: give long values by their bits.
+- **A narrowing must cover zero products**: 2d-2a's marker took ±∞, NaN and nonzero subnormal products and missed a
+  product of nonzero factors that rounds to ±0, which still moves d + p (−0 on a +0 field; a ±2^-1075 tie). Model the
+  rule itself in validate.py (Fractions wherever Rust's chain might differ), not the port's narrowing, or the two agree
+  on the same gap.
 - **A finiteness test that overflows**: `dt * dx * 0.0` is NaN at dx = DBL_MAX; test each operand on its own (2b's
   bug, caught by 11 failing mappings).
 - **Variables are function-wide**: a repeated `var` name in a test is a compile error.

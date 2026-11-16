@@ -3417,3 +3417,121 @@ fn _bj_e_within12(a: f64, b: f64, m: f64): i64 {
     if (top > 0.0) { return 1; }
     return 0;
 }
+
+# ── an FDTD cell's update at its range edges (M5 parts 2d-2a and 2d-3, ADR 0002 row 18, the answer of 2026-11-15) ──
+#
+# A cell's update d + k·(a − b) runs Rust's three roundings. It leaves the normal range only through its product: a − b
+# is exact when it is subnormal (Hauser) and overflows only into a product that is ±∞ or NaN. So with p = RN(k·(a − b))
+# Rust's chain is the one with an unbounded exponent wherever p is normal, or a zero from an exact zero. It can differ
+# where p is ±∞, NaN or a nonzero subnormal, or ±0 from a nonzero exact product; and of those zeros RN(d + p) moves only
+# for −0 against a +0 field (the exact sum, a tiny negative, rounds to −0, where Rust's +0 + −0 is +0), or for p of
+# exactly ±2^-1075 at 53 bits against a field below 2^-1021 with an odd last bit (a tie at the 2^-1074 grid). The
+# marker (_bj_e_cell_edge) is p ±∞, NaN, a nonzero subnormal or −0, or +0 against a nonzero field of at most 2^-1021
+# (one more than the rule needs, ±2^-1021, whose rerun is Rust's value). Such a cell, for finite operands, is
+# d + k·(a − b) with a − b and the product to 53 bits with an unbounded exponent and the sum rounded once (_bj_e_cell);
+# every other cell keeps Rust's bits. The grids (src/fdtd1d.cyr, src/fdtd_source.cyr) run a row on the packed f64v_*
+# verbs and scan its product row between the multiply and the add (_bj_e_cell_row).
+
+# A word as a *f64 (the typed return keeps the binding typed).
+#must_use
+fn _bj_e_f64p(a): *f64 {
+    return a;
+}
+
+# 1 when the product p with raw bits x, beside the field d with raw bits dw, marks a cell (the section comment): p ±∞,
+# a NaN, a nonzero subnormal or −0, or +0 against a nonzero d of at most 2^-1021 ((2·dw − 1) >> 54 is 0 exactly for
+# those words: d's exponent field 0 or 1, or d = ±2^-1021, which the rule doesn't need and the rerun leaves as Rust's).
+#must_use
+fn _bj_e_cell_edge(x, dw): i64 {
+    var ex = (x >> 52) & 2047;
+    if (ex == 2047) { return 1; }
+    if (ex != 0) { return 0; }
+    if (x != 0 || (((dw << 1) - 1) >> 54) == 0) { return 1; }
+    return 0;
+}
+
+# d + k·(a − b) with an unbounded exponent, rounded once (the section comment), or Rust's value r for a non-finite
+# operand.
+#must_use
+fn _bj_e_cell(dv: f64, kv: f64, av: f64, bv: f64, r: f64): f64 {
+    var z: f64 = dv * 0.0 + kv * 0.0 + av * 0.0 + bv * 0.0;
+    if (z != 0.0) { return r; }
+    var as, ae = _bj_k_ux_from(av);
+    var bs, be = _bj_k_ux_from(bv);
+    var ws, we = _bj_k_ux_sub(as, ae, bs, be);
+    var ks, ke = _bj_k_ux_from(kv);
+    var ps, pe = _bj_k_ux_mul(ks, ke, ws, we);
+    var ds, de = _bj_k_ux_from(dv);
+    var y: f64 = _bj_k_ux_add_f64(ds, de, ps, pe);
+    return y;
+}
+
+# One cell's d + k·(a − b): Rust's chain, or _bj_e_cell's value where the marker holds (the Mur ends' updates).
+#must_use
+fn _bj_e_cell_one(dv: f64, kv: f64, av: f64, bv: f64): f64 {
+    var p: f64 = kv * (av - bv);
+    var r: f64 = dv + p;
+    if (_bj_e_cell_edge(_bj_k_bits(p), _bj_k_bits(dv)) == 1) { r = _bj_e_cell(dv, kv, av, bv, r); }
+    return r;
+}
+
+# Cell i of the packed part, marked: d[i] := _bj_e_cell's value and w[i] := −0.0, so that the packed add after leaves
+# d[i] as it is (r + −0 = r, signed zeros included). The addresses and ks as _bj_e_cell_fix's.
+fn _bj_e_cell_at(d, k, ks, a, b, w, i) {
+    var dp: *f64 = _bj_e_f64p(d);
+    var kp: *f64 = _bj_e_f64p(k + i * ks);
+    var ap: *f64 = _bj_e_f64p(a);
+    var bp: *f64 = _bj_e_f64p(b);
+    var wp: *f64 = _bj_e_f64p(w);
+    var dv: f64 = dp[i];
+    var pv: f64 = wp[i];
+    var rr: f64 = dv + pv;
+    dp[i] = _bj_e_cell(dv, kp[0], ap[i], bp[i], rr);
+    wp[i] = -0.0;
+    return 0;
+}
+
+# The packed part's cells (m of them) whose product w[i] = k_i·(a[i] − b[i]) marks a cell beside d[i] (the section
+# comment), each rerun by _bj_e_cell_at. d, k, a, b and w are addresses; k_i is the f64 at k + i·ks (ks 8 for a row of
+# coefficients, 0 for one coefficient). The marker is inline, the scan's common path: a normal product is two tests, a
+# zero one loads d[i] and tests (2·d[i] − 1) >> 54, 0 exactly for a nonzero d of at most 2^-1021 as a word.
+fn _bj_e_cell_fix(d, k, ks, a, b, w, m) {
+    var q = w;
+    var end = w + m * 8;
+    var off = d - w;
+    while (q < end) {
+        var x = load64(q);
+        var ex = (x >> 52) & 2047;
+        if (ex == 0) {
+            if (x != 0 || (((load64(q + off) << 1) - 1) >> 54) == 0) { _bj_e_cell_at(d, k, ks, a, b, w, (q - w) / 8); }
+        } elif (ex == 2047) {
+            _bj_e_cell_at(d, k, ks, a, b, w, (q - w) / 8);
+        }
+        q = q + 8;
+    }
+    return 0;
+}
+
+# d[i] = d[i] + k_i·(a[i] − b[i]) for i < n, Rust's `*d += k * (a − b)`, k_i the f64 at k + i·ks (ks 8 for a row of
+# coefficients, 0 for one): the packed f64v_sub, then f64v_mul (a row) or f64v_scale (one), the scan and f64v_add
+# through the scratch row w on the largest multiple of 4, then a scalar tail, each cell at its range edge as the section
+# comment has it. The tail keeps the verbs to a lane multiple: at an odd count f64v_sub, f64v_mul and f64v_scale write
+# one word past their dst on 6.7.18 (probe p19; port plan §10).
+fn _bj_e_cell_row(d: *f64, k: *f64, ks, a: *f64, b: *f64, w: *f64, n) {
+    var m = n & (0 - 4);
+    var k0: f64 = 0.0;
+    if (ks == 0) { k0 = k[0]; }
+    if (m > 0) {
+        f64v_sub(w, a, b, m);
+        if (ks == 0) { f64v_scale(w, w, k0, m); }
+        else { f64v_mul(w, k, w, m); }
+        _bj_e_cell_fix(d, k, ks, a, b, w, m);
+        f64v_add(d, d, w, m);
+    }
+    for (var i = m; i < n; i = i + 1) {
+        var kv: f64 = k0;
+        if (ks != 0) { kv = k[i]; }
+        d[i] = _bj_e_cell_one(d[i], kv, a[i], b[i]);
+    }
+    return 0;
+}

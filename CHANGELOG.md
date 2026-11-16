@@ -468,6 +468,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
   band and its band form at every scale, `total_energy` and `run`'s source sample (ADR 0002 rows 18 and 40 amended,
   see Fixed). `fdtd.tsv` grows by 127 rows (106,170); `fdtd.adr.tsv` maps 51 more trajectories to row 18 and 8 to row
   40.
+- **Cyrius port, M5 part 2d-3 — the TF/SF grid's updates at their range edges** (`src/fdtd_source.cyr`,
+  `src/crmath_edge.cyr`, `src/fdtd1d.cyr`): the TF/SF grid takes the 1D grid's per-cell rule, which moves into
+  `src/crmath_edge.cyr` (`_bj_e_cell_row` and its scan, with a coefficient row or one coefficient) and is completed for
+  products that round to ±0 (ADR 0002 row 18 amended, see Fixed). validate.py's cell model is now the rule itself.
+  `fdtd.tsv` grows by 544 TF/SF scenario rows (106,714; 38.2 MB); `fdtd.adr.tsv` maps 216 TF/SF trajectories to row 18
+  and 10 1D trajectories change.
 
 ### Fixed
 
@@ -983,6 +989,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
   unbounded exponent where an intermediate leaves the range (the sine past DBL_MAX by Payne–Hanek), and the band form
   works on dt and dx scaled into range. Cost: `fdtd/run_100_steps_500_cells` 520–523 → 538–608 µs (the source's
   checks, a few calls a step) (`port-parity.md` §108).
+- **fdtd** (ADR 0002 row 18 amended, M5 part 2d-3): `TfsfSource::step` took Rust's chain at its range edges: on a grid
+  at S = 1 a drive of 1.5·10³⁰⁸ gave E = −∞ a step later for −1.5·10³⁰⁸, and beside a Mur end (its coefficient 0 at
+  S = 1) E₀ = 0·(−∞) = NaN for 1.5·10³⁰⁸. Its cells now take the 1D grid's rule. That rule (part 2d-2a) missed a
+  product of nonzero factors that rounds to ±0: −0 on a +0 field is −0 (Rust's +0 + −0 gave +0; a 2^-1074 source left
+  88 cells of 10 golden 1D rows at +0), and a product of exactly ±2^-1075 against an odd field below 2^-1021 is a tie
+  at the 2^-1074 grid; both grids now take those too. Cost: the scan on the TF/SF step, `fdtd/tfsf_step_200`
+  0.84–0.93 → 1.70–1.75 µs (about 1.9×); the zero products' field test, `fdtd/run_100_steps_500_cells` 546–567 →
+  566–659 µs (`port-parity.md` §109).
 
 ### Performance
 

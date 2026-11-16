@@ -15621,6 +15621,124 @@ fn _bj_e_within12(a: f64, b: f64, m: f64): i64 {
     return 0;
 }
 
+# ── an FDTD cell's update at its range edges (M5 parts 2d-2a and 2d-3, ADR 0002 row 18, the answer of 2026-11-15) ──
+#
+# A cell's update d + k·(a − b) runs Rust's three roundings. It leaves the normal range only through its product: a − b
+# is exact when it is subnormal (Hauser) and overflows only into a product that is ±∞ or NaN. So with p = RN(k·(a − b))
+# Rust's chain is the one with an unbounded exponent wherever p is normal, or a zero from an exact zero. It can differ
+# where p is ±∞, NaN or a nonzero subnormal, or ±0 from a nonzero exact product; and of those zeros RN(d + p) moves only
+# for −0 against a +0 field (the exact sum, a tiny negative, rounds to −0, where Rust's +0 + −0 is +0), or for p of
+# exactly ±2^-1075 at 53 bits against a field below 2^-1021 with an odd last bit (a tie at the 2^-1074 grid). The
+# marker (_bj_e_cell_edge) is p ±∞, NaN, a nonzero subnormal or −0, or +0 against a nonzero field of at most 2^-1021
+# (one more than the rule needs, ±2^-1021, whose rerun is Rust's value). Such a cell, for finite operands, is
+# d + k·(a − b) with a − b and the product to 53 bits with an unbounded exponent and the sum rounded once (_bj_e_cell);
+# every other cell keeps Rust's bits. The grids (src/fdtd1d.cyr, src/fdtd_source.cyr) run a row on the packed f64v_*
+# verbs and scan its product row between the multiply and the add (_bj_e_cell_row).
+
+# A word as a *f64 (the typed return keeps the binding typed).
+#must_use
+fn _bj_e_f64p(a): *f64 {
+    return a;
+}
+
+# 1 when the product p with raw bits x, beside the field d with raw bits dw, marks a cell (the section comment): p ±∞,
+# a NaN, a nonzero subnormal or −0, or +0 against a nonzero d of at most 2^-1021 ((2·dw − 1) >> 54 is 0 exactly for
+# those words: d's exponent field 0 or 1, or d = ±2^-1021, which the rule doesn't need and the rerun leaves as Rust's).
+#must_use
+fn _bj_e_cell_edge(x, dw): i64 {
+    var ex = (x >> 52) & 2047;
+    if (ex == 2047) { return 1; }
+    if (ex != 0) { return 0; }
+    if (x != 0 || (((dw << 1) - 1) >> 54) == 0) { return 1; }
+    return 0;
+}
+
+# d + k·(a − b) with an unbounded exponent, rounded once (the section comment), or Rust's value r for a non-finite
+# operand.
+#must_use
+fn _bj_e_cell(dv: f64, kv: f64, av: f64, bv: f64, r: f64): f64 {
+    var z: f64 = dv * 0.0 + kv * 0.0 + av * 0.0 + bv * 0.0;
+    if (z != 0.0) { return r; }
+    var as, ae = _bj_k_ux_from(av);
+    var bs, be = _bj_k_ux_from(bv);
+    var ws, we = _bj_k_ux_sub(as, ae, bs, be);
+    var ks, ke = _bj_k_ux_from(kv);
+    var ps, pe = _bj_k_ux_mul(ks, ke, ws, we);
+    var ds, de = _bj_k_ux_from(dv);
+    var y: f64 = _bj_k_ux_add_f64(ds, de, ps, pe);
+    return y;
+}
+
+# One cell's d + k·(a − b): Rust's chain, or _bj_e_cell's value where the marker holds (the Mur ends' updates).
+#must_use
+fn _bj_e_cell_one(dv: f64, kv: f64, av: f64, bv: f64): f64 {
+    var p: f64 = kv * (av - bv);
+    var r: f64 = dv + p;
+    if (_bj_e_cell_edge(_bj_k_bits(p), _bj_k_bits(dv)) == 1) { r = _bj_e_cell(dv, kv, av, bv, r); }
+    return r;
+}
+
+# Cell i of the packed part, marked: d[i] := _bj_e_cell's value and w[i] := −0.0, so that the packed add after leaves
+# d[i] as it is (r + −0 = r, signed zeros included). The addresses and ks as _bj_e_cell_fix's.
+fn _bj_e_cell_at(d, k, ks, a, b, w, i) {
+    var dp: *f64 = _bj_e_f64p(d);
+    var kp: *f64 = _bj_e_f64p(k + i * ks);
+    var ap: *f64 = _bj_e_f64p(a);
+    var bp: *f64 = _bj_e_f64p(b);
+    var wp: *f64 = _bj_e_f64p(w);
+    var dv: f64 = dp[i];
+    var pv: f64 = wp[i];
+    var rr: f64 = dv + pv;
+    dp[i] = _bj_e_cell(dv, kp[0], ap[i], bp[i], rr);
+    wp[i] = -0.0;
+    return 0;
+}
+
+# The packed part's cells (m of them) whose product w[i] = k_i·(a[i] − b[i]) marks a cell beside d[i] (the section
+# comment), each rerun by _bj_e_cell_at. d, k, a, b and w are addresses; k_i is the f64 at k + i·ks (ks 8 for a row of
+# coefficients, 0 for one coefficient). The marker is inline, the scan's common path: a normal product is two tests, a
+# zero one loads d[i] and tests (2·d[i] − 1) >> 54, 0 exactly for a nonzero d of at most 2^-1021 as a word.
+fn _bj_e_cell_fix(d, k, ks, a, b, w, m) {
+    var q = w;
+    var end = w + m * 8;
+    var off = d - w;
+    while (q < end) {
+        var x = load64(q);
+        var ex = (x >> 52) & 2047;
+        if (ex == 0) {
+            if (x != 0 || (((load64(q + off) << 1) - 1) >> 54) == 0) { _bj_e_cell_at(d, k, ks, a, b, w, (q - w) / 8); }
+        } elif (ex == 2047) {
+            _bj_e_cell_at(d, k, ks, a, b, w, (q - w) / 8);
+        }
+        q = q + 8;
+    }
+    return 0;
+}
+
+# d[i] = d[i] + k_i·(a[i] − b[i]) for i < n, Rust's `*d += k * (a − b)`, k_i the f64 at k + i·ks (ks 8 for a row of
+# coefficients, 0 for one): the packed f64v_sub, then f64v_mul (a row) or f64v_scale (one), the scan and f64v_add
+# through the scratch row w on the largest multiple of 4, then a scalar tail, each cell at its range edge as the section
+# comment has it. The tail keeps the verbs to a lane multiple: at an odd count f64v_sub, f64v_mul and f64v_scale write
+# one word past their dst on 6.7.18 (probe p19; port plan §10).
+fn _bj_e_cell_row(d: *f64, k: *f64, ks, a: *f64, b: *f64, w: *f64, n) {
+    var m = n & (0 - 4);
+    var k0: f64 = 0.0;
+    if (ks == 0) { k0 = k[0]; }
+    if (m > 0) {
+        f64v_sub(w, a, b, m);
+        if (ks == 0) { f64v_scale(w, w, k0, m); }
+        else { f64v_mul(w, k, w, m); }
+        _bj_e_cell_fix(d, k, ks, a, b, w, m);
+        f64v_add(d, d, w, m);
+    }
+    for (var i = m; i < n; i = i + 1) {
+        var kv: f64 = k0;
+        if (ks != 0) { kv = k[i]; }
+        d[i] = _bj_e_cell_one(d[i], kv, a[i], b[i]);
+    }
+    return 0;
+}
+
 # --- log.cyr ---
 
 # log.cyr — bijli's logging: Rust's `tracing` sites and `logging::init` on sakshi (port of rust-old/src/logging.rs).
@@ -30783,8 +30901,9 @@ public fn bj_try_write_touchstone(d: *BjTouchstoneData, format, sb): Result {
 # `h_field` are the arrays' addresses and `num_cells` their length, and nothing can resize them. No step allocates.
 # The Mur coefficients take a cancellation-free form where Rust's cancelled (`_bj_fd1_mur`, ADR 0002 row 40).
 # The updates run on the packed f64v_* verbs, each lane rounding Rust's three operations, so the bits are Rust's
-# (port plan §9.3, probe p10). The file is time-domain only; bijli's one harmonic convention, e^{+jωt}, is stated in
-# src/complex.cyr's header.
+# (port plan §9.3, probe p10), except where a cell's update leaves the normal range: that cell runs it with an unbounded
+# exponent (ADR 0002 row 18, src/crmath_edge.cyr's _bj_e_cell_row). The file is time-domain only; bijli's one harmonic
+# convention, e^{+jωt}, is stated in src/complex.cyr's header.
 
 private
 
@@ -30856,87 +30975,6 @@ fn _bj_fd1_coeff(dt: f64, k0: f64, dx: f64, m: f64): f64 {
 #must_use
 fn _bj_fd1_pos(x: f64): i64 {
     if (x > 0.0 && x < _BJ_FD1_INF) { return 1; }
-    return 0;
-}
-
-# ── the updates at their range edges (ADR 0002 row 18, M5 part 2d-2a, the user's answer of 2026-11-15) ────────────
-#
-# A cell's update d + k·(a − b) leaves the normal range only through its product: a − b is exact when it is subnormal
-# (Hauser) and overflows only into an infinite product, so a product that is ±∞, NaN or a nonzero subnormal marks
-# every cell whose chain differs from the unbounded one. Such a cell, for finite operands, is d + k·(a − b) with a − b
-# and the product to 53 bits with an unbounded exponent and the sum rounded once; elsewhere Rust's bits.
-
-# 1 when the double with raw bits x is ±∞, a NaN or a nonzero subnormal.
-#must_use
-fn _bj_fd1_edge(x): i64 {
-    var ex = (x >> 52) & 2047;
-    if (ex == 2047) { return 1; }
-    if (ex == 0 && (x << 1) != 0) { return 1; }
-    return 0;
-}
-
-# d + k·(a − b) with an unbounded exponent, rounded once (the section comment), or Rust's value r for a non-finite
-# operand.
-#must_use
-fn _bj_fd1_cell(dv: f64, kv: f64, av: f64, bv: f64, r: f64): f64 {
-    var z: f64 = dv * 0.0 + kv * 0.0 + av * 0.0 + bv * 0.0;
-    if (z != 0.0) { return r; }
-    var as, ae = _bj_k_ux_from(av);
-    var bs, be = _bj_k_ux_from(bv);
-    var ws, we = _bj_k_ux_sub(as, ae, bs, be);
-    var ks, ke = _bj_k_ux_from(kv);
-    var ps, pe = _bj_k_ux_mul(ks, ke, ws, we);
-    var ds, de = _bj_k_ux_from(dv);
-    var y: f64 = _bj_k_ux_add_f64(ds, de, ps, pe);
-    return y;
-}
-
-# The packed part's cells (m of them) whose product w[i] = k[i]·(a[i] − b[i]) is an edge: d[i] := _bj_fd1_cell's value
-# and w[i] := −0.0, so that the packed add after leaves d[i] as it is (r + −0 = r, signed zeros included). d, k, a, b
-# and w are the rows' addresses; the edge test is inline, the scan's common path.
-fn _bj_fd1_fix(d, k, a, b, w, m) {
-    var q = w;
-    var end = w + m * 8;
-    while (q < end) {
-        var x = load64(q);
-        var ex = (x >> 52) & 2047;
-        if (ex == 2047 || (ex == 0 && (x << 1) != 0)) {
-            var i = (q - w) / 8;
-            var dp: *f64 = _bj_fd1_f64p(d);
-            var kp: *f64 = _bj_fd1_f64p(k);
-            var ap: *f64 = _bj_fd1_f64p(a);
-            var bp: *f64 = _bj_fd1_f64p(b);
-            var wp: *f64 = _bj_fd1_f64p(w);
-            var dv: f64 = dp[i];
-            var pv: f64 = wp[i];
-            var rr: f64 = dv + pv;
-            dp[i] = _bj_fd1_cell(dv, kp[i], ap[i], bp[i], rr);
-            wp[i] = -0.0;
-        }
-        q = q + 8;
-    }
-    return 0;
-}
-
-# d[i] = d[i] + k[i]·(a[i] − b[i]) for i < n, Rust's `*d += k * (a − b)`: the packed f64v_* verbs through the scratch
-# row w on the largest multiple of 4, then a scalar tail, each cell at its range edge as the section comment has it.
-# The tail keeps the verbs to a lane multiple: at an odd count f64v_sub and f64v_mul write one word past their dst on
-# 6.7.18 (probe p19; port plan §10).
-fn _bj_fd1_row(d: *f64, k: *f64, a: *f64, b: *f64, w: *f64, n) {
-    var m = n & (0 - 4);
-    if (m > 0) {
-        f64v_sub(w, a, b, m);
-        f64v_mul(w, k, w, m);
-        _bj_fd1_fix(d, k, a, b, w, m);
-        f64v_add(d, d, w, m);
-    }
-    for (var i = m; i < n; i = i + 1) {
-        var v: f64 = k[i] * (a[i] - b[i]);
-        var dv: f64 = d[i];
-        var r: f64 = dv + v;
-        if (_bj_fd1_edge(_bj_k_bits(v)) == 1) { r = _bj_fd1_cell(dv, k[i], a[i], b[i], r); }
-        d[i] = r;
-    }
     return 0;
 }
 
@@ -31285,7 +31323,8 @@ impl BjFdtd1d {
 
     # Advances one time step: H from E, then the interior E from H, then the Mur boundaries,
     # E₀ⁿ⁺¹ = E₁ⁿ + k (E₁ⁿ⁺¹ − E₀ⁿ) and its mirror at the right end (Mur 1981; Taflove & Hagness, ch. 7); a cell whose
-    # update leaves the normal range runs it with an unbounded exponent (ADR 0002 row 18). Mirrors `Fdtd1d::step_once`.
+    # update leaves the normal range runs it with an unbounded exponent, rounded once (ADR 0002 row 18, M5 parts 2d-2a
+    # and 2d-3: src/crmath_edge.cyr's _bj_e_cell_row). Mirrors `Fdtd1d::step_once`.
     public fn step_once(self) {
         var n = self.num_cells;
         if (n < 2) {
@@ -31300,22 +31339,10 @@ impl BjFdtd1d {
         var e_left: f64 = e[1];
         var e_right: f64 = e[n - 2];
         # H[i] += c_h[i]·(E[i + 1] − E[i]) for i < n − 1, then E[i] += c_e[i]·(H[i] − H[i − 1]) for 0 < i < n − 1.
-        _bj_fd1_row(h, ch, e + 1, e, w, n - 1);
-        _bj_fd1_row(e + 1, ce + 1, h + 1, h, w, n - 2);
-        var kl: f64 = self.abc_left;
-        var kr: f64 = self.abc_right;
-        var a0: f64 = e[1];
-        var b0: f64 = e[0];
-        var l: f64 = kl * (a0 - b0);
-        var r0: f64 = e_left + l;
-        if (_bj_fd1_edge(_bj_k_bits(l)) == 1) { r0 = _bj_fd1_cell(e_left, kl, a0, b0, r0); }
-        e[0] = r0;
-        var a1: f64 = e[n - 2];
-        var b1: f64 = e[n - 1];
-        var r: f64 = kr * (a1 - b1);
-        var r1: f64 = e_right + r;
-        if (_bj_fd1_edge(_bj_k_bits(r)) == 1) { r1 = _bj_fd1_cell(e_right, kr, a1, b1, r1); }
-        e[n - 1] = r1;
+        _bj_e_cell_row(h, ch, 8, e + 1, e, w, n - 1);
+        _bj_e_cell_row(e + 1, ce + 1, 8, h + 1, h, w, n - 2);
+        e[0] = _bj_e_cell_one(e_left, self.abc_left, e[1], e[0]);
+        e[n - 1] = _bj_e_cell_one(e_right, self.abc_right, e[n - 2], e[n - 1]);
         self.step = self.step + 1;
         return 0;
     }
@@ -31442,7 +31469,8 @@ impl BjFdtd1d {
 # A BjTfsfSource holds the 1D auxiliary grid that carries the incident plane wave (E_z, H_y travelling in +x), with a
 # first-order Mur boundary at each end. Its two arrays and a scratch row are one anonymous mmap, fixed at construction
 # and given back by BjTfsfSource_free (ADR 0002 row 2): `inc_e` and `inc_h` are their addresses and `nx` their length.
-# The updates run on the packed f64v_* verbs, each lane rounding Rust's three operations (port plan §9.3). Rust's
+# The updates run on the packed f64v_* verbs, each lane rounding Rust's three operations (port plan §9.3), and a cell
+# whose update leaves the normal range runs it with an unbounded exponent (ADR 0002 row 18). Rust's
 # `TfsfSource::new` clamped invalid input with a warning; here both constructors validate and return Err, as
 # `try_new` does (ADR 0002 row 3). The file is time-domain only; bijli's one harmonic convention, e^{+jωt}, is stated
 # in src/complex.cyr's header.
@@ -31687,23 +31715,6 @@ public fn bj_modulated_gaussian_pulse(t: f64, t0: f64, tau: f64, frequency: f64)
     return r;
 }
 
-# d[i] = d[i] + k·(a[i] − b[i]) for i < n, Rust's `*d += k * (a − b)` with a scalar k: the packed f64v_sub, f64v_scale
-# and f64v_add through the scratch row w on the largest multiple of 4, then a scalar tail. f64v_sub and f64v_scale write
-# one word past their dst at an odd count on 6.7.18 (probe p19; port plan §10), so the verbs keep to a lane multiple.
-fn _bj_fs_row(d: *f64, a: *f64, b: *f64, w: *f64, n, k: f64) {
-    var m = n & (0 - 4);
-    if (m > 0) {
-        f64v_sub(w, a, b, m);
-        f64v_scale(w, w, k, m);
-        f64v_add(d, d, w, m);
-    }
-    for (var i = m; i < n; i = i + 1) {
-        var v: f64 = k * (a[i] - b[i]);
-        d[i] = d[i] + v;
-    }
-    return 0;
-}
-
 # ── the TF/SF source ────────────────────────────────────────────────────────────────────────────────────────────────
 
 # A TF/SF plane-wave source: the 1D auxiliary grid of the incident wave. `inc_e` and `inc_h` are the addresses of nx
@@ -31861,32 +31872,34 @@ public fn BjTfsfSource_free(src: *BjTfsfSource): i64 {
 
 impl BjTfsfSource {
     # Advances the auxiliary grid one step: H from E, then source_value added at source_cell (clamped to 1..nx − 2,
-    # since the field is writable), then the interior E from H, then the Mur boundaries at both ends. A grid under
-    # three cells (a freed one) is left alone. Mirrors `TfsfSource::step`.
+    # since the field is writable), then the interior E from H, then the Mur boundaries at both ends. A cell whose
+    # update leaves the normal range runs it with an unbounded exponent, rounded once (ADR 0002 row 18, M5 part 2d-3:
+    # src/crmath_edge.cyr's _bj_e_cell_row, the 1D grid's rule). A grid under three cells (a freed one) is left alone.
+    # Mirrors `TfsfSource::step`.
     public fn step(self, source_value: f64) {
         var n = self.nx;
         if (n < 3) { return 0; }
         var e: *f64 = _bj_fs_f64p(self.inc_e);
         var h: *f64 = _bj_fs_f64p(self.inc_h);
-        var hc: f64 = self.h_coeff_1d;
-        var ec: f64 = self.e_coeff_1d;
+        var hc: f64[1];
+        var ec: f64[1];
+        hc[0] = self.h_coeff_1d;
+        ec[0] = self.e_coeff_1d;
         var w: *f64 = _bj_fs_f64p(self.work);
         var e_left: f64 = e[1];
         var e_right: f64 = e[n - 2];
         # H[i] += c_h·(E[i + 1] − E[i]) for i < n − 1.
-        _bj_fs_row(h, e + 1, e, w, n - 1, hc);
+        _bj_e_cell_row(h, &hc, 0, e + 1, e, w, n - 1);
         var sc = self.source_cell;
         if (sc < 0 || sc > n - 2) { sc = n - 2; }
         if (sc < 1) { sc = 1; }
         var x: f64 = e[sc];
         e[sc] = x + source_value;
         # E[i] += c_e·(H[i] − H[i − 1]) for 0 < i < n − 1.
-        _bj_fs_row(e + 1, h + 1, h, w, n - 2, ec);
+        _bj_e_cell_row(e + 1, &ec, 0, h + 1, h, w, n - 2);
         var k: f64 = self.abc_coeff;
-        var l: f64 = k * (e[1] - e[0]);
-        e[0] = e_left + l;
-        var r: f64 = k * (e[n - 2] - e[n - 1]);
-        e[n - 1] = e_right + r;
+        e[0] = _bj_e_cell_one(e_left, k, e[1], e[0]);
+        e[n - 1] = _bj_e_cell_one(e_right, k, e[n - 2], e[n - 1]);
         return 0;
     }
 

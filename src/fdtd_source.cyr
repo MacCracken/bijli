@@ -7,7 +7,8 @@
 # A BjTfsfSource holds the 1D auxiliary grid that carries the incident plane wave (E_z, H_y travelling in +x), with a
 # first-order Mur boundary at each end. Its two arrays and a scratch row are one anonymous mmap, fixed at construction
 # and given back by BjTfsfSource_free (ADR 0002 row 2): `inc_e` and `inc_h` are their addresses and `nx` their length.
-# The updates run on the packed f64v_* verbs, each lane rounding Rust's three operations (port plan §9.3). Rust's
+# The updates run on the packed f64v_* verbs, each lane rounding Rust's three operations (port plan §9.3), and a cell
+# whose update leaves the normal range runs it with an unbounded exponent (ADR 0002 row 18). Rust's
 # `TfsfSource::new` clamped invalid input with a warning; here both constructors validate and return Err, as
 # `try_new` does (ADR 0002 row 3). The file is time-domain only; bijli's one harmonic convention, e^{+jωt}, is stated
 # in src/complex.cyr's header.
@@ -252,23 +253,6 @@ public fn bj_modulated_gaussian_pulse(t: f64, t0: f64, tau: f64, frequency: f64)
     return r;
 }
 
-# d[i] = d[i] + k·(a[i] − b[i]) for i < n, Rust's `*d += k * (a − b)` with a scalar k: the packed f64v_sub, f64v_scale
-# and f64v_add through the scratch row w on the largest multiple of 4, then a scalar tail. f64v_sub and f64v_scale write
-# one word past their dst at an odd count on 6.7.18 (probe p19; port plan §10), so the verbs keep to a lane multiple.
-fn _bj_fs_row(d: *f64, a: *f64, b: *f64, w: *f64, n, k: f64) {
-    var m = n & (0 - 4);
-    if (m > 0) {
-        f64v_sub(w, a, b, m);
-        f64v_scale(w, w, k, m);
-        f64v_add(d, d, w, m);
-    }
-    for (var i = m; i < n; i = i + 1) {
-        var v: f64 = k * (a[i] - b[i]);
-        d[i] = d[i] + v;
-    }
-    return 0;
-}
-
 # ── the TF/SF source ────────────────────────────────────────────────────────────────────────────────────────────────
 
 # A TF/SF plane-wave source: the 1D auxiliary grid of the incident wave. `inc_e` and `inc_h` are the addresses of nx
@@ -426,32 +410,34 @@ public fn BjTfsfSource_free(src: *BjTfsfSource): i64 {
 
 impl BjTfsfSource {
     # Advances the auxiliary grid one step: H from E, then source_value added at source_cell (clamped to 1..nx − 2,
-    # since the field is writable), then the interior E from H, then the Mur boundaries at both ends. A grid under
-    # three cells (a freed one) is left alone. Mirrors `TfsfSource::step`.
+    # since the field is writable), then the interior E from H, then the Mur boundaries at both ends. A cell whose
+    # update leaves the normal range runs it with an unbounded exponent, rounded once (ADR 0002 row 18, M5 part 2d-3:
+    # src/crmath_edge.cyr's _bj_e_cell_row, the 1D grid's rule). A grid under three cells (a freed one) is left alone.
+    # Mirrors `TfsfSource::step`.
     public fn step(self, source_value: f64) {
         var n = self.nx;
         if (n < 3) { return 0; }
         var e: *f64 = _bj_fs_f64p(self.inc_e);
         var h: *f64 = _bj_fs_f64p(self.inc_h);
-        var hc: f64 = self.h_coeff_1d;
-        var ec: f64 = self.e_coeff_1d;
+        var hc: f64[1];
+        var ec: f64[1];
+        hc[0] = self.h_coeff_1d;
+        ec[0] = self.e_coeff_1d;
         var w: *f64 = _bj_fs_f64p(self.work);
         var e_left: f64 = e[1];
         var e_right: f64 = e[n - 2];
         # H[i] += c_h·(E[i + 1] − E[i]) for i < n − 1.
-        _bj_fs_row(h, e + 1, e, w, n - 1, hc);
+        _bj_e_cell_row(h, &hc, 0, e + 1, e, w, n - 1);
         var sc = self.source_cell;
         if (sc < 0 || sc > n - 2) { sc = n - 2; }
         if (sc < 1) { sc = 1; }
         var x: f64 = e[sc];
         e[sc] = x + source_value;
         # E[i] += c_e·(H[i] − H[i − 1]) for 0 < i < n − 1.
-        _bj_fs_row(e + 1, h + 1, h, w, n - 2, ec);
+        _bj_e_cell_row(e + 1, &ec, 0, h + 1, h, w, n - 2);
         var k: f64 = self.abc_coeff;
-        var l: f64 = k * (e[1] - e[0]);
-        e[0] = e_left + l;
-        var r: f64 = k * (e[n - 2] - e[n - 1]);
-        e[n - 1] = e_right + r;
+        e[0] = _bj_e_cell_one(e_left, k, e[1], e[0]);
+        e[n - 1] = _bj_e_cell_one(e_right, k, e[n - 2], e[n - 1]);
         return 0;
     }
 
