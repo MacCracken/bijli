@@ -418,6 +418,21 @@ fn main() {
     var l0a, l0b = l0.update_coefficients(0.000000000001, 0.0001);
     assert(l0a != l0a && l0b != l0b, "ε_r = 0: Rust's formula divides by 0, so its NaNs stay");
 
+    # ADR 0002 row 41 (M5 part 2a-2): the subpixel means rounded once from their exact values.
+    test_group("cyrius_subpixel_rounded_once");
+    var su, sv = bj_subpixel_permittivity_parallel(3.0, 3.0, 0.2);
+    assert(ok_f(su, sv) == 3.0, "a uniform cell, parallel: 3 (Rust's 3.0000000000000004)");
+    var sq: f64 = bj_subpixel_permittivity_perpendicular(12.25, 12.25, 0.1);
+    assert(sq == 12.25, "a uniform cell, perpendicular: 12.25 (Rust's 12.249999999999998)");
+    var mx: f64 = _bj_from_bits(0x7FEFFFFFFFFFFFFF);
+    var sm: f64 = bj_subpixel_permittivity_perpendicular(mx, mx, 0.5);
+    assert(sm == mx, "DBL_MAX cells: DBL_MAX (Rust's 1/(f/ε₂ + (1 − f)/ε₁) overflowed to ∞)");
+    var sp2, sv2 = bj_subpixel_permittivity_parallel(mx, mx, 0.3);
+    assert(ok_f(sp2, sv2) == mx, "DBL_MAX cells, parallel: DBL_MAX (Rust's 1.7976931348623155e308)");
+    var tiny: f64 = _bj_from_bits(1);
+    var st: f64 = bj_subpixel_permittivity_perpendicular(tiny, tiny, 0.5);
+    assert(st == tiny, "the least subnormal: itself (Rust's 0: 0.5/ε overflowed)");
+
     return assert_summary();
 }
 

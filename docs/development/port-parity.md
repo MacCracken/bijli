@@ -5796,3 +5796,40 @@ exact thresholds, 2d the range edges, the per-cell step updates among them (the 
   `try_new`, `new` and `step` (their new rows and values). `fdtd1d.tcyr` (73) and `fdtd_source.tcyr` (65) pass on all
   three. The gate is clean (no warnings; execution coverage 371 of 371 functions); validate.py 748,314 rows, 0
   problems; the oracle's `--check` and clippy clean. Next: 2a-2, the subpixel means.
+
+## 102. M5 part 2a-2: the subpixel means rounded once (2026-11-15)
+
+- **The finding**: the subpixel means round three and four times, so a uniform cell (ε₁ = ε₂ = ε), which must give
+  ε, missed it: the parallel mean f·ε₂ + (1 − f)·ε₁ in 2.5 % of seeded uniform cells (ε = 3 at f = 0.2 gave
+  3.0000000000000004), the perpendicular mean 1/(f/ε₂ + (1 − f)/ε₁) in 23 % (12.25 at f = 0.1 gave 12.249999999999998).
+  Their intermediates also left the range: the perpendicular mean of DBL_MAX cells was ∞ (f/ε₂ and (1 − f)/ε₁ fell to
+  the subnormals, 1/s overflowed), of the least subnormal 0, and the parallel mean of DBL_MAX cells at f = 0.3 was an
+  ulp low.
+- **ADR 0002 row 41** (the user's answer of 2026-11-15): each mean is rounded once from its exact value on part
+  2a-1a's engine: the parallel (1 − f)ε₁ + f·ε₂ (rational 12, written ε₁ − f·ε₁ + f·ε₂ so the first tier's first
+  difference stays within its own bound) and the perpendicular ε₁ε₂/((1 − f)ε₂ + f·ε₁) (rational 13). A uniform cell
+  gives ε exactly, the mean lies in [ε₁, ε₂] (both are convex combinations, and rounding once is monotone), and no
+  intermediate leaves the range. The checks and errors, and the perpendicular mean's NaNs for an invalid ε and its
+  clamp of f (NaN as 0), are Rust's; a valid cell's denominator is positive, so neither rational meets a zero.
+- **cr_verify.py**: rationals 12 and 13 join the rat families (fourteen in all): equal, adjacent and unrelated media,
+  fills in tenths and thirds, at 0 and 1, a subnormal or an ulp from them, and media from 10^±300 to DBL_MAX and the
+  subnormals. 420,000 calls on x86_64 and on aarch64, 0 mismatches.
+- **The grid**: 4,371 rows appended to `fdtd.tsv` (99,730), each input through the three functions: uniform cells of
+  ten common media (1 to 13) at fills in tenths, thirds and quarters, the same with ε₂ one ulp above ε₁, fills of the
+  least subnormal, 10⁻³⁰⁰, 10⁻¹⁷ and an ulp or 10⁻¹⁶ from 1 on four media pairs, media of DBL_MAX, DBL_MAX/2, 10^±300,
+  DBL_MIN, 10⁻³¹⁰ and the least subnormal crossed at three fills, and 500 seeded cells and 500 seeded uniform cells.
+- **validate.py**: `fm_port41` computes each mean in Fractions and maps **2,371 rows** to row 41 (434 parallel, 992
+  perpendicular, 945 checked; part 1c's rows among them).
+- **Tests**: `tests/fdtd_media.tcyr`'s `cyrius_subpixel_rounded_once` (5 assertions, 75 in all): the two uniform
+  cells above, DBL_MAX cells through both means, the least subnormal's.
+- **Benchmarks**: the Cyrius-only `fdtd/media_coefficients` (ten coefficients and a perpendicular mean) 3.96 µs at part
+  2a-1b → 4.27–4.32 µs, so the rounded-once perpendicular mean costs about 0.35 µs where Rust's chain took a few ns.
+  Three interleaved rounds against HEAD (which predates part 2a-1a): the first at load 1.7 to 2.5 left the other rows
+  within the noise (median ratio 0.99); from the second on another repo's fuzzer ran five processes (load 8 to 15), and
+  the second's new run and the third's HEAD run are inflated (median ratios 1.00 and 0.56), so only
+  `media_coefficients`, steady at 4.27–4.32 µs whenever the new side ran, is read from them.
+- **Result, every target** (x86_64 ELF, x86_64 PE, aarch64): **18 modules, 0 failing; 639,168 ok, 0 failed, 0
+  measured, 0 pending, 113,517 accepted (ADR 01: 40,369; ADR 0002: 73,148)** over 752,685 rows; **all 475 digests
+  equal**, part 2a-1b's unchanged but the three subpixel functions' (their new rows and values). `fdtd_media.tcyr`
+  passes on all three (75). The gate is clean (no warnings; execution coverage 371 of 371 functions); validate.py
+  752,685 rows, 0 problems; the oracle's `--check` and clippy clean. Next: 2a-3, the grading.

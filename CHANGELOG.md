@@ -440,6 +440,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
   amended, see Fixed). validate.py's 1D and TF/SF models gain the port's Mur coefficients, and its 1D form is checked
   against the exact coefficient on every row that takes it. `fdtd.tsv` grows by 272 rows (95,359); `fdtd.adr.tsv`
   maps 311 trajectory rows more (10,191 in all).
+- **Cyrius port, M5 part 2a-2 — the subpixel means rounded once** (`src/fdtd_media.cyr`): both means are rounded once
+  from their exact values on part 2a-1a's engine (ADR 0002 row 41, see Fixed). `fdtd.tsv` grows by 4,371 rows
+  (99,730); `fdtd.adr.tsv` maps 2,371 rows to row 41.
 
 ### Fixed
 
@@ -910,6 +913,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
   value without the cancellation, within 6 ulps of the exact coefficient. The vacuum default (v·dt = dx/2) keeps
   Rust's bits. Cost, at setup only: a `set_permittivity` in the band 1.1–2.9 µs (108 ns on Rust's chain); the steps
   are unchanged (`port-parity.md` §101).
+- **fdtd** (ADR 0002 row 41, M5 part 2a-2, the user's answer of 2026-11-15): the subpixel means missed ε for a uniform
+  cell (ε₁ = ε₂ = ε): `subpixel_permittivity_parallel(3, 3, 0.2)` was 3.0000000000000004 (2.5 % of seeded uniform
+  cells), the perpendicular mean of 12.25 at f = 0.1 was 12.249999999999998 (23 %), and the perpendicular mean of
+  DBL_MAX cells was ∞ and of the least subnormal 0. Both are now rounded once from their exact values, (1 − f)ε₁ + f·ε₂
+  and ε₁ε₂/((1 − f)ε₂ + f·ε₁): exact for a uniform cell and always within [ε₁, ε₂]. Cost: about 0.35 µs a mean (the
+  Cyrius-only `fdtd/media_coefficients` 3.96 → 4.27–4.32 µs) (`port-parity.md` §102).
 
 ### Performance
 

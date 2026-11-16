@@ -1644,14 +1644,15 @@ def s2z_families(rng, count):
 # ── M5's rationals of signed monomials (src/crmath_edge.cyr, M5 part 2a-1a, ADR 0002 row 40) ─────────────────────────
 RAT_EPS0 = 0.0000000000088541878128
 RAT_C = 299792458.0
-RAT_KINDS = 12
+RAT_KINDS = 14
 
 
 def rat_ref(k, v):
     """RN of rational k over v (src/crmath_edge.cyr's _bj_cr_rat_spec), from the coefficient's formula: the media's
     C_a, C_b; Drude α, β, κ; Lorentz α, β, γ_c; Debye α, β; the TF/SF Mur coefficient and the 1D one's numerator
-    (M5 part 2a-1b). All ones when the denominator is exactly 0. An exact zero takes IEEE's signs: a one-product
-    numerator's factors' (and coefficient's), a cancelled sum +0, then D's."""
+    (M5 part 2a-1b); the parallel and perpendicular subpixel means (M5 part 2a-2). All ones when the denominator is
+    exactly 0. An exact zero takes IEEE's signs: a one-product numerator's factors' (and coefficient's), a cancelled
+    sum +0, then D's."""
     F = [Fraction(x) for x in v]
     sg = [math.copysign(1.0, x) < 0 for x in v]
     if k in (0, 1):
@@ -1674,6 +1675,10 @@ def rat_ref(k, v):
     elif k == 10:
         dt, dx, c = F[:3]
         num, den, zs = c * dt - dx, c * dt + dx, None
+    elif k in (12, 13):
+        e1, e2, fr = F[:3]
+        num, den = ((1 - fr) * e1 + fr * e2, Fraction(1)) if k == 12 else (e1 * e2, (1 - fr) * e2 + fr * e1)
+        zs = None if k == 12 else sg[0] ^ sg[1]
     else:
         c, dt, e, m, dx = F[:5]
         num, den, zs = c * c * dt * dt - e * m * dx * dx, Fraction(1), None
@@ -1696,6 +1701,18 @@ def rat_cases(rng, count):
         dt = 10.0 ** rng.uniform(-18, -10)
         e0 = RAT_EPS0
         dxx = 10.0 ** rng.uniform(-6, -1)
+        if k in (12, 13):                           # the subpixel means: equal, adjacent or any media, any fill
+            e1 = 10.0 ** rng.uniform(-1, 2)
+            e2 = rng.choice([e1, math.nextafter(e1, math.inf), 10.0 ** rng.uniform(-1, 2), e1 * 1.000001])
+            fr = rng.choice([rng.random(), rng.randint(0, 10) / 10, rng.randint(0, 3) / 3, 0.0, 1.0,
+                             math.nextafter(1.0, 0.0), 5e-324, rng.random() * 1e-20])
+            v = [e1, e2, fr, 0.0, 0.0, 0.0]
+            if mode >= 3:                           # wide and edge media, the fill kept in [0, 1]
+                v = [10.0 ** rng.uniform(-300, 300), 10.0 ** rng.uniform(-300, 300), rng.random(), 0.0, 0.0, 0.0]
+                if mode == 6:
+                    v[rng.randint(0, 1)] = rng.choice([5e-324, 2.2250738585072014e-308, 1.7976931348623157e308])
+            out.append((k, v))
+            continue
         if k == 10:                                 # the TF/SF Mur coefficient near S = 1
             v = [dxx / RAT_C * (1 - 10.0 ** -rng.uniform(0, 16)), dxx, RAT_C, 0.0, 0.0, 0.0]
         elif k == 11:                               # the 1D one's numerator near ε_rμ_r = 1/4 at dt = dx/2c

@@ -1761,6 +1761,43 @@ fn emit_2a1b(r: &mut Rows) {
     }
 }
 
+// ── part 2a-2: the subpixel means rounded once (ADR 0002 row 41) ─────────────────────────────────────────────────
+
+/// The subpixel means where rounding once shows (ADR 0002 row 41): uniform cells (ε₁ = ε₂) of common media at fills
+/// in tenths, thirds and quarters; adjacent doubles; fills one ulp or a subnormal from 0 and 1; media from 10^±300 to
+/// DBL_MAX and the subnormals; seeded media and seeded uniform cells.
+fn emit_2a2(r: &mut Rows) {
+    let media = [1.0, 1.5, 2.1, 2.25, 3.0, 4.0, 9.8, 11.7, 12.25, 13.0];
+    let mut fills: Vec<f64> = (0..=10).map(|k| f64::from(k) / 10.0).collect();
+    fills.extend([1.0 / 3.0, 2.0 / 3.0, 0.25, 0.75]);
+    for &e in &media {
+        for &fr in &fills {
+            r.subpixel(&[e, e, fr]);
+            r.subpixel(&[e, e.next_up(), fr]);
+        }
+    }
+    let edges = [f64::from_bits(1), 1e-300, 1e-17, 1.0f64.next_down(), 1.0 - 1e-16, 0.5f64.next_up()];
+    for fr in edges {
+        for (e1, e2) in [(2.0, 9.0), (1.0, 4.0), (3.0, 3.0), (9.0, 2.0)] {
+            r.subpixel(&[e1, e2, fr]);
+        }
+    }
+    let big = [f64::MAX, f64::MAX / 2.0, 1e300, 1e-300, f64::MIN_POSITIVE, f64::from_bits(1), 1e-310];
+    for &e1 in &big {
+        for &e2 in &big {
+            for fr in [0.5, 0.3, 0.9] {
+                r.subpixel(&[e1, e2, fr]);
+            }
+        }
+    }
+    let mut rng = Rng::new(0x2a2_0041);
+    for _ in 0..500 {
+        r.subpixel(&[rng.log_uniform(-1.0, 2.0), rng.log_uniform(-1.0, 2.0), rng.unit()]);
+        let e = rng.log_uniform(-1.0, 2.0);
+        r.subpixel(&[e, e, rng.unit()]);
+    }
+}
+
 pub fn emit() -> Module {
     let mut r = Rows { m: Module::new("fdtd"), keys: BTreeSet::new() };
     emit_1a(&mut r);
@@ -1772,5 +1809,6 @@ pub fn emit() -> Module {
     emit_1e(&mut r);
     emit_2a1a(&mut r);
     emit_2a1b(&mut r);
+    emit_2a2(&mut r);
     r.m
 }

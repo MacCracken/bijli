@@ -9652,6 +9652,28 @@ FM40 = ("LossyMaterial::update_coefficients", "DrudeMaterial::ade_coefficients",
         "DebyeMaterial::ade_coefficients")
 
 
+# ADR 0002 row 41 (M5 part 2a-2, the user's answer of 2026-11-15): the subpixel means rounded once from their exact
+# values (positive, so never a zero to sign); errors and the perpendicular mean's NaNs as Rust's.
+FM41 = ("fdtd::subpixel_permittivity_parallel", "fdtd::subpixel_permittivity_perpendicular",
+        "fdtd::subpixel_permittivity_perpendicular_checked")
+
+
+def fm_port41(fn, v, EPS0):
+    """The port's outputs of a subpixel row (row 41), as tokens."""
+    out = fm_eval(fn, v, EPS0)
+    e1, e2, f = v
+    if fn == "fdtd::subpixel_permittivity_parallel":
+        if out[0][0] != "f":
+            return out
+        F = Fraction
+        return [("f", rn_frac((1 - F(f)) * F(e1) + F(f) * F(e2)))]
+    if not (fd_pos(e1) and fd_pos(e2)) or out[0][0] != "f":
+        return out
+    ff = 0.0 if math.isnan(f) else (0.0 if f < 0.0 else (1.0 if f > 1.0 else f))
+    F = Fraction
+    return [("f", rn_frac(F(e1) * F(e2) / ((1 - F(ff)) * F(e2) + F(ff) * F(e1))))]
+
+
 def fm_rat(num, den, zneg=None):
     """RN(num/den) for exact rationals, or None for a zero den; an exact zero signed by zneg (None: a cancelled sum,
     +0) xor the den's sign."""
@@ -9716,6 +9738,11 @@ def fdtd_adr_rows(root: Path, path: Path) -> list:
             want = fm_port(fn, v, eps0)
             if not toks_same(want, [parse_tok(x) for x in outs.split(" ")]):
                 out.append((fn, ins, wire(want), "40", f"oracle {outs}; ADR 0002 row 40: rounded once"))
+            continue
+        if fn in FM41:
+            want = fm_port41(fn, v, eps0)
+            if not toks_same(want, wave_toks([parse_tok(x) for x in outs.split(" ")])):
+                out.append((fn, ins, wire(want), "41", f"oracle {outs[:120]}; ADR 0002 row 41: rounded once"))
             continue
         if not fn.startswith(("Fdtd1d::", "TfsfSource::")):
             continue
