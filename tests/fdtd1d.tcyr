@@ -443,6 +443,29 @@ fn main() {
     assert(tm2 == 61.06881095474054, "step past 2^53: step·dt once (Rust's 61.068810954740535)");
     BjFdtd1d_free(&r2);
 
+    # ADR 0002 row 18 (M5 part 2d-2a): a cell whose update leaves the normal range runs it with an unbounded exponent.
+    # The expectations are validate.py's model of the port.
+    test_group("cyrius_update_edges");
+    var u1: BjFdtd1d;
+    var tu1, vu1 = BjFdtd1d_new(20, 0.001, &u1);
+    var hb: f64 = _bj_from_bits(0x7feab36d48e1acf0);
+    var nhb: f64 = -hb;
+    u1.add_source(9, hb);
+    u1.add_source(10, nhb);
+    u1.step_once();
+    var h9w: f64 = _bj_from_bits(0x7f6224e2c3d7dd2b);
+    var nh9w: f64 = -h9w;
+    assert(at(u1.h_field, 9) == nh9w, "E₁₀ − E₉ past DBL_MAX: H₉ = c_h·(−3·10³⁰⁸) = −3.98·10³⁰⁵ (Rust's −∞)");
+    BjFdtd1d_free(&u1);
+    var u2: BjFdtd1d;
+    var tu2, vu2 = BjFdtd1d_new(200, 0.001, &u2);
+    u2.add_source(10, _bj_from_bits(0x9c16c5c5253575));
+    u2.step_once();
+    assert(at(u2.h_field, 9) == _bj_from_bits(0x98b2d582266b6),
+      "a 10⁻³⁰⁵ pulse: c_h·E₁₀ subnormal, rounded once (1.3272093639965355e-308; Rust's 1.327209363996536e-308)");
+    assert(at(u2.e_field, 9) == _bj_from_bits(0x7c16c5c52536cb), "E₉ after it (2.500000000000108e-306; Rust's …109)");
+    BjFdtd1d_free(&u2);
+
     return assert_summary();
 }
 

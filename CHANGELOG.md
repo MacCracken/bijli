@@ -461,6 +461,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
   the four pulses, whose chains now run with an unbounded exponent where an intermediate leaves the normal range
   (ADR 0002 row 18 amended, see Fixed). validate.py transcribes them on Fractions and MPFR's widest exponent range.
   `fdtd.tsv` grows by 2,238 edge rows (105,964; 37.5 MB); `fdtd.adr.tsv` maps 1,848 pulse rows to row 18.
+- **Cyrius port, M5 part 2d-2a — the 1D grid's updates at their range edges** (`src/fdtd1d.cyr`): the user's answer
+  of 2026-11-15, the per-cell updates' range edges fixed (ADR 0002 row 18 amended, see Fixed). validate.py's 1D model
+  runs the same per-cell rule. `fdtd.tsv` grows by 79 scenario rows (106,043); `fdtd.adr.tsv` maps 60 trajectories.
 
 ### Fixed
 
@@ -962,6 +965,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
   DBL_MAX gave 0 where τ brings u back (e^-9). These chains now run with an unbounded exponent, the sine past DBL_MAX
   by Payne–Hanek, the product rounded once. Cost: `fdtd/gaussian_pulse` 118–121 → 122–123 ns (`port-parity.md`
   §106).
+- **fdtd** (ADR 0002 row 18 amended, M5 part 2d-2a, the user's answer of 2026-11-15): `Fdtd1d`'s cell updates
+  d + k·(a − b) took Rust's chain at their range edges: opposite fields near DBL_MAX side by side gave H = −∞ for
+  −3.98·10³⁰⁵, and a field decaying through the subnormals lost its product's low bits before the sum. A cell whose
+  product k·(a − b) is ±∞, NaN or a nonzero subnormal is now updated with an unbounded exponent and rounded once (one
+  scan of the product row per update finds them); every other cell keeps Rust's bits. Cost: the scan, about 2.7 ns a
+  cell and row, makes the 1D step 3.5–3.8× HEAD's (`fdtd/step_1000_cells` 1.97–2.12 → 7.36–7.53 µs); 6.7.18 has no
+  vector verb that classifies a lane (`port-parity.md` §107, plan §10).
 
 ### Performance
 

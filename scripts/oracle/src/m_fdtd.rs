@@ -1956,6 +1956,47 @@ fn emit_2d1(r: &mut Rows) {
     }
 }
 
+// ── part 2d-2a: the 1D grid's updates at their range edges (ADR 0002 row 18) ──────────────────────────────────────
+
+/// 1D scripts whose cell updates d + k·(a − b) leave the normal range (the port reruns those cells with an unbounded
+/// exponent, ADR 0002 row 18): opposite sources near DBL_MAX side by side (a − b overflows, k·(a − b) doesn't), in
+/// the interior and at either Mur end; subnormal sources; a pulse decaying through the subnormals over 1,000 steps;
+/// and a permittivity of 10³⁰⁰ that sends c_e·ΔH into the subnormals.
+impl Rows {
+    /// As `frames`, skipping a frame whose (function, inputs) an earlier part emitted.
+    fn frames_new(&mut self, func: &str, n: usize, dx: f64, setup: &[Op], frames: &[usize],
+                  advance: impl Fn(usize) -> Op) {
+        let mut sc = Script::new(n, dx);
+        for &op in setup {
+            sc.apply(op);
+        }
+        let mut at = 0;
+        for &fr in frames {
+            sc.apply(advance(fr - at));
+            at = fr;
+            if !self.keys.contains(&format!("{func} {:?}", sc.ins)) {
+                self.emit(func, &sc);
+            }
+        }
+    }
+}
+
+fn emit_2d2a(r: &mut Rows) {
+    let st = "Fdtd1d::step_once";
+    let big = 1.5e308;
+    for (i, j) in [(9, 10), (0, 1), (18, 19), (1, 2), (17, 18)] {
+        r.frames_new(st, 20, 1e-3, &[Op::Source(i, big), Op::Source(j, -big)], &[1, 2, 5, 20], Op::Step);
+        r.frames_new(st, 20, 1e-3, &[Op::Source(i, f64::MAX), Op::Source(j, -f64::MAX)], &[1, 2, 5], Op::Step);
+    }
+    for v in [1e-310, 3e-308, f64::from_bits(1), 2.2250738585072014e-308, 1e-305] {
+        r.frames_new(st, 20, 1e-3, &[Op::Source(10, v)], &[1, 5, 20, 100], Op::Step);
+        r.frames_new(st, 20, 1e-3, &[Op::Source(0, v), Op::Source(19, -v)], &[1, 5, 20], Op::Step);
+    }
+    r.frames_new(st, 200, 1e-3, &[Op::Source(100, 1e-305)], &[1, 10, 100, 1000], Op::Step);
+    r.frames_new(st, 40, 1e-3, &[Op::Eps(0, 40, 1e300), Op::Source(20, 1.0)], &[1, 10, 100], Op::Step);
+    r.frames_new(st, 40, 1e-3, &[Op::Mu(0, 40, 1e300), Op::Source(20, 1e-10)], &[1, 10, 100], Op::Step);
+}
+
 pub fn emit() -> Module {
     let mut r = Rows { m: Module::new("fdtd"), keys: BTreeSet::new() };
     emit_1a(&mut r);
@@ -1972,5 +2013,6 @@ pub fn emit() -> Module {
     emit_2b(&mut r);
     emit_2c(&mut r);
     emit_2d1(&mut r);
+    emit_2d2a(&mut r);
     r.m
 }

@@ -6006,3 +6006,44 @@ M5's 2d, the range edges (row 18), runs in bites: the pulses, the 1D grid (its s
   equal**. `fdtd_source.tcyr` passes on all three (73). The gate is clean (no warnings; execution coverage 371 of 371
   functions); validate.py 758,919 rows, 0 problems; the oracle's `--check` and clippy clean. Next: 2d-2, the 1D grid
   (its step updates, the Mur ends, `total_energy`).
+
+## 107. M5 part 2d-2a: the 1D grid's updates at their range edges (2026-11-16)
+
+- **The user's answer of 2026-11-15**: the per-cell time-step updates get the range-edge fix (row 18), at the cost
+  of a scan each step; M6's 2D and 3D grids and the CPML follow the same rule. This bite is the 1D grid's; the TF/SF
+  grid's and the CW accumulator's follow in 2d-3 and 2d-4.
+- **The finding**: a cell's update d + k·(a − b) runs Rust's three roundings at any range: opposite fields near
+  DBL_MAX side by side overflow a − b, so H₉ = c_h·(E₁₀ − E₉) was −∞ for −3.98·10³⁰⁵ (E = ±1.5·10³⁰⁸); a field
+  decaying through the subnormals rounds its product to the subnormal grid before the sum (a 10⁻³⁰⁵ pulse gave
+  H₉ = 1.327209363996536·10⁻³⁰⁸ after one step for 1.3272093639965355·10⁻³⁰⁸).
+- **ADR 0002 row 18, amended** (`src/fdtd1d.cyr`): a − b is exact when subnormal (Hauser) and overflows only into an
+  infinite product, so the product k·(a − b) alone marks the cells whose chain differs from the unbounded one: ±∞,
+  NaN or a nonzero subnormal. `_bj_fd1_fix` scans the product row between the packed multiply and add (an inline test
+  on the word's exponent field), and for each such cell with finite operands writes d + k·(a − b) with a − b and the
+  product to 53 bits with an unbounded exponent and the sum rounded once (`_bj_fd1_cell`, kimiya's `_bj_k_ux_*`),
+  setting the product to −0 so the packed add leaves it (r + −0 = r, signed zeros included). The scalar tail and both
+  Mur ends take the same test. Every other cell keeps Rust's bits.
+- **validate.py**: `Fd1.step_once` under row 18 updates each cell by `fd_cell18`, the same rule on Fractions.
+- **The grid**: 79 scenario rows appended to `fdtd.tsv` (106,043): opposite sources of 1.5·10³⁰⁸ and DBL_MAX side by
+  side in the interior and at either Mur end, five subnormal or near-DBL_MIN sources (one cell, and both ends), a
+  10⁻³⁰⁵ pulse in a 200-cell grid over 1,000 steps, and ε_r or μ_r of 10³⁰⁰. The generator skips frames an earlier
+  part emitted (`frames_new`).
+- **The mapping**: **60 trajectory rows** to row 18 (59 of the new scenarios and one existing `run`), all passing;
+  others of the new rows map to row 13 or 40 where only those change them.
+- **Tests**: `tests/fdtd1d.tcyr`'s `cyrius_update_edges` (3 assertions, 79 in all): the opposite sources' H₉, and the
+  10⁻³⁰⁵ pulse's H₉ and E₉ after one step.
+- **Benchmarks**: the scan is the cost the user's answer accepted, and it is more than my estimate of 1.5–2× when
+  asking: the interleaved A/B against HEAD (two rounds, load 0.7 to 1.0) gave `fdtd/step_100_cells` 249 → 862–866 ns,
+  `fdtd/step_1000_cells` 2.04–2.09 → 7.86–7.87 µs and `fdtd/run_100_steps_500_cells` 144–146 → 520–523 µs (3.5–3.9×),
+  every other row unchanged (median ratios 1.00 and 1.00). The scan is about 2.7 ns a cell and row, against the packed
+  verbs' 0.35 ns an element. Variants measured on a 1,000-element row: the indexed loop 2.95 µs, a pointer walk 2.63 µs
+  (taken: a 1,000-cell step 7.36–7.53 µs against HEAD's 1.97–2.12 µs, two focused rounds at load 0.1 to 0.4), unrolled
+  by four with branches or ORed flags 2.8 µs; a one-test unrolled loop ran 1.7 µs but can't exclude zeros, which fill a
+  grid. No vector route exists on 6.7.18: `f64v_*` have no compare or classify, `iv_*` no shift, AND or compare, and a
+  float transform needs five passes to tell a zero from a subnormal. Filed in plan §10 as a language gap; M6's 2D and 3D
+  grids will pay the same until it closes.
+- **Result, every target** (x86_64 ELF, x86_64 PE, aarch64): **18 modules, 0 failing; 640,977 ok, 0 failed, 0
+  measured, 0 pending, 118,021 accepted (ADR 01: 40,366; ADR 0002: 77,655)** over 758,998 rows; **all 475 digests
+  equal**. `fdtd1d.tcyr` passes on all three (79). The gate is clean (no warnings; execution coverage 371 of 371
+  functions); validate.py 758,998 rows, 0 problems; the oracle's `--check` and clippy clean. Next: 2d-2b, the 1D grid's
+  Mur coefficient outside its band, `total_energy` and `run`'s source.

@@ -8772,6 +8772,18 @@ def fd_mur(dt, dx, eps_r, mu_r, c):
     return fdiv(v_dt - dx, v_dt + dx)
 
 
+def fd_cell18(d, k, a, b):
+    """d + k·(a − b) as the port updates a cell (ADR 0002 row 18, M5 part 2d-2a): Rust's chain, but where the product
+    k·(a − b) is ±∞, NaN or a nonzero subnormal and every operand is finite, a − b and the product to 53 bits with an
+    unbounded exponent and the sum rounded once."""
+    p = k * (a - b)
+    if math.isfinite(p) and (p == 0.0 or abs(p) >= 2.2250738585072014e-308):
+        return d + p
+    if not (math.isfinite(d) and math.isfinite(k) and math.isfinite(a) and math.isfinite(b)):
+        return d + p
+    return ux_fin(ux_add(ux(d), ux_mul(ux(k), ux_sub(ux(a), ux(b))), r=lambda v: v))
+
+
 FD_MUR_LO, FD_MUR_HI = 2.0 ** -400, 2.0 ** 400
 FD_PORT = frozenset({"40", "13", "17", "18"})   # the port's ADR 0002 rows in the 1D and TF/SF models
 FD_MUR_ULPS = 8                             # the cancellation-free form's accuracy gate against the exact coefficient
@@ -8878,6 +8890,15 @@ class Fd1:
     def step_once(self):
         n, e, h, ce, ch = self.n, self.e, self.h, self.ce, self.ch
         e_left, e_right = e[1], e[n - 2]
+        if self.r18:                                # ADR 0002 row 18 (M5 part 2d-2a): each cell at its range edge
+            for i in range(n - 1):
+                h[i] = fd_cell18(h[i], ch[i], e[i + 1], e[i])
+            for i in range(1, n - 1):
+                e[i] = fd_cell18(e[i], ce[i], h[i], h[i - 1])
+            e[0] = fd_cell18(e_left, self.al, e[1], e[0])
+            e[n - 1] = fd_cell18(e_right, self.ar, e[n - 2], e[n - 1])
+            self.step += 1
+            return
         for i in range(n - 1):
             h[i] = h[i] + ch[i] * (e[i + 1] - e[i])
         for i in range(1, n - 1):
