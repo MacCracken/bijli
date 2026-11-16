@@ -3425,12 +3425,17 @@ fn _bj_e_within12(a: f64, b: f64, m: f64): i64 {
 # Rust's chain is the one with an unbounded exponent wherever p is normal, or a zero from an exact zero. It can differ
 # where p is ±∞, NaN or a nonzero subnormal, or ±0 from a nonzero exact product; and of those zeros RN(d + p) moves only
 # for −0 against a +0 field (the exact sum, a tiny negative, rounds to −0, where Rust's +0 + −0 is +0), or for p of
-# exactly ±2^-1075 at 53 bits against a field below 2^-1021 with an odd last bit (a tie at the 2^-1074 grid). The
-# marker (_bj_e_cell_edge) is p ±∞, NaN, a nonzero subnormal or −0, or +0 against a nonzero field of at most 2^-1021
-# (one more than the rule needs, ±2^-1021, whose rerun is Rust's value). Such a cell, for finite operands, is
+# exactly ±2^-1075 at 53 bits against a field below 2^-1021 with an odd last bit (a tie at the 2^-1074 grid). An exact
+# zero product (k = 0 or a = b) is the same signed zero in both chains. The marker (_bj_e_cell_edge) is p ±∞, NaN or a
+# nonzero subnormal, or p ±0 where it could move the sum, −0 on a +0 field or against a nonzero field of at most 2^-1021
+# (one more than the rule needs, ±2^-1021, whose rerun is Rust's value); a zero product then needs nonzero factors,
+# k ≠ 0 and a ≠ b (M5 part 2d-4a: the CW sums' −sin(ωt)·Δt makes −0 of every zero sample). Such a cell, for finite
+# operands, is
 # d + k·(a − b) with a − b and the product to 53 bits with an unbounded exponent and the sum rounded once (_bj_e_cell);
 # every other cell keeps Rust's bits. The grids (src/fdtd1d.cyr, src/fdtd_source.cyr) run a row on the packed f64v_*
-# verbs and scan its product row between the multiply and the add (_bj_e_cell_row).
+# verbs and scan its product row between the multiply and the add (_bj_e_cell_row). The CW accumulator's sums
+# (src/fdtd_util.cyr, M5 part 2d-4a) are d + k·a, a row with b given as 0: a − (+0) is a exactly, signed zeros included,
+# so the same marker and rerun hold.
 
 # A word as a *f64 (the typed return keeps the binding typed).
 #must_use
@@ -3438,15 +3443,16 @@ fn _bj_e_f64p(a): *f64 {
     return a;
 }
 
-# 1 when the product p with raw bits x, beside the field d with raw bits dw, marks a cell (the section comment): p ±∞,
-# a NaN, a nonzero subnormal or −0, or +0 against a nonzero d of at most 2^-1021 ((2·dw − 1) >> 54 is 0 exactly for
-# those words: d's exponent field 0 or 1, or d = ±2^-1021, which the rule doesn't need and the rerun leaves as Rust's).
+# 1 when the product p with raw bits x, beside the field d with raw bits dw, marks a cell (the section comment): p ±∞, a
+# NaN or a nonzero subnormal; or p ±0 that could move the sum, −0 on a +0 d, or against a nonzero d of at most 2^-1021
+# ((2·dw − 1) >> 54 is 0 exactly for those words: d's exponent field 0 or 1, or d = ±2^-1021, which the rule doesn't
+# need and the rerun leaves as Rust's). A zero p marks the cell only for nonzero factors: the caller tests them.
 #must_use
 fn _bj_e_cell_edge(x, dw): i64 {
     var ex = (x >> 52) & 2047;
     if (ex == 2047) { return 1; }
     if (ex != 0) { return 0; }
-    if (x != 0 || (((dw << 1) - 1) >> 54) == 0) { return 1; }
+    if ((x << 1) != 0 || (x != 0 && dw == 0) || (((dw << 1) - 1) >> 54) == 0) { return 1; }
     return 0;
 }
 
@@ -3471,7 +3477,9 @@ fn _bj_e_cell(dv: f64, kv: f64, av: f64, bv: f64, r: f64): f64 {
 fn _bj_e_cell_one(dv: f64, kv: f64, av: f64, bv: f64): f64 {
     var p: f64 = kv * (av - bv);
     var r: f64 = dv + p;
-    if (_bj_e_cell_edge(_bj_k_bits(p), _bj_k_bits(dv)) == 1) { r = _bj_e_cell(dv, kv, av, bv, r); }
+    if (_bj_e_cell_edge(_bj_k_bits(p), _bj_k_bits(dv)) == 1) {
+        if (p != 0.0 || (kv != 0.0 && av != bv)) { r = _bj_e_cell(dv, kv, av, bv, r); }
+    }
     return r;
 }
 
@@ -3481,29 +3489,47 @@ fn _bj_e_cell_at(d, k, ks, a, b, w, i) {
     var dp: *f64 = _bj_e_f64p(d);
     var kp: *f64 = _bj_e_f64p(k + i * ks);
     var ap: *f64 = _bj_e_f64p(a);
-    var bp: *f64 = _bj_e_f64p(b);
     var wp: *f64 = _bj_e_f64p(w);
     var dv: f64 = dp[i];
     var pv: f64 = wp[i];
     var rr: f64 = dv + pv;
-    dp[i] = _bj_e_cell(dv, kp[0], ap[i], bp[i], rr);
+    var bv: f64 = 0.0;
+    if (b != 0) {
+        var bp: *f64 = _bj_e_f64p(b);
+        bv = bp[i];
+    }
+    dp[i] = _bj_e_cell(dv, kp[0], ap[i], bv, rr);
     wp[i] = -0.0;
     return 0;
 }
 
 # The packed part's cells (m of them) whose product w[i] = k_i·(a[i] − b[i]) marks a cell beside d[i] (the section
-# comment), each rerun by _bj_e_cell_at. d, k, a, b and w are addresses; k_i is the f64 at k + i·ks (ks 8 for a row of
-# coefficients, 0 for one coefficient). The marker is inline, the scan's common path: a normal product is two tests, a
-# zero one loads d[i] and tests (2·d[i] − 1) >> 54, 0 exactly for a nonzero d of at most 2^-1021 as a word.
+# comment), each rerun by _bj_e_cell_at. d, k, a, b and w are addresses (b 0 for none: k·a); k_i is the f64 at
+# k + i·ks (ks 8 for a row of coefficients, 0 for one coefficient). The marker is inline, the scan's common path: a
+# normal product is two tests; a zero one loads d[i] and tests it ((2·d[i] − 1) >> 54 is 0 exactly for a nonzero d of
+# at most 2^-1021 as a word), and only then its factors (a zero k, or a = b as words or both ±0: an exact zero).
 fn _bj_e_cell_fix(d, k, ks, a, b, w, m) {
     var q = w;
     var end = w + m * 8;
-    var off = d - w;
     while (q < end) {
         var x = load64(q);
         var ex = (x >> 52) & 2047;
         if (ex == 0) {
-            if (x != 0 || (((load64(q + off) << 1) - 1) >> 54) == 0) { _bj_e_cell_at(d, k, ks, a, b, w, (q - w) / 8); }
+            var i = q - w;
+            if ((x << 1) != 0) {
+                _bj_e_cell_at(d, k, ks, a, b, w, i / 8);
+            } else {
+                var dw = load64(d + i);
+                if ((x != 0 && dw == 0) || (((dw << 1) - 1) >> 54) == 0) {
+                    var aw = load64(a + i);
+                    var bw = 0;
+                    if (b != 0) { bw = load64(b + i); }
+                    var kw = load64(k + (i / 8) * ks);
+                    if ((kw << 1) != 0 && aw != bw && ((aw | bw) << 1) != 0) {
+                        _bj_e_cell_at(d, k, ks, a, b, w, i / 8);
+                    }
+                }
+            }
         } elif (ex == 2047) {
             _bj_e_cell_at(d, k, ks, a, b, w, (q - w) / 8);
         }
@@ -3512,26 +3538,33 @@ fn _bj_e_cell_fix(d, k, ks, a, b, w, m) {
     return 0;
 }
 
-# d[i] = d[i] + k_i·(a[i] − b[i]) for i < n, Rust's `*d += k * (a − b)`, k_i the f64 at k + i·ks (ks 8 for a row of
-# coefficients, 0 for one): the packed f64v_sub, then f64v_mul (a row) or f64v_scale (one), the scan and f64v_add
-# through the scratch row w on the largest multiple of 4, then a scalar tail, each cell at its range edge as the section
-# comment has it. The tail keeps the verbs to a lane multiple: at an odd count f64v_sub, f64v_mul and f64v_scale write
-# one word past their dst on 6.7.18 (probe p19; port plan §10).
+# d[i] = d[i] + k_i·(a[i] − b[i]) for i < n, Rust's `*d += k * (a − b)`, or d[i] + k_i·a[i] (`*d += k * a`) when b is
+# 0; k_i is the f64 at k + i·ks (ks 8 for a row of coefficients, 0 for one): the packed f64v_sub (unless b is 0), then
+# f64v_mul (a row) or f64v_scale (one), the scan and f64v_add through the scratch row w on the largest multiple of 4,
+# then a scalar tail, each cell at its range edge as the section comment has it. The tail keeps the verbs to a lane
+# multiple: at an odd count f64v_sub, f64v_mul and f64v_scale write one word past their dst on 6.7.18 (probe p19; port
+# plan §10).
 fn _bj_e_cell_row(d: *f64, k: *f64, ks, a: *f64, b: *f64, w: *f64, n) {
     var m = n & (0 - 4);
     var k0: f64 = 0.0;
     if (ks == 0) { k0 = k[0]; }
     if (m > 0) {
-        f64v_sub(w, a, b, m);
-        if (ks == 0) { f64v_scale(w, w, k0, m); }
-        else { f64v_mul(w, k, w, m); }
+        var x: *f64 = a;
+        if (b != 0) {
+            f64v_sub(w, a, b, m);
+            x = w;
+        }
+        if (ks == 0) { f64v_scale(w, x, k0, m); }
+        else { f64v_mul(w, k, x, m); }
         _bj_e_cell_fix(d, k, ks, a, b, w, m);
         f64v_add(d, d, w, m);
     }
     for (var i = m; i < n; i = i + 1) {
         var kv: f64 = k0;
         if (ks != 0) { kv = k[i]; }
-        d[i] = _bj_e_cell_one(d[i], kv, a[i], b[i]);
+        var bv: f64 = 0.0;
+        if (b != 0) { bv = b[i]; }
+        d[i] = _bj_e_cell_one(d[i], kv, a[i], bv);
     }
     return 0;
 }

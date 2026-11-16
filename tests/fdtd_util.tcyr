@@ -567,6 +567,59 @@ fn main() {
       "freq_max·dt exactly above ½ (Rust's freq_max > RN(0.5/dt) said no)");
     assert(_bj_fu_over_nyquist(19157.0, 0.0000261) == 0 && _bj_fu_over_nyquist(20000.0, 0.0000261) == 1, "either side");
 
+    # ADR 0002 row 18 (M5 part 2d-4a): the CW accumulator's chain at its range edges. The expectations are
+    # validate.py's model of the port (MPFR's sine and cosine at its widest range).
+    test_group("cyrius_cw_edges");
+    var cf: f64[1];
+    var ca: f64[1];
+    var cw1: BjCwAccumulator;
+    var fq1: f64 = _bj_from_bits(0x7fe1ccf385ebc8a0);
+    var tc1, vc1 = BjCwAccumulator_try_new(1, fq1, _bj_from_bits(0x1a56e1fc2f8f359), &cw1);
+    cf[0] = 1.0;
+    cw1.accumulate(&cf, 1, 1);
+    var c1i: f64 = _bj_from_bits(0x1d836e225c381c);
+    var nc1i: f64 = -c1i;
+    assert(at(cw1.real, 0) == _bj_from_bits(0x1a56e1fc2f8f354) && at(cw1.imag, 0) == nc1i,
+      "f = 1e308, ω = 2πf past DBL_MAX: the phase ω·10⁻³⁰⁰ to 53 bits, re 9.999999999999992e-301 (Rust's NaN)");
+    cw1.amplitude(&ca);
+    assert(ca[0] == _bj_from_bits(0x1a56e1fc2f8f359), "its amplitude 1e-300 (Rust's NaN)");
+    BjCwAccumulator_free(&cw1);
+    var cw2: BjCwAccumulator;
+    var tc2, vc2 = BjCwAccumulator_try_new(1, 0.0, 1.5, &cw2);
+    var m308: f64 = _bj_from_bits(0x7fe1ccf385ebc8a0);
+    cf[0] = -m308;
+    cw2.accumulate(&cf, 1, 0);
+    cf[0] = _bj_from_bits(0x7fefffffffffffff);
+    cw2.accumulate(&cf, 1, 1);
+    assert(at(cw2.real, 0) == _bj_from_bits(0x7fe54c92b71e530e),
+      "−1.5e308 + DBL_MAX·1.5: the product past DBL_MAX, the sum 1.1965397022934734e308 (Rust's ∞)");
+    BjCwAccumulator_free(&cw2);
+    var cw3: BjCwAccumulator;
+    var tc3, vc3 = BjCwAccumulator_try_new(1, 1000000000.0, _bj_from_bits(0x3d719799812dea11), &cw3);
+    cf[0] = _bj_from_bits(1);
+    cw3.accumulate(&cf, 1, 1);
+    assert(_bj_bits(at(cw3.imag, 0)) == 0x8000000000000000 && _bj_bits(at(cw3.real, 0)) == 0,
+      "2^-1074·sin(ωt)·Δt rounds to +0: +0 − tiny is −0 (Rust's +0 − +0 = +0)");
+    BjCwAccumulator_free(&cw3);
+    var cw4: BjCwAccumulator;
+    var tc4, vc4 = BjCwAccumulator_try_new(1, 1000000000.0, _bj_from_bits(0x12688b70e62b), &cw4);
+    cf[0] = 3.0;
+    cw4.accumulate(&cf, 1, 7);
+    cw4.amplitude(&ca);
+    assert(ca[0] == _bj_from_bits(0x3739a252b281) && _bj_bits(at(cw4.imag, 0)) == 0x8000000000000000,
+      "dt = 1e-310, both coefficients subnormal: the amplitude 3e-310 (Rust's 0), imag −0");
+    BjCwAccumulator_free(&cw4);
+    var cw5: BjCwAccumulator;
+    var tc5, vc5 = BjCwAccumulator_try_new(2, 0.0, 1.0, &cw5);
+    var cf2: f64[2];
+    var ca2: f64[2];
+    cf2[0] = _bj_from_bits(0x6974e718d7d7625a);
+    cf2[1] = _bj_from_bits(0x16687e92154ef7ac);
+    cw5.accumulate(&cf2, 2, 0);
+    cw5.amplitude(&ca2);
+    assert(ca2[0] == cf2[0] && ca2[1] == cf2[1], "amplitudes 1e200 and 1e-200: squares past either end (Rust's ∞, 0)");
+    BjCwAccumulator_free(&cw5);
+
     return assert_summary();
 }
 

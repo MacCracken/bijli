@@ -70,6 +70,7 @@ EXTRA = {
     "fdtd/media_coefficients": "the lossy, Drude, Lorentz and Debye coefficient sets and a subpixel average (M5 1c)",
     "fdtd/lossy_coefficients_exact_path": "the lossy C_a and C_b on the rounded-once engine's exact path (M5 2a-1a)",
     "fdtd/nf2ff_phasor_80x80_180": "NF2FF's phasor form on an 80 × 80 grid, margin 5, 180 angles (M5 part 1e)",
+    "fdtd/cw_accumulate_1000": "one CW accumulation of a 1000-cell field, a third of it zero (M5 part 2d-4a)",
     "json/drude_material_to_json": "a DrudeMaterial's JSON, gold's (src/json.cyr, M5 part 1f)",
     "json/nonuniform_grid_from_json": "a 10 × 7 × 3 NonUniformGrid read back into a new grid, its block freed (M5 1f)",
 }

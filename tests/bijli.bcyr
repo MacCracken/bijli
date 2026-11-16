@@ -1302,6 +1302,29 @@ fn main(): i64 {
     BjCwAccumulator_free(&nfc);
     if (nsum == 7.0) { println("."); }
 
+    # fdtd (M5 part 2d-4a), Cyrius-only: one CW accumulation of a 1000-cell field at 30 GHz, the sums on the per-cell
+    # rule (src/crmath_edge.cyr's scan); the field is a wave over two thirds of the cells, zero beyond.
+    var cwf: *f64 = bench_f64p(alloc(1000 * 8));
+    for (var k = 0; k < 1000; k = k + 1) {
+        var kc: f64 = f64_from(k);
+        var wv: f64 = _bj_sin(kc * 0.05);
+        cwf[k] = 0.0;
+        if (k < 667) { cwf[k] = wv; }
+    }
+    var cwa: BjCwAccumulator;
+    var tcw, vcw = BjCwAccumulator_new(1000, 30000000000.0, 0.000000000001, &cwa);
+    var bc1 = bench_new("fdtd/cw_accumulate_1000");
+    bench_batch_start(bc1);
+    for (var k = 0; k < 20000; k = k + 1) {
+        cwa.accumulate(cwf, 1000, k);
+    }
+    bench_batch_stop(bc1, 20000);
+    bench_report(bc1);
+    var cwr: *f64 = bench_f64p(cwa.real);
+    var cws: f64 = cwr[500];
+    BjCwAccumulator_free(&cwa);
+    if (is_err_result(tcw) == 1 || cws == 7.0) { println("."); }
+
     # json (M5 part 1f), Cyrius-only: a DrudeMaterial written, and a NonUniformGrid read back into a new grid.
     var jdm: BjDrudeMaterial = BjDrudeMaterial_gold();
     var sbd = str_builder_new();

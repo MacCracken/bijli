@@ -2109,6 +2109,85 @@ fn emit_2d3(r: &mut Rows) {
     }
 }
 
+// ── part 2d-4a: the CW accumulator at its range edges (ADR 0002 row 18) ──────────────────────────────────────────
+
+impl Rows {
+    /// A CW script (`try_new` unless `checked` is false) with a frame after each operation, skipping a frame whose
+    /// (function, inputs) an earlier part emitted.
+    fn cw_frames_new(&mut self, func: &str, checked: bool, g: (usize, f64, f64), ops: &[CwOp]) {
+        let (n, freq, dt) = g;
+        let mut sc = CwScript::new(checked, n, freq, dt);
+        for op in ops {
+            sc.apply(op.clone());
+            if !self.keys.contains(&format!("{func} {:?}", sc.ins)) {
+                self.cw(func, &sc);
+            }
+        }
+    }
+}
+
+/// CW scripts whose chains leave the normal range (the port runs them with an unbounded exponent, ADR 0002 row 18):
+/// ω = 2πf past DBL_MAX (f from 3·10³⁰⁷ to DBL_MAX) against a dt that brings the phase back; t = step·dt past
+/// DBL_MAX against an ω that does; the phase past DBL_MAX (Payne–Hanek); a subnormal dt (both coefficients below
+/// 2^-1022, every product rerun); a subnormal phase; sums whose products overflow while the sum doesn't (f = DBL_MAX
+/// on dt = 1.5 after −10³⁰⁸) or underflow (samples down to 2^-1074, the −0 of an underflowed product); amplitudes whose
+/// squares pass either end (sums near 10^±190); and seeded scripts over the whole range.
+fn emit_2d4a(r: &mut Rows) {
+    let ra = "CwAccumulator::accumulate";
+    let f5 = vec![1.0, -2.0, 0.5, 3.0, 0.25];
+    let at = |steps: &[usize], field: &[f64]| -> Vec<CwOp> {
+        steps.iter().map(|&k| CwOp::Accumulate(k, field.to_vec())).collect()
+    };
+    for freq in [3e307, 1e308, f64::MAX] {
+        for dt in [1e-290, 1e-300, 1e-310, 1e-320] {
+            r.cw_frames_new(ra, true, (5, freq, dt), &at(&[0, 1, 2, 10, 1000, 1 << 40], &f5));
+        }
+    }
+    for dt in [1e300, f64::MAX / 2.0] {
+        for freq in [1e-300, 1e-310] {
+            r.cw_frames_new(ra, true, (5, freq, dt), &at(&[1, 1000, 1 << 62, usize::MAX], &f5));
+        }
+    }
+    for (freq, dt) in [(1e300, 1e10), (1e200, 1e200), (1e9, 1e300)] {
+        r.cw_frames_new(ra, true, (5, freq, dt), &at(&[1, 3, 1000, 1_000_000_007], &f5));
+    }
+    for dt in [1e-310, f64::from_bits(1), 1.1125369292536007e-308] {
+        for freq in [1e9, 1e300, 1e308] {
+            r.cw_frames_new(ra, true, (5, freq, dt), &at(&[0, 1, 7, 100], &f5));
+        }
+    }
+    for (freq, dt) in [(1e-300, 1e-20), (1e-290, 1e-15), (1e-308, 1.0)] {
+        r.cw_frames_new(ra, true, (5, freq, dt), &at(&[1, 5, 77], &f5));
+    }
+    let big = vec![-1e308, 1e308, f64::MAX, -f64::MAX, 1.5e308];
+    let big2 = vec![f64::MAX, -1e308, -f64::MAX, f64::MAX, -1.5e308];
+    for (freq, dt) in [(0.0, 1.5), (0.0, 1.1), (1e9, 1.5)] {
+        let ops = [CwOp::Accumulate(0, big.clone()), CwOp::Accumulate(1, big2.clone()), CwOp::Accumulate(2, big.clone())];
+        r.cw_frames_new(ra, true, (5, freq, dt), &ops);
+    }
+    let tiny = vec![f64::from_bits(1), -f64::from_bits(1), 1e-310, -3e-320, 2.2250738585072014e-308];
+    for (freq, dt) in [(1e9, 1e-12), (3e9, 0.3), (0.0, 1e-5), (1e9, 1e-300)] {
+        let ops = [CwOp::Accumulate(1, tiny.clone()), CwOp::Accumulate(2, tiny.clone()), CwOp::Accumulate(7, f5.clone())];
+        r.cw_frames_new(ra, true, (5, freq, dt), &ops);
+    }
+    for (a, b) in [(1e200, 3e200), (1e-200, 3e-200), (1e160, -2e160), (1e-160, 5e-161)] {
+        let ops = [CwOp::Generated(1, 0, a, b), CwOp::Generated(9, 1, a, b), CwOp::Generated(90, 10, a, b)];
+        r.cw_frames_new(ra, true, (9, 1e9, 1e-12), &ops);
+    }
+    let mut rng = Rng::new(0x2d4a_c0de);
+    for _ in 0..12 {
+        let n = usize::try_from(rng.int(1, 9)).unwrap_or(1);
+        let (freq, dt) = (rng.log_uniform(-320.0, 308.2), rng.log_uniform(-323.0, 308.2));
+        let mut ops = Vec::new();
+        for _ in 0..3 {
+            let step = usize::try_from(rng.bits() >> rng.int(0, 63)).unwrap_or(0);
+            let field: Vec<f64> = (0..n).map(|_| rng.signed_log_uniform(-323.0, 308.2)).collect();
+            ops.push(CwOp::Accumulate(step, field));
+        }
+        r.cw_frames_new(ra, true, (n, freq, dt), &ops);
+    }
+}
+
 pub fn emit() -> Module {
     let mut r = Rows { m: Module::new("fdtd"), keys: BTreeSet::new() };
     emit_1a(&mut r);
@@ -2128,5 +2207,6 @@ pub fn emit() -> Module {
     emit_2d2a(&mut r);
     emit_2d2b(&mut r);
     emit_2d3(&mut r);
+    emit_2d4a(&mut r);
     r.m
 }

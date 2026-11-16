@@ -474,6 +474,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
   products that round to ±0 (ADR 0002 row 18 amended, see Fixed). validate.py's cell model is now the rule itself.
   `fdtd.tsv` grows by 544 TF/SF scenario rows (106,714; 38.2 MB); `fdtd.adr.tsv` maps 216 TF/SF trajectories to row 18
   and 10 1D trajectories change.
+- **Cyrius port, M5 part 2d-4a — the CW accumulator at its range edges** (`src/fdtd_util.cyr`,
+  `src/crmath_edge.cyr`): `accumulate`'s scalars with an unbounded exponent where they leave the range, its running sums
+  on the per-cell rule (the user's answer of 2026-11-15), and `amplitude` at its edge (ADR 0002 row 18 amended, see
+  Fixed). `BjCwAccumulator` gains two private fields, ω to 53 bits with an unbounded exponent. The per-cell rule takes a
+  cell without a difference (d + k·a) and tests a zero product's factors. A Cyrius-only bench,
+  `fdtd/cw_accumulate_1000`. `fdtd.tsv` grows by 212 CW rows (106,926; 38.4 MB); `fdtd.adr.tsv` maps 226 CW rows to
+  row 18. 2d-4b, the eigenmode search, follows.
 
 ### Fixed
 
@@ -997,6 +1004,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
   at the 2^-1074 grid; both grids now take those too. Cost: the scan on the TF/SF step, `fdtd/tfsf_step_200`
   0.84–0.93 → 1.70–1.75 µs (about 1.9×); the zero products' field test, `fdtd/run_100_steps_500_cells` 546–567 →
   566–659 µs (`port-parity.md` §109).
+- **fdtd** (ADR 0002 row 18 amended, M5 part 2d-4a): `CwAccumulator` lost its values at the range edges. Its ω = 2πf
+  is stored rounded, so f past about 2.86·10³⁰⁷ made ω = ∞ and every sample NaN (f = 10³⁰⁸ on dt = 10⁻³⁰⁰: re NaN for
+  9.999999999999992·10⁻³⁰¹); t or the phase past DBL_MAX took the sine of ∞; a subnormal dt rounded its coefficients
+  to the subnormal grid; a product past DBL_MAX made a sum ∞ where it is 1.2·10³⁰⁸, and an underflowed product left +0
+  where the sum is −0; and `amplitude` gave ∞ for re = 10²⁰⁰ and 0 for 10⁻²⁰⁰. Each now runs with an unbounded exponent
+  where it leaves the range, the sums on the per-cell rule. Cost: two scans per accumulation, the new Cyrius-only
+  `fdtd/cw_accumulate_1000` 3.48–3.95 → 11.3–12.4 µs (about 3.2×); `fdtd/tfsf_step_200` 2.34–2.51 → 1.92 µs, its quiet
+  Mur ends no longer rerun (`port-parity.md` §110).
 
 ### Performance
 

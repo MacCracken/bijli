@@ -9245,26 +9245,71 @@ MU0_NF = 1.25663706212e-06
 EPS0_NF = 8.8541878128e-12
 
 
-class Cw:
-    """fdtd.rs's `CwAccumulator`, transcribed on the primitives P."""
+def cw_k(k):
+    """A coefficient of the CW sums (a ux pair, 53 bits) as the port takes it: the double where it is one (0, or normal),
+    else the pair itself (below 2^-1022)."""
+    v = k[0]
+    if v == 0:
+        return -0.0 if k[1] else 0.0
+    if Fraction(FS_DMIN) <= abs(v) < Fraction(2) ** 1024:
+        return float(v)
+    return k
 
-    def __init__(self, n, freq, dt):
+
+def cw_cell(d, k, x):
+    """d + x·k as the port's CW sums (ADR 0002 row 18, M5 part 2d-4a): the per-cell rule where k is a double (x − 0 is
+    x exactly), else RN(d + RN53(x·k)) for finite d and x, and IEEE's specials (the sign of k) otherwise."""
+    if isinstance(k, float):
+        return fd_cell18(d, k, x, 0.0)
+    if math.isfinite(d) and math.isfinite(x):
+        return ux_fin(ux_add(ux(d), ux_mul(ux(x), k), r=lambda v: v))
+    return d + x * (1.0 if k[0] > 0 else -1.0)
+
+
+class Cw:
+    """fdtd.rs's `CwAccumulator`, transcribed on the primitives P; under row 18 (M5 part 2d-4a) the sums at their range
+    edges, the scalars with an unbounded exponent where they leave the range, and the amplitude at its edge."""
+
+    def __init__(self, n, freq, dt, port=frozenset()):
         self.n, self.dt, self.omega = n, dt, 2.0 * math.pi * freq
+        self.r18 = "18" in port
+        self.w53 = ux_mul(ux(2.0 * math.pi), ux(freq)) if math.isfinite(freq) else None
         self.re, self.im, self.ns, self.errs = [0.0] * n, [0.0] * n, 0, []
 
     def accumulate(self, field, step, P):
-        t = float(step) * self.dt
+        sf = float(step)
+        t = sf * self.dt
         arg = self.omega * t
         s, c = P["sin"](arg), P["cos"](arg)
         cos_dt, sin_dt = c * self.dt, s * self.dt
+        if not self.r18:
+            for k in range(min(len(field), self.n)):
+                self.re[k] = self.re[k] + field[k] * cos_dt
+                self.im[k] = self.im[k] - field[k] * sin_dt
+            self.ns += 1
+            return
+        kc, ks = cos_dt, -sin_dt                     # imag −= f·sin_dt is imag += f·(−sin_dt), the same bits
+        ok = (fd_prod_ok(t, sf, self.dt) and fd_prod_ok(arg, self.omega, t) and fd_prod_ok(cos_dt, c, self.dt)
+              and fd_prod_ok(sin_dt, s, self.dt))
+        if not ok and math.isfinite(self.dt) and self.w53 is not None:
+            d53 = ux(self.dt)
+            a53 = ux_mul(self.w53, ux_mul(ux(sf), d53))
+            kc = cw_k(ux_mul(fs_cos53(a53), d53))
+            sk = ux_mul(fs_sin53(a53), d53)
+            ks = cw_k((-sk[0], not sk[1]))
         for k in range(min(len(field), self.n)):
-            self.re[k] = self.re[k] + field[k] * cos_dt
-            self.im[k] = self.im[k] - field[k] * sin_dt
+            self.re[k] = cw_cell(self.re[k], kc, field[k])
+            self.im[k] = cw_cell(self.im[k], ks, field[k])
         self.ns += 1
+
+    def amp(self, r, q):
+        if self.r18 and math.isfinite(r) and math.isfinite(q) and not cx_plain(r, q):
+            return ux_fin_sqrt(ux_sumsq(r, q))
+        return fsqrt(r * r + q * q)
 
     def state(self, P):
         n = self.n
-        amp = [fsqrt(r * r + q * q) for r, q in zip(self.re, self.im)]
+        amp = [self.amp(r, q) for r, q in zip(self.re, self.im)]
         ph = [P["atan2"](q, r) for r, q in zip(self.re, self.im)]
         out = list(self.errs) + [("i", self.ns), ("f", self.omega), ("f", self.dt), ("i", n),
                                  ("i", fd_digest(self.re)), ("i", fd_digest(self.im)), ("i", fd_digest(amp)),
@@ -9275,13 +9320,13 @@ class Cw:
         return out
 
 
-def fu_cw(fn, toks, P):
+def fu_cw(fn, toks, P, port=frozenset()):
     n, freq, dt = toks[0][1] & FD_U64, toks[1][1], toks[2][1]
     if fn != "CwAccumulator::new":
         bad = fm_first(lambda: fm_nonneg("CW frequency", freq), lambda: fm_positive("dt", dt))
         if bad is not None:
             return bad
-    acc, k = Cw(n, freq, dt), 3
+    acc, k = Cw(n, freq, dt, port), 3
     while k < len(toks):
         code = toks[k][1]
         if code in (1, 2):
@@ -9645,6 +9690,19 @@ def fs_sin53(ph):
     return s, s < 0
 
 
+def fs_cos53(ph):
+    """cos of a 53-bit exact angle to 53 bits, as _bj_vx_cos53: 1 below 2^-1022 (and at 0), the double's correctly
+    rounded cosine in range, MPFR's widest range past DBL_MAX."""
+    v = ph[0]
+    if v == 0 or abs(v) < Fraction(FS_DMIN):
+        return Fraction(1), False
+    if abs(v) < Fraction(2) ** 1024:
+        return ux(MPFR_P["cos"](float(v)))
+    cs, ce = mpfr_ref.wide_split("cos", v)
+    c = Fraction(cs) * Fraction(2) ** ce
+    return c, c < 0
+
+
 def fd_pulse_port(name, v):
     """The port's pulses (ADR 0002 row 18, M5 part 2d-1): Rust's chain on correctly rounded primitives, but where an
     intermediate leaves the normal range for finite arguments, the chain with an unbounded exponent, e^x to 53 bits on
@@ -9855,6 +9913,8 @@ def fdtd_corrections(root: Path, path: Path):
                 want = fu_eval(fn, ins, MPFR_P, fs.K, fs.c12)
                 if fn == "NonUniformGrid::graded" and not toks_same(*fu_graded_port(fn, ins, fs.K, fs.c12)):
                     continue                                # ADR 0002 row 42's: fdtd.adr.tsv maps it
+                if fn.startswith("CwAccumulator::") and not toks_same(*fu_cw_port(fn, ins)):
+                    continue                                # ADR 0002 row 18's: fdtd.adr.tsv maps it
                 if fn == "fdtd::nf2ff_2d_phasor" and not toks_same(*fu_nf2ff_port(fn, ins, fs.K, fs.c12)):
                     continue                                # ADR 0002 row 17's: fdtd.adr.tsv maps it
                 old = wave_toks([parse_tok(x) for x in outs.split(" ")])
@@ -9925,6 +9985,13 @@ def fu_graded_port(fn, ins, K, c12):
     up = d_max > d_min
     cells = [min(x, d_max) if up else (d_max if x < d_max else x) for _k, x in base[1:-1]]
     return base[:1] + [("f", x) for x in cells] + [("f", d_max)], base
+
+
+def fu_cw_port(fn, ins):
+    """The port's CW accumulator script (ADR 0002 row 18, M5 part 2d-4a) on correctly rounded primitives. Returns (the
+    port's tokens, Rust's on those primitives)."""
+    toks = [parse_tok(x) for x in ins.split(" ")]
+    return fu_cw(fn, toks, MPFR_P, FD_PORT), fu_cw(fn, toks, MPFR_P)
 
 
 def fu_courant_port(fn, ins, K, c12):
@@ -10019,6 +10086,11 @@ def fdtd_adr_rows(root: Path, path: Path) -> list:
             want, base = fu_graded_port(fn, ins, fs.K, fs.c12)
             if not toks_same(want, base) and not toks_same(want, wave_toks([parse_tok(x) for x in outs.split(" ")])):
                 out.append((fn, ins, wire(want), "42", f"oracle {outs[:120]}; ADR 0002 row 42: the last cell d_max"))
+            continue
+        if fn.startswith("CwAccumulator::"):
+            want, base = fu_cw_port(fn, ins)
+            if not toks_same(want, base) and not toks_same(want, wave_toks([parse_tok(x) for x in outs.split(" ")])):
+                out.append((fn, ins, wire(want), "18", f"oracle {outs[:120]}; ADR 0002 row 18: the range edge"))
             continue
         if fn in FM41:
             want = fm_port41(fn, v, eps0)

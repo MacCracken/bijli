@@ -13,6 +13,8 @@
 private
 
 var _BJ_FU_INF: f64 = 0x7FF0000000000000;
+# 2^-1022: the normal range's floor.
+var _BJ_FU_DMIN: f64 = 0x0010000000000000;
 # std::f64::consts::PI and SQRT_2.
 var _BJ_FU_PI: f64 = 3.141592653589793;
 var _BJ_FU_SQRT_2: f64 = 1.4142135623730951;
@@ -354,10 +356,57 @@ public fn bj_fourth_order_derivative(field: *f64, n, dx: f64, out: *f64) {
 
 # ── the CW accumulator ──────────────────────────────────────────────────────────────────────────────────────────────
 
+# 1 when x is 0, or finite with |x| ≥ 2^-1022.
+#must_use
+fn _bj_fu_normal(x: f64): i64 {
+    if (x == 0.0) { return 1; }
+    var a: f64 = f64_abs(x);
+    if (a >= _BJ_FU_DMIN && a < _BJ_FU_INF) { return 1; }
+    return 0;
+}
+
+# 1 when the product z = x·y kept the normal range: z normal, or 0 from a zero factor (not an underflow).
+#must_use
+fn _bj_fu_prod_ok(z: f64, x: f64, y: f64): i64 {
+    if (_bj_fu_normal(z) == 0) { return 0; }
+    if (z == 0.0 && x != 0.0 && y != 0.0) { return 0; }
+    return 1;
+}
+
+# d[i] += f[i]·k for i < m, k = ks·2^ke to 53 bits with an unbounded exponent (ke ignored when exact is 1: ks is the
+# double). Where k is a double (normal, or 0), src/crmath_edge.cyr's per-cell rule on the packed verbs through the
+# scratch row w; where it lies below 2^-1022, every cell's product is the 53-bit f·k, and the sum is rounded once
+# (IEEE's specials on a non-finite f or d).
+fn _bj_fu_cw_sum(d: *f64, f: *f64, w: *f64, m, ks: f64, ke, exact) {
+    var k: f64[1];
+    k[0] = ks;
+    if (exact == 0) {
+        if (ks == 0.0) {
+            exact = 1;
+        } elif (ke >= 0 - 1022 && ke <= 1023) {
+            k[0] = _bj_k_ux_round(ks, ke, 0.0);
+            exact = 1;
+        }
+    }
+    if (exact == 1) {
+        _bj_e_cell_row(d, &k, 0, f, 0, w, m);
+        return 0;
+    }
+    for (var i = 0; i < m; i = i + 1) {
+        var ds, de = _bj_k_ux_from(d[i]);
+        var fs, fe = _bj_k_ux_from(f[i]);
+        var ps, pe = _bj_k_ux_mul(fs, fe, ks, ke);
+        d[i] = _bj_k_ux_add_f64(ds, de, ps, pe);
+    }
+    return 0;
+}
+
 # A running single-frequency DFT, F(ω) = Σₙ f(tₙ)·e^{−jωtₙ}·Δt per grid point, its phases in e^{+jωt}. `real` and
 # `imag` are the addresses of field_size f64 each (the cos and sin parts), `n_samples` the samples taken, `omega` 2πf,
 # `dt` the time step. `work` is the update's scratch row and `map_bytes` the mapping's length (0 once freed, or for
-# field_size 0); `mismatch_warned` is set once a length mismatch has been warned of. Mirrors `CwAccumulator`.
+# field_size 0); `mismatch_warned` is set once a length mismatch has been warned of. `omega_s`·2^`omega_e` is 2πf to 53
+# bits with an unbounded exponent, which the phase takes where `omega`, Rust's rounded field, is ∞ (ADR 0002 row 18,
+# M5 part 2d-4a); no Rust counterpart. Mirrors `CwAccumulator`.
 public struct BjCwAccumulator {
     real;
     imag;
@@ -368,6 +417,8 @@ public struct BjCwAccumulator {
     mismatch_warned;
     work;
     map_bytes;
+    omega_s: f64;
+    omega_e;
 }
 
 # An accumulator for field_size points at `frequency` (Hz) with step dt into *out, unchecked as Rust's (a non-finite
@@ -408,6 +459,9 @@ public fn BjCwAccumulator_new(field_size, frequency: f64, dt: f64, out: *BjCwAcc
     }
     var w: f64 = 2.0 * _BJ_FU_PI;
     var om: f64 = w * frequency;
+    var ws, we = _bj_k_ux_from(w);
+    var fs, fe = _bj_k_ux_from(frequency);
+    var os, oe = _bj_k_ux_mul(ws, we, fs, fe);
     out.real = 0;
     out.imag = 0;
     out.work = 0;
@@ -422,6 +476,8 @@ public fn BjCwAccumulator_new(field_size, frequency: f64, dt: f64, out: *BjCwAcc
     out.dt = dt;
     out.mismatch_warned = 0;
     out.map_bytes = field_size * 24;
+    out.omega_s = os;
+    out.omega_e = oe;
     return Ok(0);
 }
 
@@ -459,8 +515,11 @@ public fn BjCwAccumulator_free(acc: *BjCwAccumulator): i64 {
 impl BjCwAccumulator {
     # Accumulates the len samples at field, taken at t = time_step·dt (time_step a usize): real += f·cos(ωt)·Δt and
     # imag −= f·sin(ωt)·Δt, Rust's chain on the correctly rounded sin_cos. When len differs from field_size only the
-    # common prefix is taken, with one warning. The updates run on the packed f64v_* verbs (each lane rounding Rust's
-    # two operations) on a multiple of 4, then a scalar tail (probe p19). Mirrors `CwAccumulator::accumulate`.
+    # common prefix is taken, with one warning. The sums run on src/crmath_edge.cyr's per-cell rule (each lane rounding
+    # Rust's two operations, a cell at its range edge rerun with an unbounded exponent; imag += f·(−sin(ωt)·Δt), the
+    # same bits). Where t, the phase ω·t or either coefficient leaves the normal range for a finite dt and ω (ω past
+    # DBL_MAX included), the scalars run with an unbounded exponent, the sine and cosine past DBL_MAX by Payne–Hanek
+    # (ADR 0002 row 18, M5 part 2d-4a). Mirrors `CwAccumulator::accumulate`.
     public fn accumulate(self, field: *f64, len, time_step) {
         var m = self.field_size;
         if (len != m && self.mismatch_warned == 0) {
@@ -480,26 +539,33 @@ impl BjCwAccumulator {
         var sf: f64 = _bj_fu_u2f(time_step);
         var dt: f64 = self.dt;
         var t: f64 = sf * dt;
-        var arg: f64 = self.omega * t;
+        var om: f64 = self.omega;
+        var arg: f64 = om * t;
         var s, c = _bj_sin_cos(arg);
         var cos_dt: f64 = c * dt;
         var sin_dt: f64 = s * dt;
         var re: *f64 = _bj_fu_f64p(self.real);
         var im: *f64 = _bj_fu_f64p(self.imag);
         var w: *f64 = _bj_fu_f64p(self.work);
-        var m4 = m & (0 - 4);
-        if (m4 > 0) {
-            f64v_scale(w, field, cos_dt, m4);
-            f64v_add(re, re, w, m4);
-            f64v_scale(w, field, sin_dt, m4);
-            f64v_sub(im, im, w, m4);
-        }
-        for (var i = m4; i < m; i = i + 1) {
-            var f: f64 = field[i];
-            var a: f64 = f * cos_dt;
-            re[i] = re[i] + a;
-            var b: f64 = f * sin_dt;
-            im[i] = im[i] - b;
+        var ok = _bj_fu_prod_ok(t, sf, dt) & _bj_fu_prod_ok(arg, om, t);
+        ok = ok & _bj_fu_prod_ok(cos_dt, c, dt) & _bj_fu_prod_ok(sin_dt, s, dt);
+        var fin: f64 = dt * 0.0 + self.omega_s * 0.0;
+        if (ok == 1 || fin != 0.0) {
+            _bj_fu_cw_sum(re, field, w, m, cos_dt, 0, 1);
+            var nsd: f64 = -sin_dt;
+            _bj_fu_cw_sum(im, field, w, m, nsd, 0, 1);
+        } else {
+            var ds, de = _bj_k_ux_from(dt);
+            var ss0, se0 = _bj_k_ux_from(sf);
+            var ts, te = _bj_k_ux_mul(ss0, se0, ds, de);
+            var as, ae = _bj_k_ux_mul(self.omega_s, self.omega_e, ts, te);
+            var ns, ne = _bj_vx_sin53(as, ae);
+            var cs, ce = _bj_vx_cos53(as, ae);
+            var kcs, kce = _bj_k_ux_mul(cs, ce, ds, de);
+            var kss, kse = _bj_k_ux_mul(ns, ne, ds, de);
+            _bj_fu_cw_sum(re, field, w, m, kcs, kce, 0);
+            var nks: f64 = -kss;
+            _bj_fu_cw_sum(im, field, w, m, nks, kse, 0);
         }
         self.n_samples = self.n_samples + 1;
         return 0;
@@ -521,15 +587,23 @@ impl BjCwAccumulator {
         return Ok(0);
     }
 
-    # |F(ω)| = √(re² + im²) at each point into out[0..field_size]. Mirrors `CwAccumulator::amplitude`.
+    # |F(ω)| = √(re² + im²) at each point into out[0..field_size]: Rust's chain, which is BjComplex's abs, so at a range
+    # edge (re or im outside [2^-511, 2^511) and not 0) the same unbounded chain, the root rounded once (ADR 0002 row
+    # 18, M5 part 2d-4a: Rust's re² past DBL_MAX gave ∞, its underflow 0 or lost bits). Mirrors
+    # `CwAccumulator::amplitude`.
     public fn amplitude(self, out: *f64) {
         var re: *f64 = _bj_fu_f64p(self.real);
         var im: *f64 = _bj_fu_f64p(self.imag);
         for (var i = 0; i < self.field_size; i = i + 1) {
             var r: f64 = re[i];
             var q: f64 = im[i];
-            var s: f64 = r * r + q * q;
-            out[i] = f64_sqrt(s);
+            if (_bj_cx_plain(r, q) == 1) {
+                var s: f64 = r * r + q * q;
+                out[i] = f64_sqrt(s);
+            } else {
+                var us, ue = _bj_cx_ux_sumsq(r, q);
+                out[i] = _bj_k_ux_sqrt_f64(us, ue);
+            }
         }
         return 0;
     }

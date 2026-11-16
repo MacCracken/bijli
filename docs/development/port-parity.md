@@ -6147,3 +6147,63 @@ M5's 2d, the range edges (row 18), runs in bites: the pulses, the 1D grid (its s
   equal**. `fdtd1d.tcyr` (90) and `fdtd_source.tcyr` (78) pass on all three. The gate is clean (no warnings; execution
   coverage 371 of 371 functions); validate.py 759,669 rows, 0 problems; the oracle's `--check` and clippy clean. Next:
   2d-4, the CW accumulator and the eigenmodes.
+
+## 110. M5 part 2d-4a: the CW accumulator at its range edges (2026-11-16)
+
+2d-4 runs as 2d-4a, the CW accumulator (`accumulate`'s scalars and running sums, `amplitude`), and 2d-4b, the
+eigenmode search (`dft_magnitude`'s recurrence and magnitude, `find_eigenmodes`' frequencies, floor and Q).
+
+- **The findings**:
+  - `accumulate`'s scalars t = step·dt, the phase ω·t and the coefficients cos(ωt)·Δt and sin(ωt)·Δt lost the value
+    where they left the normal range for a finite dt and ω: Rust stores ω = 2πf already rounded, so f past about
+    2.86·10³⁰⁷ made ω = ∞ and every sample NaN, even where the phase is representable (f = 10³⁰⁸ on dt = 10⁻³⁰⁰: re
+    NaN for 9.999999999999992·10⁻³⁰¹); t or the phase past DBL_MAX took the sine of ∞; a subnormal dt rounded both
+    coefficients to the subnormal grid before the products;
+  - the running sums re += f·cos(ωt)·Δt and im −= f·sin(ωt)·Δt, the user's answer of 2026-11-15, as the grids'
+    updates: a product past DBL_MAX where the sum isn't (f = DBL_MAX on dt = 1.5 after −10³⁰⁸: re ∞ for
+    1.1965397022934734·10³⁰⁸), and products that underflow (2^-1074·sin(ωt)·Δt rounds to +0, and Rust's +0 − +0 left
+    +0 where the sum is −0);
+  - `amplitude`'s √(re² + im²) squared past either end: re = 10²⁰⁰ gave ∞, re = 10⁻²⁰⁰ or DBL_MIN gave 0.
+- **ADR 0002 row 18, amended** (`src/fdtd_util.cyr`, `src/crmath_edge.cyr`):
+  - the accumulator keeps ω = 2πf to 53 bits with an unbounded exponent beside Rust's `omega` (two private fields,
+    `omega_s` and `omega_e`). Where t, ω, the phase or either coefficient leaves the normal range (a product of nonzero
+    factors that underflowed to 0 included) for a finite dt and ω, `accumulate` runs the scalars with an unbounded
+    exponent, the sine and cosine past DBL_MAX by Payne–Hanek (`_bj_vx_sin53`, `_bj_vx_cos53`); a coefficient that is
+    then a normal double takes the fast path, and one below 2^-1022 makes every product the 53-bit f·k, each sum
+    rounded once (`_bj_fu_cw_sum`). Rust's `step as f64` stays, as in `run` (§108);
+  - the sums take the per-cell rule (§109) as d + k·a, `_bj_e_cell_row` with b given as 0 (a − (+0) is a exactly,
+    signed zeros included), im += f·(−sin(ωt)·Δt), the same bits as Rust's im −= f·sin(ωt)·Δt;
+  - the rule's marker now tests a zero product's factors: an exact zero product (k = 0 or a = b) is the same signed zero
+    in both chains, and −sin(ωt)·Δt makes −0 of every zero sample, which part 2d-3's marker reran on every zero cell
+    (`fdtd/cw_accumulate_1000` 40 µs, 12× HEAD's). A zero product is now marked only where it could move the sum and
+    its factors are nonzero; no result changes (every mapping still passes, the 1D and TF/SF ones included);
+  - `amplitude` is BjComplex's abs: Rust's chain where re and im are 0 or within [2^-511, 2^511), else the same chain
+    with an unbounded exponent, the root rounded once. `phase`'s atan2 is correctly rounded already.
+- **validate.py**: `Cw` takes the port set: under row 18 its scalars with an unbounded exponent where they leave the
+  range (`fs_cos53` beside `fs_sin53`), each cell by `cw_cell` (`fd_cell18` with b = 0, or RN(d + RN53(f·k)) for a
+  coefficient below 2^-1022), and the amplitude by the exact chain where `cx_plain` fails; `fu_cw_port` maps a CW row
+  to row 18, and `fdtd_corrections` skips it.
+- **The grid**: 212 CW scenario rows appended to `fdtd.tsv` (106,926; 38.4 MB): f of 3·10³⁰⁷, 10³⁰⁸ and DBL_MAX on dt
+  from 10⁻²⁹⁰ to 10⁻³²⁰ at steps 0 to 2⁴⁰; t past DBL_MAX (dt of 10³⁰⁰ and DBL_MAX/2, steps to usize::MAX) against f
+  of 10⁻³⁰⁰ and 10⁻³¹⁰; the phase past DBL_MAX; subnormal dt (10⁻³¹⁰, 2^-1074, DBL_MIN/2) at three f; subnormal
+  phases; sums of ±10³⁰⁸ to DBL_MAX on dt of 1.1 and 1.5; samples down to ±2^-1074; generated fields near 10^±200 and
+  10^±160 (amplitudes past either end); and 12 seeded scripts over the whole range.
+- **The mapping**: **226 CW rows** to row 18 (199 `accumulate`, 27 `new`): 195 of the new rows and 31 of part 1d's
+  (its special samples and dt: DBL_MIN, 2^-1074 and DBL_MAX, mostly the amplitude), all passing.
+- **Tests**: `tests/fdtd_util.tcyr`'s `cyrius_cw_edges` (6 assertions, 86 in all): f = 10³⁰⁸ (re and the amplitude),
+  the overflowing product, the −0, the subnormal dt and the amplitudes of 10^±200.
+- **Benchmarks**: `fdtd/cw_accumulate_1000` is new (Cyrius-only: no Rust bench covers `accumulate`): one accumulation of
+  a 1000-cell field at 30 GHz, a third of it zero. A focused interleaved A/B against HEAD (three rounds, load 3.4 to
+  3.5): 3.48–3.95 → 11.3–12.4 µs (about 3.2×, the two scans, as the grids'); the first marker, which reran every −0
+  product, made it 40.0–41.6 µs. The full interleaved A/B (two rounds at load 3.7 to 32: other sessions' Cyrius compiler
+  and `rustc` builds) was disturbed in both rounds (`fdtd/run_100_steps_500_cells` swung 4× either way) but showed no
+  systematic change (median ratios 1.09 and 0.98; `fdtd/find_eigenmodes_4096x256` 1.04 and 1.04, untouched by this
+  bite). A focused interleaved A/B of the grid steps for the marker's new zero path (three rounds at load 6.8 to 7.4,
+  the second disturbed): `fdtd/tfsf_step_200` 2.34–2.51 → 1.92 µs (below S = 1 the Mur coefficient is negative, so a
+  quiet end's zero product was −0 and was rerun every step), `fdtd/run_100_steps_500_cells` 784–822 → 744–746 µs, the
+  1D steps no slower (`fdtd/step_1000_cells` 8.99–10.8 → 6.71–7.07 µs).
+- **Result, every target** (x86_64 ELF, x86_64 PE, aarch64): **18 modules, 0 failing; 640,997 ok, 0 failed, 0
+  measured, 0 pending, 118,884 accepted (ADR 01: 40,366; ADR 0002: 78,518)** over 759,881 rows; **all 475 digests
+  equal**. `fdtd_util.tcyr` (86) passes on all three. The gate is clean (no warnings; execution coverage 371 of 371
+  functions); validate.py 759,881 rows, 0 problems; the oracle's `--check` and clippy clean. Next: 2d-4b, the eigenmode
+  search.

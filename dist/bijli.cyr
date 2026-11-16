@@ -15628,12 +15628,17 @@ fn _bj_e_within12(a: f64, b: f64, m: f64): i64 {
 # Rust's chain is the one with an unbounded exponent wherever p is normal, or a zero from an exact zero. It can differ
 # where p is ±∞, NaN or a nonzero subnormal, or ±0 from a nonzero exact product; and of those zeros RN(d + p) moves only
 # for −0 against a +0 field (the exact sum, a tiny negative, rounds to −0, where Rust's +0 + −0 is +0), or for p of
-# exactly ±2^-1075 at 53 bits against a field below 2^-1021 with an odd last bit (a tie at the 2^-1074 grid). The
-# marker (_bj_e_cell_edge) is p ±∞, NaN, a nonzero subnormal or −0, or +0 against a nonzero field of at most 2^-1021
-# (one more than the rule needs, ±2^-1021, whose rerun is Rust's value). Such a cell, for finite operands, is
+# exactly ±2^-1075 at 53 bits against a field below 2^-1021 with an odd last bit (a tie at the 2^-1074 grid). An exact
+# zero product (k = 0 or a = b) is the same signed zero in both chains. The marker (_bj_e_cell_edge) is p ±∞, NaN or a
+# nonzero subnormal, or p ±0 where it could move the sum, −0 on a +0 field or against a nonzero field of at most 2^-1021
+# (one more than the rule needs, ±2^-1021, whose rerun is Rust's value); a zero product then needs nonzero factors,
+# k ≠ 0 and a ≠ b (M5 part 2d-4a: the CW sums' −sin(ωt)·Δt makes −0 of every zero sample). Such a cell, for finite
+# operands, is
 # d + k·(a − b) with a − b and the product to 53 bits with an unbounded exponent and the sum rounded once (_bj_e_cell);
 # every other cell keeps Rust's bits. The grids (src/fdtd1d.cyr, src/fdtd_source.cyr) run a row on the packed f64v_*
-# verbs and scan its product row between the multiply and the add (_bj_e_cell_row).
+# verbs and scan its product row between the multiply and the add (_bj_e_cell_row). The CW accumulator's sums
+# (src/fdtd_util.cyr, M5 part 2d-4a) are d + k·a, a row with b given as 0: a − (+0) is a exactly, signed zeros included,
+# so the same marker and rerun hold.
 
 # A word as a *f64 (the typed return keeps the binding typed).
 #must_use
@@ -15641,15 +15646,16 @@ fn _bj_e_f64p(a): *f64 {
     return a;
 }
 
-# 1 when the product p with raw bits x, beside the field d with raw bits dw, marks a cell (the section comment): p ±∞,
-# a NaN, a nonzero subnormal or −0, or +0 against a nonzero d of at most 2^-1021 ((2·dw − 1) >> 54 is 0 exactly for
-# those words: d's exponent field 0 or 1, or d = ±2^-1021, which the rule doesn't need and the rerun leaves as Rust's).
+# 1 when the product p with raw bits x, beside the field d with raw bits dw, marks a cell (the section comment): p ±∞, a
+# NaN or a nonzero subnormal; or p ±0 that could move the sum, −0 on a +0 d, or against a nonzero d of at most 2^-1021
+# ((2·dw − 1) >> 54 is 0 exactly for those words: d's exponent field 0 or 1, or d = ±2^-1021, which the rule doesn't
+# need and the rerun leaves as Rust's). A zero p marks the cell only for nonzero factors: the caller tests them.
 #must_use
 fn _bj_e_cell_edge(x, dw): i64 {
     var ex = (x >> 52) & 2047;
     if (ex == 2047) { return 1; }
     if (ex != 0) { return 0; }
-    if (x != 0 || (((dw << 1) - 1) >> 54) == 0) { return 1; }
+    if ((x << 1) != 0 || (x != 0 && dw == 0) || (((dw << 1) - 1) >> 54) == 0) { return 1; }
     return 0;
 }
 
@@ -15674,7 +15680,9 @@ fn _bj_e_cell(dv: f64, kv: f64, av: f64, bv: f64, r: f64): f64 {
 fn _bj_e_cell_one(dv: f64, kv: f64, av: f64, bv: f64): f64 {
     var p: f64 = kv * (av - bv);
     var r: f64 = dv + p;
-    if (_bj_e_cell_edge(_bj_k_bits(p), _bj_k_bits(dv)) == 1) { r = _bj_e_cell(dv, kv, av, bv, r); }
+    if (_bj_e_cell_edge(_bj_k_bits(p), _bj_k_bits(dv)) == 1) {
+        if (p != 0.0 || (kv != 0.0 && av != bv)) { r = _bj_e_cell(dv, kv, av, bv, r); }
+    }
     return r;
 }
 
@@ -15684,29 +15692,47 @@ fn _bj_e_cell_at(d, k, ks, a, b, w, i) {
     var dp: *f64 = _bj_e_f64p(d);
     var kp: *f64 = _bj_e_f64p(k + i * ks);
     var ap: *f64 = _bj_e_f64p(a);
-    var bp: *f64 = _bj_e_f64p(b);
     var wp: *f64 = _bj_e_f64p(w);
     var dv: f64 = dp[i];
     var pv: f64 = wp[i];
     var rr: f64 = dv + pv;
-    dp[i] = _bj_e_cell(dv, kp[0], ap[i], bp[i], rr);
+    var bv: f64 = 0.0;
+    if (b != 0) {
+        var bp: *f64 = _bj_e_f64p(b);
+        bv = bp[i];
+    }
+    dp[i] = _bj_e_cell(dv, kp[0], ap[i], bv, rr);
     wp[i] = -0.0;
     return 0;
 }
 
 # The packed part's cells (m of them) whose product w[i] = k_i·(a[i] − b[i]) marks a cell beside d[i] (the section
-# comment), each rerun by _bj_e_cell_at. d, k, a, b and w are addresses; k_i is the f64 at k + i·ks (ks 8 for a row of
-# coefficients, 0 for one coefficient). The marker is inline, the scan's common path: a normal product is two tests, a
-# zero one loads d[i] and tests (2·d[i] − 1) >> 54, 0 exactly for a nonzero d of at most 2^-1021 as a word.
+# comment), each rerun by _bj_e_cell_at. d, k, a, b and w are addresses (b 0 for none: k·a); k_i is the f64 at
+# k + i·ks (ks 8 for a row of coefficients, 0 for one coefficient). The marker is inline, the scan's common path: a
+# normal product is two tests; a zero one loads d[i] and tests it ((2·d[i] − 1) >> 54 is 0 exactly for a nonzero d of
+# at most 2^-1021 as a word), and only then its factors (a zero k, or a = b as words or both ±0: an exact zero).
 fn _bj_e_cell_fix(d, k, ks, a, b, w, m) {
     var q = w;
     var end = w + m * 8;
-    var off = d - w;
     while (q < end) {
         var x = load64(q);
         var ex = (x >> 52) & 2047;
         if (ex == 0) {
-            if (x != 0 || (((load64(q + off) << 1) - 1) >> 54) == 0) { _bj_e_cell_at(d, k, ks, a, b, w, (q - w) / 8); }
+            var i = q - w;
+            if ((x << 1) != 0) {
+                _bj_e_cell_at(d, k, ks, a, b, w, i / 8);
+            } else {
+                var dw = load64(d + i);
+                if ((x != 0 && dw == 0) || (((dw << 1) - 1) >> 54) == 0) {
+                    var aw = load64(a + i);
+                    var bw = 0;
+                    if (b != 0) { bw = load64(b + i); }
+                    var kw = load64(k + (i / 8) * ks);
+                    if ((kw << 1) != 0 && aw != bw && ((aw | bw) << 1) != 0) {
+                        _bj_e_cell_at(d, k, ks, a, b, w, i / 8);
+                    }
+                }
+            }
         } elif (ex == 2047) {
             _bj_e_cell_at(d, k, ks, a, b, w, (q - w) / 8);
         }
@@ -15715,26 +15741,33 @@ fn _bj_e_cell_fix(d, k, ks, a, b, w, m) {
     return 0;
 }
 
-# d[i] = d[i] + k_i·(a[i] − b[i]) for i < n, Rust's `*d += k * (a − b)`, k_i the f64 at k + i·ks (ks 8 for a row of
-# coefficients, 0 for one): the packed f64v_sub, then f64v_mul (a row) or f64v_scale (one), the scan and f64v_add
-# through the scratch row w on the largest multiple of 4, then a scalar tail, each cell at its range edge as the section
-# comment has it. The tail keeps the verbs to a lane multiple: at an odd count f64v_sub, f64v_mul and f64v_scale write
-# one word past their dst on 6.7.18 (probe p19; port plan §10).
+# d[i] = d[i] + k_i·(a[i] − b[i]) for i < n, Rust's `*d += k * (a − b)`, or d[i] + k_i·a[i] (`*d += k * a`) when b is
+# 0; k_i is the f64 at k + i·ks (ks 8 for a row of coefficients, 0 for one): the packed f64v_sub (unless b is 0), then
+# f64v_mul (a row) or f64v_scale (one), the scan and f64v_add through the scratch row w on the largest multiple of 4,
+# then a scalar tail, each cell at its range edge as the section comment has it. The tail keeps the verbs to a lane
+# multiple: at an odd count f64v_sub, f64v_mul and f64v_scale write one word past their dst on 6.7.18 (probe p19; port
+# plan §10).
 fn _bj_e_cell_row(d: *f64, k: *f64, ks, a: *f64, b: *f64, w: *f64, n) {
     var m = n & (0 - 4);
     var k0: f64 = 0.0;
     if (ks == 0) { k0 = k[0]; }
     if (m > 0) {
-        f64v_sub(w, a, b, m);
-        if (ks == 0) { f64v_scale(w, w, k0, m); }
-        else { f64v_mul(w, k, w, m); }
+        var x: *f64 = a;
+        if (b != 0) {
+            f64v_sub(w, a, b, m);
+            x = w;
+        }
+        if (ks == 0) { f64v_scale(w, x, k0, m); }
+        else { f64v_mul(w, k, x, m); }
         _bj_e_cell_fix(d, k, ks, a, b, w, m);
         f64v_add(d, d, w, m);
     }
     for (var i = m; i < n; i = i + 1) {
         var kv: f64 = k0;
         if (ks != 0) { kv = k[i]; }
-        d[i] = _bj_e_cell_one(d[i], kv, a[i], b[i]);
+        var bv: f64 = 0.0;
+        if (b != 0) { bv = b[i]; }
+        d[i] = _bj_e_cell_one(d[i], kv, a[i], bv);
     }
     return 0;
 }
@@ -32410,6 +32443,8 @@ public fn bj_subpixel_permittivity_perpendicular_checked(eps1: f64, eps2: f64, f
 private
 
 var _BJ_FU_INF: f64 = 0x7FF0000000000000;
+# 2^-1022: the normal range's floor.
+var _BJ_FU_DMIN: f64 = 0x0010000000000000;
 # std::f64::consts::PI and SQRT_2.
 var _BJ_FU_PI: f64 = 3.141592653589793;
 var _BJ_FU_SQRT_2: f64 = 1.4142135623730951;
@@ -32751,10 +32786,57 @@ public fn bj_fourth_order_derivative(field: *f64, n, dx: f64, out: *f64) {
 
 # ── the CW accumulator ──────────────────────────────────────────────────────────────────────────────────────────────
 
+# 1 when x is 0, or finite with |x| ≥ 2^-1022.
+#must_use
+fn _bj_fu_normal(x: f64): i64 {
+    if (x == 0.0) { return 1; }
+    var a: f64 = f64_abs(x);
+    if (a >= _BJ_FU_DMIN && a < _BJ_FU_INF) { return 1; }
+    return 0;
+}
+
+# 1 when the product z = x·y kept the normal range: z normal, or 0 from a zero factor (not an underflow).
+#must_use
+fn _bj_fu_prod_ok(z: f64, x: f64, y: f64): i64 {
+    if (_bj_fu_normal(z) == 0) { return 0; }
+    if (z == 0.0 && x != 0.0 && y != 0.0) { return 0; }
+    return 1;
+}
+
+# d[i] += f[i]·k for i < m, k = ks·2^ke to 53 bits with an unbounded exponent (ke ignored when exact is 1: ks is the
+# double). Where k is a double (normal, or 0), src/crmath_edge.cyr's per-cell rule on the packed verbs through the
+# scratch row w; where it lies below 2^-1022, every cell's product is the 53-bit f·k, and the sum is rounded once
+# (IEEE's specials on a non-finite f or d).
+fn _bj_fu_cw_sum(d: *f64, f: *f64, w: *f64, m, ks: f64, ke, exact) {
+    var k: f64[1];
+    k[0] = ks;
+    if (exact == 0) {
+        if (ks == 0.0) {
+            exact = 1;
+        } elif (ke >= 0 - 1022 && ke <= 1023) {
+            k[0] = _bj_k_ux_round(ks, ke, 0.0);
+            exact = 1;
+        }
+    }
+    if (exact == 1) {
+        _bj_e_cell_row(d, &k, 0, f, 0, w, m);
+        return 0;
+    }
+    for (var i = 0; i < m; i = i + 1) {
+        var ds, de = _bj_k_ux_from(d[i]);
+        var fs, fe = _bj_k_ux_from(f[i]);
+        var ps, pe = _bj_k_ux_mul(fs, fe, ks, ke);
+        d[i] = _bj_k_ux_add_f64(ds, de, ps, pe);
+    }
+    return 0;
+}
+
 # A running single-frequency DFT, F(ω) = Σₙ f(tₙ)·e^{−jωtₙ}·Δt per grid point, its phases in e^{+jωt}. `real` and
 # `imag` are the addresses of field_size f64 each (the cos and sin parts), `n_samples` the samples taken, `omega` 2πf,
 # `dt` the time step. `work` is the update's scratch row and `map_bytes` the mapping's length (0 once freed, or for
-# field_size 0); `mismatch_warned` is set once a length mismatch has been warned of. Mirrors `CwAccumulator`.
+# field_size 0); `mismatch_warned` is set once a length mismatch has been warned of. `omega_s`·2^`omega_e` is 2πf to 53
+# bits with an unbounded exponent, which the phase takes where `omega`, Rust's rounded field, is ∞ (ADR 0002 row 18,
+# M5 part 2d-4a); no Rust counterpart. Mirrors `CwAccumulator`.
 public struct BjCwAccumulator {
     real;
     imag;
@@ -32765,6 +32847,8 @@ public struct BjCwAccumulator {
     mismatch_warned;
     work;
     map_bytes;
+    omega_s: f64;
+    omega_e;
 }
 
 # An accumulator for field_size points at `frequency` (Hz) with step dt into *out, unchecked as Rust's (a non-finite
@@ -32805,6 +32889,9 @@ public fn BjCwAccumulator_new(field_size, frequency: f64, dt: f64, out: *BjCwAcc
     }
     var w: f64 = 2.0 * _BJ_FU_PI;
     var om: f64 = w * frequency;
+    var ws, we = _bj_k_ux_from(w);
+    var fs, fe = _bj_k_ux_from(frequency);
+    var os, oe = _bj_k_ux_mul(ws, we, fs, fe);
     out.real = 0;
     out.imag = 0;
     out.work = 0;
@@ -32819,6 +32906,8 @@ public fn BjCwAccumulator_new(field_size, frequency: f64, dt: f64, out: *BjCwAcc
     out.dt = dt;
     out.mismatch_warned = 0;
     out.map_bytes = field_size * 24;
+    out.omega_s = os;
+    out.omega_e = oe;
     return Ok(0);
 }
 
@@ -32856,8 +32945,11 @@ public fn BjCwAccumulator_free(acc: *BjCwAccumulator): i64 {
 impl BjCwAccumulator {
     # Accumulates the len samples at field, taken at t = time_step·dt (time_step a usize): real += f·cos(ωt)·Δt and
     # imag −= f·sin(ωt)·Δt, Rust's chain on the correctly rounded sin_cos. When len differs from field_size only the
-    # common prefix is taken, with one warning. The updates run on the packed f64v_* verbs (each lane rounding Rust's
-    # two operations) on a multiple of 4, then a scalar tail (probe p19). Mirrors `CwAccumulator::accumulate`.
+    # common prefix is taken, with one warning. The sums run on src/crmath_edge.cyr's per-cell rule (each lane rounding
+    # Rust's two operations, a cell at its range edge rerun with an unbounded exponent; imag += f·(−sin(ωt)·Δt), the
+    # same bits). Where t, the phase ω·t or either coefficient leaves the normal range for a finite dt and ω (ω past
+    # DBL_MAX included), the scalars run with an unbounded exponent, the sine and cosine past DBL_MAX by Payne–Hanek
+    # (ADR 0002 row 18, M5 part 2d-4a). Mirrors `CwAccumulator::accumulate`.
     public fn accumulate(self, field: *f64, len, time_step) {
         var m = self.field_size;
         if (len != m && self.mismatch_warned == 0) {
@@ -32877,26 +32969,33 @@ impl BjCwAccumulator {
         var sf: f64 = _bj_fu_u2f(time_step);
         var dt: f64 = self.dt;
         var t: f64 = sf * dt;
-        var arg: f64 = self.omega * t;
+        var om: f64 = self.omega;
+        var arg: f64 = om * t;
         var s, c = _bj_sin_cos(arg);
         var cos_dt: f64 = c * dt;
         var sin_dt: f64 = s * dt;
         var re: *f64 = _bj_fu_f64p(self.real);
         var im: *f64 = _bj_fu_f64p(self.imag);
         var w: *f64 = _bj_fu_f64p(self.work);
-        var m4 = m & (0 - 4);
-        if (m4 > 0) {
-            f64v_scale(w, field, cos_dt, m4);
-            f64v_add(re, re, w, m4);
-            f64v_scale(w, field, sin_dt, m4);
-            f64v_sub(im, im, w, m4);
-        }
-        for (var i = m4; i < m; i = i + 1) {
-            var f: f64 = field[i];
-            var a: f64 = f * cos_dt;
-            re[i] = re[i] + a;
-            var b: f64 = f * sin_dt;
-            im[i] = im[i] - b;
+        var ok = _bj_fu_prod_ok(t, sf, dt) & _bj_fu_prod_ok(arg, om, t);
+        ok = ok & _bj_fu_prod_ok(cos_dt, c, dt) & _bj_fu_prod_ok(sin_dt, s, dt);
+        var fin: f64 = dt * 0.0 + self.omega_s * 0.0;
+        if (ok == 1 || fin != 0.0) {
+            _bj_fu_cw_sum(re, field, w, m, cos_dt, 0, 1);
+            var nsd: f64 = -sin_dt;
+            _bj_fu_cw_sum(im, field, w, m, nsd, 0, 1);
+        } else {
+            var ds, de = _bj_k_ux_from(dt);
+            var ss0, se0 = _bj_k_ux_from(sf);
+            var ts, te = _bj_k_ux_mul(ss0, se0, ds, de);
+            var as, ae = _bj_k_ux_mul(self.omega_s, self.omega_e, ts, te);
+            var ns, ne = _bj_vx_sin53(as, ae);
+            var cs, ce = _bj_vx_cos53(as, ae);
+            var kcs, kce = _bj_k_ux_mul(cs, ce, ds, de);
+            var kss, kse = _bj_k_ux_mul(ns, ne, ds, de);
+            _bj_fu_cw_sum(re, field, w, m, kcs, kce, 0);
+            var nks: f64 = -kss;
+            _bj_fu_cw_sum(im, field, w, m, nks, kse, 0);
         }
         self.n_samples = self.n_samples + 1;
         return 0;
@@ -32918,15 +33017,23 @@ impl BjCwAccumulator {
         return Ok(0);
     }
 
-    # |F(ω)| = √(re² + im²) at each point into out[0..field_size]. Mirrors `CwAccumulator::amplitude`.
+    # |F(ω)| = √(re² + im²) at each point into out[0..field_size]: Rust's chain, which is BjComplex's abs, so at a range
+    # edge (re or im outside [2^-511, 2^511) and not 0) the same unbounded chain, the root rounded once (ADR 0002 row
+    # 18, M5 part 2d-4a: Rust's re² past DBL_MAX gave ∞, its underflow 0 or lost bits). Mirrors
+    # `CwAccumulator::amplitude`.
     public fn amplitude(self, out: *f64) {
         var re: *f64 = _bj_fu_f64p(self.real);
         var im: *f64 = _bj_fu_f64p(self.imag);
         for (var i = 0; i < self.field_size; i = i + 1) {
             var r: f64 = re[i];
             var q: f64 = im[i];
-            var s: f64 = r * r + q * q;
-            out[i] = f64_sqrt(s);
+            if (_bj_cx_plain(r, q) == 1) {
+                var s: f64 = r * r + q * q;
+                out[i] = f64_sqrt(s);
+            } else {
+                var us, ue = _bj_cx_ux_sumsq(r, q);
+                out[i] = _bj_k_ux_sqrt_f64(us, ue);
+            }
         }
         return 0;
     }
