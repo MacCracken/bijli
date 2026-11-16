@@ -6259,3 +6259,44 @@ eigenmode search (`dft_magnitude`'s recurrence and magnitude, `find_eigenmodes`'
   equal**. `fdtd_util.tcyr` (91) passes on all three. The gate is clean (no warnings; execution coverage 371 of 371
   functions); validate.py 759,953 rows, 0 problems; the oracle's `--check` and clippy clean. Next: 2d-4b-2, the
   eigenmode search's frequencies, floor, half-power and Q.
+
+## 112. M5 part 2d-4b-2: the eigenmode search at its range edges; 2d-4 done (2026-11-16)
+
+- **The findings**: `find_eigenmodes` around its DFT lost values where its own chain left the normal range:
+  - the frequency grid: df = (f_max − f_min)/(n − 1) below 2^-1022 (a band of 10⁻³⁰⁹ on dt = 10³⁰⁸: df, the frequencies
+    and ω subnormal, the reported frequency 3.3333333333334·10⁻³¹⁰ for 3.33333333333336·10⁻³¹⁰), and ω = 2πf past
+    DBL_MAX for f past about 2.86·10³⁰⁷, where Rust's spectrum was NaN: a mode at 1.0112·10³⁰⁸ on dt = 3·10⁻³¹⁰ went
+    unfound (a NaN bin beside a peak fails its test). Rust's (n − 1)·df can also round past DBL_MAX on a band ending
+    at DBL_MAX;
+  - the 10 % floor max·0.1 and the half-power level spec/√2 below 2^-1022, and the interpolation's quotient there: a
+    mode of 10⁻³⁰⁵ on dt = 10⁻¹² (a spectrum near 10⁻³¹⁵) went unfound;
+  - Q = f₀/(bw·df), with bw·df or the quotient past either end.
+- **ADR 0002 row 18, amended** (`src/fdtd_util.cyr`):
+  - df, each f_i = f_min + i·df and ω_i = 2π·f_i run to 53 bits with an unbounded exponent (`_bj_fu_freq`, a few
+    operations a frequency beside its DFT), Rust's bits in range; ω_i goes to `_bj_fu_dft` as the 53-bit pair (part
+    2d-4b-1), and a peak's frequency is the 53-bit f_i rounded once;
+  - the floor's test stays on its computed value (plan §0.1): Rust's double, or below 2^-1022 the 53-bit max·0.1,
+    compared exactly (`_bj_fu_floor`);
+  - Q: Rust's chain where f₀ and df are doubles and hp, the interpolation's quotient, bw·df and the quotient stay normal
+    (or an exact 0); else `_bj_fu_quality_ux`, the half-power walk with the 53-bit hp (its test a_next < hp exact), the
+    offsets, bw and bw·df to 53 bits, and Q rounded once.
+- **validate.py**: `fu_eigen18` runs the whole search past validation on Fractions under row 18, without the port's
+  fast paths: df, each f_i and ω_i to 53 bits, the spectrum by `fu_dft_port`, the floor to 53 bits and compared
+  exactly, the frequencies rounded once, Q from `fu_half_power_ux`'s 53-bit offsets rounded once. A spectrum of ∞ (the
+  magnitude itself past DBL_MAX) makes the floor ∞, as in the port.
+- **The grid**: 47 eigenmode rows appended to `fdtd.tsv` (107,045; 38.5 MB), on one damped mode: bands of 0.1/dt for dt
+  from 10³⁰⁰ to DBL_MAX; bands from 0 or 10³⁰⁷ to DBL_MAX on dt of 10⁻³⁰⁹, 1.5·10⁻³⁰⁹ and 3·10⁻³¹⁰ (n = 4, 17 and 64);
+  modes of 10⁻²⁹⁶ to 10⁻³¹⁰ on dt = 10⁻¹²; and 16 seeded steps, bands and scales.
+- **The mapping**: **69 eigenmode rows** to row 18 in all: 34 more (29 of the new rows and 5 of part 1d's), and 6 of
+  part 2d-4b-1's mappings with new values (their frequencies or Q at these edges), all passing.
+- **Tests**: `tests/fdtd_util.tcyr`'s `cyrius_eigen_edges` (3 assertions, 94 in all): the three searches above, each
+  mode's frequency, Q and amplitude.
+- **Benchmarks**: no measurable cost: the frequency chain is a few operations a frequency beside its DFT, and Q's checks a
+  few a peak. A focused interleaved A/B of `fdtd/find_eigenmodes_4096x256` against HEAD (three rounds, load 2.5): 11.04–
+  11.36 → 11.17–11.35 ms; the full interleaved A/B (two rounds, load 2.4 to 3.5, another repo's fuzzers beside it):
+  median ratios 0.96 and 1.00, the eigenmode bench 1.03 and 0.98.
+- **Result, every target** (x86_64 ELF, x86_64 PE, aarch64): **18 modules, 0 failing; 641,047 ok, 0 failed, 0
+  measured, 0 pending, 118,953 accepted (ADR 01: 40,366; ADR 0002: 78,587)** over 760,000 rows; **all 475 digests
+  equal**. `fdtd_util.tcyr` (94) passes on all three. The gate is clean (no warnings; execution coverage 371 of 371
+  functions); validate.py 760,000 rows, 0 problems; the oracle's `--check` and clippy clean. **2d-4 is done.** Next:
+  2d-5, the utilities (`graded`, `extents`, the fourth-order derivative).

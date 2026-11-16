@@ -9459,6 +9459,57 @@ def fu_half_power(spec, peak, d):
         i = nxt
 
 
+def fu_half_power_ux(spec, peak, d):
+    """`half_power_offset` with an unbounded exponent: hp = spec[peak]/√2 to 53 bits, the walk's a_next < hp exact,
+    the offset |i − peak| + (a_cur − hp)/(a_cur − a_next) to 53 bits (a ux pair), or None."""
+    hp = ux_div(ux(spec[peak]), ux(1.4142135623730951))
+    i = peak
+    while True:
+        nxt = i + d
+        if nxt < 0 or nxt >= len(spec):
+            return None
+        a_next, a_cur = spec[nxt], spec[i]
+        if Fraction(a_next) < hp[0]:
+            frac = ux_div(ux_sub(ux(a_cur), hp), ux_sub(ux(a_cur), ux(a_next)))
+            return ux_add(ux(float(abs(i - peak))), frac)
+        if a_next > a_cur:
+            return None
+        i = nxt
+
+
+def fu_eigen18(signal, dt, fmin, fmax, n_freq):
+    """The port's `find_eigenmodes` past validation (ADR 0002 row 18, M5 parts 2d-4b-1 and 2d-4b-2), every step of the
+    search on Fractions: df, each f_i and ω_i to 53 bits with an unbounded exponent, the spectrum by fu_dft_port, the
+    10 % floor max·0.1 to 53 bits and compared exactly, the frequencies rounded once, and Q = f₀/(bw·df) from the
+    53-bit offsets (fu_half_power_ux), rounded once."""
+    df53 = ux_div(ux(fmax - fmin), ux(float(n_freq - 1)))
+    f53 = [ux_add(ux(fmin), ux_mul(ux(float(i)), df53)) for i in range(n_freq)]
+    w2 = ux(2.0 * math.pi)
+    spec = [fu_dft_port(signal, ux_mul(w2, f), dt, 0.0) for f in f53]
+    mx = 0.0
+    for a in spec:
+        mx = rust_max(mx, a)
+    thr = ux_mul(ux(mx), ux(0.1))[0] if math.isfinite(mx) else None   # an ∞ spectrum's floor ∞: no peak passes it
+    fr, qs, am = [], [], []
+    for i in range(1, n_freq - 1):
+        a = spec[i]
+        if thr is not None and Fraction(a) > thr and a > spec[i - 1] and a > spec[i + 1]:
+            lft, rgt = fu_half_power_ux(spec, i, -1), fu_half_power_ux(spec, i, 1)
+            if lft is not None and rgt is not None:
+                bw = ux_add(lft, rgt)
+            elif lft is not None or rgt is not None:
+                bw = ux_mul(ux(2.0), lft if lft is not None else rgt)
+            else:
+                bw = None
+            q = 0.0
+            if bw is not None and bw[0] > 0:
+                q = ux_fin(ux_div(f53[i], ux_mul(bw, df53), r=lambda v: v))
+            fr.append(ux_fin(f53[i]))
+            qs.append(q)
+            am.append(a)
+    return fu_seq_toks(fr) + fu_seq_toks(qs) + fu_seq_toks(am)
+
+
 def fu_eigen(toks, P, port=frozenset()):
     if toks[0][0] == "v":
         signal, k = fu_seq(toks, 0)
@@ -9491,11 +9542,9 @@ def fu_eigen(toks, P, port=frozenset()):
     if any(not math.isfinite(s) for s in signal):
         return ip_err("time signal contains non-finite values")
     df = (fmax - fmin) / float(n_freq - 1)
-    if "18" in port:                                # ADR 0002 row 18 (M5 part 2d-4b-1): the DFT at its range edges
-        oms = [2.0 * math.pi * (fmin + float(i) * df) for i in range(n_freq)]
-        spec = [fu_dft_port(signal, ux(om) if math.isfinite(om) else None, dt, om) for om in oms]
-    else:
-        spec = [fu_dft(signal, 2.0 * math.pi * (fmin + float(i) * df), dt, P) for i in range(n_freq)]
+    if "18" in port:                                # ADR 0002 row 18 (M5 part 2d-4b): the search at its range edges
+        return fu_eigen18(signal, dt, fmin, fmax, n_freq)
+    spec = [fu_dft(signal, 2.0 * math.pi * (fmin + float(i) * df), dt, P) for i in range(n_freq)]
     mx = 0.0
     for a in spec:
         mx = rust_max(mx, a)

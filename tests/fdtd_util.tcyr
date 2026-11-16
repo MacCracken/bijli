@@ -43,6 +43,24 @@ fn arr(n): *f64 {
     return p;
 }
 
+# The generator's damped mode at p[0..n): x₀ = 0, x₁ = x1, x_k = 1.95·x_{k−1} − 0.99·x_{k−2} (about 0.032 cycles a
+# sample), the recurrence in scripts/oracle's order.
+fn rec_mode(p: *f64, n, x1: f64) {
+    var prev: f64 = 0.0;
+    var cur: f64 = x1;
+    p[0] = 0.0;
+    p[1] = x1;
+    for (var k = 2; k < n; k = k + 1) {
+        var a: f64 = 1.95 * cur;
+        var b: f64 = -0.99 * prev;
+        var x: f64 = a + b;
+        prev = cur;
+        cur = x;
+        p[k] = x;
+    }
+    return 0;
+}
+
 # sin(2πf·t)·exp(−t/τ) at t = i·dt, the eigenmode tests' damped mode (τ = 0 for none).
 fn mode(i, dt: f64, f: f64, tau: f64): f64 {
     var fi: f64 = f64_from(i);
@@ -653,6 +671,38 @@ fn main() {
     dgs[2] = -1.0;
     var dm5: f64 = _bj_fu_dft_magnitude(&dgs, 3, e300n, 1.0);
     assert(dm5 == _bj_from_bits(0x1b56e1fc2f8f359), "ω·dt = 1e-300, below the rotation's bound: 2e-300 (Rust's 0)");
+
+    # ADR 0002 row 18 (M5 part 2d-4b-2): the eigenmode search's frequencies, floor and Q at their range edges, on the
+    # generator's damped mode. The expectations are validate.py's model of the port.
+    test_group("cyrius_eigen_edges");
+    var ms: *f64 = arr(1500);
+    var er1: BjEigenmodeResult;
+    rec_mode(ms, 1500, _bj_from_bits(0x4202a05f20000000));
+    var te1, ve1 = bj_find_eigenmodes(ms, 1500, _bj_from_bits(0x3739a252b281), 0.0, _bj_from_bits(0x7fefffffffffffff),
+      17, &er1);
+    assert(is_ok(te1) == 1 && er1.count == 1 && at(er1.frequencies, 0) == _bj_from_bits(0x7fe1ffffffffffff)
+      && at(er1.quality_factors, 0) == _bj_from_bits(0x401421dafbb4ad2c)
+      && at(er1.amplitudes, 0) == _bj_from_bits(0x23c9e3d85c240f7),
+      "a band to DBL_MAX on dt = 3e-310: ω past DBL_MAX kept, the mode at 1.0112e308 found (Rust's NaN bins: none)");
+    BjEigenmodeResult_free(&er1);
+    var er2: BjEigenmodeResult;
+    rec_mode(ms, 1500, _bj_from_bits(0x9c16c5c5253575));
+    var te2, ve2 = bj_find_eigenmodes(ms, 1500, _bj_from_bits(0x3d719799812dea11), 1000000000.0, 100000000000.0, 32,
+      &er2);
+    assert(is_ok(te2) == 1 && er2.count == 1 && at(er2.frequencies, 0) == _bj_from_bits(0x421eac6e677bdef8)
+      && at(er2.quality_factors, 0) == _bj_from_bits(0x40230d8b931a50df)
+      && at(er2.amplitudes, 0) == _bj_from_bits(0x25ad2158),
+      "a mode of 1e-305: a spectrum below 2^-1022, its floor and half-power to 53 bits, Q 9.5265 (Rust found none)");
+    BjEigenmodeResult_free(&er2);
+    var er3: BjEigenmodeResult;
+    rec_mode(ms, 1500, _bj_from_bits(0x3ddb7cdfd9d7bdbb));
+    var fmx3: f64 = _bj_from_bits(0xb8157268fdaf);
+    var te3, ve3 = bj_find_eigenmodes(ms, 1500, _bj_from_bits(0x7fe1ccf385ebc8a0), 0.0, fmx3, 16, &er3);
+    assert(is_ok(te3) == 1 && er3.count == 1 && at(er3.frequencies, 0) == _bj_from_bits(0x3d5c7b785490)
+      && at(er3.quality_factors, 0) == _bj_from_bits(0x401928c8c3e8adab)
+      && at(er3.amplitudes, 0) == _bj_from_bits(0x7e4d6a3b1f2f8ad3),
+      "a band of 1e-309 on dt = 1e308: df and the frequencies subnormal, to 53 bits (Rust's …334e-310, Q …248)");
+    BjEigenmodeResult_free(&er3);
 
     return assert_summary();
 }

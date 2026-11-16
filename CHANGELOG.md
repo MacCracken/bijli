@@ -484,6 +484,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
 - **Cyrius port, M5 part 2d-4b-1 — the DFT magnitude at its range edges** (`src/fdtd_util.cyr`): `dft_magnitude`'s
   recurrence with an unbounded exponent where it leaves the range (ADR 0002 row 18 amended, see Fixed), its ω a 53-bit
   value for 2d-4b-2. `fdtd.tsv` grows by 72 eigenmode rows (106,998; 38.5 MB); `fdtd.adr.tsv` maps 35 to row 18.
+- **Cyrius port, M5 part 2d-4b-2 — the eigenmode search at its range edges** (`src/fdtd_util.cyr`): `find_eigenmodes`'
+  frequency grid, ω, 10 % floor and quality factors with an unbounded exponent where they leave the range (ADR 0002 row
+  18 amended, see Fixed). 2d-4 is done. `fdtd.tsv` grows by 47 eigenmode rows (107,045; 38.5 MB); `fdtd.adr.tsv` maps
+  69 eigenmode rows to row 18 in all.
 
 ### Fixed
 
@@ -1021,6 +1025,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
   DBL_MAX gave NaN. Where an operation leaves the range, the recurrence now runs with an unbounded exponent; Rust's
   stands elsewhere, the rotation proved exact once a call and the products checked once a sample. Cost: that
   check, `fdtd/find_eigenmodes_4096x256` 8.94–8.96 → 11.38–11.43 ms (1.27–1.28×) (`port-parity.md` §111).
+- **fdtd** (ADR 0002 row 18 amended, M5 part 2d-4b-2): `find_eigenmodes` missed modes at its range edges: ω = 2πf past
+  DBL_MAX (f past 2.86·10³⁰⁷) gave NaN bins that failed the peak test beside them (a mode at 1.01·10³⁰⁸ on dt =
+  3·10⁻³¹⁰), a spectrum below 2^-1022 rounded its 10 % floor and half-power level (a mode of 10⁻³⁰⁵ on dt = 10⁻¹²),
+  and a subnormal df lost the frequencies' and Q's bits. The frequency grid and ω now run to 53 bits with an unbounded
+  exponent, the floor's test compares its 53-bit value, and Q runs Rust's chain or, at an edge, the same with an
+  unbounded exponent. Cost: none measurable (`port-parity.md` §112).
 
 ### Performance
 

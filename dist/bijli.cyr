@@ -33306,7 +33306,8 @@ public fn _bj_fu_dft_magnitude(signal: *f64, n, omega: f64, dt: f64): f64 {
 
 # The offset, in units of df (≥ 0), from the peak to its half-power crossing walking in direction dir (±1), linearly
 # interpolated; 1 with the offset in *off, or 0 when the spectrum's edge or a rising flank (a neighbouring mode) comes
-# first. Mirrors fdtd.rs's `half_power_offset`.
+# first; 2 where the interpolation's quotient leaves the normal range (ADR 0002 row 18: the caller reruns it with an
+# unbounded exponent). Mirrors fdtd.rs's `half_power_offset`.
 fn _bj_fu_half_power(spec: *f64, n, peak, dir, off: *f64): i64 {
     var hp: f64 = spec[peak] / _BJ_FU_SQRT_2;
     var i = peak;
@@ -33319,6 +33320,7 @@ fn _bj_fu_half_power(spec: *f64, n, peak, dir, off: *f64): i64 {
             var num: f64 = a_cur - hp;
             var den: f64 = a_cur - a_next;
             var frac: f64 = num / den;
+            if (_bj_fu_normal(frac) == 0 || (frac == 0.0 && num != 0.0)) { return 2; }
             var d = i - peak;
             if (d < 0) { d = 0 - d; }
             var df: f64 = f64_from(d);
@@ -33331,14 +33333,92 @@ fn _bj_fu_half_power(spec: *f64, n, peak, dir, off: *f64): i64 {
     return 0;
 }
 
-# The quality factor of the peak at index i: f₀/(Δf·df) from its half-power offsets (both sides, or twice the one
-# found), 0.0 when neither is found or the bandwidth isn't positive.
+# _bj_fu_half_power with an unbounded exponent (ADR 0002 row 18, M5 part 2d-4b-2): hp = spec[peak]/√2 to 53 bits, the
+# walk's a_next < hp decided exactly, the offset |i − peak| + (a_cur − hp)/(a_cur − a_next) to 53 bits into (os[0],
+# oe[0]); 1 when found, else 0.
+fn _bj_fu_half_power_ux(spec: *f64, n, peak, dir, os: *f64, oe): i64 {
+    var ps, pe = _bj_k_ux_from(spec[peak]);
+    var rs, re = _bj_k_ux_from(_BJ_FU_SQRT_2);
+    var hs, he = _bj_k_ux_div(ps, pe, rs, re);
+    var i = peak;
+    while (1 == 1) {
+        var next = i + dir;
+        if (next < 0 || next >= n) { return 0; }
+        var a_next: f64 = spec[next];
+        var a_cur: f64 = spec[i];
+        var ns, ne = _bj_k_ux_from(a_next);
+        if (_bj_k_ux_cmp(ns, ne, hs, he) == 0 - 1) {
+            var cs, ce = _bj_k_ux_from(a_cur);
+            var us, ue = _bj_k_ux_sub(cs, ce, hs, he);
+            var vs, ve = _bj_k_ux_sub(cs, ce, ns, ne);
+            var qs, qe = _bj_k_ux_div(us, ue, vs, ve);
+            var d = i - peak;
+            if (d < 0) { d = 0 - d; }
+            var ds, de = _bj_k_ux_from(f64_from(d));
+            var xs, xe = _bj_k_ux_add(ds, de, qs, qe);
+            os[0] = xs;
+            store64(oe, xe);
+            return 1;
+        }
+        if (a_next > a_cur) { return 0; }
+        i = next;
+    }
+    return 0;
+}
+
+# The quality factor with an unbounded exponent: the offsets from _bj_fu_half_power_ux, bw = l + r (or twice the one),
+# and f₀/(bw·df) for the 53-bit f₀ and df, rounded once; 0.0 as Rust's when no offset or no positive bandwidth.
 #must_use
-fn _bj_fu_quality(spec: *f64, n, i, f0: f64, df: f64): f64 {
+fn _bj_fu_quality_ux(spec: *f64, n, i, f0s: f64, f0e, dfs: f64, dfe): f64 {
+    var ls: f64[1];
+    var rs: f64[1];
+    var le = 0;
+    var re = 0;
+    var hl = _bj_fu_half_power_ux(spec, n, i, 0 - 1, &ls, &le);
+    var hr = _bj_fu_half_power_ux(spec, n, i, 1, &rs, &re);
+    if (hl == 0 && hr == 0) { return 0.0; }
+    var bs: f64 = 0.0;
+    var be = 0;
+    if (hl == 1 && hr == 1) {
+        var ss, se = _bj_k_ux_add(ls[0], le, rs[0], re);
+        bs = ss;
+        be = se;
+    } elif (hl == 1) {
+        bs = ls[0];
+        be = le + 1;
+    } else {
+        bs = rs[0];
+        be = re + 1;
+    }
+    if (bs > 0.0) {
+        var ps, pe = _bj_k_ux_mul(bs, be, dfs, dfe);
+        var q: f64 = _bj_k_ux_div_f64(f0s, f0e, ps, pe);
+        return q;
+    }
+    return 0.0;
+}
+
+# The quality factor of the peak at index i: f₀/(Δf·df) from its half-power offsets (both sides, or twice the one
+# found), 0.0 when neither is found or the bandwidth isn't positive. f₀ and df are 53-bit values with an unbounded
+# exponent: where both are doubles and the chain's every step stays in range (hp, the interpolation, bw·df and the
+# quotient normal, or an exact 0), Rust's chain; else _bj_fu_quality_ux (ADR 0002 row 18, M5 part 2d-4b-2).
+#must_use
+fn _bj_fu_quality(spec: *f64, n, i, f0s: f64, f0e, dfs: f64, dfe): f64 {
+    var ok0, f0 = _bj_fu_exact(f0s, f0e);
+    var ok1, df = _bj_fu_exact(dfs, dfe);
+    var hp: f64 = spec[i] / _BJ_FU_SQRT_2;
+    if (ok0 == 0 || ok1 == 0 || _bj_fu_normal(hp) == 0) {
+        var u0: f64 = _bj_fu_quality_ux(spec, n, i, f0s, f0e, dfs, dfe);
+        return u0;
+    }
     var l: f64[1];
     var r: f64[1];
     var hl = _bj_fu_half_power(spec, n, i, 0 - 1, &l);
     var hr = _bj_fu_half_power(spec, n, i, 1, &r);
+    if (hl == 2 || hr == 2) {
+        var u1: f64 = _bj_fu_quality_ux(spec, n, i, f0s, f0e, dfs, dfe);
+        return u1;
+    }
     var bw: f64 = 0.0;
     if (hl == 0 && hr == 0) { return 0.0; }
     if (hl == 1 && hr == 1) { bw = l[0] + r[0]; }
@@ -33347,9 +33427,35 @@ fn _bj_fu_quality(spec: *f64, n, i, f0: f64, df: f64): f64 {
     if (bw > 0.0) {
         var b: f64 = bw * df;
         var q: f64 = f0 / b;
+        if (_bj_fu_prod_ok(b, bw, df) == 0 || _bj_fu_normal(q) == 0 || (q == 0.0 && f0 != 0.0)) {
+            var u2: f64 = _bj_fu_quality_ux(spec, n, i, f0s, f0e, dfs, dfe);
+            return u2;
+        }
         return q;
     }
     return 0.0;
+}
+
+# f_min + i·df with df = dfs·2^dfe, each operation to 53 bits with an unbounded exponent: (s, e).
+#must_use
+fn _bj_fu_freq(freq_min: f64, i, dfs: f64, dfe): (f64, i64) {
+    var is, ie = _bj_k_ux_from(f64_from(i));
+    var xs, xe = _bj_k_ux_mul(is, ie, dfs, dfe);
+    var ms, me = _bj_k_ux_from(freq_min);
+    var s, e = _bj_k_ux_add(ms, me, xs, xe);
+    return (s, e);
+}
+
+# 1 when amp passes the 10 % floor: amp > t for the double t (tok 1), else amp above the 53-bit t = ts·2^te exactly.
+#must_use
+fn _bj_fu_floor(amp: f64, t: f64, tok, ts: f64, te): i64 {
+    if (tok == 1) {
+        if (amp > t) { return 1; }
+        return 0;
+    }
+    var as, ae = _bj_k_ux_from(amp);
+    if (_bj_k_ux_cmp(as, ae, ts, te) == 1) { return 1; }
+    return 0;
 }
 
 # 1 when freq_max > 1/(2·dt) exactly, freq_max·dt > ½ (ADR 0002 row 17, M5 part 2c; Rust's freq_max > RN(0.5/dt)), for
@@ -33443,27 +33549,38 @@ public fn bj_find_eigenmodes(signal: *f64, n, dt: f64, freq_min: f64, freq_max: 
     var sb = fl_alloc(n_freq * 8);
     if (sb == 0) { return Err(_bj_fu_alloc_err("an eigenmode spectrum", n_freq)); }
     var spec: *f64 = _bj_fu_f64p(sb);
+    # Rust's df = (f_max − f_min)/(n − 1), f_i = f_min + i·df and ω_i = 2π·f_i, each to 53 bits with an unbounded
+    # exponent (ADR 0002 row 18, M5 part 2d-4b-2): Rust's bits in range; a df below 2^-1022, an f_i past DBL_MAX or an
+    # ω_i past it (f past 2.86·10³⁰⁷, where Rust's NaN spectrum hid the peak beside it) keep their values.
     var span: f64 = freq_max - freq_min;
     var nm: f64 = _bj_fu_u2f(n_freq - 1);
-    var df: f64 = span / nm;
+    var sps, spe = _bj_k_ux_from(span);
+    var nms, nme = _bj_k_ux_from(nm);
+    var dfs, dfe = _bj_k_ux_div(sps, spe, nms, nme);
     var w2: f64 = 2.0 * _BJ_FU_PI;
+    var w2s, w2e = _bj_k_ux_from(w2);
     for (var fi = 0; fi < n_freq; fi = fi + 1) {
-        var ff: f64 = f64_from(fi);
-        var fx: f64 = ff * df;
-        var fq: f64 = freq_min + fx;
-        var om: f64 = w2 * fq;
-        spec[fi] = _bj_fu_dft_magnitude(signal, n, om, dt);
+        var fqs, fqe = _bj_fu_freq(freq_min, fi, dfs, dfe);
+        var oms, ome = _bj_k_ux_mul(w2s, w2e, fqs, fqe);
+        spec[fi] = _bj_fu_dft(signal, n, oms, ome, dt);
     }
     var max_amp: f64 = 0.0;
     for (var j = 0; j < n_freq; j = j + 1) {
         var sj: f64 = spec[j];
         max_amp = _bj_max(max_amp, sj);
     }
-    var threshold: f64 = max_amp * 0.1;
+    # The 10 % floor max·0.1, its test on the computed value (plan §0.1): Rust's double, or below 2^-1022 the 53-bit
+    # value, compared exactly (ADR 0002 row 18, M5 part 2d-4b-2).
+    var mxs, mxe = _bj_k_ux_from(max_amp);
+    var ps1, pe1 = _bj_k_ux_from(0.1);
+    var ths, the = _bj_k_ux_mul(mxs, mxe, ps1, pe1);
+    var tok, threshold = _bj_fu_exact(ths, the);
     var count = 0;
     for (var i = 1; i < n_freq - 1; i = i + 1) {
         var amp: f64 = spec[i];
-        if (amp > threshold && amp > spec[i - 1] && amp > spec[i + 1]) { count = count + 1; }
+        if (_bj_fu_floor(amp, threshold, tok, ths, the) == 1 && amp > spec[i - 1] && amp > spec[i + 1]) {
+            count = count + 1;
+        }
     }
     var rb = 0;
     if (count > 0) {
@@ -33479,12 +33596,10 @@ public fn bj_find_eigenmodes(signal: *f64, n, dt: f64, freq_min: f64, freq_max: 
     var m = 0;
     for (var i2 = 1; i2 < n_freq - 1; i2 = i2 + 1) {
         var a2: f64 = spec[i2];
-        if (a2 > threshold && a2 > spec[i2 - 1] && a2 > spec[i2 + 1]) {
-            var fi2: f64 = f64_from(i2);
-            var x2: f64 = fi2 * df;
-            var f0: f64 = freq_min + x2;
-            fr[m] = f0;
-            qs[m] = _bj_fu_quality(spec, n_freq, i2, f0, df);
+        if (_bj_fu_floor(a2, threshold, tok, ths, the) == 1 && a2 > spec[i2 - 1] && a2 > spec[i2 + 1]) {
+            var f0s, f0e = _bj_fu_freq(freq_min, i2, dfs, dfe);
+            fr[m] = _bj_k_ux_round(f0s, f0e, 0.0);
+            qs[m] = _bj_fu_quality(spec, n_freq, i2, f0s, f0e, dfs, dfe);
             am[m] = a2;
             m = m + 1;
         }

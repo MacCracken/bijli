@@ -2228,6 +2228,41 @@ fn emit_2d4b1(r: &mut Rows) {
     }
 }
 
+// ── part 2d-4b-2: the eigenmode search at its range edges (ADR 0002 row 18) ──────────────────────────────────────
+
+/// Eigenmode searches whose frequency grid, floor or quality factor leave the normal range (the port runs them with an
+/// unbounded exponent, ADR 0002 row 18), on one damped mode at about 0.032 cycles a sample: bands so narrow that df,
+/// the frequencies and ω are subnormal (f_max of 0.1/dt for dt from 10³⁰⁰ to DBL_MAX); bands reaching DBL_MAX, where
+/// ω = 2πf passes it and (n − 1)·df can round past it, the mode near 3·10³⁰⁷ (dt about 10⁻³⁰⁹); spectra below 2^-1022
+/// (the 10 % floor and the half-power level subnormal); and seeded steps, bands and scales.
+fn emit_2d4b2(r: &mut Rows) {
+    let one = |x1: f64| Signal::Generated(1500, vec![[0.0, x1, 1.95, -0.99]]);
+    for dt in [1e300, 1e307, 1e308, f64::MAX] {
+        for nf in [16, 64] {
+            r.eigen(&one(1e-10), dt, 0.0, 0.1 / dt, nf);
+        }
+    }
+    for dt in [1e-309, 1.5e-309, 3e-310] {
+        for (fmin, nf) in [(0.0, 4), (0.0, 17), (0.0, 64), (1e307, 17), (1e307, 64)] {
+            r.eigen(&one(1e10), dt, fmin, f64::MAX, nf);
+        }
+    }
+    for x1 in [1e-296, 1e-300, 1e-305, 1e-310] {
+        for nf in [32, 64] {
+            r.eigen(&one(x1), 1e-12, 1e9, 1e11, nf);
+        }
+    }
+    let mut rng = Rng::new(0x2d4b_2e16);
+    for _ in 0..16 {
+        let dt = rng.log_uniform(-323.0, 308.0);
+        let fmax = (rng.uniform(0.05, 0.5) / dt).min(f64::MAX);
+        let fmin = fmax * rng.uniform(0.0, 0.5);
+        let x1 = rng.log_uniform(-320.0, 300.0);
+        let nf = usize::try_from(rng.int(3, 120)).unwrap_or(3);
+        r.eigen(&one(x1), dt, fmin, fmax, nf);
+    }
+}
+
 pub fn emit() -> Module {
     let mut r = Rows { m: Module::new("fdtd"), keys: BTreeSet::new() };
     emit_1a(&mut r);
@@ -2249,5 +2284,6 @@ pub fn emit() -> Module {
     emit_2d3(&mut r);
     emit_2d4a(&mut r);
     emit_2d4b1(&mut r);
+    emit_2d4b2(&mut r);
     r.m
 }
