@@ -1221,6 +1221,22 @@ fn main(): i64 {
     bench_report(bm1);
     if (mcsum == 7.0) { println("."); }
 
+    # fdtd (M5 part 2a-1a): the lossy coefficients on the rounded-once engine's exact path (a Δt of 10^-40, below its
+    # fast path's 2^-120: src/crmath_edge.cyr), Cyrius-only.
+    var mlx: BjLossyMaterial = BjLossyMaterial_new(4.0, 0.5);
+    var mxsum: f64 = 0.0;
+    var bm2 = bench_new("fdtd/lossy_coefficients_exact_path");
+    bench_batch_start(bm2);
+    for (var k = 0; k < 20000; k = k + 1) {
+        var xq: f64 = f64_from((k & 7) + 1);
+        var xdt: f64 = xq * 0.0000000000000000000000000000000000000001;
+        var xca, xcb = mlx.update_coefficients(xdt, 0.0001);
+        mxsum = mxsum + xca + xcb;
+    }
+    bench_batch_stop(bm2, 20000);
+    bench_report(bm2);
+    if (mxsum == 7.0) { println("."); }
+
     # fdtd (M5 part 1d): Rust's eigenmode bench, a 30 GHz mode decaying over 1 ns, 4096 samples of 1 ps, searched at
     # 256 frequencies from 10 to 50 GHz.
     var eig: *f64 = bench_f64p(alloc(4096 * 8));

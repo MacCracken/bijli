@@ -389,6 +389,35 @@ fn main() {
     var tp, vp = bj_subpixel_permittivity_parallel(2.0, 8.0, -0.0);
     assert(is_ok(tp) == 1 && ok_f(tp, vp) == 2.0, "−0 is in [0, 1]");
 
+    # ADR 0002 row 40 (M5 part 2a-1a): each coefficient rounded once from its exact value. The expectations are
+    # Python's Fraction rounded once; Rust's values are in the comments.
+    test_group("cyrius_media_rounded_once");
+    var lc: BjLossyMaterial = BjLossyMaterial_new(1.0, 17.708375625617713);
+    var lca, lcb = lc.update_coefficients(0.000000000001, 0.0001);
+    assert(lca == -0.0000000000005000722684654696, "C_a at s = 1 + 10⁻¹² (Rust's −5.000444502909205e-13)");
+    assert(lcb == 564.7045336862271, "C_b there");
+    var lt: BjLossyMaterial = BjLossyMaterial_new(5.156839709416084, 2.7192461375511443);
+    var lta, ltb = lt.update_coefficients(0.000000000000005478853495298411, 0.0000012188740222424203);
+    assert(lta == 0.9996737616604218 && ltb == 98.43003888253212,
+      "a typical medium (Rust's 0.9996737616604217, 98.4300388825321)");
+    var dt0: BjDrudeMaterial = BjDrudeMaterial_new(9.932890709584585, 38004899321695096.0, 304480748962.7278);
+    var dta, dtb, dtk = dt0.ade_coefficients(0.0000000000000000021418090112265494);
+    assert(dtb == 13695.519380595024 && dtk == 0.000000024353217895837215,
+      "Drude β and κ (Rust's 13695.519380595022, 2.435321789583721e-08)");
+    var dz: BjDrudeMaterial = BjDrudeMaterial_new(1.0, 10000000000000000.0, 2251799813685248.0);
+    var dza, dzb, dzk = dz.ade_coefficients(0.0000000000000008881784197001252);
+    assert(dza == 0.0, "γΔt = 2 exactly: α = 0");
+    var lz: BjLorentzMaterial = BjLorentzMaterial_new(2.0, 2.0, 1000000000000000.0, 2251799813685248.0);
+    var lza, lzb, lzg = lz.ade_coefficients(0.0000000000000008881784197001252);
+    var inv: f64 = 1.0 / lzb;
+    assert(lzb == 0.0 && inv > 0.0, "γΔt = 2 exactly: β = +0, a cancelled sum (Rust's −(1 − 1)/2 = −0)");
+    var bz: BjDebyeMaterial = BjDebyeMaterial_new(4.9, 78.4, 0.00000000000002842170943040401);
+    var bza, bzb = bz.ade_coefficients(0.00000000000005684341886080802);
+    assert(bza == 0.0, "2τ = Δt exactly: α = 0");
+    var l0: BjLossyMaterial = BjLossyMaterial_new(0.0, 1.0);
+    var l0a, l0b = l0.update_coefficients(0.000000000001, 0.0001);
+    assert(l0a != l0a && l0b != l0b, "ε_r = 0: Rust's formula divides by 0, so its NaNs stay");
+
     return assert_summary();
 }
 

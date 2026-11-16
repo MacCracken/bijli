@@ -3,8 +3,13 @@
 # subpixel permittivity averages. SI units: conductivities in S/m, angular frequencies in rad/s, times in seconds.
 #
 # Each material is a small struct passed by value. Its `new` stores the fields unchecked, as Rust's does, and
-# `try_new` validates them. The coefficients are Rust's chains, as written. The presets' fields are generated from
-# the oracle into src/fdtd_media_data.cyr.
+# `try_new` validates them. The presets' fields are generated from the oracle into src/fdtd_media_data.cyr.
+#
+# The coefficients are rounded once from their exact values (ADR 0002 row 40, the user's answer of 2026-11-15): each is
+# a ratio of sums of products of the inputs and ε₀ (src/crmath_edge.cyr's _bj_cr_rat), where Rust's chains of (1 ∓ s)
+# and (2 ∓ γΔt) cancelled as s → 1 or γΔt → 2 (the lossy C_a 5.6·10⁻⁵ off at s = 1 + 10⁻¹²). An output keeps Rust's
+# chain where an operand it reads isn't finite or Rust's formula divides by an exact zero (ε_r = 0, Δx = 0, Δt = 0 for
+# Debye, or a denominator such as 1 + s exactly 0).
 #
 # bijli's one harmonic convention is e^{+jωt} with IEEE handedness (src/complex.cyr's header; ADR 0002 row 5). Rust
 # stated the Drude, Lorentz and Debye permittivities in e^{−iωt}; they are stated here in e^{+jωt}. The ADE
@@ -14,6 +19,25 @@ private
 
 var _BJ_FM_INF: f64 = 0x7FF0000000000000;
 var _BJ_FM_NAN: f64 = 0x7FF8000000000000;
+
+# 1 when x is finite (NaN-safe).
+#must_use
+fn _bj_fm_fin(x: f64): i64 {
+    var z: f64 = x * 0.0;
+    if (z == 0.0) { return 1; }
+    return 0;
+}
+
+# r, rounded once: rational k of src/crmath_edge.cyr over the n doubles at v when ok = 1 and its denominator isn't
+# exactly 0, else r as given (Rust's chain).
+#must_use
+fn _bj_fm_rat(r: f64, ok, v: *f64, n, k): f64 {
+    if (ok == 0) { return r; }
+    var o: f64[1];
+    if (_bj_cr_rat(v, n, _bj_cr_rat_spec(k), 0, &o) == 0) { return r; }
+    var x: f64 = o[0];
+    return x;
+}
 
 # 1 when x is finite and strictly positive (NaN-safe). Mirrors fdtd.rs's `is_positive_finite`.
 #must_use
@@ -83,7 +107,8 @@ public fn BjLossyMaterial_try_new(eps_r: f64, conductivity: f64, out: *BjLossyMa
 }
 
 impl BjLossyMaterial {
-    # The E-update coefficients (C_a, C_b) for steps dt and dx; dt > 0, dx > 0 and a valid material assumed. Mirrors
+    # The E-update coefficients (C_a, C_b) for steps dt and dx, C_a = (2ε − σΔt)/(2ε + σΔt) and C_b = 2Δt/(Δx·(2ε +
+    # σΔt)), ε = ε_rε₀, each rounded once (the file's header); dt > 0, dx > 0 and a valid material assumed. Mirrors
     # `LossyMaterial::update_coefficients`.
     #must_use
     public fn update_coefficients(self, dt: f64, dx: f64): (f64, f64) {
@@ -97,6 +122,17 @@ impl BjLossyMaterial {
         var edx: f64 = eps * dx;
         var q: f64 = dt / edx;
         var cb: f64 = q / den;
+        var v: f64[5];
+        v[0] = self.eps_r;
+        v[1] = self.conductivity;
+        v[2] = dt;
+        v[3] = dx;
+        v[4] = BJ_EPSILON_0;
+        var ok = _bj_fm_fin(self.eps_r) & _bj_fm_fin(self.conductivity) & _bj_fm_fin(dt);
+        if (self.eps_r == 0.0) { ok = 0; }
+        ca = _bj_fm_rat(ca, ok, &v, 5, 0);
+        if (dx == 0.0 || _bj_fm_fin(dx) == 0) { ok = 0; }
+        cb = _bj_fm_rat(cb, ok, &v, 5, 1);
         return (ca, cb);
     }
 }
@@ -155,8 +191,8 @@ public fn BjDrudeMaterial_silver(): BjDrudeMaterial {
 impl BjDrudeMaterial {
     # The ADE coefficients (α, β, κ) of the current J: α = (2 − γΔt)/(2 + γΔt), β = ε₀ω_p²Δt/(2 + γΔt) and
     # κ = Δt/(ε₀ε_∞), for the trapezoidal J^{n+1} = αJ^n + β(E^{n+1} + E^n) and
-    # E^{n+1} = E^n + κ[(∇×H)^{n+½} − ½(J^{n+1} + J^n)] (Taflove & Hagness, ch. 9); dt > 0 and a valid material
-    # assumed. Mirrors `DrudeMaterial::ade_coefficients`.
+    # E^{n+1} = E^n + κ[(∇×H)^{n+½} − ½(J^{n+1} + J^n)] (Taflove & Hagness, ch. 9), each rounded once (the file's
+    # header); dt > 0 and a valid material assumed. Mirrors `DrudeMaterial::ade_coefficients`.
     #must_use
     public fn ade_coefficients(self, dt: f64): (f64, f64, f64) {
         var gdt: f64 = self.gamma * dt;
@@ -169,6 +205,16 @@ impl BjDrudeMaterial {
         var beta: f64 = b / ap;
         var ei: f64 = BJ_EPSILON_0 * self.eps_inf;
         var kappa: f64 = dt / ei;
+        var v: f64[5];
+        v[0] = self.eps_inf;
+        v[1] = self.omega_p;
+        v[2] = self.gamma;
+        v[3] = dt;
+        v[4] = BJ_EPSILON_0;
+        var fg = _bj_fm_fin(self.gamma) & _bj_fm_fin(dt);
+        alpha = _bj_fm_rat(alpha, fg, &v, 5, 2);
+        beta = _bj_fm_rat(beta, fg & _bj_fm_fin(self.omega_p), &v, 5, 3);
+        kappa = _bj_fm_rat(kappa, _bj_fm_fin(self.eps_inf) & _bj_fm_fin(dt), &v, 5, 4);
         return (alpha, beta, kappa);
     }
 }
@@ -216,8 +262,8 @@ public fn BjLorentzMaterial_try_new(eps_inf: f64, delta_eps: f64, omega_0: f64, 
 
 impl BjLorentzMaterial {
     # The ADE coefficients (α, β, γ_c) of the central-difference P^{n+1} = αP^n + βP^{n−1} + γ_c·E^n:
-    # α = (2 − ω₀²Δt²)/(1 + γΔt/2), β = −(1 − γΔt/2)/(1 + γΔt/2), γ_c = ε₀Δεω₀²Δt²/(1 + γΔt/2); stable only for
-    # ω₀Δt < 2. Mirrors `LorentzMaterial::ade_coefficients`.
+    # α = (2 − ω₀²Δt²)/(1 + γΔt/2), β = −(1 − γΔt/2)/(1 + γΔt/2), γ_c = ε₀Δεω₀²Δt²/(1 + γΔt/2), each rounded once
+    # (the file's header); stable only for ω₀Δt < 2. Mirrors `LorentzMaterial::ade_coefficients`.
     #must_use
     public fn ade_coefficients(self, dt: f64): (f64, f64, f64) {
         var gdt: f64 = self.gamma * dt;
@@ -234,6 +280,18 @@ impl BjLorentzMaterial {
         g = g * w0dt;
         g = g * w0dt;
         var gamma_c: f64 = g / denom;
+        var v: f64[6];
+        v[0] = 0.0;
+        v[1] = self.delta_eps;
+        v[2] = self.omega_0;
+        v[3] = self.gamma;
+        v[4] = dt;
+        v[5] = BJ_EPSILON_0;
+        var fg = _bj_fm_fin(self.gamma) & _bj_fm_fin(dt);
+        var fw = fg & _bj_fm_fin(self.omega_0);
+        alpha = _bj_fm_rat(alpha, fw, &v, 6, 5);
+        beta = _bj_fm_rat(beta, fg, &v, 6, 6);
+        gamma_c = _bj_fm_rat(gamma_c, fw & _bj_fm_fin(self.delta_eps), &v, 6, 7);
         return (alpha, beta, gamma_c);
     }
 }
@@ -292,7 +350,8 @@ public fn BjDebyeMaterial_water(): BjDebyeMaterial {
 
 impl BjDebyeMaterial {
     # The ADE coefficients (α, β) of the trapezoidal P^{n+1} = αP^n + β(E^{n+1} + E^n): α = (2τ/Δt − 1)/(2τ/Δt + 1),
-    # β = ε₀(ε_s − ε_∞)/(2τ/Δt + 1); dt > 0 and a valid material assumed. Mirrors `DebyeMaterial::ade_coefficients`.
+    # β = ε₀(ε_s − ε_∞)/(2τ/Δt + 1), each rounded once (the file's header); dt > 0 and a valid material assumed.
+    # Mirrors `DebyeMaterial::ade_coefficients`.
     #must_use
     public fn ade_coefficients(self, dt: f64): (f64, f64) {
         var tdt: f64 = self.tau / dt;
@@ -303,6 +362,16 @@ impl BjDebyeMaterial {
         var de: f64 = self.eps_s - self.eps_inf;
         var b: f64 = BJ_EPSILON_0 * de;
         var beta: f64 = b / ap;
+        var v: f64[5];
+        v[0] = self.eps_inf;
+        v[1] = self.eps_s;
+        v[2] = self.tau;
+        v[3] = dt;
+        v[4] = BJ_EPSILON_0;
+        var ft = _bj_fm_fin(self.tau) & _bj_fm_fin(dt);
+        if (dt == 0.0) { ft = 0; }
+        alpha = _bj_fm_rat(alpha, ft, &v, 5, 8);
+        beta = _bj_fm_rat(beta, ft & _bj_fm_fin(self.eps_s) & _bj_fm_fin(self.eps_inf), &v, 5, 9);
         return (alpha, beta);
     }
 }

@@ -561,7 +561,7 @@ EXACT = ["mono"] + list(SHAPES) + ["sqrt_div", "wsqrt", "sqrt_mono", "sqrt_mono_
          "par_rep", "par_rep_x", "par_rep_slow", "lw_nb", "lw_nb_slow", "lw_reff_ux", "vx_sqrt", "vx_sqrt_e",
          "vx_gamma", "lwo_reff", "lwo_reff_slow", "lwo_kappa", "lwo_kappa_slow", "lwo_nb", "lwo_nb_slow", "lwo_ux",
          "gammao", "gammao_slow", "gammao2", "gammao2_slow", "sumsq", "sumsq_exact", "abcd", "abcd_slow", "cascade",
-         "cascade_slow", "s2z", "s2z_slow", "dot4", "jcdot", "jint", "jnorm",
+         "cascade_slow", "s2z", "s2z_slow", "rat", "rat_x", "rat_slow", "dot4", "jcdot", "jint", "jnorm",
          "jover", "sjones", "sdop", "sellip", "sorient", "rsig", "rq", "rphase", "rang", "bspot", "bpeak", "broc",
          "bgouy", "bci", "bdot2", "bw0", "bgp", "bfsr", "bhg", "blg", "bhgf"]
 UX = ["ux_exp", "ux_exp_w", "ux_exp_big", "ux_cosh", "ux_sinh", "ux_ln", "ux_log10", "ux_pow", "ux_sin", "ux_cos"]
@@ -1638,6 +1638,117 @@ def s2z_families(rng, count):
         for part in range(9):
             out.append(("s2z", v + [part], ref[part]))
             out.append(("s2z_slow", v + [part], ref[part]))
+    return out
+
+
+# ── M5's rationals of signed monomials (src/crmath_edge.cyr, M5 part 2a-1a, ADR 0002 row 40) ─────────────────────────
+RAT_EPS0 = 0.0000000000088541878128
+RAT_KINDS = 10
+
+
+def rat_ref(k, v):
+    """RN of rational k over v (src/crmath_edge.cyr's _bj_cr_rat_spec), from the coefficient's formula: the media's
+    C_a, C_b; Drude α, β, κ; Lorentz α, β, γ_c; Debye α, β. All ones when the denominator is exactly 0. An exact zero
+    takes IEEE's signs: a one-product numerator's factors' (and coefficient's), a cancelled sum +0, then D's."""
+    F = [Fraction(x) for x in v]
+    sg = [math.copysign(1.0, x) < 0 for x in v]
+    if k in (0, 1):
+        a, b, c, d, e = F[:5]
+        num = 2 * e * a - b * c if k == 0 else 2 * c
+        den = 2 * e * a + b * c if k == 0 else 2 * e * a * d + b * c * d
+        zs = None if k == 0 else sg[2]
+    elif k in (2, 3, 4):
+        a, b, c, d, e = F[:5]
+        num, den, zs = [(2 - c * d, 2 + c * d, None), (e * b * b * d, 2 + c * d, sg[4] ^ sg[3]),
+                        (d, e * a, sg[3])][k - 2]
+    elif k in (5, 6, 7):
+        _, b, c, d, e, f = F[:6]
+        num, den, zs = [(4 - 2 * c * c * e * e, 2 + d * e, None), (d * e - 2, 2 + d * e, None),
+                        (2 * f * b * c * c * e * e, 2 + d * e, sg[5] ^ sg[1])][k - 5]
+    else:
+        a, b, c, d, e = F[:5]
+        num = 2 * c - d if k == 8 else e * b * d - e * a * d
+        den, zs = 2 * c + d, None
+    if den == 0:
+        return (1 << 64) - 1
+    if num == 0:
+        neg = (zs or False) ^ (den < 0)
+        return f2b(-0.0 if neg else 0.0)
+    return f2b(rn_frac(num / den))
+
+
+def rat_cases(rng, count):
+    """(k, v): each rational on typical media and FDTD steps; at its cancellation (s → 1, γΔt → 2, ω₀Δt → √2,
+    2τ → Δt, ε_s → ε_∞) by relative offsets and ulp by ulp, with exact zeros; the fast path's box edges at 2^±120;
+    signed zeros; any finite values and subnormals."""
+    out = []
+    for i in range(count):
+        k = i % RAT_KINDS
+        mode = (i // RAT_KINDS) % 7
+        dt = 10.0 ** rng.uniform(-18, -10)
+        e0 = RAT_EPS0
+        if k in (0, 1):
+            v = [rng.uniform(1, 20), 10.0 ** rng.uniform(-6, 8), dt, 10.0 ** rng.uniform(-6, -2), e0, 0.0]
+        elif k in (2, 3, 4):
+            v = [rng.uniform(1, 10), 10.0 ** rng.uniform(14, 17), 10.0 ** rng.uniform(11, 15), dt, e0, 0.0]
+        elif k in (5, 6, 7):
+            v = [0.0, rng.uniform(0, 10), 10.0 ** rng.uniform(13, 16), 10.0 ** rng.uniform(11, 15), dt, e0]
+        else:
+            ei = rng.uniform(1, 10)
+            v = [ei, rng.uniform(ei, 100), 10.0 ** rng.uniform(-13, -9), dt, e0, 0.0]
+        if mode in (1, 2):                          # the cancellation, by a relative offset or ulp by ulp
+            rho = rng.choice([1.0, -1.0]) * 10.0 ** -rng.uniform(1, 16)
+            if k in (0, 1):
+                x = 2 * e0 * v[0] / v[2]
+                j = 1
+            elif k in (2, 3, 4):
+                x, j = 2 / v[3], 2
+            elif k in (5, 7):
+                x, j = math.sqrt(2) / v[4], 2
+            elif k == 6:
+                x, j = 2 / v[4], 3
+            elif k == 8:
+                x, j = v[3] / 2, 2
+            else:
+                x, j = v[0], 1
+            if mode == 1:
+                x *= 1 + rho
+            else:
+                for _ in range(rng.randint(0, 6)):
+                    x = math.nextafter(x, math.inf if rng.random() < 0.5 else 0.0)
+            v[j] = x
+            if rng.random() < 0.2 and k in (2, 6, 8):   # an exact zero: γΔt = 2, 2τ = Δt
+                dt2 = 2.0 ** -rng.randint(30, 60)
+                if k == 8:
+                    v[3], v[2] = dt2, dt2 / 2
+                else:
+                    v[3 if k == 2 else 4] = dt2
+                    v[2 if k == 2 else 3] = 2 / dt2
+        elif mode == 3:                             # the box edges
+            for j in rng.sample(range(6), rng.randint(1, 3)):
+                v[j] = rng.choice([1.0, -1.0, 1.5]) * 2.0 ** rng.choice([120, -120, 121, -121, 119, -119])
+        elif mode == 4:                             # zeros, signed
+            for j in rng.sample(range(6), rng.randint(1, 2)):
+                v[j] = rng.choice([0.0, -0.0])
+        elif mode == 5:                             # any finite values, either sign
+            v = [rng.choice([1.0, -1.0]) * 10.0 ** rng.uniform(-300, 300) for _ in range(6)]
+        elif mode == 6:                             # subnormal and huge parts
+            for j in rng.sample(range(6), rng.randint(1, 3)):
+                v[j] = rng.choice([1.0, -1.0]) * (2.0 ** rng.randint(-1074, -1000) if rng.random() < 0.6
+                                                  else 2.0 ** rng.randint(1000, 1023))
+        out.append((k, v))
+    return out
+
+
+def rat_families(rng, count):
+    """rat (the fast path's two tiers, then the exact path), rat_x (its second tier, then the exact path) and rat_slow
+    (the exact path alone)."""
+    out = []
+    for k, v in rat_cases(rng, count):
+        ref = rat_ref(k, v)
+        out.append(("rat", [k] + v, ref))
+        out.append(("rat_x", [k] + v, ref))
+        out.append(("rat_slow", [k] + v, ref))
     return out
 
 
@@ -2804,6 +2915,9 @@ def main() -> int:
                   if "exact" in names or f in names]
         zrng = random.Random(0x4_2A3)
         calls += [(f, ref, ws) for f, ws, ref in s2z_families(zrng, max(1, n // 50))
+                  if "exact" in names or f in names]
+        mrng = random.Random(0x5_2A1A)
+        calls += [(f, ref, ws) for f, ws, ref in rat_families(mrng, max(1, n // 5))
                   if "exact" in names or f in names]
         jrng = random.Random(0x3_2D1B)
         calls += [(f, ref, ws) for f, ws, ref in jones_families(jrng, max(1, n // 10))

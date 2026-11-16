@@ -429,6 +429,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
   parse misrounds; `json.adr.tsv` maps 60 ragged eigenmode results to row 36. `test_lossy_material_serde` is ported,
   and `tests/json.tcyr` gains `cyrius_fdtd_json`. Cyrius-only benches: `json/drude_material_to_json` 2.46–2.79 µs and
   `json/nonuniform_grid_from_json` 9.07–11.2 µs (a 10 × 7 × 3 grid).
+- **Cyrius port, M5 part 2a-1a — the media coefficients rounded once** (`src/fdtd_media.cyr`, `src/crmath_edge.cyr`):
+  M5's Part 2, the range-edge review, runs on the user's answers of 2026-11-15 (port plan §0.1). Its first bite
+  rounds the lossy, Drude, Lorentz and Debye coefficients once from their exact values (ADR 0002 row 40, see Fixed),
+  on a new engine for ratios of sums of products, `_bj_cr_rat` (two double-double tiers and an exact bignum path);
+  `cr_verify.py` gains the rat, rat_x and rat_slow families. `fdtd.tsv` grows by 3,052 edge rows (95,087);
+  `fdtd.adr.tsv` maps 9,775 rows to row 40.
 
 ### Fixed
 
@@ -882,6 +888,15 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
   unbounded exponent there, the sines past DBL_MAX by Payne–Hanek. Cost (three interleaved rounds at load 2.8):
   within the noise for `rf/linear_array_factor_8` (459–464 → 460–471 ns) and the planar factor; the circular
   factor 3.89–3.90 → 3.93 µs (+0.8 %, every round) (`port-parity.md` §93).
+- **fdtd** (ADR 0002 row 40, M5 part 2a-1a, the user's answer of 2026-11-15): the media coefficients cancelled where
+  their two sides meet: `LossyMaterial::update_coefficients`' C_a = (1 − s)/(1 + s) was 5.6·10⁻⁵ off at
+  s = σΔt/(2ε) = 1 + 10⁻¹², and the Drude, Lorentz and Debye α and β likewise as γΔt → 2, ω₀Δt → √2, 2τ → Δt or
+  ε_s → ε_∞; an ε_r of 10⁻³²⁰ gave C_a NaN for −1. Each coefficient is now rounded once from its exact value, the
+  ratio of sums of products of the inputs and ε₀ (C_a = (2ε − σΔt)/(2ε + σΔt), Drude α = (2 − γΔt)/(2 + γΔt), …),
+  an exact zero signed by IEEE's rules (Lorentz's β at γΔt = 2 is +0, Rust's −0). An output keeps Rust's value where
+  an operand it reads isn't finite or Rust's formula divides by an exact zero. Cost, at setup: the Cyrius-only
+  `fdtd/media_coefficients` (ten coefficients and a subpixel mean) 79 ns → 3.90–3.93 µs, about 0.4 µs a coefficient
+  (`port-parity.md` §100).
 
 ### Performance
 

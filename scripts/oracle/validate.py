@@ -9595,11 +9595,76 @@ def fdtd_corrections(root: Path, path: Path):
     return fixes
 
 
+# ADR 0002 row 40 (M5 part 2a-1a, the user's answer of 2026-11-15): the media's coefficients rounded once from their
+# exact values, each a ratio of sums of products of the inputs and ε₀; an output keeps Rust's chain where an operand
+# it reads isn't finite or Rust's formula divides by an exact zero. An exact zero takes IEEE's signs (a one-product
+# numerator's factors', a cancelled sum +0, then the denominator's).
+FM40 = ("LossyMaterial::update_coefficients", "DrudeMaterial::ade_coefficients", "LorentzMaterial::ade_coefficients",
+        "DebyeMaterial::ade_coefficients")
+
+
+def fm_rat(num, den, zneg=None):
+    """RN(num/den) for exact rationals, or None for a zero den; an exact zero signed by zneg (None: a cancelled sum,
+    +0) xor the den's sign."""
+    if den == 0:
+        return None
+    if num == 0:
+        return -0.0 if bool(zneg) ^ (den < 0) else 0.0
+    return rn_frac(num / den)
+
+
+def fm_port(fn, v, EPS0):
+    """The port's outputs of a media-coefficient row (row 40), as tokens."""
+    out = [x for _k, x in fm_eval(fn, v, EPS0)]
+    fin = lambda *xs: all(math.isfinite(x) for x in xs)  # noqa: E731
+    neg = lambda x: math.copysign(1.0, x) < 0  # noqa: E731
+    E = Fraction(EPS0)
+    X = [Fraction(x) if math.isfinite(x) else None for x in v]
+
+    def put(k, ok, val):
+        if ok:
+            r = val()
+            if r is not None:
+                out[k] = r
+    if fn == "LossyMaterial::update_coefficients":
+        a, b, c, d = v
+        A, B, C, D = X
+        ok = fin(a, b, c) and a != 0
+        put(0, ok, lambda: fm_rat(2 * E * A - B * C, 2 * E * A + B * C))
+        put(1, ok and fin(d) and d != 0, lambda: fm_rat(2 * C, 2 * E * A * D + B * C * D, neg(c)))
+    elif fn == "DrudeMaterial::ade_coefficients":
+        a, b, c, d = v
+        A, B, C, D = X
+        put(0, fin(c, d), lambda: fm_rat(2 - C * D, 2 + C * D))
+        put(1, fin(b, c, d), lambda: fm_rat(E * B * B * D, 2 + C * D, neg(d)))
+        put(2, fin(a, d), lambda: fm_rat(D, E * A, neg(d)))
+    elif fn == "LorentzMaterial::ade_coefficients":
+        _a, b, c, d, e = v
+        _A, B, C, D, Et = X
+        put(0, fin(c, d, e), lambda: fm_rat(4 - 2 * C * C * Et * Et, 2 + D * Et))
+        put(1, fin(d, e), lambda: fm_rat(D * Et - 2, 2 + D * Et))
+        put(2, fin(b, c, d, e), lambda: fm_rat(2 * E * B * C * C * Et * Et, 2 + D * Et, neg(b)))
+    elif fn == "DebyeMaterial::ade_coefficients":
+        a, b, c, d = v
+        A, B, C, D = X
+        ok = fin(c, d) and d != 0
+        put(0, ok, lambda: fm_rat(2 * C - D, 2 * C + D))
+        put(1, ok and fin(a, b), lambda: fm_rat(E * B * D - E * A * D, 2 * C + D))
+    return [("f", x) for x in out]
+
+
 def fdtd_adr_rows(root: Path, path: Path) -> list:
-    """ADR 0002 row 3: each `TfsfSource::new` row whose arguments Rust clamped, mapped to try_new's refusal."""
+    """ADR 0002 row 3: each `TfsfSource::new` row whose arguments Rust clamped, mapped to try_new's refusal. Row 40:
+    each media-coefficient row whose outputs rounding once changes."""
     fs = FdScripts(root, GLIBC_P)
     out = []
-    for fn, _cls, ins, outs, _v in sc_lines(path):
+    eps0 = golden_consts(root)["field::EPSILON_0"]
+    for fn, _cls, ins, outs, v in sc_lines(path):
+        if fn in FM40:
+            want = fm_port(fn, v, eps0)
+            if not toks_same(want, [parse_tok(x) for x in outs.split(" ")]):
+                out.append((fn, ins, wire(want), "40", f"oracle {outs}; ADR 0002 row 40: rounded once"))
+            continue
         if fn != "TfsfSource::new":
             continue
         toks = [parse_tok(x) for x in ins.split(" ")[:4]]

@@ -10,8 +10,9 @@
 # parallel combinations (src/crmath_edge.cyr, M2 parts 2c-2 to 2c-5), and the materials' 53-bit roots and Γ
 # (src/crmath_vx.cyr, M2 part 2d-2c), M3's exact sum-of-squares threshold (src/crmath_cmp.cyr, M3 part 2c-1), ABCD
 # propagation (src/crmath_edge.cyr, M3 part 2c-2), the Mueller, Jones and Stokes chains, Rayleigh's and the beam's
-# (src/crmath_vx.cyr, M3 parts 2d-1a to 2d-3a), and the S-parameter cascade and S → Z (src/crmath_edge.cyr, M4 parts
-# 2a-2 and 2a-3), against Fractions and MPFR's widest exponent range. Built from the math
+# (src/crmath_vx.cyr, M3 parts 2d-1a to 2d-3a), the S-parameter cascade and S → Z (src/crmath_edge.cyr, M4 parts 2a-2
+# and 2a-3), and the rationals of signed monomials (src/crmath_edge.cyr, M5 part 2a-1a), against Fractions and MPFR's
+# widest exponent range. Built from the math
 # sources the bundle carries (src/constants.cyr … src/mathx.cyr, in the manifest's order and byte for byte what
 # dist/bijli.cyr holds): the bundle is `private` and these entry points are bijli-internal, so a consumer of
 # dist/bijli.cyr can't call them, but a file of internals only has no marker and can be included on its own.
@@ -479,6 +480,17 @@ fn _call(fp, fl, w): i64 {
         if (cp == 8) { return cf; }
         if ((cf & 1) == 0) { return 0 - 1; }
         r = co[cp];
+    }
+    elif (_is(fp, fl, "rat") == 1 || _is(fp, fl, "rat_slow") == 1 || _is(fp, fl, "rat_x") == 1) {
+        # rat k v0 … v5, rat_x …, rat_slow …: RN of src/crmath_edge.cyr's rational k (M5 part 2a-1a: the FDTD media's
+        # coefficients) over v (the fast path's two tiers then the exact path; its second tier then the exact path;
+        # the exact path alone); all ones when its denominator is exactly 0
+        var ro: f64[1];
+        var rs = 0;
+        if (fl == 5) { rs = 2; }
+        if (fl > 5) { rs = 1; }
+        if (_bj_cr_rat(w + 8, 6, _bj_cr_rat_spec(load64(w)), rs, &ro) == 0) { return 0 - 1; }
+        r = ro[0];
     }
     elif (_is(fp, fl, "s2z") == 1 || _is(fp, fl, "s2z_slow") == 1) {
         # s2z S11 S12 S21 S22 (re, im each) Z0 part, s2z_slow …: part k (0 to 7) of src/crmath_edge.cyr's S → Z (M4 part

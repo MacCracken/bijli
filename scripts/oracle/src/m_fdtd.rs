@@ -1590,6 +1590,118 @@ fn emit_1e(r: &mut Rows) {
     }
 }
 
+// ── part 2a-1a: the media's coefficients at their cancellation (ADR 0002 row 40) ─────────────────────────────────
+
+/// `n` values from `x` walking up one ulp at a time, starting `n/2` ulps below it.
+fn ulp_walk(x: f64, n: usize) -> Vec<f64> {
+    let mut y = x;
+    for _ in 0..n / 2 {
+        y = y.next_down();
+    }
+    let mut out = Vec::with_capacity(n);
+    for _ in 0..n {
+        out.push(y);
+        y = y.next_up();
+    }
+    out
+}
+
+/// The lossy, Drude, Lorentz and Debye coefficients where Rust's (1 ∓ s), (2 ∓ γΔt), 2 − ω₀²Δt², 2τ/Δt ∓ 1 and
+/// ε_s − ε_∞ cancel (the port rounds each once from its exact value, ADR 0002 row 40): relative offsets 10⁻¹ to 10⁻¹⁶
+/// either side, ulp walks, exact zeros, the fast path's box edges at 2^±120 (src/crmath_edge.cyr), subnormal and huge
+/// operands, and seeded media near the cancellation.
+fn emit_2a1a(r: &mut Rows) {
+    let e0 = bijli::field::EPSILON_0;
+    let offs: Vec<f64> = (1..=16).flat_map(|k| [10f64.powi(-k), -10f64.powi(-k)]).collect();
+    let p2 = |k: i32| 2f64.powi(k);
+    // The lossy C_a: σΔt = 2ε₀ε_r(1 + ρ).
+    for eps_r in [1.0, 2.25, 11.7] {
+        for dt in [1e-12, 1e-15, p2(-40)] {
+            let s0 = 2.0 * e0 * eps_r / dt;
+            for &rho in &offs {
+                r.lossy(&[eps_r, s0 * (1.0 + rho), dt, 1e-4]);
+            }
+            for s in ulp_walk(s0, 16) {
+                r.lossy(&[eps_r, s, dt, 1e-4]);
+            }
+        }
+    }
+    r.lossy(&[1.0, 2.0 * e0 * p2(40), p2(-40), 1e-4]);
+    r.lossy(&[4.0, 8.0 * e0 * p2(40), p2(-40), 1e-4]);
+    // Drude's and Lorentz's γΔt = 2(1 + ρ), Lorentz's ω₀Δt = √2(1 + ρ).
+    for dt in [1e-16, 1e-17, p2(-50)] {
+        let g0 = 2.0 / dt;
+        let w0 = std::f64::consts::SQRT_2 / dt;
+        for &rho in &offs {
+            r.drude(&[1.0, 1.37e16, g0 * (1.0 + rho), dt]);
+            r.lorentz(&[2.0, 2.0, w0 * (1.0 + rho), 1e13, dt]);
+            r.lorentz(&[2.0, 2.0, 1e15, g0 * (1.0 + rho), dt]);
+        }
+        for g in ulp_walk(g0, 16) {
+            r.drude(&[1.0, 1.37e16, g, dt]);
+            r.lorentz(&[2.0, 2.0, 1e15, g, dt]);
+        }
+        for w in ulp_walk(w0, 16) {
+            r.lorentz(&[2.0, 2.0, w, 1e13, dt]);
+        }
+    }
+    r.drude(&[1.0, 1e16, p2(51), p2(-50)]);
+    r.lorentz(&[2.0, 2.0, 1e15, p2(51), p2(-50)]);
+    // Debye's 2τ = Δt(1 + ρ) and ε_s = ε_∞(1 + ρ).
+    for dt in [1e-13, 1e-14, p2(-44)] {
+        for &rho in &offs {
+            r.debye(&[4.9, 78.4, dt / 2.0 * (1.0 + rho), dt]);
+            r.debye(&[4.9, 4.9 * (1.0 + rho), 1e-11, dt]);
+        }
+        for tau in ulp_walk(dt / 2.0, 16) {
+            r.debye(&[4.9, 78.4, tau, dt]);
+        }
+        for es in ulp_walk(4.9, 16) {
+            r.debye(&[4.9, es, 1e-11, dt]);
+        }
+    }
+    r.debye(&[4.9, 78.4, p2(-45), p2(-44)]);
+    // The fast path's box edges, each operand in turn, from a typical medium.
+    let lossy = [4.0, 0.5, 1e-13, 1e-4];
+    let drude = [1.0, 1.37e16, 4.05e13, 1e-16];
+    let lorentz = [2.0, 2.0, 1e15, 1e13, 1e-16];
+    let debye = [4.9, 78.4, 8.27e-12, 1e-13];
+    let edges: Vec<f64> =
+        [120, -120, 121, -121, 119, -119].iter().flat_map(|&k| [p2(k), -p2(k), 1.5 * p2(k)]).collect();
+    let tiny = [f64::from_bits(1), 1e-310, f64::MIN_POSITIVE, 1e-300, 1e300, f64::MAX];
+    for &x in edges.iter().chain(tiny.iter()) {
+        for j in 0..4 {
+            let mut v = lossy;
+            v[j] = x;
+            r.lossy(&v);
+            let mut v = drude;
+            v[j] = x;
+            r.drude(&v);
+            let mut v = debye;
+            v[j] = x;
+            r.debye(&v);
+        }
+        for j in 1..5 {
+            let mut v = lorentz;
+            v[j] = x;
+            r.lorentz(&v);
+        }
+    }
+    // Seeded media near their cancellation.
+    let mut rng = Rng::new(0x2a1a_0040);
+    for _ in 0..400 {
+        let rho = if rng.unit() < 0.5 { 1.0 } else { -1.0 } * rng.log_uniform(-16.0, -1.0);
+        let dt = rng.log_uniform(-17.0, -11.0);
+        let eps_r = rng.uniform(1.0, 20.0);
+        r.lossy(&[eps_r, 2.0 * e0 * eps_r / dt * (1.0 + rho), dt, rng.log_uniform(-6.0, -2.0)]);
+        r.drude(&[rng.uniform(1.0, 10.0), rng.log_uniform(14.0, 17.0), 2.0 / dt * (1.0 + rho), dt]);
+        r.lorentz(&[2.0, rng.uniform(0.0, 10.0), std::f64::consts::SQRT_2 / dt * (1.0 + rho),
+                    rng.log_uniform(11.0, 15.0), dt]);
+        let ei = rng.uniform(1.0, 10.0);
+        r.debye(&[ei, rng.uniform(ei, 100.0), dt / 2.0 * (1.0 + rho), dt]);
+    }
+}
+
 pub fn emit() -> Module {
     let mut r = Rows { m: Module::new("fdtd"), keys: BTreeSet::new() };
     emit_1a(&mut r);
@@ -1599,5 +1711,6 @@ pub fn emit() -> Module {
     emit_1d_cw(&mut r);
     emit_1d_eigen(&mut r);
     emit_1e(&mut r);
+    emit_2a1a(&mut r);
     r.m
 }

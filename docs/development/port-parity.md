@@ -5698,3 +5698,54 @@ phasor form (`src/nf2ff.cyr`); 1f the JSON of the serde types. Part 2 is the ran
 **M5 Part 1 is done**: the 1D grid, the sources, the media, the utilities, NF2FF's phasor form and their JSON, in six
 bites (§94–§99). fdtd.rs's M5 surface is ported, except what needs an `Fdtd2d` (`nf2ff_2d`, its six tests and its
 bench), which moves to M6. Next: Part 2, the range-edge review (§0.1) of the FDTD core.
+
+## 100. M5 part 2a-1a: the media coefficients rounded once (2026-11-15)
+
+M5's Part 2, the range-edge review, runs on the user's answers of 2026-11-15 (plan §0.1): 2a the answers (2a-1a the
+media coefficients, 2a-1b the Mur coefficients, 2a-2 the subpixel means, 2a-3 the grading), 2b round once, 2c the
+exact thresholds, 2d the range edges, the per-cell step updates among them (the user's answer).
+
+- **The finding**: the lossy C_a = (1 − s)/(1 + s), s = σΔt/(2ε), the Drude and Lorentz α and β on 2 ∓ γΔt and
+  2 − ω₀²Δt², and the Debye α on 2τ/Δt − 1 and β on ε_s − ε_∞ cancel where the two sides meet: C_a was 5.6·10⁻⁵ off
+  (relative) at s = 1 + 10⁻¹², 3.1·10⁻⁸ at 1 + 10⁻⁹. Each chain also rounds three to six times where once is possible,
+  and leaves the range at its edges (an ε_r of 10⁻³²⁰ made ε₀ε_r 0 and C_a NaN where it is −1).
+- **ADR 0002 row 40** (`src/crmath_edge.cyr`'s new `_bj_cr_rat`, called from `src/fdtd_media.cyr`): each coefficient is
+  rounded once from its exact value, a ratio N/D of sums of products of the inputs and the double ε₀, written as a
+  spec string ("+2ea-1bc/+2ea+1bc" is C_a over (ε_r, σ, Δt, Δx, ε₀)). Three paths:
+  - the first tier, for operands each 0 or within [2^-120, 2^120]: each term TwoProduct's exact pair (then
+    `_bj_e_ed_muld` steps past two factors), the sum by `_bj_e_ed_add`, so a sum of two exact pairs is within 3.02u² of
+    its own value however much it cancels; the quotient takes the cascade's rounding test (`_bj_e_ed_quot`);
+  - where that test fails, the second tier: each term of at most four factors expanded exactly (up to eight
+    TwoProduct components), the sum's components grown into one expansion and compressed (`_bj_e_ed_exact`), the same
+    test;
+  - then the exact path: signed scaled bignums (`_bj_e_q_*`), rounded by `_bj_e_q_signed_ratio`.
+
+  An exact zero takes IEEE's signs (a one-product numerator's factors', a cancelled sum +0, then D's): Lorentz's
+  β at γΔt = 2 is now +0, Rust's −(1 − 1)/2 −0. An output keeps Rust's chain where an operand it reads isn't finite
+  or Rust's formula divides by an exact zero (ε_r = 0, Δx = 0, Debye's Δt = 0, a denominator such as 1 + s exactly 0).
+- **cr_verify.py**: the rat (both tiers, then the exact path), rat_x (the second tier, then the exact path) and
+  rat_slow (the exact path alone) families check the engine against Python's Fraction on the ten coefficients:
+  typical media, each cancellation by relative offsets and ulp by ulp, exact zeros, the box edges, signed zeros, any
+  finite values and subnormals: **300,000 calls on x86_64 and on aarch64, 0 mismatches**.
+- **The grid**: 3,052 rows appended to `fdtd.tsv` (95,087; the earlier body an exact prefix): each cancellation at
+  relative offsets 10⁻¹ to 10⁻¹⁶ either side and ulp by ulp around it on three time steps (and three ε_r for the lossy
+  material), exact zeros (σΔt = 2ε, γΔt = 2 and 2τ = Δt on powers of two), every operand at the box edges 2^±119 to
+  2^±121 and at 2^-1074, 10⁻³¹⁰, DBL_MIN, 10^±300 and DBL_MAX, and 400 seeded media near their cancellation.
+- **validate.py**: `fm_port` computes each output from its formula in Fractions (independent of the spec strings) and
+  maps **9,775 rows** to row 40 in `fdtd.adr.tsv` (2,819 lossy, 2,831 Drude, 2,224 Lorentz, 1,901 Debye; part 1c's
+  rows among them, wherever rounding once changes a bit).
+- **Tests**: `tests/fdtd_media.tcyr`'s `cyrius_media_rounded_once` (8 assertions, 70 in all): C_a at s = 1 + 10⁻¹²,
+  a typical lossy medium, Drude's β and κ, the exact zeros and their signs, ε_r = 0's NaNs kept.
+- **Benchmarks**: the Cyrius-only `fdtd/media_coefficients` (the ten coefficients and a subpixel mean a call) went from
+  79 ns to 3.90–3.93 µs, about 0.4 µs a coefficient where Rust's chains take under 8 ns, and the new Cyrius-only
+  `fdtd/lossy_coefficients_exact_path` (C_a and C_b at Δt = 10⁻⁴⁰, outside the first tier's box) 10.3–10.4 µs. A first
+  version, the expansion tier alone, took 6.2 µs; the double-double first tier takes every typical medium (216–524 ns a
+  coefficient, measured one by one). The interleaved A/B against HEAD (two rounds, load 1.1 to 1.8) left the other 100
+  rows unchanged (median ratio 1.00 both rounds). The cost is paid at setup: M6's 2D and 3D grids compute C_a and C_b
+  per cell when a lossy region is set (Rust's `e_update_coefficients`), so a 10⁶-cell region will take about a second
+  there. Recorded as a finding; a per-coefficient fast path without the spec parsing would cut it further.
+- **Result, every target** (x86_64 ELF, x86_64 PE, aarch64): **18 modules, 0 failing; 637,207 ok, 0 failed, 0
+  measured, 0 pending, 110,835 accepted (ADR 01: 40,369; ADR 0002: 70,466)** over 748,042 rows; **all 475 digests
+  equal**, HEAD's unchanged but the four media functions' (their new rows and values). `fdtd_media.tcyr` passes on all
+  three (70). The gate is clean (no warnings; execution coverage 371 of 371 functions); validate.py 748,042 rows, 0
+  problems; the oracle's `--check` and clippy clean. Next: 2a-1b, the Mur coefficients.

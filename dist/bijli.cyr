@@ -15195,6 +15195,363 @@ fn _bj_cr_s2z(v: *f64, slow, out: *f64): i64 {
     return g;
 }
 
+# ── rationals of signed monomials (M5 part 2a-1a, ADR 0002 row 40, the user's answer of 2026-11-15) ────────────────
+#
+# RN(N/D), rounded once (to nearest, ties to even) from the exact value, where N and D are sums of signed monomials in
+# the doubles v[0..n): the FDTD media's coefficients, (a − b)/(a + b) forms whose rounded chains cancel where a ≈ b. A
+# spec is a string "N/D", each sum a run of terms, each term a sign, a coefficient digit (1, 2, 4 or 8) and one letter
+# per factor ('a' is v[0]): "+2ea-1bc/+2ea+1bc" is (2·v4·v0 − v1·v2)/(2·v4·v0 + v1·v2). A term has at most six
+# factors; one of five or six stands alone in its sum. An exact zero takes IEEE's sign rules: a single-term N's sign is
+# the xor of its coefficient's and its factors' signs, a sum that cancels is +0, and D's sign follows.
+#
+# The fast path, for v's entries each 0 or of magnitude in [2^-120, 2^120] (every product then lies in [2^-720,
+# 2^724], so every TwoProduct is exact), in two tiers. The first accumulates the terms as error-bounded double-doubles:
+# a term is TwoProduct's exact pair, then _bj_e_ed_muld steps past two factors, and the sum _bj_e_ed_add steps, so a
+# sum of two exact pairs is within 3.02u² of its own value however much it cancels (AccurateDWPlusDW). Where its
+# rounding test fails, the second expands each term of at most four factors exactly (one, two, four or eight
+# TwoProduct components, each scaled exactly by its coefficient), grows the sum's components (at most 16) into one
+# expansion and compresses it to within 2^-104 (_bj_e_ed_exact); a term of five or six factors is a chain of
+# _bj_e_ed_muld steps there too. In either tier a negative D is negated with N, and the quotient takes _bj_e_ed_quot's
+# rounding test (relative bounds within 200u², the parts and the quotient within [2^-900, 2^900]).
+#
+# The exact path (the box or a test fails, or slow = 1): N and D as signed scaled bignums (_bj_e_q_*). A sum of terms
+# of at most four factors spans at most 8,394 bits (from 2^-4296 to 2^4098), inside _BJ_E_QW's 9,568; a lone term of
+# six factors spans 318. cr_verify.py's rat and rat_slow families check both paths against Python's Fraction.
+
+# The spec of rational k (cr_driver.cyr's `rat` reads them by number). Operands: the lossy material's (ε_r, σ, dt, dx,
+# ε₀); the Drude model's (ε_∞, ω_p, γ, dt, ε₀); the Lorentz model's (unused, Δε, ω₀, γ, dt, ε₀); the Debye model's
+# (ε_∞, ε_s, τ, dt, ε₀).
+#must_use
+fn _bj_cr_rat_spec(k): i64 {
+    if (k == 0) { return "+2ea-1bc/+2ea+1bc"; }           # the lossy C_a = (2ε − σΔt)/(2ε + σΔt)
+    if (k == 1) { return "+2c/+2ead+1bcd"; }               # the lossy C_b = 2Δt/(Δx·(2ε + σΔt))
+    if (k == 2) { return "+2-1cd/+2+1cd"; }                # Drude α = (2 − γΔt)/(2 + γΔt)
+    if (k == 3) { return "+1ebbd/+2+1cd"; }                # Drude β = ε₀ω_p²Δt/(2 + γΔt)
+    if (k == 4) { return "+1d/+1ea"; }                     # Drude κ = Δt/(ε₀ε_∞)
+    if (k == 5) { return "+4-2ccee/+2+1de"; }              # Lorentz α = 2(2 − ω₀²Δt²)/(2 + γΔt)
+    if (k == 6) { return "-2+1de/+2+1de"; }                # Lorentz β = −(2 − γΔt)/(2 + γΔt)
+    if (k == 7) { return "+2fbccee/+2+1de"; }              # Lorentz γ_c = 2ε₀Δεω₀²Δt²/(2 + γΔt)
+    if (k == 8) { return "+2c-1d/+2c+1d"; }                # Debye α = (2τ − Δt)/(2τ + Δt)
+    if (k == 9) { return "+1ebd-1ead/+2c+1d"; }            # Debye β = ε₀(ε_s − ε_∞)Δt/(2τ + Δt)
+    return 0;
+}
+
+# Reads the term at sp[p] (a sign, a coefficient digit, a letter per factor): ix[0] the signed coefficient, ix[1] its
+# factor count, ix[2..) the factors' indices into v; returns the position after it.
+fn _bj_e_rt_term(sp, p, ix: *i64): i64 {
+    var s = 1;
+    if (load8(sp + p) == 45) { s = 0 - 1; }
+    ix[0] = s * (load8(sp + p + 1) - 48);
+    var q = p + 2;
+    var k = 0;
+    var ch = load8(sp + q);
+    while (ch >= 97 && ch <= 122) {
+        ix[2 + k] = ch - 97;
+        k = k + 1;
+        q = q + 1;
+        ch = load8(sp + q);
+    }
+    ix[1] = k;
+    return q;
+}
+
+# 1 when sp[p] starts a term (a sign).
+#must_use
+fn _bj_e_rt_more(sp, p): i64 {
+    var ch = load8(sp + p);
+    if (ch == 43 || ch == 45) { return 1; }
+    return 0;
+}
+
+# o[..] := the exact components of c·x[0]·…·x[k − 1] for k ≤ 4 (TwoProduct's parts, each scaled by the power of two
+# c); returns their count (1, 1, 2, 4 or 8).
+fn _bj_e_rt_comps(o: *f64, c: f64, x: *f64, k): i64 {
+    if (k == 0) {
+        o[0] = c;
+        return 1;
+    }
+    var x0: f64 = x[0];
+    if (k == 1) {
+        o[0] = c * x0;
+        return 1;
+    }
+    var p, e = _bj_k_two_prod(x0, x[1]);
+    var pv: f64 = p;
+    var ev: f64 = e;
+    if (k == 2) {
+        o[0] = c * pv;
+        o[1] = c * ev;
+        return 2;
+    }
+    if (k == 3) {
+        var x2: f64 = x[2];
+        var a1, a2 = _bj_k_two_prod(pv, x2);
+        var b1, b2 = _bj_k_two_prod(ev, x2);
+        var a1v: f64 = a1;
+        var a2v: f64 = a2;
+        var b1v: f64 = b1;
+        var b2v: f64 = b2;
+        o[0] = c * a1v;
+        o[1] = c * a2v;
+        o[2] = c * b1v;
+        o[3] = c * b2v;
+        return 4;
+    }
+    var q, f = _bj_k_two_prod(x[2], x[3]);
+    var qv: f64 = q;
+    var fv: f64 = f;
+    var m0, m1 = _bj_k_two_prod(pv, qv);
+    var m2, m3 = _bj_k_two_prod(pv, fv);
+    var m4, m5 = _bj_k_two_prod(ev, qv);
+    var m6, m7 = _bj_k_two_prod(ev, fv);
+    var w0: f64 = m0;
+    var w1: f64 = m1;
+    var w2: f64 = m2;
+    var w3: f64 = m3;
+    var w4: f64 = m4;
+    var w5: f64 = m5;
+    var w6: f64 = m6;
+    var w7: f64 = m7;
+    o[0] = c * w0;
+    o[1] = c * w1;
+    o[2] = c * w2;
+    o[3] = c * w3;
+    o[4] = c * w4;
+    o[5] = c * w5;
+    o[6] = c * w6;
+    o[7] = c * w7;
+    return 8;
+}
+
+# z := the sum of the terms at sp[p..), up to '/' or the end, as an ed value by the first tier (the section comment);
+# *pe := the position after it. Returns 0 when a step's test fails.
+fn _bj_e_rt_dsum(v: *f64, sp, p, pe: *i64, z: *f64): i64 {
+    var ix: i64[8];
+    var w: f64[3];
+    var first = 1;
+    var q = p;
+    while (_bj_e_rt_more(sp, q) == 1) {
+        q = _bj_e_rt_term(sp, q, &ix);
+        var c: f64 = f64_from(ix[0]);
+        var k = ix[1];
+        if (k == 0) {
+            w[0] = c;
+            w[1] = 0.0;
+            w[2] = 0.0;
+        } elif (k == 1) {
+            var x0: f64 = v[ix[2]];
+            w[0] = c * x0;
+            w[1] = 0.0;
+            w[2] = 0.0;
+        } else {
+            _bj_e_ed_set_prod(&w, v[ix[2]], v[ix[3]]);
+            for (var j = 2; j < k; j = j + 1) {
+                if (_bj_e_ed_muld(&w, &w, v[ix[2 + j]]) == 0) { return 0; }
+            }
+            var ac: f64 = f64_abs(c);
+            w[0] = w[0] * c;
+            w[1] = w[1] * c;
+            w[2] = w[2] * ac;
+        }
+        if (first == 1) {
+            z[0] = w[0];
+            z[1] = w[1];
+            z[2] = w[2];
+            first = 0;
+        } elif (_bj_e_ed_add(z, z, &w, 1.0) == 0) {
+            return 0;
+        }
+    }
+    pe[0] = q;
+    if (first == 1) {
+        z[0] = 0.0;
+        z[1] = 0.0;
+        z[2] = 0.0;
+    }
+    return 1;
+}
+
+# z := the sum of the terms at sp[p..), up to '/' or the end, as an ed value by the second tier (the section comment);
+# *pe := the position after it. Returns 0 when a step's test fails or the sum would need more than 16 components.
+fn _bj_e_rt_fast(v: *f64, sp, p, pe: *i64, z: *f64): i64 {
+    var t: f64[16];
+    var n = 0;
+    var ix: i64[8];
+    var x: f64[6];
+    var comp: f64[8];
+    var w: f64[3];
+    var lz: f64[3];
+    var nl = 0;
+    var q = p;
+    while (_bj_e_rt_more(sp, q) == 1) {
+        q = _bj_e_rt_term(sp, q, &ix);
+        var c: f64 = f64_from(ix[0]);
+        var k = ix[1];
+        for (var j = 0; j < k; j = j + 1) { x[j] = v[ix[2 + j]]; }
+        if (k <= 4) {
+            var nc = _bj_e_rt_comps(&comp, c, &x, k);
+            if (n + nc > 16) { return 0; }
+            for (var j2 = 0; j2 < nc; j2 = j2 + 1) { t[n + j2] = comp[j2]; }
+            n = n + nc;
+        } else {
+            _bj_e_ed_set_prod(&w, x[0], x[1]);
+            for (var j3 = 2; j3 < k; j3 = j3 + 1) {
+                if (_bj_e_ed_muld(&w, &w, x[j3]) == 0) { return 0; }
+            }
+            var ac: f64 = f64_abs(c);
+            w[0] = w[0] * c;
+            w[1] = w[1] * c;
+            w[2] = w[2] * ac;
+            if (nl == 0) {
+                lz[0] = w[0];
+                lz[1] = w[1];
+                lz[2] = w[2];
+            } elif (_bj_e_ed_add(&lz, &lz, &w, 1.0) == 0) {
+                return 0;
+            }
+            nl = nl + 1;
+        }
+    }
+    pe[0] = q;
+    if (n == 0 && nl > 0) {
+        z[0] = lz[0];
+        z[1] = lz[1];
+        z[2] = lz[2];
+        return 1;
+    }
+    if (_bj_e_ed_exact(z, &t, n) == 0) { return 0; }
+    if (nl > 0) {
+        if (_bj_e_ed_add(z, z, &lz, 1.0) == 0) { return 0; }
+    }
+    return 1;
+}
+
+# ±0 for an exact zero N/D (the section comment's sign rules): dneg = 1 when D is negative.
+#must_use
+fn _bj_e_rt_zero(v: *f64, sp, dneg): f64 {
+    var ix: i64[8];
+    var neg = dneg;
+    var q = _bj_e_rt_term(sp, 0, &ix);
+    if (_bj_e_rt_more(sp, q) == 0) {
+        if (ix[0] < 0) { neg = 1 - neg; }
+        for (var j = 0; j < ix[1]; j = j + 1) {
+            if (_bj_k_bits(v[ix[2 + j]]) < 0) { neg = 1 - neg; }
+        }
+    }
+    if (neg == 1) { return -0.0; }
+    return 0.0;
+}
+
+# The fast path's tier (1 or 2, the section comment): _bj_cr_rat's return with out[0] set, 0 when D is exactly 0, or
+# −1 when the box or a test fails.
+fn _bj_e_rt_fastq(v: *f64, n, sp, tier, out: *f64): i64 {
+    var bhi: f64 = _BJ_E_C_BOX_HI;
+    var blo: f64 = _BJ_E_C_BOX_LO;
+    for (var i = 0; i < n; i = i + 1) {
+        var m: f64 = f64_abs(v[i]);
+        if (m != 0.0 && (m < blo || m > bhi)) { return 0 - 1; }
+    }
+    var nz: f64[3];
+    var dz: f64[3];
+    var pe: i64[1];
+    if (tier == 1) {
+        if (_bj_e_rt_dsum(v, sp, 0, &pe, &nz) == 0) { return 0 - 1; }
+        if (_bj_e_rt_dsum(v, sp, pe[0] + 1, &pe, &dz) == 0) { return 0 - 1; }
+    } else {
+        if (_bj_e_rt_fast(v, sp, 0, &pe, &nz) == 0) { return 0 - 1; }
+        if (_bj_e_rt_fast(v, sp, pe[0] + 1, &pe, &dz) == 0) { return 0 - 1; }
+    }
+    var dh: f64 = dz[0];
+    if (dh == 0.0) {
+        if (dz[2] == 0.0) { return 0; }
+        return 0 - 1;
+    }
+    var dneg = 0;
+    if (dh < 0.0) {
+        dz[0] = -dh;
+        dz[1] = -dz[1];
+        nz[0] = -nz[0];
+        nz[1] = -nz[1];
+        dneg = 1;
+    }
+    var r = _bj_e_ed_quot(&nz, &dz, out, 0);
+    if (r == 0) { return 0 - 1; }
+    if (r == 3) { out[0] = _bj_e_rt_zero(v, sp, dneg); }
+    return 1;
+}
+
+# acc := the sum of the terms at sp[p..), exactly; *pe := the position after it. ta, tb, tc and tm are full-size
+# scratch (_BJ_E_QW words), tx a small one (one double).
+fn _bj_e_rt_exact_sum(v: *f64, sp, p, pe: *i64, acc, ta, tb, tc, tm, tx) {
+    var ix: i64[8];
+    _bj_e_q_set(acc, 0.0);
+    var q = p;
+    while (_bj_e_rt_more(sp, q) == 1) {
+        q = _bj_e_rt_term(sp, q, &ix);
+        var c: f64 = f64_from(ix[0]);
+        var a = ta;
+        var b = tb;
+        _bj_e_q_set(a, c);
+        for (var j = 0; j < ix[1]; j = j + 1) {
+            _bj_e_q_set(tx, v[ix[2 + j]]);
+            _bj_e_q_mul(b, a, tx);
+            var s = a;
+            a = b;
+            b = s;
+        }
+        _bj_e_q_add(tc, acc, a, 1, tm);
+        _bj_e_q_copy(acc, tc);
+    }
+    pe[0] = q;
+    return 0;
+}
+
+# The exact path (the section comment): _bj_cr_rat's return and out[0].
+fn _bj_e_rt_exactq(v: *f64, sp, out: *f64): i64 {
+    var nq: i64[302];
+    var dq: i64[302];
+    var ta: i64[302];
+    var tb: i64[302];
+    var tc: i64[302];
+    var tm: i64[302];
+    var tx: i64[6];
+    var pe: i64[1];
+    _bj_e_rt_exact_sum(v, sp, 0, &pe, &nq, &ta, &tb, &tc, &tm, &tx);
+    _bj_e_rt_exact_sum(v, sp, pe[0] + 1, &pe, &dq, &ta, &tb, &tc, &tm, &tx);
+    var ds = load64(&dq);
+    if (ds == 0) { return 0; }
+    var dneg = 0;
+    if (ds < 0) {
+        store64(&dq, 1);
+        store64(&nq, 0 - load64(&nq));
+        dneg = 1;
+    }
+    if (load64(&nq) == 0) {
+        out[0] = _bj_e_rt_zero(v, sp, dneg);
+        return 1;
+    }
+    var r: f64 = _bj_e_q_signed_ratio(&nq, &dq, &ta + 16, &tb + 16);
+    out[0] = r;
+    return 1;
+}
+
+# out[0] := RN(N/D) for the spec sp over the n doubles at v, finite (the section comment): 1, or 0 when D is exactly 0
+# (out untouched). slow = 0 tries the fast path's two tiers, then the exact path; 2 the second tier, then the exact
+# path; 1 the exact path alone.
+#must_use
+fn _bj_cr_rat(v: *f64, n, sp, slow, out: *f64): i64 {
+    if (slow == 0) {
+        var f = _bj_e_rt_fastq(v, n, sp, 1, out);
+        if (f >= 0) { return f; }
+    }
+    if (slow != 1) {
+        var f2 = _bj_e_rt_fastq(v, n, sp, 2, out);
+        if (f2 >= 0) { return f2; }
+    }
+    var g = _bj_e_rt_exactq(v, sp, out);
+    return g;
+}
+
 # --- log.cyr ---
 
 # log.cyr — bijli's logging: Rust's `tracing` sites and `logging::init` on sakshi (port of rust-old/src/logging.rs).
@@ -31142,8 +31499,13 @@ var _BJ_WATER_TAU: f64 = 0.00000000000827;
 # subpixel permittivity averages. SI units: conductivities in S/m, angular frequencies in rad/s, times in seconds.
 #
 # Each material is a small struct passed by value. Its `new` stores the fields unchecked, as Rust's does, and
-# `try_new` validates them. The coefficients are Rust's chains, as written. The presets' fields are generated from
-# the oracle into src/fdtd_media_data.cyr.
+# `try_new` validates them. The presets' fields are generated from the oracle into src/fdtd_media_data.cyr.
+#
+# The coefficients are rounded once from their exact values (ADR 0002 row 40, the user's answer of 2026-11-15): each is
+# a ratio of sums of products of the inputs and ε₀ (src/crmath_edge.cyr's _bj_cr_rat), where Rust's chains of (1 ∓ s)
+# and (2 ∓ γΔt) cancelled as s → 1 or γΔt → 2 (the lossy C_a 5.6·10⁻⁵ off at s = 1 + 10⁻¹²). An output keeps Rust's
+# chain where an operand it reads isn't finite or Rust's formula divides by an exact zero (ε_r = 0, Δx = 0, Δt = 0 for
+# Debye, or a denominator such as 1 + s exactly 0).
 #
 # bijli's one harmonic convention is e^{+jωt} with IEEE handedness (src/complex.cyr's header; ADR 0002 row 5). Rust
 # stated the Drude, Lorentz and Debye permittivities in e^{−iωt}; they are stated here in e^{+jωt}. The ADE
@@ -31153,6 +31515,25 @@ private
 
 var _BJ_FM_INF: f64 = 0x7FF0000000000000;
 var _BJ_FM_NAN: f64 = 0x7FF8000000000000;
+
+# 1 when x is finite (NaN-safe).
+#must_use
+fn _bj_fm_fin(x: f64): i64 {
+    var z: f64 = x * 0.0;
+    if (z == 0.0) { return 1; }
+    return 0;
+}
+
+# r, rounded once: rational k of src/crmath_edge.cyr over the n doubles at v when ok = 1 and its denominator isn't
+# exactly 0, else r as given (Rust's chain).
+#must_use
+fn _bj_fm_rat(r: f64, ok, v: *f64, n, k): f64 {
+    if (ok == 0) { return r; }
+    var o: f64[1];
+    if (_bj_cr_rat(v, n, _bj_cr_rat_spec(k), 0, &o) == 0) { return r; }
+    var x: f64 = o[0];
+    return x;
+}
 
 # 1 when x is finite and strictly positive (NaN-safe). Mirrors fdtd.rs's `is_positive_finite`.
 #must_use
@@ -31222,7 +31603,8 @@ public fn BjLossyMaterial_try_new(eps_r: f64, conductivity: f64, out: *BjLossyMa
 }
 
 impl BjLossyMaterial {
-    # The E-update coefficients (C_a, C_b) for steps dt and dx; dt > 0, dx > 0 and a valid material assumed. Mirrors
+    # The E-update coefficients (C_a, C_b) for steps dt and dx, C_a = (2ε − σΔt)/(2ε + σΔt) and C_b = 2Δt/(Δx·(2ε +
+    # σΔt)), ε = ε_rε₀, each rounded once (the file's header); dt > 0, dx > 0 and a valid material assumed. Mirrors
     # `LossyMaterial::update_coefficients`.
     #must_use
     public fn update_coefficients(self, dt: f64, dx: f64): (f64, f64) {
@@ -31236,6 +31618,17 @@ impl BjLossyMaterial {
         var edx: f64 = eps * dx;
         var q: f64 = dt / edx;
         var cb: f64 = q / den;
+        var v: f64[5];
+        v[0] = self.eps_r;
+        v[1] = self.conductivity;
+        v[2] = dt;
+        v[3] = dx;
+        v[4] = BJ_EPSILON_0;
+        var ok = _bj_fm_fin(self.eps_r) & _bj_fm_fin(self.conductivity) & _bj_fm_fin(dt);
+        if (self.eps_r == 0.0) { ok = 0; }
+        ca = _bj_fm_rat(ca, ok, &v, 5, 0);
+        if (dx == 0.0 || _bj_fm_fin(dx) == 0) { ok = 0; }
+        cb = _bj_fm_rat(cb, ok, &v, 5, 1);
         return (ca, cb);
     }
 }
@@ -31294,8 +31687,8 @@ public fn BjDrudeMaterial_silver(): BjDrudeMaterial {
 impl BjDrudeMaterial {
     # The ADE coefficients (α, β, κ) of the current J: α = (2 − γΔt)/(2 + γΔt), β = ε₀ω_p²Δt/(2 + γΔt) and
     # κ = Δt/(ε₀ε_∞), for the trapezoidal J^{n+1} = αJ^n + β(E^{n+1} + E^n) and
-    # E^{n+1} = E^n + κ[(∇×H)^{n+½} − ½(J^{n+1} + J^n)] (Taflove & Hagness, ch. 9); dt > 0 and a valid material
-    # assumed. Mirrors `DrudeMaterial::ade_coefficients`.
+    # E^{n+1} = E^n + κ[(∇×H)^{n+½} − ½(J^{n+1} + J^n)] (Taflove & Hagness, ch. 9), each rounded once (the file's
+    # header); dt > 0 and a valid material assumed. Mirrors `DrudeMaterial::ade_coefficients`.
     #must_use
     public fn ade_coefficients(self, dt: f64): (f64, f64, f64) {
         var gdt: f64 = self.gamma * dt;
@@ -31308,6 +31701,16 @@ impl BjDrudeMaterial {
         var beta: f64 = b / ap;
         var ei: f64 = BJ_EPSILON_0 * self.eps_inf;
         var kappa: f64 = dt / ei;
+        var v: f64[5];
+        v[0] = self.eps_inf;
+        v[1] = self.omega_p;
+        v[2] = self.gamma;
+        v[3] = dt;
+        v[4] = BJ_EPSILON_0;
+        var fg = _bj_fm_fin(self.gamma) & _bj_fm_fin(dt);
+        alpha = _bj_fm_rat(alpha, fg, &v, 5, 2);
+        beta = _bj_fm_rat(beta, fg & _bj_fm_fin(self.omega_p), &v, 5, 3);
+        kappa = _bj_fm_rat(kappa, _bj_fm_fin(self.eps_inf) & _bj_fm_fin(dt), &v, 5, 4);
         return (alpha, beta, kappa);
     }
 }
@@ -31355,8 +31758,8 @@ public fn BjLorentzMaterial_try_new(eps_inf: f64, delta_eps: f64, omega_0: f64, 
 
 impl BjLorentzMaterial {
     # The ADE coefficients (α, β, γ_c) of the central-difference P^{n+1} = αP^n + βP^{n−1} + γ_c·E^n:
-    # α = (2 − ω₀²Δt²)/(1 + γΔt/2), β = −(1 − γΔt/2)/(1 + γΔt/2), γ_c = ε₀Δεω₀²Δt²/(1 + γΔt/2); stable only for
-    # ω₀Δt < 2. Mirrors `LorentzMaterial::ade_coefficients`.
+    # α = (2 − ω₀²Δt²)/(1 + γΔt/2), β = −(1 − γΔt/2)/(1 + γΔt/2), γ_c = ε₀Δεω₀²Δt²/(1 + γΔt/2), each rounded once
+    # (the file's header); stable only for ω₀Δt < 2. Mirrors `LorentzMaterial::ade_coefficients`.
     #must_use
     public fn ade_coefficients(self, dt: f64): (f64, f64, f64) {
         var gdt: f64 = self.gamma * dt;
@@ -31373,6 +31776,18 @@ impl BjLorentzMaterial {
         g = g * w0dt;
         g = g * w0dt;
         var gamma_c: f64 = g / denom;
+        var v: f64[6];
+        v[0] = 0.0;
+        v[1] = self.delta_eps;
+        v[2] = self.omega_0;
+        v[3] = self.gamma;
+        v[4] = dt;
+        v[5] = BJ_EPSILON_0;
+        var fg = _bj_fm_fin(self.gamma) & _bj_fm_fin(dt);
+        var fw = fg & _bj_fm_fin(self.omega_0);
+        alpha = _bj_fm_rat(alpha, fw, &v, 6, 5);
+        beta = _bj_fm_rat(beta, fg, &v, 6, 6);
+        gamma_c = _bj_fm_rat(gamma_c, fw & _bj_fm_fin(self.delta_eps), &v, 6, 7);
         return (alpha, beta, gamma_c);
     }
 }
@@ -31431,7 +31846,8 @@ public fn BjDebyeMaterial_water(): BjDebyeMaterial {
 
 impl BjDebyeMaterial {
     # The ADE coefficients (α, β) of the trapezoidal P^{n+1} = αP^n + β(E^{n+1} + E^n): α = (2τ/Δt − 1)/(2τ/Δt + 1),
-    # β = ε₀(ε_s − ε_∞)/(2τ/Δt + 1); dt > 0 and a valid material assumed. Mirrors `DebyeMaterial::ade_coefficients`.
+    # β = ε₀(ε_s − ε_∞)/(2τ/Δt + 1), each rounded once (the file's header); dt > 0 and a valid material assumed.
+    # Mirrors `DebyeMaterial::ade_coefficients`.
     #must_use
     public fn ade_coefficients(self, dt: f64): (f64, f64) {
         var tdt: f64 = self.tau / dt;
@@ -31442,6 +31858,16 @@ impl BjDebyeMaterial {
         var de: f64 = self.eps_s - self.eps_inf;
         var b: f64 = BJ_EPSILON_0 * de;
         var beta: f64 = b / ap;
+        var v: f64[5];
+        v[0] = self.eps_inf;
+        v[1] = self.eps_s;
+        v[2] = self.tau;
+        v[3] = dt;
+        v[4] = BJ_EPSILON_0;
+        var ft = _bj_fm_fin(self.tau) & _bj_fm_fin(dt);
+        if (dt == 0.0) { ft = 0; }
+        alpha = _bj_fm_rat(alpha, ft, &v, 5, 8);
+        beta = _bj_fm_rat(beta, ft & _bj_fm_fin(self.eps_s) & _bj_fm_fin(self.eps_inf), &v, 5, 9);
         return (alpha, beta);
     }
 }
