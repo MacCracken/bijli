@@ -3,10 +3,11 @@
 # 32-byte aligned). Each result is checked bit for bit against the scalar loop, and the guard words past dst's n-th
 # element must stay untouched (the plan's §10 note: "f64v_* writes past dst when n isn't a lane multiple", open
 # 2026-11-06). Verb set 0 is f64v_sub alone, 1 f64v_sub then f64v_mul into dst, 2 the FDTD row d += k·(a − b): sub
-# and mul into a scratch row, then f64v_add into dst.
+# and mul into a scratch row, then f64v_add into dst; 3 the same row with a scalar coefficient (f64v_scale, the TF/SF
+# grid's), 4 f64v_scale alone.
 # 6.7.18 (2026-11-15): every word equals the scalar loop's; f64v_sub and f64v_mul write one word past dst at every
-# odd count (2 lanes), f64v_add never, on x86_64 and aarch64 alike. src/fdtd1d.cyr runs the packed verbs on a multiple
-# of 4 and a scalar tail.
+# odd count (2 lanes), f64v_add never, on x86_64 and aarch64 alike; f64v_scale (M5 part 1b) as sub and mul.
+# src/fdtd1d.cyr and src/fdtd_source.cyr run the packed verbs on a multiple of 4 and a scalar tail.
 #   cyrius build scripts/probes/p19_f64v_tail.cyr build/p19 && ./build/p19
 include "lib/syscalls.cyr"
 include "lib/string.cyr"
@@ -45,6 +46,8 @@ fn run_case(n, od, oa, ob, ok_, which): i64 {
         var x: f64 = a[i] - b[i];
         if (which == 1) { x = k[i] * x; }
         if (which == 2) { var y: f64 = k[i] * x; x = d[i] + y; }
+        if (which == 3) { var ks: f64 = k[0]; var y3: f64 = x * ks; x = d[i] + y3; }
+        if (which == 4) { var k4: f64 = k[0]; x = a[i] * k4; }
         store64(wbuf + i * 8, x);
     }
     if (which == 0) { f64v_sub(d, a, b, n); }
@@ -54,6 +57,17 @@ fn run_case(n, od, oa, ob, ok_, which): i64 {
         f64v_sub(tmp, a, b, n);
         f64v_mul(tmp, k, tmp, n);
         f64v_add(d, d, tmp, n);
+    }
+    if (which == 3) {
+        var tmp3: *f64 = f64p(base + 224 * 8);
+        var s3: f64 = k[0];
+        f64v_sub(tmp3, a, b, n);
+        f64v_scale(tmp3, tmp3, s3, n);
+        f64v_add(d, d, tmp3, n);
+    }
+    if (which == 4) {
+        var s4: f64 = k[0];
+        f64v_scale(d, a, s4, n);
     }
     var bad = 0;
     for (var i2 = 0; i2 < n; i2 = i2 + 1) {
@@ -69,7 +83,7 @@ fn main(): i64 {
     alloc_init();
     var cases = 0;
     var mism = 0;
-    for (var which = 0; which < 3; which = which + 1) {
+    for (var which = 0; which < 5; which = which + 1) {
         var clob = 0;
         var odd = 0;
         for (var n = 0; n < 20; n = n + 1) {

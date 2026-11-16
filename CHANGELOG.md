@@ -375,12 +375,24 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
   golden module `fdtd.tsv`, 627 class-T rows: each row a script (the grid, then operations) replayed on a new grid,
   its state compared frame by frame as the digests of all six arrays (the private ones read from Rust's `Debug`), the
   scalars and probe cells; `fdtd.cr.tsv` corrects 3 driven frames where glibc's sine misrounds. The harness learns
-  class T; `validate.py` models the grid (`Fd1`). `tests/fdtd1d.tcyr` ports 21 of fdtd.rs's 1D tests (3 follow with
+  class T; `validate.py` models the grid (`Fd1`). `tests/fdtd1d.tcyr` ports 21 of fdtd.rs's 1D tests (2 follow with
   the pulses in part 1b, 1 is n/a) and adds 6 groups. The updates run on the packed `f64v_*` verbs with a scalar tail
   (probe p19: on 6.7.18 `f64v_sub` and `f64v_mul` still write one word past `dst` at an odd count), bit-identical to
   Rust; the three 1D bench twins, at load about 1: `fdtd/step_100_cells` 251 ns (Rust 64.09 ns, 3.9×),
   `step_1000_cells` 2.11 µs (3.4×), `run_100_steps_500_cells` 146 µs (4.5×), against 1.07–1.10 µs, 10.4–10.8 µs and
   562–579 µs for the scalar loops first written.
+- **Cyrius port, M5 part 1b — the pulses and the TF/SF source** (`src/fdtd_source.cyr`): `bj_gaussian_pulse`,
+  `bj_ricker_wavelet`, `bj_differentiated_gaussian` and `bj_modulated_gaussian_pulse` on the correctly rounded exp
+  and sin; `BjTfsfSource` (`BjTfsfSource_try_new`, `BjTfsfSource_new`, `BjTfsfSource_free`, `step`, `incident_e`,
+  `incident_h`), its auxiliary grid in one mapping (ADR 0002 rows 2 and 9 amended). Rust's `TfsfSource::new` clamped
+  invalid input with a warning; the port's refuses it as `try_new` does (ADR 0002 row 3 amended). `fdtd.tsv` grows by
+  16,901 rows (17,528): the pulses over the specials, seeded and wide values and their range edges (class C, 8 rows
+  corrected where glibc's exp or sin misrounds), Gaussian-driven 1D grids (the Rust tests' Mur absorption), and TF/SF
+  scripts over every constructor case, the dt limit ulp by ulp, drives and written fields; `fdtd.adr.tsv` maps the 105
+  clamped `new` rows to row 3. `tests/fdtd_source.tcyr` ports the 12 pulse and 10 TF/SF tests (64 assertions);
+  `tests/fdtd1d.tcyr` the two Mur absorption tests. The TF/SF step runs on the packed `f64v_*` verbs too (probe p19:
+  `f64v_scale` writes past `dst` at an odd count, as `f64v_mul`): Cyrius-only benches, at load 1.7–2.7,
+  `fdtd/tfsf_step_200` 2.37–2.45 µs → 846–852 ns (−65 %, with its Gaussian drive) and `fdtd/gaussian_pulse` 122–127 ns.
 
 ### Fixed
 

@@ -48,15 +48,13 @@ PENDING_MODULES = {
 # Their other items are checked as a ported module's now; the listed ones count as pending, and one found ported is a
 # problem (drop it from the list).
 IN_PROGRESS = {
-    # M5 part 1a ported Fdtd1d; the rest of fdtd.rs follows in M5 (sources, media, NF2FF, utilities) and M6 (CPML,
-    # 2D, 3D).
+    # M5 part 1a ported Fdtd1d, 1b the pulses and TfsfSource; the rest of fdtd.rs follows in M5 (media, NF2FF,
+    # utilities) and M6 (CPML, 2D, 3D).
     "fdtd": ("M5–M6", {
-        "TfsfSource", "LossyMaterial", "DrudeMaterial", "LorentzMaterial", "DebyeMaterial", "Nf2ffResult",
-        "CpmlParams", "Cpml", "Mode2d", "Fdtd2d", "Fdtd3d", "NonUniformGrid", "CwAccumulator", "EigenmodeResult",
-        "gaussian_pulse", "ricker_wavelet", "differentiated_gaussian", "modulated_gaussian_pulse", "nf2ff_2d",
+        "LossyMaterial", "DrudeMaterial", "LorentzMaterial", "DebyeMaterial", "Nf2ffResult", "CpmlParams", "Cpml",
+        "Mode2d", "Fdtd2d", "Fdtd3d", "NonUniformGrid", "CwAccumulator", "EigenmodeResult", "nf2ff_2d",
         "nf2ff_2d_phasor", "subpixel_permittivity_parallel", "subpixel_permittivity_perpendicular",
-        "subpixel_permittivity_perpendicular_checked", "fourth_order_derivative", "find_eigenmodes", "TfsfSource::new",
-        "TfsfSource::try_new", "TfsfSource::step", "TfsfSource::incident_e", "TfsfSource::incident_h",
+        "subpixel_permittivity_perpendicular_checked", "fourth_order_derivative", "find_eigenmodes",
         "LossyMaterial::new", "LossyMaterial::try_new", "LossyMaterial::update_coefficients", "DrudeMaterial::new",
         "DrudeMaterial::try_new", "DrudeMaterial::gold", "DrudeMaterial::silver", "DrudeMaterial::ade_coefficients",
         "LorentzMaterial::new", "LorentzMaterial::try_new", "LorentzMaterial::ade_coefficients", "DebyeMaterial::new",

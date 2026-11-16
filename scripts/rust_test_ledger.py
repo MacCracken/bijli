@@ -39,8 +39,8 @@ FILES = {
     "src/beam.rs": ("M3", ["tests/beam.tcyr"]),
     "src/rf.rs": ("M4", ["tests/rf.tcyr"]),
     # fdtd.rs's tests split by section: M5 (1D, sources, media, NF2FF, utilities) and M6 (CPML, 2D, 3D).
-    "src/fdtd.rs": ("M6", ["tests/fdtd1d.tcyr", "tests/fdtd_media.tcyr", "tests/nf2ff.tcyr", "tests/fdtd_util.tcyr",
-                           "tests/cpml.tcyr", "tests/fdtd2d.tcyr", "tests/fdtd3d.tcyr"]),
+    "src/fdtd.rs": ("M6", ["tests/fdtd1d.tcyr", "tests/fdtd_source.tcyr", "tests/fdtd_media.tcyr", "tests/nf2ff.tcyr",
+                           "tests/fdtd_util.tcyr", "tests/cpml.tcyr", "tests/fdtd2d.tcyr", "tests/fdtd3d.tcyr"]),
     "src/compute.rs": ("M6", ["tests/compute.tcyr"]),
     "src/integration/soorat.rs": ("M7", ["tests/soorat.tcyr"]),
     "src/bridge.rs": ("M7", ["tests/bridge.tcyr"]),

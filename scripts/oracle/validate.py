@@ -8388,6 +8388,8 @@ def adr_rows(root: Path, module: str, path: Path) -> list:
         return rf_adr_rows(path)
     if module == "json":
         return json_adr_rows(path)
+    if module == "fdtd":
+        return fdtd_adr_rows(root, path)
     maps = {13: adr13(root)}
     out = adr17_rows(root, module, path) if module in ("field", "charge") else []
     if module in ("field", "charge"):
@@ -8857,6 +8859,9 @@ def fd_ops(toks):
             cell = None if toks[k + 2][0] == "n" else toks[k + 2][1] & FD_U64
             ops.append((5, toks[k + 1][1] & FD_U64, cell, toks[k + 3][1], toks[k + 4][1]))
             k += 5
+        elif code == 6:
+            ops.append((6, toks[k + 1][1] & FD_U64, toks[k + 2][1] & FD_U64, toks[k + 3][1], toks[k + 4][1]))
+            k += 5
         else:
             raise ValueError(f"unknown fdtd opcode {code}")
     return ops
@@ -8870,8 +8875,12 @@ def fd_apply(sim, op, P):
     elif op[0] == 4:
         for _ in range(op[1] & FD_U64):
             sim.step_once()
-    else:
+    elif op[0] == 5:
         sim.run(op[1], op[2], op[3], op[4], P)
+    else:
+        for _ in range(op[1]):
+            sim.add_source(op[2], fd_pulse("gaussian_pulse", (float(sim.step) * sim.dt, op[3], op[4]), P))
+            sim.step_once()
 
 
 class FdScripts:
@@ -8885,6 +8894,10 @@ class FdScripts:
         self.prev, self.sim = None, None
 
     def eval(self, fn, ins_raw):
+        if fn.startswith("fdtd::"):
+            return [("f", fd_pulse(fn[6:], [b for _k, b in (parse_tok(x) for x in ins_raw.split(" "))], self.P))]
+        if fn.startswith("TfsfSource::"):
+            return self.tf_eval(fn, ins_raw)
         raw = ins_raw.split(" ")
         toks = [parse_tok(x) for x in raw]
         n, dx = toks[0][1] & FD_U64, toks[1][1]
@@ -8902,11 +8915,159 @@ class FdScripts:
         self.prev, self.sim = raw, sim
         return sim.state()
 
+    def tf_eval(self, fn, ins_raw, port=False):
+        """A TF/SF script: Rust's `new` clamps (or, port=True, refuses as try_new does: ADR 0002 row 3)."""
+        raw = ins_raw.split(" ")
+        toks = [parse_tok(x) for x in raw]
+        nx, bx, dx, dt = toks[0][1] & FD_U64, toks[1][1] & FD_U64, toks[2][1], toks[3][1]
+        bad = tf_check(nx, bx, dx, dt, self.K)
+        if bad is not None and (fn != "TfsfSource::new" or port):
+            return bad
+        cached = getattr(self, "tf_prev", None)
+        if cached is not None and raw[:len(cached[0])] == cached[0] and cached[2] == fn:
+            src, done = cached[1].copy(), len(tf_ops(toks[4:len(cached[0])]))
+        else:
+            src, done = Tf(*tf_sanitize(nx, bx, dx, dt, self.K), self.K), 0
+        for op in tf_ops(toks[4:])[done:]:
+            tf_apply(src, op, self.P)
+        self.tf_prev = (raw, src, fn)
+        return src.state()
 
-def fd_injects(ins_raw) -> bool:
-    """1 when a script's `run` takes a sine (any Some cell: Rust computes it even outside the grid)."""
+
+def fd_injects(fn, ins_raw) -> bool:
+    """1 when a row takes an exp or a sine: a pulse; a TF/SF drive; an Fdtd1d `run` with a cell (Rust computes the sine
+    even outside the grid) or a Gaussian drive."""
+    if fn.startswith("fdtd::"):
+        return True
     toks = [parse_tok(x) for x in ins_raw.split(" ")]
-    return any(op[0] == 5 and op[2] is not None and op[1] > 0 for op in fd_ops(toks[2:]))
+    if fn.startswith("TfsfSource::"):
+        return any(op[0] == 2 and op[1] > 0 for op in tf_ops(toks[4:]))
+    return any(op[0] in (5, 6) and op[1] > 0 and (op[0] == 6 or op[2] is not None) for op in fd_ops(toks[2:]))
+
+
+def fd_pulse(name, v, P):
+    """fdtd.rs's pulses on the primitives P: 0.0 for τ = 0 or NaN."""
+    t, t0, tau = v[0], v[1], v[2]
+    if tau == 0.0 or math.isnan(tau):
+        return 0.0
+    arg = fdiv(t - t0, tau)
+    if name == "gaussian_pulse":
+        return P["exp"]((-arg) * arg)
+    if name == "ricker_wavelet":
+        a2 = arg * arg
+        return (1.0 - 2.0 * a2) * P["exp"](-a2)
+    if name == "differentiated_gaussian":
+        return fdiv(-2.0 * arg, tau) * P["exp"]((-arg) * arg)
+    if name == "modulated_gaussian_pulse":
+        return P["exp"]((-arg) * arg) * P["sin"](2.0 * math.pi * v[3] * (t - t0))
+    raise ValueError(f"no pulse {name}")
+
+
+class Tf:
+    """fdtd.rs's `TfsfSource`, transcribed from already-validated arguments (its `build`)."""
+
+    def __init__(self, nx, bx, dx, dt, K):
+        c, eps0, mu0 = K
+        self.n, self.bx = nx, bx
+        self.ec, self.hc = fdiv(dt, eps0 * dx), fdiv(dt, mu0 * dx)
+        s = fdiv(c * dt, dx)
+        self.abc = fdiv(s - 1.0, s + 1.0)
+        self.sc = min(max(bx // 4, 1), nx - 2)
+        self.e, self.h = [0.0] * nx, [0.0] * nx
+
+    def copy(self):
+        o = Tf.__new__(Tf)
+        o.__dict__.update({k: (list(v) if isinstance(v, list) else v) for k, v in self.__dict__.items()})
+        return o
+
+    def step(self, v):
+        n, e, h = self.n, self.e, self.h
+        e_left, e_right = e[1], e[n - 2]
+        for i in range(n - 1):
+            h[i] = h[i] + self.hc * (e[i + 1] - e[i])
+        sc = min(max(self.sc, 1), n - 2)
+        e[sc] = e[sc] + v
+        for i in range(1, n - 1):
+            e[i] = e[i] + self.ec * (h[i] - h[i - 1])
+        e[0] = e_left + self.abc * (e[1] - e[0])
+        e[n - 1] = e_right + self.abc * (e[n - 2] - e[n - 1])
+
+    def incident_e(self):
+        return self.e[self.bx] if self.bx < self.n else 0.0
+
+    def incident_h(self):
+        return self.h[self.bx - 1] if 0 < self.bx and self.bx - 1 < self.n else 0.0
+
+    def state(self):
+        n = self.n
+        out = [("i", n), ("i", self.bx), ("i", self.sc), ("f", self.incident_e()), ("f", self.incident_h()),
+               ("f", self.ec), ("f", self.hc), ("f", self.abc), ("i", fd_digest(self.e)), ("i", fd_digest(self.h))]
+        probes = (0, 1, n // 2, n - 2, n - 1)
+        out += [("f", self.e[p]) for p in probes] + [("f", self.h[p]) for p in probes]
+        return [(k, v - (1 << 64) if k == "i" and v >= 1 << 63 else v) for k, v in out]
+
+
+def tf_check(nx, bx, dx, dt, K):
+    """`TfsfSource::try_new`'s refusal of its arguments, as tokens, or None."""
+    c = K[0]
+    if nx < 3:
+        return [("E", "InsufficientResolution"),
+                ("s", f"grid resolution too coarse: {nx} cells for domain size {rust_display(float(nx) * dx)}")]
+    if bx == 0 or bx >= nx:
+        return ip_err(f"TFSF boundary_x must be in 1..{nx}, got {bx}")
+    if not fd_pos(dx):
+        return ip_err(f"dx must be finite and positive, got {rust_display(dx)}")
+    if not fd_pos(dt) or c * dt > dx * (1.0 + 1e-12):
+        return ip_err(f"dt must be in (0, dx/c] = (0, {rust_display(dx / c)}], got {rust_display(dt)}")
+    return None
+
+
+def tf_sanitize(nx, bx, dx, dt, K):
+    """`TfsfSource::new`'s clamping (Rust 1.2.0; the port refuses these inputs instead, ADR 0002 row 3)."""
+    c = K[0]
+    nx = max(nx, 3)
+    bx = min(max(bx, 1), nx - 1)
+    pd, pt = fd_pos(dx), fd_pos(dt)
+    if pd and pt and c * dt <= dx * (1.0 + 1e-12):
+        return nx, bx, dx, dt
+    if pd:
+        return nx, bx, dx, dx / c
+    if pt:
+        return nx, bx, c * dt, dt
+    return nx, bx, 1.0, 1.0 / c
+
+
+def tf_ops(toks):
+    """A TF/SF script's operations from its input tokens (after the constructor's four)."""
+    ops, k = [], 0
+    while k < len(toks):
+        code = toks[k][1]
+        if code == 1:
+            ops.append((1, toks[k + 1][1]))
+            k += 2
+        elif code == 2:
+            ops.append((2, toks[k + 1][1] & FD_U64, toks[k + 2][1] & FD_U64, toks[k + 3][1], toks[k + 4][1],
+                        toks[k + 5][1]))
+            k += 6
+        elif code in (3, 4):
+            ops.append((code, toks[k + 1][1] & FD_U64))
+            k += 2
+        else:
+            raise ValueError(f"unknown TF/SF opcode {code}")
+    return ops
+
+
+def tf_apply(src, op, P):
+    if op[0] == 1:
+        src.step(op[1])
+    elif op[0] == 2:
+        _code, k, s0, dt, t0, tau = op
+        for j in range(k):
+            src.step(fd_pulse("gaussian_pulse", (float(s0 + j) * dt, t0, tau), P))
+    elif op[0] == 3:
+        src.bx = op[1]
+    else:
+        src.sc = op[1]
 
 
 def validate_fdtd(root: Path, path: Path) -> list:
@@ -8917,7 +9078,7 @@ def validate_fdtd(root: Path, path: Path) -> list:
         return errs
     fs = FdScripts(root, GLIBC_P)
     for n, (fn, _cls, ins, outs, _v) in enumerate(sc_lines(path), 1):
-        if not fn.startswith("Fdtd1d::"):
+        if not fn.startswith(("Fdtd1d::", "TfsfSource::", "fdtd::")):
             errs.append(f"fdtd row {n}: no transcription for {fn}")
             continue
         want = fs.eval(fn, ins)
@@ -8932,15 +9093,32 @@ def fdtd_corrections(root: Path, path: Path):
         out = []
         fs = FdScripts(root, MPFR_P)
         for fn, _cls, ins, outs, _v in sc_lines(path):
+            if fn == "TfsfSource::new" and fs.tf_eval(fn, ins, True) != fs.tf_eval(fn, ins):
+                continue                                    # ADR 0002 row 3's: fdtd.adr.tsv maps it
             want = fs.eval(fn, ins)
-            if not fd_injects(ins):
+            if not fd_injects(fn, ins):
                 continue
             old = wave_toks([parse_tok(x) for x in outs.split(" ")])
             if toks_same(want, old):
                 continue
-            out.append((fn, ins, wire(want), f"oracle {outs[:120]}…; a correctly rounded sin gives another state"))
+            note = "correctly rounded primitives give" if fn.startswith("fdtd::") else "a correctly rounded exp or sin gives"
+            out.append((fn, ins, wire(want), f"oracle {outs[:120]}; {note} {wire(want)[:60]}"))
         return out
     return fixes
+
+
+def fdtd_adr_rows(root: Path, path: Path) -> list:
+    """ADR 0002 row 3: each `TfsfSource::new` row whose arguments Rust clamped, mapped to try_new's refusal."""
+    fs = FdScripts(root, GLIBC_P)
+    out = []
+    for fn, _cls, ins, outs, _v in sc_lines(path):
+        if fn != "TfsfSource::new":
+            continue
+        toks = [parse_tok(x) for x in ins.split(" ")[:4]]
+        bad = tf_check(toks[0][1] & FD_U64, toks[1][1] & FD_U64, toks[2][1], toks[3][1], fs.K)
+        if bad is not None:
+            out.append((fn, ins, wire(bad), "3", f"oracle {outs[:120]}; ADR 0002 row 3: refused as try_new"))
+    return out
 
 
 def main() -> int:
@@ -8997,7 +9175,7 @@ def main() -> int:
     errs += check_corrections(root, "beam", golden / "beam.tsv", beam_corrections(golden / "beam.tsv"))
     errs += check_corrections(root, "rf", golden / "rf.tsv", rf_corrections(golden / "rf.tsv"))
     errs += check_corrections(root, "fdtd", golden / "fdtd.tsv", fdtd_corrections(root, golden / "fdtd.tsv"))
-    for mod in ("beam", "charge", "circuit", "complex", "field", "json", "material", "maxwell", "polarization",
+    for mod in ("beam", "charge", "circuit", "complex", "fdtd", "field", "json", "material", "maxwell", "polarization",
                 "relativity", "rf", "scattering", "wave"):
         errs += check_adr(root, mod, golden / f"{mod}.tsv")
     errs += cx_rows(golden / "complex.tsv")[1]

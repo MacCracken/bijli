@@ -1,0 +1,503 @@
+# fdtd_source.tcyr — src/fdtd_source.cyr (M5 part 1b): the pulses and the TF/SF source.
+#
+# Every group named test_* is rust-old/src/fdtd.rs's test of that name, ported assertion for assertion (the ledger
+# matches them by name): its 12 pulse tests and 10 TF/SF tests. Rust's `TfsfSource::new` clamped invalid input; the
+# port's refuses it as `try_new` does (ADR 0002 row 3), so test_tfsf_new_sanitizes_without_panic and
+# test_tfsf_boundary_at_zero assert the refusal where Rust asserted the clamped grid, and
+# test_tfsf_mutated_public_fields_no_panic leaves out its `inc_h.truncate(2)` (ADR 0002 row 2: nothing can resize the
+# grid). The cyrius_* groups pin the error records' text, the unsigned boundary and source cell, BjTfsfSource_free and
+# the pulses' τ = 0 and NaN. tests/golden/fdtd.tsv pins every function against Rust besides.
+
+include "tests/lib.cyr"
+
+# |a − b| < tol.
+fn near(a: f64, b: f64, tol: f64): i64 {
+    var d: f64 = a - b;
+    var ad: f64 = f64_abs(d);
+    if (ad < tol) { return 1; }
+    return 0;
+}
+
+# 1 when the C strings a and b are equal.
+fn text_is(a, b): i64 {
+    var n = strlen(a);
+    if (n != strlen(b)) { return 0; }
+    return memeq(a, b, n);
+}
+
+# A word as a *f64.
+fn f64p(a): *f64 {
+    return a;
+}
+
+# Element i of the f64 array at address a.
+fn at(a, i): f64 {
+    var p: *f64 = f64p(a);
+    var x: f64 = p[i];
+    return x;
+}
+
+# max |x| over the n f64 at address a.
+fn max_abs(a, n): f64 {
+    var m: f64 = 0.0;
+    for (var i = 0; i < n; i = i + 1) {
+        var x: f64 = at(a, i);
+        var ax: f64 = f64_abs(x);
+        if (ax > m) { m = ax; }
+    }
+    return m;
+}
+
+# 1 when every one of the n f64 at address a is finite.
+fn all_finite(a, n): i64 {
+    for (var i = 0; i < n; i = i + 1) {
+        var x: f64 = at(a, i);
+        var z: f64 = x * 0.0;
+        if (z != 0.0) { return 0; }
+    }
+    return 1;
+}
+
+# The Ricker wavelet's amplitude spectrum at f by direct Fourier integration over 8000 samples of τ/200, as Rust's test.
+fn ricker_spectrum(f: f64, t0: f64, tau: f64): f64 {
+    var dt: f64 = tau / 200.0;
+    var re: f64 = 0.0;
+    var im: f64 = 0.0;
+    var w2: f64 = 2.0 * 3.141592653589793;
+    for (var n = 0; n < 8000; n = n + 1) {
+        var nf: f64 = f64_from(n);
+        var t: f64 = nf * dt;
+        var wf: f64 = w2 * f;
+        var w: f64 = wf * t;
+        var r: f64 = bj_ricker_wavelet(t, t0, tau);
+        var c: f64 = _bj_cos(w);
+        var s: f64 = _bj_sin(w);
+        re = re + r * c * dt;
+        im = im - r * s * dt;
+    }
+    var h: f64 = _bj_hypot(re, im);
+    return h;
+}
+
+# BjTfsfSource_try_new's error code (0 on Ok, the source then freed).
+fn try_err(nx, bx, dx: f64, dt: f64): i64 {
+    var s: BjTfsfSource;
+    var t, v = BjTfsfSource_try_new(nx, bx, dx, dt, &s);
+    if (is_ok(t) == 1) {
+        BjTfsfSource_free(&s);
+        return 0;
+    }
+    return v;
+}
+
+# BjTfsfSource_new's error code (0 on Ok, the source then freed).
+fn new_err(nx, bx, dx: f64, dt: f64): i64 {
+    var s: BjTfsfSource;
+    var t, v = BjTfsfSource_new(nx, bx, dx, dt, &s);
+    if (is_ok(t) == 1) {
+        BjTfsfSource_free(&s);
+        return 0;
+    }
+    return v;
+}
+
+# ½ε₀ΣE² + ½μ₀ΣH² over the auxiliary grid, each sum from −0.0 (Rust's test's `energy`).
+fn tfsf_energy(s: *BjTfsfSource): f64 {
+    var se: f64 = -0.0;
+    var sh: f64 = -0.0;
+    for (var i = 0; i < s.nx; i = i + 1) {
+        var e: f64 = at(s.inc_e, i);
+        var h: f64 = at(s.inc_h, i);
+        se = se + 0.5 * BJ_EPSILON_0 * e * e;
+        sh = sh + 0.5 * BJ_MU_0 * h * h;
+    }
+    var en: f64 = se + sh;
+    return en;
+}
+
+# Runs fdtd.rs's pulse and TF/SF tests, then the Cyrius-only checks.
+fn main() {
+    alloc_init();
+    var c0: f64 = BJ_SPEED_OF_LIGHT;
+    var zero: f64 = 0.0;
+    var nan: f64 = zero / zero;
+    var t9: f64 = 0.000000001;
+    var t10: f64 = 0.0000000001;
+    var sq2: f64 = f64_sqrt(2.0);
+
+    test_group("test_gaussian_pulse_peak");
+    var g1: f64 = bj_gaussian_pulse(t9, t9, t10);
+    assert(near(g1, 1.0, t10) == 1, "1 at t₀");
+
+    test_group("test_gaussian_pulse_symmetric");
+    var half: f64 = 0.5 * t10;
+    var g2a: f64 = bj_gaussian_pulse(t9 - half, t9, t10);
+    var g2b: f64 = bj_gaussian_pulse(t9 + half, t9, t10);
+    assert(near(g2a, g2b, t10) == 1, "even about t₀");
+
+    test_group("test_gaussian_pulse_decays");
+    var g3p: f64 = bj_gaussian_pulse(t9, t9, t10);
+    var g3f: f64 = bj_gaussian_pulse(t9 + 5.0 * t10, t9, t10);
+    assert(g3f < 0.01 * g3p, "far below the peak at 5τ");
+
+    test_group("test_differentiated_gaussian_zero_at_center");
+    var d4: f64 = bj_differentiated_gaussian(t9, t9, t10);
+    assert(near(d4, 0.0, t10) == 1, "0 at t₀");
+
+    test_group("test_differentiated_gaussian_antisymmetric");
+    var d5a: f64 = bj_differentiated_gaussian(t9 - half, t9, t10);
+    var d5b: f64 = bj_differentiated_gaussian(t9 + half, t9, t10);
+    var d5s: f64 = d5a + d5b;
+    var d5r: f64 = f64_abs(d5s) / f64_abs(d5a);
+    assert(d5r < 0.000000000001, "odd about t₀");
+
+    test_group("test_differentiated_gaussian_is_gaussian_derivative");
+    var hh: f64 = 0.000000000000001;
+    var bad6 = 0;
+    for (var i6 = 0 - 20; i6 <= 20; i6 = i6 + 1) {
+        var fi: f64 = f64_from(i6);
+        var t: f64 = t9 + fi * 0.15 * t10;
+        var gp: f64 = bj_gaussian_pulse(t + hh, t9, t10);
+        var gm: f64 = bj_gaussian_pulse(t - hh, t9, t10);
+        var fd: f64 = (gp - gm) / (2.0 * hh);
+        var v: f64 = bj_differentiated_gaussian(t, t9, t10);
+        var lim6: f64 = 0.000001 / t10;
+        if (near(v, fd, lim6) != 1) { bad6 = bad6 + 1; }
+    }
+    assert(bad6 == 0, "the central difference of the Gaussian, at 41 points");
+    var pk6: f64 = bj_differentiated_gaussian(t9 - t10 / sq2, t9, t10);
+    var e6: f64 = _bj_exp(-0.5);
+    var want6: f64 = sq2 * e6 / t10;
+    var err6: f64 = f64_abs(pk6 - want6) * t10;
+    assert(err6 < 0.000000000001, "peak √2·e^{−½}/τ at t₀ − τ/√2");
+
+    test_group("test_ricker_wavelet_peak_and_symmetry");
+    var r7: f64 = bj_ricker_wavelet(t9, t9, t10);
+    assert(near(r7, 1.0, 0.000000000000001) == 1, "1 at t₀");
+    var bad7 = 0;
+    for (var i7 = 1; i7 < 30; i7 = i7 + 1) {
+        var fi7: f64 = f64_from(i7);
+        var off: f64 = fi7 * 0.1 * t10;
+        var ra: f64 = bj_ricker_wavelet(t9 - off, t9, t10);
+        var rb: f64 = bj_ricker_wavelet(t9 + off, t9, t10);
+        if (near(ra, rb, 0.00000000000001) != 1) { bad7 = bad7 + 1; }
+        if (ra > 1.0) { bad7 = bad7 + 1; }
+    }
+    assert(bad7 == 0, "even, never above 1");
+    var z7: f64 = bj_ricker_wavelet(t9 + t10 / sq2, t9, t10);
+    assert(near(z7, 0.0, 0.00000000000001) == 1, "0 at t₀ + τ/√2");
+    var s15: f64 = f64_sqrt(1.5);
+    var mn7: f64 = bj_ricker_wavelet(t9 + t10 * s15, t9, t10);
+    var e15: f64 = _bj_exp(-1.5);
+    assert(near(mn7, -2.0 * e15, 0.00000000000001) == 1, "minimum −2e^{−3/2} at t₀ + τ√(3/2)");
+
+    test_group("test_ricker_wavelet_schneider_form_and_peak_frequency");
+    var t08: f64 = 0.000000002;
+    var pi: f64 = 3.141592653589793;
+    var fp: f64 = 1.0 / (pi * t10);
+    var pf: f64 = pi * fp;
+    var pi2fp2: f64 = pf * pf;
+    var bad8 = 0;
+    for (var i8 = 0 - 40; i8 <= 40; i8 = i8 + 1) {
+        var fi8: f64 = f64_from(i8);
+        var t: f64 = t08 + fi8 * 0.1 * t10;
+        var dd: f64 = t - t08;
+        var u2: f64 = pi2fp2 * (dd * dd);
+        var eu: f64 = _bj_exp(-u2);
+        var ref: f64 = (1.0 - 2.0 * u2) * eu;
+        var rw: f64 = bj_ricker_wavelet(t, t08, t10);
+        if (near(rw, ref, 0.000000000001) != 1) { bad8 = bad8 + 1; }
+    }
+    assert(bad8 == 0, "Schneider's (1 − 2π²f_p²t²)·exp(−π²f_p²t²), f_p = 1/(πτ)");
+    var at_peak: f64 = ricker_spectrum(fp, t08, t10);
+    var lo8: f64 = ricker_spectrum(0.9 * fp, t08, t10);
+    var hi8: f64 = ricker_spectrum(1.1 * fp, t08, t10);
+    assert(at_peak > lo8 && at_peak > hi8, "the spectrum peaks at f_p");
+    var half8: f64 = ricker_spectrum(0.5 * fp, t08, t10);
+    var ratio: f64 = half8 / at_peak;
+    var e075: f64 = _bj_exp(0.75);
+    assert(near(ratio, 0.25 * e075, 0.000001) == 1, "f²·exp(−f²/f_p²): ¼e^{¾} at f_p/2");
+
+    test_group("test_source_functions_zero_tau_no_nan");
+    var bad9 = 0;
+    var ts9: f64[3];
+    ts9[0] = 0.0;
+    ts9[1] = t9;
+    ts9[2] = 0.000000002;
+    for (var i9 = 0; i9 < 3; i9 = i9 + 1) {
+        var t: f64 = ts9[i9];
+        if (bj_gaussian_pulse(t, t9, 0.0) != 0.0) { bad9 = bad9 + 1; }
+        if (bj_ricker_wavelet(t, t9, 0.0) != 0.0) { bad9 = bad9 + 1; }
+        if (bj_differentiated_gaussian(t, t9, 0.0) != 0.0) { bad9 = bad9 + 1; }
+        if (bj_modulated_gaussian_pulse(t, t9, 0.0, 1000000000.0) != 0.0) { bad9 = bad9 + 1; }
+        if (bj_gaussian_pulse(t, t9, nan) != 0.0) { bad9 = bad9 + 1; }
+        if (bj_ricker_wavelet(t, t9, nan) != 0.0) { bad9 = bad9 + 1; }
+    }
+    assert(bad9 == 0, "τ = 0 or NaN gives 0, not NaN");
+
+    test_group("test_modulated_gaussian_zero_at_center");
+    var m10: f64 = bj_modulated_gaussian_pulse(t9, t9, t10, 1000000000.0);
+    assert(near(m10, 0.0, t10) == 1, "sin 0 = 0 at t₀");
+
+    test_group("test_gaussian_pulse_narrow_tau");
+    var g11: f64 = bj_gaussian_pulse(0.0, 0.0, 0.00000000000000000001);
+    assert(near(g11, 1.0, t10) == 1, "τ = 1e-20 still peaks at 1");
+
+    test_group("test_ricker_wavelet_integral_approx_zero");
+    var t012: f64 = 5.0 * t10;
+    var dt12: f64 = t10 / 100.0;
+    var integral: f64 = 0.0;
+    for (var i12 = 0; i12 < 1000; i12 = i12 + 1) {
+        var fi12: f64 = f64_from(i12);
+        var t: f64 = fi12 * dt12;
+        var r12: f64 = bj_ricker_wavelet(t, t012, t10);
+        integral = integral + r12 * dt12;
+    }
+    var ai: f64 = f64_abs(integral);
+    assert(ai < 0.01, "no DC content");
+
+    test_group("test_tfsf_creation");
+    var s1: BjTfsfSource;
+    var tc1, vc1 = BjTfsfSource_new(100, 50, 0.0001, 0.0000000000001, &s1);
+    assert(is_ok(tc1) == 1 && s1.nx == 100, "100 cells");
+    assert(s1.boundary_x == 50, "the boundary at 50");
+    assert(s1.source_cell < s1.boundary_x, "the source on the scattered-field side");
+    BjTfsfSource_free(&s1);
+
+    test_group("test_tfsf_propagation");
+    var dt2: f64 = 0.0000000000001;
+    var s2: BjTfsfSource;
+    var tc2, vc2 = BjTfsfSource_new(200, 100, 0.0001, dt2, &s2);
+    for (var k2 = 0; k2 < 50; k2 = k2 + 1) {
+        var kf: f64 = f64_from(k2);
+        var g: f64 = bj_gaussian_pulse(kf * dt2, 20.0 * dt2, 5.0 * dt2);
+        s2.step(g);
+    }
+    var m2: f64 = max_abs(s2.inc_e, s2.nx);
+    assert(m2 > 0.0, "E^inc nonzero after 50 steps");
+    BjTfsfSource_free(&s2);
+
+    test_group("test_tfsf_incident_field");
+    var s3: BjTfsfSource;
+    var tc3, vc3 = BjTfsfSource_new(100, 50, 0.0001, 0.0000000000001, &s3);
+    s3.step(1.0);
+    var m3: f64 = max_abs(s3.inc_e, s3.nx);
+    assert(m3 > 0.0, "E^inc nonzero after one step");
+    BjTfsfSource_free(&s3);
+
+    test_group("test_tfsf_try_new_validation");
+    var dx4: f64 = 0.0001;
+    var dt4: f64 = dx4 / (2.0 * c0);
+    var dtc: f64 = dx4 / c0;
+    assert(try_err(100, 50, dx4, dt4) == 0, "S = ½");
+    assert(try_err(100, 50, dx4, dtc) == 0, "S = 1, dt = dx/c in binary64");
+    assert(try_err(0, 0, dx4, dt4) != 0, "nx = 0");
+    assert(try_err(2, 1, dx4, dt4) != 0, "nx = 2");
+    assert(try_err(100, 0, dx4, dt4) != 0, "boundary_x = 0");
+    assert(try_err(100, 100, dx4, dt4) != 0, "boundary_x = nx");
+    assert(try_err(100, 50, 0.0, dt4) != 0, "dx = 0");
+    assert(try_err(100, 50, nan, dt4) != 0, "dx = NaN");
+    assert(try_err(100, 50, dx4, 0.0) != 0, "dt = 0");
+    assert(try_err(100, 50, dx4, nan) != 0, "dt = NaN");
+    assert(try_err(100, 50, dx4, 1.01 * dtc) != 0, "dt past the Courant limit");
+
+    test_group("test_tfsf_new_sanitizes_without_panic");
+    # Rust clamped each case and stepped it 2,000 times; the port refuses each one as try_new does (ADR 0002 row 3).
+    var nx5: i64[7];
+    var bx5: i64[7];
+    var dx5: f64[7];
+    var dt5: f64[7];
+    nx5[0] = 0; bx5[0] = 0; dx5[0] = 0.0001; dt5[0] = 0.0000000000001;
+    nx5[1] = 1; bx5[1] = 0; dx5[1] = 0.0001; dt5[1] = 0.0000000000001;
+    nx5[2] = 100; bx5[2] = 500; dx5[2] = 0.0001; dt5[2] = 0.0000000000001;
+    nx5[3] = 100; bx5[3] = 50; dx5[3] = nan; dt5[3] = 0.0000000000001;
+    nx5[4] = 100; bx5[4] = 50; dx5[4] = 0.0001; dt5[4] = nan;
+    nx5[5] = 100; bx5[5] = 50; dx5[5] = 0.0001; dt5[5] = 0.00000000001;
+    nx5[6] = 100; bx5[6] = 50; dx5[6] = -1.0; dt5[6] = -1.0;
+    var same5 = 0;
+    for (var i5 = 0; i5 < 7; i5 = i5 + 1) {
+        var a5 = new_err(nx5[i5], bx5[i5], dx5[i5], dt5[i5]);
+        var b5 = try_err(nx5[i5], bx5[i5], dx5[i5], dt5[i5]);
+        if (a5 != 0 && a5 == b5) { same5 = same5 + 1; }
+    }
+    assert(same5 == 7, "each case refused, with try_new's code");
+
+    test_group("test_tfsf_mutated_public_fields_no_panic");
+    var s6: BjTfsfSource;
+    var tc6, vc6 = BjTfsfSource_try_new(50, 20, 0.0001, 0.0000000000001, &s6);
+    s6.boundary_x = 1000;
+    s6.source_cell = 1000;
+    s6.step(1.0);
+    var ie6: f64 = s6.incident_e();
+    var ih6: f64 = s6.incident_h();
+    assert(ie6 == 0.0 && ih6 == 0.0, "a boundary outside the grid reads 0");
+    s6.boundary_x = 0;
+    var ih6b: f64 = s6.incident_h();
+    assert(ih6b == 0.0, "boundary_x = 0 has no H node at −½");
+    var e48: f64 = at(s6.inc_e, 48);
+    assert(e48 != 0.0, "the source cell 1000 clamped to nx − 2 = 48");
+    BjTfsfSource_free(&s6);
+
+    test_group("test_tfsf_small_boundary_injects");
+    var dx7: f64 = 0.0001;
+    var dt7: f64 = dx7 / (2.0 * c0);
+    var bad7b = 0;
+    for (var bx = 1; bx < 4; bx = bx + 1) {
+        var s7: BjTfsfSource;
+        var tc7, vc7 = BjTfsfSource_try_new(50, bx, dx7, dt7, &s7);
+        if (s7.source_cell < 1) { bad7b = bad7b + 1; }
+        for (var k7 = 0; k7 < 60; k7 = k7 + 1) {
+            var kf7: f64 = f64_from(k7);
+            var g7: f64 = bj_gaussian_pulse(kf7 * dt7, 20.0 * dt7, 6.0 * dt7);
+            s7.step(g7);
+        }
+        var m7: f64 = max_abs(s7.inc_e, s7.nx);
+        if (m7 <= 0.001) { bad7b = bad7b + 1; }
+        BjTfsfSource_free(&s7);
+    }
+    assert(bad7b == 0, "boundary_x 1 to 3: the source on an interior node, the wave launched");
+
+    test_group("test_tfsf_aux_grid_energy_leaves");
+    var dx8: f64 = 0.0001;
+    var dt8: f64 = dx8 / (2.0 * c0);
+    var s8: BjTfsfSource;
+    var tc8, vc8 = BjTfsfSource_try_new(200, 100, dx8, dt8, &s8);
+    var tau8: f64 = 20.0 * dt8;
+    var t08b: f64 = 6.0 * tau8;
+    var peak8: f64 = 0.0;
+    for (var k8 = 0; k8 < 2000; k8 = k8 + 1) {
+        var kf8: f64 = f64_from(k8);
+        var g8: f64 = bj_gaussian_pulse(kf8 * dt8, t08b, tau8);
+        s8.step(g8);
+        var en8: f64 = tfsf_energy(&s8);
+        if (en8 > peak8) { peak8 = en8; }
+    }
+    var res8: f64 = tfsf_energy(&s8) / peak8;
+    assert(res8 < 0.000001, "the Mur ends let the pulse out");
+    BjTfsfSource_free(&s8);
+
+    test_group("test_tfsf_consistency_with_fdtd1d");
+    var n9 = 300;
+    var bx9 = 120;
+    var dx9: f64 = 0.0001;
+    var sim: BjFdtd1d;
+    var ts1, vs1 = BjFdtd1d_new(n9, dx9, &sim);
+    var src: BjTfsfSource;
+    var ts2, vs2 = BjTfsfSource_try_new(n9, bx9, dx9, sim.dt, &src);
+    var ce: f64 = sim.dt / (BJ_EPSILON_0 * dx9);
+    var ch: f64 = sim.dt / (BJ_MU_0 * dx9);
+    var tau9: f64 = 15.0 * sim.dt;
+    var t09: f64 = 6.0 * tau9;
+    var max_inc: f64 = 0.0;
+    var max_sf: f64 = 0.0;
+    var max_tf: f64 = 0.0;
+    var he: *f64 = f64p(sim.h_field);
+    var ee: *f64 = f64p(sim.e_field);
+    var ie: *f64 = f64p(src.inc_e);
+    for (var k9 = 0; k9 < 900; k9 = k9 + 1) {
+        var inc_e: f64 = src.incident_e();
+        he[bx9 - 1] = he[bx9 - 1] - ch * inc_e;
+        var kf9: f64 = f64_from(k9);
+        var g9: f64 = bj_gaussian_pulse(kf9 * sim.dt, t09, tau9);
+        src.step(g9);
+        sim.step_once();
+        var inc_h: f64 = src.incident_h();
+        ee[bx9] = ee[bx9] - ce * inc_h;
+        for (var j = bx9; j < n9; j = j + 1) {
+            var a: f64 = f64_abs(ie[j]);
+            if (a > max_inc) { max_inc = a; }
+            var d: f64 = ee[j] - ie[j];
+            var ad: f64 = f64_abs(d);
+            if (ad > max_tf) { max_tf = ad; }
+        }
+        for (var j2 = 0; j2 < bx9; j2 = j2 + 1) {
+            var b: f64 = f64_abs(ee[j2]);
+            if (b > max_sf) { max_sf = b; }
+        }
+    }
+    assert(max_inc > 0.01, "the incident wave reached the boundary");
+    assert(max_sf < 0.000000001 * max_inc, "no scattered-field leakage");
+    assert(max_tf < 0.000000001 * max_inc, "the total field is the incident one");
+    BjFdtd1d_free(&sim);
+    BjTfsfSource_free(&src);
+
+    test_group("test_tfsf_boundary_at_zero");
+    # Rust's `new` clamped boundary_x = 0 to 1 and stepped; the port's refuses it as try_new does (ADR 0002 row 3).
+    assert(try_err(100, 0, 0.0001, 0.0000000000001) == BJ_ERR_INVALID_PARAMETER, "try_new refuses boundary_x = 0");
+    assert(new_err(100, 0, 0.0001, 0.0000000000001) == BJ_ERR_INVALID_PARAMETER, "and so does new");
+
+    test_group("cyrius_tfsf_error_records");
+    var se: BjTfsfSource;
+    se.nx = 77;
+    var te1, ve1 = BjTfsfSource_try_new(2, 1, 0.0001, 0.0000000000001, &se);
+    assert(ve1 == BJ_ERR_INSUFFICIENT_RESOLUTION && se.nx == 77, "nx = 2: out untouched");
+    var d1 = text_is(bj_last_error_display(), "grid resolution too coarse: 2 cells for domain size 0.0002");
+    assert(d1 == 1, "its Display: nx·dx");
+    var te2, ve2 = BjTfsfSource_try_new(100, 100, 0.0001, 0.0000000000001, &se);
+    assert(text_is(bj_last_error_display(), "invalid parameter: TFSF boundary_x must be in 1..100, got 100") == 1,
+      "the boundary's range");
+    var te3, ve3 = BjTfsfSource_try_new(100, 0 - 1, 0.0001, 0.0000000000001, &se);
+    var w3 = "invalid parameter: TFSF boundary_x must be in 1..100, got 18446744073709551615";
+    var d3 = text_is(bj_last_error_display(), w3);
+    assert(d3 == 1, "boundary_x = usize::MAX, printed unsigned");
+    var te4, ve4 = BjTfsfSource_try_new(100, 50, -0.0, 0.0000000000001, &se);
+    assert(text_is(bj_last_error_display(), "invalid parameter: dx must be finite and positive, got -0") == 1,
+      "dx = −0");
+    var te5, ve5 = BjTfsfSource_try_new(100, 50, 3.0, 0.00000002, &se);
+    var w5 = "invalid parameter: dt must be in (0, dx/c] = (0, 0.000000010006922855944561], got 0.00000002";
+    var d5 = text_is(bj_last_error_display(), w5);
+    assert(d5 == 1, "dt past dx/c, the limit quoted");
+    var te6, ve6 = BjTfsfSource_try_new(0 - 1, 0 - 2, 0.0001, 0.0000000000001, &se);
+    assert(ve6 == BJ_ERR_ALLOCATION && se.nx == 77, "usize::MAX cells pass the checks, as in Rust, then can't be had");
+
+    test_group("cyrius_tfsf_free");
+    var sf: BjTfsfSource;
+    var tf, vf = BjTfsfSource_try_new(10, 5, 0.0001, 0.0000000000001, &sf);
+    BjTfsfSource_free(&sf);
+    assert(sf.nx == 0 && sf.inc_e == 0 && sf.map_bytes == 0, "emptied");
+    BjTfsfSource_free(&sf);
+    sf.step(1.0);
+    var ief: f64 = sf.incident_e();
+    var ihf: f64 = sf.incident_h();
+    assert(ief == 0.0 && ihf == 0.0, "a freed source steps as nothing and reads 0");
+
+    test_group("cyrius_tfsf_source_cell");
+    var sc: BjTfsfSource;
+    var tsc, vsc = BjTfsfSource_try_new(10, 9, 0.0001, 0.0000000000001, &sc);
+    assert(sc.source_cell == 2, "9/4 = 2");
+    sc.source_cell = 0;
+    sc.step(1.0);
+    var e1: f64 = at(sc.inc_e, 1);
+    assert(e1 != 0.0, "source_cell 0 clamped to 1");
+    BjTfsfSource_free(&sc);
+    var sd: BjTfsfSource;
+    var tsd, vsd = BjTfsfSource_try_new(4, 3, 0.0001, 0.0000000000001, &sd);
+    assert(sd.source_cell == 1, "3/4 = 0 clamped to 1");
+    sd.source_cell = 0 - 1;
+    sd.step(1.0);
+    var e2: f64 = at(sd.inc_e, 2);
+    assert(e2 != 0.0, "source_cell usize::MAX clamped to nx − 2");
+    var ihd: f64 = sd.incident_h();
+    var h2: f64 = at(sd.inc_h, 2);
+    assert(ihd == h2, "incident_h reads inc_h[boundary_x − 1]");
+    BjTfsfSource_free(&sd);
+
+    test_group("cyrius_pulse_specials");
+    var inf: f64 = 1.0 / zero;
+    var p1: f64 = bj_gaussian_pulse(nan, 0.0, 1.0);
+    assert(p1 != p1, "t = NaN gives NaN");
+    var p2: f64 = bj_gaussian_pulse(inf, 0.0, 1.0);
+    assert(p2 == 0.0, "t = ∞: exp(−∞) = 0");
+    var p3: f64 = bj_ricker_wavelet(1.0, 0.0, -0.0);
+    assert(p3 == 0.0, "τ = −0 counts as 0");
+    var p4: f64 = bj_differentiated_gaussian(0.0, 0.0, 1.0);
+    assert(p4 == 0.0, "0 at t₀");
+    var p5: f64 = bj_modulated_gaussian_pulse(0.25, 0.0, inf, 1.0);
+    assert(p5 == 1.0, "τ = ∞: the bare carrier, sin(π/2) = 1");
+
+    return assert_summary();
+}
+
+var exit_code = main();
+if (exit_code > 0) { exit_code = 1; }
+sys_exit_group(exit_code);

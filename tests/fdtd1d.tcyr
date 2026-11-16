@@ -1,11 +1,10 @@
 # fdtd1d.tcyr — src/fdtd1d.cyr (M5 part 1a): the 1D Yee grid with its matched Mur boundaries.
 #
 # Every group named test_* is rust-old/src/fdtd.rs's test of that name, ported assertion for assertion (the ledger
-# matches them by name): the 1D grid's 21 of part 1a. The three that drive a Gaussian pulse
-# (`fdtd1d_reflected_energy_fraction`) follow with the pulses in part 1b, and
-# `test_fdtd1d_inconsistent_public_fields_no_panic` is n/a (ADR 0002 row 2: nothing can resize the grid). The cyrius_*
-# groups pin what the port adds or decides: the error records' text, the allocation refusal, BjFdtd1d_free, usize
-# ranges, the no-source sentinel and the two-cell grid.
+# matches them by name): 23 of the 1D grid's 24, the two that drive a Gaussian pulse
+# (`fdtd1d_reflected_energy_fraction`, part 1b) among them. `test_fdtd1d_inconsistent_public_fields_no_panic` is n/a
+# (ADR 0002 row 2: nothing can resize the grid). The cyrius_* groups pin what the port adds or decides: the error
+# records' text, the allocation refusal, BjFdtd1d_free, usize ranges, the no-source sentinel and the two-cell grid.
 # tests/golden/fdtd.tsv pins the grids against Rust frame by frame besides.
 
 include "tests/lib.cyr"
@@ -74,6 +73,38 @@ fn same_fields(a: *BjFdtd1d, b: *BjFdtd1d): i64 {
     if (a.num_cells != b.num_cells) { return 0; }
     if (memeq(a.e_field, b.e_field, a.num_cells * 8) != 1) { return 0; }
     return memeq(a.h_field, b.h_field, a.num_cells * 8);
+}
+
+# The fraction of a Gaussian pulse's energy left in a homogeneous 600-cell grid of ε_r after both halves have reached
+# the Mur boundaries (a reflection still inside): 0 for a perfect boundary. Rust's `fdtd1d_reflected_energy_fraction`.
+fn reflected_energy_fraction(eps_r: f64): f64 {
+    var n = 600;
+    var sim: BjFdtd1d;
+    var t, v = BjFdtd1d_new(n, 0.0001, &sim);
+    var r, w = sim.set_permittivity(0, n, eps_r);
+    var root: f64 = f64_sqrt(eps_r);
+    var cells_per_step: f64 = 0.5 / root;
+    var tau: f64 = 40.0 * sim.dt;
+    var t0: f64 = 6.0 * tau;
+    var src_steps = 480;
+    var tq: f64 = 300.0 / cells_per_step;
+    var tt: f64 = f64_trunc(tq);
+    var travel = f64_to(tt);
+    var e_ref: f64 = 0.0;
+    var last = src_steps + travel + travel / 3;
+    for (var step = 0; step < last; step = step + 1) {
+        if (step < src_steps) {
+            var tm: f64 = sim.time();
+            var g: f64 = bj_gaussian_pulse(tm, t0, tau);
+            sim.add_source(n / 2, g);
+        }
+        sim.step_once();
+        if (step == src_steps) { e_ref = sim.total_energy(); }
+    }
+    var e_end: f64 = sim.total_energy();
+    BjFdtd1d_free(&sim);
+    var frac: f64 = e_end / e_ref;
+    return frac;
 }
 
 # Runs fdtd.rs's 1D tests, then the Cyrius-only checks.
@@ -274,6 +305,14 @@ fn main() {
     assert(near(s21.abc_left, k025, 0.000000000001) == 1, "left unchanged by μ_r on the right half");
     assert(near(s21.abc_right, k0125, 0.000000000001) == 1, "right follows ε_r μ_r = 16");
     BjFdtd1d_free(&s21);
+
+    test_group("test_mur_abc_absorbs_in_vacuum");
+    var fr1: f64 = reflected_energy_fraction(1.0);
+    assert(fr1 < 0.001, "under 10⁻³ of the energy reflected in vacuum");
+
+    test_group("test_mur_abc_absorbs_in_dielectric");
+    var fr4: f64 = reflected_energy_fraction(4.0);
+    assert(fr4 < 0.001, "under 10⁻³ in ε_r = 4 (the vacuum coefficient gave about 11 %)");
 
     test_group("cyrius_fdtd1d_error_records");
     var se: BjFdtd1d;

@@ -65,6 +65,8 @@ EXTRA = {
     "json/resonator_stability_from_json": "a ResonatorStability read back, its bool a JSON literal (src/json.cyr)",
     "json/s_matrix_to_json": "a 2-port SMatrix's JSON, ports a usize, s rows of Complex objects (M4 part 1d)",
     "json/s_matrix_from_json": "a 2-port SMatrix read back into a new matrix, its shape checked (ADR 0002 row 36)",
+    "fdtd/gaussian_pulse": "a Gaussian pulse's value: one correctly rounded exp (src/fdtd_source.cyr, M5 part 1b)",
+    "fdtd/tfsf_step_200": "one step of a 200-cell TF/SF auxiliary grid under a Gaussian drive (M5 part 1b)",
 }
 
 

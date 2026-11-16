@@ -1170,6 +1170,34 @@ fn main(): i64 {
     bench_report(bf3);
     if (is_err_result(tfd1) == 1 || is_err_result(tfd2) == 1 || fdsum == 7.0) { println("."); }
 
+    # fdtd (M5 part 1b), Cyrius-only: a Gaussian pulse's value across its width, and a 200-cell TF/SF auxiliary grid
+    # stepped under a Gaussian drive (no Rust bench covers either).
+    var pdt: f64 = 0.0000000000001;
+    var gsum: f64 = 0.0;
+    var bp1 = bench_new("fdtd/gaussian_pulse");
+    bench_batch_start(bp1);
+    for (var k = 0; k < 1000000; k = k + 1) {
+        var kq: f64 = f64_from(k & 63);
+        var gp: f64 = bj_gaussian_pulse(kq * pdt, 32.0 * pdt, 8.0 * pdt);
+        gsum = gsum + gp;
+    }
+    bench_batch_stop(bp1, 1000000);
+    bench_report(bp1);
+    var tfb: BjTfsfSource;
+    var ttf, vtf = BjTfsfSource_try_new(200, 100, 0.0001, 0.0000000000001, &tfb);
+    var bp2 = bench_new("fdtd/tfsf_step_200");
+    bench_batch_start(bp2);
+    for (var k = 0; k < 100000; k = k + 1) {
+        var kd: f64 = f64_from(k & 511);
+        var gd: f64 = bj_gaussian_pulse(kd * pdt, 40.0 * pdt, 10.0 * pdt);
+        tfb.step(gd);
+    }
+    bench_batch_stop(bp2, 100000);
+    bench_report(bp2);
+    var tfe: f64 = tfb.incident_e();
+    BjTfsfSource_free(&tfb);
+    if (is_err_result(ttf) == 1 || gsum == 7.0 || tfe == 7.0) { println("."); }
+
     var ar: f64 = acc.re;
     if (ar == 7.0) { println("."); }
     if (keep == 7) { println("."); }

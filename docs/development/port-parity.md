@@ -5350,7 +5350,7 @@ phasor form (`src/nf2ff.cyr`); 1f the JSON of the serde types. Part 2 is the ran
   `validate.py`'s independent transcription (`Fd1`, `FdScripts`) agreed with every row on its first run.
   **`fdtd.cr.tsv` has 3 rows** where glibc's sin misrounds somewhere in a drive and the whole state after it follows:
   the 1,000-step frame of the Rust test's 1 GHz drive, and a seeded scenario's 100- and 1,000-step frames.
-- **Rust tests**: 21 of the 1D grid's 25 are ported. `tests/fdtd1d.tcyr` has 68 assertions with the Cyrius-only groups:
+- **Rust tests**: 21 of the 1D grid's 24 are ported. `tests/fdtd1d.tcyr` has 68 assertions with the Cyrius-only groups:
   - the error records' text, and the cell count checked before dx, as Rust does;
   - the allocation refusal at usize::MAX and 2^59 cells;
   - `BjFdtd1d_free` and a freed grid;
@@ -5358,7 +5358,7 @@ phasor form (`src/nf2ff.cyr`); 1f the JSON of the serde types. Part 2 is the ran
   - the no-source sentinel against an out-of-grid cell and plain steps;
   - the two-cell grid.
 
-  Three tests drive `gaussian_pulse` and follow in 1b; one is n/a. The ledger: 618 ported, 9 n/a, 231 pending of 858.
+  Two tests drive `gaussian_pulse` and follow in 1b; one is n/a. The ledger: 618 ported, 9 n/a, 231 pending of 858.
 - **Surface parity**: fdtd is in progress. Fdtd1d's 15 items and the two fourth-order constants are matched (464 items
   in all), and the 114 still to come are listed by name. The API snapshot gains `BjFdtd1d_new` and `BjFdtd1d_free`
   (2,070).
@@ -5382,3 +5382,79 @@ phasor form (`src/nf2ff.cyr`); 1f the JSON of the serde types. Part 2 is the ran
   equal**, HEAD's 416 unchanged and the six Fdtd1d ones the same under the scalar and the packed kernel. `fdtd1d.tcyr`
   passes on all three (68). The gate is clean (no warnings; execution coverage 325 of 325 functions); validate.py
   628,246 rows, 0 problems; the oracle's `--check` and clippy are clean. Next: 1b, the pulses and TF/SF.
+
+## 95. M5 part 1b: the pulses and the TF/SF source (2026-11-15)
+
+- **`src/fdtd_source.cyr`**:
+  - **The pulses**: `bj_gaussian_pulse`, `bj_ricker_wavelet`, `bj_differentiated_gaussian` and
+    `bj_modulated_gaussian_pulse`, Rust's chains on the correctly rounded exp and sin: u = (t − t₀)/τ, exp((−u)·u),
+    (1 − 2u²)·exp(−u²), ((−2u)/τ)·exp((−u)·u), and the carrier's ((2π·f₀)·(t − t₀)). A τ of 0 (either sign) or NaN
+    gives 0.0, as Rust's.
+  - **`BjTfsfSource`**: `BjTfsfSource_try_new`, `BjTfsfSource_new`, `BjTfsfSource_free` and Rust's `step`,
+    `incident_e` and `incident_h`. The auxiliary grid's `inc_e`, `inc_h` and a scratch row are one mapping, and `nx` is
+    their length (ADR 0002 row 2, amended); `step`'s common-length guard goes. `boundary_x` and `source_cell` stay
+    writable, as Rust's public fields, so their guards stay: the source cell is clamped into 1..nx − 2 (unsigned: 0 to
+    1, usize::MAX to nx − 2), and the incident fields read 0.0 outside the grid.
+  - **ADR 0002 row 3, amended**: Rust's `new` clamped exactly the inputs `try_new` refuses (nx < 3, boundary_x outside
+    1..nx, a dx or dt not finite and positive, c·dt > dx·(1 + 10⁻¹²)). `BjTfsfSource_new` is therefore `try_new`: it
+    refuses them with the same error, and Rust's four warnings go.
+  - **usize**: nx and boundary_x are compared unsigned, as Rust's. A huge nx with a huge boundary below it passes the
+    checks and then fails to allocate (`Err(Allocation)`, row 9 amended, where Rust's `vec!` aborts).
+  - **The kernel**: the two row updates run on `f64v_sub`, `f64v_scale` and `f64v_add` through the scratch row, with a
+    scalar tail. Probe p19 now covers `f64v_scale`: bit-identical to Rust's `k·(a − b)`, and one word past `dst` at
+    every odd count, as `f64v_mul` (x86_64 and aarch64), so the verbs again take the largest multiple of 4.
+- **The grid**: 16,901 rows appended to `fdtd.tsv` (17,528).
+  - **The pulses**, 16,447 class-C rows: every special for t, t₀ and τ (and for the frequency on three typical
+    pulses); the Rust tests' points; 2,000 seeded pulses (τ from 1 fs to 1 µs, t within ±8τ of t₀, carriers to
+    1 THz); 1,000 seeded wide values; and the range's edges: u past DBL_MAX or subnormal, u² past either end, exp's
+    underflow near u² = 745, and carriers of 10³⁰⁰.
+  - **The 1D grid driven by a Gaussian** (opcode 6), 39 rows: the Rust tests' Mur absorption in vacuum and ε_r = 4 at
+    frames through the source and the boundaries' reflection; a pulse in vacuum at the frames; τ = 0 and NaN; t₀ NaN
+    and +∞; τ of 10^±300.
+  - **TF/SF**, 415 rows over `try_new`, `new`, `step` and the written fields:
+    - every constructor case: nx 0 to 100, the boundary 0, 1, at and past nx, 500 and usize::MAX, the specials for dx
+      and dt, dt at dx/(2c), dx/c and 1.01·dx/c, and dt straddling dx·(1 + 10⁻¹²)/c three ulps each way;
+    - a huge nx refused before any allocation;
+    - the clamped grids Rust's test stepped 2,000 times;
+    - the Rust tests' drives at their frames, boundaries 1 to 3, the magic time step (S = 1, a Mur coefficient of 0),
+      three- and four-cell grids, unit, non-finite, huge and subnormal impulses;
+    - the boundary and source cell written inside, at the edges, outside and at usize::MAX (Rust's mutated-fields
+      test among them);
+    - 12 seeded sources to 1,000 steps.
+- **validate.py**: its transcription (`fd_pulse`, `Tf`, `tf_check`, `tf_sanitize` and the TF/SF scripts, cached per
+  scenario like the 1D ones) agreed with every row on its first run.
+  - `fdtd.cr.tsv` gains 8 pulse rows where glibc's exp or sin misrounds (11 in all). No driven trajectory needed one.
+  - **`fdtd.adr.tsv`, new: 105 rows** map the `TfsfSource::new` rows Rust clamped to `try_new`'s error and text (ADR
+    0002 row 3). The other 29 `new` rows are unchanged.
+- **Rust tests**: all 12 pulse and all 10 TF/SF tests are ported in `tests/fdtd_source.tcyr`, 64 assertions with the
+  Cyrius-only groups (the error records, the unsigned boundary at usize::MAX, `BjTfsfSource_free`, the source cell's
+  clamps, the pulses' specials).
+  - Two tests assert the refusal (row 3) where Rust asserted the clamped grid: `test_tfsf_new_sanitizes_without_panic`
+    checks each of its seven cases is refused with `try_new`'s code, and `test_tfsf_boundary_at_zero` checks both
+    constructors refuse boundary_x = 0.
+  - `test_tfsf_mutated_public_fields_no_panic` keeps all but its `inc_h.truncate(2)` (row 2), and adds the clamped
+    source cell's injection.
+  - `tests/fdtd1d.tcyr` ports the two Mur absorption tests (70 assertions). §94 counted them as three: the third name
+    was their helper, `fdtd1d_reflected_energy_fraction`.
+
+  The ledger: 642 ported, 9 n/a, 207 pending of 858.
+- **Surface parity**: the four pulses and `TfsfSource` with its fields and methods are matched (478 items), and 104
+  items are still to come. The API snapshot gains seven functions (2,077).
+- **Benchmarks**: no Rust bench covers the pulses or TF/SF, so there are two Cyrius-only ones (`EXTRA`): a Gaussian
+  pulse's value, and a 200-cell TF/SF step under a Gaussian drive. HEAD's 94 rows were unchanged against the new tree,
+  with median ratios of 1.00 and 1.00 over two interleaved rounds at load 2.1–2.7. Two rows were noise:
+  `step_1000_cells` once at 3.37 µs at HEAD, and both 1D steps once at 476 ns and 3.68 µs at load 1.9.
+
+  | Bench | Scalar loops | Packed kernel |
+  |---|---|---|
+  | `fdtd/gaussian_pulse` | — | 122–127 ns |
+  | `fdtd/tfsf_step_200` | 2.37–2.45 µs | 846–852 ns (−65 %) |
+
+  The TF/SF step's figure includes its Gaussian, about 120 ns. That leaves about 3.6 ns a cell, against the 1D
+  grid's 2.1.
+- **Result, every target** (x86_64 ELF, x86_64 PE, aarch64): **18 modules, 0 failing; 553,718 ok, 0 failed, 0
+  measured, 0 pending, 91,429 accepted (ADR 01: 30,874; ADR 0002: 60,555)** over 645,147 rows; **all 430 digests
+  equal**. Against 1a's, only `Fdtd1d::step_once`'s changed (its 39 new rows), and eight are new. `fdtd_source.tcyr`
+  (64) and `fdtd1d.tcyr` (70) pass on all three. The gate is clean (no warnings; execution coverage 332 of 332
+  functions); validate.py 645,147 rows, 0 problems; the oracle's `--check` and clippy are clean. Next: 1c, the lossy
+  and dispersive materials and the subpixel averages.

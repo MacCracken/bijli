@@ -3326,6 +3326,17 @@ fn _par_fd1_script(): i64 {
             var am: f64 = _par_in(k + 4);
             sim.run(_par_in(k + 1), cell, fr, am);
             k = k + 5;
+        } elif (code == 6) {
+            var cnt6 = _par_in(k + 1);
+            var t06: f64 = _par_in(k + 3);
+            var tau6: f64 = _par_in(k + 4);
+            for (var j6 = 0; j6 != cnt6; j6 = j6 + 1) {
+                var tm: f64 = sim.time();
+                var g6: f64 = bj_gaussian_pulse(tm, t06, tau6);
+                sim.add_source(_par_in(k + 2), g6);
+                sim.step_once();
+            }
+            k = k + 5;
         } else {
             BjFdtd1d_free(&sim);
             return 0 - 1;
@@ -3336,8 +3347,127 @@ fn _par_fd1_script(): i64 {
     return 1;
 }
 
+# A TF/SF source's state to the got list: nx, the boundary and source cell, the incident fields at the boundary, the
+# three coefficients, both arrays' digests, then E and H at the probe cells 0, 1, n/2, n − 2 and n − 1.
+fn _par_tf_state(src: *BjTfsfSource) {
+    var n = src.nx;
+    _par_got_i(n);
+    _par_got_i(src.boundary_x);
+    _par_got_i(src.source_cell);
+    var ie: f64 = src.incident_e();
+    _par_got_f(ie);
+    var ih: f64 = src.incident_h();
+    _par_got_f(ih);
+    _par_got_f(src.e_coeff_1d);
+    _par_got_f(src.h_coeff_1d);
+    _par_got_f(src.abc_coeff);
+    _par_got_i(_par_fd_digest(src.inc_e, n));
+    _par_got_i(_par_fd_digest(src.inc_h, n));
+    var pr: i64[5];
+    pr[0] = 0;
+    pr[1] = 1;
+    pr[2] = n / 2;
+    pr[3] = n - 2;
+    pr[4] = n - 1;
+    var e: *f64 = _par_fd_f64p(src.inc_e);
+    var h: *f64 = _par_fd_f64p(src.inc_h);
+    for (var k = 0; k < 5; k = k + 1) { _par_got_f(e[pr[k]]); }
+    for (var k2 = 0; k2 < 5; k2 = k2 + 1) { _par_got_f(h[pr[k2]]); }
+    return 0;
+}
+
+# BjTfsfSource_new (isnew = 1) or BjTfsfSource_try_new into *out: 0, or the error code.
+fn _par_tf_make(isnew, nx, bx, dx: f64, dt: f64, out: *BjTfsfSource): i64 {
+    if (isnew == 1) {
+        var t, v = BjTfsfSource_new(nx, bx, dx, dt, out);
+        if (is_err_result(t) == 1) { return v; }
+        return 0;
+    }
+    var t2, v2 = BjTfsfSource_try_new(nx, bx, dx, dt, out);
+    if (is_err_result(t2) == 1) { return v2; }
+    return 0;
+}
+
+# Replays a TF/SF script (the constructor by the row's name, then step, Gaussian drives and field writes); 1 handled,
+# -1 for an unknown opcode.
+fn _par_tf_script(fp, fl): i64 {
+    var src: BjTfsfSource;
+    var dx: f64 = _par_in(2);
+    var dt: f64 = _par_in(3);
+    var e = _par_tf_make(_par_eq(fp, fl, "TfsfSource::new"), _par_in(0), _par_in(1), dx, dt, &src);
+    if (e != 0) {
+        _par_got_error(e);
+        return 1;
+    }
+    var k = 4;
+    while (k < _par_in_n) {
+        var code = _par_in(k);
+        if (code == 1) {
+            var x1: f64 = _par_in(k + 1);
+            src.step(x1);
+            k = k + 2;
+        } elif (code == 2) {
+            var cnt = _par_in(k + 1);
+            var s0 = _par_in(k + 2);
+            var dt2: f64 = _par_in(k + 3);
+            var t0: f64 = _par_in(k + 4);
+            var tau: f64 = _par_in(k + 5);
+            for (var j = 0; j != cnt; j = j + 1) {
+                var sf: f64 = f64_from(s0 + j);
+                var tt: f64 = sf * dt2;
+                var g: f64 = bj_gaussian_pulse(tt, t0, tau);
+                src.step(g);
+            }
+            k = k + 6;
+        } elif (code == 3) {
+            src.boundary_x = _par_in(k + 1);
+            k = k + 2;
+        } elif (code == 4) {
+            src.source_cell = _par_in(k + 1);
+            k = k + 2;
+        } else {
+            BjTfsfSource_free(&src);
+            return 0 - 1;
+        }
+    }
+    _par_tf_state(&src);
+    BjTfsfSource_free(&src);
+    return 1;
+}
+
+# fdtd.rs's pulses (`fdtd::<name>` rows, class C).
+fn _par_fd_pulse(fp, fl): i64 {
+    var t: f64 = _par_in(0);
+    var t0: f64 = _par_in(1);
+    var tau: f64 = _par_in(2);
+    if (_par_eq(fp, fl, "fdtd::gaussian_pulse") == 1) {
+        var g: f64 = bj_gaussian_pulse(t, t0, tau);
+        _par_got_f(g);
+        return 1;
+    }
+    if (_par_eq(fp, fl, "fdtd::ricker_wavelet") == 1) {
+        var r: f64 = bj_ricker_wavelet(t, t0, tau);
+        _par_got_f(r);
+        return 1;
+    }
+    if (_par_eq(fp, fl, "fdtd::differentiated_gaussian") == 1) {
+        var d: f64 = bj_differentiated_gaussian(t, t0, tau);
+        _par_got_f(d);
+        return 1;
+    }
+    if (_par_eq(fp, fl, "fdtd::modulated_gaussian_pulse") == 1) {
+        var fr: f64 = _par_in(3);
+        var m: f64 = bj_modulated_gaussian_pulse(t, t0, tau, fr);
+        _par_got_f(m);
+        return 1;
+    }
+    return 0;
+}
+
 fn _par_fdtd(fp, fl): i64 {
     if (fl > 8 && memeq(fp, "Fdtd1d::", 8) == 1) { return _par_fd1_script(); }
+    if (fl > 12 && memeq(fp, "TfsfSource::", 12) == 1) { return _par_tf_script(fp, fl); }
+    if (fl > 6 && memeq(fp, "fdtd::", 6) == 1) { return _par_fd_pulse(fp, fl); }
     return 0;
 }
 
@@ -3450,6 +3580,8 @@ public fn _par_c_bound(fp, fl): i64 {
     if (memeq(fp, "beam::", 6) == 1 || _par_eq(fp, fl, "GaussianBeam::gouy_phase") == 1) { return 0; }
     # rf's atan2, sin, cos, atan, log10 and acos (M4 part 1a): src/crmath.cyr's correctly rounded primitives.
     if (memeq(fp, "rf::", 4) == 1) { return 0; }
+    # fdtd.rs's pulses' exp and sin (M5 part 1b): src/crmath.cyr's correctly rounded primitives.
+    if (memeq(fp, "fdtd::", 6) == 1) { return 0; }
     if (_par_eq(fp, fl, "relativity::solve_retarded_time") == 1) { return 0; }
     if (_par_eq(fp, fl, "relativity::lienard_wiechert_fields") == 1) { return 0; }
     if (fl > 9 && memeq(fp, "circuit::", 9) == 1) { return 0; }

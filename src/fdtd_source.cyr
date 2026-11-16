@@ -1,0 +1,332 @@
+# fdtd_source.cyr — fdtd.rs's sources (M5 part 1b): the Gaussian pulse, the Ricker wavelet, the differentiated and the
+# modulated Gaussian, and the total-field/scattered-field plane-wave source `TfsfSource`. SI units: times in seconds,
+# frequencies in Hz, lengths in metres.
+#
+# The pulses are Rust's chains on src/crmath.cyr's correctly rounded exp and sin. A width τ of 0 or NaN gives 0.0.
+#
+# A BjTfsfSource holds the 1D auxiliary grid that carries the incident plane wave (E_z, H_y travelling in +x), with a
+# first-order Mur boundary at each end. Its two arrays and a scratch row are one anonymous mmap, fixed at construction
+# and given back by BjTfsfSource_free (ADR 0002 row 2): `inc_e` and `inc_h` are their addresses and `nx` their length.
+# The updates run on the packed f64v_* verbs, each lane rounding Rust's three operations (port plan §9.3). Rust's
+# `TfsfSource::new` clamped invalid input with a warning; here both constructors validate and return Err, as
+# `try_new` does (ADR 0002 row 3). The file is time-domain only; bijli's one harmonic convention, e^{+jωt}, is stated
+# in src/complex.cyr's header.
+
+private
+
+var _BJ_FS_INF: f64 = 0x7FF0000000000000;
+# std::f64::consts::PI, as src/mathx.cyr's _BJ_PI (private to that file).
+var _BJ_FS_PI: f64 = 3.141592653589793;
+# 10⁻¹²: the tolerance on the 1D Courant limit c·dt ≤ dx·(1 + 10⁻¹²), so dt = dx/c computed in binary64 passes.
+var _BJ_FS_REL12: f64 = 0.000000000001;
+# The largest nx whose mapping (24 bytes a cell: E, H and the scratch row) a 64-bit length can hold.
+var _BJ_FS_MAX_CELLS = 384307168202282325;
+
+# A word as a *f64 (the typed return keeps the binding typed).
+#must_use
+fn _bj_fs_f64p(a): *f64 {
+    return a;
+}
+
+# 1 when x is finite and strictly positive (NaN-safe). Mirrors fdtd.rs's `is_positive_finite`.
+#must_use
+fn _bj_fs_pos(x: f64): i64 {
+    if (x > 0.0 && x < _BJ_FS_INF) { return 1; }
+    return 0;
+}
+
+# 1 when a ≥ b as usize words (a negative word is past 2^63).
+#must_use
+fn _bj_fs_uge(a, b): i64 {
+    if ((a < 0) == (b < 0)) {
+        if (a >= b) { return 1; }
+        return 0;
+    }
+    if (a < 0) { return 1; }
+    return 0;
+}
+
+# ── the pulses ──────────────────────────────────────────────────────────────────────────────────────────────────────
+
+# 1 when τ is 0 or NaN, where every pulse is 0.0.
+#must_use
+fn _bj_fs_no_width(tau: f64): i64 {
+    if (tau == 0.0 || tau != tau) { return 1; }
+    return 0;
+}
+
+# The Gaussian pulse exp(−((t − t₀)/τ)²): 1 at t₀; 0.0 for τ = 0 or NaN. Mirrors `gaussian_pulse`.
+#must_use
+public fn bj_gaussian_pulse(t: f64, t0: f64, tau: f64): f64 {
+    if (_bj_fs_no_width(tau) == 1) { return 0.0; }
+    var d: f64 = t - t0;
+    var arg: f64 = d / tau;
+    var na: f64 = -arg;
+    var x: f64 = na * arg;
+    var g: f64 = _bj_exp(x);
+    return g;
+}
+
+# The Ricker wavelet (1 − 2u²)·exp(−u²), u = (t − t₀)/τ: even, 1 at t₀, no DC content; 0.0 for τ = 0 or NaN. Mirrors
+# `ricker_wavelet`.
+#must_use
+public fn bj_ricker_wavelet(t: f64, t0: f64, tau: f64): f64 {
+    if (_bj_fs_no_width(tau) == 1) { return 0.0; }
+    var d: f64 = t - t0;
+    var arg: f64 = d / tau;
+    var arg2: f64 = arg * arg;
+    var a: f64 = 2.0 * arg2;
+    var c: f64 = 1.0 - a;
+    var na: f64 = -arg2;
+    var g: f64 = _bj_exp(na);
+    var r: f64 = c * g;
+    return r;
+}
+
+# The differentiated Gaussian −2(t − t₀)/τ²·exp(−((t − t₀)/τ)²), the time derivative of the Gaussian pulse, as Rust's
+# (−2u/τ)·exp(−u²); 0.0 for τ = 0 or NaN. Mirrors `differentiated_gaussian`.
+#must_use
+public fn bj_differentiated_gaussian(t: f64, t0: f64, tau: f64): f64 {
+    if (_bj_fs_no_width(tau) == 1) { return 0.0; }
+    var d: f64 = t - t0;
+    var arg: f64 = d / tau;
+    var m: f64 = -2.0 * arg;
+    var q: f64 = m / tau;
+    var na: f64 = -arg;
+    var x: f64 = na * arg;
+    var g: f64 = _bj_exp(x);
+    var r: f64 = q * g;
+    return r;
+}
+
+# The modulated Gaussian exp(−((t − t₀)/τ)²)·sin(2πf₀(t − t₀)), its sine's argument Rust's (2π·f₀)·(t − t₀); 0.0 for
+# τ = 0 or NaN. Mirrors `modulated_gaussian_pulse`.
+#must_use
+public fn bj_modulated_gaussian_pulse(t: f64, t0: f64, tau: f64, frequency: f64): f64 {
+    if (_bj_fs_no_width(tau) == 1) { return 0.0; }
+    var d: f64 = t - t0;
+    var arg: f64 = d / tau;
+    var na: f64 = -arg;
+    var x: f64 = na * arg;
+    var g: f64 = _bj_exp(x);
+    var w: f64 = 2.0 * _BJ_FS_PI;
+    var wf: f64 = w * frequency;
+    var ph: f64 = wf * d;
+    var s: f64 = _bj_sin(ph);
+    var r: f64 = g * s;
+    return r;
+}
+
+# d[i] = d[i] + k·(a[i] − b[i]) for i < n, Rust's `*d += k * (a − b)` with a scalar k: the packed f64v_sub, f64v_scale
+# and f64v_add through the scratch row w on the largest multiple of 4, then a scalar tail. f64v_sub and f64v_scale write
+# one word past their dst at an odd count on 6.7.18 (probe p19; port plan §10), so the verbs keep to a lane multiple.
+fn _bj_fs_row(d: *f64, a: *f64, b: *f64, w: *f64, n, k: f64) {
+    var m = n & (0 - 4);
+    if (m > 0) {
+        f64v_sub(w, a, b, m);
+        f64v_scale(w, w, k, m);
+        f64v_add(d, d, w, m);
+    }
+    for (var i = m; i < n; i = i + 1) {
+        var v: f64 = k * (a[i] - b[i]);
+        d[i] = d[i] + v;
+    }
+    return 0;
+}
+
+# ── the TF/SF source ────────────────────────────────────────────────────────────────────────────────────────────────
+
+# A TF/SF plane-wave source: the 1D auxiliary grid of the incident wave. `inc_e` and `inc_h` are the addresses of nx
+# f64 each: E^inc at x = i·dx and H^inc at x = (i + ½)·dx (inc_h[nx − 1] stays 0); after k calls to step, E^inc is at
+# time k·dt and H^inc at (k − ½)·dt. `boundary_x` is the first total-field column and `source_cell` the soft source's
+# node; both stay writable, as Rust's public fields, and step and the incident_* readers guard them. `e_coeff_1d`
+# dt/(ε₀dx), `h_coeff_1d` dt/(μ₀dx) and `abc_coeff` (S − 1)/(S + 1), S = c·dt/dx, are fixed. `work` is the update's
+# scratch row (no Rust counterpart) and `map_bytes` the mapping's length (0 once freed). Mirrors `TfsfSource`.
+#
+# The left-edge recipe for a boundary at bx, with updates H[i] += c_h·(E[i + 1] − E[i]) and E[i] += c_e·(H[i] − H[i −
+# 1]) (BjFdtd1d's, and the 2D TM grid's H_y and E_z): update H, then H[bx − 1] −= c_h·incident_e(); call step(source);
+# update E, then E[bx] −= c_e·incident_h() (Schneider, *Understanding the FDTD Method*, §3.10–3.11).
+public struct BjTfsfSource {
+    inc_e;
+    inc_h;
+    boundary_x;
+    source_cell;
+    nx;
+    e_coeff_1d: f64;
+    h_coeff_1d: f64;
+    abc_coeff: f64;
+    work;
+    map_bytes;
+}
+
+# Records InvalidParameter "<head>{n}<mid>{m}" with n and m usize; returns its code.
+fn _bj_fs_bad_range(head, n, mid, m): i64 {
+    var t = _bj_err_reason(BJ_ERR_INVALID_PARAMETER);
+    _bj_tx_cstr(t, head);
+    _bj_tx_u64(t, n);
+    _bj_tx_cstr(t, mid);
+    _bj_tx_u64(t, m);
+    return BJ_ERR_INVALID_PARAMETER;
+}
+
+# Creates a TF/SF source over nx cells (a usize) with its boundary at column boundary_x into *out: the soft source at
+# max(boundary_x/4, 1) (at most nx − 2), every field zero. Ok(0), or with out untouched:
+# - Err(InsufficientResolution) for nx < 3;
+# - Err(InvalidParameter) "TFSF boundary_x must be in 1..{nx}, got {boundary_x}" unless 1 ≤ boundary_x < nx;
+# - Err(InvalidParameter) "dx must be finite and positive, got {dx}";
+# - Err(InvalidParameter) "dt must be in (0, dx/c] = (0, {dx/c}], got {dt}" unless 0 < dt and c·dt ≤ dx·(1 + 10⁻¹²)
+#   (the 1D Courant limit);
+# - Err(Allocation) when the grid's mapping can't be had (Rust's vec! aborts; ADR 0002 row 9).
+# Give it back with BjTfsfSource_free. Mirrors `TfsfSource::try_new`.
+#must_use
+public fn BjTfsfSource_try_new(nx, boundary_x, dx: f64, dt: f64, out: *BjTfsfSource): Result {
+    if (nx >= 0 && nx < 3) {
+        var nf: f64 = f64_from(nx);
+        var size: f64 = nf * dx;
+        return Err(_bj_err_insufficient_resolution(nx, size));
+    }
+    if (boundary_x == 0 || _bj_fs_uge(boundary_x, nx) == 1) {
+        return Err(_bj_fs_bad_range("TFSF boundary_x must be in 1..", nx, ", got ", boundary_x));
+    }
+    if (_bj_fs_pos(dx) == 0) {
+        var t = _bj_err_reason(BJ_ERR_INVALID_PARAMETER);
+        _bj_tx_cstr(t, "dx must be finite and positive, got ");
+        _bj_fmt_f64_display(t, dx);
+        return Err(BJ_ERR_INVALID_PARAMETER);
+    }
+    var c: f64 = BJ_SPEED_OF_LIGHT;
+    var cdt: f64 = c * dt;
+    var tol: f64 = 1.0 + _BJ_FS_REL12;
+    var lim: f64 = dx * tol;
+    if (_bj_fs_pos(dt) == 0 || cdt > lim) {
+        var td = _bj_err_reason(BJ_ERR_INVALID_PARAMETER);
+        _bj_tx_cstr(td, "dt must be in (0, dx/c] = (0, ");
+        var dxc: f64 = dx / c;
+        _bj_fmt_f64_display(td, dxc);
+        _bj_tx_cstr(td, "], got ");
+        _bj_fmt_f64_display(td, dt);
+        return Err(BJ_ERR_INVALID_PARAMETER);
+    }
+    var map = 0;
+    if (nx > 0 && nx <= _BJ_FS_MAX_CELLS) { map = mmap_anon(nx * 24); }
+    if (map == 0) {
+        var ta = _bj_err_reason(BJ_ERR_ALLOCATION);
+        _bj_tx_cstr(ta, "a TFSF auxiliary grid of ");
+        _bj_tx_u64(ta, nx);
+        _bj_tx_cstr(ta, " cells");
+        return Err(BJ_ERR_ALLOCATION);
+    }
+    var eps_dx: f64 = BJ_EPSILON_0 * dx;
+    var ec: f64 = dt / eps_dx;
+    var mu_dx: f64 = BJ_MU_0 * dx;
+    var hc: f64 = dt / mu_dx;
+    var s: f64 = cdt / dx;
+    var sm: f64 = s - 1.0;
+    var sp: f64 = s + 1.0;
+    var abc: f64 = sm / sp;
+    var sc = boundary_x / 4;
+    if (sc < 1) { sc = 1; }
+    if (sc > nx - 2) { sc = nx - 2; }
+    out.inc_e = map;
+    out.inc_h = map + nx * 8;
+    out.work = map + nx * 16;
+    out.boundary_x = boundary_x;
+    out.source_cell = sc;
+    out.nx = nx;
+    out.e_coeff_1d = ec;
+    out.h_coeff_1d = hc;
+    out.abc_coeff = abc;
+    out.map_bytes = nx * 24;
+    if (_bj_log_on(4) == 1) {
+        var lb[256];
+        var lt[24];
+        _bj_tx_init(&lt, &lb, 256);
+        _bj_tx_cstr(&lt, "TFSF source created nx=");
+        _bj_tx_u64(&lt, nx);
+        _bj_tx_cstr(&lt, " boundary_x=");
+        _bj_tx_u64(&lt, boundary_x);
+        _bj_tx_cstr(&lt, " source_cell=");
+        _bj_tx_u64(&lt, sc);
+        _bj_tx_cstr(&lt, " dx=");
+        _bj_fmt_f64_debug(&lt, dx);
+        _bj_tx_cstr(&lt, " dt=");
+        _bj_fmt_f64_debug(&lt, dt);
+        _bj_tx_cstr(&lt, " courant=");
+        _bj_fmt_f64_debug(&lt, s);
+        _bj_log_text(4, &lt);
+    }
+    return Ok(0);
+}
+
+# As BjTfsfSource_try_new. Rust's `TfsfSource::new` clamped invalid input with a warning (nx to 3, boundary_x into
+# 1..nx, dx or dt replaced so S = 1, dt clamped to dx/c); the port refuses the same inputs as try_new does, with its
+# error (ADR 0002 row 3). Mirrors `TfsfSource::new`.
+#must_use
+public fn BjTfsfSource_new(nx, boundary_x, dx: f64, dt: f64, out: *BjTfsfSource): Result {
+    return BjTfsfSource_try_new(nx, boundary_x, dx, dt, out);
+}
+
+# Gives a source's mapping back and empties it (nx 0, both addresses 0); a second call does nothing.
+public fn BjTfsfSource_free(src: *BjTfsfSource): i64 {
+    if (src.map_bytes > 0) { cyr_munmap(src.inc_e, src.map_bytes); }
+    src.inc_e = 0;
+    src.inc_h = 0;
+    src.work = 0;
+    src.nx = 0;
+    src.map_bytes = 0;
+    return 0;
+}
+
+impl BjTfsfSource {
+    # Advances the auxiliary grid one step: H from E, then source_value added at source_cell (clamped to 1..nx − 2,
+    # since the field is writable), then the interior E from H, then the Mur boundaries at both ends. A grid under
+    # three cells (a freed one) is left alone. Mirrors `TfsfSource::step`.
+    public fn step(self, source_value: f64) {
+        var n = self.nx;
+        if (n < 3) { return 0; }
+        var e: *f64 = _bj_fs_f64p(self.inc_e);
+        var h: *f64 = _bj_fs_f64p(self.inc_h);
+        var hc: f64 = self.h_coeff_1d;
+        var ec: f64 = self.e_coeff_1d;
+        var w: *f64 = _bj_fs_f64p(self.work);
+        var e_left: f64 = e[1];
+        var e_right: f64 = e[n - 2];
+        # H[i] += c_h·(E[i + 1] − E[i]) for i < n − 1.
+        _bj_fs_row(h, e + 1, e, w, n - 1, hc);
+        var sc = self.source_cell;
+        if (sc < 0 || sc > n - 2) { sc = n - 2; }
+        if (sc < 1) { sc = 1; }
+        var x: f64 = e[sc];
+        e[sc] = x + source_value;
+        # E[i] += c_e·(H[i] − H[i − 1]) for 0 < i < n − 1.
+        _bj_fs_row(e + 1, h + 1, h, w, n - 2, ec);
+        var k: f64 = self.abc_coeff;
+        var l: f64 = k * (e[1] - e[0]);
+        e[0] = e_left + l;
+        var r: f64 = k * (e[n - 2] - e[n - 1]);
+        e[n - 1] = e_right + r;
+        return 0;
+    }
+
+    # E^inc at the boundary node x = boundary_x·dx, or 0.0 when boundary_x is outside the grid. Mirrors
+    # `TfsfSource::incident_e`.
+    #must_use
+    public fn incident_e(self): f64 {
+        var bx = self.boundary_x;
+        if (bx < 0 || bx >= self.nx) { return 0.0; }
+        var e: *f64 = _bj_fs_f64p(self.inc_e);
+        var v: f64 = e[bx];
+        return v;
+    }
+
+    # H^inc at x = (boundary_x − ½)·dx, inc_h[boundary_x − 1], the scattered-field node beside the boundary, or 0.0 when
+    # it doesn't exist (boundary_x 0 or outside the grid). Mirrors `TfsfSource::incident_h`.
+    #must_use
+    public fn incident_h(self): f64 {
+        var i = self.boundary_x - 1;
+        if (self.boundary_x == 0 || i < 0 || i >= self.nx) { return 0.0; }
+        var h: *f64 = _bj_fs_f64p(self.inc_h);
+        var v: f64 = h[i];
+        return v;
+    }
+}

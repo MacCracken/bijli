@@ -26,12 +26,28 @@
 //! specials, at every edge cell and outside; trajectories at frames {1, 2, 10, 100, 1000} in vacuum, ε_r = 4, μ_r = 9,
 //! layered media, two- and three-cell grids, non-finite and huge sources, signed zeros; `run` with the Rust tests' and
 //! benches' sources, None and out-of-grid cells, special and huge frequencies and amplitudes; and seeded scenarios.
+//!
+//! M5 part 1b appends the sources. The pulses (`fdtd::gaussian_pulse`, `ricker_wavelet`, `differentiated_gaussian`,
+//! `modulated_gaussian_pulse`) are ordinary class-C rows: every special for t, t₀ and τ (and for the frequency on
+//! typical pulses), the Rust tests' points, seeded pulses from 1 fs to 1 µs, seeded wide values, and the range's edges
+//! ((t − t₀)/τ past DBL_MAX or subnormal, u² past either end, exp's underflow). The 1D scripts gain opcode 6, k steps
+//! each after adding gaussian_pulse(time(), t₀, τ) at a cell: the Rust tests' Mur absorption in vacuum and ε_r = 4,
+//! a pulse in vacuum, special widths and delays. A `TfsfSource` script is `i:<nx> i:<boundary_x> f:<dx> f:<dt>`, built
+//! by the row's constructor (`TfsfSource::new` rows by `new`, the others by `try_new`), then `i:1 f:<v>` step(v),
+//! `i:2 i:<k> i:<s0> f:<dt> f:<t0> f:<tau>` k steps driven by gaussian_pulse((s₀ + j)·dt, t₀, τ), `i:3 i:<b>` and
+//! `i:4 i:<c>` the public `boundary_x` and `source_cell` written. Its state: nx, the boundary, the source cell,
+//! `incident_e()`, `incident_h()`, the three private coefficients (from `Debug`), both arrays' digests and the probes.
+//! The grid: every constructor case (nx below and at 3, the boundary at and past its range's ends, the specials for dx
+//! and dt, dt straddling dx·(1 + 10⁻¹²)/c ulp by ulp), the Rust tests' drives, a unit impulse and non-finite sources,
+//! the written fields, and seeded sources. Rust's `new` clamps what `try_new` refuses; ADR 0002 row 3 maps those rows.
 
 use std::collections::BTreeSet;
 
 use crate::grids::{Rng, specials};
 use crate::tsv::{Class, Module, Tok, err, f, i, s};
-use bijli::fdtd::Fdtd1d;
+use bijli::fdtd::{
+    Fdtd1d, TfsfSource, differentiated_gaussian, gaussian_pulse, modulated_gaussian_pulse, ricker_wavelet,
+};
 
 /// One operation of a script.
 #[derive(Clone, Copy)]
@@ -41,6 +57,7 @@ enum Op {
     Source(usize, f64),
     Step(usize),
     Run(usize, Option<usize>, f64, f64),
+    Pulse(usize, usize, f64, f64),
 }
 
 fn u(x: usize) -> Tok {
@@ -55,6 +72,7 @@ impl Op {
             Self::Source(c, x) => vec![i(3), u(c), f(x)],
             Self::Step(k) => vec![i(4), u(k)],
             Self::Run(k, c, fr, am) => vec![i(5), u(k), c.map_or(Tok::None, u), f(fr), f(am)],
+            Self::Pulse(k, c, t0, tau) => vec![i(6), u(k), u(c), f(t0), f(tau)],
         }
     }
 }
@@ -160,6 +178,14 @@ impl Script {
                 sim.run(k, c, fr, am);
                 Ok(())
             }
+            Op::Pulse(k, c, t0, tau) => {
+                for _ in 0..k {
+                    let v = gaussian_pulse(sim.time(), t0, tau);
+                    sim.add_source(c, v);
+                    sim.step_once();
+                }
+                Ok(())
+            }
         };
         if let Err(e) = r {
             self.errs.extend([err(&e), s(e.to_string())]);
@@ -186,9 +212,14 @@ struct Rows {
 
 impl Rows {
     fn emit(&mut self, func: &str, sc: &Script) {
-        let key = format!("{func} {:?}", sc.ins);
-        assert!(self.keys.insert(key), "a repeated {func} script");
-        self.m.row(func, Class::T, &sc.ins, &sc.outs());
+        self.emit_toks(func, Class::T, &sc.ins, &sc.outs());
+    }
+
+    /// A row of any shape, its (function, inputs) checked unique.
+    fn emit_toks(&mut self, func: &str, cls: Class, ins: &[Tok], outs: &[Tok]) {
+        let key = format!("{func} {ins:?}");
+        assert!(self.keys.insert(key), "a repeated {func} row");
+        self.m.row(func, cls, ins, outs);
     }
 
     /// A script of `setup`, then frames: at each frame, `advance` brings the grid from the previous frame to it.
@@ -366,8 +397,365 @@ fn emit_1a(r: &mut Rows) {
     }
 }
 
+// ── part 1b: the pulses and the TF/SF source ──────────────────────────────────────────────────────────────────────
+
+/// One operation of a TF/SF script.
+#[derive(Clone, Copy)]
+enum TfOp {
+    Step(f64),
+    Pulse(usize, usize, f64, f64, f64),
+    SetBoundary(usize),
+    SetSource(usize),
+}
+
+impl TfOp {
+    fn toks(self) -> Vec<Tok> {
+        match self {
+            Self::Step(v) => vec![i(1), f(v)],
+            Self::Pulse(k, s0, dt, t0, tau) => vec![i(2), u(k), u(s0), f(dt), f(t0), f(tau)],
+            Self::SetBoundary(b) => vec![i(3), u(b)],
+            Self::SetSource(c) => vec![i(4), u(c)],
+        }
+    }
+}
+
+/// A TF/SF source's state tokens (module comment).
+fn tf_state(src: &TfsfSource) -> Vec<Tok> {
+    let d = format!("{src:?}");
+    let n = src.inc_e.len();
+    assert_eq!(src.inc_h.len(), n, "inc_e and inc_h have nx values");
+    let mut out = vec![
+        u(n),
+        u(src.boundary_x),
+        u(src.source_cell),
+        f(src.incident_e()),
+        f(src.incident_h()),
+        f(dbg_f64(&d, "e_coeff_1d")),
+        f(dbg_f64(&d, "h_coeff_1d")),
+        f(dbg_f64(&d, "abc_coeff")),
+        i(digest(&src.inc_e)),
+        i(digest(&src.inc_h)),
+    ];
+    let probes = [0, 1, n / 2, n - 2, n - 1];
+    for p in probes {
+        out.push(f(src.inc_e[p]));
+    }
+    for p in probes {
+        out.push(f(src.inc_h[p]));
+    }
+    out
+}
+
+/// A TF/SF script: the constructor (`try_new` when checked, else `new`), then operations.
+struct TfScript {
+    src: Result<TfsfSource, Vec<Tok>>,
+    ins: Vec<Tok>,
+}
+
+impl TfScript {
+    fn new(checked: bool, nx: usize, bx: usize, dx: f64, dt: f64) -> Self {
+        let src = if checked {
+            TfsfSource::try_new(nx, bx, dx, dt).map_err(|e| vec![err(&e), s(e.to_string())])
+        } else {
+            Ok(TfsfSource::new(nx, bx, dx, dt))
+        };
+        Self { src, ins: vec![u(nx), u(bx), f(dx), f(dt)] }
+    }
+
+    fn apply(&mut self, op: TfOp) {
+        self.ins.extend(op.toks());
+        let src = self.src.as_mut().expect("operations only on a source that was made");
+        match op {
+            TfOp::Step(v) => src.step(v),
+            TfOp::Pulse(k, s0, dt, t0, tau) => {
+                for j in 0..k {
+                    src.step(gaussian_pulse((s0 + j) as f64 * dt, t0, tau));
+                }
+            }
+            TfOp::SetBoundary(b) => src.boundary_x = b,
+            TfOp::SetSource(c) => src.source_cell = c,
+        }
+    }
+
+    fn outs(&self) -> Vec<Tok> {
+        match &self.src {
+            Err(e) => e.clone(),
+            Ok(src) => tf_state(src),
+        }
+    }
+}
+
+impl Rows {
+    fn tf(&mut self, func: &str, sc: &TfScript) {
+        self.emit_toks(func, Class::T, &sc.ins, &sc.outs());
+    }
+
+    /// A Gaussian-driven TF/SF scenario (try_new): a frame after each of `frames` steps, the drive's time s·dt.
+    fn tf_frames(&mut self, func: &str, g: (usize, usize, f64, f64), setup: &[TfOp], drive: (f64, f64),
+                 frames: &[usize]) {
+        let (nx, bx, dx, dt) = g;
+        let mut sc = TfScript::new(true, nx, bx, dx, dt);
+        for &op in setup {
+            sc.apply(op);
+        }
+        let mut at = 0;
+        for &fr in frames {
+            sc.apply(TfOp::Pulse(fr - at, at, dt, drive.0, drive.1));
+            at = fr;
+            self.tf(func, &sc);
+        }
+    }
+
+    /// A pulse row: `fdtd::<name>` of the inputs, class C (exp and sin).
+    fn pulse(&mut self, name: &str, ins: &[f64]) {
+        let v = match (name, ins) {
+            ("gaussian_pulse", &[t, t0, tau]) => gaussian_pulse(t, t0, tau),
+            ("ricker_wavelet", &[t, t0, tau]) => ricker_wavelet(t, t0, tau),
+            ("differentiated_gaussian", &[t, t0, tau]) => differentiated_gaussian(t, t0, tau),
+            ("modulated_gaussian_pulse", &[t, t0, tau, fr]) => modulated_gaussian_pulse(t, t0, tau, fr),
+            _ => panic!("no pulse {name} of {} inputs", ins.len()),
+        };
+        let toks: Vec<Tok> = ins.iter().map(|&x| f(x)).collect();
+        self.emit_toks(&format!("fdtd::{name}"), Class::C, &toks, &[f(v)]);
+    }
+}
+
+const PULSES: [&str; 3] = ["gaussian_pulse", "ricker_wavelet", "differentiated_gaussian"];
+
+fn emit_1b_pulses(r: &mut Rows) {
+    let sp = specials();
+    let fr0 = 1e9;
+    // Every special for t, t0 and τ; the modulated pulse at 1 GHz, then every special frequency on a typical pulse.
+    for &t in &sp {
+        for &t0 in &sp {
+            for &tau in &sp {
+                for name in PULSES {
+                    r.pulse(name, &[t, t0, tau]);
+                }
+                r.pulse("modulated_gaussian_pulse", &[t, t0, tau, fr0]);
+            }
+        }
+    }
+    for &fr in &sp {
+        for (t, t0, tau) in [(1.5e-9, 1e-9, 1e-10), (1e-9, 1e-9, 1e-10), (0.0, 3e-9, 5e-10)] {
+            if fr != fr0 {
+                r.pulse("modulated_gaussian_pulse", &[t, t0, tau, fr]);
+            }
+        }
+    }
+    // The Rust tests' points.
+    let (t0, tau) = (1e-9, 1e-10);
+    let mut pts = vec![(t0 - 0.5e-10, t0, tau), (t0 + 0.5e-10, t0, tau), (t0 + 5.0 * tau, t0, tau), (0.0, 0.0, 1e-20)];
+    for k in -40..=40 {
+        pts.push((2e-9 + f64::from(k) * 0.1 * tau, 2e-9, tau));
+    }
+    pts.push((t0 - tau / 2f64.sqrt(), t0, tau));
+    pts.push((t0 + tau / 2f64.sqrt(), t0, tau));
+    pts.push((t0 + tau * 1.5f64.sqrt(), t0, tau));
+    for (t, t0, tau) in pts {
+        for name in PULSES {
+            r.pulse(name, &[t, t0, tau]);
+        }
+        r.pulse("modulated_gaussian_pulse", &[t, t0, tau, 1e9]);
+    }
+    // Seeded typical pulses: τ from 1 fs to 1 µs, t₀ a few τ, t within ±8τ of it; carriers to 1 THz.
+    let mut rng = Rng::new(0x0b1b_5ace);
+    for _ in 0..2000 {
+        let tau = rng.log_uniform(-15.0, -6.0);
+        let t0 = tau * rng.uniform(0.0, 8.0);
+        let t = t0 + tau * rng.uniform(-8.0, 8.0);
+        for name in PULSES {
+            r.pulse(name, &[t, t0, tau]);
+        }
+        r.pulse("modulated_gaussian_pulse", &[t, t0, tau, rng.log_uniform(6.0, 12.0)]);
+    }
+    // Seeded wide values, and the edges: (t − t₀)/τ past DBL_MAX or under 2^-1022, u² past either end, exp's
+    // underflow near u² = 745.
+    for _ in 0..1000 {
+        let t = rng.signed_log_uniform(-300.0, 300.0);
+        let t0 = rng.signed_log_uniform(-300.0, 300.0);
+        let tau = rng.signed_log_uniform(-300.0, 300.0);
+        for name in PULSES {
+            r.pulse(name, &[t, t0, tau]);
+        }
+        r.pulse("modulated_gaussian_pulse", &[t, t0, tau, rng.signed_log_uniform(-300.0, 300.0)]);
+    }
+    let edges = [
+        (1e300, -1e300, 1e-10),
+        (1e308, 0.0, 0.5),
+        (f64::MAX, -f64::MAX, f64::MAX),
+        (1e-300, 0.0, 1e300),
+        (f64::MIN_POSITIVE * 3.0, 0.0, 1.0),
+        (1e-160, 0.0, 1.0),
+        (1e160, 0.0, 1.0),
+        (1e155, 0.0, 1e-1),
+        (27.29, 0.0, 1.0),
+        (27.3, 0.0, 1.0),
+        (38.6, 0.0, 1.0),
+        (1.0, 0.5, f64::from_bits(1)),
+        (5e-324, -5e-324, 5e-324),
+    ];
+    for (t, t0, tau) in edges {
+        for name in PULSES {
+            r.pulse(name, &[t, t0, tau]);
+        }
+        r.pulse("modulated_gaussian_pulse", &[t, t0, tau, 1e9]);
+        r.pulse("modulated_gaussian_pulse", &[t, t0, tau, 1e300]);
+    }
+}
+
+fn emit_1b(r: &mut Rows) {
+    emit_1b_pulses(r);
+
+    // Fdtd1d driven by a Gaussian pulse (opcode 6): the Rust tests' Mur absorption in vacuum and ε_r = 4, a pulse
+    // in vacuum at the frames, and special widths and delays.
+    let st = "Fdtd1d::step_once";
+    for eps in [1.0_f64, 4.0] {
+        let dt = Fdtd1d::new(600, 1e-4).expect("a grid").dt;
+        let (tau, t0) = (40.0 * dt, 240.0 * dt);
+        let travel = (300.0 / (0.5 / eps.sqrt())) as usize;
+        let mut sc = Script::new(600, 1e-4);
+        sc.apply(Op::Eps(0, 600, eps));
+        let mut at = 0;
+        for fr in [1, 10, 100, 480] {
+            sc.apply(Op::Pulse(fr - at, 300, t0, tau));
+            at = fr;
+            r.emit(st, &sc);
+        }
+        for fr in [481, 480 + travel / 2, 480 + travel, 480 + travel + travel / 3] {
+            sc.apply(Op::Step(fr - at));
+            at = fr;
+            r.emit(st, &sc);
+        }
+    }
+    let dt = Fdtd1d::new(200, 1e-3).expect("a grid").dt;
+    r.frames(st, 200, 1e-3, &[], &FRAMES, |k| Op::Pulse(k, 100, 40.0 * dt, 10.0 * dt));
+    for (t0, tau) in [(0.0, 0.0), (0.0, f64::NAN), (f64::NAN, dt), (f64::INFINITY, dt), (0.0, 1e-300), (0.0, 1e300)] {
+        r.frames(st, 20, 1e-3, &[], &[1, 2, 10], |k| Op::Pulse(k, 10, t0, tau));
+    }
+
+    // TF/SF: try_new and new over every kind of argument: nx below and at 3, boundary_x at and past its range's ends,
+    // the specials for dx and dt, and dt straddling the 1D Courant limit dx·(1 + 10⁻¹²)/c ulp by ulp.
+    let c = bijli::field::SPEED_OF_LIGHT;
+    let dx = 1e-4;
+    let half = dx / (2.0 * c);
+    let lim = dx * (1.0 + 1e-12) / c;
+    let mut dts = specials();
+    dts.extend([half, dx / c, 1e-13, 1e-11, 1.01 * dx / c]);
+    for k in -3_i64..=3 {
+        let bits = lim.to_bits().wrapping_add_signed(k);
+        dts.push(f64::from_bits(bits));
+    }
+    let mut cases: Vec<(usize, usize, f64, f64)> = Vec::new();
+    for nx in [0_usize, 1, 2, 3, 4, 10, 100] {
+        for bx in [0_usize, 1, 2, 5, 50, 99, 100, 101, 500, usize::MAX] {
+            cases.push((nx, bx, dx, half));
+        }
+    }
+    for &dxx in &specials() {
+        cases.push((100, 50, dxx, half));
+        cases.push((100, 50, dxx, 1e-13));
+        cases.push((100, 50, dxx, f64::NAN));
+    }
+    for &dtt in &dts {
+        cases.push((100, 50, dx, dtt));
+    }
+    cases.extend([
+        (0, 0, 1e-4, 1e-13),
+        (1, 0, 1e-4, 1e-13),
+        (100, 500, 1e-4, 1e-13),
+        (100, 50, f64::NAN, 1e-13),
+        (100, 50, 1e-4, f64::NAN),
+        (100, 50, 1e-4, 1e-11),
+        (100, 50, -1.0, -1.0),
+        (100, 0, 1e-4, 1e-13),
+        (100, 50, 1e-4, 1e-13),
+        (200, 100, 1e-4, 1e-13),
+        (50, 20, 1e-4, 1e-13),
+        (3, 1, 1e-300, 1e-310),
+        (3, 2, 1e300, 1e290),
+        (4, 3, f64::MAX, 1e290),
+    ]);
+    let mut seen = BTreeSet::new();
+    cases.retain(|&(nx, bx, dxx, dtt)| seen.insert((nx, bx, dxx.to_bits(), dtt.to_bits())));
+    for &(nx, bx, dxx, dtt) in &cases {
+        r.tf("TfsfSource::try_new", &TfScript::new(true, nx, bx, dxx, dtt));
+        r.tf("TfsfSource::new", &TfScript::new(false, nx, bx, dxx, dtt));
+    }
+    // try_new refuses a huge nx's other arguments before allocating (Rust would abort on the allocation).
+    for (bx, dxx, dtt) in [(0, 1e-4, 1e-13), (usize::MAX, 1e-4, 1e-13), (5, f64::NAN, 1e-13), (5, 1e-4, 1.0)] {
+        r.tf("TfsfSource::try_new", &TfScript::new(true, usize::MAX, bx, dxx, dtt));
+    }
+    // The Rust test that stepped each clamped grid 2,000 times with gaussian_pulse(step, 30, 10).
+    for (nx, bx, dxx, dtt) in [(0, 0, 1e-4, 1e-13), (100, 500, 1e-4, 1e-13), (100, 50, -1.0, -1.0)] {
+        let mut sc = TfScript::new(false, nx, bx, dxx, dtt);
+        sc.apply(TfOp::Pulse(2000, 0, 1.0, 30.0, 10.0));
+        r.tf("TfsfSource::new", &sc);
+    }
+
+    // TF/SF steps: the Rust tests' drives at their frames, a unit impulse, every boundary from 1 to 3, the magic time
+    // step (S = 1, the Mur coefficient 0), the smallest grids, non-finite and huge sources.
+    let ts = "TfsfSource::step";
+    let dt13 = 1e-13;
+    r.tf_frames(ts, (200, 100, 1e-4, dt13), &[], (20.0 * dt13, 5.0 * dt13), &[1, 2, 10, 50, 100]);
+    for bx in 1..4 {
+        r.tf_frames(ts, (50, bx, dx, half), &[], (20.0 * half, 6.0 * half), &[1, 10, 60]);
+    }
+    r.tf_frames(ts, (200, 100, dx, half), &[], (120.0 * half, 20.0 * half), &[1, 10, 100, 1000, 2000]);
+    r.tf_frames(ts, (300, 120, dx, half), &[], (90.0 * half, 15.0 * half), &[1, 100, 900]);
+    r.tf_frames(ts, (100, 50, dx, dx / c), &[], (30.0 * dx / c, 8.0 * dx / c), &[1, 10, 100, 300]);
+    r.tf_frames(ts, (3, 1, dx, half), &[], (2.0 * half, half), &[1, 2, 10]);
+    r.tf_frames(ts, (3, 2, dx, half), &[], (2.0 * half, half), &[1, 2, 10]);
+    r.tf_frames(ts, (4, 3, dx, half), &[], (2.0 * half, half), &[1, 2, 10]);
+    for v in [1.0, -0.0, f64::NAN, f64::INFINITY, f64::NEG_INFINITY, f64::MAX, 1e300, 1e-300, f64::from_bits(1)] {
+        let mut sc = TfScript::new(true, 100, 50, dx, dt13);
+        for k in [1, 1, 8, 90] {
+            for _ in 0..k {
+                sc.apply(TfOp::Step(if k == 1 { v } else { 0.0 }));
+            }
+            r.tf(ts, &sc);
+        }
+    }
+
+    // The public fields written: the boundary and the source cell inside, at the edges, outside and at usize::MAX
+    // (Rust's test of mutated fields among them).
+    let ti = "TfsfSource::incident_h";
+    for b in [0_usize, 1, 2, 48, 49, 50, 51, 1000, usize::MAX] {
+        let mut sc = TfScript::new(true, 50, 20, 1e-4, dt13);
+        sc.apply(TfOp::SetBoundary(b));
+        sc.apply(TfOp::Step(1.0));
+        r.tf(ti, &sc);
+        sc.apply(TfOp::Pulse(20, 1, dt13, 10.0 * dt13, 3.0 * dt13));
+        r.tf(ti, &sc);
+    }
+    for c in [0_usize, 1, 2, 47, 48, 49, 1000, usize::MAX] {
+        let mut sc = TfScript::new(true, 50, 20, 1e-4, dt13);
+        sc.apply(TfOp::SetSource(c));
+        sc.apply(TfOp::Step(1.0));
+        r.tf(ti, &sc);
+    }
+    let mut sc = TfScript::new(true, 50, 20, 1e-4, dt13);
+    sc.apply(TfOp::SetBoundary(1000));
+    sc.apply(TfOp::SetSource(1000));
+    sc.apply(TfOp::Step(1.0));
+    sc.apply(TfOp::SetBoundary(0));
+    r.tf(ti, &sc);
+
+    // Seeded sources: random sizes, boundaries, Courant numbers and drives.
+    let mut rng = Rng::new(0x7f5f_0b1b);
+    for _ in 0..12 {
+        let nx = usize::try_from(rng.int(3, 400)).unwrap_or(3);
+        let bx = usize::try_from(rng.int(1, i64::try_from(nx).unwrap_or(3) - 1)).unwrap_or(1);
+        let dxx = rng.log_uniform(-6.0, 0.0);
+        let dtt = dxx / c * rng.uniform(0.05, 1.0);
+        let tau = dtt * rng.uniform(2.0, 30.0);
+        r.tf_frames(ts, (nx, bx, dxx, dtt), &[], (tau * rng.uniform(3.0, 8.0), tau), &[1, 10, 100, 1000]);
+    }
+}
+
 pub fn emit() -> Module {
     let mut r = Rows { m: Module::new("fdtd"), keys: BTreeSet::new() };
     emit_1a(&mut r);
+    emit_1b(&mut r);
     r.m
 }
