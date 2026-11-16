@@ -9086,6 +9086,10 @@ def fu_fourth(field, dx, C1, C2):
     return d
 
 
+MU0_NF = 1.25663706212e-06
+EPS0_NF = 8.8541878128e-12
+
+
 class Cw:
     """fdtd.rs's `CwAccumulator`, transcribed on the primitives P."""
 
@@ -9264,10 +9268,125 @@ def fu_eval(fn, ins_raw, P, K, C12):
         return fu_cw(fn, toks, P)
     if fn == "fdtd::find_eigenmodes":
         return fu_eigen(toks, P)
+    if fn == "fdtd::nf2ff_2d_phasor":
+        return nf_eval(toks, P, K)
     return None
 
 
-PART_1D = ("NonUniformGrid::", "CwAccumulator::", "fdtd::fourth_order_derivative", "fdtd::find_eigenmodes")
+def nf_acc(toks, k):
+    """An NF2FF row's accumulator at toks[k]: n, the frequency, dt, the exact generator and the overrides."""
+    n, freq, dt = toks[k][1] & FD_U64, toks[k + 1][1], toks[k + 2][1]
+    p, q, m = toks[k + 3][1] & FD_U64, toks[k + 4][1] & FD_U64, toks[k + 5][1] & FD_U64
+    a, b, c, d = toks[k + 6][1], toks[k + 7][1], toks[k + 8][1], toks[k + 9][1]
+    re = [a * float((i * p + q) % m) - b for i in range(n)]
+    im = [c * float((i * p + q + 7) % m) - d for i in range(n)]
+    cnt = int(toks[k + 10][1])
+    for j in range(cnt):
+        at = k + 11 + 3 * j
+        idx = toks[at][1] & FD_U64
+        re[idx], im[idx] = toks[at + 1][1], toks[at + 2][1]
+    return {"n": n, "omega": 2.0 * math.pi * freq, "dt": dt, "re": re, "im": im}, k + 11 + 3 * cnt
+
+
+def nf_core(ez, hx, hy, rot, nx, ny, dx, k, margin, n_angles, P):
+    """fdtd.rs's `nf2ff_tm_core`, transcribed: (pattern, angles)."""
+    x0, x1, y0, y1 = margin, nx - 1 - margin, margin, ny - 1 - margin
+    xc, yc = 0.5 * float(x0 + x1), 0.5 * float(y0 + y1)
+
+    def cmul(a, b):
+        return (a[0] * b[0] - a[1] * b[1], a[0] * b[1] + a[1] * b[0])
+
+    def at(f, i):
+        return (f["re"][i], f["im"][i])
+
+    sides = []
+    for y, sign in ((y0, 1.0), (y1, -1.0)):
+        last, smp = x1 - x0, []
+        for i, x in enumerate(range(x0, x1 + 1)):
+            w = 0.5 * dx if i in (0, last) else dx
+            ha, hb = at(hx, (y - 1) * nx + x), at(hx, y * nx + x)
+            ht = ((ha[0] + hb[0]) * 0.5, (ha[1] + hb[1]) * 0.5)
+            e = at(ez, y * nx + x)
+            j = cmul(ht, rot)
+            sw = sign * w
+            smp.append(((j[0] * sw, j[1] * sw), (e[0] * sw, e[1] * sw), (0.0, 0.0)))
+        sides.append(((float(x0) - xc) * dx, (float(y) - yc) * dx, 1.0, 0.0, smp))
+    for x, sign in ((x0, -1.0), (x1, 1.0)):
+        last, smp = y1 - y0, []
+        for i, y in enumerate(range(y0, y1 + 1)):
+            w = 0.5 * dx if i in (0, last) else dx
+            ha, hb = at(hy, y * nx + x - 1), at(hy, y * nx + x)
+            ht = ((ha[0] + hb[0]) * 0.5, (ha[1] + hb[1]) * 0.5)
+            e = at(ez, y * nx + x)
+            j = cmul(ht, rot)
+            sw = sign * w
+            smp.append(((j[0] * sw, j[1] * sw), (0.0, 0.0), (e[0] * sw, e[1] * sw)))
+        sides.append(((float(x) - xc) * dx, (float(y0) - yc) * dx, 0.0, 1.0, smp))
+    eta0 = math.sqrt(fdiv(MU0_NF, EPS0_NF))
+    norm = fsqrt(fdiv(k, 8.0 * math.pi))
+    angles = [2.0 * math.pi * float(i) / float(n_angles) for i in range(n_angles)]
+    pattern = []
+    for phi in angles:
+        sp, cp = P["sin"](phi), P["cos"](phi)
+        nz, lx, ly = (0.0, 0.0), (0.0, 0.0), (0.0, 0.0)
+        for sx, sy, dxd, dyd, smp in sides:
+            arg = k * (sx * cp + sy * sp)
+            rot2 = (P["cos"](arg), P["sin"](arg))
+            sarg = k * dx * (dxd * cp + dyd * sp)
+            step = (P["cos"](sarg), P["sin"](sarg))
+            for jz, mx, my in smp:
+                a = cmul(jz, rot2)
+                nz = (nz[0] + a[0], nz[1] + a[1])
+                a = cmul(mx, rot2)
+                lx = (lx[0] + a[0], lx[1] + a[1])
+                a = cmul(my, rot2)
+                ly = (ly[0] + a[0], ly[1] + a[1])
+                rot2 = cmul(rot2, step)
+        nsp = -sp
+        lp = (ly[0] * cp + lx[0] * nsp, ly[1] * cp + lx[1] * nsp)
+        tot = (nz[0] * eta0 + lp[0] * -1.0, nz[1] * eta0 + lp[1] * -1.0)
+        pattern.append(norm * P["hypot"](tot[0], tot[1]))
+    return pattern, angles
+
+
+def nf_eval(toks, P, K):
+    """`nf2ff_2d_phasor` transcribed on the primitives P: the row's outputs."""
+    if "hypot" not in P:
+        P = dict(P, hypot=LIBM.hypot if P is GLIBC_P else (lambda x, y: mpfr_ref.cr2("hypot", x, y)))
+    ez, k = nf_acc(toks, 0)
+    hx, k = nf_acc(toks, k)
+    hy, k = nf_acc(toks, k)
+    nx, ny, dx = toks[k][1] & FD_U64, toks[k + 1][1] & FD_U64, toks[k + 2][1]
+    margin, na = toks[k + 3][1] & FD_U64, toks[k + 4][1] & FD_U64
+
+    def same(a, b):
+        return abs(a - b) <= 1e-12 * rust_max(abs(a), abs(b))
+
+    if not (same(ez["omega"], hx["omega"]) and same(ez["omega"], hy["omega"]) and same(ez["dt"], hx["dt"])
+            and same(ez["dt"], hy["dt"])):
+        return ip_err("NF2FF phasor accumulators must share frequency and dt")
+    freq = ez["omega"] / (2.0 * math.pi)
+    if na == 0:
+        return ip_err("need at least one observation angle")
+    if margin == 0 or margin >= nx // 2 or margin >= ny // 2:
+        return ip_err(f"NF2FF box margin must be in 1..min(nx, ny)/2 for a {nx}x{ny} grid, got {margin}")
+    if not fd_pos(dx):
+        return ip_err(f"dx must be finite and positive, got {rust_display(dx)}")
+    if not fd_pos(freq):
+        return ip_err(f"NF2FF frequency must be finite and positive, got {rust_display(freq)}")
+    kk = 2.0 * math.pi * freq / K[0]
+    for name, acc in (("ez", ez), ("hx", hx), ("hy", hy)):
+        if nx * ny >= 1 << 64 or acc["n"] < nx * ny:
+            return ip_err(f"NF2FF field `{name}` has {acc['n']} samples, need {nx}x{ny}")
+    if not math.isfinite(ez["dt"]):
+        return ip_err(f"accumulator dt must be finite, got {rust_display(ez['dt'])}")
+    harg = 0.5 * ez["omega"] * ez["dt"]
+    pattern, angles = nf_core(ez, hx, hy, (P["cos"](harg), P["sin"](harg)), nx, ny, dx, kk, margin, na, P)
+    return fu_seq_toks(pattern) + fu_seq_toks(angles)
+
+
+PART_1D = ("NonUniformGrid::", "CwAccumulator::", "fdtd::fourth_order_derivative", "fdtd::find_eigenmodes",
+           "fdtd::nf2ff_2d_phasor")
 
 
 def fd_injects(fn, ins_raw) -> bool:
@@ -9437,7 +9556,8 @@ def fdtd_corrections(root: Path, path: Path):
         out = []
         fs = FdScripts(root, MPFR_P)
         for fn, _cls, ins, outs, _v in sc_lines(path):
-            if fn.startswith(("NonUniformGrid::graded", "CwAccumulator::", "fdtd::find_eigenmodes")):
+            if fn.startswith(("NonUniformGrid::graded", "CwAccumulator::", "fdtd::find_eigenmodes",
+                              "fdtd::nf2ff_2d_phasor")):
                 want = fu_eval(fn, ins, MPFR_P, fs.K, fs.c12)
                 old = wave_toks([parse_tok(x) for x in outs.split(" ")])
                 if not toks_same(want, old):

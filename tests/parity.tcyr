@@ -3803,7 +3803,67 @@ fn _par_fu_eigen(): i64 {
     return 1;
 }
 
+# An NF2FF row's accumulator at token k into *acc (BjCwAccumulator_new, its parts generated, then the overrides):
+# the index after it, or -1 when it can't be made.
+fn _par_nf_acc(k, acc: *BjCwAccumulator): i64 {
+    var n = _par_in(k);
+    var fr: f64 = _par_in(k + 1);
+    var dt: f64 = _par_in(k + 2);
+    var t, v = BjCwAccumulator_new(n, fr, dt, acc);
+    if (is_err_result(t) == 1) { return 0 - 1; }
+    var p = _par_in(k + 3);
+    var q = _par_in(k + 4);
+    var m = _par_in(k + 5);
+    var a: f64 = _par_in(k + 6);
+    var b: f64 = _par_in(k + 7);
+    var c: f64 = _par_in(k + 8);
+    var d: f64 = _par_in(k + 9);
+    var re: *f64 = _par_fd_f64p(acc.real);
+    var im: *f64 = _par_fd_f64p(acc.imag);
+    for (var i = 0; i < n; i = i + 1) {
+        var x: f64 = f64_from((i * p + q) % m);
+        re[i] = a * x - b;
+        var y: f64 = f64_from((i * p + q + 7) % m);
+        im[i] = c * y - d;
+    }
+    var cnt = _par_in(k + 10);
+    for (var j = 0; j < cnt; j = j + 1) {
+        var at = k + 11 + 3 * j;
+        var idx = _par_in(at);
+        var r: f64 = _par_in(at + 1);
+        var s: f64 = _par_in(at + 2);
+        re[idx] = r;
+        im[idx] = s;
+    }
+    return k + 11 + 3 * cnt;
+}
+
+# nf2ff_2d_phasor (M5 part 1e): the three accumulators, then nx, ny, dx, the margin and the angle count.
+fn _par_nf2ff(): i64 {
+    var ez: BjCwAccumulator;
+    var hx: BjCwAccumulator;
+    var hy: BjCwAccumulator;
+    var k1 = _par_nf_acc(0, &ez);
+    var k2 = _par_nf_acc(k1, &hx);
+    var k = _par_nf_acc(k2, &hy);
+    if (k1 < 0 || k2 < 0 || k < 0) { return 0 - 1; }
+    var dx: f64 = _par_in(k + 2);
+    var r: BjNf2ffResult;
+    var t, v = bj_nf2ff_2d_phasor(&ez, &hx, &hy, _par_in(k), _par_in(k + 1), dx, _par_in(k + 3), _par_in(k + 4), &r);
+    if (is_err_result(t) == 1) { _par_got_error(v); }
+    else {
+        _par_fu_got_seq(r.pattern, r.count);
+        _par_fu_got_seq(r.angles, r.count);
+        BjNf2ffResult_free(&r);
+    }
+    BjCwAccumulator_free(&ez);
+    BjCwAccumulator_free(&hx);
+    BjCwAccumulator_free(&hy);
+    return 1;
+}
+
 fn _par_fdtd(fp, fl): i64 {
+    if (_par_eq(fp, fl, "fdtd::nf2ff_2d_phasor") == 1) { return _par_nf2ff(); }
     if (memeq(fp, "NonUniformGrid::", 16) == 1) { return _par_fu_grid(fp, fl); }
     if (memeq(fp, "CwAccumulator::", 15) == 1) { return _par_fu_cw(fp, fl); }
     if (_par_eq(fp, fl, "fdtd::find_eigenmodes") == 1) { return _par_fu_eigen(); }

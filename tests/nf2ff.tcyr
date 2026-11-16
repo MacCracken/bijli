@@ -1,0 +1,374 @@
+# nf2ff.tcyr — src/nf2ff.cyr (M5 part 1e): the phasor NF2FF transform.
+#
+# Every group named test_* is rust-old/src/fdtd.rs's test of that name, ported assertion for assertion (the ledger
+# matches them by name): the four on the phasor transform and its references (the Bessel helpers, the line source,
+# the plane wave's extinction, the validation). The six that drive an `Fdtd2d` through `nf2ff_2d` follow with the 2D
+# grid in M6. Rust's test helpers are ported as written: Bessel J_n by the trapezoid rule over 512 points, Y_n by
+# Simpson's rule (DLMF §10.9), and `nf2ff_fill`, which writes exact phasors into the accumulators near the contour. The
+# cyrius_* groups pin the error records' text, the angles, a zero field's zero pattern, and BjNf2ffResult_free.
+
+include "tests/lib.cyr"
+
+var PI: f64 = 3.141592653589793;
+
+# |a − b| < tol.
+fn near(a: f64, b: f64, tol: f64): i64 {
+    var d: f64 = a - b;
+    var ad: f64 = f64_abs(d);
+    if (ad < tol) { return 1; }
+    return 0;
+}
+
+# 1 when the C strings a and b are equal.
+fn text_is(a, b): i64 {
+    var n = strlen(a);
+    if (n != strlen(b)) { return 0; }
+    return memeq(a, b, n);
+}
+
+# A word as a *f64.
+fn f64p(a): *f64 {
+    return a;
+}
+
+# Element i of the f64 array at address a.
+fn at(a, i): f64 {
+    var p: *f64 = f64p(a);
+    var x: f64 = p[i];
+    return x;
+}
+
+# asinh y = ln(y + √(y² + 1)), y > 0.
+fn asinh(y: f64): f64 {
+    var s: f64 = f64_sqrt(y * y + 1.0);
+    var r: f64 = _bj_ln(y + s);
+    return r;
+}
+
+# Bessel J_n(x) from Bessel's integral (1/2π)∫₀^{2π} cos(nτ − x sin τ) dτ, the periodic trapezoid rule over 512 points
+# (summed from −0.0, Rust's `Sum`). Rust's test helper `bessel_j`.
+fn bessel_j(n, x: f64): f64 {
+    var m = 512;
+    var mf: f64 = f64_from(m);
+    var h: f64 = 2.0 * PI / mf;
+    var nf: f64 = f64_from(n);
+    var s: f64 = -0.0;
+    for (var i = 0; i < m; i = i + 1) {
+        var fi: f64 = f64_from(i);
+        var t: f64 = fi * h;
+        var st: f64 = _bj_sin(t);
+        var c: f64 = _bj_cos(nf * t - x * st);
+        s = s + c;
+    }
+    var r: f64 = s / mf;
+    return r;
+}
+
+# ∫₀^π sin(x sin τ − nτ) dτ by composite Simpson over 2000 intervals.
+fn simpson_a(x: f64, nf: f64): f64 {
+    var m = 2000;
+    var h: f64 = PI / 2000.0;
+    var f0: f64 = _bj_sin(x * _bj_sin(0.0) - nf * 0.0);
+    var f1: f64 = _bj_sin(x * _bj_sin(PI) - nf * PI);
+    var acc: f64 = f0 + f1;
+    for (var i = 1; i < m; i = i + 1) {
+        var fi: f64 = f64_from(i);
+        var t: f64 = 0.0 + fi * h;
+        var st: f64 = _bj_sin(t);
+        var v: f64 = _bj_sin(x * st - nf * t);
+        var wgt: f64 = 2.0;
+        if (i % 2 == 1) { wgt = 4.0; }
+        acc = acc + v * wgt;
+    }
+    var r: f64 = acc * h / 3.0;
+    return r;
+}
+
+# The integrand (e^{nt} + sign·e^{−nt})·e^{−x sinh t}.
+fn y_tail(t: f64, x: f64, nf: f64, sign: f64): f64 {
+    var a: f64 = _bj_exp(nf * t);
+    var b: f64 = _bj_exp(-nf * t);
+    var sh: f64 = _bj_sinh(t);
+    var c: f64 = _bj_exp(-x * sh);
+    var r: f64 = (a + sign * b) * c;
+    return r;
+}
+
+# ∫₀^upper of y_tail by composite Simpson over 2000 intervals.
+fn simpson_b(x: f64, nf: f64, sign: f64, upper: f64): f64 {
+    var m = 2000;
+    var h: f64 = upper / 2000.0;
+    var acc: f64 = y_tail(0.0, x, nf, sign) + y_tail(upper, x, nf, sign);
+    for (var i = 1; i < m; i = i + 1) {
+        var fi: f64 = f64_from(i);
+        var t: f64 = 0.0 + fi * h;
+        var v: f64 = y_tail(t, x, nf, sign);
+        var wgt: f64 = 2.0;
+        if (i % 2 == 1) { wgt = 4.0; }
+        acc = acc + v * wgt;
+    }
+    var r: f64 = acc * h / 3.0;
+    return r;
+}
+
+# Bessel Y_n(x), x > 0: (1/π)∫₀^π sin(x sin τ − nτ)dτ − (1/π)∫₀^∞ (e^{nt} + (−1)ⁿe^{−nt})·e^{−x sinh t} dt (DLMF
+# §10.9), the second integral cut where e^{−x sinh t} < e^{−60}. Rust's test helper `bessel_y`.
+fn bessel_y(n, x: f64): f64 {
+    var nf: f64 = f64_from(n);
+    var a: f64 = simpson_a(x, nf);
+    var sign: f64 = 1.0;
+    if (n % 2 != 0) { sign = -1.0; }
+    var upper: f64 = asinh(60.0 / x) + 1.0;
+    var b: f64 = simpson_b(x, nf, sign, upper);
+    var r: f64 = (a - b) / PI;
+    return r;
+}
+
+# The field's parameters: its kind, k, η and the line source's position.
+var g_kind = 0;
+var g_k: f64 = 0.0;
+var g_eta: f64 = 0.0;
+var g_sx: f64 = 0.0;
+var g_sy: f64 = 0.0;
+
+# The field the fill writes: kind 0 an off-centre line current E_z = H₀⁽²⁾(kρ), H_x = −(j/η)H₁⁽²⁾ sin φ,
+# H_y = (j/η)H₁⁽²⁾ cos φ; kind 1 a plane wave at α = 0.3 (E_z = e^{−jk(x cos α + y sin α)}). Its phasor of component c
+# (0 E_z, 1 H_x, 2 H_y) at (x, y) into out[0], out[1].
+fn field(x: f64, y: f64, c, out: *f64) {
+    var k: f64 = g_k;
+    var eta: f64 = g_eta;
+    if (g_kind == 1) {
+        var sa, ca = _bj_sin_cos(0.3);
+        var s, co = _bj_sin_cos(-k * (x * ca + y * sa));
+        if (c == 0) {
+            out[0] = co;
+            out[1] = s;
+        } elif (c == 1) {
+            out[0] = sa * co / eta;
+            out[1] = sa * s / eta;
+        } else {
+            out[0] = -ca * co / eta;
+            out[1] = -ca * s / eta;
+        }
+        return 0;
+    }
+    var sx: f64 = g_sx;
+    var sy: f64 = g_sy;
+    var px: f64 = x - sx;
+    var py: f64 = y - sy;
+    var r: f64 = _bj_hypot(px, py);
+    var kr: f64 = k * r;
+    if (c == 0) {
+        out[0] = bessel_j(0, kr);
+        out[1] = -bessel_y(0, kr);
+        return 0;
+    }
+    var h1r: f64 = bessel_j(1, kr);
+    var h1i: f64 = -bessel_y(1, kr);
+    if (c == 1) {
+        var s1: f64 = py / r;
+        out[0] = h1i * s1 / eta;
+        out[1] = -h1r * s1 / eta;
+    } else {
+        var c1: f64 = px / r;
+        out[0] = -h1i * c1 / eta;
+        out[1] = h1r * c1 / eta;
+    }
+    return 0;
+}
+
+# Rust's test helper `nf2ff_fill`: exact phasors near the contour of an nx × ny grid into the three accumulators (made
+# here, size nx·ny), H delayed by dt/2 like FDTD-accumulated H.
+fn nf2ff_fill(nx, ny, dx: f64, margin, freq: f64, dt: f64, ez: *BjCwAccumulator, hx: *BjCwAccumulator,
+  hy: *BjCwAccumulator) {
+    var n = nx * ny;
+    var t1, v1 = BjCwAccumulator_new(n, freq, dt, ez);
+    var t2, v2 = BjCwAccumulator_new(n, freq, dt, hx);
+    var t3, v3 = BjCwAccumulator_new(n, freq, dt, hy);
+    var x0 = margin;
+    var x1 = nx - 1 - margin;
+    var y0 = margin;
+    var y1 = ny - 1 - margin;
+    var lagarg: f64 = -PI * freq * dt;
+    var sl, cl = _bj_sin_cos(lagarg);
+    var ph: f64[2];
+    var er: *f64 = f64p(ez.real);
+    var ei: *f64 = f64p(ez.imag);
+    var hxr: *f64 = f64p(hx.real);
+    var hxi: *f64 = f64p(hx.imag);
+    var hyr: *f64 = f64p(hy.real);
+    var hyi: *f64 = f64p(hy.imag);
+    for (var y = 0; y < ny; y = y + 1) {
+        for (var x = 0; x < nx; x = x + 1) {
+            var in_box = 0;
+            if (x + 1 >= x0 && x <= x1 && y + 1 >= y0 && y <= y1) { in_box = 1; }
+            var near_edge = 0;
+            if (x <= x0 || x + 1 >= x1 || y <= y0 || y + 1 >= y1) { near_edge = 1; }
+            if (in_box == 0 || near_edge == 0) { continue; }
+            var i = y * nx + x;
+            var xi: f64 = f64_from(x);
+            var yi: f64 = f64_from(y);
+            var xf: f64 = xi * dx;
+            var yf: f64 = yi * dx;
+            field(xf, yf, 0, &ph);
+            er[i] = ph[0];
+            ei[i] = ph[1];
+            field(xf, yf + 0.5 * dx, 1, &ph);
+            hxr[i] = ph[0] * cl - ph[1] * sl;
+            hxi[i] = ph[0] * sl + ph[1] * cl;
+            field(xf + 0.5 * dx, yf, 2, &ph);
+            hyr[i] = ph[0] * cl - ph[1] * sl;
+            hyi[i] = ph[0] * sl + ph[1] * cl;
+        }
+    }
+    return 0;
+}
+
+# Runs fdtd.rs's phasor NF2FF tests, then the Cyrius-only checks.
+fn main() {
+    alloc_init();
+    var zero: f64 = 0.0;
+    var nan: f64 = zero / zero;
+    var c0: f64 = BJ_SPEED_OF_LIGHT;
+    var eta: f64 = f64_sqrt(BJ_MU_0 / BJ_EPSILON_0);
+    var sqrt2: f64 = 1.4142135623730951;
+
+    test_group("test_bessel_reference_helpers");
+    var bad1 = 0;
+    var xs: f64[2];
+    var j0s: f64[2];
+    var y0s: f64[2];
+    var j1s: f64[2];
+    var y1s: f64[2];
+    xs[0] = 1.0;
+    j0s[0] = 0.7651976866;
+    y0s[0] = 0.0882569642;
+    j1s[0] = 0.4400505857;
+    y1s[0] = -0.7812128213;
+    xs[1] = 10.0;
+    j0s[1] = -0.2459357645;
+    y0s[1] = 0.0556711673;
+    j1s[1] = 0.0434727462;
+    y1s[1] = 0.2490154242;
+    for (var k1 = 0; k1 < 2; k1 = k1 + 1) {
+        var x: f64 = xs[k1];
+        if (near(bessel_j(0, x), j0s[k1], 0.000000001) != 1) { bad1 = bad1 + 1; }
+        if (near(bessel_y(0, x), y0s[k1], 0.000000001) != 1) { bad1 = bad1 + 1; }
+        if (near(bessel_j(1, x), j1s[k1], 0.000000001) != 1) { bad1 = bad1 + 1; }
+        if (near(bessel_y(1, x), y1s[k1], 0.000000001) != 1) { bad1 = bad1 + 1; }
+    }
+    assert(bad1 == 0, "J₀, Y₀, J₁, Y₁ at 1 and 10 within 10⁻⁹ of A&S Table 9.1");
+
+    test_group("test_nf2ff_phasor_line_source");
+    var freq: f64 = 1000000000.0;
+    var lambda: f64 = c0 / freq;
+    var dx: f64 = lambda / 30.0;
+    var k: f64 = 2.0 * PI / lambda;
+    var dt: f64 = dx / (2.0 * sqrt2 * c0);
+    g_kind = 0;
+    g_k = k;
+    g_eta = eta;
+    g_sx = 35.5 * dx + 0.37 * lambda;
+    g_sy = 35.5 * dx - 0.21 * lambda;
+    var ez: BjCwAccumulator;
+    var hx: BjCwAccumulator;
+    var hy: BjCwAccumulator;
+    nf2ff_fill(72, 72, dx, 6, freq, dt, &ez, &hx, &hy);
+    var res: BjNf2ffResult;
+    var t2, v2 = bj_nf2ff_2d_phasor(&ez, &hx, &hy, 72, 72, dx, 6, 72, &res);
+    assert(is_ok(t2) == 1 && res.count == 72, "72 angles");
+    var expected: f64 = f64_sqrt(2.0 / (PI * k));
+    var worst: f64 = 0.0;
+    for (var a = 0; a < res.count; a = a + 1) {
+        var p: f64 = at(res.pattern, a);
+        var err: f64 = f64_abs(p - expected) / expected;
+        if (err > worst) { worst = err; }
+    }
+    assert(worst < 0.01, "isotropic √(2/(πk)) within 1 % at every angle");
+    BjNf2ffResult_free(&res);
+    BjCwAccumulator_free(&ez);
+    BjCwAccumulator_free(&hx);
+    BjCwAccumulator_free(&hy);
+
+    test_group("test_nf2ff_phasor_plane_wave_extinction");
+    g_kind = 1;
+    nf2ff_fill(72, 72, dx, 6, freq, dt, &ez, &hx, &hy);
+    var t3, v3 = bj_nf2ff_2d_phasor(&ez, &hx, &hy, 72, 72, dx, 6, 72, &res);
+    var sf: f64 = f64_from(72 - 1 - 2 * 6);
+    var side: f64 = sf * dx;
+    var scale: f64 = f64_sqrt(k / (8.0 * PI)) * side;
+    var mx: f64 = 0.0;
+    for (var a3 = 0; a3 < res.count; a3 = a3 + 1) {
+        var p3: f64 = at(res.pattern, a3);
+        mx = _bj_max(mx, p3);
+    }
+    assert(is_ok(t3) == 1 && mx < 0.02 * scale, "a plane wave through the contour radiates under 2 % of one side");
+    BjNf2ffResult_free(&res);
+    BjCwAccumulator_free(&ez);
+    BjCwAccumulator_free(&hx);
+    BjCwAccumulator_free(&hy);
+
+    test_group("test_nf2ff_phasor_validation");
+    var ca: BjCwAccumulator;
+    var cb: BjCwAccumulator;
+    var cs: BjCwAccumulator;
+    var cz: BjCwAccumulator;
+    var tca, vca = BjCwAccumulator_new(400, 1000000000.0, 0.000000000001, &ca);
+    var tcb, vcb = BjCwAccumulator_new(400, 2000000000.0, 0.000000000001, &cb);
+    var tcs, vcs = BjCwAccumulator_new(10, 1000000000.0, 0.000000000001, &cs);
+    var tcz, vcz = BjCwAccumulator_new(400, 0.0, 0.000000000001, &cz);
+    var r4: BjNf2ffResult;
+    var t4a, v4a = bj_nf2ff_2d_phasor(&ca, &ca, &ca, 20, 20, 0.001, 3, 8, &r4);
+    assert(is_ok(t4a) == 1, "valid");
+    BjNf2ffResult_free(&r4);
+    var t4b, v4b = bj_nf2ff_2d_phasor(&ca, &cb, &ca, 20, 20, 0.001, 3, 8, &r4);
+    var t4c, v4c = bj_nf2ff_2d_phasor(&ca, &ca, &cs, 20, 20, 0.001, 3, 8, &r4);
+    var t4d, v4d = bj_nf2ff_2d_phasor(&cz, &cz, &cz, 20, 20, 0.001, 3, 8, &r4);
+    assert(is_err_result(t4b) == 1 && is_err_result(t4c) == 1 && is_err_result(t4d) == 1,
+      "mismatched frequencies, a short accumulator and f = 0 refused");
+    var t4e, v4e = bj_nf2ff_2d_phasor(&ca, &ca, &ca, 20, 20, nan, 3, 8, &r4);
+    var t4f, v4f = bj_nf2ff_2d_phasor(&ca, &ca, &ca, 20, 20, 0.001, 10, 8, &r4);
+    var t4g, v4g = bj_nf2ff_2d_phasor(&ca, &ca, &ca, 20, 20, 0.001, 3, 0, &r4);
+    assert(is_err_result(t4e) == 1 && is_err_result(t4f) == 1 && is_err_result(t4g) == 1,
+      "dx = NaN, margin 10 and no angle refused");
+
+    test_group("cyrius_nf2ff_error_records");
+    var t5a, v5a = bj_nf2ff_2d_phasor(&ca, &cb, &ca, 20, 20, 0.001, 3, 8, &r4);
+    var w5a = "invalid parameter: NF2FF phasor accumulators must share frequency and dt";
+    assert(text_is(bj_last_error_display(), w5a) == 1, "the mismatch");
+    var t5b, v5b = bj_nf2ff_2d_phasor(&ca, &ca, &ca, 20, 21, 0.001, 10, 8, &r4);
+    var w5b = "invalid parameter: NF2FF box margin must be in 1..min(nx, ny)/2 for a 20x21 grid, got 10";
+    assert(text_is(bj_last_error_display(), w5b) == 1, "the margin");
+    var t5c, v5c = bj_nf2ff_2d_phasor(&ca, &ca, &cs, 20, 20, 0.001, 3, 8, &r4);
+    var w5c = "invalid parameter: NF2FF field `hy` has 10 samples, need 20x20";
+    assert(text_is(bj_last_error_display(), w5c) == 1, "the short field named");
+    var t5d, v5d = bj_nf2ff_2d_phasor(&cz, &cz, &cz, 20, 20, 0.001, 3, 8, &r4);
+    var w5d = "invalid parameter: NF2FF frequency must be finite and positive, got 0";
+    assert(text_is(bj_last_error_display(), w5d) == 1, "f = 0");
+    var t5e, v5e = bj_nf2ff_2d_phasor(&ca, &ca, &ca, 0 - 1, 20, 0.001, 3, 8, &r4);
+    var w5e = "invalid parameter: NF2FF field `ez` has 400 samples, need 18446744073709551615x20";
+    assert(text_is(bj_last_error_display(), w5e) == 1, "nx·ny past 2^64 refused as too few samples, as checked_mul");
+
+    test_group("cyrius_nf2ff_angles_and_zero_field");
+    var t6, v6 = bj_nf2ff_2d_phasor(&ca, &ca, &ca, 20, 20, 0.001, 3, 4, &r4);
+    assert(is_ok(t6) == 1 && r4.count == 4, "4 angles");
+    var a0: f64 = at(r4.angles, 0);
+    var a1: f64 = at(r4.angles, 1);
+    var a2: f64 = at(r4.angles, 2);
+    assert(a0 == 0.0 && a1 == PI / 2.0 && a2 == PI, "0, π/2, π: 2π·i/4");
+    var p0: f64 = at(r4.pattern, 0);
+    var p3: f64 = at(r4.pattern, 3);
+    assert(p0 == 0.0 && p3 == 0.0, "an all-zero field radiates nothing");
+    BjNf2ffResult_free(&r4);
+    assert(r4.count == 0 && r4.pattern == 0, "freed and emptied");
+    BjCwAccumulator_free(&ca);
+    BjCwAccumulator_free(&cb);
+    BjCwAccumulator_free(&cs);
+    BjCwAccumulator_free(&cz);
+
+    return assert_summary();
+}
+
+var exit_code = main();
+if (exit_code > 0) { exit_code = 1; }
+sys_exit_group(exit_code);

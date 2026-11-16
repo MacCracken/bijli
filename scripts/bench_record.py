@@ -68,6 +68,7 @@ EXTRA = {
     "fdtd/gaussian_pulse": "a Gaussian pulse's value: one correctly rounded exp (src/fdtd_source.cyr, M5 part 1b)",
     "fdtd/tfsf_step_200": "one step of a 200-cell TF/SF auxiliary grid under a Gaussian drive (M5 part 1b)",
     "fdtd/media_coefficients": "the lossy, Drude, Lorentz and Debye coefficient sets and a subpixel average (M5 1c)",
+    "fdtd/nf2ff_phasor_80x80_180": "NF2FF's phasor form on an 80 × 80 grid, margin 5, 180 angles (M5 part 1e)",
 }
 
 

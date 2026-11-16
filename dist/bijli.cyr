@@ -32275,6 +32275,444 @@ public fn bj_find_eigenmodes(signal: *f64, n, dt: f64, freq_min: f64, freq_max: 
     return Ok(0);
 }
 
+# --- nf2ff.cyr ---
+
+# nf2ff.cyr — fdtd.rs's 2D near-field to far-field transform (M5 part 1e): `nf2ff_2d_phasor`, Love's equivalence on a
+# rectangular contour of a TM-mode Yee grid, from CW phasors. `nf2ff_2d`, the same transform of a time snapshot of an
+# `Fdtd2d`, joins with the 2D grid in M6 on this file's core.
+#
+# The phasors are e^{+jωt}, bijli's one convention (src/complex.cyr's header), as the CW accumulator's are: fdtd.rs's
+# NF2FF already was. The complex arithmetic is fdtd.rs's own `Cplx`, written out on f64 locals in Rust's order; sin_cos
+# and hypot are correctly rounded (src/crmath.cyr).
+
+private
+
+var _BJ_NF_INF: f64 = 0x7FF0000000000000;
+# std::f64::consts::PI, and 10⁻¹² (the accumulators' agreement test).
+var _BJ_NF_PI: f64 = 3.141592653589793;
+var _BJ_NF_REL12: f64 = 0.000000000001;
+# freelist's largest request, 2 GiB.
+var _BJ_NF_FL_MAX = 2147483648;
+
+# A word as a *f64 (the typed return keeps the binding typed).
+#must_use
+fn _bj_nf_f64p(a): *f64 {
+    return a;
+}
+
+# 1 when x is finite and strictly positive (NaN-safe). Mirrors fdtd.rs's `is_positive_finite`.
+#must_use
+fn _bj_nf_pos(x: f64): i64 {
+    if (x > 0.0 && x < _BJ_NF_INF) { return 1; }
+    return 0;
+}
+
+# 1 when a ≥ b as usize words (a negative word is past 2^63).
+#must_use
+fn _bj_nf_uge(a, b): i64 {
+    if ((a < 0) == (b < 0)) {
+        if (a >= b) { return 1; }
+        return 0;
+    }
+    if (a < 0) { return 1; }
+    return 0;
+}
+
+# The usize product a·b into *out: 1, or 0 when it overflows 64 bits (Rust's `checked_mul` None).
+fn _bj_nf_umul(a, b, out: *i64): i64 {
+    var ah = a >> 32;
+    var al = a & 0xFFFFFFFF;
+    var bh = b >> 32;
+    var bl = b & 0xFFFFFFFF;
+    if (ah != 0 && bh != 0) { return 0; }
+    var cross = ah * bl + al * bh;
+    if ((cross >> 32) != 0) { return 0; }
+    var lo = al * bl;
+    var hi = cross << 32;
+    var s = lo + hi;
+    if (_bj_nf_uge(s, lo) == 0) { return 0; }
+    out[0] = s;
+    return 1;
+}
+
+# Rust's `n as f64` for a usize: the word read unsigned, rounded to nearest even.
+#must_use
+fn _bj_nf_u2f(n): f64 {
+    if (n >= 0) {
+        var r: f64 = f64_from(n);
+        return r;
+    }
+    var h: f64 = f64_from((n >> 1) | (n & 1));
+    var r2: f64 = h * 2.0;
+    return r2;
+}
+
+# A far-field pattern: `count` observation angles φ (radians, 0 to 2π from +x towards +y) at `angles`, and the pattern
+# lim_{ρ→∞} √ρ·|E_z(ρ, φ)| (≥ 0; V·m^{−½} for phasors in V/m, linear in the inputs) at `pattern`, in one freelist
+# block (0 when count is 0). Give it back with BjNf2ffResult_free. Mirrors `Nf2ffResult`.
+public struct BjNf2ffResult {
+    pattern;
+    angles;
+    count;
+}
+
+# Gives a result's block back and empties it; a second call does nothing.
+public fn BjNf2ffResult_free(r: *BjNf2ffResult): i64 {
+    if (r.pattern != 0) { fl_free(r.pattern); }
+    r.pattern = 0;
+    r.angles = 0;
+    r.count = 0;
+    return 0;
+}
+
+# Records InvalidParameter with a fixed reason; returns its code.
+fn _bj_nf_bad(reason): i64 {
+    _bj_tx_cstr(_bj_err_reason(BJ_ERR_INVALID_PARAMETER), reason);
+    return BJ_ERR_INVALID_PARAMETER;
+}
+
+# The shared parameter checks, in Rust's order (n_angles, the margin, dx, the frequency): 0 with k = 2πf/c in *k, or the
+# error recorded and its code. Mirrors fdtd.rs's `nf2ff_validate`.
+fn _bj_nf_validate(nx, ny, dx: f64, frequency: f64, box_margin, n_angles, k: *f64): i64 {
+    if (n_angles == 0) { return _bj_nf_bad("need at least one observation angle"); }
+    if (box_margin == 0 || _bj_nf_uge(box_margin, nx >> 1) == 1 || _bj_nf_uge(box_margin, ny >> 1) == 1) {
+        var t = _bj_err_reason(BJ_ERR_INVALID_PARAMETER);
+        _bj_tx_cstr(t, "NF2FF box margin must be in 1..min(nx, ny)/2 for a ");
+        _bj_tx_u64(t, nx);
+        _bj_tx_cstr(t, "x");
+        _bj_tx_u64(t, ny);
+        _bj_tx_cstr(t, " grid, got ");
+        _bj_tx_u64(t, box_margin);
+        return BJ_ERR_INVALID_PARAMETER;
+    }
+    if (_bj_nf_pos(dx) == 0) {
+        var t2 = _bj_err_reason(BJ_ERR_INVALID_PARAMETER);
+        _bj_tx_cstr(t2, "dx must be finite and positive, got ");
+        _bj_fmt_f64_display(t2, dx);
+        return BJ_ERR_INVALID_PARAMETER;
+    }
+    if (_bj_nf_pos(frequency) == 0) {
+        var t3 = _bj_err_reason(BJ_ERR_INVALID_PARAMETER);
+        _bj_tx_cstr(t3, "NF2FF frequency must be finite and positive, got ");
+        _bj_fmt_f64_display(t3, frequency);
+        return BJ_ERR_INVALID_PARAMETER;
+    }
+    var w: f64 = 2.0 * _BJ_NF_PI;
+    var wf: f64 = w * frequency;
+    var kk: f64 = wf / BJ_SPEED_OF_LIGHT;
+    k[0] = kk;
+    return 0;
+}
+
+# 0 when a field of len samples covers the nx·ny grid, else InvalidParameter "NF2FF field `{name}` has {len} samples,
+# need {nx}x{ny}" recorded and its code (also when nx·ny overflows). Mirrors fdtd.rs's `nf2ff_check_len`.
+fn _bj_nf_check_len(name, len, nx, ny): i64 {
+    var n: i64[1];
+    if (_bj_nf_umul(nx, ny, &n) == 1 && _bj_nf_uge(len, n[0]) == 1) { return 0; }
+    var t = _bj_err_reason(BJ_ERR_INVALID_PARAMETER);
+    _bj_tx_cstr(t, "NF2FF field `");
+    _bj_tx_cstr(t, name);
+    _bj_tx_cstr(t, "` has ");
+    _bj_tx_u64(t, len);
+    _bj_tx_cstr(t, " samples, need ");
+    _bj_tx_u64(t, nx);
+    _bj_tx_cstr(t, "x");
+    _bj_tx_u64(t, ny);
+    return BJ_ERR_INVALID_PARAMETER;
+}
+
+# The phasor at index i of a field held as real parts at re and imaginary parts at im (0: all zero, a snapshot).
+fn _bj_nf_at(re, im, i): (f64, f64) {
+    var rp: *f64 = _bj_nf_f64p(re);
+    var r: f64 = rp[i];
+    var q: f64 = 0.0;
+    if (im != 0) {
+        var ip: *f64 = _bj_nf_f64p(im);
+        q = ip[i];
+    }
+    return (r, q);
+}
+
+# One contour sample's weighted currents into s[0..4]: J_z = (h_t·rot)·(sign·w) with h_t = (a + b)·½, then the side's
+# magnetic current, the E sample e·(sign·w) (M_x on a horizontal side, M_y on a vertical one). Rust's `Cplx` add, scale
+# and mul in order. Rust also keeps the other component, zero, and multiplies it by the phasor; that product is ±0 (or
+# NaN only where the phasor is NaN, when N_z is NaN as well), so it can't reach the pattern, |η·N_z − L_φ|, and the
+# core skips it.
+fn _bj_nf_sample(s: *f64, ar: f64, ai: f64, br: f64, bi: f64, er: f64, ei: f64, rot_r: f64, rot_i: f64, sw: f64) {
+    var hr: f64 = ar + br;
+    var hi: f64 = ai + bi;
+    hr = hr * 0.5;
+    hi = hi * 0.5;
+    var jr: f64 = hr * rot_r - hi * rot_i;
+    var ji: f64 = hr * rot_i + hi * rot_r;
+    s[0] = jr * sw;
+    s[1] = ji * sw;
+    s[2] = er * sw;
+    s[3] = ei * sw;
+    return 0;
+}
+
+# The TM-mode NF2FF core (2D Love equivalence, e^{+jωt} phasors) into *out: 0, or the Allocation code recorded. The
+# fields are re/im address pairs at f[0..6] (E_z, H_x, H_y; an im of 0 reads as zero); (rot_r, rot_i) rotates H onto
+# E's time. The contour runs through the E_z nodes x₀ = y₀ = margin, x₁ = nx − 1 − margin, y₁ = ny − 1 − margin;
+# tangential H is the mean of the two Yee samples beside it; J = n̂×H, M = −n̂×E, trapezoid weights (half at each
+# side's corners). The pattern is √(k/8π)·|η·N_z − L_φ|, N_z and L = (L_x, L_y) summed with e^{jk ρ̂·ρ'} advanced
+# by a constant phasor along each side, L_φ = −L_x sin φ + L_y cos φ. Callers have validated the arguments. Mirrors
+# fdtd.rs's `nf2ff_tm_core`.
+fn _bj_nf_core(f: *i64, rot_r: f64, rot_i: f64, nx, ny, dx: f64, k: f64, margin, n_angles, out: *BjNf2ffResult): i64 {
+    var x0 = margin;
+    var x1 = nx - 1 - margin;
+    var y0 = margin;
+    var y1 = ny - 1 - margin;
+    var xs: f64 = _bj_nf_u2f(x0 + x1);
+    var xc: f64 = 0.5 * xs;
+    var ys: f64 = _bj_nf_u2f(y0 + y1);
+    var yc: f64 = 0.5 * ys;
+    var nhs = x1 - x0 + 1;
+    var nvs = y1 - y0 + 1;
+    var total = 2 * nhs + 2 * nvs;
+    if (n_angles < 0 || n_angles > _BJ_NF_FL_MAX / 16 || total > _BJ_NF_FL_MAX / 32) {
+        _bj_tx_cstr(_bj_err_reason(BJ_ERR_ALLOCATION), "an NF2FF result");
+        return BJ_ERR_ALLOCATION;
+    }
+    var sb = fl_alloc(total * 32);
+    var rb = fl_alloc(n_angles * 16);
+    if (sb == 0 || rb == 0) {
+        if (sb != 0) { fl_free(sb); }
+        if (rb != 0) { fl_free(rb); }
+        _bj_tx_cstr(_bj_err_reason(BJ_ERR_ALLOCATION), "an NF2FF result");
+        return BJ_ERR_ALLOCATION;
+    }
+    # The four sides: bottom (y₀, sign +1) and top (y₁, sign −1) along +x; left (x₀, −1) and right (x₁, +1) along +y.
+    var start_x: f64[4];
+    var start_y: f64[4];
+    var dir_x: f64[4];
+    var dir_y: f64[4];
+    var cnt: i64[4];
+    var half: f64 = 0.5 * dx;
+    var at = 0;
+    for (var side = 0; side < 4; side = side + 1) {
+        var vertical = 0;
+        var line = y0;
+        var sign: f64 = 1.0;
+        if (side == 1) {
+            line = y1;
+            sign = -1.0;
+        }
+        if (side == 2) {
+            vertical = 1;
+            line = x0;
+            sign = -1.0;
+        }
+        if (side == 3) {
+            vertical = 1;
+            line = x1;
+        }
+        var lf: f64 = _bj_nf_u2f(line);
+        if (vertical == 0) {
+            var x0f: f64 = _bj_nf_u2f(x0);
+            start_x[side] = (x0f - xc) * dx;
+            start_y[side] = (lf - yc) * dx;
+            dir_x[side] = 1.0;
+            dir_y[side] = 0.0;
+            cnt[side] = nhs;
+        } else {
+            var y0f: f64 = _bj_nf_u2f(y0);
+            start_x[side] = (lf - xc) * dx;
+            start_y[side] = (y0f - yc) * dx;
+            dir_x[side] = 0.0;
+            dir_y[side] = 1.0;
+            cnt[side] = nvs;
+        }
+        var last = cnt[side] - 1;
+        for (var i = 0; i < cnt[side]; i = i + 1) {
+            var w: f64 = dx;
+            if (i == 0 || i == last) { w = half; }
+            var sw: f64 = sign * w;
+            var ia = 0;
+            var ib = 0;
+            var ie = 0;
+            var ha = f[2];
+            var hai = f[3];
+            if (vertical == 0) {
+                ia = (line - 1) * nx + x0 + i;
+                ib = line * nx + x0 + i;
+                ie = ib;
+            } else {
+                ia = (y0 + i) * nx + line - 1;
+                ib = (y0 + i) * nx + line;
+                ie = ib;
+                ha = f[4];
+                hai = f[5];
+            }
+            var ar, ai = _bj_nf_at(ha, hai, ia);
+            var br, bi = _bj_nf_at(ha, hai, ib);
+            var er, ei = _bj_nf_at(f[0], f[1], ie);
+            _bj_nf_sample(_bj_nf_f64p(sb + (at + i) * 32), ar, ai, br, bi, er, ei, rot_r, rot_i, sw);
+        }
+        at = at + cnt[side];
+    }
+    var mu0: f64 = BJ_MU_0;
+    var me: f64 = mu0 / BJ_EPSILON_0;
+    var eta0: f64 = f64_sqrt(me);
+    var pi8: f64 = 8.0 * _BJ_NF_PI;
+    var kn: f64 = k / pi8;
+    var norm: f64 = f64_sqrt(kn);
+    var kdx: f64 = k * dx;
+    var nf: f64 = _bj_nf_u2f(n_angles);
+    var w2: f64 = 2.0 * _BJ_NF_PI;
+    var pat: *f64 = _bj_nf_f64p(rb);
+    var ang: *f64 = _bj_nf_f64p(rb + n_angles * 8);
+    var smp: *f64 = _bj_nf_f64p(sb);
+    for (var a = 0; a < n_angles; a = a + 1) {
+        var af: f64 = _bj_nf_u2f(a);
+        var wa: f64 = w2 * af;
+        var phi: f64 = wa / nf;
+        ang[a] = phi;
+        var sp, cp = _bj_sin_cos(phi);
+        var nzr: f64 = 0.0;
+        var nzi: f64 = 0.0;
+        var lxr: f64 = 0.0;
+        var lxi: f64 = 0.0;
+        var lyr: f64 = 0.0;
+        var lyi: f64 = 0.0;
+        var base = 0;
+        for (var s = 0; s < 4; s = s + 1) {
+            var pr: f64 = start_x[s] * cp + start_y[s] * sp;
+            var rarg: f64 = k * pr;
+            var rs, rc = _bj_sin_cos(rarg);
+            var rr: f64 = rc;
+            var ri: f64 = rs;
+            var dp: f64 = dir_x[s] * cp + dir_y[s] * sp;
+            var sarg: f64 = kdx * dp;
+            var ss, sc = _bj_sin_cos(sarg);
+            # Sides 0 and 1 carry M_x, 2 and 3 M_y: one accumulator each, the loop the same.
+            var mr: f64 = lxr;
+            var mi: f64 = lxi;
+            if (s >= 2) {
+                mr = lyr;
+                mi = lyi;
+            }
+            for (var j = 0; j < cnt[s]; j = j + 1) {
+                var q = (base + j) * 4;
+                var jzr: f64 = smp[q];
+                var jzi: f64 = smp[q + 1];
+                var mxr: f64 = smp[q + 2];
+                var mxi: f64 = smp[q + 3];
+                nzr = nzr + (jzr * rr - jzi * ri);
+                nzi = nzi + (jzr * ri + jzi * rr);
+                mr = mr + (mxr * rr - mxi * ri);
+                mi = mi + (mxr * ri + mxi * rr);
+                var nr: f64 = rr * sc - ri * ss;
+                ri = rr * ss + ri * sc;
+                rr = nr;
+            }
+            if (s >= 2) {
+                lyr = mr;
+                lyi = mi;
+            } else {
+                lxr = mr;
+                lxi = mi;
+            }
+            base = base + cnt[s];
+        }
+        var nsp: f64 = -sp;
+        var lpr: f64 = lyr * cp + lxr * nsp;
+        var lpi: f64 = lyi * cp + lxi * nsp;
+        var tr: f64 = nzr * eta0 + lpr * -1.0;
+        var ti: f64 = nzi * eta0 + lpi * -1.0;
+        var mag: f64 = _bj_hypot(tr, ti);
+        pat[a] = norm * mag;
+    }
+    fl_free(sb);
+    out.pattern = rb;
+    out.angles = rb + n_angles * 8;
+    out.count = n_angles;
+    return 0;
+}
+
+# |a − b| ≤ 10⁻¹²·max(|a|, |b|) with Rust's NaN-ignoring max (a NaN difference fails).
+#must_use
+fn _bj_nf_same(a: f64, b: f64): i64 {
+    var d: f64 = a - b;
+    var ad: f64 = f64_abs(d);
+    var aa: f64 = f64_abs(a);
+    var ab: f64 = f64_abs(b);
+    var m: f64 = _bj_max(aa, ab);
+    var lim: f64 = _BJ_NF_REL12 * m;
+    if (ad <= lim) { return 1; }
+    return 0;
+}
+
+# The 2D TM NF2FF transform of CW phasors into *out (free a previous result first): ez, hx and hy are accumulators of
+# E_z, H_x and H_y on an nx × ny Yee grid laid out as Fdtd2d's TM mode (index y·nx + x; E_z at (x, y), H_x at
+# (x, y + ½), H_y at (x + ½, y)), fed after each step with the same time-step index, so H is rotated by e^{+jω·dt/2}
+# onto E. The pattern is √ρ·|E_z(ρ, φ)| as ρ → ∞ at n_angles angles from 0, linear in the inputs (a CW steady state's
+# running DFT is about the phasor times n_samples·dt/2). Ok(0), or with out untouched Err(InvalidParameter), Rust's
+# texts in Rust's order: the accumulators disagree on ω or dt (relative 10⁻¹²); n_angles is 0; the margin is 0 or at
+# least nx/2 or ny/2; dx isn't finite and positive; the frequency isn't; an accumulator holds fewer than nx·ny
+# samples; dt isn't finite. Err(Allocation) when the result can't be had. Mirrors `nf2ff_2d_phasor`.
+#must_use
+public fn bj_nf2ff_2d_phasor(ez: *BjCwAccumulator, hx: *BjCwAccumulator, hy: *BjCwAccumulator, nx, ny, dx: f64,
+  box_margin, n_angles, out: *BjNf2ffResult): Result {
+    var ok = _bj_nf_same(ez.omega, hx.omega);
+    if (ok == 1) { ok = _bj_nf_same(ez.omega, hy.omega); }
+    if (ok == 1) { ok = _bj_nf_same(ez.dt, hx.dt); }
+    if (ok == 1) { ok = _bj_nf_same(ez.dt, hy.dt); }
+    if (ok == 0) { return Err(_bj_nf_bad("NF2FF phasor accumulators must share frequency and dt")); }
+    var w: f64 = 2.0 * _BJ_NF_PI;
+    var frequency: f64 = ez.omega / w;
+    var k: f64[1];
+    var e = _bj_nf_validate(nx, ny, dx, frequency, box_margin, n_angles, &k);
+    if (e == 0) { e = _bj_nf_check_len("ez", ez.field_size, nx, ny); }
+    if (e == 0) { e = _bj_nf_check_len("hx", hx.field_size, nx, ny); }
+    if (e == 0) { e = _bj_nf_check_len("hy", hy.field_size, nx, ny); }
+    if (e != 0) { return Err(e); }
+    var dt: f64 = ez.dt;
+    var z: f64 = dt * 0.0;
+    if (z != 0.0) {
+        var t = _bj_err_reason(BJ_ERR_INVALID_PARAMETER);
+        _bj_tx_cstr(t, "accumulator dt must be finite, got ");
+        _bj_fmt_f64_display(t, dt);
+        return Err(BJ_ERR_INVALID_PARAMETER);
+    }
+    if (_bj_log_on(4) == 1) {
+        var lb[256];
+        var lt[24];
+        _bj_tx_init(&lt, &lb, 256);
+        _bj_tx_cstr(&lt, "NF2FF (phasor) transform nx=");
+        _bj_tx_u64(&lt, nx);
+        _bj_tx_cstr(&lt, " ny=");
+        _bj_tx_u64(&lt, ny);
+        _bj_tx_cstr(&lt, " box_margin=");
+        _bj_tx_u64(&lt, box_margin);
+        _bj_tx_cstr(&lt, " n_angles=");
+        _bj_tx_u64(&lt, n_angles);
+        _bj_tx_cstr(&lt, " frequency=");
+        _bj_fmt_f64_debug(&lt, frequency);
+        _bj_tx_cstr(&lt, " n_samples=");
+        _bj_tx_u64(&lt, ez.n_samples);
+        _bj_log_text(4, &lt);
+    }
+    var hw: f64 = 0.5 * ez.omega;
+    var harg: f64 = hw * dt;
+    var hs, hc = _bj_sin_cos(harg);
+    var f: i64[6];
+    f[0] = ez.real;
+    f[1] = ez.imag;
+    f[2] = hx.real;
+    f[3] = hx.imag;
+    f[4] = hy.real;
+    f[5] = hy.imag;
+    var r: BjNf2ffResult;
+    var ce = _bj_nf_core(&f, hc, hs, nx, ny, dx, k[0], box_margin, n_angles, &r);
+    if (ce != 0) { return Err(ce); }
+    out.pattern = r.pattern;
+    out.angles = r.angles;
+    out.count = r.count;
+    return Ok(0);
+}
+
 # --- json.cyr ---
 
 # json.cyr — JSON for the serializable types: BjComplex (Rust hisab 1.4.0's `Complex`), BjFieldVector,

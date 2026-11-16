@@ -1245,6 +1245,47 @@ fn main(): i64 {
     bench_report(be1);
     if (esum == 7) { println("."); }
 
+    # fdtd (M5 part 1e), Cyrius-only: NF2FF's phasor form on an 80 × 80 grid with a margin of 5 and 180 angles, as
+    # Rust's snapshot bench sizes it (that one, on an Fdtd2d, joins in M6); the accumulators hold generated phasors.
+    var nfa: BjCwAccumulator;
+    var nfb: BjCwAccumulator;
+    var nfc: BjCwAccumulator;
+    var tna, vna = BjCwAccumulator_new(6400, 30000000000.0, 0.000000000001, &nfa);
+    var tnb, vnb = BjCwAccumulator_new(6400, 30000000000.0, 0.000000000001, &nfb);
+    var tnc, vnc = BjCwAccumulator_new(6400, 30000000000.0, 0.000000000001, &nfc);
+    var nar: *f64 = bench_f64p(nfa.real);
+    var nai: *f64 = bench_f64p(nfa.imag);
+    var nbr: *f64 = bench_f64p(nfb.real);
+    var nbi: *f64 = bench_f64p(nfb.imag);
+    var ncr: *f64 = bench_f64p(nfc.real);
+    var nci: *f64 = bench_f64p(nfc.imag);
+    for (var k = 0; k < 6400; k = k + 1) {
+        var q1: f64 = f64_from((k * 3 + 1) % 13);
+        var q2: f64 = f64_from((k * 5 + 2) % 17);
+        nar[k] = 0.25 * q1 - 1.5;
+        nai[k] = 0.125 * q2 - 0.75;
+        nbr[k] = 0.5 * q2 - 2.0;
+        nbi[k] = 0.375 * q1 + 1.25;
+        ncr[k] = q1 - 5.0;
+        nci[k] = 1.0 - 0.25 * q2;
+    }
+    var nsum: f64 = 0.0;
+    var bn1 = bench_new("fdtd/nf2ff_phasor_80x80_180");
+    bench_batch_start(bn1);
+    for (var k = 0; k < 200; k = k + 1) {
+        var nr: BjNf2ffResult;
+        var tn, vn = bj_nf2ff_2d_phasor(&nfa, &nfb, &nfc, 80, 80, 0.001, 5, 180, &nr);
+        var np: *f64 = bench_f64p(nr.pattern);
+        nsum = nsum + np[0];
+        BjNf2ffResult_free(&nr);
+    }
+    bench_batch_stop(bn1, 200);
+    bench_report(bn1);
+    BjCwAccumulator_free(&nfa);
+    BjCwAccumulator_free(&nfb);
+    BjCwAccumulator_free(&nfc);
+    if (nsum == 7.0) { println("."); }
+
     var ar: f64 = acc.re;
     if (ar == 7.0) { println("."); }
     if (keep == 7) { println("."); }

@@ -411,6 +411,16 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
   (91,874): grid queries, gradings, derivatives, CW scripts and eigenmode searches on exactly generated damped modes;
   `fdtd.cr.tsv` corrects 7 CW rows. `tests/fdtd_util.tcyr` ports all 25 of their tests (73 assertions). The bench
   twin `fdtd/find_eigenmodes_4096x256` takes 8.37–8.48 ms at load 1.8 (Rust 2.12 ms, 3.9×).
+- **Cyrius port, M5 part 1e — NF2FF's phasor form** (`src/nf2ff.cyr`): `bj_nf2ff_2d_phasor` into a `BjNf2ffResult`,
+  Love's equivalence on a TM grid's rectangular contour from three CW accumulators: J and M from trapezoid-weighted
+  samples, H rotated by e^{+jω·dt/2}, e^{jkρ̂·ρ'} advanced by a constant phasor along each side, the pattern
+  √(k/8π)·|η·N_z − L_φ| on the correctly rounded sin_cos and hypot. Rust's checks and texts, in Rust's order; its
+  result arrays fixed (ADR 0002 rows 2 and 9 amended). `nf2ff_2d`, on an `Fdtd2d`, joins in M6 on the same core.
+  `fdtd.tsv` grows by 161 rows (92,035) over exactly generated phasors; `fdtd.cr.tsv` corrects 13. `tests/nf2ff.tcyr`
+  ports the four phasor tests (a line source isotropic within 1 %, a plane wave's extinction, the validation, the
+  Bessel references; 16 assertions). A Cyrius-only bench, `fdtd/nf2ff_phasor_80x80_180`, takes 1.52–1.54 ms, after
+  skipping Rust's products of the structurally zero magnetic current, which can't reach the pattern (1.87–1.90 ms
+  before, the same bits).
 
 ### Fixed
 

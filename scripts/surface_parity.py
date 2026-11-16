@@ -49,23 +49,22 @@ PENDING_MODULES = {
 # problem (drop it from the list).
 IN_PROGRESS = {
     # M5 part 1a ported Fdtd1d, 1b the pulses and TfsfSource, 1c the media and the subpixel averages, 1d the
-    # utilities (the serde impls follow in 1f); the rest of fdtd.rs follows in M5 (NF2FF, JSON) and M6 (CPML, 2D, 3D).
+    # utilities, 1e NF2FF's phasor form (the serde impls follow in 1f); nf2ff_2d, CPML, 2D and 3D follow in M6.
     "fdtd": ("M5–M6", {
-        "Nf2ffResult", "CpmlParams", "Cpml", "Mode2d", "Fdtd2d", "Fdtd3d", "nf2ff_2d", "nf2ff_2d_phasor",
-        "CpmlParams::new", "Cpml::new", "Cpml::with_params", "Cpml::attach", "Cpml::sigma_max", "Cpml::kappa_max",
-        "Cpml::alpha_max", "Cpml::grading_order", "Fdtd2d::new", "Fdtd2d::idx", "Fdtd2d::set_permittivity",
-        "Fdtd2d::set_permeability", "Fdtd2d::set_conductivity", "Fdtd2d::set_material", "Fdtd2d::add_source",
-        "Fdtd2d::try_enable_cpml", "Fdtd2d::try_enable_cpml_with", "Fdtd2d::enable_cpml", "Fdtd2d::disable_cpml",
-        "Fdtd2d::cpml", "Fdtd2d::step_once", "Fdtd2d::run", "Fdtd2d::time", "Fdtd2d::total_energy", "Fdtd3d::new",
-        "Fdtd3d::idx", "Fdtd3d::set_permittivity", "Fdtd3d::set_permeability", "Fdtd3d::set_conductivity",
-        "Fdtd3d::set_material", "Fdtd3d::add_source_ez", "Fdtd3d::try_enable_cpml", "Fdtd3d::try_enable_cpml_with",
-        "Fdtd3d::disable_cpml", "Fdtd3d::cpml", "Fdtd3d::step_once", "Fdtd3d::run", "Fdtd3d::time",
-        "Fdtd3d::total_energy", "impl Deserialize for LossyMaterial", "impl Serialize for LossyMaterial",
-        "impl Deserialize for DrudeMaterial", "impl Serialize for DrudeMaterial",
-        "impl Deserialize for LorentzMaterial", "impl Serialize for LorentzMaterial",
-        "impl Deserialize for DebyeMaterial", "impl Serialize for DebyeMaterial", "impl Deserialize for CpmlParams",
-        "impl Serialize for CpmlParams", "impl Deserialize for Mode2d", "impl Serialize for Mode2d",
-        "impl Deserialize for NonUniformGrid", "impl Serialize for NonUniformGrid",
+        "CpmlParams", "Cpml", "Mode2d", "Fdtd2d", "Fdtd3d", "nf2ff_2d", "CpmlParams::new", "Cpml::new",
+        "Cpml::with_params", "Cpml::attach", "Cpml::sigma_max", "Cpml::kappa_max", "Cpml::alpha_max",
+        "Cpml::grading_order", "Fdtd2d::new", "Fdtd2d::idx", "Fdtd2d::set_permittivity", "Fdtd2d::set_permeability",
+        "Fdtd2d::set_conductivity", "Fdtd2d::set_material", "Fdtd2d::add_source", "Fdtd2d::try_enable_cpml",
+        "Fdtd2d::try_enable_cpml_with", "Fdtd2d::enable_cpml", "Fdtd2d::disable_cpml", "Fdtd2d::cpml",
+        "Fdtd2d::step_once", "Fdtd2d::run", "Fdtd2d::time", "Fdtd2d::total_energy", "Fdtd3d::new", "Fdtd3d::idx",
+        "Fdtd3d::set_permittivity", "Fdtd3d::set_permeability", "Fdtd3d::set_conductivity", "Fdtd3d::set_material",
+        "Fdtd3d::add_source_ez", "Fdtd3d::try_enable_cpml", "Fdtd3d::try_enable_cpml_with", "Fdtd3d::disable_cpml",
+        "Fdtd3d::cpml", "Fdtd3d::step_once", "Fdtd3d::run", "Fdtd3d::time", "Fdtd3d::total_energy",
+        "impl Deserialize for LossyMaterial", "impl Serialize for LossyMaterial", "impl Deserialize for DrudeMaterial",
+        "impl Serialize for DrudeMaterial", "impl Deserialize for LorentzMaterial",
+        "impl Serialize for LorentzMaterial", "impl Deserialize for DebyeMaterial", "impl Serialize for DebyeMaterial",
+        "impl Deserialize for CpmlParams", "impl Serialize for CpmlParams", "impl Deserialize for Mode2d",
+        "impl Serialize for Mode2d", "impl Deserialize for NonUniformGrid", "impl Serialize for NonUniformGrid",
         "impl Deserialize for EigenmodeResult", "impl Serialize for EigenmodeResult",
     }),
 }

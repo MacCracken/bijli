@@ -5579,3 +5579,80 @@ phasor form (`src/nf2ff.cyr`); 1f the JSON of the serde types. Part 2 is the ran
   equal**, 1c's 448 unchanged and 14 new. `fdtd_util.tcyr` passes on all three (73). The gate is clean (no warnings;
   execution coverage 357 of 357 functions); validate.py 719,493 rows, 0 problems; the oracle's `--check` and clippy
   are clean. Next: 1e, NF2FF's phasor form.
+
+## 98. M5 part 1e: NF2FF's phasor form (2026-11-15)
+
+- **`src/nf2ff.cyr`**: `bj_nf2ff_2d_phasor` into a `BjNf2ffResult` (pattern and angles in one freelist block, freed by
+  `BjNf2ffResult_free`). It is Love's equivalence on a TM-mode Yee grid's rectangular contour through the E_z nodes
+  `box_margin` cells inside:
+  - J = n̂×H from the mean of the two Yee H samples beside the contour, rotated by e^{+jω·dt/2} onto E's time;
+  - M = −n̂×E;
+  - trapezoid weights, half at each side's corners;
+  - e^{jkρ̂·ρ'} advanced by a constant phasor along each side;
+  - the pattern √(k/8π)·|η·N_z − L_φ|, with L_φ = −L_x sin φ + L_y cos φ.
+
+  fdtd.rs's own `Cplx` arithmetic is written out on f64 locals in Rust's order. sin_cos and hypot are correctly
+  rounded. The phasors are e^{+jωt}, as fdtd.rs's were (ADR 0002 row 5).
+  - **Checks**, Rust's texts in Rust's order:
+    - the accumulators agree on ω and dt within 10⁻¹² (relative, with Rust's NaN-ignoring max);
+    - at least one angle;
+    - the margin in 1..min(nx, ny)/2, compared unsigned;
+    - dx, then the frequency ω/2π, finite and positive;
+    - each accumulator holds nx·ny samples, the product overflowing 2^64 refused as `checked_mul`'s None;
+    - dt finite.
+
+    The last is unreachable: an infinite or NaN dt already fails the agreement test, since inf − inf is NaN. It is
+    ported as written.
+  - **The core** takes the fields as real/imaginary address pairs, an imaginary part of 0 reading as zero. M6's
+    `nf2ff_2d` on an `Fdtd2d` snapshot (the 6 remaining NF2FF tests and the `fdtd/nf2ff_2d_80x80_180` bench) will
+    reuse it with rotation 1.
+  - **A finding, kept bit-identical**: Rust's samples also carry the zero magnetic component of each side (M_y on
+    horizontal sides, M_x on vertical) and multiply it by the phasor at every angle. Those products are ±0, or NaN
+    only where the phasor is NaN, and then N_z is NaN as well. So they reach neither the pattern's value nor its
+    NaN-ness: hypot ignores a zero's sign, and a NaN N_z makes both parts of η·N_z − L_φ NaN either way. The port skips
+    them, a quarter of the inner loop's complex products. The 161 rows, specials and NaN cases among them, gave the
+    same digest before and after.
+- **The grid**: 161 class-C rows appended to `fdtd.tsv` (92,035). Each accumulator's phasors come from an exact
+  generator, re[i] = a·((i·p + q) mod m) − b, with overrides at chosen indices, so no input depends on a libm. The
+  rows:
+  - Rust's test's validation;
+  - the 10⁻¹² agreement straddled three ulps each way in ω and dt;
+  - every special frequency, step and dx;
+  - the margin at 0, nx/2 and ny/2;
+  - nx·ny past 2^64;
+  - short accumulators;
+  - grid shapes from 4 × 4 to 80 × 80 with 1 to 180 angles;
+  - a zero field;
+  - NaN, ±∞, 10³⁰⁰, DBL_MAX, the smallest subnormal and −0 at a corner and on each side;
+  - frequencies, steps and spacings of 10^±300;
+  - 20 seeded transforms.
+
+  `validate.py`'s transcription (`nf_eval`, `nf_core`) agreed with every row on its first run, once its primitive
+  sets gained hypot. `fdtd.cr.tsv` gains 13 rows where glibc's sin_cos or hypot misrounds somewhere across the angles
+  (31 in all). The port passed every row on its first run.
+- **Rust tests**: 4 of the 10 NF2FF tests are ported in `tests/nf2ff.tcyr`, 16 assertions with the Cyrius-only groups
+  (the error records, nx·ny past 2^64, the angles, a zero field, the free):
+  - `test_nf2ff_phasor_line_source`: an off-centre line current's exact phasors, isotropic within 1 % at all 72
+    angles;
+  - `test_nf2ff_phasor_plane_wave_extinction`: under 2 % of one side's coherent scale;
+  - `test_nf2ff_phasor_validation`;
+  - `test_bessel_reference_helpers`: Rust's trapezoid J_n and Simpson Y_n against A&S Table 9.1 within 10⁻⁹.
+
+  The six that drive an `Fdtd2d` follow in M6. The unit takes about 4 s, mostly the line source's Bessel evaluations
+  near the contour. The ledger: 690 ported, 9 n/a, 159 pending of 858.
+- **Surface parity**: `Nf2ffResult` and `nf2ff_2d_phasor` are matched (544 items); `nf2ff_2d` stays listed for M6. The
+  API snapshot gains 2 functions (2,104).
+- **Benchmarks**: Rust's NF2FF bench drives the snapshot form on an `Fdtd2d`, so it stays pending for M6. A Cyrius-only
+  `fdtd/nf2ff_phasor_80x80_180` (`EXTRA`) sizes the phasor form the same way (an 80 × 80 grid, margin 5, 180 angles):
+  1.87–1.90 ms as first written, 1.52–1.54 ms after the skip above (−19 %, load 2.2–2.8), about 30 ns a contour
+  sample.
+
+  HEAD's 98 rows gave median ratios of 1.05 and 0.98 over two interleaved rounds. The load climbed from 1.0 to 2.8
+  during the first round; no existing path changed.
+- **The gate**: its audit first failed on one undocumented function, the field helper in `tests/nf2ff.tcyr` (its
+  comment sat above the globals before it); the comment now sits on the function.
+- **Result, every target** (x86_64 ELF, x86_64 PE, aarch64): **18 modules, 0 failing; 628,205 ok, 0 failed, 0
+  measured, 0 pending, 91,449 accepted (ADR 01: 30,894; ADR 0002: 60,555)** over 719,654 rows; **all 463 digests
+  equal**, 1d's 462 unchanged and one new. `nf2ff.tcyr` passes on all three (16). The gate is clean (no warnings;
+  execution coverage 359 of 359 functions); validate.py 719,654 rows, 0 problems; the oracle's `--check` and clippy
+  are clean. Next: 1f, the JSON of the FDTD types.
