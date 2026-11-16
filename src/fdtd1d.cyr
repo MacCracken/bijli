@@ -167,16 +167,83 @@ fn _bj_fd1_row(d: *f64, k: *f64, a: *f64, b: *f64, w: *f64, n) {
     return 0;
 }
 
-# 2^-400 and 2^400: the cancellation-free form's range (`_bj_fd1_mur`).
-var _BJ_FD1_LO: f64 = 0x26F0000000000000;
-var _BJ_FD1_HI: f64 = 0x58F0000000000000;
+# 2^-1022: the normal range's floor.
+var _BJ_FD1_DMIN: f64 = 0x0010000000000000;
 
-# The first-order Mur coefficient (v·dt − dx)/(v·dt + dx), v = c/√(ε_r μ_r): Rust's c·dt/√(ε_r μ_r). Where v·dt lies in
-# (2dx/3, 2dx), its difference with dx at least doubles v·dt's rounding error, cancelling outright at ε_rμ_r = 1/4
-# (k = 0, perfect absorption at dt = dx/2c), so there it takes the cancellation-free form (c²dt² − ε_rμ_r·dx²)/(c·dt
-# + dx·√(ε_rμ_r))², the same value, its numerator rounded once from the exact one (ADR 0002 row 40, M5 part 2a-1b);
-# elsewhere, and where c·dt or dx·√(ε_rμ_r) lies outside [2^-400, 2^400], Rust's chain. Mirrors fdtd.rs's
-# `mur_coefficient`.
+# 1 when x is 0, or finite with |x| ≥ 2^-1022.
+#must_use
+fn _bj_fd1_normal(x: f64): i64 {
+    if (x == 0.0) { return 1; }
+    var a: f64 = f64_abs(x);
+    if (a >= _BJ_FD1_DMIN && a < _BJ_FD1_INF) { return 1; }
+    return 0;
+}
+
+# 1 when the product z = x·y kept the normal range: z normal, or 0 from a zero factor (not an underflow).
+#must_use
+fn _bj_fd1_prod_ok(z: f64, x: f64, y: f64): i64 {
+    if (_bj_fd1_normal(z) == 0) { return 0; }
+    if (z == 0.0 && x != 0.0 && y != 0.0) { return 0; }
+    return 1;
+}
+
+# x·y to 53 bits with an unbounded exponent, from the doubles x and y.
+#must_use
+fn _bj_fd1_mul2(x: f64, y: f64): (f64, i64) {
+    var xs, xe = _bj_k_ux_from(x);
+    var ys, ye = _bj_k_ux_from(y);
+    var ps, pe = _bj_k_ux_mul(xs, xe, ys, ye);
+    return (ps, pe);
+}
+
+# The value s·2^e as a double when it is normal (or zero): (1, it), else (0, 0.0).
+#must_use
+fn _bj_fd1_exact(s: f64, e): (i64, f64) {
+    if (s == 0.0) { return (1, s); }
+    if (e < 0 - 1022 || e > 1023) { return (0, 0.0); }
+    var x: f64 = _bj_k_ux_round(s, e, 0.0);
+    return (1, x);
+}
+
+# The cancellation-free form (c²dt² − ε_rμ_r·dx²)/(c·dt + dx·√(ε_rμ_r))² (ADR 0002 row 40, M5 part 2a-1b) on dt and dx
+# scaled by the power of two 2^s that brings c·dt into [1, 2) (M5 part 2d-2b: the form is scale-free and the scaling
+# exact, so in range the bits are part 2a-1b's, and it now holds at every scale). (cs, ce) is c·dt and (rs, re) is
+# √(ε_rμ_r), each to 53 bits with an unbounded exponent. Returns (1, k), or (0, 0.0) where dt·2^s or dx·2^s isn't a
+# normal double.
+#must_use
+fn _bj_fd1_mur_band(dt: f64, dx: f64, eps_r: f64, mu_r: f64, cs: f64, ce, rs: f64, re): (i64, f64) {
+    var ts, te = _bj_k_ux_from(dt);
+    var xs, xe = _bj_k_ux_from(dx);
+    var ok1, dt2 = _bj_fd1_exact(ts, te - ce);
+    var ok2, dx2 = _bj_fd1_exact(xs, xe - ce);
+    if (ok1 == 0 || ok2 == 0) { return (0, 0.0); }
+    var rv: f64[5];
+    rv[0] = BJ_SPEED_OF_LIGHT;
+    rv[1] = dt2;
+    rv[2] = eps_r;
+    rv[3] = mu_r;
+    rv[4] = dx2;
+    var ro: f64[1];
+    if (_bj_cr_rat(&rv, 5, _bj_cr_rat_spec(11), 0, &ro) == 0) { return (0, 0.0); }
+    var bs, be = _bj_k_ux_mul(xs, xe - ce, rs, re);
+    var ok3, b2 = _bj_fd1_exact(bs, be);
+    if (ok3 == 0) { return (0, 0.0); }
+    var s: f64 = cs + b2;
+    var s2: f64 = s * s;
+    var n: f64 = ro[0];
+    var k: f64 = n / s2;
+    return (1, k);
+}
+
+# The first-order Mur coefficient (v·dt − dx)/(v·dt + dx), v = c/√(ε_r μ_r): Rust's c·dt/√(ε_r μ_r). For finite,
+# positive arguments:
+# - where the unbounded v·dt lies in (2dx/3, 2dx), its difference with dx at least doubles v·dt's rounding error,
+#   cancelling outright at ε_rμ_r = 1/4 (k = 0, perfect absorption at dt = dx/2c), so there it takes the
+#   cancellation-free form (_bj_fd1_mur_band; ADR 0002 row 40, M5 parts 2a-1b and 2d-2b);
+# - elsewhere, where ε_rμ_r, its root, c·dt, v·dt, v·dt − dx or v·dt + dx leaves the normal range, the chain runs with
+#   an unbounded exponent and the quotient is rounded once (ADR 0002 row 18, M5 part 2d-2b: ε_rμ_r below the range gave
+#   v·dt = ∞ and k = NaN where it is near 1);
+# - and otherwise, as for any other argument, Rust's chain. Mirrors fdtd.rs's `mur_coefficient`.
 #must_use
 fn _bj_fd1_mur(dt: f64, dx: f64, eps_r: f64, mu_r: f64): f64 {
     var em: f64 = eps_r * mu_r;
@@ -187,29 +254,29 @@ fn _bj_fd1_mur(dt: f64, dx: f64, eps_r: f64, mu_r: f64): f64 {
     var num: f64 = v_dt - dx;
     var den: f64 = v_dt + dx;
     var k: f64 = num / den;
-    var v3: f64 = 3.0 * v_dt;
-    var d2: f64 = 2.0 * dx;
-    if (v3 > d2 && v_dt < d2) {
-        var b: f64 = dx * root;
-        var lo: f64 = _BJ_FD1_LO;
-        var hi: f64 = _BJ_FD1_HI;
-        if (cdt >= lo && cdt <= hi && b >= lo && b <= hi) {
-            var rv: f64[5];
-            rv[0] = c;
-            rv[1] = dt;
-            rv[2] = eps_r;
-            rv[3] = mu_r;
-            rv[4] = dx;
-            var ro: f64[1];
-            if (_bj_cr_rat(&rv, 5, _bj_cr_rat_spec(11), 0, &ro) == 1) {
-                var s: f64 = cdt + b;
-                var s2: f64 = s * s;
-                var n: f64 = ro[0];
-                k = n / s2;
-            }
-        }
+    var z: f64 = dt * 0.0 + dx * 0.0 + eps_r * 0.0 + mu_r * 0.0;
+    if (z != 0.0 || dt <= 0.0 || dx <= 0.0 || eps_r <= 0.0 || mu_r <= 0.0) { return k; }
+    var as, ae = _bj_k_ux_from(eps_r);
+    var bs, be = _bj_k_ux_from(mu_r);
+    var es, ee = _bj_k_ux_mul(as, ae, bs, be);
+    var rs, re = _bj_k_ux_sqrt(es, ee);
+    var cxs, cxe = _bj_k_ux_from(c);
+    var ts, te = _bj_k_ux_from(dt);
+    var cs, ce = _bj_k_ux_mul(cxs, cxe, ts, te);
+    var vs, ve = _bj_k_ux_div(cs, ce, rs, re);
+    var xs, xe = _bj_k_ux_from(dx);
+    var v3s, v3e = _bj_k_ux_mul(3.0, 0, vs, ve);
+    if (_bj_k_ux_cmp(v3s, v3e, xs, xe + 1) == 1 && _bj_k_ux_cmp(vs, ve, xs, xe + 1) == 0 - 1) {
+        var ok, kb = _bj_fd1_mur_band(dt, dx, eps_r, mu_r, cs, ce, rs, re);
+        if (ok == 1) { return kb; }
     }
-    return k;
+    var nrm = _bj_fd1_normal(em) & _bj_fd1_normal(root) & _bj_fd1_normal(cdt) & _bj_fd1_normal(v_dt);
+    nrm = nrm & _bj_fd1_normal(num) & _bj_fd1_normal(den);
+    if (nrm == 1) { return k; }
+    var ns, ne = _bj_k_ux_sub(vs, ve, xs, xe);
+    var qs, qe = _bj_k_ux_add(vs, ve, xs, xe);
+    var ku: f64 = _bj_k_ux_div_f64(ns, ne, qs, qe);
+    return ku;
 }
 
 # Creates a 1D grid of num_cells cells (a usize) and spacing dx (m) into *out, every field zero, vacuum everywhere,
@@ -307,6 +374,69 @@ public fn BjFdtd1d_free(sim: *BjFdtd1d): i64 {
 fn _bj_fd1_umin(end, n): i64 {
     if (end < 0 || end > n) { return n; }
     return end;
+}
+
+# The source sample amplitude·sin((2π·f)·(step·dt)) with an unbounded exponent (ADR 0002 row 18, M5 part 2d-2b): t, 2πf
+# and the phase to 53 bits, the sine by _bj_vx_sin53 (Payne–Hanek past DBL_MAX), the product rounded once. sf is Rust's
+# `step as f64`.
+#must_use
+fn _bj_fd1_source_ux(sf: f64, dt: f64, w: f64, f: f64, amp: f64): f64 {
+    var ts, te = _bj_fd1_mul2(sf, dt);
+    var ws, we = _bj_fd1_mul2(w, f);
+    var ps, pe = _bj_k_ux_mul(ws, we, ts, te);
+    var ss, se = _bj_vx_sin53(ps, pe);
+    var as, ae = _bj_k_ux_from(amp);
+    var v: f64 = _bj_k_ux_mul_f64(as, ae, ss, se);
+    return v;
+}
+
+# 1 when every field, ε_r, μ_r and dx of the grid is finite.
+#must_use
+fn _bj_fd1_finite_fields(sim: *BjFdtd1d): i64 {
+    var e: *f64 = _bj_fd1_f64p(sim.e_field);
+    var h: *f64 = _bj_fd1_f64p(sim.h_field);
+    var eps: *f64 = _bj_fd1_f64p(sim.permittivity);
+    var mu: *f64 = _bj_fd1_f64p(sim.permeability);
+    var z: f64 = sim.dx * 0.0;
+    for (var i = 0; i < sim.num_cells; i = i + 1) {
+        var zi: f64 = e[i] * 0.0 + h[i] * 0.0 + eps[i] * 0.0 + mu[i] * 0.0;
+        z = z + zi;
+    }
+    if (z == 0.0) { return 1; }
+    return 0;
+}
+
+# total_energy's chain with an unbounded exponent (ADR 0002 row 18, M5 part 2d-2b): each product, term and partial sum
+# to 53 bits, the sum from −0.0, and sum·dx rounded once.
+#must_use
+fn _bj_fd1_energy_ux(sim: *BjFdtd1d): f64 {
+    var e: *f64 = _bj_fd1_f64p(sim.e_field);
+    var h: *f64 = _bj_fd1_f64p(sim.h_field);
+    var eps: *f64 = _bj_fd1_f64p(sim.permittivity);
+    var mu: *f64 = _bj_fd1_f64p(sim.permeability);
+    var ss: f64 = -0.0;
+    var se = 0;
+    var e0s, e0e = _bj_k_ux_from(BJ_EPSILON_0);
+    var m0s, m0e = _bj_k_ux_from(BJ_MU_0);
+    for (var i = 0; i < sim.num_cells; i = i + 1) {
+        var es, ee = _bj_k_ux_from(e[i]);
+        var hs, he = _bj_k_ux_from(h[i]);
+        var a1s, a1e = _bj_fd1_mul2(0.5, eps[i]);
+        var a2s, a2e = _bj_k_ux_mul(a1s, a1e, e0s, e0e);
+        var a3s, a3e = _bj_k_ux_mul(a2s, a2e, es, ee);
+        var as, ae = _bj_k_ux_mul(a3s, a3e, es, ee);
+        var b1s, b1e = _bj_fd1_mul2(0.5, mu[i]);
+        var b2s, b2e = _bj_k_ux_mul(b1s, b1e, m0s, m0e);
+        var b3s, b3e = _bj_k_ux_mul(b2s, b2e, hs, he);
+        var bs, be = _bj_k_ux_mul(b3s, b3e, hs, he);
+        var ts, te = _bj_k_ux_add(as, ae, bs, be);
+        var ns, ne = _bj_k_ux_add(ss, se, ts, te);
+        ss = ns;
+        se = ne;
+    }
+    var xs, xe = _bj_k_ux_from(sim.dx);
+    var en: f64 = _bj_k_ux_mul_f64(ss, se, xs, xe);
+    return en;
 }
 
 impl BjFdtd1d {
@@ -419,7 +549,9 @@ impl BjFdtd1d {
 
     # Runs `steps` time steps (a usize). Before each, when source_cell is in the grid, adds
     # source_amplitude·sin(2π·source_frequency·t) at it, t = step·dt; BJ_FDTD_NO_SOURCE (or any cell outside the
-    # grid) injects nothing, as Rust's None. Mirrors `Fdtd1d::run`.
+    # grid) injects nothing, as Rust's None. Where t, 2πf or the phase leaves the normal range for finite arguments
+    # (the phase past DBL_MAX, where Rust took the sine of ∞), the sample runs with an unbounded exponent, the sine past
+    # DBL_MAX by Payne–Hanek (ADR 0002 row 18, M5 part 2d-2b). Mirrors `Fdtd1d::run`.
     public fn run(self, steps, source_cell, source_frequency: f64, source_amplitude: f64) {
         if (_bj_log_on(4) == 1) {
             var lb[256];
@@ -452,6 +584,10 @@ impl BjFdtd1d {
                 var arg: f64 = wf * t;
                 var s: f64 = _bj_sin(arg);
                 var v: f64 = source_amplitude * s;
+                var ok = _bj_fd1_prod_ok(t, sf, dt) & _bj_fd1_prod_ok(wf, w, source_frequency);
+                ok = ok & _bj_fd1_prod_ok(arg, wf, t);
+                var zf: f64 = dt * 0.0 + source_frequency * 0.0 + source_amplitude * 0.0;
+                if (ok == 0 && zf == 0.0) { v = _bj_fd1_source_ux(sf, dt, w, source_frequency, source_amplitude); }
                 self.add_source(source_cell, v);
             }
             self.step_once();
@@ -481,8 +617,10 @@ impl BjFdtd1d {
         return t;
     }
 
-    # The field energy per unit area, dx·Σ(½ε_rε₀E² + ½μ_rμ₀H²), summed from −0.0 as Rust's `Sum`. Mirrors
-    # `Fdtd1d::total_energy`.
+    # The field energy per unit area, dx·Σ(½ε_rε₀E² + ½μ_rμ₀H²), summed from −0.0 as Rust's `Sum`. Where a product,
+    # a term or the running sum leaves the normal range for finite fields (E² past DBL_MAX, or below the range, while
+    # the energy is representable), the whole chain runs with an unbounded exponent and the last product is rounded
+    # once (ADR 0002 row 18, M5 part 2d-2b). Mirrors `Fdtd1d::total_energy`.
     #must_use
     public fn total_energy(self): f64 {
         var e: *f64 = _bj_fd1_f64p(self.e_field);
@@ -490,22 +628,32 @@ impl BjFdtd1d {
         var eps: *f64 = _bj_fd1_f64p(self.permittivity);
         var mu: *f64 = _bj_fd1_f64p(self.permeability);
         var sum: f64 = -0.0;
+        var ok = 1;
         for (var i = 0; i < self.num_cells; i = i + 1) {
             var ei: f64 = e[i];
             var hi: f64 = h[i];
-            var a: f64 = 0.5 * eps[i];
-            a = a * BJ_EPSILON_0;
-            a = a * ei;
-            a = a * ei;
-            var b: f64 = 0.5 * mu[i];
-            b = b * BJ_MU_0;
-            b = b * hi;
-            b = b * hi;
+            var ep: f64 = eps[i];
+            var mp: f64 = mu[i];
+            var a1: f64 = 0.5 * ep;
+            var a2: f64 = a1 * BJ_EPSILON_0;
+            var a3: f64 = a2 * ei;
+            var a: f64 = a3 * ei;
+            var b1: f64 = 0.5 * mp;
+            var b2: f64 = b1 * BJ_MU_0;
+            var b3: f64 = b2 * hi;
+            var b: f64 = b3 * hi;
             var term: f64 = a + b;
             sum = sum + term;
+            if (ok == 1) {
+                ok = _bj_fd1_prod_ok(a1, 0.5, ep) & _bj_fd1_prod_ok(a2, a1, BJ_EPSILON_0) & _bj_fd1_prod_ok(a3, a2, ei);
+                ok = ok & _bj_fd1_prod_ok(a, a3, ei) & _bj_fd1_prod_ok(b1, 0.5, mp) & _bj_fd1_prod_ok(b2, b1, BJ_MU_0);
+                ok = ok & _bj_fd1_prod_ok(b3, b2, hi) & _bj_fd1_prod_ok(b, b3, hi);
+                ok = ok & _bj_fd1_normal(term) & _bj_fd1_normal(sum);
+            }
         }
         var dx: f64 = self.dx;
         var energy: f64 = sum * dx;
+        if (ok == 0 && _bj_fd1_finite_fields(self) == 1) { energy = _bj_fd1_energy_ux(self); }
         return energy;
     }
 }

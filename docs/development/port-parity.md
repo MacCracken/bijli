@@ -6047,3 +6047,48 @@ M5's 2d, the range edges (row 18), runs in bites: the pulses, the 1D grid (its s
   equal**. `fdtd1d.tcyr` passes on all three (79). The gate is clean (no warnings; execution coverage 371 of 371
   functions); validate.py 758,998 rows, 0 problems; the oracle's `--check` and clippy clean. Next: 2d-2b, the 1D grid's
   Mur coefficient outside its band, `total_energy` and `run`'s source.
+
+## 108. M5 part 2d-2b: the 1D grid's Mur coefficient, energy and source at their range edges (2026-11-16)
+
+- **The findings**:
+  - the Mur coefficient (v·dt − dx)/(v·dt + dx) outside its band: ε_rμ_r below the range made √ 0, v·dt = ∞ and k =
+    NaN where it is 1 (ε_r = μ_r = 10⁻³⁰⁰); its other intermediates (the root, c·dt, v·dt, v·dt ± dx) could leave either
+    end likewise; and part 2a-1b's band form held only for c·dt and dx·√(ε_rμ_r) in [2^-400, 2^400], so at extreme
+    scales the cancellation stayed (dx = 10⁻²⁰⁰ at ε_r = 1/4: 0 for 1.2657005166322485·10⁻¹⁷);
+  - `total_energy`'s ½ε_rε₀E² past DBL_MAX (or below the range) where dx brings the energy back (E = 10¹⁶⁰ on
+    dx = 10⁻¹⁰: ∞ for 4.4270939064·10²⁹⁸);
+  - `run`'s source sample amplitude·sin((2πf)·(step·dt)): 2πf past DBL_MAX made the phase ∞·0 = NaN at t = 0 (f =
+    DBL_MAX), and that NaN spread through the grid; a phase past DBL_MAX took the sine of ∞; a subnormal t (dx = 10⁻³⁰⁰,
+    so dt is subnormal) lost the phase's bits.
+- **ADR 0002 rows 18 and 40, amended** (`src/fdtd1d.cyr`):
+  - `_bj_fd1_mur` tests the band on the unbounded v·dt (3v·dt > 2dx and v·dt < 2dx, compared exactly) and takes the
+    band form on dt and dx scaled by the power of two that brings c·dt into [1, 2) (`_bj_fd1_mur_band`): the form is
+    scale-free and the scaling exact, so in range its bits are part 2a-1b's, and it now holds wherever the scaled dt
+    and dx are normal doubles (row 40). Outside the band, where any intermediate leaves the normal range, the chain
+    runs with an unbounded exponent and the quotient is rounded once (row 18);
+  - `total_energy` tracks whether any product, term or partial sum left the range (a product of nonzero factors that
+    underflowed to 0 included) and, for finite fields, reruns the whole sum with an unbounded exponent, sum·dx rounded
+    once (`_bj_fd1_energy_ux`);
+  - `run` reruns a source sample whose t, 2πf or phase left the range: those to 53 bits, the sine by `_bj_vx_sin53`
+    (Payne–Hanek past DBL_MAX), the product with the amplitude rounded once (`_bj_fd1_source_ux`). Rust's `step as f64`
+    stays: t is an intermediate of the chain (row 13 rounds `time()`, a result, once).
+- **validate.py**: `fd_mur_port` and `fd_mur_band` mirror the new coefficient (the band at every scale under row 40, the
+  unbounded chain under row 18), and `Fd1.energy` and `Fd1.run` the other two under row 18. The band form's accuracy
+  check now covers 263 argument sets (the extreme scales among them): within 3.21 ulps.
+- **The grid**: 127 rows appended to `fdtd.tsv` (106,170): seven extreme values of ε_r and μ_r at the boundary cells and
+  crossed over the whole grid, the band at dx from 2^-1000 to 10³⁰⁰ (ε_r = 1/4 and 0.3), fields of 10^±155 to 10^±200
+  on matching dx (one row with no step, two frames), `run` at f = 3·10³⁰⁷, 10³⁰⁸ and DBL_MAX, and `run` on dx = 10⁻³⁰⁰,
+  10⁻³⁰⁵ and 10⁻³¹⁰ (subnormal dt).
+- **The mapping**: 51 more 1D trajectories to row 18 (111 in all; existing `new`, `run`, `set_permittivity` and
+  `add_source` rows with special dx or media among them) and 8 to row 40 (the extreme-scale bands), all passing.
+- **Tests**: `tests/fdtd1d.tcyr`'s `cyrius_grid_edges` (4 assertions, 83 in all): the four cases above.
+- **Benchmarks**: the interleaved A/B against HEAD (two rounds, load 0.5 to 1.1) left every row but the 1D steps (part
+  2d-2a's scan) unchanged (median ratios 1.00 and 1.00): `fdtd/step_1000_cells` 7.43 µs as at part 2d-2a, and
+  `fdtd/run_100_steps_500_cells` 538–608 µs against 2d-2a's 520–523 µs (the source sample's three range checks a step, a
+  few calls, so mostly these rounds' noise). The Mur coefficient and `total_energy` aren't benched: the coefficient runs
+  at setup, and the energy's checks add a few calls a cell where it is called.
+- **Result, every target** (x86_64 ELF, x86_64 PE, aarch64): **18 modules, 0 failing; 640,981 ok, 0 failed, 0
+  measured, 0 pending, 118,144 accepted (ADR 01: 40,366; ADR 0002: 77,778)** over 759,125 rows; **all 475 digests
+  equal**. `fdtd1d.tcyr` passes on all three (83). The gate is clean (no warnings; execution coverage 371 of 371
+  functions); validate.py 759,125 rows, 0 problems; the oracle's `--check` and clippy clean. The 1D grid's range edges
+  are done (2d-2a and 2d-2b). Next: 2d-3, the TF/SF grid's updates.

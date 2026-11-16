@@ -466,6 +466,35 @@ fn main() {
     assert(at(u2.e_field, 9) == _bj_from_bits(0x7c16c5c52536cb), "E₉ after it (2.500000000000108e-306; Rust's …109)");
     BjFdtd1d_free(&u2);
 
+    # ADR 0002 rows 18 and 40 (M5 part 2d-2b): the Mur coefficient, the energy and the source at their range edges.
+    # The expectations are validate.py's model of the port.
+    test_group("cyrius_grid_edges");
+    var g1: BjFdtd1d;
+    var tg1, vg1 = BjFdtd1d_new(10, 0.001, &g1);
+    var e300: f64 = _bj_from_bits(0x1a56e1fc2f8f359);
+    var tg2, vg2 = g1.set_permittivity(0, 10, e300);
+    var tg3, vg3 = g1.set_permeability(0, 10, e300);
+    assert(g1.abc_left == 1.0, "ε_r = μ_r = 10⁻³⁰⁰: ε_rμ_r below the range, k = 1 (Rust's v·dt = ∞, k = NaN)");
+    BjFdtd1d_free(&g1);
+    var g2: BjFdtd1d;
+    var tg4, vg4 = BjFdtd1d_new(10, _bj_from_bits(0x16687e92154ef7ac), &g2);
+    var tg5, vg5 = g2.set_permittivity(0, 10, 0.25);
+    assert(g2.abc_left == _bj_from_bits(0x3c6d2f608b06a8ff),
+      "dx = 10⁻²⁰⁰, ε_r = 1/4: the band form on scaled dt and dx, 1.2657005166322485e-17 (Rust's 0)");
+    BjFdtd1d_free(&g2);
+    var g3: BjFdtd1d;
+    var tg6, vg6 = BjFdtd1d_new(10, _bj_from_bits(0x3ddb7cdfd9d7bdbb), &g3);
+    g3.add_source(5, _bj_from_bits(0x6126c2d4256ffcc3));
+    var en3: f64 = g3.total_energy();
+    assert(en3 == _bj_from_bits(0x7df0ec5831167d88), "E = 10¹⁶⁰ on dx = 10⁻¹⁰: E² past DBL_MAX, 4.427e298 (Rust's ∞)");
+    BjFdtd1d_free(&g3);
+    var g4: BjFdtd1d;
+    var tg7, vg7 = BjFdtd1d_new(20, 0.001, &g4);
+    g4.run(1, 10, _bj_from_bits(0x7FEFFFFFFFFFFFFF), 1.0);
+    assert(at(g4.e_field, 10) == 0.0 && at(g4.h_field, 9) == 0.0,
+      "f = DBL_MAX: 2πf past DBL_MAX at t = 0, the sample sin 0 = 0 (Rust's ∞·0 = NaN)");
+    BjFdtd1d_free(&g4);
+
     return assert_summary();
 }
 

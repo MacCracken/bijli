@@ -464,6 +464,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
 - **Cyrius port, M5 part 2d-2a — the 1D grid's updates at their range edges** (`src/fdtd1d.cyr`): the user's answer
   of 2026-11-15, the per-cell updates' range edges fixed (ADR 0002 row 18 amended, see Fixed). validate.py's 1D model
   runs the same per-cell rule. `fdtd.tsv` grows by 79 scenario rows (106,043); `fdtd.adr.tsv` maps 60 trajectories.
+- **Cyrius port, M5 part 2d-2b — the 1D grid's other range edges** (`src/fdtd1d.cyr`): the Mur coefficient outside its
+  band and its band form at every scale, `total_energy` and `run`'s source sample (ADR 0002 rows 18 and 40 amended,
+  see Fixed). `fdtd.tsv` grows by 127 rows (106,170); `fdtd.adr.tsv` maps 51 more trajectories to row 18 and 8 to row
+  40.
 
 ### Fixed
 
@@ -972,6 +976,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
   scan of the product row per update finds them); every other cell keeps Rust's bits. Cost: the scan, about 2.7 ns a
   cell and row, makes the 1D step 3.5–3.8× HEAD's (`fdtd/step_1000_cells` 1.97–2.12 → 7.36–7.53 µs); 6.7.18 has no
   vector verb that classifies a lane (`port-parity.md` §107, plan §10).
+- **fdtd** (ADR 0002 rows 18 and 40 amended, M5 part 2d-2b): `Fdtd1d`'s Mur coefficient was NaN where ε_rμ_r fell below
+  the range (ε_r = μ_r = 10⁻³⁰⁰: v·dt = ∞, for 1) and kept its cancellation at extreme scales (dx = 10⁻²⁰⁰ at ε_r = 1/4
+  gave 0 for 1.27·10⁻¹⁷); `total_energy` was ∞ where E² overflows but the energy doesn't (E = 10¹⁶⁰, dx = 10⁻¹⁰:
+  4.4·10²⁹⁸); and `run` with f = DBL_MAX injected NaN (2πf = ∞ times t = 0) into the grid. Each now runs with an
+  unbounded exponent where an intermediate leaves the range (the sine past DBL_MAX by Payne–Hanek), and the band form
+  works on dt and dx scaled into range. Cost: `fdtd/run_100_steps_500_cells` 520–523 → 538–608 µs (the source's
+  checks, a few calls a step) (`port-parity.md` §108).
 
 ### Performance
 

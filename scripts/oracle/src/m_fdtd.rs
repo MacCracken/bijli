@@ -1997,6 +1997,43 @@ fn emit_2d2a(r: &mut Rows) {
     r.frames_new(st, 40, 1e-3, &[Op::Mu(0, 40, 1e300), Op::Source(20, 1e-10)], &[1, 10, 100], Op::Step);
 }
 
+// ── part 2d-2b: the 1D grid's Mur coefficient, energy and source at their range edges (ADR 0002 rows 18 and 40) ──
+
+/// The 1D grid's other range edges: the Mur coefficient with ε_r and μ_r past either end at the boundary cells (their
+/// product, its root or v·dt leaving the range: row 18), the cancellation-free band at extreme scales (dx from 2^-1000
+/// to 10³⁰⁰ at ε_r = 1/4: row 40 on scaled dt and dx), `total_energy` of fields whose squares over- or underflow on
+/// grids whose dx brings the energy back, and `run`'s source with 2πf past DBL_MAX or a subnormal t.
+fn emit_2d2b(r: &mut Rows) {
+    let sp = "Fdtd1d::set_permittivity";
+    let sm = "Fdtd1d::set_permeability";
+    let ext = [1e300, 1e-300, 1e-310, f64::MAX, f64::from_bits(1), 1e200, 1e-200];
+    for &x in &ext {
+        r.one_new(sp, 10, 1e-3, &[Op::Eps(1, 2, x)]);
+        r.one_new(sm, 10, 1e-3, &[Op::Mu(0, 1, x)]);
+        r.one_new(sp, 10, 1e-3, &[Op::Eps(8, 9, x)]);
+        for &y in &ext {
+            r.one_new(sp, 10, 1e-3, &[Op::Mu(0, 10, y), Op::Eps(0, 10, x)]);
+        }
+    }
+    for dx in [2f64.powi(-1000), 1e-300, 1e-200, 1e-100, 1e100, 1e200, 1e300, f64::MAX / 4.0] {
+        r.one_new("Fdtd1d::new", 10, dx, &[]);
+        r.one_new(sp, 10, dx, &[Op::Eps(0, 10, 0.25)]);
+        r.one_new(sp, 10, dx, &[Op::Eps(0, 10, 0.3)]);
+    }
+    let fa = "Fdtd1d::add_source";
+    for (v, dx) in [(1e160, 1e-10), (1e155, 1e-3), (1e-170, 1e300), (1e-160, 1e100), (1e-200, 1e200)] {
+        r.one_new(fa, 10, dx, &[Op::Source(5, v)]);
+        r.frames_new("Fdtd1d::step_once", 10, dx, &[Op::Source(5, v)], &[1, 3], Op::Step);
+    }
+    let fr = "Fdtd1d::run";
+    for f in [f64::MAX, 1e308, 3e307] {
+        r.frames_new(fr, 20, 1e-3, &[], &[1, 2, 5], |k| Op::Run(k, Some(10), f, 1.0));
+    }
+    for dx in [1e-300, 1e-305, 1e-310] {
+        r.frames_new(fr, 20, dx, &[], &[1, 2, 5], |k| Op::Run(k, Some(10), 1e9, 1.0));
+    }
+}
+
 pub fn emit() -> Module {
     let mut r = Rows { m: Module::new("fdtd"), keys: BTreeSet::new() };
     emit_1a(&mut r);
@@ -2014,5 +2051,6 @@ pub fn emit() -> Module {
     emit_2c(&mut r);
     emit_2d1(&mut r);
     emit_2d2a(&mut r);
+    emit_2d2b(&mut r);
     r.m
 }

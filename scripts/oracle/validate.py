@@ -8772,6 +8772,11 @@ def fd_mur(dt, dx, eps_r, mu_r, c):
     return fdiv(v_dt - dx, v_dt + dx)
 
 
+def fd_prod_ok(z, x, y) -> bool:
+    """The product z = x·y kept the normal range: z normal, or 0 from a zero factor."""
+    return fs_normal(z) and not (z == 0.0 and x != 0.0 and y != 0.0)
+
+
 def fd_cell18(d, k, a, b):
     """d + k·(a − b) as the port updates a cell (ADR 0002 row 18, M5 part 2d-2a): Rust's chain, but where the product
     k·(a − b) is ±∞, NaN or a nonzero subnormal and every operand is finite, a − b and the product to 53 bits with an
@@ -8799,30 +8804,57 @@ def fd_mur_exact(dt, dx, eps_r, mu_r, c):
         return (a - b) / (a + b)
 
 
-def fd_mur_port(dt, dx, eps_r, mu_r, c):
-    """The port's Mur coefficient (ADR 0002 row 40, M5 part 2a-1b): Rust's chain, but where v·dt lies in (2dx/3, 2dx)
-    and c·dt and dx·√(ε_rμ_r) in [2^-400, 2^400], RN(c²dt² − ε_rμ_r·dx²)/(c·dt + dx·√(ε_rμ_r))² with Rust's rounded
-    c·dt and √(ε_rμ_r)."""
-    root = fsqrt(eps_r * mu_r)
+def fd_mur_band(dt, dx, eps_r, mu_r, c, cx, rx):
+    """The cancellation-free form on dt and dx scaled by 2^-e, c·dt in [2^e, 2^(e + 1)) (M5 parts 2a-1b and 2d-2b), for
+    the 53-bit c·dt = cx and √(ε_rμ_r) = rx; None where a scaled value isn't a normal double."""
+    F = Fraction
+    e = binade(cx)
+    dt2, dx2 = F(dt) / F(2) ** e, F(dx) / F(2) ** e
+
+    def normal(q):
+        return q == 0 or -1022 <= binade(abs(q)) <= 1023
+    if not (normal(dt2) and normal(dx2)):
+        return None
+    n = rn_frac(F(c) ** 2 * dt2 ** 2 - F(eps_r) * F(mu_r) * dx2 ** 2)
+    b2 = rnd53(dx2 * rx)
+    if not normal(b2):
+        return None
+    s = float(cx / F(2) ** e) + float(b2)
+    return n / (s * s)
+
+
+def fd_mur_port(dt, dx, eps_r, mu_r, c, r18=False):
+    """The port's Mur coefficient: Rust's chain, but for finite, positive arguments where the unbounded v·dt lies in
+    (2dx/3, 2dx), the cancellation-free form at any scale (ADR 0002 row 40, M5 parts 2a-1b and 2d-2b); and with r18,
+    elsewhere, where an intermediate leaves the normal range, the chain with an unbounded exponent, the quotient
+    rounded once (row 18, M5 part 2d-2b)."""
+    em = eps_r * mu_r
+    root = fsqrt(em)
     cdt = c * dt
     v_dt = fdiv(cdt, root)
-    k = fdiv(v_dt - dx, v_dt + dx)
-    if 3.0 * v_dt > 2.0 * dx and v_dt < 2.0 * dx:
-        b = dx * root
-        if FD_MUR_LO <= cdt <= FD_MUR_HI and FD_MUR_LO <= b <= FD_MUR_HI:
-            F = Fraction
-            n = rn_frac(F(c) ** 2 * F(dt) ** 2 - F(eps_r) * F(mu_r) * F(dx) ** 2)
-            s = cdt + b
-            k = n / (s * s)
+    num, den = v_dt - dx, v_dt + dx
+    k = fdiv(num, den)
+    if not all(math.isfinite(x) and x > 0 for x in (dt, dx, eps_r, mu_r)):
+        return k
+    r_ux = ux_sqrt(ux_mul(ux(eps_r), ux(mu_r)))
+    c_ux = ux_mul(ux(c), ux(dt))
+    v_ux = ux_div(c_ux, r_ux)
+    d2 = 2 * Fraction(dx)
+    if rnd53(3 * v_ux[0]) > d2 and v_ux[0] < d2:
+        kb = fd_mur_band(dt, dx, eps_r, mu_r, c, c_ux[0], r_ux[0])
+        if kb is not None:
             key = (dt, dx, eps_r, mu_r)
             if key not in FD_MUR_SEEN:
                 ex = fd_mur_exact(dt, dx, eps_r, mu_r, c)
                 with decimal.localcontext() as ctx:
                     ctx.prec = 80
                     u = math.ulp(float(ex)) if ex != 0 else 0.0
-                    FD_MUR_SEEN[key] = 0.0 if u == 0.0 and k == 0.0 else float(abs(decimal.Decimal(k) - ex)
-                                                                              / decimal.Decimal(u or 5e-324))
-    return k
+                    FD_MUR_SEEN[key] = 0.0 if u == 0.0 and kb == 0.0 else float(abs(decimal.Decimal(kb) - ex)
+                                                                               / decimal.Decimal(u or 5e-324))
+            return kb
+    if not r18 or all(fs_normal(z) for z in (em, root, cdt, v_dt, num, den)):
+        return k
+    return ux_fin(ux_div(ux_sub(v_ux, ux(dx)), ux_add(v_ux, ux(dx)), r=lambda v: v))
 
 
 def fd_pos(x) -> bool:
@@ -8835,7 +8867,8 @@ class Fd1:
 
     def __init__(self, n, dx, K, port=frozenset()):
         self.c, self.eps0, self.mu0 = K
-        self.mur = fd_mur_port if "40" in port else fd_mur
+        r18 = "18" in port
+        self.mur = (lambda *a: fd_mur_port(*a, r18=r18)) if "40" in port else fd_mur
         self.r13, self.r18 = "13" in port, "18" in port
         self.n, self.dx, self.step = n, dx, 0
         self.dt = dx / (2.0 * self.c)
@@ -8910,16 +8943,43 @@ class Fd1:
     def run(self, steps, cell, freq, amp, P):
         for _ in range(steps):
             if cell is not None:
-                t = float(self.step) * self.dt
-                v = amp * P["sin"](2.0 * math.pi * freq * t)
+                sf = float(self.step)
+                t = sf * self.dt
+                wf = 2.0 * math.pi * freq
+                arg = wf * t
+                v = amp * P["sin"](arg)
+                if self.r18 and all(math.isfinite(x) for x in (self.dt, freq, amp)) and not (
+                        fd_prod_ok(t, sf, self.dt) and fd_prod_ok(wf, 2.0 * math.pi, freq) and fd_prod_ok(arg, wf, t)):
+                    ph = ux_mul(ux_mul(ux(2.0 * math.pi), ux(freq)), ux_mul(ux(sf), ux(self.dt)))
+                    v = ux_fin(ux_mul(ux(amp), fs_sin53(ph), r=lambda q: q))   # row 18, M5 part 2d-2b
                 self.add_source(cell, v)
             self.step_once()
 
     def energy(self):
-        s = -0.0
+        s, ok = -0.0, True
         for e, h, eps, mu in zip(self.e, self.h, self.eps, self.mu):
-            s = s + (0.5 * eps * self.eps0 * e * e + 0.5 * mu * self.mu0 * h * h)
-        return s * self.dx
+            a1 = 0.5 * eps
+            a2 = a1 * self.eps0
+            a3 = a2 * e
+            a = a3 * e
+            b1 = 0.5 * mu
+            b2 = b1 * self.mu0
+            b3 = b2 * h
+            b = b3 * h
+            s = s + (a + b)
+            if ok and self.r18:
+                ok = (fd_prod_ok(a1, 0.5, eps) and fd_prod_ok(a2, a1, self.eps0) and fd_prod_ok(a3, a2, e)
+                      and fd_prod_ok(a, a3, e) and fd_prod_ok(b1, 0.5, mu) and fd_prod_ok(b2, b1, self.mu0)
+                      and fd_prod_ok(b3, b2, h) and fd_prod_ok(b, b3, h) and fs_normal(a + b) and fs_normal(s))
+        en = s * self.dx
+        if not ok and all(math.isfinite(x) for x in self.e + self.h + self.eps + self.mu + [self.dx]):
+            ss = (Fraction(0), True)                # row 18, M5 part 2d-2b: the chain with an unbounded exponent
+            for e, h, eps, mu in zip(self.e, self.h, self.eps, self.mu):
+                a = ux_mul(ux_mul(ux_mul(ux(0.5), ux(eps)), ux(self.eps0)), ux(e))
+                b = ux_mul(ux_mul(ux_mul(ux(0.5), ux(mu)), ux(self.mu0)), ux(h))
+                ss = ux_add(ss, ux_add(ux_mul(a, ux(e)), ux_mul(b, ux(h))))
+            en = ux_fin(ux_mul(ss, ux(self.dx), r=lambda q: q))
+        return en
 
     def state(self):
         n = self.n
