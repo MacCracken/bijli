@@ -5277,3 +5277,108 @@ below 2^-1022).
   equal**, HEAD's unchanged but the three array factors'. `rf.tcyr` passes on all three (266). The gate is clean (no
   warnings; execution coverage 323 of 323 functions); validate.py 627,619 rows, 0 problems. **2d is done: Part 2 is
   complete, and with it M4.** Next: M5, the FDTD core.
+
+## 94. M5 part 1a: the 1D grid and the trajectory rows (2026-11-15)
+
+M5 ports fdtd.rs's FDTD core (1,209 of its code lines; its 101 tests outside the 2D, 3D and CPML ones) in Parts, as
+M3 and M4 did. Part 1 is the API
+in bites: 1a the 1D grid; 1b the pulses and TF/SF (`src/fdtd_source.cyr`), with the three Mur-absorption tests that
+drive a Gaussian pulse; 1c the lossy and dispersive materials and the subpixel averages (`src/fdtd_media.cyr`); 1d
+`NonUniformGrid`, `fourth_order_derivative`, `CwAccumulator` and `find_eigenmodes` (`src/fdtd_util.cyr`); 1e NF2FF's
+phasor form (`src/nf2ff.cyr`); 1f the JSON of the serde types. Part 2 is the range-edge review. `nf2ff_2d` reads an
+`Fdtd2d`, so it lands with the 2D grid in M6 Part 1, and so does the `fdtd/nf2ff_2d_80x80_180` bench (the plan's
+"NF2FF on 80 × 80 × 180 angles" with it).
+
+- **`src/fdtd1d.cyr`**: `BjFdtd1d`, with `BjFdtd1d_new`, `BjFdtd1d_free` and Rust's methods `set_permittivity`,
+  `set_permeability`, `add_source`, `step_once`, `run`, `time` and `total_energy` (and the private
+  `update_abc_coefficients`).
+  - **Storage** (ADR 0002 row 2, amended): the six arrays (E, H, ε_r, μ_r and the two update coefficients) and a scratch
+    row are one anonymous mmap (plan §9.5; VirtualAlloc on PE, zeroed by the kernel either way). The fields `e_field`
+    and `h_field` are the arrays' addresses and `num_cells` their length; nothing can resize them, so Rust's
+    `active_cells` and the common-length guards in `step_once` and `update_abc_coefficients` go, and
+    `test_fdtd1d_inconsistent_public_fields_no_panic` is n/a.
+  - **Allocation** (row 9, amended): a grid past 2^63 bytes (56 a cell), or one whose mapping can't be had, is
+    `Err(Allocation)` "a 1D FDTD grid of {n} cells", where Rust's `vec!` aborts.
+  - **usize**: start, end and the cell are read unsigned, a negative word being past 2^63. An end past the grid
+    clamps, a start past it sets nothing, and a cell past it is ignored.
+  - **`run`'s `Option<usize>`** is `BJ_FDTD_NO_SOURCE` (usize::MAX). Rust's `Some(c)` with c outside the grid injects
+    nothing either, so it is `None` exactly; the port skips that sine, which no output reads.
+  - **Rust's chains as written**:
+    - dt = dx/(2c), and the coefficients dt/(ε₀·dx)/ε_r and dt/(μ₀·dx)/μ_r;
+    - the Mur coefficient c·dt/√(ε_rμ_r), then (v·dt − dx)/(v·dt + dx);
+    - the updates in Rust's order, where the right Mur update reads the E₀ just written (two cells pin it);
+    - `run`'s sin((2π·f)·t), correctly rounded;
+    - the energy summed from −0.0 (p11).
+  - **The kernel**: H[i] += c_h·(E[i+1] − E[i]) and E[i] += c_e·(H[i] − H[i−1]) run as the plan's `row_diff` on the
+    packed `f64v_sub`, `f64v_mul` and `f64v_add` (§9.3, p10), through the scratch row, then a scalar tail. Each lane
+    rounds Rust's three operations, so the bits are Rust's.
+
+    **Probe p19** (new): on 6.7.18 `f64v_sub` and `f64v_mul` still write one word past `dst` at every odd count (2
+    lanes), on x86_64 and aarch64, while every word they compute equals the scalar loop's. `f64v_add` never wrote
+    past. The packed verbs therefore take the largest multiple of 4, and plan §10's defect stays open.
+- **The trajectory format** (plan §6 step 5, new):
+  - **A row is a script**: the grid (`i:<n> f:<dx>`), then operations, each an opcode and its arguments
+    (set_permittivity, set_permeability, add_source, k × step_once, run with `n:` for `None`).
+  - **The outputs**: the constructor's error; or each failed operation's error, then the state. The state is the step,
+    dt, time, energy and the Mur coefficients, the digests of all six arrays, and E and H at the probe cells 0, 1,
+    n/2, n − 2 and n − 1.
+  - **Frames**: a scenario's frames are scripts that each extend the previous one by an advancing operation. The
+    harness replays every row on a new grid, and `validate.py` continues from the previous row's grid, so it runs
+    each scenario once.
+  - **Private state**: the oracle reads Rust's private arrays and Mur coefficients from the grid's `Debug` text, whose
+    shortest digits parse back exactly.
+  - **The digest** is the harness's cross-target step, `_par_dg_step`: FNV-1a, then y ⊕ (y >> 29), with every NaN
+    folded to 0x7ff8….
+  - **Class T** is compared as class A, every digest and probe exact. `parity_core.cyr` accepts it.
+
+  The first port run failed every digest. Rust's and Python's digests shifted logically, while Cyrius's `>>>` is the
+  arithmetic shift (its `>>` is the logical one, the reverse of Java's). The two references now take the harness's
+  form, and HEAD's cross-target digests are unchanged.
+- **New golden file `fdtd.tsv`, 627 rows over 6 functions**, every one class T:
+  - `new` over cell counts 0 to 65,537 against every special spacing (subnormal, 10^±300, DBL_MAX among them);
+  - `set_permittivity` and `set_permeability` over the specials and every kind of range (empty, reversed, clamped, past
+    the grid, usize::MAX), including those touching the Mur coefficients' nodes, plus a failed setting after good
+    ones;
+  - `add_source` over the specials at every edge cell, outside the grid and repeated;
+  - `step_once` trajectories at frames {1, 2, 10, 100, 1000} (one to 5,000) in vacuum, ε_r = 4, μ_r = 9 and layered
+    media, on two- to four-cell grids, with non-finite, huge, subnormal and signed-zero impulses, and with spacings
+    whose coefficients under- or overflow;
+  - `run` with the Rust tests' and benches' drives, with `None` and out-of-grid cells, and with special and huge
+    frequencies and amplitudes;
+  - 16 seeded scenarios.
+
+  `validate.py`'s independent transcription (`Fd1`, `FdScripts`) agreed with every row on its first run.
+  **`fdtd.cr.tsv` has 3 rows** where glibc's sin misrounds somewhere in a drive and the whole state after it follows:
+  the 1,000-step frame of the Rust test's 1 GHz drive, and a seeded scenario's 100- and 1,000-step frames.
+- **Rust tests**: 21 of the 1D grid's 25 are ported. `tests/fdtd1d.tcyr` has 68 assertions with the Cyrius-only groups:
+  - the error records' text, and the cell count checked before dx, as Rust does;
+  - the allocation refusal at usize::MAX and 2^59 cells;
+  - `BjFdtd1d_free` and a freed grid;
+  - usize ranges;
+  - the no-source sentinel against an out-of-grid cell and plain steps;
+  - the two-cell grid.
+
+  Three tests drive `gaussian_pulse` and follow in 1b; one is n/a. The ledger: 618 ported, 9 n/a, 231 pending of 858.
+- **Surface parity**: fdtd is in progress. Fdtd1d's 15 items and the two fourth-order constants are matched (464 items
+  in all), and the 114 still to come are listed by name. The API snapshot gains `BjFdtd1d_new` and `BjFdtd1d_free`
+  (2,070).
+- **Benchmarks** (the 3 twins of part 1a, so 72 of 80 are twinned; load 0.4 to 2.5, interleaved with HEAD, two rounds
+  each). Every other row is unchanged, with a median ratio of 1.01 and 0.97 in the two rounds. The packed kernel
+  against the scalar loops first written (load about 1):
+
+  | Bench | Rust | Cyrius, scalar | Cyrius | Ratio |
+  |---|---|---|---|---|
+  | `fdtd/step_100_cells` | 64.09 ns | 1.07–1.10 µs | 249–251 ns | 3.9× |
+  | `fdtd/step_1000_cells` | 623.03 ns | 10.4–10.8 µs | 2.11–2.25 µs | 3.4× |
+  | `fdtd/run_100_steps_500_cells` | 32.23 µs | 562–579 µs | 146 µs | 4.5× |
+
+  A step is now about 2.1 ns a cell, against p10's 1.26 ns for one row (two rows a step here). The run adds a sine a
+  step and a mapping per iteration.
+
+  `docs/benchmarks-rust-v-cyrius.md` takes the three twins' figures, and keeps the rest of its Cyrius column as at
+  M4's close (§93).
+- **Result, every target** (x86_64 ELF, x86_64 PE, aarch64): **18 modules, 0 failing; 536,930 ok, 0 failed, 0
+  measured, 0 pending, 91,316 accepted (ADR 01: 30,866; ADR 0002: 60,450)** over 628,246 rows; **all 422 digests
+  equal**, HEAD's 416 unchanged and the six Fdtd1d ones the same under the scalar and the packed kernel. `fdtd1d.tcyr`
+  passes on all three (68). The gate is clean (no warnings; execution coverage 325 of 325 functions); validate.py
+  628,246 rows, 0 problems; the oracle's `--check` and clippy are clean. Next: 1b, the pulses and TF/SF.

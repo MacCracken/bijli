@@ -74,6 +74,10 @@ REASONS = {
     ("src/rf.rs", "test_write_touchstone_deprecated_matches_try"):
         "rf::write_touchstone is deprecated in 1.2.0 and not carried (ADR 0002 row 1); try_write_touchstone's text is "
         "pinned byte for byte by tests/golden/rf.tsv and tests/rf.tcyr's cyrius_touchstone_write_text",
+    ("src/fdtd.rs", "test_fdtd1d_inconsistent_public_fields_no_panic"):
+        "BjFdtd1d's arrays are fixed at construction (ADR 0002 row 2): num_cells and the field arrays can't be resized "
+        "apart, so the mismatch it guards against can't arise; tests/fdtd1d.tcyr's cyrius_fdtd1d_free and "
+        "cyrius_fdtd1d_two_cells pin the empty and smallest grids",
     ("src/rf.rs", "test_smatrix_inconsistent_does_not_panic"):
         "BjSMatrix's shape is fixed at construction (ADR 0002 row 36): no matrix with too few rows, ragged rows or a "
         "short z0 can be built, so the shape errors it checks are gone; tests/rf.tcyr's cyrius_smatrix_fixed_shape pins "

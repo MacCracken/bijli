@@ -17,6 +17,7 @@ include "lib/ganita.cyr"
 include "lib/math.cyr"
 include "lib/str.cyr"
 include "lib/alloc.cyr"
+include "lib/mmap.cyr"
 include "lib/bayan.cyr"
 include "lib/fnptr.cyr"
 
@@ -30394,6 +30395,390 @@ public fn bj_try_write_touchstone(d: *BjTouchstoneData, format, sb): Result {
         return Err(BJ_ERR_ALLOCATION);
     }
     return Ok(0);
+}
+
+# --- fdtd1d.cyr ---
+
+# fdtd1d.cyr — fdtd.rs's 1D solver (M5 part 1a): `Fdtd1d`, the Yee algorithm for E_z and H_y travelling along x,
+# with a first-order Mur absorbing boundary at each end, matched to the medium beside it. SI units.
+#
+# e_field[i] lives at x = i·dx and h_field[i] at x = (i + ½)·dx; h_field[num_cells − 1] lies outside the E domain and
+# is never updated. The time step is half the 1D Courant limit, dt = dx/(2c).
+#
+# A grid's six arrays (E, H, ε_r, μ_r and the two update coefficients), and a scratch row for the update, are one
+# anonymous mmap, fixed at construction and given back by BjFdtd1d_free (port plan §9.5). Rust's public, resizable
+# `Vec` fields, and the per-step layout check that guarded them, are gone (ADR 0002 row 2): the fields `e_field` and
+# `h_field` are the arrays' addresses and `num_cells` their length, and nothing can resize them. No step allocates.
+# The updates run on the packed f64v_* verbs, each lane rounding Rust's three operations, so the bits are Rust's
+# (port plan §9.3, probe p10). The file is time-domain only; bijli's one harmonic convention, e^{+jωt}, is stated in
+# src/complex.cyr's header.
+
+private
+
+var _BJ_FD1_INF: f64 = 0x7FF0000000000000;
+# std::f64::consts::PI, as src/mathx.cyr's _BJ_PI (private to that file).
+var _BJ_FD1_PI: f64 = 3.141592653589793;
+# The grid's arrays, each num_cells f64, in one mapping: E, H, ε_r, μ_r, the E coefficients, the H coefficients and
+# the update's scratch row.
+var _BJ_FD1_ARRAYS = 7;
+# The largest num_cells whose mapping (56 bytes a cell) a 64-bit length can hold.
+var _BJ_FD1_MAX_CELLS = 164703072086692425;
+
+# Rust's `run(steps, None, ..)`: no source cell. Rust's Some(cell) with cell ≥ num_cells injects nothing either, so
+# usize::MAX (−1) is None exactly.
+public var BJ_FDTD_NO_SOURCE = 0 - 1;
+
+# 1D FDTD simulation state: E_z and H_y along x. `e_field` and `h_field` are the addresses of num_cells f64 (read and
+# write them, as Rust's public vectors); `permittivity` and `permeability` hold ε_r per E node and μ_r per H node,
+# `e_coeff` dt/(ε₀ε_r dx) and `h_coeff` dt/(μ₀μ_r dx). `dx` (m) and `dt` (s) are the steps, `step` the time-step
+# index, `abc_left` and `abc_right` the Mur coefficients (v·dt − dx)/(v·dt + dx) with v the phase velocity beside each
+# end. `work` is the update's scratch row (no Rust counterpart) and `map_bytes` the mapping's length (0 once freed).
+# Mirrors `Fdtd1d`.
+public struct BjFdtd1d {
+    e_field;
+    h_field;
+    permittivity;
+    permeability;
+    e_coeff;
+    h_coeff;
+    dx: f64;
+    dt: f64;
+    step;
+    num_cells;
+    abc_left: f64;
+    abc_right: f64;
+    work;
+    map_bytes;
+}
+
+# A word as a *f64 (the typed return keeps the binding typed).
+#must_use
+fn _bj_fd1_f64p(a): *f64 {
+    return a;
+}
+
+# 1 when x is finite and strictly positive (NaN-safe). Mirrors fdtd.rs's `is_positive_finite`.
+#must_use
+fn _bj_fd1_pos(x: f64): i64 {
+    if (x > 0.0 && x < _BJ_FD1_INF) { return 1; }
+    return 0;
+}
+
+# d[i] = d[i] + k[i]·(a[i] − b[i]) for i < n, Rust's `*d += k * (a − b)`: the packed f64v_* verbs through the scratch
+# row w on the largest multiple of 4, then a scalar tail. The tail keeps the verbs to a lane multiple: at an odd count
+# f64v_sub and f64v_mul write one word past their dst on 6.7.18 (probe p19; port plan §10).
+fn _bj_fd1_row(d: *f64, k: *f64, a: *f64, b: *f64, w: *f64, n) {
+    var m = n & (0 - 4);
+    if (m > 0) {
+        f64v_sub(w, a, b, m);
+        f64v_mul(w, k, w, m);
+        f64v_add(d, d, w, m);
+    }
+    for (var i = m; i < n; i = i + 1) {
+        var v: f64 = k[i] * (a[i] - b[i]);
+        d[i] = d[i] + v;
+    }
+    return 0;
+}
+
+# The first-order Mur coefficient (v·dt − dx)/(v·dt + dx), v = c/√(ε_r μ_r): Rust's c·dt/√(ε_r μ_r). Mirrors
+# fdtd.rs's `mur_coefficient`.
+#must_use
+fn _bj_fd1_mur(dt: f64, dx: f64, eps_r: f64, mu_r: f64): f64 {
+    var em: f64 = eps_r * mu_r;
+    var root: f64 = f64_sqrt(em);
+    var c: f64 = BJ_SPEED_OF_LIGHT;
+    var cdt: f64 = c * dt;
+    var v_dt: f64 = cdt / root;
+    var num: f64 = v_dt - dx;
+    var den: f64 = v_dt + dx;
+    var k: f64 = num / den;
+    return k;
+}
+
+# Creates a 1D grid of num_cells cells (a usize) and spacing dx (m) into *out, every field zero, vacuum everywhere,
+# dt = dx/(2c) and the vacuum Mur coefficient at both ends: Ok(0); or, with out untouched, Err(InsufficientResolution)
+# for num_cells < 2, Err(InvalidParameter) "dx must be finite and positive, got {dx}", Err(Allocation) when the
+# grid's mapping can't be had (Rust's vec! aborts there; ADR 0002 row 9). Give the grid back with BjFdtd1d_free.
+# Mirrors `Fdtd1d::new`.
+#must_use
+public fn BjFdtd1d_new(num_cells, dx: f64, out: *BjFdtd1d): Result {
+    if (num_cells >= 0 && num_cells < 2) {
+        var nf: f64 = f64_from(num_cells);
+        var size: f64 = nf * dx;
+        return Err(_bj_err_insufficient_resolution(num_cells, size));
+    }
+    if (_bj_fd1_pos(dx) == 0) {
+        var t = _bj_err_reason(BJ_ERR_INVALID_PARAMETER);
+        _bj_tx_cstr(t, "dx must be finite and positive, got ");
+        _bj_fmt_f64_display(t, dx);
+        return Err(BJ_ERR_INVALID_PARAMETER);
+    }
+    var map = 0;
+    if (num_cells > 0 && num_cells <= _BJ_FD1_MAX_CELLS) { map = mmap_anon(num_cells * 8 * _BJ_FD1_ARRAYS); }
+    if (map == 0) {
+        var ta = _bj_err_reason(BJ_ERR_ALLOCATION);
+        _bj_tx_cstr(ta, "a 1D FDTD grid of ");
+        _bj_tx_u64(ta, num_cells);
+        _bj_tx_cstr(ta, " cells");
+        return Err(BJ_ERR_ALLOCATION);
+    }
+    var c: f64 = BJ_SPEED_OF_LIGHT;
+    var c2: f64 = 2.0 * c;
+    var dt: f64 = dx / c2;
+    var eps_dx: f64 = BJ_EPSILON_0 * dx;
+    var ce: f64 = dt / eps_dx;
+    var mu_dx: f64 = BJ_MU_0 * dx;
+    var ch: f64 = dt / mu_dx;
+    var abc: f64 = _bj_fd1_mur(dt, dx, 1.0, 1.0);
+    var n = num_cells;
+    var eps: *f64 = _bj_fd1_f64p(map + 2 * n * 8);
+    var mu: *f64 = _bj_fd1_f64p(map + 3 * n * 8);
+    var cep: *f64 = _bj_fd1_f64p(map + 4 * n * 8);
+    var chp: *f64 = _bj_fd1_f64p(map + 5 * n * 8);
+    for (var i = 0; i < n; i = i + 1) {
+        eps[i] = 1.0;
+        mu[i] = 1.0;
+        cep[i] = ce;
+        chp[i] = ch;
+    }
+    out.e_field = map;
+    out.h_field = map + n * 8;
+    out.permittivity = map + 2 * n * 8;
+    out.permeability = map + 3 * n * 8;
+    out.e_coeff = map + 4 * n * 8;
+    out.h_coeff = map + 5 * n * 8;
+    out.work = map + 6 * n * 8;
+    out.dx = dx;
+    out.dt = dt;
+    out.step = 0;
+    out.num_cells = n;
+    out.abc_left = abc;
+    out.abc_right = abc;
+    out.map_bytes = n * 8 * _BJ_FD1_ARRAYS;
+    if (_bj_log_on(4) == 1) {
+        var lb[256];
+        var lt[24];
+        _bj_tx_init(&lt, &lb, 256);
+        _bj_tx_cstr(&lt, "FDTD 1D simulation created num_cells=");
+        _bj_tx_u64(&lt, n);
+        _bj_tx_cstr(&lt, " dx=");
+        _bj_fmt_f64_debug(&lt, dx);
+        _bj_tx_cstr(&lt, " dt=");
+        _bj_fmt_f64_debug(&lt, dt);
+        _bj_tx_cstr(&lt, " abc_coeff=");
+        _bj_fmt_f64_debug(&lt, abc);
+        _bj_log_text(4, &lt);
+    }
+    return Ok(0);
+}
+
+# Gives a grid's mapping back and empties it (num_cells 0, every address 0); a second call does nothing.
+public fn BjFdtd1d_free(sim: *BjFdtd1d): i64 {
+    if (sim.map_bytes > 0) { cyr_munmap(sim.e_field, sim.map_bytes); }
+    sim.e_field = 0;
+    sim.h_field = 0;
+    sim.permittivity = 0;
+    sim.permeability = 0;
+    sim.e_coeff = 0;
+    sim.h_coeff = 0;
+    sim.work = 0;
+    sim.num_cells = 0;
+    sim.map_bytes = 0;
+    return 0;
+}
+
+# min(end, n) for usize words: a negative word is past 2^63, so above n.
+#must_use
+fn _bj_fd1_umin(end, n): i64 {
+    if (end < 0 || end > n) { return n; }
+    return end;
+}
+
+impl BjFdtd1d {
+    # Recomputes the Mur coefficients from the medium beside each end: ε_r of E node 1 and μ_r of H node 0 on the
+    # left, both at n − 2 on the right. Mirrors `update_abc_coefficients`.
+    fn update_abc_coefficients(self) {
+        var n = self.num_cells;
+        if (n < 2) { return 0; }
+        var eps: *f64 = _bj_fd1_f64p(self.permittivity);
+        var mu: *f64 = _bj_fd1_f64p(self.permeability);
+        var dt: f64 = self.dt;
+        var dx: f64 = self.dx;
+        var e1: f64 = eps[1];
+        var m0: f64 = mu[0];
+        var kl: f64 = _bj_fd1_mur(dt, dx, e1, m0);
+        var er: f64 = eps[n - 2];
+        var mr: f64 = mu[n - 2];
+        var kr: f64 = _bj_fd1_mur(dt, dx, er, mr);
+        self.abc_left = kl;
+        self.abc_right = kr;
+        return 0;
+    }
+
+    # Sets ε_r on cells start..end (usize; end clamped to the grid) and recomputes the Mur coefficients: Ok(0), or
+    # Err(InvalidPermittivity) with the grid untouched unless eps_r is finite and positive. Mirrors
+    # `Fdtd1d::set_permittivity`.
+    #must_use
+    public fn set_permittivity(self, start, end, eps_r: f64): Result {
+        if (_bj_fd1_pos(eps_r) == 0) { return Err(_bj_err_invalid_permittivity(eps_r)); }
+        var hi = _bj_fd1_umin(end, self.num_cells);
+        var dt: f64 = self.dt;
+        var eps_dx: f64 = BJ_EPSILON_0 * self.dx;
+        var base: f64 = dt / eps_dx;
+        var ce: f64 = base / eps_r;
+        var eps: *f64 = _bj_fd1_f64p(self.permittivity);
+        var cep: *f64 = _bj_fd1_f64p(self.e_coeff);
+        if (start >= 0) {
+            for (var i = start; i < hi; i = i + 1) {
+                eps[i] = eps_r;
+                cep[i] = ce;
+            }
+        }
+        self.update_abc_coefficients();
+        return Ok(0);
+    }
+
+    # Sets μ_r on cells start..end (usize; end clamped to the grid) and recomputes the Mur coefficients: Ok(0), or
+    # Err(InvalidPermeability) with the grid untouched unless mu_r is finite and positive. Mirrors
+    # `Fdtd1d::set_permeability`.
+    #must_use
+    public fn set_permeability(self, start, end, mu_r: f64): Result {
+        if (_bj_fd1_pos(mu_r) == 0) { return Err(_bj_err_invalid_permeability(mu_r)); }
+        var hi = _bj_fd1_umin(end, self.num_cells);
+        var dt: f64 = self.dt;
+        var mu_dx: f64 = BJ_MU_0 * self.dx;
+        var base: f64 = dt / mu_dx;
+        var ch: f64 = base / mu_r;
+        var mu: *f64 = _bj_fd1_f64p(self.permeability);
+        var chp: *f64 = _bj_fd1_f64p(self.h_coeff);
+        if (start >= 0) {
+            for (var i = start; i < hi; i = i + 1) {
+                mu[i] = mu_r;
+                chp[i] = ch;
+            }
+        }
+        self.update_abc_coefficients();
+        return Ok(0);
+    }
+
+    # Adds value to E at cell (a soft source); a cell outside the grid is ignored. Mirrors `Fdtd1d::add_source`.
+    public fn add_source(self, cell, value: f64) {
+        if (cell >= 0 && cell < self.num_cells) {
+            var e: *f64 = _bj_fd1_f64p(self.e_field);
+            var x: f64 = e[cell];
+            e[cell] = x + value;
+        }
+        return 0;
+    }
+
+    # Advances one time step: H from E, then the interior E from H, then the Mur boundaries,
+    # E₀ⁿ⁺¹ = E₁ⁿ + k (E₁ⁿ⁺¹ − E₀ⁿ) and its mirror at the right end (Mur 1981; Taflove & Hagness, ch. 7). Mirrors
+    # `Fdtd1d::step_once`.
+    public fn step_once(self) {
+        var n = self.num_cells;
+        if (n < 2) {
+            self.step = self.step + 1;
+            return 0;
+        }
+        var e: *f64 = _bj_fd1_f64p(self.e_field);
+        var h: *f64 = _bj_fd1_f64p(self.h_field);
+        var ce: *f64 = _bj_fd1_f64p(self.e_coeff);
+        var ch: *f64 = _bj_fd1_f64p(self.h_coeff);
+        var w: *f64 = _bj_fd1_f64p(self.work);
+        var e_left: f64 = e[1];
+        var e_right: f64 = e[n - 2];
+        # H[i] += c_h[i]·(E[i + 1] − E[i]) for i < n − 1, then E[i] += c_e[i]·(H[i] − H[i − 1]) for 0 < i < n − 1.
+        _bj_fd1_row(h, ch, e + 1, e, w, n - 1);
+        _bj_fd1_row(e + 1, ce + 1, h + 1, h, w, n - 2);
+        var kl: f64 = self.abc_left;
+        var kr: f64 = self.abc_right;
+        var l: f64 = kl * (e[1] - e[0]);
+        e[0] = e_left + l;
+        var r: f64 = kr * (e[n - 2] - e[n - 1]);
+        e[n - 1] = e_right + r;
+        self.step = self.step + 1;
+        return 0;
+    }
+
+    # Runs `steps` time steps (a usize). Before each, when source_cell is in the grid, adds
+    # source_amplitude·sin(2π·source_frequency·t) at it, t = step·dt; BJ_FDTD_NO_SOURCE (or any cell outside the
+    # grid) injects nothing, as Rust's None. Mirrors `Fdtd1d::run`.
+    public fn run(self, steps, source_cell, source_frequency: f64, source_amplitude: f64) {
+        if (_bj_log_on(4) == 1) {
+            var lb[256];
+            var lt[24];
+            _bj_tx_init(&lt, &lb, 256);
+            _bj_tx_cstr(&lt, "FDTD run started steps=");
+            _bj_tx_u64(&lt, steps);
+            _bj_tx_cstr(&lt, " source_cell=");
+            if (source_cell == BJ_FDTD_NO_SOURCE) { _bj_tx_cstr(&lt, "None"); }
+            else {
+                _bj_tx_cstr(&lt, "Some(");
+                _bj_tx_u64(&lt, source_cell);
+                _bj_tx_cstr(&lt, ")");
+            }
+            _bj_tx_cstr(&lt, " source_frequency=");
+            _bj_fmt_f64_debug(&lt, source_frequency);
+            _bj_tx_cstr(&lt, " source_amplitude=");
+            _bj_fmt_f64_debug(&lt, source_amplitude);
+            _bj_log_text(4, &lt);
+        }
+        var inject = 0;
+        if (source_cell >= 0 && source_cell < self.num_cells) { inject = 1; }
+        var w: f64 = 2.0 * _BJ_FD1_PI;
+        for (var k = 0; k != steps; k = k + 1) {
+            if (inject == 1) {
+                var sf: f64 = f64_from(self.step);
+                var dt: f64 = self.dt;
+                var t: f64 = sf * dt;
+                var wf: f64 = w * source_frequency;
+                var arg: f64 = wf * t;
+                var s: f64 = _bj_sin(arg);
+                var v: f64 = source_amplitude * s;
+                self.add_source(source_cell, v);
+            }
+            self.step_once();
+        }
+        return 0;
+    }
+
+    # The simulation time step·dt (s). Mirrors `Fdtd1d::time`.
+    #must_use
+    public fn time(self): f64 {
+        var sf: f64 = f64_from(self.step);
+        var dt: f64 = self.dt;
+        var t: f64 = sf * dt;
+        return t;
+    }
+
+    # The field energy per unit area, dx·Σ(½ε_rε₀E² + ½μ_rμ₀H²), summed from −0.0 as Rust's `Sum`. Mirrors
+    # `Fdtd1d::total_energy`.
+    #must_use
+    public fn total_energy(self): f64 {
+        var e: *f64 = _bj_fd1_f64p(self.e_field);
+        var h: *f64 = _bj_fd1_f64p(self.h_field);
+        var eps: *f64 = _bj_fd1_f64p(self.permittivity);
+        var mu: *f64 = _bj_fd1_f64p(self.permeability);
+        var sum: f64 = -0.0;
+        for (var i = 0; i < self.num_cells; i = i + 1) {
+            var ei: f64 = e[i];
+            var hi: f64 = h[i];
+            var a: f64 = 0.5 * eps[i];
+            a = a * BJ_EPSILON_0;
+            a = a * ei;
+            a = a * ei;
+            var b: f64 = 0.5 * mu[i];
+            b = b * BJ_MU_0;
+            b = b * hi;
+            b = b * hi;
+            var term: f64 = a + b;
+            sum = sum + term;
+        }
+        var dx: f64 = self.dx;
+        var energy: f64 = sum * dx;
+        return energy;
+    }
 }
 
 # --- json.cyr ---

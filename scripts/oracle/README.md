@@ -55,6 +55,7 @@ port's harness reads the same files. This README records what is specific to bij
 | `complex` | M1 (+ 5c-2's edge grid) | 31,677 (+ 8 corrected) | `src/m_complex.rs` | — |
 | `constants` | M0 | 12 | `src/m_constants.rs` | `src/constants.cyr` (`src/t_constants.rs`, with the completeness proof) |
 | `error` | M1 | 1,635 | `src/m_error.rs` | — |
+| `fdtd` | M5 (part 1a: the 1D grid `Fdtd1d`, as scripts; class T) | 627 (+ 3 corrected) | `src/m_fdtd.rs` | — |
 | `field` | M1 (parts 3a–3c, 5d-1 to 5d-5) | 26,770 | `src/m_field.rs` | — |
 | `fmtf` | M1 (+ Debug, part 3c; + fixed precision, M2 part 1b; + `{:e}`, M4 part 1c-2) | 89,528 | `src/m_fmtf.rs` (impetus's grid) | — |
 | `json` | M1 (part 4), M2 (part 1a: `Material`), M3 (parts 1a-2: polarization's four structs; 1b-2: `MieResult`; 1c-2: beam's three structs), M4 (part 1d: rf's `SMatrix`, `TouchstoneFormat`, `TouchstoneData`) | 66,620 (+ 30,742 corrected) | `src/m_json.rs` (serde_json 1.0.154 on `Complex`, `FieldVector`, `PointCharge`, `Material`, `JonesVector`, `JonesMatrix`, `StokesVector`, `MuellerMatrix`, `MieResult`, `GaussianBeam`, `AbcdMatrix`, `ResonatorStability`) | — |
@@ -178,7 +179,7 @@ fn <TAB> class <TAB> inputs <TAB> outputs <TAB> note
 | B | ≤ 2 ulp, expected 0 |
 | C | 0 ulp against the corrected oracle: the row's value, or its `<module>.cr.tsv` correction where glibc misrounded |
 | D | relative ≤ 1e-12 (expected to stay empty) |
-| T | an FDTD trajectory frame: each field component's digest equal, probe cells by their path's class (M5) |
+| T | an FDTD script's frame (below): compared as A, every digest equal and every probe cell bit-identical; a `run` that injects calls sin, so its rows take `<module>.cr.tsv`'s corrections |
 
 `<module>.adr.tsv` (M1 part 5) holds the ADR 0002 mappings: for a golden row whose port result an ADR 0002 row
 changes, the port's outputs as that row gives them, written by `validate.py --write` from exact values
@@ -193,6 +194,18 @@ misrounded, the oracle's sequence of operations evaluated with correctly rounded
 (`mpfr_ref.py`). `validate.py --write` produces it; the generator only checks it has a module. `json.cr.tsv` holds, for a reader row serde_json misread
 (its default float parse is best-effort: ADR 0002 row 11), the document read with every number correctly rounded
 (Python's `float`).
+
+## FDTD scripts (class T, M5)
+
+An FDTD row is a script (port plan §6 step 5's trajectory format, `src/m_fdtd.rs`): its inputs are the grid
+(`i:<num_cells> f:<dx>` for `Fdtd1d`), then operations, each an opcode and its arguments (`i:1 i:<start> i:<end>
+f:<eps_r>` set_permittivity, `i:2 …` set_permeability, `i:3 i:<cell> f:<value>` add_source, `i:4 i:<k>` step_once k
+times, `i:5 i:<steps> i:<cell>|n: f:<frequency> f:<amplitude>` run). The harness replays it on a new grid. Its outputs
+are the constructor's error, or each failed operation's error and then the state: the step, dt, time, energy, the Mur
+coefficients, the digest of every array, and the probe cells. A frame of a scenario is a script that extends the
+previous frame's by one advancing operation, so `validate.py` runs each scenario once. The digest is the harness's
+cross-target digest step (`_par_dg_step`: FNV-1a, then y ⊕ (y >> 29) with an arithmetic shift), every NaN folded to
+0x7ff8…; the oracle reads private arrays from the grid's `Debug` text, whose shortest digits parse back exactly.
 
 ## bijli specifics
 

@@ -367,6 +367,20 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
 - **Cyrius port, M4 part 2d-5 — the array factors at their range edges** (`src/rf.cyr`): ψ and Nψ/2 past DBL_MAX
   run with an unbounded exponent for finite inputs (ADR 0002 row 18 amended, see Fixed). `rf.tsv` grows by 1,502 edge
   rows (32,216).
+- **Cyrius port, M5 part 1a — the 1D FDTD grid** (`src/fdtd1d.cyr`): `BjFdtd1d` (`BjFdtd1d_new`, `BjFdtd1d_free`,
+  `set_permittivity`, `set_permeability`, `add_source`, `step_once`, `run`, `time`, `total_energy`), Rust's Yee update
+  and per-end Mur boundaries in Rust's operation order. Its six arrays are one anonymous mapping, fixed at construction
+  and read through the `e_field`/`h_field` addresses and `num_cells` (ADR 0002 row 2 amended); a grid that can't be
+  mapped is `Err(Allocation)` where Rust's `vec!` aborts (row 9 amended); `run`'s `None` is `BJ_FDTD_NO_SOURCE`. New
+  golden module `fdtd.tsv`, 627 class-T rows: each row a script (the grid, then operations) replayed on a new grid,
+  its state compared frame by frame as the digests of all six arrays (the private ones read from Rust's `Debug`), the
+  scalars and probe cells; `fdtd.cr.tsv` corrects 3 driven frames where glibc's sine misrounds. The harness learns
+  class T; `validate.py` models the grid (`Fd1`). `tests/fdtd1d.tcyr` ports 21 of fdtd.rs's 1D tests (3 follow with
+  the pulses in part 1b, 1 is n/a) and adds 6 groups. The updates run on the packed `f64v_*` verbs with a scalar tail
+  (probe p19: on 6.7.18 `f64v_sub` and `f64v_mul` still write one word past `dst` at an odd count), bit-identical to
+  Rust; the three 1D bench twins, at load about 1: `fdtd/step_100_cells` 251 ns (Rust 64.09 ns, 3.9×),
+  `step_1000_cells` 2.11 µs (3.4×), `run_100_steps_500_cells` 146 µs (4.5×), against 1.07–1.10 µs, 10.4–10.8 µs and
+  562–579 µs for the scalar loops first written.
 
 ### Fixed
 

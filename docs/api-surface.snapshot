@@ -798,6 +798,8 @@ error::bj_last_error_expected/0
 error::bj_last_error_got/0
 error::bj_last_error_value/0
 error::bj_thread_done/0
+fdtd1d::BjFdtd1d_free/1
+fdtd1d::BjFdtd1d_new/3
 field::BjFieldVector_add/2
 field::BjFieldVector_default/0
 field::BjFieldVector_from_array/1

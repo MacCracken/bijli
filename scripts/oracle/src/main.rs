@@ -29,6 +29,7 @@ mod m_circuit;
 mod m_complex;
 mod m_constants;
 mod m_error;
+mod m_fdtd;
 mod m_field;
 mod m_fmtf;
 mod m_json;
@@ -58,6 +59,7 @@ fn golden_modules() -> Vec<tsv::Module> {
         m_complex::emit(),
         m_constants::emit(),
         m_error::emit(),
+        m_fdtd::emit(),
         m_field::emit(),
         m_fmtf::emit(),
         m_json::emit(),

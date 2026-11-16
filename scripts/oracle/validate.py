@@ -8734,6 +8734,215 @@ def check_adr(root: Path, module: str, path: Path) -> list:
     return []
 
 
+# ── fdtd (M5) ─────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+FD_U64 = (1 << 64) - 1
+
+
+def fd_digest(xs) -> int:
+    """m_fdtd.rs's digest: FNV-1a with the harness's v2 mix (an arithmetic shift by 29), every NaN as 0x7ff8…, as an
+    i64."""
+    h = 0xCBF29CE484222325
+    for x in xs:
+        w = 0x7FF8000000000000 if math.isnan(x) else f_to_bits(x)
+        y = ((h ^ w) * 0x100000001B3) & FD_U64
+        h = y ^ (((y - (1 << 64) if y >> 63 else y) >> 29) & FD_U64)
+    return h - (1 << 64) if h >= 1 << 63 else h
+
+
+def fd_mur(dt, dx, eps_r, mu_r, c):
+    """fdtd.rs's `mur_coefficient`: (v·dt − dx)/(v·dt + dx), v·dt = c·dt/√(ε_r μ_r)."""
+    v_dt = fdiv(c * dt, fsqrt(eps_r * mu_r))
+    return fdiv(v_dt - dx, v_dt + dx)
+
+
+def fd_pos(x) -> bool:
+    return x > 0.0 and math.isfinite(x)
+
+
+class Fd1:
+    """fdtd.rs's `Fdtd1d`, transcribed: every operation in Rust's order on binary64 (Python floats round each + − × ÷
+    and √ correctly, as Rust's do)."""
+
+    def __init__(self, n, dx, K):
+        self.c, self.eps0, self.mu0 = K
+        self.n, self.dx, self.step = n, dx, 0
+        self.dt = dx / (2.0 * self.c)
+        ce, ch = fdiv(self.dt, self.eps0 * dx), fdiv(self.dt, self.mu0 * dx)
+        self.e, self.h = [0.0] * n, [0.0] * n
+        self.eps, self.mu, self.ce, self.ch = [1.0] * n, [1.0] * n, [ce] * n, [ch] * n
+        self.al = self.ar = fd_mur(self.dt, dx, 1.0, 1.0, self.c)
+        self.errs = []
+
+    def copy(self):
+        o = Fd1.__new__(Fd1)
+        o.__dict__.update({k: (list(v) if isinstance(v, list) else v) for k, v in self.__dict__.items()})
+        return o
+
+    def update_abc(self):
+        n = self.n
+        self.al = fd_mur(self.dt, self.dx, self.eps[1], self.mu[0], self.c)
+        self.ar = fd_mur(self.dt, self.dx, self.eps[n - 2], self.mu[n - 2], self.c)
+
+    def set_material(self, which, start, end, x):
+        if not fd_pos(x):
+            name = "permittivity" if which == 1 else "permeability"
+            self.errs += [("E", "InvalidPermittivity" if which == 1 else "InvalidPermeability"),
+                          ("s", f"invalid {name}: {rust_display(x)} (must be > 0)")]
+            return
+        end = min(end & FD_U64, self.n)
+        k0 = self.eps0 if which == 1 else self.mu0
+        coef = fdiv(fdiv(self.dt, k0 * self.dx), x)
+        arr, cs = (self.eps, self.ce) if which == 1 else (self.mu, self.ch)
+        for i in range(start & FD_U64, end):
+            arr[i] = x
+            cs[i] = coef
+        self.update_abc()
+
+    def add_source(self, cell, v):
+        if cell & FD_U64 < self.n:
+            self.e[cell] = self.e[cell] + v
+
+    def step_once(self):
+        n, e, h, ce, ch = self.n, self.e, self.h, self.ce, self.ch
+        e_left, e_right = e[1], e[n - 2]
+        for i in range(n - 1):
+            h[i] = h[i] + ch[i] * (e[i + 1] - e[i])
+        for i in range(1, n - 1):
+            e[i] = e[i] + ce[i] * (h[i] - h[i - 1])
+        e[0] = e_left + self.al * (e[1] - e[0])
+        e[n - 1] = e_right + self.ar * (e[n - 2] - e[n - 1])
+        self.step += 1
+
+    def run(self, steps, cell, freq, amp, P):
+        for _ in range(steps):
+            if cell is not None:
+                t = float(self.step) * self.dt
+                v = amp * P["sin"](2.0 * math.pi * freq * t)
+                self.add_source(cell, v)
+            self.step_once()
+
+    def energy(self):
+        s = -0.0
+        for e, h, eps, mu in zip(self.e, self.h, self.eps, self.mu):
+            s = s + (0.5 * eps * self.eps0 * e * e + 0.5 * mu * self.mu0 * h * h)
+        return s * self.dx
+
+    def state(self):
+        n = self.n
+        out = list(self.errs)
+        out += [("i", self.step), ("f", self.dt), ("f", float(self.step) * self.dt), ("f", self.energy()),
+                ("f", self.al), ("f", self.ar)]
+        out += [("i", fd_digest(a)) for a in (self.e, self.h, self.eps, self.mu, self.ce, self.ch)]
+        probes = (0, 1, n // 2, n - 2, n - 1)
+        out += [("f", self.e[p]) for p in probes] + [("f", self.h[p]) for p in probes]
+        return out
+
+
+def fd_ops(toks):
+    """A script's operations from its input tokens (after the grid's two): (opcode, args) each."""
+    ops, k = [], 0
+    while k < len(toks):
+        code = toks[k][1]
+        if code in (1, 2):
+            ops.append((code, toks[k + 1][1], toks[k + 2][1], toks[k + 3][1]))
+            k += 4
+        elif code == 3:
+            ops.append((3, toks[k + 1][1], toks[k + 2][1]))
+            k += 3
+        elif code == 4:
+            ops.append((4, toks[k + 1][1]))
+            k += 2
+        elif code == 5:
+            cell = None if toks[k + 2][0] == "n" else toks[k + 2][1] & FD_U64
+            ops.append((5, toks[k + 1][1] & FD_U64, cell, toks[k + 3][1], toks[k + 4][1]))
+            k += 5
+        else:
+            raise ValueError(f"unknown fdtd opcode {code}")
+    return ops
+
+
+def fd_apply(sim, op, P):
+    if op[0] in (1, 2):
+        sim.set_material(op[0], op[1], op[2], op[3])
+    elif op[0] == 3:
+        sim.add_source(op[1], op[2])
+    elif op[0] == 4:
+        for _ in range(op[1] & FD_U64):
+            sim.step_once()
+    else:
+        sim.run(op[1], op[2], op[3], op[4], P)
+
+
+class FdScripts:
+    """Replays fdtd.tsv's scripts on primitives P. A row whose inputs extend the previous row's continues from that
+    row's grid (the frames of one scenario), so each scenario runs once."""
+
+    def __init__(self, root: Path, P):
+        c = golden_consts(root)
+        self.K = (c["field::SPEED_OF_LIGHT"], c["field::EPSILON_0"], c["field::MU_0"])
+        self.P = P
+        self.prev, self.sim = None, None
+
+    def eval(self, fn, ins_raw):
+        raw = ins_raw.split(" ")
+        toks = [parse_tok(x) for x in raw]
+        n, dx = toks[0][1] & FD_U64, toks[1][1]
+        if n < 2:
+            return [("E", "InsufficientResolution"),
+                    ("s", f"grid resolution too coarse: {n} cells for domain size {rust_display(float(n) * dx)}")]
+        if not fd_pos(dx):
+            return ip_err(f"dx must be finite and positive, got {rust_display(dx)}")
+        if self.prev is not None and raw[:len(self.prev)] == self.prev and self.sim is not None:
+            sim, done = self.sim.copy(), fd_ops(toks[2:len(self.prev)])
+        else:
+            sim, done = Fd1(n, dx, self.K), []
+        for op in fd_ops(toks[2:])[len(done):]:
+            fd_apply(sim, op, self.P)
+        self.prev, self.sim = raw, sim
+        return sim.state()
+
+
+def fd_injects(ins_raw) -> bool:
+    """1 when a script's `run` takes a sine (any Some cell: Rust computes it even outside the grid)."""
+    toks = [parse_tok(x) for x in ins_raw.split(" ")]
+    return any(op[0] == 5 and op[2] is not None and op[1] > 0 for op in fd_ops(toks[2:]))
+
+
+def validate_fdtd(root: Path, path: Path) -> list:
+    """fdtd.rs transcribed (Fd1 and the scripts' replay) on glibc's primitives, against every row."""
+    header, _rows = read_tsv(path)
+    errs = check_platform(header)
+    if errs:
+        return errs
+    fs = FdScripts(root, GLIBC_P)
+    for n, (fn, _cls, ins, outs, _v) in enumerate(sc_lines(path), 1):
+        if not fn.startswith("Fdtd1d::"):
+            errs.append(f"fdtd row {n}: no transcription for {fn}")
+            continue
+        want = fs.eval(fn, ins)
+        if not toks_same(want, wave_toks([parse_tok(x) for x in outs.split(" ")])):
+            errs.append(f"fdtd row {n}: {fn}({ins[:200]}) -> {wire(want)[:300]}, oracle {outs[:300]}")
+    return errs
+
+
+def fdtd_corrections(root: Path, path: Path):
+    """The fdtd rows whose state changes when `run`'s sine is correctly rounded (MPFR)."""
+    def fixes(_rows):
+        out = []
+        fs = FdScripts(root, MPFR_P)
+        for fn, _cls, ins, outs, _v in sc_lines(path):
+            want = fs.eval(fn, ins)
+            if not fd_injects(ins):
+                continue
+            old = wave_toks([parse_tok(x) for x in outs.split(" ")])
+            if toks_same(want, old):
+                continue
+            out.append((fn, ins, wire(want), f"oracle {outs[:120]}…; a correctly rounded sin gives another state"))
+        return out
+    return fixes
+
+
 def main() -> int:
     root = Path(sys.argv[1] if len(sys.argv) > 1 else ".").resolve()
     golden = root / "tests/golden"
@@ -8744,6 +8953,7 @@ def main() -> int:
         "complex": validate_complex,
         "constants": lambda p: validate_constants(root, p),
         "error": validate_error,
+        "fdtd": lambda p: validate_fdtd(root, p),
         "field": lambda p: validate_field(root, p),
         "fmtf": validate_fmtf,
         "json": validate_json,
@@ -8786,6 +8996,7 @@ def main() -> int:
                               scattering_corrections(golden / "scattering.tsv"))
     errs += check_corrections(root, "beam", golden / "beam.tsv", beam_corrections(golden / "beam.tsv"))
     errs += check_corrections(root, "rf", golden / "rf.tsv", rf_corrections(golden / "rf.tsv"))
+    errs += check_corrections(root, "fdtd", golden / "fdtd.tsv", fdtd_corrections(root, golden / "fdtd.tsv"))
     for mod in ("beam", "charge", "circuit", "complex", "field", "json", "material", "maxwell", "polarization",
                 "relativity", "rf", "scattering", "wave"):
         errs += check_adr(root, mod, golden / f"{mod}.tsv")

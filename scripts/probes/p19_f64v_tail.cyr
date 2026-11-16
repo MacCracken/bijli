@@ -1,0 +1,102 @@
+# Probe 19 (M5 part 1a): the packed f64v_sub / f64v_mul / f64v_add on the pinned compiler, at every count from 0 to
+# 19 and every 8-byte offset 0..3 of dst and the operands (the 1D grid's rows start at e + 1, h + 1: not 16- or
+# 32-byte aligned). Each result is checked bit for bit against the scalar loop, and the guard words past dst's n-th
+# element must stay untouched (the plan's §10 note: "f64v_* writes past dst when n isn't a lane multiple", open
+# 2026-11-06). Verb set 0 is f64v_sub alone, 1 f64v_sub then f64v_mul into dst, 2 the FDTD row d += k·(a − b): sub
+# and mul into a scratch row, then f64v_add into dst.
+# 6.7.18 (2026-11-15): every word equals the scalar loop's; f64v_sub and f64v_mul write one word past dst at every
+# odd count (2 lanes), f64v_add never, on x86_64 and aarch64 alike. src/fdtd1d.cyr runs the packed verbs on a multiple
+# of 4 and a scalar tail.
+#   cyrius build scripts/probes/p19_f64v_tail.cyr build/p19 && ./build/p19
+include "lib/syscalls.cyr"
+include "lib/string.cyr"
+include "lib/alloc.cyr"
+include "lib/fmt.cyr"
+include "lib/io.cyr"
+
+var GUARD = 0x5A5A5A5A5A5A5A5A;
+
+fn f64p(a): *f64 { return a; }
+
+# Fills n words at p: element i is (i + seed)·1.25 − 3.
+fn fill(p: *f64, n, seed) {
+    for (var i = 0; i < n; i = i + 1) {
+        var x: f64 = f64_from(i + seed);
+        p[i] = x * 1.25 - 3.0;
+    }
+    return 0;
+}
+
+# One case: returns the number of mismatched or clobbered words.
+fn run_case(n, od, oa, ob, ok_, which): i64 {
+    var buf = alloc(8 * 320);
+    var base = (buf + 63) & (0 - 64);
+    var d: *f64 = f64p(base + od * 8);
+    var a: *f64 = f64p(base + 64 * 8 + oa * 8);
+    var b: *f64 = f64p(base + 128 * 8 + ob * 8);
+    var k: *f64 = f64p(base + 192 * 8 + ok_ * 8);
+    fill(a, n, 1);
+    fill(b, n, 7);
+    fill(k, n, 3);
+    fill(d, n, 11);
+    for (var g = n; g < n + 8; g = g + 1) { store64(base + od * 8 + g * 8, GUARD); }
+    var wbuf = alloc(8 * 24);
+    for (var i = 0; i < n; i = i + 1) {
+        var x: f64 = a[i] - b[i];
+        if (which == 1) { x = k[i] * x; }
+        if (which == 2) { var y: f64 = k[i] * x; x = d[i] + y; }
+        store64(wbuf + i * 8, x);
+    }
+    if (which == 0) { f64v_sub(d, a, b, n); }
+    if (which == 1) { f64v_sub(d, a, b, n); f64v_mul(d, k, d, n); }
+    if (which == 2) {
+        var tmp: *f64 = f64p(base + 224 * 8);
+        f64v_sub(tmp, a, b, n);
+        f64v_mul(tmp, k, tmp, n);
+        f64v_add(d, d, tmp, n);
+    }
+    var bad = 0;
+    for (var i2 = 0; i2 < n; i2 = i2 + 1) {
+        if (load64(base + od * 8 + i2 * 8) != load64(wbuf + i2 * 8)) { bad = bad + 1; }
+    }
+    for (var g2 = n; g2 < n + 8; g2 = g2 + 1) {
+        if (load64(base + od * 8 + g2 * 8) != GUARD) { bad = bad + 100; }
+    }
+    return bad;
+}
+
+fn main(): i64 {
+    alloc_init();
+    var cases = 0;
+    var mism = 0;
+    for (var which = 0; which < 3; which = which + 1) {
+        var clob = 0;
+        var odd = 0;
+        for (var n = 0; n < 20; n = n + 1) {
+            for (var o = 0; o < 4; o = o + 1) {
+                var r = run_case(n, o, (o + 1) % 4, (o + 2) % 4, (o + 3) % 4, which);
+                cases = cases + 1;
+                mism = mism + r % 100;
+                if (r >= 100) {
+                    clob = clob + 1;
+                    if (n % 2 == 1) { odd = odd + 1; }
+                }
+            }
+        }
+        print("verb set ", 9);
+        fmt_int(which);
+        print(": cases writing past dst ", 25);
+        fmt_int(clob);
+        print(" (at an odd count: ", 19);
+        fmt_int(odd);
+        println(")");
+    }
+    print("cases ", 6);
+    fmt_int(cases);
+    print(" | words differing from the scalar loop ", 40);
+    fmt_int(mism);
+    println("");
+    return 0;
+}
+var r = main();
+sys_exit_group(r);

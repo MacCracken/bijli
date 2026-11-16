@@ -426,7 +426,7 @@ fn _par_print_first_diff() {
     return 0;
 }
 
-# Compares the got list with the wanted outputs under class `cls` ('A' 'B' 'C' 'D').
+# Compares the got list with the wanted outputs under class `cls` ('A' 'B' 'C' 'D' 'T'; T, an FDTD frame, as A).
 # Returns 1 ok, 0 failed, 2 measured (class C with no bound yet). Sets _par_outlier when a
 # float is more than 16 ulp off, or a NaN / infinity disagrees.
 var _par_outlier = 0;
@@ -448,7 +448,7 @@ fn _par_compare(slot, cls, fp, fl): i64 {
             var d = ulp_distance(gv, wv);
             _par_hist(slot, d);
             if (d > 16) { _par_outlier = 1; }
-            if (cls == 65) {
+            if (cls == 65 || cls == 84) {
                 if (ulp_bits_match(gv, wv) != 1) { result = 0; }
             } elif (cls == 66) {
                 if (d > 2) { result = 0; }
@@ -834,7 +834,7 @@ fn _par_module(mp, ml): i64 {
             var cls = load8(buf + t1 + 1);
             var bad = 0;
             if (t4 >= eol || t2 != t1 + 2) { bad = 1; }
-            if (cls < 65 || cls > 68) { bad = 1; }
+            if ((cls < 65 || cls > 68) && cls != 84) { bad = 1; }
             if (bad == 0) {
                 _par_in_n = _par_tokens(buf + t2 + 1, t3 - t2 - 1, _par_in_k, _par_in_v, _par_in_l);
                 _par_want_n = _par_tokens(buf + t3 + 1, t4 - t3 - 1, _par_want_k, _par_want_v, _par_want_l);

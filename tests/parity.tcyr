@@ -3237,6 +3237,110 @@ public fn _par_rf(fp, fl): i64 {
     return 0;
 }
 
+# ── fdtd (M5) ──────────────────────────────────────────────────────────────────────────────────────────────────────
+# A row is a script (scripts/oracle/src/m_fdtd.rs): the grid, then operations, each an opcode and its arguments; its
+# outputs are each failed operation's error, then the grid's state. The script is replayed from a new grid.
+
+# A word as a *f64.
+fn _par_fd_f64p(a): *f64 {
+    return a;
+}
+
+# m_fdtd.rs's digest of the n f64 at p: the cross-target digest's step (_par_dg_step, its shift arithmetic), every
+# NaN as 0x7ff8….
+fn _par_fd_digest(p, n): i64 {
+    var h = 0xcbf29ce484222325;
+    for (var k = 0; k < n; k = k + 1) {
+        var w = load64(p + k * 8);
+        if ((w & 0x7FFFFFFFFFFFFFFF) > 0x7FF0000000000000) { w = 0x7FF8000000000000; }
+        h = _par_dg_step(h, w);
+    }
+    return h;
+}
+
+# A 1D grid's state to the got list: step, dt, time, energy, the Mur coefficients, the six arrays' digests, then E
+# and H at the probe cells 0, 1, n/2, n − 2 and n − 1.
+fn _par_fd1_state(sim: *BjFdtd1d) {
+    var n = sim.num_cells;
+    _par_got_i(sim.step);
+    _par_got_f(sim.dt);
+    var t: f64 = sim.time();
+    _par_got_f(t);
+    var en: f64 = sim.total_energy();
+    _par_got_f(en);
+    _par_got_f(sim.abc_left);
+    _par_got_f(sim.abc_right);
+    _par_got_i(_par_fd_digest(sim.e_field, n));
+    _par_got_i(_par_fd_digest(sim.h_field, n));
+    _par_got_i(_par_fd_digest(sim.permittivity, n));
+    _par_got_i(_par_fd_digest(sim.permeability, n));
+    _par_got_i(_par_fd_digest(sim.e_coeff, n));
+    _par_got_i(_par_fd_digest(sim.h_coeff, n));
+    var pr: i64[5];
+    pr[0] = 0;
+    pr[1] = 1;
+    pr[2] = n / 2;
+    pr[3] = n - 2;
+    pr[4] = n - 1;
+    var e: *f64 = _par_fd_f64p(sim.e_field);
+    var h: *f64 = _par_fd_f64p(sim.h_field);
+    for (var k = 0; k < 5; k = k + 1) { _par_got_f(e[pr[k]]); }
+    for (var k2 = 0; k2 < 5; k2 = k2 + 1) { _par_got_f(h[pr[k2]]); }
+    return 0;
+}
+
+# Replays an Fdtd1d script; 1 handled, -1 for an unknown opcode.
+fn _par_fd1_script(): i64 {
+    var sim: BjFdtd1d;
+    var dx: f64 = _par_in(1);
+    var t, v = BjFdtd1d_new(_par_in(0), dx, &sim);
+    if (is_err_result(t) == 1) {
+        _par_got_error(v);
+        return 1;
+    }
+    var k = 2;
+    while (k < _par_in_n) {
+        var code = _par_in(k);
+        if (code == 1) {
+            var x1: f64 = _par_in(k + 3);
+            var t1, v1 = sim.set_permittivity(_par_in(k + 1), _par_in(k + 2), x1);
+            if (is_err_result(t1) == 1) { _par_got_error(v1); }
+            k = k + 4;
+        } elif (code == 2) {
+            var x2: f64 = _par_in(k + 3);
+            var t2, v2 = sim.set_permeability(_par_in(k + 1), _par_in(k + 2), x2);
+            if (is_err_result(t2) == 1) { _par_got_error(v2); }
+            k = k + 4;
+        } elif (code == 3) {
+            var x3: f64 = _par_in(k + 2);
+            sim.add_source(_par_in(k + 1), x3);
+            k = k + 3;
+        } elif (code == 4) {
+            var cnt = _par_in(k + 1);
+            for (var j = 0; j != cnt; j = j + 1) { sim.step_once(); }
+            k = k + 2;
+        } elif (code == 5) {
+            var cell = BJ_FDTD_NO_SOURCE;
+            if (load64(_par_in_k + (k + 2) * 8) == 105) { cell = _par_in(k + 2); }
+            var fr: f64 = _par_in(k + 3);
+            var am: f64 = _par_in(k + 4);
+            sim.run(_par_in(k + 1), cell, fr, am);
+            k = k + 5;
+        } else {
+            BjFdtd1d_free(&sim);
+            return 0 - 1;
+        }
+    }
+    _par_fd1_state(&sim);
+    BjFdtd1d_free(&sim);
+    return 1;
+}
+
+fn _par_fdtd(fp, fl): i64 {
+    if (fl > 8 && memeq(fp, "Fdtd1d::", 8) == 1) { return _par_fd1_script(); }
+    return 0;
+}
+
 public fn _par_dispatch(mp, ml, fp, fl): i64 {
     _par_got_n = 0;
     if (_par_eq(mp, ml, "beam") == 1) { return _par_beam(fp, fl); }
@@ -3245,6 +3349,7 @@ public fn _par_dispatch(mp, ml, fp, fl): i64 {
     if (_par_eq(mp, ml, "complex") == 1) { return _par_complex(fp, fl); }
     if (_par_eq(mp, ml, "constants") == 1) { return _par_constants(fp, fl); }
     if (_par_eq(mp, ml, "error") == 1) { return _par_error(fp, fl); }
+    if (_par_eq(mp, ml, "fdtd") == 1) { return _par_fdtd(fp, fl); }
     if (_par_eq(mp, ml, "field") == 1) { return _par_field(fp, fl); }
     if (_par_eq(mp, ml, "fmtf") == 1) { return _par_fmtf(fp, fl); }
     if (_par_eq(mp, ml, "json") == 1) { return _par_json(fp, fl); }

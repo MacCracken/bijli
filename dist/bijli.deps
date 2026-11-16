@@ -13,5 +13,6 @@ ganita
 math
 str
 alloc
+mmap
 bayan
 fnptr

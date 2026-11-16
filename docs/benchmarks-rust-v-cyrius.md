@@ -6,7 +6,7 @@
 
 **Rust column**: rust-old/bench-history.csv, run `2026-11-12T03:15:21Z` at `c95fd30` (the 1.2.0 tag's source), criterion medians. Taken under load (kimiya's gates ran beside it: load average about 2.6, median CI width 0.8 %, p90 4.2 %, max 13 %), so a ratio within the Rust row's own noise is read as parity (port plan §5 P4).
 
-**80 Rust benches:** 69 twinned, 0 not applicable, 11 pending.
+**80 Rust benches:** 72 twinned, 0 not applicable, 8 pending.
 
 | Rust bench | Rust | Cyrius twin | Cyrius | Cyrius / Rust |
 |---|---:|---|---:|---:|
@@ -38,16 +38,16 @@
 | `wave/schlick_reflectance` | 1.24 ns | `wave/schlick_reflectance` | 265.00 ns | 213.7× |
 | `wave/half_wave_dipole_pattern` | 0.50 ns | `wave/half_wave_dipole_pattern` | 483.00 ns | 962.5× |
 | `wave/rect_waveguide_cutoff` | 1.24 ns | `wave/rect_waveguide_cutoff` | 51.00 ns | 41.1× |
-| `fdtd/step_100_cells` | 64.09 ns | pending (M5) | — | — |
-| `fdtd/step_1000_cells` | 623.03 ns | pending (M5) | — | — |
-| `fdtd/run_100_steps_500_cells` | 32.23 µs | pending (M5) | — | — |
+| `fdtd/step_100_cells` | 64.09 ns | `fdtd/step_100_cells` | 251.00 ns | 3.9× |
+| `fdtd/step_1000_cells` | 623.03 ns | `fdtd/step_1000_cells` | 2.11 µs | 3.4× |
+| `fdtd/run_100_steps_500_cells` | 32.23 µs | `fdtd/run_100_steps_500_cells` | 146.06 µs | 4.5× |
 | `fdtd/2d_step_100x100_tm` | 11.42 µs | pending (M6) | — | — |
 | `fdtd/2d_run_50_steps_80x80` | 416.78 µs | pending (M6) | — | — |
 | `fdtd/2d_step_100x100_tm_cpml10` | 20.47 µs | pending (M6) | — | — |
 | `fdtd/2d_step_100x100_tm_lossy` | 14.31 µs | pending (M6) | — | — |
 | `fdtd/3d_step_30x30x30` | 319.98 µs | pending (M6) | — | — |
 | `fdtd/3d_step_30x30x30_cpml8` | 494.96 µs | pending (M6) | — | — |
-| `fdtd/nf2ff_2d_80x80_180` | 193.01 µs | pending (M5) | — | — |
+| `fdtd/nf2ff_2d_80x80_180` | 193.01 µs | pending (M6) | — | — |
 | `fdtd/find_eigenmodes_4096x256` | 2.12 ms | pending (M5) | — | — |
 | `circuit/rc_charging` | 0.50 ns | `circuit/rc_charging` | 67.00 ns | 134.0× |
 | `circuit/rl_current_rise` | 2.03 ns | `circuit/rl_current_rise` | 72.00 ns | 35.5× |

@@ -71,7 +71,8 @@ EXTRA = {
 def milestone(bench: str) -> str:
     group, _, name = bench.partition("/")
     if group == "fdtd":
-        return "M6" if name.startswith(("2d_", "3d_")) else "M5"
+        # nf2ff_2d reads an Fdtd2d, so its bench lands with the 2D grid (port-parity.md §94).
+        return "M6" if name.startswith(("2d_", "3d_", "nf2ff_2d")) else "M5"
     return GROUP_MILESTONE[group]
 
 

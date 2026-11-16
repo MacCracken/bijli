@@ -6,7 +6,7 @@
 > (`tests/golden/`) checks every ported function on its grid besides; this ledger is about the oracle's own
 > assertions.
 
-**858 Rust tests:** 597 ported, 8 not applicable, 253 pending.
+**858 Rust tests:** 618 ported, 9 not applicable, 231 pending.
 
 | Rust file | Milestone | Cyrius tests | Rust tests | Ported | N/A | Pending |
 |---|---|---|---:|---:|---:|---:|
@@ -17,7 +17,7 @@
 | `src/circuit.rs` | M2 | `tests/circuit.tcyr` | 51 | 51 | 0 | 0 |
 | `src/compute.rs` | M6 | `tests/compute.tcyr` | 18 | 0 | 0 | 18 |
 | `src/error.rs` | M1 | `tests/error.tcyr` | 10 | 10 | 0 | 0 |
-| `src/fdtd.rs` | M6 | `tests/fdtd1d.tcyr`, `tests/fdtd_media.tcyr`, `tests/nf2ff.tcyr`, `tests/fdtd_util.tcyr`, `tests/cpml.tcyr`, `tests/fdtd2d.tcyr`, `tests/fdtd3d.tcyr` | 167 | 0 | 0 | 167 |
+| `src/fdtd.rs` | M6 | `tests/fdtd1d.tcyr`, `tests/fdtd_media.tcyr`, `tests/nf2ff.tcyr`, `tests/fdtd_util.tcyr`, `tests/cpml.tcyr`, `tests/fdtd2d.tcyr`, `tests/fdtd3d.tcyr` | 167 | 21 | 1 | 145 |
 | `src/field.rs` | M1 | `tests/field.tcyr` | 105 | 105 | 0 | 0 |
 | `src/integration/soorat.rs` | M7 | `tests/soorat.tcyr` | 14 | 0 | 0 | 14 |
 | `src/logging.rs` | M1 | `tests/log.tcyr` | 1 | 1 | 0 | 0 |
@@ -34,6 +34,7 @@
 
 | Rust test | Reason |
 |---|---|
+| `src/fdtd.rs::test_fdtd1d_inconsistent_public_fields_no_panic` | BjFdtd1d's arrays are fixed at construction (ADR 0002 row 2): num_cells and the field arrays can't be resized apart, so the mismatch it guards against can't arise; tests/fdtd1d.tcyr's cyrius_fdtd1d_free and cyrius_fdtd1d_two_cells pin the empty and smallest grids |
 | `src/material.rs::test_material_reflectance_air_glass` | deprecated reflectance_at (ADR 0002 row 1); its 0.04 is checked through try_reflectance_at |
 | `src/material.rs::test_material_reflectance_same` | Material::reflectance_at is deprecated in 1.2.0 and not carried (ADR 0002 row 1); tests/material.tcyr's cyrius_reflectance_via_try checks the same value through try_reflectance_at |
 | `src/material.rs::test_reflectance_at_deprecated_never_wrong` | deprecated reflectance_at (ADR 0002 row 1): the port has no NaN-returning form; try_reflectance_at refuses the conductor (cyrius_reflectance_via_try) |

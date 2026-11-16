@@ -1127,6 +1127,49 @@ fn main(): i64 {
     if (is_err_result(tsj) == 1 || vsj == 7) { println("json/s_matrix: the matrix was refused"); }
     if (fsum == 7.0) { println("."); }
 
+    # fdtd (M5 part 1a): the 1D grid, as Rust's benches: one step of a 100- and a 1000-cell grid after an impulse
+    # (reading the source cell, as Rust's black_box), and a 500-cell grid made, run 100 driven steps and summed.
+    var fd1: BjFdtd1d;
+    var tfd1, vfd1 = BjFdtd1d_new(100, 0.001, &fd1);
+    fd1.add_source(50, 1.0);
+    var e100: *f64 = bench_f64p(fd1.e_field);
+    var fdsum: f64 = 0.0;
+    var bf1 = bench_new("fdtd/step_100_cells");
+    bench_batch_start(bf1);
+    for (var k = 0; k < 1000000; k = k + 1) {
+        fd1.step_once();
+        fdsum = fdsum + e100[50];
+    }
+    bench_batch_stop(bf1, 1000000);
+    bench_report(bf1);
+    BjFdtd1d_free(&fd1);
+    var fd2: BjFdtd1d;
+    var tfd2, vfd2 = BjFdtd1d_new(1000, 0.001, &fd2);
+    fd2.add_source(500, 1.0);
+    var e1000: *f64 = bench_f64p(fd2.e_field);
+    var bf2 = bench_new("fdtd/step_1000_cells");
+    bench_batch_start(bf2);
+    for (var k = 0; k < 100000; k = k + 1) {
+        fd2.step_once();
+        fdsum = fdsum + e1000[500];
+    }
+    bench_batch_stop(bf2, 100000);
+    bench_report(bf2);
+    BjFdtd1d_free(&fd2);
+    var bf3 = bench_new("fdtd/run_100_steps_500_cells");
+    bench_batch_start(bf3);
+    for (var k = 0; k < 1000; k = k + 1) {
+        var fd3: BjFdtd1d;
+        var tfd3, vfd3 = BjFdtd1d_new(500, 0.0001, &fd3);
+        fd3.run(100, 250, 1000000000.0, 1.0);
+        var en3: f64 = fd3.total_energy();
+        fdsum = fdsum + en3;
+        BjFdtd1d_free(&fd3);
+    }
+    bench_batch_stop(bf3, 1000);
+    bench_report(bf3);
+    if (is_err_result(tfd1) == 1 || is_err_result(tfd2) == 1 || fdsum == 7.0) { println("."); }
+
     var ar: f64 = acc.re;
     if (ar == 7.0) { println("."); }
     if (keep == 7) { println("."); }

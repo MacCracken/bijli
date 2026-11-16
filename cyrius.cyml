@@ -38,4 +38,4 @@ modules = ["src/constants.cyr", "src/crmath_data.cyr", "src/crmath.cyr", "src/cr
            "src/wave_data.cyr", "src/wave.cyr", "src/circuit.cyr",
            "src/relativity.cyr", "src/polarization.cyr", "src/scattering.cyr",
            "src/beam.cyr", "src/rf.cyr", "src/touchstone_data.cyr", "src/touchstone.cyr",
-           "src/json.cyr"]
+           "src/fdtd1d.cyr", "src/json.cyr"]

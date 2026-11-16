@@ -40,14 +40,47 @@ MODULES = ["error", "logging", "field", "maxwell", "charge", "material", "wave",
            "polarization", "scattering", "beam", "rf"]
 # Rust module -> the milestone that ports it (port plan §4.1).
 PENDING_MODULES = {
-    "fdtd": "M5–M6", "compute": "M6",
+    "compute": "M6",
     "integration/soorat": "M7", "bridge": "M7", "ai": "M7",
 }
 # Modules being ported Part by Part: module -> (the Parts that finish it, the Rust items still to come, by name: a free
 # fn, a method as `Owner::name`, a struct or enum (its fields or variants with it), a serde impl as `impl Trait for X`).
 # Their other items are checked as a ported module's now; the listed ones count as pending, and one found ported is a
 # problem (drop it from the list).
-IN_PROGRESS = {}
+IN_PROGRESS = {
+    # M5 part 1a ported Fdtd1d; the rest of fdtd.rs follows in M5 (sources, media, NF2FF, utilities) and M6 (CPML,
+    # 2D, 3D).
+    "fdtd": ("M5–M6", {
+        "TfsfSource", "LossyMaterial", "DrudeMaterial", "LorentzMaterial", "DebyeMaterial", "Nf2ffResult",
+        "CpmlParams", "Cpml", "Mode2d", "Fdtd2d", "Fdtd3d", "NonUniformGrid", "CwAccumulator", "EigenmodeResult",
+        "gaussian_pulse", "ricker_wavelet", "differentiated_gaussian", "modulated_gaussian_pulse", "nf2ff_2d",
+        "nf2ff_2d_phasor", "subpixel_permittivity_parallel", "subpixel_permittivity_perpendicular",
+        "subpixel_permittivity_perpendicular_checked", "fourth_order_derivative", "find_eigenmodes", "TfsfSource::new",
+        "TfsfSource::try_new", "TfsfSource::step", "TfsfSource::incident_e", "TfsfSource::incident_h",
+        "LossyMaterial::new", "LossyMaterial::try_new", "LossyMaterial::update_coefficients", "DrudeMaterial::new",
+        "DrudeMaterial::try_new", "DrudeMaterial::gold", "DrudeMaterial::silver", "DrudeMaterial::ade_coefficients",
+        "LorentzMaterial::new", "LorentzMaterial::try_new", "LorentzMaterial::ade_coefficients", "DebyeMaterial::new",
+        "DebyeMaterial::try_new", "DebyeMaterial::water", "DebyeMaterial::ade_coefficients", "CpmlParams::new",
+        "Cpml::new", "Cpml::with_params", "Cpml::attach", "Cpml::sigma_max", "Cpml::kappa_max", "Cpml::alpha_max",
+        "Cpml::grading_order", "Fdtd2d::new", "Fdtd2d::idx", "Fdtd2d::set_permittivity", "Fdtd2d::set_permeability",
+        "Fdtd2d::set_conductivity", "Fdtd2d::set_material", "Fdtd2d::add_source", "Fdtd2d::try_enable_cpml",
+        "Fdtd2d::try_enable_cpml_with", "Fdtd2d::enable_cpml", "Fdtd2d::disable_cpml", "Fdtd2d::cpml",
+        "Fdtd2d::step_once", "Fdtd2d::run", "Fdtd2d::time", "Fdtd2d::total_energy", "Fdtd3d::new", "Fdtd3d::idx",
+        "Fdtd3d::set_permittivity", "Fdtd3d::set_permeability", "Fdtd3d::set_conductivity", "Fdtd3d::set_material",
+        "Fdtd3d::add_source_ez", "Fdtd3d::try_enable_cpml", "Fdtd3d::try_enable_cpml_with", "Fdtd3d::disable_cpml",
+        "Fdtd3d::cpml", "Fdtd3d::step_once", "Fdtd3d::run", "Fdtd3d::time", "Fdtd3d::total_energy",
+        "NonUniformGrid::uniform", "NonUniformGrid::try_uniform", "NonUniformGrid::validate", "NonUniformGrid::graded",
+        "NonUniformGrid::min_spacing", "NonUniformGrid::courant_dt", "NonUniformGrid::try_courant_dt",
+        "NonUniformGrid::extents", "CwAccumulator::new", "CwAccumulator::try_new", "CwAccumulator::accumulate",
+        "CwAccumulator::try_accumulate", "CwAccumulator::amplitude", "CwAccumulator::phase",
+        "impl Deserialize for LossyMaterial", "impl Serialize for LossyMaterial", "impl Deserialize for DrudeMaterial",
+        "impl Serialize for DrudeMaterial", "impl Deserialize for LorentzMaterial",
+        "impl Serialize for LorentzMaterial", "impl Deserialize for DebyeMaterial", "impl Serialize for DebyeMaterial",
+        "impl Deserialize for CpmlParams", "impl Serialize for CpmlParams", "impl Deserialize for Mode2d",
+        "impl Serialize for Mode2d", "impl Deserialize for NonUniformGrid", "impl Serialize for NonUniformGrid",
+        "impl Deserialize for EigenmodeResult", "impl Serialize for EigenmodeResult",
+    }),
+}
 NOT_APPLICABLE_MODULES = {
     "lib": "crate root: module list and re-exports",
     "integration/mod": "module root of integration/ (no items)",

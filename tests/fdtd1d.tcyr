@@ -1,0 +1,382 @@
+# fdtd1d.tcyr — src/fdtd1d.cyr (M5 part 1a): the 1D Yee grid with its matched Mur boundaries.
+#
+# Every group named test_* is rust-old/src/fdtd.rs's test of that name, ported assertion for assertion (the ledger
+# matches them by name): the 1D grid's 21 of part 1a. The three that drive a Gaussian pulse
+# (`fdtd1d_reflected_energy_fraction`) follow with the pulses in part 1b, and
+# `test_fdtd1d_inconsistent_public_fields_no_panic` is n/a (ADR 0002 row 2: nothing can resize the grid). The cyrius_*
+# groups pin what the port adds or decides: the error records' text, the allocation refusal, BjFdtd1d_free, usize
+# ranges, the no-source sentinel and the two-cell grid.
+# tests/golden/fdtd.tsv pins the grids against Rust frame by frame besides.
+
+include "tests/lib.cyr"
+
+# |a − b| < tol.
+fn near(a: f64, b: f64, tol: f64): i64 {
+    var d: f64 = a - b;
+    var ad: f64 = f64_abs(d);
+    if (ad < tol) { return 1; }
+    return 0;
+}
+
+# 1 when the C strings a and b are equal.
+fn text_is(a, b): i64 {
+    var n = strlen(a);
+    if (n != strlen(b)) { return 0; }
+    return memeq(a, b, n);
+}
+
+# A word as a *f64.
+fn f64p(a): *f64 {
+    return a;
+}
+
+# Element i of the f64 array at address a.
+fn at(a, i): f64 {
+    var p: *f64 = f64p(a);
+    var x: f64 = p[i];
+    return x;
+}
+
+# BjFdtd1d_new's error code (0 on Ok, the grid then freed).
+fn new_err(n, dx: f64): i64 {
+    var sim: BjFdtd1d;
+    var t, v = BjFdtd1d_new(n, dx, &sim);
+    if (is_ok(t) == 1) {
+        BjFdtd1d_free(&sim);
+        return 0;
+    }
+    return v;
+}
+
+# (s − 1)/(s + 1).
+fn kmur(s: f64): f64 {
+    var a: f64 = s - 1.0;
+    var b: f64 = s + 1.0;
+    var k: f64 = a / b;
+    return k;
+}
+
+# The rightmost cell with |E| > threshold, or `fallback`. Rust's `rposition(..).unwrap_or(src)`.
+fn front(sim: *BjFdtd1d, threshold: f64, fallback): i64 {
+    var e: *f64 = f64p(sim.e_field);
+    var i = sim.num_cells - 1;
+    while (i >= 0) {
+        var x: f64 = e[i];
+        var ax: f64 = f64_abs(x);
+        if (ax > threshold) { return i; }
+        i = i - 1;
+    }
+    return fallback;
+}
+
+# 1 when the two grids' E and H are bit-identical.
+fn same_fields(a: *BjFdtd1d, b: *BjFdtd1d): i64 {
+    if (a.num_cells != b.num_cells) { return 0; }
+    if (memeq(a.e_field, b.e_field, a.num_cells * 8) != 1) { return 0; }
+    return memeq(a.h_field, b.h_field, a.num_cells * 8);
+}
+
+# Runs fdtd.rs's 1D tests, then the Cyrius-only checks.
+fn main() {
+    alloc_init();
+    var c0: f64 = BJ_SPEED_OF_LIGHT;
+    var zero: f64 = 0.0;
+    var nan: f64 = zero / zero;
+    var inf: f64 = 1.0 / zero;
+
+    test_group("test_fdtd_creation");
+    var s1: BjFdtd1d;
+    var t1, v1 = BjFdtd1d_new(100, 0.001, &s1);
+    assert(is_ok(t1) == 1, "100 cells");
+    assert(s1.num_cells == 100, "num_cells");
+    assert(s1.map_bytes == 100 * 56, "E, H, the four per-cell arrays and the scratch row: 100 values each");
+    var dt1: f64 = s1.dt;
+    assert(dt1 > 0.0, "dt > 0");
+    BjFdtd1d_free(&s1);
+
+    test_group("test_fdtd_too_few_cells");
+    assert(new_err(1, 0.001) == BJ_ERR_INSUFFICIENT_RESOLUTION, "1 cell is refused");
+
+    test_group("test_fdtd_invalid_dx");
+    assert(new_err(100, 0.0) == BJ_ERR_INVALID_PARAMETER, "dx = 0");
+    assert(new_err(100, -1.0) == BJ_ERR_INVALID_PARAMETER, "dx < 0");
+
+    test_group("test_courant_condition");
+    var s4: BjFdtd1d;
+    var t4, v4 = BjFdtd1d_new(100, 0.001, &s4);
+    var lim4: f64 = s4.dx / c0;
+    var dt4: f64 = s4.dt;
+    assert(dt4 <= lim4, "dt ≤ dx/c");
+    BjFdtd1d_free(&s4);
+
+    test_group("test_source_injection");
+    var s5: BjFdtd1d;
+    var t5, v5 = BjFdtd1d_new(100, 0.001, &s5);
+    s5.add_source(50, 1.0);
+    assert(near(at(s5.e_field, 50), 1.0, 0.000000000000001) == 1, "E[50] = 1");
+    BjFdtd1d_free(&s5);
+
+    test_group("test_step_propagates_energy");
+    var s6: BjFdtd1d;
+    var t6, v6 = BjFdtd1d_new(100, 0.001, &s6);
+    s6.add_source(50, 1.0);
+    var e6: f64 = s6.total_energy();
+    assert(e6 > 0.0, "energy after the source");
+    s6.step_once();
+    var h49: f64 = at(s6.h_field, 49);
+    var h50: f64 = at(s6.h_field, 50);
+    var a49: f64 = f64_abs(h49);
+    var a50: f64 = f64_abs(h50);
+    assert(a49 > 0.0 || a50 > 0.0, "H beside the source after one step");
+    BjFdtd1d_free(&s6);
+
+    test_group("test_run_with_source");
+    var s7: BjFdtd1d;
+    var t7, v7 = BjFdtd1d_new(200, 0.001, &s7);
+    s7.run(100, 100, 1000000000.0, 1.0);
+    var max7: f64 = 0.0;
+    for (var i7 = 0; i7 < 200; i7 = i7 + 1) {
+        var x7: f64 = at(s7.e_field, i7);
+        var a7: f64 = f64_abs(x7);
+        if (a7 > max7) { max7 = a7; }
+    }
+    assert(max7 > 0.0, "E nonzero after 100 driven steps");
+    BjFdtd1d_free(&s7);
+
+    test_group("test_set_permittivity");
+    var s8: BjFdtd1d;
+    var t8, v8 = BjFdtd1d_new(100, 0.001, &s8);
+    var r8, w8 = s8.set_permittivity(50, 75, 4.0);
+    assert(is_ok(r8) == 1, "Ok");
+    assert(near(at(s8.permittivity, 60), 4.0, 0.000000000000001) == 1, "ε_r[60] = 4");
+    assert(near(at(s8.permittivity, 30), 1.0, 0.000000000000001) == 1, "ε_r[30] = 1");
+    BjFdtd1d_free(&s8);
+
+    test_group("test_set_permittivity_invalid");
+    var s9: BjFdtd1d;
+    var t9, v9 = BjFdtd1d_new(100, 0.001, &s9);
+    var r9, w9 = s9.set_permittivity(0, 100, -1.0);
+    assert(is_err_result(r9) == 1, "ε_r = −1 refused");
+    BjFdtd1d_free(&s9);
+
+    test_group("test_wave_speed_in_dielectric");
+    var vac: BjFdtd1d;
+    var die: BjFdtd1d;
+    var t10a, v10a = BjFdtd1d_new(500, 0.0001, &vac);
+    var t10b, v10b = BjFdtd1d_new(500, 0.0001, &die);
+    var r10, w10 = die.set_permittivity(0, 500, 4.0);
+    vac.run(200, 50, 3000000000.0, 1.0);
+    die.run(200, 50, 3000000000.0, 1.0);
+    var vf = front(&vac, 0.01, 50);
+    var df = front(&die, 0.01, 50);
+    assert(df <= vf, "the wave front is behind in the dielectric");
+    BjFdtd1d_free(&vac);
+    BjFdtd1d_free(&die);
+
+    test_group("test_time");
+    var s11: BjFdtd1d;
+    var t11, v11 = BjFdtd1d_new(100, 0.001, &s11);
+    var tm0: f64 = s11.time();
+    assert(near(tm0, 0.0, 0.000000000000000000000000000001) == 1, "t = 0");
+    s11.step_once();
+    var tm1: f64 = s11.time();
+    assert(near(tm1, s11.dt, 0.000000000000000000000000000001) == 1, "t = dt after one step");
+    BjFdtd1d_free(&s11);
+
+    test_group("test_abc_coeff_precomputed");
+    var s12: BjFdtd1d;
+    var t12, v12 = BjFdtd1d_new(100, 0.001, &s12);
+    var cdt12: f64 = c0 * s12.dt;
+    var sc12: f64 = cdt12 / s12.dx;
+    var k12: f64 = kmur(sc12);
+    assert(near(s12.abc_left, k12, 0.000000000000001) == 1, "left (S − 1)/(S + 1)");
+    assert(near(s12.abc_right, k12, 0.000000000000001) == 1, "right (S − 1)/(S + 1)");
+    BjFdtd1d_free(&s12);
+
+    test_group("test_source_out_of_bounds_ignored");
+    var s13: BjFdtd1d;
+    var t13, v13 = BjFdtd1d_new(10, 0.001, &s13);
+    s13.add_source(999, 1.0);
+    var nz13 = 0;
+    for (var i13 = 0; i13 < 10; i13 = i13 + 1) {
+        var x13: f64 = at(s13.e_field, i13);
+        if (x13 != 0.0) { nz13 = nz13 + 1; }
+    }
+    assert(nz13 == 0, "E untouched");
+    BjFdtd1d_free(&s13);
+
+    test_group("test_set_permeability");
+    var s14: BjFdtd1d;
+    var t14, v14 = BjFdtd1d_new(100, 0.001, &s14);
+    var r14, w14 = s14.set_permeability(20, 40, 2.0);
+    assert(is_ok(r14) == 1, "Ok");
+    assert(near(at(s14.permeability, 30), 2.0, 0.000000000000001) == 1, "μ_r[30] = 2");
+    assert(near(at(s14.permeability, 10), 1.0, 0.000000000000001) == 1, "μ_r[10] = 1");
+    BjFdtd1d_free(&s14);
+
+    test_group("test_set_permeability_invalid");
+    var s15: BjFdtd1d;
+    var t15, v15 = BjFdtd1d_new(100, 0.001, &s15);
+    var r15a, w15a = s15.set_permeability(0, 100, -1.0);
+    assert(is_err_result(r15a) == 1, "μ_r = −1 refused");
+    var r15b, w15b = s15.set_permeability(0, 100, 0.0);
+    assert(is_err_result(r15b) == 1, "μ_r = 0 refused");
+    BjFdtd1d_free(&s15);
+
+    test_group("test_energy_nonzero_after_source");
+    var s16: BjFdtd1d;
+    var t16, v16 = BjFdtd1d_new(100, 0.001, &s16);
+    var en0: f64 = s16.total_energy();
+    var an0: f64 = f64_abs(en0);
+    assert(an0 < 0.000000000000000000000000000001, "no energy at first");
+    s16.add_source(50, 1.0);
+    var en1: f64 = s16.total_energy();
+    assert(en1 > 0.0, "energy after the source");
+    BjFdtd1d_free(&s16);
+
+    test_group("test_min_cells");
+    assert(new_err(2, 0.001) == 0, "2 cells work");
+
+    test_group("test_fdtd_invalid_dx_non_finite");
+    assert(new_err(100, nan) == BJ_ERR_INVALID_PARAMETER, "dx = NaN");
+    assert(new_err(100, inf) == BJ_ERR_INVALID_PARAMETER, "dx = ∞");
+
+    test_group("test_fdtd_dt_is_half_courant_limit");
+    var s19: BjFdtd1d;
+    var t19, v19 = BjFdtd1d_new(100, 0.001, &s19);
+    var cdt19: f64 = c0 * s19.dt;
+    var sc19: f64 = cdt19 / s19.dx;
+    assert(near(sc19, 0.5, 0.000000000001) == 1, "S = c·dt/dx = 0.5");
+    BjFdtd1d_free(&s19);
+
+    test_group("test_set_material_rejects_non_finite");
+    var s20: BjFdtd1d;
+    var t20, v20 = BjFdtd1d_new(100, 0.001, &s20);
+    var r20a, w20a = s20.set_permittivity(0, 100, nan);
+    assert(is_err_result(r20a) == 1, "ε_r = NaN refused");
+    var r20b, w20b = s20.set_permittivity(0, 100, inf);
+    assert(is_err_result(r20b) == 1, "ε_r = ∞ refused");
+    var r20c, w20c = s20.set_permeability(0, 100, nan);
+    assert(is_err_result(r20c) == 1, "μ_r = NaN refused");
+    assert(near(at(s20.permittivity, 50), 1.0, 0.000000000000001) == 1, "ε_r untouched");
+    assert(near(at(s20.permeability, 50), 1.0, 0.000000000000001) == 1, "μ_r untouched");
+    BjFdtd1d_free(&s20);
+
+    test_group("test_mur_coefficient_tracks_material");
+    var s21: BjFdtd1d;
+    var t21, v21 = BjFdtd1d_new(100, 0.001, &s21);
+    var r21a, w21a = s21.set_permittivity(0, 100, 4.0);
+    var k025: f64 = kmur(0.25);
+    var k0125: f64 = kmur(0.125);
+    assert(near(s21.abc_left, k025, 0.000000000001) == 1, "left follows ε_r = 4");
+    assert(near(s21.abc_right, k025, 0.000000000001) == 1, "right follows ε_r = 4");
+    var r21b, w21b = s21.set_permeability(50, 100, 4.0);
+    assert(near(s21.abc_left, k025, 0.000000000001) == 1, "left unchanged by μ_r on the right half");
+    assert(near(s21.abc_right, k0125, 0.000000000001) == 1, "right follows ε_r μ_r = 16");
+    BjFdtd1d_free(&s21);
+
+    test_group("cyrius_fdtd1d_error_records");
+    var se: BjFdtd1d;
+    se.num_cells = 77;
+    var te1, ve1 = BjFdtd1d_new(1, 0.001, &se);
+    assert(ve1 == BJ_ERR_INSUFFICIENT_RESOLUTION && se.num_cells == 77, "1 cell: out untouched");
+    assert(bj_last_error_cells() == 1, "the record's cells");
+    assert(text_is(bj_last_error_display(), "grid resolution too coarse: 1 cells for domain size 0.001") == 1,
+      "its Display: 1·dx");
+    var te0, ve0 = BjFdtd1d_new(0, 0.001, &se);
+    assert(text_is(bj_last_error_display(), "grid resolution too coarse: 0 cells for domain size 0") == 1,
+      "0 cells: 0·dx");
+    var te2, ve2 = BjFdtd1d_new(100, nan, &se);
+    assert(text_is(bj_last_error_display(), "invalid parameter: dx must be finite and positive, got NaN") == 1,
+      "dx = NaN named");
+    var te3, ve3 = BjFdtd1d_new(1, nan, &se);
+    assert(ve3 == BJ_ERR_INSUFFICIENT_RESOLUTION, "the cell count is checked first, as Rust");
+    var te4, ve4 = BjFdtd1d_new(100, 0.001, &se);
+    var re4, we4 = se.set_permittivity(0, 100, -2.0);
+    assert(we4 == BJ_ERR_INVALID_PERMITTIVITY, "ε_r refused as InvalidPermittivity");
+    assert(text_is(bj_last_error_display(), "invalid permittivity: -2 (must be > 0)") == 1, "its Display");
+    var re5, we5 = se.set_permeability(0, 100, inf);
+    assert(we5 == BJ_ERR_INVALID_PERMEABILITY, "μ_r refused as InvalidPermeability");
+    var mu5: f64 = bj_last_error_value();
+    assert(mu5 == inf, "the record holds the value");
+    BjFdtd1d_free(&se);
+
+    test_group("cyrius_fdtd1d_allocation");
+    var sa: BjFdtd1d;
+    sa.num_cells = 5;
+    var ta1, va1 = BjFdtd1d_new(0 - 1, 0.001, &sa);
+    assert(va1 == BJ_ERR_ALLOCATION && sa.num_cells == 5, "usize::MAX cells: Allocation, out untouched");
+    var da1 = text_is(bj_last_error_display(), "allocation failed: a 1D FDTD grid of 18446744073709551615 cells");
+    assert(da1 == 1, "its Display");
+    var ta2, va2 = BjFdtd1d_new(1 << 59, 0.001, &sa);
+    assert(va2 == BJ_ERR_ALLOCATION, "2^59 cells: the 64-bit length would overflow");
+
+    test_group("cyrius_fdtd1d_free");
+    var sf: BjFdtd1d;
+    var tf, vf2 = BjFdtd1d_new(3, 0.001, &sf);
+    BjFdtd1d_free(&sf);
+    assert(sf.num_cells == 0 && sf.e_field == 0 && sf.map_bytes == 0, "emptied");
+    BjFdtd1d_free(&sf);
+    assert(sf.num_cells == 0, "a second free does nothing");
+    sf.step_once();
+    assert(sf.step == 1, "a freed grid still counts its steps, as an empty one");
+    var ef: f64 = sf.total_energy();
+    assert(ef == 0.0, "and holds no energy");
+
+    test_group("cyrius_fdtd1d_usize_ranges");
+    var su: BjFdtd1d;
+    var tu, vu = BjFdtd1d_new(10, 0.001, &su);
+    var ru1, wu1 = su.set_permittivity(4, 0 - 1, 2.0);
+    assert(at(su.permittivity, 9) == 2.0 && at(su.permittivity, 3) == 1.0, "end = usize::MAX clamps to the grid");
+    var ru2, wu2 = su.set_permeability(0 - 1, 5, 3.0);
+    assert(is_ok(ru2) == 1 && at(su.permeability, 0) == 1.0, "start = usize::MAX sets nothing, Ok");
+    var ru3, wu3 = su.set_permeability(6, 2, 3.0);
+    assert(is_ok(ru3) == 1 && at(su.permeability, 6) == 1.0, "start > end sets nothing, Ok");
+    su.add_source(0 - 1, 1.0);
+    var eu: f64 = su.total_energy();
+    assert(eu == 0.0, "a source at usize::MAX is ignored");
+    BjFdtd1d_free(&su);
+
+    test_group("cyrius_fdtd1d_no_source");
+    var sn1: BjFdtd1d;
+    var sn2: BjFdtd1d;
+    var sn3: BjFdtd1d;
+    var tn1, vn1 = BjFdtd1d_new(40, 0.001, &sn1);
+    var tn2, vn2 = BjFdtd1d_new(40, 0.001, &sn2);
+    var tn3, vn3 = BjFdtd1d_new(40, 0.001, &sn3);
+    sn1.add_source(20, 1.0);
+    sn2.add_source(20, 1.0);
+    sn3.add_source(20, 1.0);
+    sn1.run(30, BJ_FDTD_NO_SOURCE, 1000000000.0, 1.0);
+    sn2.run(30, 40, 1000000000.0, 1.0);
+    for (var k = 0; k < 30; k = k + 1) { sn3.step_once(); }
+    assert(same_fields(&sn1, &sn2) == 1 && same_fields(&sn1, &sn3) == 1,
+      "None, an out-of-grid cell and plain steps agree bit for bit");
+    assert(sn1.step == 30 && sn2.step == 30, "each counts its steps");
+    BjFdtd1d_free(&sn1);
+    BjFdtd1d_free(&sn2);
+    BjFdtd1d_free(&sn3);
+
+    test_group("cyrius_fdtd1d_two_cells");
+    var s2c: BjFdtd1d;
+    var t2c, v2c = BjFdtd1d_new(2, 0.001, &s2c);
+    s2c.add_source(1, 1.0);
+    s2c.step_once();
+    var h0: f64 = at(s2c.h_field, 0);
+    var hc: f64 = s2c.dt / (BJ_MU_0 * s2c.dx);
+    assert(h0 == hc, "H₀ = c_h·(E₁ − E₀), the one H node updated");
+    var e0: f64 = at(s2c.e_field, 0);
+    var e1: f64 = at(s2c.e_field, 1);
+    var k2: f64 = s2c.abc_left;
+    var e0w: f64 = 1.0 + k2;
+    var e1w: f64 = k2 * (e0w - 1.0);
+    assert(e0 == e0w, "E₀ = E₁ⁿ + k(E₁ − E₀)");
+    assert(e1 == e1w, "E₁ = E₀ⁿ + k(E₀ − E₁), reading the E₀ just written, as Rust's order does");
+    BjFdtd1d_free(&s2c);
+
+    return assert_summary();
+}
+
+var exit_code = main();
+if (exit_code > 0) { exit_code = 1; }
+sys_exit_group(exit_code);
