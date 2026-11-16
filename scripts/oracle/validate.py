@@ -8773,7 +8773,7 @@ def fd_mur(dt, dx, eps_r, mu_r, c):
 
 
 FD_MUR_LO, FD_MUR_HI = 2.0 ** -400, 2.0 ** 400
-FD_PORT = frozenset({"40", "13", "17"})     # the port's ADR 0002 rows in the 1D and TF/SF models
+FD_PORT = frozenset({"40", "13", "17", "18"})   # the port's ADR 0002 rows in the 1D and TF/SF models
 FD_MUR_ULPS = 8                             # the cancellation-free form's accuracy gate against the exact coefficient
 FD_MUR_SEEN = {}                            # (dt, dx, ε_r, μ_r) -> its error in ulps, each band call measured once
 
@@ -8824,7 +8824,7 @@ class Fd1:
     def __init__(self, n, dx, K, port=frozenset()):
         self.c, self.eps0, self.mu0 = K
         self.mur = fd_mur_port if "40" in port else fd_mur
-        self.r13 = "13" in port
+        self.r13, self.r18 = "13" in port, "18" in port
         self.n, self.dx, self.step = n, dx, 0
         self.dt = dx / (2.0 * self.c)
         ce, ch = self.coeff(self.eps0, 1.0), self.coeff(self.mu0, 1.0)
@@ -8949,7 +8949,8 @@ def fd_apply(sim, op, P):
         sim.run(op[1], op[2], op[3], op[4], P)
     else:
         for _ in range(op[1]):
-            sim.add_source(op[2], fd_pulse("gaussian_pulse", (float(sim.step) * sim.dt, op[3], op[4]), P))
+            v = (float(sim.step) * sim.dt, op[3], op[4])
+            sim.add_source(op[2], fd_pulse_port("gaussian_pulse", v) if sim.r18 else fd_pulse("gaussian_pulse", v, P))
             sim.step_once()
 
 
@@ -9505,12 +9506,115 @@ def fd_pulse(name, v, P):
     raise ValueError(f"no pulse {name}")
 
 
+FS_PULSES = ("fdtd::gaussian_pulse", "fdtd::ricker_wavelet", "fdtd::differentiated_gaussian",
+             "fdtd::modulated_gaussian_pulse")
+FS_DMIN = 2.0 ** -1022
+FS_EXP_FAR = Fraction(2) ** 47                      # from it e^x is the port's far stand-in
+
+
+def fs_normal(x) -> bool:
+    return x == 0.0 or (math.isfinite(x) and abs(x) >= FS_DMIN)
+
+
+def fs_exp53(x):
+    """e^x to 53 bits for a 53-bit exact x (a ux pair), as the port's _bj_fs_exp_ux: ("v", s, e) with e^x = s·2^e (kept
+    split: past |x| = 2300 a Fraction of 2^e would take trillions of bits), or ("far", negative) for |x| ≥ 2^47."""
+    v = x[0]
+    if v == 0 or abs(v) < Fraction(2) ** -300:
+        return "v", Fraction(1), 0
+    if abs(v) >= FS_EXP_FAR:
+        return "far", v < 0
+    es, ee = mpfr_ref.wide_split("exp", v)
+    return "v", Fraction(es), ee
+
+
+def fs_times(a, g) -> float:
+    """RN(a·g) once for a ux pair a and fs_exp53's g: ±0 or ±∞ by the product's sign where its binade lies past ∓1200
+    (or g is the far stand-in), without building the power of two."""
+    if a[0] == 0:
+        return -0.0 if a[1] else 0.0
+    neg = a[0] < 0
+    if g[0] == "far":
+        if g[1]:
+            return -0.0 if neg else 0.0
+        return -math.inf if neg else math.inf
+    _k, gs, ge = g
+    lb = binade(a[0]) + ge
+    if lb < -1200:
+        return -0.0 if neg else 0.0
+    if lb > 1200:
+        return -math.inf if neg else math.inf
+    return rn_frac(a[0] * gs * Fraction(2) ** ge)
+
+
+def fs_sin53(ph):
+    """sin of a 53-bit exact angle to 53 bits, as _bj_vx_sin53: the angle itself below 2^-1022, the double's correctly
+    rounded sine in range, MPFR's widest range past DBL_MAX."""
+    v = ph[0]
+    if v == 0:
+        return ph
+    if abs(v) < Fraction(FS_DMIN):
+        return ph
+    if abs(v) < Fraction(2) ** 1024:
+        return ux(MPFR_P["sin"](float(v)))
+    ss, se = mpfr_ref.wide_split("sin", v)
+    s = Fraction(ss) * Fraction(2) ** se
+    return s, s < 0
+
+
+def fd_pulse_port(name, v):
+    """The port's pulses (ADR 0002 row 18, M5 part 2d-1): Rust's chain on correctly rounded primitives, but where an
+    intermediate leaves the normal range for finite arguments, the chain with an unbounded exponent, e^x to 53 bits on
+    MPFR's widest range (zero past 2^47), the sine past DBL_MAX by MPFR, and the last step rounded once."""
+    P = MPFR_P
+    rust = fd_pulse(name, v, P)
+    t, t0, tau = v[0], v[1], v[2]
+    if tau == 0.0 or math.isnan(tau) or not all(math.isfinite(x) for x in v):
+        return rust
+    d = t - t0
+    arg = fdiv(d, tau)
+    a_ux = ux_div(ux_sub(ux(t), ux(t0)), ux(tau))
+    if name == "gaussian_pulse":
+        if not math.isinf(d):                       # its other edges give Rust's value (the port's comment)
+            return rust
+        x = ux_mul(ux_neg(a_ux), a_ux)
+        if x[0] == 0:
+            return 1.0
+        if abs(x[0]) >= 2048:
+            return 0.0
+        return P["exp"](float(x[0]))
+    if name == "ricker_wavelet":
+        a2 = arg * arg
+        if all(fs_normal(z) for z in (d, arg, a2, P["exp"](-a2))):
+            return rust
+        a2u = ux_mul(a_ux, a_ux)
+        c = ux_sub(ux(1.0), (2 * a2u[0], a2u[1]))
+        return fs_times(c, fs_exp53(ux_neg(a2u)))
+    if name == "differentiated_gaussian":
+        q = fdiv(-2.0 * arg, tau)
+        if all(fs_normal(z) for z in (d, arg, q, P["exp"]((-arg) * arg))):
+            return rust
+        m = ux_neg((2 * a_ux[0], a_ux[1]))
+        qu = ux_div(m, ux(tau))
+        return fs_times(qu, fs_exp53(ux_mul(ux_neg(a_ux), a_ux)))
+    if name == "modulated_gaussian_pulse":
+        wf = 2.0 * math.pi * v[3]
+        ph = wf * d
+        if all(fs_normal(z) for z in (d, arg, P["exp"]((-arg) * arg), wf, ph)):
+            return rust
+        g = fs_exp53(ux_mul(ux_neg(a_ux), a_ux))
+        phu = ux_mul(ux_mul(ux(2.0 * math.pi), ux(v[3])), ux_sub(ux(t), ux(t0)))
+        s = fs_sin53(phu)
+        return fs_times(s, g)
+    raise ValueError(f"no pulse {name}")
+
+
 class Tf:
     """fdtd.rs's `TfsfSource`, transcribed from already-validated arguments (its `build`)."""
 
     def __init__(self, nx, bx, dx, dt, K, port=frozenset()):
         c, eps0, mu0 = K
-        self.n, self.bx = nx, bx
+        self.n, self.bx, self.r18 = nx, bx, "18" in port
         self.ec, self.hc = fdiv(dt, eps0 * dx), fdiv(dt, mu0 * dx)
         if "13" in port:                            # ADR 0002 row 13 (M5 part 2b): rounded once
             self.ec, self.hc = rn_mono([dt], [eps0, dx]), rn_mono([dt], [mu0, dx])
@@ -9614,7 +9718,8 @@ def tf_apply(src, op, P):
     elif op[0] == 2:
         _code, k, s0, dt, t0, tau = op
         for j in range(k):
-            src.step(fd_pulse("gaussian_pulse", (float(s0 + j) * dt, t0, tau), P))
+            v = (float(s0 + j) * dt, t0, tau)
+            src.step(fd_pulse_port("gaussian_pulse", v) if src.r18 else fd_pulse("gaussian_pulse", v, P))
     elif op[0] == 3:
         src.bx = op[1]
     else:
@@ -9672,7 +9777,11 @@ def fdtd_corrections(root: Path, path: Path):
                 continue                                    # ADR 0002 row 3's: fdtd.adr.tsv maps it
             want = fs.eval(fn, ins)
             if fn.startswith(("Fdtd1d::", "TfsfSource::")) and not toks_same(fsp.eval(fn, ins), want):
-                continue                                    # ADR 0002 row 40's: fdtd.adr.tsv maps it
+                continue                                    # ADR 0002 rows 13, 17, 18 and 40's: fdtd.adr.tsv maps it
+            if fn in FS_PULSES:
+                pv = [("f", fd_pulse_port(fn[6:], _v))]
+                if not toks_same(pv, [("f", fd_pulse(fn[6:], _v, MPFR_P))]):
+                    continue                                # ADR 0002 row 18's: fdtd.adr.tsv maps it
             if not fd_injects(fn, ins):
                 continue
             old = wave_toks([parse_tok(x) for x in outs.split(" ")])
@@ -9794,6 +9903,7 @@ def fdtd_adr_rows(root: Path, path: Path) -> list:
     fsb = FdScripts(root, MPFR_P)
     fs40 = FdScripts(root, MPFR_P, port=frozenset({"40"}))
     fs13 = FdScripts(root, MPFR_P, port=frozenset({"40", "13"}))
+    fs17 = FdScripts(root, MPFR_P, port=frozenset({"40", "13", "17"}))
     fsp = FdScripts(root, MPFR_P, port=FD_PORT)
     out = []
     eps0 = golden_consts(root)["field::EPSILON_0"]
@@ -9823,6 +9933,11 @@ def fdtd_adr_rows(root: Path, path: Path) -> list:
             if not toks_same(want, wave_toks([parse_tok(x) for x in outs.split(" ")])):
                 out.append((fn, ins, wire(want), "41", f"oracle {outs[:120]}; ADR 0002 row 41: rounded once"))
             continue
+        if fn in FS_PULSES:
+            want, base = [("f", fd_pulse_port(fn[6:], v))], [("f", fd_pulse(fn[6:], v, MPFR_P))]
+            if not toks_same(want, base) and not toks_same(want, wave_toks([parse_tok(x) for x in outs.split(" ")])):
+                out.append((fn, ins, wire(want), "18", f"oracle {outs[:120]}; ADR 0002 row 18: the range edge"))
+            continue
         if not fn.startswith(("Fdtd1d::", "TfsfSource::")):
             continue
         if fn == "TfsfSource::new":
@@ -9839,8 +9954,10 @@ def fdtd_adr_rows(root: Path, path: Path) -> list:
         elif toks_same(want, fs13.eval(fn, ins)):
             out.append((fn, ins, wire(want), "13", f"oracle {outs[:120]}; ADR 0002 row 13: the update coefficients "
                                                    "rounded once (and row 40's Mur coefficient)"))
-        else:
+        elif toks_same(want, fs17.eval(fn, ins)):
             out.append((fn, ins, wire(want), "17", f"oracle {outs[:120]}; ADR 0002 row 17: the Courant test exact"))
+        else:
+            out.append((fn, ins, wire(want), "18", f"oracle {outs[:120]}; ADR 0002 row 18: the pulse's range edge"))
     if FD_MUR_SEEN:
         worst = max(FD_MUR_SEEN.values())
         print(f"     fdtd: the 1D Mur coefficient's cancellation-free form (ADR 0002 row 40) on {len(FD_MUR_SEEN)} "

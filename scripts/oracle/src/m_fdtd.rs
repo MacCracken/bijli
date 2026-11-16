@@ -1889,6 +1889,73 @@ fn i64_to_f64_2c(k: i64) -> f64 {
     f64::from(i32::try_from(k).unwrap_or(0))
 }
 
+// ── part 2d-1: the pulses' range edges (ADR 0002 row 18) ───────────────────────────────────────────────────────────
+
+impl Rows {
+    /// As `pulse`, skipping a (function, inputs) already emitted.
+    fn pulse_new(&mut self, name: &str, ins: &[f64]) {
+        let toks: Vec<Tok> = ins.iter().map(|&x| f(x)).collect();
+        if !self.keys.contains(&format!("fdtd::{name} {toks:?}")) {
+            self.pulse(name, ins);
+        }
+    }
+}
+
+/// The pulses where an intermediate leaves the normal range (the port runs their chains with an unbounded exponent,
+/// ADR 0002 row 18): t − t₀ past DBL_MAX against a τ that brings u back; u² across e^{−u²}'s underflow (u² from 700
+/// to 760) on five τ; u² past DBL_MAX; −2u/τ past DBL_MAX with a representable product; a subnormal u; the modulated
+/// pulse's phase 2πf₀(t − t₀) past DBL_MAX; and seeded arguments from 10^±300 of either sign.
+fn emit_2d1(r: &mut Rows) {
+    let all = ["gaussian_pulse", "ricker_wavelet", "differentiated_gaussian"];
+    for tau in [f64::MAX, 1e308, 5e307, 2e307, 1e307, 3e306] {
+        for (t, t0) in [(1.5e308, -1.5e308), (f64::MAX, -1e308), (-1.5e308, 1.5e308)] {
+            for name in all {
+                r.pulse_new(name, &[t, t0, tau]);
+            }
+            for fr in [1e-300, 1e-308, 1.0, 1e10] {
+                r.pulse_new("modulated_gaussian_pulse", &[t, t0, tau, fr]);
+            }
+        }
+    }
+    for k in (700..=760).step_by(2) {
+        let u = f64::from(k).sqrt();
+        for tau in [1.0, 1e-300, 1e-200, 1e100, 1e300] {
+            r.pulse_new("ricker_wavelet", &[u * tau, 0.0, tau]);
+            r.pulse_new("differentiated_gaussian", &[u * tau, 0.0, tau]);
+            r.pulse_new("modulated_gaussian_pulse", &[u * tau, 0.0, tau, 0.3 / tau]);
+        }
+    }
+    for u in [1e155, 1e160, 1e200, 1e300] {
+        r.pulse_new("ricker_wavelet", &[u, 0.0, 1.0]);
+        r.pulse_new("differentiated_gaussian", &[u, 0.0, 1e-10]);
+    }
+    for tau in [1e-300, 1e-305, 1e-308, 1e-310, f64::from_bits(1)] {
+        for u in [1.0, 3.0, 10.0, 26.0] {
+            r.pulse_new("differentiated_gaussian", &[u * tau, 0.0, tau]);
+        }
+    }
+    for (d, tau) in [(1e-315, 1e-5), (1e-320, 1e-10), (f64::from_bits(1), 1e-8)] {
+        for name in all {
+            r.pulse_new(name, &[d, 0.0, tau]);
+        }
+        r.pulse_new("modulated_gaussian_pulse", &[d, 0.0, tau, 1e9]);
+    }
+    for fr in [1e300, f64::MAX, 1e200] {
+        for d in [1e10, 1e100, 1.0] {
+            r.pulse_new("modulated_gaussian_pulse", &[d, 0.0, 1e200, fr]);
+        }
+    }
+    let mut rng = Rng::new(0x2d1_0018);
+    for _ in 0..400 {
+        let v = [rng.signed_log_uniform(-300.0, 300.0), rng.signed_log_uniform(-300.0, 300.0),
+                 rng.signed_log_uniform(-300.0, 300.0), rng.signed_log_uniform(-300.0, 300.0)];
+        for name in all {
+            r.pulse_new(name, &v[..3]);
+        }
+        r.pulse_new("modulated_gaussian_pulse", &v);
+    }
+}
+
 pub fn emit() -> Module {
     let mut r = Rows { m: Module::new("fdtd"), keys: BTreeSet::new() };
     emit_1a(&mut r);
@@ -1904,5 +1971,6 @@ pub fn emit() -> Module {
     emit_2a3(&mut r);
     emit_2b(&mut r);
     emit_2c(&mut r);
+    emit_2d1(&mut r);
     r.m
 }

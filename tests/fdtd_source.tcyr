@@ -521,6 +521,29 @@ fn main() {
     assert(is_ok(tsl) == 1, "an ulp lower: accepted");
     BjTfsfSource_free(&sk);
 
+    # ADR 0002 row 18 (M5 part 2d-1): the pulses' chains with an unbounded exponent where an intermediate leaves the
+    # normal range. The expectations are validate.py's model (MPFR with its widest exponent range).
+    test_group("cyrius_pulse_edges");
+    var dmin: f64 = _bj_from_bits(0x0010000000000000);
+    var rk: f64 = bj_ricker_wavelet(0.0, 1.0, dmin);
+    var rki: f64 = 1.0 / rk;
+    assert(rk == 0.0 && rki < 0.0, "u² past DBL_MAX: −0 (Rust's −∞·0 = NaN)");
+    var b15: f64 = _bj_from_bits(0x7feab36d48e1acf0);
+    var nb15: f64 = -b15;
+    var gp: f64 = bj_gaussian_pulse(b15, nb15, _bj_from_bits(0x7fe1ccf385ebc8a0));
+    assert(gp == 0.00012340980408667956, "t − t₀ past DBL_MAX, u = 3: e^-9 (Rust's 0)");
+    var dg: f64 = bj_differentiated_gaussian(_bj_from_bits(0x159283684dba77), 0.0, _bj_from_bits(0x730d67819e8d2));
+    var dgw: f64 = _bj_from_bits(0x7f3afe6ecd3deb67);
+    var ndgw: f64 = -dgw;
+    assert(dg == ndgw, "−2u/τ past DBL_MAX: −7.404588245200748e304 (Rust's −∞)");
+    var mg: f64 = bj_modulated_gaussian_pulse(10000000000.0, 0.0, _bj_from_bits(0x6974e718d7d7625a),
+      _bj_from_bits(0x7e37e43c8800759c));
+    assert(mg == -0.40564476173363645, "the phase 2π·10³⁰⁰·10¹⁰ past DBL_MAX: its sine (Rust's sin ∞ = NaN)");
+    var rs: f64 = bj_ricker_wavelet(27.018512172212592, 0.0, 1.0);
+    var rsw: f64 = _bj_from_bits(0x00000000a265b903);
+    var nrsw: f64 = -rsw;
+    assert(rs == nrsw, "u² = 730: e^-730 subnormal times −1459, rounded once (Rust's −1.3461193976e-314)");
+
     return assert_summary();
 }
 

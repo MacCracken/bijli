@@ -5960,3 +5960,49 @@ dt/(μ₀μ_r·dx), `courant_dt`'s d/(2√3·c) and `Fdtd1d::time`'s step·dt.
   equal**. `fdtd_source.tcyr` (68), `fdtd_util.tcyr` (80), `nf2ff.tcyr` (18) and `rf.tcyr` (266) pass on all three.
   The gate is clean (no warnings; execution coverage 371 of 371 functions); validate.py 756,681 rows, 0 problems; the
   oracle's `--check` and clippy clean. Next: 2d, the range edges.
+
+## 106. M5 part 2d-1: the pulses' range edges (2026-11-16)
+
+M5's 2d, the range edges (row 18), runs in bites: the pulses, the 1D grid (its step updates, the user's answer of
+2026-11-15, the Mur ends and `total_energy`), the TF/SF grid, the CW accumulator and the eigenmodes, the utilities
+(`graded`, `extents`, the fourth-order derivative) and NF2FF.
+
+- **The finding**: the pulses' chains lose the value where an intermediate leaves the normal range for finite
+  arguments:
+  - the Ricker wavelet (1 − 2u²)·e^{−u²}: once u² passes DBL_MAX, −∞·0 = NaN where the value is −0; for u² in
+    (708, 753), e^{−u²} is subnormal (or 0) and the product hundreds of subnormal ulps off (u² = 730:
+    −1.3461193976·10⁻³¹⁴ for −1.3461191496·10⁻³¹⁴);
+  - the differentiated Gaussian (−2u/τ)·e^{−u²}: where −2u/τ passes DBL_MAX, ±∞ or NaN for a representable value
+    (τ = 10⁻³⁰⁸, u = 3: −∞ for −7.404588245200748·10³⁰⁴); a subnormal u carried its lost bits into −2u/τ;
+  - the modulated pulse e^{−u²}·sin(2πf₀(t − t₀)): where the phase passes DBL_MAX, the sine of ∞ (f₀ = 10³⁰⁰, t − t₀ =
+    10¹⁰: NaN for −0.40564476173363645), and e^{−u²} subnormal against the sine;
+  - all four: t − t₀ past DBL_MAX against a τ that brings u back (t = 1.5·10³⁰⁸, t₀ = −t, τ = 10³⁰⁸: 0 for e^-9).
+- **ADR 0002 row 18, amended** (`src/fdtd_source.cyr`): each pulse runs Rust's chain and, where an intermediate it
+  reads later (t − t₀, u, u², −2u/τ, e^{−u²}, 2πf₀, the phase) is non-finite or below 2^-1022 for finite arguments,
+  reruns it with an unbounded exponent (the Gaussian only where t − t₀ overflows: its other edges already give the
+  unbounded value): kimiya's `_bj_k_ux_*` to 53 bits, e^x by `_bj_ux_exp_wide` (1 below 2^-300,
+  the far stand-in past 2^47), the sine by `_bj_vx_sin53` (Payne–Hanek past DBL_MAX), and the last product rounded once
+  (`_bj_k_ux_mul_f64`). The Gaussian's last step is its exp, so it stays the correctly rounded exp of the 53-bit
+  argument. In-range rows keep Rust's bits; a non-finite argument keeps Rust's chain.
+- **validate.py**: `fd_pulse_port` transcribes the chains on Fractions (53 bits, unbounded exponent) with e^x and the
+  sine from MPFR at its widest exponent range. e^x stays split as (s, e): past |x| = 2300 its power of two would take
+  trillions of bits, and a first version that built it was killed for memory, silently; a product whose binade lies
+  past ∓1200 is ±0 or ±∞ without it. The 1D and TF/SF models take the port's Gaussian under row 18, and name a
+  trajectory row 18 when only it accounts for a change (none does: the scripts' pulses stay in range).
+- **The grid**: 2,238 rows appended to `fdtd.tsv` (105,964; 37.5 MB): t − t₀ past DBL_MAX on six τ from 3·10³⁰⁶ to
+  DBL_MAX (and four f₀ for the modulated pulse); u² from 700 to 760 on five τ (10⁻³⁰⁰ to 10³⁰⁰); u from 10¹⁵⁵ to
+  10³⁰⁰; −2u/τ past DBL_MAX on five τ down to the least subnormal; three subnormal u; the phase past DBL_MAX on three
+  f₀; and 400 seeded argument sets from 10^±300 of either sign.
+- **The mapping**: **1,848 rows** to row 18 (766 Ricker, 626 differentiated, 443 modulated, 13 Gaussian; part 1b's
+  special-value rows among them), all passing.
+- **Tests**: `tests/fdtd_source.tcyr`'s `cyrius_pulse_edges` (5 assertions, 73 in all), the five cases above.
+- **Benchmarks**: the interleaved A/B against HEAD (two rounds, load 1.7 to 4.0) left the other rows within the noise
+  (median ratios 1.00 and 1.06) but the Cyrius-only `fdtd/gaussian_pulse`, 119–129 → 135–148 ns: four range checks on
+  every call. The Gaussian's need only one (the bullet above): a subnormal t − t₀ is exact, and a subnormal or infinite
+  u gives Rust's e⁰ = 1 or 0 as the unbounded chain does, so it now reruns only where t − t₀ overflows (`fdtd.adr.tsv`
+  byte for byte the same). A focused interleaved A/B of the bench's loop, two rounds at load 1.7: 118–121 → 122–123 ns.
+- **Result, every target** (x86_64 ELF, x86_64 PE, aarch64): **18 modules, 0 failing; 640,977 ok, 0 failed, 0
+  measured, 0 pending, 117,942 accepted (ADR 01: 40,366; ADR 0002: 77,576)** over 758,919 rows; **all 475 digests
+  equal**. `fdtd_source.tcyr` passes on all three (73). The gate is clean (no warnings; execution coverage 371 of 371
+  functions); validate.py 758,919 rows, 0 problems; the oracle's `--check` and clippy clean. Next: 2d-2, the 1D grid
+  (its step updates, the Mur ends, `total_energy`).

@@ -78,6 +78,54 @@ fn _bj_fs_uge(a, b): i64 {
 
 # ── the pulses ──────────────────────────────────────────────────────────────────────────────────────────────────────
 
+# 2^-1022 and 2^-300: the normal range's floor, and the |x| below which e^x is 1 at 53 bits.
+var _BJ_FS_DMIN: f64 = 0x0010000000000000;
+var _BJ_FS_2M300: f64 = 0x2D30000000000000;
+
+# 1 when x is 0, or finite with |x| ≥ 2^-1022: an intermediate the pulses' chains can keep (ADR 0002 row 18).
+#must_use
+fn _bj_fs_normal(x: f64): i64 {
+    if (x == 0.0) { return 1; }
+    var a: f64 = f64_abs(x);
+    if (a >= _BJ_FS_DMIN && a < _BJ_FS_INF) { return 1; }
+    return 0;
+}
+
+# 1 when every one of t, t₀ and τ is finite.
+#must_use
+fn _bj_fs_fin3(t: f64, t0: f64, tau: f64): i64 {
+    var z: f64 = t * 0.0 + t0 * 0.0 + tau * 0.0;
+    if (z == 0.0) { return 1; }
+    return 0;
+}
+
+# u = (t − t₀)/τ, each operation to 53 bits with an unbounded exponent: (s, e).
+#must_use
+fn _bj_fs_arg_ux(t: f64, t0: f64, tau: f64): (f64, i64) {
+    var ts, te = _bj_k_ux_from(t);
+    var us, ue = _bj_k_ux_from(t0);
+    var ds, de = _bj_k_ux_sub(ts, te, us, ue);
+    var vs, ve = _bj_k_ux_from(tau);
+    var as, ae = _bj_k_ux_div(ds, de, vs, ve);
+    return (as, ae);
+}
+
+# e^x to 53 bits with an unbounded exponent for the 53-bit x = xs·2^xe: 1 for x = 0 or |x| < 2^-300 (e^x rounds to 1),
+# _bj_ux_exp_wide's value to |x| = 2^47, and its far stand-in (1, ±_BJ_UX_FAR) beyond.
+#must_use
+fn _bj_fs_exp_ux(xs: f64, xe): (f64, i64) {
+    if (xs == 0.0) { return (1.0, 0); }
+    if (xe > 46) {
+        if (xs > 0.0) { return (1.0, _BJ_UX_FAR); }
+        return (1.0, 0 - _BJ_UX_FAR);
+    }
+    var x: f64 = _bj_k_ux_round(xs, xe, 0.0);
+    var ax: f64 = f64_abs(x);
+    if (ax < _BJ_FS_2M300) { return (1.0, 0); }
+    var gs, ge = _bj_ux_exp_wide(x);
+    return (gs, ge);
+}
+
 # 1 when τ is 0 or NaN, where every pulse is 0.0.
 #must_use
 fn _bj_fs_no_width(tau: f64): i64 {
@@ -85,7 +133,10 @@ fn _bj_fs_no_width(tau: f64): i64 {
     return 0;
 }
 
-# The Gaussian pulse exp(−((t − t₀)/τ)²): 1 at t₀; 0.0 for τ = 0 or NaN. Mirrors `gaussian_pulse`.
+# The Gaussian pulse exp(−((t − t₀)/τ)²): 1 at t₀; 0.0 for τ = 0 or NaN. Where t − t₀ overflows for finite arguments
+# (against a τ that brings u back), the chain runs with an unbounded exponent to its exp (ADR 0002 row 18, M5 part
+# 2d-1); its other edges need nothing (a subnormal t − t₀ is exact, a subnormal u gives e⁰ = 1, an infinite one 0, as
+# the unbounded chain does). Mirrors `gaussian_pulse`.
 #must_use
 public fn bj_gaussian_pulse(t: f64, t0: f64, tau: f64): f64 {
     if (_bj_fs_no_width(tau) == 1) { return 0.0; }
@@ -94,11 +145,23 @@ public fn bj_gaussian_pulse(t: f64, t0: f64, tau: f64): f64 {
     var na: f64 = -arg;
     var x: f64 = na * arg;
     var g: f64 = _bj_exp(x);
+    var ad: f64 = f64_abs(d);
+    if (ad == _BJ_FS_INF && _bj_fs_fin3(t, t0, tau) == 1) {
+        var as, ae = _bj_fs_arg_ux(t, t0, tau);
+        var ns, ne = _bj_k_ux_neg(as, ae);
+        var xs, xe = _bj_k_ux_mul(ns, ne, as, ae);
+        if (xs == 0.0) { return 1.0; }
+        if (xe > 10) { return 0.0; }
+        var xd: f64 = _bj_k_ux_round(xs, xe, 0.0);
+        g = _bj_exp(xd);
+    }
     return g;
 }
 
-# The Ricker wavelet (1 − 2u²)·exp(−u²), u = (t − t₀)/τ: even, 1 at t₀, no DC content; 0.0 for τ = 0 or NaN. Mirrors
-# `ricker_wavelet`.
+# The Ricker wavelet (1 − 2u²)·exp(−u²), u = (t − t₀)/τ: even, 1 at t₀, no DC content; 0.0 for τ = 0 or NaN. Where an
+# intermediate leaves the normal range for finite arguments (u² past DBL_MAX, where Rust's −∞·0 was NaN for −0;
+# e^{−u²} below 2^-1022 while 1 − 2u² lifts the product back; t − t₀ or u past either end), the chain runs with an
+# unbounded exponent and the product is rounded once (ADR 0002 row 18, M5 part 2d-1). Mirrors `ricker_wavelet`.
 #must_use
 public fn bj_ricker_wavelet(t: f64, t0: f64, tau: f64): f64 {
     if (_bj_fs_no_width(tau) == 1) { return 0.0; }
@@ -110,11 +173,22 @@ public fn bj_ricker_wavelet(t: f64, t0: f64, tau: f64): f64 {
     var na: f64 = -arg2;
     var g: f64 = _bj_exp(na);
     var r: f64 = c * g;
+    var ok = _bj_fs_normal(d) & _bj_fs_normal(arg) & _bj_fs_normal(arg2) & _bj_fs_normal(g);
+    if (_bj_fs_fin3(t, t0, tau) == 1 && ok == 0) {
+        var as, ae = _bj_fs_arg_ux(t, t0, tau);
+        var a2s, a2e = _bj_k_ux_mul(as, ae, as, ae);
+        var cs, ce = _bj_k_ux_sub(1.0, 0, a2s, a2e + 1);
+        var ns, ne = _bj_k_ux_neg(a2s, a2e);
+        var gs, ge = _bj_fs_exp_ux(ns, ne);
+        r = _bj_k_ux_mul_f64(cs, ce, gs, ge);
+    }
     return r;
 }
 
 # The differentiated Gaussian −2(t − t₀)/τ²·exp(−((t − t₀)/τ)²), the time derivative of the Gaussian pulse, as Rust's
-# (−2u/τ)·exp(−u²); 0.0 for τ = 0 or NaN. Mirrors `differentiated_gaussian`.
+# (−2u/τ)·exp(−u²); 0.0 for τ = 0 or NaN. Where an intermediate leaves the normal range for finite arguments (−2u/τ
+# past DBL_MAX against an e^{−u²} below 2^-1022, Rust's ∞·0 = NaN; u subnormal), the chain runs with an unbounded
+# exponent and the product is rounded once (ADR 0002 row 18, M5 part 2d-1). Mirrors `differentiated_gaussian`.
 #must_use
 public fn bj_differentiated_gaussian(t: f64, t0: f64, tau: f64): f64 {
     if (_bj_fs_no_width(tau) == 1) { return 0.0; }
@@ -126,11 +200,25 @@ public fn bj_differentiated_gaussian(t: f64, t0: f64, tau: f64): f64 {
     var x: f64 = na * arg;
     var g: f64 = _bj_exp(x);
     var r: f64 = q * g;
+    var ok = _bj_fs_normal(d) & _bj_fs_normal(arg) & _bj_fs_normal(q) & _bj_fs_normal(g);
+    if (_bj_fs_fin3(t, t0, tau) == 1 && ok == 0) {
+        var as, ae = _bj_fs_arg_ux(t, t0, tau);
+        var ms, me = _bj_k_ux_neg(as, ae + 1);
+        var vs, ve = _bj_k_ux_from(tau);
+        var qs, qe = _bj_k_ux_div(ms, me, vs, ve);
+        var ns, ne = _bj_k_ux_neg(as, ae);
+        var xs, xe = _bj_k_ux_mul(ns, ne, as, ae);
+        var gs, ge = _bj_fs_exp_ux(xs, xe);
+        r = _bj_k_ux_mul_f64(qs, qe, gs, ge);
+    }
     return r;
 }
 
 # The modulated Gaussian exp(−((t − t₀)/τ)²)·sin(2πf₀(t − t₀)), its sine's argument Rust's (2π·f₀)·(t − t₀); 0.0 for
-# τ = 0 or NaN. Mirrors `modulated_gaussian_pulse`.
+# τ = 0 or NaN. Where an intermediate leaves the normal range for finite arguments (the phase past DBL_MAX, where Rust
+# took the sine of ∞; e^{−u²} below 2^-1022; t − t₀, u or 2πf₀ past either end), the chain runs with an unbounded
+# exponent, the sine past DBL_MAX by Payne–Hanek (_bj_vx_sin53), and the product is rounded once (ADR 0002 row 18, M5
+# part 2d-1). Mirrors `modulated_gaussian_pulse`.
 #must_use
 public fn bj_modulated_gaussian_pulse(t: f64, t0: f64, tau: f64, frequency: f64): f64 {
     if (_bj_fs_no_width(tau) == 1) { return 0.0; }
@@ -144,6 +232,23 @@ public fn bj_modulated_gaussian_pulse(t: f64, t0: f64, tau: f64, frequency: f64)
     var ph: f64 = wf * d;
     var s: f64 = _bj_sin(ph);
     var r: f64 = g * s;
+    var ok = _bj_fs_normal(d) & _bj_fs_normal(arg) & _bj_fs_normal(g) & _bj_fs_normal(wf) & _bj_fs_normal(ph);
+    var zf: f64 = frequency * 0.0;
+    if (_bj_fs_fin3(t, t0, tau) == 1 && zf == 0.0 && ok == 0) {
+        var as, ae = _bj_fs_arg_ux(t, t0, tau);
+        var ns, ne = _bj_k_ux_neg(as, ae);
+        var xs, xe = _bj_k_ux_mul(ns, ne, as, ae);
+        var gs, ge = _bj_fs_exp_ux(xs, xe);
+        var ts, te = _bj_k_ux_from(t);
+        var us, ue = _bj_k_ux_from(t0);
+        var ds, de = _bj_k_ux_sub(ts, te, us, ue);
+        var ws, we = _bj_k_ux_from(w);
+        var fs, fe = _bj_k_ux_from(frequency);
+        var wfs, wfe = _bj_k_ux_mul(ws, we, fs, fe);
+        var ps, pe = _bj_k_ux_mul(wfs, wfe, ds, de);
+        var ss, se = _bj_vx_sin53(ps, pe);
+        r = _bj_k_ux_mul_f64(gs, ge, ss, se);
+    }
     return r;
 }
 

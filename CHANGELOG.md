@@ -457,6 +457,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
   thresholds (ADR 0002 row 17 amended, see Fixed). `_bj_rf_within12` moves from `src/rf.cyr` into
   `src/crmath_edge.cyr` as `_bj_e_within12`, shared by rf and NF2FF. `fdtd.tsv` grows by 576 rows (103,726);
   `fdtd.adr.tsv` maps 28 rows to row 17.
+- **Cyrius port, M5 part 2d-1 — the pulses' range edges** (`src/fdtd_source.cyr`): M5's range-edge bites begin with
+  the four pulses, whose chains now run with an unbounded exponent where an intermediate leaves the normal range
+  (ADR 0002 row 18 amended, see Fixed). validate.py transcribes them on Fractions and MPFR's widest exponent range.
+  `fdtd.tsv` grows by 2,238 edge rows (105,964; 37.5 MB); `fdtd.adr.tsv` maps 1,848 pulse rows to row 18.
 
 ### Fixed
 
@@ -951,6 +955,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
   10⁻¹² agreement of the accumulators' frequency and step is decided as `z0_equal`'s is (steps near 10⁻²⁹⁸ were taken
   as equal 10⁻¹² apart), and `find_eigenmodes` warns of a frequency past Nyquist on the exact freq_max·dt > ½.
   Cost: within the noise (`rf/s_cascade` 3.69 → 3.75–3.77 µs, NF2FF 1.48–1.59 → 1.55 ms) (`port-parity.md` §105).
+- **fdtd** (ADR 0002 row 18 amended, M5 part 2d-1): the pulses lost their values where an intermediate left the
+  normal range. `ricker_wavelet` was NaN once u² passed DBL_MAX (for −0) and hundreds of subnormal ulps off for u² in
+  (708, 753); `differentiated_gaussian` was ±∞ or NaN where −2u/τ passed DBL_MAX (τ = 10⁻³⁰⁸, u = 3 gave −∞ for
+  −7.4·10³⁰⁴); `modulated_gaussian_pulse` took the sine of ∞ where 2πf₀(t − t₀) passed DBL_MAX; and t − t₀ past
+  DBL_MAX gave 0 where τ brings u back (e^-9). These chains now run with an unbounded exponent, the sine past DBL_MAX
+  by Payne–Hanek, the product rounded once. Cost: `fdtd/gaussian_pulse` 118–121 → 122–123 ns (`port-parity.md`
+  §106).
 
 ### Performance
 
