@@ -1,0 +1,546 @@
+# fdtd_util.tcyr — src/fdtd_util.cyr (M5 part 1d): the non-uniform grid, the fourth-order derivative, the CW
+# accumulator and the eigenmode search.
+#
+# Every group named test_* is rust-old/src/fdtd.rs's test of that name, ported assertion for assertion (the ledger
+# matches them by name): its 7 non-uniform-grid, 6 fourth-order, 5 CW and 7 eigenmode tests. Rust's Vec results land
+# in caller buffers here; `test_cw_accumulator_length_mismatch` passes a pointer and a length where Rust passes a
+# slice, and keeps its own copy where Rust clones. The cyrius_* groups pin the error records' text, BjNonUniformGrid
+# from its axes, the extents' −0.0, graded's ratio, the free functions, and a result with no mode.
+# tests/golden/fdtd.tsv pins every function against Rust besides.
+
+include "tests/lib.cyr"
+
+# |a − b| < tol.
+fn near(a: f64, b: f64, tol: f64): i64 {
+    var d: f64 = a - b;
+    var ad: f64 = f64_abs(d);
+    if (ad < tol) { return 1; }
+    return 0;
+}
+
+# 1 when the C strings a and b are equal.
+fn text_is(a, b): i64 {
+    var n = strlen(a);
+    if (n != strlen(b)) { return 0; }
+    return memeq(a, b, n);
+}
+
+# A word as a *f64.
+fn f64p(a): *f64 {
+    return a;
+}
+
+# Element i of the f64 array at address a.
+fn at(a, i): f64 {
+    var p: *f64 = f64p(a);
+    var x: f64 = p[i];
+    return x;
+}
+
+# A fresh array of n f64.
+fn arr(n): *f64 {
+    var p: *f64 = f64p(alloc(n * 8 + 8));
+    return p;
+}
+
+# sin(2πf·t)·exp(−t/τ) at t = i·dt, the eigenmode tests' damped mode (τ = 0 for none).
+fn mode(i, dt: f64, f: f64, tau: f64): f64 {
+    var fi: f64 = f64_from(i);
+    var t: f64 = fi * dt;
+    var w: f64 = 2.0 * 3.141592653589793 * f * t;
+    var s: f64 = _bj_sin(w);
+    if (tau == 0.0) { return s; }
+    var x: f64 = -t / tau;
+    var e: f64 = _bj_exp(x);
+    var r: f64 = s * e;
+    return r;
+}
+
+# Runs fdtd.rs's utility tests, then the Cyrius-only checks.
+fn main() {
+    alloc_init();
+    var zero: f64 = 0.0;
+    var nan: f64 = zero / zero;
+    var inf: f64 = 1.0 / zero;
+    var pi: f64 = 3.141592653589793;
+    var c0: f64 = BJ_SPEED_OF_LIGHT;
+    var s3: f64 = f64_sqrt(3.0);
+
+    test_group("test_nonuniform_grid_uniform");
+    var g1: BjNonUniformGrid;
+    var t1, v1 = BjNonUniformGrid_uniform(10, 10, 10, 0.001, &g1);
+    assert(is_ok(t1) == 1 && g1.nx == 10, "10 cells along x");
+    var m1: f64 = g1.min_spacing();
+    assert(near(m1, 0.001, 0.000000000000001) == 1, "min spacing 1 mm");
+    BjNonUniformGrid_free(&g1);
+
+    test_group("test_nonuniform_grid_graded");
+    var d2: *f64 = arr(10);
+    var t2, v2 = BjNonUniformGrid_graded(10, 0.0001, 0.001, d2);
+    assert(is_ok(t2) == 1, "Ok");
+    assert(near(d2[0], 0.0001, 0.0000000001) == 1 && near(d2[9], 0.001, 0.0000000001) == 1, "from 0.1 to 1 mm");
+    var mono = 1;
+    for (var i2 = 1; i2 < 10; i2 = i2 + 1) {
+        if (d2[i2] <= d2[i2 - 1]) { mono = 0; }
+    }
+    assert(mono == 1, "monotonically increasing");
+
+    test_group("test_nonuniform_grid_graded_invalid");
+    var d3: *f64 = arr(10);
+    var t3a, v3a = BjNonUniformGrid_graded(1, 0.0001, 0.001, d3);
+    var t3b, v3b = BjNonUniformGrid_graded(10, 0.0, 0.001, d3);
+    assert(is_err_result(t3a) == 1 && is_err_result(t3b) == 1, "one cell and a zero size refused");
+
+    test_group("test_nonuniform_grid_courant_dt");
+    var g4: BjNonUniformGrid;
+    var t4, v4 = BjNonUniformGrid_uniform(10, 10, 10, 0.001, &g4);
+    var dt4: f64 = g4.courant_dt();
+    var lim4: f64 = 0.001 / (c0 * s3);
+    assert(dt4 > 0.0 && dt4 <= lim4, "0 < dt ≤ d/(c√3)");
+    BjNonUniformGrid_free(&g4);
+
+    test_group("test_nonuniform_grid_extents");
+    var g5: BjNonUniformGrid;
+    var t5, v5 = BjNonUniformGrid_uniform(10, 5, 3, 0.001, &g5);
+    var ex, ey, ez = g5.extents();
+    assert(near(ex, 0.01, 0.000000000000001) == 1, "10 mm");
+    assert(near(ey, 0.005, 0.000000000000001) == 1 && near(ez, 0.003, 0.000000000000001) == 1, "5 mm, 3 mm");
+    BjNonUniformGrid_free(&g5);
+
+    test_group("test_nonuniform_grid_validation");
+    var g6: BjNonUniformGrid;
+    var t6a, v6a = BjNonUniformGrid_try_uniform(10, 10, 10, 0.001, &g6);
+    assert(is_ok(t6a) == 1, "a valid grid");
+    BjNonUniformGrid_free(&g6);
+    var t6b, v6b = BjNonUniformGrid_try_uniform(0, 10, 10, 0.001, &g6);
+    var t6c, v6c = BjNonUniformGrid_try_uniform(10, 10, 10, 0.0, &g6);
+    var t6d, v6d = BjNonUniformGrid_try_uniform(10, 10, 10, nan, &g6);
+    assert(is_err_result(t6b) == 1 && is_err_result(t6c) == 1 && is_err_result(t6d) == 1,
+      "an empty axis, a zero and a NaN spacing refused");
+    var ge: BjNonUniformGrid;
+    var t6e, v6e = BjNonUniformGrid_uniform(0, 10, 10, 0.001, &ge);
+    var t6f, v6f = ge.try_courant_dt();
+    var c6: f64 = ge.courant_dt();
+    assert(is_err_result(t6f) == 1 && c6 == 0.0, "an empty axis: refused, and courant_dt 0");
+    BjNonUniformGrid_free(&ge);
+    var gn: BjNonUniformGrid;
+    var t6g, v6g = BjNonUniformGrid_uniform(10, 10, 10, -0.001, &gn);
+    var t6h, v6h = gn.validate();
+    var c6b: f64 = gn.courant_dt();
+    assert(is_err_result(t6h) == 1 && c6b == 0.0, "a negative spacing: invalid, courant_dt 0");
+    BjNonUniformGrid_free(&gn);
+    var gy: BjNonUniformGrid;
+    var t6i, v6i = BjNonUniformGrid_uniform(4, 4, 4, 0.001, &gy);
+    var dy: *f64 = f64p(gy.dy);
+    dy[2] = nan;
+    var t6j, v6j = gy.try_courant_dt();
+    assert(is_err_result(t6j) == 1, "a NaN width refused");
+    BjNonUniformGrid_free(&gy);
+    var d6: *f64 = arr(10);
+    var t6k, v6k = BjNonUniformGrid_graded(10, nan, 0.001, d6);
+    var t6l, v6l = BjNonUniformGrid_graded(10, 0.0001, inf, d6);
+    assert(is_err_result(t6k) == 1 && is_err_result(t6l) == 1, "graded refuses NaN and ∞");
+
+    test_group("test_nonuniform_grid_courant_dt_value");
+    var g7: BjNonUniformGrid;
+    var t7, v7 = BjNonUniformGrid_uniform(5, 5, 5, 0.001, &g7);
+    var dz: *f64 = f64p(g7.dz);
+    dz[3] = 0.00025;
+    var t7a, v7a = g7.try_courant_dt();
+    var dt7: f64 = v7a;
+    var exp7: f64 = 0.00025 / (2.0 * s3 * c0);
+    var tol7: f64 = 0.000000000001 * exp7;
+    assert(is_ok(t7a) == 1 && near(dt7, exp7, tol7) == 1, "d_min/(2√3·c), d_min the 0.25 mm cell");
+    var c7: f64 = g7.courant_dt();
+    assert(near(c7, exp7, tol7) == 1, "courant_dt agrees");
+    BjNonUniformGrid_free(&g7);
+
+    test_group("test_fourth_order_constants");
+    var c1: f64 = BJ_FOURTH_ORDER_C1;
+    var c2: f64 = BJ_FOURTH_ORDER_C2;
+    assert(near(c1, 1.125, 0.0000000001) == 1 && near(c2, -1.0 / 24.0, 0.0000000001) == 1, "9/8 and −1/24");
+
+    test_group("test_fourth_order_derivative_linear");
+    var dx8: f64 = 0.1;
+    var f8: *f64 = arr(10);
+    var o8: *f64 = arr(10);
+    for (var i8 = 0; i8 < 10; i8 = i8 + 1) {
+        var fi8: f64 = f64_from(i8);
+        f8[i8] = fi8 * dx8;
+    }
+    bj_fourth_order_derivative(f8, 10, dx8, o8);
+    var bad8 = 0;
+    for (var j8 = 2; j8 < 8; j8 = j8 + 1) {
+        if (near(o8[j8], 1.0, 0.1) != 1) { bad8 = bad8 + 1; }
+    }
+    assert(bad8 == 0, "the interior near 1");
+
+    test_group("test_fourth_order_derivative_quadratic");
+    var f9: *f64 = arr(20);
+    var o9: *f64 = arr(20);
+    for (var i9 = 0; i9 < 20; i9 = i9 + 1) {
+        var fi9: f64 = f64_from(i9);
+        var x9: f64 = fi9 * dx8;
+        f9[i9] = _bj_powi(x9, 2);
+    }
+    bj_fourth_order_derivative(f9, 20, dx8, o9);
+    var bad9 = 0;
+    for (var j9 = 0; j9 < 19; j9 = j9 + 1) {
+        var fj: f64 = f64_from(j9);
+        var ex9: f64 = 2.0 * (fj + 0.5) * dx8;
+        if (near(o9[j9], ex9, 0.000000000001) != 1) { bad9 = bad9 + 1; }
+    }
+    assert(bad9 == 0, "exact for x² at the half nodes");
+    assert(o9[19] == 0.0, "padding");
+
+    test_group("test_fourth_order_derivative_linear_all_points");
+    var bad10 = 0;
+    for (var j10 = 0; j10 < 9; j10 = j10 + 1) {
+        if (near(o8[j10], 1.0, 0.000000000001) != 1) { bad10 = bad10 + 1; }
+    }
+    assert(bad10 == 0 && o8[9] == 0.0, "f = x: 1 at every half node, 0 padding");
+
+    test_group("test_fourth_order_derivative_cubic_interior_exact");
+    var dx11: f64 = 0.05;
+    var f11: *f64 = arr(16);
+    var o11: *f64 = arr(16);
+    for (var i11 = 0; i11 < 16; i11 = i11 + 1) {
+        var fi11: f64 = f64_from(i11);
+        var x11: f64 = fi11 * dx11;
+        f11[i11] = _bj_powi(x11, 3);
+    }
+    bj_fourth_order_derivative(f11, 16, dx11, o11);
+    var bad11 = 0;
+    for (var j11 = 1; j11 < 14; j11 = j11 + 1) {
+        var fj11: f64 = f64_from(j11);
+        var h11: f64 = (fj11 + 0.5) * dx11;
+        var ex11: f64 = 3.0 * _bj_powi(h11, 2);
+        if (near(o11[j11], ex11, 0.000000000001) != 1) { bad11 = bad11 + 1; }
+    }
+    assert(bad11 == 0, "exact for x³ in the interior");
+    var hd: f64 = 0.5 * dx11;
+    var edge: f64 = 3.0 * _bj_powi(hd, 2);
+    var err11: f64 = o11[0] - edge - dx11 * dx11 / 4.0;
+    assert(near(err11, 0.0, 0.000000000001) == 1, "the edge midpoint second order: off by dx²/4");
+
+    test_group("test_fourth_order_derivative_small_and_invalid");
+    var o12: *f64 = arr(4);
+    var f12: *f64 = arr(4);
+    o12[0] = 9.0;
+    bj_fourth_order_derivative(f12, 0, 0.1, o12);
+    assert(o12[0] == 9.0, "no sample: nothing written");
+    f12[0] = 3.0;
+    bj_fourth_order_derivative(f12, 1, 0.1, o12);
+    assert(o12[0] == 0.0, "one sample: [0]");
+    f12[0] = 1.0;
+    f12[1] = 2.0;
+    bj_fourth_order_derivative(f12, 2, 0.5, o12);
+    assert(o12[0] == 2.0 && o12[1] == 0.0, "two samples: [2, 0]");
+    f12[0] = 0.0;
+    f12[1] = 1.0;
+    f12[2] = 4.0;
+    bj_fourth_order_derivative(f12, 3, 1.0, o12);
+    assert(o12[0] == 1.0 && o12[1] == 3.0 && o12[2] == 0.0, "three samples: [1, 3, 0]");
+    f12[3] = 3.0;
+    f12[2] = 2.0;
+    bj_fourth_order_derivative(f12, 4, 0.0, o12);
+    assert(o12[0] == 0.0 && o12[1] == 0.0 && o12[2] == 0.0 && o12[3] == 0.0, "dx = 0: zeros");
+    bj_fourth_order_derivative(f12, 4, nan, o12);
+    assert(o12[0] == 0.0 && o12[1] == 0.0 && o12[2] == 0.0 && o12[3] == 0.0, "dx = NaN: zeros");
+
+    test_group("test_cw_accumulator_sinusoid");
+    var a13: BjCwAccumulator;
+    var t13, v13 = BjCwAccumulator_new(1, 1000000000.0, 0.000000000001, &a13);
+    var x13: f64[1];
+    for (var s13 = 0; s13 < 10000; s13 = s13 + 1) {
+        x13[0] = mode(s13, 0.000000000001, 1000000000.0, 0.0);
+        a13.accumulate(&x13, 1, s13);
+    }
+    var amp13: f64[1];
+    a13.amplitude(&amp13);
+    assert(amp13[0] > 0.0, "a response at its own frequency");
+    BjCwAccumulator_free(&a13);
+
+    test_group("test_cw_accumulator_off_frequency");
+    var on: BjCwAccumulator;
+    var off: BjCwAccumulator;
+    var t14a, v14a = BjCwAccumulator_new(1, 1000000000.0, 0.000000000001, &on);
+    var t14b, v14b = BjCwAccumulator_new(1, 1000000000.0, 0.000000000001, &off);
+    var x14: f64[1];
+    for (var s14 = 0; s14 < 10000; s14 = s14 + 1) {
+        var fs14: f64 = f64_from(s14);
+        var tt: f64 = fs14 * 0.000000000001;
+        var w14: f64 = 2.0 * pi * 1000000000.0 * tt;
+        x14[0] = _bj_sin(w14);
+        on.accumulate(&x14, 1, s14);
+        var w14b: f64 = 2.0 * pi * 2.0 * 1000000000.0 * tt;
+        x14[0] = _bj_sin(w14b);
+        off.accumulate(&x14, 1, s14);
+    }
+    var ao: f64[1];
+    var af: f64[1];
+    on.amplitude(&ao);
+    off.amplitude(&af);
+    assert(ao[0] > af[0] * 5.0, "on frequency five times stronger");
+    BjCwAccumulator_free(&on);
+    BjCwAccumulator_free(&off);
+
+    test_group("test_cw_accumulator_exact_phasor");
+    var freq: f64 = 1000000000.0;
+    var dt15: f64 = 1.0 / (freq * 100.0);
+    var a15: BjCwAccumulator;
+    var t15, v15 = BjCwAccumulator_try_new(2, freq, dt15, &a15);
+    var x15: f64[2];
+    for (var s15 = 0; s15 < 1000; s15 = s15 + 1) {
+        var fs15: f64 = f64_from(s15);
+        var th: f64 = 2.0 * pi * freq * fs15 * dt15;
+        x15[0] = _bj_cos(th);
+        x15[1] = _bj_sin(th);
+        a15.accumulate(&x15, 2, s15);
+    }
+    var half: f64 = 1000.0 * dt15 / 2.0;
+    var tol15: f64 = 0.000000001 * half;
+    var re15: *f64 = f64p(a15.real);
+    var im15: *f64 = f64p(a15.imag);
+    assert(near(re15[0], half, tol15) == 1 && near(im15[0], 0.0, tol15) == 1, "cos → N·Δt/2");
+    assert(near(re15[1], 0.0, tol15) == 1 && near(im15[1], -half, tol15) == 1, "sin → −j·N·Δt/2");
+    var am15: f64[2];
+    var ph15: f64[2];
+    a15.amplitude(&am15);
+    a15.phase(&ph15);
+    assert(near(am15[0], half, tol15) == 1, "its amplitude");
+    assert(near(ph15[1], -pi / 2.0, 0.000000001) == 1, "sin's phase −π/2");
+    assert(a15.n_samples == 1000, "1000 samples");
+    BjCwAccumulator_free(&a15);
+
+    test_group("test_cw_accumulator_length_mismatch");
+    var a16: BjCwAccumulator;
+    var t16, v16 = BjCwAccumulator_new(3, 1000000000.0, 0.000000000001, &a16);
+    var ones: f64[5];
+    for (var k16 = 0; k16 < 5; k16 = k16 + 1) { ones[k16] = 1.0; }
+    a16.accumulate(&ones, 5, 0);
+    var re16: *f64 = f64p(a16.real);
+    assert(re16[0] == 0.000000000001 && re16[1] == 0.000000000001 && re16[2] == 0.000000000001,
+      "a longer field: its first 3 samples");
+    a16.accumulate(&ones, 1, 0);
+    assert(near(re16[0], 0.000000000002, 0.000000000000000000000001) == 1, "a shorter field: its one sample");
+    assert(near(re16[1], 0.000000000001, 0.000000000000000000000001) == 1, "the rest untouched");
+    var before: f64[3];
+    for (var k16b = 0; k16b < 3; k16b = k16b + 1) { before[k16b] = re16[k16b]; }
+    var ns16 = a16.n_samples;
+    var t16a, v16a = a16.try_accumulate(&ones, 4, 1);
+    assert(is_err_result(t16a) == 1, "try_accumulate refuses 4 samples");
+    assert(re16[0] == before[0] && re16[1] == before[1] && re16[2] == before[2] && a16.n_samples == ns16,
+      "and leaves the accumulator alone");
+    var t16b, v16b = a16.try_accumulate(&ones, 3, 1);
+    assert(is_ok(t16b) == 1 && a16.n_samples == ns16 + 1, "3 samples taken");
+    BjCwAccumulator_free(&a16);
+
+    test_group("test_cw_accumulator_try_new_validation");
+    var a17: BjCwAccumulator;
+    var t17a, v17a = BjCwAccumulator_try_new(4, 1000000000.0, 0.000000000001, &a17);
+    assert(is_ok(t17a) == 1, "valid");
+    BjCwAccumulator_free(&a17);
+    var t17b, v17b = BjCwAccumulator_try_new(4, nan, 0.000000000001, &a17);
+    var t17c, v17c = BjCwAccumulator_try_new(4, -1000000000.0, 0.000000000001, &a17);
+    var t17d, v17d = BjCwAccumulator_try_new(4, 1000000000.0, 0.0, &a17);
+    var t17e, v17e = BjCwAccumulator_try_new(4, 1000000000.0, inf, &a17);
+    assert(is_err_result(t17b) == 1 && is_err_result(t17c) == 1, "f = NaN and f < 0 refused");
+    assert(is_err_result(t17d) == 1 && is_err_result(t17e) == 1, "dt = 0 and ∞ refused");
+
+    test_group("test_eigenmode_single_frequency");
+    var n18 = 20000;
+    var s18: *f64 = arr(n18);
+    for (var i18 = 0; i18 < n18; i18 = i18 + 1) { s18[i18] = mode(i18, 0.000000000001, 5000000000.0, 0.000000005); }
+    var r18: BjEigenmodeResult;
+    var t18, v18 = bj_find_eigenmodes(s18, n18, 0.000000000001, 1000000000.0, 10000000000.0, 1000, &r18);
+    assert(is_ok(t18) == 1 && r18.count > 0, "modes found");
+    var best: f64 = at(r18.frequencies, 0);
+    for (var k18 = 1; k18 < r18.count; k18 = k18 + 1) {
+        var fk: f64 = at(r18.frequencies, k18);
+        var dk: f64 = f64_abs(fk - 5000000000.0);
+        var db: f64 = f64_abs(best - 5000000000.0);
+        if (dk < db) { best = fk; }
+    }
+    var rel18: f64 = f64_abs(best - 5000000000.0) / 5000000000.0;
+    assert(rel18 < 0.05, "the closest within 5 % of 5 GHz");
+    BjEigenmodeResult_free(&r18);
+
+    test_group("test_eigenmode_empty_signal");
+    var r19: BjEigenmodeResult;
+    var t19, v19 = bj_find_eigenmodes(s18, 0, 0.000000000001, 1000000000.0, 10000000000.0, 100, &r19);
+    assert(is_err_result(t19) == 1, "an empty signal refused");
+
+    test_group("test_eigenmode_invalid_freq_range");
+    var one: f64[1];
+    one[0] = 1.0;
+    var t20, v20 = bj_find_eigenmodes(&one, 1, 0.000000000001, 10000000000.0, 1000000000.0, 100, &r19);
+    assert(is_err_result(t20) == 1, "freq_min > freq_max refused");
+
+    test_group("test_eigenmode_two_mode_quality_factors");
+    var tau21: f64 = 0.000000005;
+    var dt21: f64 = 0.00000000002;
+    var s21: *f64 = arr(5000);
+    for (var i21 = 0; i21 < 5000; i21 = i21 + 1) {
+        var a21: f64 = mode(i21, dt21, 3000000000.0, 0.0);
+        var b21: f64 = mode(i21, dt21, 7000000000.0, 0.0);
+        var fi21: f64 = f64_from(i21);
+        var t21: f64 = fi21 * dt21;
+        var e21: f64 = _bj_exp(-t21 / tau21);
+        s21[i21] = (a21 + b21) * e21;
+    }
+    var r21: BjEigenmodeResult;
+    var tr21, vr21 = bj_find_eigenmodes(s21, 5000, dt21, 1000000000.0, 10000000000.0, 1801, &r21);
+    assert(is_ok(tr21) == 1 && r21.count == 2, "two modes");
+    var bad21 = 0;
+    for (var m21 = 0; m21 < 2; m21 = m21 + 1) {
+        var f0: f64 = 3000000000.0;
+        if (m21 == 1) { f0 = 7000000000.0; }
+        var qref: f64 = pi * f0 * tau21;
+        var fm: f64 = at(r21.frequencies, m21);
+        var qm: f64 = at(r21.quality_factors, m21);
+        if (near(fm, f0, 1000000.0) != 1) { bad21 = bad21 + 1; }
+        var rq: f64 = f64_abs(qm - qref) / qref;
+        if (rq >= 0.01) { bad21 = bad21 + 1; }
+    }
+    assert(bad21 == 0, "each at its frequency within 1 MHz, Q = πf₀τ within 1 %");
+    BjEigenmodeResult_free(&r21);
+
+    test_group("test_eigenmode_frequency_grid_includes_endpoints");
+    var s22: *f64 = arr(3000);
+    for (var i22 = 0; i22 < 3000; i22 = i22 + 1) { s22[i22] = mode(i22, 0.00000000001, 2000000000.0, 0.000000003); }
+    var r22: BjEigenmodeResult;
+    var t22, v22 = bj_find_eigenmodes(s22, 3000, 0.00000000001, 1000000000.0, 3000000000.0, 3, &r22);
+    assert(is_ok(t22) == 1 && r22.count == 1, "one mode");
+    assert(near(at(r22.frequencies, 0), 2000000000.0, 1.0) == 1, "at exactly 2 GHz, the grid's middle point");
+    BjEigenmodeResult_free(&r22);
+
+    test_group("test_eigenmode_validation");
+    var s23: f64[3];
+    s23[0] = 1.0;
+    s23[1] = 0.5;
+    s23[2] = 0.25;
+    var r23: BjEigenmodeResult;
+    var t23a, v23a = bj_find_eigenmodes(&s23, 3, 0.000000000001, 1000000000.0, 10000000000.0, 1, &r23);
+    var t23b, v23b = bj_find_eigenmodes(&s23, 3, 0.0, 1000000000.0, 10000000000.0, 10, &r23);
+    var t23c, v23c = bj_find_eigenmodes(&s23, 3, nan, 1000000000.0, 10000000000.0, 10, &r23);
+    var t23d, v23d = bj_find_eigenmodes(&s23, 3, 0.000000000001, nan, 10000000000.0, 10, &r23);
+    assert(is_err_result(t23a) == 1 && is_err_result(t23b) == 1, "n_freq = 1 and dt = 0 refused");
+    assert(is_err_result(t23c) == 1 && is_err_result(t23d) == 1, "dt = NaN and freq_min = NaN refused");
+    var t23e, v23e = bj_find_eigenmodes(&s23, 3, 0.000000000001, 1000000000.0, nan, 10, &r23);
+    var t23f, v23f = bj_find_eigenmodes(&s23, 3, 0.000000000001, 1000000000.0, inf, 10, &r23);
+    var t23g, v23g = bj_find_eigenmodes(&s23, 3, 0.000000000001, -1000000000.0, 10000000000.0, 10, &r23);
+    assert(is_err_result(t23e) == 1 && is_err_result(t23f) == 1 && is_err_result(t23g) == 1,
+      "freq_max NaN or ∞ and freq_min < 0 refused");
+    var s23n: f64[2];
+    s23n[0] = 1.0;
+    s23n[1] = nan;
+    var t23h, v23h = bj_find_eigenmodes(&s23n, 2, 0.000000000001, 1000000000.0, 10000000000.0, 10, &r23);
+    assert(is_err_result(t23h) == 1, "a NaN sample refused");
+
+    test_group("test_eigenmode_dft_recurrence_matches_direct");
+    var n24 = 10000;
+    var s24: *f64 = arr(n24);
+    for (var i24 = 0; i24 < n24; i24 = i24 + 1) {
+        var fi24: f64 = f64_from(i24);
+        var a24: f64 = _bj_sin(fi24 * 0.37);
+        var b24: f64 = _bj_cos(fi24 * 0.011);
+        s24[i24] = a24 + 0.1 * b24;
+    }
+    var fs24: f64[3];
+    fs24[0] = 1000000000.0;
+    fs24[1] = 5123000000.0;
+    fs24[2] = 47000000000.0;
+    var bad24 = 0;
+    for (var k24 = 0; k24 < 3; k24 = k24 + 1) {
+        var om24: f64 = 2.0 * pi * fs24[k24];
+        var re24: f64 = 0.0;
+        var im24: f64 = 0.0;
+        for (var j24 = 0; j24 < n24; j24 = j24 + 1) {
+            var fj24: f64 = f64_from(j24);
+            var th24: f64 = om24 * fj24 * 0.000000000001;
+            var c24: f64 = _bj_cos(th24);
+            var sn24: f64 = _bj_sin(th24);
+            re24 = re24 + s24[j24] * c24 * 0.000000000001;
+            im24 = im24 - s24[j24] * sn24 * 0.000000000001;
+        }
+        var direct: f64 = _bj_hypot(re24, im24);
+        var fast: f64 = _bj_fu_dft_magnitude(s24, n24, om24, 0.000000000001);
+        var d24: f64 = f64_abs(fast - direct);
+        if (d24 > 0.000000001 * direct) { bad24 = bad24 + 1; }
+    }
+    assert(bad24 == 0, "the phasor recurrence within 10⁻⁹ of direct trig, over 10 reseed blocks");
+
+    test_group("cyrius_fdtd_util_error_records");
+    var g25: BjNonUniformGrid;
+    var t25a, v25a = BjNonUniformGrid_try_uniform(3, 3, 3, -0.0, &g25);
+    var w25a = "invalid parameter: grid spacing must be finite and positive, got -0";
+    assert(text_is(bj_last_error_display(), w25a) == 1, "−0 named");
+    var t25b, v25b = BjNonUniformGrid_try_uniform(3, 0, 3, nan, &g25);
+    var w25b = "grid resolution too coarse: 0 cells for domain size 0";
+    assert(v25b == BJ_ERR_INSUFFICIENT_RESOLUTION && text_is(bj_last_error_display(), w25b) == 1, "the axis first");
+    var t25c, v25c = BjNonUniformGrid_uniform(2, 2, 2, 0.001, &g25);
+    var dz25: *f64 = f64p(g25.dz);
+    dz25[1] = -2.5;
+    var t25d, v25d = g25.validate();
+    assert(text_is(bj_last_error_display(), "invalid parameter: dz contains invalid cell size -2.5") == 1, "dz named");
+    BjNonUniformGrid_free(&g25);
+    var o25: *f64 = arr(4);
+    var t25e, v25e = BjNonUniformGrid_graded(0, 1.0, 2.0, o25);
+    assert(text_is(bj_last_error_display(), "invalid parameter: need at least 2 cells for grading, got 0") == 1,
+      "graded: 0 cells");
+    var t25f, v25f = BjNonUniformGrid_graded(4, 0.5, -0.0, o25);
+    var w25f = "invalid parameter: cell sizes must be finite and positive, got 0.5, -0";
+    assert(text_is(bj_last_error_display(), w25f) == 1, "graded: both sizes quoted");
+    var a25: BjCwAccumulator;
+    var t25g, v25g = BjCwAccumulator_try_new(2, -0.5, 1.0, &a25);
+    var w25g = "invalid parameter: CW frequency must be finite and non-negative, got -0.5";
+    assert(text_is(bj_last_error_display(), w25g) == 1, "CW frequency");
+    var t25h, v25h = BjCwAccumulator_try_new(2, 0.0, 1.0, &a25);
+    var t25i, v25i = a25.try_accumulate(&ones, 5, 0);
+    assert(text_is(bj_last_error_display(), "invalid parameter: CwAccumulator expects 2 samples, got 5") == 1,
+      "the sample count");
+    BjCwAccumulator_free(&a25);
+    var r25: BjEigenmodeResult;
+    var t25j, v25j = bj_find_eigenmodes(&s23, 3, 1.0, 2.0, 1.0, 10, &r25);
+    var w25j = "invalid parameter: need 0 <= freq_min < freq_max < inf, got freq_min = 2, freq_max = 1";
+    assert(text_is(bj_last_error_display(), w25j) == 1, "the range quoted");
+
+    test_group("cyrius_nonuniform_grid_from_axes");
+    var ax: f64[3];
+    ax[0] = 0.002;
+    ax[1] = 0.001;
+    ax[2] = 0.003;
+    var az: f64[1];
+    az[0] = 0.0005;
+    var g26: BjNonUniformGrid;
+    var t26, v26 = BjNonUniformGrid_from_axes(&ax, 3, &ax, 2, &az, 1, &g26);
+    assert(is_ok(t26) == 1 && g26.nx == 3 && g26.ny == 2 && g26.nz == 1, "the three lengths");
+    ax[1] = 9.0;
+    assert(at(g26.dx, 1) == 0.001, "the widths copied");
+    var m26: f64 = g26.min_spacing();
+    var e26x, e26y, e26z = g26.extents();
+    assert(m26 == 0.0005 && e26z == 0.0005, "min over all axes; z's one cell");
+    BjNonUniformGrid_free(&g26);
+    assert(g26.nx == 0 && g26.dx == 0 && g26.block == 0, "freed and emptied");
+    var g27: BjNonUniformGrid;
+    var t27, v27 = BjNonUniformGrid_uniform(0, 0, 0, 1.0, &g27);
+    var e27x, e27y, e27z = g27.extents();
+    var m27: f64 = g27.min_spacing();
+    assert(_bj_bits(e27x) == 0x8000000000000000 && m27 == inf, "empty axes: extents −0.0 (Rust's Sum), min ∞");
+    BjNonUniformGrid_free(&g27);
+
+    test_group("cyrius_eigenmode_no_mode");
+    var flat: f64[8];
+    for (var k28 = 0; k28 < 8; k28 = k28 + 1) { flat[k28] = 0.0; }
+    var r28: BjEigenmodeResult;
+    var t28, v28 = bj_find_eigenmodes(&flat, 8, 1.0, 0.0, 0.25, 5, &r28);
+    assert(is_ok(t28) == 1 && r28.count == 0 && r28.frequencies == 0, "a zero signal: Ok, no mode, no block");
+    BjEigenmodeResult_free(&r28);
+
+    return assert_summary();
+}
+
+var exit_code = main();
+if (exit_code > 0) { exit_code = 1; }
+sys_exit_group(exit_code);

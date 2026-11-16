@@ -55,7 +55,7 @@ port's harness reads the same files. This README records what is specific to bij
 | `complex` | M1 (+ 5c-2's edge grid) | 31,677 (+ 8 corrected) | `src/m_complex.rs` | — |
 | `constants` | M0 | 12 | `src/m_constants.rs` | `src/constants.cyr` (`src/t_constants.rs`, with the completeness proof) |
 | `error` | M1 | 1,635 | `src/m_error.rs` | — |
-| `fdtd` | M5 (part 1a: the 1D grid `Fdtd1d`, as scripts, class T; 1b: the pulses, class C, the Gaussian-driven grid and the TF/SF scripts; 1c: the media and the subpixel averages, class A) | 85,909 (+ 11 corrected, 105 mapped) | `src/m_fdtd.rs` | `src/fdtd_media_data.cyr`, the gold, silver and water presets (`src/t_fdtd_media.rs`) |
+| `fdtd` | M5 (part 1a: the 1D grid `Fdtd1d`, as scripts, class T; 1b: the pulses, class C, the Gaussian-driven grid and the TF/SF scripts; 1c: the media and the subpixel averages, class A; 1d: the non-uniform grid, the fourth-order derivative, the CW scripts and the eigenmodes) | 91,874 (+ 18 corrected, 105 mapped) | `src/m_fdtd.rs` | `src/fdtd_media_data.cyr`, the gold, silver and water presets (`src/t_fdtd_media.rs`) |
 | `field` | M1 (parts 3a–3c, 5d-1 to 5d-5) | 26,770 | `src/m_field.rs` | — |
 | `fmtf` | M1 (+ Debug, part 3c; + fixed precision, M2 part 1b; + `{:e}`, M4 part 1c-2) | 89,528 | `src/m_fmtf.rs` (impetus's grid) | — |
 | `json` | M1 (part 4), M2 (part 1a: `Material`), M3 (parts 1a-2: polarization's four structs; 1b-2: `MieResult`; 1c-2: beam's three structs), M4 (part 1d: rf's `SMatrix`, `TouchstoneFormat`, `TouchstoneData`) | 66,620 (+ 30,742 corrected) | `src/m_json.rs` (serde_json 1.0.154 on `Complex`, `FieldVector`, `PointCharge`, `Material`, `JonesVector`, `JonesMatrix`, `StokesVector`, `MuellerMatrix`, `MieResult`, `GaussianBeam`, `AbcdMatrix`, `ResonatorStability`) | — |
@@ -210,6 +210,13 @@ error, or each failed operation's error and then the state.
   `try_new`), then `i:1 f:<v>` step(v), `i:2 i:<k> i:<s0> f:<dt> f:<t0> f:<tau>` k steps of
   gaussian_pulse((s₀ + j)·dt, t₀, τ), `i:3 i:<b>` and `i:4 i:<c>` the boundary and the source cell written. Its state:
   nx, the boundary, the source cell, both incident fields, the three coefficients, both arrays' digests and the probes.
+- **`CwAccumulator`** (M5 part 1d): `i:<n> f:<frequency> f:<dt>`, built by `new` for `CwAccumulator::new` rows and
+  `try_new` for the others, then `i:1 i:<step> v:<len> f:…` accumulate, `i:2 …` try_accumulate, `i:3 i:<k> i:<s0>
+  f:<a> f:<b>` k accumulations from step s₀ of the field a·((step + c) mod 11) − b. Its state: the samples taken,
+  ω and dt (from `Debug`), n, the digests of real, imag, the amplitudes and the phases, then each at 0, n/2, n − 1.
+- **`find_eigenmodes`'s signal** (M5 part 1d, a class-C row's input): `v:<len>` and its samples, or `i:<n> v:<g>` and g
+  recurrences `f:<x0> f:<x1> f:<a> f:<b>` (x_{k+1} = a·x_k + b·x_{k−1}, summed in order): damped modes from exact
+  operations only, so no input depends on a libm.
 
 A frame of a scenario is a script that extends the previous frame's by one advancing operation, so `validate.py` runs
 each scenario once. The digest is the harness's cross-target digest step (`_par_dg_step`: FNV-1a, then y ⊕ (y >> 29)

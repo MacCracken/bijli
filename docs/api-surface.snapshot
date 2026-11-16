@@ -821,6 +821,17 @@ fdtd_source::bj_differentiated_gaussian/3
 fdtd_source::bj_gaussian_pulse/3
 fdtd_source::bj_modulated_gaussian_pulse/4
 fdtd_source::bj_ricker_wavelet/3
+fdtd_util::BjCwAccumulator_free/1
+fdtd_util::BjCwAccumulator_new/4
+fdtd_util::BjCwAccumulator_try_new/4
+fdtd_util::BjEigenmodeResult_free/1
+fdtd_util::BjNonUniformGrid_free/1
+fdtd_util::BjNonUniformGrid_from_axes/7
+fdtd_util::BjNonUniformGrid_graded/4
+fdtd_util::BjNonUniformGrid_try_uniform/5
+fdtd_util::BjNonUniformGrid_uniform/5
+fdtd_util::bj_find_eigenmodes/7
+fdtd_util::bj_fourth_order_derivative/4
 field::BjFieldVector_add/2
 field::BjFieldVector_default/0
 field::BjFieldVector_from_array/1

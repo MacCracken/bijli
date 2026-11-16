@@ -1221,6 +1221,30 @@ fn main(): i64 {
     bench_report(bm1);
     if (mcsum == 7.0) { println("."); }
 
+    # fdtd (M5 part 1d): Rust's eigenmode bench, a 30 GHz mode decaying over 1 ns, 4096 samples of 1 ps, searched at
+    # 256 frequencies from 10 to 50 GHz.
+    var eig: *f64 = bench_f64p(alloc(4096 * 8));
+    for (var k = 0; k < 4096; k = k + 1) {
+        var kt: f64 = f64_from(k);
+        var tt: f64 = kt * 0.000000000001;
+        var ws: f64 = 2.0 * _BJ_PI * 30000000000.0 * tt;
+        var sn: f64 = _bj_sin(ws);
+        var dec: f64 = _bj_exp(-tt / 0.000000001);
+        eig[k] = sn * dec;
+    }
+    var esum = 0;
+    var be1 = bench_new("fdtd/find_eigenmodes_4096x256");
+    bench_batch_start(be1);
+    for (var k = 0; k < 20; k = k + 1) {
+        var er: BjEigenmodeResult;
+        var te, ve = bj_find_eigenmodes(eig, 4096, 0.000000000001, 10000000000.0, 50000000000.0, 256, &er);
+        esum = esum + er.count;
+        BjEigenmodeResult_free(&er);
+    }
+    bench_batch_stop(be1, 20);
+    bench_report(be1);
+    if (esum == 7) { println("."); }
+
     var ar: f64 = acc.re;
     if (ar == 7.0) { println("."); }
     if (keep == 7) { println("."); }

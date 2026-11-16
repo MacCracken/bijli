@@ -402,6 +402,15 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
   grows by 68,381 class-A rows (85,909). `tests/fdtd_media.tcyr` ports 12 of the 13 material tests (the serde one
   follows with the JSON in part 1f) and the 7 subpixel tests (60 assertions). A Cyrius-only bench,
   `fdtd/media_coefficients`, takes all four coefficient sets and a subpixel average in 83–84 ns.
+- **Cyrius port, M5 part 1d — the FDTD utilities** (`src/fdtd_util.cyr`): `BjNonUniformGrid` (`uniform`, `try_uniform`,
+  `graded` into a caller buffer, `validate`, `min_spacing`, `courant_dt`, `try_courant_dt`, `extents`, and a
+  Cyrius-only `from_axes`), `bj_fourth_order_derivative`, `BjCwAccumulator` (`new`, `try_new`, `accumulate` on the
+  packed kernel, `try_accumulate`, `amplitude`, `phase`) and `bj_find_eigenmodes` with `BjEigenmodeResult`: Rust's
+  chains on the correctly rounded pow, sin_cos and atan2, the DFT's phasor recurrence reseeded every 1024 samples, the
+  half-power Q. Their arrays are fixed at construction (ADR 0002 rows 2 and 9 amended). `fdtd.tsv` grows by 5,965 rows
+  (91,874): grid queries, gradings, derivatives, CW scripts and eigenmode searches on exactly generated damped modes;
+  `fdtd.cr.tsv` corrects 7 CW rows. `tests/fdtd_util.tcyr` ports all 25 of their tests (73 assertions). The bench
+  twin `fdtd/find_eigenmodes_4096x256` takes 8.37–8.48 ms at load 1.8 (Rust 2.12 ms, 3.9×).
 
 ### Fixed
 

@@ -31505,6 +31505,776 @@ public fn bj_subpixel_permittivity_perpendicular_checked(eps1: f64, eps2: f64, f
     return Ok(r);
 }
 
+# --- fdtd_util.cyr ---
+
+# fdtd_util.cyr — fdtd.rs's FDTD utilities (M5 part 1d): the non-uniform grid, the fourth-order staggered derivative,
+# the CW (single-frequency DFT) accumulator, and the eigenmode search by DFT with half-power quality factors. SI units.
+#
+# Rust's `Vec<f64>` results are written into the caller's `out` (fourth_order_derivative, graded, amplitude, phase),
+# or into a result the caller frees (BjEigenmodeResult). The grid's and the accumulator's arrays are fixed at
+# construction (ADR 0002 row 2): addresses and lengths, freed by their Bj*_free. A failed allocation is
+# Err(Allocation), where Rust's `vec!` aborts (ADR 0002 row 9).
+#
+# The accumulator's DFT is F(ω) = Σₙ f(tₙ)·e^{−jωtₙ}·Δt, so its phases are bijli's one convention, e^{+jωt}
+# (src/complex.cyr's header): fdtd.rs's CW phasors already were. sin, cos, atan2 and pow are correctly rounded
+# (src/crmath.cyr).
+
+private
+
+var _BJ_FU_INF: f64 = 0x7FF0000000000000;
+# std::f64::consts::PI and SQRT_2.
+var _BJ_FU_PI: f64 = 3.141592653589793;
+var _BJ_FU_SQRT_2: f64 = 1.4142135623730951;
+# freelist's largest request, 2 GiB: a grid's or a result's block must fit it.
+var _BJ_FU_FL_MAX = 2147483648;
+
+# A word as a *f64 (the typed return keeps the binding typed).
+#must_use
+fn _bj_fu_f64p(a): *f64 {
+    return a;
+}
+
+# 1 when x is finite and strictly positive (NaN-safe). Mirrors fdtd.rs's `is_positive_finite`.
+#must_use
+fn _bj_fu_pos(x: f64): i64 {
+    if (x > 0.0 && x < _BJ_FU_INF) { return 1; }
+    return 0;
+}
+
+# Rust's `n as f64` for a usize: the word read unsigned, rounded to nearest even.
+#must_use
+fn _bj_fu_u2f(n): f64 {
+    if (n >= 0) {
+        var r: f64 = f64_from(n);
+        return r;
+    }
+    var h: f64 = f64_from((n >> 1) | (n & 1));
+    var r2: f64 = h * 2.0;
+    return r2;
+}
+
+# Records Allocation "<what> of {n} values"; returns its code.
+fn _bj_fu_alloc_err(what, n): i64 {
+    var t = _bj_err_reason(BJ_ERR_ALLOCATION);
+    _bj_tx_cstr(t, what);
+    _bj_tx_cstr(t, " of ");
+    _bj_tx_u64(t, n);
+    _bj_tx_cstr(t, " values");
+    return BJ_ERR_ALLOCATION;
+}
+
+# ── the non-uniform grid ────────────────────────────────────────────────────────────────────────────────────────────
+
+# A non-uniform grid: the cell widths along x, y and z. `dx`, `dy` and `dz` are the addresses of nx, ny and nz f64 (read
+# and write them, as Rust's public vectors), in one freelist block (`block`, 0 when every axis is empty). Mirrors
+# `NonUniformGrid`.
+public struct BjNonUniformGrid {
+    dx;
+    nx;
+    dy;
+    ny;
+    dz;
+    nz;
+    block;
+}
+
+# The grid's block for nx + ny + nz values into *out, every value 0: 0, or the Allocation code recorded (out untouched).
+fn _bj_fu_grid_alloc(nx, ny, nz, out: *BjNonUniformGrid): i64 {
+    var cap = _BJ_FU_FL_MAX / 8;
+    if (nx < 0 || ny < 0 || nz < 0 || nx > cap || ny > cap || nz > cap || nx + ny + nz > cap) {
+        return _bj_fu_alloc_err("a non-uniform grid", nx + ny + nz);
+    }
+    var total = nx + ny + nz;
+    var b = 0;
+    if (total > 0) {
+        b = fl_calloc(total * 8);
+        if (b == 0) { return _bj_fu_alloc_err("a non-uniform grid", total); }
+    }
+    out.block = b;
+    out.nx = nx;
+    out.ny = ny;
+    out.nz = nz;
+    out.dx = 0;
+    out.dy = 0;
+    out.dz = 0;
+    if (nx > 0) { out.dx = b; }
+    if (ny > 0) { out.dy = b + nx * 8; }
+    if (nz > 0) { out.dz = b + (nx + ny) * 8; }
+    return 0;
+}
+
+# Fills n f64 at p with x.
+fn _bj_fu_fill(p, n, x: f64) {
+    var a: *f64 = _bj_fu_f64p(p);
+    for (var i = 0; i < n; i = i + 1) { a[i] = x; }
+    return 0;
+}
+
+# A uniform grid of nx × ny × nz cells (usize), every width `spacing`, into *out, unchecked as Rust's (an empty axis or
+# an invalid spacing makes an invalid grid, whose courant_dt is 0.0): Ok(0), or Err(Allocation) with out untouched
+# when the block can't be had (Rust's vec! aborts). Give it back with BjNonUniformGrid_free. Mirrors
+# `NonUniformGrid::uniform`.
+#must_use
+public fn BjNonUniformGrid_uniform(nx, ny, nz, spacing: f64, out: *BjNonUniformGrid): Result {
+    var g: BjNonUniformGrid;
+    var e = _bj_fu_grid_alloc(nx, ny, nz, &g);
+    if (e != 0) { return Err(e); }
+    _bj_fu_fill(g.block, nx + ny + nz, spacing);
+    memcpy(out, &g, 56);
+    return Ok(0);
+}
+
+# A uniform grid, checked: Ok(0), or with out untouched Err(InsufficientResolution) (cells 0, domain size 0) when an
+# axis has no cell, Err(InvalidParameter) "grid spacing must be finite and positive, got {spacing}", Err(Allocation).
+# Mirrors `NonUniformGrid::try_uniform`.
+#must_use
+public fn BjNonUniformGrid_try_uniform(nx, ny, nz, spacing: f64, out: *BjNonUniformGrid): Result {
+    if (nx == 0 || ny == 0 || nz == 0) { return Err(_bj_err_insufficient_resolution(0, 0.0)); }
+    if (_bj_fu_pos(spacing) == 0) {
+        var t = _bj_err_reason(BJ_ERR_INVALID_PARAMETER);
+        _bj_tx_cstr(t, "grid spacing must be finite and positive, got ");
+        _bj_fmt_f64_display(t, spacing);
+        return Err(BJ_ERR_INVALID_PARAMETER);
+    }
+    return BjNonUniformGrid_uniform(nx, ny, nz, spacing, out);
+}
+
+# A grid of the given widths (nx at dx, ny at dy, nz at dz), copied, unchecked: Rust builds one from its public vectors
+# (`NonUniformGrid { dx, dy, dz }`, `graded`'s among them). Ok(0), or Err(Allocation) with out untouched. Cyrius only.
+#must_use
+public fn BjNonUniformGrid_from_axes(dx: *f64, nx, dy: *f64, ny, dz: *f64, nz, out: *BjNonUniformGrid): Result {
+    var g: BjNonUniformGrid;
+    var e = _bj_fu_grid_alloc(nx, ny, nz, &g);
+    if (e != 0) { return Err(e); }
+    if (nx > 0) { memcpy(g.dx, dx, nx * 8); }
+    if (ny > 0) { memcpy(g.dy, dy, ny * 8); }
+    if (nz > 0) { memcpy(g.dz, dz, nz * 8); }
+    memcpy(out, &g, 56);
+    return Ok(0);
+}
+
+# Gives a grid's block back and empties it (every axis 0); a second call does nothing.
+public fn BjNonUniformGrid_free(g: *BjNonUniformGrid): i64 {
+    if (g.block != 0) { fl_free(g.block); }
+    g.block = 0;
+    g.dx = 0;
+    g.dy = 0;
+    g.dz = 0;
+    g.nx = 0;
+    g.ny = 0;
+    g.nz = 0;
+    return 0;
+}
+
+# Geometric grading from d_min to d_max over n cells into out[0..n]: d_i = d_min·ratio^i, ratio =
+# (d_max/d_min)^(1/(n − 1)) (Rust's powf, correctly rounded, then powi with i as an i32, as Rust truncates it). Ok(0),
+# or with out untouched Err(InvalidParameter) "need at least 2 cells for grading, got {n}" or "cell sizes must be
+# finite and positive, got {d_min}, {d_max}". out holds n f64. Mirrors `NonUniformGrid::graded`.
+#must_use
+public fn BjNonUniformGrid_graded(n, d_min: f64, d_max: f64, out: *f64): Result {
+    if (n >= 0 && n < 2) {
+        var t = _bj_err_reason(BJ_ERR_INVALID_PARAMETER);
+        _bj_tx_cstr(t, "need at least 2 cells for grading, got ");
+        _bj_tx_u64(t, n);
+        return Err(BJ_ERR_INVALID_PARAMETER);
+    }
+    if (_bj_fu_pos(d_min) == 0 || _bj_fu_pos(d_max) == 0) {
+        var t2 = _bj_err_reason(BJ_ERR_INVALID_PARAMETER);
+        _bj_tx_cstr(t2, "cell sizes must be finite and positive, got ");
+        _bj_fmt_f64_display(t2, d_min);
+        _bj_tx_cstr(t2, ", ");
+        _bj_fmt_f64_display(t2, d_max);
+        return Err(BJ_ERR_INVALID_PARAMETER);
+    }
+    var q: f64 = d_max / d_min;
+    var nm: f64 = _bj_fu_u2f(n - 1);
+    var e: f64 = 1.0 / nm;
+    var ratio: f64 = _bj_powf(q, e);
+    for (var i = 0; i != n; i = i + 1) {
+        var k = (i << 32) >>> 32;
+        var p: f64 = _bj_powi(ratio, k);
+        out[i] = d_min * p;
+    }
+    return Ok(0);
+}
+
+# The smallest of the n f64 at p, folded from +∞ with Rust's NaN-ignoring f64::min.
+#must_use
+fn _bj_fu_axis_min(p, n): f64 {
+    var a: *f64 = _bj_fu_f64p(p);
+    var m: f64 = _BJ_FU_INF;
+    for (var i = 0; i < n; i = i + 1) {
+        var x: f64 = a[i];
+        m = _bj_min(m, x);
+    }
+    return m;
+}
+
+# Rust's f64 `Sum` of the n f64 at p: a left fold from −0.0.
+#must_use
+fn _bj_fu_axis_sum(p, n): f64 {
+    var a: *f64 = _bj_fu_f64p(p);
+    var s: f64 = -0.0;
+    for (var i = 0; i < n; i = i + 1) { s = s + a[i]; }
+    return s;
+}
+
+# 0 when the axis (its name, n values at p) is valid, else its error recorded and its code.
+fn _bj_fu_axis_check(name, p, n): i64 {
+    if (n == 0) { return _bj_err_insufficient_resolution(0, 0.0); }
+    var a: *f64 = _bj_fu_f64p(p);
+    for (var i = 0; i < n; i = i + 1) {
+        var x: f64 = a[i];
+        if (_bj_fu_pos(x) == 0) {
+            var t = _bj_err_reason(BJ_ERR_INVALID_PARAMETER);
+            _bj_tx_cstr(t, name);
+            _bj_tx_cstr(t, " contains invalid cell size ");
+            _bj_fmt_f64_display(t, x);
+            return BJ_ERR_INVALID_PARAMETER;
+        }
+    }
+    return 0;
+}
+
+impl BjNonUniformGrid {
+    # Ok(0) when every axis has a cell and every width is finite and positive; else Err(InsufficientResolution)
+    # (cells 0, domain size 0) for the first empty axis, or Err(InvalidParameter) "{axis} contains invalid cell size
+    # {v}" for the first bad width, axes in the order dx, dy, dz. Mirrors `NonUniformGrid::validate`.
+    #must_use
+    public fn validate(self): Result {
+        var e = _bj_fu_axis_check("dx", self.dx, self.nx);
+        if (e == 0) { e = _bj_fu_axis_check("dy", self.dy, self.ny); }
+        if (e == 0) { e = _bj_fu_axis_check("dz", self.dz, self.nz); }
+        if (e != 0) { return Err(e); }
+        return Ok(0);
+    }
+
+    # The smallest width over all axes (+∞ when all are empty), Rust's NaN-ignoring min. Mirrors
+    # `NonUniformGrid::min_spacing`.
+    #must_use
+    public fn min_spacing(self): f64 {
+        var mx: f64 = _bj_fu_axis_min(self.dx, self.nx);
+        var my: f64 = _bj_fu_axis_min(self.dy, self.ny);
+        var mz: f64 = _bj_fu_axis_min(self.dz, self.nz);
+        var m: f64 = _bj_min(mx, my);
+        var m2: f64 = _bj_min(m, mz);
+        return m2;
+    }
+
+    # Half the 3D Courant limit, d_min/(2√3·c): Ok(dt), or validate's error. Mirrors `NonUniformGrid::try_courant_dt`.
+    #must_use
+    public fn try_courant_dt(self): Result {
+        var t, v = self.validate();
+        if (is_err_result(t) == 1) { return Err(v); }
+        var d: f64 = self.min_spacing();
+        var s3: f64 = f64_sqrt(3.0);
+        var k: f64 = 2.0 * s3;
+        k = k * BJ_SPEED_OF_LIGHT;
+        var dt: f64 = d / k;
+        return Ok(dt);
+    }
+
+    # As try_courant_dt, with 0.0 (and a warning) for an invalid grid. Mirrors `NonUniformGrid::courant_dt`.
+    #must_use
+    public fn courant_dt(self): f64 {
+        var t, v = self.try_courant_dt();
+        if (is_err_result(t) == 1) {
+            if (_bj_log_on(2) == 1) {
+                var lb[320];
+                var lt[24];
+                _bj_tx_init(&lt, &lb, 320);
+                _bj_tx_cstr(&lt, "NonUniformGrid::courant_dt on invalid grid, returning 0 e=");
+                _bj_tx_cstr(&lt, bj_last_error_display());
+                _bj_log_text(2, &lt);
+            }
+            return 0.0;
+        }
+        var dt: f64 = v;
+        return dt;
+    }
+
+    # The total extent along x, y and z: each axis's widths summed from −0.0, as Rust's `Sum` (an empty axis is −0.0).
+    # Mirrors `NonUniformGrid::extents`.
+    #must_use
+    public fn extents(self): (f64, f64, f64) {
+        var ex: f64 = _bj_fu_axis_sum(self.dx, self.nx);
+        var ey: f64 = _bj_fu_axis_sum(self.dy, self.ny);
+        var ez: f64 = _bj_fu_axis_sum(self.dz, self.nz);
+        return (ex, ey, ez);
+    }
+}
+
+# ── the fourth-order derivative ─────────────────────────────────────────────────────────────────────────────────────
+
+# The fourth-order staggered derivative of the n samples at field into out[0..n] (out must not overlap field): out[i]
+# approximates f'(x_{i+½}). For 1 ≤ i ≤ n − 3 it is (1/dx)·(c₁(f[i+1] − f[i]) + c₂(f[i+2] − f[i−1])), c₁ = 9/8,
+# c₂ = −1/24, exact for cubics; out[0] and out[n − 2] are (f[i+1] − f[i])·(1/dx), second order; out[n − 1] is 0.0.
+# Fewer than two samples, or a dx that isn't finite and positive (with a warning), give all zeros. Mirrors
+# `fourth_order_derivative`.
+public fn bj_fourth_order_derivative(field: *f64, n, dx: f64, out: *f64) {
+    for (var z = 0; z < n; z = z + 1) { out[z] = 0.0; }
+    if (n < 2) { return 0; }
+    if (_bj_fu_pos(dx) == 0) {
+        if (_bj_log_on(2) == 1) {
+            var lb[160];
+            var lt[24];
+            _bj_tx_init(&lt, &lb, 160);
+            _bj_tx_cstr(&lt, "fourth_order_derivative: invalid dx, returning zeros dx=");
+            _bj_fmt_f64_debug(&lt, dx);
+            _bj_log_text(2, &lt);
+        }
+        return 0;
+    }
+    var inv: f64 = 1.0 / dx;
+    var c1: f64 = BJ_FOURTH_ORDER_C1;
+    var c2: f64 = BJ_FOURTH_ORDER_C2;
+    for (var i = 1; i < n - 2; i = i + 1) {
+        var a: f64 = c1 * (field[i + 1] - field[i]);
+        var b: f64 = c2 * (field[i + 2] - field[i - 1]);
+        var s: f64 = a + b;
+        out[i] = inv * s;
+    }
+    var d0: f64 = field[1] - field[0];
+    out[0] = d0 * inv;
+    var dn: f64 = field[n - 1] - field[n - 2];
+    out[n - 2] = dn * inv;
+    return 0;
+}
+
+# ── the CW accumulator ──────────────────────────────────────────────────────────────────────────────────────────────
+
+# A running single-frequency DFT, F(ω) = Σₙ f(tₙ)·e^{−jωtₙ}·Δt per grid point, its phases in e^{+jωt}. `real` and
+# `imag` are the addresses of field_size f64 each (the cos and sin parts), `n_samples` the samples taken, `omega` 2πf,
+# `dt` the time step. `work` is the update's scratch row and `map_bytes` the mapping's length (0 once freed, or for
+# field_size 0); `mismatch_warned` is set once a length mismatch has been warned of. Mirrors `CwAccumulator`.
+public struct BjCwAccumulator {
+    real;
+    imag;
+    field_size;
+    n_samples;
+    omega: f64;
+    dt: f64;
+    mismatch_warned;
+    work;
+    map_bytes;
+}
+
+# An accumulator for field_size points at `frequency` (Hz) with step dt into *out, unchecked as Rust's (a non-finite
+# frequency or an invalid dt is accepted with a warning and gives meaningless results): Ok(0), or Err(Allocation)
+# with out untouched. Give it back with BjCwAccumulator_free. Mirrors `CwAccumulator::new`.
+#must_use
+public fn BjCwAccumulator_new(field_size, frequency: f64, dt: f64, out: *BjCwAccumulator): Result {
+    var f0: f64 = frequency * 0.0;
+    if ((f0 != 0.0 || _bj_fu_pos(dt) == 0) && _bj_log_on(2) == 1) {
+        var lb[256];
+        var lt[24];
+        _bj_tx_init(&lt, &lb, 256);
+        _bj_tx_cstr(&lt, "CwAccumulator created with invalid frequency/dt frequency=");
+        _bj_fmt_f64_debug(&lt, frequency);
+        _bj_tx_cstr(&lt, " dt=");
+        _bj_fmt_f64_debug(&lt, dt);
+        _bj_log_text(2, &lt);
+    }
+    var map = 0;
+    if (field_size < 0 || field_size > 384307168202282325) {
+        return Err(_bj_fu_alloc_err("a CW accumulator", field_size));
+    }
+    if (field_size > 0) {
+        map = mmap_anon(field_size * 24);
+        if (map == 0) { return Err(_bj_fu_alloc_err("a CW accumulator", field_size)); }
+    }
+    if (_bj_log_on(4) == 1) {
+        var db[256];
+        var dtx[24];
+        _bj_tx_init(&dtx, &db, 256);
+        _bj_tx_cstr(&dtx, "CW accumulator created field_size=");
+        _bj_tx_u64(&dtx, field_size);
+        _bj_tx_cstr(&dtx, " frequency=");
+        _bj_fmt_f64_debug(&dtx, frequency);
+        _bj_tx_cstr(&dtx, " dt=");
+        _bj_fmt_f64_debug(&dtx, dt);
+        _bj_log_text(4, &dtx);
+    }
+    var w: f64 = 2.0 * _BJ_FU_PI;
+    var om: f64 = w * frequency;
+    out.real = 0;
+    out.imag = 0;
+    out.work = 0;
+    if (map != 0) {
+        out.real = map;
+        out.imag = map + field_size * 8;
+        out.work = map + field_size * 16;
+    }
+    out.field_size = field_size;
+    out.n_samples = 0;
+    out.omega = om;
+    out.dt = dt;
+    out.mismatch_warned = 0;
+    out.map_bytes = field_size * 24;
+    return Ok(0);
+}
+
+# An accumulator, checked: Ok(0), or with out untouched Err(InvalidParameter) "CW frequency must be finite and
+# non-negative, got {f}" or "dt must be finite and positive, got {dt}", or Err(Allocation). Mirrors
+# `CwAccumulator::try_new`.
+#must_use
+public fn BjCwAccumulator_try_new(field_size, frequency: f64, dt: f64, out: *BjCwAccumulator): Result {
+    if (!(frequency >= 0.0 && frequency < _BJ_FU_INF)) {
+        var t = _bj_err_reason(BJ_ERR_INVALID_PARAMETER);
+        _bj_tx_cstr(t, "CW frequency must be finite and non-negative, got ");
+        _bj_fmt_f64_display(t, frequency);
+        return Err(BJ_ERR_INVALID_PARAMETER);
+    }
+    if (_bj_fu_pos(dt) == 0) {
+        var t2 = _bj_err_reason(BJ_ERR_INVALID_PARAMETER);
+        _bj_tx_cstr(t2, "dt must be finite and positive, got ");
+        _bj_fmt_f64_display(t2, dt);
+        return Err(BJ_ERR_INVALID_PARAMETER);
+    }
+    return BjCwAccumulator_new(field_size, frequency, dt, out);
+}
+
+# Gives an accumulator's mapping back and empties it (field_size 0, every address 0); a second call does nothing.
+public fn BjCwAccumulator_free(acc: *BjCwAccumulator): i64 {
+    if (acc.map_bytes > 0 && acc.real != 0) { cyr_munmap(acc.real, acc.map_bytes); }
+    acc.real = 0;
+    acc.imag = 0;
+    acc.work = 0;
+    acc.field_size = 0;
+    acc.map_bytes = 0;
+    return 0;
+}
+
+impl BjCwAccumulator {
+    # Accumulates the len samples at field, taken at t = time_step·dt (time_step a usize): real += f·cos(ωt)·Δt and
+    # imag −= f·sin(ωt)·Δt, Rust's chain on the correctly rounded sin_cos. When len differs from field_size only the
+    # common prefix is taken, with one warning. The updates run on the packed f64v_* verbs (each lane rounding Rust's
+    # two operations) on a multiple of 4, then a scalar tail (probe p19). Mirrors `CwAccumulator::accumulate`.
+    public fn accumulate(self, field: *f64, len, time_step) {
+        var m = self.field_size;
+        if (len != m && self.mismatch_warned == 0) {
+            if (_bj_log_on(2) == 1) {
+                var lb[256];
+                var lt[24];
+                _bj_tx_init(&lt, &lb, 256);
+                _bj_tx_cstr(&lt, "CwAccumulator::accumulate length mismatch, using common prefix field_len=");
+                _bj_tx_u64(&lt, len);
+                _bj_tx_cstr(&lt, " accumulator_len=");
+                _bj_tx_u64(&lt, m);
+                _bj_log_text(2, &lt);
+            }
+            self.mismatch_warned = 1;
+        }
+        if (len < m) { m = len; }
+        var sf: f64 = _bj_fu_u2f(time_step);
+        var dt: f64 = self.dt;
+        var t: f64 = sf * dt;
+        var arg: f64 = self.omega * t;
+        var s, c = _bj_sin_cos(arg);
+        var cos_dt: f64 = c * dt;
+        var sin_dt: f64 = s * dt;
+        var re: *f64 = _bj_fu_f64p(self.real);
+        var im: *f64 = _bj_fu_f64p(self.imag);
+        var w: *f64 = _bj_fu_f64p(self.work);
+        var m4 = m & (0 - 4);
+        if (m4 > 0) {
+            f64v_scale(w, field, cos_dt, m4);
+            f64v_add(re, re, w, m4);
+            f64v_scale(w, field, sin_dt, m4);
+            f64v_sub(im, im, w, m4);
+        }
+        for (var i = m4; i < m; i = i + 1) {
+            var f: f64 = field[i];
+            var a: f64 = f * cos_dt;
+            re[i] = re[i] + a;
+            var b: f64 = f * sin_dt;
+            im[i] = im[i] - b;
+        }
+        self.n_samples = self.n_samples + 1;
+        return 0;
+    }
+
+    # As accumulate, checked: Ok(0), or Err(InvalidParameter) "CwAccumulator expects {field_size} samples, got {len}"
+    # with the accumulator untouched. Mirrors `CwAccumulator::try_accumulate`.
+    #must_use
+    public fn try_accumulate(self, field: *f64, len, time_step): Result {
+        if (len != self.field_size) {
+            var t = _bj_err_reason(BJ_ERR_INVALID_PARAMETER);
+            _bj_tx_cstr(t, "CwAccumulator expects ");
+            _bj_tx_u64(t, self.field_size);
+            _bj_tx_cstr(t, " samples, got ");
+            _bj_tx_u64(t, len);
+            return Err(BJ_ERR_INVALID_PARAMETER);
+        }
+        self.accumulate(field, len, time_step);
+        return Ok(0);
+    }
+
+    # |F(ω)| = √(re² + im²) at each point into out[0..field_size]. Mirrors `CwAccumulator::amplitude`.
+    public fn amplitude(self, out: *f64) {
+        var re: *f64 = _bj_fu_f64p(self.real);
+        var im: *f64 = _bj_fu_f64p(self.imag);
+        for (var i = 0; i < self.field_size; i = i + 1) {
+            var r: f64 = re[i];
+            var q: f64 = im[i];
+            var s: f64 = r * r + q * q;
+            out[i] = f64_sqrt(s);
+        }
+        return 0;
+    }
+
+    # arg F(ω) = atan2(im, re) at each point into out[0..field_size], correctly rounded. Mirrors
+    # `CwAccumulator::phase`.
+    public fn phase(self, out: *f64) {
+        var re: *f64 = _bj_fu_f64p(self.real);
+        var im: *f64 = _bj_fu_f64p(self.imag);
+        for (var i = 0; i < self.field_size; i = i + 1) {
+            var r: f64 = re[i];
+            var q: f64 = im[i];
+            var a: f64 = _bj_atan2(q, r);
+            out[i] = a;
+        }
+        return 0;
+    }
+}
+
+# ── the eigenmode search ────────────────────────────────────────────────────────────────────────────────────────────
+
+# The modes found by find_eigenmodes: `count` of them, their frequencies (Hz), quality factors Q = f₀/Δf from each
+# peak's own half-power bandwidth (0.0 when it can't be found) and spectral amplitudes, at the addresses
+# `frequencies`, `quality_factors` and `amplitudes` (one freelist block; 0 when count is 0). Give it back with
+# BjEigenmodeResult_free. Mirrors `EigenmodeResult`.
+public struct BjEigenmodeResult {
+    frequencies;
+    quality_factors;
+    amplitudes;
+    count;
+}
+
+# Gives a result's block back and empties it; a second call does nothing.
+public fn BjEigenmodeResult_free(r: *BjEigenmodeResult): i64 {
+    if (r.frequencies != 0) { fl_free(r.frequencies); }
+    r.frequencies = 0;
+    r.quality_factors = 0;
+    r.amplitudes = 0;
+    r.count = 0;
+    return 0;
+}
+
+# |Σᵢ sᵢ·e^{−jω·i·dt}|·dt over the n samples at signal, by Rust's phasor recurrence: one complex multiply a sample by
+# e^{−jω·dt}, the phasor reseeded from the correctly rounded sin_cos of ω·(1024·b)·dt at each block of 1024. Public
+# for tests/fdtd_util.tcyr (Rust's test of it reaches the private fn). Mirrors fdtd.rs's `dft_magnitude`.
+#must_use
+public fn _bj_fu_dft_magnitude(signal: *f64, n, omega: f64, dt: f64): f64 {
+    var od: f64 = omega * dt;
+    var s1, c1 = _bj_sin_cos(od);
+    var wr: f64 = c1;
+    var wi: f64 = -s1;
+    var re: f64 = 0.0;
+    var im: f64 = 0.0;
+    var start = 0;
+    while (start < n) {
+        var bf: f64 = _bj_fu_u2f(start);
+        var a: f64 = omega * bf;
+        var arg: f64 = a * dt;
+        var s0, c0 = _bj_sin_cos(arg);
+        var zr: f64 = c0;
+        var zi: f64 = -s0;
+        var end = start + 1024;
+        if (end > n) { end = n; }
+        for (var i = start; i < end; i = i + 1) {
+            var s: f64 = signal[i];
+            re = re + s * zr;
+            im = im + s * zi;
+            var nr: f64 = zr * wr - zi * wi;
+            zi = zr * wi + zi * wr;
+            zr = nr;
+        }
+        start = end;
+    }
+    var m: f64 = re * re + im * im;
+    var r: f64 = f64_sqrt(m);
+    var r2: f64 = r * dt;
+    return r2;
+}
+
+# The offset, in units of df (≥ 0), from the peak to its half-power crossing walking in direction dir (±1), linearly
+# interpolated; 1 with the offset in *off, or 0 when the spectrum's edge or a rising flank (a neighbouring mode) comes
+# first. Mirrors fdtd.rs's `half_power_offset`.
+fn _bj_fu_half_power(spec: *f64, n, peak, dir, off: *f64): i64 {
+    var hp: f64 = spec[peak] / _BJ_FU_SQRT_2;
+    var i = peak;
+    while (1 == 1) {
+        var next = i + dir;
+        if (next < 0 || next >= n) { return 0; }
+        var a_next: f64 = spec[next];
+        var a_cur: f64 = spec[i];
+        if (a_next < hp) {
+            var num: f64 = a_cur - hp;
+            var den: f64 = a_cur - a_next;
+            var frac: f64 = num / den;
+            var d = i - peak;
+            if (d < 0) { d = 0 - d; }
+            var df: f64 = f64_from(d);
+            off[0] = df + frac;
+            return 1;
+        }
+        if (a_next > a_cur) { return 0; }
+        i = next;
+    }
+    return 0;
+}
+
+# The quality factor of the peak at index i: f₀/(Δf·df) from its half-power offsets (both sides, or twice the one
+# found), 0.0 when neither is found or the bandwidth isn't positive.
+#must_use
+fn _bj_fu_quality(spec: *f64, n, i, f0: f64, df: f64): f64 {
+    var l: f64[1];
+    var r: f64[1];
+    var hl = _bj_fu_half_power(spec, n, i, 0 - 1, &l);
+    var hr = _bj_fu_half_power(spec, n, i, 1, &r);
+    var bw: f64 = 0.0;
+    if (hl == 0 && hr == 0) { return 0.0; }
+    if (hl == 1 && hr == 1) { bw = l[0] + r[0]; }
+    elif (hl == 1) { bw = 2.0 * l[0]; }
+    else { bw = 2.0 * r[0]; }
+    if (bw > 0.0) {
+        var b: f64 = bw * df;
+        var q: f64 = f0 / b;
+        return q;
+    }
+    return 0.0;
+}
+
+# Records InvalidParameter with a fixed reason; returns its code.
+fn _bj_fu_bad(reason): i64 {
+    _bj_tx_cstr(_bj_err_reason(BJ_ERR_INVALID_PARAMETER), reason);
+    return BJ_ERR_INVALID_PARAMETER;
+}
+
+# The resonances in the n samples at signal (step dt): the DFT magnitude at n_freq frequencies spanning [freq_min,
+# freq_max] inclusive, then every strict local maximum above 10 % of the strongest, with its half-power Q, into *out
+# (free a previous result first). Ok(0), or with out untouched Err(InvalidParameter) for an empty signal, n_freq < 2,
+# a dt that isn't finite and positive, a range other than 0 ≤ freq_min < freq_max < ∞, or a non-finite sample (in that
+# order, Rust's texts); Err(Allocation) when the spectrum or the result can't be had. A freq_max past Nyquist is
+# warned of. Mirrors `find_eigenmodes`.
+#must_use
+public fn bj_find_eigenmodes(signal: *f64, n, dt: f64, freq_min: f64, freq_max: f64, n_freq,
+  out: *BjEigenmodeResult): Result {
+    if (n == 0) { return Err(_bj_fu_bad("time signal is empty")); }
+    if (n_freq >= 0 && n_freq < 2) {
+        var t = _bj_err_reason(BJ_ERR_INVALID_PARAMETER);
+        _bj_tx_cstr(t, "need at least two frequency points, got ");
+        _bj_tx_u64(t, n_freq);
+        return Err(BJ_ERR_INVALID_PARAMETER);
+    }
+    if (_bj_fu_pos(dt) == 0) {
+        var t2 = _bj_err_reason(BJ_ERR_INVALID_PARAMETER);
+        _bj_tx_cstr(t2, "dt must be finite and positive, got ");
+        _bj_fmt_f64_display(t2, dt);
+        return Err(BJ_ERR_INVALID_PARAMETER);
+    }
+    if (!(freq_min >= 0.0 && freq_min < freq_max && freq_max < _BJ_FU_INF)) {
+        var t3 = _bj_err_reason(BJ_ERR_INVALID_PARAMETER);
+        _bj_tx_cstr(t3, "need 0 <= freq_min < freq_max < inf, got freq_min = ");
+        _bj_fmt_f64_display(t3, freq_min);
+        _bj_tx_cstr(t3, ", freq_max = ");
+        _bj_fmt_f64_display(t3, freq_max);
+        return Err(BJ_ERR_INVALID_PARAMETER);
+    }
+    var fin: f64 = 0.0;
+    for (var k = 0; k < n; k = k + 1) { fin = fin + signal[k] * 0.0; }
+    if (fin != 0.0) { return Err(_bj_fu_bad("time signal contains non-finite values")); }
+    var nyq: f64 = 0.5 / dt;
+    if (freq_max > nyq && _bj_log_on(2) == 1) {
+        var lb[256];
+        var lt[24];
+        _bj_tx_init(&lt, &lb, 256);
+        _bj_tx_cstr(&lt, "find_eigenmodes: freq_max above Nyquist, spectrum is aliased freq_max=");
+        _bj_fmt_f64_debug(&lt, freq_max);
+        _bj_tx_cstr(&lt, " nyquist=");
+        _bj_fmt_f64_debug(&lt, nyq);
+        _bj_log_text(2, &lt);
+    }
+    if (_bj_log_on(4) == 1) {
+        var db[256];
+        var dtx[24];
+        _bj_tx_init(&dtx, &db, 256);
+        _bj_tx_cstr(&dtx, "finding eigenmodes via DFT n_samples=");
+        _bj_tx_u64(&dtx, n);
+        _bj_tx_cstr(&dtx, " dt=");
+        _bj_fmt_f64_debug(&dtx, dt);
+        _bj_tx_cstr(&dtx, " freq_min=");
+        _bj_fmt_f64_debug(&dtx, freq_min);
+        _bj_tx_cstr(&dtx, " freq_max=");
+        _bj_fmt_f64_debug(&dtx, freq_max);
+        _bj_tx_cstr(&dtx, " n_freq=");
+        _bj_tx_u64(&dtx, n_freq);
+        _bj_log_text(4, &dtx);
+    }
+    if (n_freq < 0 || n_freq > _BJ_FU_FL_MAX / 8) { return Err(_bj_fu_alloc_err("an eigenmode spectrum", n_freq)); }
+    var sb = fl_alloc(n_freq * 8);
+    if (sb == 0) { return Err(_bj_fu_alloc_err("an eigenmode spectrum", n_freq)); }
+    var spec: *f64 = _bj_fu_f64p(sb);
+    var span: f64 = freq_max - freq_min;
+    var nm: f64 = _bj_fu_u2f(n_freq - 1);
+    var df: f64 = span / nm;
+    var w2: f64 = 2.0 * _BJ_FU_PI;
+    for (var fi = 0; fi < n_freq; fi = fi + 1) {
+        var ff: f64 = f64_from(fi);
+        var fx: f64 = ff * df;
+        var fq: f64 = freq_min + fx;
+        var om: f64 = w2 * fq;
+        spec[fi] = _bj_fu_dft_magnitude(signal, n, om, dt);
+    }
+    var max_amp: f64 = 0.0;
+    for (var j = 0; j < n_freq; j = j + 1) {
+        var sj: f64 = spec[j];
+        max_amp = _bj_max(max_amp, sj);
+    }
+    var threshold: f64 = max_amp * 0.1;
+    var count = 0;
+    for (var i = 1; i < n_freq - 1; i = i + 1) {
+        var amp: f64 = spec[i];
+        if (amp > threshold && amp > spec[i - 1] && amp > spec[i + 1]) { count = count + 1; }
+    }
+    var rb = 0;
+    if (count > 0) {
+        rb = fl_alloc(count * 24);
+        if (rb == 0) {
+            fl_free(sb);
+            return Err(_bj_fu_alloc_err("an eigenmode result", count * 3));
+        }
+    }
+    var fr: *f64 = _bj_fu_f64p(rb);
+    var qs: *f64 = _bj_fu_f64p(rb + count * 8);
+    var am: *f64 = _bj_fu_f64p(rb + count * 16);
+    var m = 0;
+    for (var i2 = 1; i2 < n_freq - 1; i2 = i2 + 1) {
+        var a2: f64 = spec[i2];
+        if (a2 > threshold && a2 > spec[i2 - 1] && a2 > spec[i2 + 1]) {
+            var fi2: f64 = f64_from(i2);
+            var x2: f64 = fi2 * df;
+            var f0: f64 = freq_min + x2;
+            fr[m] = f0;
+            qs[m] = _bj_fu_quality(spec, n_freq, i2, f0, df);
+            am[m] = a2;
+            m = m + 1;
+        }
+    }
+    fl_free(sb);
+    out.count = count;
+    out.frequencies = 0;
+    out.quality_factors = 0;
+    out.amplitudes = 0;
+    if (count > 0) {
+        out.frequencies = rb;
+        out.quality_factors = rb + count * 8;
+        out.amplitudes = rb + count * 16;
+    }
+    return Ok(0);
+}
+
 # --- json.cyr ---
 
 # json.cyr — JSON for the serializable types: BjComplex (Rust hisab 1.4.0's `Complex`), BjFieldVector,

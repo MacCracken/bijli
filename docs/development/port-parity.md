@@ -5505,3 +5505,77 @@ phasor form (`src/nf2ff.cyr`); 1f the JSON of the serde types. Part 2 is the ran
   equal**, 1b's 430 unchanged and 18 new. `fdtd_media.tcyr` passes on all three (60). The gate is clean (no
   warnings; execution coverage 346 of 346 functions); validate.py 713,528 rows, 0 problems; the oracle's `--check`
   and clippy are clean. Next: 1d, `NonUniformGrid`, `fourth_order_derivative`, `CwAccumulator` and `find_eigenmodes`.
+
+## 97. M5 part 1d: the non-uniform grid, the fourth-order derivative, the CW accumulator, the eigenmodes (2026-11-15)
+
+- **`src/fdtd_util.cyr`**:
+  - **`BjNonUniformGrid`**: its axes are addresses and lengths in one freelist block (ADR 0002 row 2, amended).
+    - `uniform`, unchecked as Rust's, and `try_uniform`;
+    - `graded` into a caller buffer: Rust's (d_max/d_min)^(1/(n − 1)) on the correctly rounded pow, then `powi` with
+      i as an i32, as Rust truncates it;
+    - `validate`, axes in Rust's order;
+    - `min_spacing`, folded from +∞ with Rust's NaN-ignoring min;
+    - `try_courant_dt` and `courant_dt`: d_min/((2·√3)·c), 0.0 with a warning for an invalid grid;
+    - `extents` as a tuple, each axis summed from −0.0, so an empty axis is −0.0, as Rust's `Sum`.
+
+    Rust builds a grid from its public vectors (`graded`'s among them); the port's `BjNonUniformGrid_from_axes` copies
+    a caller's arrays.
+  - **`bj_fourth_order_derivative`** writes into the caller's `out`, which must not overlap the field. It is Rust's
+    stencil: (1/dx)·(c₁Δ₁ + c₂Δ₃) inside, (f[i+1] − f[i])·(1/dx) at the edges, and 0.0 padding. Fewer than two
+    samples, or an invalid dx (with a warning), give zeros.
+  - **`BjCwAccumulator`**: real, imag and a scratch row are one mapping.
+    - `new`, unchecked with Rust's warning, and `try_new`;
+    - `accumulate`: the correctly rounded sin_cos of ω·(step·dt), then real += f·(cos·dt) and imag −= f·(sin·dt). It
+      runs on `f64v_scale`, `f64v_add` and `f64v_sub` over a multiple of 4 (probe p19), with Rust's common prefix and
+      its one-time warning on a length mismatch;
+    - `try_accumulate`, which refuses the mismatch;
+    - `amplitude` √(re² + im²) and `phase` atan2(im, re), into the caller's `out`.
+
+    The phasors are e^{+jωt} already (ADR 0002 row 5).
+  - **`bj_find_eigenmodes`** into a `BjEigenmodeResult`, three arrays in one block that the caller frees:
+    - Rust's checks and texts in Rust's order;
+    - a Nyquist warning;
+    - `dft_magnitude`'s phasor recurrence, reseeded from the correctly rounded sin_cos every 1,024 samples (public as
+      `_bj_fu_dft_magnitude` for Rust's test of it);
+    - the strict local maxima above 10 % of the strongest, with `half_power_offset`'s interpolated Q.
+
+    A failed allocation is `Err(Allocation)` (row 9, amended).
+- **The grid**: 5,965 rows appended to `fdtd.tsv` (91,874, 27 MB):
+  - `uniform` and `try_uniform` over 64 sizes and 12 spacings;
+  - 1,173 gradings (class C): cell counts against every special pair, ratios of 10^±600, and seeded grades;
+  - 235 grids, each queried five ways: uniform grids, an empty axis, a special at each axis's ends and middle, the
+    Rust tests' grids, graded axes, extremes and seeded grids;
+  - 1,097 fourth-order derivatives: x, x², x³, specials inserted, and seeded fields, against special and typical dx;
+  - 811 CW scripts: the constructors over the specials, the Rust test's mismatches, generated fields at the packed
+    kernel's split sizes to 1,000 samples, the step at usize::MAX, special samples, frequencies and steps, and seeded
+    runs;
+  - 173 eigenmode searches: the Rust tests' validation; special dt, ranges and samples; and damped modes from exact
+    recurrences (x_{k+1} = a·x_k + b·x_{k−1}, so no input depends on a libm). The modes run at the bench's 4096 × 256,
+    in pairs, merged, at the band's edges, past Nyquist, and seeded.
+
+  The rows follow the oracle README's `black_box` rule. Wrapping 1b's pulse inputs in it changed no row.
+- **validate.py**: its transcription (`fu_eval`, `Cw`, `fu_eigen`) agreed with every row once the CW rows' builder was
+  fixed. The first emitter built the special-frequency `accumulate` scripts with the unchecked `new`, so those rows
+  are now named `CwAccumulator::new`, the name telling the model which constructor built them. `fdtd.cr.tsv` gains 7
+  CW rows where glibc's sin_cos or atan2 misrounds (18 in all). No grading or eigenmode search needed a correction.
+- **The port** passed every row on its first run. The harness's two 64 KB static scratch rows tripped the compiler's
+  static-data advisory (a warning), so they are allocated on first use instead.
+- **Rust tests**: all 25 are ported in `tests/fdtd_util.tcyr` (7 grid, 6 fourth-order, 5 CW, 7 eigenmode), with 73
+  assertions in all including the Cyrius-only groups: the error records, `from_axes`, the extents' −0.0, the free
+  functions, and a result with no mode. `test_cw_accumulator_length_mismatch` passes lengths and keeps its own copy
+  where Rust clones. The ledger: 686 ported, 9 n/a, 163 pending of 858.
+- **Surface parity**: the three types and two functions are matched (540 items), and their serde impls stay listed for
+  1f. The API snapshot gains 11 functions (2,102).
+- **Benchmarks** (the twin of part 1d, so 73 of 80 are twinned): `fdtd/find_eigenmodes_4096x256` takes 8.37–8.48 ms at
+  load 1.8, against Rust's 2.12 ms (3.9×). HEAD's 97 rows were unchanged, with median ratios of 1.00 and 1.00 over two
+  interleaved rounds at load 0.5–2.1; the 1D step rows swung both ways at HEAD too.
+
+  First written, the twin took 8.8–9.1 ms. Updating the phasor's imaginary part in place, one local fewer a sample,
+  saves about 5 % with the same bits. The rest is the per-sample chain (two products into the sums, four into the
+  phasor), about 2 ns a sample in Rust and about 8 here, which a two-lane form across frequencies could halve. That is
+  a finding for M8's performance pass, not this bite.
+- **Result, every target** (x86_64 ELF, x86_64 PE, aarch64): **18 modules, 0 failing; 628,057 ok, 0 failed, 0
+  measured, 0 pending, 91,436 accepted (ADR 01: 30,881; ADR 0002: 60,555)** over 719,493 rows; **all 462 digests
+  equal**, 1c's 448 unchanged and 14 new. `fdtd_util.tcyr` passes on all three (73). The gate is clean (no warnings;
+  execution coverage 357 of 357 functions); validate.py 719,493 rows, 0 problems; the oracle's `--check` and clippy
+  are clean. Next: 1e, NF2FF's phasor form.

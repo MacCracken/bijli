@@ -6,7 +6,7 @@
 
 **Rust column**: rust-old/bench-history.csv, run `2026-11-12T03:15:21Z` at `c95fd30` (the 1.2.0 tag's source), criterion medians. Taken under load (kimiya's gates ran beside it: load average about 2.6, median CI width 0.8 %, p90 4.2 %, max 13 %), so a ratio within the Rust row's own noise is read as parity (port plan §5 P4).
 
-**80 Rust benches:** 72 twinned, 0 not applicable, 8 pending.
+**80 Rust benches:** 73 twinned, 0 not applicable, 7 pending.
 
 | Rust bench | Rust | Cyrius twin | Cyrius | Cyrius / Rust |
 |---|---:|---|---:|---:|
@@ -48,7 +48,7 @@
 | `fdtd/3d_step_30x30x30` | 319.98 µs | pending (M6) | — | — |
 | `fdtd/3d_step_30x30x30_cpml8` | 494.96 µs | pending (M6) | — | — |
 | `fdtd/nf2ff_2d_80x80_180` | 193.01 µs | pending (M6) | — | — |
-| `fdtd/find_eigenmodes_4096x256` | 2.12 ms | pending (M5) | — | — |
+| `fdtd/find_eigenmodes_4096x256` | 2.12 ms | `fdtd/find_eigenmodes_4096x256` | 8.37 ms | 3.9× |
 | `circuit/rc_charging` | 0.50 ns | `circuit/rc_charging` | 67.00 ns | 134.0× |
 | `circuit/rl_current_rise` | 2.03 ns | `circuit/rl_current_rise` | 72.00 ns | 35.5× |
 | `circuit/rlc_impedance` | 1.53 ns | `circuit/rlc_impedance` | 17.00 ns | 11.1× |

@@ -3575,7 +3575,246 @@ fn _par_fd_subpixel(fp, fl): i64 {
     return 0;
 }
 
+# Two scratch rows for part 1d's sequences (a row's token list holds at most _PAR_MAX values), allocated on first use
+# (as static arrays they would pass the compiler's static-data advisory).
+var _par_fu_xa = 0;
+var _par_fu_ya = 0;
+fn _par_fu_bufs() {
+    if (_par_fu_xa == 0) {
+        _par_fu_xa = alloc(_PAR_MAX * 8);
+        _par_fu_ya = alloc(_PAR_MAX * 8);
+    }
+    return 0;
+}
+
+# The n f64 at p to the got list as a sequence (`v:n`, then each).
+fn _par_fu_got_seq(p, n) {
+    _par_got_seq(n);
+    for (var k = 0; k < n; k = k + 1) { _par_got_f(load64(p + k * 8)); }
+    return 0;
+}
+
+# A non-uniform grid's three axes to the got list.
+fn _par_fu_got_grid(g: *BjNonUniformGrid) {
+    _par_fu_got_seq(g.dx, g.nx);
+    _par_fu_got_seq(g.dy, g.ny);
+    _par_fu_got_seq(g.dz, g.nz);
+    return 0;
+}
+
+# A Result<f64> or Result<()> (unit = 1: `i:0`) to the got list.
+fn _par_fu_got_res(t, v, unit) {
+    if (is_err_result(t) == 1) { return _par_got_error(v); }
+    if (unit == 1) { return _par_got_i(0); }
+    _par_got_f(v);
+    return 0;
+}
+
+# The non-uniform grid's functions (M5 part 1d).
+fn _par_fu_grid(fp, fl): i64 {
+    _par_fu_bufs();
+    var g: BjNonUniformGrid;
+    if (_par_eq(fp, fl, "NonUniformGrid::uniform") == 1 || _par_eq(fp, fl, "NonUniformGrid::try_uniform") == 1) {
+        var s: f64 = _par_in(3);
+        var e = 0;
+        if (_par_eq(fp, fl, "NonUniformGrid::uniform") == 1) {
+            var t1, v1 = BjNonUniformGrid_uniform(_par_in(0), _par_in(1), _par_in(2), s, &g);
+            if (is_err_result(t1) == 1) { e = v1; }
+        } else {
+            var t2, v2 = BjNonUniformGrid_try_uniform(_par_in(0), _par_in(1), _par_in(2), s, &g);
+            if (is_err_result(t2) == 1) { e = v2; }
+        }
+        if (e != 0) { return _par_got_error(e) + 1; }
+        _par_fu_got_grid(&g);
+        BjNonUniformGrid_free(&g);
+        return 1;
+    }
+    if (_par_eq(fp, fl, "NonUniformGrid::graded") == 1) {
+        var n = _par_in(0);
+        var a: f64 = _par_in(1);
+        var b: f64 = _par_in(2);
+        var t3, v3 = BjNonUniformGrid_graded(n, a, b, _par_fd_f64p(_par_fu_xa));
+        if (is_err_result(t3) == 1) { return _par_got_error(v3) + 1; }
+        _par_fu_got_seq(_par_fu_xa, n);
+        return 1;
+    }
+    # A grid's queries: its axes from the inputs, copied into a grid.
+    var base = _par_fu_xa;
+    var nx = _par_in_f64s(0, base);
+    var ny = _par_in_f64s(1 + nx, base + nx * 8);
+    var nz = _par_in_f64s(2 + nx + ny, base + (nx + ny) * 8);
+    var tg, vg = BjNonUniformGrid_from_axes(_par_fd_f64p(base), nx, _par_fd_f64p(base + nx * 8), ny,
+      _par_fd_f64p(base + (nx + ny) * 8), nz, &g);
+    if (is_err_result(tg) == 1) { return 0 - 1; }
+    var done = 1;
+    if (_par_eq(fp, fl, "NonUniformGrid::validate") == 1) {
+        var t4, v4 = g.validate();
+        _par_fu_got_res(t4, v4, 1);
+    } elif (_par_eq(fp, fl, "NonUniformGrid::min_spacing") == 1) {
+        var m: f64 = g.min_spacing();
+        _par_got_f(m);
+    } elif (_par_eq(fp, fl, "NonUniformGrid::courant_dt") == 1) {
+        var c: f64 = g.courant_dt();
+        _par_got_f(c);
+    } elif (_par_eq(fp, fl, "NonUniformGrid::try_courant_dt") == 1) {
+        var t5, v5 = g.try_courant_dt();
+        _par_fu_got_res(t5, v5, 0);
+    } elif (_par_eq(fp, fl, "NonUniformGrid::extents") == 1) {
+        var ex, ey, ez = g.extents();
+        _par_got_f(ex);
+        _par_got_f(ey);
+        _par_got_f(ez);
+    } else {
+        done = 0;
+    }
+    BjNonUniformGrid_free(&g);
+    return done;
+}
+
+# A CW accumulator's state to the got list: n_samples, ω, dt, the length, the digests of real, imag, the amplitudes
+# and the phases, then each at the probes 0, n/2 and n − 1.
+fn _par_fu_cw_state(acc: *BjCwAccumulator) {
+    var n = acc.field_size;
+    _par_got_i(acc.n_samples);
+    _par_got_f(acc.omega);
+    _par_got_f(acc.dt);
+    _par_got_i(n);
+    acc.amplitude(_par_fd_f64p(_par_fu_xa));
+    acc.phase(_par_fd_f64p(_par_fu_ya));
+    _par_got_i(_par_fd_digest(acc.real, n));
+    _par_got_i(_par_fd_digest(acc.imag, n));
+    _par_got_i(_par_fd_digest(_par_fu_xa, n));
+    _par_got_i(_par_fd_digest(_par_fu_ya, n));
+    if (n == 0) { return 0; }
+    var pr: i64[3];
+    pr[0] = 0;
+    pr[1] = n / 2;
+    pr[2] = n - 1;
+    var re: *f64 = _par_fd_f64p(acc.real);
+    var im: *f64 = _par_fd_f64p(acc.imag);
+    var xs: *f64 = _par_fd_f64p(_par_fu_xa);
+    var ys: *f64 = _par_fd_f64p(_par_fu_ya);
+    for (var k = 0; k < 3; k = k + 1) {
+        var p = pr[k];
+        _par_got_f(re[p]);
+        _par_got_f(im[p]);
+        _par_got_f(xs[p]);
+        _par_got_f(ys[p]);
+    }
+    return 0;
+}
+
+# Replays a CW accumulator script (`CwAccumulator::new` rows by BjCwAccumulator_new, the others by try_new); 1
+# handled, -1 for an unknown opcode.
+fn _par_fu_cw(fp, fl): i64 {
+    _par_fu_bufs();
+    var acc: BjCwAccumulator;
+    var n = _par_in(0);
+    var fr: f64 = _par_in(1);
+    var dt: f64 = _par_in(2);
+    var e = 0;
+    if (_par_eq(fp, fl, "CwAccumulator::new") == 1) {
+        var t1, v1 = BjCwAccumulator_new(n, fr, dt, &acc);
+        if (is_err_result(t1) == 1) { e = v1; }
+    } else {
+        var t2, v2 = BjCwAccumulator_try_new(n, fr, dt, &acc);
+        if (is_err_result(t2) == 1) { e = v2; }
+    }
+    if (e != 0) { return _par_got_error(e) + 1; }
+    var k = 3;
+    while (k < _par_in_n) {
+        var code = _par_in(k);
+        if (code == 1 || code == 2) {
+            var step = _par_in(k + 1);
+            var len = _par_in_f64s(k + 2, _par_fu_xa);
+            if (code == 1) { acc.accumulate(_par_fd_f64p(_par_fu_xa), len, step); }
+            else {
+                var t3, v3 = acc.try_accumulate(_par_fd_f64p(_par_fu_xa), len, step);
+                if (is_err_result(t3) == 1) { _par_got_error(v3); }
+            }
+            k = k + 3 + len;
+        } elif (code == 3) {
+            var cnt = _par_in(k + 1);
+            var s0 = _par_in(k + 2);
+            var a: f64 = _par_in(k + 3);
+            var b: f64 = _par_in(k + 4);
+            for (var j = 0; j < cnt; j = j + 1) {
+                var gx: *f64 = _par_fd_f64p(_par_fu_xa);
+                for (var c = 0; c < n; c = c + 1) {
+                    var q: f64 = f64_from((s0 + j + c) % 11);
+                    gx[c] = a * q - b;
+                }
+                acc.accumulate(gx, n, s0 + j);
+            }
+            k = k + 5;
+        } else {
+            BjCwAccumulator_free(&acc);
+            return 0 - 1;
+        }
+    }
+    _par_fu_cw_state(&acc);
+    BjCwAccumulator_free(&acc);
+    return 1;
+}
+
+# find_eigenmodes: the signal given (`v:`) or generated by its recurrences, then dt, the range and n_freq.
+fn _par_fu_eigen(): i64 {
+    _par_fu_bufs();
+    var n = 0;
+    var k = 0;
+    if (load64(_par_in_k) == 118) {
+        n = _par_in_f64s(0, _par_fu_xa);
+        k = 1 + n;
+    } else {
+        n = _par_in(0);
+        var g = _par_in(1);
+        var sx: *f64 = _par_fd_f64p(_par_fu_xa);
+        for (var gi = 0; gi < g; gi = gi + 1) {
+            var x0: f64 = _par_in(2 + 4 * gi);
+            var x1: f64 = _par_in(3 + 4 * gi);
+            var a: f64 = _par_in(4 + 4 * gi);
+            var b: f64 = _par_in(5 + 4 * gi);
+            var prev: f64 = x0;
+            var cur: f64 = x1;
+            for (var j = 0; j < n; j = j + 1) {
+                var x: f64 = x0;
+                if (j == 1) { x = x1; }
+                if (j >= 2) {
+                    x = a * cur + b * prev;
+                    prev = cur;
+                    cur = x;
+                }
+                if (gi == 0) { sx[j] = x; }
+                else { sx[j] = sx[j] + x; }
+            }
+        }
+        k = 2 + 4 * g;
+    }
+    var dt: f64 = _par_in(k);
+    var fmin: f64 = _par_in(k + 1);
+    var fmax: f64 = _par_in(k + 2);
+    var r: BjEigenmodeResult;
+    var t, v = bj_find_eigenmodes(_par_fd_f64p(_par_fu_xa), n, dt, fmin, fmax, _par_in(k + 3), &r);
+    if (is_err_result(t) == 1) { return _par_got_error(v) + 1; }
+    _par_fu_got_seq(r.frequencies, r.count);
+    _par_fu_got_seq(r.quality_factors, r.count);
+    _par_fu_got_seq(r.amplitudes, r.count);
+    BjEigenmodeResult_free(&r);
+    return 1;
+}
+
 fn _par_fdtd(fp, fl): i64 {
+    if (memeq(fp, "NonUniformGrid::", 16) == 1) { return _par_fu_grid(fp, fl); }
+    if (memeq(fp, "CwAccumulator::", 15) == 1) { return _par_fu_cw(fp, fl); }
+    if (_par_eq(fp, fl, "fdtd::find_eigenmodes") == 1) { return _par_fu_eigen(); }
+    if (_par_eq(fp, fl, "fdtd::fourth_order_derivative") == 1) {
+        _par_fu_bufs();
+        var n = _par_in_f64s(0, _par_fu_xa);
+        var dx: f64 = _par_in(1 + n);
+        bj_fourth_order_derivative(_par_fd_f64p(_par_fu_xa), n, dx, _par_fd_f64p(_par_fu_ya));
+        _par_fu_got_seq(_par_fu_ya, n);
+        return 1;
+    }
     if (fl > 14 && memeq(fp, "fdtd::subpixel", 14) == 1) { return _par_fd_subpixel(fp, fl); }
     if (memeq(fp, "LossyMaterial::", 15) == 1 || memeq(fp, "DrudeMaterial::", 15) == 1
       || memeq(fp, "LorentzMaterial::", 17) == 1 || memeq(fp, "DebyeMaterial::", 15) == 1) {
@@ -3696,8 +3935,10 @@ public fn _par_c_bound(fp, fl): i64 {
     if (memeq(fp, "beam::", 6) == 1 || _par_eq(fp, fl, "GaussianBeam::gouy_phase") == 1) { return 0; }
     # rf's atan2, sin, cos, atan, log10 and acos (M4 part 1a): src/crmath.cyr's correctly rounded primitives.
     if (memeq(fp, "rf::", 4) == 1) { return 0; }
-    # fdtd.rs's pulses' exp and sin (M5 part 1b): src/crmath.cyr's correctly rounded primitives.
+    # fdtd.rs's pulses' exp and sin (M5 part 1b) and the eigenmodes' sin_cos (1d): src/crmath.cyr's correctly rounded
+    # primitives; graded's pow (1d).
     if (memeq(fp, "fdtd::", 6) == 1) { return 0; }
+    if (_par_eq(fp, fl, "NonUniformGrid::graded") == 1) { return 0; }
     if (_par_eq(fp, fl, "relativity::solve_retarded_time") == 1) { return 0; }
     if (_par_eq(fp, fl, "relativity::lienard_wiechert_fields") == 1) { return 0; }
     if (fl > 9 && memeq(fp, "circuit::", 9) == 1) { return 0; }

@@ -8891,6 +8891,7 @@ class FdScripts:
         c = golden_consts(root)
         self.K = (c["field::SPEED_OF_LIGHT"], c["field::EPSILON_0"], c["field::MU_0"])
         self.eps0 = c["field::EPSILON_0"]
+        self.c12 = (c["fdtd::FOURTH_ORDER_C1"], c["fdtd::FOURTH_ORDER_C2"])
         self.P = P
         self.prev, self.sim = None, None
 
@@ -9019,6 +9020,254 @@ def fm_eval(fn, v, EPS0):
         if fn == "fdtd::subpixel_permittivity_perpendicular_checked":
             return check or fl([perp])
     return None
+
+
+def fu_seq(toks, k):
+    """A `v:<len>` sequence at toks[k]: (its floats, the index after it)."""
+    n = int(toks[k][1])
+    return [b for _kind, b in toks[k + 1:k + 1 + n]], k + 1 + n
+
+
+def fu_seq_toks(xs):
+    return [("v", str(len(xs)))] + [("f", x) for x in xs]
+
+
+def fu_grid(toks):
+    dx, k = fu_seq(toks, 0)
+    dy, k = fu_seq(toks, k)
+    dz, k = fu_seq(toks, k)
+    return dx, dy, dz, k
+
+
+def fu_validate(dx, dy, dz):
+    for name, axis in (("dx", dx), ("dy", dy), ("dz", dz)):
+        if not axis:
+            return [("E", "InsufficientResolution"), ("s", "grid resolution too coarse: 0 cells for domain size 0")]
+        for v in axis:
+            if not fd_pos(v):
+                return ip_err(f"{name} contains invalid cell size {rust_display(v)}")
+    return None
+
+
+def fu_min_spacing(dx, dy, dz):
+    m = []
+    for axis in (dx, dy, dz):
+        acc = math.inf
+        for v in axis:
+            acc = rust_min(acc, v)
+        m.append(acc)
+    return rust_min(rust_min(m[0], m[1]), m[2])
+
+
+def fu_try_courant(dx, dy, dz, C):
+    bad = fu_validate(dx, dy, dz)
+    if bad is not None:
+        return bad
+    return [("f", fdiv(fu_min_spacing(dx, dy, dz), 2.0 * math.sqrt(3.0) * C))]
+
+
+def fu_sum(axis):
+    s = -0.0
+    for v in axis:
+        s = s + v
+    return s
+
+
+def fu_fourth(field, dx, C1, C2):
+    n = len(field)
+    d = [0.0] * n
+    if n < 2 or not fd_pos(dx):
+        return d
+    inv = 1.0 / dx
+    for i in range(1, n - 2):
+        d[i] = inv * (C1 * (field[i + 1] - field[i]) + C2 * (field[i + 2] - field[i - 1]))
+    d[0] = (field[1] - field[0]) * inv
+    d[n - 2] = (field[n - 1] - field[n - 2]) * inv
+    return d
+
+
+class Cw:
+    """fdtd.rs's `CwAccumulator`, transcribed on the primitives P."""
+
+    def __init__(self, n, freq, dt):
+        self.n, self.dt, self.omega = n, dt, 2.0 * math.pi * freq
+        self.re, self.im, self.ns, self.errs = [0.0] * n, [0.0] * n, 0, []
+
+    def accumulate(self, field, step, P):
+        t = float(step) * self.dt
+        arg = self.omega * t
+        s, c = P["sin"](arg), P["cos"](arg)
+        cos_dt, sin_dt = c * self.dt, s * self.dt
+        for k in range(min(len(field), self.n)):
+            self.re[k] = self.re[k] + field[k] * cos_dt
+            self.im[k] = self.im[k] - field[k] * sin_dt
+        self.ns += 1
+
+    def state(self, P):
+        n = self.n
+        amp = [fsqrt(r * r + q * q) for r, q in zip(self.re, self.im)]
+        ph = [P["atan2"](q, r) for r, q in zip(self.re, self.im)]
+        out = list(self.errs) + [("i", self.ns), ("f", self.omega), ("f", self.dt), ("i", n),
+                                 ("i", fd_digest(self.re)), ("i", fd_digest(self.im)), ("i", fd_digest(amp)),
+                                 ("i", fd_digest(ph))]
+        if n > 0:
+            for p in (0, n // 2, n - 1):
+                out += [("f", self.re[p]), ("f", self.im[p]), ("f", amp[p]), ("f", ph[p])]
+        return out
+
+
+def fu_cw(fn, toks, P):
+    n, freq, dt = toks[0][1] & FD_U64, toks[1][1], toks[2][1]
+    if fn != "CwAccumulator::new":
+        bad = fm_first(lambda: fm_nonneg("CW frequency", freq), lambda: fm_positive("dt", dt))
+        if bad is not None:
+            return bad
+    acc, k = Cw(n, freq, dt), 3
+    while k < len(toks):
+        code = toks[k][1]
+        if code in (1, 2):
+            step = toks[k + 1][1] & FD_U64
+            field, k = fu_seq(toks, k + 2)
+            if code == 2 and len(field) != n:
+                acc.errs += ip_err(f"CwAccumulator expects {n} samples, got {len(field)}")
+            else:
+                acc.accumulate(field, step, P)
+        else:
+            cnt, s0, a, b = toks[k + 1][1] & FD_U64, toks[k + 2][1] & FD_U64, toks[k + 3][1], toks[k + 4][1]
+            for j in range(cnt):
+                acc.accumulate([a * float((s0 + j + c) % 11) - b for c in range(n)], s0 + j, P)
+            k += 5
+    return acc.state(P)
+
+
+def fu_dft(signal, omega, dt, P):
+    """fdtd.rs's `dft_magnitude`: the phasor recurrence, reseeded every 1024 samples."""
+    od = omega * dt
+    wr, wi = P["cos"](od), -P["sin"](od)
+    re = im = 0.0
+    for start in range(0, len(signal), 1024):
+        arg = omega * float(start) * dt
+        zr, zi = P["cos"](arg), -P["sin"](arg)
+        for s in signal[start:start + 1024]:
+            re += s * zr
+            im += s * zi
+            zr, zi = zr * wr - zi * wi, zr * wi + zi * wr
+    return fsqrt(re * re + im * im) * dt
+
+
+def fu_half_power(spec, peak, d):
+    hp = spec[peak] / 1.4142135623730951
+    i = peak
+    while True:
+        nxt = i + d
+        if nxt < 0 or nxt >= len(spec):
+            return None
+        a_next, a_cur = spec[nxt], spec[i]
+        if a_next < hp:
+            return float(abs(i - peak)) + fdiv(a_cur - hp, a_cur - a_next)
+        if a_next > a_cur:
+            return None
+        i = nxt
+
+
+def fu_eigen(toks, P):
+    if toks[0][0] == "v":
+        signal, k = fu_seq(toks, 0)
+    else:
+        n, g = toks[0][1], int(toks[1][1])
+        gens = [[b for _kind, b in toks[2 + 4 * j:6 + 4 * j]] for j in range(g)]
+        signal = [0.0] * n
+        for gi, (x0, x1, a, b) in enumerate(gens):
+            prev, cur = x0, x1
+            for kk in range(n):
+                if kk == 0:
+                    x = x0
+                elif kk == 1:
+                    x = x1
+                else:
+                    x = a * cur + b * prev
+                    prev, cur = cur, x
+                signal[kk] = x if gi == 0 else signal[kk] + x
+        k = 2 + 4 * g
+    dt, fmin, fmax, n_freq = toks[k][1], toks[k + 1][1], toks[k + 2][1], toks[k + 3][1] & FD_U64
+    if not signal:
+        return ip_err("time signal is empty")
+    if n_freq < 2:
+        return ip_err(f"need at least two frequency points, got {n_freq}")
+    if not fd_pos(dt):
+        return ip_err(f"dt must be finite and positive, got {rust_display(dt)}")
+    if not (fmin >= 0.0 and fmin < fmax and math.isfinite(fmax)):
+        return ip_err(f"need 0 <= freq_min < freq_max < inf, got freq_min = {rust_display(fmin)}, "
+                      f"freq_max = {rust_display(fmax)}")
+    if any(not math.isfinite(s) for s in signal):
+        return ip_err("time signal contains non-finite values")
+    df = (fmax - fmin) / float(n_freq - 1)
+    spec = [fu_dft(signal, 2.0 * math.pi * (fmin + float(i) * df), dt, P) for i in range(n_freq)]
+    mx = 0.0
+    for a in spec:
+        mx = rust_max(mx, a)
+    thr = mx * 0.1
+    fr, qs, am = [], [], []
+    for i in range(1, n_freq - 1):
+        a = spec[i]
+        if a > thr and a > spec[i - 1] and a > spec[i + 1]:
+            f0 = fmin + float(i) * df
+            lft, rgt = fu_half_power(spec, i, -1), fu_half_power(spec, i, 1)
+            if lft is not None and rgt is not None:
+                bw = lft + rgt
+            elif lft is not None or rgt is not None:
+                bw = 2.0 * (lft if lft is not None else rgt)
+            else:
+                bw = None
+            fr.append(f0)
+            qs.append(fdiv(f0, bw * df) if bw is not None and bw > 0.0 else 0.0)
+            am.append(a)
+    return fu_seq_toks(fr) + fu_seq_toks(qs) + fu_seq_toks(am)
+
+
+def fu_eval(fn, ins_raw, P, K, C12):
+    """fdtd.rs's part-1d functions transcribed on the primitives P: a row's outputs, or None."""
+    toks = [parse_tok(x) for x in ins_raw.split(" ")] if ins_raw != "-" else []
+    if fn in ("NonUniformGrid::uniform", "NonUniformGrid::try_uniform"):
+        nx, ny, nz, s = toks[0][1] & FD_U64, toks[1][1] & FD_U64, toks[2][1] & FD_U64, toks[3][1]
+        if fn == "NonUniformGrid::try_uniform":
+            if min(nx, ny, nz) == 0:
+                return [("E", "InsufficientResolution"), ("s", "grid resolution too coarse: 0 cells for domain size 0")]
+            if not fd_pos(s):
+                return ip_err(f"grid spacing must be finite and positive, got {rust_display(s)}")
+        return fu_seq_toks([s] * nx) + fu_seq_toks([s] * ny) + fu_seq_toks([s] * nz)
+    if fn == "NonUniformGrid::graded":
+        n, a, b = toks[0][1] & FD_U64, toks[1][1], toks[2][1]
+        if n < 2:
+            return ip_err(f"need at least 2 cells for grading, got {n}")
+        if not fd_pos(a) or not fd_pos(b):
+            return ip_err(f"cell sizes must be finite and positive, got {rust_display(a)}, {rust_display(b)}")
+        ratio = P["pow"](b / a, 1.0 / float(n - 1))
+        return fu_seq_toks([a * powidf2_ieee(ratio, i) for i in range(n)])
+    if fn.startswith("NonUniformGrid::"):
+        dx, dy, dz, _k = fu_grid(toks)
+        if fn == "NonUniformGrid::validate":
+            return fu_validate(dx, dy, dz) or [("i", 0)]
+        if fn == "NonUniformGrid::min_spacing":
+            return [("f", fu_min_spacing(dx, dy, dz))]
+        if fn == "NonUniformGrid::try_courant_dt":
+            return fu_try_courant(dx, dy, dz, K[0])
+        if fn == "NonUniformGrid::courant_dt":
+            r = fu_try_courant(dx, dy, dz, K[0])
+            return r if r[0][0] == "f" else [("f", 0.0)]
+        if fn == "NonUniformGrid::extents":
+            return [("f", fu_sum(dx)), ("f", fu_sum(dy)), ("f", fu_sum(dz))]
+    if fn == "fdtd::fourth_order_derivative":
+        field, k = fu_seq(toks, 0)
+        return fu_seq_toks(fu_fourth(field, toks[k][1], *C12))
+    if fn.startswith("CwAccumulator::"):
+        return fu_cw(fn, toks, P)
+    if fn == "fdtd::find_eigenmodes":
+        return fu_eigen(toks, P)
+    return None
+
+
+PART_1D = ("NonUniformGrid::", "CwAccumulator::", "fdtd::fourth_order_derivative", "fdtd::find_eigenmodes")
 
 
 def fd_injects(fn, ins_raw) -> bool:
@@ -9168,6 +9417,8 @@ def validate_fdtd(root: Path, path: Path) -> list:
         if fn.startswith(("LossyMaterial::", "DrudeMaterial::", "LorentzMaterial::", "DebyeMaterial::",
                           "fdtd::subpixel")):
             want = fm_eval(fn, _v, fs.eps0)
+        elif fn.startswith(PART_1D):
+            want = fu_eval(fn, ins, GLIBC_P, fs.K, fs.c12)
         elif fn.startswith(("Fdtd1d::", "TfsfSource::", "fdtd::")):
             want = fs.eval(fn, ins)
         else:
@@ -9186,7 +9437,15 @@ def fdtd_corrections(root: Path, path: Path):
         out = []
         fs = FdScripts(root, MPFR_P)
         for fn, _cls, ins, outs, _v in sc_lines(path):
-            if not fn.startswith(("Fdtd1d::", "TfsfSource::", "fdtd::")) or fn.startswith("fdtd::subpixel"):
+            if fn.startswith(("NonUniformGrid::graded", "CwAccumulator::", "fdtd::find_eigenmodes")):
+                want = fu_eval(fn, ins, MPFR_P, fs.K, fs.c12)
+                old = wave_toks([parse_tok(x) for x in outs.split(" ")])
+                if not toks_same(want, old):
+                    out.append((fn, ins, wire(want), f"oracle {outs[:120]}; correctly rounded primitives give "
+                                                     f"{wire(want)[:60]}"))
+                continue
+            if not fn.startswith(("Fdtd1d::", "TfsfSource::", "fdtd::")) or fn.startswith(("fdtd::subpixel",
+                                                                                            "fdtd::fourth")):
                 continue                                    # + − × ÷ only: no primitive to correct
             if fn == "TfsfSource::new" and fs.tf_eval(fn, ins, True) != fs.tf_eval(fn, ins):
                 continue                                    # ADR 0002 row 3's: fdtd.adr.tsv maps it
