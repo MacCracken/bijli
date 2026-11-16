@@ -1,4 +1,4 @@
-# Handoff: the Cyrius port, mid-M5 Part 2 (2026-11-16, after 2d-4a)
+# Handoff: the Cyrius port, mid-M5 Part 2 (2026-11-16, after 2d-4b-1)
 
 For the next agent picking up the port. **Read first:** `CLAUDE.md` (the rules), [`state.md`](state.md) (live state),
 [`bijli-port-plan.md`](bijli-port-plan.md) (§0.1 holds the user's M5 Part 2 answers; the tracking table is near the
@@ -9,8 +9,8 @@ bite is done, the machinery, the scripts and the traps. Delete it once it has se
 
 ## Where it stands
 
-- **Committed through `3d58fad`** ("m5 2d-3 done"); 2d-4a is in the working tree for the user to commit ("m5 2d-4a
-  done").
+- **Committed through `41262c8`** ("m5 bit 2d-4a done"); 2d-4b-1 is in the working tree for the user to commit ("m5
+  2d-4b-1 done").
 - **M5 Part 1 is done** (§94–§99): the 1D grid, the pulses and TF/SF, the media, the utilities, NF2FF's phasor form,
   their JSON.
 - **M5 Part 2, the range-edge review**, runs on the user's answers of 2026-11-15 (plan §0.1). Done:
@@ -29,21 +29,25 @@ bite is done, the machinery, the scripts and the traps. Delete it once it has se
     2^-1021): 10 1D rows changed with it (row 18, §109);
   - 2d-4a, the CW accumulator: ω kept to 53 bits beside Rust's rounded `omega` (two private fields), the scalars with
     an unbounded exponent at their edges, the sums on the per-cell rule as d + k·a (b = 0), `amplitude` as BjComplex's
-    abs; the rule's marker now tests a zero product's factors (row 18, §110).
-- **Numbers after 2d-4a**: 18 modules, 640,997 ok, 0 failed, 118,884 accepted (ADR 01: 40,366; ADR 0002: 78,518)
-  over 759,881 rows; 475 digests equal on x86_64 ELF, x86_64 PE and aarch64. Ledger 691 ported, 9 n/a, 158 pending of
+    abs; the rule's marker now tests a zero product's factors (row 18, §110);
+  - 2d-4b-1, `dft_magnitude`: `_bj_fu_dft` takes ω as a 53-bit pair; Rust's recurrence where it is the unbounded chain
+    (ω·dt and the block seeds doubles, |w_r|, |w_i| ≥ 2^-959 once a call, the products s·z checked once a sample,
+    re/im finite, the magnitude in range), else `_bj_fu_dft_ux` (row 18, §111).
+- **Numbers after 2d-4b-1**: 18 modules, 641,034 ok, 0 failed, 118,919 accepted (ADR 01: 40,366; ADR 0002: 78,553)
+  over 759,953 rows; 475 digests equal on x86_64 ELF, x86_64 PE and aarch64. Ledger 691 ported, 9 n/a, 158 pending of
   858; API snapshot 2,116; benches 73 of 80 twinned; execution coverage 371 of 371.
-- **Next, 2d-4b: the eigenmode search.** `dft_magnitude` (8.2 ns a sample-step, its whole cost):
-  - the rotation z ← z·w never needs a per-sample check when |ω·dt| ≥ 2^-960 (or ω·dt = 0): |z| and |w| stay within
-    1 ± 10⁻¹² over a 1024-sample block, so in each component one product is at least 0.7·min(|w_r|, |w_i|) ≥ 2^-960
-    and absorbs the other's underflow (an RN(P ± p) with |p| < ulp(P)/4 is P). Check w once a call;
-  - the products s·z_r and s·z_i need a per-sample check (z's components have no lower bound): an underflowed product
-    moves re only while |re| < 2^-960; an overflow leaves re or im non-finite at the end. On a flag, rerun the whole
-    recurrence with an unbounded exponent;
-  - ω·dt and each block's (ω·1024b)·dt at their edges; the final √(re² + im²)·dt as BjComplex's abs, then ·dt rounded
-    once. `find_eigenmodes`' ω = 2πf past DBL_MAX (pass ω unbounded to the DFT), df = span/(n − 1) and f = f_min + i·df
-    below the range, the 10 % floor's max·0.1 below 2^-1022 (the test stays on the computed value, now 53-bit: plan
-    §0.1), half-power's spec/√2, its interpolation, and Q = f₀/(bw·df).
+- **Next, 2d-4b-2: the eigenmode search around the DFT** (`bj_find_eigenmodes`, `_bj_fu_half_power`, `_bj_fu_quality`):
+  - df = (f_max − f_min)/(n − 1) below the range (f_max subnormal-scale: Rust's df subnormal, or 0, which made every
+    frequency f_min), each f_i = f_min + i·df (output frequencies RN(f_i53), rounded once) and ω_i = 2π·f_i past
+    DBL_MAX (f past 2.86·10³⁰⁷, and Rust's (n − 1)·df can round past DBL_MAX at f_max = DBL_MAX: the last ω NaN blocks
+    the peak beside it): pass ω_i53 to `_bj_fu_dft` (its pair argument is ready);
+  - the 10 % floor's max·0.1 below 2^-1022: the test stays on the computed value (plan §0.1), now the 53-bit one
+    (`_bj_k_ux_cmp`);
+  - half-power: spec/√2 below the range (the walk's `a_next < hp` against the 53-bit hp), (a_cur − hp)/(a_cur − a_next),
+    the offsets, bw = l + r, and Q = f₀/(bw·df) (b past either end; f₀ the 53-bit frequency): Rust's chain with a
+    cheap check, else a ux version of the quality;
+  - validate.py's `fu_eigen` and `fu_half_power` under the port set; the grid: tiny and huge bands, n near 2 and large,
+    spectra below 2^-1022 (dt subnormal), f_max = DBL_MAX.
 - **Then**:
   - 2d-5, the utilities: `graded`'s d_max/d_min and ratio^i out of range, `extents`' partial sums (an unchecked grid's
     mixed signs), and `fourth_order_derivative`'s 1/dx (subnormal dx), its differences and its c₁Δ + c₂Δ′;
@@ -51,7 +55,7 @@ bite is done, the machinery, the scripts and the traps. Delete it once it has se
     correctly rounded);
   - then M5 is done; M6 (`Fdtd2d`, `Fdtd3d`, the CPML, `nf2ff_2d`, `Mode2d`, `CpmlParams`) follows, under the same
     per-cell rule.
-- **Corpus size**: `fdtd.tsv` is 38.4 MB (106,926 rows) and `json.tsv` 38.7 MB, against the 48 MiB cap that
+- **Corpus size**: `fdtd.tsv` is 38.5 MB (106,998 rows) and `json.tsv` 38.7 MB, against the 48 MiB cap that
   validate.py's `too_big` guards (§81). M6 will need `fdtd.tsv` split (a second module file, e.g. by milestone), and 2d
   may: watch the size after each regeneration.
 - **A recorded cost**: the 1D step runs 3.5–3.8× HEAD's with 2d-2a's scan (§107), the TF/SF step about 2× with

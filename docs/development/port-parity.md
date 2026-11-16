@@ -6207,3 +6207,55 @@ eigenmode search (`dft_magnitude`'s recurrence and magnitude, `find_eigenmodes`'
   equal**. `fdtd_util.tcyr` (86) passes on all three. The gate is clean (no warnings; execution coverage 371 of 371
   functions); validate.py 759,881 rows, 0 problems; the oracle's `--check` and clippy clean. Next: 2d-4b, the eigenmode
   search.
+
+## 111. M5 part 2d-4b-1: the DFT magnitude at its range edges (2026-11-16)
+
+2d-4b runs as 2d-4b-1, `dft_magnitude` (ω·dt, the block seeds, the recurrence, √(re² + im²)·dt), and 2d-4b-2,
+`find_eigenmodes` around it (df and the frequencies, ω past DBL_MAX, the 10 % floor, half-power and Q).
+
+- **The findings**: Rust's phasor recurrence (w = e^{−jω·dt}, each block of 1024 reseeded with e^{−jω·(1024b)·dt},
+  re += s·z_r, im += s·z_i, z ← z·w) and its magnitude lost the value where an operation left the normal range:
+  - √(re² + im²) squared past either end: a mode of 10¹⁵⁵ or more gave an ∞ spectrum (so a floor of ∞ and no mode),
+    one of 10⁻¹⁶⁰ or less a spectrum of 0 (no mode either); samples of ±10²⁰⁰ at ω·dt = π/2 gave ∞ for 2·10²⁰⁰;
+  - sums past DBL_MAX where the magnitude, times dt, is representable (two samples of DBL_MAX on dt = ¼: ∞ for
+    DBL_MAX/2);
+  - ω·dt or a block's seed past DBL_MAX, whose sine Rust took of ∞ (ω = 10³⁰⁰ on dt = 10¹⁰: NaN for
+    10044315450.73544);
+  - ω·dt below the range, and products s·z that underflow beside a small sum (ω·dt = 10⁻³⁰⁰ on samples 1, 10⁻³⁰⁰, −1:
+    0 for 2·10⁻³⁰⁰).
+- **ADR 0002 row 18, amended** (`src/fdtd_util.cyr`): `_bj_fu_dft` takes ω as a 53-bit value with an unbounded exponent
+  (2d-4b-2 passes ω past DBL_MAX) and runs Rust's recurrence where it is the unbounded chain, else the whole recurrence
+  with an unbounded exponent (`_bj_fu_dft_ux`: each operation to 53 bits, the sines and cosines of the 53-bit angles,
+  Payne–Hanek past DBL_MAX, the product with dt rounded once). The tests that choose:
+  - ω·dt and each block's (ω·1024b)·dt to 53 bits, a double (0, or normal) or the slow path;
+  - the rotation, once a call: |w_r| and |w_i| at least 2^-959 (or w = (1, ±0)). Then z ← z·w is the unbounded chain:
+    |z| and |w| stay within 1 ± 10⁻¹² over a block, so in each of z_r·w_r − z_i·w_i and z_r·w_i + z_i·w_r one product is
+    at least 0.7·2^-959, normal with an ulp/4 above 2^-1022, and absorbs the other's underflow;
+  - the products s·z_r and s·z_i, per sample on their exponent fields (one test, `(e_r − 1) | (e_i − 1) < 0`): an
+    underflow (a nonzero subnormal, or 0 from nonzero factors) counts where its sum is below 2^-960, which would
+    otherwise absorb it (`_bj_fu_dft_low`);
+  - re or im non-finite at the end (a product or sum past DBL_MAX);
+  - √(re² + im²) at BjComplex's abs edge, or its product with dt below the range (the unbounded chain there, rounded
+    once).
+- **validate.py**: `fu_dft_port` checks every operation instead of the rotation's bound (each product of the recurrence,
+  the rotation's four included, normal, an exact zero, or an underflow its sum's other term absorbs), so a gap in the
+  bound's argument would show as a failing row; `fu_dft_ux` is the unbounded recurrence on Fractions with MPFR's sine
+  and cosine at its widest range. `fu_eigen` under row 18 takes them; `fu_eigen_port` maps a row to row 18.
+- **The grid**: 72 eigenmode rows appended to `fdtd.tsv` (106,998; 38.5 MB): one damped mode scaled from 2^-1074 to
+  10³⁰⁰ in one block and two, on dt = 10⁻¹² and 1; alternating and constant samples near DBL_MAX on dt = 10⁻³⁰⁰ and 1;
+  ω·dt below 2^-959 and subnormal; ω·dt and the second block's seed past DBL_MAX; subnormal samples among normal ones;
+  and 16 seeded scales, steps and bands.
+- **The mapping**: **35 eigenmode rows** to row 18 (34 of the new ones, and part 1d's sample of DBL_MAX), all passing.
+  The rest of the new rows stay in range, or wait for 2d-4b-2's edges.
+- **Tests**: `tests/fdtd_util.tcyr`'s `cyrius_dft_edges` (5 assertions, 91 in all): the five cases above.
+- **Benchmarks**: the per-sample test is `fdtd/find_eigenmodes_4096x256`'s cost. The interleaved A/B against HEAD (two
+  rounds, load 3.2 to 12: another repo's benchmark, `rasayan`, ran beside it): 8.94–8.96 → 11.38–11.43 ms (1.27–1.28×)
+  in both rounds, every other row unchanged in the second (median ratio 1.00; the first's HEAD runs were disturbed,
+  0.83). A first form of the test, two compares joined by `||` with the zero-sample test outside, cost 1.37× in a
+  focused interleaved A/B (three rounds, load 7.6 to 8.6); the single test brought it to 1.27–1.28× (focused, load
+  about 12.5, two of three rounds clean).
+- **Result, every target** (x86_64 ELF, x86_64 PE, aarch64): **18 modules, 0 failing; 641,034 ok, 0 failed, 0
+  measured, 0 pending, 118,919 accepted (ADR 01: 40,366; ADR 0002: 78,553)** over 759,953 rows; **all 475 digests
+  equal**. `fdtd_util.tcyr` (91) passes on all three. The gate is clean (no warnings; execution coverage 371 of 371
+  functions); validate.py 759,953 rows, 0 problems; the oracle's `--check` and clippy clean. Next: 2d-4b-2, the
+  eigenmode search's frequencies, floor, half-power and Q.

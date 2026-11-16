@@ -32445,6 +32445,9 @@ private
 var _BJ_FU_INF: f64 = 0x7FF0000000000000;
 # 2^-1022: the normal range's floor.
 var _BJ_FU_DMIN: f64 = 0x0010000000000000;
+# 2^-959 and 2^-960: the DFT rotation's and sums' absorption bounds (M5 part 2d-4b-1).
+var _BJ_FU_2M959: f64 = 0x0400000000000000;
+var _BJ_FU_2M960: f64 = 0x03F0000000000000;
 # std::f64::consts::PI and SQRT_2.
 var _BJ_FU_PI: f64 = 3.141592653589793;
 var _BJ_FU_SQRT_2: f64 = 1.4142135623730951;
@@ -33076,11 +33079,35 @@ public fn BjEigenmodeResult_free(r: *BjEigenmodeResult): i64 {
     return 0;
 }
 
-# |Σᵢ sᵢ·e^{−jω·i·dt}|·dt over the n samples at signal, by Rust's phasor recurrence: one complex multiply a sample by
-# e^{−jω·dt}, the phasor reseeded from the correctly rounded sin_cos of ω·(1024·b)·dt at each block of 1024. Public
-# for tests/fdtd_util.tcyr (Rust's test of it reaches the private fn). Mirrors fdtd.rs's `dft_magnitude`.
+# ── the DFT magnitude at its range edges (ADR 0002 row 18, M5 part 2d-4b-1) ─────────────────────────────────────
+#
+# Rust's |Σᵢ sᵢ·e^{−jω·i·dt}|·dt runs a phasor recurrence: w = e^{−jω·dt}, each block of 1024 samples reseeded with
+# z = e^{−jω·(1024b)·dt}, then per sample re += s·z_r, im += s·z_i and z ← z·w, and last √(re² + im²)·dt. With an
+# unbounded exponent the chain differs from Rust's only where an operation leaves the normal range:
+# - ω·dt or a block's (ω·1024b)·dt below 2^-1022 or past DBL_MAX (its sine and cosine then of a 53-bit angle);
+# - the rotation z ← z·w, never, when |w_r| and |w_i| are both at least 2^-959 (or w = (1, ±0), ω·dt = 0): |z| and
+#   |w| stay within 1 ± 10⁻¹² over a block, so in each of z_r·w_r − z_i·w_i and z_r·w_i + z_i·w_r one product is at
+#   least 0.7·2^-959, a normal value whose ulp/4 exceeds 2^-1022, and the other, should it underflow, can't move
+#   their sum (RN(P ± p) = P for |p| < ulp(P)/4). That is checked once a call, on w;
+# - a product s·z_r or s·z_i that underflows (a nonzero subnormal, or 0 from nonzero factors) while its sum is below
+#   2^-960 (above, the same absorption); checked per sample on the products' exponent fields;
+# - a product or a sum past DBL_MAX, which leaves re or im non-finite at the end;
+# - √(re² + im²) at BjComplex's abs edge, or its product with dt below 2^-1022.
+# Where any holds for a finite ω and dt, the whole recurrence runs with an unbounded exponent, each operation to 53
+# bits, the sines and cosines of the 53-bit angles (Payne–Hanek past DBL_MAX), the product with dt rounded once.
+
+# (1, x) when the 53-bit x = s·2^e is a double, 0 or normal; else (0, 0.0).
 #must_use
-public fn _bj_fu_dft_magnitude(signal: *f64, n, omega: f64, dt: f64): f64 {
+fn _bj_fu_exact(s: f64, e): (i64, f64) {
+    if (s == 0.0) { return (1, s); }
+    if (e < 0 - 1022 || e > 1023) { return (0, 0.0); }
+    var x: f64 = _bj_k_ux_round(s, e, 0.0);
+    return (1, x);
+}
+
+# Rust's dft_magnitude on the double ω, unchecked: for a non-finite ω, dt or sample, where Rust's result stands.
+#must_use
+fn _bj_fu_dft_rust(signal: *f64, n, omega: f64, dt: f64): f64 {
     var od: f64 = omega * dt;
     var s1, c1 = _bj_sin_cos(od);
     var wr: f64 = c1;
@@ -33111,6 +33138,170 @@ public fn _bj_fu_dft_magnitude(signal: *f64, n, omega: f64, dt: f64): f64 {
     var r: f64 = f64_sqrt(m);
     var r2: f64 = r * dt;
     return r2;
+}
+
+# The recurrence with an unbounded exponent throughout (the section comment's slow path), for the 53-bit ω = ws·2^we
+# and a finite dt; a non-finite sample keeps Rust's chain.
+#must_use
+fn _bj_fu_dft_ux(signal: *f64, n, ws: f64, we, dt: f64): f64 {
+    for (var k = 0; k < n; k = k + 1) {
+        var z0: f64 = signal[k] * 0.0;
+        if (z0 != 0.0) {
+            var om: f64 = _bj_k_ux_round(ws, we, 0.0);
+            var rr: f64 = _bj_fu_dft_rust(signal, n, om, dt);
+            return rr;
+        }
+    }
+    var ds, de = _bj_k_ux_from(dt);
+    var os, oe = _bj_k_ux_mul(ws, we, ds, de);
+    var ws1, we1 = _bj_vx_sin53(os, oe);
+    var wrs, wre = _bj_vx_cos53(os, oe);
+    var wis: f64 = -ws1;
+    var wie = we1;
+    var rs: f64 = 0.0;
+    var rex = 0;
+    var is: f64 = 0.0;
+    var iex = 0;
+    var start = 0;
+    while (start < n) {
+        var bs, be = _bj_k_ux_from(_bj_fu_u2f(start));
+        var as, ae = _bj_k_ux_mul(ws, we, bs, be);
+        var gs, ge = _bj_k_ux_mul(as, ae, ds, de);
+        var zs0, ze0 = _bj_vx_sin53(gs, ge);
+        var zrs, zre = _bj_vx_cos53(gs, ge);
+        var zis: f64 = -zs0;
+        var zie = ze0;
+        var end = start + 1024;
+        if (end > n) { end = n; }
+        for (var i = start; i < end; i = i + 1) {
+            var ss, se = _bj_k_ux_from(signal[i]);
+            var prs, pre = _bj_k_ux_mul(ss, se, zrs, zre);
+            var nrs, nre = _bj_k_ux_add(rs, rex, prs, pre);
+            rs = nrs;
+            rex = nre;
+            var pis, pie = _bj_k_ux_mul(ss, se, zis, zie);
+            var nis, nie = _bj_k_ux_add(is, iex, pis, pie);
+            is = nis;
+            iex = nie;
+            var p1s, p1e = _bj_k_ux_mul(zrs, zre, wrs, wre);
+            var p2s, p2e = _bj_k_ux_mul(zis, zie, wis, wie);
+            var p3s, p3e = _bj_k_ux_mul(zrs, zre, wis, wie);
+            var p4s, p4e = _bj_k_ux_mul(zis, zie, wrs, wre);
+            var qrs, qre = _bj_k_ux_sub(p1s, p1e, p2s, p2e);
+            var qis, qie = _bj_k_ux_add(p3s, p3e, p4s, p4e);
+            zrs = qrs;
+            zre = qre;
+            zis = qis;
+            zie = qie;
+        }
+        start = end;
+    }
+    var r2s, r2e = _bj_k_ux_mul(rs, rex, rs, rex);
+    var i2s, i2e = _bj_k_ux_mul(is, iex, is, iex);
+    var ms, me = _bj_k_ux_add(r2s, r2e, i2s, i2e);
+    var qs, qe = _bj_k_ux_sqrt(ms, me);
+    var r: f64 = _bj_k_ux_mul_f64(qs, qe, ds, de);
+    return r;
+}
+
+# 1 when the product p = s·z, beside its sum's running value acc, is one the unbounded chain would change (the section
+# comment): a nonzero subnormal, or ±0 from a nonzero z (s is nonzero here), while |acc| < 2^-960.
+#must_use
+fn _bj_fu_dft_low(p: f64, z: f64, acc: f64): i64 {
+    if (((load64(&p) >> 52) & 2047) != 0) { return 0; }
+    if (p == 0.0 && z == 0.0) { return 0; }
+    var a: f64 = f64_abs(acc);
+    if (a >= _BJ_FU_2M960) { return 0; }
+    return 1;
+}
+
+# |Σᵢ sᵢ·e^{−jω·i·dt}|·dt over the n samples at signal for the 53-bit ω = ws·2^we, by Rust's phasor recurrence (one
+# complex multiply a sample by e^{−jω·dt}, the phasor reseeded from the correctly rounded sin_cos of ω·(1024·b)·dt at
+# each block of 1024), at its range edges as the section comment has it; a non-finite ω, dt or sample keeps Rust's.
+#must_use
+fn _bj_fu_dft(signal: *f64, n, ws: f64, we, dt: f64): f64 {
+    var fin: f64 = ws * 0.0 + dt * 0.0;
+    if (fin != 0.0) {
+        var om: f64 = _bj_k_ux_round(ws, we, 0.0);
+        var rr: f64 = _bj_fu_dft_rust(signal, n, om, dt);
+        return rr;
+    }
+    var ds, de = _bj_k_ux_from(dt);
+    var os, oe = _bj_k_ux_mul(ws, we, ds, de);
+    var ok, od = _bj_fu_exact(os, oe);
+    if (ok == 0) {
+        var u0: f64 = _bj_fu_dft_ux(signal, n, ws, we, dt);
+        return u0;
+    }
+    var s1, c1 = _bj_sin_cos(od);
+    var wr: f64 = c1;
+    var wi: f64 = -s1;
+    var awr: f64 = f64_abs(wr);
+    var awi: f64 = f64_abs(wi);
+    if (!((awr >= _BJ_FU_2M959 && awi >= _BJ_FU_2M959) || (wr == 1.0 && wi == 0.0))) {
+        var u1: f64 = _bj_fu_dft_ux(signal, n, ws, we, dt);
+        return u1;
+    }
+    var re: f64 = 0.0;
+    var im: f64 = 0.0;
+    var start = 0;
+    while (start < n) {
+        var bs, be = _bj_k_ux_from(_bj_fu_u2f(start));
+        var as, ae = _bj_k_ux_mul(ws, we, bs, be);
+        var gs, ge = _bj_k_ux_mul(as, ae, ds, de);
+        var okb, arg = _bj_fu_exact(gs, ge);
+        if (okb == 0) {
+            var u2: f64 = _bj_fu_dft_ux(signal, n, ws, we, dt);
+            return u2;
+        }
+        var s0, c0 = _bj_sin_cos(arg);
+        var zr: f64 = c0;
+        var zi: f64 = -s0;
+        var end = start + 1024;
+        if (end > n) { end = n; }
+        for (var i = start; i < end; i = i + 1) {
+            var s: f64 = signal[i];
+            var pr: f64 = s * zr;
+            var pi: f64 = s * zi;
+            # either product's exponent field 0 (a subnormal or a zero): (e − 1) is then negative, so one test
+            if (((((load64(&pr) >> 52) & 2047) - 1) | (((load64(&pi) >> 52) & 2047) - 1)) < 0) {
+                if (s != 0.0 && (_bj_fu_dft_low(pr, zr, re) == 1 || _bj_fu_dft_low(pi, zi, im) == 1)) {
+                    var u3: f64 = _bj_fu_dft_ux(signal, n, ws, we, dt);
+                    return u3;
+                }
+            }
+            re = re + pr;
+            im = im + pi;
+            var nr: f64 = zr * wr - zi * wi;
+            zi = zr * wi + zi * wr;
+            zr = nr;
+        }
+        start = end;
+    }
+    var fr: f64 = re * 0.0 + im * 0.0;
+    if (fr != 0.0) {
+        var u4: f64 = _bj_fu_dft_ux(signal, n, ws, we, dt);
+        return u4;
+    }
+    if (_bj_cx_plain(re, im) == 1) {
+        var m: f64 = re * re + im * im;
+        var r: f64 = f64_sqrt(m);
+        var r2: f64 = r * dt;
+        if (_bj_fu_prod_ok(r2, r, dt) == 1) { return r2; }
+    }
+    var us, ue = _bj_cx_ux_sumsq(re, im);
+    var qs, qe = _bj_k_ux_sqrt(us, ue);
+    var r3: f64 = _bj_k_ux_mul_f64(qs, qe, ds, de);
+    return r3;
+}
+
+# The DFT magnitude for a double ω: _bj_fu_dft on its exact value. Public for tests/fdtd_util.tcyr (Rust's test of it
+# reaches the private fn). Mirrors fdtd.rs's `dft_magnitude`.
+#must_use
+public fn _bj_fu_dft_magnitude(signal: *f64, n, omega: f64, dt: f64): f64 {
+    var ws, we = _bj_k_ux_from(omega);
+    var r: f64 = _bj_fu_dft(signal, n, ws, we, dt);
+    return r;
 }
 
 # The offset, in units of df (≥ 0), from the peak to its half-power crossing walking in direction dir (±1), linearly

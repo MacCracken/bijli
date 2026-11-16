@@ -9359,6 +9359,91 @@ def fu_dft(signal, omega, dt, P):
     return fsqrt(re * re + im * im) * dt
 
 
+FU_ABSORB = 2.0 ** -960                    # a sum's other term at least this absorbs an underflowed product
+
+
+def ux_double(a):
+    """The double a ux pair is, where it is one (0, or normal: binary64's rounding of it is exact), else None."""
+    v = a[0]
+    if isinstance(v, float):
+        return None
+    if v == 0:
+        return -0.0 if a[1] else 0.0
+    if Fraction(FS_DMIN) <= abs(v) < Fraction(2) ** 1024:
+        return float(v)
+    return None
+
+
+def fu_kept(p, x, y, other) -> bool:
+    """Rust's p = RN(x·y) leaves its sum with `other` as the unbounded chain's: p normal, or 0 from a zero factor, or
+    an underflow (a nonzero subnormal, or 0 from nonzero factors) beside |other| ≥ 2^-960, whose ulp/4 exceeds it."""
+    if math.isfinite(p) and abs(p) >= FS_DMIN:
+        return True
+    if p == 0.0 and (x == 0.0 or y == 0.0):
+        return True
+    if not math.isfinite(p):
+        return False
+    return abs(other) >= FU_ABSORB
+
+
+def fu_dft_ux(signal, w53, dt):
+    """dft_magnitude with an unbounded exponent throughout: each operation to 53 bits, the sines and cosines of the
+    53-bit angles by MPFR (its widest range past DBL_MAX), the product with dt rounded once."""
+    d53 = ux(dt)
+    od = ux_mul(w53, d53)
+    wr, s1 = fs_cos53(od), fs_sin53(od)
+    wi = (-s1[0], not s1[1])
+    re = im = (Fraction(0), False)
+    for start in range(0, len(signal), 1024):
+        g = ux_mul(ux_mul(w53, ux(float(start))), d53)
+        zr, s0 = fs_cos53(g), fs_sin53(g)
+        zi = (-s0[0], not s0[1])
+        for x in signal[start:start + 1024]:
+            u = ux(x)
+            re, im = ux_add(re, ux_mul(u, zr)), ux_add(im, ux_mul(u, zi))
+            zr, zi = ux_sub(ux_mul(zr, wr), ux_mul(zi, wi)), ux_add(ux_mul(zr, wi), ux_mul(zi, wr))
+    m = ux_sqrt(ux_add(ux_mul(re, re), ux_mul(im, im)))
+    return ux_fin(ux_mul(m, d53, r=lambda v: v))
+
+
+def fu_dft_port(signal, w53, dt, omega):
+    """The port's dft_magnitude (ADR 0002 row 18, M5 part 2d-4b-1): Rust's recurrence on correctly rounded primitives
+    where it is the unbounded chain, judged operation by operation (every product and sum, the rotation's included),
+    else fu_dft_ux; a non-finite ω, dt or sample keeps Rust's."""
+    P = MPFR_P
+    if w53 is None or not math.isfinite(dt) or any(not math.isfinite(x) for x in signal):
+        return fu_dft(signal, omega, dt, P)
+    d53 = ux(dt)
+    od = ux_double(ux_mul(w53, d53))
+    if od is None:
+        return fu_dft_ux(signal, w53, dt)
+    wr, wi = P["cos"](od), -P["sin"](od)
+    re = im = 0.0
+    for start in range(0, len(signal), 1024):
+        arg = ux_double(ux_mul(ux_mul(w53, ux(float(start))), d53))
+        if arg is None:
+            return fu_dft_ux(signal, w53, dt)
+        zr, zi = P["cos"](arg), -P["sin"](arg)
+        for x in signal[start:start + 1024]:
+            pr, pi = x * zr, x * zi
+            if not (fu_kept(pr, x, zr, re) and fu_kept(pi, x, zi, im)):
+                return fu_dft_ux(signal, w53, dt)
+            re, im = re + pr, im + pi
+            p1, p2, p3, p4 = zr * wr, zi * wi, zr * wi, zi * wr
+            if not (fu_kept(p1, zr, wr, p2) and fu_kept(p2, zi, wi, p1) and fu_kept(p3, zr, wi, p4)
+                    and fu_kept(p4, zi, wr, p3)):
+                return fu_dft_ux(signal, w53, dt)
+            zr, zi = p1 - p2, p3 + p4
+    if not (math.isfinite(re) and math.isfinite(im)):
+        return fu_dft_ux(signal, w53, dt)
+    if cx_plain(re, im):
+        r = fsqrt(re * re + im * im)
+        r2 = r * dt
+        if fd_prod_ok(r2, r, dt):
+            return r2
+    return ux_fin(ux_mul(ux_sqrt(ux_sumsq(re, im)), d53, r=lambda v: v))
+
+
 def fu_half_power(spec, peak, d):
     hp = spec[peak] / 1.4142135623730951
     i = peak
@@ -9374,7 +9459,7 @@ def fu_half_power(spec, peak, d):
         i = nxt
 
 
-def fu_eigen(toks, P):
+def fu_eigen(toks, P, port=frozenset()):
     if toks[0][0] == "v":
         signal, k = fu_seq(toks, 0)
     else:
@@ -9406,7 +9491,11 @@ def fu_eigen(toks, P):
     if any(not math.isfinite(s) for s in signal):
         return ip_err("time signal contains non-finite values")
     df = (fmax - fmin) / float(n_freq - 1)
-    spec = [fu_dft(signal, 2.0 * math.pi * (fmin + float(i) * df), dt, P) for i in range(n_freq)]
+    if "18" in port:                                # ADR 0002 row 18 (M5 part 2d-4b-1): the DFT at its range edges
+        oms = [2.0 * math.pi * (fmin + float(i) * df) for i in range(n_freq)]
+        spec = [fu_dft_port(signal, ux(om) if math.isfinite(om) else None, dt, om) for om in oms]
+    else:
+        spec = [fu_dft(signal, 2.0 * math.pi * (fmin + float(i) * df), dt, P) for i in range(n_freq)]
     mx = 0.0
     for a in spec:
         mx = rust_max(mx, a)
@@ -9915,6 +10004,8 @@ def fdtd_corrections(root: Path, path: Path):
                     continue                                # ADR 0002 row 42's: fdtd.adr.tsv maps it
                 if fn.startswith("CwAccumulator::") and not toks_same(*fu_cw_port(fn, ins)):
                     continue                                # ADR 0002 row 18's: fdtd.adr.tsv maps it
+                if fn == "fdtd::find_eigenmodes" and not toks_same(*fu_eigen_port(ins)):
+                    continue                                # ADR 0002 row 18's: fdtd.adr.tsv maps it
                 if fn == "fdtd::nf2ff_2d_phasor" and not toks_same(*fu_nf2ff_port(fn, ins, fs.K, fs.c12)):
                     continue                                # ADR 0002 row 17's: fdtd.adr.tsv maps it
                 old = wave_toks([parse_tok(x) for x in outs.split(" ")])
@@ -9985,6 +10076,13 @@ def fu_graded_port(fn, ins, K, c12):
     up = d_max > d_min
     cells = [min(x, d_max) if up else (d_max if x < d_max else x) for _k, x in base[1:-1]]
     return base[:1] + [("f", x) for x in cells] + [("f", d_max)], base
+
+
+def fu_eigen_port(ins):
+    """The port's `find_eigenmodes` (ADR 0002 row 18, M5 part 2d-4b) on correctly rounded primitives. Returns (the
+    port's tokens, Rust's on those primitives)."""
+    toks = [parse_tok(x) for x in ins.split(" ")]
+    return fu_eigen(toks, MPFR_P, FD_PORT), fu_eigen(toks, MPFR_P)
 
 
 def fu_cw_port(fn, ins):
@@ -10089,6 +10187,11 @@ def fdtd_adr_rows(root: Path, path: Path) -> list:
             continue
         if fn.startswith("CwAccumulator::"):
             want, base = fu_cw_port(fn, ins)
+            if not toks_same(want, base) and not toks_same(want, wave_toks([parse_tok(x) for x in outs.split(" ")])):
+                out.append((fn, ins, wire(want), "18", f"oracle {outs[:120]}; ADR 0002 row 18: the range edge"))
+            continue
+        if fn == "fdtd::find_eigenmodes":
+            want, base = fu_eigen_port(ins)
             if not toks_same(want, base) and not toks_same(want, wave_toks([parse_tok(x) for x in outs.split(" ")])):
                 out.append((fn, ins, wire(want), "18", f"oracle {outs[:120]}; ADR 0002 row 18: the range edge"))
             continue

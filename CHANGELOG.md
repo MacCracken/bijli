@@ -481,6 +481,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
   cell without a difference (d + k·a) and tests a zero product's factors. A Cyrius-only bench,
   `fdtd/cw_accumulate_1000`. `fdtd.tsv` grows by 212 CW rows (106,926; 38.4 MB); `fdtd.adr.tsv` maps 226 CW rows to
   row 18. 2d-4b, the eigenmode search, follows.
+- **Cyrius port, M5 part 2d-4b-1 — the DFT magnitude at its range edges** (`src/fdtd_util.cyr`): `dft_magnitude`'s
+  recurrence with an unbounded exponent where it leaves the range (ADR 0002 row 18 amended, see Fixed), its ω a 53-bit
+  value for 2d-4b-2. `fdtd.tsv` grows by 72 eigenmode rows (106,998; 38.5 MB); `fdtd.adr.tsv` maps 35 to row 18.
 
 ### Fixed
 
@@ -1012,6 +1015,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
   where it leaves the range, the sums on the per-cell rule. Cost: two scans per accumulation, the new Cyrius-only
   `fdtd/cw_accumulate_1000` 3.48–3.95 → 11.3–12.4 µs (about 3.2×); `fdtd/tfsf_step_200` 2.34–2.51 → 1.92 µs, its quiet
   Mur ends no longer rerun (`port-parity.md` §110).
+- **fdtd** (ADR 0002 row 18 amended, M5 part 2d-4b-1): `find_eigenmodes`' DFT lost its values at the range edges: a
+  mode of 10¹⁵⁵ or more squared past DBL_MAX (an ∞ spectrum, so no mode found), one of 10⁻¹⁶⁰ or less underflowed (a
+  spectrum of 0, no mode either), sums past DBL_MAX gave ∞ where the magnitude times dt is DBL_MAX/2, and ω·dt past
+  DBL_MAX gave NaN. Where an operation leaves the range, the recurrence now runs with an unbounded exponent; Rust's
+  stands elsewhere, the rotation proved exact once a call and the products checked once a sample. Cost: that
+  check, `fdtd/find_eigenmodes_4096x256` 8.94–8.96 → 11.38–11.43 ms (1.27–1.28×) (`port-parity.md` §111).
 
 ### Performance
 

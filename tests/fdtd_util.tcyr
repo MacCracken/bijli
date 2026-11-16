@@ -620,6 +620,40 @@ fn main() {
     assert(ca2[0] == cf2[0] && ca2[1] == cf2[1], "amplitudes 1e200 and 1e-200: squares past either end (Rust's ∞, 0)");
     BjCwAccumulator_free(&cw5);
 
+    # ADR 0002 row 18 (M5 part 2d-4b-1): the DFT magnitude at its range edges, the whole recurrence with an unbounded
+    # exponent there. The expectations are validate.py's model of the port.
+    test_group("cyrius_dft_edges");
+    var dgs: f64[4];
+    var hpi: f64 = _bj_from_bits(0x3ff921fb54442d18);
+    var e200: f64 = _bj_from_bits(0x6974e718d7d7625a);
+    dgs[0] = e200;
+    dgs[1] = 0.0;
+    dgs[2] = -e200;
+    dgs[3] = 0.0;
+    var dm1: f64 = _bj_fu_dft_magnitude(&dgs, 4, hpi, 1.0);
+    assert(dm1 == _bj_from_bits(0x6984e718d7d7625a), "±1e200 at ω·dt = π/2: 2e200 (Rust's re² past DBL_MAX, ∞)");
+    var e200n: f64 = _bj_from_bits(0x16687e92154ef7ac);
+    dgs[0] = e200n;
+    dgs[2] = -e200n;
+    var dm2: f64 = _bj_fu_dft_magnitude(&dgs, 4, hpi, 1.0);
+    assert(dm2 == _bj_from_bits(0x16787e92154ef7ac), "±1e-200: 2e-200 (Rust's re² underflowed, 0)");
+    dgs[0] = 1.0;
+    dgs[1] = 2.0;
+    var dm3: f64 = _bj_fu_dft_magnitude(&dgs, 2, _bj_from_bits(0x7e37e43c8800759c), _bj_from_bits(0x4202a05f20000000));
+    assert(dm3 == _bj_from_bits(0x4202b580b9d5e22e),
+      "ω·dt = 10³¹⁰ past DBL_MAX: its sine and cosine by Payne–Hanek, 10044315450.73544 (Rust's NaN)");
+    var dmx: f64 = _bj_from_bits(0x7fefffffffffffff);
+    dgs[0] = dmx;
+    dgs[1] = dmx;
+    var dm4: f64 = _bj_fu_dft_magnitude(&dgs, 2, 0.0, 0.25);
+    assert(dm4 == _bj_from_bits(0x7fdfffffffffffff), "2·DBL_MAX·¼ (Rust's sum past DBL_MAX, ∞)");
+    var e300n: f64 = _bj_from_bits(0x1a56e1fc2f8f359);
+    dgs[0] = 1.0;
+    dgs[1] = e300n;
+    dgs[2] = -1.0;
+    var dm5: f64 = _bj_fu_dft_magnitude(&dgs, 3, e300n, 1.0);
+    assert(dm5 == _bj_from_bits(0x1b56e1fc2f8f359), "ω·dt = 1e-300, below the rotation's bound: 2e-300 (Rust's 0)");
+
     return assert_summary();
 }
 

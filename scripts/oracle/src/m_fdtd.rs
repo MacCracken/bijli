@@ -2188,6 +2188,46 @@ fn emit_2d4a(r: &mut Rows) {
     }
 }
 
+// ── part 2d-4b-1: the DFT magnitude at its range edges (ADR 0002 row 18) ─────────────────────────────────────────
+
+/// Eigenmode searches whose DFT leaves the normal range (the port reruns the recurrence with an unbounded exponent,
+/// ADR 0002 row 18): one damped mode scaled from 2^-1074 to 10³⁰⁰ (re² past either end, the products s·z underflowing),
+/// in one block and two, on dt = 10⁻¹² and 1; alternating and constant samples near DBL_MAX (sums past DBL_MAX) on a dt
+/// that brings the magnitude back; ω·dt below 2^-959 (the rotation's bound) and subnormal; ω·dt and a block's seed
+/// (ω·1024b)·dt past DBL_MAX; subnormal samples among normal ones; and seeded scales, steps and bands.
+fn emit_2d4b1(r: &mut Rows) {
+    let one = |x1: f64, a: f64, b: f64| [0.0, x1, a, b];
+    for x1 in [1e150, 1e155, 1e200, 1e300, 1e-150, 1e-160, 1e-200, 1e-300, 1e-310, f64::from_bits(1)] {
+        for n in [256, 2048] {
+            r.eigen(&Signal::Generated(n, vec![one(x1, 1.95, -0.99)]), 1e-12, 1e9, 1e11, 32);
+            r.eigen(&Signal::Generated(n, vec![one(x1, 1.95, -0.99)]), 1.0, 0.0, 0.5, 32);
+        }
+    }
+    let alt: Vec<f64> = (0..64).map(|k| if k % 2 == 0 { f64::MAX } else { -f64::MAX }).collect();
+    for sig in [Signal::Given(alt), Signal::Given(vec![f64::MAX; 64]), Signal::Given(vec![1.5e308; 3])] {
+        r.eigen(&sig, 1e-300, 0.0, 5e299, 33);
+        r.eigen(&sig, 1.0, 0.0, 0.5, 9);
+    }
+    let s30 = Signal::Generated(1500, vec![one(1.0, 1.95, -0.99)]);
+    for (dt, fmin, fmax) in [(1.0, 0.0, 1e-290), (1.0, 0.0, 1e-300), (1e-300, 0.0, 1e-10), (1e-300, 1e-12, 1e-10),
+                             (1e10, 1e300, 2e300), (1e6, 1e300, 2e300), (1e100, 1e200, 4e200)] {
+        r.eigen(&s30, dt, fmin, fmax, 16);
+    }
+    let mixed = Signal::Given(vec![f64::from_bits(1), -1e-310, 0.0, 2.2250738585072014e-308, 1.0, -0.5, 1e-320, 0.25]);
+    for (dt, fmax) in [(1.0, 0.5), (1e-12, 5e11), (1e300, 5e-301)] {
+        r.eigen(&mixed, dt, 0.0, fmax, 9);
+    }
+    let mut rng = Rng::new(0x2d4b_d1f7);
+    for _ in 0..16 {
+        let n = usize::try_from(rng.int(16, 1200)).unwrap_or(16);
+        let gens = vec![one(rng.signed_log_uniform(-323.0, 300.0), rng.uniform(-1.98, 1.98), -rng.uniform(0.95, 0.999))];
+        let dt = rng.log_uniform(-300.0, 300.0);
+        let fmax = 0.5 / dt * rng.uniform(0.1, 1.0);
+        let nf = usize::try_from(rng.int(2, 40)).unwrap_or(2);
+        r.eigen(&Signal::Generated(n, gens), dt, 0.0, fmax, nf);
+    }
+}
+
 pub fn emit() -> Module {
     let mut r = Rows { m: Module::new("fdtd"), keys: BTreeSet::new() };
     emit_1a(&mut r);
@@ -2208,5 +2248,6 @@ pub fn emit() -> Module {
     emit_2d2b(&mut r);
     emit_2d3(&mut r);
     emit_2d4a(&mut r);
+    emit_2d4b1(&mut r);
     r.m
 }
