@@ -1798,6 +1798,37 @@ fn emit_2a2(r: &mut Rows) {
     }
 }
 
+// ── part 2a-3: the grading's last cell (ADR 0002 row 42) ───────────────────────────────────────────────────────────
+
+/// `NonUniformGrid::graded`, whose last cell the port sets to d_max and whose cells it holds at d_max (ADR 0002 row
+/// 42): increasing and decreasing gradings, a ratio of 1 and ones an ulp from it, powers of two whose ratio is exact,
+/// wide ratios, n from 2 to 1000, ratios 1 ± 10⁻ᵏ whose interior passes d_max, and seeded gradings.
+fn emit_2a3(r: &mut Rows) {
+    let pairs = [(1e-4, 1e-3), (1e-3, 1e-4), (1.0, 1.0), (1.0, 1.0f64.next_up()), (1.0, 1.0f64.next_down()),
+                 (1e-9, 1.0), (1.0, 1e9), (0.1, 0.3), (2.0, 1024.0), (1.0, 3.0), (1e-300, 1e-290), (1e290, 1e300)];
+    for n in [2, 3, 4, 7, 10, 33, 100, 257, 1000] {
+        for (a, b) in pairs {
+            r.graded(n, a, b);
+        }
+    }
+    // Ratios within (n − 1)²·2^-53 of 1, whose interior Rust's powers carry past d_max (the port holds it there).
+    for n in [10, 100, 1000] {
+        for k in 4..16 {
+            for s in [1.0, -1.0] {
+                for a in [1.0, 1e-3, 0.37] {
+                    r.graded(n, a, a * (1.0 + s * 10f64.powi(-k)));
+                }
+            }
+        }
+    }
+    let mut rng = Rng::new(0x2a3_0042);
+    for _ in 0..300 {
+        let n = 2 + (rng.unit() * 200.0) as usize;
+        let a = rng.log_uniform(-6.0, 0.0);
+        r.graded(n, a, a * rng.log_uniform(-3.0, 3.0));
+    }
+}
+
 pub fn emit() -> Module {
     let mut r = Rows { m: Module::new("fdtd"), keys: BTreeSet::new() };
     emit_1a(&mut r);
@@ -1810,5 +1841,6 @@ pub fn emit() -> Module {
     emit_2a1a(&mut r);
     emit_2a1b(&mut r);
     emit_2a2(&mut r);
+    emit_2a3(&mut r);
     r.m
 }

@@ -443,6 +443,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
 - **Cyrius port, M5 part 2a-2 — the subpixel means rounded once** (`src/fdtd_media.cyr`): both means are rounded once
   from their exact values on part 2a-1a's engine (ADR 0002 row 41, see Fixed). `fdtd.tsv` grows by 4,371 rows
   (99,730); `fdtd.adr.tsv` maps 2,371 rows to row 41.
+- **Cyrius port, M5 part 2a-3 — the grading's ends** (`src/fdtd_util.cyr`): `BjNonUniformGrid_graded`'s last cell is
+  exactly d_max with no cell past it, and a cell index past 2³¹ no longer wraps (ADR 0002 row 42, see Fixed).
+  `fdtd.tsv` grows by 620 rows (100,350); `fdtd.adr.tsv` maps 913 rows to row 42. This completes 2a, the user's
+  answers.
 
 ### Fixed
 
@@ -919,6 +923,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
   DBL_MAX cells was ∞ and of the least subnormal 0. Both are now rounded once from their exact values, (1 − f)ε₁ + f·ε₂
   and ε₁ε₂/((1 − f)ε₂ + f·ε₁): exact for a uniform cell and always within [ε₁, ε₂]. Cost: about 0.35 µs a mean (the
   Cyrius-only `fdtd/media_coefficients` 3.96 → 4.27–4.32 µs) (`port-parity.md` §102).
+- **fdtd** (ADR 0002 row 42, M5 part 2a-3, the user's answer of 2026-11-15): `NonUniformGrid::graded`'s last cell
+  missed d_max, in 97 % of seeded gradings and by up to 270 ulps for n ≤ 200 (`graded(10, 1e-4, 1e-3)` ended at
+  0.0010000000000000005); it is now exactly d_max. For a ratio within about (n − 1)²·2⁻⁵³ of 1 the interior ran past
+  d_max (`graded(10, 1, 1.000000000000001)` reached 1.000000000000002), so such cells are now held at d_max and the
+  grading stays monotone; otherwise the interior is unchanged. Its power took the cell index as an i32, so past 2³¹
+  cells the exponent wrapped and the cells shrank; the whole index is used now (`port-parity.md` §103).
 
 ### Performance
 

@@ -157,10 +157,22 @@ public fn BjNonUniformGrid_free(g: *BjNonUniformGrid): i64 {
     return 0;
 }
 
+# Cell i of a geometric grading, d_min·ratio^i (Rust's powi, on the whole usize i: Rust's `i as i32` wrapped past 2³¹
+# cells, ADR 0002 row 42). Public for tests/fdtd_util.tcyr, which can't build a grid of 2³¹ cells.
+#must_use
+public fn _bj_fu_graded_cell(d_min: f64, ratio: f64, i): f64 {
+    var p: f64 = _bj_powi(ratio, i);
+    var d: f64 = d_min * p;
+    return d;
+}
+
 # Geometric grading from d_min to d_max over n cells into out[0..n]: d_i = d_min·ratio^i, ratio =
-# (d_max/d_min)^(1/(n − 1)) (Rust's powf, correctly rounded, then powi with i as an i32, as Rust truncates it). Ok(0),
-# or with out untouched Err(InvalidParameter) "need at least 2 cells for grading, got {n}" or "cell sizes must be
-# finite and positive, got {d_min}, {d_max}". out holds n f64. Mirrors `NonUniformGrid::graded`.
+# (d_max/d_min)^(1/(n − 1)) (Rust's powf, correctly rounded, then powi), the last cell exactly d_max and no cell past
+# it (ADR 0002 row 42, the user's answers of 2026-11-15 and 2026-11-16: Rust's d_min·ratio^(n − 1) missed d_max in
+# 97 % of cases, by up to 270 ulps for n ≤ 200, and for a ratio within about (n − 1)²·2^-53 of 1 its interior passes
+# d_max, so the grading stays monotone only with those cells held at d_max). Ok(0), or with out untouched
+# Err(InvalidParameter) "need at least 2 cells for grading, got {n}" or "cell sizes must be finite and positive, got
+# {d_min}, {d_max}". out holds n f64. Mirrors `NonUniformGrid::graded`.
 #must_use
 public fn BjNonUniformGrid_graded(n, d_min: f64, d_max: f64, out: *f64): Result {
     if (n >= 0 && n < 2) {
@@ -181,11 +193,15 @@ public fn BjNonUniformGrid_graded(n, d_min: f64, d_max: f64, out: *f64): Result 
     var nm: f64 = _bj_fu_u2f(n - 1);
     var e: f64 = 1.0 / nm;
     var ratio: f64 = _bj_powf(q, e);
+    var up = 0;
+    if (d_max > d_min) { up = 1; }
     for (var i = 0; i != n; i = i + 1) {
-        var k = (i << 32) >>> 32;
-        var p: f64 = _bj_powi(ratio, k);
-        out[i] = d_min * p;
+        var d: f64 = _bj_fu_graded_cell(d_min, ratio, i);
+        if (up == 1 && d > d_max) { d = d_max; }
+        if (up == 0 && d < d_max) { d = d_max; }
+        out[i] = d;
     }
+    out[n - 1] = d_max;
     return Ok(0);
 }
 

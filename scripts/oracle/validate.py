@@ -9620,6 +9620,8 @@ def fdtd_corrections(root: Path, path: Path):
             if fn.startswith(("NonUniformGrid::graded", "CwAccumulator::", "fdtd::find_eigenmodes",
                               "fdtd::nf2ff_2d_phasor")):
                 want = fu_eval(fn, ins, MPFR_P, fs.K, fs.c12)
+                if fn == "NonUniformGrid::graded" and not toks_same(*fu_graded_port(fn, ins, fs.K, fs.c12)):
+                    continue                                # ADR 0002 row 42's: fdtd.adr.tsv maps it
                 old = wave_toks([parse_tok(x) for x in outs.split(" ")])
                 if not toks_same(want, old):
                     out.append((fn, ins, wire(want), f"oracle {outs[:120]}; correctly rounded primitives give "
@@ -9672,6 +9674,18 @@ def fm_port41(fn, v, EPS0):
     ff = 0.0 if math.isnan(f) else (0.0 if f < 0.0 else (1.0 if f > 1.0 else f))
     F = Fraction
     return [("f", rn_frac(F(e1) * F(e2) / ((1 - F(ff)) * F(e2) + F(ff) * F(e1))))]
+
+
+def fu_graded_port(fn, ins, K, c12):
+    """The port's `graded` (ADR 0002 row 42, M5 part 2a-3): on correctly rounded primitives, no cell past d_max and the
+    last cell exactly d_max. Returns (the port's tokens, Rust's on those primitives)."""
+    base = fu_eval(fn, ins, MPFR_P, K, c12)
+    if base[0][0] != "v":
+        return base, base
+    d_min, d_max = parse_tok(ins.split(" ")[1])[1], parse_tok(ins.split(" ")[2])[1]
+    up = d_max > d_min
+    cells = [min(x, d_max) if up else (d_max if x < d_max else x) for _k, x in base[1:-1]]
+    return base[:1] + [("f", x) for x in cells] + [("f", d_max)], base
 
 
 def fm_rat(num, den, zneg=None):
@@ -9738,6 +9752,11 @@ def fdtd_adr_rows(root: Path, path: Path) -> list:
             want = fm_port(fn, v, eps0)
             if not toks_same(want, [parse_tok(x) for x in outs.split(" ")]):
                 out.append((fn, ins, wire(want), "40", f"oracle {outs}; ADR 0002 row 40: rounded once"))
+            continue
+        if fn == "NonUniformGrid::graded":
+            want, base = fu_graded_port(fn, ins, fs.K, fs.c12)
+            if not toks_same(want, base) and not toks_same(want, wave_toks([parse_tok(x) for x in outs.split(" ")])):
+                out.append((fn, ins, wire(want), "42", f"oracle {outs[:120]}; ADR 0002 row 42: the last cell d_max"))
             continue
         if fn in FM41:
             want = fm_port41(fn, v, eps0)

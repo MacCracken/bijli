@@ -538,6 +538,21 @@ fn main() {
     assert(is_ok(t28) == 1 && r28.count == 0 && r28.frequencies == 0, "a zero signal: Ok, no mode, no block");
     BjEigenmodeResult_free(&r28);
 
+    # ADR 0002 row 42 (M5 part 2a-3): the grading's last cell is d_max, and a cell index past 2³¹ doesn't wrap.
+    test_group("cyrius_graded_rounded_ends");
+    var dg: *f64 = arr(10);
+    var tg, vg = BjNonUniformGrid_graded(10, 0.0001, 0.001, dg);
+    assert(is_ok(tg) == 1 && dg[0] == 0.0001 && dg[9] == 0.001, "the ends exactly (Rust's last 0.0010000000000000005)");
+    var dd: *f64 = arr(5);
+    var td, vd = BjNonUniformGrid_graded(5, 0.001, 0.0001, dd);
+    assert(is_ok(td) == 1 && dd[4] == 0.0001 && dd[3] > dd[4], "decreasing: the last cell d_max, still monotone");
+    var dn: *f64 = arr(10);
+    var tn, vn = BjNonUniformGrid_graded(10, 1.0, 1.000000000000001, dn);
+    assert(dn[4] == 1.0000000000000009 && dn[8] == 1.000000000000001 && dn[9] == 1.000000000000001,
+      "a ratio within 81·2^-53 of 1: cells past d_max held there (Rust's ran to 1.000000000000002)");
+    var big: f64 = _bj_fu_graded_cell(1.0, 1.0000000001, 2147483653);
+    assert(big == 1.2395499649960704, "cell 2³¹ + 5: ratio^(2³¹ + 5) (Rust's i32 wrap gave ratio^-(2³¹ − 5), 0.8067)");
+
     return assert_summary();
 }
 

@@ -5833,3 +5833,48 @@ exact thresholds, 2d the range edges, the per-cell step updates among them (the 
   equal**, part 2a-1b's unchanged but the three subpixel functions' (their new rows and values). `fdtd_media.tcyr`
   passes on all three (75). The gate is clean (no warnings; execution coverage 371 of 371 functions); validate.py
   752,685 rows, 0 problems; the oracle's `--check` and clippy clean. Next: 2a-3, the grading.
+
+## 103. M5 part 2a-3: the grading's ends; 2a done (2026-11-16)
+
+- **The finding**: `NonUniformGrid::graded` documents a geometric grading "computed to reach d_max at the end", but
+  its last cell d_min·ratio^(n − 1) misses d_max: the ratio (d_max/d_min)^(1/(n − 1)) carries its rounding, and the
+  power multiplies it about n − 1 times, so in 97 % of seeded gradings the last cell was off, by up to 270 ulps for
+  n ≤ 200 (`graded(10, 1e-4, 1e-3)` ends at 0.0010000000000000005). Rust also takes the power as
+  `ratio.powi(i as i32)`: past 2³¹ cells the exponent wraps, so cell 2³¹ + 5 is ratio^-(2³¹ − 5), below d_min.
+- **ADR 0002 row 42** (`src/fdtd_util.cyr`): the last cell is exactly d_max (the user's answer of 2026-11-15; the first
+  already is d_min), and the interior keeps Rust's chain but never passes d_max (the user's answer of 2026-11-16). The
+  power takes the whole usize index on the same square-and-multiply loop (`_bj_powi`, compiler-rt's `__powidf2`), the
+  same bits below 2³¹; a Rust fault, fixed whatever the answer. The cell is `_bj_fu_graded_cell`, public for the test
+  (no golden row can hold 2³¹ cells: 16 GiB of output). The range edges (d_max/d_min or ratio^i out of range) are part
+  2d's.
+- **A question asked in the bite**: pinning the last cell alone broke monotonicity where the ratio lies within about
+  (n − 1)²·2^-53 of 1: there the grading's steps are below the accumulated rounding of ratio^i, and Rust's interior
+  runs past d_max (`graded(10, 1, 1.000000000000001)` ends at 1.000000000000002), so the pinned last cell stepped back.
+  Over 20,000 seeded gradings of such ratios (1 ± 10⁻⁴ to 10⁻¹⁵, n = 10, 100, 1,000) 1,473 became non-monotone, where
+  Rust's were all monotone; over 20,000 typical ones none. The user's answer of 2026-11-16 (the recommended option):
+  hold a cell past d_max at d_max (min for an increasing grading, max for a decreasing one), so the grading is
+  monotone (not strictly) and ends at d_max; typical gradings keep Rust's bits.
+- **The grid**: 620 rows appended to `fdtd.tsv` (100,350; 35.0 MB, under the 48 MiB cap): twelve gradings
+  (increasing and decreasing by a decade, a ratio of 1 and ones an ulp either side of it, 0.1 to 0.3, 2 to 1,024 and
+  1 to 3, 10⁻⁹ to 1 and 1 to 10⁹, and two at 10^±300's ends) at n = 2, 3, 4, 7, 10, 33, 100, 257 and 1,000, ratios
+  1 ± 10⁻ᵏ (k = 4 to 15) from three d_min at n = 10, 100 and 1,000, whose interior passes d_max, and 300 seeded
+  gradings.
+- **validate.py**: `fu_graded_port` replays a grading on correctly rounded primitives, holds its cells at d_max and
+  pins its last; a row whose state that changes is mapped to row 42 and left out of the corrected oracle: **913
+  rows**, part 1d's among them. `fdtd.cr.tsv` keeps its 31 rows (it held no grading).
+- **Tests**: `tests/fdtd_util.tcyr`'s `cyrius_graded_rounded_ends` (4 assertions, 77 in all): both ends of the Rust
+  test's grading exact, a decreasing grading's last cell and monotonicity, `graded(10, 1, 1.000000000000001)`'s cells
+  held at d_max, and cell 2³¹ + 5 of a ratio 1 + 10⁻¹⁰, 1.2395499649960704 (Rust's wrap gave 0.8067).
+- **Benchmarks**: no bench calls `graded`, and nothing else changed. The interleaved A/B against HEAD (two rounds at
+  load 4 to 15, another repo's fuzzer running throughout) is too noisy to read the other rows (median ratios 0.50 and
+  0.94, HEAD's runs the more loaded); `fdtd/media_coefficients` held at 4.27–4.38 µs, as at part 2a-2. The clamp is
+  one compare a cell.
+- **Result, every target** (x86_64 ELF, x86_64 PE, aarch64): **18 modules, 0 failing; 638,875 ok, 0 failed, 0
+  measured, 0 pending, 114,430 accepted (ADR 01: 40,369; ADR 0002: 74,061)** over 753,305 rows; **all 475 digests
+  equal**, part 2a-2's unchanged but `NonUniformGrid::graded`'s (its new rows and values). `fdtd_util.tcyr` passes on
+  all three (77). The gate is clean (no warnings; execution coverage 371 of 371 functions); validate.py 753,305 rows,
+  0 problems; the oracle's `--check` and clippy clean.
+
+**Part 2a, the user's answers, is done** (§100–§103): the media and Mur coefficients (row 40), the subpixel means
+(row 41) and the grading (row 42). Next, 2b: round once (row 13) for the update coefficients dt/(ε₀ε_r·dx) and
+dt/(μ₀μ_r·dx), `courant_dt`'s d/(2√3·c) and `Fdtd1d::time`'s step·dt.
