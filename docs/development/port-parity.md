@@ -6430,3 +6430,34 @@ eigenmode search (`dft_magnitude`'s recurrence and magnitude, `find_eigenmodes`'
   functions, the new helpers private); validate.py 760,296 rows, 0 problems; the oracle's `--check` and clippy clean.
   **2d is done, and with it M5's Part 2.** Next: M5's wrap-up (the benchmark record regenerated, the roadmap), then
   M6.
+
+## 115. M5 done: the wrap-up (2026-11-16)
+
+- **The benchmark record** (`docs/benchmarks-rust-v-cyrius.md`, `scripts/bench_record.py`) is regenerated. Its Cyrius
+  column was last written at part 1d and kept older runs' values for some rows (`rf/s_cascade` 523 ns, from before
+  M4's star product rounded once, §83; `field/magnetic_field_moving` 41 ns, from before M1 part 5's +38–39 ns). The
+  new column is each row's least of four full `cyrius bench` runs of the committed tree (`1d6de0b`): the two counted
+  "new" rounds of §114's A/B (load 3.2 and 3.5) and two runs for the record (load 2.5 to 12.9, a shravan session's and
+  then pramana's benches beside them). The rows vary up to 1.5× between runs (the FDTD rows most), so the least is
+  the column; a single run's ratio within that spread is noise.
+- **What moved**: 73 twinned rows, median Cyrius/Rust 32.6× (29.7× in the stale column), the median row 1.01× its old
+  value. The FDTD rows carry Part 2's per-cell scan (§107, §108): `fdtd/step_100_cells` 251 → 732 ns (11.4× Rust's),
+  `fdtd/step_1000_cells` 2.11 → 6.43 µs (10.3×), `fdtd/run_100_steps_500_cells` 146 → 683 µs (21.2×), and
+  `fdtd/find_eigenmodes_4096x256` 8.37 → 10.91 ms (5.2×) with the DFT's per-sample check (§111). `rf/s_cascade` reads
+  3.69 µs (36.8×) and `field/magnetic_field_moving` 80 ns (46.3×), their recorded costs; HEAD's runs in §114's A/B
+  read the same (3.78 µs, 85–92 ns), and that A/B left every row outside NF2FF within its noise.
+- **The gate** for finished milestones: `bench_record.py`'s `DONE` names M1–M5, so a Rust bench of theirs without a
+  twin (or a `REASONS` entry) now fails `--check`. None does: 73 twinned, 7 pending, all seven M6's (the 2D and 3D
+  steps and `nf2ff_2d`, which reads an `Fdtd2d`).
+- **The roadmap** marks M5 done and lists the per-cell scan's cost as planned performance work (a lane-wise
+  exponent-field test in the stdlib's vector verbs, plan §10, not yet filed): the 1D step 3.5–3.8× its unchecked
+  form, the TF/SF step about 2×, `accumulate` about 3×, and M6's grids to pay as much.
+- **M5 in all**: Part 1 (§94–§99) ported fdtd.rs's 1D grid, pulses and TF/SF, media and subpixel averages, the
+  non-uniform grid, the fourth-order derivative, the CW accumulator, the eigenmodes, NF2FF's phasor form and their
+  JSON; Part 2 (§100–§114) its range-edge review under the user's answers of 2026-11-15 (ADR 0002 rows 13, 17, 18 and
+  40–42). The ledger's fdtd.rs tests stand at the 1D grid's 23 of 24 (1 n/a), the pulses and TF/SF 22/22, the media
+  13/13, the subpixel averages 7/7, the utilities 25/25 and NF2FF 4/10 (the 6 on `Fdtd2d` are M6's).
+- **Result**: no code changed; the parity and digests are §114's (641,185 ok, 0 failed, 119,111 accepted over 760,296
+  rows; all 475 digests equal on three targets). The gate is clean. **M5 is done.** Next: M6, the FDTD 2D/3D grids
+  (`Fdtd2d`, `Fdtd3d`, the CPML, `nf2ff_2d`, `Mode2d`, `CpmlParams`), under the same per-cell rule; `fdtd.tsv` (38.8
+  MB of the 48 MiB cap) will need splitting.

@@ -1,4 +1,4 @@
-# Handoff: the Cyrius port, end of M5 Part 2 (2026-11-16, after 2d-6)
+# Handoff: the Cyrius port, M5 done, before M6 (2026-11-16)
 
 For the next agent picking up the port. **Read first:** `CLAUDE.md` (the rules), [`state.md`](state.md) (live state),
 [`bijli-port-plan.md`](bijli-port-plan.md) (§0.1 holds the user's M5 Part 2 answers; the tracking table is near the
@@ -9,8 +9,8 @@ bite is done, the machinery, the scripts and the traps. Delete it once it has se
 
 ## Where it stands
 
-- **Committed through `26e5050`** ("M5 2d-5 done"); 2d-6 is in the working tree for the user to commit ("m5 2d-6
-  done").
+- **Committed through `1d6de0b`** ("M5 2d-6 done"); M5's wrap-up is in the working tree for the user to commit ("m5
+  done"): the benchmark record regenerated, `bench_record.py`'s `DONE` naming M1–M5, the roadmap (§115).
 - **M5 Part 1 is done** (§94–§99): the 1D grid, the pulses and TF/SF, the media, the utilities, NF2FF's phasor form,
   their JSON.
 - **M5 Part 2, the range-edge review**, runs on the user's answers of 2026-11-15 (plan §0.1). Done:
@@ -46,9 +46,9 @@ bite is done, the machinery, the scripts and the traps. Delete it once it has se
 - **Numbers after 2d-6**: 18 modules, 641,185 ok, 0 failed, 119,111 accepted (ADR 01: 40,366; ADR 0002: 78,745)
   over 760,296 rows; 475 digests equal on x86_64 ELF, x86_64 PE and aarch64. Ledger 691 ported, 9 n/a, 158 pending of
   858; API snapshot 2,116; benches 73 of 80 twinned; execution coverage 371 of 371.
-- **Next: M5's wrap-up**: state, the roadmap, and the benchmark doc regenerated with `scripts/bench_record.py`. Then
-  M5 is done.
-- **Then**: M6 (`Fdtd2d`, `Fdtd3d`, the CPML, `nf2ff_2d`, `Mode2d`, `CpmlParams`), under the same per-cell rule.
+- **M5 is done** (§115). The benchmark record's Cyrius column is each row's least of four full runs: rows vary up to
+  1.5× between runs under other repos' loads, so take the least of several when regenerating it.
+- **Next**: M6 (`Fdtd2d`, `Fdtd3d`, the CPML, `nf2ff_2d`, `Mode2d`, `CpmlParams`), under the same per-cell rule.
   `nf2ff_2d` (the snapshot form) calls `_bj_nf_core` with the rotation (1, 0) and k from `_bj_nf_validate` on its
   double frequency (`_bj_k_ux_from`): the core's range edges come with it.
 - **Corpus size**: `fdtd.tsv` is 38.8 MB (107,341 rows) and `json.tsv` 38.7 MB, against the 48 MiB cap that

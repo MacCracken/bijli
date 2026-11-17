@@ -497,6 +497,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
   Rust's chain where every operation is its 53-bit value, else runs the call or the angle with an unbounded exponent
   (ADR 0002 row 18 amended, see Fixed). M5's Part 2 is done. `fdtd.tsv` grows by 155 rows (107,341; 38.8 MB);
   `fdtd.adr.tsv` maps 94 NF2FF rows to row 18 (7 of part 1e's).
+- **M5 done — the benchmark record regenerated** (`docs/benchmarks-rust-v-cyrius.md`): the Cyrius column, last written
+  at M5 part 1d with some rows older still, is each row's least of four full runs of the committed tree (load 2.5 to
+  12.9, other repos' benches beside them; `port-parity.md` §115). The FDTD rows carry Part 2's per-cell scan, as
+  recorded in §107–§111: `fdtd/step_1000_cells` 2.11 → 6.43 µs (10.3× Rust's), `fdtd/run_100_steps_500_cells` 146 →
+  683 µs, `fdtd/find_eigenmodes_4096x256` 8.37 → 10.91 ms. `scripts/bench_record.py`'s `DONE` names M1–M5, so a
+  finished milestone's Rust bench without a twin fails `--check`. The roadmap lists the scan's cost as performance work.
 
 ### Fixed
 

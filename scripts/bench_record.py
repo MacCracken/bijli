@@ -36,7 +36,8 @@ GROUP_MILESTONE = {
     "polarization": "M3", "scattering": "M3", "beam": "M3",
     "rf": "M4",
 }
-DONE = set()
+# The milestones done (state.md): their every Rust bench must have a twin or a REASONS entry.
+DONE = {"M1", "M2", "M3", "M4", "M5"}
 # Rust bench -> its Cyrius twin's name, where it isn't the same.
 TWINS = {}
 # Rust bench -> why it has no twin.
