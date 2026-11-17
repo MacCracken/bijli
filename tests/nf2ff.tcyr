@@ -224,6 +224,46 @@ fn nf2ff_fill(nx, ny, dx: f64, margin, freq: f64, dt: f64, ez: *BjCwAccumulator,
     return 0;
 }
 
+# A 100-point accumulator at freq and dt filled by the corpus's NF2FF generator `which` (0, 1, 2: part 1e's g1, g2,
+# g3): re[i] = a·((i·p + q) mod m) − b, im[i] = c·((i·p + q + 7) mod m) − d.
+fn gen_acc(acc: *BjCwAccumulator, freq: f64, dt: f64, which) {
+    var t, v = BjCwAccumulator_new(100, freq, dt, acc);
+    var p = 3;
+    var q = 1;
+    var m = 13;
+    var a: f64 = 0.25;
+    var b: f64 = 1.5;
+    var c: f64 = 0.125;
+    var d: f64 = 0.75;
+    if (which == 1) {
+        p = 5;
+        q = 2;
+        m = 17;
+        a = -0.5;
+        b = 2.0;
+        c = 0.375;
+        d = -1.25;
+    }
+    if (which == 2) {
+        p = 7;
+        q = 4;
+        m = 11;
+        a = 1.0;
+        b = 5.0;
+        c = -0.25;
+        d = 1.0;
+    }
+    var re: *f64 = f64p(acc.real);
+    var im: *f64 = f64p(acc.imag);
+    for (var i = 0; i < 100; i = i + 1) {
+        var x: f64 = f64_from((i * p + q) % m);
+        re[i] = a * x - b;
+        var y: f64 = f64_from((i * p + q + 7) % m);
+        im[i] = c * y - d;
+    }
+    return 0;
+}
+
 # Runs fdtd.rs's phasor NF2FF tests, then the Cyrius-only checks.
 fn main() {
     alloc_init();
@@ -382,6 +422,103 @@ fn main() {
     BjNf2ffResult_free(&r6);
     BjCwAccumulator_free(&qa);
     BjCwAccumulator_free(&qb);
+
+    # ADR 0002 row 18 (M5 part 2d-6): the transform at its range edges, on a 10 × 10 grid with margin 2 and 8 angles,
+    # the fields the corpus's generators (tests/golden/fdtd.tsv's part 2d-6). Each value is validate.py's model, the
+    # chain with an unbounded exponent (nf_eval18), by its bits.
+    test_group("cyrius_nf2ff_range_edges");
+    var ea: BjCwAccumulator;
+    var eb: BjCwAccumulator;
+    var ec: BjCwAccumulator;
+    var r7: BjNf2ffResult;
+    var f308: f64 = _bj_from_bits(0x7fe1ccf385ebc8a0);
+    var h17: f64 = _bj_from_bits(0x7fee42d130773b76);
+    var f106: f64 = _bj_from_bits(0x5614cc4476cf86f3);
+    var dx200: f64 = _bj_from_bits(0x16687e92154ef7ac);
+    # ω = 2π·10³⁰⁸ past DBL_MAX: Rust's ∞ − ∞ refused the accumulators as disagreeing; ω to 53 bits agrees.
+    gen_acc(&ea, f308, 0.000000000001, 0);
+    gen_acc(&eb, f308, 0.000000000001, 1);
+    gen_acc(&ec, f308, 0.000000000001, 2);
+    var t7a, v7a = bj_nf2ff_2d_phasor(&ea, &eb, &ec, 10, 10, 0.001, 2, 8, &r7);
+    var p7a: f64 = at(r7.pattern, 0);
+    assert(is_ok(t7a) == 1 && _bj_bits(p7a) == 0x5f1af42ba05d81b7, "ω past DBL_MAX transforms");
+    BjNf2ffResult_free(&r7);
+    BjCwAccumulator_free(&ea);
+    BjCwAccumulator_free(&eb);
+    BjCwAccumulator_free(&ec);
+    # hx's ω past DBL_MAX against ez's 2π·10⁹: Rust's |6.28·10⁹ − ∞| ≤ 10⁻¹²·∞ passed them; they disagree.
+    gen_acc(&ea, 1000000000.0, 0.000000000001, 0);
+    gen_acc(&eb, f308, 0.000000000001, 1);
+    gen_acc(&ec, 1000000000.0, 0.000000000001, 2);
+    var t7b, v7b = bj_nf2ff_2d_phasor(&ea, &eb, &ec, 10, 10, 0.001, 2, 8, &r7);
+    assert(is_err_result(t7b) == 1 && text_is(bj_last_error_display(), w5a) == 1, "an ω past DBL_MAX disagrees");
+    BjCwAccumulator_free(&ea);
+    BjCwAccumulator_free(&eb);
+    BjCwAccumulator_free(&ec);
+    # f = 2^-1074: Rust's k = 2π·f/c underflowed to 0, and the pattern with it; k ≈ 10⁻³³¹ to 53 bits.
+    var ftiny: f64 = _bj_from_bits(1);
+    gen_acc(&ea, ftiny, 0.000000000001, 0);
+    gen_acc(&eb, ftiny, 0.000000000001, 1);
+    gen_acc(&ec, ftiny, 0.000000000001, 2);
+    var t7c, v7c = bj_nf2ff_2d_phasor(&ea, &eb, &ec, 10, 10, 0.001, 2, 8, &r7);
+    var p7c: f64 = at(r7.pattern, 0);
+    assert(is_ok(t7c) == 1 && _bj_bits(p7c) == 0x1d56603b13626428, "a subnormal frequency's pattern");
+    BjNf2ffResult_free(&r7);
+    BjCwAccumulator_free(&ea);
+    BjCwAccumulator_free(&eb);
+    BjCwAccumulator_free(&ec);
+    # dt = DBL_MAX: ω·dt/2 past DBL_MAX, Rust's rotation NaN; its sine and cosine of the 53-bit angle.
+    var dtmax: f64 = _bj_from_bits(0x7fefffffffffffff);
+    gen_acc(&ea, 1000000000.0, dtmax, 0);
+    gen_acc(&eb, 1000000000.0, dtmax, 1);
+    gen_acc(&ec, 1000000000.0, dtmax, 2);
+    var t7d, v7d = bj_nf2ff_2d_phasor(&ea, &eb, &ec, 10, 10, 0.001, 2, 8, &r7);
+    var p7d: f64 = at(r7.pattern, 0);
+    assert(is_ok(t7d) == 1 && _bj_bits(p7d) == 0x3fcfa353aae40995, "dt = DBL_MAX: a finite pattern");
+    BjNf2ffResult_free(&r7);
+    BjCwAccumulator_free(&ea);
+    BjCwAccumulator_free(&eb);
+    BjCwAccumulator_free(&ec);
+    # H_x's two Yee samples 1.7·10³⁰⁸ each: Rust's sum ∞; their mean to 53 bits.
+    gen_acc(&ea, 1000000000.0, 0.000000000001, 0);
+    gen_acc(&eb, 1000000000.0, 0.000000000001, 1);
+    gen_acc(&ec, 1000000000.0, 0.000000000001, 2);
+    var hbr: *f64 = f64p(eb.real);
+    var hbi: *f64 = f64p(eb.imag);
+    hbr[14] = h17;
+    hbi[14] = 0.5;
+    hbr[24] = h17;
+    hbi[24] = 0.5;
+    var t7e, v7e = bj_nf2ff_2d_phasor(&ea, &eb, &ec, 10, 10, 0.001, 2, 8, &r7);
+    var p7e: f64 = at(r7.pattern, 0);
+    assert(is_ok(t7e) == 1 && _bj_bits(p7e) == 0x7fd4d2333ff6547b, "H's samples summing past DBL_MAX");
+    BjNf2ffResult_free(&r7);
+    BjCwAccumulator_free(&ea);
+    BjCwAccumulator_free(&eb);
+    BjCwAccumulator_free(&ec);
+    # A constant real E = 10⁻¹⁰ and no H at f = 4.77·10¹⁰⁶, dx = 10⁻²⁰⁰: L's real parts cancel exactly, and its
+    # imaginary parts are E·sin(k·ρ̂·ρ') products near 2.5·10⁻³¹⁰ with no partner to absorb them. Rust's subnormal
+    # products put 300 ulps of noise on the pattern (alternating by angle); the unbounded chain's is one value.
+    var t7z, v7z = BjCwAccumulator_new(100, f106, 0.000000000001, &ea);
+    var t7y, v7y = BjCwAccumulator_new(100, f106, 0.000000000001, &eb);
+    var cer: *f64 = f64p(ea.real);
+    for (var k7 = 0; k7 < 100; k7 = k7 + 1) { cer[k7] = 0.0000000001; }
+    var t7f, v7f = bj_nf2ff_2d_phasor(&ea, &eb, &eb, 10, 10, dx200, 2, 8, &r7);
+    var p7f: f64 = at(r7.pattern, 0);
+    var p7g: f64 = at(r7.pattern, 1);
+    assert(is_ok(t7f) == 1 && _bj_bits(p7f) == 0x09c8d158dd06dd27 && _bj_bits(p7g) == 0x09c8d158dd06dd27,
+      "unabsorbed underflowing products: one value at every angle");
+    BjNf2ffResult_free(&r7);
+    # The same with a unit imaginary E: each underflowing product beside a partner at least 2^-960, absorbed, so the
+    # checked fast path keeps Rust's value.
+    var cei: *f64 = f64p(ea.imag);
+    for (var k8 = 0; k8 < 100; k8 = k8 + 1) { cei[k8] = 1.0; }
+    var t7h, v7h = bj_nf2ff_2d_phasor(&ea, &eb, &eb, 10, 10, dx200, 2, 8, &r7);
+    var p7h: f64 = at(r7.pattern, 0);
+    assert(is_ok(t7h) == 1 && _bj_bits(p7h) == 0x1d69e46e621ad206, "absorbed underflows keep Rust's value");
+    BjNf2ffResult_free(&r7);
+    BjCwAccumulator_free(&ea);
+    BjCwAccumulator_free(&eb);
 
     return assert_summary();
 }

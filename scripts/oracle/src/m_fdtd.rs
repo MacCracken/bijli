@@ -2307,6 +2307,121 @@ fn emit_2d5(r: &mut Rows) {
     }
 }
 
+// ── part 2d-6: NF2FF at its range edges (ADR 0002 row 18) ──────────────────────────────────────────────────────────
+
+/// A generator spec scaled by `s` (its offsets and slopes; exact for powers of two, else rounded once each).
+fn nf_scaled(g: (usize, usize, usize, f64, f64, f64, f64), s: f64) -> (usize, usize, usize, f64, f64, f64, f64) {
+    (g.0, g.1, g.2, g.3 * s, g.4 * s, g.5 * s, g.6 * s)
+}
+
+fn emit_2d6(r: &mut Rows) {
+    let g1 = (3, 1, 13, 0.25, 1.5, 0.125, 0.75);
+    let g2 = (5, 2, 17, -0.5, 2.0, 0.375, -1.25);
+    let g3 = (7, 4, 11, 1.0, 5.0, -0.25, 1.0);
+    let tiny = f64::from_bits(1);
+    let dmin = f64::MIN_POSITIVE;
+    // A 10 × 10 grid, margin 2 (24 contour samples), the three fields at one frequency and step, scaled by s.
+    let three = |r: &mut Rows, fr: f64, dt: f64, dx: f64, s: f64, na: usize| {
+        let ph = |g| Phasors::new(100, fr, dt, nf_scaled(g, s));
+        r.nf2ff(&ph(g1), &ph(g2), &ph(g3), 10, 10, dx, 2, na);
+    };
+    // ω past DBL_MAX (Rust's NaN agreement refuses it), and its agreement straddled at 10⁻¹² there.
+    for fr in [3e307, 1e308, 1.5e308, f64::MAX] {
+        for dt in [1e-12, 1e-300, 1e-320] {
+            three(r, fr, dt, 1e-3, 1.0, 8);
+        }
+    }
+    let big: f64 = 1e308;
+    for k in [-2_i64, -1, 0, 1, 2] {
+        let edge = big * (1.0 + 1e-12);
+        let fk = f64::from_bits(edge.to_bits().wrapping_add_signed(k));
+        r.nf2ff(&Phasors::new(100, big, 1e-12, g1), &Phasors::new(100, fk, 1e-12, g2),
+                &Phasors::new(100, big, 1e-12, g3), 10, 10, 1e-3, 2, 8);
+    }
+    for (fa, fb) in [(1e308, 1e9), (1e9, 1e308), (1e308, f64::INFINITY), (f64::INFINITY, 1e308)] {
+        r.nf2ff(&Phasors::new(100, fa, 1e-12, g1), &Phasors::new(100, fb, 1e-12, g2),
+                &Phasors::new(100, fa, 1e-12, g3), 10, 10, 1e-3, 2, 8);
+    }
+    // ω below 2^-1022: the frequency, k and √(k/8π) with it, and the agreement where Rust's ω is rounded.
+    for fr in [1e-300, dmin, 1e-310, 1e-320, tiny] {
+        for (dt, dx) in [(1e-12, 1e-3), (1e290, 1e-3), (1e-12, 1e300), (1e290, 1e300)] {
+            three(r, fr, dt, dx, 1.0, 8);
+        }
+    }
+    let low: f64 = 1e-309;
+    for k in [-3_i64, -2, -1, 0, 1, 2, 3] {
+        let edge = low * (1.0 + 1e-12);
+        let fk = f64::from_bits(edge.to_bits().wrapping_add_signed(k));
+        r.nf2ff(&Phasors::new(100, low, 1e290, g1), &Phasors::new(100, fk, 1e290, g2),
+                &Phasors::new(100, low, 1e290, g3), 10, 10, 1e300, 2, 8);
+    }
+    // k·dx and k·ρ̂·ρ' past DBL_MAX; dx so large the samples' sums pass it (a small k keeps the pattern finite).
+    for dx in [1e10, 1e100, 1e300, f64::MAX] {
+        three(r, 1e300, 1e-300, dx, 1.0, 8);
+    }
+    for (dx, s) in [(1e300, 1.0), (1e307, 1.0), (f64::MAX, 1.0), (1e306, 10.0), (10.0, 1e306), (1.0, 1e307)] {
+        three(r, 1.0, 1e-12, dx, s, 8);
+    }
+    // dx below 2^-1022 (its half, the starts and the samples' weights inexact) and at it.
+    for dx in [1e-300, dmin, 1e-310, 1e-320, tiny] {
+        for (fr, dt) in [(1e9, 1e-12), (1e300, 1e-300)] {
+            three(r, fr, dt, dx, 1.0, 8);
+        }
+    }
+    // The fields' scale: products below 2^-1022 and sums past DBL_MAX.
+    for s in [1e-290, 1e-300, 1e-305, 1e-310, 1e-320, 1e300, 1e305, 1e307] {
+        for dx in [1e-3, 1.0] {
+            three(r, 1e9, 1e-12, dx, s, 8);
+        }
+    }
+    // ω·dt/2 past DBL_MAX, below 2^-1022, zero and negative.
+    for dt in [1e300, f64::MAX, 1e-320, tiny, 0.0, -0.0, -1e-12] {
+        three(r, 1e9, dt, 1e-3, 1.0, 8);
+    }
+    // H's two Yee samples summing past DBL_MAX, and E at DBL_MAX.
+    let m = 1.7e308;
+    let ovs: [Vec<(usize, usize, f64, f64)>; 4] = [
+        vec![(1, 14, m, 0.5), (1, 24, m, 0.5)],
+        vec![(2, 41, -m, 0.0), (2, 42, -m, 0.0)],
+        vec![(0, 22, f64::MAX, f64::MAX), (0, 27, f64::MAX, -f64::MAX)],
+        vec![(1, 14, m, m), (1, 24, m, m), (2, 41, -m, -m), (2, 42, -m, -m)],
+    ];
+    for ov in &ovs {
+        let mut fs = [Phasors::new(100, 1e9, 1e-12, g1), Phasors::new(100, 1e9, 1e-12, g2),
+                      Phasors::new(100, 1e9, 1e-12, g3)];
+        for &(which, at, re, im) in ov {
+            fs[which].overrides.push((at, re, im));
+        }
+        r.nf2ff(&fs[0], &fs[1], &fs[2], 10, 10, 1e-3, 2, 8);
+    }
+    // A constant real E and no H: the real parts of L cancel exactly, leaving the pattern to products of E with the
+    // rotation's small imaginary parts that pass below 2^-1022 (none absorbed), or, with a unit imaginary E, absorbed.
+    let zero = (1, 0, 1, 0.0, 0.0, 0.0, 0.0);
+    for (fr, dx, e) in [(4.77e106, 1e-200, 1e-10), (4.77e106, 1e-205, 1e-10), (4.77e86, 1e-180, 1.0),
+                        (4.77e126, 1e-220, 1e-20), (4.77e106, 1e-200, 1.0), (4.77e96, 1e-150, 1e-100)] {
+        for im in [0.0, -1.0] {
+            let ez = Phasors::new(100, fr, 1e-12, (1, 0, 1, 0.0, -e, 0.0, im));
+            let h = Phasors::new(100, fr, 1e-12, zero);
+            r.nf2ff(&ez, &h, &h, 10, 10, dx, 2, 8);
+        }
+    }
+    // Seeded sweeps over every scale: the frequency, the step, dx and the fields from 10⁻³²³ to 10³⁰⁸.
+    let mut rng = Rng::new(0x2d6e_f00d);
+    for _ in 0..48 {
+        let nx = usize::try_from(rng.int(5, 12)).unwrap_or(5);
+        let ny = usize::try_from(rng.int(5, 12)).unwrap_or(5);
+        let mg = usize::try_from(rng.int(1, i64::try_from(nx.min(ny) / 2).unwrap_or(2) - 1)).unwrap_or(1);
+        let fr = rng.log_uniform(-323.0, 308.0);
+        let dt = rng.signed_log_uniform(-323.0, 308.0);
+        let dx = rng.log_uniform(-323.0, 308.0);
+        let s = rng.log_uniform(-323.0, 308.0);
+        let na = usize::try_from(rng.int(1, 12)).unwrap_or(1);
+        let n = nx * ny;
+        let ph = |g| Phasors::new(n, fr, dt, nf_scaled(g, s));
+        r.nf2ff(&ph(g1), &ph(g2), &ph(g3), nx, ny, dx, mg, na);
+    }
+}
+
 pub fn emit() -> Module {
     let mut r = Rows { m: Module::new("fdtd"), keys: BTreeSet::new() };
     emit_1a(&mut r);
@@ -2330,5 +2445,6 @@ pub fn emit() -> Module {
     emit_2d4b1(&mut r);
     emit_2d4b2(&mut r);
     emit_2d5(&mut r);
+    emit_2d6(&mut r);
     r.m
 }

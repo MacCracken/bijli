@@ -6354,3 +6354,79 @@ eigenmode search (`dft_magnitude`'s recurrence and magnitude, `find_eigenmodes`'
   equal**. `fdtd_util.tcyr` (100) passes on all three. The gate is clean (no warnings; execution coverage 371 of 371
   functions); validate.py 760,141 rows, 0 problems; the oracle's `--check` and clippy clean. Next: 2d-6, NF2FF, the
   last bite of M5.
+
+## 114. M5 part 2d-6: NF2FF at its range edges; Part 2 done (2026-11-16)
+
+- **The findings** (`nf2ff_2d_phasor`'s chain, every operation of it):
+  - ω = 2πf past DBL_MAX (f above DBL_MAX/2π): Rust's `omega` is ∞, so its agreement test computed ∞ − ∞ = NaN and
+    refused three equal accumulators ("must share frequency and dt"); against a finite ez its ∞ passed (|x − ∞| ≤
+    10⁻¹²·∞), and hx's or hy's ∞ was not refused afterwards. Below 2^-1022 Rust's ω is rounded on the subnormal grid,
+    but its agreement's verdict stands (distinct subnormal frequencies give ω's at least 6 ulps apart, and the walk at
+    10⁻³⁰⁹ below refuses from the same ulp either way); the frequency and k come from the 53-bit ω;
+  - k = 2πf/c below 2^-1022 for f under about 1.1·10⁻³⁰⁰ (f = 2^-1074: k underflowed to 0, and every pattern with it),
+    k/8π below it from 2.7·10⁻²⁹⁹ (f = DBL_MIN's pattern 2.2·10⁻⁸ off), and k·dx or k·ρ̂·ρ' past DBL_MAX (f = 10³⁰⁰ with
+    dx ≥ 10¹⁶: the step's sine of ∞, NaN patterns);
+  - ω·dt/2 past DBL_MAX (dt = DBL_MAX at 1 GHz: NaN patterns) or below 2^-1022 (its sine rounded on the subnormal
+    grid);
+  - dx: its half below 2^-1022 (dx under 2^-1021), the sides' starts (x − x_c)·dx and the samples' weights past
+    DBL_MAX (dx = DBL_MAX: NaN) or below the range (dx = DBL_MIN: Rust's subnormal samples lost the 53-bit residual of
+    a contour whose sums cancel, 0 for 7.9·10⁻³²²);
+  - a sample: H's two Yee values summing past DBL_MAX (1.7·10³⁰⁸ each: ∞), their mean or the products with the
+    rotation and the weight below the range;
+  - an angle: E·sin(k·ρ̂·ρ') and the other products of the sums underflowing where nothing absorbs them. A constant
+    real E with no H cancels L's real parts exactly, so the pattern is those products: at f = 4.77·10¹⁰⁶ and dx =
+    10⁻²⁰⁰ they lie near 2.5·10⁻³¹⁰, and Rust's subnormal roundings put 300 ulps of noise on the pattern, alternating by
+    angle, where the unbounded chain gives one value at every angle; the sums past DBL_MAX (a field of 10³⁰⁶ on dx = 10
+    at 1 Hz: Rust ∞, the pattern 1.1·10³⁰⁷ with √(k/8π) = 2.9·10⁻⁵); |η·N_z − L_φ| past DBL_MAX or below the range.
+- **ADR 0002 row 18, amended** (`src/nf2ff.cyr`; the section comment there has the argument):
+  - the scalars come from ω to 53 bits with an unbounded exponent, the accumulator's `omega_s` and `omega_e` (part
+    2d-4a): the agreement is row 17's exact test on the pair (`_bj_nf_same53`: both scaled by one power of two, the
+    larger into [1, 2); the test is homogeneous, and a smaller one scaled below 2^-1022 fails it as its exact value
+    does), the frequency's test reads ω/2π to 53 bits (its message prints Rust's double), and k = 2π·f/c, ω·dt/2 and the
+    rotation's cosine and sine (Payne–Hanek past DBL_MAX) follow to 53 bits. A non-finite ω keeps Rust's test;
+  - the core keeps Rust's chain (mode 0) where k, the rotation's parts, dx/2, the starts, k/8π and k·dx are doubles
+    (normal, or an exact 0), and every contour sample's operations are their 53-bit values: each product normal, or 0
+    from a zero factor, or an underflow beside its sum's other product of at least 2^-960 (which absorbs it in both
+    chains), each sum finite. Else the whole transform runs with an unbounded exponent (mode 1), its samples as
+    (significand, exponent) blocks;
+  - an angle in mode 0 checks each side's ρ̂·ρ' products and sum, k·ρ̂·ρ' and k·dx·(d̂·ρ̂); the rotation step's parts
+    at least 2^-959 (or (1, ±0)), which keeps the recurrence Rust's, as the DFT's; each sample's eight products by one
+    test, the rotation parts' exponent fields against 1024 less the samples' smallest (|x·r| ≥ 2^(e_x + e_r − 2046)),
+    and where that fails by each product against its partner (`_bj_nf_low8`); the sums finite; and the tail
+    (`_bj_nf_tail`): L_φ's and η·N_z's products as a sample's, |η·N_z − L_φ| normal or 0 and finite. An angle that
+    fails any reruns with an unbounded exponent (`_bj_nf_angle_ux`: each operation to 53 bits, the magnitude by
+    `_bj_vx_hypot_ux`, its product with √(k/8π) rounded once);
+  - a non-finite field value on the contour keeps Rust's chain throughout (mode 2), on k and the rotation rounded into
+    binary64.
+- **validate.py**: `nf_eval18` and `nf_core18` model the unbounded chain itself, not the port's narrowing: each
+  operation on exact values rounded to 53 bits (ux pairs), taken as Rust's double only where that double is the same
+  value (a product or quotient normal or 0 from a zero operand, a finite sum, a correctly rounded sine, cosine or
+  hypot of a double that is normal or 0), so a value leaves the doubles only where Rust's would differ, and returns once
+  its 53-bit value is a double again. `fu_nf2ff_port` returns the port's tokens, row 17's alone, and Rust's: a change
+  row 17 alone accounts for keeps its row-17 mapping, the others map to row 18.
+- **The grid**: 155 rows appended to `fdtd.tsv` (107,341; 38.8 MB), on a 10 × 10 grid with margin 2 unless swept: ω
+  past DBL_MAX (four frequencies on three steps) and its agreement straddled at 10⁻¹² there; mixed accumulators, one
+  past DBL_MAX or infinite; frequencies from 10⁻³⁰⁰ down to 2^-1074 on four (dt, dx) pairs, and the agreement walked
+  over ulps at 10⁻³⁰⁹; k·dx past DBL_MAX; dx from 10¹⁰ to DBL_MAX at a small k; dx from 10⁻³⁰⁰ down to 2^-1074; field
+  scales from 10⁻³²⁰ to 10³⁰⁷; ω·dt/2 past DBL_MAX, subnormal, ±0 and negative; H's samples summing past DBL_MAX and
+  E at DBL_MAX; the cancelling constant E (six frequencies and steps, real and with a unit imaginary part); and 48
+  seeded sweeps over every scale of f, dt (signed), dx and the fields from 10⁻³²³ to 10³⁰⁸ on grids of 5 to 12 a side.
+- **The mapping**: **94 rows** to row 18 (7 of part 1e's: f = DBL_MIN, 2^-1074 and DBL_MAX, dt = DBL_MAX, dx = DBL_MIN
+  and DBL_MAX, and f = 10⁻³⁰⁰ on dt = dx = 10³⁰⁰; and 87 new), all passing; row 17's 12 unchanged.
+- **Tests**: `tests/nf2ff.tcyr`'s `cyrius_nf2ff_range_edges` (7 assertions, 25 in all): ω past DBL_MAX transforms, an ω
+  past DBL_MAX disagrees with a finite one, f = 2^-1074's pattern, dt = DBL_MAX's, H's samples summing past DBL_MAX, the
+  cancelling E's one value at every angle, and its absorbed form keeping Rust's value.
+- **Benchmarks**: a focused scratch bench of `fdtd/nf2ff_phasor_80x80_180`'s transform, interleaved against HEAD (three
+  rounds, load 2.6, no other repo's jobs): 1.49–1.52 → 1.60–1.62 ms (1.07×), the per-sample exponent test and the
+  per-angle checks; the wholly unbounded path (the same grid at f = 10⁻³⁰⁰, k below 2^-1022) 16.2–16.3 ms, 11× the
+  checked one, taken only at an edge. The full interleaved A/B (two rounds, load 2.3 to 3.6, a svara session's
+  mutation tests beside it) left every other row unchanged: median ratios 1.01 and 0.99, the NF2FF row 1.18× and 1.01×
+  (the first round's rise also moved two unchanged rows, `json/nonuniform_grid_from_json` 1.24× and
+  `fdtd/gaussian_pulse` 1.14×). A third round ran as the load climbed from 3.8 to 14.6 (median 1.48; unchanged rows
+  from 0.63× to 2.8×) and isn't counted.
+- **Result, every target** (x86_64 ELF, x86_64 PE, aarch64): **18 modules, 0 failing; 641,185 ok, 0 failed, 0
+  measured, 0 pending, 119,111 accepted (ADR 01: 40,366; ADR 0002: 78,745)** over 760,296 rows; **all 475 digests
+  equal**. `nf2ff.tcyr` (25) passes on all three. The gate is clean (no warnings; execution coverage 371 of 371
+  functions, the new helpers private); validate.py 760,296 rows, 0 problems; the oracle's `--check` and clippy clean.
+  **2d is done, and with it M5's Part 2.** Next: M5's wrap-up (the benchmark record regenerated, the roadmap), then
+  M6.

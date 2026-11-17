@@ -492,6 +492,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
   `fourth_order_derivative` with an unbounded exponent where their chains leave the range (ADR 0002 row 18 amended, see
   Fixed). `fdtd.tsv` grows by 141 rows (107,186; 38.6 MB); `fdtd.adr.tsv` maps 98 rows to row 18 (36 gradings moved
   from row 42).
+- **Cyrius port, M5 part 2d-6 — NF2FF at its range edges; Part 2 done** (`src/nf2ff.cyr`): `nf2ff_2d_phasor` reads
+  ω to 53 bits with an unbounded exponent for its agreement test, frequency, k and H's rotation, and its transform keeps
+  Rust's chain where every operation is its 53-bit value, else runs the call or the angle with an unbounded exponent
+  (ADR 0002 row 18 amended, see Fixed). M5's Part 2 is done. `fdtd.tsv` grows by 155 rows (107,341; 38.8 MB);
+  `fdtd.adr.tsv` maps 94 NF2FF rows to row 18 (7 of part 1e's).
 
 ### Fixed
 
@@ -1041,6 +1046,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
   came back; `fourth_order_derivative` on a subnormal dx gave ∞ or NaN (a flat field's 0). Each now runs with an
   unbounded exponent where it leaves the range. Cost: the derivative's per-cell check, 9.8–10.0 → 16.2–16.6 µs on 1,000
   samples (a focused bench), the grading's 1.03× (`port-parity.md` §113).
+- **fdtd** (ADR 0002 row 18 amended, M5 part 2d-6): `nf2ff_2d_phasor` refused three equal accumulators whose
+  ω = 2πf passed DBL_MAX (its agreement test computed ∞ − ∞) and passed an ω past DBL_MAX beside a finite one; gave 0
+  patterns where k = 2πf/c underflowed (f = 2^-1074), NaN where ω·dt/2, k·dx or the contour's starts passed DBL_MAX
+  (dt or dx = DBL_MAX), ∞ where H's two Yee samples summed past it, and patterns off by up to 300 ulps where products in
+  the sums fell below 2^-1022 unabsorbed. ω is now read to 53 bits (the accumulator's `omega_s`, `omega_e`), and the
+  transform runs with an unbounded exponent where Rust's chain leaves the range. Cost: the 80 × 80, 180-angle transform
+  1.49–1.52 → 1.60–1.62 ms (1.07×, the per-sample check); the wholly unbounded path, taken only at an edge, 16.2 ms
+  (`port-parity.md` §114).
 
 ### Performance
 

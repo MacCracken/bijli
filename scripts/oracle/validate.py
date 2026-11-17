@@ -9638,14 +9638,16 @@ FU17 = {"on": False}                       # NF2FF's agreement test decided exac
 
 
 def fu_nf2ff_port(fn, ins, K, c12):
-    """NF2FF on correctly rounded primitives with the exact agreement test, and without it."""
+    """NF2FF on correctly rounded primitives: as the port computes it (ADR 0002 rows 17 and 18, M5 parts 2c and 2d-6:
+    nf_eval18), with row 17's exact agreement test alone, and Rust's."""
     base = fu_eval(fn, ins, MPFR_P, K, c12)
     FU17["on"] = True
     try:
-        want = fu_eval(fn, ins, MPFR_P, K, c12)
+        want17 = fu_eval(fn, ins, MPFR_P, K, c12)
     finally:
         FU17["on"] = False
-    return want, base
+    want = nf_eval18([parse_tok(x) for x in ins.split(" ")], K)
+    return want, want17, base
 
 
 def fu_eval(fn, ins_raw, P, K, C12):
@@ -9708,7 +9710,7 @@ def nf_acc(toks, k):
         at = k + 11 + 3 * j
         idx = toks[at][1] & FD_U64
         re[idx], im[idx] = toks[at + 1][1], toks[at + 2][1]
-    return {"n": n, "omega": 2.0 * math.pi * freq, "dt": dt, "re": re, "im": im}, k + 11 + 3 * cnt
+    return {"n": n, "freq": freq, "omega": 2.0 * math.pi * freq, "dt": dt, "re": re, "im": im}, k + 11 + 3 * cnt
 
 
 def nf_core(ez, hx, hy, rot, nx, ny, dx, k, margin, n_angles, P):
@@ -9807,6 +9809,210 @@ def nf_eval(toks, P, K):
         return ip_err(f"accumulator dt must be finite, got {rust_display(ez['dt'])}")
     harg = 0.5 * ez["omega"] * ez["dt"]
     pattern, angles = nf_core(ez, hx, hy, (P["cos"](harg), P["sin"](harg)), nx, ny, dx, kk, margin, na, P)
+    return fu_seq_toks(pattern) + fu_seq_toks(angles)
+
+
+# ADR 0002 row 18 (M5 part 2d-6): NF2FF at its range edges. The model is the unbounded chain itself, not the port's
+# narrowing: every operation of Rust's chain exact and rounded to 53 bits with an unbounded exponent (a ux pair),
+# taken as Rust's double wherever that double is the same value (a product or quotient normal, or 0 from a zero
+# operand; a finite sum; the root of a normal value; a correctly rounded sine, cosine or hypot of a double, normal or
+# 0), so a value turns into a pair only where Rust's would differ, and back where its 53-bit value is a double again.
+# The sines and cosines of pairs are fs_sin53's and fs_cos53's, the magnitude exact, the last product rounded once.
+
+def nh_ux(a):
+    return ux(a) if isinstance(a, float) else a
+
+
+def nh_back(r):
+    d = ux_double(r)
+    return r if d is None else d
+
+
+def nh_mul(a, b):
+    if isinstance(a, float) and isinstance(b, float):
+        p = a * b
+        if math.isfinite(p) and (abs(p) >= FS_DMIN or (p == 0.0 and (a == 0.0 or b == 0.0))):
+            return p
+    return nh_back(ux_mul(nh_ux(a), nh_ux(b)))
+
+
+def nh_div(a, b):
+    if isinstance(a, float) and isinstance(b, float):
+        q = fdiv(a, b)
+        if math.isfinite(q) and (abs(q) >= FS_DMIN or (q == 0.0 and a == 0.0)):
+            return q
+    return nh_back(ux_div(nh_ux(a), nh_ux(b)))
+
+
+def nh_add(a, b):
+    if isinstance(a, float) and isinstance(b, float):
+        s = a + b
+        if math.isfinite(s):
+            return s
+    return nh_back(ux_add(nh_ux(a), nh_ux(b)))
+
+
+def nh_neg(a):
+    return -a if isinstance(a, float) else (-a[0], not a[1])
+
+
+def nh_sub(a, b):
+    return nh_add(a, nh_neg(b))
+
+
+def nh_sqrt(a):
+    if isinstance(a, float) and (a == 0.0 or a >= FS_DMIN):
+        return fsqrt(a)
+    return nh_back(ux_sqrt(nh_ux(a)))
+
+
+def nh_trig(name, a):
+    if isinstance(a, float):
+        return MPFR_P[name](a)
+    return nh_back(fs_sin53(a) if name == "sin" else fs_cos53(a))
+
+
+def nh_hypot(a, b):
+    if isinstance(a, float) and isinstance(b, float):
+        h = mpfr_ref.cr2("hypot", a, b)
+        if math.isfinite(h) and (h == 0.0 or h >= FS_DMIN):
+            return h
+    x, y = nh_ux(a)[0], nh_ux(b)[0]
+    return nh_back((rnd53_sqrt(x * x + y * y), False))
+
+
+def nh_fin_mul(a, b) -> float:
+    """RN(a·b) once into binary64."""
+    if isinstance(a, float) and isinstance(b, float):
+        return a * b
+    return ux_fin(ux_mul(nh_ux(a), nh_ux(b), r=lambda v: v))
+
+
+def nf_contour(nx, ny, margin):
+    """The contour's samples as Rust walks them: (H field key, its two indices, E's index, the side's sign, the weight
+    is half) per sample, the sides bottom, top (H_x), left, right (H_y)."""
+    x0, x1, y0, y1 = margin, nx - 1 - margin, margin, ny - 1 - margin
+    out = []
+    for y, sign in ((y0, 1.0), (y1, -1.0)):
+        for i, x in enumerate(range(x0, x1 + 1)):
+            out.append(("hx", (y - 1) * nx + x, y * nx + x, y * nx + x, sign, i in (0, x1 - x0)))
+    for x, sign in ((x0, -1.0), (x1, 1.0)):
+        for i, y in enumerate(range(y0, y1 + 1)):
+            out.append(("hy", y * nx + x - 1, y * nx + x, y * nx + x, sign, i in (0, y1 - y0)))
+    return out
+
+
+def nf_core18(ez, hx, hy, rot, nx, ny, dx, k, margin, n_angles):
+    """`nf2ff_tm_core` with an unbounded exponent (the section comment): rot and k as model values."""
+    x0, x1, y0, y1 = margin, nx - 1 - margin, margin, ny - 1 - margin
+    xc, yc = 0.5 * float(x0 + x1), 0.5 * float(y0 + y1)
+    fl = {"hx": hx, "hy": hy}
+
+    def cmul(a, b):
+        return (nh_sub(nh_mul(a[0], b[0]), nh_mul(a[1], b[1])), nh_add(nh_mul(a[0], b[1]), nh_mul(a[1], b[0])))
+
+    half = nh_mul(0.5, dx)
+    samples = []
+    for key, ia, ib, ie, sign, is_half in nf_contour(nx, ny, margin):
+        h = fl[key]
+        w = half if is_half else dx
+        sw = w if sign > 0 else nh_neg(w)
+        ht = (nh_mul(nh_add(h["re"][ia], h["re"][ib]), 0.5), nh_mul(nh_add(h["im"][ia], h["im"][ib]), 0.5))
+        j = cmul(ht, rot)
+        e = (nh_mul(ez["re"][ie], sw), nh_mul(ez["im"][ie], sw))
+        samples.append(((nh_mul(j[0], sw), nh_mul(j[1], sw)), e))
+    nh_, nv_ = x1 - x0 + 1, y1 - y0 + 1
+    sides = [(nh_mul(float(x0) - xc, dx), nh_mul(float(y0) - yc, dx), 1.0, 0.0, samples[:nh_]),
+             (nh_mul(float(x0) - xc, dx), nh_mul(float(y1) - yc, dx), 1.0, 0.0, samples[nh_:2 * nh_]),
+             (nh_mul(float(x0) - xc, dx), nh_mul(float(y0) - yc, dx), 0.0, 1.0, samples[2 * nh_:2 * nh_ + nv_]),
+             (nh_mul(float(x1) - xc, dx), nh_mul(float(y0) - yc, dx), 0.0, 1.0, samples[2 * nh_ + nv_:])]
+    eta0 = math.sqrt(fdiv(MU0_NF, EPS0_NF))
+    norm = nh_sqrt(nh_div(k, 8.0 * math.pi))
+    kdx = nh_mul(k, dx)
+    angles = [2.0 * math.pi * float(i) / float(n_angles) for i in range(n_angles)]
+    pattern = []
+    zero = (0.0, 0.0)
+    for phi in angles:
+        sp, cp = MPFR_P["sin"](phi), MPFR_P["cos"](phi)
+        nz, lx, ly = zero, zero, zero
+        for n_side, (sx, sy, dxd, dyd, smp) in enumerate(sides):
+            arg = nh_mul(k, nh_add(nh_mul(sx, cp), nh_mul(sy, sp)))
+            r = (nh_trig("cos", arg), nh_trig("sin", arg))
+            sarg = nh_mul(kdx, dxd * cp + dyd * sp)
+            step = (nh_trig("cos", sarg), nh_trig("sin", sarg))
+            for jz, m in smp:
+                a = cmul(jz, r)
+                nz = (nh_add(nz[0], a[0]), nh_add(nz[1], a[1]))
+                a = cmul(m, r)
+                if n_side < 2:
+                    lx = (nh_add(lx[0], a[0]), nh_add(lx[1], a[1]))
+                else:
+                    ly = (nh_add(ly[0], a[0]), nh_add(ly[1], a[1]))
+                r = cmul(r, step)
+        nsp = -sp
+        lp = (nh_add(nh_mul(ly[0], cp), nh_mul(lx[0], nsp)), nh_add(nh_mul(ly[1], cp), nh_mul(lx[1], nsp)))
+        tot = (nh_add(nh_mul(nz[0], eta0), nh_neg(lp[0])), nh_add(nh_mul(nz[1], eta0), nh_neg(lp[1])))
+        pattern.append(nh_fin_mul(norm, nh_hypot(tot[0], tot[1])))
+    return pattern, angles
+
+
+def nf_eval18(toks, K):
+    """The port's `nf2ff_2d_phasor` (ADR 0002 rows 17 and 18, M5 parts 2c and 2d-6) on correctly rounded primitives: ω
+    to 53 bits with an unbounded exponent from each accumulator's frequency (CwAccumulator::new's omega_s, omega_e),
+    the agreement decided exactly on it, the frequency tested on ω/2π to 53 bits, k, ω·dt/2 and its rotation from it,
+    and the transform by nf_core18; a non-finite field value on the contour keeps Rust's core, on k and the rotation
+    rounded into binary64."""
+    P = dict(MPFR_P, hypot=lambda x, y: mpfr_ref.cr2("hypot", x, y))
+    ez, k = nf_acc(toks, 0)
+    hx, k = nf_acc(toks, k)
+    hy, k = nf_acc(toks, k)
+    nx, ny, dx = toks[k][1] & FD_U64, toks[k + 1][1] & FD_U64, toks[k + 2][1]
+    margin, na = toks[k + 3][1] & FD_U64, toks[k + 4][1] & FD_U64
+    w = 2.0 * math.pi
+
+    def w53(acc):
+        return ux_mul(ux(w), ux(acc["freq"])) if math.isfinite(acc["freq"]) else None
+
+    def same(a, b):                                 # row 17's: the decimal 10⁻¹² exactly for finite doubles
+        if math.isfinite(a) and math.isfinite(b):
+            return abs(Fraction(a) - Fraction(b)) * 10 ** 12 <= max(abs(Fraction(a)), abs(Fraction(b)))
+        return abs(a - b) <= 1e-12 * rust_max(abs(a), abs(b))
+
+    def same53(p, q):
+        x, y = w53(p), w53(q)
+        if x is not None and y is not None:
+            return abs(x[0] - y[0]) * 10 ** 12 <= max(abs(x[0]), abs(y[0]))
+        return same(p["omega"], q["omega"])
+
+    if not (same53(ez, hx) and same53(ez, hy) and same(ez["dt"], hx["dt"]) and same(ez["dt"], hy["dt"])):
+        return ip_err("NF2FF phasor accumulators must share frequency and dt")
+    freq = ez["omega"] / w
+    om = w53(ez)
+    f53 = None if om is None else ux_div(om, ux(w))
+    if na == 0:
+        return ip_err("need at least one observation angle")
+    if margin == 0 or margin >= nx // 2 or margin >= ny // 2:
+        return ip_err(f"NF2FF box margin must be in 1..min(nx, ny)/2 for a {nx}x{ny} grid, got {margin}")
+    if not fd_pos(dx):
+        return ip_err(f"dx must be finite and positive, got {rust_display(dx)}")
+    if f53 is None or not f53[0] > 0:
+        return ip_err(f"NF2FF frequency must be finite and positive, got {rust_display(freq)}")
+    k53 = ux_div(ux_mul(ux(w), f53), ux(K[0]))
+    for name, acc in (("ez", ez), ("hx", hx), ("hy", hy)):
+        if nx * ny >= 1 << 64 or acc["n"] < nx * ny:
+            return ip_err(f"NF2FF field `{name}` has {acc['n']} samples, need {nx}x{ny}")
+    if not math.isfinite(ez["dt"]):
+        return ip_err(f"accumulator dt must be finite, got {rust_display(ez['dt'])}")
+    harg = ux_mul(ux_mul(om, ux(0.5)), ux(ez["dt"]))
+    rc, rs = fs_cos53(harg), fs_sin53(harg)
+    fields = []
+    for key, ia, ib, ie, _s, _h in nf_contour(nx, ny, margin):
+        h = hx if key == "hx" else hy
+        fields += [h["re"][ia], h["im"][ia], h["re"][ib], h["im"][ib], ez["re"][ie], ez["im"][ie]]
+    if not all(math.isfinite(v) for v in fields):
+        pattern, angles = nf_core(ez, hx, hy, (ux_fin(rc), ux_fin(rs)), nx, ny, dx, ux_fin(k53), margin, na, P)
+    else:
+        pattern, angles = nf_core18(ez, hx, hy, (nh_back(rc), nh_back(rs)), nx, ny, dx, nh_back(k53), margin, na)
     return fu_seq_toks(pattern) + fu_seq_toks(angles)
 
 
@@ -10126,8 +10332,10 @@ def fdtd_corrections(root: Path, path: Path):
                     continue                                # ADR 0002 row 18's: fdtd.adr.tsv maps it
                 if fn == "fdtd::find_eigenmodes" and not toks_same(*fu_eigen_port(ins)):
                     continue                                # ADR 0002 row 18's: fdtd.adr.tsv maps it
-                if fn == "fdtd::nf2ff_2d_phasor" and not toks_same(*fu_nf2ff_port(fn, ins, fs.K, fs.c12)):
-                    continue                                # ADR 0002 row 17's: fdtd.adr.tsv maps it
+                if fn == "fdtd::nf2ff_2d_phasor":
+                    pw, _w17, pb = fu_nf2ff_port(fn, ins, fs.K, fs.c12)
+                    if not toks_same(pw, pb):
+                        continue                            # ADR 0002 rows 17 and 18's: fdtd.adr.tsv maps it
                 old = wave_toks([parse_tok(x) for x in outs.split(" ")])
                 if not toks_same(want, old):
                     out.append((fn, ins, wire(want), f"oracle {outs[:120]}; correctly rounded primitives give "
@@ -10301,9 +10509,10 @@ def fdtd_adr_rows(root: Path, path: Path) -> list:
                 out.append((fn, ins, wire(want), "40", f"oracle {outs}; ADR 0002 row 40: rounded once"))
             continue
         if fn == "fdtd::nf2ff_2d_phasor":
-            want, base = fu_nf2ff_port(fn, ins, fs.K, fs.c12)
+            want, want17, base = fu_nf2ff_port(fn, ins, fs.K, fs.c12)
             if not toks_same(want, base) and not toks_same(want, wave_toks([parse_tok(x) for x in outs.split(" ")])):
-                out.append((fn, ins, wire(want), "17", f"oracle {outs[:120]}; ADR 0002 row 17: the agreement exact"))
+                note = "row 17: the agreement exact" if toks_same(want, want17) else "row 18: the range edge"
+                out.append((fn, ins, wire(want), note[4:6], f"oracle {outs[:120]}; ADR 0002 {note}"))
             continue
         if fn in ("NonUniformGrid::try_courant_dt", "NonUniformGrid::courant_dt"):
             want, base = fu_courant_port(fn, ins, fs.K, fs.c12)

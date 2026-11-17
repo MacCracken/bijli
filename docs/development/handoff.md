@@ -1,4 +1,4 @@
-# Handoff: the Cyrius port, mid-M5 Part 2 (2026-11-16, after 2d-5)
+# Handoff: the Cyrius port, end of M5 Part 2 (2026-11-16, after 2d-6)
 
 For the next agent picking up the port. **Read first:** `CLAUDE.md` (the rules), [`state.md`](state.md) (live state),
 [`bijli-port-plan.md`](bijli-port-plan.md) (§0.1 holds the user's M5 Part 2 answers; the tracking table is near the
@@ -9,7 +9,7 @@ bite is done, the machinery, the scripts and the traps. Delete it once it has se
 
 ## Where it stands
 
-- **Committed through `6804aab`** ("M5 2d-4b-2 done"); 2d-5 is in the working tree for the user to commit ("m5 2d-5
+- **Committed through `26e5050`** ("M5 2d-5 done"); 2d-6 is in the working tree for the user to commit ("m5 2d-6
   done").
 - **M5 Part 1 is done** (§94–§99): the 1D grid, the pulses and TF/SF, the media, the utilities, NF2FF's phasor form,
   their JSON.
@@ -38,16 +38,20 @@ bite is done, the machinery, the scripts and the traps. Delete it once it has se
     §112). 2d-4 is done;
   - 2d-5, the utilities: `graded` by cell (`_bj_fu_graded_ux`, `_bj_ux_pow` for the ratio), `extents`' sum rerun when
     it ends non-finite, `fourth_order_derivative` by cell (`_bj_fu_fourth_ux`), each check one exponent-field test
-    (row 18, §113).
-- **Numbers after 2d-5**: 18 modules, 641,124 ok, 0 failed, 119,017 accepted (ADR 01: 40,366; ADR 0002: 78,651)
-  over 760,141 rows; 475 digests equal on x86_64 ELF, x86_64 PE and aarch64. Ledger 691 ported, 9 n/a, 158 pending of
+    (row 18, §113);
+  - 2d-6, NF2FF: ω to 53 bits for the agreement (`_bj_nf_same53`), the frequency, k and the rotation; the core on
+    Rust's chain where every operation is its 53-bit value (mode 0, checked per sample by one exponent test and per
+    angle), else the call or the angle unbounded (`_bj_nf_angle_ux`); a non-finite field keeps Rust's (row 18, §114).
+    **Part 2 is done.**
+- **Numbers after 2d-6**: 18 modules, 641,185 ok, 0 failed, 119,111 accepted (ADR 01: 40,366; ADR 0002: 78,745)
+  over 760,296 rows; 475 digests equal on x86_64 ELF, x86_64 PE and aarch64. Ledger 691 ported, 9 n/a, 158 pending of
   858; API snapshot 2,116; benches 73 of 80 twinned; execution coverage 371 of 371.
-- **Next, 2d-6: NF2FF** (`src/nf2ff.cyr`, `bj_nf2ff_2d_phasor`): k = 2πf/c (Rust's frequency = ω/2π from the
-  accumulators' `omega`; 2d-4a's `omega_s`/`omega_e` hold ω past DBL_MAX), the samples' products and sums along the
-  contour, and √(k/8π)·|…| (`_bj_hypot` is already correctly rounded). Its agreement test is row 17's (§105). Then M5
-  is done: the milestone's wrap-up (state, roadmap, the benchmark doc regenerated with `scripts/bench_record.py`).
+- **Next: M5's wrap-up**: state, the roadmap, and the benchmark doc regenerated with `scripts/bench_record.py`. Then
+  M5 is done.
 - **Then**: M6 (`Fdtd2d`, `Fdtd3d`, the CPML, `nf2ff_2d`, `Mode2d`, `CpmlParams`), under the same per-cell rule.
-- **Corpus size**: `fdtd.tsv` is 38.6 MB (107,186 rows) and `json.tsv` 38.7 MB, against the 48 MiB cap that
+  `nf2ff_2d` (the snapshot form) calls `_bj_nf_core` with the rotation (1, 0) and k from `_bj_nf_validate` on its
+  double frequency (`_bj_k_ux_from`): the core's range edges come with it.
+- **Corpus size**: `fdtd.tsv` is 38.8 MB (107,341 rows) and `json.tsv` 38.7 MB, against the 48 MiB cap that
   validate.py's `too_big` guards (§81). M6 will need `fdtd.tsv` split (a second module file, e.g. by milestone), and 2d
   may: watch the size after each regeneration.
 - **A recorded cost**: the 1D step runs 3.5–3.8× HEAD's with 2d-2a's scan (§107), the TF/SF step about 2× with
