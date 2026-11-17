@@ -6866,7 +6866,8 @@ def field_corrections(root: Path):
 # `false` or `true` in a document), another struct's name, ("arr", n, type) for Rust's `[type; n]`, or ("vec", type)
 # for a `Vec<type>`, whose row tokens are `i:` its length, then its elements. M2 part 1a added Material, M3 part 1a-2
 # polarization's four structs, M3 part 1b-2 MieResult, M3 part 1c-2 beam's three structs (and "bool"), M4 part 1d
-# rf's SMatrix and TouchstoneData (and "usize", `i:` its word) and TouchstoneFormat (JSON_ENUMS).
+# rf's SMatrix and TouchstoneData (and "usize", `i:` its word) and TouchstoneFormat (JSON_ENUMS), M5 part 1f the FDTD
+# types, M6 part 1d CpmlParams and Mode2d (JSON_ENUMS).
 JSON_FIELDS = {
     "Complex": [("re", "f64"), ("im", "f64")],
     "FieldVector": [("x", "f64"), ("y", "f64"), ("z", "f64")],
@@ -6893,10 +6894,13 @@ JSON_FIELDS = {
     "NonUniformGrid": [("dx", ("vec", "f64")), ("dy", ("vec", "f64")), ("dz", ("vec", "f64"))],
     "EigenmodeResult": [("frequencies", ("vec", "f64")), ("quality_factors", ("vec", "f64")),
                         ("amplitudes", ("vec", "f64"))],
+    # M6 part 1d: the 2D FDTD's CPML grading.
+    "CpmlParams": [("thickness", "usize"), ("grading_order", "f64"), ("sigma_ratio", "f64"), ("kappa_max", "f64"),
+                   ("alpha_max", "f64")],
 }
 # M4 part 1d: a unit enum, written as its variant's name and read from it or from a one-key map to `null`; its row
 # token is `i:` the port's enum value.
-JSON_ENUMS = {"TouchstoneFormat": ["MagnitudeAngle", "RealImag", "DbAngle"]}
+JSON_ENUMS = {"TouchstoneFormat": ["MagnitudeAngle", "RealImag", "DbAngle"], "Mode2d": ["Tm", "Te"]}
 
 
 class JsonCount(int):
@@ -7200,11 +7204,13 @@ def json_sm_shape(outs, k):
 def json_row36(fn, outs, flags) -> bool:
     """A reader row serde reads Ok whose value the port's fixed structs can't hold (ADR 0002 row 36): a matrix whose s
     isn't ports × ports or whose z0 isn't ports long, data whose frequencies and matrices differ in number or whose
-    matrices aren't ports-port, a port count past 2^63 − 1 (the port's i64 word), or (M5 part 1f) an eigenmode result
-    whose three vectors differ in length. A row with row-12 flags is that
-    row's (the port refuses it whatever its shape)."""
+    matrices aren't ports-port, a port count past 2^63 − 1 (the port's i64 word), (M5 part 1f) an eigenmode result
+    whose three vectors differ in length, or (M6 part 1d) a CPML thickness past 2^63 − 1 (bayan's tree keeps no exact
+    integer past it). A row with row-12 flags is that row's (the port refuses it whatever its shape)."""
     if flags or not outs or outs[0][0] == "E":
         return False
+    if fn == "json::CpmlParams::from_str":
+        return outs[0][1] < 0
     if fn == "json::SMatrix::from_str":
         return not json_sm_shape(outs, 0)[1]
     if fn == "json::EigenmodeResult::from_str":
@@ -7226,19 +7232,22 @@ def json_row36(fn, outs, flags) -> bool:
 
 
 def json_adr_rows(path: Path) -> list:
-    """ADR 0002 mappings for json.tsv: row 36's (M4 part 1d), each refused by the port as Deserialize."""
+    """ADR 0002 mappings for json.tsv: row 36's (M4 part 1d, M5 part 1f, M6 part 1d), each refused by the port as
+    Deserialize."""
     out = []
     for line in path.read_text().splitlines():
         if line.startswith("#"):
             continue
         fn, _cls, ins, outs, _note = line.split("\t")
-        if fn not in ("json::SMatrix::from_str", "json::TouchstoneData::from_str", "json::EigenmodeResult::from_str"):
+        if fn not in ("json::SMatrix::from_str", "json::TouchstoneData::from_str", "json::EigenmodeResult::from_str",
+                      "json::CpmlParams::from_str"):
             continue
         toks_in = [parse_tok(t) for t in ins.split(" ")]
         toks_out = [parse_tok(t) for t in outs.split(" ")]
         if json_row36(fn, toks_out, toks_in[1][1]):
-            out.append((fn, ins, "E:Deserialize", "36", f"oracle {outs[:120]}; ADR 0002 row 36: a shape the port's "
-                        "fixed structs can't hold"))
+            why = ("a thickness past 2^63 − 1, which bayan's tree keeps no exact integer for"
+                   if fn == "json::CpmlParams::from_str" else "a shape the port's fixed structs can't hold")
+            out.append((fn, ins, "E:Deserialize", "36", f"oracle {outs[:120]}; ADR 0002 row 36: {why}"))
     return out
 
 

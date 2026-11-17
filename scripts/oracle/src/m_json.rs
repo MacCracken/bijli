@@ -49,12 +49,20 @@
 //! `Vec<f64>` each (`emit_fdtd_vecs`): a value is each vector as `i:` its length and its elements. Their documents add
 //! every triple of lengths to 3; an eigenmode result whose vectors differ in length is read by serde and refused by the
 //! port (ADR 0002 row 36), and its writer values are equal-length, the only ones the port can build.
+//!
+//! The 2D FDTD types (M6 part 1d, `emit_fdtd2d`, after the FDTD vectors): `Mode2d` is laid out as `TouchstoneFormat`,
+//! `i:` the port's enum value (0 Tm, 1 Te), written as its name; `CpmlParams` is a `Kind` whose first value is a usize
+//! (`Kind::is_usize`: `thickness`, carried in a value's f64 as its bits, `i:` its word in a row, an integer in a
+//! document), then four f64. Its writer values take thicknesses at usize's edges once each (`THICKNESSES`) and small
+//! ones after; a thickness past 2^63 − 1 is read by serde and refused by the port (ADR 0002 row 36).
 
 use crate::grids::{Rng, pow2, specials};
 use crate::tsv::{Class, Module, Tok, b, f, i, s};
 use bijli::beam::{AbcdMatrix, GaussianBeam, ResonatorStability};
 use bijli::charge::{ELECTRON_MASS, ELEMENTARY_CHARGE, PROTON_MASS, PointCharge};
-use bijli::fdtd::{DebyeMaterial, DrudeMaterial, EigenmodeResult, LorentzMaterial, LossyMaterial, NonUniformGrid};
+use bijli::fdtd::{
+    CpmlParams, DebyeMaterial, DrudeMaterial, EigenmodeResult, LorentzMaterial, LossyMaterial, Mode2d, NonUniformGrid,
+};
 use bijli::field::{EPSILON_0, FieldVector, MU_0, SPEED_OF_LIGHT};
 use bijli::material::Material;
 use bijli::polarization::{Complex, JonesMatrix, JonesVector, MuellerMatrix, StokesVector};
@@ -81,6 +89,7 @@ enum Kind {
     DrudeMaterial,
     LorentzMaterial,
     DebyeMaterial,
+    CpmlParams,
 }
 
 /// `{"re":<a>,"im":<b>}`.
@@ -126,6 +135,9 @@ impl Kind {
     /// The FDTD materials (M5 part 1f), emitted after rf's rows.
     const FDTD: [Kind; 4] = [Kind::LossyMaterial, Kind::DrudeMaterial, Kind::LorentzMaterial, Kind::DebyeMaterial];
 
+    /// The 2D FDTD's struct (M6 part 1d), emitted after the FDTD vectors.
+    const FDTD2D: [Kind; 1] = [Kind::CpmlParams];
+
     fn name(self) -> &'static str {
         match self {
             Kind::Complex => "Complex",
@@ -143,13 +155,15 @@ impl Kind {
             Kind::DrudeMaterial => "DrudeMaterial",
             Kind::LorentzMaterial => "LorentzMaterial",
             Kind::DebyeMaterial => "DebyeMaterial",
+            Kind::CpmlParams => "CpmlParams",
         }
     }
 
-    /// How many values the type holds: its f64, and its bool if any (`is_bool`).
+    /// How many values the type holds: its f64, and its bool or usize if any (`is_bool`, `is_usize`).
     fn width(self) -> usize {
         match self {
             Kind::Complex | Kind::LossyMaterial => 2,
+            Kind::CpmlParams => 5,
             Kind::FieldVector | Kind::Material | Kind::GaussianBeam | Kind::DrudeMaterial | Kind::DebyeMaterial => 3,
             Kind::LorentzMaterial => 4,
             Kind::PointCharge => 8,
@@ -165,16 +179,45 @@ impl Kind {
         matches!(self, Kind::ResonatorStability) && k == 3
     }
 
-    /// The row tokens of the values v: `f:` each f64, `i:` each bool.
-    fn toks(self, v: &[f64]) -> Vec<Tok> {
-        v.iter().enumerate().map(|(k, &x)| if self.is_bool(k) { b(x != 0.0) } else { f(x) }).collect()
+    /// Whether value k is a usize (M6 part 1d), carried in the value's f64 as its bits: CpmlParams' `thickness`.
+    fn is_usize(self, k: usize) -> bool {
+        matches!(self, Kind::CpmlParams) && k == 0
     }
 
-    /// The spellings of the values v: each f64 by `g`, each bool as `true` or `false`.
+    /// Whether every f64 among the values v is finite (a bool or a usize always is).
+    fn finite(self, v: &[f64]) -> bool {
+        v[..self.width()].iter().enumerate().all(|(k, x)| self.is_usize(k) || x.is_finite())
+    }
+
+    /// The row tokens of the values v: `f:` each f64, `i:` each bool and each usize (its word).
+    fn toks(self, v: &[f64]) -> Vec<Tok> {
+        v.iter()
+            .enumerate()
+            .map(|(k, &x)| {
+                if self.is_bool(k) {
+                    b(x != 0.0)
+                } else if self.is_usize(k) {
+                    usize_tok(word(x))
+                } else {
+                    f(x)
+                }
+            })
+            .collect()
+    }
+
+    /// The spellings of the values v: each f64 by `g`, each bool as `true` or `false`, each usize in decimal.
     fn spell(self, v: &[f64], g: impl Fn(f64) -> String) -> Vec<String> {
         v.iter()
             .enumerate()
-            .map(|(k, &x)| if self.is_bool(k) { (x != 0.0).to_string() } else { g(x) })
+            .map(|(k, &x)| {
+                if self.is_bool(k) {
+                    (x != 0.0).to_string()
+                } else if self.is_usize(k) {
+                    word(x).to_string()
+                } else {
+                    g(x)
+                }
+            })
             .collect()
     }
 
@@ -212,6 +255,10 @@ impl Kind {
                 v[0], v[1], v[2], v[3]
             ),
             Kind::DebyeMaterial => format!("{{\"eps_inf\":{},\"eps_s\":{},\"tau\":{}}}", v[0], v[1], v[2]),
+            Kind::CpmlParams => format!(
+                "{{\"thickness\":{},\"grading_order\":{},\"sigma_ratio\":{},\"kappa_max\":{},\"alpha_max\":{}}}",
+                v[0], v[1], v[2], v[3], v[4]
+            ),
         }
     }
 
@@ -235,6 +282,7 @@ impl Kind {
             }
             Kind::LossyMaterial => format!("[{},{}]", v[0], v[1]),
             Kind::DrudeMaterial | Kind::DebyeMaterial => format!("[{},{},{}]", v[0], v[1], v[2]),
+            Kind::CpmlParams => format!("[{},{},{},{},{}]", v[0], v[1], v[2], v[3], v[4]),
         }
     }
 
@@ -275,6 +323,13 @@ impl Kind {
                 ("gamma", v[3].clone()),
             ],
             Kind::DebyeMaterial => vec![("eps_inf", v[0].clone()), ("eps_s", v[1].clone()), ("tau", v[2].clone())],
+            Kind::CpmlParams => vec![
+                ("thickness", v[0].clone()),
+                ("grading_order", v[1].clone()),
+                ("sigma_ratio", v[2].clone()),
+                ("kappa_max", v[3].clone()),
+                ("alpha_max", v[4].clone()),
+            ],
         }
     }
 
@@ -338,6 +393,14 @@ impl Kind {
             Kind::DebyeMaterial => {
                 serde_json::to_string(&DebyeMaterial::new(black_box(v[0]), black_box(v[1]), black_box(v[2])))
             }
+            Kind::CpmlParams => {
+                let mut p = CpmlParams::new(black_box(word(v[0])));
+                p.grading_order = black_box(v[1]);
+                p.sigma_ratio = black_box(v[2]);
+                p.kappa_max = black_box(v[3]);
+                p.alpha_max = black_box(v[4]);
+                serde_json::to_string(&p)
+            }
         }
         .expect("serde_json writes every value")
     }
@@ -376,9 +439,21 @@ impl Kind {
             Kind::LorentzMaterial => serde_json::from_str::<LorentzMaterial>(doc)
                 .map(|m| vec![m.eps_inf, m.delta_eps, m.omega_0, m.gamma]),
             Kind::DebyeMaterial => serde_json::from_str::<DebyeMaterial>(doc).map(|m| vec![m.eps_inf, m.eps_s, m.tau]),
+            Kind::CpmlParams => serde_json::from_str::<CpmlParams>(doc)
+                .map(|p| vec![carried(p.thickness), p.grading_order, p.sigma_ratio, p.kappa_max, p.alpha_max]),
         }
         .map_err(|e| e.to_string())
     }
+}
+
+/// A usize carried in a value's f64 (`Kind::is_usize`): its bits.
+fn word(x: f64) -> usize {
+    usize::try_from(x.to_bits()).expect("a 64-bit usize")
+}
+
+/// A usize as a value's f64: its word as the bits.
+fn carried(n: usize) -> f64 {
+    f64::from_bits(u64::try_from(n).expect("a 64-bit usize"))
 }
 
 // ── the parsed-token form of a document ─────────────────────────────────────────────
@@ -747,12 +822,15 @@ fn reader_row(m: &mut Module, kind: Kind, doc: &str) {
     }
 }
 
-/// The plain spellings of a set of seeded values (`Kind::draws`) for a document's other fields; a bool field is `true`.
+/// The plain spellings of a set of seeded values (`Kind::draws`) for a document's other fields; a bool field is `true`,
+/// a usize field `10`.
 fn fillers(kind: Kind, rng: &mut Rng) -> Vec<String> {
     let mut v: Vec<String> = (0..kind.draws()).map(|_| js(rng.signed_log_uniform(-20.0, 20.0))).collect();
     for (k, x) in v.iter_mut().enumerate().take(kind.width()) {
         if kind.is_bool(k) {
             *x = "true".to_string();
+        } else if kind.is_usize(k) {
+            *x = "10".to_string();
         }
     }
     v
@@ -1062,7 +1140,8 @@ fn nested(kind: Kind, v: &[String]) -> Vec<String> {
         | Kind::LossyMaterial
         | Kind::DrudeMaterial
         | Kind::LorentzMaterial
-        | Kind::DebyeMaterial => {}
+        | Kind::DebyeMaterial
+        | Kind::CpmlParams => {}
     }
     docs
 }
@@ -1108,6 +1187,8 @@ pub fn emit() -> Module {
         emit_kind(m, kind, &mut rng, &xs);
     }
     emit_fdtd_vecs(m, &mut rng, &xs);
+    // M6 part 1d: the 2D FDTD's Mode2d and CpmlParams, after the vectors.
+    emit_fdtd2d(m, &mut rng, &xs);
     rows.m
 }
 
@@ -1124,11 +1205,13 @@ fn emit_kind(m: &mut Rows, kind: Kind, rng: &mut Rng, xs: &[f64]) {
     for _ in 0..300 {
         sets.push((0..kind.draws()).map(|_| f64::from_bits(rng.bits())).collect());
     }
-    // A bool field alternates false, true over the sets.
+    // A bool field alternates false, true over the sets; a usize field takes THICKNESSES once each, then 0 to 24.
     for (j, v) in sets.iter_mut().enumerate() {
         for (k, x) in v.iter_mut().enumerate().take(w) {
             if kind.is_bool(k) {
                 *x = f64::from(u8::from(j % 2 == 1));
+            } else if kind.is_usize(k) {
+                *x = carried(THICKNESSES.get(j).copied().unwrap_or(j % 25));
             }
         }
     }
@@ -1139,13 +1222,12 @@ fn emit_kind(m: &mut Rows, kind: Kind, rng: &mut Rng, xs: &[f64]) {
     // the shape rows cover it).
     for v in &sets {
         m.reader(kind, &kind.write(v));
-        let finite = v[..w].iter().all(|x| x.is_finite());
-        if finite {
+        if kind.finite(v) {
             m.reader(kind, &kind.doc(&kind.spell(v, js)));
         }
     }
     for v in sets.iter().take(250) {
-        if v[..w].iter().all(|x| x.is_finite()) {
+        if kind.finite(v) {
             m.reader(kind, &kind.doc(&kind.spell(v, |x| format!("{x}"))));
             m.reader(kind, &kind.doc(&kind.spell(v, |x| format!("{x:e}"))));
         }
@@ -1162,7 +1244,7 @@ fn emit_kind(m: &mut Rows, kind: Kind, rng: &mut Rng, xs: &[f64]) {
         }
     }
     // Seeded decimals, a few in each f64 position.
-    let nums: Vec<usize> = (0..w).filter(|&k| !kind.is_bool(k)).collect();
+    let nums: Vec<usize> = (0..w).filter(|&k| !kind.is_bool(k) && !kind.is_usize(k)).collect();
     for (k, d) in random_decimals(rng, 1200).into_iter().enumerate() {
         let mut v = base.clone();
         v[nums[k % nums.len()]] = d;
@@ -2059,3 +2141,65 @@ fn vecs_shapes(kind: Vecs, v: &[String]) -> Vec<String> {
     docs
 }
 
+
+// ── the 2D FDTD types (M6 part 1d) ─────────────────────────────────────────────────────
+
+/// CpmlParams' writer thicknesses at usize's edges, one set each before the small ones: zero (which `Cpml::with_params`
+/// refuses), the typical layers, freelist's largest profile block (2^31/48 layers) and one past, 2^32, f64's integer
+/// edge, and i64's and u64's (past 2^63 − 1 the port's reader refuses, ADR 0002 row 36).
+const THICKNESSES: [usize; 16] = [
+    0,
+    1,
+    8,
+    10,
+    20,
+    44_739_242,
+    44_739_243,
+    1 << 32,
+    (1 << 53) - 1,
+    1 << 53,
+    (1 << 53) + 1,
+    (1 << 63) - 1,
+    1 << 63,
+    (1 << 63) + 1,
+    usize::MAX - 1,
+    usize::MAX,
+];
+
+const MODES: [Mode2d; 2] = [Mode2d::Tm, Mode2d::Te];
+
+/// A mode as its row token: the port's enum value (0 Tm, 1 Te).
+fn mode_tok(t: Mode2d) -> Tok {
+    count_tok(MODES.iter().position(|&x| x == t).expect("one of the two"))
+}
+
+impl Rows {
+    fn md_json(&mut self, doc: &str) {
+        let read = serde_json::from_str::<Mode2d>(black_box(doc)).map_err(|e| e.to_string());
+        self.rf_reader("Mode2d", doc, read, |&t| vec![mode_tok(t)]);
+    }
+}
+
+/// The 2D FDTD's two types, after the FDTD vectors: Mode2d's two values, then every spelling of a variant and a near
+/// miss (as TouchstoneFormat's); then CpmlParams, a `Kind` (`emit_kind`) whose thickness is a usize.
+fn emit_fdtd2d(m: &mut Rows, rng: &mut Rng, xs: &[f64]) {
+    for t in MODES {
+        let text = serde_json::to_string(&t).expect("serde_json writes a unit variant");
+        m.rf_writer("Mode2d", vec![mode_tok(t)], &text);
+        m.md_json(&text);
+    }
+    for d in [
+        "{\"Tm\":null}", "{\"Te\":null}", " \"Te\" ", "{ \"Tm\" : null }", "\"\\u0054m\"", "\"T\\u0065\"",
+        "{\"\\u0054e\":null}", "{\"Te\":[]}", "{\"Te\":{}}", "{\"Te\":0}", "{\"Te\":false}", "{\"Te\":\"\"}",
+        "{\"Te\":null,\"x\":1}", "{\"x\":1,\"Te\":null}", "{\"Te\":null,\"Te\":null}", "{\"Tm\":null,\"Te\":null}",
+        "{\"x\":null}", "{}", "[\"Te\"]", "[]", "\"te\"", "\"TE\"", "\"tm\"", "\"TM\"", "\"T e\"", "\"Te \"",
+        "\" Te\"", "\"\"", "\"T\"", "\"Tem\"", "\"Tx\"", "\"Tm\\u0000\"", "\"Mode2d::Te\"", "\"\\ud800\"",
+        "{\"\\ud800\":null}", "0", "1", "2", "-0", "null", "true", "", " ", "\"Te", "Te", "\"Te\"x", "\"Te\",",
+        "\"Tm\"\"Te\"", "{\"Te\"}", "{\"Te\":}", "{\"Te\":null", "{\"Te\":null}}", "{\"Te\":nul}",
+    ] {
+        m.md_json(d);
+    }
+    for kind in Kind::FDTD2D {
+        emit_kind(m, kind, rng, xs);
+    }
+}

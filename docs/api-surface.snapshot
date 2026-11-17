@@ -1100,6 +1100,8 @@ json::BjAbcdMatrix_from_json/3
 json::BjAbcdMatrix_to_json/2
 json::BjComplex_from_json/3
 json::BjComplex_to_json/2
+json::BjCpmlParams_from_json/3
+json::BjCpmlParams_to_json/2
 json::BjDebyeMaterial_from_json/3
 json::BjDebyeMaterial_to_json/2
 json::BjDrudeMaterial_from_json/3
@@ -1122,6 +1124,8 @@ json::BjMaterial_from_json/3
 json::BjMaterial_to_json/2
 json::BjMieResult_from_json/3
 json::BjMieResult_to_json/2
+json::BjMode2d_from_json/3
+json::BjMode2d_to_json/2
 json::BjMuellerMatrix_from_json/3
 json::BjMuellerMatrix_to_json/2
 json::BjNonUniformGrid_from_json/3

@@ -1435,6 +1435,23 @@ fn main(): i64 {
     bench_report(bjg);
     BjNonUniformGrid_free(&jg);
     if (jgsum == 7 || jdk == 7) { println("."); }
+    var jcp: BjCpmlParams = BjCpmlParams_new(10);
+    jcp.kappa_max = 5.0;
+    jcp.alpha_max = 0.05;
+    var sbc = str_builder_new();
+    var tcw, vcw = BjCpmlParams_to_json(&jcp, sbc);
+    var cdoc = str_builder_build(sbc);
+    var jcsum = 0;
+    var bjc = bench_new("json/cpml_params_from_json");
+    bench_batch_start(bjc);
+    for (var k = 0; k < 100000; k = k + 1) {
+        var jcp2: BjCpmlParams;
+        var tcr, vcr = BjCpmlParams_from_json(str_data(cdoc), str_len(cdoc), &jcp2);
+        jcsum = jcsum + jcp2.thickness;
+    }
+    bench_batch_stop(bjc, 100000);
+    bench_report(bjc);
+    if (jcsum == 7 || vcw == 7) { println("."); }
 
     var ar: f64 = acc.re;
     if (ar == 7.0) { println("."); }

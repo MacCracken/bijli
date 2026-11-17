@@ -534,6 +534,16 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
   rows (953); `fdtd_2d3d.cr.tsv` corrects 14 in all, and `fdtd_2d3d.adr.tsv` maps 12 to row 18. `tests/nf2ff.tcyr`
   ports fdtd.rs's six snapshot tests (35 assertions). Bench twin: `fdtd/nf2ff_2d_80x80_180` 1.59–1.60 ms (8.2×
   Rust's 193.01 µs; about 30 ns a contour sample and angle, as the phasor form's).
+- **Cyrius port, M6 part 1d — the 2D FDTD types' JSON; M6 Part 1 done** (`src/json.cyr`): writers and readers of
+  `BjCpmlParams` and `BjMode2d`, with serde's derive semantics as for the earlier types. A CpmlParams' fields are read
+  as written (`BjCpml_with_params` refuses an invalid grading when it is used), and its thickness, a usize, is written
+  as Rust's whole u64 and read from 0 to 2^63 − 1: a thickness past that, which serde reads, is refused as Deserialize
+  (ADR 0002 row 36 amended: bayan's tree keeps no exact integer past 2^63 − 1, and no grid fits such a layer).
+  `BjMode2d_to_json` refuses a word that is no mode, as `BjFdtd2d_new` does; its reader takes both forms of a unit
+  variant. `json.tsv` grows by 5,136 rows (97,092); `json.cr.tsv` by 2,719 where serde_json's parse misrounds;
+  `json.adr.tsv` maps 14 thicknesses to row 36. `tests/json.tcyr` gains `cyrius_fdtd2d_json` (19 assertions).
+  Cyrius-only bench: `json/cpml_params_from_json` 3.62–3.76 µs (five fields, between FieldVector's 1.9 µs
+  and PointCharge's 4.4 µs).
 
 ### Fixed
 

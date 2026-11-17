@@ -74,6 +74,7 @@ EXTRA = {
     "fdtd/cw_accumulate_1000": "one CW accumulation of a 1000-cell field, a third of it zero (M5 part 2d-4a)",
     "json/drude_material_to_json": "a DrudeMaterial's JSON, gold's (src/json.cyr, M5 part 1f)",
     "json/nonuniform_grid_from_json": "a 10 × 7 × 3 NonUniformGrid read back into a new grid, its block freed (M5 1f)",
+    "json/cpml_params_from_json": "a CpmlParams read back, its thickness a usize (src/json.cyr, M6 part 1d)",
 }
 
 

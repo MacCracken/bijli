@@ -6654,3 +6654,56 @@ eigenmode search (`dft_magnitude`'s recurrence and magnitude, `find_eigenmodes`'
   equal**. `nf2ff.tcyr` (35) passes on all three. The gate is clean (no warnings; execution coverage 378 of 378
   functions); validate.py 761,249 rows, 0 problems; the oracle's `--check` and clippy clean. Next: 1d, the JSON of
   `CpmlParams` and `Mode2d`.
+
+## 120. M6 part 1d: the 2D FDTD types' JSON; M6 Part 1 done (2026-11-16)
+
+- **`src/json.cyr`**: writers and readers for fdtd.rs's last two serde types.
+  - **`BjCpmlParams`** is written as serde writes it, `{"thickness":..,"grading_order":..,"sigma_ratio":..,
+    "kappa_max":..,"alpha_max":..}`, the thickness as Rust's usize: the word's whole u64 (`_bj_jw_u64`, as an
+    SMatrix's ports), so the word −1 writes 18446744073709551615. Its reader takes serde's object and sequence forms
+    and reads every field as written, as serde's derive reads Rust's public fields: a zero thickness or a grading order
+    below 1 is read, and `BjCpml_with_params` refuses it when it is used.
+  - **The thickness past 2^63 − 1** (ADR 0002 row 36, amended): serde reads any integer up to u64::MAX into a usize.
+    bayan's tree holds an integer past i64 as a float (the pre-pass appends `.0`, so an f64 field keeps its correctly
+    rounded value), and no exact integer survives it; `_bj_jr_usize` refuses the float, as it refuses a port count
+    past 2^63 − 1. Such a layer fits no grid (2·thickness + 3 nodes) and its profiles can't be allocated (Rust's
+    `with_params` returns Allocation), so nothing the port could do with it is lost. Reading the exact integer would
+    take the text's position from the tree, which bayan's nodes don't keep.
+  - **`BjMode2d`** is written as its variant's name, `"Tm"` or `"Te"`; a word that is no mode is refused first,
+    InvalidParameter "unknown 2D mode {mode}", as `BjFdtd2d_new` and `BjTouchstoneFormat_to_json` refuse one. Its
+    reader takes serde's two forms of a unit variant (the name, or a one-member object mapping it to null), escapes
+    decoded, and refuses anything else as Deserialize.
+- **The grid** (`m_json.rs`): 5,136 rows appended to `json.tsv` (97,092, 40.7 MB of the 48 MiB cap).
+  - `Mode2d`'s rows are `TouchstoneFormat`'s: its two values, every spelling of a variant and a near miss (case,
+    spaces, escapes, a key with a lone surrogate, the variant's value other than null, two variants, prefixes).
+  - `CpmlParams` is a new `Kind` through `emit_kind`, with a usize position (`Kind::is_usize`): the thickness rides
+    in a value's f64 as its bits, `i:` its word in a row, an integer in a document. The writer sets take
+    `THICKNESSES` once each (0, 1, 8, 10, 20, freelist's 2^31/48 profile bound and one past, 2^32, 2^53 ± 1, 2^63 − 1,
+    2^63, 2^63 + 1, u64::MAX − 1 and u64::MAX), then 0 to 24; every number spelling goes to the thickness position
+    too, and the seeded decimals to the f64 positions only.
+- **validate.py**: `CpmlParams` joins `JSON_FIELDS` (its thickness a "usize") and `Mode2d` `JSON_ENUMS`;
+  `json_row36` maps a CpmlParams whose thickness word is negative (past 2^63 − 1). The model agreed with every row.
+  `json.cr.tsv` gains 2,719 rows where serde_json's best-effort decimal parse misrounds (42,976 in all);
+  `json.adr.tsv` maps 14 thicknesses past 2^63 − 1 (110 in all).
+- **Tests**: rust-old has no serde test of these types. `tests/json.tcyr` gains `cyrius_fdtd2d_json` (19 assertions;
+  105 in all): the exact text (the u64 thickness, NaN as null, −0 kept), the refused mode word, round trips, both
+  enum forms with escapes, a grading read as written and refused by `BjCpml_with_params`, a document's grading
+  enabling a grid's CPML, and the refusals with their reasons (a thickness past 2^63 − 1, negative or written as a
+  float, κ_max null, a short sequence, a missing field, a near-miss variant, a variant's value other than null) with
+  out left alone.
+- **Surface parity**: the four serde impls are matched (606 items); only `Fdtd3d`'s items remain in progress. The API
+  snapshot gains the four functions (2,127).
+- **Benchmarks**: a Cyrius-only `json/cpml_params_from_json`, 3.62–3.76 µs a read of its five fields (FieldVector's
+  reader 1.9 µs, PointCharge's 4.4). The interleaved A/B against HEAD left every row unchanged: median ratios 1.001,
+  1.014 and 1.000 over three rounds (load 3.2 to 3.5 for the first two, beside another repo's tests and then this
+  bite's gate in round 2, whose outliers to 1.35× in rf and field rows don't repeat; 1.0 for the third, every row 0.93
+  to 1.05). The benchmark record's Cyrius column is each row's least of the 17 full runs since M5's close (`rec_min5`):
+  rows moved by a few percent, all down, the third round's quieter machine.
+- **Result, every target** (x86_64 ELF, x86_64 PE, aarch64): **19 modules, 0 failing; 644,497 ok, 0 failed, 0
+  measured, 0 pending, 121,888 accepted (ADR 01: 43,099; ADR 0002: 78,789)** over 766,385 rows; **all 485 digests
+  equal**. The new rows: `Mode2d`'s 57 ok; `CpmlParams`' writer 1,186 ok, its reader 1,142 ok, 2,719 against the
+  corrected oracle, 14 mapped to row 36 and 18 refused whole under row 12 (whose count rises to 327). `json.tcyr`
+  (105) passes on all three. The gate is clean (no warnings; execution coverage 382 of 382 functions); validate.py
+  766,385 rows, 0 problems; the oracle's `--check` and clippy clean. **M6 Part 1 is done** (§116–§120): fdtd.rs's 2D
+  CPML, `Fdtd2d`, `nf2ff_2d` and the JSON of `CpmlParams` and `Mode2d`. Next: Part 2, the 3D grid (`Fdtd3d`) and its
+  CPML.

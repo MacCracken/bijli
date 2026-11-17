@@ -1,6 +1,6 @@
 # json.tcyr — src/json.cyr (M1 part 4): the JSON of BjComplex, BjFieldVector and BjPointCharge; (M4 part 1d) of
 # rf's BjSMatrix, BjTouchstoneFormat and BjTouchstoneData (cyrius_rf_json); (M5 part 1f) of the FDTD types
-# (cyrius_fdtd_json).
+# (cyrius_fdtd_json); (M6 part 1d) of the 2D FDTD's BjCpmlParams and BjMode2d (cyrius_fdtd2d_json).
 #
 # rust-old has no test of these types' serde (its serde tests are of later modules' types), so every group here is
 # Cyrius-only. tests/golden/json.tsv pins the writers and readers against serde_json 1.0.154 besides; these groups
@@ -292,6 +292,131 @@ fn cyrius_fdtd_json(): i64 {
     return 0;
 }
 
+# Reads the C string doc as a CpmlParams into *p: 1 on Ok, 0 on Err.
+fn read_cp(doc, p: *BjCpmlParams): i64 {
+    var t, v = BjCpmlParams_from_json(doc, strlen(doc), p);
+    return is_ok(t);
+}
+
+# The 2D FDTD types (M6 part 1d): the text of each, the thickness as a u64, round trips, both enum forms, parameters
+# read as written and refused when used, ADR 0002 row 36's thickness past 2^63 − 1, a mode no enum holds, out left
+# alone.
+fn cyrius_fdtd2d_json(): i64 {
+    test_group("cyrius_fdtd2d_json_text");
+    var p: BjCpmlParams = BjCpmlParams_new(10);
+    var sb1 = str_builder_new();
+    var t1, v1 = BjCpmlParams_to_json(&p, sb1);
+    var w1 = "{\"thickness\":10,\"grading_order\":3.0,\"sigma_ratio\":1.0,\"kappa_max\":1.0,\"alpha_max\":0.0}";
+    assert(is_ok(t1) == 1 && built_is(sb1, w1) == 1, "the classic grading, the fields in Rust's order");
+    var q: BjCpmlParams = BjCpmlParams_new(0 - 1);
+    var nan: f64 = 0.0 / 0.0;
+    q.grading_order = nan;
+    q.alpha_max = -0.0;
+    var sb2 = str_builder_new();
+    var t2, v2 = BjCpmlParams_to_json(&q, sb2);
+    var w2 = "{\"thickness\":18446744073709551615,\"grading_order\":null,\"sigma_ratio\":1.0,\"kappa_max\":1.0,";
+    assert(is_ok(t2) == 1 && built_is(sb2, cat2(w2, "\"alpha_max\":-0.0}")) == 1,
+      "the thickness as Rust's usize (the word −1 is u64::MAX), NaN as null, −0 kept");
+    var sb3 = str_builder_new();
+    var t3, v3 = BjMode2d_to_json(BJ_MODE2D_TE, sb3);
+    var sb4 = str_builder_new();
+    var t4, v4 = BjMode2d_to_json(BJ_MODE2D_TM, sb4);
+    assert(is_ok(t3) == 1 && built_is(sb3, "\"Te\"") == 1 && is_ok(t4) == 1 && built_is(sb4, "\"Tm\"") == 1,
+      "a unit variant is its name");
+    var sb5 = str_builder_new();
+    var t5, v5 = BjMode2d_to_json(2, sb5);
+    assert(is_err_result(t5) == 1 && v5 == BJ_ERR_INVALID_PARAMETER && built_is(sb5, "") == 1
+      && text_is(bj_last_error_display(), "invalid parameter: unknown 2D mode 2") == 1,
+      "2 is no mode: refused first, as BjFdtd2d_new refuses it, the builder untouched");
+
+    test_group("cyrius_fdtd2d_json_round_trip");
+    var s1 = str_builder_build(sb1);
+    var r1: BjCpmlParams;
+    var t6, v6 = BjCpmlParams_from_json(str_data(s1), str_len(s1), &r1);
+    assert(is_ok(t6) == 1 && r1.thickness == 10 && r1.grading_order == 3.0 && r1.sigma_ratio == 1.0
+      && r1.kappa_max == 1.0 && r1.alpha_max == 0.0, "the classic grading reads back");
+    var r2: BjCpmlParams;
+    assert(read_cp("[8,4,0.8,5,1e6]", &r2) == 1 && r2.thickness == 8 && r2.grading_order == 4.0
+      && r2.kappa_max == 5.0 && r2.alpha_max == 1000000.0, "the sequence form");
+    var doc3 = cat2("{\"alpha_max\":-0,\"kappa_max\":1,\"sigma_ratio\":1,\"grading_order\":3,",
+      "\"thickness\":9223372036854775807}");
+    var r3: BjCpmlParams;
+    assert(read_cp(doc3, &r3) == 1 && r3.thickness == 9223372036854775807
+      && _bj_bits(r3.alpha_max) == 0x8000000000000000,
+      "fields in any order, 2^63 − 1 the largest thickness, -0 as −0.0");
+    var md: i64[1];
+    md[0] = 7;
+    var t7, v7 = BjMode2d_from_json("{ \"Te\" : null }", 15, &md);
+    var md2: i64[1];
+    var t8, v8 = BjMode2d_from_json("\"\\u0054m\"", 9, &md2);
+    assert(is_ok(t7) == 1 && md[0] == BJ_MODE2D_TE && is_ok(t8) == 1 && md2[0] == BJ_MODE2D_TM,
+      "both forms of a unit variant, escapes decoded");
+
+    test_group("cyrius_fdtd2d_json_as_written");
+    var doc9 = "{\"thickness\":0,\"grading_order\":0.5,\"sigma_ratio\":-1,\"kappa_max\":0,\"alpha_max\":-2}";
+    var r9: BjCpmlParams;
+    assert(read_cp(doc9, &r9) == 1 && r9.thickness == 0 && r9.sigma_ratio == -1.0,
+      "parameters BjCpml_with_params refuses are read, as serde's derive reads Rust's public fields");
+    var c9: BjCpml;
+    var t9, v9 = BjCpml_with_params(&r9, 0.001, 0.000000000001, &c9);
+    assert(is_err_result(t9) == 1 && v9 == BJ_ERR_INVALID_PARAMETER
+      && text_is(bj_last_error_display(), "invalid parameter: CPML thickness must be at least 1 cell") == 1,
+      "and refused when used");
+    var r10: BjCpmlParams;
+    var doc10 = "{\"thickness\":6,\"grading_order\":4,\"sigma_ratio\":1.2,\"kappa_max\":5,\"alpha_max\":0.05}";
+    var sim: BjFdtd2d;
+    var ts, vs = BjFdtd2d_new(40, 40, 0.001, BJ_MODE2D_TM, &sim);
+    var ok10 = 0;
+    if (read_cp(doc10, &r10) == 1 && is_ok(ts) == 1) {
+        var te, ve = sim.try_enable_cpml_with(&r10);
+        var layer: *BjCpml = _cp(sim.cpml());
+        if (is_ok(te) == 1 && layer != 0) {
+            if (layer.thickness == 6 && layer.kappa_max == 5.0) { ok10 = 1; }
+        }
+    }
+    assert(ok10 == 1, "a document's grading enables a grid's CPML");
+    BjFdtd2d_free(&sim);
+
+    test_group("cyrius_fdtd2d_json_refused");
+    var r11: BjCpmlParams = BjCpmlParams_new(3);
+    var doc11 = cat2("{\"thickness\":9223372036854775808,\"grading_order\":3,\"sigma_ratio\":1,",
+      "\"kappa_max\":1,\"alpha_max\":0}");
+    var t11, v11 = BjCpmlParams_from_json(doc11, strlen(doc11), &r11);
+    assert(is_err_result(t11) == 1 && v11 == BJ_ERR_DESERIALIZE && r11.thickness == 3
+      && reason_is("invalid type: floating point, expected usize") == 1,
+      "a thickness past 2^63 − 1 refused (ADR 0002 row 36), out untouched");
+    var doc12 = "{\"thickness\":-1,\"grading_order\":3,\"sigma_ratio\":1,\"kappa_max\":1,\"alpha_max\":0}";
+    assert(read_cp(doc12, &r11) == 0 && reason_is("invalid value: integer `-1`, expected usize") == 1
+      && r11.thickness == 3, "a negative thickness");
+    var doc13 = "{\"thickness\":8.0,\"grading_order\":3,\"sigma_ratio\":1,\"kappa_max\":1,\"alpha_max\":0}";
+    assert(read_cp(doc13, &r11) == 0 && reason_is("invalid type: floating point, expected usize") == 1,
+      "a thickness written as a float, as serde refuses it");
+    var doc14 = "{\"thickness\":8,\"grading_order\":3,\"sigma_ratio\":1,\"kappa_max\":null,\"alpha_max\":0}";
+    assert(read_cp(doc14, &r11) == 0 && reason_is("invalid type: null, expected f64") == 1, "κ_max null");
+    assert(read_cp("[8,3,1,1]", &r11) == 0
+      && reason_is("invalid length 4, expected struct CpmlParams with 5 elements") == 1, "a short sequence");
+    var doc15 = "{\"thickness\":8,\"grading_order\":3,\"sigma_ratio\":1,\"kappa_max\":1}";
+    assert(read_cp(doc15, &r11) == 0 && reason_is("missing field `alpha_max`") == 1 && r11.thickness == 3,
+      "a missing field");
+    var md3: i64[1];
+    md3[0] = 7;
+    var t16, v16 = BjMode2d_from_json("\"TE\"", 4, &md3);
+    assert(is_err_result(t16) == 1 && v16 == BJ_ERR_DESERIALIZE && md3[0] == 7
+      && reason_is("unknown variant, expected `Tm` or `Te`") == 1, "a near miss refused, out untouched");
+    var t17, v17 = BjMode2d_from_json("{\"Te\":0}", 8, &md3);
+    var t18, v18 = BjMode2d_from_json("1", 1, &md3);
+    assert(is_err_result(t17) == 1 && is_err_result(t18) == 1
+      && reason_is("invalid type: integer, expected enum Mode2d") == 1 && md3[0] == 7,
+      "a variant's value other than null, and a number, refused");
+    if (v1 == 7 || v2 == 7 || v3 == 7 || v4 == 7 || v6 == 7 || v7 == 7 || v8 == 7 || vs == 7) { println("."); }
+    return 0;
+}
+
+# The address a as a *BjCpml (an untyped word stored into a typed pointer warns; a typed return does not).
+fn _cp(a): *BjCpml {
+    return a;
+}
+
 # Runs the Cyrius-only JSON checks (rust-old has no serde test of these types).
 fn main(): i64 {
     alloc_init();
@@ -532,6 +657,7 @@ fn main(): i64 {
 
     cyrius_rf_json();
     cyrius_fdtd_json();
+    cyrius_fdtd2d_json();
     return assert_summary();
 }
 

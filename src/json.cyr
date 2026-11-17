@@ -3,9 +3,11 @@
 # BjStokesVector and BjMuellerMatrix, (M3 part 1b-2) scattering's BjMieResult, (M3 part 1c-2) beam's
 # BjGaussianBeam, BjAbcdMatrix and BjResonatorStability, (M4 part 1d) rf's BjSMatrix, BjTouchstoneFormat and
 # BjTouchstoneData, and (M5 part 1f) the FDTD's BjLossyMaterial, BjDrudeMaterial, BjLorentzMaterial, BjDebyeMaterial,
-# BjNonUniformGrid and BjEigenmodeResult, as serde_json 1.0.154 writes and reads them (port plan D5, M1 part 4; ADR 0002
-# rows 10–12, 36). An EigenmodeResult's three vectors share one count, so a document whose vectors differ in length is
-# refused (row 36); a NonUniformGrid's axes have any lengths.
+# BjNonUniformGrid and BjEigenmodeResult, and (M6 part 1d) the 2D FDTD's BjCpmlParams and BjMode2d, as serde_json
+# 1.0.154 writes and reads them (port plan D5, M1 part 4; ADR 0002 rows 10–12, 36). An EigenmodeResult's three vectors
+# share one count, so a document whose vectors differ in length is refused (row 36); a NonUniformGrid's axes have any
+# lengths. A usize (an SMatrix's or TouchstoneData's ports, a CpmlParams' thickness) is read from 0 to 2^63 − 1 (row
+# 36: bayan's tree keeps no exact integer past it) and written as Rust's whole u64.
 #
 # Writers append serde's document to a `str_builder`: the fields in Rust declaration order, no spaces, a Rust array
 # (`[f64; 3]`, a Jones matrix's `m: [[Complex; 2]; 2]`, a Mueller matrix's `m: [[f64; 4]; 4]`) as nested arrays row by
@@ -1809,5 +1811,126 @@ public fn BjEigenmodeResult_from_json(buf, len, out: *BjEigenmodeResult): Result
     out.quality_factors = r.quality_factors;
     out.amplitudes = r.amplitudes;
     out.count = r.count;
+    return Ok(0);
+}
+
+# ── the 2D FDTD types (M6 part 1d) ───────────────────────────────────────────────────────────────────────────────
+
+# Appends `{"thickness":<n>,"grading_order":<m>,"sigma_ratio":<r>,"kappa_max":<κ>,"alpha_max":<α>}` to the builder sb,
+# the thickness as an unsigned 64-bit integer (Rust's usize), the fields as held (parameters BjCpml_with_params would
+# refuse too): Ok(0), or Err(BJ_ERR_ALLOCATION) with sb as it was. Mirrors `serde_json::to_string(&p)` for
+# `fdtd::CpmlParams`.
+#must_use
+public fn BjCpmlParams_to_json(p: *BjCpmlParams, sb): Result {
+    var buf[224];
+    var n = _bj_jw_cstr(&buf, 0, "{\"thickness\":");
+    n = _bj_jw_u64(&buf, n, p.thickness);
+    n = _bj_jw_cstr(&buf, n, ",\"grading_order\":");
+    n = _bj_jw_f64(&buf, n, p.grading_order);
+    n = _bj_jw_cstr(&buf, n, ",\"sigma_ratio\":");
+    n = _bj_jw_f64(&buf, n, p.sigma_ratio);
+    n = _bj_jw_cstr(&buf, n, ",\"kappa_max\":");
+    n = _bj_jw_f64(&buf, n, p.kappa_max);
+    n = _bj_jw_cstr(&buf, n, ",\"alpha_max\":");
+    n = _bj_jw_f64(&buf, n, p.alpha_max);
+    n = _bj_jw_cstr(&buf, n, "}");
+    return _bj_jw_put(sb, &buf, n);
+}
+
+# Appends the mode's document, its variant's name in quotes (`"Tm"`, `"Te"`), to the builder sb: Ok(0),
+# Err(BJ_ERR_ALLOCATION) with sb as it was, or Err(BJ_ERR_INVALID_PARAMETER) "unknown 2D mode {mode}" for a word that
+# is no BjMode2d (Rust's enum has no other), as BjFdtd2d_new refuses it. Mirrors `serde_json::to_string(&m)` for
+# `fdtd::Mode2d`.
+#must_use
+public fn BjMode2d_to_json(mode, sb): Result {
+    if (mode != BJ_MODE2D_TM && mode != BJ_MODE2D_TE) {
+        var t0 = _bj_err_reason(BJ_ERR_INVALID_PARAMETER);
+        _bj_tx_cstr(t0, "unknown 2D mode ");
+        _bj_tx_i64(t0, mode);
+        return Err(BJ_ERR_INVALID_PARAMETER);
+    }
+    var buf[8];
+    var n = 0;
+    if (mode == BJ_MODE2D_TE) { n = _bj_jw_cstr(&buf, 0, "\"Te\""); }
+    else { n = _bj_jw_cstr(&buf, 0, "\"Tm\""); }
+    return _bj_jw_put(sb, &buf, n);
+}
+
+# A CpmlParams node into the BjCpmlParams at w: `thickness` a usize (_bj_jr_usize: an integer from 0 to 2^63 − 1,
+# since bayan's tree keeps no exact integer past it, ADR 0002 row 36), the four f64 as written. 0, or
+# BJ_ERR_DESERIALIZE recorded.
+fn _bj_jr_cpml_params(v, w): i64 {
+    var form = _bj_jr_form(v, 5, "struct CpmlParams");
+    if (form == 0) { return BJ_ERR_DESERIALIZE; }
+    var names: i64[5];
+    names[0] = "thickness";
+    names[1] = "grading_order";
+    names[2] = "sigma_ratio";
+    names[3] = "kappa_max";
+    names[4] = "alpha_max";
+    for (var k = 0; k < 5; k = k + 1) {
+        var f = _bj_jr_field(v, form, k, names[k]);
+        if (f == 0) { return BJ_ERR_DESERIALIZE; }
+        var c = 0;
+        if (k == 0) { c = _bj_jr_usize(f, w); }
+        else { c = _bj_jr_f64(f, w + k * 8); }
+        if (c != 0) { return c; }
+    }
+    return 0;
+}
+
+# A Mode2d node into w[0]: a string, or a one-member object whose value is null (serde's two forms of a unit variant),
+# naming `Tm` or `Te`. 0, or BJ_ERR_DESERIALIZE recorded.
+fn _bj_jr_mode2d(v, w): i64 {
+    var tag = bayan_json_v_tag(v);
+    var name = 0;
+    if (tag == JTAG_STR) { name = bayan_json_v_str(v); }
+    elif (tag == JTAG_OBJ && bayan_json_v_obj_len(v) == 1) {
+        if (bayan_json_v_tag(bayan_json_v_obj_val(v, 0)) != JTAG_NULL) {
+            return _bj_jr_type(bayan_json_v_obj_val(v, 0), "unit");
+        }
+        name = bayan_json_v_obj_key(v, 0);
+    } else {
+        return _bj_jr_type(v, "enum Mode2d");
+    }
+    if (str_len(name) == 2 && memeq(str_data(name), "Tm", 2) == 1) {
+        store64(w, BJ_MODE2D_TM);
+        return 0;
+    }
+    if (str_len(name) == 2 && memeq(str_data(name), "Te", 2) == 1) {
+        store64(w, BJ_MODE2D_TE);
+        return 0;
+    }
+    _bj_tx_cstr(_bj_err_reason(BJ_ERR_DESERIALIZE), "unknown variant, expected `Tm` or `Te`");
+    return BJ_ERR_DESERIALIZE;
+}
+
+# Reads a `CpmlParams` document from [buf, buf + len) into *out: Ok(0), or the error recorded with out untouched, as
+# BjComplex_from_json. The fields are read as written, as serde's derive reads Rust's public fields: parameters
+# BjCpml_with_params refuses (a zero thickness, a grading order below 1) are read, and refused when used. A thickness
+# past 2^63 − 1, which serde reads, is refused (ADR 0002 row 36): no grid fits it and no profile can be allocated for
+# it. Mirrors `serde_json::from_str::<CpmlParams>`.
+#must_use
+public fn BjCpmlParams_from_json(buf, len, out: *BjCpmlParams): Result {
+    var p: BjCpmlParams;
+    var code = _bj_jr_read(buf, len, &_bj_jr_cpml_params, &p);
+    if (code != 0) { return Err(code); }
+    out.thickness = p.thickness;
+    out.grading_order = p.grading_order;
+    out.sigma_ratio = p.sigma_ratio;
+    out.kappa_max = p.kappa_max;
+    out.alpha_max = p.alpha_max;
+    return Ok(0);
+}
+
+# Reads a `Mode2d` document from [buf, buf + len) into *out (BJ_MODE2D_TM or BJ_MODE2D_TE): Ok(0), or Err with the
+# reason recorded and out untouched. serde's two forms of a unit variant: its name as a string, or a one-member object
+# mapping the name to null. Mirrors `serde_json::from_str::<Mode2d>`.
+#must_use
+public fn BjMode2d_from_json(buf, len, out: *i64): Result {
+    var w: i64[1];
+    var code = _bj_jr_read(buf, len, &_bj_jr_mode2d, &w);
+    if (code != 0) { return Err(code); }
+    out[0] = w[0];
     return Ok(0);
 }

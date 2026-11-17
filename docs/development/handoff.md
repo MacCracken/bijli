@@ -1,4 +1,4 @@
-# Handoff: the Cyrius port, M6 Part 1 under way (2026-11-16)
+# Handoff: the Cyrius port, M6 Part 1 done (2026-11-16)
 
 For the next agent picking up the port. **Read first:** `CLAUDE.md` (the rules), [`state.md`](state.md) (live state),
 [`bijli-port-plan.md`](bijli-port-plan.md) (§0.1 holds the user's M5 Part 2 answers; the tracking table is near the
@@ -9,14 +9,15 @@ bite is done, the machinery, the scripts and the traps. Delete it once it has se
 
 ## Where it stands
 
-- **Committed through `85e3e67`** ("M6 pt1b-2"); part 1c is in the working tree for the user to commit ("m6 1c
-  done").
+- **Committed through `e1f8fe4`** ("M6 pt1c"); part 1d is in the working tree for the user to commit.
 - **M6 Part 1** (the 2D CPML and `Fdtd2d`, §116–§119) runs in bites. Done: 1a the CPML layer (`src/cpml.cyr`); 1b-1
   `Fdtd2d` without the CPML (`src/fdtd2d.cyr`; its scripts `Fdtd2d::script` in `fdtd_2d3d.tsv`, replayed by
   validate.py's `Fd2Scripts` in pure Python, no NumPy on the host); 1b-2 the CPML attached (the y-strips packed, the
   x-strips scalar: the CPML step 5.7–6.2× Rust's); 1c `nf2ff_2d` (on the phasor form's core with the rotation (1, 0),
-  `src/nf2ff.cyr` after `src/fdtd2d.cyr` in the bundle; its edge rows mapped in `fdtd_2d3d.adr.tsv`). Next: 1d the
-  JSON of `CpmlParams` and `Mode2d` (src/json.cyr, as M5 part 1f's). Part 2 is the 3D grid, Part 3
+  `src/nf2ff.cyr` after `src/fdtd2d.cyr` in the bundle; its edge rows mapped in `fdtd_2d3d.adr.tsv`); 1d the JSON
+  of `CpmlParams` and `Mode2d` (src/json.cyr; `m_json.rs`'s `Kind::is_usize` carries the thickness in an f64's bits;
+  a thickness past 2^63 − 1 is refused, ADR 0002 row 36, §120). **Part 1 is done.** Next: Part 2, the 3D grid
+  (`Fdtd3d`, its CPML: 12 Ψ slabs; its rows join `fdtd_2d3d.tsv`, whose `Op2` scripts want a 3D twin), Part 3
   `compute.rs`, then the range-edge review (the per-cell rule for the 2D and 3D updates and the CPML).
 - **M6's corpus** is `tests/golden/fdtd_2d3d.tsv` (`scripts/oracle/src/m_fdtd_2d3d.rs`, which imports `m_fdtd`'s
   `u`, `seq`, `res_toks`, `digest` and `dbg_*`), checked by validate.py's `validate_fdtd_2d3d` (Rust's chain on
@@ -55,12 +56,15 @@ bite is done, the machinery, the scripts and the traps. Delete it once it has se
     Rust's chain where every operation is its 53-bit value (mode 0, checked per sample by one exponent test and per
     angle), else the call or the angle unbounded (`_bj_nf_angle_ux`); a non-finite field keeps Rust's (row 18, §114).
     **Part 2 is done.**
-- **Numbers after 2d-6**: 18 modules, 641,185 ok, 0 failed, 119,111 accepted (ADR 01: 40,366; ADR 0002: 78,745)
-  over 760,296 rows; 475 digests equal on x86_64 ELF, x86_64 PE and aarch64. Ledger 691 ported, 9 n/a, 158 pending of
-  858; API snapshot 2,116; benches 73 of 80 twinned; execution coverage 371 of 371.
+- **Numbers after M6 1d**: 19 modules, 644,497 ok, 0 failed, 121,888 accepted (ADR 01: 43,099; ADR 0002: 78,789)
+  over 766,385 rows; 485 digests equal on x86_64 ELF, x86_64 PE and aarch64. Ledger 731 ported, 10 n/a, 117 pending
+  of 858; API snapshot 2,127; surface parity 606 items; benches 78 of 80 twinned (the 3D steps pending); execution
+  coverage 382 of 382. `json.tsv` is 40.7 MB of the 48 MiB cap: the rest of M6 adds no JSON (`Fdtd3d` and compute.rs
+  have no serde), but M7's eight serde types (integration/) will want their own module.
 - **M5 is done** (§115). The benchmark record's Cyrius column is each row's least of four full runs: rows vary up to
   1.5× between runs under other repos' loads, so take the least of several when regenerating it.
-- **Next**: M6 (`Fdtd2d`, `Fdtd3d`, the CPML, `nf2ff_2d`, `Mode2d`, `CpmlParams`), under the same per-cell rule.
+- **Next**: M6 Part 2 (`Fdtd3d` and its CPML), Part 3 (`compute.rs`), then M6's range-edge review under the same
+  per-cell rule.
   `nf2ff_2d` (the snapshot form) calls `_bj_nf_core` with the rotation (1, 0) and k from `_bj_nf_validate` on its
   double frequency (`_bj_k_ux_from`): the core's range edges come with it.
 - **Corpus size**: `fdtd.tsv` is 38.8 MB (107,341 rows) and `json.tsv` 38.7 MB, against the 48 MiB cap that

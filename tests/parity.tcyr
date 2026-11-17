@@ -2365,11 +2365,61 @@ fn _par_json_fdtd(fp, fl): i64 {
     return 0;
 }
 
+# The 2D FDTD types' JSON (M6 part 1d): a CpmlParams is i:thickness (its word) and its four f64, a Mode2d i:its value.
+# 1 handled, 0 another type's row, -1 for unusable inputs.
+fn _par_json_fdtd2d(fp, fl): i64 {
+    if (_par_eq(fp, fl, "json::CpmlParams::to_string") == 1) {
+        var cp: BjCpmlParams = BjCpmlParams_new(_par_in(0));
+        var gm: f64 = _par_in(1);
+        var sr: f64 = _par_in(2);
+        var km: f64 = _par_in(3);
+        var am: f64 = _par_in(4);
+        cp.grading_order = gm;
+        cp.sigma_ratio = sr;
+        cp.kappa_max = km;
+        cp.alpha_max = am;
+        var sb1 = str_builder_new();
+        var t1, v1 = BjCpmlParams_to_json(&cp, sb1);
+        _par_got_json_res(t1, v1, sb1);
+        return 1;
+    }
+    if (_par_eq(fp, fl, "json::Mode2d::to_string") == 1) {
+        var sb2 = str_builder_new();
+        var t2, v2 = BjMode2d_to_json(_par_in(0), sb2);
+        _par_got_json_res(t2, v2, sb2);
+        return 1;
+    }
+    var cpr = _par_eq(fp, fl, "json::CpmlParams::from_str");
+    if (cpr != 1 && _par_eq(fp, fl, "json::Mode2d::from_str") != 1) { return 0; }
+    var lenw[8];
+    var doc = _par_in_bytes(0, &lenw);
+    if (doc == 0) { return 0 - 1; }
+    var len = load64(&lenw);
+    if (cpr == 1) {
+        var rp: BjCpmlParams;
+        var r1, w1 = BjCpmlParams_from_json(doc, len, &rp);
+        if (is_err_result(r1) == 1) { _par_got_err(w1); return 1; }
+        _par_got_i(rp.thickness);
+        _par_got_f(rp.grading_order);
+        _par_got_f(rp.sigma_ratio);
+        _par_got_f(rp.kappa_max);
+        _par_got_f(rp.alpha_max);
+        return 1;
+    }
+    var md: i64[1];
+    var r2, w2 = BjMode2d_from_json(doc, len, &md);
+    if (is_err_result(r2) == 1) { _par_got_err(w2); return 1; }
+    _par_got_i(md[0]);
+    return 1;
+}
+
 public fn _par_json(fp, fl): i64 {
     var rf = _par_json_rf(fp, fl);
     if (rf != 0) { return rf; }
     var fd = _par_json_fdtd(fp, fl);
     if (fd != 0) { return fd; }
+    var f2 = _par_json_fdtd2d(fp, fl);
+    if (f2 != 0) { return f2; }
     if (_par_eq(fp, fl, "json::Complex::to_string") == 1) {
         var cr: f64 = _par_in(0);
         var ci: f64 = _par_in(1);
@@ -4435,6 +4485,8 @@ public fn _par_c_bound(fp, fl): i64 {
     if (_par_eq(fp, fl, "json::DebyeMaterial::from_str") == 1) { return 0; }
     if (_par_eq(fp, fl, "json::NonUniformGrid::from_str") == 1) { return 0; }
     if (_par_eq(fp, fl, "json::EigenmodeResult::from_str") == 1) { return 0; }
+    if (_par_eq(fp, fl, "json::CpmlParams::from_str") == 1) { return 0; }
+    if (_par_eq(fp, fl, "json::Mode2d::from_str") == 1) { return 0; }
     return 0 - 1;
 }
 
