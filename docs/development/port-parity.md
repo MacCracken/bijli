@@ -6851,3 +6851,57 @@ eigenmode search (`dft_magnitude`'s recurrence and magnitude, `find_eigenmodes`'
   equal**. `fdtd3d.tcyr` (83) and `fdtd2d.tcyr` (73) pass on all three. The gate is clean (no warnings; coverage 384 of
   384; `emit.py --check` among its steps); validate.py 766,633 rows, 0 problems. **M6 Part 2 is done**, and fdtd.rs is
   ported whole. Next: Part 3, `compute.rs`.
+
+## 124. M6 Part 3: compute.rs (2026-11-17)
+
+- **The language review** (CLAUDE.md, before anything is deferred or reshaped): the guide's *Traits and impl blocks*,
+  *Trait objects*, *Generic structs* and *Trait bounds* sections, and probe p20 (`scripts/probes/p20_compute_backend.cyr`
+  with its private library file) on the pinned 6.7.18. A `public trait` with `: Result` members and a default method
+  works across files; an empty struct is a zero-size unit backend; a generic struct holds its backend by value
+  (`struct P20Grid<B: P20Backend> { backend: B; .. }`) and is driven by generic functions over `*P20Grid<B>`; a
+  generic impl header (`impl<B> T<B>`) is refused (6.7.17, by design); a `private` file's impl methods need `public
+  fn` for another file's calls; and a trait default inherited by another file's impl is private to the trait's file,
+  with no way to mark it (filed in the plan's §10).
+- **`src/compute.cyr`**: `BjComputeBackend` mirrors `ComputeBackend` with a buffer as an opaque word, host arrays as a
+  pointer and a length, and a required `free_buffer` (Cyrius has no Drop); its default `add_to_element` reads the
+  buffer into the scratch, checks the index ("element index {index} out of range for buffer of {n}"), adds, writes
+  back. `BjCpuBackend` (an empty struct) keeps a buffer in an anonymous mapping of its length word and values; its
+  transfers check lengths ("host slice length {h} does not match buffer length {b}"), its kernels the axis first ("axis
+  must be 0 or 1, got {axis}"), then the grid ("invalid grid dimensions {nx}x{ny}" for a zero or overflowing nx·ny,
+  "buffer length {len} does not match grid {nx}x{ny} = {n}" for the first wrong buffer in argument order), and run
+  src/fdtd2d.cyr's packed row kernels (now public) in 256-cell chunks through a stack scratch, no allocation per step.
+  `BjGpuFdtd2d<B>` holds the backend by value and five buffers; `BjGpuFdtd2d_new` keeps Rust's checks and texts ("grid
+  {nx}x{ny} is too large", not BjFdtd2d's bracketed form) and gives back the buffers made before a creation error;
+  `step_once`, `add_source` (the host scratch mapped on first use), `run`, `time`, `read_ez`/`hx`/`hy` and
+  `BjGpuFdtd2d_free` follow. `BjWgpuBackend` is the scaffold: no device, `BjWgpuBackend_new` always Ok.
+- **ADR 0002 row 43** records the shape (the opaque buffer, `free_buffer`, the generic functions, the forwarder), and
+  row 9 the allocations that return `BJ_ERR_ALLOCATION` where Rust's `to_vec` and `vec!` abort.
+- **The corpus**: emit.py's `emit_3` appends 262 rows to `fdtd_2d3d.tsv` (1,463 in all): 66 `GpuFdtd2d::script` rows
+  (class T: construction's refusals, compute.rs's tests' grids, Rust's 2D shapes with sources inside, on the wall and
+  outside, `run` with and without a source, 16 seeded scripts; the state step, dt, time, the five buffers' digests and
+  the probes) and 196 `CpuBackend::kernel` rows (class A: every kernel on ten shapes from 1 × 1 to 40 × 3 at three
+  seeds, every refusal in Rust's order, the transfers and both add_to_elements at and past the end; the outputs the
+  four arrays' digests). validate.py's `Gpu2Scripts` replays the scripts on `Fd2`'s TM physics (GpuFdtd2d on the CPU
+  backend is that update) and `cpu_kernel` the kernels, transcribed from 1.2.0:src/compute.rs; no row changes on
+  correctly rounded primitives. The harness replays both, op 7's default through a backend of its own; all 262 rows
+  match.
+- **Tests**: `tests/compute.tcyr` (33 assertions) ports compute.rs's 18 tests, `RoundTripBackend` (a backend of the
+  test file defining only the required members) and `test_default_add_to_element_matches_cpu` among them, and adds
+  `cyrius_compute_records` and `cyrius_compute_grid`. `test_gpu_fdtd2d_matches_fdtd2d` holds bit for bit, not only to
+  10⁻¹⁰. The ledger: 778 ported, 12 n/a, 68 pending, compute.rs's 18 all ported.
+- **Surface parity**: compute is ported (15 modules, 653 items); `GpuFdtd2d`'s methods map to the generic functions
+  (`FN_RENAMES`), the trait impl is an exception with its reason, and the index reads a generic struct's header. The API
+  snapshot gains ten functions (2,139).
+- **Benchmarks**: compute.rs has no Rust bench; a Cyrius-only `fdtd/gpu_fdtd2d_step_100x100_cpu` runs
+  fdtd/2d_step_100x100_tm through the trait: 50.4–54.5 µs, against BjFdtd2d's 46.6–48.7 µs in the same runs (about
+  1.1×: each kernel's grid check, the 256-cell chunks, the `Result`s). The interleaved A/B against HEAD left every row
+  unchanged: median ratios 0.997, 1.029 and 0.99 over three rounds (load 1.2 to 3.5; another repo's validator beside
+  the third). The JSON readers swing up to 2× either way between rounds (1.80× slower in the second, 0.50× in the
+  third), noise of code this part doesn't touch. The benchmark record's Cyrius column is each row's least of the 33
+  full runs since M5's close (`rec_min8`).
+- **Result, every target** (x86_64 ELF, x86_64 PE, aarch64): **19 modules, 0 failing; 645,007 ok, 0 failed, 0
+  measured, 0 pending, 121,888 accepted (ADR 01: 43,099; ADR 0002: 78,789)** over 766,895 rows; **all 488 digests
+  equal**. `compute.tcyr` (33) and `fdtd3d.tcyr` (83) pass on all three. The gate is clean (no warnings; coverage 394
+  of 394); `cyrius audit`'s docs check first counted the two test backends' 16 trait methods as undocumented public
+  functions, so each has its comment. validate.py 766,895 rows, 0 problems. **M6's three Parts are done**; its
+  range-edge review is next.

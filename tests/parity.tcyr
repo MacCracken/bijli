@@ -4490,8 +4490,215 @@ fn _par_fd3_script(): i64 {
     return 1;
 }
 
+# M6 Part 3: a backend of this file defining only the trait's required members (delegating to BjCpuBackend), so the
+# kernel rows' op 7 runs the trait's default add_to_element (reached through _bj_compute_add_to_element).
+struct ParTrip { }
+
+impl BjComputeBackend for ParTrip {
+    # BjCpuBackend's create_buffer.
+    fn create_buffer(self, data: *f64, n): Result {
+        var c: BjCpuBackend;
+        return c.create_buffer(data, n);
+    }
+    # BjCpuBackend's read_buffer.
+    fn read_buffer(self, buffer, dst: *f64, n): Result {
+        var c: BjCpuBackend;
+        return c.read_buffer(buffer, dst, n);
+    }
+    # BjCpuBackend's write_buffer.
+    fn write_buffer(self, buffer, src: *f64, n): Result {
+        var c: BjCpuBackend;
+        return c.write_buffer(buffer, src, n);
+    }
+    # BjCpuBackend's fdtd_update_h.
+    fn fdtd_update_h(self, h, e, coeff, nx, ny, axis): Result {
+        var c: BjCpuBackend;
+        return c.fdtd_update_h(h, e, coeff, nx, ny, axis);
+    }
+    # BjCpuBackend's fdtd_update_e.
+    fn fdtd_update_e(self, e, hx, hy, coeff, nx, ny): Result {
+        var c: BjCpuBackend;
+        return c.fdtd_update_e(e, hx, hy, coeff, nx, ny);
+    }
+    # BjCpuBackend's apply_zero_boundary.
+    fn apply_zero_boundary(self, field, nx, ny): Result {
+        var c: BjCpuBackend;
+        return c.apply_zero_boundary(field, nx, ny);
+    }
+    # Ok(0): nothing is queued.
+    fn synchronize(self): Result {
+        return Ok(0);
+    }
+    # BjCpuBackend's free_buffer.
+    fn free_buffer(self, buffer): i64 {
+        var c: BjCpuBackend;
+        return c.free_buffer(buffer);
+    }
+}
+
+# A GpuFdtd2d script (M6 Part 3) on BjCpuBackend: nx, ny, dx, then add_source (5), step_once (6), run (7); the state
+# (tests/golden's README): step, dt, time, the digests of E_z, H_x, H_y, C_e and C_h, then E_z, H_x, H_y at the 2D
+# probes. A CPU buffer's values follow its length word.
+fn _par_gpu_script(): i64 {
+    var cpu: BjCpuBackend;
+    var sim: BjGpuFdtd2d<BjCpuBackend>;
+    var dx: f64 = _par_in(2);
+    var t, v = BjGpuFdtd2d_new(_par_in(0), _par_in(1), dx, cpu, &sim);
+    if (is_err_result(t) == 1) {
+        _par_got_error(v);
+        return 1;
+    }
+    var k = 3;
+    while (k < _par_in_n) {
+        var code = _par_in(k);
+        if (code == 5) {
+            var x5: f64 = _par_in(k + 3);
+            var t5, v5 = BjGpuFdtd2d_add_source(&sim, _par_in(k + 1), _par_in(k + 2), x5);
+            if (is_err_result(t5) == 1) { _par_got_error(v5); }
+            k = k + 4;
+        } elif (code == 6) {
+            var cnt = _par_in(k + 1);
+            for (var j = 0; j != cnt; j = j + 1) {
+                var t6, v6 = BjGpuFdtd2d_step_once(&sim);
+                if (is_err_result(t6) == 1) { _par_got_error(v6); }
+            }
+            k = k + 2;
+        } elif (code == 7) {
+            var sx = BJ_FDTD2D_NO_SOURCE;
+            var sy = 0;
+            var at = k + 2;
+            if (load64(_par_in_k + at * 8) == 105) {
+                sx = _par_in(at);
+                sy = _par_in(at + 1);
+                at = at + 2;
+            } else {
+                at = at + 1;
+            }
+            var fr: f64 = _par_in(at);
+            var am: f64 = _par_in(at + 1);
+            var t7, v7 = BjGpuFdtd2d_run(&sim, _par_in(k + 1), sx, sy, fr, am);
+            if (is_err_result(t7) == 1) { _par_got_error(v7); }
+            k = at + 2;
+        } else {
+            BjGpuFdtd2d_free(&sim);
+            return 0 - 1;
+        }
+    }
+    var nx = sim.nx;
+    var ny = sim.ny;
+    var n = nx * ny;
+    _par_got_i(sim.step);
+    _par_got_f(sim.dt);
+    var tm: f64 = BjGpuFdtd2d_time(&sim);
+    _par_got_f(tm);
+    _par_got_i(_par_fd_digest(sim.fz + 8, n));
+    _par_got_i(_par_fd_digest(sim.fx + 8, n));
+    _par_got_i(_par_fd_digest(sim.fy + 8, n));
+    _par_got_i(_par_fd_digest(sim.ce + 8, n));
+    _par_got_i(_par_fd_digest(sim.ch + 8, n));
+    var px: i64[5];
+    var py: i64[5];
+    px[0] = nx / 2;
+    py[0] = ny / 2;
+    px[1] = 1;
+    py[1] = 1;
+    px[2] = nx - 2;
+    py[2] = ny - 2;
+    px[3] = 0;
+    py[3] = ny / 2;
+    px[4] = nx / 2;
+    py[4] = 1;
+    for (var q = 0; q < 5; q = q + 1) {
+        var i = py[q] * nx + px[q];
+        _par_got_f(load64(sim.fz + 8 + i * 8));
+        _par_got_f(load64(sim.fx + 8 + i * 8));
+        _par_got_f(load64(sim.fy + 8 + i * 8));
+    }
+    BjGpuFdtd2d_free(&sim);
+    return 1;
+}
+
+# A CpuBackend kernel row (M6 Part 3; emit.py's `kernel` comment): four host arrays filled as seed·((7i + 3j) mod 11)
+# − 1, the CPU buffers the operation takes made from them, the operation, then its error or the four arrays' digests
+# (a CPU buffer's after the operation).
+fn _par_cpu_kernel(): i64 {
+    var cpu: BjCpuBackend;
+    var trip: ParTrip;
+    var op = _par_in(0);
+    var nx = _par_in(1);
+    var ny = _par_in(2);
+    var arg = _par_in(3);
+    var seed: f64 = _par_in(8);
+    var host: i64[4];
+    var lens: i64[4];
+    for (var j = 0; j < 4; j = j + 1) {
+        var len = _par_in(4 + j);
+        lens[j] = len;
+        host[j] = fl_alloc(len * 8 + 8);
+        for (var i = 0; i < len; i = i + 1) {
+            var q: f64 = f64_from((7 * i + 3 * j) % 11);
+            var x: f64 = seed * q - 1.0;
+            store64(host[j] + i * 8, x);
+        }
+    }
+    # Which arrays are CPU buffers: ops 1 (three), 2 (four), 3 to 7 (the first).
+    var nb = 1;
+    if (op == 1) { nb = 3; }
+    if (op == 2) { nb = 4; }
+    var buf: i64[4];
+    for (var b = 0; b < nb; b = b + 1) {
+        var tb, vb = cpu.create_buffer(host[b], lens[b]);
+        buf[b] = vb;
+    }
+    var t = 0;
+    var v = 0;
+    if (op == 1) {
+        var t1, v1 = cpu.fdtd_update_h(buf[0], buf[1], buf[2], nx, ny, arg);
+        t = t1;
+        v = v1;
+    } elif (op == 2) {
+        var t2, v2 = cpu.fdtd_update_e(buf[0], buf[1], buf[2], buf[3], nx, ny);
+        t = t2;
+        v = v2;
+    } elif (op == 3) {
+        var t3, v3 = cpu.apply_zero_boundary(buf[0], nx, ny);
+        t = t3;
+        v = v3;
+    } elif (op == 4) {
+        var t4, v4 = cpu.read_buffer(buf[0], host[1], lens[1]);
+        t = t4;
+        v = v4;
+    } elif (op == 5) {
+        var t5, v5 = cpu.write_buffer(buf[0], host[1], lens[1]);
+        t = t5;
+        v = v5;
+    } elif (op == 6) {
+        var t6, v6 = cpu.add_to_element(buf[0], arg, seed, host[1], lens[1]);
+        t = t6;
+        v = v6;
+    } else {
+        var t7, v7 = _bj_compute_add_to_element(&trip, buf[0], arg, seed, host[1], lens[1]);
+        t = t7;
+        v = v7;
+    }
+    if (is_err_result(t) == 1) { _par_got_error(v); }
+    else {
+        for (var d = 0; d < 4; d = d + 1) {
+            if (d < nb) { _par_got_i(_par_fd_digest(buf[d] + 8, lens[d])); }
+            else { _par_got_i(_par_fd_digest(host[d], lens[d])); }
+        }
+    }
+    for (var e = 0; e < 4; e = e + 1) {
+        if (e < nb) { cpu.free_buffer(buf[e]); }
+        fl_free(host[e]);
+    }
+    return 1;
+}
+
 # M6 part 1a: CpmlParams::new, Cpml::with_params, Cpml::new and Cpml::attach (tests/golden/fdtd_2d3d.tsv's comment).
 fn _par_fdtd_2d3d(fp, fl): i64 {
+    if (_par_eq(fp, fl, "GpuFdtd2d::script") == 1) { return _par_gpu_script(); }
+    if (_par_eq(fp, fl, "CpuBackend::kernel") == 1) { return _par_cpu_kernel(); }
     if (_par_eq(fp, fl, "Fdtd2d::script") == 1) { return _par_fd2_script(); }
     if (_par_eq(fp, fl, "Fdtd3d::script") == 1) { return _par_fd3_script(); }
     if (_par_eq(fp, fl, "fdtd::nf2ff_2d") == 1) { return _par_fd2_nf2ff(); }

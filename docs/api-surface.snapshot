@@ -785,6 +785,16 @@ complex::BjComplex_sub/2
 complex::bj_complex_from_polar/2
 complex::bj_complex_real/1
 complex::bj_complex_zero/0
+compute::BjGpuFdtd2d_add_source/4
+compute::BjGpuFdtd2d_free/1
+compute::BjGpuFdtd2d_new/5
+compute::BjGpuFdtd2d_read_ez/3
+compute::BjGpuFdtd2d_read_hx/3
+compute::BjGpuFdtd2d_read_hy/3
+compute::BjGpuFdtd2d_run/6
+compute::BjGpuFdtd2d_step_once/1
+compute::BjGpuFdtd2d_time/1
+compute::BjWgpuBackend_new/1
 cpml::BjCpmlParams_new/1
 cpml::BjCpml_free/1
 cpml::BjCpml_new/4

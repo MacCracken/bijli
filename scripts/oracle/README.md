@@ -50,7 +50,7 @@ The table's emitters are the retired Rust generator's, kept in git history (`git
 | `constants` | M0 | 12 | `src/m_constants.rs` | `src/constants.cyr` (frozen; validate.py checks every value) |
 | `error` | M1 | 1,635 | `src/m_error.rs` | — |
 | `fdtd` | M5 (part 1a: the 1D grid `Fdtd1d`, as scripts, class T; 1b: the pulses, class C, the Gaussian-driven grid and the TF/SF scripts; 1c: the media and the subpixel averages, class A; 1d: the non-uniform grid, the fourth-order derivative, the CW scripts and the eigenmodes; 1e: NF2FF's phasor form; 2a-1a and 2a-1b: the media and Mur coefficients at their cancellation; 2a-2: the subpixel means; 2a-3: the grading; 2b: seeded grids, media and sources for the rounded-once coefficients; 2c: the Courant limit and NF2FF's agreement straddled; 2d-1: the pulses' range edges; 2d-2a and 2d-2b: the 1D grid's; 2d-3: the TF/SF grid's; 2d-4a: the CW accumulator's; 2d-4b-1 and 2d-4b-2: the eigenmode search's; 2d-5: the utilities'; 2d-6: NF2FF's') | 107,341 (+ 28 corrected, 18,159 mapped) | `src/m_fdtd.rs` | `src/fdtd_media_data.cyr`, the gold, silver and water presets (frozen; validate.py checks every value) |
-| `fdtd_2d3d` | M6 (part 1a: the CPML layer's grading and profiles, `CpmlParams` and `Cpml`, class C; 1b-1: `Fdtd2d` without its CPML, as scripts, class T; 1b-2: the CPML attached; 1c: `nf2ff_2d`, class C; 2a: `Fdtd3d` without its CPML; 2b: the 3D CPML, the first rows from `emit.py`; `fdtd.tsv` neared the 48 MiB cap, so M6's rows start this module) | 1,201 (+ 14 corrected, 12 mapped) | `src/m_fdtd_2d3d.rs` (rows 1–1,107), `emit.py`'s `emit_2b` (the rest) | — |
+| `fdtd_2d3d` | M6 (part 1a: the CPML layer's grading and profiles, `CpmlParams` and `Cpml`, class C; 1b-1: `Fdtd2d` without its CPML, as scripts, class T; 1b-2: the CPML attached; 1c: `nf2ff_2d`, class C; 2a: `Fdtd3d` without its CPML; 2b: the 3D CPML, the first rows from `emit.py`; Part 3: compute.rs's GpuFdtd2d and CPU kernels; `fdtd.tsv` neared the 48 MiB cap, so M6's rows start this module) | 1,463 (+ 14 corrected, 12 mapped) | `src/m_fdtd_2d3d.rs` (rows 1–1,107), `emit.py`'s `emit_2b` and `emit_3` (the rest) | — |
 | `field` | M1 (parts 3a–3c, 5d-1 to 5d-5) | 26,770 | `src/m_field.rs` | — |
 | `fmtf` | M1 (+ Debug, part 3c; + fixed precision, M2 part 1b; + `{:e}`, M4 part 1c-2) | 89,528 | `src/m_fmtf.rs` (impetus's grid) | — |
 | `json` | M1 (part 4), M2 (part 1a: `Material`), M3 (parts 1a-2: polarization's four structs; 1b-2: `MieResult`; 1c-2: beam's three structs), M4 (part 1d: rf's `SMatrix`, `TouchstoneFormat`, `TouchstoneData`), M5 (part 1f: the four FDTD materials, `NonUniformGrid`, `EigenmodeResult`), M6 (part 1d: `CpmlParams`, `Mode2d`) | 97,092 (+ 42,976 corrected, 110 mapped) | `src/m_json.rs` (serde_json 1.0.154 on `Complex`, `FieldVector`, `PointCharge`, `Material`, `JonesVector`, `JonesMatrix`, `StokesVector`, `MuellerMatrix`, `MieResult`, `GaussianBeam`, `AbcdMatrix`, `ResonatorStability`) | — |
@@ -231,6 +231,13 @@ error, or each failed operation's error and then the state.
   and its twelve Ψ slabs' digests in `Cpml3d`'s order (hx_y, hx_z, hy_x, hy_z, hz_x, hz_y, ex_y, ex_z, ey_x, ey_z,
   ez_x, ez_y), each slab the grid's shape with its axis cut to the 2·thickness layers, x fastest. The rows from 2b on
   are emit.py's.
+- **`GpuFdtd2d`** (M6 Part 3, class T, on `CpuBackend`): `i:<nx> i:<ny> f:<dx>`, then the 2D opcodes 5 (add_source), 6
+  (step_once) and 7 (run). Its state: step, dt, time, the digests of E_z, H_x, H_y, C_e and C_h, then E_z, H_x and H_y
+  at the 2D probes.
+- **`CpuBackend::kernel`** (M6 Part 3, class A): `i:<op> i:<nx> i:<ny> i:<axis|index> i:<len0> .. i:<len3> f:<seed>`,
+  four arrays j filled as seed·((7i + 3j) mod 11) − 1, then op 1 fdtd_update_h, 2 fdtd_update_e, 3
+  apply_zero_boundary, 4 read_buffer, 5 write_buffer, 6 CpuBackend's add_to_element, 7 the trait's default (emit.py's
+  `kernel`); its outputs the error, or the four arrays' digests.
 
 A frame of a scenario is a script that extends the previous frame's by one advancing operation, so `validate.py` runs
 each scenario once. The digest is the harness's cross-target digest step (`_par_dg_step`: FNV-1a, then y ⊕ (y >> 29)

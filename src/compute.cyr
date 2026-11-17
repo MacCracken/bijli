@@ -1,0 +1,570 @@
+# compute.cyr — compute.rs's generic compute backend (M6 Part 3): the BjComputeBackend trait, the CPU reference
+# backend BjCpuBackend, the backend-agnostic 2D TM solver BjGpuFdtd2d<B> and the BjWgpuBackend scaffold.
+#
+# A backend owns field buffers and runs the FDTD stencils on them. Rust's trait has an associated `Buffer` type; here a
+# buffer is an opaque word each backend defines (BjCpuBackend's is the address of a block holding its length, then
+# its values). Host slices are a pointer and a length. Cyrius has no Drop, so the trait adds `free_buffer`, which gives
+# a buffer back (BjGpuFdtd2d_free calls it for every buffer it made). Fields are 2D, row-major (index y·nx + x), in
+# src/fdtd2d.cyr's TM Yee layout: E_z at (x, y), H_x at (x, y + ½), H_y at (x + ½, y). A refused request returns an
+# error value; nothing aborts.
+#
+# Cyrius refuses a generic impl header (`impl<B> T<B>`, cyrius 6.7.17; probe p20), so BjGpuFdtd2d<B>'s methods are
+# generic functions over a `*BjGpuFdtd2d<B>`: `BjGpuFdtd2d_step_once(&sim)` is Rust's `sim.step_once()`, the backend
+# inferred from the grid's type. The grid holds its backend by value, as Rust's (`backend: B`). With BjCpuBackend
+# its arithmetic is src/fdtd2d.cyr's TM update (the same row kernels, the same order), so its fields are BjFdtd2d's
+# bit for bit. The file is time-domain only; bijli's one harmonic convention, e^{+jωt}, is stated in src/complex.cyr's
+# header.
+
+private
+
+# std::f64::consts::PI and SQRT_2.
+var _BJ_CB_PI: f64 = 3.141592653589793;
+var _BJ_CB_SQRT_2: f64 = 1.4142135623730951;
+# The kernels' stack scratch: rows are run in chunks of this many cells.
+var _BJ_CB_CHUNK = 256;
+# The largest buffer length whose block (8 bytes a value and a header) a 64-bit length holds.
+var _BJ_CB_MAX_LEN = 1152921504606846974;
+
+# A compute backend (CPU or GPU) that holds FDTD field buffers and runs the TM stencils on them. A buffer is an opaque
+# word the backend defines; a host array is a pointer and its length n. Every fallible member returns Ok or an error
+# value, never aborts. Mirrors `ComputeBackend`.
+public trait BjComputeBackend {
+    # A new buffer holding the n values at data: Ok(the buffer). Mirrors `ComputeBackend::create_buffer`.
+    fn create_buffer(self, data: *f64, n): Result;
+    # Copies the buffer's values to the n f64 at dst (n must be the buffer's length): Ok(0). Mirrors
+    # `ComputeBackend::read_buffer`.
+    fn read_buffer(self, buffer, dst: *f64, n): Result;
+    # Copies the n f64 at src into the buffer (n must be its length): Ok(0). Mirrors `ComputeBackend::write_buffer`.
+    fn write_buffer(self, buffer, src: *f64, n): Result;
+    # The TM H update from E_z for one in-plane component: axis 0, H_x[x, y] −= coeff[x, y]·(E[x, y + 1] − E[x, y]) for
+    # y < ny − 1; axis 1, H_y[x, y] += coeff[x, y]·(E[x + 1, y] − E[x, y]) for x < nx − 1; any other axis an error.
+    # Mirrors `ComputeBackend::fdtd_update_h`.
+    fn fdtd_update_h(self, h, e, coeff, nx, ny, axis): Result;
+    # The E update from curl H on the interior nodes: E[x, y] += coeff·((Hy[x, y] − Hy[x − 1, y]) − (Hx[x, y] −
+    # Hx[x, y − 1])). Mirrors `ComputeBackend::fdtd_update_e`.
+    fn fdtd_update_e(self, e, hx, hy, coeff, nx, ny): Result;
+    # Zeroes the outermost ring of an nx × ny field. Mirrors `ComputeBackend::apply_zero_boundary`.
+    fn apply_zero_boundary(self, field, nx, ny): Result;
+    # Waits for every queued operation. Mirrors `ComputeBackend::synchronize`.
+    fn synchronize(self): Result;
+    # Gives a buffer back (Rust drops it; Cyrius has no Drop). A second call on the same buffer is the caller's error.
+    fn free_buffer(self, buffer): i64;
+    # Adds value to element index of the buffer (a point source). scratch is host memory of the buffer's length n; this
+    # default round-trips the whole buffer through it (read, modify, write), and a backend that can update one element
+    # in place overrides it. Ok(0), or Err(InvalidParameter) "element index {index} out of range for buffer of {n}",
+    # or a transfer's error. Mirrors `ComputeBackend::add_to_element`.
+    fn add_to_element(self, buffer, index, value: f64, scratch: *f64, n): Result {
+        var t, v = self.read_buffer(buffer, scratch, n);
+        if (is_err_result(t) == 1) { return Err(v); }
+        if (_bj_fd2_uge(index, n) == 1) {
+            var r = _bj_err_reason(BJ_ERR_INVALID_PARAMETER);
+            _bj_tx_cstr(r, "element index ");
+            _bj_tx_u64(r, index);
+            _bj_tx_cstr(r, " out of range for buffer of ");
+            _bj_tx_u64(r, n);
+            return Err(BJ_ERR_INVALID_PARAMETER);
+        }
+        scratch[index] = scratch[index] + value;
+        return self.write_buffer(buffer, scratch, n);
+    }
+}
+
+# backend.add_to_element(..) from any file: the trait's default, instantiated for a backend of another file, is private
+# to this one (cyrius 6.7.18, probe p20; to file upstream), so a backend defined elsewhere that inherits it reaches it
+# here. Public for tests/compute.tcyr and for consumers' backends.
+#must_use
+public fn _bj_compute_add_to_element<B: BjComputeBackend>(backend: *B, buffer, index, value: f64,
+  scratch: *f64, n): Result {
+    return backend.add_to_element(buffer, index, value, scratch, n);
+}
+
+# A CPU buffer's values (after its length word).
+#must_use
+fn _bj_cb_data(buffer): *f64 {
+    return buffer + 8;
+}
+
+# Records InvalidParameter "invalid grid dimensions {nx}x{ny}" (nx·ny zero or past 2^64) or "buffer length {len} does
+# not match grid {nx}x{ny} = {n}" for the first of the k CPU buffers at bufs whose length isn't nx·ny, and returns its
+# code; 0 when all match. Mirrors compute.rs's `check_grid`.
+fn _bj_cb_check(nx, ny, bufs: *i64, k): i64 {
+    var cells: i64[1];
+    if (_bj_fd2_umul(nx, ny, &cells) == 0 || cells[0] == 0) {
+        var t = _bj_err_reason(BJ_ERR_INVALID_PARAMETER);
+        _bj_tx_cstr(t, "invalid grid dimensions ");
+        _bj_tx_u64(t, nx);
+        _bj_tx_cstr(t, "x");
+        _bj_tx_u64(t, ny);
+        return BJ_ERR_INVALID_PARAMETER;
+    }
+    var n = cells[0];
+    for (var j = 0; j < k; j = j + 1) {
+        var len = load64(bufs[j]);
+        if (len != n) {
+            var t2 = _bj_err_reason(BJ_ERR_INVALID_PARAMETER);
+            _bj_tx_cstr(t2, "buffer length ");
+            _bj_tx_u64(t2, len);
+            _bj_tx_cstr(t2, " does not match grid ");
+            _bj_tx_u64(t2, nx);
+            _bj_tx_cstr(t2, "x");
+            _bj_tx_u64(t2, ny);
+            _bj_tx_cstr(t2, " = ");
+            _bj_tx_u64(t2, n);
+            return BJ_ERR_INVALID_PARAMETER;
+        }
+    }
+    return 0;
+}
+
+# Records InvalidParameter "host slice length {host_len} does not match buffer length {buffer_len}" and returns its
+# code when the two differ; else 0. Mirrors compute.rs's `check_transfer`.
+fn _bj_cb_transfer(buffer_len, host_len): i64 {
+    if (buffer_len == host_len) { return 0; }
+    var t = _bj_err_reason(BJ_ERR_INVALID_PARAMETER);
+    _bj_tx_cstr(t, "host slice length ");
+    _bj_tx_u64(t, host_len);
+    _bj_tx_cstr(t, " does not match buffer length ");
+    _bj_tx_u64(t, buffer_len);
+    return BJ_ERR_INVALID_PARAMETER;
+}
+
+# d ± k·(a − b) over n cells (add 1: +=, 0: −=), src/fdtd2d.cyr's packed row kernel in chunks through a stack scratch.
+fn _bj_cb_diff(d: *f64, k: *f64, a: *f64, b: *f64, n, add) {
+    var w: f64[256];
+    for (var s = 0; s < n; s = s + _BJ_CB_CHUNK) {
+        var m = n - s;
+        if (m > _BJ_CB_CHUNK) { m = _BJ_CB_CHUNK; }
+        _bj_fd2_diff(d + s, k + s, a + s, b + s, &w, m, add);
+    }
+    return 0;
+}
+
+# One row's interior curl update, x ∈ 1..n − 1: d[x] += k[x]·((a[x] − a[x − 1]) − (b[x] − bp[x])), src/fdtd2d.cyr's
+# packed kernel on chunks of the interior (each chunk with the cell before it) through stack scratch rows.
+fn _bj_cb_curl(d: *f64, k: *f64, a: *f64, b: *f64, bp: *f64, n) {
+    var w: f64[256];
+    var w2: f64[256];
+    for (var s = 1; s < n - 1; s = s + _BJ_CB_CHUNK) {
+        var e = s + _BJ_CB_CHUNK;
+        if (e > n - 1) { e = n - 1; }
+        var o = s - 1;
+        _bj_fd2_curl(d + o, k + o, a + o, b + o, bp + o, &w, &w2, e - s + 2, 1);
+    }
+    return 0;
+}
+
+# The CPU reference backend: a buffer is the address of an anonymous mapping holding its length, then its values.
+# Suitable for testing, small grids and machines without a GPU. Mirrors `CpuBackend`.
+public struct BjCpuBackend { }
+
+impl BjComputeBackend for BjCpuBackend {
+    # A new buffer holding the n values at data: Ok(it), or Err(BJ_ERR_ALLOCATION) "a compute buffer of {n} values"
+    # when its mapping can't be had, where Rust's `to_vec` aborts (ADR 0002 row 9). Mirrors `CpuBackend::create_buffer`.
+    public fn create_buffer(self, data: *f64, n): Result {
+        var map = 0;
+        if (n >= 0 && n <= _BJ_CB_MAX_LEN) { map = mmap_anon((n + 1) * 8); }
+        if (map == 0) {
+            var t = _bj_err_reason(BJ_ERR_ALLOCATION);
+            _bj_tx_cstr(t, "a compute buffer of ");
+            _bj_tx_u64(t, n);
+            _bj_tx_cstr(t, " values");
+            return Err(BJ_ERR_ALLOCATION);
+        }
+        store64(map, n);
+        if (n > 0) { memcpy(map + 8, data, n * 8); }
+        return Ok(map);
+    }
+
+    # Copies the buffer's values to dst: Ok(0), or Err(InvalidParameter) "host slice length {n} does not match buffer
+    # length {len}" with dst untouched. Mirrors `CpuBackend::read_buffer`.
+    public fn read_buffer(self, buffer, dst: *f64, n): Result {
+        var e = _bj_cb_transfer(load64(buffer), n);
+        if (e != 0) { return Err(e); }
+        if (n > 0) { memcpy(dst, buffer + 8, n * 8); }
+        return Ok(0);
+    }
+
+    # Copies src into the buffer: Ok(0), or Err(InvalidParameter) as read_buffer with the buffer untouched. Mirrors
+    # `CpuBackend::write_buffer`.
+    public fn write_buffer(self, buffer, src: *f64, n): Result {
+        var e = _bj_cb_transfer(load64(buffer), n);
+        if (e != 0) { return Err(e); }
+        if (n > 0) { memcpy(buffer + 8, src, n * 8); }
+        return Ok(0);
+    }
+
+    # The H update (the trait's comment): Ok(0), or Err(InvalidParameter) "axis must be 0 or 1, got {axis}" first, then
+    # check_grid's records, with nothing written. Mirrors `CpuBackend::fdtd_update_h`.
+    public fn fdtd_update_h(self, h, e, coeff, nx, ny, axis): Result {
+        if (axis != 0 && axis != 1) {
+            var t = _bj_err_reason(BJ_ERR_INVALID_PARAMETER);
+            _bj_tx_cstr(t, "axis must be 0 or 1, got ");
+            _bj_tx_i64(t, axis);
+            return Err(BJ_ERR_INVALID_PARAMETER);
+        }
+        var bufs: i64[3];
+        bufs[0] = h;
+        bufs[1] = e;
+        bufs[2] = coeff;
+        var c = _bj_cb_check(nx, ny, &bufs, 3);
+        if (c != 0) { return Err(c); }
+        var hp: *f64 = _bj_cb_data(h);
+        var ep: *f64 = _bj_cb_data(e);
+        var kp: *f64 = _bj_cb_data(coeff);
+        if (axis == 0) {
+            for (var y = 0; y < ny - 1; y = y + 1) {
+                var r = y * nx;
+                _bj_cb_diff(hp + r, kp + r, ep + r + nx, ep + r, nx, 0);
+            }
+        } else {
+            for (var y2 = 0; y2 < ny; y2 = y2 + 1) {
+                var r2 = y2 * nx;
+                _bj_cb_diff(hp + r2, kp + r2, ep + r2 + 1, ep + r2, nx - 1, 1);
+            }
+        }
+        return Ok(0);
+    }
+
+    # The E update (the trait's comment): Ok(0), or check_grid's records with nothing written. Mirrors
+    # `CpuBackend::fdtd_update_e`.
+    public fn fdtd_update_e(self, e, hx, hy, coeff, nx, ny): Result {
+        var bufs: i64[4];
+        bufs[0] = e;
+        bufs[1] = hx;
+        bufs[2] = hy;
+        bufs[3] = coeff;
+        var c = _bj_cb_check(nx, ny, &bufs, 4);
+        if (c != 0) { return Err(c); }
+        var ep: *f64 = _bj_cb_data(e);
+        var xp: *f64 = _bj_cb_data(hx);
+        var yp: *f64 = _bj_cb_data(hy);
+        var kp: *f64 = _bj_cb_data(coeff);
+        for (var y = 1; y < ny - 1; y = y + 1) {
+            var r = y * nx;
+            _bj_cb_curl(ep + r, kp + r, yp + r, xp + r, xp + r - nx, nx);
+        }
+        return Ok(0);
+    }
+
+    # Zeroes the outermost ring: Ok(0), or check_grid's records. Mirrors `CpuBackend::apply_zero_boundary`.
+    public fn apply_zero_boundary(self, field, nx, ny): Result {
+        var bufs: i64[1];
+        bufs[0] = field;
+        var c = _bj_cb_check(nx, ny, &bufs, 1);
+        if (c != 0) { return Err(c); }
+        _bj_fd2_walls(_bj_cb_data(field), nx, ny);
+        return Ok(0);
+    }
+
+    # Ok(0): the CPU is synchronous. Mirrors `CpuBackend::synchronize`.
+    public fn synchronize(self): Result {
+        return Ok(0);
+    }
+
+    # Gives the buffer's mapping back.
+    public fn free_buffer(self, buffer): i64 {
+        if (buffer != 0) { cyr_munmap(buffer, (load64(buffer) + 1) * 8); }
+        return 0;
+    }
+
+    # Adds value to element index in place (scratch unused): Ok(0), or Err(InvalidParameter) "element index {index} out
+    # of range for buffer of {len}". Mirrors `CpuBackend::add_to_element`.
+    public fn add_to_element(self, buffer, index, value: f64, scratch: *f64, n): Result {
+        var len = load64(buffer);
+        if (_bj_fd2_uge(index, len) == 1) {
+            var r = _bj_err_reason(BJ_ERR_INVALID_PARAMETER);
+            _bj_tx_cstr(r, "element index ");
+            _bj_tx_u64(r, index);
+            _bj_tx_cstr(r, " out of range for buffer of ");
+            _bj_tx_u64(r, len);
+            return Err(BJ_ERR_INVALID_PARAMETER);
+        }
+        var p: *f64 = _bj_cb_data(buffer);
+        p[index] = p[index] + value;
+        return Ok(0);
+    }
+}
+
+# A backend-agnostic 2D FDTD simulation, TM mode (E_z, H_x, H_y): BjFdtd2d's physics with the fields and the stencils
+# delegated to `backend`. nx × ny are the nodes, `dx` (m) the spacing, `dt` (s) the step, `step` the time-step index.
+# fz, fx, fy (E_z, H_x, H_y) and ce, ch (the E and H coefficients) are the backend's buffers; `scratch` is host memory
+# of nx·ny f64 for add_to_element (mapped on first use; scratch_len its length, 0 before). Give it back with
+# BjGpuFdtd2d_free. Mirrors `GpuFdtd2d`.
+public struct BjGpuFdtd2d<B: BjComputeBackend> {
+    backend: B;
+    nx;
+    ny;
+    dx: f64;
+    dt: f64;
+    step;
+    fz;
+    fx;
+    fy;
+    ce;
+    ch;
+    scratch;
+    scratch_len;
+}
+
+# A host block of n f64, each v: its address, or 0 with Allocation recorded ("the grid's host values").
+fn _bj_cb_host(n, v: f64): i64 {
+    var map = 0;
+    if (n > 0 && n <= _BJ_CB_MAX_LEN) { map = mmap_anon(n * 8); }
+    if (map == 0) {
+        var t = _bj_err_reason(BJ_ERR_ALLOCATION);
+        _bj_tx_cstr(t, "the grid's host values (");
+        _bj_tx_u64(t, n);
+        _bj_tx_cstr(t, ")");
+        return 0;
+    }
+    var p: *f64 = _bj_fd2_f64p(map);
+    if (v != 0.0) {
+        for (var i = 0; i < n; i = i + 1) { p[i] = v; }
+    }
+    return map;
+}
+
+# A vacuum TM grid of nx × ny nodes at spacing dx on `backend` into *out (the backend copied in): Ok(0), or with out
+# untouched Err(InsufficientResolution) when nx < 3 or ny < 3 (cells min(nx, ny), domain min·dx),
+# Err(InvalidParameter) "dx must be finite and positive, got {dx}" or "grid {nx}x{ny} is too large", in Rust's order,
+# or a buffer's creation error (the buffers made so far given back). dt = dx/(2√2·c), half the 2D Courant limit.
+# Mirrors `GpuFdtd2d::new`.
+#must_use
+public fn BjGpuFdtd2d_new<B: BjComputeBackend>(nx, ny, dx: f64, backend: B, out: *BjGpuFdtd2d<B>): Result {
+    if ((nx >= 0 && nx < 3) || (ny >= 0 && ny < 3)) {
+        var mn = nx;
+        if (_bj_fd2_uge(nx, ny) == 1) { mn = ny; }
+        var mf: f64 = _bj_fd2_u2f(mn);
+        var size: f64 = mf * dx;
+        return Err(_bj_err_insufficient_resolution(mn, size));
+    }
+    if (_bj_fd2_pos(dx) == 0) {
+        var t = _bj_err_reason(BJ_ERR_INVALID_PARAMETER);
+        _bj_tx_cstr(t, "dx must be finite and positive, got ");
+        _bj_fmt_f64_display(t, dx);
+        return Err(BJ_ERR_INVALID_PARAMETER);
+    }
+    var cells: i64[1];
+    if (_bj_fd2_umul(nx, ny, &cells) == 0) {
+        var tg = _bj_err_reason(BJ_ERR_INVALID_PARAMETER);
+        _bj_tx_cstr(tg, "grid ");
+        _bj_tx_u64(tg, nx);
+        _bj_tx_cstr(tg, "x");
+        _bj_tx_u64(tg, ny);
+        _bj_tx_cstr(tg, " is too large");
+        return Err(BJ_ERR_INVALID_PARAMETER);
+    }
+    var n = cells[0];
+    var c: f64 = BJ_SPEED_OF_LIGHT;
+    var r2: f64 = 2.0 * _BJ_CB_SQRT_2;
+    var r2c: f64 = r2 * c;
+    var dt: f64 = dx / r2c;
+    var e0dx: f64 = BJ_EPSILON_0 * dx;
+    var ce: f64 = dt / e0dx;
+    var m0dx: f64 = BJ_MU_0 * dx;
+    var ch: f64 = dt / m0dx;
+    var zeros = _bj_cb_host(n, 0.0);
+    if (zeros == 0) { return Err(BJ_ERR_ALLOCATION); }
+    var vals = _bj_cb_host(n, ce);
+    if (vals == 0) {
+        cyr_munmap(zeros, n * 8);
+        return Err(BJ_ERR_ALLOCATION);
+    }
+    var bufs: i64[5];
+    var made = 0;
+    var code = 0;
+    out.backend = backend;
+    while (made < 5 && code == 0) {
+        var src = zeros;
+        if (made == 3) { src = vals; }
+        if (made == 4) {
+            var vp: *f64 = _bj_fd2_f64p(vals);
+            for (var i = 0; i < n; i = i + 1) { vp[i] = ch; }
+        }
+        if (made == 4) { src = vals; }
+        var tb, vb = out.backend.create_buffer(src, n);
+        if (is_err_result(tb) == 1) { code = vb; }
+        else {
+            bufs[made] = vb;
+            made = made + 1;
+        }
+    }
+    cyr_munmap(zeros, n * 8);
+    cyr_munmap(vals, n * 8);
+    if (code != 0) {
+        for (var j = 0; j < made; j = j + 1) { out.backend.free_buffer(bufs[j]); }
+        return Err(code);
+    }
+    out.nx = nx;
+    out.ny = ny;
+    out.dx = dx;
+    out.dt = dt;
+    out.step = 0;
+    out.fz = bufs[0];
+    out.fx = bufs[1];
+    out.fy = bufs[2];
+    out.ce = bufs[3];
+    out.ch = bufs[4];
+    out.scratch = 0;
+    out.scratch_len = 0;
+    if (_bj_log_on(4) == 1) {
+        var lb[256];
+        var lt[24];
+        _bj_tx_init(&lt, &lb, 256);
+        _bj_tx_cstr(&lt, "GpuFdtd2d created nx=");
+        _bj_tx_u64(&lt, nx);
+        _bj_tx_cstr(&lt, " ny=");
+        _bj_tx_u64(&lt, ny);
+        _bj_tx_cstr(&lt, " dx=");
+        _bj_fmt_f64_debug(&lt, dx);
+        _bj_tx_cstr(&lt, " dt=");
+        _bj_fmt_f64_debug(&lt, dt);
+        _bj_log_text(4, &lt);
+    }
+    return Ok(0);
+}
+
+# Gives the grid's five buffers back through its backend, and its host scratch; empties it (nx = ny = 0, every handle
+# 0). A second call does nothing.
+public fn BjGpuFdtd2d_free<B: BjComputeBackend>(sim: *BjGpuFdtd2d<B>): i64 {
+    if (sim.fz != 0) { sim.backend.free_buffer(sim.fz); }
+    if (sim.fx != 0) { sim.backend.free_buffer(sim.fx); }
+    if (sim.fy != 0) { sim.backend.free_buffer(sim.fy); }
+    if (sim.ce != 0) { sim.backend.free_buffer(sim.ce); }
+    if (sim.ch != 0) { sim.backend.free_buffer(sim.ch); }
+    if (sim.scratch_len > 0) { cyr_munmap(sim.scratch, sim.scratch_len * 8); }
+    sim.fz = 0;
+    sim.fx = 0;
+    sim.fy = 0;
+    sim.ce = 0;
+    sim.ch = 0;
+    sim.scratch = 0;
+    sim.scratch_len = 0;
+    sim.nx = 0;
+    sim.ny = 0;
+    return 0;
+}
+
+# Advances one TM time step through the backend: H_x and H_y from E_z, E_z from curl H, the zero boundary. Ok(0), or
+# the first kernel's error (the step not counted). Mirrors `GpuFdtd2d::step_once`.
+public fn BjGpuFdtd2d_step_once<B: BjComputeBackend>(sim: *BjGpuFdtd2d<B>): Result {
+    var nx = sim.nx;
+    var ny = sim.ny;
+    if (_bj_log_on(5) == 1) {
+        var lb[96];
+        var lt[24];
+        _bj_tx_init(&lt, &lb, 96);
+        _bj_tx_cstr(&lt, "GpuFdtd2d step step=");
+        _bj_tx_u64(&lt, sim.step);
+        _bj_log_text(5, &lt);
+    }
+    var t1, v1 = sim.backend.fdtd_update_h(sim.fx, sim.fz, sim.ch, nx, ny, 0);
+    if (is_err_result(t1) == 1) { return Err(v1); }
+    var t2, v2 = sim.backend.fdtd_update_h(sim.fy, sim.fz, sim.ch, nx, ny, 1);
+    if (is_err_result(t2) == 1) { return Err(v2); }
+    var t3, v3 = sim.backend.fdtd_update_e(sim.fz, sim.fx, sim.fy, sim.ce, nx, ny);
+    if (is_err_result(t3) == 1) { return Err(v3); }
+    var t4, v4 = sim.backend.apply_zero_boundary(sim.fz, nx, ny);
+    if (is_err_result(t4) == 1) { return Err(v4); }
+    sim.step = sim.step + 1;
+    return Ok(0);
+}
+
+# Adds value to E_z at node (x, y), a soft source; a node outside the grid is ignored (usize compares), as BjFdtd2d's
+# add_source. The host scratch is mapped on first use. Ok(0), Err(BJ_ERR_ALLOCATION) when the scratch can't be had, or
+# the backend's error. Mirrors `GpuFdtd2d::add_source`.
+public fn BjGpuFdtd2d_add_source<B: BjComputeBackend>(sim: *BjGpuFdtd2d<B>, x, y, value: f64): Result {
+    if (_bj_fd2_uge(x, sim.nx) == 1 || _bj_fd2_uge(y, sim.ny) == 1) { return Ok(0); }
+    var n = sim.nx * sim.ny;
+    if (sim.scratch_len != n) {
+        var s = _bj_cb_host(n, 0.0);
+        if (s == 0) { return Err(BJ_ERR_ALLOCATION); }
+        if (sim.scratch_len > 0) { cyr_munmap(sim.scratch, sim.scratch_len * 8); }
+        sim.scratch = s;
+        sim.scratch_len = n;
+    }
+    return sim.backend.add_to_element(sim.fz, y * sim.nx + x, value, _bj_fd2_f64p(sim.scratch), n);
+}
+
+# Runs `steps` time steps (a usize). Before each, when (sx, sy) is in the grid, adds amplitude·sin(2π·frequency·t) to
+# E_z there, t = step·dt; BJ_FDTD2D_NO_SOURCE for sx (or any node outside the grid) injects nothing, as Rust's None.
+# Then synchronizes the backend. Ok(0), or the first error (the steps before it taken). Mirrors `GpuFdtd2d::run`.
+public fn BjGpuFdtd2d_run<B: BjComputeBackend>(sim: *BjGpuFdtd2d<B>, steps, sx, sy, frequency: f64,
+  amplitude: f64): Result {
+    if (_bj_log_on(4) == 1) {
+        var lb[256];
+        var lt[24];
+        _bj_tx_init(&lt, &lb, 256);
+        _bj_tx_cstr(&lt, "GpuFdtd2d run started steps=");
+        _bj_tx_u64(&lt, steps);
+        _bj_tx_cstr(&lt, " source=");
+        if (sx == BJ_FDTD2D_NO_SOURCE) {
+            _bj_tx_cstr(&lt, "None");
+        } else {
+            _bj_tx_cstr(&lt, "Some((");
+            _bj_tx_u64(&lt, sx);
+            _bj_tx_cstr(&lt, ", ");
+            _bj_tx_u64(&lt, sy);
+            _bj_tx_cstr(&lt, "))");
+        }
+        _bj_tx_cstr(&lt, " frequency=");
+        _bj_fmt_f64_debug(&lt, frequency);
+        _bj_tx_cstr(&lt, " amplitude=");
+        _bj_fmt_f64_debug(&lt, amplitude);
+        _bj_log_text(4, &lt);
+    }
+    var w2pi: f64 = 2.0 * _BJ_CB_PI;
+    var wf: f64 = w2pi * frequency;
+    for (var k = 0; _bj_fd2_uge(k, steps) == 0; k = k + 1) {
+        if (sx != BJ_FDTD2D_NO_SOURCE) {
+            var sf: f64 = _bj_fd2_u2f(sim.step);
+            var t: f64 = sf * sim.dt;
+            var arg: f64 = wf * t;
+            var sv: f64 = _bj_sin(arg);
+            var value: f64 = amplitude * sv;
+            var ta, va = BjGpuFdtd2d_add_source(sim, sx, sy, value);
+            if (is_err_result(ta) == 1) { return Err(va); }
+        }
+        var ts, vs = BjGpuFdtd2d_step_once(sim);
+        if (is_err_result(ts) == 1) { return Err(vs); }
+    }
+    return sim.backend.synchronize();
+}
+
+# The simulation time step·dt in seconds. Mirrors `GpuFdtd2d::time`.
+#must_use
+public fn BjGpuFdtd2d_time<B: BjComputeBackend>(sim: *BjGpuFdtd2d<B>): f64 {
+    var sf: f64 = _bj_fd2_u2f(sim.step);
+    var t: f64 = sf * sim.dt;
+    return t;
+}
+
+# Reads E_z back to the n f64 at dst: Ok(0), or the backend's error (BjCpuBackend: InvalidParameter when n isn't
+# nx·ny). Mirrors `GpuFdtd2d::read_ez`.
+public fn BjGpuFdtd2d_read_ez<B: BjComputeBackend>(sim: *BjGpuFdtd2d<B>, dst: *f64, n): Result {
+    return sim.backend.read_buffer(sim.fz, dst, n);
+}
+
+# Reads H_x back to the n f64 at dst, as read_ez. Mirrors `GpuFdtd2d::read_hx`.
+public fn BjGpuFdtd2d_read_hx<B: BjComputeBackend>(sim: *BjGpuFdtd2d<B>, dst: *f64, n): Result {
+    return sim.backend.read_buffer(sim.fx, dst, n);
+}
+
+# Reads H_y back to the n f64 at dst, as read_ez. Mirrors `GpuFdtd2d::read_hy`.
+public fn BjGpuFdtd2d_read_hy<B: BjComputeBackend>(sim: *BjGpuFdtd2d<B>, dst: *f64, n): Result {
+    return sim.backend.read_buffer(sim.fy, dst, n);
+}
+
+# **A scaffold, not functional yet**: the placeholder of a wgpu GPU backend. It does not implement BjComputeBackend
+# and holds no device, queue or buffers, so it can't run a simulation; use BjCpuBackend. It exists so the API keeps
+# its shape while a GPU backend is developed (plan §11: a mabda backend behind it, in a `[lib.gpu]` profile). Mirrors
+# `WgpuBackend` (Rust's `compute-wgpu` feature; here it has no dependency to gate).
+public struct BjWgpuBackend { }
+
+# The placeholder backend into *out: no GPU initialization (no adapter or device is requested), so Ok(0) always;
+# reserved for adapter and device failures once implemented. Mirrors `WgpuBackend::new`.
+#must_use
+public fn BjWgpuBackend_new(out: *BjWgpuBackend): Result {
+    _bj_log(4, "WgpuBackend scaffold created (no GPU initialization performed)");
+    return Ok(0);
+}

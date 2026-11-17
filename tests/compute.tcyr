@@ -1,0 +1,452 @@
+# compute.tcyr — src/compute.cyr (M6 Part 3): the BjComputeBackend trait, BjCpuBackend, BjGpuFdtd2d<B> and the
+# BjWgpuBackend scaffold.
+#
+# Every group named test_* is rust-old's compute.rs test of that name (1.2.0:src/compute.rs), ported assertion for
+# assertion (the ledger matches them by name). Its RoundTripBackend is ported too: a backend of this file defining
+# only the trait's required members (delegating to BjCpuBackend), so BjGpuFdtd2d runs the trait's default
+# add_to_element through it. The cyrius_* groups pin the records' texts, a source on the wall, the scaffold and
+# BjGpuFdtd2d_free. tests/golden/fdtd_2d3d.tsv pins the grid and the kernels against the reference model besides.
+
+include "tests/lib.cyr"
+
+var DX: f64 = 0.001;
+var DX4: f64 = 0.0001;
+
+# 1 when the C strings a and b are equal.
+fn text_is(a, b): i64 {
+    var n = strlen(a);
+    if (n != strlen(b)) { return 0; }
+    return memeq(a, b, n);
+}
+
+# A word as a *f64.
+fn f64p(a): *f64 {
+    return a;
+}
+
+# A host block of n f64, each v (fl_alloc; the caller frees it).
+fn host(n, v: f64): *f64 {
+    var p: *f64 = f64p(fl_alloc(n * 8 + 8));
+    for (var i = 0; i < n; i = i + 1) { p[i] = v; }
+    return p;
+}
+
+# `RoundTripBackend`: only the required members, each delegating to BjCpuBackend; add_to_element is the trait's
+# default (read the buffer, modify one element, write it back).
+struct RoundTripBackend { }
+
+impl BjComputeBackend for RoundTripBackend {
+    # BjCpuBackend's create_buffer.
+    fn create_buffer(self, data: *f64, n): Result {
+        var c: BjCpuBackend;
+        return c.create_buffer(data, n);
+    }
+    # BjCpuBackend's read_buffer.
+    fn read_buffer(self, buffer, dst: *f64, n): Result {
+        var c: BjCpuBackend;
+        return c.read_buffer(buffer, dst, n);
+    }
+    # BjCpuBackend's write_buffer.
+    fn write_buffer(self, buffer, src: *f64, n): Result {
+        var c: BjCpuBackend;
+        return c.write_buffer(buffer, src, n);
+    }
+    # BjCpuBackend's fdtd_update_h.
+    fn fdtd_update_h(self, h, e, coeff, nx, ny, axis): Result {
+        var c: BjCpuBackend;
+        return c.fdtd_update_h(h, e, coeff, nx, ny, axis);
+    }
+    # BjCpuBackend's fdtd_update_e.
+    fn fdtd_update_e(self, e, hx, hy, coeff, nx, ny): Result {
+        var c: BjCpuBackend;
+        return c.fdtd_update_e(e, hx, hy, coeff, nx, ny);
+    }
+    # BjCpuBackend's apply_zero_boundary.
+    fn apply_zero_boundary(self, field, nx, ny): Result {
+        var c: BjCpuBackend;
+        return c.apply_zero_boundary(field, nx, ny);
+    }
+    # Ok(0): nothing is queued.
+    fn synchronize(self): Result {
+        return Ok(0);
+    }
+    # BjCpuBackend's free_buffer.
+    fn free_buffer(self, buffer): i64 {
+        var c: BjCpuBackend;
+        return c.free_buffer(buffer);
+    }
+}
+
+# Rust's 18 compute.rs tests, then the Cyrius-only groups.
+fn main() {
+    alloc_init();
+    var cpu: BjCpuBackend;
+    var tiny15: f64 = _bj_from_bits(0x3cd203af9ee75616);
+    var tiny30: f64 = _bj_from_bits(0x39b4484bfeebc2a0);
+
+    test_group("test_cpu_backend_create_read");
+    var d1: f64[3];
+    d1[0] = 1.0;
+    d1[1] = 2.0;
+    d1[2] = 3.0;
+    var t1, b1 = cpu.create_buffer(&d1, 3);
+    var o1: f64[3];
+    var r1, r1v = cpu.read_buffer(b1, &o1, 3);
+    assert(is_ok(t1) == 1 && is_ok(r1) == 1 && o1[0] == 1.0 && o1[1] == 2.0 && o1[2] == 3.0, "read back");
+    cpu.free_buffer(b1);
+
+    test_group("test_cpu_backend_write");
+    var z2: f64[3];
+    z2[0] = 0.0;
+    z2[1] = 0.0;
+    z2[2] = 0.0;
+    var t2, b2 = cpu.create_buffer(&z2, 3);
+    var w2: f64[3];
+    w2[0] = 4.0;
+    w2[1] = 5.0;
+    w2[2] = 6.0;
+    var r2, r2v = cpu.write_buffer(b2, &w2, 3);
+    var o2: f64[3];
+    var q2, q2v = cpu.read_buffer(b2, &o2, 3);
+    assert(is_ok(r2) == 1 && o2[0] == 4.0 && o2[1] == 5.0 && o2[2] == 6.0, "written");
+    cpu.free_buffer(b2);
+
+    test_group("test_cpu_backend_synchronize");
+    var t3, v3 = cpu.synchronize();
+    assert(is_ok(t3) == 1, "synchronize is Ok");
+
+    test_group("test_gpu_fdtd2d_creation");
+    var s4: BjGpuFdtd2d<BjCpuBackend>;
+    var t4, v4 = BjGpuFdtd2d_new(50, 50, DX, cpu, &s4);
+    assert(is_ok(t4) == 1 && s4.nx == 50 && s4.ny == 50 && s4.dt > 0.0, "50 × 50, dt > 0");
+    BjGpuFdtd2d_free(&s4);
+
+    test_group("test_gpu_fdtd2d_too_small");
+    var s5: BjGpuFdtd2d<BjCpuBackend>;
+    var t5, v5 = BjGpuFdtd2d_new(2, 50, DX, cpu, &s5);
+    assert(is_err_result(t5) == 1, "nx = 2 refused");
+
+    test_group("test_gpu_fdtd2d_step");
+    var s6: BjGpuFdtd2d<BjCpuBackend>;
+    var t6, v6 = BjGpuFdtd2d_new(30, 30, DX4, cpu, &s6);
+    var f6: *f64 = host(900, 0.0);
+    f6[15 * 30 + 15] = 1.0;
+    var w6, w6v = cpu.write_buffer(s6.fz, f6, 900);
+    var st6, st6v = BjGpuFdtd2d_step_once(&s6);
+    var o6: *f64 = host(900, 0.0);
+    var r6, r6v = BjGpuFdtd2d_read_ez(&s6, o6, 900);
+    var spread = 0;
+    for (var i6 = 0; i6 < 900; i6 = i6 + 1) {
+        var v6x: f64 = o6[i6];
+        var a6: f64 = f64_abs(v6x);
+        if (i6 != 15 * 30 + 15 && a6 > tiny15) { spread = 1; }
+    }
+    assert(is_ok(w6) == 1 && is_ok(st6) == 1 && is_ok(r6) == 1 && spread == 1, "the field spread");
+    fl_free(f6);
+    fl_free(o6);
+    BjGpuFdtd2d_free(&s6);
+
+    test_group("test_gpu_fdtd2d_run");
+    var s7: BjGpuFdtd2d<BjCpuBackend>;
+    var t7, v7 = BjGpuFdtd2d_new(40, 40, DX4, cpu, &s7);
+    var r7, r7v = BjGpuFdtd2d_run(&s7, 20, 20, 20, 1000000000.0, 1.0);
+    var o7: *f64 = host(1600, 0.0);
+    var q7, q7v = BjGpuFdtd2d_read_ez(&s7, o7, 1600);
+    var m7: f64 = 0.0;
+    for (var i7 = 0; i7 < 1600; i7 = i7 + 1) {
+        var v7x: f64 = o7[i7];
+        var a7: f64 = f64_abs(v7x);
+        if (a7 > m7) { m7 = a7; }
+    }
+    assert(is_ok(r7) == 1 && m7 > 0.0, "the source drove E_z");
+    fl_free(o7);
+    BjGpuFdtd2d_free(&s7);
+
+    test_group("test_gpu_fdtd2d_matches_fdtd2d");
+    var std8: BjFdtd2d;
+    var t8a, v8a = BjFdtd2d_new(40, 40, DX4, BJ_MODE2D_TM, &std8);
+    std8.run(30, 20, 20, 1000000000.0, 1.0);
+    var g8: BjGpuFdtd2d<BjCpuBackend>;
+    var t8b, v8b = BjGpuFdtd2d_new(40, 40, DX4, cpu, &g8);
+    var r8, r8v = BjGpuFdtd2d_run(&g8, 30, 20, 20, 1000000000.0, 1.0);
+    var o8: *f64 = host(1600, 0.0);
+    var q8, q8v = BjGpuFdtd2d_read_ez(&g8, o8, 1600);
+    var sz: *f64 = f64p(std8.fz);
+    var md8: f64 = 0.0;
+    for (var i8 = 0; i8 < 1600; i8 = i8 + 1) {
+        var d8: f64 = sz[i8] - o8[i8];
+        var ad8: f64 = f64_abs(d8);
+        if (ad8 > md8) { md8 = ad8; }
+    }
+    assert(is_ok(r8) == 1 && md8 < 0.0000000001, "the CPU backend's grid matches BjFdtd2d (max |Δ| < 1e-10)");
+    assert(memeq(o8, std8.fz, 1600 * 8) == 1, "bit for bit: the same row kernels in the same order");
+    fl_free(o8);
+    BjGpuFdtd2d_free(&g8);
+    BjFdtd2d_free(&std8);
+
+    test_group("test_cpu_backend_invalid_axis");
+    var z9: *f64 = host(9, 0.0);
+    var th, h9 = cpu.create_buffer(z9, 9);
+    var te, e9 = cpu.create_buffer(z9, 9);
+    var tc, c9 = cpu.create_buffer(z9, 9);
+    var r9, r9v = cpu.fdtd_update_h(h9, e9, c9, 3, 3, 2);
+    var w9 = "invalid parameter: axis must be 0 or 1, got 2";
+    assert(is_err_result(r9) == 1 && text_is(bj_last_error_display(), w9) == 1, "axis 2 refused");
+    cpu.free_buffer(h9);
+    cpu.free_buffer(e9);
+    cpu.free_buffer(c9);
+    fl_free(z9);
+
+    test_group("test_gpu_fdtd2d_time");
+    var s10: BjGpuFdtd2d<BjCpuBackend>;
+    var t10, v10 = BjGpuFdtd2d_new(10, 10, DX, cpu, &s10);
+    var tm0: f64 = BjGpuFdtd2d_time(&s10);
+    var ta0: f64 = f64_abs(tm0);
+    var st10, st10v = BjGpuFdtd2d_step_once(&s10);
+    var tm1: f64 = BjGpuFdtd2d_time(&s10);
+    var d10: f64 = tm1 - s10.dt;
+    var da10: f64 = f64_abs(d10);
+    assert(ta0 < tiny30 && da10 < tiny30, "time 0, then dt");
+    BjGpuFdtd2d_free(&s10);
+
+    test_group("test_cpu_backend_transfer_length_mismatch");
+    var d11: f64[4];
+    d11[0] = 1.0;
+    d11[1] = 2.0;
+    d11[2] = 3.0;
+    d11[3] = 1.0;
+    var t11, b11 = cpu.create_buffer(&d11, 3);
+    var sh11: f64[2];
+    var r11a, r11av = cpu.read_buffer(b11, &sh11, 2);
+    var w11: f64[4];
+    w11[0] = 1.0;
+    w11[1] = 1.0;
+    w11[2] = 1.0;
+    w11[3] = 1.0;
+    var r11b, r11bv = cpu.write_buffer(b11, &w11, 4);
+    var o11: f64[3];
+    var r11c, r11cv = cpu.read_buffer(b11, &o11, 3);
+    assert(is_err_result(r11a) == 1 && is_err_result(r11b) == 1, "short and long host slices refused");
+    assert(o11[0] == 1.0 && o11[1] == 2.0 && o11[2] == 3.0, "the buffer untouched");
+    cpu.free_buffer(b11);
+
+    test_group("test_gpu_fdtd2d_read_wrong_length_errors");
+    var s12: BjGpuFdtd2d<BjCpuBackend>;
+    var t12, v12 = BjGpuFdtd2d_new(10, 10, DX, cpu, &s12);
+    var o12: *f64 = host(100, 0.0);
+    var r12a, r12av = BjGpuFdtd2d_read_ez(&s12, o12, 99);
+    var r12b, r12bv = BjGpuFdtd2d_read_hx(&s12, o12, 99);
+    var r12c, r12cv = BjGpuFdtd2d_read_hy(&s12, o12, 99);
+    var r12d, r12dv = BjGpuFdtd2d_read_ez(&s12, o12, 100);
+    assert(is_err_result(r12a) == 1 && is_err_result(r12b) == 1 && is_err_result(r12c) == 1 && is_ok(r12d) == 1,
+      "99 values refused, 100 read");
+    fl_free(o12);
+    BjGpuFdtd2d_free(&s12);
+
+    test_group("test_cpu_backend_kernels_validate_dimensions");
+    var z13: *f64 = host(9, 0.0);
+    var th13, h13 = cpu.create_buffer(z13, 9);
+    var te13, e13 = cpu.create_buffer(z13, 9);
+    var tc13, c13 = cpu.create_buffer(z13, 9);
+    var ts13, sh13 = cpu.create_buffer(z13, 8);
+    var k1, k1v = cpu.fdtd_update_h(h13, e13, c13, 3, 0, 0);
+    var k2, k2v = cpu.apply_zero_boundary(h13, 3, 0);
+    var k3, k3v = cpu.fdtd_update_e(h13, e13, e13, c13, 0, 3);
+    assert(is_err_result(k1) == 1 && is_err_result(k2) == 1 && is_err_result(k3) == 1, "ny = 0 and nx = 0 refused");
+    var k4, k4v = cpu.fdtd_update_h(h13, e13, c13, 4, 4, 1);
+    var k5, k5v = cpu.fdtd_update_e(h13, e13, e13, c13, 4, 4);
+    var k6, k6v = cpu.apply_zero_boundary(h13, 4, 4);
+    assert(is_err_result(k4) == 1 && is_err_result(k5) == 1 && is_err_result(k6) == 1, "4 × 4 larger than the buffers");
+    var k7, k7v = cpu.fdtd_update_h(h13, sh13, c13, 3, 3, 0);
+    var k8, k8v = cpu.fdtd_update_h(h13, e13, c13, 0 - 1, 2, 0);
+    assert(is_err_result(k7) == 1 && is_err_result(k8) == 1, "a short buffer, and usize::MAX × 2");
+    cpu.free_buffer(h13);
+    cpu.free_buffer(e13);
+    cpu.free_buffer(c13);
+    cpu.free_buffer(sh13);
+    fl_free(z13);
+
+    test_group("test_cpu_backend_update_h_matches_documented_stencil");
+    var e14: *f64 = host(9, 0.0);
+    for (var i14 = 0; i14 < 9; i14 = i14 + 1) {
+        var xi: f64 = f64_from(i14 % 3);
+        var yi: f64 = f64_from(i14 / 3);
+        e14[i14] = xi + 10.0 * yi;
+    }
+    var c14: *f64 = host(9, 2.0);
+    var z14: *f64 = host(9, 0.0);
+    var tb1, be14 = cpu.create_buffer(e14, 9);
+    var tb2, bc14 = cpu.create_buffer(c14, 9);
+    var tb3, bx14 = cpu.create_buffer(z14, 9);
+    var tb4, by14 = cpu.create_buffer(z14, 9);
+    var u1, u1v = cpu.fdtd_update_h(bx14, be14, bc14, 3, 3, 0);
+    var u2, u2v = cpu.fdtd_update_h(by14, be14, bc14, 3, 3, 1);
+    var hx14: *f64 = host(9, 0.0);
+    var hy14: *f64 = host(9, 0.0);
+    var g1, g1v = cpu.read_buffer(bx14, hx14, 9);
+    var g2, g2v = cpu.read_buffer(by14, hy14, 9);
+    var good14 = 1;
+    for (var j14 = 0; j14 < 9; j14 = j14 + 1) {
+        var x14 = j14 % 3;
+        var y14 = j14 / 3;
+        var wx: f64 = 0.0;
+        if (y14 < 2) { wx = -20.0; }
+        var wy: f64 = 0.0;
+        if (x14 < 2) { wy = 2.0; }
+        if (hx14[j14] != wx || hy14[j14] != wy) { good14 = 0; }
+    }
+    assert(is_ok(u1) == 1 && is_ok(u2) == 1 && good14 == 1, "H_x −20 for y < 2, H_y +2 for x < 2, else 0");
+    cpu.free_buffer(be14);
+    cpu.free_buffer(bc14);
+    cpu.free_buffer(bx14);
+    cpu.free_buffer(by14);
+    fl_free(e14);
+    fl_free(c14);
+    fl_free(z14);
+    fl_free(hx14);
+    fl_free(hy14);
+
+    test_group("test_gpu_fdtd2d_new_rejects_non_finite_dx");
+    var nan: f64 = 0.0 / 0.0;
+    var inf: f64 = 1.0 / 0.0;
+    var s15: BjGpuFdtd2d<BjCpuBackend>;
+    var t15a, v15a = BjGpuFdtd2d_new(10, 10, nan, cpu, &s15);
+    var t15b, v15b = BjGpuFdtd2d_new(10, 10, inf, cpu, &s15);
+    var t15c, v15c = BjGpuFdtd2d_new(10, 10, -1.0, cpu, &s15);
+    var t15d, v15d = BjGpuFdtd2d_new(0 - 1, 3, DX, cpu, &s15);
+    assert(is_err_result(t15a) == 1 && is_err_result(t15b) == 1 && is_err_result(t15c) == 1
+      && is_err_result(t15d) == 1, "NaN, ∞, −1 and usize::MAX × 3 refused");
+
+    test_group("test_gpu_fdtd2d_source_outside_grid_ignored");
+    var leak = 0;
+    var srcx: i64[3];
+    var srcy: i64[3];
+    srcx[0] = 20;
+    srcy[0] = 5;
+    srcx[1] = 0;
+    srcy[1] = 20;
+    srcx[2] = 0 - 1;
+    srcy[2] = 0;
+    for (var k16 = 0; k16 < 3; k16 = k16 + 1) {
+        var s16: BjGpuFdtd2d<BjCpuBackend>;
+        var t16, v16 = BjGpuFdtd2d_new(20, 20, DX4, cpu, &s16);
+        var r16, r16v = BjGpuFdtd2d_run(&s16, 10, srcx[k16], srcy[k16], 1000000000.0, 1.0);
+        var o16: *f64 = host(400, 0.0);
+        var q16, q16v = BjGpuFdtd2d_read_ez(&s16, o16, 400);
+        for (var i16 = 0; i16 < 400; i16 = i16 + 1) {
+            var v16x: f64 = o16[i16];
+            if (v16x != 0.0) { leak = 1; }
+        }
+        fl_free(o16);
+        BjGpuFdtd2d_free(&s16);
+    }
+    assert(leak == 0, "(nx, 5), (0, ny) and (usize::MAX, 0) leak nothing into the grid");
+
+    test_group("test_gpu_fdtd2d_add_source");
+    var s17: BjGpuFdtd2d<BjCpuBackend>;
+    var t17, v17 = BjGpuFdtd2d_new(10, 10, DX, cpu, &s17);
+    var a17, a17v = BjGpuFdtd2d_add_source(&s17, 3, 4, 2.5);
+    var b17, b17v = BjGpuFdtd2d_add_source(&s17, 3, 4, 0.5);
+    var c17, c17v = BjGpuFdtd2d_add_source(&s17, 10, 4, 1.0);
+    var o17: *f64 = host(100, 0.0);
+    var q17, q17v = BjGpuFdtd2d_read_ez(&s17, o17, 100);
+    var nz17 = 0;
+    for (var i17 = 0; i17 < 100; i17 = i17 + 1) {
+        var v17x: f64 = o17[i17];
+        if (v17x != 0.0) { nz17 = nz17 + 1; }
+    }
+    assert(is_ok(a17) == 1 && is_ok(b17) == 1 && is_ok(c17) == 1 && o17[43] == 3.0 && nz17 == 1,
+      "2.5 + 0.5 at (3, 4); (10, 4) outside ignored");
+    fl_free(o17);
+    BjGpuFdtd2d_free(&s17);
+
+    test_group("test_default_add_to_element_matches_cpu");
+    var rt: RoundTripBackend;
+    var ga: BjGpuFdtd2d<BjCpuBackend>;
+    var gb: BjGpuFdtd2d<RoundTripBackend>;
+    var t18a, v18a = BjGpuFdtd2d_new(30, 30, DX4, cpu, &ga);
+    var t18b, v18b = BjGpuFdtd2d_new(30, 30, DX4, rt, &gb);
+    var r18a, r18av = BjGpuFdtd2d_run(&ga, 25, 12, 17, 2000000000.0, 1.0);
+    var r18b, r18bv = BjGpuFdtd2d_run(&gb, 25, 12, 17, 2000000000.0, 1.0);
+    var ea: *f64 = host(900, 0.0);
+    var eb: *f64 = host(900, 0.0);
+    var q18a, q18av = BjGpuFdtd2d_read_ez(&ga, ea, 900);
+    var q18b, q18bv = BjGpuFdtd2d_read_ez(&gb, eb, 900);
+    var any18 = 0;
+    for (var i18 = 0; i18 < 900; i18 = i18 + 1) {
+        var v18x: f64 = ea[i18];
+        if (v18x != 0.0) { any18 = 1; }
+    }
+    assert(is_ok(r18a) == 1 && is_ok(r18b) == 1 && memeq(ea, eb, 900 * 8) == 1 && any18 == 1,
+      "the default round trip gives the CPU backend's field exactly");
+    var z18: f64[4];
+    z18[0] = 0.0;
+    z18[1] = 0.0;
+    z18[2] = 0.0;
+    z18[3] = 0.0;
+    var sc18: f64[4];
+    var tbb, buf18 = cpu.create_buffer(&z18, 4);
+    var e18a, e18av = _bj_compute_add_to_element(&rt, buf18, 4, 1.0, &sc18, 4);
+    var e18b, e18bv = cpu.add_to_element(buf18, 4, 1.0, &sc18, 4);
+    assert(is_err_result(e18a) == 1 && is_err_result(e18b) == 1, "index 4 of 4 refused by the default and the CPU's");
+    cpu.free_buffer(buf18);
+    fl_free(ea);
+    fl_free(eb);
+    BjGpuFdtd2d_free(&ga);
+    BjGpuFdtd2d_free(&gb);
+
+    test_group("cyrius_compute_records");
+    var s19: BjGpuFdtd2d<BjCpuBackend>;
+    var t19, v19 = BjGpuFdtd2d_new(4294967296, 4294967296, DX, cpu, &s19);
+    assert(text_is(bj_last_error_display(), "invalid parameter: grid 4294967296x4294967296 is too large") == 1,
+      "nx·ny past 2^64: Rust's text (not BjFdtd2d's)");
+    var t19b, v19b = BjGpuFdtd2d_new(2, 9, DX, cpu, &s19);
+    assert(v19b == BJ_ERR_INSUFFICIENT_RESOLUTION
+      && text_is(bj_last_error_display(), "grid resolution too coarse: 2 cells for domain size 0.002") == 1,
+      "the smaller axis and its domain");
+    var z19: *f64 = host(12, 0.0);
+    var tz, bz19 = cpu.create_buffer(z19, 12);
+    var tz2, bs19 = cpu.create_buffer(z19, 11);
+    var k19a, k19av = cpu.apply_zero_boundary(bz19, 3, 0);
+    assert(text_is(bj_last_error_display(), "invalid parameter: invalid grid dimensions 3x0") == 1, "a zero dimension");
+    var k19b, k19bv = cpu.fdtd_update_e(bz19, bz19, bs19, bz19, 3, 4);
+    assert(text_is(bj_last_error_display(), "invalid parameter: buffer length 11 does not match grid 3x4 = 12") == 1,
+      "the first wrong length, in argument order");
+    var k19c, k19cv = cpu.read_buffer(bz19, z19, 5);
+    assert(text_is(bj_last_error_display(), "invalid parameter: host slice length 5 does not match buffer length 12")
+      == 1, "a transfer's lengths");
+    var k19d, k19dv = cpu.add_to_element(bz19, 12, 1.0, z19, 12);
+    assert(text_is(bj_last_error_display(), "invalid parameter: element index 12 out of range for buffer of 12") == 1,
+      "an element past the end");
+    cpu.free_buffer(bz19);
+    cpu.free_buffer(bs19);
+    fl_free(z19);
+
+    test_group("cyrius_compute_grid");
+    var g20: BjGpuFdtd2d<BjCpuBackend>;
+    var t20, v20 = BjGpuFdtd2d_new(9, 7, DX, cpu, &g20);
+    var a20, a20v = BjGpuFdtd2d_add_source(&g20, 0, 3, 1.0);
+    var a20b, a20bv = BjGpuFdtd2d_add_source(&g20, 4, 3, 1.0);
+    var st20, st20v = BjGpuFdtd2d_step_once(&g20);
+    var o20: *f64 = host(63, 0.0);
+    var q20, q20v = BjGpuFdtd2d_read_ez(&g20, o20, 63);
+    assert(is_ok(st20) == 1 && o20[3 * 9] == 0.0 && o20[3 * 9 + 4] != 0.0 && g20.step == 1 && g20.scratch_len == 63,
+      "a source on the wall cleared by the step; the scratch mapped on first use");
+    var r20, r20v = BjGpuFdtd2d_run(&g20, 3, BJ_FDTD2D_NO_SOURCE, 0, 1000000000.0, 1.0);
+    var tm20: f64 = BjGpuFdtd2d_time(&g20);
+    var t4w: f64 = 4.0 * g20.dt;
+    assert(is_ok(r20) == 1 && g20.step == 4 && tm20 == t4w, "run without a source; time = step·dt");
+    fl_free(o20);
+    BjGpuFdtd2d_free(&g20);
+    assert(g20.fz == 0 && g20.ce == 0 && g20.scratch == 0 && g20.nx == 0, "freed and emptied");
+    BjGpuFdtd2d_free(&g20);
+    var wg: BjWgpuBackend;
+    var tw, vw = BjWgpuBackend_new(&wg);
+    assert(is_ok(tw) == 1 && sizeof(BjWgpuBackend) == 0, "the scaffold: no device, always Ok");
+
+    return assert_summary();
+}
+
+var exit_code = main();
+if (exit_code > 0) { exit_code = 1; }
+sys_exit_group(exit_code);

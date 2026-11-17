@@ -11459,6 +11459,142 @@ class Fd3Scripts:
         return errs + sim.state()
 
 
+# M6 Part 3: compute.rs's `GpuFdtd2d` on `CpuBackend` (its physics `Fdtd2d`'s TM update in the same order, so `Fd2`'s
+# model), and the CPU backend's kernels, transfers and add_to_element on given buffer lengths, transcribed from
+# 1.2.0:src/compute.rs.
+
+class Gpu2Scripts:
+    """Replays the `GpuFdtd2d::script` rows: `i:<nx> i:<ny> f:<dx>`, then add_source (5), step_once (6) and run (7) as
+    the 2D scripts' opcodes; the state is step, dt, time, the digests of E_z, H_x, H_y, C_e and C_h, and E_z, H_x, H_y
+    at the 2D probes."""
+
+    def __init__(self, root: Path, P):
+        c = golden_consts(root)
+        self.K = (c["field::SPEED_OF_LIGHT"], c["field::EPSILON_0"], c["field::MU_0"])
+        self.P = P
+        self.prev, self.sim = None, None
+
+    def eval(self, ins_raw):
+        raw = ins_raw.split(" ")
+        toks = [parse_tok(x) for x in raw]
+        nx, ny, dx = toks[0][1] & FD_U64, toks[1][1] & FD_U64, toks[2][1]
+        if nx < 3 or ny < 3:
+            m = min(nx, ny)
+            return [("E", "InsufficientResolution"),
+                    ("s", f"grid resolution too coarse: {m} cells for domain size {rust_display(float(m) * dx)}")]
+        if not fd_pos(dx):
+            return ip_err(f"dx must be finite and positive, got {rust_display(dx)}")
+        if nx * ny > FD_U64:
+            return ip_err(f"grid {nx}x{ny} is too large")
+        ops = fd2_ops(toks[3:])
+        if self.prev is not None and raw[:len(self.prev)] == self.prev and self.sim is not None:
+            sim, done = self.sim.copy(), len(fd2_ops([parse_tok(x) for x in self.prev[3:]]))
+        else:
+            sim, done = Fd2(nx, ny, dx, 0, self.K), 0
+        for code, a in ops[done:]:
+            if code == 5:
+                sim.add_source(a[0] & FD_U64, a[1] & FD_U64, a[2])
+            elif code == 6:
+                for _ in range(a[0] & FD_U64):
+                    sim.step_once()
+            elif code == 7:
+                steps, src, fr, am = a[0] & FD_U64, a[1], a[2], a[3]
+                for _ in range(steps):
+                    if src is not None:
+                        sim.add_source(src[0], src[1], am * self.P["sin"](2.0 * math.pi * fr * sim.time()))
+                    sim.step_once()
+            else:
+                raise ValueError(f"GpuFdtd2d script: opcode {code}")
+        self.prev, self.sim = raw, sim
+        out = [("i", sim.step), ("f", sim.dt), ("f", sim.time())]
+        for v in (sim.fz, sim.fx, sim.fy, sim.ce, sim.ch):
+            out.append(("i", fd_digest(v)))
+        for x, y in ((nx // 2, ny // 2), (1, 1), (nx - 2, ny - 2), (0, ny // 2), (nx // 2, 1)):
+            k = y * nx + x
+            out += [("f", sim.fz[k]), ("f", sim.fx[k]), ("f", sim.fy[k])]
+        return out
+
+
+def cpu_fill(j, n, seed):
+    """Buffer j's n values: seed·((7i + 3j) mod 11) − 1, exact operations on the doubles."""
+    return [seed * float((7 * i + 3 * j) % 11) - 1.0 for i in range(n)]
+
+
+def cpu_kernel(v):
+    """A `CpuBackend::kernel` row's outputs (emit.py's comment): the operation's error, or each buffer's digest after."""
+    op, nx, ny, arg, seed = v[0], v[1] & FD_U64, v[2] & FD_U64, v[3] & FD_U64, v[8]
+    lens = [q & FD_U64 for q in v[4:8]]
+    bufs = [cpu_fill(j, lens[j], seed) for j in range(4)]
+
+    def grid(k):
+        n = nx * ny
+        if n > FD_U64 or n == 0:
+            return ip_err(f"invalid grid dimensions {nx}x{ny}")
+        for ln in lens[:k]:
+            if ln != n:
+                return ip_err(f"buffer length {ln} does not match grid {nx}x{ny} = {n}")
+        return None
+    if op == 1:
+        if arg > 1:
+            return ip_err(f"axis must be 0 or 1, got {arg}")
+        e = grid(3)
+        if e:
+            return e
+        h, ef, c = bufs[0], bufs[1], bufs[2]
+        if arg == 0:
+            for y in range(ny - 1):
+                for x in range(nx):
+                    i = y * nx + x
+                    h[i] -= c[i] * (ef[i + nx] - ef[i])
+        else:
+            for y in range(ny):
+                for x in range(nx - 1):
+                    i = y * nx + x
+                    h[i] += c[i] * (ef[i + 1] - ef[i])
+    elif op == 2:
+        e = grid(4)
+        if e:
+            return e
+        ef, hx, hy, c = bufs
+        for y in range(1, max(ny - 1, 0)):
+            for x in range(1, max(nx - 1, 0)):
+                i = y * nx + x
+                ef[i] += c[i] * ((hy[i] - hy[i - 1]) - (hx[i] - hx[i - nx]))
+    elif op == 3:
+        e = grid(1)
+        if e:
+            return e
+        f = bufs[0]
+        for x in range(nx):
+            f[x] = 0.0
+            f[(ny - 1) * nx + x] = 0.0
+        for y in range(ny):
+            f[y * nx] = 0.0
+            f[y * nx + nx - 1] = 0.0
+    elif op in (4, 5):
+        if lens[0] != lens[1]:
+            return ip_err(f"host slice length {lens[1]} does not match buffer length {lens[0]}")
+        if op == 4:
+            bufs[1] = list(bufs[0])
+        else:
+            bufs[0] = list(bufs[1])
+    elif op == 6:                                       # CpuBackend's own: in place, the scratch unused
+        if arg >= lens[0]:
+            return ip_err(f"element index {arg} out of range for buffer of {lens[0]}")
+        bufs[0][arg] += seed
+    elif op == 7:                                       # the trait's default: read, modify, write through the scratch
+        if lens[1] != lens[0]:
+            return ip_err(f"host slice length {lens[1]} does not match buffer length {lens[0]}")
+        bufs[1] = list(bufs[0])
+        if arg >= lens[1]:
+            return ip_err(f"element index {arg} out of range for buffer of {lens[1]}")
+        bufs[1][arg] += seed
+        bufs[0] = list(bufs[1])
+    else:
+        raise ValueError(f"CpuBackend::kernel: op {op}")
+    return [("i", fd_digest(b)) for b in bufs]
+
+
 # M6 part 1c: `nf2ff_2d` on a replayed snapshot. Rust's: `nf_core` with the rotation (1, 0) and k = 2π·f/c on the
 # primitives P. The port's (ADR 0002 row 18, M5 part 2d-6's core): k to 53 bits, the core by `nf_core18` (the unbounded
 # chain itself), Rust's core on k rounded where a contour field isn't finite.
@@ -11523,12 +11659,17 @@ def validate_fdtd_2d3d(root: Path, path: Path) -> list:
         return errs
     C = golden_consts(root)
     f2, f2n, f3 = Fd2Scripts(root, GLIBC_P), Fd2Scripts(root, GLIBC_P), Fd3Scripts(root, GLIBC_P)
+    g2 = Gpu2Scripts(root, GLIBC_P)
     PG = dict(GLIBC_P, hypot=LIBM.hypot)
     for n, (fn, _cls, ins, outs, _v) in enumerate(sc_lines(path), 1):
         if fn == "Fdtd2d::script":
             want = f2.eval(ins)
         elif fn == "Fdtd3d::script":
             want = f3.eval(ins)
+        elif fn == "GpuFdtd2d::script":
+            want = g2.eval(ins)
+        elif fn == "CpuBackend::kernel":
+            want = cpu_kernel([parse_tok(x)[1] for x in ins.split(" ")])
         elif fn == "fdtd::nf2ff_2d":
             want = fd2_nf2ff(f2n, ins, PG)
         else:
@@ -11548,6 +11689,7 @@ def fdtd_2d3d_corrections(root: Path, path: Path):
         C = golden_consts(root)
         f2, f2n, f2p = Fd2Scripts(root, MPFR_P), Fd2Scripts(root, MPFR_P), Fd2Scripts(root, MPFR_P)
         f3 = Fd3Scripts(root, MPFR_P)
+        g2 = Gpu2Scripts(root, MPFR_P)
         P = dict(MPFR_P, hypot=lambda x, y: mpfr_ref.cr2("hypot", x, y))
         for fn, cls, ins, outs, _v in sc_lines(path):
             if fn == "fdtd::nf2ff_2d":
@@ -11559,8 +11701,8 @@ def fdtd_2d3d_corrections(root: Path, path: Path):
                     out.append((fn, ins, wire(want), f"oracle {outs[:120]}; correctly rounded primitives give "
                                                      f"{wire(want)[:60]}"))
                 continue
-            if fn in ("Fdtd2d::script", "Fdtd3d::script"):
-                want = (f2 if fn == "Fdtd2d::script" else f3).eval(ins)
+            if fn in ("Fdtd2d::script", "Fdtd3d::script", "GpuFdtd2d::script"):
+                want = {"Fdtd2d::script": f2, "Fdtd3d::script": f3, "GpuFdtd2d::script": g2}[fn].eval(ins)
                 old = wave_toks([parse_tok(x) for x in outs.split(" ")])
                 if not toks_same(want, old):            # run's sine, the CPML profiles' powf and exp
                     out.append((fn, ins, wire(want), f"oracle {outs[:120]}; correctly rounded primitives give "

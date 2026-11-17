@@ -1,0 +1,68 @@
+# p20 — compute.rs's shape on the pinned compiler (M6 Part 3): a `public trait` with `: Result` members and a default
+# method calling two others, declared in a `private` file and implemented in another (a second backend that takes
+# the default); a unit backend as an empty struct (sizeof 0); a generic struct holding its backend by value
+# (`struct P20Grid<B: P20Backend> { backend: B; .. }`); generic functions over `*P20Grid<B>` calling `g.backend.m(..)`
+# (a generic `impl<B> P20Grid<B>` header is refused, 6.7.17, so a generic struct's methods are generic functions).
+# A trait impl's methods in a `private` file are private to it unless marked `public fn` (the file's own callers
+# don't need it; another file's call `c.make(..)` is refused, *'P20Cpu.make' is private to its file*).
+# Expected: `3 1 0x4012000000000000 0x4012000000000000 77 77 32 0`.
+include "lib/syscalls.cyr"
+include "lib/string.cyr"
+include "lib/alloc.cyr"
+include "lib/fmt.cyr"
+include "lib/io.cyr"
+include "lib/result.cyr"
+include "scripts/probes/p20_backend_lib.cyr"
+
+# A backend defining only the required members: add_at is the trait's default (read, modify, write).
+struct P20Trip { }
+
+impl P20Backend for P20Trip {
+    fn make(self, data: *f64, n): Result {
+        var c: P20Cpu;
+        return c.make(data, n);
+    }
+    fn read(self, buf, dst: *f64, n): Result {
+        var c: P20Cpu;
+        return c.read(buf, dst, n);
+    }
+    fn write(self, buf, src: *f64, n): Result {
+        var c: P20Cpu;
+        return c.write(buf, src, n);
+    }
+    fn scale(self, buf, k: f64): Result {
+        var c: P20Cpu;
+        return c.scale(buf, k);
+    }
+}
+
+fn main(): i64 {
+    alloc_init();
+    var a: P20Grid<P20Cpu>;
+    var b: P20Grid<P20Trip>;
+    var cpu: P20Cpu;
+    var trip: P20Trip;
+    var t1, v1 = P20Grid_new(3, 1.5, cpu, &a);
+    var t2, v2 = P20Grid_new(3, 1.5, trip, &b);
+    var s1, w1 = P20Grid_step(&a);
+    var s2, w2 = P20Grid_step(&b);
+    var u1, x1 = P20Grid_add(&a, 1, 3.0);
+    var u2, x2 = P20Grid_add(&b, 1, 3.0);
+    var da: f64[3];
+    var db: f64[3];
+    var r1, y1 = P20Grid_read(&a, &da);
+    var r2, y2 = P20Grid_read(&b, &db);
+    println_int(a.n);
+    println_int(is_ok(t1) + is_ok(t2) + is_ok(s1) + is_ok(s2) + is_ok(u1) + is_ok(u2) - 5);
+    fmt_hex0x(da[1]); println("");
+    fmt_hex0x(db[1]); println("");
+    var e1, f1 = P20Grid_add(&a, 9, 1.0);
+    var e2, f2 = P20Grid_add(&b, 9, 1.0);
+    println_int(f1);
+    println_int(f2);
+    println_int(sizeof(P20Grid<P20Cpu>));
+    println_int(sizeof(P20Cpu));
+    return 0;
+}
+var r = main();
+sys_exit_group(r);

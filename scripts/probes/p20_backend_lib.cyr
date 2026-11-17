@@ -1,0 +1,87 @@
+# p20's private library file: a `public trait` with `: Result` members and a default calling two of them, a unit
+# backend implementing it, a generic struct holding its backend by value, and generic functions driving it.
+private
+
+public trait P20Backend {
+    fn make(self, data: *f64, n): Result;
+    fn read(self, buf, dst: *f64, n): Result;
+    fn write(self, buf, src: *f64, n): Result;
+    fn scale(self, buf, k: f64): Result;
+    fn add_at(self, buf, index, value: f64, scratch: *f64, n): Result {
+        var t, v = self.read(buf, scratch, n);
+        if (is_err_result(t) == 1) { return Err(v); }
+        if (index < 0 || index >= n) { return Err(77); }
+        scratch[index] = scratch[index] + value;
+        return self.write(buf, scratch, n);
+    }
+}
+
+# A block's address as a *f64.
+fn p20_f64p(a): *f64 {
+    return a;
+}
+
+# A unit backend: a buffer is a block of [len][values].
+public struct P20Cpu { }
+
+impl P20Backend for P20Cpu {
+    public fn make(self, data: *f64, n): Result {
+        var b = alloc((n + 1) * 8);
+        store64(b, n);
+        var q: *f64 = p20_f64p(b + 8);
+        for (var i = 0; i < n; i = i + 1) { q[i] = data[i]; }
+        return Ok(b);
+    }
+    public fn read(self, buf, dst: *f64, n): Result {
+        if (load64(buf) != n) { return Err(5); }
+        var q: *f64 = p20_f64p(buf + 8);
+        for (var i = 0; i < n; i = i + 1) { dst[i] = q[i]; }
+        return Ok(0);
+    }
+    public fn write(self, buf, src: *f64, n): Result {
+        if (load64(buf) != n) { return Err(5); }
+        var q: *f64 = p20_f64p(buf + 8);
+        for (var i = 0; i < n; i = i + 1) { q[i] = src[i]; }
+        return Ok(0);
+    }
+    public fn scale(self, buf, k: f64): Result {
+        var n = load64(buf);
+        var p: *f64 = p20_f64p(buf + 8);
+        for (var i = 0; i < n; i = i + 1) { p[i] = p[i] * k; }
+        return Ok(0);
+    }
+    public fn add_at(self, buf, index, value: f64, scratch: *f64, n): Result {
+        if (index < 0 || index >= load64(buf)) { return Err(77); }
+        var p: *f64 = p20_f64p(buf + 8);
+        p[index] = p[index] + value;
+        return Ok(0);
+    }
+}
+
+public struct P20Grid<B: P20Backend> { backend: B; n; k: f64; buf; scratch; }
+
+public fn P20Grid_new<B: P20Backend>(n, k: f64, backend: B, out: *P20Grid<B>): Result {
+    var zeros: f64[8];
+    for (var i = 0; i < 8; i = i + 1) { zeros[i] = 1.0; }
+    out.backend = backend;
+    var t, v = out.backend.make(&zeros, n);
+    if (is_err_result(t) == 1) { return Err(v); }
+    out.n = n;
+    out.k = k;
+    out.buf = v;
+    out.scratch = alloc(n * 8);
+    return Ok(0);
+}
+
+public fn P20Grid_step<B: P20Backend>(g: *P20Grid<B>): Result {
+    var k: f64 = g.k;
+    return g.backend.scale(g.buf, k);
+}
+
+public fn P20Grid_add<B: P20Backend>(g: *P20Grid<B>, index, value: f64): Result {
+    return g.backend.add_at(g.buf, index, value, g.scratch, g.n);
+}
+
+public fn P20Grid_read<B: P20Backend>(g: *P20Grid<B>, dst: *f64): Result {
+    return g.backend.read(g.buf, dst, g.n);
+}

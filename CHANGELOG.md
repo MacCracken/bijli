@@ -581,6 +581,19 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
   test (83 assertions), `tests/fdtd2d.tcyr` `Fdtd2d::try_enable_cpml_with`'s; `cpml3d_desynced_fields_do_not_panic` is
   n/a. fdtd.rs is ported whole. Bench twin: `fdtd/3d_step_30x30x30_cpml8` 2.12–2.29 ms (4.3× Rust's
   494.96 µs; the slab terms about 1.6 ms of it); every Rust bench is twinned.
+- **Cyrius port, M6 Part 3 — compute.rs** (`src/compute.cyr`): the `BjComputeBackend` trait (buffer creation and
+  transfer, the TM H and E stencils, the zero boundary, `synchronize`, `free_buffer` in place of Drop, and the default
+  `add_to_element` that round-trips a buffer through host scratch), the reference `BjCpuBackend` (its kernels
+  src/fdtd2d.cyr's packed row kernels, chunked through a stack scratch), the backend-agnostic `BjGpuFdtd2d<B>` (its
+  methods generic functions over `*BjGpuFdtd2d<B>`, since cyrius refuses a generic impl header) and the
+  `BjWgpuBackend` scaffold. Rust's checks and texts in Rust's order (ADR 0002 row 43: the buffer an opaque word, host
+  arrays a pointer and a length; row 9 amended). On the CPU backend the grid's fields equal `BjFdtd2d`'s bit for bit.
+  Probe p20 records the language's shape for it, and a finding to file: a trait default inherited by another file's
+  impl is private to the trait's file (`_bj_compute_add_to_element` reaches it). The Python emitter appends 66
+  `GpuFdtd2d::script` and 196 `CpuBackend::kernel` rows to `fdtd_2d3d.tsv` (1,463), all matched. `tests/compute.tcyr`
+  ports compute.rs's 18 tests, its `RoundTripBackend` among them (33 assertions). Cyrius-only bench:
+  `fdtd/gpu_fdtd2d_step_100x100_cpu` 50.4–54.5 µs (BjFdtd2d's step 46.6–48.7 µs in the
+  same runs: the trait's per-kernel checks and the chunking, about 1.1×).
 
 ### Fixed
 

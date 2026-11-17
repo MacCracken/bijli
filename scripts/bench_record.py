@@ -78,6 +78,7 @@ EXTRA = {
     "json/drude_material_to_json": "a DrudeMaterial's JSON, gold's (src/json.cyr, M5 part 1f)",
     "json/nonuniform_grid_from_json": "a 10 × 7 × 3 NonUniformGrid read back into a new grid, its block freed (M5 1f)",
     "json/cpml_params_from_json": "a CpmlParams read back, its thickness a usize (src/json.cyr, M6 part 1d)",
+    "fdtd/gpu_fdtd2d_step_100x100_cpu": "GpuFdtd2d on BjCpuBackend: fdtd/2d_step_100x100_tm through the trait (M6 3)",
 }
 
 

@@ -230,6 +230,116 @@ def emit_2b(rows, model):
         frames3(rows, model, dims, rng.log_uniform(-5.0, -2.0), ops, [rng.int(1, 30)])
 
 
+# ── compute.rs (M6 Part 3) ──────────────────────────────────────────────────────────────────────────────────────
+
+class Script2:
+    """A `GpuFdtd2d::script` being built: `i:<nx> i:<ny> f:<dx>`, then the 2D scripts' add_source (5), step_once (6)
+    and run (7); the outputs from validate.py's Gpu2Scripts (Fd2's TM physics, which GpuFdtd2d on CpuBackend is)."""
+
+    def __init__(self, rows, model, nx, ny, dx):
+        self.rows, self.model = rows, model
+        self.ins = [u(nx), u(ny), f(dx)]
+
+    def op(self, *toks):
+        self.ins += list(toks)
+
+    def row(self):
+        self.rows.emit("GpuFdtd2d::script", "T", self.ins, self.model.eval(V.wire(self.ins)))
+
+
+def source2(x, y, v):
+    return (i(5), u(x), u(y), f(v))
+
+
+def run2(k, src, fr, am):
+    head = (i(7), u(k)) + ((u(src[0]), u(src[1])) if src is not None else (NONE,))
+    return head + (f(fr), f(am))
+
+
+def frames_gpu(rows, model, nx, ny, dx, setup, frames, advance=step):
+    sc = Script2(rows, model, nx, ny, dx)
+    for op in setup:
+        sc.op(*op)
+    if not frames:
+        sc.row()
+    at = 0
+    for fr in frames:
+        sc.op(*advance(fr - at))
+        at = fr
+        sc.row()
+
+
+def kernel(rows, op, nx, ny, arg, lens, seed):
+    """A `CpuBackend::kernel` row (class A): `i:<op> i:<nx> i:<ny> i:<axis|index> i:<len0> .. i:<len3> f:<seed>`, four
+    arrays filled by validate.py's cpu_fill (j, len_j, seed), then the operation: 1 fdtd_update_h(b0, b1, b2, nx, ny,
+    axis), 2 fdtd_update_e(b0, b1, b2, b3, nx, ny), 3 apply_zero_boundary(b0, nx, ny), 4 read_buffer(b0) into the host
+    array 1, 5 write_buffer(b0) from the host array 1, 6 CpuBackend's add_to_element(b0, index, seed), 7 the trait's
+    default add_to_element through the host array 1 as scratch; its outputs the error, or the four arrays' digests."""
+    ins = [i(op), u(nx), u(ny), u(arg)] + [u(q) for q in lens] + [f(seed)]
+    rows.emit("CpuBackend::kernel", "A", ins, V.cpu_kernel([t[1] for t in ins]))
+
+
+def emit_3(rows, model):
+    """M6 Part 3: GpuFdtd2d on CpuBackend (compute.rs's tests' grids, Rust's 2D grid's shapes, sources inside, on the
+    wall and outside, run with and without a source, seeded scripts) and the CPU backend's kernels on every shape and
+    every refusal, in Rust's order."""
+    mx = (1 << 64) - 1
+    for nx, ny, dx in ((2, 50, 1e-3), (50, 2, 1e-3), (0, 0, 1e-3), (2, 2, math.nan), (1, mx, 1e-3), (mx, 3, 1e-3),
+                       (1 << 32, 1 << 32, 1e-3), (10, 10, math.nan), (10, 10, math.inf), (10, 10, -1.0),
+                       (10, 10, 0.0), (10, 10, -0.0)):
+        frames_gpu(rows, model, nx, ny, dx, [], [])
+    frames_gpu(rows, model, 50, 50, 1e-3, [], [])
+    frames_gpu(rows, model, 30, 30, 1e-4, [source2(15, 15, 1.0)], [1, 5, 20])
+    frames_gpu(rows, model, 40, 40, 1e-4, [], [10, 20, 30], lambda k: run2(k, (20, 20), 1e9, 1.0))
+    frames_gpu(rows, model, 30, 30, 1e-4, [], [25], lambda k: run2(k, (12, 17), 2e9, 1.0))
+    for src in ((20, 5), (0, 20), (mx, 0)):
+        frames_gpu(rows, model, 20, 20, 1e-4, [], [10], lambda k, src=src: run2(k, src, 1e9, 1.0))
+    frames_gpu(rows, model, 10, 10, 1e-3, [source2(3, 4, 2.5), source2(3, 4, 0.5), source2(10, 4, 1.0)], [0, 1])
+    for nx, ny in ((3, 3), (3, 5), (5, 3), (4, 4), (7, 5), (16, 9), (9, 16)):
+        ops = [source2(nx // 2, ny // 2, 1.0), source2(1, 1, -0.5), source2(0, ny // 2, 2.0)]
+        frames_gpu(rows, model, nx, ny, 1e-3, ops, [1, 3, 12])
+    frames_gpu(rows, model, 24, 24, 1e-3, [source2(12, 12, 1.0)], [4, 15], lambda k: run2(k, None, 1e9, 1.0))
+    frames_gpu(rows, model, 100, 100, 1e-4, [source2(50, 50, 1.0)], [1, 3])
+    rng = Rng(0x3C_0FF)
+    for _ in range(16):
+        nx, ny = rng.int(3, 24), rng.int(3, 24)
+        ops = [source2(rng.int(0, nx), rng.int(0, ny), (-1.0 if rng.unit() < 0.5 else 1.0) * rng.log_uniform(-2.0, 1.0))
+               for _ in range(rng.int(1, 3))]
+        frames_gpu(rows, model, nx, ny, rng.log_uniform(-5.0, -2.0), ops, [rng.int(1, 25)],
+                   (lambda k, s=(rng.int(0, nx - 1), rng.int(0, ny - 1)), fr=rng.log_uniform(8.0, 11.0):
+                    run2(k, s, fr, 1.0)) if rng.unit() < 0.5 else step)
+    # The kernels on every small shape (1 or 2 wide included), each with its buffers nx·ny long.
+    shapes = ((3, 3), (4, 5), (5, 4), (1, 4), (4, 1), (2, 2), (1, 1), (2, 7), (17, 9), (40, 3))
+    for nx, ny in shapes:
+        n = nx * ny
+        for seed in (1.0, 0.37, -2.5):
+            kernel(rows, 1, nx, ny, 0, (n, n, n, n), seed)
+            kernel(rows, 1, nx, ny, 1, (n, n, n, n), seed)
+            kernel(rows, 2, nx, ny, 0, (n, n, n, n), seed)
+            kernel(rows, 3, nx, ny, 0, (n, n, n, n), seed)
+    # The refusals, in Rust's order: the axis first, then the grid (a zero or overflowing nx·ny), then the first
+    # buffer of the wrong length.
+    for axis in (2, 3, 255):
+        kernel(rows, 1, 3, 3, axis, (9, 9, 9, 9), 1.0)
+        kernel(rows, 1, 0, 3, axis, (9, 9, 9, 9), 1.0)
+    for nx, ny in ((3, 0), (0, 3), (0, 0), (mx, 2), (2, mx), (1 << 32, 1 << 32)):
+        for op in (1, 2, 3):
+            kernel(rows, op, nx, ny, 0, (9, 9, 9, 9), 1.0)
+    for lens in ((8, 9, 9, 9), (9, 8, 9, 9), (9, 9, 8, 9), (9, 9, 9, 8), (16, 16, 16, 16), (8, 8, 8, 8)):
+        for op in (1, 2, 3):
+            kernel(rows, op, 3, 3, 1, lens, 0.5)
+    # The transfers and add_to_element: equal and unequal lengths, indices to and past the end.
+    for lens in ((0, 0, 0, 0), (3, 3, 0, 0), (9, 9, 0, 0), (3, 2, 0, 0), (3, 4, 0, 0), (0, 1, 0, 0)):
+        kernel(rows, 4, 1, 1, 0, lens, 0.25)
+        kernel(rows, 5, 1, 1, 0, lens, 0.25)
+    for n, idx in ((4, 0), (4, 3), (4, 4), (4, 5), (4, mx), (1, 0), (0, 0), (9, 8)):
+        kernel(rows, 6, 1, 1, idx, (n, n, 0, 0), 1.5)
+        kernel(rows, 7, 1, 1, idx, (n, n, 0, 0), 1.5)
+    for idx in (0, 3, 4):
+        kernel(rows, 7, 1, 1, idx, (4, 3, 0, 0), 1.5)
+        kernel(rows, 7, 1, 1, idx, (4, 5, 0, 0), 1.5)
+
+
 # ── modules ─────────────────────────────────────────────────────────────────────────────────────────────────────────
 
 def module(name, parts):
@@ -251,8 +361,9 @@ def module(name, parts):
 
 def main() -> int:
     model3 = V.Fd3Scripts(root, V.GLIBC_P)
+    model_gpu = V.Gpu2Scripts(root, V.GLIBC_P)
     problems = 0
-    for name, parts in (("fdtd_2d3d", [lambda r: emit_2b(r, model3)]),):
+    for name, parts in (("fdtd_2d3d", [lambda r: emit_2b(r, model3), lambda r: emit_3(r, model_gpu)]),):
         path, text, n = module(name, parts)
         big = V.too_big(f"tests/golden/{name}.tsv", text)
         if big:

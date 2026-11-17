@@ -166,7 +166,7 @@ public fn _bj_fd2_e_coefficients(dt: f64, dx: f64, eps_r: f64, sigma: f64): (f64
 
 # d[i] ± k[i]·(a[i] − b[i]) into d for i < n (add 1: `+=`, 0: `-=`), Rust's `row_diff`: the packed f64v_sub, f64v_mul
 # and f64v_add or f64v_sub through the scratch row w on the largest multiple of 4, then a scalar tail (probe p19).
-fn _bj_fd2_diff(d: *f64, k: *f64, a: *f64, b: *f64, w: *f64, n, add) {
+public fn _bj_fd2_diff(d: *f64, k: *f64, a: *f64, b: *f64, w: *f64, n, add) {
     var m = n & (0 - 4);
     if (m > 0) {
         f64v_sub(w, a, b, m);
@@ -185,7 +185,7 @@ fn _bj_fd2_diff(d: *f64, k: *f64, a: *f64, b: *f64, w: *f64, n, add) {
 
 # One row's interior curl update, x ∈ 1..n − 1: d[x] ± k[x]·((a[x] − a[x − 1]) − (b[x] − bp[x])) (add 1: `+=`, 0:
 # `-=`), Rust's `row_curl`, on the packed verbs through the scratch rows w and w2 (lane multiples, a scalar tail).
-fn _bj_fd2_curl(d: *f64, k: *f64, a: *f64, b: *f64, bp: *f64, w: *f64, w2: *f64, n, add) {
+public fn _bj_fd2_curl(d: *f64, k: *f64, a: *f64, b: *f64, bp: *f64, w: *f64, w2: *f64, n, add) {
     if (n < 3) { return 0; }
     var c = n - 2;
     var m = c & (0 - 4);
@@ -219,7 +219,7 @@ public fn _bj_fd2_scale(f: *f64, factor: *f64, n) {
 
 # Zeroes the outermost ring of a row-major nx-wide field of nx·ny cells (the PEC or PMC wall). Mirrors fdtd.rs's
 # `zero_walls`.
-fn _bj_fd2_walls(f: *f64, nx, ny) {
+public fn _bj_fd2_walls(f: *f64, nx, ny) {
     var n = nx * ny;
     for (var x = 0; x < nx; x = x + 1) {
         f[x] = 0.0;

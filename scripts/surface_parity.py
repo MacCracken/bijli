@@ -37,10 +37,9 @@ INV = json.loads((root / "scripts/rust_1_2_0.json").read_text())
 
 # Ported modules (their milestone done or in progress, item by item).
 MODULES = ["error", "logging", "field", "maxwell", "charge", "material", "wave", "circuit", "relativity",
-           "polarization", "scattering", "beam", "rf", "fdtd"]
+           "polarization", "scattering", "beam", "rf", "fdtd", "compute"]
 # Rust module -> the milestone that ports it (port plan §4.1).
 PENDING_MODULES = {
-    "compute": "M6",
     "integration/soorat": "M7", "bridge": "M7", "ai": "M7",
 }
 # Modules being ported Part by Part: module -> (the Parts that finish it, the Rust items still to come, by name: a free
@@ -62,10 +61,16 @@ OPERATORS = {"Add": "add", "Sub": "sub", "Mul": "mul", "Div": "div", "Neg": "neg
 FN_RENAMES = {"init": "bj_log_init", "init_with_level": "bj_log_init_with_level",
               # pub(crate): bijli-internal in the port
               "check_radial_distance": "_bj_check_radial_distance",
-              "Material::lossless_optical_constants": "_bj_material_lossless_optical_constants"}
+              "Material::lossless_optical_constants": "_bj_material_lossless_optical_constants",
+              # A generic struct's methods are generic functions over `*BjGpuFdtd2d<B>`: cyrius refuses a generic impl
+              # header, `impl<B> T<B>` (6.7.17; probe p20).
+              **{f"GpuFdtd2d::{m}": f"BjGpuFdtd2d_{m}"
+                 for m in ("step_once", "add_source", "run", "time", "read_ez", "read_hx", "read_hy")}}
 # Rust's `JonesMatrix.m: [[Complex; 2]; 2]` is four BjComplex fields (a tuple's slots are 8 bytes).
 FIELD_RENAMES = {("JonesMatrix", "m"): ["m00", "m01", "m10", "m11"]}
 EXCEPTIONS = {
+    "compute::impl ComputeBackend for CpuBackend": "`impl BjComputeBackend for BjCpuBackend`: a Cyrius trait impl, "
+                                                   "checked by the compiler against the trait (src/compute.cyr)",
     "field::impl From for FieldVector": "BjFieldVector_from_array(p); the other direction, From<FieldVector> for "
                                         "[f64; 3], is the method to_array(p)",
     "field::impl AddAssign for FieldVector": "`a = a + b`: Cyrius refuses `+=` on a struct value (guide, Compound "
@@ -125,7 +130,7 @@ def cyrius_index():
                 depth += line.count("{") - line.count("}")
                 if depth <= 0 and s == "}":
                     impl = None
-        for m in re.finditer(r"(?:public |pub )?struct (\w+) \{(.*?)\}", text, re.S):
+        for m in re.finditer(r"(?:public |pub )?struct (\w+)(?:<[^>{]*>)? \{(.*?)\}", text, re.S):
             structs[m.group(1)] = {f.strip().split(":")[0].strip() for f in m.group(2).replace("\n", ";").split(";")
                                    if f.strip() and not f.strip().startswith("#")}
     return fns, consts, members, enums, structs

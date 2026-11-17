@@ -9,7 +9,7 @@ bite is done, the machinery, the scripts and the traps. Delete it once it has se
 
 ## Where it stands
 
-- **Committed through `5677463`** ("M6 pt2a", with the Rust tree's retirement); part 2b is in the working tree for the
+- **Committed through `3170d5a`** ("M6 pt3", which holds part 2b); Part 3 (compute.rs) is in the working tree for the
   user to commit.
 - **M6 Part 1** (the 2D CPML and `Fdtd2d`, §116–§119) runs in bites. Done: 1a the CPML layer (`src/cpml.cyr`); 1b-1
   `Fdtd2d` without the CPML (`src/fdtd2d.cyr`; its scripts `Fdtd2d::script` in `fdtd_2d3d.tsv`, replayed by
@@ -21,9 +21,10 @@ bite is done, the machinery, the scripts and the traps. Delete it once it has se
   `Fdtd3d` without the CPML (`src/fdtd3d.cyr`, §121: `Fdtd3d::script` rows replayed by validate.py's `Fd3Scripts` and
   the harness's `_par_fd3_script`; the 2D file's helpers public as `_bj_fd2_*`); 2b the 3D CPML (§123: `_bj_fd3_slabs`,
   the twelve Ψ slabs in one mapping; the first rows from `scripts/oracle/emit.py`, whose `emit_2b` is the template for
-  the next part's emitter). **Part 2 is done**; fdtd.rs is ported whole. Next: Part 3 `compute.rs` (`ComputeBackend`,
-  `CpuBackend`, `GpuFdtd2d<B>`, the `WgpuBackend` scaffold), then the range-edge review (the per-cell rule for the 2D
-  and 3D updates and the CPML).
+  the next part's emitter). **Part 2 is done**; fdtd.rs is ported whole. Part 3, compute.rs, is done (§124:
+  `src/compute.cyr`; probe p20 for the trait and generic shape; `emit_3`'s GpuFdtd2d scripts and CPU kernel rows).
+  Next: M6's range-edge review (the per-cell rule of M5 Part 2 for the 2D and 3D updates and the CPML), then M6 is
+  done.
 - **No Rust (ADR 0003, 2026-11-16).** The Rust tree and the Rust generator are retired; the corpus is frozen data and
   `scripts/oracle/validate.py` the reference model. New rows come from `scripts/oracle/emit.py` (2b's `emit_2b` is
   the first part): add a part function, register it in `main()`'s module list, run `emit.py .`, then `validate.py .
@@ -66,10 +67,10 @@ bite is done, the machinery, the scripts and the traps. Delete it once it has se
     Rust's chain where every operation is its 53-bit value (mode 0, checked per sample by one exponent test and per
     angle), else the call or the angle unbounded (`_bj_nf_angle_ux`); a non-finite field keeps Rust's (row 18, §114).
     **Part 2 is done.**
-- **Numbers after M6 2b**: 19 modules, 644,745 ok, 0 failed, 121,888 accepted (ADR 01: 43,099; ADR 0002: 78,789)
-  over 766,633 rows; 486 digests equal on x86_64 ELF, x86_64 PE and aarch64. Ledger 760 ported, 12 n/a, 86 pending
-  of 858; API snapshot 2,129; surface parity 634 items (fdtd whole); benches 80 of 80 twinned; execution coverage 384
-  of 384. `json.tsv` is 40.7 MB of the 48 MiB cap: the rest of M6 adds no JSON (`Fdtd3d` and compute.rs
+- **Numbers after M6 Part 3**: 19 modules, 645,007 ok, 0 failed, 121,888 accepted (ADR 01: 43,099; ADR 0002:
+  78,789) over 766,895 rows; 488 digests equal on x86_64 ELF, x86_64 PE and aarch64. Ledger 778 ported, 12 n/a, 68
+  pending of 858; API snapshot 2,139; surface parity 653 items (15 modules); benches 80 of 80 twinned; execution
+  coverage 394 of 394. `json.tsv` is 40.7 MB of the 48 MiB cap: the rest of M6 adds no JSON (`Fdtd3d` and compute.rs
   have no serde), but M7's eight serde types (integration/) will want their own module.
 - **M5 is done** (§115). The benchmark record's Cyrius column is each row's least of four full runs: rows vary up to
   1.5× between runs under other repos' loads, so take the least of several when regenerating it.

@@ -1249,6 +1249,24 @@ fn main(): i64 {
     f2bad = f2bad + is_err_result(tf2d) + is_err_result(tf2e) + is_err_result(tf2n);
     if (f2bad > 0 || f2sum == 7.0) { println("."); }
 
+    # fdtd (M6 Part 3), Cyrius-only: GpuFdtd2d on BjCpuBackend, the 2D TM step of fdtd/2d_step_100x100_tm through the
+    # compute trait (the same row kernels, chunked through a stack scratch).
+    var cpu: BjCpuBackend;
+    var g2: BjGpuFdtd2d<BjCpuBackend>;
+    var tg2, vg2 = BjGpuFdtd2d_new(100, 100, 0.0001, cpu, &g2);
+    var ta2, va2 = BjGpuFdtd2d_add_source(&g2, 50, 50, 1.0);
+    var gsum2 = 0;
+    var bg2 = bench_new("fdtd/gpu_fdtd2d_step_100x100_cpu");
+    bench_batch_start(bg2);
+    for (var k = 0; k < 2000; k = k + 1) {
+        var ts2, vs2 = BjGpuFdtd2d_step_once(&g2);
+        gsum2 = gsum2 + vs2;
+    }
+    bench_batch_stop(bg2, 2000);
+    bench_report(bg2);
+    BjGpuFdtd2d_free(&g2);
+    if (is_err_result(tg2) == 1 || is_err_result(ta2) == 1 || gsum2 == 7) { println("."); }
+
     # fdtd (M6 part 2a): Rust's 3D step on a 30³ grid with a point source, each step followed by the total energy, as
     # Rust's bench reads it.
     var f3a: BjFdtd3d;
