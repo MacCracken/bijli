@@ -32,6 +32,10 @@
 //! while a CPML is attached, its thickness and the digests of its four Ψ fields (`psi_fx_y`, `psi_fz_y`, `psi_fy_x`,
 //! `psi_fz_x`). The private vectors are read from the grid's and the layer's `Debug` text.
 //!
+//! M6 part 1c: `nf2ff_2d` (class C: sin_cos and hypot): `i:<box_margin> i:<n_angles> f:<frequency>`, then a 2D script
+//! as above building the snapshot (its operations' errors aren't kept); its outputs the pattern and the angles (each
+//! `v:<len>` and its values), or the error.
+//!
 //! The grid: the validation of each parameter over the specials and its boundary; thicknesses 2^60 + 1 and usize::MAX,
 //! whose profiles no allocation can hold (smaller huge ones depend on the machine); the profiles around the classic
 //! grading, each parameter swept alone, at 2D and 3D Courant steps; the extremes of dx, dt, κ_max, α_max and m; and
@@ -43,7 +47,7 @@ use std::hint::black_box;
 use crate::grids::{Rng, specials};
 use crate::m_fdtd::{dbg_field, dbg_f64, dbg_vec, digest, res_toks, seq, u};
 use crate::tsv::{Class, Module, Tok, err, f, i, s};
-use bijli::fdtd::{Cpml, CpmlParams, Fdtd2d, Mode2d};
+use bijli::fdtd::{Cpml, CpmlParams, Fdtd2d, Mode2d, nf2ff_2d};
 use bijli::material::Material;
 
 /// The module's rows, each (function, inputs) once.
@@ -559,10 +563,107 @@ fn emit_1b2(r: &mut Rows) {
     }
 }
 
+// ── part 1c: nf2ff_2d, the snapshot NF2FF ──────────────────────────────────────────────────────────────────────
+
+impl Rows {
+    /// An `nf2ff_2d` row: the grid of the script (nx, ny, dx, mode, ops), then the transform.
+    #[allow(clippy::too_many_arguments)]
+    fn nf2ff2(&mut self, margin: usize, na: usize, freq: f64, nx: usize, ny: usize, dx: f64, mode: Mode2d,
+              ops: &[Op2]) {
+        let mut sc = Script2::new(nx, ny, dx, mode);
+        for &op in ops {
+            sc.apply(op);
+        }
+        let mut ins = vec![u(margin), u(na), f(freq)];
+        ins.extend(sc.ins.clone());
+        let sim = sc.sim.as_ref().expect("a grid that was made");
+        let outs = res_toks(nf2ff_2d(black_box(sim), margin, na, black_box(freq)), |res| {
+            let mut o = seq(&res.pattern);
+            o.extend(seq(&res.angles));
+            o
+        });
+        self.emit("fdtd::nf2ff_2d", Class::C, &ins, &outs);
+    }
+}
+
+fn emit_1c(r: &mut Rows) {
+    let tm = Mode2d::Tm;
+    // fdtd.rs's tests and its bench.
+    let run60 = [Op2::Run(100, Some((30, 30)), 3e9, 1.0)];
+    r.nf2ff2(5, 36, 3e9, 60, 60, 1e-4, tm, &run60);
+    r.nf2ff2(6, 36, 1e9, 10, 10, 1e-4, tm, &[]);
+    r.nf2ff2(2, 0, 1e9, 10, 10, 1e-4, tm, &[]);
+    r.nf2ff2(3, 8, 1e9, 30, 30, 1e-4, Mode2d::Te, &[]);
+    for (m, na, fr) in [(0, 8, 1e9), (3, 8, 0.0), (3, 8, f64::NAN), (3, 4, 1e9)] {
+        r.nf2ff2(m, na, fr, 30, 30, 1e-4, tm, &[]);
+    }
+    let bench = [Op2::Run(60, Some((40, 40)), 3e10, 1.0)];
+    r.nf2ff2(5, 180, 3e10, 80, 80, 1e-3, tm, &bench);
+    // The validation: the frequency's specials, the margin at 0, 1, its last valid value and nx/2 or ny/2 on a
+    // non-square grid, angle counts from 0 to 360.
+    let run40 = [Op2::Source(20, 12, 1.0), Op2::Step(30)];
+    for &v in &specials() {
+        r.nf2ff2(4, 12, v, 40, 24, 1e-4, tm, &run40);
+    }
+    for m in [0, 1, 2, 11, 12, 19, 20] {
+        r.nf2ff2(m, 12, 1e9, 40, 24, 1e-4, tm, &run40);
+    }
+    for na in [0, 1, 2, 3, 7, 36, 90, 360] {
+        r.nf2ff2(3, na, 1e9, 40, 24, 1e-4, tm, &run40);
+    }
+    r.nf2ff2(4, 12, 1e9, 40, 24, 1e-4, Mode2d::Te, &run40);
+    // Transforms: a driven point source with and without the CPML, a dielectric, the smallest contours, frequencies
+    // from 1 MHz to 300 GHz.
+    for (nx, ny, m) in [(7, 7, 1), (8, 9, 1), (9, 9, 2), (20, 20, 3), (33, 21, 4), (48, 48, 6)] {
+        let ops = [Op2::Source(nx / 2, ny / 2, 1.0), Op2::Step(12), Op2::Source(nx / 3, ny / 3, -0.5), Op2::Step(5)];
+        for na in [1, 4, 24] {
+            r.nf2ff2(m, na, 2e9, nx, ny, 1e-4, tm, &ops);
+        }
+    }
+    for fr in [1e6, 1e8, 1e9, 3e9, 1e10, 3e11] {
+        r.nf2ff2(5, 36, fr, 60, 60, 1e-4, tm, &run60);
+    }
+    let cpml = [Op2::Cpml(8), Op2::Run(120, Some((30, 30)), 3e9, 1.0)];
+    r.nf2ff2(10, 72, 3e9, 60, 60, 1e-4, tm, &cpml);
+    let die = [Op2::Eps(20, 20, 40, 40, 4.0), Op2::Run(80, Some((30, 30)), 3e9, 1.0)];
+    r.nf2ff2(5, 36, 3e9, 60, 60, 1e-4, tm, &die);
+    // At the core's range edges (ADR 0002 row 18, M5 part 2d-6): k below 2^-1022 and near DBL_MAX, fields of 10^±300
+    // and past DBL_MAX in their sums, a non-finite field, dx of 10^±300.
+    for fr in [f64::from_bits(1), 1e-310, 1e-300, f64::MIN_POSITIVE, 1e300, f64::MAX] {
+        r.nf2ff2(3, 8, fr, 20, 20, 1e-4, tm, &[Op2::Source(10, 10, 1.0), Op2::Step(15)]);
+    }
+    for v in [1e300, 1e-300, 1e-310, f64::MAX] {
+        let ops = [Op2::Source(10, 10, v), Op2::Step(15), Op2::Source(4, 4, v)];
+        r.nf2ff2(3, 8, 1e9, 20, 20, 1e-4, tm, &ops);
+    }
+    for v in [f64::MAX, 1e-305, f64::INFINITY, f64::NAN] {
+        let ops = [Op2::Fill(0, 1.0), Op2::Source(3, 3, v), Op2::Fill(2, 0.25)];
+        r.nf2ff2(3, 8, 1e9, 20, 20, 1e-4, tm, &ops);
+    }
+    for dx in [1e-300, 1e300, 1e-310] {
+        r.nf2ff2(3, 8, 1e9, 20, 20, dx, tm, &[Op2::Source(10, 10, 1.0), Op2::Step(15)]);
+        r.nf2ff2(3, 8, 1e-300, 20, 20, dx, tm, &[Op2::Source(10, 10, 1.0), Op2::Step(15)]);
+    }
+    // Seeded transforms on grids from 7 to 40 a side.
+    let mut rng = Rng::new(0x1c_2ff2);
+    for _ in 0..30 {
+        let nx = usize::try_from(rng.int(7, 40)).unwrap_or(7);
+        let ny = usize::try_from(rng.int(7, 40)).unwrap_or(7);
+        let mmax = i64::try_from(nx.min(ny) / 2).unwrap_or(2) - 1;
+        let m = usize::try_from(rng.int(1, mmax.max(1))).unwrap_or(1);
+        let na = usize::try_from(rng.int(1, 48)).unwrap_or(1);
+        let fr = rng.log_uniform(6.0, 11.0);
+        let k = usize::try_from(rng.int(1, 40)).unwrap_or(1);
+        let ops = [Op2::Source(nx / 2, ny / 2, rng.signed_log_uniform(-2.0, 1.0)), Op2::Step(k)];
+        r.nf2ff2(m, na, fr, nx, ny, rng.log_uniform(-5.0, -2.0), tm, &ops);
+    }
+}
+
 pub fn emit() -> Module {
     let mut r = Rows { m: Module::new("fdtd_2d3d"), keys: BTreeSet::new() };
     emit_1a(&mut r);
     emit_1b1(&mut r);
     emit_1b2(&mut r);
+    emit_1c(&mut r);
     r.m
 }

@@ -1,11 +1,12 @@
 # nf2ff.tcyr — src/nf2ff.cyr (M5 part 1e): the phasor NF2FF transform.
 #
 # Every group named test_* is rust-old/src/fdtd.rs's test of that name, ported assertion for assertion (the ledger
-# matches them by name): the four on the phasor transform and its references (the Bessel helpers, the line source,
-# the plane wave's extinction, the validation). The six that drive an `Fdtd2d` through `nf2ff_2d` follow with the 2D
-# grid in M6. Rust's test helpers are ported as written: Bessel J_n by the trapezoid rule over 512 points, Y_n by
-# Simpson's rule (DLMF §10.9), and `nf2ff_fill`, which writes exact phasors into the accumulators near the contour. The
-# cyrius_* groups pin the error records' text, the angles, a zero field's zero pattern, and BjNf2ffResult_free.
+# matches them by name): the four on the phasor transform and its references (the Bessel helpers, the line source, the
+# plane wave's extinction, the validation), and the six that drive a BjFdtd2d through bj_nf2ff_2d (M6 part 1c;
+# `test_nf2ff_snapshot_validation`'s `fx.truncate(10)` step is n/a, ADR 0002 row 2: the arrays are fixed). Rust's test
+# helpers are ported as written: Bessel J_n by the trapezoid rule over 512 points, Y_n by Simpson's rule (DLMF §10.9),
+# and `nf2ff_fill`, which writes exact phasors into the accumulators near the contour. The cyrius_* groups pin the error
+# records' text, the angles, a zero field's zero pattern, and BjNf2ffResult_free.
 
 include "tests/lib.cyr"
 
@@ -371,6 +372,85 @@ fn main() {
     var t4g, v4g = bj_nf2ff_2d_phasor(&ca, &ca, &ca, 20, 20, 0.001, 3, 0, &r4);
     assert(is_err_result(t4e) == 1 && is_err_result(t4f) == 1 && is_err_result(t4g) == 1,
       "dx = NaN, margin 10 and no angle refused");
+
+    test_group("test_nf2ff_basic");
+    var g1: BjFdtd2d;
+    var tg1, vg1 = BjFdtd2d_new(60, 60, 0.0001, BJ_MODE2D_TM, &g1);
+    g1.run(100, 30, 30, 3000000000.0, 1.0);
+    var rb: BjNf2ffResult;
+    var tb, vb = bj_nf2ff_2d(&g1, 5, 36, 3000000000.0, &rb);
+    var anyb = 0;
+    for (var kb = 0; kb < 36; kb = kb + 1) {
+        var pb: f64 = at(rb.pattern, kb);
+        var ab: f64 = f64_abs(pb);
+        if (ab > 0.0) { anyb = 1; }
+    }
+    assert(is_ok(tb) == 1 && rb.count == 36 && anyb == 1, "36 angles, a nonzero pattern");
+    test_group("test_nf2ff_snapshot_is_magnitude");
+    var tm2, vm2 = bj_nf2ff_2d(&g1, 5, 36, 3000000000.0, &rb);
+    var allm = 1;
+    var anym = 0;
+    for (var km = 0; km < 36; km = km + 1) {
+        var pm: f64 = at(rb.pattern, km);
+        var zm: f64 = pm * 0.0;
+        if (!(pm >= 0.0 && zm == 0.0)) { allm = 0; }
+        if (pm > 0.0) { anym = 1; }
+    }
+    assert(is_ok(tm2) == 1 && allm == 1 && anym == 1, "every value ≥ 0 and finite, some > 0");
+    BjNf2ffResult_free(&rb);
+    BjFdtd2d_free(&g1);
+
+    test_group("test_nf2ff_invalid_margin");
+    var g2: BjFdtd2d;
+    var tg2, vg2 = BjFdtd2d_new(10, 10, 0.0001, BJ_MODE2D_TM, &g2);
+    var ti2, vi2 = bj_nf2ff_2d(&g2, 6, 36, 1000000000.0, &rb);
+    assert(is_err_result(ti2) == 1, "margin 6 on 10 × 10");
+
+    test_group("test_nf2ff_zero_angles");
+    var tz2, vz2 = bj_nf2ff_2d(&g2, 2, 0, 1000000000.0, &rb);
+    assert(is_err_result(tz2) == 1, "no angle");
+    BjFdtd2d_free(&g2);
+
+    test_group("test_nf2ff_snapshot_validation");
+    var te3: BjFdtd2d;
+    var tt3, vt3 = BjFdtd2d_new(30, 30, 0.0001, BJ_MODE2D_TE, &te3);
+    var tv1, vv1 = bj_nf2ff_2d(&te3, 3, 8, 1000000000.0, &rb);
+    assert(is_err_result(tv1) == 1, "TE refused");
+    BjFdtd2d_free(&te3);
+    var tm3: BjFdtd2d;
+    var tt4, vt4 = BjFdtd2d_new(30, 30, 0.0001, BJ_MODE2D_TM, &tm3);
+    var tv2, vv2 = bj_nf2ff_2d(&tm3, 0, 8, 1000000000.0, &rb);
+    var tv3, vv3 = bj_nf2ff_2d(&tm3, 3, 8, 0.0, &rb);
+    var tv4, vv4 = bj_nf2ff_2d(&tm3, 3, 8, nan, &rb);
+    assert(is_err_result(tv2) == 1 && is_err_result(tv3) == 1 && is_err_result(tv4) == 1,
+      "margin 0 (the contour on the PEC edge), f = 0, f = NaN");
+
+    test_group("test_nf2ff_angle_coverage");
+    var tv5, vv5 = bj_nf2ff_2d(&tm3, 3, 4, 1000000000.0, &rb);
+    var an0: f64 = at(rb.angles, 0);
+    var an1: f64 = at(rb.angles, 1);
+    var hp: f64 = PI / 2.0;
+    assert(is_ok(tv5) == 1 && near(an0, 0.0, 0.0000000001) == 1 && near(an1, hp, 0.0000000001) == 1, "0, π/2");
+    BjNf2ffResult_free(&rb);
+    BjFdtd2d_free(&tm3);
+
+    test_group("cyrius_nf2ff_snapshot_records");
+    var te4: BjFdtd2d;
+    var tt5, vt5 = BjFdtd2d_new(20, 20, 0.0001, BJ_MODE2D_TE, &te4);
+    var tv6, vv6 = bj_nf2ff_2d(&te4, 0, 0, nan, &rb);
+    var wte = "invalid parameter: NF2FF requires a TM-mode simulation, got Te";
+    assert(text_is(bj_last_error_display(), wte) == 1, "the mode first, Rust's text");
+    BjFdtd2d_free(&te4);
+    var tm4: BjFdtd2d;
+    var tt6, vt6 = BjFdtd2d_new(20, 20, 0.0001, BJ_MODE2D_TM, &tm4);
+    var tv7, vv7 = bj_nf2ff_2d(&tm4, 3, 8, -1.0, &rb);
+    var wf = "invalid parameter: NF2FF frequency must be finite and positive, got -1";
+    assert(text_is(bj_last_error_display(), wf) == 1, "the frequency's text");
+    var tv8, vv8 = bj_nf2ff_2d(&tm4, 3, 8, 1000000000.0, &rb);
+    var z8: f64 = at(rb.pattern, 0);
+    assert(is_ok(tv8) == 1 && z8 == 0.0, "a zero field radiates nothing");
+    BjNf2ffResult_free(&rb);
+    BjFdtd2d_free(&tm4);
 
     test_group("cyrius_nf2ff_error_records");
     var t5a, v5a = bj_nf2ff_2d_phasor(&ca, &cb, &ca, 20, 20, 0.001, 3, 8, &r4);

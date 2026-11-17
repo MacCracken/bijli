@@ -6612,3 +6612,45 @@ eigenmode search (`dft_magnitude`'s recurrence and magnitude, `find_eigenmodes`'
   equal**. `fdtd2d.tcyr` (72) passes on all three. The gate is clean (no warnings; execution coverage 377 of 377
   functions; its audit first failed on a header comment line past 120 characters, reflowed); validate.py 761,139 rows,
   0 problems; the oracle's `--check` and clippy clean. Next: 1c, `nf2ff_2d`.
+
+## 119. M6 part 1c: the snapshot NF2FF (2026-11-16)
+
+- **`src/nf2ff.cyr`**: `bj_nf2ff_2d(sim, box_margin, n_angles, frequency, out)`, fdtd.rs's `nf2ff_2d`: the TM check
+  first ("NF2FF requires a TM-mode simulation, got Te"), then `_bj_nf_validate` (Rust's order: the angles, the margin,
+  dx, the frequency, its texts), then `_bj_nf_core` on the fields' real parts (an imaginary address of 0 reads as 0),
+  the rotation (1, 0) and k = 2π·f/c to 53 bits from the double frequency (`_bj_k_ux_from`). Rust's three
+  `nf2ff_check_len` calls go: the arrays are nx·ny by construction (ADR 0002 row 2 amended, as
+  `test_nf2ff_snapshot_validation`'s `fx.truncate(10)` step). `src/nf2ff.cyr` moves after `src/cpml.cyr` and
+  `src/fdtd2d.cyr` in the bundle (cyrius.cyml, tests/lib.cyr) to see `BjFdtd2d`; neither depends on it.
+- **ADR 0002 row 18, amended**: the core's range edges (M5 part 2d-6) hold for the snapshot as for the phasor form:
+  Rust's `2.0 * PI * frequency` overflows for f past DBL_MAX/2π (f = DBL_MAX gave NaN patterns), k underflows below
+  about 10⁻³⁰⁰ Hz, and the fields' and dx's extremes act as in §114.
+- **The corpus**: `fdtd_2d3d.tsv` gains 110 `fdtd::nf2ff_2d` rows (953 in all, 1.8 MB), class C: the margin, angle
+  count and frequency, then a 2D script building the snapshot (`m_fdtd_2d3d.rs`' comment; the script's errors aren't
+  kept). fdtd.rs's six tests' cases and its bench (an 80 × 80 grid run 60 steps at 30 GHz, 180 angles); the
+  frequency's specials, the margin from 0 to nx/2 and ny/2 on a 40 × 24 grid, angle counts from 0 to 360, the TE
+  refusal; driven point sources on grids from 7 × 7 to 48 × 48 with 1 to 24 angles, frequencies from 1 MHz to 300 GHz,
+  a CPML and a dielectric; the range edges (frequencies 2^-1074 to DBL_MAX, sources of 10^±300 and DBL_MAX, a non-finite
+  field, dx of 10^±300); 30 seeded transforms.
+- **validate.py**: `fd2_nf2ff` replays the snapshot with `Fd2Scripts`, then Rust's `nf_core` (rotation (1, 0)) on the
+  primitives P, or the port's `nf_core18` (row 18, the unbounded chain itself); `fdtd_2d3d_adr_rows` maps the module's
+  rows (the first `fdtd_2d3d.adr.tsv`). On glibc it reproduces all 110 rows; on MPFR 5 change (`fdtd_2d3d.cr.tsv`, 14
+  in all: misrounded sin_cos or hypot), and 12 map to row 18 (frequencies of 2^-1074, 10⁻³¹⁰, 10⁻³⁰⁰, DBL_MIN and
+  DBL_MAX; sources of 10⁻³⁰⁰ and 10⁻³¹⁰; dx of 10⁻³¹⁰; 10⁻³⁰⁰ Hz on dx of 10³⁰⁰), a mapped row skipping the
+  corrections. Sources of 10³⁰⁰ and DBL_MAX stay in range on this contour, and a non-finite field keeps Rust's chain.
+- **Tests**: `tests/nf2ff.tcyr` (35 assertions): fdtd.rs's `test_nf2ff_basic`, `test_nf2ff_snapshot_is_magnitude`,
+  `test_nf2ff_invalid_margin`, `test_nf2ff_zero_angles`, `test_nf2ff_snapshot_validation` (its truncate step n/a) and
+  `test_nf2ff_angle_coverage`, and `cyrius_nf2ff_snapshot_records` (the TM check first, the frequency's text, a zero
+  field). The ledger: 731 ported, 10 n/a, 117 pending of 858; fdtd.rs's NF2FF tests 10 of 10.
+- **Surface parity**: `nf2ff_2d` is matched (602 items); the API snapshot gains `bj_nf2ff_2d` (2,123).
+- **Benchmarks**: Rust's `fdtd/nf2ff_2d_80x80_180` is twinned: 1.57–1.60 ms (Rust 193.01 µs, 8.1×), the phasor
+  form's cost on the same grid (1.54–1.59 ms), about 30 ns a contour sample and angle against Rust's 3.6 (§98, §114).
+  The interleaved A/B against HEAD (two rounds, load 1.5 to 2.3) left every row unchanged: median ratios 1.01 and 0.98
+  (the 2D steps 0.94 to 1.06 across the rounds; `src/nf2ff.cyr`'s move in the bundle changes no path). The benchmark
+  record gains the twin (each row the least of the eleven full runs since M5's close); 2 of Rust's 80 benches are
+  pending, the 3D steps.
+- **Result, every target** (x86_64 ELF, x86_64 PE, aarch64): **19 modules, 0 failing; 642,112 ok, 0 failed, 0
+  measured, 0 pending, 119,137 accepted (ADR 01: 40,380; ADR 0002: 78,757)** over 761,249 rows; **all 481 digests
+  equal**. `nf2ff.tcyr` (35) passes on all three. The gate is clean (no warnings; execution coverage 378 of 378
+  functions); validate.py 761,249 rows, 0 problems; the oracle's `--check` and clippy clean. Next: 1d, the JSON of
+  `CpmlParams` and `Mode2d`.

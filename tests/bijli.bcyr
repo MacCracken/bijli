@@ -1228,8 +1228,25 @@ fn main(): i64 {
     bench_batch_stop(b2d, 2000);
     bench_report(b2d);
     BjFdtd2d_free(&f2d);
+    # The snapshot NF2FF (M6 part 1c): an 80 × 80 TM grid run 60 steps with a 30 GHz source, its transform at 180
+    # angles with a margin of 5.
+    var f2n: BjFdtd2d;
+    var tf2n, vf2n = BjFdtd2d_new(80, 80, 0.001, BJ_MODE2D_TM, &f2n);
+    f2n.run(60, 40, 40, 30000000000.0, 1.0);
+    var b2n = bench_new("fdtd/nf2ff_2d_80x80_180");
+    bench_batch_start(b2n);
+    for (var k = 0; k < 200; k = k + 1) {
+        var n2r: BjNf2ffResult;
+        var tn2, vn2 = bj_nf2ff_2d(&f2n, 5, 180, 30000000000.0, &n2r);
+        var n2p: *f64 = bench_f64p(n2r.pattern);
+        f2sum = f2sum + n2p[0];
+        BjNf2ffResult_free(&n2r);
+    }
+    bench_batch_stop(b2n, 200);
+    bench_report(b2n);
+    BjFdtd2d_free(&f2n);
     var f2bad = is_err_result(tf2a) + is_err_result(tf2c) + is_err_result(tf2s);
-    f2bad = f2bad + is_err_result(tf2d) + is_err_result(tf2e);
+    f2bad = f2bad + is_err_result(tf2d) + is_err_result(tf2e) + is_err_result(tf2n);
     if (f2bad > 0 || f2sum == 7.0) { println("."); }
 
     # fdtd (M5 part 1b), Cyrius-only: a Gaussian pulse's value across its width, and a 200-cell TF/SF auxiliary grid

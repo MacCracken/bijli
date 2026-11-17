@@ -1,6 +1,6 @@
-# nf2ff.cyr — fdtd.rs's 2D near-field to far-field transform (M5 part 1e): `nf2ff_2d_phasor`, Love's equivalence on a
-# rectangular contour of a TM-mode Yee grid, from CW phasors. `nf2ff_2d`, the same transform of a time snapshot of an
-# `Fdtd2d`, joins with the 2D grid in M6 on this file's core.
+# nf2ff.cyr — fdtd.rs's 2D near-field to far-field transform: `nf2ff_2d_phasor` (M5 part 1e), Love's equivalence on a
+# rectangular contour of a TM-mode Yee grid, from CW phasors, and `nf2ff_2d` (M6 part 1c), the same transform of one
+# time snapshot of a BjFdtd2d, on the same core.
 #
 # The phasors are e^{+jωt}, bijli's one convention (src/complex.cyr's header), as the CW accumulator's are: fdtd.rs's
 # NF2FF already was. The complex arithmetic is fdtd.rs's own `Cplx`, written out on f64 locals in Rust's order; sin_cos
@@ -954,6 +954,74 @@ public fn bj_nf2ff_2d_phasor(ez: *BjCwAccumulator, hx: *BjCwAccumulator, hy: *Bj
     f[3] = hx.imag;
     f[4] = hy.real;
     f[5] = hy.imag;
+    var r: BjNf2ffResult;
+    var ce = _bj_nf_core(&f, &sv, &se, nx, ny, dx, box_margin, n_angles, &r);
+    if (ce != 0) { return Err(ce); }
+    out.pattern = r.pattern;
+    out.angles = r.angles;
+    out.count = r.count;
+    return Ok(0);
+}
+
+# The 2D TM NF2FF transform of one time snapshot of sim into *out (free a previous result first): the contour
+# `box_margin` cells inside the grid's edge, J = n̂×H and M = −n̂×E integrated by Love's equivalence, the pattern
+# √ρ·|E_z(ρ, φ)| as ρ → ∞ at n_angles angles from 0 (BjNf2ffResult). A monochromatic approximation: the snapshot is
+# real, so the fields are taken as the phasor's real part and H (half a step behind E on the Yee grid) as it is, and the
+# result depends on the instant; for accurate patterns accumulate E_z, H_x and H_y in BjCwAccumulators and use
+# bj_nf2ff_2d_phasor. Ok(0), or with out untouched Err(InvalidParameter), Rust's texts in Rust's order: the grid isn't
+# TM ("NF2FF requires a TM-mode simulation, got Te"), n_angles is 0, the margin is 0 or at least nx/2 or ny/2, dx isn't
+# finite and positive, the frequency isn't. Rust's check that each field holds nx·ny samples goes (ADR 0002 row 2: the
+# arrays are fixed at construction). Err(Allocation) when the result can't be had. The core runs at its range edges as
+# the phasor form's (ADR 0002 row 18, M5 part 2d-6), its rotation (1, 0) and k = 2π·frequency/c to 53 bits. Mirrors
+# `nf2ff_2d`.
+#must_use
+public fn bj_nf2ff_2d(sim: *BjFdtd2d, box_margin, n_angles, frequency: f64, out: *BjNf2ffResult): Result {
+    if (sim.mode != BJ_MODE2D_TM) {
+        var tm = _bj_err_reason(BJ_ERR_INVALID_PARAMETER);
+        _bj_tx_cstr(tm, "NF2FF requires a TM-mode simulation, got ");
+        if (sim.mode == BJ_MODE2D_TE) { _bj_tx_cstr(tm, "Te"); }
+        else { _bj_tx_i64(tm, sim.mode); }
+        return Err(BJ_ERR_INVALID_PARAMETER);
+    }
+    var nx = sim.nx;
+    var ny = sim.ny;
+    var dx: f64 = sim.dx;
+    var fs, fe = _bj_k_ux_from(frequency);
+    var kv: f64[1];
+    var kx: i64[1];
+    var e = _bj_nf_validate(nx, ny, dx, frequency, fs, fe, box_margin, n_angles, &kv, &kx);
+    if (e != 0) { return Err(e); }
+    if (_bj_log_on(4) == 1) {
+        var lb[256];
+        var lt[24];
+        _bj_tx_init(&lt, &lb, 256);
+        _bj_tx_cstr(&lt, "NF2FF (snapshot) transform nx=");
+        _bj_tx_u64(&lt, nx);
+        _bj_tx_cstr(&lt, " ny=");
+        _bj_tx_u64(&lt, ny);
+        _bj_tx_cstr(&lt, " box_margin=");
+        _bj_tx_u64(&lt, box_margin);
+        _bj_tx_cstr(&lt, " n_angles=");
+        _bj_tx_u64(&lt, n_angles);
+        _bj_tx_cstr(&lt, " frequency=");
+        _bj_fmt_f64_debug(&lt, frequency);
+        _bj_log_text(4, &lt);
+    }
+    var sv: f64[3];
+    var se: i64[3];
+    sv[0] = 1.0;
+    se[0] = 0;
+    sv[1] = 0.0;
+    se[1] = 0;
+    sv[2] = kv[0];
+    se[2] = kx[0];
+    var f: i64[6];
+    f[0] = sim.fz;
+    f[1] = 0;
+    f[2] = sim.fx;
+    f[3] = 0;
+    f[4] = sim.fy;
+    f[5] = 0;
     var r: BjNf2ffResult;
     var ce = _bj_nf_core(&f, &sv, &se, nx, ny, dx, box_margin, n_angles, &r);
     if (ce != 0) { return Err(ce); }

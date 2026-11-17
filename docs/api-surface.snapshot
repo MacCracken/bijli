@@ -1196,6 +1196,7 @@ mmap::mmap_anon/1
 mmap::mmap_file_ro/2
 mmap::mmap_file_rw/2
 nf2ff::BjNf2ffResult_free/1
+nf2ff::bj_nf2ff_2d/5
 nf2ff::bj_nf2ff_2d_phasor/9
 poison::poison_alloc/1
 poison::poison_allocator/0

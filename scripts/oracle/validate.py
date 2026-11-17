@@ -8404,6 +8404,8 @@ def adr_rows(root: Path, module: str, path: Path) -> list:
         return json_adr_rows(path)
     if module == "fdtd":
         return fdtd_adr_rows(root, path)
+    if module == "fdtd_2d3d":
+        return fdtd_2d3d_adr_rows(root, path)
     maps = {13: adr13(root)}
     out = adr17_rows(root, module, path) if module in ("field", "charge") else []
     if module in ("field", "charge"):
@@ -11030,15 +11032,78 @@ class Fd2Scripts:
         return errs + sim.state()
 
 
+# M6 part 1c: `nf2ff_2d` on a replayed snapshot. Rust's: `nf_core` with the rotation (1, 0) and k = 2π·f/c on the
+# primitives P. The port's (ADR 0002 row 18, M5 part 2d-6's core): k to 53 bits, the core by `nf_core18` (the unbounded
+# chain itself), Rust's core on k rounded where a contour field isn't finite.
+
+def fd2_nf2ff(scripts, ins_raw, P, port=False):
+    """An `fdtd::nf2ff_2d` row's outputs: its snapshot replayed by `scripts` (an Fd2Scripts), then the transform."""
+    raw = ins_raw.split(" ")
+    toks = [parse_tok(x) for x in raw[:3]]
+    margin, na, freq = toks[0][1] & FD_U64, toks[1][1] & FD_U64, toks[2][1]
+    scripts.eval(" ".join(raw[3:]))
+    sim = scripts.sim
+    if sim.mode != 0:
+        return ip_err("NF2FF requires a TM-mode simulation, got Te")
+    nx, ny, dx = sim.nx, sim.ny, sim.dx
+    if na == 0:
+        return ip_err("need at least one observation angle")
+    if margin == 0 or margin >= nx // 2 or margin >= ny // 2:
+        return ip_err(f"NF2FF box margin must be in 1..min(nx, ny)/2 for a {nx}x{ny} grid, got {margin}")
+    if not fd_pos(dx):
+        return ip_err(f"dx must be finite and positive, got {rust_display(dx)}")
+    if not fd_pos(freq):
+        return ip_err(f"NF2FF frequency must be finite and positive, got {rust_display(freq)}")
+    n = nx * ny
+    zero = [0.0] * n
+    ez, hx, hy = {"re": sim.fz, "im": zero}, {"re": sim.fx, "im": zero}, {"re": sim.fy, "im": zero}
+    c = scripts.K[0]
+    if not port:
+        pattern, angles = nf_core(ez, hx, hy, (1.0, 0.0), nx, ny, dx, 2.0 * math.pi * freq / c, margin, na, P)
+        return fu_seq_toks(pattern) + fu_seq_toks(angles)
+    k53 = ux_div(ux_mul(ux(2.0 * math.pi), ux(freq)), ux(c))
+    fields = []
+    for key, ia, ib, ie, _s, _h in nf_contour(nx, ny, margin):
+        h = hx if key == "hx" else hy
+        fields += [h["re"][ia], h["re"][ib], ez["re"][ie]]
+    if not all(math.isfinite(v) for v in fields):
+        pattern, angles = nf_core(ez, hx, hy, (1.0, 0.0), nx, ny, dx, ux_fin(k53), margin, na, P)
+    else:
+        pattern, angles = nf_core18(ez, hx, hy, (1.0, 0.0), nx, ny, dx, nh_back(k53), margin, na)
+    return fu_seq_toks(pattern) + fu_seq_toks(angles)
+
+
+def fdtd_2d3d_adr_rows(root: Path, path: Path) -> list:
+    """ADR 0002 row 18: each `nf2ff_2d` row whose outputs the core's range edges change (M5 part 2d-6), on correctly
+    rounded primitives, the port's model (`nf_core18`) against Rust's chain."""
+    out = []
+    base, port = Fd2Scripts(root, MPFR_P), Fd2Scripts(root, MPFR_P)
+    P = dict(MPFR_P, hypot=lambda x, y: mpfr_ref.cr2("hypot", x, y))
+    for fn, _cls, ins, outs, _v in sc_lines(path):
+        if fn != "fdtd::nf2ff_2d":
+            continue
+        want = fd2_nf2ff(port, ins, P, port=True)
+        rust = fd2_nf2ff(base, ins, P)
+        if not toks_same(want, rust) and not toks_same(want, wave_toks([parse_tok(x) for x in outs.split(" ")])):
+            out.append((fn, ins, wire(want), "18", f"oracle {outs[:120]}; ADR 0002 row 18: the range edge"))
+    return out
+
+
 def validate_fdtd_2d3d(root: Path, path: Path) -> list:
     header, _rows = read_tsv(path)
     errs = check_platform(header)
     if errs:
         return errs
     C = golden_consts(root)
-    f2 = Fd2Scripts(root, GLIBC_P)
+    f2, f2n = Fd2Scripts(root, GLIBC_P), Fd2Scripts(root, GLIBC_P)
+    PG = dict(GLIBC_P, hypot=LIBM.hypot)
     for n, (fn, _cls, ins, outs, _v) in enumerate(sc_lines(path), 1):
-        want = f2.eval(ins) if fn == "Fdtd2d::script" else fd2_eval(fn, ins, GLIBC_P, C)
+        if fn == "Fdtd2d::script":
+            want = f2.eval(ins)
+        elif fn == "fdtd::nf2ff_2d":
+            want = fd2_nf2ff(f2n, ins, PG)
+        else:
+            want = fd2_eval(fn, ins, GLIBC_P, C)
         if want is None:
             errs.append(f"fdtd_2d3d row {n}: no transcription for {fn}")
             continue
@@ -11052,8 +11117,18 @@ def fdtd_2d3d_corrections(root: Path, path: Path):
     def fixes(_rows):
         out = []
         C = golden_consts(root)
-        f2 = Fd2Scripts(root, MPFR_P)
+        f2, f2n, f2p = Fd2Scripts(root, MPFR_P), Fd2Scripts(root, MPFR_P), Fd2Scripts(root, MPFR_P)
+        P = dict(MPFR_P, hypot=lambda x, y: mpfr_ref.cr2("hypot", x, y))
         for fn, cls, ins, outs, _v in sc_lines(path):
+            if fn == "fdtd::nf2ff_2d":
+                want = fd2_nf2ff(f2n, ins, P)
+                if not toks_same(fd2_nf2ff(f2p, ins, P, port=True), want):
+                    continue                                # ADR 0002 row 18's: fdtd_2d3d.adr.tsv maps it
+                old = wave_toks([parse_tok(x) for x in outs.split(" ")])
+                if not toks_same(want, old):
+                    out.append((fn, ins, wire(want), f"oracle {outs[:120]}; correctly rounded primitives give "
+                                                     f"{wire(want)[:60]}"))
+                continue
             if fn == "Fdtd2d::script":
                 want = f2.eval(ins)
                 old = wave_toks([parse_tok(x) for x in outs.split(" ")])

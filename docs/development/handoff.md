@@ -9,13 +9,14 @@ bite is done, the machinery, the scripts and the traps. Delete it once it has se
 
 ## Where it stands
 
-- **Committed through `6ca5ebc`** ("M6 pt1b-1"); part 1b-2 is in the working tree for the user to commit ("m6 1b-2
+- **Committed through `85e3e67`** ("M6 pt1b-2"); part 1c is in the working tree for the user to commit ("m6 1c
   done").
-- **M6 Part 1** (the 2D CPML and `Fdtd2d`, §116–§118) runs in bites: 1a the CPML layer (`src/cpml.cyr`), 1b-1
+- **M6 Part 1** (the 2D CPML and `Fdtd2d`, §116–§119) runs in bites. Done: 1a the CPML layer (`src/cpml.cyr`); 1b-1
   `Fdtd2d` without the CPML (`src/fdtd2d.cyr`; its scripts `Fdtd2d::script` in `fdtd_2d3d.tsv`, replayed by
-  validate.py's `Fd2Scripts` in pure Python, no NumPy on the host) and 1b-2 the CPML attached (the y-strips packed,
-  the x-strips scalar: the CPML step 5.7–6.2× Rust's) are done; next 1c `nf2ff_2d`
-  (`_bj_nf_core` with the rotation (1, 0)), 1d the JSON of `CpmlParams` and `Mode2d`. Part 2 is the 3D grid, Part 3
+  validate.py's `Fd2Scripts` in pure Python, no NumPy on the host); 1b-2 the CPML attached (the y-strips packed, the
+  x-strips scalar: the CPML step 5.7–6.2× Rust's); 1c `nf2ff_2d` (on the phasor form's core with the rotation (1, 0),
+  `src/nf2ff.cyr` after `src/fdtd2d.cyr` in the bundle; its edge rows mapped in `fdtd_2d3d.adr.tsv`). Next: 1d the
+  JSON of `CpmlParams` and `Mode2d` (src/json.cyr, as M5 part 1f's). Part 2 is the 3D grid, Part 3
   `compute.rs`, then the range-edge review (the per-cell rule for the 2D and 3D updates and the CPML).
 - **M6's corpus** is `tests/golden/fdtd_2d3d.tsv` (`scripts/oracle/src/m_fdtd_2d3d.rs`, which imports `m_fdtd`'s
   `u`, `seq`, `res_toks`, `digest` and `dbg_*`), checked by validate.py's `validate_fdtd_2d3d` (Rust's chain on

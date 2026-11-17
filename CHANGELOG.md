@@ -527,6 +527,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
   `tests/fdtd2d.tcyr` ports `cpml_tests`' reflection, energy, long-run, profile, thickness and conductor-slab tests and
   the main module's two CPML tests (72 assertions). Bench twin: `fdtd/2d_step_100x100_tm_cpml10` 117–127 µs (5.7–6.2×
   Rust's 20.47 µs; wholly scalar corrections first took 189 µs).
+- **Cyrius port, M6 part 1c — the snapshot NF2FF** (`src/nf2ff.cyr`): `bj_nf2ff_2d`, the TM transform of one
+  BjFdtd2d snapshot on the phasor form's core (the rotation (1, 0); Rust's checks and texts, the TM check first; the
+  fields' length checks gone with the fixed arrays, ADR 0002 row 2 amended), its range edges the core's (ADR 0002 row
+  18 amended, see Fixed). `src/nf2ff.cyr` now follows `src/fdtd2d.cyr` in the bundle. `fdtd_2d3d.tsv` grows by 110
+  rows (953); `fdtd_2d3d.cr.tsv` corrects 14 in all, and `fdtd_2d3d.adr.tsv` maps 12 to row 18. `tests/nf2ff.tcyr`
+  ports fdtd.rs's six snapshot tests (35 assertions). Bench twin: `fdtd/nf2ff_2d_80x80_180` 1.59–1.60 ms (8.2×
+  Rust's 193.01 µs; about 30 ns a contour sample and angle, as the phasor form's).
 
 ### Fixed
 
@@ -1084,6 +1091,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
   transform runs with an unbounded exponent where Rust's chain leaves the range. Cost: the 80 × 80, 180-angle transform
   1.49–1.52 → 1.60–1.62 ms (1.07×, the per-sample check); the wholly unbounded path, taken only at an edge, 16.2 ms
   (`port-parity.md` §114).
+- **fdtd** (ADR 0002 row 18 amended, M6 part 1c): `nf2ff_2d` gave NaN patterns for a frequency past DBL_MAX/2π
+  (Rust's 2π·f overflowed: f = DBL_MAX), 0 or imprecise ones where k = 2πf/c fell below 2^-1022 (f under about
+  10⁻³⁰⁰ Hz), and the phasor form's other edges (sources of 10⁻³⁰⁰ and 10⁻³¹⁰, dx of 10⁻³¹⁰). It runs on the phasor
+  form's core, whose range edges hold for it: k to 53 bits from the double frequency, the transform with an unbounded
+  exponent where Rust's chain leaves the range (`port-parity.md` §119).
 
 ### Performance
 

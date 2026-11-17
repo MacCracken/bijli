@@ -49,10 +49,10 @@ PENDING_MODULES = {
 # problem (drop it from the list).
 IN_PROGRESS = {
     # M5 Part 1 ported the 1D grid, the sources, the media, the utilities, NF2FF's phasor form and their JSON; M6
-    # part 1a the CPML layer (CpmlParams, Cpml), 1b-1 and 1b-2 Fdtd2d and Mode2d. nf2ff_2d, the JSON of CpmlParams and
-    # Mode2d, and 3D follow.
+    # part 1a the CPML layer (CpmlParams, Cpml), 1b-1 and 1b-2 Fdtd2d and Mode2d, 1c nf2ff_2d. The JSON of CpmlParams
+    # and Mode2d, and 3D, follow.
     "fdtd": ("M5–M6", {
-        "Fdtd3d", "nf2ff_2d", "Fdtd3d::new", "Fdtd3d::idx",
+        "Fdtd3d", "Fdtd3d::new", "Fdtd3d::idx",
         "Fdtd3d::set_permittivity", "Fdtd3d::set_permeability", "Fdtd3d::set_conductivity", "Fdtd3d::set_material",
         "Fdtd3d::add_source_ez", "Fdtd3d::try_enable_cpml", "Fdtd3d::try_enable_cpml_with", "Fdtd3d::disable_cpml",
         "Fdtd3d::cpml", "Fdtd3d::step_once", "Fdtd3d::run", "Fdtd3d::time", "Fdtd3d::total_energy",
