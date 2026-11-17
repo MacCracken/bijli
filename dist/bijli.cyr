@@ -34713,6 +34713,487 @@ public fn bj_nf2ff_2d_phasor(ez: *BjCwAccumulator, hx: *BjCwAccumulator, hy: *Bj
     return Ok(0);
 }
 
+# --- cpml.cyr ---
+
+# cpml.cyr — fdtd.rs's convolutional PML (M6 part 1a): `CpmlParams`, the grading of an absorbing layer, and `Cpml`,
+# the layer itself, Roden & Gedney's stretched-coordinate PML with recursive convolution (Taflove & Hagness, 3rd ed.,
+# §7.9–7.11). Inside the layer each spatial derivative ∂/∂u normal to it becomes (1/κ_u)·∂/∂u + Ψ_u, with
+#
+#   Ψ_u ← b_u·Ψ_u + c_u·∂/∂u,  b = exp(−(σ/κ + α)·Δt/ε₀),  c = σ·(b − 1)/(κ·(σ + κα)),
+#
+# and with ρ ∈ (0, 1] the depth into the layer (1 at the outer wall), σ(ρ) = σ_max·ρ^m, σ_max = sigma_ratio·σ_opt,
+# σ_opt = 0.8·(m + 1)/(η₀·Δx), κ(ρ) = 1 + (κ_max − 1)·ρ^m and α(ρ) = α_max·(1 − ρ) (the complex-frequency shift).
+# The profiles b, c and 1/κ − 1 are sampled at the integer nodes l cells from the wall and at the half nodes l + ½
+# cells from it, l = 0..t; the 2D grid's strip corrections read them (src/fdtd2d.cyr). Ψ is stored only inside the
+# PML, the four edge strips of a 2D grid. The powf and the exp are correctly rounded (src/crmath.cyr). The file is
+# time-domain only; bijli's one harmonic convention, e^{+jωt}, is stated in src/complex.cyr's header.
+
+private
+
+var _BJ_CPML_INF: f64 = 0x7FF0000000000000;
+# The nodes required between opposite layers: a grid needs 2·thickness + 3 ≤ its smallest dimension.
+var _BJ_CPML_MIN_INTERIOR = 3;
+# freelist's largest request, 2 GiB: the six profiles' block caps the thickness at 2^31/48 layers.
+var _BJ_CPML_FL_MAX = 2147483648;
+
+# A word as a *f64 (the typed return keeps the binding typed).
+#must_use
+fn _bj_cpml_f64p(a): *f64 {
+    return a;
+}
+
+# 1 when a ≥ b as usize words (a negative word is past 2^63).
+#must_use
+fn _bj_cpml_uge(a, b): i64 {
+    if ((a < 0) == (b < 0)) {
+        if (a >= b) { return 1; }
+        return 0;
+    }
+    if (a < 0) { return 1; }
+    return 0;
+}
+
+# The usize product a·b into *out: 1, or 0 when it overflows 64 bits (Rust's `checked_mul` None).
+fn _bj_cpml_umul(a, b, out: *i64): i64 {
+    var ah = a >> 32;
+    var al = a & 0xFFFFFFFF;
+    var bh = b >> 32;
+    var bl = b & 0xFFFFFFFF;
+    if (ah != 0 && bh != 0) { return 0; }
+    var cross = ah * bl + al * bh;
+    if ((cross >> 32) != 0) { return 0; }
+    var lo = al * bl;
+    var hi = cross << 32;
+    var s = lo + hi;
+    if (_bj_cpml_uge(s, lo) == 0) { return 0; }
+    out[0] = s;
+    return 1;
+}
+
+# 1 when a CPML of `thickness` cells a side fits a grid whose smallest dimension is min_dim nodes: thickness ≥ 1 and
+# 2·thickness + 3 ≤ min_dim, the sum checked against overflow. Public for src/fdtd2d.cyr and src/fdtd3d.cyr. Mirrors
+# fdtd.rs's `cpml_fits`.
+#must_use
+public fn _bj_cpml_fits(thickness, min_dim): i64 {
+    if (thickness == 0) { return 0; }
+    var t2: i64[1];
+    if (_bj_cpml_umul(thickness, 2, &t2) == 0) { return 0; }
+    var need = t2[0] + _BJ_CPML_MIN_INTERIOR;
+    if (_bj_cpml_uge(need, t2[0]) == 0) { return 0; }
+    return _bj_cpml_uge(min_dim, need);
+}
+
+# A CPML layer's grading: `thickness` PML cells a side (≥ 1, typically 8–20), the polynomial grading order m
+# (finite, ≥ 1; typically 3–4), sigma_ratio = σ_max/σ_opt (finite, > 0; typically 0.7–1.5), kappa_max = κ_max
+# (finite, ≥ 1) and alpha_max = α_max in S/m (finite, ≥ 0). The classic grading (m = 3, σ_max = σ_opt, κ_max = 1,
+# α_max = 0) absorbs propagating waves over a wide range of incidence (about −88 dB for a 10-cell layer around a 2D
+# point source, −80 dB in 3D); κ_max of 5–15 and an α_max absorb evanescent and grazing fields better, α_max =
+# 2π·ε₀·f_c acting only near and below f_c. σ_opt assumes vacuum: scale sigma_ratio by 1/√(ε_r·μ_r) for a filled
+# layer. Mirrors `CpmlParams`.
+public struct BjCpmlParams {
+    thickness;
+    grading_order: f64;
+    sigma_ratio: f64;
+    kappa_max: f64;
+    alpha_max: f64;
+}
+
+# The classic grading for a layer `thickness` cells thick: m = 3, σ_max = σ_opt, κ_max = 1, α_max = 0. Mirrors
+# `CpmlParams::new`.
+#must_use
+public fn BjCpmlParams_new(thickness): BjCpmlParams {
+    var p: BjCpmlParams;
+    p.thickness = thickness;
+    p.grading_order = 3.0;
+    p.sigma_ratio = 1.0;
+    p.kappa_max = 1.0;
+    p.alpha_max = 0.0;
+    return p;
+}
+
+# Records InvalidParameter "{name} must be finite and {rule}, got {x}"; returns its code.
+fn _bj_cpml_bad_f(name, rule, x: f64): i64 {
+    var t = _bj_err_reason(BJ_ERR_INVALID_PARAMETER);
+    _bj_tx_cstr(t, name);
+    _bj_tx_cstr(t, " must be finite and ");
+    _bj_tx_cstr(t, rule);
+    _bj_tx_cstr(t, ", got ");
+    _bj_fmt_f64_display(t, x);
+    return BJ_ERR_INVALID_PARAMETER;
+}
+
+# 0 when every parameter is finite and in range, else InvalidParameter recorded (Rust's texts, in Rust's order) and
+# its code. Mirrors `CpmlParams::validate`.
+fn _bj_cpml_params_validate(p: *BjCpmlParams): i64 {
+    if (p.thickness == 0) {
+        _bj_tx_cstr(_bj_err_reason(BJ_ERR_INVALID_PARAMETER), "CPML thickness must be at least 1 cell");
+        return BJ_ERR_INVALID_PARAMETER;
+    }
+    var m: f64 = p.grading_order;
+    if (!(m >= 1.0 && m < _BJ_CPML_INF)) { return _bj_cpml_bad_f("CPML grading order", "≥ 1", m); }
+    var sr: f64 = p.sigma_ratio;
+    if (!(sr > 0.0 && sr < _BJ_CPML_INF)) { return _bj_cpml_bad_f("CPML sigma_ratio", "> 0", sr); }
+    var km: f64 = p.kappa_max;
+    if (!(km >= 1.0 && km < _BJ_CPML_INF)) { return _bj_cpml_bad_f("CPML kappa_max", "≥ 1", km); }
+    var am: f64 = p.alpha_max;
+    if (!(am >= 0.0 && am < _BJ_CPML_INF)) { return _bj_cpml_bad_f("CPML alpha_max", "≥ 0", am); }
+    return 0;
+}
+
+# A convolutional PML layer (the file comment). `thickness` is the cells a side; grading_order, sigma_max (S/m),
+# kappa_max and alpha_max (S/m) are read through the accessors. b_node, c_node and km1_node hold b, c and 1/κ − 1 at
+# the integer nodes l cells from the outer wall (l = 0 is the wall node), b_half, c_half and km1_half at l + ½ cells,
+# each the address of `prof_n` f64 (thickness, or 0 for the inert layer of invalid input), all six in one freelist
+# block at `prof_block`. nx × ny is the grid the Ψ fields are allocated for (0 × 0 unattached): psi_fx_y and psi_fz_y
+# (Ψ of ∂f_z/∂y in the f_x update and of ∂f_x/∂y in the f_z update, the y-strips, index (side·t + l)·nx + x) hold
+# psi_x_len f64 each, psi_fy_x and psi_fz_x (Ψ of ∂f_z/∂x in the f_y update and of ∂f_y/∂x in the f_z update, the
+# x-strips, index y·2t + side·t + l) psi_y_len each, all four in one anonymous mapping of psi_bytes (0 when none).
+# Give it back with BjCpml_free. Mirrors `Cpml`.
+public struct BjCpml {
+    thickness;
+    grading_order: f64;
+    sigma_max: f64;
+    kappa_max: f64;
+    alpha_max: f64;
+    b_node;
+    c_node;
+    km1_node;
+    b_half;
+    c_half;
+    km1_half;
+    prof_n;
+    prof_block;
+    nx;
+    ny;
+    psi_fx_y;
+    psi_fz_y;
+    psi_fy_x;
+    psi_fz_x;
+    psi_x_len;
+    psi_y_len;
+    psi_bytes;
+}
+
+# An unattached layer of params' grading with sigma_max into *out, its profiles the block `prof` of prof_n layers (0
+# and 0: the inert layer). Mirrors `Cpml::from_profiles`.
+fn _bj_cpml_from(params: *BjCpmlParams, sigma_max: f64, prof, prof_n, out: *BjCpml) {
+    out.thickness = params.thickness;
+    out.grading_order = params.grading_order;
+    out.sigma_max = sigma_max;
+    out.kappa_max = params.kappa_max;
+    out.alpha_max = params.alpha_max;
+    out.prof_block = prof;
+    out.prof_n = prof_n;
+    out.b_node = 0;
+    out.c_node = 0;
+    out.km1_node = 0;
+    out.b_half = 0;
+    out.c_half = 0;
+    out.km1_half = 0;
+    if (prof != 0) {
+        out.b_node = prof;
+        out.c_node = prof + prof_n * 8;
+        out.km1_node = prof + 2 * prof_n * 8;
+        out.b_half = prof + 3 * prof_n * 8;
+        out.c_half = prof + 4 * prof_n * 8;
+        out.km1_half = prof + 5 * prof_n * 8;
+    }
+    out.nx = 0;
+    out.ny = 0;
+    out.psi_fx_y = 0;
+    out.psi_fz_y = 0;
+    out.psi_fy_x = 0;
+    out.psi_fz_x = 0;
+    out.psi_x_len = 0;
+    out.psi_y_len = 0;
+    out.psi_bytes = 0;
+    return 0;
+}
+
+# The recursive-convolution coefficients (b, c, 1/κ − 1) at depth rho ∈ [0, 1], in Rust's order of operations:
+# grade = ρ^m, σ = σ_max·grade, κ = 1 + (κ_max − 1)·grade, α = α_max·(1 − ρ), b = e^((−(σ/κ + α)·Δt)/ε₀), and c =
+# σ·(b − 1)/(κ·(σ + κα)) where σ and that denominator are positive, else 0. Mirrors fdtd.rs's `cpml_coefficients`.
+#must_use
+fn _bj_cpml_coefficients(rho: f64, params: *BjCpmlParams, sigma_max: f64, dt: f64): (f64, f64, f64) {
+    var grade: f64 = _bj_powf(rho, params.grading_order);
+    var sigma: f64 = sigma_max * grade;
+    var km: f64 = params.kappa_max;
+    var kd: f64 = km - 1.0;
+    var kg: f64 = kd * grade;
+    var kappa: f64 = 1.0 + kg;
+    var omr: f64 = 1.0 - rho;
+    var alpha: f64 = params.alpha_max * omr;
+    var sk: f64 = sigma / kappa;
+    var ska: f64 = sk + alpha;
+    var nsk: f64 = -ska;
+    var arg: f64 = nsk * dt;
+    var x: f64 = arg / BJ_EPSILON_0;
+    var b: f64 = _bj_exp(x);
+    var ka: f64 = kappa * alpha;
+    var sa: f64 = sigma + ka;
+    var denom: f64 = kappa * sa;
+    var c: f64 = 0.0;
+    if (sigma > 0.0 && denom > 0.0) {
+        var bm1: f64 = b - 1.0;
+        var num: f64 = sigma * bm1;
+        c = num / denom;
+    }
+    var ik: f64 = 1.0 / kappa;
+    var km1: f64 = ik - 1.0;
+    return (b, c, km1);
+}
+
+# The profiles of layers l = 0..t, located l + offset cells from the outer wall (depth ρ = (t − l − offset)/t), into
+# the three rows of t f64 at b, c and km1. Mirrors `Profile::sample`'s loop.
+fn _bj_cpml_sample(b: *f64, c: *f64, km1: *f64, t, offset: f64, params: *BjCpmlParams, sigma_max: f64, dt: f64) {
+    var tf: f64 = f64_from(t);
+    for (var l = 0; l < t; l = l + 1) {
+        var lf: f64 = f64_from(l);
+        var d: f64 = tf - lf;
+        var e: f64 = d - offset;
+        var rho: f64 = e / tf;
+        var bv, cv, kv = _bj_cpml_coefficients(rho, params, sigma_max, dt);
+        b[l] = bv;
+        c[l] = cv;
+        km1[l] = kv;
+    }
+    return 0;
+}
+
+# A layer with params' grading for a grid of spacing dx and step dt into *out (unattached): Ok(0), or with out
+# untouched Err(InvalidParameter) — a parameter out of range (Rust's texts and order, `CpmlParams`), dx or dt not
+# finite and positive, "cannot allocate {t} grid values" where the profiles can't be had, or a coefficient not
+# finite. σ_max = sigma_ratio·0.8·(m + 1)/(η₀·dx), η₀ = μ₀·c. Give it back with BjCpml_free. Mirrors
+# `Cpml::with_params`.
+#must_use
+public fn BjCpml_with_params(params: *BjCpmlParams, dx: f64, dt: f64, out: *BjCpml): Result {
+    var e = _bj_cpml_params_validate(params);
+    if (e != 0) { return Err(e); }
+    if (!(dx > 0.0 && dx < _BJ_CPML_INF)) {
+        var t1 = _bj_err_reason(BJ_ERR_INVALID_PARAMETER);
+        _bj_tx_cstr(t1, "CPML dx must be finite and positive, got ");
+        _bj_fmt_f64_display(t1, dx);
+        return Err(BJ_ERR_INVALID_PARAMETER);
+    }
+    if (!(dt > 0.0 && dt < _BJ_CPML_INF)) {
+        var t2 = _bj_err_reason(BJ_ERR_INVALID_PARAMETER);
+        _bj_tx_cstr(t2, "CPML dt must be finite and positive, got ");
+        _bj_fmt_f64_display(t2, dt);
+        return Err(BJ_ERR_INVALID_PARAMETER);
+    }
+    var t = params.thickness;
+    var m: f64 = params.grading_order;
+    var mu0: f64 = BJ_MU_0;
+    var eta0: f64 = mu0 * BJ_SPEED_OF_LIGHT;
+    var s8: f64 = params.sigma_ratio * 0.8;
+    var m1: f64 = m + 1.0;
+    var sn: f64 = s8 * m1;
+    var sd: f64 = eta0 * dx;
+    var sigma_max: f64 = sn / sd;
+    var prof = 0;
+    if (t > 0 && t <= _BJ_CPML_FL_MAX / 48) { prof = fl_alloc(t * 48); }
+    if (prof == 0) {
+        var t3 = _bj_err_reason(BJ_ERR_INVALID_PARAMETER);
+        _bj_tx_cstr(t3, "cannot allocate ");
+        _bj_tx_u64(t3, t);
+        _bj_tx_cstr(t3, " grid values");
+        return Err(BJ_ERR_INVALID_PARAMETER);
+    }
+    var pb: *f64 = _bj_cpml_f64p(prof);
+    _bj_cpml_sample(_bj_cpml_f64p(prof), _bj_cpml_f64p(prof + t * 8), _bj_cpml_f64p(prof + 2 * t * 8), t, 0.0,
+      params, sigma_max, dt);
+    _bj_cpml_sample(_bj_cpml_f64p(prof + 3 * t * 8), _bj_cpml_f64p(prof + 4 * t * 8), _bj_cpml_f64p(prof + 5 * t * 8),
+      t, 0.5, params, sigma_max, dt);
+    var fin = 1;
+    var zs: f64 = sigma_max * 0.0;
+    if (zs != 0.0) { fin = 0; }
+    for (var i = 0; i < 6 * t; i = i + 1) {
+        var v: f64 = pb[i];
+        var z: f64 = v * 0.0;
+        if (z != 0.0) { fin = 0; }
+    }
+    if (fin == 0) {
+        fl_free(prof);
+        var t4 = _bj_err_reason(BJ_ERR_INVALID_PARAMETER);
+        _bj_tx_cstr(t4, "CPML coefficients are not finite for dx = ");
+        _bj_fmt_f64_display(t4, dx);
+        _bj_tx_cstr(t4, ", dt = ");
+        _bj_fmt_f64_display(t4, dt);
+        return Err(BJ_ERR_INVALID_PARAMETER);
+    }
+    if (_bj_log_on(4) == 1) {
+        var lb[256];
+        var lt[24];
+        _bj_tx_init(&lt, &lb, 256);
+        _bj_tx_cstr(&lt, "CPML profile computed thickness=");
+        _bj_tx_u64(&lt, t);
+        _bj_tx_cstr(&lt, " grading_order=");
+        _bj_fmt_f64_debug(&lt, m);
+        _bj_tx_cstr(&lt, " sigma_max=");
+        _bj_fmt_f64_debug(&lt, sigma_max);
+        _bj_tx_cstr(&lt, " kappa_max=");
+        _bj_fmt_f64_debug(&lt, params.kappa_max);
+        _bj_tx_cstr(&lt, " alpha_max=");
+        _bj_fmt_f64_debug(&lt, params.alpha_max);
+        _bj_log_text(4, &lt);
+    }
+    _bj_cpml_from(params, sigma_max, prof, t, out);
+    return Ok(0);
+}
+
+# A layer with the classic grading (BjCpmlParams_new) into *out. Invalid input (zero thickness, dx or dt not finite
+# and positive) logs a warning and gives an inert layer that can never be attached; BjCpml_with_params returns the
+# error instead. Give it back with BjCpml_free. Mirrors `Cpml::new`.
+public fn BjCpml_new(thickness, dx: f64, dt: f64, out: *BjCpml): i64 {
+    var p: BjCpmlParams = BjCpmlParams_new(thickness);
+    var t, v = BjCpml_with_params(&p, dx, dt, out);
+    if (is_err_result(t) == 1) {
+        if (_bj_log_on(2) == 1) {
+            var lb[512];
+            var lt[24];
+            _bj_tx_init(&lt, &lb, 512);
+            _bj_tx_cstr(&lt, "invalid CPML parameters; layer is inert thickness=");
+            _bj_tx_u64(&lt, thickness);
+            _bj_tx_cstr(&lt, " dx=");
+            _bj_fmt_f64_debug(&lt, dx);
+            _bj_tx_cstr(&lt, " dt=");
+            _bj_fmt_f64_debug(&lt, dt);
+            _bj_tx_cstr(&lt, " error=");
+            _bj_tx_cstr(&lt, bj_last_error_display());
+            _bj_log_text(2, &lt);
+        }
+        _bj_cpml_from(&p, 0.0, 0, 0, out);
+    }
+    return 0;
+}
+
+# Gives the Ψ mapping back, unattached (0 × 0, every Ψ empty).
+fn _bj_cpml_detach(c: *BjCpml) {
+    if (c.psi_bytes > 0) { cyr_munmap(c.psi_fx_y, c.psi_bytes); }
+    c.psi_fx_y = 0;
+    c.psi_fz_y = 0;
+    c.psi_fy_x = 0;
+    c.psi_fz_x = 0;
+    c.psi_x_len = 0;
+    c.psi_y_len = 0;
+    c.psi_bytes = 0;
+    c.nx = 0;
+    c.ny = 0;
+    return 0;
+}
+
+# 1 when the profiles and Ψ storage are consistent with an nx × ny grid: the layer fits it, is attached to it, has its
+# profiles (not the inert layer), and its Ψ fields have 2·thickness·nx and 2·thickness·ny cells. The strip updates
+# rely on it (it bounds every index they use). Public for src/fdtd2d.cyr and tests/cpml.tcyr. Mirrors
+# `Cpml::is_attached_to`.
+#must_use
+public fn _bj_cpml_is_attached_to(c: *BjCpml, nx, ny): i64 {
+    var t = c.thickness;
+    var md = nx;
+    if (_bj_cpml_uge(nx, ny) == 1) { md = ny; }
+    if (_bj_cpml_fits(t, md) == 0 || c.nx != nx || c.ny != ny || c.prof_n != t || c.prof_block == 0) { return 0; }
+    var t2: i64[1];
+    var sx: i64[1];
+    var sy: i64[1];
+    if (_bj_cpml_umul(t, 2, &t2) == 0) { return 0; }
+    if (_bj_cpml_umul(t2[0], nx, &sx) == 0 || _bj_cpml_umul(t2[0], ny, &sy) == 0) { return 0; }
+    if (c.psi_x_len == sx[0] && c.psi_y_len == sy[0]) { return 1; }
+    return 0;
+}
+
+impl BjCpml {
+    # Allocates (and zeroes) the Ψ fields for an nx × ny 2D grid, in place of any before: 2·thickness rows of nx cells
+    # and 2·thickness columns of ny cells a field. Where the sizes overflow or can't be had, logs a warning and leaves
+    # the layer unattached. (A 3D grid keeps its own face-slab storage.) Mirrors `Cpml::attach`.
+    public fn attach(self, nx, ny): i64 {
+        _bj_cpml_detach(self);
+        var t2: i64[1];
+        var sx: i64[1];
+        var sy: i64[1];
+        var ok = _bj_cpml_umul(self.thickness, 2, &t2);
+        if (ok == 1) { ok = _bj_cpml_umul(t2[0], nx, &sx); }
+        if (ok == 1) { ok = _bj_cpml_umul(t2[0], ny, &sy); }
+        var tot: i64[1];
+        if (ok == 1) { ok = _bj_cpml_umul(sx[0] + sy[0], 16, &tot); }
+        if (ok == 1 && (sx[0] < 0 || sy[0] < 0 || _bj_cpml_uge(sx[0] + sy[0], sx[0]) == 0)) { ok = 0; }
+        var map = 0;
+        if (ok == 1 && tot[0] > 0) { map = mmap_anon(tot[0]); }
+        if (ok == 1 && tot[0] == 0) { ok = 2; }
+        if (ok == 0 || (ok == 1 && map == 0)) {
+            if (_bj_log_on(2) == 1) {
+                var lb[256];
+                var lt[24];
+                _bj_tx_init(&lt, &lb, 256);
+                _bj_tx_cstr(&lt, "CPML auxiliary fields could not be allocated; layer left unattached thickness=");
+                _bj_tx_u64(&lt, self.thickness);
+                _bj_tx_cstr(&lt, " nx=");
+                _bj_tx_u64(&lt, nx);
+                _bj_tx_cstr(&lt, " ny=");
+                _bj_tx_u64(&lt, ny);
+                _bj_log_text(2, &lt);
+            }
+            return 0;
+        }
+        var x = sx[0];
+        var y = sy[0];
+        if (map != 0) {
+            self.psi_fx_y = map;
+            self.psi_fz_y = map + x * 8;
+            self.psi_fy_x = map + 2 * x * 8;
+            self.psi_fz_x = map + 2 * x * 8 + y * 8;
+            self.psi_bytes = tot[0];
+        }
+        self.psi_x_len = x;
+        self.psi_y_len = y;
+        self.nx = nx;
+        self.ny = ny;
+        return 0;
+    }
+
+    # The maximum PML conductivity σ_max (S/m). Mirrors `Cpml::sigma_max`.
+    #must_use
+    public fn sigma_max(self): f64 {
+        var x: f64 = self.sigma_max;
+        return x;
+    }
+
+    # The maximum coordinate stretching κ_max. Mirrors `Cpml::kappa_max`.
+    #must_use
+    public fn kappa_max(self): f64 {
+        var x: f64 = self.kappa_max;
+        return x;
+    }
+
+    # The maximum CFS shift α_max (S/m). Mirrors `Cpml::alpha_max`.
+    #must_use
+    public fn alpha_max(self): f64 {
+        var x: f64 = self.alpha_max;
+        return x;
+    }
+
+    # The polynomial grading order m. Mirrors `Cpml::grading_order`.
+    #must_use
+    public fn grading_order(self): f64 {
+        var x: f64 = self.grading_order;
+        return x;
+    }
+}
+
+# Gives a layer's profiles and Ψ back and empties it (no profiles, unattached); a second call does nothing.
+public fn BjCpml_free(c: *BjCpml): i64 {
+    _bj_cpml_detach(c);
+    if (c.prof_block != 0) { fl_free(c.prof_block); }
+    c.prof_block = 0;
+    c.prof_n = 0;
+    c.b_node = 0;
+    c.c_node = 0;
+    c.km1_node = 0;
+    c.b_half = 0;
+    c.c_half = 0;
+    c.km1_half = 0;
+    return 0;
+}
+
 # --- json.cyr ---
 
 # json.cyr — JSON for the serializable types: BjComplex (Rust hisab 1.4.0's `Complex`), BjFieldVector,

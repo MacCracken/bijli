@@ -6461,3 +6461,50 @@ eigenmode search (`dft_magnitude`'s recurrence and magnitude, `find_eigenmodes`'
   rows; all 475 digests equal on three targets). The gate is clean. **M5 is done.** Next: M6, the FDTD 2D/3D grids
   (`Fdtd2d`, `Fdtd3d`, the CPML, `nf2ff_2d`, `Mode2d`, `CpmlParams`), under the same per-cell rule; `fdtd.tsv` (38.8
   MB of the 48 MiB cap) will need splitting.
+
+## 116. M6 part 1a: the CPML layer (2026-11-16)
+
+- **The bites of M6 Part 1** (the 2D CPML and `Fdtd2d`, plan §4.1): 1a the layer (`CpmlParams`, `Cpml`), 1b-1 `Fdtd2d`
+  without the CPML (TM and TE, the walls, the materials, `run`, the energy), 1b-2 the CPML attached
+  (`try_enable_cpml*`, the strip corrections), 1c `nf2ff_2d`, 1d the JSON of `CpmlParams` and `Mode2d`. Part 2 is the
+  3D grid and its CPML, Part 3 `compute.rs`, and the range-edge review follows, as M5's Part 2, under the user's
+  answers of 2026-11-15 (plan §0.1: the per-cell rule for the updates and the CPML).
+- **`src/cpml.cyr`** (a private file; `BjCpmlParams`, `BjCpml`): `BjCpmlParams_new` (the classic grading, by value),
+  `BjCpml_with_params` (Rust's validation and texts in Rust's order, σ_max = sigma_ratio·0.8·(m + 1)/(η₀·dx), the
+  profiles sampled as `Profile::sample` and `cpml_coefficients` on src/crmath.cyr's correctly rounded powf and exp),
+  `BjCpml_new` (the inert layer of invalid input, with Rust's warning), `attach` (the Ψ strips in one anonymous mapping,
+  zeroed, replacing any before; sizes past 2^64 leave it unattached with Rust's warning), the four accessors and
+  `BjCpml_free`. The six profiles share one freelist block; Rust's `Vec`s become addresses with `prof_n` their length
+  (0 for the inert layer). `cpml_fits` and `is_attached_to` are public as `_bj_cpml_fits` and
+  `_bj_cpml_is_attached_to`, for the grids' files and the tests (a private file's helpers can't be reached from
+  another file).
+- **Allocation**: Rust's `try_filled` refuses a profile it can't reserve with InvalidParameter "cannot allocate {t}
+  grid values", which the port keeps, text and code. Where Rust's reservation fails depends on the machine below the
+  capacity overflow at t > 2^60; the port's freelist block caps the six profiles at 2^31 bytes, t ≤ 44,739,242, far
+  past any layer that fits a grid (2t + 3 ≤ min(nx, ny)). `attach` maps 16·(2t·nx + 2t·ny) bytes; the rows keep its
+  sizes small or past 2^64 for the same reason.
+- **The corpus**: `fdtd.tsv` is 38.8 MB of the 48 MiB cap, so M6's rows start a module of their own,
+  **`fdtd_2d3d.tsv`** (`scripts/oracle/src/m_fdtd_2d3d.rs`, which reuses `m_fdtd`'s token and `Debug` helpers;
+  validate.py's `validate_fdtd_2d3d` and `fdtd_2d3d_corrections`; `_par_fdtd_2d3d` in the harness). Part 1a's 528 rows:
+  `CpmlParams::new` (5), `Cpml::with_params` (495: each parameter over the specials and its bound, Rust's order of
+  checks, thicknesses 2^60 + 1 and usize::MAX, the classic grading at 12 thicknesses and each parameter swept alone at
+  the 2D and 3D Courant steps for three dx, the extremes of dx, dt, κ_max, α_max, m and sigma_ratio, and 120 seeded
+  gradings), `Cpml::new` (11) and `Cpml::attach` (17).
+- **validate.py**: Rust's chain on Python's doubles reproduces all 528 rows on glibc's powf and exp; on MPFR's, 9
+  rows change (`fdtd_2d3d.cr.tsv`), each a profile whose b or c a glibc misrounding moved (c = σ(b − 1)/denom carries
+  b's error, cancelled, up to 257 ulps). The harness bounds both functions at 0 ulps against the corrected oracle.
+- **Tests**: `tests/cpml.tcyr` (37 assertions): fdtd.rs's `cpml_kappa_profile` and `cpml_params_validation`
+  (`cpml_profile_is_graded` waits for `try_enable_cpml`, part 1b-2), and `cyrius_cpml_error_records` (each text, Rust's
+  order, the allocation refusal, a σ_max past DBL_MAX) and `cyrius_cpml_layer` (the classic grading, σ_max's bits, the
+  profiles' order, attaching, re-attaching, a grid too small, sizes past 2^64, an empty grid, freeing twice,
+  `cpml_fits`). The ledger: 693 ported, 9 n/a, 156 pending of 858.
+- **Surface parity**: `CpmlParams`, `Cpml` and their eight functions are matched (572 items); the API snapshot gains
+  4 functions (2,120).
+- **Benchmarks**: Rust has no bench of the layer alone (its CPML benches step a grid: part 1b-2). The interleaved
+  A/B against HEAD (two rounds, load 2.7 to 2.9) left every row unchanged: median ratios 0.97 and 1.00 (the extremes,
+  from 0.55 to 1.37, on rows of a few ns or under the second round's noise; no existing path changed).
+- **Result, every target** (x86_64 ELF, x86_64 PE, aarch64): **19 modules, 0 failing; 641,704 ok, 0 failed, 0
+  measured, 0 pending, 119,120 accepted (ADR 01: 40,375; ADR 0002: 78,745)** over 760,824 rows; **all 479 digests
+  equal**. `cpml.tcyr` (37) passes on all three. The gate is clean (no warnings; execution coverage 375 of 375
+  functions); validate.py 760,824 rows, 0 problems; the oracle's `--check` and clippy clean. Next: 1b-1, `Fdtd2d`
+  without the CPML.

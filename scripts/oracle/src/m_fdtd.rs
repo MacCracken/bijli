@@ -93,7 +93,7 @@ enum Op {
     Pulse(usize, usize, f64, f64),
 }
 
-fn u(x: usize) -> Tok {
+pub(crate) fn u(x: usize) -> Tok {
     i(i64::from_ne_bytes(x.to_ne_bytes()))
 }
 
@@ -112,7 +112,7 @@ impl Op {
 
 /// FNV-1a with the harness's v2 mix over the words of xs, every NaN as 0x7ff8000000000000: y = (h ⊕ w)·0x100000001b3,
 /// then h = y ⊕ (y >> 29) with the shift arithmetic (sign-filling), as Cyrius's `>>>` in `_par_dg_step`.
-fn digest(xs: &[f64]) -> i64 {
+pub(crate) fn digest(xs: &[f64]) -> i64 {
     let mut h: u64 = 0xcbf2_9ce4_8422_2325;
     for &x in xs {
         let w = if x.is_nan() { 0x7ff8_0000_0000_0000 } else { x.to_bits() };
@@ -124,7 +124,7 @@ fn digest(xs: &[f64]) -> i64 {
 }
 
 /// The text of field `name` in a `Debug` rendering: a scalar up to the next `, ` or ` }`, or a `[..]` list.
-fn dbg_field<'a>(d: &'a str, name: &str) -> &'a str {
+pub(crate) fn dbg_field<'a>(d: &'a str, name: &str) -> &'a str {
     let key = format!(" {name}: ");
     let at = d.find(&key).unwrap_or_else(|| panic!("no field {name} in the Debug text")) + key.len();
     let rest = &d[at..];
@@ -137,11 +137,11 @@ fn dbg_field<'a>(d: &'a str, name: &str) -> &'a str {
     }
 }
 
-fn dbg_f64(d: &str, name: &str) -> f64 {
+pub(crate) fn dbg_f64(d: &str, name: &str) -> f64 {
     dbg_field(d, name).parse().expect("a Debug f64")
 }
 
-fn dbg_vec(d: &str, name: &str) -> Vec<f64> {
+pub(crate) fn dbg_vec(d: &str, name: &str) -> Vec<f64> {
     let body = dbg_field(d, name);
     if body.is_empty() {
         return Vec::new();
@@ -982,7 +982,7 @@ fn emit_1c(r: &mut Rows) {
 // ── part 1d: the non-uniform grid, the fourth-order derivative, the CW accumulator, the eigenmodes ────────────────
 
 /// A sequence: `v:<len>`, then its values.
-fn seq(xs: &[f64]) -> Vec<Tok> {
+pub(crate) fn seq(xs: &[f64]) -> Vec<Tok> {
     let mut out = vec![Tok::V(xs.len())];
     out.extend(xs.iter().map(|&x| f(x)));
     out
@@ -997,7 +997,7 @@ fn grid_toks(g: &NonUniformGrid) -> Vec<Tok> {
 }
 
 /// A `Result` as its value's tokens, or its error.
-fn res_toks<T>(r: bijli::error::Result<T>, ok: impl Fn(T) -> Vec<Tok>) -> Vec<Tok> {
+pub(crate) fn res_toks<T>(r: bijli::error::Result<T>, ok: impl Fn(T) -> Vec<Tok>) -> Vec<Tok> {
     match r {
         Ok(v) => ok(v),
         Err(e) => vec![err(&e), s(e.to_string())],

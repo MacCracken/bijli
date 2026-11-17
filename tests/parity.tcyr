@@ -4038,6 +4038,75 @@ fn _par_fdtd(fp, fl): i64 {
     return 0;
 }
 
+# ── fdtd_2d3d (M6): the 2D and 3D grids and their CPML ──────────────────────────────────────────────────────────
+
+# A CPML layer's outputs: its thickness, grading order, σ_max, κ_max, α_max, then the six profiles.
+fn _par_cpml_got(c: *BjCpml) {
+    _par_got_i(c.thickness);
+    _par_got_f(c.grading_order());
+    _par_got_f(c.sigma_max());
+    _par_got_f(c.kappa_max());
+    _par_got_f(c.alpha_max());
+    var n = c.prof_n;
+    _par_fu_got_seq(c.b_node, n);
+    _par_fu_got_seq(c.c_node, n);
+    _par_fu_got_seq(c.km1_node, n);
+    _par_fu_got_seq(c.b_half, n);
+    _par_fu_got_seq(c.c_half, n);
+    _par_fu_got_seq(c.km1_half, n);
+    return 0;
+}
+
+# M6 part 1a: CpmlParams::new, Cpml::with_params, Cpml::new and Cpml::attach (tests/golden/fdtd_2d3d.tsv's comment).
+fn _par_fdtd_2d3d(fp, fl): i64 {
+    if (_par_eq(fp, fl, "CpmlParams::new") == 1) {
+        var pn: BjCpmlParams = BjCpmlParams_new(_par_in(0));
+        _par_got_i(pn.thickness);
+        _par_got_f(pn.grading_order);
+        _par_got_f(pn.sigma_ratio);
+        _par_got_f(pn.kappa_max);
+        _par_got_f(pn.alpha_max);
+        return 1;
+    }
+    if (_par_eq(fp, fl, "Cpml::with_params") == 1) {
+        var p: BjCpmlParams = BjCpmlParams_new(_par_in(0));
+        p.grading_order = _par_in(1);
+        p.sigma_ratio = _par_in(2);
+        p.kappa_max = _par_in(3);
+        p.alpha_max = _par_in(4);
+        var dx: f64 = _par_in(5);
+        var dt: f64 = _par_in(6);
+        var c: BjCpml;
+        var t, v = BjCpml_with_params(&p, dx, dt, &c);
+        if (is_err_result(t) == 1) { return _par_got_error(v) + 1; }
+        _par_cpml_got(&c);
+        BjCpml_free(&c);
+        return 1;
+    }
+    var dx2: f64 = _par_in(1);
+    var dt2: f64 = _par_in(2);
+    var cn: BjCpml;
+    BjCpml_new(_par_in(0), dx2, dt2, &cn);
+    if (_par_eq(fp, fl, "Cpml::new") == 1) {
+        _par_cpml_got(&cn);
+        BjCpml_free(&cn);
+        return 1;
+    }
+    if (_par_eq(fp, fl, "Cpml::attach") == 1) {
+        cn.attach(_par_in(3), _par_in(4));
+        _par_got_i(cn.nx);
+        _par_got_i(cn.ny);
+        _par_got_i(cn.psi_x_len);
+        _par_got_i(cn.psi_x_len);
+        _par_got_i(cn.psi_y_len);
+        _par_got_i(cn.psi_y_len);
+        BjCpml_free(&cn);
+        return 1;
+    }
+    BjCpml_free(&cn);
+    return 0;
+}
+
 public fn _par_dispatch(mp, ml, fp, fl): i64 {
     _par_got_n = 0;
     if (_par_eq(mp, ml, "beam") == 1) { return _par_beam(fp, fl); }
@@ -4047,6 +4116,7 @@ public fn _par_dispatch(mp, ml, fp, fl): i64 {
     if (_par_eq(mp, ml, "constants") == 1) { return _par_constants(fp, fl); }
     if (_par_eq(mp, ml, "error") == 1) { return _par_error(fp, fl); }
     if (_par_eq(mp, ml, "fdtd") == 1) { return _par_fdtd(fp, fl); }
+    if (_par_eq(mp, ml, "fdtd_2d3d") == 1) { return _par_fdtd_2d3d(fp, fl); }
     if (_par_eq(mp, ml, "field") == 1) { return _par_field(fp, fl); }
     if (_par_eq(mp, ml, "fmtf") == 1) { return _par_fmtf(fp, fl); }
     if (_par_eq(mp, ml, "json") == 1) { return _par_json(fp, fl); }
@@ -4150,6 +4220,8 @@ public fn _par_c_bound(fp, fl): i64 {
     # fdtd.rs's pulses' exp and sin (M5 part 1b) and the eigenmodes' sin_cos (1d): src/crmath.cyr's correctly rounded
     # primitives; graded's pow (1d).
     if (memeq(fp, "fdtd::", 6) == 1) { return 0; }
+    # The CPML profiles' powf and exp (M6 part 1a): src/crmath.cyr's correctly rounded primitives.
+    if (_par_eq(fp, fl, "Cpml::with_params") == 1 || _par_eq(fp, fl, "Cpml::new") == 1) { return 0; }
     if (_par_eq(fp, fl, "NonUniformGrid::graded") == 1) { return 0; }
     if (_par_eq(fp, fl, "relativity::solve_retarded_time") == 1) { return 0; }
     if (_par_eq(fp, fl, "relativity::lienard_wiechert_fields") == 1) { return 0; }

@@ -1,0 +1,186 @@
+# cpml.tcyr — src/cpml.cyr (M6 part 1a): the CPML layer's grading and profiles.
+#
+# The groups named as rust-old/src/fdtd.rs's `cpml_tests` are those tests, ported assertion for assertion (the ledger
+# matches them by name): the κ profile and the parameter validation. The tests that need a grid (the profile through
+# `try_enable_cpml`, the reflections, the energy) follow with `Fdtd2d` and `Fdtd3d`. The cyrius_* groups pin the
+# error records' text and order, the inert layer, `attach` at its edges, and BjCpml_free. tests/golden/fdtd_2d3d.tsv
+# pins every function against Rust besides.
+
+include "tests/lib.cyr"
+
+var DX: f64 = 0.0001;
+var DT: f64 = 0.0000000000001;
+
+# |a − b| < tol.
+fn near(a: f64, b: f64, tol: f64): i64 {
+    var d: f64 = a - b;
+    var ad: f64 = f64_abs(d);
+    if (ad < tol) { return 1; }
+    return 0;
+}
+
+# 1 when the C strings a and b are equal.
+fn text_is(a, b): i64 {
+    var n = strlen(a);
+    if (n != strlen(b)) { return 0; }
+    return memeq(a, b, n);
+}
+
+# A word as a *f64 (the typed return keeps the binding typed).
+fn f64p(a): *f64 {
+    return a;
+}
+
+# Element i of the f64 array at address a.
+fn at(a, i): f64 {
+    var p: *f64 = f64p(a);
+    var x: f64 = p[i];
+    return x;
+}
+
+# 1 when BjCpml_with_params on p refuses with the InvalidParameter text want (and leaves nothing to free).
+fn refuses(p: *BjCpmlParams, dx: f64, dt: f64, want): i64 {
+    var c: BjCpml;
+    var t, v = BjCpml_with_params(p, dx, dt, &c);
+    if (is_err_result(t) == 0) {
+        BjCpml_free(&c);
+        return 0;
+    }
+    if (v != BJ_ERR_INVALID_PARAMETER) { return 0; }
+    return text_is(bj_last_error_display(), want);
+}
+
+# Runs fdtd.rs's CPML profile tests, then the Cyrius-only checks.
+fn main() {
+    alloc_init();
+
+    test_group("cpml_kappa_profile");
+    var p: BjCpmlParams = BjCpmlParams_new(6);
+    p.kappa_max = 7.0;
+    var ck: BjCpml;
+    var tk, vk = BjCpml_with_params(&p, DX, DT, &ck);
+    assert(is_ok(tk) == 1, "with_params Ok");
+    var k0: f64 = at(ck.km1_node, 0);
+    var want_k0: f64 = 1.0 / 7.0 - 1.0;
+    assert(near(k0, want_k0, 0.000000000001) == 1, "at the wall: 1/κ − 1 = 1/7 − 1");
+    var all = 1;
+    for (var l = 0; l < 6; l = l + 1) {
+        var kh: f64 = at(ck.km1_half, l);
+        if (!(kh < 0.0 && kh > -1.0)) { all = 0; }
+    }
+    assert(all == 1, "every half-node 1/κ − 1 in (−1, 0)");
+    BjCpml_free(&ck);
+
+    test_group("cpml_params_validation");
+    var ok: BjCpmlParams = BjCpmlParams_new(8);
+    var co: BjCpml;
+    var to, vo = BjCpml_with_params(&ok, DX, DT, &co);
+    assert(is_ok(to) == 1, "the classic grading is valid");
+    BjCpml_free(&co);
+    var zero: f64 = 0.0;
+    var nan: f64 = zero / zero;
+    var cn: BjCpml;
+    var tn, vn = BjCpml_with_params(&ok, nan, DT, &cn);
+    assert(is_err_result(tn) == 1, "dx = NaN");
+    var tz, vz = BjCpml_with_params(&ok, DX, 0.0, &cn);
+    assert(is_err_result(tz) == 1, "dt = 0");
+    var p0: BjCpmlParams = BjCpmlParams_new(0);
+    var t0, v0 = BjCpml_with_params(&p0, DX, DT, &cn);
+    assert(is_err_result(t0) == 1, "thickness 0");
+    var bad: BjCpmlParams = BjCpmlParams_new(8);
+    bad.kappa_max = 0.5;
+    var t1, v1 = BjCpml_with_params(&bad, DX, DT, &cn);
+    assert(is_err_result(t1) == 1, "kappa_max 0.5");
+    bad.kappa_max = 1.0;
+    bad.alpha_max = -1.0;
+    var t2, v2 = BjCpml_with_params(&bad, DX, DT, &cn);
+    assert(is_err_result(t2) == 1, "alpha_max −1");
+    bad.alpha_max = 0.0;
+    bad.sigma_ratio = nan;
+    var t3, v3 = BjCpml_with_params(&bad, DX, DT, &cn);
+    assert(is_err_result(t3) == 1, "sigma_ratio NaN");
+    bad.sigma_ratio = 1.0;
+    bad.grading_order = 0.0;
+    var t4, v4 = BjCpml_with_params(&bad, DX, DT, &cn);
+    assert(is_err_result(t4) == 1, "grading order 0");
+    # The infallible constructor degrades to an inert, unattachable layer.
+    var inert: BjCpml;
+    BjCpml_new(8, -1.0, DT, &inert);
+    inert.attach(60, 60);
+    assert(_bj_cpml_is_attached_to(&inert, 60, 60) == 0, "the inert layer never attaches");
+    BjCpml_free(&inert);
+
+    test_group("cyrius_cpml_error_records");
+    var q: BjCpmlParams = BjCpmlParams_new(0);
+    assert(refuses(&q, DX, DT, "invalid parameter: CPML thickness must be at least 1 cell") == 1, "thickness 0");
+    q.thickness = 4;
+    q.grading_order = 0.5;
+    assert(refuses(&q, DX, DT, "invalid parameter: CPML grading order must be finite and ≥ 1, got 0.5") == 1,
+      "the grading order");
+    q.grading_order = 3.0;
+    q.sigma_ratio = 0.0;
+    assert(refuses(&q, DX, DT, "invalid parameter: CPML sigma_ratio must be finite and > 0, got 0") == 1,
+      "sigma_ratio");
+    q.sigma_ratio = 1.0;
+    var inf: f64 = 1.0 / zero;
+    q.kappa_max = inf;
+    assert(refuses(&q, DX, DT, "invalid parameter: CPML kappa_max must be finite and ≥ 1, got inf") == 1,
+      "kappa_max ∞");
+    q.kappa_max = 1.0;
+    q.alpha_max = nan;
+    assert(refuses(&q, DX, DT, "invalid parameter: CPML alpha_max must be finite and ≥ 0, got NaN") == 1,
+      "alpha_max NaN");
+    q.alpha_max = 0.0;
+    assert(refuses(&q, -0.5, DT, "invalid parameter: CPML dx must be finite and positive, got -0.5") == 1, "dx");
+    assert(refuses(&q, DX, inf, "invalid parameter: CPML dt must be finite and positive, got inf") == 1, "dt");
+    # The parameters are checked before dx and dt, and both before the profiles.
+    q.thickness = 0;
+    assert(refuses(&q, nan, nan, "invalid parameter: CPML thickness must be at least 1 cell") == 1, "Rust's order");
+    q.thickness = 0 - 1;
+    assert(refuses(&q, DX, DT, "invalid parameter: cannot allocate 18446744073709551615 grid values") == 1,
+      "a thickness past any allocation");
+    q.thickness = 3;
+    q.sigma_ratio = _bj_from_bits(0x7fefffffffffffff);
+    var wnf = "invalid parameter: CPML coefficients are not finite for dx = 0.0001, dt = 0.0000000000001";
+    assert(refuses(&q, DX, DT, wnf) == 1, "σ_max past DBL_MAX: sigma_ratio = DBL_MAX");
+
+    test_group("cyrius_cpml_layer");
+    var pn: BjCpmlParams = BjCpmlParams_new(12);
+    assert(pn.thickness == 12 && pn.grading_order == 3.0 && pn.sigma_ratio == 1.0, "new's thickness, m, ratio");
+    assert(pn.kappa_max == 1.0 && pn.alpha_max == 0.0, "new's κ_max, α_max: the classic grading");
+    var cl: BjCpml;
+    BjCpml_new(4, DX, DT, &cl);
+    var sm: f64 = cl.sigma_max();
+    var mu0: f64 = BJ_MU_0;
+    var eta0: f64 = mu0 * BJ_SPEED_OF_LIGHT;
+    var sopt: f64 = 0.8 * 4.0 / (eta0 * DX);
+    assert(sm == sopt && cl.grading_order() == 3.0, "σ_max = σ_opt for m = 3, the bits");
+    assert(cl.kappa_max() == 1.0 && cl.alpha_max() == 0.0, "the accessors");
+    assert(cl.prof_n == 4 && cl.nx == 0 && cl.psi_bytes == 0, "four layers, unattached");
+    var bw: f64 = at(cl.b_node, 0);
+    var bi: f64 = at(cl.b_node, 3);
+    var cw: f64 = at(cl.c_half, 0);
+    assert(bw > 0.0 && bw < bi && bi < 1.0 && cw < 0.0, "b grows towards the interface, c < 0");
+    cl.attach(11, 20);
+    assert(_bj_cpml_is_attached_to(&cl, 11, 20) == 1 && cl.psi_x_len == 88 && cl.psi_y_len == 160, "11 × 20");
+    assert(_bj_cpml_is_attached_to(&cl, 20, 11) == 0, "not to another grid");
+    var zf: f64 = at(cl.psi_fz_x, 159);
+    assert(zf == 0.0, "Ψ zeroed");
+    cl.attach(10, 20);
+    assert(cl.nx == 10 && _bj_cpml_is_attached_to(&cl, 10, 20) == 0, "attached, but 2·4 + 3 > 10: never usable");
+    cl.attach(0 - 1, 20);
+    assert(cl.nx == 0 && cl.ny == 0 && cl.psi_bytes == 0, "2t·nx past 2^64: left unattached");
+    cl.attach(0, 0);
+    assert(cl.nx == 0 && cl.psi_x_len == 0 && cl.psi_bytes == 0, "a 0 × 0 grid: empty Ψ");
+    BjCpml_free(&cl);
+    assert(cl.prof_n == 0 && cl.prof_block == 0 && cl.b_node == 0, "freed and emptied");
+    BjCpml_free(&cl);
+    assert(_bj_cpml_fits(1, 5) == 1 && _bj_cpml_fits(2, 6) == 0 && _bj_cpml_fits(0, 100) == 0, "cpml_fits");
+    assert(_bj_cpml_fits(0 - 1, 0 - 1) == 0, "2t + 3 past 2^64 never fits");
+
+    return assert_summary();
+}
+
+var exit_code = main();
+if (exit_code > 0) { exit_code = 1; }
+sys_exit_group(exit_code);

@@ -503,6 +503,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
   recorded in §107–§111: `fdtd/step_1000_cells` 2.11 → 6.43 µs (10.3× Rust's), `fdtd/run_100_steps_500_cells` 146 →
   683 µs, `fdtd/find_eigenmodes_4096x256` 8.37 → 10.91 ms. `scripts/bench_record.py`'s `DONE` names M1–M5, so a
   finished milestone's Rust bench without a twin fails `--check`. The roadmap lists the scan's cost as performance work.
+- **Cyrius port, M6 part 1a — the CPML layer** (`src/cpml.cyr`): `BjCpmlParams` (the classic grading by
+  `BjCpmlParams_new`) and `BjCpml`: `BjCpml_with_params` (Rust's checks and texts in Rust's order; σ_max and the b, c
+  and 1/κ − 1 profiles at the integer and half nodes on the correctly rounded powf and exp), `BjCpml_new` (the inert
+  layer of invalid input), `attach` (the 2D Ψ strips in one mapping), the four accessors and `BjCpml_free`. M6's rows
+  start a golden module of their own, `fdtd_2d3d.tsv` (528 rows; `fdtd.tsv` neared the 48 MiB cap), and
+  `fdtd_2d3d.cr.tsv` corrects 9 where glibc's powf or exp misround. `tests/cpml.tcyr` ports `cpml_kappa_profile`
+  and `cpml_params_validation` (37 assertions).
 
 ### Fixed
 

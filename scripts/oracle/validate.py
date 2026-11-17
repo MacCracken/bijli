@@ -10582,6 +10582,133 @@ def fdtd_adr_rows(root: Path, path: Path) -> list:
     return out
 
 
+# ── fdtd_2d3d (M6): fdtd.rs's 2D and 3D grids and their CPML ──────────────────────────────────────────────────────
+# M6 part 1a: the CPML layer's grading and profiles, transcribed from rust-old/src/fdtd.rs in its order of operations
+# on IEEE doubles (Python's floats), the powf and exp from the primitives P: glibc's reproduce the oracle, MPFR's give
+# the corrected oracle the port matches (`fdtd_2d3d.cr.tsv`).
+
+def fd2_i(x: int):
+    """A usize as the golden's signed integer token."""
+    return ("i", x - (1 << 64) if x >= 1 << 63 else x)
+
+
+def cpml_params_err(t, m, sr, km, am):
+    """`CpmlParams::validate`: the error tokens, or None."""
+    if t == 0:
+        return ip_err("CPML thickness must be at least 1 cell")
+    if not (m >= 1.0 and math.isfinite(m)):
+        return ip_err(f"CPML grading order must be finite and ≥ 1, got {rust_display(m)}")
+    if not (sr > 0.0 and math.isfinite(sr)):
+        return ip_err(f"CPML sigma_ratio must be finite and > 0, got {rust_display(sr)}")
+    if not (km >= 1.0 and math.isfinite(km)):
+        return ip_err(f"CPML kappa_max must be finite and ≥ 1, got {rust_display(km)}")
+    if not (am >= 0.0 and math.isfinite(am)):
+        return ip_err(f"CPML alpha_max must be finite and ≥ 0, got {rust_display(am)}")
+    return None
+
+
+def cpml_layer_toks(t, m, sigma_max, km, am, profiles):
+    out = [fd2_i(t), ("f", m), ("f", sigma_max), ("f", km), ("f", am)]
+    for prof in profiles:
+        out += fu_seq_toks(prof)
+    return out
+
+
+def cpml_with_params(t, m, sr, km, am, dx, dt, P, C):
+    """`Cpml::with_params` on the primitives P and the constants C: the layer's tokens or the error's."""
+    e = cpml_params_err(t, m, sr, km, am)
+    if e:
+        return e
+    if not (dx > 0.0 and math.isfinite(dx)):
+        return ip_err(f"CPML dx must be finite and positive, got {rust_display(dx)}")
+    if not (dt > 0.0 and math.isfinite(dt)):
+        return ip_err(f"CPML dt must be finite and positive, got {rust_display(dt)}")
+    eta0 = C["field::MU_0"] * C["field::SPEED_OF_LIGHT"]
+    eps0 = C["field::EPSILON_0"]
+    sigma_max = fdiv(sr * 0.8 * (m + 1.0), eta0 * dx)
+    if t * 8 > (1 << 63) - 1:                      # try_reserve_exact's capacity overflow
+        return ip_err(f"cannot allocate {t} grid values")
+    tf = float(t)
+    node, half = ([], [], []), ([], [], [])
+    for off, prof in ((0.0, node), (0.5, half)):
+        for l in range(t):
+            rho = fdiv((tf - float(l)) - off, tf)
+            grade = P["pow"](rho, m)
+            sigma = sigma_max * grade
+            kappa = 1.0 + (km - 1.0) * grade
+            alpha = am * (1.0 - rho)
+            b = P["exp"](fdiv(-(fdiv(sigma, kappa) + alpha) * dt, eps0))
+            denom = kappa * (sigma + kappa * alpha)
+            c = fdiv(sigma * (b - 1.0), denom) if sigma > 0.0 and denom > 0.0 else 0.0
+            prof[0].append(b)
+            prof[1].append(c)
+            prof[2].append(fdiv(1.0, kappa) - 1.0)
+    vals = [sigma_max] + [x for prof in (node, half) for v in prof for x in v]
+    if not all(math.isfinite(x) for x in vals):
+        return ip_err(f"CPML coefficients are not finite for dx = {rust_display(dx)}, dt = {rust_display(dt)}")
+    return cpml_layer_toks(t, m, sigma_max, km, am, node + half)
+
+
+def cpml_new(t, dx, dt, P, C):
+    """`Cpml::new`: the classic grading's layer, or the inert one of invalid input."""
+    r = cpml_with_params(t, 3.0, 1.0, 1.0, 0.0, dx, dt, P, C)
+    if r[0][0] == "E":
+        return cpml_layer_toks(t, 3.0, 0.0, 1.0, 0.0, [[]] * 6)
+    return r
+
+
+def fd2_eval(fn, ins_raw, P, C):
+    """fdtd_2d3d's functions on the primitives P: a row's outputs, or None."""
+    toks = [parse_tok(x) for x in ins_raw.split(" ")] if ins_raw != "-" else []
+    v = [b for _k, b in toks]
+    if fn == "CpmlParams::new":
+        return [fd2_i(v[0] & FD_U64), ("f", 3.0), ("f", 1.0), ("f", 1.0), ("f", 0.0)]
+    if fn == "Cpml::with_params":
+        return cpml_with_params(v[0] & FD_U64, v[1], v[2], v[3], v[4], v[5], v[6], P, C)
+    if fn == "Cpml::new":
+        return cpml_new(v[0] & FD_U64, v[1], v[2], P, C)
+    if fn == "Cpml::attach":
+        t, nx, ny = v[0] & FD_U64, v[3] & FD_U64, v[4] & FD_U64
+        t2, sx, sy = 2 * t, 2 * t * nx, 2 * t * ny
+        if t2 > FD_U64 or sx > FD_U64 or sy > FD_U64 or sx * 8 > (1 << 63) - 1 or sy * 8 > (1 << 63) - 1:
+            return [("i", 0)] * 6
+        return [fd2_i(nx), fd2_i(ny), ("i", sx), ("i", sx), ("i", sy), ("i", sy)]
+    return None
+
+
+def validate_fdtd_2d3d(root: Path, path: Path) -> list:
+    header, _rows = read_tsv(path)
+    errs = check_platform(header)
+    if errs:
+        return errs
+    C = golden_consts(root)
+    for n, (fn, _cls, ins, outs, _v) in enumerate(sc_lines(path), 1):
+        want = fd2_eval(fn, ins, GLIBC_P, C)
+        if want is None:
+            errs.append(f"fdtd_2d3d row {n}: no transcription for {fn}")
+            continue
+        if not toks_same(want, wave_toks([parse_tok(x) for x in outs.split(" ")])):
+            errs.append(f"fdtd_2d3d row {n}: {fn}({ins[:200]}) -> {wire(want)[:300]}, oracle {outs[:300]}")
+    return errs
+
+
+def fdtd_2d3d_corrections(root: Path, path: Path):
+    """The fdtd_2d3d rows whose outputs change on correctly rounded primitives (MPFR's powf and exp)."""
+    def fixes(_rows):
+        out = []
+        C = golden_consts(root)
+        for fn, cls, ins, outs, _v in sc_lines(path):
+            if cls != "C":
+                continue
+            want = fd2_eval(fn, ins, MPFR_P, C)
+            old = wave_toks([parse_tok(x) for x in outs.split(" ")])
+            if not toks_same(want, old):
+                out.append((fn, ins, wire(want), f"oracle {outs[:120]}; correctly rounded powf and exp give "
+                                                 f"{wire(want)[:60]}"))
+        return out
+    return fixes
+
+
 def main() -> int:
     root = Path(sys.argv[1] if len(sys.argv) > 1 else ".").resolve()
     golden = root / "tests/golden"
@@ -10593,6 +10720,7 @@ def main() -> int:
         "constants": lambda p: validate_constants(root, p),
         "error": validate_error,
         "fdtd": lambda p: validate_fdtd(root, p),
+        "fdtd_2d3d": lambda p: validate_fdtd_2d3d(root, p),
         "field": lambda p: validate_field(root, p),
         "fmtf": validate_fmtf,
         "json": validate_json,
@@ -10636,8 +10764,10 @@ def main() -> int:
     errs += check_corrections(root, "beam", golden / "beam.tsv", beam_corrections(golden / "beam.tsv"))
     errs += check_corrections(root, "rf", golden / "rf.tsv", rf_corrections(golden / "rf.tsv"))
     errs += check_corrections(root, "fdtd", golden / "fdtd.tsv", fdtd_corrections(root, golden / "fdtd.tsv"))
-    for mod in ("beam", "charge", "circuit", "complex", "fdtd", "field", "json", "material", "maxwell", "polarization",
-                "relativity", "rf", "scattering", "wave"):
+    errs += check_corrections(root, "fdtd_2d3d", golden / "fdtd_2d3d.tsv",
+                              fdtd_2d3d_corrections(root, golden / "fdtd_2d3d.tsv"))
+    for mod in ("beam", "charge", "circuit", "complex", "fdtd", "fdtd_2d3d", "field", "json", "material", "maxwell",
+                "polarization", "relativity", "rf", "scattering", "wave"):
         errs += check_adr(root, mod, golden / f"{mod}.tsv")
     errs += cx_rows(golden / "complex.tsv")[1]
     errs += fv_rows(root, "field", golden / "field.tsv")[1] + fv_rows(root, "charge", golden / "charge.tsv")[1]

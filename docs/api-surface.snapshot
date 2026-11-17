@@ -785,6 +785,10 @@ complex::BjComplex_sub/2
 complex::bj_complex_from_polar/2
 complex::bj_complex_real/1
 complex::bj_complex_zero/0
+cpml::BjCpmlParams_new/1
+cpml::BjCpml_free/1
+cpml::BjCpml_new/4
+cpml::BjCpml_with_params/4
 error::bj_error_message/1
 error::bj_error_name/1
 error::bj_init/0

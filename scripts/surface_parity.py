@@ -48,12 +48,10 @@ PENDING_MODULES = {
 # Their other items are checked as a ported module's now; the listed ones count as pending, and one found ported is a
 # problem (drop it from the list).
 IN_PROGRESS = {
-    # M5 Part 1 ported the 1D grid, the sources, the media, the utilities, NF2FF's phasor form and their JSON;
-    # nf2ff_2d, CPML (CpmlParams and Mode2d's JSON with it), 2D and 3D follow in M6.
+    # M5 Part 1 ported the 1D grid, the sources, the media, the utilities, NF2FF's phasor form and their JSON; M6
+    # part 1a the CPML layer (CpmlParams, Cpml). nf2ff_2d, the JSON of CpmlParams and Mode2d, 2D and 3D follow.
     "fdtd": ("M5–M6", {
-        "CpmlParams", "Cpml", "Mode2d", "Fdtd2d", "Fdtd3d", "nf2ff_2d", "CpmlParams::new", "Cpml::new",
-        "Cpml::with_params", "Cpml::attach", "Cpml::sigma_max", "Cpml::kappa_max", "Cpml::alpha_max",
-        "Cpml::grading_order", "Fdtd2d::new", "Fdtd2d::idx", "Fdtd2d::set_permittivity", "Fdtd2d::set_permeability",
+        "Mode2d", "Fdtd2d", "Fdtd3d", "nf2ff_2d", "Fdtd2d::new", "Fdtd2d::idx", "Fdtd2d::set_permittivity", "Fdtd2d::set_permeability",
         "Fdtd2d::set_conductivity", "Fdtd2d::set_material", "Fdtd2d::add_source", "Fdtd2d::try_enable_cpml",
         "Fdtd2d::try_enable_cpml_with", "Fdtd2d::enable_cpml", "Fdtd2d::disable_cpml", "Fdtd2d::cpml",
         "Fdtd2d::step_once", "Fdtd2d::run", "Fdtd2d::time", "Fdtd2d::total_energy", "Fdtd3d::new", "Fdtd3d::idx",

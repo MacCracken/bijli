@@ -1,16 +1,29 @@
-# Handoff: the Cyrius port, M5 done, before M6 (2026-11-16)
+# Handoff: the Cyrius port, M6 Part 1 under way (2026-11-16)
 
 For the next agent picking up the port. **Read first:** `CLAUDE.md` (the rules), [`state.md`](state.md) (live state),
 [`bijli-port-plan.md`](bijli-port-plan.md) (§0.1 holds the user's M5 Part 2 answers; the tracking table is near the
-end), [`port-parity.md`](port-parity.md) §94–§108 (M5), and [ADR 0002](../adr/0002-port-api-divergences.md) (rows 1–42;
+end), [`port-parity.md`](port-parity.md) §94–§115 (M5) and §116 on (M6), and [ADR 0002](../adr/0002-port-api-divergences.md) (rows 1–42;
 M5 touched 2, 3, 9, 13, 17, 18, 36, 40, 41 and 42). This file is the working knowledge those don't hold: how a Part 2
 bite is done, the machinery, the scripts and the traps. Delete it once it has served (the M3 one lives at
 `git show 01bb43e:docs/development/handoff.md`; its bite workflow for a module's API still applies).
 
 ## Where it stands
 
-- **Committed through `1d6de0b`** ("M5 2d-6 done"); M5's wrap-up is in the working tree for the user to commit ("m5
-  done"): the benchmark record regenerated, `bench_record.py`'s `DONE` naming M1–M5, the roadmap (§115).
+- **Committed through `d612f26`** ("M5 done"); M6 part 1a is in the working tree for the user to commit ("m6 1a
+  done").
+- **M6 Part 1** (the 2D CPML and `Fdtd2d`, §116) runs in bites: 1a the CPML layer (`src/cpml.cyr`: `CpmlParams`,
+  `Cpml`) done; next 1b-1 `Fdtd2d` without the CPML (TM and TE, the PEC/PMC walls, ε_r/μ_r/σ regions with C_a/C_b,
+  `add_source`, `step_once`, `run`, `time`, `total_energy`; the row kernels on `f64v_*` with add and sub forms, plan
+  §9.3's table; ADR 0002 row 2 for Rust's public resizable vectors and the per-step layout check, as the 1D grid's),
+  then 1b-2 the CPML attached (`try_enable_cpml*`, `enable_cpml`, `disable_cpml`, `cpml`, the strip corrections
+  `correct_fx`, `correct_fy`, `correct_fz`; `cpml_profile_is_graded` and the reflection tests), 1c `nf2ff_2d`
+  (`_bj_nf_core` with the rotation (1, 0)), 1d the JSON of `CpmlParams` and `Mode2d`. Part 2 is the 3D grid, Part 3
+  `compute.rs`, then the range-edge review (the per-cell rule for the 2D and 3D updates and the CPML).
+- **M6's corpus** is `tests/golden/fdtd_2d3d.tsv` (`scripts/oracle/src/m_fdtd_2d3d.rs`, which imports `m_fdtd`'s
+  `u`, `seq`, `res_toks`, `digest` and `dbg_*`), checked by validate.py's `validate_fdtd_2d3d` (Rust's chain on
+  glibc's primitives) and corrected by `fdtd_2d3d_corrections` (MPFR's), replayed by the harness's `_par_fdtd_2d3d`.
+  A class-C function needs its line in `_par_c_bound` (tests/parity.tcyr), or its rows stay "measured".
+  `cpml_fits` and `is_attached_to` are public as `_bj_cpml_fits` and `_bj_cpml_is_attached_to` for the grid files.
 - **M5 Part 1 is done** (§94–§99): the 1D grid, the pulses and TF/SF, the media, the utilities, NF2FF's phasor form,
   their JSON.
 - **M5 Part 2, the range-edge review**, runs on the user's answers of 2026-11-15 (plan §0.1). Done:
