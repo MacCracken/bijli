@@ -6564,3 +6564,51 @@ eigenmode search (`dft_magnitude`'s recurrence and magnitude, `find_eigenmodes`'
   equal**. `fdtd2d.tcyr` (48) and `cpml.tcyr` (40) pass on all three. The gate is clean (no warnings; execution
   coverage 377 of 377 functions; its audit first failed on the bench's one line past 120 characters, rewrapped);
   validate.py 761,025 rows, 0 problems; the oracle's `--check` and clippy clean. Next: 1b-2, the CPML attached.
+
+## 118. M6 part 1b-2: the CPML attached to the 2D grid (2026-11-16)
+
+- **`src/fdtd2d.cyr`**: `try_enable_cpml` (the classic grading), `try_enable_cpml_with` (Rust's fit check and text,
+  "CPML thickness {t} is invalid for a {nx}×{ny} grid (need thickness ≥ 1 and 2·thickness + 3 ≤ min(nx, ny))", then
+  `BjCpml_with_params`' refusals, then the attach: "cannot allocate CPML auxiliary fields for a {nx}×{ny} grid"; the
+  boundaries unchanged on error, a replacement restarting Ψ at zero), `enable_cpml` (Rust's warning), `disable_cpml`,
+  `cpml` (the layer's address, 0 for None) and, in `step_tm` and `step_te`, Rust's `correct_fx` and `correct_fy` after
+  the in-plane update and `correct_fz` after the out-of-plane one, with Rust's signs (TM −1, +1, +1; TE +1, −1, −1).
+  The layer is a freelist block of `BjCpml` the grid owns. `run`'s debug line names its thickness.
+- **The corrections**: each strip cell is Rust's Ψ ← b·Ψ + c·Δ, f += (sign·k)·((1/κ − 1)·Δ + Ψ) (f −= for f_z's
+  y-strips), in Rust's order (f_z's x-strips before its y-strips, so a corner cell takes both in Rust's order). The
+  y-strips are whole rows and run on the packed verbs through three scratch rows (`_bj_fd2_strip`, nine passes, each
+  lane Rust's operations: IEEE's products and sums are commutative, so a lane's operands may swap); the x-strips are
+  2·thickness scattered cells a row and stay scalar. A first, wholly scalar form took the bench's step to 189 µs.
+- **ADR 0002 row 2, amended**: the layer is attached to the grid's fixed geometry when enabled, so `check_layout`'s
+  CPML half goes.
+- **The corpus**: `fdtd_2d3d.tsv` gains 114 scripts (843 rows, 1.6 MB) with four operations (`try_enable_cpml`,
+  `try_enable_cpml_with`, `enable_cpml`, `disable_cpml`) and, while a layer is attached, its thickness and Ψ digests
+  appended to the state (the earlier rows unchanged): in each mode the classic layer around a point source, the CFS
+  layer around a driven one, the bench's grid, four other gradings on thin layers, a dielectric and lossy block over
+  the strips, the thinnest fitting grids (7 × 7 with 2 cells, 9 × 13 with 3, 8 × 30), enabling, refusing, replacing
+  and disabling, and lossy cells inside and outside the strips; the thickness's refusals from 0 to usize::MAX and the
+  grading's in Rust's order; 30 seeded scripts. validate.py's `Fd2` gains the layer (`cpml_profiles`, shared with
+  `Cpml::with_params`' rows, and the three corrections) and reproduces all 315 scripts; its corrections now compare
+  every script (run's sine, the profiles' powf and exp), and none changes on MPFR's primitives.
+- **The physics**: the port's layer measures as Rust's comment says: on fdtd.rs's reflection set-up (an 81 × 81 grid
+  against a 201 × 201 reference, four probes, 450 steps) the bare wall gives +4.2 dB, the 10-cell classic CPML
+  −87.9 dB and the CFS-CPML −87.7 dB, in TM and TE alike.
+- **Tests**: `tests/fdtd2d.tcyr` (72 assertions, 2.8 s): `cpml_tests`' `cpml_reflection_tm`, `cpml_reflection_te`,
+  `cpml_energy_decays`, `cpml_stable_long_run_with_materials` (3000 steps), `cpml_profile_is_graded`,
+  `try_enable_cpml_validates_thickness` and `conductor_slab_attenuates_wave`, and the main module's
+  `test_fdtd2d_enable_cpml` and `test_fdtd2d_cpml_runs_without_panic`. The ledger: 725 ported, 10 n/a, 123 pending of
+  858.
+- **Surface parity**: the five CPML methods, `Fdtd2d` and `Mode2d` are matched (601 items); the API snapshot is
+  unchanged (methods aren't in it).
+- **Benchmarks**: Rust's `fdtd/2d_step_100x100_tm_cpml10` is twinned: 117–127 µs (Rust 20.47 µs, 5.7–6.2×), the
+  corrections about 70 µs of it, against 47 µs for the plain step (4.1×): the x-strips' scalar cells cost most (a
+  first, wholly scalar form took 189 µs). The interleaved A/B against HEAD (two rounds, load 3.2 to 3.9) left the other
+  rows unchanged, median ratios 0.99 and 0.98; the plain 2D steps read about 3 % over HEAD in both rounds (51.0 →
+  52.8 and 48.9 → 50.5 µs), at the edge of the noise (other rows moved from 0.89 to 1.09), their only change the
+  CPML's branch tests. The benchmark record gains the twin (each row the least of the nine full runs since M5's close);
+  3 of Rust's 80 benches are pending: `nf2ff_2d_80x80_180` (part 1c) and the two 3D steps.
+- **Result, every target** (x86_64 ELF, x86_64 PE, aarch64): **19 modules, 0 failing; 642,019 ok, 0 failed, 0
+  measured, 0 pending, 119,120 accepted (ADR 01: 40,375; ADR 0002: 78,745)** over 761,139 rows; **all 480 digests
+  equal**. `fdtd2d.tcyr` (72) passes on all three. The gate is clean (no warnings; execution coverage 377 of 377
+  functions; its audit first failed on a header comment line past 120 characters, reflowed); validate.py 761,139 rows,
+  0 problems; the oracle's `--check` and clippy clean. Next: 1c, `nf2ff_2d`.

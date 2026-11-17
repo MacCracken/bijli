@@ -6,15 +6,17 @@
 # The outer walls reflect: the out-of-plane field is held at zero on the outermost ring of nodes, a perfect electric
 # conductor in TM (E_z = 0) and a perfect magnetic conductor in TE (H_z = 0). Per-cell ε_r, μ_r and conductivity σ
 # (the lossy E update E ← C_a·E + C_b·∇×H, C_a = (1 − σΔt/2ε)/(1 + σΔt/2ε), C_b = (Δt/εΔx)/(1 + σΔt/2ε)) are set by
-# region. The CPML absorbing layer attaches in M6 part 1b-2 (src/cpml.cyr).
+# region. A CPML absorbing layer (src/cpml.cyr) can replace the walls' reflection: it occupies the outermost `thickness`
+# cells, ends on the same wall, and corrects the updates in its strips after each phase (Rust's `correct_fx`,
+# `correct_fy`, `correct_fz`, in Rust's order).
 #
-# A grid's seven arrays (f_z, f_x, f_y, the C_b and H coefficients, ε_r and μ_r) and two scratch rows are one anonymous
-# mmap, fixed at construction; the first lossy region maps C_a and σ beside them. BjFdtd2d_free gives both back. Rust's
-# public, resizable `Vec` fields and the per-step layout check that guarded them are gone (ADR 0002 row 2): the fields
-# are the arrays' addresses and nx·ny their length. No step allocates. The updates run on the packed f64v_* verbs,
-# each lane rounding Rust's operations in Rust's order, so the bits are Rust's (port plan §9.3, probe p10), on lane
-# multiples with a scalar tail (probe p19). The file is time-domain only; bijli's one harmonic convention, e^{+jωt},
-# is stated in src/complex.cyr's header.
+# A grid's seven arrays (f_z, f_x, f_y, the C_b and H coefficients, ε_r and μ_r) and three scratch rows are one
+# anonymous mmap, fixed at construction; the first lossy region maps C_a and σ beside them. BjFdtd2d_free gives both
+# back. Rust's public, resizable `Vec` fields and the per-step layout check that guarded them are gone (ADR 0002 row 2):
+# the fields are the arrays' addresses and nx·ny their length. No step allocates. The updates run on the packed f64v_*
+# verbs, each lane rounding Rust's operations in Rust's order, so the bits are Rust's (port plan §9.3, probe p10), on
+# lane multiples with a scalar tail (probe p19). The file is time-domain only; bijli's one harmonic convention,
+# e^{+jωt}, is stated in src/complex.cyr's header.
 
 private
 
@@ -22,7 +24,7 @@ var _BJ_FD2_INF: f64 = 0x7FF0000000000000;
 # std::f64::consts::PI and SQRT_2.
 var _BJ_FD2_PI: f64 = 3.141592653589793;
 var _BJ_FD2_SQRT_2: f64 = 1.4142135623730951;
-# The grid's arrays, each nx·ny f64, in one mapping: f_z, f_x, f_y, C_b, the H coefficients, ε_r and μ_r (then two
+# The grid's arrays, each nx·ny f64, in one mapping: f_z, f_x, f_y, C_b, the H coefficients, ε_r and μ_r (then three
 # scratch rows of nx).
 var _BJ_FD2_ARRAYS = 7;
 # The largest nx·ny whose mapping (under 64 bytes a cell with the scratch rows) a 64-bit length holds.
@@ -44,8 +46,9 @@ public var BJ_FDTD2D_NO_SOURCE = 0 - 1;
 # E_y) are the addresses of nx·ny f64 each (read and write the values, as Rust's public vectors). `ce` holds C_b per
 # cell (Δt/(ε₀ε_r·Δx), divided by 1 + σΔt/2ε where lossy), `ch` Δt/(μ₀μ_r·Δx), `ca` C_a and `conductivity` σ (S/m),
 # both 0 while every cell is lossless (Rust's empty vectors), `permittivity` ε_r and `permeability` μ_r. `cpml` is the
-# attached layer's address, 0 for none (M6 part 1b-2). `work` holds the update's two scratch rows, `map_bytes` and
-# `lossy_bytes` the mappings' lengths (0 once freed). Mirrors `Fdtd2d`.
+# attached layer's address (a freelist block holding a BjCpml, attached to this grid), 0 for none; read it through
+# `cpml()`. `work` holds the update's three scratch rows, `map_bytes` and `lossy_bytes` the mappings' lengths (0 once
+# freed). Mirrors `Fdtd2d`.
 public struct BjFdtd2d {
     mode;
     nx;
@@ -71,6 +74,12 @@ public struct BjFdtd2d {
 # A word as a *f64 (the typed return keeps the binding typed).
 #must_use
 fn _bj_fd2_f64p(a): *f64 {
+    return a;
+}
+
+# A word as a *BjCpml.
+#must_use
+fn _bj_fd2_cpmlp(a): *BjCpml {
     return a;
 }
 
@@ -268,6 +277,138 @@ fn _bj_fd2_check_sigma(sigma: f64): i64 {
     return BJ_ERR_INVALID_PARAMETER;
 }
 
+# One CPML strip row on the packed verbs: for i < n, d = hi[i] − lo[i], Ψ ← b·Ψ + c·d, and f ± (sign·k)·((1/κ − 1)·d +
+# Ψ) (sub 0: `+=`, 1: `-=`), Rust's `*psi = b * *psi + c * d; *f += sign * kk * (km1 * d + *psi)` lane by lane (IEEE's
+# products and sums are commutative, so each lane's operands may swap), through the scratch rows w1, w2, w3 on lane
+# multiples, then a scalar tail.
+fn _bj_fd2_strip(f: *f64, hi: *f64, lo: *f64, k: *f64, psi: *f64, n, pr: *f64, w: *f64, sub) {
+    var b: f64 = pr[0];
+    var c: f64 = pr[1];
+    var km1: f64 = pr[2];
+    var sign: f64 = pr[3];
+    var w1: *f64 = w;
+    var w2: *f64 = w + n;
+    var w3: *f64 = w + 2 * n;
+    var m = n & (0 - 4);
+    if (m > 0) {
+        f64v_sub(w1, hi, lo, m);
+        f64v_scale(w2, psi, b, m);
+        f64v_scale(w3, w1, c, m);
+        f64v_add(psi, w2, w3, m);
+        f64v_scale(w2, w1, km1, m);
+        f64v_add(w2, w2, psi, m);
+        f64v_scale(w3, k, sign, m);
+        f64v_mul(w2, w3, w2, m);
+        if (sub == 0) { f64v_add(f, f, w2, m); }
+        else { f64v_sub(f, f, w2, m); }
+    }
+    for (var i = m; i < n; i = i + 1) {
+        var d: f64 = hi[i] - lo[i];
+        var pv: f64 = b * psi[i] + c * d;
+        psi[i] = pv;
+        var v: f64 = sign * k[i] * (km1 * d + pv);
+        if (sub == 0) { f[i] = f[i] + v; }
+        else { f[i] = f[i] - v; }
+    }
+    return 0;
+}
+
+# The CPML term for f_x at (x, y + ½) in the y-strips (rows y = l and ny − 2 − l, the half-node profiles):
+# Ψ ← b·Ψ + c·Δ_y f_z, f_x += sign·k·((1/κ − 1)·Δ + Ψ). The layer is attached to this grid. Mirrors `Cpml::correct_fx`.
+fn _bj_fd2_cpml_fx(c: *BjCpml, fx: *f64, fz: *f64, k: *f64, nx, ny, sign: f64, w: *f64) {
+    var t = c.thickness;
+    var bh: *f64 = _bj_fd2_f64p(c.b_half);
+    var chf: *f64 = _bj_fd2_f64p(c.c_half);
+    var kh: *f64 = _bj_fd2_f64p(c.km1_half);
+    var psi: *f64 = _bj_fd2_f64p(c.psi_fx_y);
+    var pr: f64[4];
+    pr[3] = sign;
+    for (var side = 0; side < 2; side = side + 1) {
+        for (var l = 0; l < t; l = l + 1) {
+            var y = l;
+            if (side == 1) { y = ny - 2 - l; }
+            pr[0] = bh[l];
+            pr[1] = chf[l];
+            pr[2] = kh[l];
+            var r0 = y * nx;
+            _bj_fd2_strip(fx + r0, fz + r0 + nx, fz + r0, k + r0, psi + (side * t + l) * nx, nx, &pr, w, 0);
+        }
+    }
+    return 0;
+}
+
+# The CPML term for f_y at (x + ½, y) in the x-strips (columns x = l and nx − 2 − l on every row, the half-node
+# profiles): Ψ ← b·Ψ + c·Δ_x f_z, f_y += sign·k·((1/κ − 1)·Δ + Ψ). Mirrors `Cpml::correct_fy`.
+fn _bj_fd2_cpml_fy(c: *BjCpml, fy: *f64, fz: *f64, k: *f64, nx, ny, sign: f64) {
+    var t = c.thickness;
+    var bh: *f64 = _bj_fd2_f64p(c.b_half);
+    var chf: *f64 = _bj_fd2_f64p(c.c_half);
+    var kh: *f64 = _bj_fd2_f64p(c.km1_half);
+    for (var y = 0; y < ny; y = y + 1) {
+        var r = y * nx;
+        var fr: *f64 = fy + r;
+        var zr: *f64 = fz + r;
+        var kr: *f64 = k + r;
+        var pp: *f64 = _bj_fd2_f64p(c.psi_fy_x + y * 2 * t * 8);
+        for (var l = 0; l < t; l = l + 1) {
+            var d: f64 = zr[l + 1] - zr[l];
+            var pv: f64 = bh[l] * pp[l] + chf[l] * d;
+            pp[l] = pv;
+            fr[l] = fr[l] + sign * kr[l] * (kh[l] * d + pv);
+            var x = nx - 2 - l;
+            var d2: f64 = zr[x + 1] - zr[x];
+            var pv2: f64 = bh[l] * pp[t + l] + chf[l] * d2;
+            pp[t + l] = pv2;
+            fr[x] = fr[x] + sign * kr[x] * (kh[l] * d2 + pv2);
+        }
+    }
+    return 0;
+}
+
+# The CPML terms for f_z at the integer nodes, the node profiles, layers l = 1..t (the wall node l = 0 is reset by the
+# boundary): first the x-strips on the interior rows (columns l and nx − 1 − l: Ψ ← b·Ψ + c·Δ_x f_y, f_z +=
+# sign·k·((1/κ − 1)·Δ + Ψ)), then the y-strips on the interior columns (rows l and ny − 1 − l: Ψ ← b·Ψ + c·Δ_y f_x,
+# f_z −= sign·k·((1/κ − 1)·Δ + Ψ)); a corner cell takes both, in that order. Mirrors `Cpml::correct_fz`.
+fn _bj_fd2_cpml_fz(c: *BjCpml, fz: *f64, fx: *f64, fy: *f64, k: *f64, nx, ny, sign: f64, w: *f64) {
+    var t = c.thickness;
+    var bn: *f64 = _bj_fd2_f64p(c.b_node);
+    var cn: *f64 = _bj_fd2_f64p(c.c_node);
+    var kn: *f64 = _bj_fd2_f64p(c.km1_node);
+    for (var y = 1; y < ny - 1; y = y + 1) {
+        var r = y * nx;
+        var fr: *f64 = fz + r;
+        var yr: *f64 = fy + r;
+        var kr: *f64 = k + r;
+        var pp: *f64 = _bj_fd2_f64p(c.psi_fz_x + y * 2 * t * 8);
+        for (var l = 1; l < t; l = l + 1) {
+            var d: f64 = yr[l] - yr[l - 1];
+            var pv: f64 = bn[l] * pp[l] + cn[l] * d;
+            pp[l] = pv;
+            fr[l] = fr[l] + sign * kr[l] * (kn[l] * d + pv);
+            var x = nx - 1 - l;
+            var d2: f64 = yr[x] - yr[x - 1];
+            var pv2: f64 = bn[l] * pp[t + l] + cn[l] * d2;
+            pp[t + l] = pv2;
+            fr[x] = fr[x] + sign * kr[x] * (kn[l] * d2 + pv2);
+        }
+    }
+    var psi: *f64 = _bj_fd2_f64p(c.psi_fz_y);
+    var pr: f64[4];
+    pr[3] = sign;
+    for (var side = 0; side < 2; side = side + 1) {
+        for (var l2 = 1; l2 < t; l2 = l2 + 1) {
+            var y2 = l2;
+            if (side == 1) { y2 = ny - 1 - l2; }
+            pr[0] = bn[l2];
+            pr[1] = cn[l2];
+            pr[2] = kn[l2];
+            var r0 = y2 * nx + 1;
+            _bj_fd2_strip(fz + r0, fx + r0, fx + r0 - nx, k + r0, psi + (side * t + l2) * nx + 1, nx - 2, &pr, w, 1);
+        }
+    }
+    return 0;
+}
+
 # A vacuum grid of nx × ny nodes at spacing dx in `mode` into *out, the walls reflecting: Ok(0), or with out untouched
 # Err(InsufficientResolution) when nx < 3 or ny < 3 (cells min(nx, ny), domain min(nx, ny)·dx), Err(InvalidParameter)
 # "dx must be finite and positive, got {dx}", "grid [{nx}, {ny}] is too large" (nx·ny past 2^64) or "cannot allocate
@@ -313,7 +454,7 @@ public fn BjFdtd2d_new(nx, ny, dx: f64, mode, out: *BjFdtd2d): Result {
     var map = 0;
     var bytes = 0;
     if (n >= 0 && n <= _BJ_FD2_MAX_CELLS) {
-        bytes = (n * _BJ_FD2_ARRAYS + 2 * nx) * 8;
+        bytes = (n * _BJ_FD2_ARRAYS + 3 * nx) * 8;
         map = mmap_anon(bytes);
     }
     if (map == 0) { return Err(_bj_fd2_alloc_err(n)); }
@@ -370,8 +511,13 @@ public fn BjFdtd2d_new(nx, ny, dx: f64, mode, out: *BjFdtd2d): Result {
     return Ok(0);
 }
 
-# Gives a grid's mappings back and empties it (nx = ny = 0, every address 0); a second call does nothing.
+# Gives a grid's mappings and its CPML back and empties it (nx = ny = 0, every address 0); a second call does nothing.
 public fn BjFdtd2d_free(sim: *BjFdtd2d): i64 {
+    if (sim.cpml != 0) {
+        BjCpml_free(sim.cpml);
+        fl_free(sim.cpml);
+    }
+    sim.cpml = 0;
     if (sim.map_bytes > 0) { cyr_munmap(sim.fz, sim.map_bytes); }
     if (sim.lossy_bytes > 0) { cyr_munmap(sim.ca, sim.lossy_bytes); }
     sim.fz = 0;
@@ -536,10 +682,125 @@ impl BjFdtd2d {
         return 0;
     }
 
+    # Replaces the reflecting walls by a CPML of the classic grading (BjCpmlParams_new) `thickness` cells a side;
+    # calling it again replaces the layer (Ψ restarts at zero). Ok(0), or with the boundaries unchanged
+    # Err(InvalidParameter) as try_enable_cpml_with. Mirrors `Fdtd2d::try_enable_cpml`.
+    public fn try_enable_cpml(self, thickness): Result {
+        var p: BjCpmlParams = BjCpmlParams_new(thickness);
+        return self.try_enable_cpml_with(&p);
+    }
+
+    # Replaces the reflecting walls by a CPML of params' grading (κ and CFS-α profiles, grading order, σ_max's scale),
+    # occupying the outermost thickness cells; calling it again replaces the layer. Ok(0), or with the boundaries
+    # unchanged Err(InvalidParameter): "CPML thickness {t} is invalid for a {nx}×{ny} grid (need thickness ≥ 1 and
+    # 2·thickness + 3 ≤ min(nx, ny))", any refusal of BjCpml_with_params, or "cannot allocate CPML auxiliary fields for
+    # a {nx}×{ny} grid". Mirrors `Fdtd2d::try_enable_cpml_with`.
+    public fn try_enable_cpml_with(self, params: *BjCpmlParams): Result {
+        var nx = self.nx;
+        var ny = self.ny;
+        var t = params.thickness;
+        var md = nx;
+        if (_bj_fd2_uge(nx, ny) == 1) { md = ny; }
+        if (_bj_cpml_fits(t, md) == 0) {
+            var e1 = _bj_err_reason(BJ_ERR_INVALID_PARAMETER);
+            _bj_tx_cstr(e1, "CPML thickness ");
+            _bj_tx_u64(e1, t);
+            _bj_tx_cstr(e1, " is invalid for a ");
+            _bj_tx_u64(e1, nx);
+            _bj_tx_cstr(e1, "×");
+            _bj_tx_u64(e1, ny);
+            _bj_tx_cstr(e1, " grid (need thickness ≥ 1 and 2·thickness + 3 ≤ min(nx, ny))");
+            return Err(BJ_ERR_INVALID_PARAMETER);
+        }
+        var blk = fl_alloc(sizeof(BjCpml));
+        if (blk != 0) {
+            var t2, v2 = BjCpml_with_params(params, self.dx, self.dt, blk);
+            if (is_err_result(t2) == 1) {
+                fl_free(blk);
+                return Err(v2);
+            }
+            var c: *BjCpml = _bj_fd2_cpmlp(blk);
+            c.attach(nx, ny);
+            if (_bj_cpml_is_attached_to(blk, nx, ny) == 0) {
+                BjCpml_free(blk);
+                fl_free(blk);
+                blk = 0;
+            }
+        }
+        if (blk == 0) {
+            var e3 = _bj_err_reason(BJ_ERR_INVALID_PARAMETER);
+            _bj_tx_cstr(e3, "cannot allocate CPML auxiliary fields for a ");
+            _bj_tx_u64(e3, nx);
+            _bj_tx_cstr(e3, "×");
+            _bj_tx_u64(e3, ny);
+            _bj_tx_cstr(e3, " grid");
+            return Err(BJ_ERR_INVALID_PARAMETER);
+        }
+        if (_bj_log_on(4) == 1) {
+            var cl: *BjCpml = _bj_fd2_cpmlp(blk);
+            var lb[256];
+            var lt[24];
+            _bj_tx_init(&lt, &lb, 256);
+            _bj_tx_cstr(&lt, "2D CPML enabled thickness=");
+            _bj_tx_u64(&lt, t);
+            _bj_tx_cstr(&lt, " sigma_max=");
+            _bj_fmt_f64_debug(&lt, cl.sigma_max);
+            _bj_tx_cstr(&lt, " kappa_max=");
+            _bj_fmt_f64_debug(&lt, cl.kappa_max);
+            _bj_tx_cstr(&lt, " alpha_max=");
+            _bj_fmt_f64_debug(&lt, cl.alpha_max);
+            _bj_tx_cstr(&lt, " mode=");
+            if (self.mode == BJ_MODE2D_TE) { _bj_tx_cstr(&lt, "Te"); }
+            else { _bj_tx_cstr(&lt, "Tm"); }
+            _bj_log_text(4, &lt);
+        }
+        if (self.cpml != 0) {
+            BjCpml_free(self.cpml);
+            fl_free(self.cpml);
+        }
+        self.cpml = blk;
+        return Ok(0);
+    }
+
+    # try_enable_cpml without the error: on invalid input (thickness 0, or 2·thickness + 3 > min(nx, ny)) logs a
+    # warning and leaves the boundaries as they are. Mirrors `Fdtd2d::enable_cpml`.
+    public fn enable_cpml(self, thickness) {
+        var t, v = self.try_enable_cpml(thickness);
+        if (is_err_result(t) == 1 && _bj_log_on(2) == 1) {
+            var lb[512];
+            var lt[24];
+            _bj_tx_init(&lt, &lb, 512);
+            _bj_tx_cstr(&lt, "enable_cpml ignored; boundaries unchanged thickness=");
+            _bj_tx_u64(&lt, thickness);
+            _bj_tx_cstr(&lt, " error=");
+            _bj_tx_cstr(&lt, bj_last_error_display());
+            _bj_log_text(2, &lt);
+        }
+        return 0;
+    }
+
+    # Removes the CPML (giving its storage back) and returns to the reflecting PEC (TM) or PMC (TE) walls. Mirrors
+    # `Fdtd2d::disable_cpml`.
+    public fn disable_cpml(self) {
+        if (self.cpml != 0) {
+            BjCpml_free(self.cpml);
+            fl_free(self.cpml);
+            self.cpml = 0;
+            _bj_log(4, "2D CPML disabled");
+        }
+        return 0;
+    }
+
+    # The active CPML layer's address (a *BjCpml), or 0 (Rust's None). Mirrors `Fdtd2d::cpml`.
+    #must_use
+    public fn cpml(self): i64 {
+        return self.cpml;
+    }
+
     # The TM update, E_z, H_x, H_y, in Rust's order: H_x −= C_h·(E_z[y + 1] − E_z[y]) on rows 0..ny − 1, H_y +=
     # C_h·(E_z[x + 1] − E_z[x]) for x < nx − 1 on every row (each cell's update reads only E_z, so the rows
-    # interleave), E_z ← C_a·E_z where lossy, E_z += C_b·((H_y[x] − H_y[x − 1]) − (H_x[y] − H_x[y − 1])) on the
-    # interior, the PEC wall. Mirrors `Fdtd2d::step_tm`.
+    # interleave), the CPML's H terms, E_z ← C_a·E_z where lossy, E_z += C_b·((H_y[x] − H_y[x − 1]) − (H_x[y] −
+    # H_x[y − 1])) on the interior, the CPML's E_z terms, the PEC wall. Mirrors `Fdtd2d::step_tm`.
     fn step_tm(self) {
         var nx = self.nx;
         var ny = self.ny;
@@ -556,18 +817,24 @@ impl BjFdtd2d {
             if (y < ny - 1) { _bj_fd2_diff(fx + r, ch + r, fz + r + nx, fz + r, w, nx, 0); }
             _bj_fd2_diff(fy + r, ch + r, fz + r + 1, fz + r, w, nx - 1, 1);
         }
+        if (self.cpml != 0) {
+            _bj_fd2_cpml_fx(self.cpml, fx, fz, ch, nx, ny, -1.0, w);
+            _bj_fd2_cpml_fy(self.cpml, fy, fz, ch, nx, ny, 1.0);
+        }
         if (self.ca != 0) { _bj_fd2_scale(fz, _bj_fd2_f64p(self.ca), n); }
         for (var y2 = 1; y2 < ny - 1; y2 = y2 + 1) {
             var r2 = y2 * nx;
             _bj_fd2_curl(fz + r2, ce + r2, fy + r2, fx + r2, fx + r2 - nx, w, w2, nx, 1);
         }
+        if (self.cpml != 0) { _bj_fd2_cpml_fz(self.cpml, fz, fx, fy, ce, nx, ny, 1.0, w); }
         _bj_fd2_walls(fz, nx, ny);
         return 0;
     }
 
     # The TE update, H_z, E_x, E_y, in Rust's order: E ← C_a·E where lossy, E_x += C_b·(H_z[y + 1] − H_z[y]) on rows
-    # 0..ny − 1, E_y −= C_b·(H_z[x + 1] − H_z[x]) for x < nx − 1 on every row, H_z −= C_h·((E_y[x] − E_y[x − 1]) −
-    # (E_x[y] − E_x[y − 1])) on the interior, the PMC wall. Mirrors `Fdtd2d::step_te`.
+    # 0..ny − 1, E_y −= C_b·(H_z[x + 1] − H_z[x]) for x < nx − 1 on every row, the CPML's E terms, H_z −=
+    # C_h·((E_y[x] − E_y[x − 1]) − (E_x[y] − E_x[y − 1])) on the interior, the CPML's H_z terms, the PMC wall. Mirrors
+    # `Fdtd2d::step_te`.
     fn step_te(self) {
         var nx = self.nx;
         var ny = self.ny;
@@ -589,10 +856,15 @@ impl BjFdtd2d {
             if (y < ny - 1) { _bj_fd2_diff(fx + r, ce + r, fz + r + nx, fz + r, w, nx, 1); }
             _bj_fd2_diff(fy + r, ce + r, fz + r + 1, fz + r, w, nx - 1, 0);
         }
+        if (self.cpml != 0) {
+            _bj_fd2_cpml_fx(self.cpml, fx, fz, ce, nx, ny, 1.0, w);
+            _bj_fd2_cpml_fy(self.cpml, fy, fz, ce, nx, ny, -1.0);
+        }
         for (var y2 = 1; y2 < ny - 1; y2 = y2 + 1) {
             var r2 = y2 * nx;
             _bj_fd2_curl(fz + r2, ch + r2, fy + r2, fx + r2, fx + r2 - nx, w, w2, nx, 0);
         }
+        if (self.cpml != 0) { _bj_fd2_cpml_fz(self.cpml, fz, fx, fy, ch, nx, ny, -1.0, w); }
         _bj_fd2_walls(fz, nx, ny);
         return 0;
     }
@@ -630,7 +902,13 @@ impl BjFdtd2d {
             _bj_fmt_f64_debug(&lt, frequency);
             _bj_tx_cstr(&lt, " amplitude=");
             _bj_fmt_f64_debug(&lt, amplitude);
-            _bj_tx_cstr(&lt, " cpml=None");
+            if (self.cpml == 0) { _bj_tx_cstr(&lt, " cpml=None"); }
+            else {
+                var lc: *BjCpml = _bj_fd2_cpmlp(self.cpml);
+                _bj_tx_cstr(&lt, " cpml=Some(");
+                _bj_tx_u64(&lt, lc.thickness);
+                _bj_tx_cstr(&lt, ")");
+            }
             _bj_log_text(4, &lt);
         }
         var w2pi: f64 = 2.0 * _BJ_FD2_PI;

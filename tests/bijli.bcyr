@@ -1170,7 +1170,7 @@ fn main(): i64 {
     bench_report(bf3);
     if (is_err_result(tfd1) == 1 || is_err_result(tfd2) == 1 || fdsum == 7.0) { println("."); }
 
-    # fdtd (M6 part 1b-1): Rust's 2D benches without the CPML. A 100 × 100 TM step after a point source; an 80 × 80
+    # fdtd (M6 parts 1b-1, 1b-2): Rust's 2D benches. A 100 × 100 TM step after a point source; an 80 × 80
     # grid made and run 50 steps with a 1 GHz source, then its energy; the 100 × 100 step with a lossy slab (σ = 1 S/m
     # over x ≥ 60).
     var f2a: BjFdtd2d;
@@ -1213,7 +1213,23 @@ fn main(): i64 {
     bench_batch_stop(b2c, 2000);
     bench_report(b2c);
     BjFdtd2d_free(&f2c);
+    # The 100 × 100 TM step with a 10-cell classic CPML (M6 part 1b-2).
+    var f2d: BjFdtd2d;
+    var tf2d, vf2d = BjFdtd2d_new(100, 100, 0.0001, BJ_MODE2D_TM, &f2d);
+    var tf2e, vf2e = f2d.try_enable_cpml(10);
+    f2d.add_source(50, 50, 1.0);
+    var f2dz: *f64 = bench_f64p(f2d.fz);
+    var b2d = bench_new("fdtd/2d_step_100x100_tm_cpml10");
+    bench_batch_start(b2d);
+    for (var k = 0; k < 2000; k = k + 1) {
+        f2d.step_once();
+        f2sum = f2sum + f2dz[5050];
+    }
+    bench_batch_stop(b2d, 2000);
+    bench_report(b2d);
+    BjFdtd2d_free(&f2d);
     var f2bad = is_err_result(tf2a) + is_err_result(tf2c) + is_err_result(tf2s);
+    f2bad = f2bad + is_err_result(tf2d) + is_err_result(tf2e);
     if (f2bad > 0 || f2sum == 7.0) { println("."); }
 
     # fdtd (M5 part 1b), Cyrius-only: a Gaussian pulse's value across its width, and a 200-cell TF/SF auxiliary grid

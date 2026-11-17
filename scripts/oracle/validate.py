@@ -10616,18 +10616,28 @@ def cpml_layer_toks(t, m, sigma_max, km, am, profiles):
 
 def cpml_with_params(t, m, sr, km, am, dx, dt, P, C):
     """`Cpml::with_params` on the primitives P and the constants C: the layer's tokens or the error's."""
+    r = cpml_profiles(t, m, sr, km, am, dx, dt, P, C)
+    if r[0] is not None:
+        return r[0]
+    _e, sigma_max, node, half = r
+    return cpml_layer_toks(t, m, sigma_max, km, am, node + half)
+
+
+def cpml_profiles(t, m, sr, km, am, dx, dt, P, C):
+    """`Cpml::with_params`' numbers: (None, σ_max, (b, c, 1/κ − 1) at the nodes, at the half nodes), or (the error's
+    tokens, None, None, None)."""
     e = cpml_params_err(t, m, sr, km, am)
     if e:
-        return e
+        return e, None, None, None
     if not (dx > 0.0 and math.isfinite(dx)):
-        return ip_err(f"CPML dx must be finite and positive, got {rust_display(dx)}")
+        return ip_err(f"CPML dx must be finite and positive, got {rust_display(dx)}"), None, None, None
     if not (dt > 0.0 and math.isfinite(dt)):
-        return ip_err(f"CPML dt must be finite and positive, got {rust_display(dt)}")
+        return ip_err(f"CPML dt must be finite and positive, got {rust_display(dt)}"), None, None, None
     eta0 = C["field::MU_0"] * C["field::SPEED_OF_LIGHT"]
     eps0 = C["field::EPSILON_0"]
     sigma_max = fdiv(sr * 0.8 * (m + 1.0), eta0 * dx)
     if t * 8 > (1 << 63) - 1:                      # try_reserve_exact's capacity overflow
-        return ip_err(f"cannot allocate {t} grid values")
+        return ip_err(f"cannot allocate {t} grid values"), None, None, None
     tf = float(t)
     node, half = ([], [], []), ([], [], [])
     for off, prof in ((0.0, node), (0.5, half)):
@@ -10645,8 +10655,9 @@ def cpml_with_params(t, m, sr, km, am, dx, dt, P, C):
             prof[2].append(fdiv(1.0, kappa) - 1.0)
     vals = [sigma_max] + [x for prof in (node, half) for v in prof for x in v]
     if not all(math.isfinite(x) for x in vals):
-        return ip_err(f"CPML coefficients are not finite for dx = {rust_display(dx)}, dt = {rust_display(dt)}")
-    return cpml_layer_toks(t, m, sigma_max, km, am, node + half)
+        return (ip_err(f"CPML coefficients are not finite for dx = {rust_display(dx)}, dt = {rust_display(dt)}"),
+                None, None, None)
+    return None, sigma_max, node, half
 
 
 def cpml_new(t, dx, dt, P, C):
@@ -10693,11 +10704,78 @@ class Fd2:
         self.ce, self.ch = [fdiv(self.dt, eps0 * dx)] * n, [fdiv(self.dt, mu0 * dx)] * n
         self.eps, self.mu = [1.0] * n, [1.0] * n
         self.ca, self.cond = [], []
+        self.cpml = None                                   # (t, node profiles, half profiles, Ψ: fx_y, fz_y, fy_x, fz_x)
 
     def copy(self):
         o = Fd2.__new__(Fd2)
         o.__dict__ = {k: (list(v) if isinstance(v, list) else v) for k, v in self.__dict__.items()}
+        if self.cpml is not None:
+            t, node, half, psi = self.cpml
+            o.cpml = (t, node, half, [list(p) for p in psi])
         return o
+
+    def enable_cpml(self, t, m, sr, km, am, P, C):
+        """`try_enable_cpml_with`: None, or the error's tokens (the boundaries unchanged)."""
+        nx, ny = self.nx, self.ny
+        need = 2 * t + 3
+        if t == 0 or need > FD_U64 or need > min(nx, ny):
+            return ip_err(f"CPML thickness {t} is invalid for a {nx}×{ny} grid (need thickness ≥ 1 and "
+                          f"2·thickness + 3 ≤ min(nx, ny))")
+        e, _sm, node, half = cpml_profiles(t, m, sr, km, am, self.dx, self.dt, P, C)
+        if e is not None:
+            return e
+        self.cpml = (t, node, half, [[0.0] * (2 * t * nx), [0.0] * (2 * t * nx), [0.0] * (2 * t * ny),
+                                     [0.0] * (2 * t * ny)])
+        return None
+
+    def cpml_fx(self, k, sign):
+        """`correct_fx`: f_x's y-strip terms."""
+        t, _node, (b, c, km1), (pfx, _pfz, _pfy, _pzx) = self.cpml
+        nx, ny, fx, fz = self.nx, self.ny, self.fx, self.fz
+        for side in (0, 1):
+            for l in range(t):
+                y = l if side == 0 else ny - 2 - l
+                r0, p0 = y * nx, (side * t + l) * nx
+                for x in range(nx):
+                    d = fz[r0 + nx + x] - fz[r0 + x]
+                    pv = b[l] * pfx[p0 + x] + c[l] * d
+                    pfx[p0 + x] = pv
+                    fx[r0 + x] += sign * k[r0 + x] * (km1[l] * d + pv)
+
+    def cpml_fy(self, k, sign):
+        """`correct_fy`: f_y's x-strip terms."""
+        t, _node, (b, c, km1), (_pfx, _pfz, pfy, _pzx) = self.cpml
+        nx, ny, fy, fz = self.nx, self.ny, self.fy, self.fz
+        for y in range(ny):
+            r, pr = y * nx, y * 2 * t
+            for l in range(t):
+                for sl, x in ((l, l), (t + l, nx - 2 - l)):
+                    d = fz[r + x + 1] - fz[r + x]
+                    pv = b[l] * pfy[pr + sl] + c[l] * d
+                    pfy[pr + sl] = pv
+                    fy[r + x] += sign * k[r + x] * (km1[l] * d + pv)
+
+    def cpml_fz(self, k, sign):
+        """`correct_fz`: f_z's x-strip terms, then its y-strip terms."""
+        t, (b, c, km1), _half, (_pfx, pfz, _pfy, pzx) = self.cpml
+        nx, ny, fz, fx, fy = self.nx, self.ny, self.fz, self.fx, self.fy
+        for y in range(1, ny - 1):
+            r, pr = y * nx, y * 2 * t
+            for l in range(1, t):
+                for sl, x in ((l, l), (t + l, nx - 1 - l)):
+                    d = fy[r + x] - fy[r + x - 1]
+                    pv = b[l] * pzx[pr + sl] + c[l] * d
+                    pzx[pr + sl] = pv
+                    fz[r + x] += sign * k[r + x] * (km1[l] * d + pv)
+        for side in (0, 1):
+            for l in range(1, t):
+                y = l if side == 0 else ny - 1 - l
+                r0, p0 = y * nx, (side * t + l) * nx
+                for x in range(1, nx - 1):
+                    d = fx[r0 + x] - fx[r0 - nx + x]
+                    pv = b[l] * pfz[p0 + x] + c[l] * d
+                    pfz[p0 + x] = pv
+                    fz[r0 + x] -= sign * k[r0 + x] * (km1[l] * d + pv)
 
     def e_coefficients(self, eps_r, sigma):
         _c, eps0, _mu0 = self.K
@@ -10762,6 +10840,9 @@ class Fd2:
                 fy[r:r + nx - 1] = [h + k * (a - b) for h, k, a, b in seg]
             else:
                 fy[r:r + nx - 1] = [h - k * (a - b) for h, k, a, b in seg]
+        if self.cpml is not None:
+            self.cpml_fx(kx, -1.0 if tm else 1.0)
+            self.cpml_fy(kx, 1.0 if tm else -1.0)
         if tm and self.ca:
             self.fz = fz = [v * a for v, a in zip(fz, self.ca)]
         kz = ce if tm else ch
@@ -10773,6 +10854,8 @@ class Fd2:
                 fz[r + 1:r + nx - 1] = [d + k * ((a1 - a0) - (b1 - b0)) for d, k, a1, a0, b1, b0 in seg]
             else:
                 fz[r + 1:r + nx - 1] = [d - k * ((a1 - a0) - (b1 - b0)) for d, k, a1, a0, b1, b0 in seg]
+        if self.cpml is not None:
+            self.cpml_fz(kz, 1.0 if tm else -1.0)
         n = nx * ny
         for x in range(nx):
             fz[x] = 0.0
@@ -10804,6 +10887,9 @@ class Fd2:
         for x, y in ((nx // 2, ny // 2), (1, 1), (nx - 2, ny - 2), (0, ny // 2), (nx // 2, 1)):
             k = y * nx + x
             out += [("f", self.fz[k]), ("f", self.fx[k]), ("f", self.fy[k])]
+        if self.cpml is not None:
+            out.append(("i", self.cpml[0]))
+            out += [("i", fd_digest(p)) for p in self.cpml[3]]
         return out
 
 
@@ -10834,6 +10920,15 @@ def fd2_ops(toks):
         elif code == 8:
             ops.append((code, [toks[k + 1][1], toks[k + 2][1]]))
             k += 3
+        elif code in (9, 11):
+            ops.append((code, [toks[k + 1][1] & FD_U64]))
+            k += 2
+        elif code == 10:
+            ops.append((code, [toks[k + 1][1] & FD_U64] + [toks[k + j][1] for j in range(2, 6)]))
+            k += 6
+        elif code == 12:
+            ops.append((code, []))
+            k += 1
         else:
             raise ValueError(f"unknown 2D opcode {code}")
     return ops
@@ -10845,6 +10940,7 @@ class Fd2Scripts:
 
     def __init__(self, root: Path, P):
         c = golden_consts(root)
+        self.C = c
         self.K = (c["field::SPEED_OF_LIGHT"], c["field::EPSILON_0"], c["field::MU_0"])
         self.P = P
         self.prev, self.sim, self.errs = None, None, []
@@ -10920,6 +11016,14 @@ class Fd2Scripts:
                     sim.fx = [v] * n
                 else:
                     sim.fy = [v] * n
+            elif code in (9, 11):
+                e = sim.enable_cpml(a[0], 3.0, 1.0, 1.0, 0.0, self.P, self.C)
+                if code == 11:
+                    e = None
+            elif code == 10:
+                e = sim.enable_cpml(a[0], a[1], a[2], a[3], a[4], self.P, self.C)
+            elif code == 12:
+                sim.cpml = None
             if e is not None:
                 errs += e
         self.prev, self.sim, self.errs = raw, sim, errs
@@ -10944,7 +11048,7 @@ def validate_fdtd_2d3d(root: Path, path: Path) -> list:
 
 
 def fdtd_2d3d_corrections(root: Path, path: Path):
-    """The fdtd_2d3d rows whose outputs change on correctly rounded primitives (MPFR's powf and exp)."""
+    """The fdtd_2d3d rows whose outputs change on correctly rounded primitives (MPFR's powf, exp and sin)."""
     def fixes(_rows):
         out = []
         C = golden_consts(root)
@@ -10953,8 +11057,8 @@ def fdtd_2d3d_corrections(root: Path, path: Path):
             if fn == "Fdtd2d::script":
                 want = f2.eval(ins)
                 old = wave_toks([parse_tok(x) for x in outs.split(" ")])
-                if " i:7 " in f" {ins} " and not toks_same(want, old):
-                    out.append((fn, ins, wire(want), f"oracle {outs[:120]}; a correctly rounded sin gives "
+                if not toks_same(want, old):            # run's sine, the CPML profiles' powf and exp
+                    out.append((fn, ins, wire(want), f"oracle {outs[:120]}; correctly rounded primitives give "
                                                      f"{wire(want)[:60]}"))
                 continue
             if cls != "C":

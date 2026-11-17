@@ -4059,7 +4059,7 @@ fn _par_cpml_got(c: *BjCpml) {
 
 # A 2D grid's state to the got list (tests/golden/fdtd_2d3d.tsv's comment): step, dt, time, energy, the digests of
 # f_z, f_x, f_y, ε_r, μ_r, C_b and C_h, then C_a's and σ's lengths and digests (0 and the empty digest while
-# lossless), then f_z, f_x, f_y at the five probes.
+# lossless), then f_z, f_x, f_y at the five probes, then an attached CPML's thickness and Ψ digests.
 fn _par_fd2_state(sim: *BjFdtd2d) {
     var nx = sim.nx;
     var ny = sim.ny;
@@ -4101,7 +4101,20 @@ fn _par_fd2_state(sim: *BjFdtd2d) {
         _par_got_f(load64(sim.fx + q * 8));
         _par_got_f(load64(sim.fy + q * 8));
     }
+    if (sim.cpml != 0) {
+        var c: *BjCpml = _par_cpmlp(sim.cpml);
+        _par_got_i(c.thickness);
+        _par_got_i(_par_fd_digest(c.psi_fx_y, c.psi_x_len));
+        _par_got_i(_par_fd_digest(c.psi_fz_y, c.psi_x_len));
+        _par_got_i(_par_fd_digest(c.psi_fy_x, c.psi_y_len));
+        _par_got_i(_par_fd_digest(c.psi_fz_x, c.psi_y_len));
+    }
     return 0;
+}
+
+# A word as a *BjCpml.
+fn _par_cpmlp(a): *BjCpml {
+    return a;
 }
 
 # A 2D script (M6 part 1b-1): the grid, then its operations (tests/golden/fdtd_2d3d.tsv's comment).
@@ -4172,6 +4185,25 @@ fn _par_fd2_script(): i64 {
             var nn = sim.nx * sim.ny;
             for (var q = 0; q < nn; q = q + 1) { store64(fa + q * 8, fv); }
             k = k + 3;
+        } elif (code == 9) {
+            var t9, v9 = sim.try_enable_cpml(_par_in(k + 1));
+            if (is_err_result(t9) == 1) { _par_got_error(v9); }
+            k = k + 2;
+        } elif (code == 10) {
+            var cp: BjCpmlParams = BjCpmlParams_new(_par_in(k + 1));
+            cp.grading_order = _par_in(k + 2);
+            cp.sigma_ratio = _par_in(k + 3);
+            cp.kappa_max = _par_in(k + 4);
+            cp.alpha_max = _par_in(k + 5);
+            var t10, v10 = sim.try_enable_cpml_with(&cp);
+            if (is_err_result(t10) == 1) { _par_got_error(v10); }
+            k = k + 6;
+        } elif (code == 11) {
+            sim.enable_cpml(_par_in(k + 1));
+            k = k + 2;
+        } elif (code == 12) {
+            sim.disable_cpml();
+            k = k + 1;
         } else {
             BjFdtd2d_free(&sim);
             return 0 - 1;

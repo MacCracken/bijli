@@ -13,6 +13,7 @@ include "tests/lib.cyr"
 
 var DX: f64 = 0.001;
 var DX4: f64 = 0.0001;
+var PI2: f64 = 3.141592653589793;
 
 # |a − b| < tol.
 fn near(a: f64, b: f64, tol: f64): i64 {
@@ -31,6 +32,11 @@ fn text_is(a, b): i64 {
 
 # A word as a *f64 (the typed return keeps the binding typed).
 fn f64p(a): *f64 {
+    return a;
+}
+
+# A word as a *BjCpml.
+fn cpmlp(a): *BjCpml {
     return a;
 }
 
@@ -70,6 +76,140 @@ fn front(sim: *BjFdtd2d, tol: f64, dflt): i64 {
         }
     }
     return dflt;
+}
+
+# fdtd.rs's `cpml_tests` helpers: the CPML grids (N × N, a T-cell layer) and the reference grid (N_REF, no wall echo
+# reaches a probe within STEPS), the probe offsets from the centre.
+var CN = 81;
+var CT = 10;
+var CN_REF = 201;
+var CSTEPS = 450;
+
+# `record`: a soft Gaussian point source at the centre of an n × n grid (with params' CPML when params is not 0), f_z
+# at the four probes after each of CSTEPS steps, into a block of 4·CSTEPS f64 (probe-major). Give it back with fl_free.
+fn record(mode, n, params): i64 {
+    var sim: BjFdtd2d;
+    var t, v = BjFdtd2d_new(n, n, DX4, mode, &sim);
+    if (params != 0) { var tc, vc = sim.try_enable_cpml_with(params); }
+    var c = n / 2;
+    var pr: i64[4];
+    pr[0] = sim.idx(c - 28, c);
+    pr[1] = sim.idx(c, c + 28);
+    pr[2] = sim.idx(c - 28, c - 28);
+    pr[3] = sim.idx(c - 15, c - 26);
+    var tau: f64 = 25.0 * sim.dt;
+    var t0: f64 = 4.0 * tau;
+    var out = fl_alloc(4 * CSTEPS * 8);
+    var o: *f64 = f64p(out);
+    for (var k = 0; k < CSTEPS; k = k + 1) {
+        var tm: f64 = sim.time();
+        var g: f64 = bj_gaussian_pulse(tm, t0, tau);
+        sim.add_source(c, c, g);
+        sim.step_once();
+        for (var j = 0; j < 4; j = j + 1) {
+            var fv: f64 = at(sim.fz, pr[j]);
+            o[j * CSTEPS + k] = fv;
+        }
+    }
+    BjFdtd2d_free(&sim);
+    return out;
+}
+
+# `reflection`: the worst over the probes of max|f − f_ref| / max|f_ref|.
+fn reflection(test, refr): f64 {
+    var a: *f64 = f64p(test);
+    var r: *f64 = f64p(refr);
+    var worst: f64 = 0.0;
+    for (var j = 0; j < 4; j = j + 1) {
+        var peak: f64 = 0.0;
+        var err: f64 = 0.0;
+        for (var k = 0; k < CSTEPS; k = k + 1) {
+            var rv: f64 = r[j * CSTEPS + k];
+            var arv: f64 = f64_abs(rv);
+            if (arv > peak) { peak = arv; }
+            var dv: f64 = a[j * CSTEPS + k] - rv;
+            var adv: f64 = f64_abs(dv);
+            if (adv > err) { err = adv; }
+        }
+        var q: f64 = err / peak;
+        if (q > worst) { worst = q; }
+    }
+    return worst;
+}
+
+# `check_reflection`: without the layer the wall echoes into every probe (> 0.3); the classic CPML and the CFS-CPML
+# (κ_max 5, α_max = 2π·ε₀·1 GHz) of CT cells each stay under 10⁻³ (about −88 dB measured in Rust).
+fn check_reflection(mode) {
+    var refr = record(mode, CN_REF, 0);
+    var wall = record(mode, CN, 0);
+    var pec: f64 = reflection(wall, refr);
+    var p: BjCpmlParams = BjCpmlParams_new(CT);
+    var cl = record(mode, CN, &p);
+    var classic: f64 = reflection(cl, refr);
+    var q: BjCpmlParams = BjCpmlParams_new(CT);
+    q.kappa_max = 5.0;
+    var tpe: f64 = 2.0 * PI2;
+    var tpe2: f64 = tpe * BJ_EPSILON_0;
+    q.alpha_max = tpe2 * 1000000000.0;
+    var cf = record(mode, CN, &q);
+    var cfs: f64 = reflection(cf, refr);
+    assert(pec > 0.3, "the wall reflects into the probes");
+    assert(classic < 0.001, "CPML(10) reflection under −60 dB");
+    assert(cfs < 0.001, "CFS-CPML(10) reflection under −60 dB");
+    fl_free(refr);
+    fl_free(wall);
+    fl_free(cl);
+    fl_free(cf);
+    return 0;
+}
+
+# `energy_history`: the peak (sampled every 5 steps) and final energy of an N × N grid, with a CT-cell CPML or the
+# walls, driven at its centre by a zero-DC Ricker pulse for 1500 steps.
+fn energy_history(mode, cpml): (f64, f64) {
+    var sim: BjFdtd2d;
+    var t, v = BjFdtd2d_new(CN, CN, DX4, mode, &sim);
+    if (cpml == 1) { var tc, vc = sim.try_enable_cpml(CT); }
+    var tau: f64 = 25.0 * sim.dt;
+    var t0: f64 = 4.0 * tau;
+    var peak: f64 = 0.0;
+    for (var k = 0; k < 1500; k = k + 1) {
+        var tm: f64 = sim.time();
+        var rw: f64 = bj_ricker_wavelet(tm, t0, tau);
+        var sv: f64 = tau * rw;
+        sim.add_source(CN / 2, CN / 2, sv);
+        sim.step_once();
+        if (k % 5 == 0) {
+            var e: f64 = sim.total_energy();
+            if (e > peak) { peak = e; }
+        }
+    }
+    var end: f64 = sim.total_energy();
+    BjFdtd2d_free(&sim);
+    return (peak, end);
+}
+
+# `conductor_slab_attenuates_wave`'s run: the peak |f_z| at (60, 30) over 600 steps of an 80 × 60 TM grid with a
+# 10-cell CPML, a slab of conductivity sigma over x ∈ [40, 46) and a Gaussian source at (25, 30).
+fn slab_peak(sigma: f64): f64 {
+    var sim: BjFdtd2d;
+    var t, v = BjFdtd2d_new(80, 60, DX4, BJ_MODE2D_TM, &sim);
+    var tc, vc = sim.try_enable_cpml(10);
+    var ts, vs = sim.set_conductivity(40, 0, 46, 60, sigma);
+    var tau: f64 = 25.0 * sim.dt;
+    var t0: f64 = 4.0 * tau;
+    var peak: f64 = 0.0;
+    var probe = sim.idx(60, 30);
+    for (var k = 0; k < 600; k = k + 1) {
+        var tm: f64 = sim.time();
+        var g: f64 = bj_gaussian_pulse(tm, t0, tau);
+        sim.add_source(25, 30, g);
+        sim.step_once();
+        var fv: f64 = at(sim.fz, probe);
+        var af: f64 = f64_abs(fv);
+        if (af > peak) { peak = af; }
+    }
+    BjFdtd2d_free(&sim);
+    return peak;
 }
 
 # Runs fdtd.rs's 2D grid tests, then the Cyrius-only checks.
@@ -291,6 +431,118 @@ fn main() {
         assert(near(e20, analytic, tol20) == 1, "the analytic e^(−σt/ε)");
         BjFdtd2d_free(&s20);
     }
+
+    test_group("test_fdtd2d_enable_cpml");
+    var e1: BjFdtd2d;
+    var te1, ve1 = BjFdtd2d_new(60, 60, DX4, BJ_MODE2D_TM, &e1);
+    e1.enable_cpml(10);
+    var c1: *BjCpml = cpmlp(e1.cpml());
+    assert(e1.cpml() != 0 && c1.thickness == 10 && c1.psi_x_len > 0, "a 10-cell layer, its Ψ allocated");
+    BjFdtd2d_free(&e1);
+
+    test_group("test_fdtd2d_cpml_runs_without_panic");
+    var e2: BjFdtd2d;
+    var te2, ve2 = BjFdtd2d_new(60, 60, DX4, BJ_MODE2D_TM, &e2);
+    e2.enable_cpml(8);
+    e2.run(30, 30, 30, 1000000000.0, 1.0);
+    var en2: f64 = e2.total_energy();
+    assert(en2 > 0.0, "the source still radiates");
+    BjFdtd2d_free(&e2);
+
+    test_group("cpml_profile_is_graded");
+    var g3: BjFdtd2d;
+    var tg3, vg3 = BjFdtd2d_new(60, 60, DX4, BJ_MODE2D_TM, &g3);
+    var tc3, vc3 = g3.try_enable_cpml(10);
+    var c3: *BjCpml = cpmlp(g3.cpml());
+    var eta0: f64 = BJ_MU_0 * BJ_SPEED_OF_LIGHT;
+    var sopt: f64 = 0.8 * 4.0 / (eta0 * DX4);
+    var sg3: f64 = c3.sigma_max();
+    var tol3: f64 = 0.000000001 * sopt;
+    assert(is_ok(tc3) == 1 && near(sg3, sopt, tol3) == 1, "σ_max = σ_opt = 0.8(m + 1)/(η₀Δx)");
+    var mg3: f64 = c3.grading_order();
+    var kg3: f64 = c3.kappa_max();
+    var ag3: f64 = c3.alpha_max();
+    var mka = near(mg3, 3.0, tiny15) + near(kg3, 1.0, tiny15) + near(ag3, 0.0, tiny15);
+    assert(mka == 3, "m, κ_max, α_max");
+    var inc = 1;
+    var inb = 1;
+    var inc_c = 1;
+    var between = 1;
+    for (var l = 0; l < 10; l = l + 1) {
+        var bn: f64 = at(c3.b_node, l);
+        var bh: f64 = at(c3.b_half, l);
+        var cn: f64 = at(c3.c_node, l);
+        var chv: f64 = at(c3.c_half, l);
+        if (l < 9) {
+            var bn1: f64 = at(c3.b_node, l + 1);
+            var bh1: f64 = at(c3.b_half, l + 1);
+            if (!(bn < bn1 && bh < bh1)) { inc = 0; }
+            if (!(bn < bh && bh < bn1)) { between = 0; }
+        }
+        if (!(bn > 0.0 && bn < 1.0 && bh > 0.0 && bh < 1.0)) { inb = 0; }
+        if (!(cn < 0.0 && cn > -1.0 && chv < 0.0 && chv > -1.0)) { inc_c = 0; }
+    }
+    assert(inc == 1 && inb == 1, "b increases towards the interface, in (0, 1)");
+    assert(inc_c == 1 && between == 1, "c in (−1, 0); the half nodes between their integer neighbours");
+    BjFdtd2d_free(&g3);
+
+    test_group("try_enable_cpml_validates_thickness");
+    var g4: BjFdtd2d;
+    var tg4, vg4 = BjFdtd2d_new(30, 40, DX4, BJ_MODE2D_TE, &g4);
+    var t4a, v4a = g4.try_enable_cpml(0);
+    var t4b, v4b = g4.try_enable_cpml(14);
+    assert(is_err_result(t4a) == 1 && is_err_result(t4b) == 1 && g4.cpml() == 0, "0 and 14 refused (2·14 + 3 > 30)");
+    var t4c, v4c = g4.try_enable_cpml(13);
+    var c4: *BjCpml = cpmlp(g4.cpml());
+    assert(is_ok(t4c) == 1 && c4.thickness == 13, "13 fits");
+    var t4d, v4d = g4.try_enable_cpml(100);
+    g4.enable_cpml(100);
+    var c4b: *BjCpml = cpmlp(g4.cpml());
+    assert(is_err_result(t4d) == 1 && c4b.thickness == 13, "an invalid request keeps the active layer");
+    g4.disable_cpml();
+    assert(g4.cpml() == 0, "disabled");
+    g4.enable_cpml(0);
+    assert(g4.cpml() == 0, "enable_cpml(0) leaves none");
+    BjFdtd2d_free(&g4);
+
+    test_group("cpml_reflection_tm");
+    check_reflection(BJ_MODE2D_TM);
+
+    test_group("cpml_reflection_te");
+    check_reflection(BJ_MODE2D_TE);
+
+    test_group("cpml_energy_decays");
+    for (var md2 = 0; md2 < 2; md2 = md2 + 1) {
+        var pw, ew = energy_history(md2, 0);
+        var pc, ec = energy_history(md2, 1);
+        var rw: f64 = ew / pw;
+        var rc: f64 = ec / pc;
+        assert(rw > 0.5, "the walls trap the energy");
+        assert(rc < 0.0001, "the CPML absorbs it");
+    }
+
+    test_group("cpml_stable_long_run_with_materials");
+    for (var md3 = 0; md3 < 2; md3 = md3 + 1) {
+        var g5: BjFdtd2d;
+        var tg5, vg5 = BjFdtd2d_new(60, 60, DX4, md3, &g5);
+        var tc5, vc5 = g5.try_enable_cpml(8);
+        var m5: BjMaterial = BjMaterial_new(4.0, 1.0, 0.5);
+        var tm5, vm5 = g5.set_material(0, 20, 30, 40, &m5);
+        g5.run(3000, 40, 30, 30000000000.0, 1.0);
+        var fin = 1;
+        for (var q5 = 0; q5 < 3600; q5 = q5 + 1) {
+            var z5: f64 = at(g5.fz, q5) * 0.0 + at(g5.fx, q5) * 0.0 + at(g5.fy, q5) * 0.0;
+            if (z5 != 0.0) { fin = 0; }
+        }
+        assert(is_ok(tm5) == 1 && fin == 1, "every field finite after 3000 steps");
+        BjFdtd2d_free(&g5);
+    }
+
+    test_group("conductor_slab_attenuates_wave");
+    var open: f64 = slab_peak(0.0);
+    var blocked: f64 = slab_peak(1000.0);
+    var lim6: f64 = 0.01 * open;
+    assert(blocked < lim6, "a good conductor between source and probe kills the field");
 
     test_group("cyrius_fdtd2d_error_records");
     var q: BjFdtd2d;

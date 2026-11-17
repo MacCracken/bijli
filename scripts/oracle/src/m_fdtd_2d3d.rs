@@ -21,13 +21,16 @@
 //! - `i:5 i:<x> i:<y> f:<v>`: `add_source`;
 //! - `i:6 i:<k>`: `step_once`, k times;
 //! - `i:7 i:<steps> i:<x> i:<y>|n: f:<frequency> f:<amplitude>`: `run`, `n:` for `None`;
-//! - `i:8 i:<field> f:<v>`: every value of `fz` (0), `fx` (1) or `fy` (2) set to v (Rust's public vectors).
+//! - `i:8 i:<field> f:<v>`: every value of `fz` (0), `fx` (1) or `fy` (2) set to v (Rust's public vectors);
+//! - `i:9 i:<thickness>`: `try_enable_cpml`; `i:10 i:<thickness> f:<m> f:<sigma_ratio> f:<kappa_max> f:<alpha_max>`:
+//!   `try_enable_cpml_with`; `i:11 i:<thickness>`: `enable_cpml`; `i:12`: `disable_cpml` (part 1b-2).
 //!
 //! The outputs: `new`'s error, or each failing operation's error in order, then the state: `i:<step>`, `f:<dt>`,
 //! `f:<time()>`, `f:<total_energy()>`, the digests (`i:`, as `fdtd.tsv`'s) of `fz`, `fx`, `fy`, `permittivity`,
 //! `permeability`, `ce` and `ch`, then `ca`'s and `conductivity`'s lengths and digests (empty while lossless), then
-//! `f:` `fz`, `fx` and `fy` at the probes (nx/2, ny/2), (1, 1), (nx − 2, ny − 2), (0, ny/2) and (nx/2, 1). The
-//! private vectors are read from the grid's `Debug` text.
+//! `f:` `fz`, `fx` and `fy` at the probes (nx/2, ny/2), (1, 1), (nx − 2, ny − 2), (0, ny/2) and (nx/2, 1), then,
+//! while a CPML is attached, its thickness and the digests of its four Ψ fields (`psi_fx_y`, `psi_fz_y`, `psi_fy_x`,
+//! `psi_fz_x`). The private vectors are read from the grid's and the layer's `Debug` text.
 //!
 //! The grid: the validation of each parameter over the specials and its boundary; thicknesses 2^60 + 1 and usize::MAX,
 //! whose profiles no allocation can hold (smaller huge ones depend on the machine); the profiles around the classic
@@ -226,6 +229,10 @@ enum Op2 {
     Step(usize),
     Run(usize, Option<(usize, usize)>, f64, f64),
     Fill(usize, f64),
+    Cpml(usize),
+    CpmlWith(usize, f64, f64, f64, f64),
+    EnableCpml(usize),
+    DisableCpml,
 }
 
 impl Op2 {
@@ -247,6 +254,10 @@ impl Op2 {
                 t
             }
             Self::Fill(w, v) => vec![i(8), u(w), f(v)],
+            Self::Cpml(t) => vec![i(9), u(t)],
+            Self::CpmlWith(t, m, sr, km, am) => vec![i(10), u(t), f(m), f(sr), f(km), f(am)],
+            Self::EnableCpml(t) => vec![i(11), u(t)],
+            Self::DisableCpml => vec![i(12)],
         }
     }
 }
@@ -269,6 +280,13 @@ fn state2(sim: &Fdtd2d) -> Vec<Tok> {
     for (x, y) in [(nx / 2, ny / 2), (1, 1), (nx - 2, ny - 2), (0, ny / 2), (nx / 2, 1)] {
         let k = y * nx + x;
         out.extend([f(sim.fz[k]), f(sim.fx[k]), f(sim.fy[k])]);
+    }
+    if let Some(c) = sim.cpml() {
+        let dc = format!("{c:?}");
+        out.push(u(c.thickness));
+        for name in ["psi_fx_y", "psi_fz_y", "psi_fy_x", "psi_fz_x"] {
+            out.push(i(digest(&dbg_vec(&dc, name))));
+        }
     }
     out
 }
@@ -316,6 +334,16 @@ impl Script2 {
                     1 => sim.fx.fill(v),
                     _ => sim.fy.fill(v),
                 }
+                Ok(())
+            }
+            Op2::Cpml(t) => sim.try_enable_cpml(t),
+            Op2::CpmlWith(t, m, sr, km, am) => sim.try_enable_cpml_with(&params(t, m, sr, km, am)),
+            Op2::EnableCpml(t) => {
+                sim.enable_cpml(t);
+                Ok(())
+            }
+            Op2::DisableCpml => {
+                sim.disable_cpml();
                 Ok(())
             }
         };
@@ -461,9 +489,80 @@ fn emit_1b1(r: &mut Rows) {
     }
 }
 
+// ── part 1b-2: the CPML attached to Fdtd2d ──────────────────────────────────────────────────────────────────────
+
+fn emit_1b2(r: &mut Rows) {
+    let step = Op2::Step;
+    let cfs = |t| Op2::CpmlWith(t, 3.0, 1.0, 5.0, 2.0 * std::f64::consts::PI * bijli::field::EPSILON_0 * 1e9);
+    for &mode in &[Mode2d::Tm, Mode2d::Te] {
+        // The classic layer around a point source, the CFS layer around a driven one, Rust's bench grid.
+        r.frames2(60, 60, 1e-4, mode, &[Op2::Cpml(10), Op2::Source(30, 30, 1.0)], &[1, 10, 50, 150], step);
+        r.frames2(61, 61, 1e-4, mode, &[cfs(10)], &[10, 80], |k| Op2::Run(k, Some((30, 30)), 1e10, 1.0));
+        r.frames2(100, 100, 1e-4, mode, &[Op2::Cpml(10), Op2::Source(50, 50, 1.0)], &[1, 20], step);
+        // Graded otherwise: m, σ ratio, κ_max and α_max, on thin layers.
+        for op in [Op2::CpmlWith(4, 2.0, 0.7, 1.0, 0.0), Op2::CpmlWith(6, 4.0, 1.5, 11.0, 0.05),
+                   Op2::CpmlWith(3, 1.0, 1.0, 1.0, 1.0), Op2::CpmlWith(5, 3.5, 1.2, 3.0, 1e-3)] {
+            r.frames2(24, 20, 1e-3, mode, &[op, Op2::Source(12, 10, 1.0), Op2::Source(3, 3, -0.5)], &[1, 7, 40], step);
+        }
+        // A dielectric and lossy block overlapping the strips (fdtd.rs's long-run test, shortened).
+        r.frames2(60, 60, 1e-4, mode, &[Op2::Cpml(8), Op2::Mat(0, 20, 30, 40, 4.0, 1.0, 0.5)], &[50, 300],
+                  |k| Op2::Run(k, Some((40, 30)), 3e10, 1.0));
+        // The thinnest grids a layer fits (2t + 3 = min(nx, ny)) and a source inside a strip.
+        r.frames2(7, 7, 1e-3, mode, &[Op2::Cpml(2), Op2::Source(3, 3, 1.0)], &[1, 4, 20], step);
+        r.frames2(9, 13, 1e-3, mode, &[Op2::Cpml(3), Op2::Source(1, 6, 1.0), Op2::Source(4, 11, 0.5)], &[1, 12], step);
+        r.frames2(8, 30, 1e-3, mode, &[Op2::Cpml(2), Op2::Source(4, 15, 1.0)], &[3, 25], step);
+        // Enable, disable, replace: Ψ restarts at zero, a refused request keeps the layer.
+        let ops = [Op2::Source(15, 15, 1.0), Op2::Step(5), Op2::Cpml(4), Op2::Step(5), Op2::Cpml(100),
+                   Op2::EnableCpml(100), Op2::Step(3), Op2::Cpml(6), Op2::Step(4), Op2::DisableCpml, Op2::Step(2),
+                   Op2::EnableCpml(3), Op2::EnableCpml(0)];
+        r.frames2(30, 30, 1e-3, mode, &ops, &[1, 6], step);
+        r.frames2(30, 30, 1e-3, mode, &[Op2::Cpml(5), Op2::Step(4), Op2::DisableCpml, Op2::Source(15, 15, 1.0)],
+                  &[3], step);
+        // Lossy cells inside and outside the strips.
+        r.frames2(40, 40, 1e-3, mode, &[Op2::Cpml(6), Op2::Sigma(0, 0, 40, 10, 2.0), Op2::Sigma(15, 15, 25, 25, 50.0),
+                                          Op2::Source(20, 30, 1.0)], &[1, 30], step);
+    }
+    // The thickness's and the grading's refusals, in Rust's order (the fit first, then the parameters).
+    for t in [0, 1, 13, 14, 15, 100, usize::MAX] {
+        r.frames2(30, 40, 1e-4, Mode2d::Te, &[Op2::Cpml(t), Op2::EnableCpml(t)], &[1], step);
+    }
+    for op in [Op2::CpmlWith(4, 0.5, 1.0, 1.0, 0.0), Op2::CpmlWith(4, 3.0, 0.0, 1.0, 0.0),
+               Op2::CpmlWith(4, 3.0, 1.0, 0.5, 0.0), Op2::CpmlWith(4, 3.0, 1.0, 1.0, -1.0),
+               Op2::CpmlWith(4, f64::NAN, f64::NAN, 1.0, 0.0), Op2::CpmlWith(0, 0.5, 0.0, 0.5, -1.0),
+               Op2::CpmlWith(20, 0.5, 1.0, 1.0, 0.0), Op2::CpmlWith(4, 3.0, f64::MAX, 1.0, 0.0),
+               Op2::CpmlWith(4, 3.0, 1.0, f64::INFINITY, 0.0)] {
+        r.frames2(30, 30, 1e-3, Mode2d::Tm, &[op, Op2::Source(15, 15, 1.0)], &[2], step);
+    }
+    // Seeded scripts: a fitting layer of random grading on grids from 7 to 30 a side, with random materials and
+    // sources.
+    let mut rng = Rng::new(0x1b2_c9b1);
+    for _ in 0..30 {
+        let nx = usize::try_from(rng.int(7, 30)).unwrap_or(7);
+        let ny = usize::try_from(rng.int(7, 30)).unwrap_or(7);
+        let mode = if rng.unit() < 0.5 { Mode2d::Tm } else { Mode2d::Te };
+        let tmax = i64::try_from((nx.min(ny) - 3) / 2).unwrap_or(2);
+        let t = usize::try_from(rng.int(2, tmax.max(2))).unwrap_or(2);
+        let m = 1.0 + 3.0 * rng.unit();
+        let km = if rng.unit() < 0.5 { 1.0 } else { 1.0 + 10.0 * rng.unit() };
+        let am = if rng.unit() < 0.5 { 0.0 } else { rng.log_uniform(-4.0, 0.0) };
+        let mut ops = vec![Op2::CpmlWith(t, m, 0.5 + rng.unit(), km, am)];
+        if rng.unit() < 0.5 {
+            ops.push(Op2::Mat(0, 0, nx / 2, ny, 1.0 + 3.0 * rng.unit(), 1.0, if rng.unit() < 0.5 { 0.0 } else { 1.0 }));
+        }
+        let pick =
+            |n: usize, rng: &mut Rng| usize::try_from(rng.int(0, i64::try_from(n).unwrap_or(1) - 1)).unwrap_or(0);
+        for _ in 0..usize::try_from(rng.int(1, 3)).unwrap_or(1) {
+            ops.push(Op2::Source(pick(nx, &mut rng), pick(ny, &mut rng), rng.signed_log_uniform(-2.0, 1.0)));
+        }
+        let k = usize::try_from(rng.int(1, 60)).unwrap_or(1);
+        r.frames2(nx, ny, rng.log_uniform(-5.0, -2.0), mode, &ops, &[k], step);
+    }
+}
+
 pub fn emit() -> Module {
     let mut r = Rows { m: Module::new("fdtd_2d3d"), keys: BTreeSet::new() };
     emit_1a(&mut r);
     emit_1b1(&mut r);
+    emit_1b2(&mut r);
     r.m
 }

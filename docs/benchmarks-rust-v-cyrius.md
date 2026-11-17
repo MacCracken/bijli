@@ -6,7 +6,7 @@
 
 **Rust column**: rust-old/bench-history.csv, run `2026-11-12T03:15:21Z` at `c95fd30` (the 1.2.0 tag's source), criterion medians. Taken under load (kimiya's gates ran beside it: load average about 2.6, median CI width 0.8 %, p90 4.2 %, max 13 %), so a ratio within the Rust row's own noise is read as parity (port plan §5 P4).
 
-**80 Rust benches:** 76 twinned, 0 not applicable, 4 pending.
+**80 Rust benches:** 77 twinned, 0 not applicable, 3 pending.
 
 | Rust bench | Rust | Cyrius twin | Cyrius | Cyrius / Rust |
 |---|---:|---|---:|---:|
@@ -43,7 +43,7 @@
 | `fdtd/run_100_steps_500_cells` | 32.23 µs | `fdtd/run_100_steps_500_cells` | 647.93 µs | 20.1× |
 | `fdtd/2d_step_100x100_tm` | 11.42 µs | `fdtd/2d_step_100x100_tm` | 46.37 µs | 4.1× |
 | `fdtd/2d_run_50_steps_80x80` | 416.78 µs | `fdtd/2d_run_50_steps_80x80` | 1.74 ms | 4.2× |
-| `fdtd/2d_step_100x100_tm_cpml10` | 20.47 µs | pending (M6) | — | — |
+| `fdtd/2d_step_100x100_tm_cpml10` | 20.47 µs | `fdtd/2d_step_100x100_tm_cpml10` | 117.12 µs | 5.7× |
 | `fdtd/2d_step_100x100_tm_lossy` | 14.31 µs | `fdtd/2d_step_100x100_tm_lossy` | 49.25 µs | 3.4× |
 | `fdtd/3d_step_30x30x30` | 319.98 µs | pending (M6) | — | — |
 | `fdtd/3d_step_30x30x30_cpml8` | 494.96 µs | pending (M6) | — | — |

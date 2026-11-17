@@ -519,6 +519,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
   and two of its `cpml_tests` (48 assertions), and `tests/cpml.tcyr` the main module's three CPML tests. Bench twins:
   `fdtd/2d_step_100x100_tm` 46.4–47.6 µs (4.1× Rust's 11.42 µs), `fdtd/2d_run_50_steps_80x80` 1.74–1.83 ms (4.2×),
   `fdtd/2d_step_100x100_tm_lossy` 49.3–50.7 µs (3.4×); the benchmark record carries them.
+- **Cyrius port, M6 part 1b-2 — the CPML attached to the 2D grid** (`src/fdtd2d.cyr`): `try_enable_cpml`,
+  `try_enable_cpml_with`, `enable_cpml`, `disable_cpml` and `cpml`, and Rust's strip corrections in `step_once`
+  (`correct_fx`, `correct_fy`, `correct_fz`, in Rust's order; the y-strips on the packed verbs, the x-strips scalar),
+  Rust's bits. The layer absorbs as Rust's: −87.9 dB for a 10-cell classic CPML around a 2D point source, −87.7 dB with
+  κ_max 5 and α_max = 2π·ε₀·1 GHz (the bare wall +4.2 dB). `fdtd_2d3d.tsv` grows by 114 scripts (843 rows);
+  `tests/fdtd2d.tcyr` ports `cpml_tests`' reflection, energy, long-run, profile, thickness and conductor-slab tests and
+  the main module's two CPML tests (72 assertions). Bench twin: `fdtd/2d_step_100x100_tm_cpml10` 117–127 µs (5.7–6.2×
+  Rust's 20.47 µs; wholly scalar corrections first took 189 µs).
 
 ### Fixed
 
