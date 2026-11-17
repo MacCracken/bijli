@@ -10736,18 +10736,59 @@ def fd2_eval(fn, ins_raw, P, C):
 # M6 part 1b-1: `Fdtd2d` without its CPML, transcribed in Rust's order of operations on Python's doubles (each
 # row's cells are independent within a phase, so a list comprehension per row is Rust's arithmetic), `run`'s sine from
 # the primitives P.
+#
+# M6 part 4a: the grids (Fd2, Fd3, GpuFdtd2d's Fd2) take the port's ADR 0002 rows as a set, as Fd1: "13" rounds dt, the
+# update coefficients and `time()` past 2^53 once, "40" rounds the lossy C_a and C_b once from their exact rationals
+# (`fm_port`'s `LossyMaterial` model: Rust's `e_update_coefficients` is that chain).
+
+FD2_PORT = frozenset({"40", "13"})          # the port's ADR 0002 rows in the 2D and 3D models
+
+
+def fd23_setup(sim, dx, root2, port):
+    """The grid's dt, C_b and C_h (Rust's, or rounded once under row 13); root2 is Rust's 2√2 or 2√3 as a double."""
+    c, eps0, mu0 = sim.K
+    sim.r13, sim.r40 = "13" in port, "40" in port
+    sim.dt = rn_mono([dx], [root2, c]) if sim.r13 else fdiv(dx, root2 * c)
+    return sim.coeff(eps0, 1.0), sim.coeff(mu0, 1.0)
+
+
+def fd23_coeff(sim, k0, m):
+    """dt/(k₀·dx·m): Rust's (dt/(k₀·dx))/m, or rounded once (row 13) where dt and dx are finite and dx ≠ 0."""
+    if sim.r13 and math.isfinite(sim.dt) and math.isfinite(sim.dx) and sim.dx != 0.0:
+        return rn_mono([sim.dt], [k0, sim.dx, m])
+    return fdiv(fdiv(sim.dt, k0 * sim.dx), m)
+
+
+def fd23_time(sim):
+    """step·dt: Rust's `step as f64 * dt`, or rounded once past 2^53 (row 13) for a finite dt."""
+    if sim.r13 and sim.step > 1 << 53 and math.isfinite(sim.dt):
+        return rn_frac(Fraction(sim.step) * Fraction(sim.dt))
+    return float(sim.step) * sim.dt
+
+
+def fd23_e_coefficients(sim, eps_r, sigma):
+    """`e_update_coefficients`: Rust's chain, the lossy pair rounded once under row 40, the lossless C_b under 13."""
+    _c, eps0, _mu0 = sim.K
+    if sigma > 0.0:
+        if sim.r40:
+            ca, cb = fm_port("LossyMaterial::update_coefficients", [eps_r, sigma, sim.dt, sim.dx], eps0)
+            return ca[1], cb[1]
+        eps = eps_r * eps0
+        hl = fdiv(sigma * sim.dt, 2.0 * eps)
+        return fdiv(1.0 - hl, 1.0 + hl), fdiv(fdiv(sim.dt, eps * sim.dx), 1.0 + hl)
+    return 1.0, sim.coeff(eps0, eps_r)
+
 
 class Fd2:
     """An `Fdtd2d`: nx × ny, fields row-major (index y·nx + x)."""
 
-    def __init__(self, nx, ny, dx, mode, K):
-        c, eps0, mu0 = K
+    def __init__(self, nx, ny, dx, mode, K, port=frozenset()):
         self.nx, self.ny, self.dx, self.mode, self.K = nx, ny, dx, mode, K
         n = nx * ny
-        self.dt = fdiv(dx, 2.0 * math.sqrt(2.0) * c)
+        ce, ch = fd23_setup(self, dx, 2.0 * math.sqrt(2.0), port)
         self.step = 0
         self.fz, self.fx, self.fy = [0.0] * n, [0.0] * n, [0.0] * n
-        self.ce, self.ch = [fdiv(self.dt, eps0 * dx)] * n, [fdiv(self.dt, mu0 * dx)] * n
+        self.ce, self.ch = [ce] * n, [ch] * n
         self.eps, self.mu = [1.0] * n, [1.0] * n
         self.ca, self.cond = [], []
         self.cpml = None                                   # (t, node profiles, half profiles, Ψ: fx_y, fz_y, fy_x, fz_x)
@@ -10823,13 +10864,9 @@ class Fd2:
                     pfz[p0 + x] = pv
                     fz[r0 + x] -= sign * k[r0 + x] * (km1[l] * d + pv)
 
-    def e_coefficients(self, eps_r, sigma):
-        _c, eps0, _mu0 = self.K
-        if sigma > 0.0:
-            eps = eps_r * eps0
-            hl = fdiv(sigma * self.dt, 2.0 * eps)
-            return fdiv(1.0 - hl, 1.0 + hl), fdiv(fdiv(self.dt, eps * self.dx), 1.0 + hl)
-        return 1.0, fdiv(fdiv(self.dt, eps0 * self.dx), eps_r)
+    coeff = fd23_coeff
+    e_coefficients = fd23_e_coefficients
+    time = fd23_time
 
     def region(self, x0, y0, x1, y1):
         for axis, lo, hi, n in (("x", x0, x1, self.nx), ("y", y0, y1, self.ny)):
@@ -10841,13 +10878,13 @@ class Fd2:
         n, nx = self.nx * self.ny, self.nx
         if sigma is not None and sigma > 0.0 and not self.ca:
             self.ca, self.cond = [1.0] * n, [0.0] * n
-        base_h = fdiv(self.dt, self.K[2] * self.dx)
+        hm = self.coeff(self.K[2], mu_r) if mu_r is not None else None
         for y in range(y0, min(y1, self.ny)):
             for x in range(x0, min(x1, self.nx)):
                 i = y * nx + x
                 if mu_r is not None:
                     self.mu[i] = mu_r
-                    self.ch[i] = fdiv(base_h, mu_r)
+                    self.ch[i] = hm
                 if eps_r is None and sigma is None:
                     continue
                 if eps_r is not None:
@@ -10910,9 +10947,6 @@ class Fd2:
             fz[y * nx] = 0.0
             fz[y * nx + nx - 1] = 0.0
         self.step += 1
-
-    def time(self):
-        return float(self.step) * self.dt
 
     def energy(self):
         _c, eps0, mu0 = self.K
@@ -10984,11 +11018,12 @@ class Fd2Scripts:
     """Replays fdtd_2d3d.tsv's 2D scripts on primitives P; a row whose inputs extend the previous row's continues from
     that row's grid (the frames of one scenario)."""
 
-    def __init__(self, root: Path, P):
+    def __init__(self, root: Path, P, port=frozenset()):
         c = golden_consts(root)
         self.C = c
         self.K = (c["field::SPEED_OF_LIGHT"], c["field::EPSILON_0"], c["field::MU_0"])
         self.P = P
+        self.port = port
         self.prev, self.sim, self.errs = None, None, []
 
     def eval(self, ins_raw):
@@ -11009,7 +11044,7 @@ class Fd2Scripts:
         if self.prev is not None and raw[:len(self.prev)] == self.prev and self.sim is not None:
             sim, errs, done = self.sim.copy(), list(self.errs), len(fd2_ops([parse_tok(x) for x in self.prev[4:]]))
         else:
-            sim, errs, done = Fd2(nx, ny, dx, mode, self.K), [], 0
+            sim, errs, done = Fd2(nx, ny, dx, mode, self.K, self.port), [], 0
         for code, a in ops[done:]:
             e = None
             if code in (1, 2, 3, 4):
@@ -11051,7 +11086,8 @@ class Fd2Scripts:
                 steps, src, fr, am = a[0] & FD_U64, a[1], a[2], a[3]
                 for _ in range(steps):
                     if src is not None:
-                        sim.add_source(src[0], src[1], am * self.P["sin"](2.0 * math.pi * fr * sim.time()))
+                        t = float(sim.step) * sim.dt                # Rust's `step as f64 * dt`, not time()
+                        sim.add_source(src[0], src[1], am * self.P["sin"](2.0 * math.pi * fr * t))
                     sim.step_once()
             elif code == 8:
                 which, v = a[0], a[1]
@@ -11090,15 +11126,14 @@ class Fd3:
     SLABS = (("hx_y", 1), ("hx_z", 2), ("hy_x", 0), ("hy_z", 2), ("hz_x", 0), ("hz_y", 1), ("ex_y", 1), ("ex_z", 2),
              ("ey_x", 0), ("ey_z", 2), ("ez_x", 0), ("ez_y", 1))
 
-    def __init__(self, nx, ny, nz, dx, K):
-        c, eps0, mu0 = K
+    def __init__(self, nx, ny, nz, dx, K, port=frozenset()):
         self.nx, self.ny, self.nz, self.dx, self.K = nx, ny, nz, dx, K
         n = nx * ny * nz
-        self.dt = fdiv(dx, 2.0 * math.sqrt(3.0) * c)
+        ce, ch = fd23_setup(self, dx, 2.0 * math.sqrt(3.0), port)
         self.step = 0
         for name in Fd3.FIELDS:
             setattr(self, name, [0.0] * n)
-        self.ce, self.ch = [fdiv(self.dt, eps0 * dx)] * n, [fdiv(self.dt, mu0 * dx)] * n
+        self.ce, self.ch = [ce] * n, [ch] * n
         self.eps, self.mu = [1.0] * n, [1.0] * n
         self.ca, self.cond = [], []
         self.cpml = None
@@ -11197,8 +11232,9 @@ class Fd3:
         self.slabs(0, False, psi["ez_x"], self.ez, hy, ce, r, 1.0)
         self.slabs(1, False, psi["ez_y"], self.ez, hx, ce, r, -1.0)
 
-    def e_coefficients(self, eps_r, sigma):
-        return Fd2.e_coefficients(self, eps_r, sigma)
+    coeff = fd23_coeff
+    e_coefficients = fd23_e_coefficients
+    time = fd23_time
 
     def region(self, c):
         for axis, lo, hi, n in (("x", c[0], c[3], self.nx), ("y", c[1], c[4], self.ny), ("z", c[2], c[5], self.nz)):
@@ -11211,14 +11247,14 @@ class Fd3:
         n = nxy * self.nz
         if sigma is not None and sigma > 0.0 and not self.ca:
             self.ca, self.cond = [1.0] * n, [0.0] * n
-        base_h = fdiv(self.dt, self.K[2] * self.dx)
+        hm = self.coeff(self.K[2], mu_r) if mu_r is not None else None
         for z in range(c[2], min(c[5], self.nz)):
             for y in range(c[1], min(c[4], self.ny)):
                 for x in range(c[0], min(c[3], self.nx)):
                     i = z * nxy + y * nx + x
                     if mu_r is not None:
                         self.mu[i] = mu_r
-                        self.ch[i] = fdiv(base_h, mu_r)
+                        self.ch[i] = hm
                     if eps_r is None and sigma is None:
                         continue
                     if eps_r is not None:
@@ -11299,9 +11335,6 @@ class Fd3:
             f[last:last + nxy] = [0.0] * nxy
         self.step += 1
 
-    def time(self):
-        return float(self.step) * self.dt
-
     def energy(self):
         _c, eps0, mu0 = self.K
         e = 0.0
@@ -11375,11 +11408,12 @@ class Fd3Scripts:
     """Replays fdtd_2d3d.tsv's 3D scripts on primitives P; a row whose inputs extend the previous row's continues from
     that row's grid (the frames of one scenario)."""
 
-    def __init__(self, root: Path, P):
+    def __init__(self, root: Path, P, port=frozenset()):
         c = golden_consts(root)
         self.C = c
         self.K = (c["field::SPEED_OF_LIGHT"], c["field::EPSILON_0"], c["field::MU_0"])
         self.P = P
+        self.port = port
         self.prev, self.sim, self.errs = None, None, []
 
     def eval(self, ins_raw):
@@ -11401,7 +11435,7 @@ class Fd3Scripts:
         if self.prev is not None and raw[:len(self.prev)] == self.prev and self.sim is not None:
             sim, errs, done = self.sim.copy(), list(self.errs), len(fd3_ops([parse_tok(x) for x in self.prev[4:]]))
         else:
-            sim, errs, done = Fd3(nx, ny, nz, dx, self.K), [], 0
+            sim, errs, done = Fd3(nx, ny, nz, dx, self.K, self.port), [], 0
         for code, a in ops[done:]:
             e = None
             if code in (1, 2, 3, 4):
@@ -11443,7 +11477,8 @@ class Fd3Scripts:
                 steps, src, fr, am = a[0] & FD_U64, a[1], a[2], a[3]
                 for _ in range(steps):
                     if src is not None:
-                        sim.add_source(src[0], src[1], src[2], am * self.P["sin"](2.0 * math.pi * fr * sim.time()))
+                        t = float(sim.step) * sim.dt                # Rust's `step as f64 * dt`, not time()
+                        sim.add_source(src[0], src[1], src[2], am * self.P["sin"](2.0 * math.pi * fr * t))
                     sim.step_once()
             elif code == 8:
                 setattr(sim, Fd3.FIELDS[a[0]], [a[1]] * n)
@@ -11468,10 +11503,11 @@ class Gpu2Scripts:
     the 2D scripts' opcodes; the state is step, dt, time, the digests of E_z, H_x, H_y, C_e and C_h, and E_z, H_x, H_y
     at the 2D probes."""
 
-    def __init__(self, root: Path, P):
+    def __init__(self, root: Path, P, port=frozenset()):
         c = golden_consts(root)
         self.K = (c["field::SPEED_OF_LIGHT"], c["field::EPSILON_0"], c["field::MU_0"])
         self.P = P
+        self.port = port
         self.prev, self.sim = None, None
 
     def eval(self, ins_raw):
@@ -11490,7 +11526,7 @@ class Gpu2Scripts:
         if self.prev is not None and raw[:len(self.prev)] == self.prev and self.sim is not None:
             sim, done = self.sim.copy(), len(fd2_ops([parse_tok(x) for x in self.prev[3:]]))
         else:
-            sim, done = Fd2(nx, ny, dx, 0, self.K), 0
+            sim, done = Fd2(nx, ny, dx, 0, self.K, self.port), 0
         for code, a in ops[done:]:
             if code == 5:
                 sim.add_source(a[0] & FD_U64, a[1] & FD_U64, a[2])
@@ -11501,7 +11537,8 @@ class Gpu2Scripts:
                 steps, src, fr, am = a[0] & FD_U64, a[1], a[2], a[3]
                 for _ in range(steps):
                     if src is not None:
-                        sim.add_source(src[0], src[1], am * self.P["sin"](2.0 * math.pi * fr * sim.time()))
+                        t = float(sim.step) * sim.dt                # Rust's `step as f64 * dt`, not time()
+                        sim.add_source(src[0], src[1], am * self.P["sin"](2.0 * math.pi * fr * t))
                     sim.step_once()
             else:
                 raise ValueError(f"GpuFdtd2d script: opcode {code}")
@@ -11636,19 +11673,50 @@ def fd2_nf2ff(scripts, ins_raw, P, port=False):
     return fu_seq_toks(pattern) + fu_seq_toks(angles)
 
 
+FD23_SCRIPTS = ("Fdtd2d::script", "Fdtd3d::script", "GpuFdtd2d::script")
+_FD23_RUNS = {}
+
+
+def fd23_runs(root: Path, path: Path, port):
+    """The script and `nf2ff_2d` rows replayed on MPFR's primitives with the port's ADR 0002 rows `port`, by row index:
+    a script row's outputs, an nf2ff row's (Rust's core, the port's core) on that grid's snapshot. Cached, so the
+    mappings and the corrections share each replay."""
+    key = (str(path), port)
+    if key not in _FD23_RUNS:
+        sc = {"Fdtd2d::script": Fd2Scripts(root, MPFR_P, port), "Fdtd3d::script": Fd3Scripts(root, MPFR_P, port),
+              "GpuFdtd2d::script": Gpu2Scripts(root, MPFR_P, port)}
+        f2n = Fd2Scripts(root, MPFR_P, port)
+        P = dict(MPFR_P, hypot=lambda x, y: mpfr_ref.cr2("hypot", x, y))
+        res = {}
+        for n, (fn, _cls, ins, _outs, _v) in enumerate(sc_lines(path)):
+            if fn in sc:
+                res[n] = sc[fn].eval(ins)
+            elif fn == "fdtd::nf2ff_2d":
+                res[n] = (fd2_nf2ff(f2n, ins, P), fd2_nf2ff(f2n, ins, P, port=True))
+        _FD23_RUNS[key] = res
+    return _FD23_RUNS[key]
+
+
 def fdtd_2d3d_adr_rows(root: Path, path: Path) -> list:
-    """ADR 0002 row 18: each `nf2ff_2d` row whose outputs the core's range edges change (M5 part 2d-6), on correctly
-    rounded primitives, the port's model (`nf_core18`) against Rust's chain."""
+    """ADR 0002 rows 40 and 13 (M6 part 4a): each 2D, 3D and GpuFdtd2d script whose state the coefficients rounded once
+    change, named by the first set of the port's rows that accounts for its whole change (row 40, then 13). Row 18:
+    each `nf2ff_2d` row whose outputs the core's range edges change (M5 part 2d-6). All on correctly rounded primitives,
+    the port's model against Rust's chain; a row whose port value is the oracle's needs no mapping."""
     out = []
-    base, port = Fd2Scripts(root, MPFR_P), Fd2Scripts(root, MPFR_P)
-    P = dict(MPFR_P, hypot=lambda x, y: mpfr_ref.cr2("hypot", x, y))
-    for fn, _cls, ins, outs, _v in sc_lines(path):
-        if fn != "fdtd::nf2ff_2d":
+    rust, port = fd23_runs(root, path, frozenset()), fd23_runs(root, path, FD2_PORT)
+    subs = [("40", fd23_runs(root, path, frozenset({"40"}))), ("13", port)]
+    notes = {"40": "the lossy coefficients rounded once", "13": "rounded once", "18": "the range edge"}
+    for n, (fn, _cls, ins, outs, _v) in enumerate(sc_lines(path)):
+        if n not in port:
             continue
-        want = fd2_nf2ff(port, ins, P, port=True)
-        rust = fd2_nf2ff(base, ins, P)
-        if not toks_same(want, rust) and not toks_same(want, wave_toks([parse_tok(x) for x in outs.split(" ")])):
-            out.append((fn, ins, wire(want), "18", f"oracle {outs[:120]}; ADR 0002 row 18: the range edge"))
+        if fn == "fdtd::nf2ff_2d":
+            want, have, cands = port[n][1], rust[n][0], [(k, r[n][0]) for k, r in subs]
+        else:
+            want, have, cands = port[n], rust[n], [(k, r[n]) for k, r in subs]
+        if toks_same(want, have) or toks_same(want, wave_toks([parse_tok(x) for x in outs.split(" ")])):
+            continue
+        row = next((k for k, v in cands if toks_same(v, want)), "18")
+        out.append((fn, ins, wire(want), row, f"oracle {outs[:120]}; ADR 0002 row {row}: {notes[row]}"))
     return out
 
 
@@ -11687,24 +11755,14 @@ def fdtd_2d3d_corrections(root: Path, path: Path):
     def fixes(_rows):
         out = []
         C = golden_consts(root)
-        f2, f2n, f2p = Fd2Scripts(root, MPFR_P), Fd2Scripts(root, MPFR_P), Fd2Scripts(root, MPFR_P)
-        f3 = Fd3Scripts(root, MPFR_P)
-        g2 = Gpu2Scripts(root, MPFR_P)
-        P = dict(MPFR_P, hypot=lambda x, y: mpfr_ref.cr2("hypot", x, y))
-        for fn, cls, ins, outs, _v in sc_lines(path):
-            if fn == "fdtd::nf2ff_2d":
-                want = fd2_nf2ff(f2n, ins, P)
-                if not toks_same(fd2_nf2ff(f2p, ins, P, port=True), want):
-                    continue                                # ADR 0002 row 18's: fdtd_2d3d.adr.tsv maps it
+        rust, port = fd23_runs(root, path, frozenset()), fd23_runs(root, path, FD2_PORT)
+        for n, (fn, cls, ins, outs, _v) in enumerate(sc_lines(path)):
+            if n in rust:
+                want, mine = (rust[n][0], port[n][1]) if fn == "fdtd::nf2ff_2d" else (rust[n], port[n])
+                if not toks_same(mine, want):
+                    continue                                # an ADR 0002 row's: fdtd_2d3d.adr.tsv maps it
                 old = wave_toks([parse_tok(x) for x in outs.split(" ")])
-                if not toks_same(want, old):
-                    out.append((fn, ins, wire(want), f"oracle {outs[:120]}; correctly rounded primitives give "
-                                                     f"{wire(want)[:60]}"))
-                continue
-            if fn in ("Fdtd2d::script", "Fdtd3d::script", "GpuFdtd2d::script"):
-                want = {"Fdtd2d::script": f2, "Fdtd3d::script": f3, "GpuFdtd2d::script": g2}[fn].eval(ins)
-                old = wave_toks([parse_tok(x) for x in outs.split(" ")])
-                if not toks_same(want, old):            # run's sine, the CPML profiles' powf and exp
+                if not toks_same(want, old):            # run's sine, the CPML profiles' powf and exp, NF2FF's
                     out.append((fn, ins, wire(want), f"oracle {outs[:120]}; correctly rounded primitives give "
                                                      f"{wire(want)[:60]}"))
                 continue

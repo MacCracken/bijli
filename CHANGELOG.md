@@ -594,6 +594,16 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
   ports compute.rs's 18 tests, its `RoundTripBackend` among them (33 assertions). Cyrius-only bench:
   `fdtd/gpu_fdtd2d_step_100x100_cpu` 50.4–54.5 µs (BjFdtd2d's step 46.6–48.7 µs in the
   same runs: the trait's per-kernel checks and the chunking, about 1.1×).
+- **Cyrius port, M6 part 4a — the range-edge review begins: round once** (ADR 0002 rows 13 and 40 amended): M6's review
+  runs as Part 4, in bites (`port-parity.md` §125). 4a applies the standing decisions to the 2D and 3D grids and
+  `GpuFdtd2d` as M5 did to the 1D grid: dt = dx/(2√2·c) and dx/(2√3·c), the update coefficients dt/(ε₀·dx·ε_r) and
+  dt/(μ₀·dx·μ_r) and `time()` past 2⁵³ are each rounded once (row 13), and the lossy C_a and C_b once from their exact
+  rationals (row 40: `e_update_coefficients` is `LossyMaterial::update_coefficients`' chain, which the grids now call).
+  The 1D grid's helpers moved into `src/crmath_edge.cyr`, shared by the four grids; a region computes each distinct
+  material's coefficients once. Every 2D, 3D and `GpuFdtd2d` trajectory reads the coefficients, so most change in their
+  last bits: `fdtd_2d3d.adr.tsv` maps 824 rows (row 13: 789, row 40: 23, row 18's 12 NF2FF rows as before), and
+  `emit.py`'s `emit_4a` appends 282 rows (1,745): ten decades of dx in both modes, 3D and on the CPU backend, lossy
+  cells where C_a cancels, the spacings at the range's ends, CPML layers on the rounded dt.
 
 ### Fixed
 
@@ -1156,9 +1166,18 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
   10⁻³⁰⁰ Hz), and the phasor form's other edges (sources of 10⁻³⁰⁰ and 10⁻³¹⁰, dx of 10⁻³¹⁰). It runs on the phasor
   form's core, whose range edges hold for it: k to 53 bits from the double frequency, the transform with an unbounded
   exponent where Rust's chain leaves the range (`port-parity.md` §119).
+- **fdtd** (ADR 0002 rows 13 and 40 amended, M6 part 4a): the 2D and 3D grids' and `GpuFdtd2d`'s dt and update
+  coefficients were an ulp off on many grids (the 3D dt, C_b and C_h each at dx = 5 cm, the 2D C_h at dx = 1 mm), the
+  lossy C_a cancelled where σΔt/2ε nears 1 (2.7·10⁻⁶ relative at 1 + 10⁻¹²), `time()` rounded the step first past 2⁵³,
+  and at dx = 5·10⁻³²⁴ C_b was 0/0 = NaN where ε₀·dx underflowed. Each is now rounded once. Cost: none; the steps and
+  construction are unchanged, and the regions got faster (below; `port-parity.md` §125).
 
 ### Performance
 
+- **fdtd** (M6 part 4a; a focused interleaved A/B against HEAD, two rounds at load 3.3–3.4): a 2D or 3D region
+  computes each distinct material's coefficients once, where Rust's chain ran per cell: `set_conductivity` over
+  100 × 100 238–241 → 155 µs (−35 %), over 30³ 672–686 → 447–448 µs (−34 %), `set_permeability` over 100 × 100
+  56–57 → 49–50 µs (−12 %). There's no Rust twin (Rust has no bench of a region).
 - **relativity** (M2 part 2d-3g; a focused interleaved A/B against HEAD, three rounds at load 1.2–1.4):
   `relativity/solve_retarded_time_uniform_t1s` 804 → 612 ns (−24 %) and `relativity/lienard_wiechert_fields_orbit_b099`
   6.06 → 5.87 µs (−3 %). The light-cone sample takes its maxima with compares instead of four `_bj_max` and three

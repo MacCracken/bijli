@@ -620,6 +620,35 @@ fn main() {
     assert(g.fz == 0 && g.ca == 0 && g.map_bytes == 0 && g.lossy_bytes == 0, "freed and emptied");
     BjFdtd2d_free(&g);
 
+    # ADR 0002 rows 13 and 40 (M6 part 4a): dt, the coefficients and time() rounded once, the lossy C_a and C_b once
+    # from their exact rationals. The expectations are validate.py's model of the port.
+    test_group("cyrius_round_once");
+    var ro1: BjFdtd2d;
+    var tro1, vro1 = BjFdtd2d_new(9, 8, 0.001, BJ_MODE2D_TM, &ro1);
+    var ro1h: f64 = at(ro1.ch, 0);
+    var ro1hw: f64 = _bj_from_bits(0x3f4ec087c0428803);
+    assert(is_ok(tro1) == 1 && ro1h == ro1hw, "dt/(μ₀dx) at dx = 1 mm, rounded once (Rust's an ulp below)");
+    var ro1s: f64 = _bj_from_bits(0x402e080491c11869);
+    var tro2, vro2 = ro1.set_conductivity(2, 2, 6, 5, ro1s);
+    var ro1ap: f64 = _bj_from_bits(0x3d619803226c0dc8);
+    var ro1aw: f64 = -ro1ap;
+    var ro1bw: f64 = _bj_from_bits(0x4050a6378a231d88);
+    var ro1a: f64 = at(ro1.ca, ro1.idx(3, 3));
+    var ro1b: f64 = at(ro1.ce, ro1.idx(3, 3));
+    assert(is_ok(tro2) == 1 && ro1a == ro1aw && ro1b == ro1bw,
+      "C_a at σΔt/2ε = 1 + 10⁻¹²: the exact −5.000458096470582·10⁻¹³ (Rust's −5.000444502909205·10⁻¹³)");
+    ro1.step = 9007199255861437;
+    var ro1t: f64 = ro1.time();
+    var ro1tw: f64 = _bj_from_bits(0x40c4bf37a74f6b51);
+    assert(ro1t == ro1tw, "a step of 2^53 + 1,120,445: step·dt rounded once (Rust's an ulp below)");
+    BjFdtd2d_free(&ro1);
+    var ro2: BjFdtd2d;
+    var tro3, vro3 = BjFdtd2d_new(5, 5, 0.0001, BJ_MODE2D_TE, &ro2);
+    var ro2e: f64 = at(ro2.ce, 0);
+    var ro2ew: f64 = _bj_from_bits(0x4060a6378a2326af);
+    assert(is_ok(tro3) == 1 && ro2e == ro2ew, "dt/(ε₀dx) at dx = 0.1 mm, rounded once (Rust's an ulp off)");
+    BjFdtd2d_free(&ro2);
+
     return assert_summary();
 }
 

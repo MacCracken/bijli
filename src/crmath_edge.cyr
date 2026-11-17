@@ -3568,3 +3568,67 @@ fn _bj_e_cell_row(d: *f64, k: *f64, ks, a: *f64, b: *f64, w: *f64, n) {
     }
     return 0;
 }
+
+# ── the FDTD grids' coefficients rounded once (ADR 0002 row 13: M5 part 2b, M6 part 4a) ──────────────────────────────
+#
+# The 1D grid (src/fdtd1d.cyr), the 2D and 3D grids (src/fdtd2d.cyr, src/fdtd3d.cyr) and GpuFdtd2d (src/compute.cyr)
+# share these: each is one product or quotient of the grid's fields and constants, which Rust rounded two or three
+# times.
+
+# An update coefficient dt/(k₀·dx·m), m = ε_r or μ_r (1 at construction), rounded once; Rust's (dt/(k₀·dx))/m rounded
+# three times. Rust's chain stays where dt or dx isn't finite or dx is 0 (both are writable fields).
+#must_use
+fn _bj_e_fd_coeff(dt: f64, k0: f64, dx: f64, m: f64): f64 {
+    var kd: f64 = k0 * dx;
+    var base: f64 = dt / kd;
+    var r: f64 = base / m;
+    var zt: f64 = dt * 0.0;
+    var zx: f64 = dx * 0.0;
+    if (zt == 0.0 && zx == 0.0 && dx != 0.0) {
+        var num: f64[1];
+        var den: f64[3];
+        num[0] = dt;
+        den[0] = k0;
+        den[1] = dx;
+        den[2] = m;
+        r = _bj_k_cr_mono(&num, 1, &den, 3);
+    }
+    return r;
+}
+
+# The time step·dt (s) of a step count s (a usize), rounded once: Rust's `step as f64 * dt` (the word read unsigned),
+# where a step past 2^53 (a written field) is split exactly as s_hi + s_lo (s_hi a multiple of 2^11) and rounded once
+# on rational 14, where Rust's `step as f64` rounded first. Rust's product stays for a dt that isn't finite.
+#must_use
+fn _bj_e_fd_time(s, dt: f64): f64 {
+    var sf: f64 = f64_from(s);
+    if (s < 0) {
+        var h: f64 = f64_from((s >> 1) | (s & 1));
+        sf = h * 2.0;
+    }
+    var t: f64 = sf * dt;
+    var z: f64 = dt * 0.0;
+    if ((s < 0 || s > 9007199254740992) && z == 0.0) {
+        var rv: f64[3];
+        var hf: f64 = f64_from(s >> 11);
+        rv[0] = hf * 2048.0;
+        rv[1] = dt;
+        rv[2] = f64_from(s & 2047);
+        var ro: f64[1];
+        if (_bj_cr_rat(&rv, 3, _bj_cr_rat_spec(14), 0, &ro) == 1) { t = ro[0]; }
+    }
+    return t;
+}
+
+# Half a grid's Courant limit, dx/(r·c) with r = 2√2 (2D) or 2√3 (3D) as Rust's doubles, rounded once; Rust's
+# dx/((r)·c) rounded twice. dx is a validated spacing (finite, > 0).
+#must_use
+fn _bj_e_fd_courant(dx: f64, r: f64): f64 {
+    var num: f64[1];
+    var den: f64[2];
+    num[0] = dx;
+    den[0] = r;
+    den[1] = BJ_SPEED_OF_LIGHT;
+    var dt: f64 = _bj_k_cr_mono(&num, 1, &den, 2);
+    return dt;
+}

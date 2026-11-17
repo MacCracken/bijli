@@ -1,6 +1,8 @@
 # fdtd3d.cyr — fdtd.rs's 3D solver (M6 part 2a): `Fdtd3d`, the full vector Yee algorithm on an nx × ny × nz grid, all
 # six components E_x, E_y, E_z, H_x, H_y, H_z, SI units. Fields are stored z-major, index z·nx·ny + y·nx + x. The
-# time step is half the 3D Courant limit, dt = dx/(2√3·c), a Courant number of 1/(2√3).
+# time step is half the 3D Courant limit, dt = dx/(2√3·c), a Courant number of 1/(2√3). dt, the update coefficients and
+# `time()` are rounded once (ADR 0002 row 13), and the lossy C_a and C_b once from their exact rationals (row 40), as
+# the 1D grid's (M6 part 4a).
 #
 # The outer faces are perfect electric conductors: tangential E is held at zero on all six faces (E_y and E_z on the x
 # faces, E_x and E_z on the y faces, E_x and E_y on the z faces), so outgoing waves reflect. A CPML (M6 part 2b) can
@@ -224,8 +226,8 @@ fn _bj_fd3_zero(f: *f64, n) {
 # A vacuum grid of nx × ny × nz nodes at spacing dx into *out, the faces PEC: Ok(0), or with out untouched
 # Err(InsufficientResolution) when a dimension is below 3 (cells min(nx, ny, nz), domain that min·dx),
 # Err(InvalidParameter) "dx must be finite and positive, got {dx}", "grid [{nx}, {ny}, {nz}] is too large" (the cell
-# count past 2^64) or "cannot allocate {n} grid values", in Rust's order. dt = dx/(2√3·c). Give it back with
-# BjFdtd3d_free. Mirrors `Fdtd3d::new`.
+# count past 2^64) or "cannot allocate {n} grid values", in Rust's order. dt = dx/(2√3·c), it and the coefficients
+# rounded once (ADR 0002 row 13, M6 part 4a). Give it back with BjFdtd3d_free. Mirrors `Fdtd3d::new`.
 #must_use
 public fn BjFdtd3d_new(nx, ny, nz, dx: f64, out: *BjFdtd3d): Result {
     if ((nx >= 0 && nx < 3) || (ny >= 0 && ny < 3) || (nz >= 0 && nz < 3)) {
@@ -256,10 +258,8 @@ public fn BjFdtd3d_new(nx, ny, nz, dx: f64, out: *BjFdtd3d): Result {
         return Err(BJ_ERR_INVALID_PARAMETER);
     }
     var n = cells[0];
-    var c: f64 = BJ_SPEED_OF_LIGHT;
     var r3: f64 = 2.0 * _BJ_FD3_SQRT_3;
-    var r3c: f64 = r3 * c;
-    var dt: f64 = dx / r3c;
+    var dt: f64 = _bj_e_fd_courant(dx, r3);
     var map = 0;
     var bytes = 0;
     var wl = nx;
@@ -269,10 +269,8 @@ public fn BjFdtd3d_new(nx, ny, nz, dx: f64, out: *BjFdtd3d): Result {
         map = mmap_anon(bytes);
     }
     if (map == 0) { return Err(_bj_fd2_alloc_err(n)); }
-    var e0dx: f64 = BJ_EPSILON_0 * dx;
-    var ce: f64 = dt / e0dx;
-    var m0dx: f64 = BJ_MU_0 * dx;
-    var ch: f64 = dt / m0dx;
+    var ce: f64 = _bj_e_fd_coeff(dt, BJ_EPSILON_0, dx, 1.0);
+    var ch: f64 = _bj_e_fd_coeff(dt, BJ_MU_0, dx, 1.0);
     var cep: *f64 = _bj_fd2_f64p(map + 6 * n * 8);
     var chp: *f64 = _bj_fd2_f64p(map + 7 * n * 8);
     var eps: *f64 = _bj_fd2_f64p(map + 8 * n * 8);
@@ -420,8 +418,14 @@ impl BjFdtd3d {
         }
         var dt: f64 = self.dt;
         var dx: f64 = self.dx;
-        var m0dx: f64 = BJ_MU_0 * dx;
-        var base_h: f64 = dt / m0dx;
+        var hm: f64 = 0.0;
+        if (has_mu == 1) { hm = _bj_e_fd_coeff(dt, BJ_MU_0, dx, mu_r); }
+        # The last cell's (ε_r, σ) as words and its (C_a, C_b), as the 2D grid's apply_region.
+        var lw_e = 0;
+        var lw_s = 0;
+        var lca: f64 = 0.0;
+        var lcb: f64 = 0.0;
+        var have = 0;
         var eps: *f64 = _bj_fd2_f64p(self.permittivity);
         var mu: *f64 = _bj_fd2_f64p(self.permeability);
         var ce: *f64 = _bj_fd2_f64p(self.ce);
@@ -434,7 +438,6 @@ impl BjFdtd3d {
                     var i = z * nxy + y * nx + x;
                     if (has_mu == 1) {
                         mu[i] = mu_r;
-                        var hm: f64 = base_h / mu_r;
                         ch[i] = hm;
                     }
                     if (has_eps == 1 || has_sigma == 1) {
@@ -442,9 +445,18 @@ impl BjFdtd3d {
                         if (has_sigma == 1 && self.conductivity != 0) { cond[i] = sigma; }
                         var s: f64 = 0.0;
                         if (self.conductivity != 0) { s = cond[i]; }
-                        var cav, cbv = _bj_fd2_e_coefficients(dt, dx, eps[i], s);
-                        ce[i] = cbv;
-                        if (self.ca != 0) { ca[i] = cav; }
+                        var we = _bj_k_bits(eps[i]);
+                        var ws = _bj_k_bits(s);
+                        if (have == 0 || we != lw_e || ws != lw_s) {
+                            var cav, cbv = _bj_fd2_e_coefficients(dt, dx, eps[i], s);
+                            lca = cav;
+                            lcb = cbv;
+                            lw_e = we;
+                            lw_s = ws;
+                            have = 1;
+                        }
+                        ce[i] = lcb;
+                        if (self.ca != 0) { ca[i] = lca; }
                     }
                 }
             }
@@ -893,11 +905,11 @@ impl BjFdtd3d {
         return 0;
     }
 
-    # The simulation time step·dt in seconds. Mirrors `Fdtd3d::time`.
+    # The simulation time step·dt in seconds, rounded once past 2^53 (ADR 0002 row 13, M6 part 4a). Mirrors
+    # `Fdtd3d::time`.
     #must_use
     public fn time(self): f64 {
-        var sf: f64 = _bj_fd2_u2f(self.step);
-        var t: f64 = sf * self.dt;
+        var t: f64 = _bj_e_fd_time(self.step, self.dt);
         return t;
     }
 

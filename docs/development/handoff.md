@@ -1,4 +1,4 @@
-# Handoff: the Cyrius port, M6 Part 1 done (2026-11-16)
+# Handoff: the Cyrius port, M6's range-edge review (Part 4) under way (2026-11-17)
 
 For the next agent picking up the port. **Read first:** `CLAUDE.md` (the rules), [`state.md`](state.md) (live state),
 [`bijli-port-plan.md`](bijli-port-plan.md) (§0.1 holds the user's M5 Part 2 answers; the tracking table is near the
@@ -9,8 +9,8 @@ bite is done, the machinery, the scripts and the traps. Delete it once it has se
 
 ## Where it stands
 
-- **Committed through `3170d5a`** ("M6 pt3", which holds part 2b); Part 3 (compute.rs) is in the working tree for the
-  user to commit.
+- **Committed through `53b06f0`** ("M6 pt3", Part 3: compute.rs); part 4a is in the working tree for the user to
+  commit.
 - **M6 Part 1** (the 2D CPML and `Fdtd2d`, §116–§119) runs in bites. Done: 1a the CPML layer (`src/cpml.cyr`); 1b-1
   `Fdtd2d` without the CPML (`src/fdtd2d.cyr`; its scripts `Fdtd2d::script` in `fdtd_2d3d.tsv`, replayed by
   validate.py's `Fd2Scripts` in pure Python, no NumPy on the host); 1b-2 the CPML attached (the y-strips packed, the
@@ -23,8 +23,17 @@ bite is done, the machinery, the scripts and the traps. Delete it once it has se
   the twelve Ψ slabs in one mapping; the first rows from `scripts/oracle/emit.py`, whose `emit_2b` is the template for
   the next part's emitter). **Part 2 is done**; fdtd.rs is ported whole. Part 3, compute.rs, is done (§124:
   `src/compute.cyr`; probe p20 for the trait and generic shape; `emit_3`'s GpuFdtd2d scripts and CPU kernel rows).
-  Next: M6's range-edge review (the per-cell rule of M5 Part 2 for the 2D and 3D updates and the CPML), then M6 is
-  done.
+  **Part 4, M6's range-edge review** (plan §0.1's M6 paragraph: the standing answers applied, nothing new asked), runs
+  in bites: 4a round once (done, §125: `_bj_e_fd_coeff`, `_bj_e_fd_time`, `_bj_e_fd_courant` in
+  `src/crmath_edge.cyr`, the lossy pair through `BjLossyMaterial`; validate.py's `FD2_PORT` and `fd23_runs`, the
+  mappings named 40, then 13, else 18; `emit_4a`), then 4b the CPML profile (σ_max and each layer's b, c, 1/κ − 1 at
+  their range edges; c's b − 1 as `_bj_expm1`, 1/κ − 1 as (1 − κ)/κ rounded once; every CPML trajectory will change
+  with c), 4c the per-cell rule for the 2D updates and the CPU kernels (`_bj_e_cell_row` needs a subtract form and a
+  curl form: d ± k·((a1 − a0) − (b1 − b0)), the marker on the product with w = Δa − Δb ≠ 0 as the factor test), 4d
+  the 3D updates (the same curl form), 4e the CPML corrections (two statements a cell: Ψ ← bΨ + cΔ, then f +=
+  (s·k)·(km1·Δ + Ψ); a product's marker tests it against the other addend, as `_bj_e_cell_edge` against d; Ψ's
+  geometric decay makes b·Ψ subnormal in quiet layers), 4f `total_energy` (the 1D's `_bj_fd1_energy_ux` pattern) and
+  `run`'s source (`_bj_fd1_source_ux`, to share) in the three grids. Then M6 is done.
 - **No Rust (ADR 0003, 2026-11-16).** The Rust tree and the Rust generator are retired; the corpus is frozen data and
   `scripts/oracle/validate.py` the reference model. New rows come from `scripts/oracle/emit.py` (2b's `emit_2b` is
   the first part): add a part function, register it in `main()`'s module list, run `emit.py .`, then `validate.py .
@@ -67,20 +76,18 @@ bite is done, the machinery, the scripts and the traps. Delete it once it has se
     Rust's chain where every operation is its 53-bit value (mode 0, checked per sample by one exponent test and per
     angle), else the call or the angle unbounded (`_bj_nf_angle_ux`); a non-finite field keeps Rust's (row 18, §114).
     **Part 2 is done.**
-- **Numbers after M6 Part 3**: 19 modules, 645,007 ok, 0 failed, 121,888 accepted (ADR 01: 43,099; ADR 0002:
-  78,789) over 766,895 rows; 488 digests equal on x86_64 ELF, x86_64 PE and aarch64. Ledger 778 ported, 12 n/a, 68
+- **Numbers after M6 part 4a**: 19 modules, 644,480 ok, 0 failed, 122,697 accepted (ADR 01: 43,096; ADR 0002:
+  79,601) over 767,177 rows; 488 digests equal on x86_64 ELF, x86_64 PE and aarch64. Ledger 778 ported, 12 n/a, 68
   pending of 858; API snapshot 2,139; surface parity 653 items (15 modules); benches 80 of 80 twinned; execution
   coverage 394 of 394. `json.tsv` is 40.7 MB of the 48 MiB cap: the rest of M6 adds no JSON (`Fdtd3d` and compute.rs
   have no serde), but M7's eight serde types (integration/) will want their own module.
 - **M5 is done** (§115). The benchmark record's Cyrius column is each row's least of four full runs: rows vary up to
   1.5× between runs under other repos' loads, so take the least of several when regenerating it.
-- **Next**: M6 Part 2 (`Fdtd3d` and its CPML), Part 3 (`compute.rs`), then M6's range-edge review under the same
-  per-cell rule.
+- **Next**: part 4b, the CPML profile (above).
   `nf2ff_2d` (the snapshot form) calls `_bj_nf_core` with the rotation (1, 0) and k from `_bj_nf_validate` on its
   double frequency (`_bj_k_ux_from`): the core's range edges come with it.
-- **Corpus size**: `fdtd.tsv` is 38.8 MB (107,341 rows) and `json.tsv` 38.7 MB, against the 48 MiB cap that
-  validate.py's `too_big` guards (§81). M6 will need `fdtd.tsv` split (a second module file, e.g. by milestone), and 2d
-  may: watch the size after each regeneration.
+- **Corpus size**: `fdtd.tsv` is 38.8 MB (107,341 rows) and `json.tsv` 40.7 MB, against the 48 MiB cap that
+  validate.py's `too_big` guards (§81); M6's rows are in `fdtd_2d3d.tsv` (2.9 MB after 4a).
 - **A recorded cost**: the 1D step runs 3.5–3.8× HEAD's with 2d-2a's scan (§107), the TF/SF step about 2× with
   2d-3's (§109) and `accumulate` about 3× with 2d-4a's (§110). The user chose that fix; I had estimated 1.5–2×.
   Cyrius 6.7.18 has no vector verb that classifies a lane (plan §10, listed as a gap). M6's grids will pay the same.

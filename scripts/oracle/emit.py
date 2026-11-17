@@ -340,6 +340,117 @@ def emit_3(rows, model):
         kernel(rows, 7, 1, 1, idx, (4, 5, 0, 0), 1.5)
 
 
+# ── M6 Part 4: the range-edge review ────────────────────────────────────────────────────────────────────────────────
+
+class Script2d:
+    """An `Fdtd2d::script` being built: `i:<nx> i:<ny> f:<dx> i:<mode>`, then the 2D scripts' operations; the outputs
+    from validate.py's Fd2Scripts on glibc's primitives."""
+
+    def __init__(self, rows, model, nx, ny, dx, mode):
+        self.rows, self.model = rows, model
+        self.ins = [u(nx), u(ny), f(dx), i(mode)]
+
+    def op(self, *toks):
+        self.ins += list(toks)
+
+    def row(self):
+        self.rows.emit("Fdtd2d::script", "T", self.ins, self.model.eval(V.wire(self.ins)))
+
+
+def region2(op, c, *vals):
+    return (i(op),) + tuple(u(q) for q in c) + tuple(f(v) for v in vals)
+
+
+def source2d(x, y, v):
+    return (i(5), u(x), u(y), f(v))
+
+
+def frames2(rows, model, nx, ny, dx, mode, setup, frames, advance=step):
+    """A 2D scenario: the setup operations, then a row at each frame (cumulative steps)."""
+    sc = Script2d(rows, model, nx, ny, dx, mode)
+    for op in setup:
+        sc.op(*op)
+    if not frames:
+        sc.row()
+    at = 0
+    for fr in frames:
+        sc.op(*advance(fr - at))
+        at = fr
+        sc.row()
+
+
+# The spacings at the range's ends: past them Rust's ε₀·dx, (2√2)·c·… or dt itself left the normal range.
+EDGE_DX = (sys.float_info.max, 1e300, 1e200, 1.0, 0.032, 1e-200, 1e-300, 1e-305, 2.2250738585072014e-308, 1e-310,
+           5e-324)
+
+
+def emit_4a(rows, m2, m3, mg):
+    """M6 part 4a (ADR 0002 rows 13 and 40): the grids' dt, update coefficients and lossy C_a and C_b rounded once.
+    Seeded 2D (both modes), 3D and GpuFdtd2d grids over ten decades of dx, each through seeded materials; lossy cells
+    where C_a's numerator cancels (σΔt/2ε within 10⁻¹⁵ to 10⁻³ of 1); the spacings at the range's ends; and CPML
+    layers on the rounded dt."""
+    c, eps0 = m2.K[0], m2.K[1]
+    # The spacings at the range's ends, a source in each grid.
+    for dx in EDGE_DX:
+        for mode in (0, 1):
+            frames2(rows, m2, 7, 6, dx, mode, [source2d(3, 3, 1.0), source2d(2, 4, -0.5)], [1, 3])
+        frames3(rows, m3, (5, 6, 5), dx, [source(2, 3, 2, 1.0)], [1, 3])
+        frames_gpu(rows, mg, 7, 6, dx, [source2(3, 3, 1.0)], [1, 3])
+    # Lossy cells where C_a = (1 − s)/(1 + s) cancels: σ = (1 + δ)·2ε₀ε_r/dt, so s = σΔt/2ε is 1 + δ to an ulp or two.
+    for delta in (0.0, 1e-15, -1e-15, 1e-12, -1e-12, 1e-9, 1e-6, -1e-3):
+        for eps_r in (1.0, 2.5):
+            dt2 = V.fdiv(1e-3, 2.0 * math.sqrt(2.0) * c)
+            sg = (1.0 + delta) * 2.0 * eps0 * eps_r / dt2
+            ops = [region2(4, (2, 2, 6, 5), eps_r, 1.0, sg), source2d(4, 3, 1.0)]
+            frames2(rows, m2, 9, 8, 1e-3, 0 if eps_r == 1.0 else 1, ops, [1, 4])
+            dt3 = V.fdiv(1e-3, 2.0 * math.sqrt(3.0) * c)
+            sg3 = (1.0 + delta) * 2.0 * eps0 * eps_r / dt3
+            frames3(rows, m3, (6, 6, 6), 1e-3, [box(4, (1, 1, 1, 5, 5, 4), eps_r, 1.0, sg3), source(3, 3, 2, 1.0)],
+                    [1, 3])
+    # Seeded 2D grids: dx over ten decades, both modes, up to three material regions, sources.
+    rng = Rng(0x4A_2D)
+    for _ in range(64):
+        nx, ny, mode = rng.int(3, 12), rng.int(3, 12), rng.int(0, 1)
+        ops = []
+        for _ in range(rng.int(0, 3)):
+            x0, y0 = rng.int(0, nx - 1), rng.int(0, ny - 1)
+            cc = (x0, y0, rng.int(x0, nx + 1), rng.int(y0, ny + 1))
+            kind = rng.int(1, 4)
+            eps, mu = rng.log_uniform(0.0, 2.0), rng.log_uniform(0.0, 1.0)
+            sg = 0.0 if rng.unit() < 0.3 else rng.log_uniform(-3.0, 3.0)
+            ops.append(region2(kind, cc, *{1: (eps,), 2: (mu,), 3: (sg,), 4: (eps, mu, sg)}[kind]))
+        for _ in range(rng.int(1, 2)):
+            ops.append(source2d(rng.int(0, nx - 1), rng.int(0, ny - 1), rng.log_uniform(-2.0, 1.0)))
+        frames2(rows, m2, nx, ny, rng.log_uniform(-9.0, 1.0), mode, ops, [rng.int(1, 6)])
+    # Seeded 3D grids, as the 2D ones.
+    rng = Rng(0x4A_3D)
+    for _ in range(32):
+        dims = tuple(rng.int(3, 7) for _ in range(3))
+        ops = []
+        for _ in range(rng.int(0, 3)):
+            lo = tuple(rng.int(0, d - 1) for d in dims)
+            cc = lo + tuple(rng.int(lo[k], dims[k] + 1) for k in range(3))
+            kind = rng.int(1, 4)
+            eps, mu = rng.log_uniform(0.0, 2.0), rng.log_uniform(0.0, 1.0)
+            sg = 0.0 if rng.unit() < 0.3 else rng.log_uniform(-3.0, 3.0)
+            ops.append(box(kind, cc, *{1: (eps,), 2: (mu,), 3: (sg,), 4: (eps, mu, sg)}[kind]))
+        ops.append(source(*(rng.int(0, d - 1) for d in dims), rng.log_uniform(-2.0, 1.0)))
+        frames3(rows, m3, dims, rng.log_uniform(-9.0, 1.0), ops, [rng.int(1, 4)])
+    # Seeded GpuFdtd2d grids.
+    rng = Rng(0x4A_6C)
+    for _ in range(24):
+        nx, ny = rng.int(3, 16), rng.int(3, 16)
+        ops = [source2(rng.int(0, nx - 1), rng.int(0, ny - 1), rng.log_uniform(-2.0, 1.0))]
+        frames_gpu(rows, mg, nx, ny, rng.log_uniform(-9.0, 1.0), ops, [rng.int(1, 8)])
+    # CPML layers on the rounded dt: the profiles read the grid's dt.
+    rng = Rng(0x4A_C9)
+    for _ in range(6):
+        dx = rng.log_uniform(-6.0, -1.0)
+        frames2(rows, m2, 11, 10, dx, rng.int(0, 1), [cpml(2), source2d(5, 5, 1.0)], [3])
+    for _ in range(4):
+        frames3(rows, m3, (9, 8, 9), rng.log_uniform(-6.0, -1.0), [cpml(2), source(4, 4, 4, 1.0)], [2])
+
+
 # ── modules ─────────────────────────────────────────────────────────────────────────────────────────────────────────
 
 def module(name, parts):
@@ -360,10 +471,13 @@ def module(name, parts):
 
 
 def main() -> int:
+    model2 = V.Fd2Scripts(root, V.GLIBC_P)
     model3 = V.Fd3Scripts(root, V.GLIBC_P)
     model_gpu = V.Gpu2Scripts(root, V.GLIBC_P)
     problems = 0
-    for name, parts in (("fdtd_2d3d", [lambda r: emit_2b(r, model3), lambda r: emit_3(r, model_gpu)]),):
+    parts = [lambda r: emit_2b(r, model3), lambda r: emit_3(r, model_gpu),
+             lambda r: emit_4a(r, model2, model3, model_gpu)]
+    for name, parts in (("fdtd_2d3d", parts),):
         path, text, n = module(name, parts)
         big = V.too_big(f"tests/golden/{name}.tsv", text)
         if big:

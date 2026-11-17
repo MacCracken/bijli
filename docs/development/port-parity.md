@@ -6905,3 +6905,57 @@ eigenmode search (`dft_magnitude`'s recurrence and magnitude, `find_eigenmodes`'
   of 394); `cyrius audit`'s docs check first counted the two test backends' 16 trait methods as undocumented public
   functions, so each has its comment. validate.py 766,895 rows, 0 problems. **M6's three Parts are done**; its
   range-edge review is next.
+
+## 125. M6 part 4a: the range-edge review begins, round once (2026-11-17)
+
+- **M6's Part 4** (plan §0.1, the user's answers of 2026-11-12 and 2026-11-15; nothing new asked) runs in bites: 4a
+  round once (rows 13 and 40), 4b the CPML profile's range edges and its two cancelling differences (c's b − 1 as
+  expm1, 1/κ − 1 as (1 − κ)/κ: rows 29 and 40's forms), 4c the per-cell rule for the 2D updates and the CPU backend's
+  kernels, 4d the 3D updates, 4e the CPML corrections, 4f `total_energy` and `run`'s source. No threshold of M6's
+  compares against a constant: the profile's σ > 0 and denominator tests fall on the unbounded values in 4b.
+- **ADR 0002 row 13, amended**: the 2D and 3D grids and `GpuFdtd2d` as the 1D grid (M5 part 2b): dt = dx/(2√2·c) and
+  dx/(2√3·c) (Rust's dx/((2√2)·c) rounded twice; √2 and √3 as Rust's doubles), C_b = dt/(ε₀·dx) and C_h = dt/(μ₀·dx)
+  at construction, dt/(μ₀·dx·μ_r) and the lossless dt/(ε₀·dx·ε_r) in `apply_region`, and `time()` past 2⁵³. The 1D
+  grid's `_bj_fd1_coeff` and its `time()` body moved into `src/crmath_edge.cyr` as `_bj_e_fd_coeff` and
+  `_bj_e_fd_time` beside the new `_bj_e_fd_courant`, shared by the four grids (the 1D's `step as f64` now reads the
+  word unsigned past 2⁶³, as Rust's, where its fallback for an infinite dt had the sign wrong). Rust's 3D dt, C_b and
+  C_h were each an ulp off at dx = 5 cm, the 2D C_h at dx = 1 mm; at dx = 5·10⁻³²⁴ Rust's ε₀·dx underflowed and C_b
+  was 0/0 = NaN, now 0.
+- **ADR 0002 row 40, amended**: fdtd.rs's `e_update_coefficients` is `LossyMaterial::update_coefficients`' chain
+  (s = σΔt/2ε, C_a = (1 − s)/(1 + s), C_b = (Δt/εΔx)/(1 + s)), so `_bj_fd2_e_coefficients` calls it: both rounded once
+  from rationals 0 and 1. At s = 1 + 10⁻¹² Rust's C_a was −5.000444502909205·10⁻¹³ for −5.000458096470582·10⁻¹³
+  (2D, dx = 1 mm; 2.7·10⁻⁶ relative). `apply_region` computes each distinct (ε_r, σ) pair's coefficients once (the
+  last pair's words kept), and μ_r's C_h once per region: Rust's per-cell chain cost nanoseconds, a rounding a few
+  hundred.
+- **validate.py**: `Fd2`, `Fd3` and `Gpu2Scripts`' grid take the port's rows as a set (`FD2_PORT`, rows 40 and 13; the
+  shared `fd23_setup`, `fd23_coeff`, `fd23_time`, `fd23_e_coefficients`, the lossy pair from `fm_port`); `run`'s
+  sample keeps Rust's `step as f64 * dt`. `fdtd_2d3d_adr_rows` names a trajectory by the first set that accounts for
+  its whole change (row 40, then 13; an `nf2ff_2d` row's snapshot the same way, else 18), and `fd23_runs` caches each
+  replay so the mappings and the corrections share it (three replays, 55 s). **824 rows map** (row 13: 2D scripts 386,
+  3D 267, `GpuFdtd2d` 76, `nf2ff_2d`'s snapshots 60; row 40: 2D 12, 3D 11; row 18: the 12 NF2FF rows as before);
+  `fdtd_2d3d.cr.tsv` loses 3 script rows to them (11).
+- **The grid**: `emit.py`'s `emit_4a` appends 282 rows (1,745; the old body an exact prefix): the spacings at the
+  range's ends (DBL_MAX to 5·10⁻³²⁴, where ε₀·dx, (2√2)·c·… or dt itself leave the normal range) in both 2D modes, 3D
+  and on the CPU backend; lossy cells where C_a cancels (σΔt/2ε = 1 + δ for δ from ±10⁻¹⁵ to −10⁻³, ε_r 1 and 2.5, 2D
+  and 3D); 64 seeded 2D grids (dx over ten decades, both modes, up to three regions), 32 seeded 3D grids, 24 seeded
+  `GpuFdtd2d` grids; CPML layers on the rounded dt (6 2D, 4 3D).
+- **Tests**: `cyrius_round_once` in `tests/fdtd2d.tcyr` (4 assertions, 77 in all: C_h at dx = 1 mm, the lossy pair at s
+  = 1 + 10⁻¹², `time()` at a step of 2⁵³ + 1,120,445, C_b at dx = 0.1 mm), `tests/fdtd3d.tcyr` (3, 86: dt, C_b and C_h
+  at dx = 5 cm, the lossy pair, `time()`) and `tests/compute.tcyr` (2, 35: C_h, `time()`), each from validate.py's
+  model.
+- **Benchmarks**: no step loop changed. The interleaved A/B against HEAD ran three rounds, beside shravan's search
+  and fuzzing jobs: rounds 1 and 2 as the load fell from 18.6 to 4.0 (HEAD first each time, so their medians, 0.92
+  and 0.94 over 112 rows, flatter this tree), round 3 at 2.0 to 3.5 (median 1.05; the extremes 0.73 to 1.20 on rows
+  4a doesn't touch: the 1D step, a JSON reader, the Touchstone writer). The FDTD rows over the three rounds:
+  `fdtd/2d_step_100x100_tm` 49.0–52.7 → 45.3–50.4 µs, `_lossy` 52.9–54.2 → 48.5–53.2 µs, `fdtd/3d_step_30x30x30`
+  634.6–785.1 → 571.2–652.1 µs, `_cpml8` 2.17–2.43 → 2.11–2.46 ms, `fdtd/gpu_fdtd2d_step_100x100_cpu` 53.0–64.7 →
+  48.4–54.2 µs. A focused scratch bench of the setup paths, two interleaved rounds at load 3.3 to 3.4: `BjFdtd2d_new`
+  of 100 × 100 177–182 → 171–181 µs and `BjFdtd3d_new` of 30³ 174–190 → 174–175 µs (the mapping and its fill), the
+  rounding once a grid; `set_conductivity` over 100 × 100 238–241 → 155 µs (0.65×) and over 30³ 672–686 → 447–448 µs
+  (0.66×), `set_permeability` over 100 × 100 56–57 → 49–50 µs: a region now rounds each distinct material's
+  coefficients once, where Rust's chain ran in every cell.
+- **Result, every target** (x86_64 ELF, x86_64 PE, aarch64): **19 modules, 0 failing; 644,480 ok, 0 failed, 0
+  measured, 0 pending, 122,697 accepted (ADR 01: 43,096; ADR 0002: 79,601)** over 767,177 rows; **all 488 digests
+  equal**. `fdtd2d.tcyr` (77), `fdtd3d.tcyr` (86), `compute.tcyr` (35) and `fdtd1d.tcyr` (90) pass on all three. The
+  gate is clean (no warnings; execution coverage 394 of 394); validate.py 767,177 rows, 0 problems; `emit.py --check`
+  1,107 frozen rows and 638 emitted. Next: 4b, the CPML profile.

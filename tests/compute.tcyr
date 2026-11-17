@@ -444,6 +444,24 @@ fn main() {
     var tw, vw = BjWgpuBackend_new(&wg);
     assert(is_ok(tw) == 1 && sizeof(BjWgpuBackend) == 0, "the scaffold: no device, always Ok");
 
+    # ADR 0002 row 13 (M6 part 4a): GpuFdtd2d's dt, coefficients and time() rounded once, as Fdtd2d's. The expectations
+    # are validate.py's model of the port.
+    test_group("cyrius_round_once");
+    var g21: BjGpuFdtd2d<BjCpuBackend>;
+    var t21, v21 = BjGpuFdtd2d_new(9, 8, DX, cpu, &g21);
+    var o21: *f64 = host(72, 0.0);
+    var q21, q21v = cpu.read_buffer(g21.ch, o21, 72);
+    var h21: f64 = o21[0];
+    var h21w: f64 = _bj_from_bits(0x3f4ec087c0428803);
+    assert(is_ok(t21) == 1 && is_ok(q21) == 1 && h21 == h21w,
+      "dt/(μ₀dx) at dx = 1 mm, rounded once (Rust's an ulp below)");
+    g21.step = 9007199255861437;
+    var tm21: f64 = BjGpuFdtd2d_time(&g21);
+    var tm21w: f64 = _bj_from_bits(0x40c4bf37a74f6b51);
+    assert(tm21 == tm21w, "a step of 2^53 + 1,120,445: step·dt rounded once (Rust's an ulp below)");
+    fl_free(o21);
+    BjGpuFdtd2d_free(&g21);
+
     return assert_summary();
 }
 

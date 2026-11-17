@@ -15772,6 +15772,70 @@ fn _bj_e_cell_row(d: *f64, k: *f64, ks, a: *f64, b: *f64, w: *f64, n) {
     return 0;
 }
 
+# ── the FDTD grids' coefficients rounded once (ADR 0002 row 13: M5 part 2b, M6 part 4a) ──────────────────────────────
+#
+# The 1D grid (src/fdtd1d.cyr), the 2D and 3D grids (src/fdtd2d.cyr, src/fdtd3d.cyr) and GpuFdtd2d (src/compute.cyr)
+# share these: each is one product or quotient of the grid's fields and constants, which Rust rounded two or three
+# times.
+
+# An update coefficient dt/(k₀·dx·m), m = ε_r or μ_r (1 at construction), rounded once; Rust's (dt/(k₀·dx))/m rounded
+# three times. Rust's chain stays where dt or dx isn't finite or dx is 0 (both are writable fields).
+#must_use
+fn _bj_e_fd_coeff(dt: f64, k0: f64, dx: f64, m: f64): f64 {
+    var kd: f64 = k0 * dx;
+    var base: f64 = dt / kd;
+    var r: f64 = base / m;
+    var zt: f64 = dt * 0.0;
+    var zx: f64 = dx * 0.0;
+    if (zt == 0.0 && zx == 0.0 && dx != 0.0) {
+        var num: f64[1];
+        var den: f64[3];
+        num[0] = dt;
+        den[0] = k0;
+        den[1] = dx;
+        den[2] = m;
+        r = _bj_k_cr_mono(&num, 1, &den, 3);
+    }
+    return r;
+}
+
+# The time step·dt (s) of a step count s (a usize), rounded once: Rust's `step as f64 * dt` (the word read unsigned),
+# where a step past 2^53 (a written field) is split exactly as s_hi + s_lo (s_hi a multiple of 2^11) and rounded once
+# on rational 14, where Rust's `step as f64` rounded first. Rust's product stays for a dt that isn't finite.
+#must_use
+fn _bj_e_fd_time(s, dt: f64): f64 {
+    var sf: f64 = f64_from(s);
+    if (s < 0) {
+        var h: f64 = f64_from((s >> 1) | (s & 1));
+        sf = h * 2.0;
+    }
+    var t: f64 = sf * dt;
+    var z: f64 = dt * 0.0;
+    if ((s < 0 || s > 9007199254740992) && z == 0.0) {
+        var rv: f64[3];
+        var hf: f64 = f64_from(s >> 11);
+        rv[0] = hf * 2048.0;
+        rv[1] = dt;
+        rv[2] = f64_from(s & 2047);
+        var ro: f64[1];
+        if (_bj_cr_rat(&rv, 3, _bj_cr_rat_spec(14), 0, &ro) == 1) { t = ro[0]; }
+    }
+    return t;
+}
+
+# Half a grid's Courant limit, dx/(r·c) with r = 2√2 (2D) or 2√3 (3D) as Rust's doubles, rounded once; Rust's
+# dx/((r)·c) rounded twice. dx is a validated spacing (finite, > 0).
+#must_use
+fn _bj_e_fd_courant(dx: f64, r: f64): f64 {
+    var num: f64[1];
+    var den: f64[2];
+    num[0] = dx;
+    den[0] = r;
+    den[1] = BJ_SPEED_OF_LIGHT;
+    var dt: f64 = _bj_k_cr_mono(&num, 1, &den, 2);
+    return dt;
+}
+
 # --- log.cyr ---
 
 # log.cyr — bijli's logging: Rust's `tracing` sites and `logging::init` on sakshi (port of 1.2.0:src/logging.rs).
@@ -30982,28 +31046,6 @@ fn _bj_fd1_f64p(a): *f64 {
     return a;
 }
 
-# An update coefficient dt/(k₀·dx·m), m = ε_r or μ_r (1 at construction), rounded once (ADR 0002 row 13, M5 part 2b);
-# Rust's (dt/(k₀·dx))/m rounded three times. Rust's chain stays where dt or dx isn't finite or dx is 0 (both are
-# writable fields).
-#must_use
-fn _bj_fd1_coeff(dt: f64, k0: f64, dx: f64, m: f64): f64 {
-    var kd: f64 = k0 * dx;
-    var base: f64 = dt / kd;
-    var r: f64 = base / m;
-    var zt: f64 = dt * 0.0;
-    var zx: f64 = dx * 0.0;
-    if (zt == 0.0 && zx == 0.0 && dx != 0.0) {
-        var num: f64[1];
-        var den: f64[3];
-        num[0] = dt;
-        den[0] = k0;
-        den[1] = dx;
-        den[2] = m;
-        r = _bj_k_cr_mono(&num, 1, &den, 3);
-    }
-    return r;
-}
-
 # 1 when x is finite and strictly positive (NaN-safe). Mirrors fdtd.rs's `is_positive_finite`.
 #must_use
 fn _bj_fd1_pos(x: f64): i64 {
@@ -31153,8 +31195,8 @@ public fn BjFdtd1d_new(num_cells, dx: f64, out: *BjFdtd1d): Result {
     var c: f64 = BJ_SPEED_OF_LIGHT;
     var c2: f64 = 2.0 * c;
     var dt: f64 = dx / c2;
-    var ce: f64 = _bj_fd1_coeff(dt, BJ_EPSILON_0, dx, 1.0);
-    var ch: f64 = _bj_fd1_coeff(dt, BJ_MU_0, dx, 1.0);
+    var ce: f64 = _bj_e_fd_coeff(dt, BJ_EPSILON_0, dx, 1.0);
+    var ch: f64 = _bj_e_fd_coeff(dt, BJ_MU_0, dx, 1.0);
     var abc: f64 = _bj_fd1_mur(dt, dx, 1.0, 1.0);
     var n = num_cells;
     var eps: *f64 = _bj_fd1_f64p(map + 2 * n * 8);
@@ -31311,7 +31353,7 @@ impl BjFdtd1d {
     public fn set_permittivity(self, start, end, eps_r: f64): Result {
         if (_bj_fd1_pos(eps_r) == 0) { return Err(_bj_err_invalid_permittivity(eps_r)); }
         var hi = _bj_fd1_umin(end, self.num_cells);
-        var ce: f64 = _bj_fd1_coeff(self.dt, BJ_EPSILON_0, self.dx, eps_r);
+        var ce: f64 = _bj_e_fd_coeff(self.dt, BJ_EPSILON_0, self.dx, eps_r);
         var eps: *f64 = _bj_fd1_f64p(self.permittivity);
         var cep: *f64 = _bj_fd1_f64p(self.e_coeff);
         if (start >= 0) {
@@ -31331,7 +31373,7 @@ impl BjFdtd1d {
     public fn set_permeability(self, start, end, mu_r: f64): Result {
         if (_bj_fd1_pos(mu_r) == 0) { return Err(_bj_err_invalid_permeability(mu_r)); }
         var hi = _bj_fd1_umin(end, self.num_cells);
-        var ch: f64 = _bj_fd1_coeff(self.dt, BJ_MU_0, self.dx, mu_r);
+        var ch: f64 = _bj_e_fd_coeff(self.dt, BJ_MU_0, self.dx, mu_r);
         var mu: *f64 = _bj_fd1_f64p(self.permeability);
         var chp: *f64 = _bj_fd1_f64p(self.h_coeff);
         if (start >= 0) {
@@ -31429,24 +31471,11 @@ impl BjFdtd1d {
     }
 
     # The simulation time step·dt (s), rounded once: a step past 2^53 (a written field) is split exactly as
-    # s_hi + s_lo, where Rust's `step as f64` rounded first (ADR 0002 row 13, M5 part 2b). Mirrors `Fdtd1d::time`.
+    # s_hi + s_lo, where Rust's `step as f64` rounded first (ADR 0002 row 13, M5 part 2b; src/crmath_edge.cyr's
+    # _bj_e_fd_time). Mirrors `Fdtd1d::time`.
     #must_use
     public fn time(self): f64 {
-        var s = self.step;
-        var dt: f64 = self.dt;
-        var sf: f64 = f64_from(s);
-        var t: f64 = sf * dt;
-        var z: f64 = dt * 0.0;
-        if ((s < 0 || s > 9007199254740992) && z == 0.0) {
-            var hi = (s >> 11) << 11;
-            var rv: f64[3];
-            var hf: f64 = f64_from(hi >> 11);
-            rv[0] = hf * 2048.0;
-            rv[1] = dt;
-            rv[2] = f64_from(s & 2047);
-            var ro: f64[1];
-            if (_bj_cr_rat(&rv, 3, _bj_cr_rat_spec(14), 0, &ro) == 1) { t = ro[0]; }
-        }
+        var t: f64 = _bj_e_fd_time(self.step, self.dt);
         return t;
     }
 
@@ -34232,7 +34261,8 @@ public fn BjCpml_free(c: *BjCpml): i64 {
 # fdtd2d.cyr — fdtd.rs's 2D solver (M6 part 1b-1): `Fdtd2d`, the Yee algorithm on an nx × ny grid in TM mode (E_z at
 # the integer nodes (x, y), H_x at (x, y + ½), H_y at (x + ½, y)) or TE mode (H_z, E_x, E_y at the same places), SI
 # units. Fields are row-major, index y·nx + x. The time step is half the 2D Courant limit, dt = dx/(2√2·c), a Courant
-# number of 1/(2√2).
+# number of 1/(2√2). dt, the update coefficients and `time()` are rounded once (ADR 0002 row 13), and the lossy C_a and
+# C_b once from their exact rationals (row 40), as the 1D grid's (M6 part 4a).
 #
 # The outer walls reflect: the out-of-plane field is held at zero on the outermost ring of nodes, a perfect electric
 # conductor in TM (E_z = 0) and a perfect magnetic conductor in TE (H_z = 0). Per-cell ε_r, μ_r and conductivity σ
@@ -34373,25 +34403,19 @@ public fn _bj_fd2_alloc_err(n): i64 {
 }
 
 # The E-update coefficients (C_a, C_b) for ε_r and σ: C_a = (1 − σΔt/2ε)/(1 + σΔt/2ε), C_b = (Δt/(εΔx))/(1 +
-# σΔt/2ε), ε = ε_rε₀; the lossless case exactly (1, Δt/(ε₀Δx)/ε_r). Mirrors fdtd.rs's `e_update_coefficients`.
+# σΔt/2ε), ε = ε_rε₀; the lossless case (1, Δt/(ε₀Δx·ε_r)). Rust's `e_update_coefficients` is `LossyMaterial`'s chain,
+# so the lossy pair is BjLossyMaterial's, each rounded once from its exact rational (ADR 0002 row 40, M6 part 4a), and
+# the lossless C_b is rounded once (row 13). Mirrors fdtd.rs's `e_update_coefficients`.
 #must_use
 public fn _bj_fd2_e_coefficients(dt: f64, dx: f64, eps_r: f64, sigma: f64): (f64, f64) {
     if (sigma > 0.0) {
-        var eps: f64 = eps_r * BJ_EPSILON_0;
-        var sdt: f64 = sigma * dt;
-        var e2: f64 = 2.0 * eps;
-        var hl: f64 = sdt / e2;
-        var num: f64 = 1.0 - hl;
-        var den: f64 = 1.0 + hl;
-        var ca: f64 = num / den;
-        var edx: f64 = eps * dx;
-        var q: f64 = dt / edx;
-        var cb: f64 = q / den;
-        return (ca, cb);
+        var m: BjLossyMaterial = BjLossyMaterial_new(eps_r, sigma);
+        var ca, cb = m.update_coefficients(dt, dx);
+        var cav: f64 = ca;
+        var cbv: f64 = cb;
+        return (cav, cbv);
     }
-    var e0dx: f64 = BJ_EPSILON_0 * dx;
-    var q0: f64 = dt / e0dx;
-    var cb0: f64 = q0 / eps_r;
+    var cb0: f64 = _bj_e_fd_coeff(dt, BJ_EPSILON_0, dx, eps_r);
     return (1.0, cb0);
 }
 
@@ -34647,7 +34671,7 @@ fn _bj_fd2_cpml_fz(c: *BjCpml, fz: *f64, fx: *f64, fy: *f64, k: *f64, nx, ny, si
 # "dx must be finite and positive, got {dx}", "grid [{nx}, {ny}] is too large" (nx·ny past 2^64) or "cannot allocate
 # {n} grid values", in Rust's order. A mode word that is no BjMode2d (Rust's enum has no other) is refused first,
 # InvalidParameter "unknown 2D mode {mode}", as bj_try_write_touchstone's format. dt = dx/(2√2·c). Give it back with
-# BjFdtd2d_free. Mirrors `Fdtd2d::new`.
+# BjFdtd2d_free. dt and the coefficients are rounded once (ADR 0002 row 13, M6 part 4a). Mirrors `Fdtd2d::new`.
 #must_use
 public fn BjFdtd2d_new(nx, ny, dx: f64, mode, out: *BjFdtd2d): Result {
     if (mode != BJ_MODE2D_TM && mode != BJ_MODE2D_TE) {
@@ -34680,10 +34704,8 @@ public fn BjFdtd2d_new(nx, ny, dx: f64, mode, out: *BjFdtd2d): Result {
         return Err(BJ_ERR_INVALID_PARAMETER);
     }
     var n = cells[0];
-    var c: f64 = BJ_SPEED_OF_LIGHT;
     var r2: f64 = 2.0 * _BJ_FD2_SQRT_2;
-    var r2c: f64 = r2 * c;
-    var dt: f64 = dx / r2c;
+    var dt: f64 = _bj_e_fd_courant(dx, r2);
     var map = 0;
     var bytes = 0;
     if (n >= 0 && n <= _BJ_FD2_MAX_CELLS) {
@@ -34691,10 +34713,8 @@ public fn BjFdtd2d_new(nx, ny, dx: f64, mode, out: *BjFdtd2d): Result {
         map = mmap_anon(bytes);
     }
     if (map == 0) { return Err(_bj_fd2_alloc_err(n)); }
-    var e0dx: f64 = BJ_EPSILON_0 * dx;
-    var ce: f64 = dt / e0dx;
-    var m0dx: f64 = BJ_MU_0 * dx;
-    var ch: f64 = dt / m0dx;
+    var ce: f64 = _bj_e_fd_coeff(dt, BJ_EPSILON_0, dx, 1.0);
+    var ch: f64 = _bj_e_fd_coeff(dt, BJ_MU_0, dx, 1.0);
     var cep: *f64 = _bj_fd2_f64p(map + 3 * n * 8);
     var chp: *f64 = _bj_fd2_f64p(map + 4 * n * 8);
     var eps: *f64 = _bj_fd2_f64p(map + 5 * n * 8);
@@ -34809,8 +34829,15 @@ impl BjFdtd2d {
         }
         var dt: f64 = self.dt;
         var dx: f64 = self.dx;
-        var m0dx: f64 = BJ_MU_0 * dx;
-        var base_h: f64 = dt / m0dx;
+        var hm: f64 = 0.0;
+        if (has_mu == 1) { hm = _bj_e_fd_coeff(dt, BJ_MU_0, dx, mu_r); }
+        # The last cell's (ε_r, σ) as words and its (C_a, C_b): a region's cells mostly share them, and each pair is
+        # rounded once (a few hundred ns), so a repeated pair reuses it.
+        var lw_e = 0;
+        var lw_s = 0;
+        var lca: f64 = 0.0;
+        var lcb: f64 = 0.0;
+        var have = 0;
         var eps: *f64 = _bj_fd2_f64p(self.permittivity);
         var mu: *f64 = _bj_fd2_f64p(self.permeability);
         var ce: *f64 = _bj_fd2_f64p(self.ce);
@@ -34822,7 +34849,6 @@ impl BjFdtd2d {
                 var i = y * nx + x;
                 if (has_mu == 1) {
                     mu[i] = mu_r;
-                    var hm: f64 = base_h / mu_r;
                     ch[i] = hm;
                 }
                 if (has_eps == 1 || has_sigma == 1) {
@@ -34830,9 +34856,18 @@ impl BjFdtd2d {
                     if (has_sigma == 1 && self.conductivity != 0) { cond[i] = sigma; }
                     var s: f64 = 0.0;
                     if (self.conductivity != 0) { s = cond[i]; }
-                    var cav, cbv = _bj_fd2_e_coefficients(dt, dx, eps[i], s);
-                    ce[i] = cbv;
-                    if (self.ca != 0) { ca[i] = cav; }
+                    var we = _bj_k_bits(eps[i]);
+                    var ws = _bj_k_bits(s);
+                    if (have == 0 || we != lw_e || ws != lw_s) {
+                        var cav, cbv = _bj_fd2_e_coefficients(dt, dx, eps[i], s);
+                        lca = cav;
+                        lcb = cbv;
+                        lw_e = we;
+                        lw_s = ws;
+                        have = 1;
+                    }
+                    ce[i] = lcb;
+                    if (self.ca != 0) { ca[i] = lca; }
                 }
             }
         }
@@ -35160,11 +35195,11 @@ impl BjFdtd2d {
         return 0;
     }
 
-    # The simulation time step·dt in seconds. Mirrors `Fdtd2d::time`.
+    # The simulation time step·dt in seconds, rounded once past 2^53 (ADR 0002 row 13, M6 part 4a). Mirrors
+    # `Fdtd2d::time`.
     #must_use
     public fn time(self): f64 {
-        var sf: f64 = _bj_fd2_u2f(self.step);
-        var t: f64 = sf * self.dt;
+        var t: f64 = _bj_e_fd_time(self.step, self.dt);
         return t;
     }
 
@@ -35216,7 +35251,9 @@ impl BjFdtd2d {
 
 # fdtd3d.cyr — fdtd.rs's 3D solver (M6 part 2a): `Fdtd3d`, the full vector Yee algorithm on an nx × ny × nz grid, all
 # six components E_x, E_y, E_z, H_x, H_y, H_z, SI units. Fields are stored z-major, index z·nx·ny + y·nx + x. The
-# time step is half the 3D Courant limit, dt = dx/(2√3·c), a Courant number of 1/(2√3).
+# time step is half the 3D Courant limit, dt = dx/(2√3·c), a Courant number of 1/(2√3). dt, the update coefficients and
+# `time()` are rounded once (ADR 0002 row 13), and the lossy C_a and C_b once from their exact rationals (row 40), as
+# the 1D grid's (M6 part 4a).
 #
 # The outer faces are perfect electric conductors: tangential E is held at zero on all six faces (E_y and E_z on the x
 # faces, E_x and E_z on the y faces, E_x and E_y on the z faces), so outgoing waves reflect. A CPML (M6 part 2b) can
@@ -35440,8 +35477,8 @@ fn _bj_fd3_zero(f: *f64, n) {
 # A vacuum grid of nx × ny × nz nodes at spacing dx into *out, the faces PEC: Ok(0), or with out untouched
 # Err(InsufficientResolution) when a dimension is below 3 (cells min(nx, ny, nz), domain that min·dx),
 # Err(InvalidParameter) "dx must be finite and positive, got {dx}", "grid [{nx}, {ny}, {nz}] is too large" (the cell
-# count past 2^64) or "cannot allocate {n} grid values", in Rust's order. dt = dx/(2√3·c). Give it back with
-# BjFdtd3d_free. Mirrors `Fdtd3d::new`.
+# count past 2^64) or "cannot allocate {n} grid values", in Rust's order. dt = dx/(2√3·c), it and the coefficients
+# rounded once (ADR 0002 row 13, M6 part 4a). Give it back with BjFdtd3d_free. Mirrors `Fdtd3d::new`.
 #must_use
 public fn BjFdtd3d_new(nx, ny, nz, dx: f64, out: *BjFdtd3d): Result {
     if ((nx >= 0 && nx < 3) || (ny >= 0 && ny < 3) || (nz >= 0 && nz < 3)) {
@@ -35472,10 +35509,8 @@ public fn BjFdtd3d_new(nx, ny, nz, dx: f64, out: *BjFdtd3d): Result {
         return Err(BJ_ERR_INVALID_PARAMETER);
     }
     var n = cells[0];
-    var c: f64 = BJ_SPEED_OF_LIGHT;
     var r3: f64 = 2.0 * _BJ_FD3_SQRT_3;
-    var r3c: f64 = r3 * c;
-    var dt: f64 = dx / r3c;
+    var dt: f64 = _bj_e_fd_courant(dx, r3);
     var map = 0;
     var bytes = 0;
     var wl = nx;
@@ -35485,10 +35520,8 @@ public fn BjFdtd3d_new(nx, ny, nz, dx: f64, out: *BjFdtd3d): Result {
         map = mmap_anon(bytes);
     }
     if (map == 0) { return Err(_bj_fd2_alloc_err(n)); }
-    var e0dx: f64 = BJ_EPSILON_0 * dx;
-    var ce: f64 = dt / e0dx;
-    var m0dx: f64 = BJ_MU_0 * dx;
-    var ch: f64 = dt / m0dx;
+    var ce: f64 = _bj_e_fd_coeff(dt, BJ_EPSILON_0, dx, 1.0);
+    var ch: f64 = _bj_e_fd_coeff(dt, BJ_MU_0, dx, 1.0);
     var cep: *f64 = _bj_fd2_f64p(map + 6 * n * 8);
     var chp: *f64 = _bj_fd2_f64p(map + 7 * n * 8);
     var eps: *f64 = _bj_fd2_f64p(map + 8 * n * 8);
@@ -35636,8 +35669,14 @@ impl BjFdtd3d {
         }
         var dt: f64 = self.dt;
         var dx: f64 = self.dx;
-        var m0dx: f64 = BJ_MU_0 * dx;
-        var base_h: f64 = dt / m0dx;
+        var hm: f64 = 0.0;
+        if (has_mu == 1) { hm = _bj_e_fd_coeff(dt, BJ_MU_0, dx, mu_r); }
+        # The last cell's (ε_r, σ) as words and its (C_a, C_b), as the 2D grid's apply_region.
+        var lw_e = 0;
+        var lw_s = 0;
+        var lca: f64 = 0.0;
+        var lcb: f64 = 0.0;
+        var have = 0;
         var eps: *f64 = _bj_fd2_f64p(self.permittivity);
         var mu: *f64 = _bj_fd2_f64p(self.permeability);
         var ce: *f64 = _bj_fd2_f64p(self.ce);
@@ -35650,7 +35689,6 @@ impl BjFdtd3d {
                     var i = z * nxy + y * nx + x;
                     if (has_mu == 1) {
                         mu[i] = mu_r;
-                        var hm: f64 = base_h / mu_r;
                         ch[i] = hm;
                     }
                     if (has_eps == 1 || has_sigma == 1) {
@@ -35658,9 +35696,18 @@ impl BjFdtd3d {
                         if (has_sigma == 1 && self.conductivity != 0) { cond[i] = sigma; }
                         var s: f64 = 0.0;
                         if (self.conductivity != 0) { s = cond[i]; }
-                        var cav, cbv = _bj_fd2_e_coefficients(dt, dx, eps[i], s);
-                        ce[i] = cbv;
-                        if (self.ca != 0) { ca[i] = cav; }
+                        var we = _bj_k_bits(eps[i]);
+                        var ws = _bj_k_bits(s);
+                        if (have == 0 || we != lw_e || ws != lw_s) {
+                            var cav, cbv = _bj_fd2_e_coefficients(dt, dx, eps[i], s);
+                            lca = cav;
+                            lcb = cbv;
+                            lw_e = we;
+                            lw_s = ws;
+                            have = 1;
+                        }
+                        ce[i] = lcb;
+                        if (self.ca != 0) { ca[i] = lca; }
                     }
                 }
             }
@@ -36109,11 +36156,11 @@ impl BjFdtd3d {
         return 0;
     }
 
-    # The simulation time step·dt in seconds. Mirrors `Fdtd3d::time`.
+    # The simulation time step·dt in seconds, rounded once past 2^53 (ADR 0002 row 13, M6 part 4a). Mirrors
+    # `Fdtd3d::time`.
     #must_use
     public fn time(self): f64 {
-        var sf: f64 = _bj_fd2_u2f(self.step);
-        var t: f64 = sf * self.dt;
+        var t: f64 = _bj_e_fd_time(self.step, self.dt);
         return t;
     }
 
@@ -36523,8 +36570,8 @@ fn _bj_cb_host(n, v: f64): i64 {
 # A vacuum TM grid of nx × ny nodes at spacing dx on `backend` into *out (the backend copied in): Ok(0), or with out
 # untouched Err(InsufficientResolution) when nx < 3 or ny < 3 (cells min(nx, ny), domain min·dx),
 # Err(InvalidParameter) "dx must be finite and positive, got {dx}" or "grid {nx}x{ny} is too large", in Rust's order,
-# or a buffer's creation error (the buffers made so far given back). dt = dx/(2√2·c), half the 2D Courant limit.
-# Mirrors `GpuFdtd2d::new`.
+# or a buffer's creation error (the buffers made so far given back). dt = dx/(2√2·c), half the 2D Courant limit, it
+# and the coefficients rounded once (ADR 0002 row 13, M6 part 4a). Mirrors `GpuFdtd2d::new`.
 #must_use
 public fn BjGpuFdtd2d_new<B: BjComputeBackend>(nx, ny, dx: f64, backend: B, out: *BjGpuFdtd2d<B>): Result {
     if ((nx >= 0 && nx < 3) || (ny >= 0 && ny < 3)) {
@@ -36551,14 +36598,10 @@ public fn BjGpuFdtd2d_new<B: BjComputeBackend>(nx, ny, dx: f64, backend: B, out:
         return Err(BJ_ERR_INVALID_PARAMETER);
     }
     var n = cells[0];
-    var c: f64 = BJ_SPEED_OF_LIGHT;
     var r2: f64 = 2.0 * _BJ_CB_SQRT_2;
-    var r2c: f64 = r2 * c;
-    var dt: f64 = dx / r2c;
-    var e0dx: f64 = BJ_EPSILON_0 * dx;
-    var ce: f64 = dt / e0dx;
-    var m0dx: f64 = BJ_MU_0 * dx;
-    var ch: f64 = dt / m0dx;
+    var dt: f64 = _bj_e_fd_courant(dx, r2);
+    var ce: f64 = _bj_e_fd_coeff(dt, BJ_EPSILON_0, dx, 1.0);
+    var ch: f64 = _bj_e_fd_coeff(dt, BJ_MU_0, dx, 1.0);
     var zeros = _bj_cb_host(n, 0.0);
     if (zeros == 0) { return Err(BJ_ERR_ALLOCATION); }
     var vals = _bj_cb_host(n, ce);
@@ -36727,11 +36770,11 @@ public fn BjGpuFdtd2d_run<B: BjComputeBackend>(sim: *BjGpuFdtd2d<B>, steps, sx, 
     return sim.backend.synchronize();
 }
 
-# The simulation time step·dt in seconds. Mirrors `GpuFdtd2d::time`.
+# The simulation time step·dt in seconds, rounded once past 2^53 (ADR 0002 row 13, M6 part 4a). Mirrors
+# `GpuFdtd2d::time`.
 #must_use
 public fn BjGpuFdtd2d_time<B: BjComputeBackend>(sim: *BjGpuFdtd2d<B>): f64 {
-    var sf: f64 = _bj_fd2_u2f(sim.step);
-    var t: f64 = sf * sim.dt;
+    var t: f64 = _bj_e_fd_time(sim.step, sim.dt);
     return t;
 }
 

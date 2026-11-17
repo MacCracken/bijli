@@ -754,6 +754,36 @@ fn main() {
     BjFdtd3d_free(&g27);
     assert(g27.cpml == 0 && g27.psi == 0 && g27.psi_bytes == 0, "BjFdtd3d_free gives the CPML back");
 
+    # ADR 0002 rows 13 and 40 (M6 part 4a): dt, the coefficients and time() rounded once, the lossy C_a and C_b once
+    # from their exact rationals. The expectations are validate.py's model of the port.
+    test_group("cyrius_round_once");
+    var ro1: BjFdtd3d;
+    var tro1, vro1 = BjFdtd3d_new(6, 6, 6, 0.05, &ro1);
+    var ro1dw: f64 = _bj_from_bits(0x3dca77ec567841e7);
+    var ro1e: f64 = at(ro1.ce, 0);
+    var ro1ew: f64 = _bj_from_bits(0x405b302bcf95a463);
+    var ro1h: f64 = at(ro1.ch, 0);
+    var ro1hw: f64 = _bj_from_bits(0x3f491be4e0c5a66b);
+    assert(is_ok(tro1) == 1 && ro1.dt == ro1dw && ro1e == ro1ew && ro1h == ro1hw,
+      "dx/(2√3·c), dt/(ε₀dx) and dt/(μ₀dx) at dx = 5 cm, each rounded once (Rust's each an ulp above)");
+    BjFdtd3d_free(&ro1);
+    var ro2: BjFdtd3d;
+    var tro2, vro2 = BjFdtd3d_new(6, 6, 6, 0.001, &ro2);
+    var ro2s: f64 = _bj_from_bits(0x403263ee22a0d6bb);
+    var tro3, vro3 = ro2.set_conductivity(1, 1, 1, 5, 5, 4, ro2s);
+    var ro2ap: f64 = _bj_from_bits(0x3d619816ede2c519);
+    var ro2aw: f64 = -ro2ap;
+    var ro2bw: f64 = _bj_from_bits(0x404b302bcf959571);
+    var ro2a: f64 = at(ro2.ca, ro2.idx(2, 2, 2));
+    var ro2b: f64 = at(ro2.ce, ro2.idx(2, 2, 2));
+    assert(is_ok(tro3) == 1 && ro2a == ro2aw && ro2b == ro2bw,
+      "C_a at σΔt/2ε = 1 + 10⁻¹²: the exact −5.000543942645428·10⁻¹³ (Rust's −5.000444502909205·10⁻¹³)");
+    ro2.step = 9007199255861437;
+    var ro2t: f64 = ro2.time();
+    var ro2tw: f64 = _bj_from_bits(0x40c0f097419db1f8);
+    assert(ro2t == ro2tw, "a step of 2^53 + 1,120,445: step·dt rounded once (Rust's an ulp below)");
+    BjFdtd3d_free(&ro2);
+
     return assert_summary();
 }
 

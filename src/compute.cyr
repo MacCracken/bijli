@@ -327,8 +327,8 @@ fn _bj_cb_host(n, v: f64): i64 {
 # A vacuum TM grid of nx × ny nodes at spacing dx on `backend` into *out (the backend copied in): Ok(0), or with out
 # untouched Err(InsufficientResolution) when nx < 3 or ny < 3 (cells min(nx, ny), domain min·dx),
 # Err(InvalidParameter) "dx must be finite and positive, got {dx}" or "grid {nx}x{ny} is too large", in Rust's order,
-# or a buffer's creation error (the buffers made so far given back). dt = dx/(2√2·c), half the 2D Courant limit.
-# Mirrors `GpuFdtd2d::new`.
+# or a buffer's creation error (the buffers made so far given back). dt = dx/(2√2·c), half the 2D Courant limit, it
+# and the coefficients rounded once (ADR 0002 row 13, M6 part 4a). Mirrors `GpuFdtd2d::new`.
 #must_use
 public fn BjGpuFdtd2d_new<B: BjComputeBackend>(nx, ny, dx: f64, backend: B, out: *BjGpuFdtd2d<B>): Result {
     if ((nx >= 0 && nx < 3) || (ny >= 0 && ny < 3)) {
@@ -355,14 +355,10 @@ public fn BjGpuFdtd2d_new<B: BjComputeBackend>(nx, ny, dx: f64, backend: B, out:
         return Err(BJ_ERR_INVALID_PARAMETER);
     }
     var n = cells[0];
-    var c: f64 = BJ_SPEED_OF_LIGHT;
     var r2: f64 = 2.0 * _BJ_CB_SQRT_2;
-    var r2c: f64 = r2 * c;
-    var dt: f64 = dx / r2c;
-    var e0dx: f64 = BJ_EPSILON_0 * dx;
-    var ce: f64 = dt / e0dx;
-    var m0dx: f64 = BJ_MU_0 * dx;
-    var ch: f64 = dt / m0dx;
+    var dt: f64 = _bj_e_fd_courant(dx, r2);
+    var ce: f64 = _bj_e_fd_coeff(dt, BJ_EPSILON_0, dx, 1.0);
+    var ch: f64 = _bj_e_fd_coeff(dt, BJ_MU_0, dx, 1.0);
     var zeros = _bj_cb_host(n, 0.0);
     if (zeros == 0) { return Err(BJ_ERR_ALLOCATION); }
     var vals = _bj_cb_host(n, ce);
@@ -531,11 +527,11 @@ public fn BjGpuFdtd2d_run<B: BjComputeBackend>(sim: *BjGpuFdtd2d<B>, steps, sx, 
     return sim.backend.synchronize();
 }
 
-# The simulation time step·dt in seconds. Mirrors `GpuFdtd2d::time`.
+# The simulation time step·dt in seconds, rounded once past 2^53 (ADR 0002 row 13, M6 part 4a). Mirrors
+# `GpuFdtd2d::time`.
 #must_use
 public fn BjGpuFdtd2d_time<B: BjComputeBackend>(sim: *BjGpuFdtd2d<B>): f64 {
-    var sf: f64 = _bj_fd2_u2f(sim.step);
-    var t: f64 = sf * sim.dt;
+    var t: f64 = _bj_e_fd_time(sim.step, sim.dt);
     return t;
 }
 
