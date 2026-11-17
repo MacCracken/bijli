@@ -6707,3 +6707,88 @@ eigenmode search (`dft_magnitude`'s recurrence and magnitude, `find_eigenmodes`'
   766,385 rows, 0 problems; the oracle's `--check` and clippy clean. **M6 Part 1 is done** (§116–§120): fdtd.rs's 2D
   CPML, `Fdtd2d`, `nf2ff_2d` and the JSON of `CpmlParams` and `Mode2d`. Next: Part 2, the 3D grid (`Fdtd3d`) and its
   CPML.
+
+## 121. M6 part 2a: the 3D grid without its CPML (2026-11-16)
+
+- **The bites of M6 Part 2** (the 3D grid and its CPML): 2a `Fdtd3d` without the CPML, 2b the CPML attached
+  (`Cpml3d`'s twelve Ψ slabs, `try_enable_cpml*`, `disable_cpml`, `cpml()`). Part 3 is `compute.rs`, and M6's
+  range-edge review follows.
+- **`src/fdtd3d.cyr`**: `BjFdtd3d_new(nx, ny, nz, dx, out)` keeps Rust's checks, texts and order: a dimension below 3
+  (InsufficientResolution, the smallest as a usize and its domain), dx, the cell count past 2^64 ("grid [nx, ny, nz]
+  is too large", checked as Rust's `try_fold`), then the allocation; dt = dx/(2√3·c) with √3 correctly rounded. The
+  ten arrays (the six fields, C_b, the H coefficients, ε_r, μ_r) and three scratch rows of max(nx, 1024) are one
+  anonymous mmap, and the first lossy region maps C_a and σ (ADR 0002 row 2, amended: `check_grid`, `check_layout`
+  and their guards go). `idx`, the four material setters over boxes (validation, then x's range, then y's, then z's),
+  `add_source_ez` (usize bounds; Rust's checked index arithmetic is proved unneeded by them), `run` (Rust's sine
+  argument, ((2π)·f)·t), `time` and `BjFdtd3d_free` follow Rust's. The shared helpers (the usize compares, the E
+  coefficients, the region range and the material checks) are src/fdtd2d.cyr's, now public `_bj_fd2_*`, as
+  `_bj_cpml_fits` is (a `_bj_` name stays out of the API).
+- **The step**: each of the six component updates is one row kernel, `_bj_fd3_curl`, d += k·((a − a') − (b − b')) on
+  the packed verbs in Rust's order (lane multiples, a scalar tail). The H components read only E and the E components
+  only H, so each phase runs in one pass over the rows (Rust runs three loops a phase; the cells' values are the same
+  since no update reads its own phase's output). C_a·E scales the three E arrays before the E phase, as Rust's, and the
+  PEC faces zero E_y and E_z on the x faces, E_x and E_z on the y faces, E_x and E_y on the z faces.
+- **The energy**: Σ (½ε_rε₀|E|² + ½μ_rμ₀|H|²)·dx³ in Rust's order (each square summed x, y, z; each cell's two terms
+  added before the running sum). Its first form, scalar, cost 592 µs on the bench's 30³ grid (22 ns a cell); the cell
+  terms now run on the packed verbs over the flat arrays in chunks of the scratch rows, the running sum cell by cell
+  (each lane Rust's operations in Rust's order; IEEE products commute): 290 µs.
+- **The corpus**: `fdtd_2d3d.tsv` gains 154 `Fdtd3d::script` rows (1,107 in all, 2.1 MB), class T: `i:<nx> i:<ny>
+  i:<nz> f:<dx>`, then the operations (the 2D opcodes' numbers; a region's six corners in Rust's argument order), and
+  the state (`m_fdtd_2d3d.rs`' comment): step, dt, time, energy, the digests of the six fields and the four private
+  arrays, C_a's and σ's lengths and digests, the six fields at six probes. Construction's errors (each axis below 3,
+  dx's specials, counts past 2^64, 2^60 and 2^63 cells, whose allocation fails in both by its size alone); the bench's
+  30³ grid; eight small shapes from 3³ to 9 × 6 × 5; sources on each face, a corner and outside; each field filled
+  then stepped; dielectric, magnetic, lossy and mixed regions; the conductor's uniform decay (fdtd.rs's test); `run`
+  with a source, none and one outside; the regions' errors in Rust's order; the specials as ε_r, μ_r and σ; the bad
+  materials; 30 seeded scripts.
+- **validate.py**: `Fd3` and `Fd3Scripts` replay the scripts in pure Python, Rust's arithmetic row by row (1.4 s for
+  the 154 rows). The model agreed with every row, and none changes on correctly rounded primitives (glibc's sine is
+  correctly rounded on the runs' arguments), so `fdtd_2d3d.cr.tsv` keeps its 14 rows.
+- **Tests**: `tests/fdtd3d.tcyr` (60 assertions) ports fdtd.rs's 15 `test_fdtd3d_*` tests and the six shared 2D/3D
+  tests (`new_rejects_non_finite_dx`, `courant_numbers_are_half_the_limit`, `set_material_validates_before_mutating`,
+  `region_bounds`, `conductor_uniform_decay_matches_analytic_3d`, `lossless_path_unchanged_by_material_api`), and
+  `cyrius_fdtd3d_records` and `cyrius_fdtd3d_grid` (the records' texts and order, z's region error, the six faces'
+  walls with the normal components kept, the lazy C_a and σ, `run` without a source, BjFdtd3d_free).
+  `desynced_fields_do_not_panic_3d` is n/a (ADR 0002 row 2). The ledger: 752 ported, 11 n/a, 95 pending of 858.
+- **Surface parity**: `Fdtd3d`'s grid items are matched (630); its four CPML methods remain for 2b. The API snapshot
+  gains `BjFdtd3d_new` and `BjFdtd3d_free` (2,129).
+- **Benchmarks**: Rust's `fdtd/3d_step_30x30x30` (a step, then the total energy, on the 30³ grid) is twinned: 637–641
+  µs (Rust 319.98 µs, 2.0×; 805 µs in a disturbed round). The step alone takes about 410 µs, 15 ns a cell for the six
+  updates, and the energy 290 µs. The interleaved A/B against HEAD left every row unchanged: median ratios 0.90, 1.04
+  and 1.015 over three rounds. The first two ran at load 3.1 to 5.1, beside the validator and another repo's bench; the
+  third ran at 2.1 to 2.3, with the 2D steps at 0.98 to 1.03 and NF2FF at 1.04. The 2D steps' 1.04 to 1.18 in the
+  first two rounds don't repeat: making the 2D helpers public changes no code path. The benchmark record gains the twin
+  (each row the least of the 23 full runs since M5's close, `rec_min6`); one Rust bench is pending, the 3D CPML step.
+- **Result, every target** (x86_64 ELF, x86_64 PE, aarch64): **19 modules, 0 failing; 644,651 ok, 0 failed, 0
+  measured, 0 pending, 121,888 accepted (ADR 01: 43,099; ADR 0002: 78,789)** over 766,539 rows; **all 486 digests
+  equal**. `fdtd3d.tcyr` (60) passes on all three. The gate is clean (no warnings; execution coverage 384 of 384
+  functions); validate.py 766,539 rows, 0 problems. Next: retiring the Rust tooling (§122), then 2b.
+
+## 122. The Rust tree retired (2026-11-16)
+
+- **The decision** (the user's, [ADR 0003](../adr/0003-retire-the-rust-tree.md)): no Rust in the repository. The Rust
+  golden generator had grown with every bite to 16,629 lines (`scripts/oracle/src`), beside `rust-old/` (23,752); both
+  are deleted, with the three Rust probe references, `scripts/rustsrc.py` and every `cargo` step. Every `.rs` file of
+  `rust-old/` was first confirmed byte for byte the `1.2.0` tag's, so the specification stays readable with `git show
+  1.2.0:src/<module>.rs`.
+- **The corpus is frozen data.** Its 766,539 rows are unchanged; the 19 module files' `# regenerate: cargo run …`
+  header line now records the retirement (`# frozen: …`), and the `# oracle:` line that validate.py's platform check
+  reads is kept. `scripts/oracle/validate.py` is the reference model: it still re-derives every row, and new rows come
+  from Python emitters with its model's outputs and its `wire()` (format 1; the first with M6 part 2b).
+- **The generated sources the Rust generator wrote once** are frozen: `src/constants.cyr` (12 constants) and
+  `src/fdtd_media_data.cyr` (9 preset values) are checked by validate.py's new `check_frozen_sources` against
+  constants.tsv and fdtd.tsv's gold, silver and water rows, and `src/touchstone_data.cyr` (rustc 1.100.0's Unicode
+  sets) is exercised by rf.tsv's Touchstone rows. Their headers say so.
+- **The tools' inventory**: `scripts/rust_1_2_0.json` (108 KB), made by the tools' own parsers from `rust-old/`
+  before it went: the 20 modules and their 733 public items (surface parity), the 858 tests (the ledger), the 80
+  benches and the BASELINE run's medians (the benchmark record), and the 12 public constants' literals
+  (validate_constants). Every result is unchanged: surface parity 630 items, 0 problems; the ledger 752 ported, 11
+  n/a, 95 pending; the benchmark record byte for byte but its source line; the constants' check clean.
+- **Documents**: CLAUDE.md (no Rust; the corpus and validate.py's roles; the quick start without `cargo`), ADR 0001's
+  status, the plan's §0.1, §11 and the independent model's source, the README's build section and CONTRIBUTING (both
+  still the Rust crate's), the getting-started guide, `state.md`, the roadmap, the oracle and probe READMEs, the
+  handoff and CI's step name. `.gitignore` drops the Rust build entries.
+- **Result, every target** (x86_64 ELF, x86_64 PE, aarch64), with no Rust in the tree: **19 modules, 0 failing;
+  644,651 ok, 0 failed, 0 measured, 0 pending, 121,888 accepted (ADR 01: 43,099; ADR 0002: 78,789)** over 766,539
+  rows; **all 486 digests equal**, as §121's. The gate is clean (no warnings; coverage 384 of 384); validate.py
+  766,539 rows, 0 problems, the frozen sources checked. Next: M6 part 2b, its rows from the first Python emitter.

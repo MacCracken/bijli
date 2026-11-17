@@ -1,61 +1,55 @@
-# scripts/oracle: what the port derives from the Rust oracle
+# scripts/oracle: the golden corpus and its reference model
 
-`oracle` drives the frozen Rust bijli 1.2.0 in [`rust-old/`](../../rust-old/) and writes two kinds
-of output:
-- **The golden corpus, `tests/golden/<module>.tsv`** (port plan §6 step 5). It has one row per
-  call, with every float as its IEEE-754 bit pattern. The Cyrius parity harness
-  (`tests/parity.tcyr`, M0 step 7) replays every row against the port and checks it within its
-  tolerance class.
-- **The generated Cyrius sources**: `src/constants.cyr` (the public constants), plus data
-  modules and private constants as milestones need them (step 6). No value the port reads is
-  typed by hand.
+There is no Rust here ([ADR 0003](../../docs/adr/0003-retire-the-rust-tree.md)). The corpus's rows up to M6 part 2a
+were recorded from the frozen Rust bijli 1.2.0 by a Rust generator that ran it; that generator and the crate were
+retired on 2026-11-16, and the rows are frozen data. This directory holds what the port derives in Python:
+- **`validate.py`, the reference model.** It recomputes every golden row from a Python transcription of Rust 1.2.0's
+  semantics (glibc's libm through `ctypes` where the oracle reached glibc; MPFR for the corrected oracle) and checks
+  the frozen generated sources. `--write` writes the corrected-oracle files (`<module>.cr.tsv`), the ADR 0002
+  mappings (`<module>.adr.tsv`) and the correctly rounded tables.
+- **New rows** come from Python emitters here (the first with M6 part 2b): an emitter builds a module's inputs, takes
+  each expected output from validate.py's transcription, and appends the rows with its `wire()` (format 1, below).
+  A row then compares two implementations, the Python transcription and the Cyrius port, which must agree.
+- **The correctly rounded tables** (`crtables.py`, `crtables_k.py`) and **`cr_verify.py`**, which checks each
+  primitive against MPFR and exact values beyond the corpus.
 
 ```sh
-cargo run --release --locked --manifest-path scripts/oracle/Cargo.toml              # write
-cargo run --release --locked --manifest-path scripts/oracle/Cargo.toml -- --check   # verify; exit 1 on any difference
-python3 -I -B scripts/oracle/validate.py .                                          # independent re-check
-python3 -I -B scripts/oracle/mpfr_ref.py                                            # the MPFR helper's self-checks
+python3 -I -B scripts/oracle/validate.py .            # check every row and every generated file
+python3 -I -B scripts/oracle/validate.py . --write    # rewrite the corrections, mappings and tables
+python3 -I -B scripts/oracle/mpfr_ref.py              # the MPFR helper's self-checks
 ```
 
-The format, the comparison rules and the generator's structure are impetus's
-(`/home/macro/Repos/impetus/scripts/oracle/README.md`), which are kimiya's and tanmatra's: every
-port's harness reads the same files. This README records what is specific to bijli.
+The format and the comparison rules are impetus's (`/home/macro/Repos/impetus/scripts/oracle/README.md`), which are
+kimiya's and tanmatra's: every port's harness reads the same files. This README records what is specific to bijli.
 
 ## Rules
 
-- **`rust-old/` is never built in place or edited.** This crate depends on it by path, with
-  `features = ["full"]` (every module but the `compute-wgpu` scaffold). `Cargo.lock` was seeded
-  from `rust-old/Cargo.lock`: the 193 shared crates are the versions the oracle was tested with,
-  Rust hisab 1.4.0 (the oracle's `Complex`) among them.
-- **The output is deterministic.** Two runs give byte-identical files, and `--check` passes on
-  any machine with the recorded glibc. Grids use only + − × ÷, `floor`, decimal parsing, bit
-  construction and seeded xorshift (`src/grids.rs`); never a transcendental std method, never a
-  timestamp or a hash-map order.
-- **glibc, mostly.** bijli calls the std f64 methods. On x86_64 Linux those reach the host glibc
-  for sin, cos, sincos, tan, asin, acos, atan, atan2, exp, pow, hypot and log10, and through the re-exported
-  `Complex` for ln, sinh and cosh (`src/glibc.rs`; port plan §5 P3). Every TSV header records the glibc and the CPU class
-  (`glibc 2.44 x86_64 fma`), and `--check` refuses a corpus from another one. **`cbrt` is the
-  exception**: Rust std links compiler-builtins' own, correctly rounded `cbrt` (the `libm`
-  crate's port of CORE-MATH), so its rows are MPFR's bits. `powi` with a run-time exponent is
-  compiler-rt's `__powidf2`.
-- **Every input is a run-time value** (`std::hint::black_box`), so no row is a compile-time fold:
-  LLVM folds asin, acos, tan and cbrt of constants (P3).
-- **The corpus is regenerated only from the oracle.** A wrong oracle value is fixed in Rust as
-  1.2.x, then regenerated. It is never patched in a `.tsv`.
-- **Modules arrive with their milestone.** Each one starts by adding its golden emitter
-  (`src/m_<module>.rs`, the grid from the port plan §8) and, where it has data, its Cyrius
-  emitter (`src/t_<module>.rs`), registered in `src/main.rs`. `validate.py` gets a check for the
-  module at the same time; it reports a listed module with no check as a problem.
+- **The frozen rows are never edited.** A wrong expected value is a model defect: validate.py's transcription is
+  corrected against the specification (`git show 1.2.0:src/<module>.rs`), and the row is corrected in
+  `<module>.cr.tsv` (a correctly rounded value) or mapped in `<module>.adr.tsv` (an ADR 0002 divergence), never in the
+  `.tsv` itself.
+- **The output is deterministic.** Emitters use only + − × ÷, `floor`, decimal parsing, bit construction and seeded
+  xorshift for their grids; never a transcendental, a timestamp or a hash order. Two runs give byte-identical files.
+- **glibc, mostly, as the frozen rows were recorded.** Rust 1.2.0 called the std f64 methods, which on x86_64 Linux
+  reach the host glibc for sin, cos, sincos, tan, asin, acos, atan, atan2, exp, pow, hypot and log10, and through the
+  re-exported `Complex` for ln, sinh and cosh (port plan §5 P3). Every TSV header records the glibc and the CPU class
+  (`glibc 2.44 x86_64 fma`), and validate.py refuses a corpus from another one. **`cbrt` is the exception**: Rust std
+  linked compiler-builtins' correctly rounded `cbrt`, so its rows are MPFR's bits; `powi` with a run-time exponent is
+  compiler-rt's `__powidf2`. New rows take glibc's values the same way, and the corrected oracle MPFR's.
+- **Modules arrive with their milestone.** validate.py gets a check for each module (it reports a listed module with no
+  check as a problem), and a module's new rows their Python emitter.
 
-| Module | Milestone | Golden rows | Golden emitter | Generated Cyrius |
+The table's emitters are the retired Rust generator's, kept in git history (`git show 8b460df:scripts/oracle/src/…`).
+
+| Module | Milestone | Golden rows | Golden emitter (retired) | Generated Cyrius |
 |---|---|---|---|---|
 | `beam` | M3 (part 1c-1; its JSON, part 1c-2, in `json`; 2a-2, 2a-3, 2b, 2c-2: the resonators', determinant's, round-once and q_out edge grids; 2d-3a to 2d-3c: the chains', the HG amplitude's, the LG intensity's and the HG field's range edges) | 44,135 | `src/m_beam.rs` | — |
 | `charge` | M1 (parts 3d, 5d-1 to 5d-3) | 12,769 | `src/m_charge.rs` (field.rs's grids) | — |
 | `circuit` | M2 (parts 1c, 2c-1, 2c-5, 2d-3a, 2d-3b) | 69,273 (+ 1 corrected) | `src/m_circuit.rs` | — |
 | `complex` | M1 (+ 5c-2's edge grid) | 31,677 (+ 8 corrected) | `src/m_complex.rs` | — |
-| `constants` | M0 | 12 | `src/m_constants.rs` | `src/constants.cyr` (`src/t_constants.rs`, with the completeness proof) |
+| `constants` | M0 | 12 | `src/m_constants.rs` | `src/constants.cyr` (frozen; validate.py checks every value) |
 | `error` | M1 | 1,635 | `src/m_error.rs` | — |
-| `fdtd` | M5 (part 1a: the 1D grid `Fdtd1d`, as scripts, class T; 1b: the pulses, class C, the Gaussian-driven grid and the TF/SF scripts; 1c: the media and the subpixel averages, class A; 1d: the non-uniform grid, the fourth-order derivative, the CW scripts and the eigenmodes; 1e: NF2FF's phasor form; 2a-1a and 2a-1b: the media and Mur coefficients at their cancellation; 2a-2: the subpixel means; 2a-3: the grading; 2b: seeded grids, media and sources for the rounded-once coefficients; 2c: the Courant limit and NF2FF's agreement straddled; 2d-1: the pulses' range edges; 2d-2a and 2d-2b: the 1D grid's; 2d-3: the TF/SF grid's; 2d-4a: the CW accumulator's; 2d-4b-1 and 2d-4b-2: the eigenmode search's; 2d-5: the utilities'; 2d-6: NF2FF's') | 107,341 (+ 28 corrected, 18,159 mapped) | `src/m_fdtd.rs` | `src/fdtd_media_data.cyr`, the gold, silver and water presets (`src/t_fdtd_media.rs`) |
+| `fdtd` | M5 (part 1a: the 1D grid `Fdtd1d`, as scripts, class T; 1b: the pulses, class C, the Gaussian-driven grid and the TF/SF scripts; 1c: the media and the subpixel averages, class A; 1d: the non-uniform grid, the fourth-order derivative, the CW scripts and the eigenmodes; 1e: NF2FF's phasor form; 2a-1a and 2a-1b: the media and Mur coefficients at their cancellation; 2a-2: the subpixel means; 2a-3: the grading; 2b: seeded grids, media and sources for the rounded-once coefficients; 2c: the Courant limit and NF2FF's agreement straddled; 2d-1: the pulses' range edges; 2d-2a and 2d-2b: the 1D grid's; 2d-3: the TF/SF grid's; 2d-4a: the CW accumulator's; 2d-4b-1 and 2d-4b-2: the eigenmode search's; 2d-5: the utilities'; 2d-6: NF2FF's') | 107,341 (+ 28 corrected, 18,159 mapped) | `src/m_fdtd.rs` | `src/fdtd_media_data.cyr`, the gold, silver and water presets (frozen; validate.py checks every value) |
 | `fdtd_2d3d` | M6 (part 1a: the CPML layer's grading and profiles, `CpmlParams` and `Cpml`, class C; 1b-1: `Fdtd2d` without its CPML, as scripts, class T; 1b-2: the CPML attached; 1c: `nf2ff_2d`, class C; `fdtd.tsv` neared the 48 MiB cap, so M6's rows start this module) | 953 (+ 14 corrected, 12 mapped) | `src/m_fdtd_2d3d.rs` | — |
 | `field` | M1 (parts 3a–3c, 5d-1 to 5d-5) | 26,770 | `src/m_field.rs` | — |
 | `fmtf` | M1 (+ Debug, part 3c; + fixed precision, M2 part 1b; + `{:e}`, M4 part 1c-2) | 89,528 | `src/m_fmtf.rs` (impetus's grid) | — |
@@ -65,7 +59,7 @@ port's harness reads the same files. This README records what is specific to bij
 | `maxwell` | M1 (part 3d) | 20,349 | `src/m_maxwell.rs` | — |
 | `polarization` | M3 (part 1a-1; 2a-1: the waveplates' edge grid; 2d-1a to 2d-1c: the Mueller, Jones and Stokes edge grids) | 26,829 (+ 18 corrected) | `src/m_polarization.rs` | — |
 | `relativity` | M2 (parts 1d-1, 1d-2: the solver over six trajectories; 2c-1, 2c-4, 2d-1, 2d-3c–2d-3j) | 30,780 | `src/m_relativity.rs` (field.rs's vectors) | — |
-| `rf` | M4 (part 1a: the lines, reflection and the losses, the Smith chart, matching and the array factors; 1b: the S-parameter matrices, their cascade and S → Z; 1c-1, 1c-2: reading and writing Touchstone; 2a-1: the stub match's cancellation edges, ADR 0002 row 39; 2a-2, 2a-3: the cascade's and S → Z's edges, row 17; 2b: round once, row 13; 2c: the exact thresholds' knife edges, row 17; 2d-1 to 2d-3b: the input impedance's, the lossy Z₀'s, γ's, the reflections', the Smith chart's and the stub match's range edges, 2d-4a, 2d-4b: the Touchstone reader's and writer's, 2d-5: the array factors', row 18) | 32,216 (+ 91 corrected, 11,587 mapped) | `src/m_rf.rs` | `src/touchstone_data.cyr` (`src/t_touchstone.rs`: the White_Space set and the characters `{:?}` escapes, from the oracle's compiler, which `build.rs` records) |
+| `rf` | M4 (part 1a: the lines, reflection and the losses, the Smith chart, matching and the array factors; 1b: the S-parameter matrices, their cascade and S → Z; 1c-1, 1c-2: reading and writing Touchstone; 2a-1: the stub match's cancellation edges, ADR 0002 row 39; 2a-2, 2a-3: the cascade's and S → Z's edges, row 17; 2b: round once, row 13; 2c: the exact thresholds' knife edges, row 17; 2d-1 to 2d-3b: the input impedance's, the lossy Z₀'s, γ's, the reflections', the Smith chart's and the stub match's range edges, 2d-4a, 2d-4b: the Touchstone reader's and writer's, 2d-5: the array factors', row 18) | 32,216 (+ 91 corrected, 11,587 mapped) | `src/m_rf.rs` | `src/touchstone_data.cyr` (frozen: the White_Space set and the characters `{:?}` escapes, from rustc 1.100.0's tables) |
 | `scattering` | M3 (parts 1b-1; its JSON in `json`; 2b: the round-once edge grid; 2c-1: Mie's \|m\|·x limit; 2d-2: Rayleigh's edge grid; 2d-2b: Mie's tiny m) | 5,132 (+ 6 corrected) | `src/m_scattering.rs` | — |
 | `wave` | M2 (parts 1b, 2c-1, 2c-3, 2d-1, 2d-2a, 2d-2b, 2d-2c) | 79,138 (+ 1 corrected) | `src/m_wave.rs` (field.rs's vectors, material.tsv's materials) | `src/wave_data.cyr`, the dipole constants of ADR 0002 row 22 (`validate.py`'s `render_wave_data`: Cin(2π) by its series, π by Machin's formula checked against MPFR, η₀ from BJ_MU_0 and BJ_EPSILON_0, in rational arithmetic) |
 | (correctly rounded tables) | M1 | — | — | `src/crmath_data.cyr` (`crtables.py`, written and checked by `validate.py`) |
@@ -168,9 +162,8 @@ fn <TAB> class <TAB> inputs <TAB> outputs <TAB> note
 - The **note** column is a human-readable rendering for review; the harness ignores it. It stays short where the
   inputs and outputs already carry the text: a JSON writer's note is a 160-character preview of its document, a
   reader's `unchecked <d> -> Ok` or `-> Err(<serde's message>)` (validate.py reads that message).
-- **No file passes 48 MiB** (`MAX_FILE_BYTES` in `main.rs` and `validate.py`): GitHub warns on a push above
-  50 MiB and refuses one above 100 MiB. The generator and validate.py fail on a larger file, in both modes; trim
-  its notes or split the module.
+- **No file passes 48 MiB** (`MAX_FILE_BYTES` in `validate.py`): GitHub warns on a push above 50 MiB and refuses one
+  above 100 MiB. validate.py fails on a larger file, in both modes, and an emitter must split the module first.
 
 ## Classes and comparison (port plan §7)
 

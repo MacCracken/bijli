@@ -1,12 +1,12 @@
 #!/usr/bin/env python3
-"""Independent check of bijli's golden corpus (port plan §6 step 5).
+"""The reference model of bijli's golden corpus (port plan §6 step 5; ADR 0003).
 
-The generator (`scripts/oracle`, Rust) records what the frozen Rust bijli 1.2.0 returns. This
-script recomputes every row from a separate transcription of the same semantics, so that a
-defect in the generator (a wrong grid, a mislabelled function, a value written for the wrong
-input) is caught before the Cyrius port is compared against it:
+The corpus's rows up to M6 part 2a were recorded from the frozen Rust bijli 1.2.0 by a Rust generator, retired with
+the Rust tree (ADR 0003); they are frozen data. This script recomputes every row from a Python transcription of the
+same semantics, so the corpus stays checked without Rust, and it is the model new rows are written from: a row's
+expected outputs are this transcription's, compared against the Cyrius port, two implementations that must agree:
 
-- **constants**: each public const's literal is read from `rust-old/src` and evaluated in
+- **constants**: each public const's literal is read from scripts/rust_1_2_0.json (Rust 1.2.0's) and evaluated in
   Python with the Rust expression's operation order (`COULOMB_K = 1 / (4·π·ε₀)`);
 - **math**: glibc's libm through `ctypes` for the transcendentals (the same glibc the oracle
   links; the header's platform is checked first), except `cbrt`: Rust std links compiler-builtins'
@@ -339,7 +339,7 @@ def cr_text(module: str, header: list, rows, fixes_of=None, source=None, columns
     return "\n".join(head + ["\t".join(f) for f in fixes]) + "\n"
 
 
-# The largest file this script writes, as the oracle's (main.rs MAX_FILE_BYTES): GitHub warns on a push above
+# The largest file this script or an emitter writes: GitHub warns on a push above
 # 50 MiB and refuses one above 100 MiB.
 MAX_FILE_BYTES = 48 << 20
 
@@ -431,16 +431,51 @@ def check_tables(root: Path) -> list:
     return errs
 
 
+def check_frozen_sources(root: Path) -> list:
+    """src/constants.cyr and src/fdtd_media_data.cyr were written once from bijli 1.2.0 by the Rust generator retired
+    with the Rust tree (ADR 0003) and are frozen: every literal must parse to the bits tests/golden pins (constants.tsv,
+    and fdtd.tsv's gold, silver and water rows), and the constants must be exactly constants.tsv's."""
+    errs = []
+    lit = dict(re.findall(r"^public const (BJ_\w+) = (-?[0-9.]+);$", (root / "src/constants.cyr").read_text(), re.M))
+    _h, rows = read_tsv(root / "tests/golden/constants.tsv")
+    want = {"BJ_" + ins[0][1].partition("::")[2]: outs[0][1] for _fn, _cls, ins, outs in rows}
+    if set(lit) != set(want):
+        errs.append(f"src/constants.cyr: constants {sorted(set(lit) ^ set(want))} differ from constants.tsv's")
+    errs += [f"src/constants.cyr: {k} = {lit[k]} is not constants.tsv's value"
+             for k in sorted(set(lit) & set(want)) if not same(float(lit[k]), want[k])]
+    media = dict(re.findall(r"^var (_BJ_\w+): f64 = (-?[0-9.]+);$", (root / "src/fdtd_media_data.cyr").read_text(),
+                            re.M))
+    presets = {"DrudeMaterial::gold": ("GOLD", ("EPS_INF", "OMEGA_P", "GAMMA")),
+               "DrudeMaterial::silver": ("SILVER", ("EPS_INF", "OMEGA_P", "GAMMA")),
+               "DebyeMaterial::water": ("WATER", ("EPS_INF", "EPS_S", "TAU"))}
+    seen = set()
+    with (root / "tests/golden/fdtd.tsv").open() as fh:
+        for line in fh:
+            fn = line.split("\t", 1)[0]
+            if fn not in presets:
+                continue
+            seen.add(fn)
+            outs = [parse_tok(t) for t in line.split("\t")[3].split(" ")]
+            tag, fields = presets[fn]
+            for (_k, x), field in zip(outs, fields):
+                name = f"_BJ_{tag}_{field}"
+                if name not in media or not same(float(media[name]), x):
+                    errs.append(f"src/fdtd_media_data.cyr: {name} is not fdtd.tsv's {fn} value")
+    if seen != set(presets) or len(media) != 9:
+        errs.append("src/fdtd_media_data.cyr: its nine presets and fdtd.tsv's three rows don't match")
+    if not errs:
+        print("ok   frozen sources: src/constants.cyr's 12 and src/fdtd_media_data.cyr's 9 values are the corpus's")
+    return errs
+
+
 def rust_literal(text: str) -> float:
     return float(text.replace("_", ""))
 
 
 def validate_constants(root: Path, path: Path) -> list:
     _header, rows = read_tsv(path)
-    src = {}
-    for f in ("field.rs", "charge.rs", "fdtd.rs", "scattering.rs"):
-        for m in re.finditer(r"pub const ([A-Z0-9_]+): f64 = (.+);", (root / "rust-old/src" / f).read_text()):
-            src[(f[:-3], m.group(1))] = m.group(2).strip()
+    src = {(mod, name): expr for mod, name, expr in json.loads((root / "scripts/rust_1_2_0.json").read_text())
+                                                            ["constants"]}
     env = {}
 
     def value(mod: str, name: str) -> float:
@@ -470,7 +505,7 @@ def validate_constants(root: Path, path: Path) -> list:
         if fn != "const" or not same(outs[0][1], want):
             errs.append(f"constants: {ins[0][1]} recorded {outs[0][1]!r}, transcription {want!r}")
     if len(rows) != len(src):
-        errs.append(f"constants: {len(rows)} rows, rust-old/src has {len(src)} public f64 consts")
+        errs.append(f"constants: {len(rows)} rows, Rust 1.2.0 has {len(src)} public f64 consts")
     return errs
 
 
@@ -635,7 +670,7 @@ ERROR_TEXT = {
 
 
 def validate_error(path: Path) -> list:
-    """thiserror's messages transcribed from rust-old/src/error.rs, the f64 fields through rust_display; the
+    """thiserror's messages transcribed from 1.2.0:src/error.rs, the f64 fields through rust_display; the
     variant token names the row's variant, and the payload tokens repeat the inputs (the reason, for the /f64
     rows, is the prefix and the value's Display)."""
     _header, rows = read_tsv(path)
@@ -785,7 +820,7 @@ def complex_corrections(rows) -> list:
     return out
 
 
-# ── field (M1 part 3a): rust-old/src/field.rs ─────────────────────────────────────────────────
+# ── field (M1 part 3a): 1.2.0:src/field.rs ─────────────────────────────────────────────────
 # Each function transcribed from field.rs in its order of operations, in IEEE double (Python's floats, with fdiv and
 # fsqrt for the cases Python raises on). The constants are constants.tsv's, which validate_constants proves.
 def golden_consts(root: Path) -> dict:
@@ -1331,7 +1366,7 @@ def field_3b(fn, v, ins, P, K, EPS0, MU0):
     return None
 
 
-# ── material (M2 part 1a): rust-old/src/material.rs ───────────────────────────────────────────────────────────────
+# ── material (M2 part 1a): 1.2.0:src/material.rs ───────────────────────────────────────────────────────────────
 def material_rust(fn, v, EPS0, MU0):
     """material.rs transcribed in its order of operations (class A: + − × ÷ and sqrt), its checks and error texts;
     None for another name."""
@@ -1624,7 +1659,7 @@ def material_adr_rows(root: Path, path: Path) -> list:
             out.append((fn, ins, wire(model), str(row), f"oracle {outs}; ADR 0002 row {row}"))
     return out
 
-# ── wave (M2 part 1b): rust-old/src/wave.rs ───────────────────────────────────────────────────────────────────────
+# ── wave (M2 part 1b): 1.2.0:src/wave.rs ───────────────────────────────────────────────────────────────────────
 FRAC_PI_2 = PI / 2.0          # core::f64::consts::FRAC_PI_2, the same double (a halving is exact)
 COS_TOL = 1e-6                # wave.rs's COS_THETA_TOLERANCE
 WAVE_C_FNS = ("wave::plane_wave_e", "wave::snell_refraction_angle", "wave::critical_angle", "wave::brewster_angle",
@@ -2373,7 +2408,7 @@ def wave_adr_rows(root: Path, path: Path) -> list:
             out.append((fn, ins, wire(model), str(row), f"oracle {outs}; ADR 0002 row {row}"))
     return out
 
-# ── circuit (M2 part 1c): rust-old/src/circuit.rs ─────────────────────────────────────────────────────────────────
+# ── circuit (M2 part 1c): 1.2.0:src/circuit.rs ─────────────────────────────────────────────────────────────────
 def circuit_lc(l, c):
     if not (math.isfinite(l) and l > 0.0 and math.isfinite(c) and c > 0.0):
         return ip_err(f"L and C must be finite and positive, got L={rust_display(l)}, C={rust_display(c)}")
@@ -2716,7 +2751,7 @@ def circuit_adr_rows(path: Path) -> list:
             out.append((fn, ins, wire(model), str(row), f"oracle {outs}; ADR 0002 row {row}"))
     return out
 
-# ── relativity (M2 part 1d-1): rust-old/src/relativity.rs ─────────────────────────────────────────────────────────
+# ── relativity (M2 part 1d-1): 1.2.0:src/relativity.rs ─────────────────────────────────────────────────────────
 # Each function transcribed in Rust's order on a set of vector operations: Rust's plain FieldVector chains (which must
 # reproduce the oracle), or the port's, where FieldVector's magnitude, magnitude_sq, dot and cross take ADR 0002 row
 # 18's unbounded chain at a range edge (fv_governed / fv_model, as material's and wave's). The port's model adds row 27.
@@ -3637,7 +3672,7 @@ def relativity_adr_rows(root: Path, path: Path) -> list:
     return out
 
 
-# ── polarization: rust-old/src/polarization.rs (M3 part 1a-1) ──────────────────────────────────────────────────────
+# ── polarization: 1.2.0:src/polarization.rs (M3 part 1a-1) ──────────────────────────────────────────────────────
 # Jones vectors and matrices (hisab's Complex), Stokes vectors and Mueller matrices, transcribed in Rust's order. One
 # transcription serves Rust and the port: they share every formula but the retarders, whose port forms are Rust's
 # conjugated (Jones) and D·M·D (Mueller), each changed entry the exact negative of Rust's (ADR 0002 row 5, e^{+jωt});
@@ -4069,7 +4104,7 @@ def polarization_adr_rows(path: Path) -> list:
     return out
 
 
-# ── scattering: rust-old/src/scattering.rs (M3 part 1b-1) ──────────────────────────────────────────────────────────
+# ── scattering: 1.2.0:src/scattering.rs (M3 part 1b-1) ──────────────────────────────────────────────────────────
 # Mie (Bohren & Huffman's recurrences) and Rayleigh, transcribed in Rust's order: hisab's Complex products and sums,
 # the module's own reciprocal and Smith division, sin and cos of x, hypot of m, and cbrt, Rust's being CORE-MATH's
 # correctly rounded one (port plan P3). The port runs Mie's recurrences on f64 locals in the same order (probe p8),
@@ -4624,7 +4659,7 @@ def scattering_adr_rows(path: Path) -> list:
     return out
 
 
-# ── beam: rust-old/src/beam.rs (M3 part 1c-1) ──────────────────────────────────────────────────────────────────────
+# ── beam: 1.2.0:src/beam.rs (M3 part 1c-1) ──────────────────────────────────────────────────────────────────────
 # Gaussian beams, ABCD matrices, resonators and the HG/LG modes, transcribed in Rust's order. One transcription
 # serves Rust and the port: they share every formula but two. The port's Hermite–Gaussian field is Rust's conjugated
 # part for part (ADR 0002 row 5, e^{+jωt}: (u·cos φ, −(u·sin φ))), and its Laguerre–Gaussian power for l = i32::MIN
@@ -5397,7 +5432,7 @@ def beam_adr_rows(path: Path) -> list:
     return out
 
 
-# ── maxwell: rust-old/src/maxwell.rs ──────────────────────────────────────────────────────────
+# ── maxwell: 1.2.0:src/maxwell.rs ──────────────────────────────────────────────────────────
 def validate_maxwell(root: Path, path: Path) -> list:
     """maxwell.rs transcribed in its order of operations (class A: + − × ÷ and sqrt), its checks and error texts."""
     c = golden_consts(root)
@@ -5453,7 +5488,7 @@ def validate_maxwell(root: Path, path: Path) -> list:
     return errs
 
 
-# ── charge: rust-old/src/charge.rs ────────────────────────────────────────────────────────────
+# ── charge: 1.2.0:src/charge.rs ────────────────────────────────────────────────────────────
 def validate_charge(root: Path, path: Path, sink=None, P=None) -> list:
     """charge.rs transcribed in its order of operations (class A), its checks and error texts; the PointCharge
     methods through field.rs's transcriptions above. A sink as validate_field's (charge has no class-C row)."""
@@ -10594,7 +10629,7 @@ def fdtd_adr_rows(root: Path, path: Path) -> list:
 
 
 # ── fdtd_2d3d (M6): fdtd.rs's 2D and 3D grids and their CPML ──────────────────────────────────────────────────────
-# M6 part 1a: the CPML layer's grading and profiles, transcribed from rust-old/src/fdtd.rs in its order of operations
+# M6 part 1a: the CPML layer's grading and profiles, transcribed from 1.2.0:src/fdtd.rs in its order of operations
 # on IEEE doubles (Python's floats), the powf and exp from the primitives P: glibc's reproduce the oracle, MPFR's give
 # the corrected oracle the port matches (`fdtd_2d3d.cr.tsv`).
 
@@ -11041,6 +11076,272 @@ class Fd2Scripts:
         return errs + sim.state()
 
 
+# M6 part 2a: `Fdtd3d` without its CPML, transcribed in Rust's order of operations on Python's doubles (each row's
+# cells are independent within a phase, so a list comprehension per row is Rust's arithmetic), `run`'s sine from the
+# primitives P.
+
+class Fd3:
+    """An `Fdtd3d`: nx × ny × nz, fields z-major (index z·nx·ny + y·nx + x)."""
+
+    FIELDS = ("ex", "ey", "ez", "hx", "hy", "hz")
+
+    def __init__(self, nx, ny, nz, dx, K):
+        c, eps0, mu0 = K
+        self.nx, self.ny, self.nz, self.dx, self.K = nx, ny, nz, dx, K
+        n = nx * ny * nz
+        self.dt = fdiv(dx, 2.0 * math.sqrt(3.0) * c)
+        self.step = 0
+        for name in Fd3.FIELDS:
+            setattr(self, name, [0.0] * n)
+        self.ce, self.ch = [fdiv(self.dt, eps0 * dx)] * n, [fdiv(self.dt, mu0 * dx)] * n
+        self.eps, self.mu = [1.0] * n, [1.0] * n
+        self.ca, self.cond = [], []
+
+    def copy(self):
+        o = Fd3.__new__(Fd3)
+        o.__dict__ = {k: (list(v) if isinstance(v, list) else v) for k, v in self.__dict__.items()}
+        return o
+
+    def e_coefficients(self, eps_r, sigma):
+        return Fd2.e_coefficients(self, eps_r, sigma)
+
+    def region(self, c):
+        for axis, lo, hi, n in (("x", c[0], c[3], self.nx), ("y", c[1], c[4], self.ny), ("z", c[2], c[5], self.nz)):
+            if lo >= n or hi < lo:
+                return ip_err(f"region {axis} range {lo}..{hi} is invalid for a grid of {n} cells")
+        return None
+
+    def apply(self, c, eps_r=None, mu_r=None, sigma=None):
+        nx, nxy = self.nx, self.nx * self.ny
+        n = nxy * self.nz
+        if sigma is not None and sigma > 0.0 and not self.ca:
+            self.ca, self.cond = [1.0] * n, [0.0] * n
+        base_h = fdiv(self.dt, self.K[2] * self.dx)
+        for z in range(c[2], min(c[5], self.nz)):
+            for y in range(c[1], min(c[4], self.ny)):
+                for x in range(c[0], min(c[3], self.nx)):
+                    i = z * nxy + y * nx + x
+                    if mu_r is not None:
+                        self.mu[i] = mu_r
+                        self.ch[i] = fdiv(base_h, mu_r)
+                    if eps_r is None and sigma is None:
+                        continue
+                    if eps_r is not None:
+                        self.eps[i] = eps_r
+                    if sigma is not None and self.cond:
+                        self.cond[i] = sigma
+                    ca, cb = self.e_coefficients(self.eps[i], self.cond[i] if self.cond else 0.0)
+                    self.ce[i] = cb
+                    if self.ca:
+                        self.ca[i] = ca
+
+    def add_source(self, x, y, z, v):
+        if x < self.nx and y < self.ny and z < self.nz:
+            self.ez[z * self.nx * self.ny + y * self.nx + x] += v
+
+    @staticmethod
+    def curl(d, k, a1, a0, b1, b0):
+        """`d += k·((a1 − a0) − (b1 − b0))` over the rows' common length."""
+        return [v + q * ((p1 - p0) - (r1 - r0)) for v, q, p1, p0, r1, r0 in zip(d, k, a1, a0, b1, b0)]
+
+    def step_once(self):
+        nx, ny, nz = self.nx, self.ny, self.nz
+        nxy = nx * ny
+        ex, ey, ez, hx, hy, hz, ce, ch = self.ex, self.ey, self.ez, self.hx, self.hy, self.hz, self.ce, self.ch
+        cu = Fd3.curl
+        for z in range(nz - 1):
+            for y in range(ny - 1):
+                r = z * nxy + y * nx
+                e = r + nx
+                hx[r:e] = cu(hx[r:e], ch[r:e], ey[r + nxy:e + nxy], ey[r:e], ez[r + nx:e + nx], ez[r:e])
+        for z in range(nz - 1):
+            for y in range(ny):
+                r = z * nxy + y * nx
+                e = r + nx - 1
+                hy[r:e] = cu(hy[r:e], ch[r:e], ez[r + 1:e + 1], ez[r:e], ex[r + nxy:e + nxy], ex[r:e])
+        for z in range(nz):
+            for y in range(ny - 1):
+                r = z * nxy + y * nx
+                e = r + nx - 1
+                hz[r:e] = cu(hz[r:e], ch[r:e], ex[r + nx:e + nx], ex[r:e], ey[r + 1:e + 1], ey[r:e])
+        if self.ca:
+            self.ex = ex = [v * a for v, a in zip(ex, self.ca)]
+            self.ey = ey = [v * a for v, a in zip(ey, self.ca)]
+            self.ez = ez = [v * a for v, a in zip(ez, self.ca)]
+        for z in range(1, nz - 1):
+            for y in range(1, ny - 1):
+                r = z * nxy + y * nx
+                e = r + nx
+                ex[r:e] = cu(ex[r:e], ce[r:e], hz[r:e], hz[r - nx:e - nx], hy[r:e], hy[r - nxy:e - nxy])
+        for z in range(1, nz - 1):
+            for y in range(ny):
+                r = z * nxy + y * nx + 1
+                e = r + nx - 2
+                ey[r:e] = cu(ey[r:e], ce[r:e], hx[r:e], hx[r - nxy:e - nxy], hz[r:e], hz[r - 1:e - 1])
+        for z in range(nz):
+            for y in range(1, ny - 1):
+                r = z * nxy + y * nx + 1
+                e = r + nx - 2
+                ez[r:e] = cu(ez[r:e], ce[r:e], hy[r:e], hy[r - 1:e - 1], hx[r:e], hx[r - nx:e - nx])
+        for z in range(nz):
+            for y in range(ny):
+                i0 = z * nxy + y * nx
+                for f in (ey, ez):
+                    f[i0] = 0.0
+                    f[i0 + nx - 1] = 0.0
+            for x in range(nx):
+                i0, i1 = z * nxy + x, z * nxy + (ny - 1) * nx + x
+                for f in (ex, ez):
+                    f[i0] = 0.0
+                    f[i1] = 0.0
+        last = (nz - 1) * nxy
+        for f in (ex, ey):
+            f[0:nxy] = [0.0] * nxy
+            f[last:last + nxy] = [0.0] * nxy
+        self.step += 1
+
+    def time(self):
+        return float(self.step) * self.dt
+
+    def energy(self):
+        _c, eps0, mu0 = self.K
+        e = 0.0
+        for ax, ay, az, px, py, pz, ep, m in zip(self.ex, self.ey, self.ez, self.hx, self.hy, self.hz, self.eps,
+                                                  self.mu):
+            e_sq = ax * ax + ay * ay + az * az
+            h_sq = px * px + py * py + pz * pz
+            e += 0.5 * ep * eps0 * e_sq + 0.5 * m * mu0 * h_sq
+        return e * (self.dx * self.dx * self.dx)
+
+    def state(self):
+        nx, ny, nz = self.nx, self.ny, self.nz
+        out = [("i", self.step), ("f", self.dt), ("f", self.time()), ("f", self.energy())]
+        fields = [getattr(self, name) for name in Fd3.FIELDS]
+        for v in fields + [self.eps, self.mu, self.ce, self.ch]:
+            out.append(("i", fd_digest(v)))
+        for v in (self.ca, self.cond):
+            out += [("i", len(v)), ("i", fd_digest(v))]
+        for x, y, z in ((nx // 2, ny // 2, nz // 2), (1, 1, 1), (nx - 2, ny - 2, nz - 2), (0, ny // 2, nz // 2),
+                        (nx // 2, 0, nz // 2), (nx // 2, ny // 2, 0)):
+            k = z * nx * ny + y * nx + x
+            out += [("f", f[k]) for f in fields]
+        return out
+
+
+def fd3_ops(toks):
+    """A 3D script's operations: (opcode, arguments) per operation, `run`'s source None or (x, y, z)."""
+    ops, k = [], 0
+    while k < len(toks):
+        code = toks[k][1]
+        if code in (1, 2, 3):
+            ops.append((code, [toks[k + j][1] for j in range(1, 8)]))
+            k += 8
+        elif code == 4:
+            ops.append((code, [toks[k + j][1] for j in range(1, 10)]))
+            k += 10
+        elif code == 5:
+            ops.append((code, [toks[k + j][1] for j in range(1, 5)]))
+            k += 5
+        elif code == 6:
+            ops.append((code, [toks[k + 1][1]]))
+            k += 2
+        elif code == 7:
+            if toks[k + 2][0] == "i":
+                src, at = tuple(toks[k + j][1] & FD_U64 for j in (2, 3, 4)), k + 5
+            else:
+                src, at = None, k + 3
+            ops.append((code, [toks[k + 1][1], src, toks[at][1], toks[at + 1][1]]))
+            k = at + 2
+        elif code == 8:
+            ops.append((code, [toks[k + 1][1], toks[k + 2][1]]))
+            k += 3
+        else:
+            raise ValueError(f"unknown 3D opcode {code}")
+    return ops
+
+
+class Fd3Scripts:
+    """Replays fdtd_2d3d.tsv's 3D scripts on primitives P; a row whose inputs extend the previous row's continues from
+    that row's grid (the frames of one scenario)."""
+
+    def __init__(self, root: Path, P):
+        c = golden_consts(root)
+        self.C = c
+        self.K = (c["field::SPEED_OF_LIGHT"], c["field::EPSILON_0"], c["field::MU_0"])
+        self.P = P
+        self.prev, self.sim, self.errs = None, None, []
+
+    def eval(self, ins_raw):
+        raw = ins_raw.split(" ")
+        toks = [parse_tok(x) for x in raw]
+        nx, ny, nz, dx = toks[0][1] & FD_U64, toks[1][1] & FD_U64, toks[2][1] & FD_U64, toks[3][1]
+        if nx < 3 or ny < 3 or nz < 3:
+            m = min(nx, ny, nz)
+            return [("E", "InsufficientResolution"),
+                    ("s", f"grid resolution too coarse: {m} cells for domain size {rust_display(float(m) * dx)}")]
+        if not fd_pos(dx):
+            return ip_err(f"dx must be finite and positive, got {rust_display(dx)}")
+        n = nx * ny * nz
+        if n > FD_U64:
+            return ip_err(f"grid [{nx}, {ny}, {nz}] is too large")
+        if n * 8 > (1 << 63) - 1:
+            return ip_err(f"cannot allocate {n} grid values")
+        ops = fd3_ops(toks[4:])
+        if self.prev is not None and raw[:len(self.prev)] == self.prev and self.sim is not None:
+            sim, errs, done = self.sim.copy(), list(self.errs), len(fd3_ops([parse_tok(x) for x in self.prev[4:]]))
+        else:
+            sim, errs, done = Fd3(nx, ny, nz, dx, self.K), [], 0
+        for code, a in ops[done:]:
+            e = None
+            if code in (1, 2, 3, 4):
+                v = a[6]
+                if code == 1 and not fd_pos(v):
+                    e = [("E", "InvalidPermittivity"), ("s", f"invalid permittivity: {rust_display(v)} (must be > 0)")]
+                elif code == 2 and not fd_pos(v):
+                    e = [("E", "InvalidPermeability"), ("s", f"invalid permeability: {rust_display(v)} (must be > 0)")]
+                elif code == 3 and not (v >= 0.0 and math.isfinite(v)):
+                    e = ip_err(f"conductivity must be finite and ≥ 0 S/m, got {rust_display(v)}")
+                elif code == 4:
+                    em, mm, sm = a[6], a[7], a[8]
+                    if not fd_pos(em):
+                        e = [("E", "InvalidPermittivity"),
+                             ("s", f"invalid permittivity: {rust_display(em)} (must be > 0)")]
+                    elif not fd_pos(mm):
+                        e = [("E", "InvalidPermeability"),
+                             ("s", f"invalid permeability: {rust_display(mm)} (must be > 0)")]
+                    elif not (sm >= 0.0 and math.isfinite(sm)):
+                        e = ip_err(f"conductivity must be finite and ≥ 0 S/m, got {rust_display(sm)}")
+                c = [q & FD_U64 for q in a[:6]]
+                if e is None:
+                    e = sim.region(c)
+                if e is None:
+                    if code == 1:
+                        sim.apply(c, eps_r=v)
+                    elif code == 2:
+                        sim.apply(c, mu_r=v)
+                    elif code == 3:
+                        sim.apply(c, sigma=v)
+                    else:
+                        sim.apply(c, eps_r=a[6], mu_r=a[7], sigma=a[8])
+            elif code == 5:
+                sim.add_source(a[0] & FD_U64, a[1] & FD_U64, a[2] & FD_U64, a[3])
+            elif code == 6:
+                for _ in range(a[0] & FD_U64):
+                    sim.step_once()
+            elif code == 7:
+                steps, src, fr, am = a[0] & FD_U64, a[1], a[2], a[3]
+                for _ in range(steps):
+                    if src is not None:
+                        sim.add_source(src[0], src[1], src[2], am * self.P["sin"](2.0 * math.pi * fr * sim.time()))
+                    sim.step_once()
+            elif code == 8:
+                setattr(sim, Fd3.FIELDS[a[0]], [a[1]] * n)
+            if e is not None:
+                errs += e
+        self.prev, self.sim, self.errs = raw, sim, errs
+        return errs + sim.state()
+
+
 # M6 part 1c: `nf2ff_2d` on a replayed snapshot. Rust's: `nf_core` with the rotation (1, 0) and k = 2π·f/c on the
 # primitives P. The port's (ADR 0002 row 18, M5 part 2d-6's core): k to 53 bits, the core by `nf_core18` (the unbounded
 # chain itself), Rust's core on k rounded where a contour field isn't finite.
@@ -11104,11 +11405,13 @@ def validate_fdtd_2d3d(root: Path, path: Path) -> list:
     if errs:
         return errs
     C = golden_consts(root)
-    f2, f2n = Fd2Scripts(root, GLIBC_P), Fd2Scripts(root, GLIBC_P)
+    f2, f2n, f3 = Fd2Scripts(root, GLIBC_P), Fd2Scripts(root, GLIBC_P), Fd3Scripts(root, GLIBC_P)
     PG = dict(GLIBC_P, hypot=LIBM.hypot)
     for n, (fn, _cls, ins, outs, _v) in enumerate(sc_lines(path), 1):
         if fn == "Fdtd2d::script":
             want = f2.eval(ins)
+        elif fn == "Fdtd3d::script":
+            want = f3.eval(ins)
         elif fn == "fdtd::nf2ff_2d":
             want = fd2_nf2ff(f2n, ins, PG)
         else:
@@ -11127,6 +11430,7 @@ def fdtd_2d3d_corrections(root: Path, path: Path):
         out = []
         C = golden_consts(root)
         f2, f2n, f2p = Fd2Scripts(root, MPFR_P), Fd2Scripts(root, MPFR_P), Fd2Scripts(root, MPFR_P)
+        f3 = Fd3Scripts(root, MPFR_P)
         P = dict(MPFR_P, hypot=lambda x, y: mpfr_ref.cr2("hypot", x, y))
         for fn, cls, ins, outs, _v in sc_lines(path):
             if fn == "fdtd::nf2ff_2d":
@@ -11138,8 +11442,8 @@ def fdtd_2d3d_corrections(root: Path, path: Path):
                     out.append((fn, ins, wire(want), f"oracle {outs[:120]}; correctly rounded primitives give "
                                                      f"{wire(want)[:60]}"))
                 continue
-            if fn == "Fdtd2d::script":
-                want = f2.eval(ins)
+            if fn in ("Fdtd2d::script", "Fdtd3d::script"):
+                want = (f2 if fn == "Fdtd2d::script" else f3).eval(ins)
                 old = wave_toks([parse_tok(x) for x in outs.split(" ")])
                 if not toks_same(want, old):            # run's sine, the CPML profiles' powf and exp
                     out.append((fn, ins, wire(want), f"oracle {outs[:120]}; correctly rounded primitives give "
@@ -11219,6 +11523,7 @@ def main() -> int:
     errs += cx_rows(golden / "complex.tsv")[1]
     errs += fv_rows(root, "field", golden / "field.tsv")[1] + fv_rows(root, "charge", golden / "charge.tsv")[1]
     errs += check_tables(root)
+    errs += check_frozen_sources(root)
     errs += check_wave_data(root)
     for e in errs[:40]:
         print("  " + e)

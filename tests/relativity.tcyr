@@ -1,7 +1,7 @@
 # relativity.tcyr — src/relativity.cyr (M2 part 1d-1): the Lorentz factor, the EM tensor, the field transforms,
 # four-vectors, the retarded and Liénard–Wiechert potentials and fields, and the Larmor powers.
 #
-# Every group named test_* is rust-old/src/relativity.rs's test of that name, ported assertion for assertion (the
+# Every group named test_* is 1.2.0:src/relativity.rs's test of that name, ported assertion for assertion (the
 # ledger matches them by name): all 48. uniform_motion_delay is the Rust tests' closed-form delay, ported as they wrote
 # it; their trajectory closures are `traj`'s (the parity harness's scenarios). The cyrius_* groups check what the port
 # adds: the recorded errors and their Display texts, ADR 0002 rows 13, 17, 27 and 30, the outs untouched on an error,

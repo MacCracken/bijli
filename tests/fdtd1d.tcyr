@@ -1,6 +1,6 @@
 # fdtd1d.tcyr — src/fdtd1d.cyr (M5 part 1a): the 1D Yee grid with its matched Mur boundaries.
 #
-# Every group named test_* is rust-old/src/fdtd.rs's test of that name, ported assertion for assertion (the ledger
+# Every group named test_* is 1.2.0:src/fdtd.rs's test of that name, ported assertion for assertion (the ledger
 # matches them by name): 23 of the 1D grid's 24, the two that drive a Gaussian pulse
 # (`fdtd1d_reflected_energy_fraction`, part 1b) among them. `test_fdtd1d_inconsistent_public_fields_no_panic` is n/a
 # (ADR 0002 row 2: nothing can resize the grid). The cyrius_* groups pin what the port adds or decides: the error

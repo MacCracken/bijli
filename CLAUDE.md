@@ -15,11 +15,12 @@ Maxwell's equations, charge dynamics, EM waves
 - **License**: GPL-3.0-only
 - **Language**: Cyrius. The toolchain is pinned in `cyrius.cyml` `[package].cyrius`
 - **Version**: `VERSION` at the project root is the source of truth. Don't inline the number here
-- **Rust oracle**: bijli 1.2.0 (tag `1.2.0`), frozen at `rust-old/`. It stays the parity reference
-  until the Rust-test ledger is closed and the corpus archived
+- **No Rust in the tree** ([ADR 0003](docs/adr/0003-retire-the-rust-tree.md)): bijli 1.2.0 is the
+  specification, read from the tag (`git show 1.2.0:src/fdtd.rs`). The golden corpus is frozen data, and
+  `scripts/oracle/validate.py` (Python) is the reference model: it checks every row and writes new ones
 - **Plan of record**: [`docs/development/bijli-port-plan.md`](docs/development/bijli-port-plan.md),
-  with [ADR 0001](docs/adr/0001-cyrius-port-with-rust-oracle.md) (the port) and ADR 0002 (the 2.0
-  API changes)
+  with [ADR 0001](docs/adr/0001-cyrius-port-with-rust-oracle.md) (the port), ADR 0002 (the 2.0
+  API changes) and ADR 0003 (the Rust tree retired)
 - **Standards**: [First-Party Standards](https://github.com/MacCracken/agnosticos/blob/main/docs/development/applications/first-party-standards.md) · [First-Party Documentation](https://github.com/MacCracken/agnosticos/blob/main/docs/development/applications/first-party-documentation.md)
 
 ## Goal
@@ -47,9 +48,7 @@ cyrius build src/main.cyr build/bijli          # compile
 cyrius test                                    # tests/*.tcyr: parity, trajectory, reference
 cyrius bench                                   # tests/*.bcyr
 cyrius distlib --all                           # dist/bijli.cyr and dist/bijli-ai.cyr
-cargo test --manifest-path rust-old/Cargo.toml --all-features                       # the Rust oracle, read-only
-cargo run --release --locked --manifest-path scripts/oracle/Cargo.toml -- --check   # the golden corpus is up to date
-python3 -I -B scripts/oracle/validate.py .                                          # independent check of the corpus
+python3 -I -B scripts/oracle/validate.py .     # the reference model: every golden row, the frozen sources
 ```
 
 ## Development Process
@@ -107,7 +106,7 @@ and still exits 0.
 3. Test + benchmark additions: golden parity rows, trajectory rows, reference tests, bench twins
 4. Run benchmarks, recorded against the Rust numbers. Before any benchmark run, check `ps` for
    other repos' gates and benches, not only the load average
-5. Audit phase — correctness against `rust-old/`, the range-edge review (plan §0.1), memory (no
+5. Audit phase — correctness against Rust 1.2.0 (the tag), the range-edge review (plan §0.1), memory (no
    per-step allocation), a surface-parity diff
 6. Cleanliness check — must be clean after the audit
 7. Deeper tests/benchmarks from the audit observations
@@ -132,7 +131,7 @@ and still exits 0.
 
 ## Key Principles
 
-- **The port removes Rust; it doesn't carry Rust's faults.** Parity with `rust-old/` is
+- **The port removes Rust; it doesn't carry Rust's faults.** Parity with Rust 1.2.0 is
   functional: the same physics, results, errors and branches. An inconsistency or gap in the Rust
   crate is fixed in the port as an ADR 0002 row, with its oracle rows mapped exactly. "As Rust"
   is never a justification on its own.
@@ -141,9 +140,11 @@ and still exits 0.
   `docs/stdlib-reference.md`. Then prove the claim with a probe program on the pinned compiler
   (`scripts/probes/`). Never take another port's limitation list on trust. The default is to
   port everything.
-- **Cross-check against `rust-old/`** within the tolerance class the plan assigns (§7). A failure
-  is a port defect, an upstream defect (file it), or an oracle defect (fix it in Rust 1.2.x and
-  regenerate). **Never widen a class to make a row pass.**
+- **Cross-check against the golden corpus** within the tolerance class the plan assigns (§7). A
+  failure is a port defect, an upstream defect (file it), or a model defect (fix validate.py's
+  transcription against `git show 1.2.0:…`). **Never widen a class to make a row pass.**
+- **No Rust.** Never add a Rust file, a `cargo` step or a Rust toolchain (ADR 0003). New golden
+  rows come from Python emitters in `scripts/oracle/`, their expected outputs from validate.py.
 - **Correct rounding is the accuracy target.** Every transcendental is correctly rounded and
   target-independent (`src/crmath.cyr`). Class-C rows compare against the corrected oracle
   (MPFR), never against glibc's misroundings.
@@ -185,8 +186,9 @@ and still exits 0.
   - **Never write `s.f = g(t.e)`** when `g` returns a struct (an open compiler defect): bind the
     result to a local first.
   - Use the canonical `ganita_f64_*` names, not the deprecated short aliases.
-- **Constants and tables are generated, never typed by hand.** `scripts/oracle/` writes them from
-  the oracle. Regenerate them; never edit them.
+- **Constants and tables are generated, never typed by hand.** Python in `scripts/oracle/` writes
+  them (crtables.py), or they are frozen from Rust 1.2.0 and checked by validate.py (`constants.cyr`,
+  `fdtd_media_data.cyr`, `touchstone_data.cyr`). Never edit them.
 - **Names.**
   - Public structs are `Bj<Name>`, with `impl` blocks, so methods keep their Rust names.
   - Free functions are `bj_<rust_name>`.
@@ -205,8 +207,9 @@ and still exits 0.
 
 - **Do not commit or push** — the user handles all git operations (commit, push, tag)
 - **NEVER use `gh` CLI** — use `curl` to the GitHub API only
-- **Do not modify `rust-old/`** — it is the parity oracle. Tools that drive it (the golden and
-  table generators) live in `scripts/oracle/` and depend on it by path
+- **Do not add Rust** — no `.rs` file, Cargo manifest or `cargo` step anywhere (ADR 0003)
+- **Do not edit frozen golden rows** — `tests/golden/*.tsv` rows are data; new rows are appended
+  by the Python emitters, corrections live in `*.cr.tsv` and mappings in `*.adr.tsv`
 - Do not modify `lib/` files (vendored stdlib / dep symlinks)
 - Do not hardcode toolchain versions in CI YAML — `cyrius = "X.Y.Z"` in `cyrius.cyml` is the source of truth
 - Do not widen a parity tolerance class to make a row pass
@@ -246,7 +249,7 @@ docs/ (when earned — not scaffolded empty):
   guides/getting-started.md, guides/migration-2.0.md — how-tos; the 2.0 migration (M8)
 
 scripts/probes/   — the language-review probe programs, re-run at every pin bump
-rust-old/docs/    — the Rust 1.2.0 architecture overview, kept for reference
+scripts/rust_1_2_0.json — Rust 1.2.0's surface, tests and benches, as the port's tools read them
 ```
 
 ADR format: `# NNNN — Title`, then Status, Context, Decision, Consequences, Alternatives

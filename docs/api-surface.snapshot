@@ -806,6 +806,8 @@ fdtd1d::BjFdtd1d_free/1
 fdtd1d::BjFdtd1d_new/3
 fdtd2d::BjFdtd2d_free/1
 fdtd2d::BjFdtd2d_new/5
+fdtd3d::BjFdtd3d_free/1
+fdtd3d::BjFdtd3d_new/5
 fdtd_media::BjDebyeMaterial_new/3
 fdtd_media::BjDebyeMaterial_try_new/4
 fdtd_media::BjDebyeMaterial_water/0

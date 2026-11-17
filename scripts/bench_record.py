@@ -5,13 +5,15 @@ Port plan §6 step 7 (brought forward from M8; as impetus's scripts/bench_record
     python3 -I -B scripts/bench_record.py . CYRIUS.log      # ... with the Cyrius column from a `cyrius bench` log
     python3 -I -B scripts/bench_record.py . --check         # exit 1 if a twin is missing or the record is stale
 
-The Rust benches are read from rust-old/benches/benchmarks.rs (`benchmark_group("g")` then `bench_function("b")`,
-criterion's id `g/b`). The Rust column is the run in rust-old/bench-history.csv stamped BASELINE (port plan §5 P4:
-taken under load, so a ratio within that row's own noise is parity, not a finding). A twin is a
+The Rust benches (criterion ids `group/bench` from Rust 1.2.0's benches/benchmarks.rs) and the Rust column (its
+bench-history.csv run stamped BASELINE; port plan §5 P4: taken under load, so a ratio within that row's own noise is
+parity, not a finding) are read from scripts/rust_1_2_0.json, the inventory snapshot when the Rust tree was retired
+(ADR 0003). A twin is a
 `bench_new("<name>")` in tests/*.bcyr; by default it has the Rust bench's own name. A Rust bench without a twin is
 pending while its milestone is open, and an error once the milestone is in DONE unless REASONS explains it. A
 Cyrius bench that is no twin must be in EXTRA.
 """
+import json
 import re
 import sys
 from pathlib import Path
@@ -21,6 +23,7 @@ args = sys.argv[2:]
 check = "--check" in args
 logs = [a for a in args if a != "--check"]
 out_path = root / "docs/benchmarks-rust-v-cyrius.md"
+INV = json.loads((root / "scripts/rust_1_2_0.json").read_text())
 
 BASELINE = "2026-11-12T03:15:21Z"
 BASELINE_NOTE = (
@@ -55,7 +58,7 @@ EXTRA = {
     "complex_sin": "BjComplex::sin: sin, cos, sinh, cosh, each correctly rounded (src/complex.cyr)",
     "complex_exp_edge": "BjComplex::exp at e^1000, with an unbounded exponent (src/crmath_ux.cyr, ADR 0002 row 16)",
     "complex_powf_edge": "BjComplex::powf with |z|^2.5 past DBL_MAX, on the fixed point (src/crmath_ux.cyr, row 16)",
-    "json/field_vector_to_json": "a FieldVector's JSON (src/json.cyr); rust-old benches no serde",
+    "json/field_vector_to_json": "a FieldVector's JSON (src/json.cyr); Rust 1.2.0 benches no serde",
     "json/field_vector_from_json": "a FieldVector read from serde_json's document (src/json.cyr)",
     "json/point_charge_from_json": "a PointCharge read from serde_json's document (src/json.cyr)",
     "json/mueller_matrix_to_json": "a Mueller matrix's JSON, the largest document (src/json.cyr, M3 part 1a-2)",
@@ -87,24 +90,13 @@ def milestone(bench: str) -> str:
 
 
 def rust_benches() -> list:
-    out, group = [], None
-    for line in (root / "rust-old/benches/benchmarks.rs").read_text().split("\n"):
-        m = re.search(r'benchmark_group\("([^"]+)"\)', line)
-        if m:
-            group = m.group(1)
-        m = re.search(r'bench_function\("([^"]+)"', line)
-        if m:
-            out.append(f"{group}/{m.group(1)}")
-    return out
+    """The Rust benches' criterion ids in source order, from the inventory."""
+    return list(INV["benches"])
 
 
 def rust_ns() -> dict:
-    ns = {}
-    for line in (root / "rust-old/bench-history.csv").read_text().split("\n"):
-        f = line.split(",")
-        if len(f) == 5 and f[0] == BASELINE:
-            ns[f[3]] = float(f[4])
-    return ns
+    """The BASELINE run's medians (ns), from the inventory."""
+    return dict(INV["baseline"])
 
 
 def cyrius_benches() -> set:
@@ -141,7 +133,7 @@ def main() -> int:
     cns = cyrius_ns(logs)
     problems = []
     if len(benches) != len(set(benches)):
-        problems.append("rust-old/benches/benchmarks.rs has duplicate bench ids")
+        problems.append("Rust 1.2.0's benches/benchmarks.rs has duplicate bench ids")
     missing_rust = [b for b in benches if b not in rns]
     if missing_rust:
         problems.append(f"{len(missing_rust)} Rust benches have no {BASELINE} row: {missing_rust[:5]}")
@@ -181,7 +173,7 @@ def main() -> int:
         "> column); `--check` gates the twin mapping (port plan §6 step 7). Speed is measured, not gated (port plan",
         "> §0.1): a slow row is a finding to file with its numbers.",
         "",
-        f"**Rust column**: rust-old/bench-history.csv, run `{BASELINE}` at {BASELINE_NOTE}",
+        f"**Rust column**: Rust 1.2.0's bench-history.csv (scripts/rust_1_2_0.json), run `{BASELINE}` at {BASELINE_NOTE}",
         "",
         f"**{len(benches)} Rust benches:** {counts['twinned']} twinned, {counts['na']} not applicable, "
         f"{counts['pending']} pending.",

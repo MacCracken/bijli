@@ -176,7 +176,7 @@ fn main(): i64 {
     bench_batch_stop(bpe, 2000);
     bench_report(bpe);
     if (hsum == 7.0) { println("."); }
-    # ── Rust twins (rust-old/benches/benchmarks.rs, the same inputs) ──
+    # ── Rust twins (1.2.0:benches/benchmarks.rs, the same inputs) ──
     var fo: f64[3];
     var fx: f64[3];
     var fy: f64[3];
@@ -341,7 +341,7 @@ fn main(): i64 {
     bench_report(b12);
     BjPolyline_free(&tpoly);
 
-    # maxwell/* and charge/* (M1 part 3d): rust-old/benches/benchmarks.rs's maxwell_benchmarks and charge_benchmarks.
+    # maxwell/* and charge/* (M1 part 3d): 1.2.0:benches/benchmarks.rs's maxwell_benchmarks and charge_benchmarks.
     var b13 = bench_new("maxwell/wave_speed");
     bench_batch_start(b13);
     for (var k = 0; k < 1000000; k = k + 1) {
@@ -396,7 +396,7 @@ fn main(): i64 {
     bench_report(b17);
     if (fsum == 7.0) { println("."); }
 
-    # material/* (M2 part 1a): rust-old/benches/benchmarks.rs's material_benchmarks.
+    # material/* (M2 part 1a): 1.2.0:benches/benchmarks.rs's material_benchmarks.
     var me = BjFieldVector_new(1000.0, 0.0, 0.0);
     var msum: f64 = 0.0;
     var b21 = bench_new("material/polarization");
@@ -449,7 +449,7 @@ fn main(): i64 {
     bench_report(b25);
     if (msum == 7.0) { println("."); }
 
-    # wave/* (M2 part 1b): rust-old/benches/benchmarks.rs's wave_benchmarks, with its arguments.
+    # wave/* (M2 part 1b): 1.2.0:benches/benchmarks.rs's wave_benchmarks, with its arguments.
     var we = BjFieldVector_new(0.0, 1000.0, 0.0);
     var wb = BjFieldVector_new(0.0, 0.0, 0.000001);
     var wsum: f64 = 0.0;
@@ -556,7 +556,7 @@ fn main(): i64 {
     bench_report(b36);
     if (wsum == 7.0) { println("."); }
 
-    # circuit/* (M2 part 1c): rust-old/benches/benchmarks.rs's circuit_benchmarks, with its arguments.
+    # circuit/* (M2 part 1c): 1.2.0:benches/benchmarks.rs's circuit_benchmarks, with its arguments.
     var csum: f64 = 0.0;
     var b37 = bench_new("circuit/rc_charging");
     bench_batch_start(b37);
@@ -610,7 +610,7 @@ fn main(): i64 {
     bench_report(b41);
     if (csum == 7.0) { println("."); }
 
-    # relativity/* (M2 part 1d-1): rust-old/benches/benchmarks.rs's relativity_benchmarks with its arguments; the
+    # relativity/* (M2 part 1d-1): 1.2.0:benches/benchmarks.rs's relativity_benchmarks with its arguments; the
     # retarded-time solver's two benches are part 1d-2's.
     var rsum: f64 = 0.0;
     var c09: f64 = 0.9 * BJ_SPEED_OF_LIGHT;
@@ -716,7 +716,7 @@ fn main(): i64 {
     bench_report(b49);
     if (rsum == 7.0) { println("."); }
 
-    # polarization/* (M3 part 1a-1): rust-old/benches/benchmarks.rs's polarization_benchmarks with its arguments.
+    # polarization/* (M3 part 1a-1): 1.2.0:benches/benchmarks.rs's polarization_benchmarks with its arguments.
     var pol = BjJonesMatrix_horizontal_polarizer();
     var pdiag = BjJonesVector_diagonal();
     var psum: f64 = 0.0;
@@ -872,7 +872,7 @@ fn main(): i64 {
     bench_report(b64);
     if (bsum == 7.0 || is_err_result(tgb) == 1 || is_err_result(t61l) == 1) { println("."); }
 
-    # rf (M4 part 1a): rust-old's benches' inputs.
+    # rf (M4 part 1a): Rust 1.2.0's benches' inputs.
     var rfsum: f64 = 0.0;
     var b65 = bench_new("rf/reflection_coefficient");
     bench_batch_start(b65);
@@ -1248,6 +1248,24 @@ fn main(): i64 {
     var f2bad = is_err_result(tf2a) + is_err_result(tf2c) + is_err_result(tf2s);
     f2bad = f2bad + is_err_result(tf2d) + is_err_result(tf2e) + is_err_result(tf2n);
     if (f2bad > 0 || f2sum == 7.0) { println("."); }
+
+    # fdtd (M6 part 2a): Rust's 3D step on a 30³ grid with a point source, each step followed by the total energy, as
+    # Rust's bench reads it.
+    var f3a: BjFdtd3d;
+    var tf3a, vf3a = BjFdtd3d_new(30, 30, 30, 0.001, &f3a);
+    f3a.add_source_ez(15, 15, 15, 1.0);
+    var f3sum: f64 = 0.0;
+    var b3a = bench_new("fdtd/3d_step_30x30x30");
+    bench_batch_start(b3a);
+    for (var k = 0; k < 200; k = k + 1) {
+        f3a.step_once();
+        var e3a: f64 = f3a.total_energy();
+        f3sum = f3sum + e3a;
+    }
+    bench_batch_stop(b3a, 200);
+    bench_report(b3a);
+    BjFdtd3d_free(&f3a);
+    if (is_err_result(tf3a) == 1 || f3sum == 7.0) { println("."); }
 
     # fdtd (M5 part 1b), Cyrius-only: a Gaussian pulse's value across its width, and a 200-cell TF/SF auxiliary grid
     # stepped under a Gaussian drive (no Rust bench covers either).

@@ -1,6 +1,6 @@
 # scattering.tcyr — src/scattering.cyr (M3 part 1b-1): Mie scattering by a homogeneous sphere, and Rayleigh.
 #
-# Every group named test_* is rust-old/src/scattering.rs's test of that name, ported assertion for assertion (the
+# Every group named test_* is 1.2.0:src/scattering.rs's test of that name, ported assertion for assertion (the
 # ledger matches them by name). scattering.rs already used e^{+jωt} with absorbing Im(m) < 0, bijli's one convention
 # (ADR 0002 row 5), so no test changes its numbers. The cyrius_* groups pin what the corpus can't show: the reasons'
 # exact text, out left alone on an error, the coefficient buffers given back, the |m|·x limit accepted, and (M3 part

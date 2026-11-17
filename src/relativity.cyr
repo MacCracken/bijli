@@ -1,6 +1,6 @@
 # relativity.cyr — relativistic electrodynamics: the Lorentz factor, the EM field tensor, the Lorentz transformation
 # of fields, four-vectors, the retarded and Liénard–Wiechert potentials and fields, and the Larmor powers (port of
-# rust-old/src/relativity.rs, M2 part 1d-1; the retarded-time solver and lienard_wiechert_fields are part 1d-2's).
+# 1.2.0:src/relativity.rs, M2 part 1d-1; the retarded-time solver and lienard_wiechert_fields are part 1d-2's).
 #
 # SI units; indices 0 = ct, 1 = x, 2 = y, 3 = z. BjFourVector's dot and interval_sq use the (−,+,+,+) metric
 # η = diag(−1, 1, 1, 1). BjEmTensor stores F^μν in the Jackson/Griffiths layout (F^{0i} = −Eᵢ/c, F^{12} = −B_z), the

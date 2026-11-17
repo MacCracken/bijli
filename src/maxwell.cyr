@@ -1,5 +1,5 @@
 # maxwell.cyr — Maxwell's equations: the divergences, the displacement current, wave speed, refractive index,
-# impedance, wavelength and frequency, skin depth (port of rust-old/src/maxwell.rs, M1 part 3d).
+# impedance, wavelength and frequency, skin depth (port of 1.2.0:src/maxwell.rs, M1 part 3d).
 #
 # SI units throughout. A fallible function returns a value-form Result with its f64 payload, the error in the last-error
 # record (src/error.cyr). No harmonic quantity appears here, so no time convention (src/complex.cyr) is involved.

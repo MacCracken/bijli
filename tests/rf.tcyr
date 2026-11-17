@@ -1,7 +1,7 @@
 # rf.tcyr — src/rf.cyr and src/touchstone.cyr (M4 parts 1a–1c): transmission lines, reflection and the losses, the
 # Smith chart, matching, the array factors, (1b) the S-parameter matrices and (1c) Touchstone read and write.
 #
-# Every group named test_* is rust-old/src/rf.rs's test of that name, ported assertion for assertion (the ledger
+# Every group named test_* is 1.2.0:src/rf.rs's test of that name, ported assertion for assertion (the ledger
 # matches them by name). rf.rs was already in bijli's one convention, e^{+jωt} (ADR 0002 row 5), so nothing changes
 # sign. The three tests of the deprecated input_impedance_lossless are n/a (ADR 0002 row 1):
 # cyrius_input_impedance_real_loads checks their values through input_impedance_lossless_complex. The other cyrius_*

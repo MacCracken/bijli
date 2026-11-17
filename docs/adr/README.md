@@ -21,5 +21,6 @@ Decisions about bijli — what we chose, the context, and the consequences we ac
 
 | ADR | Title | Status |
 |---|---|---|
-| [0001](0001-cyrius-port-with-rust-oracle.md) | Port to Cyrius, with Rust 1.2.0 frozen as the parity oracle | Accepted |
+| [0001](0001-cyrius-port-with-rust-oracle.md) | Port to Cyrius, with Rust 1.2.0 frozen as the parity oracle | Accepted; its oracle clause superseded by 0003 |
 | [0002](0002-port-api-divergences.md) | The Cyrius 2.0.0 API diverges from Rust 1.2.0 where the Rust crate was wrong or incomplete | Accepted |
+| [0003](0003-retire-the-rust-tree.md) | Retire the Rust tree: the frozen corpus and a Python reference model | Accepted |

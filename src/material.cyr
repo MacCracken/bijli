@@ -1,5 +1,5 @@
 # material.cyr — dielectric and magnetic materials: susceptibilities, polarization and magnetization, bound charges
-# and currents, Clausius–Mossotti, the Curie laws, and the unified BjMaterial (port of rust-old/src/material.rs, M2
+# and currents, Clausius–Mossotti, the Curie laws, and the unified BjMaterial (port of 1.2.0:src/material.rs, M2
 # part 1a).
 #
 # SI units: C/m², A/m, F/m, H/m. Every formula is Rust's in Rust's order (the golden rows compare bit for bit, class A),

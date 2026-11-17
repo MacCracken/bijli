@@ -64,7 +64,7 @@ jobs:
       - name: Bundle is current (dist/)
         run: cyrius distlib --check
 
-      - name: Surface parity against rust-old/ (and [test] modules = [lib])
+      - name: Surface parity against Rust 1.2.0's inventory (and [test] modules = [lib])
         run: python3 -I -B scripts/surface_parity.py .
 
       - name: Rust-test ledger (every Rust test ported, pending or recorded)

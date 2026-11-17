@@ -1,6 +1,6 @@
 # fdtd2d.tcyr — src/fdtd2d.cyr (M6 part 1b-1): the 2D grid without its CPML.
 #
-# Every group named test_* is rust-old/src/fdtd.rs's test of that name, and the groups named as its `cpml_tests` are
+# Every group named test_* is 1.2.0:src/fdtd.rs's test of that name, and the groups named as its `cpml_tests` are
 # those tests, ported assertion for assertion (the ledger matches them by name): the grid's construction, Courant
 # step, sources, propagation in TM and TE, energy, run, time, the material regions, a dielectric slowing the wave, and
 # the lossy coefficients and a conductor's uniform decay. `desynced_fields_do_not_panic_2d` is n/a (ADR 0002 row 2:

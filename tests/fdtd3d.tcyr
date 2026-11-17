@@ -1,0 +1,430 @@
+# fdtd3d.tcyr — src/fdtd3d.cyr (M6 part 2a): the 3D grid without its CPML.
+#
+# Every group named test_* is 1.2.0:src/fdtd.rs's test of that name, ported assertion for assertion (the ledger
+# matches them by name): the grid's construction, Courant step, index, sources, energy, propagation, run, time, the
+# material regions and all six components stepping. The shared tests that drive both grids (`new_rejects_non_finite_dx`,
+# `courant_numbers_are_half_the_limit`, `set_material_validates_before_mutating`, `region_bounds`,
+# `lossless_path_unchanged_by_material_api`) and the conductor's uniform decay in 3D land here with their 2D halves.
+# `desynced_fields_do_not_panic_3d` is n/a (ADR 0002 row 2: nothing can resize the arrays). The CPML's tests follow
+# with it (part 2b). The cyrius_* groups pin the error records' text and order, the regions' edges, the six faces'
+# walls, the lossy arrays' lazy mapping and BjFdtd3d_free. tests/golden/fdtd_2d3d.tsv pins every operation against
+# Rust besides.
+
+include "tests/lib.cyr"
+
+var DX: f64 = 0.001;
+var DX4: f64 = 0.0001;
+
+# |a − b| < tol.
+fn near(a: f64, b: f64, tol: f64): i64 {
+    var d: f64 = a - b;
+    var ad: f64 = f64_abs(d);
+    if (ad < tol) { return 1; }
+    return 0;
+}
+
+# 1 when the C strings a and b are equal.
+fn text_is(a, b): i64 {
+    var n = strlen(a);
+    if (n != strlen(b)) { return 0; }
+    return memeq(a, b, n);
+}
+
+# A word as a *f64 (the typed return keeps the binding typed).
+fn f64p(a): *f64 {
+    return a;
+}
+
+# Element i of the f64 array at address a.
+fn at(a, i): f64 {
+    var p: *f64 = f64p(a);
+    var x: f64 = p[i];
+    return x;
+}
+
+# Writes v into the n f64 at address a.
+fn fill(a, n, v: f64) {
+    var p: *f64 = f64p(a);
+    for (var i = 0; i < n; i = i + 1) { p[i] = v; }
+    return 0;
+}
+
+# 1 when some |f[i]| of the n at address a exceeds tol, index skip aside.
+fn any_above(a, n, skip, tol: f64): i64 {
+    var p: *f64 = f64p(a);
+    for (var i = 0; i < n; i = i + 1) {
+        var v: f64 = p[i];
+        var av: f64 = f64_abs(v);
+        if (i != skip && av > tol) { return 1; }
+    }
+    return 0;
+}
+
+# The largest |f[i]| of the n at address a.
+fn max_abs(a, n): f64 {
+    var p: *f64 = f64p(a);
+    var m: f64 = 0.0;
+    for (var i = 0; i < n; i = i + 1) {
+        var v: f64 = p[i];
+        var av: f64 = f64_abs(v);
+        if (av > m) { m = av; }
+    }
+    return m;
+}
+
+# 1 when every f[i] of the n at address a is below lim.
+fn all_below(a, n, lim: f64): i64 {
+    var p: *f64 = f64p(a);
+    for (var i = 0; i < n; i = i + 1) {
+        var v: f64 = p[i];
+        if (!(v < lim)) { return 0; }
+    }
+    return 1;
+}
+
+# 1 when every value of field a on the nodes where `face` holds is 0: face 0 the x faces, 1 the y faces, 2 the z faces.
+fn face_zero(sim: *BjFdtd3d, a, face): i64 {
+    var p: *f64 = f64p(a);
+    for (var z = 0; z < sim.nz; z = z + 1) {
+        for (var y = 0; y < sim.ny; y = y + 1) {
+            for (var x = 0; x < sim.nx; x = x + 1) {
+                var on = 0;
+                if (face == 0 && (x == 0 || x == sim.nx - 1)) { on = 1; }
+                if (face == 1 && (y == 0 || y == sim.ny - 1)) { on = 1; }
+                if (face == 2 && (z == 0 || z == sim.nz - 1)) { on = 1; }
+                var v: f64 = p[sim.idx(x, y, z)];
+                if (on == 1 && v != 0.0) { return 0; }
+            }
+        }
+    }
+    return 1;
+}
+
+# Rust's 15 Fdtd3d tests, the shared 2D/3D tests and the Cyrius-only groups.
+fn main() {
+    alloc_init();
+    var tiny30: f64 = _bj_from_bits(0x39b4484bfeebc2a0);
+    var tiny15: f64 = _bj_from_bits(0x3cd203af9ee75616);
+    var nan: f64 = 0.0 / 0.0;
+    var inf: f64 = 1.0 / 0.0;
+
+    test_group("test_fdtd3d_creation");
+    var s1: BjFdtd3d;
+    var t1, v1 = BjFdtd3d_new(10, 10, 10, DX, &s1);
+    assert(is_ok(t1) == 1 && s1.nx == 10 && s1.ny == 10 && s1.nz == 10, "10 × 10 × 10 nodes");
+    assert(s1.map_bytes >= 1000 * 10 * 8 && s1.dt > 0.0, "nx·ny·nz values a field; dt > 0");
+    BjFdtd3d_free(&s1);
+
+    test_group("test_fdtd3d_too_small");
+    var s2: BjFdtd3d;
+    var t2a, v2a = BjFdtd3d_new(2, 10, 10, DX, &s2);
+    var t2b, v2b = BjFdtd3d_new(10, 2, 10, DX, &s2);
+    var t2c, v2c = BjFdtd3d_new(10, 10, 2, DX, &s2);
+    assert(is_err_result(t2a) == 1 && is_err_result(t2b) == 1 && is_err_result(t2c) == 1, "each axis below 3");
+
+    test_group("test_fdtd3d_invalid_dx");
+    var t3a, v3a = BjFdtd3d_new(10, 10, 10, 0.0, &s2);
+    var t3b, v3b = BjFdtd3d_new(10, 10, 10, -1.0, &s2);
+    assert(is_err_result(t3a) == 1 && is_err_result(t3b) == 1, "dx 0 and −1");
+
+    test_group("test_fdtd3d_courant");
+    var s4: BjFdtd3d;
+    var t4, v4 = BjFdtd3d_new(10, 10, 10, DX, &s4);
+    var sq3: f64 = f64_sqrt(3.0);
+    var cs: f64 = BJ_SPEED_OF_LIGHT * sq3;
+    var lim4: f64 = s4.dx / cs;
+    assert(s4.dt <= lim4, "dt ≤ dx/(c√3)");
+    BjFdtd3d_free(&s4);
+
+    test_group("test_fdtd3d_idx");
+    var s5: BjFdtd3d;
+    var t5, v5 = BjFdtd3d_new(5, 6, 7, DX, &s5);
+    assert(s5.idx(0, 0, 0) == 0 && s5.idx(1, 0, 0) == 1 && s5.idx(0, 1, 0) == 5 && s5.idx(0, 0, 1) == 30,
+      "z·(nx·ny) + y·nx + x");
+    BjFdtd3d_free(&s5);
+
+    test_group("test_fdtd3d_source_injection");
+    var s6: BjFdtd3d;
+    var t6, v6 = BjFdtd3d_new(10, 10, 10, DX, &s6);
+    s6.add_source_ez(5, 5, 5, 1.0);
+    var e6: f64 = at(s6.ez, s6.idx(5, 5, 5));
+    assert(near(e6, 1.0, tiny15) == 1, "E_z = 1 at the source");
+
+    test_group("test_fdtd3d_source_oob");
+    s6.add_source_ez(99, 99, 99, 1.0);
+    assert(any_above(s6.ez, 1000, s6.idx(5, 5, 5), 0.0) == 0, "a source outside the grid is ignored");
+    BjFdtd3d_free(&s6);
+
+    test_group("test_fdtd3d_energy_after_source");
+    var s7: BjFdtd3d;
+    var t7, v7 = BjFdtd3d_new(10, 10, 10, DX, &s7);
+    var en0: f64 = s7.total_energy();
+    var ea0: f64 = f64_abs(en0);
+    assert(ea0 < tiny30, "no energy in vacuum at rest");
+    s7.add_source_ez(5, 5, 5, 1.0);
+    var en1: f64 = s7.total_energy();
+    assert(en1 > 0.0, "a source adds energy");
+    BjFdtd3d_free(&s7);
+
+    test_group("test_fdtd3d_propagation");
+    var s8: BjFdtd3d;
+    var t8, v8 = BjFdtd3d_new(20, 20, 20, DX4, &s8);
+    s8.add_source_ez(10, 10, 10, 1.0);
+    for (var k8 = 0; k8 < 10; k8 = k8 + 1) { s8.step_once(); }
+    assert(any_above(s8.ez, 8000, s8.idx(10, 10, 10), tiny15) == 1, "E_z spread from the centre");
+    BjFdtd3d_free(&s8);
+
+    test_group("test_fdtd3d_run_with_source");
+    var s9: BjFdtd3d;
+    var t9, v9 = BjFdtd3d_new(15, 15, 15, DX4, &s9);
+    s9.run(20, 7, 7, 7, 1000000000.0, 1.0);
+    var m9: f64 = max_abs(s9.ez, 15 * 15 * 15);
+    assert(m9 > 0.0, "the source drove E_z");
+    BjFdtd3d_free(&s9);
+
+    test_group("test_fdtd3d_time");
+    var s10: BjFdtd3d;
+    var t10, v10 = BjFdtd3d_new(5, 5, 5, DX, &s10);
+    var tm0: f64 = s10.time();
+    var ta0: f64 = f64_abs(tm0);
+    assert(ta0 < tiny30, "time 0 at the start");
+    s10.step_once();
+    var tm1: f64 = s10.time();
+    var d10: f64 = tm1 - s10.dt;
+    var da10: f64 = f64_abs(d10);
+    assert(da10 < tiny30, "time dt after one step");
+    BjFdtd3d_free(&s10);
+
+    test_group("test_fdtd3d_set_permittivity");
+    var s11: BjFdtd3d;
+    var t11, v11 = BjFdtd3d_new(10, 10, 10, DX, &s11);
+    var r11, r11v = s11.set_permittivity(2, 2, 2, 8, 8, 8, 4.0);
+    var c11: f64 = at(s11.permittivity, s11.idx(5, 5, 5));
+    var o11: f64 = at(s11.permittivity, s11.idx(0, 0, 0));
+    assert(is_ok(r11) == 1 && near(c11, 4.0, tiny15) == 1 && near(o11, 1.0, tiny15) == 1, "ε_r 4 inside, 1 outside");
+
+    test_group("test_fdtd3d_set_permittivity_invalid");
+    var r12, r12v = s11.set_permittivity(0, 0, 0, 10, 10, 10, -1.0);
+    assert(is_err_result(r12) == 1, "ε_r −1 refused");
+    BjFdtd3d_free(&s11);
+
+    test_group("test_fdtd3d_set_material");
+    var s13: BjFdtd3d;
+    var t13, v13 = BjFdtd3d_new(10, 10, 10, DX, &s13);
+    var glass: BjMaterial = BjMaterial_dielectric(2.25);
+    var r13, r13v = s13.set_material(2, 2, 2, 8, 8, 8, &glass);
+    var c13: f64 = at(s13.permittivity, s13.idx(5, 5, 5));
+    assert(is_ok(r13) == 1 && near(c13, 2.25, tiny15) == 1, "glass's ε_r");
+    BjFdtd3d_free(&s13);
+
+    test_group("test_fdtd3d_six_components");
+    var s14: BjFdtd3d;
+    var t14, v14 = BjFdtd3d_new(15, 15, 15, DX4, &s14);
+    s14.add_source_ez(7, 7, 7, 1.0);
+    for (var k14 = 0; k14 < 5; k14 = k14 + 1) { s14.step_once(); }
+    var tiny20: f64 = 0.00000000000000000001;
+    var n14 = 15 * 15 * 15;
+    assert(any_above(s14.hx, n14, 0 - 1, tiny20) == 1 && any_above(s14.hy, n14, 0 - 1, tiny20) == 1, "H_x, H_y");
+    assert(any_above(s14.ex, n14, 0 - 1, tiny20) == 1 && any_above(s14.ey, n14, 0 - 1, tiny20) == 1, "E_x, E_y");
+    BjFdtd3d_free(&s14);
+
+    test_group("new_rejects_non_finite_dx");
+    var bad_dx: f64[4];
+    bad_dx[0] = nan;
+    bad_dx[1] = inf;
+    bad_dx[2] = -0.001;
+    bad_dx[3] = 0.0;
+    var g2: BjFdtd2d;
+    var g3: BjFdtd3d;
+    for (var k15 = 0; k15 < 4; k15 = k15 + 1) {
+        var dx15: f64 = bad_dx[k15];
+        var a15, a15v = BjFdtd2d_new(10, 10, dx15, BJ_MODE2D_TM, &g2);
+        var b15, b15v = BjFdtd3d_new(5, 5, 5, dx15, &g3);
+        assert(is_err_result(a15) == 1 && is_err_result(b15) == 1, "2D and 3D refuse the dx");
+    }
+    var c15, c15v = BjFdtd2d_new(0 - 1, 3, DX, BJ_MODE2D_TM, &g2);
+    var d15, d15v = BjFdtd3d_new(0 - 1, 0 - 1, 3, DX, &g3);
+    assert(is_err_result(c15) == 1 && is_err_result(d15) == 1, "usize::MAX grids refused");
+
+    test_group("courant_numbers_are_half_the_limit");
+    var t16a, v16a = BjFdtd2d_new(10, 10, DX, BJ_MODE2D_TM, &g2);
+    var cd2: f64 = BJ_SPEED_OF_LIGHT * g2.dt;
+    var courant2: f64 = cd2 / g2.dx;
+    var sq2: f64 = f64_sqrt(2.0);
+    var want2: f64 = 0.5 / sq2;
+    var tol12: f64 = 0.000000000001;
+    assert(near(courant2, want2, tol12) == 1, "2D: 1/(2√2)");
+    BjFdtd2d_free(&g2);
+    var t16b, v16b = BjFdtd3d_new(5, 5, 5, DX, &g3);
+    var cd3: f64 = BJ_SPEED_OF_LIGHT * g3.dt;
+    var courant3: f64 = cd3 / g3.dx;
+    var want3: f64 = 0.5 / sq3;
+    assert(near(courant3, want3, tol12) == 1, "3D: 1/(2√3)");
+    BjFdtd3d_free(&g3);
+
+    test_group("set_material_validates_before_mutating");
+    var be: f64[5];
+    var bm: f64[5];
+    var bs: f64[5];
+    be[0] = 4.0;
+    bm[0] = 0.0;
+    bs[0] = 0.0;
+    be[1] = 4.0;
+    bm[1] = nan;
+    bs[1] = 0.0;
+    be[2] = nan;
+    bm[2] = 1.0;
+    bs[2] = 0.0;
+    be[3] = 4.0;
+    bm[3] = 1.0;
+    bs[3] = -1.0;
+    be[4] = 4.0;
+    bm[4] = 1.0;
+    bs[4] = inf;
+    var t17, v17 = BjFdtd2d_new(20, 20, DX, BJ_MODE2D_TM, &g2);
+    var eps17: f64[400];
+    var ce17: f64[400];
+    var ch17: f64[400];
+    memcpy(&eps17, g2.permittivity, 3200);
+    memcpy(&ce17, g2.ce, 3200);
+    memcpy(&ch17, g2.ch, 3200);
+    for (var k17 = 0; k17 < 5; k17 = k17 + 1) {
+        var m17: BjMaterial = BjMaterial_new(be[k17], bm[k17], bs[k17]);
+        var r17, r17v = g2.set_material(0, 0, 20, 20, &m17);
+        assert(is_err_result(r17) == 1, "a bad material refused (2D)");
+    }
+    var di17: BjMaterial = BjMaterial_dielectric(2.0);
+    var r17b, r17bv = g2.set_material(25, 0, 30, 20, &di17);
+    assert(is_err_result(r17b) == 1, "a region outside refused");
+    assert(memeq(&eps17, g2.permittivity, 3200) == 1 && memeq(&ce17, g2.ce, 3200) == 1
+      && memeq(&ch17, g2.ch, 3200) == 1 && g2.ca == 0, "nothing modified (2D)");
+    BjFdtd2d_free(&g2);
+    var t17c, v17c = BjFdtd3d_new(6, 6, 6, DX, &g3);
+    var eps17b: f64[216];
+    var ch17b: f64[216];
+    memcpy(&eps17b, g3.permittivity, 1728);
+    memcpy(&ch17b, g3.ch, 1728);
+    for (var k17b = 0; k17b < 5; k17b = k17b + 1) {
+        var m17b: BjMaterial = BjMaterial_new(be[k17b], bm[k17b], bs[k17b]);
+        var r17c, r17cv = g3.set_material(0, 0, 0, 6, 6, 6, &m17b);
+        assert(is_err_result(r17c) == 1, "a bad material refused (3D)");
+    }
+    assert(memeq(&eps17b, g3.permittivity, 1728) == 1 && memeq(&ch17b, g3.ch, 1728) == 1, "nothing modified (3D)");
+    BjFdtd3d_free(&g3);
+
+    test_group("region_bounds");
+    var t18, v18 = BjFdtd2d_new(10, 10, DX, BJ_MODE2D_TM, &g2);
+    var r18a, r18av = g2.set_permittivity(10, 0, 12, 5, 2.0);
+    var r18b, r18bv = g2.set_permittivity(0, 10, 5, 12, 2.0);
+    var r18c, r18cv = g2.set_permittivity(5, 0, 4, 5, 2.0);
+    var r18d, r18dv = g2.set_conductivity(0, 0, 10, 10, -1.0);
+    assert(is_err_result(r18a) == 1 && is_err_result(r18b) == 1 && is_err_result(r18c) == 1
+      && is_err_result(r18d) == 1, "starts outside, inverted, σ < 0");
+    var r18e, r18ev = g2.set_permittivity(8, 8, 100, 100, 2.0);
+    var e18: f64 = at(g2.permittivity, g2.idx(9, 9));
+    assert(is_ok(r18e) == 1 && near(e18, 2.0, tiny15) == 1, "the ends clamped");
+    var r18f, r18fv = g2.set_permittivity(3, 3, 3, 3, 5.0);
+    assert(is_ok(r18f) == 1 && all_below(g2.permittivity, 100, 3.0) == 1, "an empty region is a no-op");
+    BjFdtd2d_free(&g2);
+    var t18b, v18b = BjFdtd3d_new(5, 5, 5, DX, &g3);
+    var r18g, r18gv = g3.set_permittivity(0, 0, 5, 5, 5, 6, 2.0);
+    var r18h, r18hv = g3.set_permeability(0, 0, 0, 5, 5, 5, nan);
+    assert(is_err_result(r18g) == 1 && is_err_result(r18h) == 1, "z starts outside; μ_r NaN");
+    var r18i, r18iv = g3.set_permeability(1, 1, 1, 9, 9, 9, 3.0);
+    var m18: f64 = at(g3.permeability, g3.idx(4, 4, 4));
+    var m18o: f64 = at(g3.permeability, g3.idx(0, 0, 0));
+    assert(is_ok(r18i) == 1 && near(m18, 3.0, tiny15) == 1 && near(m18o, 1.0, tiny15) == 1, "3D ends clamped");
+    BjFdtd3d_free(&g3);
+
+    test_group("conductor_uniform_decay_matches_analytic_3d");
+    var s19: BjFdtd3d;
+    var t19, v19 = BjFdtd3d_new(21, 21, 21, DX, &s19);
+    var se19: f64 = 0.1 * BJ_EPSILON_0;
+    var sigma19: f64 = se19 / s19.dt;
+    var r19, r19v = s19.set_conductivity(0, 0, 0, 21, 21, 21, sigma19);
+    fill(s19.ex, 21 * 21 * 21, 1.0);
+    fill(s19.ez, 21 * 21 * 21, 1.0);
+    for (var k19 = 0; k19 < 9; k19 = k19 + 1) { s19.step_once(); }
+    var c19 = s19.idx(10, 10, 10);
+    var ns19: f64 = -sigma19;
+    var a19: f64 = ns19 * 9.0;
+    var b19: f64 = a19 * s19.dt;
+    var q19: f64 = b19 / BJ_EPSILON_0;
+    var analytic19: f64 = _bj_exp(q19);
+    var tol19: f64 = 0.002 * analytic19;
+    var ex19: f64 = at(s19.ex, c19);
+    var ez19: f64 = at(s19.ez, c19);
+    assert(is_ok(r19) == 1 && near(ex19, analytic19, tol19) == 1 && near(ez19, analytic19, tol19) == 1,
+      "E decays as exp(−σt/ε₀)");
+    BjFdtd3d_free(&s19);
+
+    test_group("lossless_path_unchanged_by_material_api");
+    var t20, v20 = BjFdtd2d_new(10, 10, DX, BJ_MODE2D_TE, &g2);
+    var di20: BjMaterial = BjMaterial_dielectric(2.0);
+    var r20, r20v = g2.set_material(0, 0, 10, 10, &di20);
+    assert(is_ok(r20) == 1 && g2.ca == 0 && g2.conductivity == 0, "2D keeps the lossless update");
+    BjFdtd2d_free(&g2);
+    var t20b, v20b = BjFdtd3d_new(5, 5, 5, DX, &g3);
+    var r20b, r20bv = g3.set_material(0, 0, 0, 5, 5, 5, &di20);
+    assert(is_ok(r20b) == 1 && g3.ca == 0 && g3.conductivity == 0, "3D keeps the lossless update");
+    BjFdtd3d_free(&g3);
+
+    test_group("cyrius_fdtd3d_records");
+    var e21: BjFdtd3d;
+    e21.nx = 77;
+    var t21, v21 = BjFdtd3d_new(4, 1, 9, DX, &e21);
+    var w21 = "grid resolution too coarse: 1 cells for domain size 0.001";
+    assert(v21 == BJ_ERR_INSUFFICIENT_RESOLUTION && text_is(bj_last_error_display(), w21) == 1 && e21.nx == 77,
+      "the smallest axis and its domain, before dx; out untouched");
+    var t22, v22 = BjFdtd3d_new(3, 3, 3, nan, &e21);
+    assert(v22 == BJ_ERR_INVALID_PARAMETER
+      && text_is(bj_last_error_display(), "invalid parameter: dx must be finite and positive, got NaN") == 1, "dx");
+    var t23, v23 = BjFdtd3d_new(4294967296, 4294967296, 3, DX, &e21);
+    var w23 = "invalid parameter: grid [4294967296, 4294967296, 3] is too large";
+    assert(v23 == BJ_ERR_INVALID_PARAMETER && text_is(bj_last_error_display(), w23) == 1, "nx·ny·nz past 2^64");
+    var t24, v24 = BjFdtd3d_new(1048576, 1048576, 1048576, DX, &e21);
+    var w24 = "invalid parameter: cannot allocate 1152921504606846976 grid values";
+    assert(v24 == BJ_ERR_INVALID_PARAMETER && text_is(bj_last_error_display(), w24) == 1, "2^60 cells");
+    var g25: BjFdtd3d;
+    var t25, v25 = BjFdtd3d_new(5, 6, 7, DX, &g25);
+    var r25a, r25av = g25.set_conductivity(0, 6, 0, 1, 1, 1, 1.0);
+    var w25a = "invalid parameter: region y range 6..1 is invalid for a grid of 6 cells";
+    assert(is_err_result(r25a) == 1 && text_is(bj_last_error_display(), w25a) == 1, "y's range checked after x's");
+    var r25b, r25bv = g25.set_conductivity(0, 0, 3, 1, 1, 2, 1.0);
+    var w25b = "invalid parameter: region z range 3..2 is invalid for a grid of 7 cells";
+    assert(is_err_result(r25b) == 1 && text_is(bj_last_error_display(), w25b) == 1 && g25.ca == 0,
+      "z's range; nothing mapped on an error");
+
+    test_group("cyrius_fdtd3d_grid");
+    fill(g25.ex, 210, 1.0);
+    fill(g25.ey, 210, 1.0);
+    fill(g25.ez, 210, 1.0);
+    g25.step_once();
+    assert(face_zero(&g25, g25.ey, 0) == 1 && face_zero(&g25, g25.ez, 0) == 1, "E_y, E_z zero on the x faces");
+    assert(face_zero(&g25, g25.ex, 1) == 1 && face_zero(&g25, g25.ez, 1) == 1, "E_x, E_z zero on the y faces");
+    assert(face_zero(&g25, g25.ex, 2) == 1 && face_zero(&g25, g25.ey, 2) == 1, "E_x, E_y zero on the z faces");
+    var ex_xface: f64 = at(g25.ex, g25.idx(0, 3, 3));
+    var ez_zface: f64 = at(g25.ez, g25.idx(2, 3, 0));
+    assert(ex_xface == 1.0 && ez_zface == 1.0, "the normal components on a face are kept (E_x on x, E_z on z)");
+    var r26, r26v = g25.set_conductivity(1, 1, 1, 2, 2, 2, 0.5);
+    var ca26: f64 = at(g25.ca, g25.idx(1, 1, 1));
+    var cb26: f64 = at(g25.ca, g25.idx(3, 3, 3));
+    var sg26: f64 = at(g25.conductivity, g25.idx(1, 1, 1));
+    assert(is_ok(r26) == 1 && g25.lossy_bytes == 2 * 210 * 8 && ca26 < 1.0 && cb26 == 1.0 && sg26 == 0.5,
+      "C_a and σ mapped by the first lossy region");
+    g25.run(3, BJ_FDTD3D_NO_SOURCE, 0, 0, 1000000000.0, 1.0);
+    var tm25: f64 = g25.time();
+    var t4w: f64 = 4.0 * g25.dt;
+    assert(g25.step == 4 && tm25 == t4w, "run without a source; time = step·dt");
+    g25.add_source_ez(0 - 1, 2, 2, 1.0);
+    BjFdtd3d_free(&g25);
+    assert(g25.ex == 0 && g25.ca == 0 && g25.map_bytes == 0 && g25.lossy_bytes == 0 && g25.nz == 0,
+      "freed and emptied");
+    BjFdtd3d_free(&g25);
+
+    return assert_summary();
+}
+
+var exit_code = main();
+if (exit_code > 0) { exit_code = 1; }
+sys_exit_group(exit_code);

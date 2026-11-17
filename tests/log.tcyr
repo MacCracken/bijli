@@ -1,6 +1,6 @@
 # log.tcyr — src/log.cyr: bijli's logging gate on sakshi.
 #
-# init_does_not_panic is rust-old/src/logging.rs's test, ported (the ledger matches it by name). The others are
+# init_does_not_panic is 1.2.0:src/logging.rs's test, ported (the ledger matches it by name). The others are
 # Cyrius-only: the gate starts off, the BIJLI_LOG grammar, and that bj_log_init never lowers sakshi's level.
 
 include "tests/lib.cyr"

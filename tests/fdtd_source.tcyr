@@ -1,6 +1,6 @@
 # fdtd_source.tcyr — src/fdtd_source.cyr (M5 part 1b): the pulses and the TF/SF source.
 #
-# Every group named test_* is rust-old/src/fdtd.rs's test of that name, ported assertion for assertion (the ledger
+# Every group named test_* is 1.2.0:src/fdtd.rs's test of that name, ported assertion for assertion (the ledger
 # matches them by name): its 12 pulse tests and 10 TF/SF tests. Rust's `TfsfSource::new` clamped invalid input; the
 # port's refuses it as `try_new` does (ADR 0002 row 3), so test_tfsf_new_sanitizes_without_panic and
 # test_tfsf_boundary_at_zero assert the refusal where Rust asserted the clamped grid, and

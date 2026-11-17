@@ -4,9 +4,9 @@
 > column); `--check` gates the twin mapping (port plan §6 step 7). Speed is measured, not gated (port plan
 > §0.1): a slow row is a finding to file with its numbers.
 
-**Rust column**: rust-old/bench-history.csv, run `2026-11-12T03:15:21Z` at `c95fd30` (the 1.2.0 tag's source), criterion medians. Taken under load (kimiya's gates ran beside it: load average about 2.6, median CI width 0.8 %, p90 4.2 %, max 13 %), so a ratio within the Rust row's own noise is read as parity (port plan §5 P4).
+**Rust column**: Rust 1.2.0's bench-history.csv (scripts/rust_1_2_0.json), run `2026-11-12T03:15:21Z` at `c95fd30` (the 1.2.0 tag's source), criterion medians. Taken under load (kimiya's gates ran beside it: load average about 2.6, median CI width 0.8 %, p90 4.2 %, max 13 %), so a ratio within the Rust row's own noise is read as parity (port plan §5 P4).
 
-**80 Rust benches:** 78 twinned, 0 not applicable, 2 pending.
+**80 Rust benches:** 79 twinned, 0 not applicable, 1 pending.
 
 | Rust bench | Rust | Cyrius twin | Cyrius | Cyrius / Rust |
 |---|---:|---|---:|---:|
@@ -38,14 +38,14 @@
 | `wave/schlick_reflectance` | 1.24 ns | `wave/schlick_reflectance` | 251.00 ns | 203.0× |
 | `wave/half_wave_dipole_pattern` | 0.50 ns | `wave/half_wave_dipole_pattern` | 450.00 ns | 896.8× |
 | `wave/rect_waveguide_cutoff` | 1.24 ns | `wave/rect_waveguide_cutoff` | 48.00 ns | 38.8× |
-| `fdtd/step_100_cells` | 64.09 ns | `fdtd/step_100_cells` | 711.00 ns | 11.1× |
+| `fdtd/step_100_cells` | 64.09 ns | `fdtd/step_100_cells` | 708.00 ns | 11.0× |
 | `fdtd/step_1000_cells` | 623.03 ns | `fdtd/step_1000_cells` | 5.90 µs | 9.5× |
 | `fdtd/run_100_steps_500_cells` | 32.23 µs | `fdtd/run_100_steps_500_cells` | 646.77 µs | 20.1× |
 | `fdtd/2d_step_100x100_tm` | 11.42 µs | `fdtd/2d_step_100x100_tm` | 46.37 µs | 4.1× |
 | `fdtd/2d_run_50_steps_80x80` | 416.78 µs | `fdtd/2d_run_50_steps_80x80` | 1.74 ms | 4.2× |
 | `fdtd/2d_step_100x100_tm_cpml10` | 20.47 µs | `fdtd/2d_step_100x100_tm_cpml10` | 109.99 µs | 5.4× |
 | `fdtd/2d_step_100x100_tm_lossy` | 14.31 µs | `fdtd/2d_step_100x100_tm_lossy` | 49.25 µs | 3.4× |
-| `fdtd/3d_step_30x30x30` | 319.98 µs | pending (M6) | — | — |
+| `fdtd/3d_step_30x30x30` | 319.98 µs | `fdtd/3d_step_30x30x30` | 637.33 µs | 2.0× |
 | `fdtd/3d_step_30x30x30_cpml8` | 494.96 µs | pending (M6) | — | — |
 | `fdtd/nf2ff_2d_80x80_180` | 193.01 µs | `fdtd/nf2ff_2d_80x80_180` | 1.54 ms | 8.0× |
 | `fdtd/find_eigenmodes_4096x256` | 2.12 ms | `fdtd/find_eigenmodes_4096x256` | 10.67 ms | 5.0× |

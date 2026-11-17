@@ -1,6 +1,6 @@
 # beam.tcyr — src/beam.cyr (M3 part 1c-1): Gaussian beams, ABCD matrices, resonators and the HG/LG modes.
 #
-# Every group named test_* is rust-old/src/beam.rs's test of that name, ported assertion for assertion (the ledger
+# Every group named test_* is 1.2.0:src/beam.rs's test of that name, ported assertion for assertion (the ledger
 # matches them by name). bijli's one convention is e^{+jωt} (ADR 0002 row 5): the Hermite–Gaussian field is the
 # conjugate of Rust's e^{−iωt} field, so `test_hermite_gaussian_field_closed_form` reads its imaginary parts with the
 # opposite sign, and says so; every other test reads real values that the convention leaves alone. The cyrius_* groups

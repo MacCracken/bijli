@@ -1,6 +1,6 @@
 # error.tcyr — src/error.cyr: the BJ_ERR_* codes and the per-thread last-error record.
 #
-# The groups named test_* are rust-old/src/error.rs's tests, ported (the ledger matches them by name): each makes
+# The groups named test_* are 1.2.0:src/error.rs's tests, ported (the ledger matches them by name): each makes
 # the error and checks the same fragment of its Display text, now read from the last-error record. The others
 # are Cyrius-only: the record's fields, the names and messages, a reason formatted with Rust's f64 Display, and
 # one record per thread. tests/golden/error.tsv pins every variant's Display text against Rust besides.

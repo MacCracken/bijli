@@ -1,6 +1,6 @@
 # wave.cyr — electromagnetic waves: the Poynting vector and the plane-wave relations, Snell's law and the Fresnel
 # coefficients (the angle forms and the trig-free family: *_direct, unpolarized, Schlick), the material-based interface,
-# rectangular and circular waveguides, and the dipole antennas (port of rust-old/src/wave.rs, M2 part 1b).
+# rectangular and circular waveguides, and the dipole antennas (port of 1.2.0:src/wave.rs, M2 part 1b).
 #
 # SI units. A plane wave here is the real E(x, t) = E₀ sin(kx − ωt + φ), so no complex phasor and no time convention
 # (src/complex.cyr) is involved. Every formula is Rust's in Rust's order: the golden rows compare bit for bit (class A),

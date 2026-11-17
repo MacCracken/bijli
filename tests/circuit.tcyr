@@ -1,7 +1,7 @@
 # circuit.tcyr — src/circuit.cyr (M2 part 1c): Ohm's law, the series and parallel combinations, capacitance and
 # inductance, the RC and RL transients and the series RLC relations.
 #
-# Every group named test_* is rust-old/src/circuit.rs's test of that name, ported assertion for assertion (the ledger
+# Every group named test_* is 1.2.0:src/circuit.rs's test of that name, ported assertion for assertion (the ledger
 # matches them by name): all 51. The cyrius_* groups check what the port adds: the recorded errors and their Display
 # texts, ADR 0002 rows 13, 17, 26 and 29, and the series sums' fold from −0.0. tests/golden/circuit.tsv pins every
 # function over its grid against Rust besides.

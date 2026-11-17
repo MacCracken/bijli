@@ -1,4 +1,4 @@
-# error.cyr — bijli's error codes and the per-thread last-error record (port of rust-old/src/error.rs).
+# error.cyr — bijli's error codes and the per-thread last-error record (port of 1.2.0:src/error.rs).
 #
 # A fallible bijli function returns a value-form Result whose Err payload is one of the BJ_ERR_* codes:
 # `var t, v = f(..); if (is_err_result(t) == 1) { .. v is the code .. }`. The golden token `E:InvalidParameter`

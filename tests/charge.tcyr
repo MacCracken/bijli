@@ -1,6 +1,6 @@
 # charge.tcyr — src/charge.cyr (M1 part 3d): point charges, Coulomb's law, the Lorentz force, cyclotron motion.
 #
-# Every group named test_* is rust-old/src/charge.rs's test of that name, ported assertion for assertion (the ledger
+# Every group named test_* is 1.2.0:src/charge.rs's test of that name, ported assertion for assertion (the ledger
 # matches them by name): all 26. tests/golden/charge.tsv pins every function over its grid against Rust besides.
 
 include "tests/lib.cyr"

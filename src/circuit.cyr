@@ -1,5 +1,5 @@
 # circuit.cyr — Ohm's law, series and parallel combinations, capacitance and inductance, the RC and RL transients and
-# the series RLC relations (port of rust-old/src/circuit.rs, M2 part 1c).
+# the series RLC relations (port of 1.2.0:src/circuit.rs, M2 part 1c).
 #
 # SI units: ohms, farads, henries, volts, amperes, seconds. Every formula is Rust's in Rust's order: the golden rows
 # compare bit for bit (class A), and the transients take bijli's correctly rounded exp and expm1 (class C). A

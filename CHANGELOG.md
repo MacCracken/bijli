@@ -544,6 +544,29 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
   `json.adr.tsv` maps 14 thicknesses to row 36. `tests/json.tcyr` gains `cyrius_fdtd2d_json` (19 assertions).
   Cyrius-only bench: `json/cpml_params_from_json` 3.62–3.76 µs (five fields, between FieldVector's 1.9 µs
   and PointCharge's 4.4 µs).
+- **Cyrius port, M6 part 2a — `Fdtd3d` without its CPML** (`src/fdtd3d.cyr`): the 3D Yee grid. `BjFdtd3d_new` keeps
+  Rust's checks, texts and order (dt = dx/(2√3·c)); then `idx`, the four material setters over boxes (x's range
+  checked first, then y's, then z's), `add_source_ez`, `step_once`, `run`, `time`, `total_energy` and `BjFdtd3d_free`.
+  `step_once` updates H from curl E, applies C_a·E where lossy, updates E from curl H, then zeroes tangential E on the
+  PEC faces. The arrays are fixed at construction (ADR 0002 row 2 amended). Each of the six updates is one row kernel
+  on the packed verbs, the energy's cell terms are packed over the flat arrays, and the 2D grid's helpers are shared
+  (public `_bj_fd2_*`). `fdtd_2d3d.tsv` gains 154 `Fdtd3d::script` rows (1,107 in all), none needing a correction
+  (glibc's sine is correctly rounded on the runs' arguments). `tests/fdtd3d.tcyr`
+  ports fdtd.rs's 15 `test_fdtd3d_*` tests and the six shared 2D/3D tests (60 assertions);
+  `desynced_fields_do_not_panic_3d` is n/a. Bench twin: `fdtd/3d_step_30x30x30` 637–641 µs (2.0× Rust's 319.98 µs;
+  the step about 410 µs, the energy 290 µs, down from 592 µs scalar).
+- **Cyrius port: the Rust tree retired** ([ADR 0003](docs/adr/0003-retire-the-rust-tree.md), the user's decision of
+  2026-11-16). No Rust is kept, built or run in the repository: `rust-old/` (the 1.2.0 crate, 23,752 lines, byte for
+  byte the `1.2.0` tag's), the Rust golden generator (`scripts/oracle/src`, `Cargo.toml`, `Cargo.lock`, `build.rs`;
+  16,629 lines), the three Rust probe references and `scripts/rustsrc.py` are deleted, with every `cargo` step. The
+  golden corpus (766,539 rows) is frozen data, its stale `# regenerate: cargo run …` header line replaced;
+  `scripts/oracle/validate.py` is the reference model that checks every row and writes new ones (Python emitters,
+  from M6 part 2b). `src/constants.cyr`, `src/fdtd_media_data.cyr` and `src/touchstone_data.cyr` are frozen, and
+  validate.py checks the first two against the corpus (`check_frozen_sources`). Surface parity, the Rust-test ledger,
+  the benchmark record and the constants' check read `scripts/rust_1_2_0.json`, an inventory their own parsers made
+  from `rust-old/` before it went (20 modules, 733 public items, 858 tests, 80 benches and their baseline, 12
+  constants): every result is unchanged. CLAUDE.md, the plan, ADR 0001, the README, CONTRIBUTING and the guides
+  follow; Rust 1.2.0 is read as the specification with `git show 1.2.0:…`.
 
 ### Fixed
 

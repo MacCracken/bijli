@@ -1,7 +1,7 @@
 # wave.tcyr — src/wave.cyr (M2 part 1b): the plane-wave relations, Snell's law and the Fresnel coefficients (the angle
 # forms and the trig-free family), the material-based interface, the waveguides and the antennas.
 #
-# Every group named test_* is rust-old/src/wave.rs's test of that name, ported assertion for assertion (the ledger
+# Every group named test_* is 1.2.0:src/wave.rs's test of that name, ported assertion for assertion (the ledger
 # matches them by name): all 63. test_hertzian_radiation_resistance compares against (2π/3)·η₀·10⁻⁴, ADR 0002 row 22's
 # value, where Rust's test has 80π²·10⁻⁴. The cyrius_* groups check what the port adds: the recorded errors and their
 # Display texts, Ok(None) and the errors leaving out untouched, ADR 0002 rows 22–25 and the Cyrius-only u32 check of a

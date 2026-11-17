@@ -1,4 +1,4 @@
-# charge.cyr — point charges, Coulomb's law, the Lorentz force, cyclotron motion (port of rust-old/src/charge.rs,
+# charge.cyr — point charges, Coulomb's law, the Lorentz force, cyclotron motion (port of 1.2.0:src/charge.rs,
 # M1 part 3d).
 #
 # SI units: coulombs, newtons, metres, seconds. Every formula is Rust's in Rust's order (the golden rows compare bit for

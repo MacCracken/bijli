@@ -1,7 +1,7 @@
 # material.tcyr — src/material.cyr (M2 part 1a): the dielectric and magnetic relations, Clausius–Mossotti, the
 # Curie laws, the classification and BjMaterial, and its JSON (src/json.cyr).
 #
-# Every group named test_* is rust-old/src/material.rs's test of that name, ported assertion for assertion (the ledger
+# Every group named test_* is 1.2.0:src/material.rs's test of that name, ported assertion for assertion (the ledger
 # matches them by name): 39 of 42. The other three test the deprecated `Material::reflectance_at`, which is not
 # carried (ADR 0002 row 1); `cyrius_reflectance_via_try` checks their values through try_reflectance_at. The cyrius_*
 # groups check what the port adds: the recorded errors and their Display texts, ADR 0002 rows 13, 17 and 19–21, out

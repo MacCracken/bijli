@@ -2,7 +2,7 @@
 # rf's BjSMatrix, BjTouchstoneFormat and BjTouchstoneData (cyrius_rf_json); (M5 part 1f) of the FDTD types
 # (cyrius_fdtd_json); (M6 part 1d) of the 2D FDTD's BjCpmlParams and BjMode2d (cyrius_fdtd2d_json).
 #
-# rust-old has no test of these types' serde (its serde tests are of later modules' types), so every group here is
+# Rust 1.2.0 has no test of these types' serde (its serde tests are of later modules' types), so every group here is
 # Cyrius-only. tests/golden/json.tsv pins the writers and readers against serde_json 1.0.154 besides; these groups
 # pin what the corpus can't show: the exact text, the record's reasons and byte offsets, `out` left alone on an
 # error, the heap left as it was, and reads on several threads at once.
@@ -417,7 +417,7 @@ fn _cp(a): *BjCpml {
     return a;
 }
 
-# Runs the Cyrius-only JSON checks (rust-old has no serde test of these types).
+# Runs the Cyrius-only JSON checks (Rust 1.2.0 has no serde test of these types).
 fn main(): i64 {
     alloc_init();
 

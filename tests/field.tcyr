@@ -1,7 +1,7 @@
 # field.tcyr — src/field.cyr (M1 parts 3a and 3b): vectors, point charges, dipoles, the Gauss's-law fields, multipoles,
 # images, Green's functions and the stress tensor.
 #
-# Every group named test_* is rust-old/src/field.rs's test of that name, ported assertion for assertion (the ledger
+# Every group named test_* is 1.2.0:src/field.rs's test of that name, ported assertion for assertion (the ledger
 # matches them by name): all 105, parts 3a, 3b and 3c. tests/golden/field.tsv pins every
 # function over its grid against Rust besides.
 
@@ -41,7 +41,7 @@ fn put4(p: *f64, k, q: f64, x: f64, y: f64, z: f64) {
 }
 
 # Σ kq/|p − c| over n charges, each distance √(Σ (pᵢ − cᵢ)²) by powi(2), summed in order from 0: the Rust tests'
-# `direct_potential` (rust-old/src/field.rs, its test module).
+# `direct_potential` (1.2.0:src/field.rs, its test module).
 fn direct_potential(charges: *f64, n, p: *f64): f64 {
     var sum: f64 = 0.0;
     for (var i = 0; i < n; i = i + 1) {

@@ -1,7 +1,7 @@
 # fdtd_util.tcyr — src/fdtd_util.cyr (M5 part 1d): the non-uniform grid, the fourth-order derivative, the CW
 # accumulator and the eigenmode search.
 #
-# Every group named test_* is rust-old/src/fdtd.rs's test of that name, ported assertion for assertion (the ledger
+# Every group named test_* is 1.2.0:src/fdtd.rs's test of that name, ported assertion for assertion (the ledger
 # matches them by name): its 7 non-uniform-grid, 6 fourth-order, 5 CW and 7 eigenmode tests. Rust's Vec results land
 # in caller buffers here; `test_cw_accumulator_length_mismatch` passes a pointer and a length where Rust passes a
 # slice, and keeps its own copy where Rust clones. The cyrius_* groups pin the error records' text, BjNonUniformGrid

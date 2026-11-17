@@ -57,13 +57,16 @@ sim.run(500, Some((100, 100)), 3e9, 1.0);
 ## Building
 
 ```bash
-cargo build                    # default features
-cargo build --all-features     # everything including GPU backends
-cargo test --all-features      # full test suite (850 tests)
-make check                     # fmt + clippy + test + audit
-make features                  # every feature compiles on its own
-make bench                     # criterion benchmarks with history
+cyrius deps                                   # resolve the stdlib (vendors lib/)
+cyrius build src/main.cyr build/bijli         # compile
+cyrius test                                   # the unit tests and the golden parity harness
+cyrius bench                                  # the benchmarks
+cyrius distlib --all                          # dist/bijli.cyr and dist/bijli-ai.cyr
+python3 -I -B scripts/oracle/validate.py .    # the reference model checks every golden row
 ```
+
+There is no Rust in the tree ([ADR 0003](docs/adr/0003-retire-the-rust-tree.md)): Rust bijli 1.2.0 is the
+specification, read from the `1.2.0` tag.
 
 ## License
 

@@ -10,11 +10,12 @@ workflow, coding standards, and review process.
 git clone https://github.com/MacCracken/bijli.git
 cd bijli
 
-# Ensure you have the correct toolchain (see rust-toolchain.toml)
-rustup show
+# The Cyrius toolchain is pinned in cyrius.cyml ([package].cyrius)
+cyrius deps
 
-# Run the full local CI suite
-make check
+# Build and test
+cyrius build src/main.cyr build/bijli
+cyrius test
 ```
 
 ## Pull Request Process
@@ -23,39 +24,33 @@ make check
 2. **Keep commits focused** — one logical change per commit.
 3. **Write tests** — new features require tests; bug fixes require a regression
    test.
-4. **Run CI locally** before pushing:
-   ```bash
-   make check        # fmt + clippy + test + audit
-   ```
+4. **Run the cleanliness check** (CLAUDE.md) before pushing: `cyrius fmt --check`, `cyrius lint`, `cyrius vet`,
+   `cyrius test` (warning-free), `cyrius test --bounds`, `cyrius coverage --exec --min 80`, `cyrius distlib --check`,
+   `cyrius api-surface`, `cyrius audit`, and the port's Python checks (`scripts/surface_parity.py`,
+   `scripts/rust_test_ledger.py --check`, `scripts/bench_record.py --check`, `scripts/oracle/validate.py`).
 5. **Open a PR** against `main` with a clear description of the change.
 6. **Address review feedback** — maintainers may request changes before merging.
 
 ## Code Style
 
-- Follow `rustfmt` defaults (enforced by CI).
-- Zero clippy warnings (`cargo clippy --all-features --all-targets -- -D warnings`).
-- Public API items must have doc comments.
-- Use `#[inline]` on small, hot-path functions.
-- Use `#[non_exhaustive]` on public enums.
-- Physics functions must document units in their doc comments.
+- `cyrius fmt` and `cyrius lint` clean; lines at most 120 characters.
+- Public API items have a doc comment, with units for physics.
+- `#must_use` on pure functions, `#inline` on hot-path functions of at most two parameters.
+- Public enums have explicit, append-only numeric values.
+- No Rust: no `.rs` file, Cargo manifest or `cargo` step ([ADR 0003](docs/adr/0003-retire-the-rust-tree.md)).
 
 ## Testing Requirements
 
-- All public API changes must include unit tests.
-- Integration tests go in `tests/`.
-- Benchmarks go in `benches/` and should be run before/after performance-sensitive
+- All public API changes include unit tests (`tests/*.tcyr`) and golden rows (`tests/golden/`, written by a Python
+  emitter in `scripts/oracle/` from validate.py's model).
+- Benchmarks go in `tests/*.bcyr`; run an interleaved A/B against the base before and after performance-sensitive
   changes.
-- Target: maintain or improve code coverage on every PR.
+- Execution coverage stays at 80 % or above.
 
 ```bash
-# Run tests
-cargo test --all-features
-
-# Run benchmarks
-make bench
-
-# Generate coverage report
-make coverage
+cyrius test                          # tests and the golden parity harness
+cyrius bench                         # benchmarks
+cyrius coverage --exec --min 80      # execution coverage
 ```
 
 ## Commit Messages

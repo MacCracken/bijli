@@ -1,4 +1,4 @@
-# log.cyr — bijli's logging: Rust's `tracing` sites and `logging::init` on sakshi (port of rust-old/src/logging.rs).
+# log.cyr — bijli's logging: Rust's `tracing` sites and `logging::init` on sakshi (port of 1.2.0:src/logging.rs).
 #
 # Rust 1.2.0 emits through `tracing` (39 debug!, 15 warn!, 4 error!, 4 trace!), which prints nothing until the
 # consumer installs a subscriber; `bijli::logging::init()` installs one filtered by the `BIJLI_LOG` environment

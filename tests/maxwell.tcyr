@@ -1,7 +1,7 @@
 # maxwell.tcyr — src/maxwell.cyr (M1 part 3d): the divergences, the displacement current, wave speed, refractive
 # index, impedance, wavelength and frequency, skin depth.
 #
-# Every group named test_* is rust-old/src/maxwell.rs's test of that name, ported assertion for assertion (the ledger
+# Every group named test_* is 1.2.0:src/maxwell.rs's test of that name, ported assertion for assertion (the ledger
 # matches them by name): all 18. tests/golden/maxwell.tsv pins every function over its grid against Rust besides.
 
 include "tests/lib.cyr"

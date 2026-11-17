@@ -30,7 +30,7 @@ All milestones through V2.0 are shipped. See [CHANGELOG.md](/CHANGELOG.md) for d
 
 ## Next — Cyrius port (2.0.0)
 
-Plan of record: [bijli-port-plan.md](bijli-port-plan.md). Decision: [ADR 0001](../adr/0001-cyrius-port-with-rust-oracle.md), proposed.
+Plan of record: [bijli-port-plan.md](bijli-port-plan.md). Decisions: [ADR 0001](../adr/0001-cyrius-port-with-rust-oracle.md) (the port) and [ADR 0003](../adr/0003-retire-the-rust-tree.md) (the Rust tree retired, 2026-11-16).
 
 - [ ] **Prep (plan §4)**:
   - decisions: D1 (the 1.2.0 tag) and D5 (JSON) accepted, D2 and D4 settled (ported), D3 settled as e^{+jωt} with IEEE handedness in every module (plan §4.4);

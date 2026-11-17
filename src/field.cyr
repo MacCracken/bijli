@@ -1,4 +1,4 @@
-# field.cyr — electric and magnetic fields (port of rust-old/src/field.rs). M1 part 3a: BjFieldVector, point charges,
+# field.cyr — electric and magnetic fields (port of 1.2.0:src/field.rs). M1 part 3a: BjFieldVector, point charges,
 # superposition, energy densities and dipoles; part 3b: the Gauss's-law fields, multipoles, images, Green's functions
 # and the stress tensor; part 3c: trace_field_line, into a BjPolyline.
 #

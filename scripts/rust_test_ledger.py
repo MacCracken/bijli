@@ -5,21 +5,21 @@ from the repo root:
     python3 -I -B scripts/rust_test_ledger.py .           # write docs/development/rust-test-ledger.md
     python3 -I -B scripts/rust_test_ledger.py . --check   # exit 1 if the ledger is stale or a test is unaccounted
 
-It lists each `#[test]` / `#[tokio::test]` in rust-old/src/**.rs (inside every `#[cfg(test)]` module, wherever it
-sits: scripts/rustsrc.py), each test in rust-old/tests/*.rs, and each doc test (a runnable fence in a doc comment).
+It lists each `#[test]` / `#[tokio::test]` in Rust 1.2.0's src/**.rs (inside every `#[cfg(test)]` module, wherever
+it sits), each test in its tests/*.rs, and each doc test (a runnable fence in a doc comment), from
+scripts/rust_1_2_0.json (the inventory snapshot when the Rust tree was retired, ADR 0003).
 A test is **ported** when one of the Cyrius test files FILES maps its Rust file to has a `test_group("<name>")` of
 the same name. A test that isn't is **pending** while its milestone is open, and must be ported or have a REASONS
 entry once its milestone is in DONE. A REASONS entry for a test that is ported, or that no longer exists, is an
 error, as is a Rust file with tests and no FILES entry.
 """
+import json
 import re
 import sys
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parent))
-import rustsrc  # noqa: E402
-
 root = Path(sys.argv[1] if len(sys.argv) > 1 else ".").resolve()
+INV = json.loads((root / "scripts/rust_1_2_0.json").read_text())
 check = "--check" in sys.argv[2:]
 out_path = root / "docs/development/rust-test-ledger.md"
 
@@ -78,6 +78,10 @@ REASONS = {
         "BjFdtd1d's arrays are fixed at construction (ADR 0002 row 2): num_cells and the field arrays can't be resized "
         "apart, so the mismatch it guards against can't arise; tests/fdtd1d.tcyr's cyrius_fdtd1d_free and "
         "cyrius_fdtd1d_two_cells pin the empty and smallest grids",
+    ("src/fdtd.rs", "desynced_fields_do_not_panic_3d"):
+        "BjFdtd3d's arrays are fixed at construction (ADR 0002 row 2): nx, ny, nz and the six field arrays can't be "
+        "resized apart, so the desynchronised layout it steps, runs, sources and sets materials on can't arise; "
+        "tests/fdtd3d.tcyr's cyrius_fdtd3d_grid pins sources outside the grid and BjFdtd3d_free",
     ("src/fdtd.rs", "desynced_fields_do_not_panic_2d"):
         "BjFdtd2d's arrays are fixed at construction (ADR 0002 row 2): nx, ny and the field arrays can't be resized "
         "apart, so the desynchronised layout it steps, runs and sources on can't arise; tests/fdtd2d.tcyr's "
@@ -99,19 +103,8 @@ def cyrius_groups(files):
 
 
 def collect():
-    """Rust file -> [(test name, kind)], kind 'unit', 'integration' or 'doc'."""
-    found = {}
-    for module in rustsrc.rust_modules(root):
-        path = root / "rust-old/src" / f"{module}.rs"
-        tests = [(name, "unit") for name, _ in rustsrc.tests_in(path)]
-        tests += [(f"doc test at line {no}", "doc") for no in rustsrc.doc_tests(path)]
-        if tests:
-            found[f"src/{module}.rs"] = tests
-    for path in sorted((root / "rust-old/tests").glob("*.rs")):
-        tests = [(name, "integration") for name, _ in rustsrc.tests_in(path, whole_file=True)]
-        if tests:
-            found[f"tests/{path.name}"] = tests
-    return found
+    """Rust file -> [(test name, kind)], kind 'unit', 'integration' or 'doc', from the inventory."""
+    return {f: [tuple(t) for t in tests] for f, tests in INV["tests"].items()}
 
 
 def main() -> int:
@@ -153,7 +146,7 @@ def main() -> int:
         "# Rust-test ledger",
         "",
         "> **Generated** by `python3 -I -B scripts/rust_test_ledger.py .`; `--check` gates it (port plan §6 step 7, the",
-        "> mela pattern). Every test of the frozen Rust oracle (`rust-old/`, bijli 1.2.0) is ported to a Cyrius test",
+        "> mela pattern). Every test of the frozen Rust crate (bijli 1.2.0, tag `1.2.0`) is ported to a Cyrius test",
         "> group of the same name, recorded here with its reason, or pending until its milestone. The golden corpus",
         "> (`tests/golden/`) checks every ported function on its grid besides; this ledger is about the oracle's own",
         "> assertions.",

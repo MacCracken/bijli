@@ -9,17 +9,25 @@ bite is done, the machinery, the scripts and the traps. Delete it once it has se
 
 ## Where it stands
 
-- **Committed through `e1f8fe4`** ("M6 pt1c"); part 1d is in the working tree for the user to commit.
+- **Committed through `8b460df`** ("M6 pt1d"); part 2a is in the working tree for the user to commit.
 - **M6 Part 1** (the 2D CPML and `Fdtd2d`, §116–§119) runs in bites. Done: 1a the CPML layer (`src/cpml.cyr`); 1b-1
   `Fdtd2d` without the CPML (`src/fdtd2d.cyr`; its scripts `Fdtd2d::script` in `fdtd_2d3d.tsv`, replayed by
   validate.py's `Fd2Scripts` in pure Python, no NumPy on the host); 1b-2 the CPML attached (the y-strips packed, the
   x-strips scalar: the CPML step 5.7–6.2× Rust's); 1c `nf2ff_2d` (on the phasor form's core with the rotation (1, 0),
   `src/nf2ff.cyr` after `src/fdtd2d.cyr` in the bundle; its edge rows mapped in `fdtd_2d3d.adr.tsv`); 1d the JSON
   of `CpmlParams` and `Mode2d` (src/json.cyr; `m_json.rs`'s `Kind::is_usize` carries the thickness in an f64's bits;
-  a thickness past 2^63 − 1 is refused, ADR 0002 row 36, §120). **Part 1 is done.** Next: Part 2, the 3D grid
-  (`Fdtd3d`, its CPML: 12 Ψ slabs; its rows join `fdtd_2d3d.tsv`, whose `Op2` scripts want a 3D twin), Part 3
-  `compute.rs`, then the range-edge review (the per-cell rule for the 2D and 3D updates and the CPML).
-- **M6's corpus** is `tests/golden/fdtd_2d3d.tsv` (`scripts/oracle/src/m_fdtd_2d3d.rs`, which imports `m_fdtd`'s
+  a thickness past 2^63 − 1 is refused, ADR 0002 row 36, §120). **Part 1 is done.** Part 2 runs in bites: 2a
+  `Fdtd3d` without the CPML (`src/fdtd3d.cyr`, done, §121: `Op3` scripts as `Fdtd3d::script` rows, replayed by
+  validate.py's `Fd3Scripts` and the harness's `_par_fd3_script`; the 2D file's helpers public as `_bj_fd2_*`); next 2b,
+  `Cpml3d`'s twelve Ψ slabs (Rust's `correct_slabs`, `SlabPass`; `try_enable_cpml*`, `disable_cpml`, `cpml()`; the
+  `cpml3d_*` tests, `desynced` n/a; the bench `fdtd/3d_step_30x30x30_cpml8`; Ψ digests in `state3`, ops 9, 10, 12).
+  Then Part 3 `compute.rs`, then the range-edge review (the per-cell rule for the 2D and 3D updates and the CPML).
+- **No Rust (ADR 0003, 2026-11-16).** The Rust tree and the Rust generator are retired; the corpus is frozen data and
+  `scripts/oracle/validate.py` the reference model. New rows (2b first) come from a Python emitter you write in
+  `scripts/oracle/`: inputs from a seeded grid, outputs from validate.py's model (`Fd3Scripts` for 3D), tokens from its
+  `wire()`, appended to the module's TSV with its `# rows:` line updated. The tools read `scripts/rust_1_2_0.json`;
+  the Rust source is `git show 1.2.0:src/fdtd.rs`. Steps 4 and 9 below and the final job have no `cargo` step now.
+- **M6's corpus** is `tests/golden/fdtd_2d3d.tsv` (its frozen rows from the retired `m_fdtd_2d3d.rs`, which imported `m_fdtd`'s
   `u`, `seq`, `res_toks`, `digest` and `dbg_*`), checked by validate.py's `validate_fdtd_2d3d` (Rust's chain on
   glibc's primitives) and corrected by `fdtd_2d3d_corrections` (MPFR's), replayed by the harness's `_par_fdtd_2d3d`.
   A class-C function needs its line in `_par_c_bound` (tests/parity.tcyr), or its rows stay "measured".
@@ -56,10 +64,10 @@ bite is done, the machinery, the scripts and the traps. Delete it once it has se
     Rust's chain where every operation is its 53-bit value (mode 0, checked per sample by one exponent test and per
     angle), else the call or the angle unbounded (`_bj_nf_angle_ux`); a non-finite field keeps Rust's (row 18, §114).
     **Part 2 is done.**
-- **Numbers after M6 1d**: 19 modules, 644,497 ok, 0 failed, 121,888 accepted (ADR 01: 43,099; ADR 0002: 78,789)
-  over 766,385 rows; 485 digests equal on x86_64 ELF, x86_64 PE and aarch64. Ledger 731 ported, 10 n/a, 117 pending
-  of 858; API snapshot 2,127; surface parity 606 items; benches 78 of 80 twinned (the 3D steps pending); execution
-  coverage 382 of 382. `json.tsv` is 40.7 MB of the 48 MiB cap: the rest of M6 adds no JSON (`Fdtd3d` and compute.rs
+- **Numbers after M6 2a**: 19 modules, 644,651 ok, 0 failed, 121,888 accepted (ADR 01: 43,099; ADR 0002: 78,789)
+  over 766,539 rows; 486 digests equal on x86_64 ELF, x86_64 PE and aarch64. Ledger 752 ported, 11 n/a, 95 pending
+  of 858; API snapshot 2,129; surface parity 630 items; benches 79 of 80 twinned (the 3D CPML step pending);
+  execution coverage 384 of 384. `json.tsv` is 40.7 MB of the 48 MiB cap: the rest of M6 adds no JSON (`Fdtd3d` and compute.rs
   have no serde), but M7's eight serde types (integration/) will want their own module.
 - **M5 is done** (§115). The benchmark record's Cyrius column is each row's least of four full runs: rows vary up to
   1.5× between runs under other repos' loads, so take the least of several when regenerating it.
@@ -93,9 +101,9 @@ bite is done, the machinery, the scripts and the traps. Delete it once it has se
    the first subset that accounts for its whole change: `fs40`, then `fs13`, then `fs17`, else 18. Free functions
    get a `*_port` beside the Rust transcription, mapped in `fdtd_adr_rows`. **Every new mapping must make
    `fdtd_corrections` skip the row**: a golden row never has both a `.cr.tsv` and an `.adr.tsv` entry.
-4. **The grid**: one `emit_<part>()` in `scripts/oracle/src/m_fdtd.rs`, appended last in `emit()`. Use the
-   skip-if-seen helpers (`a` built in; `tf_new`, `one_new`, `frames_new`, `pulse_new`): the generator panics on a
-   repeated (function, inputs) row. Regenerate, then check that the old body is an exact prefix (script below).
+4. **The grid**: a Python emitter in `scripts/oracle/` (ADR 0003): inputs from a seeded grid, each output from
+   validate.py's model, rows appended to the module's TSV with `wire()`; skip a repeated (function, inputs). Check
+   that the old body is an exact prefix of the new file.
 5. **Map and check**: `python3 -I -B scripts/oracle/validate.py . --write` (about 10–15 min now; run it in the
    background), then `cyrius test tests/parity.tcyr`: every `fdtd.adr.tsv` row must be accepted, 0 warnings.
 6. **Tests**: `cyrius_*` groups pinning values computed from validate.py's model. Load the model with the exec trick
@@ -107,7 +115,7 @@ bite is done, the machinery, the scripts and the traps. Delete it once it has se
 8. **Docs**: ADR 0002 row (new or `*Amended …*` in both the Cyrius and golden columns), a CHANGELOG Changed entry and
    a Fixed entry (with the cost), `port-parity.md` §N with placeholders until the numbers are in, `state.md`'s M5 row
    and counts, the plan's tracking row, `scripts/oracle/README.md`'s fdtd row. Keep lines ≤ 120 (tables exempt).
-9. **The final job** (background, one command, below): the gate, the oracle's `--check`, clippy, validate.py, then
+9. **The final job** (background, one command, below): the gate, validate.py, then
    wine, then aarch64, one at a time, each with its `=== parity summary` line and the 475 digests compared with ELF's.
    Fill §N's result line, then wrap up. The user commits each bite; never commit or push.
 
@@ -178,13 +186,10 @@ run "cyrius audit > $S/audit.txt 2>&1"
 run python3 -I -B scripts/bench_record.py . --check
 ```
 
-The final job (after the gate): the oracle, then the cross-targets one at a time.
+The final job (after the gate): validate.py, then the cross-targets one at a time.
 
 ```bash
 cd /home/macro/Repos/bijli
-M=scripts/oracle/Cargo.toml
-cargo run --release --locked --manifest-path $M -- --check > $S/oracle_check.txt 2>&1; echo "oracle rc=$?"
-cargo clippy --release --locked --manifest-path $M -- -D warnings > $S/clippy.txt 2>&1; echo "clippy rc=$?"
 python3 -I -B scripts/oracle/validate.py . > $S/validate.txt 2>&1; echo "validate rc=$?"; tail -1 $S/validate.txt
 grep -a '^  digest' $S/test.out > $S/dig.elf
 cyrius test --win > $S/win.out 2>&1; grep -a '=== parity summary' $S/win.out
@@ -264,7 +269,7 @@ exec(compile(src, "validate.py", "exec"), g)
 - **A finiteness test that overflows**: `dt * dx * 0.0` is NaN at dx = DBL_MAX; test each operand on its own (2b's
   bug, caught by 11 failing mappings).
 - **Variables are function-wide**: a repeated `var` name in a test is a compile error.
-- **The generator**: a repeated (function, inputs) row panics, so use the `*_new` helpers in a new part.
+- **An emitter**: a repeated (function, inputs) row breaks the corrections' keys; skip one already written.
 - **Cost model**: a scalar loop over a row costs about 2.6–2.9 ns an element; the `f64v_*` verbs about 0.35 ns. There
   is no vector compare or classify (plan §10).
 

@@ -1,0 +1,624 @@
+# fdtd3d.cyr — fdtd.rs's 3D solver (M6 part 2a): `Fdtd3d`, the full vector Yee algorithm on an nx × ny × nz grid, all
+# six components E_x, E_y, E_z, H_x, H_y, H_z, SI units. Fields are stored z-major, index z·nx·ny + y·nx + x. The
+# time step is half the 3D Courant limit, dt = dx/(2√3·c), a Courant number of 1/(2√3).
+#
+# The outer faces are perfect electric conductors: tangential E is held at zero on all six faces (E_y and E_z on the x
+# faces, E_x and E_z on the y faces, E_x and E_y on the z faces), so outgoing waves reflect. Per-cell ε_r, μ_r and
+# conductivity σ (the lossy E update E ← C_a·E + C_b·∇×H, C_a = (1 − σΔt/2ε)/(1 + σΔt/2ε), C_b = (Δt/εΔx)/(1 +
+# σΔt/2ε)) are set by box region.
+#
+# A grid's ten arrays (E_x, E_y, E_z, H_x, H_y, H_z, the C_b and H coefficients, ε_r and μ_r) and three scratch rows
+# are one anonymous mmap, fixed at construction; the first lossy region maps C_a and σ beside them. BjFdtd3d_free gives
+# both back. Rust's public, resizable `Vec` fields and the per-step layout check that guarded them are gone (ADR 0002
+# row 2), as the 2D grid's: the fields are the arrays' addresses and nx·ny·nz their length. No step allocates. Each
+# component's update is one row kernel on the packed f64v_* verbs, every lane rounding Rust's operations in Rust's
+# order (port plan §9.3, probe p10), on lane multiples with a scalar tail (probe p19). The H components read only E and
+# the E components only H, so each phase's rows run in one pass over the grid. The file is time-domain only; bijli's
+# one harmonic convention, e^{+jωt}, is stated in src/complex.cyr's header. The shared helpers (the usize compares,
+# the E coefficients, the region and material checks) are src/fdtd2d.cyr's.
+
+private
+
+# std::f64::consts::PI, and 3.0_f64.sqrt() (correctly rounded).
+var _BJ_FD3_PI: f64 = 3.141592653589793;
+var _BJ_FD3_SQRT_3: f64 = 1.7320508075688772;
+# The grid's arrays, each nx·ny·nz f64, in one mapping: E_x, E_y, E_z, H_x, H_y, H_z, C_b, the H coefficients, ε_r and
+# μ_r (then three scratch rows of max(nx, 1024)).
+var _BJ_FD3_ARRAYS = 10;
+# The scratch rows' least length: the energy's chunk.
+var _BJ_FD3_CHUNK = 1024;
+# The largest nx·ny·nz whose mapping (under 104 bytes a cell with the scratch rows) a 64-bit length holds: 2^56 − 1.
+var _BJ_FD3_MAX_CELLS = 72057594037927935;
+
+# Rust's `run(steps, None, ..)`: no source. Rust's Some((x, y, z)) outside the grid injects nothing either, so
+# usize::MAX (−1) for x is None exactly.
+public var BJ_FDTD3D_NO_SOURCE = 0 - 1;
+
+# A 3D FDTD simulation. nx × ny × nz are the nodes, `dx` (m) the uniform spacing, `dt` (s) the step, `step` the
+# time-step index. `ex`, `ey`, `ez`, `hx`, `hy` and `hz` are the addresses of nx·ny·nz f64 each (read and write the
+# values, as Rust's public vectors). `ce` holds C_b per cell (Δt/(ε₀ε_r·Δx), divided by 1 + σΔt/2ε where lossy), `ch`
+# Δt/(μ₀μ_r·Δx), `ca` C_a and `conductivity` σ (S/m), both 0 while every cell is lossless (Rust's empty vectors),
+# `permittivity` ε_r and `permeability` μ_r. `work` holds three scratch rows of `wlen` (max(nx, 1024)) f64, the
+# updates' and the energy's, `map_bytes` and `lossy_bytes`
+# the mappings' lengths (0 once freed). Mirrors `Fdtd3d`.
+public struct BjFdtd3d {
+    nx;
+    ny;
+    nz;
+    dx: f64;
+    dt: f64;
+    step;
+    ex;
+    ey;
+    ez;
+    hx;
+    hy;
+    hz;
+    ce;
+    ch;
+    ca;
+    permittivity;
+    permeability;
+    conductivity;
+    work;
+    wlen;
+    map_bytes;
+    lossy_bytes;
+}
+
+# One row of a curl update: d[i] += k[i]·((a[i] − ap[i]) − (b[i] − bp[i])) for i < n, Rust's `f[i] += c[i] * (da −
+# db)` for each of the six components, on the packed f64v_sub, f64v_mul and f64v_add through the scratch rows w and w2
+# on the largest multiple of 4, then a scalar tail (probe p19).
+fn _bj_fd3_curl(d: *f64, k: *f64, a: *f64, ap: *f64, b: *f64, bp: *f64, w: *f64, w2: *f64, n) {
+    var m = n & (0 - 4);
+    if (m > 0) {
+        f64v_sub(w, a, ap, m);
+        f64v_sub(w2, b, bp, m);
+        f64v_sub(w, w, w2, m);
+        f64v_mul(w, k, w, m);
+        f64v_add(d, d, w, m);
+    }
+    for (var i = m; i < n; i = i + 1) {
+        var da: f64 = a[i] - ap[i];
+        var db: f64 = b[i] - bp[i];
+        var dd: f64 = da - db;
+        var v: f64 = k[i] * dd;
+        d[i] = d[i] + v;
+    }
+    return 0;
+}
+
+# Zeroes n f64 at f.
+fn _bj_fd3_zero(f: *f64, n) {
+    for (var i = 0; i < n; i = i + 1) { f[i] = 0.0; }
+    return 0;
+}
+
+# A vacuum grid of nx × ny × nz nodes at spacing dx into *out, the faces PEC: Ok(0), or with out untouched
+# Err(InsufficientResolution) when a dimension is below 3 (cells min(nx, ny, nz), domain that min·dx),
+# Err(InvalidParameter) "dx must be finite and positive, got {dx}", "grid [{nx}, {ny}, {nz}] is too large" (the cell
+# count past 2^64) or "cannot allocate {n} grid values", in Rust's order. dt = dx/(2√3·c). Give it back with
+# BjFdtd3d_free. Mirrors `Fdtd3d::new`.
+#must_use
+public fn BjFdtd3d_new(nx, ny, nz, dx: f64, out: *BjFdtd3d): Result {
+    if ((nx >= 0 && nx < 3) || (ny >= 0 && ny < 3) || (nz >= 0 && nz < 3)) {
+        var mn = nx;
+        if (_bj_fd2_uge(mn, ny) == 1) { mn = ny; }
+        if (_bj_fd2_uge(mn, nz) == 1) { mn = nz; }
+        var mf: f64 = _bj_fd2_u2f(mn);
+        var size: f64 = mf * dx;
+        return Err(_bj_err_insufficient_resolution(mn, size));
+    }
+    if (_bj_fd2_pos(dx) == 0) {
+        var t = _bj_err_reason(BJ_ERR_INVALID_PARAMETER);
+        _bj_tx_cstr(t, "dx must be finite and positive, got ");
+        _bj_fmt_f64_display(t, dx);
+        return Err(BJ_ERR_INVALID_PARAMETER);
+    }
+    var plane: i64[1];
+    var cells: i64[1];
+    if (_bj_fd2_umul(nx, ny, &plane) == 0 || _bj_fd2_umul(plane[0], nz, &cells) == 0) {
+        var tg = _bj_err_reason(BJ_ERR_INVALID_PARAMETER);
+        _bj_tx_cstr(tg, "grid [");
+        _bj_tx_u64(tg, nx);
+        _bj_tx_cstr(tg, ", ");
+        _bj_tx_u64(tg, ny);
+        _bj_tx_cstr(tg, ", ");
+        _bj_tx_u64(tg, nz);
+        _bj_tx_cstr(tg, "] is too large");
+        return Err(BJ_ERR_INVALID_PARAMETER);
+    }
+    var n = cells[0];
+    var c: f64 = BJ_SPEED_OF_LIGHT;
+    var r3: f64 = 2.0 * _BJ_FD3_SQRT_3;
+    var r3c: f64 = r3 * c;
+    var dt: f64 = dx / r3c;
+    var map = 0;
+    var bytes = 0;
+    var wl = nx;
+    if (_bj_fd2_uge(wl, _BJ_FD3_CHUNK) == 0) { wl = _BJ_FD3_CHUNK; }
+    if (n >= 0 && n <= _BJ_FD3_MAX_CELLS) {
+        bytes = (n * _BJ_FD3_ARRAYS + 3 * wl) * 8;
+        map = mmap_anon(bytes);
+    }
+    if (map == 0) { return Err(_bj_fd2_alloc_err(n)); }
+    var e0dx: f64 = BJ_EPSILON_0 * dx;
+    var ce: f64 = dt / e0dx;
+    var m0dx: f64 = BJ_MU_0 * dx;
+    var ch: f64 = dt / m0dx;
+    var cep: *f64 = _bj_fd2_f64p(map + 6 * n * 8);
+    var chp: *f64 = _bj_fd2_f64p(map + 7 * n * 8);
+    var eps: *f64 = _bj_fd2_f64p(map + 8 * n * 8);
+    var mu: *f64 = _bj_fd2_f64p(map + 9 * n * 8);
+    for (var i = 0; i < n; i = i + 1) {
+        cep[i] = ce;
+        chp[i] = ch;
+        eps[i] = 1.0;
+        mu[i] = 1.0;
+    }
+    out.nx = nx;
+    out.ny = ny;
+    out.nz = nz;
+    out.dx = dx;
+    out.dt = dt;
+    out.step = 0;
+    out.ex = map;
+    out.ey = map + n * 8;
+    out.ez = map + 2 * n * 8;
+    out.hx = map + 3 * n * 8;
+    out.hy = map + 4 * n * 8;
+    out.hz = map + 5 * n * 8;
+    out.ce = map + 6 * n * 8;
+    out.ch = map + 7 * n * 8;
+    out.permittivity = map + 8 * n * 8;
+    out.permeability = map + 9 * n * 8;
+    out.work = map + 10 * n * 8;
+    out.wlen = wl;
+    out.ca = 0;
+    out.conductivity = 0;
+    out.map_bytes = bytes;
+    out.lossy_bytes = 0;
+    if (_bj_log_on(4) == 1) {
+        var lb[256];
+        var lt[24];
+        _bj_tx_init(&lt, &lb, 256);
+        _bj_tx_cstr(&lt, "3D FDTD simulation created nx=");
+        _bj_tx_u64(&lt, nx);
+        _bj_tx_cstr(&lt, " ny=");
+        _bj_tx_u64(&lt, ny);
+        _bj_tx_cstr(&lt, " nz=");
+        _bj_tx_u64(&lt, nz);
+        _bj_tx_cstr(&lt, " dx=");
+        _bj_fmt_f64_debug(&lt, dx);
+        _bj_tx_cstr(&lt, " dt=");
+        _bj_fmt_f64_debug(&lt, dt);
+        _bj_tx_cstr(&lt, " n=");
+        _bj_tx_u64(&lt, n);
+        _bj_log_text(4, &lt);
+    }
+    return Ok(0);
+}
+
+# Gives a grid's mappings back and empties it (nx = ny = nz = 0, every address 0); a second call does nothing.
+public fn BjFdtd3d_free(sim: *BjFdtd3d): i64 {
+    if (sim.map_bytes > 0) { cyr_munmap(sim.ex, sim.map_bytes); }
+    if (sim.lossy_bytes > 0) { cyr_munmap(sim.ca, sim.lossy_bytes); }
+    sim.ex = 0;
+    sim.ey = 0;
+    sim.ez = 0;
+    sim.hx = 0;
+    sim.hy = 0;
+    sim.hz = 0;
+    sim.ce = 0;
+    sim.ch = 0;
+    sim.ca = 0;
+    sim.permittivity = 0;
+    sim.permeability = 0;
+    sim.conductivity = 0;
+    sim.work = 0;
+    sim.wlen = 0;
+    sim.nx = 0;
+    sim.ny = 0;
+    sim.nz = 0;
+    sim.map_bytes = 0;
+    sim.lossy_bytes = 0;
+    return 0;
+}
+
+impl BjFdtd3d {
+    # The linear index of node (x, y, z): z·(nx·ny) + y·nx + x. Mirrors `Fdtd3d::idx`.
+    #must_use
+    public fn idx(self, x, y, z): i64 {
+        return z * (self.nx * self.ny) + y * self.nx + x;
+    }
+
+    # Writes material values to an already validated box r[0..6] (x0, x1, y0, y1, z0, z1) and refreshes the update
+    # coefficients; a flag of 0 leaves that property as it is (Rust's None). The first region with σ > 0 maps C_a (1)
+    # and σ (0) for every cell: Ok(0), or Err(InvalidParameter) "cannot allocate {n} grid values" with nothing written.
+    # Mirrors `Fdtd3d::apply_region`.
+    fn apply_region(self, r: *i64, has_eps, eps_r: f64, has_mu, mu_r: f64, has_sigma, sigma: f64): Result {
+        var nx = self.nx;
+        var nxy = nx * self.ny;
+        var n = nxy * self.nz;
+        if (has_sigma == 1 && sigma > 0.0 && self.ca == 0) {
+            var map = mmap_anon(2 * n * 8);
+            if (map == 0) { return Err(_bj_fd2_alloc_err(n)); }
+            var cap: *f64 = _bj_fd2_f64p(map);
+            for (var i = 0; i < n; i = i + 1) { cap[i] = 1.0; }
+            self.ca = map;
+            self.conductivity = map + n * 8;
+            self.lossy_bytes = 2 * n * 8;
+        }
+        if (_bj_log_on(4) == 1) {
+            var lb[256];
+            var lt[24];
+            _bj_tx_init(&lt, &lb, 256);
+            _bj_tx_cstr(&lt, "3D FDTD material region set xs=");
+            _bj_tx_u64(&lt, r[0]);
+            _bj_tx_cstr(&lt, "..");
+            _bj_tx_u64(&lt, r[1]);
+            _bj_tx_cstr(&lt, " ys=");
+            _bj_tx_u64(&lt, r[2]);
+            _bj_tx_cstr(&lt, "..");
+            _bj_tx_u64(&lt, r[3]);
+            _bj_tx_cstr(&lt, " zs=");
+            _bj_tx_u64(&lt, r[4]);
+            _bj_tx_cstr(&lt, "..");
+            _bj_tx_u64(&lt, r[5]);
+            _bj_log_text(4, &lt);
+        }
+        var dt: f64 = self.dt;
+        var dx: f64 = self.dx;
+        var m0dx: f64 = BJ_MU_0 * dx;
+        var base_h: f64 = dt / m0dx;
+        var eps: *f64 = _bj_fd2_f64p(self.permittivity);
+        var mu: *f64 = _bj_fd2_f64p(self.permeability);
+        var ce: *f64 = _bj_fd2_f64p(self.ce);
+        var ch: *f64 = _bj_fd2_f64p(self.ch);
+        var ca: *f64 = _bj_fd2_f64p(self.ca);
+        var cond: *f64 = _bj_fd2_f64p(self.conductivity);
+        for (var z = r[4]; z < r[5]; z = z + 1) {
+            for (var y = r[2]; y < r[3]; y = y + 1) {
+                for (var x = r[0]; x < r[1]; x = x + 1) {
+                    var i = z * nxy + y * nx + x;
+                    if (has_mu == 1) {
+                        mu[i] = mu_r;
+                        var hm: f64 = base_h / mu_r;
+                        ch[i] = hm;
+                    }
+                    if (has_eps == 1 || has_sigma == 1) {
+                        if (has_eps == 1) { eps[i] = eps_r; }
+                        if (has_sigma == 1 && self.conductivity != 0) { cond[i] = sigma; }
+                        var s: f64 = 0.0;
+                        if (self.conductivity != 0) { s = cond[i]; }
+                        var cav, cbv = _bj_fd2_e_coefficients(dt, dx, eps[i], s);
+                        ce[i] = cbv;
+                        if (self.ca != 0) { ca[i] = cav; }
+                    }
+                }
+            }
+        }
+        return Ok(0);
+    }
+
+    # The validated box [x0, x1) × [y0, y1) × [z0, z1) into r[0..6] (x0, x1, y0, y1, z0, z1, each end clamped to the
+    # grid): 0, or InvalidParameter (x's first, then y's, then z's) recorded and its code. Mirrors `Fdtd3d::region`.
+    fn region(self, x0, y0, z0, x1, y1, z1, r: *i64): i64 {
+        var e = _bj_fd2_range("x", x0, x1, self.nx, r);
+        if (e != 0) { return e; }
+        e = _bj_fd2_range("y", y0, y1, self.ny, r + 2);
+        if (e != 0) { return e; }
+        return _bj_fd2_range("z", z0, z1, self.nz, r + 4);
+    }
+
+    # Sets ε_r over [x0, x1) × [y0, y1) × [z0, z1), the ends clamped to the grid; σ already set there is kept. Ok(0),
+    # or with nothing modified Err(InvalidPermittivity) for an ε_r not finite and positive, Err(InvalidParameter) for a
+    # region that starts outside the grid or is inverted. Mirrors `Fdtd3d::set_permittivity`.
+    public fn set_permittivity(self, x0, y0, z0, x1, y1, z1, eps_r: f64): Result {
+        var e = _bj_fd2_check_eps(eps_r);
+        if (e != 0) { return Err(e); }
+        var r: i64[6];
+        e = self.region(x0, y0, z0, x1, y1, z1, &r);
+        if (e != 0) { return Err(e); }
+        return self.apply_region(&r, 1, eps_r, 0, 1.0, 0, 0.0);
+    }
+
+    # Sets μ_r over [x0, x1) × [y0, y1) × [z0, z1), the ends clamped. Ok(0), or with nothing modified
+    # Err(InvalidPermeability) for a μ_r not finite and positive, Err(InvalidParameter) for a bad region. Mirrors
+    # `Fdtd3d::set_permeability`.
+    public fn set_permeability(self, x0, y0, z0, x1, y1, z1, mu_r: f64): Result {
+        var e = _bj_fd2_check_mu(mu_r);
+        if (e != 0) { return Err(e); }
+        var r: i64[6];
+        e = self.region(x0, y0, z0, x1, y1, z1, &r);
+        if (e != 0) { return Err(e); }
+        return self.apply_region(&r, 0, 1.0, 1, mu_r, 0, 0.0);
+    }
+
+    # Sets σ (S/m) over [x0, x1) × [y0, y1) × [z0, z1), the ends clamped: lossy cells take E ← C_a·E + C_b·∇×H (the
+    # file comment); the first lossy region maps C_a and σ, and a lossless grid keeps the cheaper lossless update.
+    # Ok(0), or with nothing modified Err(InvalidParameter) for a σ negative or not finite, or a bad region. Mirrors
+    # `Fdtd3d::set_conductivity`.
+    public fn set_conductivity(self, x0, y0, z0, x1, y1, z1, sigma: f64): Result {
+        var e = _bj_fd2_check_sigma(sigma);
+        if (e != 0) { return Err(e); }
+        var r: i64[6];
+        e = self.region(x0, y0, z0, x1, y1, z1, &r);
+        if (e != 0) { return Err(e); }
+        return self.apply_region(&r, 0, 1.0, 0, 1.0, 1, sigma);
+    }
+
+    # Sets ε_r, μ_r and σ over [x0, x1) × [y0, y1) × [z0, z1) from a material, every input validated (ε_r, μ_r, σ,
+    # then the region) before anything is written. Mirrors `Fdtd3d::set_material`.
+    public fn set_material(self, x0, y0, z0, x1, y1, z1, mat: *BjMaterial): Result {
+        var e = _bj_fd2_check_eps(mat.eps_r);
+        if (e == 0) { e = _bj_fd2_check_mu(mat.mu_r); }
+        if (e == 0) { e = _bj_fd2_check_sigma(mat.conductivity); }
+        if (e != 0) { return Err(e); }
+        var r: i64[6];
+        e = self.region(x0, y0, z0, x1, y1, z1, &r);
+        if (e != 0) { return Err(e); }
+        return self.apply_region(&r, 1, mat.eps_r, 1, mat.mu_r, 1, mat.conductivity);
+    }
+
+    # Adds `value` to E_z at node (x, y, z), a soft source; a node outside the grid is ignored (usize compares), and
+    # one where E_z is tangential to a wall (an x or y face) is cleared on the next step. Mirrors
+    # `Fdtd3d::add_source_ez`.
+    public fn add_source_ez(self, x, y, z, value: f64) {
+        if (_bj_fd2_uge(x, self.nx) == 1 || _bj_fd2_uge(y, self.ny) == 1 || _bj_fd2_uge(z, self.nz) == 1) {
+            return 0;
+        }
+        var f: *f64 = _bj_fd2_f64p(self.ez);
+        var i = z * (self.nx * self.ny) + y * self.nx + x;
+        f[i] = f[i] + value;
+        return 0;
+    }
+
+    # The H update from curl E: H_x += C_h·((E_y[z + 1] − E_y) − (E_z[y + 1] − E_z)) on z < nz − 1, y < ny − 1, every
+    # x; H_y += C_h·((E_z[x + 1] − E_z) − (E_x[z + 1] − E_x)) on z < nz − 1, x < nx − 1; H_z += C_h·((E_x[y + 1] − E_x)
+    # − (E_y[x + 1] − E_y)) on y < ny − 1, x < nx − 1. Each reads only E, so one pass over the rows does all three.
+    fn update_h(self) {
+        var nx = self.nx;
+        var ny = self.ny;
+        var nz = self.nz;
+        var nxy = nx * ny;
+        var ex: *f64 = _bj_fd2_f64p(self.ex);
+        var ey: *f64 = _bj_fd2_f64p(self.ey);
+        var ez: *f64 = _bj_fd2_f64p(self.ez);
+        var hx: *f64 = _bj_fd2_f64p(self.hx);
+        var hy: *f64 = _bj_fd2_f64p(self.hy);
+        var hz: *f64 = _bj_fd2_f64p(self.hz);
+        var ch: *f64 = _bj_fd2_f64p(self.ch);
+        var w: *f64 = _bj_fd2_f64p(self.work);
+        var w2: *f64 = _bj_fd2_f64p(self.work + nx * 8);
+        for (var z = 0; z < nz; z = z + 1) {
+            for (var y = 0; y < ny; y = y + 1) {
+                var r = z * nxy + y * nx;
+                if (z < nz - 1) {
+                    if (y < ny - 1) {
+                        _bj_fd3_curl(hx + r, ch + r, ey + r + nxy, ey + r, ez + r + nx, ez + r, w, w2, nx);
+                    }
+                    _bj_fd3_curl(hy + r, ch + r, ez + r + 1, ez + r, ex + r + nxy, ex + r, w, w2, nx - 1);
+                }
+                if (y < ny - 1) {
+                    _bj_fd3_curl(hz + r, ch + r, ex + r + nx, ex + r, ey + r + 1, ey + r, w, w2, nx - 1);
+                }
+            }
+        }
+        return 0;
+    }
+
+    # The E update from curl H (after E ← C_a·E where lossy): E_x += C_b·((H_z − H_z[y − 1]) − (H_y − H_y[z − 1])) on
+    # 1 ≤ z ≤ nz − 2, 1 ≤ y ≤ ny − 2, every x; E_y += C_b·((H_x − H_x[z − 1]) − (H_z − H_z[x − 1])) on 1 ≤ z ≤ nz − 2,
+    # 1 ≤ x ≤ nx − 2; E_z += C_b·((H_y − H_y[x − 1]) − (H_x − H_x[y − 1])) on 1 ≤ y ≤ ny − 2, 1 ≤ x ≤ nx − 2. Each
+    # reads only H, so one pass over the rows does all three.
+    fn update_e(self) {
+        var nx = self.nx;
+        var ny = self.ny;
+        var nz = self.nz;
+        var nxy = nx * ny;
+        var ex: *f64 = _bj_fd2_f64p(self.ex);
+        var ey: *f64 = _bj_fd2_f64p(self.ey);
+        var ez: *f64 = _bj_fd2_f64p(self.ez);
+        var hx: *f64 = _bj_fd2_f64p(self.hx);
+        var hy: *f64 = _bj_fd2_f64p(self.hy);
+        var hz: *f64 = _bj_fd2_f64p(self.hz);
+        var ce: *f64 = _bj_fd2_f64p(self.ce);
+        var w: *f64 = _bj_fd2_f64p(self.work);
+        var w2: *f64 = _bj_fd2_f64p(self.work + nx * 8);
+        for (var z = 0; z < nz; z = z + 1) {
+            var zi = 0;
+            if (z > 0 && z < nz - 1) { zi = 1; }
+            for (var y = 0; y < ny; y = y + 1) {
+                var r = z * nxy + y * nx;
+                var r1 = r + 1;
+                var yi = 0;
+                if (y > 0 && y < ny - 1) { yi = 1; }
+                if (zi == 1 && yi == 1) {
+                    _bj_fd3_curl(ex + r, ce + r, hz + r, hz + r - nx, hy + r, hy + r - nxy, w, w2, nx);
+                }
+                if (zi == 1) { _bj_fd3_curl(ey + r1, ce + r1, hx + r1, hx + r1 - nxy, hz + r1, hz + r, w, w2, nx - 2); }
+                if (yi == 1) { _bj_fd3_curl(ez + r1, ce + r1, hy + r1, hy + r, hx + r1, hx + r1 - nx, w, w2, nx - 2); }
+            }
+        }
+        return 0;
+    }
+
+    # The PEC faces: tangential E zeroed, E_y and E_z on the x faces, E_x and E_z on the y faces, E_x and E_y on the z
+    # faces.
+    fn walls(self) {
+        var nx = self.nx;
+        var ny = self.ny;
+        var nz = self.nz;
+        var nxy = nx * ny;
+        var ex: *f64 = _bj_fd2_f64p(self.ex);
+        var ey: *f64 = _bj_fd2_f64p(self.ey);
+        var ez: *f64 = _bj_fd2_f64p(self.ez);
+        for (var z = 0; z < nz; z = z + 1) {
+            var p = z * nxy;
+            for (var y = 0; y < ny; y = y + 1) {
+                var i0 = p + y * nx;
+                var i1 = i0 + nx - 1;
+                ey[i0] = 0.0;
+                ey[i1] = 0.0;
+                ez[i0] = 0.0;
+                ez[i1] = 0.0;
+            }
+            var top = p + (ny - 1) * nx;
+            _bj_fd3_zero(ex + p, nx);
+            _bj_fd3_zero(ex + top, nx);
+            _bj_fd3_zero(ez + p, nx);
+            _bj_fd3_zero(ez + top, nx);
+        }
+        var last = (nz - 1) * nxy;
+        _bj_fd3_zero(ex, nxy);
+        _bj_fd3_zero(ex + last, nxy);
+        _bj_fd3_zero(ey, nxy);
+        _bj_fd3_zero(ey + last, nxy);
+        return 0;
+    }
+
+    # Advances the simulation one time step by the 3D Yee algorithm, in Rust's order: H from curl E, E ← C_a·E where
+    # lossy, E from curl H, then the PEC faces. Mirrors `Fdtd3d::step_once`.
+    public fn step_once(self) {
+        self.update_h();
+        if (self.ca != 0) {
+            var n = self.nx * self.ny * self.nz;
+            var ca: *f64 = _bj_fd2_f64p(self.ca);
+            _bj_fd2_scale(self.ex, ca, n);
+            _bj_fd2_scale(self.ey, ca, n);
+            _bj_fd2_scale(self.ez, ca, n);
+        }
+        self.update_e();
+        self.walls();
+        self.step = self.step + 1;
+        return 0;
+    }
+
+    # Runs `steps` time steps (a usize). Before each, when (sx, sy, sz) is in the grid, adds
+    # amplitude·sin(2π·frequency·t) to E_z there as a soft source, t = step·dt; BJ_FDTD3D_NO_SOURCE for sx (or any node
+    # outside the grid) injects nothing, as Rust's None. Mirrors `Fdtd3d::run`.
+    public fn run(self, steps, sx, sy, sz, frequency: f64, amplitude: f64) {
+        if (_bj_log_on(4) == 1) {
+            var lb[256];
+            var lt[24];
+            _bj_tx_init(&lt, &lb, 256);
+            _bj_tx_cstr(&lt, "3D FDTD run started steps=");
+            _bj_tx_u64(&lt, steps);
+            _bj_tx_cstr(&lt, " source=");
+            if (sx == BJ_FDTD3D_NO_SOURCE) {
+                _bj_tx_cstr(&lt, "None");
+            } else {
+                _bj_tx_cstr(&lt, "Some((");
+                _bj_tx_u64(&lt, sx);
+                _bj_tx_cstr(&lt, ", ");
+                _bj_tx_u64(&lt, sy);
+                _bj_tx_cstr(&lt, ", ");
+                _bj_tx_u64(&lt, sz);
+                _bj_tx_cstr(&lt, "))");
+            }
+            _bj_tx_cstr(&lt, " frequency=");
+            _bj_fmt_f64_debug(&lt, frequency);
+            _bj_tx_cstr(&lt, " amplitude=");
+            _bj_fmt_f64_debug(&lt, amplitude);
+            _bj_tx_cstr(&lt, " cpml=None");
+            _bj_log_text(4, &lt);
+        }
+        var w2pi: f64 = 2.0 * _BJ_FD3_PI;
+        var wf: f64 = w2pi * frequency;
+        for (var k = 0; _bj_fd2_uge(k, steps) == 0; k = k + 1) {
+            if (sx != BJ_FDTD3D_NO_SOURCE) {
+                var sf: f64 = _bj_fd2_u2f(self.step);
+                var t: f64 = sf * self.dt;
+                var arg: f64 = wf * t;
+                var sv: f64 = _bj_sin(arg);
+                var value: f64 = amplitude * sv;
+                self.add_source_ez(sx, sy, sz, value);
+            }
+            self.step_once();
+        }
+        return 0;
+    }
+
+    # The simulation time step·dt in seconds. Mirrors `Fdtd3d::time`.
+    #must_use
+    public fn time(self): f64 {
+        var sf: f64 = _bj_fd2_u2f(self.step);
+        var t: f64 = sf * self.dt;
+        return t;
+    }
+
+    # The total electromagnetic energy in the grid, Σ (½·ε_r·ε₀·|E|² + ½·μ_r·μ₀·|H|²) times dx³, each square summed
+    # x, y, z and each cell's two terms added before the running sum, in Rust's order from +0. The cell terms run on
+    # the packed verbs over the flat arrays in chunks of `wlen` through the scratch rows (each lane Rust's operations
+    # in Rust's order; IEEE products commute), the running sum cell by cell, a scalar tail past the last lane multiple.
+    # Mirrors `Fdtd3d::total_energy`.
+    #must_use
+    public fn total_energy(self): f64 {
+        var wl = self.wlen;
+        var n = self.nx * self.ny * self.nz;
+        var dx: f64 = self.dx;
+        var dx2: f64 = dx * dx;
+        var vol: f64 = dx2 * dx;
+        var ex: *f64 = _bj_fd2_f64p(self.ex);
+        var ey: *f64 = _bj_fd2_f64p(self.ey);
+        var ez: *f64 = _bj_fd2_f64p(self.ez);
+        var hx: *f64 = _bj_fd2_f64p(self.hx);
+        var hy: *f64 = _bj_fd2_f64p(self.hy);
+        var hz: *f64 = _bj_fd2_f64p(self.hz);
+        var eps: *f64 = _bj_fd2_f64p(self.permittivity);
+        var mu: *f64 = _bj_fd2_f64p(self.permeability);
+        var w1: *f64 = _bj_fd2_f64p(self.work);
+        var w2: *f64 = _bj_fd2_f64p(self.work + wl * 8);
+        var w3: *f64 = _bj_fd2_f64p(self.work + 2 * wl * 8);
+        var e0: f64 = BJ_EPSILON_0;
+        var m0: f64 = BJ_MU_0;
+        var packed = n & (0 - 4);
+        var chunk = wl & (0 - 4);
+        var energy: f64 = 0.0;
+        var r = 0;
+        while (r < packed) {
+            var m = packed - r;
+            if (m > chunk) { m = chunk; }
+            f64v_mul(w1, ex + r, ex + r, m);
+            f64v_mul(w2, ey + r, ey + r, m);
+            f64v_add(w1, w1, w2, m);
+            f64v_mul(w2, ez + r, ez + r, m);
+            f64v_add(w1, w1, w2, m);
+            f64v_scale(w2, eps + r, 0.5, m);
+            f64v_scale(w2, w2, e0, m);
+            f64v_mul(w1, w2, w1, m);
+            f64v_mul(w2, hx + r, hx + r, m);
+            f64v_mul(w3, hy + r, hy + r, m);
+            f64v_add(w2, w2, w3, m);
+            f64v_mul(w3, hz + r, hz + r, m);
+            f64v_add(w2, w2, w3, m);
+            f64v_scale(w3, mu + r, 0.5, m);
+            f64v_scale(w3, w3, m0, m);
+            f64v_mul(w2, w3, w2, m);
+            f64v_add(w1, w1, w2, m);
+            for (var j = 0; j < m; j = j + 1) { energy = energy + w1[j]; }
+            r = r + m;
+        }
+        for (var i = packed; i < n; i = i + 1) {
+            var a: f64 = ex[i];
+            var b: f64 = ey[i];
+            var c: f64 = ez[i];
+            var e_sq: f64 = a * a + b * b + c * c;
+            var p: f64 = hx[i];
+            var q: f64 = hy[i];
+            var t: f64 = hz[i];
+            var h_sq: f64 = p * p + q * q + t * t;
+            var ke: f64 = 0.5 * eps[i];
+            var ke0: f64 = ke * e0;
+            var te: f64 = ke0 * e_sq;
+            var kh: f64 = 0.5 * mu[i];
+            var kh0: f64 = kh * m0;
+            var th: f64 = kh0 * h_sq;
+            var cell: f64 = te + th;
+            energy = energy + cell;
+        }
+        var en: f64 = energy * vol;
+        return en;
+    }
+}

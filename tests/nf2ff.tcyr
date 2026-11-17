@@ -1,6 +1,6 @@
 # nf2ff.tcyr — src/nf2ff.cyr (M5 part 1e): the phasor NF2FF transform.
 #
-# Every group named test_* is rust-old/src/fdtd.rs's test of that name, ported assertion for assertion (the ledger
+# Every group named test_* is 1.2.0:src/fdtd.rs's test of that name, ported assertion for assertion (the ledger
 # matches them by name): the four on the phasor transform and its references (the Bessel helpers, the line source, the
 # plane wave's extinction, the validation), and the six that drive a BjFdtd2d through bj_nf2ff_2d (M6 part 1c;
 # `test_nf2ff_snapshot_validation`'s `fx.truncate(10)` step is n/a, ADR 0002 row 2: the arrays are fixed). Rust's test

@@ -1,6 +1,6 @@
 # cpml.tcyr — src/cpml.cyr (M6 part 1a): the CPML layer's grading and profiles.
 #
-# The groups named as rust-old/src/fdtd.rs's tests are those tests, ported assertion for assertion (the ledger matches
+# The groups named as 1.2.0:src/fdtd.rs's tests are those tests, ported assertion for assertion (the ledger matches
 # them by name): `cpml_tests`' κ profile and parameter validation, and the main module's creation, bounded
 # coefficients and attached sizes (M6 part 1b-1). The tests that need a grid (the profile through
 # `try_enable_cpml`, the reflections, the energy) follow with `Fdtd2d` and `Fdtd3d`. The cyrius_* groups pin the

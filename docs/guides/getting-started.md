@@ -14,12 +14,13 @@ cyrius test                              # run tests/*.tcyr
   Use `sys_exit_group`, not `syscall(SYS_EXIT, r)` — the latter is exit(2) and ends
   only the calling thread, so it hangs once the program spawns its first worker.
 - `tests/` — test suite (`.tcyr` files, auto-discovered by `cyrius test`).
-- `rust-old/` — original Rust source preserved for parity checks. Do not modify; it's the reference oracle.
+- `tests/golden/` — the golden corpus the parity harness compares against; `scripts/oracle/validate.py` is its
+  reference model. Rust bijli 1.2.0, the specification, is read from the `1.2.0` tag (ADR 0003).
 
 ## Adding a feature
 
 1. Edit `src/main.cyr` (or add a new module and `include` it).
-2. Cross-check parity against `rust-old/`.
+2. Cross-check parity: golden rows written from validate.py's model of `git show 1.2.0:…`.
 3. Add a test case to `tests/bijli.tcyr`.
 4. Run `cyrius test`.
 5. Bump `VERSION` and add a CHANGELOG entry before tagging.

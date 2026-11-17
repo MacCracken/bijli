@@ -4,9 +4,10 @@ Port plan §8 (a per-milestone gate) and M8 (the release gate), brought forward 
 impetus's scripts/surface_parity.py (itself kimiya's and tanmatra's). Usage, from the repo root:
     python3 -I -B scripts/surface_parity.py .
 
-For each module in MODULES it lists rust-old/src/<module>.rs's public items outside every `#[cfg(test)]` module
-(scripts/rustsrc.py skips them by brace depth, wherever they sit) and checks that src/ defines the Cyrius name the
-naming rules give (port plan §9.4):
+For each module in MODULES it lists Rust 1.2.0's src/<module>.rs's public items outside every `#[cfg(test)]` module,
+from scripts/rust_1_2_0.json (the inventory snapshot when the Rust tree was retired, ADR 0003: a `#[derive]` naming
+Serialize or Deserialize counts as the trait items `impl Serialize for X`), and checks that src/ defines the Cyrius
+name the naming rules give (port plan §9.4):
 - free `pub fn f`                         -> `fn bj_f(`
 - `impl Struct { pub fn f(...) }`, no self -> `fn BjStruct_f(`
 - `impl Struct { pub fn m(&self ...) }`    -> `fn m(` inside `impl BjStruct {`
@@ -16,7 +17,7 @@ naming rules give (port plan §9.4):
 - `pub enum E` and each variant V          -> `enum <ENUM_NAMES[E]> {` and `<ENUM_PREFIX[E]><SNAKE(V)> =`
 - `pub struct S` and each `pub` field f    -> `struct BjS {` with a field f, or FIELD_RENAMES' fields
 A function the rules would name otherwise is in FN_RENAMES; anything else needs an EXCEPTIONS entry with its reason
-(an ADR 0002 change, say). Every file under rust-old/src must be in MODULES, PENDING_MODULES (a later milestone) or
+(an ADR 0002 change, say). Every Rust 1.2.0 source file must be in MODULES, PENDING_MODULES (a later milestone) or
 NOT_APPLICABLE_MODULES.
 
 It also checks two things the port relies on:
@@ -26,14 +27,13 @@ It also checks two things the port relies on:
   field-store defect).
 Exits 1 on a missing item, an EXCEPTIONS entry that names no Rust item, a file unaccounted for, or a failed check.
 """
+import json
 import re
 import sys
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parent))
-import rustsrc  # noqa: E402
-
 root = Path(sys.argv[1] if len(sys.argv) > 1 else ".").resolve()
+INV = json.loads((root / "scripts/rust_1_2_0.json").read_text())
 
 # Ported modules (their milestone done or in progress, item by item).
 MODULES = ["error", "logging", "field", "maxwell", "charge", "material", "wave", "circuit", "relativity",
@@ -50,12 +50,9 @@ PENDING_MODULES = {
 IN_PROGRESS = {
     # M5 Part 1 ported the 1D grid, the sources, the media, the utilities, NF2FF's phasor form and their JSON; M6
     # part 1a the CPML layer (CpmlParams, Cpml), 1b-1 and 1b-2 Fdtd2d and Mode2d, 1c nf2ff_2d, 1d the JSON of
-    # CpmlParams and Mode2d. 3D follows.
+    # CpmlParams and Mode2d, 2a Fdtd3d without its CPML. The 3D CPML follows (2b).
     "fdtd": ("M5–M6", {
-        "Fdtd3d", "Fdtd3d::new", "Fdtd3d::idx",
-        "Fdtd3d::set_permittivity", "Fdtd3d::set_permeability", "Fdtd3d::set_conductivity", "Fdtd3d::set_material",
-        "Fdtd3d::add_source_ez", "Fdtd3d::try_enable_cpml", "Fdtd3d::try_enable_cpml_with", "Fdtd3d::disable_cpml",
-        "Fdtd3d::cpml", "Fdtd3d::step_once", "Fdtd3d::run", "Fdtd3d::time", "Fdtd3d::total_energy",
+        "Fdtd3d::try_enable_cpml", "Fdtd3d::try_enable_cpml_with", "Fdtd3d::disable_cpml", "Fdtd3d::cpml",
     }),
 }
 NOT_APPLICABLE_MODULES = {
@@ -139,7 +136,6 @@ def cyrius_index():
     return fns, consts, members, enums, structs
 
 
-VIS = r"pub(?:\((?:crate|super)\))?"
 # A serde derive's Cyrius counterparts (port plan D5): the writer and the reader, src/json.cyr's shapes.
 SERDE = {"Serialize": "to_json", "Deserialize": "from_json"}
 # Serde types bijli takes from Rust hisab rather than defining (its re-exported `Complex`): checked by name.
@@ -147,54 +143,9 @@ HISAB_SERDE = ["Complex"]
 
 
 def rust_items(module):
-    """(kind, owner, name, has_self) for each public item of rust-old/src/<module>.rs outside test modules."""
-    text = rustsrc.library_text(root / "rust-old/src" / f"{module}.rs")
-    items = []
-    owner = enum_name = struct_name = None
-    derives = set()
-    lines = text.splitlines()
-    for li, line in enumerate(lines):
-        s = line.strip()
-        # A `#[derive(..)]` naming Serialize / Deserialize gives the next struct or enum its JSON writer / reader
-        # (port plan D5), as the trait items `impl Serialize for X` / `impl Deserialize for X`.
-        if (m := re.match(r"#\[derive\((.*)\)\]", s)):
-            derives |= {d.strip().split("::")[-1] for d in m.group(1).split(",")}
-            continue
-        if s.startswith("#["):
-            continue
-        serde, derives = derives & {"Serialize", "Deserialize"}, set()
-        if (m := re.match(r"impl(?:<[^>]*>)? (?:std::ops::|std::fmt::)?(\w+)(?:<[^>]*>)? for (\w+)", s)):
-            owner = m.group(2)
-            items.append(("trait", owner, m.group(1), None))
-            continue
-        if (m := re.match(r"impl(?:<[^>]*>)? (\w+)(?:<[^>]*>)? \{", s)):
-            owner = m.group(1)
-            continue
-        if (m := re.match(VIS + r" enum (\w+)", s)):
-            enum_name, struct_name = m.group(1), None
-            items.append(("enum", None, enum_name, None))
-            items += [("trait", enum_name, t, None) for t in sorted(serde)]
-            continue
-        if (m := re.match(VIS + r" struct (\w+)", s)):
-            struct_name, enum_name = m.group(1), None
-            items.append(("struct", None, struct_name, None))
-            items += [("trait", struct_name, t, None) for t in sorted(serde)]
-            continue
-        if s.startswith("}") and not line.startswith(" "):
-            owner = enum_name = struct_name = None
-            continue
-        if enum_name and (m := re.match(r"([A-Z]\w*)(?:\(|,|\s*\{|$)", s)) and not s.startswith("#"):
-            items.append(("variant", enum_name, m.group(1), None))
-        if struct_name and (m := re.match(r"pub (\w+):", s)):
-            items.append(("field", struct_name, m.group(1), None))
-        if (m := re.match(VIS + r" (?:const )?fn (\w+)(?:<[^>]*>)?\((&?(?:mut )?self)?", s)):
-            has_self = bool(m.group(2))
-            if not has_self and s.endswith("(") and li + 1 < len(lines):
-                has_self = bool(re.match(r"&?(?:mut )?self\b", lines[li + 1].strip()))
-            items.append(("fn", owner, m.group(1), has_self))
-        if (m := re.match(r"pub const (\w+):", s)):
-            items.append(("const", owner, m.group(1), None))
-    return items
+    """(kind, owner, name, has_self) for each public item of Rust 1.2.0's src/<module>.rs outside test modules, from
+    the inventory scripts/rust_1_2_0.json."""
+    return [tuple(t) for t in INV["items"][module]]
 
 
 def lib_sync():
@@ -302,11 +253,11 @@ def main() -> int:
     fns, consts, members, enums, structs = cyrius_index()
     problems, ok = [], 0
     used = set()
-    modules = rustsrc.rust_modules(root)
+    modules = INV["modules"]
     for module in modules:
         if module not in MODULES and module not in PENDING_MODULES and module not in NOT_APPLICABLE_MODULES \
                 and module not in IN_PROGRESS:
-            problems.append(f"rust-old/src/{module}.rs is in no module list")
+            problems.append(f"Rust 1.2.0's src/{module}.rs is in no module list")
     pending_counts = {}
     for module in modules:
         items = rust_items(module)
