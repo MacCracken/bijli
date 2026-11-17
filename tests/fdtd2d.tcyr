@@ -581,6 +581,16 @@ fn main() {
     assert(text_is(bj_last_error_display(), "invalid permeability: 0 (must be > 0)") == 1, "μ_r before σ and region");
     assert(g.ca == 0 && g.lossy_bytes == 0, "nothing mapped on error");
 
+    test_group("doc test at line 2649");
+    var dg: BjFdtd2d;
+    var tdg, vdg = BjFdtd2d_new(100, 100, DX4, BJ_MODE2D_TM, &dg);
+    var dp: BjCpmlParams = BjCpmlParams_new(12);
+    dp.kappa_max = 5.0;
+    var tdp, vdp = dg.try_enable_cpml_with(&dp);
+    dg.run(100, 50, 50, 10000000000.0, 1.0);
+    assert(is_ok(tdg) == 1 && is_ok(tdp) == 1 && dg.step == 100, "Fdtd2d::try_enable_cpml_with's example");
+    BjFdtd2d_free(&dg);
+
     test_group("cyrius_fdtd2d_grid");
     var r1, r1v = g.set_conductivity(0, 0, 10, 8, 0.0);
     assert(is_ok(r1) == 1 && g.ca == 0, "σ = 0 on a lossless grid maps nothing");

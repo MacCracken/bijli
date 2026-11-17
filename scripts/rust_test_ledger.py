@@ -78,6 +78,10 @@ REASONS = {
         "BjFdtd1d's arrays are fixed at construction (ADR 0002 row 2): num_cells and the field arrays can't be resized "
         "apart, so the mismatch it guards against can't arise; tests/fdtd1d.tcyr's cyrius_fdtd1d_free and "
         "cyrius_fdtd1d_two_cells pin the empty and smallest grids",
+    ("src/fdtd.rs", "cpml3d_desynced_fields_do_not_panic"):
+        "BjFdtd3d's arrays are fixed at construction and its CPML is attached to that geometry when enabled (ADR 0002 "
+        "row 2): nx, ny, nz and the field arrays can't be changed apart from the layer, so the mismatch it steps, runs "
+        "and enables on can't arise; tests/fdtd3d.tcyr's cyrius_fdtd3d_cpml pins the layer's records and slabs",
     ("src/fdtd.rs", "desynced_fields_do_not_panic_3d"):
         "BjFdtd3d's arrays are fixed at construction (ADR 0002 row 2): nx, ny, nz and the six field arrays can't be "
         "resized apart, so the desynchronised layout it steps, runs, sources and sets materials on can't arise; "

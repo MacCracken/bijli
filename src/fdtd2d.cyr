@@ -283,7 +283,7 @@ public fn _bj_fd2_check_sigma(sigma: f64): i64 {
 # Ψ) (sub 0: `+=`, 1: `-=`), Rust's `*psi = b * *psi + c * d; *f += sign * kk * (km1 * d + *psi)` lane by lane (IEEE's
 # products and sums are commutative, so each lane's operands may swap), through the scratch rows w1, w2, w3 on lane
 # multiples, then a scalar tail.
-fn _bj_fd2_strip(f: *f64, hi: *f64, lo: *f64, k: *f64, psi: *f64, n, pr: *f64, w: *f64, sub) {
+public fn _bj_fd2_strip(f: *f64, hi: *f64, lo: *f64, k: *f64, psi: *f64, n, pr: *f64, w: *f64, sub) {
     var b: f64 = pr[0];
     var c: f64 = pr[1];
     var km1: f64 = pr[2];

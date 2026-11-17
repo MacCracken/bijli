@@ -5,10 +5,11 @@
 # material regions and all six components stepping. The shared tests that drive both grids (`new_rejects_non_finite_dx`,
 # `courant_numbers_are_half_the_limit`, `set_material_validates_before_mutating`, `region_bounds`,
 # `lossless_path_unchanged_by_material_api`) and the conductor's uniform decay in 3D land here with their 2D halves.
-# `desynced_fields_do_not_panic_3d` is n/a (ADR 0002 row 2: nothing can resize the arrays). The CPML's tests follow
-# with it (part 2b). The cyrius_* groups pin the error records' text and order, the regions' edges, the six faces'
-# walls, the lossy arrays' lazy mapping and BjFdtd3d_free. tests/golden/fdtd_2d3d.tsv pins every operation against
-# Rust besides.
+# `desynced_fields_do_not_panic_3d` is n/a (ADR 0002 row 2: nothing can resize the arrays). M6 part 2b adds the CPML's
+# `cpml3d_tests` (`cpml3d_desynced_fields_do_not_panic` n/a, as the grid's) and `Fdtd3d::try_enable_cpml`'s doc test.
+# The cyrius_* groups pin the error records' text and order, the regions' edges, the six faces' walls, the lossy
+# arrays' lazy mapping, the CPML's records and slabs, and BjFdtd3d_free. tests/golden/fdtd_2d3d.tsv pins every
+# operation against the reference model besides.
 
 include "tests/lib.cyr"
 
@@ -28,6 +29,22 @@ fn text_is(a, b): i64 {
     var n = strlen(a);
     if (n != strlen(b)) { return 0; }
     return memeq(a, b, n);
+}
+
+# 1 when the C string d is a followed by b.
+fn text_is2(d, a, b): i64 {
+    var n = strlen(a);
+    var m = strlen(b);
+    if (strlen(d) != n + m || memeq(d, a, n) != 1) { return 0; }
+    return memeq(d + n, b, m);
+}
+
+# |a − b| ≤ tol (Rust's `close`).
+fn within(a: f64, b: f64, tol: f64): i64 {
+    var d: f64 = a - b;
+    var ad: f64 = f64_abs(d);
+    if (ad <= tol) { return 1; }
+    return 0;
 }
 
 # A word as a *f64 (the typed return keeps the binding typed).
@@ -100,7 +117,134 @@ fn face_zero(sim: *BjFdtd3d, a, face): i64 {
     return 1;
 }
 
-# Rust's 15 Fdtd3d tests, the shared 2D/3D tests and the Cyrius-only groups.
+# cpml3d_tests' constants: the CPML thickness T, the probe distance P, the test grid N = 2(P + 2 + T) + 1 (the
+# source P + 2 cells from the interface), the reference grid N_REF (walls 26 cells from the source) and the window.
+var CT = 10;
+var CP = 4;
+var CN = 33;
+var CN_REF = 53;
+var CSTEPS = 170;
+var PI: f64 = 3.141592653589793;
+
+# A word as a *BjCpml.
+fn cpmlp(a): *BjCpml {
+    return a;
+}
+
+# `cfs`: CFS-CPML parameters exercising the κ and α terms (α_max = 2π·ε₀·1 GHz).
+fn cfs(thickness, kappa_max: f64): BjCpmlParams {
+    var p: BjCpmlParams = BjCpmlParams_new(thickness);
+    p.kappa_max = kappa_max;
+    var tp: f64 = 2.0 * PI;
+    var tpe: f64 = tp * BJ_EPSILON_0;
+    p.alpha_max = tpe * 1000000000.0;
+    return p;
+}
+
+# `record`: E_z at the eight probes (all six faces' directions P cells from the source, an edge and a corner) over
+# CSTEPS steps of an n³ grid with a CPML of params (0: the walls), a soft Gaussian E_z source at the centre; a block of
+# 8·CSTEPS f64, probe-major, for the caller to fl_free.
+fn record(n, params): i64 {
+    var sim: BjFdtd3d;
+    var t, v = BjFdtd3d_new(n, n, n, DX, &sim);
+    if (params != 0) { var tc, vc = sim.try_enable_cpml_with(params); }
+    var c = n / 2;
+    var o: i64[24];
+    for (var z = 0; z < 24; z = z + 1) { o[z] = 0; }
+    o[0] = 0 - CP;
+    o[3] = CP;
+    o[7] = 0 - CP;
+    o[10] = CP;
+    o[14] = 0 - CP;
+    o[17] = CP;
+    o[18] = 0 - CP;
+    o[19] = CP;
+    o[21] = CP;
+    o[22] = 0 - CP;
+    o[23] = 0 - CP;
+    var pr: i64[8];
+    for (var j = 0; j < 8; j = j + 1) { pr[j] = sim.idx(c + o[3 * j], c + o[3 * j + 1], c + o[3 * j + 2]); }
+    var tau: f64 = 15.0 * sim.dt;
+    var t0: f64 = 4.0 * tau;
+    var out = fl_alloc(8 * CSTEPS * 8);
+    var q: *f64 = f64p(out);
+    for (var k = 0; k < CSTEPS; k = k + 1) {
+        var tm: f64 = sim.time();
+        var g: f64 = bj_gaussian_pulse(tm, t0, tau);
+        sim.add_source_ez(c, c, c, g);
+        sim.step_once();
+        for (var j2 = 0; j2 < 8; j2 = j2 + 1) {
+            var fv: f64 = at(sim.ez, pr[j2]);
+            q[j2 * CSTEPS + k] = fv;
+        }
+    }
+    BjFdtd3d_free(&sim);
+    return out;
+}
+
+# `reflection`: the worst over the probes of max|f − f_ref| / max|f_ref|.
+fn reflection(test, refr): f64 {
+    var a: *f64 = f64p(test);
+    var r: *f64 = f64p(refr);
+    var worst: f64 = 0.0;
+    for (var j = 0; j < 8; j = j + 1) {
+        var peak: f64 = 0.0;
+        var err: f64 = 0.0;
+        for (var k = 0; k < CSTEPS; k = k + 1) {
+            var rv: f64 = r[j * CSTEPS + k];
+            var arv: f64 = f64_abs(rv);
+            if (arv > peak) { peak = arv; }
+            var dv: f64 = a[j * CSTEPS + k] - rv;
+            var adv: f64 = f64_abs(dv);
+            if (adv > err) { err = adv; }
+        }
+        var q: f64 = err / peak;
+        if (q > worst) { worst = q; }
+    }
+    return worst;
+}
+
+# `energy_history`: the peak (sampled every 5 steps) and final total energy of a 25³ grid, with a 6-cell CPML (cpml 1)
+# or the walls, driven at its centre by a zero-DC Ricker pulse for 260 steps.
+fn energy_history(cpml): (f64, f64) {
+    var sim: BjFdtd3d;
+    var t, v = BjFdtd3d_new(25, 25, 25, DX, &sim);
+    if (cpml == 1) { var tc, vc = sim.try_enable_cpml(6); }
+    var tau: f64 = 15.0 * sim.dt;
+    var t0: f64 = 4.0 * tau;
+    var peak: f64 = 0.0;
+    for (var k = 0; k < 260; k = k + 1) {
+        var tm: f64 = sim.time();
+        var rw: f64 = bj_ricker_wavelet(tm, t0, tau);
+        sim.add_source_ez(12, 12, 12, rw);
+        sim.step_once();
+        if (k % 5 == 0) {
+            var e: f64 = sim.total_energy();
+            if (e > peak) { peak = e; }
+        }
+    }
+    var end: f64 = sim.total_energy();
+    BjFdtd3d_free(&sim);
+    return (peak, end);
+}
+
+# `cpml3d_disabled_matches_pec`'s run: E_z of an 11³ grid run 40 steps with a 30 GHz source at the centre, after
+# enabling and disabling a 2-cell CPML when toggle is 1; an fl_alloc block of 1331 f64 for the caller to free.
+fn pec_run(toggle): i64 {
+    var sim: BjFdtd3d;
+    var t, v = BjFdtd3d_new(11, 11, 11, DX, &sim);
+    if (toggle == 1) {
+        var tc, vc = sim.try_enable_cpml(2);
+        sim.disable_cpml();
+    }
+    sim.run(40, 5, 5, 5, 30000000000.0, 1.0);
+    var out = fl_alloc(1331 * 8);
+    memcpy(out, sim.ez, 1331 * 8);
+    BjFdtd3d_free(&sim);
+    return out;
+}
+
+# Rust's Fdtd3d tests, the shared 2D/3D tests, cpml3d_tests, the doc test and the Cyrius-only groups.
 fn main() {
     alloc_init();
     var tiny30: f64 = _bj_from_bits(0x39b4484bfeebc2a0);
@@ -369,6 +513,160 @@ fn main() {
     assert(is_ok(r20b) == 1 && g3.ca == 0 && g3.conductivity == 0, "3D keeps the lossless update");
     BjFdtd3d_free(&g3);
 
+    test_group("cpml3d_reflection");
+    var refr = record(CN_REF, 0);
+    var wall = record(CN, 0);
+    var p21: BjCpmlParams = BjCpmlParams_new(CT);
+    var cl21 = record(CN, &p21);
+    var q21: BjCpmlParams = cfs(CT, 3.0);
+    var cf21 = record(CN, &q21);
+    var pec21: f64 = reflection(wall, refr);
+    var classic21: f64 = reflection(cl21, refr);
+    var cfs21: f64 = reflection(cf21, refr);
+    assert(pec21 > 0.3, "the walls reflect everything back into the probes");
+    assert(classic21 < 0.001, "CPML(10) reflection under −60 dB");
+    assert(cfs21 < 0.001, "CFS-CPML(10, κ = 3) reflection under −60 dB");
+    fl_free(refr);
+    fl_free(wall);
+    fl_free(cl21);
+    fl_free(cf21);
+
+    test_group("cpml3d_energy_decays");
+    var pw, ew = energy_history(0);
+    var pc, ec = energy_history(1);
+    var rw22: f64 = ew / pw;
+    var rc22: f64 = ec / pc;
+    assert(rw22 > 0.03, "the PEC walls trap energy");
+    assert(rc22 < 0.000001, "the CPML absorbs it");
+
+    test_group("cpml3d_fields_are_mirror_symmetric");
+    var sm: BjFdtd3d;
+    var tsm, vsm = BjFdtd3d_new(21, 21, 20, DX, &sm);
+    var csm: BjCpmlParams = cfs(5, 3.0);
+    var rsm, rsmv = sm.try_enable_cpml_with(&csm);
+    var tau23: f64 = 8.0 * sm.dt;
+    var t023: f64 = 4.0 * tau23;
+    for (var k23 = 0; k23 < 120; k23 = k23 + 1) {
+        var tm23: f64 = sm.time();
+        var g23: f64 = bj_gaussian_pulse(tm23, t023, tau23);
+        sm.add_source_ez(10, 10, 9, g23);
+        sm.step_once();
+    }
+    var nsm = 21 * 21 * 20;
+    var mez: f64 = max_abs(sm.ez, nsm);
+    var mhx: f64 = max_abs(sm.hx, nsm);
+    var tol23: f64 = 0.000000001 * mez;
+    var tolh23: f64 = 0.000000001 * mhx;
+    assert(tol23 > 0.0 && tolh23 > 0.0, "the source drove E_z and H_x");
+    var bad23: i64[6];
+    for (var b23 = 0; b23 < 6; b23 = b23 + 1) { bad23[b23] = 0; }
+    for (var z23 = 0; z23 < 19; z23 = z23 + 1) {
+        for (var y23 = 0; y23 < 21; y23 = y23 + 1) {
+            for (var x23 = 0; x23 < 21; x23 = x23 + 1) {
+                var ez23: f64 = at(sm.ez, sm.idx(x23, y23, z23));
+                var mx: f64 = at(sm.ez, sm.idx(20 - x23, y23, z23));
+                var my: f64 = at(sm.ez, sm.idx(x23, 20 - y23, z23));
+                var mz: f64 = at(sm.ez, sm.idx(x23, y23, 18 - z23));
+                var sw: f64 = at(sm.ez, sm.idx(y23, x23, z23));
+                var exv: f64 = at(sm.ex, sm.idx(x23, y23, z23));
+                var eyv: f64 = at(sm.ey, sm.idx(y23, x23, z23));
+                var hxv: f64 = at(sm.hx, sm.idx(x23, y23, z23));
+                var hyv: f64 = at(sm.hy, sm.idx(y23, x23, z23));
+                if (within(ez23, mx, tol23) == 0) { bad23[0] = bad23[0] + 1; }
+                if (within(ez23, my, tol23) == 0) { bad23[1] = bad23[1] + 1; }
+                if (within(ez23, mz, tol23) == 0) { bad23[2] = bad23[2] + 1; }
+                if (within(ez23, sw, tol23) == 0) { bad23[3] = bad23[3] + 1; }
+                if (within(exv, eyv, tol23) == 0) { bad23[4] = bad23[4] + 1; }
+                var hs: f64 = hxv + hyv;
+                var ahs: f64 = f64_abs(hs);
+                if (ahs > tolh23) { bad23[5] = bad23[5] + 1; }
+            }
+        }
+    }
+    assert(bad23[0] == 0 && bad23[1] == 0 && bad23[2] == 0, "E_z even under the x, y and z mirrors");
+    assert(bad23[3] == 0, "E_z even under x ↔ y");
+    assert(bad23[4] == 0 && bad23[5] == 0, "x ↔ y swaps E_x ↔ E_y and H_x ↔ −H_y");
+    BjFdtd3d_free(&sm);
+
+    test_group("cpml3d_stable_long_run_with_materials");
+    var lr: BjFdtd3d;
+    var tlr, vlr = BjFdtd3d_new(19, 19, 19, DX, &lr);
+    var clr: BjCpmlParams = cfs(4, 5.0);
+    var rlr, rlrv = lr.try_enable_cpml_with(&clr);
+    var mlr: BjMaterial = BjMaterial_new(4.0, 2.0, 0.5);
+    var slr, slrv = lr.set_material(0, 6, 6, 9, 13, 13, &mlr);
+    lr.run(500, 12, 9, 9, 30000000000.0, 1.0);
+    var nlr = 19 * 19 * 19;
+    var fin = 1;
+    var lrf: i64[6];
+    lrf[0] = lr.ex;
+    lrf[1] = lr.ey;
+    lrf[2] = lr.ez;
+    lrf[3] = lr.hx;
+    lrf[4] = lr.hy;
+    lrf[5] = lr.hz;
+    for (var f24 = 0; f24 < 6; f24 = f24 + 1) {
+        var fp24: *f64 = f64p(lrf[f24]);
+        for (var i24 = 0; i24 < nlr; i24 = i24 + 1) {
+            var v24: f64 = fp24[i24];
+            if (!(v24 == v24 && v24 < inf && v24 > -inf)) { fin = 0; }
+        }
+    }
+    var e24: f64 = lr.total_energy();
+    assert(is_ok(rlr) == 1 && is_ok(slr) == 1 && fin == 1 && e24 > 0.0, "every field finite, energy positive");
+    BjFdtd3d_free(&lr);
+
+    test_group("cpml3d_enable_validates_and_disables");
+    var ev: BjFdtd3d;
+    var tev, vev = BjFdtd3d_new(20, 30, 40, DX, &ev);
+    var e25a, e25av = ev.try_enable_cpml(0);
+    var e25b, e25bv = ev.try_enable_cpml(9);
+    assert(is_err_result(e25a) == 1 && is_err_result(e25b) == 1 && ev.cpml() == 0, "0 and 2·9 + 3 > 20 refused");
+    var e25c, e25cv = ev.try_enable_cpml(8);
+    var cp25: *BjCpml = cpmlp(ev.cpml());
+    var eta0: f64 = BJ_MU_0 * BJ_SPEED_OF_LIGHT;
+    var sopt: f64 = 0.8 * 4.0 / (eta0 * DX);
+    var sm25: f64 = cp25.sigma_max();
+    var km25: f64 = cp25.kappa_max();
+    var tol25: f64 = 0.000000001 * sopt;
+    assert(is_ok(e25c) == 1 && cp25.thickness == 8 && near(sm25, sopt, tol25) == 1 && near(km25, 1.0, tiny15) == 1,
+      "thickness 8, σ_max = σ_opt, κ_max = 1");
+    var e25d, e25dv = ev.try_enable_cpml(100);
+    var bad25: BjCpmlParams = BjCpmlParams_new(4);
+    bad25.kappa_max = 0.5;
+    var e25e, e25ev = ev.try_enable_cpml_with(&bad25);
+    bad25.kappa_max = nan;
+    var e25f, e25fv = ev.try_enable_cpml_with(&bad25);
+    var cp25b: *BjCpml = cpmlp(ev.cpml());
+    assert(is_err_result(e25d) == 1 && is_err_result(e25e) == 1 && is_err_result(e25f) == 1 && cp25b.thickness == 8,
+      "invalid requests keep the active layer");
+    var c25: BjCpmlParams = cfs(5, 7.0);
+    var e25g, e25gv = ev.try_enable_cpml_with(&c25);
+    var cp25c: *BjCpml = cpmlp(ev.cpml());
+    var km25c: f64 = cp25c.kappa_max();
+    assert(is_ok(e25g) == 1 && cp25c.thickness == 5 && near(km25c, 7.0, tiny15) == 1, "re-enabling replaces the layer");
+    ev.disable_cpml();
+    assert(ev.cpml() == 0, "disabled");
+    ev.disable_cpml();
+    assert(ev.cpml() == 0 && ev.psi == 0, "disabled again, nothing held");
+    BjFdtd3d_free(&ev);
+
+    test_group("cpml3d_disabled_matches_pec");
+    var pa = pec_run(0);
+    var pb = pec_run(1);
+    assert(memeq(pa, pb, 1331 * 8) == 1, "disabling the CPML restores the PEC update exactly");
+    fl_free(pa);
+    fl_free(pb);
+
+    test_group("doc test at line 4000");
+    var dt26: BjFdtd3d;
+    var t26, v26 = BjFdtd3d_new(32, 32, 32, DX, &dt26);
+    var e26, e26v = dt26.try_enable_cpml(8);
+    dt26.run(50, 16, 16, 16, 30000000000.0, 1.0);
+    var cp26: *BjCpml = cpmlp(dt26.cpml());
+    assert(is_ok(t26) == 1 && is_ok(e26) == 1 && cp26.thickness == 8, "Fdtd3d::try_enable_cpml's example");
+    BjFdtd3d_free(&dt26);
+
     test_group("cyrius_fdtd3d_records");
     var e21: BjFdtd3d;
     e21.nx = 77;
@@ -421,6 +719,40 @@ fn main() {
     assert(g25.ex == 0 && g25.ca == 0 && g25.map_bytes == 0 && g25.lossy_bytes == 0 && g25.nz == 0,
       "freed and emptied");
     BjFdtd3d_free(&g25);
+
+    test_group("cyrius_fdtd3d_cpml");
+    var g27: BjFdtd3d;
+    var t27, v27 = BjFdtd3d_new(9, 10, 11, DX, &g27);
+    var e27a, e27av = g27.try_enable_cpml(4);
+    var w27 = "invalid parameter: CPML thickness 4 is invalid for a 9×10×11 grid ";
+    var w27x = "(need thickness ≥ 1 and 2·thickness + 3 ≤ min(nx, ny, nz))";
+    assert(is_err_result(e27a) == 1 && text_is2(bj_last_error_display(), w27, w27x) == 1 && g27.cpml() == 0,
+      "the thickness's record, the smallest axis named");
+    var bad27: BjCpmlParams = BjCpmlParams_new(2);
+    bad27.grading_order = 0.5;
+    var e27b, e27bv = g27.try_enable_cpml_with(&bad27);
+    var w27b = "invalid parameter: CPML grading order must be finite and ≥ 1, got 0.5";
+    assert(is_err_result(e27b) == 1 && text_is(bj_last_error_display(), w27b) == 1, "the grading's own record");
+    var e27c, e27cv = g27.try_enable_cpml(3);
+    assert(is_ok(e27c) == 1 && g27.slab_x == 6 * 10 * 11 && g27.slab_y == 6 * 9 * 11 && g27.slab_z == 6 * 9 * 10
+      && g27.psi_bytes == 4 * (660 + 594 + 540) * 8, "the twelve slabs: 2t·ny·nz, 2t·nx·nz, 2t·nx·ny f64 each");
+    g27.add_source_ez(4, 5, 5, 1.0);
+    for (var k27 = 0; k27 < 6; k27 = k27 + 1) { g27.step_once(); }
+    var any27 = 0;
+    for (var q27 = 0; q27 < 4 * (660 + 594 + 540); q27 = q27 + 1) {
+        var pv27: f64 = at(g27.psi, q27);
+        if (pv27 != 0.0) { any27 = 1; }
+    }
+    var e27d, e27dv = g27.try_enable_cpml(2);
+    var zero27 = 1;
+    for (var q27b = 0; q27b < 4 * (440 + 396 + 360); q27b = q27b + 1) {
+        var pz27: f64 = at(g27.psi, q27b);
+        if (pz27 != 0.0) { zero27 = 0; }
+    }
+    assert(any27 == 1 && is_ok(e27d) == 1 && zero27 == 1 && g27.slab_x == 4 * 10 * 11,
+      "the slabs carry Ψ; re-enabling restarts it at zero");
+    BjFdtd3d_free(&g27);
+    assert(g27.cpml == 0 && g27.psi == 0 && g27.psi_bytes == 0, "BjFdtd3d_free gives the CPML back");
 
     return assert_summary();
 }

@@ -6792,3 +6792,62 @@ eigenmode search (`dft_magnitude`'s recurrence and magnitude, `find_eigenmodes`'
   644,651 ok, 0 failed, 0 measured, 0 pending, 121,888 accepted (ADR 01: 43,099; ADR 0002: 78,789)** over 766,539
   rows; **all 486 digests equal**, as §121's. The gate is clean (no warnings; coverage 384 of 384); validate.py
   766,539 rows, 0 problems, the frozen sources checked. Next: M6 part 2b, its rows from the first Python emitter.
+
+## 123. M6 part 2b: the 3D CPML; M6 Part 2 done (2026-11-16)
+
+- **`src/fdtd3d.cyr`**: `try_enable_cpml(t)` and `try_enable_cpml_with(params)` in Rust's order: the fit on the
+  smallest axis ("CPML thickness {t} is invalid for a {nx}×{ny}×{nz} grid (need thickness ≥ 1 and 2·thickness + 3 ≤
+  min(nx, ny, nz))"), BjCpml_with_params' refusals, the slabs' lengths past 2^64 ("CPML slabs for a [nx, ny, nz] grid
+  are too large"), their allocation ("cannot allocate {n} grid values", hx_y's n, the first Rust allocates). Rust's
+  last check, `is_attached_to`, is true by construction and goes (ADR 0002 row 2, amended). The grid owns an
+  unattached BjCpml (its grading and profiles, what `cpml()` returns) and one mapping of the twelve Ψ slabs; a refused
+  request leaves the active layer, a new one replaces it (Ψ at zero), and `disable_cpml` and BjFdtd3d_free give both
+  back.
+- **The corrections** (`_bj_fd3_slabs`, Rust's `correct_slabs::<AXIS, HALF>`): after the H loops, H_x's z then y
+  terms, H_y's x then z, H_z's y then x (half-node profiles, Δ forward); after the E loops and before the walls, E_x's
+  y then z, E_y's z then x, E_z's x then y (node profiles, Δ backward, layer 0 the wall). Each term runs over both
+  face slabs normal to its axis, on the main loop's ranges for the other axes: a y- or z-slab row is one layer on
+  contiguous x, the packed strip of src/fdtd2d.cyr (now public); an x-slab row crosses the layers cell by cell. A cell
+  of an edge or corner region takes each term whose slab holds it, in that order, as Rust's.
+- **The physics**, measured by the ported tests: a 10-cell layer −80.0 dB, the CFS layer (κ_max 3, α_max = 2π·ε₀·1
+  GHz) −77.3 dB, the walls −2.1 dB (Rust's comments: ≈ −80 and ≈ −77 dB); a 6-cell layer leaves 10^-7.69 of the peak
+  energy, the walls 10^-1.02; the fields stay mirror-symmetric about a centred source to 10^-9 of their peaks.
+- **The first rows written without Rust** (ADR 0003): `scripts/oracle/emit.py`, the corpus's Python emitter, keeps
+  `fdtd_2d3d.tsv`'s 1,107 frozen rows byte for byte and appends 94 `Fdtd3d::script` rows (1,201 in all), their inputs
+  from deterministic grids (a seeded xorshift64*, decimal strings for its floats), their outputs from validate.py's
+  model on glibc's primitives (the oracle's convention), their tokens from its `wire()`; `--check` rewrites nothing and
+  fails on a difference (4.7 s). The grids: the bench's 30³ with 8 cells, a 17³ layer of 4 around a point source to 40
+  steps, a CFS layer around a driven source, four gradings on a 12 × 11 × 10 grid, a dielectric and lossy block across
+  the x-low slab, the thinnest grids a layer fits on each axis with sources in and at the slabs' edges, each field
+  filled then stepped, enable / disable / replace, lossy cells in and out of the slabs, the thickness's and the
+  grading's refusals in Rust's order, 24 seeded scripts. The state gains the layer's thickness and its twelve Ψ
+  digests in `Cpml3d`'s order (the README's FDTD scripts section, which now also documents the 2D and 3D formats the
+  retired Rust module held).
+- **validate.py**: `Fd3` gains the CPML (`enable_cpml`, `slabs`, `correct_h`, `correct_e`, transcribed from `git show
+  1.2.0:src/fdtd.rs`) and the opcodes 9, 10 and 12. No row changes on correctly rounded primitives: glibc's `pow` and
+  `exp` are correctly rounded on these profiles' arguments, so `fdtd_2d3d.cr.tsv` keeps 14 rows.
+- **Parity**: the harness replays the operations and the Ψ digests; the port agrees with the model on all 248
+  `Fdtd3d::script` rows, bit for bit. Two implementations written apart from the specification, the Python model and
+  the Cyrius port, agree on every CPML script.
+- **Tests**: `tests/fdtd3d.tcyr` (83 assertions) ports `cpml3d_reflection`, `cpml3d_energy_decays`,
+  `cpml3d_fields_are_mirror_symmetric`, `cpml3d_stable_long_run_with_materials`,
+  `cpml3d_enable_validates_and_disables`, `cpml3d_disabled_matches_pec` and `Fdtd3d::try_enable_cpml`'s doc test, and
+  `cyrius_fdtd3d_cpml` (the records, the slab lengths, Ψ restarting at zero, BjFdtd3d_free); `tests/fdtd2d.tcyr`
+  ports `Fdtd2d::try_enable_cpml_with`'s doc test, missed in 1b-2. `cpml3d_desynced_fields_do_not_panic` is n/a
+  (ADR 0002 row 2). The ledger: 760 ported, 12 n/a, 86 pending; fdtd.rs's 167 tests are all accounted for. The whole
+  file runs in 3.3 s natively.
+- **Surface parity**: fdtd.rs is ported whole (14 modules, 634 items, none in progress).
+- **Benchmarks**: Rust's `fdtd/3d_step_30x30x30_cpml8` is twinned: 2.12–2.29 ms (Rust 494.96 µs, 4.3×), so all 80 of
+  Rust's benches are. The step alone takes about 2.0 ms, of which the twelve slab terms about 1.6: 57,600 scalar
+  x-slab cell updates a step (about 10 ns each) and 3,840 packed y- and z-slab rows of 28 to 30 cells (about 220 ns a
+  row, mostly the nine verbs' call overhead). Rust's CPML adds about 175 µs to its step. A z-slab of full x rows is
+  contiguous across y and could run in one strip a layer, and x-slab rows could run on per-cell coefficient arrays;
+  both are recorded here as findings, since the cost is measured, not gated. The interleaved A/B against HEAD left
+  every row unchanged: median ratios 1.000 and 0.973 (load 1.7 to 2.3, rasayan's tests beside the first round); the 3D
+  step without a CPML at 1.05 and 0.92, its two `cpml` tests' cost below the noise. The benchmark record's Cyrius
+  column is each row's least of the 27 full runs since M5's close (`rec_min7`).
+- **Result, every target** (x86_64 ELF, x86_64 PE, aarch64): **19 modules, 0 failing; 644,745 ok, 0 failed, 0
+  measured, 0 pending, 121,888 accepted (ADR 01: 43,099; ADR 0002: 78,789)** over 766,633 rows; **all 486 digests
+  equal**. `fdtd3d.tcyr` (83) and `fdtd2d.tcyr` (73) pass on all three. The gate is clean (no warnings; coverage 384 of
+  384; `emit.py --check` among its steps); validate.py 766,633 rows, 0 problems. **M6 Part 2 is done**, and fdtd.rs is
+  ported whole. Next: Part 3, `compute.rs`.

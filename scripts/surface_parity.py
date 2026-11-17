@@ -37,7 +37,7 @@ INV = json.loads((root / "scripts/rust_1_2_0.json").read_text())
 
 # Ported modules (their milestone done or in progress, item by item).
 MODULES = ["error", "logging", "field", "maxwell", "charge", "material", "wave", "circuit", "relativity",
-           "polarization", "scattering", "beam", "rf"]
+           "polarization", "scattering", "beam", "rf", "fdtd"]
 # Rust module -> the milestone that ports it (port plan §4.1).
 PENDING_MODULES = {
     "compute": "M6",
@@ -48,12 +48,7 @@ PENDING_MODULES = {
 # Their other items are checked as a ported module's now; the listed ones count as pending, and one found ported is a
 # problem (drop it from the list).
 IN_PROGRESS = {
-    # M5 Part 1 ported the 1D grid, the sources, the media, the utilities, NF2FF's phasor form and their JSON; M6
-    # part 1a the CPML layer (CpmlParams, Cpml), 1b-1 and 1b-2 Fdtd2d and Mode2d, 1c nf2ff_2d, 1d the JSON of
-    # CpmlParams and Mode2d, 2a Fdtd3d without its CPML. The 3D CPML follows (2b).
-    "fdtd": ("M5–M6", {
-        "Fdtd3d::try_enable_cpml", "Fdtd3d::try_enable_cpml_with", "Fdtd3d::disable_cpml", "Fdtd3d::cpml",
-    }),
+    # fdtd.rs (M5 Part 1, M6 Parts 1 and 2) is ported whole since M6 part 2b; none is in progress.
 }
 NOT_APPLICABLE_MODULES = {
     "lib": "crate root: module list and re-exports",

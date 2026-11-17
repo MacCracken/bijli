@@ -1266,6 +1266,22 @@ fn main(): i64 {
     bench_report(b3a);
     BjFdtd3d_free(&f3a);
     if (is_err_result(tf3a) == 1 || f3sum == 7.0) { println("."); }
+    # fdtd (M6 part 2b): the same with an 8-cell CPML on every face.
+    var f3b: BjFdtd3d;
+    var tf3b, vf3b = BjFdtd3d_new(30, 30, 30, 0.001, &f3b);
+    var tc3b, vc3b = f3b.try_enable_cpml(8);
+    f3b.add_source_ez(15, 15, 15, 1.0);
+    var b3b = bench_new("fdtd/3d_step_30x30x30_cpml8");
+    bench_batch_start(b3b);
+    for (var k = 0; k < 200; k = k + 1) {
+        f3b.step_once();
+        var e3b: f64 = f3b.total_energy();
+        f3sum = f3sum + e3b;
+    }
+    bench_batch_stop(b3b, 200);
+    bench_report(b3b);
+    BjFdtd3d_free(&f3b);
+    if (is_err_result(tf3b) == 1 || is_err_result(tc3b) == 1 || f3sum == 7.0) { println("."); }
 
     # fdtd (M5 part 1b), Cyrius-only: a Gaussian pulse's value across its width, and a 200-cell TF/SF auxiliary grid
     # stepped under a Gaussian drive (no Rust bench covers either).

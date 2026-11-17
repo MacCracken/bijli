@@ -1,0 +1,275 @@
+#!/usr/bin/env python3
+"""Golden rows written from the reference model (ADR 0003): the corpus's emitter since the Rust tree was retired.
+
+Each module's file keeps its frozen rows (the retired Rust generator's, FROZEN of them) and is followed by the rows the
+parts below emit, in order: their inputs from deterministic grids, their outputs from validate.py's transcription of
+Rust 1.2.0 on glibc's primitives (the oracle's convention: `validate.py --write` then puts MPFR's correctly rounded
+values in `<module>.cr.tsv` where they differ), their tokens from validate.py's `wire()` (format 1, README.md). A
+part's rows are appended once; a later part is appended after them, so every earlier row stays byte for byte.
+
+Usage, from the repo root:
+    python3 -I -B scripts/oracle/emit.py .            # rewrite the emitted rows of each module
+    python3 -I -B scripts/oracle/emit.py . --check    # exit 1 if a module's file differs from what the parts emit
+"""
+import math
+import sys
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import validate as V  # noqa: E402  (the reference model; its main runs only as a script)
+
+root = Path(sys.argv[1] if len(sys.argv) > 1 else ".").resolve()
+check = "--check" in sys.argv[2:]
+
+# The rows of each module written by the retired Rust generator; never rewritten.
+FROZEN = {"fdtd_2d3d": 1107}
+
+
+# ── tokens and rows ─────────────────────────────────────────────────────────────────────────────────────────────────
+
+def u(x: int):
+    """A usize as its row token (its 64-bit word)."""
+    return ("i", x - (1 << 64) if x >= 1 << 63 else x)
+
+
+def i(x: int):
+    return ("i", x)
+
+
+def f(x: float):
+    return ("f", float(x))
+
+
+NONE = ("n", "")
+
+
+def human(tok) -> str:
+    """A token for the note, as the frozen rows render it (Rust's `{:?}`)."""
+    k, b = tok
+    if k == "f":
+        return V.rust_debug(b)
+    if k == "i":
+        return str(b)
+    if k == "s":
+        return '"' + b.replace("\\", "\\\\").replace('"', '\\"') + '"'
+    if k == "n":
+        return "None"
+    if k == "E":
+        return f"Err({b})"
+    return f"{k}:{b}"
+
+
+def wire(toks) -> str:
+    return V.wire(toks) if toks else "-"
+
+
+class Rows:
+    """One module's emitted rows, each (function, inputs) once, none repeating a frozen row."""
+
+    def __init__(self, frozen_keys):
+        self.lines, self.keys = [], set(frozen_keys)
+
+    def emit(self, fn, cls, ins, outs):
+        key = (fn, wire(ins))
+        if key in self.keys:
+            return
+        self.keys.add(key)
+        note = f"{fn}({', '.join(human(t) for t in ins)}) -> {', '.join(human(t) for t in outs)}"
+        self.lines.append(f"{fn}\t{cls}\t{wire(ins)}\t{wire(outs)}\t{note}")
+
+
+class Rng:
+    """A seeded xorshift64*: draws for the grids (integers and plain floats only)."""
+
+    def __init__(self, seed: int):
+        self.s = seed or 0x9E3779B97F4A7C15
+
+    def bits(self) -> int:
+        x = self.s
+        x ^= (x >> 12)
+        x ^= (x << 25) & V.FD_U64
+        x ^= (x >> 27)
+        self.s = x
+        return (x * 0x2545F4914F6CDD1D) & V.FD_U64
+
+    def unit(self) -> float:
+        return (self.bits() >> 11) / float(1 << 53)
+
+    def int(self, lo: int, hi: int) -> int:
+        """An integer in [lo, hi]."""
+        return lo + self.bits() % (hi - lo + 1)
+
+    def log_uniform(self, a: float, b: float) -> float:
+        """10^e for e uniform in [a, b], through a decimal string (no transcendental)."""
+        e = a + (b - a) * self.unit()
+        k = math.floor(e)
+        m = 1.0 + 9.0 * (e - k)
+        return float(f"{m:.6f}e{k}")
+
+
+# ── 3D scripts (M6 part 2b on) ──────────────────────────────────────────────────────────────────────────────────────
+
+class Script3:
+    """A 3D script being built (m_fdtd_2d3d.rs's form): the grid, its operations' tokens, a row at each frame; the
+    outputs from validate.py's Fd3Scripts on glibc's primitives."""
+
+    def __init__(self, rows, model, dims, dx):
+        self.rows, self.model = rows, model
+        self.ins = [u(dims[0]), u(dims[1]), u(dims[2]), f(dx)]
+
+    def op(self, *toks):
+        self.ins += list(toks)
+
+    def row(self):
+        outs = self.model.eval(V.wire(self.ins))
+        self.rows.emit("Fdtd3d::script", "T", self.ins, outs)
+
+
+def step(k):
+    return (i(6), u(k))
+
+
+def source(x, y, z, v):
+    return (i(5), u(x), u(y), u(z), f(v))
+
+
+def cpml(t):
+    return (i(9), u(t))
+
+
+def cpml_with(t, m, sr, km, am):
+    return (i(10), u(t), f(m), f(sr), f(km), f(am))
+
+
+def disable():
+    return (i(12),)
+
+
+def run(k, src, fr, am):
+    head = (i(7), u(k)) + ((u(src[0]), u(src[1]), u(src[2])) if src is not None else (NONE,))
+    return head + (f(fr), f(am))
+
+
+def box(op, c, *vals):
+    return (i(op),) + tuple(u(q) for q in c) + tuple(f(v) for v in vals)
+
+
+def frames3(rows, model, dims, dx, setup, frames, advance=step):
+    """A 3D scenario: the setup operations, then a row at each frame (cumulative steps)."""
+    sc = Script3(rows, model, dims, dx)
+    for op in setup:
+        sc.op(*op)
+    if not frames:
+        sc.row()
+    at = 0
+    for fr in frames:
+        sc.op(*advance(fr - at))
+        at = fr
+        sc.row()
+
+
+def emit_2b(rows, model):
+    """M6 part 2b: `Fdtd3d`'s CPML. The classic layer and the CFS layer around point and driven sources, the
+    gradings swept, a dielectric and lossy block across the slabs, the thinnest grids a layer fits on each axis,
+    sources inside the slabs, enable / disable / replace, the thickness's and the grading's refusals in Rust's order,
+    and seeded scripts."""
+    two_pi_e0 = 2.0 * math.pi * model.C["field::EPSILON_0"]
+    cfs = lambda t, km: cpml_with(t, 3.0, 1.0, km, two_pi_e0 * 1e9)  # noqa: E731
+    # The bench's grid (8 cells) a few steps; fdtd.rs's reflection and energy grids (10 and 6 cells), shortened.
+    frames3(rows, model, (30, 30, 30), 1e-3, [cpml(8), source(15, 15, 15, 1.0)], [1, 2])
+    frames3(rows, model, (17, 17, 17), 1e-3, [cpml(4), source(8, 8, 8, 1.0)], [1, 5, 20, 40])
+    frames3(rows, model, (15, 15, 15), 1e-3, [cfs(4, 3.0)], [6, 24], lambda k: run(k, (7, 7, 7), 1e10, 1.0))
+    # Gradings: m, σ ratio, κ_max and α_max, on thin layers, each axis a different length.
+    for op in (cpml_with(2, 2.0, 0.7, 1.0, 0.0), cpml_with(3, 4.0, 1.5, 11.0, 0.05), cpml_with(2, 1.0, 1.0, 1.0, 1.0),
+               cpml_with(2, 3.5, 1.2, 3.0, 1e-3)):
+        frames3(rows, model, (12, 11, 10), 1e-3, [op, source(6, 5, 5, 1.0), source(2, 2, 2, -0.5)], [1, 6, 18])
+    # A dielectric and lossy block overlapping the x-low slab (fdtd.rs's long-run test, smaller and shorter).
+    frames3(rows, model, (13, 13, 13), 1e-3, [cfs(3, 5.0), box(4, (0, 4, 4, 6, 9, 9), 4.0, 2.0, 0.5)], [10, 40],
+            lambda k: run(k, (8, 6, 6), 3e10, 1.0))
+    # The thinnest grids a layer fits (2t + 3 on one axis, then on each), sources inside the slabs and their edges.
+    frames3(rows, model, (7, 7, 7), 1e-3, [cpml(2), source(3, 3, 3, 1.0)], [1, 4, 15])
+    for dims in ((7, 12, 11), (12, 7, 11), (12, 11, 7), (9, 9, 13)):
+        ops = [cpml(2), source(dims[0] // 2, dims[1] // 2, dims[2] // 2, 1.0), source(1, 1, 1, 0.5),
+               source(dims[0] - 2, 1, dims[2] - 3, -0.25)]
+        frames3(rows, model, dims, 1e-3, ops, [1, 8, 20])
+    # Every field filled, then stepped with a layer: each slab term sees a uniform source field.
+    for w in range(6):
+        frames3(rows, model, (9, 8, 7), 1e-3, [cpml(2), (i(8), u(w), f(1.0 + w))], [1, 3])
+    # Enable, disable, replace: Ψ restarts at zero, a refused request keeps the layer.
+    ops = [source(7, 7, 7, 1.0), step(3), cpml(3), step(4), cpml(100), step(2), cpml(4), step(3), disable(),
+           step(2), cfs(2, 7.0), cpml(0)]
+    frames3(rows, model, (15, 14, 13), 1e-3, ops, [1, 5])
+    frames3(rows, model, (11, 11, 11), 1e-3, [cpml(2), step(4), disable(), source(5, 5, 5, 1.0)], [3])
+    # Lossy cells inside and outside the slabs.
+    frames3(rows, model, (14, 13, 12), 1e-3, [cpml(3), box(3, (0, 0, 0, 14, 4, 12), 2.0),
+                                              box(3, (5, 5, 4, 9, 8, 8), 50.0), source(7, 9, 6, 1.0)], [1, 12])
+    # The thickness's refusals (the fit first), then the grading's, in Rust's order.
+    for t in (0, 1, 4, 5, 6, 100, (1 << 64) - 1):
+        frames3(rows, model, (11, 13, 15), 1e-3, [cpml(t)], [1])
+    for op in (cpml_with(2, 0.5, 1.0, 1.0, 0.0), cpml_with(2, 3.0, 0.0, 1.0, 0.0), cpml_with(2, 3.0, 1.0, 0.5, 0.0),
+               cpml_with(2, 3.0, 1.0, 1.0, -1.0), cpml_with(2, math.nan, math.nan, 1.0, 0.0),
+               cpml_with(0, 0.5, 0.0, 0.5, -1.0), cpml_with(9, 0.5, 1.0, 1.0, 0.0),
+               cpml_with(2, 3.0, sys.float_info.max, 1.0, 0.0), cpml_with(2, 3.0, 1.0, math.inf, 0.0)):
+        frames3(rows, model, (9, 9, 9), 1e-3, [op, source(4, 4, 4, 1.0)], [2])
+    # Seeded scripts: a fitting layer of random grading on grids from 7 to 14 a side, random materials and sources.
+    rng = Rng(0x2B_3D_C9)
+    for _ in range(24):
+        dims = tuple(rng.int(7, 14) for _ in range(3))
+        tmax = max(2, (min(dims) - 3) // 2)
+        t = rng.int(2, tmax)
+        m = 1.0 + 3.0 * rng.unit()
+        km = 1.0 if rng.unit() < 0.5 else 1.0 + 10.0 * rng.unit()
+        am = 0.0 if rng.unit() < 0.5 else rng.log_uniform(-4.0, 0.0)
+        ops = [cpml_with(t, m, 0.5 + rng.unit(), km, am)]
+        if rng.unit() < 0.5:
+            sg = 0.0 if rng.unit() < 0.5 else 1.0
+            ops.append(box(4, (0, 0, 0, dims[0] // 2, dims[1], dims[2]), 1.0 + 3.0 * rng.unit(), 1.0, sg))
+        for _ in range(rng.int(1, 3)):
+            at = tuple(rng.int(0, d - 1) for d in dims)
+            ops.append(source(*at, (-1.0 if rng.unit() < 0.5 else 1.0) * rng.log_uniform(-2.0, 1.0)))
+        frames3(rows, model, dims, rng.log_uniform(-5.0, -2.0), ops, [rng.int(1, 30)])
+
+
+# ── modules ─────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+def module(name, parts):
+    """The module file's text: its header (the row count updated), its frozen rows, then the parts' rows."""
+    path = root / "tests/golden" / f"{name}.tsv"
+    lines = path.read_text().split("\n")
+    header = [ln for ln in lines if ln.startswith("#")]
+    body = [ln for ln in lines if ln and not ln.startswith("#")]
+    frozen = body[:FROZEN[name]]
+    keys = [(ln.split("\t")[0], ln.split("\t")[2]) for ln in frozen]
+    rows = Rows(keys)
+    for part in parts:
+        part(rows)
+    total = len(frozen) + len(rows.lines)
+    header = [f"# rows: {total}" if h.startswith("# rows: ") else h for h in header]
+    text = "\n".join(header + frozen + rows.lines) + "\n"
+    return path, text, len(rows.lines)
+
+
+def main() -> int:
+    model3 = V.Fd3Scripts(root, V.GLIBC_P)
+    problems = 0
+    for name, parts in (("fdtd_2d3d", [lambda r: emit_2b(r, model3)]),):
+        path, text, n = module(name, parts)
+        big = V.too_big(f"tests/golden/{name}.tsv", text)
+        if big:
+            print("  " + big[0])
+            problems += 1
+            continue
+        if check:
+            if path.read_text() != text:
+                print(f"BAD  {name}.tsv differs from the emitted rows (rewrite with scripts/oracle/emit.py .)")
+                problems += 1
+            else:
+                print(f"ok   {name}.tsv: {FROZEN[name]} frozen rows, {n} emitted")
+        else:
+            path.write_text(text)
+            print(f"wrote tests/golden/{name}.tsv ({FROZEN[name]} frozen rows, {n} emitted)")
+    return 1 if problems else 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

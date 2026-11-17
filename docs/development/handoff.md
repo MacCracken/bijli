@@ -9,7 +9,8 @@ bite is done, the machinery, the scripts and the traps. Delete it once it has se
 
 ## Where it stands
 
-- **Committed through `8b460df`** ("M6 pt1d"); part 2a is in the working tree for the user to commit.
+- **Committed through `5677463`** ("M6 pt2a", with the Rust tree's retirement); part 2b is in the working tree for the
+  user to commit.
 - **M6 Part 1** (the 2D CPML and `Fdtd2d`, §116–§119) runs in bites. Done: 1a the CPML layer (`src/cpml.cyr`); 1b-1
   `Fdtd2d` without the CPML (`src/fdtd2d.cyr`; its scripts `Fdtd2d::script` in `fdtd_2d3d.tsv`, replayed by
   validate.py's `Fd2Scripts` in pure Python, no NumPy on the host); 1b-2 the CPML attached (the y-strips packed, the
@@ -17,15 +18,16 @@ bite is done, the machinery, the scripts and the traps. Delete it once it has se
   `src/nf2ff.cyr` after `src/fdtd2d.cyr` in the bundle; its edge rows mapped in `fdtd_2d3d.adr.tsv`); 1d the JSON
   of `CpmlParams` and `Mode2d` (src/json.cyr; `m_json.rs`'s `Kind::is_usize` carries the thickness in an f64's bits;
   a thickness past 2^63 − 1 is refused, ADR 0002 row 36, §120). **Part 1 is done.** Part 2 runs in bites: 2a
-  `Fdtd3d` without the CPML (`src/fdtd3d.cyr`, done, §121: `Op3` scripts as `Fdtd3d::script` rows, replayed by
-  validate.py's `Fd3Scripts` and the harness's `_par_fd3_script`; the 2D file's helpers public as `_bj_fd2_*`); next 2b,
-  `Cpml3d`'s twelve Ψ slabs (Rust's `correct_slabs`, `SlabPass`; `try_enable_cpml*`, `disable_cpml`, `cpml()`; the
-  `cpml3d_*` tests, `desynced` n/a; the bench `fdtd/3d_step_30x30x30_cpml8`; Ψ digests in `state3`, ops 9, 10, 12).
-  Then Part 3 `compute.rs`, then the range-edge review (the per-cell rule for the 2D and 3D updates and the CPML).
+  `Fdtd3d` without the CPML (`src/fdtd3d.cyr`, §121: `Fdtd3d::script` rows replayed by validate.py's `Fd3Scripts` and
+  the harness's `_par_fd3_script`; the 2D file's helpers public as `_bj_fd2_*`); 2b the 3D CPML (§123: `_bj_fd3_slabs`,
+  the twelve Ψ slabs in one mapping; the first rows from `scripts/oracle/emit.py`, whose `emit_2b` is the template for
+  the next part's emitter). **Part 2 is done**; fdtd.rs is ported whole. Next: Part 3 `compute.rs` (`ComputeBackend`,
+  `CpuBackend`, `GpuFdtd2d<B>`, the `WgpuBackend` scaffold), then the range-edge review (the per-cell rule for the 2D
+  and 3D updates and the CPML).
 - **No Rust (ADR 0003, 2026-11-16).** The Rust tree and the Rust generator are retired; the corpus is frozen data and
-  `scripts/oracle/validate.py` the reference model. New rows (2b first) come from a Python emitter you write in
-  `scripts/oracle/`: inputs from a seeded grid, outputs from validate.py's model (`Fd3Scripts` for 3D), tokens from its
-  `wire()`, appended to the module's TSV with its `# rows:` line updated. The tools read `scripts/rust_1_2_0.json`;
+  `scripts/oracle/validate.py` the reference model. New rows come from `scripts/oracle/emit.py` (2b's `emit_2b` is
+  the first part): add a part function, register it in `main()`'s module list, run `emit.py .`, then `validate.py .
+  --write` for the corrections; `emit.py . --check` must pass. A module's frozen rows (FROZEN) are never rewritten. The tools read `scripts/rust_1_2_0.json`;
   the Rust source is `git show 1.2.0:src/fdtd.rs`. Steps 4 and 9 below and the final job have no `cargo` step now.
 - **M6's corpus** is `tests/golden/fdtd_2d3d.tsv` (its frozen rows from the retired `m_fdtd_2d3d.rs`, which imported `m_fdtd`'s
   `u`, `seq`, `res_toks`, `digest` and `dbg_*`), checked by validate.py's `validate_fdtd_2d3d` (Rust's chain on
@@ -64,10 +66,10 @@ bite is done, the machinery, the scripts and the traps. Delete it once it has se
     Rust's chain where every operation is its 53-bit value (mode 0, checked per sample by one exponent test and per
     angle), else the call or the angle unbounded (`_bj_nf_angle_ux`); a non-finite field keeps Rust's (row 18, §114).
     **Part 2 is done.**
-- **Numbers after M6 2a**: 19 modules, 644,651 ok, 0 failed, 121,888 accepted (ADR 01: 43,099; ADR 0002: 78,789)
-  over 766,539 rows; 486 digests equal on x86_64 ELF, x86_64 PE and aarch64. Ledger 752 ported, 11 n/a, 95 pending
-  of 858; API snapshot 2,129; surface parity 630 items; benches 79 of 80 twinned (the 3D CPML step pending);
-  execution coverage 384 of 384. `json.tsv` is 40.7 MB of the 48 MiB cap: the rest of M6 adds no JSON (`Fdtd3d` and compute.rs
+- **Numbers after M6 2b**: 19 modules, 644,745 ok, 0 failed, 121,888 accepted (ADR 01: 43,099; ADR 0002: 78,789)
+  over 766,633 rows; 486 digests equal on x86_64 ELF, x86_64 PE and aarch64. Ledger 760 ported, 12 n/a, 86 pending
+  of 858; API snapshot 2,129; surface parity 634 items (fdtd whole); benches 80 of 80 twinned; execution coverage 384
+  of 384. `json.tsv` is 40.7 MB of the 48 MiB cap: the rest of M6 adds no JSON (`Fdtd3d` and compute.rs
   have no serde), but M7's eight serde types (integration/) will want their own module.
 - **M5 is done** (§115). The benchmark record's Cyrius column is each row's least of four full runs: rows vary up to
   1.5× between runs under other repos' loads, so take the least of several when regenerating it.

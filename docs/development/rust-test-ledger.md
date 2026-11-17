@@ -6,7 +6,7 @@
 > (`tests/golden/`) checks every ported function on its grid besides; this ledger is about the oracle's own
 > assertions.
 
-**858 Rust tests:** 752 ported, 11 not applicable, 95 pending.
+**858 Rust tests:** 760 ported, 12 not applicable, 86 pending.
 
 | Rust file | Milestone | Cyrius tests | Rust tests | Ported | N/A | Pending |
 |---|---|---|---:|---:|---:|---:|
@@ -17,7 +17,7 @@
 | `src/circuit.rs` | M2 | `tests/circuit.tcyr` | 51 | 51 | 0 | 0 |
 | `src/compute.rs` | M6 | `tests/compute.tcyr` | 18 | 0 | 0 | 18 |
 | `src/error.rs` | M1 | `tests/error.tcyr` | 10 | 10 | 0 | 0 |
-| `src/fdtd.rs` | M6 | `tests/fdtd1d.tcyr`, `tests/fdtd_source.tcyr`, `tests/fdtd_media.tcyr`, `tests/nf2ff.tcyr`, `tests/fdtd_util.tcyr`, `tests/cpml.tcyr`, `tests/fdtd2d.tcyr`, `tests/fdtd3d.tcyr` | 167 | 155 | 3 | 9 |
+| `src/fdtd.rs` | M6 | `tests/fdtd1d.tcyr`, `tests/fdtd_source.tcyr`, `tests/fdtd_media.tcyr`, `tests/nf2ff.tcyr`, `tests/fdtd_util.tcyr`, `tests/cpml.tcyr`, `tests/fdtd2d.tcyr`, `tests/fdtd3d.tcyr` | 167 | 163 | 4 | 0 |
 | `src/field.rs` | M1 | `tests/field.tcyr` | 105 | 105 | 0 | 0 |
 | `src/integration/soorat.rs` | M7 | `tests/soorat.tcyr` | 14 | 0 | 0 | 14 |
 | `src/logging.rs` | M1 | `tests/log.tcyr` | 1 | 1 | 0 | 0 |
@@ -34,6 +34,7 @@
 
 | Rust test | Reason |
 |---|---|
+| `src/fdtd.rs::cpml3d_desynced_fields_do_not_panic` | BjFdtd3d's arrays are fixed at construction and its CPML is attached to that geometry when enabled (ADR 0002 row 2): nx, ny, nz and the field arrays can't be changed apart from the layer, so the mismatch it steps, runs and enables on can't arise; tests/fdtd3d.tcyr's cyrius_fdtd3d_cpml pins the layer's records and slabs |
 | `src/fdtd.rs::desynced_fields_do_not_panic_2d` | BjFdtd2d's arrays are fixed at construction (ADR 0002 row 2): nx, ny and the field arrays can't be resized apart, so the desynchronised layout it steps, runs and sources on can't arise; tests/fdtd2d.tcyr's cyrius_fdtd2d_grid pins sources outside the grid and BjFdtd2d_free |
 | `src/fdtd.rs::desynced_fields_do_not_panic_3d` | BjFdtd3d's arrays are fixed at construction (ADR 0002 row 2): nx, ny, nz and the six field arrays can't be resized apart, so the desynchronised layout it steps, runs, sources and sets materials on can't arise; tests/fdtd3d.tcyr's cyrius_fdtd3d_grid pins sources outside the grid and BjFdtd3d_free |
 | `src/fdtd.rs::test_fdtd1d_inconsistent_public_fields_no_panic` | BjFdtd1d's arrays are fixed at construction (ADR 0002 row 2): num_cells and the field arrays can't be resized apart, so the mismatch it guards against can't arise; tests/fdtd1d.tcyr's cyrius_fdtd1d_free and cyrius_fdtd1d_two_cells pin the empty and smallest grids |

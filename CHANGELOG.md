@@ -567,6 +567,20 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
   from `rust-old/` before it went (20 modules, 733 public items, 858 tests, 80 benches and their baseline, 12
   constants): every result is unchanged. CLAUDE.md, the plan, ADR 0001, the README, CONTRIBUTING and the guides
   follow; Rust 1.2.0 is read as the specification with `git show 1.2.0:…`.
+- **Cyrius port, M6 part 2b — the 3D CPML; M6 Part 2 done** (`src/fdtd3d.cyr`): `try_enable_cpml`,
+  `try_enable_cpml_with`, `disable_cpml` and `cpml()` on `BjFdtd3d`, with Rust's checks, texts and order (the fit on the
+  smallest axis, the grading, the slabs' size). The layer occupies the outermost cells of every face, edges and corners
+  included, and corrects each curl term in the two face slabs normal to its derivative axis after each phase (Rust's
+  `Cpml3d`, `correct_slabs`): twelve Ψ slabs in one mapping owned by the grid, the y- and z-slab rows on the packed
+  strip kernel, the x-slab cells scalar (ADR 0002 row 2 amended: the attachment is fixed, so the step's layout check
+  goes). It measures as Rust's: a 10-cell layer −80.0 dB, the CFS layer (κ_max 3) −77.3 dB, the walls −2.1 dB; a 6-cell
+  layer leaves 2·10⁻⁸ of the peak energy where the walls keep 10 %. The first rows written without Rust:
+  `scripts/oracle/emit.py`, the corpus's Python emitter (ADR 0003), appends 94 `Fdtd3d::script` rows to
+  `fdtd_2d3d.tsv` (1,201), their outputs from validate.py's model of the CPML (none needing a correction). The port
+  matches all 94 bit for bit. `tests/fdtd3d.tcyr` ports the six `cpml3d_*` tests and `Fdtd3d::try_enable_cpml`'s doc
+  test (83 assertions), `tests/fdtd2d.tcyr` `Fdtd2d::try_enable_cpml_with`'s; `cpml3d_desynced_fields_do_not_panic` is
+  n/a. fdtd.rs is ported whole. Bench twin: `fdtd/3d_step_30x30x30_cpml8` 2.12–2.29 ms (4.3× Rust's
+  494.96 µs; the slab terms about 1.6 ms of it); every Rust bench is twinned.
 
 ### Fixed
 

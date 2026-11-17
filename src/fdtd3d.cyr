@@ -3,7 +3,11 @@
 # time step is half the 3D Courant limit, dt = dx/(2√3·c), a Courant number of 1/(2√3).
 #
 # The outer faces are perfect electric conductors: tangential E is held at zero on all six faces (E_y and E_z on the x
-# faces, E_x and E_z on the y faces, E_x and E_y on the z faces), so outgoing waves reflect. Per-cell ε_r, μ_r and
+# faces, E_x and E_z on the y faces, E_x and E_y on the z faces), so outgoing waves reflect. A CPML (M6 part 2b) can
+# absorb them instead: a layer of src/cpml.cyr's grading occupies the outermost `thickness` cells on every face, edges
+# and corners included, ends on the same wall, and corrects each curl term in the two face slabs normal to its
+# derivative axis after each phase (Rust's `Cpml3d`, `correct_slabs`). Its twelve Ψ fields, named `<component>_<axis>`
+# (hx_z is Ψ of ∂E_y/∂z in the H_x update), live in one mapping owned by the grid. Per-cell ε_r, μ_r and
 # conductivity σ (the lossy E update E ← C_a·E + C_b·∇×H, C_a = (1 − σΔt/2ε)/(1 + σΔt/2ε), C_b = (Δt/εΔx)/(1 +
 # σΔt/2ε)) are set by box region.
 #
@@ -38,8 +42,12 @@ public var BJ_FDTD3D_NO_SOURCE = 0 - 1;
 # time-step index. `ex`, `ey`, `ez`, `hx`, `hy` and `hz` are the addresses of nx·ny·nz f64 each (read and write the
 # values, as Rust's public vectors). `ce` holds C_b per cell (Δt/(ε₀ε_r·Δx), divided by 1 + σΔt/2ε where lossy), `ch`
 # Δt/(μ₀μ_r·Δx), `ca` C_a and `conductivity` σ (S/m), both 0 while every cell is lossless (Rust's empty vectors),
-# `permittivity` ε_r and `permeability` μ_r. `work` holds three scratch rows of `wlen` (max(nx, 1024)) f64, the
-# updates' and the energy's, `map_bytes` and `lossy_bytes`
+# `permittivity` ε_r and `permeability` μ_r. `cpml` is the attached layer's address (a freelist block holding an
+# unattached BjCpml: its grading and profiles), 0 for none; read it through `cpml()`. `psi` is the mapping of its
+# twelve Ψ slabs (`psi_bytes` long): four x-slabs of `slab_x` = 2·thickness·ny·nz f64 (hy_x, hz_x, ey_x, ez_x), four
+# y-slabs of `slab_y` = 2·thickness·nx·nz (hx_y, hz_y, ex_y, ez_y) and four z-slabs of `slab_z` = 2·thickness·nx·ny
+# (hx_z, hy_z, ex_z, ey_z), each the grid's shape with its axis cut to the 2·thickness layers, x fastest. `work` holds
+# three scratch rows of `wlen` (max(nx, 1024)) f64, the updates' and the energy's, `map_bytes` and `lossy_bytes`
 # the mappings' lengths (0 once freed). Mirrors `Fdtd3d`.
 public struct BjFdtd3d {
     nx;
@@ -64,6 +72,12 @@ public struct BjFdtd3d {
     wlen;
     map_bytes;
     lossy_bytes;
+    cpml;
+    psi;
+    psi_bytes;
+    slab_x;
+    slab_y;
+    slab_z;
 }
 
 # One row of a curl update: d[i] += k[i]·((a[i] − ap[i]) − (b[i] − bp[i])) for i < n, Rust's `f[i] += c[i] * (da −
@@ -84,6 +98,119 @@ fn _bj_fd3_curl(d: *f64, k: *f64, a: *f64, ap: *f64, b: *f64, bp: *f64, w: *f64,
         var dd: f64 = da - db;
         var v: f64 = k[i] * dd;
         d[i] = d[i] + v;
+    }
+    return 0;
+}
+
+# A word as a *BjCpml.
+#must_use
+fn _bj_fd3_cpmlp(a): *BjCpml {
+    return a;
+}
+
+# Writes a pass's update ranges [x0, x1) × [y0, y1) × [z0, z1) into g[3..9] (g[0..3] holds the grid's nx, ny, nz).
+fn _bj_fd3_ranges(g: *i64, x0, x1, y0, y1, z0, z1) {
+    g[3] = x0;
+    g[4] = x1;
+    g[5] = y0;
+    g[6] = y1;
+    g[7] = z0;
+    g[8] = z1;
+    return 0;
+}
+
+# One 3D CPML derivative term over both face slabs normal to `axis` (0 x, 1 y, 2 z): Ψ ← b·Ψ + c·Δ, f += sign·k·((1/κ −
+# 1)·Δ + Ψ), Δ the source field's difference along the axis. With half 1 the corrected field sits half a cell off the
+# nodes along the axis (the H update): Δ = src[u + 1] − src[u], layer l = 0..t lies l + ½ cells from the wall (the
+# half-node profiles). With half 0 (the E update) Δ = src[u] − src[u − 1], layer l = 1..t on the integer node l cells
+# from the wall (l = 0 is the wall, reset after the update). g holds the grid's nx, ny, nz, then the main loop's update
+# ranges (x0, x1, y0, y1, z0, z1), the axis's replaced by the two slabs'; psi has the grid's shape with the axis cut to
+# 2·t layers, indexed side·t + l, x fastest. A y- or z-slab row is one layer on contiguous x, run on the packed strip
+# (src/fdtd2d.cyr's, through the scratch rows w); an x-slab row crosses the layers cell by cell, ascending on the low
+# side and descending on the high side. The layer is attached to this grid. Mirrors `Cpml::correct_slabs`.
+fn _bj_fd3_slabs(c: *BjCpml, axis, half, psi: *f64, f: *f64, src: *f64, k: *f64, g: *i64, sign: f64, w: *f64) {
+    var nx = g[0];
+    var nxy = nx * g[1];
+    var n = g[axis];
+    var t = c.thickness;
+    var stride = 1;
+    if (axis == 1) { stride = nx; }
+    if (axis == 2) { stride = nxy; }
+    var bp: *f64 = _bj_fd2_f64p(c.b_node);
+    var cp: *f64 = _bj_fd2_f64p(c.c_node);
+    var kp: *f64 = _bj_fd2_f64p(c.km1_node);
+    var l0 = 1;
+    var off = 1;
+    if (half == 1) {
+        bp = _bj_fd2_f64p(c.b_half);
+        cp = _bj_fd2_f64p(c.c_half);
+        kp = _bj_fd2_f64p(c.km1_half);
+        l0 = 0;
+        off = 2;
+    }
+    var pd0 = nx;
+    var pd1 = g[1];
+    if (axis == 0) { pd0 = 2 * t; }
+    if (axis == 1) { pd1 = 2 * t; }
+    var pr: f64[4];
+    pr[3] = sign;
+    var lo: i64[3];
+    var hi: i64[3];
+    for (var side = 0; side < 2; side = side + 1) {
+        for (var a = 0; a < 3; a = a + 1) {
+            lo[a] = g[3 + 2 * a];
+            hi[a] = g[4 + 2 * a];
+        }
+        if (side == 0) {
+            lo[axis] = l0;
+            hi[axis] = t;
+        } else {
+            lo[axis] = n + 1 - off - t;
+            hi[axis] = n + 1 - off - l0;
+        }
+        for (var z = lo[2]; z < hi[2]; z = z + 1) {
+            for (var y = lo[1]; y < hi[1]; y = y + 1) {
+                var row = z * nxy + y * nx;
+                if (axis == 0) {
+                    var prow = (z * pd1 + y) * pd0 + side * t;
+                    for (var x = lo[0]; x < hi[0]; x = x + 1) {
+                        var l = x;
+                        if (side == 1) { l = n - off - x; }
+                        var i = row + x;
+                        var d: f64 = src[i + 1] - src[i];
+                        if (half == 0) { d = src[i] - src[i - 1]; }
+                        var pv: f64 = bp[l] * psi[prow + l] + cp[l] * d;
+                        psi[prow + l] = pv;
+                        f[i] = f[i] + sign * k[i] * (kp[l] * d + pv);
+                    }
+                } else {
+                    var u = y;
+                    if (axis == 2) { u = z; }
+                    var l2 = u;
+                    if (side == 1) { l2 = n - off - u; }
+                    var sl = side * t + l2;
+                    var py = y;
+                    var pz = sl;
+                    if (axis == 1) {
+                        py = sl;
+                        pz = z;
+                    }
+                    var prow2 = (pz * pd1 + py) * pd0;
+                    var up = row;
+                    var down = row - stride;
+                    if (half == 1) {
+                        up = row + stride;
+                        down = row;
+                    }
+                    pr[0] = bp[l2];
+                    pr[1] = cp[l2];
+                    pr[2] = kp[l2];
+                    var x0 = lo[0];
+                    _bj_fd2_strip(f + row + x0, src + up + x0, src + down + x0, k + row + x0, psi + prow2 + x0,
+                      hi[0] - x0, &pr, w, 0);
+                }
+            }
+        }
     }
     return 0;
 }
@@ -178,6 +305,12 @@ public fn BjFdtd3d_new(nx, ny, nz, dx: f64, out: *BjFdtd3d): Result {
     out.conductivity = 0;
     out.map_bytes = bytes;
     out.lossy_bytes = 0;
+    out.cpml = 0;
+    out.psi = 0;
+    out.psi_bytes = 0;
+    out.slab_x = 0;
+    out.slab_y = 0;
+    out.slab_z = 0;
     if (_bj_log_on(4) == 1) {
         var lb[256];
         var lt[24];
@@ -199,8 +332,26 @@ public fn BjFdtd3d_new(nx, ny, nz, dx: f64, out: *BjFdtd3d): Result {
     return Ok(0);
 }
 
-# Gives a grid's mappings back and empties it (nx = ny = nz = 0, every address 0); a second call does nothing.
+# Gives a CPML's layer and Ψ slabs back and detaches it from the grid (cpml = psi = 0).
+fn _bj_fd3_drop_cpml(sim: *BjFdtd3d) {
+    if (sim.cpml != 0) {
+        BjCpml_free(sim.cpml);
+        fl_free(sim.cpml);
+    }
+    if (sim.psi_bytes > 0) { cyr_munmap(sim.psi, sim.psi_bytes); }
+    sim.cpml = 0;
+    sim.psi = 0;
+    sim.psi_bytes = 0;
+    sim.slab_x = 0;
+    sim.slab_y = 0;
+    sim.slab_z = 0;
+    return 0;
+}
+
+# Gives a grid's mappings and its CPML back and empties it (nx = ny = nz = 0, every address 0); a second call does
+# nothing.
 public fn BjFdtd3d_free(sim: *BjFdtd3d): i64 {
+    _bj_fd3_drop_cpml(sim);
     if (sim.map_bytes > 0) { cyr_munmap(sim.ex, sim.map_bytes); }
     if (sim.lossy_bytes > 0) { cyr_munmap(sim.ca, sim.lossy_bytes); }
     sim.ex = 0;
@@ -374,6 +525,200 @@ impl BjFdtd3d {
         return 0;
     }
 
+    # Replaces the reflecting walls by a CPML of the classic grading (BjCpmlParams_new) `thickness` cells on every face;
+    # calling it again replaces the layer (Ψ restarts at zero). Ok(0), or with the boundaries unchanged
+    # Err(InvalidParameter) as try_enable_cpml_with. Mirrors `Fdtd3d::try_enable_cpml`.
+    public fn try_enable_cpml(self, thickness): Result {
+        var p: BjCpmlParams = BjCpmlParams_new(thickness);
+        return self.try_enable_cpml_with(&p);
+    }
+
+    # Replaces the reflecting walls by a CPML of params' grading (κ and CFS-α profiles, grading order, σ_max's scale),
+    # occupying the outermost thickness cells on every face; calling it again replaces the layer. Ok(0), or with the
+    # boundaries unchanged Err(InvalidParameter), in Rust's order: "CPML thickness {t} is invalid for a {nx}×{ny}×{nz}
+    # grid (need thickness ≥ 1 and 2·thickness + 3 ≤ min(nx, ny, nz))", any refusal of BjCpml_with_params, "CPML slabs
+    # for a [{nx}, {ny}, {nz}] grid are too large" (the slab lengths past 2^64) or "cannot allocate {n} grid values"
+    # (n the first slab Rust allocates, hx_y's). Rust's last check, that the new slabs fit the grid, holds by
+    # construction. Mirrors `Fdtd3d::try_enable_cpml_with`.
+    public fn try_enable_cpml_with(self, params: *BjCpmlParams): Result {
+        var nx = self.nx;
+        var ny = self.ny;
+        var nz = self.nz;
+        var t = params.thickness;
+        var md = nx;
+        if (_bj_fd2_uge(md, ny) == 1) { md = ny; }
+        if (_bj_fd2_uge(md, nz) == 1) { md = nz; }
+        if (_bj_cpml_fits(t, md) == 0) {
+            var e1 = _bj_err_reason(BJ_ERR_INVALID_PARAMETER);
+            _bj_tx_cstr(e1, "CPML thickness ");
+            _bj_tx_u64(e1, t);
+            _bj_tx_cstr(e1, " is invalid for a ");
+            _bj_tx_u64(e1, nx);
+            _bj_tx_cstr(e1, "×");
+            _bj_tx_u64(e1, ny);
+            _bj_tx_cstr(e1, "×");
+            _bj_tx_u64(e1, nz);
+            _bj_tx_cstr(e1, " grid (need thickness ≥ 1 and 2·thickness + 3 ≤ min(nx, ny, nz))");
+            return Err(BJ_ERR_INVALID_PARAMETER);
+        }
+        var blk = fl_alloc(sizeof(BjCpml));
+        if (blk == 0) { return Err(_bj_fd2_alloc_err(t)); }
+        var t2, v2 = BjCpml_with_params(params, self.dx, self.dt, blk);
+        if (is_err_result(t2) == 1) {
+            fl_free(blk);
+            return Err(v2);
+        }
+        var tt: i64[1];
+        var p: i64[1];
+        var sx: i64[1];
+        var sy: i64[1];
+        var sz: i64[1];
+        var ok = _bj_fd2_umul(t, 2, &tt);
+        if (ok == 1) { ok = _bj_fd2_umul(tt[0], ny, &p); }
+        if (ok == 1) { ok = _bj_fd2_umul(p[0], nz, &sx); }
+        if (ok == 1) { ok = _bj_fd2_umul(tt[0], nx, &p); }
+        if (ok == 1) { ok = _bj_fd2_umul(p[0], nz, &sy); }
+        if (ok == 1) { ok = _bj_fd2_umul(p[0], ny, &sz); }
+        if (ok == 0) {
+            BjCpml_free(blk);
+            fl_free(blk);
+            var e2 = _bj_err_reason(BJ_ERR_INVALID_PARAMETER);
+            _bj_tx_cstr(e2, "CPML slabs for a [");
+            _bj_tx_u64(e2, nx);
+            _bj_tx_cstr(e2, ", ");
+            _bj_tx_u64(e2, ny);
+            _bj_tx_cstr(e2, ", ");
+            _bj_tx_u64(e2, nz);
+            _bj_tx_cstr(e2, "] grid are too large");
+            return Err(BJ_ERR_INVALID_PARAMETER);
+        }
+        var map = 0;
+        var bytes = 0;
+        if (sx[0] >= 0 && sy[0] >= 0 && sz[0] >= 0 && sx[0] <= _BJ_FD3_MAX_CELLS && sy[0] <= _BJ_FD3_MAX_CELLS
+          && sz[0] <= _BJ_FD3_MAX_CELLS) {
+            bytes = 4 * (sx[0] + sy[0] + sz[0]) * 8;
+            map = mmap_anon(bytes);
+        }
+        if (map == 0) {
+            BjCpml_free(blk);
+            fl_free(blk);
+            return Err(_bj_fd2_alloc_err(sy[0]));
+        }
+        if (_bj_log_on(4) == 1) {
+            var cl: *BjCpml = _bj_fd3_cpmlp(blk);
+            var lb[256];
+            var lt[24];
+            _bj_tx_init(&lt, &lb, 256);
+            _bj_tx_cstr(&lt, "3D CPML enabled thickness=");
+            _bj_tx_u64(&lt, t);
+            _bj_tx_cstr(&lt, " sigma_max=");
+            _bj_fmt_f64_debug(&lt, cl.sigma_max);
+            _bj_tx_cstr(&lt, " kappa_max=");
+            _bj_fmt_f64_debug(&lt, cl.kappa_max);
+            _bj_tx_cstr(&lt, " alpha_max=");
+            _bj_fmt_f64_debug(&lt, cl.alpha_max);
+            _bj_tx_cstr(&lt, " dims=[");
+            _bj_tx_u64(&lt, nx);
+            _bj_tx_cstr(&lt, ", ");
+            _bj_tx_u64(&lt, ny);
+            _bj_tx_cstr(&lt, ", ");
+            _bj_tx_u64(&lt, nz);
+            _bj_tx_cstr(&lt, "]");
+            _bj_log_text(4, &lt);
+        }
+        _bj_fd3_drop_cpml(self);
+        self.cpml = blk;
+        self.psi = map;
+        self.psi_bytes = bytes;
+        self.slab_x = sx[0];
+        self.slab_y = sy[0];
+        self.slab_z = sz[0];
+        return Ok(0);
+    }
+
+    # Removes the CPML (giving its layer and Ψ slabs back) and returns to the reflecting PEC faces. Mirrors
+    # `Fdtd3d::disable_cpml`.
+    public fn disable_cpml(self) {
+        if (self.cpml != 0) {
+            _bj_fd3_drop_cpml(self);
+            _bj_log(4, "3D CPML disabled");
+        }
+        return 0;
+    }
+
+    # The active CPML layer's address (a *BjCpml: its thickness and grading), or 0 (Rust's None). Mirrors
+    # `Fdtd3d::cpml`.
+    #must_use
+    public fn cpml(self): i64 {
+        return self.cpml;
+    }
+
+    # Ψ slab k's address: 0–3 the x-slabs (hy_x, hz_x, ey_x, ez_x), 4–7 the y-slabs (hx_y, hz_y, ex_y, ez_y), 8–11 the
+    # z-slabs (hx_z, hy_z, ex_z, ey_z).
+    #must_use
+    fn slab(self, k): *f64 {
+        var at = k * self.slab_x;
+        if (k >= 4) { at = 4 * self.slab_x + (k - 4) * self.slab_y; }
+        if (k >= 8) { at = 4 * self.slab_x + 4 * self.slab_y + (k - 8) * self.slab_z; }
+        return _bj_fd2_f64p(self.psi + at * 8);
+    }
+
+    # The CPML's terms of the H update (the half-node profiles), after the main H loops on their update ranges, in
+    # Rust's order: H_x's z then y terms, H_y's x then z, H_z's y then x. Mirrors `Cpml3d::correct_h`.
+    fn cpml_h(self) {
+        var g: i64[9];
+        var nx = self.nx;
+        var ny = self.ny;
+        var nz = self.nz;
+        g[0] = nx;
+        g[1] = ny;
+        g[2] = nz;
+        var c: *BjCpml = _bj_fd3_cpmlp(self.cpml);
+        var ex: *f64 = _bj_fd2_f64p(self.ex);
+        var ey: *f64 = _bj_fd2_f64p(self.ey);
+        var ez: *f64 = _bj_fd2_f64p(self.ez);
+        var ch: *f64 = _bj_fd2_f64p(self.ch);
+        var w: *f64 = _bj_fd2_f64p(self.work);
+        _bj_fd3_ranges(&g, 0, nx, 0, ny - 1, 0, nz - 1);
+        _bj_fd3_slabs(c, 2, 1, self.slab(8), self.hx, ey, ch, &g, 1.0, w);
+        _bj_fd3_slabs(c, 1, 1, self.slab(4), self.hx, ez, ch, &g, -1.0, w);
+        _bj_fd3_ranges(&g, 0, nx - 1, 0, ny, 0, nz - 1);
+        _bj_fd3_slabs(c, 0, 1, self.slab(0), self.hy, ez, ch, &g, 1.0, w);
+        _bj_fd3_slabs(c, 2, 1, self.slab(9), self.hy, ex, ch, &g, -1.0, w);
+        _bj_fd3_ranges(&g, 0, nx - 1, 0, ny - 1, 0, nz);
+        _bj_fd3_slabs(c, 1, 1, self.slab(5), self.hz, ex, ch, &g, 1.0, w);
+        _bj_fd3_slabs(c, 0, 1, self.slab(1), self.hz, ey, ch, &g, -1.0, w);
+        return 0;
+    }
+
+    # The CPML's terms of the E update (the integer-node profiles), after the main E loops and before the PEC faces, in
+    # Rust's order: E_x's y then z terms, E_y's z then x, E_z's x then y. Mirrors `Cpml3d::correct_e`.
+    fn cpml_e(self) {
+        var g: i64[9];
+        var nx = self.nx;
+        var ny = self.ny;
+        var nz = self.nz;
+        g[0] = nx;
+        g[1] = ny;
+        g[2] = nz;
+        var c: *BjCpml = _bj_fd3_cpmlp(self.cpml);
+        var hx: *f64 = _bj_fd2_f64p(self.hx);
+        var hy: *f64 = _bj_fd2_f64p(self.hy);
+        var hz: *f64 = _bj_fd2_f64p(self.hz);
+        var ce: *f64 = _bj_fd2_f64p(self.ce);
+        var w: *f64 = _bj_fd2_f64p(self.work);
+        _bj_fd3_ranges(&g, 0, nx, 1, ny - 1, 1, nz - 1);
+        _bj_fd3_slabs(c, 1, 0, self.slab(6), self.ex, hz, ce, &g, 1.0, w);
+        _bj_fd3_slabs(c, 2, 0, self.slab(10), self.ex, hy, ce, &g, -1.0, w);
+        _bj_fd3_ranges(&g, 1, nx - 1, 0, ny, 1, nz - 1);
+        _bj_fd3_slabs(c, 2, 0, self.slab(11), self.ey, hx, ce, &g, 1.0, w);
+        _bj_fd3_slabs(c, 0, 0, self.slab(2), self.ey, hz, ce, &g, -1.0, w);
+        _bj_fd3_ranges(&g, 1, nx - 1, 1, ny - 1, 0, nz);
+        _bj_fd3_slabs(c, 0, 0, self.slab(3), self.ez, hy, ce, &g, 1.0, w);
+        _bj_fd3_slabs(c, 1, 0, self.slab(7), self.ez, hx, ce, &g, -1.0, w);
+        return 0;
+    }
+
     # The H update from curl E: H_x += C_h·((E_y[z + 1] − E_y) − (E_z[y + 1] − E_z)) on z < nz − 1, y < ny − 1, every
     # x; H_y += C_h·((E_z[x + 1] − E_z) − (E_x[z + 1] − E_x)) on z < nz − 1, x < nx − 1; H_z += C_h·((E_x[y + 1] − E_x)
     # − (E_y[x + 1] − E_y)) on y < ny − 1, x < nx − 1. Each reads only E, so one pass over the rows does all three.
@@ -478,10 +823,11 @@ impl BjFdtd3d {
         return 0;
     }
 
-    # Advances the simulation one time step by the 3D Yee algorithm, in Rust's order: H from curl E, E ← C_a·E where
-    # lossy, E from curl H, then the PEC faces. Mirrors `Fdtd3d::step_once`.
+    # Advances the simulation one time step by the 3D Yee algorithm, in Rust's order: H from curl E, the CPML's H terms,
+    # E ← C_a·E where lossy, E from curl H, the CPML's E terms, then the PEC faces. Mirrors `Fdtd3d::step_once`.
     public fn step_once(self) {
         self.update_h();
+        if (self.cpml != 0) { self.cpml_h(); }
         if (self.ca != 0) {
             var n = self.nx * self.ny * self.nz;
             var ca: *f64 = _bj_fd2_f64p(self.ca);
@@ -490,6 +836,7 @@ impl BjFdtd3d {
             _bj_fd2_scale(self.ez, ca, n);
         }
         self.update_e();
+        if (self.cpml != 0) { self.cpml_e(); }
         self.walls();
         self.step = self.step + 1;
         return 0;
@@ -521,7 +868,13 @@ impl BjFdtd3d {
             _bj_fmt_f64_debug(&lt, frequency);
             _bj_tx_cstr(&lt, " amplitude=");
             _bj_fmt_f64_debug(&lt, amplitude);
-            _bj_tx_cstr(&lt, " cpml=None");
+            if (self.cpml == 0) { _bj_tx_cstr(&lt, " cpml=None"); }
+            else {
+                var lc: *BjCpml = _bj_fd3_cpmlp(self.cpml);
+                _bj_tx_cstr(&lt, " cpml=Some(");
+                _bj_tx_u64(&lt, lc.thickness);
+                _bj_tx_cstr(&lt, ")");
+            }
             _bj_log_text(4, &lt);
         }
         var w2pi: f64 = 2.0 * _BJ_FD3_PI;

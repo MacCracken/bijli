@@ -49,6 +49,7 @@ cyrius test                                    # tests/*.tcyr: parity, trajector
 cyrius bench                                   # tests/*.bcyr
 cyrius distlib --all                           # dist/bijli.cyr and dist/bijli-ai.cyr
 python3 -I -B scripts/oracle/validate.py .     # the reference model: every golden row, the frozen sources
+python3 -I -B scripts/oracle/emit.py .         # write the emitted golden rows (--check: they are current)
 ```
 
 ## Development Process
@@ -86,6 +87,7 @@ python3 -I -B scripts/surface_parity.py .           # every ported Rust item has
 python3 -I -B scripts/rust_test_ledger.py . --check  # every Rust test ported, pending or recorded
 python3 -I -B scripts/bench_record.py . --check      # every Rust bench has a twin, or is pending
 python3 -I -B scripts/doc_examples.py .              # the README's and guides' cyrius blocks run
+python3 -I -B scripts/oracle/emit.py . --check       # the emitted golden rows are current
 ```
 
 `cyrius test` must be **warning-free**. The f64 type diagnostics come only from the compiles that

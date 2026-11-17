@@ -11076,14 +11076,19 @@ class Fd2Scripts:
         return errs + sim.state()
 
 
-# M6 part 2a: `Fdtd3d` without its CPML, transcribed in Rust's order of operations on Python's doubles (each row's
+# M6 part 2a: `Fdtd3d` without its CPML (2b: with it), transcribed in Rust's order of operations on Python's doubles (each row's
 # cells are independent within a phase, so a list comprehension per row is Rust's arithmetic), `run`'s sine from the
 # primitives P.
 
 class Fd3:
-    """An `Fdtd3d`: nx × ny × nz, fields z-major (index z·nx·ny + y·nx + x)."""
+    """An `Fdtd3d`: nx × ny × nz, fields z-major (index z·nx·ny + y·nx + x). M6 part 2b: its CPML, `cpml` = (t, node
+    profiles, half profiles, the twelve Ψ slabs by name), `correct_slabs`, `correct_h` and `correct_e` transcribed from
+    1.2.0:src/fdtd.rs."""
 
     FIELDS = ("ex", "ey", "ez", "hx", "hy", "hz")
+    # Cpml3d's Ψ slabs in its declaration order (the state's), and the axis each is normal to.
+    SLABS = (("hx_y", 1), ("hx_z", 2), ("hy_x", 0), ("hy_z", 2), ("hz_x", 0), ("hz_y", 1), ("ex_y", 1), ("ex_z", 2),
+             ("ey_x", 0), ("ey_z", 2), ("ez_x", 0), ("ez_y", 1))
 
     def __init__(self, nx, ny, nz, dx, K):
         c, eps0, mu0 = K
@@ -11096,11 +11101,101 @@ class Fd3:
         self.ce, self.ch = [fdiv(self.dt, eps0 * dx)] * n, [fdiv(self.dt, mu0 * dx)] * n
         self.eps, self.mu = [1.0] * n, [1.0] * n
         self.ca, self.cond = [], []
+        self.cpml = None
 
     def copy(self):
         o = Fd3.__new__(Fd3)
         o.__dict__ = {k: (list(v) if isinstance(v, list) else v) for k, v in self.__dict__.items()}
+        if self.cpml is not None:
+            t, node, half, psi = self.cpml
+            o.cpml = (t, node, half, {k: list(v) for k, v in psi.items()})
         return o
+
+    def enable_cpml(self, t, m, sr, km, am, P, C):
+        """`try_enable_cpml_with`: None, or the error's tokens (the boundaries unchanged)."""
+        nx, ny, nz = self.nx, self.ny, self.nz
+        need = 2 * t + 3
+        if t == 0 or need > FD_U64 or need > min(nx, ny, nz):
+            return ip_err(f"CPML thickness {t} is invalid for a {nx}×{ny}×{nz} grid (need thickness ≥ 1 and "
+                          f"2·thickness + 3 ≤ min(nx, ny, nz))")
+        e, _sm, node, half = cpml_profiles(t, m, sr, km, am, self.dx, self.dt, P, C)
+        if e is not None:
+            return e
+        lens = (2 * t * ny * nz, 2 * t * nx * nz, 2 * t * nx * ny)
+        if max(lens) > FD_U64:
+            return ip_err(f"CPML slabs for a [{nx}, {ny}, {nz}] grid are too large")
+        if lens[1] * 8 > (1 << 63) - 1:
+            return ip_err(f"cannot allocate {lens[1]} grid values")
+        self.cpml = (t, node, half, {name: [0.0] * lens[axis] for name, axis in Fd3.SLABS})
+        return None
+
+    def slabs(self, axis, half, psi, f, src, k, ranges, sign):
+        """`Cpml::correct_slabs::<axis, half>`: one derivative term over both face slabs normal to the axis."""
+        t, node, halfp, _psi = self.cpml
+        b, c, km1 = halfp if half else node
+        nx, ny = self.nx, self.ny
+        nxy = nx * ny
+        n = (nx, ny, self.nz)[axis]
+        stride = (1, nx, nxy)[axis]
+        l0, off = (0, 2) if half else (1, 1)
+        pd0 = 2 * t if axis == 0 else nx
+        pd1 = 2 * t if axis == 1 else ny
+        for side in (0, 1):
+            r = [list(q) for q in ranges]
+            r[axis] = [l0, t] if side == 0 else [n + 1 - off - t, n + 1 - off - l0]
+            for z in range(*r[2]):
+                for y in range(*r[1]):
+                    row = z * nxy + y * nx
+                    if axis == 0:
+                        prow = (z * pd1 + y) * pd0 + side * t
+                        for x in range(*r[0]):
+                            lay = x if side == 0 else n - off - x
+                            i = row + x
+                            d = (src[i + 1] - src[i]) if half else (src[i] - src[i - 1])
+                            pv = b[lay] * psi[prow + lay] + c[lay] * d
+                            psi[prow + lay] = pv
+                            f[i] += sign * k[i] * (km1[lay] * d + pv)
+                    else:
+                        u = y if axis == 1 else z
+                        lay = u if side == 0 else n - off - u
+                        sl = side * t + lay
+                        py, pz = (sl, z) if axis == 1 else (y, sl)
+                        prow = (pz * pd1 + py) * pd0
+                        up, down = (row + stride, row) if half else (row, row - stride)
+                        bl, cl, kl = b[lay], c[lay], km1[lay]
+                        for x in range(*r[0]):
+                            d = src[up + x] - src[down + x]
+                            pv = bl * psi[prow + x] + cl * d
+                            psi[prow + x] = pv
+                            f[row + x] += sign * k[row + x] * (kl * d + pv)
+
+    def correct_h(self):
+        """`Cpml3d::correct_h`, after the main H loops."""
+        nx, ny, nz, psi = self.nx, self.ny, self.nz, self.cpml[3]
+        ex, ey, ez, ch = self.ex, self.ey, self.ez, self.ch
+        r = ((0, nx), (0, ny - 1), (0, nz - 1))
+        self.slabs(2, True, psi["hx_z"], self.hx, ey, ch, r, 1.0)
+        self.slabs(1, True, psi["hx_y"], self.hx, ez, ch, r, -1.0)
+        r = ((0, nx - 1), (0, ny), (0, nz - 1))
+        self.slabs(0, True, psi["hy_x"], self.hy, ez, ch, r, 1.0)
+        self.slabs(2, True, psi["hy_z"], self.hy, ex, ch, r, -1.0)
+        r = ((0, nx - 1), (0, ny - 1), (0, nz))
+        self.slabs(1, True, psi["hz_y"], self.hz, ex, ch, r, 1.0)
+        self.slabs(0, True, psi["hz_x"], self.hz, ey, ch, r, -1.0)
+
+    def correct_e(self):
+        """`Cpml3d::correct_e`, after the main E loops and before the PEC walls."""
+        nx, ny, nz, psi = self.nx, self.ny, self.nz, self.cpml[3]
+        hx, hy, hz, ce = self.hx, self.hy, self.hz, self.ce
+        r = ((0, nx), (1, ny - 1), (1, nz - 1))
+        self.slabs(1, False, psi["ex_y"], self.ex, hz, ce, r, 1.0)
+        self.slabs(2, False, psi["ex_z"], self.ex, hy, ce, r, -1.0)
+        r = ((1, nx - 1), (0, ny), (1, nz - 1))
+        self.slabs(2, False, psi["ey_z"], self.ey, hx, ce, r, 1.0)
+        self.slabs(0, False, psi["ey_x"], self.ey, hz, ce, r, -1.0)
+        r = ((1, nx - 1), (1, ny - 1), (0, nz))
+        self.slabs(0, False, psi["ez_x"], self.ez, hy, ce, r, 1.0)
+        self.slabs(1, False, psi["ez_y"], self.ez, hx, ce, r, -1.0)
 
     def e_coefficients(self, eps_r, sigma):
         return Fd2.e_coefficients(self, eps_r, sigma)
@@ -11164,6 +11259,8 @@ class Fd3:
                 r = z * nxy + y * nx
                 e = r + nx - 1
                 hz[r:e] = cu(hz[r:e], ch[r:e], ex[r + nx:e + nx], ex[r:e], ey[r + 1:e + 1], ey[r:e])
+        if self.cpml is not None:
+            self.correct_h()
         if self.ca:
             self.ex = ex = [v * a for v, a in zip(ex, self.ca)]
             self.ey = ey = [v * a for v, a in zip(ey, self.ca)]
@@ -11183,6 +11280,8 @@ class Fd3:
                 r = z * nxy + y * nx + 1
                 e = r + nx - 2
                 ez[r:e] = cu(ez[r:e], ce[r:e], hy[r:e], hy[r - 1:e - 1], hx[r:e], hx[r - nx:e - nx])
+        if self.cpml is not None:
+            self.correct_e()
         for z in range(nz):
             for y in range(ny):
                 i0 = z * nxy + y * nx
@@ -11225,6 +11324,9 @@ class Fd3:
                         (nx // 2, 0, nz // 2), (nx // 2, ny // 2, 0)):
             k = z * nx * ny + y * nx + x
             out += [("f", f[k]) for f in fields]
+        if self.cpml is not None:
+            out.append(("i", self.cpml[0]))
+            out += [("i", fd_digest(self.cpml[3][name])) for name, _axis in Fd3.SLABS]
         return out
 
 
@@ -11255,6 +11357,15 @@ def fd3_ops(toks):
         elif code == 8:
             ops.append((code, [toks[k + 1][1], toks[k + 2][1]]))
             k += 3
+        elif code == 9:
+            ops.append((code, [toks[k + 1][1] & FD_U64]))
+            k += 2
+        elif code == 10:
+            ops.append((code, [toks[k + 1][1] & FD_U64] + [toks[k + j][1] for j in range(2, 6)]))
+            k += 6
+        elif code == 12:
+            ops.append((code, []))
+            k += 1
         else:
             raise ValueError(f"unknown 3D opcode {code}")
     return ops
@@ -11336,6 +11447,12 @@ class Fd3Scripts:
                     sim.step_once()
             elif code == 8:
                 setattr(sim, Fd3.FIELDS[a[0]], [a[1]] * n)
+            elif code == 9:
+                e = sim.enable_cpml(a[0], 3.0, 1.0, 1.0, 0.0, self.P, self.C)
+            elif code == 10:
+                e = sim.enable_cpml(a[0], a[1], a[2], a[3], a[4], self.P, self.C)
+            elif code == 12:
+                sim.cpml = None
             if e is not None:
                 errs += e
         self.prev, self.sim, self.errs = raw, sim, errs

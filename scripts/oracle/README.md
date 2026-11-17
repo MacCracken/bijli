@@ -50,7 +50,7 @@ The table's emitters are the retired Rust generator's, kept in git history (`git
 | `constants` | M0 | 12 | `src/m_constants.rs` | `src/constants.cyr` (frozen; validate.py checks every value) |
 | `error` | M1 | 1,635 | `src/m_error.rs` | — |
 | `fdtd` | M5 (part 1a: the 1D grid `Fdtd1d`, as scripts, class T; 1b: the pulses, class C, the Gaussian-driven grid and the TF/SF scripts; 1c: the media and the subpixel averages, class A; 1d: the non-uniform grid, the fourth-order derivative, the CW scripts and the eigenmodes; 1e: NF2FF's phasor form; 2a-1a and 2a-1b: the media and Mur coefficients at their cancellation; 2a-2: the subpixel means; 2a-3: the grading; 2b: seeded grids, media and sources for the rounded-once coefficients; 2c: the Courant limit and NF2FF's agreement straddled; 2d-1: the pulses' range edges; 2d-2a and 2d-2b: the 1D grid's; 2d-3: the TF/SF grid's; 2d-4a: the CW accumulator's; 2d-4b-1 and 2d-4b-2: the eigenmode search's; 2d-5: the utilities'; 2d-6: NF2FF's') | 107,341 (+ 28 corrected, 18,159 mapped) | `src/m_fdtd.rs` | `src/fdtd_media_data.cyr`, the gold, silver and water presets (frozen; validate.py checks every value) |
-| `fdtd_2d3d` | M6 (part 1a: the CPML layer's grading and profiles, `CpmlParams` and `Cpml`, class C; 1b-1: `Fdtd2d` without its CPML, as scripts, class T; 1b-2: the CPML attached; 1c: `nf2ff_2d`, class C; `fdtd.tsv` neared the 48 MiB cap, so M6's rows start this module) | 953 (+ 14 corrected, 12 mapped) | `src/m_fdtd_2d3d.rs` | — |
+| `fdtd_2d3d` | M6 (part 1a: the CPML layer's grading and profiles, `CpmlParams` and `Cpml`, class C; 1b-1: `Fdtd2d` without its CPML, as scripts, class T; 1b-2: the CPML attached; 1c: `nf2ff_2d`, class C; 2a: `Fdtd3d` without its CPML; 2b: the 3D CPML, the first rows from `emit.py`; `fdtd.tsv` neared the 48 MiB cap, so M6's rows start this module) | 1,201 (+ 14 corrected, 12 mapped) | `src/m_fdtd_2d3d.rs` (rows 1–1,107), `emit.py`'s `emit_2b` (the rest) | — |
 | `field` | M1 (parts 3a–3c, 5d-1 to 5d-5) | 26,770 | `src/m_field.rs` | — |
 | `fmtf` | M1 (+ Debug, part 3c; + fixed precision, M2 part 1b; + `{:e}`, M4 part 1c-2) | 89,528 | `src/m_fmtf.rs` (impetus's grid) | — |
 | `json` | M1 (part 4), M2 (part 1a: `Material`), M3 (parts 1a-2: polarization's four structs; 1b-2: `MieResult`; 1c-2: beam's three structs), M4 (part 1d: rf's `SMatrix`, `TouchstoneFormat`, `TouchstoneData`), M5 (part 1f: the four FDTD materials, `NonUniformGrid`, `EigenmodeResult`), M6 (part 1d: `CpmlParams`, `Mode2d`) | 97,092 (+ 42,976 corrected, 110 mapped) | `src/m_json.rs` (serde_json 1.0.154 on `Complex`, `FieldVector`, `PointCharge`, `Material`, `JonesVector`, `JonesMatrix`, `StokesVector`, `MuellerMatrix`, `MieResult`, `GaussianBeam`, `AbcdMatrix`, `ResonatorStability`) | — |
@@ -214,6 +214,23 @@ error, or each failed operation's error and then the state.
 - **`nf2ff_2d_phasor`'s accumulators** (M5 part 1e, a class-C row's input): each `i:<n> f:<frequency> f:<dt>`, an exact
   generator `i:<p> i:<q> i:<m> f:<a> f:<b> f:<c> f:<d>` (re[i] = a·((i·p + q) mod m) − b, im[i] = c·((i·p + q + 7) mod m)
   − d) and `v:<k>` overrides `i:<index> f:<re> f:<im>`; then nx, ny, dx, the margin and the angle count.
+
+- **`Fdtd2d`** (M6 part 1b, `fdtd_2d3d.tsv`): `i:<nx> i:<ny> f:<dx> i:<mode>` (0 TM, 1 TE), then `i:1|2|3 i:<x0>
+  i:<y0> i:<x1> i:<y1> f:<v>` set_permittivity, set_permeability, set_conductivity, `i:4 …corners… f:<eps_r> f:<mu_r>
+  f:<sigma>` set_material, `i:5 i:<x> i:<y> f:<v>` add_source, `i:6 i:<k>` k steps, `i:7 i:<steps> i:<x> i:<y>|n:
+  f:<frequency> f:<amplitude>` run, `i:8 i:<field> f:<v>` a field (fz, fx, fy: 0–2) filled, `i:9 i:<t>`
+  try_enable_cpml, `i:10 i:<t> f:<m> f:<sigma_ratio> f:<kappa_max> f:<alpha_max>` try_enable_cpml_with, `i:11 i:<t>`
+  enable_cpml, `i:12` disable_cpml. Its state: step, dt, time, energy, the digests of fz, fx, fy, ε_r, μ_r, C_b and
+  C_h, C_a's and σ's lengths and digests, fz, fx and fy at five probes, then an attached CPML's thickness and its four
+  Ψ fields' digests. `nf2ff_2d` rows (class C) take `i:<margin> i:<n_angles> f:<frequency>` and such a script.
+- **`Fdtd3d`** (M6 parts 2a and 2b): `i:<nx> i:<ny> i:<nz> f:<dx>`, then the 2D opcodes with a region's six corners
+  (x0, y0, z0, x1, y1, z1) and a source's three coordinates (add_source_ez), `i:8` filling ex, ey, ez, hx, hy or hz
+  (0–5), and no `i:11` (Fdtd3d has no enable_cpml). Its state: step, dt, time, energy, the digests of the six fields,
+  ε_r, μ_r, C_b and C_h, C_a's and σ's lengths and digests, the six fields at (nx/2, ny/2, nz/2), (1, 1, 1),
+  (nx − 2, ny − 2, nz − 2), (0, ny/2, nz/2), (nx/2, 0, nz/2) and (nx/2, ny/2, 0), then an attached CPML's thickness
+  and its twelve Ψ slabs' digests in `Cpml3d`'s order (hx_y, hx_z, hy_x, hy_z, hz_x, hz_y, ex_y, ex_z, ey_x, ey_z,
+  ez_x, ez_y), each slab the grid's shape with its axis cut to the 2·thickness layers, x fastest. The rows from 2b on
+  are emit.py's.
 
 A frame of a scenario is a script that extends the previous frame's by one advancing operation, so `validate.py` runs
 each scenario once. The digest is the harness's cross-target digest step (`_par_dg_step`: FNV-1a, then y ⊕ (y >> 29)

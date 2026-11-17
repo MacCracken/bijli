@@ -4294,7 +4294,8 @@ fn _par_fd2_build(sim: *BjFdtd2d, k0, errs): i64 {
 
 # A 3D grid's state to the got list (tests/golden/fdtd_2d3d.tsv's comment): step, dt, time, energy, the digests of
 # the six fields, ε_r, μ_r, C_b and C_h, then C_a's and σ's lengths and digests (0 and the empty digest while
-# lossless), then the six fields at the six probes.
+# lossless), then the six fields at the six probes, then an attached CPML's thickness and its twelve Ψ slabs' digests
+# (M6 part 2b).
 fn _par_fd3_state(sim: *BjFdtd3d) {
     var nx = sim.nx;
     var ny = sim.ny;
@@ -4346,6 +4347,39 @@ fn _par_fd3_state(sim: *BjFdtd3d) {
     for (var j = 0; j < 6; j = j + 1) {
         var q = sim.idx(pr[3 * j], pr[3 * j + 1], pr[3 * j + 2]);
         for (var f2 = 0; f2 < 6; f2 = f2 + 1) { _par_got_f(load64(fields[f2] + q * 8)); }
+    }
+    if (sim.cpml != 0) {
+        var c: *BjCpml = _par_cpmlp(sim.cpml);
+        _par_got_i(c.thickness);
+        # Cpml3d's order (hx_y, hx_z, hy_x, hy_z, hz_x, hz_y, ex_y, ex_z, ey_x, ey_z, ez_x, ez_y) as the mapping's
+        # slab numbers (0–3 x: hy_x, hz_x, ey_x, ez_x; 4–7 y: hx_y, hz_y, ex_y, ez_y; 8–11 z: hx_z, hy_z, ex_z, ey_z).
+        var ord: i64[12];
+        ord[0] = 4;
+        ord[1] = 8;
+        ord[2] = 0;
+        ord[3] = 9;
+        ord[4] = 1;
+        ord[5] = 5;
+        ord[6] = 6;
+        ord[7] = 10;
+        ord[8] = 2;
+        ord[9] = 11;
+        ord[10] = 3;
+        ord[11] = 7;
+        for (var s2 = 0; s2 < 12; s2 = s2 + 1) {
+            var k2 = ord[s2];
+            var at = k2 * sim.slab_x;
+            var len = sim.slab_x;
+            if (k2 >= 4) {
+                at = 4 * sim.slab_x + (k2 - 4) * sim.slab_y;
+                len = sim.slab_y;
+            }
+            if (k2 >= 8) {
+                at = 4 * sim.slab_x + 4 * sim.slab_y + (k2 - 8) * sim.slab_z;
+                len = sim.slab_z;
+            }
+            _par_got_i(_par_fd_digest(sim.psi + at * 8, len));
+        }
     }
     return 0;
 }
@@ -4430,6 +4464,22 @@ fn _par_fd3_script(): i64 {
             var nn = sim.nx * sim.ny * sim.nz;
             for (var q = 0; q < nn; q = q + 1) { store64(fa + q * 8, fv); }
             k = k + 3;
+        } elif (code == 9) {
+            var t9, v9 = sim.try_enable_cpml(_par_in(k + 1));
+            if (is_err_result(t9) == 1) { _par_got_error(v9); }
+            k = k + 2;
+        } elif (code == 10) {
+            var cp: BjCpmlParams = BjCpmlParams_new(_par_in(k + 1));
+            cp.grading_order = _par_in(k + 2);
+            cp.sigma_ratio = _par_in(k + 3);
+            cp.kappa_max = _par_in(k + 4);
+            cp.alpha_max = _par_in(k + 5);
+            var t10, v10 = sim.try_enable_cpml_with(&cp);
+            if (is_err_result(t10) == 1) { _par_got_error(v10); }
+            k = k + 6;
+        } elif (code == 12) {
+            sim.disable_cpml();
+            k = k + 1;
         } else {
             BjFdtd3d_free(&sim);
             return 0 - 1;
