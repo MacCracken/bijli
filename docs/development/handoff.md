@@ -258,6 +258,70 @@ exec(compile(src, "validate.py", "exec"), g)
 # e.g. g["fd_pulse_port"](name, v), g["Fd1"](n, dx, K, frozenset({"40", "13", "17", "18"}))
 ```
 
+fdtd_2d3d's mappings and corrections alone (M6 part 4a: about a minute, against the full `validate.py --write`'s 15),
+then `cyrius test tests/parity.tcyr` (13 s) to check the port against them before the full run. Run from
+`scripts/oracle`; drop `"--write"` from argv to print the counts without writing:
+
+```python
+import sys, collections
+sys.argv = ["validate.py", "/home/macro/Repos/bijli", "--write"]
+src = open("validate.py").read().replace('if __name__ == "__main__":', 'if False:')
+g = {"__name__": "v", "__file__": "/home/macro/Repos/bijli/scripts/oracle/validate.py"}
+exec(compile(src, "validate.py", "exec"), g)
+from pathlib import Path
+root = Path("/home/macro/Repos/bijli"); path = root / "tests/golden/fdtd_2d3d.tsv"
+rows = g["fdtd_2d3d_adr_rows"](root, path)
+print("adr rows", len(rows), collections.Counter((r[0], r[3]) for r in rows))
+print(g["check_corrections"](root, "fdtd_2d3d", path, g["fdtd_2d3d_corrections"](root, path)))
+print(g["check_adr"](root, "fdtd_2d3d", path))
+```
+
+The final job as part 4a ran it (`S` set; after the gate, which writes `$S/test.out`):
+
+```bash
+cd /home/macro/Repos/bijli
+python3 -I -B scripts/oracle/validate.py . --write > $S/validate_w.txt 2>&1; echo "validate --write rc=$?"
+tail -3 $S/validate_w.txt; git status --short tests/golden
+python3 -I -B scripts/oracle/validate.py . > $S/validate.txt 2>&1; echo "validate rc=$?"; tail -1 $S/validate.txt
+grep -a '^  digest' $S/test.out > $S/dig.elf; wc -l < $S/dig.elf
+grep -a '=== parity summary' $S/test.out
+cyrius test --win > $S/win.out 2>&1; grep -a '=== parity summary' $S/win.out
+grep -a '^  digest' $S/win.out | tr -d '\r' | diff -q $S/dig.elf - && echo "win digests equal"
+cyrius test --aarch64 > $S/arm.out 2>&1; grep -a '=== parity summary' $S/arm.out
+grep -a '^  digest' $S/arm.out | tr -d '\r' | diff -q $S/dig.elf - && echo "arm digests equal"
+echo FINAL-DONE
+```
+
+A focused bench outside the tree (a stray `tests/*.bcyr` breaks `bench_record.py --check`): put it in
+`$S/zzb/` and run `cyrius bench $S/zzb/<name>.bcyr` from each tree in turn (HEAD's in `$S/head`). Part 4a's, the
+setup paths (the body's pattern for any one-off row):
+
+```cyrius
+include "lib/alloc.cyr"
+include "tests/lib.cyr"
+
+fn main() {
+    var g2: BjFdtd2d;
+    var t2, v2 = BjFdtd2d_new(100, 100, 0.001, BJ_MODE2D_TM, &g2);
+    var b2 = bench_new("setup/fdtd2d_set_conductivity_100x100");
+    bench_batch_start(b2);
+    for (var k2 = 0; k2 < 100; k2 = k2 + 1) {
+        var s2: f64 = f64_from(k2 + 1);
+        var r2, w2 = g2.set_conductivity(0, 0, 100, 100, s2);
+    }
+    bench_batch_stop(b2, 100);
+    bench_report(b2);
+    BjFdtd2d_free(&g2);
+    return 0;
+}
+
+var rc = main();
+sys_exit_group(rc);
+```
+
+Rust 1.2.0's sources for reading: `git show 1.2.0:src/fdtd.rs > $S/fdtd.rs` (and `compute.rs`); the CPML profile is
+`cpml_coefficients` (line 2040), the strips `correct_fx`/`fy`/`fz` (1869–1987), the 3D slabs `correct_slabs` (1772).
+
 ## Traps found in M5 (Cyrius 6.7.18)
 
 - **Waiting on a background job**: never wait on `pgrep -f <pattern>` where the pattern is in your own command line,
