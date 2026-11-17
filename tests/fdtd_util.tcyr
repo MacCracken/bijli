@@ -704,6 +704,46 @@ fn main() {
       "a band of 1e-309 on dt = 1e308: df and the frequencies subnormal, to 53 bits (Rust's …334e-310, Q …248)");
     BjEigenmodeResult_free(&er3);
 
+    # ADR 0002 row 18 (M5 part 2d-5): the grading, the extents and the fourth-order derivative at their range edges.
+    # The expectations are validate.py's model of the port.
+    test_group("cyrius_utility_edges");
+    var ugc: *f64 = arr(101);
+    var e300: f64 = _bj_from_bits(0x7e37e43c8800759c);
+    var tg1, vg1 = BjNonUniformGrid_graded(101, _bj_from_bits(0x1a56e1fc2f8f359), e300, ugc);
+    assert(is_ok(tg1) == 1 && at(ugc, 60) == _bj_from_bits(0x4c63e9e4e4c2f390) && at(ugc, 100) == e300,
+      "1e-300 to 1e300 over 101 cells: ratio 1e6, ratio^60 past DBL_MAX, cell 60 1e60 (Rust's ∞, held at d_max)");
+    var tg2, vg2 = BjNonUniformGrid_graded(3, _bj_from_bits(1), dmx, ugc);
+    assert(is_ok(tg2) == 1 && at(ugc, 1) == _bj_from_bits(0x3e5fffffffffffff),
+      "2^-1074 to DBL_MAX over 3 cells: d_max/d_min past DBL_MAX, the middle cell 2.98e-8 (Rust's d_max)");
+    var tg4, vg4 = BjNonUniformGrid_graded(3, dmx, _bj_from_bits(0x10000000000000), ugc);
+    assert(is_ok(tg4) == 1 && at(ugc, 1) == _bj_from_bits(0x3fffffffffffffff),
+      "DBL_MAX down to DBL_MIN: d_max/d_min underflows (Rust's ratio 0), the middle cell 2 − 2^-52 (Rust's d_max)");
+    var gx: f64[3];
+    var ugy: f64[1];
+    gx[0] = dmx;
+    gx[1] = dmx;
+    gx[2] = -dmx;
+    ugy[0] = 1.0;
+    var gu: BjNonUniformGrid;
+    var tg3, vg3 = BjNonUniformGrid_from_axes(&gx, 3, &ugy, 1, &ugy, 1, &gu);
+    var uex, uey, uez = gu.extents();
+    assert(uex == dmx && uey == 1.0, "dx DBL_MAX, DBL_MAX, −DBL_MAX: a sum past DBL_MAX, extent DBL_MAX (Rust's ∞)");
+    BjNonUniformGrid_free(&gu);
+    var ff: *f64 = arr(9);
+    var fo: *f64 = arr(9);
+    var sdx: f64 = _bj_from_bits(0x12688b70e62b);
+    for (var k = 0; k < 9; k = k + 1) { ff[k] = 3.0; }
+    bj_fourth_order_derivative(ff, 9, sdx, fo);
+    assert(_bj_bits(at(fo, 1)) == 0 && _bj_bits(at(fo, 0)) == 0, "a flat field on dx = 1e-310: 0 (Rust's ∞·0 = NaN)");
+    var ue300n: f64 = _bj_from_bits(0x1a56e1fc2f8f359);
+    for (var k = 0; k < 9; k = k + 1) {
+        var kf: f64 = f64_from(k);
+        ff[k] = kf * ue300n;
+    }
+    bj_fourth_order_derivative(ff, 9, sdx, fo);
+    assert(at(fo, 0) == _bj_from_bits(0x4202a05f20000010) && at(fo, 2) == _bj_from_bits(0x4202a05f20000011),
+      "a ramp of 1e-300 on dx = 1e-310: 1/dx past DBL_MAX, the slope 1e10 (Rust's ∞)");
+
     return assert_summary();
 }
 

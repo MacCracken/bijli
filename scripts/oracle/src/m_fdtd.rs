@@ -2263,6 +2263,50 @@ fn emit_2d4b2(r: &mut Rows) {
     }
 }
 
+// ── part 2d-5: the utilities at their range edges (ADR 0002 row 18) ─────────────────────────────────────────────
+
+/// The utilities where their chains leave the normal range (the port runs them with an unbounded exponent, ADR 0002
+/// row 18): gradings whose d_max/d_min passes either end (10^±600 to 2^±2098) or whose ratio^i does (10⁻³⁰⁰ to 10³⁰⁰
+/// over 101 cells: ratio 10⁶, ratio^60 past DBL_MAX); grids whose widths of mixed signs push `extents`' partial sums
+/// past DBL_MAX; and fourth-order derivatives on a subnormal dx (1/dx past DBL_MAX: a flat field's ∞·0, a ramp of
+/// 10⁻³⁰⁰ whose derivative is representable), a dx near DBL_MAX (1/dx subnormal), opposite samples near DBL_MAX and
+/// samples whose c₂Δ′ underflows.
+fn emit_2d5(r: &mut Rows) {
+    let tiny = f64::from_bits(1);
+    let ends = [(1e-300, 1e300), (1e300, 1e-300), (tiny, f64::MAX), (f64::MAX, tiny), (1e-310, 1.0), (1.0, 1e-310),
+                (2.2250738585072014e-308, 1e308), (1e-200, 1e200), (1e-160, 1e160)];
+    for (a, b) in ends {
+        for n in [3, 4, 10, 101, 200] {
+            r.graded(n, a, b);
+        }
+    }
+    let m = f64::MAX;
+    let axes: [Vec<f64>; 6] = [vec![m, m, -m], vec![1e308, 1e308, -1e308, -1e308, 5.0], vec![-m, -m, m, 1.0],
+                                vec![m, -m, m, -m, m], vec![1.5e308, 1.5e308, -1e308, 2.0, -1.5e308], vec![m, 1.0, m, -m, -m]];
+    for ax in &axes {
+        r.grid_rows(&NonUniformGrid { dx: ax.clone(), dy: vec![1.0; 2], dz: vec![2.0; 3] });
+        r.grid_rows(&NonUniformGrid { dx: vec![0.5; 2], dy: ax.clone(), dz: ax.clone() });
+    }
+    let ramp: Vec<f64> = (0..9).map(|k| f64::from(k) * 0.1).collect();
+    let cube: Vec<f64> = (0..9).map(|k| f64::from(k).powi(3) * 1e-3).collect();
+    let tramp: Vec<f64> = (0..9).map(|k| f64::from(k) * 1e-300).collect();
+    let flat = vec![3.0; 9];
+    for dx in [1e-310, tiny, 1.1125369292536007e-308, 4e-309, 1e308, f64::MAX] {
+        for field in [&ramp, &cube, &tramp, &flat] {
+            r.fourth(field, dx);
+        }
+    }
+    let alt: Vec<f64> = (0..9).map(|k| if k % 2 == 0 { 1e308 } else { -1e308 }).collect();
+    let altm: Vec<f64> = (0..9).map(|k| if k % 3 == 0 { m } else { -m }).collect();
+    let small: Vec<f64> = (0..9).map(|k| f64::from(k) * 1e-309).collect();
+    let sub: Vec<f64> = (0..9).map(|k| f64::from_bits(k * 7)).collect();
+    for field in [&alt, &altm, &small, &sub] {
+        for dx in [1.0, 1e-10, 1e10, 0.5] {
+            r.fourth(field, dx);
+        }
+    }
+}
+
 pub fn emit() -> Module {
     let mut r = Rows { m: Module::new("fdtd"), keys: BTreeSet::new() };
     emit_1a(&mut r);
@@ -2285,5 +2329,6 @@ pub fn emit() -> Module {
     emit_2d4a(&mut r);
     emit_2d4b1(&mut r);
     emit_2d4b2(&mut r);
+    emit_2d5(&mut r);
     r.m
 }

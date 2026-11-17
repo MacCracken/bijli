@@ -9228,6 +9228,73 @@ def fu_sum(axis):
     return s
 
 
+FU18 = {"on": False}                       # the utilities at their range edges (ADR 0002 row 18, M5 part 2d-5)
+
+
+def fu_sum18(axis):
+    """`extents`' sum as the port's: for finite widths the left fold from −0.0 with each sum to 53 bits and an unbounded
+    exponent, rounded once (Rust's where any width isn't finite)."""
+    if not all(math.isfinite(v) for v in axis):
+        return fu_sum(axis)
+    s = ux(-0.0)
+    for v in axis:
+        s = ux_add(s, ux(v))
+    return ux_fin(s)
+
+
+def fu_fourth18(field, dx, C1, C2):
+    """`fourth_order_derivative` as the port's: each cell's differences, c₁Δ, c₂Δ′, their sum and 1/dx to 53 bits with
+    an unbounded exponent, the product rounded once; Rust's chain where a sample it reads isn't finite."""
+    n = len(field)
+    d = [0.0] * n
+    if n < 2 or not fd_pos(dx):
+        return d
+    rust = fu_fourth(field, dx, C1, C2)
+    inv = ux_div(ux(1.0), ux(dx))
+    fin = [math.isfinite(x) for x in field]
+    for i in range(1, n - 2):
+        if not all(fin[i - 1:i + 3]):
+            d[i] = rust[i]
+            continue
+        a = ux_mul(ux(C1), ux_sub(ux(field[i + 1]), ux(field[i])))
+        b = ux_mul(ux(C2), ux_sub(ux(field[i + 2]), ux(field[i - 1])))
+        d[i] = ux_fin(ux_mul(inv, ux_add(a, b), r=lambda v: v))
+    for i in (0, n - 2):
+        if not (fin[i] and fin[i + 1]):
+            d[i] = rust[i]
+            continue
+        d[i] = ux_fin(ux_mul(ux_sub(ux(field[i + 1]), ux(field[i])), inv, r=lambda v: v))
+    return d
+
+
+def fu_graded18(n, d_min, d_max):
+    """`graded` as the port's (ADR 0002 rows 42 and 18): each cell d_min·ratio^i from q = d_max/d_min to 53 bits, the
+    ratio q^(1/(n − 1)) to 53 bits by MPFR at its widest range, ratio^i by Rust's powi's products each to 53 bits, the
+    cell rounded once; then no cell past d_max and the last exactly d_max."""
+    q = ux_div(ux(d_max), ux(d_min))[0]
+    e = 1.0 / float(n - 1)
+    rs, re2 = mpfr_ref.wide_split("pow", q, e)
+    ratio = Fraction(rs) * Fraction(2) ** re2
+    up = d_max > d_min
+    cells = []
+    for i in range(n):
+        mul, a, p = Fraction(1), ratio, i
+        while p:
+            if p & 1:
+                mul = rnd53(mul * a)
+            p >>= 1
+            if p:
+                a = rnd53(a * a)
+        x = rn_frac(Fraction(d_min) * mul)
+        if up and x > d_max:
+            x = d_max
+        if not up and x < d_max:
+            x = d_max
+        cells.append(x)
+    cells[-1] = d_max
+    return cells
+
+
 def fu_fourth(field, dx, C1, C2):
     n = len(field)
     d = [0.0] * n
@@ -9598,6 +9665,8 @@ def fu_eval(fn, ins_raw, P, K, C12):
             return ip_err(f"need at least 2 cells for grading, got {n}")
         if not fd_pos(a) or not fd_pos(b):
             return ip_err(f"cell sizes must be finite and positive, got {rust_display(a)}, {rust_display(b)}")
+        if FU18["on"]:                              # ADR 0002 rows 42 and 18 (M5 parts 2a-3 and 2d-5)
+            return fu_seq_toks(fu_graded18(n, a, b))
         ratio = P["pow"](b / a, 1.0 / float(n - 1))
         return fu_seq_toks([a * powidf2_ieee(ratio, i) for i in range(n)])
     if fn.startswith("NonUniformGrid::"):
@@ -9612,10 +9681,12 @@ def fu_eval(fn, ins_raw, P, K, C12):
             r = fu_try_courant(dx, dy, dz, K[0])
             return r if r[0][0] == "f" else [("f", 0.0)]
         if fn == "NonUniformGrid::extents":
-            return [("f", fu_sum(dx)), ("f", fu_sum(dy)), ("f", fu_sum(dz))]
+            sm = fu_sum18 if FU18["on"] else fu_sum
+            return [("f", sm(dx)), ("f", sm(dy)), ("f", sm(dz))]
     if fn == "fdtd::fourth_order_derivative":
         field, k = fu_seq(toks, 0)
-        return fu_seq_toks(fu_fourth(field, toks[k][1], *C12))
+        fo = fu_fourth18 if FU18["on"] else fu_fourth
+        return fu_seq_toks(fo(field, toks[k][1], *C12))
     if fn.startswith("CwAccumulator::"):
         return fu_cw(fn, toks, P)
     if fn == "fdtd::find_eigenmodes":
@@ -10049,8 +10120,8 @@ def fdtd_corrections(root: Path, path: Path):
             if fn.startswith(("NonUniformGrid::graded", "CwAccumulator::", "fdtd::find_eigenmodes",
                               "fdtd::nf2ff_2d_phasor")):
                 want = fu_eval(fn, ins, MPFR_P, fs.K, fs.c12)
-                if fn == "NonUniformGrid::graded" and not toks_same(*fu_graded_port(fn, ins, fs.K, fs.c12)):
-                    continue                                # ADR 0002 row 42's: fdtd.adr.tsv maps it
+                if fn == "NonUniformGrid::graded" and not toks_same(fu_port18(fn, ins, fs.K, fs.c12), want):
+                    continue                                # ADR 0002 rows 42 and 18's: fdtd.adr.tsv maps it
                 if fn.startswith("CwAccumulator::") and not toks_same(*fu_cw_port(fn, ins)):
                     continue                                # ADR 0002 row 18's: fdtd.adr.tsv maps it
                 if fn == "fdtd::find_eigenmodes" and not toks_same(*fu_eigen_port(ins)):
@@ -10117,7 +10188,7 @@ def fm_port41(fn, v, EPS0):
 
 def fu_graded_port(fn, ins, K, c12):
     """The port's `graded` (ADR 0002 row 42, M5 part 2a-3): on correctly rounded primitives, no cell past d_max and the
-    last cell exactly d_max. Returns (the port's tokens, Rust's on those primitives)."""
+    last cell exactly d_max. Returns (the port's tokens, Rust's on those primitives); fu_port18 adds row 18."""
     base = fu_eval(fn, ins, MPFR_P, K, c12)
     if base[0][0] != "v":
         return base, base
@@ -10125,6 +10196,16 @@ def fu_graded_port(fn, ins, K, c12):
     up = d_max > d_min
     cells = [min(x, d_max) if up else (d_max if x < d_max else x) for _k, x in base[1:-1]]
     return base[:1] + [("f", x) for x in cells] + [("f", d_max)], base
+
+
+def fu_port18(fn, ins, K, c12):
+    """`graded`, `extents` and the fourth-order derivative as the port computes them (ADR 0002 row 18, M5 part 2d-5:
+    their range edges with an unbounded exponent; `graded` with row 42's rule too), on correctly rounded primitives."""
+    FU18["on"] = True
+    try:
+        return fu_eval(fn, ins, MPFR_P, K, c12)
+    finally:
+        FU18["on"] = False
 
 
 def fu_eigen_port(ins):
@@ -10230,9 +10311,18 @@ def fdtd_adr_rows(root: Path, path: Path) -> list:
                 out.append((fn, ins, wire(want), "13", f"oracle {outs[:120]}; ADR 0002 row 13: rounded once"))
             continue
         if fn == "NonUniformGrid::graded":
-            want, base = fu_graded_port(fn, ins, fs.K, fs.c12)
+            want42, base = fu_graded_port(fn, ins, fs.K, fs.c12)
+            want = fu_port18(fn, ins, fs.K, fs.c12)
             if not toks_same(want, base) and not toks_same(want, wave_toks([parse_tok(x) for x in outs.split(" ")])):
-                out.append((fn, ins, wire(want), "42", f"oracle {outs[:120]}; ADR 0002 row 42: the last cell d_max"))
+                if toks_same(want, want42):
+                    out.append((fn, ins, wire(want), "42", f"oracle {outs[:120]}; ADR 0002 row 42: the last cell d_max"))
+                else:
+                    out.append((fn, ins, wire(want), "18", f"oracle {outs[:120]}; ADR 0002 row 18: the range edge"))
+            continue
+        if fn in ("NonUniformGrid::extents", "fdtd::fourth_order_derivative"):
+            want, base = fu_port18(fn, ins, fs.K, fs.c12), fu_eval(fn, ins, MPFR_P, fs.K, fs.c12)
+            if not toks_same(want, base) and not toks_same(want, wave_toks([parse_tok(x) for x in outs.split(" ")])):
+                out.append((fn, ins, wire(want), "18", f"oracle {outs[:120]}; ADR 0002 row 18: the range edge"))
             continue
         if fn.startswith("CwAccumulator::"):
             want, base = fu_cw_port(fn, ins)

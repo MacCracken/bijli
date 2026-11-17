@@ -32601,13 +32601,44 @@ public fn _bj_fu_graded_cell(d_min: f64, ratio: f64, i): f64 {
     return d;
 }
 
+# Cell i of the grading with an unbounded exponent (ADR 0002 row 18, M5 part 2d-5): q = d_max/d_min to 53 bits, the
+# ratio q^e to 53 bits (_bj_ux_pow: Rust's correctly rounded powf in range), ratio^i by Rust's powi's own products
+# each to 53 bits, and d_min·ratio^i rounded once.
+#must_use
+fn _bj_fu_graded_ux(d_min: f64, d_max: f64, e: f64, i): f64 {
+    var as, ae = _bj_k_ux_from(d_max);
+    var bs, be = _bj_k_ux_from(d_min);
+    var qs, qe = _bj_k_ux_div(as, ae, bs, be);
+    var rs, re = _bj_ux_pow(qs, qe, e);
+    var ms: f64 = 1.0;
+    var me = 0;
+    var p = i;
+    while (p != 0) {
+        if ((p & 1) != 0) {
+            var ns, ne = _bj_k_ux_mul(ms, me, rs, re);
+            ms = ns;
+            me = ne;
+        }
+        p = p >> 1;
+        if (p != 0) {
+            var ss, se = _bj_k_ux_mul(rs, re, rs, re);
+            rs = ss;
+            re = se;
+        }
+    }
+    var d: f64 = _bj_k_ux_mul_f64(bs, be, ms, me);
+    return d;
+}
+
 # Geometric grading from d_min to d_max over n cells into out[0..n]: d_i = d_min·ratio^i, ratio =
 # (d_max/d_min)^(1/(n − 1)) (Rust's powf, correctly rounded, then powi), the last cell exactly d_max and no cell past
 # it (ADR 0002 row 42, the user's answers of 2026-11-15 and 2026-11-16: Rust's d_min·ratio^(n − 1) missed d_max in
 # 97 % of cases, by up to 270 ulps for n ≤ 200, and for a ratio within about (n − 1)²·2^-53 of 1 its interior passes
 # d_max, so the grading stays monotone only with those cells held at d_max). Ok(0), or with out untouched
 # Err(InvalidParameter) "need at least 2 cells for grading, got {n}" or "cell sizes must be finite and positive, got
-# {d_min}, {d_max}". out holds n f64. Mirrors `NonUniformGrid::graded`.
+# {d_min}, {d_max}". out holds n f64. A cell whose chain leaves the normal range runs it with an unbounded exponent
+# (ADR 0002 row 18, M5 part 2d-5: Rust's d_max/d_min = ∞ or ratio^i past DBL_MAX left those cells at d_max). Mirrors
+# `NonUniformGrid::graded`.
 #must_use
 public fn BjNonUniformGrid_graded(n, d_min: f64, d_max: f64, out: *f64): Result {
     if (n >= 0 && n < 2) {
@@ -32628,10 +32659,22 @@ public fn BjNonUniformGrid_graded(n, d_min: f64, d_max: f64, out: *f64): Result 
     var nm: f64 = _bj_fu_u2f(n - 1);
     var e: f64 = 1.0 / nm;
     var ratio: f64 = _bj_powf(q, e);
+    # The range edges (ADR 0002 row 18, M5 part 2d-5): q = d_max/d_min past either end, or a cell whose powi or product
+    # with d_min leaves the normal range, runs the chain with an unbounded exponent (_bj_fu_graded_ux), the cell
+    # rounded once. A normal power means no partial of powi left the range: each lies between 1 and the power.
+    # q and the power are positive, so a 0 is an underflow: each must be a positive normal value.
+    var qok = _bj_fu_pnormal(q);
     var up = 0;
     if (d_max > d_min) { up = 1; }
     for (var i = 0; i != n; i = i + 1) {
-        var d: f64 = _bj_fu_graded_cell(d_min, ratio, i);
+        var pw: f64 = _bj_powi(ratio, i);
+        var d: f64 = d_min * pw;
+        # pw and d positive normal: each exponent field in [1, 2046], so every difference below is ≥ 0 (one test)
+        var ep = (load64(&pw) >> 52) & 2047;
+        var ed = (load64(&d) >> 52) & 2047;
+        if (qok == 0 || ((ep - 1) | (ed - 1) | (2046 - ep) | (2046 - ed)) < 0) {
+            d = _bj_fu_graded_ux(d_min, d_max, e, i);
+        }
         if (up == 1 && d > d_max) { d = d_max; }
         if (up == 0 && d < d_max) { d = d_max; }
         out[i] = d;
@@ -32652,13 +32695,30 @@ fn _bj_fu_axis_min(p, n): f64 {
     return m;
 }
 
-# Rust's f64 `Sum` of the n f64 at p: a left fold from −0.0.
+# Rust's f64 `Sum` of the n f64 at p: a left fold from −0.0. A partial sum past DBL_MAX stays ∞ (or NaN) to the end;
+# where that happens for finite values the fold reruns with an unbounded exponent, each sum to 53 bits and the total
+# rounded once (ADR 0002 row 18, M5 part 2d-5: Rust's DBL_MAX + DBL_MAX − DBL_MAX was ∞). Below the range a sum is
+# exact.
 #must_use
 fn _bj_fu_axis_sum(p, n): f64 {
     var a: *f64 = _bj_fu_f64p(p);
     var s: f64 = -0.0;
     for (var i = 0; i < n; i = i + 1) { s = s + a[i]; }
-    return s;
+    var z: f64 = s * 0.0;
+    if (z == 0.0) { return s; }
+    var ss: f64 = -0.0;
+    var se = 0;
+    for (var j = 0; j < n; j = j + 1) {
+        var x: f64 = a[j];
+        var zx: f64 = x * 0.0;
+        if (zx != 0.0) { return s; }
+        var xs, xe = _bj_k_ux_from(x);
+        var ts, te = _bj_k_ux_add(ss, se, xs, xe);
+        ss = ts;
+        se = te;
+    }
+    var r: f64 = _bj_k_ux_round(ss, se, 0.0);
+    return r;
 }
 
 # 0 when the axis (its name, n values at p) is valid, else its error recorded and its code.
@@ -32752,10 +32812,56 @@ impl BjNonUniformGrid {
 
 # ── the fourth-order derivative ─────────────────────────────────────────────────────────────────────────────────────
 
+# 1/dx to 53 bits with an unbounded exponent: (s, e).
+#must_use
+fn _bj_fu_inv_ux(dx: f64): (f64, i64) {
+    var ds, de = _bj_k_ux_from(dx);
+    var s, e = _bj_k_ux_div(1.0, 0, ds, de);
+    return (s, e);
+}
+
+# out[i] of the fourth-order derivative with an unbounded exponent (ADR 0002 row 18, M5 part 2d-5): the differences,
+# c₁Δ, c₂Δ′, their sum and 1/dx to 53 bits, the product rounded once; Rust's r for a non-finite sample.
+#must_use
+fn _bj_fu_fourth_ux(field: *f64, i, dx: f64, r: f64): f64 {
+    var z: f64 = field[i - 1] * 0.0 + field[i] * 0.0 + field[i + 1] * 0.0 + field[i + 2] * 0.0;
+    if (z != 0.0) { return r; }
+    var as, ae = _bj_k_ux_from(field[i + 1]);
+    var bs, be = _bj_k_ux_from(field[i]);
+    var cs, ce = _bj_k_ux_from(field[i + 2]);
+    var ds, de = _bj_k_ux_from(field[i - 1]);
+    var d1s, d1e = _bj_k_ux_sub(as, ae, bs, be);
+    var d2s, d2e = _bj_k_ux_sub(cs, ce, ds, de);
+    var k1s, k1e = _bj_k_ux_from(BJ_FOURTH_ORDER_C1);
+    var k2s, k2e = _bj_k_ux_from(BJ_FOURTH_ORDER_C2);
+    var ps, pe = _bj_k_ux_mul(k1s, k1e, d1s, d1e);
+    var qs, qe = _bj_k_ux_mul(k2s, k2e, d2s, d2e);
+    var ss, se = _bj_k_ux_add(ps, pe, qs, qe);
+    var vs, ve = _bj_fu_inv_ux(dx);
+    var o: f64 = _bj_k_ux_mul_f64(vs, ve, ss, se);
+    return o;
+}
+
+# out[i] at an end, (f[i + 1] − f[i])·(1/dx), with an unbounded exponent, the product rounded once; Rust's r for a
+# non-finite sample.
+#must_use
+fn _bj_fu_fourth_end_ux(field: *f64, i, dx: f64, r: f64): f64 {
+    var z: f64 = field[i] * 0.0 + field[i + 1] * 0.0;
+    if (z != 0.0) { return r; }
+    var as, ae = _bj_k_ux_from(field[i + 1]);
+    var bs, be = _bj_k_ux_from(field[i]);
+    var ds, de = _bj_k_ux_sub(as, ae, bs, be);
+    var vs, ve = _bj_fu_inv_ux(dx);
+    var o: f64 = _bj_k_ux_mul_f64(ds, de, vs, ve);
+    return o;
+}
+
 # The fourth-order staggered derivative of the n samples at field into out[0..n] (out must not overlap field): out[i]
 # approximates f'(x_{i+½}). For 1 ≤ i ≤ n − 3 it is (1/dx)·(c₁(f[i+1] − f[i]) + c₂(f[i+2] − f[i−1])), c₁ = 9/8,
 # c₂ = −1/24, exact for cubics; out[0] and out[n − 2] are (f[i+1] − f[i])·(1/dx), second order; out[n − 1] is 0.0.
-# Fewer than two samples, or a dx that isn't finite and positive (with a warning), give all zeros. Mirrors
+# Fewer than two samples, or a dx that isn't finite and positive (with a warning), give all zeros. Where 1/dx (a
+# subnormal dx), a difference, a product or the sum leaves the normal range, the cell runs with an unbounded exponent
+# and its product is rounded once (ADR 0002 row 18, M5 part 2d-5: Rust's 1/dx = ∞ gave ∞ or NaN). Mirrors
 # `fourth_order_derivative`.
 public fn bj_fourth_order_derivative(field: *f64, n, dx: f64, out: *f64) {
     for (var z = 0; z < n; z = z + 1) { out[z] = 0.0; }
@@ -32774,16 +32880,32 @@ public fn bj_fourth_order_derivative(field: *f64, n, dx: f64, out: *f64) {
     var inv: f64 = 1.0 / dx;
     var c1: f64 = BJ_FOURTH_ORDER_C1;
     var c2: f64 = BJ_FOURTH_ORDER_C2;
+    var iok = _bj_fu_normal(inv);
     for (var i = 1; i < n - 2; i = i + 1) {
-        var a: f64 = c1 * (field[i + 1] - field[i]);
-        var b: f64 = c2 * (field[i + 2] - field[i - 1]);
+        var d1: f64 = field[i + 1] - field[i];
+        var d2: f64 = field[i + 2] - field[i - 1];
+        var a: f64 = c1 * d1;
+        var b: f64 = c2 * d2;
         var s: f64 = a + b;
-        out[i] = inv * s;
+        var o: f64 = inv * s;
+        # a, b and o normal: each exponent field in [1, 2046] (one test); else the exact checks (a zero factor is fine)
+        var ea = (load64(&a) >> 52) & 2047;
+        var eb = (load64(&b) >> 52) & 2047;
+        var eo = (load64(&o) >> 52) & 2047;
+        if (iok == 0 || ((ea - 1) | (eb - 1) | (eo - 1) | (2046 - ea) | (2046 - eb) | (2046 - eo)) < 0) {
+            var ok = iok & _bj_fu_prod_ok(a, c1, d1) & _bj_fu_prod_ok(b, c2, d2);
+            if (ok == 0 || _bj_fu_prod_ok(o, inv, s) == 0) { o = _bj_fu_fourth_ux(field, i, dx, o); }
+        }
+        out[i] = o;
     }
     var d0: f64 = field[1] - field[0];
-    out[0] = d0 * inv;
+    var o0: f64 = d0 * inv;
+    if (iok == 0 || _bj_fu_prod_ok(o0, d0, inv) == 0) { o0 = _bj_fu_fourth_end_ux(field, 0, dx, o0); }
+    out[0] = o0;
     var dn: f64 = field[n - 1] - field[n - 2];
-    out[n - 2] = dn * inv;
+    var on: f64 = dn * inv;
+    if (iok == 0 || _bj_fu_prod_ok(on, dn, inv) == 0) { on = _bj_fu_fourth_end_ux(field, n - 2, dx, on); }
+    out[n - 2] = on;
     return 0;
 }
 
@@ -32795,6 +32917,13 @@ fn _bj_fu_normal(x: f64): i64 {
     if (x == 0.0) { return 1; }
     var a: f64 = f64_abs(x);
     if (a >= _BJ_FU_DMIN && a < _BJ_FU_INF) { return 1; }
+    return 0;
+}
+
+# 1 when x is a positive normal value: at least 2^-1022 and finite.
+#must_use
+fn _bj_fu_pnormal(x: f64): i64 {
+    if (x >= _BJ_FU_DMIN && x < _BJ_FU_INF) { return 1; }
     return 0;
 }
 

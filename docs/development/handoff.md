@@ -1,4 +1,4 @@
-# Handoff: the Cyrius port, mid-M5 Part 2 (2026-11-16, after 2d-4)
+# Handoff: the Cyrius port, mid-M5 Part 2 (2026-11-16, after 2d-5)
 
 For the next agent picking up the port. **Read first:** `CLAUDE.md` (the rules), [`state.md`](state.md) (live state),
 [`bijli-port-plan.md`](bijli-port-plan.md) (§0.1 holds the user's M5 Part 2 answers; the tracking table is near the
@@ -9,8 +9,8 @@ bite is done, the machinery, the scripts and the traps. Delete it once it has se
 
 ## Where it stands
 
-- **Committed through `f49c2dd`** ("M5 2d-4b-1 done"); 2d-4b-2 is in the working tree for the user to commit ("m5
-  2d-4b-2 done").
+- **Committed through `6804aab`** ("M5 2d-4b-2 done"); 2d-5 is in the working tree for the user to commit ("m5 2d-5
+  done").
 - **M5 Part 1 is done** (§94–§99): the 1D grid, the pulses and TF/SF, the media, the utilities, NF2FF's phasor form,
   their JSON.
 - **M5 Part 2, the range-edge review**, runs on the user's answers of 2026-11-15 (plan §0.1). Done:
@@ -35,21 +35,19 @@ bite is done, the machinery, the scripts and the traps. Delete it once it has se
     re/im finite, the magnitude in range), else `_bj_fu_dft_ux` (row 18, §111);
   - 2d-4b-2, `find_eigenmodes` around it: df, f_i and ω_i to 53 bits (`_bj_fu_freq`), the frequencies rounded once,
     the 10 % floor's 53-bit value compared exactly (`_bj_fu_floor`), Q by Rust's chain or `_bj_fu_quality_ux` (row 18,
-    §112). 2d-4 is done.
-- **Numbers after 2d-4**: 18 modules, 641,047 ok, 0 failed, 118,953 accepted (ADR 01: 40,366; ADR 0002: 78,587)
-  over 760,000 rows; 475 digests equal on x86_64 ELF, x86_64 PE and aarch64. Ledger 691 ported, 9 n/a, 158 pending of
+    §112). 2d-4 is done;
+  - 2d-5, the utilities: `graded` by cell (`_bj_fu_graded_ux`, `_bj_ux_pow` for the ratio), `extents`' sum rerun when
+    it ends non-finite, `fourth_order_derivative` by cell (`_bj_fu_fourth_ux`), each check one exponent-field test
+    (row 18, §113).
+- **Numbers after 2d-5**: 18 modules, 641,124 ok, 0 failed, 119,017 accepted (ADR 01: 40,366; ADR 0002: 78,651)
+  over 760,141 rows; 475 digests equal on x86_64 ELF, x86_64 PE and aarch64. Ledger 691 ported, 9 n/a, 158 pending of
   858; API snapshot 2,116; benches 73 of 80 twinned; execution coverage 371 of 371.
-- **Next, 2d-5: the utilities** (`src/fdtd_util.cyr`): `NonUniformGrid::graded`'s d_max/d_min and ratio^i out of
-  range (row 42's last cell and its no-cell-past-d_max rule stay, §103), `extents`' partial sums (an unchecked grid's
-  mixed signs can cancel or pass DBL_MAX), and `fourth_order_derivative`'s 1/dx (a subnormal dx), its differences and
-  its c₁Δ + c₂Δ′. The pattern of 2d-2b's `total_energy` (§108) fits the sums: track whether a product, term or partial
-  sum left the range, and rerun the whole sum with an unbounded exponent.
-- **Then**:
-  - 2d-6, NF2FF: k = 2πf/c (2πf past DBL_MAX), the samples' products and sums, √(k/8π)·|…| (`_bj_hypot` is already
-    correctly rounded);
-  - then M5 is done; M6 (`Fdtd2d`, `Fdtd3d`, the CPML, `nf2ff_2d`, `Mode2d`, `CpmlParams`) follows, under the same
-    per-cell rule.
-- **Corpus size**: `fdtd.tsv` is 38.5 MB (107,045 rows) and `json.tsv` 38.7 MB, against the 48 MiB cap that
+- **Next, 2d-6: NF2FF** (`src/nf2ff.cyr`, `bj_nf2ff_2d_phasor`): k = 2πf/c (Rust's frequency = ω/2π from the
+  accumulators' `omega`; 2d-4a's `omega_s`/`omega_e` hold ω past DBL_MAX), the samples' products and sums along the
+  contour, and √(k/8π)·|…| (`_bj_hypot` is already correctly rounded). Its agreement test is row 17's (§105). Then M5
+  is done: the milestone's wrap-up (state, roadmap, the benchmark doc regenerated with `scripts/bench_record.py`).
+- **Then**: M6 (`Fdtd2d`, `Fdtd3d`, the CPML, `nf2ff_2d`, `Mode2d`, `CpmlParams`), under the same per-cell rule.
+- **Corpus size**: `fdtd.tsv` is 38.6 MB (107,186 rows) and `json.tsv` 38.7 MB, against the 48 MiB cap that
   validate.py's `too_big` guards (§81). M6 will need `fdtd.tsv` split (a second module file, e.g. by milestone), and 2d
   may: watch the size after each regeneration.
 - **A recorded cost**: the 1D step runs 3.5–3.8× HEAD's with 2d-2a's scan (§107), the TF/SF step about 2× with

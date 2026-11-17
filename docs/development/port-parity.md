@@ -6300,3 +6300,57 @@ eigenmode search (`dft_magnitude`'s recurrence and magnitude, `find_eigenmodes`'
   equal**. `fdtd_util.tcyr` (94) passes on all three. The gate is clean (no warnings; execution coverage 371 of 371
   functions); validate.py 760,000 rows, 0 problems; the oracle's `--check` and clippy clean. **2d-4 is done.** Next:
   2d-5, the utilities (`graded`, `extents`, the fourth-order derivative).
+
+## 113. M5 part 2d-5: the utilities at their range edges (2026-11-16)
+
+- **The findings**:
+  - `NonUniformGrid::graded`'s d_min·ratio^i, ratio = (d_max/d_min)^(1/(n − 1)): d_max/d_min past either end made the
+    ratio ∞ or 0, so row 42's rule held every interior cell at d_max (2^-1074 to DBL_MAX over 3 cells: the middle cell
+    d_max for 2.98·10⁻⁸); and ratio^i past DBL_MAX (or below the range) where d_min·ratio^i is representable did the
+    same from that cell on (10⁻³⁰⁰ to 10³⁰⁰ over 101 cells: ratio 10⁶, ratio^60 = 10³⁶⁰, so cells 60 to 99 were d_max
+    for 10⁶⁰ to 10²⁹⁴);
+  - `extents`' left fold: a partial sum past DBL_MAX stays ∞ (widths DBL_MAX, DBL_MAX, −DBL_MAX: ∞ for DBL_MAX); an
+    unchecked grid's mixed signs reach it. Below the range a sum is exact;
+  - `fourth_order_derivative`: 1/dx past DBL_MAX for a subnormal dx (a flat field gave ∞·0 = NaN for 0, a ramp of
+    10⁻³⁰⁰ ∞ for 10¹⁰), 1/dx subnormal for a dx near DBL_MAX, the differences past DBL_MAX for opposite samples, and
+    c₂Δ′ or the product underflowing.
+- **ADR 0002 row 18, amended** (`src/fdtd_util.cyr`):
+  - `graded` runs Rust's chain where q = d_max/d_min is a positive normal value and so are a cell's power and its
+    product with d_min (one test of their exponent fields; a normal power means none of powi's partials left the range:
+    each lies between 1 and the power, and Rust's powi computes no unused square); else the cell runs with an unbounded
+    exponent (`_bj_fu_graded_ux`): q to 53 bits, the ratio by `_bj_ux_pow` (Rust's correctly rounded powf in range),
+    ratio^i by powi's own products each to 53 bits, d_min·ratio^i rounded once. Row 42's rule then applies to the cell
+    as before. A first form of the test took a 0 for normal, as the products' test does where a zero factor makes it
+    exact; q and the power are positive, so their 0 is an underflow, and the model's 15 failing decreasing gradings
+    (DBL_MAX down to DBL_MIN, 10³⁰⁰ down to 10⁻³⁰⁰: q underflowed to 0, so every interior cell was held at d_max) found
+    it;
+  - `extents` reruns a non-finite sum of finite widths with an unbounded exponent, the total rounded once;
+  - `fourth_order_derivative` checks 1/dx once and each cell's c₁Δ, c₂Δ′ and product, one test of their exponent fields
+    and, where one is 0 or 2047, the exact check (normal, or 0 from a zero factor); a cell that fails reruns with an
+    unbounded exponent, the product rounded once (`_bj_fu_fourth_ux`, and `_bj_fu_fourth_end_ux` for the second-order
+    ends). A non-finite sample keeps Rust's.
+- **validate.py**: under row 18 (`FU18`, `fu_port18`) each runs on Fractions for finite inputs, without the port's
+  checks: `fu_graded18` (the ratio by MPFR at its widest range, powi's products with `rnd53`, each cell rounded once,
+  then row 42's rule), `fu_sum18`, `fu_fourth18`. A grading row whose change row 42 alone accounts for keeps its row-42
+  mapping; the others map to row 18.
+- **The grid**: 141 rows appended to `fdtd.tsv` (107,186; 38.6 MB): gradings between 10^±300, 2^-1074 and DBL_MAX,
+  10^±310 and 1, DBL_MIN and 10³⁰⁸, 10^±200 and 10^±160, over 3 to 200 cells (41 rows); six grids of widths of mixed
+  signs near DBL_MAX on each axis (12 grids, 60 rows: their `validate`, `min_spacing`, `courant_dt`, `try_courant_dt`
+  and `extents`); and derivatives of a ramp, a cubic, a ramp of 10⁻³⁰⁰ and a flat field on six dx from 2^-1074 to
+  DBL_MAX, and of opposite samples near DBL_MAX and subnormal samples on four dx (40 rows).
+- **The mapping**: **98 rows** to row 18: 72 gradings (36 of the new rows, and 36 of part 2a-3's that row 42 alone no
+  longer accounts for, moved from row 42), 16 derivatives (11 new, 5 of part 1d's) and 10 extents; 2 new gradings to
+  row 42; all passing.
+- **Tests**: `tests/fdtd_util.tcyr`'s `cyrius_utility_edges` (6 assertions, 100 in all): the two gradings, the
+  decreasing one from DBL_MAX to DBL_MIN, the extent, and the flat field and the ramp on dx = 10⁻³¹⁰.
+- **Benchmarks**: no bench covers these functions (Rust has none), so a focused scratch bench measured them, interleaved
+  against HEAD (three rounds, load 2.3): `fourth_order_derivative` on 1,000 samples 9.8–10.0 → 16.2–16.6 µs (1.65×, the
+  per-cell check), a 1,000-cell `graded` 32.7–33.0 → 33.8–34.1 µs (1.03×). A first form of both checks, three calls a
+  cell, cost 4.0× and 1.6×; one test of the exponent fields, the exact check only where a field is 0 or 2047, brought
+  them to these. The full interleaved A/B (two rounds, load 2.4 to 4.0, another repo's fuzzers beside it) left every
+  row unchanged: median ratios 1.00 and 1.00 (`json/nonuniform_grid_from_json` 0.97 and 0.98).
+- **Result, every target** (x86_64 ELF, x86_64 PE, aarch64): **18 modules, 0 failing; 641,124 ok, 0 failed, 0
+  measured, 0 pending, 119,017 accepted (ADR 01: 40,366; ADR 0002: 78,651)** over 760,141 rows; **all 475 digests
+  equal**. `fdtd_util.tcyr` (100) passes on all three. The gate is clean (no warnings; execution coverage 371 of 371
+  functions); validate.py 760,141 rows, 0 problems; the oracle's `--check` and clippy clean. Next: 2d-6, NF2FF, the
+  last bite of M5.

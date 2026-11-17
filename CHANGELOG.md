@@ -488,6 +488,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
   frequency grid, ω, 10 % floor and quality factors with an unbounded exponent where they leave the range (ADR 0002 row
   18 amended, see Fixed). 2d-4 is done. `fdtd.tsv` grows by 47 eigenmode rows (107,045; 38.5 MB); `fdtd.adr.tsv` maps
   69 eigenmode rows to row 18 in all.
+- **Cyrius port, M5 part 2d-5 — the utilities at their range edges** (`src/fdtd_util.cyr`): `graded`, `extents` and
+  `fourth_order_derivative` with an unbounded exponent where their chains leave the range (ADR 0002 row 18 amended, see
+  Fixed). `fdtd.tsv` grows by 141 rows (107,186; 38.6 MB); `fdtd.adr.tsv` maps 98 rows to row 18 (36 gradings moved
+  from row 42).
 
 ### Fixed
 
@@ -1031,6 +1035,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
   and a subnormal df lost the frequencies' and Q's bits. The frequency grid and ω now run to 53 bits with an unbounded
   exponent, the floor's test compares its 53-bit value, and Q runs Rust's chain or, at an edge, the same with an
   unbounded exponent. Cost: none measurable (`port-parity.md` §112).
+- **fdtd** (ADR 0002 row 18 amended, M5 part 2d-5): `NonUniformGrid::graded` held cells at d_max where d_max/d_min or
+  ratio^i passed either end (10⁻³⁰⁰ to 10³⁰⁰ over 101 cells: cells 60 to 99, for 10⁶⁰ to 10²⁹⁴; DBL_MAX down to
+  DBL_MIN over 3 cells: the middle one, for 2); `extents` gave ∞ where a sum of mixed-sign widths passed DBL_MAX and
+  came back; `fourth_order_derivative` on a subnormal dx gave ∞ or NaN (a flat field's 0). Each now runs with an
+  unbounded exponent where it leaves the range. Cost: the derivative's per-cell check, 9.8–10.0 → 16.2–16.6 µs on 1,000
+  samples (a focused bench), the grading's 1.03× (`port-parity.md` §113).
 
 ### Performance
 
