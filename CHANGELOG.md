@@ -510,6 +510,15 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
   start a golden module of their own, `fdtd_2d3d.tsv` (528 rows; `fdtd.tsv` neared the 48 MiB cap), and
   `fdtd_2d3d.cr.tsv` corrects 9 where glibc's powf or exp misround. `tests/cpml.tcyr` ports `cpml_kappa_profile`
   and `cpml_params_validation` (37 assertions).
+- **Cyrius port, M6 part 1b-1 — the 2D grid without its CPML** (`src/fdtd2d.cyr`): `BjMode2d` (TM, TE) and
+  `BjFdtd2d`: `BjFdtd2d_new` (Rust's checks and texts in Rust's order; dt = dx/(2√2·c)), `idx`, the ε_r, μ_r, σ and
+  material regions (C_a and C_b where lossy, the arrays mapped by the first lossy region), `add_source`, `step_once`
+  (TM and TE on the packed verbs, Rust's bits, the PEC and PMC walls), `run`, `time`, `total_energy` and
+  `BjFdtd2d_free`. Its arrays are fixed at construction (ADR 0002 row 2 amended). `fdtd_2d3d.tsv` grows by 201 class-T
+  scripts (729 rows) that validate.py's pure-Python model replays; `tests/fdtd2d.tcyr` ports 18 of fdtd.rs's 2D tests
+  and two of its `cpml_tests` (48 assertions), and `tests/cpml.tcyr` the main module's three CPML tests. Bench twins:
+  `fdtd/2d_step_100x100_tm` 46.4–47.6 µs (4.1× Rust's 11.42 µs), `fdtd/2d_run_50_steps_80x80` 1.74–1.83 ms (4.2×),
+  `fdtd/2d_step_100x100_tm_lossy` 49.3–50.7 µs (3.4×); the benchmark record carries them.
 
 ### Fixed
 

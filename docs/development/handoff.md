@@ -9,14 +9,14 @@ bite is done, the machinery, the scripts and the traps. Delete it once it has se
 
 ## Where it stands
 
-- **Committed through `d612f26`** ("M5 done"); M6 part 1a is in the working tree for the user to commit ("m6 1a
-  done").
-- **M6 Part 1** (the 2D CPML and `Fdtd2d`, §116) runs in bites: 1a the CPML layer (`src/cpml.cyr`: `CpmlParams`,
-  `Cpml`) done; next 1b-1 `Fdtd2d` without the CPML (TM and TE, the PEC/PMC walls, ε_r/μ_r/σ regions with C_a/C_b,
-  `add_source`, `step_once`, `run`, `time`, `total_energy`; the row kernels on `f64v_*` with add and sub forms, plan
-  §9.3's table; ADR 0002 row 2 for Rust's public resizable vectors and the per-step layout check, as the 1D grid's),
-  then 1b-2 the CPML attached (`try_enable_cpml*`, `enable_cpml`, `disable_cpml`, `cpml`, the strip corrections
-  `correct_fx`, `correct_fy`, `correct_fz`; `cpml_profile_is_graded` and the reflection tests), 1c `nf2ff_2d`
+- **Committed through `d1b21cd`** ("M6 pt1", part 1a); part 1b-1 is in the working tree for the user to commit
+  ("m6 1b-1 done").
+- **M6 Part 1** (the 2D CPML and `Fdtd2d`, §116–§117) runs in bites: 1a the CPML layer (`src/cpml.cyr`) done; 1b-1
+  `Fdtd2d` without the CPML (`src/fdtd2d.cyr`; its scripts `Fdtd2d::script` in `fdtd_2d3d.tsv`, replayed by
+  validate.py's `Fd2Scripts` in pure Python, no NumPy on the host) done; next 1b-2 the CPML attached
+  (`try_enable_cpml*`, `enable_cpml`, `disable_cpml`, `cpml`, the strip corrections `correct_fx`, `correct_fy`,
+  `correct_fz` in `step_tm`/`step_te`, `check_layout`'s CPML half; `cpml_profile_is_graded`,
+  `try_enable_cpml_validates_thickness` and the reflection and energy tests), 1c `nf2ff_2d`
   (`_bj_nf_core` with the rotation (1, 0)), 1d the JSON of `CpmlParams` and `Mode2d`. Part 2 is the 3D grid, Part 3
   `compute.rs`, then the range-edge review (the per-cell rule for the 2D and 3D updates and the CPML).
 - **M6's corpus** is `tests/golden/fdtd_2d3d.tsv` (`scripts/oracle/src/m_fdtd_2d3d.rs`, which imports `m_fdtd`'s

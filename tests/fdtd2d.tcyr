@@ -1,0 +1,366 @@
+# fdtd2d.tcyr — src/fdtd2d.cyr (M6 part 1b-1): the 2D grid without its CPML.
+#
+# Every group named test_* is rust-old/src/fdtd.rs's test of that name, and the groups named as its `cpml_tests` are
+# those tests, ported assertion for assertion (the ledger matches them by name): the grid's construction, Courant
+# step, sources, propagation in TM and TE, energy, run, time, the material regions, a dielectric slowing the wave, and
+# the lossy coefficients and a conductor's uniform decay. `desynced_fields_do_not_panic_2d` is n/a (ADR 0002 row 2:
+# nothing can resize the arrays). The tests that need the CPML follow with it (part 1b-2), and those that also drive
+# an `Fdtd3d` with the 3D grid. The cyrius_* groups pin the error records' text and order, the regions' edges, the
+# walls, the lossy arrays' lazy mapping, an unknown mode and BjFdtd2d_free. tests/golden/fdtd_2d3d.tsv pins every
+# operation against Rust besides.
+
+include "tests/lib.cyr"
+
+var DX: f64 = 0.001;
+var DX4: f64 = 0.0001;
+
+# |a − b| < tol.
+fn near(a: f64, b: f64, tol: f64): i64 {
+    var d: f64 = a - b;
+    var ad: f64 = f64_abs(d);
+    if (ad < tol) { return 1; }
+    return 0;
+}
+
+# 1 when the C strings a and b are equal.
+fn text_is(a, b): i64 {
+    var n = strlen(a);
+    if (n != strlen(b)) { return 0; }
+    return memeq(a, b, n);
+}
+
+# A word as a *f64 (the typed return keeps the binding typed).
+fn f64p(a): *f64 {
+    return a;
+}
+
+# Element i of the f64 array at address a.
+fn at(a, i): f64 {
+    var p: *f64 = f64p(a);
+    var x: f64 = p[i];
+    return x;
+}
+
+# Writes v into the n f64 at address a.
+fn fill(a, n, v: f64) {
+    var p: *f64 = f64p(a);
+    for (var i = 0; i < n; i = i + 1) { p[i] = v; }
+    return 0;
+}
+
+# 1 when some |f_z| other than at index skip exceeds tol.
+fn spread(sim: *BjFdtd2d, skip, tol: f64): i64 {
+    var n = sim.nx * sim.ny;
+    for (var i = 0; i < n; i = i + 1) {
+        var v: f64 = at(sim.fz, i);
+        var a: f64 = f64_abs(v);
+        if (i != skip && a > tol) { return 1; }
+    }
+    return 0;
+}
+
+# The rightmost column x with some |f_z| above tol, or dflt.
+fn front(sim: *BjFdtd2d, tol: f64, dflt): i64 {
+    var n = sim.nx;
+    for (var x = n - 1; x >= 0; x = x - 1) {
+        for (var y = 0; y < sim.ny; y = y + 1) {
+            var v: f64 = at(sim.fz, y * n + x);
+            var a: f64 = f64_abs(v);
+            if (a > tol) { return x; }
+        }
+    }
+    return dflt;
+}
+
+# Runs fdtd.rs's 2D grid tests, then the Cyrius-only checks.
+fn main() {
+    alloc_init();
+    var c0: f64 = BJ_SPEED_OF_LIGHT;
+    var sqrt2: f64 = 1.4142135623730951;
+    var tiny30: f64 = _bj_from_bits(0x39b4484bfeebc2a0);
+    var tiny15: f64 = _bj_from_bits(0x3cd203af9ee75616);
+
+    test_group("test_fdtd2d_creation_tm");
+    var s1: BjFdtd2d;
+    var t1, v1 = BjFdtd2d_new(50, 50, DX, BJ_MODE2D_TM, &s1);
+    assert(is_ok(t1) == 1 && s1.nx == 50 && s1.ny == 50, "50 × 50");
+    assert(s1.nx * s1.ny == 2500 && s1.dt > 0.0, "2500 nodes, dt > 0");
+    BjFdtd2d_free(&s1);
+
+    test_group("test_fdtd2d_creation_te");
+    var s2: BjFdtd2d;
+    var t2, v2 = BjFdtd2d_new(50, 50, DX, BJ_MODE2D_TE, &s2);
+    assert(is_ok(t2) == 1 && s2.mode == BJ_MODE2D_TE, "TE");
+    BjFdtd2d_free(&s2);
+
+    test_group("test_fdtd2d_too_small");
+    var s3: BjFdtd2d;
+    var t3a, v3a = BjFdtd2d_new(2, 50, DX, BJ_MODE2D_TM, &s3);
+    var t3b, v3b = BjFdtd2d_new(50, 2, DX, BJ_MODE2D_TM, &s3);
+    assert(is_err_result(t3a) == 1 && is_err_result(t3b) == 1, "nx or ny below 3");
+
+    test_group("test_fdtd2d_invalid_dx");
+    var t4, v4 = BjFdtd2d_new(50, 50, 0.0, BJ_MODE2D_TM, &s3);
+    assert(is_err_result(t4) == 1, "dx = 0");
+
+    test_group("test_fdtd2d_courant");
+    var s5: BjFdtd2d;
+    var t5, v5 = BjFdtd2d_new(50, 50, DX, BJ_MODE2D_TM, &s5);
+    var lim: f64 = s5.dx / (c0 * sqrt2);
+    assert(s5.dt <= lim, "dt ≤ dx/(c√2)");
+    BjFdtd2d_free(&s5);
+
+    test_group("test_fdtd2d_source_injection");
+    var s6: BjFdtd2d;
+    var t6, v6 = BjFdtd2d_new(50, 50, DX, BJ_MODE2D_TM, &s6);
+    s6.add_source(25, 25, 1.0);
+    var i6 = s6.idx(25, 25);
+    var f6: f64 = at(s6.fz, i6);
+    assert(near(f6, 1.0, tiny15) == 1, "f_z = 1 at the source");
+    BjFdtd2d_free(&s6);
+
+    test_group("test_fdtd2d_source_oob_ignored");
+    var s7: BjFdtd2d;
+    var t7, v7 = BjFdtd2d_new(10, 10, DX, BJ_MODE2D_TM, &s7);
+    s7.add_source(999, 999, 1.0);
+    assert(spread(&s7, 0 - 1, 0.0) == 0, "nothing injected");
+    BjFdtd2d_free(&s7);
+
+    test_group("test_fdtd2d_tm_propagation");
+    var s8: BjFdtd2d;
+    var t8, v8 = BjFdtd2d_new(60, 60, DX4, BJ_MODE2D_TM, &s8);
+    s8.add_source(30, 30, 1.0);
+    for (var k8 = 0; k8 < 20; k8 = k8 + 1) { s8.step_once(); }
+    assert(spread(&s8, s8.idx(30, 30), tiny15) == 1, "energy spread from the centre");
+    BjFdtd2d_free(&s8);
+
+    test_group("test_fdtd2d_te_propagation");
+    var s9: BjFdtd2d;
+    var t9, v9 = BjFdtd2d_new(60, 60, DX4, BJ_MODE2D_TE, &s9);
+    s9.add_source(30, 30, 1.0);
+    for (var k9 = 0; k9 < 20; k9 = k9 + 1) { s9.step_once(); }
+    assert(spread(&s9, s9.idx(30, 30), tiny15) == 1, "energy spread from the centre");
+    BjFdtd2d_free(&s9);
+
+    test_group("test_fdtd2d_energy_after_source");
+    var s10: BjFdtd2d;
+    var t10, v10 = BjFdtd2d_new(50, 50, DX, BJ_MODE2D_TM, &s10);
+    var e10a: f64 = s10.total_energy();
+    var a10: f64 = f64_abs(e10a);
+    assert(a10 < tiny30, "no energy at first");
+    s10.add_source(25, 25, 1.0);
+    var e10b: f64 = s10.total_energy();
+    assert(e10b > 0.0, "energy after a source");
+    BjFdtd2d_free(&s10);
+
+    test_group("test_fdtd2d_run_with_source");
+    var s11: BjFdtd2d;
+    var t11, v11 = BjFdtd2d_new(80, 80, DX4, BJ_MODE2D_TM, &s11);
+    s11.run(50, 40, 40, 1000000000.0, 1.0);
+    assert(spread(&s11, 0 - 1, 0.0) == 1, "max |E_z| > 0");
+    BjFdtd2d_free(&s11);
+
+    test_group("test_fdtd2d_set_permittivity");
+    var s12: BjFdtd2d;
+    var t12, v12 = BjFdtd2d_new(50, 50, DX, BJ_MODE2D_TM, &s12);
+    var r12, r12v = s12.set_permittivity(10, 10, 30, 30, 4.0);
+    var e12c: f64 = at(s12.permittivity, s12.idx(20, 20));
+    var e12o: f64 = at(s12.permittivity, s12.idx(5, 5));
+    assert(is_ok(r12) == 1 && near(e12c, 4.0, tiny15) == 1 && near(e12o, 1.0, tiny15) == 1, "ε_r 4 inside, 1 outside");
+    BjFdtd2d_free(&s12);
+
+    test_group("test_fdtd2d_set_permittivity_invalid");
+    var s13: BjFdtd2d;
+    var t13, v13 = BjFdtd2d_new(50, 50, DX, BJ_MODE2D_TM, &s13);
+    var r13, r13v = s13.set_permittivity(0, 0, 50, 50, -1.0);
+    assert(is_err_result(r13) == 1, "ε_r = −1");
+    BjFdtd2d_free(&s13);
+
+    test_group("test_fdtd2d_time");
+    var s14: BjFdtd2d;
+    var t14, v14 = BjFdtd2d_new(20, 20, DX, BJ_MODE2D_TM, &s14);
+    var tm0: f64 = s14.time();
+    var at0: f64 = f64_abs(tm0);
+    assert(at0 < tiny30, "time 0");
+    s14.step_once();
+    var tm1: f64 = s14.time();
+    var dd: f64 = tm1 - s14.dt;
+    var add: f64 = f64_abs(dd);
+    assert(add < tiny30, "time dt after a step");
+    BjFdtd2d_free(&s14);
+
+    test_group("test_fdtd2d_dielectric_slows_wave");
+    var vac: BjFdtd2d;
+    var die: BjFdtd2d;
+    var tva, vva = BjFdtd2d_new(100, 100, DX4, BJ_MODE2D_TM, &vac);
+    var tdi, vdi = BjFdtd2d_new(100, 100, DX4, BJ_MODE2D_TM, &die);
+    var r15, r15v = die.set_permittivity(0, 0, 100, 100, 4.0);
+    vac.run(50, 50, 50, 3000000000.0, 1.0);
+    die.run(50, 50, 50, 3000000000.0, 1.0);
+    var vmax = front(&vac, 0.0001, 50);
+    var dmax = front(&die, 0.0001, 50);
+    assert(is_ok(r15) == 1 && dmax <= vmax, "the dielectric's wave travels slower");
+    BjFdtd2d_free(&vac);
+    BjFdtd2d_free(&die);
+
+    test_group("test_fdtd2d_set_permeability");
+    var s16: BjFdtd2d;
+    var t16, v16 = BjFdtd2d_new(50, 50, DX, BJ_MODE2D_TM, &s16);
+    var r16, r16v = s16.set_permeability(10, 10, 30, 30, 2.0);
+    var m16: f64 = at(s16.permeability, s16.idx(20, 20));
+    assert(is_ok(r16) == 1 && near(m16, 2.0, tiny15) == 1, "μ_r 2 inside");
+    BjFdtd2d_free(&s16);
+
+    test_group("test_fdtd2d_set_permeability_invalid");
+    var s17: BjFdtd2d;
+    var t17, v17 = BjFdtd2d_new(50, 50, DX, BJ_MODE2D_TM, &s17);
+    var r17, r17v = s17.set_permeability(0, 0, 50, 50, -1.0);
+    assert(is_err_result(r17) == 1, "μ_r = −1");
+    BjFdtd2d_free(&s17);
+
+    test_group("test_fdtd2d_set_material");
+    var s18: BjFdtd2d;
+    var t18, v18 = BjFdtd2d_new(50, 50, DX, BJ_MODE2D_TM, &s18);
+    var glass: BjMaterial = BjMaterial_dielectric(2.25);
+    var r18, r18v = s18.set_material(10, 10, 30, 30, &glass);
+    var e18: f64 = at(s18.permittivity, s18.idx(20, 20));
+    var m18: f64 = at(s18.permeability, s18.idx(20, 20));
+    assert(is_ok(r18) == 1 && near(e18, 2.25, tiny15) == 1 && near(m18, 1.0, tiny15) == 1, "glass");
+    BjFdtd2d_free(&s18);
+
+    test_group("conductivity_coefficients");
+    var s19: BjFdtd2d;
+    var t19, v19 = BjFdtd2d_new(10, 10, DX, BJ_MODE2D_TM, &s19);
+    var lossless_ce: f64 = at(s19.ce, 0);
+    var m19: BjMaterial = BjMaterial_new(2.0, 1.0, 0.3);
+    var r19, r19v = s19.set_material(2, 2, 5, 5, &m19);
+    var lm: BjLossyMaterial = BjLossyMaterial_new(2.0, 0.3);
+    var ca19, cb19 = lm.update_coefficients(s19.dt, s19.dx);
+    var i19 = s19.idx(3, 3);
+    var ca_i: f64 = at(s19.ca, i19);
+    var ce_i: f64 = at(s19.ce, i19);
+    var tol19: f64 = 0.000000000001 * cb19;
+    assert(is_ok(r19) == 1 && near(ca_i, ca19, tiny15) == 1 && near(ce_i, cb19, tol19) == 1, "the material's C_a, C_b");
+    var ca0: f64 = at(s19.ca, 0);
+    var ce0: f64 = at(s19.ce, 0);
+    assert(near(ca0, 1.0, tiny15) == 1 && near(ce0, lossless_ce, tiny30) == 1, "lossless cells unchanged");
+    var r19b, r19bv = s19.set_permittivity(2, 2, 5, 5, 4.0);
+    var lm4: BjLossyMaterial = BjLossyMaterial_new(4.0, 0.3);
+    var ca4, cb4 = lm4.update_coefficients(s19.dt, s19.dx);
+    var ca_j: f64 = at(s19.ca, i19);
+    assert(is_ok(r19b) == 1 && near(ca_j, ca4, tiny15) == 1, "changing ε keeps σ");
+    var r19c, r19cv = s19.set_conductivity(2, 2, 5, 5, 0.0);
+    var ca_k: f64 = at(s19.ca, i19);
+    var ce_k: f64 = at(s19.ce, i19);
+    var q4: f64 = lossless_ce / 4.0;
+    var tol19b: f64 = 0.000000000001 * lossless_ce;
+    assert(is_ok(r19c) == 1 && near(ca_k, 1.0, tiny15) == 1 && near(ce_k, q4, tol19b) == 1,
+      "σ = 0 restores the lossless coefficients");
+    BjFdtd2d_free(&s19);
+
+    test_group("conductor_uniform_decay_matches_analytic_2d");
+    for (var md = 0; md < 2; md = md + 1) {
+        var s20: BjFdtd2d;
+        var t20, v20 = BjFdtd2d_new(41, 41, DX, md, &s20);
+        var eps_r: f64 = 2.0;
+        var se: f64 = 0.05 * eps_r;
+        var se0: f64 = se * BJ_EPSILON_0;
+        var sigma: f64 = se0 / s20.dt;
+        var m20: BjMaterial = BjMaterial_new(eps_r, 1.0, sigma);
+        var r20, r20v = s20.set_material(0, 0, 41, 41, &m20);
+        if (md == BJ_MODE2D_TM) { fill(s20.fz, 41 * 41, 1.0); }
+        else {
+            fill(s20.fx, 41 * 41, 1.0);
+            fill(s20.fy, 41 * 41, 1.0);
+        }
+        for (var k20 = 0; k20 < 19; k20 = k20 + 1) { s20.step_once(); }
+        var c20 = s20.idx(20, 20);
+        var e20: f64 = at(s20.fz, c20);
+        if (md == BJ_MODE2D_TE) { e20 = at(s20.fx, c20); }
+        var ns: f64 = -sigma;
+        var a1: f64 = ns * 19.0;
+        var a2: f64 = a1 * s20.dt;
+        var ee: f64 = eps_r * BJ_EPSILON_0;
+        var a3: f64 = a2 / ee;
+        var analytic: f64 = _bj_exp(a3);
+        var l20: BjLossyMaterial = BjLossyMaterial_new(eps_r, sigma);
+        var ca20, cb20 = l20.update_coefficients(s20.dt, s20.dx);
+        var disc: f64 = _bj_powi(ca20, 19);
+        var tol20: f64 = 0.001 * analytic;
+        assert(is_ok(r20) == 1 && near(e20, disc, 0.000000000001) == 1, "the discrete decay C_a^19");
+        assert(near(e20, analytic, tol20) == 1, "the analytic e^(−σt/ε)");
+        BjFdtd2d_free(&s20);
+    }
+
+    test_group("cyrius_fdtd2d_error_records");
+    var q: BjFdtd2d;
+    var tq1, vq1 = BjFdtd2d_new(2, 50, DX, BJ_MODE2D_TM, &q);
+    assert(vq1 == BJ_ERR_INSUFFICIENT_RESOLUTION
+      && text_is(bj_last_error_display(), "grid resolution too coarse: 2 cells for domain size 0.002") == 1, "nx 2");
+    var tq2, vq2 = BjFdtd2d_new(50, 0 - 1, DX, BJ_MODE2D_TM, &q);
+    var wq2 = "invalid parameter: grid [50, 18446744073709551615] is too large";
+    assert(vq2 == BJ_ERR_INVALID_PARAMETER && text_is(bj_last_error_display(), wq2) == 1, "nx·ny past 2^64");
+    var tq3, vq3 = BjFdtd2d_new(3, 3, -0.5, BJ_MODE2D_TE, &q);
+    assert(text_is(bj_last_error_display(), "invalid parameter: dx must be finite and positive, got -0.5") == 1, "dx");
+    var tq4, vq4 = BjFdtd2d_new(1 << 32, 1 << 30, DX, BJ_MODE2D_TM, &q);
+    var wq4 = "invalid parameter: cannot allocate 4611686018427387904 grid values";
+    assert(text_is(bj_last_error_display(), wq4) == 1, "2^62 cells");
+    var tq5, vq5 = BjFdtd2d_new(5, 5, DX, 2, &q);
+    var wq5 = "invalid parameter: unknown 2D mode 2";
+    assert(text_is(bj_last_error_display(), wq5) == 1, "a mode word neither TM nor TE");
+    var tq6, vq6 = BjFdtd2d_new(1, 1, 0.0, 0 - 1, &q);
+    var wq6 = "invalid parameter: unknown 2D mode -1";
+    assert(text_is(bj_last_error_display(), wq6) == 1, "the mode refused first, as the Touchstone format");
+    var tq7, vq7 = BjFdtd2d_new(1, 1, 0.0, BJ_MODE2D_TE, &q);
+    assert(vq7 == BJ_ERR_INSUFFICIENT_RESOLUTION, "Rust's order: the size before dx");
+    var g: BjFdtd2d;
+    var tg, vg = BjFdtd2d_new(10, 8, DX, BJ_MODE2D_TM, &g);
+    var rg1, rg1v = g.set_permittivity(10, 0, 12, 5, 2.0);
+    var wg1 = "invalid parameter: region x range 10..12 is invalid for a grid of 10 cells";
+    assert(text_is(bj_last_error_display(), wg1) == 1, "x starts outside");
+    var rg2, rg2v = g.set_permeability(0, 5, 3, 4, 2.0);
+    var wg2 = "invalid parameter: region y range 5..4 is invalid for a grid of 8 cells";
+    assert(text_is(bj_last_error_display(), wg2) == 1, "y inverted");
+    var rg3, rg3v = g.set_conductivity(0, 0, 3, 3, -1.0);
+    var wg3 = "invalid parameter: conductivity must be finite and ≥ 0 S/m, got -1";
+    assert(text_is(bj_last_error_display(), wg3) == 1, "σ < 0");
+    var m3: BjMaterial = BjMaterial_new(2.0, 0.0, -1.0);
+    var rg4, rg4v = g.set_material(20, 0, 3, 3, &m3);
+    assert(text_is(bj_last_error_display(), "invalid permeability: 0 (must be > 0)") == 1, "μ_r before σ and region");
+    assert(g.ca == 0 && g.lossy_bytes == 0, "nothing mapped on error");
+
+    test_group("cyrius_fdtd2d_grid");
+    var r1, r1v = g.set_conductivity(0, 0, 10, 8, 0.0);
+    assert(is_ok(r1) == 1 && g.ca == 0, "σ = 0 on a lossless grid maps nothing");
+    var r2, r2v = g.set_permittivity(3, 3, 3, 3, 5.0);
+    var r3, r3v = g.set_permittivity(8, 6, 100, 100, 2.0);
+    var e9: f64 = at(g.permittivity, g.idx(9, 7));
+    var e7: f64 = at(g.permittivity, g.idx(7, 7));
+    assert(is_ok(r2) == 1 && is_ok(r3) == 1 && e9 == 2.0 && e7 == 1.0, "an empty region; the ends clamped");
+    var r4, r4v = g.set_conductivity(1, 1, 2, 2, 0.5);
+    var ca_g: f64 = at(g.ca, g.idx(1, 1));
+    var ca_h: f64 = at(g.ca, g.idx(5, 5));
+    var sg: f64 = at(g.conductivity, g.idx(1, 1));
+    assert(is_ok(r4) == 1 && g.lossy_bytes == 2 * 80 * 8 && ca_g < 1.0 && ca_h == 1.0 && sg == 0.5, "C_a and σ mapped");
+    g.add_source(4, 4, 2.5);
+    g.add_source(9, 0, 1.0);
+    g.add_source(0 - 1, 4, 1.0);
+    g.step_once();
+    var wall: f64 = at(g.fz, g.idx(9, 0));
+    var inner: f64 = at(g.fz, g.idx(4, 4));
+    assert(wall == 0.0 && inner != 0.0 && g.step == 1, "the PEC wall cleared, the interior stepped");
+    g.run(3, BJ_FDTD2D_NO_SOURCE, 0, 1000000000.0, 1.0);
+    assert(g.step == 4, "run without a source");
+    var tmg: f64 = g.time();
+    var t4w: f64 = 4.0 * g.dt;
+    assert(tmg == t4w, "time = step·dt");
+    BjFdtd2d_free(&g);
+    assert(g.fz == 0 && g.ca == 0 && g.map_bytes == 0 && g.lossy_bytes == 0, "freed and emptied");
+    BjFdtd2d_free(&g);
+
+    return assert_summary();
+}
+
+var exit_code = main();
+if (exit_code > 0) { exit_code = 1; }
+sys_exit_group(exit_code);

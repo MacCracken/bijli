@@ -1,0 +1,702 @@
+# fdtd2d.cyr — fdtd.rs's 2D solver (M6 part 1b-1): `Fdtd2d`, the Yee algorithm on an nx × ny grid in TM mode (E_z at
+# the integer nodes (x, y), H_x at (x, y + ½), H_y at (x + ½, y)) or TE mode (H_z, E_x, E_y at the same places), SI
+# units. Fields are row-major, index y·nx + x. The time step is half the 2D Courant limit, dt = dx/(2√2·c), a Courant
+# number of 1/(2√2).
+#
+# The outer walls reflect: the out-of-plane field is held at zero on the outermost ring of nodes, a perfect electric
+# conductor in TM (E_z = 0) and a perfect magnetic conductor in TE (H_z = 0). Per-cell ε_r, μ_r and conductivity σ
+# (the lossy E update E ← C_a·E + C_b·∇×H, C_a = (1 − σΔt/2ε)/(1 + σΔt/2ε), C_b = (Δt/εΔx)/(1 + σΔt/2ε)) are set by
+# region. The CPML absorbing layer attaches in M6 part 1b-2 (src/cpml.cyr).
+#
+# A grid's seven arrays (f_z, f_x, f_y, the C_b and H coefficients, ε_r and μ_r) and two scratch rows are one anonymous
+# mmap, fixed at construction; the first lossy region maps C_a and σ beside them. BjFdtd2d_free gives both back. Rust's
+# public, resizable `Vec` fields and the per-step layout check that guarded them are gone (ADR 0002 row 2): the fields
+# are the arrays' addresses and nx·ny their length. No step allocates. The updates run on the packed f64v_* verbs,
+# each lane rounding Rust's operations in Rust's order, so the bits are Rust's (port plan §9.3, probe p10), on lane
+# multiples with a scalar tail (probe p19). The file is time-domain only; bijli's one harmonic convention, e^{+jωt},
+# is stated in src/complex.cyr's header.
+
+private
+
+var _BJ_FD2_INF: f64 = 0x7FF0000000000000;
+# std::f64::consts::PI and SQRT_2.
+var _BJ_FD2_PI: f64 = 3.141592653589793;
+var _BJ_FD2_SQRT_2: f64 = 1.4142135623730951;
+# The grid's arrays, each nx·ny f64, in one mapping: f_z, f_x, f_y, C_b, the H coefficients, ε_r and μ_r (then two
+# scratch rows of nx).
+var _BJ_FD2_ARRAYS = 7;
+# The largest nx·ny whose mapping (under 64 bytes a cell with the scratch rows) a 64-bit length holds.
+var _BJ_FD2_MAX_CELLS = 144115188075855871;
+
+# The polarization of a 2D grid. TM: E_z, H_x, H_y (E perpendicular to the plane; the walls PEC, E_z = 0). TE: H_z,
+# E_x, E_y (H perpendicular; the walls PMC, H_z = 0). Mirrors `Mode2d`.
+public enum BjMode2d {
+    BJ_MODE2D_TM = 0;
+    BJ_MODE2D_TE = 1;
+}
+
+# Rust's `run(steps, None, ..)`: no source. Rust's Some((x, y)) outside the grid injects nothing either, so usize::MAX
+# (−1) for x is None exactly.
+public var BJ_FDTD2D_NO_SOURCE = 0 - 1;
+
+# A 2D FDTD simulation. `mode` is BJ_MODE2D_TM or BJ_MODE2D_TE; nx × ny the nodes; `dx` (m) the uniform spacing in x
+# and y, `dt` (s) the step, `step` the time-step index. `fz` (E_z in TM, H_z in TE), `fx` (H_x, E_x) and `fy` (H_y,
+# E_y) are the addresses of nx·ny f64 each (read and write the values, as Rust's public vectors). `ce` holds C_b per
+# cell (Δt/(ε₀ε_r·Δx), divided by 1 + σΔt/2ε where lossy), `ch` Δt/(μ₀μ_r·Δx), `ca` C_a and `conductivity` σ (S/m),
+# both 0 while every cell is lossless (Rust's empty vectors), `permittivity` ε_r and `permeability` μ_r. `cpml` is the
+# attached layer's address, 0 for none (M6 part 1b-2). `work` holds the update's two scratch rows, `map_bytes` and
+# `lossy_bytes` the mappings' lengths (0 once freed). Mirrors `Fdtd2d`.
+public struct BjFdtd2d {
+    mode;
+    nx;
+    ny;
+    dx: f64;
+    dt: f64;
+    step;
+    fz;
+    fx;
+    fy;
+    ce;
+    ch;
+    ca;
+    permittivity;
+    permeability;
+    conductivity;
+    cpml;
+    work;
+    map_bytes;
+    lossy_bytes;
+}
+
+# A word as a *f64 (the typed return keeps the binding typed).
+#must_use
+fn _bj_fd2_f64p(a): *f64 {
+    return a;
+}
+
+# 1 when a ≥ b as usize words (a negative word is past 2^63).
+#must_use
+fn _bj_fd2_uge(a, b): i64 {
+    if ((a < 0) == (b < 0)) {
+        if (a >= b) { return 1; }
+        return 0;
+    }
+    if (a < 0) { return 1; }
+    return 0;
+}
+
+# The usize product a·b into *out: 1, or 0 when it overflows 64 bits (Rust's `checked_mul` None).
+fn _bj_fd2_umul(a, b, out: *i64): i64 {
+    var ah = a >> 32;
+    var al = a & 0xFFFFFFFF;
+    var bh = b >> 32;
+    var bl = b & 0xFFFFFFFF;
+    if (ah != 0 && bh != 0) { return 0; }
+    var cross = ah * bl + al * bh;
+    if ((cross >> 32) != 0) { return 0; }
+    var lo = al * bl;
+    var hi = cross << 32;
+    var s = lo + hi;
+    if (_bj_fd2_uge(s, lo) == 0) { return 0; }
+    out[0] = s;
+    return 1;
+}
+
+# Rust's `n as f64` for a usize: the word read unsigned, rounded to nearest even.
+#must_use
+fn _bj_fd2_u2f(n): f64 {
+    if (n >= 0) {
+        var r: f64 = f64_from(n);
+        return r;
+    }
+    var h: f64 = f64_from((n >> 1) | (n & 1));
+    var r2: f64 = h * 2.0;
+    return r2;
+}
+
+# 1 when x is finite and strictly positive (NaN-safe). Mirrors fdtd.rs's `is_positive_finite`.
+#must_use
+fn _bj_fd2_pos(x: f64): i64 {
+    if (x > 0.0 && x < _BJ_FD2_INF) { return 1; }
+    return 0;
+}
+
+# Records InvalidParameter "cannot allocate {n} grid values" (Rust's `try_filled`); returns its code.
+fn _bj_fd2_alloc_err(n): i64 {
+    var t = _bj_err_reason(BJ_ERR_INVALID_PARAMETER);
+    _bj_tx_cstr(t, "cannot allocate ");
+    _bj_tx_u64(t, n);
+    _bj_tx_cstr(t, " grid values");
+    return BJ_ERR_INVALID_PARAMETER;
+}
+
+# The E-update coefficients (C_a, C_b) for ε_r and σ: C_a = (1 − σΔt/2ε)/(1 + σΔt/2ε), C_b = (Δt/(εΔx))/(1 +
+# σΔt/2ε), ε = ε_rε₀; the lossless case exactly (1, Δt/(ε₀Δx)/ε_r). Mirrors fdtd.rs's `e_update_coefficients`.
+#must_use
+fn _bj_fd2_e_coefficients(dt: f64, dx: f64, eps_r: f64, sigma: f64): (f64, f64) {
+    if (sigma > 0.0) {
+        var eps: f64 = eps_r * BJ_EPSILON_0;
+        var sdt: f64 = sigma * dt;
+        var e2: f64 = 2.0 * eps;
+        var hl: f64 = sdt / e2;
+        var num: f64 = 1.0 - hl;
+        var den: f64 = 1.0 + hl;
+        var ca: f64 = num / den;
+        var edx: f64 = eps * dx;
+        var q: f64 = dt / edx;
+        var cb: f64 = q / den;
+        return (ca, cb);
+    }
+    var e0dx: f64 = BJ_EPSILON_0 * dx;
+    var q0: f64 = dt / e0dx;
+    var cb0: f64 = q0 / eps_r;
+    return (1.0, cb0);
+}
+
+# d[i] ± k[i]·(a[i] − b[i]) into d for i < n (add 1: `+=`, 0: `-=`), Rust's `row_diff`: the packed f64v_sub, f64v_mul
+# and f64v_add or f64v_sub through the scratch row w on the largest multiple of 4, then a scalar tail (probe p19).
+fn _bj_fd2_diff(d: *f64, k: *f64, a: *f64, b: *f64, w: *f64, n, add) {
+    var m = n & (0 - 4);
+    if (m > 0) {
+        f64v_sub(w, a, b, m);
+        f64v_mul(w, k, w, m);
+        if (add == 1) { f64v_add(d, d, w, m); }
+        else { f64v_sub(d, d, w, m); }
+    }
+    for (var i = m; i < n; i = i + 1) {
+        var ab: f64 = a[i] - b[i];
+        var v: f64 = k[i] * ab;
+        if (add == 1) { d[i] = d[i] + v; }
+        else { d[i] = d[i] - v; }
+    }
+    return 0;
+}
+
+# One row's interior curl update, x ∈ 1..n − 1: d[x] ± k[x]·((a[x] − a[x − 1]) − (b[x] − bp[x])) (add 1: `+=`, 0:
+# `-=`), Rust's `row_curl`, on the packed verbs through the scratch rows w and w2 (lane multiples, a scalar tail).
+fn _bj_fd2_curl(d: *f64, k: *f64, a: *f64, b: *f64, bp: *f64, w: *f64, w2: *f64, n, add) {
+    if (n < 3) { return 0; }
+    var c = n - 2;
+    var m = c & (0 - 4);
+    if (m > 0) {
+        f64v_sub(w, a + 1, a, m);
+        f64v_sub(w2, b + 1, bp + 1, m);
+        f64v_sub(w, w, w2, m);
+        f64v_mul(w, k + 1, w, m);
+        if (add == 1) { f64v_add(d + 1, d + 1, w, m); }
+        else { f64v_sub(d + 1, d + 1, w, m); }
+    }
+    for (var x = m + 1; x < n - 1; x = x + 1) {
+        var da: f64 = a[x] - a[x - 1];
+        var db: f64 = b[x] - bp[x];
+        var dd: f64 = da - db;
+        var v: f64 = k[x] * dd;
+        if (add == 1) { d[x] = d[x] + v; }
+        else { d[x] = d[x] - v; }
+    }
+    return 0;
+}
+
+# f[i] ·= factor[i] for i < n (lossy cells' C_a; the packed f64v_mul on lane multiples, a scalar tail). Mirrors
+# fdtd.rs's `scale_by`.
+fn _bj_fd2_scale(f: *f64, factor: *f64, n) {
+    var m = n & (0 - 4);
+    if (m > 0) { f64v_mul(f, f, factor, m); }
+    for (var i = m; i < n; i = i + 1) { f[i] = f[i] * factor[i]; }
+    return 0;
+}
+
+# Zeroes the outermost ring of a row-major nx-wide field of nx·ny cells (the PEC or PMC wall). Mirrors fdtd.rs's
+# `zero_walls`.
+fn _bj_fd2_walls(f: *f64, nx, ny) {
+    var n = nx * ny;
+    for (var x = 0; x < nx; x = x + 1) {
+        f[x] = 0.0;
+        f[n - nx + x] = 0.0;
+    }
+    for (var y = 0; y < ny; y = y + 1) {
+        f[y * nx] = 0.0;
+        f[y * nx + nx - 1] = 0.0;
+    }
+    return 0;
+}
+
+# Records InvalidParameter "region {axis} range {lo}..{hi} is invalid for a grid of {n} cells" when lo ≥ n or hi < lo
+# (usize compares) and returns its code; else 0 with the range clamped to n in r[0..2]. Mirrors fdtd.rs's
+# `region_range`.
+fn _bj_fd2_range(axis, lo, hi, n, r: *i64): i64 {
+    if (_bj_fd2_uge(lo, n) == 1 || _bj_fd2_uge(hi, lo) == 0) {
+        var t = _bj_err_reason(BJ_ERR_INVALID_PARAMETER);
+        _bj_tx_cstr(t, "region ");
+        _bj_tx_cstr(t, axis);
+        _bj_tx_cstr(t, " range ");
+        _bj_tx_u64(t, lo);
+        _bj_tx_cstr(t, "..");
+        _bj_tx_u64(t, hi);
+        _bj_tx_cstr(t, " is invalid for a grid of ");
+        _bj_tx_u64(t, n);
+        _bj_tx_cstr(t, " cells");
+        return BJ_ERR_INVALID_PARAMETER;
+    }
+    r[0] = lo;
+    r[1] = hi;
+    if (_bj_fd2_uge(hi, n) == 1) { r[1] = n; }
+    return 0;
+}
+
+# 0 for a finite and strictly positive ε_r, else InvalidPermittivity { value } recorded and its code. Mirrors
+# fdtd.rs's `validate_eps_r`.
+fn _bj_fd2_check_eps(eps_r: f64): i64 {
+    if (_bj_fd2_pos(eps_r) == 1) { return 0; }
+    return _bj_err_invalid_permittivity(eps_r);
+}
+
+# 0 for a finite and strictly positive μ_r, else InvalidPermeability { value } recorded and its code. Mirrors
+# fdtd.rs's `validate_mu_r`.
+fn _bj_fd2_check_mu(mu_r: f64): i64 {
+    if (_bj_fd2_pos(mu_r) == 1) { return 0; }
+    return _bj_err_invalid_permeability(mu_r);
+}
+
+# 0 for a finite σ ≥ 0, else InvalidParameter "conductivity must be finite and ≥ 0 S/m, got {σ}" recorded and its
+# code. Mirrors fdtd.rs's `validate_conductivity`.
+fn _bj_fd2_check_sigma(sigma: f64): i64 {
+    if (sigma >= 0.0 && sigma < _BJ_FD2_INF) { return 0; }
+    var t = _bj_err_reason(BJ_ERR_INVALID_PARAMETER);
+    _bj_tx_cstr(t, "conductivity must be finite and ≥ 0 S/m, got ");
+    _bj_fmt_f64_display(t, sigma);
+    return BJ_ERR_INVALID_PARAMETER;
+}
+
+# A vacuum grid of nx × ny nodes at spacing dx in `mode` into *out, the walls reflecting: Ok(0), or with out untouched
+# Err(InsufficientResolution) when nx < 3 or ny < 3 (cells min(nx, ny), domain min(nx, ny)·dx), Err(InvalidParameter)
+# "dx must be finite and positive, got {dx}", "grid [{nx}, {ny}] is too large" (nx·ny past 2^64) or "cannot allocate
+# {n} grid values", in Rust's order. A mode word that is no BjMode2d (Rust's enum has no other) is refused first,
+# InvalidParameter "unknown 2D mode {mode}", as bj_try_write_touchstone's format. dt = dx/(2√2·c). Give it back with
+# BjFdtd2d_free. Mirrors `Fdtd2d::new`.
+#must_use
+public fn BjFdtd2d_new(nx, ny, dx: f64, mode, out: *BjFdtd2d): Result {
+    if (mode != BJ_MODE2D_TM && mode != BJ_MODE2D_TE) {
+        var tm = _bj_err_reason(BJ_ERR_INVALID_PARAMETER);
+        _bj_tx_cstr(tm, "unknown 2D mode ");
+        _bj_tx_i64(tm, mode);
+        return Err(BJ_ERR_INVALID_PARAMETER);
+    }
+    if ((nx >= 0 && nx < 3) || (ny >= 0 && ny < 3)) {
+        var mn = nx;
+        if (_bj_fd2_uge(nx, ny) == 1) { mn = ny; }
+        var mf: f64 = _bj_fd2_u2f(mn);
+        var size: f64 = mf * dx;
+        return Err(_bj_err_insufficient_resolution(mn, size));
+    }
+    if (_bj_fd2_pos(dx) == 0) {
+        var t = _bj_err_reason(BJ_ERR_INVALID_PARAMETER);
+        _bj_tx_cstr(t, "dx must be finite and positive, got ");
+        _bj_fmt_f64_display(t, dx);
+        return Err(BJ_ERR_INVALID_PARAMETER);
+    }
+    var cells: i64[1];
+    if (_bj_fd2_umul(nx, ny, &cells) == 0) {
+        var tg = _bj_err_reason(BJ_ERR_INVALID_PARAMETER);
+        _bj_tx_cstr(tg, "grid [");
+        _bj_tx_u64(tg, nx);
+        _bj_tx_cstr(tg, ", ");
+        _bj_tx_u64(tg, ny);
+        _bj_tx_cstr(tg, "] is too large");
+        return Err(BJ_ERR_INVALID_PARAMETER);
+    }
+    var n = cells[0];
+    var c: f64 = BJ_SPEED_OF_LIGHT;
+    var r2: f64 = 2.0 * _BJ_FD2_SQRT_2;
+    var r2c: f64 = r2 * c;
+    var dt: f64 = dx / r2c;
+    var map = 0;
+    var bytes = 0;
+    if (n >= 0 && n <= _BJ_FD2_MAX_CELLS) {
+        bytes = (n * _BJ_FD2_ARRAYS + 2 * nx) * 8;
+        map = mmap_anon(bytes);
+    }
+    if (map == 0) { return Err(_bj_fd2_alloc_err(n)); }
+    var e0dx: f64 = BJ_EPSILON_0 * dx;
+    var ce: f64 = dt / e0dx;
+    var m0dx: f64 = BJ_MU_0 * dx;
+    var ch: f64 = dt / m0dx;
+    var cep: *f64 = _bj_fd2_f64p(map + 3 * n * 8);
+    var chp: *f64 = _bj_fd2_f64p(map + 4 * n * 8);
+    var eps: *f64 = _bj_fd2_f64p(map + 5 * n * 8);
+    var mu: *f64 = _bj_fd2_f64p(map + 6 * n * 8);
+    for (var i = 0; i < n; i = i + 1) {
+        cep[i] = ce;
+        chp[i] = ch;
+        eps[i] = 1.0;
+        mu[i] = 1.0;
+    }
+    out.mode = mode;
+    out.nx = nx;
+    out.ny = ny;
+    out.dx = dx;
+    out.dt = dt;
+    out.step = 0;
+    out.fz = map;
+    out.fx = map + n * 8;
+    out.fy = map + 2 * n * 8;
+    out.ce = map + 3 * n * 8;
+    out.ch = map + 4 * n * 8;
+    out.permittivity = map + 5 * n * 8;
+    out.permeability = map + 6 * n * 8;
+    out.work = map + 7 * n * 8;
+    out.ca = 0;
+    out.conductivity = 0;
+    out.cpml = 0;
+    out.map_bytes = bytes;
+    out.lossy_bytes = 0;
+    if (_bj_log_on(4) == 1) {
+        var lb[256];
+        var lt[24];
+        _bj_tx_init(&lt, &lb, 256);
+        _bj_tx_cstr(&lt, "2D FDTD simulation created nx=");
+        _bj_tx_u64(&lt, nx);
+        _bj_tx_cstr(&lt, " ny=");
+        _bj_tx_u64(&lt, ny);
+        _bj_tx_cstr(&lt, " dx=");
+        _bj_fmt_f64_debug(&lt, dx);
+        _bj_tx_cstr(&lt, " dt=");
+        _bj_fmt_f64_debug(&lt, dt);
+        _bj_tx_cstr(&lt, " mode=");
+        if (mode == BJ_MODE2D_TE) { _bj_tx_cstr(&lt, "Te"); }
+        else { _bj_tx_cstr(&lt, "Tm"); }
+        _bj_log_text(4, &lt);
+    }
+    return Ok(0);
+}
+
+# Gives a grid's mappings back and empties it (nx = ny = 0, every address 0); a second call does nothing.
+public fn BjFdtd2d_free(sim: *BjFdtd2d): i64 {
+    if (sim.map_bytes > 0) { cyr_munmap(sim.fz, sim.map_bytes); }
+    if (sim.lossy_bytes > 0) { cyr_munmap(sim.ca, sim.lossy_bytes); }
+    sim.fz = 0;
+    sim.fx = 0;
+    sim.fy = 0;
+    sim.ce = 0;
+    sim.ch = 0;
+    sim.ca = 0;
+    sim.permittivity = 0;
+    sim.permeability = 0;
+    sim.conductivity = 0;
+    sim.work = 0;
+    sim.nx = 0;
+    sim.ny = 0;
+    sim.map_bytes = 0;
+    sim.lossy_bytes = 0;
+    return 0;
+}
+
+impl BjFdtd2d {
+    # The linear index of node (x, y): y·nx + x. Mirrors `Fdtd2d::idx`.
+    #must_use
+    public fn idx(self, x, y): i64 {
+        return y * self.nx + x;
+    }
+
+    # Writes material values to an already validated region [x0, x1) × [y0, y1) and refreshes the update coefficients;
+    # a flag of 0 leaves that property as it is (Rust's None). The first region with σ > 0 maps C_a (1) and σ (0) for
+    # every cell: Ok(0), or Err(InvalidParameter) "cannot allocate {n} grid values" with nothing written. Mirrors
+    # `Fdtd2d::apply_region`.
+    fn apply_region(self, r: *i64, has_eps, eps_r: f64, has_mu, mu_r: f64, has_sigma, sigma: f64): Result {
+        var nx = self.nx;
+        var n = nx * self.ny;
+        if (has_sigma == 1 && sigma > 0.0 && self.ca == 0) {
+            var map = mmap_anon(2 * n * 8);
+            if (map == 0) { return Err(_bj_fd2_alloc_err(n)); }
+            var cap: *f64 = _bj_fd2_f64p(map);
+            for (var i = 0; i < n; i = i + 1) { cap[i] = 1.0; }
+            self.ca = map;
+            self.conductivity = map + n * 8;
+            self.lossy_bytes = 2 * n * 8;
+        }
+        if (_bj_log_on(4) == 1) {
+            var lb[256];
+            var lt[24];
+            _bj_tx_init(&lt, &lb, 256);
+            _bj_tx_cstr(&lt, "2D FDTD material region set xs=");
+            _bj_tx_u64(&lt, r[0]);
+            _bj_tx_cstr(&lt, "..");
+            _bj_tx_u64(&lt, r[1]);
+            _bj_tx_cstr(&lt, " ys=");
+            _bj_tx_u64(&lt, r[2]);
+            _bj_tx_cstr(&lt, "..");
+            _bj_tx_u64(&lt, r[3]);
+            _bj_log_text(4, &lt);
+        }
+        var dt: f64 = self.dt;
+        var dx: f64 = self.dx;
+        var m0dx: f64 = BJ_MU_0 * dx;
+        var base_h: f64 = dt / m0dx;
+        var eps: *f64 = _bj_fd2_f64p(self.permittivity);
+        var mu: *f64 = _bj_fd2_f64p(self.permeability);
+        var ce: *f64 = _bj_fd2_f64p(self.ce);
+        var ch: *f64 = _bj_fd2_f64p(self.ch);
+        var ca: *f64 = _bj_fd2_f64p(self.ca);
+        var cond: *f64 = _bj_fd2_f64p(self.conductivity);
+        for (var y = r[2]; y < r[3]; y = y + 1) {
+            for (var x = r[0]; x < r[1]; x = x + 1) {
+                var i = y * nx + x;
+                if (has_mu == 1) {
+                    mu[i] = mu_r;
+                    var hm: f64 = base_h / mu_r;
+                    ch[i] = hm;
+                }
+                if (has_eps == 1 || has_sigma == 1) {
+                    if (has_eps == 1) { eps[i] = eps_r; }
+                    if (has_sigma == 1 && self.conductivity != 0) { cond[i] = sigma; }
+                    var s: f64 = 0.0;
+                    if (self.conductivity != 0) { s = cond[i]; }
+                    var cav, cbv = _bj_fd2_e_coefficients(dt, dx, eps[i], s);
+                    ce[i] = cbv;
+                    if (self.ca != 0) { ca[i] = cav; }
+                }
+            }
+        }
+        return Ok(0);
+    }
+
+    # The validated region [x0, x1) × [y0, y1) into r[0..4] (x0, x1, y0, y1, each end clamped to the grid): 0, or
+    # InvalidParameter (x's first) recorded and its code. Mirrors `Fdtd2d::region`.
+    fn region(self, x0, y0, x1, y1, r: *i64): i64 {
+        var rx: i64[2];
+        var ry: i64[2];
+        var e = _bj_fd2_range("x", x0, x1, self.nx, &rx);
+        if (e != 0) { return e; }
+        e = _bj_fd2_range("y", y0, y1, self.ny, &ry);
+        if (e != 0) { return e; }
+        r[0] = rx[0];
+        r[1] = rx[1];
+        r[2] = ry[0];
+        r[3] = ry[1];
+        return 0;
+    }
+
+    # Sets ε_r over [x0, x1) × [y0, y1), the ends clamped to the grid; σ already set there is kept. Ok(0), or with
+    # nothing modified Err(InvalidPermittivity) for an ε_r not finite and positive, Err(InvalidParameter) for a region
+    # that starts outside the grid or is inverted. Mirrors `Fdtd2d::set_permittivity`.
+    public fn set_permittivity(self, x0, y0, x1, y1, eps_r: f64): Result {
+        var e = _bj_fd2_check_eps(eps_r);
+        if (e != 0) { return Err(e); }
+        var r: i64[4];
+        e = self.region(x0, y0, x1, y1, &r);
+        if (e != 0) { return Err(e); }
+        return self.apply_region(&r, 1, eps_r, 0, 1.0, 0, 0.0);
+    }
+
+    # Sets μ_r over [x0, x1) × [y0, y1), the ends clamped. Ok(0), or with nothing modified Err(InvalidPermeability) for
+    # a μ_r not finite and positive, Err(InvalidParameter) for a bad region. Mirrors `Fdtd2d::set_permeability`.
+    public fn set_permeability(self, x0, y0, x1, y1, mu_r: f64): Result {
+        var e = _bj_fd2_check_mu(mu_r);
+        if (e != 0) { return Err(e); }
+        var r: i64[4];
+        e = self.region(x0, y0, x1, y1, &r);
+        if (e != 0) { return Err(e); }
+        return self.apply_region(&r, 0, 1.0, 1, mu_r, 0, 0.0);
+    }
+
+    # Sets σ (S/m) over [x0, x1) × [y0, y1), the ends clamped: lossy cells take E ← C_a·E + C_b·∇×H (the file
+    # comment); the first lossy region maps C_a and σ, and a lossless grid keeps the cheaper lossless update. Ok(0), or
+    # with nothing modified Err(InvalidParameter) for a σ negative or not finite, or a bad region. Mirrors
+    # `Fdtd2d::set_conductivity`.
+    public fn set_conductivity(self, x0, y0, x1, y1, sigma: f64): Result {
+        var e = _bj_fd2_check_sigma(sigma);
+        if (e != 0) { return Err(e); }
+        var r: i64[4];
+        e = self.region(x0, y0, x1, y1, &r);
+        if (e != 0) { return Err(e); }
+        return self.apply_region(&r, 0, 1.0, 0, 1.0, 1, sigma);
+    }
+
+    # Sets ε_r, μ_r and σ over [x0, x1) × [y0, y1) from a material, every input validated (ε_r, μ_r, σ, then the
+    # region) before anything is written. Mirrors `Fdtd2d::set_material`.
+    public fn set_material(self, x0, y0, x1, y1, mat: *BjMaterial): Result {
+        var e = _bj_fd2_check_eps(mat.eps_r);
+        if (e == 0) { e = _bj_fd2_check_mu(mat.mu_r); }
+        if (e == 0) { e = _bj_fd2_check_sigma(mat.conductivity); }
+        if (e != 0) { return Err(e); }
+        var r: i64[4];
+        e = self.region(x0, y0, x1, y1, &r);
+        if (e != 0) { return Err(e); }
+        return self.apply_region(&r, 1, mat.eps_r, 1, mat.mu_r, 1, mat.conductivity);
+    }
+
+    # Adds `value` to the out-of-plane field (E_z in TM, H_z in TE) at node (x, y), a soft source; a node outside the
+    # grid is ignored (usize compares), and one on the outermost ring is cleared by the wall on the next step. Mirrors
+    # `Fdtd2d::add_source`.
+    public fn add_source(self, x, y, value: f64) {
+        if (_bj_fd2_uge(x, self.nx) == 1 || _bj_fd2_uge(y, self.ny) == 1) { return 0; }
+        var f: *f64 = _bj_fd2_f64p(self.fz);
+        var i = y * self.nx + x;
+        f[i] = f[i] + value;
+        return 0;
+    }
+
+    # The TM update, E_z, H_x, H_y, in Rust's order: H_x −= C_h·(E_z[y + 1] − E_z[y]) on rows 0..ny − 1, H_y +=
+    # C_h·(E_z[x + 1] − E_z[x]) for x < nx − 1 on every row (each cell's update reads only E_z, so the rows
+    # interleave), E_z ← C_a·E_z where lossy, E_z += C_b·((H_y[x] − H_y[x − 1]) − (H_x[y] − H_x[y − 1])) on the
+    # interior, the PEC wall. Mirrors `Fdtd2d::step_tm`.
+    fn step_tm(self) {
+        var nx = self.nx;
+        var ny = self.ny;
+        var n = nx * ny;
+        var fz: *f64 = _bj_fd2_f64p(self.fz);
+        var fx: *f64 = _bj_fd2_f64p(self.fx);
+        var fy: *f64 = _bj_fd2_f64p(self.fy);
+        var ce: *f64 = _bj_fd2_f64p(self.ce);
+        var ch: *f64 = _bj_fd2_f64p(self.ch);
+        var w: *f64 = _bj_fd2_f64p(self.work);
+        var w2: *f64 = _bj_fd2_f64p(self.work + nx * 8);
+        for (var y = 0; y < ny; y = y + 1) {
+            var r = y * nx;
+            if (y < ny - 1) { _bj_fd2_diff(fx + r, ch + r, fz + r + nx, fz + r, w, nx, 0); }
+            _bj_fd2_diff(fy + r, ch + r, fz + r + 1, fz + r, w, nx - 1, 1);
+        }
+        if (self.ca != 0) { _bj_fd2_scale(fz, _bj_fd2_f64p(self.ca), n); }
+        for (var y2 = 1; y2 < ny - 1; y2 = y2 + 1) {
+            var r2 = y2 * nx;
+            _bj_fd2_curl(fz + r2, ce + r2, fy + r2, fx + r2, fx + r2 - nx, w, w2, nx, 1);
+        }
+        _bj_fd2_walls(fz, nx, ny);
+        return 0;
+    }
+
+    # The TE update, H_z, E_x, E_y, in Rust's order: E ← C_a·E where lossy, E_x += C_b·(H_z[y + 1] − H_z[y]) on rows
+    # 0..ny − 1, E_y −= C_b·(H_z[x + 1] − H_z[x]) for x < nx − 1 on every row, H_z −= C_h·((E_y[x] − E_y[x − 1]) −
+    # (E_x[y] − E_x[y − 1])) on the interior, the PMC wall. Mirrors `Fdtd2d::step_te`.
+    fn step_te(self) {
+        var nx = self.nx;
+        var ny = self.ny;
+        var n = nx * ny;
+        var fz: *f64 = _bj_fd2_f64p(self.fz);
+        var fx: *f64 = _bj_fd2_f64p(self.fx);
+        var fy: *f64 = _bj_fd2_f64p(self.fy);
+        var ce: *f64 = _bj_fd2_f64p(self.ce);
+        var ch: *f64 = _bj_fd2_f64p(self.ch);
+        var w: *f64 = _bj_fd2_f64p(self.work);
+        var w2: *f64 = _bj_fd2_f64p(self.work + nx * 8);
+        if (self.ca != 0) {
+            var ca: *f64 = _bj_fd2_f64p(self.ca);
+            _bj_fd2_scale(fx, ca, n);
+            _bj_fd2_scale(fy, ca, n);
+        }
+        for (var y = 0; y < ny; y = y + 1) {
+            var r = y * nx;
+            if (y < ny - 1) { _bj_fd2_diff(fx + r, ce + r, fz + r + nx, fz + r, w, nx, 1); }
+            _bj_fd2_diff(fy + r, ce + r, fz + r + 1, fz + r, w, nx - 1, 0);
+        }
+        for (var y2 = 1; y2 < ny - 1; y2 = y2 + 1) {
+            var r2 = y2 * nx;
+            _bj_fd2_curl(fz + r2, ch + r2, fy + r2, fx + r2, fx + r2 - nx, w, w2, nx, 0);
+        }
+        _bj_fd2_walls(fz, nx, ny);
+        return 0;
+    }
+
+    # Advances the simulation one time step: the mode's update, the outermost ring always the PEC (TM) or PMC (TE)
+    # wall. Mirrors `Fdtd2d::step_once`.
+    public fn step_once(self) {
+        if (self.mode == BJ_MODE2D_TE) { self.step_te(); }
+        else { self.step_tm(); }
+        self.step = self.step + 1;
+        return 0;
+    }
+
+    # Runs `steps` time steps (a usize). Before each, when (sx, sy) is in the grid, adds amplitude·sin(2π·frequency·t)
+    # at it as a soft source, t = step·dt; BJ_FDTD2D_NO_SOURCE for sx (or any node outside the grid) injects nothing,
+    # as Rust's None. Mirrors `Fdtd2d::run`.
+    public fn run(self, steps, sx, sy, frequency: f64, amplitude: f64) {
+        if (_bj_log_on(4) == 1) {
+            var lb[256];
+            var lt[24];
+            _bj_tx_init(&lt, &lb, 256);
+            _bj_tx_cstr(&lt, "2D FDTD run started steps=");
+            _bj_tx_u64(&lt, steps);
+            _bj_tx_cstr(&lt, " source=");
+            if (sx == BJ_FDTD2D_NO_SOURCE) {
+                _bj_tx_cstr(&lt, "None");
+            } else {
+                _bj_tx_cstr(&lt, "Some((");
+                _bj_tx_u64(&lt, sx);
+                _bj_tx_cstr(&lt, ", ");
+                _bj_tx_u64(&lt, sy);
+                _bj_tx_cstr(&lt, "))");
+            }
+            _bj_tx_cstr(&lt, " frequency=");
+            _bj_fmt_f64_debug(&lt, frequency);
+            _bj_tx_cstr(&lt, " amplitude=");
+            _bj_fmt_f64_debug(&lt, amplitude);
+            _bj_tx_cstr(&lt, " cpml=None");
+            _bj_log_text(4, &lt);
+        }
+        var w2pi: f64 = 2.0 * _BJ_FD2_PI;
+        var wf: f64 = w2pi * frequency;
+        for (var k = 0; _bj_fd2_uge(k, steps) == 0; k = k + 1) {
+            if (sx != BJ_FDTD2D_NO_SOURCE) {
+                var sf: f64 = _bj_fd2_u2f(self.step);
+                var t: f64 = sf * self.dt;
+                var arg: f64 = wf * t;
+                var sv: f64 = _bj_sin(arg);
+                var value: f64 = amplitude * sv;
+                self.add_source(sx, sy, value);
+            }
+            self.step_once();
+        }
+        return 0;
+    }
+
+    # The simulation time step·dt in seconds. Mirrors `Fdtd2d::time`.
+    #must_use
+    public fn time(self): f64 {
+        var sf: f64 = _bj_fd2_u2f(self.step);
+        var t: f64 = sf * self.dt;
+        return t;
+    }
+
+    # The total electromagnetic energy in the grid, Σ ½·m_z·k_z·f_z² + ½·m_xy·k_xy·(f_x² + f_y²) times dx², in Rust's
+    # order from +0: TM's (ε_r, ε₀) for f_z and (μ_r, μ₀) for f_x, f_y; TE's the other way. Mirrors
+    # `Fdtd2d::total_energy`.
+    #must_use
+    public fn total_energy(self): f64 {
+        var n = self.nx * self.ny;
+        var dx: f64 = self.dx;
+        var area: f64 = dx * dx;
+        var zm: *f64 = _bj_fd2_f64p(self.permittivity);
+        var zc: f64 = BJ_EPSILON_0;
+        var xym: *f64 = _bj_fd2_f64p(self.permeability);
+        var xyc: f64 = BJ_MU_0;
+        if (self.mode == BJ_MODE2D_TE) {
+            zm = _bj_fd2_f64p(self.permeability);
+            zc = BJ_MU_0;
+            xym = _bj_fd2_f64p(self.permittivity);
+            xyc = BJ_EPSILON_0;
+        }
+        var fz: *f64 = _bj_fd2_f64p(self.fz);
+        var fx: *f64 = _bj_fd2_f64p(self.fx);
+        var fy: *f64 = _bj_fd2_f64p(self.fy);
+        var energy: f64 = 0.0;
+        for (var i = 0; i < n; i = i + 1) {
+            var z: f64 = fz[i];
+            var a: f64 = 0.5 * zm[i];
+            var b: f64 = a * zc;
+            var c: f64 = b * z;
+            var d: f64 = c * z;
+            energy = energy + d;
+            var x: f64 = fx[i];
+            var y: f64 = fy[i];
+            var xx: f64 = x * x;
+            var yy: f64 = y * y;
+            var s: f64 = xx + yy;
+            var a2: f64 = 0.5 * xym[i];
+            var b2: f64 = a2 * xyc;
+            var c2: f64 = b2 * s;
+            energy = energy + c2;
+        }
+        var e: f64 = energy * area;
+        return e;
+    }
+}

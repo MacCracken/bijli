@@ -6508,3 +6508,59 @@ eigenmode search (`dft_magnitude`'s recurrence and magnitude, `find_eigenmodes`'
   equal**. `cpml.tcyr` (37) passes on all three. The gate is clean (no warnings; execution coverage 375 of 375
   functions); validate.py 760,824 rows, 0 problems; the oracle's `--check` and clippy clean. Next: 1b-1, `Fdtd2d`
   without the CPML.
+
+## 117. M6 part 1b-1: the 2D grid without its CPML (2026-11-16)
+
+- **`src/fdtd2d.cyr`** (a private file; `BjMode2d`, `BjFdtd2d`): `BjFdtd2d_new` (Rust's checks, texts and order:
+  InsufficientResolution below 3 nodes a side, dx, "grid [nx, ny] is too large" past 2^64 cells, "cannot allocate {n}
+  grid values"; dt = dx/(2√2·c); C_b = dt/(ε₀·dx) and C_h = dt/(μ₀·dx) in every cell), `idx`, `set_permittivity`,
+  `set_permeability`, `set_conductivity` and `set_material` (each validated before anything is written; the region's
+  ends clamped; `apply_region`'s C_a and C_b by Rust's `e_update_coefficients`, the first region with σ > 0 mapping C_a
+  and σ), `add_source`, `step_once`, `run` (Rust's `None` as `BJ_FDTD2D_NO_SOURCE`), `time`, `total_energy` (Rust's
+  order from +0) and `BjFdtd2d_free`. A mode word that is no `BjMode2d` (Rust's enum has no other) is refused first,
+  as `bj_try_write_touchstone`'s format.
+- **The updates**: TM's H_x, H_y and E_z (TE's E_x, E_y and H_z) on the packed `f64v_*` verbs row by row, Rust's
+  `row_diff` and `row_curl` with an add and a sub form (port plan §9.3), each lane rounding Rust's operations in its
+  order, through two scratch rows of nx on lane multiples with a scalar tail (probe p19); C_a's scaling packed too;
+  the walls zeroed after each step. A first form ran H_x over its (ny − 1)·nx contiguous cells in one call through the
+  one-row scratch, which overran the mapping on the 100 × 100 test (a SIGSEGV): row by row, as Rust's loop.
+- **ADR 0002 row 2, amended**: the seven arrays and the scratch rows are one anonymous mmap and C_a and σ a second, so
+  Rust's `check_grid`, `check_layout`'s grid half and the step's, run's and energy's guards go;
+  `desynced_fields_do_not_panic_2d` is n/a (the ledger records why).
+- **The corpus**: `fdtd_2d3d.tsv` gains 201 `Fdtd2d::script` rows (729 in all, 1.43 MB), m_fdtd.rs's script format
+  for the 2D grid (`m_fdtd_2d3d.rs`' comment: the regions, the material, a source, steps, `run`, and writes to the
+  field values), class T: construction's errors in Rust's order (2^62 cells refused as unallocatable, as Rust's
+  capacity overflow); in each mode a point source on the bench's 100 × 100 grid (frames 1 to 100), the smallest grids
+  from 3 × 3, sources on and outside the walls, dielectric, magnetic and material regions, the bench's lossy slab, a
+  material with σ then ε over it then σ = 0, a strong conductor, fdtd.rs's uniform-conductor decay, `run` with the
+  bench's source, none, one outside, a dielectric and 30 GHz; the regions' errors and the specials of each property;
+  `set_material`'s refusals in Rust's order; and 40 seeded scripts on grids of 3 to 30 a side.
+- **validate.py**: `Fd2` and `Fd2Scripts` replay the scripts in pure Python (no NumPy on the host): a phase's cells
+  are independent, so a list comprehension per row is Rust's arithmetic, and a row extending the previous one
+  continues from its grid. On glibc's sine it reproduces all 201 rows; on MPFR's none changes (3 s for the module).
+- **Tests**: `tests/fdtd2d.tcyr` (48 assertions): fdtd.rs's `test_fdtd2d_creation_tm`, `_creation_te`, `_too_small`,
+  `_invalid_dx`, `_courant`, `_source_injection`, `_source_oob_ignored`, `_tm_propagation`, `_te_propagation`,
+  `_energy_after_source`, `_run_with_source`, `_set_permittivity`, `_set_permittivity_invalid`, `_time`,
+  `_dielectric_slows_wave`, `_set_permeability`, `_set_permeability_invalid` and `_set_material`, and its
+  `cpml_tests`' `conductivity_coefficients` and `conductor_uniform_decay_matches_analytic_2d`;
+  `cyrius_fdtd2d_error_records` and `cyrius_fdtd2d_grid`. `tests/cpml.tcyr` (40) gains the main module's `test_cpml_creation`,
+  `test_cpml_coefficients_bounded` and `test_cpml_attach_sizes`, missed in 1a. The ledger: 716 ported, 10 n/a, 132
+  pending of 858. The tests that also drive an `Fdtd3d` wait for it (`new_rejects_non_finite_dx`,
+  `courant_numbers_are_half_the_limit`, `set_material_validates_before_mutating`, `region_bounds`,
+  `lossless_path_unchanged_by_material_api`).
+- **Surface parity**: `Fdtd2d::new` and ten of its methods are matched (583 items); the API snapshot gains 2
+  functions (2,122).
+- **Benchmarks**: Rust's three 2D benches without the CPML are twinned in `tests/bijli.bcyr`:
+  `fdtd/2d_step_100x100_tm` 46.4–47.6 µs (Rust 11.42 µs, 4.1×), `fdtd/2d_run_50_steps_80x80` 1.74–1.83 ms (416.78 µs,
+  4.2×; a grid made, 50 steps with a 1 GHz source, its energy), `fdtd/2d_step_100x100_tm_lossy` 49.3–50.7 µs (14.31
+  µs, 3.4×), the 1D grid's ratios before Part 2's scan (3.4–4.5×, §94). The interleaved A/B against HEAD: rounds 1
+  (load 2.3 to 2.8) and 3 (6.2 falling to 2.7, a pramana bench and a shravan job beside it) gave median ratios 1.00 and
+  0.96; round 2 ran as the load climbed from 3.1 to 8.1 (median 2.06, unchanged rows from 0.42× to 2.7×) and isn't
+  counted. No existing path changed. The benchmark record is regenerated with the twins, each row the least of the
+  seven full runs since M5's close (§115's four and these three), the other rows a few percent under §115's least of
+  four.
+- **Result, every target** (x86_64 ELF, x86_64 PE, aarch64): **19 modules, 0 failing; 641,905 ok, 0 failed, 0
+  measured, 0 pending, 119,120 accepted (ADR 01: 40,375; ADR 0002: 78,745)** over 761,025 rows; **all 480 digests
+  equal**. `fdtd2d.tcyr` (48) and `cpml.tcyr` (40) pass on all three. The gate is clean (no warnings; execution
+  coverage 377 of 377 functions; its audit first failed on the bench's one line past 120 characters, rewrapped);
+  validate.py 761,025 rows, 0 problems; the oracle's `--check` and clippy clean. Next: 1b-2, the CPML attached.

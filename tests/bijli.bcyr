@@ -1170,6 +1170,52 @@ fn main(): i64 {
     bench_report(bf3);
     if (is_err_result(tfd1) == 1 || is_err_result(tfd2) == 1 || fdsum == 7.0) { println("."); }
 
+    # fdtd (M6 part 1b-1): Rust's 2D benches without the CPML. A 100 × 100 TM step after a point source; an 80 × 80
+    # grid made and run 50 steps with a 1 GHz source, then its energy; the 100 × 100 step with a lossy slab (σ = 1 S/m
+    # over x ≥ 60).
+    var f2a: BjFdtd2d;
+    var tf2a, vf2a = BjFdtd2d_new(100, 100, 0.0001, BJ_MODE2D_TM, &f2a);
+    f2a.add_source(50, 50, 1.0);
+    var f2az: *f64 = bench_f64p(f2a.fz);
+    var f2sum: f64 = 0.0;
+    var b2a = bench_new("fdtd/2d_step_100x100_tm");
+    bench_batch_start(b2a);
+    for (var k = 0; k < 2000; k = k + 1) {
+        f2a.step_once();
+        f2sum = f2sum + f2az[5050];
+    }
+    bench_batch_stop(b2a, 2000);
+    bench_report(b2a);
+    BjFdtd2d_free(&f2a);
+    var b2b = bench_new("fdtd/2d_run_50_steps_80x80");
+    bench_batch_start(b2b);
+    for (var k = 0; k < 40; k = k + 1) {
+        var f2b: BjFdtd2d;
+        var tf2b, vf2b = BjFdtd2d_new(80, 80, 0.0001, BJ_MODE2D_TM, &f2b);
+        f2b.run(50, 40, 40, 1000000000.0, 1.0);
+        var e2b: f64 = f2b.total_energy();
+        f2sum = f2sum + e2b;
+        BjFdtd2d_free(&f2b);
+    }
+    bench_batch_stop(b2b, 40);
+    bench_report(b2b);
+    var f2c: BjFdtd2d;
+    var tf2c, vf2c = BjFdtd2d_new(100, 100, 0.0001, BJ_MODE2D_TM, &f2c);
+    var tf2s, vf2s = f2c.set_conductivity(60, 0, 100, 100, 1.0);
+    f2c.add_source(30, 50, 1.0);
+    var f2cz: *f64 = bench_f64p(f2c.fz);
+    var b2c = bench_new("fdtd/2d_step_100x100_tm_lossy");
+    bench_batch_start(b2c);
+    for (var k = 0; k < 2000; k = k + 1) {
+        f2c.step_once();
+        f2sum = f2sum + f2cz[5030];
+    }
+    bench_batch_stop(b2c, 2000);
+    bench_report(b2c);
+    BjFdtd2d_free(&f2c);
+    var f2bad = is_err_result(tf2a) + is_err_result(tf2c) + is_err_result(tf2s);
+    if (f2bad > 0 || f2sum == 7.0) { println("."); }
+
     # fdtd (M5 part 1b), Cyrius-only: a Gaussian pulse's value across its width, and a 200-cell TF/SF auxiliary grid
     # stepped under a Gaussian drive (no Rust bench covers either).
     var pdt: f64 = 0.0000000000001;

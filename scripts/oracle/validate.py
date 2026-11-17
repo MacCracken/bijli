@@ -10676,14 +10676,265 @@ def fd2_eval(fn, ins_raw, P, C):
     return None
 
 
+# M6 part 1b-1: `Fdtd2d` without its CPML, transcribed in Rust's order of operations on Python's doubles (each
+# row's cells are independent within a phase, so a list comprehension per row is Rust's arithmetic), `run`'s sine from
+# the primitives P.
+
+class Fd2:
+    """An `Fdtd2d`: nx × ny, fields row-major (index y·nx + x)."""
+
+    def __init__(self, nx, ny, dx, mode, K):
+        c, eps0, mu0 = K
+        self.nx, self.ny, self.dx, self.mode, self.K = nx, ny, dx, mode, K
+        n = nx * ny
+        self.dt = fdiv(dx, 2.0 * math.sqrt(2.0) * c)
+        self.step = 0
+        self.fz, self.fx, self.fy = [0.0] * n, [0.0] * n, [0.0] * n
+        self.ce, self.ch = [fdiv(self.dt, eps0 * dx)] * n, [fdiv(self.dt, mu0 * dx)] * n
+        self.eps, self.mu = [1.0] * n, [1.0] * n
+        self.ca, self.cond = [], []
+
+    def copy(self):
+        o = Fd2.__new__(Fd2)
+        o.__dict__ = {k: (list(v) if isinstance(v, list) else v) for k, v in self.__dict__.items()}
+        return o
+
+    def e_coefficients(self, eps_r, sigma):
+        _c, eps0, _mu0 = self.K
+        if sigma > 0.0:
+            eps = eps_r * eps0
+            hl = fdiv(sigma * self.dt, 2.0 * eps)
+            return fdiv(1.0 - hl, 1.0 + hl), fdiv(fdiv(self.dt, eps * self.dx), 1.0 + hl)
+        return 1.0, fdiv(fdiv(self.dt, eps0 * self.dx), eps_r)
+
+    def region(self, x0, y0, x1, y1):
+        for axis, lo, hi, n in (("x", x0, x1, self.nx), ("y", y0, y1, self.ny)):
+            if lo >= n or hi < lo:
+                return ip_err(f"region {axis} range {lo}..{hi} is invalid for a grid of {n} cells")
+        return None
+
+    def apply(self, x0, y0, x1, y1, eps_r=None, mu_r=None, sigma=None):
+        n, nx = self.nx * self.ny, self.nx
+        if sigma is not None and sigma > 0.0 and not self.ca:
+            self.ca, self.cond = [1.0] * n, [0.0] * n
+        base_h = fdiv(self.dt, self.K[2] * self.dx)
+        for y in range(y0, min(y1, self.ny)):
+            for x in range(x0, min(x1, self.nx)):
+                i = y * nx + x
+                if mu_r is not None:
+                    self.mu[i] = mu_r
+                    self.ch[i] = fdiv(base_h, mu_r)
+                if eps_r is None and sigma is None:
+                    continue
+                if eps_r is not None:
+                    self.eps[i] = eps_r
+                if sigma is not None and self.cond:
+                    self.cond[i] = sigma
+                ca, cb = self.e_coefficients(self.eps[i], self.cond[i] if self.cond else 0.0)
+                self.ce[i] = cb
+                if self.ca:
+                    self.ca[i] = ca
+
+    def add_source(self, x, y, v):
+        if x < self.nx and y < self.ny:
+            self.fz[y * self.nx + x] += v
+
+    def step_once(self):
+        nx, ny = self.nx, self.ny
+        fz, fx, fy, ce, ch = self.fz, self.fx, self.fy, self.ce, self.ch
+        tm = self.mode == 0
+        if not tm and self.ca:
+            self.fx = fx = [v * a for v, a in zip(fx, self.ca)]
+            self.fy = fy = [v * a for v, a in zip(fy, self.ca)]
+        kx = ch if tm else ce
+        for y in range(ny - 1):
+            r = y * nx
+            if tm:
+                fx[r:r + nx] = [h - k * (a - b) for h, k, a, b in zip(fx[r:r + nx], kx[r:r + nx], fz[r + nx:r + 2 * nx],
+                                                                      fz[r:r + nx])]
+            else:
+                fx[r:r + nx] = [h + k * (a - b) for h, k, a, b in zip(fx[r:r + nx], kx[r:r + nx], fz[r + nx:r + 2 * nx],
+                                                                      fz[r:r + nx])]
+        for y in range(ny):
+            r = y * nx
+            seg = zip(fy[r:r + nx - 1], kx[r:r + nx - 1], fz[r + 1:r + nx], fz[r:r + nx - 1])
+            if tm:
+                fy[r:r + nx - 1] = [h + k * (a - b) for h, k, a, b in seg]
+            else:
+                fy[r:r + nx - 1] = [h - k * (a - b) for h, k, a, b in seg]
+        if tm and self.ca:
+            self.fz = fz = [v * a for v, a in zip(fz, self.ca)]
+        kz = ce if tm else ch
+        for y in range(1, ny - 1):
+            r = y * nx
+            seg = zip(fz[r + 1:r + nx - 1], kz[r + 1:r + nx - 1], fy[r + 1:r + nx], fy[r:r + nx - 1], fx[r + 1:r + nx],
+                      fx[r - nx + 1:r - 1])
+            if tm:
+                fz[r + 1:r + nx - 1] = [d + k * ((a1 - a0) - (b1 - b0)) for d, k, a1, a0, b1, b0 in seg]
+            else:
+                fz[r + 1:r + nx - 1] = [d - k * ((a1 - a0) - (b1 - b0)) for d, k, a1, a0, b1, b0 in seg]
+        n = nx * ny
+        for x in range(nx):
+            fz[x] = 0.0
+            fz[n - nx + x] = 0.0
+        for y in range(ny):
+            fz[y * nx] = 0.0
+            fz[y * nx + nx - 1] = 0.0
+        self.step += 1
+
+    def time(self):
+        return float(self.step) * self.dt
+
+    def energy(self):
+        _c, eps0, mu0 = self.K
+        zm, zc, xym, xyc = (self.eps, eps0, self.mu, mu0) if self.mode == 0 else (self.mu, mu0, self.eps, eps0)
+        e = 0.0
+        for z, x, y, mz, mxy in zip(self.fz, self.fx, self.fy, zm, xym):
+            e += 0.5 * mz * zc * z * z
+            e += 0.5 * mxy * xyc * (x * x + y * y)
+        return e * (self.dx * self.dx)
+
+    def state(self):
+        nx, ny = self.nx, self.ny
+        out = [("i", self.step), ("f", self.dt), ("f", self.time()), ("f", self.energy())]
+        for v in (self.fz, self.fx, self.fy, self.eps, self.mu, self.ce, self.ch):
+            out.append(("i", fd_digest(v)))
+        for v in (self.ca, self.cond):
+            out += [("i", len(v)), ("i", fd_digest(v))]
+        for x, y in ((nx // 2, ny // 2), (1, 1), (nx - 2, ny - 2), (0, ny // 2), (nx // 2, 1)):
+            k = y * nx + x
+            out += [("f", self.fz[k]), ("f", self.fx[k]), ("f", self.fy[k])]
+        return out
+
+
+def fd2_ops(toks):
+    """A 2D script's operations: (opcode, arguments) per operation, `run`'s source None or (x, y)."""
+    ops, k = [], 0
+    while k < len(toks):
+        code = toks[k][1]
+        if code in (1, 2, 3):
+            ops.append((code, [toks[k + j][1] for j in range(1, 6)]))
+            k += 6
+        elif code == 4:
+            ops.append((code, [toks[k + j][1] for j in range(1, 8)]))
+            k += 8
+        elif code == 5:
+            ops.append((code, [toks[k + 1][1], toks[k + 2][1], toks[k + 3][1]]))
+            k += 4
+        elif code == 6:
+            ops.append((code, [toks[k + 1][1]]))
+            k += 2
+        elif code == 7:
+            if toks[k + 2][0] == "i":
+                src, at = (toks[k + 2][1] & FD_U64, toks[k + 3][1] & FD_U64), k + 4
+            else:
+                src, at = None, k + 3
+            ops.append((code, [toks[k + 1][1], src, toks[at][1], toks[at + 1][1]]))
+            k = at + 2
+        elif code == 8:
+            ops.append((code, [toks[k + 1][1], toks[k + 2][1]]))
+            k += 3
+        else:
+            raise ValueError(f"unknown 2D opcode {code}")
+    return ops
+
+
+class Fd2Scripts:
+    """Replays fdtd_2d3d.tsv's 2D scripts on primitives P; a row whose inputs extend the previous row's continues from
+    that row's grid (the frames of one scenario)."""
+
+    def __init__(self, root: Path, P):
+        c = golden_consts(root)
+        self.K = (c["field::SPEED_OF_LIGHT"], c["field::EPSILON_0"], c["field::MU_0"])
+        self.P = P
+        self.prev, self.sim, self.errs = None, None, []
+
+    def eval(self, ins_raw):
+        raw = ins_raw.split(" ")
+        toks = [parse_tok(x) for x in raw]
+        nx, ny, dx, mode = toks[0][1] & FD_U64, toks[1][1] & FD_U64, toks[2][1], toks[3][1]
+        if nx < 3 or ny < 3:
+            m = min(nx, ny)
+            return [("E", "InsufficientResolution"),
+                    ("s", f"grid resolution too coarse: {m} cells for domain size {rust_display(float(m) * dx)}")]
+        if not fd_pos(dx):
+            return ip_err(f"dx must be finite and positive, got {rust_display(dx)}")
+        if nx * ny > FD_U64:
+            return ip_err(f"grid [{nx}, {ny}] is too large")
+        if nx * ny * 8 > (1 << 63) - 1:
+            return ip_err(f"cannot allocate {nx * ny} grid values")
+        ops = fd2_ops(toks[4:])
+        if self.prev is not None and raw[:len(self.prev)] == self.prev and self.sim is not None:
+            sim, errs, done = self.sim.copy(), list(self.errs), len(fd2_ops([parse_tok(x) for x in self.prev[4:]]))
+        else:
+            sim, errs, done = Fd2(nx, ny, dx, mode, self.K), [], 0
+        for code, a in ops[done:]:
+            e = None
+            if code in (1, 2, 3, 4):
+                v = a[4]
+                if code == 1 and not fd_pos(v):
+                    e = [("E", "InvalidPermittivity"), ("s", f"invalid permittivity: {rust_display(v)} (must be > 0)")]
+                elif code == 2 and not fd_pos(v):
+                    e = [("E", "InvalidPermeability"), ("s", f"invalid permeability: {rust_display(v)} (must be > 0)")]
+                elif code == 3 and not (v >= 0.0 and math.isfinite(v)):
+                    e = ip_err(f"conductivity must be finite and ≥ 0 S/m, got {rust_display(v)}")
+                elif code == 4:
+                    em, mm, sm = a[4], a[5], a[6]
+                    if not fd_pos(em):
+                        e = [("E", "InvalidPermittivity"),
+                             ("s", f"invalid permittivity: {rust_display(em)} (must be > 0)")]
+                    elif not fd_pos(mm):
+                        e = [("E", "InvalidPermeability"),
+                             ("s", f"invalid permeability: {rust_display(mm)} (must be > 0)")]
+                    elif not (sm >= 0.0 and math.isfinite(sm)):
+                        e = ip_err(f"conductivity must be finite and ≥ 0 S/m, got {rust_display(sm)}")
+                x0, y0, x1, y1 = (q & FD_U64 for q in a[:4])
+                if e is None:
+                    e = sim.region(x0, y0, x1, y1)
+                if e is None:
+                    if code == 1:
+                        sim.apply(x0, y0, x1, y1, eps_r=v)
+                    elif code == 2:
+                        sim.apply(x0, y0, x1, y1, mu_r=v)
+                    elif code == 3:
+                        sim.apply(x0, y0, x1, y1, sigma=v)
+                    else:
+                        sim.apply(x0, y0, x1, y1, eps_r=a[4], mu_r=a[5], sigma=a[6])
+            elif code == 5:
+                sim.add_source(a[0] & FD_U64, a[1] & FD_U64, a[2])
+            elif code == 6:
+                for _ in range(a[0] & FD_U64):
+                    sim.step_once()
+            elif code == 7:
+                steps, src, fr, am = a[0] & FD_U64, a[1], a[2], a[3]
+                for _ in range(steps):
+                    if src is not None:
+                        sim.add_source(src[0], src[1], am * self.P["sin"](2.0 * math.pi * fr * sim.time()))
+                    sim.step_once()
+            elif code == 8:
+                which, v = a[0], a[1]
+                n = nx * ny
+                if which == 0:
+                    sim.fz = [v] * n
+                elif which == 1:
+                    sim.fx = [v] * n
+                else:
+                    sim.fy = [v] * n
+            if e is not None:
+                errs += e
+        self.prev, self.sim, self.errs = raw, sim, errs
+        return errs + sim.state()
+
+
 def validate_fdtd_2d3d(root: Path, path: Path) -> list:
     header, _rows = read_tsv(path)
     errs = check_platform(header)
     if errs:
         return errs
     C = golden_consts(root)
+    f2 = Fd2Scripts(root, GLIBC_P)
     for n, (fn, _cls, ins, outs, _v) in enumerate(sc_lines(path), 1):
-        want = fd2_eval(fn, ins, GLIBC_P, C)
+        want = f2.eval(ins) if fn == "Fdtd2d::script" else fd2_eval(fn, ins, GLIBC_P, C)
         if want is None:
             errs.append(f"fdtd_2d3d row {n}: no transcription for {fn}")
             continue
@@ -10697,7 +10948,15 @@ def fdtd_2d3d_corrections(root: Path, path: Path):
     def fixes(_rows):
         out = []
         C = golden_consts(root)
+        f2 = Fd2Scripts(root, MPFR_P)
         for fn, cls, ins, outs, _v in sc_lines(path):
+            if fn == "Fdtd2d::script":
+                want = f2.eval(ins)
+                old = wave_toks([parse_tok(x) for x in outs.split(" ")])
+                if " i:7 " in f" {ins} " and not toks_same(want, old):
+                    out.append((fn, ins, wire(want), f"oracle {outs[:120]}; a correctly rounded sin gives "
+                                                     f"{wire(want)[:60]}"))
+                continue
             if cls != "C":
                 continue
             want = fd2_eval(fn, ins, MPFR_P, C)

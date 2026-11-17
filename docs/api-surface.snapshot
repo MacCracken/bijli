@@ -804,6 +804,8 @@ error::bj_last_error_value/0
 error::bj_thread_done/0
 fdtd1d::BjFdtd1d_free/1
 fdtd1d::BjFdtd1d_new/3
+fdtd2d::BjFdtd2d_free/1
+fdtd2d::BjFdtd2d_new/5
 fdtd_media::BjDebyeMaterial_new/3
 fdtd_media::BjDebyeMaterial_try_new/4
 fdtd_media::BjDebyeMaterial_water/0

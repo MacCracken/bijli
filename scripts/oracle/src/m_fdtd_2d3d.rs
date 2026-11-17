@@ -14,6 +14,21 @@
 //!   are kept small, or past 2^64 (where Rust's `checked_mul` leaves the layer unattached): an allocation between
 //!   depends on the machine.
 //!
+//! M6 part 1b-1: `Fdtd2d` without its CPML, as scripts (class T, port plan §6 step 5's trajectory format): the
+//! grid's `i:<nx> i:<ny> f:<dx> i:<mode>` (0 TM, 1 TE), then its operations in order, each an opcode and its arguments:
+//! - `i:1|2|3 i:<x0> i:<y0> i:<x1> i:<y1> f:<v>`: `set_permittivity`, `set_permeability`, `set_conductivity`;
+//! - `i:4 i:<x0> i:<y0> i:<x1> i:<y1> f:<eps_r> f:<mu_r> f:<sigma>`: `set_material`;
+//! - `i:5 i:<x> i:<y> f:<v>`: `add_source`;
+//! - `i:6 i:<k>`: `step_once`, k times;
+//! - `i:7 i:<steps> i:<x> i:<y>|n: f:<frequency> f:<amplitude>`: `run`, `n:` for `None`;
+//! - `i:8 i:<field> f:<v>`: every value of `fz` (0), `fx` (1) or `fy` (2) set to v (Rust's public vectors).
+//!
+//! The outputs: `new`'s error, or each failing operation's error in order, then the state: `i:<step>`, `f:<dt>`,
+//! `f:<time()>`, `f:<total_energy()>`, the digests (`i:`, as `fdtd.tsv`'s) of `fz`, `fx`, `fy`, `permittivity`,
+//! `permeability`, `ce` and `ch`, then `ca`'s and `conductivity`'s lengths and digests (empty while lossless), then
+//! `f:` `fz`, `fx` and `fy` at the probes (nx/2, ny/2), (1, 1), (nx − 2, ny − 2), (0, ny/2) and (nx/2, 1). The
+//! private vectors are read from the grid's `Debug` text.
+//!
 //! The grid: the validation of each parameter over the specials and its boundary; thicknesses 2^60 + 1 and usize::MAX,
 //! whose profiles no allocation can hold (smaller huge ones depend on the machine); the profiles around the classic
 //! grading, each parameter swept alone, at 2D and 3D Courant steps; the extremes of dx, dt, κ_max, α_max and m; and
@@ -23,9 +38,10 @@ use std::collections::BTreeSet;
 use std::hint::black_box;
 
 use crate::grids::{Rng, specials};
-use crate::m_fdtd::{dbg_field, dbg_f64, dbg_vec, res_toks, seq, u};
-use crate::tsv::{Class, Module, Tok, f};
-use bijli::fdtd::{Cpml, CpmlParams};
+use crate::m_fdtd::{dbg_field, dbg_f64, dbg_vec, digest, res_toks, seq, u};
+use crate::tsv::{Class, Module, Tok, err, f, i, s};
+use bijli::fdtd::{Cpml, CpmlParams, Fdtd2d, Mode2d};
+use bijli::material::Material;
 
 /// The module's rows, each (function, inputs) once.
 struct Rows {
@@ -197,8 +213,257 @@ fn emit_1a(r: &mut Rows) {
     r.attach(0, 1e-4, 1e-13, 9, 9);
 }
 
+// ── part 1b-1: Fdtd2d without its CPML ─────────────────────────────────────────────────────────────────────────
+
+/// One operation of a 2D script.
+#[derive(Clone, Copy)]
+enum Op2 {
+    Eps(usize, usize, usize, usize, f64),
+    Mu(usize, usize, usize, usize, f64),
+    Sigma(usize, usize, usize, usize, f64),
+    Mat(usize, usize, usize, usize, f64, f64, f64),
+    Source(usize, usize, f64),
+    Step(usize),
+    Run(usize, Option<(usize, usize)>, f64, f64),
+    Fill(usize, f64),
+}
+
+impl Op2 {
+    fn toks(self) -> Vec<Tok> {
+        match self {
+            Self::Eps(a, b, c, d, x) => vec![i(1), u(a), u(b), u(c), u(d), f(x)],
+            Self::Mu(a, b, c, d, x) => vec![i(2), u(a), u(b), u(c), u(d), f(x)],
+            Self::Sigma(a, b, c, d, x) => vec![i(3), u(a), u(b), u(c), u(d), f(x)],
+            Self::Mat(a, b, c, d, e, m, sg) => vec![i(4), u(a), u(b), u(c), u(d), f(e), f(m), f(sg)],
+            Self::Source(x, y, v) => vec![i(5), u(x), u(y), f(v)],
+            Self::Step(k) => vec![i(6), u(k)],
+            Self::Run(k, src, fr, am) => {
+                let mut t = vec![i(7), u(k)];
+                match src {
+                    Some((x, y)) => t.extend([u(x), u(y)]),
+                    None => t.push(Tok::None),
+                }
+                t.extend([f(fr), f(am)]);
+                t
+            }
+            Self::Fill(w, v) => vec![i(8), u(w), f(v)],
+        }
+    }
+}
+
+/// A 2D grid's state tokens (module comment).
+fn state2(sim: &Fdtd2d) -> Vec<Tok> {
+    let d = format!("{sim:?}");
+    let (nx, ny) = (sim.nx, sim.ny);
+    let mut out = vec![u(sim.step), f(sim.dt), f(sim.time()), f(sim.total_energy()), i(digest(&sim.fz)),
+                       i(digest(&sim.fx)), i(digest(&sim.fy))];
+    for name in ["permittivity", "permeability", "ce", "ch"] {
+        let v = dbg_vec(&d, name);
+        assert_eq!(v.len(), nx * ny, "{name} has nx·ny values");
+        out.push(i(digest(&v)));
+    }
+    for name in ["ca", "conductivity"] {
+        let v = dbg_vec(&d, name);
+        out.extend([u(v.len()), i(digest(&v))]);
+    }
+    for (x, y) in [(nx / 2, ny / 2), (1, 1), (nx - 2, ny - 2), (0, ny / 2), (nx / 2, 1)] {
+        let k = y * nx + x;
+        out.extend([f(sim.fz[k]), f(sim.fx[k]), f(sim.fy[k])]);
+    }
+    out
+}
+
+/// A 2D script being built: its grid (the error when `new` failed), inputs and the operations' errors so far.
+struct Script2 {
+    sim: Result<Fdtd2d, Vec<Tok>>,
+    ins: Vec<Tok>,
+    errs: Vec<Tok>,
+}
+
+impl Script2 {
+    fn new(nx: usize, ny: usize, dx: f64, mode: Mode2d) -> Self {
+        let sim = Fdtd2d::new(black_box(nx), black_box(ny), black_box(dx), mode)
+            .map_err(|e| vec![err(&e), s(e.to_string())]);
+        let m = if mode == Mode2d::Te { 1 } else { 0 };
+        Self { sim, ins: vec![u(nx), u(ny), f(dx), i(m)], errs: Vec::new() }
+    }
+
+    fn apply(&mut self, op: Op2) {
+        self.ins.extend(op.toks());
+        let sim = self.sim.as_mut().expect("operations only on a grid that was made");
+        let r = match op {
+            Op2::Eps(a, b, c, d, x) => sim.set_permittivity(a, b, c, d, x),
+            Op2::Mu(a, b, c, d, x) => sim.set_permeability(a, b, c, d, x),
+            Op2::Sigma(a, b, c, d, x) => sim.set_conductivity(a, b, c, d, x),
+            Op2::Mat(a, b, c, d, e, m, sg) => sim.set_material(a, b, c, d, &Material::new(e, m, sg)),
+            Op2::Source(x, y, v) => {
+                sim.add_source(x, y, v);
+                Ok(())
+            }
+            Op2::Step(k) => {
+                for _ in 0..k {
+                    sim.step_once();
+                }
+                Ok(())
+            }
+            Op2::Run(k, src, fr, am) => {
+                sim.run(k, src, fr, am);
+                Ok(())
+            }
+            Op2::Fill(w, v) => {
+                match w {
+                    0 => sim.fz.fill(v),
+                    1 => sim.fx.fill(v),
+                    _ => sim.fy.fill(v),
+                }
+                Ok(())
+            }
+        };
+        if let Err(e) = r {
+            self.errs.extend([err(&e), s(e.to_string())]);
+        }
+    }
+
+    fn outs(&self) -> Vec<Tok> {
+        match &self.sim {
+            Err(e) => e.clone(),
+            Ok(sim) => {
+                let mut out = self.errs.clone();
+                out.extend(state2(sim));
+                out
+            }
+        }
+    }
+}
+
+impl Rows {
+    /// A 2D scenario: `setup`, then a row at each frame (cumulative steps), `advance` bringing the grid there.
+    #[allow(clippy::too_many_arguments)]
+    fn frames2(&mut self, nx: usize, ny: usize, dx: f64, mode: Mode2d, setup: &[Op2], frames: &[usize],
+               advance: impl Fn(usize) -> Op2) {
+        let mut sc = Script2::new(nx, ny, dx, mode);
+        if sc.sim.is_err() {
+            self.emit("Fdtd2d::script", Class::T, &sc.ins, &sc.outs());
+            return;
+        }
+        for &op in setup {
+            sc.apply(op);
+        }
+        if frames.is_empty() {
+            self.emit("Fdtd2d::script", Class::T, &sc.ins, &sc.outs());
+        }
+        let mut at = 0;
+        for &fr in frames {
+            sc.apply(advance(fr - at));
+            at = fr;
+            self.emit("Fdtd2d::script", Class::T, &sc.ins, &sc.outs());
+        }
+    }
+}
+
+fn emit_1b1(r: &mut Rows) {
+    let modes = [Mode2d::Tm, Mode2d::Te];
+    let step = Op2::Step;
+    // Construction's errors, in Rust's order (the size, dx, the cell count, the allocation).
+    for (nx, ny, dx) in [(2, 50, 1e-3), (50, 2, 1e-3), (0, 0, 1e-3), (2, 2, f64::NAN), (1, usize::MAX, 1e-3),
+                         (usize::MAX, 3, 1e-3), (3, usize::MAX, 1e-3), (1 << 32, 1 << 30, 1e-3),
+                         (1 << 33, 1 << 31, 1e-3)] {
+        r.frames2(nx, ny, dx, Mode2d::Tm, &[], &[], step);
+    }
+    for &v in &specials() {
+        r.frames2(10, 10, v, Mode2d::Tm, &[], &[], step);
+    }
+    for &mode in &modes {
+        // A point source in vacuum on the bench's grid, and the smallest grids.
+        r.frames2(100, 100, 1e-4, mode, &[Op2::Source(50, 50, 1.0)], &[1, 2, 10, 40, 100], step);
+        for (nx, ny) in [(3, 3), (3, 5), (5, 3), (4, 4), (7, 5), (16, 9), (9, 16)] {
+            let src = [Op2::Source(nx / 2, ny / 2, 1.0), Op2::Source(1, 1, -0.5)];
+            r.frames2(nx, ny, 1e-3, mode, &src, &[1, 3, 10, 30], step);
+        }
+        // A source on the wall is cleared by the next step; one outside is ignored.
+        let walls = [Op2::Source(0, 5, 1.0), Op2::Source(11, 9, 2.0), Op2::Source(12, 5, 1.0), Op2::Source(5, 10, 1.0),
+                     Op2::Source(6, 4, 0.25)];
+        r.frames2(12, 10, 1e-3, mode, &walls, &[1, 5], step);
+        // Dielectric and magnetic regions.
+        r.frames2(60, 40, 1e-4, mode, &[Op2::Eps(10, 5, 30, 35, 4.0), Op2::Mu(35, 0, 50, 40, 2.0),
+                                          Op2::Source(20, 20, 1.0)], &[1, 20, 80], step);
+        r.frames2(30, 30, 1e-3, mode, &[Op2::Mat(5, 5, 25, 25, 2.25, 1.5, 0.0), Op2::Source(15, 15, 1.0)], &[1, 30],
+                  step);
+        // Lossy regions: the bench's slab, a material with σ, then ε over it (σ kept), then σ = 0 (lossless again).
+        r.frames2(100, 100, 1e-4, mode, &[Op2::Sigma(60, 0, 100, 100, 1.0), Op2::Source(30, 50, 1.0)], &[1, 20, 60],
+                  step);
+        r.frames2(40, 30, 1e-3, mode, &[Op2::Mat(10, 10, 20, 20, 2.0, 1.0, 0.3), Op2::Eps(10, 10, 20, 20, 4.0),
+                                          Op2::Sigma(15, 10, 20, 20, 0.0), Op2::Source(12, 15, 1.0)], &[1, 25], step);
+        r.frames2(40, 30, 1e-3, mode, &[Op2::Sigma(0, 0, 40, 30, 50.0), Op2::Source(20, 15, 1.0)], &[1, 10, 40], step);
+        // A conductor's uniform decay (fdtd.rs's test): σΔt/ε = 0.05 on the whole grid, E set to 1.
+        let sigma = 0.05 * 2.0 * bijli::field::EPSILON_0 / dt_2d(1e-3);
+        let fill = if mode == Mode2d::Tm {
+            vec![Op2::Fill(0, 1.0)]
+        } else {
+            vec![Op2::Fill(1, 1.0), Op2::Fill(2, 1.0)]
+        };
+        let mut setup = vec![Op2::Mat(0, 0, 41, 41, 2.0, 1.0, sigma)];
+        setup.extend(fill);
+        r.frames2(41, 41, 1e-3, mode, &setup, &[1, 19], step);
+        // run with a sinusoidal source (the bench's), none, and one outside the grid.
+        r.frames2(80, 80, 1e-4, mode, &[], &[10, 50], |k| Op2::Run(k, Some((40, 40)), 1e9, 1.0));
+        r.frames2(40, 40, 1e-3, mode, &[Op2::Source(20, 20, 1.0)], &[5, 20], |k| Op2::Run(k, None, 1e9, 1.0));
+        r.frames2(40, 40, 1e-3, mode, &[], &[5], |k| Op2::Run(k, Some((999, 0)), 1e9, 1.0));
+        r.frames2(100, 100, 1e-4, mode, &[Op2::Eps(0, 0, 100, 100, 4.0)], &[50],
+                  |k| Op2::Run(k, Some((50, 50)), 3e9, 1.0));
+        r.frames2(30, 30, 1e-3, mode, &[], &[7, 30], |k| Op2::Run(k, Some((15, 15)), 3e10, 0.5));
+    }
+    // The regions' errors, each followed by the unchanged state.
+    let bad_regions = [(10, 0, 12, 5), (0, 10, 5, 12), (5, 0, 4, 5), (0, 5, 5, 4), (usize::MAX, 0, 1, 1)];
+    for (a, b, c, d) in bad_regions {
+        r.frames2(10, 10, 1e-3, Mode2d::Tm, &[Op2::Eps(a, b, c, d, 2.0), Op2::Mu(a, b, c, d, 2.0),
+                                                Op2::Sigma(a, b, c, d, 2.0), Op2::Mat(a, b, c, d, 2.0, 2.0, 2.0)],
+                  &[], step);
+    }
+    r.frames2(10, 10, 1e-3, Mode2d::Tm, &[Op2::Eps(8, 8, 100, 100, 2.0), Op2::Eps(3, 3, 3, 3, 5.0),
+                                            Op2::Sigma(0, 0, usize::MAX, usize::MAX, 0.0), Op2::Mu(9, 9, 10, 10, 3.0)],
+              &[1], step);
+    for &v in specials().iter().chain(&[-1.0, 1e-300, 1e300]) {
+        let ops = [Op2::Eps(0, 0, 5, 5, v), Op2::Mu(0, 0, 5, 5, v), Op2::Sigma(0, 0, 5, 5, v), Op2::Source(4, 4, 1.0)];
+        r.frames2(10, 10, 1e-3, Mode2d::Te, &ops, &[3], step);
+    }
+    for (e, m, sg) in [(4.0, 0.0, 0.0), (4.0, f64::NAN, 0.0), (f64::NAN, 1.0, 0.0), (4.0, 1.0, -1.0),
+                       (4.0, 1.0, f64::INFINITY), (0.0, 0.0, -1.0), (2.0, 3.0, 0.0), (2.0, 3.0, 1e-3)] {
+        let ops = [Op2::Mat(0, 0, 20, 20, e, m, sg), Op2::Mat(25, 0, 30, 20, 2.0, 1.0, 0.0), Op2::Source(10, 10, 1.0)];
+        r.frames2(20, 20, 1e-3, Mode2d::Tm, &ops, &[2], step);
+    }
+    // Seeded scripts: grids from 3 to 30 a side, either mode, random regions, sources, fills and steps.
+    let mut rng = Rng::new(0x1b1_2d00);
+    for _ in 0..40 {
+        let nx = usize::try_from(rng.int(3, 30)).unwrap_or(3);
+        let ny = usize::try_from(rng.int(3, 30)).unwrap_or(3);
+        let mode = if rng.unit() < 0.5 { Mode2d::Tm } else { Mode2d::Te };
+        let dx = rng.log_uniform(-5.0, -1.0);
+        let mut ops = Vec::new();
+        let pick = |n: usize, rng: &mut Rng| usize::try_from(rng.int(0, i64::try_from(n).unwrap_or(1))).unwrap_or(0);
+        for _ in 0..usize::try_from(rng.int(1, 6)).unwrap_or(1) {
+            let (x0, y0) = (pick(nx - 1, &mut rng), pick(ny - 1, &mut rng));
+            let (x1, y1) = (x0 + pick(nx, &mut rng), y0 + pick(ny, &mut rng));
+            let v = 1.0 + 9.0 * rng.unit();
+            ops.push(match rng.int(0, 4) {
+                0 => Op2::Eps(x0, y0, x1, y1, v),
+                1 => Op2::Mu(x0, y0, x1, y1, v),
+                2 => Op2::Sigma(x0, y0, x1, y1, rng.log_uniform(-3.0, 2.0)),
+                3 => Op2::Mat(x0, y0, x1, y1, v, 1.0 + rng.unit(), if rng.unit() < 0.5 { 0.0 } else { rng.unit() }),
+                _ => Op2::Fill(pick(2, &mut rng), rng.signed_log_uniform(-3.0, 1.0)),
+            });
+        }
+        for _ in 0..usize::try_from(rng.int(1, 4)).unwrap_or(1) {
+            ops.push(Op2::Source(pick(nx, &mut rng), pick(ny, &mut rng), rng.signed_log_uniform(-2.0, 1.0)));
+        }
+        let k = usize::try_from(rng.int(1, 40)).unwrap_or(1);
+        r.frames2(nx, ny, dx, mode, &ops, &[k], step);
+    }
+}
+
 pub fn emit() -> Module {
     let mut r = Rows { m: Module::new("fdtd_2d3d"), keys: BTreeSet::new() };
     emit_1a(&mut r);
+    emit_1b1(&mut r);
     r.m
 }

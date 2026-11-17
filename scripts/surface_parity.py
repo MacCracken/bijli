@@ -49,12 +49,11 @@ PENDING_MODULES = {
 # problem (drop it from the list).
 IN_PROGRESS = {
     # M5 Part 1 ported the 1D grid, the sources, the media, the utilities, NF2FF's phasor form and their JSON; M6
-    # part 1a the CPML layer (CpmlParams, Cpml). nf2ff_2d, the JSON of CpmlParams and Mode2d, 2D and 3D follow.
+    # part 1a the CPML layer (CpmlParams, Cpml), 1b-1 Fdtd2d without it. The 2D CPML's methods, nf2ff_2d, the JSON of
+    # CpmlParams and Mode2d, and 3D follow.
     "fdtd": ("M5–M6", {
-        "Mode2d", "Fdtd2d", "Fdtd3d", "nf2ff_2d", "Fdtd2d::new", "Fdtd2d::idx", "Fdtd2d::set_permittivity", "Fdtd2d::set_permeability",
-        "Fdtd2d::set_conductivity", "Fdtd2d::set_material", "Fdtd2d::add_source", "Fdtd2d::try_enable_cpml",
-        "Fdtd2d::try_enable_cpml_with", "Fdtd2d::enable_cpml", "Fdtd2d::disable_cpml", "Fdtd2d::cpml",
-        "Fdtd2d::step_once", "Fdtd2d::run", "Fdtd2d::time", "Fdtd2d::total_energy", "Fdtd3d::new", "Fdtd3d::idx",
+        "Mode2d", "Fdtd2d", "Fdtd3d", "nf2ff_2d", "Fdtd2d::try_enable_cpml", "Fdtd2d::try_enable_cpml_with",
+        "Fdtd2d::enable_cpml", "Fdtd2d::disable_cpml", "Fdtd2d::cpml", "Fdtd3d::new", "Fdtd3d::idx",
         "Fdtd3d::set_permittivity", "Fdtd3d::set_permeability", "Fdtd3d::set_conductivity", "Fdtd3d::set_material",
         "Fdtd3d::add_source_ez", "Fdtd3d::try_enable_cpml", "Fdtd3d::try_enable_cpml_with", "Fdtd3d::disable_cpml",
         "Fdtd3d::cpml", "Fdtd3d::step_once", "Fdtd3d::run", "Fdtd3d::time", "Fdtd3d::total_energy",

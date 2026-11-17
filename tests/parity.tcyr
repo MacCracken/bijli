@@ -4057,8 +4057,134 @@ fn _par_cpml_got(c: *BjCpml) {
     return 0;
 }
 
+# A 2D grid's state to the got list (tests/golden/fdtd_2d3d.tsv's comment): step, dt, time, energy, the digests of
+# f_z, f_x, f_y, ε_r, μ_r, C_b and C_h, then C_a's and σ's lengths and digests (0 and the empty digest while
+# lossless), then f_z, f_x, f_y at the five probes.
+fn _par_fd2_state(sim: *BjFdtd2d) {
+    var nx = sim.nx;
+    var ny = sim.ny;
+    var n = nx * ny;
+    _par_got_i(sim.step);
+    _par_got_f(sim.dt);
+    var tm: f64 = sim.time();
+    _par_got_f(tm);
+    var en: f64 = sim.total_energy();
+    _par_got_f(en);
+    _par_got_i(_par_fd_digest(sim.fz, n));
+    _par_got_i(_par_fd_digest(sim.fx, n));
+    _par_got_i(_par_fd_digest(sim.fy, n));
+    _par_got_i(_par_fd_digest(sim.permittivity, n));
+    _par_got_i(_par_fd_digest(sim.permeability, n));
+    _par_got_i(_par_fd_digest(sim.ce, n));
+    _par_got_i(_par_fd_digest(sim.ch, n));
+    var nl = 0;
+    if (sim.ca != 0) { nl = n; }
+    _par_got_i(nl);
+    _par_got_i(_par_fd_digest(sim.ca, nl));
+    _par_got_i(nl);
+    _par_got_i(_par_fd_digest(sim.conductivity, nl));
+    var px: i64[5];
+    var py: i64[5];
+    px[0] = nx / 2;
+    py[0] = ny / 2;
+    px[1] = 1;
+    py[1] = 1;
+    px[2] = nx - 2;
+    py[2] = ny - 2;
+    px[3] = 0;
+    py[3] = ny / 2;
+    px[4] = nx / 2;
+    py[4] = 1;
+    for (var j = 0; j < 5; j = j + 1) {
+        var q = py[j] * nx + px[j];
+        _par_got_f(load64(sim.fz + q * 8));
+        _par_got_f(load64(sim.fx + q * 8));
+        _par_got_f(load64(sim.fy + q * 8));
+    }
+    return 0;
+}
+
+# A 2D script (M6 part 1b-1): the grid, then its operations (tests/golden/fdtd_2d3d.tsv's comment).
+fn _par_fd2_script(): i64 {
+    var sim: BjFdtd2d;
+    var dx: f64 = _par_in(2);
+    var t, v = BjFdtd2d_new(_par_in(0), _par_in(1), dx, _par_in(3), &sim);
+    if (is_err_result(t) == 1) {
+        _par_got_error(v);
+        return 1;
+    }
+    var k = 4;
+    while (k < _par_in_n) {
+        var code = _par_in(k);
+        if (code >= 1 && code <= 3) {
+            var x1: f64 = _par_in(k + 5);
+            var t1 = 0;
+            var v1 = 0;
+            if (code == 1) {
+                var t1a, v1a = sim.set_permittivity(_par_in(k + 1), _par_in(k + 2), _par_in(k + 3), _par_in(k + 4), x1);
+                t1 = t1a;
+                v1 = v1a;
+            } elif (code == 2) {
+                var t1b, v1b = sim.set_permeability(_par_in(k + 1), _par_in(k + 2), _par_in(k + 3), _par_in(k + 4), x1);
+                t1 = t1b;
+                v1 = v1b;
+            } else {
+                var t1c, v1c = sim.set_conductivity(_par_in(k + 1), _par_in(k + 2), _par_in(k + 3), _par_in(k + 4), x1);
+                t1 = t1c;
+                v1 = v1c;
+            }
+            if (is_err_result(t1) == 1) { _par_got_error(v1); }
+            k = k + 6;
+        } elif (code == 4) {
+            var mat: BjMaterial = BjMaterial_new(_par_in(k + 5), _par_in(k + 6), _par_in(k + 7));
+            var t4, v4 = sim.set_material(_par_in(k + 1), _par_in(k + 2), _par_in(k + 3), _par_in(k + 4), &mat);
+            if (is_err_result(t4) == 1) { _par_got_error(v4); }
+            k = k + 8;
+        } elif (code == 5) {
+            var x5: f64 = _par_in(k + 3);
+            sim.add_source(_par_in(k + 1), _par_in(k + 2), x5);
+            k = k + 4;
+        } elif (code == 6) {
+            var cnt = _par_in(k + 1);
+            for (var j = 0; j != cnt; j = j + 1) { sim.step_once(); }
+            k = k + 2;
+        } elif (code == 7) {
+            var sx = BJ_FDTD2D_NO_SOURCE;
+            var sy = 0;
+            var at = k + 2;
+            if (load64(_par_in_k + at * 8) == 105) {
+                sx = _par_in(at);
+                sy = _par_in(at + 1);
+                at = at + 2;
+            } else {
+                at = at + 1;
+            }
+            var fr: f64 = _par_in(at);
+            var am: f64 = _par_in(at + 1);
+            sim.run(_par_in(k + 1), sx, sy, fr, am);
+            k = at + 2;
+        } elif (code == 8) {
+            var fv: f64 = _par_in(k + 2);
+            var which = _par_in(k + 1);
+            var fa = sim.fz;
+            if (which == 1) { fa = sim.fx; }
+            if (which == 2) { fa = sim.fy; }
+            var nn = sim.nx * sim.ny;
+            for (var q = 0; q < nn; q = q + 1) { store64(fa + q * 8, fv); }
+            k = k + 3;
+        } else {
+            BjFdtd2d_free(&sim);
+            return 0 - 1;
+        }
+    }
+    _par_fd2_state(&sim);
+    BjFdtd2d_free(&sim);
+    return 1;
+}
+
 # M6 part 1a: CpmlParams::new, Cpml::with_params, Cpml::new and Cpml::attach (tests/golden/fdtd_2d3d.tsv's comment).
 fn _par_fdtd_2d3d(fp, fl): i64 {
+    if (_par_eq(fp, fl, "Fdtd2d::script") == 1) { return _par_fd2_script(); }
     if (_par_eq(fp, fl, "CpmlParams::new") == 1) {
         var pn: BjCpmlParams = BjCpmlParams_new(_par_in(0));
         _par_got_i(pn.thickness);

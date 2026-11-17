@@ -78,6 +78,10 @@ REASONS = {
         "BjFdtd1d's arrays are fixed at construction (ADR 0002 row 2): num_cells and the field arrays can't be resized "
         "apart, so the mismatch it guards against can't arise; tests/fdtd1d.tcyr's cyrius_fdtd1d_free and "
         "cyrius_fdtd1d_two_cells pin the empty and smallest grids",
+    ("src/fdtd.rs", "desynced_fields_do_not_panic_2d"):
+        "BjFdtd2d's arrays are fixed at construction (ADR 0002 row 2): nx, ny and the field arrays can't be resized "
+        "apart, so the desynchronised layout it steps, runs and sources on can't arise; tests/fdtd2d.tcyr's "
+        "cyrius_fdtd2d_grid pins sources outside the grid and BjFdtd2d_free",
     ("src/rf.rs", "test_smatrix_inconsistent_does_not_panic"):
         "BjSMatrix's shape is fixed at construction (ADR 0002 row 36): no matrix with too few rows, ragged rows or a "
         "short z0 can be built, so the shape errors it checks are gone; tests/rf.tcyr's cyrius_smatrix_fixed_shape pins "

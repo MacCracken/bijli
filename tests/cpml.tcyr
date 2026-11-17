@@ -1,7 +1,8 @@
 # cpml.tcyr — src/cpml.cyr (M6 part 1a): the CPML layer's grading and profiles.
 #
-# The groups named as rust-old/src/fdtd.rs's `cpml_tests` are those tests, ported assertion for assertion (the ledger
-# matches them by name): the κ profile and the parameter validation. The tests that need a grid (the profile through
+# The groups named as rust-old/src/fdtd.rs's tests are those tests, ported assertion for assertion (the ledger matches
+# them by name): `cpml_tests`' κ profile and parameter validation, and the main module's creation, bounded
+# coefficients and attached sizes (M6 part 1b-1). The tests that need a grid (the profile through
 # `try_enable_cpml`, the reflections, the energy) follow with `Fdtd2d` and `Fdtd3d`. The cyrius_* groups pin the
 # error records' text and order, the inert layer, `attach` at its edges, and BjCpml_free. tests/golden/fdtd_2d3d.tsv
 # pins every function against Rust besides.
@@ -109,6 +110,32 @@ fn main() {
     inert.attach(60, 60);
     assert(_bj_cpml_is_attached_to(&inert, 60, 60) == 0, "the inert layer never attaches");
     BjCpml_free(&inert);
+
+    test_group("test_cpml_creation");
+    var cc: BjCpml;
+    BjCpml_new(10, 0.001, 0.000000000001, &cc);
+    var scc: f64 = cc.sigma_max();
+    assert(cc.thickness == 10 && scc > 0.0 && cc.prof_n == 10, "10 layers, σ_max > 0");
+    BjCpml_free(&cc);
+
+    test_group("test_cpml_coefficients_bounded");
+    var cb: BjCpml;
+    BjCpml_new(10, DX, DT, &cb);
+    var inb = 1;
+    for (var lb = 0; lb < 10; lb = lb + 1) {
+        var bn: f64 = at(cb.b_node, lb);
+        var bh: f64 = at(cb.b_half, lb);
+        if (!(bn >= 0.0 && bn <= 1.0 && bh >= 0.0 && bh <= 1.0)) { inb = 0; }
+    }
+    assert(inb == 1, "every b in [0, 1]");
+    BjCpml_free(&cb);
+
+    test_group("test_cpml_attach_sizes");
+    var ca: BjCpml;
+    BjCpml_new(8, DX, DT, &ca);
+    ca.attach(100, 80);
+    assert(ca.psi_x_len == 2 * 8 * 100 && ca.psi_y_len == 2 * 8 * 80, "psi_fz_y 2·8·100, psi_fz_x 2·8·80");
+    BjCpml_free(&ca);
 
     test_group("cyrius_cpml_error_records");
     var q: BjCpmlParams = BjCpmlParams_new(0);
