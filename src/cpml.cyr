@@ -10,10 +10,18 @@
 # cells from it, l = 0..t; the 2D grid's strip corrections read them (src/fdtd2d.cyr). Ψ is stored only inside the
 # PML, the four edge strips of a 2D grid. The powf and the exp are correctly rounded (src/crmath.cyr). The file is
 # time-domain only; bijli's one harmonic convention, e^{+jωt}, is stated in src/complex.cyr's header.
+#
+# M6 part 4b (ADR 0002 rows 40 and 18). Two of Rust's differences cancel in the inner layers, where b and κ near 1: c
+# takes b − 1 as expm1 of b's own exponent (row 29's form), and 1/κ − 1 is rounded once from its exact value
+# −(κ_max − 1)·g/(1 + (κ_max − 1)·g) on the grade g (rational 17; the rounded κ would keep its rounding). σ_max and each
+# layer's chain run with an unbounded exponent where an intermediate leaves binary64's normal range (a grade below
+# 2^-1022, σ/κ + α past DBL_MAX, a product of the extremes), each output rounded once.
 
 private
 
 var _BJ_CPML_INF: f64 = 0x7FF0000000000000;
+# 2^-1022: the normal range's floor.
+var _BJ_CPML_DMIN: f64 = 0x0010000000000000;
 # The nodes required between opposite layers: a grid needs 2·thickness + 3 ≤ its smallest dimension.
 var _BJ_CPML_MIN_INTERIOR = 3;
 # freelist's largest request, 2 GiB: the six profiles' block caps the thickness at 2^31/48 layers.
@@ -193,9 +201,110 @@ fn _bj_cpml_from(params: *BjCpmlParams, sigma_max: f64, prof, prof_n, out: *BjCp
     return 0;
 }
 
+# 1 when z is a normal double: 2^-1022 ≤ |z| ≤ DBL_MAX.
+#must_use
+fn _bj_cpml_normal(z: f64): i64 {
+    var a: f64 = f64_abs(z);
+    if (a >= _BJ_CPML_DMIN && a < _BJ_CPML_INF) { return 1; }
+    return 0;
+}
+
+# 1 when the product z = x·y kept the normal range: z normal, or 0 from a zero factor (not an underflow).
+#must_use
+fn _bj_cpml_pok(z: f64, x: f64, y: f64): i64 {
+    if (_bj_cpml_normal(z) == 1) { return 1; }
+    if (z == 0.0 && (x == 0.0 || y == 0.0)) { return 1; }
+    return 0;
+}
+
+# 1/κ − 1 for κ = 1 + (κ_max − 1)·g, rounded once from its exact value −(κ_max − 1)·g/(1 + (κ_max − 1)·g) (rational 17;
+# ADR 0002 row 40, M6 part 4b), for the grade g = gs·2^ge to 53 bits (a double's (s, e) in range, the unbounded value at
+# an edge). The power of two is split into normal factors; below 2^-2100 the value lies under 2^-1075·(κ_max − 1)/
+# DBL_MAX and rounds to −0 (to +0 for κ_max = 1, the cancelled sum).
+#must_use
+fn _bj_cpml_km1(km: f64, gs: f64, ge): f64 {
+    if (gs == 0.0 || km == 1.0) { return 0.0; }
+    if (ge < 0 - 2100) { return -0.0; }
+    var rem = ge;
+    var p = rem;
+    if (p < 0 - 1022) { p = 0 - 1022; }
+    rem = rem - p;
+    var q = rem;
+    if (q < 0 - 1022) { q = 0 - 1022; }
+    rem = rem - q;
+    var v: f64[6];
+    v[0] = km;
+    var sp: f64 = _bj_k_cr_pow2(p);
+    v[1] = gs * sp;
+    v[2] = _bj_k_cr_pow2(q);
+    v[3] = _bj_k_cr_pow2(rem);
+    v[4] = 0.0;
+    v[5] = 0.0;
+    var o: f64[1];
+    if (_bj_cr_rat(&v, 4, _bj_cr_rat_spec(17), 0, &o) == 0) { return 0.0; }
+    var r: f64 = o[0];
+    return r;
+}
+
+# The coefficients' chain (_bj_cpml_coefficients) with an unbounded exponent (ADR 0002 row 18, M6 part 4b): every
+# operation to 53 bits, the grade by _bj_ux_pow (its far stand-in past e^±10000 rounds every output as the true grade
+# does), b, c and 1/κ − 1 each rounded once. b = e^x and expm1(x) of the 53-bit exponent x ≤ 0: the correctly rounded
+# functions of the double x where x is normal, 1 and x itself where |x| < 2^-1022 (e^x is within 2^-1022 of 1, and
+# expm1(x) within |x|²/2 of x), +0 and −1 past −DBL_MAX.
+#must_use
+fn _bj_cpml_coeff_ux(rho: f64, params: *BjCpmlParams, sigma_max: f64, dt: f64): (f64, f64, f64) {
+    var rs, re = _bj_k_ux_from(rho);
+    var gs, ge = _bj_ux_pow(rs, re, params.grading_order);
+    var mxs, mxe = _bj_k_ux_from(sigma_max);
+    var ss, se = _bj_k_ux_mul(mxs, mxe, gs, ge);
+    var kd: f64 = params.kappa_max - 1.0;
+    var kds, kde = _bj_k_ux_from(kd);
+    var kgs, kge = _bj_k_ux_mul(kds, kde, gs, ge);
+    var ks, ke = _bj_k_ux_add(1.0, 0, kgs, kge);
+    var omr: f64 = 1.0 - rho;
+    var ams, ame = _bj_k_ux_from(params.alpha_max);
+    var oms, ome = _bj_k_ux_from(omr);
+    var als, ale = _bj_k_ux_mul(ams, ame, oms, ome);
+    var sks, ske = _bj_k_ux_div(ss, se, ks, ke);
+    var t1s, t1e = _bj_k_ux_add(sks, ske, als, ale);
+    var n1s, n1e = _bj_k_ux_neg(t1s, t1e);
+    var dts, dte = _bj_k_ux_from(dt);
+    var ys, ye = _bj_k_ux_mul(n1s, n1e, dts, dte);
+    var e0s, e0e = _bj_k_ux_from(BJ_EPSILON_0);
+    var xs, xe = _bj_k_ux_div(ys, ye, e0s, e0e);
+    var b: f64 = 1.0;
+    var ems: f64 = xs;
+    var eme = xe;
+    if (xs != 0.0 && xe > 1023) {
+        b = 0.0;
+        ems = -1.0;
+        eme = 0;
+    } elif (xs != 0.0 && xe >= 0 - 1022) {
+        var xd: f64 = _bj_k_ux_round(xs, xe, 0.0);
+        b = _bj_exp(xd);
+        var em: f64 = _bj_expm1(xd);
+        var es2, ee2 = _bj_k_ux_from(em);
+        ems = es2;
+        eme = ee2;
+    }
+    var kas, kae = _bj_k_ux_mul(ks, ke, als, ale);
+    var sas, sae = _bj_k_ux_add(ss, se, kas, kae);
+    var dns, dne = _bj_k_ux_mul(ks, ke, sas, sae);
+    var c: f64 = 0.0;
+    if (_bj_k_ux_is_positive(ss, se) == 1 && _bj_k_ux_is_positive(dns, dne) == 1) {
+        var nus, nue = _bj_k_ux_mul(ss, se, ems, eme);
+        c = _bj_k_ux_div_f64(nus, nue, dns, dne);
+    }
+    var km1: f64 = _bj_cpml_km1(params.kappa_max, gs, ge);
+    return (b, c, km1);
+}
+
 # The recursive-convolution coefficients (b, c, 1/κ − 1) at depth rho ∈ [0, 1], in Rust's order of operations:
-# grade = ρ^m, σ = σ_max·grade, κ = 1 + (κ_max − 1)·grade, α = α_max·(1 − ρ), b = e^((−(σ/κ + α)·Δt)/ε₀), and c =
-# σ·(b − 1)/(κ·(σ + κα)) where σ and that denominator are positive, else 0. Mirrors fdtd.rs's `cpml_coefficients`.
+# grade = ρ^m, σ = σ_max·grade, κ = 1 + (κ_max − 1)·grade, α = α_max·(1 − ρ), x = (−(σ/κ + α)·Δt)/ε₀, b = e^x, and
+# c = σ·expm1(x)/(κ·(σ + κα)) where σ and that denominator are positive, else 0 (Rust's σ·(b − 1) cancelled: ADR 0002
+# row 40, M6 part 4b), 1/κ − 1 rounded once from its exact value (_bj_cpml_km1). Where an intermediate leaves the normal
+# range for a finite σ_max, the chain with an unbounded exponent (_bj_cpml_coeff_ux; row 18). Mirrors fdtd.rs's
+# `cpml_coefficients`.
 #must_use
 fn _bj_cpml_coefficients(rho: f64, params: *BjCpmlParams, sigma_max: f64, dt: f64): (f64, f64, f64) {
     var grade: f64 = _bj_powf(rho, params.grading_order);
@@ -215,14 +324,23 @@ fn _bj_cpml_coefficients(rho: f64, params: *BjCpmlParams, sigma_max: f64, dt: f6
     var ka: f64 = kappa * alpha;
     var sa: f64 = sigma + ka;
     var denom: f64 = kappa * sa;
+    var em1: f64 = _bj_expm1(x);
+    var num: f64 = sigma * em1;
     var c: f64 = 0.0;
-    if (sigma > 0.0 && denom > 0.0) {
-        var bm1: f64 = b - 1.0;
-        var num: f64 = sigma * bm1;
-        c = num / denom;
+    if (sigma > 0.0 && denom > 0.0) { c = num / denom; }
+    var ok = _bj_cpml_normal(grade) & _bj_cpml_pok(sigma, sigma_max, grade) & _bj_cpml_pok(kg, kd, grade);
+    ok = ok & _bj_cpml_pok(alpha, params.alpha_max, omr) & _bj_cpml_pok(sk, sigma, 1.0) & _bj_cpml_pok(arg, nsk, dt);
+    ok = ok & _bj_cpml_pok(x, arg, 1.0) & _bj_cpml_pok(ka, kappa, alpha) & _bj_cpml_pok(denom, kappa, sa);
+    ok = ok & _bj_cpml_pok(em1, x, 1.0) & _bj_cpml_pok(num, sigma, em1);
+    var zs: f64 = ska * 0.0 + sa * 0.0;
+    var zm: f64 = sigma_max * 0.0;
+    if (zs != 0.0) { ok = 0; }
+    if (ok == 0 && zm == 0.0) {
+        var ub, uc, uk = _bj_cpml_coeff_ux(rho, params, sigma_max, dt);
+        return (ub, uc, uk);
     }
-    var ik: f64 = 1.0 / kappa;
-    var km1: f64 = ik - 1.0;
+    var gs, ge = _bj_k_ux_from(grade);
+    var km1: f64 = _bj_cpml_km1(km, gs, ge);
     return (b, c, km1);
 }
 
@@ -246,8 +364,9 @@ fn _bj_cpml_sample(b: *f64, c: *f64, km1: *f64, t, offset: f64, params: *BjCpmlP
 # A layer with params' grading for a grid of spacing dx and step dt into *out (unattached): Ok(0), or with out
 # untouched Err(InvalidParameter) — a parameter out of range (Rust's texts and order, `CpmlParams`), dx or dt not
 # finite and positive, "cannot allocate {t} grid values" where the profiles can't be had, or a coefficient not
-# finite. σ_max = sigma_ratio·0.8·(m + 1)/(η₀·dx), η₀ = μ₀·c. Give it back with BjCpml_free. Mirrors
-# `Cpml::with_params`.
+# finite. σ_max = sigma_ratio·0.8·(m + 1)/(η₀·dx), η₀ = μ₀·c, in Rust's order, or with an unbounded exponent where a
+# product leaves the normal range (the quotient rounded once; ADR 0002 row 18, M6 part 4b). Give it back with
+# BjCpml_free. Mirrors `Cpml::with_params`.
 #must_use
 public fn BjCpml_with_params(params: *BjCpmlParams, dx: f64, dt: f64, out: *BjCpml): Result {
     var e = _bj_cpml_params_validate(params);
@@ -273,6 +392,19 @@ public fn BjCpml_with_params(params: *BjCpmlParams, dx: f64, dt: f64, out: *BjCp
     var sn: f64 = s8 * m1;
     var sd: f64 = eta0 * dx;
     var sigma_max: f64 = sn / sd;
+    var okm = _bj_cpml_pok(s8, params.sigma_ratio, 0.8) & _bj_cpml_pok(sn, s8, m1) & _bj_cpml_pok(sd, eta0, dx);
+    if (okm == 0) {
+        # σ_max's chain with an unbounded exponent, the quotient rounded once (ADR 0002 row 18, M6 part 4b).
+        var srs, sre = _bj_k_ux_from(params.sigma_ratio);
+        var p8s, p8e = _bj_k_ux_from(0.8);
+        var a1s, a1e = _bj_k_ux_mul(srs, sre, p8s, p8e);
+        var m1s, m1e = _bj_k_ux_from(m1);
+        var a2s, a2e = _bj_k_ux_mul(a1s, a1e, m1s, m1e);
+        var ets, ete = _bj_k_ux_from(eta0);
+        var dxs, dxe = _bj_k_ux_from(dx);
+        var dds, dde = _bj_k_ux_mul(ets, ete, dxs, dxe);
+        sigma_max = _bj_k_ux_div_f64(a2s, a2e, dds, dde);
+    }
     var prof = 0;
     if (t > 0 && t <= _BJ_CPML_FL_MAX / 48) { prof = fl_alloc(t * 48); }
     if (prof == 0) {

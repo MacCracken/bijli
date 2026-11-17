@@ -9,31 +9,31 @@ bite is done, the machinery, the scripts and the traps. Delete it once it has se
 
 ## Where it stands
 
-- **Committed through `53b06f0`** ("M6 pt3", Part 3: compute.rs); part 4a is in the working tree for the user to
-  commit.
+- **Committed through `1c12aca`** ("cleanup", after `234748d` "m6 pt4": part 4a); part 4b is in the working tree for
+  the user to commit.
 - **M6 Part 1** (the 2D CPML and `Fdtd2d`, §116–§119) runs in bites. Done: 1a the CPML layer (`src/cpml.cyr`); 1b-1
   `Fdtd2d` without the CPML (`src/fdtd2d.cyr`; its scripts `Fdtd2d::script` in `fdtd_2d3d.tsv`, replayed by
   validate.py's `Fd2Scripts` in pure Python, no NumPy on the host); 1b-2 the CPML attached (the y-strips packed, the
   x-strips scalar: the CPML step 5.7–6.2× Rust's); 1c `nf2ff_2d` (on the phasor form's core with the rotation (1, 0),
-  `src/nf2ff.cyr` after `src/fdtd2d.cyr` in the bundle; its edge rows mapped in `fdtd_2d3d.adr.tsv`); 1d the JSON
-  of `CpmlParams` and `Mode2d` (src/json.cyr; `m_json.rs`'s `Kind::is_usize` carries the thickness in an f64's bits;
-  a thickness past 2^63 − 1 is refused, ADR 0002 row 36, §120). **Part 1 is done.** Part 2 runs in bites: 2a
-  `Fdtd3d` without the CPML (`src/fdtd3d.cyr`, §121: `Fdtd3d::script` rows replayed by validate.py's `Fd3Scripts` and
-  the harness's `_par_fd3_script`; the 2D file's helpers public as `_bj_fd2_*`); 2b the 3D CPML (§123: `_bj_fd3_slabs`,
-  the twelve Ψ slabs in one mapping; the first rows from `scripts/oracle/emit.py`, whose `emit_2b` is the template for
-  the next part's emitter). **Part 2 is done**; fdtd.rs is ported whole. Part 3, compute.rs, is done (§124:
+  `src/nf2ff.cyr` after `src/fdtd2d.cyr` in the bundle; its edge rows mapped in `fdtd_2d3d.adr.tsv`); 1d the JSON of
+  `CpmlParams` and `Mode2d` (src/json.cyr; `m_json.rs`'s `Kind::is_usize` carries the thickness in an f64's bits; a
+  thickness past 2^63 − 1 is refused, ADR 0002 row 36, §120). **Part 1 is done.** Part 2 runs in bites: 2a `Fdtd3d`
+  without the CPML (`src/fdtd3d.cyr`, §121: `Fdtd3d::script` rows replayed by validate.py's `Fd3Scripts` and the
+  harness's `_par_fd3_script`; the 2D file's helpers public as `_bj_fd2_*`); 2b the 3D CPML (§123: `_bj_fd3_slabs`, the
+  twelve Ψ slabs in one mapping; the first rows from `scripts/oracle/emit.py`, whose `emit_2b` is the template for the
+  next part's emitter). **Part 2 is done**; fdtd.rs is ported whole. Part 3, compute.rs, is done (§124:
   `src/compute.cyr`; probe p20 for the trait and generic shape; `emit_3`'s GpuFdtd2d scripts and CPU kernel rows).
   **Part 4, M6's range-edge review** (plan §0.1's M6 paragraph: the standing answers applied, nothing new asked), runs
-  in bites: 4a round once (done, §125: `_bj_e_fd_coeff`, `_bj_e_fd_time`, `_bj_e_fd_courant` in
-  `src/crmath_edge.cyr`, the lossy pair through `BjLossyMaterial`; validate.py's `FD2_PORT` and `fd23_runs`, the
-  mappings named 40, then 13, else 18; `emit_4a`), then 4b the CPML profile (σ_max and each layer's b, c, 1/κ − 1 at
-  their range edges; c's b − 1 as `_bj_expm1`, 1/κ − 1 as (1 − κ)/κ rounded once; every CPML trajectory will change
-  with c), 4c the per-cell rule for the 2D updates and the CPU kernels (`_bj_e_cell_row` needs a subtract form and a
-  curl form: d ± k·((a1 − a0) − (b1 − b0)), the marker on the product with w = Δa − Δb ≠ 0 as the factor test), 4d
-  the 3D updates (the same curl form), 4e the CPML corrections (two statements a cell: Ψ ← bΨ + cΔ, then f +=
-  (s·k)·(km1·Δ + Ψ); a product's marker tests it against the other addend, as `_bj_e_cell_edge` against d; Ψ's
-  geometric decay makes b·Ψ subnormal in quiet layers), 4f `total_energy` (the 1D's `_bj_fd1_energy_ux` pattern) and
-  `run`'s source (`_bj_fd1_source_ux`, to share) in the three grids. Then M6 is done.
+  in bites: 4a round once (done, §125: `_bj_e_fd_coeff`, `_bj_e_fd_time`, `_bj_e_fd_courant` in `src/crmath_edge.cyr`,
+  the lossy pair through `BjLossyMaterial`; validate.py's `FD2_PORT` and `fd23_runs`, the mappings named 40, then 13,
+  else 18; `emit_4a`), 4b the CPML profile (done, §126: c on `_bj_expm1`, 1/κ − 1 on rational 17 from κ_max and the
+  grade, `_bj_cpml_coeff_ux` at the edges; validate.py's `cpml_coeffs` runs the unbounded chain itself under "18", and
+  `fd23_runs` replays the `Cpml::` rows; `emit_4b`), then 4c the per-cell rule for the 2D updates and the CPU kernels
+  (`_bj_e_cell_row` needs a subtract form and a curl form: d ± k·((a1 − a0) − (b1 − b0)), the marker on the product with
+  w = Δa − Δb ≠ 0 as the factor test), 4d the 3D updates (the same curl form), 4e the CPML corrections (two statements a
+  cell: Ψ ← bΨ + cΔ, then f += (s·k)·(km1·Δ + Ψ); a product's marker tests it against the other addend, as
+  `_bj_e_cell_edge` against d; Ψ's geometric decay makes b·Ψ subnormal in quiet layers), 4f `total_energy` (the 1D's
+  `_bj_fd1_energy_ux` pattern) and `run`'s source (`_bj_fd1_source_ux`, to share) in the three grids. Then M6 is done.
 - **No Rust (ADR 0003, 2026-11-16).** The Rust tree and the Rust generator are retired; the corpus is frozen data and
   `scripts/oracle/validate.py` the reference model. New rows come from `scripts/oracle/emit.py` (2b's `emit_2b` is
   the first part): add a part function, register it in `main()`'s module list, run `emit.py .`, then `validate.py .
@@ -76,18 +76,18 @@ bite is done, the machinery, the scripts and the traps. Delete it once it has se
     Rust's chain where every operation is its 53-bit value (mode 0, checked per sample by one exponent test and per
     angle), else the call or the angle unbounded (`_bj_nf_angle_ux`); a non-finite field keeps Rust's (row 18, §114).
     **Part 2 is done.**
-- **Numbers after M6 part 4a**: 19 modules, 644,480 ok, 0 failed, 122,697 accepted (ADR 01: 43,096; ADR 0002:
-  79,601) over 767,177 rows; 488 digests equal on x86_64 ELF, x86_64 PE and aarch64. Ledger 778 ported, 12 n/a, 68
+- **Numbers after M6 part 4b**: 19 modules, 644,113 ok, 0 failed, 123,265 accepted (ADR 01: 43,087; ADR 0002:
+  80,178) over 767,378 rows; 488 digests equal on x86_64 ELF, x86_64 PE and aarch64. Ledger 778 ported, 12 n/a, 68
   pending of 858; API snapshot 2,139; surface parity 653 items (15 modules); benches 80 of 80 twinned; execution
   coverage 394 of 394. `json.tsv` is 40.7 MB of the 48 MiB cap: the rest of M6 adds no JSON (`Fdtd3d` and compute.rs
   have no serde), but M7's eight serde types (integration/) will want their own module.
 - **M5 is done** (§115). The benchmark record's Cyrius column is each row's least of four full runs: rows vary up to
   1.5× between runs under other repos' loads, so take the least of several when regenerating it.
-- **Next**: part 4b, the CPML profile (above).
+- **Next**: part 4c, the 2D updates and the CPU backend's kernels (above).
   `nf2ff_2d` (the snapshot form) calls `_bj_nf_core` with the rotation (1, 0) and k from `_bj_nf_validate` on its
   double frequency (`_bj_k_ux_from`): the core's range edges come with it.
 - **Corpus size**: `fdtd.tsv` is 38.8 MB (107,341 rows) and `json.tsv` 40.7 MB, against the 48 MiB cap that
-  validate.py's `too_big` guards (§81); M6's rows are in `fdtd_2d3d.tsv` (2.9 MB after 4a).
+  validate.py's `too_big` guards (§81); M6's rows are in `fdtd_2d3d.tsv` (3.2 MB after 4b).
 - **A recorded cost**: the 1D step runs 3.5–3.8× HEAD's with 2d-2a's scan (§107), the TF/SF step about 2× with
   2d-3's (§109) and `accumulate` about 3× with 2d-4a's (§110). The user chose that fix; I had estimated 1.5–2×.
   Cyrius 6.7.18 has no vector verb that classifies a lane (plan §10, listed as a gap). M6's grids will pay the same.
@@ -346,6 +346,13 @@ Rust 1.2.0's sources for reading: `git show 1.2.0:src/fdtd.rs > $S/fdtd.rs` (and
 - **An emitter**: a repeated (function, inputs) row breaks the corrections' keys; skip one already written.
 - **Cost model**: a scalar loop over a row costs about 2.6–2.9 ns an element; the `f64v_*` verbs about 0.35 ns. There
   is no vector compare or classify (plan §10).
+
+- **Wine and `vm.max_map_count`** (2026-11-17, after a reboot onto kernel 7.3.4): the PE parity run maps every
+  allocation past the bump heap separately (plan §10) and dies in the json module at about 1,048,576 mappings, with
+  wine's `err:virtual ... mmap() error Cannot allocate memory` under `WINEDEBUG=err+all`. The default
+  `vm.max_map_count` is that limit; the PE check needs it raised (the user's call: it is a system setting). The user
+  raised it to 2,147,483,642 (`sudo sysctl -w vm.max_map_count=2147483642`, which lasts until a reboot) and the run
+  passed; check `cat /proc/sys/vm/max_map_count` before a PE run, until the allocator is fixed upstream.
 
 ## Standing preferences (also in the memory directory)
 

@@ -205,6 +205,60 @@ fn main() {
     assert(_bj_cpml_fits(1, 5) == 1 && _bj_cpml_fits(2, 6) == 0 && _bj_cpml_fits(0, 100) == 0, "cpml_fits");
     assert(_bj_cpml_fits(0 - 1, 0 - 1) == 0, "2t + 3 past 2^64 never fits");
 
+    # ADR 0002 rows 40 and 18 (M6 part 4b): c's b − 1 as expm1, 1/κ − 1 rounded once from its exact value, and the
+    # profile's range edges. The expectations are validate.py's model of the port; dt is the 2D grid's at dx = 1 mm.
+    test_group("cyrius_cpml_profile_port");
+    var dt2: f64 = _bj_from_bits(0x3d74bf37a74455b1);
+    var q1p: BjCpmlParams = BjCpmlParams_new(20);
+    q1p.grading_order = 4.0;
+    var q1: BjCpml;
+    var tq1, vq1 = BjCpml_with_params(&q1p, 0.001, dt2, &q1);
+    var q1n: f64 = at(q1.c_node, 19);
+    var q1nwp: f64 = _bj_from_bits(0x3ee2894ad4cfe430);
+    var q1nw: f64 = -q1nwp;
+    var q1h: f64 = at(q1.c_half, 19);
+    var q1hwp: f64 = _bj_from_bits(0x3ea2894fdd4c58dd);
+    var q1hw: f64 = -q1hwp;
+    assert(is_ok(tq1) == 1 && q1n == q1nw && q1h == q1hw,
+      "the innermost c of a 20-cell, m = 4 layer on expm1 (Rust's σ(b − 1) 1.4·10⁻¹² and 4.6·10⁻¹¹ off)");
+    BjCpml_free(&q1);
+    var q2p: BjCpmlParams = BjCpmlParams_new(12);
+    q2p.grading_order = 4.0;
+    q2p.kappa_max = 1.00000001;
+    var q2: BjCpml;
+    var tq2, vq2 = BjCpml_with_params(&q2p, 0.001, dt2, &q2);
+    var q2k: f64 = at(q2.km1_half, 11);
+    var q2kwp: f64 = _bj_from_bits(0x3d20f7bfe6b74e72);
+    var q2kw: f64 = -q2kwp;
+    var q2n: f64 = at(q2.km1_node, 11);
+    var q2nwp: f64 = _bj_from_bits(0x3d60f7bfe6b74603);
+    var q2nw: f64 = -q2nwp;
+    assert(is_ok(tq2) == 1 && q2k == q2kw && q2n == q2nw,
+      "1/κ − 1 at κ_max = 1 + 10⁻⁸, the inner layers: −3.0140817718053706·10⁻¹⁴ (Rust's −3.019806626980426·10⁻¹⁴)");
+    BjCpml_free(&q2);
+    var q3p: BjCpmlParams = BjCpmlParams_new(4);
+    q3p.grading_order = 300.0;
+    var q3: BjCpml;
+    var dx3: f64 = _bj_from_bits(0x01a56e1fc2f8f359);
+    var dt3: f64 = _bj_from_bits(0x12688b70e62b);
+    var tq3, vq3 = BjCpml_with_params(&q3p, dx3, dt3, &q3);
+    var q3c: f64 = at(q3.c_node, 3);
+    var q3cwp: f64 = _bj_from_bits(0x1a9ce0422983d2e1);
+    var q3cw: f64 = -q3cwp;
+    assert(is_ok(tq3) == 1 && q3c == q3cw,
+      "a grade of 0.25^300 below 2^-1022 (dx = 10⁻³⁰⁰, dt = 10⁻³¹⁰): c = −1.739721726260941·10⁻¹⁸⁰ (Rust's 0)");
+    BjCpml_free(&q3);
+    var q4p: BjCpmlParams = BjCpmlParams_new(3);
+    q4p.sigma_ratio = _bj_from_bits(1);
+    var q4: BjCpml;
+    var dx4: f64 = _bj_from_bits(1);
+    var tq4, vq4 = BjCpml_with_params(&q4p, dx4, 0.000000000001, &q4);
+    var q4s: f64 = q4.sigma_max();
+    var q4sw: f64 = _bj_from_bits(0x3f81656029a437c8);
+    assert(is_ok(tq4) == 1 && q4s == q4sw,
+      "σ_max at sigma_ratio = dx = 2^-1074: 0.00849413992957783 (Rust's subnormal products gave 0.010610079575596816)");
+    BjCpml_free(&q4);
+
     return assert_summary();
 }
 

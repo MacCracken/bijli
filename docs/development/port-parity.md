@@ -6959,3 +6959,62 @@ eigenmode search (`dft_magnitude`'s recurrence and magnitude, `find_eigenmodes`'
   equal**. `fdtd2d.tcyr` (77), `fdtd3d.tcyr` (86), `compute.tcyr` (35) and `fdtd1d.tcyr` (90) pass on all three. The
   gate is clean (no warnings; execution coverage 394 of 394); validate.py 767,177 rows, 0 problems; `emit.py --check`
   1,107 frozen rows and 638 emitted. Next: 4b, the CPML profile.
+
+## 126. M6 part 4b: the CPML profile (2026-11-17)
+
+- **ADR 0002 row 40, amended**: the profile's two differences that cancel in the inner layers, where b and κ near 1
+  (plan §0.1's M6 paragraph, rows 29 and 40's forms):
+  - c = σ·(b − 1)/(κ(σ + κα)) takes b − 1 as expm1(x), x the exponent of b = e^x on Rust's chain (b stays Rust's).
+    Rust's c was up to 3.6·10⁻¹³ off in a 10-cell, m = 3 layer, 4.6·10⁻¹¹ in a 20-cell, m = 4 one and 5.5·10⁻¹⁰ in a
+    40-cell one (2D grid, dx = 1 mm; against MPFR's expm1 on Rust's x);
+  - 1/κ − 1 is rounded once from −(κ_max − 1)·g/(1 + (κ_max − 1)·g) on the grade g = ρ^m (rational 17,
+    `_bj_cpml_km1`): (1 − κ)/κ on Rust's rounded κ would keep κ's rounding, which is the cancellation. At κ_max =
+    1 + 10⁻⁸ Rust's innermost half-node value was −3.019806626980426·10⁻¹⁴ for −3.0140817718053706·10⁻¹⁴ (1.9·10⁻³
+    relative). For an edge grade below 2^-1022 its power of two is split into normal factors; below 2^-2100 the value
+    rounds to −0 (+0 for κ_max = 1, the cancelled sum).
+- **ADR 0002 row 18, amended**: σ_max and each layer's chain with an unbounded exponent where an intermediate leaves
+  the normal range (`_bj_cpml_coeff_ux`): the grade by `_bj_ux_pow` (its far stand-in past e^±10000), every
+  operation to 53 bits on kimiya's `_bj_k_ux_*`, b and expm1 of the 53-bit x as the correctly rounded functions of
+  the double where x is normal (1 and x itself below 2^-1022, +0 and −1 past −DBL_MAX), c's quotient and σ_max's
+  rounded once. The σ > 0 and denominator tests fall on the unbounded values, which are positive. At sigma_ratio = dx =
+  2^-1074 Rust's subnormal sigma_ratio·0.8 and η₀·dx gave σ_max = 0.010610079575596816 for 0.00849413992957783 (25 %
+  off); a grade 0.25^300 below 2^-1022 (4 cells, dx = 10⁻³⁰⁰, dt = 10⁻³¹⁰) gave c = 0 for −1.739721726260941·10⁻¹⁸⁰.
+  A grade below 2^-5000 rounds every output as any smaller one does: κ is 1 to 53 bits, σ/κ + α is α (or σ, then x,
+  c and 1/κ − 1 lie below 2^-2900 and round to −0), so the far stand-in gives the true values.
+- **validate.py**: `cpml_profiles` and `cpml_coeffs` take the port's rows: "40" the two forms, "18" σ_max and every
+  layer on Fractions with an unbounded exponent (the grade by MPFR at its widest range, floored at 2^-5000 by the
+  argument above; b and expm1 MPFR's where x isn't a normal double), Rust's chain itself wherever every operation
+  stays normal, so the model doesn't detect the edge. `FD2_PORT` gains "18"; `fd23_runs` replays the `Cpml::` rows
+  too, and the mappings take four replays (Rust's, {40}, {40, 13}, the port's: 75 s). **1,401 rows map** (row 40: 522,
+  of them 483 layers and 39 scripts; row 18: 86, 74 layers and the 12 NF2FF rows; row 13: 793). 18 of the layers are
+  frozen rows at the parameters' extremes: sigma_ratio and dt at 2^-1074 and 2^-1022, dx at 10³⁰⁰ and DBL_MAX, α_max
+  at DBL_MAX, m from 1000 to 10³⁰⁰ (grades below 2^-1022). `fdtd_2d3d.cr.tsv` keeps 2 rows, its 9 corrected layers now
+  mapped.
+- **The grid**: `emit.py`'s `emit_4b` appends 201 rows (1,946; the old body an exact prefix): thick and high-order
+  layers on the 2D and 3D steps, κ_max near 1 with and without CFS α; σ_max past either end (sigma_ratio and dx from
+  2^-1074 to DBL_MAX, m past DBL_MAX/2); grades below 2^-1022 (m from 200 to DBL_MAX); α_max, κ_max and dt at their
+  extremes, and σ/κ + α past DBL_MAX on a subnormal dt; 64 seeded gradings over the whole range; 2D and 3D grids
+  graded by κ_max = 1 + 10⁻⁹ and 1.001.
+- **cr_verify.py**: rational 17 joins the rat, rat_x and rat_slow families (κ_max near 1, CFS gradings, any grade,
+  an edge grade's split power of two, the cancelled sum, any finite values): 60,000 calls with the other rationals on
+  x86_64 and aarch64, 0 mismatches.
+- **Tests**: `cyrius_cpml_profile_port` in `tests/cpml.tcyr` (4 assertions, 44 in all): the innermost c of a 20-cell,
+  m = 4 layer, 1/κ − 1 at κ_max = 1 + 10⁻⁸, c from a grade below 2^-1022, σ_max at the subnormal floor, each from
+  validate.py's model.
+- **Benchmarks**: the profile is sampled once a layer, at `try_enable_cpml`; no step changes. The interleaved A/B
+  against HEAD (two rounds, load 1.5 to 2.6, another repo's bench beside both) left the suite unchanged: median ratios
+  0.985 and 1.009 over 112 rows, the FDTD rows 0.90–0.95 in round 1 and 1.02–1.06 in round 2 (HEAD and this tree swap
+  places: noise), the round-2 extremes ns-scale rf rows 4b doesn't touch. A focused scratch bench, interleaved in the
+  same rounds: `BjCpml_with_params` of the classic 10-cell layer 15.6–15.7 → 19.5–19.6 µs (1.25×: expm1 a layer), of
+  a 20-cell CFS layer (κ_max 5, α_max 0.05, m = 4) 31.1–31.7 → 68.0–68.1 µs (2.2×: rational 17 a layer, where κ_max ≠
+  1), and the 2D grid's `try_enable_cpml(10)` on 100 × 100 19.0–19.2 → 23.7–24.1 µs (1.25×), each paid once a layer.
+- **Result, every target** (x86_64 ELF, x86_64 PE, aarch64): **19 modules, 0 failing; 644,113 ok, 0 failed, 0
+  measured, 0 pending, 123,265 accepted (ADR 01: 43,087; ADR 0002: 80,178)** over 767,378 rows; **all 488 digests
+  equal**. `cpml.tcyr` (44), `fdtd2d.tcyr` (77), `fdtd3d.tcyr` (86), `compute.tcyr` (35) and `json.tcyr` (105) pass on
+  all three. The first PE run died in the parity harness's json module after 216 of the 488 digests (each equal to
+  ELF's), its wine process past `vm.max_map_count` (1,048,578 mappings against the default 1,048,576); the committed
+  4a tree, which passed under wine before the machine's reboot onto kernel 7.3.4, died the same way after it. With the
+  limit raised to 2,147,483,642 (the user's setting) the PE run passes as above: an environment limit and the PE
+  allocator's mapping per allocation (plan §10), not this bite. The gate is
+  clean (no warnings; execution coverage 394 of 394); validate.py 767,378 rows, 0 problems; `emit.py --check` 1,107
+  frozen rows and 839 emitted; `cr_verify.py`'s rat families 0 mismatches. Next: 4c.

@@ -1645,14 +1645,15 @@ def s2z_families(rng, count):
 RAT_EPS0 = 0.0000000000088541878128
 RAT_C = 299792458.0
 RAT_KINDS = 14
+RAT_K = list(range(RAT_KINDS)) + [17]   # 14–16 (the step time, two thresholds) are checked by their own rows
 
 
 def rat_ref(k, v):
-    """RN of rational k over v (src/crmath_edge.cyr's _bj_cr_rat_spec), from the coefficient's formula: the media's
-    C_a, C_b; Drude α, β, κ; Lorentz α, β, γ_c; Debye α, β; the TF/SF Mur coefficient and the 1D one's numerator
-    (M5 part 2a-1b); the parallel and perpendicular subpixel means (M5 part 2a-2). All ones when the denominator is
-    exactly 0. An exact zero takes IEEE's signs: a one-product numerator's factors' (and coefficient's), a cancelled
-    sum +0, then D's."""
+    """RN of rational k over v (src/crmath_edge.cyr's _bj_cr_rat_spec), from the coefficient's formula: the media's C_a,
+    C_b; Drude α, β, κ; Lorentz α, β, γ_c; Debye α, β; the TF/SF Mur coefficient and the 1D one's numerator (M5 part
+    2a-1b); the parallel and perpendicular subpixel means (M5 part 2a-2); the CPML's 1/κ − 1 (M6 part 4b). All ones when
+    the denominator is exactly 0. An exact zero takes IEEE's signs: a one-product numerator's factors' (and
+    coefficient's), a cancelled sum +0, then D's."""
     F = [Fraction(x) for x in v]
     sg = [math.copysign(1.0, x) < 0 for x in v]
     if k in (0, 1):
@@ -1675,6 +1676,9 @@ def rat_ref(k, v):
     elif k == 10:
         dt, dx, c = F[:3]
         num, den, zs = c * dt - dx, c * dt + dx, None
+    elif k == 17:                                   # −(κ_max − 1)·g/(1 + (κ_max − 1)·g), g = b·c·d
+        a, g = F[0], F[1] * F[2] * F[3]
+        num, den, zs = -(a - 1) * g, 1 + (a - 1) * g, None
     elif k in (12, 13):
         e1, e2, fr = F[:3]
         num, den = ((1 - fr) * e1 + fr * e2, Fraction(1)) if k == 12 else (e1 * e2, (1 - fr) * e2 + fr * e1)
@@ -1696,8 +1700,8 @@ def rat_cases(rng, count):
     signed zeros; any finite values and subnormals."""
     out = []
     for i in range(count):
-        k = i % RAT_KINDS
-        mode = (i // RAT_KINDS) % 7
+        k = RAT_K[i % len(RAT_K)]
+        mode = (i // len(RAT_K)) % 7
         dt = 10.0 ** rng.uniform(-18, -10)
         e0 = RAT_EPS0
         dxx = 10.0 ** rng.uniform(-6, -1)
@@ -1711,6 +1715,22 @@ def rat_cases(rng, count):
                 v = [10.0 ** rng.uniform(-300, 300), 10.0 ** rng.uniform(-300, 300), rng.random(), 0.0, 0.0, 0.0]
                 if mode == 6:
                     v[rng.randint(0, 1)] = rng.choice([5e-324, 2.2250738585072014e-308, 1.7976931348623157e308])
+            out.append((k, v))
+            continue
+        if k == 17:                                 # the CPML's 1/κ − 1: κ_max near 1, CFS gradings, any grade
+            km = rng.choice([1.0, math.nextafter(1.0, 2.0), 1 + 10.0 ** -rng.uniform(1, 15), rng.uniform(1, 20),
+                             10.0 ** rng.uniform(0, 300), 1.7976931348623157e308])
+            g = rng.choice([rng.random(), 10.0 ** -rng.uniform(0, 30), 1.0, 2.0 ** -rng.randint(1, 1022)])
+            v = [km, g, 1.0, 1.0, 0.0, 0.0]
+            if mode in (3, 6):                      # an edge grade s·2^e, e ≤ −1023, its power split as the port's
+                e = -rng.randint(1023, 2100)
+                p = max(e, -1022)
+                q = max(e - p, -1022)
+                v = [km, (1 + rng.random()) * 2.0 ** p, 2.0 ** q, 2.0 ** (e - p - q), 0.0, 0.0]
+            elif mode == 4:                         # the cancelled sum: κ_max = 1, or a zero grade
+                v[rng.randint(0, 1)] = rng.choice([1.0, 0.0, -0.0]) if v[0] != 1.0 else 0.0
+            elif mode == 5:                         # any finite values, either sign
+                v = [rng.choice([1.0, -1.0]) * 10.0 ** rng.uniform(-300, 300) for _ in range(4)] + [0.0, 0.0]
             out.append((k, v))
             continue
         if k == 10:                                 # the TF/SF Mur coefficient near S = 1

@@ -10660,18 +10660,86 @@ def cpml_layer_toks(t, m, sigma_max, km, am, profiles):
     return out
 
 
-def cpml_with_params(t, m, sr, km, am, dx, dt, P, C):
+def cpml_with_params(t, m, sr, km, am, dx, dt, P, C, port=frozenset()):
     """`Cpml::with_params` on the primitives P and the constants C: the layer's tokens or the error's."""
-    r = cpml_profiles(t, m, sr, km, am, dx, dt, P, C)
+    r = cpml_profiles(t, m, sr, km, am, dx, dt, P, C, port)
     if r[0] is not None:
         return r[0]
     _e, sigma_max, node, half = r
     return cpml_layer_toks(t, m, sigma_max, km, am, node + half)
 
 
-def cpml_profiles(t, m, sr, km, am, dx, dt, P, C):
+# M6 part 4b (ADR 0002 rows 40 and 18): the port's profile. Under "40" c takes b − 1 as expm1(x) and 1/κ − 1 is
+# rounded once from −(κ_max − 1)·g/(1 + (κ_max − 1)·g); under "18" σ_max and every layer run the chain with an
+# unbounded exponent (each operation to 53 bits on Fractions, the grade by MPFR at its widest range), the outputs
+# rounded once: Rust's chain itself wherever every operation stays normal, so the model needn't detect the edge.
+
+CPML_G_FLOOR = Fraction(1, 1 << 5000)  # a grade below it rounds every output as any smaller one does (port-parity §126)
+
+
+def cpml_km1(km, g):
+    """1/κ − 1 rounded once from −(κ_max − 1)·g/(1 + (κ_max − 1)·g), g the grade as a Fraction; +0 for κ_max = 1 or a
+    zero grade (the cancelled sum)."""
+    if km == 1.0 or g == 0:
+        return 0.0
+    d = (Fraction(km) - 1) * g
+    return rn_frac(-d / (1 + d))
+
+
+def cpml_grade53(rho, m):
+    """ρ^m to 53 bits with an unbounded exponent (MPFR's widest range) as a Fraction, CPML_G_FLOOR below it."""
+    r = mpfr_ref.wide_split("pow", rho, m)
+    if isinstance(r, float):
+        return Fraction(r) if r > 0 else CPML_G_FLOOR
+    if r[1] < -5000:
+        return CPML_G_FLOOR
+    return Fraction(r[0]) * Fraction(2) ** r[1]
+
+
+def cpml_exp53(X, P):
+    """(b, expm1) for the 53-bit exponent X ≤ 0: b = e^X rounded once into binary64, expm1(X) to 53 bits (a Fraction):
+    the correctly rounded functions of the double X where it is normal (expm1 MPFR's, as the port's), MPFR at its widest
+    range elsewhere."""
+    if X != 0 and Fraction(2) ** -1022 <= abs(X) <= Fraction(sys.float_info.max):
+        return P["exp"](float(X)), Fraction(mpfr_ref.expm1(float(X)))
+    if X == 0:
+        return 1.0, Fraction(0)
+    eb = mpfr_ref.wide_split("exp", X)
+    b = eb if isinstance(eb, float) else rn_frac(Fraction(eb[0]) * Fraction(2) ** eb[1])
+    em = mpfr_ref.wide_split("expm1", X)
+    return b, (Fraction(em) if isinstance(em, float) else Fraction(em[0]) * Fraction(2) ** em[1])
+
+
+def cpml_coeffs(rho, m, km, am, sm, dt, P, eps0, port=frozenset()):
+    """`cpml_coefficients`: (b, c, 1/κ − 1) at depth ρ, Rust's chain on the primitives P, or the port's (the section
+    comment)."""
+    grade = P["pow"](rho, m)
+    sigma = sm * grade
+    kappa = 1.0 + (km - 1.0) * grade
+    alpha = am * (1.0 - rho)
+    x = fdiv(-(fdiv(sigma, kappa) + alpha) * dt, eps0)
+    b = P["exp"](x)
+    denom = kappa * (sigma + kappa * alpha)
+    if "40" not in port:
+        c = fdiv(sigma * (b - 1.0), denom) if sigma > 0.0 and denom > 0.0 else 0.0
+        return b, c, fdiv(1.0, kappa) - 1.0
+    if "18" not in port or not math.isfinite(sm):
+        c = fdiv(sigma * mpfr_ref.expm1(x), denom) if sigma > 0.0 and denom > 0.0 else 0.0
+        return b, c, cpml_km1(km, Fraction(grade))
+    g = cpml_grade53(rho, m)
+    S = rnd53(Fraction(sm) * g)
+    K = rnd53(1 + rnd53(Fraction(km - 1.0) * g))
+    A = rnd53(Fraction(am) * Fraction(1.0 - rho))
+    X = rnd53(rnd53(-rnd53(rnd53(S / K) + A) * Fraction(dt)) / Fraction(eps0))
+    b, EM = cpml_exp53(X, P)
+    D = rnd53(K * rnd53(S + rnd53(K * A)))
+    c = rn_frac(rnd53(S * EM) / D) if S > 0 and D > 0 else 0.0
+    return b, c, cpml_km1(km, g)
+
+
+def cpml_profiles(t, m, sr, km, am, dx, dt, P, C, port=frozenset()):
     """`Cpml::with_params`' numbers: (None, σ_max, (b, c, 1/κ − 1) at the nodes, at the half nodes), or (the error's
-    tokens, None, None, None)."""
+    tokens, None, None, None); the port's under its ADR 0002 rows `port` (the section comment)."""
     e = cpml_params_err(t, m, sr, km, am)
     if e:
         return e, None, None, None
@@ -10682,6 +10750,9 @@ def cpml_profiles(t, m, sr, km, am, dx, dt, P, C):
     eta0 = C["field::MU_0"] * C["field::SPEED_OF_LIGHT"]
     eps0 = C["field::EPSILON_0"]
     sigma_max = fdiv(sr * 0.8 * (m + 1.0), eta0 * dx)
+    if "18" in port:                                # its chain with an unbounded exponent, rounded once
+        sigma_max = rn_frac(rnd53(rnd53(Fraction(sr) * Fraction(0.8)) * Fraction(m + 1.0))
+                            / rnd53(Fraction(eta0) * Fraction(dx)))
     if t * 8 > (1 << 63) - 1:                      # try_reserve_exact's capacity overflow
         return ip_err(f"cannot allocate {t} grid values"), None, None, None
     tf = float(t)
@@ -10689,16 +10760,10 @@ def cpml_profiles(t, m, sr, km, am, dx, dt, P, C):
     for off, prof in ((0.0, node), (0.5, half)):
         for l in range(t):
             rho = fdiv((tf - float(l)) - off, tf)
-            grade = P["pow"](rho, m)
-            sigma = sigma_max * grade
-            kappa = 1.0 + (km - 1.0) * grade
-            alpha = am * (1.0 - rho)
-            b = P["exp"](fdiv(-(fdiv(sigma, kappa) + alpha) * dt, eps0))
-            denom = kappa * (sigma + kappa * alpha)
-            c = fdiv(sigma * (b - 1.0), denom) if sigma > 0.0 and denom > 0.0 else 0.0
+            b, c, km1 = cpml_coeffs(rho, m, km, am, sigma_max, dt, P, eps0, port)
             prof[0].append(b)
             prof[1].append(c)
-            prof[2].append(fdiv(1.0, kappa) - 1.0)
+            prof[2].append(km1)
     vals = [sigma_max] + [x for prof in (node, half) for v in prof for x in v]
     if not all(math.isfinite(x) for x in vals):
         return (ip_err(f"CPML coefficients are not finite for dx = {rust_display(dx)}, dt = {rust_display(dt)}"),
@@ -10706,24 +10771,25 @@ def cpml_profiles(t, m, sr, km, am, dx, dt, P, C):
     return None, sigma_max, node, half
 
 
-def cpml_new(t, dx, dt, P, C):
+def cpml_new(t, dx, dt, P, C, port=frozenset()):
     """`Cpml::new`: the classic grading's layer, or the inert one of invalid input."""
-    r = cpml_with_params(t, 3.0, 1.0, 1.0, 0.0, dx, dt, P, C)
+    r = cpml_with_params(t, 3.0, 1.0, 1.0, 0.0, dx, dt, P, C, port)
     if r[0][0] == "E":
         return cpml_layer_toks(t, 3.0, 0.0, 1.0, 0.0, [[]] * 6)
     return r
 
 
-def fd2_eval(fn, ins_raw, P, C):
-    """fdtd_2d3d's functions on the primitives P: a row's outputs, or None."""
+def fd2_eval(fn, ins_raw, P, C, port=frozenset()):
+    """fdtd_2d3d's functions on the primitives P (the port's under its ADR 0002 rows `port`): a row's outputs, or
+    None."""
     toks = [parse_tok(x) for x in ins_raw.split(" ")] if ins_raw != "-" else []
     v = [b for _k, b in toks]
     if fn == "CpmlParams::new":
         return [fd2_i(v[0] & FD_U64), ("f", 3.0), ("f", 1.0), ("f", 1.0), ("f", 0.0)]
     if fn == "Cpml::with_params":
-        return cpml_with_params(v[0] & FD_U64, v[1], v[2], v[3], v[4], v[5], v[6], P, C)
+        return cpml_with_params(v[0] & FD_U64, v[1], v[2], v[3], v[4], v[5], v[6], P, C, port)
     if fn == "Cpml::new":
-        return cpml_new(v[0] & FD_U64, v[1], v[2], P, C)
+        return cpml_new(v[0] & FD_U64, v[1], v[2], P, C, port)
     if fn == "Cpml::attach":
         t, nx, ny = v[0] & FD_U64, v[3] & FD_U64, v[4] & FD_U64
         t2, sx, sy = 2 * t, 2 * t * nx, 2 * t * ny
@@ -10739,15 +10805,16 @@ def fd2_eval(fn, ins_raw, P, C):
 #
 # M6 part 4a: the grids (Fd2, Fd3, GpuFdtd2d's Fd2) take the port's ADR 0002 rows as a set, as Fd1: "13" rounds dt, the
 # update coefficients and `time()` past 2^53 once, "40" rounds the lossy C_a and C_b once from their exact rationals
-# (`fm_port`'s `LossyMaterial` model: Rust's `e_update_coefficients` is that chain).
+# (`fm_port`'s `LossyMaterial` model: Rust's `e_update_coefficients` is that chain). M6 part 4b: the CPML profile they
+# attach is the port's too ("40" and "18", `cpml_profiles`).
 
-FD2_PORT = frozenset({"40", "13"})          # the port's ADR 0002 rows in the 2D and 3D models
+FD2_PORT = frozenset({"40", "13", "18"})    # the port's ADR 0002 rows in the 2D and 3D models (and the CPML's)
 
 
 def fd23_setup(sim, dx, root2, port):
     """The grid's dt, C_b and C_h (Rust's, or rounded once under row 13); root2 is Rust's 2√2 or 2√3 as a double."""
     c, eps0, mu0 = sim.K
-    sim.r13, sim.r40 = "13" in port, "40" in port
+    sim.port, sim.r13, sim.r40 = port, "13" in port, "40" in port
     sim.dt = rn_mono([dx], [root2, c]) if sim.r13 else fdiv(dx, root2 * c)
     return sim.coeff(eps0, 1.0), sim.coeff(mu0, 1.0)
 
@@ -10808,7 +10875,7 @@ class Fd2:
         if t == 0 or need > FD_U64 or need > min(nx, ny):
             return ip_err(f"CPML thickness {t} is invalid for a {nx}×{ny} grid (need thickness ≥ 1 and "
                           f"2·thickness + 3 ≤ min(nx, ny))")
-        e, _sm, node, half = cpml_profiles(t, m, sr, km, am, self.dx, self.dt, P, C)
+        e, _sm, node, half = cpml_profiles(t, m, sr, km, am, self.dx, self.dt, P, C, self.port)
         if e is not None:
             return e
         self.cpml = (t, node, half, [[0.0] * (2 * t * nx), [0.0] * (2 * t * nx), [0.0] * (2 * t * ny),
@@ -11153,7 +11220,7 @@ class Fd3:
         if t == 0 or need > FD_U64 or need > min(nx, ny, nz):
             return ip_err(f"CPML thickness {t} is invalid for a {nx}×{ny}×{nz} grid (need thickness ≥ 1 and "
                           f"2·thickness + 3 ≤ min(nx, ny, nz))")
-        e, _sm, node, half = cpml_profiles(t, m, sr, km, am, self.dx, self.dt, P, C)
+        e, _sm, node, half = cpml_profiles(t, m, sr, km, am, self.dx, self.dt, P, C, self.port)
         if e is not None:
             return e
         lens = (2 * t * ny * nz, 2 * t * nx * nz, 2 * t * nx * ny)
@@ -11678,34 +11745,39 @@ _FD23_RUNS = {}
 
 
 def fd23_runs(root: Path, path: Path, port):
-    """The script and `nf2ff_2d` rows replayed on MPFR's primitives with the port's ADR 0002 rows `port`, by row index:
-    a script row's outputs, an nf2ff row's (Rust's core, the port's core) on that grid's snapshot. Cached, so the
-    mappings and the corrections share each replay."""
+    """The script, `nf2ff_2d` and CPML layer rows replayed on MPFR's primitives with the port's ADR 0002 rows `port`, by
+    row index: a script's or a layer's outputs, an nf2ff row's (Rust's core, the port's core) on that grid's snapshot.
+    Cached, so the mappings and the corrections share each replay."""
     key = (str(path), port)
     if key not in _FD23_RUNS:
         sc = {"Fdtd2d::script": Fd2Scripts(root, MPFR_P, port), "Fdtd3d::script": Fd3Scripts(root, MPFR_P, port),
               "GpuFdtd2d::script": Gpu2Scripts(root, MPFR_P, port)}
         f2n = Fd2Scripts(root, MPFR_P, port)
         P = dict(MPFR_P, hypot=lambda x, y: mpfr_ref.cr2("hypot", x, y))
+        C = golden_consts(root)
         res = {}
         for n, (fn, _cls, ins, _outs, _v) in enumerate(sc_lines(path)):
             if fn in sc:
                 res[n] = sc[fn].eval(ins)
             elif fn == "fdtd::nf2ff_2d":
                 res[n] = (fd2_nf2ff(f2n, ins, P), fd2_nf2ff(f2n, ins, P, port=True))
+            elif fn in ("Cpml::with_params", "Cpml::new"):
+                res[n] = fd2_eval(fn, ins, MPFR_P, C, port)
         _FD23_RUNS[key] = res
     return _FD23_RUNS[key]
 
 
 def fdtd_2d3d_adr_rows(root: Path, path: Path) -> list:
     """ADR 0002 rows 40 and 13 (M6 part 4a): each 2D, 3D and GpuFdtd2d script whose state the coefficients rounded once
-    change, named by the first set of the port's rows that accounts for its whole change (row 40, then 13). Row 18:
+    change; row 40 and 18 (M6 part 4b): each CPML layer row the profile's cancellation-free forms or range edges
+    change. Each named by the first set of the port's rows that accounts for its whole change (row 40, then 13, else
+    18). Row 18:
     each `nf2ff_2d` row whose outputs the core's range edges change (M5 part 2d-6). All on correctly rounded primitives,
     the port's model against Rust's chain; a row whose port value is the oracle's needs no mapping."""
     out = []
     rust, port = fd23_runs(root, path, frozenset()), fd23_runs(root, path, FD2_PORT)
-    subs = [("40", fd23_runs(root, path, frozenset({"40"}))), ("13", port)]
-    notes = {"40": "the lossy coefficients rounded once", "13": "rounded once", "18": "the range edge"}
+    subs = [("40", fd23_runs(root, path, frozenset({"40"}))), ("13", fd23_runs(root, path, frozenset({"40", "13"})))]
+    notes = {"40": "the coefficients rounded once", "13": "rounded once", "18": "the range edge"}
     for n, (fn, _cls, ins, outs, _v) in enumerate(sc_lines(path)):
         if n not in port:
             continue
@@ -11762,8 +11834,9 @@ def fdtd_2d3d_corrections(root: Path, path: Path):
                 if not toks_same(mine, want):
                     continue                                # an ADR 0002 row's: fdtd_2d3d.adr.tsv maps it
                 old = wave_toks([parse_tok(x) for x in outs.split(" ")])
+                what = "powf and exp" if fn.startswith("Cpml::") else "primitives"
                 if not toks_same(want, old):            # run's sine, the CPML profiles' powf and exp, NF2FF's
-                    out.append((fn, ins, wire(want), f"oracle {outs[:120]}; correctly rounded primitives give "
+                    out.append((fn, ins, wire(want), f"oracle {outs[:120]}; correctly rounded {what} give "
                                                      f"{wire(want)[:60]}"))
                 continue
             if cls != "C":

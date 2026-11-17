@@ -3020,7 +3020,8 @@ fn _bj_cr_s2z(v: *f64, slow, out: *f64): i64 {
 # (ε_∞, ε_s, τ, dt, ε₀); the TF/SF grid's (dt, dx, c); the 1D grid's (c, dt, ε_r, μ_r, dx) (M5 part 2a-1b); the
 # subpixel means' (ε₁, ε₂, f) (M5 part 2a-2: ADR 0002 row 41); a step count past 2^53 split exactly as s_hi + s_lo
 # times dt (s_hi, dt, s_lo) (M5 part 2b: row 13); the signs of 10¹²·c·dt − (10¹² + 1)·dx (10¹², c, dt, 10¹² + 1, dx)
-# and of f·dt − ½ (f, dt, ½) (M5 part 2c: row 17).
+# and of f·dt − ½ (f, dt, ½) (M5 part 2c: row 17); the CPML's 1/κ − 1 = −(κ_max − 1)·g/(1 + (κ_max − 1)·g) for the grade
+# g = b·c·d, its power of two split into normal factors (κ_max, b, c, d) (M6 part 4b: row 40).
 #must_use
 fn _bj_cr_rat_spec(k): i64 {
     if (k == 0) { return "+2ea-1bc/+2ea+1bc"; }           # the lossy C_a = (2ε − σΔt)/(2ε + σΔt)
@@ -3040,6 +3041,7 @@ fn _bj_cr_rat_spec(k): i64 {
     if (k == 14) { return "+1ab+1cb/+1"; }                 # step·dt = s_hi·dt + s_lo·dt
     if (k == 15) { return "+1abc-1de/+1"; }                # the TF/SF Courant test's 10¹²·c·dt − (10¹² + 1)·dx
     if (k == 16) { return "+1ab-1c/+1"; }                  # the Nyquist warning's f·dt − ½
+    if (k == 17) { return "-1abcd+1bcd/+1+1abcd-1bcd"; }   # the CPML's 1/κ − 1 = −(κ_max − 1)g/(1 + (κ_max − 1)g)
     return 0;
 }
 

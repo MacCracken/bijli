@@ -451,6 +451,68 @@ def emit_4a(rows, m2, m3, mg):
         frames3(rows, m3, (9, 8, 9), rng.log_uniform(-6.0, -1.0), [cpml(2), source(4, 4, 4, 1.0)], [2])
 
 
+def layer(rows, C, t, m, sr, km, am, dx, dt):
+    """A `Cpml::with_params` row (class C): `i:<t> f:<m> f:<sigma_ratio> f:<kappa_max> f:<alpha_max> f:<dx> f:<dt>`."""
+    ins = [u(t), f(m), f(sr), f(km), f(am), f(dx), f(dt)]
+    rows.emit("Cpml::with_params", "C", ins, V.fd2_eval("Cpml::with_params", V.wire(ins), V.GLIBC_P, C))
+
+
+def emit_4b(rows, m2, m3):
+    """M6 part 4b (ADR 0002 rows 40 and 18): the CPML profile. Thick layers and high orders on the 2D and 3D steps,
+    where c's b − 1 and 1/κ − 1 cancel in the inner layers (κ_max near 1 for the second); σ_max past either end of the
+    range (sigma_ratio and dx from 2^-1074 to DBL_MAX, m past it); grades below 2^-1022 (m to DBL_MAX); α_max, κ_max
+    and dt at their extremes; seeded gradings over the whole range; and grids whose layers κ_max near 1 grades."""
+    C = m2.C
+    mx, tiny = sys.float_info.max, 5e-324
+    c0 = C["field::SPEED_OF_LIGHT"]
+    dt2 = V.rn_mono([1e-3], [2.0 * math.sqrt(2.0), c0])
+    dt3 = V.rn_mono([1e-3], [2.0 * math.sqrt(3.0), c0])
+    # The cancellation: thick layers, high orders, CFS κ_max near 1.
+    for dt in (dt2, dt3):
+        for t, m in ((16, 3.0), (20, 4.0), (32, 4.0), (40, 6.0), (64, 3.0)):
+            layer(rows, C, t, m, 1.0, 1.0, 0.0, 1e-3, dt)
+        for km in (1.0 + 1e-12, 1.0 + 1e-8, 1.001, 1.5, 3.0, 15.0):
+            for am in (0.0, 1e-3, 0.05):
+                layer(rows, C, 12, 4.0, 1.0, km, am, 1e-3, dt)
+    # σ_max past either end: sigma_ratio and dx over the range, m past DBL_MAX/2.
+    for sr in (tiny, 1e-310, 2.2250738585072014e-308, 1.0, 1e300, mx):
+        for dx in (tiny, 1e-310, 1e-300, 1e-3, 1e300, mx):
+            layer(rows, C, 3, 3.0, sr, 1.0, 0.0, dx, 1e-12)
+    for m in (1e300, mx):
+        for sr in (1e-300, 1.0, 1e10):
+            layer(rows, C, 3, m, sr, 1.0, 0.0, 1e-3, dt2)
+    # Grades below 2^-1022: high orders on a fine dx (σ_max large enough that σ stays normal), CFS and classic.
+    for m in (200.0, 300.0, 500.0, 1000.0, 1e5, 1e300):
+        for t in (4, 10):
+            layer(rows, C, t, m, 1.0, 1.0, 0.0, 1e-300, 1e-310)
+            layer(rows, C, t, m, 1e-200, 1e100, 0.01, 1e-3, dt2)
+    # α_max, κ_max and dt at their extremes; σ/κ + α past DBL_MAX on a dt that brings it back.
+    for am in (tiny, 1e-310, 1e300, mx):
+        layer(rows, C, 4, 3.0, 1.0, 1.0, am, 1e-3, dt2)
+        layer(rows, C, 4, 3.0, 1.0, 5.0, am, 1e-3, tiny)
+    for km in (1e300, mx):
+        layer(rows, C, 4, 3.0, 1.0, km, 0.0, 1e-3, dt2)
+        layer(rows, C, 4, 3.0, 1.0, km, 1.0, 1e-3, dt2)
+    for dt in (tiny, 1e-310, 1e-300, 1e300, mx):
+        layer(rows, C, 4, 3.0, 1.0, 2.0, 0.01, 1e-3, dt)
+    for dt in (tiny, 1e-320, 1e-300):
+        layer(rows, C, 3, 3.0, mx, 1.0, mx, tiny, dt)
+        layer(rows, C, 3, 3.0, 1e300, 1.0, mx, 1e-20, dt)
+    # Seeded gradings over the whole range.
+    rng = Rng(0x4B_C9)
+    for _ in range(64):
+        t = rng.int(1, 12)
+        m = 1.0 + rng.log_uniform(-2.0, 3.0)
+        km = 1.0 if rng.unit() < 0.3 else 1.0 + rng.log_uniform(-15.0, 300.0)
+        am = 0.0 if rng.unit() < 0.3 else rng.log_uniform(-320.0, 300.0)
+        layer(rows, C, t, m, rng.log_uniform(-300.0, 300.0), km, am, rng.log_uniform(-300.0, 300.0),
+              rng.log_uniform(-320.0, 300.0))
+    # Grids whose layers κ_max near 1 grades: 1/κ − 1 cancels in every layer.
+    for km in (1.0 + 1e-9, 1.001):
+        frames2(rows, m2, 15, 14, 1e-3, 0, [cpml_with(4, 4.0, 1.0, km, 0.0), source2d(7, 7, 1.0)], [6])
+        frames3(rows, m3, (11, 11, 11), 1e-3, [cpml_with(3, 4.0, 1.0, km, 0.0), source(5, 5, 5, 1.0)], [4])
+
+
 # ── modules ─────────────────────────────────────────────────────────────────────────────────────────────────────────
 
 def module(name, parts):
@@ -476,7 +538,7 @@ def main() -> int:
     model_gpu = V.Gpu2Scripts(root, V.GLIBC_P)
     problems = 0
     parts = [lambda r: emit_2b(r, model3), lambda r: emit_3(r, model_gpu),
-             lambda r: emit_4a(r, model2, model3, model_gpu)]
+             lambda r: emit_4a(r, model2, model3, model_gpu), lambda r: emit_4b(r, model2, model3)]
     for name, parts in (("fdtd_2d3d", parts),):
         path, text, n = module(name, parts)
         big = V.too_big(f"tests/golden/{name}.tsv", text)

@@ -604,6 +604,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
   last bits: `fdtd_2d3d.adr.tsv` maps 824 rows (row 13: 789, row 40: 23, row 18's 12 NF2FF rows as before), and
   `emit.py`'s `emit_4a` appends 282 rows (1,745): ten decades of dx in both modes, 3D and on the CPU backend, lossy
   cells where C_a cancels, the spacings at the range's ends, CPML layers on the rounded dt.
+- **Cyrius port, M6 part 4b — the CPML profile** (ADR 0002 rows 40 and 18 amended; `src/cpml.cyr`): c takes b − 1 as
+  expm1 of b's exponent (row 29's form), 1/κ − 1 is rounded once from −(κ_max − 1)g/(1 + (κ_max − 1)g) on the grade
+  (rational 17 in `src/crmath_edge.cyr`, checked by `cr_verify.py`), and σ_max and each layer's chain run with an
+  unbounded exponent where an intermediate leaves the normal range (`_bj_cpml_coeff_ux`, the grade by `_bj_ux_pow`).
+  Every CPML layer's c changes in its last bits, so every CPML trajectory does too: `fdtd_2d3d.adr.tsv` maps 1,401 rows
+  (row 40: 522, row 18: 86, row 13: 793), and `emit.py`'s `emit_4b` appends 201 rows (1,946). validate.py's
+  `cpml_profiles` runs the unbounded chain itself under row 18 (`cpml_coeffs`; the grade by MPFR at its widest range).
 
 ### Fixed
 
@@ -1171,6 +1178,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
   lossy C_a cancelled where σΔt/2ε nears 1 (2.7·10⁻⁶ relative at 1 + 10⁻¹²), `time()` rounded the step first past 2⁵³,
   and at dx = 5·10⁻³²⁴ C_b was 0/0 = NaN where ε₀·dx underflowed. Each is now rounded once. Cost: none; the steps and
   construction are unchanged, and the regions got faster (below; `port-parity.md` §125).
+- **cpml** (ADR 0002 rows 40 and 18 amended, M6 part 4b): the CPML profile's c lost up to 5.5·10⁻¹⁰ of its value in a
+  40-cell layer's inner cells (Rust's b − 1 cancelled), and 1/κ − 1 up to 1.9·10⁻³ at κ_max = 1 + 10⁻⁸ (1/κ − 1 on
+  κ ≈ 1); σ_max was 25 % off where sigma_ratio·0.8 and η₀·dx fell below 2^-1022 (sigma_ratio = dx = 2^-1074), and a
+  grade below 2^-1022 (m = 300 on 4 cells) gave c = 0 for −1.74·10⁻¹⁸⁰. c is on expm1, 1/κ − 1 rounded once from its
+  exact value, and the chain runs with an unbounded exponent at its range edges. Cost: the layer's construction, once
+  a layer: the classic 10-cell layer 15.6–15.7 → 19.5–19.6 µs, a 20-cell CFS one 31.1–31.7 → 68.0–68.1 µs (the
+  rational where κ_max ≠ 1); no step changes (`port-parity.md` §126).
 
 ### Performance
 
