@@ -1,4 +1,4 @@
-# Handoff: the Cyrius port, M6's range-edge review (Part 4) under way (2026-11-17)
+# Handoff: the Cyrius port, M6 done, M7 next (2026-11-17)
 
 For the next agent picking up the port. **Read first:** `CLAUDE.md` (the rules), [`state.md`](state.md) (live state),
 [`bijli-port-plan.md`](bijli-port-plan.md) (§0.1 holds the user's M5 Part 2 answers; the tracking table is near the
@@ -9,7 +9,8 @@ bite is done, the machinery, the scripts and the traps. Delete it once it has se
 
 ## Where it stands
 
-- **Committed through `2a7fda8`** ("m6 pt4e done"); part 4f is in the working tree for the user to commit.
+- **Committed through `0ffb892`** ("m6 pt4f done"); M6's wrap-up (§131) is in the working tree for the user to
+  commit. **M6 is done.**
 - **M6 Part 1** (the 2D CPML and `Fdtd2d`, §116–§119) runs in bites. Done: 1a the CPML layer (`src/cpml.cyr`); 1b-1
   `Fdtd2d` without the CPML (`src/fdtd2d.cyr`; its scripts `Fdtd2d::script` in `fdtd_2d3d.tsv`, replayed by
   validate.py's `Fd2Scripts` in pure Python, no NumPy on the host); 1b-2 the CPML attached (the y-strips packed, the
@@ -87,11 +88,12 @@ bite is done, the machinery, the scripts and the traps. Delete it once it has se
   have no serde), but M7's eight serde types (integration/) will want their own module.
 - **M5 is done** (§115). The benchmark record's Cyrius column is each row's least of four full runs: rows vary up to
   1.5× between runs under other repos' loads, so take the least of several when regenerating it.
-- **Next**: the M6 wrap-up, as M5's (§115): regenerate the benchmark record's Cyrius column (each row's least of four
-  full `cyrius bench` runs of the committed tree), add M6 to `bench_record.py`'s `DONE`, mark M6 done in the roadmap
-  with the per-cell scans' costs as planned performance work (plan §10's classify verb), and write §131. Then M7.
-  `nf2ff_2d` (the snapshot form) calls `_bj_nf_core` with the rotation (1, 0) and k from `_bj_nf_validate` on its
-  double frequency (`_bj_k_ux_from`): the core's range edges come with it.
+- **Next**: M7, the integration surfaces (plan §4.1's M7 rows: `integration/soorat.rs` as `src/soorat.cyr`,
+  `bridge.rs` as `src/bridge.cyr`, `ai.rs` in the `[lib.ai]` profile only), in bites as M6's Part 1: each module's API
+  first (the M3 handoff's bite workflow, `git show 01bb43e:docs/development/handoff.md`), its golden rows from a new
+  `emit.py` part (a module of its own: `json.tsv` is 40.7 MB of the 48 MiB cap, and M7's eight serde types want
+  theirs), then its range-edge review as Part 4 was. M6's wrap-up (§131) regenerated the benchmark record from four
+  full runs; M7's close does the same.
 - **Corpus size**: `fdtd.tsv` is 38.8 MB (107,341 rows) and `json.tsv` 40.7 MB, against the 48 MiB cap that
   validate.py's `too_big` guards (§81); M6's rows are in `fdtd_2d3d.tsv` (4.2 MB after 4f).
 - **A recorded cost**: the 1D step runs 3.5–3.8× HEAD's with 2d-2a's scan (§107), the TF/SF step about 2× with
@@ -245,6 +247,24 @@ a, b = load(sys.argv[1]), load(sys.argv[2])
 rs = sorted((b[k] / a[k], k) for k in a if k in b)
 print(len(rs), "common; median ratio", round(rs[len(rs)//2][0], 3))
 for r, k in rs[:3] + rs[-3:]: print(f"{k:45s} {a[k]:10.1f} {b[k]:10.1f} {r:.3f}")
+```
+
+The benchmark record at a milestone's close (§115, §131): four full `cyrius bench` runs of the committed tree into
+`bench_1.txt` … `bench_4.txt`, merged into each row's least (`minlog.py out.txt bench_*.txt`), then
+`python3 -I -B scripts/bench_record.py . out.txt`:
+
+```python
+import re, sys
+unit = {"ps": 1e-3, "ns": 1.0, "us": 1e3, "µs": 1e3, "ms": 1e6, "s": 1e9}
+best, order = {}, []
+for p in sys.argv[2:]:
+    for line in open(p, encoding="utf-8", errors="replace"):
+        m = re.match(r"\s*(\S+): ([\d.]+)(ps|ns|us|µs|ms|s) avg", line)
+        if m:
+            k, v = m.group(1), float(m.group(2)) * unit[m.group(3)]
+            order += [] if k in best else [k]
+            best[k] = min(v, best.get(k, v))
+open(sys.argv[1], "w").write("".join(f"  {k}: {best[k]:.3f}ns avg\n" for k in order))
 ```
 
 The prefix check after a regeneration (copy `fdtd.tsv` to the scratchpad first):

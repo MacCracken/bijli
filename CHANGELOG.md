@@ -639,6 +639,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
   `src/crmath_edge.cyr` as `_bj_e_fd_source`, which the 2D and 3D grids' and GpuFdtd2d's `run` now call. validate.py's
   `fd_source18` and the energies of `Fd2` and `Fd3` model both; `fdtd_2d3d.adr.tsv` maps 1,980 rows (row 18: 489),
   and `emit.py`'s `emit_4f` appends 91 rows (2,606).
+- **M6 done — the benchmark record regenerated** (`docs/benchmarks-rust-v-cyrius.md`): the Cyrius column is each
+  row's least of four full runs of the committed tree (`0ffb892`; load 2.5 to 17.8, another session's work beside
+  three of them; `port-parity.md` §131). M6's rows carry Part 4's per-cell rule, as recorded in §127–§130:
+  `fdtd/2d_step_100x100_tm` 45.6 → 108.8 µs (9.5× Rust's), `fdtd/2d_step_100x100_tm_cpml10` 109.4 → 236.9 µs,
+  `fdtd/3d_step_30x30x30` 593 µs → 1.35 ms, `fdtd/3d_step_30x30x30_cpml8` 2.12 → 4.24 ms. `scripts/bench_record.py`'s
+  `DONE` names M1–M6. The roadmap marks M6 done and lists M6's scan costs with the 1D grid's as performance work.
 
 ### Fixed
 

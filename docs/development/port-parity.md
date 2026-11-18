@@ -7228,3 +7228,31 @@ eigenmode search (`dft_magnitude`'s recurrence and magnitude, `find_eigenmodes`'
   394 of 394; the audit passes); validate.py 768,038 rows, 0 problems; `emit.py --check` 1,107 frozen rows and 1,499
   emitted. **M6 Part 4 is done**: every range edge plan §0.1 lists for M6 is on the rule. Next: the M6 wrap-up (as
   §115), then M7.
+
+## 131. M6 done: the wrap-up (2026-11-17)
+
+- **The benchmark record** (`docs/benchmarks-rust-v-cyrius.md`, `scripts/bench_record.py`) is regenerated, as at M5's
+  close (§115): the Cyrius column is each row's least of four full `cyrius bench` runs of the committed tree
+  (`0ffb892`, "m6 pt4f done"). The first ran at load 2.5; the other three beside another session's shravan work and
+  repo builds (load 12 to 18 by the last), so most rows' least is the first run's. A single run's ratio within the
+  rows' run-to-run spread (up to 1.5×, §115) is noise.
+- **What moved**: 80 twinned rows, median Cyrius/Rust 28.3× (27.2× in the old column), the median row 1.04× its old
+  value. M6's rows carry Part 4's per-cell rule (§127–§130): `fdtd/2d_step_100x100_tm` 45.59 → 108.81 µs (9.5× Rust's),
+  `fdtd/2d_step_100x100_tm_lossy` 48.90 → 112.02 µs (7.8×), `fdtd/2d_step_100x100_tm_cpml10` 109.38 → 236.91 µs
+  (11.6×), `fdtd/2d_run_50_steps_80x80` 1.73 → 5.47 ms (13.1×), `fdtd/3d_step_30x30x30` 592.85 µs → 1.35 ms (4.2×; its
+  Rust bench takes the energy each step), `fdtd/3d_step_30x30x30_cpml8` 2.12 → 4.24 ms (8.6×); `fdtd/nf2ff_2d_80x80_180`
+  reads 1.52 ms (7.9×) as before. Every other row is within 0.98–1.14× its old value, the extremes ns-scale rows.
+- **The gate** for finished milestones: `bench_record.py`'s `DONE` names M1–M6, so a Rust bench of theirs without a
+  twin (or a `REASONS` entry) fails `--check`. None does: 80 of 80 twinned, none pending.
+- **The roadmap** marks M6 done, and its per-cell scan item lists M6's costs beside the 1D grid's (the 2D step 2.4–2.7×
+  its unchecked form, the 3D step 1.8×, the CPML steps 1.4× and 1.5×, `total_energy` 2.3× and 2.8×), the lane-wise
+  exponent-field verb (plan §10) still the way to about one pass.
+- **M6 in all**: Part 1 (§116–§120) ported the 2D CPML layer, `Fdtd2d` and its CPML, `nf2ff_2d` and the JSON of
+  `CpmlParams` and `Mode2d` (ADR 0002 row 36); §122 retired the Rust tree (ADR 0003); Part 2 (§121, §123) `Fdtd3d` and
+  its CPML; Part 3 (§124) compute.rs, `GpuFdtd2d` on the CPU backend; Part 4 (§125–§130) the range-edge review under the
+  user's answers of 2026-11-15 (ADR 0002 rows 13, 18 and 40). fdtd.rs is ported whole (163 of its 167 tests, 4 n/a by
+  row 2), compute.rs 18 of 18. `fdtd_2d3d.tsv` holds 2,606 rows (1,107 frozen from the retired generator, 1,499 from
+  `emit.py`), 1,980 of them mapped to ADR 0002.
+- **Result**: no code changed; the parity and digests are §130's (644,194 ok, 0 failed, 123,844 accepted over 768,038
+  rows; all 488 digests equal on three targets). The gate is clean. **M6 is done.** Next: M7, the integration
+  surfaces (`integration/soorat.rs`, `bridge.rs`, and `ai.rs` in the `[lib.ai]` profile; plan §4.1).
