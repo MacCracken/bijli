@@ -486,7 +486,9 @@ public fn BjGpuFdtd2d_add_source<B: BjComputeBackend>(sim: *BjGpuFdtd2d<B>, x, y
 
 # Runs `steps` time steps (a usize). Before each, when (sx, sy) is in the grid, adds amplitude·sin(2π·frequency·t) to
 # E_z there, t = step·dt; BJ_FDTD2D_NO_SOURCE for sx (or any node outside the grid) injects nothing, as Rust's None.
-# Then synchronizes the backend. Ok(0), or the first error (the steps before it taken). Mirrors `GpuFdtd2d::run`.
+# The sample at its range edges runs with an unbounded exponent (src/crmath_edge.cyr's _bj_e_fd_source; ADR 0002 row
+# 18, M6 part 4f). Then synchronizes the backend. Ok(0), or the first error (the steps before it taken). Mirrors
+# `GpuFdtd2d::run`.
 public fn BjGpuFdtd2d_run<B: BjComputeBackend>(sim: *BjGpuFdtd2d<B>, steps, sx, sy, frequency: f64,
   amplitude: f64): Result {
     if (_bj_log_on(4) == 1) {
@@ -512,14 +514,10 @@ public fn BjGpuFdtd2d_run<B: BjComputeBackend>(sim: *BjGpuFdtd2d<B>, steps, sx, 
         _bj_log_text(4, &lt);
     }
     var w2pi: f64 = 2.0 * _BJ_CB_PI;
-    var wf: f64 = w2pi * frequency;
     for (var k = 0; _bj_fd2_uge(k, steps) == 0; k = k + 1) {
         if (sx != BJ_FDTD2D_NO_SOURCE) {
             var sf: f64 = _bj_fd2_u2f(sim.step);
-            var t: f64 = sf * sim.dt;
-            var arg: f64 = wf * t;
-            var sv: f64 = _bj_sin(arg);
-            var value: f64 = amplitude * sv;
+            var value: f64 = _bj_e_fd_source(sf, sim.dt, w2pi, frequency, amplitude);
             var ta, va = BjGpuFdtd2d_add_source(sim, sx, sy, value);
             if (is_err_result(ta) == 1) { return Err(va); }
         }

@@ -662,6 +662,34 @@ def emit_4e(rows, m2, m3):
         frames3(rows, m3, d3, rng.log_uniform(-6.0, -1.0), ops, [rng.int(1, 3)])
 
 
+def emit_4f(rows, m2, m3, mg):
+    """M6 part 4f (ADR 0002 row 18): `total_energy` and `run`'s source at their range edges. The energies, 2D in both
+    modes and 3D: fields of 10^±160 on dx of 10^∓150 (f² past DBL_MAX, or below the range, where dx² or dx³ brings the
+    energy back), dx = 10⁻¹⁶⁰ (dx² subnormal, dx³ zero), media of 10⁻³⁰⁰ (½·m·k subnormal), an in-plane field of
+    10⁻¹⁷⁰ alone (its square 0); the source on all three grids: f = DBL_MAX (2πf past it, the phase ∞·0 at t = 0),
+    f = 10³⁰⁰ (the phase past DBL_MAX within a few steps), dx = 10⁻³⁰⁰ (dt and t subnormal). Field fills take each
+    grid's field index."""
+    for mode in (0, 1):
+        for w, v, dx in ((0, 1e160, 1e-150), (1, 1e160, 1e-150), (0, 1e-160, 1e150), (2, 1e-160, 1e150),
+                         (1, 1e-170, 1e150), (0, 1.0, 1e-160), (0, 3e-155, 1e150)):
+            frames2(rows, m2, 8, 7, dx, mode, [fill2(w, v)], [])
+            frames2(rows, m2, 8, 7, dx, mode, [fill2(w, v), source2d(3, 3, -v)], [1, 2])
+        frames2(rows, m2, 8, 7, 1e-3, mode, [region2(1, (0, 0, 8, 7), 1e-300), region2(2, (0, 0, 8, 7), 1e-300),
+                                             fill2(0, 1.0), fill2(1, 1.0)], [])
+    for w, v, dx in ((2, 1e160, 1e-150), (3, 1e160, 1e-150), (0, 1e-160, 1e150), (5, 1e-160, 1e150),
+                     (1, 1e-170, 1e150), (2, 1.0, 1e-160), (2, 1.0, 1e-110)):
+        frames3(rows, m3, (6, 6, 6), dx, [fill2(w, v)], [])
+        frames3(rows, m3, (6, 6, 6), dx, [fill2(w, v), source(2, 2, 2, -v)], [1])
+    frames3(rows, m3, (6, 6, 6), 1e-3, [box(1, (0, 0, 0, 6, 6, 6), 1e-300), box(2, (0, 0, 0, 6, 6, 6), 1e-300),
+                                        fill2(2, 1.0), fill2(3, 1.0)], [])
+    mx = sys.float_info.max
+    for fr, dx in ((mx, 1e-3), (1e300, 1e-3), (1e9, 1e-300), (3e307, 1e-3)):
+        for mode in (0, 1):
+            frames2(rows, m2, 8, 7, dx, mode, [], [1, 3], advance=lambda k, fr=fr: run2(k, (3, 3), fr, 1.0))
+        frames3(rows, m3, (6, 6, 6), dx, [], [1, 3], advance=lambda k, fr=fr: run(k, (2, 2, 2), fr, 1.0))
+        frames_gpu(rows, mg, 8, 7, dx, [], [1, 3], advance=lambda k, fr=fr: run2(k, (3, 3), fr, 1.0))
+
+
 # ── modules ─────────────────────────────────────────────────────────────────────────────────────────────────────────
 
 def module(name, parts):
@@ -689,7 +717,7 @@ def main() -> int:
     parts = [lambda r: emit_2b(r, model3), lambda r: emit_3(r, model_gpu),
              lambda r: emit_4a(r, model2, model3, model_gpu), lambda r: emit_4b(r, model2, model3),
              lambda r: emit_4c(r, model2, model_gpu), lambda r: emit_4d(r, model3),
-             lambda r: emit_4e(r, model2, model3)]
+             lambda r: emit_4e(r, model2, model3), lambda r: emit_4f(r, model2, model3, model_gpu)]
     for name, parts in (("fdtd_2d3d", parts),):
         path, text, n = module(name, parts)
         big = V.too_big(f"tests/golden/{name}.tsv", text)

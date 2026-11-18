@@ -866,6 +866,24 @@ fn main() {
       "then E_z = 1.1445678707085323·10³⁰⁸ and E_x, E_y = 2.9532200524477127·10³⁰⁷ (Rust's NaN)");
     BjFdtd3d_free(&ce1);
 
+    # ADR 0002 row 18 (M6 part 4f): total_energy at its range edges, with an unbounded exponent. The expectation is
+    # validate.py's model of the port.
+    test_group("cyrius_energy_edges");
+    var ee1: BjFdtd3d;
+    var dxs: f64 = _bj_from_bits(0x20ca2fe76a3f9475);
+    var tee1, vee1 = BjFdtd3d_new(6, 6, 6, dxs, &ee1);
+    var e160: f64 = _bj_from_bits(0x6126c2d4256ffcc3);
+    for (var ez = 0; ez < 6; ez = ez + 1) {
+        for (var ey = 0; ey < 6; ey = ey + 1) {
+            for (var ex = 0; ex < 6; ex = ex + 1) { ee1.add_source_ez(ex, ey, ez, e160); }
+        }
+    }
+    var ee1e: f64 = ee1.total_energy();
+    var ee1w: f64 = _bj_from_bits(0x23123857ac18d04f);
+    assert(is_ok(tee1) == 1 && ee1e == ee1w,
+      "E_z = 10¹⁶⁰ on dx = 10⁻¹⁵⁰: |E|² past DBL_MAX, dx³ below the range: 9.562522837824012·10⁻¹⁴⁰ (Rust's ∞·0)");
+    BjFdtd3d_free(&ee1);
+
     return assert_summary();
 }
 

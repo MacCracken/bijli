@@ -547,6 +547,16 @@ fn main() {
     assert(at(g4.e_field, 10) == 0.0 && at(g4.h_field, 9) == 0.0,
       "f = DBL_MAX: 2πf past DBL_MAX at t = 0, the sample sin 0 = 0 (Rust's ∞·0 = NaN)");
     BjFdtd1d_free(&g4);
+    # M6 part 4f: the sample's step is read unsigned, as Rust's `step as f64` (the shared _bj_e_fd_source).
+    var g5: BjFdtd1d;
+    var tg8, vg8 = BjFdtd1d_new(50, 0.001, &g5);
+    g5.step = 0 - 1;
+    g5.run(1, 25, 1000000000.0, 1.0);
+    var g5e: f64 = at(g5.e_field, 25);
+    var g5p: f64 = _bj_from_bits(0x3fdd615a0dd11526);
+    var g5w: f64 = -g5p;
+    assert(is_ok(tg8) == 1 && g5e == g5w, "a step of 2^64 − 1: t = 2^64·dt, the sample −0.4590668806962007");
+    BjFdtd1d_free(&g5);
 
     return assert_summary();
 }

@@ -274,20 +274,6 @@ fn _bj_fd1_umin(end, n): i64 {
     return end;
 }
 
-# The source sample amplitude·sin((2π·f)·(step·dt)) with an unbounded exponent (ADR 0002 row 18, M5 part 2d-2b): t, 2πf
-# and the phase to 53 bits, the sine by _bj_vx_sin53 (Payne–Hanek past DBL_MAX), the product rounded once. sf is Rust's
-# `step as f64`.
-#must_use
-fn _bj_fd1_source_ux(sf: f64, dt: f64, w: f64, f: f64, amp: f64): f64 {
-    var ts, te = _bj_fd1_mul2(sf, dt);
-    var ws, we = _bj_fd1_mul2(w, f);
-    var ps, pe = _bj_k_ux_mul(ws, we, ts, te);
-    var ss, se = _bj_vx_sin53(ps, pe);
-    var as, ae = _bj_k_ux_from(amp);
-    var v: f64 = _bj_k_ux_mul_f64(as, ae, ss, se);
-    return v;
-}
-
 # 1 when every field, ε_r, μ_r and dx of the grid is finite.
 #must_use
 fn _bj_fd1_finite_fields(sim: *BjFdtd1d): i64 {
@@ -438,7 +424,9 @@ impl BjFdtd1d {
     # source_amplitude·sin(2π·source_frequency·t) at it, t = step·dt; BJ_FDTD_NO_SOURCE (or any cell outside the
     # grid) injects nothing, as Rust's None. Where t, 2πf or the phase leaves the normal range for finite arguments
     # (the phase past DBL_MAX, where Rust took the sine of ∞), the sample runs with an unbounded exponent, the sine past
-    # DBL_MAX by Payne–Hanek (ADR 0002 row 18, M5 part 2d-2b). Mirrors `Fdtd1d::run`.
+    # DBL_MAX by Payne–Hanek (ADR 0002 row 18, M5 part 2d-2b; src/crmath_edge.cyr's _bj_e_fd_source, which the 2D and
+    # 3D grids share since M6 part 4f). A step past 2^63 is read unsigned, as Rust's `step as f64`. Mirrors
+    # `Fdtd1d::run`.
     public fn run(self, steps, source_cell, source_frequency: f64, source_amplitude: f64) {
         if (_bj_log_on(4) == 1) {
             var lb[256];
@@ -464,17 +452,8 @@ impl BjFdtd1d {
         var w: f64 = 2.0 * _BJ_FD1_PI;
         for (var k = 0; k != steps; k = k + 1) {
             if (inject == 1) {
-                var sf: f64 = f64_from(self.step);
-                var dt: f64 = self.dt;
-                var t: f64 = sf * dt;
-                var wf: f64 = w * source_frequency;
-                var arg: f64 = wf * t;
-                var s: f64 = _bj_sin(arg);
-                var v: f64 = source_amplitude * s;
-                var ok = _bj_fd1_prod_ok(t, sf, dt) & _bj_fd1_prod_ok(wf, w, source_frequency);
-                ok = ok & _bj_fd1_prod_ok(arg, wf, t);
-                var zf: f64 = dt * 0.0 + source_frequency * 0.0 + source_amplitude * 0.0;
-                if (ok == 0 && zf == 0.0) { v = _bj_fd1_source_ux(sf, dt, w, source_frequency, source_amplitude); }
+                var sf: f64 = _bj_e_u2f(self.step);
+                var v: f64 = _bj_e_fd_source(sf, self.dt, w, source_frequency, source_amplitude);
                 self.add_source(source_cell, v);
             }
             self.step_once();

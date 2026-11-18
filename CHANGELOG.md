@@ -630,6 +630,15 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
   `fd_cpml18`
   models the rule in `Fd2`'s strips and `Fd3`'s slabs; `fdtd_2d3d.adr.tsv` maps 1,895 rows (row 18: 422), and
   `emit.py`'s `emit_4e` appends 270 rows (2,515).
+- **Cyrius port, M6 part 4f — the energies and the run source at their range edges** (ADR 0002 row 18 amended):
+  `Fdtd2d::total_energy` and `Fdtd3d::total_energy` take the 1D grid's rule (the whole sum with an unbounded exponent
+  where a product or a sum leaves the normal range, dx² and dx³ included). Each cell tests a band (fields 0 or of
+  2^±400, ½·m·k of 2^±200, square sums of 2^-800 to 2^802) inside which every product provably stays normal, and only
+  a cell outside it takes the exact test (`_bj_fd2_energy_cell`, `_bj_fd3_energy_cell`); the 3D grid's packed chunks
+  scan each square sum before its product (`_bj_fd3_energy_scan`). The 1D grid's source sample moved to
+  `src/crmath_edge.cyr` as `_bj_e_fd_source`, which the 2D and 3D grids' and GpuFdtd2d's `run` now call. validate.py's
+  `fd_source18` and the energies of `Fd2` and `Fd3` model both; `fdtd_2d3d.adr.tsv` maps 1,980 rows (row 18: 489),
+  and `emit.py`'s `emit_4f` appends 91 rows (2,606).
 
 ### Fixed
 
@@ -1224,6 +1233,16 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
   left Ψ at +0 for the exact sum's −0. Each such statement now runs with an unbounded exponent. Cost: the per-cell
   scans, `fdtd/2d_step_100x100_tm_cpml10` 177.5–178.8 → 243.2–244.1 µs (1.37×), `fdtd/3d_step_30x30x30_cpml8`
   2.66–2.67 → 4.07–4.09 ms (1.53×) (`port-parity.md` §129).
+- **fdtd** (ADR 0002 row 18 amended, M6 part 4f): the 2D and 3D energies overflowed or underflowed where the result is
+  representable (E_z = 10¹⁶⁰ on dx = 10⁻¹⁵⁰: the 2D energy ∞ for 2.479·10¹⁰, the 3D one ∞·0 = NaN for 9.56·10⁻¹⁴⁰;
+  zero fields on dx = DBL_MAX: NaN for +0), and the 2D, 3D and GpuFdtd2d `run` took Rust's sample where 2πf passed
+  DBL_MAX (f = DBL_MAX: NaN through the grid for a zero source) or the phase did. Both now run with an unbounded
+  exponent at those edges, as the 1D grid's did. Cost: the energies' per-cell band test, `total_energy` 126 → 291 µs
+  (2D, 100 × 100) and 200 → 556 µs (3D, 30³) in a focused bench at load 0.8; `fdtd/3d_step_30x30x30`, whose Rust bench
+  takes the energy each step, 1.20–1.22 → 1.61–1.71 ms (1.34–1.41×, at load 7 to 13) (`port-parity.md` §130).
+- **fdtd** (port defect, M6 part 4f): the 1D grid's `run` read a step past 2^63 as negative (`f64_from`), where Rust's
+  `step as f64` is unsigned: at step 2^64 − 1 its sample was sin(−2πf·dt) for sin(2πf·2^64·dt). It reads the step
+  unsigned now, through the shared sample.
 
 ### Performance
 

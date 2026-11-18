@@ -223,6 +223,166 @@ fn _bj_fd3_slabs(c: *BjCpml, axis, half, psi: *f64, f: *f64, src: *f64, k: *f64,
     return 0;
 }
 
+# 1 when cell i of total_energy leaves the normal range for finite operands, the exact test (ADR 0002 row 18, M6 part
+# 4f): a product neither normal nor 0 from a zero factor, or a sum (a square sum, the cell's two terms) neither normal
+# nor 0.
+#must_use
+fn _bj_fd3_energy_cell(sim: *BjFdtd3d, i): i64 {
+    var exp: *f64 = _bj_fd2_f64p(sim.ex);
+    var eyp: *f64 = _bj_fd2_f64p(sim.ey);
+    var ezp: *f64 = _bj_fd2_f64p(sim.ez);
+    var hxp: *f64 = _bj_fd2_f64p(sim.hx);
+    var hyp: *f64 = _bj_fd2_f64p(sim.hy);
+    var hzp: *f64 = _bj_fd2_f64p(sim.hz);
+    var epp: *f64 = _bj_fd2_f64p(sim.permittivity);
+    var mup: *f64 = _bj_fd2_f64p(sim.permeability);
+    var ok = _bj_fd3_energy_part(exp[i], eyp[i], ezp[i], epp[i], BJ_EPSILON_0);
+    ok = ok & _bj_fd3_energy_part(hxp[i], hyp[i], hzp[i], mup[i], BJ_MU_0);
+    if (ok == 1) {
+        var a: f64 = exp[i];
+        var b: f64 = eyp[i];
+        var c: f64 = ezp[i];
+        var p: f64 = hxp[i];
+        var q: f64 = hyp[i];
+        var t: f64 = hzp[i];
+        var es: f64 = a * a + b * b + c * c;
+        var hs: f64 = p * p + q * q + t * t;
+        var ke: f64 = 0.5 * epp[i];
+        var ke0: f64 = ke * BJ_EPSILON_0;
+        var te: f64 = ke0 * es;
+        var kh: f64 = 0.5 * mup[i];
+        var kh0: f64 = kh * BJ_MU_0;
+        var th: f64 = kh0 * hs;
+        var cell: f64 = te + th;
+        var cw = cell;
+        if (_bj_e_nrm(cw) < 0 && (cw << 1) != 0) { ok = 0; }
+    }
+    return 1 - ok;
+}
+
+# 1 when one of a cell's two energy terms, ½·m·k·(a² + b² + c²), keeps the normal range (each product normal or 0
+# from a zero factor, each sum normal or 0), else 0.
+#must_use
+fn _bj_fd3_energy_part(a: f64, b: f64, c: f64, m: f64, k: f64): i64 {
+    var aa: f64 = a * a;
+    var bb: f64 = b * b;
+    var cc: f64 = c * c;
+    var s1: f64 = aa + bb;
+    var sq: f64 = s1 + cc;
+    var h1: f64 = 0.5 * m;
+    var h2: f64 = h1 * k;
+    var tm: f64 = h2 * sq;
+    var hw: f64 = 0.5;
+    var ok = _bj_e_zok(aa, a, a) & _bj_e_zok(bb, b, b) & _bj_e_zok(cc, c, c) & _bj_e_zok(h1, hw, m);
+    ok = ok & _bj_e_zok(h2, h1, k) & _bj_e_zok(tm, h2, sq);
+    var w1 = s1;
+    var w2 = sq;
+    if ((_bj_e_nrm(w1) < 0 && (w1 << 1) != 0) || (_bj_e_nrm(w2) < 0 && (w2 << 1) != 0)) { ok = 0; }
+    return ok;
+}
+
+# 1 when a packed chunk's m lanes (the cells from r) leave total_energy's band (src/fdtd2d.cyr's total_energy) and a
+# lane's exact test (_bj_fd3_energy_cell) holds: sq[j] the lane's square sum (0 only from three zero fields fa, fb,
+# fc) and k[j] its ½·m·k, whose band result is kept while the next lane's word is the same. Addresses are words.
+#must_use
+fn _bj_fd3_energy_scan(sim: *BjFdtd3d, sq, k, fa, fb, fc, m, r): i64 {
+    var q = 0;
+    var end = m * 8;
+    var pk = 0;
+    var tk = -1;
+    while (q < end) {
+        var sw = load64(sq + q);
+        var kw = load64(k + q);
+        if (kw != pk || q == 0) {
+            var k2 = kw << 1;
+            tk = ((k2 >> 53) - 823) | (1223 - (k2 >> 53));
+            pk = kw;
+        }
+        var s2 = sw << 1;
+        var t = ((((s2 - 1) >> 53) - 223) | (1825 - (s2 >> 53))) | tk;
+        if (sw == 0) {
+            if (((load64(fa + q) | load64(fb + q) | load64(fc + q)) << 1) != 0) { t = -1; }
+        }
+        if (t < 0) {
+            if (_bj_fd3_energy_cell(sim, r + q / 8) == 1) { return 1; }
+        }
+        q = q + 8;
+    }
+    return 0;
+}
+
+# 1 when every field, ε_r, μ_r and dx of the grid is finite.
+#must_use
+fn _bj_fd3_finite_grid(sim: *BjFdtd3d): i64 {
+    var n = sim.nx * sim.ny * sim.nz;
+    var exp: *f64 = _bj_fd2_f64p(sim.ex);
+    var eyp: *f64 = _bj_fd2_f64p(sim.ey);
+    var ezp: *f64 = _bj_fd2_f64p(sim.ez);
+    var hxp: *f64 = _bj_fd2_f64p(sim.hx);
+    var hyp: *f64 = _bj_fd2_f64p(sim.hy);
+    var hzp: *f64 = _bj_fd2_f64p(sim.hz);
+    var epp: *f64 = _bj_fd2_f64p(sim.permittivity);
+    var mup: *f64 = _bj_fd2_f64p(sim.permeability);
+    var z: f64 = sim.dx * 0.0;
+    for (var i = 0; i < n; i = i + 1) {
+        var zi: f64 = exp[i] * 0.0 + eyp[i] * 0.0 + ezp[i] * 0.0 + hxp[i] * 0.0 + hyp[i] * 0.0 + hzp[i] * 0.0;
+        var zm: f64 = epp[i] * 0.0 + mup[i] * 0.0;
+        z = z + zi + zm;
+    }
+    if (z == 0.0) { return 1; }
+    return 0;
+}
+
+# One energy term ½·m·k·(a² + b² + c²) with an unbounded exponent, each operation to 53 bits.
+#must_use
+fn _bj_fd3_energy_term_ux(a: f64, b: f64, c: f64, m: f64, k: f64): (f64, i64) {
+    var as, ae = _bj_k_ux_from(a);
+    var bs, be = _bj_k_ux_from(b);
+    var cs, ce = _bj_k_ux_from(c);
+    var a2s, a2e = _bj_k_ux_mul(as, ae, as, ae);
+    var b2s, b2e = _bj_k_ux_mul(bs, be, bs, be);
+    var c2s, c2e = _bj_k_ux_mul(cs, ce, cs, ce);
+    var s1s, s1e = _bj_k_ux_add(a2s, a2e, b2s, b2e);
+    var sqs, sqe = _bj_k_ux_add(s1s, s1e, c2s, c2e);
+    var hs, he = _bj_k_ux_from(0.5);
+    var ms, me = _bj_k_ux_from(m);
+    var h1s, h1e = _bj_k_ux_mul(hs, he, ms, me);
+    var ks, ke = _bj_k_ux_from(k);
+    var h2s, h2e = _bj_k_ux_mul(h1s, h1e, ks, ke);
+    var ts, te = _bj_k_ux_mul(h2s, h2e, sqs, sqe);
+    return (ts, te);
+}
+
+# total_energy's chain with an unbounded exponent (ADR 0002 row 18, M6 part 4f): each product and sum to 53 bits, the
+# sum from +0, and its product with dx³ (to 53 bits) rounded once.
+#must_use
+fn _bj_fd3_energy_ux(sim: *BjFdtd3d): f64 {
+    var n = sim.nx * sim.ny * sim.nz;
+    var exp: *f64 = _bj_fd2_f64p(sim.ex);
+    var eyp: *f64 = _bj_fd2_f64p(sim.ey);
+    var ezp: *f64 = _bj_fd2_f64p(sim.ez);
+    var hxp: *f64 = _bj_fd2_f64p(sim.hx);
+    var hyp: *f64 = _bj_fd2_f64p(sim.hy);
+    var hzp: *f64 = _bj_fd2_f64p(sim.hz);
+    var epp: *f64 = _bj_fd2_f64p(sim.permittivity);
+    var mup: *f64 = _bj_fd2_f64p(sim.permeability);
+    var es: f64 = 0.0;
+    var ee = 0;
+    for (var i = 0; i < n; i = i + 1) {
+        var as, ae = _bj_fd3_energy_term_ux(exp[i], eyp[i], ezp[i], epp[i], BJ_EPSILON_0);
+        var bs, be = _bj_fd3_energy_term_ux(hxp[i], hyp[i], hzp[i], mup[i], BJ_MU_0);
+        var cs, ce = _bj_k_ux_add(as, ae, bs, be);
+        var ns, ne = _bj_k_ux_add(es, ee, cs, ce);
+        es = ns;
+        ee = ne;
+    }
+    var ds, de = _bj_k_ux_from(sim.dx);
+    var d2s, d2e = _bj_k_ux_mul(ds, de, ds, de);
+    var vs, ve = _bj_k_ux_mul(d2s, d2e, ds, de);
+    var en: f64 = _bj_k_ux_mul_f64(es, ee, vs, ve);
+    return en;
+}
+
 # Zeroes n f64 at f.
 fn _bj_fd3_zero(f: *f64, n) {
     for (var i = 0; i < n; i = i + 1) { f[i] = 0.0; }
@@ -862,7 +1022,8 @@ impl BjFdtd3d {
 
     # Runs `steps` time steps (a usize). Before each, when (sx, sy, sz) is in the grid, adds
     # amplitude·sin(2π·frequency·t) to E_z there as a soft source, t = step·dt; BJ_FDTD3D_NO_SOURCE for sx (or any node
-    # outside the grid) injects nothing, as Rust's None. Mirrors `Fdtd3d::run`.
+    # outside the grid) injects nothing, as Rust's None. The sample at its range edges runs with an unbounded exponent
+    # (src/crmath_edge.cyr's _bj_e_fd_source; ADR 0002 row 18, M6 part 4f). Mirrors `Fdtd3d::run`.
     public fn run(self, steps, sx, sy, sz, frequency: f64, amplitude: f64) {
         if (_bj_log_on(4) == 1) {
             var lb[256];
@@ -896,14 +1057,10 @@ impl BjFdtd3d {
             _bj_log_text(4, &lt);
         }
         var w2pi: f64 = 2.0 * _BJ_FD3_PI;
-        var wf: f64 = w2pi * frequency;
         for (var k = 0; _bj_fd2_uge(k, steps) == 0; k = k + 1) {
             if (sx != BJ_FDTD3D_NO_SOURCE) {
                 var sf: f64 = _bj_fd2_u2f(self.step);
-                var t: f64 = sf * self.dt;
-                var arg: f64 = wf * t;
-                var sv: f64 = _bj_sin(arg);
-                var value: f64 = amplitude * sv;
+                var value: f64 = _bj_e_fd_source(sf, self.dt, w2pi, frequency, amplitude);
                 self.add_source_ez(sx, sy, sz, value);
             }
             self.step_once();
@@ -923,7 +1080,10 @@ impl BjFdtd3d {
     # x, y, z and each cell's two terms added before the running sum, in Rust's order from +0. The cell terms run on
     # the packed verbs over the flat arrays in chunks of `wlen` through the scratch rows (each lane Rust's operations
     # in Rust's order; IEEE products commute), the running sum cell by cell, a scalar tail past the last lane multiple.
-    # Mirrors `Fdtd3d::total_energy`.
+    # Where a product or a sum leaves the normal range for finite fields, media and dx, the whole sum runs with an
+    # unbounded exponent and its product with dx³ is rounded once (ADR 0002 row 18, M6 part 4f): each lane tests the
+    # 2D grid's band on |E|² and ½·ε_r·ε₀, |H|² and ½·μ_r·μ₀ before their products (_bj_fd3_energy_scan), a lane
+    # outside it and the tail the exact test (_bj_fd3_energy_cell). Mirrors `Fdtd3d::total_energy`.
     #must_use
     public fn total_energy(self): f64 {
         var wl = self.wlen;
@@ -947,6 +1107,7 @@ impl BjFdtd3d {
         var packed = n & (0 - 4);
         var chunk = wl & (0 - 4);
         var energy: f64 = 0.0;
+        var edge = 0;
         var r = 0;
         while (r < packed) {
             var m = packed - r;
@@ -958,6 +1119,7 @@ impl BjFdtd3d {
             f64v_add(w1, w1, w2, m);
             f64v_scale(w2, eps + r, 0.5, m);
             f64v_scale(w2, w2, e0, m);
+            if (edge == 0) { edge = _bj_fd3_energy_scan(self, w1, w2, ex + r, ey + r, ez + r, m, r); }
             f64v_mul(w1, w2, w1, m);
             f64v_mul(w2, hx + r, hx + r, m);
             f64v_mul(w3, hy + r, hy + r, m);
@@ -966,6 +1128,7 @@ impl BjFdtd3d {
             f64v_add(w2, w2, w3, m);
             f64v_scale(w3, mu + r, 0.5, m);
             f64v_scale(w3, w3, m0, m);
+            if (edge == 0) { edge = _bj_fd3_energy_scan(self, w2, w3, hx + r, hy + r, hz + r, m, r); }
             f64v_mul(w2, w3, w2, m);
             f64v_add(w1, w1, w2, m);
             for (var j = 0; j < m; j = j + 1) { energy = energy + w1[j]; }
@@ -988,8 +1151,16 @@ impl BjFdtd3d {
             var th: f64 = kh0 * h_sq;
             var cell: f64 = te + th;
             energy = energy + cell;
+            if (edge == 0) { edge = _bj_fd3_energy_cell(self, i); }
         }
+        var ew = energy;
+        var dw = dx;
+        var d2w = dx2;
+        var vw = vol;
+        if (edge == 0 && ((_bj_e_nrm(ew) < 0 && (ew << 1) != 0) || _bj_e_zok(d2w, dw, dw) == 0)) { edge = 1; }
+        if (edge == 0 && _bj_e_zok(vw, d2w, dw) == 0) { edge = 1; }
         var en: f64 = energy * vol;
+        if (edge == 1 && _bj_fd3_finite_grid(self) == 1) { en = _bj_fd3_energy_ux(self); }
         return en;
     }
 }

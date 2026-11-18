@@ -4060,6 +4060,77 @@ fn _bj_e_cpml_run(f: *f64, psi: *f64, k: *f64, up: *f64, dn: *f64, n, fs, ps, pr
     return 0;
 }
 
+# ── the FDTD grids' run source at its range edges (ADR 0002 row 18: M5 part 2d-2b, M6 part 4f) ──────────────────────
+#
+# Every grid's `run` (src/fdtd1d.cyr, src/fdtd2d.cyr, src/fdtd3d.cyr, GpuFdtd2d's in src/compute.cyr) adds a soft source
+# before each step, Rust's `amplitude * (2.0 * PI * frequency * t).sin()` with t = `step as f64 * dt`: t = sf·dt, w·f
+# (w = 2π as Rust's double), the phase (w·f)·t, its sine, the product with the amplitude. Where t, w·f or the phase
+# leaves the normal range for finite dt, f and amplitude (2πf past DBL_MAX made the phase ∞·0 = NaN at t = 0; a phase
+# past DBL_MAX took the sine of ∞; a subnormal t lost the phase's bits), the sample runs with an unbounded exponent:
+# those three to 53 bits, the sine by _bj_vx_sin53 (Payne–Hanek past DBL_MAX), the product rounded once. sf is Rust's
+# `step as f64`: t is an intermediate of the chain (row 13 rounds `time()`, a result, once).
+
+# A usize word as a double, Rust's `n as f64` (rounded once, a word past 2^63 read unsigned).
+#must_use
+fn _bj_e_u2f(n): f64 {
+    if (n >= 0) {
+        var r: f64 = f64_from(n);
+        return r;
+    }
+    var h: f64 = f64_from((n >> 1) | (n & 1));
+    var r2: f64 = h * 2.0;
+    return r2;
+}
+
+# 1 when the product z = x·y (raw bits xz; the factors' xx and xy) kept the normal range: z normal, or ±0 from a zero
+# factor (not an underflow).
+#must_use
+fn _bj_e_zok(xz, xx, xy): i64 {
+    if (_bj_e_nrm(xz) >= 0) { return 1; }
+    if ((xz << 1) == 0 && ((xx << 1) == 0 || (xy << 1) == 0)) { return 1; }
+    return 0;
+}
+
+# The sample amplitude·sin((w·f)·(sf·dt)) with an unbounded exponent (the section comment).
+#must_use
+fn _bj_e_fd_source_ux(sf: f64, dt: f64, w: f64, f: f64, amp: f64): f64 {
+    var fs1, fe1 = _bj_k_ux_from(sf);
+    var ds, de = _bj_k_ux_from(dt);
+    var ts, te = _bj_k_ux_mul(fs1, fe1, ds, de);
+    var w1s, w1e = _bj_k_ux_from(w);
+    var fs2, fe2 = _bj_k_ux_from(f);
+    var ws, we = _bj_k_ux_mul(w1s, w1e, fs2, fe2);
+    var ps, pe = _bj_k_ux_mul(ws, we, ts, te);
+    var ss, se = _bj_vx_sin53(ps, pe);
+    var as, ae = _bj_k_ux_from(amp);
+    var v: f64 = _bj_k_ux_mul_f64(as, ae, ss, se);
+    return v;
+}
+
+# One source sample amplitude·sin((w·f)·(sf·dt)): Rust's chain, or _bj_e_fd_source_ux's where t, w·f or the phase
+# left the normal range for finite dt, f and amplitude (the section comment).
+#must_use
+fn _bj_e_fd_source(sf: f64, dt: f64, w: f64, f: f64, amp: f64): f64 {
+    var t: f64 = sf * dt;
+    var wf: f64 = w * f;
+    var arg: f64 = wf * t;
+    var sv: f64 = _bj_sin(arg);
+    var v: f64 = amp * sv;
+    var xt = t;
+    var xw = wf;
+    var xa = arg;
+    if ((_bj_e_nrm(xt) | _bj_e_nrm(xw) | _bj_e_nrm(xa)) < 0) {
+        var sw = sf;
+        var dw = dt;
+        var ww = w;
+        var fw = f;
+        var ok = _bj_e_zok(xt, sw, dw) & _bj_e_zok(xw, ww, fw) & _bj_e_zok(xa, xw, xt);
+        var z: f64 = dt * 0.0 + f * 0.0 + amp * 0.0;
+        if (ok == 0 && z == 0.0) { v = _bj_e_fd_source_ux(sf, dt, w, f, amp); }
+    }
+    return v;
+}
+
 # ── the FDTD grids' coefficients rounded once (ADR 0002 row 13: M5 part 2b, M6 part 4a) ──────────────────────────────
 #
 # The 1D grid (src/fdtd1d.cyr), the 2D and 3D grids (src/fdtd2d.cyr, src/fdtd3d.cyr) and GpuFdtd2d (src/compute.cyr)

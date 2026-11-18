@@ -8823,6 +8823,23 @@ def fd_prod_ok(z, x, y) -> bool:
     return fs_normal(z) and not (z == 0.0 and x != 0.0 and y != 0.0)
 
 
+def fd_source18(step, dt, freq, amp, P, r18):
+    """`run`'s soft source sample amplitude·sin(2π·f·t), t = `step as f64`·dt, in Rust's chain; with r18 (ADR 0002 row
+    18: M5 part 2d-2b for the 1D grid, M6 part 4f for the 2D and 3D grids and GpuFdtd2d) t, 2πf and the phase to 53
+    bits with an unbounded exponent where one left the normal range for finite dt, f and amplitude, the sine of the
+    53-bit phase (Payne–Hanek past DBL_MAX), the product rounded once."""
+    sf = float(step)
+    t = sf * dt
+    wf = 2.0 * math.pi * freq
+    arg = wf * t
+    v = amp * P["sin"](arg)
+    if r18 and all(math.isfinite(x) for x in (dt, freq, amp)) and not (
+            fd_prod_ok(t, sf, dt) and fd_prod_ok(wf, 2.0 * math.pi, freq) and fd_prod_ok(arg, wf, t)):
+        ph = ux_mul(ux_mul(ux(2.0 * math.pi), ux(freq)), ux_mul(ux(sf), ux(dt)))
+        v = ux_fin(ux_mul(ux(amp), fs_sin53(ph), r=lambda q: q))
+    return v
+
+
 def fd_cell18(d, k, a, b):
     """d + k·(a − b) as the port updates a cell (ADR 0002 row 18, M5 parts 2d-2a and 2d-3): for finite operands, a − b
     and the product to 53 bits with an unbounded exponent and the sum rounded once. Rust's binary64 chain is that one
@@ -8991,16 +9008,7 @@ class Fd1:
     def run(self, steps, cell, freq, amp, P):
         for _ in range(steps):
             if cell is not None:
-                sf = float(self.step)
-                t = sf * self.dt
-                wf = 2.0 * math.pi * freq
-                arg = wf * t
-                v = amp * P["sin"](arg)
-                if self.r18 and all(math.isfinite(x) for x in (self.dt, freq, amp)) and not (
-                        fd_prod_ok(t, sf, self.dt) and fd_prod_ok(wf, 2.0 * math.pi, freq) and fd_prod_ok(arg, wf, t)):
-                    ph = ux_mul(ux_mul(ux(2.0 * math.pi), ux(freq)), ux_mul(ux(sf), ux(self.dt)))
-                    v = ux_fin(ux_mul(ux(amp), fs_sin53(ph), r=lambda q: q))   # row 18, M5 part 2d-2b
-                self.add_source(cell, v)
+                self.add_source(cell, fd_source18(self.step, self.dt, freq, amp, P, self.r18))
             self.step_once()
 
     def energy(self):
@@ -11083,13 +11091,41 @@ class Fd2:
         self.step += 1
 
     def energy(self):
+        """`total_energy`; under row 18 (M6 part 4f) Rust's chain wherever every product kept the normal range (or is 0
+        from a zero factor) and every sum is normal or 0, dx² included, else (finite fields, media and dx) the whole
+        sum on Fractions with an unbounded exponent, each operation to 53 bits and the product with dx² rounded once."""
         _c, eps0, mu0 = self.K
         zm, zc, xym, xyc = (self.eps, eps0, self.mu, mu0) if self.mode == 0 else (self.mu, mu0, self.eps, eps0)
-        e = 0.0
+        r18 = "18" in self.port
+        e, ok = 0.0, True
         for z, x, y, mz, mxy in zip(self.fz, self.fx, self.fy, zm, xym):
-            e += 0.5 * mz * zc * z * z
-            e += 0.5 * mxy * xyc * (x * x + y * y)
-        return e * (self.dx * self.dx)
+            a = 0.5 * mz
+            b = a * zc
+            c = b * z
+            d = c * z
+            e1 = e + d
+            xx, yy = x * x, y * y
+            s = xx + yy
+            a2 = 0.5 * mxy
+            b2 = a2 * xyc
+            c2 = b2 * s
+            e = e1 + c2
+            if r18 and ok:
+                ok = (fd_prod_ok(a, 0.5, mz) and fd_prod_ok(b, a, zc) and fd_prod_ok(c, b, z) and fd_prod_ok(d, c, z)
+                      and fd_prod_ok(xx, x, x) and fd_prod_ok(yy, y, y) and fs_normal(s) and fd_prod_ok(a2, 0.5, mxy)
+                      and fd_prod_ok(b2, a2, xyc) and fd_prod_ok(c2, b2, s) and fs_normal(e1) and fs_normal(e))
+        dx = self.dx
+        area = dx * dx
+        en = e * area
+        if r18 and not (ok and fd_prod_ok(area, dx, dx)) and all(
+                math.isfinite(v) for v in self.fz + self.fx + self.fy + self.eps + self.mu + [dx]):
+            E = (Fraction(0), False)
+            for z, x, y, mz, mxy in zip(self.fz, self.fx, self.fy, zm, xym):
+                E = ux_add(E, ux_mul(ux_mul(ux_mul(ux_mul(ux(0.5), ux(mz)), ux(zc)), ux(z)), ux(z)))
+                s = ux_add(ux_mul(ux(x), ux(x)), ux_mul(ux(y), ux(y)))
+                E = ux_add(E, ux_mul(ux_mul(ux_mul(ux(0.5), ux(mxy)), ux(xyc)), s))
+            en = ux_fin(ux_mul(E, ux_mul(ux(dx), ux(dx)), r=lambda q: q))
+        return en
 
     def state(self):
         nx, ny = self.nx, self.ny
@@ -11220,8 +11256,8 @@ class Fd2Scripts:
                 steps, src, fr, am = a[0] & FD_U64, a[1], a[2], a[3]
                 for _ in range(steps):
                     if src is not None:
-                        t = float(sim.step) * sim.dt                # Rust's `step as f64 * dt`, not time()
-                        sim.add_source(src[0], src[1], am * self.P["sin"](2.0 * math.pi * fr * t))
+                        v = fd_source18(sim.step, sim.dt, fr, am, self.P, "18" in self.port)   # Rust's t, not time()
+                        sim.add_source(src[0], src[1], v)
                     sim.step_once()
             elif code == 8:
                 which, v = a[0], a[1]
@@ -11473,14 +11509,48 @@ class Fd3:
         self.step += 1
 
     def energy(self):
+        """`total_energy`; under row 18 (M6 part 4f) the 2D grid's rule (Fd2.energy), dx² and dx³ included."""
         _c, eps0, mu0 = self.K
-        e = 0.0
-        for ax, ay, az, px, py, pz, ep, m in zip(self.ex, self.ey, self.ez, self.hx, self.hy, self.hz, self.eps,
-                                                  self.mu):
-            e_sq = ax * ax + ay * ay + az * az
-            h_sq = px * px + py * py + pz * pz
-            e += 0.5 * ep * eps0 * e_sq + 0.5 * m * mu0 * h_sq
-        return e * (self.dx * self.dx * self.dx)
+        r18 = "18" in self.port
+        e, ok = 0.0, True
+        cells = list(zip(self.ex, self.ey, self.ez, self.hx, self.hy, self.hz, self.eps, self.mu))
+        for ax, ay, az, px, py, pz, ep, m in cells:
+            q1, q2, q3 = ax * ax, ay * ay, az * az
+            s1 = q1 + q2
+            e_sq = s1 + q3
+            p1, p2, p3 = px * px, py * py, pz * pz
+            t1 = p1 + p2
+            h_sq = t1 + p3
+            a1 = 0.5 * ep
+            a2 = a1 * eps0
+            A = a2 * e_sq
+            b1 = 0.5 * m
+            b2 = b1 * mu0
+            B = b2 * h_sq
+            term = A + B
+            e = e + term
+            if r18 and ok:
+                ok = (fd_prod_ok(q1, ax, ax) and fd_prod_ok(q2, ay, ay) and fd_prod_ok(q3, az, az) and fs_normal(s1)
+                      and fs_normal(e_sq) and fd_prod_ok(p1, px, px) and fd_prod_ok(p2, py, py)
+                      and fd_prod_ok(p3, pz, pz) and fs_normal(t1) and fs_normal(h_sq) and fd_prod_ok(a1, 0.5, ep)
+                      and fd_prod_ok(a2, a1, eps0) and fd_prod_ok(A, a2, e_sq) and fd_prod_ok(b1, 0.5, m)
+                      and fd_prod_ok(b2, b1, mu0) and fd_prod_ok(B, b2, h_sq) and fs_normal(term) and fs_normal(e))
+        dx = self.dx
+        dx2 = dx * dx
+        vol = dx2 * dx
+        en = e * vol
+        if r18 and not (ok and fd_prod_ok(dx2, dx, dx) and fd_prod_ok(vol, dx2, dx)) and all(
+                math.isfinite(v) for c in cells for v in c) and math.isfinite(dx):
+            E = (Fraction(0), False)
+            for ax, ay, az, px, py, pz, ep, m in cells:
+                es = ux_add(ux_add(ux_mul(ux(ax), ux(ax)), ux_mul(ux(ay), ux(ay))), ux_mul(ux(az), ux(az)))
+                hs = ux_add(ux_add(ux_mul(ux(px), ux(px)), ux_mul(ux(py), ux(py))), ux_mul(ux(pz), ux(pz)))
+                A = ux_mul(ux_mul(ux_mul(ux(0.5), ux(ep)), ux(eps0)), es)
+                B = ux_mul(ux_mul(ux_mul(ux(0.5), ux(m)), ux(mu0)), hs)
+                E = ux_add(E, ux_add(A, B))
+            V = ux_mul(ux_mul(ux(dx), ux(dx)), ux(dx))
+            en = ux_fin(ux_mul(E, V, r=lambda q: q))
+        return en
 
     def state(self):
         nx, ny, nz = self.nx, self.ny, self.nz
@@ -11614,8 +11684,8 @@ class Fd3Scripts:
                 steps, src, fr, am = a[0] & FD_U64, a[1], a[2], a[3]
                 for _ in range(steps):
                     if src is not None:
-                        t = float(sim.step) * sim.dt                # Rust's `step as f64 * dt`, not time()
-                        sim.add_source(src[0], src[1], src[2], am * self.P["sin"](2.0 * math.pi * fr * t))
+                        v = fd_source18(sim.step, sim.dt, fr, am, self.P, "18" in self.port)   # Rust's t, not time()
+                        sim.add_source(src[0], src[1], src[2], v)
                     sim.step_once()
             elif code == 8:
                 setattr(sim, Fd3.FIELDS[a[0]], [a[1]] * n)
@@ -11674,8 +11744,8 @@ class Gpu2Scripts:
                 steps, src, fr, am = a[0] & FD_U64, a[1], a[2], a[3]
                 for _ in range(steps):
                     if src is not None:
-                        t = float(sim.step) * sim.dt                # Rust's `step as f64 * dt`, not time()
-                        sim.add_source(src[0], src[1], am * self.P["sin"](2.0 * math.pi * fr * t))
+                        v = fd_source18(sim.step, sim.dt, fr, am, self.P, "18" in self.port)   # Rust's t, not time()
+                        sim.add_source(src[0], src[1], v)
                     sim.step_once()
             else:
                 raise ValueError(f"GpuFdtd2d script: opcode {code}")

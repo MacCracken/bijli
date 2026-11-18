@@ -392,6 +392,98 @@ fn _bj_fd2_cpml_fz(c: *BjCpml, fz: *f64, fx: *f64, fy: *f64, k: *f64, nx, ny, si
     return 0;
 }
 
+# 1 when a cell of total_energy leaves the normal range for finite operands, the exact test (ADR 0002 row 18, M6 part
+# 4f): a product neither normal nor 0 from a zero factor, or f_x² + f_y² neither normal nor 0. z, x and y are the
+# cell's fields, mz and mxy its media and zc, xyc their constants (the mode's order).
+#must_use
+fn _bj_fd2_energy_cell(z: f64, mz: f64, zc: f64, x: f64, y: f64, mxy: f64, xyc: f64): i64 {
+    var a: f64 = 0.5 * mz;
+    var b: f64 = a * zc;
+    var c: f64 = b * z;
+    var d: f64 = c * z;
+    var xx: f64 = x * x;
+    var yy: f64 = y * y;
+    var s: f64 = xx + yy;
+    var a2: f64 = 0.5 * mxy;
+    var b2: f64 = a2 * xyc;
+    var c2: f64 = b2 * s;
+    var hw: f64 = 0.5;
+    var ok = _bj_e_zok(a, hw, mz) & _bj_e_zok(b, a, zc) & _bj_e_zok(c, b, z) & _bj_e_zok(d, c, z);
+    ok = ok & _bj_e_zok(xx, x, x) & _bj_e_zok(yy, y, y) & _bj_e_zok(a2, hw, mxy) & _bj_e_zok(b2, a2, xyc);
+    ok = ok & _bj_e_zok(c2, b2, s);
+    var sw = s;
+    if (_bj_e_nrm(sw) < 0 && (sw << 1) != 0) { ok = 0; }
+    return 1 - ok;
+}
+
+# 1 when every field, ε_r, μ_r and dx of the grid is finite.
+#must_use
+fn _bj_fd2_finite_grid(sim: *BjFdtd2d): i64 {
+    var n = sim.nx * sim.ny;
+    var fz: *f64 = _bj_fd2_f64p(sim.fz);
+    var fx: *f64 = _bj_fd2_f64p(sim.fx);
+    var fy: *f64 = _bj_fd2_f64p(sim.fy);
+    var eps: *f64 = _bj_fd2_f64p(sim.permittivity);
+    var mu: *f64 = _bj_fd2_f64p(sim.permeability);
+    var z: f64 = sim.dx * 0.0;
+    for (var i = 0; i < n; i = i + 1) {
+        var zi: f64 = fz[i] * 0.0 + fx[i] * 0.0 + fy[i] * 0.0 + eps[i] * 0.0 + mu[i] * 0.0;
+        z = z + zi;
+    }
+    if (z == 0.0) { return 1; }
+    return 0;
+}
+
+# total_energy's chain with an unbounded exponent (ADR 0002 row 18, M6 part 4f): each product and sum to 53 bits, the
+# sum from +0, and its product with dx² (to 53 bits) rounded once.
+#must_use
+fn _bj_fd2_energy_ux(sim: *BjFdtd2d): f64 {
+    var n = sim.nx * sim.ny;
+    var zm: *f64 = _bj_fd2_f64p(sim.permittivity);
+    var zc: f64 = BJ_EPSILON_0;
+    var xym: *f64 = _bj_fd2_f64p(sim.permeability);
+    var xyc: f64 = BJ_MU_0;
+    if (sim.mode == BJ_MODE2D_TE) {
+        zm = _bj_fd2_f64p(sim.permeability);
+        zc = BJ_MU_0;
+        xym = _bj_fd2_f64p(sim.permittivity);
+        xyc = BJ_EPSILON_0;
+    }
+    var fz: *f64 = _bj_fd2_f64p(sim.fz);
+    var fx: *f64 = _bj_fd2_f64p(sim.fx);
+    var fy: *f64 = _bj_fd2_f64p(sim.fy);
+    var hs, he = _bj_k_ux_from(0.5);
+    var zs, ze = _bj_k_ux_from(zc);
+    var ks, ke = _bj_k_ux_from(xyc);
+    var es: f64 = 0.0;
+    var ee = 0;
+    for (var i = 0; i < n; i = i + 1) {
+        var ms, me = _bj_k_ux_from(zm[i]);
+        var as, ae = _bj_k_ux_mul(hs, he, ms, me);
+        var bs, be = _bj_k_ux_mul(as, ae, zs, ze);
+        var fs, fe = _bj_k_ux_from(fz[i]);
+        var cs, ce = _bj_k_ux_mul(bs, be, fs, fe);
+        var ds, de = _bj_k_ux_mul(cs, ce, fs, fe);
+        var e1s, e1e = _bj_k_ux_add(es, ee, ds, de);
+        var xs, xe = _bj_k_ux_from(fx[i]);
+        var ys, ye = _bj_k_ux_from(fy[i]);
+        var x2s, x2e = _bj_k_ux_mul(xs, xe, xs, xe);
+        var y2s, y2e = _bj_k_ux_mul(ys, ye, ys, ye);
+        var ss, se = _bj_k_ux_add(x2s, x2e, y2s, y2e);
+        var m2s, m2e = _bj_k_ux_from(xym[i]);
+        var a2s, a2e = _bj_k_ux_mul(hs, he, m2s, m2e);
+        var b2s, b2e = _bj_k_ux_mul(a2s, a2e, ks, ke);
+        var c2s, c2e = _bj_k_ux_mul(b2s, b2e, ss, se);
+        var e2s, e2e = _bj_k_ux_add(e1s, e1e, c2s, c2e);
+        es = e2s;
+        ee = e2e;
+    }
+    var dxs, dxe = _bj_k_ux_from(sim.dx);
+    var qs, qe = _bj_k_ux_mul(dxs, dxe, dxs, dxe);
+    var en: f64 = _bj_k_ux_mul_f64(es, ee, qs, qe);
+    return en;
+}
+
 # A vacuum grid of nx × ny nodes at spacing dx in `mode` into *out, the walls reflecting: Ok(0), or with out untouched
 # Err(InsufficientResolution) when nx < 3 or ny < 3 (cells min(nx, ny), domain min(nx, ny)·dx), Err(InvalidParameter)
 # "dx must be finite and positive, got {dx}", "grid [{nx}, {ny}] is too large" (nx·ny past 2^64) or "cannot allocate
@@ -874,7 +966,8 @@ impl BjFdtd2d {
 
     # Runs `steps` time steps (a usize). Before each, when (sx, sy) is in the grid, adds amplitude·sin(2π·frequency·t)
     # at it as a soft source, t = step·dt; BJ_FDTD2D_NO_SOURCE for sx (or any node outside the grid) injects nothing,
-    # as Rust's None. Mirrors `Fdtd2d::run`.
+    # as Rust's None. The sample at its range edges runs with an unbounded exponent (src/crmath_edge.cyr's
+    # _bj_e_fd_source; ADR 0002 row 18, M6 part 4f). Mirrors `Fdtd2d::run`.
     public fn run(self, steps, sx, sy, frequency: f64, amplitude: f64) {
         if (_bj_log_on(4) == 1) {
             var lb[256];
@@ -906,14 +999,10 @@ impl BjFdtd2d {
             _bj_log_text(4, &lt);
         }
         var w2pi: f64 = 2.0 * _BJ_FD2_PI;
-        var wf: f64 = w2pi * frequency;
         for (var k = 0; _bj_fd2_uge(k, steps) == 0; k = k + 1) {
             if (sx != BJ_FDTD2D_NO_SOURCE) {
                 var sf: f64 = _bj_fd2_u2f(self.step);
-                var t: f64 = sf * self.dt;
-                var arg: f64 = wf * t;
-                var sv: f64 = _bj_sin(arg);
-                var value: f64 = amplitude * sv;
+                var value: f64 = _bj_e_fd_source(sf, self.dt, w2pi, frequency, amplitude);
                 self.add_source(sx, sy, value);
             }
             self.step_once();
@@ -930,8 +1019,13 @@ impl BjFdtd2d {
     }
 
     # The total electromagnetic energy in the grid, Σ ½·m_z·k_z·f_z² + ½·m_xy·k_xy·(f_x² + f_y²) times dx², in Rust's
-    # order from +0: TM's (ε_r, ε₀) for f_z and (μ_r, μ₀) for f_x, f_y; TE's the other way. Mirrors
-    # `Fdtd2d::total_energy`.
+    # order from +0: TM's (ε_r, ε₀) for f_z and (μ_r, μ₀) for f_x, f_y; TE's the other way. Where a product or a sum
+    # leaves the normal range for finite fields, media and dx (f² past DBL_MAX where dx² brings the energy back, or
+    # below the range), the whole sum runs with an unbounded exponent and its product with dx² is rounded once (ADR
+    # 0002 row 18, M6 part 4f): each cell tests a band (f_z 0 or of 2^±400, ½·m·k of 2^±200, f_x² + f_y² 0 from zero
+    # fields or of 2^-800 to 2^802) inside which every product provably stays normal, and a cell outside it takes the
+    # exact test (_bj_fd2_energy_cell). A medium's band result is kept while the next cell's medium is the same (a NaN
+    # medium is retested). Mirrors `Fdtd2d::total_energy`.
     #must_use
     public fn total_energy(self): f64 {
         var n = self.nx * self.ny;
@@ -951,9 +1045,15 @@ impl BjFdtd2d {
         var fx: *f64 = _bj_fd2_f64p(self.fx);
         var fy: *f64 = _bj_fd2_f64p(self.fy);
         var energy: f64 = 0.0;
+        var edge = 0;
+        var pmz: f64 = -1.0;
+        var pmx: f64 = -1.0;
+        var tz = 0;
+        var tx = 0;
         for (var i = 0; i < n; i = i + 1) {
             var z: f64 = fz[i];
-            var a: f64 = 0.5 * zm[i];
+            var mzv: f64 = zm[i];
+            var a: f64 = 0.5 * mzv;
             var b: f64 = a * zc;
             var c: f64 = b * z;
             var d: f64 = c * z;
@@ -963,12 +1063,42 @@ impl BjFdtd2d {
             var xx: f64 = x * x;
             var yy: f64 = y * y;
             var s: f64 = xx + yy;
-            var a2: f64 = 0.5 * xym[i];
+            var mxv: f64 = xym[i];
+            var a2: f64 = 0.5 * mxv;
             var b2: f64 = a2 * xyc;
             var c2: f64 = b2 * s;
             energy = energy + c2;
+            if (mzv != pmz) {
+                var bw = b;
+                var bq = bw << 1;
+                tz = ((bq >> 53) - 823) | (1223 - (bq >> 53));
+                pmz = mzv;
+            }
+            if (mxv != pmx) {
+                var b2w = b2;
+                var b2q = b2w << 1;
+                tx = ((b2q >> 53) - 823) | (1223 - (b2q >> 53));
+                pmx = mxv;
+            }
+            var zw = z;
+            var sw = s;
+            var zq = zw << 1;
+            var sq = sw << 1;
+            var t = ((((zq - 1) >> 53) - 623) | (1423 - (zq >> 53))) | tz | tx;
+            t = t | ((((sq - 1) >> 53) - 223) | (1825 - (sq >> 53)));
+            if (sq == 0) {
+                var xw = x;
+                var yw = y;
+                if (((xw | yw) << 1) != 0) { t = -1; }
+            }
+            if (t < 0 && edge == 0) { edge = _bj_fd2_energy_cell(z, mzv, zc, x, y, mxv, xyc); }
         }
+        var ew = energy;
+        var aw = area;
+        var dw = dx;
+        if (edge == 0 && ((_bj_e_nrm(ew) < 0 && (ew << 1) != 0) || _bj_e_zok(aw, dw, dw) == 0)) { edge = 1; }
         var e: f64 = energy * area;
+        if (edge == 1 && _bj_fd2_finite_grid(self) == 1) { e = _bj_fd2_energy_ux(self); }
         return e;
     }
 }

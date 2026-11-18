@@ -7174,3 +7174,57 @@ eigenmode search (`dft_magnitude`'s recurrence and magnitude, `find_eigenmodes`'
   and `json.tcyr` (105) pass on all three. The gate is clean (no warnings; execution coverage 394 of 394; the audit
   passes); validate.py 767,947 rows, 0 problems; `emit.py --check` 1,107 frozen rows and 1,408 emitted. Next: 4f, the
   three grids' `total_energy` and `run`'s source; then M6 is done.
+
+## 130. M6 part 4f: the energies and the run source at their range edges; Part 4 done (2026-11-17)
+
+- **ADR 0002 row 18, amended** (the user's answer of 2026-11-15, the rule the 1D grid took in M5 part 2d-2b):
+  - `Fdtd2d::total_energy` and `Fdtd3d::total_energy`: where a product or a sum leaves the normal range for finite
+    fields, media and dx (dx² and dx³ included), the whole sum runs with an unbounded exponent and its product with dx²
+    or dx³ is rounded once (`_bj_fd2_energy_ux`, `_bj_fd3_energy_ux`). The common path is a band each cell tests in
+    bits: f_z zero or of 2^±400, ½·m·k of 2^±200, each square sum zero (from zero fields) or of 2^-800 to 2^802. Inside
+    it every product stays normal (½·m·k·f_z² of 2^±1000, ½·m·k·Σf² of 2^-1000 to 2^1003), and a square below the range
+    beside a sum of at least 2^-800 is under half its ulp, so Rust's chain is the rule's value. Overflow of the sums is
+    the final energy's test. A cell outside the band takes the exact test, the model's own condition
+    (`_bj_fd2_energy_cell`, `_bj_fd3_energy_cell`), and only an edge there reruns the sum. The 3D grid's packed chunks
+    scan |E|² with ½·ε_r·ε₀ and |H|² with ½·μ_r·μ₀ before their products (`_bj_fd3_energy_scan`). A medium's band
+    result is kept while the next cell's medium is the same.
+  - `run`'s source: the 1D grid's sample (t, 2πf and the phase to 53 bits where one leaves the range, the sine by
+    `_bj_vx_sin53`, the product rounded once) moved to `src/crmath_edge.cyr` as `_bj_e_fd_source`, which the 1D, 2D and
+    3D grids and GpuFdtd2d's `run` call (`_bj_e_zok`, the product test, in bits).
+- **A port defect, fixed with it**: the 1D grid's `run` read its step with `f64_from`, which takes a word past 2^63 as
+  negative, where Rust's `step as f64` reads it unsigned (the 2D and 3D grids already did): at step 2^64 − 1 the sample
+  was sin(−2πf·dt). It reads the step unsigned (`_bj_e_u2f`); no golden row writes a step that large, and
+  `tests/fdtd1d.tcyr` now pins it.
+- **What changed**: E_z = 10¹⁶⁰ everywhere on dx = 10⁻¹⁵⁰ gave the 2D energy ∞ for 2.479172587584·10¹⁰ (8 × 7, TM) and
+  the 3D one ∞·0 = NaN for 9.562522837824012·10⁻¹⁴⁰ (6³; dx³ = 10⁻⁴⁵⁰ underflowed); zero fields on dx = DBL_MAX gave
+  NaN for +0 (frozen row 544); fields of 10⁻¹⁶⁰ on dx = 10¹⁵⁰ gave 0 for 2.48·10⁻³⁰; `run` at f = DBL_MAX spread NaN
+  through each grid where the sample is sin 0 = 0.
+- **validate.py**: `fd_source18` (the 1D model's sample, now shared by `Fd1.run` and the three scripts' `run`), and
+  `Fd2.energy` and `Fd3.energy` under "18" (every product normal or 0 from a zero factor and every sum normal or 0,
+  else the whole sum on Fractions). **1,980 rows map** (row 18: 489, 67 of them this bite's; row 13: 957; row 40:
+  534): 64 of the 91 new rows to row 18 and 21 to row 13 (6 are Rust's), and 3 earlier rows from row 13 to 18 (frozen
+  row 544 and two of part 4d's seeded 3D scripts, fields near 10¹⁵⁵ whose squares pass DBL_MAX).
+- **The grid**: `emit.py`'s `emit_4f` appends 91 rows (2,606; the old body an exact prefix): fields of 10^±160 and
+  10⁻¹⁷⁰ on dx of 10^∓150, dx = 10⁻¹⁶⁰ and 10⁻¹¹⁰ (dx² or dx³ subnormal), media of 10⁻³⁰⁰, each with no step and after
+  a source and a step or two, in both 2D modes and in 3D; and `run` at f = DBL_MAX, 3·10³⁰⁷ and 10³⁰⁰ and on dx =
+  10⁻³⁰⁰ (dt subnormal) on all three grids.
+- **Tests**: `cyrius_energy_edges` in `tests/fdtd2d.tcyr` (2 assertions, 85 in all: the energy above, `run` at f =
+  DBL_MAX) and `tests/fdtd3d.tcyr` (1, 92); `tests/fdtd1d.tcyr`'s unsigned step (1, 91). Two of the first draft's
+  decimal literals for 10⁻¹⁵⁰ and 10¹⁶⁰ came out as 10⁻¹⁴⁷ and 10¹⁵⁷ (miscounted zeros, the lexer having no exponent
+  form): the tests give such values by their bits.
+- **Benchmarks**: a focused interleaved A/B of the energies against HEAD (part 4e's commit; three rounds at load 0.8,
+  and three more at load 7): `total_energy` on a 100 × 100 TM grid 126 → 291 µs (2.3×; 139–145 → 322–330 µs at load
+  7), on 30³ 200 → 556 µs (2.8×; 228–234 → 622–647 µs), about 17 and 13 ns a cell. Most cells in these grids are zero,
+  and a zero square sum loads its fields to tell a zero from an underflow; caching a medium's band result changed
+  little (300 → 291 µs, 561 → 556 µs). The full A/B ran three rounds beside another session's benches and builds (load
+  7 to 14): the first was unusable (rows this bite doesn't touch at 0.5× to 2×), the other two agree on
+  `fdtd/3d_step_30x30x30`, whose Rust bench takes the energy each step, 1.20–1.22 → 1.61–1.71 ms (1.34–1.41×), and
+  leave the other rows within that load's noise (`fdtd/2d_run_50_steps_80x80`, one energy a run, 0.97–1.08×; the
+  run source is a few checks a step).
+- **Result, every target** (x86_64 ELF, x86_64 PE, aarch64): **19 modules, 0 failing; 644,194 ok, 0 failed, 0
+  measured, 0 pending, 123,844 accepted (ADR 01: 43,087; ADR 0002: 80,757)** over 768,038 rows; **all 488 digests
+  equal**; 29 of 29 test files on each. `fdtd1d.tcyr` (91), `fdtd2d.tcyr` (85), `fdtd3d.tcyr` (92), `compute.tcyr`
+  (36), `cpml.tcyr` (44) and `json.tcyr` (105) pass on all three. The gate is clean (no warnings; execution coverage
+  394 of 394; the audit passes); validate.py 768,038 rows, 0 problems; `emit.py --check` 1,107 frozen rows and 1,499
+  emitted. **M6 Part 4 is done**: every range edge plan §0.1 lists for M6 is on the rule. Next: the M6 wrap-up (as
+  §115), then M7.

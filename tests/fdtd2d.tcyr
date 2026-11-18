@@ -719,6 +719,30 @@ fn main() {
       "c·Δ of 2^-1074 differences rounds to −0: Ψ the exact sum's −0 (Rust's +0 + −0 gave +0)");
     BjFdtd2d_free(&ce2);
 
+    # ADR 0002 row 18 (M6 part 4f): total_energy and run's source at their range edges, with an unbounded exponent.
+    # The expectations are validate.py's model of the port.
+    test_group("cyrius_energy_edges");
+    var ee1: BjFdtd2d;
+    var dxs: f64 = _bj_from_bits(0x20ca2fe76a3f9475);
+    var tee1, vee1 = BjFdtd2d_new(8, 7, dxs, BJ_MODE2D_TM, &ee1);
+    var e160: f64 = _bj_from_bits(0x6126c2d4256ffcc3);
+    for (var ey = 0; ey < 7; ey = ey + 1) {
+        for (var ex = 0; ex < 8; ex = ex + 1) { ee1.add_source(ex, ey, e160); }
+    }
+    var ee1e: f64 = ee1.total_energy();
+    var ee1w: f64 = _bj_from_bits(0x421716cedccf5c30);
+    assert(is_ok(tee1) == 1 && ee1e == ee1w,
+      "E_z = 10¹⁶⁰ on dx = 10⁻¹⁵⁰: ½ε₀E² past DBL_MAX, dx² brings it back: 2.479172587584·10¹⁰ (Rust's ∞)");
+    BjFdtd2d_free(&ee1);
+    var ee2: BjFdtd2d;
+    var tee2, vee2 = BjFdtd2d_new(8, 7, 0.001, BJ_MODE2D_TM, &ee2);
+    ee2.run(1, 3, 3, mxv, 1.0);
+    var ee2z: f64 = at(ee2.fz, ee2.idx(3, 3));
+    var ee2e: f64 = ee2.total_energy();
+    assert(is_ok(tee2) == 1 && _bj_k_bits(ee2z) == 0 && ee2e == 0.0,
+      "run at f = DBL_MAX: 2πf past DBL_MAX at t = 0, the sample sin 0 = 0 (Rust's ∞·0 = NaN through the grid)");
+    BjFdtd2d_free(&ee2);
+
     return assert_summary();
 }
 
