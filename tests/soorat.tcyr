@@ -1,8 +1,8 @@
 # soorat.tcyr — src/soorat.cyr (M7 part 1b-1): the soorat visualization structs and their constructors.
 #
 # Every group not named cyrius_* is 1.2.0:src/integration/soorat.rs's test of that name, ported assertion for assertion
-# (the ledger matches them by name): 12 of its 14; field_slice_2d_serializes and field_slice_3d_serializes wait for
-# the structs' JSON (part 1b-2). tests/golden/soorat.tsv pins every constructor over its grid against Rust besides.
+# (the ledger matches them by name): all 14, field_slice_2d_serializes and field_slice_3d_serializes with the structs'
+# JSON (part 1b-2). tests/golden/soorat.tsv pins every constructor over its grid and every struct's JSON besides.
 
 include "tests/lib.cyr"
 
@@ -41,6 +41,42 @@ fn linep(a): *BjFieldLine {
 # A word as a *BjChargePoint.
 fn cpp(a): *BjChargePoint {
     return a;
+}
+
+# The C strings a and b joined, in a fresh block.
+fn cat2(a, b): i64 {
+    var na = strlen(a);
+    var nb = strlen(b);
+    var p = alloc(na + nb + 1);
+    memcpy(p, a, na);
+    memcpy(p + na, b, nb);
+    store8(p + na + nb, 0);
+    return p;
+}
+
+# 1 when the builder sb's document is the text a followed by the text b.
+fn doc_is(sb, a, b): i64 {
+    var js = str_builder_build(sb);
+    var na = strlen(a);
+    var nb = strlen(b);
+    if (str_len(js) != na + nb) { return 0; }
+    if (memeq(str_data(js), a, na) != 1) { return 0; }
+    return memeq(str_data(js) + na, b, nb);
+}
+
+# 1 when the f32 whose value has the f64 bits `bits` prints as `want` in serde_json's form.
+fn f32_text_is(bits, want): i64 {
+    var buf[40];
+    var t[24];
+    _bj_tx_init(&t, &buf, 40);
+    var x: f64 = _bj_from_bits(bits);
+    _bj_fmt_f32_json(&t, x);
+    return text_is(_bj_tx_ptr(&t), want);
+}
+
+# The bits of the f32 field value v, widened.
+fn f32_bits(v: f64): i64 {
+    return _bj_k_bits(v);
 }
 
 # Runs soorat.rs's tests, then the Cyrius-only checks.
@@ -273,6 +309,36 @@ fn main() {
     BjFieldSlice3D_free(&vol);
     BjFdtd3d_free(&g3);
 
+    test_group("field_slice_2d_serializes");
+    var z8: f64[8];
+    for (var k = 0; k < 8; k = k + 1) { z8[k] = 0.0; }
+    var sv2: BjFieldSlice2D;
+    sv2.values = &z8;
+    sv2.values_len = 4;
+    sv2.dimensions = (2, 2);
+    sv2.origin = (0.0, 0.0);
+    sv2.spacing = 1.0;
+    sv2.component = "Ez";
+    sv2.component_len = 2;
+    sv2.step = 0;
+    var jb2 = str_builder_new();
+    var j2a, j2b = BjFieldSlice2D_to_json(&sv2, jb2);
+    assert(is_ok(j2a) == 1, "serde_json::to_string(&slice) is Ok");
+
+    test_group("field_slice_3d_serializes");
+    var sv3: BjFieldSlice3D;
+    sv3.values = &z8;
+    sv3.values_len = 8;
+    sv3.dimensions = (2, 2, 2);
+    sv3.origin = (0.0, 0.0, 0.0);
+    sv3.spacing = 0.5;
+    sv3.component = "ex";
+    sv3.component_len = 2;
+    sv3.step = 10;
+    var jb3 = str_builder_new();
+    var j3a, j3b = BjFieldSlice3D_to_json(&sv3, jb3);
+    assert(is_ok(j3a) == 1, "serde_json::to_string(&slice) is Ok");
+
     test_group("cyrius_soorat_text");
     # Bytes that are not UTF-8 name no component (ADR 0002 row 44): try refuses them, the lenient form falls back.
     var tx: BjFdtd2d;
@@ -345,6 +411,112 @@ fn main() {
     var m3a, m3b = BjVectorFieldSample_from_components(&bo, 1099511627776, &bo, 1099511627776, &bo, 1099511627776,
       &hd, &bo, 1.0, &big_vs);
     assert(is_err_result(m3a) == 1 && m3b == BJ_ERR_ALLOCATION && big_vs.vectors == 0, "2⁴⁰ samples: Allocation");
+
+    # The structs' JSON (part 1b-2): Rust's two slices as serde_json writes them; f32 in zmij's shortest digits (a tie
+    # to the even digit, positional for exponents −6..=12); a round trip through every escape; f32 numbers rounded once,
+    # where bijli's build of serde_json rounds twice (ADR 0002 row 45), and refused past f32's range.
+    test_group("cyrius_soorat_json");
+    assert(doc_is(jb2, "{\"values\":[0.0,0.0,0.0,0.0],\"dimensions\":[2,2],\"origin\":[0.0,0.0],",
+        "\"spacing\":1.0,\"component\":\"Ez\",\"step\":0}") == 1, "the 2D slice's document");
+    assert(doc_is(jb3, "{\"values\":[0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0],\"dimensions\":[2,2,2],",
+        "\"origin\":[0.0,0.0,0.0],\"spacing\":0.5,\"component\":\"ex\",\"step\":10}") == 1,
+      "the 3D volume's document");
+    assert(f32_text_is(0x3FB99999A0000000, "0.1") == 1 && f32_text_is(0x47EFFFFFE0000000, "3.4028235e+38") == 1,
+      "0.1f32 and f32::MAX");
+    assert(f32_text_is(0x36A0000000000000, "1e-45") == 1 && f32_text_is(0x3810000000000000, "1.1754944e-38") == 1,
+      "the least subnormal and the least normal");
+    assert(f32_text_is(0x4140000020000000, "2097152.2") == 1 && f32_text_is(0x4140000060000000, "2097152.8") == 1,
+      "2097152.25 and 2097152.75: ties to the even digit");
+    assert(f32_text_is(0x4170000000000000, "16777216.0") == 1 && f32_text_is(0x8000000000000000, "-0.0") == 1,
+      "an integer and −0");
+    assert(f32_text_is(0x3EB0C6F7A0000000, "0.000001") == 1 && f32_text_is(0x3E7AD7F2A0000000, "1e-7") == 1,
+      "positional down to 10⁻⁶");
+    assert(f32_text_is(0x426D1A94A0000000, "1000000000000.0") == 1 && f32_text_is(0x42A2309CE0000000, "1e+13") == 1,
+      "positional up to 10¹²");
+    assert(f32_text_is(0x7FF8000000000000, "null") == 1 && f32_text_is(0xFFF0000000000000, "null") == 1,
+      "NaN and −∞ as null");
+    var cpw: BjChargePoint;
+    cpw.position_x = 0.1;
+    cpw.position_y = 0.2;
+    cpw.position_z = 0.3;
+    var ech: f64 = _bj_from_bits(0x3C07A4DA290C1653);
+    var ech_n: f64 = -ech;
+    cpw.charge = ech_n;
+    cpw.magnitude = ech;
+    var jbc = str_builder_new();
+    var jca, jcb = BjChargePoint_to_json(&cpw, jbc);
+    assert(is_ok(jca) == 1 && doc_is(jbc, "{\"position\":[0.1,0.2,0.3],\"charge\":-1.6021766e-19,",
+        "\"magnitude\":1.6021766e-19}") == 1, "an electron's point, each f32 shortest");
+    var cb[16];
+    memcpy(&cb, "\"a\\b\n", 6);
+    store8(&cb + 6, 1);
+    store8(&cb + 7, 0);
+    store8(&cb + 8, 127);
+    store8(&cb + 9, 195);
+    store8(&cb + 10, 169);
+    var rv: f64[4];
+    rv[0] = 1.5;
+    rv[1] = -0.0;
+    rv[2] = _bj_from_bits(1);
+    rv[3] = _bj_from_bits(0x7FEFFFFFFFFFFFFF);
+    var rt: BjFieldSlice3D;
+    rt.values = &rv;
+    rt.values_len = 4;
+    rt.dimensions = (1, 2, 2);
+    rt.origin = (-0.0, 1.0, 2.5);
+    rt.spacing = 0.001;
+    rt.component = &cb;
+    rt.component_len = 11;
+    rt.step = 9223372036854775807;
+    var jbr = str_builder_new();
+    var jra, jrb = BjFieldSlice3D_to_json(&rt, jbr);
+    var rdoc = str_builder_build(jbr);
+    var back: BjFieldSlice3D;
+    var bka, bkb = BjFieldSlice3D_from_json(str_data(rdoc), str_len(rdoc), &back);
+    assert(is_ok(jra) == 1 && is_ok(bka) == 1 && back.values_len == 4 && back.component_len == 11 &&
+      memeq(back.component, &cb, 11) == 1, "the component's bytes back, a NUL and DEL among them");
+    var bv1: f64 = at(back.values, 1);
+    var bv2: f64 = at(back.values, 2);
+    var bv3: f64 = at(back.values, 3);
+    var bo0: f64 = back.origin.0;
+    assert(f32_bits(bv1) == 0x8000000000000000 && f32_bits(bv2) == 1 && f32_bits(bv3) == 0x7FEFFFFFFFFFFFFF &&
+      f32_bits(bo0) == 0x8000000000000000, "−0, the least subnormal and DBL_MAX back bit for bit");
+    assert(back.dimensions.2 == 2 && back.step == 9223372036854775807 && back.spacing == 0.001, "2^63 − 1 steps");
+    BjFieldSlice3D_free(&back);
+    rt.step = 0 - 1;
+    var jbu = str_builder_new();
+    var jua, jub = BjFieldSlice3D_to_json(&rt, jbu);
+    var udoc = str_builder_build(jbu);
+    back.values = 0;
+    var bua, bub = BjFieldSlice3D_from_json(str_data(udoc), str_len(udoc), &back);
+    assert(is_ok(jua) == 1 && is_err_result(bua) == 1 && bub == BJ_ERR_DESERIALIZE && back.values == 0,
+      "a step of 2^64 − 1, written as Rust's usize, is refused on reading (ADR 0002 row 36)");
+    var once = cat2("{\"position\":[1.0000000596046448,3.4028235677973366e38,16777217],",
+      "\"charge\":1e-46,\"magnitude\":-0}");
+    var rc: BjChargePoint;
+    var rca, rcb = BjChargePoint_from_json(once, strlen(once), &rc);
+    var rx: f64 = f32_to(rc.position_x);
+    var ry: f64 = f32_to(rc.position_y);
+    var rz: f64 = f32_to(rc.position_z);
+    var rq: f64 = f32_to(rc.charge);
+    var rm: f64 = f32_to(rc.magnitude);
+    assert(is_ok(rca) == 1 && f32_bits(rx) == 0x3FF0000020000000, "1 + 2⁻²⁴ + a hair: up to 1 + 2⁻²³ (serde: 1)");
+    assert(f32_bits(ry) == 0x47EFFFFFE0000000, "a hair under f32::MAX's halfway up: f32::MAX (serde: +∞)");
+    assert(f32_bits(rz) == 0x4170000000000000 && f32_bits(rq) == 0 && f32_bits(rm) == 0x8000000000000000,
+      "16777217 ties to 2²⁴, 10⁻⁴⁶ is +0, -0 is −0");
+    var big = "{\"position\":[0,0,0],\"charge\":1e39,\"magnitude\":1}";
+    rc.charge = 7.0;
+    var bga, bgb = BjChargePoint_from_json(big, strlen(big), &rc);
+    var still: f64 = f32_to(rc.charge);
+    assert(is_err_result(bga) == 1 && bgb == BJ_ERR_DESERIALIZE && still == 7.0 &&
+      text_is(bj_last_error_display(), "deserialization failed: number out of range") == 1,
+      "10³⁹ overflows f32: refused, the point untouched");
+    var huge_line: BjFieldLine = BjFieldLine { 0, 1099511627776, 0, 0 };
+    var jbh = str_builder_new();
+    var hla, hlb = BjFieldLine_to_json(&huge_line, jbh);
+    var hdoc = str_builder_build(jbh);
+    assert(is_err_result(hla) == 1 && hlb == BJ_ERR_ALLOCATION && str_len(hdoc) == 0,
+      "a line claiming 2⁴⁰ points: Allocation, the builder as it was");
 
     return assert_summary();
 }

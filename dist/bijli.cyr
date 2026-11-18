@@ -11232,6 +11232,15 @@ fn _bj_shortest(bits, digits, tie_even) {
         f = f | 0x10000000000000;
         e = be - 1075;
     }
+    var asym = 0;
+    if (f == 0x10000000000000 && be > 1) { asym = 1; }
+    return _bj_shortest_fe(f, e, asym, digits, tie_even);
+}
+
+# bijli's (M7 part 1b-2): the digit generator of _bj_shortest for any binary format, so an f32 prints as its own
+# shortest digits. The value is f·2^e (f > 0, below 2^53); `asym` 1 when f is the format's smallest normal significand
+# above its least exponent, where the gap below the value is half the gap above. Returns (n, k) as _bj_shortest.
+fn _bj_shortest_fe(f, e, asym, digits, tie_even) {
     # IEEE round-half-even on reading: the interval's ends belong to it when f is even.
     var even = 1 - (f & 1);
     var r[328];
@@ -11240,7 +11249,7 @@ fn _bj_shortest(bits, digits, tie_even) {
     var mm[328];
     var t[328];
     if (e >= 0) {
-        if (f != 0x10000000000000) {
+        if (asym == 0) {
             _bj_bn_set(&r, f);
             _bj_bn_shl(&r, e + 1);
             _bj_bn_set(&s, 2);
@@ -11257,7 +11266,7 @@ fn _bj_shortest(bits, digits, tie_even) {
             _bj_bn_shl(&mm, e);
         }
     } else {
-        if (e == 0 - 1074 || f != 0x10000000000000) {
+        if (asym == 0) {
             _bj_bn_set(&r, f);
             _bj_bn_shl(&r, 1);
             _bj_bn_set(&s, 1);
@@ -11570,6 +11579,60 @@ fn _bj_fmt_f64_json(t, x: f64) {
     var n, k = _bj_shortest(mag, &digits, 1);
     var ex = k - 1;
     if (ex >= 0 - 5 && ex <= 15) {
+        _bj_tx_positional(t, &digits, n, k, 1);
+        return 0;
+    }
+    _bj_tx_putc(t, load8(&digits));
+    if (n > 1) {
+        _bj_tx_putc(t, 46);
+        _bj_tx_digits(t, &digits, 1, n);
+    }
+    _bj_tx_putc(t, 101);
+    if (ex >= 0) {
+        _bj_tx_putc(t, 43);
+        _bj_tx_i64(t, ex);
+    } else {
+        _bj_tx_putc(t, 45);
+        _bj_tx_i64(t, 0 - ex);
+    }
+    return 0;
+}
+
+# Appends the f32 value x (an f32 widened to f64, which is exact) as serde_json 1.0.154 writes an f32 (zmij's format,
+# bijli's, M7 part 1b-2): the shortest digits that read back to the same f32, the closest to its value among them, a
+# tie to the even digit (2097152.25 is 2097152.2); positional while the decimal exponent is in −6..=12, with ".0" on
+# an integer (`16777216.0`, `0.000001`), otherwise `d.ddde±x` (`1e-7`, `3.4028235e+38`); `null` for NaN and ±∞.
+# Mirrors `serde_json::to_string(&x)` for an f32.
+fn _bj_fmt_f32_json(t, x: f64) {
+    var bits = _bj_bits(x);
+    var mag = bits & 0x7FFFFFFFFFFFFFFF;
+    if (mag >= 0x7FF0000000000000) {
+        _bj_json_nonfinite = _bj_json_nonfinite + 1;
+        _bj_tx_cstr(t, "null");
+        return 0;
+    }
+    if (bits < 0) { _bj_tx_putc(t, 45); }
+    if (mag == 0) {
+        _bj_tx_cstr(t, "0.0");
+        return 0;
+    }
+    # x = m·2^er exactly; as an f32, f·2^e with f below 2^24 and e at least −149 (the low bits of m are zero).
+    var be = mag >> 52;
+    var m = (mag & 0xFFFFFFFFFFFFF) | 0x10000000000000;
+    var er = be - 1075;
+    if (be == 0) {
+        m = mag;
+        er = 0 - 1074;
+    }
+    var e = er + 29;
+    if (e < 0 - 149) { e = 0 - 149; }
+    var f = m >> (e - er);
+    var asym = 0;
+    if (f == 0x800000 && e > 0 - 149) { asym = 1; }
+    var digits[24];
+    var n, k = _bj_shortest_fe(f, e, asym, &digits, 1);
+    var ex = k - 1;
+    if (ex >= 0 - 6 && ex <= 12) {
         _bj_tx_positional(t, &digits, n, k, 1);
         return 0;
     }
@@ -39656,8 +39719,10 @@ public fn BjVectorFieldSample_try_from_components(vx: *f64, lx, vy: *f64, ly, vz
 # BjStokesVector and BjMuellerMatrix, (M3 part 1b-2) scattering's BjMieResult, (M3 part 1c-2) beam's
 # BjGaussianBeam, BjAbcdMatrix and BjResonatorStability, (M4 part 1d) rf's BjSMatrix, BjTouchstoneFormat and
 # BjTouchstoneData, and (M5 part 1f) the FDTD's BjLossyMaterial, BjDrudeMaterial, BjLorentzMaterial, BjDebyeMaterial,
-# BjNonUniformGrid and BjEigenmodeResult, and (M6 part 1d) the 2D FDTD's BjCpmlParams and BjMode2d, as serde_json
-# 1.0.154 writes and reads them (port plan D5, M1 part 4; ADR 0002 rows 10–12, 36). An EigenmodeResult's three vectors
+# BjNonUniformGrid and BjEigenmodeResult, (M6 part 1d) the 2D FDTD's BjCpmlParams and BjMode2d, and (M7 part 1b-2)
+# soorat's BjFieldSlice2D, BjFieldSlice3D, BjFieldLine, BjFieldLineVisualization, BjChargePoint, BjChargeVisualization,
+# BjRadiationPattern and BjVectorFieldSample, as serde_json 1.0.154 writes and reads them (port plan D5, M1 part 4;
+# ADR 0002 rows 10–12, 36, 45). An EigenmodeResult's three vectors
 # share one count, so a document whose vectors differ in length is refused (row 36); a NonUniformGrid's axes have any
 # lengths. A usize (an SMatrix's or TouchstoneData's ports, a CpmlParams' thickness) is read from 0 to 2^63 − 1 (row
 # 36: bayan's tree keeps no exact integer past it) and written as Rust's whole u64.
@@ -39666,7 +39731,9 @@ public fn BjVectorFieldSample_try_from_components(vx: *f64, lx, vy: *f64, ly, vz
 # (`[f64; 3]`, a Jones matrix's `m: [[Complex; 2]; 2]`, a Mueller matrix's `m: [[f64; 4]; 4]`) as nested arrays row by
 # row, an inner Complex as its own object, a bool (BjResonatorStability's `is_stable`, 1 or 0) as `true` or `false`,
 # every f64 through bayan's printer (`bayan_f64_to_json`, the printer `#derive(Serialize)` uses): the shortest
-# round-trip digits, `null` for NaN and ±∞ as serde_json writes them. The notation is bayan's, not ryu's
+# round-trip digits, `null` for NaN and ±∞ as serde_json writes them; an f32 (a ChargePoint's) through fmtf's
+# `_bj_fmt_f32_json`, zmij's shortest f32 digits; a String (a field slice's component) with serde_json's escapes
+# (`\"`, `\\`, `\n`-style for five controls, `\u00xx` for the rest). The f64 notation is bayan's, not ryu's
 # (`10000000000000000.0` where serde_json writes `1e16`); each parses to the same bits, which is what the golden rows
 # compare (D5). The document is built on the stack (a BjMieResult's, whose two `Vec<Complex>` have any length, in one
 # fl_alloc block sized for the longest numbers) and appended in one grow, so a refused allocation leaves the builder as
@@ -39684,7 +39751,9 @@ public fn BjVectorFieldSample_try_from_components(vx: *f64, lx, vy: *f64, ly, vz
 # - an f64 takes any JSON number, correctly rounded (ADR 0002 row 11: serde_json's default parse is best-effort, and
 #   the golden rows compare against the correctly rounded value), and never `null` (serde_json writes NaN and ±∞ as
 #   `null` and can't read them back, nor can the port); a number whose correctly rounded value overflows is refused,
-#   as serde_json refuses `1e400`;
+#   as serde_json refuses `1e400`; an f32 takes any JSON number rounded once to the nearest f32 and is refused where
+#   that overflows (ADR 0002 row 45: serde_json, built without float_roundtrip, rounds twice and keeps ±∞); a String
+#   takes a JSON string, its escapes decoded (a `\u0000` among them: the bytes keep their count);
 # - the whole document is checked, unknown values included (ADR 0002 row 12): a key repeated in any object, a lone
 #   surrogate escape in any string, or containers nested past 128 levels refuse it. serde_json checks only what it
 #   deserializes: it refuses those in the struct's own fields and keys, and skips an unknown value unchecked;
@@ -41585,5 +41654,1038 @@ public fn BjMode2d_from_json(buf, len, out: *i64): Result {
     var code = _bj_jr_read(buf, len, &_bj_jr_mode2d, &w);
     if (code != 0) { return Err(code); }
     out[0] = w[0];
+    return Ok(0);
+}
+
+# ── soorat's visualization types (M7 part 1b-2) ──────────────────────────────────────────────────────────────────────
+
+# The largest count a writer takes: freelist's largest block is 2 GiB, so no array a constructor or reader made is
+# longer. A hand-filled struct claiming more is refused as Allocation before anything is written.
+var _BJ_JW_MAX = 268435456;
+
+# Appends the bytes [s, s + k) as a JSON string, escaped as serde_json escapes it: `"` and `\` after a backslash, the
+# control bytes U+0000..U+001F as `\b` `\t` `\n` `\f` `\r` or `\u00xx` (lowercase hex), every other byte as it is
+# (UTF-8 passes through; U+007F is not escaped); the new length (at most 6k + 2 bytes more).
+fn _bj_jw_str(buf, n, s, k): i64 {
+    var m = n;
+    store8(buf + m, 34);
+    m = m + 1;
+    for (var i = 0; i < k; i = i + 1) {
+        var c = load8(s + i);
+        if (c == 34 || c == 92) {
+            store8(buf + m, 92);
+            store8(buf + m + 1, c);
+            m = m + 2;
+        } elif (c >= 32) {
+            store8(buf + m, c);
+            m = m + 1;
+        } else {
+            var e = 0;
+            if (c == 8) { e = 98; }
+            elif (c == 9) { e = 116; }
+            elif (c == 10) { e = 110; }
+            elif (c == 12) { e = 102; }
+            elif (c == 13) { e = 114; }
+            store8(buf + m, 92);
+            if (e != 0) {
+                store8(buf + m + 1, e);
+                m = m + 2;
+            } else {
+                var hex = "0123456789abcdef";
+                store8(buf + m + 1, 117);
+                store8(buf + m + 2, 48);
+                store8(buf + m + 3, 48);
+                store8(buf + m + 4, load8(hex + (c >> 4)));
+                store8(buf + m + 5, load8(hex + (c & 15)));
+                m = m + 6;
+            }
+        }
+    }
+    store8(buf + m, 34);
+    return m + 1;
+}
+
+# Appends the f32 x (widened to f64, which is exact) as serde_json writes an f32 (_bj_fmt_f32_json: at most 17 bytes,
+# with 32 bytes of room needed at buf + n); the new length.
+fn _bj_jw_f32(buf, n, x: f64): i64 {
+    var t[24];
+    _bj_tx_init(&t, buf + n, 32);
+    _bj_fmt_f32_json(&t, x);
+    return n + _bj_tx_len(&t);
+}
+
+# Appends `[a,b]` (k = 2) or `[a,b,c]` (k = 3) for the k words at p, as unsigned integers (Rust's usize); the new
+# length.
+fn _bj_jw_u64s(buf, n, p: *i64, k): i64 {
+    var m = n;
+    for (var j = 0; j < k; j = j + 1) {
+        if (j == 0) { store8(buf + m, 91); } else { store8(buf + m, 44); }
+        m = _bj_jw_u64(buf, m + 1, p[j]);
+    }
+    store8(buf + m, 93);
+    return m + 1;
+}
+
+# Appends `[[x,y,z],..]` for the k triples (3k f64) at p; the new length.
+fn _bj_jw_triples(buf, n, p, k): i64 {
+    var m = n;
+    store8(buf + m, 91);
+    m = m + 1;
+    for (var j = 0; j < k; j = j + 1) {
+        if (j > 0) {
+            store8(buf + m, 44);
+            m = m + 1;
+        }
+        var q = p + j * 24;
+        m = _bj_jw_triple(buf, m, load64(q), load64(q + 8), load64(q + 16));
+    }
+    store8(buf + m, 93);
+    return m + 1;
+}
+
+# Records Allocation for a writer's buffer; returns its code.
+fn _bj_jw_nobuf(): i64 {
+    _bj_tx_cstr(_bj_err_reason(BJ_ERR_ALLOCATION), "the JSON document's buffer");
+    return BJ_ERR_ALLOCATION;
+}
+
+# A writer's buffer of `bytes` bytes (fl_alloc), or 0 with Allocation recorded.
+fn _bj_jw_buf(bytes): i64 {
+    var b = fl_alloc(bytes);
+    if (b == 0) { _bj_jw_nobuf(); }
+    return b;
+}
+
+# A word as a *BjFieldLine.
+#must_use
+fn _bj_jw_linep(a): *BjFieldLine {
+    return a;
+}
+
+# A word as a *BjChargePoint.
+#must_use
+fn _bj_jw_cpp(a): *BjChargePoint {
+    return a;
+}
+
+# 1 when the count n is one a writer takes (0 ≤ n ≤ _BJ_JW_MAX).
+#must_use
+fn _bj_jw_count_ok(n): i64 {
+    if (n < 0 || n > _BJ_JW_MAX) { return 0; }
+    return 1;
+}
+
+# Appends buf's document [buf, buf + n) to sb and gives buf back: Ok(0), or Err(BJ_ERR_ALLOCATION) with sb as it was.
+#must_use
+fn _bj_jw_put_free(sb, buf, n): Result {
+    var t, v = _bj_jw_put(sb, buf, n);
+    fl_free(buf);
+    if (is_err_result(t) == 1) { return Err(v); }
+    return Ok(0);
+}
+
+# Appends a field slice's or volume's document to the builder sb: nd (2 or 3) dimensions at dims and origin values at
+# org, the other fields given. Ok(0), or Err(BJ_ERR_ALLOCATION) with sb as it was.
+#must_use
+fn _bj_jw_slice(sb, values, nv, dims: *i64, org: *i64, nd, spacing, comp, nc, step): Result {
+    if (_bj_jw_count_ok(nv) == 0 || _bj_jw_count_ok(nc) == 0) { return Err(_bj_jw_nobuf()); }
+    var buf = _bj_jw_buf(256 + nv * 26 + nc * 6);
+    if (buf == 0) { return Err(BJ_ERR_ALLOCATION); }
+    var n = _bj_jw_cstr(buf, 0, "{\"values\":");
+    n = _bj_jw_f64_vec(buf, n, values, nv);
+    n = _bj_jw_cstr(buf, n, ",\"dimensions\":");
+    n = _bj_jw_u64s(buf, n, dims, nd);
+    n = _bj_jw_cstr(buf, n, ",\"origin\":");
+    if (nd == 2) { n = _bj_jw_f64_vec(buf, n, org, 2); }
+    else { n = _bj_jw_triple(buf, n, org[0], org[1], org[2]); }
+    n = _bj_jw_cstr(buf, n, ",\"spacing\":");
+    n = _bj_jw_f64(buf, n, spacing);
+    n = _bj_jw_cstr(buf, n, ",\"component\":");
+    n = _bj_jw_str(buf, n, comp, nc);
+    n = _bj_jw_cstr(buf, n, ",\"step\":");
+    n = _bj_jw_u64(buf, n, step);
+    n = _bj_jw_cstr(buf, n, "}");
+    return _bj_jw_put_free(sb, buf, n);
+}
+
+# Appends `{"values":[..],"dimensions":[nx,ny],"origin":[x,y],"spacing":<Δ>,"component":"<name>","step":<n>}` to the
+# builder sb: the values_len values in order, the dimensions and step as unsigned integers (Rust's usize), the
+# component's component_len bytes as a JSON string (serde_json's escapes). The fields are written as held: a values_len
+# other than nx·ny too. Ok(0), or Err(BJ_ERR_ALLOCATION) with sb as it was. Mirrors `serde_json::to_string(&s)` for
+# `integration::soorat::FieldSlice2D`.
+#must_use
+public fn BjFieldSlice2D_to_json(s: *BjFieldSlice2D, sb): Result {
+    var dims: i64[2];
+    var org: i64[2];
+    dims[0] = s.dimensions.0;
+    dims[1] = s.dimensions.1;
+    var o0: f64 = s.origin.0;
+    var o1: f64 = s.origin.1;
+    org[0] = _bj_bits(o0);
+    org[1] = _bj_bits(o1);
+    return _bj_jw_slice(sb, s.values, s.values_len, &dims, &org, 2, s.spacing, s.component, s.component_len, s.step);
+}
+
+# Appends `{"values":[..],"dimensions":[nx,ny,nz],"origin":[x,y,z],"spacing":<Δ>,"component":"<name>","step":<n>}` to
+# the builder sb, as BjFieldSlice2D_to_json. Ok(0), or Err(BJ_ERR_ALLOCATION) with sb as it was. Mirrors
+# `serde_json::to_string(&s)` for `integration::soorat::FieldSlice3D`.
+#must_use
+public fn BjFieldSlice3D_to_json(s: *BjFieldSlice3D, sb): Result {
+    var dims: i64[3];
+    var org: i64[3];
+    dims[0] = s.dimensions.0;
+    dims[1] = s.dimensions.1;
+    dims[2] = s.dimensions.2;
+    var o0: f64 = s.origin.0;
+    var o1: f64 = s.origin.1;
+    var o2: f64 = s.origin.2;
+    org[0] = _bj_bits(o0);
+    org[1] = _bj_bits(o1);
+    org[2] = _bj_bits(o2);
+    return _bj_jw_slice(sb, s.values, s.values_len, &dims, &org, 3, s.spacing, s.component, s.component_len, s.step);
+}
+
+# The bytes a field line's document needs, or 0 for a count past _BJ_JW_MAX.
+#must_use
+fn _bj_jw_line_size(l: *BjFieldLine): i64 {
+    if (_bj_jw_count_ok(l.points_len) == 0 || _bj_jw_count_ok(l.magnitudes_len) == 0) { return 0; }
+    return 64 + l.points_len * 80 + l.magnitudes_len * 26;
+}
+
+# Appends `{"points":[[x,y,z],..],"magnitudes":[..]}` for field line l; the new length.
+fn _bj_jw_line(buf, n, l: *BjFieldLine): i64 {
+    var m = _bj_jw_cstr(buf, n, "{\"points\":");
+    m = _bj_jw_triples(buf, m, l.points, l.points_len);
+    m = _bj_jw_cstr(buf, m, ",\"magnitudes\":");
+    m = _bj_jw_f64_vec(buf, m, l.magnitudes, l.magnitudes_len);
+    store8(buf + m, 125);
+    return m + 1;
+}
+
+# Appends `{"points":[[x,y,z],..],"magnitudes":[..]}` to the builder sb, the points_len points and magnitudes_len
+# magnitudes as held (lengths that differ too). Ok(0), or Err(BJ_ERR_ALLOCATION) with sb as it was. Mirrors
+# `serde_json::to_string(&l)` for `integration::soorat::FieldLine`.
+#must_use
+public fn BjFieldLine_to_json(l: *BjFieldLine, sb): Result {
+    var size = _bj_jw_line_size(l);
+    if (size == 0) { return Err(_bj_jw_nobuf()); }
+    var buf = _bj_jw_buf(size);
+    if (buf == 0) { return Err(BJ_ERR_ALLOCATION); }
+    var n = _bj_jw_line(buf, 0, l);
+    return _bj_jw_put_free(sb, buf, n);
+}
+
+# Appends `{"lines":[{"points":..,"magnitudes":..},..]}` to the builder sb, each of the lines_len lines as
+# BjFieldLine_to_json writes it. Ok(0), or Err(BJ_ERR_ALLOCATION) with sb as it was. Mirrors
+# `serde_json::to_string(&v)` for `integration::soorat::FieldLineVisualization`.
+#must_use
+public fn BjFieldLineVisualization_to_json(v: *BjFieldLineVisualization, sb): Result {
+    if (_bj_jw_count_ok(v.lines_len) == 0) { return Err(_bj_jw_nobuf()); }
+    var ls: *BjFieldLine = _bj_jw_linep(v.lines);
+    var size = 32;
+    for (var i = 0; i < v.lines_len; i = i + 1) {
+        var one = _bj_jw_line_size(ls + i);
+        if (one == 0 || size > 1099511627776) { return Err(_bj_jw_nobuf()); }
+        size = size + one + 1;
+    }
+    var buf = _bj_jw_buf(size);
+    if (buf == 0) { return Err(BJ_ERR_ALLOCATION); }
+    var n = _bj_jw_cstr(buf, 0, "{\"lines\":[");
+    for (var j = 0; j < v.lines_len; j = j + 1) {
+        if (j > 0) { n = _bj_jw_cstr(buf, n, ","); }
+        n = _bj_jw_line(buf, n, ls + j);
+    }
+    n = _bj_jw_cstr(buf, n, "]}");
+    return _bj_jw_put_free(sb, buf, n);
+}
+
+# Appends `{"position":[x,y,z],"charge":<q>,"magnitude":<|q|>}` for charge point c, each an f32 as serde_json writes
+# one (_bj_jw_f32); the new length (at most 128 bytes, with 160 of room).
+fn _bj_jw_charge(buf, n, c: *BjChargePoint): i64 {
+    var x: f64 = f32_to(c.position_x);
+    var y: f64 = f32_to(c.position_y);
+    var z: f64 = f32_to(c.position_z);
+    var q: f64 = f32_to(c.charge);
+    var a: f64 = f32_to(c.magnitude);
+    var m = _bj_jw_cstr(buf, n, "{\"position\":[");
+    m = _bj_jw_f32(buf, m, x);
+    store8(buf + m, 44);
+    m = _bj_jw_f32(buf, m + 1, y);
+    store8(buf + m, 44);
+    m = _bj_jw_f32(buf, m + 1, z);
+    m = _bj_jw_cstr(buf, m, "],\"charge\":");
+    m = _bj_jw_f32(buf, m, q);
+    m = _bj_jw_cstr(buf, m, ",\"magnitude\":");
+    m = _bj_jw_f32(buf, m, a);
+    store8(buf + m, 125);
+    return m + 1;
+}
+
+# Appends `{"position":[x,y,z],"charge":<q>,"magnitude":<|q|>}` to the builder sb, each f32 as serde_json writes one:
+# the shortest digits that read back to the same f32 (`0.1`, not the widened 0.10000000149011612), `null` for NaN and
+# ±∞. Ok(0), or Err(BJ_ERR_ALLOCATION) with sb as it was. Mirrors `serde_json::to_string(&c)` for
+# `integration::soorat::ChargePoint`.
+#must_use
+public fn BjChargePoint_to_json(c: *BjChargePoint, sb): Result {
+    var buf[160];
+    var n = _bj_jw_charge(&buf, 0, c);
+    return _bj_jw_put(sb, &buf, n);
+}
+
+# Appends `{"charges":[{"position":..,"charge":..,"magnitude":..},..]}` to the builder sb, each of the charges_len
+# points as BjChargePoint_to_json writes it. Ok(0), or Err(BJ_ERR_ALLOCATION) with sb as it was. Mirrors
+# `serde_json::to_string(&v)` for `integration::soorat::ChargeVisualization`.
+#must_use
+public fn BjChargeVisualization_to_json(v: *BjChargeVisualization, sb): Result {
+    if (_bj_jw_count_ok(v.charges_len) == 0) { return Err(_bj_jw_nobuf()); }
+    var buf = _bj_jw_buf(192 + v.charges_len * 161);
+    if (buf == 0) { return Err(BJ_ERR_ALLOCATION); }
+    var cs: *BjChargePoint = _bj_jw_cpp(v.charges);
+    var n = _bj_jw_cstr(buf, 0, "{\"charges\":[");
+    for (var j = 0; j < v.charges_len; j = j + 1) {
+        if (j > 0) { n = _bj_jw_cstr(buf, n, ","); }
+        n = _bj_jw_charge(buf, n, cs + j);
+    }
+    n = _bj_jw_cstr(buf, n, "]}");
+    return _bj_jw_put_free(sb, buf, n);
+}
+
+# Appends `{"angles":[..],"pattern":[..],"max_gain":<g>}` to the builder sb, the angles_len angles and pattern_len
+# values as held. Ok(0), or Err(BJ_ERR_ALLOCATION) with sb as it was. Mirrors `serde_json::to_string(&p)` for
+# `integration::soorat::RadiationPattern`.
+#must_use
+public fn BjRadiationPattern_to_json(p: *BjRadiationPattern, sb): Result {
+    if (_bj_jw_count_ok(p.angles_len) == 0 || _bj_jw_count_ok(p.pattern_len) == 0) {
+        return Err(_bj_jw_nobuf());
+    }
+    var buf = _bj_jw_buf(96 + (p.angles_len + p.pattern_len) * 26);
+    if (buf == 0) { return Err(BJ_ERR_ALLOCATION); }
+    var n = _bj_jw_cstr(buf, 0, "{\"angles\":");
+    n = _bj_jw_f64_vec(buf, n, p.angles, p.angles_len);
+    n = _bj_jw_cstr(buf, n, ",\"pattern\":");
+    n = _bj_jw_f64_vec(buf, n, p.pattern, p.pattern_len);
+    n = _bj_jw_cstr(buf, n, ",\"max_gain\":");
+    n = _bj_jw_f64(buf, n, p.max_gain);
+    n = _bj_jw_cstr(buf, n, "}");
+    return _bj_jw_put_free(sb, buf, n);
+}
+
+# Appends `{"vectors":[[vx,vy,vz],..],"dimensions":[nx,ny,nz],"origin":[x,y,z],"spacing":<Δ>,"max_magnitude":<m>}` to
+# the builder sb, the vectors_len vectors and the other fields as held. Ok(0), or Err(BJ_ERR_ALLOCATION) with sb as it
+# was. Mirrors `serde_json::to_string(&v)` for `integration::soorat::VectorFieldSample`.
+#must_use
+public fn BjVectorFieldSample_to_json(v: *BjVectorFieldSample, sb): Result {
+    if (_bj_jw_count_ok(v.vectors_len) == 0) { return Err(_bj_jw_nobuf()); }
+    var buf = _bj_jw_buf(256 + v.vectors_len * 80);
+    if (buf == 0) { return Err(BJ_ERR_ALLOCATION); }
+    var dims: i64[3];
+    dims[0] = v.dimensions.0;
+    dims[1] = v.dimensions.1;
+    dims[2] = v.dimensions.2;
+    var o0: f64 = v.origin.0;
+    var o1: f64 = v.origin.1;
+    var o2: f64 = v.origin.2;
+    var n = _bj_jw_cstr(buf, 0, "{\"vectors\":");
+    n = _bj_jw_triples(buf, n, v.vectors, v.vectors_len);
+    n = _bj_jw_cstr(buf, n, ",\"dimensions\":");
+    n = _bj_jw_u64s(buf, n, &dims, 3);
+    n = _bj_jw_cstr(buf, n, ",\"origin\":");
+    n = _bj_jw_triple(buf, n, o0, o1, o2);
+    n = _bj_jw_cstr(buf, n, ",\"spacing\":");
+    n = _bj_jw_f64(buf, n, v.spacing);
+    n = _bj_jw_cstr(buf, n, ",\"max_magnitude\":");
+    n = _bj_jw_f64(buf, n, v.max_magnitude);
+    n = _bj_jw_cstr(buf, n, "}");
+    return _bj_jw_put_free(sb, buf, n);
+}
+
+# A reader's block of `bytes` bytes (at least 8), or 0 with Allocation recorded.
+fn _bj_jr_block(bytes): i64 {
+    var n = bytes;
+    if (n < 8) { n = 8; }
+    var b = fl_alloc(n);
+    if (b == 0) { _bj_tx_cstr(_bj_err_reason(BJ_ERR_ALLOCATION), "the JSON reader's array"); }
+    return b;
+}
+
+# Array node v of numbers (a `Vec<f64>`) into a new block: its address into w[0] and its n values' count into w[1].
+# 0, or the code recorded (w[0] then the block or 0, which the caller gives back).
+fn _bj_jr_f64_vec(v, w: *i64): i64 {
+    if (bayan_json_v_tag(v) != JTAG_ARR) { return _bj_jr_type(v, "a sequence"); }
+    var n = bayan_json_v_arr_len(v);
+    var b = _bj_jr_block(n * 8);
+    if (b == 0) { return BJ_ERR_ALLOCATION; }
+    w[0] = b;
+    w[1] = n;
+    return _bj_jr_f64_elems(v, n, b);
+}
+
+# Array node v of `[f64; 3]` (a `Vec<[f64; 3]>`) into a new block of 3n f64: its address into w[0], n into w[1]. 0, or
+# the code recorded (w[0] then the block or 0, which the caller gives back).
+fn _bj_jr_triples(v, w: *i64): i64 {
+    if (bayan_json_v_tag(v) != JTAG_ARR) { return _bj_jr_type(v, "a sequence"); }
+    var n = bayan_json_v_arr_len(v);
+    var b = _bj_jr_block(n * 24);
+    if (b == 0) { return BJ_ERR_ALLOCATION; }
+    w[0] = b;
+    w[1] = n;
+    for (var k = 0; k < n; k = k + 1) {
+        var c = _bj_jr_f64s(bayan_json_v_arr_get(v, k), 3, "an array of length 3", b + k * 24);
+        if (c != 0) { return c; }
+    }
+    return 0;
+}
+
+# Node v as a `[usize; k]` (k 2 or 3) into out[0..k]: an array of exactly k integers from 0 to 2^63 − 1 (_bj_jr_usize,
+# ADR 0002 row 36). 0, or the code recorded.
+fn _bj_jr_usizes(v, k, out): i64 {
+    var what = "an array of length 3";
+    if (k == 2) { what = "an array of length 2"; }
+    var c = _bj_jr_array(v, k, what);
+    if (c != 0) { return c; }
+    for (var j = 0; j < k; j = j + 1) {
+        c = _bj_jr_usize(bayan_json_v_arr_get(v, j), out + j * 8);
+        if (c != 0) { return c; }
+    }
+    return 0;
+}
+
+# String node v (a Rust `String`: JSON's escapes decoded, UTF-8) into a new block holding its bytes and a NUL: the
+# address into w[0], the byte count into w[1]. 0, or the code recorded.
+fn _bj_jr_string(v, w: *i64): i64 {
+    if (bayan_json_v_tag(v) != JTAG_STR) { return _bj_jr_type(v, "a string"); }
+    var s = bayan_json_v_str(v);
+    var n = str_len(s);
+    var b = _bj_jr_block(n + 1);
+    if (b == 0) { return BJ_ERR_ALLOCATION; }
+    memcpy(b, str_data(s), n);
+    store8(b + n, 0);
+    w[0] = b;
+    w[1] = n;
+    return 0;
+}
+
+# ── f32, rounded once (ADR 0002 row 45) ──────────────────────────────────────────────────────────────────────────────
+# A JSON number read into an f32 field is rounded once from its decimal value to the nearest f32, ties to even, as
+# serde_json's `float_roundtrip` feature reads it; bijli's build of serde_json, which lacks it, reads the f64 and then
+# casts it (`as f32`), rounding twice. Bayan's tree holds each number's correctly rounded f64 x, and the nearest f32 to
+# x is the nearest f32 to the number unless x lies exactly halfway between two f32 (or between f32::MAX and 2^128):
+# only then is the number itself compared with x, exactly, from the document's text.
+
+# The f32 quantum's exponent q (the gap between f32 values near x is 2^q, −149 ≤ q ≤ 104) when the finite double with
+# bits `bits` lies exactly halfway between two neighbouring f32 values, or between f32::MAX and 2^128; else 999.
+#must_use
+fn _bj_jr_f32_mid(bits): i64 {
+    var mag = bits & 0x7FFFFFFFFFFFFFFF;
+    var be = mag >> 52;
+    if (mag == 0 || be >= 1151) { return 999; }
+    var m = (mag & 0xFFFFFFFFFFFFF) | 0x10000000000000;
+    var er = be - 1075;
+    if (be == 0) {
+        m = mag;
+        er = 0 - 1074;
+    }
+    var q = er + 29;
+    if (q < 0 - 149) { q = 0 - 149; }
+    var sh = q - er;
+    if (sh > 53) { return 999; }
+    var low = m & ((1 << sh) - 1);
+    if (low != (1 << (sh - 1))) { return 999; }
+    return q;
+}
+
+# The number of number nodes met before node t in a document-order walk of node v, added to cnt[0]; 1 when t was met
+# (the walk stops there), else 0. A document's number nodes come in the order of its number tokens.
+fn _bj_jr_ord(v, t, cnt: *i64): i64 {
+    if (v == t) { return 1; }
+    var tag = bayan_json_v_tag(v);
+    if (tag == JTAG_INT || tag == JTAG_FLOAT) {
+        cnt[0] = cnt[0] + 1;
+        return 0;
+    }
+    if (tag == JTAG_ARR) {
+        var na = bayan_json_v_arr_len(v);
+        for (var k = 0; k < na; k = k + 1) {
+            if (_bj_jr_ord(bayan_json_v_arr_get(v, k), t, cnt) == 1) { return 1; }
+        }
+    } elif (tag == JTAG_OBJ) {
+        var no = bayan_json_v_obj_len(v);
+        for (var j = 0; j < no; j = j + 1) {
+            if (_bj_jr_ord(bayan_json_v_obj_val(v, j), t, cnt) == 1) { return 1; }
+        }
+    }
+    return 0;
+}
+
+# The offset of number token k (from 0, outside strings) in the well-formed JSON text [buf, buf + len), its end into
+# end[0], or −1.
+fn _bj_jr_num_tok(buf, len, k, end: *i64): i64 {
+    var seen = 0;
+    var i = 0;
+    while (i < len) {
+        var c = load8(buf + i);
+        if (c == 34) {
+            i = i + 1;
+            while (i < len && load8(buf + i) != 34) {
+                if (load8(buf + i) == 92) { i = i + 2; } else { i = i + 1; }
+            }
+            i = i + 1;
+        } elif (c == 45 || (c >= 48 && c <= 57)) {
+            var s = i;
+            while (i < len) {
+                var d = load8(buf + i);
+                if ((d >= 48 && d <= 57) || d == 46 || d == 101 || d == 69 || d == 43 || d == 45) { i = i + 1; }
+                else { break; }
+            }
+            if (seen == k) {
+                end[0] = i;
+                return s;
+            }
+            seen = seen + 1;
+        } else {
+            i = i + 1;
+        }
+    }
+    return 0 - 1;
+}
+
+# Digit q (from 0) of the digit run of a JSON number: its integer part's il digits at p, then its fraction's after
+# the point.
+#must_use
+fn _bj_jr_dig(p, il, q): i64 {
+    if (q < il) { return load8(p + q); }
+    return load8(p + q + 1);
+}
+
+# The sign of |the JSON number [p, p + n)| − mg·2^er (mg below 2^53, −202 ≤ er ≤ 104, an f32 halfway value): −1, 0
+# or 1, exactly, for a number of any length. The halfway value is X·10^sc with X an integer of L digits (fmtf's
+# bignum: mg·2^er, or mg·5^−er with sc = er); the number is 0.d₁d₂… × 10^kd once its leading zeros are dropped.
+fn _bj_jr_dec_cmp(p, n, mg, er): i64 {
+    var a[328];
+    _bj_bn_set(&a, mg);
+    var sc = 0;
+    if (er >= 0) { _bj_bn_shl(&a, er); }
+    else {
+        var k5 = 0 - er;
+        sc = er;
+        while (k5 >= 13) {
+            _bj_bn_mul_small(&a, 1220703125);
+            k5 = k5 - 13;
+        }
+        while (k5 > 0) {
+            _bj_bn_mul_small(&a, 5);
+            k5 = k5 - 1;
+        }
+    }
+    var rev[192];
+    var xl = 0;
+    while (load64(&a) != 0) {
+        var r = _bj_bn_divmod_small(&a, 1000000000);
+        for (var j = 0; j < 9; j = j + 1) {
+            store8(&rev + xl, 48 + r % 10);
+            r = r / 10;
+            xl = xl + 1;
+        }
+    }
+    while (xl > 0 && load8(&rev + xl - 1) == 48) { xl = xl - 1; }
+    var tz = 0;
+    while (tz < xl && load8(&rev + tz) == 48) { tz = tz + 1; }
+    var kx = xl + sc;
+    # The number's digit run: il integer digits, fl fraction digits, then an exponent (saturated far past any
+    # document's length).
+    var i = 0;
+    if (n > 0 && load8(p) == 45) { i = 1; }
+    var ds = p + i;
+    var il = 0;
+    while (i < n && load8(p + i) >= 48 && load8(p + i) <= 57) {
+        il = il + 1;
+        i = i + 1;
+    }
+    var fl = 0;
+    if (i < n && load8(p + i) == 46) {
+        i = i + 1;
+        while (i < n && load8(p + i) >= 48 && load8(p + i) <= 57) {
+            fl = fl + 1;
+            i = i + 1;
+        }
+    }
+    var ex = 0;
+    if (i < n && (load8(p + i) == 101 || load8(p + i) == 69)) {
+        i = i + 1;
+        var neg = 0;
+        if (i < n && (load8(p + i) == 43 || load8(p + i) == 45)) {
+            if (load8(p + i) == 45) { neg = 1; }
+            i = i + 1;
+        }
+        while (i < n && load8(p + i) >= 48 && load8(p + i) <= 57) {
+            if (ex < 2199023255552) { ex = ex * 10 + load8(p + i) - 48; }
+            i = i + 1;
+        }
+        if (neg == 1) { ex = 0 - ex; }
+    }
+    var nd = il + fl;
+    var z = 0;
+    while (z < nd && _bj_jr_dig(ds, il, z) == 48) { z = z + 1; }
+    if (z == nd) { return 0 - 1; }
+    var kd = il - z + ex;
+    if (kd < kx) { return 0 - 1; }
+    if (kd > kx) { return 1; }
+    for (var q = 0; q < nd - z; q = q + 1) {
+        var dd = _bj_jr_dig(ds, il, z + q);
+        var xd = 48;
+        if (q < xl - tz) { xd = load8(&rev + xl - 1 - q); }
+        if (dd < xd) { return 0 - 1; }
+        if (dd > xd) { return 1; }
+    }
+    if (nd - z < xl - tz) { return 0 - 1; }
+    return 0;
+}
+
+# The sign of |number node v| − |x| for the f32 halfway double x with bits `bits` (quantum 2^q), exactly: an integer
+# node against x's integer value, a float node from its token in the text cx[0], cx[1] bytes, whose root node is cx[2].
+fn _bj_jr_f32_side(cx: *i64, v, bits, q): i64 {
+    var mag = bits & 0x7FFFFFFFFFFFFFFF;
+    if (bayan_json_v_tag(v) == JTAG_INT) {
+        var iv = bayan_json_v_int(v);
+        if (iv < 0) { iv = 0 - iv; }
+        var xf: f64 = _bj_from_bits(mag);
+        var xi = f64_to(xf);
+        if (iv < xi) { return 0 - 1; }
+        if (iv > xi) { return 1; }
+        return 0;
+    }
+    var cnt: i64[1];
+    cnt[0] = 0;
+    _bj_jr_ord(cx[2], v, &cnt);
+    var e: i64[1];
+    var s = _bj_jr_num_tok(cx[0], cx[1], cnt[0], &e);
+    if (s < 0) { return 0; }
+    var be = mag >> 52;
+    var mg = (mag & 0xFFFFFFFFFFFFF) | 0x10000000000000;
+    return _bj_jr_dec_cmp(cx[0] + s, e[0] - s, mg, be - 1075);
+}
+
+# Number node v of the document cx (its text cx[0], cx[1] bytes; its root node cx[2]) as an f32 into *out, the f32
+# widened to f64 (exact): the number rounded once to the nearest f32, ties to even (ADR 0002 row 45). An integer reads
+# as serde reads one into an f32 (`n as f32`, rounded once); a number whose f32 overflows is refused, as serde_json's
+# float_roundtrip refuses one. 0, or BJ_ERR_DESERIALIZE recorded.
+fn _bj_jr_f32(cx: *i64, v, out): i64 {
+    var tag = bayan_json_v_tag(v);
+    if (tag != JTAG_INT && tag != JTAG_FLOAT) { return _bj_jr_type(v, "f32"); }
+    var bits = bayan_json_v_float(v);
+    var y: f64 = 0.0;
+    if ((bits & 0x7FF0000000000000) != 0x7FF0000000000000) {
+        var x: f64 = _bj_from_bits(bits);
+        var r: f32 = x;
+        y = f32_to(r);
+        var q = _bj_jr_f32_mid(bits);
+        if (q != 999) {
+            var side = _bj_jr_f32_side(cx, v, bits, q);
+            if (side != 0) {
+                var h: f64 = _bj_from_bits((q + 1022) << 52);
+                var ax: f64 = f64_abs(x);
+                var near: f64 = ax + h;
+                if (side < 0) { near = ax - h; }
+                if (x < 0.0) { near = -near; }
+                y = near;
+            }
+        }
+    }
+    var ay: f64 = f64_abs(y);
+    var top: f64 = _bj_from_bits(0x47F0000000000000);
+    if ((bits & 0x7FF0000000000000) == 0x7FF0000000000000 || ay >= top) {
+        var t = _bj_err_reason(BJ_ERR_DESERIALIZE);
+        _bj_tx_cstr(t, "number out of range");
+        return BJ_ERR_DESERIALIZE;
+    }
+    store64(out, _bj_bits(y));
+    return 0;
+}
+
+# ── soorat's readers ─────────────────────────────────────────────────────────────────────────────────────────────────
+
+# A field slice (nd 2) or volume (nd 3) node into the words at w, which are 0 on entry: w[0..2] the values' block and
+# count, w[2..4] the component's block and byte count, w[4] the step, w[5] the spacing's bits, w[6..6 + nd] the
+# dimensions and w[9..9 + nd] the origin's bits. 0, or the code recorded (the caller gives back w[0] and w[2]).
+fn _bj_jr_slice(v, w, nd): i64 {
+    var what = "struct FieldSlice2D";
+    var arr = "an array of length 2";
+    if (nd == 3) {
+        what = "struct FieldSlice3D";
+        arr = "an array of length 3";
+    }
+    var form = _bj_jr_form(v, 6, what);
+    if (form == 0) { return BJ_ERR_DESERIALIZE; }
+    var f = _bj_jr_field(v, form, 0, "values");
+    if (f == 0) { return BJ_ERR_DESERIALIZE; }
+    var c = _bj_jr_f64_vec(f, w);
+    if (c != 0) { return c; }
+    f = _bj_jr_field(v, form, 1, "dimensions");
+    if (f == 0) { return BJ_ERR_DESERIALIZE; }
+    c = _bj_jr_usizes(f, nd, w + 48);
+    if (c != 0) { return c; }
+    f = _bj_jr_field(v, form, 2, "origin");
+    if (f == 0) { return BJ_ERR_DESERIALIZE; }
+    c = _bj_jr_f64s(f, nd, arr, w + 72);
+    if (c != 0) { return c; }
+    f = _bj_jr_field(v, form, 3, "spacing");
+    if (f == 0) { return BJ_ERR_DESERIALIZE; }
+    c = _bj_jr_f64(f, w + 40);
+    if (c != 0) { return c; }
+    f = _bj_jr_field(v, form, 4, "component");
+    if (f == 0) { return BJ_ERR_DESERIALIZE; }
+    c = _bj_jr_string(f, w + 16);
+    if (c != 0) { return c; }
+    f = _bj_jr_field(v, form, 5, "step");
+    if (f == 0) { return BJ_ERR_DESERIALIZE; }
+    return _bj_jr_usize(f, w + 32);
+}
+
+fn _bj_jr_slice2(v, w): i64 {
+    return _bj_jr_slice(v, w, 2);
+}
+
+fn _bj_jr_slice3(v, w): i64 {
+    return _bj_jr_slice(v, w, 3);
+}
+
+# Gives back a reader's blocks a and b (each 0 or a block).
+fn _bj_jr_give(a, b) {
+    if (a != 0) { fl_free(a); }
+    if (b != 0) { fl_free(b); }
+    return 0;
+}
+
+# Word k's address in the word array p.
+#must_use
+fn _bj_jr_at(p, k): i64 {
+    return p + k * 8;
+}
+
+# The n words at w, zeroed.
+fn _bj_jr_zero(w: *i64, n) {
+    for (var k = 0; k < n; k = k + 1) { w[k] = 0; }
+    return 0;
+}
+
+# Reads a `FieldSlice2D` document from [buf, buf + len) into a new slice in *out: Ok(0), or the error recorded with
+# out untouched (and never read), as BjComplex_from_json. The fields are read as written, as serde's derive reads
+# Rust's public fields: any number of values (a count other than nx·ny too), the dimensions and step integers from 0
+# to 2^63 − 1 (ADR 0002 row 36: past it bayan's tree keeps no exact integer, where serde reads up to u64::MAX), the
+# component any JSON string. Give it back with BjFieldSlice2D_free. Mirrors `serde_json::from_str::<FieldSlice2D>`.
+#must_use
+public fn BjFieldSlice2D_from_json(buf, len, out: *BjFieldSlice2D): Result {
+    var w: i64[12];
+    _bj_jr_zero(&w, 12);
+    var code = _bj_jr_read(buf, len, &_bj_jr_slice2, &w);
+    if (code != 0) {
+        _bj_jr_give(w[0], w[2]);
+        return Err(code);
+    }
+    var sp: f64 = _bj_from_bits(w[5]);
+    var o0: f64 = _bj_from_bits(w[9]);
+    var o1: f64 = _bj_from_bits(w[10]);
+    out.values = w[0];
+    out.values_len = w[1];
+    out.dimensions = (w[6], w[7]);
+    out.origin = (o0, o1);
+    out.spacing = sp;
+    out.component = w[2];
+    out.component_len = w[3];
+    out.step = w[4];
+    return Ok(0);
+}
+
+# Reads a `FieldSlice3D` document from [buf, buf + len) into a new volume in *out: Ok(0), or the error recorded with
+# out untouched (and never read), as BjFieldSlice2D_from_json. Give it back with BjFieldSlice3D_free. Mirrors
+# `serde_json::from_str::<FieldSlice3D>`.
+#must_use
+public fn BjFieldSlice3D_from_json(buf, len, out: *BjFieldSlice3D): Result {
+    var w: i64[12];
+    _bj_jr_zero(&w, 12);
+    var code = _bj_jr_read(buf, len, &_bj_jr_slice3, &w);
+    if (code != 0) {
+        _bj_jr_give(w[0], w[2]);
+        return Err(code);
+    }
+    var sp: f64 = _bj_from_bits(w[5]);
+    var o0: f64 = _bj_from_bits(w[9]);
+    var o1: f64 = _bj_from_bits(w[10]);
+    var o2: f64 = _bj_from_bits(w[11]);
+    out.values = w[0];
+    out.values_len = w[1];
+    out.dimensions = (w[6], w[7], w[8]);
+    out.origin = (o0, o1, o2);
+    out.spacing = sp;
+    out.component = w[2];
+    out.component_len = w[3];
+    out.step = w[4];
+    return Ok(0);
+}
+
+# A FieldLine node into the BjFieldLine words at w (points, points_len, magnitudes, magnitudes_len), which are 0 on
+# entry: the points an array of `[f64; 3]`, the magnitudes of numbers, any lengths. 0, or the code recorded (the
+# caller gives back the blocks).
+fn _bj_jr_line(v, w): i64 {
+    var form = _bj_jr_form(v, 2, "struct FieldLine");
+    if (form == 0) { return BJ_ERR_DESERIALIZE; }
+    var f = _bj_jr_field(v, form, 0, "points");
+    if (f == 0) { return BJ_ERR_DESERIALIZE; }
+    var c = _bj_jr_triples(f, w);
+    if (c != 0) { return c; }
+    f = _bj_jr_field(v, form, 1, "magnitudes");
+    if (f == 0) { return BJ_ERR_DESERIALIZE; }
+    return _bj_jr_f64_vec(f, w + 16);
+}
+
+# A FieldLineVisualization node into w[0..2] (the lines' block and count, 0 on entry): the lines' block is zeroed
+# before any line is read, so BjFieldLineVisualization_free gives back whatever a failed read made.
+fn _bj_jr_lines(v, w: *i64): i64 {
+    var f = _bj_jr_only(v, "lines", "struct FieldLineVisualization");
+    if (f == 0) { return BJ_ERR_DESERIALIZE; }
+    if (bayan_json_v_tag(f) != JTAG_ARR) { return _bj_jr_type(f, "a sequence"); }
+    var n = bayan_json_v_arr_len(f);
+    var b = _bj_jr_block(n * 32);
+    if (b == 0) { return BJ_ERR_ALLOCATION; }
+    _bj_jr_zero(b, n * 4);
+    w[0] = b;
+    w[1] = n;
+    for (var k = 0; k < n; k = k + 1) {
+        var c = _bj_jr_line(bayan_json_v_arr_get(f, k), b + k * 32);
+        if (c != 0) { return c; }
+    }
+    return 0;
+}
+
+# Reads a `FieldLine` document from [buf, buf + len) into a new line in *out: Ok(0), or the error recorded with out
+# untouched (and never read), as BjComplex_from_json; any numbers of points and magnitudes. Give it back with
+# BjFieldLine_free. Mirrors `serde_json::from_str::<FieldLine>`.
+#must_use
+public fn BjFieldLine_from_json(buf, len, out: *BjFieldLine): Result {
+    var w: i64[4];
+    _bj_jr_zero(&w, 4);
+    var code = _bj_jr_read(buf, len, &_bj_jr_line, &w);
+    if (code != 0) {
+        _bj_jr_give(w[0], w[2]);
+        return Err(code);
+    }
+    out.points = w[0];
+    out.points_len = w[1];
+    out.magnitudes = w[2];
+    out.magnitudes_len = w[3];
+    return Ok(0);
+}
+
+# Reads a `FieldLineVisualization` document from [buf, buf + len) into a new visualization in *out: Ok(0), or the
+# error recorded with out untouched (and never read), as BjComplex_from_json; each line as BjFieldLine_from_json reads
+# it. Give it back with BjFieldLineVisualization_free. Mirrors `serde_json::from_str::<FieldLineVisualization>`.
+#must_use
+public fn BjFieldLineVisualization_from_json(buf, len, out: *BjFieldLineVisualization): Result {
+    var lv: BjFieldLineVisualization;
+    lv.lines = 0;
+    lv.lines_len = 0;
+    var code = _bj_jr_read(buf, len, &_bj_jr_lines, &lv);
+    if (code != 0) {
+        BjFieldLineVisualization_free(&lv);
+        return Err(code);
+    }
+    out.lines = lv.lines;
+    out.lines_len = lv.lines_len;
+    return Ok(0);
+}
+
+# A ChargePoint node of the document cx (_bj_jr_f32's) into the five f64 words at w (x, y, z, charge, magnitude), each
+# an f32 rounded once (_bj_jr_f32). 0, or the code recorded.
+fn _bj_jr_charge(cx: *i64, v, w): i64 {
+    var form = _bj_jr_form(v, 3, "struct ChargePoint");
+    if (form == 0) { return BJ_ERR_DESERIALIZE; }
+    var f = _bj_jr_field(v, form, 0, "position");
+    if (f == 0) { return BJ_ERR_DESERIALIZE; }
+    var c = _bj_jr_array(f, 3, "an array of length 3");
+    if (c != 0) { return c; }
+    for (var k = 0; k < 3; k = k + 1) {
+        c = _bj_jr_f32(cx, bayan_json_v_arr_get(f, k), w + k * 8);
+        if (c != 0) { return c; }
+    }
+    f = _bj_jr_field(v, form, 1, "charge");
+    if (f == 0) { return BJ_ERR_DESERIALIZE; }
+    c = _bj_jr_f32(cx, f, w + 24);
+    if (c != 0) { return c; }
+    f = _bj_jr_field(v, form, 2, "magnitude");
+    if (f == 0) { return BJ_ERR_DESERIALIZE; }
+    return _bj_jr_f32(cx, f, w + 32);
+}
+
+# The five f64 words at w (each an f32's value) into charge point c.
+fn _bj_jr_put_charge(c: *BjChargePoint, w: *i64) {
+    var x: f64 = _bj_from_bits(w[0]);
+    var y: f64 = _bj_from_bits(w[1]);
+    var z: f64 = _bj_from_bits(w[2]);
+    var q: f64 = _bj_from_bits(w[3]);
+    var a: f64 = _bj_from_bits(w[4]);
+    c.position_x = x;
+    c.position_y = y;
+    c.position_z = z;
+    c.charge = q;
+    c.magnitude = a;
+    return 0;
+}
+
+# The ChargePoint decoder: cx[0..2] the text, cx[2] the root (set here), cx[3..8] the five values.
+fn _bj_jr_charge1(v, cx): i64 {
+    store64(cx + 16, v);
+    return _bj_jr_charge(cx, v, cx + 24);
+}
+
+# The ChargeVisualization decoder: cx[0..2] the text, cx[2] the root (set here), cx[3..5] the points' block and count
+# (0 on entry; the caller gives the block back on a failure).
+fn _bj_jr_charges(v, cx: *i64): i64 {
+    cx[2] = v;
+    var f = _bj_jr_only(v, "charges", "struct ChargeVisualization");
+    if (f == 0) { return BJ_ERR_DESERIALIZE; }
+    if (bayan_json_v_tag(f) != JTAG_ARR) { return _bj_jr_type(f, "a sequence"); }
+    var n = bayan_json_v_arr_len(f);
+    var b = _bj_jr_block(n * 20);
+    if (b == 0) { return BJ_ERR_ALLOCATION; }
+    cx[3] = b;
+    cx[4] = n;
+    var cs: *BjChargePoint = _bj_jw_cpp(b);
+    var w: i64[5];
+    for (var k = 0; k < n; k = k + 1) {
+        var c = _bj_jr_charge(cx, bayan_json_v_arr_get(f, k), &w);
+        if (c != 0) { return c; }
+        _bj_jr_put_charge(cs + k, &w);
+    }
+    return 0;
+}
+
+# Reads a `ChargePoint` document from [buf, buf + len) into *out: Ok(0), or the error recorded with out untouched, as
+# BjComplex_from_json. Each value is rounded once to the nearest f32, ties to even, as serde_json's float_roundtrip
+# reads one (ADR 0002 row 45: bijli's build of serde_json reads the f64, then casts it, rounding twice), and refused
+# where that overflows (1e39); an integer as `n as f32`. The magnitude is read as written, not |charge|. Mirrors
+# `serde_json::from_str::<ChargePoint>`.
+#must_use
+public fn BjChargePoint_from_json(buf, len, out: *BjChargePoint): Result {
+    var cx: i64[8];
+    _bj_jr_zero(&cx, 8);
+    cx[0] = buf;
+    cx[1] = len;
+    var code = _bj_jr_read(buf, len, &_bj_jr_charge1, &cx);
+    if (code != 0) { return Err(code); }
+    _bj_jr_put_charge(out, _bj_jr_at(&cx, 3));
+    return Ok(0);
+}
+
+# Reads a `ChargeVisualization` document from [buf, buf + len) into a new visualization in *out: Ok(0), or the error
+# recorded with out untouched (and never read), as BjComplex_from_json; each point as BjChargePoint_from_json reads
+# it. Give it back with BjChargeVisualization_free. Mirrors `serde_json::from_str::<ChargeVisualization>`.
+#must_use
+public fn BjChargeVisualization_from_json(buf, len, out: *BjChargeVisualization): Result {
+    var cx: i64[5];
+    _bj_jr_zero(&cx, 5);
+    cx[0] = buf;
+    cx[1] = len;
+    var code = _bj_jr_read(buf, len, &_bj_jr_charges, &cx);
+    if (code != 0) {
+        _bj_jr_give(cx[3], 0);
+        return Err(code);
+    }
+    out.charges = cx[3];
+    out.charges_len = cx[4];
+    return Ok(0);
+}
+
+# A RadiationPattern node into the words at w (0 on entry): w[0..2] the angles' block and count, w[2..4] the pattern's,
+# w[4] max_gain's bits. Any lengths; the gain as written. 0, or the code recorded (the caller gives back the blocks).
+fn _bj_jr_pattern(v, w): i64 {
+    var form = _bj_jr_form(v, 3, "struct RadiationPattern");
+    if (form == 0) { return BJ_ERR_DESERIALIZE; }
+    var f = _bj_jr_field(v, form, 0, "angles");
+    if (f == 0) { return BJ_ERR_DESERIALIZE; }
+    var c = _bj_jr_f64_vec(f, w);
+    if (c != 0) { return c; }
+    f = _bj_jr_field(v, form, 1, "pattern");
+    if (f == 0) { return BJ_ERR_DESERIALIZE; }
+    c = _bj_jr_f64_vec(f, w + 16);
+    if (c != 0) { return c; }
+    f = _bj_jr_field(v, form, 2, "max_gain");
+    if (f == 0) { return BJ_ERR_DESERIALIZE; }
+    return _bj_jr_f64(f, w + 32);
+}
+
+# Reads a `RadiationPattern` document from [buf, buf + len) into a new pattern in *out: Ok(0), or the error recorded
+# with out untouched (and never read), as BjComplex_from_json. The fields are read as written: angles and pattern of
+# any lengths, a max_gain that isn't their maximum too. Give it back with BjRadiationPattern_free. Mirrors
+# `serde_json::from_str::<RadiationPattern>`.
+#must_use
+public fn BjRadiationPattern_from_json(buf, len, out: *BjRadiationPattern): Result {
+    var w: i64[5];
+    _bj_jr_zero(&w, 5);
+    var code = _bj_jr_read(buf, len, &_bj_jr_pattern, &w);
+    if (code != 0) {
+        _bj_jr_give(w[0], w[2]);
+        return Err(code);
+    }
+    var g: f64 = _bj_from_bits(w[4]);
+    out.angles = w[0];
+    out.angles_len = w[1];
+    out.pattern = w[2];
+    out.pattern_len = w[3];
+    out.max_gain = g;
+    return Ok(0);
+}
+
+# A VectorFieldSample node into the words at w (0 on entry): w[0..2] the vectors' block and count, w[2..5] the
+# dimensions, w[5..8] the origin's bits, w[8] the spacing's and w[9] max_magnitude's. 0, or the code recorded (the
+# caller gives back the block).
+fn _bj_jr_vectors(v, w): i64 {
+    var form = _bj_jr_form(v, 5, "struct VectorFieldSample");
+    if (form == 0) { return BJ_ERR_DESERIALIZE; }
+    var f = _bj_jr_field(v, form, 0, "vectors");
+    if (f == 0) { return BJ_ERR_DESERIALIZE; }
+    var c = _bj_jr_triples(f, w);
+    if (c != 0) { return c; }
+    f = _bj_jr_field(v, form, 1, "dimensions");
+    if (f == 0) { return BJ_ERR_DESERIALIZE; }
+    c = _bj_jr_usizes(f, 3, w + 16);
+    if (c != 0) { return c; }
+    f = _bj_jr_field(v, form, 2, "origin");
+    if (f == 0) { return BJ_ERR_DESERIALIZE; }
+    c = _bj_jr_f64s(f, 3, "an array of length 3", w + 40);
+    if (c != 0) { return c; }
+    f = _bj_jr_field(v, form, 3, "spacing");
+    if (f == 0) { return BJ_ERR_DESERIALIZE; }
+    c = _bj_jr_f64(f, w + 64);
+    if (c != 0) { return c; }
+    f = _bj_jr_field(v, form, 4, "max_magnitude");
+    if (f == 0) { return BJ_ERR_DESERIALIZE; }
+    return _bj_jr_f64(f, w + 72);
+}
+
+# Reads a `VectorFieldSample` document from [buf, buf + len) into a new sample in *out: Ok(0), or the error recorded
+# with out untouched (and never read), as BjComplex_from_json. The fields are read as written (a vector count other
+# than nx·ny·nz, a spacing or origin try_from_components refuses, a max_magnitude that isn't the largest too), the
+# dimensions from 0 to 2^63 − 1 (ADR 0002 row 36). Give it back with BjVectorFieldSample_free. Mirrors
+# `serde_json::from_str::<VectorFieldSample>`.
+#must_use
+public fn BjVectorFieldSample_from_json(buf, len, out: *BjVectorFieldSample): Result {
+    var w: i64[10];
+    _bj_jr_zero(&w, 10);
+    var code = _bj_jr_read(buf, len, &_bj_jr_vectors, &w);
+    if (code != 0) {
+        _bj_jr_give(w[0], 0);
+        return Err(code);
+    }
+    var o0: f64 = _bj_from_bits(w[5]);
+    var o1: f64 = _bj_from_bits(w[6]);
+    var o2: f64 = _bj_from_bits(w[7]);
+    var sp: f64 = _bj_from_bits(w[8]);
+    var mm: f64 = _bj_from_bits(w[9]);
+    out.vectors = w[0];
+    out.vectors_len = w[1];
+    out.dimensions = (w[2], w[3], w[4]);
+    out.origin = (o0, o1, o2);
+    out.spacing = sp;
+    out.max_magnitude = mm;
     return Ok(0);
 }

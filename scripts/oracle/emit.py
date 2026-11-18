@@ -13,7 +13,9 @@ Usage, from the repo root:
 """
 import math
 import platform
+import struct
 import sys
+from fractions import Fraction
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
@@ -896,6 +898,265 @@ def emit_1b(rows):
             abs(draw(-6.0, 0.0)))
 
 
+def dec_text(q: Fraction) -> str:
+    """The exact decimal text of q, whose denominator is 2^a·5^b (so its expansion ends)."""
+    neg, q, k = q < 0, abs(q), 0
+    while q.denominator != 1:
+        q, k = q * 10, k + 1
+    digits = str(q.numerator)
+    if k:
+        digits = digits.rjust(k + 1, "0")
+        digits = digits[:-k] + "." + digits[-k:]
+    return ("-" if neg else "") + digits
+
+
+def emit_1b2(rows):
+    """M7 part 1b-2: the eight soorat structs' JSON (class A), their outputs validate.py's soorat_json_eval. Writers:
+    each struct's fields (f64 at every edge, NaN and ±∞ as null; usize words to 2^64 − 1; components with every escape
+    serde_json writes and raw UTF-8; f32 at the binades' edges, the ties zmij breaks to even, a seeded sweep). Readers:
+    the writers' documents back, serde's two struct forms, unknown and missing fields, wrong types and lengths, ADR 0002
+    row 12's documents and row 36's counts past 2^63 − 1, and f32 numbers rounded once (row 45): f32 halfway values
+    written exactly, a hair either side, at 17 digits and at 800, integers past 2^53, overflow by a hair."""
+    inf, nan = math.inf, math.nan
+    mx, tiny = sys.float_info.max, 5e-324
+    F = V.JSON_FIELDS
+
+    def flat(ty, val, toks):
+        if ty in ("f64", "f32"):
+            toks.append(f(val))
+        elif ty == "usize":
+            toks.append(u(val))
+        elif ty == "string":
+            toks.append(("s", val))
+        elif isinstance(ty, tuple) and ty[0] == "vec":
+            toks.append(i(len(val)))
+            for e in val:
+                flat(ty[1], e, toks)
+        elif isinstance(ty, tuple):
+            for e in val:
+                flat(ty[2], e, toks)
+        else:
+            for (_name, fty), e in zip(F[ty], val):
+                flat(fty, e, toks)
+
+    def num(ty, x):
+        if ty == "f32":
+            return V.f32_serde_text(x)
+        if not math.isfinite(x):
+            return "null"
+        return repr(x)
+
+    def text(ty, val):
+        """The struct's document as serde_json writes it (each number in Python's or f32_shortest's notation)."""
+        if ty in ("f64", "f32"):
+            return num(ty, val)
+        if ty == "usize":
+            return str(val)
+        if ty == "string":
+            return V.serde_json_str(val)
+        if isinstance(ty, tuple):
+            ety = ty[1] if ty[0] == "vec" else ty[2]
+            return "[" + ",".join(text(ety, e) for e in val) + "]"
+        return "{" + ",".join(f'"{name}":{text(fty, e)}' for (name, fty), e in zip(F[ty], val)) + "}"
+
+    def put(kind, val, back=True):
+        toks = []
+        flat(kind, val, toks)
+        fn = f"json::{kind}::to_string"
+        rows.emit(fn, "A", toks, V.soorat_json_eval(fn, toks))
+        if back:
+            read(kind, text(kind, val))
+
+    def read(kind, doc):
+        fn = f"json::{kind}::from_str"
+        ins = [("s", doc)]
+        rows.emit(fn, "A", ins, V.soorat_json_eval(fn, ins))
+
+    rng = Rng(0x7B_52)
+
+    def draw(lo=-320.0, hi=308.0):
+        x = rng.log_uniform(lo, hi)
+        return -x if rng.unit() < 0.5 else x
+
+    def f32_bits(b):
+        return struct.unpack("<f", struct.pack("<I", b))[0]
+
+    special = [0.0, -0.0, 1.0, -2.5, 0.1, 1e-7, 1e16, 1e300, -1e-300, tiny, -tiny, mx, -mx, 2.2250738585072014e-308,
+               1.602176634e-19, 299792458.0, inf, -inf, nan]
+    comps = ["Ez", "Tm_z", "Te_x", "ex", "", "a\"b\\c/d", "\n\t\r\x08\x0c", "\x00\x01\x1f\x7f", "\u00e9\u2028\u2029",
+             "\U0001f600 hz", "\ufeffez", "\u0085\u00a0", "e\u0301", "{\"k\":[1,2]}", "123", "-0.5e3", "\\u0041",
+             "x" * 40]
+    # FieldSlice2D and FieldSlice3D: Rust's two tests' slices, then the fields at their edges.
+    put("FieldSlice2D", ([0.0] * 4, (2, 2), (0.0, 0.0), 1.0, "Ez", 0))
+    put("FieldSlice3D", ([0.0] * 8, (2, 2, 2), (0.0, 0.0, 0.0), 0.5, "ex", 10))
+    for c in comps:
+        put("FieldSlice2D", ([1.5, -0.25], (2, 1), (0.0, 0.0), 0.01, c, 3))
+        put("FieldSlice3D", ([2.0], (1, 1, 1), (0.0, -1.0, 2.0), 1e-3, c, 7))
+    for j in range(0, len(special), 4):
+        vals = special[j:j + 4]
+        put("FieldSlice2D", (vals, (len(vals), 1), (special[j], special[-1 - j]), special[(j + 1) % len(special)],
+                             "Tm_z", j))
+        put("FieldSlice3D", (vals, (1, len(vals), 1), (special[j], 0.5, special[-1 - j]),
+                             special[(j + 2) % len(special)], "hy", j * 1000))
+    for dims, step in (((0, 0), 0), (((1 << 64) - 1, 1 << 63), (1 << 64) - 1), (((1 << 63) - 1, 1), (1 << 63) - 1),
+                       ((10 ** 18, 3), 10 ** 19)):
+        put("FieldSlice2D", ([], dims, (0.0, 0.0), 1.0, "fz", step))
+        put("FieldSlice3D", ([], (dims[0], dims[1], 2), (0.0, 0.0, 0.0), 1.0, "ez", step))
+    for _ in range(6):
+        n = rng.int(0, 12)
+        put("FieldSlice2D", ([draw() for _ in range(n)], (n, 1), (draw(-5, 5), draw(-5, 5)), abs(draw(-6, 0)),
+                             "Tm_z", rng.int(0, 10 ** 6)))
+        put("FieldSlice3D", ([draw() for _ in range(n)], (1, 1, n), (draw(-5, 5), draw(-5, 5), draw(-5, 5)),
+                             abs(draw(-6, 0)), "ez", rng.int(0, 10 ** 6)))
+    # FieldLine and FieldLineVisualization: Rust's test's line, then empty, uneven and edge lines.
+    rust_line = ([(0.0, 0.0, 0.0), (1.0, 0.0, 0.0), (2.0, 0.5, 0.0)], [1.0, 0.8, 0.5])
+    lines = [rust_line, ([], []), ([(1.0, 2.0, 3.0)], []), ([], [0.5, 0.25]),
+             ([(special[j], special[j + 1], special[j + 2]) for j in range(0, len(special) - 2, 3)], special[:7])]
+    for _ in range(4):
+        n = rng.int(1, 8)
+        lines.append(([(draw(), draw(), draw()) for _ in range(n)], [abs(draw()) for _ in range(n)]))
+    for ln in lines:
+        put("FieldLine", ln)
+    put("FieldLineVisualization", ([rust_line],))
+    put("FieldLineVisualization", ([],))
+    put("FieldLineVisualization", (lines,))
+    put("FieldLineVisualization", (lines[1:4],))
+    # ChargePoint and ChargeVisualization: f32 at the edges, the ties, then a seeded sweep of bit patterns.
+    f32s = [0.0, -0.0, 1.0, -1.0, 0.1, -0.1, 0.5, 3.0, 16777216.0, 16777218.0, 2097152.25, 2097152.75, -2097153.25,
+            1e-6, 1e-7, 9.99999e-7, 1e12, 1e13, 9.99999e12, 3.4028234663852886e38, -3.4028234663852886e38,
+            1.1754943508222875e-38, 1.1754942106924411e-38, 2.0 ** -149, -(2.0 ** -149), 2.0 ** -148, 2.0 ** -127,
+            1.602176634e-19, 8.854187812800001e-12, 299792458.0, 6.02214076e23, inf, -inf, nan]
+    f32s = [V.f32_round(x) for x in f32s]
+    for b in (0x00000001, 0x007FFFFF, 0x00800000, 0x00800001, 0x7F7FFFFF, 0x7F7FFFFE, 0x3F800001, 0x3F7FFFFF,
+              0x4B000001, 0x4AFFFFFF, 0x33800000, 0x2F800000, 0x5F000000, 0x1E3CE508, 0x56B5E621):
+        f32s.append(f32_bits(b))
+    for _ in range(200):
+        b = rng.bits() & 0xFFFFFFFF
+        if (b >> 23) & 0xFF != 0xFF:
+            f32s.append(f32_bits(b))
+    cps = []
+    for j in range(0, len(f32s), 5):
+        q = (f32s[j:j + 5] + [0.25] * 5)[:5]
+        cps.append(((q[0], q[1], q[2]), q[3], q[4]))
+    for cp in cps:
+        put("ChargePoint", cp)
+    put("ChargeVisualization", ([],))
+    put("ChargeVisualization", (cps[:1],))
+    put("ChargeVisualization", (cps[:7],))
+    put("ChargeVisualization", (cps,))
+    # RadiationPattern.
+    for ang, pat, g in (([], [], 0.0), ([0.0, 1.5707963267948966, math.pi], [1.0, 0.5, 0.1], 1.0),
+                        ([0.0, 1.0], [nan, inf], -0.0), ([1.0], [], nan), ([], [2.0, -0.0], inf),
+                        (special[:10], special[9:], mx)):
+        put("RadiationPattern", (ang, pat, g))
+    for _ in range(4):
+        n = rng.int(1, 30)
+        put("RadiationPattern", ([draw(-3, 1) for _ in range(n)], [abs(draw(-20, 5)) for _ in range(n)],
+                                 abs(draw(-20, 5))))
+    # VectorFieldSample.
+    put("VectorFieldSample", ([(1.0, 0.0, 0.0), (0.0, 1.0, 0.0)], (2, 1, 1), (0.0, 0.0, 0.0), 1.0, 1.0))
+    put("VectorFieldSample", ([], (0, 0, 0), (0.0, 0.0, 0.0), 1.0, 0.0))
+    put("VectorFieldSample", ([(special[j], special[-1 - j], special[(3 * j) % 19]) for j in range(19)],
+                              ((1 << 64) - 1, 1 << 63, (1 << 63) - 1), (nan, inf, -0.0), -inf, nan))
+    for _ in range(4):
+        n = rng.int(1, 6)
+        put("VectorFieldSample", ([(draw(), draw(), draw()) for _ in range(n)], (n, 1, 1),
+                                  (draw(-5, 5), draw(-5, 5), draw(-5, 5)), abs(draw(-6, 0)), abs(draw())))
+
+    # ── readers beyond the round trips ──
+    good2 = '{"values":[1.0,2.0],"dimensions":[2,1],"origin":[0.0,0.0],"spacing":1.0,"component":"Ez","step":4}'
+    docs2 = [good2, '[[1.0,2.0],[2,1],[0.0,0.0],1.0,"Ez",4]', ' \n\t' + good2 + '\r ',
+             good2[:-1] + ',"extra":{"deep":[1,[2,{"x":null}]],"s":"\\ud83d\\ude00"}}',
+             '{"step":4,"component":"Ez","spacing":1.0,"origin":[0.0,0.0],"dimensions":[2,1],"values":[]}',
+             good2.replace('"step":4', '"step":18446744073709551615'),
+             good2.replace('"step":4', '"step":9223372036854775807'),
+             good2.replace('"step":4', '"step":9223372036854775808'),
+             good2.replace('"step":4', '"step":-1'), good2.replace('"step":4', '"step":4.0'),
+             good2.replace('"step":4', '"step":4e0'), good2.replace('"step":4', '"step":"4"'),
+             good2.replace('"step":4', '"step":-0'),
+             good2.replace('"dimensions":[2,1]', '"dimensions":[2,1,1]'),
+             good2.replace('"dimensions":[2,1]', '"dimensions":[2]'),
+             good2.replace('"dimensions":[2,1]', '"dimensions":{"0":2,"1":1}'),
+             good2.replace('"origin":[0.0,0.0]', '"origin":[0.0,null]'),
+             good2.replace('"origin":[0.0,0.0]', '"origin":[-0,1e-400]'),
+             good2.replace('"origin":[0.0,0.0]', '"origin":[1e308,1.8e308]'),
+             good2.replace('"values":[1.0,2.0]', '"values":[1,-0,1e-320,123456789012345678901234567890]'),
+             good2.replace('"values":[1.0,2.0]', '"values":1.0'), good2.replace('"values":[1.0,2.0]', '"values":null'),
+             good2.replace('"values":[1.0,2.0]', '"values":[true]'),
+             good2.replace('"component":"Ez"', '"component":"\\u0000E\\u007f\\u00e9\\ud83d\\ude00\\/\\b"'),
+             good2.replace('"component":"Ez"', '"component":"\\ud800"'),
+             good2.replace('"component":"Ez"', '"component":"\\udc00x"'),
+             good2.replace('"component":"Ez"', '"component":42'),
+             good2.replace('"component":"Ez"', '"component":null'),
+             good2.replace('"component":"Ez"', '"component":["E","z"]'),
+             good2.replace('"component":"Ez"', '"component":"E\tz"'),
+             good2.replace(',"step":4', ''), good2.replace('"values":[1.0,2.0],', ''),
+             good2[:-1] + ',"step":5}', good2[:-1] + ',"extra":1,"extra":2}',
+             '[[1.0],[2,1],[0.0,0.0],1.0,"Ez"]', '[[1.0],[2,1],[0.0,0.0],1.0,"Ez",4,5]', '"Ez"', 'null', '[]', '{}',
+             good2 + ' x', good2[:-3], '{"values":' + '[' * 130 + ']' * 130 + '}',
+             good2[:-1] + ',"deep":' + '[' * 130 + ']' * 130 + '}',
+             good2[:-1] + ',"deep":' + '[' * 100 + ']' * 100 + '}']
+    for d in docs2:
+        read("FieldSlice2D", d)
+        read("FieldSlice3D", d.replace("[2,1]", "[2,1,1]").replace("[0.0,0.0]", "[0.0,0.0,0.0]"))
+    for d in ('{"points":[],"magnitudes":[]}', '[[[1,2,3]],[4]]', '{"points":[[1,2]],"magnitudes":[]}',
+              '{"points":[[1,2,3,4]],"magnitudes":[]}', '{"points":[1,2,3],"magnitudes":[]}',
+              '{"points":[[1,2,3]],"magnitudes":[1,"2"]}', '{"points":[[1,2,3]]}', '{"magnitudes":[1]}',
+              '{"points":[[1e400,2,3]],"magnitudes":[]}', '{"points":[[1,2,3]],"magnitudes":[],"magnitudes":[]}'):
+        read("FieldLine", d)
+        read("FieldLineVisualization", '{"lines":[' + d + ']}')
+    for d in ('{"lines":[]}', '[[]]', '{"lines":{}}', '{"lines":null}', '{}', '{"lines":[[[[0,0,0]],[1]],[[],[]]]}',
+              '{"lines":[{"points":[],"magnitudes":[]},{"points":[[1,2]],"magnitudes":[]}]}'):
+        read("FieldLineVisualization", d)
+    for d in ('{"angles":[],"pattern":[],"max_gain":0}', '[[1],[2],3]', '{"angles":[1],"pattern":[2]}',
+              '{"angles":[1],"pattern":[2],"max_gain":null}', '{"angles":[1],"pattern":[2],"max_gain":"1"}',
+              '{"angles":[1],"pattern":{"a":2},"max_gain":1}', '{"angles":[1],"pattern":[2],"max_gain":-0}'):
+        read("RadiationPattern", d)
+    goodv = '{"vectors":[[1,0,0]],"dimensions":[1,1,1],"origin":[0,0,0],"spacing":1,"max_magnitude":1}'
+    for d in (goodv, '[[[1,0,0]],[1,1,1],[0,0,0],1,1]', goodv.replace('[1,1,1]', '[1,1]'),
+              goodv.replace('[1,1,1]', '[18446744073709551615,1,1]'), goodv.replace('[1,1,1]', '[1,-1,1]'),
+              goodv.replace('[[1,0,0]]', '[[1,0]]'), goodv.replace('"spacing":1', '"spacing":1e-400'),
+              goodv.replace('"max_magnitude":1', '"max_magnitude":true')):
+        read("VectorFieldSample", d)
+    # f32 readings, rounded once (ADR 0002 row 45).
+    fx = []
+    for b in (0x3F800000, 0x3F800001, 0x4B800000, 0x4B800001, 0x7F7FFFFF, 0x7F7FFFFE, 0x00000000, 0x00000001,
+              0x00000002, 0x007FFFFF, 0x00800000, 0x3DCCCCCD, 0x5A000000, 0x5E800000):
+        lo = Fraction(f32_bits(b))
+        hi = Fraction(f32_bits(b + 1)) if b != 0x7F7FFFFF else Fraction(2) ** 128
+        fx.append((lo + hi) / 2)
+    for _ in range(40):
+        b = rng.bits() & 0x7F7FFFFE
+        fx.append((Fraction(f32_bits(b)) + Fraction(f32_bits(b + 1))) / 2)
+    texts = []
+    for m in fx:
+        exact = dec_text(m)
+        texts += [exact, exact + "1", dec_text(m - Fraction(1, 10 ** 60) * m), repr(float(m)),
+                  "-" + repr(float(m)), dec_text(m + m / 10 ** 30)]
+    texts += ["16777217", "16777219", "-16777217", "33554434", "33554438", "9007199791611905", "9007199791611904",
+              "-9007199791611905", "9223372036854775807", "-9223372036854775808", "18446744073709551615",
+              "36893488147419103232", "340282356779733661637539395458142568448",
+              "340282356779733661637539395458142568447", "340282356779733661637539395458142568449",
+              "3.4028235677973366e38", "3.4028235677973367e38",
+              "3.4028234663852886e38", "3.4028236e38", "1e39", "-1e39", "1e400", "1e-46", "7.006492321624085e-46",
+              "7.006492321624086e-46", "-7.006492321624085e-46", "1e-400", "-0", "-0.0", "0e5", "0.000", "1E-45",
+              "1.0000000596046448", "1.00000005960464477539", "1.000000059604644775390625",
+              "1.000000059604644775390625000000000000000000000000000000000000001",
+              "0." + "0" * 800 + "1e801", "1" + "0" * 400 + "e-400", "1.5e-45", "2.1019476964872256e-45"]
+    for t in texts:
+        read("ChargePoint", '{"position":[' + t + ',0,0],"charge":' + t + ',"magnitude":1}')
+    for d in ('[[1,2,3],4,5]', '{"position":[1,2],"charge":1,"magnitude":1}', '{"position":[1,2,3],"charge":1}',
+              '{"position":[1,2,3],"charge":"1","magnitude":1}', '{"position":[1,2,3],"charge":null,"magnitude":1}',
+              '{"position":{"x":1},"charge":1,"magnitude":1}',
+              '{"charge":1,"magnitude":1,"position":[1,2,3],"x":[1e999]}'):
+        read("ChargePoint", d)
+    for d in ('{"charges":[]}', '[[[[1,2,3],4,5]]]', '{"charges":[{"position":[0.1,0.2,0.3],"charge":-1e-19,'
+              '"magnitude":1e-19},[[1,2,3],1.0000000596046448,3.4028235677973366e38]]}',
+              '{"charges":[[[1,2,3],1e39,1]]}', '{"charges":[1]}', '{"charges":{}}',
+              '{"charges":[[[1,2,3],1,1]],"note":"1.0000000596046448"}'):
+        read("ChargeVisualization", d)
+
+
 # ── modules ─────────────────────────────────────────────────────────────────────────────────────────────────────────
 
 def new_header(name):
@@ -935,7 +1196,7 @@ def main() -> int:
              lambda r: emit_4a(r, model2, model3, model_gpu), lambda r: emit_4b(r, model2, model3),
              lambda r: emit_4c(r, model2, model_gpu), lambda r: emit_4d(r, model3),
              lambda r: emit_4e(r, model2, model3), lambda r: emit_4f(r, model2, model3, model_gpu)]
-    for name, parts in (("fdtd_2d3d", parts), ("bridge", [emit_1a]), ("soorat", [emit_1b])):
+    for name, parts in (("fdtd_2d3d", parts), ("bridge", [emit_1a]), ("soorat", [emit_1b, emit_1b2])):
         path, text, n = module(name, parts)
         big = V.too_big(f"tests/golden/{name}.tsv", text)
         if big:

@@ -4834,9 +4834,393 @@ fn _par_so_values(p, n) {
     return 0;
 }
 
+# ── soorat's JSON (M7 part 1b-2) ──
+# A writer row's inputs are the struct's fields in declaration order (a Vec its count, then its elements; an array its
+# elements; an f32 its value; a String its s: bytes); a reader row's outputs the same, or E:Deserialize. _par_sj_at is
+# the next input token.
+var _par_sj_at = 0;
+
+# The next input token's word.
+fn _par_sj_next(): i64 {
+    var w = _par_in(_par_sj_at);
+    _par_sj_at = _par_sj_at + 1;
+    return w;
+}
+
+# A block of the next n input words (f64 bits), n ≥ 0.
+fn _par_sj_words(n): i64 {
+    var b = alloc(n * 8 + 8);
+    for (var k = 0; k < n; k = k + 1) { store64(b + k * 8, _par_sj_next()); }
+    return b;
+}
+
+# The n words at p to the got list as f64.
+fn _par_sj_got_words(p, n) {
+    for (var k = 0; k < n; k = k + 1) { _par_got_f(load64(p + k * 8)); }
+    return 0;
+}
+
+# A BjFieldLine from the next input tokens into *l.
+fn _par_sj_in_line(l: *BjFieldLine) {
+    var np = _par_sj_next();
+    l.points = _par_sj_words(3 * np);
+    l.points_len = np;
+    var nm = _par_sj_next();
+    l.magnitudes = _par_sj_words(nm);
+    l.magnitudes_len = nm;
+    return 0;
+}
+
+# A BjFieldLine to the got list.
+fn _par_sj_got_line(l: *BjFieldLine) {
+    _par_got_i(l.points_len);
+    _par_sj_got_words(l.points, 3 * l.points_len);
+    _par_got_i(l.magnitudes_len);
+    _par_sj_got_words(l.magnitudes, l.magnitudes_len);
+    return 0;
+}
+
+# A BjChargePoint from the next five input tokens (each an f32's value) into *c.
+fn _par_sj_in_charge(c: *BjChargePoint) {
+    var x: f64 = _par_sj_next();
+    var y: f64 = _par_sj_next();
+    var z: f64 = _par_sj_next();
+    var q: f64 = _par_sj_next();
+    var a: f64 = _par_sj_next();
+    c.position_x = x;
+    c.position_y = y;
+    c.position_z = z;
+    c.charge = q;
+    c.magnitude = a;
+    return 0;
+}
+
+# A BjChargePoint to the got list, its five f32 widened.
+fn _par_sj_got_charge(c: *BjChargePoint) {
+    var x: f64 = f32_to(c.position_x);
+    var y: f64 = f32_to(c.position_y);
+    var z: f64 = f32_to(c.position_z);
+    var q: f64 = f32_to(c.charge);
+    var a: f64 = f32_to(c.magnitude);
+    _par_got_f(x);
+    _par_got_f(y);
+    _par_got_f(z);
+    _par_got_f(q);
+    _par_got_f(a);
+    return 0;
+}
+
+# The slice and volume rows (nd 2 or 3): 1 handled, 0 another row's.
+fn _par_sj_slice(fp, fl, nd): i64 {
+    var two = 0;
+    if (nd == 2) { two = 1; }
+    var w = 0;
+    var r = 0;
+    if (two == 1) {
+        w = _par_eq(fp, fl, "json::FieldSlice2D::to_string");
+        r = _par_eq(fp, fl, "json::FieldSlice2D::from_str");
+    } else {
+        w = _par_eq(fp, fl, "json::FieldSlice3D::to_string");
+        r = _par_eq(fp, fl, "json::FieldSlice3D::from_str");
+    }
+    if (w != 1 && r != 1) { return 0; }
+    var s2: BjFieldSlice2D;
+    var s3: BjFieldSlice3D;
+    if (w == 1) {
+        var n = _par_sj_next();
+        var vals = _par_sj_words(n);
+        var d = _par_sj_words(nd);
+        var o = _par_sj_words(nd);
+        var sp: f64 = _par_sj_next();
+        var cl: i64[1];
+        var cp = _par_in_bytes(_par_sj_at, &cl);
+        _par_sj_at = _par_sj_at + 1;
+        var step = _par_sj_next();
+        var sb = str_builder_new();
+        if (two == 1) {
+            var a0: f64 = _bj_from_bits(load64(o));
+            var a1: f64 = _bj_from_bits(load64(o + 8));
+            s2.values = vals;
+            s2.values_len = n;
+            s2.dimensions = (load64(d), load64(d + 8));
+            s2.origin = (a0, a1);
+            s2.spacing = sp;
+            s2.component = cp;
+            s2.component_len = cl[0];
+            s2.step = step;
+            var t2, v2 = BjFieldSlice2D_to_json(&s2, sb);
+            _par_got_json_res(t2, v2, sb);
+        } else {
+            var b0: f64 = _bj_from_bits(load64(o));
+            var b1: f64 = _bj_from_bits(load64(o + 8));
+            var b2: f64 = _bj_from_bits(load64(o + 16));
+            s3.values = vals;
+            s3.values_len = n;
+            s3.dimensions = (load64(d), load64(d + 8), load64(d + 16));
+            s3.origin = (b0, b1, b2);
+            s3.spacing = sp;
+            s3.component = cp;
+            s3.component_len = cl[0];
+            s3.step = step;
+            var t3, v3 = BjFieldSlice3D_to_json(&s3, sb);
+            _par_got_json_res(t3, v3, sb);
+        }
+        return 1;
+    }
+    var lw: i64[1];
+    var doc = _par_in_bytes(0, &lw);
+    if (doc == 0) { return 0 - 1; }
+    if (two == 1) {
+        var t4, v4 = BjFieldSlice2D_from_json(doc, lw[0], &s2);
+        if (is_err_result(t4) == 1) {
+            _par_got_err(v4);
+            return 1;
+        }
+        _par_got_i(s2.values_len);
+        _par_sj_got_words(s2.values, s2.values_len);
+        _par_got_i(s2.dimensions.0);
+        _par_got_i(s2.dimensions.1);
+        var c0: f64 = s2.origin.0;
+        var c1: f64 = s2.origin.1;
+        var c2: f64 = s2.spacing;
+        _par_got_f(c0);
+        _par_got_f(c1);
+        _par_got_f(c2);
+        _par_got_text(s2.component, s2.component_len);
+        _par_got_i(s2.step);
+        BjFieldSlice2D_free(&s2);
+        return 1;
+    }
+    var t5, v5 = BjFieldSlice3D_from_json(doc, lw[0], &s3);
+    if (is_err_result(t5) == 1) {
+        _par_got_err(v5);
+        return 1;
+    }
+    _par_got_i(s3.values_len);
+    _par_sj_got_words(s3.values, s3.values_len);
+    _par_got_i(s3.dimensions.0);
+    _par_got_i(s3.dimensions.1);
+    _par_got_i(s3.dimensions.2);
+    var e0: f64 = s3.origin.0;
+    var e1: f64 = s3.origin.1;
+    var e2: f64 = s3.origin.2;
+    var e3: f64 = s3.spacing;
+    _par_got_f(e0);
+    _par_got_f(e1);
+    _par_got_f(e2);
+    _par_got_f(e3);
+    _par_got_text(s3.component, s3.component_len);
+    _par_got_i(s3.step);
+    BjFieldSlice3D_free(&s3);
+    return 1;
+}
+
+# A word as a *BjFieldLine.
+fn _par_sj_linep(a): *BjFieldLine {
+    return a;
+}
+
+# The field line rows: 1 handled, 0 another row's.
+fn _par_sj_lines(fp, fl): i64 {
+    var lw: i64[1];
+    var l: BjFieldLine;
+    var lv: BjFieldLineVisualization;
+    if (_par_eq(fp, fl, "json::FieldLine::to_string") == 1) {
+        _par_sj_in_line(&l);
+        var sb = str_builder_new();
+        var t, v = BjFieldLine_to_json(&l, sb);
+        _par_got_json_res(t, v, sb);
+        return 1;
+    }
+    if (_par_eq(fp, fl, "json::FieldLineVisualization::to_string") == 1) {
+        var nl = _par_sj_next();
+        var blk = alloc(nl * 32 + 32);
+        var ls: *BjFieldLine = _par_sj_linep(blk);
+        for (var k = 0; k < nl; k = k + 1) { _par_sj_in_line(ls + k); }
+        lv.lines = blk;
+        lv.lines_len = nl;
+        var sb2 = str_builder_new();
+        var t2, v2 = BjFieldLineVisualization_to_json(&lv, sb2);
+        _par_got_json_res(t2, v2, sb2);
+        return 1;
+    }
+    if (_par_eq(fp, fl, "json::FieldLine::from_str") == 1) {
+        var doc = _par_in_bytes(0, &lw);
+        if (doc == 0) { return 0 - 1; }
+        var t3, v3 = BjFieldLine_from_json(doc, lw[0], &l);
+        if (is_err_result(t3) == 1) {
+            _par_got_err(v3);
+            return 1;
+        }
+        _par_sj_got_line(&l);
+        BjFieldLine_free(&l);
+        return 1;
+    }
+    if (_par_eq(fp, fl, "json::FieldLineVisualization::from_str") != 1) { return 0; }
+    var doc2 = _par_in_bytes(0, &lw);
+    if (doc2 == 0) { return 0 - 1; }
+    var t4, v4 = BjFieldLineVisualization_from_json(doc2, lw[0], &lv);
+    if (is_err_result(t4) == 1) {
+        _par_got_err(v4);
+        return 1;
+    }
+    _par_got_i(lv.lines_len);
+    var rl: *BjFieldLine = _par_sj_linep(lv.lines);
+    for (var j = 0; j < lv.lines_len; j = j + 1) { _par_sj_got_line(rl + j); }
+    BjFieldLineVisualization_free(&lv);
+    return 1;
+}
+
+# The charge rows: 1 handled, 0 another row's.
+fn _par_sj_charges(fp, fl): i64 {
+    var lw: i64[1];
+    var c: BjChargePoint;
+    var cv: BjChargeVisualization;
+    if (_par_eq(fp, fl, "json::ChargePoint::to_string") == 1) {
+        _par_sj_in_charge(&c);
+        var sb = str_builder_new();
+        var t, v = BjChargePoint_to_json(&c, sb);
+        _par_got_json_res(t, v, sb);
+        return 1;
+    }
+    if (_par_eq(fp, fl, "json::ChargeVisualization::to_string") == 1) {
+        var n = _par_sj_next();
+        var blk = alloc(n * 20 + 20);
+        var cs: *BjChargePoint = _par_so_cpp(blk);
+        for (var k = 0; k < n; k = k + 1) { _par_sj_in_charge(cs + k); }
+        cv.charges = blk;
+        cv.charges_len = n;
+        var sb2 = str_builder_new();
+        var t2, v2 = BjChargeVisualization_to_json(&cv, sb2);
+        _par_got_json_res(t2, v2, sb2);
+        return 1;
+    }
+    if (_par_eq(fp, fl, "json::ChargePoint::from_str") == 1) {
+        var doc = _par_in_bytes(0, &lw);
+        if (doc == 0) { return 0 - 1; }
+        var t3, v3 = BjChargePoint_from_json(doc, lw[0], &c);
+        if (is_err_result(t3) == 1) {
+            _par_got_err(v3);
+            return 1;
+        }
+        _par_sj_got_charge(&c);
+        return 1;
+    }
+    if (_par_eq(fp, fl, "json::ChargeVisualization::from_str") != 1) { return 0; }
+    var doc2 = _par_in_bytes(0, &lw);
+    if (doc2 == 0) { return 0 - 1; }
+    var t4, v4 = BjChargeVisualization_from_json(doc2, lw[0], &cv);
+    if (is_err_result(t4) == 1) {
+        _par_got_err(v4);
+        return 1;
+    }
+    _par_got_i(cv.charges_len);
+    var rc: *BjChargePoint = _par_so_cpp(cv.charges);
+    for (var j = 0; j < cv.charges_len; j = j + 1) { _par_sj_got_charge(rc + j); }
+    BjChargeVisualization_free(&cv);
+    return 1;
+}
+
+# The radiation pattern and vector field rows: 1 handled, 0 another row's.
+fn _par_sj_samples(fp, fl): i64 {
+    var lw: i64[1];
+    var rp: BjRadiationPattern;
+    var vs: BjVectorFieldSample;
+    if (_par_eq(fp, fl, "json::RadiationPattern::to_string") == 1) {
+        var na = _par_sj_next();
+        rp.angles = _par_sj_words(na);
+        rp.angles_len = na;
+        var np = _par_sj_next();
+        rp.pattern = _par_sj_words(np);
+        rp.pattern_len = np;
+        var g: f64 = _par_sj_next();
+        rp.max_gain = g;
+        var sb = str_builder_new();
+        var t, v = BjRadiationPattern_to_json(&rp, sb);
+        _par_got_json_res(t, v, sb);
+        return 1;
+    }
+    if (_par_eq(fp, fl, "json::VectorFieldSample::to_string") == 1) {
+        var nv = _par_sj_next();
+        vs.vectors = _par_sj_words(3 * nv);
+        vs.vectors_len = nv;
+        var d0 = _par_sj_next();
+        var d1 = _par_sj_next();
+        var d2 = _par_sj_next();
+        vs.dimensions = (d0, d1, d2);
+        var o0: f64 = _par_sj_next();
+        var o1: f64 = _par_sj_next();
+        var o2: f64 = _par_sj_next();
+        vs.origin = (o0, o1, o2);
+        var sp: f64 = _par_sj_next();
+        var mm: f64 = _par_sj_next();
+        vs.spacing = sp;
+        vs.max_magnitude = mm;
+        var sb2 = str_builder_new();
+        var t2, v2 = BjVectorFieldSample_to_json(&vs, sb2);
+        _par_got_json_res(t2, v2, sb2);
+        return 1;
+    }
+    if (_par_eq(fp, fl, "json::RadiationPattern::from_str") == 1) {
+        var doc = _par_in_bytes(0, &lw);
+        if (doc == 0) { return 0 - 1; }
+        var t3, v3 = BjRadiationPattern_from_json(doc, lw[0], &rp);
+        if (is_err_result(t3) == 1) {
+            _par_got_err(v3);
+            return 1;
+        }
+        _par_got_i(rp.angles_len);
+        _par_sj_got_words(rp.angles, rp.angles_len);
+        _par_got_i(rp.pattern_len);
+        _par_sj_got_words(rp.pattern, rp.pattern_len);
+        var gg: f64 = rp.max_gain;
+        _par_got_f(gg);
+        BjRadiationPattern_free(&rp);
+        return 1;
+    }
+    if (_par_eq(fp, fl, "json::VectorFieldSample::from_str") != 1) { return 0; }
+    var doc2 = _par_in_bytes(0, &lw);
+    if (doc2 == 0) { return 0 - 1; }
+    var t4, v4 = BjVectorFieldSample_from_json(doc2, lw[0], &vs);
+    if (is_err_result(t4) == 1) {
+        _par_got_err(v4);
+        return 1;
+    }
+    _par_got_i(vs.vectors_len);
+    _par_sj_got_words(vs.vectors, 3 * vs.vectors_len);
+    _par_got_i(vs.dimensions.0);
+    _par_got_i(vs.dimensions.1);
+    _par_got_i(vs.dimensions.2);
+    var q0: f64 = vs.origin.0;
+    var q1: f64 = vs.origin.1;
+    var q2: f64 = vs.origin.2;
+    var q3: f64 = vs.spacing;
+    var q4: f64 = vs.max_magnitude;
+    _par_got_f(q0);
+    _par_got_f(q1);
+    _par_got_f(q2);
+    _par_got_f(q3);
+    _par_got_f(q4);
+    BjVectorFieldSample_free(&vs);
+    return 1;
+}
+
+# soorat's `json::<Type>::to_string` and `from_str` rows: 1 handled, 0 another row's, -1 for unusable inputs.
+fn _par_so_json(fp, fl): i64 {
+    _par_sj_at = 0;
+    var r = _par_sj_slice(fp, fl, 2);
+    if (r == 0) { r = _par_sj_slice(fp, fl, 3); }
+    if (r == 0) { r = _par_sj_lines(fp, fl); }
+    if (r == 0) { r = _par_sj_charges(fp, fl); }
+    if (r == 0) { r = _par_sj_samples(fp, fl); }
+    return r;
+}
+
 # soorat (M7 part 1b-1): the constructors, class A. Slices read grids filled by _par_so_fill; charges, NF2FF results
 # and component arrays come from the row's tokens.
 public fn _par_soorat(fp, fl): i64 {
+    var sj = _par_so_json(fp, fl);
+    if (sj != 0) { return sj; }
     if (_par_eq(fp, fl, "FieldSlice2D::from_fdtd_2d") == 1 || _par_eq(fp, fl, "FieldSlice2D::try_from_fdtd_2d") == 1) {
         var g: BjFdtd2d;
         var dx: f64 = _par_in(2);

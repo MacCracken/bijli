@@ -2,14 +2,14 @@
 
 For the next agent picking up the port. **Read first:** `CLAUDE.md` (the rules), [`state.md`](state.md) (live state),
 [`bijli-port-plan.md`](bijli-port-plan.md) (§0.1 holds the user's M5 Part 2 answers; the tracking table is near the
-end), [`port-parity.md`](port-parity.md) §94–§115 (M5) and §116 on (M6), and [ADR 0002](../adr/0002-port-api-divergences.md) (rows 1–42;
+end), [`port-parity.md`](port-parity.md) §94–§115 (M5) and §116 on (M6), and [ADR 0002](../adr/0002-port-api-divergences.md) (rows 1–45;
 M5 touched 2, 3, 9, 13, 17, 18, 36, 40, 41 and 42). This file is the working knowledge those don't hold: how a Part 2
 bite is done, the machinery, the scripts and the traps. Delete it once it has served (the M3 one lives at
 `git show 01bb43e:docs/development/handoff.md`; its bite workflow for a module's API still applies).
 
 ## Where it stands
 
-- **Committed through `0fa28f8`** ("m7 part1a"); M7 part 1b-1 is in the working tree for the user to commit. **M6
+- **Committed through `873ac05`** ("m7 part1b"); M7 part 1b-2 is in the working tree for the user to commit. **M6
   is done** (§131).
 - **M7** runs as Part 1 in bites (1a `bridge.rs`, 1b `integration/soorat.rs`, 1c `ai.rs` in `[lib.ai]`), then Part 2
   its range-edge review. **1a done** (§132): `src/bridge.cyr`; its constants rendered by validate.py
@@ -19,7 +19,11 @@ bite is done, the machinery, the scripts and the traps. Delete it once it has se
   checklist is that list plus `scripts/surface_parity.py`'s `MODULES`, `cyrius api-surface --update`, the ledger
   rewrite and the oracle README's table. **1b-1 done** (§133): `src/soorat.cyr`, the eight structs and constructors;
   `soorat.tsv` (`emit_1b`, `soorat_eval`, `_par_soorat`); `ChargePoint`'s f32 kept (probe p21); component names as
-  bytes (ADR 0002 row 44) through touchstone's now-public `_bj_ts_*` text helpers.
+  bytes (ADR 0002 row 44) through touchstone's now-public `_bj_ts_*` text helpers. **1b-2 done** (§134): the eight
+  structs' JSON in `src/json.cyr`'s soorat section; their rows in `soorat.tsv` itself (`emit_1b2`,
+  `soorat_json_eval` on the json model's `JSON_FIELDS`, the harness's `_par_so_json`), not `json.tsv`; an f32
+  written as zmij's shortest f32 digits (fmtf's `_bj_shortest_fe`) and read rounded once (ADR 0002 row 45:
+  `_bj_jr_f32` compares the token's text only at an f32 halfway value). `integration/soorat.rs` is done.
 - **M6 Part 1** (the 2D CPML and `Fdtd2d`, §116–§119) runs in bites. Done: 1a the CPML layer (`src/cpml.cyr`); 1b-1
   `Fdtd2d` without the CPML (`src/fdtd2d.cyr`; its scripts `Fdtd2d::script` in `fdtd_2d3d.tsv`, replayed by
   validate.py's `Fd2Scripts` in pure Python, no NumPy on the host); 1b-2 the CPML attached (the y-strips packed, the
@@ -90,18 +94,16 @@ bite is done, the machinery, the scripts and the traps. Delete it once it has se
     Rust's chain where every operation is its 53-bit value (mode 0, checked per sample by one exponent test and per
     angle), else the call or the angle unbounded (`_bj_nf_angle_ux`); a non-finite field keeps Rust's (row 18, §114).
     **Part 2 is done.**
-- **Numbers after M7 part 1b-1**: 21 modules, 645,435 ok, 0 failed, 123,844 accepted (ADR 01: 43,087; ADR 0002:
-  80,757) over 769,279 rows; 504 digests equal on x86_64 ELF, x86_64 PE and aarch64. Ledger 808 ported, 12 n/a, 38
-  pending of 858; API snapshot 2,162; surface parity 704 items (17 modules, soorat in progress); benches 80 of 80
-  twinned; execution coverage 417 of 417. `json.tsv` is 40.7 MB of the 48 MiB cap: the rest of M6 adds no JSON
-  (`Fdtd3d` and compute.rs have no serde), but M7's eight serde types (integration/) will want their own module.
+- **Numbers after M7 part 1b-2**: 21 modules, 646,235 ok, 0 failed, 123,844 accepted (ADR 01: 43,087; ADR 0002:
+  80,757) over 770,079 rows; 520 digests equal on x86_64 ELF, x86_64 PE and aarch64. Ledger 810 ported, 12 n/a, 36
+  pending of 858; API snapshot 2,178; surface parity 720 items (17 modules, none in progress); benches 80 of 80
+  twinned; execution coverage 433 of 433. `json.tsv` is 40.7 MB of the 48 MiB cap; soorat's JSON went into
+  `soorat.tsv` (0.8 MB), and ai.rs's serde types (1c) should go into an `ai` module likewise.
 - **M5 is done** (§115). The benchmark record's Cyrius column is each row's least of four full runs: rows vary up to
   1.5× between runs under other repos' loads, so take the least of several when regenerating it.
-- **Next**: part 1b-2, the soorat structs' JSON: serde's writer and reader for all eight (D5: `#derive(Serialize)`
-  writers, hand-written readers on bayan, as `src/json.cyr`'s), rows in a golden module of their own (`json.tsv` is
-  40.7 MB of the 48 MiB cap), the f32 fields written as serde_json writes an f32 (its shortest f32 digits) and read
-  as serde_json reads one; then the two serialize tests. Then 1c (`ai.rs` in `[lib.ai]`), then Part 2, whose review
-  takes `_bj_max`'s ±0 ties with it (§133's finding); M7's close regenerates the benchmark record as §131 did.
+- **Next**: part 1c, `ai.rs` in the `[lib.ai]` profile (sandhi; the default `[lib]` bundle never pulls it).
+  Then Part 2, whose review takes `_bj_max`'s ±0 ties with it (§133's finding); M7's close regenerates the
+  benchmark record as §131 did.
 - **Corpus size**: `fdtd.tsv` is 38.8 MB (107,341 rows) and `json.tsv` 40.7 MB, against the 48 MiB cap that
   validate.py's `too_big` guards (§81); M6's rows are in `fdtd_2d3d.tsv` (4.2 MB after 4f).
 - **A recorded cost**: the 1D step runs 3.5–3.8× HEAD's with 2d-2a's scan (§107), the TF/SF step about 2× with

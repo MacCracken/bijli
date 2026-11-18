@@ -48,12 +48,7 @@ PENDING_MODULES = {
 # problem (drop it from the list).
 IN_PROGRESS = {
     # fdtd.rs (M5 Part 1, M6 Parts 1 and 2) is ported whole since M6 part 2b.
-    # integration/soorat.rs (M7 parts 1b-1, 1b-2): the structs and constructors are ported; their serde, next.
-    "integration/soorat": ("1b-2", [f"impl {t} for {s}"
-                                    for s in ("FieldSlice2D", "FieldSlice3D", "FieldLineVisualization", "FieldLine",
-                                              "ChargeVisualization", "ChargePoint", "RadiationPattern",
-                                              "VectorFieldSample")
-                                    for t in ("Serialize", "Deserialize")]),
+    # integration/soorat.rs (M7 parts 1b-1 and 1b-2) is ported whole since part 1b-2.
 }
 NOT_APPLICABLE_MODULES = {
     "lib": "crate root: module list and re-exports",

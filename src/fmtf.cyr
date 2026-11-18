@@ -375,6 +375,15 @@ fn _bj_shortest(bits, digits, tie_even) {
         f = f | 0x10000000000000;
         e = be - 1075;
     }
+    var asym = 0;
+    if (f == 0x10000000000000 && be > 1) { asym = 1; }
+    return _bj_shortest_fe(f, e, asym, digits, tie_even);
+}
+
+# bijli's (M7 part 1b-2): the digit generator of _bj_shortest for any binary format, so an f32 prints as its own
+# shortest digits. The value is f·2^e (f > 0, below 2^53); `asym` 1 when f is the format's smallest normal significand
+# above its least exponent, where the gap below the value is half the gap above. Returns (n, k) as _bj_shortest.
+fn _bj_shortest_fe(f, e, asym, digits, tie_even) {
     # IEEE round-half-even on reading: the interval's ends belong to it when f is even.
     var even = 1 - (f & 1);
     var r[328];
@@ -383,7 +392,7 @@ fn _bj_shortest(bits, digits, tie_even) {
     var mm[328];
     var t[328];
     if (e >= 0) {
-        if (f != 0x10000000000000) {
+        if (asym == 0) {
             _bj_bn_set(&r, f);
             _bj_bn_shl(&r, e + 1);
             _bj_bn_set(&s, 2);
@@ -400,7 +409,7 @@ fn _bj_shortest(bits, digits, tie_even) {
             _bj_bn_shl(&mm, e);
         }
     } else {
-        if (e == 0 - 1074 || f != 0x10000000000000) {
+        if (asym == 0) {
             _bj_bn_set(&r, f);
             _bj_bn_shl(&r, 1);
             _bj_bn_set(&s, 1);
@@ -713,6 +722,60 @@ fn _bj_fmt_f64_json(t, x: f64) {
     var n, k = _bj_shortest(mag, &digits, 1);
     var ex = k - 1;
     if (ex >= 0 - 5 && ex <= 15) {
+        _bj_tx_positional(t, &digits, n, k, 1);
+        return 0;
+    }
+    _bj_tx_putc(t, load8(&digits));
+    if (n > 1) {
+        _bj_tx_putc(t, 46);
+        _bj_tx_digits(t, &digits, 1, n);
+    }
+    _bj_tx_putc(t, 101);
+    if (ex >= 0) {
+        _bj_tx_putc(t, 43);
+        _bj_tx_i64(t, ex);
+    } else {
+        _bj_tx_putc(t, 45);
+        _bj_tx_i64(t, 0 - ex);
+    }
+    return 0;
+}
+
+# Appends the f32 value x (an f32 widened to f64, which is exact) as serde_json 1.0.154 writes an f32 (zmij's format,
+# bijli's, M7 part 1b-2): the shortest digits that read back to the same f32, the closest to its value among them, a
+# tie to the even digit (2097152.25 is 2097152.2); positional while the decimal exponent is in −6..=12, with ".0" on
+# an integer (`16777216.0`, `0.000001`), otherwise `d.ddde±x` (`1e-7`, `3.4028235e+38`); `null` for NaN and ±∞.
+# Mirrors `serde_json::to_string(&x)` for an f32.
+fn _bj_fmt_f32_json(t, x: f64) {
+    var bits = _bj_bits(x);
+    var mag = bits & 0x7FFFFFFFFFFFFFFF;
+    if (mag >= 0x7FF0000000000000) {
+        _bj_json_nonfinite = _bj_json_nonfinite + 1;
+        _bj_tx_cstr(t, "null");
+        return 0;
+    }
+    if (bits < 0) { _bj_tx_putc(t, 45); }
+    if (mag == 0) {
+        _bj_tx_cstr(t, "0.0");
+        return 0;
+    }
+    # x = m·2^er exactly; as an f32, f·2^e with f below 2^24 and e at least −149 (the low bits of m are zero).
+    var be = mag >> 52;
+    var m = (mag & 0xFFFFFFFFFFFFF) | 0x10000000000000;
+    var er = be - 1075;
+    if (be == 0) {
+        m = mag;
+        er = 0 - 1074;
+    }
+    var e = er + 29;
+    if (e < 0 - 149) { e = 0 - 149; }
+    var f = m >> (e - er);
+    var asym = 0;
+    if (f == 0x800000 && e > 0 - 149) { asym = 1; }
+    var digits[24];
+    var n, k = _bj_shortest_fe(f, e, asym, &digits, 1);
+    var ex = k - 1;
+    if (ex >= 0 - 6 && ex <= 12) {
         _bj_tx_positional(t, &digits, n, k, 1);
         return 0;
     }

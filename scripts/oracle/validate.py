@@ -6954,6 +6954,15 @@ class JsonEnum(int):
     """A unit enum's variant (M4 part 1d): an `i:` token, its index in JSON_ENUMS."""
 
 
+class JsonStr(str):
+    """A String among a reading's values (M7 part 1b-2): an `s:` token."""
+
+
+class JsonF32Text(float):
+    """An f32 among a writer's values (M7 part 1b-2): serde_json writes its shortest f32 digits (f32_shortest), whose
+    f64 parse is the row's `f:` token, or `null`."""
+
+
 
 def json_writer_parts(ty, xs: list, at: int, parts: list) -> int:
     """serde_json's text of a value of type ty from the f64 xs[at..], as parts (text runs and f64), appended to
@@ -6968,6 +6977,12 @@ def json_writer_parts(ty, xs: list, at: int, parts: list) -> int:
         return at + 1
     if ty == "usize":
         parts.append(float(xs[at] & 0xFFFFFFFFFFFFFFFF))
+        return at + 1
+    if ty == "f32":
+        parts.append(JsonF32Text(xs[at]))
+        return at + 1
+    if ty == "string":
+        parts.append(serde_json_str(xs[at]))
         return at + 1
     if isinstance(ty, tuple) and ty[0] == "vec":
         count, at = xs[at], at + 1
@@ -7004,6 +7019,8 @@ def json_writer_tokens(kind: str, xs: list) -> list:
         raise ValueError(f"{kind}: {len(xs)} values")
     toks, run = [], ""
     for p in parts:
+        if isinstance(p, JsonF32Text):
+            p = f32_json_value(float(p))
         if isinstance(p, str):
             run += p
         elif math.isfinite(p):
@@ -7070,6 +7087,14 @@ def json_value(ty, v) -> list:
     (json_read)."""
     if ty == "f64":
         return [json_f64(v)]
+    if ty == "f32":
+        return [json_f32(v)]
+    if ty == "string":
+        if isinstance(v, str):
+            if json_has_surrogate(v):
+                raise JsonRefused("lone surrogate in a string")
+            return [JsonStr(v)]
+        raise JsonRefused("invalid type, expected a string")
     if ty == "bool":
         if isinstance(v, bool):
             return [JsonBool(v)]
@@ -12247,19 +12272,242 @@ def soorat_eval(root: Path, fn, toks):
     return None
 
 
+# ── soorat's JSON (M7 part 1b-2): serde's derive on the eight structs, through the json model above ─────────────────
+
+JSON_FIELDS.update({
+    "FieldSlice2D": [("values", ("vec", "f64")), ("dimensions", ("arr", 2, "usize")), ("origin", ("arr", 2, "f64")),
+                     ("spacing", "f64"), ("component", "string"), ("step", "usize")],
+    "FieldSlice3D": [("values", ("vec", "f64")), ("dimensions", ("arr", 3, "usize")), ("origin", ("arr", 3, "f64")),
+                     ("spacing", "f64"), ("component", "string"), ("step", "usize")],
+    "FieldLine": [("points", ("vec", ("arr", 3, "f64"))), ("magnitudes", ("vec", "f64"))],
+    "FieldLineVisualization": [("lines", ("vec", "FieldLine"))],
+    "ChargePoint": [("position", ("arr", 3, "f32")), ("charge", "f32"), ("magnitude", "f32")],
+    "ChargeVisualization": [("charges", ("vec", "ChargePoint"))],
+    "RadiationPattern": [("angles", ("vec", "f64")), ("pattern", ("vec", "f64")), ("max_gain", "f64")],
+    "VectorFieldSample": [("vectors", ("vec", ("arr", 3, "f64"))), ("dimensions", ("arr", 3, "usize")),
+                          ("origin", ("arr", 3, "f64")), ("spacing", "f64"), ("max_magnitude", "f64")],
+})
+SOORAT_JSON = ("FieldSlice2D", "FieldSlice3D", "FieldLine", "FieldLineVisualization", "ChargePoint",
+               "ChargeVisualization", "RadiationPattern", "VectorFieldSample")
+
+
+def serde_json_str(t: str) -> str:
+    """serde_json's text of a string: `"` and `\\` after a backslash, U+0000..U+001F as \\b \\t \\n \\f \\r or \\u00xx
+    (lowercase hex), every other character as it is (U+007F too), in quotes."""
+    short = {8: "\\b", 9: "\\t", 10: "\\n", 12: "\\f", 13: "\\r"}
+    out = ['"']
+    for c in t:
+        o = ord(c)
+        if c in '"\\':
+            out.append("\\" + c)
+        elif o < 0x20:
+            out.append(short.get(o, f"\\u{o:04x}"))
+        else:
+            out.append(c)
+    return "".join(out) + '"'
+
+
+def f32_from_frac(q: Fraction, neg: bool) -> float:
+    """The rational ±q (q ≥ 0) rounded once to the nearest binary32, ties to even, as a float (±∞ past f32's range,
+    ±0 below its least subnormal's half)."""
+    if q == 0:
+        return -0.0 if neg else 0.0
+    e = q.numerator.bit_length() - q.denominator.bit_length()
+    if Fraction(2) ** e > q:
+        e -= 1
+    unit = Fraction(2) ** max(e - 23, -149)
+    r = q / unit
+    n = r.numerator // r.denominator
+    rem = r - n
+    if rem > Fraction(1, 2) or (rem == Fraction(1, 2) and n % 2 == 1):
+        n += 1
+    v = n * unit
+    x = math.inf if v > FLT_MAX_FRAC else float(v)
+    return -x if neg else x
+
+
+def f32_shortest(x: float) -> str:
+    """The shortest decimal (digits and exponent, `ddde±k`) that reads back to the f32 x (> 0, finite) under IEEE's
+    round-half-even, the closest to x among them, a tie to the even last digit: zmij's f32 digits (serde_json 1.0.154),
+    by search over the rounding interval in exact rationals."""
+    fx = Fraction(x)
+    e = fx.numerator.bit_length() - fx.denominator.bit_length()
+    if Fraction(2) ** e > fx:
+        e -= 1
+    q = max(e - 23, -149)
+    m = fx / Fraction(2) ** q
+    ulp = Fraction(2) ** q
+    lo = fx - (ulp / 4 if m == 1 << 23 and q > -149 else ulp / 2)
+    hi = fx + ulp / 2
+    closed = m % 2 == 0
+    k = len(str(fx.numerator // fx.denominator)) if fx >= 1 else 0
+    while Fraction(10) ** k <= fx:
+        k += 1
+    while Fraction(10) ** (k - 1) > fx:
+        k -= 1
+    for n in range(1, 12):
+        unit = Fraction(10) ** (k - n)
+        c0 = (fx / unit).numerator // (fx / unit).denominator
+        best = None
+        for c in (c0, c0 + 1):
+            v = c * unit
+            if (lo < v < hi) or (closed and (v == lo or v == hi)):
+                if best is None or abs(v - fx) < abs(best * unit - fx) or (
+                        abs(v - fx) == abs(best * unit - fx) and c % 2 == 0):
+                    best = c
+        if best is not None:
+            ex = k - n
+            while best % 10 == 0:
+                best, ex = best // 10, ex + 1
+            return f"{best}e{ex}"
+    raise ValueError(f"no shortest digits for {x!r}")
+
+
+def f32_serde_text(x: float) -> str:
+    """serde_json's text of the f32 x (zmij 1.0.23's notation): positional while the decimal exponent is in −6..=12,
+    with ".0" on an integer; otherwise d.ddde±x; `null` for NaN and ±∞."""
+    if not math.isfinite(x):
+        return "null"
+    if x == 0.0:
+        return "-0.0" if math.copysign(1.0, x) < 0 else "0.0"
+    c, _, e = f32_shortest(abs(x)).partition("e")
+    k = int(e) + len(c)                               # x = 0.c × 10^k
+    if -6 <= k - 1 <= 12:
+        if k <= 0:
+            t = "0." + "0" * -k + c
+        elif k >= len(c):
+            t = c + "0" * (k - len(c)) + ".0"
+        else:
+            t = c[:k] + "." + c[k:]
+    else:
+        t = c[0] + ("." + c[1:] if len(c) > 1 else "") + ("e+" if k - 1 >= 0 else "e-") + str(abs(k - 1))
+    return ("-" if x < 0 else "") + t
+
+
+def f32_json_value(x: float):
+    """serde_json's f32 text for x (an f32's value) as the oracle tokenizer reads it: the f64 parse of its shortest
+    digits, or `null` for NaN and ±∞."""
+    if not math.isfinite(x):
+        return "null"
+    if x == 0.0:
+        return x
+    v = float(f32_shortest(abs(x)))
+    return -v if x < 0 else v
+
+
+def json_num_frac(text: str):
+    """A JSON number's exact value as (|value|, negative), or None for a magnitude far outside f32's range either way
+    (its decimal exponent past ±400, which no exact arithmetic needs)."""
+    neg = text.startswith("-")
+    body = text[1:] if neg else text
+    mant, _, ex = body.replace("E", "e").partition("e")
+    ip, _, fp = mant.partition(".")
+    digits = (ip + fp).lstrip("0")
+    exp = int(ex) if ex else 0
+    if not digits:
+        return Fraction(0), neg
+    lead = len(ip.lstrip("0")) if ip.lstrip("0") else -(len(fp) - len(fp.lstrip("0")))
+    if lead + exp > 400 or lead + exp < -400:
+        return None
+    return Fraction(int(ip + fp)) * Fraction(10) ** (exp - len(fp)), neg
+
+
+def json_f32(v) -> float:
+    """An f32 field (ADR 0002 row 45): a number rounded once to the nearest f32, ties to even, as serde_json's
+    float_roundtrip reads it; refused as out of range where that overflows (or the number's f64 does)."""
+    if not (isinstance(v, tuple) and v[0] == "num"):
+        raise JsonRefused("invalid type, expected f32")
+    json_f64(v)                                     # refused where the f64 overflows, as serde_json's parse is
+    got = json_num_frac(v[1])
+    if got is None:
+        neg = v[1].startswith("-")
+        x = math.inf if not re.search(r"[eE]-", v[1]) else 0.0
+        x = -x if neg else x
+    else:
+        x = f32_from_frac(*got)
+    if math.isinf(x):
+        raise JsonRefused("number out of range", True)
+    return x
+
+
+def json_f32_serde(text: str) -> float:
+    """bijli's build of serde_json reading an f32 (no float_roundtrip): the f64, here correctly rounded (ADR 0002 row
+    11), then `as f32`: rounded twice, and ±∞ where the f32 overflows."""
+    x = json_f64(("num", text))
+    return f32_round(x)
+
+
+def soorat_json_tokens(vals) -> list:
+    """A reading's values as row tokens."""
+    out = []
+    for x in vals:
+        if isinstance(x, JsonStr):
+            out.append(("s", str(x)))
+        elif isinstance(x, JsonUsize):
+            out.append(("i", x - (1 << 64) if x >= 1 << 63 else int(x)))
+        elif isinstance(x, (JsonCount, JsonBool, JsonEnum)):
+            out.append(("i", int(x)))
+        else:
+            out.append(("f", x))
+    return out
+
+
+def soorat_json_eval(fn, toks):
+    """A soorat JSON row's expected outputs: a writer's tokens (json_writer_tokens), or a reader's values, or
+    E:Deserialize where the port refuses the document (serde's refusals, ADR 0002 row 12's flags, row 36's counts past
+    2^63 − 1, row 45's f32 overflow)."""
+    kind = fn.split("::")[1]
+    if fn.endswith("::to_string"):
+        return json_writer_tokens(kind, [b for _k, b in toks])
+    doc = toks[0][1]
+    try:
+        tree = json_tree(doc)
+        vals = json_read(kind, tree)
+        if json_unchecked(tree):
+            raise JsonRefused("ADR 0002 row 12")
+    except JsonRefused:
+        return [("E", "Deserialize")]
+    if any(isinstance(x, JsonUsize) and x >= 1 << 63 for x in vals):
+        return [("E", "Deserialize")]
+    return soorat_json_tokens(vals)
+
+
+def soorat_json_serde_differs(fn, toks) -> bool:
+    """1 for a reader row of f32 fields whose reading by bijli's build of serde_json (rounded twice, ±∞ kept: ADR 0002
+    row 45) differs from the port's."""
+    if not fn.startswith("json::Charge") or not fn.endswith("::from_str"):
+        return False
+    global json_f32
+    port = soorat_json_eval(fn, toks)
+    keep = json_f32
+    try:
+        json_f32 = lambda v: json_f32_serde(v[1]) if isinstance(v, tuple) and v[0] == "num" else keep(v)  # noqa: E731
+        serde = soorat_json_eval(fn, toks)
+    finally:
+        json_f32 = keep
+    return not toks_same(port, serde)
+
+
 def validate_soorat(root: Path, path: Path) -> list:
     """soorat.rs's constructors transcribed (soorat_eval), every row class A."""
     header, rows = read_tsv(path)
     errs = check_platform(header)
     if errs:
         return errs
+    serde = 0
     for n, (fn, _cls, ins, outs) in enumerate(rows, 1):
         toks = [(k, tok_text(b) if k == "s" else b) for k, b in ins]
-        want = soorat_eval(root, fn, toks)
+        if fn.startswith("json::"):
+            want = soorat_json_eval(fn, toks)
+            serde += soorat_json_serde_differs(fn, toks)
+        else:
+            want = soorat_eval(root, fn, toks)
         if want is None:
             errs.append(f"soorat row {n}: no transcription for {fn}")
             continue
         rows_agree(fn, [b for _k, b in toks], outs, want, "soorat", n, errs)
+    if serde:
+        print(f"     soorat: {serde} f32 readings serde_json's double rounding gives otherwise (ADR 0002 row 45)")
     return errs
 
 def main() -> int:

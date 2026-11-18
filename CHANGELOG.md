@@ -664,7 +664,19 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
   name is bytes; ones that are not UTF-8 name no component (ADR 0002 row 44). src/touchstone.cyr's UTF-8, White_Space
   and `{:?}` helpers are public for it. The golden module `soorat.tsv` (544 rows, class A, `emit.py`'s `emit_1b`,
   validate.py's `soorat_eval`, the harness's `_par_soorat`); `tests/soorat.tcyr` ports 12 of soorat.rs's 14 tests (the
-  two on serde wait for part 1b-2). Probe p21 proves f32 on the pinned compiler (`port-parity.md` §133).  ### Fixed
+  two on serde wait for part 1b-2). Probe p21 proves f32 on the pinned compiler (`port-parity.md` §133).
+- **Cyrius port, M7 part 1b-2 — the soorat structs' JSON** (`src/json.cyr`): `to_json` and `from_json` for the eight
+  soorat structs, as serde_json 1.0.154 writes and reads them: fields in Rust's order, usize words
+  unsigned, the component through serde_json's escapes (`\u00xx` lowercase, U+007F and UTF-8 raw), Vecs of any
+  length, both struct forms, unknown fields ignored. An f32 is written as zmij's shortest f32 digits, a tie to the even
+  digit (`0.1`, `3.4028235e+38`, `2097152.2`; `src/fmtf.cyr`'s digit generator now takes any binary format), and read
+  rounded once to the nearest f32, refused past f32's range (ADR 0002 row 45: bijli's build of serde_json rounds
+  twice, through the f64, and keeps ±∞). Counts past 2^63 − 1 are refused on reading (row 36). 800 rows join
+  `soorat.tsv` (1,344 in all, `emit.py`'s `emit_1b2`, validate.py's `soorat_json_eval`); `tests/soorat.tcyr` ports
+  soorat.rs's last two tests, `field_slice_2d_serializes` and `field_slice_3d_serializes`, all 14 now
+  (`port-parity.md` §134).
+
+### Fixed
 - **relativity** (ADR 0002 row 27, M2 part 1d-1): `lienard_wiechert_e` returned Ok(NaN) for a NaN R, which the
   Liénard–Wiechert potentials refuse, and now refuses it with their InvalidParameter ("R vector must not contain
   NaN").

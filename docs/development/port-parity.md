@@ -7359,3 +7359,62 @@ eigenmode search (`dft_magnitude`'s recurrence and magnitude, `find_eigenmodes`'
   equal** (soorat's 8 new); `soorat.tcyr` passes on all three (35). The gate is clean (no warnings; execution coverage
   417 of 417; the audit passes); validate.py 769,279 rows, 0 problems; `emit.py --check` current for fdtd_2d3d, bridge
   and soorat. Next: 1b-2, the soorat structs' JSON.
+
+## 134. M7 part 1b-2: the soorat structs' JSON; `integration/soorat.rs` done (2026-11-17)
+
+- **The writers** (`src/json.cyr`'s soorat section): `BjFieldSlice2D_to_json`, `BjFieldSlice3D_to_json`,
+  `BjFieldLine_to_json`, `BjFieldLineVisualization_to_json`, `BjChargePoint_to_json`, `BjChargeVisualization_to_json`,
+  `BjRadiationPattern_to_json` and `BjVectorFieldSample_to_json`, serde's derive by hand as the earlier types': Rust's
+  field order, a `[usize; n]` and a step as unsigned words, a `Vec<[f64; 3]>` as nested arrays, f64 through bayan's
+  printer, the whole document in one fl_alloc buffer appended in one grow (a count past 2^28 is Allocation before
+  anything is written). The component goes through serde_json's escapes (`_bj_jw_str`: `\"`, `\\`, `\b` `\t` `\n` `\f`
+  `\r`, `\u00xx` lowercase for the other controls; U+007F and UTF-8 raw), checked against serde_json 1.0.154's
+  `ESCAPE` table. An f32 is written as serde_json writes one: zmij 1.0.23's `format_finite` for f32 (its source read in
+  the registry), the shortest digits that read back to the f32, the closest, a tie to the even digit (2097152.25 is
+  `2097152.2`; core's Display would round it up), positional for decimal exponents −6..=12. fmtf's Burger–Dybvig
+  generator now takes any binary format (`_bj_shortest_fe`: a significand, an exponent and whether the gap below is
+  half; `_bj_shortest` decodes an f64 and calls it), and `_bj_fmt_f32_json` decodes an f32's value. The notation is
+  free under D5 (the rows compare each number's parse), but it is zmij's.
+- **The readers**: the eight `_from_json`, on bayan's tree with serde's derive semantics (both struct forms, unknown
+  fields ignored, every array checked for type and length, `[usize; n]` and `step` from 0 to 2^63 − 1 per row 36, the
+  component any JSON string, `\u0000` included, its bytes counted). Each Vec is its own fl_alloc block, so the
+  structs' `_free` give a read back; a failed read gives back what it made and leaves `out` untouched.
+- **A finding, ADR 0002 row 45**: bijli's build of serde_json (no `float_roundtrip`) reads an f32 field as its f64 and
+  then `v as f32` (serde_core 1.0.229's f32 visitor): two roundings, and ±∞ for a number past f32's range where one
+  past f64's is refused. `1.0000000596046448` (the 17-digit text of 1 + 2⁻²⁴, a hair above it) reads as 1.0, and
+  `3.4028235677973366e38` (a hair below f32::MAX's halfway up) as +∞. serde_json's own `float_roundtrip` rounds once
+  and refuses an f32 overflow; the port reads as it does. bayan's tree keeps each number's correctly rounded f64 x,
+  whose nearest f32 is the number's unless x lies exactly halfway between two f32: only then does `_bj_jr_f32` find
+  the number's token (its ordinal among the tree's number nodes in document order, then the text) and compare it with
+  x exactly (`_bj_jr_dec_cmp`: x's decimal digits from fmtf's bignum, the number's digit run however long). An integer
+  node compares as an integer. The f32 itself comes from Cyrius's f32 store (nearest, ties to even, probe p21).
+- **The golden module**: `soorat.tsv` gains 800 rows from `emit_1b2` (1,344 in all, class A): 152 writer rows (34
+  each of the slice pair; 9 lines, 4 visualizations, 50 charge points, 4 charge visualizations, 10 patterns, 7
+  samples: f64 at every edge, NaN and ±∞ as null, usize words to 2^64 − 1, 18 components through every escape and
+  raw UTF-8, f32 at the binades' edges, the ties and 200 seeded bit patterns) and 648 reader rows (136 refused): the
+  writers' documents back, the array form, unknown and nested fields, missing fields, wrong types and lengths, row
+  12's repeated keys, lone surrogates and nesting past 128, row 36's counts past 2^63 − 1, and 421 charge readings: 54
+  f32 halfway values written exactly, a hair above and below (by 10⁻⁶⁰ and 10⁻³⁰ relative), at 17 digits and negated,
+  integers past 2^53 and 2^63, overflow by a hair, subnormal halfway values and an 800-digit mantissa. validate.py's
+  `soorat_json_eval` is the model: the json model's `JSON_FIELDS` gains the eight structs and two types, `f32`
+  (`json_f32`, exact rationals) and `string` (`serde_json_str`), and `f32_shortest` searches the rounding interval in
+  exact rationals for zmij's digits (it gives Rust's documented f32 outputs: `0.1`, `3.4028235e38`, `1e-45`,
+  `1.1754944e-38`, `3.1415927`). It counts the reader rows serde_json's double rounding reads otherwise: 153 of
+  the 421 charge readings. The harness's `_par_so_json` replays every row.
+- **Tests**: `tests/soorat.tcyr` ports soorat.rs's last two tests, `field_slice_2d_serializes` and
+  `field_slice_3d_serializes` (all 14 now), and adds `cyrius_soorat_json`: Rust's two slices' documents byte for
+  byte, eleven f32 texts (the ties, both notation edges, null), an electron's point, a round trip through the
+  escapes (NUL and DEL in the component; −0, the least subnormal and DBL_MAX back bit for bit), a step of 2^64 − 1
+  refused on reading, the halfway reads and the f32 overflow refused with the point untouched, and a writer refusing
+  2⁴⁰ points as Allocation: 56 assertions. The ledger: 810 ported, 12 n/a, 36 pending; surface parity: 17 modules, 720
+  items, soorat done; the API snapshot 2,178 (16 added).
+- **Result, every target** (x86_64 ELF, x86_64 PE, aarch64): **21 modules, 0 failing; 646,235 ok, 0 failed, 0
+  measured, 0 pending, 123,844 accepted (ADR 01: 43,087; ADR 0002: 80,757)** over 770,079 rows; **all 520 digests
+  equal** (the 16 soorat JSON functions' new); the 31 test files pass on all three (2,816 assertions). The gate is
+  clean (no warnings; execution coverage 433 of 433; the audit passes); validate.py 770,079 rows, 0 problems;
+  `emit.py --check` current for fdtd_2d3d, bridge and soorat. The A/B
+  against HEAD (two interleaved runs, load 1.0–3.4, then 7–9 beside another repo's gate): median ratios 1.014 and
+  1.006 over 112 benches; `fmt_f64_display` 0.93 and 0.92 and `rf/write_touchstone_s2p_201` 1.006 and 0.984, the
+  two that print through the split digit generator: within noise. Rust 1.2.0 has no soorat or JSON bench, so M7 adds
+  no twin.
+  **`integration/soorat.rs` is done.** Next: 1c, `ai.rs` in the `[lib.ai]` profile.
