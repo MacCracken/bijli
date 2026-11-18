@@ -90,17 +90,34 @@ fn _bj_sc_load(p): BjComplex {
     return z;
 }
 
+# NaN + NaN·j, an accessor's value for an index out of range.
+#must_use
+fn _bj_sc_nan_c(): BjComplex {
+    var z: BjComplex;
+    z.re = 0x7FF8000000000000;
+    z.im = 0x7FF8000000000000;
+    return z;
+}
+
 impl BjMieResult {
-    # aₖ₊₁, the coefficient at index k (0 ≤ k < a_len). Mirrors `result.a[k]`.
+    # aₖ₊₁, the coefficient at index k (0 ≤ k < a_len), else NaN + NaN·j (Rust's `result.a[k]` panics there).
     #must_use
     public fn a_at(self, k): BjComplex {
+        if (k < 0 || k >= self.a_len) {
+            var nz: BjComplex = _bj_sc_nan_c();
+            return nz;
+        }
         var z: BjComplex = _bj_sc_load(self.a + k * 16);
         return z;
     }
 
-    # bₖ₊₁, the coefficient at index k (0 ≤ k < b_len). Mirrors `result.b[k]`.
+    # bₖ₊₁, the coefficient at index k (0 ≤ k < b_len), else NaN + NaN·j (Rust's `result.b[k]` panics there).
     #must_use
     public fn b_at(self, k): BjComplex {
+        if (k < 0 || k >= self.b_len) {
+            var nz: BjComplex = _bj_sc_nan_c();
+            return nz;
+        }
         var z: BjComplex = _bj_sc_load(self.b + k * 16);
         return z;
     }

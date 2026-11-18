@@ -3547,6 +3547,7 @@ fn _bj_e_cell_fix(d, k, ks, a, b, w, m) {
 # multiple: at an odd count f64v_sub, f64v_mul and f64v_scale write one word past their dst on 6.7.18 (probe p19; port
 # plan §10).
 fn _bj_e_cell_row(d: *f64, k: *f64, ks, a: *f64, b: *f64, w: *f64, n) {
+    if (n <= 0) { return 0; }
     var m = n & (0 - 4);
     var k0: f64 = 0.0;
     if (ks == 0) { k0 = k[0]; }

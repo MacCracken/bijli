@@ -1425,6 +1425,86 @@ fn main() {
     txv.display(&txt2);
     assert(bj_text_len(&txt2) == 7 && bj_text_overflowed(&txt2) == 1 && text_is(bj_text_ptr(&txt2), "(1, -2.") == 1,
       "a short buffer keeps 7 bytes and its NUL, and says it overflowed");
+
+    test_group("cyrius_audit_201_memory (2.0.1 bite 1a)");
+    # H1: a line continued from its own last point. 200 steps leave a 201-point block (4,824 bytes, past the 4 KiB
+    # freelist classes, so freeing it unmaps it); the next trace from line.at(200) grows it, and start is copied first.
+    var cl = BjPolyline_new();
+    var ca1, cb1 = bj_trace_field_line(&o, 0.01, 200, x_hat, &cl);
+    var cend: *f64 = cl.at(200);
+    var cex: f64 = cend[0];
+    var ca2, cb2 = bj_trace_field_line(cl.at(200), 0.01, 1000, x_hat, &cl);
+    var cst: *f64 = cl.at(0);
+    var csx: f64 = cst[0];
+    var clast: *f64 = cl.at(1000);
+    var clx: f64 = clast[0];
+    assert(is_ok(ca1) == 1 && is_ok(ca2) == 1 && cl.count() == 1001 && same_bits(csx, _bj_bits(cex)) == 1 &&
+      near(clx, 12.0, 0.000001) == 1, "a trace from the polyline's own last point starts there (H1)");
+    # H10: the field function gets a copy of the position; writing through it doesn't move the line.
+    var scribble = |pos, out| {
+        var pp: *f64 = as_f64p(pos);
+        pp[0] = 1000.0;
+        var oo: *BjFieldVector = as_fv(out);
+        oo.x = 1.0;
+        oo.y = 0.0;
+        oo.z = 0.0;
+        return 0;
+    };
+    var cs1, cs2 = bj_trace_field_line(&o, 0.5, 2, scribble, &cl);
+    var cs_p: *f64 = cl.at(2);
+    var cs_x: f64 = cs_p[0];
+    assert(is_ok(cs1) == 1 && cl.count() == 3 && same_bits(cs_x, _bj_bits(1.0)) == 1,
+      "a field function's write to pos doesn't move the line (H10)");
+    # H10: a field function that returns NONE and fills nothing sees a zero vector: a null point, not stack data.
+    var lazy = |pos, out| { return 0; };
+    var cz1, cz2 = bj_trace_field_line(&o, 0.5, 5, lazy, &cl);
+    assert(is_ok(cz1) == 1 && cl.count() == 1, "an unfilled field vector is zero: the line stops at once (H10)");
+    BjPolyline_free(&cl);
+    # H7: the sphere image in place. R = 1e-200 at |r| = 1: (R/|r|)² = 1e-400 underflows, so the range-edge path runs
+    # and rereads the position; in place it must still see (1, 0, 0).
+    var spos: f64[3];
+    at3(&spos, 1.0, 0.0, 0.0);
+    var sref: f64[3];
+    var srr: f64 = _bj_from_bits(0x16687E92154EF7AC);
+    var sr1, sr2 = bj_image_charge_sphere(1.0, &spos, srr, &sref);
+    var si1, si2 = bj_image_charge_sphere(1.0, &spos, srr, &spos);
+    var sq_ref: f64 = sr2;
+    var sq_in: f64 = si2;
+    var sx_ref: f64 = sref[0];
+    var sx_in: f64 = spos[0];
+    assert(is_ok(sr1) == 1 && is_ok(si1) == 1 && same_bits(sq_in, _bj_bits(sq_ref)) == 1 &&
+      same_bits(sx_in, _bj_bits(sx_ref)) == 1, "the sphere image in place equals the one beside it (H7)");
+    # H4: a capacity below 1 writes nothing outside the caller's buffer.
+    var tzb[16];
+    store8(&tzb, 90);
+    store8(&tzb + 1, 90);
+    var tzt[24];
+    var tzr = bj_text_init(&tzt, &tzb + 1, 0);
+    _bj_tx_cstr(&tzt, "abc");
+    _bj_tx_putc(&tzt, 65);
+    assert(tzr == BJ_ERR_INVALID_PARAMETER && load8(&tzb) == 90 && load8(&tzb + 1) == 90 && bj_text_len(&tzt) == 0 &&
+      bj_text_overflowed(&tzt) == 1 && load8(bj_text_ptr(&tzt)) == 0, "cap 0: nothing written, an empty text (H4)");
+    var tzr2 = bj_text_init(&tzt, &tzb, 0 - 5);
+    assert(tzr2 == BJ_ERR_INVALID_PARAMETER && load8(&tzb) == 90, "a negative cap: nothing written (H4)");
+    # H11: a cut never ends inside a UTF-8 sequence. Room 4 for "abcé" (é = C3 A9) keeps "abc", by string and by byte.
+    var tub[5];
+    var tut[24];
+    bj_text_init(&tut, &tub, 5);
+    _bj_tx_cstr(&tut, "abc\xC3\xA9");
+    assert(text_is(bj_text_ptr(&tut), "abc") == 1 && bj_text_len(&tut) == 3 && bj_text_overflowed(&tut) == 1,
+      "a two-byte character that doesn't fit is dropped whole (H11)");
+    bj_text_init(&tut, &tub, 5);
+    _bj_tx_cstr(&tut, "ab");
+    _bj_tx_putc(&tut, 226);
+    _bj_tx_putc(&tut, 130);
+    _bj_tx_putc(&tut, 172);
+    assert(text_is(bj_text_ptr(&tut), "ab") == 1 && bj_text_len(&tut) == 2 && bj_text_overflowed(&tut) == 1,
+      "a three-byte character cut by putc is dropped whole (H11)");
+    bj_text_init(&tut, &tub, 5);
+    _bj_tx_cstr(&tut, "a\xC3\xA9b");
+    _bj_tx_cstr(&tut, "cd");
+    assert(text_is(bj_text_ptr(&tut), "a\xC3\xA9b") == 1 && bj_text_len(&tut) == 4,
+      "a cut after whole characters keeps them (H11)");
     return assert_summary();
 }
 

@@ -482,6 +482,22 @@ fn main() {
     fl_free(o22);
     BjGpuFdtd2d_free(&g22);
 
+    test_group("cyrius_audit_201_freed_reads (2.0.1 bite 1a)");
+    # H6: after free the grid reads as an empty one; the backend is never handed buffer 0.
+    var g23: BjGpuFdtd2d<BjCpuBackend>;
+    var t23, v23 = BjGpuFdtd2d_new(4, 4, DX, cpu, &g23);
+    BjGpuFdtd2d_free(&g23);
+    var d23: f64[16];
+    var r0, w0 = BjGpuFdtd2d_read_ez(&g23, &d23, 0);
+    var r1, w1 = BjGpuFdtd2d_read_ez(&g23, &d23, 16);
+    var r1e = bj_last_error_display();
+    var r2, w2 = BjGpuFdtd2d_read_hx(&g23, &d23, 16);
+    var r3, w3 = BjGpuFdtd2d_read_hy(&g23, &d23, 16);
+    assert(is_ok(t23) == 1 && is_ok(r0) == 1 && is_err_result(r1) == 1 && w1 == BJ_ERR_INVALID_PARAMETER &&
+      is_err_result(r2) == 1 && is_err_result(r3) == 1, "reads after free: Ok for 0, else InvalidParameter (H6)");
+    assert(text_is(r1e, "invalid parameter: host slice length 16 does not match buffer length 0") == 1,
+      "the CPU backend's text for an empty buffer (H6)");
+
     return assert_summary();
 }
 

@@ -98,6 +98,46 @@ fn cat2(a, b): i64 {
     return out;
 }
 
+# 2.0.1 bite 1a (port-parity §142): TouchstoneData's document is sized by each matrix's own ports (H9).
+fn cyrius_audit_201(): i64 {
+    test_group("cyrius_audit_201_touchstone_json (2.0.1 bite 1a)");
+    var ad: BjTouchstoneData;
+    var az = "{\"ports\":4611686018427387904,\"z0\":50.0,\"frequencies\":[],\"s_matrices\":[]}";
+    var ta1, va1 = BjTouchstoneData_from_json(az, strlen(az), &ad);
+    var asb = str_builder_new();
+    var ta2, va2 = BjTouchstoneData_to_json(&ad, asb);
+    assert(is_ok(ta1) == 1 && is_ok(ta2) == 1 && built_is(asb, az) == 1,
+      "2^62 ports and no points: read, and written back (it was Allocation)");
+    BjTouchstoneData_free(&ad);
+    # A 1-port point whose matrix a consumer replaced with a 3-port one: the block is sized by the 3-port matrix.
+    var a1 = cat2("{\"ports\":1,\"z0\":50.0,\"frequencies\":[1.0],",
+      "\"s_matrices\":[{\"ports\":1,\"s\":[[{\"re\":0.5,\"im\":0.0}]],\"z0\":[50.0]}]}");
+    var ad2: BjTouchstoneData;
+    var tb1, vb1 = BjTouchstoneData_from_json(a1, strlen(a1), &ad2);
+    var m3: BjSMatrix;
+    var tm3, vm3 = BjSMatrix_new(3, 50.0, &m3);
+    var m0: *BjSMatrix = ad2.matrix_at(0);
+    var sp = m0.ports;
+    var ss = m0.s;
+    var sz = m0.z0;
+    m0.ports = m3.ports;
+    m0.s = m3.s;
+    m0.z0 = m3.z0;
+    var asb2 = str_builder_new();
+    var tb2, vb2 = BjTouchstoneData_to_json(&ad2, asb2);
+    m0.ports = sp;
+    m0.s = ss;
+    m0.z0 = sz;
+    var js = str_builder_build(asb2);
+    var tail = "\"z0\":[50.0,50.0,50.0]}]}";
+    var nt = strlen(tail);
+    assert(is_ok(tb1) == 1 && is_ok(tm3) == 1 && is_ok(tb2) == 1 && str_len(js) > nt &&
+      memeq(str_data(js) + str_len(js) - nt, tail, nt) == 1, "a 3-port matrix in 1-port data is written whole");
+    BjSMatrix_free(&m3);
+    BjTouchstoneData_free(&ad2);
+    return 0;
+}
+
 # rf's three types (M4 part 1d): the text, round trips, ADR 0002 row 36's refusals, a format no enum holds, out left
 # alone, and the heap.
 fn cyrius_rf_json(): i64 {
@@ -658,6 +698,7 @@ fn main(): i64 {
     cyrius_rf_json();
     cyrius_fdtd_json();
     cyrius_fdtd2d_json();
+    cyrius_audit_201();
     return assert_summary();
 }
 

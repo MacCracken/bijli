@@ -564,6 +564,42 @@ fn main() {
     assert(is_ok(ga) == 1 && _bj_k_bits(gmx) == 0, "a pattern of -0: the gain +0 (Rust's x86-64 max gave -0)");
     BjRadiationPattern_free(&grp);
 
+    test_group("cyrius_audit_201_budgets (2.0.1 bite 1a)");
+    # H3: the longest fixed fields, usize words of 2^64 − 1 (20 digits) and a 25-byte float (bayan's positional
+    # -0.0000012345678901234567), fit the writers' budgets (the NUL once ran 4 bytes past a 256-byte block).
+    var wf: f64 = _bj_from_bits(0xBEB4B66DC01EC6FB);
+    var wm = 0 - 1;
+    var wfs = "-0.0000012345678901234567";
+    var wdims = "18446744073709551615,18446744073709551615,18446744073709551615]";
+    var wtri = cat2(cat2(cat2(wfs, ","), cat2(wfs, ",")), cat2(wfs, "]"));
+    var wv: BjVectorFieldSample;
+    wv.vectors = 0;
+    wv.vectors_len = 0;
+    wv.dimensions = (wm, wm, wm);
+    wv.origin = (wf, wf, wf);
+    wv.spacing = wf;
+    wv.max_magnitude = wf;
+    var wsb = str_builder_new();
+    var tw1, vw1 = BjVectorFieldSample_to_json(&wv, wsb);
+    var wtail = cat2(cat2(cat2(",\"origin\":[", wtri), cat2(",\"spacing\":", wfs)), cat2(",\"max_magnitude\":", wfs));
+    assert(is_ok(tw1) == 1 && doc_is(wsb, cat2("{\"vectors\":[],\"dimensions\":[", wdims), cat2(wtail, "}")) == 1,
+      "a vector sample with no vectors at its longest: 259 bytes and the NUL (H3)");
+    var wq: BjFieldSlice3D;
+    wq.values = 0;
+    wq.values_len = 0;
+    wq.dimensions = (wm, wm, wm);
+    wq.origin = (wf, wf, wf);
+    wq.spacing = wf;
+    wq.component = "";
+    wq.component_len = 0;
+    wq.step = wm;
+    var wsb2 = str_builder_new();
+    var tw2, vw2 = BjFieldSlice3D_to_json(&wq, wsb2);
+    var wtail2 = cat2(cat2(",\"origin\":[", wtri), cat2(",\"spacing\":", wfs));
+    var wtail3 = cat2(wtail2, ",\"component\":\"\",\"step\":18446744073709551615}");
+    assert(is_ok(tw2) == 1 && doc_is(wsb2, cat2("{\"values\":[],\"dimensions\":[", wdims), wtail3) == 1,
+      "a volume with no values at its longest: 259 bytes and the NUL (H3)");
+
     return assert_summary();
 }
 

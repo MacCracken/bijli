@@ -25,8 +25,9 @@
 
 # ── BjText: a bounded text buffer ───────────────────────────────────────────────────
 # Three words: the buffer's address, its capacity in bytes, and the length written so far. The text is kept
-# NUL-terminated; bytes past capacity − 1 are dropped and counted in the length, so `_bj_tx_overflowed` tells.
-# src/text.cyr's bj_text_* are these four for a consumer (M8 part 2).
+# NUL-terminated; bytes past capacity − 1 are dropped and counted in the length, so `_bj_tx_overflowed` tells. At the
+# first dropped byte, a UTF-8 sequence the kept bytes end inside is dropped whole (_bj_tx_cut), so a text of UTF-8
+# stays UTF-8 when it is cut (2.0.1). src/text.cyr's bj_text_* are these four for a consumer (M8 part 2).
 
 # t = an empty text over [buf, buf + cap), cap ≥ 1.
 fn _bj_tx_init(t, buf, cap) {
@@ -43,13 +44,41 @@ fn _bj_tx_ptr(t): i64 {
     return load64(t);
 }
 
-# The number of bytes kept (below the capacity).
+# The number of bytes kept (below the capacity). Past it, the kept bytes end at capacity − 1, less the sequence
+# _bj_tx_cut dropped (at most 3 bytes, NUL-filled).
 #must_use
 fn _bj_tx_len(t): i64 {
     var n = load64(t + 16);
-    var cap = load64(t + 8);
-    if (n > cap - 1) { return cap - 1; }
-    return n;
+    var room = load64(t + 8) - 1;
+    if (n <= room) { return n; }
+    var buf = load64(t);
+    var k = room;
+    var j = 0;
+    while (j < 3 && k > 0 && load8(buf + k - 1) == 0) {
+        k = k - 1;
+        j = j + 1;
+    }
+    return k;
+}
+
+# At the first dropped byte: when the kept bytes [0, room) end inside a UTF-8 sequence, its kept bytes are dropped
+# too (NUL-filled), so the text stays well-formed. Only a lead byte's own sequence is judged; anything else is kept.
+fn _bj_tx_cut(buf, room) {
+    var k = room;
+    var j = 0;
+    while (j < 3 && k > 0 && (load8(buf + k - 1) & 192) == 128) {
+        k = k - 1;
+        j = j + 1;
+    }
+    if (k == 0) { return 0; }
+    var lead = load8(buf + k - 1);
+    var need = 1;
+    if ((lead & 224) == 192) { need = 2; }
+    elif ((lead & 240) == 224) { need = 3; }
+    elif ((lead & 248) == 240) { need = 4; }
+    if (need == 1 || room - (k - 1) >= need) { return 0; }
+    for (var i = k - 1; i < room; i = i + 1) { store8(buf + i, 0); }
+    return 0;
 }
 
 # 1 when bytes were dropped for want of room.
@@ -63,9 +92,12 @@ fn _bj_tx_overflowed(t): i64 {
 fn _bj_tx_putc(t, c) {
     var n = load64(t + 16);
     var buf = load64(t);
-    if (n < load64(t + 8) - 1) {
+    var room = load64(t + 8) - 1;
+    if (n < room) {
         store8(buf + n, c);
         store8(buf + n + 1, 0);
+    } elif (n == room) {
+        _bj_tx_cut(buf, room);
     }
     store64(t + 16, n + 1);
     return 0;
@@ -85,6 +117,7 @@ fn _bj_tx_cstr(t, s) {
     }
     var end = n + i;
     if (end < room) { store8(buf + end, 0); } else { store8(buf + room, 0); }
+    if (n <= room && end > room) { _bj_tx_cut(buf, room); }
     store64(t + 16, end);
     return 0;
 }

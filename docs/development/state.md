@@ -10,6 +10,10 @@ it through `version = "${file:VERSION}"`, and the release workflow checks both a
 (2026-11-11), the specification; its tree was retired from the repository with the Rust generator on 2026-11-16
 ([ADR 0003](../adr/0003-retire-the-rust-tree.md)). It includes the 3D CPML. crates.io stops at 1.1.0.
 
+**2.0.1 is in progress** (the user's request of 2026-11-18): the audit is done ([`port-parity.md`](port-parity.md)
+§142, 34 findings, H1–H34), and the repairs run in bites 1a–7, listed in the [roadmap](roadmap.md). `VERSION`
+stays 2.0.0 until bite 7.
+
 ## Port progress
 
 Plan of record: [`bijli-port-plan.md`](bijli-port-plan.md). Decisions:

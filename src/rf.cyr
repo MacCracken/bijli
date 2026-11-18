@@ -1043,6 +1043,26 @@ public fn BjSMatrix_new(ports, z0: f64, out: *BjSMatrix): Result {
     return Ok(0);
 }
 
+# The cascade's result, the four entries at e (re, im pairs) with both reference impedances z0, into *out: Ok(0), or
+# Err(Allocation) with out untouched. When out is a or b (an input), the matrix is built aside, then out's old block is
+# given back and the new one takes its place.
+#must_use
+fn _bj_rf_cascade_out(e: *f64, z0: f64, a, b, out: *BjSMatrix): Result {
+    var m: BjSMatrix;
+    var dst: *BjSMatrix = out;
+    if (out == a || out == b) { dst = &m; }
+    var t, v = BjSMatrix_two_port(BjComplex_new(e[0], e[1]), BjComplex_new(e[2], e[3]), BjComplex_new(e[4], e[5]),
+      BjComplex_new(e[6], e[7]), z0, dst);
+    if (is_err_result(t) == 1) { return Err(v); }
+    if (out == a || out == b) {
+        BjSMatrix_free(out);
+        out.ports = m.ports;
+        out.s = m.s;
+        out.z0 = m.z0;
+    }
+    return Ok(0);
+}
+
 # A 2-port matrix [[S11, S12], [S21, S22]] with both reference impedances z0, into *out: Ok(0), or Err(Allocation)
 # with out untouched. Mirrors `SMatrix::two_port`.
 #must_use
@@ -1258,11 +1278,16 @@ impl BjSMatrix {
         return Ok(0);
     }
 
-    # Rust's `s[i][j]`, indices from 0 (0 ≤ i, j < ports; unchecked, as the entry's address is).
+    # Rust's `s[i][j]`, indices from 0 (0 ≤ i, j < ports), else NaN + NaN·j (Rust's index panics there), as z0_at.
     #must_use
     public fn s_at(self, i, j): BjComplex {
-        var p = self.s + (i * self.ports + j) * 16;
         var z: BjComplex;
+        if (i < 0 || i >= self.ports || j < 0 || j >= self.ports) {
+            z.re = 0x7FF8000000000000;
+            z.im = 0x7FF8000000000000;
+            return z;
+        }
+        var p = self.s + (i * self.ports + j) * 16;
         z.re = load64(p);
         z.im = load64(p + 8);
         return z;
@@ -1297,9 +1322,10 @@ impl BjSMatrix {
     }
 
     # The cascade of two 2-ports, self then other (self's port 2 to other's port 1), into a new matrix in *out: Ok(0),
-    # or Err with out untouched (and never read). For finite entries, Redheffer's star product with each part rounded
-    # once from the exact value (src/crmath_edge.cyr's _bj_cr_cascade; ADR 0002 row 17, M4 part 2a-2): S11 = A11 +
-    # A12·A21·B11/D, S12 = A12·B12/D, S21 = A21·B21/D, S22 = B22 + A22·B12·B21/D, D = 1 − A22·B11; a part exactly 0
+    # or Err with out untouched (and never read). out may be self or other: that matrix's block is then given back and
+    # replaced. For finite entries, Redheffer's star product with each part rounded once from the exact value
+    # (src/crmath_edge.cyr's _bj_cr_cascade; ADR 0002 row 17, M4 part 2a-2): S11 = A11 + A12·A21·B11/D, S12 = A12·B12/D,
+    # S21 = A21·B21/D, S22 = B22 + A22·B12·B21/D, D = 1 − A22·B11; a part exactly 0
     # keeps Rust's zero where Rust's chain gives one (+0 otherwise). With a non-finite entry, Rust's chain through the
     # transfer matrices, T = T_self·T_other. InvalidParameter unless both are 2-ports
     # whose reference impedances are all equal (finite, positive); DivisionByZero where S21 of either is 0
@@ -1370,14 +1396,12 @@ impl BjSMatrix {
                     if (((zm >> k2) & 1) == 1 && rk == 0.0) { o[k2] = rk; }
                 }
             }
-            return BjSMatrix_two_port(BjComplex_new(o[0], o[1]), BjComplex_new(o[2], o[3]), BjComplex_new(o[4], o[5]),
-              BjComplex_new(o[6], o[7]), z0, out);
+            return _bj_rf_cascade_out(&o, z0, self, other, out);
         }
         if (_bj_rf_cascade_chain(&t1, &t2, &r) == 1) {
             return Err(_bj_err_division_by_zero("T22 = 0, cannot convert to S-parameters"));
         }
-        return BjSMatrix_two_port(BjComplex_new(r[0], r[1]), BjComplex_new(r[2], r[3]), BjComplex_new(r[4], r[5]),
-          BjComplex_new(r[6], r[7]), z0, out);
+        return _bj_rf_cascade_out(&r, z0, self, other, out);
     }
 }
 

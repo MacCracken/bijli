@@ -6,6 +6,30 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
 
+The 2.0.1 audit and its repairs (`docs/development/port-parity.md` §142, findings H1–H34).
+
+### Fixed
+- **field** — `bj_trace_field_line` copies `start` before its polyline can grow. A line continued from its own last
+  point (`start = line.at(k)`) used to read the block it had just freed, unmapped once past 4 KiB (H1). The field
+  function now gets a copy of the position, as Rust passes it by value, and a zeroed vector to fill (H10).
+- **field** — `bj_image_charge_sphere` with `image_pos == position`: its range-edge path reread a position it had
+  already overwritten, which returned a wrong Err with the out-param written (H7).
+- **fdtd** — `BjCwAccumulator.accumulate` with a `len` of 2^63 or more (a usize) wrote before its `real` sums. It now
+  takes the whole field, and the per-cell row helper refuses a count ≤ 0 (H2). `BjNonUniformGrid_graded` with
+  n ≥ 2^60, Rust's capacity overflow, returns Allocation instead of writing without bound (H8).
+- **json** — the `BjVectorFieldSample` and `BjFieldSlice3D` writers budgeted 4 bytes too few for their longest fixed
+  fields (a 25-byte float, a 20-digit usize), so a document read and written back could put its NUL into the next
+  heap block (H3). `BjTouchstoneData_to_json` sizes its block by each matrix's own ports, so a matrix a consumer
+  replaced is written whole, and data of 2^62 ports with no points writes back (it was Allocation) (H9).
+- **text** — `bj_text_init` with a capacity below 1 wrote before the caller's buffer. The text is now empty over a
+  byte of bijli's own, and the call returns BJ_ERR_INVALID_PARAMETER (H4). A text cut for want of room no longer ends
+  inside a UTF-8 sequence (H11).
+- **scattering, rf** — `BjMieResult.a_at`/`b_at` and `BjSMatrix.s_at` return NaN + NaN·j out of range, as `z0_at`
+  does (they read past their block) (H5). `BjSMatrix.cascade` into `self` or `other` gives that matrix's block back
+  (it leaked) (H9).
+- **compute** — `BjGpuFdtd2d_read_ez`/`hx`/`hy` after `BjGpuFdtd2d_free` read as an empty grid. They used to hand
+  buffer 0 to the backend, which loaded from it (H6).
+
 ## [2.0.0] — 2026-11-18
 
 bijli is now a Cyrius library: the port of the Rust crate 1.2.0

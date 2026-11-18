@@ -13,8 +13,20 @@
 
 private
 
-# Makes t an empty text over [buf, buf + cap), cap ≥ 1 (the NUL takes one byte). Returns 0.
+# The byte a text gets when its capacity is below 1: its NUL, so such a text drops everything written to it.
+var _bj_text_none[8];
+
+# Makes t an empty text over [buf, buf + cap) (the NUL takes one byte): 0. A cap below 1 has no room for the NUL, so
+# t is then an empty text over a byte of bijli's own, nothing is written at buf, and the return is
+# BJ_ERR_INVALID_PARAMETER with its error recorded. A text cut for want of room never ends inside a UTF-8 sequence.
 public fn bj_text_init(t, buf, cap): i64 {
+    if (cap < 1) {
+        _bj_tx_init(t, &_bj_text_none, 1);
+        var e = _bj_err_reason(BJ_ERR_INVALID_PARAMETER);
+        _bj_tx_cstr(e, "text capacity must be at least 1, got ");
+        _bj_tx_i64(e, cap);
+        return BJ_ERR_INVALID_PARAMETER;
+    }
     _bj_tx_init(t, buf, cap);
     return 0;
 }

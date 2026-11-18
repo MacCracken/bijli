@@ -1992,7 +1992,8 @@ public fn bj_image_charge_plane(charge: f64, position: *f64, plane_z: f64, image
 # The image of a charge at `position` outside a grounded sphere of radius R at the origin: Ok(q' = −(R/d)·q), and the
 # position (R²/d²)·r into image_pos (Griffiths Ex. 3.2). InvalidParameter when R is not positive and finite, or the
 # charge is not strictly outside (a NaN position included). At a range edge the chain runs with an unbounded exponent,
-# the comparison with R included, each output rounded once (ADR 0002 row 18). Mirrors `field::image_charge_sphere`.
+# the comparison with R included, each output rounded once (ADR 0002 row 18). image_pos may be position (an image in
+# place); on an error it is untouched. Mirrors `field::image_charge_sphere`.
 public fn bj_image_charge_sphere(charge: f64, position: *f64, sphere_radius: f64, image_pos: *f64): Result {
     if (!(sphere_radius > 0.0 && _bj_is_finite(sphere_radius) == 1)) {
         var t = _bj_err_reason(BJ_ERR_INVALID_PARAMETER);
@@ -2017,13 +2018,19 @@ public fn bj_image_charge_sphere(charge: f64, position: *f64, sphere_radius: f64
     var nq: f64 = -charge;
     var q_image: f64 = nq * ratio;
     var scale: f64 = ratio * ratio;
-    image_pos[0] = position[0] * scale;
-    image_pos[1] = position[1] * scale;
-    image_pos[2] = position[2] * scale;
     var e2 = (load64(&ratio) >> 52) & 0x7FF;
     var e3 = (load64(&scale) >> 52) & 0x7FF;
     var w = (e2 - 2) | (2046 - e2) | (e3 - 2) | (2046 - e3);
-    if (w >= 0 || _bj_is_finite(charge) == 0) { return Ok(q_image); }
+    if (w >= 0 || _bj_is_finite(charge) == 0) {
+        # image_pos may be position itself: each product is formed before its store.
+        var ix: f64 = position[0] * scale;
+        var iy: f64 = position[1] * scale;
+        var iz: f64 = position[2] * scale;
+        image_pos[0] = ix;
+        image_pos[1] = iy;
+        image_pos[2] = iz;
+        return Ok(q_image);
+    }
     var r2t, r2v = _bj_fv_sphere_edge(charge, position, sphere_radius, image_pos);
     if (is_err_result(r2t) == 1) { return Err(r2v); }
     return Ok(r2v);
@@ -2553,7 +2560,8 @@ impl BjPolyline {
         return self.len;
     }
 
-    # The address of point i's three f64 (0 ≤ i < count).
+    # The address of point i's three f64 (0 ≤ i < count). It stays valid until the polyline is traced into again or
+    # freed; bj_trace_field_line may start from it (it copies `start` first).
     #must_use
     public fn at(self, i): *f64 {
         var a: *f64 = _bj_f64p(self.pts + i * 24);
@@ -2626,6 +2634,11 @@ fn _bj_fv_trace_edge(fx: f64, fy: f64, fz: f64, h: f64, pos: *f64) {
 # 0002 row 9). On an error out is empty. A success leaves the last-error record as field_fn left it. Mirrors
 # `field::trace_field_line`.
 public fn bj_trace_field_line(start: *f64, step_size: f64, max_steps, field_fn, out: *BjPolyline): Result {
+    # start may point into out's own block (a line continued from its last point): copy it before out can grow.
+    var pos: f64[3];
+    pos[0] = start[0];
+    pos[1] = start[1];
+    pos[2] = start[2];
     out.len = 0;
     if (!(step_size > 0.0 && _bj_is_finite(step_size) == 1)) {
         var t = _bj_err_reason(BJ_ERR_INVALID_PARAMETER);
@@ -2633,10 +2646,10 @@ public fn bj_trace_field_line(start: *f64, step_size: f64, max_steps, field_fn, 
         _bj_fmt_f64_display(t, step_size);
         return Err(BJ_ERR_INVALID_PARAMETER);
     }
-    if (_bj_is_finite(start[0]) == 0 || _bj_is_finite(start[1]) == 0 || _bj_is_finite(start[2]) == 0) {
+    if (_bj_is_finite(pos[0]) == 0 || _bj_is_finite(pos[1]) == 0 || _bj_is_finite(pos[2]) == 0) {
         var t2 = _bj_err_reason(BJ_ERR_INVALID_PARAMETER);
         _bj_tx_cstr(t2, "start position must be finite, got ");
-        _bj_fmt_f64x3_debug(t2, start);
+        _bj_fmt_f64x3_debug(t2, &pos);
         return Err(BJ_ERR_INVALID_PARAMETER);
     }
     if (_bj_log_on(4) == 1) {
@@ -2644,7 +2657,7 @@ public fn bj_trace_field_line(start: *f64, step_size: f64, max_steps, field_fn, 
         var lt[24];
         _bj_tx_init(&lt, &lb, 400);
         _bj_tx_cstr(&lt, "tracing field line start=");
-        _bj_fmt_f64x3_debug(&lt, start);
+        _bj_fmt_f64x3_debug(&lt, &pos);
         _bj_tx_cstr(&lt, " step_size=");
         _bj_fmt_f64_debug(&lt, step_size);
         _bj_tx_cstr(&lt, " max_steps=");
@@ -2657,19 +2670,23 @@ public fn bj_trace_field_line(start: *f64, step_size: f64, max_steps, field_fn, 
         _bj_tx_cstr(_bj_err_reason(BJ_ERR_ALLOCATION), "field line buffer");
         return Err(BJ_ERR_ALLOCATION);
     }
-    var pos: f64[3];
-    pos[0] = start[0];
-    pos[1] = start[1];
-    pos[2] = start[2];
     _bj_poly_push(out, &pos);
     var stop_reason = "max_steps reached";
+    # The field function gets a copy of the position (Rust passes it by value) and a zeroed vector to fill.
+    var q: f64[3];
     var f: BjFieldVector;
+    f.x = 0.0;
+    f.y = 0.0;
+    f.z = 0.0;
     var h_small = 0;
     if (step_size <= 1.0) { h_small = 1; }
     var wh = (load64(&step_size) >> 52) - 2046;                     # negative when h < 2^1023
     var i = 0;
     while (i != max_steps) {
-        var st = callptr(field_fn, &pos, &f);
+        q[0] = pos[0];
+        q[1] = pos[1];
+        q[2] = pos[2];
+        var st = callptr(field_fn, &q, &f);
         if (st != BJ_ERR_NONE) {
             if (st == BJ_ERR_SINGULARITY) {
                 stop_reason = "singularity (source/sink)";

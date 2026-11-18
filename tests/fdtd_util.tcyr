@@ -744,6 +744,47 @@ fn main() {
     assert(at(fo, 0) == _bj_from_bits(0x4202a05f20000010) && at(fo, 2) == _bj_from_bits(0x4202a05f20000011),
       "a ramp of 1e-300 on dx = 1e-310: 1/dx past DBL_MAX, the slope 1e10 (Rust's ∞)");
 
+    test_group("cyrius_audit_201_lengths (2.0.1 bite 1a)");
+    # H2: a len of 2^63 or more (a usize) is longer than the field, so the prefix is field_size, as len = 8.
+    var aw1: BjCwAccumulator;
+    var aw2: BjCwAccumulator;
+    var aw3: BjCwAccumulator;
+    var at1, av1 = BjCwAccumulator_new(8, 1000000000.0, 0.000000000001, &aw1);
+    var at2, av2 = BjCwAccumulator_new(8, 1000000000.0, 0.000000000001, &aw2);
+    var at3, av3 = BjCwAccumulator_new(8, 1000000000.0, 0.000000000001, &aw3);
+    var af8: f64[8];
+    for (var ak = 0; ak < 8; ak = ak + 1) {
+        var akf: f64 = f64_from(ak + 1);
+        af8[ak] = akf * 0.25;
+    }
+    aw1.accumulate(&af8, 8, 3);
+    aw2.accumulate(&af8, 0 - 1, 3);
+    aw3.accumulate(&af8, 0 - 3, 3);
+    var am1: f64[8];
+    var am2: f64[8];
+    var am3: f64[8];
+    aw1.amplitude(&am1);
+    aw2.amplitude(&am2);
+    aw3.amplitude(&am3);
+    var asame = 1;
+    for (var k2 = 0; k2 < 8; k2 = k2 + 1) {
+        if (_bj_bits(am1[k2]) != _bj_bits(am2[k2]) || _bj_bits(am1[k2]) != _bj_bits(am3[k2])) { asame = 0; }
+    }
+    assert(is_ok(at1) == 1 && is_ok(at2) == 1 && is_ok(at3) == 1 && asame == 1 && am1[7] > 0.0,
+      "accumulate with len -1 and -3 (2^64 − 1, 2^64 − 3) takes the whole field (H2)");
+    BjCwAccumulator_free(&aw1);
+    BjCwAccumulator_free(&aw2);
+    BjCwAccumulator_free(&aw3);
+    # H8: n of 2^60 or more is Rust's capacity overflow: Allocation, nothing written.
+    var gd: f64[2];
+    gd[0] = 7.0;
+    var gt1, gv1 = BjNonUniformGrid_graded(0 - 1, 1.0, 2.0, &gd);
+    var gt2, gv2 = BjNonUniformGrid_graded(1152921504606846976, 1.0, 2.0, &gd);
+    var ge2 = bj_last_error_display();
+    assert(is_err_result(gt1) == 1 && gv1 == BJ_ERR_ALLOCATION && is_err_result(gt2) == 1 && gv2 == BJ_ERR_ALLOCATION
+      && gd[0] == 7.0, "graded with n = 2^64 − 1 or 2^60: Allocation, out untouched (H8)");
+    assert(text_is(ge2, "allocation failed: a graded grid of 1152921504606846976 cells") == 1, "its text (H8)");
+
     return assert_summary();
 }
 

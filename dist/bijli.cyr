@@ -10902,8 +10902,9 @@ fn _bj_vx_bm_hgf(v: *f64, m, n, out: *f64): i64 {
 
 # ── BjText: a bounded text buffer ───────────────────────────────────────────────────
 # Three words: the buffer's address, its capacity in bytes, and the length written so far. The text is kept
-# NUL-terminated; bytes past capacity − 1 are dropped and counted in the length, so `_bj_tx_overflowed` tells.
-# src/text.cyr's bj_text_* are these four for a consumer (M8 part 2).
+# NUL-terminated; bytes past capacity − 1 are dropped and counted in the length, so `_bj_tx_overflowed` tells. At the
+# first dropped byte, a UTF-8 sequence the kept bytes end inside is dropped whole (_bj_tx_cut), so a text of UTF-8
+# stays UTF-8 when it is cut (2.0.1). src/text.cyr's bj_text_* are these four for a consumer (M8 part 2).
 
 # t = an empty text over [buf, buf + cap), cap ≥ 1.
 fn _bj_tx_init(t, buf, cap) {
@@ -10920,13 +10921,41 @@ fn _bj_tx_ptr(t): i64 {
     return load64(t);
 }
 
-# The number of bytes kept (below the capacity).
+# The number of bytes kept (below the capacity). Past it, the kept bytes end at capacity − 1, less the sequence
+# _bj_tx_cut dropped (at most 3 bytes, NUL-filled).
 #must_use
 fn _bj_tx_len(t): i64 {
     var n = load64(t + 16);
-    var cap = load64(t + 8);
-    if (n > cap - 1) { return cap - 1; }
-    return n;
+    var room = load64(t + 8) - 1;
+    if (n <= room) { return n; }
+    var buf = load64(t);
+    var k = room;
+    var j = 0;
+    while (j < 3 && k > 0 && load8(buf + k - 1) == 0) {
+        k = k - 1;
+        j = j + 1;
+    }
+    return k;
+}
+
+# At the first dropped byte: when the kept bytes [0, room) end inside a UTF-8 sequence, its kept bytes are dropped
+# too (NUL-filled), so the text stays well-formed. Only a lead byte's own sequence is judged; anything else is kept.
+fn _bj_tx_cut(buf, room) {
+    var k = room;
+    var j = 0;
+    while (j < 3 && k > 0 && (load8(buf + k - 1) & 192) == 128) {
+        k = k - 1;
+        j = j + 1;
+    }
+    if (k == 0) { return 0; }
+    var lead = load8(buf + k - 1);
+    var need = 1;
+    if ((lead & 224) == 192) { need = 2; }
+    elif ((lead & 240) == 224) { need = 3; }
+    elif ((lead & 248) == 240) { need = 4; }
+    if (need == 1 || room - (k - 1) >= need) { return 0; }
+    for (var i = k - 1; i < room; i = i + 1) { store8(buf + i, 0); }
+    return 0;
 }
 
 # 1 when bytes were dropped for want of room.
@@ -10940,9 +10969,12 @@ fn _bj_tx_overflowed(t): i64 {
 fn _bj_tx_putc(t, c) {
     var n = load64(t + 16);
     var buf = load64(t);
-    if (n < load64(t + 8) - 1) {
+    var room = load64(t + 8) - 1;
+    if (n < room) {
         store8(buf + n, c);
         store8(buf + n + 1, 0);
+    } elif (n == room) {
+        _bj_tx_cut(buf, room);
     }
     store64(t + 16, n + 1);
     return 0;
@@ -10962,6 +10994,7 @@ fn _bj_tx_cstr(t, s) {
     }
     var end = n + i;
     if (end < room) { store8(buf + end, 0); } else { store8(buf + room, 0); }
+    if (n <= room && end > room) { _bj_tx_cut(buf, room); }
     store64(t + 16, end);
     return 0;
 }
@@ -11690,8 +11723,20 @@ fn _bj_fmt_f32_json(t, x: f64) {
 
 private
 
-# Makes t an empty text over [buf, buf + cap), cap ≥ 1 (the NUL takes one byte). Returns 0.
+# The byte a text gets when its capacity is below 1: its NUL, so such a text drops everything written to it.
+var _bj_text_none[8];
+
+# Makes t an empty text over [buf, buf + cap) (the NUL takes one byte): 0. A cap below 1 has no room for the NUL, so
+# t is then an empty text over a byte of bijli's own, nothing is written at buf, and the return is
+# BJ_ERR_INVALID_PARAMETER with its error recorded. A text cut for want of room never ends inside a UTF-8 sequence.
 public fn bj_text_init(t, buf, cap): i64 {
+    if (cap < 1) {
+        _bj_tx_init(t, &_bj_text_none, 1);
+        var e = _bj_err_reason(BJ_ERR_INVALID_PARAMETER);
+        _bj_tx_cstr(e, "text capacity must be at least 1, got ");
+        _bj_tx_i64(e, cap);
+        return BJ_ERR_INVALID_PARAMETER;
+    }
     _bj_tx_init(t, buf, cap);
     return 0;
 }
@@ -15875,6 +15920,7 @@ fn _bj_e_cell_fix(d, k, ks, a, b, w, m) {
 # multiple: at an odd count f64v_sub, f64v_mul and f64v_scale write one word past their dst on 6.7.18 (probe p19; port
 # plan §10).
 fn _bj_e_cell_row(d: *f64, k: *f64, ks, a: *f64, b: *f64, w: *f64, n) {
+    if (n <= 0) { return 0; }
     var m = n & (0 - 4);
     var k0: f64 = 0.0;
     if (ks == 0) { k0 = k[0]; }
@@ -20013,7 +20059,8 @@ public fn bj_image_charge_plane(charge: f64, position: *f64, plane_z: f64, image
 # The image of a charge at `position` outside a grounded sphere of radius R at the origin: Ok(q' = −(R/d)·q), and the
 # position (R²/d²)·r into image_pos (Griffiths Ex. 3.2). InvalidParameter when R is not positive and finite, or the
 # charge is not strictly outside (a NaN position included). At a range edge the chain runs with an unbounded exponent,
-# the comparison with R included, each output rounded once (ADR 0002 row 18). Mirrors `field::image_charge_sphere`.
+# the comparison with R included, each output rounded once (ADR 0002 row 18). image_pos may be position (an image in
+# place); on an error it is untouched. Mirrors `field::image_charge_sphere`.
 public fn bj_image_charge_sphere(charge: f64, position: *f64, sphere_radius: f64, image_pos: *f64): Result {
     if (!(sphere_radius > 0.0 && _bj_is_finite(sphere_radius) == 1)) {
         var t = _bj_err_reason(BJ_ERR_INVALID_PARAMETER);
@@ -20038,13 +20085,19 @@ public fn bj_image_charge_sphere(charge: f64, position: *f64, sphere_radius: f64
     var nq: f64 = -charge;
     var q_image: f64 = nq * ratio;
     var scale: f64 = ratio * ratio;
-    image_pos[0] = position[0] * scale;
-    image_pos[1] = position[1] * scale;
-    image_pos[2] = position[2] * scale;
     var e2 = (load64(&ratio) >> 52) & 0x7FF;
     var e3 = (load64(&scale) >> 52) & 0x7FF;
     var w = (e2 - 2) | (2046 - e2) | (e3 - 2) | (2046 - e3);
-    if (w >= 0 || _bj_is_finite(charge) == 0) { return Ok(q_image); }
+    if (w >= 0 || _bj_is_finite(charge) == 0) {
+        # image_pos may be position itself: each product is formed before its store.
+        var ix: f64 = position[0] * scale;
+        var iy: f64 = position[1] * scale;
+        var iz: f64 = position[2] * scale;
+        image_pos[0] = ix;
+        image_pos[1] = iy;
+        image_pos[2] = iz;
+        return Ok(q_image);
+    }
     var r2t, r2v = _bj_fv_sphere_edge(charge, position, sphere_radius, image_pos);
     if (is_err_result(r2t) == 1) { return Err(r2v); }
     return Ok(r2v);
@@ -20574,7 +20627,8 @@ impl BjPolyline {
         return self.len;
     }
 
-    # The address of point i's three f64 (0 ≤ i < count).
+    # The address of point i's three f64 (0 ≤ i < count). It stays valid until the polyline is traced into again or
+    # freed; bj_trace_field_line may start from it (it copies `start` first).
     #must_use
     public fn at(self, i): *f64 {
         var a: *f64 = _bj_f64p(self.pts + i * 24);
@@ -20647,6 +20701,11 @@ fn _bj_fv_trace_edge(fx: f64, fy: f64, fz: f64, h: f64, pos: *f64) {
 # 0002 row 9). On an error out is empty. A success leaves the last-error record as field_fn left it. Mirrors
 # `field::trace_field_line`.
 public fn bj_trace_field_line(start: *f64, step_size: f64, max_steps, field_fn, out: *BjPolyline): Result {
+    # start may point into out's own block (a line continued from its last point): copy it before out can grow.
+    var pos: f64[3];
+    pos[0] = start[0];
+    pos[1] = start[1];
+    pos[2] = start[2];
     out.len = 0;
     if (!(step_size > 0.0 && _bj_is_finite(step_size) == 1)) {
         var t = _bj_err_reason(BJ_ERR_INVALID_PARAMETER);
@@ -20654,10 +20713,10 @@ public fn bj_trace_field_line(start: *f64, step_size: f64, max_steps, field_fn, 
         _bj_fmt_f64_display(t, step_size);
         return Err(BJ_ERR_INVALID_PARAMETER);
     }
-    if (_bj_is_finite(start[0]) == 0 || _bj_is_finite(start[1]) == 0 || _bj_is_finite(start[2]) == 0) {
+    if (_bj_is_finite(pos[0]) == 0 || _bj_is_finite(pos[1]) == 0 || _bj_is_finite(pos[2]) == 0) {
         var t2 = _bj_err_reason(BJ_ERR_INVALID_PARAMETER);
         _bj_tx_cstr(t2, "start position must be finite, got ");
-        _bj_fmt_f64x3_debug(t2, start);
+        _bj_fmt_f64x3_debug(t2, &pos);
         return Err(BJ_ERR_INVALID_PARAMETER);
     }
     if (_bj_log_on(4) == 1) {
@@ -20665,7 +20724,7 @@ public fn bj_trace_field_line(start: *f64, step_size: f64, max_steps, field_fn, 
         var lt[24];
         _bj_tx_init(&lt, &lb, 400);
         _bj_tx_cstr(&lt, "tracing field line start=");
-        _bj_fmt_f64x3_debug(&lt, start);
+        _bj_fmt_f64x3_debug(&lt, &pos);
         _bj_tx_cstr(&lt, " step_size=");
         _bj_fmt_f64_debug(&lt, step_size);
         _bj_tx_cstr(&lt, " max_steps=");
@@ -20678,19 +20737,23 @@ public fn bj_trace_field_line(start: *f64, step_size: f64, max_steps, field_fn, 
         _bj_tx_cstr(_bj_err_reason(BJ_ERR_ALLOCATION), "field line buffer");
         return Err(BJ_ERR_ALLOCATION);
     }
-    var pos: f64[3];
-    pos[0] = start[0];
-    pos[1] = start[1];
-    pos[2] = start[2];
     _bj_poly_push(out, &pos);
     var stop_reason = "max_steps reached";
+    # The field function gets a copy of the position (Rust passes it by value) and a zeroed vector to fill.
+    var q: f64[3];
     var f: BjFieldVector;
+    f.x = 0.0;
+    f.y = 0.0;
+    f.z = 0.0;
     var h_small = 0;
     if (step_size <= 1.0) { h_small = 1; }
     var wh = (load64(&step_size) >> 52) - 2046;                     # negative when h < 2^1023
     var i = 0;
     while (i != max_steps) {
-        var st = callptr(field_fn, &pos, &f);
+        q[0] = pos[0];
+        q[1] = pos[1];
+        q[2] = pos[2];
+        var st = callptr(field_fn, &q, &f);
         if (st != BJ_ERR_NONE) {
             if (st == BJ_ERR_SINGULARITY) {
                 stop_reason = "singularity (source/sink)";
@@ -26586,17 +26649,34 @@ fn _bj_sc_load(p): BjComplex {
     return z;
 }
 
+# NaN + NaN·j, an accessor's value for an index out of range.
+#must_use
+fn _bj_sc_nan_c(): BjComplex {
+    var z: BjComplex;
+    z.re = 0x7FF8000000000000;
+    z.im = 0x7FF8000000000000;
+    return z;
+}
+
 impl BjMieResult {
-    # aₖ₊₁, the coefficient at index k (0 ≤ k < a_len). Mirrors `result.a[k]`.
+    # aₖ₊₁, the coefficient at index k (0 ≤ k < a_len), else NaN + NaN·j (Rust's `result.a[k]` panics there).
     #must_use
     public fn a_at(self, k): BjComplex {
+        if (k < 0 || k >= self.a_len) {
+            var nz: BjComplex = _bj_sc_nan_c();
+            return nz;
+        }
         var z: BjComplex = _bj_sc_load(self.a + k * 16);
         return z;
     }
 
-    # bₖ₊₁, the coefficient at index k (0 ≤ k < b_len). Mirrors `result.b[k]`.
+    # bₖ₊₁, the coefficient at index k (0 ≤ k < b_len), else NaN + NaN·j (Rust's `result.b[k]` panics there).
     #must_use
     public fn b_at(self, k): BjComplex {
+        if (k < 0 || k >= self.b_len) {
+            var nz: BjComplex = _bj_sc_nan_c();
+            return nz;
+        }
         var z: BjComplex = _bj_sc_load(self.b + k * 16);
         return z;
     }
@@ -29772,6 +29852,26 @@ public fn BjSMatrix_new(ports, z0: f64, out: *BjSMatrix): Result {
     return Ok(0);
 }
 
+# The cascade's result, the four entries at e (re, im pairs) with both reference impedances z0, into *out: Ok(0), or
+# Err(Allocation) with out untouched. When out is a or b (an input), the matrix is built aside, then out's old block is
+# given back and the new one takes its place.
+#must_use
+fn _bj_rf_cascade_out(e: *f64, z0: f64, a, b, out: *BjSMatrix): Result {
+    var m: BjSMatrix;
+    var dst: *BjSMatrix = out;
+    if (out == a || out == b) { dst = &m; }
+    var t, v = BjSMatrix_two_port(BjComplex_new(e[0], e[1]), BjComplex_new(e[2], e[3]), BjComplex_new(e[4], e[5]),
+      BjComplex_new(e[6], e[7]), z0, dst);
+    if (is_err_result(t) == 1) { return Err(v); }
+    if (out == a || out == b) {
+        BjSMatrix_free(out);
+        out.ports = m.ports;
+        out.s = m.s;
+        out.z0 = m.z0;
+    }
+    return Ok(0);
+}
+
 # A 2-port matrix [[S11, S12], [S21, S22]] with both reference impedances z0, into *out: Ok(0), or Err(Allocation)
 # with out untouched. Mirrors `SMatrix::two_port`.
 #must_use
@@ -29987,11 +30087,16 @@ impl BjSMatrix {
         return Ok(0);
     }
 
-    # Rust's `s[i][j]`, indices from 0 (0 ≤ i, j < ports; unchecked, as the entry's address is).
+    # Rust's `s[i][j]`, indices from 0 (0 ≤ i, j < ports), else NaN + NaN·j (Rust's index panics there), as z0_at.
     #must_use
     public fn s_at(self, i, j): BjComplex {
-        var p = self.s + (i * self.ports + j) * 16;
         var z: BjComplex;
+        if (i < 0 || i >= self.ports || j < 0 || j >= self.ports) {
+            z.re = 0x7FF8000000000000;
+            z.im = 0x7FF8000000000000;
+            return z;
+        }
+        var p = self.s + (i * self.ports + j) * 16;
         z.re = load64(p);
         z.im = load64(p + 8);
         return z;
@@ -30026,9 +30131,10 @@ impl BjSMatrix {
     }
 
     # The cascade of two 2-ports, self then other (self's port 2 to other's port 1), into a new matrix in *out: Ok(0),
-    # or Err with out untouched (and never read). For finite entries, Redheffer's star product with each part rounded
-    # once from the exact value (src/crmath_edge.cyr's _bj_cr_cascade; ADR 0002 row 17, M4 part 2a-2): S11 = A11 +
-    # A12·A21·B11/D, S12 = A12·B12/D, S21 = A21·B21/D, S22 = B22 + A22·B12·B21/D, D = 1 − A22·B11; a part exactly 0
+    # or Err with out untouched (and never read). out may be self or other: that matrix's block is then given back and
+    # replaced. For finite entries, Redheffer's star product with each part rounded once from the exact value
+    # (src/crmath_edge.cyr's _bj_cr_cascade; ADR 0002 row 17, M4 part 2a-2): S11 = A11 + A12·A21·B11/D, S12 = A12·B12/D,
+    # S21 = A21·B21/D, S22 = B22 + A22·B12·B21/D, D = 1 − A22·B11; a part exactly 0
     # keeps Rust's zero where Rust's chain gives one (+0 otherwise). With a non-finite entry, Rust's chain through the
     # transfer matrices, T = T_self·T_other. InvalidParameter unless both are 2-ports
     # whose reference impedances are all equal (finite, positive); DivisionByZero where S21 of either is 0
@@ -30099,14 +30205,12 @@ impl BjSMatrix {
                     if (((zm >> k2) & 1) == 1 && rk == 0.0) { o[k2] = rk; }
                 }
             }
-            return BjSMatrix_two_port(BjComplex_new(o[0], o[1]), BjComplex_new(o[2], o[3]), BjComplex_new(o[4], o[5]),
-              BjComplex_new(o[6], o[7]), z0, out);
+            return _bj_rf_cascade_out(&o, z0, self, other, out);
         }
         if (_bj_rf_cascade_chain(&t1, &t2, &r) == 1) {
             return Err(_bj_err_division_by_zero("T22 = 0, cannot convert to S-parameters"));
         }
-        return BjSMatrix_two_port(BjComplex_new(r[0], r[1]), BjComplex_new(r[2], r[3]), BjComplex_new(r[4], r[5]),
-          BjComplex_new(r[6], r[7]), z0, out);
+        return _bj_rf_cascade_out(&r, z0, self, other, out);
     }
 }
 
@@ -33607,12 +33711,20 @@ fn _bj_fu_graded_ux(d_min: f64, d_max: f64, e: f64, i): f64 {
 # 97 % of cases, by up to 270 ulps for n ≤ 200, and for a ratio within about (n − 1)²·2^-53 of 1 its interior passes
 # d_max, so the grading stays monotone only with those cells held at d_max). Ok(0), or with out untouched
 # Err(InvalidParameter) "need at least 2 cells for grading, got {n}" or "cell sizes must be finite and positive, got
-# {d_min}, {d_max}". out holds n f64. A cell whose chain leaves the normal range runs it with an unbounded exponent
-# (ADR 0002 row 18, M5 part 2d-5: Rust's d_max/d_min = ∞ or ratio^i past DBL_MAX left those cells at d_max). Mirrors
-# `NonUniformGrid::graded`.
+# {d_min}, {d_max}"; Err(Allocation) for n ≥ 2^60 (Rust's capacity overflow). out holds n f64. A cell whose chain
+# leaves the normal range runs it with an unbounded exponent (ADR 0002 row 18, M5 part 2d-5: Rust's d_max/d_min = ∞ or
+# ratio^i past DBL_MAX left those cells at d_max). Mirrors `NonUniformGrid::graded`.
 #must_use
 public fn BjNonUniformGrid_graded(n, d_min: f64, d_max: f64, out: *f64): Result {
-    if (n >= 0 && n < 2) {
+    # n·8 bytes past isize::MAX (n ≥ 2^60 as a usize) is Rust's capacity overflow, an abort: Allocation (row 9).
+    if (n < 0 || n > 1152921504606846975) {
+        var ta = _bj_err_reason(BJ_ERR_ALLOCATION);
+        _bj_tx_cstr(ta, "a graded grid of ");
+        _bj_tx_u64(ta, n);
+        _bj_tx_cstr(ta, " cells");
+        return Err(BJ_ERR_ALLOCATION);
+    }
+    if (n < 2) {
         var t = _bj_err_reason(BJ_ERR_INVALID_PARAMETER);
         _bj_tx_cstr(t, "need at least 2 cells for grading, got ");
         _bj_tx_u64(t, n);
@@ -34068,7 +34180,8 @@ impl BjCwAccumulator {
             }
             self.mismatch_warned = 1;
         }
-        if (len < m) { m = len; }
+        # len is a usize: a word of 2^63 or more is longer than any field, so the prefix is field_size.
+        if (len >= 0 && len < m) { m = len; }
         var sf: f64 = _bj_fu_u2f(time_step);
         var dt: f64 = self.dt;
         var t: f64 = sf * dt;
@@ -38145,19 +38258,31 @@ public fn BjGpuFdtd2d_time<B: BjComputeBackend>(sim: *BjGpuFdtd2d<B>): f64 {
     return t;
 }
 
+# A read of a grid with no buffers (freed, or never built), as of an empty one: Ok(0) for n = 0, else InvalidParameter
+# "host slice length {n} does not match buffer length 0" (BjCpuBackend's text). The backend is never called.
+#must_use
+fn _bj_gf_read_empty(n): Result {
+    var e = _bj_cb_transfer(0, n);
+    if (e != 0) { return Err(e); }
+    return Ok(0);
+}
+
 # Reads E_z back to the n f64 at dst: Ok(0), or the backend's error (BjCpuBackend: InvalidParameter when n isn't
-# nx·ny). Mirrors `GpuFdtd2d::read_ez`.
+# nx·ny). After BjGpuFdtd2d_free the grid reads as an empty one. Mirrors `GpuFdtd2d::read_ez`.
 public fn BjGpuFdtd2d_read_ez<B: BjComputeBackend>(sim: *BjGpuFdtd2d<B>, dst: *f64, n): Result {
+    if (sim.fz == 0) { return _bj_gf_read_empty(n); }
     return sim.backend.read_buffer(sim.fz, dst, n);
 }
 
 # Reads H_x back to the n f64 at dst, as read_ez. Mirrors `GpuFdtd2d::read_hx`.
 public fn BjGpuFdtd2d_read_hx<B: BjComputeBackend>(sim: *BjGpuFdtd2d<B>, dst: *f64, n): Result {
+    if (sim.fx == 0) { return _bj_gf_read_empty(n); }
     return sim.backend.read_buffer(sim.fx, dst, n);
 }
 
 # Reads H_y back to the n f64 at dst, as read_ez. Mirrors `GpuFdtd2d::read_hy`.
 public fn BjGpuFdtd2d_read_hy<B: BjComputeBackend>(sim: *BjGpuFdtd2d<B>, dst: *f64, n): Result {
+    if (sim.fy == 0) { return _bj_gf_read_empty(n); }
     return sim.backend.read_buffer(sim.fy, dst, n);
 }
 
@@ -40318,15 +40443,22 @@ public fn BjTouchstoneFormat_to_json(format, sb): Result {
 }
 
 # Appends `{"ports":<n>,"z0":<R>,"frequencies":[..],"s_matrices":[<SMatrix>,..]}` to the builder sb: Ok(0), or
-# Err(BJ_ERR_ALLOCATION) with sb as it was. Built in one fl_alloc block. Mirrors `serde_json::to_string(&d)` for
+# Err(BJ_ERR_ALLOCATION) with sb as it was. Built in one fl_alloc block, sized by each matrix's own ports (a matrix's
+# fields are public, so they need not be d.ports), at most 2^40 bytes. Mirrors `serde_json::to_string(&d)` for
 # `rf::TouchstoneData`.
 #must_use
 public fn BjTouchstoneData_to_json(d: *BjTouchstoneData, sb): Result {
-    var per = _bj_jw_sm_size(d.ports);
-    var buf = 0;
-    if (per > 0 && d.points >= 0 && d.points < 1099511627776 / (per + 32)) {
-        buf = fl_alloc(128 + d.points * (per + 32));
+    var total = 128;
+    var fits = 1;
+    if (d.points < 0) { fits = 0; }
+    for (var i = 0; fits == 1 && i < d.points; i = i + 1) {
+        var mi: *BjSMatrix = d.matrix_at(i);
+        var per = _bj_jw_sm_size(mi.ports);
+        if (per < 0 || per + 32 > 1099511627776 - total) { fits = 0; }
+        else { total = total + per + 32; }
     }
+    var buf = 0;
+    if (fits == 1) { buf = fl_alloc(total); }
     if (buf == 0) {
         _bj_tx_cstr(_bj_err_reason(BJ_ERR_ALLOCATION), "the JSON document's buffer");
         return Err(BJ_ERR_ALLOCATION);
@@ -41951,7 +42083,10 @@ public fn _bj_jw_put_free(sb, buf, n): Result {
 #must_use
 fn _bj_jw_slice(sb, values, nv, dims: *i64, org: *i64, nd, spacing, comp, nc, step): Result {
     if (_bj_jw_count_ok(nv) == 0 || _bj_jw_count_ok(nc) == 0) { return Err(_bj_jw_nobuf()); }
-    var buf = _bj_jw_buf(256 + nv * 26 + nc * 6);
+    # At their longest a float is 25 bytes (bayan's positional form, -0.0000012345678901234567) and a usize 20 digits:
+    # a volume's fixed fields and the NUL take 258 bytes, its values 26 a value plus 1 (2 when empty), a component byte
+    # 6 (\u00XX). 264 covers both cases.
+    var buf = _bj_jw_buf(264 + nv * 26 + nc * 6);
     if (buf == 0) { return Err(BJ_ERR_ALLOCATION); }
     var n = _bj_jw_cstr(buf, 0, "{\"values\":");
     n = _bj_jw_f64_vec(buf, n, values, nv);
@@ -42138,7 +42273,9 @@ public fn BjRadiationPattern_to_json(p: *BjRadiationPattern, sb): Result {
 #must_use
 public fn BjVectorFieldSample_to_json(v: *BjVectorFieldSample, sb): Result {
     if (_bj_jw_count_ok(v.vectors_len) == 0) { return Err(_bj_jw_nobuf()); }
-    var buf = _bj_jw_buf(256 + v.vectors_len * 80);
+    # The fixed fields and the NUL take 258 bytes at their longest (a float 25 bytes, a usize 20 digits), the vectors 80
+    # a vector plus 1 (2 when empty): 264 covers both cases.
+    var buf = _bj_jw_buf(264 + v.vectors_len * 80);
     if (buf == 0) { return Err(BJ_ERR_ALLOCATION); }
     var dims: i64[3];
     dims[0] = v.dimensions.0;

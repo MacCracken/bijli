@@ -11,14 +11,30 @@ included. 2.0.0 (2026-11-18) is the Cyrius port of the Rust crate 1.2.0: how it 
 
 ## 2.0.x — after the port
 
-These are patch releases: no API change, and every golden row keeps its bits. A change that moves a row needs an ADR
-and waits for 2.1 or later.
+These are patch releases: fixes and hardening, no new features. A fix that changes a result is an ADR 0002 row, and
+any golden rows it moves are mapped in `*.adr.tsv` (the user's answer of 2026-11-18).
+
+### 2.0.1 — the audit and its repairs
+
+The audit's findings H1–H34 are in [port-parity §142](port-parity.md). They are repaired in these bites, in order:
+
+- [x] **1a** Memory safety with no result changes (H1–H11; port-parity §143).
+- [ ] **1b** Constructors leave `out` empty on Err; `BjCpml_new` becomes fallible and `enable_cpml` is dropped, as
+  ADR row 3 says; the per-step CPML attach check is restored (H12–H15).
+- [ ] **2** Hangs and quadratic costs: Mie, the f32 reader, the parallel combination's exact tier, the ai client's
+  deadlines and allocations, and the mode orders (H16–H22).
+- [ ] **3** Threads: the math tables become data, plus the error slot's publication and the 3D energy's scratch
+  (H23–H25).
+- [ ] **4** Results that change, each an ADR 0002 row (H26–H31).
+- [ ] **5** Rules and docs: `#must_use`, the stale claims, CLAUDE.md's cleanliness check and CI's missing gates
+  (H32–H34).
+- [ ] **6** A JSON fuzz harness: the readers rest on bayan's parser and on the golden corpus's documents, not on
+  mutation (the [threat model](threat-model.md)'s open item). A harness like `tests/bijli.fcyr`, the Touchstone
+  reader's, closes it for `_bj_jr_doc` and a few readers.
+- [ ] **7** The release: the post-review bench against §142's baseline, the cross-targets, the docs.
 
 ### Hardening
 
-- [ ] **A JSON fuzz harness**: the readers rest on bayan's parser and on the golden corpus's documents, not on
-  mutation (the [threat model](threat-model.md)'s open item). A harness like `tests/bijli.fcyr`, the Touchstone
-  reader's, closes it for `_bj_jr_doc` and a few readers.
 - [ ] **Retire the port's handoff**: [handoff.md](handoff.md) has served the port. Delete it once no 2.0.x work needs
   it; git keeps it.
 
@@ -55,6 +71,10 @@ None of these changes a result: the bits stay the same. The numbers go in
 - [ ] **File the PE syscall warnings** that sandhi's stack prints under `CYRIUS_TARGET_WIN`: `lib/dynlib.cyr` lines
   674 and 950, and `lib/fdlopen.cyr` lines 472, 530, 626 and 954. Once a fixed stdlib is pinned, drop the PE part of
   CLAUDE.md's exception for `tests/ai.tcyr`.
+- [ ] **File sandhi's client gaps** (port-parity §142):
+  - DNS and the TLS handshake have no deadline;
+  - the resolver skips `/etc/hosts`, so the ai client's default `localhost` endpoint resolves through DNS;
+  - the response's header parse allocates from the never-freed bump heap.
 
 ---
 

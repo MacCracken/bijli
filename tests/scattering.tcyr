@@ -71,6 +71,31 @@ fn ok_f(t, v): f64 {
     return x;
 }
 
+# 2.0.1 bite 1a (port-parity §142): the coefficient accessors are bounds-checked (H5).
+fn cyrius_audit_201(): i64 {
+    test_group("cyrius_audit_201_accessors (2.0.1 bite 1a)");
+    var r: BjMieResult;
+    var t, v = bj_mie(1.0, BjComplex_new(1.5, 0.0), &r);
+    var a0: BjComplex = r.a_at(0);
+    var an: BjComplex = r.a_at(r.a_len);
+    var am: BjComplex = r.a_at(0 - 1);
+    var bn: BjComplex = r.b_at(r.b_len);
+    var bm: BjComplex = r.b_at(0 - 1);
+    var a0r: f64 = a0.re;
+    var anr: f64 = an.re;
+    var ani: f64 = an.im;
+    var amr: f64 = am.re;
+    var bnr: f64 = bn.re;
+    var bmi: f64 = bm.im;
+    assert(is_ok(t) == 1 && r.a_len > 0 && a0r == a0r && anr != anr && ani != ani && amr != amr && bnr != bnr &&
+      bmi != bmi, "a_at and b_at: NaN + NaN·j past either end, the coefficient inside (H5)");
+    BjMieResult_free(&r);
+    var e0: BjComplex = r.a_at(0);
+    var e0r: f64 = e0.re;
+    assert(e0r != e0r, "a freed result has no coefficients (H5)");
+    return 0;
+}
+
 # scattering.rs's Mie tests.
 fn rust_tests_a(): i64 {
     var r: BjMieResult = BjMieResult_new();
@@ -645,6 +670,7 @@ fn main(): i64 {
     cyrius_rayleigh_row18();
     cyrius_mie_row18();
     cyrius_json();
+    cyrius_audit_201();
     return assert_summary();
 }
 

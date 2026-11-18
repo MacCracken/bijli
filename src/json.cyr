@@ -440,15 +440,22 @@ public fn BjTouchstoneFormat_to_json(format, sb): Result {
 }
 
 # Appends `{"ports":<n>,"z0":<R>,"frequencies":[..],"s_matrices":[<SMatrix>,..]}` to the builder sb: Ok(0), or
-# Err(BJ_ERR_ALLOCATION) with sb as it was. Built in one fl_alloc block. Mirrors `serde_json::to_string(&d)` for
+# Err(BJ_ERR_ALLOCATION) with sb as it was. Built in one fl_alloc block, sized by each matrix's own ports (a matrix's
+# fields are public, so they need not be d.ports), at most 2^40 bytes. Mirrors `serde_json::to_string(&d)` for
 # `rf::TouchstoneData`.
 #must_use
 public fn BjTouchstoneData_to_json(d: *BjTouchstoneData, sb): Result {
-    var per = _bj_jw_sm_size(d.ports);
-    var buf = 0;
-    if (per > 0 && d.points >= 0 && d.points < 1099511627776 / (per + 32)) {
-        buf = fl_alloc(128 + d.points * (per + 32));
+    var total = 128;
+    var fits = 1;
+    if (d.points < 0) { fits = 0; }
+    for (var i = 0; fits == 1 && i < d.points; i = i + 1) {
+        var mi: *BjSMatrix = d.matrix_at(i);
+        var per = _bj_jw_sm_size(mi.ports);
+        if (per < 0 || per + 32 > 1099511627776 - total) { fits = 0; }
+        else { total = total + per + 32; }
     }
+    var buf = 0;
+    if (fits == 1) { buf = fl_alloc(total); }
     if (buf == 0) {
         _bj_tx_cstr(_bj_err_reason(BJ_ERR_ALLOCATION), "the JSON document's buffer");
         return Err(BJ_ERR_ALLOCATION);
@@ -2073,7 +2080,10 @@ public fn _bj_jw_put_free(sb, buf, n): Result {
 #must_use
 fn _bj_jw_slice(sb, values, nv, dims: *i64, org: *i64, nd, spacing, comp, nc, step): Result {
     if (_bj_jw_count_ok(nv) == 0 || _bj_jw_count_ok(nc) == 0) { return Err(_bj_jw_nobuf()); }
-    var buf = _bj_jw_buf(256 + nv * 26 + nc * 6);
+    # At their longest a float is 25 bytes (bayan's positional form, -0.0000012345678901234567) and a usize 20 digits:
+    # a volume's fixed fields and the NUL take 258 bytes, its values 26 a value plus 1 (2 when empty), a component byte
+    # 6 (\u00XX). 264 covers both cases.
+    var buf = _bj_jw_buf(264 + nv * 26 + nc * 6);
     if (buf == 0) { return Err(BJ_ERR_ALLOCATION); }
     var n = _bj_jw_cstr(buf, 0, "{\"values\":");
     n = _bj_jw_f64_vec(buf, n, values, nv);
@@ -2260,7 +2270,9 @@ public fn BjRadiationPattern_to_json(p: *BjRadiationPattern, sb): Result {
 #must_use
 public fn BjVectorFieldSample_to_json(v: *BjVectorFieldSample, sb): Result {
     if (_bj_jw_count_ok(v.vectors_len) == 0) { return Err(_bj_jw_nobuf()); }
-    var buf = _bj_jw_buf(256 + v.vectors_len * 80);
+    # The fixed fields and the NUL take 258 bytes at their longest (a float 25 bytes, a usize 20 digits), the vectors 80
+    # a vector plus 1 (2 when empty): 264 covers both cases.
+    var buf = _bj_jw_buf(264 + v.vectors_len * 80);
     if (buf == 0) { return Err(BJ_ERR_ALLOCATION); }
     var dims: i64[3];
     dims[0] = v.dimensions.0;

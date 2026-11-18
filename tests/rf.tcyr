@@ -979,6 +979,47 @@ fn tp_real(s11: f64, s12: f64, s21: f64, s22: f64, z0: f64, m: *BjSMatrix): i64 
     return 0;
 }
 
+# 2.0.1 bite 1a (port-parity §142): s_at is bounds-checked (H5); a cascade into one of its inputs replaces it (H9).
+fn cyrius_audit_201(): i64 {
+    test_group("cyrius_audit_201_smatrix (2.0.1 bite 1a)");
+    var a: BjSMatrix;
+    var b: BjSMatrix;
+    var c: BjSMatrix;
+    tp_real(0.1, 0.9, 0.9, 0.1, 50.0, &a);
+    var e11: BjComplex = a.s_at(1, 1);
+    var o1: BjComplex = a.s_at(2, 0);
+    var o2: BjComplex = a.s_at(0, 0 - 1);
+    var o3: BjComplex = a.s_at(0 - 1, 1);
+    var e11r: f64 = e11.re;
+    var o1r: f64 = o1.re;
+    var o2i: f64 = o2.im;
+    var o3r: f64 = o3.re;
+    assert(e11r == 0.1 && o1r != o1r && o2i != o2i && o3r != o3r, "s_at: NaN + NaN·j out of range, as z0_at (H5)");
+    tp_real(0.2, 0.8, 0.7, 0.3, 50.0, &b);
+    var t1, v1 = a.cascade(&b, &c);
+    var t2, v2 = a.cascade(&b, &a);
+    var same_all = 1;
+    for (var i = 0; i < 2; i = i + 1) {
+        for (var j = 0; j < 2; j = j + 1) {
+            var x: BjComplex = c.s_at(i, j);
+            var y: BjComplex = a.s_at(i, j);
+            var xr: f64 = x.re;
+            var xi: f64 = x.im;
+            var yr: f64 = y.re;
+            var yi: f64 = y.im;
+            if (same(xr, yr) == 0 || same(xi, yi) == 0) { same_all = 0; }
+        }
+    }
+    assert(is_ok(t1) == 1 && is_ok(t2) == 1 && same_all == 1 && a.ports == 2,
+      "a cascade into self equals one beside it (H9)");
+    var t3, v3 = b.cascade(&c, &c);
+    assert(is_ok(t3) == 1 && c.ports == 2, "and into other (H9)");
+    BjSMatrix_free(&a);
+    BjSMatrix_free(&b);
+    BjSMatrix_free(&c);
+    return 0;
+}
+
 # 1 when a.cascade(b) refuses (nothing is written).
 fn cascade_refused(a: *BjSMatrix, b: *BjSMatrix): i64 {
     var c: BjSMatrix;
@@ -1837,6 +1878,7 @@ fn main(): i64 {
     cyrius_touchstone();
     rust_tests_f();
     cyrius_touchstone_write();
+    cyrius_audit_201();
     return assert_summary();
 }
 

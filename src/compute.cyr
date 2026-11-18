@@ -535,19 +535,31 @@ public fn BjGpuFdtd2d_time<B: BjComputeBackend>(sim: *BjGpuFdtd2d<B>): f64 {
     return t;
 }
 
+# A read of a grid with no buffers (freed, or never built), as of an empty one: Ok(0) for n = 0, else InvalidParameter
+# "host slice length {n} does not match buffer length 0" (BjCpuBackend's text). The backend is never called.
+#must_use
+fn _bj_gf_read_empty(n): Result {
+    var e = _bj_cb_transfer(0, n);
+    if (e != 0) { return Err(e); }
+    return Ok(0);
+}
+
 # Reads E_z back to the n f64 at dst: Ok(0), or the backend's error (BjCpuBackend: InvalidParameter when n isn't
-# nx·ny). Mirrors `GpuFdtd2d::read_ez`.
+# nx·ny). After BjGpuFdtd2d_free the grid reads as an empty one. Mirrors `GpuFdtd2d::read_ez`.
 public fn BjGpuFdtd2d_read_ez<B: BjComputeBackend>(sim: *BjGpuFdtd2d<B>, dst: *f64, n): Result {
+    if (sim.fz == 0) { return _bj_gf_read_empty(n); }
     return sim.backend.read_buffer(sim.fz, dst, n);
 }
 
 # Reads H_x back to the n f64 at dst, as read_ez. Mirrors `GpuFdtd2d::read_hx`.
 public fn BjGpuFdtd2d_read_hx<B: BjComputeBackend>(sim: *BjGpuFdtd2d<B>, dst: *f64, n): Result {
+    if (sim.fx == 0) { return _bj_gf_read_empty(n); }
     return sim.backend.read_buffer(sim.fx, dst, n);
 }
 
 # Reads H_y back to the n f64 at dst, as read_ez. Mirrors `GpuFdtd2d::read_hy`.
 public fn BjGpuFdtd2d_read_hy<B: BjComputeBackend>(sim: *BjGpuFdtd2d<B>, dst: *f64, n): Result {
+    if (sim.fy == 0) { return _bj_gf_read_empty(n); }
     return sim.backend.read_buffer(sim.fy, dst, n);
 }
 

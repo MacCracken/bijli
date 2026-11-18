@@ -7647,3 +7647,170 @@ eigenmode search (`dft_magnitude`'s recurrence and magnitude, `find_eigenmodes`'
   validate.py: 770,127 rows, 0 problems. 33 test files, 2,913 assertions; execution coverage 449 of 449; the ledger
   846 ported, 12 n/a, 0 pending; the surface parity 735 items, its record current. **M8 is done; bijli 2.0.0 is ready
   to tag.**
+
+## 142. 2.0.1: the audit (2026-11-18)
+
+The P(-1) sweep of the released 2.0.0 (CLAUDE.md), before any repair.
+- **Sweep**: every gate step of §141 green. `cyrius fuzz` passes (40,000 Touchstone parses, 2,138 accepted, 0 heap
+  growth). The bench baseline ran on a quiet machine (load 0.01 at the start, 0.70 at the end; nothing else running):
+  1 min 8 s for the whole `cyrius bench`, kept beside the post-review run for the release's A/B.
+- **Mechanical scans of `src/`**: no `+?`, `-?`, `*?`, `assert_fatal`, `panic`, `result_unwrap`, `alloc_reset` or
+  `exit`; no hashmap; no TODO; the four public enums carry explicit values.
+- **The review**: seven read-only reviews, one per area (the readers; ai, soorat, text and errors; the 1D FDTD and
+  its utilities; the 2D/3D grids, the CPML and NF2FF; the fields to the circuits; optics, relativity, RF and complex;
+  the math). Each reviewer read its files whole against the Rust 1.2.0 tag and ADR 0002, nothing compiled. I then
+  checked every high and medium finding against the code. Two reviews found the JSON writers' budget and
+  `bj_text_init`'s capacity independently.
+- **Process gaps**: CI runs neither `cyrius vet`, the coverage gate, `cyrius api-surface`, `emit.py --check` nor
+  validate.py; CLAUDE.md's cleanliness check leaves out `cyrius fuzz`, and its memory rule names `fl_calloc` where
+  the 1D grid, the TF/SF source, the CW accumulator and the CPU backend map their blocks (plan §9.5).
+
+The findings, by repair bite. H is high (memory, a hang, a race, a wrong result), M medium, L low.
+
+**1a. Memory safety, no result changes**
+- **H1** (H) `bj_trace_field_line` reserves its polyline before copying `start`. A reused polyline whose block grows
+  frees it, so `start = line.at(k)` reads a freed (or, past 4 KiB, unmapped) block (field.cyr:2656–2663).
+- **H2** (H) `BjCwAccumulator.accumulate` clamps the prefix with a signed compare (`if (len < m)`), so a `len` of
+  2^63 or more reaches `_bj_e_cell_row` as a negative count: its tail writes `real[-4..-2]` (fdtd_util.cyr:670,
+  crmath_edge.cyr:3550). The row helper has no `n ≤ 0` guard.
+- **H3** (H) The `BjVectorFieldSample` and `BjFieldSlice3D` JSON writers budget too few bytes. A float can be 25 bytes
+  in bayan's positional form, a usize 20 digits, plus the NUL. A slice with 3 × (2^63 − 1) dims, read from valid
+  JSON and written back, puts its NUL into the next freelist block (json.cyr:2076, 2263).
+- **H4** (M) `bj_text_init` with `cap < 1` writes before the buffer (`store8(buf + room, 0)` with room −1) and reports
+  a length of −1 (text.cyr:17, fmtf.cyr:32–90).
+- **H5** (M) `BjMieResult.a_at`/`b_at` and `BjSMatrix.s_at` read unchecked; their siblings (`z0_at`, Touchstone's
+  `frequency_at`/`matrix_at`) return NaN or 0 out of range (scattering.cyr:94–106, rf.cyr:1261).
+- **H6** (M) `BjGpuFdtd2d_read_ez`/`hx`/`hy` after `_free` hand buffer 0 to the CPU backend, which loads from it
+  (compute.cyr:540–552, 182).
+- **H7** (M) `bj_image_charge_sphere` with `image_pos == position` stores the image before its range-edge path
+  rereads `position`: a wrong Err, and the out-param written on it (field.cyr:2020–2028).
+- **H8** (L) `BjNonUniformGrid_graded` takes a negative `n` (`n >= 0 && n < 2` refuses only 0 and 1) and writes
+  without bound (fdtd_util.cyr:214, 239).
+- **H9** (L) `BjSMatrix.cascade` into `self` or `other` drops the old block (rf.cyr:1299–1380);
+  `BjTouchstoneData_to_json` sizes by `d.ports` and writes each matrix by its own `ports` (json.cyr:466).
+- **H10** (L) The tracer hands the field function its live position, and its field vector persists across steps,
+  so a callee that writes through `pos` or doesn't fill `f` changes the line (field.cyr:2672).
+- **H11** (L) Truncation can end a text inside a UTF-8 sequence (the last-error record past 2,047 bytes, a log line,
+  ai's 256-byte reason) (fmtf.cyr:63–90).
+
+**1b. Constructors empty `out` on Err; the CPML (the user's answers of 2026-11-18)**
+- **H12** (M) Every owning constructor leaves `out` untouched on Err, and Cyrius doesn't zero struct locals, so a
+  `_free` after a failure (a `defer`, plan §9.3) frees garbage (fdtd2d.cyr:586, fdtd3d.cyr:517, the CPML, the S-matrix,
+  soorat, the CW accumulator and the rest). The answer: `out` is empty on Err.
+- **H13** (M) `cpml()` gives the grid's own layer out, and row 2 dropped Rust's per-step `is_attached_to` check, so a
+  consumer's `attach` or `BjCpml_free` on it makes the next step index past its Ψ strips (fdtd2d.cyr:882,
+  fdtd3d.cyr:830).
+- **H14** (M) ADR 0002 row 3, the migration guide and the CHANGELOG say `BjCpml_new` and `enable_cpml` refuse, but
+  both still sanitize with a warning, as Rust did; only the TF/SF source changed (cpml.cyr:462, fdtd2d.cyr:853). The
+  answer: fix the code.
+- **H15** (L) `BjGpuFdtd2d_new` writes `out.backend` before the buffers can fail (compute.cyr:374).
+
+**2. Hangs and quadratic costs**
+- **H16** (H) `bj_mie` hangs when |m| overflows `hypot` and x is tiny: |m·x| passes the exact size test, but the
+  rounded `mx_abs` is +∞, so `f64_to(⌈∞⌉)` starts the D_n recurrence at 2^63 − 1 (scattering.cyr:784,
+  `_bj_sc_terms`). validate.py's port model has the same gap. Rust refused it (∞ > 10⁷).
+- **H17** (H) The ChargeVisualization reader walks the tree from the root and rescans the text from byte 0 for each
+  float on an f32 halfway value, which makes it O(halfway floats × size). About 89,000 `16777217.0` fit in a MiB
+  (json.cyr:2541). It comes from row 45's code.
+- **H18** (M) The exact tier of the parallel combination (`_bj_e_par_exact`) is quadratic in the distinct
+  significands (§40 records it), and any list of 20 or more exactly cancelling pairs ±(1 + k·2^-52) reaches it. The
+  circuit functions put no cap on n (crmath_edge.cyr:1471).
+- **H19** (H) `register_agent` can block forever. It sets only sandhi's total deadline, which is checked between
+  reads. Reads, writes and the connect block (read_ms = 0); the TLS handshake and DNS have no deadline (ai.cyr:466).
+- **H20** (M) `register_agent` doesn't check sandhi's allocations: a refused options or headers block is dereferenced
+  inside sandhi, and a dropped `authorization` header becomes a 401 (ai.cyr:457–466).
+- **H21** (M) The HG and LG mode orders take any word: a negative m, n or p silently gives another mode, an order
+  past 2^32 loops for hours, and l = INT64_MIN reaches `_bj_powi` the wrong way round, row 32's case
+  (beam.cyr:1021–1243). Their siblings refuse orders outside u32 (wave.cyr:704).
+- **H22** (L) `bj_circular_array_factor` with a negative count runs 2^64 iterations (rf.cyr:973). A consumer
+  backend's `create_buffer` returning `Err(0)` spins `BjGpuFdtd2d_new` forever (compute.cyr:375).
+
+**3. Threads**
+- **H23** (H) The math tables fill on first use behind a plain flag (`_bj_cr_load`, `_bj_cr_odd_load`). On aarch64
+  a second thread can see the flag before the stores and round with zero coefficients (crmath_data.cyr:47,
+  crmath.cyr:1578). `bj_init` warms neither.
+- **H24** (M) The 3D `total_energy` computes in the grid's scratch rows, so two readers of one grid race; Rust's
+  `&self` allows them (fdtd3d.cyr:1102).
+- **H25** (L) `_bj_err_claim` publishes the thread-local slot with no ordering (error.cyr:70–79). The diagnostic call
+  counters and `_bj_json_nonfinite` are plain read-modify-writes from every thread, and nothing reads the latter.
+
+**4. Results that change (ADR 0002 rows, the user's answer of 2026-11-18)**
+- **H26** (M) `bj_lienard_wiechert_fields` doesn't check the retarded position for finiteness and returns Ok(NaN)
+  where row 27 refuses (relativity.cyr:1933).
+- **H27** (L) Rayleigh's cross sections take a non-finite m, and `bj_rayleigh_angular_intensity` a NaN or negative
+  cross section, as Ok(NaN); `bj_mie` refuses (scattering.cyr:918).
+- **H28** (L) The 2D and 3D grids report a refused map as InvalidParameter, as Rust's `try_filled` did. 1D, TF/SF and
+  NF2FF report Allocation, and row 9 says 2D/3D follow (fdtd2d.cyr:136).
+- **H29** (L) `BjTouchstoneData_to_json` returns Allocation for more than 131,072 ports with no points, a value the
+  reader accepts (json.cyr:400); `BjGpuFdtd2d_add_source` drops Rust's checked nx·ny (compute.cyr:476).
+- **H30** (L) The 2 GiB "freelist's largest request" caps are stale (freelist mmaps any size), and they refuse
+  grids, eigenmode spectra and CPML/NF2FF/soorat blocks that Rust accepts (fdtd_util.cyr:25 and peers).
+- **H31** (L) The ai configs report a negative length as Allocation, not InvalidParameter (ai.cyr:58), and log the
+  endpoint before the control-byte check (ai.cyr:301, 428). `register_agent` returns Ok with an id the text
+  truncated (ai.cyr:391).
+
+**5. Rules and docs**
+- **H32** (L) None of the 92 public Result functions of field, charge, maxwell, material, wave and circuit carries
+  `#must_use` (beam, rf and scattering mark theirs). Two Results go unchecked (wave.cyr:405, 590).
+- **H33** (L) The sentinels `BJ_FDTD*_NO_SOURCE` are public `var`s. `_bj_vx_sin53`/`cos53` take any exponent past
+  4,452, where the 2/π table runs out silently (every caller stays below). `_bj_nf_at` lacks `#must_use`.
+- **H34** (L) Docs disagree with the code:
+  - the timeout claims (ai.cyr:27, 419; the threat model; row 46);
+  - the claim that sandhi's exchange is all region memory (its header parse uses the bump heap, about a few hundred
+    bytes a call and up to a MiB from a hostile endpoint);
+  - row 2's "two scratch rows" (three);
+  - `bj_last_error_detail`'s list (Deserialize);
+  - `bj_init`'s return in thread_local's foreign mode;
+  - the circuit docs' "< 1e-30" and missing Allocation;
+  - `_bj_g_scale`'s and `_bj_g_step`'s preconditions.
+- **Upstream (sandhi)**: no deadline on DNS or the TLS handshake, no `/etc/hosts` (the default `localhost`
+  endpoint resolves through DNS), and the header parse on the bump allocator. Filed in the roadmap's 2.0.x list.
+
+**6. The JSON fuzz harness** (the threat model's open item), then **7. the release** (the post-review bench against
+this baseline, the cross-targets, the docs).
+
+Reviewed clean: the Touchstone reader and writer, the bridges, the 2D/3D index arithmetic and size bounds, Mie's
+buffers, the S-matrix's bounds, the retarded-time solver's termination, the math's table indices, buffer bounds and
+loops, and every Err path's last-error record.
+
+## 143. 2.0.1 bite 1a: memory safety (2026-11-18)
+
+H1–H11 of §142, with no result changing for any input 2.0.0 handled safely.
+- **H1, H10, the tracer** (src/field.cyr): `start` is copied into the position before `out.len = 0` and the
+  reservation, and the finite test, the log line and the first point read the copy. Each step hands the field
+  function a fresh copy of the position, and the field vector starts at zero, so a callee that writes through `pos`
+  or fills nothing can't move the line or feed it stack data. `at()`'s doc says how long its address lives.
+- **H2, the accumulator** (src/fdtd_util.cyr, src/crmath_edge.cyr): the common prefix is `len` only for
+  0 ≤ len < field_size (a usize), and `_bj_e_cell_row` returns at once for a count ≤ 0, one compare a row.
+- **H3, the writers' budgets** (src/json.cyr): 264 fixed bytes (258 at the longest with the NUL: a float is 25 bytes
+  in bayan's positional form, a usize 20 digits) for `BjFieldSlice3D` and `BjVectorFieldSample`, checked in Python
+  against the exact longest documents (260 bytes for each empty one, against the old 256).
+- **H4, H11, the text** (src/text.cyr, src/fmtf.cyr): `bj_text_init` with cap < 1 makes an empty text over a byte of
+  bijli's own (`_bj_text_none`, written only with its NUL) and returns InvalidParameter with its reason. At the first
+  dropped byte, `_bj_tx_cut` drops a UTF-8 sequence that the kept bytes end inside (NUL-filling at most 3 bytes), and
+  `_bj_tx_len` skips those NULs. Both run once per text, at the overflow.
+- **H5** (src/scattering.cyr, src/rf.cyr): `a_at`, `b_at` and `s_at` return NaN + NaN·j outside their ranges.
+- **H6** (src/compute.cyr): a read of a grid with no buffer never calls the backend. It answers as an empty buffer:
+  Ok for 0 values, else the CPU backend's "host slice length {n} does not match buffer length 0".
+- **H7** (src/field.cyr): the sphere's plain path forms the three products before storing them.
+  `_bj_fv_sphere_edge` already read each coordinate before writing it.
+- **H8** (src/fdtd_util.cyr): `graded` refuses n ≥ 2^60 as a usize (n·8 bytes past isize::MAX, Rust's capacity
+  overflow) with Allocation, "a graded grid of {n} cells" (ADR 0002 row 9).
+- **H9** (src/rf.cyr, src/json.cyr): `_bj_rf_cascade_out` builds the result aside when `out` is an input, then frees
+  that input's block and moves the new one in. `BjTouchstoneData_to_json` sums each matrix's own size, up to the same
+  2^40 bytes; with no points it needs only its header, so the 2^62-port case of row 36 writes back (H29's
+  Allocation is gone as a side effect).
+- **Tests**: `cyrius_audit_201_*` groups in tests/field.tcyr (9), fdtd_util.tcyr (3), scattering.tcyr (2),
+  rf.tcyr (3), compute.tcyr (2), soorat.tcyr (2) and json.tcyr (2). Against 2.0.0's src/ (a scratch copy with the
+  new tests), field, fdtd_util, scattering and compute die with SIGSEGV, and rf and json fail their new assertions.
+  Soorat's budget overrun is invisible from a test: its NUL lands in a neighbour's free-list word.
+- **Benchmarks**: three interleaved rounds against 2.0.0's src/ (load 0.7–1.2, nothing else running), median ratio
+  1.000 in each. `field/trace_field_line_10` costs 3.4–4.5 % more (1,116–1,123 ns to 1,161–1,170), about 4 ns a step
+  for the position's copy. `fdtd/step_1000_cells` reads +2.5 %, +6.2 % and +2.5 % (5.7 µs), which two compares a step
+  can't cost. The untouched Jones benches move +4.6–5.1 % in every round, and a build without the row guard ran the
+  1D step at 6,723 ns, slower than either: layout, not the guard.
+- **Result**: the gate clean (its first audit caught three comment lines past 120 characters and two tests' doc
+  comments split by the new groups; fixed and rerun). 21 modules, 646,281 ok, 0 failed, 123,846 accepted, the 520
+  digests equal to 2.0.0's; validate.py: 770,127 rows, 0 problems; 33 test files, 2,936 assertions (23 new);
+  coverage 449 of 449; `cyrius fuzz` unchanged; the API snapshot 2,194, unchanged. No golden row moved. The seven
+  changed test files pass on x86_64 PE and aarch64, one target at a time. Next: bite 1b.
