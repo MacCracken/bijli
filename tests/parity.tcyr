@@ -4800,6 +4800,281 @@ public fn _par_bridge(fp, fl): i64 {
     return 0;
 }
 
+# A word as a *BjPointCharge.
+fn _par_so_pcp(a): *BjPointCharge {
+    return a;
+}
+
+# A word as a *BjChargePoint.
+fn _par_so_cpp(a): *BjChargePoint {
+    return a;
+}
+
+# soorat.tsv's grid fill (validate.py's so_fill): field k of cell i is ±seed·(i + 1 + k), negative for odd k.
+fn _par_so_fill(p, n, seed: f64, k) {
+    var a: *f64 = _bj_fd2_f64p(p);
+    for (var i = 0; i < n; i = i + 1) {
+        var m: f64 = f64_from(i + 1 + k);
+        var v: f64 = seed * m;
+        if (k % 2 == 1) { v = -v; }
+        a[i] = v;
+    }
+    return 0;
+}
+
+# A field slice's values to the got list as soorat.tsv holds them: their count, digest and end values.
+fn _par_so_values(p, n) {
+    var a: *f64 = _bj_fd2_f64p(p);
+    _par_got_i(n);
+    _par_got_i(_par_fd_digest(p, n));
+    var first: f64 = a[0];
+    var last: f64 = a[n - 1];
+    _par_got_f(first);
+    _par_got_f(last);
+    return 0;
+}
+
+# soorat (M7 part 1b-1): the constructors, class A. Slices read grids filled by _par_so_fill; charges, NF2FF results
+# and component arrays come from the row's tokens.
+public fn _par_soorat(fp, fl): i64 {
+    if (_par_eq(fp, fl, "FieldSlice2D::from_fdtd_2d") == 1 || _par_eq(fp, fl, "FieldSlice2D::try_from_fdtd_2d") == 1) {
+        var g: BjFdtd2d;
+        var dx: f64 = _par_in(2);
+        var tg, vg = BjFdtd2d_new(_par_in(0), _par_in(1), dx, _par_in(3), &g);
+        if (is_err_result(tg) == 1) { return 0; }
+        var n = g.nx * g.ny;
+        var seed: f64 = _par_in(5);
+        _par_so_fill(g.fz, n, seed, 0);
+        _par_so_fill(g.fx, n, seed, 1);
+        _par_so_fill(g.fy, n, seed, 2);
+        g.step = _par_in(4);
+        var cl: i64[1];
+        var cp = _par_in_bytes(6, &cl);
+        var sl: BjFieldSlice2D;
+        var t = 0;
+        var v = 0;
+        if (_par_eq(fp, fl, "FieldSlice2D::from_fdtd_2d") == 1) {
+            var t1, v1 = BjFieldSlice2D_from_fdtd_2d(&g, cp, cl[0], &sl);
+            t = t1;
+            v = v1;
+        } else {
+            var t2, v2 = BjFieldSlice2D_try_from_fdtd_2d(&g, cp, cl[0], &sl);
+            t = t2;
+            v = v2;
+        }
+        if (is_err_result(t) == 1) { _par_got_error(v); }
+        else {
+            _par_so_values(sl.values, sl.values_len);
+            _par_got_i(sl.dimensions.0);
+            _par_got_i(sl.dimensions.1);
+            var o0: f64 = sl.origin.0;
+            var o1: f64 = sl.origin.1;
+            var sp: f64 = sl.spacing;
+            _par_got_f(o0);
+            _par_got_f(o1);
+            _par_got_f(sp);
+            _par_got_text(sl.component, sl.component_len);
+            _par_got_i(sl.step);
+            BjFieldSlice2D_free(&sl);
+        }
+        BjFdtd2d_free(&g);
+        return 1;
+    }
+    if (_par_eq(fp, fl, "FieldSlice3D::from_fdtd_3d") == 1 || _par_eq(fp, fl, "FieldSlice3D::try_from_fdtd_3d") == 1) {
+        var g3: BjFdtd3d;
+        var dx3: f64 = _par_in(3);
+        var tg3, vg3 = BjFdtd3d_new(_par_in(0), _par_in(1), _par_in(2), dx3, &g3);
+        if (is_err_result(tg3) == 1) { return 0; }
+        var n3 = g3.nx * g3.ny * g3.nz;
+        var seed3: f64 = _par_in(5);
+        _par_so_fill(g3.ex, n3, seed3, 0);
+        _par_so_fill(g3.ey, n3, seed3, 1);
+        _par_so_fill(g3.ez, n3, seed3, 2);
+        _par_so_fill(g3.hx, n3, seed3, 3);
+        _par_so_fill(g3.hy, n3, seed3, 4);
+        _par_so_fill(g3.hz, n3, seed3, 5);
+        g3.step = _par_in(4);
+        var cl3: i64[1];
+        var cp3 = _par_in_bytes(6, &cl3);
+        var vo: BjFieldSlice3D;
+        var t3 = 0;
+        var v3 = 0;
+        if (_par_eq(fp, fl, "FieldSlice3D::from_fdtd_3d") == 1) {
+            var t4, v4 = BjFieldSlice3D_from_fdtd_3d(&g3, cp3, cl3[0], &vo);
+            t3 = t4;
+            v3 = v4;
+        } else {
+            var t5, v5 = BjFieldSlice3D_try_from_fdtd_3d(&g3, cp3, cl3[0], &vo);
+            t3 = t5;
+            v3 = v5;
+        }
+        if (is_err_result(t3) == 1) { _par_got_error(v3); }
+        else {
+            _par_so_values(vo.values, vo.values_len);
+            _par_got_i(vo.dimensions.0);
+            _par_got_i(vo.dimensions.1);
+            _par_got_i(vo.dimensions.2);
+            var p0: f64 = vo.origin.0;
+            var p1: f64 = vo.origin.1;
+            var p2: f64 = vo.origin.2;
+            var sp3: f64 = vo.spacing;
+            _par_got_f(p0);
+            _par_got_f(p1);
+            _par_got_f(p2);
+            _par_got_f(sp3);
+            _par_got_text(vo.component, vo.component_len);
+            _par_got_i(vo.step);
+            BjFieldSlice3D_free(&vo);
+        }
+        BjFdtd3d_free(&g3);
+        return 1;
+    }
+    if (_par_eq(fp, fl, "ChargeVisualization::from_point_charges") == 1) {
+        var nc = _par_in(0);
+        var cb = fl_alloc(nc * sizeof(BjPointCharge) + 8);
+        var pcs: *BjPointCharge = _par_so_pcp(cb);
+        for (var j = 0; j < nc; j = j + 1) {
+            var pc: *BjPointCharge = pcs + j;
+            var q: f64 = _par_in(1 + 4 * j);
+            var x: f64 = _par_in(2 + 4 * j);
+            var y: f64 = _par_in(3 + 4 * j);
+            var z: f64 = _par_in(4 + 4 * j);
+            pc.charge = q;
+            pc.mass = 1.0;
+            pc.position = (x, y, z);
+            pc.velocity = (0.0, 0.0, 0.0);
+        }
+        var cv: BjChargeVisualization;
+        var tc, vc = BjChargeVisualization_from_point_charges(pcs, nc, &cv);
+        if (is_err_result(tc) == 1) { _par_got_error(vc); }
+        else {
+            _par_got_i(cv.charges_len);
+            var cs: *BjChargePoint = _par_so_cpp(cv.charges);
+            for (var k = 0; k < cv.charges_len; k = k + 1) {
+                var c: *BjChargePoint = cs + k;
+                var cx: f64 = f32_to(c.position_x);
+                var cy: f64 = f32_to(c.position_y);
+                var cz: f64 = f32_to(c.position_z);
+                var cq: f64 = f32_to(c.charge);
+                var cm: f64 = f32_to(c.magnitude);
+                _par_got_f(cx);
+                _par_got_f(cy);
+                _par_got_f(cz);
+                _par_got_f(cq);
+                _par_got_f(cm);
+            }
+            BjChargeVisualization_free(&cv);
+        }
+        fl_free(cb);
+        return 1;
+    }
+    if (_par_eq(fp, fl, "RadiationPattern::from_nf2ff") == 1) {
+        var nr = _par_in(0);
+        var rb = fl_alloc(nr * 16 + 8);
+        var ra: *f64 = _bj_fd2_f64p(rb);
+        for (var j2 = 0; j2 < 2 * nr; j2 = j2 + 1) {
+            var w: f64 = _par_in(1 + j2);
+            ra[j2] = w;
+        }
+        var res: BjNf2ffResult;
+        res.angles = rb;
+        res.pattern = rb + nr * 8;
+        res.count = nr;
+        var rp: BjRadiationPattern;
+        var tr, vr = BjRadiationPattern_from_nf2ff(&res, &rp);
+        if (is_err_result(tr) == 1) { _par_got_error(vr); }
+        else {
+            var aa: *f64 = _bj_fd2_f64p(rp.angles);
+            var pp: *f64 = _bj_fd2_f64p(rp.pattern);
+            _par_got_i(rp.angles_len);
+            for (var k2 = 0; k2 < rp.angles_len; k2 = k2 + 1) {
+                var av: f64 = aa[k2];
+                _par_got_f(av);
+            }
+            _par_got_i(rp.pattern_len);
+            for (var k3 = 0; k3 < rp.pattern_len; k3 = k3 + 1) {
+                var pv: f64 = pp[k3];
+                _par_got_f(pv);
+            }
+            var mg: f64 = rp.max_gain;
+            _par_got_f(mg);
+            BjRadiationPattern_free(&rp);
+        }
+        fl_free(rb);
+        return 1;
+    }
+    if (_par_eq(fp, fl, "VectorFieldSample::from_components") == 1 ||
+      _par_eq(fp, fl, "VectorFieldSample::try_from_components") == 1) {
+        var at = 0;
+        var lens: i64[3];
+        var arrs: i64[3];
+        for (var c3 = 0; c3 < 3; c3 = c3 + 1) {
+            var m = _par_in(at);
+            var ab = fl_alloc(m * 8 + 8);
+            var ap: *f64 = _bj_fd2_f64p(ab);
+            for (var j3 = 0; j3 < m; j3 = j3 + 1) {
+                var e: f64 = _par_in(at + 1 + j3);
+                ap[j3] = e;
+            }
+            lens[c3] = m;
+            arrs[c3] = ab;
+            at = at + 1 + m;
+        }
+        var dims: i64[3];
+        dims[0] = _par_in(at);
+        dims[1] = _par_in(at + 1);
+        dims[2] = _par_in(at + 2);
+        var og: f64[3];
+        og[0] = _par_in(at + 3);
+        og[1] = _par_in(at + 4);
+        og[2] = _par_in(at + 5);
+        var spv: f64 = _par_in(at + 6);
+        var vs: BjVectorFieldSample;
+        var tv = 0;
+        var vv = 0;
+        var px: *f64 = _bj_fd2_f64p(arrs[0]);
+        var py: *f64 = _bj_fd2_f64p(arrs[1]);
+        var pz: *f64 = _bj_fd2_f64p(arrs[2]);
+        if (_par_eq(fp, fl, "VectorFieldSample::from_components") == 1) {
+            var t6, v6 = BjVectorFieldSample_from_components(px, lens[0], py, lens[1], pz, lens[2], &dims, &og, spv,
+              &vs);
+            tv = t6;
+            vv = v6;
+        } else {
+            var t7, v7 = BjVectorFieldSample_try_from_components(px, lens[0], py, lens[1], pz, lens[2], &dims, &og, spv,
+              &vs);
+            tv = t7;
+            vv = v7;
+        }
+        if (is_err_result(tv) == 1) { _par_got_error(vv); }
+        else {
+            var vp: *f64 = _bj_fd2_f64p(vs.vectors);
+            _par_got_i(vs.vectors_len);
+            for (var k4 = 0; k4 < 3 * vs.vectors_len; k4 = k4 + 1) {
+                var vk: f64 = vp[k4];
+                _par_got_f(vk);
+            }
+            _par_got_i(vs.dimensions.0);
+            _par_got_i(vs.dimensions.1);
+            _par_got_i(vs.dimensions.2);
+            var q0: f64 = vs.origin.0;
+            var q1: f64 = vs.origin.1;
+            var q2: f64 = vs.origin.2;
+            var qs: f64 = vs.spacing;
+            var qm: f64 = vs.max_magnitude;
+            _par_got_f(q0);
+            _par_got_f(q1);
+            _par_got_f(q2);
+            _par_got_f(qs);
+            _par_got_f(qm);
+            BjVectorFieldSample_free(&vs);
+        }
+        for (var c4 = 0; c4 < 3; c4 = c4 + 1) { fl_free(arrs[c4]); }
+        return 1;
+    }
+    return 0;
+}
+
 public fn _par_dispatch(mp, ml, fp, fl): i64 {
     _par_got_n = 0;
     if (_par_eq(mp, ml, "beam") == 1) { return _par_beam(fp, fl); }
@@ -4821,6 +5096,7 @@ public fn _par_dispatch(mp, ml, fp, fl): i64 {
     if (_par_eq(mp, ml, "relativity") == 1) { return _par_relativity(fp, fl); }
     if (_par_eq(mp, ml, "rf") == 1) { return _par_rf(fp, fl); }
     if (_par_eq(mp, ml, "scattering") == 1) { return _par_scattering(fp, fl); }
+    if (_par_eq(mp, ml, "soorat") == 1) { return _par_soorat(fp, fl); }
     if (_par_eq(mp, ml, "wave") == 1) { return _par_wave(fp, fl); }
     return 0;
 }

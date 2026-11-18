@@ -1,0 +1,354 @@
+# soorat.tcyr — src/soorat.cyr (M7 part 1b-1): the soorat visualization structs and their constructors.
+#
+# Every group not named cyrius_* is 1.2.0:src/integration/soorat.rs's test of that name, ported assertion for assertion
+# (the ledger matches them by name): 12 of its 14; field_slice_2d_serializes and field_slice_3d_serializes wait for
+# the structs' JSON (part 1b-2). tests/golden/soorat.tsv pins every constructor over its grid against Rust besides.
+
+include "tests/lib.cyr"
+
+# |a − b| < tol.
+fn near(a: f64, b: f64, tol: f64): i64 {
+    var dd: f64 = a - b;
+    var ad: f64 = f64_abs(dd);
+    if (ad < tol) { return 1; }
+    return 0;
+}
+
+# 1 when the C strings a and b are equal.
+fn text_is(a, b): i64 {
+    var n = strlen(a);
+    if (n != strlen(b)) { return 0; }
+    return memeq(a, b, n);
+}
+
+# Element i of the f64 array at a.
+fn at(a, i): f64 {
+    var p: *f64 = f64p(a);
+    var v: f64 = p[i];
+    return v;
+}
+
+# A word as a *f64.
+fn f64p(a): *f64 {
+    return a;
+}
+
+# A word as a *BjFieldLine.
+fn linep(a): *BjFieldLine {
+    return a;
+}
+
+# A word as a *BjChargePoint.
+fn cpp(a): *BjChargePoint {
+    return a;
+}
+
+# Runs soorat.rs's tests, then the Cyrius-only checks.
+fn main() {
+    test_group("field_line_visualization");
+    var pts: f64[9];
+    pts[3] = 1.0;
+    pts[6] = 2.0;
+    pts[7] = 0.5;
+    var mags: f64[3];
+    mags[0] = 1.0;
+    mags[1] = 0.8;
+    mags[2] = 0.5;
+    var line: BjFieldLine = BjFieldLine { &pts, 3, &mags, 3 };
+    var viz: BjFieldLineVisualization = BjFieldLineVisualization { &line, 1 };
+    var l0: *BjFieldLine = linep(viz.lines);
+    assert(viz.lines_len == 1 && l0.points_len == 3, "one line of three points");
+
+    test_group("charge_visualization_manual");
+    var cps: BjChargePoint[2];
+    var e19: f64 = 0.00000000000000000016;
+    var ne19: f64 = -e19;
+    var c0: *BjChargePoint = cpp(&cps);
+    var c1: *BjChargePoint = c0 + 1;
+    c0.position_x = 0.0;
+    c0.position_y = 0.0;
+    c0.position_z = 0.0;
+    c0.charge = e19;
+    c0.magnitude = e19;
+    c1.position_x = 1.0;
+    c1.position_y = 0.0;
+    c1.position_z = 0.0;
+    c1.charge = ne19;
+    c1.magnitude = e19;
+    var cv: BjChargeVisualization = BjChargeVisualization { &cps, 2 };
+    var q0: f64 = f32_to(c0.charge);
+    var q1: f64 = f32_to(c1.charge);
+    assert(cv.charges_len == 2 && q0 > 0.0 && q1 < 0.0, "a positive and a negative charge");
+
+    test_group("charge_visualization_from_point_charges");
+    var pcs: BjPointCharge[2];
+    var o: f64[3];
+    var r1: f64[3];
+    r1[0] = 0.0000000001;
+    var pa: BjPointCharge = BjPointCharge_proton(&o);
+    var pb: BjPointCharge = BjPointCharge_electron(&r1);
+    var pq0: *BjPointCharge = &pcs;
+    var pq1: *BjPointCharge = pq0 + 1;
+    memcpy(pq0, &pa, sizeof(BjPointCharge));
+    memcpy(pq1, &pb, sizeof(BjPointCharge));
+    var fv: BjChargeVisualization;
+    var tf, vf = BjChargeVisualization_from_point_charges(&pcs, 2, &fv);
+    var f0: *BjChargePoint = cpp(fv.charges);
+    var f1: *BjChargePoint = f0 + 1;
+    var fq0: f64 = f32_to(f0.charge);
+    var fq1: f64 = f32_to(f1.charge);
+    assert(is_ok(tf) == 1 && fv.charges_len == 2 && fq0 > 0.0 && fq1 < 0.0, "a proton and an electron");
+    BjChargeVisualization_free(&fv);
+
+    test_group("radiation_pattern_manual");
+    var an: f64[3];
+    an[1] = 1.5707963267948966;
+    an[2] = 3.141592653589793;
+    var pt: f64[3];
+    pt[0] = 1.0;
+    pt[1] = 0.5;
+    pt[2] = 0.1;
+    var pat: BjRadiationPattern = BjRadiationPattern { &an, 3, &pt, 3, 1.0 };
+    assert(pat.angles_len == 3 && pat.max_gain == 1.0, "three angles, a gain of 1");
+
+    test_group("vector_field_from_components");
+    var vx: f64[4];
+    var vy: f64[4];
+    var vz: f64[4];
+    vx[0] = 1.0;
+    vx[3] = 1.0;
+    vy[1] = 1.0;
+    vz[2] = 1.0;
+    var dm: i64[3];
+    dm[0] = 2;
+    dm[1] = 2;
+    dm[2] = 1;
+    var og: f64[3];
+    var vs: BjVectorFieldSample;
+    var tv, vv = BjVectorFieldSample_from_components(&vx, 4, &vy, 4, &vz, 4, &dm, &og, 1.0, &vs);
+    assert(is_ok(tv) == 1 && vs.vectors_len == 4 && near(vs.max_magnitude, 1.0, 0.001) == 1, "four unit vectors");
+    BjVectorFieldSample_free(&vs);
+
+    test_group("vector_field_empty");
+    var e3: f64[1];
+    var dz: i64[3];
+    var oz: f64[3];
+    var ve: BjVectorFieldSample;
+    var te, vte = BjVectorFieldSample_from_components(&e3, 0, &e3, 0, &e3, 0, &dz, &oz, 1.0, &ve);
+    assert(is_ok(te) == 1 && ve.vectors_len == 0 && ve.max_magnitude == 0.0, "no samples, a magnitude of 0");
+    BjVectorFieldSample_free(&ve);
+
+    test_group("field_slice_from_fdtd_2d");
+    var g: BjFdtd2d;
+    var tg, vg = BjFdtd2d_new(10, 10, 0.01, BJ_MODE2D_TM, &g);
+    var sl: BjFieldSlice2D;
+    var ts, vs2 = BjFieldSlice2D_from_fdtd_2d(&g, "fz", 2, &sl);
+    assert(is_ok(tg) == 1 && is_ok(ts) == 1 && sl.dimensions.0 == 10 && sl.dimensions.1 == 10 &&
+      sl.values_len == 100 && near(sl.spacing, 0.01, 0.0000000001) == 1,
+      "10 × 10 at 1 cm");
+    BjFieldSlice2D_free(&sl);
+    BjFdtd2d_free(&g);
+
+    test_group("vector_field_try_from_components_checks_count");
+    var v4: f64[4];
+    v4[0] = 1.0;
+    v4[3] = 1.0;
+    var v3: f64[3];
+    v3[1] = 1.0;
+    var d221: i64[3];
+    d221[0] = 2;
+    d221[1] = 2;
+    d221[2] = 1;
+    var d321: i64[3];
+    d321[0] = 3;
+    d321[1] = 2;
+    d321[2] = 1;
+    var dmx: i64[3];
+    dmx[0] = 0 - 1;
+    dmx[1] = 2;
+    dmx[2] = 1;
+    var o3: f64[3];
+    var w: BjVectorFieldSample;
+    var a1, b1 = BjVectorFieldSample_try_from_components(&v4, 4, &v4, 4, &v3, 3, &d221, &o3, 1.0, &w);
+    assert(is_err_result(a1) == 1, "mismatched lengths");
+    var a2, b2 = BjVectorFieldSample_try_from_components(&v4, 4, &v4, 4, &v4, 4, &d321, &o3, 1.0, &w);
+    assert(is_err_result(a2) == 1, "lengths that agree but not with nx·ny·nz");
+    var a3, b3 = BjVectorFieldSample_try_from_components(&v4, 4, &v4, 4, &v4, 4, &dmx, &o3, 1.0, &w);
+    assert(is_err_result(a3) == 1, "nx·ny·nz past usize");
+    var a4, b4 = BjVectorFieldSample_try_from_components(&v4, 4, &v4, 4, &v4, 4, &d221, &o3, 0.0, &w);
+    assert(is_err_result(a4) == 1, "a zero spacing");
+    var ax: f64[4];
+    var ay: f64[4];
+    var az: f64[4];
+    ax[0] = 3.0;
+    ay[0] = 4.0;
+    az[3] = 2.0;
+    var ok: BjVectorFieldSample;
+    var a5, b5 = BjVectorFieldSample_try_from_components(&ax, 4, &ay, 4, &az, 4, &d221, &o3, 1.0, &ok);
+    var okv: *f64 = f64p(ok.vectors);
+    assert(is_ok(a5) == 1 && ok.vectors_len == 4 && okv[0] == 3.0 && okv[1] == 4.0 && okv[2] == 0.0, "[3, 4, 0] first");
+    assert(near(ok.max_magnitude, 5.0, 0.000000000001) == 1, "the largest magnitude 5");
+    BjVectorFieldSample_free(&ok);
+
+    test_group("vector_field_lenient_truncates_documented");
+    var lx: f64[3];
+    lx[0] = 1.0;
+    lx[1] = 2.0;
+    lx[2] = 3.0;
+    var ly: f64[2];
+    var lz: f64[3];
+    var d311: i64[3];
+    d311[0] = 3;
+    d311[1] = 1;
+    d311[2] = 1;
+    var ol: f64[3];
+    var lv: BjVectorFieldSample;
+    var tl, vl = BjVectorFieldSample_from_components(&lx, 3, &ly, 2, &lz, 3, &d311, &ol, 1.0, &lv);
+    assert(is_ok(tl) == 1 && lv.vectors_len == 2 && near(lv.max_magnitude, 2.0, 0.000000000001) == 1,
+      "the shortest array's two samples");
+    BjVectorFieldSample_free(&lv);
+
+    test_group("field_slice_3d_component_is_case_insensitive_and_labelled");
+    var s3: BjFdtd3d;
+    var t3, v3s = BjFdtd3d_new(4, 4, 4, 0.01, &s3);
+    var exa: *f64 = f64p(s3.ex);
+    var eza: *f64 = f64p(s3.ez);
+    var hya: *f64 = f64p(s3.hy);
+    exa[0] = 1.0;
+    eza[0] = 2.0;
+    hya[0] = 3.0;
+    var q: BjFieldSlice3D;
+    var r1a, r1b = BjFieldSlice3D_from_fdtd_3d(&s3, "Ex", 2, &q);
+    assert(is_ok(r1a) == 1 && at(q.values, 0) == 1.0 && text_is(q.component, "ex") == 1, "Ex: E_x, labelled ex");
+    BjFieldSlice3D_free(&q);
+    var r2a, r2b = BjFieldSlice3D_from_fdtd_3d(&s3, "HY", 2, &q);
+    assert(at(q.values, 0) == 3.0 && text_is(q.component, "hy") == 1, "HY: H_y, labelled hy");
+    BjFieldSlice3D_free(&q);
+    var r3a, r3b = BjFieldSlice3D_from_fdtd_3d(&s3, "bogus", 5, &q);
+    assert(at(q.values, 0) == 2.0 && text_is(q.component, "ez") == 1, "an unknown name falls back to E_z, labelled ez");
+    BjFieldSlice3D_free(&q);
+    var r4a, r4b = BjFieldSlice3D_try_from_fdtd_3d(&s3, "bogus", 5, &q);
+    assert(is_err_result(r4a) == 1, "try refuses an unknown name");
+    var r5a, r5b = BjFieldSlice3D_try_from_fdtd_3d(&s3, "Ex", 2, &q);
+    assert(is_ok(r5a) == 1 && at(q.values, 0) == 1.0 && text_is(q.component, "ex") == 1, "try takes Ex");
+    BjFieldSlice3D_free(&q);
+    BjFdtd3d_free(&s3);
+
+    test_group("field_slice_2d_component_is_case_insensitive_and_mode_aware");
+    var tm: BjFdtd2d;
+    var ttm, vtm = BjFdtd2d_new(5, 5, 0.01, BJ_MODE2D_TM, &tm);
+    var tfx: *f64 = f64p(tm.fx);
+    var tfz: *f64 = f64p(tm.fz);
+    tfx[0] = 1.0;
+    tfz[0] = 3.0;
+    var z: BjFieldSlice2D;
+    var u1a, u1b = BjFieldSlice2D_from_fdtd_2d(&tm, "FX", 2, &z);
+    assert(at(z.values, 0) == 1.0 && text_is(z.component, "Tm_x") == 1, "FX: f_x, labelled Tm_x");
+    BjFieldSlice2D_free(&z);
+    var u2a, u2b = BjFieldSlice2D_try_from_fdtd_2d(&tm, "Ez", 2, &z);
+    assert(is_ok(u2a) == 1 && at(z.values, 0) == 3.0 && text_is(z.component, "Tm_z") == 1, "Ez in TM: f_z");
+    BjFieldSlice2D_free(&z);
+    var u3a, u3b = BjFieldSlice2D_try_from_fdtd_2d(&tm, "Hx", 2, &z);
+    assert(is_ok(u3a) == 1 && text_is(z.component, "Tm_x") == 1, "Hx in TM: f_x");
+    BjFieldSlice2D_free(&z);
+    var teg: BjFdtd2d;
+    var tte, vte2 = BjFdtd2d_new(5, 5, 0.01, BJ_MODE2D_TE, &teg);
+    var u4a, u4b = BjFieldSlice2D_try_from_fdtd_2d(&teg, "Ez", 2, &z);
+    assert(is_err_result(u4a) == 1, "E_z is not a TE field");
+    var u5a, u5b = BjFieldSlice2D_try_from_fdtd_2d(&teg, "ex", 2, &z);
+    assert(is_ok(u5a) == 1 && text_is(z.component, "Te_x") == 1, "ex in TE: f_x");
+    BjFieldSlice2D_free(&z);
+    var u6a, u6b = BjFieldSlice2D_from_fdtd_2d(&teg, "bogus", 5, &z);
+    assert(is_ok(u6a) == 1 && text_is(z.component, "Te_z") == 1, "the lenient fallback labels what it returns");
+    BjFieldSlice2D_free(&z);
+    BjFdtd2d_free(&tm);
+    BjFdtd2d_free(&teg);
+
+    test_group("field_slice_from_fdtd_3d");
+    var g3: BjFdtd3d;
+    var tg3, vg3 = BjFdtd3d_new(4, 4, 4, 0.01, &g3);
+    var vol: BjFieldSlice3D;
+    var tv3, vv3 = BjFieldSlice3D_from_fdtd_3d(&g3, "ez", 2, &vol);
+    assert(is_ok(tv3) == 1 && vol.dimensions.0 == 4 && vol.dimensions.2 == 4 && vol.values_len == 64, "4³: 64 values");
+    BjFieldSlice3D_free(&vol);
+    BjFdtd3d_free(&g3);
+
+    test_group("cyrius_soorat_text");
+    # Bytes that are not UTF-8 name no component (ADR 0002 row 44): try refuses them, the lenient form falls back.
+    var tx: BjFdtd2d;
+    var ttx, vtx = BjFdtd2d_new(5, 5, 0.01, BJ_MODE2D_TM, &tx);
+    var bad[4];
+    store8(&bad, 101);
+    store8(&bad + 1, 255);
+    var y: BjFieldSlice2D;
+    var x1a, x1b = BjFieldSlice2D_try_from_fdtd_2d(&tx, &bad, 2, &y);
+    var utf8_why = "invalid parameter: 2D FDTD component is not valid UTF-8 (an invalid sequence at byte 1)";
+    assert(is_err_result(x1a) == 1 && text_is(bj_last_error_display(), utf8_why) == 1, "a stray 0xFF refused");
+    var x2a, x2b = BjFieldSlice2D_from_fdtd_2d(&tx, &bad, 2, &y);
+    assert(is_ok(x2a) == 1 && text_is(y.component, "Tm_z") == 1, "the lenient form falls back to f_z");
+    BjFieldSlice2D_free(&y);
+    # Rust's `{:?}` of the name in the reason: quotes and newlines escaped; Unicode White_Space trimmed first.
+    var x3a, x3b = BjFieldSlice2D_try_from_fdtd_2d(&tx, "e\"z\n", 4, &y);
+    assert(is_err_result(x3a) == 1 &&
+      text_is(bj_last_error_display(), "invalid parameter: unknown 2D FDTD component \"e\\\"z\\n\" for Tm mode") == 1,
+      "the reason quotes the name");
+    var x4a, x4b = BjFieldSlice2D_try_from_fdtd_2d(&tx, "\u3000Ez\u2003", 8, &y);
+    assert(is_ok(x4a) == 1 && text_is(y.component, "Tm_z") == 1, "U+3000 and U+2003 trimmed");
+    BjFieldSlice2D_free(&y);
+    BjFdtd2d_free(&tx);
+    # ChargePoint's f32: nearest, ties to even, ±∞ past f32's range.
+    var bo: f64[3];
+    var bp: BjPointCharge = BjPointCharge_proton(&bo);
+    bp.charge = 1000000000000000000000000000000000000000.0;
+    var bv: BjChargeVisualization;
+    var bt, bvv = BjChargeVisualization_from_point_charges(&bp, 1, &bv);
+    var b0: *BjChargePoint = cpp(bv.charges);
+    var bq: f64 = f32_to(b0.charge);
+    assert(is_ok(bt) == 1 && _bj_k_bits(bq) == 0x7ff0000000000000, "10³⁹ C as f32 is +∞");
+    BjChargeVisualization_free(&bv);
+
+    # The structs' blocks: a visualization built from fl_alloc blocks gives every one back, twice harmlessly; a
+    # constructor past freelist's 2 GiB request is Allocation with its output untouched.
+    test_group("cyrius_soorat_memory");
+    var lb = fl_alloc(2 * sizeof(BjFieldLine));
+    var l0m: *BjFieldLine = linep(lb);
+    var l1m: *BjFieldLine = l0m + 1;
+    l0m.points = fl_alloc(24);
+    l0m.points_len = 1;
+    l0m.magnitudes = fl_alloc(8);
+    l0m.magnitudes_len = 1;
+    l1m.points = fl_alloc(48);
+    l1m.points_len = 2;
+    l1m.magnitudes = 0;
+    l1m.magnitudes_len = 0;
+    var fz: BjFieldLineVisualization = BjFieldLineVisualization { lb, 2 };
+    BjFieldLineVisualization_free(&fz);
+    BjFieldLineVisualization_free(&fz);
+    assert(fz.lines == 0 && fz.lines_len == 0, "every block given back; a second free does nothing");
+    var one: BjPointCharge = BjPointCharge_proton(&bo);
+    var big_cv: BjChargeVisualization = BjChargeVisualization { 0, 0 };
+    var m1a, m1b = BjChargeVisualization_from_point_charges(&one, 1099511627776, &big_cv);
+    assert(is_err_result(m1a) == 1 && m1b == BJ_ERR_ALLOCATION && big_cv.charges == 0, "2⁴⁰ charges: Allocation");
+    var huge: BjNf2ffResult;
+    huge.angles = 0;
+    huge.pattern = 0;
+    huge.count = 1099511627776;
+    var big_rp: BjRadiationPattern = BjRadiationPattern { 0, 0, 0, 0, 0.0 };
+    var m2a, m2b = BjRadiationPattern_from_nf2ff(&huge, &big_rp);
+    assert(is_err_result(m2a) == 1 && m2b == BJ_ERR_ALLOCATION && big_rp.angles == 0, "2⁴⁰ angles: Allocation");
+    var hd: i64[3];
+    hd[0] = 1099511627776;
+    hd[1] = 1;
+    hd[2] = 1;
+    var big_vs: BjVectorFieldSample;
+    big_vs.vectors = 0;
+    var m3a, m3b = BjVectorFieldSample_from_components(&bo, 1099511627776, &bo, 1099511627776, &bo, 1099511627776,
+      &hd, &bo, 1.0, &big_vs);
+    assert(is_err_result(m3a) == 1 && m3b == BJ_ERR_ALLOCATION && big_vs.vectors == 0, "2⁴⁰ samples: Allocation");
+
+    return assert_summary();
+}
+
+var exit_code = main();
+if (exit_code > 0) { exit_code = 1; }
+sys_exit_group(exit_code);

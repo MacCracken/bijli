@@ -655,9 +655,16 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
   module `bridge.tsv` (697 rows, class A) is the first whose rows are all `emit.py`'s (`emit_1a`; validate.py's
   `bridge_eval` the model), replayed by the harness's `_par_bridge`; `tests/bridge.tcyr` ports all 18 of bridge.rs's
   tests (`port-parity.md` §132).
-
-### Fixed
-
+- **Cyrius port, M7 part 1b-1 — the soorat visualization structs** (`src/soorat.cyr`): `BjFieldSlice2D`,
+  `BjFieldSlice3D`, `BjFieldLine`, `BjFieldLineVisualization`, `BjChargePoint` (f32 fields, as Rust's),
+  `BjChargeVisualization`, `BjRadiationPattern` and `BjVectorFieldSample`, each with a `_free`, and their constructors
+  from the 2D and 3D grids (`from_fdtd_2d`, `try_from_fdtd_2d`, `from_fdtd_3d`, `try_from_fdtd_3d`: component names
+  case-insensitive and trimmed on Unicode's White_Space, Rust's labels and `{:?}` reasons), point charges, NF2FF
+  results and component arrays (`from_components`, `try_from_components`, Rust's checks in Rust's order). A component
+  name is bytes; ones that are not UTF-8 name no component (ADR 0002 row 44). src/touchstone.cyr's UTF-8, White_Space
+  and `{:?}` helpers are public for it. The golden module `soorat.tsv` (544 rows, class A, `emit.py`'s `emit_1b`,
+  validate.py's `soorat_eval`, the harness's `_par_soorat`); `tests/soorat.tcyr` ports 12 of soorat.rs's 14 tests (the
+  two on serde wait for part 1b-2). Probe p21 proves f32 on the pinned compiler (`port-parity.md` §133).  ### Fixed
 - **relativity** (ADR 0002 row 27, M2 part 1d-1): `lienard_wiechert_e` returned Ok(NaN) for a NaN R, which the
   Liénard–Wiechert potentials refuse, and now refuses it with their InvalidParameter ("R vector must not contain
   NaN").

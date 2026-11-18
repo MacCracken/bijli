@@ -7301,3 +7301,61 @@ eigenmode search (`dft_magnitude`'s recurrence and magnitude, `find_eigenmodes`'
   `main`, which `cyrius doc --check <file>` names and the audit's count doesn't (fixed as the other test files'). The
   audit passes; validate.py 768,735 rows, 0 problems; `emit.py --check` 1,107 frozen and 1,499 emitted fdtd_2d3d
   rows, 697 emitted bridge rows. Next: 1b, the soorat visualization structs.
+
+## 133. M7 part 1b-1: the soorat visualization structs (2026-11-17)
+
+- **The split**: soorat.rs is eight serde structs and eight constructors; 1b-1 ports the structs and the constructors,
+  1b-2 their JSON (serde's writer and reader for each, 16 impls) in a golden module of its own.
+- **`src/soorat.cyr`**: the eight structs with Rust's field names (FieldSlice2D's `values`, `dimensions`, `origin`,
+  `spacing`, `component`, `step`; the 3D volume's; FieldLine's `points` and `magnitudes`; the lines; ChargePoint's
+  position, charge and magnitude; the charges; RadiationPattern's `angles`, `pattern` and `max_gain`;
+  VectorFieldSample's `vectors`, `dimensions`, `origin`, `spacing`, `max_magnitude`). A `Vec` is a block of its own
+  with a `_len` beside it (fl_alloc; `BjX_free` gives back every non-zero one), a `String` a NUL-terminated block and
+  its byte length, `[usize; N]` and `[f64; N]` tuple fields (`dimensions: (i64, i64)`, as `BjPointCharge.position`,
+  probe p15), and ChargePoint's `[f32; 3]` three `f32` fields (`position_x`, `_y`, `_z`; surface parity's
+  FIELD_RENAMES). Every constructor returns a Result, Allocation where a copy can't be had (Rust's clone aborts, ADR
+  0002 row 9).
+- **f32 is the language's** (the review before deferring anything): a store into an `f32` slot rounds to nearest,
+  ties to even, since 6.7.6, and an `f32` field is 4 bytes since 6.7.10 (guide, Field types). Probe p21 proves it on
+  the pinned 6.7.18 against IEEE's binary64-to-binary32 conversion: the ties at 1 + 2^-24 and 1 + 3·2^-24, f32::MAX's
+  halfway (to +∞), the subnormal ties at 2^-150, −0, a NaN, `f32_to`'s exact widening, a 20-byte five-field struct.
+  goonj's soorat port widened its f32 fields to f64; bijli keeps Rust's type.
+- **The constructors**: `from_fdtd_2d` / `try_from_fdtd_2d` resolve the name as Rust's `resolve_2d` (`trim` on
+  White_Space, `to_ascii_lowercase`; fx, fy, fz, or the mode's physical names), copy the field, label it
+  `{mode:?}_<axis>` ("Tm_z"), origin (0, 0), spacing dx and the grid's step; the lenient form falls back to fz (a debug
+  log line, `component="…"` in `{:?}`), the strict one refuses "unknown 2D FDTD component {name:?} for {mode:?} mode".
+  The 3D pair likewise, labelled with the canonical lowercase name and refusing "… (expected one of ["ex", "ey", "ez",
+  "hx", "hy", "hz"])". The text helpers are src/touchstone.cyr's (UTF-8, White_Space, the `{:?}` escapes from the
+  oracle compiler's sets), now public as `_bj_ts_*`; `_bj_ts_quote`'s escape loop is `_bj_ts_escape_body`, shared with
+  the new uncut `_bj_ts_debug_str`. `from_point_charges` rounds each position, the charge and |charge| to f32 (Rust's
+  `as f32`). `from_nf2ff` copies the angles and pattern and folds `f64::max` from +0. `from_components` takes the
+  shortest array's samples and stores the dimensions as given; `try_from_components` checks, in Rust's order, the
+  product nx·ny·nz (usize overflow), the lengths, the spacing and the origin, with Rust's reasons ({:?} of a [usize; 3]
+  and a [f64; 3], Display of the spacing).
+- **A finding**: Rust's `f64::max` is LLVM's `maxnum`, which on x86-64 keeps its first operand when they compare
+  equal: (+0).max(−0) is +0. src/mathx.cyr's `_bj_max` returns the second (−0), and validate.py's `rust_max` the first;
+  M1 accepted ±0 ties either way, so no row tells them apart until now. `from_nf2ff`'s fold keeps the running value on
+  a tie, Rust's: two rows with a −0 pattern failed against the model with `_bj_max`. `_bj_max`'s other callers are
+  M7 Part 2's to review (its range-edge review, the ±0 ties among them).
+- **The golden module** `soorat.tsv`: 544 rows from `emit_1b`, class A (148 each of the 2D pair, 60 each of the 3D
+  pair, 38 charge visualizations, 18 radiation patterns, 36 each of the vector pair; 114 refusals): grids filled by
+  `so_fill` (±seed·(i + 1 + k), seeds from 2^-1074 to 10^300 and NaN, steps to 2^64 − 1), 54 2D names in both modes
+  and 32 3D names, lenient and strict (every casing, White_Space around a name, look-alikes that aren't White_Space,
+  U+200B, U+00AD, U+FEFF, a combining acute, an emoji, NUL, DEL, quotes and backslashes in the reasons); charges
+  through f32's ties, its halfway to ∞, the subnormals, NaN, ±0 and ±∞; patterns whose maximum meets NaN, ±0 and ∞;
+  vector samples through each refusal, magnitudes past DBL_MAX, below the range and NaN, and seeded grids. validate.py's
+  `soorat_eval` is the model (its f32 by exact rational rounding, `f32_round`, not the host's conversion), the harness's
+  `_par_soorat` replays every row. The notes now render a string token as Rust's `{:?}` (`rf_debug_str`), which
+  leaves the earlier modules' notes as they were.
+- **Tests**: `tests/soorat.tcyr`, 12 of soorat.rs's 14 tests by name (`field_slice_2d_serializes` and
+  `field_slice_3d_serializes` are 1b-2's), `cyrius_soorat_text` (the UTF-8 refusal and fallback, a `{:?}` reason,
+  U+3000 and U+2003 trimmed, a charge of 10³⁹ C as f32 +∞) and `cyrius_soorat_memory` (a visualization of fl_alloc
+  blocks freed twice; 2⁴⁰ charges, angles and samples refused as Allocation, the output untouched): 35 assertions. The
+  first gate read execution coverage 415 of 417, the field lines' two frees unentered; the memory group enters them.
+  The ledger: 808 ported, 12 n/a, 38 pending; surface parity: 17 modules, soorat in progress (its 16 serde impls,
+  1b-2), 704 items; the API snapshot 2,162 (15 added).
+- **Result, every target** (x86_64 ELF, x86_64 PE, aarch64): **21 modules, 0 failing; 645,435 ok, 0 failed, 0
+  measured, 0 pending, 123,844 accepted (ADR 01: 43,087; ADR 0002: 80,757)** over 769,279 rows; **all 504 digests
+  equal** (soorat's 8 new); `soorat.tcyr` passes on all three (35). The gate is clean (no warnings; execution coverage
+  417 of 417; the audit passes); validate.py 769,279 rows, 0 problems; `emit.py --check` current for fdtd_2d3d, bridge
+  and soorat. Next: 1b-2, the soorat structs' JSON.

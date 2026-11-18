@@ -45,6 +45,7 @@ sim.run(500, Some((100, 100)), 3e9, 1.0);
 | `beam` | Yes | Gaussian beams, ABCD matrices, resonator stability, HG/LG modes |
 | `rf` | Yes | Transmission lines, S-parameters, Smith chart, Touchstone I/O, arrays |
 | `bridge` | Yes | Cross-crate bridges: primitive values to and from ushma, prakash, tanmatra and dravya |
+| `soorat` | Yes | Visualization data for soorat: FDTD field slices, field lines, charges, radiation patterns, vector fields |
 | `compute` | No | Compute backend trait + CPU reference backend (wgpu backend is a scaffold) |
 | `ai` | No | Daimon/hoosh AI integration |
 | `logging` | No | Structured logging via `BIJLI_LOG` |

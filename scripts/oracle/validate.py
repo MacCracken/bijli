@@ -12123,6 +12123,145 @@ def validate_bridge(path: Path) -> list:
         rows_agree(fn, v, outs, want, "bridge", n, errs)
     return errs
 
+# ── soorat: 1.2.0:src/integration/soorat.rs (M7 part 1b-1) ────────────────────────────────────────────────────────────
+
+FLT_MAX_FRAC = (Fraction(2) - Fraction(1, 1 << 23)) * Fraction(2) ** 127
+
+
+def f32_round(x: float) -> float:
+    """Rust's `x as f32` widened back to f64: the nearest binary32, ties to even, ±∞ past its range, the subnormals
+    down to 2^-149 (exact rational arithmetic, not the host's conversion); ±0, ±∞ and NaN as they are."""
+    if math.isnan(x) or math.isinf(x) or x == 0.0:
+        return x
+    f = abs(Fraction(x))
+    _m, e = math.frexp(abs(x))
+    unit = Fraction(2) ** max(e - 24, -149)
+    q = f / unit
+    n = q.numerator // q.denominator
+    rem = q - n
+    if rem > Fraction(1, 2) or (rem == Fraction(1, 2) and n % 2 == 1):
+        n += 1
+    v = n * unit
+    if v > FLT_MAX_FRAC:
+        return math.copysign(math.inf, x)
+    return math.copysign(float(v), x)
+
+
+def so_fill(seed: float, i: int, k: int) -> float:
+    """The harness's deterministic field k of cell i (soorat.tsv's grids): ±seed·(i + 1 + k), the sign alternating with
+    k (exact IEEE products)."""
+    v = seed * float(i + 1 + k)
+    return v if k % 2 == 0 else -v
+
+
+def so_lower(t: str) -> str:
+    """`str::to_ascii_lowercase`: A–Z only."""
+    return "".join(chr(ord(c) + 32) if "A" <= c <= "Z" else c for c in t)
+
+
+def soorat_eval(root: Path, fn, toks):
+    """soorat.rs's constructors transcribed: a row's output tokens, or None where nothing transcribes fn. Grids are
+    filled by so_fill; a slice's values are reported as their count, digest and end values."""
+    v = [b for _k, b in toks]
+    if fn in ("FieldSlice2D::from_fdtd_2d", "FieldSlice2D::try_from_fdtd_2d"):
+        nx, ny, dx, mode, step, seed, comp = v
+        n = nx * ny
+        name = so_lower(rf_trim(comp))
+        mname = "Te" if mode == 1 else "Tm"
+        table = {"fx": 0, "fy": 1, "fz": 2}
+        table.update({"ex": 0, "ey": 1, "hz": 2} if mode == 1 else {"hx": 0, "hy": 1, "ez": 2})
+        axis = table.get(name)
+        if axis is None:
+            if fn.startswith("FieldSlice2D::try"):
+                return ip_err(f"unknown 2D FDTD component {rf_debug_str(root, comp)} for {mname} mode")
+            axis = 2
+        k = {0: 1, 1: 2, 2: 0}[axis]           # fx is field 1, fy field 2, fz field 0
+        vals = [so_fill(seed, i, k) for i in range(n)]
+        return [("i", n), ("i", fd_digest(vals)), ("f", vals[0]), ("f", vals[-1]), ("i", nx), ("i", ny), ("f", 0.0),
+                ("f", 0.0), ("f", dx), ("s", f"{mname}_{'xyz'[axis]}"), ("i", step)]
+    if fn in ("FieldSlice3D::from_fdtd_3d", "FieldSlice3D::try_from_fdtd_3d"):
+        nx, ny, nz, dx, step, seed, comp = v
+        n = nx * ny * nz
+        names = ["ex", "ey", "ez", "hx", "hy", "hz"]
+        name = so_lower(rf_trim(comp))
+        if name not in names:
+            if fn.startswith("FieldSlice3D::try"):
+                return ip_err(f"unknown 3D FDTD component {rf_debug_str(root, comp)} (expected one of "
+                              f'["ex", "ey", "ez", "hx", "hy", "hz"])')
+            name = "ez"
+        k = names.index(name)
+        vals = [so_fill(seed, i, k) for i in range(n)]
+        return [("i", n), ("i", fd_digest(vals)), ("f", vals[0]), ("f", vals[-1]), ("i", nx), ("i", ny), ("i", nz),
+                ("f", 0.0), ("f", 0.0), ("f", 0.0), ("f", dx), ("s", name), ("i", step)]
+    if fn == "ChargeVisualization::from_point_charges":
+        n = v[0]
+        out = [("i", n)]
+        for j in range(n):
+            q, x, y, z = v[1 + 4 * j: 5 + 4 * j]
+            out += [("f", f32_round(x)), ("f", f32_round(y)), ("f", f32_round(z)), ("f", f32_round(q)),
+                    ("f", f32_round(abs(q)))]
+        return out
+    if fn == "RadiationPattern::from_nf2ff":
+        n = v[0]
+        angles, pattern = v[1:1 + n], v[1 + n:1 + 2 * n]
+        g = 0.0
+        for x in pattern:
+            g = rust_max(g, x)
+        return [("i", n)] + [("f", a) for a in angles] + [("i", n)] + [("f", p) for p in pattern] + [("f", g)]
+    if fn in ("VectorFieldSample::from_components", "VectorFieldSample::try_from_components"):
+        at = 0
+        arrs = []
+        for _ in range(3):
+            m = v[at]
+            arrs.append(v[at + 1:at + 1 + m])
+            at += 1 + m
+        nx, ny, nz = (q & FD_U64 for q in v[at:at + 3])
+        origin = v[at + 3:at + 6]
+        spacing = v[at + 6]
+        lens = [len(a) for a in arrs]
+        if fn.startswith("VectorFieldSample::try"):
+            expected = nx * ny
+            if expected > FD_U64 or expected * nz > FD_U64:
+                return ip_err(f"grid dimensions [{nx}, {ny}, {nz}] overflow usize")
+            expected *= nz
+            if any(m != expected for m in lens):
+                return ip_err(f"component lengths ({lens[0]}, {lens[1]}, {lens[2]}) must all equal nx·ny·nz = "
+                              f"{expected}")
+            if not (math.isfinite(spacing) and spacing > 0.0):
+                return ip_err(f"grid spacing must be finite and positive, got {rust_display(spacing)}")
+            if not all(math.isfinite(o) for o in origin):
+                return ip_err(f"grid origin must be finite, got {debug3(origin)}")
+            count = expected
+        else:
+            count = min(lens)
+        mx = 0.0
+        out = [("i", count)]
+        for i in range(count):
+            x, y, z = arrs[0][i], arrs[1][i], arrs[2][i]
+            sq = x * x + y * y + z * z
+            mag = math.sqrt(sq) if not math.isnan(sq) else math.nan
+            if mag > mx:
+                mx = mag
+            out += [("f", x), ("f", y), ("f", z)]
+        return out + [("i", nx), ("i", ny), ("i", nz)] + [("f", o) for o in origin] + [("f", spacing), ("f", mx)]
+    return None
+
+
+def validate_soorat(root: Path, path: Path) -> list:
+    """soorat.rs's constructors transcribed (soorat_eval), every row class A."""
+    header, rows = read_tsv(path)
+    errs = check_platform(header)
+    if errs:
+        return errs
+    for n, (fn, _cls, ins, outs) in enumerate(rows, 1):
+        toks = [(k, tok_text(b) if k == "s" else b) for k, b in ins]
+        want = soorat_eval(root, fn, toks)
+        if want is None:
+            errs.append(f"soorat row {n}: no transcription for {fn}")
+            continue
+        rows_agree(fn, [b for _k, b in toks], outs, want, "soorat", n, errs)
+    return errs
+
 def main() -> int:
     root = Path(sys.argv[1] if len(sys.argv) > 1 else ".").resolve()
     golden = root / "tests/golden"
@@ -12146,6 +12285,7 @@ def main() -> int:
         "relativity": lambda p: validate_relativity(root, p),
         "rf": validate_rf,
         "scattering": validate_scattering,
+        "soorat": lambda p: validate_soorat(root, p),
         "wave": lambda p: validate_wave(root, p),
     }
     listed = [l for l in (golden / "modules.txt").read_text().splitlines() if l and not l.startswith("#")]

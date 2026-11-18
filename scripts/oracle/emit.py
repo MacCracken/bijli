@@ -53,7 +53,7 @@ def human(tok) -> str:
     if k == "i":
         return str(b)
     if k == "s":
-        return '"' + b.replace("\\", "\\\\").replace('"', '\\"') + '"'
+        return V.rf_debug_str(root, b)
     if k == "n":
         return "None"
     if k == "E":
@@ -786,6 +786,116 @@ def emit_1a(rows):
         put("magnetic_flux_to_magnetostrictive_strain", sat * (rng.unit() * 6.0 - 3.0), draw(-12.0, -2.0), sat)
 
 
+# ── M7: integration/soorat.rs (part 1b-1) ───────────────────────────────────────────────────────────────────────────
+
+def emit_1b(rows):
+    """M7 part 1b-1: soorat.rs's constructors (class A), their outputs validate.py's soorat_eval. The 2D and 3D field
+    slices over small grids filled by so_fill (seeds of either sign from 2^-1074 to 10^300, NaN; steps up to 2^64 − 1),
+    their component names in every casing, trimmed of Unicode's White_Space and not of the look-alikes, Rust's `{:?}`
+    escapes in the refusals' names, in both modes, lenient and strict; point charges through f32 (ties, the overflow
+    halfway, the subnormals, NaN, ±0, ±∞); radiation patterns whose maximum meets NaN, ±0 and ∞; vector field samples,
+    lenient and checked, each refusal in Rust's order, magnitudes past DBL_MAX, below it and NaN."""
+    inf, nan = math.inf, math.nan
+    mx, tiny = sys.float_info.max, 5e-324
+
+    def put(fn, *toks):
+        ins = tuple(toks)
+        vals = [(k, b) for k, b in ins]
+        rows.emit(fn, "A", ins, V.soorat_eval(root, fn, vals))
+
+    names2 = ["fz", "fx", "fy", "FZ", "Fx", "fY", " fy ", "ez", "Ez", "EZ", "eZ", "hx", "Hx", "HX", "hy", "Hy", "hz",
+              "Hz", "ex", "Ex", "ey", "EY", "bogus", "", " ", "z", "f", "fzz", "e", "ezz", "\tEz\n", "\r\nhx\x0b",
+              "\u3000hx\u2003", "\u00a0fy\u00a0", "\u0085ez", "\u2028hz\u2029", "\u205fex\u202f", "\u1680ey",
+              "\x1cez", "\u200bez", "e\"z", "e\\z", "e\x00z", "\u00e9", "ez\u0301", "\U0001f600", "\x7f", "Ez ",
+              "f z", "\ufeffez", "e\u00adz", "\u0378", "ez\ufe0f", "\u00a0\u00a0"]
+    for mode in (0, 1):
+        for name in names2:
+            for fn in ("FieldSlice2D::from_fdtd_2d", "FieldSlice2D::try_from_fdtd_2d"):
+                put(fn, i(5), i(4), f(0.01), i(mode), u(3), f(1.5), ("s", name))
+        for nx, ny, dx, step, seed in ((3, 3, 1e-3, 0, -0.25), (10, 10, 0.01, 7, 1e300), (4, 6, 1e-300, (1 << 64) - 1,
+                                       tiny), (7, 3, 2.5, 1 << 63, nan), (3, 5, 1e300, 12345, -1e-300)):
+            for name in ("fz", "fx", "fy", "bogus"):
+                put("FieldSlice2D::from_fdtd_2d", i(nx), i(ny), f(dx), i(mode), u(step), f(seed), ("s", name))
+                put("FieldSlice2D::try_from_fdtd_2d", i(nx), i(ny), f(dx), i(mode), u(step), f(seed), ("s", name))
+    names3 = ["ex", "ey", "ez", "hx", "hy", "hz", "Ex", "EY", "eZ", "HX", "Hy", "hZ", " ez ", "\tHy\n",
+              "\u3000hz\u3000", "\u0085ex", "fz", "fx", "bogus", "", "e", "exx", "\x1cez", "\u200bhx", "e\"x",
+              "h\\y", "e\x00x", "ex\u0301", "\u00e9", "\U0001f600", "\x7f", "\u00a0hy"]
+    for name in names3:
+        for fn in ("FieldSlice3D::from_fdtd_3d", "FieldSlice3D::try_from_fdtd_3d"):
+            put(fn, i(4), i(3), i(3), f(0.01), u(2), f(-1.25), ("s", name))
+    for dims, dx, step, seed in (((3, 3, 3), 1e-3, 0, 0.5), ((5, 4, 3), 0.01, 9, -1e300), ((3, 4, 5), 1e-300,
+                                 (1 << 64) - 1, tiny), ((4, 4, 4), 1.0, 1 << 63, nan)):
+        for name in ("ex", "ey", "ez", "hx", "hy", "hz", "bogus"):
+            for fn in ("FieldSlice3D::from_fdtd_3d", "FieldSlice3D::try_from_fdtd_3d"):
+                put(fn, i(dims[0]), i(dims[1]), i(dims[2]), f(dx), u(step), f(seed), ("s", name))
+    # Point charges through f32.
+    e = 1.602176634e-19
+    half = float.fromhex("0x1.ffffffp+127")          # f32::MAX's halfway up: rounds to +inf (ties to even)
+    special = (0.0, -0.0, 1.0, -1.0, 1.0 + 2.0 ** -24, 1.0 + 3 * 2.0 ** -24, e, -e, 3.4028234663852886e38, half,
+               float.fromhex("0x1.fffffefffffffp+127"), -half, 2.0 ** -149, 2.0 ** -150, 2.0 ** -150 * 1.0000001,
+               1e-41, 1e-46, 1e39, -1e39, mx, tiny, inf, -inf, nan)
+    put("ChargeVisualization::from_point_charges", i(0))
+    for q in special:
+        put("ChargeVisualization::from_point_charges", i(1), f(q), f(q), f(-q), f(0.5))
+    put("ChargeVisualization::from_point_charges", i(2), f(e), f(0.0), f(0.0), f(0.0), f(-e), f(1e-10), f(0.0), f(0.0))
+    rng = Rng(0x7B_50)
+
+    def draw(lo=-330.0, hi=308.0):
+        x = rng.log_uniform(lo, hi)
+        return -x if rng.unit() < 0.5 else x
+
+    for n in (3, 5, 8):
+        for _ in range(4):
+            toks = [i(n)]
+            for _j in range(n):
+                toks += [f(draw(-50.0, 50.0)), f(draw()), f(draw()), f(draw())]
+            put("ChargeVisualization::from_point_charges", *toks)
+    # Radiation patterns: the maximum from +0 by f64::max.
+    pats = ([], [1.0, 0.5, 0.1], [nan], [nan, 0.25, nan], [-0.0], [0.0, -0.0], [-0.0, 0.0], [-1.0, -2.0], [inf, 1.0],
+            [1.0, inf, nan], [-inf], [tiny], [mx, mx], [0.5, 0.5, 0.25], [nan, nan])
+    for pat in pats:
+        n = len(pat)
+        angles = [math.pi * j / max(n - 1, 1) for j in range(n)]
+        put("RadiationPattern::from_nf2ff", i(n), *[f(a) for a in angles], *[f(x) for x in pat])
+    for n in (7, 31, 181):
+        put("RadiationPattern::from_nf2ff", i(n), *[f(draw(-3.0, 1.0)) for _ in range(n)],
+            *[f(abs(draw(-20.0, 5.0))) for _ in range(n)])
+
+    # Vector field samples.
+    def vec(fn, vx, vy, vz, dims, origin, spacing):
+        toks = [i(len(vx)), *[f(x) for x in vx], i(len(vy)), *[f(x) for x in vy], i(len(vz)), *[f(x) for x in vz]]
+        toks += [u(d) for d in dims] + [f(o) for o in origin] + [f(spacing)]
+        put(fn, *toks)
+
+    v4a, v4b, v4c = [1.0, 0.0, 0.0, 1.0], [0.0, 1.0, 0.0, 0.0], [0.0, 0.0, 1.0, 0.0]
+    for fn in ("VectorFieldSample::from_components", "VectorFieldSample::try_from_components"):
+        vec(fn, v4a, v4b, v4c, (2, 2, 1), (0.0, 0.0, 0.0), 1.0)
+        vec(fn, [], [], [], (0, 0, 0), (0.0, 0.0, 0.0), 1.0)
+        vec(fn, v4a, v4a, [0.0, 1.0, 0.0], (2, 2, 1), (0.0, 0.0, 0.0), 1.0)
+        vec(fn, v4a, v4a, v4a, (3, 2, 1), (0.0, 0.0, 0.0), 1.0)
+        vec(fn, v4a, v4a, v4a, ((1 << 64) - 1, 2, 1), (0.0, 0.0, 0.0), 1.0)
+        vec(fn, v4a, v4a, v4a, (1 << 32, 1 << 32, 1), (0.0, 0.0, 0.0), 1.0)
+        vec(fn, v4a, v4a, v4a, (1 << 62, 4, 0), (0.0, 0.0, 0.0), 1.0)
+        for sp in (0.0, -0.0, -1.0, nan, inf, -inf, tiny, mx):
+            vec(fn, v4a, v4a, v4a, (2, 2, 1), (0.0, 0.0, 0.0), sp)
+        for og in ((nan, 0.0, 0.0), (0.0, inf, 0.0), (0.0, 0.0, -inf), (1e-7, 1e16, nan), (-0.0, 1.5, 2.0)):
+            vec(fn, v4a, v4a, v4a, (2, 2, 1), og, 0.5)
+        vec(fn, [3.0, 0.0, 0.0, 0.0], [4.0, 0.0, 0.0, 0.0], [0.0, 0.0, 0.0, 2.0], (2, 2, 1), (0.0, 0.0, 0.0), 1.0)
+        vec(fn, [1.0, 2.0, 3.0], [0.0, 0.0], [0.0, 0.0, 0.0], (3, 1, 1), (0.0, 0.0, 0.0), 1.0)
+        vec(fn, [1e200, 1e-200, nan, inf], [1e200, 0.0, 1.0, 0.0], [0.0, 1e-200, 1.0, -inf], (4, 1, 1),
+            (0.0, 0.0, 0.0), 1.0)
+        vec(fn, [1e154, -1e154, 5e-324, -0.0], [1e154, 0.0, 5e-324, -0.0], [1e154, 0.0, 0.0, 0.0], (2, 2, 1),
+            (1.0, 2.0, 3.0), 1e-3)
+    for _ in range(12):
+        nx, ny, nz = rng.int(1, 4), rng.int(1, 3), rng.int(1, 3)
+        n = nx * ny * nz
+        comps = [[draw(-200.0, 200.0) for _ in range(n)] for _ in range(3)]
+        og = (draw(-5.0, 5.0), draw(-5.0, 5.0), draw(-5.0, 5.0))
+        vec("VectorFieldSample::try_from_components", *comps, (nx, ny, nz), og, abs(draw(-6.0, 0.0)))
+        vec("VectorFieldSample::from_components", comps[0], comps[1][:n - 1] or [0.0], comps[2], (nx, ny, nz), og,
+            abs(draw(-6.0, 0.0)))
+
+
 # ── modules ─────────────────────────────────────────────────────────────────────────────────────────────────────────
 
 def new_header(name):
@@ -825,7 +935,7 @@ def main() -> int:
              lambda r: emit_4a(r, model2, model3, model_gpu), lambda r: emit_4b(r, model2, model3),
              lambda r: emit_4c(r, model2, model_gpu), lambda r: emit_4d(r, model3),
              lambda r: emit_4e(r, model2, model3), lambda r: emit_4f(r, model2, model3, model_gpu)]
-    for name, parts in (("fdtd_2d3d", parts), ("bridge", [emit_1a])):
+    for name, parts in (("fdtd_2d3d", parts), ("bridge", [emit_1a]), ("soorat", [emit_1b])):
         path, text, n = module(name, parts)
         big = V.too_big(f"tests/golden/{name}.tsv", text)
         if big:

@@ -37,17 +37,23 @@ INV = json.loads((root / "scripts/rust_1_2_0.json").read_text())
 
 # Ported modules (their milestone done or in progress, item by item).
 MODULES = ["error", "logging", "field", "maxwell", "charge", "material", "wave", "circuit", "relativity",
-           "polarization", "scattering", "beam", "rf", "fdtd", "compute", "bridge"]
+           "polarization", "scattering", "beam", "rf", "fdtd", "compute", "bridge", "integration/soorat"]
 # Rust module -> the milestone that ports it (port plan §4.1).
 PENDING_MODULES = {
-    "integration/soorat": "M7", "ai": "M7",
+    "ai": "M7",
 }
 # Modules being ported Part by Part: module -> (the Parts that finish it, the Rust items still to come, by name: a free
 # fn, a method as `Owner::name`, a struct or enum (its fields or variants with it), a serde impl as `impl Trait for X`).
 # Their other items are checked as a ported module's now; the listed ones count as pending, and one found ported is a
 # problem (drop it from the list).
 IN_PROGRESS = {
-    # fdtd.rs (M5 Part 1, M6 Parts 1 and 2) is ported whole since M6 part 2b; none is in progress.
+    # fdtd.rs (M5 Part 1, M6 Parts 1 and 2) is ported whole since M6 part 2b.
+    # integration/soorat.rs (M7 parts 1b-1, 1b-2): the structs and constructors are ported; their serde, next.
+    "integration/soorat": ("1b-2", [f"impl {t} for {s}"
+                                    for s in ("FieldSlice2D", "FieldSlice3D", "FieldLineVisualization", "FieldLine",
+                                              "ChargeVisualization", "ChargePoint", "RadiationPattern",
+                                              "VectorFieldSample")
+                                    for t in ("Serialize", "Deserialize")]),
 }
 NOT_APPLICABLE_MODULES = {
     "lib": "crate root: module list and re-exports",
@@ -67,7 +73,9 @@ FN_RENAMES = {"init": "bj_log_init", "init_with_level": "bj_log_init_with_level"
               **{f"GpuFdtd2d::{m}": f"BjGpuFdtd2d_{m}"
                  for m in ("step_once", "add_source", "run", "time", "read_ez", "read_hx", "read_hy")}}
 # Rust's `JonesMatrix.m: [[Complex; 2]; 2]` is four BjComplex fields (a tuple's slots are 8 bytes).
-FIELD_RENAMES = {("JonesMatrix", "m"): ["m00", "m01", "m10", "m11"]}
+FIELD_RENAMES = {("JonesMatrix", "m"): ["m00", "m01", "m10", "m11"],
+                 # soorat's `ChargePoint.position: [f32; 3]`: three f32 fields (a tuple's slots are 8 bytes).
+                 ("ChargePoint", "position"): ["position_x", "position_y", "position_z"]}
 EXCEPTIONS = {
     "compute::impl ComputeBackend for CpuBackend": "`impl BjComputeBackend for BjCpuBackend`: a Cyrius trait impl, "
                                                    "checked by the compiler against the trait (src/compute.cyr)",

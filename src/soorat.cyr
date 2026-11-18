@@ -1,0 +1,659 @@
+# bijli — soorat: visualization data for soorat (M7 part 1b-1): FDTD field slices and volumes, field line traces,
+# point charges, far-field radiation patterns and vector field samples, with their constructors from bijli's grids,
+# charges and NF2FF results. bijli owns these structs; soorat (the renderer) reads them, so nothing here depends on it.
+#
+# Each struct's arrays are blocks of its own (fl_alloc): a constructor allocates them, and BjX_free gives back every
+# non-zero one and empties the struct (a second call does nothing). A struct a caller fills by hand owns its blocks as
+# the caller made them. Rust's fixed arrays are tuple fields (`dimensions: (i64, i64)`, `origin: (f64, f64, f64)`),
+# except ChargePoint's `[f32; 3]` position, three f32 fields. A component name is bytes, an address and a length, as
+# Rust's `&str` is text: bytes that are not UTF-8 name no component (ADR 0002 row 44). Every constructor returns a
+# Result (Allocation where a block can't be had; Rust's clone aborts the process, ADR 0002 row 9).
+
+private
+
+# freelist's largest request, 2 GiB.
+var _BJ_SO_FL_MAX = 2147483648;
+
+# A 2D slice of an FDTD field for heatmap rendering: `values` (values_len f64, row-major, values[y·nx + x]), the
+# grid's (nx, ny) in `dimensions`, the slice's world-space origin (its min corner, m) and spacing (m), the component's
+# name (component_len UTF-8 bytes, NUL-terminated) and the time step it was captured at. Mirrors `FieldSlice2D`.
+public struct BjFieldSlice2D {
+    values;
+    values_len;
+    dimensions: (i64, i64);
+    origin: (f64, f64);
+    spacing: f64;
+    component;
+    component_len;
+    step;
+}
+
+# A 3D field volume for volumetric rendering: `values` (values_len f64, values[z·ny·nx + y·nx + x]), (nx, ny, nz),
+# the world-space origin and spacing (m), the component's name and the time step. Mirrors `FieldSlice3D`.
+public struct BjFieldSlice3D {
+    values;
+    values_len;
+    dimensions: (i64, i64, i64);
+    origin: (f64, f64, f64);
+    spacing: f64;
+    component;
+    component_len;
+    step;
+}
+
+# One field line trace: `points` (points_len [x, y, z] triples in m, 3·points_len f64) and the field magnitude at each
+# point (magnitudes_len f64, for colour mapping). Mirrors `FieldLine`.
+public struct BjFieldLine {
+    points;
+    points_len;
+    magnitudes;
+    magnitudes_len;
+}
+
+# A collection of field line traces for polyline rendering: `lines` (lines_len BjFieldLine). Mirrors
+# `FieldLineVisualization`.
+public struct BjFieldLineVisualization {
+    lines;
+    lines_len;
+}
+
+# One charge for particle rendering: its world-space position (m), its charge (C; the sign picks the colour) and the
+# charge's magnitude (for size scaling), each an f32. Mirrors `ChargePoint`.
+public struct BjChargePoint {
+    position_x: f32;
+    position_y: f32;
+    position_z: f32;
+    charge: f32;
+    magnitude: f32;
+}
+
+# Point charges for particle rendering: `charges` (charges_len BjChargePoint, 20 bytes each). Mirrors
+# `ChargeVisualization`.
+public struct BjChargeVisualization {
+    charges;
+    charges_len;
+}
+
+# A far-field radiation pattern for polar or balloon rendering: the observation angles (angles_len, rad), the
+# pattern's linear magnitude at each (pattern_len) and its largest value. Mirrors `RadiationPattern`.
+public struct BjRadiationPattern {
+    angles;
+    angles_len;
+    pattern;
+    pattern_len;
+    max_gain: f64;
+}
+
+# A regular grid of 3D vector field samples for arrow or streamline rendering: `vectors` (vectors_len [vx, vy, vz]
+# triples, 3·vectors_len f64, row-major), (nx, ny, nz) (nz = 1 for a 2D grid), the world-space origin and spacing (m)
+# and the largest vector magnitude. Mirrors `VectorFieldSample`.
+public struct BjVectorFieldSample {
+    vectors;
+    vectors_len;
+    dimensions: (i64, i64, i64);
+    origin: (f64, f64, f64);
+    spacing: f64;
+    max_magnitude: f64;
+}
+
+# A word as a *BjFieldLine.
+#must_use
+fn _bj_so_linep(a): *BjFieldLine {
+    return a;
+}
+
+# A word as a *BjChargePoint.
+#must_use
+fn _bj_so_cpp(a): *BjChargePoint {
+    return a;
+}
+
+# ── memory ─────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+# A block of n f64 copied from src (n ≤ 2^28), or 0 when it can't be had; an empty n gives a block of one f64.
+fn _bj_so_copy(src, n): i64 {
+    if (n < 0 || n > _BJ_SO_FL_MAX / 8) { return 0; }
+    var bytes = n * 8;
+    if (bytes == 0) { bytes = 8; }
+    var b = fl_alloc(bytes);
+    if (b == 0) { return 0; }
+    if (n > 0) { memcpy(b, src, n * 8); }
+    return b;
+}
+
+# A block holding the C string s (len bytes) and its NUL, or 0.
+fn _bj_so_text(s, len): i64 {
+    var b = fl_alloc(len + 1);
+    if (b == 0) { return 0; }
+    memcpy(b, s, len);
+    store8(b + len, 0);
+    return b;
+}
+
+# Records Allocation for `what`; returns its code.
+fn _bj_so_alloc_err(what): i64 {
+    _bj_tx_cstr(_bj_err_reason(BJ_ERR_ALLOCATION), what);
+    return BJ_ERR_ALLOCATION;
+}
+
+# Gives a 2D slice's blocks back and empties it; a second call does nothing.
+public fn BjFieldSlice2D_free(s: *BjFieldSlice2D): i64 {
+    if (s.values != 0) { fl_free(s.values); }
+    if (s.component != 0) { fl_free(s.component); }
+    s.values = 0;
+    s.values_len = 0;
+    s.component = 0;
+    s.component_len = 0;
+    return 0;
+}
+
+# Gives a 3D volume's blocks back and empties it; a second call does nothing.
+public fn BjFieldSlice3D_free(s: *BjFieldSlice3D): i64 {
+    if (s.values != 0) { fl_free(s.values); }
+    if (s.component != 0) { fl_free(s.component); }
+    s.values = 0;
+    s.values_len = 0;
+    s.component = 0;
+    s.component_len = 0;
+    return 0;
+}
+
+# Gives a field line's blocks back and empties it; a second call does nothing.
+public fn BjFieldLine_free(l: *BjFieldLine): i64 {
+    if (l.points != 0) { fl_free(l.points); }
+    if (l.magnitudes != 0) { fl_free(l.magnitudes); }
+    l.points = 0;
+    l.points_len = 0;
+    l.magnitudes = 0;
+    l.magnitudes_len = 0;
+    return 0;
+}
+
+# Gives every line's blocks back, then the lines' block, and empties it; a second call does nothing.
+public fn BjFieldLineVisualization_free(v: *BjFieldLineVisualization): i64 {
+    if (v.lines != 0) {
+        var ls: *BjFieldLine = _bj_so_linep(v.lines);
+        for (var i = 0; i < v.lines_len; i = i + 1) { BjFieldLine_free(ls + i); }
+        fl_free(v.lines);
+    }
+    v.lines = 0;
+    v.lines_len = 0;
+    return 0;
+}
+
+# Gives a charge visualization's block back and empties it; a second call does nothing.
+public fn BjChargeVisualization_free(v: *BjChargeVisualization): i64 {
+    if (v.charges != 0) { fl_free(v.charges); }
+    v.charges = 0;
+    v.charges_len = 0;
+    return 0;
+}
+
+# Gives a radiation pattern's blocks back and empties it; a second call does nothing.
+public fn BjRadiationPattern_free(p: *BjRadiationPattern): i64 {
+    if (p.angles != 0) { fl_free(p.angles); }
+    if (p.pattern != 0) { fl_free(p.pattern); }
+    p.angles = 0;
+    p.angles_len = 0;
+    p.pattern = 0;
+    p.pattern_len = 0;
+    return 0;
+}
+
+# Gives a vector field sample's block back and empties it; a second call does nothing.
+public fn BjVectorFieldSample_free(v: *BjVectorFieldSample): i64 {
+    if (v.vectors != 0) { fl_free(v.vectors); }
+    v.vectors = 0;
+    v.vectors_len = 0;
+    return 0;
+}
+
+# ── FDTD field slices ──────────────────────────────────────────────────────────────────────────────────────────────
+
+# The ASCII letter b lowercased (Rust's `to_ascii_lowercase`; any other byte as it is).
+#must_use
+fn _bj_so_lower(b): i64 {
+    if (b >= 65 && b <= 90) { return b + 32; }
+    return b;
+}
+
+# The trimmed name of c[0..n) (Rust's `str::trim`, on Unicode's White_Space) as its two bytes lowercased, b0·256 + b1,
+# or -1 when it is not two bytes long. c is valid UTF-8.
+#must_use
+fn _bj_so_name2(c, n): i64 {
+    var a = _bj_ts_skip_ws(c, 0, n);
+    var e = _bj_ts_trim_end(c, a, n);
+    if (e - a != 2) { return 0 - 1; }
+    var b0 = _bj_so_lower(load8(c + a));
+    var b1 = _bj_so_lower(load8(c + a + 1));
+    return b0 * 256 + b1;
+}
+
+# Rust's `resolve_2d`: the field axis a 2D component name gives in `mode` (0 x, 1 y, 2 z), or -1. Accepts the storage
+# names fx, fy, fz and the mode's physical names (TM: hx, hy, ez; TE: ex, ey, hz), case-insensitively and trimmed.
+#must_use
+fn _bj_so_resolve_2d(mode, c, n): i64 {
+    if (_bj_ts_utf8_bad(c, n) >= 0) { return 0 - 1; }
+    var w = _bj_so_name2(c, n);
+    if (w < 0) { return 0 - 1; }
+    var b0 = w >> 8;
+    var b1 = w & 255;
+    var p = 104;
+    if (mode == BJ_MODE2D_TE) { p = 101; }
+    var q = 101;
+    if (mode == BJ_MODE2D_TE) { q = 104; }
+    if (b0 == 102 || b0 == p) {
+        if (b1 == 120) { return 0; }
+        if (b1 == 121) { return 1; }
+    }
+    if ((b0 == 102 || b0 == q) && b1 == 122) { return 2; }
+    return 0 - 1;
+}
+
+# The slice of sim's field on `axis` into *out: Ok's 0, or BJ_ERR_ALLOCATION with out untouched. Its label is
+# `{:?}_<axis>` of the mode ("Tm_z" for E_z in TM). Mirrors `FieldSlice2D::build_2d`.
+fn _bj_so_build_2d(sim: *BjFdtd2d, axis, out: *BjFieldSlice2D): i64 {
+    var n = sim.nx * sim.ny;
+    var src = sim.fz;
+    var sx = 122;
+    if (axis == 0) {
+        src = sim.fx;
+        sx = 120;
+    } elif (axis == 1) {
+        src = sim.fy;
+        sx = 121;
+    }
+    var v = _bj_so_copy(src, n);
+    var lb[8];
+    if (sim.mode == BJ_MODE2D_TE) { memcpy(&lb, "Te_", 3); }
+    else { memcpy(&lb, "Tm_", 3); }
+    store8(&lb + 3, sx);
+    var lab = _bj_so_text(&lb, 4);
+    if (v == 0 || lab == 0) {
+        if (v != 0) { fl_free(v); }
+        if (lab != 0) { fl_free(lab); }
+        return _bj_so_alloc_err("a 2D FDTD field slice");
+    }
+    out.values = v;
+    out.values_len = n;
+    out.dimensions = (sim.nx, sim.ny);
+    out.origin = (0.0, 0.0);
+    out.spacing = sim.dx;
+    out.component = lab;
+    out.component_len = 4;
+    out.step = sim.step;
+    return 0;
+}
+
+# Writes ` component="<c>"` for a log line: Rust's `{:?}` of the name, or `<not UTF-8>` (Cyrius-only bytes).
+fn _bj_so_log_name(t, c, n) {
+    _bj_tx_cstr(t, " component=");
+    if (_bj_ts_utf8_bad(c, n) >= 0) { _bj_tx_cstr(t, "<not UTF-8>"); }
+    else { _bj_ts_debug_str(t, c, n); }
+    return 0;
+}
+
+# A field slice of the 2D grid sim into *out: Ok(0), or Err(Allocation) with out untouched. `component` (len bytes)
+# names the field, case-insensitively and trimmed: fz, fx, fy, or the mode's physical name (TM: ez, hx, hy; TE: hz, ex,
+# ey). An unknown name, or bytes that are not UTF-8, fall back to fz (logged at debug level); the label always names
+# the data returned, `<Mode>_<axis>` ("Tm_z" for E_z in TM). BjFieldSlice2D_try_from_fdtd_2d refuses unknown names.
+# Mirrors `FieldSlice2D::from_fdtd_2d`.
+#must_use
+public fn BjFieldSlice2D_from_fdtd_2d(sim: *BjFdtd2d, component, len, out: *BjFieldSlice2D): Result {
+    var axis = _bj_so_resolve_2d(sim.mode, component, len);
+    if (axis < 0) {
+        axis = 2;
+        if (_bj_log_on(4) == 1) {
+            var lb[256];
+            var lt[24];
+            _bj_tx_init(&lt, &lb, 256);
+            _bj_tx_cstr(&lt, "unknown 2D FDTD component, falling back to fz");
+            _bj_so_log_name(&lt, component, len);
+            _bj_log_text(4, &lt);
+        }
+    }
+    var code = _bj_so_build_2d(sim, axis, out);
+    if (code != 0) { return Err(code); }
+    return Ok(0);
+}
+
+# A field slice of the 2D grid sim into *out, refusing unknown names: Ok(0), or with out untouched Err(InvalidParameter)
+# "unknown 2D FDTD component {component:?} for {mode:?} mode" (Rust's `{:?}` of the name), "2D FDTD component is not
+# valid UTF-8 (an invalid sequence at byte {k})" for bytes Rust's &str can't hold (ADR 0002 row 44), or
+# Err(Allocation). Accepts BjFieldSlice2D_from_fdtd_2d's names. Mirrors `FieldSlice2D::try_from_fdtd_2d`.
+#must_use
+public fn BjFieldSlice2D_try_from_fdtd_2d(sim: *BjFdtd2d, component, len, out: *BjFieldSlice2D): Result {
+    var bad = _bj_ts_utf8_bad(component, len);
+    if (bad >= 0) {
+        var tu = _bj_err_reason(BJ_ERR_INVALID_PARAMETER);
+        _bj_tx_cstr(tu, "2D FDTD component is not valid UTF-8 (an invalid sequence at byte ");
+        _bj_tx_u64(tu, bad);
+        _bj_tx_cstr(tu, ")");
+        return Err(BJ_ERR_INVALID_PARAMETER);
+    }
+    var axis = _bj_so_resolve_2d(sim.mode, component, len);
+    if (axis < 0) {
+        var t = _bj_err_reason(BJ_ERR_INVALID_PARAMETER);
+        _bj_tx_cstr(t, "unknown 2D FDTD component ");
+        _bj_ts_debug_str(t, component, len);
+        if (sim.mode == BJ_MODE2D_TE) { _bj_tx_cstr(t, " for Te mode"); }
+        else { _bj_tx_cstr(t, " for Tm mode"); }
+        return Err(BJ_ERR_INVALID_PARAMETER);
+    }
+    if (_bj_log_on(5) == 1) {
+        var lb[256];
+        var lt[24];
+        _bj_tx_init(&lt, &lb, 256);
+        _bj_tx_cstr(&lt, "extracting 2D FDTD field slice");
+        _bj_so_log_name(&lt, component, len);
+        _bj_log_text(5, &lt);
+    }
+    var code = _bj_so_build_2d(sim, axis, out);
+    if (code != 0) { return Err(code); }
+    return Ok(0);
+}
+
+# Rust's `select_3d`: the index of a 3D component name in ex, ey, ez, hx, hy, hz (case-insensitive, trimmed), or -1.
+#must_use
+fn _bj_so_select_3d(c, n): i64 {
+    if (_bj_ts_utf8_bad(c, n) >= 0) { return 0 - 1; }
+    var w = _bj_so_name2(c, n);
+    if (w < 0) { return 0 - 1; }
+    var b0 = w >> 8;
+    var b1 = w & 255;
+    var base = 0 - 1;
+    if (b0 == 101) { base = 0; }
+    if (b0 == 104) { base = 3; }
+    if (base < 0 || b1 < 120 || b1 > 122) { return 0 - 1; }
+    return base + b1 - 120;
+}
+
+# The volume of sim's field k (0..5: ex, ey, ez, hx, hy, hz) into *out, labelled with its canonical lowercase name:
+# Ok's 0, or BJ_ERR_ALLOCATION with out untouched. Mirrors `FieldSlice3D::build_3d`.
+fn _bj_so_build_3d(sim: *BjFdtd3d, k, out: *BjFieldSlice3D): i64 {
+    var n = sim.nx * sim.ny * sim.nz;
+    var src = sim.ez;
+    if (k == 0) { src = sim.ex; }
+    elif (k == 1) { src = sim.ey; }
+    elif (k == 3) { src = sim.hx; }
+    elif (k == 4) { src = sim.hy; }
+    elif (k == 5) { src = sim.hz; }
+    var v = _bj_so_copy(src, n);
+    var lb[8];
+    store8(&lb, 101);
+    if (k >= 3) { store8(&lb, 104); }
+    store8(&lb + 1, 120 + k % 3);
+    var lab = _bj_so_text(&lb, 2);
+    if (v == 0 || lab == 0) {
+        if (v != 0) { fl_free(v); }
+        if (lab != 0) { fl_free(lab); }
+        return _bj_so_alloc_err("a 3D FDTD field volume");
+    }
+    out.values = v;
+    out.values_len = n;
+    out.dimensions = (sim.nx, sim.ny, sim.nz);
+    out.origin = (0.0, 0.0, 0.0);
+    out.spacing = sim.dx;
+    out.component = lab;
+    out.component_len = 2;
+    out.step = sim.step;
+    return 0;
+}
+
+# A field volume of the 3D grid sim into *out: Ok(0), or Err(Allocation) with out untouched. `component` (len bytes):
+# ex, ey, ez, hx, hy or hz, case-insensitively and trimmed; an unknown name, or bytes that are not UTF-8, fall back to
+# ez (logged at debug level). The label is the canonical lowercase name of the data returned ("Ex" gives "ex", an
+# unknown name "ez"). BjFieldSlice3D_try_from_fdtd_3d refuses unknown names. Mirrors `FieldSlice3D::from_fdtd_3d`.
+#must_use
+public fn BjFieldSlice3D_from_fdtd_3d(sim: *BjFdtd3d, component, len, out: *BjFieldSlice3D): Result {
+    var k = _bj_so_select_3d(component, len);
+    if (k < 0) {
+        k = 2;
+        if (_bj_log_on(4) == 1) {
+            var lb[256];
+            var lt[24];
+            _bj_tx_init(&lt, &lb, 256);
+            _bj_tx_cstr(&lt, "unknown 3D FDTD component, falling back to ez");
+            _bj_so_log_name(&lt, component, len);
+            _bj_log_text(4, &lt);
+        }
+    }
+    var code = _bj_so_build_3d(sim, k, out);
+    if (code != 0) { return Err(code); }
+    return Ok(0);
+}
+
+# A field volume of the 3D grid sim into *out, refusing unknown names: Ok(0), or with out untouched
+# Err(InvalidParameter) "unknown 3D FDTD component {component:?} (expected one of ["ex", "ey", "ez", "hx", "hy",
+# "hz"])", "3D FDTD component is not valid UTF-8 (an invalid sequence at byte {k})" (ADR 0002 row 44), or
+# Err(Allocation). Mirrors `FieldSlice3D::try_from_fdtd_3d`.
+#must_use
+public fn BjFieldSlice3D_try_from_fdtd_3d(sim: *BjFdtd3d, component, len, out: *BjFieldSlice3D): Result {
+    var bad = _bj_ts_utf8_bad(component, len);
+    if (bad >= 0) {
+        var tu = _bj_err_reason(BJ_ERR_INVALID_PARAMETER);
+        _bj_tx_cstr(tu, "3D FDTD component is not valid UTF-8 (an invalid sequence at byte ");
+        _bj_tx_u64(tu, bad);
+        _bj_tx_cstr(tu, ")");
+        return Err(BJ_ERR_INVALID_PARAMETER);
+    }
+    var k = _bj_so_select_3d(component, len);
+    if (k < 0) {
+        var t = _bj_err_reason(BJ_ERR_INVALID_PARAMETER);
+        _bj_tx_cstr(t, "unknown 3D FDTD component ");
+        _bj_ts_debug_str(t, component, len);
+        _bj_tx_cstr(t, " (expected one of [\"ex\", \"ey\", \"ez\", \"hx\", \"hy\", \"hz\"])");
+        return Err(BJ_ERR_INVALID_PARAMETER);
+    }
+    if (_bj_log_on(5) == 1) {
+        var lb[256];
+        var lt[24];
+        _bj_tx_init(&lt, &lb, 256);
+        _bj_tx_cstr(&lt, "extracting 3D FDTD field volume component=\"");
+        _bj_tx_putc(&lt, 101 + 3 * (k / 3));
+        _bj_tx_putc(&lt, 120 + k % 3);
+        _bj_tx_putc(&lt, 34);
+        _bj_log_text(5, &lt);
+    }
+    var code = _bj_so_build_3d(sim, k, out);
+    if (code != 0) { return Err(code); }
+    return Ok(0);
+}
+
+# ── point charges ──────────────────────────────────────────────────────────────────────────────────────────────────
+
+# The n point charges at `charges` as render points into *out: each position and charge rounded to f32 (Rust's `as
+# f32`: nearest, ties to even, ±∞ past f32's range), and |charge| likewise. Ok(0), or Err(Allocation) with out
+# untouched. Mirrors `ChargeVisualization::from_point_charges`.
+#must_use
+public fn BjChargeVisualization_from_point_charges(charges: *BjPointCharge, n, out: *BjChargeVisualization): Result {
+    if (n < 0 || n > _BJ_SO_FL_MAX / 20) { return Err(_bj_so_alloc_err("a charge visualization")); }
+    var bytes = n * 20;
+    if (bytes == 0) { bytes = 20; }
+    var b = fl_alloc(bytes);
+    if (b == 0) { return Err(_bj_so_alloc_err("a charge visualization")); }
+    var cs: *BjChargePoint = _bj_so_cpp(b);
+    for (var i = 0; i < n; i = i + 1) {
+        var pc: *BjPointCharge = charges + i;
+        var cp: *BjChargePoint = cs + i;
+        var px: f64 = pc.position.0;
+        var py: f64 = pc.position.1;
+        var pz: f64 = pc.position.2;
+        var q: f64 = pc.charge;
+        var aq: f64 = f64_abs(q);
+        cp.position_x = px;
+        cp.position_y = py;
+        cp.position_z = pz;
+        cp.charge = q;
+        cp.magnitude = aq;
+    }
+    out.charges = b;
+    out.charges_len = n;
+    return Ok(0);
+}
+
+# ── radiation pattern ──────────────────────────────────────────────────────────────────────────────────────────────
+
+# The radiation pattern of an NF2FF result into *out: its angles and pattern copied, max_gain the fold of the pattern
+# from +0 by Rust's f64::max: a NaN is ignored, and a tie keeps the running value (LLVM's maxnum on x86-64 returns its
+# first operand when they compare equal, so −0 after +0 leaves +0; mathx.cyr's _bj_max returns the second). Ok(0), or
+# Err(Allocation) with out untouched. Mirrors `RadiationPattern::from_nf2ff`.
+#must_use
+public fn BjRadiationPattern_from_nf2ff(result: *BjNf2ffResult, out: *BjRadiationPattern): Result {
+    var n = result.count;
+    var a = _bj_so_copy(result.angles, n);
+    var p = _bj_so_copy(result.pattern, n);
+    if (a == 0 || p == 0) {
+        if (a != 0) { fl_free(a); }
+        if (p != 0) { fl_free(p); }
+        return Err(_bj_so_alloc_err("a radiation pattern"));
+    }
+    var pv: *f64 = _bj_fd2_f64p(p);
+    var g: f64 = 0.0;
+    for (var i = 0; i < n; i = i + 1) {
+        var x: f64 = pv[i];
+        if (x > g) { g = x; }
+    }
+    out.angles = a;
+    out.angles_len = n;
+    out.pattern = p;
+    out.pattern_len = n;
+    out.max_gain = g;
+    return Ok(0);
+}
+
+# ── vector field sampling ──────────────────────────────────────────────────────────────────────────────────────────
+
+# The first `count` samples of vx, vy and vz as [x, y, z] triples into *out (its vectors and max_magnitude, the
+# largest √(x² + y² + z²) from +0, a NaN magnitude never larger): 0, or BJ_ERR_ALLOCATION with out untouched. Mirrors
+# `VectorFieldSample::collect`.
+fn _bj_so_collect(vx: *f64, vy: *f64, vz: *f64, count, out: *BjVectorFieldSample): i64 {
+    if (count < 0 || count > _BJ_SO_FL_MAX / 24) { return _bj_so_alloc_err("a vector field sample"); }
+    var bytes = count * 24;
+    if (bytes == 0) { bytes = 24; }
+    var b = fl_alloc(bytes);
+    if (b == 0) { return _bj_so_alloc_err("a vector field sample"); }
+    var v: *f64 = _bj_fd2_f64p(b);
+    var mx: f64 = 0.0;
+    for (var i = 0; i < count; i = i + 1) {
+        var x: f64 = vx[i];
+        var y: f64 = vy[i];
+        var z: f64 = vz[i];
+        var s: f64 = x * x + y * y + z * z;
+        var mag: f64 = f64_sqrt(s);
+        if (mag > mx) { mx = mag; }
+        v[3 * i] = x;
+        v[3 * i + 1] = y;
+        v[3 * i + 2] = z;
+    }
+    out.vectors = b;
+    out.vectors_len = count;
+    out.max_magnitude = mx;
+    return 0;
+}
+
+# A vector field sample from parallel component arrays (vx with lx samples, vy with ly, vz with lz) on a regular grid
+# into *out, leniently: the first min(lx, ly, lz) samples, `dims` (nx, ny, nz) stored as given without checking the
+# count against nx·ny·nz, `origin` [x, y, z] and spacing as given; a NaN magnitude never sets max_magnitude. Ok(0), or
+# Err(Allocation) with out untouched. BjVectorFieldSample_try_from_components checks its input. Mirrors
+# `VectorFieldSample::from_components`.
+#must_use
+public fn BjVectorFieldSample_from_components(vx: *f64, lx, vy: *f64, ly, vz: *f64, lz, dims: *i64, origin: *f64,
+  spacing: f64, out: *BjVectorFieldSample): Result {
+    var count = lx;
+    if (_bj_fd2_uge(count, ly) == 1) { count = ly; }
+    if (_bj_fd2_uge(count, lz) == 1) { count = lz; }
+    var tmp: BjVectorFieldSample;
+    var code = _bj_so_collect(vx, vy, vz, count, &tmp);
+    if (code != 0) { return Err(code); }
+    out.vectors = tmp.vectors;
+    out.vectors_len = tmp.vectors_len;
+    out.dimensions = (dims[0], dims[1], dims[2]);
+    out.origin = (origin[0], origin[1], origin[2]);
+    out.spacing = spacing;
+    out.max_magnitude = tmp.max_magnitude;
+    return Ok(0);
+}
+
+# Writes `[a, b, c]` of three usize words (Rust's `{:?}` of a [usize; 3]).
+fn _bj_so_dims_debug(t, dims: *i64) {
+    _bj_tx_putc(t, 91);
+    for (var k = 0; k < 3; k = k + 1) {
+        if (k > 0) { _bj_tx_cstr(t, ", "); }
+        _bj_tx_u64(t, dims[k]);
+    }
+    _bj_tx_putc(t, 93);
+    return 0;
+}
+
+# A vector field sample from parallel component arrays into *out, checking its input in Rust's order: Ok(0), or with
+# out untouched Err(InvalidParameter) "grid dimensions {dims:?} overflow usize" (nx·ny·nz past 2^64), "component
+# lengths (lx, ly, lz) must all equal nx·ny·nz = {expected}", "grid spacing must be finite and positive, got
+# {spacing}", "grid origin must be finite, got {origin:?}", or Err(Allocation). Samples are row-major, z·ny·nx + y·nx +
+# x. Mirrors `VectorFieldSample::try_from_components`.
+#must_use
+public fn BjVectorFieldSample_try_from_components(vx: *f64, lx, vy: *f64, ly, vz: *f64, lz, dims: *i64,
+  origin: *f64, spacing: f64, out: *BjVectorFieldSample): Result {
+    var p1: i64[1];
+    var p2: i64[1];
+    if (_bj_fd2_umul(dims[0], dims[1], &p1) == 0 || _bj_fd2_umul(p1[0], dims[2], &p2) == 0) {
+        var to = _bj_err_reason(BJ_ERR_INVALID_PARAMETER);
+        _bj_tx_cstr(to, "grid dimensions ");
+        _bj_so_dims_debug(to, dims);
+        _bj_tx_cstr(to, " overflow usize");
+        return Err(BJ_ERR_INVALID_PARAMETER);
+    }
+    var expected = p2[0];
+    if (lx != expected || ly != expected || lz != expected) {
+        var tl = _bj_err_reason(BJ_ERR_INVALID_PARAMETER);
+        _bj_tx_cstr(tl, "component lengths (");
+        _bj_tx_u64(tl, lx);
+        _bj_tx_cstr(tl, ", ");
+        _bj_tx_u64(tl, ly);
+        _bj_tx_cstr(tl, ", ");
+        _bj_tx_u64(tl, lz);
+        _bj_tx_cstr(tl, ") must all equal nx·ny·nz = ");
+        _bj_tx_u64(tl, expected);
+        return Err(BJ_ERR_INVALID_PARAMETER);
+    }
+    var zs: f64 = spacing * 0.0;
+    if (zs != 0.0 || spacing <= 0.0) {
+        var ts = _bj_err_reason(BJ_ERR_INVALID_PARAMETER);
+        _bj_tx_cstr(ts, "grid spacing must be finite and positive, got ");
+        _bj_fmt_f64_display(ts, spacing);
+        return Err(BJ_ERR_INVALID_PARAMETER);
+    }
+    var o0: f64 = origin[0];
+    var o1: f64 = origin[1];
+    var o2: f64 = origin[2];
+    var zo: f64 = o0 * 0.0 + o1 * 0.0 + o2 * 0.0;
+    if (zo != 0.0) {
+        var tg = _bj_err_reason(BJ_ERR_INVALID_PARAMETER);
+        _bj_tx_cstr(tg, "grid origin must be finite, got [");
+        _bj_fmt_f64_debug(tg, o0);
+        _bj_tx_cstr(tg, ", ");
+        _bj_fmt_f64_debug(tg, o1);
+        _bj_tx_cstr(tg, ", ");
+        _bj_fmt_f64_debug(tg, o2);
+        _bj_tx_putc(tg, 93);
+        return Err(BJ_ERR_INVALID_PARAMETER);
+    }
+    if (_bj_log_on(5) == 1) {
+        var lb[160];
+        var lt[24];
+        _bj_tx_init(&lt, &lb, 160);
+        _bj_tx_cstr(&lt, "building vector field sample dimensions=");
+        _bj_so_dims_debug(&lt, dims);
+        _bj_log_text(5, &lt);
+    }
+    var tmp: BjVectorFieldSample;
+    var code = _bj_so_collect(vx, vy, vz, expected, &tmp);
+    if (code != 0) { return Err(code); }
+    out.vectors = tmp.vectors;
+    out.vectors_len = tmp.vectors_len;
+    out.dimensions = (dims[0], dims[1], dims[2]);
+    out.origin = (o0, o1, o2);
+    out.spacing = spacing;
+    out.max_magnitude = tmp.max_magnitude;
+    return Ok(0);
+}

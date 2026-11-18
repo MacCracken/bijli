@@ -167,7 +167,7 @@ impl BjTouchstoneData {
 # The offset of the first byte of c[0..n) that is not part of a well-formed UTF-8 sequence (Rust's `str::from_utf8`:
 # no overlong forms, no surrogates, nothing past U+10FFFF), or -1 when all of it is UTF-8.
 #must_use
-fn _bj_ts_utf8_bad(c, n): i64 {
+public fn _bj_ts_utf8_bad(c, n): i64 {
     var i = 0;
     while (i < n) {
         var b = load8(c + i);
@@ -209,7 +209,7 @@ fn _bj_ts_utf8_bad(c, n): i64 {
 
 # The scalar value of the UTF-8 character at c + i and its byte count (c is valid UTF-8).
 #must_use
-fn _bj_ts_dec(c, i): (i64, i64) {
+public fn _bj_ts_dec(c, i): (i64, i64) {
     var b = load8(c + i);
     if (b < 128) { return (b, 1); }
     if (b < 224) { return (((b & 31) << 6) | (load8(c + i + 1) & 63), 2); }
@@ -235,7 +235,7 @@ fn _bj_ts_is_ws(u): i64 {
 
 # The offset of the first character of c[i..e) that isn't White_Space, or e. ASCII is tested inline (the common case).
 #must_use
-fn _bj_ts_skip_ws(c, i, e): i64 {
+public fn _bj_ts_skip_ws(c, i, e): i64 {
     var p = i;
     while (p < e) {
         var b = load8(c + p);
@@ -253,7 +253,7 @@ fn _bj_ts_skip_ws(c, i, e): i64 {
 
 # The end of c[a..e) with its trailing White_Space dropped (a starts a character).
 #must_use
-fn _bj_ts_trim_end(c, a, e): i64 {
+public fn _bj_ts_trim_end(c, a, e): i64 {
     var q = e;
     while (q > a) {
         var s = q - 1;
@@ -331,24 +331,12 @@ fn _bj_ts_hex(t, u) {
     return 0;
 }
 
-# Writes `{:?}` of the token c[i..e) cut to 32 characters with '…' appended past them (rf.rs's `snippet`).
-fn _bj_ts_quote(t, c, i, e) {
-    var chars = 0;
-    var lim = e;
+# Writes the characters of c[i..e) as Rust's `{:?}` of a str writes them inside its quotes: `\0`, `\t`, `\n`, `\r`,
+# `\"` and `\\`, `\u{…}` for a character src/touchstone_data.cyr's ranges name, every other character as it is (c is
+# valid UTF-8).
+fn _bj_ts_escape_body(t, c, i, e) {
     var p = i;
     while (p < e) {
-        if (chars == 32) {
-            lim = p;
-            p = e;
-        } else {
-            var u0, l0 = _bj_ts_dec(c, p);
-            chars = chars + 1;
-            p = p + l0;
-        }
-    }
-    _bj_tx_putc(t, 34);
-    p = i;
-    while (p < lim) {
         var u, l = _bj_ts_dec(c, p);
         if (u == 0) { _bj_tx_cstr(t, "\\0"); }
         elif (u == 9) { _bj_tx_cstr(t, "\\t"); }
@@ -365,7 +353,35 @@ fn _bj_ts_quote(t, c, i, e) {
         }
         p = p + l;
     }
+    return 0;
+}
+
+# Writes `{:?}` of the token c[i..e) cut to 32 characters with '…' appended past them (rf.rs's `snippet`).
+fn _bj_ts_quote(t, c, i, e) {
+    var chars = 0;
+    var lim = e;
+    var p = i;
+    while (p < e) {
+        if (chars == 32) {
+            lim = p;
+            p = e;
+        } else {
+            var u0, l0 = _bj_ts_dec(c, p);
+            chars = chars + 1;
+            p = p + l0;
+        }
+    }
+    _bj_tx_putc(t, 34);
+    _bj_ts_escape_body(t, c, i, lim);
     if (lim < e) { _bj_tx_cstr(t, "…"); }
+    _bj_tx_putc(t, 34);
+    return 0;
+}
+
+# Writes Rust's `{:?}` of the str c[0..n), whole (c is valid UTF-8): src/soorat.cyr's reasons.
+public fn _bj_ts_debug_str(t, c, n) {
+    _bj_tx_putc(t, 34);
+    _bj_ts_escape_body(t, c, 0, n);
     _bj_tx_putc(t, 34);
     return 0;
 }

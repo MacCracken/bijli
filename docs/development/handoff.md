@@ -9,15 +9,17 @@ bite is done, the machinery, the scripts and the traps. Delete it once it has se
 
 ## Where it stands
 
-- **Committed through `f2a4cc0`** ("m6 done"); M7 part 1a is in the working tree for the user to commit. **M6 is
-  done** (§131).
+- **Committed through `0fa28f8`** ("m7 part1a"); M7 part 1b-1 is in the working tree for the user to commit. **M6
+  is done** (§131).
 - **M7** runs as Part 1 in bites (1a `bridge.rs`, 1b `integration/soorat.rs`, 1c `ai.rs` in `[lib.ai]`), then Part 2
   its range-edge review. **1a done** (§132): `src/bridge.cyr`; its constants rendered by validate.py
   (`BRIDGE_LITERALS`, `render_bridge_data`) into `src/bridge_data.cyr`; `bridge.tsv`, the first module with no frozen
   rows (`emit.py`'s `new_header` and `emit_1a`; validate.py's `bridge_eval`; the harness's `_par_bridge`; the module
   listed in `tests/golden/modules.txt`, validate.py's `checks`, `cyrius.cyml` and `tests/lib.cyr`). A new module's
   checklist is that list plus `scripts/surface_parity.py`'s `MODULES`, `cyrius api-surface --update`, the ledger
-  rewrite and the oracle README's table.
+  rewrite and the oracle README's table. **1b-1 done** (§133): `src/soorat.cyr`, the eight structs and constructors;
+  `soorat.tsv` (`emit_1b`, `soorat_eval`, `_par_soorat`); `ChargePoint`'s f32 kept (probe p21); component names as
+  bytes (ADR 0002 row 44) through touchstone's now-public `_bj_ts_*` text helpers.
 - **M6 Part 1** (the 2D CPML and `Fdtd2d`, §116–§119) runs in bites. Done: 1a the CPML layer (`src/cpml.cyr`); 1b-1
   `Fdtd2d` without the CPML (`src/fdtd2d.cyr`; its scripts `Fdtd2d::script` in `fdtd_2d3d.tsv`, replayed by
   validate.py's `Fd2Scripts` in pure Python, no NumPy on the host); 1b-2 the CPML attached (the y-strips packed, the
@@ -88,18 +90,18 @@ bite is done, the machinery, the scripts and the traps. Delete it once it has se
     Rust's chain where every operation is its 53-bit value (mode 0, checked per sample by one exponent test and per
     angle), else the call or the angle unbounded (`_bj_nf_angle_ux`); a non-finite field keeps Rust's (row 18, §114).
     **Part 2 is done.**
-- **Numbers after M7 part 1a**: 20 modules, 644,891 ok, 0 failed, 123,844 accepted (ADR 01: 43,087; ADR 0002:
-  80,757) over 768,735 rows; 496 digests equal on x86_64 ELF, x86_64 PE and aarch64. Ledger 796 ported, 12 n/a, 50
-  pending of 858; API snapshot 2,147; surface parity 661 items (16 modules); benches 80 of 80 twinned; execution
-  coverage 394 of 394. `json.tsv` is 40.7 MB of the 48 MiB cap: the rest of M6 adds no JSON (`Fdtd3d` and compute.rs
-  have no serde), but M7's eight serde types (integration/) will want their own module.
+- **Numbers after M7 part 1b-1**: 21 modules, 645,435 ok, 0 failed, 123,844 accepted (ADR 01: 43,087; ADR 0002:
+  80,757) over 769,279 rows; 504 digests equal on x86_64 ELF, x86_64 PE and aarch64. Ledger 808 ported, 12 n/a, 38
+  pending of 858; API snapshot 2,162; surface parity 704 items (17 modules, soorat in progress); benches 80 of 80
+  twinned; execution coverage 417 of 417. `json.tsv` is 40.7 MB of the 48 MiB cap: the rest of M6 adds no JSON
+  (`Fdtd3d` and compute.rs have no serde), but M7's eight serde types (integration/) will want their own module.
 - **M5 is done** (§115). The benchmark record's Cyrius column is each row's least of four full runs: rows vary up to
   1.5× between runs under other repos' loads, so take the least of several when regenerating it.
-- **Next**: part 1b, `integration/soorat.rs` as `src/soorat.cyr` (plan §2's row: bijli-owned structs and serde, no
-  soorat dependency; goonj ported its own; `[f64; 3]` fields become typed fields): its constructors read the FDTD
-  grids, field lines, charges and NF2FF, and its JSON (D5's writers, bayan readers) wants a golden module of its own
-  (`json.tsv` is 40.7 MB of the 48 MiB cap). Then 1c, then Part 2; M7's close regenerates the benchmark record as
-  §131 did.
+- **Next**: part 1b-2, the soorat structs' JSON: serde's writer and reader for all eight (D5: `#derive(Serialize)`
+  writers, hand-written readers on bayan, as `src/json.cyr`'s), rows in a golden module of their own (`json.tsv` is
+  40.7 MB of the 48 MiB cap), the f32 fields written as serde_json writes an f32 (its shortest f32 digits) and read
+  as serde_json reads one; then the two serialize tests. Then 1c (`ai.rs` in `[lib.ai]`), then Part 2, whose review
+  takes `_bj_max`'s ±0 ties with it (§133's finding); M7's close regenerates the benchmark record as §131 did.
 - **Corpus size**: `fdtd.tsv` is 38.8 MB (107,341 rows) and `json.tsv` 40.7 MB, against the 48 MiB cap that
   validate.py's `too_big` guards (§81); M6's rows are in `fdtd_2d3d.tsv` (4.2 MB after 4f).
 - **A recorded cost**: the 1D step runs 3.5–3.8× HEAD's with 2d-2a's scan (§107), the TF/SF step about 2× with
@@ -396,9 +398,11 @@ Rust 1.2.0's sources for reading: `git show 1.2.0:src/fdtd.rs > $S/fdtd.rs` (and
 - **`cyrius audit`'s docs stage** (M7 part 1a) counts every undocumented public fn in src and tests, a test file's
   `fn main()` among them, but doesn't name it: `cyrius doc --check <file>` does. Give a new test file's `main` its
   comment (`# Runs <module>.rs's tests, then the Cyrius-only checks.`).
-- **An f64's bits in a scalar path** (part 4e): `var x = v;` with `v: f64` puts the raw bits in an untyped local for
-  free (no call and no warning on 6.7.18), where `_bj_k_bits(v)` is a call. `_bj_e_cpml_run` classifies its four
-  products this way.
+- **An f64's bits in a scalar path** (part 4e, corrected in M7 1b-1): `var x = v;` with `v: f64` is a pure copy,
+  so `x` is an f64 too (guide, 6.6.11). The bit operators (`& | ^ << >> >>>`) still act on its word, and passing it to
+  an untyped parameter passes its bits, free where `_bj_k_bits(v)` is a call: `_bj_e_cpml_run` classifies its four
+  products this way. A comparison of `x` with an integer warns (*comparison mixes f64 and integer operands*): compare
+  `_bj_k_bits(v)` there.
 - **Where the port and the model part** (part 4e): when a mapped trajectory fails, dump the Cyrius fields each step
   from a scratch `tests/zz_*.tcyr` (`println_int` of each f64's bits; delete it after) and compare them with the
   model's `Fd2` or `Fd3` step by step. The first differing cell and its inputs settle which side is wrong: in 4e it

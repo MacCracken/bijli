@@ -1,0 +1,56 @@
+# p21 — f32 for soorat's ChargePoint (M7 part 1b): an f64 written into an f32 slot rounds to the nearest f32, ties to
+# even (IEEE's binary64 -> binary32 conversion, Rust's `x as f32`), overflow to ±inf and the subnormals included; an f32
+# read back widens exactly (`f32_to`); an f32 struct field is 4 bytes. Each line prints the f64 input's bits, then the
+# f32's bits, then the widened f64's bits: scripts/probes/README.md gives the expected values (Python's ctypes.c_float).
+
+struct P3 {
+    x: f32;
+    y: f32;
+    z: f32;
+    q: f32;
+    m: f32;
+}
+
+fn show(d: f64) {
+    var s: f32 = d;
+    var w: f64 = f32_to(s);
+    var db = d;
+    fmt_hex0x(db);
+    print(" ", 1);
+    fmt_hex0x(load32(&s));
+    print(" ", 1);
+    var wb = w;
+    fmt_hex0x(wb);
+    println("");
+    return 0;
+}
+
+fn main() {
+    show(1.5);
+    show(1.0000000596046448);
+    show(1.0000001788139343);
+    show(1.00000005960464478);
+    show(340282346638528859811704183484516925440.0);
+    show(340282356779733661637539395458142568448.0);
+    show(340282356779733623858607532500980858880.0);
+    show(-340282356779733661637539395458142568448.0);
+    show(0.0000000000000000000000000000000000000000000014012984643248171);
+    show(0.00000000000000000000000000000000000000000000070064923216240854);
+    show(0.00000000000000000000000000000000000000000000070064923216240862);
+    show(0.00000000000000000000000000000000000000001);
+    show(-0.0);
+    show(0.00000000000000000016021766340);
+    var nan: f64 = 0.0;
+    store64(&nan, 0x7FF8000000000001);
+    show(nan);
+    var p: P3 = P3 { 1.0, 2.0, 3.0, 4.0, 5.0 };
+    fmt_int(sizeof(P3));
+    print(" ", 1);
+    var py: f64 = f32_to(p.y);
+    var pyb = py;
+    fmt_hex0x(pyb);
+    println("");
+    return 0;
+}
+
+main();
