@@ -90,8 +90,12 @@ python3 -I -B scripts/doc_examples.py .              # the README's and guides' 
 python3 -I -B scripts/oracle/emit.py . --check       # the emitted golden rows are current
 ```
 
-`cyrius test` must be **warning-free**. The f64 type diagnostics come only from the compiles that
-`test` and `build` drive, never from `cyrius lint`. Each one is a bug:
+`cyrius test` must be **warning-free**, with one recorded exception (the user's answer of 2026-11-17):
+`tests/ai.tcyr`, the only unit that includes sandhi, prints the stdlib's own warnings and nothing else:
+the static-data advisory (bijli and sandhi's stack pass the compiler's 128 KiB) on every target, and on PE
+six `syscall … not routed` warnings from `lib/dynlib.cyr` (674, 950) and `lib/fdlopen.cyr` (472, 530, 626,
+954). Any other line from it, or any warning from another unit, is a defect. The f64 type diagnostics
+come only from the compiles that `test` and `build` drive, never from `cyrius lint`. Each one is a bug:
 - *integer arithmetic with an f64 right operand*
 - *f64 arithmetic with a non-f64 right operand*
 - *an integer stored into an f64 slot*

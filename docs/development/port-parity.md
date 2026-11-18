@@ -7418,3 +7418,52 @@ eigenmode search (`dft_magnitude`'s recurrence and magnitude, `find_eigenmodes`'
   two that print through the split digit generator: within noise. Rust 1.2.0 has no soorat or JSON bench, so M7 adds
   no twin.
   **`integration/soorat.rs` is done.** Next: 1c, `ai.rs` in the `[lib.ai]` profile.
+
+## 135. M7 part 1c: the daimon/hoosh client in `[lib.ai]`; M7 Part 1 done (2026-11-17)
+
+- **The module** (`src/ai.cyr`): `BjDaimonConfig` (endpoint, an optional API key), `BjHooshConfig` (endpoint) and
+  `BjDaimonClient` (its own copy of the configuration and the 30 s deadline). Strings are bytes in fl_alloc blocks
+  of the struct's own, as soorat's components; the constructors copy them and refuse bytes that are not UTF-8
+  (a Rust `String` can't hold them), and each struct has a `_free`. `debug` writes Rust's `{:?}`: DaimonConfig's
+  hand-written one redacts the key (`api_key: Some("<redacted>")`), HooshConfig's is the derive, and the client's
+  prints its configuration and `timeout: 30s` (Rust's also prints reqwest's internals). The JSON is serde's derive
+  (`{"endpoint":…,"api_key":…|null}`; on reading, a missing or null key is None, both struct forms), on src/json.cyr's
+  helpers, sixteen of them now public for it as touchstone's `_bj_ts_*` were for soorat.
+- **The route, ADR 0002 row 46** (the user's answer of 2026-11-17): Rust's `register_agent` posts to
+  `/v1/agents/register` and reads a string `agent_id`; daimon (2.5.6, `src/router.cyr`) registers at `POST /v1/agents`
+  and answers 201 `{"id":N,…}`, and the Rust route falls into `/v1/agents/{id}` (404 or 405), so Rust's client
+  registers with no daimon. prakash 2.5.1 found the same and moved. The port posts Rust's body (serde_json's
+  `json!`, keys sorted: `{"capabilities":[…],"name":"bijli"}`) to daimon's route with the Bearer header, takes a
+  2xx only (sandhi follows no redirect), caps the body at Rust's 1 MiB and returns the integer `id` as its decimal
+  text. `_bj_ai_register_response` (status, body) is split out so every branch runs without a server.
+- **Errors, ADR 0002 row 7**: every registration failure is Transport, with Rust's reasons (`daimon: registration
+  request failed: CONNECT`, `… rejected: HTTP status 500`, `… response body exceeds 1048576 bytes`, `… invalid
+  registration response: …`, `… registration response missing id field`); an endpoint or key holding a control byte
+  is refused before the request (no URL or header can carry it). The exchange's memory (headers, the 1.06 MiB read
+  buffer, the response) comes from a json.cyr decode region, given back before register_agent returns.
+- **The profile**: `[lib.ai]` is `[lib]` plus `src/ai.cyr`; `cyrius distlib` derives its sidecar (17 leaves, sandhi
+  among them) and writes `dist/bijli-ai.cyr`, whose header includes `lib/sandhi.cyr`. sandhi is not in `[deps]
+  stdlib`: a listed leaf is prepended to every compile, which took each test compile from 1.2 s to 2.2 s and put every
+  unit past the compiler's 128 KiB static-data advisory (bijli alone is just under it; sandhi's stack adds about
+  100 KB). Folded distfiles resolve from the toolchain when included, so `tests/ai.tcyr` includes `lib/sandhi.cyr`
+  itself and no other compile carries it. Probed in a scratch copy before the tree changed, on ELF, PE and aarch64.
+- **The warnings** (the user's answer of 2026-11-17): `tests/ai.tcyr` prints the stdlib's own warnings and is the one
+  recorded exception to the warning-free rule (CLAUDE.md): the static-data advisory on every target (226,560 bytes
+  on x86_64), and on PE six `syscall … not routed on CYRIUS_TARGET_WIN` warnings, `lib/dynlib.cyr` lines 674 and 950
+  and `lib/fdlopen.cyr` lines 472, 530, 626 and 954 (sandhi's TLS path; a cyrius stdlib finding to report). prakash's
+  ai test prints the same advisory at 138,720 bytes.
+- **Tests**: `tests/ai.tcyr` ports all 10 of ai.rs's tests by name. The three request tests run against a one-shot
+  HTTP/1.1 server, a thread of the test on 127.0.0.1 (a port from 47311 up), as Rust's tokio task: the bearer header
+  and `POST /v1/agents` (the trailing slash dropped) with daimon's 201 answer, a 500 refused (no authorization header
+  without a key), a body of 1 MiB + 26 bytes refused. `cyrius_ai_json` (exact documents, the escapes and an escaped
+  NUL, the array form, None three ways, the refusals), `cyrius_ai_response` (every branch, the control bytes, nothing
+  listening) and `cyrius_ai_memory` (UTF-8 refusals, double frees): 45 assertions, passing on all three targets. The
+  ledger: 820 ported, 12 n/a, 26 pending; surface parity: 18 modules, 735 items, none pending
+  (`impl Debug for DaimonConfig` is the method `debug`); the API snapshot 2,190 (12 added).
+- **Result, every target** (x86_64 ELF, x86_64 PE, aarch64): **21 modules, 0 failing; 646,235 ok, 0 failed, 0
+  measured, 0 pending, 123,844 accepted (ADR 01: 43,087; ADR 0002: 80,757)**; all 520 digests equal (ai has no
+  golden rows); the 32 test files pass on all three (2,862 assertions), and the only warnings are the recorded ones
+  from `tests/ai.tcyr`'s compile. The gate is otherwise clean (execution coverage 445 of 445, ai.cyr's 12 of 12;
+  both bundles current; the audit passes). One bench run beside the last 1b-2 run, at load 4.0 against 1–3: median
+  ratio 1.03 over 112 benches, within noise (1c changes no benched code; Rust 1.2.0 has no ai bench). **M7 Part 1 is
+  done.** Next: Part 2, the range-edge review of M7's modules.

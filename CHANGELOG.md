@@ -675,6 +675,17 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
   `soorat.tsv` (1,344 in all, `emit.py`'s `emit_1b2`, validate.py's `soorat_json_eval`); `tests/soorat.tcyr` ports
   soorat.rs's last two tests, `field_slice_2d_serializes` and `field_slice_3d_serializes`, all 14 now
   (`port-parity.md` §134).
+- **Cyrius port, M7 part 1c — the daimon/hoosh client** (`src/ai.cyr`, the `[lib.ai]` profile only:
+  `dist/bijli-ai.cyr`, with sandhi; the default bundle never pulls it): `BjDaimonConfig` (`_new`, `_default`, a
+  redacting `debug`, JSON), `BjHooshConfig` (the same, Debug derived) and `BjDaimonClient` (`_new`, `config`, `debug`,
+  `register_agent`). Registration speaks daimon's route, `POST /v1/agents` and its integer `id` (ADR 0002 row 46, the
+  user's answer: Rust's `/v1/agents/register` and `agent_id` exist on no daimon), with Rust's body, Bearer header,
+  30 s deadline and 1 MiB cap; every failure is `BJ_ERR_TRANSPORT` with Rust's `daimon:` reasons (row 7), and an
+  endpoint or key holding a control byte is refused before anything is sent. `tests/ai.tcyr` ports all 10 of ai.rs's
+  tests, the three request tests against a one-shot server thread on 127.0.0.1 (45 assertions). sandhi is not in
+  `[deps] stdlib`, so no other compile carries it; the ai unit prints the stdlib's own warnings only, the one recorded
+  exception to the warning-free rule (CLAUDE.md). Some of `src/json.cyr`'s helpers are public for it. M7 Part 1 is
+  done (`port-parity.md` §135).
 
 ### Fixed
 - **relativity** (ADR 0002 row 27, M2 part 1d-1): `lienard_wiechert_e` returned Ok(NaN) for a NaN R, which the

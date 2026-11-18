@@ -81,7 +81,7 @@ Plan of record: [bijli-port-plan.md](bijli-port-plan.md). Decisions: [ADR 0001](
 - [ ] **CPML + materials for `GpuFdtd2d`** — the compute-backend solver has PEC walls and vacuum only
 - [ ] **TFSF integration into `Fdtd2d`** — `TfsfSource` is a standalone auxiliary grid; add plane-wave injection on the TF/SF contour
 - [ ] **Frequency-aware lossy Fresnel** — complex ε = ε − jσ/ω so conductors are supported (today they return `Err`)
-- [ ] **Transport error variant** — `BijliError` has no network/transport variant; the `ai` client maps to `InvalidParameter`
+- [x] **Transport error variant** — `BJ_ERR_TRANSPORT` (ADR 0002 row 7); the ai client reports every registration failure as it (M7 part 1c)
 - [ ] **Sub-femtometre point-charge separations** — field/potential/Coulomb functions treat r² < 1e-30 m² as singular
 - [ ] **2.0 cleanup (breaking)** — remove the 1.2.0 deprecations (`rf::input_impedance_lossless`, `rf::write_touchstone`, `Material::reflectance_at`), make FDTD grid fields private behind accessors, make `TfsfSource::new`/`Cpml::new` fallible, unify the polarization (e^{−iωt}) and scattering (e^{+iωt}) time conventions
 - [ ] **Real `WgpuBackend`** — currently a scaffold

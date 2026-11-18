@@ -9,7 +9,7 @@ bite is done, the machinery, the scripts and the traps. Delete it once it has se
 
 ## Where it stands
 
-- **Committed through `873ac05`** ("m7 part1b"); M7 part 1b-2 is in the working tree for the user to commit. **M6
+- **Committed through `53ee986`** (part 1b-2); M7 part 1c is in the working tree for the user to commit. **M6
   is done** (§131).
 - **M7** runs as Part 1 in bites (1a `bridge.rs`, 1b `integration/soorat.rs`, 1c `ai.rs` in `[lib.ai]`), then Part 2
   its range-edge review. **1a done** (§132): `src/bridge.cyr`; its constants rendered by validate.py
@@ -24,6 +24,11 @@ bite is done, the machinery, the scripts and the traps. Delete it once it has se
   `soorat_json_eval` on the json model's `JSON_FIELDS`, the harness's `_par_so_json`), not `json.tsv`; an f32
   written as zmij's shortest f32 digits (fmtf's `_bj_shortest_fe`) and read rounded once (ADR 0002 row 45:
   `_bj_jr_f32` compares the token's text only at an f32 halfway value). `integration/soorat.rs` is done.
+  **1c done** (§135): `src/ai.cyr` in the `[lib.ai]` profile; sandhi is never in `[deps] stdlib` (listed leaves
+  are prepended to every compile, and bijli plus sandhi pass the 128 KiB static-data advisory), so
+  `tests/ai.tcyr` includes `lib/sandhi.cyr` itself and distlib derives the ai bundle's sidecar; that unit's
+  stdlib warnings are the one recorded exception (CLAUDE.md). daimon's route, ADR 0002 row 46. **Part 1 is
+  done.**
 - **M6 Part 1** (the 2D CPML and `Fdtd2d`, §116–§119) runs in bites. Done: 1a the CPML layer (`src/cpml.cyr`); 1b-1
   `Fdtd2d` without the CPML (`src/fdtd2d.cyr`; its scripts `Fdtd2d::script` in `fdtd_2d3d.tsv`, replayed by
   validate.py's `Fd2Scripts` in pure Python, no NumPy on the host); 1b-2 the CPML attached (the y-strips packed, the
@@ -101,9 +106,8 @@ bite is done, the machinery, the scripts and the traps. Delete it once it has se
   `soorat.tsv` (0.8 MB), and ai.rs's serde types (1c) should go into an `ai` module likewise.
 - **M5 is done** (§115). The benchmark record's Cyrius column is each row's least of four full runs: rows vary up to
   1.5× between runs under other repos' loads, so take the least of several when regenerating it.
-- **Next**: part 1c, `ai.rs` in the `[lib.ai]` profile (sandhi; the default `[lib]` bundle never pulls it).
-  Then Part 2, whose review takes `_bj_max`'s ±0 ties with it (§133's finding); M7's close regenerates the
-  benchmark record as §131 did.
+- **Next**: M7 Part 2, the range-edge review of M7's modules (bridge, soorat, their JSON, ai), taking
+  `_bj_max`'s ±0 ties with it (§133's finding); M7's close regenerates the benchmark record as §131 did.
 - **Corpus size**: `fdtd.tsv` is 38.8 MB (107,341 rows) and `json.tsv` 40.7 MB, against the 48 MiB cap that
   validate.py's `too_big` guards (§81); M6's rows are in `fdtd_2d3d.tsv` (4.2 MB after 4f).
 - **A recorded cost**: the 1D step runs 3.5–3.8× HEAD's with 2d-2a's scan (§107), the TF/SF step about 2× with

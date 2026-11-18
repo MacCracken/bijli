@@ -13,8 +13,11 @@ output = "build/bijli"
 
 # Stdlib leaves (port plan §6 step 3): atomic and thread_local hold the per-thread last-error record
 # (src/error.cyr), sakshi is the logging (src/log.cyr), bayan the JSON (src/json.cyr: its f64 printer
-# and its value tree); the [lib.ai] profile adds sandhi in M7. No [deps.hisab]: bijli has no production
-# hisab dependency (ADR 0001).
+# and its value tree). sandhi (the stdlib's HTTP/TLS fold, for src/ai.cyr) is deliberately not listed:
+# a listed leaf is prepended to every compile, and sandhi's stack would put every test past the
+# compiler's 128 KiB static-data advisory. The [lib.ai] bundle's header includes it (`cyrius distlib`
+# derives it), and tests/ai.tcyr includes lib/sandhi.cyr itself. No [deps.hisab]: bijli has no
+# production hisab dependency (ADR 0001).
 [deps]
 stdlib = ["syscalls", "string", "alloc", "str", "fmt", "io", "vec", "args", "math", "ganita",
           "tagged", "result", "fnptr", "freelist", "mmap", "overflow", "atomic", "thread_local",
@@ -28,7 +31,7 @@ stdlib = ["assert", "bench", "thread"]
 timeout = 300
 
 # The default bundle (dist/bijli.cyr). The order is load-bearing: no src/ file includes another.
-# [lib.ai] joins in M7.
+# [lib.ai] (dist/bijli-ai.cyr) is the same modules and src/ai.cyr, the daimon/hoosh client (M7 part 1c).
 [lib]
 modules = ["src/constants.cyr", "src/crmath_data.cyr", "src/crmath.cyr", "src/crmath_k_data.cyr",
            "src/crmath_k.cyr", "src/crmath_kx.cyr", "src/crmath_mono.cyr", "src/crmath_ux_data.cyr", "src/crmath_ux.cyr",
@@ -42,3 +45,18 @@ modules = ["src/constants.cyr", "src/crmath_data.cyr", "src/crmath.cyr", "src/cr
            "src/fdtd_media_data.cyr", "src/fdtd_media.cyr", "src/fdtd_util.cyr",
            "src/cpml.cyr", "src/fdtd2d.cyr", "src/fdtd3d.cyr", "src/compute.cyr", "src/nf2ff.cyr", "src/soorat.cyr",
            "src/json.cyr"]
+
+# The ai profile: [lib] and the client, which pulls sandhi (never in the default bundle).
+[lib.ai]
+modules = ["src/constants.cyr", "src/crmath_data.cyr", "src/crmath.cyr", "src/crmath_k_data.cyr",
+           "src/crmath_k.cyr", "src/crmath_kx.cyr", "src/crmath_mono.cyr", "src/crmath_ux_data.cyr", "src/crmath_ux.cyr",
+           "src/crmath_cmp.cyr", "src/mathx.cyr", "src/crmath_vx.cyr", "src/fmtf.cyr", "src/crmath_gamma.cyr",
+           "src/crmath_edge.cyr", "src/log.cyr", "src/error.cyr", "src/bridge_data.cyr", "src/bridge.cyr",
+           "src/complex.cyr", "src/field.cyr", "src/maxwell.cyr", "src/charge.cyr", "src/material.cyr",
+           "src/wave_data.cyr", "src/wave.cyr", "src/circuit.cyr",
+           "src/relativity.cyr", "src/polarization.cyr", "src/scattering.cyr",
+           "src/beam.cyr", "src/rf.cyr", "src/touchstone_data.cyr", "src/touchstone.cyr",
+           "src/fdtd1d.cyr", "src/fdtd_source.cyr",
+           "src/fdtd_media_data.cyr", "src/fdtd_media.cyr", "src/fdtd_util.cyr",
+           "src/cpml.cyr", "src/fdtd2d.cyr", "src/fdtd3d.cyr", "src/compute.cyr", "src/nf2ff.cyr", "src/soorat.cyr",
+           "src/json.cyr", "src/ai.cyr"]

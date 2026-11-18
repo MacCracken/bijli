@@ -37,11 +37,9 @@ INV = json.loads((root / "scripts/rust_1_2_0.json").read_text())
 
 # Ported modules (their milestone done or in progress, item by item).
 MODULES = ["error", "logging", "field", "maxwell", "charge", "material", "wave", "circuit", "relativity",
-           "polarization", "scattering", "beam", "rf", "fdtd", "compute", "bridge", "integration/soorat"]
-# Rust module -> the milestone that ports it (port plan §4.1).
-PENDING_MODULES = {
-    "ai": "M7",
-}
+           "polarization", "scattering", "beam", "rf", "fdtd", "compute", "bridge", "integration/soorat", "ai"]
+# Rust module -> the milestone that ports it (port plan §4.1); none is left since M7 part 1c.
+PENDING_MODULES = {}
 # Modules being ported Part by Part: module -> (the Parts that finish it, the Rust items still to come, by name: a free
 # fn, a method as `Owner::name`, a struct or enum (its fields or variants with it), a serde impl as `impl Trait for X`).
 # Their other items are checked as a ported module's now; the listed ones count as pending, and one found ported is a
@@ -86,6 +84,7 @@ EXCEPTIONS = {
     "rf::input_impedance_lossless": "deprecated in 1.2.0, not carried (ADR 0002 row 1): "
                                     "input_impedance_lossless_complex",
     "rf::write_touchstone": "deprecated in 1.2.0, not carried (ADR 0002 row 1): try_write_touchstone",
+    "ai::impl Debug for DaimonConfig": "the method debug(t), into a BjText, the key redacted (src/ai.cyr)",
     "polarization::impl ComplexExt for Complex": "BjComplex's own methods norm_sq, norm and arg (src/complex.cyr): "
                                                  "hisab 1.4 made them inherent, and the trait only delegates",
 }

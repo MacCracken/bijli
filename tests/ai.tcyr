@@ -1,0 +1,437 @@
+# ai.tcyr — src/ai.cyr (M7 part 1c): the daimon/hoosh client of the [lib.ai] profile.
+#
+# Every group not named cyrius_* is 1.2.0:src/ai.rs's test of that name, ported assertion for assertion (the ledger
+# matches them by name): all 10. The three on register_agent run against a one-shot HTTP/1.1 server on 127.0.0.1 (a
+# thread of this test, as Rust's tokio task), answering as daimon does (ADR 0002 row 46: `POST /v1/agents`, an
+# integer `id`). This unit alone includes sandhi (lib/sandhi.cyr, the stdlib's fold), as the [lib.ai] bundle does: no
+# other compile carries the HTTP/TLS stack.
+
+include "tests/lib.cyr"
+include "lib/sandhi.cyr"
+include "src/ai.cyr"
+
+# 1 when the C strings a and b are equal.
+fn text_is(a, b): i64 {
+    var n = strlen(a);
+    if (n != strlen(b)) { return 0; }
+    return memeq(a, b, n);
+}
+
+# 1 when the bytes [p, p + n) equal the C string b.
+fn bytes_are(p, n, b): i64 {
+    if (n != strlen(b)) { return 0; }
+    return memeq(p, b, n);
+}
+
+# 1 when the C string s holds the C string w.
+fn has(s, w): i64 {
+    var n = strlen(s);
+    var k = strlen(w);
+    for (var i = 0; i + k <= n; i = i + 1) {
+        if (memeq(s + i, w, k) == 1) { return 1; }
+    }
+    return 0;
+}
+
+# The ASCII byte c lowercased.
+fn lower(c): i64 {
+    if (c >= 65 && c <= 90) { return c + 32; }
+    return c;
+}
+
+# 1 when some line of the text [p, p + n) equals the C string w, ignoring ASCII case.
+fn has_line_nocase(p, n, w): i64 {
+    var k = strlen(w);
+    var at = 0;
+    while (at < n) {
+        var e = at;
+        while (e < n && load8(p + e) != 13 && load8(p + e) != 10) { e = e + 1; }
+        if (e - at == k) {
+            var same = 1;
+            for (var j = 0; j < k; j = j + 1) {
+                if (lower(load8(p + at + j)) != lower(load8(w + j))) { same = 0; }
+            }
+            if (same == 1) { return 1; }
+        }
+        at = e + 1;
+    }
+    return 0;
+}
+
+# 1 when the text [p, p + n) holds `authorization:` in any case.
+fn has_auth(p, n): i64 {
+    var w = "authorization:";
+    for (var i = 0; i + 14 <= n; i = i + 1) {
+        var same = 1;
+        for (var j = 0; j < 14; j = j + 1) {
+            if (lower(load8(p + i + j)) != load8(w + j)) { same = 0; }
+        }
+        if (same == 1) { return 1; }
+    }
+    return 0;
+}
+
+# ── a one-shot HTTP/1.1 server (Rust's `one_shot_server`) ──
+# Its words: +0 the listening socket, +8 the port, +16 the response's address, +24 its length, +32 the request read,
+# +40 its length.
+
+# The request head's Content-Length in [p, p + n), 0 when it has none.
+fn content_length(p, n): i64 {
+    var w = "content-length:";
+    for (var i = 0; i + 15 <= n; i = i + 1) {
+        var same = 1;
+        for (var j = 0; j < 15; j = j + 1) {
+            if (lower(load8(p + i + j)) != load8(w + j)) { same = 0; }
+        }
+        if (same == 1) {
+            var k = i + 15;
+            while (k < n && load8(p + k) == 32) { k = k + 1; }
+            var v = 0;
+            while (k < n && load8(p + k) >= 48 && load8(p + k) <= 57) {
+                v = v * 10 + load8(p + k) - 48;
+                k = k + 1;
+            }
+            return v;
+        }
+    }
+    return 0;
+}
+
+# The offset just past the request head's blank line in [p, p + n), or -1.
+fn head_end(p, n): i64 {
+    for (var i = 0; i + 4 <= n; i = i + 1) {
+        if (memeq(p + i, "\r\n\r\n", 4) == 1) { return i + 4; }
+    }
+    return 0 - 1;
+}
+
+# The server thread: accepts one connection, reads the head and its body, answers, closes.
+fn srv_run(srv) {
+    var at, c = sock_accept(load64(srv));
+    if (is_err_result(at) == 1) { return 0; }
+    var cap = 65536;
+    var req = alloc(cap);
+    var n = 0;
+    while (n < cap) {
+        var rt, got = sock_recv(c, req + n, cap - n);
+        if (is_err_result(rt) == 1) { break; }
+        if (got <= 0) { break; }
+        n = n + got;
+        var he = head_end(req, n);
+        if (he >= 0 && n >= he + content_length(req, he)) { break; }
+    }
+    store64(srv + 32, req);
+    store64(srv + 40, n);
+    sock_send_all(c, load64(srv + 16), load64(srv + 24));
+    sock_shutdown(c, 1);
+    sock_close(c);
+    sock_close(load64(srv));
+    return 0;
+}
+
+# Starts a server answering `status` (a full status line) with the JSON body [body, body + blen): its thread, or 0.
+# Its base URL (`http://127.0.0.1:<port>`) goes to url.
+fn srv_start(srv, status, body, blen, url): i64 {
+    var st, fd = tcp_socket();
+    if (is_err_result(st) == 1) { return 0; }
+    sock_reuse(fd);
+    var port = 0;
+    var p = 47311;
+    while (port == 0 && p < 47711) {
+        var bt, bv = sock_bind(fd, INADDR_LOOPBACK(), p);
+        if (is_ok(bt) == 1) { port = p; }
+        p = p + 1;
+    }
+    if (port == 0) { return 0; }
+    var lt, lv = sock_listen(fd, 4);
+    if (is_err_result(lt) == 1) { return 0; }
+    var resp = alloc(blen + 256);
+    var t[24];
+    _bj_tx_init(&t, resp, blen + 256);
+    _bj_tx_cstr(&t, status);
+    _bj_tx_cstr(&t, "\r\ncontent-type: application/json\r\ncontent-length: ");
+    _bj_tx_i64(&t, blen);
+    _bj_tx_cstr(&t, "\r\nconnection: close\r\n\r\n");
+    var hn = _bj_tx_len(&t);
+    memcpy(resp + hn, body, blen);
+    store64(srv, fd);
+    store64(srv + 8, port);
+    store64(srv + 16, resp);
+    store64(srv + 24, hn + blen);
+    store64(srv + 32, 0);
+    store64(srv + 40, 0);
+    _bj_tx_init(url, url + 24, 40);
+    _bj_tx_cstr(url, "http://127.0.0.1:");
+    _bj_tx_i64(url, port);
+    return thread_create(&srv_run, srv);
+}
+
+# A client for the endpoint text e plus `tail` with the key k (0 for none) into *cl.
+fn client_for(e, tail, k, cl: *BjDaimonClient): i64 {
+    var eb[96];
+    var n = strlen(e);
+    memcpy(&eb, e, n);
+    memcpy(&eb + n, tail, strlen(tail));
+    n = n + strlen(tail);
+    var c: BjDaimonConfig;
+    var kl = 0;
+    if (k != 0) { kl = strlen(k); }
+    var t, v = BjDaimonConfig_new(&eb, n, k, kl, &c);
+    var t2, v2 = BjDaimonClient_new(&c, cl);
+    BjDaimonConfig_free(&c);
+    if (is_ok(t) == 1 && is_ok(t2) == 1) { return 1; }
+    return 0;
+}
+
+# Runs ai.rs's tests, then the Cyrius-only checks.
+fn main() {
+    var tb[512];
+    var tx[24];
+
+    test_group("test_default_config");
+    var dc: BjDaimonConfig;
+    var dt, dv = BjDaimonConfig_default(&dc);
+    assert(is_ok(dt) == 1 && bytes_are(dc.endpoint, dc.endpoint_len, "http://localhost:8090") == 1,
+      "endpoint http://localhost:8090");
+    assert(dc.api_key == 0, "no API key");
+
+    test_group("test_hoosh_default");
+    var hc: BjHooshConfig;
+    var ht, hv = BjHooshConfig_default(&hc);
+    assert(is_ok(ht) == 1 && bytes_are(hc.endpoint, hc.endpoint_len, "http://localhost:8088") == 1,
+      "endpoint http://localhost:8088");
+
+    test_group("test_daimon_client_new");
+    var cl: BjDaimonClient;
+    var ct, cv = BjDaimonClient_new(&dc, &cl);
+    assert(is_ok(ct) == 1, "DaimonClient::new is Ok");
+    BjDaimonClient_free(&cl);
+
+    test_group("test_daimon_config_with_api_key");
+    var kc: BjDaimonConfig;
+    var kt, kv = BjDaimonConfig_new("https://custom.host:9090", 24, "test-key", 8, &kc);
+    assert(is_ok(kt) == 1 && bytes_are(kc.api_key, kc.api_key_len, "test-key") == 1, "api_key Some(\"test-key\")");
+    BjDaimonConfig_free(&kc);
+
+    test_group("test_debug_redacts_api_key");
+    var sc: BjDaimonConfig;
+    var st, sv = BjDaimonConfig_new("https://custom.host:9090", 24, "super-secret-key", 16, &sc);
+    _bj_tx_init(&tx, &tb, 512);
+    sc.debug(&tx);
+    var shown = _bj_tx_ptr(&tx);
+    assert(is_ok(st) == 1 && has(shown, "super-secret-key") == 0, "the key isn't shown");
+    assert(has(shown, "redacted") == 1 && has(shown, "custom.host") == 1, "redacted, and the host shown");
+    var scl: BjDaimonClient;
+    var sct, scv = BjDaimonClient_new(&sc, &scl);
+    _bj_tx_init(&tx, &tb, 512);
+    scl.debug(&tx);
+    assert(is_ok(sct) == 1 && has(_bj_tx_ptr(&tx), "super-secret-key") == 0, "nor by the client's Debug");
+
+    test_group("test_daimon_config_serde_roundtrip");
+    var rc: BjDaimonConfig;
+    var rt, rv = BjDaimonConfig_new("http://example.com", 18, "key123", 6, &rc);
+    var sb = str_builder_new();
+    var jt, jv = BjDaimonConfig_to_json(&rc, sb);
+    var js = str_builder_build(sb);
+    var back: BjDaimonConfig;
+    var bt, bv = BjDaimonConfig_from_json(str_data(js), str_len(js), &back);
+    assert(is_ok(rt) == 1 && is_ok(jt) == 1 && is_ok(bt) == 1, "to_string and from_str are Ok");
+    assert(bytes_are(back.endpoint, back.endpoint_len, "http://example.com") == 1, "the endpoint back");
+    assert(bytes_are(back.api_key, back.api_key_len, "key123") == 1, "the key back");
+    BjDaimonConfig_free(&back);
+
+    test_group("test_hoosh_config_serde_roundtrip");
+    var sb2 = str_builder_new();
+    var jt2, jv2 = BjHooshConfig_to_json(&hc, sb2);
+    var js2 = str_builder_build(sb2);
+    var hb: BjHooshConfig;
+    var hbt, hbv = BjHooshConfig_from_json(str_data(js2), str_len(js2), &hb);
+    assert(is_ok(jt2) == 1 && is_ok(hbt) == 1 && bytes_are(hb.endpoint, hb.endpoint_len, "http://localhost:8088") == 1,
+      "the endpoint back");
+    BjHooshConfig_free(&hb);
+
+    # daimon's answer to a registration (ADR 0002 row 46: 201 and an integer id, where Rust's test served 200 and
+    # {"agent_id":"abc-123"}).
+    test_group("test_register_sends_bearer_and_parses_id");
+    var srv: i64[6];
+    var ub[64];
+    var u1 = "{\"id\":123,\"name\":\"bijli\",\"type\":\"User\",\"status\":0}";
+    var th = srv_start(&srv, "HTTP/1.1 201 Created", u1, strlen(u1), &ub);
+    var rcl: BjDaimonClient;
+    var ok1 = client_for(_bj_tx_ptr(&ub), "/", "s3cret", &rcl);
+    var it[24];
+    var ib[64];
+    _bj_tx_init(&it, &ib, 64);
+    var rgt, rgv = rcl.register_agent(&it);
+    thread_join(th);
+    assert(th != 0 && ok1 == 1 && is_ok(rgt) == 1 && text_is(_bj_tx_ptr(&it), "123") == 1, "the id 123");
+    var req = srv[4];
+    var rn = srv[5];
+    assert(rn > 16 && memeq(req, "POST /v1/agents ", 16) == 1, "POST /v1/agents (the trailing slash dropped)");
+    assert(has_line_nocase(req, rn, "authorization: Bearer s3cret") == 1, "the bearer header");
+    BjDaimonClient_free(&rcl);
+
+    test_group("test_register_rejects_error_status");
+    var u2 = "{\"id\":123}";
+    var th2 = srv_start(&srv, "HTTP/1.1 500 Internal Server Error", u2, strlen(u2), &ub);
+    var ecl: BjDaimonClient;
+    var ok2 = client_for(_bj_tx_ptr(&ub), "", 0, &ecl);
+    _bj_tx_init(&it, &ib, 64);
+    var r2t, r2v = ecl.register_agent(&it);
+    thread_join(th2);
+    assert(th2 != 0 && ok2 == 1 && is_err_result(r2t) == 1 && r2v == BJ_ERR_TRANSPORT, "a 500 is refused");
+    assert(has_auth(srv[4], srv[5]) == 0, "no authorization header without a key");
+    BjDaimonClient_free(&ecl);
+
+    test_group("test_register_rejects_oversized_body");
+    var big = alloc(1048576 + 64);
+    var bn = _bj_jw_cstr(big, 0, "{\"id\":1,\"pad\":\"");
+    memset(big + bn, 97, 1048576);
+    bn = _bj_jw_cstr(big, bn + 1048576, "\"}");
+    var th3 = srv_start(&srv, "HTTP/1.1 200 OK", big, bn, &ub);
+    var ocl: BjDaimonClient;
+    var ok3 = client_for(_bj_tx_ptr(&ub), "", 0, &ocl);
+    _bj_tx_init(&it, &ib, 64);
+    var r3t, r3v = ocl.register_agent(&it);
+    thread_join(th3);
+    assert(th3 != 0 && ok3 == 1 && is_err_result(r3t) == 1 &&
+      text_is(bj_last_error_detail(), "daimon: response body exceeds 1048576 bytes") == 1, "a body past 1 MiB");
+    BjDaimonClient_free(&ocl);
+
+    # The documents serde_json writes and reads: both struct forms, api_key's three None spellings, the refusals.
+    test_group("cyrius_ai_json");
+    assert(bytes_are(str_data(js), str_len(js), "{\"endpoint\":\"http://example.com\",\"api_key\":\"key123\"}") == 1,
+      "a DaimonConfig's document");
+    var sb3 = str_builder_new();
+    var j3t, j3v = BjDaimonConfig_to_json(&dc, sb3);
+    var js3 = str_builder_build(sb3);
+    assert(bytes_are(str_data(js3), str_len(js3), "{\"endpoint\":\"http://localhost:8090\",\"api_key\":null}") == 1,
+      "None as null");
+    assert(bytes_are(str_data(js2), str_len(js2), "{\"endpoint\":\"http://localhost:8088\"}") == 1,
+      "a HooshConfig's document");
+    var qc: BjDaimonConfig;
+    var q = "[\"h\\u0000\\\"x\",\"k\"]";
+    var qt, qv = BjDaimonConfig_from_json(q, strlen(q), &qc);
+    assert(is_ok(qt) == 1 && qc.endpoint_len == 4 && load8(qc.endpoint + 1) == 0 &&
+      bytes_are(qc.api_key, qc.api_key_len, "k") == 1, "the array form; an escaped NUL kept");
+    var sb4 = str_builder_new();
+    var j4t, j4v = BjDaimonConfig_to_json(&qc, sb4);
+    var js4 = str_builder_build(sb4);
+    assert(bytes_are(str_data(js4), str_len(js4), "{\"endpoint\":\"h\\u0000\\\"x\",\"api_key\":\"k\"}") == 1,
+      "written back with serde_json's escapes");
+    BjDaimonConfig_free(&qc);
+    var m1 = "{\"endpoint\":\"e\"}";
+    var m1t, m1v = BjDaimonConfig_from_json(m1, strlen(m1), &qc);
+    assert(is_ok(m1t) == 1 && qc.api_key == 0, "a missing api_key is None");
+    BjDaimonConfig_free(&qc);
+    var m2 = "{\"api_key\":null,\"x\":[1,{\"y\":2}],\"endpoint\":\"e\"}";
+    var m2t, m2v = BjDaimonConfig_from_json(m2, strlen(m2), &qc);
+    assert(is_ok(m2t) == 1 && qc.api_key == 0, "null is None; unknown fields ignored");
+    BjDaimonConfig_free(&qc);
+    qc.endpoint = 0;
+    var m3 = "{\"endpoint\":\"e\",\"api_key\":5}";
+    var m3t, m3v = BjDaimonConfig_from_json(m3, strlen(m3), &qc);
+    assert(is_err_result(m3t) == 1 && m3v == BJ_ERR_DESERIALIZE && qc.endpoint == 0, "a number key refused");
+    var m4 = "{\"api_key\":\"k\"}";
+    var m4t, m4v = BjDaimonConfig_from_json(m4, strlen(m4), &qc);
+    assert(is_err_result(m4t) == 1 &&
+      text_is(bj_last_error_display(), "deserialization failed: missing field `endpoint`") == 1, "endpoint required");
+    var m5 = "{\"endpoint\":\"a\",\"endpoint\":\"b\"}";
+    var m5t, m5v = BjDaimonConfig_from_json(m5, strlen(m5), &qc);
+    assert(is_err_result(m5t) == 1 && m5v == BJ_ERR_DESERIALIZE, "a repeated key refused (ADR 0002 row 12)");
+    var m6 = "[\"e\"]";
+    var m6t, m6v = BjDaimonConfig_from_json(m6, strlen(m6), &qc);
+    assert(is_err_result(m6t) == 1 && m6v == BJ_ERR_DESERIALIZE, "an array of one: serde wants both elements");
+    var h1 = "{\"endpoint\":7}";
+    var h1t, h1v = BjHooshConfig_from_json(h1, strlen(h1), &hb);
+    assert(is_err_result(h1t) == 1 && h1v == BJ_ERR_DESERIALIZE, "a number endpoint refused");
+    _bj_tx_init(&tx, &tb, 512);
+    hc.debug(&tx);
+    assert(text_is(_bj_tx_ptr(&tx), "HooshConfig { endpoint: \"http://localhost:8088\" }") == 1, "HooshConfig's Debug");
+    _bj_tx_init(&tx, &tb, 512);
+    dc.debug(&tx);
+    assert(text_is(_bj_tx_ptr(&tx), "DaimonConfig { endpoint: \"http://localhost:8090\", api_key: None }") == 1,
+      "DaimonConfig's Debug without a key");
+
+    # daimon's answers, each branch (_bj_ai_register_response), and the requests refused before they are sent.
+    test_group("cyrius_ai_response");
+    var a1 = "{\"id\":42,\"name\":\"bijli\"}";
+    _bj_tx_init(&it, &ib, 64);
+    var a1t, a1v = _bj_ai_register_response(201, a1, strlen(a1), &it);
+    assert(is_ok(a1t) == 1 && text_is(_bj_tx_ptr(&it), "42") == 1, "201: the id 42");
+    var a2t, a2v = _bj_ai_register_response(404, a1, strlen(a1), &it);
+    assert(is_err_result(a2t) == 1 && a2v == BJ_ERR_TRANSPORT &&
+      text_is(bj_last_error_display(), "transport error: daimon: registration rejected: HTTP status 404") == 1,
+      "404 rejected");
+    var a3t, a3v = _bj_ai_register_response(302, a1, strlen(a1), &it);
+    var a4t, a4v = _bj_ai_register_response(199, a1, strlen(a1), &it);
+    assert(is_err_result(a3t) == 1 && is_err_result(a4t) == 1, "3xx and 1xx rejected (2xx only)");
+    var a5 = "not json";
+    var a5t, a5v = _bj_ai_register_response(200, a5, strlen(a5), &it);
+    assert(is_err_result(a5t) == 1 && a5v == BJ_ERR_TRANSPORT &&
+      has(bj_last_error_display(), "daimon: invalid registration response: ") == 1, "a body that is no JSON");
+    var a6 = "{\"agent_id\":\"abc-123\"}";
+    var a6t, a6v = _bj_ai_register_response(200, a6, strlen(a6), &it);
+    var a6w = "daimon: registration response missing id field";
+    assert(is_err_result(a6t) == 1 && text_is(bj_last_error_detail(), a6w) == 1, "Rust's answer has no id");
+    var a7 = "{\"id\":\"7\"}";
+    var a7t, a7v = _bj_ai_register_response(200, a7, strlen(a7), &it);
+    var a8 = "{\"id\":7.0}";
+    var a8t, a8v = _bj_ai_register_response(200, a8, strlen(a8), &it);
+    var a9 = "[{\"id\":7}]";
+    var a9t, a9v = _bj_ai_register_response(200, a9, strlen(a9), &it);
+    assert(is_err_result(a7t) == 1 && is_err_result(a8t) == 1 && is_err_result(a9t) == 1,
+      "a string, a float, or an id not in an object: missing");
+    var a10t, a10v = _bj_ai_register_response(200, 0, 0, &it);
+    assert(is_err_result(a10t) == 1 && a10v == BJ_ERR_TRANSPORT, "an empty body");
+    var x1: BjDaimonClient;
+    var x1ok = client_for("http://127.0.0.1:1\r\nX: y", "", 0, &x1);
+    var x1t, x1v = x1.register_agent(&it);
+    var x1w = "daimon: registration request failed: the endpoint holds a control byte";
+    assert(x1ok == 1 && is_err_result(x1t) == 1 && text_is(bj_last_error_detail(), x1w) == 1,
+      "CR LF in the endpoint refused");
+    BjDaimonClient_free(&x1);
+    var x2: BjDaimonClient;
+    var x2ok = client_for("http://127.0.0.1:1", "", "k\ny", &x2);
+    var x2t, x2v = x2.register_agent(&it);
+    assert(x2ok == 1 && is_err_result(x2t) == 1 && text_is(bj_last_error_detail(),
+        "daimon: registration request failed: the API key holds a control byte") == 1, "LF in the key refused");
+    BjDaimonClient_free(&x2);
+    var x3: BjDaimonClient;
+    var x3ok = client_for("http://127.0.0.1:1", "", 0, &x3);
+    var x3t, x3v = x3.register_agent(&it);
+    assert(x3ok == 1 && is_err_result(x3t) == 1 && x3v == BJ_ERR_TRANSPORT &&
+      has(bj_last_error_detail(), "daimon: registration request failed: ") == 1, "nothing listening: Transport");
+    BjDaimonClient_free(&x3);
+
+    # Bytes that are not UTF-8 are refused by the constructors; every struct frees twice harmlessly.
+    test_group("cyrius_ai_memory");
+    var bad[4];
+    store8(&bad, 104);
+    store8(&bad + 1, 255);
+    var nc: BjDaimonConfig;
+    nc.endpoint = 0;
+    var n1t, n1v = BjDaimonConfig_new(&bad, 2, 0, 0, &nc);
+    var n1w = "invalid parameter: daimon endpoint is not valid UTF-8 (an invalid sequence at byte 1)";
+    assert(is_err_result(n1t) == 1 && n1v == BJ_ERR_INVALID_PARAMETER && nc.endpoint == 0 &&
+      text_is(bj_last_error_display(), n1w) == 1, "a stray 0xFF in the endpoint");
+    var n2t, n2v = BjDaimonConfig_new("e", 1, &bad, 2, &nc);
+    var nh: BjHooshConfig;
+    var n3t, n3v = BjHooshConfig_new(&bad, 2, &nh);
+    assert(is_err_result(n2t) == 1 && is_err_result(n3t) == 1, "and in the key and the hoosh endpoint");
+    BjDaimonConfig_free(&dc);
+    BjDaimonConfig_free(&dc);
+    BjHooshConfig_free(&hc);
+    BjHooshConfig_free(&hc);
+    BjDaimonClient_free(&scl);
+    BjDaimonClient_free(&scl);
+    BjDaimonConfig_free(&sc);
+    BjDaimonConfig_free(&rc);
+    var sclc: *BjDaimonConfig = scl.config();
+    assert(dc.endpoint == 0 && hc.endpoint == 0 && sclc.endpoint == 0, "every block given back");
+    return assert_summary();
+}
+
+var exit_code = main();
+if (exit_code > 0) { exit_code = 1; }
+sys_exit_group(exit_code);

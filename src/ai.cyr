@@ -1,0 +1,495 @@
+# bijli — ai: the daimon/hoosh client (M7 part 1c), the port of 1.2.0:src/ai.rs. It is in the [lib.ai] profile only
+# (dist/bijli-ai.cyr), never in the default bundle: it pulls the sandhi HTTP/TLS stack, as Rust's `ai` feature pulled
+# reqwest and tokio.
+#
+# Strings are bytes with a length in fl_alloc blocks of the struct's own (NUL-terminated as well), as src/soorat.cyr's
+# component names: a constructor or reader copies them, and BjX_free gives every non-zero block back and empties the
+# struct (a second call does nothing). An `Option<String>` is an address of 0 for None. Bytes that are not UTF-8,
+# which a Rust `String` can't hold, are refused by the constructors (InvalidParameter).
+#
+# Errors. Every failure of register_agent (the request, an HTTP status other than 2xx, an oversized or unreadable
+# body, a body that is no JSON, no `id` in it) is Transport with Rust's `daimon:`-prefixed reason (ADR 0002 row 7: Rust
+# reported them as InvalidParameter only because its error enum had no network variant, as ai.rs's header says). A
+# block that can't be had is Allocation (row 9), where Rust aborts; DaimonClient_new can fail only so.
+#
+# The route (ADR 0002 row 46, the user's answer of 2026-11-17): Rust 1.2.0 posts to `{endpoint}/v1/agents/register` and
+# reads a string `agent_id`, a route daimon has never had (2.5.6 answers it 404 or 405). The port posts Rust's body to
+# daimon's `{endpoint}/v1/agents` and reads its integer `id`, returned as its decimal text (Rust's String).
+
+private
+
+# The largest daimon response body register_agent takes (1 MiB). Mirrors `MAX_RESPONSE_BYTES`.
+var _BJ_AI_MAX_RESPONSE = 1048576;
+
+# sandhi's cap is the whole response, its head included: the body's 1 MiB and 64 KiB of headers.
+var _BJ_AI_MAX_READ = 1114112;
+
+# Rust's reqwest client timeout, 30 s, as sandhi's total deadline for one exchange.
+var _BJ_AI_TIMEOUT_MS = 30000;
+
+# Connection settings for a daimon agent registry: the service's base URL (`endpoint`, endpoint_len bytes, e.g.
+# `http://localhost:8090`) and an optional API key (api_key_len bytes, 0 for None), sent as `Authorization: Bearer
+# <key>`. `debug` redacts the key; the JSON writer writes it in clear, as Rust's Serialize does (a configuration
+# round-trip format: keep written configs out of logs and world-readable files). Mirrors `DaimonConfig`.
+public struct BjDaimonConfig {
+    endpoint;
+    endpoint_len;
+    api_key;
+    api_key_len;
+}
+
+# Connection settings for a hoosh inference gateway: its base URL (endpoint_len bytes, e.g. `http://localhost:8088`).
+# Mirrors `HooshConfig`.
+public struct BjHooshConfig {
+    endpoint;
+    endpoint_len;
+}
+
+# The HTTP client that registers bijli with daimon: its own copy of the configuration and the request deadline
+# (30 s, Rust's reqwest timeout). Mirrors `DaimonClient`.
+public struct BjDaimonClient {
+    config: BjDaimonConfig;
+    timeout_ms;
+}
+
+# ── strings ───────────────────────────────────────────────────────────────────────────────────────────────────────
+
+# A block holding the bytes [s, s + n) and a NUL, or 0 when it can't be had.
+fn _bj_ai_copy(s, n): i64 {
+    if (n < 0 || n > 2147483646) { return 0; }
+    var b = fl_alloc(n + 1);
+    if (b == 0) { return 0; }
+    if (n > 0) { memcpy(b, s, n); }
+    store8(b + n, 0);
+    return b;
+}
+
+# Records InvalidParameter "<what> is not valid UTF-8 (an invalid sequence at byte <k>)"; returns its code.
+fn _bj_ai_not_utf8(what, k): i64 {
+    var t = _bj_err_reason(BJ_ERR_INVALID_PARAMETER);
+    _bj_tx_cstr(t, what);
+    _bj_tx_cstr(t, " is not valid UTF-8 (an invalid sequence at byte ");
+    _bj_tx_i64(t, k);
+    _bj_tx_putc(t, 41);
+    return BJ_ERR_INVALID_PARAMETER;
+}
+
+# Records Allocation for `what`; returns its code.
+fn _bj_ai_alloc_err(what): i64 {
+    _bj_tx_cstr(_bj_err_reason(BJ_ERR_ALLOCATION), what);
+    return BJ_ERR_ALLOCATION;
+}
+
+# 1 when [s, s + n) holds a control byte (U+0000..U+001F or U+007F), which can't go into a URL or a header.
+#must_use
+fn _bj_ai_has_control(s, n): i64 {
+    for (var i = 0; i < n; i = i + 1) {
+        var c = load8(s + i);
+        if (c < 32 || c == 127) { return 1; }
+    }
+    return 0;
+}
+
+# ── DaimonConfig ──────────────────────────────────────────────────────────────────────────────────────────────────
+
+# A daimon configuration in *out from the endpoint's endpoint_len bytes and the API key's api_key_len bytes (api_key 0
+# for None), each copied into a block of its own: Ok(0), Err(InvalidParameter) for bytes that are not UTF-8 ("daimon
+# endpoint is not valid UTF-8 (an invalid sequence at byte k)", "daimon API key …"), or Err(Allocation), with out
+# untouched. Rust's struct literal, whose `String` fields hold any UTF-8. Give it back with BjDaimonConfig_free.
+#must_use
+public fn BjDaimonConfig_new(endpoint, endpoint_len, api_key, api_key_len, out: *BjDaimonConfig): Result {
+    var be = _bj_ts_utf8_bad(endpoint, endpoint_len);
+    if (be >= 0) { return Err(_bj_ai_not_utf8("daimon endpoint", be)); }
+    if (api_key != 0) {
+        var bk = _bj_ts_utf8_bad(api_key, api_key_len);
+        if (bk >= 0) { return Err(_bj_ai_not_utf8("daimon API key", bk)); }
+    }
+    var e = _bj_ai_copy(endpoint, endpoint_len);
+    var k = 0;
+    if (api_key != 0) { k = _bj_ai_copy(api_key, api_key_len); }
+    if (e == 0 || (api_key != 0 && k == 0)) {
+        if (e != 0) { fl_free(e); }
+        if (k != 0) { fl_free(k); }
+        return Err(_bj_ai_alloc_err("a daimon configuration"));
+    }
+    out.endpoint = e;
+    out.endpoint_len = endpoint_len;
+    out.api_key = k;
+    out.api_key_len = 0;
+    if (k != 0) { out.api_key_len = api_key_len; }
+    return Ok(0);
+}
+
+# The default daimon configuration in *out: endpoint `http://localhost:8090`, no API key. Ok(0), or Err(Allocation)
+# with out untouched. Mirrors `impl Default for DaimonConfig`.
+#must_use
+public fn BjDaimonConfig_default(out: *BjDaimonConfig): Result {
+    return BjDaimonConfig_new("http://localhost:8090", 21, 0, 0, out);
+}
+
+# Gives a daimon configuration's blocks back and empties it; a second call does nothing.
+public fn BjDaimonConfig_free(c: *BjDaimonConfig): i64 {
+    if (c.endpoint != 0) { fl_free(c.endpoint); }
+    if (c.api_key != 0) { fl_free(c.api_key); }
+    c.endpoint = 0;
+    c.endpoint_len = 0;
+    c.api_key = 0;
+    c.api_key_len = 0;
+    return 0;
+}
+
+impl BjDaimonConfig {
+    # Writes Rust's `{:?}` of the configuration to the text t, the key redacted:
+    # `DaimonConfig { endpoint: "http://localhost:8090", api_key: Some("<redacted>") }`, or `api_key: None`. The
+    # endpoint is written as Rust's `{:?}` of a str (its escapes). Mirrors `impl Debug for DaimonConfig`.
+    public fn debug(self, t) {
+        _bj_tx_cstr(t, "DaimonConfig { endpoint: ");
+        _bj_ts_debug_str(t, self.endpoint, self.endpoint_len);
+        if (self.api_key != 0) { _bj_tx_cstr(t, ", api_key: Some(\"<redacted>\") }"); }
+        else { _bj_tx_cstr(t, ", api_key: None }"); }
+        return 0;
+    }
+}
+
+# Appends `{"endpoint":"<endpoint>","api_key":"<key>"}` (`"api_key":null` for None) to the builder sb, each string with
+# serde_json's escapes, the key in clear: Ok(0), or Err(BJ_ERR_ALLOCATION) with sb as it was. Mirrors
+# `serde_json::to_string(&c)` for `ai::DaimonConfig`.
+#must_use
+public fn BjDaimonConfig_to_json(c: *BjDaimonConfig, sb): Result {
+    if (c.endpoint_len < 0 || c.endpoint_len > 268435456 || c.api_key_len < 0 || c.api_key_len > 268435456) {
+        return Err(_bj_jw_nobuf());
+    }
+    var buf = _bj_jw_buf(64 + 6 * (c.endpoint_len + c.api_key_len));
+    if (buf == 0) { return Err(BJ_ERR_ALLOCATION); }
+    var n = _bj_jw_cstr(buf, 0, "{\"endpoint\":");
+    n = _bj_jw_str(buf, n, c.endpoint, c.endpoint_len);
+    n = _bj_jw_cstr(buf, n, ",\"api_key\":");
+    if (c.api_key != 0) { n = _bj_jw_str(buf, n, c.api_key, c.api_key_len); }
+    else { n = _bj_jw_cstr(buf, n, "null"); }
+    n = _bj_jw_cstr(buf, n, "}");
+    return _bj_jw_put_free(sb, buf, n);
+}
+
+# A DaimonConfig node into the words at w (0 on entry): w[0..2] the endpoint's block and length, w[2..4] the key's
+# (0 for None). `api_key` is an Option<String>: missing or null is None (serde's derive reads a missing Option field
+# as None). 0, or the code recorded (the caller gives back the blocks).
+fn _bj_ai_config_dec(v, w): i64 {
+    var form = _bj_jr_form(v, 2, "struct DaimonConfig");
+    if (form == 0) { return BJ_ERR_DESERIALIZE; }
+    var f = _bj_jr_field(v, form, 0, "endpoint");
+    if (f == 0) { return BJ_ERR_DESERIALIZE; }
+    var c = _bj_jr_string(f, w);
+    if (c != 0) { return c; }
+    var k = 0;
+    if (form == 1) { k = bayan_json_v_obj_get_by_cstr(v, "api_key"); }
+    else { k = bayan_json_v_arr_get(v, 1); }
+    if (k == 0 || bayan_json_v_tag(k) == JTAG_NULL) { return 0; }
+    return _bj_jr_string(k, w + 16);
+}
+
+# Reads a `DaimonConfig` document from [buf, buf + len) into a new configuration in *out: Ok(0), or the error recorded
+# with out untouched (and never read), as BjComplex_from_json; `api_key` absent or null is None, a string Some, any
+# other type refused. Give it back with BjDaimonConfig_free. Mirrors `serde_json::from_str::<DaimonConfig>`.
+#must_use
+public fn BjDaimonConfig_from_json(buf, len, out: *BjDaimonConfig): Result {
+    var w: i64[4];
+    w[0] = 0;
+    w[1] = 0;
+    w[2] = 0;
+    w[3] = 0;
+    var code = _bj_jr_read(buf, len, &_bj_ai_config_dec, &w);
+    if (code != 0) {
+        if (w[0] != 0) { fl_free(w[0]); }
+        if (w[2] != 0) { fl_free(w[2]); }
+        return Err(code);
+    }
+    out.endpoint = w[0];
+    out.endpoint_len = w[1];
+    out.api_key = w[2];
+    out.api_key_len = w[3];
+    return Ok(0);
+}
+
+# ── HooshConfig ───────────────────────────────────────────────────────────────────────────────────────────────────
+
+# A hoosh configuration in *out from the endpoint's len bytes, copied: Ok(0), Err(InvalidParameter) for bytes that are
+# not UTF-8 ("hoosh endpoint is not valid UTF-8 (…)"), or Err(Allocation), with out untouched. Rust's struct literal.
+# Give it back with BjHooshConfig_free.
+#must_use
+public fn BjHooshConfig_new(endpoint, len, out: *BjHooshConfig): Result {
+    var be = _bj_ts_utf8_bad(endpoint, len);
+    if (be >= 0) { return Err(_bj_ai_not_utf8("hoosh endpoint", be)); }
+    var e = _bj_ai_copy(endpoint, len);
+    if (e == 0) { return Err(_bj_ai_alloc_err("a hoosh configuration")); }
+    out.endpoint = e;
+    out.endpoint_len = len;
+    return Ok(0);
+}
+
+# The default hoosh configuration in *out: endpoint `http://localhost:8088`. Ok(0), or Err(Allocation) with out
+# untouched. Mirrors `impl Default for HooshConfig`.
+#must_use
+public fn BjHooshConfig_default(out: *BjHooshConfig): Result {
+    return BjHooshConfig_new("http://localhost:8088", 21, out);
+}
+
+# Gives a hoosh configuration's block back and empties it; a second call does nothing.
+public fn BjHooshConfig_free(c: *BjHooshConfig): i64 {
+    if (c.endpoint != 0) { fl_free(c.endpoint); }
+    c.endpoint = 0;
+    c.endpoint_len = 0;
+    return 0;
+}
+
+impl BjHooshConfig {
+    # Writes Rust's derived `{:?}` to the text t: `HooshConfig { endpoint: "http://localhost:8088" }`. Mirrors
+    # `#[derive(Debug)]` on `HooshConfig`.
+    public fn debug(self, t) {
+        _bj_tx_cstr(t, "HooshConfig { endpoint: ");
+        _bj_ts_debug_str(t, self.endpoint, self.endpoint_len);
+        _bj_tx_cstr(t, " }");
+        return 0;
+    }
+}
+
+# Appends `{"endpoint":"<endpoint>"}` to the builder sb, with serde_json's escapes: Ok(0), or Err(BJ_ERR_ALLOCATION)
+# with sb as it was. Mirrors `serde_json::to_string(&c)` for `ai::HooshConfig`.
+#must_use
+public fn BjHooshConfig_to_json(c: *BjHooshConfig, sb): Result {
+    if (c.endpoint_len < 0 || c.endpoint_len > 268435456) { return Err(_bj_jw_nobuf()); }
+    var buf = _bj_jw_buf(32 + 6 * c.endpoint_len);
+    if (buf == 0) { return Err(BJ_ERR_ALLOCATION); }
+    var n = _bj_jw_cstr(buf, 0, "{\"endpoint\":");
+    n = _bj_jw_str(buf, n, c.endpoint, c.endpoint_len);
+    n = _bj_jw_cstr(buf, n, "}");
+    return _bj_jw_put_free(sb, buf, n);
+}
+
+# A HooshConfig node into w[0..2], the endpoint's block and length (0 on entry). 0, or the code recorded.
+fn _bj_ai_hoosh_dec(v, w): i64 {
+    var f = _bj_jr_only(v, "endpoint", "struct HooshConfig");
+    if (f == 0) { return BJ_ERR_DESERIALIZE; }
+    return _bj_jr_string(f, w);
+}
+
+# Reads a `HooshConfig` document from [buf, buf + len) into a new configuration in *out: Ok(0), or the error recorded
+# with out untouched (and never read), as BjComplex_from_json. Give it back with BjHooshConfig_free. Mirrors
+# `serde_json::from_str::<HooshConfig>`.
+#must_use
+public fn BjHooshConfig_from_json(buf, len, out: *BjHooshConfig): Result {
+    var w: i64[2];
+    w[0] = 0;
+    w[1] = 0;
+    var code = _bj_jr_read(buf, len, &_bj_ai_hoosh_dec, &w);
+    if (code != 0) {
+        if (w[0] != 0) { fl_free(w[0]); }
+        return Err(code);
+    }
+    out.endpoint = w[0];
+    out.endpoint_len = w[1];
+    return Ok(0);
+}
+
+# ── DaimonClient ──────────────────────────────────────────────────────────────────────────────────────────────────
+
+# A client for daimon in *out with its own copy of config and a 30 s request deadline: Ok(0), or Err(Allocation) with
+# out untouched (Rust's "failed to build HTTP client" has no counterpart: nothing is built until a request). Logged at
+# debug level (`creating daimon client endpoint=<endpoint>`; never the key). Give it back with BjDaimonClient_free.
+# Mirrors `DaimonClient::new`.
+#must_use
+public fn BjDaimonClient_new(config: *BjDaimonConfig, out: *BjDaimonClient): Result {
+    if (_bj_log_on(4) == 1) {
+        var lb[256];
+        var lt[24];
+        _bj_tx_init(&lt, &lb, 256);
+        _bj_tx_cstr(&lt, "creating daimon client endpoint=");
+        _bj_tx_cstr(&lt, config.endpoint);
+        _bj_log_text(4, &lt);
+    }
+    var oc: *BjDaimonConfig = _bj_ai_cfgp(out);
+    var t, v = BjDaimonConfig_new(config.endpoint, config.endpoint_len, config.api_key, config.api_key_len, oc);
+    if (is_err_result(t) == 1) { return Err(v); }
+    out.timeout_ms = _BJ_AI_TIMEOUT_MS;
+    return Ok(0);
+}
+
+# Gives a client's blocks back and empties it; a second call does nothing.
+public fn BjDaimonClient_free(c: *BjDaimonClient): i64 {
+    var cfg: *BjDaimonConfig = _bj_ai_cfgp(c);
+    BjDaimonConfig_free(cfg);
+    return 0;
+}
+
+# The client at c's configuration (its first field).
+#must_use
+fn _bj_ai_cfgp(c): *BjDaimonConfig {
+    return c;
+}
+
+# Records Transport "daimon: <what>"; returns its code.
+fn _bj_ai_fail(what): i64 {
+    var t = _bj_err_reason(BJ_ERR_TRANSPORT);
+    _bj_tx_cstr(t, "daimon: ");
+    _bj_tx_cstr(t, what);
+    return BJ_ERR_TRANSPORT;
+}
+
+# Records Transport "daimon: registration request failed: <sandhi's kind> (<its message>)"; returns its code.
+fn _bj_ai_request_failed(kind, msg): i64 {
+    var t = _bj_err_reason(BJ_ERR_TRANSPORT);
+    _bj_tx_cstr(t, "daimon: registration request failed: ");
+    _bj_tx_cstr(t, sandhi_err_kind_name(kind));
+    if (kind == SANDHI_ERR_PROTOCOL) { _bj_tx_cstr(t, " (a malformed response, or one past 1114112 bytes)"); }
+    elif (msg != 0) {
+        _bj_tx_cstr(t, " (");
+        _bj_tx_cstr(t, msg);
+        _bj_tx_putc(t, 41);
+    }
+    return BJ_ERR_TRANSPORT;
+}
+
+# daimon's answer to a registration, the HTTP status and the body [body, body + n), into the text t: the integer `id`
+# of the JSON object it holds, as its decimal text. Ok(0), or Err(Transport) with Rust's reasons: "daimon:
+# registration rejected: HTTP status <status>" for a status outside 200..=299, "daimon: response body exceeds 1048576
+# bytes", "daimon: invalid registration response: <the JSON reader's reason>" for a body that is no JSON (ADR 0002
+# rows 11 and 12 apply) and "daimon: registration response missing id field" for one with no integer `id` (row 46:
+# Rust read a string `agent_id`). Split from register_agent so each branch runs without a server.
+#must_use
+public fn _bj_ai_register_response(status, body, n, t): Result {
+    if (status < 200 || status > 299) {
+        var e = _bj_err_reason(BJ_ERR_TRANSPORT);
+        _bj_tx_cstr(e, "daimon: registration rejected: HTTP status ");
+        _bj_tx_i64(e, status);
+        return Err(BJ_ERR_TRANSPORT);
+    }
+    if (n > _BJ_AI_MAX_RESPONSE) { return Err(_bj_ai_fail("response body exceeds 1048576 bytes")); }
+    var rg[64];
+    var a = _bj_jr_open(&rg);
+    var doc = _bj_jr_doc(a, body, n);
+    if (doc == 0) {
+        _bj_jr_close(&rg);
+        if (bj_last_error() == BJ_ERR_ALLOCATION) { return Err(BJ_ERR_ALLOCATION); }
+        var why[256];
+        var wt[24];
+        _bj_tx_init(&wt, &why, 256);
+        _bj_tx_cstr(&wt, bj_last_error_detail());
+        var e2 = _bj_err_reason(BJ_ERR_TRANSPORT);
+        _bj_tx_cstr(e2, "daimon: invalid registration response: ");
+        _bj_tx_cstr(e2, _bj_tx_ptr(&wt));
+        return Err(BJ_ERR_TRANSPORT);
+    }
+    var id = 0;
+    if (bayan_json_v_tag(doc) == JTAG_OBJ) { id = bayan_json_v_obj_get_by_cstr(doc, "id"); }
+    var ok = 0;
+    var num = 0;
+    if (id != 0 && bayan_json_v_tag(id) == JTAG_INT) {
+        ok = 1;
+        num = bayan_json_v_int(id);
+    }
+    _bj_jr_close(&rg);
+    if (ok == 0) { return Err(_bj_ai_fail("registration response missing id field")); }
+    _bj_tx_i64(t, num);
+    return Ok(0);
+}
+
+impl BjDaimonClient {
+    # The client's configuration. Mirrors `DaimonClient::config`.
+    #must_use
+    public fn config(self): *BjDaimonConfig {
+        return _bj_ai_cfgp(self);
+    }
+
+    # Writes the client's `{:?}` to the text t, the key redacted: `DaimonClient { config: DaimonConfig { endpoint:
+    # "…", api_key: Some("<redacted>") }, timeout: 30s }` (Rust's also prints reqwest's internals, which the port has
+    # none of). Mirrors `#[derive(Debug)]` on `DaimonClient`.
+    public fn debug(self, t) {
+        _bj_tx_cstr(t, "DaimonClient { config: ");
+        var cfg: *BjDaimonConfig = _bj_ai_cfgp(self);
+        cfg.debug(t);
+        _bj_tx_cstr(t, ", timeout: ");
+        _bj_tx_i64(t, self.timeout_ms / 1000);
+        _bj_tx_cstr(t, "s }");
+        return 0;
+    }
+
+    # Registers bijli as an agent with daimon and writes the assigned id's decimal text to the text t (ADR 0002 row
+    # 46: daimon's route). Sends `POST {endpoint}/v1/agents` (the endpoint's trailing slashes dropped, as Rust's
+    # `trim_end_matches('/')`) with Rust's body `{"capabilities":["electric_fields","magnetic_fields","maxwell",
+    # "charge_dynamics"],"name":"bijli"}` (serde_json's `json!` sorts the keys), `content-type: application/json`, and
+    # `Authorization: Bearer <key>` when a key is set; one exchange within the 30 s deadline, no redirect followed.
+    # Ok(0), or Err(Transport): "daimon: registration request failed: …" where the request can't be made (an endpoint
+    # or key holding a control byte, which can't go into a URL or a header; sandhi's CONNECT, TIMEOUT, TLS, PARSE or
+    # PROTOCOL) and the response's failures as _bj_ai_register_response gives them. Every block of the exchange comes
+    # from a decode region given back before it returns. Mirrors `DaimonClient::register_agent`.
+    public fn register_agent(self, t): Result {
+        var cfg: *BjDaimonConfig = _bj_ai_cfgp(self);
+        var en = cfg.endpoint_len;
+        while (en > 0 && load8(cfg.endpoint + en - 1) == 47) { en = en - 1; }
+        if (_bj_log_on(4) == 1) {
+            var lb[256];
+            var lt[24];
+            _bj_tx_init(&lt, &lb, 256);
+            _bj_tx_cstr(&lt, "registering agent with daimon endpoint=");
+            _bj_tx_cstr(&lt, cfg.endpoint);
+            _bj_log_text(4, &lt);
+        }
+        if (_bj_ai_has_control(cfg.endpoint, en) == 1) {
+            return Err(_bj_ai_fail("registration request failed: the endpoint holds a control byte"));
+        }
+        if (cfg.api_key != 0 && _bj_ai_has_control(cfg.api_key, cfg.api_key_len) == 1) {
+            return Err(_bj_ai_fail("registration request failed: the API key holds a control byte"));
+        }
+        var rg[64];
+        var a = _bj_jr_open(&rg);
+        var url = alloc_via(a, en + 16);
+        var body = alloc_via(a, 112);
+        var auth = 0;
+        if (cfg.api_key != 0) { auth = alloc_via(a, cfg.api_key_len + 8); }
+        if (url == 0 || body == 0 || (cfg.api_key != 0 && auth == 0)) {
+            _bj_jr_close(&rg);
+            return Err(_bj_ai_alloc_err("a daimon registration request"));
+        }
+        memcpy(url, cfg.endpoint, en);
+        memcpy(url + en, "/v1/agents", 10);
+        store8(url + en + 10, 0);
+        var bn = _bj_jw_cstr(body, 0, "{\"capabilities\":[\"electric_fields\",\"magnetic_fields\",");
+        bn = _bj_jw_cstr(body, bn, "\"maxwell\",\"charge_dynamics\"],\"name\":\"bijli\"}");
+        var h = sandhi_headers_new_a(a);
+        sandhi_headers_set_a(a, h, "content-type", "application/json");
+        if (auth != 0) {
+            memcpy(auth, "Bearer ", 7);
+            memcpy(auth + 7, cfg.api_key, cfg.api_key_len);
+            store8(auth + 7 + cfg.api_key_len, 0);
+            sandhi_headers_set_a(a, h, "authorization", auth);
+        }
+        var opts = sandhi_http_options_new_a(a);
+        sandhi_http_options_total_ms(opts, self.timeout_ms);
+        sandhi_http_options_max_response_bytes(opts, _BJ_AI_MAX_READ);
+        var resp = sandhi_http_post_opts_a(a, url, h, body, bn, opts);
+        var kind = sandhi_http_err_kind(resp);
+        if (resp == 0 || kind != SANDHI_OK) {
+            var k2 = SANDHI_ERR_INTERNAL;
+            var msg = 0;
+            if (resp != 0) {
+                k2 = kind;
+                msg = sandhi_http_err_message(resp);
+            }
+            var code = _bj_ai_request_failed(k2, msg);
+            _bj_jr_close(&rg);
+            return Err(code);
+        }
+        var tr, vr = _bj_ai_register_response(sandhi_http_status(resp), sandhi_http_body(resp),
+          sandhi_http_body_len(resp), t);
+        _bj_jr_close(&rg);
+        if (is_err_result(tr) == 1) { return Err(vr); }
+        if (_bj_log_on(4) == 1) {
+            var lb2[256];
+            var lt2[24];
+            _bj_tx_init(&lt2, &lb2, 256);
+            _bj_tx_cstr(&lt2, "registered with daimon agent_id=");
+            _bj_tx_cstr(&lt2, _bj_tx_ptr(t));
+            _bj_log_text(4, &lt2);
+        }
+        return Ok(0);
+    }
+}

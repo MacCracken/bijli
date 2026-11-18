@@ -47,7 +47,7 @@ sim.run(500, Some((100, 100)), 3e9, 1.0);
 | `bridge` | Yes | Cross-crate bridges: primitive values to and from ushma, prakash, tanmatra and dravya |
 | `soorat` | Yes | Visualization data for soorat: FDTD field slices, field lines, charges, radiation patterns, vector fields |
 | `compute` | No | Compute backend trait + CPU reference backend (wgpu backend is a scaffold) |
-| `ai` | No | Daimon/hoosh AI integration |
+| `ai` | No | The daimon/hoosh client: the `[lib.ai]` profile (`dist/bijli-ai.cyr`, with sandhi's HTTP/TLS) |
 | `logging` | No | Structured logging via `BIJLI_LOG` |
 
 ## Consumers

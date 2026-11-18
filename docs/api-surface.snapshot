@@ -1,3 +1,15 @@
+ai::BjDaimonClient_free/1
+ai::BjDaimonClient_new/2
+ai::BjDaimonConfig_default/1
+ai::BjDaimonConfig_free/1
+ai::BjDaimonConfig_from_json/3
+ai::BjDaimonConfig_new/5
+ai::BjDaimonConfig_to_json/2
+ai::BjHooshConfig_default/1
+ai::BjHooshConfig_free/1
+ai::BjHooshConfig_from_json/3
+ai::BjHooshConfig_new/3
+ai::BjHooshConfig_to_json/2
 alloc::alloc/1
 alloc::alloc_init/0
 alloc::alloc_reset/0

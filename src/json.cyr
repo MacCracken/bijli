@@ -65,7 +65,7 @@ private
 # ── writers ─────────────────────────────────────────────────────────────────────────
 
 # Appends the C string s at buf + n; the new length.
-fn _bj_jw_cstr(buf, n, s): i64 {
+public fn _bj_jw_cstr(buf, n, s): i64 {
     var k = strlen(s);
     memcpy(buf + n, s, k);
     return n + k;
@@ -113,7 +113,7 @@ fn _bj_jw_quad(buf, n, p): i64 {
 # Appends the document [buf, buf + n) to the builder sb in one grow: Ok(0), or Err(BJ_ERR_ALLOCATION) with sb as it
 # was.
 #must_use
-fn _bj_jw_put(sb, buf, n): Result {
+public fn _bj_jw_put(sb, buf, n): Result {
     store8(buf + n, 0);
     if (str_builder_add_cstr_a(default_alloc(), sb, buf) != 0) {
         var t = _bj_err_reason(BJ_ERR_ALLOCATION);
@@ -539,7 +539,7 @@ fn _bj_jr_reset(st): i64 {
 }
 
 # Makes the region at rg empty; its allocator is rg + 24.
-fn _bj_jr_open(rg): i64 {
+public fn _bj_jr_open(rg): i64 {
     store64(rg, 0);
     store64(rg + 8, 0);
     store64(rg + 16, 0);
@@ -552,7 +552,7 @@ fn _bj_jr_open(rg): i64 {
 }
 
 # Gives the region's memory back.
-fn _bj_jr_close(rg): i64 {
+public fn _bj_jr_close(rg): i64 {
     return _bj_jr_reset(rg);
 }
 
@@ -691,7 +691,7 @@ fn _bj_jr_syntax(msg, pos): i64 {
 # The value tree of the JSON text [buf, buf + len), on the region whose allocator is `a`, or 0 with the error
 # recorded (BJ_ERR_DESERIALIZE; BJ_ERR_ALLOCATION when the region can't grow). Of a string defect the scan noted and
 # bayan's own error, the earlier in the text is reported.
-fn _bj_jr_doc(a, buf, len): i64 {
+public fn _bj_jr_doc(a, buf, len): i64 {
     if (buf == 0 || len < 0) {
         _bj_jr_syntax("no document", 0);
         return 0;
@@ -771,7 +771,7 @@ fn _bj_jr_starts(s, p): i64 {
 
 # serde's name for the JSON type of node v, as its "invalid type" message gives it.
 #must_use
-fn _bj_jr_kind(v): i64 {
+public fn _bj_jr_kind(v): i64 {
     var tag = bayan_json_v_tag(v);
     if (tag == JTAG_NULL) { return "null"; }
     if (tag == JTAG_BOOL) { return "boolean"; }
@@ -783,7 +783,7 @@ fn _bj_jr_kind(v): i64 {
 }
 
 # Records `invalid type: <kind of v>, expected <what>`. Returns BJ_ERR_DESERIALIZE.
-fn _bj_jr_type(v, what): i64 {
+public fn _bj_jr_type(v, what): i64 {
     var t = _bj_err_reason(BJ_ERR_DESERIALIZE);
     _bj_tx_cstr(t, "invalid type: ");
     _bj_tx_cstr(t, _bj_jr_kind(v));
@@ -848,7 +848,7 @@ fn _bj_jr_f64s(v, n, what, out): i64 {
 
 # The form of struct node v with n fields: 1 an object, 2 an array of exactly n elements (serde's sequence form), or
 # 0 with BJ_ERR_DESERIALIZE recorded (`what` names the struct: "struct FieldVector").
-fn _bj_jr_form(v, n, what): i64 {
+public fn _bj_jr_form(v, n, what): i64 {
     var tag = bayan_json_v_tag(v);
     if (tag == JTAG_OBJ) { return 1; }
     if (tag != JTAG_ARR) {
@@ -871,7 +871,7 @@ fn _bj_jr_form(v, n, what): i64 {
 }
 
 # Field i, named `name`, of struct node v in `form`: its node, or 0 with `missing field` recorded.
-fn _bj_jr_field(v, form, i, name): i64 {
+public fn _bj_jr_field(v, form, i, name): i64 {
     var f = 0;
     if (form == 1) { f = bayan_json_v_obj_get_by_cstr(v, name); }
     else { f = bayan_json_v_arr_get(v, i); }
@@ -893,7 +893,7 @@ fn _bj_jr_f64_struct(v, names, n, what, out): i64 {
 }
 
 # Reads the document [buf, buf + len) with decoder `dec(node, words)` into the n words at w: 0, or the code recorded.
-fn _bj_jr_read(buf, len, dec, w): i64 {
+public fn _bj_jr_read(buf, len, dec, w): i64 {
     var rg[64];
     var a = _bj_jr_open(&rg);
     var code = BJ_ERR_DESERIALIZE;
@@ -949,7 +949,7 @@ fn _bj_jr_point_charge(v, w): i64 {
 }
 
 # The one field, named `name`, of struct node v (`what` names the struct): its node, or 0 with the reason recorded.
-fn _bj_jr_only(v, name, what): i64 {
+public fn _bj_jr_only(v, name, what): i64 {
     var form = _bj_jr_form(v, 1, what);
     if (form == 0) { return 0; }
     return _bj_jr_field(v, form, 0, name);
@@ -1950,7 +1950,7 @@ var _BJ_JW_MAX = 268435456;
 # Appends the bytes [s, s + k) as a JSON string, escaped as serde_json escapes it: `"` and `\` after a backslash, the
 # control bytes U+0000..U+001F as `\b` `\t` `\n` `\f` `\r` or `\u00xx` (lowercase hex), every other byte as it is
 # (UTF-8 passes through; U+007F is not escaped); the new length (at most 6k + 2 bytes more).
-fn _bj_jw_str(buf, n, s, k): i64 {
+public fn _bj_jw_str(buf, n, s, k): i64 {
     var m = n;
     store8(buf + m, 34);
     m = m + 1;
@@ -2028,13 +2028,13 @@ fn _bj_jw_triples(buf, n, p, k): i64 {
 }
 
 # Records Allocation for a writer's buffer; returns its code.
-fn _bj_jw_nobuf(): i64 {
+public fn _bj_jw_nobuf(): i64 {
     _bj_tx_cstr(_bj_err_reason(BJ_ERR_ALLOCATION), "the JSON document's buffer");
     return BJ_ERR_ALLOCATION;
 }
 
 # A writer's buffer of `bytes` bytes (fl_alloc), or 0 with Allocation recorded.
-fn _bj_jw_buf(bytes): i64 {
+public fn _bj_jw_buf(bytes): i64 {
     var b = fl_alloc(bytes);
     if (b == 0) { _bj_jw_nobuf(); }
     return b;
@@ -2061,7 +2061,7 @@ fn _bj_jw_count_ok(n): i64 {
 
 # Appends buf's document [buf, buf + n) to sb and gives buf back: Ok(0), or Err(BJ_ERR_ALLOCATION) with sb as it was.
 #must_use
-fn _bj_jw_put_free(sb, buf, n): Result {
+public fn _bj_jw_put_free(sb, buf, n): Result {
     var t, v = _bj_jw_put(sb, buf, n);
     fl_free(buf);
     if (is_err_result(t) == 1) { return Err(v); }
@@ -2336,7 +2336,7 @@ fn _bj_jr_usizes(v, k, out): i64 {
 
 # String node v (a Rust `String`: JSON's escapes decoded, UTF-8) into a new block holding its bytes and a NUL: the
 # address into w[0], the byte count into w[1]. 0, or the code recorded.
-fn _bj_jr_string(v, w: *i64): i64 {
+public fn _bj_jr_string(v, w: *i64): i64 {
     if (bayan_json_v_tag(v) != JTAG_STR) { return _bj_jr_type(v, "a string"); }
     var s = bayan_json_v_str(v);
     var n = str_len(s);
