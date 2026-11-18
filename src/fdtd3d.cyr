@@ -83,24 +83,21 @@ public struct BjFdtd3d {
 }
 
 # One row of a curl update: d[i] += k[i]·((a[i] − ap[i]) − (b[i] − bp[i])) for i < n, Rust's `f[i] += c[i] * (da −
-# db)` for each of the six components, on the packed f64v_sub, f64v_mul and f64v_add through the scratch rows w and w2
-# on the largest multiple of 4, then a scalar tail (probe p19).
+# db)` for each of the six components, on the packed f64v_sub, f64v_mul and f64v_add through the scratch rows w (the
+# inner difference) and w2 (the product) on the largest multiple of 4, then a scalar tail (probe p19). Each cell at a
+# range edge is rerun with an unbounded exponent between the multiply and the add (_bj_e_curl_fix; ADR 0002 row 18,
+# M6 part 4d), the 2D curl kernel's rule.
 fn _bj_fd3_curl(d: *f64, k: *f64, a: *f64, ap: *f64, b: *f64, bp: *f64, w: *f64, w2: *f64, n) {
     var m = n & (0 - 4);
     if (m > 0) {
         f64v_sub(w, a, ap, m);
         f64v_sub(w2, b, bp, m);
         f64v_sub(w, w, w2, m);
-        f64v_mul(w, k, w, m);
-        f64v_add(d, d, w, m);
+        f64v_mul(w2, k, w, m);
+        _bj_e_curl_fix(d, k, a, ap, b, bp, w, w2, m, 0);
+        f64v_add(d, d, w2, m);
     }
-    for (var i = m; i < n; i = i + 1) {
-        var da: f64 = a[i] - ap[i];
-        var db: f64 = b[i] - bp[i];
-        var dd: f64 = da - db;
-        var v: f64 = k[i] * dd;
-        d[i] = d[i] + v;
-    }
+    for (var i = m; i < n; i = i + 1) { d[i] = _bj_e_curl_one(d[i], k[i], a[i], ap[i], b[i], bp[i], 0); }
     return 0;
 }
 

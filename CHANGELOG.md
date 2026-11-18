@@ -617,6 +617,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
   curl form (`src/crmath_edge.cyr`'s `_bj_e_diff_fix`, `_bj_e_curl_fix`, `_bj_e_curl`); a marked cell reruns with an
   unbounded exponent. validate.py's `fd_diff18` and `fd_curl18` model the rule in `Fd2` and the CPU kernels;
   `fdtd_2d3d.adr.tsv` maps 1,540 rows (row 18: 161), and `emit.py`'s `emit_4c` appends 204 rows (2,150).
+- **Cyrius port, M6 part 4d — the 3D updates on the per-cell rule** (ADR 0002 row 18 amended): `src/fdtd3d.cyr`'s
+  `_bj_fd3_curl`, the six curl updates of `Fdtd3d`, keeps its inner difference and its product in two scratch rows and
+  scans the product row between the multiply and the add with the 2D curl kernel's marker (`_bj_e_curl_fix`, which now
+  takes the a' row as its own pointer); its scalar tail is `_bj_e_curl_one`. validate.py's `Fd3` runs `fd_curl18` under
+  row 18; `fdtd_2d3d.adr.tsv` maps 1,625 rows (row 18: 220), and `emit.py`'s `emit_4d` appends 95 rows (2,245).
 
 ### Fixed
 
@@ -1197,6 +1202,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
   to −0 (the exact sum's −0). Each such cell now runs its update with an unbounded exponent. Cost: the per-cell scan,
   `fdtd/2d_step_100x100_tm` 45.7–50.4 → 113.4–135.0 µs (2.5–2.7×), `fdtd/gpu_fdtd2d_step_100x100_cpu` 46.6–48.4 →
   114.3–120.2 µs, `fdtd/2d_run_50_steps_80x80` 1.74–1.82 → 5.18–5.55 ms (3.0×) (`port-parity.md` §127).
+- **fdtd** (ADR 0002 row 18 amended, M6 part 4d): the 3D grid's updates gave ±∞ where a field's neighbours differed by
+  more than DBL_MAX (H_y = −∞ for −2.755·10³⁰⁵ beside ±DBL_MAX on E_z, then E_z = −∞ for 1.049·10³⁰⁸; with ε_r = 1000
+  and μ_r = 1.28·10⁻³, E_z = ∞ for −6.063·10³⁰⁷ where the curl alone passed DBL_MAX), lost bits where a product fell
+  below 2^-1022, and left +0 where the exact sum is −0. Each such cell now runs its update with an unbounded exponent.
+  Cost: the per-cell scan, `fdtd/3d_step_30x30x30` 608–624 → 1,114–1,146 µs (1.83×),
+  `fdtd/3d_step_30x30x30_cpml8` 2.30–2.33 → 2.73–2.78 ms (1.19×; the CPML's slabs follow in part 4e)
+  (`port-parity.md` §128).
 
 ### Performance
 

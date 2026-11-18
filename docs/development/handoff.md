@@ -9,7 +9,7 @@ bite is done, the machinery, the scripts and the traps. Delete it once it has se
 
 ## Where it stands
 
-- **Committed through `c9de733`** ("m6 pt4b done"); part 4c is in the working tree for the user to commit.
+- **Committed through `94a6cb4`** ("m6 pt4c done"); part 4d is in the working tree for the user to commit.
 - **M6 Part 1** (the 2D CPML and `Fdtd2d`, §116–§119) runs in bites. Done: 1a the CPML layer (`src/cpml.cyr`); 1b-1
   `Fdtd2d` without the CPML (`src/fdtd2d.cyr`; its scripts `Fdtd2d::script` in `fdtd_2d3d.tsv`, replayed by
   validate.py's `Fd2Scripts` in pure Python, no NumPy on the host); 1b-2 the CPML attached (the y-strips packed, the
@@ -30,7 +30,9 @@ bite is done, the machinery, the scripts and the traps. Delete it once it has se
   `fd23_runs` replays the `Cpml::` rows; `emit_4b`), 4c (done, §127: `_bj_e_diff_fix` and `_bj_e_curl_fix` in
   `_bj_fd2_diff` and `_bj_fd2_curl`, so the CPU kernels follow; validate.py's `fd_diff18`, `fd_curl18`; `emit_4c`: the
   subtract form is the add form with −k, the curl form's marker the product's with w = Δa − Δb ≠ 0 as the factor test),
-  then 4d the 3D updates (`_bj_fd3_curl`'s rows in `_bj_e_curl_fix`'s form), 4e the CPML corrections (two statements a
+  4d the 3D updates (done, §128: `_bj_fd3_curl` on `_bj_e_curl_fix`, which takes a' as its own row; validate.py's
+  `Fd3.curl18`; `emit_4d`: the E rows' edges need ε_r and μ_r that scale C_e and C_h, since C_e·ΔH can't pass DBL_MAX
+  at unit materials), then 4e the CPML corrections (two statements a
   cell: Ψ ← bΨ + cΔ, then f += (s·k)·(km1·Δ + Ψ); a product's marker tests it against the other addend, as
   `_bj_e_cell_edge` against d; Ψ's geometric decay makes b·Ψ subnormal in quiet layers), 4f `total_energy` (the 1D's
   `_bj_fd1_energy_ux` pattern) and `run`'s source (`_bj_fd1_source_ux`, to share) in the three grids. Then M6 is done.
@@ -76,18 +78,18 @@ bite is done, the machinery, the scripts and the traps. Delete it once it has se
     Rust's chain where every operation is its 53-bit value (mode 0, checked per sample by one exponent test and per
     angle), else the call or the angle unbounded (`_bj_nf_angle_ux`); a non-finite field keeps Rust's (row 18, §114).
     **Part 2 is done.**
-- **Numbers after M6 part 4c**: 19 modules, 644,178 ok, 0 failed, 123,404 accepted (ADR 01: 43,087; ADR 0002:
-  80,317) over 767,582 rows; 488 digests equal on x86_64 ELF, x86_64 PE and aarch64. Ledger 778 ported, 12 n/a, 68
+- **Numbers after M6 part 4d**: 19 modules, 644,188 ok, 0 failed, 123,489 accepted (ADR 01: 43,087; ADR 0002:
+  80,402) over 767,677 rows; 488 digests equal on x86_64 ELF, x86_64 PE and aarch64. Ledger 778 ported, 12 n/a, 68
   pending of 858; API snapshot 2,139; surface parity 653 items (15 modules); benches 80 of 80 twinned; execution
   coverage 394 of 394. `json.tsv` is 40.7 MB of the 48 MiB cap: the rest of M6 adds no JSON (`Fdtd3d` and compute.rs
   have no serde), but M7's eight serde types (integration/) will want their own module.
 - **M5 is done** (§115). The benchmark record's Cyrius column is each row's least of four full runs: rows vary up to
   1.5× between runs under other repos' loads, so take the least of several when regenerating it.
-- **Next**: part 4d, the 3D updates (above: `_bj_fd3_curl`'s rows take `_bj_e_curl_fix`'s form).
+- **Next**: part 4e, the CPML corrections (above: the 2D strips' and the 3D slabs' two statements a cell).
   `nf2ff_2d` (the snapshot form) calls `_bj_nf_core` with the rotation (1, 0) and k from `_bj_nf_validate` on its
   double frequency (`_bj_k_ux_from`): the core's range edges come with it.
 - **Corpus size**: `fdtd.tsv` is 38.8 MB (107,341 rows) and `json.tsv` 40.7 MB, against the 48 MiB cap that
-  validate.py's `too_big` guards (§81); M6's rows are in `fdtd_2d3d.tsv` (3.2 MB after 4b).
+  validate.py's `too_big` guards (§81); M6's rows are in `fdtd_2d3d.tsv` (3.6 MB after 4d).
 - **A recorded cost**: the 1D step runs 3.5–3.8× HEAD's with 2d-2a's scan (§107), the TF/SF step about 2× with
   2d-3's (§109) and `accumulate` about 3× with 2d-4a's (§110). The user chose that fix; I had estimated 1.5–2×.
   Cyrius 6.7.18 has no vector verb that classifies a lane (plan §10, listed as a gap). M6's grids will pay the same.
@@ -357,6 +359,10 @@ Rust 1.2.0's sources for reading: `git show 1.2.0:src/fdtd.rs > $S/fdtd.rs` (and
   `vm.max_map_count` is that limit; the PE check needs it raised (the user's call: it is a system setting). The user
   raised it to 2,147,483,642 (`sudo sysctl -w vm.max_map_count=2147483642`, which lasts until a reboot) and the run
   passed; check `cat /proc/sys/vm/max_map_count` before a PE run, until the allocator is fixed upstream.
+- **The aarch64 test timeout under load** (2026-11-17, part 4d): `cyrius test --aarch64` kills a file at `[test]
+  timeout = 300` s, and under another repo's gate (load 9–11) it killed `fdtd3d.tcyr` in `cpml3d_reflection`, which
+  takes 36 s alone under qemu. Before reading a "killed by signal 15" as a defect, time the file alone (`cyrius test
+  --aarch64 --timeout 1800 tests/<file>.tcyr`, HEAD's tree beside it) and rerun the suite when the load drops.
 
 ## Standing preferences (also in the memory directory)
 

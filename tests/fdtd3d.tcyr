@@ -784,6 +784,61 @@ fn main() {
     assert(ro2t == ro2tw, "a step of 2^53 + 1,120,445: step·dt rounded once (Rust's an ulp below)");
     BjFdtd3d_free(&ro2);
 
+    # ADR 0002 row 18 (M6 part 4d): a cell whose curl update leaves the normal range runs it with an unbounded
+    # exponent, in a row's packed part and its scalar tail. The expectations are validate.py's model of the port.
+    test_group("cyrius_update_edges");
+    var mxv: f64 = _bj_from_bits(0x7fefffffffffffff);
+    var nmx: f64 = -mxv;
+    var ue1: BjFdtd3d;
+    var tue1, vue1 = BjFdtd3d_new(9, 7, 7, 0.001, &ue1);
+    ue1.add_source_ez(4, 3, 3, mxv);
+    ue1.add_source_ez(5, 3, 3, nmx);
+    ue1.add_source_ez(8, 3, 3, mxv);
+    ue1.add_source_ez(8, 4, 3, nmx);
+    ue1.step_once();
+    var ue1y: f64 = at(ue1.hy, ue1.idx(4, 3, 3));
+    var ue1yp: f64 = _bj_from_bits(0x7f591be4e0c5a66b);
+    var ue1yw: f64 = -ue1yp;
+    var ue1x: f64 = at(ue1.hx, ue1.idx(8, 3, 3));
+    var ue1z: f64 = at(ue1.ez, ue1.idx(4, 3, 3));
+    var ue1zw: f64 = _bj_from_bits(0x7fe2aaaaaaaaaa06);
+    assert(is_ok(tue1) == 1 && ue1y == ue1yw && ue1x == ue1yp && ue1z == ue1zw,
+      "ΔE_z past DBL_MAX: H_y −2.755·10³⁰⁵ (packed), H_x 2.755·10³⁰⁵ (tail), E_z 1.0487·10³⁰⁸ (Rust's −∞, ∞, −∞)");
+    BjFdtd3d_free(&ue1);
+    var ue2: BjFdtd3d;
+    var tue2, vue2 = BjFdtd3d_new(9, 7, 7, 0.001, &ue2);
+    var ue2m: f64 = _bj_from_bits(0x3f54f8b588e368f1);
+    var hmx: f64 = _bj_from_bits(0x7fe0000000000000);
+    var nhmx: f64 = -hmx;
+    var tue2e, vue2e = ue2.set_permittivity(0, 0, 0, 9, 7, 7, 1000.0);
+    var tue2m, vue2m = ue2.set_permeability(0, 0, 0, 9, 7, 7, ue2m);
+    ue2.add_source_ez(6, 3, 3, hmx);
+    ue2.add_source_ez(7, 3, 3, nhmx);
+    ue2.step_once();
+    var ue2y: f64 = at(ue2.hy, ue2.idx(6, 3, 3));
+    var ue2yp: f64 = _bj_from_bits(0x7fe328180ebccb88);
+    var ue2yw: f64 = -ue2yp;
+    var ue2z: f64 = at(ue2.ez, ue2.idx(7, 3, 3));
+    var ue2zp: f64 = _bj_from_bits(0x7fd59555555554d6);
+    var ue2zw: f64 = -ue2zp;
+    assert(is_ok(tue2) == 1 && is_ok(tue2e) == 1 && is_ok(tue2m) == 1 && ue2y == ue2yw && ue2z == ue2zw,
+      "ε_r 1000, μ_r 1.28·10⁻³: H_y −1.0762·10³⁰⁸, then a tail curl past DBL_MAX, E_z −6.0625·10³⁰⁷ (Rust's −∞, ∞)");
+    BjFdtd3d_free(&ue2);
+    var ue3: BjFdtd3d;
+    var tue3, vue3 = BjFdtd3d_new(9, 7, 7, 0.001, &ue3);
+    var tn: f64 = _bj_from_bits(1);
+    var ntn: f64 = -tn;
+    ue3.add_source_ez(4, 3, 3, tn);
+    ue3.add_source_ez(5, 3, 3, ntn);
+    ue3.step_once();
+    var ue3y: f64 = at(ue3.hy, ue3.idx(4, 3, 3));
+    var ue3x: f64 = at(ue3.hx, ue3.idx(4, 2, 3));
+    var ue3x5: f64 = at(ue3.hx, ue3.idx(5, 3, 3));
+    var negz = 0 - 9223372036854775807 - 1;
+    assert(is_ok(tue3) == 1 && _bj_k_bits(ue3y) == negz && _bj_k_bits(ue3x) == negz && _bj_k_bits(ue3x5) == negz,
+      "products of 2^-1074 differences round to −0: the exact sums' −0 (Rust's +0 + −0 gave +0)");
+    BjFdtd3d_free(&ue3);
+
     return assert_summary();
 }
 

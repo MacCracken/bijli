@@ -11381,11 +11381,16 @@ class Fd3:
         """`d += k·((a1 − a0) − (b1 − b0))` over the rows' common length."""
         return [v + q * ((p1 - p0) - (r1 - r0)) for v, q, p1, p0, r1, r0 in zip(d, k, a1, a0, b1, b0)]
 
+    @staticmethod
+    def curl18(d, k, a1, a0, b1, b0):
+        """`curl` with each cell at its range edge on the port's rule (ADR 0002 row 18, M6 part 4d): fd_curl18."""
+        return [fd_curl18(v, q, p1, p0, r1, r0, False) for v, q, p1, p0, r1, r0 in zip(d, k, a1, a0, b1, b0)]
+
     def step_once(self):
         nx, ny, nz = self.nx, self.ny, self.nz
         nxy = nx * ny
         ex, ey, ez, hx, hy, hz, ce, ch = self.ex, self.ey, self.ez, self.hx, self.hy, self.hz, self.ce, self.ch
-        cu = Fd3.curl
+        cu = Fd3.curl18 if "18" in self.port else Fd3.curl
         for z in range(nz - 1):
             for y in range(ny - 1):
                 r = z * nxy + y * nx

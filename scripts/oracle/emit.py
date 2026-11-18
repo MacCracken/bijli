@@ -557,6 +557,45 @@ def emit_4c(rows, m2, mg):
             kernel(rows, 2, nx, ny, 0, (n, n, n, n), -seed)
 
 
+def emit_4d(rows, m3):
+    """M6 part 4d (ADR 0002 row 18): the 3D grid's six curl updates at their range edges: neighbours of ±DBL_MAX, of
+    2^-1074 to 2^-1022 and of opposite signs on E_z (H_x and H_y from it, then E_x, E_y and E_z from H, then H_z), on
+    a grid whose rows have a packed part and a scalar tail; ±0 fields under subnormal sources; lossy cells among the
+    edges; materials whose coefficients let an E curl pass DBL_MAX; and seeded scenarios. Field fills take Fd3.FIELDS's
+    index (E_x, E_y, E_z, H_x, H_y, H_z)."""
+    mx, tiny, dmin = sys.float_info.max, 5e-324, 2.2250738585072014e-308
+    big = ((mx, -mx), (mx, mx), (1e308, -1e308), (8.98846567431158e307, -8.98846567431158e307), (mx, 1e300))
+    small = ((tiny, -tiny), (tiny, 0.0), (1e-310, -1e-310), (dmin, -dmin), (-1e-320, 3e-321), (dmin, -tiny))
+    dims = (9, 7, 7)
+    for a, b in big + small:
+        ops = [source(4, 3, 3, a), source(5, 3, 3, b), source(4, 4, 3, b), source(4, 3, 4, b)]
+        frames3(rows, m3, dims, 1e-3, ops, [1, 2, 4])
+    # The ±0 fields: a product of a subnormal difference rounds to ∓0 against them.
+    for z in (0.0, -0.0):
+        for w in range(6):
+            frames3(rows, m3, (8, 6, 6), 1e-3, [fill2(w, z), source(3, 3, 3, -tiny), source(4, 3, 3, tiny)], [1, 3])
+    # Lossy cells beside the edges: C_a·E first, then the curl term.
+    ops = [box(3, (2, 2, 2, 7, 6, 6), 50.0), source(4, 3, 3, mx), source(5, 3, 3, -mx), source(3, 3, 3, tiny)]
+    frames3(rows, m3, dims, 1e-3, ops, [1, 3])
+    # Coefficients that let a curl pass DBL_MAX where its update doesn't (μ_r ≈ 10⁻³: C_h ≈ 0.6-0.77; ε_r = 1000:
+    # C_e ≈ 0.11), E_z pairs at ±DBL_MAX/2 in the E rows' packed part (x = 3, 4) and their scalar tail (x = 6, 7).
+    h = 8.98846567431158e307
+    for mu in (1.28e-3, 1e-3):
+        ops = [box(1, (0, 0, 0, 9, 7, 7), 1000.0), box(2, (0, 0, 0, 9, 7, 7), mu), source(3, 3, 3, h),
+               source(4, 3, 3, -h), source(6, 3, 3, h), source(7, 3, 3, -h)]
+        frames3(rows, m3, dims, 1e-3, ops, [1, 2, 3])
+    # Seeded scenarios: sources over every binade of either sign.
+    rng = Rng(0x4D_3D)
+    for _ in range(30):
+        d3 = (rng.int(3, 9), rng.int(3, 8), rng.int(3, 8))
+        ops = []
+        for _ in range(rng.int(2, 5)):
+            v = rng.log_uniform(-323.0, 308.0)
+            ops.append(source(rng.int(0, d3[0] - 1), rng.int(0, d3[1] - 1), rng.int(0, d3[2] - 1),
+                              -v if rng.unit() < 0.5 else v))
+        frames3(rows, m3, d3, rng.log_uniform(-6.0, -1.0), ops, [rng.int(1, 4)])
+
+
 # ── modules ─────────────────────────────────────────────────────────────────────────────────────────────────────────
 
 def module(name, parts):
@@ -583,7 +622,7 @@ def main() -> int:
     problems = 0
     parts = [lambda r: emit_2b(r, model3), lambda r: emit_3(r, model_gpu),
              lambda r: emit_4a(r, model2, model3, model_gpu), lambda r: emit_4b(r, model2, model3),
-             lambda r: emit_4c(r, model2, model_gpu)]
+             lambda r: emit_4c(r, model2, model_gpu), lambda r: emit_4d(r, model3)]
     for name, parts in (("fdtd_2d3d", parts),):
         path, text, n = module(name, parts)
         big = V.too_big(f"tests/golden/{name}.tsv", text)

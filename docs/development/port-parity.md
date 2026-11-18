@@ -7067,3 +7067,48 @@ eigenmode search (`dft_magnitude`'s recurrence and magnitude, `find_eigenmodes`'
   line past 120 characters in `src/compute.cyr`, which the gate's one-call lint of every file didn't report and a
   per-file lint does (fixed; the audit passes). validate.py 767,582 rows, 0 problems; `emit.py --check` 1,107 frozen
   rows and 1,043 emitted. Next: 4d, the 3D updates.
+
+## 128. M6 part 4d: the 3D updates at their range edges (2026-11-17)
+
+- **ADR 0002 row 18, amended** (the user's answer of 2026-11-15: the per-cell rule for M6's grids): `Fdtd3d`'s six
+  curl updates, Rust's `f[i] += c[i] * (da − db)` with da and db each a difference of two neighbour rows, run the 2D
+  curl kernel's rule (§127). `_bj_fd3_curl` keeps the inner difference w = da − db and the product k·w in two scratch
+  rows (the grid's work buffer, as before) instead of one, so the zero path can test w; `_bj_e_curl_fix` and
+  `_bj_e_curl_at` take the a' row as a pointer of their own (the 2D kernel passes a one cell back, the 3D kernel the
+  neighbour row on its axis), and the scalar tail is `_bj_e_curl_one`. Every 3D update adds (H from curl E and E from
+  curl H both carry their signs in the differences), so the marker's sign bit is 0. The common path is Rust's own
+  operations; the 3D rows have no subtract form.
+- **What changed**: on a 9 × 7 × 7 grid (dx = 1 mm), E_z = ±DBL_MAX at neighbouring x gave H_y = −∞ for
+  −2.755017522298258·10³⁰⁵ (the packed part) and H_x = ∞ for 2.755017522298258·10³⁰⁵ at the row's last cell (the
+  scalar tail), and E_z = −∞ for 1.0486543286696514·10³⁰⁸ after; with ε_r = 1000 and μ_r = 1.28·10⁻³ (C_e ≈ 0.11,
+  C_h ≈ 0.60) and E_z = ±2^1023 side by side, H_y was −∞ for −1.0761787196477572·10³⁰⁸ and E_z's curl passed DBL_MAX
+  in the E row's tail, E_z = ∞ for −6.062532837621485·10³⁰⁷; products of 2^-1074 differences that round to −0 left H
+  at +0 for the exact sums' −0. C_e·ΔH can't pass DBL_MAX at unit ε_r and μ_r (C_h ≈ 7.7·10⁻⁴ and C_e ≈ 109 whatever
+  dx), so the E rows' edges need the materials.
+- **validate.py**: `Fd3.curl18` runs `fd_curl18` cell by cell under "18"; `fd23_runs` already replayed the 3D scripts.
+  **1,625 rows map** (row 18: 220, 59 of them this bite's 3D scripts; row 13: 883; row 40: 522). Of the 95 new rows
+  57 map to row 18 and 28 to row 13 (in-range cells, the coefficients alone); two frozen rows (1,063 and 1,068: 6³
+  grids whose regions set ε_r, μ_r and σ to 5·10⁻³²⁴ and 10⁻³⁰⁰, so C_e and C_h pass 10²⁹⁶) moved from row 13 to 18.
+- **The grid**: `emit.py`'s `emit_4d` appends 95 rows (2,245; the old body an exact prefix) on a 9 × 7 × 7 grid whose
+  rows have a packed part and a scalar tail: E_z at ±DBL_MAX, 10³⁰⁸ and DBL_MAX/2 beside their negatives and at
+  2^-1074, 10⁻³¹⁰, 2^-1022 and 10⁻³²⁰ beside opposite signs (frames at 1, 2 and 4 steps, so H_z and the E rows follow);
+  ±0 fills of each of the six fields under tiny opposite sources; lossy cells beside the edges; ε_r = 1000 with μ_r =
+  1.28·10⁻³ and 10⁻³, E_z pairs at ±2^1023 in the E rows' packed part and tail; 30 seeded scenarios over every binade
+  of either sign.
+- **Tests**: `cyrius_update_edges` in `tests/fdtd3d.tcyr` (3 assertions, 89 in all: H_y, H_x and E_z beside ±DBL_MAX;
+  H_y and E_z under the materials; the −0 sums), each from validate.py's model.
+- **Benchmarks**: the interleaved A/B against HEAD (part 4c's commit; two rounds at load 3.8 to 5.1, another repo's
+  fuzzers and a test binary running) left every other row unchanged (median ratios 0.989 and 0.995 over 112 rows; the
+  2D rows 0.96–1.01; the extremes ns-scale and I/O rows, noise) and measured the 3D grid's: `fdtd/3d_step_30x30x30`
+  608–624 → 1,114–1,146 µs (1.83×), `fdtd/3d_step_30x30x30_cpml8` 2.30–2.33 → 2.73–2.78 ms (1.19×: the slabs aren't
+  on the rule yet, part 4e). That is about 3.4 ns a cell update (a 30³ step makes about 146,000), above the 2D grid's
+  2.3 ns: on rows of 30 the per-row call and the scalar tails (one or two cells in four of the six rows) take a larger
+  share than on rows of 100. The same trade as §107 and §127, which a vector classify verb would remove (plan §10).
+- **Result, every target** (x86_64 ELF, x86_64 PE, aarch64): **19 modules, 0 failing; 644,188 ok, 0 failed, 0
+  measured, 0 pending, 123,489 accepted (ADR 01: 43,087; ADR 0002: 80,402)** over 767,677 rows; **all 488 digests
+  equal**. `fdtd3d.tcyr` (89), `fdtd2d.tcyr` (80), `compute.tcyr` (36), `cpml.tcyr` (44) and `json.tcyr` (105) pass on
+  all three. The first aarch64 run killed `fdtd3d.tcyr` at the 300 s test timeout in `cpml3d_reflection` while another
+  repo's coverage gate held the load at 9–11; alone under qemu the file takes 36 s (HEAD's 28 s), and the full suite's
+  rerun at load 4–5 passed (29 of 29, 239 s). The gate is clean (no warnings; execution coverage 394 of 394; the audit
+  passes); validate.py 767,677 rows, 0 problems; `emit.py --check` 1,107 frozen rows and 1,138 emitted. Next: 4e, the
+  CPML corrections.

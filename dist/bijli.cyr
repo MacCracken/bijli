@@ -15853,13 +15853,14 @@ fn _bj_e_diff_fix(d, k, a, b, wd, w, m, sg) {
     return 0;
 }
 
-# The cell at byte offset i of a packed curl row, marked: d[i] := _bj_e_curl's value of d[i] ± k[i]·((a[i] −
-# a[i − 1]) − (b[i] − bp[i])) and wp[i] := ∓0, as _bj_e_diff_at.
-fn _bj_e_curl_at(d, k, a, b, bp, wp, i, sg) {
+# The cell at byte offset i of a packed curl row, marked: d[i] := _bj_e_curl's value of d[i] ± k[i]·((a[i] − ap[i]) −
+# (b[i] − bp[i])) and wp[i] := ∓0, as _bj_e_diff_at.
+fn _bj_e_curl_at(d, k, a, ap, b, bp, wp, i, sg) {
     var dq: *f64 = _bj_e_f64p(d + i);
     var wq: *f64 = _bj_e_f64p(wp + i);
     var kq: *f64 = _bj_e_f64p(k + i);
-    var aq: *f64 = _bj_e_f64p(a + i - 8);
+    var aq: *f64 = _bj_e_f64p(a + i);
+    var a0q: *f64 = _bj_e_f64p(ap + i);
     var bq: *f64 = _bj_e_f64p(b + i);
     var cq: *f64 = _bj_e_f64p(bp + i);
     var dv: f64 = dq[0];
@@ -15870,7 +15871,7 @@ fn _bj_e_curl_at(d, k, a, b, bp, wp, i, sg) {
         rr = dv - pv;
         kv = -kv;
     }
-    dq[0] = _bj_e_curl(dv, kv, aq[1], aq[0], bq[0], cq[0], rr);
+    dq[0] = _bj_e_curl(dv, kv, aq[0], a0q[0], bq[0], cq[0], rr);
     if (sg != 0) { wq[0] = 0.0; }
     else { wq[0] = -0.0; }
     return 0;
@@ -15878,8 +15879,9 @@ fn _bj_e_curl_at(d, k, a, b, bp, wp, i, sg) {
 
 # A packed curl row's m cells whose product wp[i] = k[i]·wi[i] (wi the inner difference; −wp[i] for the subtract form)
 # marks a cell beside d[i], each rerun by _bj_e_curl_at; the zero path as _bj_e_diff_fix's, the inner difference
-# first. Addresses are words; a, b and bp point at the cells' own a[x], b[x] and b'[x].
-fn _bj_e_curl_fix(d, k, a, b, bp, wi, wp, m, sg) {
+# first. Addresses are words; a, ap, b and bp point at the cells' own a[i], a'[i], b[i] and b'[i] (the 2D grid's a' is
+# a one cell back, the 3D grid's four rows its neighbours on two axes).
+fn _bj_e_curl_fix(d, k, a, ap, b, bp, wi, wp, m, sg) {
     var q = wp;
     var end = wp + m * 8;
     while (q < end) {
@@ -15888,14 +15890,16 @@ fn _bj_e_curl_fix(d, k, a, b, bp, wi, wp, m, sg) {
         if (ex == 0) {
             var i = q - wp;
             if ((x << 1) != 0) {
-                _bj_e_curl_at(d, k, a, b, bp, wp, i, sg);
+                _bj_e_curl_at(d, k, a, ap, b, bp, wp, i, sg);
             } elif ((load64(wi + i) << 1) != 0 && (load64(k + i) << 1) != 0) {
                 x = x ^ sg;
                 var dw = load64(d + i);
-                if ((x != 0 && dw == 0) || (((dw << 1) - 1) >> 54) == 0) { _bj_e_curl_at(d, k, a, b, bp, wp, i, sg); }
+                if ((x != 0 && dw == 0) || (((dw << 1) - 1) >> 54) == 0) {
+                    _bj_e_curl_at(d, k, a, ap, b, bp, wp, i, sg);
+                }
             }
         } elif (ex == 2047) {
-            _bj_e_curl_at(d, k, a, b, bp, wp, q - wp, sg);
+            _bj_e_curl_at(d, k, a, ap, b, bp, wp, q - wp, sg);
         }
         q = q + 8;
     }
@@ -34759,7 +34763,7 @@ public fn _bj_fd2_curl(d: *f64, k: *f64, a: *f64, b: *f64, bp: *f64, w: *f64, w2
         f64v_sub(w2, b + 1, bp + 1, m);
         f64v_sub(w, w, w2, m);
         f64v_mul(w2, k + 1, w, m);
-        _bj_e_curl_fix(d + 1, k + 1, a + 1, b + 1, bp + 1, w, w2, m, sg);
+        _bj_e_curl_fix(d + 1, k + 1, a + 1, a, b + 1, bp + 1, w, w2, m, sg);
         if (add == 1) { f64v_add(d + 1, d + 1, w2, m); }
         else { f64v_sub(d + 1, d + 1, w2, m); }
     }
@@ -35640,24 +35644,21 @@ public struct BjFdtd3d {
 }
 
 # One row of a curl update: d[i] += k[i]·((a[i] − ap[i]) − (b[i] − bp[i])) for i < n, Rust's `f[i] += c[i] * (da −
-# db)` for each of the six components, on the packed f64v_sub, f64v_mul and f64v_add through the scratch rows w and w2
-# on the largest multiple of 4, then a scalar tail (probe p19).
+# db)` for each of the six components, on the packed f64v_sub, f64v_mul and f64v_add through the scratch rows w (the
+# inner difference) and w2 (the product) on the largest multiple of 4, then a scalar tail (probe p19). Each cell at a
+# range edge is rerun with an unbounded exponent between the multiply and the add (_bj_e_curl_fix; ADR 0002 row 18,
+# M6 part 4d), the 2D curl kernel's rule.
 fn _bj_fd3_curl(d: *f64, k: *f64, a: *f64, ap: *f64, b: *f64, bp: *f64, w: *f64, w2: *f64, n) {
     var m = n & (0 - 4);
     if (m > 0) {
         f64v_sub(w, a, ap, m);
         f64v_sub(w2, b, bp, m);
         f64v_sub(w, w, w2, m);
-        f64v_mul(w, k, w, m);
-        f64v_add(d, d, w, m);
+        f64v_mul(w2, k, w, m);
+        _bj_e_curl_fix(d, k, a, ap, b, bp, w, w2, m, 0);
+        f64v_add(d, d, w2, m);
     }
-    for (var i = m; i < n; i = i + 1) {
-        var da: f64 = a[i] - ap[i];
-        var db: f64 = b[i] - bp[i];
-        var dd: f64 = da - db;
-        var v: f64 = k[i] * dd;
-        d[i] = d[i] + v;
-    }
+    for (var i = m; i < n; i = i + 1) { d[i] = _bj_e_curl_one(d[i], k[i], a[i], ap[i], b[i], bp[i], 0); }
     return 0;
 }
 

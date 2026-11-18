@@ -197,7 +197,7 @@ public fn _bj_fd2_curl(d: *f64, k: *f64, a: *f64, b: *f64, bp: *f64, w: *f64, w2
         f64v_sub(w2, b + 1, bp + 1, m);
         f64v_sub(w, w, w2, m);
         f64v_mul(w2, k + 1, w, m);
-        _bj_e_curl_fix(d + 1, k + 1, a + 1, b + 1, bp + 1, w, w2, m, sg);
+        _bj_e_curl_fix(d + 1, k + 1, a + 1, a, b + 1, bp + 1, w, w2, m, sg);
         if (add == 1) { f64v_add(d + 1, d + 1, w2, m); }
         else { f64v_sub(d + 1, d + 1, w2, m); }
     }
