@@ -696,6 +696,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
 - **Cyrius port, M7 done** (`port-parity.md` §138): the benchmark record regenerated (each row's least of four runs;
   80 of 80 twinned, median 27.2× Rust), with three Cyrius-only benches for M7's paths: a bridge rounded once (83 ns),
   a 16³ vector field sample (170 µs) and a 16-point charge visualization read back (45.7 µs).
+- **Cyrius port, M8 part 1 — the Rust-test ledger closed** (`port-parity.md` §139): `tests/integration.tcyr` ports
+  `tests/integration.rs`'s 26 cross-module tests (31 assertions, all three targets); the ledger reads 858 Rust tests,
+  846 ported, 12 not applicable, 0 pending, and `--check` now holds M1–M7 to it.
 
 ### Fixed
 

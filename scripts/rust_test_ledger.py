@@ -49,7 +49,7 @@ FILES = {
 }
 
 # Milestones that are complete: a test of theirs that isn't ported needs a REASONS entry.
-DONE = set()
+DONE = {"M1", "M2", "M3", "M4", "M5", "M6", "M7"}
 
 # (Rust file, test name) -> why it has no Cyrius port. Added at the milestone that decides it (the ADR 0002 #1
 # deprecations, #2 the per-step layout check, ...).

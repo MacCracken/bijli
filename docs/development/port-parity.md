@@ -7580,3 +7580,22 @@ eigenmode search (`dft_magnitude`'s recurrence and magnitude, `find_eigenmodes`'
 - **Result**: no library code changed; the parity and digests are §137's (646,281 ok, 0 failed, 123,846 accepted;
   all 520 digests equal on three targets). The audit passes with the new benches (its first run found `main`'s doc comment cut off by the new cast helper, which now sits above it); `bench_record.py --check` is clean. **M7 is done.** Next: M8, the 2.0.0
   release (plan §4.1).
+
+## 139. M8 part 1: the Rust-test ledger closed (2026-11-18)
+
+- **M8** (plan §4.1's row) runs as part 1, the ledger; part 2, the documentation (the migration guide, getting-started,
+  the architecture overview, the README, SECURITY and the readers' threat model); part 3, the release (the full
+  surface-parity record, VERSION 2.0.0, the CHANGELOG's release section, the last gate and cross-target runs).
+- **`tests/integration.tcyr`** ports `tests/integration.rs`'s 26 tests by name, assertion for assertion (31 assertions):
+  Maxwell's 1/√(ε₀μ₀) against c, Coulomb's inverse square, the plane wave's equal energy densities, the Lorentz
+  force across v, hydrogen's −27.2 eV at the Bohr radius, superposition at a dipole's midpoint, the Poynting vector's
+  direction, n = 1.5 for ε_r = 2.25, the RC cycle, Z = R at resonance, series = 4 × parallel, CV²/2 against the field
+  energy, D = ε₀E + P and B = μ₀(H + M), the material's magnetic energy, Snell's reciprocity, R + T = 1, f_c·λ_c = c,
+  A_e·4π/λ² = D, the 1D grid's spreading pulse and its slower wave at ε_r = 4, the Lorentz invariants, the
+  Liénard–Wiechert field at rest, the interval under a 0.9c boost, Liénard's power at v ≪ c, and E′_y = −γvB_z.
+  Rust's `e_field` and `step as f64 * dt` read the grid's fields directly (ADR 0002 row 2's struct holds them);
+  `snell_refraction_angle`'s `Option` is `Some`/`None` with the angle out. Passing on all three targets.
+- **The ledger**: 858 Rust tests, 846 ported, 12 not applicable, **0 pending**. `rust_test_ledger.py`'s `DONE`, which had
+  stayed empty, now names M1–M7, so a finished milestone's test without a port or a reason fails `--check`.
+- **Result**: no library code changed; 33 test files, 2,911 assertions, the gate clean (execution coverage 445 of 445).
+  Next: part 2, the documentation.
