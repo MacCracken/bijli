@@ -7521,3 +7521,38 @@ eigenmode search (`dft_magnitude`'s recurrence and magnitude, `find_eigenmodes`'
   new); the 32 test files pass on all three (2,872 assertions), the only warnings the ai unit's recorded ones. The
   gate is clean (execution coverage 445 of 445; the audit passes); validate.py 770,121 rows, 0 problems; `emit.py
   --check` current. Next: 2b.
+
+## 137. M7 part 2b: soorat's magnitudes at the range edges and the ±0 rule; Part 2 done (2026-11-18)
+
+- **ADR 0002 row 47** (the user's answer of 2026-11-18, §136's finding): `_bj_max` and `_bj_min` order −0 < +0, IEEE
+  754-2019's maximumNumber and minimumNumber, so max(±0, ∓0) is +0 and min −0 in either order; a NaN is still
+  ignored. Rust's x86-64 code returned the second operand on a tie (math.tsv's frozen rows), its aarch64 code IEEE's.
+  relativity's noise scale folds four unbounded values with kimiya's `_bj_k_ux_max`, a generated copy that stays as
+  kimiya wrote it; it now calls bijli's `_bj_ux_max` (src/mathx.cyr), the same rule on the exact values. soorat's
+  `from_nf2ff` fold is `_bj_max` again (§133 had matched it to validate.py's wrong `rust_max`). The other inline
+  maxima (beam's waist scale, wave's, relativity's ‖·‖∞ and bracket tolerance, NF2FF's exponents, the accumulator's
+  length) fold absolute values or integers, where no ±0 tie arises; `_bj_clamp` is unchanged.
+- **validate.py**: `rust_max`/`rust_min` now model x86-64 exactly (the second operand on a tie), so `validate_math`'s
+  `SIGNED_ZERO_TIE` exemption is gone; `ieee_max`/`ieee_min` are the port's rule. The models with a `port` flag
+  (relativity's `rel_solve`, the eigenmode search's row-18 path) take the port's rule there, soorat's model takes it
+  outright. `math_adr_rows` writes `math.adr.tsv`, the first ADR 0002 mapping for math: `f64::max(0.0, -0.0)` → 0.0
+  and `f64::min(-0.0, 0.0)` → −0.0, the only frozen rows of the 646,235 the rule changes (the harness run with the
+  rule in a scratch copy failed those two and nothing else). The harness's `f64::max ~ f64_max` shadow line (the
+  stdlib's own max against the expected values, informational) reads 70 differing rows for 69: the stdlib keeps
+  x86-64's tie on the mapped row.
+- **ADR 0002 row 18, amended**: `VectorFieldSample`'s magnitudes are `BjFieldVector::magnitude`'s (M1 part 5d-2's
+  guard on Rust's sum: the band [2⁻⁹⁰⁰, DBL_MAX], all parts 0, or a part not finite), so a square past DBL_MAX or
+  below 2⁻¹⁰²² that the root can see takes the unbounded chain, the root rounded once. (10²⁰⁰, 0, 0) has
+  max_magnitude 10²⁰⁰ where Rust's x² overflowed to ∞; (10⁻²⁰⁰, 0, 0) has 10⁻²⁰⁰ where it underflowed to 0. The
+  model is validate.py's `so_magnitude`; `soorat.tsv` gains 6 rows (squares either side of DBL_MAX and 2⁻¹⁰²², and
+  sums the band keeps): 1,350 rows, 27 of its 78 vector rows differing from Rust's chain (validate.py's count).
+- **Tests**: `tests/crmath_bijli.tcyr`'s `cyrius_max_min_signed_zero` (the ties in both orders, NaN, the unbounded
+  max) and `tests/soorat.tcyr`'s `cyrius_soorat_edges` (10²⁰⁰ and 10⁻²⁰⁰ magnitudes, a pattern of −0 with gain +0).
+- **The cost**: the A/B against HEAD (98a2afd, part 2a; 2b alone; two interleaved runs at load 2.0–2.7): median ratios 1.000 and
+  1.007 over 112 benches; the four through max and min (`find_eigenmodes_4096x256` 0.985 and 1.011,
+  `solve_retarded_time_uniform_t1s` 1.014 and 0.987, the two NF2FF runs 0.975–1.027) within noise.
+- **Result, every target** (x86_64 ELF, x86_64 PE, aarch64): **21 modules, 0 failing; 646,281 ok, 0 failed, 0
+  measured, 0 pending, 123,846 accepted (ADR 01: 43,087; ADR 0002: 80,759, row 47's 2 among them)**; all 520 digests
+  equal; the 32 test files pass on all three (2,879 assertions), the only warnings the ai unit's recorded ones. The
+  gate is clean (execution coverage 445 of 445; the audit passes); validate.py 770,127 rows, 0 problems, `math.adr.tsv`
+  current; `emit.py --check` current. **M7 Part 2 is done.** Next: M7's close, the benchmark record regenerated.

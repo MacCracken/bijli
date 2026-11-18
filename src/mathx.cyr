@@ -51,24 +51,44 @@ fn _bj_is_finite(x: f64): i64 {
     return 0;
 }
 
-# The smaller of x and y, ignoring a NaN operand (NaN only when both are). Equal operands, +0 and
-# −0 included, give y, as rustc 1.99.1's `x.min(y)` does (minsd). Mirrors `f64::min`.
+# The smaller of x and y, ignoring a NaN operand (NaN only when both are), with −0 < +0: min(+0, −0)
+# is −0 in either order, IEEE 754-2019's minimumNumber (ADR 0002 row 47, the user's answer of
+# 2026-11-18). Rust leaves the tie unspecified: rustc 1.99.1's `x.min(y)` returns its second operand
+# on x86-64 (minsd), so min(-0.0, 0.0) is 0.0 there, and −0 on aarch64 (fminnm). Mirrors `f64::min`.
 #must_use
 fn _bj_min(x: f64, y: f64): f64 {
     if (x != x) { return y; }
     if (y != y) { return x; }
     if (x < y) { return x; }
+    if (x > y) { return y; }
+    if (_bj_bits(x) < 0) { return x; }
     return y;
 }
 
-# The larger of x and y, ignoring a NaN operand (NaN only when both are). Equal operands give y
-# (maxsd). Mirrors `f64::max`.
+# The larger of x and y, ignoring a NaN operand (NaN only when both are), with −0 < +0: max(+0, −0)
+# is +0 in either order, IEEE 754-2019's maximumNumber (ADR 0002 row 47). rustc 1.99.1's `x.max(y)`
+# returns its second operand on x86-64 (maxsd: max(0.0, -0.0) is -0.0) and +0 on aarch64 (fmaxnm).
+# Mirrors `f64::max`.
 #must_use
 fn _bj_max(x: f64, y: f64): f64 {
     if (x != x) { return y; }
     if (y != y) { return x; }
     if (x > y) { return x; }
+    if (x < y) { return y; }
+    if (_bj_bits(x) >= 0) { return x; }
     return y;
+}
+
+# _bj_max on two values with an unbounded exponent (kimiya's pairs, src/crmath_kx.cyr): a NaN is ignored, the larger
+# exact value wins, and of two zeros the +0 (ADR 0002 row 47; kimiya's own _bj_k_ux_max, a generated copy, gives y).
+#must_use
+fn _bj_ux_max(xs: f64, xe, ys: f64, ye): (f64, i64) {
+    if (xs != xs) { return (ys, ye); }
+    if (ys != ys) { return (xs, xe); }
+    var c = _bj_k_ux_cmp(xs, xe, ys, ye);
+    if (c == 1) { return (xs, xe); }
+    if (c == 0 && xs == 0.0 && _bj_bits(xs) >= 0) { return (xs, xe); }
+    return (ys, ye);
 }
 
 # x restricted to [lo, hi]: lo when x < lo, hi when x > hi, else x (a NaN x stays NaN). Rust

@@ -690,8 +690,19 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
   (bridge, soorat, their JSON, ai) against the standing answers of 2026-11-12, and the user's answer of 2026-11-18 on
   ±0 ties (IEEE 754-2019's −0 < +0 for every max and min, part 2b). §133's finding is corrected: Rust's x86-64
   `f64::max` returns its second operand on a tie, as `_bj_max` did; validate.py's `rust_max` was the defect.
+- **Cyrius port, M7 part 2b — Part 2 done** (`port-parity.md` §137): the ±0 rule for every max and min (ADR 0002
+  row 47, the first ADR 0002 mapping for math, `math.adr.tsv`) and soorat's vector magnitudes at the range edges
+  (row 18); `soorat.tsv` 1,350 rows. M7's close regenerates the benchmark record.
 
 ### Fixed
+
+- **max and min** (ADR 0002 row 47, M7 part 2b, the user's answer of 2026-11-18): `_bj_max` and `_bj_min` order
+  −0 < +0 (IEEE 754-2019), so max(±0, ∓0) is +0 and min(±0, ∓0) −0 in either order. Rust's x86-64 code returned its
+  second operand on a tie (max(0.0, -0.0) = -0.0, but max(-0.0, 0.0) = 0.0); `math.adr.tsv` maps the two frozen rows.
+  soorat's `from_nf2ff` gain fold is `_bj_max` again; validate.py's `rust_max`/`rust_min` now model x86-64 exactly.
+- **soorat** (ADR 0002 row 18, M7 part 2b): `VectorFieldSample`'s magnitudes at the range edges, as
+  `BjFieldVector::magnitude`'s: (10²⁰⁰, 0, 0) has max_magnitude 10²⁰⁰ where x²'s overflow gave ∞, and (10⁻²⁰⁰, 0, 0)
+  10⁻²⁰⁰ where it gave 0.
 
 - **bridge** (ADR 0002 rows 13 and 18, M7 part 2a): `joule_heating_power_density`, `em_energy_to_heating_rate`,
   `e_field_to_optical_intensity`, `nuclear_charge_potential` and `magnetic_flux_to_magnetostrictive_strain` round once

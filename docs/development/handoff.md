@@ -9,7 +9,7 @@ bite is done, the machinery, the scripts and the traps. Delete it once it has se
 
 ## Where it stands
 
-- **Committed through `3e20254`** (part 1c); M7 part 2a is in the working tree for the user to commit. **M6
+- **Committed through `98a2afd`** (part 2a); M7 part 2b is in the working tree for the user to commit. **M6
   is done** (§131).
 - **M7** runs as Part 1 in bites (1a `bridge.rs`, 1b `integration/soorat.rs`, 1c `ai.rs` in `[lib.ai]`), then Part 2
   its range-edge review. **1a done** (§132): `src/bridge.cyr`; its constants rendered by validate.py
@@ -106,15 +106,14 @@ bite is done, the machinery, the scripts and the traps. Delete it once it has se
   `soorat.tsv` (0.8 MB), and ai.rs's serde types (1c) should go into an `ai` module likewise.
 - **M5 is done** (§115). The benchmark record's Cyrius column is each row's least of four full runs: rows vary up to
   1.5× between runs under other repos' loads, so take the least of several when regenerating it.
-- **M7 Part 2** (§136) runs as 2a (bridge.rs: round once, row 13; the Sellmeier edge, row 18; done: `bridge.tsv`
-  re-emitted from the port's rule, `bridge_eval` / `bridge_rust_eval`) and 2b. §133's ±0 finding was backwards:
-  Rust x86-64's max/min return the second operand on a tie (math.tsv's frozen rows), and validate.py's
-  `rust_max`/`rust_min` were wrong; the user chose IEEE 754-2019's −0 < +0 for every max and min.
-- **Next**: part 2b: `VectorFieldSample`'s magnitudes on an unbounded exponent where a square leaves the range
-  (row 18); `_bj_max`/`_bj_min` (and `_bj_k_max`, `_bj_k_ux_max`?) to IEEE 754-2019's ±0 rule, math.tsv's two
-  tie rows mapped in a new ADR 0002 row, validate.py's `rust_max`/`rust_min` and its `SIGNED_ZERO_TIE`
-  exemption to the same rule, soorat's `from_nf2ff` fold back on `_bj_max`. Then M7's close: the benchmark
-  record regenerated as §131 did.
+- **M7 Part 2 is done** (§136, §137): 2a bridge.rs (round once, row 13; the Sellmeier edge, row 18;
+  `bridge_eval` / `bridge_rust_eval`); 2b the ±0 rule, IEEE 754-2019's −0 < +0 for every max and min (row 47,
+  the user's answer: Rust x86-64's ties went to the second operand, validate.py's `rust_max` had them on the
+  first; now `rust_max` models x86-64 and `ieee_max` the port; `math.adr.tsv` maps the two frozen tie rows),
+  and soorat's magnitudes on `BjFieldVector::magnitude` (row 18). kimiya's generated `_bj_k_ux_max` is left
+  as it is; bijli's `_bj_ux_max` carries the rule.
+- **Next**: M7's close: regenerate the benchmark record (`scripts/bench_record.py`, least of several full
+  runs, as §131 did), the plan's M7 row, then M8.
 - **Corpus size**: `fdtd.tsv` is 38.8 MB (107,341 rows) and `json.tsv` 40.7 MB, against the 48 MiB cap that
   validate.py's `too_big` guards (§81); M6's rows are in `fdtd_2d3d.tsv` (4.2 MB after 4f).
 - **A recorded cost**: the 1D step runs 3.5–3.8× HEAD's with 2d-2a's scan (§107), the TF/SF step about 2× with

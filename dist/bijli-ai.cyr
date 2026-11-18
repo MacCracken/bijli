@@ -9079,24 +9079,44 @@ fn _bj_is_finite(x: f64): i64 {
     return 0;
 }
 
-# The smaller of x and y, ignoring a NaN operand (NaN only when both are). Equal operands, +0 and
-# −0 included, give y, as rustc 1.99.1's `x.min(y)` does (minsd). Mirrors `f64::min`.
+# The smaller of x and y, ignoring a NaN operand (NaN only when both are), with −0 < +0: min(+0, −0)
+# is −0 in either order, IEEE 754-2019's minimumNumber (ADR 0002 row 47, the user's answer of
+# 2026-11-18). Rust leaves the tie unspecified: rustc 1.99.1's `x.min(y)` returns its second operand
+# on x86-64 (minsd), so min(-0.0, 0.0) is 0.0 there, and −0 on aarch64 (fminnm). Mirrors `f64::min`.
 #must_use
 fn _bj_min(x: f64, y: f64): f64 {
     if (x != x) { return y; }
     if (y != y) { return x; }
     if (x < y) { return x; }
+    if (x > y) { return y; }
+    if (_bj_bits(x) < 0) { return x; }
     return y;
 }
 
-# The larger of x and y, ignoring a NaN operand (NaN only when both are). Equal operands give y
-# (maxsd). Mirrors `f64::max`.
+# The larger of x and y, ignoring a NaN operand (NaN only when both are), with −0 < +0: max(+0, −0)
+# is +0 in either order, IEEE 754-2019's maximumNumber (ADR 0002 row 47). rustc 1.99.1's `x.max(y)`
+# returns its second operand on x86-64 (maxsd: max(0.0, -0.0) is -0.0) and +0 on aarch64 (fmaxnm).
+# Mirrors `f64::max`.
 #must_use
 fn _bj_max(x: f64, y: f64): f64 {
     if (x != x) { return y; }
     if (y != y) { return x; }
     if (x > y) { return x; }
+    if (x < y) { return y; }
+    if (_bj_bits(x) >= 0) { return x; }
     return y;
+}
+
+# _bj_max on two values with an unbounded exponent (kimiya's pairs, src/crmath_kx.cyr): a NaN is ignored, the larger
+# exact value wins, and of two zeros the +0 (ADR 0002 row 47; kimiya's own _bj_k_ux_max, a generated copy, gives y).
+#must_use
+fn _bj_ux_max(xs: f64, xe, ys: f64, ye): (f64, i64) {
+    if (xs != xs) { return (ys, ye); }
+    if (ys != ys) { return (xs, xe); }
+    var c = _bj_k_ux_cmp(xs, xe, ys, ye);
+    if (c == 1) { return (xs, xe); }
+    if (c == 0 && xs == 0.0 && _bj_bits(xs) >= 0) { return (xs, xe); }
+    return (ys, ye);
 }
 
 # x restricted to [lo, hi]: lo when x < lo, hi when x > hi, else x (a NaN x stays NaN). Rust
@@ -25006,7 +25026,7 @@ fn _bj_rel_sample_ux(obs: *f64, t: f64, tau: f64, st: *f64, s: *f64) {
         var qs, qe = _bj_k_ux_div(u2s, u2e, ms, me);
         dg = _bj_k_ux_sub_f64(qs, qe, cs, ce);
     }
-    var mxs, mxe = _bj_k_ux_max(ms, me, ls, le);
+    var mxs, mxe = _bj_ux_max(ms, me, ls, le);
     var mo: f64 = _bj_rel_max_abs3(obs, 0);
     var mp: f64 = _bj_rel_max_abs3(st, 0);
     var mv: f64 = _bj_rel_max_abs3(st, 3);
@@ -25016,9 +25036,9 @@ fn _bj_rel_sample_ux(obs: *f64, t: f64, tau: f64, st: *f64, s: *f64) {
     var mvs, mve = _bj_k_ux_from(mv);
     var ats, ate = _bj_k_ux_from(at);
     var mts, mte = _bj_k_ux_mul(mvs, mve, ats, ate);
-    var a1s, a1e = _bj_k_ux_max(mxs, mxe, mos, moe);
-    var a2s, a2e = _bj_k_ux_max(a1s, a1e, mps, mpe);
-    var a3s, a3e = _bj_k_ux_max(a2s, a2e, mts, mte);
+    var a1s, a1e = _bj_ux_max(mxs, mxe, mos, moe);
+    var a2s, a2e = _bj_ux_max(a1s, a1e, mps, mpe);
+    var a3s, a3e = _bj_ux_max(a2s, a2e, mts, mte);
     var noise: f64 = _bj_k_ux_mul_f64(1.0, 0 - 51, a3s, a3e);
     s[0] = tau;
     s[1] = g;
@@ -39649,9 +39669,9 @@ public fn BjChargeVisualization_from_point_charges(charges: *BjPointCharge, n, o
 # ── radiation pattern ──────────────────────────────────────────────────────────────────────────────────────────────
 
 # The radiation pattern of an NF2FF result into *out: its angles and pattern copied, max_gain the fold of the pattern
-# from +0 by Rust's f64::max: a NaN is ignored, and a tie keeps the running value (LLVM's maxnum on x86-64 returns its
-# first operand when they compare equal, so −0 after +0 leaves +0; mathx.cyr's _bj_max returns the second). Ok(0), or
-# Err(Allocation) with out untouched. Mirrors `RadiationPattern::from_nf2ff`.
+# from +0 by f64::max (mathx.cyr's _bj_max): a NaN is ignored, and −0 < +0, so a pattern of zeros has the gain +0 (ADR
+# 0002 row 47; Rust's x86-64 max returns its second operand on a tie, giving −0 after +0). Ok(0), or Err(Allocation)
+# with out untouched. Mirrors `RadiationPattern::from_nf2ff`.
 #must_use
 public fn BjRadiationPattern_from_nf2ff(result: *BjNf2ffResult, out: *BjRadiationPattern): Result {
     var n = result.count;
@@ -39666,7 +39686,7 @@ public fn BjRadiationPattern_from_nf2ff(result: *BjNf2ffResult, out: *BjRadiatio
     var g: f64 = 0.0;
     for (var i = 0; i < n; i = i + 1) {
         var x: f64 = pv[i];
-        if (x > g) { g = x; }
+        g = _bj_max(g, x);
     }
     out.angles = a;
     out.angles_len = n;
@@ -39679,8 +39699,10 @@ public fn BjRadiationPattern_from_nf2ff(result: *BjNf2ffResult, out: *BjRadiatio
 # ── vector field sampling ──────────────────────────────────────────────────────────────────────────────────────────
 
 # The first `count` samples of vx, vy and vz as [x, y, z] triples into *out (its vectors and max_magnitude, the
-# largest √(x² + y² + z²) from +0, a NaN magnitude never larger): 0, or BJ_ERR_ALLOCATION with out untouched. Mirrors
-# `VectorFieldSample::collect`.
+# largest √(x² + y² + z²) from +0, a NaN magnitude never larger): 0, or BJ_ERR_ALLOCATION with out untouched. Each
+# magnitude is BjFieldVector::magnitude's, Rust's chain with ADR 0002 row 18's range edge (M7 part 2b): a square past
+# DBL_MAX or below 2^-1022 that the root can see takes the unbounded chain, so (10²⁰⁰, 0, 0) has 10²⁰⁰ where Rust's
+# x² overflowed to ∞, and (10⁻²⁰⁰, 0, 0) has 10⁻²⁰⁰ where it underflowed to 0. Mirrors `VectorFieldSample::collect`.
 fn _bj_so_collect(vx: *f64, vy: *f64, vz: *f64, count, out: *BjVectorFieldSample): i64 {
     if (count < 0 || count > _BJ_SO_FL_MAX / 24) { return _bj_so_alloc_err("a vector field sample"); }
     var bytes = count * 24;
@@ -39693,8 +39715,8 @@ fn _bj_so_collect(vx: *f64, vy: *f64, vz: *f64, count, out: *BjVectorFieldSample
         var x: f64 = vx[i];
         var y: f64 = vy[i];
         var z: f64 = vz[i];
-        var s: f64 = x * x + y * y + z * z;
-        var mag: f64 = f64_sqrt(s);
+        var fv: BjFieldVector = BjFieldVector_new(x, y, z);
+        var mag: f64 = fv.magnitude();
         if (mag > mx) { mx = mag; }
         v[3 * i] = x;
         v[3 * i + 1] = y;

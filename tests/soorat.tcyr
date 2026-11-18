@@ -518,6 +518,52 @@ fn main() {
     assert(is_err_result(hla) == 1 && hlb == BJ_ERR_ALLOCATION && str_len(hdoc) == 0,
       "a line claiming 2⁴⁰ points: Allocation, the builder as it was");
 
+    # Part 2b's edges: magnitudes as BjFieldVector::magnitude's (ADR 0002 row 18), the gain's fold on _bj_max (row 47).
+    test_group("cyrius_soorat_edges");
+    var ex: f64[3];
+    var ey: f64[3];
+    var ez: f64[3];
+    ex[0] = _bj_from_bits(0x6974E718D7D7625A);
+    ex[1] = _bj_from_bits(0x16687E92154EF7AC);
+    ex[2] = 0.0;
+    ey[0] = 0.0;
+    ey[1] = 0.0;
+    ey[2] = 0.0;
+    ez[0] = 0.0;
+    ez[1] = 0.0;
+    ez[2] = 0.0;
+    var edims: i64[3];
+    edims[0] = 3;
+    edims[1] = 1;
+    edims[2] = 1;
+    var eorg: f64[3];
+    eorg[0] = 0.0;
+    eorg[1] = 0.0;
+    eorg[2] = 0.0;
+    var evs: BjVectorFieldSample;
+    var ea, eb = BjVectorFieldSample_from_components(&ex, 3, &ey, 3, &ez, 3, &edims, &eorg, 1.0, &evs);
+    var emx: f64 = evs.max_magnitude;
+    assert(is_ok(ea) == 1 && _bj_k_bits(emx) == 0x6974E718D7D7625A, "(1e200, 0, 0): 1e200 (Rust's x² overflowed)");
+    BjVectorFieldSample_free(&evs);
+    ex[0] = _bj_from_bits(0x16687E92154EF7AC);
+    var evt: BjVectorFieldSample;
+    var ec, ed = BjVectorFieldSample_from_components(&ex, 3, &ey, 3, &ez, 3, &edims, &eorg, 1.0, &evt);
+    var emy: f64 = evt.max_magnitude;
+    assert(is_ok(ec) == 1 && _bj_k_bits(emy) == 0x16687E92154EF7AC, "(1e-200, 0, 0): 1e-200 (Rust's underflowed: 0)");
+    BjVectorFieldSample_free(&evt);
+    var zpat: f64[2];
+    zpat[0] = -0.0;
+    zpat[1] = -0.0;
+    var nfr: BjNf2ffResult;
+    nfr.angles = &zpat;
+    nfr.pattern = &zpat;
+    nfr.count = 2;
+    var grp: BjRadiationPattern;
+    var ga, gb = BjRadiationPattern_from_nf2ff(&nfr, &grp);
+    var gmx: f64 = grp.max_gain;
+    assert(is_ok(ga) == 1 && _bj_k_bits(gmx) == 0, "a pattern of -0: the gain +0 (Rust's x86-64 max gave -0)");
+    BjRadiationPattern_free(&grp);
+
     return assert_summary();
 }
 

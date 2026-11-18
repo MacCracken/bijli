@@ -81,22 +81,46 @@ PI = math.pi  # core::f64::consts::PI, the same double
 
 
 def rust_max(a: float, b: float) -> float:
-    """f64::max: NaN is ignored; between ±0 either may be returned. LLVM's `maxnum` on x86_64
-    returns the second operand when the first is NaN, else the larger, preferring the first on a
-    tie; the oracle's bits decide ±0 rows, so ±0 ties are accepted either way."""
+    """f64::max as rustc 1.99.1 compiles it on x86_64 (maxsd, the oracle's target): NaN is ignored, else the larger,
+    the second operand on a tie, so max(0.0, -0.0) is -0.0 and max(-0.0, 0.0) is 0.0, as math.tsv's frozen rows
+    record (M7 part 2b; this preferred the first operand until then, and math's validator excused the ±0 rows)."""
     if math.isnan(a):
         return b
     if math.isnan(b):
         return a
-    return a if a > b or (a == b) else b
+    return a if a > b else b
 
 
 def rust_min(a: float, b: float) -> float:
+    """f64::min on x86_64 (minsd): the second operand on a tie, as rust_max."""
     if math.isnan(a):
         return b
     if math.isnan(b):
         return a
-    return a if a < b or (a == b) else b
+    return a if a < b else b
+
+
+def ieee_max(a: float, b: float) -> float:
+    """The port's max (src/mathx.cyr's _bj_max, ADR 0002 row 47, the user's answer of 2026-11-18): NaN ignored,
+    −0 < +0, IEEE 754-2019's maximumNumber; max(±0, ∓0) is +0 in either order."""
+    if math.isnan(a):
+        return b
+    if math.isnan(b):
+        return a
+    if a == b == 0.0:
+        return 0.0 if math.copysign(1.0, a) > 0 or math.copysign(1.0, b) > 0 else -0.0
+    return a if a > b else b
+
+
+def ieee_min(a: float, b: float) -> float:
+    """The port's min (_bj_min, row 47): −0 < +0, so min(±0, ∓0) is −0 in either order."""
+    if math.isnan(a):
+        return b
+    if math.isnan(b):
+        return a
+    if a == b == 0.0:
+        return -0.0 if math.copysign(1.0, a) < 0 or math.copysign(1.0, b) < 0 else 0.0
+    return a if a < b else b
 
 
 def rust_clamp(x: float, lo: float, hi: float) -> float:
@@ -211,8 +235,6 @@ MATH = {
     "f64::cbrt": lambda xs: [mpfr_ref.cbrt(xs[0])],
 }
 
-# min / max between ±0: Rust's result is LLVM's choice, not specified; the row stands as recorded.
-SIGNED_ZERO_TIE = {"f64::max", "f64::min"}
 
 
 # ── the corpus ────────────────────────────────────────────────────────────────────────────────
@@ -273,8 +295,6 @@ def validate_math(path: Path) -> list:
             continue
         for g, w in zip(got, want):
             if same(g, w):
-                continue
-            if fn in SIGNED_ZERO_TIE and g == 0.0 and w == 0.0:
                 continue
             errs.append(
                 f"math row {n}: {fn}{tuple(t[1] for t in ins)} recorded {w!r} "
@@ -3365,6 +3385,7 @@ def rel_solve(obs, t, traj, max_it, C, port=False):
     met while the bracket expands reports the bracket error (ADR 0002 row 31, the user's answer of 2026-11-13), and
     (row 18's rule, M2 part 2d-3g) the light-cone sample runs with an unbounded exponent outside its guard, every
     decision on g taken on its 53-bit value G (τ₀ = G/c, the comparisons, the Newton point and step)."""
+    vmax, vmin = (ieee_max, ieee_min) if port else (rust_max, rust_min)   # row 47
     if not (math.isfinite(t) and all(math.isfinite(c) for c in obs)):
         return "err", ip_err("observer position and time must be finite, got [" + ", ".join(rust_debug(c) for c in obs)
                              + f"] at t = {rust_display(t)}")
@@ -3382,9 +3403,9 @@ def rel_solve(obs, t, traj, max_it, C, port=False):
         dg = fdiv(dx * vel[0] + dy * vel[1] + dz * vel[2], dist) - C if dist > 0.0 else -C
 
         def mabs(v):
-            return rust_max(rust_max(abs(v[0]), abs(v[1])), abs(v[2]))
+            return vmax(vmax(abs(v[0]), abs(v[1])), abs(v[2]))
         mvt = mabs(vel) * abs(t_r)
-        m4 = rust_max(rust_max(rust_max(rust_max(dist, light), mabs(obs)), mabs(pos)), mvt)
+        m4 = vmax(vmax(vmax(vmax(dist, light), mabs(obs)), mabs(pos)), mvt)
         noise = 2.0 * EPS52 * m4
         g = dist - light
         if port and not rel_sample_plain(dx, dy, dz, d2, light, dt, vel, mvt, m4, abs(t_r)):
@@ -3392,7 +3413,7 @@ def rel_solve(obs, t, traj, max_it, C, port=False):
         return {"tau": tau, "g": g, "G": uz(g) if port else None, "dg": dg, "noise": noise}, None
 
     def tol(tau):
-        return 4.0 * EPS52 * rust_max(abs(t), tau)
+        return 4.0 * EPS52 * vmax(abs(t), tau)
 
     def sign(s):
         z = _gval(s["G"]) if port else s["g"]
@@ -3424,7 +3445,7 @@ def rel_solve(obs, t, traj, max_it, C, port=False):
         return "ok", t
     lo = s0
     tau0 = uz_out(uz_div(s0["G"], uz(C), True)) if port else fdiv(s0["g"], C)
-    hi, e = ev(rust_max(tau0, MIN_NORMAL))
+    hi, e = ev(vmax(tau0, MIN_NORMAL))
     if e:
         return "err", e
     expansions = 0
@@ -3446,7 +3467,7 @@ def rel_solve(obs, t, traj, max_it, C, port=False):
             break
         if le_noise(cur):
             if cur["dg"] < 0.0:
-                conv = rust_min(rust_max(newton_pt(cur)[0], lo["tau"]), hi["tau"])
+                conv = vmin(vmax(newton_pt(cur)[0], lo["tau"]), hi["tau"])
             else:
                 conv = cur["tau"]
             break
@@ -8449,8 +8470,30 @@ def fv_rows(root: Path, module: str, path: Path):
     return out, errs
 
 
+def math_adr_rows(path: Path) -> list:
+    """Row 47's mappings (M7 part 2b, the user's answer of 2026-11-18): the f64::max and f64::min rows whose ±0 tie
+    rustc's x86-64 code broke toward its second operand, where the port's IEEE 754-2019 rule (−0 < +0) gives the
+    other zero."""
+    out = []
+    for line in path.read_text().splitlines():
+        if line.startswith("#"):
+            continue
+        fn, _cls, ins, outs, _note = line.split("\t")
+        if fn not in ("f64::max", "f64::min"):
+            continue
+        a, b = (parse_tok(t)[1] for t in ins.split(" "))
+        want = (ieee_max if fn == "f64::max" else ieee_min)(a, b)
+        old = parse_tok(outs)[1]
+        if not same(want, old):
+            out.append((fn, ins, f"f:{f_to_bits(want):016x}", "47",
+                        f"oracle {outs}; ADR 0002 row 47: −0 < +0 (rustc's x86-64 code returns the second operand)"))
+    return out
+
+
 def adr_rows(root: Path, module: str, path: Path) -> list:
     """(fn, raw inputs, outputs, ADR 0002 row, note) for each golden row of `module` an ADR 0002 row changes."""
+    if module == "math":
+        return math_adr_rows(path)
     if module == "complex":
         return cx_rows(path)[0]
     if module == "material":
@@ -9634,7 +9677,7 @@ def fu_eigen18(signal, dt, fmin, fmax, n_freq):
     spec = [fu_dft_port(signal, ux_mul(w2, f), dt, 0.0) for f in f53]
     mx = 0.0
     for a in spec:
-        mx = rust_max(mx, a)
+        mx = ieee_max(mx, a)
     thr = ux_mul(ux(mx), ux(0.1))[0] if math.isfinite(mx) else None   # an ∞ spectrum's floor ∞: no peak passes it
     fr, qs, am = [], [], []
     for i in range(1, n_freq - 1):
@@ -12271,6 +12314,21 @@ def so_lower(t: str) -> str:
     return "".join(chr(ord(c) + 32) if "A" <= c <= "Z" else c for c in t)
 
 
+SO_RUST_MAG = False                                     # True: Rust's √(x² + y² + z²), for validate_soorat's count
+
+
+def so_magnitude(x: float, y: float, z: float) -> float:
+    """BjFieldVector::magnitude, as VectorFieldSample's collect takes it (M7 part 2b, ADR 0002 row 18): Rust's
+    √(x² + y² + z²) while the sum lies in [2^-900, DBL_MAX], every part is 0 or a part is not finite
+    (src/crmath_vx.cyr's guard); otherwise the squares and sums to 53 bits with an unbounded exponent, the root rounded
+    once."""
+    s = x * x + y * y + z * z
+    if SO_RUST_MAG or (2.0 ** -900 <= s <= sys.float_info.max) or (x == 0 and y == 0 and z == 0) or not all(
+            math.isfinite(c) for c in (x, y, z)):
+        return math.sqrt(s) if not math.isnan(s) else math.nan
+    return ux_fin_sqrt(ux_add(ux_add(ux_mul(ux(x), ux(x)), ux_mul(ux(y), ux(y))), ux_mul(ux(z), ux(z))))
+
+
 def soorat_eval(root: Path, fn, toks):
     """soorat.rs's constructors transcribed: a row's output tokens, or None where nothing transcribes fn. Grids are
     filled by so_fill; a slice's values are reported as their count, digest and end values."""
@@ -12318,7 +12376,7 @@ def soorat_eval(root: Path, fn, toks):
         angles, pattern = v[1:1 + n], v[1 + n:1 + 2 * n]
         g = 0.0
         for x in pattern:
-            g = rust_max(g, x)
+            g = ieee_max(g, x)                     # row 47 (M7 part 2b)
         return [("i", n)] + [("f", a) for a in angles] + [("i", n)] + [("f", p) for p in pattern] + [("f", g)]
     if fn in ("VectorFieldSample::from_components", "VectorFieldSample::try_from_components"):
         at = 0
@@ -12350,8 +12408,7 @@ def soorat_eval(root: Path, fn, toks):
         out = [("i", count)]
         for i in range(count):
             x, y, z = arrs[0][i], arrs[1][i], arrs[2][i]
-            sq = x * x + y * y + z * z
-            mag = math.sqrt(sq) if not math.isnan(sq) else math.nan
+            mag = so_magnitude(x, y, z)
             if mag > mx:
                 mx = mag
             out += [("f", x), ("f", y), ("f", z)]
@@ -12581,7 +12638,7 @@ def validate_soorat(root: Path, path: Path) -> list:
     errs = check_platform(header)
     if errs:
         return errs
-    serde = 0
+    serde = edge = 0
     for n, (fn, _cls, ins, outs) in enumerate(rows, 1):
         toks = [(k, tok_text(b) if k == "s" else b) for k, b in ins]
         if fn.startswith("json::"):
@@ -12589,12 +12646,20 @@ def validate_soorat(root: Path, path: Path) -> list:
             serde += soorat_json_serde_differs(fn, toks)
         else:
             want = soorat_eval(root, fn, toks)
+            if fn.startswith("VectorFieldSample::"):
+                global SO_RUST_MAG
+                SO_RUST_MAG = True
+                rust = soorat_eval(root, fn, toks)
+                SO_RUST_MAG = False
+                edge += not toks_same(want, rust)
         if want is None:
             errs.append(f"soorat row {n}: no transcription for {fn}")
             continue
         rows_agree(fn, [b for _k, b in toks], outs, want, "soorat", n, errs)
     if serde:
         print(f"     soorat: {serde} f32 readings serde_json's double rounding gives otherwise (ADR 0002 row 45)")
+    if edge:
+        print(f"     soorat: {edge} vector samples Rust's magnitudes give otherwise (ADR 0002 row 18, M7 part 2b)")
     return errs
 
 def main() -> int:
@@ -12656,8 +12721,8 @@ def main() -> int:
     errs += check_corrections(root, "fdtd", golden / "fdtd.tsv", fdtd_corrections(root, golden / "fdtd.tsv"))
     errs += check_corrections(root, "fdtd_2d3d", golden / "fdtd_2d3d.tsv",
                               fdtd_2d3d_corrections(root, golden / "fdtd_2d3d.tsv"))
-    for mod in ("beam", "charge", "circuit", "complex", "fdtd", "fdtd_2d3d", "field", "json", "material", "maxwell",
-                "polarization", "relativity", "rf", "scattering", "wave"):
+    for mod in ("beam", "charge", "circuit", "complex", "fdtd", "fdtd_2d3d", "field", "json", "material", "math",
+                "maxwell", "polarization", "relativity", "rf", "scattering", "wave"):
         errs += check_adr(root, mod, golden / f"{mod}.tsv")
     errs += cx_rows(golden / "complex.tsv")[1]
     errs += fv_rows(root, "field", golden / "field.tsv")[1] + fv_rows(root, "charge", golden / "charge.tsv")[1]

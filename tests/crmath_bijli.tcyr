@@ -268,6 +268,32 @@ fn main() {
     }
     assert_eq(abad, 0, "fast = accurate, and asin odd, on 2,000 arguments");
 
+    # src/mathx.cyr's max and min order −0 < +0 (IEEE 754-2019, ADR 0002 row 47, M7 part 2b): +0 and −0 in either
+    # order, NaN ignored, other ties as they are.
+    test_group("cyrius_max_min_signed_zero");
+    var pz: f64 = 0.0;
+    var nz: f64 = -0.0;
+    var mx1: f64 = _bj_max(pz, nz);
+    var mx2: f64 = _bj_max(nz, pz);
+    var mx3: f64 = _bj_max(nz, nz);
+    assert(_bj_k_bits(mx1) == 0 && _bj_k_bits(mx2) == 0 && _bj_k_bits(mx3) == 0x8000000000000000,
+      "max(+0, -0) = max(-0, +0) = +0; max(-0, -0) = -0");
+    var mn1: f64 = _bj_min(pz, nz);
+    var mn2: f64 = _bj_min(nz, pz);
+    var mn3: f64 = _bj_min(pz, pz);
+    assert(_bj_k_bits(mn1) == 0x8000000000000000 && _bj_k_bits(mn2) == 0x8000000000000000 && _bj_k_bits(mn3) == 0,
+      "min(+0, -0) = min(-0, +0) = -0; min(+0, +0) = +0");
+    var qn: f64 = _bj_from_bits(0x7FF8000000000000);
+    var mx4: f64 = _bj_max(qn, nz);
+    var mn4: f64 = _bj_min(pz, qn);
+    var mx5: f64 = _bj_max(1.5, -2.0);
+    var mn5: f64 = _bj_min(1.5, -2.0);
+    assert(_bj_k_bits(mx4) == 0x8000000000000000 && _bj_k_bits(mn4) == 0 && mx5 == 1.5 && mn5 == -2.0,
+      "a NaN operand ignored; unequal values as ever");
+    var us, ue = _bj_k_ux_from(nz);
+    var vs, ve = _bj_k_ux_from(pz);
+    var ws, we = _bj_ux_max(us, ue, vs, ve);
+    assert(_bj_k_bits(ws) == 0, "the unbounded-exponent max: +0 over -0 too");
     return assert_summary();
 }
 

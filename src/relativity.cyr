@@ -1569,7 +1569,7 @@ fn _bj_rel_sample_ux(obs: *f64, t: f64, tau: f64, st: *f64, s: *f64) {
         var qs, qe = _bj_k_ux_div(u2s, u2e, ms, me);
         dg = _bj_k_ux_sub_f64(qs, qe, cs, ce);
     }
-    var mxs, mxe = _bj_k_ux_max(ms, me, ls, le);
+    var mxs, mxe = _bj_ux_max(ms, me, ls, le);
     var mo: f64 = _bj_rel_max_abs3(obs, 0);
     var mp: f64 = _bj_rel_max_abs3(st, 0);
     var mv: f64 = _bj_rel_max_abs3(st, 3);
@@ -1579,9 +1579,9 @@ fn _bj_rel_sample_ux(obs: *f64, t: f64, tau: f64, st: *f64, s: *f64) {
     var mvs, mve = _bj_k_ux_from(mv);
     var ats, ate = _bj_k_ux_from(at);
     var mts, mte = _bj_k_ux_mul(mvs, mve, ats, ate);
-    var a1s, a1e = _bj_k_ux_max(mxs, mxe, mos, moe);
-    var a2s, a2e = _bj_k_ux_max(a1s, a1e, mps, mpe);
-    var a3s, a3e = _bj_k_ux_max(a2s, a2e, mts, mte);
+    var a1s, a1e = _bj_ux_max(mxs, mxe, mos, moe);
+    var a2s, a2e = _bj_ux_max(a1s, a1e, mps, mpe);
+    var a3s, a3e = _bj_ux_max(a2s, a2e, mts, mte);
     var noise: f64 = _bj_k_ux_mul_f64(1.0, 0 - 51, a3s, a3e);
     s[0] = tau;
     s[1] = g;
