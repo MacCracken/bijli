@@ -686,8 +686,20 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
   `[deps] stdlib`, so no other compile carries it; the ai unit prints the stdlib's own warnings only, the one recorded
   exception to the warning-free rule (CLAUDE.md). Some of `src/json.cyr`'s helpers are public for it. M7 Part 1 is
   done (`port-parity.md` §135).
+- **Cyrius port, M7 part 2a — the range-edge review begins** (`port-parity.md` §136): the review of M7's modules
+  (bridge, soorat, their JSON, ai) against the standing answers of 2026-11-12, and the user's answer of 2026-11-18 on
+  ±0 ties (IEEE 754-2019's −0 < +0 for every max and min, part 2b). §133's finding is corrected: Rust's x86-64
+  `f64::max` returns its second operand on a tie, as `_bj_max` did; validate.py's `rust_max` was the defect.
 
 ### Fixed
+
+- **bridge** (ADR 0002 rows 13 and 18, M7 part 2a): `joule_heating_power_density`, `em_energy_to_heating_rate`,
+  `e_field_to_optical_intensity`, `nuclear_charge_potential` and `magnetic_flux_to_magnetostrictive_strain` round once
+  (Rust's J·J overflowed at J = 10¹⁵⁵ for a representable 10³⁰⁰; the intensity at 100 V/m was an ulp high); the heating
+  rate's "ρ·c_p not positive" sentinel is decided on the exact product (ρ = c_p = 10⁻²⁰⁰ gave 0); the strain's clamp on
+  the exact |B|; `wavelength_to_refractive_index_bk7` past λ ≈ 1.3·10¹⁵⁷ nm gives n = 1.8116 where λ²'s overflow gave
+  the sentinel 1.0. The cost, measured: 76–159 ns a call for the five where Rust's chain took 6–11 ns, and 28 ns for
+  the Sellmeier index (21 before; `port-parity.md` §136).
 - **relativity** (ADR 0002 row 27, M2 part 1d-1): `lienard_wiechert_e` returned Ok(NaN) for a NaN R, which the
   Liénard–Wiechert potentials refuse, and now refuses it with their InvalidParameter ("R vector must not contain
   NaN").

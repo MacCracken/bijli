@@ -1,7 +1,8 @@
-# bridge.tcyr — src/bridge.cyr (M7 part 1a): the eight cross-crate bridges (ushma, prakash, tanmatra, dravya).
+# bridge.tcyr — src/bridge.cyr (M7 parts 1a and 2a): the eight cross-crate bridges (ushma, prakash, tanmatra, dravya).
 #
 # Every group not named cyrius_* is 1.2.0:src/bridge.rs's test of that name, ported assertion for assertion (the ledger
-# matches them by name): all 18. tests/golden/bridge.tsv pins every function over its grid against Rust besides.
+# matches them by name): all 18. tests/golden/bridge.tsv pins every function over its grid besides, as the port
+# computes it (part 2a: round once, ADR 0002 row 13; the Sellmeier index's range edge, row 18).
 
 include "tests/lib.cyr"
 
@@ -121,6 +122,33 @@ fn main() {
     var vt: f64 = bj_nuclear_charge_potential(4294967295, 1.0);
     assert(vn == 0.0 && vb == 0.0 && vt > 0.0, "Z = −1 and 2³² give 0.0; 2³² − 1 is a u32");
 
+    # Part 2a's edges: each value Rust's chain gave otherwise, as bits (a literal has no exponent).
+    test_group("cyrius_bridge_edges");
+    var j1: f64 = bj_joule_heating_power_density(_bj_from_bits(0x601DD55745CBB7ED), _bj_from_bits(0x3DDB7CDFD9D7BDBB));
+    assert(_bj_k_bits(j1) == 0x7E37E43C8800759C, "J = 1e155, ρ = 1e-10: 1e300 (Rust's J·J overflowed)");
+    var e1p: f64 = _bj_from_bits(0x01A56E1FC2F8F359);
+    var e1r: f64 = _bj_from_bits(0x16687E92154EF7AC);
+    var h1: f64 = bj_em_energy_to_heating_rate(e1p, e1r, e1r);
+    assert(_bj_k_bits(h1) == 0x54B249AD2594C37D, "ρ = c_p = 1e-200: p/(ρc_p) = 1e100 (Rust's sentinel 0)");
+    var e2r: f64 = -e1r;
+    var h2: f64 = bj_em_energy_to_heating_rate(1.0, e2r, e2r);
+    assert(_bj_k_bits(h2) == 0x7FF0000000000000, "both negative, the exact product positive: 1/1e-400 overflows");
+    var h3: f64 = bj_em_energy_to_heating_rate(1.0, e2r, e1r);
+    assert(h3 == 0.0, "opposite signs: the sentinel");
+    var i1: f64 = bj_e_field_to_optical_intensity(100.0);
+    assert(_bj_k_bits(i1) == 0x402A8B4FDB8A3258, "E = 100 V/m: 13.27209363996478 (Rust's ulp high)");
+    var v1: f64 = bj_nuclear_charge_potential(26, _bj_from_bits(0x3CD203AF9EE75616));
+    assert(_bj_k_bits(v1) == 0x4181DA3331F38560, "Fe at 1 fm: 37439078.24390674 (Rust's ulp high)");
+    var m1: f64 = bj_magnetic_flux_to_magnetostrictive_strain(1.0, _bj_from_bits(0xBEDD5C31593E5FB7),
+      _bj_from_bits(0x4001333333333333));
+    assert(_bj_k_bits(m1) == 0xBEC30E014A651F86, "iron at 1 T: -2.271498107084911e-6 (Rust's ulp off)");
+    var below: f64 = _bj_from_bits(0x4001333333333332);
+    var m2: f64 = bj_magnetic_flux_to_magnetostrictive_strain(below, -1.0, _bj_from_bits(0x4001333333333333));
+    assert(m2 > -1.5, "a hair below B_sat: under (3/2)·λ_s, where Rust's rounded ratio reached 1");
+    var n1: f64 = bj_wavelength_to_refractive_index_bk7(_bj_from_bits(0x6974E718D7D7625A));
+    assert(_bj_k_bits(n1) == 0x3FFCFC4A4E77A7C9, "λ = 1e200 nm: n = 1.8116 (Rust's λ² overflowed to the sentinel)");
+    var n2: f64 = bj_wavelength_to_refractive_index_bk7(_bj_from_bits(0x606BF801D16EFC6E));
+    assert(_bj_k_bits(n2) == 0x3FFCFC4A4E77A7C9, "λ = 3e156 nm, in range: Rust's own bits");
     return assert_summary();
 }
 

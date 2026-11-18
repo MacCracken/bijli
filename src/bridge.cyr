@@ -2,38 +2,59 @@
 # electromagnetism parameters (ushma: thermodynamics; prakash: optics; tanmatra: atomic physics; dravya: material
 # science). Always available, dependency-free: each function takes and gives f64 values (M7 part 1a).
 #
-# Each function is bridge.rs's chain in Rust's order of operations: + − × ÷, sqrt (correctly rounded) and a clamp, so
-# every result is Rust's bits. The constants are bridge.rs's own (src/bridge_data.cyr, generated from Rust 1.2.0's
-# literals by scripts/oracle/validate.py), CODATA 2018 where they are physical. The sentinels are Rust's: 0.0 or 1.0
-# where an argument is not positive (NaN included), as each function says.
+# The range-edge review (M7 part 2a, plan §0.1, the user's answers of 2026-11-12): a function that is one product or
+# quotient of its inputs and constants is rounded once from its exact value (ADR 0002 row 13: kimiya's monomials,
+# src/crmath_kx.cyr), where Rust's chain rounds two to four times and over- or underflows at the range edges; a
+# non-finite input keeps Rust's chain. The Sellmeier index, a sum, keeps Rust's chain wherever every intermediate is
+# normal and is otherwise rerun with an unbounded exponent (row 18). The constants are bridge.rs's own
+# (src/bridge_data.cyr, generated from Rust 1.2.0's literals by scripts/oracle/validate.py), CODATA 2018 where they are
+# physical. The sentinels are Rust's: 0.0 or 1.0 where an argument is not positive (NaN included), as each function
+# says, decided on the exact value where Rust tested a rounded product.
 
 private
 
 # ── ushma (thermodynamics) ─────────────────────────────────────────────────────────────────────────────────────────
 
 # Joule heating power per unit volume (W/m³), p = J²·ρ, from the current density magnitude J (A/m²) and the bulk
-# resistivity ρ (Ω·m); feeds bj_em_energy_to_heating_rate. Mirrors `joule_heating_power_density`.
+# resistivity ρ (Ω·m); feeds bj_em_energy_to_heating_rate. Rounded once (row 13; Rust's (J·J)·ρ overflowed at J =
+# 10¹⁵⁵ for ρ = 10⁻¹⁰, whose p is 10³⁰⁰). Mirrors `joule_heating_power_density`.
 #must_use
 #pure
 public fn bj_joule_heating_power_density(current_density_a_m2: f64, resistivity_ohm_m: f64): f64 {
-    var jj: f64 = current_density_a_m2 * current_density_a_m2;
-    var p: f64 = jj * resistivity_ohm_m;
-    return p;
+    if (_bj_is_finite(current_density_a_m2) == 0 || _bj_is_finite(resistivity_ohm_m) == 0) {
+        var jj: f64 = current_density_a_m2 * current_density_a_m2;
+        var p: f64 = jj * resistivity_ohm_m;
+        return p;
+    }
+    var r: f64 = _bj_k_cr_mul3(current_density_a_m2, current_density_a_m2, resistivity_ohm_m);
+    return r;
 }
 
 # The temperature rise rate (K/s) of an absorbed EM power density p (W/m³) under adiabatic heating, dT/dt = p/(ρ·c_p),
 # ρ the mass density (kg/m³) and c_p the specific heat (J/(kg·K)); 0.0 where ρ·c_p is not positive (NaN included).
-# Mirrors `em_energy_to_heating_rate`.
+# For finite ρ and c_p the test is on the exact product (both positive or both negative) and the rate is rounded once
+# (row 13): Rust tested the rounded ρ·c_p, so ρ = c_p = 10⁻²⁰⁰ (product 10⁻⁴⁰⁰, positive) gave the sentinel 0.0 for a
+# rate of p·10⁴⁰⁰, and an overflowing product gave 0 for a representable rate. Mirrors `em_energy_to_heating_rate`.
 #must_use
 #pure
 public fn bj_em_energy_to_heating_rate(power_density_w_m3: f64, material_density_kg_m3: f64,
   specific_heat_j_per_kg_k: f64): f64 {
-    var denom: f64 = material_density_kg_m3 * specific_heat_j_per_kg_k;
-    if (denom > 0.0) {
-        var r: f64 = power_density_w_m3 / denom;
-        return r;
+    var rho: f64 = material_density_kg_m3;
+    var cp: f64 = specific_heat_j_per_kg_k;
+    if (_bj_is_finite(rho) == 0 || _bj_is_finite(cp) == 0) {
+        var denom: f64 = rho * cp;
+        if (denom > 0.0) {
+            var r: f64 = power_density_w_m3 / denom;
+            return r;
+        }
+        return 0.0;
     }
-    return 0.0;
+    var pos = 0;
+    if ((rho > 0.0 && cp > 0.0) || (rho < 0.0 && cp < 0.0)) { pos = 1; }
+    if (pos == 0) { return 0.0; }
+    if (_bj_is_finite(power_density_w_m3) == 0) { return power_density_w_m3; }   # ±∞ or NaN over a positive
+    var q: f64 = _bj_k_cr_div2(power_density_w_m3, rho, cp);
+    return q;
 }
 
 # ── prakash (optics) ───────────────────────────────────────────────────────────────────────────────────────────────
@@ -41,7 +62,10 @@ public fn bj_em_energy_to_heating_rate(power_density_w_m3: f64, material_density
 # Schott N-BK7's refractive index at a vacuum wavelength λ (nm), by the Sellmeier equation with λ in µm: n² = 1 +
 # B₁λ²/(λ² − C₁) + B₂λ²/(λ² − C₂) + B₃λ²/(λ² − C₃) (n_d = 1.5168 at 587.56 nm). The fit holds for 300–2500 nm; outside
 # it the value is an extrapolation (poles near 77 nm, 141 nm and 10.2 µm). The sentinel 1.0 where λ is not positive
-# (NaN included) or n² ≤ 0 (NaN included). Mirrors `wavelength_to_refractive_index_bk7`.
+# (NaN included) or n² ≤ 0 (NaN included). Rust's chain wherever every intermediate is normal; otherwise (λ past about
+# 1.3·10¹⁵⁷ nm, where λ² overflowed and Rust gave the sentinel for n = 1.8116, or below 10⁻¹⁵¹ nm) the chain is rerun
+# with an unbounded exponent, each operation to 53 bits, n² rounded once (row 18); +∞ keeps Rust's chain. Mirrors
+# `wavelength_to_refractive_index_bk7`.
 #must_use
 #pure
 public fn bj_wavelength_to_refractive_index_bk7(wavelength_nm: f64): f64 {
@@ -55,28 +79,75 @@ public fn bj_wavelength_to_refractive_index_bk7(wavelength_nm: f64): f64 {
     var t2: f64 = _BJ_BRIDGE_BK7_B2 * l2;
     var d2: f64 = l2 - _BJ_BRIDGE_BK7_C2;
     var q2: f64 = t2 / d2;
-    n2 = n2 + q2;
+    var n2b: f64 = n2 + q2;
     var t3: f64 = _BJ_BRIDGE_BK7_B3 * l2;
     var d3: f64 = l2 - _BJ_BRIDGE_BK7_C3;
     var q3: f64 = t3 / d3;
-    n2 = n2 + q3;
-    if (n2 > 0.0) {
-        var n: f64 = f64_sqrt(n2);
+    var n2c: f64 = n2b + q3;
+    # The products are where the chain leaves the range: with them normal, each λ² − C is exact (zero only at a pole,
+    # whose ±∞ is the true value) and each quotient normal. For 10⁻¹⁵⁰ ≤ λ ≤ 10¹⁵⁷ nm they all are (λ² from 10⁻³⁰⁶ to
+    # 10³⁰⁸, B₁λ² below DBL_MAX), so only a λ outside that tests them.
+    var lo: f64 = _bj_from_bits(0x20CA2FE76A3F9475);
+    var hi: f64 = _bj_from_bits(0x60874EAC2E8727B1);
+    if (wavelength_nm < lo || wavelength_nm > hi) {
+        var ok = _bj_k_ux_normal(um) & _bj_k_ux_normal(l2) & _bj_k_ux_normal(t1) & _bj_k_ux_normal(t2);
+        ok = ok & _bj_k_ux_normal(t3);
+        if (ok == 0 && _bj_is_finite(wavelength_nm) == 1) { n2c = _bj_bridge_bk7_ux(wavelength_nm); }
+    }
+    if (n2c > 0.0) {
+        var n: f64 = f64_sqrt(n2c);
         return n;
     }
     return 1.0;
 }
 
+# The Sellmeier n² of bj_wavelength_to_refractive_index_bk7 for a finite λ > 0 on an unbounded exponent: Rust's chain,
+# each operation rounded to 53 bits (kimiya's _bj_k_ux_*), the sum rounded once into binary64.
+#must_use
+fn _bj_bridge_bk7_ux(wavelength_nm: f64): f64 {
+    var ls, le = _bj_k_ux_from(wavelength_nm);
+    var ks, ke = _bj_k_ux_from(_BJ_BRIDGE_NM_TO_UM);
+    var us, ue = _bj_k_ux_mul(ls, le, ks, ke);
+    var l2s, l2e = _bj_k_ux_mul(us, ue, us, ue);
+    var ns, ne = _bj_k_ux_from(1.0);
+    for (var k = 0; k < 3; k = k + 1) {
+        var b: f64 = _BJ_BRIDGE_BK7_B1;
+        var c: f64 = _BJ_BRIDGE_BK7_C1;
+        if (k == 1) {
+            b = _BJ_BRIDGE_BK7_B2;
+            c = _BJ_BRIDGE_BK7_C2;
+        } elif (k == 2) {
+            b = _BJ_BRIDGE_BK7_B3;
+            c = _BJ_BRIDGE_BK7_C3;
+        }
+        var bs, be = _bj_k_ux_from(b);
+        var cs, ce = _bj_k_ux_from(c);
+        var ts, te = _bj_k_ux_mul(bs, be, l2s, l2e);
+        var ds, de = _bj_k_ux_sub(l2s, l2e, cs, ce);
+        var qs, qe = _bj_k_ux_div(ts, te, ds, de);
+        var as, ae = _bj_k_ux_add(ns, ne, qs, qe);
+        ns = as;
+        ne = ae;
+    }
+    var r: f64 = _bj_k_ux_round(ns, ne, 0.0);
+    return r;
+}
+
 # The time-averaged optical intensity (W/m²) of a plane wave in vacuum with peak E-field amplitude E (V/m), I =
-# ε₀·c·E²/2. Mirrors `e_field_to_optical_intensity`.
+# ε₀·c·E²/2, rounded once for a finite E (row 13: Rust's four roundings put E = 100 V/m an ulp low, 13.272093639964783
+# for 13.27209363996478); a non-finite E keeps Rust's chain. Mirrors `e_field_to_optical_intensity`.
 #must_use
 #pure
 public fn bj_e_field_to_optical_intensity(e_amplitude_v_m: f64): f64 {
-    var a: f64 = 0.5 * _BJ_BRIDGE_EPSILON_0;
-    var b: f64 = a * _BJ_BRIDGE_C;
-    var c: f64 = b * e_amplitude_v_m;
-    var i: f64 = c * e_amplitude_v_m;
-    return i;
+    if (_bj_is_finite(e_amplitude_v_m) == 0) {
+        var a: f64 = 0.5 * _BJ_BRIDGE_EPSILON_0;
+        var b: f64 = a * _BJ_BRIDGE_C;
+        var c: f64 = b * e_amplitude_v_m;
+        var i: f64 = c * e_amplitude_v_m;
+        return i;
+    }
+    var r: f64 = _bj_k_cr_mul5(0.5, _BJ_BRIDGE_EPSILON_0, _BJ_BRIDGE_C, e_amplitude_v_m, e_amplitude_v_m);
+    return r;
 }
 
 # ── tanmatra (atomic and nuclear physics) ──────────────────────────────────────────────────────────────────────────
@@ -93,18 +164,23 @@ public fn bj_energy_level_to_wavelength_nm(energy_ev: f64): f64 {
 }
 
 # The Coulomb potential (V) of a nuclear charge Z at distance r (m), V = k·Z·e/r with k = 1/(4πε₀) and e the
-# elementary charge (CODATA 2018). Z is Rust's u32 (0 ≤ Z < 2³²); 0.0 where r is not positive (NaN included), and for
-# the Cyrius-only Z outside a u32, which Rust's type can't take. Mirrors `nuclear_charge_potential`.
+# elementary charge (CODATA 2018), rounded once for a finite r (row 13; Rust's three roundings put Fe's potential at
+# 1 fm an ulp high); r = +∞ keeps Rust's chain. Z is Rust's u32 (0 ≤ Z < 2³²); 0.0 where r is not positive (NaN
+# included), and for the Cyrius-only Z outside a u32, which Rust's type can't take. Mirrors `nuclear_charge_potential`.
 #must_use
 #pure
 public fn bj_nuclear_charge_potential(atomic_number, distance_m: f64): f64 {
     if (distance_m != distance_m || distance_m <= 0.0) { return 0.0; }
     if (atomic_number < 0 || atomic_number > 4294967295) { return 0.0; }
     var z: f64 = f64_from(atomic_number);
-    var kz: f64 = _BJ_BRIDGE_K * z;
-    var kze: f64 = kz * _BJ_BRIDGE_E;
-    var v: f64 = kze / distance_m;
-    return v;
+    if (_bj_is_finite(distance_m) == 0) {
+        var kz: f64 = _BJ_BRIDGE_K * z;
+        var kze: f64 = kz * _BJ_BRIDGE_E;
+        var v: f64 = kze / distance_m;
+        return v;
+    }
+    var r: f64 = _bj_k_cr_mul3_div(_BJ_BRIDGE_K, z, _BJ_BRIDGE_E, distance_m);
+    return r;
 }
 
 # ── dravya (material science) ──────────────────────────────────────────────────────────────────────────────────────
@@ -122,17 +198,39 @@ public fn bj_e_field_to_piezo_stress(e_field_v_m: f64, piezo_coeff_c_m2: f64): f
 # The magnetostrictive strain of a flux density B (T) in the quadratic-moment model, ε = (3/2)·λ_s·(B/B_sat)² with
 # B/B_sat clamped to [−1, 1] (the strain saturates; NaN stays NaN, as Rust's f64::clamp), λ_s the isotropic saturation
 # magnetostriction (signed, e.g. ≈ −7·10⁻⁶ for iron) and B_sat the saturation flux density (T); 0.0 where B_sat is not
-# positive (NaN included). Mirrors `magnetic_flux_to_magnetostrictive_strain`.
+# positive (NaN included). For finite B and λ_s, rounded once (row 13): (3/2)·λ_s·B²/B_sat² where |B| < B_sat, and
+# (3/2)·λ_s where |B| ≥ B_sat, the clamp decided on the exact |B| against B_sat (Rust's rounded ratio could reach 1 just
+# below it); a non-finite input keeps Rust's chain. Mirrors `magnetic_flux_to_magnetostrictive_strain`.
 #must_use
 #pure
 public fn bj_magnetic_flux_to_magnetostrictive_strain(flux_density_t: f64, saturation_magnetostriction: f64,
   saturation_flux_t: f64): f64 {
     if (saturation_flux_t != saturation_flux_t || saturation_flux_t <= 0.0) { return 0.0; }
-    var ratio: f64 = flux_density_t / saturation_flux_t;
-    if (ratio < -1.0) { ratio = -1.0; }
-    if (ratio > 1.0) { ratio = 1.0; }
-    var a: f64 = 1.5 * saturation_magnetostriction;
-    var b: f64 = a * ratio;
-    var e: f64 = b * ratio;
-    return e;
+    var b: f64 = flux_density_t;
+    var ls: f64 = saturation_magnetostriction;
+    var sat: f64 = saturation_flux_t;
+    if (_bj_is_finite(b) == 0 || _bj_is_finite(ls) == 0 || _bj_is_finite(sat) == 0) {
+        var ratio: f64 = b / sat;
+        if (ratio < -1.0) { ratio = -1.0; }
+        if (ratio > 1.0) { ratio = 1.0; }
+        var a: f64 = 1.5 * ls;
+        var p: f64 = a * ratio;
+        var e: f64 = p * ratio;
+        return e;
+    }
+    var ab: f64 = f64_abs(b);
+    if (ab >= sat) {
+        var s1: f64 = 1.5 * ls;
+        return s1;
+    }
+    var num: f64[4];
+    num[0] = 1.5;
+    num[1] = ls;
+    num[2] = b;
+    num[3] = b;
+    var den: f64[2];
+    den[0] = sat;
+    den[1] = sat;
+    var r: f64 = _bj_k_cr_mono(&num, 4, &den, 2);
+    return r;
 }

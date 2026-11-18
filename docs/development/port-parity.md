@@ -7467,3 +7467,57 @@ eigenmode search (`dft_magnitude`'s recurrence and magnitude, `find_eigenmodes`'
   both bundles current; the audit passes). One bench run beside the last 1b-2 run, at load 4.0 against 1–3: median
   ratio 1.03 over 112 benches, within noise (1c changes no benched code; Rust 1.2.0 has no ai bench). **M7 Part 1 is
   done.** Next: Part 2, the range-edge review of M7's modules.
+
+## 136. M7 part 2a: the range-edge review begins; bridge.rs rounded once (2026-11-18)
+
+- **M7's Part 2** (plan §0.1): a review of M7's modules against the user's standing answers of 2026-11-12 (round
+  once for every function that is one product or quotient of inputs and constants; Rust's chain on an unbounded
+  exponent where an intermediate leaves the range and the result is representable; tests on the exact value). It
+  found:
+  - bridge.rs: five of its eight functions are monomials, rounded two to four times, three of them over- or
+    underflowing at the edges, and the heating rate's sentinel tests a product that can under- or overflow; the
+    Sellmeier index, a sum, gives its sentinel 1.0 past λ ≈ 1.3·10¹⁵⁷ nm, where λ² overflows and n is 1.8116.
+    `energy_level_to_wavelength_nm` (one quotient) and `e_field_to_piezo_stress` (one product) are already rounded
+    once.
+  - soorat.rs: `VectorFieldSample`'s magnitudes √(x² + y² + z²) overflow past 1.3·10¹⁵⁴ and underflow below
+    1.5·10⁻¹⁵⁴ (a sum: the range-edge rule); the constructors otherwise copy, or cast to f32 once; the JSON rounds
+    once already (rows 11 and 45). ai.rs has no arithmetic.
+  - **§133's finding was backwards.** math.tsv's frozen rows show Rust's x86-64 `f64::max(0.0, -0.0)` is −0.0 and
+    `f64::max(-0.0, 0.0)` is 0.0: the second operand on a tie, as `_bj_max` and `_bj_min` do. validate.py's
+    `rust_max` and `rust_min` take the first, and its math validator exempts exactly those four rows
+    (`SIGNED_ZERO_TIE`); soorat's model used `rust_max`, and part 1b-1 changed the port's `from_nf2ff` fold to match
+    the model. On aarch64 Rust's max and min are `fmaxnm`/`fminnm`: +0 and −0 in either order. **The user's answer of
+    2026-11-18**: IEEE 754-2019's rule, −0 < +0 (commutative, Rust's on aarch64), for every max and min; it changes
+    two of the 646,235 frozen rows (math.tsv's direct `max(0.0, -0.0)` and `min(-0.0, 0.0)`, measured with the rule
+    in a scratch copy). Part 2b.
+  - Part 2 runs as 2a, bridge.rs, and 2b, soorat's magnitudes and the ±0 rule.
+- **2a, ADR 0002 row 13, amended**: `joule_heating_power_density` (J·J·ρ), `em_energy_to_heating_rate` (p/(ρ·c_p)),
+  `e_field_to_optical_intensity` (0.5·ε₀·c·E·E), `nuclear_charge_potential` (K·Z·e/r) and
+  `magnetic_flux_to_magnetostrictive_strain` ((3/2)·λ_s·B²/B_sat² below the clamp, 1.5·λ_s at or above it) are
+  rounded once for finite inputs, on src/crmath_kx.cyr's `_bj_k_cr_mul3`, `_div2`, `_mul5`, `_mul3_div` and `_mono`;
+  a non-finite input keeps Rust's chain. The heating rate's sentinel is the exact product's sign (both factors
+  positive or both negative; ±∞ or NaN power over a positive is itself), and the strain's clamp is the exact |B|
+  against B_sat. Rust's J·J overflowed at J = 10¹⁵⁵ for ρ = 10⁻¹⁰ (p = 10³⁰⁰); ρ = c_p = 10⁻²⁰⁰ gave the sentinel
+  0 for p·10⁴⁰⁰; the intensity at 100 V/m (13.272093639964783 for 13.27209363996478), Fe's potential at 1 fm and
+  iron's strain at 1 T were each an ulp off.
+- **2a, ADR 0002 row 18, amended**: the Sellmeier index keeps Rust's chain while λ·10⁻³, λ² and each B·λ² pass
+  `_bj_k_ux_normal`; otherwise it is rerun with every operation to 53 bits (`_bj_bridge_bk7_ux`), n² rounded once
+  and its root correctly rounded. With the products normal each λ² − C is exact (zero only at a pole, whose ±∞ is
+  the true value) and each quotient normal, so only the products need the test (a first version tested every
+  intermediate and sent the exact poles to the rerun, whose zero divisor the model refused).
+- **The rows**: `bridge.tsv` is emitted from the port's rule: validate.py's `bridge_eval` (exact rationals,
+  `bridge_mono`; the rerun on its ux helpers), with Rust's chains kept as `bridge_rust_eval`; 42 rows appended
+  (`emit_1a`'s Part 2a edges: three predecessors of B_sat, the heating rate's signs and products past either end, λ
+  either side of 1.34·10¹⁵⁷ nm and 1.5·10⁻¹⁵¹ nm, E either side of 1.34·10¹⁵⁴): 739 rows, of which Rust's chains
+  give 86 otherwise (row 13) and 8 (row 18), validate.py's count. `tests/bridge.tcyr`'s `cyrius_bridge_edges` pins
+  each (33 assertions).
+- **The cost**, measured beside HEAD's tree (one run each, 200,000 calls, load 1.3–2.0; Rust 1.2.0 has no bridge
+  bench): joule 6 → 76 ns, the heating rate 6 → 87, the intensity 6 → 131, the potential 11 → 113, the strain 10 →
+  159 (kimiya's fast paths), and the Sellmeier index 21 → 28 ns. A first version tested the five products on every
+  call (37 ns); for 10⁻¹⁵⁰ ≤ λ ≤ 10¹⁵⁷ nm they are all normal (λ² from 10⁻³⁰⁶ to 10³⁰⁸), so one range test on λ
+  comes first.
+- **Result, every target** (x86_64 ELF, x86_64 PE, aarch64): **21 modules, 0 failing; 646,277 ok, 0 failed, 0
+  measured, 0 pending, 123,844 accepted (ADR 01: 43,087; ADR 0002: 80,757)**; all 520 digests equal (bridge's eight
+  new); the 32 test files pass on all three (2,872 assertions), the only warnings the ai unit's recorded ones. The
+  gate is clean (execution coverage 445 of 445; the audit passes); validate.py 770,121 rows, 0 problems; `emit.py
+  --check` current. Next: 2b.

@@ -12090,9 +12090,88 @@ def check_bridge_data(root: Path) -> list:
     return []
 
 
+def bridge_mono(num, den=()):
+    """RN(Π num / Π den) of finite doubles, rounded once from the exact value (kimiya's monomials, ADR 0002 row 13): a
+    zero takes the xor of the factors' signs, as IEEE's chain gives it; ±∞ past DBL_MAX."""
+    neg = sum(math.copysign(1.0, x) < 0 for x in list(num) + list(den)) % 2 == 1
+    q = Fraction(1)
+    for x in num:
+        q *= Fraction(x)
+    for x in den:
+        q /= Fraction(x)
+    if q == 0:
+        return -0.0 if neg else 0.0
+    return rn_frac(q)
+
+
+def bridge_finite(*xs) -> bool:
+    return all(math.isfinite(x) for x in xs)
+
+
+def bridge_bk7_ux(lam):
+    """bk7's n² on an unbounded exponent (row 18): Rust's chain with every operation to 53 bits, rounded once."""
+    c = bridge_consts()
+    l2 = ux_mul(ux_mul(ux(lam), ux(c["NM_TO_UM"])), ux_mul(ux(lam), ux(c["NM_TO_UM"])))
+    n2 = ux(1.0)
+    for b, cc in (("BK7_B1", "BK7_C1"), ("BK7_B2", "BK7_C2"), ("BK7_B3", "BK7_C3")):
+        n2 = ux_add(n2, ux_div(ux_mul(ux(c[b]), l2), ux_sub(l2, ux(c[cc]))))
+    return ux_fin(n2)
+
+
+def bridge_normal(x: float) -> bool:
+    """src/crmath_kx.cyr's _bj_k_ux_normal: |x| in [2^-1021, DBL_MAX], where an IEEE result is its 53-bit rounding."""
+    return math.isfinite(x) and abs(x) >= 2.0 ** -1021
+
+
 def bridge_eval(fn, v):
+    """The port's bridge (M7 part 2a): bridge_rust_eval's chains, but every function that is one product or quotient of
+    its inputs and constants rounded once for finite inputs (row 13), the heating rate's sentinel on the exact product
+    ρ·c_p, the strain's clamp on the exact |B| against B_sat, and the Sellmeier index rerun on an unbounded exponent
+    where an intermediate leaves the normal range (row 18)."""
+    c = bridge_consts()
+    if fn == "bridge::joule_heating_power_density" and bridge_finite(*v):
+        return [("f", bridge_mono([v[0], v[0], v[1]]))]
+    if fn == "bridge::em_energy_to_heating_rate" and bridge_finite(v[1], v[2]):
+        p, rho, cp = v
+        if not ((rho > 0 and cp > 0) or (rho < 0 and cp < 0)):
+            return [("f", 0.0)]
+        if not math.isfinite(p):
+            return [("f", p)]
+        return [("f", bridge_mono([p], [rho, cp]))]
+    if fn == "bridge::wavelength_to_refractive_index_bk7" and math.isfinite(v[0]) and v[0] > 0:
+        lam = v[0]
+        um = lam * c["NM_TO_UM"]
+        l2 = um * um
+        chain = [um, l2]                                # the products; λ² − C is then exact, its quotient normal
+        n2 = 1.0
+        for b, cc in (("BK7_B1", "BK7_C1"), ("BK7_B2", "BK7_C2"), ("BK7_B3", "BK7_C3")):
+            t = c[b] * l2
+            d = l2 - c[cc]
+            q = fdiv(t, d)
+            chain.append(t)
+            n2 = n2 + q
+        if not all(bridge_normal(x) for x in chain):
+            n2 = bridge_bk7_ux(lam)
+        return [("f", math.sqrt(n2) if n2 > 0.0 else 1.0)]
+    if fn == "bridge::e_field_to_optical_intensity" and bridge_finite(v[0]):
+        return [("f", bridge_mono([0.5, c["EPSILON_0"], c["C"], v[0], v[0]]))]
+    if fn == "bridge::nuclear_charge_potential":
+        z, r = v
+        if not (math.isnan(r) or r <= 0.0) and math.isfinite(r):
+            return [("f", bridge_mono([c["K"], float(z), c["E"]], [r]))]
+    if fn == "bridge::magnetic_flux_to_magnetostrictive_strain":
+        b, ls, sat = v
+        if not (math.isnan(sat) or sat <= 0.0) and bridge_finite(b, ls, sat):
+            if abs(b) >= sat:
+                return [("f", 1.5 * ls)]
+            return [("f", bridge_mono([1.5, ls, b, b], [sat, sat]))]
+    return bridge_rust_eval(fn, v)
+
+
+def bridge_rust_eval(fn, v):
     """bridge.rs's functions transcribed in their order of operations (class A: + − × ÷, sqrt and a clamp), with
-    their sentinels: a row's output tokens, or None where nothing transcribes fn."""
+    their sentinels: a row's output tokens, or None where nothing transcribes fn. The port's for non-finite inputs; the
+    rows it differs from the port on are row 13's and row 18's (M7 part 2a)."""
     c = bridge_consts()
     if fn == "bridge::joule_heating_power_density":
         return [("f", v[0] * v[0] * v[1])]
@@ -12139,13 +12218,21 @@ def validate_bridge(path: Path) -> list:
     errs = check_platform(header)
     if errs:
         return errs
+    differ = {}
     for n, (fn, _cls, ins, outs) in enumerate(rows, 1):
         v = [b for _k, b in ins]
         want = bridge_eval(fn, v)
         if want is None:
             errs.append(f"bridge row {n}: no transcription for {fn}")
             continue
+        rust = bridge_rust_eval(fn, v)
+        if not toks_same(want, rust):
+            key = "18" if fn.endswith("bk7") else "13"
+            differ[key] = differ.get(key, 0) + 1
         rows_agree(fn, v, outs, want, "bridge", n, errs)
+    if differ:
+        print("     bridge: rows Rust's chain gives otherwise: " +
+              ", ".join(f"row {k} {differ[k]}" for k in sorted(differ)) + " (M7 part 2a)")
     return errs
 
 # ── soorat: 1.2.0:src/integration/soorat.rs (M7 part 1b-1) ────────────────────────────────────────────────────────────

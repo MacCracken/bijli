@@ -783,6 +783,29 @@ def emit_1a(rows):
         put("magnetic_flux_to_magnetostrictive_strain", 1.0, -7e-6, a)
     for v in ((1e-160, -7e-6, 1e-150), (1e-300, 1e-10, 1e300), (1e300, -7e-6, 1e-300), (1.0, 1e300, 1.0)):
         put("magnetic_flux_to_magnetostrictive_strain", *v)
+    # Part 2a's edges: the exact clamp just below B_sat, the products past either end, the sentinel's exact sign.
+    below = float.fromhex("0x1.13333333332ffp+1")                 # 2.15's predecessors: B/B_sat rounds to 1
+    for k in range(1, 4):
+        b = math.nextafter(2.15, 0.0)
+        for _j in range(k - 1):
+            b = math.nextafter(b, 0.0)
+        put("magnetic_flux_to_magnetostrictive_strain", b, -7e-6, 2.15)
+        put("magnetic_flux_to_magnetostrictive_strain", -b, 35e-6, 2.15)
+    put("magnetic_flux_to_magnetostrictive_strain", below, 1e300, 2.15)
+    for v in ((1e-200, 1e300, 1e-100), (3e-155, 1e10, 1e-160), (1e154, 1e-300, 1e-150)):
+        put("magnetic_flux_to_magnetostrictive_strain", *v)
+    for v in ((1.0, -1e-200, -1e-200), (-5.0, -1e-200, -2.0), (1e-300, 1e-200, 1e-200), (inf, 1e-200, 1e-200),
+              (-inf, 1e200, 1e200), (nan, 1e-200, 1e-200), (1e10, 1e200, 1e200), (1e10, -1e200, 1e-200),
+              (5e-324, 1e-300, 1e10), (2.0, mx, 2.0)):
+        put("em_energy_to_heating_rate", *v)
+    for j, r in ((1.4e154, 1.0), (1e154, 2.0), (1.3e154, 0.5), (1e-170, 1e-170), (3e-162, 1e300)):
+        put("joule_heating_power_density", j, r)
+    for nm in (1.3e157, 1.34e157, 1.35e157, 1.4e157, 1e200, 2e-151, 1.5e-151, 1e-152, mx, 1e308):
+        put("wavelength_to_refractive_index_bk7", nm)
+    for a in (1.34e154, 1.35e154, 3e-162, 1e-161, 1e-170):
+        put("e_field_to_optical_intensity", a)
+    for z, r in ((92, 1e300), (1, 1e-310), ((1 << 32) - 1, 5e-324), (79, 1.5e-305)):
+        put("nuclear_charge_potential", z, r)
     for _ in range(30):
         sat = abs(draw(-10.0, 10.0))
         put("magnetic_flux_to_magnetostrictive_strain", sat * (rng.unit() * 6.0 - 3.0), draw(-12.0, -2.0), sat)

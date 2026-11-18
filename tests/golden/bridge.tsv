@@ -1,7 +1,7 @@
 # bijli golden corpus, format 1: bridge
 # oracle: bijli 1.2.0 via validate.py; libm: glibc 2.44 x86_64. Written by scripts/oracle/emit.py; do not edit.
 # columns: fn<TAB>class<TAB>inputs<TAB>outputs<TAB>note (tokens: scripts/oracle/README.md)
-# rows: 697
+# rows: 739
 bridge::joule_heating_power_density	A	f:3ff0000000000000 f:3e7ad7f29abcaf48	f:3e7ad7f29abcaf48	bridge::joule_heating_power_density(1.0, 1e-7) -> 1e-7
 bridge::joule_heating_power_density	A	f:412e848000000000 f:3e5209f2e6f59483	f:40d0680000000000	bridge::joule_heating_power_density(1000000.0, 1.68e-8) -> 16800.0
 bridge::joule_heating_power_density	A	f:0000000000000000 f:3e5209f2e6f59483	f:0000000000000000	bridge::joule_heating_power_density(0.0, 1.68e-8) -> 0.0
@@ -38,13 +38,13 @@ bridge::joule_heating_power_density	A	f:fff0000000000000 f:3e5209f2e6f59483	f:7f
 bridge::joule_heating_power_density	A	f:412e848000000000 f:fff0000000000000	f:fff0000000000000	bridge::joule_heating_power_density(1000000.0, -inf) -> -inf
 bridge::joule_heating_power_density	A	f:7ff8000000000000 f:3e5209f2e6f59483	f:7ff8000000000000	bridge::joule_heating_power_density(NaN, 1.68e-8) -> NaN
 bridge::joule_heating_power_density	A	f:412e848000000000 f:7ff8000000000000	f:7ff8000000000000	bridge::joule_heating_power_density(1000000.0, NaN) -> NaN
-bridge::joule_heating_power_density	A	f:601dd55745cbb7ed f:3ddb7cdfd9d7bdbb	f:7ff0000000000000	bridge::joule_heating_power_density(1e155, 1e-10) -> inf
-bridge::joule_heating_power_density	A	f:6974e718d7d7625a f:01a56e1fc2f8f359	f:7ff0000000000000	bridge::joule_heating_power_density(1e200, 1e-300) -> inf
-bridge::joule_heating_power_density	A	f:1eb67e9c127b6e74 f:54b249ad2594c37d	f:124212d01e240533	bridge::joule_heating_power_density(1e-160, 1e100) -> 9.999888671826831e-221
-bridge::joule_heating_power_density	A	f:16687e92154ef7ac f:7e37e43c8800759c	f:0000000000000000	bridge::joule_heating_power_density(1e-200, 1e300) -> 0.0
-bridge::joule_heating_power_density	A	f:e126c2d4256ffcc3 f:bbc79ca10c924223	f:fff0000000000000	bridge::joule_heating_power_density(-1e160, -1e-20) -> -inf
+bridge::joule_heating_power_density	A	f:601dd55745cbb7ed f:3ddb7cdfd9d7bdbb	f:7e37e43c8800759c	bridge::joule_heating_power_density(1e155, 1e-10) -> 1e300
+bridge::joule_heating_power_density	A	f:6974e718d7d7625a f:01a56e1fc2f8f359	f:54b249ad2594c37d	bridge::joule_heating_power_density(1e200, 1e-300) -> 1e100
+bridge::joule_heating_power_density	A	f:1eb67e9c127b6e74 f:54b249ad2594c37d	f:124212dd4de70913	bridge::joule_heating_power_density(1e-160, 1e100) -> 1e-220
+bridge::joule_heating_power_density	A	f:16687e92154ef7ac f:7e37e43c8800759c	f:2b2bff2ee48e0530	bridge::joule_heating_power_density(1e-200, 1e300) -> 1e-100
+bridge::joule_heating_power_density	A	f:e126c2d4256ffcc3 f:bbc79ca10c924223	f:fe37e43c8800759b	bridge::joule_heating_power_density(-1e160, -1e-20) -> -9.999999999999999e299
 bridge::joule_heating_power_density	A	f:c833ee4518814d16 f:94628688d44644de	f:a4ecbefa2bd82983	bridge::joule_heating_power_density(-6.78208e39, -1.760936e-210) -> -8.09970848886063e-131
-bridge::joule_heating_power_density	A	f:237601a483f58c40 f:e5ee18764ecf7991	f:acfc775f975316ac	bridge::joule_heating_power_density(7.391819e-138, -9.990558e182) -> -5.458739799616982e-92
+bridge::joule_heating_power_density	A	f:237601a483f58c40 f:e5ee18764ecf7991	f:acfc775f975316ab	bridge::joule_heating_power_density(7.391819e-138, -9.990558e182) -> -5.4587397996169814e-92
 bridge::joule_heating_power_density	A	f:fd8dece229e7c6be f:3658b53b73bb732f	f:7ff0000000000000	bridge::joule_heating_power_density(-6.11596e296, 6.762343e-47) -> inf
 bridge::joule_heating_power_density	A	f:5f318dd4a6b229d0 f:eb68b9ea94d63406	f:fff0000000000000	bridge::joule_heating_power_density(3.591324e150, -2.5403e209) -> -inf
 bridge::joule_heating_power_density	A	f:2898f66eebf51c8a f:02a03acd97108677	f:0000000000000000	bridge::joule_heating_power_density(4.054637e-113, 4.963234e-296) -> 0.0
@@ -59,30 +59,30 @@ bridge::joule_heating_power_density	A	f:070645bd6a14f70f f:417d58d320000000	f:00
 bridge::joule_heating_power_density	A	f:ea557b81a1d3db94 f:d371615e1f1d74eb	f:fff0000000000000	bridge::joule_heating_power_density(-1.68384e204, -9.063522e93) -> -inf
 bridge::joule_heating_power_density	A	f:b1fff7c8a8f97af3 f:6465cf391a35c97e	f:4885c4077ec5437d	bridge::joule_heating_power_density(-7.410972e-68, 4.315315e175) -> 2.370079139137282e41
 bridge::joule_heating_power_density	A	f:504ead95882d7461 f:7396bbcd58f85c96	f:7ff0000000000000	bridge::joule_heating_power_density(7.104554e78, 6.358061e248) -> inf
-bridge::joule_heating_power_density	A	f:a9a70b3b2bf99636 f:c95ad2294620a682	f:9ccbd13a894ecdb7	bridge::joule_heating_power_density(-4.905994e-108, -2.392508e45) -> -5.758474182904316e-170
-bridge::joule_heating_power_density	A	f:9fe9d27fcb2d2ad0 f:d0476c089487bf79	f:903e80c5505cdf1f	bridge::joule_heating_power_density(-6.018476e-155, -5.424166e78) -> -1.9647443029947041e-230
+bridge::joule_heating_power_density	A	f:a9a70b3b2bf99636 f:c95ad2294620a682	f:9ccbd13a894ecdb6	bridge::joule_heating_power_density(-4.905994e-108, -2.392508e45) -> -5.7584741829043155e-170
+bridge::joule_heating_power_density	A	f:9fe9d27fcb2d2ad0 f:d0476c089487bf79	f:903e80c5505cdf1e	bridge::joule_heating_power_density(-6.018476e-155, -5.424166e78) -> -1.964744302994704e-230
 bridge::joule_heating_power_density	A	f:76bf2dd346af3fc5 f:a2514388eb8b7352	f:fff0000000000000	bridge::joule_heating_power_density(9.817897e263, -2.212069e-143) -> -inf
 bridge::joule_heating_power_density	A	f:b1593019353c6302 f:4e4100abe0dc8ff0	f:3115117ba42b1053	bridge::joule_heating_power_density(-5.702335e-71, 9.167796e68) -> 2.9810577958661057e-72
 bridge::joule_heating_power_density	A	f:9b8f494f32b1f08f f:1498f76f0a4945af	f:0000000000000000	bridge::joule_heating_power_density(-6.176574e-176, 1.898547e-209) -> 0.0
-bridge::joule_heating_power_density	A	f:3482dba756727438 f:fe2cfa3ff698d035	f:e75420918bd9645f	bridge::joule_heating_power_density(9.61362e-56, -6.064391e299) -> -5.604812620352779e189
+bridge::joule_heating_power_density	A	f:3482dba756727438 f:fe2cfa3ff698d035	f:e75420918bd9645e	bridge::joule_heating_power_density(9.61362e-56, -6.064391e299) -> -5.604812620352778e189
 bridge::joule_heating_power_density	A	f:bee3d3f5b90030d3 f:caf0b166192f27bc	f:c8d9a2cf93a1b660	bridge::joule_heating_power_density(-9.454712e-6, -9.992927e52) -> -8.932835233911524e42
-bridge::joule_heating_power_density	A	f:65b0196e50a31df6 f:0e0863bda34bf9ab	f:7ff0000000000000	bridge::joule_heating_power_density(6.680446e181, 4.572128e-241) -> inf
+bridge::joule_heating_power_density	A	f:65b0196e50a31df6 f:0e0863bda34bf9ab	f:5988b18342b8e0a1	bridge::joule_heating_power_density(6.680446e181, 4.572128e-241) -> 2.0404656867568507e123
 bridge::joule_heating_power_density	A	f:333c9d3fcb579db2 f:3ed617e4edf18d91	f:2571aa5f02f421cf	bridge::joule_heating_power_density(6.95574e-62, 5.267462e-6) -> 2.5485202652836303e-128
 bridge::joule_heating_power_density	A	f:cc50a0c6fb48f562 f:4e232fc53ad14f65	f:66e4b8ef35411dc7	bridge::joule_heating_power_density(-4.175035e59, 2.586349e68) -> 4.508243540178853e187
 bridge::joule_heating_power_density	A	f:ff41fd60f798a2b7 f:d5a1ee38bde0d886	f:fff0000000000000	bridge::joule_heating_power_density(-9.869406e304, -3.212789e104) -> -inf
-bridge::joule_heating_power_density	A	f:12a8a8a26468aad8 f:756057494f591986	f:0000000000000000	bridge::joule_heating_power_density(8.731801e-219, 2.453601e257) -> 0.0
+bridge::joule_heating_power_density	A	f:12a8a8a26468aad8 f:756057494f591986	f:1ad368159fc94946	bridge::joule_heating_power_density(8.731801e-219, 2.453601e257) -> 1.8707321022350413e-179
 bridge::joule_heating_power_density	A	f:68a57b9acf921583 f:f8601088cf5a5e24	f:fff0000000000000	bridge::joule_heating_power_density(1.254581e196, -6.789467e271) -> -inf
 bridge::joule_heating_power_density	A	f:c7bf6c5970c82105 f:08437979e1bc1067	f:17e2c761b2dd1f0a	bridge::joule_heating_power_density(-4.176865e37, 7.372598e-269) -> 1.2862382828280918e-193
 bridge::joule_heating_power_density	A	f:315fbf91573a8b98 f:9c85f1946d51c088	f:800002b331e9c52d	bridge::joule_heating_power_density(7.187563e-71, -2.839107e-171) -> -1.46671282408e-311
-bridge::joule_heating_power_density	A	f:9bcdc159cfd11720 f:4a4ec28b156e7972	f:0000000000000000	bridge::joule_heating_power_density(-9.398889e-175, 8.991139e49) -> 0.0
-bridge::joule_heating_power_density	A	f:e6bc1bea4ffffff4 f:12f3658939cf3fd7	f:7ff0000000000000	bridge::joule_heating_power_density(-7.644048e186, 2.197907e-217) -> inf
+bridge::joule_heating_power_density	A	f:9bcdc159cfd11720 f:4a4ec28b156e7972	f:020a9887e00d9276	bridge::joule_heating_power_density(-9.398889e-175, 8.991139e49) -> 7.942692570158864e-299
+bridge::joule_heating_power_density	A	f:e6bc1bea4ffffff4 f:12f3658939cf3fd7	f:608deed097b5fa51	bridge::joule_heating_power_density(-7.644048e186, 2.197907e-217) -> 1.2842693655152236e157
 bridge::joule_heating_power_density	A	f:fb7aa4e2434d146d f:345d21a7a3870bcc	f:7ff0000000000000	bridge::joule_heating_power_density(-6.339231e286, 1.856364e-56) -> inf
 bridge::joule_heating_power_density	A	f:dfe6e722a28b1d5c f:736749cc13aa9b0c	f:7ff0000000000000	bridge::joule_heating_power_density(-9.596166e153, 8.141486e247) -> inf
 bridge::joule_heating_power_density	A	f:7e558cbe2a2e7e2b f:0bd64093bb89b0a6	f:7ff0000000000000	bridge::joule_heating_power_density(3.607933e300, 1.214053e-251) -> inf
 bridge::joule_heating_power_density	A	f:9160bf2f179706ee f:39984e72d4849f19	f:0000000000000000	bridge::joule_heating_power_density(-5.655427e-225, 2.996e-31) -> 0.0
 bridge::joule_heating_power_density	A	f:0c4f0603ad714476 f:dd98e35fba4663fe	f:8000000000000000	bridge::joule_heating_power_density(2.166528e-249, -7.587367e142) -> -0.0
 bridge::joule_heating_power_density	A	f:c1ff0cbd71000000 f:b1c4c4ad11122421	f:b5e38d9bd2742d8f	bridge::joule_heating_power_density(-8334858000.0, -6.018264e-69) -> -4.180879447653073e-49
-bridge::joule_heating_power_density	A	f:a4b6b8bfa2bdcb93 f:bdff7fdefd704d28	f:878fc331660331aa	bridge::joule_heating_power_density(-8.002805e-132, -4.58378e-10) -> -2.9356767611169566e-272
+bridge::joule_heating_power_density	A	f:a4b6b8bfa2bdcb93 f:bdff7fdefd704d28	f:878fc331660331a9	bridge::joule_heating_power_density(-8.002805e-132, -4.58378e-10) -> -2.9356767611169562e-272
 bridge::em_energy_to_heating_rate	A	f:408f400000000000 f:408f400000000000 f:40b05a0000000000	f:3f2f4fdebb23592a	bridge::em_energy_to_heating_rate(1000.0, 1000.0, 4186.0) -> 0.00023889154323936931
 bridge::em_energy_to_heating_rate	A	f:40d0680000000000 f:40c1800000000000 f:4078100000000000	f:3f73f2b3884fcace	bridge::em_energy_to_heating_rate(16800.0, 8960.0, 385.0) -> 0.00487012987012987
 bridge::em_energy_to_heating_rate	A	f:408f400000000000 f:0000000000000000 f:40b05a0000000000	f:0000000000000000	bridge::em_energy_to_heating_rate(1000.0, 0.0, 4186.0) -> 0.0
@@ -106,7 +106,7 @@ bridge::em_energy_to_heating_rate	A	f:8010000000000000 f:40c1800000000000 f:4078
 bridge::em_energy_to_heating_rate	A	f:40d0680000000000 f:8010000000000000 f:4078100000000000	f:0000000000000000	bridge::em_energy_to_heating_rate(16800.0, -2.2250738585072014e-308, 385.0) -> 0.0
 bridge::em_energy_to_heating_rate	A	f:40d0680000000000 f:40c1800000000000 f:8010000000000000	f:0000000000000000	bridge::em_energy_to_heating_rate(16800.0, 8960.0, -2.2250738585072014e-308) -> 0.0
 bridge::em_energy_to_heating_rate	A	f:01a56e1fc2f8f359 f:40c1800000000000 f:4078100000000000	f:004a0e79b75b0938	bridge::em_energy_to_heating_rate(1e-300, 8960.0, 385.0) -> 2.898886827458256e-307
-bridge::em_energy_to_heating_rate	A	f:40d0680000000000 f:01a56e1fc2f8f359 f:4078100000000000	f:7e904a294574ad48	bridge::em_energy_to_heating_rate(16800.0, 1e-300, 385.0) -> 4.363636363636364e301
+bridge::em_energy_to_heating_rate	A	f:40d0680000000000 f:01a56e1fc2f8f359 f:4078100000000000	f:7e904a294574ad47	bridge::em_energy_to_heating_rate(16800.0, 1e-300, 385.0) -> 4.363636363636363e301
 bridge::em_energy_to_heating_rate	A	f:40d0680000000000 f:40c1800000000000 f:01a56e1fc2f8f359	f:7e4665f8bf806e42	bridge::em_energy_to_heating_rate(16800.0, 8960.0, 1e-300) -> 1.875e300
 bridge::em_energy_to_heating_rate	A	f:81a56e1fc2f8f359 f:40c1800000000000 f:4078100000000000	f:804a0e79b75b0938	bridge::em_energy_to_heating_rate(-1e-300, 8960.0, 385.0) -> -2.898886827458256e-307
 bridge::em_energy_to_heating_rate	A	f:40d0680000000000 f:81a56e1fc2f8f359 f:4078100000000000	f:0000000000000000	bridge::em_energy_to_heating_rate(16800.0, -1e-300, 385.0) -> 0.0
@@ -124,8 +124,8 @@ bridge::em_energy_to_heating_rate	A	f:fe37e43c8800759c f:40c1800000000000 f:4078
 bridge::em_energy_to_heating_rate	A	f:40d0680000000000 f:fe37e43c8800759c f:4078100000000000	f:0000000000000000	bridge::em_energy_to_heating_rate(16800.0, -1e300, 385.0) -> 0.0
 bridge::em_energy_to_heating_rate	A	f:40d0680000000000 f:40c1800000000000 f:fe37e43c8800759c	f:0000000000000000	bridge::em_energy_to_heating_rate(16800.0, 8960.0, -1e300) -> 0.0
 bridge::em_energy_to_heating_rate	A	f:7fefffffffffffff f:40c1800000000000 f:4078100000000000	f:7e93743fe8e5f41b	bridge::em_energy_to_heating_rate(1.7976931348623157e308, 8960.0, 385.0) -> 5.211308948464505e301
-bridge::em_energy_to_heating_rate	A	f:40d0680000000000 f:7fefffffffffffff f:4078100000000000	f:0000000000000000	bridge::em_energy_to_heating_rate(16800.0, 1.7976931348623157e308, 385.0) -> 0.0
-bridge::em_energy_to_heating_rate	A	f:40d0680000000000 f:40c1800000000000 f:7fefffffffffffff	f:0000000000000000	bridge::em_energy_to_heating_rate(16800.0, 8960.0, 1.7976931348623157e308) -> 0.0
+bridge::em_energy_to_heating_rate	A	f:40d0680000000000 f:7fefffffffffffff f:4078100000000000	f:0045d1745d1745d2	bridge::em_energy_to_heating_rate(16800.0, 1.7976931348623157e308, 385.0) -> 2.4273533001896745e-307
+bridge::em_energy_to_heating_rate	A	f:40d0680000000000 f:40c1800000000000 f:7fefffffffffffff	f:0007800000000000	bridge::em_energy_to_heating_rate(16800.0, 8960.0, 1.7976931348623157e308) -> 1.0430033711752506e-308
 bridge::em_energy_to_heating_rate	A	f:ffefffffffffffff f:40c1800000000000 f:4078100000000000	f:fe93743fe8e5f41b	bridge::em_energy_to_heating_rate(-1.7976931348623157e308, 8960.0, 385.0) -> -5.211308948464505e301
 bridge::em_energy_to_heating_rate	A	f:40d0680000000000 f:ffefffffffffffff f:4078100000000000	f:0000000000000000	bridge::em_energy_to_heating_rate(16800.0, -1.7976931348623157e308, 385.0) -> 0.0
 bridge::em_energy_to_heating_rate	A	f:40d0680000000000 f:40c1800000000000 f:ffefffffffffffff	f:0000000000000000	bridge::em_energy_to_heating_rate(16800.0, 8960.0, -1.7976931348623157e308) -> 0.0
@@ -138,8 +138,8 @@ bridge::em_energy_to_heating_rate	A	f:40d0680000000000 f:40c1800000000000 f:fff0
 bridge::em_energy_to_heating_rate	A	f:7ff8000000000000 f:40c1800000000000 f:4078100000000000	f:7ff8000000000000	bridge::em_energy_to_heating_rate(NaN, 8960.0, 385.0) -> NaN
 bridge::em_energy_to_heating_rate	A	f:40d0680000000000 f:7ff8000000000000 f:4078100000000000	f:0000000000000000	bridge::em_energy_to_heating_rate(16800.0, NaN, 385.0) -> 0.0
 bridge::em_energy_to_heating_rate	A	f:40d0680000000000 f:40c1800000000000 f:7ff8000000000000	f:0000000000000000	bridge::em_energy_to_heating_rate(16800.0, 8960.0, NaN) -> 0.0
-bridge::em_energy_to_heating_rate	A	f:3ff0000000000000 f:16687e92154ef7ac f:16687e92154ef7ac	f:0000000000000000	bridge::em_energy_to_heating_rate(1.0, 1e-200, 1e-200) -> 0.0
-bridge::em_energy_to_heating_rate	A	f:7e37e43c8800759c f:6974e718d7d7625a f:6974e718d7d7625a	f:0000000000000000	bridge::em_energy_to_heating_rate(1e300, 1e200, 1e200) -> 0.0
+bridge::em_energy_to_heating_rate	A	f:3ff0000000000000 f:16687e92154ef7ac f:16687e92154ef7ac	f:7ff0000000000000	bridge::em_energy_to_heating_rate(1.0, 1e-200, 1e-200) -> inf
+bridge::em_energy_to_heating_rate	A	f:7e37e43c8800759c f:6974e718d7d7625a f:6974e718d7d7625a	f:2b2bff2ee48e0531	bridge::em_energy_to_heating_rate(1e300, 1e200, 1e200) -> 1.0000000000000001e-100
 bridge::em_energy_to_heating_rate	A	f:01a56e1fc2f8f359 f:5f138d352e5096af f:6126c2d4256ffcc3	f:0000000000000000	bridge::em_energy_to_heating_rate(1e-300, 1e150, 1e160) -> 0.0
 bridge::em_energy_to_heating_rate	A	f:7fe1ccf385ebc8a0 f:1eb67e9c127b6e74 f:1eb67e9c127b6e74	f:7ff0000000000000	bridge::em_energy_to_heating_rate(1e308, 1e-160, 1e-160) -> inf
 bridge::em_energy_to_heating_rate	A	f:5bf3d69b8ff79507 f:45be9c0dd2b34a56 f:ee34f33d0555a5c4	f:0000000000000000	bridge::em_energy_to_heating_rate(9.012033e134, 9.473208e27, -7.57293e222) -> 0.0
@@ -150,19 +150,19 @@ bridge::em_energy_to_heating_rate	A	f:39579d38fb6f4d28 f:593023dd4ed245cf f:080d
 bridge::em_energy_to_heating_rate	A	f:d9d657dca08e5bcf f:c35714483f818a00 f:66f10fb561affd1e	f:0000000000000000	bridge::em_energy_to_heating_rate(-5.908045e124, -2.59849e16, 7.423539e187) -> 0.0
 bridge::em_energy_to_heating_rate	A	f:baa8eb19f918dc2d f:6f3bd4bdeaf7c245 f:151796c220cf4c97	f:b6336efea1b8dd57	bridge::em_energy_to_heating_rate(-4.025779e-26, 6.593043e227, 4.592093e-207) -> -1.3296990147272628e-47
 bridge::em_energy_to_heating_rate	A	f:2ab65b73946a50f5 f:9c808be11f8ee229 f:d95851c5a72c29fc	f:34bc7257a6f7d4f8	bridge::em_energy_to_heating_rate(6.238778e-103, -2.1408e-171, -2.511953e122) -> 1.1601440757965207e-54
-bridge::em_energy_to_heating_rate	A	f:890af7505469eca5 f:097ae43dcac49a83 f:1e17a0d7947d649f	f:0000000000000000	bridge::em_energy_to_heating_rate(-4.181494e-265, 5.337525e-263, 1.025781e-163) -> 0.0
+bridge::em_energy_to_heating_rate	A	f:890af7505469eca5 f:097ae43dcac49a83 f:1e17a0d7947d649f	f:e155ba9dfbfabdd9	bridge::em_energy_to_heating_rate(-4.181494e-265, 5.337525e-263, 1.025781e-163) -> -7.637248206361343e160
 bridge::em_energy_to_heating_rate	A	f:6d94ccdfaeaccfa3 f:f08f22dd6b6a259e f:8f700468abab1f64	f:6d755ab78f07db08	bridge::em_energy_to_heating_rate(7.342538e219, -1.546864e234, -2.518782e-234) -> 1.884531883589778e219
 bridge::em_energy_to_heating_rate	A	f:cb2b1289a651ef56 f:994008918a12d2fd f:6dafb1a3fcbaacfb	f:0000000000000000	bridge::em_energy_to_heating_rate(-1.296511e54, -4.606173e-187, 2.237601e220) -> 0.0
 bridge::em_energy_to_heating_rate	A	f:b5b92470e83c39be f:6f6ed34e268663e5 f:d297f84cb5a98e76	f:0000000000000000	bridge::em_energy_to_heating_rate(-6.719958e-50, 5.84192e228, -7.629311e89) -> 0.0
 bridge::em_energy_to_heating_rate	A	f:1be46e0549726f10 f:c64031aea56cd2db f:4373dc47af56ea00	f:0000000000000000	bridge::em_energy_to_heating_rate(2.581285e-174, -2.566053e30, 8.94436e16) -> 0.0
-bridge::em_energy_to_heating_rate	A	f:75f51ea34d3a0851 f:a993c23aea7dcb38 f:91c5350b1e6bf365	f:0000000000000000	bridge::em_energy_to_heating_rate(1.623617e260, -2.103295e-108, -4.583493e-223) -> 0.0
-bridge::em_energy_to_heating_rate	A	f:83eda282234a6137 f:06002707d78bc153 f:0c01d31d74d5a182	f:0000000000000000	bridge::em_energy_to_heating_rate(-9.5029e-290, 8.898418e-280, 7.779919e-251) -> 0.0
+bridge::em_energy_to_heating_rate	A	f:75f51ea34d3a0851 f:a993c23aea7dcb38 f:91c5350b1e6bf365	f:7ff0000000000000	bridge::em_energy_to_heating_rate(1.623617e260, -2.103295e-108, -4.583493e-223) -> inf
+bridge::em_energy_to_heating_rate	A	f:83eda282234a6137 f:06002707d78bc153 f:0c01d31d74d5a182	f:f1ca599df94958dd	bridge::em_energy_to_heating_rate(-9.5029e-290, 8.898418e-280, 7.779919e-251) -> -1.372676760310762e240
 bridge::em_energy_to_heating_rate	A	f:9a37d954815a1cc5 f:0ed849d711596eec f:d1f85bcd9b523457	f:0000000000000000	bridge::em_energy_to_heating_rate(-2.24508e-182, 3.72995e-237, -7.571313e86) -> 0.0
 bridge::em_energy_to_heating_rate	A	f:0a0f0d2cfc776307 f:23d0fc317d44a912 f:95cca897afe49df9	f:0000000000000000	bridge::em_energy_to_heating_rate(3.155556e-260, 3.651328e-136, -1.142582e-203) -> 0.0
 bridge::em_energy_to_heating_rate	A	f:795b5c2b7df619d1 f:61fa97016c2f4a1f f:22044cab59f7fbd8	f:7539f3ef5b4a8474	bridge::em_energy_to_heating_rate(3.789071e276, 9.570041e163, 8.128253e-145) -> 4.871040402582549e256
-bridge::em_energy_to_heating_rate	A	f:d331253fadaacd21 f:b5d0dadd0247c912 f:aa1637d7dd2867a7	f:f32771065cb9d520	bridge::em_energy_to_heating_rate(-5.588161e92, -1.801971e-49, -6.054652e-106) -> -5.12190980195512e246
+bridge::em_energy_to_heating_rate	A	f:d331253fadaacd21 f:b5d0dadd0247c912 f:aa1637d7dd2867a7	f:f32771065cb9d51f	bridge::em_energy_to_heating_rate(-5.588161e92, -1.801971e-49, -6.054652e-106) -> -5.1219098019551195e246
 bridge::em_energy_to_heating_rate	A	f:95c5850013d1f99e f:550aa22d4a5496e4 f:db1e0c3934f59e43	f:0000000000000000	bridge::em_energy_to_heating_rate(-8.579575e-204, 4.660332e101, -8.331248e130) -> 0.0
-bridge::em_energy_to_heating_rate	A	f:5b811cf6c6036bd3 f:9968cb7d23b375b6 f:9c3f2f5dc6c69526	f:0000000000000000	bridge::em_energy_to_heating_rate(6.073483e132, -2.849277e-186, -1.260865e-172) -> 0.0
+bridge::em_energy_to_heating_rate	A	f:5b811cf6c6036bd3 f:9968cb7d23b375b6 f:9c3f2f5dc6c69526	f:7ff0000000000000	bridge::em_energy_to_heating_rate(6.073483e132, -2.849277e-186, -1.260865e-172) -> inf
 bridge::em_energy_to_heating_rate	A	f:8f17d67c4c842ac7 f:4dbb0f19314aa127 f:18e5744569f89422	f:a855061e8d49b114	bridge::em_energy_to_heating_rate(-5.857202e-236, 2.849643e66, 9.630409e-189) -> -2.134297789842822e-114
 bridge::em_energy_to_heating_rate	A	f:36c37da1b249155a f:fe563072d009ba05 f:8dadd7c52d6bed08	f:2a9e23e134bd611a	bridge::em_energy_to_heating_rate(6.828089e-45, -3.714996e300, -8.741256e-243) -> 2.1026499801440035e-103
 bridge::em_energy_to_heating_rate	A	f:52581e6caf492e79 f:4172118fc0000000 f:fe6d06d36ec5bfa1	f:0000000000000000	bridge::em_energy_to_heating_rate(4.797945e88, 18946300.0, -9.719475e300) -> 0.0
@@ -174,9 +174,9 @@ bridge::em_energy_to_heating_rate	A	f:e89d157e7347f651 f:5b1f6ec7350822bd f:d53f
 bridge::em_energy_to_heating_rate	A	f:1d95b7c44802af15 f:7cea6da9c8495170 f:df492bf1334ff656	f:0000000000000000	bridge::em_energy_to_heating_rate(3.682977e-166, 5.274681e293, -1.029958e151) -> 0.0
 bridge::em_energy_to_heating_rate	A	f:e4ecf21f8b16e886 f:c0a8f02d916872b0 f:56f04f360361f163	f:0000000000000000	bridge::em_energy_to_heating_rate(-1.466199e178, -3192.089, 6.128538e110) -> 0.0
 bridge::em_energy_to_heating_rate	A	f:140d6d5229e8a918 f:aa33218b8647aea5 f:77bf30f6be42695c	f:0000000000000000	bridge::em_energy_to_heating_rate(4.370585e-212, -2.085355e-105, 6.436787e268) -> 0.0
-bridge::em_energy_to_heating_rate	A	f:6df0dab639a96f6e f:f73185c5877ef777 f:f7819da7248b819c	f:0000000000000000	bridge::em_energy_to_heating_rate(3.807752e221, -1.412516e266, -4.544115e267) -> 0.0
+bridge::em_energy_to_heating_rate	A	f:6df0dab639a96f6e f:f73185c5877ef777 f:f7819da7248b819c	f:0000001bf4d77ae7	bridge::em_energy_to_heating_rate(3.807752e221, -1.412516e266, -4.544115e267) -> 5.93233906426e-313
 bridge::em_energy_to_heating_rate	A	f:30d5d72248fb4a0c f:0cfdd708a96e8b64 f:4804696a1a8d8ae8	f:5bb25bebeb579aaa	bridge::em_energy_to_heating_rate(1.931439e-73, 4.26778e-246, 8.682209e38) -> 5.212532029426627e133
-bridge::em_energy_to_heating_rate	A	f:3bec22bff38e510a f:7aa00112a6ca6086 f:272b8285d29340bf	f:1a005c17b7b55b99	bridge::em_energy_to_heating_rate(4.76638e-20, 4.648145e282, 5.326722e-120) -> 1.9250808080099883e-183
+bridge::em_energy_to_heating_rate	A	f:3bec22bff38e510a f:7aa00112a6ca6086 f:272b8285d29340bf	f:1a005c17b7b55b98	bridge::em_energy_to_heating_rate(4.76638e-20, 4.648145e282, 5.326722e-120) -> 1.925080808009988e-183
 bridge::em_energy_to_heating_rate	A	f:225287dc6d4fa8ba f:f959a8e539edbffa f:df0b90da36e5a35f	f:0000000000000000	bridge::em_energy_to_heating_rate(2.374401e-143, -3.553599e276, -7.04951e149) -> 0.0
 bridge::em_energy_to_heating_rate	A	f:a01ce6384b341485 f:0d782c05f13994ca f:b7d31e547e5e7371	f:0000000000000000	bridge::em_energy_to_heating_rate(-5.38852e-154, 8.850249e-244, -8.778774e-40) -> 0.0
 bridge::em_energy_to_heating_rate	A	f:7c53442d755d4e92 f:b43dd367995bafb0 f:1dddb1deed89975f	f:0000000000000000	bridge::em_energy_to_heating_rate(7.510253e290, -4.751524e-57, 8.057177e-165) -> 0.0
@@ -245,9 +245,9 @@ bridge::wavelength_to_refractive_index_bk7	A	f:01a56e1fc2f8f359	f:3ff00000000000
 bridge::wavelength_to_refractive_index_bk7	A	f:81a56e1fc2f8f359	f:3ff0000000000000	bridge::wavelength_to_refractive_index_bk7(-1e-300) -> 1.0
 bridge::wavelength_to_refractive_index_bk7	A	f:3ff0000000000000	f:3fefff3e24db5b62	bridge::wavelength_to_refractive_index_bk7(1.0) -> 0.9999075622425659
 bridge::wavelength_to_refractive_index_bk7	A	f:bff0000000000000	f:3ff0000000000000	bridge::wavelength_to_refractive_index_bk7(-1.0) -> 1.0
-bridge::wavelength_to_refractive_index_bk7	A	f:7e37e43c8800759c	f:3ff0000000000000	bridge::wavelength_to_refractive_index_bk7(1e300) -> 1.0
+bridge::wavelength_to_refractive_index_bk7	A	f:7e37e43c8800759c	f:3ffcfc4a4e77a7c9	bridge::wavelength_to_refractive_index_bk7(1e300) -> 1.8115943017132727
 bridge::wavelength_to_refractive_index_bk7	A	f:fe37e43c8800759c	f:3ff0000000000000	bridge::wavelength_to_refractive_index_bk7(-1e300) -> 1.0
-bridge::wavelength_to_refractive_index_bk7	A	f:7fefffffffffffff	f:3ff0000000000000	bridge::wavelength_to_refractive_index_bk7(1.7976931348623157e308) -> 1.0
+bridge::wavelength_to_refractive_index_bk7	A	f:7fefffffffffffff	f:3ffcfc4a4e77a7c9	bridge::wavelength_to_refractive_index_bk7(1.7976931348623157e308) -> 1.8115943017132727
 bridge::wavelength_to_refractive_index_bk7	A	f:ffefffffffffffff	f:3ff0000000000000	bridge::wavelength_to_refractive_index_bk7(-1.7976931348623157e308) -> 1.0
 bridge::wavelength_to_refractive_index_bk7	A	f:7ff0000000000000	f:3ff0000000000000	bridge::wavelength_to_refractive_index_bk7(inf) -> 1.0
 bridge::wavelength_to_refractive_index_bk7	A	f:fff0000000000000	f:3ff0000000000000	bridge::wavelength_to_refractive_index_bk7(-inf) -> 1.0
@@ -276,7 +276,7 @@ bridge::wavelength_to_refractive_index_bk7	A	f:40c3e03cdc36f1cb	f:41698fc12cc803
 bridge::wavelength_to_refractive_index_bk7	A	f:20ca2fe76a3f9475	f:3ff0000000000000	bridge::wavelength_to_refractive_index_bk7(1e-150) -> 1.0
 bridge::wavelength_to_refractive_index_bk7	A	f:1eb67e9c127b6e74	f:3ff0000000000000	bridge::wavelength_to_refractive_index_bk7(1e-160) -> 1.0
 bridge::wavelength_to_refractive_index_bk7	A	f:5f138d352e5096af	f:3ffcfc4a4e77a7c9	bridge::wavelength_to_refractive_index_bk7(1e150) -> 1.8115943017132727
-bridge::wavelength_to_refractive_index_bk7	A	f:6126c2d4256ffcc3	f:3ff0000000000000	bridge::wavelength_to_refractive_index_bk7(1e160) -> 1.0
+bridge::wavelength_to_refractive_index_bk7	A	f:6126c2d4256ffcc3	f:3ffcfc4a4e77a7c9	bridge::wavelength_to_refractive_index_bk7(1e160) -> 1.8115943017132727
 bridge::wavelength_to_refractive_index_bk7	A	f:606bf801d16efc6e	f:3ffcfc4a4e77a7c9	bridge::wavelength_to_refractive_index_bk7(3e156) -> 1.8115943017132727
 bridge::wavelength_to_refractive_index_bk7	A	f:c0874f02de00d1b7	f:3ff0000000000000	bridge::wavelength_to_refractive_index_bk7(-745.8764) -> 1.0
 bridge::wavelength_to_refractive_index_bk7	A	f:408d0c257a786c22	f:3ff822f37b6498b5	bridge::wavelength_to_refractive_index_bk7(929.5183) -> 1.5085329837834653
@@ -325,18 +325,18 @@ bridge::e_field_to_optical_intensity	A	f:ffefffffffffffff	f:7ff0000000000000	bri
 bridge::e_field_to_optical_intensity	A	f:7ff0000000000000	f:7ff0000000000000	bridge::e_field_to_optical_intensity(inf) -> inf
 bridge::e_field_to_optical_intensity	A	f:fff0000000000000	f:7ff0000000000000	bridge::e_field_to_optical_intensity(-inf) -> inf
 bridge::e_field_to_optical_intensity	A	f:7ff8000000000000	f:7ff8000000000000	bridge::e_field_to_optical_intensity(NaN) -> NaN
-bridge::e_field_to_optical_intensity	A	f:4059000000000000	f:402a8b4fdb8a325a	bridge::e_field_to_optical_intensity(100.0) -> 13.272093639964783
+bridge::e_field_to_optical_intensity	A	f:4059000000000000	f:402a8b4fdb8a3258	bridge::e_field_to_optical_intensity(100.0) -> 13.27209363996478
 bridge::e_field_to_optical_intensity	A	f:403b800000000000	f:3ff00f29e9f10c8a	bridge::e_field_to_optical_intensity(27.5) -> 1.0037020815223365
 bridge::e_field_to_optical_intensity	A	f:5fe7dddf6b095ff1	f:7f48312e5a7525bc	bridge::e_field_to_optical_intensity(1e154) -> 1.3272093639964782e305
 bridge::e_field_to_optical_intensity	A	f:5fef06d5a4bf631f	f:7f54713cedb77834	bridge::e_field_to_optical_intensity(1.3e154) -> 2.242983825154048e305
 bridge::e_field_to_optical_intensity	A	f:1eb67e9c127b6e74	f:0000000000000003	bridge::e_field_to_optical_intensity(1e-160) -> 1.5e-323
-bridge::e_field_to_optical_intensity	A	f:a4498e2fce4592fe	f:080bbc9ac063911f	bridge::e_field_to_optical_intensity(-7.031936e-134) -> 6.562801308288314e-270
+bridge::e_field_to_optical_intensity	A	f:a4498e2fce4592fe	f:080bbc9ac063911e	bridge::e_field_to_optical_intensity(-7.031936e-134) -> 6.562801308288313e-270
 bridge::e_field_to_optical_intensity	A	f:95ba2dfabef7ea2e	f:0000000000000000	bridge::e_field_to_optical_intensity(-5.218745e-204) -> 0.0
-bridge::e_field_to_optical_intensity	A	f:c29f1ca6eb8c0000	f:44b48e06e5f5be17	bridge::e_field_to_optical_intensity(-8551980000000.0) -> 9.706726438939033e22
+bridge::e_field_to_optical_intensity	A	f:c29f1ca6eb8c0000	f:44b48e06e5f5be16	bridge::e_field_to_optical_intensity(-8551980000000.0) -> 9.706726438939032e22
 bridge::e_field_to_optical_intensity	A	f:a5bba1bf801c5888	f:0af036ac8ddfe03c	bridge::e_field_to_optical_intensity(-6.378102e-127) -> 5.39911226235648e-256
-bridge::e_field_to_optical_intensity	A	f:39e6fa139d72dd85	f:33466bfc521fce18	bridge::e_field_to_optical_intensity(9.062774e-30) -> 1.0900884478293438e-61
+bridge::e_field_to_optical_intensity	A	f:39e6fa139d72dd85	f:33466bfc521fce17	bridge::e_field_to_optical_intensity(9.062774e-30) -> 1.0900884478293437e-61
 bridge::e_field_to_optical_intensity	A	f:12a40435e1546425	f:0000000000000000	bridge::e_field_to_optical_intensity(7.087942e-219) -> 0.0
-bridge::e_field_to_optical_intensity	A	f:4939b917cb9c50c4	f:51ec1a0c067aeac0	bridge::e_field_to_optical_intensity(5.736425e44) -> 4.367391020426776e86
+bridge::e_field_to_optical_intensity	A	f:4939b917cb9c50c4	f:51ec1a0c067aeabf	bridge::e_field_to_optical_intensity(5.736425e44) -> 4.367391020426775e86
 bridge::e_field_to_optical_intensity	A	f:1f00874a99c05f45	f:00000000000005cd	bridge::e_field_to_optical_intensity(2.351285e-159) -> 7.337e-321
 bridge::e_field_to_optical_intensity	A	f:1e67ebcff8bad312	f:0000000000000000	bridge::e_field_to_optical_intensity(3.323183e-162) -> 0.0
 bridge::e_field_to_optical_intensity	A	f:8c9674b4e78a1306	f:0000000000000000	bridge::e_field_to_optical_intensity(-5.018267e-248) -> 0.0
@@ -346,17 +346,17 @@ bridge::e_field_to_optical_intensity	A	f:016aefc6edba080b	f:0000000000000000	bri
 bridge::e_field_to_optical_intensity	A	f:00000000002acbda	f:0000000000000000	bridge::e_field_to_optical_intensity(1.385705e-317) -> 0.0
 bridge::e_field_to_optical_intensity	A	f:7c8b887a6228c3a4	f:7ff0000000000000	bridge::e_field_to_optical_intensity(8.586204e291) -> inf
 bridge::e_field_to_optical_intensity	A	f:8a517861d45b8ccd	f:0000000000000000	bridge::e_field_to_optical_intensity(-5.681234e-259) -> 0.0
-bridge::e_field_to_optical_intensity	A	f:cf034b152c016949	f:5d7f9e2a302b857c	bridge::e_field_to_optical_intensity(-4.261037e72) -> 2.4097392294563452e142
+bridge::e_field_to_optical_intensity	A	f:cf034b152c016949	f:5d7f9e2a302b857b	bridge::e_field_to_optical_intensity(-4.261037e72) -> 2.409739229456345e142
 bridge::e_field_to_optical_intensity	A	f:276cb81b17c523f5	f:0e5183c422b861c0	bridge::e_field_to_optical_intensity(8.897408e-119) -> 1.0506702838421704e-239
 bridge::e_field_to_optical_intensity	A	f:97a63a5646e47101	f:0000000000000000	bridge::e_field_to_optical_intensity(-9.515483e-195) -> 0.0
-bridge::e_field_to_optical_intensity	A	f:cbab02ba76bde7ee	f:56cefc4f759becce	bridge::e_field_to_optical_intensity(-3.311497e56) -> 1.4554194317776461e110
+bridge::e_field_to_optical_intensity	A	f:cbab02ba76bde7ee	f:56cefc4f759beccd	bridge::e_field_to_optical_intensity(-3.311497e56) -> 1.455419431777646e110
 bridge::e_field_to_optical_intensity	A	f:2f0b43c123bd986d	f:1d8f9233e4ee5f89	bridge::e_field_to_optical_intensity(4.491086e-82) -> 2.6769618381747126e-166
 bridge::e_field_to_optical_intensity	A	f:d42b9e790e5f33cc	f:67d032d4d4dc3e17	bridge::e_field_to_optical_intensity(-2.949695e97) -> 1.154765130039249e192
-bridge::e_field_to_optical_intensity	A	f:5294cb9b7674d718	f:64a25dc55e3b6256	bridge::e_field_to_optical_intensity(6.618884e89) -> 5.814454507129921e176
-bridge::e_field_to_optical_intensity	A	f:bc320bdf0d456c18	f:37dba9ba30b798f5	bridge::e_field_to_optical_intensity(-9.782958e-19) -> 1.2702225406049206e-39
+bridge::e_field_to_optical_intensity	A	f:5294cb9b7674d718	f:64a25dc55e3b6255	bridge::e_field_to_optical_intensity(6.618884e89) -> 5.81445450712992e176
+bridge::e_field_to_optical_intensity	A	f:bc320bdf0d456c18	f:37dba9ba30b798f4	bridge::e_field_to_optical_intensity(-9.782958e-19) -> 1.2702225406049204e-39
 bridge::e_field_to_optical_intensity	A	f:a5137632a359e4e1	f:09a0160c3bf34386	bridge::e_field_to_optical_intensity(-4.386952e-130) -> 2.5542605880292957e-262
 bridge::e_field_to_optical_intensity	A	f:85b5d7831ff8fca7	f:0000000000000000	bridge::e_field_to_optical_intensity(-3.760221e-281) -> 0.0
-bridge::e_field_to_optical_intensity	A	f:d7bdab24e90ad01b	f:6ef2b11af5527e77	bridge::e_field_to_optical_intensity(-4.566405e114) -> 2.767504215557204e226
+bridge::e_field_to_optical_intensity	A	f:d7bdab24e90ad01b	f:6ef2b11af5527e76	bridge::e_field_to_optical_intensity(-4.566405e114) -> 2.7675042155572037e226
 bridge::e_field_to_optical_intensity	A	f:782ce55381c8682f	f:7ff0000000000000	bridge::e_field_to_optical_intensity(7.632748e270) -> inf
 bridge::e_field_to_optical_intensity	A	f:8bb46afc917bdb20	f:0000000000000000	bridge::e_field_to_optical_intensity(-2.784935e-252) -> 0.0
 bridge::e_field_to_optical_intensity	A	f:f7eba4afc755105d	f:7ff0000000000000	bridge::e_field_to_optical_intensity(-4.56369e269) -> inf
@@ -447,7 +447,7 @@ bridge::nuclear_charge_potential	A	i:2 f:0000000000000001	f:7ff0000000000000	bri
 bridge::nuclear_charge_potential	A	i:2 f:0010000000000000	f:7e08bd07f3451121	bridge::nuclear_charge_potential(2, 2.2250738585072014e-308) -> 1.2943071910508508e299
 bridge::nuclear_charge_potential	A	i:2 f:7fefffffffffffff	f:0000000000317a10	bridge::nuclear_charge_potential(2, 1.7976931348623157e308) -> 1.602014e-317
 bridge::nuclear_charge_potential	A	i:26 f:3dcd15035cbfe6f1	f:40861ddd48510452	bridge::nuclear_charge_potential(26, 5.29e-11) -> 707.7330480889743
-bridge::nuclear_charge_potential	A	i:26 f:3cd203af9ee75616	f:4181da3331f38561	bridge::nuclear_charge_potential(26, 1e-15) -> 37439078.243906744
+bridge::nuclear_charge_potential	A	i:26 f:3cd203af9ee75616	f:4181da3331f38560	bridge::nuclear_charge_potential(26, 1e-15) -> 37439078.24390674
 bridge::nuclear_charge_potential	A	i:26 f:3ff0000000000000	f:3e64199675a81deb	bridge::nuclear_charge_potential(26, 1.0) -> 3.7439078243906744e-8
 bridge::nuclear_charge_potential	A	i:26 f:0000000000000000	f:0000000000000000	bridge::nuclear_charge_potential(26, 0.0) -> 0.0
 bridge::nuclear_charge_potential	A	i:26 f:8000000000000000	f:0000000000000000	bridge::nuclear_charge_potential(26, -0.0) -> 0.0
@@ -459,25 +459,25 @@ bridge::nuclear_charge_potential	A	i:26 f:0010000000000000	f:7e44199675a81deb	br
 bridge::nuclear_charge_potential	A	i:26 f:7fefffffffffffff	f:00000000028332cf	bridge::nuclear_charge_potential(26, 1.7976931348623157e308) -> 2.08261787e-316
 bridge::nuclear_charge_potential	A	i:79 f:3dcd15035cbfe6f1	f:40a0ccd6dbdb1483	bridge::nuclear_charge_potential(79, 5.29e-11) -> 2150.419646116499
 bridge::nuclear_charge_potential	A	i:79 f:3cd203af9ee75616	f:419b1f303d1e45b5	bridge::nuclear_charge_potential(79, 1e-15) -> 113757199.27956279
-bridge::nuclear_charge_potential	A	i:79 f:3ff0000000000000	f:3e7e8955d0494125	bridge::nuclear_charge_potential(79, 1.0) -> 1.137571992795628e-7
+bridge::nuclear_charge_potential	A	i:79 f:3ff0000000000000	f:3e7e8955d0494124	bridge::nuclear_charge_potential(79, 1.0) -> 1.1375719927956279e-7
 bridge::nuclear_charge_potential	A	i:79 f:0000000000000000	f:0000000000000000	bridge::nuclear_charge_potential(79, 0.0) -> 0.0
 bridge::nuclear_charge_potential	A	i:79 f:8000000000000000	f:0000000000000000	bridge::nuclear_charge_potential(79, -0.0) -> 0.0
 bridge::nuclear_charge_potential	A	i:79 f:bff0000000000000	f:0000000000000000	bridge::nuclear_charge_potential(79, -1.0) -> 0.0
 bridge::nuclear_charge_potential	A	i:79 f:7ff8000000000000	f:0000000000000000	bridge::nuclear_charge_potential(79, NaN) -> 0.0
 bridge::nuclear_charge_potential	A	i:79 f:7ff0000000000000	f:0000000000000000	bridge::nuclear_charge_potential(79, inf) -> 0.0
 bridge::nuclear_charge_potential	A	i:79 f:0000000000000001	f:7ff0000000000000	bridge::nuclear_charge_potential(79, 5e-324) -> inf
-bridge::nuclear_charge_potential	A	i:79 f:0010000000000000	f:7e5e8955d0494125	bridge::nuclear_charge_potential(79, 2.2250738585072014e-308) -> 5.112513404650861e300
+bridge::nuclear_charge_potential	A	i:79 f:0010000000000000	f:7e5e8955d0494124	bridge::nuclear_charge_potential(79, 2.2250738585072014e-308) -> 5.11251340465086e300
 bridge::nuclear_charge_potential	A	i:79 f:7fefffffffffffff	f:0000000007a25574	bridge::nuclear_charge_potential(79, 1.7976931348623157e308) -> 6.32795425e-316
 bridge::nuclear_charge_potential	A	i:92 f:3dcd15035cbfe6f1	f:40a3909284e5350d	bridge::nuclear_charge_potential(92, 5.29e-11) -> 2504.286170160986
-bridge::nuclear_charge_potential	A	i:92 f:3cd203af9ee75616	f:419f95bd099b270c	bridge::nuclear_charge_potential(92, 1e-15) -> 132476738.40151614
-bridge::nuclear_charge_potential	A	i:92 f:3ff0000000000000	f:3e81c7ddb6d9a44f	bridge::nuclear_charge_potential(92, 1.0) -> 1.3247673840151615e-7
+bridge::nuclear_charge_potential	A	i:92 f:3cd203af9ee75616	f:419f95bd099b270d	bridge::nuclear_charge_potential(92, 1e-15) -> 132476738.40151615
+bridge::nuclear_charge_potential	A	i:92 f:3ff0000000000000	f:3e81c7ddb6d9a450	bridge::nuclear_charge_potential(92, 1.0) -> 1.3247673840151617e-7
 bridge::nuclear_charge_potential	A	i:92 f:0000000000000000	f:0000000000000000	bridge::nuclear_charge_potential(92, 0.0) -> 0.0
 bridge::nuclear_charge_potential	A	i:92 f:8000000000000000	f:0000000000000000	bridge::nuclear_charge_potential(92, -0.0) -> 0.0
 bridge::nuclear_charge_potential	A	i:92 f:bff0000000000000	f:0000000000000000	bridge::nuclear_charge_potential(92, -1.0) -> 0.0
 bridge::nuclear_charge_potential	A	i:92 f:7ff8000000000000	f:0000000000000000	bridge::nuclear_charge_potential(92, NaN) -> 0.0
 bridge::nuclear_charge_potential	A	i:92 f:7ff0000000000000	f:0000000000000000	bridge::nuclear_charge_potential(92, inf) -> 0.0
 bridge::nuclear_charge_potential	A	i:92 f:0000000000000001	f:7ff0000000000000	bridge::nuclear_charge_potential(92, 5e-324) -> inf
-bridge::nuclear_charge_potential	A	i:92 f:0010000000000000	f:7e61c7ddb6d9a44f	bridge::nuclear_charge_potential(92, 2.2250738585072014e-308) -> 5.953813078833913e300
+bridge::nuclear_charge_potential	A	i:92 f:0010000000000000	f:7e61c7ddb6d9a450	bridge::nuclear_charge_potential(92, 2.2250738585072014e-308) -> 5.953813078833914e300
 bridge::nuclear_charge_potential	A	i:92 f:7fefffffffffffff	f:0000000008e3eedb	bridge::nuclear_charge_potential(92, 1.7976931348623157e308) -> 7.36926317e-316
 bridge::nuclear_charge_potential	A	i:118 f:3dcd15035cbfe6f1	f:40a91809d6f97622	bridge::nuclear_charge_potential(118, 5.29e-11) -> 3212.0192182499604
 bridge::nuclear_charge_potential	A	i:118 f:3cd203af9ee75616	f:41a4416b514a74de	bridge::nuclear_charge_potential(118, 1e-15) -> 169915816.64542288
@@ -490,17 +490,17 @@ bridge::nuclear_charge_potential	A	i:118 f:7ff0000000000000	f:0000000000000000	b
 bridge::nuclear_charge_potential	A	i:118 f:0000000000000001	f:7ff0000000000000	bridge::nuclear_charge_potential(118, 5e-324) -> inf
 bridge::nuclear_charge_potential	A	i:118 f:0010000000000000	f:7e66ce435443abca	bridge::nuclear_charge_potential(118, 2.2250738585072014e-308) -> 7.636412427200019e300
 bridge::nuclear_charge_potential	A	i:118 f:7fefffffffffffff	f:000000000b6721aa	bridge::nuclear_charge_potential(118, 1.7976931348623157e308) -> 9.45188104e-316
-bridge::nuclear_charge_potential	A	i:2147483647 f:3dcd15035cbfe6f1	f:422b3872cef231f4	bridge::nuclear_charge_potential(2147483647, 5.29e-11) -> 58455582585.097565
-bridge::nuclear_charge_potential	A	i:2147483647 f:3cd203af9ee75616	f:4325f8dc8c13775a	bridge::nuclear_charge_potential(2147483647, 1e-15) -> 3092300318751661.0
-bridge::nuclear_charge_potential	A	i:2147483647 f:3ff0000000000000	f:4008bd07f3139710	bridge::nuclear_charge_potential(2147483647, 1.0) -> 3.0923003187516613
+bridge::nuclear_charge_potential	A	i:2147483647 f:3dcd15035cbfe6f1	f:422b3872cef231f5	bridge::nuclear_charge_potential(2147483647, 5.29e-11) -> 58455582585.09757
+bridge::nuclear_charge_potential	A	i:2147483647 f:3cd203af9ee75616	f:4325f8dc8c13775b	bridge::nuclear_charge_potential(2147483647, 1e-15) -> 3092300318751661.5
+bridge::nuclear_charge_potential	A	i:2147483647 f:3ff0000000000000	f:4008bd07f3139711	bridge::nuclear_charge_potential(2147483647, 1.0) -> 3.092300318751662
 bridge::nuclear_charge_potential	A	i:2147483647 f:0000000000000000	f:0000000000000000	bridge::nuclear_charge_potential(2147483647, 0.0) -> 0.0
 bridge::nuclear_charge_potential	A	i:2147483647 f:8000000000000000	f:0000000000000000	bridge::nuclear_charge_potential(2147483647, -0.0) -> 0.0
 bridge::nuclear_charge_potential	A	i:2147483647 f:bff0000000000000	f:0000000000000000	bridge::nuclear_charge_potential(2147483647, -1.0) -> 0.0
 bridge::nuclear_charge_potential	A	i:2147483647 f:7ff8000000000000	f:0000000000000000	bridge::nuclear_charge_potential(2147483647, NaN) -> 0.0
 bridge::nuclear_charge_potential	A	i:2147483647 f:7ff0000000000000	f:0000000000000000	bridge::nuclear_charge_potential(2147483647, inf) -> 0.0
 bridge::nuclear_charge_potential	A	i:2147483647 f:0000000000000001	f:7ff0000000000000	bridge::nuclear_charge_potential(2147483647, 5e-324) -> inf
-bridge::nuclear_charge_potential	A	i:2147483647 f:0010000000000000	f:7fe8bd07f3139710	bridge::nuclear_charge_potential(2147483647, 2.2250738585072014e-308) -> 1.3897517634881032e308
-bridge::nuclear_charge_potential	A	i:2147483647 f:7fefffffffffffff	f:000c5e83f989cb88	bridge::nuclear_charge_potential(2147483647, 1.7976931348623157e308) -> 1.720149150476952e-308
+bridge::nuclear_charge_potential	A	i:2147483647 f:0010000000000000	f:7fe8bd07f3139711	bridge::nuclear_charge_potential(2147483647, 2.2250738585072014e-308) -> 1.3897517634881034e308
+bridge::nuclear_charge_potential	A	i:2147483647 f:7fefffffffffffff	f:000c5e83f989cb89	bridge::nuclear_charge_potential(2147483647, 1.7976931348623157e308) -> 1.7201491504769525e-308
 bridge::nuclear_charge_potential	A	i:2147483648 f:3dcd15035cbfe6f1	f:422b3872cf28a2db	bridge::nuclear_charge_potential(2147483648, 5.29e-11) -> 58455582612.31808
 bridge::nuclear_charge_potential	A	i:2147483648 f:3cd203af9ee75616	f:4325f8dc8c3f6914	bridge::nuclear_charge_potential(2147483648, 1e-15) -> 3092300320191626.0
 bridge::nuclear_charge_potential	A	i:2147483648 f:3ff0000000000000	f:4008bd07f3451121	bridge::nuclear_charge_potential(2147483648, 1.0) -> 3.0923003201916264
@@ -529,17 +529,17 @@ bridge::nuclear_charge_potential	A	i:1541674036 f:7b83065ef8a43167	f:046ddf3220e
 bridge::nuclear_charge_potential	A	i:4155960179 f:cf7a50a115e70c09	f:0000000000000000	bridge::nuclear_charge_potential(4155960179, -7.439121e74) -> 0.0
 bridge::nuclear_charge_potential	A	i:950043485 f:a1488faadf67ff50	f:0000000000000000	bridge::nuclear_charge_potential(950043485, -2.401053e-148) -> 0.0
 bridge::nuclear_charge_potential	A	i:3304294757 f:8632af67e19a0fff	f:0000000000000000	bridge::nuclear_charge_potential(3304294757, -8.234956e-279) -> 0.0
-bridge::nuclear_charge_potential	A	i:1196195802 f:09b916dd9498a388	f:7631934d4be32bb4	bridge::nuclear_charge_potential(1196195802, 7.967694e-262) -> 2.16182944169054e261
-bridge::nuclear_charge_potential	A	i:481263143 f:0e3d7e537b766791	f:71980f8b54ff9d51	bridge::nuclear_charge_potential(481263143, 4.423125e-240) -> 1.5667697930835953e239
-bridge::nuclear_charge_potential	A	i:2936806910 f:5cc06f7d61d85255	f:234077a51cbbce13	bridge::nuclear_charge_potential(2936806910, 6.116333e138) -> 6.914106596647166e-139
+bridge::nuclear_charge_potential	A	i:1196195802 f:09b916dd9498a388	f:7631934d4be32bb5	bridge::nuclear_charge_potential(1196195802, 7.967694e-262) -> 2.1618294416905406e261
+bridge::nuclear_charge_potential	A	i:481263143 f:0e3d7e537b766791	f:71980f8b54ff9d50	bridge::nuclear_charge_potential(481263143, 4.423125e-240) -> 1.566769793083595e239
+bridge::nuclear_charge_potential	A	i:2936806910 f:5cc06f7d61d85255	f:234077a51cbbce14	bridge::nuclear_charge_potential(2936806910, 6.116333e138) -> 6.914106596647168e-139
 bridge::nuclear_charge_potential	A	i:564207551 f:15c70c6c59efaa0d	f:6a120c2a0fb05552	bridge::nuclear_charge_potential(564207551, 9.189167e-204) -> 8.841267887122708e202
 bridge::nuclear_charge_potential	A	i:3157577761 f:71772f2d66b92995	f:0e891a50cefab307	bridge::nuclear_charge_potential(3157577761, 3.774247e238) -> 1.2046906397212769e-238
 bridge::nuclear_charge_potential	A	i:2190252241 f:234222b286c1ace4	f:5cb642907a51e789	bridge::nuclear_charge_potential(2190252241, 7.614518e-139) -> 4.141937254429938e138
 bridge::nuclear_charge_potential	A	i:1353342001 f:e787aa8779b1d950	f:0000000000000000	bridge::nuclear_charge_potential(1353342001, -5.272232e190) -> 0.0
-bridge::nuclear_charge_potential	A	i:2989942338 f:5791a3b801034727	f:286f3dee35c4afb0	bridge::nuclear_charge_potential(2989942338, 6.787429e113) -> 6.343213265013184e-114
-bridge::nuclear_charge_potential	A	i:3137815270 f:44afa7a50b9bf83e	f:3b52453ac0b11e0b	bridge::nuclear_charge_potential(3137815270, 7.474293e22) -> 6.04517744551766e-23
+bridge::nuclear_charge_potential	A	i:2989942338 f:5791a3b801034727	f:286f3dee35c4afb1	bridge::nuclear_charge_potential(2989942338, 6.787429e113) -> 6.343213265013185e-114
+bridge::nuclear_charge_potential	A	i:3137815270 f:44afa7a50b9bf83e	f:3b52453ac0b11e0a	bridge::nuclear_charge_potential(3137815270, 7.474293e22) -> 6.045177445517659e-23
 bridge::nuclear_charge_potential	A	i:2038352585 f:2ee699f0f34b6497	f:51109f76f64906ba	bridge::nuclear_charge_potential(2038352585, 9.307333e-83) -> 3.15359454572352e82
-bridge::nuclear_charge_potential	A	i:755495819 f:49229420d1f377b0	f:36bdfb083baac51b	bridge::nuclear_charge_potential(755495819, 2.071586e44) -> 5.251470107460105e-45
+bridge::nuclear_charge_potential	A	i:755495819 f:49229420d1f377b0	f:36bdfb083baac51a	bridge::nuclear_charge_potential(755495819, 2.071586e44) -> 5.2514701074601046e-45
 bridge::nuclear_charge_potential	A	i:2525212360 f:90a6dd666448ba77	f:0000000000000000	bridge::nuclear_charge_potential(2525212360, -1.885131e-228) -> 0.0
 bridge::nuclear_charge_potential	A	i:2112505397 f:bf77888f52903d1c	f:0000000000000000	bridge::nuclear_charge_potential(2112505397, -0.005745468) -> 0.0
 bridge::nuclear_charge_potential	A	i:2169003552 f:a29e296dd3e00443	f:0000000000000000	bridge::nuclear_charge_potential(2169003552, -6.183577e-142) -> 0.0
@@ -608,13 +608,13 @@ bridge::e_field_to_piezo_stress	A	f:9bc9cf5567b6b915 f:f757877ce06f8300	f:5332fa
 bridge::e_field_to_piezo_stress	A	f:163ac2e63fab4c26 f:a5f2d2d3bfd3cac9	f:8000000000000000	bridge::e_field_to_piezo_stress(1.365685e-201, -6.951895e-126) -> -0.0
 bridge::e_field_to_piezo_stress	A	f:09b2153e2eaea6c1 f:6185e131651a7999	f:2b48ba642b082656	bridge::e_field_to_piezo_stress(5.742669e-262, 6.152169e161) -> 3.5329870199060996e-100
 bridge::e_field_to_piezo_stress	A	f:6b0386aaf9cfa417 f:90effabd873f7017	f:bc0383755fa9776e	bridge::e_field_to_piezo_stress(3.13445e207, -4.218561e-227) -> -1.322286852645e-19
-bridge::magnetic_flux_to_magnetostrictive_strain	A	f:3ff0000000000000 f:bedd5c31593e5fb7 f:4001333333333333	f:bec30e014a651f85	bridge::magnetic_flux_to_magnetostrictive_strain(1.0, -7e-6, 2.15) -> -2.2714981070849106e-6
+bridge::magnetic_flux_to_magnetostrictive_strain	A	f:3ff0000000000000 f:bedd5c31593e5fb7 f:4001333333333333	f:bec30e014a651f86	bridge::magnetic_flux_to_magnetostrictive_strain(1.0, -7e-6, 2.15) -> -2.271498107084911e-6
 bridge::magnetic_flux_to_magnetostrictive_strain	A	f:4001333333333333 f:bedd5c31593e5fb7 f:4001333333333333	f:bee6052502eec7c9	bridge::magnetic_flux_to_magnetostrictive_strain(2.15, -7e-6, 2.15) -> -1.05e-5
 bridge::magnetic_flux_to_magnetostrictive_strain	A	f:4008000000000000 f:bedd5c31593e5fb7 f:4001333333333333	f:bee6052502eec7c9	bridge::magnetic_flux_to_magnetostrictive_strain(3.0, -7e-6, 2.15) -> -1.05e-5
 bridge::magnetic_flux_to_magnetostrictive_strain	A	f:4024000000000000 f:bedd5c31593e5fb7 f:4001333333333333	f:bee6052502eec7c9	bridge::magnetic_flux_to_magnetostrictive_strain(10.0, -7e-6, 2.15) -> -1.05e-5
 bridge::magnetic_flux_to_magnetostrictive_strain	A	f:c008000000000000 f:bedd5c31593e5fb7 f:4001333333333333	f:bee6052502eec7c9	bridge::magnetic_flux_to_magnetostrictive_strain(-3.0, -7e-6, 2.15) -> -1.05e-5
-bridge::magnetic_flux_to_magnetostrictive_strain	A	f:bff0000000000000 f:bedd5c31593e5fb7 f:4001333333333333	f:bec30e014a651f85	bridge::magnetic_flux_to_magnetostrictive_strain(-1.0, -7e-6, 2.15) -> -2.2714981070849106e-6
-bridge::magnetic_flux_to_magnetostrictive_strain	A	f:3fe0000000000000 f:bedd5c31593e5fb7 f:4001333333333333	f:bea30e014a651f85	bridge::magnetic_flux_to_magnetostrictive_strain(0.5, -7e-6, 2.15) -> -5.678745267712276e-7
+bridge::magnetic_flux_to_magnetostrictive_strain	A	f:bff0000000000000 f:bedd5c31593e5fb7 f:4001333333333333	f:bec30e014a651f86	bridge::magnetic_flux_to_magnetostrictive_strain(-1.0, -7e-6, 2.15) -> -2.271498107084911e-6
+bridge::magnetic_flux_to_magnetostrictive_strain	A	f:3fe0000000000000 f:bedd5c31593e5fb7 f:4001333333333333	f:bea30e014a651f86	bridge::magnetic_flux_to_magnetostrictive_strain(0.5, -7e-6, 2.15) -> -5.678745267712278e-7
 bridge::magnetic_flux_to_magnetostrictive_strain	A	f:3ff0000000000000 f:3f02599ed7c6fbd2 f:0000000000000000	f:0000000000000000	bridge::magnetic_flux_to_magnetostrictive_strain(1.0, 3.5e-5, 0.0) -> 0.0
 bridge::magnetic_flux_to_magnetostrictive_strain	A	f:0000000000000000 f:bedd5c31593e5fb7 f:4001333333333333	f:8000000000000000	bridge::magnetic_flux_to_magnetostrictive_strain(0.0, -7e-6, 2.15) -> -0.0
 bridge::magnetic_flux_to_magnetostrictive_strain	A	f:3ff0000000000000 f:0000000000000000 f:4001333333333333	f:0000000000000000	bridge::magnetic_flux_to_magnetostrictive_strain(1.0, 0.0, 2.15) -> 0.0
@@ -629,10 +629,10 @@ bridge::magnetic_flux_to_magnetostrictive_strain	A	f:8000000000000001 f:bedd5c31
 bridge::magnetic_flux_to_magnetostrictive_strain	A	f:3ff0000000000000 f:8000000000000001 f:4001333333333333	f:8000000000000000	bridge::magnetic_flux_to_magnetostrictive_strain(1.0, -5e-324, 2.15) -> -0.0
 bridge::magnetic_flux_to_magnetostrictive_strain	A	f:3ff0000000000000 f:bedd5c31593e5fb7 f:8000000000000001	f:0000000000000000	bridge::magnetic_flux_to_magnetostrictive_strain(1.0, -7e-6, -5e-324) -> 0.0
 bridge::magnetic_flux_to_magnetostrictive_strain	A	f:0010000000000000 f:bedd5c31593e5fb7 f:4001333333333333	f:8000000000000000	bridge::magnetic_flux_to_magnetostrictive_strain(2.2250738585072014e-308, -7e-6, 2.15) -> -0.0
-bridge::magnetic_flux_to_magnetostrictive_strain	A	f:3ff0000000000000 f:0010000000000000 f:4001333333333333	f:00053126a0e1f4a5	bridge::magnetic_flux_to_magnetostrictive_strain(1.0, 2.2250738585072014e-308, 2.15) -> 7.22035865389032e-309
+bridge::magnetic_flux_to_magnetostrictive_strain	A	f:3ff0000000000000 f:0010000000000000 f:4001333333333333	f:00053126a0e1f4a6	bridge::magnetic_flux_to_magnetostrictive_strain(1.0, 2.2250738585072014e-308, 2.15) -> 7.220358653890326e-309
 bridge::magnetic_flux_to_magnetostrictive_strain	A	f:3ff0000000000000 f:bedd5c31593e5fb7 f:0010000000000000	f:bee6052502eec7c9	bridge::magnetic_flux_to_magnetostrictive_strain(1.0, -7e-6, 2.2250738585072014e-308) -> -1.05e-5
 bridge::magnetic_flux_to_magnetostrictive_strain	A	f:8010000000000000 f:bedd5c31593e5fb7 f:4001333333333333	f:8000000000000000	bridge::magnetic_flux_to_magnetostrictive_strain(-2.2250738585072014e-308, -7e-6, 2.15) -> -0.0
-bridge::magnetic_flux_to_magnetostrictive_strain	A	f:3ff0000000000000 f:8010000000000000 f:4001333333333333	f:80053126a0e1f4a5	bridge::magnetic_flux_to_magnetostrictive_strain(1.0, -2.2250738585072014e-308, 2.15) -> -7.22035865389032e-309
+bridge::magnetic_flux_to_magnetostrictive_strain	A	f:3ff0000000000000 f:8010000000000000 f:4001333333333333	f:80053126a0e1f4a6	bridge::magnetic_flux_to_magnetostrictive_strain(1.0, -2.2250738585072014e-308, 2.15) -> -7.220358653890326e-309
 bridge::magnetic_flux_to_magnetostrictive_strain	A	f:3ff0000000000000 f:bedd5c31593e5fb7 f:8010000000000000	f:0000000000000000	bridge::magnetic_flux_to_magnetostrictive_strain(1.0, -7e-6, -2.2250738585072014e-308) -> 0.0
 bridge::magnetic_flux_to_magnetostrictive_strain	A	f:01a56e1fc2f8f359 f:bedd5c31593e5fb7 f:4001333333333333	f:8000000000000000	bridge::magnetic_flux_to_magnetostrictive_strain(1e-300, -7e-6, 2.15) -> -0.0
 bridge::magnetic_flux_to_magnetostrictive_strain	A	f:3ff0000000000000 f:01a56e1fc2f8f359 f:4001333333333333	f:018bd0fbace8ddb8	bridge::magnetic_flux_to_magnetostrictive_strain(1.0, 1e-300, 2.15) -> 3.244997295835587e-301
@@ -640,21 +640,21 @@ bridge::magnetic_flux_to_magnetostrictive_strain	A	f:3ff0000000000000 f:bedd5c31
 bridge::magnetic_flux_to_magnetostrictive_strain	A	f:81a56e1fc2f8f359 f:bedd5c31593e5fb7 f:4001333333333333	f:8000000000000000	bridge::magnetic_flux_to_magnetostrictive_strain(-1e-300, -7e-6, 2.15) -> -0.0
 bridge::magnetic_flux_to_magnetostrictive_strain	A	f:3ff0000000000000 f:81a56e1fc2f8f359 f:4001333333333333	f:818bd0fbace8ddb8	bridge::magnetic_flux_to_magnetostrictive_strain(1.0, -1e-300, 2.15) -> -3.244997295835587e-301
 bridge::magnetic_flux_to_magnetostrictive_strain	A	f:3ff0000000000000 f:bedd5c31593e5fb7 f:81a56e1fc2f8f359	f:0000000000000000	bridge::magnetic_flux_to_magnetostrictive_strain(1.0, -7e-6, -1e-300) -> 0.0
-bridge::magnetic_flux_to_magnetostrictive_strain	A	f:3ff0000000000000 f:3ff0000000000000 f:4001333333333333	f:3fd4c49a8387d296	bridge::magnetic_flux_to_magnetostrictive_strain(1.0, 1.0, 2.15) -> 0.32449972958355866
+bridge::magnetic_flux_to_magnetostrictive_strain	A	f:3ff0000000000000 f:3ff0000000000000 f:4001333333333333	f:3fd4c49a8387d297	bridge::magnetic_flux_to_magnetostrictive_strain(1.0, 1.0, 2.15) -> 0.3244997295835587
 bridge::magnetic_flux_to_magnetostrictive_strain	A	f:3ff0000000000000 f:bedd5c31593e5fb7 f:3ff0000000000000	f:bee6052502eec7c9	bridge::magnetic_flux_to_magnetostrictive_strain(1.0, -7e-6, 1.0) -> -1.05e-5
-bridge::magnetic_flux_to_magnetostrictive_strain	A	f:3ff0000000000000 f:bff0000000000000 f:4001333333333333	f:bfd4c49a8387d296	bridge::magnetic_flux_to_magnetostrictive_strain(1.0, -1.0, 2.15) -> -0.32449972958355866
+bridge::magnetic_flux_to_magnetostrictive_strain	A	f:3ff0000000000000 f:bff0000000000000 f:4001333333333333	f:bfd4c49a8387d297	bridge::magnetic_flux_to_magnetostrictive_strain(1.0, -1.0, 2.15) -> -0.3244997295835587
 bridge::magnetic_flux_to_magnetostrictive_strain	A	f:3ff0000000000000 f:bedd5c31593e5fb7 f:bff0000000000000	f:0000000000000000	bridge::magnetic_flux_to_magnetostrictive_strain(1.0, -7e-6, -1.0) -> 0.0
 bridge::magnetic_flux_to_magnetostrictive_strain	A	f:7e37e43c8800759c f:bedd5c31593e5fb7 f:4001333333333333	f:bee6052502eec7c9	bridge::magnetic_flux_to_magnetostrictive_strain(1e300, -7e-6, 2.15) -> -1.05e-5
-bridge::magnetic_flux_to_magnetostrictive_strain	A	f:3ff0000000000000 f:7e37e43c8800759c f:4001333333333333	f:7e1f02de48b0b574	bridge::magnetic_flux_to_magnetostrictive_strain(1.0, 1e300, 2.15) -> 3.2449972958355868e299
+bridge::magnetic_flux_to_magnetostrictive_strain	A	f:3ff0000000000000 f:7e37e43c8800759c f:4001333333333333	f:7e1f02de48b0b575	bridge::magnetic_flux_to_magnetostrictive_strain(1.0, 1e300, 2.15) -> 3.244997295835587e299
 bridge::magnetic_flux_to_magnetostrictive_strain	A	f:3ff0000000000000 f:bedd5c31593e5fb7 f:7e37e43c8800759c	f:8000000000000000	bridge::magnetic_flux_to_magnetostrictive_strain(1.0, -7e-6, 1e300) -> -0.0
 bridge::magnetic_flux_to_magnetostrictive_strain	A	f:fe37e43c8800759c f:bedd5c31593e5fb7 f:4001333333333333	f:bee6052502eec7c9	bridge::magnetic_flux_to_magnetostrictive_strain(-1e300, -7e-6, 2.15) -> -1.05e-5
-bridge::magnetic_flux_to_magnetostrictive_strain	A	f:3ff0000000000000 f:fe37e43c8800759c f:4001333333333333	f:fe1f02de48b0b574	bridge::magnetic_flux_to_magnetostrictive_strain(1.0, -1e300, 2.15) -> -3.2449972958355868e299
+bridge::magnetic_flux_to_magnetostrictive_strain	A	f:3ff0000000000000 f:fe37e43c8800759c f:4001333333333333	f:fe1f02de48b0b575	bridge::magnetic_flux_to_magnetostrictive_strain(1.0, -1e300, 2.15) -> -3.244997295835587e299
 bridge::magnetic_flux_to_magnetostrictive_strain	A	f:3ff0000000000000 f:bedd5c31593e5fb7 f:fe37e43c8800759c	f:0000000000000000	bridge::magnetic_flux_to_magnetostrictive_strain(1.0, -7e-6, -1e300) -> 0.0
 bridge::magnetic_flux_to_magnetostrictive_strain	A	f:7fefffffffffffff f:bedd5c31593e5fb7 f:4001333333333333	f:bee6052502eec7c9	bridge::magnetic_flux_to_magnetostrictive_strain(1.7976931348623157e308, -7e-6, 2.15) -> -1.05e-5
-bridge::magnetic_flux_to_magnetostrictive_strain	A	f:3ff0000000000000 f:7fefffffffffffff f:4001333333333333	f:7ff0000000000000	bridge::magnetic_flux_to_magnetostrictive_strain(1.0, 1.7976931348623157e308, 2.15) -> inf
+bridge::magnetic_flux_to_magnetostrictive_strain	A	f:3ff0000000000000 f:7fefffffffffffff f:4001333333333333	f:7fd4c49a8387d296	bridge::magnetic_flux_to_magnetostrictive_strain(1.0, 1.7976931348623157e308, 2.15) -> 5.833509361370414e307
 bridge::magnetic_flux_to_magnetostrictive_strain	A	f:3ff0000000000000 f:bedd5c31593e5fb7 f:7fefffffffffffff	f:8000000000000000	bridge::magnetic_flux_to_magnetostrictive_strain(1.0, -7e-6, 1.7976931348623157e308) -> -0.0
 bridge::magnetic_flux_to_magnetostrictive_strain	A	f:ffefffffffffffff f:bedd5c31593e5fb7 f:4001333333333333	f:bee6052502eec7c9	bridge::magnetic_flux_to_magnetostrictive_strain(-1.7976931348623157e308, -7e-6, 2.15) -> -1.05e-5
-bridge::magnetic_flux_to_magnetostrictive_strain	A	f:3ff0000000000000 f:ffefffffffffffff f:4001333333333333	f:fff0000000000000	bridge::magnetic_flux_to_magnetostrictive_strain(1.0, -1.7976931348623157e308, 2.15) -> -inf
+bridge::magnetic_flux_to_magnetostrictive_strain	A	f:3ff0000000000000 f:ffefffffffffffff f:4001333333333333	f:ffd4c49a8387d296	bridge::magnetic_flux_to_magnetostrictive_strain(1.0, -1.7976931348623157e308, 2.15) -> -5.833509361370414e307
 bridge::magnetic_flux_to_magnetostrictive_strain	A	f:3ff0000000000000 f:bedd5c31593e5fb7 f:ffefffffffffffff	f:0000000000000000	bridge::magnetic_flux_to_magnetostrictive_strain(1.0, -7e-6, -1.7976931348623157e308) -> 0.0
 bridge::magnetic_flux_to_magnetostrictive_strain	A	f:7ff0000000000000 f:bedd5c31593e5fb7 f:4001333333333333	f:bee6052502eec7c9	bridge::magnetic_flux_to_magnetostrictive_strain(inf, -7e-6, 2.15) -> -1.05e-5
 bridge::magnetic_flux_to_magnetostrictive_strain	A	f:3ff0000000000000 f:7ff0000000000000 f:4001333333333333	f:7ff0000000000000	bridge::magnetic_flux_to_magnetostrictive_strain(1.0, inf, 2.15) -> inf
@@ -669,33 +669,75 @@ bridge::magnetic_flux_to_magnetostrictive_strain	A	f:1eb67e9c127b6e74 f:bedd5c31
 bridge::magnetic_flux_to_magnetostrictive_strain	A	f:01a56e1fc2f8f359 f:3ddb7cdfd9d7bdbb f:7e37e43c8800759c	f:0000000000000000	bridge::magnetic_flux_to_magnetostrictive_strain(1e-300, 1e-10, 1e300) -> 0.0
 bridge::magnetic_flux_to_magnetostrictive_strain	A	f:7e37e43c8800759c f:bedd5c31593e5fb7 f:01a56e1fc2f8f359	f:bee6052502eec7c9	bridge::magnetic_flux_to_magnetostrictive_strain(1e300, -7e-6, 1e-300) -> -1.05e-5
 bridge::magnetic_flux_to_magnetostrictive_strain	A	f:3ff0000000000000 f:7e37e43c8800759c f:3ff0000000000000	f:7e41eb2d66005835	bridge::magnetic_flux_to_magnetostrictive_strain(1.0, 1e300, 1.0) -> 1.5e300
+bridge::magnetic_flux_to_magnetostrictive_strain	A	f:4001333333333332 f:bedd5c31593e5fb7 f:4001333333333333	f:bee6052502eec7c7	bridge::magnetic_flux_to_magnetostrictive_strain(2.1499999999999995, -7e-6, 2.15) -> -1.0499999999999996e-5
+bridge::magnetic_flux_to_magnetostrictive_strain	A	f:c001333333333332 f:3f02599ed7c6fbd2 f:4001333333333333	f:3f0b866e43aa79b8	bridge::magnetic_flux_to_magnetostrictive_strain(-2.1499999999999995, 3.5e-5, 2.15) -> 5.2499999999999975e-5
+bridge::magnetic_flux_to_magnetostrictive_strain	A	f:4001333333333331 f:bedd5c31593e5fb7 f:4001333333333333	f:bee6052502eec7c4	bridge::magnetic_flux_to_magnetostrictive_strain(2.149999999999999, -7e-6, 2.15) -> -1.0499999999999991e-5
+bridge::magnetic_flux_to_magnetostrictive_strain	A	f:c001333333333331 f:3f02599ed7c6fbd2 f:4001333333333333	f:3f0b866e43aa79b5	bridge::magnetic_flux_to_magnetostrictive_strain(-2.149999999999999, 3.5e-5, 2.15) -> 5.2499999999999955e-5
+bridge::magnetic_flux_to_magnetostrictive_strain	A	f:4001333333333330 f:bedd5c31593e5fb7 f:4001333333333333	f:bee6052502eec7c2	bridge::magnetic_flux_to_magnetostrictive_strain(2.1499999999999986, -7e-6, 2.15) -> -1.0499999999999988e-5
+bridge::magnetic_flux_to_magnetostrictive_strain	A	f:c001333333333330 f:3f02599ed7c6fbd2 f:4001333333333333	f:3f0b866e43aa79b1	bridge::magnetic_flux_to_magnetostrictive_strain(-2.1499999999999986, 3.5e-5, 2.15) -> 5.249999999999993e-5
+bridge::magnetic_flux_to_magnetostrictive_strain	A	f:40013333333332ff f:7e37e43c8800759c f:4001333333333333	f:7e41eb2d660057c9	bridge::magnetic_flux_to_magnetostrictive_strain(2.149999999999977, 1e300, 2.15) -> 1.499999999999968e300
+bridge::magnetic_flux_to_magnetostrictive_strain	A	f:16687e92154ef7ac f:7e37e43c8800759c f:2b2bff2ee48e0530	f:54bb6e83b85f253b	bridge::magnetic_flux_to_magnetostrictive_strain(1e-200, 1e300, 1e-100) -> 1.5e100
+bridge::magnetic_flux_to_magnetostrictive_strain	A	f:1fd9be34ac46b18f f:4202a05f20000000 f:1eb67e9c127b6e74	f:420bf08eb0000000	bridge::magnetic_flux_to_magnetostrictive_strain(3e-155, 10000000000.0, 1e-160) -> 15000000000.0
+bridge::magnetic_flux_to_magnetostrictive_strain	A	f:5fe7dddf6b095ff1 f:01a56e1fc2f8f359 f:20ca2fe76a3f9475	f:01b01297d23ab683	bridge::magnetic_flux_to_magnetostrictive_strain(1e154, 1e-300, 1e-150) -> 1.5e-300
+bridge::em_energy_to_heating_rate	A	f:3ff0000000000000 f:96687e92154ef7ac f:96687e92154ef7ac	f:7ff0000000000000	bridge::em_energy_to_heating_rate(1.0, -1e-200, -1e-200) -> inf
+bridge::em_energy_to_heating_rate	A	f:c014000000000000 f:96687e92154ef7ac f:c000000000000000	f:e98a20df0dcd3af1	bridge::em_energy_to_heating_rate(-5.0, -1e-200, -2.0) -> -2.5e200
+bridge::em_energy_to_heating_rate	A	f:01a56e1fc2f8f359 f:16687e92154ef7ac f:16687e92154ef7ac	f:54b249ad2594c37d	bridge::em_energy_to_heating_rate(1e-300, 1e-200, 1e-200) -> 1e100
+bridge::em_energy_to_heating_rate	A	f:7ff0000000000000 f:16687e92154ef7ac f:16687e92154ef7ac	f:7ff0000000000000	bridge::em_energy_to_heating_rate(inf, 1e-200, 1e-200) -> inf
+bridge::em_energy_to_heating_rate	A	f:fff0000000000000 f:6974e718d7d7625a f:6974e718d7d7625a	f:fff0000000000000	bridge::em_energy_to_heating_rate(-inf, 1e200, 1e200) -> -inf
+bridge::em_energy_to_heating_rate	A	f:7ff8000000000000 f:16687e92154ef7ac f:16687e92154ef7ac	f:7ff8000000000000	bridge::em_energy_to_heating_rate(NaN, 1e-200, 1e-200) -> NaN
+bridge::em_energy_to_heating_rate	A	f:4202a05f20000000 f:6974e718d7d7625a f:6974e718d7d7625a	f:0000000000000000	bridge::em_energy_to_heating_rate(10000000000.0, 1e200, 1e200) -> 0.0
+bridge::em_energy_to_heating_rate	A	f:4202a05f20000000 f:e974e718d7d7625a f:16687e92154ef7ac	f:0000000000000000	bridge::em_energy_to_heating_rate(10000000000.0, -1e200, 1e-200) -> 0.0
+bridge::em_energy_to_heating_rate	A	f:0000000000000001 f:01a56e1fc2f8f359 f:4202a05f20000000	f:390485ce9e7a065e	bridge::em_energy_to_heating_rate(5e-324, 1e-300, 10000000000.0) -> 4.940656458412465e-34
+bridge::em_energy_to_heating_rate	A	f:4000000000000000 f:7fefffffffffffff f:4000000000000000	f:0004000000000000	bridge::em_energy_to_heating_rate(2.0, 1.7976931348623157e308, 2.0) -> 5.562684646268003e-309
+bridge::joule_heating_power_density	A	f:5ff0b4e931535cc2 f:3ff0000000000000	f:7ff0000000000000	bridge::joule_heating_power_density(1.4e154, 1.0) -> inf
+bridge::joule_heating_power_density	A	f:5fe7dddf6b095ff1 f:4000000000000000	f:7ff0000000000000	bridge::joule_heating_power_density(1e154, 2.0) -> inf
+bridge::joule_heating_power_density	A	f:5fef06d5a4bf631f f:3fe0000000000000	f:7fde153f64e2f455	bridge::joule_heating_power_density(1.3e154, 0.5) -> 8.449999999999999e307
+bridge::joule_heating_power_density	A	f:1ca3529ba7d19eaf f:1ca3529ba7d19eaf	f:0000000000000000	bridge::joule_heating_power_density(1e-170, 1e-170) -> 0.0
+bridge::joule_heating_power_density	A	f:1e659843e8c86a09 f:7e37e43c8800759c	f:3b25c2baecdda07d	bridge::joule_heating_power_density(3e-162, 1e300) -> 9.000000000000001e-24
+bridge::wavelength_to_refractive_index_bk7	A	f:608e4caca2e2e6cd	f:3ffcfc4a4e77a7c9	bridge::wavelength_to_refractive_index_bk7(1.3e157) -> 1.8115943017132727
+bridge::wavelength_to_refractive_index_bk7	A	f:608f3b575d11448c	f:3ffcfc4a4e77a7c9	bridge::wavelength_to_refractive_index_bk7(1.34e157) -> 1.8115943017132727
+bridge::wavelength_to_refractive_index_bk7	A	f:608f77020b9cdbfc	f:3ffcfc4a4e77a7c9	bridge::wavelength_to_refractive_index_bk7(1.35e157) -> 1.8115943017132727
+bridge::wavelength_to_refractive_index_bk7	A	f:609050abba2b6896	f:3ffcfc4a4e77a7c9	bridge::wavelength_to_refractive_index_bk7(1.4e157) -> 1.8115943017132727
+bridge::wavelength_to_refractive_index_bk7	A	f:6974e718d7d7625a	f:3ffcfc4a4e77a7c9	bridge::wavelength_to_refractive_index_bk7(1e200) -> 1.8115943017132727
+bridge::wavelength_to_refractive_index_bk7	A	f:20a4f31f8832dd2a	f:3ff0000000000000	bridge::wavelength_to_refractive_index_bk7(2e-151) -> 1.0
+bridge::wavelength_to_refractive_index_bk7	A	f:209f6caf4c4c4bc0	f:3ff0000000000000	bridge::wavelength_to_refractive_index_bk7(1.5e-151) -> 1.0
+bridge::wavelength_to_refractive_index_bk7	A	f:2060c27fa028b0ef	f:3ff0000000000000	bridge::wavelength_to_refractive_index_bk7(1e-152) -> 1.0
+bridge::wavelength_to_refractive_index_bk7	A	f:7fe1ccf385ebc8a0	f:3ffcfc4a4e77a7c9	bridge::wavelength_to_refractive_index_bk7(1e308) -> 1.8115943017132727
+bridge::e_field_to_optical_intensity	A	f:5feffb3abd82527b	f:7f55b83ceb1ebaea	bridge::e_field_to_optical_intensity(1.34e154) -> 2.383137133992076e305
+bridge::e_field_to_optical_intensity	A	f:5ff01c2a01d98729	f:7f560b89478cabaa	bridge::e_field_to_optical_intensity(1.35e154) -> 2.4188390658835813e305
+bridge::e_field_to_optical_intensity	A	f:1e659843e8c86a09	f:0000000000000000	bridge::e_field_to_optical_intensity(3e-162) -> 0.0
+bridge::e_field_to_optical_intensity	A	f:1e81fee341fc585d	f:0000000000000000	bridge::e_field_to_optical_intensity(1e-161) -> 0.0
+bridge::e_field_to_optical_intensity	A	f:1ca3529ba7d19eaf	f:0000000000000000	bridge::e_field_to_optical_intensity(1e-170) -> 0.0
+bridge::nuclear_charge_potential	A	i:92 f:7e37e43c8800759c	f:0037d0b460305adb	bridge::nuclear_charge_potential(92, 1e300) -> 1.3247673840151615e-307
+bridge::nuclear_charge_potential	A	i:1 f:000012688b70e62b	f:7e75807a2f4a433e	bridge::nuclear_charge_potential(1, 1e-310) -> 1.4399645478425714e301
+bridge::nuclear_charge_potential	A	i:79 f:00a5111453dbe818	f:7dc73133dd0bdc6d	bridge::nuclear_charge_potential(79, 1.5e-305) -> 7.583813285304186e297
 bridge::magnetic_flux_to_magnetostrictive_strain	A	f:be1f233a7ae7913d f:bf16c7b147c9b7d6 f:3e08f86ffd493609	f:bf2115c4f5d749e0	bridge::magnetic_flux_to_magnetostrictive_strain(-1.8124475077171961e-9, -8.689899e-5, 7.26736e-10) -> -0.00013034848499999998
-bridge::magnetic_flux_to_magnetostrictive_strain	A	f:c06f6b930a7c0e59 f:beb00106a7c10550 f:408ee90f9096bb99	f:be78cdeed4066659	bridge::magnetic_flux_to_magnetostrictive_strain(-251.36169933538147, -9.539132e-7, 989.1326) -> -9.24036855975972e-8
+bridge::magnetic_flux_to_magnetostrictive_strain	A	f:c06f6b930a7c0e59 f:beb00106a7c10550 f:408ee90f9096bb99	f:be78cdeed4066658	bridge::magnetic_flux_to_magnetostrictive_strain(-251.36169933538147, -9.539132e-7, 989.1326) -> -9.240368559759718e-8
 bridge::magnetic_flux_to_magnetostrictive_strain	A	f:c00d4cd4066d7164 f:bd8e0172030cb78f f:401a701fb82c2bd8	f:bd7ba3f89661f2a7	bridge::magnetic_flux_to_magnetostrictive_strain(-3.6625137807988484, -3.411247e-12, 6.609496) -> -1.5711811950717151e-12
 bridge::magnetic_flux_to_magnetostrictive_strain	A	f:be023caa0689436e f:be91f0cbb8e7db3d f:3dffcc0d60b8e3db	f:be9ae931955bc8dc	bridge::magnetic_flux_to_magnetostrictive_strain(-5.30765664988652e-10, -2.673359e-7, 4.627084e-10) -> -4.0100385000000005e-7
 bridge::magnetic_flux_to_magnetostrictive_strain	A	f:406af41bff6ac31f f:3dd7f934250b9f88 f:405710277c45cbbc	f:3de1fae71bc8b7a6	bridge::magnetic_flux_to_magnetostrictive_strain(215.62841769077292, 8.721491e-11, 92.25241) -> 1.30822365e-10
-bridge::magnetic_flux_to_magnetostrictive_strain	A	f:bea29b5d08b42ccd f:be68b513a2d497e4 f:3ea67e8d58b07cf7	f:be695bb10fc50aa9	bridge::magnetic_flux_to_magnetostrictive_strain(-5.545284848263929e-7, -4.602099e-8, 6.703837e-7) -> -4.7233273267021526e-8
+bridge::magnetic_flux_to_magnetostrictive_strain	A	f:bea29b5d08b42ccd f:be68b513a2d497e4 f:3ea67e8d58b07cf7	f:be695bb10fc50aa8	bridge::magnetic_flux_to_magnetostrictive_strain(-5.545284848263929e-7, -4.602099e-8, 6.703837e-7) -> -4.723327326702152e-8
 bridge::magnetic_flux_to_magnetostrictive_strain	A	f:bf2299d4e9494900 f:3f0d921730518e33 f:3f10911b3c8fb1f3	f:3f162d91643d2aa6	bridge::magnetic_flux_to_magnetostrictive_strain(-0.00014191364302235804, 5.640157e-5, 6.319741e-5) -> 8.460235499999999e-5
 bridge::magnetic_flux_to_magnetostrictive_strain	A	f:4175186afaecca96 f:3d9cfec4cb757e70 f:415f565080000000	f:3da5bf1398981ed4	bridge::magnetic_flux_to_magnetostrictive_strain(22120111.68281039, 6.592743e-12, 8214850.0) -> 9.8891145e-12
 bridge::magnetic_flux_to_magnetostrictive_strain	A	f:c09936f6f85d14db f:3f4c00b546433c5d f:4085ab92d77318fc	f:3f550087f4b26d46	bridge::magnetic_flux_to_magnetostrictive_strain(-1613.7411818069438, 0.0008545766, 693.4467) -> 0.0012818649
-bridge::magnetic_flux_to_magnetostrictive_strain	A	f:3e3887e979e57d66 f:bf075ed2dc78ecc7 f:3e420e8ae79651f0	f:bf002cc91e28ea2d	bridge::magnetic_flux_to_magnetostrictive_strain(5.711546706372371e-9, -4.457551e-5, 8.408356e-9) -> -3.085125696996138e-5
+bridge::magnetic_flux_to_magnetostrictive_strain	A	f:3e3887e979e57d66 f:bf075ed2dc78ecc7 f:3e420e8ae79651f0	f:bf002cc91e28ea2e	bridge::magnetic_flux_to_magnetostrictive_strain(5.711546706372371e-9, -4.457551e-5, 8.408356e-9) -> -3.085125696996139e-5
 bridge::magnetic_flux_to_magnetostrictive_strain	A	f:3fa580baeca921fd f:3da3a64171409e93 f:3f8df4b14257be58	f:3dad796229e0eddc	bridge::magnetic_flux_to_magnetostrictive_strain(0.04199775828289274, 8.935529e-12, 0.01462687) -> 1.3403293499999998e-11
-bridge::magnetic_flux_to_magnetostrictive_strain	A	f:400eba575f131608 f:bee4bb315dfb3435 f:401c05c0767d34df	f:bed2b211cf7f8250	bridge::magnetic_flux_to_magnetostrictive_strain(3.840986960191689, -9.885417e-6, 7.005617) -> -4.4573746364745e-6
-bridge::magnetic_flux_to_magnetostrictive_strain	A	f:40620251963fbc26 f:3eb08a61b264e8fd f:4077b921ff2e48e9	f:3e8c989d8b9865a6	bridge::magnetic_flux_to_magnetostrictive_strain(144.07245933960183, 9.858938e-7, 379.5708) -> 2.1305794976957994e-7
+bridge::magnetic_flux_to_magnetostrictive_strain	A	f:400eba575f131608 f:bee4bb315dfb3435 f:401c05c0767d34df	f:bed2b211cf7f824f	bridge::magnetic_flux_to_magnetostrictive_strain(3.840986960191689, -9.885417e-6, 7.005617) -> -4.457374636474499e-6
+bridge::magnetic_flux_to_magnetostrictive_strain	A	f:40620251963fbc26 f:3eb08a61b264e8fd f:4077b921ff2e48e9	f:3e8c989d8b9865a4	bridge::magnetic_flux_to_magnetostrictive_strain(144.07245933960183, 9.858938e-7, 379.5708) -> 2.1305794976957989e-7
 bridge::magnetic_flux_to_magnetostrictive_strain	A	f:bf01c21afe907d7c f:bdd948c05ce3af3a f:3eebc09706b1bdda	f:bde2f69045aac36c	bridge::magnetic_flux_to_magnetostrictive_strain(-3.3871125033830906e-5, -9.198333e-11, 1.323333e-5) -> -1.37974995e-10
 bridge::magnetic_flux_to_magnetostrictive_strain	A	f:c156e2b8e1b766f8 f:3e2bfdfc54e1572e f:41620b58e0000000	f:3e20e2aad24a79ca	bridge::magnetic_flux_to_magnetostrictive_strain(-5999331.526818983, 3.258713e-9, 9460423.0) -> 1.9657214903803847e-9
-bridge::magnetic_flux_to_magnetostrictive_strain	A	f:c0805cdf4c6d0b7d f:3ed5c5b7b2d86d43 f:40ab47ab851eb852	f:3e877fcb84bb9930	bridge::magnetic_flux_to_magnetostrictive_strain(-523.6090324896937, 5.190929e-6, 3491.835) -> 1.7508267757051774e-7
+bridge::magnetic_flux_to_magnetostrictive_strain	A	f:c0805cdf4c6d0b7d f:3ed5c5b7b2d86d43 f:40ab47ab851eb852	f:3e877fcb84bb992f	bridge::magnetic_flux_to_magnetostrictive_strain(-523.6090324896937, 5.190929e-6, 3491.835) -> 1.7508267757051772e-7
 bridge::magnetic_flux_to_magnetostrictive_strain	A	f:3ec1795ce9d44ed1 f:bf14eb008be36ff4 f:3f444b5cdbdf4a8f	f:be174313e1cc986e	bridge::magnetic_flux_to_magnetostrictive_strain(2.0830719466099456e-6, -7.979575e-5, 0.0006193355) -> -1.3540278960527705e-9
 bridge::magnetic_flux_to_magnetostrictive_strain	A	f:4136d6a0caa47a5e f:3f159e3c328ca26c f:4120ad759999999a	f:3f2036ad25e979d1	bridge::magnetic_flux_to_magnetostrictive_strain(1496736.791572235, 8.246653e-5, 546490.8) -> 0.000123699795
 bridge::magnetic_flux_to_magnetostrictive_strain	A	f:3e1b317219ba2aab f:3ed2f5efd7ec6480 f:3e09ca73bc8fd8d1	f:3edc70e7c3e296c0	bridge::magnetic_flux_to_magnetostrictive_strain(1.5828494963593869e-9, 4.520581e-6, 7.506119e-10) -> 6.7808715e-6
-bridge::magnetic_flux_to_magnetostrictive_strain	A	f:3dd9c7886dcf65bd f:bf48fef03aaf0b42 f:3e17e6bcfc846e43	f:bed5cf0de1090560	bridge::magnetic_flux_to_magnetostrictive_strain(9.378500359346528e-11, -0.0007628129, 1.39124e-9) -> -5.1996244257457855e-6
+bridge::magnetic_flux_to_magnetostrictive_strain	A	f:3dd9c7886dcf65bd f:bf48fef03aaf0b42 f:3e17e6bcfc846e43	f:bed5cf0de1090561	bridge::magnetic_flux_to_magnetostrictive_strain(9.378500359346528e-11, -0.0007628129, 1.39124e-9) -> -5.199624425745786e-6
 bridge::magnetic_flux_to_magnetostrictive_strain	A	f:be420dd0980b2102 f:3dcf80d4589a2cf2 f:3ea7eee84d2e9838	f:3d0ae3cf6ea66a98	bridge::magnetic_flux_to_magnetostrictive_strain(-8.407032182729879e-9, 5.730406e-11, 7.132659e-7) -> 1.1941507300591823e-14
-bridge::magnetic_flux_to_magnetostrictive_strain	A	f:4134fdb43255bd46 f:3ef688d409b7fbb9 f:4161438fe0000000	f:3ea8fc6eeb7c2eec	bridge::magnetic_flux_to_magnetostrictive_strain(1375668.1966207786, 2.149056e-5, 9051263.0) -> 7.446428389192245e-7
+bridge::magnetic_flux_to_magnetostrictive_strain	A	f:4134fdb43255bd46 f:3ef688d409b7fbb9 f:4161438fe0000000	f:3ea8fc6eeb7c2eeb	bridge::magnetic_flux_to_magnetostrictive_strain(1375668.1966207786, 2.149056e-5, 9051263.0) -> 7.446428389192244e-7
 bridge::magnetic_flux_to_magnetostrictive_strain	A	f:3ea3c5f66ba498f1 f:3f4e16c509212068 f:3e97018edeb95a11	f:3f569113c6d8d84e	bridge::magnetic_flux_to_magnetostrictive_strain(5.892900028267411e-7, 0.0009182417, 3.428174e-7) -> 0.00137736255
-bridge::magnetic_flux_to_magnetostrictive_strain	A	f:40860c0e17be8ab1 f:beac6b4476b855cb f:408741b404ea4a8c	f:beb327a32b05a0d3	bridge::magnetic_flux_to_magnetostrictive_strain(705.5068812261653, -8.469526e-7, 744.2129) -> -1.1417170463161072e-6
+bridge::magnetic_flux_to_magnetostrictive_strain	A	f:40860c0e17be8ab1 f:beac6b4476b855cb f:408741b404ea4a8c	f:beb327a32b05a0d4	bridge::magnetic_flux_to_magnetostrictive_strain(705.5068812261653, -8.469526e-7, 744.2129) -> -1.1417170463161074e-6
 bridge::magnetic_flux_to_magnetostrictive_strain	A	f:c008469065fb5896 f:bde3c404f4dd4044 f:3ff2e3fbbd7b2032	f:bdeda6076f4be066	bridge::magnetic_flux_to_magnetostrictive_strain(-3.034455105526898, -1.438144e-10, 1.18066) -> -2.157216e-10
 bridge::magnetic_flux_to_magnetostrictive_strain	A	f:c08c2d2acba9c2ea f:3da1321613d299b1 f:408bb43cd35a8588	f:3da9cb211dbbe68a	bridge::magnetic_flux_to_magnetostrictive_strain(-901.6458962690933, 7.819676e-12, 886.5297) -> 1.1729514000000002e-11
 bridge::magnetic_flux_to_magnetostrictive_strain	A	f:bee223904dba6d62 f:3d9a8f6a55d1ff28 f:3eccb66c990ae2d2	f:3da3eb8fc05d7f5e	bridge::magnetic_flux_to_magnetostrictive_strain(-8.649311374944988e-6, 6.039094e-12, 3.422808e-6) -> 9.058641e-12
-bridge::magnetic_flux_to_magnetostrictive_strain	A	f:40997740565d779b f:bf05af9df493817a f:409fbf50e5604189	f:bf04ee1d10d0d865	bridge::magnetic_flux_to_magnetostrictive_strain(1629.8128294567348, -4.136277e-5, 2031.829) -> -3.992105676113646e-5
+bridge::magnetic_flux_to_magnetostrictive_strain	A	f:40997740565d779b f:bf05af9df493817a f:409fbf50e5604189	f:bf04ee1d10d0d864	bridge::magnetic_flux_to_magnetostrictive_strain(1629.8128294567348, -4.136277e-5, 2031.829) -> -3.9921056761136453e-5
 bridge::magnetic_flux_to_magnetostrictive_strain	A	f:c1b14956f0c2b655 f:3f6008b8d89b8478 f:41c266e95c000000	f:3f45393b9f6bbdf9	bridge::magnetic_flux_to_magnetostrictive_strain(-290019056.76059467, 0.001957284, 617468600.0) -> 0.0006476918341302144
 bridge::magnetic_flux_to_magnetostrictive_strain	A	f:be0ed8cc8c9a8079 f:3e346b18d3091081 f:3dff6a25f1f6fc66	f:3e3ea0a53c8d98c2	bridge::magnetic_flux_to_magnetostrictive_strain(-8.977621087569215e-10, 4.754017e-9, 4.571432e-10) -> 7.131025500000001e-9
