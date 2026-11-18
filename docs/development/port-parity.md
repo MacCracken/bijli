@@ -7556,3 +7556,27 @@ eigenmode search (`dft_magnitude`'s recurrence and magnitude, `find_eigenmodes`'
   equal; the 32 test files pass on all three (2,879 assertions), the only warnings the ai unit's recorded ones. The
   gate is clean (execution coverage 445 of 445; the audit passes); validate.py 770,127 rows, 0 problems, `math.adr.tsv`
   current; `emit.py --check` current. **M7 Part 2 is done.** Next: M7's close, the benchmark record regenerated.
+
+## 138. M7 done: the close (2026-11-18)
+
+- **The benchmark record** (`docs/benchmarks-rust-v-cyrius.md`) is regenerated as at M5's and M6's closes: the
+  Cyrius column is each row's least of four full `cyrius bench` runs of the committed library (`34b6b63`, part 2b;
+  the bench file gains this close's three benches), at load 1.0 to 1.9, a quieter machine than M6's close. 80 of 80
+  Rust benches twinned (M7's modules have no Rust bench); median Cyrius/Rust 27.2× (28.3× at M6's close), the median
+  row 0.955× its old value, every row within 0.86–1.03× it (`beam/resonator_stability` 50 → 43 ns the most, the 2D
+  steps 1.03× the least). `bench_record.py`'s `DONE` now names M1–M7.
+- **Three Cyrius-only benches** (`EXTRA`): `bridge/em_energy_to_heating_rate` 83 ns (a bridge rounded once, row 13;
+  Rust's chain took 6 ns, §136), `soorat/vector_field_from_components_16x16x16` 170.14 µs (4,096 samples, 41.5 ns
+  each with the checks and the row-18 guard) and `json/charge_visualization_from_json` 45.66 µs (16 points, each f32
+  rounded once, row 45). Their first run printed a pointer warning from the bench's own setup (an untyped word into a
+  `*BjChargePoint`), outside the timed loops; a cast helper fixed it, and `cyrius bench` is warning-free.
+- **M7 in all**: Part 1 (§132–§135) ported bridge.rs (`src/bridge.cyr`, its constants generated), soorat.rs's eight
+  structs, constructors and JSON (`src/soorat.cyr`, `src/json.cyr`; the f32 read rounded once, ADR 0002 row 45) and
+  ai.rs's daimon/hoosh client in the `[lib.ai]` profile (`src/ai.cyr`, daimon's own route, row 46; sandhi never in
+  `[deps] stdlib`); Part 2 (§136, §137) the range-edge review (rows 13, 18 and 47, the ±0 rule the user chose).
+  bridge.rs 18/18, soorat.rs 14/14 and ai.rs 10/10 tests ported; `bridge.tsv` (739 rows) and `soorat.tsv` (1,350)
+  are all `emit.py`'s, the first modules with no frozen rows; every Rust surface item is ported (surface parity: 18
+  modules, 735 items, none pending).
+- **Result**: no library code changed; the parity and digests are §137's (646,281 ok, 0 failed, 123,846 accepted;
+  all 520 digests equal on three targets). The audit passes with the new benches (its first run found `main`'s doc comment cut off by the new cast helper, which now sits above it); `bench_record.py --check` is clean. **M7 is done.** Next: M8, the 2.0.0
+  release (plan §4.1).

@@ -60,6 +60,11 @@ fn bench_orbit(w: f64): i64 {
     };
 }
 
+# A word as a *BjChargePoint.
+fn bench_cpp(a): *BjChargePoint {
+    return a;
+}
+
 # Runs the bijli benchmarks and reports each. Beside the Rust twins (as their modules land), the Cyrius-only costs
 # of the port's own machinery: a log site with the gate off (Rust's tracing with no subscriber), making an error
 # (the last-error record, on the main thread's static record, with no syscall until a thread exists), the same with
@@ -1504,6 +1509,76 @@ fn main(): i64 {
     bench_batch_stop(bjc, 100000);
     bench_report(bjc);
     if (jcsum == 7 || vcw == 7) { println("."); }
+
+    # M7: a bridge rounded once (ADR 0002 row 13), a 16³ vector field sample (its magnitudes on row 18's guard), and a
+    # 16-point charge visualization read back, each f32 rounded once (row 45).
+    var m7h: f64 = 0.0;
+    var bbh = bench_new("bridge/em_energy_to_heating_rate");
+    bench_batch_start(bbh);
+    for (var k = 0; k < 100000; k = k + 1) {
+        var hr: f64 = bj_em_energy_to_heating_rate(16800.0, 8960.0, 385.0);
+        m7h = m7h + hr;
+    }
+    bench_batch_stop(bbh, 100000);
+    bench_report(bbh);
+    var vn = 4096;
+    var vbx = fl_alloc(vn * 24);
+    var vpx: *f64 = _bj_fd2_f64p(vbx);
+    for (var k = 0; k < 3 * vn; k = k + 1) {
+        var vk: f64 = f64_from(k % 97);
+        vpx[k] = vk * 0.125 - 6.0;
+    }
+    var vdims: i64[3];
+    vdims[0] = 16;
+    vdims[1] = 16;
+    vdims[2] = 16;
+    var vorg: f64[3];
+    vorg[0] = 0.0;
+    vorg[1] = 0.0;
+    vorg[2] = 0.0;
+    var vmsum: f64 = 0.0;
+    var bvs = bench_new("soorat/vector_field_from_components_16x16x16");
+    bench_batch_start(bvs);
+    for (var k = 0; k < 200; k = k + 1) {
+        var vfs: BjVectorFieldSample;
+        var tvf, vvf = BjVectorFieldSample_try_from_components(vbx, vn, vbx + vn * 8, vn, vbx + vn * 16, vn, &vdims,
+          &vorg, 0.01, &vfs);
+        var m7vm: f64 = vfs.max_magnitude;
+        vmsum = vmsum + m7vm;
+        BjVectorFieldSample_free(&vfs);
+    }
+    bench_batch_stop(bvs, 200);
+    bench_report(bvs);
+    fl_free(vbx);
+    var cvb = fl_alloc(16 * 20);
+    var cvp: *BjChargePoint = bench_cpp(cvb);
+    for (var k = 0; k < 16; k = k + 1) {
+        var cpk: *BjChargePoint = cvp + k;
+        var ck: f64 = f64_from(k);
+        var cq: f64 = ck * 0.1 - 0.7;
+        cpk.position_x = ck;
+        cpk.position_y = cq;
+        cpk.position_z = 0.5;
+        cpk.charge = cq;
+        cpk.magnitude = f64_abs(cq);
+    }
+    var cvv: BjChargeVisualization = BjChargeVisualization { cvb, 16 };
+    var sbv = str_builder_new();
+    var tcv, vcv = BjChargeVisualization_to_json(&cvv, sbv);
+    var cvdoc = str_builder_build(sbv);
+    var cvsum = 0;
+    var bcv = bench_new("json/charge_visualization_from_json");
+    bench_batch_start(bcv);
+    for (var k = 0; k < 2000; k = k + 1) {
+        var cvr: BjChargeVisualization;
+        var tcr2, vcr2 = BjChargeVisualization_from_json(str_data(cvdoc), str_len(cvdoc), &cvr);
+        cvsum = cvsum + cvr.charges_len;
+        BjChargeVisualization_free(&cvr);
+    }
+    bench_batch_stop(bcv, 2000);
+    bench_report(bcv);
+    fl_free(cvb);
+    if (m7h == 7.0 || vmsum == 7.0 || cvsum == 7 || vcv == 7) { println("."); }
 
     var ar: f64 = acc.re;
     if (ar == 7.0) { println("."); }

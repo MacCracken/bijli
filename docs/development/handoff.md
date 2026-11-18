@@ -9,8 +9,8 @@ bite is done, the machinery, the scripts and the traps. Delete it once it has se
 
 ## Where it stands
 
-- **Committed through `98a2afd`** (part 2a); M7 part 2b is in the working tree for the user to commit. **M6
-  is done** (§131).
+- **Committed through `34b6b63`** (part 2b); M7's close is in the working tree for the user to commit. **M7 is
+  done** (§138); M6 is done (§131).
 - **M7** runs as Part 1 in bites (1a `bridge.rs`, 1b `integration/soorat.rs`, 1c `ai.rs` in `[lib.ai]`), then Part 2
   its range-edge review. **1a done** (§132): `src/bridge.cyr`; its constants rendered by validate.py
   (`BRIDGE_LITERALS`, `render_bridge_data`) into `src/bridge_data.cyr`; `bridge.tsv`, the first module with no frozen
@@ -112,8 +112,11 @@ bite is done, the machinery, the scripts and the traps. Delete it once it has se
   first; now `rust_max` models x86-64 and `ieee_max` the port; `math.adr.tsv` maps the two frozen tie rows),
   and soorat's magnitudes on `BjFieldVector::magnitude` (row 18). kimiya's generated `_bj_k_ux_max` is left
   as it is; bijli's `_bj_ux_max` carries the rule.
-- **Next**: M7's close: regenerate the benchmark record (`scripts/bench_record.py`, least of several full
-  runs, as §131 did), the plan's M7 row, then M8.
+- **Next**: M8, the 2.0.0 release (plan §4.1's row): close the Rust-test ledger (26 pending: every one ported,
+  folded into golden rows, or n/a with its reason; nothing deferred), the full surface-parity diff, the benchmark
+  record with all 80 in both columns, `docs/guides/migration-2.0.md` (Rust idioms, the ADR 0002 changes, `BjComplex`
+  for hisab's `Complex`), README, the architecture overview, getting-started and SECURITY, `distlib --all`, the
+  audit, VERSION 2.0.0; the full corpus green with equal digests on the three targets.
 - **Corpus size**: `fdtd.tsv` is 38.8 MB (107,341 rows) and `json.tsv` 40.7 MB, against the 48 MiB cap that
   validate.py's `too_big` guards (§81); M6's rows are in `fdtd_2d3d.tsv` (4.2 MB after 4f).
 - **A recorded cost**: the 1D step runs 3.5–3.8× HEAD's with 2d-2a's scan (§107), the TF/SF step about 2× with

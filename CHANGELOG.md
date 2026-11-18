@@ -693,6 +693,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
 - **Cyrius port, M7 part 2b — Part 2 done** (`port-parity.md` §137): the ±0 rule for every max and min (ADR 0002
   row 47, the first ADR 0002 mapping for math, `math.adr.tsv`) and soorat's vector magnitudes at the range edges
   (row 18); `soorat.tsv` 1,350 rows. M7's close regenerates the benchmark record.
+- **Cyrius port, M7 done** (`port-parity.md` §138): the benchmark record regenerated (each row's least of four runs;
+  80 of 80 twinned, median 27.2× Rust), with three Cyrius-only benches for M7's paths: a bridge rounded once (83 ns),
+  a 16³ vector field sample (170 µs) and a 16-point charge visualization read back (45.7 µs).
 
 ### Fixed
 

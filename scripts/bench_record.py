@@ -40,7 +40,7 @@ GROUP_MILESTONE = {
     "rf": "M4",
 }
 # The milestones done (state.md): their every Rust bench must have a twin or a REASONS entry.
-DONE = {"M1", "M2", "M3", "M4", "M5", "M6"}
+DONE = {"M1", "M2", "M3", "M4", "M5", "M6", "M7"}
 # Rust bench -> its Cyrius twin's name, where it isn't the same.
 TWINS = {}
 # Rust bench -> why it has no twin.
@@ -78,6 +78,9 @@ EXTRA = {
     "json/drude_material_to_json": "a DrudeMaterial's JSON, gold's (src/json.cyr, M5 part 1f)",
     "json/nonuniform_grid_from_json": "a 10 × 7 × 3 NonUniformGrid read back into a new grid, its block freed (M5 1f)",
     "json/cpml_params_from_json": "a CpmlParams read back, its thickness a usize (src/json.cyr, M6 part 1d)",
+    "bridge/em_energy_to_heating_rate": "a bridge rounded once, p/(ρc_p) on kimiya's monomials (M7 part 2a, row 13)",
+    "soorat/vector_field_from_components_16x16x16": "a 16³ VectorFieldSample from components, checked (M7 part 1b-1)",
+    "json/charge_visualization_from_json": "16 charge points read back, each f32 rounded once (M7 part 1b-2, row 45)",
     "fdtd/gpu_fdtd2d_step_100x100_cpu": "GpuFdtd2d on BjCpuBackend: fdtd/2d_step_100x100_tm through the trait (M6 3)",
 }
 
