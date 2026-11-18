@@ -6,6 +6,40 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
 
+## [2.0.0] — 2026-11-18
+
+bijli is now a Cyrius library: the port of the Rust crate 1.2.0
+([ADR 0001](docs/adr/0001-cyrius-port-with-rust-oracle.md)), whose Rust tree is retired; 1.2.0 stays the specification,
+read from its tag
+([ADR 0003](docs/adr/0003-retire-the-rust-tree.md)). Every module is ported, with all 858 of its tests (846 ported,
+12 not applicable, `docs/development/rust-test-ledger.md`) and all 735 public items
+(`docs/development/surface-parity.md`). A golden corpus of 770,127 rows checks it: 646,281 equal to the oracle and
+123,846 accepted against the corrected oracle or an ADR 0002 mapping, 0 failed, with the same digests on x86_64 ELF,
+x86_64 PE and aarch64. Every transcendental is correctly rounded, and one time convention holds everywhere.
+
+### Breaking
+
+The whole API is Cyrius's; the [migration guide](docs/guides/migration-2.0.md) maps every Rust idiom and change.
+[ADR 0002](docs/adr/0002-port-api-divergences.md) records each divergence from 1.2.0, with its golden comparison:
+
+- **Packaging and names**: two bundles, `dist/bijli.cyr` and `dist/bijli-ai.cyr` (the ai client alone, with sandhi);
+  free functions `bj_<name>`, types `Bj<Name>` whose methods keep Rust's names, constants and enum members `BJ_*`.
+- **Errors** (rows 4, 7, 9, 10): value-form Results with `BJ_ERR_*` codes, the payload and Rust's Display text in the
+  per-thread last-error record; Transport, Allocation and Deserialize are new codes.
+- **Removed and reshaped** (rows 1–3, 36, 43): the 1.2 deprecations are gone; the FDTD grids, `BjSMatrix` and
+  `BjTouchstoneData` have fixed shapes; `BjTfsfSource_try_new`, `BjCpml_new` and `try_enable_cpml` refuse what 1.2
+  clamped; `GpuFdtd2d`'s methods are generic functions.
+- **One time convention, e^{+jωt} with IEEE handedness** (row 5): `polarization`, `beam`, the field's Green's function
+  and the FDTD media's complex amplitudes are 1.2's conjugates.
+- **Results** (rows 6, 13–18, 22, 28–30, 33–35, 39–42, 47): bit-identical across targets, correctly rounded where a
+  function is one product, quotient or root, free of spurious overflow and underflow at the range edges, and free of
+  1.2's cancellations; max and min order −0 < +0.
+- **Validation** (rows 17, 19–21, 23–27, 31, 32, 37): exact Singularity thresholds; NaN refused where 1.2's `<= 0`
+  tests let it through; `classify_magnetic` returns a Result.
+- **Text, JSON, logging and the ai client** (rows 8, 11, 12, 38, 44–46): text inputs are bytes checked for UTF-8;
+  JSON numbers are correctly rounded and the whole document is checked; `bj_log_init` never lowers another library's
+  logging; the ai client registers on daimon's real route.
+
 ### Added
 
 - **text** (M8 part 2): `bj_text_init`, `bj_text_ptr`, `bj_text_len` and `bj_text_overflowed` (`src/text.cyr`), the

@@ -7627,3 +7627,23 @@ eigenmode search (`dft_magnitude`'s recurrence and magnitude, `find_eigenmodes`'
 - **Result**: the library gains `src/text.cyr` and no other code changes; the parity is §139's (646,281 ok). 33 test
   files, 2,913 assertions; execution coverage 449 of 449; the gate clean (the audit's first run caught a line of the
   new test past 120 characters); `tests/field.tcyr` passes on PE and aarch64. Next: part 3, the release.
+
+## 141. M8 done: bijli 2.0.0 (2026-11-18)
+
+- **The surface-parity record**: `scripts/surface_parity.py . --write` writes `docs/development/surface-parity.md`,
+  every one of Rust 1.2.0's 735 public items (18 modules and hisab's re-exported `Complex`) beside its Cyrius name, or
+  the reason it has none of that form (the trait impls that are methods, the 1.2 deprecations, the operator forms);
+  a plain run, as CI makes it, now also fails when the record is stale.
+- **The version**: `VERSION` reads 2.0.0 (`cyrius.cyml` takes it through `${file:VERSION}`, and the release workflow
+  checks both against the tag); both bundles are regenerated (`# Version: 2.0.0`).
+- **The CHANGELOG**: `[Unreleased]` became `[2.0.0] — 2026-11-18`, opened by a summary and a **Breaking** section that
+  points at the migration guide and groups ADR 0002's rows; the port's history (Added, Changed, Fixed, Performance)
+  follows under it. A new empty `[Unreleased]` heads the file.
+- **The finished-milestone gates**: `rust_test_ledger.py`'s and `bench_record.py`'s `DONE` name M1–M8; the roadmap,
+  `state.md` and the plan's table mark M8 done.
+- **Result, every target**: the gate clean, every step exit 0; `tests/ai.tcyr`'s recorded stdlib warnings, and no
+  other (on PE the advisory and the six `dynlib`/`fdlopen` syscall lines). 21 modules, 646,281 ok and 0 failed,
+  123,846 accepted (ADR 01: 43,087; ADR 0002: 80,759); the 520 digests equal on x86_64 ELF, x86_64 PE and aarch64;
+  validate.py: 770,127 rows, 0 problems. 33 test files, 2,913 assertions; execution coverage 449 of 449; the ledger
+  846 ported, 12 n/a, 0 pending; the surface parity 735 items, its record current. **M8 is done; bijli 2.0.0 is ready
+  to tag.**

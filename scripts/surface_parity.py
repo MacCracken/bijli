@@ -26,6 +26,10 @@ It also checks two things the port relies on:
 - no `s.f = g(.., t.e, ..)` where g returns a struct and t.e is struct-typed (impetus's scan of the open cyrius
   field-store defect).
 Exits 1 on a missing item, an EXCEPTIONS entry that names no Rust item, a file unaccounted for, or a failed check.
+
+The record (M8 part 3): docs/development/surface-parity.md lists every Rust item beside its Cyrius name, or its
+exception's reason. `--write` rewrites it; a plain run also fails when it is stale.
+    python3 -I -B scripts/surface_parity.py . --write
 """
 import json
 import re
@@ -33,6 +37,8 @@ import sys
 from pathlib import Path
 
 root = Path(sys.argv[1] if len(sys.argv) > 1 else ".").resolve()
+WRITE = "--write" in sys.argv[2:]
+RECORD = root / "docs/development/surface-parity.md"
 INV = json.loads((root / "scripts/rust_1_2_0.json").read_text())
 
 # Ported modules (their milestone done or in progress, item by item).
@@ -251,10 +257,36 @@ def expected(module, kind, owner, name, has_self):
     return "exception", None
 
 
+def render_record(record, ok) -> str:
+    """The record's Markdown: per Rust module, each public item beside its Cyrius name or its exception's reason."""
+    lines = [
+        "# Surface parity: Rust 1.2.0 and Cyrius 2.0",
+        "",
+        "> **Generated** by `python3 -I -B scripts/surface_parity.py . --write`; a plain run fails when this is stale.",
+        "> Every public item of Rust bijli 1.2.0 (outside its test modules, from `scripts/rust_1_2_0.json`) beside the",
+        "> Cyrius name the port's naming rules give it (port plan §9.4), or the reason it has none of that form.",
+        "",
+        f"**{ok} items**, every one ported or explained.",
+        "",
+    ]
+    by_module = {}
+    for module, kind, rust_name, cy, why in record:
+        by_module.setdefault(module, []).append((kind, rust_name, cy, why))
+    for module in sorted(by_module):
+        rows = by_module[module]
+        lines += [f"## `{module}` ({len(rows)})", "", "| Rust | Kind | Cyrius |", "|---|---|---|"]
+        for kind, rust_name, cy, why in rows:
+            right = f"`{cy}`" if cy else why.replace("|", "\\|")
+            lines.append(f"| `{rust_name}` | {kind} | {right} |")
+        lines.append("")
+    return "\n".join(lines)
+
+
 def main() -> int:
     fns, consts, members, enums, structs = cyrius_index()
     problems, ok = [], 0
     used = set()
+    record = []
     modules = INV["modules"]
     for module in modules:
         if module not in MODULES and module not in PENDING_MODULES and module not in NOT_APPLICABLE_MODULES \
@@ -286,9 +318,12 @@ def main() -> int:
                 continue
             label = f"{module}::{owner + '::' if owner else ''}{name}"
             key = label if kind != "trait" else f"{module}::impl {name} for {owner}"
+            rust_name = (f"impl {name} for {owner}" if kind == "trait" else
+                         f"{owner}::{name}" if owner else name)
             if key in EXCEPTIONS:
                 used.add(key)
                 ok += 1
+                record.append((module, kind, rust_name, "", EXCEPTIONS[key]))
                 continue
             where, want = expected(module, kind, owner, name, has_self)
             hit = {
@@ -301,12 +336,15 @@ def main() -> int:
             }.get(where, lambda w: False)(want)
             if hit:
                 ok += 1
+                shown = f"{want[0]}." + ", ".join(want[1]) if where == "field" else want
+                record.append((module, kind, rust_name, shown, ""))
             else:
                 problems.append(f"{label} ({kind}) -> {want}")
     for name in HISAB_SERDE:
         for trait, suffix in SERDE.items():
             if f"Bj{name}_{suffix}" in fns:
                 ok += 1
+                record.append(("hisab (re-exported)", "trait", f"impl {trait} for {name}", f"Bj{name}_{suffix}", ""))
             else:
                 problems.append(f"hisab::{name} ({trait}, re-exported) -> Bj{name}_{suffix}")
     for key in EXCEPTIONS:
@@ -314,6 +352,12 @@ def main() -> int:
             problems.append(f"EXCEPTIONS entry {key!r} names no Rust item of a ported module")
     problems += lib_sync()
     problems += field_store_scan()
+    text = render_record(record, ok)
+    if WRITE:
+        RECORD.write_text(text)
+        print(f"wrote {RECORD.relative_to(root)} ({len(record)} items)")
+    elif not RECORD.exists() or RECORD.read_text() != text:
+        problems.append(f"{RECORD.relative_to(root)} is stale (rewrite with scripts/surface_parity.py . --write)")
     for p in problems:
         print("  " + p)
     pend = sum(pending_counts.values())

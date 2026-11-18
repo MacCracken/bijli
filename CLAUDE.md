@@ -252,6 +252,7 @@ docs/ (when earned — not scaffolded empty):
   architecture/math.md            — mathematical reference for algorithms/formulas
   development/threat-model.md     — attack surface, mitigations (Touchstone and JSON readers)
   development/rust-test-ledger.md — every Rust test: ported, folded into golden rows, or n/a
+  development/surface-parity.md   — every Rust public item beside its Cyrius name (generated)
   guides/getting-started.md, guides/migration-2.0.md — how-tos; the 2.0 migration (M8)
 
 scripts/probes/   — the language-review probe programs, re-run at every pin bump

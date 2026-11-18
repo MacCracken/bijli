@@ -1,4 +1,4 @@
-# Handoff: the Cyrius port, M7 under way (2026-11-17)
+# Handoff: the Cyrius port, complete at 2.0.0 (2026-11-18)
 
 For the next agent picking up the port. **Read first:** `CLAUDE.md` (the rules), [`state.md`](state.md) (live state),
 [`bijli-port-plan.md`](bijli-port-plan.md) (§0.1 holds the user's M5 Part 2 answers; the tracking table is near the
@@ -9,9 +9,9 @@ bite is done, the machinery, the scripts and the traps. Delete it once it has se
 
 ## Where it stands
 
-- **Committed through `1c7303b`** (M8 part 1); M8 part 2 is in the working tree for the user to commit. **M7 is
-  done** (§138). **M8** runs as part 1 the ledger (done, §139), part 2 the documentation (done, §140), part 3 the
-  release.
+- **The port is complete: bijli 2.0.0** (§141). Committed through `6292c09` (M8 part 2); part 3, the release, is in
+  the working tree for the user to commit and tag. M8 ran as part 1 the ledger (§139), part 2 the documentation
+  (§140), part 3 the release (§141).
 - **M7** runs as Part 1 in bites (1a `bridge.rs`, 1b `integration/soorat.rs`, 1c `ai.rs` in `[lib.ai]`), then Part 2
   its range-edge review. **1a done** (§132): `src/bridge.cyr`; its constants rendered by validate.py
   (`BRIDGE_LITERALS`, `render_bridge_data`) into `src/bridge_data.cyr`; `bridge.tsv`, the first module with no frozen
@@ -113,10 +113,10 @@ bite is done, the machinery, the scripts and the traps. Delete it once it has se
   first; now `rust_max` models x86-64 and `ieee_max` the port; `math.adr.tsv` maps the two frozen tie rows),
   and soorat's magnitudes on `BjFieldVector::magnitude` (row 18). kimiya's generated `_bj_k_ux_max` is left
   as it is; bijli's `_bj_ux_max` carries the rule.
-- **Next**: M8 part 3, the release: the full surface-parity record (every Rust item and its Cyrius name), VERSION
-  2.0.0 (and `cyrius.cyml`'s `${file:VERSION}`), the CHANGELOG's `[2.0.0]` section with its Breaking notes
-  pointing at the migration guide, `distlib --all`, the audit, and the last gate with the three cross-target
-  runs. The user tags. The threat model's open item (a JSON fuzz harness) is a candidate for 2.0.x.
+- **After 2.0.0** (none started): a JSON fuzz harness (the threat model's open item); the roadmap's backlog
+  (crmath's sin and cos past 2^20, the FDTD per-cell scan's cost, a real `WgpuBackend`); the cyrius stdlib
+  findings (the PE syscall warnings in `lib/dynlib.cyr` and `lib/fdlopen.cyr`, CLAUDE.md's one exception).
+  This file has served the port; delete it when no 2.0.x work needs it.
 - **Corpus size**: `fdtd.tsv` is 38.8 MB (107,341 rows) and `json.tsv` 40.7 MB, against the 48 MiB cap that
   validate.py's `too_big` guards (§81); M6's rows are in `fdtd_2d3d.tsv` (4.2 MB after 4f).
 - **A recorded cost**: the 1D step runs 3.5–3.8× HEAD's with 2d-2a's scan (§107), the TF/SF step about 2× with

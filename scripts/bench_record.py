@@ -40,7 +40,7 @@ GROUP_MILESTONE = {
     "rf": "M4",
 }
 # The milestones done (state.md): their every Rust bench must have a twin or a REASONS entry.
-DONE = {"M1", "M2", "M3", "M4", "M5", "M6", "M7"}
+DONE = {"M1", "M2", "M3", "M4", "M5", "M6", "M7", "M8"}
 # Rust bench -> its Cyrius twin's name, where it isn't the same.
 TWINS = {}
 # Rust bench -> why it has no twin.
