@@ -10879,6 +10879,35 @@ def fd_curl18(d, k, a1, a0, b1, b0, sub):
     return ux_fin(ux_sub(ux(d), P, r=lambda v: v) if sub else ux_add(ux(d), P, r=lambda v: v))
 
 
+
+def fd_ok18(p, x, y):
+    """A product the per-cell rule keeps as Rust's: finite and at least 2^-1022, or 0 from a zero factor."""
+    return math.isfinite(p) and (abs(p) >= FS_DMIN2 or (p == 0.0 and (x == 0.0 or y == 0.0)))
+
+
+def fd_cpml18(f, k, up, dn, p, b, c, km1, sign, sub, r18=True):
+    """One CPML cell, Rust's `*psi = b * *psi + c * d; *f += sign * kk * (km1 * d + *psi)` (`-=` for sub), as (f, Ψ).
+    With r18 each statement takes the per-cell rule (ADR 0002 row 18, M6 part 4e): Rust's chain wherever d and the sum
+    km1·d + Ψ are finite and every product normal or 0 from a zero factor, else the statement on Fractions with an
+    unbounded exponent, each operation to 53 bits and its last rounded once; Rust's for a non-finite operand."""
+    d = up - dn
+    pv = b * p + c * d
+    if r18 and all(math.isfinite(v) for v in (b, p, c, up, dn)):
+        if not (math.isfinite(d) and fd_ok18(b * p, b, p) and fd_ok18(c * d, c, d)):
+            D = ux_sub(ux(up), ux(dn))
+            pv = ux_fin(ux_add(ux_mul(ux(b), ux(p)), ux_mul(ux(c), D), r=lambda v: v))
+    sk = sign * k
+    q = km1 * d
+    u = q + pv
+    p3 = sk * u
+    r = f - p3 if sub else f + p3
+    if r18 and all(math.isfinite(v) for v in (f, sk, km1, up, dn, pv)):
+        if not (math.isfinite(d) and fd_ok18(q, km1, d) and math.isfinite(u) and fd_ok18(p3, sk, u)):
+            D = ux_sub(ux(up), ux(dn))
+            P = ux_mul(ux(sk), ux_add(ux_mul(ux(km1), D), ux(pv)))
+            r = ux_fin(ux_sub(ux(f), P, r=lambda v: v) if sub else ux_add(ux(f), P, r=lambda v: v))
+    return r, pv
+
 class Fd2:
     """An `Fdtd2d`: nx × ny, fields row-major (index y·nx + x)."""
 
@@ -10917,6 +10946,7 @@ class Fd2:
 
     def cpml_fx(self, k, sign):
         """`correct_fx`: f_x's y-strip terms."""
+        r18 = "18" in self.port                        # ADR 0002 row 18 (M6 part 4e): each statement on the rule
         t, _node, (b, c, km1), (pfx, _pfz, _pfy, _pzx) = self.cpml
         nx, ny, fx, fz = self.nx, self.ny, self.fx, self.fz
         for side in (0, 1):
@@ -10924,45 +10954,43 @@ class Fd2:
                 y = l if side == 0 else ny - 2 - l
                 r0, p0 = y * nx, (side * t + l) * nx
                 for x in range(nx):
-                    d = fz[r0 + nx + x] - fz[r0 + x]
-                    pv = b[l] * pfx[p0 + x] + c[l] * d
-                    pfx[p0 + x] = pv
-                    fx[r0 + x] += sign * k[r0 + x] * (km1[l] * d + pv)
+                    i = r0 + x
+                    fx[i], pfx[p0 + x] = fd_cpml18(fx[i], k[i], fz[i + nx], fz[i], pfx[p0 + x], b[l], c[l], km1[l],
+                                                   sign, False, r18)
 
     def cpml_fy(self, k, sign):
         """`correct_fy`: f_y's x-strip terms."""
+        r18 = "18" in self.port                        # ADR 0002 row 18 (M6 part 4e): each statement on the rule
         t, _node, (b, c, km1), (_pfx, _pfz, pfy, _pzx) = self.cpml
         nx, ny, fy, fz = self.nx, self.ny, self.fy, self.fz
         for y in range(ny):
             r, pr = y * nx, y * 2 * t
             for l in range(t):
                 for sl, x in ((l, l), (t + l, nx - 2 - l)):
-                    d = fz[r + x + 1] - fz[r + x]
-                    pv = b[l] * pfy[pr + sl] + c[l] * d
-                    pfy[pr + sl] = pv
-                    fy[r + x] += sign * k[r + x] * (km1[l] * d + pv)
+                    i = r + x
+                    fy[i], pfy[pr + sl] = fd_cpml18(fy[i], k[i], fz[i + 1], fz[i], pfy[pr + sl], b[l], c[l], km1[l],
+                                                    sign, False, r18)
 
     def cpml_fz(self, k, sign):
         """`correct_fz`: f_z's x-strip terms, then its y-strip terms."""
+        r18 = "18" in self.port                        # ADR 0002 row 18 (M6 part 4e): each statement on the rule
         t, (b, c, km1), _half, (_pfx, pfz, _pfy, pzx) = self.cpml
         nx, ny, fz, fx, fy = self.nx, self.ny, self.fz, self.fx, self.fy
         for y in range(1, ny - 1):
             r, pr = y * nx, y * 2 * t
             for l in range(1, t):
                 for sl, x in ((l, l), (t + l, nx - 1 - l)):
-                    d = fy[r + x] - fy[r + x - 1]
-                    pv = b[l] * pzx[pr + sl] + c[l] * d
-                    pzx[pr + sl] = pv
-                    fz[r + x] += sign * k[r + x] * (km1[l] * d + pv)
+                    i = r + x
+                    fz[i], pzx[pr + sl] = fd_cpml18(fz[i], k[i], fy[i], fy[i - 1], pzx[pr + sl], b[l], c[l], km1[l],
+                                                    sign, False, r18)
         for side in (0, 1):
             for l in range(1, t):
                 y = l if side == 0 else ny - 1 - l
                 r0, p0 = y * nx, (side * t + l) * nx
                 for x in range(1, nx - 1):
-                    d = fx[r0 + x] - fx[r0 - nx + x]
-                    pv = b[l] * pfz[p0 + x] + c[l] * d
-                    pfz[p0 + x] = pv
-                    fz[r0 + x] -= sign * k[r0 + x] * (km1[l] * d + pv)
+                    i = r0 + x
+                    fz[i], pfz[p0 + x] = fd_cpml18(fz[i], k[i], fx[i], fx[i - nx], pfz[p0 + x], b[l], c[l], km1[l],
+                                                   sign, True, r18)
 
     coeff = fd23_coeff
     e_coefficients = fd23_e_coefficients
@@ -11272,6 +11300,7 @@ class Fd3:
 
     def slabs(self, axis, half, psi, f, src, k, ranges, sign):
         """`Cpml::correct_slabs::<axis, half>`: one derivative term over both face slabs normal to the axis."""
+        r18 = "18" in self.port                        # ADR 0002 row 18 (M6 part 4e): each statement on the rule
         t, node, halfp, _psi = self.cpml
         b, c, km1 = halfp if half else node
         nx, ny = self.nx, self.ny
@@ -11292,10 +11321,9 @@ class Fd3:
                         for x in range(*r[0]):
                             lay = x if side == 0 else n - off - x
                             i = row + x
-                            d = (src[i + 1] - src[i]) if half else (src[i] - src[i - 1])
-                            pv = b[lay] * psi[prow + lay] + c[lay] * d
-                            psi[prow + lay] = pv
-                            f[i] += sign * k[i] * (km1[lay] * d + pv)
+                            up, dn = (src[i + 1], src[i]) if half else (src[i], src[i - 1])
+                            f[i], psi[prow + lay] = fd_cpml18(f[i], k[i], up, dn, psi[prow + lay], b[lay], c[lay],
+                                                              km1[lay], sign, False, r18)
                     else:
                         u = y if axis == 1 else z
                         lay = u if side == 0 else n - off - u
@@ -11305,10 +11333,8 @@ class Fd3:
                         up, down = (row + stride, row) if half else (row, row - stride)
                         bl, cl, kl = b[lay], c[lay], km1[lay]
                         for x in range(*r[0]):
-                            d = src[up + x] - src[down + x]
-                            pv = bl * psi[prow + x] + cl * d
-                            psi[prow + x] = pv
-                            f[row + x] += sign * k[row + x] * (kl * d + pv)
+                            f[row + x], psi[prow + x] = fd_cpml18(f[row + x], k[row + x], src[up + x], src[down + x],
+                                                                  psi[prow + x], bl, cl, kl, sign, False, r18)
 
     def correct_h(self):
         """`Cpml3d::correct_h`, after the main H loops."""

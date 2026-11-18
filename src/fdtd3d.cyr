@@ -167,22 +167,31 @@ fn _bj_fd3_slabs(c: *BjCpml, axis, half, psi: *f64, f: *f64, src: *f64, k: *f64,
             lo[axis] = n + 1 - off - t;
             hi[axis] = n + 1 - off - l0;
         }
-        for (var z = lo[2]; z < hi[2]; z = z + 1) {
-            for (var y = lo[1]; y < hi[1]; y = y + 1) {
-                var row = z * nxy + y * nx;
-                if (axis == 0) {
-                    var prow = (z * pd1 + y) * pd0 + side * t;
-                    for (var x = lo[0]; x < hi[0]; x = x + 1) {
-                        var l = x;
-                        if (side == 1) { l = n - off - x; }
-                        var i = row + x;
-                        var d: f64 = src[i + 1] - src[i];
-                        if (half == 0) { d = src[i] - src[i - 1]; }
-                        var pv: f64 = bp[l] * psi[prow + l] + cp[l] * d;
-                        psi[prow + l] = pv;
-                        f[i] = f[i] + sign * k[i] * (kp[l] * d + pv);
+        if (axis == 0) {
+            # The x-slabs: one layer per x, run along y (the cells are independent, so the order is Rust's results).
+            var ny0 = lo[1];
+            for (var z = lo[2]; z < hi[2]; z = z + 1) {
+                for (var x = lo[0]; x < hi[0]; x = x + 1) {
+                    var l = x;
+                    if (side == 1) { l = n - off - x; }
+                    pr[0] = bp[l];
+                    pr[1] = cp[l];
+                    pr[2] = kp[l];
+                    var i = z * nxy + ny0 * nx + x;
+                    var pj = (z * pd1 + ny0) * pd0 + side * t + l;
+                    var iu = i + 1;
+                    var id = i;
+                    if (half == 0) {
+                        iu = i;
+                        id = i - 1;
                     }
-                } else {
+                    _bj_e_cpml_run(f + i, psi + pj, k + i, src + iu, src + id, hi[1] - ny0, nx, pd0, &pr, 0);
+                }
+            }
+        } else {
+            for (var z = lo[2]; z < hi[2]; z = z + 1) {
+                for (var y = lo[1]; y < hi[1]; y = y + 1) {
+                    var row = z * nxy + y * nx;
                     var u = y;
                     if (axis == 2) { u = z; }
                     var l2 = u;

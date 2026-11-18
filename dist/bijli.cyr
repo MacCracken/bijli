@@ -15946,6 +15946,323 @@ fn _bj_e_curl_one(dv: f64, kv: f64, a1: f64, a0: f64, b1: f64, b0: f64, sub): f6
     return r;
 }
 
+# ── the CPML corrections' per-cell rule (M6 part 4e, ADR 0002 row 18, the answer of 2026-11-15) ──────────────────────
+#
+# A CPML cell (src/fdtd2d.cyr's strips, src/fdtd3d.cyr's slabs) runs two statements, Rust's `*psi = b * *psi + c * d;
+# *f += sign * kk * (km1 * d + *psi)` with d = up − dn: Ψ' = b·Ψ + c·d, then f ± s·k·(km1·d + Ψ') (s = ±1, so s·k is
+# exact; the subtract form is the add form with −s·k). Each statement is a chain whose last operation rounds into
+# binary64 (Ψ' is state), and each takes the updates' rule: Rust's operations wherever they are the chain's own with
+# an unbounded exponent, else the chain to 53 bits and its last operation rounded once. A difference past DBL_MAX
+# reaches c·d and km1·d as ±∞ or NaN, and a subnormal one is exact. The first statement's marker: b·Ψ or c·d ±∞, NaN
+# or a nonzero subnormal (to 53 bits, then the store's rounding: twice, as the updates' subnormal products, so even
+# beside a ±0 other product the rule's value may be an ulp from Rust's one rounding; a decaying Ψ in a quiet layer marks
+# its cell each step until it reaches 0), or ±0 from nonzero factors at the updates' zero test against the other
+# product. The second's: km1·d ±∞, NaN, a nonzero subnormal or ±0 from nonzero factors (km1·d + Ψ' isn't the
+# statement's last operation, so a lost bit may reach f), or s·k·u at the first statement's test against f (u = km1·d
+# + Ψ' past DBL_MAX makes it ±∞ or NaN). A marked statement reruns for finite operands; a non-finite one keeps Rust's.
+
+# Negative when the raw bits x aren't a normal double's (±0, a subnormal, ±∞ or NaN), else ≥ 0: (exponent field + 1)
+# mod 2048 is 0 or 1 exactly for those, the sign bit masked off. An OR of several is negative when any is.
+#inline
+#must_use
+fn _bj_e_nrm(x): i64 {
+    return (((x >> 52) + 1) & 2047) - 2;
+}
+
+# 1 when a statement's last product p (raw bits x; its factors' fa and fb) beside the other addend (bits a) marks the
+# cell (the section comment): p ±∞, NaN or a nonzero subnormal; ±0 from nonzero factors, −0 on a +0 a or against a
+# nonzero a of at most 2^-1021 (_bj_e_cell_edge's test).
+#must_use
+fn _bj_e_last_edge(x, fa, fb, a): i64 {
+    var ex = (x >> 52) & 2047;
+    if (ex == 2047) { return 1; }
+    if (ex != 0) { return 0; }
+    if ((x << 1) != 0) { return 1; }
+    if ((fa << 1) == 0 || (fb << 1) == 0) { return 0; }
+    if ((x != 0 && a == 0) || (((a << 1) - 1) >> 54) == 0) { return 1; }
+    return 0;
+}
+
+# 1 when the second statement marks the cell (the section comment): q = km1·d with raw bits xq (km1's kmw, d's nodes
+# hw and lw), then p = s·k·u with raw bits x3 (s·k's skw; u = q + Ψ', Ψ' with bits pw) beside f's fw; sgb is the sign
+# bit for the subtract form (its product is −p), else 0.
+#must_use
+fn _bj_e_cpml_mark2(xq, kmw, hw, lw, x3, skw, pw, fw, sgb): i64 {
+    var eq = (xq >> 52) & 2047;
+    if (eq == 2047) { return 1; }
+    if (eq == 0) {
+        if ((xq << 1) != 0) { return 1; }
+        if ((kmw << 1) != 0 && hw != lw && ((hw | lw) << 1) != 0) { return 1; }
+    }
+    var sgn = 0 - 9223372036854775807 - 1;
+    var un = 1;
+    if (xq == (pw ^ sgn) || ((xq | pw) << 1) == 0) { un = 0; }
+    var y = _bj_e_last_edge(x3 ^ sgb, skw, un, fw);
+    return y;
+}
+
+# b·Ψ + c·(up − dn) with an unbounded exponent, rounded once (finite operands).
+#must_use
+fn _bj_e_psi(bv: f64, pv: f64, cv: f64, up: f64, dn: f64): f64 {
+    var us, ue = _bj_k_ux_from(up);
+    var ds, de = _bj_k_ux_from(dn);
+    var ws, we = _bj_k_ux_sub(us, ue, ds, de);
+    var cs, ce = _bj_k_ux_from(cv);
+    var qs, qe = _bj_k_ux_mul(cs, ce, ws, we);
+    var bs, be = _bj_k_ux_from(bv);
+    var ps, pe = _bj_k_ux_from(pv);
+    var rs, re = _bj_k_ux_mul(bs, be, ps, pe);
+    var y: f64 = _bj_k_ux_add_f64(rs, re, qs, qe);
+    return y;
+}
+
+# f + sk·(km1·(up − dn) + Ψ') with an unbounded exponent, rounded once (finite operands; sk = s·k, negated by the
+# caller for the subtract form).
+#must_use
+fn _bj_e_cpml_f(fv: f64, sk: f64, km: f64, pv: f64, up: f64, dn: f64): f64 {
+    var us, ue = _bj_k_ux_from(up);
+    var ds, de = _bj_k_ux_from(dn);
+    var ws, we = _bj_k_ux_sub(us, ue, ds, de);
+    var ks, ke = _bj_k_ux_from(km);
+    var qs, qe = _bj_k_ux_mul(ks, ke, ws, we);
+    var ps, pe = _bj_k_ux_from(pv);
+    var vs, ve = _bj_k_ux_add(qs, qe, ps, pe);
+    var ss, se = _bj_k_ux_from(sk);
+    var ts, te = _bj_k_ux_mul(ss, se, vs, ve);
+    var fs, fe = _bj_k_ux_from(fv);
+    var y: f64 = _bj_k_ux_add_f64(fs, fe, ts, te);
+    return y;
+}
+
+# The first statement at byte offset i of a packed strip, marked: Ψ' by _bj_e_psi into p1[i] and −0 into p2[i], so the
+# packed add after stores it (Ψ' + −0 = Ψ', signed zeros included); a non-finite operand leaves Rust's. pr is [b, c,
+# 1/κ − 1, s]; the other addresses are words.
+fn _bj_e_psi_at(hi, lo, psi, p1, p2, i, pr: *f64) {
+    var hp: *f64 = _bj_e_f64p(hi + i);
+    var lp: *f64 = _bj_e_f64p(lo + i);
+    var sp: *f64 = _bj_e_f64p(psi + i);
+    var up: f64 = hp[0];
+    var dn: f64 = lp[0];
+    var pv: f64 = sp[0];
+    var bv: f64 = pr[0];
+    var cv: f64 = pr[1];
+    var z: f64 = up * 0.0 + dn * 0.0 + pv * 0.0 + bv * 0.0 + cv * 0.0;
+    if (z != 0.0) { return 0; }
+    var np: f64 = _bj_e_psi(bv, pv, cv, up, dn);
+    var w1: *f64 = _bj_e_f64p(p1 + i);
+    var w2: *f64 = _bj_e_f64p(p2 + i);
+    w1[0] = np;
+    w2[0] = -0.0;
+    return 0;
+}
+
+# A packed strip's m cells after the first statement's products, p1[i] = b·Ψ[i] and p2[i] = c·d[i]: each marked cell
+# rerun by _bj_e_psi_at. A quiet cell (Ψ and d both ±0, both products exact zeros) leaves at one test.
+fn _bj_e_psi_fix(hi, lo, psi, d, p1, p2, m, pr: *f64) {
+    var bv: f64 = pr[0];
+    var cv: f64 = pr[1];
+    var bw = bv;
+    var cw = cv;
+    var q = 0;
+    var end = m * 8;
+    while (q < end) {
+        var x1 = load64(p1 + q);
+        var x2 = load64(p2 + q);
+        if ((_bj_e_nrm(x1) | _bj_e_nrm(x2)) < 0) {
+            var pw = load64(psi + q);
+            var dw = load64(d + q);
+            if (((pw | dw) << 1) != 0) {
+                if ((_bj_e_last_edge(x1, bw, pw, x2) | _bj_e_last_edge(x2, cw, dw, x1)) == 1) {
+                    _bj_e_psi_at(hi, lo, psi, p1, p2, q, pr);
+                }
+            }
+        }
+        q = q + 8;
+    }
+    return 0;
+}
+
+# The second statement at byte offset i of a packed strip, marked: f[i] := _bj_e_cpml_f's value and p3[i] := ∓0, so
+# that the packed add or subtract after leaves f[i]; sk[i] holds s·k. A non-finite operand leaves Rust's.
+fn _bj_e_cpmlf_at(f, hi, lo, psi, sk, p3, i, pr: *f64, sub) {
+    var fp: *f64 = _bj_e_f64p(f + i);
+    var hp: *f64 = _bj_e_f64p(hi + i);
+    var lp: *f64 = _bj_e_f64p(lo + i);
+    var sp: *f64 = _bj_e_f64p(psi + i);
+    var kp: *f64 = _bj_e_f64p(sk + i);
+    var fv: f64 = fp[0];
+    var up: f64 = hp[0];
+    var dn: f64 = lp[0];
+    var pv: f64 = sp[0];
+    var skv: f64 = kp[0];
+    var km: f64 = pr[2];
+    var z: f64 = fv * 0.0 + up * 0.0 + dn * 0.0 + pv * 0.0 + skv * 0.0 + km * 0.0;
+    if (z != 0.0) { return 0; }
+    if (sub == 1) { skv = -skv; }
+    var nf: f64 = _bj_e_cpml_f(fv, skv, km, pv, up, dn);
+    fp[0] = nf;
+    var wp: *f64 = _bj_e_f64p(p3 + i);
+    if (sub == 1) { wp[0] = 0.0; }
+    else { wp[0] = -0.0; }
+    return 0;
+}
+
+# A packed strip's m cells after the second statement's products, q[i] = km1·d[i], sk[i] = s·k[i] and p3[i] =
+# sk[i]·(q[i] + Ψ'[i]): each marked cell rerun by _bj_e_cpmlf_at. A quiet cell (q, p3 and Ψ' ±0, km1 = 0 or d = 0)
+# leaves at one test. With km1 = ±0 (the classic layer's κ = 1) q is ±0 exactly, or NaN where d isn't finite, and then
+# so is p3: q's row isn't read and the cell is p3's test alone.
+fn _bj_e_cpmlf_fix(f, hi, lo, psi, qr, sk, p3, m, pr: *f64, sub) {
+    var km: f64 = pr[2];
+    var kmw = km;
+    var kz = 0;
+    if ((kmw << 1) == 0) { kz = 1; }
+    var sgb = 0;
+    if (sub == 1) { sgb = 0 - 9223372036854775807 - 1; }
+    var q = 0;
+    var end = m * 8;
+    while (q < end) {
+        var x3 = load64(p3 + q);
+        var xq = 0;
+        var xt = x3;
+        if (kz == 0) {
+            xq = load64(qr + q);
+            xt = xq;
+        }
+        if ((_bj_e_nrm(x3) | _bj_e_nrm(xt)) < 0) {
+            var pw = load64(psi + q);
+            var hw = load64(hi + q);
+            var lw = load64(lo + q);
+            if (((xq | x3 | pw) << 1) != 0 || ((kmw << 1) != 0 && hw != lw)) {
+                if (_bj_e_cpml_mark2(xq, kmw, hw, lw, x3, load64(sk + q), pw, load64(f + q), sgb) == 1) {
+                    _bj_e_cpmlf_at(f, hi, lo, psi, sk, p3, q, pr, sub);
+                }
+            }
+        }
+        q = q + 8;
+    }
+    return 0;
+}
+
+# One CPML cell on the rule, the scalar form (the x-strips and x-slabs, a packed strip's tail): Ψ at the word address
+# pq and f at fq updated in place from the source field's nodes up and dn and the cell's coefficient kv, pr [b, c, 1/κ
+# − 1, s]; sub 1 for f −=. Rust's two statements, each rerun where its marker holds; with 1/κ − 1 = ±0 the second
+# statement's test is the product's alone (_bj_e_cpmlf_fix's reason).
+fn _bj_e_cpml_one(fq, pq, kv: f64, up: f64, dn: f64, pr: *f64, sub) {
+    var fp: *f64 = _bj_e_f64p(fq);
+    var pp: *f64 = _bj_e_f64p(pq);
+    var bv: f64 = pr[0];
+    var cv: f64 = pr[1];
+    var km: f64 = pr[2];
+    var sv: f64 = pr[3];
+    var pv: f64 = pp[0];
+    var d: f64 = up - dn;
+    var p1: f64 = bv * pv;
+    var p2: f64 = cv * d;
+    var np: f64 = p1 + p2;
+    var x1 = p1;
+    var x2 = p2;
+    var e1 = (x1 >> 52) & 2047;
+    var e2 = (x2 >> 52) & 2047;
+    if (e1 == 0 || e1 == 2047 || e2 == 0 || e2 == 2047) {
+        var pw = pv;
+        var dw = d;
+        if (((pw | dw) << 1) != 0) {
+            var bw = bv;
+            var cw = cv;
+            if ((_bj_e_last_edge(x1, bw, pw, x2) | _bj_e_last_edge(x2, cw, dw, x1)) == 1) {
+                var z: f64 = up * 0.0 + dn * 0.0 + pv * 0.0 + bv * 0.0 + cv * 0.0;
+                if (z == 0.0) { np = _bj_e_psi(bv, pv, cv, up, dn); }
+            }
+        }
+    }
+    pp[0] = np;
+    var fv: f64 = fp[0];
+    var q: f64 = km * d;
+    var u: f64 = q + np;
+    var sk: f64 = sv * kv;
+    var p3: f64 = sk * u;
+    var r: f64 = fv + p3;
+    var sgb = 0;
+    if (sub == 1) {
+        r = fv - p3;
+        sgb = 0 - 9223372036854775807 - 1;
+    }
+    var x3 = p3;
+    var e3 = (x3 >> 52) & 2047;
+    var kmw = km;
+    var xq = 0;
+    var eq = 1;
+    if ((kmw << 1) != 0) {
+        xq = q;
+        eq = (xq >> 52) & 2047;
+    }
+    if (eq == 0 || eq == 2047 || e3 == 0 || e3 == 2047) {
+        var hw = up;
+        var lw = dn;
+        var nw = np;
+        if (((xq | x3 | nw) << 1) != 0 || ((kmw << 1) != 0 && hw != lw)) {
+            var skw = sk;
+            var fw = fv;
+            if (_bj_e_cpml_mark2(xq, kmw, hw, lw, x3, skw, nw, fw, sgb) == 1) {
+                var z2: f64 = fv * 0.0 + up * 0.0 + dn * 0.0 + np * 0.0 + sk * 0.0 + km * 0.0;
+                if (z2 == 0.0) {
+                    if (sub == 1) { sk = -sk; }
+                    r = _bj_e_cpml_f(fv, sk, km, np, up, dn);
+                }
+            }
+        }
+    }
+    fp[0] = r;
+    return 0;
+}
+
+# n CPML cells on the rule, the scalar form (the x-strips' columns, the x-slabs' runs along y, a packed strip's tail):
+# cell j's f at f[j·fs], its Ψ at psi[j·ps], its k at k[j·fs] and the source's nodes at up[j·fs] and dn[j·fs]; pr [b,
+# c, 1/κ − 1, s], sub 1 for f −=. Rust's two statements inline, kept where every product is normal (km1·d's test
+# skipped where 1/κ − 1 is ±0, _bj_e_cpmlf_fix's reason) or the cell is quiet (Ψ and d ±0, every product an exact
+# zero): both are the rule's value. Any other cell goes to _bj_e_cpml_one, which tests each statement's marker.
+fn _bj_e_cpml_run(f: *f64, psi: *f64, k: *f64, up: *f64, dn: *f64, n, fs, ps, pr: *f64, sub) {
+    var bv: f64 = pr[0];
+    var cv: f64 = pr[1];
+    var km: f64 = pr[2];
+    var sv: f64 = pr[3];
+    var kw = km;
+    var kq = 0;
+    if ((kw << 1) != 0) { kq = 1; }
+    var a = 0;
+    var pz = 0;
+    for (var j = 0; j < n; j = j + 1) {
+        var uv: f64 = up[a];
+        var dv: f64 = dn[a];
+        var po: f64 = psi[pz];
+        var d: f64 = uv - dv;
+        var p1: f64 = bv * po;
+        var p2: f64 = cv * d;
+        var pv: f64 = p1 + p2;
+        var q: f64 = km * d;
+        var u: f64 = q + pv;
+        var sk: f64 = sv * k[a];
+        var p3: f64 = sk * u;
+        var x1 = p1;
+        var x2 = p2;
+        var x3 = p3;
+        var xt = x3;
+        if (kq == 1) { xt = q; }
+        var pw = po;
+        var dw = d;
+        if ((_bj_e_nrm(x1) | _bj_e_nrm(x2) | _bj_e_nrm(x3) | _bj_e_nrm(xt)) >= 0 || ((pw | dw) << 1) == 0) {
+            psi[pz] = pv;
+            if (sub == 1) { f[a] = f[a] - p3; }
+            else { f[a] = f[a] + p3; }
+        } else {
+            _bj_e_cpml_one(f + a, psi + pz, k[a], uv, dv, pr, sub);
+        }
+        a = a + fs;
+        pz = pz + ps;
+    }
+    return 0;
+}
+
 # ── the FDTD grids' coefficients rounded once (ADR 0002 row 13: M5 part 2b, M6 part 4a) ──────────────────────────────
 #
 # The 1D grid (src/fdtd1d.cyr), the 2D and 3D grids (src/fdtd2d.cyr, src/fdtd3d.cyr) and GpuFdtd2d (src/compute.cyr)
@@ -34847,7 +35164,9 @@ public fn _bj_fd2_check_sigma(sigma: f64): i64 {
 # One CPML strip row on the packed verbs: for i < n, d = hi[i] − lo[i], Ψ ← b·Ψ + c·d, and f ± (sign·k)·((1/κ − 1)·d +
 # Ψ) (sub 0: `+=`, 1: `-=`), Rust's `*psi = b * *psi + c * d; *f += sign * kk * (km1 * d + *psi)` lane by lane (IEEE's
 # products and sums are commutative, so each lane's operands may swap), through the scratch rows w1, w2, w3 on lane
-# multiples, then a scalar tail.
+# multiples, then a scalar tail. Each statement's products are scanned before its last operation, and a cell at a
+# range edge reruns that statement with an unbounded exponent (src/crmath_edge.cyr's CPML rule; ADR 0002 row 18, M6
+# part 4e): d stays in w1 until km1·d is in w2, then w1 takes u = km1·d + Ψ and the product, w3 takes s·k.
 public fn _bj_fd2_strip(f: *f64, hi: *f64, lo: *f64, k: *f64, psi: *f64, n, pr: *f64, w: *f64, sub) {
     var b: f64 = pr[0];
     var c: f64 = pr[1];
@@ -34861,22 +35180,17 @@ public fn _bj_fd2_strip(f: *f64, hi: *f64, lo: *f64, k: *f64, psi: *f64, n, pr: 
         f64v_sub(w1, hi, lo, m);
         f64v_scale(w2, psi, b, m);
         f64v_scale(w3, w1, c, m);
+        _bj_e_psi_fix(hi, lo, psi, w1, w2, w3, m, pr);
         f64v_add(psi, w2, w3, m);
         f64v_scale(w2, w1, km1, m);
-        f64v_add(w2, w2, psi, m);
+        f64v_add(w1, w2, psi, m);
         f64v_scale(w3, k, sign, m);
-        f64v_mul(w2, w3, w2, m);
-        if (sub == 0) { f64v_add(f, f, w2, m); }
-        else { f64v_sub(f, f, w2, m); }
+        f64v_mul(w1, w3, w1, m);
+        _bj_e_cpmlf_fix(f, hi, lo, psi, w2, w3, w1, m, pr, sub);
+        if (sub == 0) { f64v_add(f, f, w1, m); }
+        else { f64v_sub(f, f, w1, m); }
     }
-    for (var i = m; i < n; i = i + 1) {
-        var d: f64 = hi[i] - lo[i];
-        var pv: f64 = b * psi[i] + c * d;
-        psi[i] = pv;
-        var v: f64 = sign * k[i] * (km1 * d + pv);
-        if (sub == 0) { f[i] = f[i] + v; }
-        else { f[i] = f[i] - v; }
-    }
+    if (m < n) { _bj_e_cpml_run(f + m, psi + m, k + m, hi + m, lo + m, n - m, 1, 1, pr, sub); }
     return 0;
 }
 
@@ -34911,23 +35225,16 @@ fn _bj_fd2_cpml_fy(c: *BjCpml, fy: *f64, fz: *f64, k: *f64, nx, ny, sign: f64) {
     var bh: *f64 = _bj_fd2_f64p(c.b_half);
     var chf: *f64 = _bj_fd2_f64p(c.c_half);
     var kh: *f64 = _bj_fd2_f64p(c.km1_half);
-    for (var y = 0; y < ny; y = y + 1) {
-        var r = y * nx;
-        var fr: *f64 = fy + r;
-        var zr: *f64 = fz + r;
-        var kr: *f64 = k + r;
-        var pp: *f64 = _bj_fd2_f64p(c.psi_fy_x + y * 2 * t * 8);
-        for (var l = 0; l < t; l = l + 1) {
-            var d: f64 = zr[l + 1] - zr[l];
-            var pv: f64 = bh[l] * pp[l] + chf[l] * d;
-            pp[l] = pv;
-            fr[l] = fr[l] + sign * kr[l] * (kh[l] * d + pv);
-            var x = nx - 2 - l;
-            var d2: f64 = zr[x + 1] - zr[x];
-            var pv2: f64 = bh[l] * pp[t + l] + chf[l] * d2;
-            pp[t + l] = pv2;
-            fr[x] = fr[x] + sign * kr[x] * (kh[l] * d2 + pv2);
-        }
+    var pp: *f64 = _bj_fd2_f64p(c.psi_fy_x);
+    var pr: f64[4];
+    pr[3] = sign;
+    for (var l = 0; l < t; l = l + 1) {
+        pr[0] = bh[l];
+        pr[1] = chf[l];
+        pr[2] = kh[l];
+        _bj_e_cpml_run(fy + l, pp + l, k + l, fz + l + 1, fz + l, ny, nx, 2 * t, &pr, 0);
+        var x = nx - 2 - l;
+        _bj_e_cpml_run(fy + x, pp + t + l, k + x, fz + x + 1, fz + x, ny, nx, 2 * t, &pr, 0);
     }
     return 0;
 }
@@ -34941,27 +35248,19 @@ fn _bj_fd2_cpml_fz(c: *BjCpml, fz: *f64, fx: *f64, fy: *f64, k: *f64, nx, ny, si
     var bn: *f64 = _bj_fd2_f64p(c.b_node);
     var cn: *f64 = _bj_fd2_f64p(c.c_node);
     var kn: *f64 = _bj_fd2_f64p(c.km1_node);
-    for (var y = 1; y < ny - 1; y = y + 1) {
-        var r = y * nx;
-        var fr: *f64 = fz + r;
-        var yr: *f64 = fy + r;
-        var kr: *f64 = k + r;
-        var pp: *f64 = _bj_fd2_f64p(c.psi_fz_x + y * 2 * t * 8);
-        for (var l = 1; l < t; l = l + 1) {
-            var d: f64 = yr[l] - yr[l - 1];
-            var pv: f64 = bn[l] * pp[l] + cn[l] * d;
-            pp[l] = pv;
-            fr[l] = fr[l] + sign * kr[l] * (kn[l] * d + pv);
-            var x = nx - 1 - l;
-            var d2: f64 = yr[x] - yr[x - 1];
-            var pv2: f64 = bn[l] * pp[t + l] + cn[l] * d2;
-            pp[t + l] = pv2;
-            fr[x] = fr[x] + sign * kr[x] * (kn[l] * d2 + pv2);
-        }
-    }
-    var psi: *f64 = _bj_fd2_f64p(c.psi_fz_y);
+    var pp: *f64 = _bj_fd2_f64p(c.psi_fz_x + 2 * t * 8);
     var pr: f64[4];
     pr[3] = sign;
+    for (var l = 1; l < t; l = l + 1) {
+        pr[0] = bn[l];
+        pr[1] = cn[l];
+        pr[2] = kn[l];
+        var o = nx + l;
+        _bj_e_cpml_run(fz + o, pp + l, k + o, fy + o, fy + o - 1, ny - 2, nx, 2 * t, &pr, 0);
+        var o2 = nx + nx - 1 - l;
+        _bj_e_cpml_run(fz + o2, pp + t + l, k + o2, fy + o2, fy + o2 - 1, ny - 2, nx, 2 * t, &pr, 0);
+    }
+    var psi: *f64 = _bj_fd2_f64p(c.psi_fz_y);
     for (var side = 0; side < 2; side = side + 1) {
         for (var l2 = 1; l2 < t; l2 = l2 + 1) {
             var y2 = l2;
@@ -35728,22 +36027,31 @@ fn _bj_fd3_slabs(c: *BjCpml, axis, half, psi: *f64, f: *f64, src: *f64, k: *f64,
             lo[axis] = n + 1 - off - t;
             hi[axis] = n + 1 - off - l0;
         }
-        for (var z = lo[2]; z < hi[2]; z = z + 1) {
-            for (var y = lo[1]; y < hi[1]; y = y + 1) {
-                var row = z * nxy + y * nx;
-                if (axis == 0) {
-                    var prow = (z * pd1 + y) * pd0 + side * t;
-                    for (var x = lo[0]; x < hi[0]; x = x + 1) {
-                        var l = x;
-                        if (side == 1) { l = n - off - x; }
-                        var i = row + x;
-                        var d: f64 = src[i + 1] - src[i];
-                        if (half == 0) { d = src[i] - src[i - 1]; }
-                        var pv: f64 = bp[l] * psi[prow + l] + cp[l] * d;
-                        psi[prow + l] = pv;
-                        f[i] = f[i] + sign * k[i] * (kp[l] * d + pv);
+        if (axis == 0) {
+            # The x-slabs: one layer per x, run along y (the cells are independent, so the order is Rust's results).
+            var ny0 = lo[1];
+            for (var z = lo[2]; z < hi[2]; z = z + 1) {
+                for (var x = lo[0]; x < hi[0]; x = x + 1) {
+                    var l = x;
+                    if (side == 1) { l = n - off - x; }
+                    pr[0] = bp[l];
+                    pr[1] = cp[l];
+                    pr[2] = kp[l];
+                    var i = z * nxy + ny0 * nx + x;
+                    var pj = (z * pd1 + ny0) * pd0 + side * t + l;
+                    var iu = i + 1;
+                    var id = i;
+                    if (half == 0) {
+                        iu = i;
+                        id = i - 1;
                     }
-                } else {
+                    _bj_e_cpml_run(f + i, psi + pj, k + i, src + iu, src + id, hi[1] - ny0, nx, pd0, &pr, 0);
+                }
+            }
+        } else {
+            for (var z = lo[2]; z < hi[2]; z = z + 1) {
+                for (var y = lo[1]; y < hi[1]; y = y + 1) {
+                    var row = z * nxy + y * nx;
                     var u = y;
                     if (axis == 2) { u = z; }
                     var l2 = u;

@@ -683,6 +683,42 @@ fn main() {
       "products of 2^-1074 differences round to ∓0: the exact sums' −0 (Rust's +0 + −0 and +0 − +0 gave +0)");
     BjFdtd2d_free(&ue2);
 
+    # ADR 0002 row 18 (M6 part 4e): each CPML statement, Ψ ← b·Ψ + c·Δ then f += s·k·((1/κ − 1)·Δ + Ψ), runs with an
+    # unbounded exponent at its range edges, in the scalar x-strips and the packed y-strips. The expectations are
+    # validate.py's model of the port.
+    test_group("cyrius_cpml_edges");
+    var ce1: BjFdtd2d;
+    var tce1, vce1 = BjFdtd2d_new(12, 11, 0.001, BJ_MODE2D_TM, &ce1);
+    var tce1c, vce1c = ce1.try_enable_cpml(3);
+    ce1.add_source(1, 5, mxv);
+    ce1.add_source(2, 5, nmx);
+    ce1.add_source(6, 1, mxv);
+    ce1.add_source(6, 2, nmx);
+    ce1.step_once();
+    var ce1y: f64 = at(ce1.fy, ce1.idx(1, 5));
+    var ce1hp: f64 = _bj_from_bits(0x7f5ab253fee95e7a);
+    var ce1hw: f64 = -ce1hp;
+    var ce1x: f64 = at(ce1.fx, ce1.idx(6, 1));
+    var ce1z: f64 = at(ce1.fz, ce1.idx(1, 5));
+    var ce1z2: f64 = at(ce1.fz, ce1.idx(6, 1));
+    var ce1zw: f64 = _bj_from_bits(0x7fe18bf4a69e7618);
+    assert(is_ok(tce1) == 1 && is_ok(tce1c) == 1 && ce1y == ce1hw && ce1x == ce1hp,
+      "Δ past DBL_MAX in the layers: H_y = −2.929·10³⁰⁵ (x-strip), H_x = 2.929·10³⁰⁵ (y-strip) (Rust's NaN)");
+    assert(ce1z == ce1zw && ce1z2 == ce1zw, "then E_z = 9.857370441159752·10³⁰⁷ in both strips (Rust's NaN)");
+    BjFdtd2d_free(&ce1);
+    var ce2: BjFdtd2d;
+    var tce2, vce2 = BjFdtd2d_new(12, 11, 0.001, BJ_MODE2D_TM, &ce2);
+    var tce2c, vce2c = ce2.try_enable_cpml(3);
+    ce2.add_source(1, 5, tn);
+    ce2.add_source(2, 5, ntn);
+    ce2.step_once();
+    var cp2: *BjCpml = cpmlp(ce2.cpml());
+    var ce2a: f64 = at(cp2.psi_fy_x, 30);
+    var ce2b: f64 = at(cp2.psi_fy_x, 32);
+    assert(is_ok(tce2) == 1 && is_ok(tce2c) == 1 && _bj_k_bits(ce2a) == negz && _bj_k_bits(ce2b) == negz,
+      "c·Δ of 2^-1074 differences rounds to −0: Ψ the exact sum's −0 (Rust's +0 + −0 gave +0)");
+    BjFdtd2d_free(&ce2);
+
     return assert_summary();
 }
 

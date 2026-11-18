@@ -9,7 +9,7 @@ bite is done, the machinery, the scripts and the traps. Delete it once it has se
 
 ## Where it stands
 
-- **Committed through `94a6cb4`** ("m6 pt4c done"); part 4d is in the working tree for the user to commit.
+- **Committed through `f854881`** ("m6 pt4d done"); part 4e is in the working tree for the user to commit.
 - **M6 Part 1** (the 2D CPML and `Fdtd2d`, §116–§119) runs in bites. Done: 1a the CPML layer (`src/cpml.cyr`); 1b-1
   `Fdtd2d` without the CPML (`src/fdtd2d.cyr`; its scripts `Fdtd2d::script` in `fdtd_2d3d.tsv`, replayed by
   validate.py's `Fd2Scripts` in pure Python, no NumPy on the host); 1b-2 the CPML attached (the y-strips packed, the
@@ -32,10 +32,11 @@ bite is done, the machinery, the scripts and the traps. Delete it once it has se
   subtract form is the add form with −k, the curl form's marker the product's with w = Δa − Δb ≠ 0 as the factor test),
   4d the 3D updates (done, §128: `_bj_fd3_curl` on `_bj_e_curl_fix`, which takes a' as its own row; validate.py's
   `Fd3.curl18`; `emit_4d`: the E rows' edges need ε_r and μ_r that scale C_e and C_h, since C_e·ΔH can't pass DBL_MAX
-  at unit materials), then 4e the CPML corrections (two statements a
-  cell: Ψ ← bΨ + cΔ, then f += (s·k)·(km1·Δ + Ψ); a product's marker tests it against the other addend, as
-  `_bj_e_cell_edge` against d; Ψ's geometric decay makes b·Ψ subnormal in quiet layers), 4f `total_energy` (the 1D's
-  `_bj_fd1_energy_ux` pattern) and `run`'s source (`_bj_fd1_source_ux`, to share) in the three grids. Then M6 is done.
+  at unit materials), 4e the CPML corrections (done, §129: `_bj_fd2_strip` scans each statement's products,
+  `_bj_e_psi_fix` and `_bj_e_cpmlf_fix`, the x-strips, x-slabs and tails `_bj_e_cpml_run`; validate.py's `fd_cpml18`;
+  `emit_4e`; a subnormal product marks its cell even beside a ±0 addend, since the rule rounds it twice), then 4f
+  `total_energy` (the 1D's `_bj_fd1_energy_ux` pattern) and `run`'s source (`_bj_fd1_source_ux`, to share) in the
+  three grids. Then M6 is done.
 - **No Rust (ADR 0003, 2026-11-16).** The Rust tree and the Rust generator are retired; the corpus is frozen data and
   `scripts/oracle/validate.py` the reference model. New rows come from `scripts/oracle/emit.py` (2b's `emit_2b` is
   the first part): add a part function, register it in `main()`'s module list, run `emit.py .`, then `validate.py .
@@ -78,18 +79,19 @@ bite is done, the machinery, the scripts and the traps. Delete it once it has se
     Rust's chain where every operation is its 53-bit value (mode 0, checked per sample by one exponent test and per
     angle), else the call or the angle unbounded (`_bj_nf_angle_ux`); a non-finite field keeps Rust's (row 18, §114).
     **Part 2 is done.**
-- **Numbers after M6 part 4d**: 19 modules, 644,188 ok, 0 failed, 123,489 accepted (ADR 01: 43,087; ADR 0002:
-  80,402) over 767,677 rows; 488 digests equal on x86_64 ELF, x86_64 PE and aarch64. Ledger 778 ported, 12 n/a, 68
+- **Numbers after M6 part 4e**: 19 modules, 644,188 ok, 0 failed, 123,759 accepted (ADR 01: 43,087; ADR 0002:
+  80,672) over 767,947 rows; 488 digests equal on x86_64 ELF, x86_64 PE and aarch64. Ledger 778 ported, 12 n/a, 68
   pending of 858; API snapshot 2,139; surface parity 653 items (15 modules); benches 80 of 80 twinned; execution
   coverage 394 of 394. `json.tsv` is 40.7 MB of the 48 MiB cap: the rest of M6 adds no JSON (`Fdtd3d` and compute.rs
   have no serde), but M7's eight serde types (integration/) will want their own module.
 - **M5 is done** (§115). The benchmark record's Cyrius column is each row's least of four full runs: rows vary up to
   1.5× between runs under other repos' loads, so take the least of several when regenerating it.
-- **Next**: part 4e, the CPML corrections (above: the 2D strips' and the 3D slabs' two statements a cell).
+- **Next**: part 4f, `total_energy` of the three grids and `run`'s source (above: the 1D's `_bj_fd1_energy_ux` and
+  `_bj_fd1_source_ux` patterns, shared). Then M6 is done.
   `nf2ff_2d` (the snapshot form) calls `_bj_nf_core` with the rotation (1, 0) and k from `_bj_nf_validate` on its
   double frequency (`_bj_k_ux_from`): the core's range edges come with it.
 - **Corpus size**: `fdtd.tsv` is 38.8 MB (107,341 rows) and `json.tsv` 40.7 MB, against the 48 MiB cap that
-  validate.py's `too_big` guards (§81); M6's rows are in `fdtd_2d3d.tsv` (3.6 MB after 4d).
+  validate.py's `too_big` guards (§81); M6's rows are in `fdtd_2d3d.tsv` (4.1 MB after 4e).
 - **A recorded cost**: the 1D step runs 3.5–3.8× HEAD's with 2d-2a's scan (§107), the TF/SF step about 2× with
   2d-3's (§109) and `accumulate` about 3× with 2d-4a's (§110). The user chose that fix; I had estimated 1.5–2×.
   Cyrius 6.7.18 has no vector verb that classifies a lane (plan §10, listed as a gap). M6's grids will pay the same.
@@ -363,6 +365,13 @@ Rust 1.2.0's sources for reading: `git show 1.2.0:src/fdtd.rs > $S/fdtd.rs` (and
   timeout = 300` s, and under another repo's gate (load 9–11) it killed `fdtd3d.tcyr` in `cpml3d_reflection`, which
   takes 36 s alone under qemu. Before reading a "killed by signal 15" as a defect, time the file alone (`cyrius test
   --aarch64 --timeout 1800 tests/<file>.tcyr`, HEAD's tree beside it) and rerun the suite when the load drops.
+- **An f64's bits in a scalar path** (part 4e): `var x = v;` with `v: f64` puts the raw bits in an untyped local for
+  free (no call and no warning on 6.7.18), where `_bj_k_bits(v)` is a call. `_bj_e_cpml_run` classifies its four
+  products this way.
+- **Where the port and the model part** (part 4e): when a mapped trajectory fails, dump the Cyrius fields each step
+  from a scratch `tests/zz_*.tcyr` (`println_int` of each f64's bits; delete it after) and compare them with the
+  model's `Fd2` or `Fd3` step by step. The first differing cell and its inputs settle which side is wrong: in 4e it
+  was the port's narrowing (a subnormal product beside a ±0 addend, which the rule rounds twice).
 
 ## Standing preferences (also in the memory directory)
 

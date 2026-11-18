@@ -281,7 +281,9 @@ public fn _bj_fd2_check_sigma(sigma: f64): i64 {
 # One CPML strip row on the packed verbs: for i < n, d = hi[i] − lo[i], Ψ ← b·Ψ + c·d, and f ± (sign·k)·((1/κ − 1)·d +
 # Ψ) (sub 0: `+=`, 1: `-=`), Rust's `*psi = b * *psi + c * d; *f += sign * kk * (km1 * d + *psi)` lane by lane (IEEE's
 # products and sums are commutative, so each lane's operands may swap), through the scratch rows w1, w2, w3 on lane
-# multiples, then a scalar tail.
+# multiples, then a scalar tail. Each statement's products are scanned before its last operation, and a cell at a
+# range edge reruns that statement with an unbounded exponent (src/crmath_edge.cyr's CPML rule; ADR 0002 row 18, M6
+# part 4e): d stays in w1 until km1·d is in w2, then w1 takes u = km1·d + Ψ and the product, w3 takes s·k.
 public fn _bj_fd2_strip(f: *f64, hi: *f64, lo: *f64, k: *f64, psi: *f64, n, pr: *f64, w: *f64, sub) {
     var b: f64 = pr[0];
     var c: f64 = pr[1];
@@ -295,22 +297,17 @@ public fn _bj_fd2_strip(f: *f64, hi: *f64, lo: *f64, k: *f64, psi: *f64, n, pr: 
         f64v_sub(w1, hi, lo, m);
         f64v_scale(w2, psi, b, m);
         f64v_scale(w3, w1, c, m);
+        _bj_e_psi_fix(hi, lo, psi, w1, w2, w3, m, pr);
         f64v_add(psi, w2, w3, m);
         f64v_scale(w2, w1, km1, m);
-        f64v_add(w2, w2, psi, m);
+        f64v_add(w1, w2, psi, m);
         f64v_scale(w3, k, sign, m);
-        f64v_mul(w2, w3, w2, m);
-        if (sub == 0) { f64v_add(f, f, w2, m); }
-        else { f64v_sub(f, f, w2, m); }
+        f64v_mul(w1, w3, w1, m);
+        _bj_e_cpmlf_fix(f, hi, lo, psi, w2, w3, w1, m, pr, sub);
+        if (sub == 0) { f64v_add(f, f, w1, m); }
+        else { f64v_sub(f, f, w1, m); }
     }
-    for (var i = m; i < n; i = i + 1) {
-        var d: f64 = hi[i] - lo[i];
-        var pv: f64 = b * psi[i] + c * d;
-        psi[i] = pv;
-        var v: f64 = sign * k[i] * (km1 * d + pv);
-        if (sub == 0) { f[i] = f[i] + v; }
-        else { f[i] = f[i] - v; }
-    }
+    if (m < n) { _bj_e_cpml_run(f + m, psi + m, k + m, hi + m, lo + m, n - m, 1, 1, pr, sub); }
     return 0;
 }
 
@@ -345,23 +342,16 @@ fn _bj_fd2_cpml_fy(c: *BjCpml, fy: *f64, fz: *f64, k: *f64, nx, ny, sign: f64) {
     var bh: *f64 = _bj_fd2_f64p(c.b_half);
     var chf: *f64 = _bj_fd2_f64p(c.c_half);
     var kh: *f64 = _bj_fd2_f64p(c.km1_half);
-    for (var y = 0; y < ny; y = y + 1) {
-        var r = y * nx;
-        var fr: *f64 = fy + r;
-        var zr: *f64 = fz + r;
-        var kr: *f64 = k + r;
-        var pp: *f64 = _bj_fd2_f64p(c.psi_fy_x + y * 2 * t * 8);
-        for (var l = 0; l < t; l = l + 1) {
-            var d: f64 = zr[l + 1] - zr[l];
-            var pv: f64 = bh[l] * pp[l] + chf[l] * d;
-            pp[l] = pv;
-            fr[l] = fr[l] + sign * kr[l] * (kh[l] * d + pv);
-            var x = nx - 2 - l;
-            var d2: f64 = zr[x + 1] - zr[x];
-            var pv2: f64 = bh[l] * pp[t + l] + chf[l] * d2;
-            pp[t + l] = pv2;
-            fr[x] = fr[x] + sign * kr[x] * (kh[l] * d2 + pv2);
-        }
+    var pp: *f64 = _bj_fd2_f64p(c.psi_fy_x);
+    var pr: f64[4];
+    pr[3] = sign;
+    for (var l = 0; l < t; l = l + 1) {
+        pr[0] = bh[l];
+        pr[1] = chf[l];
+        pr[2] = kh[l];
+        _bj_e_cpml_run(fy + l, pp + l, k + l, fz + l + 1, fz + l, ny, nx, 2 * t, &pr, 0);
+        var x = nx - 2 - l;
+        _bj_e_cpml_run(fy + x, pp + t + l, k + x, fz + x + 1, fz + x, ny, nx, 2 * t, &pr, 0);
     }
     return 0;
 }
@@ -375,27 +365,19 @@ fn _bj_fd2_cpml_fz(c: *BjCpml, fz: *f64, fx: *f64, fy: *f64, k: *f64, nx, ny, si
     var bn: *f64 = _bj_fd2_f64p(c.b_node);
     var cn: *f64 = _bj_fd2_f64p(c.c_node);
     var kn: *f64 = _bj_fd2_f64p(c.km1_node);
-    for (var y = 1; y < ny - 1; y = y + 1) {
-        var r = y * nx;
-        var fr: *f64 = fz + r;
-        var yr: *f64 = fy + r;
-        var kr: *f64 = k + r;
-        var pp: *f64 = _bj_fd2_f64p(c.psi_fz_x + y * 2 * t * 8);
-        for (var l = 1; l < t; l = l + 1) {
-            var d: f64 = yr[l] - yr[l - 1];
-            var pv: f64 = bn[l] * pp[l] + cn[l] * d;
-            pp[l] = pv;
-            fr[l] = fr[l] + sign * kr[l] * (kn[l] * d + pv);
-            var x = nx - 1 - l;
-            var d2: f64 = yr[x] - yr[x - 1];
-            var pv2: f64 = bn[l] * pp[t + l] + cn[l] * d2;
-            pp[t + l] = pv2;
-            fr[x] = fr[x] + sign * kr[x] * (kn[l] * d2 + pv2);
-        }
-    }
-    var psi: *f64 = _bj_fd2_f64p(c.psi_fz_y);
+    var pp: *f64 = _bj_fd2_f64p(c.psi_fz_x + 2 * t * 8);
     var pr: f64[4];
     pr[3] = sign;
+    for (var l = 1; l < t; l = l + 1) {
+        pr[0] = bn[l];
+        pr[1] = cn[l];
+        pr[2] = kn[l];
+        var o = nx + l;
+        _bj_e_cpml_run(fz + o, pp + l, k + o, fy + o, fy + o - 1, ny - 2, nx, 2 * t, &pr, 0);
+        var o2 = nx + nx - 1 - l;
+        _bj_e_cpml_run(fz + o2, pp + t + l, k + o2, fy + o2, fy + o2 - 1, ny - 2, nx, 2 * t, &pr, 0);
+    }
+    var psi: *f64 = _bj_fd2_f64p(c.psi_fz_y);
     for (var side = 0; side < 2; side = side + 1) {
         for (var l2 = 1; l2 < t; l2 = l2 + 1) {
             var y2 = l2;

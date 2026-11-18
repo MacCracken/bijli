@@ -622,6 +622,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
   scans the product row between the multiply and the add with the 2D curl kernel's marker (`_bj_e_curl_fix`, which now
   takes the a' row as its own pointer); its scalar tail is `_bj_e_curl_one`. validate.py's `Fd3` runs `fd_curl18` under
   row 18; `fdtd_2d3d.adr.tsv` maps 1,625 rows (row 18: 220), and `emit.py`'s `emit_4d` appends 95 rows (2,245).
+- **Cyrius port, M6 part 4e — the CPML corrections on the per-cell rule** (ADR 0002 row 18 amended): each CPML cell's
+  two statements, Ψ ← b·Ψ + c·Δ and f ± s·k·((1/κ − 1)·Δ + Ψ), run as two chains on the rule in the 2D strips and the
+  3D slabs. `_bj_fd2_strip`, the packed row both grids share, scans the first statement's products before Ψ's sum and
+  the second's before f's (its three scratch rows reused: Δ until (1/κ − 1)·Δ is formed, then the sum and the product);
+  the x-strips, the x-slabs and the tails run by layer through `_bj_e_cpml_run` (`src/crmath_edge.cyr`). validate.py's
+  `fd_cpml18`
+  models the rule in `Fd2`'s strips and `Fd3`'s slabs; `fdtd_2d3d.adr.tsv` maps 1,895 rows (row 18: 422), and
+  `emit.py`'s `emit_4e` appends 270 rows (2,515).
 
 ### Fixed
 
@@ -1209,6 +1217,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
   Cost: the per-cell scan, `fdtd/3d_step_30x30x30` 608–624 → 1,114–1,146 µs (1.83×),
   `fdtd/3d_step_30x30x30_cpml8` 2.30–2.33 → 2.73–2.78 ms (1.19×; the CPML's slabs follow in part 4e)
   (`port-parity.md` §128).
+- **fdtd** (ADR 0002 row 18 amended, M6 part 4e): the CPML corrections gave NaN where a field's neighbours inside a
+  layer differed by more than DBL_MAX (on a 12 × 11 TM grid with t = 3, E_z = ±DBL_MAX across a strip left H and E_z
+  NaN after one step for −2.929·10³⁰⁵ and 9.857·10³⁰⁷; on 9³ with t = 2, NaN for −2.716·10³⁰⁵ and 1.145·10³⁰⁸), lost
+  bits where a product fell below 2^-1022 (a σ ratio of 10⁻³⁰⁰ makes c about −4·10⁻³⁰², so c·Δ is subnormal), and
+  left Ψ at +0 for the exact sum's −0. Each such statement now runs with an unbounded exponent. Cost: the per-cell
+  scans, `fdtd/2d_step_100x100_tm_cpml10` 177.5–178.8 → 243.2–244.1 µs (1.37×), `fdtd/3d_step_30x30x30_cpml8`
+  2.66–2.67 → 4.07–4.09 ms (1.53×) (`port-parity.md` §129).
 
 ### Performance
 

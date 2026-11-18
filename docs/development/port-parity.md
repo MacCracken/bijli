@@ -7112,3 +7112,65 @@ eigenmode search (`dft_magnitude`'s recurrence and magnitude, `find_eigenmodes`'
   rerun at load 4–5 passed (29 of 29, 239 s). The gate is clean (no warnings; execution coverage 394 of 394; the audit
   passes); validate.py 767,677 rows, 0 problems; `emit.py --check` 1,107 frozen rows and 1,138 emitted. Next: 4e, the
   CPML corrections.
+
+## 129. M6 part 4e: the CPML corrections at their range edges (2026-11-17)
+
+- **ADR 0002 row 18, amended** (the user's answer of 2026-11-15: the per-cell rule for M6's grids): a CPML cell runs
+  two statements, Rust's `*psi = b * *psi + c * d; *f += sign * kk * (km1 * d + *psi)` with d = up − dn, and each is a
+  chain whose last operation rounds into binary64 (Ψ is state). Each takes the updates' rule: Rust's operations where
+  they are the chain's own with an unbounded exponent, else the statement to 53 bits and its last operation rounded
+  once. s = ±1, so s·k is exact, and the subtract form (the 2D E_z y-strips) is the add form with −s·k. The first
+  statement's marker is the updates' on b·Ψ and c·d, each against the other (c·d is ±∞ or NaN wherever d passed
+  DBL_MAX). The second's is km1·d at ±∞, NaN, a nonzero subnormal or an underflowed ±0 (km1·d + Ψ' is intermediate, so
+  any lost bit may reach f) and s·k·u at the updates' marker against f (u past DBL_MAX makes it ±∞ or NaN). The packed
+  strip (`_bj_fd2_strip`, the 2D y-strips' and the 3D y- and z-slabs') keeps its three scratch rows: d, b·Ψ and c·d;
+  the first scan (`_bj_e_psi_fix`) before Ψ's sum, a marked cell's Ψ' written through the b·Ψ slot with −0 beside it;
+  then km1·d in the second row, u and then the product in the first (d is no longer needed), s·k in the third, and the
+  second scan (`_bj_e_cpmlf_fix`) before f's add, a marked cell's f written and its product slot set to ∓0. The
+  x-strips, the x-slabs and the tails go by layer through `_bj_e_cpml_run`: a column of the 2D strips, a run along y
+  of the 3D slabs (the cells are independent, so Rust's results in any order), Rust's chain inline and one bit test
+  on the four products (an untyped local takes an f64's bits for free; `_bj_e_nrm`), the rare cell to
+  `_bj_e_cpml_one`, which tests each statement's marker. A quiet cell (Ψ and d both 0) leaves each test at once. In
+  the classic layer κ = 1, so 1/κ − 1 = 0 and km1·d is ±0 exactly in every cell (or NaN where d isn't finite, and then
+  so is the product after it): its test is skipped, which the first draft didn't do, sending every cell's zero q
+  through the marker's call.
+- **A narrowing that was wrong**: the first draft left a nonzero subnormal product unmarked beside a ±0 addend, on the
+  claim that the sum is then that product, Rust's single rounding. The rule rounds the product to 53 bits and the store
+  rounds again, so its value can be an ulp from Rust's: with σ ratio 10⁻³⁰⁰, b = 1 and Ψ = 0, c·d = 1.920152436337998·
+  10⁻³⁰⁸ in Rust's arithmetic, 1.9201524363379975·10⁻³⁰⁸ on the rule (6 rows failed against the model, the first
+  difference at step 5). A subnormal product now marks its cell as the updates' do, so a Ψ decaying through the
+  subnormals in a quiet layer reruns each step until it reaches 0.
+- **What changed**: on a 12 × 11 TM grid (dx = 1 mm, the classic layer, t = 3), E_z = ±DBL_MAX at x = 1, 2 (an x-strip,
+  scalar) or y = 1, 2 (a y-strip, packed) gave NaN in H_y or H_x and then E_z after one step, for ∓2.9292165569909566·
+  10³⁰⁵ and 9.857370441159752·10³⁰⁷; on 9³ (t = 2), across an x-slab or a y-slab, NaN for ∓2.7155378748171564·10³⁰⁵,
+  E_z = 1.1445678707085323·10³⁰⁸ and E_x, E_y = 2.9532200524477127·10³⁰⁷; c·Δ of 2^-1074 differences left Ψ at +0
+  for the exact sums' −0.
+- **validate.py**: `fd_cpml18` (both statements, the rule itself: Rust's chain where d and u are finite and every
+  product normal or 0 from a zero factor, else Fractions), in `Fd2`'s four strip loops and `Fd3.slabs` under "18".
+  **1,895 rows map** (row 18: 422, 202 of them this bite's: 143 2D and 59 3D scripts; row 13: 939; row 40: 534); the 68
+  other new rows differ from Rust by the coefficients alone, and no earlier mapping changes. A module-only write
+  (`fdtd_2d3d_adr_rows` and `check_adr` under `--write`, 2 minutes) checked the bite before the full run.
+- **The grid**: `emit.py`'s `emit_4e` appends 270 rows (2,515; the old body an exact prefix). 2D, both modes, the
+  classic layer and a CFS one (κ_max = 5, α_max = 0.05): pairs at ±DBL_MAX, 10³⁰⁸ and DBL_MAX/2 and at 2^-1074, 10⁻³¹⁰,
+  2^-1022 and 10⁻³²⁰ across an x-strip, a y-strip and a corner (frames at 1, 2 and 4 steps); ±0 fills of each field
+  under tiny sources in the layers. Layers at the coefficients' ends under unit sources: σ ratios of 10³⁰⁰, 10⁻³⁰⁰
+  and 10⁻³⁰⁵, a grade of order 350 on 4 cells (the half layer's grade near 10⁻³¹⁶, 1/κ − 1 subnormal), κ_max and
+  α_max of 10³⁰⁰. 3D (9³, t = 2) the same pairs across the x- and y-slabs with one near the z faces, ±0 fills, and
+  four layers at the ends; 20 seeded 2D scenarios and 10 3D ones with classic and CFS layers and sources over every
+  binade, most inside the layers.
+- **Tests**: `cyrius_cpml_edges` in `tests/fdtd2d.tcyr` (3 assertions, 83 in all: H in both strips, E_z after, the
+  −0 Ψ) and `tests/fdtd3d.tcyr` (2, 91: H in both slabs, then E), each from validate.py's model.
+- **Benchmarks**: the interleaved A/B against HEAD (part 4d's commit; two rounds at load 1.9 to 2.3, nothing else
+  running) left every other row unchanged (median ratios 1.000 and 0.994 over 112 rows; the extremes ns-scale rows and
+  one round's 1D run, noise) and measured the CPML steps: `fdtd/2d_step_100x100_tm_cpml10` 177.5–178.8 → 243.2–244.1
+  µs (1.37×), `fdtd/3d_step_30x30x30_cpml8` 2.66–2.67 → 4.07–4.09 ms (1.53×), about 8 to 9 ns a CPML cell (7,528 a 2D
+  step, about 173,000 cell-terms a 3D one). The first draft cost 2.31× and 2.65×: every classic-layer cell's zero
+  km1·d reached the marker's call, and each scalar cell was a call of its own; a focused scratch bench of the two
+  steps confirmed each change (2.31× → 1.77× → 1.38× in 2D). The cost left is the scans themselves, which a vector
+  classify verb would remove (plan §10).
+- **Result, every target** (x86_64 ELF, x86_64 PE, aarch64): **19 modules, 0 failing; 644,188 ok, 0 failed, 0
+  measured, 0 pending, 123,759 accepted (ADR 01: 43,087; ADR 0002: 80,672)** over 767,947 rows; **all 488 digests
+  equal**; 29 of 29 test files on each. `fdtd2d.tcyr` (83), `fdtd3d.tcyr` (91), `compute.tcyr` (36), `cpml.tcyr` (44)
+  and `json.tcyr` (105) pass on all three. The gate is clean (no warnings; execution coverage 394 of 394; the audit
+  passes); validate.py 767,947 rows, 0 problems; `emit.py --check` 1,107 frozen rows and 1,408 emitted. Next: 4f, the
+  three grids' `total_energy` and `run`'s source; then M6 is done.

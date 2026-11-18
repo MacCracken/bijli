@@ -839,6 +839,33 @@ fn main() {
       "products of 2^-1074 differences round to −0: the exact sums' −0 (Rust's +0 + −0 gave +0)");
     BjFdtd3d_free(&ue3);
 
+    # ADR 0002 row 18 (M6 part 4e): each CPML statement runs with an unbounded exponent at its range edges, in the
+    # scalar x-slabs and the packed y-slabs. The expectations are validate.py's model of the port.
+    test_group("cyrius_cpml_edges");
+    var ce1: BjFdtd3d;
+    var tce1, vce1 = BjFdtd3d_new(9, 9, 9, 0.001, &ce1);
+    var tce1c, vce1c = ce1.try_enable_cpml(2);
+    ce1.add_source_ez(1, 4, 4, mxv);
+    ce1.add_source_ez(2, 4, 4, nmx);
+    ce1.add_source_ez(4, 1, 4, mxv);
+    ce1.add_source_ez(4, 2, 4, nmx);
+    ce1.step_once();
+    var ce1y: f64 = at(ce1.hy, ce1.idx(1, 4, 4));
+    var ce1hp: f64 = _bj_from_bits(0x7f58bfc8214c44c2);
+    var ce1hw: f64 = -ce1hp;
+    var ce1x: f64 = at(ce1.hx, ce1.idx(4, 1, 4));
+    var ce1z: f64 = at(ce1.ez, ce1.idx(1, 4, 4));
+    var ce1z2: f64 = at(ce1.ez, ce1.idx(4, 1, 4));
+    var ce1zw: f64 = _bj_from_bits(0x7fe45fbd70d8442b);
+    var ce1e: f64 = at(ce1.ex, ce1.idx(1, 4, 4));
+    var ce1e2: f64 = at(ce1.ey, ce1.idx(4, 1, 4));
+    var ce1ew: f64 = _bj_from_bits(0x7fc507126a8b8be1);
+    assert(is_ok(tce1) == 1 && is_ok(tce1c) == 1 && ce1y == ce1hw && ce1x == ce1hp,
+      "Δ past DBL_MAX in the slabs: H_y = −2.716·10³⁰⁵ (x-slab), H_x = 2.716·10³⁰⁵ (y-slab) (Rust's NaN)");
+    assert(ce1z == ce1zw && ce1z2 == ce1zw && ce1e == ce1ew && ce1e2 == ce1ew,
+      "then E_z = 1.1445678707085323·10³⁰⁸ and E_x, E_y = 2.9532200524477127·10³⁰⁷ (Rust's NaN)");
+    BjFdtd3d_free(&ce1);
+
     return assert_summary();
 }
 

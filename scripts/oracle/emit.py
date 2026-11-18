@@ -596,6 +596,72 @@ def emit_4d(rows, m3):
         frames3(rows, m3, d3, rng.log_uniform(-6.0, -1.0), ops, [rng.int(1, 4)])
 
 
+def emit_4e(rows, m2, m3):
+    """M6 part 4e (ADR 0002 row 18): the CPML corrections' two statements at their range edges. 2D (both modes, t = 3
+    on 12 × 11): pairs across an x-strip (scalar), a y-strip (packed, with the E strips' scalar tail) and a corner; 3D
+    (t = 2 on 9³): pairs across the x-slabs (scalar) and the y-slabs (packed), frames on to the z-slabs. Each with the
+    classic layer and a CFS one (κ_max = 5, so 1/κ − 1 ≠ 0, and α_max = 0.05): neighbours of ±DBL_MAX, of 2^-1074 to
+    2^-1022, ±0 fields under subnormal sources; then layers whose coefficients reach the range's ends (σ ratios of
+    10^±300, a grade below 2^-1022 that makes c and 1/κ − 1 subnormal, κ_max and α_max of 10^300) under unit sources;
+    then seeded scenarios. Field fills take each grid's field index."""
+    mx, tiny, dmin = sys.float_info.max, 5e-324, 2.2250738585072014e-308
+    big = ((mx, -mx), (1e308, -1e308), (8.98846567431158e307, -8.98846567431158e307))
+    small = ((tiny, -tiny), (1e-310, -1e-310), (dmin, -dmin), (-1e-320, 3e-321))
+    for mode in (0, 1):
+        for lay in (cpml(3), cpml_with(3, 4.0, 1.0, 5.0, 0.05)):
+            for a, b in big + small:
+                ops = [lay, source2d(1, 5, a), source2d(2, 5, b), source2d(6, 1, a), source2d(6, 2, b),
+                       source2d(1, 1, a), source2d(9, 8, b)]
+                frames2(rows, m2, 12, 11, 1e-3, mode, ops, [1, 2, 4])
+            for z in (0.0, -0.0):
+                for w in (0, 1, 2):
+                    ops = [lay, fill2(w, z), source2d(1, 5, -tiny), source2d(6, 1, tiny), source2d(9, 9, -tiny)]
+                    frames2(rows, m2, 12, 11, 1e-3, mode, ops, [1, 3])
+    ends = ((3, 3.0, 1e300, 1.0, 0.0), (3, 3.0, 1e-300, 1.0, 0.0), (3, 3.0, 1e-305, 5.0, 0.05),
+            (4, 350.0, 1.0, 2.0, 0.0), (4, 350.0, 1.0, 1.0, 0.0), (3, 3.0, 1.0, 1e300, 0.0), (3, 3.0, 1.0, 1.0, 1e300))
+    for t, m, sr, km, am in ends:
+        for mode in (0, 1):
+            ops = [cpml_with(t, m, sr, km, am), source2d(2, 5, 1.0), source2d(6, 2, -1.0), source2d(7, 5, 1e-300)]
+            frames2(rows, m2, 14, 13, 1e-3, mode, ops, [1, 3, 6])
+    # 3D: E_z pairs across an x-slab (x = 1, 2) and a y-slab (y = 1, 2), one near the z faces.
+    for lay in (cpml(2), cpml_with(2, 4.0, 1.0, 5.0, 0.05)):
+        for a, b in big + small:
+            ops = [lay, source(1, 4, 4, a), source(2, 4, 4, b), source(4, 1, 4, a), source(4, 2, 4, b),
+                   source(4, 4, 1, a), source(5, 4, 1, b)]
+            frames3(rows, m3, (9, 9, 9), 1e-3, ops, [1, 2, 4])
+        for z in (0.0, -0.0):
+            for w in (0, 3):
+                ops = [lay, fill2(w, z), source(1, 4, 4, -tiny), source(4, 1, 4, tiny)]
+                frames3(rows, m3, (9, 9, 9), 1e-3, ops, [1, 3])
+    for t, m, sr, km, am in ((2, 3.0, 1e300, 1.0, 0.0), (2, 3.0, 1e-300, 5.0, 0.05), (3, 400.0, 1.0, 2.0, 0.0),
+                             (2, 3.0, 1.0, 1e300, 1e300)):
+        ops = [cpml_with(t, m, sr, km, am), source(2, 4, 4, 1.0), source(4, 2, 4, -1.0), source(4, 4, 2, 1e-300)]
+        frames3(rows, m3, (9, 9, 9), 1e-3, ops, [1, 3])
+    # Seeded scenarios: classic and CFS layers, sources over every binade of either sign, most inside the layers.
+    rng = Rng(0x4E_CB)
+    for _ in range(20):
+        nx, ny, mode, t = rng.int(9, 14), rng.int(9, 14), rng.int(0, 1), rng.int(1, 3)
+        if rng.unit() < 0.5:
+            lay = cpml(t)
+        else:
+            lay = cpml_with(t, 1.0 + rng.log_uniform(-1.0, 1.0), rng.log_uniform(-2.0, 2.0),
+                            1.0 + rng.log_uniform(-3.0, 1.0), rng.log_uniform(-4.0, 0.0))
+        ops = [lay]
+        for _ in range(rng.int(2, 5)):
+            v = rng.log_uniform(-323.0, 308.0)
+            x = rng.int(0, t) if rng.unit() < 0.5 else rng.int(nx - 1 - t, nx - 1)
+            ops.append(source2d(x, rng.int(0, ny - 1), -v if rng.unit() < 0.5 else v))
+        frames2(rows, m2, nx, ny, rng.log_uniform(-6.0, -1.0), mode, ops, [rng.int(1, 4)])
+    for _ in range(10):
+        d3, t = (rng.int(7, 9), rng.int(7, 9), rng.int(7, 9)), rng.int(1, 2)
+        ops = [cpml(t) if rng.unit() < 0.5 else cpml_with(t, 3.0, 1.0, 5.0, 0.05)]
+        for _ in range(rng.int(2, 4)):
+            v = rng.log_uniform(-323.0, 308.0)
+            x, y, z = rng.int(0, t), rng.int(0, d3[1] - 1), rng.int(0, d3[2] - 1)
+            ops.append(source(x, y, z, -v if rng.unit() < 0.5 else v))
+        frames3(rows, m3, d3, rng.log_uniform(-6.0, -1.0), ops, [rng.int(1, 3)])
+
+
 # ── modules ─────────────────────────────────────────────────────────────────────────────────────────────────────────
 
 def module(name, parts):
@@ -622,7 +688,8 @@ def main() -> int:
     problems = 0
     parts = [lambda r: emit_2b(r, model3), lambda r: emit_3(r, model_gpu),
              lambda r: emit_4a(r, model2, model3, model_gpu), lambda r: emit_4b(r, model2, model3),
-             lambda r: emit_4c(r, model2, model_gpu), lambda r: emit_4d(r, model3)]
+             lambda r: emit_4c(r, model2, model_gpu), lambda r: emit_4d(r, model3),
+             lambda r: emit_4e(r, model2, model3)]
     for name, parts in (("fdtd_2d3d", parts),):
         path, text, n = module(name, parts)
         big = V.too_big(f"tests/golden/{name}.tsv", text)
