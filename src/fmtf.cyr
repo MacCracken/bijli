@@ -26,6 +26,7 @@
 # ── BjText: a bounded text buffer ───────────────────────────────────────────────────
 # Three words: the buffer's address, its capacity in bytes, and the length written so far. The text is kept
 # NUL-terminated; bytes past capacity − 1 are dropped and counted in the length, so `_bj_tx_overflowed` tells.
+# src/text.cyr's bj_text_* are these four for a consumer (M8 part 2).
 
 # t = an empty text over [buf, buf + cap), cap ≥ 1.
 fn _bj_tx_init(t, buf, cap) {

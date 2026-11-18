@@ -1410,6 +1410,21 @@ fn main() {
     BjPolyline_free(&me_poly);
     if (me_v1 == 7 || me_v2 == 7 || me_v5 == 7 || me_v6 == 7) { println("."); }
 
+    # src/text.cyr (M8 part 2): a consumer's text for `display`, and its overflow.
+    test_group("cyrius_text_api");
+    var txv: BjFieldVector = BjFieldVector_new(1.0, -2.5, 0.0);
+    var txbuf[64];
+    var txt1[24];
+    bj_text_init(&txt1, &txbuf, 64);
+    txv.display(&txt1);
+    assert(text_is(bj_text_ptr(&txt1), "(1, -2.5, 0)") == 1 && bj_text_len(&txt1) == 12 &&
+      bj_text_overflowed(&txt1) == 0, "Display into a consumer's text");
+    var txsb[8];
+    var txt2[24];
+    bj_text_init(&txt2, &txsb, 8);
+    txv.display(&txt2);
+    assert(bj_text_len(&txt2) == 7 && bj_text_overflowed(&txt2) == 1 && text_is(bj_text_ptr(&txt2), "(1, -2.") == 1,
+      "a short buffer keeps 7 bytes and its NUL, and says it overflowed");
     return assert_summary();
 }
 

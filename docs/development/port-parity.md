@@ -7599,3 +7599,31 @@ eigenmode search (`dft_magnitude`'s recurrence and magnitude, `find_eigenmodes`'
   stayed empty, now names M1–M7, so a finished milestone's test without a port or a reason fails `--check`.
 - **Result**: no library code changed; 33 test files, 2,911 assertions, the gate clean (execution coverage 445 of 445).
   Next: part 2, the documentation.
+
+## 140. M8 part 2: the documentation (2026-11-18)
+
+- **`docs/guides/migration-2.0.md`** (new): how a 1.2 caller's Rust maps to Cyrius (names, value-form Results and out
+  pointers, `Some`/`None`, arrays and tuple fields, byte text, owned blocks and `_free`, text for Display and Debug,
+  JSON, logging, closures, `BjComplex` for hisab's `Complex`), with four runnable examples, and every ADR 0002 change a
+  consumer sees, grouped: removed and reshaped, errors, the one time convention, exact and correctly rounded results,
+  validation, text, JSON and logging, the ai client.
+- **`docs/guides/getting-started.md`**, rewritten for a consumer: the `[deps]` entry and stdlib leaves, a whole program
+  (a 2D TM grid with a glass block), the error and text idioms, the ai profile's bundle and its static-data advisory,
+  then building bijli, its layout and how a feature is added.
+- **`docs/architecture/README.md`**, from a stub to the overview CLAUDE.md asks for: the module map by layer, the data
+  flow (values, owned memory, the arithmetic's rules, text), how the corpus checks it, the dependencies and consumers.
+- **`README.md`**: a Cyrius quick start (it was Rust's, "built on hisab"), the module table by bundle, the consumers;
+  **`SECURITY.md`**: the supported versions (2.0.x; the Rust 1.x retired) and the scope, the reading surfaces;
+  **`docs/development/threat-model.md`** (new): the Touchstone and JSON readers, the soorat names and the ai client,
+  what each defends against, and what remains (the JSON readers have no fuzz harness; size is the caller's to bound;
+  an `http` endpoint is plaintext).
+- **A gap the examples found**: every `display` and `debug` method, and the ai client's `register_agent`, writes into a
+  `BjText`, but `_bj_tx_init` and its fellows are private to the bundle, so a consumer had no way to make one.
+  `src/text.cyr` (new, `private`, after `src/fmtf.cyr` in both bundles) gives them: `bj_text_init`, `bj_text_ptr`,
+  `bj_text_len` and `bj_text_overflowed` (the API snapshot 2,194, 4 added); `tests/field.tcyr`'s `cyrius_text_api`
+  enters all four (a Display into a consumer's text, and one that overflows an 8-byte buffer).
+- **The checks**: `scripts/doc_examples.py` builds and runs all 7 Cyrius blocks against the bundles (README 1,
+  getting-started 2, the migration guide 4), warning-free; every relative link in the new and rewritten docs resolves.
+- **Result**: the library gains `src/text.cyr` and no other code changes; the parity is §139's (646,281 ok). 33 test
+  files, 2,913 assertions; execution coverage 449 of 449; the gate clean (the audit's first run caught a line of the
+  new test past 120 characters); `tests/field.tcyr` passes on PE and aarch64. Next: part 3, the release.

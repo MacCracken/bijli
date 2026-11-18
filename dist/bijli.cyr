@@ -10903,6 +10903,7 @@ fn _bj_vx_bm_hgf(v: *f64, m, n, out: *f64): i64 {
 # ── BjText: a bounded text buffer ───────────────────────────────────────────────────
 # Three words: the buffer's address, its capacity in bytes, and the length written so far. The text is kept
 # NUL-terminated; bytes past capacity − 1 are dropped and counted in the length, so `_bj_tx_overflowed` tells.
+# src/text.cyr's bj_text_* are these four for a consumer (M8 part 2).
 
 # t = an empty text over [buf, buf + cap), cap ≥ 1.
 fn _bj_tx_init(t, buf, cap) {
@@ -11670,6 +11671,47 @@ fn _bj_fmt_f32_json(t, x: f64) {
         _bj_tx_i64(t, 0 - ex);
     }
     return 0;
+}
+
+# --- text.cyr ---
+
+# bijli — text: the bounded text that bijli's `display` and `debug` methods and the ai client's `register_agent` write
+# into (M8 part 2), src/fmtf.cyr's BjText for a consumer. Rust's `Display` and `Debug` write to a growing `String`; a
+# bijli text is a fixed buffer the caller owns, so formatting never allocates.
+#
+# A text is three words, 24 bytes (`var t[24];`), over a buffer of `cap` bytes the caller supplies. It is kept
+# NUL-terminated; bytes past cap − 1 are dropped and counted, so bj_text_overflowed tells when the buffer was too small.
+#
+#     var buf[128];
+#     var t[24];
+#     bj_text_init(&t, &buf, 128);
+#     v.display(&t);                 # Rust's `format!("{v}")`: "(1, 2, 3)"
+#     print(bj_text_ptr(&t), bj_text_len(&t));
+
+private
+
+# Makes t an empty text over [buf, buf + cap), cap ≥ 1 (the NUL takes one byte). Returns 0.
+public fn bj_text_init(t, buf, cap): i64 {
+    _bj_tx_init(t, buf, cap);
+    return 0;
+}
+
+# The text's address: a NUL-terminated C string.
+#must_use
+public fn bj_text_ptr(t): i64 {
+    return _bj_tx_ptr(t);
+}
+
+# The number of bytes the text holds (below its capacity).
+#must_use
+public fn bj_text_len(t): i64 {
+    return _bj_tx_len(t);
+}
+
+# 1 when bytes were dropped for want of room, else 0.
+#must_use
+public fn bj_text_overflowed(t): i64 {
+    return _bj_tx_overflowed(t);
 }
 
 # --- crmath_gamma.cyr ---

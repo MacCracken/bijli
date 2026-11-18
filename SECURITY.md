@@ -1,5 +1,12 @@
 # Security Policy
 
+## Supported Versions
+
+| Version | Supported |
+|---|---|
+| 2.0.x (Cyrius) | ✅ |
+| 1.x (the Rust crate) | ❌ — retired: Rust 1.2.0 is the port's specification only ([ADR 0003](docs/adr/0003-retire-the-rust-tree.md)) |
+
 ## Reporting a Vulnerability
 
 If you discover a security vulnerability in bijli, please report it
@@ -23,9 +30,14 @@ responsibly through **GitHub Security Advisories**:
 
 ## Scope
 
-This policy covers the `bijli` crate and its published API. Vulnerabilities
-in dependencies should be reported to the respective upstream projects (and
-flagged here if they affect bijli users).
+This policy covers bijli's library, `dist/bijli.cyr` and `dist/bijli-ai.cyr`, and its public API. The surfaces that
+read data from elsewhere are the Touchstone reader, the JSON readers, the soorat constructors' component names and
+the ai client's HTTP exchange; [`docs/development/threat-model.md`](docs/development/threat-model.md) describes what
+each defends against and what remains. A wrong numerical result is a bug, not a vulnerability, unless it reads or
+writes memory it shouldn't.
+
+Vulnerabilities in the Cyrius toolchain or its stdlib (sakshi, bayan, sandhi and the rest) should be reported to the
+Cyrius project, and flagged here if they affect bijli's users.
 
 ## Disclosure
 

@@ -2072,6 +2072,10 @@ tagged::is_tag/2
 tagged::option_print/2
 tagged::unwrap/2
 tagged::unwrap_or/3
+text::bj_text_init/3
+text::bj_text_len/1
+text::bj_text_overflowed/1
+text::bj_text_ptr/1
 thread::chan_close/1
 thread::chan_new/1
 thread::chan_recv/1

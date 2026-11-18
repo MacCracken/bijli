@@ -6,6 +6,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
 
+### Added
+
+- **text** (M8 part 2): `bj_text_init`, `bj_text_ptr`, `bj_text_len` and `bj_text_overflowed` (`src/text.cyr`), the
+  bounded text that every `display` and `debug` method and the ai client's `register_agent` write into. Its helpers
+  were private to the bundle, so a consumer had no way to make one; the migration guide's examples found it.
+
 ### Changed
 
 - **Cyrius port (2.0.0-dev), M0 Part 1**: bijli is now a Cyrius project. `cyrius port` (6.7.18)
@@ -699,6 +705,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
 - **Cyrius port, M8 part 1 — the Rust-test ledger closed** (`port-parity.md` §139): `tests/integration.tcyr` ports
   `tests/integration.rs`'s 26 cross-module tests (31 assertions, all three targets); the ledger reads 858 Rust tests,
   846 ported, 12 not applicable, 0 pending, and `--check` now holds M1–M7 to it.
+- **Cyrius port, M8 part 2 — the documentation** (`port-parity.md` §140): `docs/guides/migration-2.0.md` (new: Rust's
+  idioms in Cyrius and every ADR 0002 change a 1.2 caller sees), `docs/guides/getting-started.md` for a consumer,
+  `docs/architecture/README.md` (the module map, data flow, dependencies), the README's Cyrius quick start,
+  `SECURITY.md`'s versions and scope, and `docs/development/threat-model.md` (new); every Cyrius block in them runs.
 
 ### Fixed
 
