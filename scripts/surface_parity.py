@@ -37,10 +37,10 @@ INV = json.loads((root / "scripts/rust_1_2_0.json").read_text())
 
 # Ported modules (their milestone done or in progress, item by item).
 MODULES = ["error", "logging", "field", "maxwell", "charge", "material", "wave", "circuit", "relativity",
-           "polarization", "scattering", "beam", "rf", "fdtd", "compute"]
+           "polarization", "scattering", "beam", "rf", "fdtd", "compute", "bridge"]
 # Rust module -> the milestone that ports it (port plan §4.1).
 PENDING_MODULES = {
-    "integration/soorat": "M7", "bridge": "M7", "ai": "M7",
+    "integration/soorat": "M7", "ai": "M7",
 }
 # Modules being ported Part by Part: module -> (the Parts that finish it, the Rust items still to come, by name: a free
 # fn, a method as `Owner::name`, a struct or enum (its fields or variants with it), a serde impl as `impl Trait for X`).

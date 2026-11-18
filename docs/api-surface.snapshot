@@ -689,6 +689,14 @@ boxed::boxed_new/2
 boxed::boxed_payload/1
 boxed::boxed_tag/1
 boxed::tagged_new/2
+bridge::bj_e_field_to_optical_intensity/1
+bridge::bj_e_field_to_piezo_stress/2
+bridge::bj_em_energy_to_heating_rate/3
+bridge::bj_energy_level_to_wavelength_nm/1
+bridge::bj_joule_heating_power_density/2
+bridge::bj_magnetic_flux_to_magnetostrictive_strain/3
+bridge::bj_nuclear_charge_potential/2
+bridge::bj_wavelength_to_refractive_index_bk7/1
 charge::BjPointCharge_electron/1
 charge::BjPointCharge_new/5
 charge::BjPointCharge_proton/1

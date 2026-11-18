@@ -44,6 +44,7 @@ The table's emitters are the retired Rust generator's, kept in git history (`git
 | Module | Milestone | Golden rows | Golden emitter (retired) | Generated Cyrius |
 |---|---|---|---|---|
 | `beam` | M3 (part 1c-1; its JSON, part 1c-2, in `json`; 2a-2, 2a-3, 2b, 2c-2: the resonators', determinant's, round-once and q_out edge grids; 2d-3a to 2d-3c: the chains', the HG amplitude's, the LG intensity's and the HG field's range edges) | 44,135 | `src/m_beam.rs` | — |
+| `bridge` | M7 (part 1a: bridge.rs's eight functions, class A) | 697 | `emit.py`'s `emit_1a` (all of them; no frozen rows) | `src/bridge_data.cyr` (validate.py renders it from Rust 1.2.0's literals and checks it) |
 | `charge` | M1 (parts 3d, 5d-1 to 5d-3) | 12,769 | `src/m_charge.rs` (field.rs's grids) | — |
 | `circuit` | M2 (parts 1c, 2c-1, 2c-5, 2d-3a, 2d-3b) | 69,273 (+ 1 corrected) | `src/m_circuit.rs` | — |
 | `complex` | M1 (+ 5c-2's edge grid) | 31,677 (+ 8 corrected) | `src/m_complex.rs` | — |

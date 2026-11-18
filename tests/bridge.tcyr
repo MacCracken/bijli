@@ -1,0 +1,129 @@
+# bridge.tcyr — src/bridge.cyr (M7 part 1a): the eight cross-crate bridges (ushma, prakash, tanmatra, dravya).
+#
+# Every group not named cyrius_* is 1.2.0:src/bridge.rs's test of that name, ported assertion for assertion (the ledger
+# matches them by name): all 18. tests/golden/bridge.tsv pins every function over its grid against Rust besides.
+
+include "tests/lib.cyr"
+
+# |a − b| < tol.
+fn near(a: f64, b: f64, tol: f64): i64 {
+    var dd: f64 = a - b;
+    var ad: f64 = f64_abs(dd);
+    if (ad < tol) { return 1; }
+    return 0;
+}
+
+# The f64 with bit pattern b.
+fn fb(b): f64 {
+    var x: f64 = 0.0;
+    store64(&x, b);
+    return x;
+}
+
+# Runs bridge.rs's tests, then the Cyrius-only check.
+fn main() {
+    test_group("joule_heating_basic");
+    var p: f64 = bj_joule_heating_power_density(1.0, 0.0000001);
+    assert(near(p, 0.0000001, 0.000000000001) == 1, "1 A/m² in 10⁻⁷ Ω·m: 10⁻⁷ W/m³");
+
+    test_group("heating_rate_basic");
+    var rate: f64 = bj_em_energy_to_heating_rate(1000.0, 1000.0, 4186.0);
+    var want: f64 = 1000.0 / (1000.0 * 4186.0);
+    assert(near(rate, want, 0.0000000001) == 1, "dT/dt = p/(ρ·c_p)");
+
+    test_group("heating_rate_zero_density");
+    var nan: f64 = fb(0x7ff8000000000000);
+    var r0: f64 = bj_em_energy_to_heating_rate(1000.0, 0.0, 4186.0);
+    var r1: f64 = bj_em_energy_to_heating_rate(1000.0, nan, 4186.0);
+    assert(r0 == 0.0 && r1 == 0.0, "ρ·c_p not positive (NaN included): 0.0");
+
+    test_group("joule_heating_chain_copper");
+    var p2: f64 = bj_joule_heating_power_density(1000000.0, 0.0000000168);
+    assert(near(p2, 16800.0, 0.000000001) == 1, "10⁶ A/m² in copper: 1.68·10⁴ W/m³");
+    var rate2: f64 = bj_em_energy_to_heating_rate(p2, 8960.0, 385.0);
+    assert(near(rate2, 0.00487012987012987, 0.000000000000001) == 1, "then 4.87013·10⁻³ K/s");
+
+    test_group("bk7_visible_range");
+    var n: f64 = bj_wavelength_to_refractive_index_bk7(550.0);
+    assert(n > 1.5 && n < 1.55, "BK7 at 550 nm");
+
+    test_group("bk7_dispersion");
+    var nb: f64 = bj_wavelength_to_refractive_index_bk7(450.0);
+    var nr: f64 = bj_wavelength_to_refractive_index_bk7(650.0);
+    assert(nb > nr, "blue has the higher index");
+
+    test_group("bk7_zero_wavelength");
+    var nan2: f64 = fb(0x7ff8000000000000);
+    var z0: f64 = bj_wavelength_to_refractive_index_bk7(0.0);
+    var z1: f64 = bj_wavelength_to_refractive_index_bk7(nan2);
+    assert(z0 == 1.0 && z1 == 1.0, "λ not positive (NaN included): the sentinel 1.0");
+
+    test_group("bk7_d_line");
+    var nd: f64 = bj_wavelength_to_refractive_index_bk7(587.5618);
+    assert(near(nd, 1.5168, 0.00001) == 1, "n_d = 1.5168 at 587.5618 nm");
+
+    test_group("e_field_intensity_roundtrip");
+    var i: f64 = bj_e_field_to_optical_intensity(100.0);
+    assert(i > 0.0 && near(i, 13.28, 0.1) == 1, "I = ε₀cE²/2 ≈ 13.28 W/m² at 100 V/m");
+
+    test_group("hydrogen_lyman_alpha");
+    var nm: f64 = bj_energy_level_to_wavelength_nm(10.2);
+    assert(near(nm, 121.6, 1.0) == 1, "Lyman-α: 10.2 eV ≈ 121.5 nm");
+
+    test_group("energy_zero");
+    var nan3: f64 = fb(0x7ff8000000000000);
+    var e0: f64 = bj_energy_level_to_wavelength_nm(0.0);
+    var e1: f64 = bj_energy_level_to_wavelength_nm(nan3);
+    assert(e0 == 0.0 && e1 == 0.0, "E not positive (NaN included): 0.0");
+
+    test_group("energy_one_ev_is_hc");
+    var hc: f64 = bj_energy_level_to_wavelength_nm(1.0);
+    assert(near(hc, 1239.8419843320025, 0.000000001) == 1, "1 eV: hc = 1239.8419843320025 nm");
+
+    test_group("nuclear_potential_hydrogen");
+    var v: f64 = bj_nuclear_charge_potential(1, 0.0000000000529);
+    assert(near(v, 27.2, 0.5) == 1, "Z = 1 at one Bohr radius ≈ 27.2 V");
+
+    test_group("nuclear_potential_zero_distance");
+    var v0: f64 = bj_nuclear_charge_potential(1, 0.0);
+    assert(v0 == 0.0, "r = 0: 0.0");
+
+    test_group("piezo_stress_basic");
+    var s: f64 = bj_e_field_to_piezo_stress(1000.0, 15.0);
+    assert(near(s, 15000.0, 0.1) == 1, "PZT, e = 15 C/m², E = 1000 V/m: 15000 Pa");
+
+    test_group("magnetostriction_iron");
+    var ls: f64 = -0.000007;
+    var st: f64 = bj_magnetic_flux_to_magnetostrictive_strain(1.0, ls, 2.15);
+    assert(near(st, -0.0000022714981070849106, 0.000000000000000001) == 1, "iron at 1 T: −2.2714981·10⁻⁶");
+
+    test_group("magnetostriction_saturates_beyond_bsat");
+    var ls2: f64 = -0.000007;
+    var at_sat: f64 = 1.5 * ls2;
+    var bs: f64[4];
+    bs[0] = 2.15;
+    bs[1] = 3.0;
+    bs[2] = 10.0;
+    bs[3] = -3.0;
+    for (var k = 0; k < 4; k = k + 1) {
+        var sk: f64 = bj_magnetic_flux_to_magnetostrictive_strain(bs[k], ls2, 2.15);
+        assert(near(sk, at_sat, 0.000000000000000001) == 1, "past B_sat the strain stays (3/2)λ_s");
+    }
+
+    test_group("magnetostriction_zero_saturation");
+    var sz: f64 = bj_magnetic_flux_to_magnetostrictive_strain(1.0, 0.000035, 0.0);
+    assert(sz == 0.0, "B_sat = 0: 0.0");
+
+    test_group("cyrius_bridge_u32");
+    # Z is Rust's u32: the Cyrius-only words outside it take the sentinel 0.0, as a distance that isn't positive.
+    var vn: f64 = bj_nuclear_charge_potential(0 - 1, 1.0);
+    var vb: f64 = bj_nuclear_charge_potential(4294967296, 1.0);
+    var vt: f64 = bj_nuclear_charge_potential(4294967295, 1.0);
+    assert(vn == 0.0 && vb == 0.0 && vt > 0.0, "Z = −1 and 2³² give 0.0; 2³² − 1 is a u32");
+
+    return assert_summary();
+}
+
+var exit_code = main();
+if (exit_code > 0) { exit_code = 1; }
+sys_exit_group(exit_code);

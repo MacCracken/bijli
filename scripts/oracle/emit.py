@@ -12,6 +12,7 @@ Usage, from the repo root:
     python3 -I -B scripts/oracle/emit.py . --check    # exit 1 if a module's file differs from what the parts emit
 """
 import math
+import platform
 import sys
 from pathlib import Path
 
@@ -21,7 +22,8 @@ import validate as V  # noqa: E402  (the reference model; its main runs only as 
 root = Path(sys.argv[1] if len(sys.argv) > 1 else ".").resolve()
 check = "--check" in sys.argv[2:]
 
-# The rows of each module written by the retired Rust generator; never rewritten.
+# The rows of each module written by the retired Rust generator; never rewritten. A module absent here has none: its
+# file is all emitted rows, under the header new_header() writes.
 FROZEN = {"fdtd_2d3d": 1107}
 
 
@@ -690,15 +692,120 @@ def emit_4f(rows, m2, m3, mg):
         frames_gpu(rows, mg, 8, 7, dx, [], [1, 3], advance=lambda k, fr=fr: run2(k, (3, 3), fr, 1.0))
 
 
+# ── M7: bridge.rs (part 1a) ─────────────────────────────────────────────────────────────────────────────────────────
+
+def emit_1a(rows):
+    """M7 part 1a: bridge.rs's eight functions (class A), their outputs validate.py's bridge_eval. Rust's tests' inputs;
+    each argument through ±0, ±2^-1074, ±2^-1022, ±10^±300, ±1, ±DBL_MAX, ±∞ and NaN beside ordinary values; the
+    ranges the functions are documented on (BK7's 300-2500 nm, the Lyman and Balmer lines, the light nuclei); the range
+    edges a later Part reviews (squares and products past DBL_MAX or below 2^-1022 where the result is representable,
+    the Sellmeier poles at √C₁, √C₂ and √C₃ µm); and seeded values over every binade of either sign."""
+    inf, nan = math.inf, math.nan
+    mx, tiny, dmin = sys.float_info.max, 5e-324, 2.2250738585072014e-308
+    sp = (0.0, -0.0, tiny, -tiny, dmin, -dmin, 1e-300, -1e-300, 1.0, -1.0, 1e300, -1e300, mx, -mx, inf, -inf, nan)
+
+    def put(name, *v):
+        fn = "bridge::" + name
+        ins = tuple(i(x) if isinstance(x, int) else f(x) for x in v)
+        rows.emit(fn, "A", ins, V.bridge_eval(fn, list(v)))
+
+    rng = Rng(0x7A_B1)
+
+    def draw(lo=-320.0, hi=308.0):
+        x = rng.log_uniform(lo, hi)
+        return -x if rng.unit() < 0.5 else x
+
+    # ushma: J²·ρ, then p/(ρ·c_p) with its sentinel.
+    put("joule_heating_power_density", 1.0, 1e-7)
+    put("joule_heating_power_density", 1e6, 1.68e-8)
+    for a in sp:
+        put("joule_heating_power_density", a, 1.68e-8)
+        put("joule_heating_power_density", 1e6, a)
+    for j, r in ((1e155, 1e-10), (1e200, 1e-300), (1e-160, 1e100), (1e-200, 1e300), (-1e160, -1e-20)):
+        put("joule_heating_power_density", j, r)
+    for _ in range(40):
+        put("joule_heating_power_density", draw(), draw())
+    p = V.bridge_eval("bridge::joule_heating_power_density", [1e6, 1.68e-8])[0][1]
+    for v in ((1000.0, 1000.0, 4186.0), (p, 8960.0, 385.0), (1000.0, 0.0, 4186.0), (1000.0, nan, 4186.0)):
+        put("em_energy_to_heating_rate", *v)
+    for a in sp:
+        put("em_energy_to_heating_rate", a, 8960.0, 385.0)
+        put("em_energy_to_heating_rate", 1.68e4, a, 385.0)
+        put("em_energy_to_heating_rate", 1.68e4, 8960.0, a)
+    for v in ((1.0, 1e-200, 1e-200), (1e300, 1e200, 1e200), (1e-300, 1e150, 1e160), (1e308, 1e-160, 1e-160)):
+        put("em_energy_to_heating_rate", *v)
+    for _ in range(40):
+        put("em_energy_to_heating_rate", draw(), draw(), draw())
+    # prakash: BK7's Sellmeier fit over its range, beyond it, at its poles; the plane wave's intensity.
+    for nm in range(300, 2501, 50):
+        put("wavelength_to_refractive_index_bk7", float(nm))
+    for nm in (550.0, 450.0, 650.0, 587.5618, 486.1327, 656.2725, 1064.0, 1550.0, 77.0, 141.0, 10200.0, 1e6):
+        put("wavelength_to_refractive_index_bk7", nm)
+    for a in sp:
+        put("wavelength_to_refractive_index_bk7", a)
+    for c in ("BK7_C1", "BK7_C2", "BK7_C3"):
+        pole = math.sqrt(V.bridge_consts()[c]) * 1000.0
+        for k in range(-3, 4):
+            put("wavelength_to_refractive_index_bk7", pole + k * pole * 2.0 ** -50)
+    for nm in (1e-150, 1e-160, 1e150, 1e160, 3e156):
+        put("wavelength_to_refractive_index_bk7", nm)
+    for _ in range(30):
+        put("wavelength_to_refractive_index_bk7", draw(-3.0, 8.0))
+    for a in sp + (100.0, 27.5, 1e154, 1.3e154, 1e-160):
+        put("e_field_to_optical_intensity", a)
+    for _ in range(30):
+        put("e_field_to_optical_intensity", draw())
+    # tanmatra: hc/E, then k·Z·e/r.
+    for a in sp + (10.2, 1.0, 1.89, 13.6, 2.55, 1e-310, 1e-306):
+        put("energy_level_to_wavelength_nm", a)
+    for _ in range(30):
+        put("energy_level_to_wavelength_nm", draw())
+    for z in (0, 1, 2, 26, 79, 92, 118, (1 << 31) - 1, 1 << 31, (1 << 32) - 1):
+        for r in (5.29e-11, 1e-15, 1.0, 0.0, -0.0, -1.0, nan, inf, tiny, dmin, mx):
+            put("nuclear_charge_potential", z, r)
+    for _ in range(20):
+        put("nuclear_charge_potential", rng.int(0, (1 << 32) - 1), draw())
+    # dravya: e·E, then (3/2)·λ_s·(B/B_sat)² clamped.
+    put("e_field_to_piezo_stress", 1000.0, 15.0)
+    for a in sp:
+        put("e_field_to_piezo_stress", a, 15.0)
+        put("e_field_to_piezo_stress", 1000.0, a)
+    for _ in range(30):
+        put("e_field_to_piezo_stress", draw(), draw())
+    for b in (1.0, 2.15, 3.0, 10.0, -3.0, -1.0, 0.5):
+        put("magnetic_flux_to_magnetostrictive_strain", b, -7e-6, 2.15)
+    put("magnetic_flux_to_magnetostrictive_strain", 1.0, 35e-6, 0.0)
+    for a in sp:
+        put("magnetic_flux_to_magnetostrictive_strain", a, -7e-6, 2.15)
+        put("magnetic_flux_to_magnetostrictive_strain", 1.0, a, 2.15)
+        put("magnetic_flux_to_magnetostrictive_strain", 1.0, -7e-6, a)
+    for v in ((1e-160, -7e-6, 1e-150), (1e-300, 1e-10, 1e300), (1e300, -7e-6, 1e-300), (1.0, 1e300, 1.0)):
+        put("magnetic_flux_to_magnetostrictive_strain", *v)
+    for _ in range(30):
+        sat = abs(draw(-10.0, 10.0))
+        put("magnetic_flux_to_magnetostrictive_strain", sat * (rng.unit() * 6.0 - 3.0), draw(-12.0, -2.0), sat)
+
+
 # ── modules ─────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+def new_header(name):
+    """The header of a module with no frozen rows (M7 on): the platform line validate.py's check_platform reads."""
+    return [
+        f"# bijli golden corpus, format 1: {name}",
+        f"# oracle: bijli 1.2.0 via validate.py; libm: glibc {V.glibc_version()} {platform.machine()}. Written by "
+        "scripts/oracle/emit.py; do not edit.",
+        "# columns: fn<TAB>class<TAB>inputs<TAB>outputs<TAB>note (tokens: scripts/oracle/README.md)",
+        "# rows: 0",
+    ]
+
 
 def module(name, parts):
     """The module file's text: its header (the row count updated), its frozen rows, then the parts' rows."""
     path = root / "tests/golden" / f"{name}.tsv"
-    lines = path.read_text().split("\n")
+    lines = path.read_text().split("\n") if path.exists() else new_header(name)
     header = [ln for ln in lines if ln.startswith("#")]
     body = [ln for ln in lines if ln and not ln.startswith("#")]
-    frozen = body[:FROZEN[name]]
+    frozen = body[:FROZEN.get(name, 0)]
     keys = [(ln.split("\t")[0], ln.split("\t")[2]) for ln in frozen]
     rows = Rows(keys)
     for part in parts:
@@ -718,7 +825,7 @@ def main() -> int:
              lambda r: emit_4a(r, model2, model3, model_gpu), lambda r: emit_4b(r, model2, model3),
              lambda r: emit_4c(r, model2, model_gpu), lambda r: emit_4d(r, model3),
              lambda r: emit_4e(r, model2, model3), lambda r: emit_4f(r, model2, model3, model_gpu)]
-    for name, parts in (("fdtd_2d3d", parts),):
+    for name, parts in (("fdtd_2d3d", parts), ("bridge", [emit_1a])):
         path, text, n = module(name, parts)
         big = V.too_big(f"tests/golden/{name}.tsv", text)
         if big:
@@ -730,10 +837,10 @@ def main() -> int:
                 print(f"BAD  {name}.tsv differs from the emitted rows (rewrite with scripts/oracle/emit.py .)")
                 problems += 1
             else:
-                print(f"ok   {name}.tsv: {FROZEN[name]} frozen rows, {n} emitted")
+                print(f"ok   {name}.tsv: {FROZEN.get(name, 0)} frozen rows, {n} emitted")
         else:
             path.write_text(text)
-            print(f"wrote tests/golden/{name}.tsv ({FROZEN[name]} frozen rows, {n} emitted)")
+            print(f"wrote tests/golden/{name}.tsv ({FROZEN.get(name, 0)} frozen rows, {n} emitted)")
     return 1 if problems else 0
 
 

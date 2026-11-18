@@ -44,6 +44,7 @@ sim.run(500, Some((100, 100)), 3e9, 1.0);
 | `scattering` | Yes | Mie and Rayleigh scattering |
 | `beam` | Yes | Gaussian beams, ABCD matrices, resonator stability, HG/LG modes |
 | `rf` | Yes | Transmission lines, S-parameters, Smith chart, Touchstone I/O, arrays |
+| `bridge` | Yes | Cross-crate bridges: primitive values to and from ushma, prakash, tanmatra and dravya |
 | `compute` | No | Compute backend trait + CPU reference backend (wgpu backend is a scaffold) |
 | `ai` | No | Daimon/hoosh AI integration |
 | `logging` | No | Structured logging via `BIJLI_LOG` |
