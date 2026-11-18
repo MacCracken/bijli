@@ -314,7 +314,7 @@
 | `Fdtd2d::add_source` | fn | `BjFdtd2d::add_source` |
 | `Fdtd2d::try_enable_cpml` | fn | `BjFdtd2d::try_enable_cpml` |
 | `Fdtd2d::try_enable_cpml_with` | fn | `BjFdtd2d::try_enable_cpml_with` |
-| `Fdtd2d::enable_cpml` | fn | `BjFdtd2d::enable_cpml` |
+| `Fdtd2d::enable_cpml` | fn | its warn-and-ignore form is not carried (ADR 0002 row 3, 2.0.1): try_enable_cpml |
 | `Fdtd2d::disable_cpml` | fn | `BjFdtd2d::disable_cpml` |
 | `Fdtd2d::cpml` | fn | `BjFdtd2d::cpml` |
 | `Fdtd2d::step_once` | fn | `BjFdtd2d::step_once` |

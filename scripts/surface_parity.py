@@ -90,6 +90,7 @@ EXCEPTIONS = {
     "rf::input_impedance_lossless": "deprecated in 1.2.0, not carried (ADR 0002 row 1): "
                                     "input_impedance_lossless_complex",
     "rf::write_touchstone": "deprecated in 1.2.0, not carried (ADR 0002 row 1): try_write_touchstone",
+    "fdtd::Fdtd2d::enable_cpml": "its warn-and-ignore form is not carried (ADR 0002 row 3, 2.0.1): try_enable_cpml",
     "ai::impl Debug for DaimonConfig": "the method debug(t), into a BjText, the key redacted (src/ai.cyr)",
     "polarization::impl ComplexExt for Complex": "BjComplex's own methods norm_sq, norm and arg (src/complex.cyr): "
                                                  "hisab 1.4 made them inherent, and the trait only delegates",

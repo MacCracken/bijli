@@ -1205,13 +1205,14 @@ public fn BjMuellerMatrix_from_json(buf, len, out: *BjMuellerMatrix): Result {
     return Ok(0);
 }
 
-# Reads a `MieResult` document from [buf, buf + len) into *out: Ok(0), or the error recorded with out untouched, as
+# Reads a `MieResult` document from [buf, buf + len) into *out: Ok(0), or the error recorded with out empty, errors as
 # BjComplex_from_json (and any coefficients read so far given back). `a` and `b` are arrays of any length, each
 # element a Complex in either of serde's forms, so out's lengths may differ, as Rust's public fields may. out gets new
 # coefficient blocks and is never read: free a previous result first (BjMieResult_free). Mirrors
 # `serde_json::from_str::<MieResult>`.
 #must_use
 public fn BjMieResult_from_json(buf, len, out: *BjMieResult): Result {
+    memset(out, 0, sizeof(BjMieResult));
     var w: i64[8];
     w[4] = 0;
     w[5] = 0;
@@ -1436,11 +1437,12 @@ fn _bj_jr_ts_data(v, w): i64 {
 }
 
 # Reads an `SMatrix` document from [buf, buf + len) into a new matrix in *out: Ok(0), or Err with the reason recorded
-# and out untouched (and never read), as BjComplex_from_json. Its shape is fixed (ADR 0002 row 36): `s` must be
+# and out empty (never read), errors as BjComplex_from_json. Its shape is fixed (ADR 0002 row 36): `s` must be
 # ports rows of ports entries and `z0` ports long, where serde reads any lengths (and a port count past 2^63 − 1, which
 # no matrix holds, is refused). Give the matrix back with BjSMatrix_free. Mirrors `serde_json::from_str::<SMatrix>`.
 #must_use
 public fn BjSMatrix_from_json(buf, len, out: *BjSMatrix): Result {
+    memset(out, 0, sizeof(BjSMatrix));
     var m: BjSMatrix;
     var code = _bj_jr_read(buf, len, &_bj_jr_smatrix, &m);
     if (code != 0) { return Err(code); }
@@ -1463,11 +1465,12 @@ public fn BjTouchstoneFormat_from_json(buf, len, out: *i64): Result {
 }
 
 # Reads a `TouchstoneData` document from [buf, buf + len) into new data in *out: Ok(0), or Err with the reason
-# recorded and out untouched (and never read), as BjComplex_from_json. Its shape is fixed (ADR 0002 row 36): as many
+# recorded and out empty (never read), errors as BjComplex_from_json. Its shape is fixed (ADR 0002 row 36): as many
 # matrices as frequencies, each a ports-port SMatrix of the data's ports, where serde reads any. Give the data back
 # with BjTouchstoneData_free. Mirrors `serde_json::from_str::<TouchstoneData>`.
 #must_use
 public fn BjTouchstoneData_from_json(buf, len, out: *BjTouchstoneData): Result {
+    memset(out, 0, sizeof(BjTouchstoneData));
     var d: BjTouchstoneData;
     var code = _bj_jr_read(buf, len, &_bj_jr_ts_data, &d);
     if (code != 0) { return Err(code); }
@@ -1789,10 +1792,11 @@ public fn BjDebyeMaterial_from_json(buf, len, out: *BjDebyeMaterial): Result {
 }
 
 # Reads a `NonUniformGrid` document from [buf, buf + len) into a new grid in *out: Ok(0), or the error recorded with
-# out untouched (and never read), as BjComplex_from_json; each axis an array of any length, its widths as written (a
+# out empty (never read), errors as BjComplex_from_json; each axis an array of any length, its widths as written (a
 # grid validate refuses too). Give it back with BjNonUniformGrid_free. Mirrors `serde_json::from_str::<NonUniformGrid>`.
 #must_use
 public fn BjNonUniformGrid_from_json(buf, len, out: *BjNonUniformGrid): Result {
+    memset(out, 0, sizeof(BjNonUniformGrid));
     var g: BjNonUniformGrid;
     g.block = 0;
     g.nx = 0;
@@ -1808,10 +1812,11 @@ public fn BjNonUniformGrid_from_json(buf, len, out: *BjNonUniformGrid): Result {
 }
 
 # Reads an `EigenmodeResult` document from [buf, buf + len) into a new result in *out: Ok(0), or the error recorded
-# with out untouched (and never read), as BjComplex_from_json. Its three arrays must be equally long (ADR 0002 row 36),
+# with out empty (never read), errors as BjComplex_from_json. Its three arrays must be equally long (ADR 0002 row 36),
 # where serde reads any. Give it back with BjEigenmodeResult_free. Mirrors `serde_json::from_str::<EigenmodeResult>`.
 #must_use
 public fn BjEigenmodeResult_from_json(buf, len, out: *BjEigenmodeResult): Result {
+    memset(out, 0, sizeof(BjEigenmodeResult));
     var r: BjEigenmodeResult;
     r.frequencies = 0;
     r.count = 0;
@@ -2665,12 +2670,13 @@ fn _bj_jr_zero(w: *i64, n) {
 }
 
 # Reads a `FieldSlice2D` document from [buf, buf + len) into a new slice in *out: Ok(0), or the error recorded with
-# out untouched (and never read), as BjComplex_from_json. The fields are read as written, as serde's derive reads
+# out empty (never read), errors as BjComplex_from_json. The fields are read as written, as serde's derive reads
 # Rust's public fields: any number of values (a count other than nx·ny too), the dimensions and step integers from 0
 # to 2^63 − 1 (ADR 0002 row 36: past it bayan's tree keeps no exact integer, where serde reads up to u64::MAX), the
 # component any JSON string. Give it back with BjFieldSlice2D_free. Mirrors `serde_json::from_str::<FieldSlice2D>`.
 #must_use
 public fn BjFieldSlice2D_from_json(buf, len, out: *BjFieldSlice2D): Result {
+    memset(out, 0, sizeof(BjFieldSlice2D));
     var w: i64[12];
     _bj_jr_zero(&w, 12);
     var code = _bj_jr_read(buf, len, &_bj_jr_slice2, &w);
@@ -2693,10 +2699,11 @@ public fn BjFieldSlice2D_from_json(buf, len, out: *BjFieldSlice2D): Result {
 }
 
 # Reads a `FieldSlice3D` document from [buf, buf + len) into a new volume in *out: Ok(0), or the error recorded with
-# out untouched (and never read), as BjFieldSlice2D_from_json. Give it back with BjFieldSlice3D_free. Mirrors
+# out empty (never read), errors as BjFieldSlice2D_from_json. Give it back with BjFieldSlice3D_free. Mirrors
 # `serde_json::from_str::<FieldSlice3D>`.
 #must_use
 public fn BjFieldSlice3D_from_json(buf, len, out: *BjFieldSlice3D): Result {
+    memset(out, 0, sizeof(BjFieldSlice3D));
     var w: i64[12];
     _bj_jr_zero(&w, 12);
     var code = _bj_jr_read(buf, len, &_bj_jr_slice3, &w);
@@ -2754,10 +2761,11 @@ fn _bj_jr_lines(v, w: *i64): i64 {
 }
 
 # Reads a `FieldLine` document from [buf, buf + len) into a new line in *out: Ok(0), or the error recorded with out
-# untouched (and never read), as BjComplex_from_json; any numbers of points and magnitudes. Give it back with
+# empty (and never read), as BjComplex_from_json; any numbers of points and magnitudes. Give it back with
 # BjFieldLine_free. Mirrors `serde_json::from_str::<FieldLine>`.
 #must_use
 public fn BjFieldLine_from_json(buf, len, out: *BjFieldLine): Result {
+    memset(out, 0, sizeof(BjFieldLine));
     var w: i64[4];
     _bj_jr_zero(&w, 4);
     var code = _bj_jr_read(buf, len, &_bj_jr_line, &w);
@@ -2773,10 +2781,11 @@ public fn BjFieldLine_from_json(buf, len, out: *BjFieldLine): Result {
 }
 
 # Reads a `FieldLineVisualization` document from [buf, buf + len) into a new visualization in *out: Ok(0), or the
-# error recorded with out untouched (and never read), as BjComplex_from_json; each line as BjFieldLine_from_json reads
+# error recorded with out empty (never read), errors as BjComplex_from_json; each line as BjFieldLine_from_json reads
 # it. Give it back with BjFieldLineVisualization_free. Mirrors `serde_json::from_str::<FieldLineVisualization>`.
 #must_use
 public fn BjFieldLineVisualization_from_json(buf, len, out: *BjFieldLineVisualization): Result {
+    memset(out, 0, sizeof(BjFieldLineVisualization));
     var lv: BjFieldLineVisualization;
     lv.lines = 0;
     lv.lines_len = 0;
@@ -2873,10 +2882,11 @@ public fn BjChargePoint_from_json(buf, len, out: *BjChargePoint): Result {
 }
 
 # Reads a `ChargeVisualization` document from [buf, buf + len) into a new visualization in *out: Ok(0), or the error
-# recorded with out untouched (and never read), as BjComplex_from_json; each point as BjChargePoint_from_json reads
+# recorded with out empty (never read), errors as BjComplex_from_json; each point as BjChargePoint_from_json reads
 # it. Give it back with BjChargeVisualization_free. Mirrors `serde_json::from_str::<ChargeVisualization>`.
 #must_use
 public fn BjChargeVisualization_from_json(buf, len, out: *BjChargeVisualization): Result {
+    memset(out, 0, sizeof(BjChargeVisualization));
     var cx: i64[5];
     _bj_jr_zero(&cx, 5);
     cx[0] = buf;
@@ -2910,11 +2920,12 @@ fn _bj_jr_pattern(v, w): i64 {
 }
 
 # Reads a `RadiationPattern` document from [buf, buf + len) into a new pattern in *out: Ok(0), or the error recorded
-# with out untouched (and never read), as BjComplex_from_json. The fields are read as written: angles and pattern of
+# with out empty (never read), errors as BjComplex_from_json. The fields are read as written: angles and pattern of
 # any lengths, a max_gain that isn't their maximum too. Give it back with BjRadiationPattern_free. Mirrors
 # `serde_json::from_str::<RadiationPattern>`.
 #must_use
 public fn BjRadiationPattern_from_json(buf, len, out: *BjRadiationPattern): Result {
+    memset(out, 0, sizeof(BjRadiationPattern));
     var w: i64[5];
     _bj_jr_zero(&w, 5);
     var code = _bj_jr_read(buf, len, &_bj_jr_pattern, &w);
@@ -2959,12 +2970,13 @@ fn _bj_jr_vectors(v, w): i64 {
 }
 
 # Reads a `VectorFieldSample` document from [buf, buf + len) into a new sample in *out: Ok(0), or the error recorded
-# with out untouched (and never read), as BjComplex_from_json. The fields are read as written (a vector count other
+# with out empty (never read), errors as BjComplex_from_json. The fields are read as written (a vector count other
 # than nx·ny·nz, a spacing or origin try_from_components refuses, a max_magnitude that isn't the largest too), the
 # dimensions from 0 to 2^63 − 1 (ADR 0002 row 36). Give it back with BjVectorFieldSample_free. Mirrors
 # `serde_json::from_str::<VectorFieldSample>`.
 #must_use
 public fn BjVectorFieldSample_from_json(buf, len, out: *BjVectorFieldSample): Result {
+    memset(out, 0, sizeof(BjVectorFieldSample));
     var w: i64[10];
     _bj_jr_zero(&w, 10);
     var code = _bj_jr_read(buf, len, &_bj_jr_vectors, &w);

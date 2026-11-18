@@ -785,7 +785,7 @@ fn _bj_sc_drop(d, a, b) {
 }
 
 # Mie scattering by a homogeneous sphere of size parameter x and relative index m, into *out: Ok(0), or Err with
-# the reason recorded and out untouched. Q_sca = (2/x²) Σ (2n+1)(|aₙ|² + |bₙ|²), Q_ext = (2/x²) Σ (2n+1) Re(aₙ + bₙ),
+# the reason recorded and out empty. Q_sca = (2/x²) Σ (2n+1)(|aₙ|² + |bₙ|²), Q_ext = (2/x²) Σ (2n+1) Re(aₙ + bₙ),
 # Q_abs = Q_ext − Q_sca, g = 2 Σ[..]/Σ(2n+1)(|aₙ|² + |bₙ|²) (0 when nothing scatters). out gets n_max new coefficients
 # of each kind; bj_mie never reads it, so free a previous result first (BjMieResult_free).
 # - x finite, 0 < x ≤ BJ_MIE_MAX_SIZE_PARAMETER; m finite, nonzero, Im(m) ≤ 0 (e^{+jωt}: absorbing m = n − jκ),
@@ -795,6 +795,7 @@ fn _bj_sc_drop(d, a, b) {
 # Mirrors `scattering::mie`.
 #must_use
 public fn bj_mie(x: f64, m: BjComplex, out: *BjMieResult): Result {
+    memset(out, 0, sizeof(BjMieResult));
     var mre: f64 = m.re;
     var mim: f64 = m.im;
     var h: f64 = 0.0;

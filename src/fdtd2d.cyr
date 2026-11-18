@@ -484,7 +484,7 @@ fn _bj_fd2_energy_ux(sim: *BjFdtd2d): f64 {
     return en;
 }
 
-# A vacuum grid of nx × ny nodes at spacing dx in `mode` into *out, the walls reflecting: Ok(0), or with out untouched
+# A vacuum grid of nx × ny nodes at spacing dx in `mode` into *out, the walls reflecting: Ok(0), or with out empty
 # Err(InsufficientResolution) when nx < 3 or ny < 3 (cells min(nx, ny), domain min(nx, ny)·dx), Err(InvalidParameter)
 # "dx must be finite and positive, got {dx}", "grid [{nx}, {ny}] is too large" (nx·ny past 2^64) or "cannot allocate
 # {n} grid values", in Rust's order. A mode word that is no BjMode2d (Rust's enum has no other) is refused first,
@@ -492,6 +492,7 @@ fn _bj_fd2_energy_ux(sim: *BjFdtd2d): f64 {
 # BjFdtd2d_free. dt and the coefficients are rounded once (ADR 0002 row 13, M6 part 4a). Mirrors `Fdtd2d::new`.
 #must_use
 public fn BjFdtd2d_new(nx, ny, dx: f64, mode, out: *BjFdtd2d): Result {
+    memset(out, 0, sizeof(BjFdtd2d));
     if (mode != BJ_MODE2D_TM && mode != BJ_MODE2D_TE) {
         var tm = _bj_err_reason(BJ_ERR_INVALID_PARAMETER);
         _bj_tx_cstr(tm, "unknown 2D mode ");
@@ -770,7 +771,8 @@ impl BjFdtd2d {
 
     # Replaces the reflecting walls by a CPML of the classic grading (BjCpmlParams_new) `thickness` cells a side;
     # calling it again replaces the layer (Ψ restarts at zero). Ok(0), or with the boundaries unchanged
-    # Err(InvalidParameter) as try_enable_cpml_with. Mirrors `Fdtd2d::try_enable_cpml`.
+    # Err(InvalidParameter) as try_enable_cpml_with. Mirrors `Fdtd2d::try_enable_cpml`, and stands for
+    # `Fdtd2d::enable_cpml` too: Rust's warn-and-ignore form is not carried (ADR 0002 row 3, 2.0.1).
     public fn try_enable_cpml(self, thickness): Result {
         var p: BjCpmlParams = BjCpmlParams_new(thickness);
         return self.try_enable_cpml_with(&p);
@@ -848,23 +850,6 @@ impl BjFdtd2d {
         return Ok(0);
     }
 
-    # try_enable_cpml without the error: on invalid input (thickness 0, or 2·thickness + 3 > min(nx, ny)) logs a
-    # warning and leaves the boundaries as they are. Mirrors `Fdtd2d::enable_cpml`.
-    public fn enable_cpml(self, thickness) {
-        var t, v = self.try_enable_cpml(thickness);
-        if (is_err_result(t) == 1 && _bj_log_on(2) == 1) {
-            var lb[512];
-            var lt[24];
-            _bj_tx_init(&lt, &lb, 512);
-            _bj_tx_cstr(&lt, "enable_cpml ignored; boundaries unchanged thickness=");
-            _bj_tx_u64(&lt, thickness);
-            _bj_tx_cstr(&lt, " error=");
-            _bj_tx_cstr(&lt, bj_last_error_display());
-            _bj_log_text(2, &lt);
-        }
-        return 0;
-    }
-
     # Removes the CPML (giving its storage back) and returns to the reflecting PEC (TM) or PMC (TE) walls. Mirrors
     # `Fdtd2d::disable_cpml`.
     public fn disable_cpml(self) {
@@ -877,10 +862,32 @@ impl BjFdtd2d {
         return 0;
     }
 
-    # The active CPML layer's address (a *BjCpml), or 0 (Rust's None). Mirrors `Fdtd2d::cpml`.
+    # The active CPML layer's address (a *BjCpml), or 0 (Rust's None). The layer belongs to the grid: read it, but
+    # don't free, attach or detach it (a step skips a layer no longer attached to the grid, as Rust's did, and
+    # BjFdtd2d_free gives it back). Mirrors `Fdtd2d::cpml`.
     #must_use
     public fn cpml(self): i64 {
         return self.cpml;
+    }
+
+    # 1 when the grid's layer, if it has one, is attached to it: Rust's check_layout without its geometry half (the
+    # shapes are fixed, ADR 0002 row 2); else logs Rust's error with `what` ("Fdtd2d step skipped") and returns 0.
+    fn layout_ok(self, what): i64 {
+        if (self.cpml == 0 || _bj_cpml_is_attached_to(self.cpml, self.nx, self.ny) == 1) { return 1; }
+        if (_bj_log_on(1) == 1) {
+            var lb[256];
+            var lt[24];
+            _bj_tx_init(&lt, &lb, 256);
+            _bj_tx_cstr(&lt, what);
+            _bj_tx_cstr(&lt, " error=invalid parameter: CPML is not attached to the current ");
+            _bj_tx_u64(&lt, self.nx);
+            _bj_tx_cstr(&lt, "×");
+            _bj_tx_u64(&lt, self.ny);
+            _bj_tx_cstr(&lt, " grid step=");
+            _bj_tx_u64(&lt, self.step);
+            _bj_log_text(1, &lt);
+        }
+        return 0;
     }
 
     # The TM update, E_z, H_x, H_y, in Rust's order: H_x −= C_h·(E_z[y + 1] − E_z[y]) on rows 0..ny − 1, H_y +=
@@ -958,6 +965,7 @@ impl BjFdtd2d {
     # Advances the simulation one time step: the mode's update, the outermost ring always the PEC (TM) or PMC (TE)
     # wall. Mirrors `Fdtd2d::step_once`.
     public fn step_once(self) {
+        if (self.layout_ok("Fdtd2d step skipped") == 0) { return 0; }
         if (self.mode == BJ_MODE2D_TE) { self.step_te(); }
         else { self.step_tm(); }
         self.step = self.step + 1;
@@ -998,6 +1006,7 @@ impl BjFdtd2d {
             }
             _bj_log_text(4, &lt);
         }
+        if (self.layout_ok("Fdtd2d run aborted") == 0) { return 0; }
         var w2pi: f64 = 2.0 * _BJ_FD2_PI;
         for (var k = 0; _bj_fd2_uge(k, steps) == 0; k = k + 1) {
             if (sx != BJ_FDTD2D_NO_SOURCE) {

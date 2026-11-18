@@ -8,6 +8,19 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
 The 2.0.1 audit and its repairs (`docs/development/port-parity.md` §142, findings H1–H34).
 
+### Breaking
+- **fdtd** — `BjCpml_new` returns a `Result`: invalid input (a zero thickness, a dx or dt not finite and positive) is
+  `BjCpml_with_params`'s error, where 2.0.0 logged a warning and built an inert layer. `Fdtd2d::enable_cpml` is gone;
+  `try_enable_cpml` is its form, and its error leaves the walls as the warning did. ADR 0002 row 3 had decided both
+  for 2.0.0, but only the TF/SF source followed it (H14).
+
+### Changed
+- **every owning constructor and reader** — on an error, `out` is left empty (every word 0), so its `_free` does
+  nothing; 2.0.0 left it untouched, and a `_free` after a failure (a `defer`) freed whatever the stack held. This
+  covers the FDTD grids, the CPML, the TF/SF source, the non-uniform grid, the CW accumulator, the eigenmodes, NF2FF,
+  Mie, the S-matrix, Touchstone, the soorat structs, `GpuFdtd2d` and the ai configs, and the JSON readers of each
+  (ADR 0002 row 48, H12). `cascade` leaves an `out` that is one of its inputs as it was.
+
 ### Fixed
 - **field** — `bj_trace_field_line` copies `start` before its polyline can grow. A line continued from its own last
   point (`start = line.at(k)`) used to read the block it had just freed, unmapped once past 4 KiB (H1). The field
@@ -29,6 +42,11 @@ The 2.0.1 audit and its repairs (`docs/development/port-parity.md` §142, findin
   (it leaked) (H9).
 - **compute** — `BjGpuFdtd2d_read_ez`/`hx`/`hy` after `BjGpuFdtd2d_free` read as an empty grid. They used to hand
   buffer 0 to the backend, which loaded from it (H6).
+- **fdtd** — `step_once` and `run` on the 2D and 3D grids check their CPML again, as Rust's did: a layer a consumer
+  reattached or freed through `cpml()` made the next step index past its Ψ strips or read its freed profiles. Such a
+  step is now skipped with Rust's error log (ADR 0002 row 2, amended; H13).
+- **compute** — `BjGpuFdtd2d_new` wrote `out.backend` before its buffers could fail. An error now leaves `out`
+  empty, with the buffers made so far given back (H15).
 
 ## [2.0.0] — 2026-11-18
 

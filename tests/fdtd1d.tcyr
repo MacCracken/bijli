@@ -318,7 +318,7 @@ fn main() {
     var se: BjFdtd1d;
     se.num_cells = 77;
     var te1, ve1 = BjFdtd1d_new(1, 0.001, &se);
-    assert(ve1 == BJ_ERR_INSUFFICIENT_RESOLUTION && se.num_cells == 77, "1 cell: out untouched");
+    assert(ve1 == BJ_ERR_INSUFFICIENT_RESOLUTION && se.num_cells == 0, "1 cell: out empty (2.0.1 H12)");
     assert(bj_last_error_cells() == 1, "the record's cells");
     assert(text_is(bj_last_error_display(), "grid resolution too coarse: 1 cells for domain size 0.001") == 1,
       "its Display: 1·dx");
@@ -344,7 +344,7 @@ fn main() {
     var sa: BjFdtd1d;
     sa.num_cells = 5;
     var ta1, va1 = BjFdtd1d_new(0 - 1, 0.001, &sa);
-    assert(va1 == BJ_ERR_ALLOCATION && sa.num_cells == 5, "usize::MAX cells: Allocation, out untouched");
+    assert(va1 == BJ_ERR_ALLOCATION && sa.num_cells == 0, "usize::MAX cells: Allocation, out empty (2.0.1 H12)");
     var da1 = text_is(bj_last_error_display(), "allocation failed: a 1D FDTD grid of 18446744073709551615 cells");
     assert(da1 == 1, "its Display");
     var ta2, va2 = BjFdtd1d_new(1 << 59, 0.001, &sa);

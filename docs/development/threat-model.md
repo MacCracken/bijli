@@ -17,8 +17,8 @@ against, and what remains (M8 part 2).
 
 - **Malformed text.** Every byte input is an address and a length, never NUL-terminated, and is checked to be UTF-8
   (no overlong forms, surrogates or values past U+10FFFF) before any of it is read as text (ADR 0002 rows 38 and 44).
-  A refusal returns an error code with the reason and byte offset in the last-error record, and leaves `out`
-  untouched.
+  A refusal returns an error code with the reason and byte offset in the last-error record, and leaves `out` empty
+  (2.0.1: every owning word 0, so its `_free` does nothing), or untouched when `out` owns nothing.
 - **Unbounded documents.** The Touchstone reader takes 1 to 256 ports (Rust's `MAX_TOUCHSTONE_PORTS`) and sizes its
   one block from the records it read. A JSON document is parsed once into a tree in a decode region (freelist chunks
   on the reader's stack), given back before the reader returns; nesting past 128 levels, a key repeated in any
@@ -36,7 +36,7 @@ against, and what remains (M8 part 2).
   `Some("<redacted>")`. The JSON writer writes it in clear, as Rust's `Serialize` did: a written config is a secret.
 - **Memory.** No time step allocates; a grid, matrix or slice owns its blocks and its `_free` gives them back once (a
   second call does nothing). The Touchstone reader is fuzzed (`tests/bijli.fcyr`: byte-level mutants of every format,
-  1 to 4 ports, checked to return, to leave `out` untouched on a refusal, and not to grow the heap on a replay).
+  1 to 4 ports, checked to return, to leave `out` empty on a refusal, and not to grow the heap on a replay).
 
 ## What remains
 

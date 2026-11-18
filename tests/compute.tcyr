@@ -77,6 +77,58 @@ impl BjComputeBackend for RoundTripBackend {
     }
 }
 
+# Buffers made by FailBackend so far, and freed.
+var _fb_made = 0;
+var _fb_freed = 0;
+
+# `FailBackend`: BjCpuBackend, except that its third create_buffer fails with Allocation (2.0.1 bite 1b, H15).
+struct FailBackend { }
+
+impl BjComputeBackend for FailBackend {
+    # BjCpuBackend's create_buffer, refused on the third call.
+    fn create_buffer(self, data: *f64, n): Result {
+        if (_fb_made == 2) { return Err(BJ_ERR_ALLOCATION); }
+        _fb_made = _fb_made + 1;
+        var c: BjCpuBackend;
+        return c.create_buffer(data, n);
+    }
+    # BjCpuBackend's read_buffer.
+    fn read_buffer(self, buffer, dst: *f64, n): Result {
+        var c: BjCpuBackend;
+        return c.read_buffer(buffer, dst, n);
+    }
+    # BjCpuBackend's write_buffer.
+    fn write_buffer(self, buffer, src: *f64, n): Result {
+        var c: BjCpuBackend;
+        return c.write_buffer(buffer, src, n);
+    }
+    # BjCpuBackend's fdtd_update_h.
+    fn fdtd_update_h(self, h, e, coeff, nx, ny, axis): Result {
+        var c: BjCpuBackend;
+        return c.fdtd_update_h(h, e, coeff, nx, ny, axis);
+    }
+    # BjCpuBackend's fdtd_update_e.
+    fn fdtd_update_e(self, e, hx, hy, coeff, nx, ny): Result {
+        var c: BjCpuBackend;
+        return c.fdtd_update_e(e, hx, hy, coeff, nx, ny);
+    }
+    # BjCpuBackend's apply_zero_boundary.
+    fn apply_zero_boundary(self, field, nx, ny): Result {
+        var c: BjCpuBackend;
+        return c.apply_zero_boundary(field, nx, ny);
+    }
+    # Ok(0): nothing is queued.
+    fn synchronize(self): Result {
+        return Ok(0);
+    }
+    # BjCpuBackend's free_buffer, counted.
+    fn free_buffer(self, buffer): i64 {
+        _fb_freed = _fb_freed + 1;
+        var c: BjCpuBackend;
+        return c.free_buffer(buffer);
+    }
+}
+
 # Rust's 18 compute.rs tests, then the Cyrius-only groups.
 fn main() {
     alloc_init();
@@ -497,6 +549,17 @@ fn main() {
       is_err_result(r2) == 1 && is_err_result(r3) == 1, "reads after free: Ok for 0, else InvalidParameter (H6)");
     assert(text_is(r1e, "invalid parameter: host slice length 16 does not match buffer length 0") == 1,
       "the CPU backend's text for an empty buffer (H6)");
+
+    test_group("cyrius_audit_201_failed_buffer (2.0.1 bite 1b, H15)");
+    # A backend whose third buffer fails: the two made are given back and out is empty, so its free does nothing.
+    var fb: FailBackend;
+    var g24: BjGpuFdtd2d<FailBackend>;
+    memset(&g24, 171, sizeof(BjGpuFdtd2d<FailBackend>));
+    var t24, v24 = BjGpuFdtd2d_new(8, 8, DX, fb, &g24);
+    assert(is_err_result(t24) == 1 && v24 == BJ_ERR_ALLOCATION && _fb_made == 2 && _fb_freed == 2 && g24.fz == 0 &&
+      g24.nx == 0, "the buffers made are given back, out empty");
+    BjGpuFdtd2d_free(&g24);
+    assert(_fb_freed == 2, "and its free gives nothing back twice");
 
     return assert_summary();
 }

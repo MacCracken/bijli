@@ -3,7 +3,7 @@
 # Seed files (each format, unit and layout, a 2-port with its noise block, comments and Unicode White_Space) are mutated
 # byte by byte with a fixed xorshift stream (replace, insert, delete; bytes chosen to hit the grammar: digits, signs,
 # '.', 'e', '!', '#', '[', newlines, spaces, and bytes that break UTF-8), and each mutant is parsed as 1 to 4 ports.
-# Every parse must return; a refusal leaves `out` untouched; an accepted parse has its ports, at least one point,
+# Every parse must return; a refusal leaves `out` empty (2.0.1); an accepted parse has its ports, at least one point,
 # finite non-negative frequencies and finite entries; and a replay of the same mutants doesn't grow the heap.
 
 include "tests/lib.cyr"
@@ -60,9 +60,12 @@ fn fuzz_main(data, len, ports): i64 {
     var d: BjTouchstoneData;
     d.ports = 0 - 7;
     d.points = 0 - 7;
+    d.frequencies = 0 - 7;
     var t, v = bj_parse_touchstone(data, len, ports, &d);
     if (is_err_result(t) == 1) {
-        if (d.ports != 0 - 7 || d.points != 0 - 7 || v == 0) { return 1; }
+        # An owning constructor leaves out empty on a refusal (2.0.1 bite 1b), so its free does nothing.
+        if (d.ports != 0 || d.points != 0 || d.frequencies != 0 || d.s_matrices != 0 || v == 0) { return 1; }
+        BjTouchstoneData_free(&d);
         return 0;
     }
     var ok = fz_sane(&d, ports);

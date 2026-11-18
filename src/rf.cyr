@@ -1035,9 +1035,10 @@ fn _bj_rf_sm_alloc(ports, z0: f64, out: *BjSMatrix): i64 {
 }
 
 # An N-port matrix with every entry 0 and every reference impedance z0, into *out: Ok(0), or Err(Allocation) with out
-# untouched when its block can't be had (Rust aborts). Mirrors `SMatrix::new`.
+# empty when its block can't be had (Rust aborts). Mirrors `SMatrix::new`.
 #must_use
 public fn BjSMatrix_new(ports, z0: f64, out: *BjSMatrix): Result {
+    memset(out, 0, sizeof(BjSMatrix));
     var e = _bj_rf_sm_alloc(ports, z0, out);
     if (e != 0) { return Err(e); }
     return Ok(0);
@@ -1064,10 +1065,11 @@ fn _bj_rf_cascade_out(e: *f64, z0: f64, a, b, out: *BjSMatrix): Result {
 }
 
 # A 2-port matrix [[S11, S12], [S21, S22]] with both reference impedances z0, into *out: Ok(0), or Err(Allocation)
-# with out untouched. Mirrors `SMatrix::two_port`.
+# with out empty. Mirrors `SMatrix::two_port`.
 #must_use
 public fn BjSMatrix_two_port(s11: BjComplex, s12: BjComplex, s21: BjComplex, s22: BjComplex, z0: f64,
   out: *BjSMatrix): Result {
+    memset(out, 0, sizeof(BjSMatrix));
     var m: BjSMatrix;
     var e = _bj_rf_sm_alloc(2, z0, &m);
     if (e != 0) { return Err(e); }
@@ -1322,10 +1324,10 @@ impl BjSMatrix {
     }
 
     # The cascade of two 2-ports, self then other (self's port 2 to other's port 1), into a new matrix in *out: Ok(0),
-    # or Err with out untouched (and never read). out may be self or other: that matrix's block is then given back and
-    # replaced. For finite entries, Redheffer's star product with each part rounded once from the exact value
-    # (src/crmath_edge.cyr's _bj_cr_cascade; ADR 0002 row 17, M4 part 2a-2): S11 = A11 + A12·A21·B11/D, S12 = A12·B12/D,
-    # S21 = A21·B21/D, S22 = B22 + A22·B12·B21/D, D = 1 − A22·B11; a part exactly 0
+    # or Err with out empty (never read before). out may be self or other: on Ok that matrix's block is given back and
+    # replaced, on Err it is as it was. For finite entries, Redheffer's star product with each part rounded once from
+    # the exact value (src/crmath_edge.cyr's _bj_cr_cascade; ADR 0002 row 17, M4 part 2a-2): S11 = A11 + A12·A21·B11/D,
+    # S12 = A12·B12/D, S21 = A21·B21/D, S22 = B22 + A22·B12·B21/D, D = 1 − A22·B11; a part exactly 0
     # keeps Rust's zero where Rust's chain gives one (+0 otherwise). With a non-finite entry, Rust's chain through the
     # transfer matrices, T = T_self·T_other. InvalidParameter unless both are 2-ports
     # whose reference impedances are all equal (finite, positive); DivisionByZero where S21 of either is 0
@@ -1334,6 +1336,7 @@ impl BjSMatrix {
     # Mirrors `SMatrix::cascade`.
     #must_use
     public fn cascade(self, other: *BjSMatrix, out: *BjSMatrix): Result {
+        if (out != self && out != other) { memset(out, 0, sizeof(BjSMatrix)); }
         if (self.ports != 2 || other.ports != 2) {
             return Err(_bj_err_invalid_parameter("cascade requires two 2-port networks"));
         }

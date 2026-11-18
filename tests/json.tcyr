@@ -202,7 +202,8 @@ fn cyrius_rf_json(): i64 {
         var tk, vk = BjSMatrix_from_json(docs[k], strlen(docs[k]), &m9);
         if (is_err_result(tk) == 1 && vk == BJ_ERR_DESERIALIZE) { bad = bad + 1; }
     }
-    assert(bad == 6 && m9.ports == 7, "too few rows, a ragged row, a short z0, 2^63 ports, -0, 2.0: refused");
+    assert(bad == 6 && m9.ports == 0,
+      "too few rows, a ragged row, a short z0, 2^63 ports, -0, 2.0: refused, out empty");
     var t10, v10 = BjSMatrix_from_json(docs[0], strlen(docs[0]), &m9);
     assert(reason_is("an SMatrix's s does not have ports rows (its shape is fixed: ADR 0002 row 36)") == 1,
       "row 36's reason");
@@ -320,15 +321,16 @@ fn cyrius_fdtd_json(): i64 {
     var doc11 = "{\"frequencies\":[3e9,7e9],\"quality_factors\":[47.1],\"amplitudes\":[1,0.5]}";
     var t11, v11 = BjEigenmodeResult_from_json(doc11, strlen(doc11), &r11);
     var w11 = "an EigenmodeResult whose three arrays differ in length (its shape is fixed: ADR 0002 row 36)";
-    assert(is_err_result(t11) == 1 && v11 == BJ_ERR_DESERIALIZE && reason_is(w11) == 1 && r11.count == 7,
-      "arrays of different lengths refused, out untouched");
+    assert(is_err_result(t11) == 1 && v11 == BJ_ERR_DESERIALIZE && reason_is(w11) == 1 && r11.count == 0,
+      "arrays of different lengths refused, out empty (2.0.1 H12)");
     var doc12 = "{\"frequencies\":[1],\"quality_factors\":[1],\"amplitudes\":[null]}";
     var t12, v12 = BjEigenmodeResult_from_json(doc12, strlen(doc12), &r11);
-    assert(is_err_result(t12) == 1 && r11.count == 7, "a null amplitude refused after the block is had, freed");
+    assert(is_err_result(t12) == 1 && r11.count == 0 && r11.frequencies == 0,
+      "a null amplitude refused after the block is had, freed, out empty");
     var g13: BjNonUniformGrid;
     g13.nx = 5;
     var t13, v13 = BjNonUniformGrid_from_json("{\"dx\":[1],\"dy\":{}}", 18, &g13);
-    assert(is_err_result(t13) == 1 && g13.nx == 5 && reason_is("missing field `dz`") == 0, "dy an object refused");
+    assert(is_err_result(t13) == 1 && g13.nx == 0 && reason_is("missing field `dz`") == 0, "dy an object refused");
     return 0;
 }
 

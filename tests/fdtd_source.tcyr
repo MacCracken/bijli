@@ -430,7 +430,7 @@ fn main() {
     var se: BjTfsfSource;
     se.nx = 77;
     var te1, ve1 = BjTfsfSource_try_new(2, 1, 0.0001, 0.0000000000001, &se);
-    assert(ve1 == BJ_ERR_INSUFFICIENT_RESOLUTION && se.nx == 77, "nx = 2: out untouched");
+    assert(ve1 == BJ_ERR_INSUFFICIENT_RESOLUTION && se.nx == 0, "nx = 2: out empty (2.0.1 H12)");
     var d1 = text_is(bj_last_error_display(), "grid resolution too coarse: 2 cells for domain size 0.0002");
     assert(d1 == 1, "its Display: nx·dx");
     var te2, ve2 = BjTfsfSource_try_new(100, 100, 0.0001, 0.0000000000001, &se);
@@ -448,7 +448,7 @@ fn main() {
     var d5 = text_is(bj_last_error_display(), w5);
     assert(d5 == 1, "dt past dx/c, the limit quoted");
     var te6, ve6 = BjTfsfSource_try_new(0 - 1, 0 - 2, 0.0001, 0.0000000000001, &se);
-    assert(ve6 == BJ_ERR_ALLOCATION && se.nx == 77, "usize::MAX cells pass the checks, as in Rust, then can't be had");
+    assert(ve6 == BJ_ERR_ALLOCATION && se.nx == 0, "usize::MAX cells pass the checks, as in Rust, then can't be had");
 
     test_group("cyrius_tfsf_free");
     var sf: BjTfsfSource;

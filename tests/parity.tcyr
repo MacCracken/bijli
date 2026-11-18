@@ -4279,7 +4279,9 @@ fn _par_fd2_build(sim: *BjFdtd2d, k0, errs): i64 {
             if (errs == 1 && is_err_result(t10) == 1) { _par_got_error(v10); }
             k = k + 6;
         } elif (code == 11) {
-            sim.enable_cpml(_par_in(k + 1));
+            # Rust's enable_cpml: its form is try_enable_cpml (ADR 0002 row 3, 2.0.1), whose error leaves the
+            # boundaries as enable_cpml's warning did, and which the script doesn't record.
+            var t11, v11 = sim.try_enable_cpml(_par_in(k + 1));
             k = k + 2;
         } elif (code == 12) {
             sim.disable_cpml();
@@ -4729,7 +4731,12 @@ fn _par_fdtd_2d3d(fp, fl): i64 {
     var dx2: f64 = _par_in(1);
     var dt2: f64 = _par_in(2);
     var cn: BjCpml;
-    BjCpml_new(_par_in(0), dx2, dt2, &cn);
+    var tn, vn = BjCpml_new(_par_in(0), dx2, dt2, &cn);
+    # BjCpml_new refuses what Rust's new built an inert layer of (ADR 0002 row 3, 2.0.1): its error, for the layer's
+    # rows and for the attach rows built on it.
+    if (is_err_result(tn) == 1 && (_par_eq(fp, fl, "Cpml::new") == 1 || _par_eq(fp, fl, "Cpml::attach") == 1)) {
+        return _par_got_error(vn) + 1;
+    }
     if (_par_eq(fp, fl, "Cpml::new") == 1) {
         _par_cpml_got(&cn);
         BjCpml_free(&cn);

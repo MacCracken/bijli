@@ -27346,7 +27346,7 @@ fn _bj_sc_drop(d, a, b) {
 }
 
 # Mie scattering by a homogeneous sphere of size parameter x and relative index m, into *out: Ok(0), or Err with
-# the reason recorded and out untouched. Q_sca = (2/x²) Σ (2n+1)(|aₙ|² + |bₙ|²), Q_ext = (2/x²) Σ (2n+1) Re(aₙ + bₙ),
+# the reason recorded and out empty. Q_sca = (2/x²) Σ (2n+1)(|aₙ|² + |bₙ|²), Q_ext = (2/x²) Σ (2n+1) Re(aₙ + bₙ),
 # Q_abs = Q_ext − Q_sca, g = 2 Σ[..]/Σ(2n+1)(|aₙ|² + |bₙ|²) (0 when nothing scatters). out gets n_max new coefficients
 # of each kind; bj_mie never reads it, so free a previous result first (BjMieResult_free).
 # - x finite, 0 < x ≤ BJ_MIE_MAX_SIZE_PARAMETER; m finite, nonzero, Im(m) ≤ 0 (e^{+jωt}: absorbing m = n − jκ),
@@ -27356,6 +27356,7 @@ fn _bj_sc_drop(d, a, b) {
 # Mirrors `scattering::mie`.
 #must_use
 public fn bj_mie(x: f64, m: BjComplex, out: *BjMieResult): Result {
+    memset(out, 0, sizeof(BjMieResult));
     var mre: f64 = m.re;
     var mim: f64 = m.im;
     var h: f64 = 0.0;
@@ -29846,9 +29847,10 @@ fn _bj_rf_sm_alloc(ports, z0: f64, out: *BjSMatrix): i64 {
 }
 
 # An N-port matrix with every entry 0 and every reference impedance z0, into *out: Ok(0), or Err(Allocation) with out
-# untouched when its block can't be had (Rust aborts). Mirrors `SMatrix::new`.
+# empty when its block can't be had (Rust aborts). Mirrors `SMatrix::new`.
 #must_use
 public fn BjSMatrix_new(ports, z0: f64, out: *BjSMatrix): Result {
+    memset(out, 0, sizeof(BjSMatrix));
     var e = _bj_rf_sm_alloc(ports, z0, out);
     if (e != 0) { return Err(e); }
     return Ok(0);
@@ -29875,10 +29877,11 @@ fn _bj_rf_cascade_out(e: *f64, z0: f64, a, b, out: *BjSMatrix): Result {
 }
 
 # A 2-port matrix [[S11, S12], [S21, S22]] with both reference impedances z0, into *out: Ok(0), or Err(Allocation)
-# with out untouched. Mirrors `SMatrix::two_port`.
+# with out empty. Mirrors `SMatrix::two_port`.
 #must_use
 public fn BjSMatrix_two_port(s11: BjComplex, s12: BjComplex, s21: BjComplex, s22: BjComplex, z0: f64,
   out: *BjSMatrix): Result {
+    memset(out, 0, sizeof(BjSMatrix));
     var m: BjSMatrix;
     var e = _bj_rf_sm_alloc(2, z0, &m);
     if (e != 0) { return Err(e); }
@@ -30133,10 +30136,10 @@ impl BjSMatrix {
     }
 
     # The cascade of two 2-ports, self then other (self's port 2 to other's port 1), into a new matrix in *out: Ok(0),
-    # or Err with out untouched (and never read). out may be self or other: that matrix's block is then given back and
-    # replaced. For finite entries, Redheffer's star product with each part rounded once from the exact value
-    # (src/crmath_edge.cyr's _bj_cr_cascade; ADR 0002 row 17, M4 part 2a-2): S11 = A11 + A12·A21·B11/D, S12 = A12·B12/D,
-    # S21 = A21·B21/D, S22 = B22 + A22·B12·B21/D, D = 1 − A22·B11; a part exactly 0
+    # or Err with out empty (never read before). out may be self or other: on Ok that matrix's block is given back and
+    # replaced, on Err it is as it was. For finite entries, Redheffer's star product with each part rounded once from
+    # the exact value (src/crmath_edge.cyr's _bj_cr_cascade; ADR 0002 row 17, M4 part 2a-2): S11 = A11 + A12·A21·B11/D,
+    # S12 = A12·B12/D, S21 = A21·B21/D, S22 = B22 + A22·B12·B21/D, D = 1 − A22·B11; a part exactly 0
     # keeps Rust's zero where Rust's chain gives one (+0 otherwise). With a non-finite entry, Rust's chain through the
     # transfer matrices, T = T_self·T_other. InvalidParameter unless both are 2-ports
     # whose reference impedances are all equal (finite, positive); DivisionByZero where S21 of either is 0
@@ -30145,6 +30148,7 @@ impl BjSMatrix {
     # Mirrors `SMatrix::cascade`.
     #must_use
     public fn cascade(self, other: *BjSMatrix, out: *BjSMatrix): Result {
+        if (out != self && out != other) { memset(out, 0, sizeof(BjSMatrix)); }
         if (self.ports != 2 || other.ports != 2) {
             return Err(_bj_err_invalid_parameter("cascade requires two 2-port networks"));
         }
@@ -31055,11 +31059,12 @@ fn _bj_ts_alloc(ports, z0: f64, points, out: *BjTouchstoneData): i64 {
 }
 
 # A new BjTouchstoneData of `points` frequencies (0 Hz) and as many ports-port matrices (every entry 0, every
-# reference impedance z0) into *out, for bj_try_write_touchstone: Ok(0), or Err(Allocation) with out untouched. Nothing
+# reference impedance z0) into *out, for bj_try_write_touchstone: Ok(0), or Err(Allocation) with out empty. Nothing
 # is checked, as Rust's struct literal checks nothing: the writer does. Fill it with set_frequency and each matrix_at's
 # set and set_z0.
 #must_use
 public fn BjTouchstoneData_new(ports, z0: f64, points, out: *BjTouchstoneData): Result {
+    memset(out, 0, sizeof(BjTouchstoneData));
     if (ports < 0 || points < 0) {
         var t = _bj_err_reason(BJ_ERR_ALLOCATION);
         _bj_tx_cstr(t, "Touchstone data of ");
@@ -31703,7 +31708,7 @@ public fn _bj_ts_format_name(fmt): i64 {
 }
 
 # Parses Touchstone v1.1 (`.sNp`) S-parameter content, the len bytes at content, for a ports-port network into a new
-# BjTouchstoneData in *out: Ok(0), or Err with out untouched (and never read).
+# BjTouchstoneData in *out: Ok(0), or Err with out empty (and never read).
 # - The option line `# <unit> <param> <format> R <z0>` is case-insensitive, its defaults `GHz S MA R 50`. Only the
 #   first is used (later ones are ignored, as the spec says), and it must precede the data. Units Hz, kHz, MHz, GHz;
 #   formats RI, MA, DB (angles in degrees); parameter types other than S are refused.
@@ -31717,6 +31722,7 @@ public fn _bj_ts_format_name(fmt): i64 {
 # last record, or no record at all; Allocation when the buffers can't be had. Mirrors `rf::parse_touchstone`.
 #must_use
 public fn bj_parse_touchstone(content, len, ports, out: *BjTouchstoneData): Result {
+    memset(out, 0, sizeof(BjTouchstoneData));
     if (ports <= 0 || ports > _BJ_TS_MAX_PORTS) {
         var t = _bj_err_reason(BJ_ERR_INVALID_PARAMETER);
         _bj_tx_cstr(t, "Touchstone port count must be in 1..=256, got ");
@@ -32235,12 +32241,13 @@ fn _bj_fd1_mur(dt: f64, dx: f64, eps_r: f64, mu_r: f64): f64 {
 }
 
 # Creates a 1D grid of num_cells cells (a usize) and spacing dx (m) into *out, every field zero, vacuum everywhere,
-# dt = dx/(2c) and the vacuum Mur coefficient at both ends: Ok(0); or, with out untouched, Err(InsufficientResolution)
+# dt = dx/(2c) and the vacuum Mur coefficient at both ends: Ok(0); or, with out empty, Err(InsufficientResolution)
 # for num_cells < 2, Err(InvalidParameter) "dx must be finite and positive, got {dx}", Err(Allocation) when the
 # grid's mapping can't be had (Rust's vec! aborts there; ADR 0002 row 9). Give the grid back with BjFdtd1d_free.
 # Mirrors `Fdtd1d::new`.
 #must_use
 public fn BjFdtd1d_new(num_cells, dx: f64, out: *BjFdtd1d): Result {
+    memset(out, 0, sizeof(BjFdtd1d));
     if (num_cells >= 0 && num_cells < 2) {
         var nf: f64 = f64_from(num_cells);
         var size: f64 = nf * dx;
@@ -32862,7 +32869,7 @@ fn _bj_fs_bad_range(head, n, mid, m): i64 {
 }
 
 # Creates a TF/SF source over nx cells (a usize) with its boundary at column boundary_x into *out: the soft source at
-# max(boundary_x/4, 1) (at most nx − 2), every field zero. Ok(0), or with out untouched:
+# max(boundary_x/4, 1) (at most nx − 2), every field zero. Ok(0), or with out empty:
 # - Err(InsufficientResolution) for nx < 3;
 # - Err(InvalidParameter) "TFSF boundary_x must be in 1..{nx}, got {boundary_x}" unless 1 ≤ boundary_x < nx;
 # - Err(InvalidParameter) "dx must be finite and positive, got {dx}";
@@ -32872,6 +32879,7 @@ fn _bj_fs_bad_range(head, n, mid, m): i64 {
 # Give it back with BjTfsfSource_free. Mirrors `TfsfSource::try_new`.
 #must_use
 public fn BjTfsfSource_try_new(nx, boundary_x, dx: f64, dt: f64, out: *BjTfsfSource): Result {
+    memset(out, 0, sizeof(BjTfsfSource));
     if (nx >= 0 && nx < 3) {
         var nf: f64 = f64_from(nx);
         var size: f64 = nf * dx;
@@ -32966,6 +32974,7 @@ public fn BjTfsfSource_try_new(nx, boundary_x, dx: f64, dt: f64, out: *BjTfsfSou
 # error (ADR 0002 row 3). Mirrors `TfsfSource::new`.
 #must_use
 public fn BjTfsfSource_new(nx, boundary_x, dx: f64, dt: f64, out: *BjTfsfSource): Result {
+    memset(out, 0, sizeof(BjTfsfSource));
     return BjTfsfSource_try_new(nx, boundary_x, dx, dt, out);
 }
 
@@ -33614,11 +33623,12 @@ fn _bj_fu_fill(p, n, x: f64) {
 }
 
 # A uniform grid of nx × ny × nz cells (usize), every width `spacing`, into *out, unchecked as Rust's (an empty axis or
-# an invalid spacing makes an invalid grid, whose courant_dt is 0.0): Ok(0), or Err(Allocation) with out untouched
+# an invalid spacing makes an invalid grid, whose courant_dt is 0.0): Ok(0), or Err(Allocation) with out empty
 # when the block can't be had (Rust's vec! aborts). Give it back with BjNonUniformGrid_free. Mirrors
 # `NonUniformGrid::uniform`.
 #must_use
 public fn BjNonUniformGrid_uniform(nx, ny, nz, spacing: f64, out: *BjNonUniformGrid): Result {
+    memset(out, 0, sizeof(BjNonUniformGrid));
     var g: BjNonUniformGrid;
     var e = _bj_fu_grid_alloc(nx, ny, nz, &g);
     if (e != 0) { return Err(e); }
@@ -33627,11 +33637,12 @@ public fn BjNonUniformGrid_uniform(nx, ny, nz, spacing: f64, out: *BjNonUniformG
     return Ok(0);
 }
 
-# A uniform grid, checked: Ok(0), or with out untouched Err(InsufficientResolution) (cells 0, domain size 0) when an
+# A uniform grid, checked: Ok(0), or with out empty Err(InsufficientResolution) (cells 0, domain size 0) when an
 # axis has no cell, Err(InvalidParameter) "grid spacing must be finite and positive, got {spacing}", Err(Allocation).
 # Mirrors `NonUniformGrid::try_uniform`.
 #must_use
 public fn BjNonUniformGrid_try_uniform(nx, ny, nz, spacing: f64, out: *BjNonUniformGrid): Result {
+    memset(out, 0, sizeof(BjNonUniformGrid));
     if (nx == 0 || ny == 0 || nz == 0) { return Err(_bj_err_insufficient_resolution(0, 0.0)); }
     if (_bj_fu_pos(spacing) == 0) {
         var t = _bj_err_reason(BJ_ERR_INVALID_PARAMETER);
@@ -33643,9 +33654,10 @@ public fn BjNonUniformGrid_try_uniform(nx, ny, nz, spacing: f64, out: *BjNonUnif
 }
 
 # A grid of the given widths (nx at dx, ny at dy, nz at dz), copied, unchecked: Rust builds one from its public vectors
-# (`NonUniformGrid { dx, dy, dz }`, `graded`'s among them). Ok(0), or Err(Allocation) with out untouched. Cyrius only.
+# (`NonUniformGrid { dx, dy, dz }`, `graded`'s among them). Ok(0), or Err(Allocation) with out empty. Cyrius only.
 #must_use
 public fn BjNonUniformGrid_from_axes(dx: *f64, nx, dy: *f64, ny, dz: *f64, nz, out: *BjNonUniformGrid): Result {
+    memset(out, 0, sizeof(BjNonUniformGrid));
     var g: BjNonUniformGrid;
     var e = _bj_fu_grid_alloc(nx, ny, nz, &g);
     if (e != 0) { return Err(e); }
@@ -34070,9 +34082,10 @@ public struct BjCwAccumulator {
 
 # An accumulator for field_size points at `frequency` (Hz) with step dt into *out, unchecked as Rust's (a non-finite
 # frequency or an invalid dt is accepted with a warning and gives meaningless results): Ok(0), or Err(Allocation)
-# with out untouched. Give it back with BjCwAccumulator_free. Mirrors `CwAccumulator::new`.
+# with out empty. Give it back with BjCwAccumulator_free. Mirrors `CwAccumulator::new`.
 #must_use
 public fn BjCwAccumulator_new(field_size, frequency: f64, dt: f64, out: *BjCwAccumulator): Result {
+    memset(out, 0, sizeof(BjCwAccumulator));
     var f0: f64 = frequency * 0.0;
     if ((f0 != 0.0 || _bj_fu_pos(dt) == 0) && _bj_log_on(2) == 1) {
         var lb[256];
@@ -34128,11 +34141,12 @@ public fn BjCwAccumulator_new(field_size, frequency: f64, dt: f64, out: *BjCwAcc
     return Ok(0);
 }
 
-# An accumulator, checked: Ok(0), or with out untouched Err(InvalidParameter) "CW frequency must be finite and
+# An accumulator, checked: Ok(0), or with out empty Err(InvalidParameter) "CW frequency must be finite and
 # non-negative, got {f}" or "dt must be finite and positive, got {dt}", or Err(Allocation). Mirrors
 # `CwAccumulator::try_new`.
 #must_use
 public fn BjCwAccumulator_try_new(field_size, frequency: f64, dt: f64, out: *BjCwAccumulator): Result {
+    memset(out, 0, sizeof(BjCwAccumulator));
     if (!(frequency >= 0.0 && frequency < _BJ_FU_INF)) {
         var t = _bj_err_reason(BJ_ERR_INVALID_PARAMETER);
         _bj_tx_cstr(t, "CW frequency must be finite and non-negative, got ");
@@ -34702,13 +34716,14 @@ fn _bj_fu_bad(reason): i64 {
 
 # The resonances in the n samples at signal (step dt): the DFT magnitude at n_freq frequencies spanning [freq_min,
 # freq_max] inclusive, then every strict local maximum above 10 % of the strongest, with its half-power Q, into *out
-# (free a previous result first). Ok(0), or with out untouched Err(InvalidParameter) for an empty signal, n_freq < 2,
+# (free a previous result first). Ok(0), or with out empty Err(InvalidParameter) for an empty signal, n_freq < 2,
 # a dt that isn't finite and positive, a range other than 0 ≤ freq_min < freq_max < ∞, or a non-finite sample (in that
 # order, Rust's texts); Err(Allocation) when the spectrum or the result can't be had. A freq_max past Nyquist is
 # warned of. Mirrors `find_eigenmodes`.
 #must_use
 public fn bj_find_eigenmodes(signal: *f64, n, dt: f64, freq_min: f64, freq_max: f64, n_freq,
   out: *BjEigenmodeResult): Result {
+    memset(out, 0, sizeof(BjEigenmodeResult));
     if (n == 0) { return Err(_bj_fu_bad("time signal is empty")); }
     if (n_freq >= 0 && n_freq < 2) {
         var t = _bj_err_reason(BJ_ERR_INVALID_PARAMETER);
@@ -35198,13 +35213,14 @@ fn _bj_cpml_sample(b: *f64, c: *f64, km1: *f64, t, offset: f64, params: *BjCpmlP
 }
 
 # A layer with params' grading for a grid of spacing dx and step dt into *out (unattached): Ok(0), or with out
-# untouched Err(InvalidParameter) — a parameter out of range (Rust's texts and order, `CpmlParams`), dx or dt not
+# empty Err(InvalidParameter) — a parameter out of range (Rust's texts and order, `CpmlParams`), dx or dt not
 # finite and positive, "cannot allocate {t} grid values" where the profiles can't be had, or a coefficient not
 # finite. σ_max = sigma_ratio·0.8·(m + 1)/(η₀·dx), η₀ = μ₀·c, in Rust's order, or with an unbounded exponent where a
 # product leaves the normal range (the quotient rounded once; ADR 0002 row 18, M6 part 4b). Give it back with
 # BjCpml_free. Mirrors `Cpml::with_params`.
 #must_use
 public fn BjCpml_with_params(params: *BjCpmlParams, dx: f64, dt: f64, out: *BjCpml): Result {
+    memset(out, 0, sizeof(BjCpml));
     var e = _bj_cpml_params_validate(params);
     if (e != 0) { return Err(e); }
     if (!(dx > 0.0 && dx < _BJ_CPML_INF)) {
@@ -35292,30 +35308,15 @@ public fn BjCpml_with_params(params: *BjCpmlParams, dx: f64, dt: f64, out: *BjCp
     return Ok(0);
 }
 
-# A layer with the classic grading (BjCpmlParams_new) into *out. Invalid input (zero thickness, dx or dt not finite
-# and positive) logs a warning and gives an inert layer that can never be attached; BjCpml_with_params returns the
-# error instead. Give it back with BjCpml_free. Mirrors `Cpml::new`.
-public fn BjCpml_new(thickness, dx: f64, dt: f64, out: *BjCpml): i64 {
+# A layer with the classic grading (BjCpmlParams_new) into *out: Ok(0), or with out empty BjCpml_with_params's error
+# for invalid input (zero thickness, dx or dt not finite and positive). Rust's `new` logged a warning and built an
+# inert layer instead; the port refuses it (ADR 0002 row 3, 2.0.1). Give it back with BjCpml_free. Mirrors
+# `Cpml::new`.
+#must_use
+public fn BjCpml_new(thickness, dx: f64, dt: f64, out: *BjCpml): Result {
+    memset(out, 0, sizeof(BjCpml));
     var p: BjCpmlParams = BjCpmlParams_new(thickness);
-    var t, v = BjCpml_with_params(&p, dx, dt, out);
-    if (is_err_result(t) == 1) {
-        if (_bj_log_on(2) == 1) {
-            var lb[512];
-            var lt[24];
-            _bj_tx_init(&lt, &lb, 512);
-            _bj_tx_cstr(&lt, "invalid CPML parameters; layer is inert thickness=");
-            _bj_tx_u64(&lt, thickness);
-            _bj_tx_cstr(&lt, " dx=");
-            _bj_fmt_f64_debug(&lt, dx);
-            _bj_tx_cstr(&lt, " dt=");
-            _bj_fmt_f64_debug(&lt, dt);
-            _bj_tx_cstr(&lt, " error=");
-            _bj_tx_cstr(&lt, bj_last_error_display());
-            _bj_log_text(2, &lt);
-        }
-        _bj_cpml_from(&p, 0.0, 0, 0, out);
-    }
-    return 0;
+    return BjCpml_with_params(&p, dx, dt, out);
 }
 
 # Gives the Ψ mapping back, unattached (0 × 0, every Ψ empty).
@@ -35933,7 +35934,7 @@ fn _bj_fd2_energy_ux(sim: *BjFdtd2d): f64 {
     return en;
 }
 
-# A vacuum grid of nx × ny nodes at spacing dx in `mode` into *out, the walls reflecting: Ok(0), or with out untouched
+# A vacuum grid of nx × ny nodes at spacing dx in `mode` into *out, the walls reflecting: Ok(0), or with out empty
 # Err(InsufficientResolution) when nx < 3 or ny < 3 (cells min(nx, ny), domain min(nx, ny)·dx), Err(InvalidParameter)
 # "dx must be finite and positive, got {dx}", "grid [{nx}, {ny}] is too large" (nx·ny past 2^64) or "cannot allocate
 # {n} grid values", in Rust's order. A mode word that is no BjMode2d (Rust's enum has no other) is refused first,
@@ -35941,6 +35942,7 @@ fn _bj_fd2_energy_ux(sim: *BjFdtd2d): f64 {
 # BjFdtd2d_free. dt and the coefficients are rounded once (ADR 0002 row 13, M6 part 4a). Mirrors `Fdtd2d::new`.
 #must_use
 public fn BjFdtd2d_new(nx, ny, dx: f64, mode, out: *BjFdtd2d): Result {
+    memset(out, 0, sizeof(BjFdtd2d));
     if (mode != BJ_MODE2D_TM && mode != BJ_MODE2D_TE) {
         var tm = _bj_err_reason(BJ_ERR_INVALID_PARAMETER);
         _bj_tx_cstr(tm, "unknown 2D mode ");
@@ -36219,7 +36221,8 @@ impl BjFdtd2d {
 
     # Replaces the reflecting walls by a CPML of the classic grading (BjCpmlParams_new) `thickness` cells a side;
     # calling it again replaces the layer (Ψ restarts at zero). Ok(0), or with the boundaries unchanged
-    # Err(InvalidParameter) as try_enable_cpml_with. Mirrors `Fdtd2d::try_enable_cpml`.
+    # Err(InvalidParameter) as try_enable_cpml_with. Mirrors `Fdtd2d::try_enable_cpml`, and stands for
+    # `Fdtd2d::enable_cpml` too: Rust's warn-and-ignore form is not carried (ADR 0002 row 3, 2.0.1).
     public fn try_enable_cpml(self, thickness): Result {
         var p: BjCpmlParams = BjCpmlParams_new(thickness);
         return self.try_enable_cpml_with(&p);
@@ -36297,23 +36300,6 @@ impl BjFdtd2d {
         return Ok(0);
     }
 
-    # try_enable_cpml without the error: on invalid input (thickness 0, or 2·thickness + 3 > min(nx, ny)) logs a
-    # warning and leaves the boundaries as they are. Mirrors `Fdtd2d::enable_cpml`.
-    public fn enable_cpml(self, thickness) {
-        var t, v = self.try_enable_cpml(thickness);
-        if (is_err_result(t) == 1 && _bj_log_on(2) == 1) {
-            var lb[512];
-            var lt[24];
-            _bj_tx_init(&lt, &lb, 512);
-            _bj_tx_cstr(&lt, "enable_cpml ignored; boundaries unchanged thickness=");
-            _bj_tx_u64(&lt, thickness);
-            _bj_tx_cstr(&lt, " error=");
-            _bj_tx_cstr(&lt, bj_last_error_display());
-            _bj_log_text(2, &lt);
-        }
-        return 0;
-    }
-
     # Removes the CPML (giving its storage back) and returns to the reflecting PEC (TM) or PMC (TE) walls. Mirrors
     # `Fdtd2d::disable_cpml`.
     public fn disable_cpml(self) {
@@ -36326,10 +36312,32 @@ impl BjFdtd2d {
         return 0;
     }
 
-    # The active CPML layer's address (a *BjCpml), or 0 (Rust's None). Mirrors `Fdtd2d::cpml`.
+    # The active CPML layer's address (a *BjCpml), or 0 (Rust's None). The layer belongs to the grid: read it, but
+    # don't free, attach or detach it (a step skips a layer no longer attached to the grid, as Rust's did, and
+    # BjFdtd2d_free gives it back). Mirrors `Fdtd2d::cpml`.
     #must_use
     public fn cpml(self): i64 {
         return self.cpml;
+    }
+
+    # 1 when the grid's layer, if it has one, is attached to it: Rust's check_layout without its geometry half (the
+    # shapes are fixed, ADR 0002 row 2); else logs Rust's error with `what` ("Fdtd2d step skipped") and returns 0.
+    fn layout_ok(self, what): i64 {
+        if (self.cpml == 0 || _bj_cpml_is_attached_to(self.cpml, self.nx, self.ny) == 1) { return 1; }
+        if (_bj_log_on(1) == 1) {
+            var lb[256];
+            var lt[24];
+            _bj_tx_init(&lt, &lb, 256);
+            _bj_tx_cstr(&lt, what);
+            _bj_tx_cstr(&lt, " error=invalid parameter: CPML is not attached to the current ");
+            _bj_tx_u64(&lt, self.nx);
+            _bj_tx_cstr(&lt, "×");
+            _bj_tx_u64(&lt, self.ny);
+            _bj_tx_cstr(&lt, " grid step=");
+            _bj_tx_u64(&lt, self.step);
+            _bj_log_text(1, &lt);
+        }
+        return 0;
     }
 
     # The TM update, E_z, H_x, H_y, in Rust's order: H_x −= C_h·(E_z[y + 1] − E_z[y]) on rows 0..ny − 1, H_y +=
@@ -36407,6 +36415,7 @@ impl BjFdtd2d {
     # Advances the simulation one time step: the mode's update, the outermost ring always the PEC (TM) or PMC (TE)
     # wall. Mirrors `Fdtd2d::step_once`.
     public fn step_once(self) {
+        if (self.layout_ok("Fdtd2d step skipped") == 0) { return 0; }
         if (self.mode == BJ_MODE2D_TE) { self.step_te(); }
         else { self.step_tm(); }
         self.step = self.step + 1;
@@ -36447,6 +36456,7 @@ impl BjFdtd2d {
             }
             _bj_log_text(4, &lt);
         }
+        if (self.layout_ok("Fdtd2d run aborted") == 0) { return 0; }
         var w2pi: f64 = 2.0 * _BJ_FD2_PI;
         for (var k = 0; _bj_fd2_uge(k, steps) == 0; k = k + 1) {
             if (sx != BJ_FDTD2D_NO_SOURCE) {
@@ -36945,13 +36955,14 @@ fn _bj_fd3_zero(f: *f64, n) {
     return 0;
 }
 
-# A vacuum grid of nx × ny × nz nodes at spacing dx into *out, the faces PEC: Ok(0), or with out untouched
+# A vacuum grid of nx × ny × nz nodes at spacing dx into *out, the faces PEC: Ok(0), or with out empty
 # Err(InsufficientResolution) when a dimension is below 3 (cells min(nx, ny, nz), domain that min·dx),
 # Err(InvalidParameter) "dx must be finite and positive, got {dx}", "grid [{nx}, {ny}, {nz}] is too large" (the cell
 # count past 2^64) or "cannot allocate {n} grid values", in Rust's order. dt = dx/(2√3·c), it and the coefficients
 # rounded once (ADR 0002 row 13, M6 part 4a). Give it back with BjFdtd3d_free. Mirrors `Fdtd3d::new`.
 #must_use
 public fn BjFdtd3d_new(nx, ny, nz, dx: f64, out: *BjFdtd3d): Result {
+    memset(out, 0, sizeof(BjFdtd3d));
     if ((nx >= 0 && nx < 3) || (ny >= 0 && ny < 3) || (nz >= 0 && nz < 3)) {
         var mn = nx;
         if (_bj_fd2_uge(mn, ny) == 1) { mn = ny; }
@@ -37380,11 +37391,41 @@ impl BjFdtd3d {
         return 0;
     }
 
-    # The active CPML layer's address (a *BjCpml: its thickness and grading), or 0 (Rust's None). Mirrors
-    # `Fdtd3d::cpml`.
+    # The active CPML layer's address (a *BjCpml: its thickness and grading), or 0 (Rust's None). The layer belongs to
+    # the grid: read it, but don't free it (a step skips a layer whose profiles are gone, as Rust's skipped one no
+    # longer attached, and BjFdtd3d_free gives it back). Mirrors `Fdtd3d::cpml`.
     #must_use
     public fn cpml(self): i64 {
         return self.cpml;
+    }
+
+    # 1 when the grid's layer, if it has one, is still attached: it fits the grid and has its profiles (Rust's
+    # Cpml3d::is_attached_to; the face slabs are the grid's own, sized at enable). Else logs Rust's error with `what`
+    # ("Fdtd3d step skipped") and returns 0. Rust's check_layout without its geometry half (ADR 0002 row 2).
+    fn layout_ok(self, what): i64 {
+        if (self.cpml == 0) { return 1; }
+        var c: *BjCpml = _bj_fd3_cpmlp(self.cpml);
+        var t = c.thickness;
+        var md = self.nx;
+        if (_bj_fd2_uge(md, self.ny) == 1) { md = self.ny; }
+        if (_bj_fd2_uge(md, self.nz) == 1) { md = self.nz; }
+        if (_bj_cpml_fits(t, md) == 1 && c.prof_n == t && c.prof_block != 0 && self.psi_bytes > 0) { return 1; }
+        if (_bj_log_on(1) == 1) {
+            var lb[256];
+            var lt[24];
+            _bj_tx_init(&lt, &lb, 256);
+            _bj_tx_cstr(&lt, what);
+            _bj_tx_cstr(&lt, " error=invalid parameter: CPML is not attached to the current ");
+            _bj_tx_u64(&lt, self.nx);
+            _bj_tx_cstr(&lt, "×");
+            _bj_tx_u64(&lt, self.ny);
+            _bj_tx_cstr(&lt, "×");
+            _bj_tx_u64(&lt, self.nz);
+            _bj_tx_cstr(&lt, " grid step=");
+            _bj_tx_u64(&lt, self.step);
+            _bj_log_text(1, &lt);
+        }
+        return 0;
     }
 
     # Ψ slab k's address: 0–3 the x-slabs (hy_x, hz_x, ey_x, ez_x), 4–7 the y-slabs (hx_y, hz_y, ex_y, ez_y), 8–11 the
@@ -37560,6 +37601,7 @@ impl BjFdtd3d {
     # Advances the simulation one time step by the 3D Yee algorithm, in Rust's order: H from curl E, the CPML's H terms,
     # E ← C_a·E where lossy, E from curl H, the CPML's E terms, then the PEC faces. Mirrors `Fdtd3d::step_once`.
     public fn step_once(self) {
+        if (self.layout_ok("Fdtd3d step skipped") == 0) { return 0; }
         self.update_h();
         if (self.cpml != 0) { self.cpml_h(); }
         if (self.ca != 0) {
@@ -37612,6 +37654,7 @@ impl BjFdtd3d {
             }
             _bj_log_text(4, &lt);
         }
+        if (self.layout_ok("Fdtd3d run aborted") == 0) { return 0; }
         var w2pi: f64 = 2.0 * _BJ_FD3_PI;
         for (var k = 0; _bj_fd2_uge(k, steps) == 0; k = k + 1) {
             if (sx != BJ_FDTD3D_NO_SOURCE) {
@@ -38052,12 +38095,13 @@ fn _bj_cb_host(n, v: f64): i64 {
 }
 
 # A vacuum TM grid of nx × ny nodes at spacing dx on `backend` into *out (the backend copied in): Ok(0), or with out
-# untouched Err(InsufficientResolution) when nx < 3 or ny < 3 (cells min(nx, ny), domain min·dx),
+# empty Err(InsufficientResolution) when nx < 3 or ny < 3 (cells min(nx, ny), domain min·dx),
 # Err(InvalidParameter) "dx must be finite and positive, got {dx}" or "grid {nx}x{ny} is too large", in Rust's order,
 # or a buffer's creation error (the buffers made so far given back). dt = dx/(2√2·c), half the 2D Courant limit, it
 # and the coefficients rounded once (ADR 0002 row 13, M6 part 4a). Mirrors `GpuFdtd2d::new`.
 #must_use
 public fn BjGpuFdtd2d_new<B: BjComputeBackend>(nx, ny, dx: f64, backend: B, out: *BjGpuFdtd2d<B>): Result {
+    memset(out, 0, sizeof(BjGpuFdtd2d<B>));
     if ((nx >= 0 && nx < 3) || (ny >= 0 && ny < 3)) {
         var mn = nx;
         if (_bj_fd2_uge(nx, ny) == 1) { mn = ny; }
@@ -38096,6 +38140,8 @@ public fn BjGpuFdtd2d_new<B: BjComputeBackend>(nx, ny, dx: f64, backend: B, out:
     var bufs: i64[5];
     var made = 0;
     var code = 0;
+    # The buffers are made through out's own copy of the backend (a consumer's backend may keep state), which an
+    # error empties again with the rest of out.
     out.backend = backend;
     while (made < 5 && code == 0) {
         var src = zeros;
@@ -38116,6 +38162,7 @@ public fn BjGpuFdtd2d_new<B: BjComputeBackend>(nx, ny, dx: f64, backend: B, out:
     cyr_munmap(vals, n * 8);
     if (code != 0) {
         for (var j = 0; j < made; j = j + 1) { out.backend.free_buffer(bufs[j]); }
+        memset(out, 0, sizeof(BjGpuFdtd2d<B>));
         return Err(code);
     }
     out.nx = nx;
@@ -39187,7 +39234,7 @@ fn _bj_nf_same53(av: f64, ae, bv: f64, be, ad: f64, bd: f64): i64 {
 # E_z, H_x and H_y on an nx × ny Yee grid laid out as Fdtd2d's TM mode (index y·nx + x; E_z at (x, y), H_x at
 # (x, y + ½), H_y at (x + ½, y)), fed after each step with the same time-step index, so H is rotated by e^{+jω·dt/2}
 # onto E. The pattern is √ρ·|E_z(ρ, φ)| as ρ → ∞ at n_angles angles from 0, linear in the inputs (a CW steady state's
-# running DFT is about the phasor times n_samples·dt/2). Ok(0), or with out untouched Err(InvalidParameter), Rust's
+# running DFT is about the phasor times n_samples·dt/2). Ok(0), or with out empty Err(InvalidParameter), Rust's
 # texts in Rust's order: the accumulators disagree on ω or dt (relative 10⁻¹²); n_angles is 0; the margin is 0 or at
 # least nx/2 or ny/2; dx isn't finite and positive; the frequency isn't; an accumulator holds fewer than nx·ny
 # samples; dt isn't finite. Err(Allocation) when the result can't be had. ω is read to 53 bits with an unbounded
@@ -39196,6 +39243,7 @@ fn _bj_nf_same53(av: f64, ae, bv: f64, be, ad: f64, bd: f64): i64 {
 #must_use
 public fn bj_nf2ff_2d_phasor(ez: *BjCwAccumulator, hx: *BjCwAccumulator, hy: *BjCwAccumulator, nx, ny, dx: f64,
   box_margin, n_angles, out: *BjNf2ffResult): Result {
+    memset(out, 0, sizeof(BjNf2ffResult));
     var ok = _bj_nf_same53(ez.omega_s, ez.omega_e, hx.omega_s, hx.omega_e, ez.omega, hx.omega);
     if (ok == 1) { ok = _bj_nf_same53(ez.omega_s, ez.omega_e, hy.omega_s, hy.omega_e, ez.omega, hy.omega); }
     if (ok == 1) { ok = _bj_nf_same(ez.dt, hx.dt); }
@@ -39274,7 +39322,7 @@ public fn bj_nf2ff_2d_phasor(ez: *BjCwAccumulator, hx: *BjCwAccumulator, hy: *Bj
 # √ρ·|E_z(ρ, φ)| as ρ → ∞ at n_angles angles from 0 (BjNf2ffResult). A monochromatic approximation: the snapshot is
 # real, so the fields are taken as the phasor's real part and H (half a step behind E on the Yee grid) as it is, and the
 # result depends on the instant; for accurate patterns accumulate E_z, H_x and H_y in BjCwAccumulators and use
-# bj_nf2ff_2d_phasor. Ok(0), or with out untouched Err(InvalidParameter), Rust's texts in Rust's order: the grid isn't
+# bj_nf2ff_2d_phasor. Ok(0), or with out empty Err(InvalidParameter), Rust's texts in Rust's order: the grid isn't
 # TM ("NF2FF requires a TM-mode simulation, got Te"), n_angles is 0, the margin is 0 or at least nx/2 or ny/2, dx isn't
 # finite and positive, the frequency isn't. Rust's check that each field holds nx·ny samples goes (ADR 0002 row 2: the
 # arrays are fixed at construction). Err(Allocation) when the result can't be had. The core runs at its range edges as
@@ -39282,6 +39330,7 @@ public fn bj_nf2ff_2d_phasor(ez: *BjCwAccumulator, hx: *BjCwAccumulator, hy: *Bj
 # `nf2ff_2d`.
 #must_use
 public fn bj_nf2ff_2d(sim: *BjFdtd2d, box_margin, n_angles, frequency: f64, out: *BjNf2ffResult): Result {
+    memset(out, 0, sizeof(BjNf2ffResult));
     if (sim.mode != BJ_MODE2D_TM) {
         var tm = _bj_err_reason(BJ_ERR_INVALID_PARAMETER);
         _bj_tx_cstr(tm, "NF2FF requires a TM-mode simulation, got ");
@@ -39634,13 +39683,14 @@ fn _bj_so_log_name(t, c, n) {
     return 0;
 }
 
-# A field slice of the 2D grid sim into *out: Ok(0), or Err(Allocation) with out untouched. `component` (len bytes)
+# A field slice of the 2D grid sim into *out: Ok(0), or Err(Allocation) with out empty. `component` (len bytes)
 # names the field, case-insensitively and trimmed: fz, fx, fy, or the mode's physical name (TM: ez, hx, hy; TE: hz, ex,
 # ey). An unknown name, or bytes that are not UTF-8, fall back to fz (logged at debug level); the label always names
 # the data returned, `<Mode>_<axis>` ("Tm_z" for E_z in TM). BjFieldSlice2D_try_from_fdtd_2d refuses unknown names.
 # Mirrors `FieldSlice2D::from_fdtd_2d`.
 #must_use
 public fn BjFieldSlice2D_from_fdtd_2d(sim: *BjFdtd2d, component, len, out: *BjFieldSlice2D): Result {
+    memset(out, 0, sizeof(BjFieldSlice2D));
     var axis = _bj_so_resolve_2d(sim.mode, component, len);
     if (axis < 0) {
         axis = 2;
@@ -39658,12 +39708,13 @@ public fn BjFieldSlice2D_from_fdtd_2d(sim: *BjFdtd2d, component, len, out: *BjFi
     return Ok(0);
 }
 
-# A field slice of the 2D grid sim into *out, refusing unknown names: Ok(0), or with out untouched Err(InvalidParameter)
+# A field slice of the 2D grid sim into *out, refusing unknown names: Ok(0), or with out empty Err(InvalidParameter)
 # "unknown 2D FDTD component {component:?} for {mode:?} mode" (Rust's `{:?}` of the name), "2D FDTD component is not
 # valid UTF-8 (an invalid sequence at byte {k})" for bytes Rust's &str can't hold (ADR 0002 row 44), or
 # Err(Allocation). Accepts BjFieldSlice2D_from_fdtd_2d's names. Mirrors `FieldSlice2D::try_from_fdtd_2d`.
 #must_use
 public fn BjFieldSlice2D_try_from_fdtd_2d(sim: *BjFdtd2d, component, len, out: *BjFieldSlice2D): Result {
+    memset(out, 0, sizeof(BjFieldSlice2D));
     var bad = _bj_ts_utf8_bad(component, len);
     if (bad >= 0) {
         var tu = _bj_err_reason(BJ_ERR_INVALID_PARAMETER);
@@ -39741,12 +39792,13 @@ fn _bj_so_build_3d(sim: *BjFdtd3d, k, out: *BjFieldSlice3D): i64 {
     return 0;
 }
 
-# A field volume of the 3D grid sim into *out: Ok(0), or Err(Allocation) with out untouched. `component` (len bytes):
+# A field volume of the 3D grid sim into *out: Ok(0), or Err(Allocation) with out empty. `component` (len bytes):
 # ex, ey, ez, hx, hy or hz, case-insensitively and trimmed; an unknown name, or bytes that are not UTF-8, fall back to
 # ez (logged at debug level). The label is the canonical lowercase name of the data returned ("Ex" gives "ex", an
 # unknown name "ez"). BjFieldSlice3D_try_from_fdtd_3d refuses unknown names. Mirrors `FieldSlice3D::from_fdtd_3d`.
 #must_use
 public fn BjFieldSlice3D_from_fdtd_3d(sim: *BjFdtd3d, component, len, out: *BjFieldSlice3D): Result {
+    memset(out, 0, sizeof(BjFieldSlice3D));
     var k = _bj_so_select_3d(component, len);
     if (k < 0) {
         k = 2;
@@ -39764,12 +39816,13 @@ public fn BjFieldSlice3D_from_fdtd_3d(sim: *BjFdtd3d, component, len, out: *BjFi
     return Ok(0);
 }
 
-# A field volume of the 3D grid sim into *out, refusing unknown names: Ok(0), or with out untouched
+# A field volume of the 3D grid sim into *out, refusing unknown names: Ok(0), or with out empty
 # Err(InvalidParameter) "unknown 3D FDTD component {component:?} (expected one of ["ex", "ey", "ez", "hx", "hy",
 # "hz"])", "3D FDTD component is not valid UTF-8 (an invalid sequence at byte {k})" (ADR 0002 row 44), or
 # Err(Allocation). Mirrors `FieldSlice3D::try_from_fdtd_3d`.
 #must_use
 public fn BjFieldSlice3D_try_from_fdtd_3d(sim: *BjFdtd3d, component, len, out: *BjFieldSlice3D): Result {
+    memset(out, 0, sizeof(BjFieldSlice3D));
     var bad = _bj_ts_utf8_bad(component, len);
     if (bad >= 0) {
         var tu = _bj_err_reason(BJ_ERR_INVALID_PARAMETER);
@@ -39805,9 +39858,10 @@ public fn BjFieldSlice3D_try_from_fdtd_3d(sim: *BjFdtd3d, component, len, out: *
 
 # The n point charges at `charges` as render points into *out: each position and charge rounded to f32 (Rust's `as
 # f32`: nearest, ties to even, ±∞ past f32's range), and |charge| likewise. Ok(0), or Err(Allocation) with out
-# untouched. Mirrors `ChargeVisualization::from_point_charges`.
+# empty. Mirrors `ChargeVisualization::from_point_charges`.
 #must_use
 public fn BjChargeVisualization_from_point_charges(charges: *BjPointCharge, n, out: *BjChargeVisualization): Result {
+    memset(out, 0, sizeof(BjChargeVisualization));
     if (n < 0 || n > _BJ_SO_FL_MAX / 20) { return Err(_bj_so_alloc_err("a charge visualization")); }
     var bytes = n * 20;
     if (bytes == 0) { bytes = 20; }
@@ -39838,9 +39892,10 @@ public fn BjChargeVisualization_from_point_charges(charges: *BjPointCharge, n, o
 # The radiation pattern of an NF2FF result into *out: its angles and pattern copied, max_gain the fold of the pattern
 # from +0 by f64::max (mathx.cyr's _bj_max): a NaN is ignored, and −0 < +0, so a pattern of zeros has the gain +0 (ADR
 # 0002 row 47; Rust's x86-64 max returns its second operand on a tie, giving −0 after +0). Ok(0), or Err(Allocation)
-# with out untouched. Mirrors `RadiationPattern::from_nf2ff`.
+# with out empty. Mirrors `RadiationPattern::from_nf2ff`.
 #must_use
 public fn BjRadiationPattern_from_nf2ff(result: *BjNf2ffResult, out: *BjRadiationPattern): Result {
+    memset(out, 0, sizeof(BjRadiationPattern));
     var n = result.count;
     var a = _bj_so_copy(result.angles, n);
     var p = _bj_so_copy(result.pattern, n);
@@ -39898,11 +39953,12 @@ fn _bj_so_collect(vx: *f64, vy: *f64, vz: *f64, count, out: *BjVectorFieldSample
 # A vector field sample from parallel component arrays (vx with lx samples, vy with ly, vz with lz) on a regular grid
 # into *out, leniently: the first min(lx, ly, lz) samples, `dims` (nx, ny, nz) stored as given without checking the
 # count against nx·ny·nz, `origin` [x, y, z] and spacing as given; a NaN magnitude never sets max_magnitude. Ok(0), or
-# Err(Allocation) with out untouched. BjVectorFieldSample_try_from_components checks its input. Mirrors
+# Err(Allocation) with out empty. BjVectorFieldSample_try_from_components checks its input. Mirrors
 # `VectorFieldSample::from_components`.
 #must_use
 public fn BjVectorFieldSample_from_components(vx: *f64, lx, vy: *f64, ly, vz: *f64, lz, dims: *i64, origin: *f64,
   spacing: f64, out: *BjVectorFieldSample): Result {
+    memset(out, 0, sizeof(BjVectorFieldSample));
     var count = lx;
     if (_bj_fd2_uge(count, ly) == 1) { count = ly; }
     if (_bj_fd2_uge(count, lz) == 1) { count = lz; }
@@ -39930,13 +39986,14 @@ fn _bj_so_dims_debug(t, dims: *i64) {
 }
 
 # A vector field sample from parallel component arrays into *out, checking its input in Rust's order: Ok(0), or with
-# out untouched Err(InvalidParameter) "grid dimensions {dims:?} overflow usize" (nx·ny·nz past 2^64), "component
+# out empty Err(InvalidParameter) "grid dimensions {dims:?} overflow usize" (nx·ny·nz past 2^64), "component
 # lengths (lx, ly, lz) must all equal nx·ny·nz = {expected}", "grid spacing must be finite and positive, got
 # {spacing}", "grid origin must be finite, got {origin:?}", or Err(Allocation). Samples are row-major, z·ny·nx + y·nx +
 # x. Mirrors `VectorFieldSample::try_from_components`.
 #must_use
 public fn BjVectorFieldSample_try_from_components(vx: *f64, lx, vy: *f64, ly, vz: *f64, lz, dims: *i64,
   origin: *f64, spacing: f64, out: *BjVectorFieldSample): Result {
+    memset(out, 0, sizeof(BjVectorFieldSample));
     var p1: i64[1];
     var p2: i64[1];
     if (_bj_fd2_umul(dims[0], dims[1], &p1) == 0 || _bj_fd2_umul(p1[0], dims[2], &p2) == 0) {
@@ -41210,13 +41267,14 @@ public fn BjMuellerMatrix_from_json(buf, len, out: *BjMuellerMatrix): Result {
     return Ok(0);
 }
 
-# Reads a `MieResult` document from [buf, buf + len) into *out: Ok(0), or the error recorded with out untouched, as
+# Reads a `MieResult` document from [buf, buf + len) into *out: Ok(0), or the error recorded with out empty, errors as
 # BjComplex_from_json (and any coefficients read so far given back). `a` and `b` are arrays of any length, each
 # element a Complex in either of serde's forms, so out's lengths may differ, as Rust's public fields may. out gets new
 # coefficient blocks and is never read: free a previous result first (BjMieResult_free). Mirrors
 # `serde_json::from_str::<MieResult>`.
 #must_use
 public fn BjMieResult_from_json(buf, len, out: *BjMieResult): Result {
+    memset(out, 0, sizeof(BjMieResult));
     var w: i64[8];
     w[4] = 0;
     w[5] = 0;
@@ -41441,11 +41499,12 @@ fn _bj_jr_ts_data(v, w): i64 {
 }
 
 # Reads an `SMatrix` document from [buf, buf + len) into a new matrix in *out: Ok(0), or Err with the reason recorded
-# and out untouched (and never read), as BjComplex_from_json. Its shape is fixed (ADR 0002 row 36): `s` must be
+# and out empty (never read), errors as BjComplex_from_json. Its shape is fixed (ADR 0002 row 36): `s` must be
 # ports rows of ports entries and `z0` ports long, where serde reads any lengths (and a port count past 2^63 − 1, which
 # no matrix holds, is refused). Give the matrix back with BjSMatrix_free. Mirrors `serde_json::from_str::<SMatrix>`.
 #must_use
 public fn BjSMatrix_from_json(buf, len, out: *BjSMatrix): Result {
+    memset(out, 0, sizeof(BjSMatrix));
     var m: BjSMatrix;
     var code = _bj_jr_read(buf, len, &_bj_jr_smatrix, &m);
     if (code != 0) { return Err(code); }
@@ -41468,11 +41527,12 @@ public fn BjTouchstoneFormat_from_json(buf, len, out: *i64): Result {
 }
 
 # Reads a `TouchstoneData` document from [buf, buf + len) into new data in *out: Ok(0), or Err with the reason
-# recorded and out untouched (and never read), as BjComplex_from_json. Its shape is fixed (ADR 0002 row 36): as many
+# recorded and out empty (never read), errors as BjComplex_from_json. Its shape is fixed (ADR 0002 row 36): as many
 # matrices as frequencies, each a ports-port SMatrix of the data's ports, where serde reads any. Give the data back
 # with BjTouchstoneData_free. Mirrors `serde_json::from_str::<TouchstoneData>`.
 #must_use
 public fn BjTouchstoneData_from_json(buf, len, out: *BjTouchstoneData): Result {
+    memset(out, 0, sizeof(BjTouchstoneData));
     var d: BjTouchstoneData;
     var code = _bj_jr_read(buf, len, &_bj_jr_ts_data, &d);
     if (code != 0) { return Err(code); }
@@ -41794,10 +41854,11 @@ public fn BjDebyeMaterial_from_json(buf, len, out: *BjDebyeMaterial): Result {
 }
 
 # Reads a `NonUniformGrid` document from [buf, buf + len) into a new grid in *out: Ok(0), or the error recorded with
-# out untouched (and never read), as BjComplex_from_json; each axis an array of any length, its widths as written (a
+# out empty (never read), errors as BjComplex_from_json; each axis an array of any length, its widths as written (a
 # grid validate refuses too). Give it back with BjNonUniformGrid_free. Mirrors `serde_json::from_str::<NonUniformGrid>`.
 #must_use
 public fn BjNonUniformGrid_from_json(buf, len, out: *BjNonUniformGrid): Result {
+    memset(out, 0, sizeof(BjNonUniformGrid));
     var g: BjNonUniformGrid;
     g.block = 0;
     g.nx = 0;
@@ -41813,10 +41874,11 @@ public fn BjNonUniformGrid_from_json(buf, len, out: *BjNonUniformGrid): Result {
 }
 
 # Reads an `EigenmodeResult` document from [buf, buf + len) into a new result in *out: Ok(0), or the error recorded
-# with out untouched (and never read), as BjComplex_from_json. Its three arrays must be equally long (ADR 0002 row 36),
+# with out empty (never read), errors as BjComplex_from_json. Its three arrays must be equally long (ADR 0002 row 36),
 # where serde reads any. Give it back with BjEigenmodeResult_free. Mirrors `serde_json::from_str::<EigenmodeResult>`.
 #must_use
 public fn BjEigenmodeResult_from_json(buf, len, out: *BjEigenmodeResult): Result {
+    memset(out, 0, sizeof(BjEigenmodeResult));
     var r: BjEigenmodeResult;
     r.frequencies = 0;
     r.count = 0;
@@ -42670,12 +42732,13 @@ fn _bj_jr_zero(w: *i64, n) {
 }
 
 # Reads a `FieldSlice2D` document from [buf, buf + len) into a new slice in *out: Ok(0), or the error recorded with
-# out untouched (and never read), as BjComplex_from_json. The fields are read as written, as serde's derive reads
+# out empty (never read), errors as BjComplex_from_json. The fields are read as written, as serde's derive reads
 # Rust's public fields: any number of values (a count other than nx·ny too), the dimensions and step integers from 0
 # to 2^63 − 1 (ADR 0002 row 36: past it bayan's tree keeps no exact integer, where serde reads up to u64::MAX), the
 # component any JSON string. Give it back with BjFieldSlice2D_free. Mirrors `serde_json::from_str::<FieldSlice2D>`.
 #must_use
 public fn BjFieldSlice2D_from_json(buf, len, out: *BjFieldSlice2D): Result {
+    memset(out, 0, sizeof(BjFieldSlice2D));
     var w: i64[12];
     _bj_jr_zero(&w, 12);
     var code = _bj_jr_read(buf, len, &_bj_jr_slice2, &w);
@@ -42698,10 +42761,11 @@ public fn BjFieldSlice2D_from_json(buf, len, out: *BjFieldSlice2D): Result {
 }
 
 # Reads a `FieldSlice3D` document from [buf, buf + len) into a new volume in *out: Ok(0), or the error recorded with
-# out untouched (and never read), as BjFieldSlice2D_from_json. Give it back with BjFieldSlice3D_free. Mirrors
+# out empty (never read), errors as BjFieldSlice2D_from_json. Give it back with BjFieldSlice3D_free. Mirrors
 # `serde_json::from_str::<FieldSlice3D>`.
 #must_use
 public fn BjFieldSlice3D_from_json(buf, len, out: *BjFieldSlice3D): Result {
+    memset(out, 0, sizeof(BjFieldSlice3D));
     var w: i64[12];
     _bj_jr_zero(&w, 12);
     var code = _bj_jr_read(buf, len, &_bj_jr_slice3, &w);
@@ -42759,10 +42823,11 @@ fn _bj_jr_lines(v, w: *i64): i64 {
 }
 
 # Reads a `FieldLine` document from [buf, buf + len) into a new line in *out: Ok(0), or the error recorded with out
-# untouched (and never read), as BjComplex_from_json; any numbers of points and magnitudes. Give it back with
+# empty (and never read), as BjComplex_from_json; any numbers of points and magnitudes. Give it back with
 # BjFieldLine_free. Mirrors `serde_json::from_str::<FieldLine>`.
 #must_use
 public fn BjFieldLine_from_json(buf, len, out: *BjFieldLine): Result {
+    memset(out, 0, sizeof(BjFieldLine));
     var w: i64[4];
     _bj_jr_zero(&w, 4);
     var code = _bj_jr_read(buf, len, &_bj_jr_line, &w);
@@ -42778,10 +42843,11 @@ public fn BjFieldLine_from_json(buf, len, out: *BjFieldLine): Result {
 }
 
 # Reads a `FieldLineVisualization` document from [buf, buf + len) into a new visualization in *out: Ok(0), or the
-# error recorded with out untouched (and never read), as BjComplex_from_json; each line as BjFieldLine_from_json reads
+# error recorded with out empty (never read), errors as BjComplex_from_json; each line as BjFieldLine_from_json reads
 # it. Give it back with BjFieldLineVisualization_free. Mirrors `serde_json::from_str::<FieldLineVisualization>`.
 #must_use
 public fn BjFieldLineVisualization_from_json(buf, len, out: *BjFieldLineVisualization): Result {
+    memset(out, 0, sizeof(BjFieldLineVisualization));
     var lv: BjFieldLineVisualization;
     lv.lines = 0;
     lv.lines_len = 0;
@@ -42878,10 +42944,11 @@ public fn BjChargePoint_from_json(buf, len, out: *BjChargePoint): Result {
 }
 
 # Reads a `ChargeVisualization` document from [buf, buf + len) into a new visualization in *out: Ok(0), or the error
-# recorded with out untouched (and never read), as BjComplex_from_json; each point as BjChargePoint_from_json reads
+# recorded with out empty (never read), errors as BjComplex_from_json; each point as BjChargePoint_from_json reads
 # it. Give it back with BjChargeVisualization_free. Mirrors `serde_json::from_str::<ChargeVisualization>`.
 #must_use
 public fn BjChargeVisualization_from_json(buf, len, out: *BjChargeVisualization): Result {
+    memset(out, 0, sizeof(BjChargeVisualization));
     var cx: i64[5];
     _bj_jr_zero(&cx, 5);
     cx[0] = buf;
@@ -42915,11 +42982,12 @@ fn _bj_jr_pattern(v, w): i64 {
 }
 
 # Reads a `RadiationPattern` document from [buf, buf + len) into a new pattern in *out: Ok(0), or the error recorded
-# with out untouched (and never read), as BjComplex_from_json. The fields are read as written: angles and pattern of
+# with out empty (never read), errors as BjComplex_from_json. The fields are read as written: angles and pattern of
 # any lengths, a max_gain that isn't their maximum too. Give it back with BjRadiationPattern_free. Mirrors
 # `serde_json::from_str::<RadiationPattern>`.
 #must_use
 public fn BjRadiationPattern_from_json(buf, len, out: *BjRadiationPattern): Result {
+    memset(out, 0, sizeof(BjRadiationPattern));
     var w: i64[5];
     _bj_jr_zero(&w, 5);
     var code = _bj_jr_read(buf, len, &_bj_jr_pattern, &w);
@@ -42964,12 +43032,13 @@ fn _bj_jr_vectors(v, w): i64 {
 }
 
 # Reads a `VectorFieldSample` document from [buf, buf + len) into a new sample in *out: Ok(0), or the error recorded
-# with out untouched (and never read), as BjComplex_from_json. The fields are read as written (a vector count other
+# with out empty (never read), errors as BjComplex_from_json. The fields are read as written (a vector count other
 # than nx·ny·nz, a spacing or origin try_from_components refuses, a max_magnitude that isn't the largest too), the
 # dimensions from 0 to 2^63 − 1 (ADR 0002 row 36). Give it back with BjVectorFieldSample_free. Mirrors
 # `serde_json::from_str::<VectorFieldSample>`.
 #must_use
 public fn BjVectorFieldSample_from_json(buf, len, out: *BjVectorFieldSample): Result {
+    memset(out, 0, sizeof(BjVectorFieldSample));
     var w: i64[10];
     _bj_jr_zero(&w, 10);
     var code = _bj_jr_read(buf, len, &_bj_jr_vectors, &w);
@@ -43090,9 +43159,10 @@ fn _bj_ai_has_control(s, n): i64 {
 # A daimon configuration in *out from the endpoint's endpoint_len bytes and the API key's api_key_len bytes (api_key 0
 # for None), each copied into a block of its own: Ok(0), Err(InvalidParameter) for bytes that are not UTF-8 ("daimon
 # endpoint is not valid UTF-8 (an invalid sequence at byte k)", "daimon API key …"), or Err(Allocation), with out
-# untouched. Rust's struct literal, whose `String` fields hold any UTF-8. Give it back with BjDaimonConfig_free.
+# empty. Rust's struct literal, whose `String` fields hold any UTF-8. Give it back with BjDaimonConfig_free.
 #must_use
 public fn BjDaimonConfig_new(endpoint, endpoint_len, api_key, api_key_len, out: *BjDaimonConfig): Result {
+    memset(out, 0, sizeof(BjDaimonConfig));
     var be = _bj_ts_utf8_bad(endpoint, endpoint_len);
     if (be >= 0) { return Err(_bj_ai_not_utf8("daimon endpoint", be)); }
     if (api_key != 0) {
@@ -43116,9 +43186,10 @@ public fn BjDaimonConfig_new(endpoint, endpoint_len, api_key, api_key_len, out: 
 }
 
 # The default daimon configuration in *out: endpoint `http://localhost:8090`, no API key. Ok(0), or Err(Allocation)
-# with out untouched. Mirrors `impl Default for DaimonConfig`.
+# with out empty. Mirrors `impl Default for DaimonConfig`.
 #must_use
 public fn BjDaimonConfig_default(out: *BjDaimonConfig): Result {
+    memset(out, 0, sizeof(BjDaimonConfig));
     return BjDaimonConfig_new("http://localhost:8090", 21, 0, 0, out);
 }
 
@@ -43183,10 +43254,11 @@ fn _bj_ai_config_dec(v, w): i64 {
 }
 
 # Reads a `DaimonConfig` document from [buf, buf + len) into a new configuration in *out: Ok(0), or the error recorded
-# with out untouched (and never read), as BjComplex_from_json; `api_key` absent or null is None, a string Some, any
+# with out empty (and never read), as BjComplex_from_json; `api_key` absent or null is None, a string Some, any
 # other type refused. Give it back with BjDaimonConfig_free. Mirrors `serde_json::from_str::<DaimonConfig>`.
 #must_use
 public fn BjDaimonConfig_from_json(buf, len, out: *BjDaimonConfig): Result {
+    memset(out, 0, sizeof(BjDaimonConfig));
     var w: i64[4];
     w[0] = 0;
     w[1] = 0;
@@ -43208,10 +43280,11 @@ public fn BjDaimonConfig_from_json(buf, len, out: *BjDaimonConfig): Result {
 # ── HooshConfig ───────────────────────────────────────────────────────────────────────────────────────────────────
 
 # A hoosh configuration in *out from the endpoint's len bytes, copied: Ok(0), Err(InvalidParameter) for bytes that are
-# not UTF-8 ("hoosh endpoint is not valid UTF-8 (…)"), or Err(Allocation), with out untouched. Rust's struct literal.
+# not UTF-8 ("hoosh endpoint is not valid UTF-8 (…)"), or Err(Allocation), with out empty. Rust's struct literal.
 # Give it back with BjHooshConfig_free.
 #must_use
 public fn BjHooshConfig_new(endpoint, len, out: *BjHooshConfig): Result {
+    memset(out, 0, sizeof(BjHooshConfig));
     var be = _bj_ts_utf8_bad(endpoint, len);
     if (be >= 0) { return Err(_bj_ai_not_utf8("hoosh endpoint", be)); }
     var e = _bj_ai_copy(endpoint, len);
@@ -43222,9 +43295,10 @@ public fn BjHooshConfig_new(endpoint, len, out: *BjHooshConfig): Result {
 }
 
 # The default hoosh configuration in *out: endpoint `http://localhost:8088`. Ok(0), or Err(Allocation) with out
-# untouched. Mirrors `impl Default for HooshConfig`.
+# empty. Mirrors `impl Default for HooshConfig`.
 #must_use
 public fn BjHooshConfig_default(out: *BjHooshConfig): Result {
+    memset(out, 0, sizeof(BjHooshConfig));
     return BjHooshConfig_new("http://localhost:8088", 21, out);
 }
 
@@ -43268,10 +43342,11 @@ fn _bj_ai_hoosh_dec(v, w): i64 {
 }
 
 # Reads a `HooshConfig` document from [buf, buf + len) into a new configuration in *out: Ok(0), or the error recorded
-# with out untouched (and never read), as BjComplex_from_json. Give it back with BjHooshConfig_free. Mirrors
+# with out empty (and never read), as BjComplex_from_json. Give it back with BjHooshConfig_free. Mirrors
 # `serde_json::from_str::<HooshConfig>`.
 #must_use
 public fn BjHooshConfig_from_json(buf, len, out: *BjHooshConfig): Result {
+    memset(out, 0, sizeof(BjHooshConfig));
     var w: i64[2];
     w[0] = 0;
     w[1] = 0;
@@ -43288,7 +43363,7 @@ public fn BjHooshConfig_from_json(buf, len, out: *BjHooshConfig): Result {
 # ── DaimonClient ──────────────────────────────────────────────────────────────────────────────────────────────────
 
 # A client for daimon in *out with its own copy of config and a 30 s request deadline: Ok(0), or Err(Allocation) with
-# out untouched (Rust's "failed to build HTTP client" has no counterpart: nothing is built until a request). Logged at
+# out empty (Rust's "failed to build HTTP client" has no counterpart: nothing is built until a request). Logged at
 # debug level (`creating daimon client endpoint=<endpoint>`; never the key). Give it back with BjDaimonClient_free.
 # Mirrors `DaimonClient::new`.
 #must_use
@@ -43302,8 +43377,12 @@ public fn BjDaimonClient_new(config: *BjDaimonConfig, out: *BjDaimonClient): Res
         _bj_log_text(4, &lt);
     }
     var oc: *BjDaimonConfig = _bj_ai_cfgp(out);
+    # config may lie inside out (its own config): BjDaimonConfig_new empties oc only after its arguments are read.
     var t, v = BjDaimonConfig_new(config.endpoint, config.endpoint_len, config.api_key, config.api_key_len, oc);
-    if (is_err_result(t) == 1) { return Err(v); }
+    if (is_err_result(t) == 1) {
+        out.timeout_ms = 0;
+        return Err(v);
+    }
     out.timeout_ms = _BJ_AI_TIMEOUT_MS;
     return Ok(0);
 }

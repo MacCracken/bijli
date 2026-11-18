@@ -290,7 +290,7 @@ fn _bj_fs_bad_range(head, n, mid, m): i64 {
 }
 
 # Creates a TF/SF source over nx cells (a usize) with its boundary at column boundary_x into *out: the soft source at
-# max(boundary_x/4, 1) (at most nx − 2), every field zero. Ok(0), or with out untouched:
+# max(boundary_x/4, 1) (at most nx − 2), every field zero. Ok(0), or with out empty:
 # - Err(InsufficientResolution) for nx < 3;
 # - Err(InvalidParameter) "TFSF boundary_x must be in 1..{nx}, got {boundary_x}" unless 1 ≤ boundary_x < nx;
 # - Err(InvalidParameter) "dx must be finite and positive, got {dx}";
@@ -300,6 +300,7 @@ fn _bj_fs_bad_range(head, n, mid, m): i64 {
 # Give it back with BjTfsfSource_free. Mirrors `TfsfSource::try_new`.
 #must_use
 public fn BjTfsfSource_try_new(nx, boundary_x, dx: f64, dt: f64, out: *BjTfsfSource): Result {
+    memset(out, 0, sizeof(BjTfsfSource));
     if (nx >= 0 && nx < 3) {
         var nf: f64 = f64_from(nx);
         var size: f64 = nf * dx;
@@ -394,6 +395,7 @@ public fn BjTfsfSource_try_new(nx, boundary_x, dx: f64, dt: f64, out: *BjTfsfSou
 # error (ADR 0002 row 3). Mirrors `TfsfSource::new`.
 #must_use
 public fn BjTfsfSource_new(nx, boundary_x, dx: f64, dt: f64, out: *BjTfsfSource): Result {
+    memset(out, 0, sizeof(BjTfsfSource));
     return BjTfsfSource_try_new(nx, boundary_x, dx, dt, out);
 }
 

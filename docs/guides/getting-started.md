@@ -46,7 +46,8 @@ fn main(): i64 {
 
 Every fallible function returns a value-form `Result` (`var t, v = f(..)`); on an error `v` is a `BJ_ERR_*` code and
 `bj_last_error_display()` is the error's text. A struct that owns memory (the FDTD grids, an S-matrix, a field
-slice) is given back with its `_free`. Formatting writes into a text over a buffer you own:
+slice) is given back with its `_free`; a constructor that fails leaves it empty, so a `_free` after the failure (a
+`defer`, say) does nothing. Formatting writes into a text over a buffer you own:
 
 ```cyrius
 var z: BjComplex = BjComplex_new(1.0, -2.0);

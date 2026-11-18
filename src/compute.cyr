@@ -327,12 +327,13 @@ fn _bj_cb_host(n, v: f64): i64 {
 }
 
 # A vacuum TM grid of nx × ny nodes at spacing dx on `backend` into *out (the backend copied in): Ok(0), or with out
-# untouched Err(InsufficientResolution) when nx < 3 or ny < 3 (cells min(nx, ny), domain min·dx),
+# empty Err(InsufficientResolution) when nx < 3 or ny < 3 (cells min(nx, ny), domain min·dx),
 # Err(InvalidParameter) "dx must be finite and positive, got {dx}" or "grid {nx}x{ny} is too large", in Rust's order,
 # or a buffer's creation error (the buffers made so far given back). dt = dx/(2√2·c), half the 2D Courant limit, it
 # and the coefficients rounded once (ADR 0002 row 13, M6 part 4a). Mirrors `GpuFdtd2d::new`.
 #must_use
 public fn BjGpuFdtd2d_new<B: BjComputeBackend>(nx, ny, dx: f64, backend: B, out: *BjGpuFdtd2d<B>): Result {
+    memset(out, 0, sizeof(BjGpuFdtd2d<B>));
     if ((nx >= 0 && nx < 3) || (ny >= 0 && ny < 3)) {
         var mn = nx;
         if (_bj_fd2_uge(nx, ny) == 1) { mn = ny; }
@@ -371,6 +372,8 @@ public fn BjGpuFdtd2d_new<B: BjComputeBackend>(nx, ny, dx: f64, backend: B, out:
     var bufs: i64[5];
     var made = 0;
     var code = 0;
+    # The buffers are made through out's own copy of the backend (a consumer's backend may keep state), which an
+    # error empties again with the rest of out.
     out.backend = backend;
     while (made < 5 && code == 0) {
         var src = zeros;
@@ -391,6 +394,7 @@ public fn BjGpuFdtd2d_new<B: BjComputeBackend>(nx, ny, dx: f64, backend: B, out:
     cyr_munmap(vals, n * 8);
     if (code != 0) {
         for (var j = 0; j < made; j = j + 1) { out.backend.free_buffer(bufs[j]); }
+        memset(out, 0, sizeof(BjGpuFdtd2d<B>));
         return Err(code);
     }
     out.nx = nx;

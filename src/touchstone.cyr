@@ -98,11 +98,12 @@ fn _bj_ts_alloc(ports, z0: f64, points, out: *BjTouchstoneData): i64 {
 }
 
 # A new BjTouchstoneData of `points` frequencies (0 Hz) and as many ports-port matrices (every entry 0, every
-# reference impedance z0) into *out, for bj_try_write_touchstone: Ok(0), or Err(Allocation) with out untouched. Nothing
+# reference impedance z0) into *out, for bj_try_write_touchstone: Ok(0), or Err(Allocation) with out empty. Nothing
 # is checked, as Rust's struct literal checks nothing: the writer does. Fill it with set_frequency and each matrix_at's
 # set and set_z0.
 #must_use
 public fn BjTouchstoneData_new(ports, z0: f64, points, out: *BjTouchstoneData): Result {
+    memset(out, 0, sizeof(BjTouchstoneData));
     if (ports < 0 || points < 0) {
         var t = _bj_err_reason(BJ_ERR_ALLOCATION);
         _bj_tx_cstr(t, "Touchstone data of ");
@@ -746,7 +747,7 @@ public fn _bj_ts_format_name(fmt): i64 {
 }
 
 # Parses Touchstone v1.1 (`.sNp`) S-parameter content, the len bytes at content, for a ports-port network into a new
-# BjTouchstoneData in *out: Ok(0), or Err with out untouched (and never read).
+# BjTouchstoneData in *out: Ok(0), or Err with out empty (and never read).
 # - The option line `# <unit> <param> <format> R <z0>` is case-insensitive, its defaults `GHz S MA R 50`. Only the
 #   first is used (later ones are ignored, as the spec says), and it must precede the data. Units Hz, kHz, MHz, GHz;
 #   formats RI, MA, DB (angles in degrees); parameter types other than S are refused.
@@ -760,6 +761,7 @@ public fn _bj_ts_format_name(fmt): i64 {
 # last record, or no record at all; Allocation when the buffers can't be had. Mirrors `rf::parse_touchstone`.
 #must_use
 public fn bj_parse_touchstone(content, len, ports, out: *BjTouchstoneData): Result {
+    memset(out, 0, sizeof(BjTouchstoneData));
     if (ports <= 0 || ports > _BJ_TS_MAX_PORTS) {
         var t = _bj_err_reason(BJ_ERR_INVALID_PARAMETER);
         _bj_tx_cstr(t, "Touchstone port count must be in 1..=256, got ");

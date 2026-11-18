@@ -107,11 +107,12 @@ fn _bj_fu_fill(p, n, x: f64) {
 }
 
 # A uniform grid of nx × ny × nz cells (usize), every width `spacing`, into *out, unchecked as Rust's (an empty axis or
-# an invalid spacing makes an invalid grid, whose courant_dt is 0.0): Ok(0), or Err(Allocation) with out untouched
+# an invalid spacing makes an invalid grid, whose courant_dt is 0.0): Ok(0), or Err(Allocation) with out empty
 # when the block can't be had (Rust's vec! aborts). Give it back with BjNonUniformGrid_free. Mirrors
 # `NonUniformGrid::uniform`.
 #must_use
 public fn BjNonUniformGrid_uniform(nx, ny, nz, spacing: f64, out: *BjNonUniformGrid): Result {
+    memset(out, 0, sizeof(BjNonUniformGrid));
     var g: BjNonUniformGrid;
     var e = _bj_fu_grid_alloc(nx, ny, nz, &g);
     if (e != 0) { return Err(e); }
@@ -120,11 +121,12 @@ public fn BjNonUniformGrid_uniform(nx, ny, nz, spacing: f64, out: *BjNonUniformG
     return Ok(0);
 }
 
-# A uniform grid, checked: Ok(0), or with out untouched Err(InsufficientResolution) (cells 0, domain size 0) when an
+# A uniform grid, checked: Ok(0), or with out empty Err(InsufficientResolution) (cells 0, domain size 0) when an
 # axis has no cell, Err(InvalidParameter) "grid spacing must be finite and positive, got {spacing}", Err(Allocation).
 # Mirrors `NonUniformGrid::try_uniform`.
 #must_use
 public fn BjNonUniformGrid_try_uniform(nx, ny, nz, spacing: f64, out: *BjNonUniformGrid): Result {
+    memset(out, 0, sizeof(BjNonUniformGrid));
     if (nx == 0 || ny == 0 || nz == 0) { return Err(_bj_err_insufficient_resolution(0, 0.0)); }
     if (_bj_fu_pos(spacing) == 0) {
         var t = _bj_err_reason(BJ_ERR_INVALID_PARAMETER);
@@ -136,9 +138,10 @@ public fn BjNonUniformGrid_try_uniform(nx, ny, nz, spacing: f64, out: *BjNonUnif
 }
 
 # A grid of the given widths (nx at dx, ny at dy, nz at dz), copied, unchecked: Rust builds one from its public vectors
-# (`NonUniformGrid { dx, dy, dz }`, `graded`'s among them). Ok(0), or Err(Allocation) with out untouched. Cyrius only.
+# (`NonUniformGrid { dx, dy, dz }`, `graded`'s among them). Ok(0), or Err(Allocation) with out empty. Cyrius only.
 #must_use
 public fn BjNonUniformGrid_from_axes(dx: *f64, nx, dy: *f64, ny, dz: *f64, nz, out: *BjNonUniformGrid): Result {
+    memset(out, 0, sizeof(BjNonUniformGrid));
     var g: BjNonUniformGrid;
     var e = _bj_fu_grid_alloc(nx, ny, nz, &g);
     if (e != 0) { return Err(e); }
@@ -563,9 +566,10 @@ public struct BjCwAccumulator {
 
 # An accumulator for field_size points at `frequency` (Hz) with step dt into *out, unchecked as Rust's (a non-finite
 # frequency or an invalid dt is accepted with a warning and gives meaningless results): Ok(0), or Err(Allocation)
-# with out untouched. Give it back with BjCwAccumulator_free. Mirrors `CwAccumulator::new`.
+# with out empty. Give it back with BjCwAccumulator_free. Mirrors `CwAccumulator::new`.
 #must_use
 public fn BjCwAccumulator_new(field_size, frequency: f64, dt: f64, out: *BjCwAccumulator): Result {
+    memset(out, 0, sizeof(BjCwAccumulator));
     var f0: f64 = frequency * 0.0;
     if ((f0 != 0.0 || _bj_fu_pos(dt) == 0) && _bj_log_on(2) == 1) {
         var lb[256];
@@ -621,11 +625,12 @@ public fn BjCwAccumulator_new(field_size, frequency: f64, dt: f64, out: *BjCwAcc
     return Ok(0);
 }
 
-# An accumulator, checked: Ok(0), or with out untouched Err(InvalidParameter) "CW frequency must be finite and
+# An accumulator, checked: Ok(0), or with out empty Err(InvalidParameter) "CW frequency must be finite and
 # non-negative, got {f}" or "dt must be finite and positive, got {dt}", or Err(Allocation). Mirrors
 # `CwAccumulator::try_new`.
 #must_use
 public fn BjCwAccumulator_try_new(field_size, frequency: f64, dt: f64, out: *BjCwAccumulator): Result {
+    memset(out, 0, sizeof(BjCwAccumulator));
     if (!(frequency >= 0.0 && frequency < _BJ_FU_INF)) {
         var t = _bj_err_reason(BJ_ERR_INVALID_PARAMETER);
         _bj_tx_cstr(t, "CW frequency must be finite and non-negative, got ");
@@ -1195,13 +1200,14 @@ fn _bj_fu_bad(reason): i64 {
 
 # The resonances in the n samples at signal (step dt): the DFT magnitude at n_freq frequencies spanning [freq_min,
 # freq_max] inclusive, then every strict local maximum above 10 % of the strongest, with its half-power Q, into *out
-# (free a previous result first). Ok(0), or with out untouched Err(InvalidParameter) for an empty signal, n_freq < 2,
+# (free a previous result first). Ok(0), or with out empty Err(InvalidParameter) for an empty signal, n_freq < 2,
 # a dt that isn't finite and positive, a range other than 0 ≤ freq_min < freq_max < ∞, or a non-finite sample (in that
 # order, Rust's texts); Err(Allocation) when the spectrum or the result can't be had. A freq_max past Nyquist is
 # warned of. Mirrors `find_eigenmodes`.
 #must_use
 public fn bj_find_eigenmodes(signal: *f64, n, dt: f64, freq_min: f64, freq_max: f64, n_freq,
   out: *BjEigenmodeResult): Result {
+    memset(out, 0, sizeof(BjEigenmodeResult));
     if (n == 0) { return Err(_bj_fu_bad("time signal is empty")); }
     if (n_freq >= 0 && n_freq < 2) {
         var t = _bj_err_reason(BJ_ERR_INVALID_PARAMETER);

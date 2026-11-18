@@ -104,23 +104,26 @@ fn main() {
     bad.grading_order = 0.0;
     var t4, v4 = BjCpml_with_params(&bad, DX, DT, &cn);
     assert(is_err_result(t4) == 1, "grading order 0");
-    # The infallible constructor degrades to an inert, unattachable layer.
+    # Rust's infallible constructor degraded to an inert, unattachable layer; the port's refuses, with out empty
+    # (ADR 0002 row 3, 2.0.1).
     var inert: BjCpml;
-    BjCpml_new(8, -1.0, DT, &inert);
-    inert.attach(60, 60);
-    assert(_bj_cpml_is_attached_to(&inert, 60, 60) == 0, "the inert layer never attaches");
+    inert.prof_n = 5;
+    var ti, vi = BjCpml_new(8, -1.0, DT, &inert);
+    var wi = "invalid parameter: CPML dx must be finite and positive, got -1";
+    assert(is_err_result(ti) == 1 && vi == BJ_ERR_INVALID_PARAMETER && text_is(bj_last_error_display(), wi) == 1 &&
+      inert.prof_n == 0 && inert.prof_block == 0, "an invalid dx refused, out empty");
     BjCpml_free(&inert);
 
     test_group("test_cpml_creation");
     var cc: BjCpml;
-    BjCpml_new(10, 0.001, 0.000000000001, &cc);
+    var tcc, vcc = BjCpml_new(10, 0.001, 0.000000000001, &cc);
     var scc: f64 = cc.sigma_max();
-    assert(cc.thickness == 10 && scc > 0.0 && cc.prof_n == 10, "10 layers, σ_max > 0");
+    assert(is_ok(tcc) == 1 && cc.thickness == 10 && scc > 0.0 && cc.prof_n == 10, "10 layers, σ_max > 0");
     BjCpml_free(&cc);
 
     test_group("test_cpml_coefficients_bounded");
     var cb: BjCpml;
-    BjCpml_new(10, DX, DT, &cb);
+    var tcb, vcb = BjCpml_new(10, DX, DT, &cb);
     var inb = 1;
     for (var lb = 0; lb < 10; lb = lb + 1) {
         var bn: f64 = at(cb.b_node, lb);
@@ -132,7 +135,7 @@ fn main() {
 
     test_group("test_cpml_attach_sizes");
     var ca: BjCpml;
-    BjCpml_new(8, DX, DT, &ca);
+    var tca, vca = BjCpml_new(8, DX, DT, &ca);
     ca.attach(100, 80);
     assert(ca.psi_x_len == 2 * 8 * 100 && ca.psi_y_len == 2 * 8 * 80, "psi_fz_y 2·8·100, psi_fz_x 2·8·80");
     BjCpml_free(&ca);
@@ -176,7 +179,7 @@ fn main() {
     assert(pn.thickness == 12 && pn.grading_order == 3.0 && pn.sigma_ratio == 1.0, "new's thickness, m, ratio");
     assert(pn.kappa_max == 1.0 && pn.alpha_max == 0.0, "new's κ_max, α_max: the classic grading");
     var cl: BjCpml;
-    BjCpml_new(4, DX, DT, &cl);
+    var tcl, vcl = BjCpml_new(4, DX, DT, &cl);
     var sm: f64 = cl.sigma_max();
     var mu0: f64 = BJ_MU_0;
     var eta0: f64 = mu0 * BJ_SPEED_OF_LIGHT;

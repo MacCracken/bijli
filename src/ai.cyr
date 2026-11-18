@@ -95,9 +95,10 @@ fn _bj_ai_has_control(s, n): i64 {
 # A daimon configuration in *out from the endpoint's endpoint_len bytes and the API key's api_key_len bytes (api_key 0
 # for None), each copied into a block of its own: Ok(0), Err(InvalidParameter) for bytes that are not UTF-8 ("daimon
 # endpoint is not valid UTF-8 (an invalid sequence at byte k)", "daimon API key …"), or Err(Allocation), with out
-# untouched. Rust's struct literal, whose `String` fields hold any UTF-8. Give it back with BjDaimonConfig_free.
+# empty. Rust's struct literal, whose `String` fields hold any UTF-8. Give it back with BjDaimonConfig_free.
 #must_use
 public fn BjDaimonConfig_new(endpoint, endpoint_len, api_key, api_key_len, out: *BjDaimonConfig): Result {
+    memset(out, 0, sizeof(BjDaimonConfig));
     var be = _bj_ts_utf8_bad(endpoint, endpoint_len);
     if (be >= 0) { return Err(_bj_ai_not_utf8("daimon endpoint", be)); }
     if (api_key != 0) {
@@ -121,9 +122,10 @@ public fn BjDaimonConfig_new(endpoint, endpoint_len, api_key, api_key_len, out: 
 }
 
 # The default daimon configuration in *out: endpoint `http://localhost:8090`, no API key. Ok(0), or Err(Allocation)
-# with out untouched. Mirrors `impl Default for DaimonConfig`.
+# with out empty. Mirrors `impl Default for DaimonConfig`.
 #must_use
 public fn BjDaimonConfig_default(out: *BjDaimonConfig): Result {
+    memset(out, 0, sizeof(BjDaimonConfig));
     return BjDaimonConfig_new("http://localhost:8090", 21, 0, 0, out);
 }
 
@@ -188,10 +190,11 @@ fn _bj_ai_config_dec(v, w): i64 {
 }
 
 # Reads a `DaimonConfig` document from [buf, buf + len) into a new configuration in *out: Ok(0), or the error recorded
-# with out untouched (and never read), as BjComplex_from_json; `api_key` absent or null is None, a string Some, any
+# with out empty (and never read), as BjComplex_from_json; `api_key` absent or null is None, a string Some, any
 # other type refused. Give it back with BjDaimonConfig_free. Mirrors `serde_json::from_str::<DaimonConfig>`.
 #must_use
 public fn BjDaimonConfig_from_json(buf, len, out: *BjDaimonConfig): Result {
+    memset(out, 0, sizeof(BjDaimonConfig));
     var w: i64[4];
     w[0] = 0;
     w[1] = 0;
@@ -213,10 +216,11 @@ public fn BjDaimonConfig_from_json(buf, len, out: *BjDaimonConfig): Result {
 # ── HooshConfig ───────────────────────────────────────────────────────────────────────────────────────────────────
 
 # A hoosh configuration in *out from the endpoint's len bytes, copied: Ok(0), Err(InvalidParameter) for bytes that are
-# not UTF-8 ("hoosh endpoint is not valid UTF-8 (…)"), or Err(Allocation), with out untouched. Rust's struct literal.
+# not UTF-8 ("hoosh endpoint is not valid UTF-8 (…)"), or Err(Allocation), with out empty. Rust's struct literal.
 # Give it back with BjHooshConfig_free.
 #must_use
 public fn BjHooshConfig_new(endpoint, len, out: *BjHooshConfig): Result {
+    memset(out, 0, sizeof(BjHooshConfig));
     var be = _bj_ts_utf8_bad(endpoint, len);
     if (be >= 0) { return Err(_bj_ai_not_utf8("hoosh endpoint", be)); }
     var e = _bj_ai_copy(endpoint, len);
@@ -227,9 +231,10 @@ public fn BjHooshConfig_new(endpoint, len, out: *BjHooshConfig): Result {
 }
 
 # The default hoosh configuration in *out: endpoint `http://localhost:8088`. Ok(0), or Err(Allocation) with out
-# untouched. Mirrors `impl Default for HooshConfig`.
+# empty. Mirrors `impl Default for HooshConfig`.
 #must_use
 public fn BjHooshConfig_default(out: *BjHooshConfig): Result {
+    memset(out, 0, sizeof(BjHooshConfig));
     return BjHooshConfig_new("http://localhost:8088", 21, out);
 }
 
@@ -273,10 +278,11 @@ fn _bj_ai_hoosh_dec(v, w): i64 {
 }
 
 # Reads a `HooshConfig` document from [buf, buf + len) into a new configuration in *out: Ok(0), or the error recorded
-# with out untouched (and never read), as BjComplex_from_json. Give it back with BjHooshConfig_free. Mirrors
+# with out empty (and never read), as BjComplex_from_json. Give it back with BjHooshConfig_free. Mirrors
 # `serde_json::from_str::<HooshConfig>`.
 #must_use
 public fn BjHooshConfig_from_json(buf, len, out: *BjHooshConfig): Result {
+    memset(out, 0, sizeof(BjHooshConfig));
     var w: i64[2];
     w[0] = 0;
     w[1] = 0;
@@ -293,7 +299,7 @@ public fn BjHooshConfig_from_json(buf, len, out: *BjHooshConfig): Result {
 # ── DaimonClient ──────────────────────────────────────────────────────────────────────────────────────────────────
 
 # A client for daimon in *out with its own copy of config and a 30 s request deadline: Ok(0), or Err(Allocation) with
-# out untouched (Rust's "failed to build HTTP client" has no counterpart: nothing is built until a request). Logged at
+# out empty (Rust's "failed to build HTTP client" has no counterpart: nothing is built until a request). Logged at
 # debug level (`creating daimon client endpoint=<endpoint>`; never the key). Give it back with BjDaimonClient_free.
 # Mirrors `DaimonClient::new`.
 #must_use
@@ -307,8 +313,12 @@ public fn BjDaimonClient_new(config: *BjDaimonConfig, out: *BjDaimonClient): Res
         _bj_log_text(4, &lt);
     }
     var oc: *BjDaimonConfig = _bj_ai_cfgp(out);
+    # config may lie inside out (its own config): BjDaimonConfig_new empties oc only after its arguments are read.
     var t, v = BjDaimonConfig_new(config.endpoint, config.endpoint_len, config.api_key, config.api_key_len, oc);
-    if (is_err_result(t) == 1) { return Err(v); }
+    if (is_err_result(t) == 1) {
+        out.timeout_ms = 0;
+        return Err(v);
+    }
     out.timeout_ms = _BJ_AI_TIMEOUT_MS;
     return Ok(0);
 }

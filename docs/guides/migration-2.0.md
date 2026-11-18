@@ -121,7 +121,8 @@ Each item names its ADR 0002 row; the row has the details and how the golden cor
   can't be resized, so Rust's per-step layout checks and their errors are gone. Read a grid's fields through its
   struct (`sim.e_field`, `sim.num_cells`) or its accessors; a matrix's entries through `get`, `set` and `s_at`.
 - **The sanitizing constructors are fallible** (row 3): `BjTfsfSource_try_new` and `BjCpml_new` refuse what Rust's
-  `new` clamped with a warning, and `enable_cpml` is the `try_` form.
+  `new` clamped with a warning, and `Fdtd2d::enable_cpml` is `try_enable_cpml` (2.0.1: before it, `BjCpml_new` and
+  `enable_cpml` still sanitized).
 - **`GpuFdtd2d<B>`'s methods are generic functions** (row 43): `BjGpuFdtd2d_step_once(&sim)` for `sim.step_once()`.
   `BjComputeBackend` is a Cyrius trait with an explicit `free_buffer`, and `BjGpuFdtd2d_free` gives every buffer back.
 

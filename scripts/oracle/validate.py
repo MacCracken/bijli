@@ -10848,9 +10848,10 @@ def cpml_profiles(t, m, sr, km, am, dx, dt, P, C, port=frozenset()):
 
 
 def cpml_new(t, dx, dt, P, C, port=frozenset()):
-    """`Cpml::new`: the classic grading's layer, or the inert one of invalid input."""
+    """`Cpml::new`: the classic grading's layer, or the inert one of invalid input. Under ADR 0002 row 3 (2.0.1) the
+    port refuses that input with `with_params`'s error instead."""
     r = cpml_with_params(t, 3.0, 1.0, 1.0, 0.0, dx, dt, P, C, port)
-    if r[0][0] == "E":
+    if r[0][0] == "E" and "3" not in port:
         return cpml_layer_toks(t, 3.0, 0.0, 1.0, 0.0, [[]] * 6)
     return r
 
@@ -10868,6 +10869,10 @@ def fd2_eval(fn, ins_raw, P, C, port=frozenset()):
         return cpml_new(v[0] & FD_U64, v[1], v[2], P, C, port)
     if fn == "Cpml::attach":
         t, nx, ny = v[0] & FD_U64, v[3] & FD_U64, v[4] & FD_U64
+        if "3" in port:                             # the port's layer is BjCpml_new's: refused, or the one Rust built
+            r = cpml_with_params(t, 3.0, 1.0, 1.0, 0.0, v[1], v[2], P, C, port)
+            if r[0][0] == "E":
+                return r
         t2, sx, sy = 2 * t, 2 * t * nx, 2 * t * ny
         if t2 > FD_U64 or sx > FD_U64 or sy > FD_U64 or sx * 8 > (1 << 63) - 1 or sy * 8 > (1 << 63) - 1:
             return [("i", 0)] * 6
@@ -10884,7 +10889,7 @@ def fd2_eval(fn, ins_raw, P, C, port=frozenset()):
 # (`fm_port`'s `LossyMaterial` model: Rust's `e_update_coefficients` is that chain). M6 part 4b: the CPML profile they
 # attach is the port's too ("40" and "18", `cpml_profiles`).
 
-FD2_PORT = frozenset({"40", "13", "18"})    # the port's ADR 0002 rows in the 2D and 3D models (and the CPML's)
+FD2_PORT = frozenset({"40", "13", "18", "3"})    # the port's ADR 0002 rows in the 2D and 3D models (and the CPML's)
 
 
 def fd23_setup(sim, dx, root2, port):
@@ -11980,7 +11985,7 @@ def fd23_runs(root: Path, path: Path, port):
                 res[n] = sc[fn].eval(ins)
             elif fn == "fdtd::nf2ff_2d":
                 res[n] = (fd2_nf2ff(f2n, ins, P), fd2_nf2ff(f2n, ins, P, port=True))
-            elif fn in ("Cpml::with_params", "Cpml::new"):
+            elif fn in ("Cpml::with_params", "Cpml::new", "Cpml::attach"):
                 res[n] = fd2_eval(fn, ins, MPFR_P, C, port)
             elif fn == "CpuBackend::kernel":
                 res[n] = cpu_kernel([parse_tok(x)[1] for x in ins.split(" ")], port)
@@ -11997,8 +12002,10 @@ def fdtd_2d3d_adr_rows(root: Path, path: Path) -> list:
     the port's model against Rust's chain; a row whose port value is the oracle's needs no mapping."""
     out = []
     rust, port = fd23_runs(root, path, frozenset()), fd23_runs(root, path, FD2_PORT)
-    subs = [("40", fd23_runs(root, path, frozenset({"40"}))), ("13", fd23_runs(root, path, frozenset({"40", "13"})))]
-    notes = {"40": "the coefficients rounded once", "13": "rounded once", "18": "the range edge"}
+    subs = [("3", fd23_runs(root, path, frozenset({"3"}))), ("40", fd23_runs(root, path, frozenset({"40"}))),
+            ("13", fd23_runs(root, path, frozenset({"40", "13"})))]
+    notes = {"3": "refused as with_params (2.0.1)", "40": "the coefficients rounded once", "13": "rounded once",
+             "18": "the range edge"}
     for n, (fn, _cls, ins, outs, _v) in enumerate(sc_lines(path)):
         if n not in port:
             continue

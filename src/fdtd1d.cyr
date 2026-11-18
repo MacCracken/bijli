@@ -178,12 +178,13 @@ fn _bj_fd1_mur(dt: f64, dx: f64, eps_r: f64, mu_r: f64): f64 {
 }
 
 # Creates a 1D grid of num_cells cells (a usize) and spacing dx (m) into *out, every field zero, vacuum everywhere,
-# dt = dx/(2c) and the vacuum Mur coefficient at both ends: Ok(0); or, with out untouched, Err(InsufficientResolution)
+# dt = dx/(2c) and the vacuum Mur coefficient at both ends: Ok(0); or, with out empty, Err(InsufficientResolution)
 # for num_cells < 2, Err(InvalidParameter) "dx must be finite and positive, got {dx}", Err(Allocation) when the
 # grid's mapping can't be had (Rust's vec! aborts there; ADR 0002 row 9). Give the grid back with BjFdtd1d_free.
 # Mirrors `Fdtd1d::new`.
 #must_use
 public fn BjFdtd1d_new(num_cells, dx: f64, out: *BjFdtd1d): Result {
+    memset(out, 0, sizeof(BjFdtd1d));
     if (num_cells >= 0 && num_cells < 2) {
         var nf: f64 = f64_from(num_cells);
         var size: f64 = nf * dx;

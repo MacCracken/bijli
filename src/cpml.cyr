@@ -362,13 +362,14 @@ fn _bj_cpml_sample(b: *f64, c: *f64, km1: *f64, t, offset: f64, params: *BjCpmlP
 }
 
 # A layer with params' grading for a grid of spacing dx and step dt into *out (unattached): Ok(0), or with out
-# untouched Err(InvalidParameter) — a parameter out of range (Rust's texts and order, `CpmlParams`), dx or dt not
+# empty Err(InvalidParameter) — a parameter out of range (Rust's texts and order, `CpmlParams`), dx or dt not
 # finite and positive, "cannot allocate {t} grid values" where the profiles can't be had, or a coefficient not
 # finite. σ_max = sigma_ratio·0.8·(m + 1)/(η₀·dx), η₀ = μ₀·c, in Rust's order, or with an unbounded exponent where a
 # product leaves the normal range (the quotient rounded once; ADR 0002 row 18, M6 part 4b). Give it back with
 # BjCpml_free. Mirrors `Cpml::with_params`.
 #must_use
 public fn BjCpml_with_params(params: *BjCpmlParams, dx: f64, dt: f64, out: *BjCpml): Result {
+    memset(out, 0, sizeof(BjCpml));
     var e = _bj_cpml_params_validate(params);
     if (e != 0) { return Err(e); }
     if (!(dx > 0.0 && dx < _BJ_CPML_INF)) {
@@ -456,30 +457,15 @@ public fn BjCpml_with_params(params: *BjCpmlParams, dx: f64, dt: f64, out: *BjCp
     return Ok(0);
 }
 
-# A layer with the classic grading (BjCpmlParams_new) into *out. Invalid input (zero thickness, dx or dt not finite
-# and positive) logs a warning and gives an inert layer that can never be attached; BjCpml_with_params returns the
-# error instead. Give it back with BjCpml_free. Mirrors `Cpml::new`.
-public fn BjCpml_new(thickness, dx: f64, dt: f64, out: *BjCpml): i64 {
+# A layer with the classic grading (BjCpmlParams_new) into *out: Ok(0), or with out empty BjCpml_with_params's error
+# for invalid input (zero thickness, dx or dt not finite and positive). Rust's `new` logged a warning and built an
+# inert layer instead; the port refuses it (ADR 0002 row 3, 2.0.1). Give it back with BjCpml_free. Mirrors
+# `Cpml::new`.
+#must_use
+public fn BjCpml_new(thickness, dx: f64, dt: f64, out: *BjCpml): Result {
+    memset(out, 0, sizeof(BjCpml));
     var p: BjCpmlParams = BjCpmlParams_new(thickness);
-    var t, v = BjCpml_with_params(&p, dx, dt, out);
-    if (is_err_result(t) == 1) {
-        if (_bj_log_on(2) == 1) {
-            var lb[512];
-            var lt[24];
-            _bj_tx_init(&lt, &lb, 512);
-            _bj_tx_cstr(&lt, "invalid CPML parameters; layer is inert thickness=");
-            _bj_tx_u64(&lt, thickness);
-            _bj_tx_cstr(&lt, " dx=");
-            _bj_fmt_f64_debug(&lt, dx);
-            _bj_tx_cstr(&lt, " dt=");
-            _bj_fmt_f64_debug(&lt, dt);
-            _bj_tx_cstr(&lt, " error=");
-            _bj_tx_cstr(&lt, bj_last_error_display());
-            _bj_log_text(2, &lt);
-        }
-        _bj_cpml_from(&p, 0.0, 0, 0, out);
-    }
-    return 0;
+    return BjCpml_with_params(&p, dx, dt, out);
 }
 
 # Gives the Ψ mapping back, unattached (0 × 0, every Ψ empty).

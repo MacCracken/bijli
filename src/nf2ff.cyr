@@ -881,7 +881,7 @@ fn _bj_nf_same53(av: f64, ae, bv: f64, be, ad: f64, bd: f64): i64 {
 # E_z, H_x and H_y on an nx × ny Yee grid laid out as Fdtd2d's TM mode (index y·nx + x; E_z at (x, y), H_x at
 # (x, y + ½), H_y at (x + ½, y)), fed after each step with the same time-step index, so H is rotated by e^{+jω·dt/2}
 # onto E. The pattern is √ρ·|E_z(ρ, φ)| as ρ → ∞ at n_angles angles from 0, linear in the inputs (a CW steady state's
-# running DFT is about the phasor times n_samples·dt/2). Ok(0), or with out untouched Err(InvalidParameter), Rust's
+# running DFT is about the phasor times n_samples·dt/2). Ok(0), or with out empty Err(InvalidParameter), Rust's
 # texts in Rust's order: the accumulators disagree on ω or dt (relative 10⁻¹²); n_angles is 0; the margin is 0 or at
 # least nx/2 or ny/2; dx isn't finite and positive; the frequency isn't; an accumulator holds fewer than nx·ny
 # samples; dt isn't finite. Err(Allocation) when the result can't be had. ω is read to 53 bits with an unbounded
@@ -890,6 +890,7 @@ fn _bj_nf_same53(av: f64, ae, bv: f64, be, ad: f64, bd: f64): i64 {
 #must_use
 public fn bj_nf2ff_2d_phasor(ez: *BjCwAccumulator, hx: *BjCwAccumulator, hy: *BjCwAccumulator, nx, ny, dx: f64,
   box_margin, n_angles, out: *BjNf2ffResult): Result {
+    memset(out, 0, sizeof(BjNf2ffResult));
     var ok = _bj_nf_same53(ez.omega_s, ez.omega_e, hx.omega_s, hx.omega_e, ez.omega, hx.omega);
     if (ok == 1) { ok = _bj_nf_same53(ez.omega_s, ez.omega_e, hy.omega_s, hy.omega_e, ez.omega, hy.omega); }
     if (ok == 1) { ok = _bj_nf_same(ez.dt, hx.dt); }
@@ -968,7 +969,7 @@ public fn bj_nf2ff_2d_phasor(ez: *BjCwAccumulator, hx: *BjCwAccumulator, hy: *Bj
 # √ρ·|E_z(ρ, φ)| as ρ → ∞ at n_angles angles from 0 (BjNf2ffResult). A monochromatic approximation: the snapshot is
 # real, so the fields are taken as the phasor's real part and H (half a step behind E on the Yee grid) as it is, and the
 # result depends on the instant; for accurate patterns accumulate E_z, H_x and H_y in BjCwAccumulators and use
-# bj_nf2ff_2d_phasor. Ok(0), or with out untouched Err(InvalidParameter), Rust's texts in Rust's order: the grid isn't
+# bj_nf2ff_2d_phasor. Ok(0), or with out empty Err(InvalidParameter), Rust's texts in Rust's order: the grid isn't
 # TM ("NF2FF requires a TM-mode simulation, got Te"), n_angles is 0, the margin is 0 or at least nx/2 or ny/2, dx isn't
 # finite and positive, the frequency isn't. Rust's check that each field holds nx·ny samples goes (ADR 0002 row 2: the
 # arrays are fixed at construction). Err(Allocation) when the result can't be had. The core runs at its range edges as
@@ -976,6 +977,7 @@ public fn bj_nf2ff_2d_phasor(ez: *BjCwAccumulator, hx: *BjCwAccumulator, hy: *Bj
 # `nf2ff_2d`.
 #must_use
 public fn bj_nf2ff_2d(sim: *BjFdtd2d, box_margin, n_angles, frequency: f64, out: *BjNf2ffResult): Result {
+    memset(out, 0, sizeof(BjNf2ffResult));
     if (sim.mode != BJ_MODE2D_TM) {
         var tm = _bj_err_reason(BJ_ERR_INVALID_PARAMETER);
         _bj_tx_cstr(tm, "NF2FF requires a TM-mode simulation, got ");

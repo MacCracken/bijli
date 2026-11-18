@@ -435,15 +435,16 @@ fn main() {
     test_group("test_fdtd2d_enable_cpml");
     var e1: BjFdtd2d;
     var te1, ve1 = BjFdtd2d_new(60, 60, DX4, BJ_MODE2D_TM, &e1);
-    e1.enable_cpml(10);
+    var tc1, vc1 = e1.try_enable_cpml(10);
     var c1: *BjCpml = cpmlp(e1.cpml());
-    assert(e1.cpml() != 0 && c1.thickness == 10 && c1.psi_x_len > 0, "a 10-cell layer, its Ψ allocated");
+    assert(is_ok(tc1) == 1 && e1.cpml() != 0 && c1.thickness == 10 && c1.psi_x_len > 0,
+      "a 10-cell layer, its Ψ allocated (try_enable_cpml stands for enable_cpml: ADR 0002 row 3)");
     BjFdtd2d_free(&e1);
 
     test_group("test_fdtd2d_cpml_runs_without_panic");
     var e2: BjFdtd2d;
     var te2, ve2 = BjFdtd2d_new(60, 60, DX4, BJ_MODE2D_TM, &e2);
-    e2.enable_cpml(8);
+    var tc2, vc2 = e2.try_enable_cpml(8);
     e2.run(30, 30, 30, 1000000000.0, 1.0);
     var en2: f64 = e2.total_energy();
     assert(en2 > 0.0, "the source still radiates");
@@ -496,13 +497,12 @@ fn main() {
     var c4: *BjCpml = cpmlp(g4.cpml());
     assert(is_ok(t4c) == 1 && c4.thickness == 13, "13 fits");
     var t4d, v4d = g4.try_enable_cpml(100);
-    g4.enable_cpml(100);
     var c4b: *BjCpml = cpmlp(g4.cpml());
     assert(is_err_result(t4d) == 1 && c4b.thickness == 13, "an invalid request keeps the active layer");
     g4.disable_cpml();
     assert(g4.cpml() == 0, "disabled");
-    g4.enable_cpml(0);
-    assert(g4.cpml() == 0, "enable_cpml(0) leaves none");
+    var t4e, v4e = g4.try_enable_cpml(0);
+    assert(is_err_result(t4e) == 1 && g4.cpml() == 0, "thickness 0 refused, and leaves none (Rust's enable_cpml(0))");
     BjFdtd2d_free(&g4);
 
     test_group("cpml_reflection_tm");
@@ -742,6 +742,27 @@ fn main() {
     assert(is_ok(tee2) == 1 && _bj_k_bits(ee2z) == 0 && ee2e == 0.0,
       "run at f = DBL_MAX: 2πf past DBL_MAX at t = 0, the sample sin 0 = 0 (Rust's ∞·0 = NaN through the grid)");
     BjFdtd2d_free(&ee2);
+
+    test_group("cyrius_audit_201_cpml_layout (2.0.1 bite 1b, H13)");
+    # A consumer that reattaches or frees the grid's own layer: the step skips, as Rust's check_layout did, instead of
+    # indexing past the layer's new Ψ strips (or through its freed profiles).
+    var la: BjFdtd2d;
+    var tla, vla = BjFdtd2d_new(60, 60, DX4, BJ_MODE2D_TM, &la);
+    var tlc, vlc = la.try_enable_cpml(10);
+    la.step_once();
+    var lc: *BjCpml = cpmlp(la.cpml());
+    lc.attach(5, 5);
+    la.step_once();
+    la.run(20, 30, 30, 1000000000.0, 1.0);
+    assert(is_ok(tla) == 1 && is_ok(tlc) == 1 && la.step == 1, "a layer reattached to 5 × 5: steps and runs skipped");
+    lc.attach(60, 60);
+    la.step_once();
+    assert(la.step == 2, "attached again to the grid: it steps");
+    BjCpml_free(la.cpml());
+    la.step_once();
+    assert(la.step == 2, "a layer freed through cpml(): skipped");
+    BjFdtd2d_free(&la);
+    assert(la.cpml() == 0 && la.nx == 0, "and the grid still frees");
 
     return assert_summary();
 }

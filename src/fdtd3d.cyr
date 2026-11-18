@@ -389,13 +389,14 @@ fn _bj_fd3_zero(f: *f64, n) {
     return 0;
 }
 
-# A vacuum grid of nx × ny × nz nodes at spacing dx into *out, the faces PEC: Ok(0), or with out untouched
+# A vacuum grid of nx × ny × nz nodes at spacing dx into *out, the faces PEC: Ok(0), or with out empty
 # Err(InsufficientResolution) when a dimension is below 3 (cells min(nx, ny, nz), domain that min·dx),
 # Err(InvalidParameter) "dx must be finite and positive, got {dx}", "grid [{nx}, {ny}, {nz}] is too large" (the cell
 # count past 2^64) or "cannot allocate {n} grid values", in Rust's order. dt = dx/(2√3·c), it and the coefficients
 # rounded once (ADR 0002 row 13, M6 part 4a). Give it back with BjFdtd3d_free. Mirrors `Fdtd3d::new`.
 #must_use
 public fn BjFdtd3d_new(nx, ny, nz, dx: f64, out: *BjFdtd3d): Result {
+    memset(out, 0, sizeof(BjFdtd3d));
     if ((nx >= 0 && nx < 3) || (ny >= 0 && ny < 3) || (nz >= 0 && nz < 3)) {
         var mn = nx;
         if (_bj_fd2_uge(mn, ny) == 1) { mn = ny; }
@@ -824,11 +825,41 @@ impl BjFdtd3d {
         return 0;
     }
 
-    # The active CPML layer's address (a *BjCpml: its thickness and grading), or 0 (Rust's None). Mirrors
-    # `Fdtd3d::cpml`.
+    # The active CPML layer's address (a *BjCpml: its thickness and grading), or 0 (Rust's None). The layer belongs to
+    # the grid: read it, but don't free it (a step skips a layer whose profiles are gone, as Rust's skipped one no
+    # longer attached, and BjFdtd3d_free gives it back). Mirrors `Fdtd3d::cpml`.
     #must_use
     public fn cpml(self): i64 {
         return self.cpml;
+    }
+
+    # 1 when the grid's layer, if it has one, is still attached: it fits the grid and has its profiles (Rust's
+    # Cpml3d::is_attached_to; the face slabs are the grid's own, sized at enable). Else logs Rust's error with `what`
+    # ("Fdtd3d step skipped") and returns 0. Rust's check_layout without its geometry half (ADR 0002 row 2).
+    fn layout_ok(self, what): i64 {
+        if (self.cpml == 0) { return 1; }
+        var c: *BjCpml = _bj_fd3_cpmlp(self.cpml);
+        var t = c.thickness;
+        var md = self.nx;
+        if (_bj_fd2_uge(md, self.ny) == 1) { md = self.ny; }
+        if (_bj_fd2_uge(md, self.nz) == 1) { md = self.nz; }
+        if (_bj_cpml_fits(t, md) == 1 && c.prof_n == t && c.prof_block != 0 && self.psi_bytes > 0) { return 1; }
+        if (_bj_log_on(1) == 1) {
+            var lb[256];
+            var lt[24];
+            _bj_tx_init(&lt, &lb, 256);
+            _bj_tx_cstr(&lt, what);
+            _bj_tx_cstr(&lt, " error=invalid parameter: CPML is not attached to the current ");
+            _bj_tx_u64(&lt, self.nx);
+            _bj_tx_cstr(&lt, "×");
+            _bj_tx_u64(&lt, self.ny);
+            _bj_tx_cstr(&lt, "×");
+            _bj_tx_u64(&lt, self.nz);
+            _bj_tx_cstr(&lt, " grid step=");
+            _bj_tx_u64(&lt, self.step);
+            _bj_log_text(1, &lt);
+        }
+        return 0;
     }
 
     # Ψ slab k's address: 0–3 the x-slabs (hy_x, hz_x, ey_x, ez_x), 4–7 the y-slabs (hx_y, hz_y, ex_y, ez_y), 8–11 the
@@ -1004,6 +1035,7 @@ impl BjFdtd3d {
     # Advances the simulation one time step by the 3D Yee algorithm, in Rust's order: H from curl E, the CPML's H terms,
     # E ← C_a·E where lossy, E from curl H, the CPML's E terms, then the PEC faces. Mirrors `Fdtd3d::step_once`.
     public fn step_once(self) {
+        if (self.layout_ok("Fdtd3d step skipped") == 0) { return 0; }
         self.update_h();
         if (self.cpml != 0) { self.cpml_h(); }
         if (self.ca != 0) {
@@ -1056,6 +1088,7 @@ impl BjFdtd3d {
             }
             _bj_log_text(4, &lt);
         }
+        if (self.layout_ok("Fdtd3d run aborted") == 0) { return 0; }
         var w2pi: f64 = 2.0 * _BJ_FD3_PI;
         for (var k = 0; _bj_fd2_uge(k, steps) == 0; k = k + 1) {
             if (sx != BJ_FDTD3D_NO_SOURCE) {

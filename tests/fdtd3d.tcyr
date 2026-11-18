@@ -672,8 +672,8 @@ fn main() {
     e21.nx = 77;
     var t21, v21 = BjFdtd3d_new(4, 1, 9, DX, &e21);
     var w21 = "grid resolution too coarse: 1 cells for domain size 0.001";
-    assert(v21 == BJ_ERR_INSUFFICIENT_RESOLUTION && text_is(bj_last_error_display(), w21) == 1 && e21.nx == 77,
-      "the smallest axis and its domain, before dx; out untouched");
+    assert(v21 == BJ_ERR_INSUFFICIENT_RESOLUTION && text_is(bj_last_error_display(), w21) == 1 && e21.nx == 0,
+      "the smallest axis and its domain, before dx; out empty (2.0.1 H12)");
     var t22, v22 = BjFdtd3d_new(3, 3, 3, nan, &e21);
     assert(v22 == BJ_ERR_INVALID_PARAMETER
       && text_is(bj_last_error_display(), "invalid parameter: dx must be finite and positive, got NaN") == 1, "dx");
@@ -883,6 +883,19 @@ fn main() {
     assert(is_ok(tee1) == 1 && ee1e == ee1w,
       "E_z = 10¹⁶⁰ on dx = 10⁻¹⁵⁰: |E|² past DBL_MAX, dx³ below the range: 9.562522837824012·10⁻¹⁴⁰ (Rust's ∞·0)");
     BjFdtd3d_free(&ee1);
+
+    test_group("cyrius_audit_201_cpml_layout (2.0.1 bite 1b, H13)");
+    # A consumer that frees the grid's own layer through cpml(): its profiles are gone, so the step skips.
+    var la: BjFdtd3d;
+    var tla, vla = BjFdtd3d_new(14, 14, 14, DX4, &la);
+    var tlc, vlc = la.try_enable_cpml(2);
+    la.step_once();
+    BjCpml_free(la.cpml());
+    la.step_once();
+    la.run(5, 7, 7, 7, 1000000000.0, 1.0);
+    assert(is_ok(tla) == 1 && is_ok(tlc) == 1 && la.step == 1, "a layer freed through cpml(): steps and runs skipped");
+    BjFdtd3d_free(&la);
+    assert(la.cpml() == 0, "and the grid still frees");
 
     return assert_summary();
 }

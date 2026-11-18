@@ -359,6 +359,68 @@ fn main() {
     var mey: f64 = mep.y;
     assert(is_ok(t26) == 1 && is_ok(t26b) == 1 && rel_near(mey, want, 0.000001) == 1, "E′_y = −γvB_z");
 
+    test_group("cyrius_audit_201_failed_constructors (2.0.1 bite 1b, H12)");
+    # Each struct is filled with garbage (struct locals aren't zeroed), its constructor fails, and its _free runs, as a
+    # defer would: an owning constructor leaves out empty on Err, so the free has nothing to give back.
+    var fcg1: BjFdtd1d;
+    memset(&fcg1, 171, sizeof(BjFdtd1d));
+    var fca1, fcb1 = BjFdtd1d_new(1, 0.001, &fcg1);
+    var fce1 = is_err_result(fca1) == 1 && fcg1.map_bytes == 0 && fcg1.e_field == 0;
+    BjFdtd1d_free(&fcg1);
+    var fcg2: BjFdtd2d;
+    memset(&fcg2, 171, sizeof(BjFdtd2d));
+    var fca2, fcb2 = BjFdtd2d_new(2, 50, 0.001, BJ_MODE2D_TM, &fcg2);
+    var fce2 = is_err_result(fca2) == 1 && fcg2.map_bytes == 0 && fcg2.cpml == 0 && fcg2.lossy_bytes == 0;
+    BjFdtd2d_free(&fcg2);
+    var fcg3: BjFdtd3d;
+    memset(&fcg3, 171, sizeof(BjFdtd3d));
+    var fca3, fcb3 = BjFdtd3d_new(4, 1, 9, 0.001, &fcg3);
+    var fce3 = is_err_result(fca3) == 1 && fcg3.cpml == 0 && fcg3.psi_bytes == 0;
+    BjFdtd3d_free(&fcg3);
+    var fcg4: BjCpml;
+    memset(&fcg4, 171, sizeof(BjCpml));
+    var fca4, fcb4 = BjCpml_new(8, -1.0, 0.000000000001, &fcg4);
+    var fce4 = is_err_result(fca4) == 1 && fcg4.prof_block == 0 && fcg4.psi_bytes == 0;
+    BjCpml_free(&fcg4);
+    var fcg5: BjTfsfSource;
+    memset(&fcg5, 171, sizeof(BjTfsfSource));
+    var fca5, fcb5 = BjTfsfSource_try_new(2, 1, 0.0001, 0.0000000000001, &fcg5);
+    var fce5 = is_err_result(fca5) == 1 && fcg5.map_bytes == 0;
+    BjTfsfSource_free(&fcg5);
+    var fcg6: BjSMatrix;
+    memset(&fcg6, 171, sizeof(BjSMatrix));
+    var fca6, fcb6 = BjSMatrix_new(1099511627776, 50.0, &fcg6);
+    var fce6 = is_err_result(fca6) == 1 && fcg6.s == 0 && fcg6.ports == 0;
+    BjSMatrix_free(&fcg6);
+    var fcg7: BjTouchstoneData;
+    memset(&fcg7, 171, sizeof(BjTouchstoneData));
+    var fcraw[16];
+    memcpy(&fcraw, "1.0 0.5 0.1\n", 12);
+    store8(&fcraw + 4, 192);
+    var fca7, fcb7 = bj_parse_touchstone(&fcraw, 12, 1, &fcg7);
+    var fce7 = is_err_result(fca7) == 1 && fcg7.frequencies == 0 && fcg7.points == 0;
+    BjTouchstoneData_free(&fcg7);
+    var fcg8: BjEigenmodeResult;
+    memset(&fcg8, 171, sizeof(BjEigenmodeResult));
+    var fcd8 = "{\"frequencies\":[1],\"quality_factors\":[1],\"amplitudes\":[null]}";
+    var fca8, fcb8 = BjEigenmodeResult_from_json(fcd8, strlen(fcd8), &fcg8);
+    var fce8 = is_err_result(fca8) == 1 && fcg8.frequencies == 0 && fcg8.count == 0;
+    BjEigenmodeResult_free(&fcg8);
+    var fcg9: BjMieResult;
+    memset(&fcg9, 171, sizeof(BjMieResult));
+    var fca9, fcb9 = bj_mie(0.0 - 1.0, BjComplex_new(1.5, 0.0), &fcg9);
+    var fce9 = is_err_result(fca9) == 1 && fcg9.a == 0 && fcg9.b == 0;
+    BjMieResult_free(&fcg9);
+    var fcg10: BjFieldSlice2D;
+    memset(&fcg10, 171, sizeof(BjFieldSlice2D));
+    var fca10, fcb10 = BjFieldSlice2D_from_json("{}", 2, &fcg10);
+    var fce10 = is_err_result(fca10) == 1 && fcg10.values == 0 && fcg10.component == 0;
+    BjFieldSlice2D_free(&fcg10);
+    assert(fce1 && fce2 && fce3 && fce4 && fce5,
+      "the grids, the CPML and the TF/SF source: empty after a failure, freed");
+    assert(fce6 && fce7 && fce8 && fce9 && fce10,
+      "the S-matrix, Touchstone, eigenmodes, Mie and a slice: empty, freed");
+
     return assert_summary();
 }
 

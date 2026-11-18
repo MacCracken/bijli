@@ -7814,3 +7814,48 @@ H1–H11 of §142, with no result changing for any input 2.0.0 handled safely.
   digests equal to 2.0.0's; validate.py: 770,127 rows, 0 problems; 33 test files, 2,936 assertions (23 new);
   coverage 449 of 449; `cyrius fuzz` unchanged; the API snapshot 2,194, unchanged. No golden row moved. The seven
   changed test files pass on x86_64 PE and aarch64, one target at a time. Next: bite 1b.
+
+## 144. 2.0.1 bite 1b: the constructors and the CPML (2026-11-18)
+
+H12–H15 of §142, with the user's answers of 2026-11-18 (`out` empty on Err; fix the CPML code to ADR row 3).
+- **H12, `out` empty on Err** (ADR 0002 row 48): each of the 47 owning constructors and readers starts with
+  `memset(out, 0, sizeof(T))`. Every `Bj*_free` already treats a zeroed struct as empty, checked one by one. Their
+  docs say "out empty" where they said "out untouched" (`sizeof(BjGpuFdtd2d<B>)` works in the generic). Three cases
+  differ:
+  - `cascade` empties an `out` that is not one of its inputs, and an input stays as it was on an error;
+  - `BjDaimonClient_new` leaves the emptying to `BjDaimonConfig_new`, whose arguments are read before it zeroes (the
+    config may lie inside `out`), and zeroes its own word on the error path;
+  - value types (vectors, complexes, materials, beams) keep "out untouched".
+- **H13, the per-step check** (ADR 0002 row 2, amended): `step_once` and `run` on `BjFdtd2d` call `layout_ok`, which
+  is `_bj_cpml_is_attached_to` on the grid's dimensions. On `BjFdtd3d` the layer must fit, keep its profiles and
+  have its slabs. On a failure they skip, logging Rust's error ("Fdtd2d step skipped", "Fdtd2d run aborted", the 3D
+  ones). It costs one call a step; no golden row reaches it. `cpml()`'s doc says the layer belongs to the grid.
+- **H14, the CPML constructors** (ADR 0002 row 3, amended): `BjCpml_new` is `BjCpml_with_params` on
+  `BjCpmlParams_new(thickness)`, a `Result`. `enable_cpml` is gone, with surface_parity's EXCEPTIONS naming
+  `try_enable_cpml` for it and docs/development/surface-parity.md rewritten. In the harness, script op 11 runs
+  `try_enable_cpml` without recording its error (the grid is as Rust's warning left it), and the `Cpml::new` and
+  `Cpml::attach` rows record `BjCpml_new`'s error. validate.py's port model gains "3" in `FD2_PORT`: `cpml_new`
+  returns `with_params`'s error, the attach model refuses on it, `fd23_runs` replays the attach rows, and
+  `fdtd_2d3d_adr_rows` tries the {"3"} subset first. `--write` maps 11 rows to row 3 (8 `Cpml::new`, the inert
+  layers; 3 `Cpml::attach` built on one) and changes nothing else.
+- **H15** (src/compute.cyr): `BjGpuFdtd2d_new`'s error path gives back the buffers made, then empties `out`, the
+  backend copy with it.
+- **Tests**:
+  - The 13 assertions that pinned "out untouched" on an owning type now pin "out empty".
+  - `tests/cpml.tcyr` asserts `BjCpml_new`'s refusal and its text. `tests/fdtd2d.tcyr`'s `enable_cpml` calls became
+    `try_enable_cpml` with their results checked.
+  - New groups: `cyrius_audit_201_failed_constructors` in tests/integration.tcyr (ten owning types filled with
+    garbage, failed and freed), `cyrius_audit_201_cpml_layout` in fdtd2d.tcyr (4) and fdtd3d.tcyr (2), and
+    `cyrius_audit_201_failed_buffer` in compute.tcyr (2, a backend whose third buffer fails).
+  - The Touchstone fuzz harness checks that every refusal leaves `out` empty, then frees it.
+- **Benchmarks**: two interleaved rounds against bite 1a's src/ (load 0.9–1.0, nothing else running), median ratio
+  1.000 in each. The steps that now check their layer move 0.0–1.5 %: `fdtd/2d_step_100x100_tm` +0.5 and +0.6 %,
+  `2d_step_100x100_tm_cpml10` +0.9 and +0.2 %, `3d_step_30x30x30_cpml8` +1.5 and 0.0 %. `json/cpml_params_from_json`
+  reads +4.8 and +5.4 %, though its reader gained nothing, and untouched rows drift as much (`scattering/mie_x1_real`
+  +3.9 %, `field/vector_cross` +4.5 %): layout, as in §143.
+- **Result**: the gate clean, all 17 steps. 21 modules, 646,270 ok and 0 failed, 123,857 accepted (ADR 01: 43,087; ADR
+  0002: 80,770, the 11 new rows under row 3); only `Cpml::new`'s and `Cpml::attach`'s digests change, and all 520 are
+  equal on x86_64 ELF, x86_64 PE and aarch64 (whole suites, one target at a time, each with only the recorded
+  warnings). validate.py: 770,127 rows, 0 problems. 2,946 assertions (10 new); coverage 449 of 449; `cyrius fuzz`
+  40,000 parses, 0 failures; the surface parity 735 items with its record rewritten; the API snapshot 2,194,
+  unchanged. Next: bite 2.

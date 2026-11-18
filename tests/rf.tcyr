@@ -602,8 +602,8 @@ fn cyrius_cascade_exact(): i64 {
     cc.ports = 7;
     var t4, v4 = a.cascade(&b, &cc);
     var want4 = "division by zero in EM calculation: T22 = 0, cannot convert to S-parameters";
-    assert(err_is(t4, v4, BJ_ERR_DIVISION_BY_ZERO, want4) == 1 && cc.ports == 7,
-      "x past 2^-40·10³⁰: refused, out untouched");
+    assert(err_is(t4, v4, BJ_ERR_DIVISION_BY_ZERO, want4) == 1 && cc.ports == 0,
+      "x past 2^-40·10³⁰: refused, out empty (2.0.1 H12)");
     BjSMatrix_free(&b);
     BjSMatrix_free(&a);
     # The exact path (S11 = 3·2^120, past the fast path's box) leaves the heap as it was.
@@ -721,8 +721,8 @@ fn cyrius_exact_thresholds(): i64 {
     c.ports = 9;
     var t3, v3 = m.cascade(&m, &c);
     var want3 = "division by zero in EM calculation: S21 = 0, cannot convert to T-parameters";
-    assert(err_is(t3, v3, BJ_ERR_DIVISION_BY_ZERO, want3) == 1 && c.ports == 9,
-      "the same S21: |S21|² < 10⁻⁶⁰ exactly, refused, out untouched");
+    assert(err_is(t3, v3, BJ_ERR_DIVISION_BY_ZERO, want3) == 1 && c.ports == 0,
+      "the same S21: |S21|² < 10⁻⁶⁰ exactly, refused, out empty (2.0.1 H12)");
     BjSMatrix_free(&m);
     var z0: f64 = _bj_from_bits(0x0210005D38117FFF);
     var z1: f64 = _bj_from_bits(0x0210005D38116E67);
@@ -1177,7 +1177,7 @@ fn cyrius_smatrix(): i64 {
     big.ports = 5;
     var t6, v6 = BjSMatrix_new(1099511627776, 50.0, &big);
     assert(err_is(t6, v6, BJ_ERR_ALLOCATION, "allocation failed: an S-matrix of 1099511627776 ports") == 1 &&
-      big.ports == 5, "2^40 ports: Allocation, out untouched (Rust aborts)");
+      big.ports == 0, "2^40 ports: Allocation, out empty (Rust aborts; 2.0.1 H12)");
 
     test_group("cyrius_z0_equal_finite (ADR 0002 row 37)");
     var a: BjSMatrix;
@@ -1443,7 +1443,7 @@ fn cyrius_touchstone(): i64 {
     store8(&raw + 4, 192);
     var t1, v1 = bj_parse_touchstone(&raw, 12, 1, &d);
     assert(is_err_result(t1) == 1 && reason_is2("invalid parameter: Touchstone content is not valid UTF-8 ",
-        "(an invalid sequence at byte 4)") == 1 && d.points == 7, "a lone lead byte: refused, out untouched");
+        "(an invalid sequence at byte 4)") == 1 && d.points == 0, "a lone lead byte: refused, out empty (H12)");
     var bad = 0;
     store8(&raw + 4, 237);
     store8(&raw + 5, 160);

@@ -293,13 +293,14 @@ fn _bj_so_log_name(t, c, n) {
     return 0;
 }
 
-# A field slice of the 2D grid sim into *out: Ok(0), or Err(Allocation) with out untouched. `component` (len bytes)
+# A field slice of the 2D grid sim into *out: Ok(0), or Err(Allocation) with out empty. `component` (len bytes)
 # names the field, case-insensitively and trimmed: fz, fx, fy, or the mode's physical name (TM: ez, hx, hy; TE: hz, ex,
 # ey). An unknown name, or bytes that are not UTF-8, fall back to fz (logged at debug level); the label always names
 # the data returned, `<Mode>_<axis>` ("Tm_z" for E_z in TM). BjFieldSlice2D_try_from_fdtd_2d refuses unknown names.
 # Mirrors `FieldSlice2D::from_fdtd_2d`.
 #must_use
 public fn BjFieldSlice2D_from_fdtd_2d(sim: *BjFdtd2d, component, len, out: *BjFieldSlice2D): Result {
+    memset(out, 0, sizeof(BjFieldSlice2D));
     var axis = _bj_so_resolve_2d(sim.mode, component, len);
     if (axis < 0) {
         axis = 2;
@@ -317,12 +318,13 @@ public fn BjFieldSlice2D_from_fdtd_2d(sim: *BjFdtd2d, component, len, out: *BjFi
     return Ok(0);
 }
 
-# A field slice of the 2D grid sim into *out, refusing unknown names: Ok(0), or with out untouched Err(InvalidParameter)
+# A field slice of the 2D grid sim into *out, refusing unknown names: Ok(0), or with out empty Err(InvalidParameter)
 # "unknown 2D FDTD component {component:?} for {mode:?} mode" (Rust's `{:?}` of the name), "2D FDTD component is not
 # valid UTF-8 (an invalid sequence at byte {k})" for bytes Rust's &str can't hold (ADR 0002 row 44), or
 # Err(Allocation). Accepts BjFieldSlice2D_from_fdtd_2d's names. Mirrors `FieldSlice2D::try_from_fdtd_2d`.
 #must_use
 public fn BjFieldSlice2D_try_from_fdtd_2d(sim: *BjFdtd2d, component, len, out: *BjFieldSlice2D): Result {
+    memset(out, 0, sizeof(BjFieldSlice2D));
     var bad = _bj_ts_utf8_bad(component, len);
     if (bad >= 0) {
         var tu = _bj_err_reason(BJ_ERR_INVALID_PARAMETER);
@@ -400,12 +402,13 @@ fn _bj_so_build_3d(sim: *BjFdtd3d, k, out: *BjFieldSlice3D): i64 {
     return 0;
 }
 
-# A field volume of the 3D grid sim into *out: Ok(0), or Err(Allocation) with out untouched. `component` (len bytes):
+# A field volume of the 3D grid sim into *out: Ok(0), or Err(Allocation) with out empty. `component` (len bytes):
 # ex, ey, ez, hx, hy or hz, case-insensitively and trimmed; an unknown name, or bytes that are not UTF-8, fall back to
 # ez (logged at debug level). The label is the canonical lowercase name of the data returned ("Ex" gives "ex", an
 # unknown name "ez"). BjFieldSlice3D_try_from_fdtd_3d refuses unknown names. Mirrors `FieldSlice3D::from_fdtd_3d`.
 #must_use
 public fn BjFieldSlice3D_from_fdtd_3d(sim: *BjFdtd3d, component, len, out: *BjFieldSlice3D): Result {
+    memset(out, 0, sizeof(BjFieldSlice3D));
     var k = _bj_so_select_3d(component, len);
     if (k < 0) {
         k = 2;
@@ -423,12 +426,13 @@ public fn BjFieldSlice3D_from_fdtd_3d(sim: *BjFdtd3d, component, len, out: *BjFi
     return Ok(0);
 }
 
-# A field volume of the 3D grid sim into *out, refusing unknown names: Ok(0), or with out untouched
+# A field volume of the 3D grid sim into *out, refusing unknown names: Ok(0), or with out empty
 # Err(InvalidParameter) "unknown 3D FDTD component {component:?} (expected one of ["ex", "ey", "ez", "hx", "hy",
 # "hz"])", "3D FDTD component is not valid UTF-8 (an invalid sequence at byte {k})" (ADR 0002 row 44), or
 # Err(Allocation). Mirrors `FieldSlice3D::try_from_fdtd_3d`.
 #must_use
 public fn BjFieldSlice3D_try_from_fdtd_3d(sim: *BjFdtd3d, component, len, out: *BjFieldSlice3D): Result {
+    memset(out, 0, sizeof(BjFieldSlice3D));
     var bad = _bj_ts_utf8_bad(component, len);
     if (bad >= 0) {
         var tu = _bj_err_reason(BJ_ERR_INVALID_PARAMETER);
@@ -464,9 +468,10 @@ public fn BjFieldSlice3D_try_from_fdtd_3d(sim: *BjFdtd3d, component, len, out: *
 
 # The n point charges at `charges` as render points into *out: each position and charge rounded to f32 (Rust's `as
 # f32`: nearest, ties to even, ±∞ past f32's range), and |charge| likewise. Ok(0), or Err(Allocation) with out
-# untouched. Mirrors `ChargeVisualization::from_point_charges`.
+# empty. Mirrors `ChargeVisualization::from_point_charges`.
 #must_use
 public fn BjChargeVisualization_from_point_charges(charges: *BjPointCharge, n, out: *BjChargeVisualization): Result {
+    memset(out, 0, sizeof(BjChargeVisualization));
     if (n < 0 || n > _BJ_SO_FL_MAX / 20) { return Err(_bj_so_alloc_err("a charge visualization")); }
     var bytes = n * 20;
     if (bytes == 0) { bytes = 20; }
@@ -497,9 +502,10 @@ public fn BjChargeVisualization_from_point_charges(charges: *BjPointCharge, n, o
 # The radiation pattern of an NF2FF result into *out: its angles and pattern copied, max_gain the fold of the pattern
 # from +0 by f64::max (mathx.cyr's _bj_max): a NaN is ignored, and −0 < +0, so a pattern of zeros has the gain +0 (ADR
 # 0002 row 47; Rust's x86-64 max returns its second operand on a tie, giving −0 after +0). Ok(0), or Err(Allocation)
-# with out untouched. Mirrors `RadiationPattern::from_nf2ff`.
+# with out empty. Mirrors `RadiationPattern::from_nf2ff`.
 #must_use
 public fn BjRadiationPattern_from_nf2ff(result: *BjNf2ffResult, out: *BjRadiationPattern): Result {
+    memset(out, 0, sizeof(BjRadiationPattern));
     var n = result.count;
     var a = _bj_so_copy(result.angles, n);
     var p = _bj_so_copy(result.pattern, n);
@@ -557,11 +563,12 @@ fn _bj_so_collect(vx: *f64, vy: *f64, vz: *f64, count, out: *BjVectorFieldSample
 # A vector field sample from parallel component arrays (vx with lx samples, vy with ly, vz with lz) on a regular grid
 # into *out, leniently: the first min(lx, ly, lz) samples, `dims` (nx, ny, nz) stored as given without checking the
 # count against nx·ny·nz, `origin` [x, y, z] and spacing as given; a NaN magnitude never sets max_magnitude. Ok(0), or
-# Err(Allocation) with out untouched. BjVectorFieldSample_try_from_components checks its input. Mirrors
+# Err(Allocation) with out empty. BjVectorFieldSample_try_from_components checks its input. Mirrors
 # `VectorFieldSample::from_components`.
 #must_use
 public fn BjVectorFieldSample_from_components(vx: *f64, lx, vy: *f64, ly, vz: *f64, lz, dims: *i64, origin: *f64,
   spacing: f64, out: *BjVectorFieldSample): Result {
+    memset(out, 0, sizeof(BjVectorFieldSample));
     var count = lx;
     if (_bj_fd2_uge(count, ly) == 1) { count = ly; }
     if (_bj_fd2_uge(count, lz) == 1) { count = lz; }
@@ -589,13 +596,14 @@ fn _bj_so_dims_debug(t, dims: *i64) {
 }
 
 # A vector field sample from parallel component arrays into *out, checking its input in Rust's order: Ok(0), or with
-# out untouched Err(InvalidParameter) "grid dimensions {dims:?} overflow usize" (nx·ny·nz past 2^64), "component
+# out empty Err(InvalidParameter) "grid dimensions {dims:?} overflow usize" (nx·ny·nz past 2^64), "component
 # lengths (lx, ly, lz) must all equal nx·ny·nz = {expected}", "grid spacing must be finite and positive, got
 # {spacing}", "grid origin must be finite, got {origin:?}", or Err(Allocation). Samples are row-major, z·ny·nx + y·nx +
 # x. Mirrors `VectorFieldSample::try_from_components`.
 #must_use
 public fn BjVectorFieldSample_try_from_components(vx: *f64, lx, vy: *f64, ly, vz: *f64, lz, dims: *i64,
   origin: *f64, spacing: f64, out: *BjVectorFieldSample): Result {
+    memset(out, 0, sizeof(BjVectorFieldSample));
     var p1: i64[1];
     var p2: i64[1];
     if (_bj_fd2_umul(dims[0], dims[1], &p1) == 0 || _bj_fd2_umul(p1[0], dims[2], &p2) == 0) {
