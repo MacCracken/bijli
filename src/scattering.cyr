@@ -803,6 +803,14 @@ public fn bj_mie(x: f64, m: BjComplex, out: *BjMieResult): Result {
     var mx_abs: f64 = h * x;
     var c = _bj_sc_mie_check(x, m, mx_abs);
     if (c != 0) { return Err(c); }
+    # |m| past DBL_MAX with a tiny x: the rounded |m|·x is +∞, which the exact size test accepts (row 17) when the
+    # true |m·x| ≤ 10⁷. The parts' products are then finite, and their hypot is |m·x| rounded, so the D_n recurrence
+    # starts from a bounded order (2.0.1, H16: from +∞ it started at 2^63 − 1 and never ended).
+    if (_bj_is_finite(mx_abs) == 0) {
+        var px: f64 = mre * x;
+        var qx: f64 = mim * x;
+        mx_abs = _bj_hypot(px, qx);
+    }
     var n_max, n_start = _bj_sc_terms(x, mx_abs);
     _bj_sc_log_start(x, mre, mim, n_max, n_start);
     var d = fl_alloc((n_max + 1) * 16);

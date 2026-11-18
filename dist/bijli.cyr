@@ -27362,6 +27362,14 @@ public fn bj_mie(x: f64, m: BjComplex, out: *BjMieResult): Result {
     var mx_abs: f64 = h * x;
     var c = _bj_sc_mie_check(x, m, mx_abs);
     if (c != 0) { return Err(c); }
+    # |m| past DBL_MAX with a tiny x: the rounded |m|·x is +∞, which the exact size test accepts (row 17) when the
+    # true |m·x| ≤ 10⁷. The parts' products are then finite, and their hypot is |m·x| rounded, so the D_n recurrence
+    # starts from a bounded order (2.0.1, H16: from +∞ it started at 2^63 − 1 and never ended).
+    if (_bj_is_finite(mx_abs) == 0) {
+        var px: f64 = mre * x;
+        var qx: f64 = mim * x;
+        mx_abs = _bj_hypot(px, qx);
+    }
     var n_max, n_start = _bj_sc_terms(x, mx_abs);
     _bj_sc_log_start(x, mre, mim, n_max, n_start);
     var d = fl_alloc((n_max + 1) * 16);
@@ -27566,6 +27574,8 @@ public fn bj_rayleigh_angular_intensity(cross_section: f64, distance: f64, cos_t
 private
 
 # std::f64::consts::SQRT_2.
+# NaN, a mode function's value for an order outside Rust's type.
+var _BJ_BEAM_NAN: f64 = 0x7FF8000000000000;
 var _BJ_BEAM_SQRT_2: f64 = 0x3FF6A09E667F3BCD;
 
 # ── the Gaussian beam ───────────────────────────────────────────────────────────────────────────────────────────
@@ -28631,12 +28641,17 @@ fn _bj_beam_hermite_fl(n, t: f64, x: f64, fl: *i64): f64 {
 
 # The Hermite–Gaussian envelope u_mn(x, y, z) = (w₀/w)·H_m(√2x/w)·H_n(√2y/w)·e^{−(x² + y²)/w²}, the field with every
 # propagation phase removed (|u_mn| = |E|, u_mn² the intensity), the lobes' signs kept. The TEM₀₀ prefactor serves
-# every mode (HG₀₀(0, 0, 0) = 1): HG_mn carries 2^{m+n}·m!·n! times TEM₀₀'s power. m, n ≥ 0 (Rust's u32). Rust's chain
-# where every step of it is provably the one with an unbounded exponent, else that chain, its last product rounded once
-# (ADR 0002 row 18, M3 part 2d-3b-1; src/crmath_vx.cyr's _bj_vx_bm_hg, whose section comment lists the tests). Mirrors
-# `hermite_gaussian`.
+# every mode (HG₀₀(0, 0, 0) = 1): HG_mn carries 2^{m+n}·m!·n! times TEM₀₀'s power. m, n are Rust's u32s: NaN for an
+# order outside it (2.0.1, H21: a negative order gave another mode's value, a larger one a recurrence of up to 2^63
+# steps). Rust's chain where every step of it is provably the one with an unbounded exponent, else that chain, its
+# last product rounded once (ADR 0002 row 18, M3 part 2d-3b-1; src/crmath_vx.cyr's _bj_vx_bm_hg, whose section
+# comment lists the tests). Mirrors `hermite_gaussian`.
 #must_use
 public fn bj_hermite_gaussian(beam: *BjGaussianBeam, m, n, x: f64, y: f64, z: f64): f64 {
+    if (m < 0 || m > 4294967295 || n < 0 || n > 4294967295) {
+        var nan: f64 = _BJ_BEAM_NAN;
+        return nan;
+    }
     var w: f64 = beam.spot_size(z);
     var w0: f64 = beam.waist;
     var tx: f64 = _BJ_BEAM_SQRT_2 * x;
@@ -28670,9 +28685,14 @@ public fn bj_hermite_gaussian(beam: *BjGaussianBeam, m, n, x: f64, y: f64, z: f6
 # −(u·sin φ)) (ADR 0002 row 5). Normalization as bj_hermite_gaussian's. Rust's chain where every step of it is provably
 # the one with an unbounded exponent, else that chain, the amplitude's 53-bit value and the phase's, the two last
 # products rounded once (ADR 0002 row 18, M3 part 2d-3c; src/crmath_vx.cyr's _bj_vx_bm_hgf, whose section comment
-# lists the tests). Mirrors `hermite_gaussian_field`.
+# lists the tests). NaN + NaN·j for an order outside Rust's u32 (2.0.1, H21). Mirrors `hermite_gaussian_field`.
 #must_use
 public fn bj_hermite_gaussian_field(beam: *BjGaussianBeam, m, n, x: f64, y: f64, z: f64): BjComplex {
+    if (m < 0 || m > 4294967295 || n < 0 || n > 4294967295) {
+        var nan: f64 = _BJ_BEAM_NAN;
+        var zn: BjComplex = BjComplex_new(nan, nan);
+        return zn;
+    }
     var amp: f64 = bj_hermite_gaussian(beam, m, n, x, y, z);
     var two_pi: f64 = 2.0 * _BJ_PI;
     var k: f64 = two_pi / beam.wavelength;
@@ -28763,13 +28783,17 @@ fn _bj_beam_laguerre_fl(p, l, x: f64, fl: *i64): f64 {
 
 # The Laguerre–Gaussian intensity I_pl(r, z) = (w₀/w)²·(2r²/w²)^|l|·[L_p^|l|(2r²/w²)]²·e^{−2r²/w²}, |E|² (the vortex
 # phase e^{jlφ} and the Gouy phase drop out). The TEM₀₀ prefactor serves every mode (LG₀₀(0, 0) = 1): LG_pl carries
-# (p + |l|)!/p! times TEM₀₀'s power. p ≥ 0 (Rust's u32), l Rust's i32. For l = i32::MIN the power is (2r²/w²)^{2³¹}
-# (ADR 0002 row 32: Rust's `l.unsigned_abs() as i32` wraps to −2³¹, the reciprocal). Rust's chain where every step of it
-# is provably the one with an unbounded exponent, else that chain, its last product rounded once (ADR 0002 row 18, M3
-# part 2d-3b-2; src/crmath_vx.cyr's _bj_vx_bm_lg, whose section comment lists the tests). Mirrors
-# `laguerre_gaussian_intensity`.
+# (p + |l|)!/p! times TEM₀₀'s power. p is Rust's u32 and l its i32: NaN for either outside its type (2.0.1, H21). For
+# l = i32::MIN the power is (2r²/w²)^{2³¹} (ADR 0002 row 32: Rust's `l.unsigned_abs() as i32` wraps to −2³¹, the
+# reciprocal). Rust's chain where every step of it is provably the one with an unbounded exponent, else that chain, its
+# last product rounded once (ADR 0002 row 18, M3 part 2d-3b-2; src/crmath_vx.cyr's _bj_vx_bm_lg, whose section comment
+# lists the tests). Mirrors `laguerre_gaussian_intensity`.
 #must_use
 public fn bj_laguerre_gaussian_intensity(beam: *BjGaussianBeam, p, l, r: f64, z: f64): f64 {
+    if (p < 0 || p > 4294967295 || l < 0 - 2147483648 || l > 2147483647) {
+        var nan: f64 = _BJ_BEAM_NAN;
+        return nan;
+    }
     var w: f64 = beam.spot_size(z);
     var w0: f64 = beam.waist;
     var tr: f64 = _BJ_BEAM_SQRT_2 * r;
@@ -37769,10 +37793,10 @@ impl BjFdtd3d {
 #
 # A backend owns field buffers and runs the FDTD stencils on them. Rust's trait has an associated `Buffer` type; here a
 # buffer is an opaque word each backend defines (BjCpuBackend's is the address of a block holding its length, then
-# its values). Host slices are a pointer and a length. Cyrius has no Drop, so the trait adds `free_buffer`, which gives
-# a buffer back (BjGpuFdtd2d_free calls it for every buffer it made). Fields are 2D, row-major (index y·nx + x), in
-# src/fdtd2d.cyr's TM Yee layout: E_z at (x, y), H_x at (x, y + ½), H_y at (x + ½, y). A refused request returns an
-# error value; nothing aborts.
+# its values), never 0, which BjGpuFdtd2d takes for no buffer. Host slices are a pointer and a length. Cyrius has
+# no Drop, so the trait adds `free_buffer`, which gives a buffer back (BjGpuFdtd2d_free calls it for every buffer
+# it made). Fields are 2D, row-major (index y·nx + x), in src/fdtd2d.cyr's TM Yee layout: E_z at (x, y), H_x at
+# (x, y + ½), H_y at (x + ½, y). A refused request returns an error value; nothing aborts.
 #
 # Cyrius refuses a generic impl header (`impl<B> T<B>`, cyrius 6.7.17; probe p20), so BjGpuFdtd2d<B>'s methods are
 # generic functions over a `*BjGpuFdtd2d<B>`: `BjGpuFdtd2d_step_once(&sim)` is Rust's `sim.step_once()`, the backend
@@ -38138,10 +38162,11 @@ public fn BjGpuFdtd2d_new<B: BjComputeBackend>(nx, ny, dx: f64, backend: B, out:
     var bufs: i64[5];
     var made = 0;
     var code = 0;
+    var failed = 0;
     # The buffers are made through out's own copy of the backend (a consumer's backend may keep state), which an
     # error empties again with the rest of out.
     out.backend = backend;
-    while (made < 5 && code == 0) {
+    while (made < 5 && failed == 0) {
         var src = zeros;
         if (made == 3) { src = vals; }
         if (made == 4) {
@@ -38150,7 +38175,12 @@ public fn BjGpuFdtd2d_new<B: BjComputeBackend>(nx, ny, dx: f64, backend: B, out:
         }
         if (made == 4) { src = vals; }
         var tb, vb = out.backend.create_buffer(src, n);
-        if (is_err_result(tb) == 1) { code = vb; }
+        # A backend's Err may carry any code, 0 (BJ_ERR_NONE) included: the loop stops on the Err itself (2.0.1, H22:
+        # an Err(0) made it ask again forever).
+        if (is_err_result(tb) == 1) {
+            code = vb;
+            failed = 1;
+        }
         else {
             bufs[made] = vb;
             made = made + 1;
@@ -38158,7 +38188,7 @@ public fn BjGpuFdtd2d_new<B: BjComputeBackend>(nx, ny, dx: f64, backend: B, out:
     }
     cyr_munmap(zeros, n * 8);
     cyr_munmap(vals, n * 8);
-    if (code != 0) {
+    if (failed == 1) {
         for (var j = 0; j < made; j = j + 1) { out.backend.free_buffer(bufs[j]); }
         memset(out, 0, sizeof(BjGpuFdtd2d<B>));
         return Err(code);

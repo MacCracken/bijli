@@ -7859,3 +7859,35 @@ H12–H15 of §142, with the user's answers of 2026-11-18 (`out` empty on Err; f
   warnings). validate.py: 770,127 rows, 0 problems. 2,946 assertions (10 new); coverage 449 of 449; `cyrius fuzz`
   40,000 parses, 0 failures; the surface parity 735 items with its record rewritten; the API snapshot 2,194,
   unchanged. Next: bite 2.
+
+## 145. 2.0.1 bite 2a: the hangs (2026-11-18)
+
+H16 and H19–H22 of §142. Bite 2 runs in two parts: 2a the hangs, and 2b the two quadratic costs (H17 and H18), each
+of which needs an algorithm of its own.
+- **H16, Mie** (src/scattering.cyr, ADR 0002 row 17, amended): after the size check accepts, a non-finite `mx_abs`
+  (|m| past DBL_MAX, the exact |m·x| ≤ 10⁷) is replaced by hypot(Re m·x, Im m·x), finite there. The check itself still
+  sees and quotes Rust's rounded value, so no refusal's text changes. For x = 10⁻³⁰⁵, m = 1.3·10³⁰⁸ − 1.3·10³⁰⁸i the
+  call now returns at once with Rust's "Mie series over/underflowed" error; it used to start the D_n recurrence at
+  2^63 − 1. validate.py's `sc_mie_checks(port=True)` makes the same replacement, and its `sc_mie` gives the same error.
+  No golden row has such an m, and scattering has no emitter, so `cyrius_audit_201_mie_terms` pins it.
+- **H19, the ai deadline** (src/ai.cyr): `register_agent` sets sandhi's connect, read and write timeouts to
+  `timeout_ms` beside the total deadline. SO_RCVTIMEO is set before the TLS handshake, so each of its reads is bounded
+  too. The name lookup isn't (sandhi's resolver has no timeout), and the docs and the threat model now say so.
+  `cyrius_audit_201_deadline` points a client at a listener that never accepts, with a 300 ms deadline. It returns
+  Transport promptly; against bite 1b's src/ the same test was still blocked when a 25 s timeout killed it.
+- **H20, sandhi's blocks** (src/ai.cyr): the headers vector, each header set (sandhi returns −2 for a refused copy)
+  and the options block are checked, and a refusal is Allocation ("a daimon registration request"). Before, a
+  refused block was dereferenced inside sandhi, or the request went out without its `authorization` header. No test
+  can make sandhi's allocation fail.
+- **H21, the mode orders** (src/beam.cyr): `bj_hermite_gaussian`, `bj_hermite_gaussian_field` and
+  `bj_laguerre_gaussian_intensity` return NaN (NaN + NaN·j for the field) for m, n or p outside u32 and l outside
+  i32: Rust's types can't hold those, and the functions return a bare f64. `cyrius_audit_201_mode_orders` (3).
+- **H22** (src/compute.cyr): `BjGpuFdtd2d_new`'s buffer loop stops on the Err itself, so a backend's `Err(0)` ends
+  it, and the trait's doc says a buffer handle is never 0. `bj_circular_array_factor`'s count stays Rust's usize: a
+  count of 2^63 or more takes as long as it does in Rust, which also has no bound.
+- **Benchmarks**: two interleaved rounds against bite 1b's src/ (load 0.6–1.0, nothing else running), median ratio
+  1.000 and 0.997. `beam/hermite_gaussian_hg33` +0.5 % and 0.0 %, its field +1.7 % and +1.1 %, `scattering/mie_*`
+  within −0.4 to +0.4 %.
+- **Result**: the gate clean, all 17 steps; parity and the 520 digests unchanged from §144; validate.py: 770,127 rows,
+  0 problems; 2,952 assertions (6 new); coverage 449 of 449. The changed test files (beam, scattering, compute, ai)
+  pass on x86_64 PE and aarch64, one target at a time, the deadline test included. Next: bite 2b.

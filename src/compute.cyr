@@ -3,10 +3,10 @@
 #
 # A backend owns field buffers and runs the FDTD stencils on them. Rust's trait has an associated `Buffer` type; here a
 # buffer is an opaque word each backend defines (BjCpuBackend's is the address of a block holding its length, then
-# its values). Host slices are a pointer and a length. Cyrius has no Drop, so the trait adds `free_buffer`, which gives
-# a buffer back (BjGpuFdtd2d_free calls it for every buffer it made). Fields are 2D, row-major (index y·nx + x), in
-# src/fdtd2d.cyr's TM Yee layout: E_z at (x, y), H_x at (x, y + ½), H_y at (x + ½, y). A refused request returns an
-# error value; nothing aborts.
+# its values), never 0, which BjGpuFdtd2d takes for no buffer. Host slices are a pointer and a length. Cyrius has
+# no Drop, so the trait adds `free_buffer`, which gives a buffer back (BjGpuFdtd2d_free calls it for every buffer
+# it made). Fields are 2D, row-major (index y·nx + x), in src/fdtd2d.cyr's TM Yee layout: E_z at (x, y), H_x at
+# (x, y + ½), H_y at (x + ½, y). A refused request returns an error value; nothing aborts.
 #
 # Cyrius refuses a generic impl header (`impl<B> T<B>`, cyrius 6.7.17; probe p20), so BjGpuFdtd2d<B>'s methods are
 # generic functions over a `*BjGpuFdtd2d<B>`: `BjGpuFdtd2d_step_once(&sim)` is Rust's `sim.step_once()`, the backend
@@ -372,10 +372,11 @@ public fn BjGpuFdtd2d_new<B: BjComputeBackend>(nx, ny, dx: f64, backend: B, out:
     var bufs: i64[5];
     var made = 0;
     var code = 0;
+    var failed = 0;
     # The buffers are made through out's own copy of the backend (a consumer's backend may keep state), which an
     # error empties again with the rest of out.
     out.backend = backend;
-    while (made < 5 && code == 0) {
+    while (made < 5 && failed == 0) {
         var src = zeros;
         if (made == 3) { src = vals; }
         if (made == 4) {
@@ -384,7 +385,12 @@ public fn BjGpuFdtd2d_new<B: BjComputeBackend>(nx, ny, dx: f64, backend: B, out:
         }
         if (made == 4) { src = vals; }
         var tb, vb = out.backend.create_buffer(src, n);
-        if (is_err_result(tb) == 1) { code = vb; }
+        # A backend's Err may carry any code, 0 (BJ_ERR_NONE) included: the loop stops on the Err itself (2.0.1, H22:
+        # an Err(0) made it ask again forever).
+        if (is_err_result(tb) == 1) {
+            code = vb;
+            failed = 1;
+        }
         else {
             bufs[made] = vb;
             made = made + 1;
@@ -392,7 +398,7 @@ public fn BjGpuFdtd2d_new<B: BjComputeBackend>(nx, ny, dx: f64, backend: B, out:
     }
     cyr_munmap(zeros, n * 8);
     cyr_munmap(vals, n * 8);
-    if (code != 0) {
+    if (failed == 1) {
         for (var j = 0; j < made; j = j + 1) { out.backend.free_buffer(bufs[j]); }
         memset(out, 0, sizeof(BjGpuFdtd2d<B>));
         return Err(code);

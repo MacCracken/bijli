@@ -27364,6 +27364,14 @@ public fn bj_mie(x: f64, m: BjComplex, out: *BjMieResult): Result {
     var mx_abs: f64 = h * x;
     var c = _bj_sc_mie_check(x, m, mx_abs);
     if (c != 0) { return Err(c); }
+    # |m| past DBL_MAX with a tiny x: the rounded |m|·x is +∞, which the exact size test accepts (row 17) when the
+    # true |m·x| ≤ 10⁷. The parts' products are then finite, and their hypot is |m·x| rounded, so the D_n recurrence
+    # starts from a bounded order (2.0.1, H16: from +∞ it started at 2^63 − 1 and never ended).
+    if (_bj_is_finite(mx_abs) == 0) {
+        var px: f64 = mre * x;
+        var qx: f64 = mim * x;
+        mx_abs = _bj_hypot(px, qx);
+    }
     var n_max, n_start = _bj_sc_terms(x, mx_abs);
     _bj_sc_log_start(x, mre, mim, n_max, n_start);
     var d = fl_alloc((n_max + 1) * 16);
@@ -27568,6 +27576,8 @@ public fn bj_rayleigh_angular_intensity(cross_section: f64, distance: f64, cos_t
 private
 
 # std::f64::consts::SQRT_2.
+# NaN, a mode function's value for an order outside Rust's type.
+var _BJ_BEAM_NAN: f64 = 0x7FF8000000000000;
 var _BJ_BEAM_SQRT_2: f64 = 0x3FF6A09E667F3BCD;
 
 # ── the Gaussian beam ───────────────────────────────────────────────────────────────────────────────────────────
@@ -28633,12 +28643,17 @@ fn _bj_beam_hermite_fl(n, t: f64, x: f64, fl: *i64): f64 {
 
 # The Hermite–Gaussian envelope u_mn(x, y, z) = (w₀/w)·H_m(√2x/w)·H_n(√2y/w)·e^{−(x² + y²)/w²}, the field with every
 # propagation phase removed (|u_mn| = |E|, u_mn² the intensity), the lobes' signs kept. The TEM₀₀ prefactor serves
-# every mode (HG₀₀(0, 0, 0) = 1): HG_mn carries 2^{m+n}·m!·n! times TEM₀₀'s power. m, n ≥ 0 (Rust's u32). Rust's chain
-# where every step of it is provably the one with an unbounded exponent, else that chain, its last product rounded once
-# (ADR 0002 row 18, M3 part 2d-3b-1; src/crmath_vx.cyr's _bj_vx_bm_hg, whose section comment lists the tests). Mirrors
-# `hermite_gaussian`.
+# every mode (HG₀₀(0, 0, 0) = 1): HG_mn carries 2^{m+n}·m!·n! times TEM₀₀'s power. m, n are Rust's u32s: NaN for an
+# order outside it (2.0.1, H21: a negative order gave another mode's value, a larger one a recurrence of up to 2^63
+# steps). Rust's chain where every step of it is provably the one with an unbounded exponent, else that chain, its
+# last product rounded once (ADR 0002 row 18, M3 part 2d-3b-1; src/crmath_vx.cyr's _bj_vx_bm_hg, whose section
+# comment lists the tests). Mirrors `hermite_gaussian`.
 #must_use
 public fn bj_hermite_gaussian(beam: *BjGaussianBeam, m, n, x: f64, y: f64, z: f64): f64 {
+    if (m < 0 || m > 4294967295 || n < 0 || n > 4294967295) {
+        var nan: f64 = _BJ_BEAM_NAN;
+        return nan;
+    }
     var w: f64 = beam.spot_size(z);
     var w0: f64 = beam.waist;
     var tx: f64 = _BJ_BEAM_SQRT_2 * x;
@@ -28672,9 +28687,14 @@ public fn bj_hermite_gaussian(beam: *BjGaussianBeam, m, n, x: f64, y: f64, z: f6
 # −(u·sin φ)) (ADR 0002 row 5). Normalization as bj_hermite_gaussian's. Rust's chain where every step of it is provably
 # the one with an unbounded exponent, else that chain, the amplitude's 53-bit value and the phase's, the two last
 # products rounded once (ADR 0002 row 18, M3 part 2d-3c; src/crmath_vx.cyr's _bj_vx_bm_hgf, whose section comment
-# lists the tests). Mirrors `hermite_gaussian_field`.
+# lists the tests). NaN + NaN·j for an order outside Rust's u32 (2.0.1, H21). Mirrors `hermite_gaussian_field`.
 #must_use
 public fn bj_hermite_gaussian_field(beam: *BjGaussianBeam, m, n, x: f64, y: f64, z: f64): BjComplex {
+    if (m < 0 || m > 4294967295 || n < 0 || n > 4294967295) {
+        var nan: f64 = _BJ_BEAM_NAN;
+        var zn: BjComplex = BjComplex_new(nan, nan);
+        return zn;
+    }
     var amp: f64 = bj_hermite_gaussian(beam, m, n, x, y, z);
     var two_pi: f64 = 2.0 * _BJ_PI;
     var k: f64 = two_pi / beam.wavelength;
@@ -28765,13 +28785,17 @@ fn _bj_beam_laguerre_fl(p, l, x: f64, fl: *i64): f64 {
 
 # The Laguerre–Gaussian intensity I_pl(r, z) = (w₀/w)²·(2r²/w²)^|l|·[L_p^|l|(2r²/w²)]²·e^{−2r²/w²}, |E|² (the vortex
 # phase e^{jlφ} and the Gouy phase drop out). The TEM₀₀ prefactor serves every mode (LG₀₀(0, 0) = 1): LG_pl carries
-# (p + |l|)!/p! times TEM₀₀'s power. p ≥ 0 (Rust's u32), l Rust's i32. For l = i32::MIN the power is (2r²/w²)^{2³¹}
-# (ADR 0002 row 32: Rust's `l.unsigned_abs() as i32` wraps to −2³¹, the reciprocal). Rust's chain where every step of it
-# is provably the one with an unbounded exponent, else that chain, its last product rounded once (ADR 0002 row 18, M3
-# part 2d-3b-2; src/crmath_vx.cyr's _bj_vx_bm_lg, whose section comment lists the tests). Mirrors
-# `laguerre_gaussian_intensity`.
+# (p + |l|)!/p! times TEM₀₀'s power. p is Rust's u32 and l its i32: NaN for either outside its type (2.0.1, H21). For
+# l = i32::MIN the power is (2r²/w²)^{2³¹} (ADR 0002 row 32: Rust's `l.unsigned_abs() as i32` wraps to −2³¹, the
+# reciprocal). Rust's chain where every step of it is provably the one with an unbounded exponent, else that chain, its
+# last product rounded once (ADR 0002 row 18, M3 part 2d-3b-2; src/crmath_vx.cyr's _bj_vx_bm_lg, whose section comment
+# lists the tests). Mirrors `laguerre_gaussian_intensity`.
 #must_use
 public fn bj_laguerre_gaussian_intensity(beam: *BjGaussianBeam, p, l, r: f64, z: f64): f64 {
+    if (p < 0 || p > 4294967295 || l < 0 - 2147483648 || l > 2147483647) {
+        var nan: f64 = _BJ_BEAM_NAN;
+        return nan;
+    }
     var w: f64 = beam.spot_size(z);
     var w0: f64 = beam.waist;
     var tr: f64 = _BJ_BEAM_SQRT_2 * r;
@@ -37771,10 +37795,10 @@ impl BjFdtd3d {
 #
 # A backend owns field buffers and runs the FDTD stencils on them. Rust's trait has an associated `Buffer` type; here a
 # buffer is an opaque word each backend defines (BjCpuBackend's is the address of a block holding its length, then
-# its values). Host slices are a pointer and a length. Cyrius has no Drop, so the trait adds `free_buffer`, which gives
-# a buffer back (BjGpuFdtd2d_free calls it for every buffer it made). Fields are 2D, row-major (index y·nx + x), in
-# src/fdtd2d.cyr's TM Yee layout: E_z at (x, y), H_x at (x, y + ½), H_y at (x + ½, y). A refused request returns an
-# error value; nothing aborts.
+# its values), never 0, which BjGpuFdtd2d takes for no buffer. Host slices are a pointer and a length. Cyrius has
+# no Drop, so the trait adds `free_buffer`, which gives a buffer back (BjGpuFdtd2d_free calls it for every buffer
+# it made). Fields are 2D, row-major (index y·nx + x), in src/fdtd2d.cyr's TM Yee layout: E_z at (x, y), H_x at
+# (x, y + ½), H_y at (x + ½, y). A refused request returns an error value; nothing aborts.
 #
 # Cyrius refuses a generic impl header (`impl<B> T<B>`, cyrius 6.7.17; probe p20), so BjGpuFdtd2d<B>'s methods are
 # generic functions over a `*BjGpuFdtd2d<B>`: `BjGpuFdtd2d_step_once(&sim)` is Rust's `sim.step_once()`, the backend
@@ -38140,10 +38164,11 @@ public fn BjGpuFdtd2d_new<B: BjComputeBackend>(nx, ny, dx: f64, backend: B, out:
     var bufs: i64[5];
     var made = 0;
     var code = 0;
+    var failed = 0;
     # The buffers are made through out's own copy of the backend (a consumer's backend may keep state), which an
     # error empties again with the rest of out.
     out.backend = backend;
-    while (made < 5 && code == 0) {
+    while (made < 5 && failed == 0) {
         var src = zeros;
         if (made == 3) { src = vals; }
         if (made == 4) {
@@ -38152,7 +38177,12 @@ public fn BjGpuFdtd2d_new<B: BjComputeBackend>(nx, ny, dx: f64, backend: B, out:
         }
         if (made == 4) { src = vals; }
         var tb, vb = out.backend.create_buffer(src, n);
-        if (is_err_result(tb) == 1) { code = vb; }
+        # A backend's Err may carry any code, 0 (BJ_ERR_NONE) included: the loop stops on the Err itself (2.0.1, H22:
+        # an Err(0) made it ask again forever).
+        if (is_err_result(tb) == 1) {
+            code = vb;
+            failed = 1;
+        }
         else {
             bufs[made] = vb;
             made = made + 1;
@@ -38160,7 +38190,7 @@ public fn BjGpuFdtd2d_new<B: BjComputeBackend>(nx, ny, dx: f64, backend: B, out:
     }
     cyr_munmap(zeros, n * 8);
     cyr_munmap(vals, n * 8);
-    if (code != 0) {
+    if (failed == 1) {
         for (var j = 0; j < made; j = j + 1) { out.backend.free_buffer(bufs[j]); }
         memset(out, 0, sizeof(BjGpuFdtd2d<B>));
         return Err(code);
@@ -43088,7 +43118,7 @@ var _BJ_AI_MAX_RESPONSE = 1048576;
 # sandhi's cap is the whole response, its head included: the body's 1 MiB and 64 KiB of headers.
 var _BJ_AI_MAX_READ = 1114112;
 
-# Rust's reqwest client timeout, 30 s, as sandhi's total deadline for one exchange.
+# Rust's reqwest client timeout, 30 s: sandhi's deadline for one exchange and for its connect, each read and write.
 var _BJ_AI_TIMEOUT_MS = 30000;
 
 # Connection settings for a daimon agent registry: the service's base URL (`endpoint`, endpoint_len bytes, e.g.
@@ -43490,11 +43520,15 @@ impl BjDaimonClient {
     # 46: daimon's route). Sends `POST {endpoint}/v1/agents` (the endpoint's trailing slashes dropped, as Rust's
     # `trim_end_matches('/')`) with Rust's body `{"capabilities":["electric_fields","magnetic_fields","maxwell",
     # "charge_dynamics"],"name":"bijli"}` (serde_json's `json!` sorts the keys), `content-type: application/json`, and
-    # `Authorization: Bearer <key>` when a key is set; one exchange within the 30 s deadline, no redirect followed.
-    # Ok(0), or Err(Transport): "daimon: registration request failed: …" where the request can't be made (an endpoint
-    # or key holding a control byte, which can't go into a URL or a header; sandhi's CONNECT, TIMEOUT, TLS, PARSE or
-    # PROTOCOL) and the response's failures as _bj_ai_register_response gives them. Every block of the exchange comes
-    # from a decode region given back before it returns. Mirrors `DaimonClient::register_agent`.
+    # `Authorization: Bearer <key>` when a key is set; one exchange, no redirect followed. The 30 s deadline
+    # (timeout_ms) bounds the whole exchange and each step of it: the connect, every read (the TLS handshake's
+    # included) and every write. sandhi's name lookup has no deadline of its own: an endpoint named by host waits on
+    # the resolver (an IP literal doesn't). Ok(0), or Err(Transport): "daimon: registration request failed: …" where
+    # the request can't be made (an endpoint or key holding a control byte, which can't go into a URL or a header;
+    # sandhi's CONNECT, TIMEOUT, TLS, PARSE, PROTOCOL, DISCOVERY or INTERNAL) and the response's failures as
+    # _bj_ai_register_response gives them; Err(Allocation) when one of the request's blocks can't be had. The request's
+    # blocks come from a decode region given back before it returns; sandhi parses the response's headers on its own
+    # bump heap, which is never given back. Mirrors `DaimonClient::register_agent`.
     public fn register_agent(self, t): Result {
         var cfg: *BjDaimonConfig = _bj_ai_cfgp(self);
         var en = cfg.endpoint_len;
@@ -43528,16 +43562,29 @@ impl BjDaimonClient {
         store8(url + en + 10, 0);
         var bn = _bj_jw_cstr(body, 0, "{\"capabilities\":[\"electric_fields\",\"magnetic_fields\",");
         bn = _bj_jw_cstr(body, bn, "\"maxwell\",\"charge_dynamics\"],\"name\":\"bijli\"}");
+        # Each of sandhi's blocks is checked: a refused one is Allocation, never a request sent without its headers
+        # (a dropped authorization header came back as a 401) or a null options block (2.0.1, H20).
         var h = sandhi_headers_new_a(a);
-        sandhi_headers_set_a(a, h, "content-type", "application/json");
-        if (auth != 0) {
+        var hs = 0 - 2;
+        if (h != 0) { hs = sandhi_headers_set_a(a, h, "content-type", "application/json"); }
+        if (hs >= 0 && auth != 0) {
             memcpy(auth, "Bearer ", 7);
             memcpy(auth + 7, cfg.api_key, cfg.api_key_len);
             store8(auth + 7 + cfg.api_key_len, 0);
-            sandhi_headers_set_a(a, h, "authorization", auth);
+            hs = sandhi_headers_set_a(a, h, "authorization", auth);
         }
-        var opts = sandhi_http_options_new_a(a);
+        var opts = 0;
+        if (hs >= 0) { opts = sandhi_http_options_new_a(a); }
+        if (opts == 0) {
+            _bj_jr_close(&rg);
+            return Err(_bj_ai_alloc_err("a daimon registration request"));
+        }
+        # The deadline bounds each step, not only the gaps between reads (sandhi checks total_ms there alone): the
+        # connect, every read (the TLS handshake's too, through SO_RCVTIMEO) and every write (2.0.1, H19).
         sandhi_http_options_total_ms(opts, self.timeout_ms);
+        sandhi_http_options_connect_ms(opts, self.timeout_ms);
+        sandhi_http_options_read_ms(opts, self.timeout_ms);
+        sandhi_http_options_write_ms(opts, self.timeout_ms);
         sandhi_http_options_max_response_bytes(opts, _BJ_AI_MAX_READ);
         var resp = sandhi_http_post_opts_a(a, url, h, body, bn, opts);
         var kind = sandhi_http_err_kind(resp);

@@ -28,10 +28,12 @@ against, and what remains (M8 part 2).
   overflows is refused. NaN and ±∞ can't be written as JSON numbers, so a writer emits `null` and the reader refuses
   it.
 - **The ai client's requests.** An endpoint or API key holding a control byte (U+0000..U+001F, U+007F) is refused
-  before anything is sent, so neither can split a request or inject a header. A request has a 30 s deadline and
-  follows no redirect. The response is capped (a 1 MiB body, 1.06 MiB in all); a status outside 2xx, an oversized,
-  malformed or truncated answer, and one without an integer `id` are all `BJ_ERR_TRANSPORT`. The exchange's memory
-  comes from a decode region freed before the call returns. TLS (an `https` endpoint) is sandhi's, with its policy.
+  before anything is sent, so neither can split a request or inject a header. A request has a 30 s deadline, which
+  bounds the connect, every read (the TLS handshake's included) and every write as well as the whole exchange
+  (2.0.1), and follows no redirect. The response is capped (a 1 MiB body, 1.06 MiB in all); a status outside 2xx, an
+  oversized, malformed or truncated answer, and one without an integer `id` are all `BJ_ERR_TRANSPORT`. The request's
+  memory comes from a decode region freed before the call returns. TLS (an `https` endpoint) is sandhi's, with its
+  policy.
 - **Secrets.** The API key is never logged (the debug lines print the endpoint only), and `debug` prints it as
   `Some("<redacted>")`. The JSON writer writes it in clear, as Rust's `Serialize` did: a written config is a secret.
 - **Memory.** No time step allocates; a grid, matrix or slice owns its blocks and its `_free` gives them back once (a
@@ -39,6 +41,11 @@ against, and what remains (M8 part 2).
   1 to 4 ports, checked to return, to leave `out` empty on a refusal, and not to grow the heap on a replay).
 
 ## What remains
+
+- **sandhi's own limits** (2.0.1's audit, filed upstream from the roadmap): its name lookup has no deadline and skips
+  `/etc/hosts`, so an endpoint named by host (the default `localhost` among them) waits on the resolver, and its
+  response-header parse allocates from the never-freed bump heap: a few hundred bytes a call, and up to about a MiB
+  from a hostile endpoint. An endpoint given as an IP literal avoids the lookup.
 
 - **The JSON readers have no fuzz harness.** They rest on bayan's parser and on the golden corpus's documents
   (malformed, repeated keys, deep nesting, every escape, numbers at every edge), not on mutation. A harness like

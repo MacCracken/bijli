@@ -50,6 +50,29 @@ fn lab_beam(g: *BjGaussianBeam): i64 {
     return 0;
 }
 
+# 2.0.1 bite 2a (port-parity §142, H21): a mode order outside Rust's u32 (an i32 for l) is NaN.
+fn cyrius_audit_201(): i64 {
+    test_group("cyrius_audit_201_mode_orders (2.0.1 bite 2a)");
+    var g: BjGaussianBeam;
+    lab_beam(&g);
+    var big = 4294967296;
+    var h1: f64 = bj_hermite_gaussian(&g, 0 - 1, 0, 0.00001, 0.0, 0.0);
+    var h2: f64 = bj_hermite_gaussian(&g, 0, big, 0.00001, 0.00001, 0.0);
+    var h3: f64 = bj_hermite_gaussian(&g, 1, 0, 0.00001, 0.0, 0.0);
+    assert(h1 != h1 && h2 != h2 && h3 == h3 && h3 != 0.0, "HG: m = -1 or n = 2^32 is NaN; HG10 is not");
+    var f1: BjComplex = bj_hermite_gaussian_field(&g, 0 - 1, 0, 0.00001, 0.0, 0.0);
+    var f1r: f64 = f1.re;
+    assert(f1r != f1r, "and so is its field");
+    var l1: f64 = bj_laguerre_gaussian_intensity(&g, 0 - 1, 0, 0.00001, 0.0);
+    var l2: f64 = bj_laguerre_gaussian_intensity(&g, 0, 2147483648, 0.00001, 0.0);
+    var l3: f64 = bj_laguerre_gaussian_intensity(&g, 0, 0 - 2147483649, 0.00001, 0.0);
+    var l4: f64 = bj_laguerre_gaussian_intensity(&g, 0, 0 - 2147483648, 0.00001, 0.0);
+    var l5: f64 = bj_laguerre_gaussian_intensity(&g, 1, 2, 0.00001, 0.0);
+    assert(l1 != l1 && l2 != l2 && l3 != l3 && l4 == l4 && l5 == l5,
+      "LG: p = -1, l = 2^31 or -2^31 - 1 NaN; l = i32::MIN is not");
+    return 0;
+}
+
 # 1 when BjGaussianBeam_new(λ, w₀) is refused.
 fn beam_refused(lam: f64, w0: f64): i64 {
     var g: BjGaussianBeam;
@@ -1165,6 +1188,7 @@ fn main(): i64 {
     cyrius_lg_row18();
     cyrius_hgf_row18();
     cyrius_json();
+    cyrius_audit_201();
     return assert_summary();
 }
 

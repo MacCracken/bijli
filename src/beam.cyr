@@ -21,6 +21,8 @@
 private
 
 # std::f64::consts::SQRT_2.
+# NaN, a mode function's value for an order outside Rust's type.
+var _BJ_BEAM_NAN: f64 = 0x7FF8000000000000;
 var _BJ_BEAM_SQRT_2: f64 = 0x3FF6A09E667F3BCD;
 
 # ── the Gaussian beam ───────────────────────────────────────────────────────────────────────────────────────────
@@ -1086,12 +1088,17 @@ fn _bj_beam_hermite_fl(n, t: f64, x: f64, fl: *i64): f64 {
 
 # The Hermite–Gaussian envelope u_mn(x, y, z) = (w₀/w)·H_m(√2x/w)·H_n(√2y/w)·e^{−(x² + y²)/w²}, the field with every
 # propagation phase removed (|u_mn| = |E|, u_mn² the intensity), the lobes' signs kept. The TEM₀₀ prefactor serves
-# every mode (HG₀₀(0, 0, 0) = 1): HG_mn carries 2^{m+n}·m!·n! times TEM₀₀'s power. m, n ≥ 0 (Rust's u32). Rust's chain
-# where every step of it is provably the one with an unbounded exponent, else that chain, its last product rounded once
-# (ADR 0002 row 18, M3 part 2d-3b-1; src/crmath_vx.cyr's _bj_vx_bm_hg, whose section comment lists the tests). Mirrors
-# `hermite_gaussian`.
+# every mode (HG₀₀(0, 0, 0) = 1): HG_mn carries 2^{m+n}·m!·n! times TEM₀₀'s power. m, n are Rust's u32s: NaN for an
+# order outside it (2.0.1, H21: a negative order gave another mode's value, a larger one a recurrence of up to 2^63
+# steps). Rust's chain where every step of it is provably the one with an unbounded exponent, else that chain, its
+# last product rounded once (ADR 0002 row 18, M3 part 2d-3b-1; src/crmath_vx.cyr's _bj_vx_bm_hg, whose section
+# comment lists the tests). Mirrors `hermite_gaussian`.
 #must_use
 public fn bj_hermite_gaussian(beam: *BjGaussianBeam, m, n, x: f64, y: f64, z: f64): f64 {
+    if (m < 0 || m > 4294967295 || n < 0 || n > 4294967295) {
+        var nan: f64 = _BJ_BEAM_NAN;
+        return nan;
+    }
     var w: f64 = beam.spot_size(z);
     var w0: f64 = beam.waist;
     var tx: f64 = _BJ_BEAM_SQRT_2 * x;
@@ -1125,9 +1132,14 @@ public fn bj_hermite_gaussian(beam: *BjGaussianBeam, m, n, x: f64, y: f64, z: f6
 # −(u·sin φ)) (ADR 0002 row 5). Normalization as bj_hermite_gaussian's. Rust's chain where every step of it is provably
 # the one with an unbounded exponent, else that chain, the amplitude's 53-bit value and the phase's, the two last
 # products rounded once (ADR 0002 row 18, M3 part 2d-3c; src/crmath_vx.cyr's _bj_vx_bm_hgf, whose section comment
-# lists the tests). Mirrors `hermite_gaussian_field`.
+# lists the tests). NaN + NaN·j for an order outside Rust's u32 (2.0.1, H21). Mirrors `hermite_gaussian_field`.
 #must_use
 public fn bj_hermite_gaussian_field(beam: *BjGaussianBeam, m, n, x: f64, y: f64, z: f64): BjComplex {
+    if (m < 0 || m > 4294967295 || n < 0 || n > 4294967295) {
+        var nan: f64 = _BJ_BEAM_NAN;
+        var zn: BjComplex = BjComplex_new(nan, nan);
+        return zn;
+    }
     var amp: f64 = bj_hermite_gaussian(beam, m, n, x, y, z);
     var two_pi: f64 = 2.0 * _BJ_PI;
     var k: f64 = two_pi / beam.wavelength;
@@ -1218,13 +1230,17 @@ fn _bj_beam_laguerre_fl(p, l, x: f64, fl: *i64): f64 {
 
 # The Laguerre–Gaussian intensity I_pl(r, z) = (w₀/w)²·(2r²/w²)^|l|·[L_p^|l|(2r²/w²)]²·e^{−2r²/w²}, |E|² (the vortex
 # phase e^{jlφ} and the Gouy phase drop out). The TEM₀₀ prefactor serves every mode (LG₀₀(0, 0) = 1): LG_pl carries
-# (p + |l|)!/p! times TEM₀₀'s power. p ≥ 0 (Rust's u32), l Rust's i32. For l = i32::MIN the power is (2r²/w²)^{2³¹}
-# (ADR 0002 row 32: Rust's `l.unsigned_abs() as i32` wraps to −2³¹, the reciprocal). Rust's chain where every step of it
-# is provably the one with an unbounded exponent, else that chain, its last product rounded once (ADR 0002 row 18, M3
-# part 2d-3b-2; src/crmath_vx.cyr's _bj_vx_bm_lg, whose section comment lists the tests). Mirrors
-# `laguerre_gaussian_intensity`.
+# (p + |l|)!/p! times TEM₀₀'s power. p is Rust's u32 and l its i32: NaN for either outside its type (2.0.1, H21). For
+# l = i32::MIN the power is (2r²/w²)^{2³¹} (ADR 0002 row 32: Rust's `l.unsigned_abs() as i32` wraps to −2³¹, the
+# reciprocal). Rust's chain where every step of it is provably the one with an unbounded exponent, else that chain, its
+# last product rounded once (ADR 0002 row 18, M3 part 2d-3b-2; src/crmath_vx.cyr's _bj_vx_bm_lg, whose section comment
+# lists the tests). Mirrors `laguerre_gaussian_intensity`.
 #must_use
 public fn bj_laguerre_gaussian_intensity(beam: *BjGaussianBeam, p, l, r: f64, z: f64): f64 {
+    if (p < 0 || p > 4294967295 || l < 0 - 2147483648 || l > 2147483647) {
+        var nan: f64 = _BJ_BEAM_NAN;
+        return nan;
+    }
     var w: f64 = beam.spot_size(z);
     var w0: f64 = beam.waist;
     var tr: f64 = _BJ_BEAM_SQRT_2 * r;

@@ -24,7 +24,7 @@ var _BJ_AI_MAX_RESPONSE = 1048576;
 # sandhi's cap is the whole response, its head included: the body's 1 MiB and 64 KiB of headers.
 var _BJ_AI_MAX_READ = 1114112;
 
-# Rust's reqwest client timeout, 30 s, as sandhi's total deadline for one exchange.
+# Rust's reqwest client timeout, 30 s: sandhi's deadline for one exchange and for its connect, each read and write.
 var _BJ_AI_TIMEOUT_MS = 30000;
 
 # Connection settings for a daimon agent registry: the service's base URL (`endpoint`, endpoint_len bytes, e.g.
@@ -426,11 +426,15 @@ impl BjDaimonClient {
     # 46: daimon's route). Sends `POST {endpoint}/v1/agents` (the endpoint's trailing slashes dropped, as Rust's
     # `trim_end_matches('/')`) with Rust's body `{"capabilities":["electric_fields","magnetic_fields","maxwell",
     # "charge_dynamics"],"name":"bijli"}` (serde_json's `json!` sorts the keys), `content-type: application/json`, and
-    # `Authorization: Bearer <key>` when a key is set; one exchange within the 30 s deadline, no redirect followed.
-    # Ok(0), or Err(Transport): "daimon: registration request failed: …" where the request can't be made (an endpoint
-    # or key holding a control byte, which can't go into a URL or a header; sandhi's CONNECT, TIMEOUT, TLS, PARSE or
-    # PROTOCOL) and the response's failures as _bj_ai_register_response gives them. Every block of the exchange comes
-    # from a decode region given back before it returns. Mirrors `DaimonClient::register_agent`.
+    # `Authorization: Bearer <key>` when a key is set; one exchange, no redirect followed. The 30 s deadline
+    # (timeout_ms) bounds the whole exchange and each step of it: the connect, every read (the TLS handshake's
+    # included) and every write. sandhi's name lookup has no deadline of its own: an endpoint named by host waits on
+    # the resolver (an IP literal doesn't). Ok(0), or Err(Transport): "daimon: registration request failed: …" where
+    # the request can't be made (an endpoint or key holding a control byte, which can't go into a URL or a header;
+    # sandhi's CONNECT, TIMEOUT, TLS, PARSE, PROTOCOL, DISCOVERY or INTERNAL) and the response's failures as
+    # _bj_ai_register_response gives them; Err(Allocation) when one of the request's blocks can't be had. The request's
+    # blocks come from a decode region given back before it returns; sandhi parses the response's headers on its own
+    # bump heap, which is never given back. Mirrors `DaimonClient::register_agent`.
     public fn register_agent(self, t): Result {
         var cfg: *BjDaimonConfig = _bj_ai_cfgp(self);
         var en = cfg.endpoint_len;
@@ -464,16 +468,29 @@ impl BjDaimonClient {
         store8(url + en + 10, 0);
         var bn = _bj_jw_cstr(body, 0, "{\"capabilities\":[\"electric_fields\",\"magnetic_fields\",");
         bn = _bj_jw_cstr(body, bn, "\"maxwell\",\"charge_dynamics\"],\"name\":\"bijli\"}");
+        # Each of sandhi's blocks is checked: a refused one is Allocation, never a request sent without its headers
+        # (a dropped authorization header came back as a 401) or a null options block (2.0.1, H20).
         var h = sandhi_headers_new_a(a);
-        sandhi_headers_set_a(a, h, "content-type", "application/json");
-        if (auth != 0) {
+        var hs = 0 - 2;
+        if (h != 0) { hs = sandhi_headers_set_a(a, h, "content-type", "application/json"); }
+        if (hs >= 0 && auth != 0) {
             memcpy(auth, "Bearer ", 7);
             memcpy(auth + 7, cfg.api_key, cfg.api_key_len);
             store8(auth + 7 + cfg.api_key_len, 0);
-            sandhi_headers_set_a(a, h, "authorization", auth);
+            hs = sandhi_headers_set_a(a, h, "authorization", auth);
         }
-        var opts = sandhi_http_options_new_a(a);
+        var opts = 0;
+        if (hs >= 0) { opts = sandhi_http_options_new_a(a); }
+        if (opts == 0) {
+            _bj_jr_close(&rg);
+            return Err(_bj_ai_alloc_err("a daimon registration request"));
+        }
+        # The deadline bounds each step, not only the gaps between reads (sandhi checks total_ms there alone): the
+        # connect, every read (the TLS handshake's too, through SO_RCVTIMEO) and every write (2.0.1, H19).
         sandhi_http_options_total_ms(opts, self.timeout_ms);
+        sandhi_http_options_connect_ms(opts, self.timeout_ms);
+        sandhi_http_options_read_ms(opts, self.timeout_ms);
+        sandhi_http_options_write_ms(opts, self.timeout_ms);
         sandhi_http_options_max_response_bytes(opts, _BJ_AI_MAX_READ);
         var resp = sandhi_http_post_opts_a(a, url, h, body, bn, opts);
         var kind = sandhi_http_err_kind(resp);

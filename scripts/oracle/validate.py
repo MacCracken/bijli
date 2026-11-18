@@ -4206,6 +4206,8 @@ def sc_mie_checks(x, mre, mim, P, port=False):
         over = (Fraction(mre) * Fraction(x)) ** 2 + (Fraction(mim) * Fraction(x)) ** 2 > Fraction(SC_MAX_MX) ** 2
     if over:
         return None, ip_err(f"|m|·x = {rust_display(mx_abs)} exceeds the supported maximum {rust_display(SC_MAX_MX)}")
+    if port and not math.isfinite(mx_abs):      # |m| past DBL_MAX, the exact |m·x| ≤ 10⁷ (2.0.1, H16)
+        mx_abs = P["hypot"](mre * x, mim * x)
     return mx_abs, None
 
 

@@ -77,9 +77,10 @@ impl BjComputeBackend for RoundTripBackend {
     }
 }
 
-# Buffers made by FailBackend so far, and freed.
+# Buffers made by FailBackend so far, and freed; the code its refusal carries.
 var _fb_made = 0;
 var _fb_freed = 0;
+var _fb_code = 10;
 
 # `FailBackend`: BjCpuBackend, except that its third create_buffer fails with Allocation (2.0.1 bite 1b, H15).
 struct FailBackend { }
@@ -87,7 +88,7 @@ struct FailBackend { }
 impl BjComputeBackend for FailBackend {
     # BjCpuBackend's create_buffer, refused on the third call.
     fn create_buffer(self, data: *f64, n): Result {
-        if (_fb_made == 2) { return Err(BJ_ERR_ALLOCATION); }
+        if (_fb_made == 2) { return Err(_fb_code); }
         _fb_made = _fb_made + 1;
         var c: BjCpuBackend;
         return c.create_buffer(data, n);
@@ -560,6 +561,14 @@ fn main() {
       g24.nx == 0, "the buffers made are given back, out empty");
     BjGpuFdtd2d_free(&g24);
     assert(_fb_freed == 2, "and its free gives nothing back twice");
+    # H22: a refusal that carries code 0 (BJ_ERR_NONE) still ends the loop; it asked again forever.
+    _fb_made = 0;
+    _fb_freed = 0;
+    _fb_code = 0;
+    var g25: BjGpuFdtd2d<FailBackend>;
+    var t25, v25 = BjGpuFdtd2d_new(8, 8, DX, fb, &g25);
+    assert(is_err_result(t25) == 1 && v25 == 0 && _fb_made == 2 && _fb_freed == 2 && g25.fz == 0,
+      "an Err(0) from the backend: returned, the buffers made given back (H22)");
 
     return assert_summary();
 }

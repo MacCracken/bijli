@@ -429,6 +429,38 @@ fn main() {
     BjDaimonConfig_free(&rc);
     var sclc: *BjDaimonConfig = scl.config();
     assert(dc.endpoint == 0 && hc.endpoint == 0 && sclc.endpoint == 0, "every block given back");
+
+    test_group("cyrius_audit_201_deadline (2.0.1 bite 2a, H19)");
+    # A listener that never accepts: the connect completes in its backlog and the request is buffered, but no answer
+    # comes. The deadline now bounds each read (sandhi checked it only between reads, so the first read blocked).
+    var dlt, dlfd = tcp_socket();
+    sock_reuse(dlfd);
+    var dlp = 0;
+    var dlq = 47711;
+    while (dlp == 0 && dlq < 48111) {
+        var dlbt, dlbv = sock_bind(dlfd, INADDR_LOOPBACK(), dlq);
+        if (is_ok(dlbt) == 1) { dlp = dlq; }
+        dlq = dlq + 1;
+    }
+    var dllt, dllv = sock_listen(dlfd, 4);
+    var dlub[64];
+    var dlu[24];
+    _bj_tx_init(&dlu, &dlub, 64);
+    _bj_tx_cstr(&dlu, "http://127.0.0.1:");
+    _bj_tx_i64(&dlu, dlp);
+    var dlc: BjDaimonClient;
+    var dlok = client_for(_bj_tx_ptr(&dlu), "", 0, &dlc);
+    dlc.timeout_ms = 300;
+    var dlib[64];
+    var dlit[24];
+    bj_text_init(&dlit, &dlib, 64);
+    var dl0 = clock_now_ms();
+    var dlrt, dlrv = dlc.register_agent(&dlit);
+    var dlel = clock_now_ms() - dl0;
+    assert(dlp != 0 && is_ok(dllt) == 1 && dlok == 1 && is_err_result(dlrt) == 1 && dlrv == BJ_ERR_TRANSPORT &&
+      dlel < 5000, "a server that never answers: Transport within the deadline, not a hang");
+    sock_close(dlfd);
+    BjDaimonClient_free(&dlc);
     return assert_summary();
 }
 

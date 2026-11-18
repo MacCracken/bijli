@@ -21,8 +21,10 @@ The audit's findings H1–H34 are in [port-parity §142](port-parity.md). They a
 - [x] **1a** Memory safety with no result changes (H1–H11; port-parity §143).
 - [x] **1b** Constructors leave `out` empty on Err; `BjCpml_new` becomes fallible and `enable_cpml` is dropped, as
   ADR row 3 says; the per-step CPML attach check is restored (H12–H15; port-parity §144).
-- [ ] **2** Hangs and quadratic costs: Mie, the f32 reader, the parallel combination's exact tier, the ai client's
-  deadlines and allocations, and the mode orders (H16–H22).
+- [x] **2a** Hangs: Mie, the ai client's deadlines and allocations, the mode orders and the GPU constructor's loop
+  (H16, H19–H22; port-parity §145).
+- [ ] **2b** The quadratic costs: the f32 reader's halfway floats and the parallel combination's exact tier (H17,
+  H18).
 - [ ] **3** Threads: the math tables become data, plus the error slot's publication and the 3D energy's scratch
   (H23–H25).
 - [ ] **4** Results that change, each an ADR 0002 row (H26–H31).

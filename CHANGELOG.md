@@ -47,6 +47,19 @@ The 2.0.1 audit and its repairs (`docs/development/port-parity.md` §142, findin
   step is now skipped with Rust's error log (ADR 0002 row 2, amended; H13).
 - **compute** — `BjGpuFdtd2d_new` wrote `out.backend` before its buffers could fail. An error now leaves `out`
   empty, with the buffers made so far given back (H15).
+- **scattering** — `bj_mie` hung for an index whose |m| overflows hypot when x is small: the exact size test accepted
+  |m·x| ≤ 10⁷, but the D_n recurrence started from the rounded +∞, at order 2^63 − 1. It now starts from the parts'
+  products (ADR 0002 row 17, amended; H16).
+- **ai** — `register_agent` set only sandhi's total deadline, which sandhi checks between reads, so a server that
+  accepted and never answered, or stalled a TLS handshake, blocked the caller forever. The connect, every read and
+  every write now take the deadline too; only the name lookup is still unbounded, in sandhi (H19). A refused
+  allocation of sandhi's headers or options is now Allocation; it was dereferenced inside sandhi, or the request went
+  out without its authorization header (H20).
+- **beam** — `bj_hermite_gaussian`, `bj_hermite_gaussian_field` and `bj_laguerre_gaussian_intensity` return NaN for an
+  order outside Rust's u32 (an i32 for l). A negative order gave another mode's value, and a larger one a recurrence
+  of up to 2^63 steps (H21).
+- **compute** — `BjGpuFdtd2d_new` stops at a backend's refusal whatever its code: an `Err(0)` made it ask again
+  forever (H22).
 
 ## [2.0.0] — 2026-11-18
 
