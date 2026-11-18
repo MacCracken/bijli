@@ -128,13 +128,15 @@ fn _bj_cb_transfer(buffer_len, host_len): i64 {
     return BJ_ERR_INVALID_PARAMETER;
 }
 
-# d ± k·(a − b) over n cells (add 1: +=, 0: −=), src/fdtd2d.cyr's packed row kernel in chunks through a stack scratch.
+# d ± k·(a − b) over n cells (add 1: +=, 0: −=), src/fdtd2d.cyr's packed row kernel in chunks through stack
+# scratch rows.
 fn _bj_cb_diff(d: *f64, k: *f64, a: *f64, b: *f64, n, add) {
     var w: f64[256];
+    var w2: f64[256];
     for (var s = 0; s < n; s = s + _BJ_CB_CHUNK) {
         var m = n - s;
         if (m > _BJ_CB_CHUNK) { m = _BJ_CB_CHUNK; }
-        _bj_fd2_diff(d + s, k + s, a + s, b + s, &w, m, add);
+        _bj_fd2_diff(d + s, k + s, a + s, b + s, &w, &w2, m, add);
     }
     return 0;
 }

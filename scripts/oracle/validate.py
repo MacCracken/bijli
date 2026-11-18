@@ -10846,6 +10846,39 @@ def fd23_e_coefficients(sim, eps_r, sigma):
     return 1.0, sim.coeff(eps0, eps_r)
 
 
+FS_DMIN2 = 2.2250738585072014e-308
+
+
+def fd_diff18(d, k, a, b, sub):
+    """d ± k·(a − b) as the port's 2D row kernel updates a cell (ADR 0002 row 18, M6 part 4c): Rust's chain wherever its
+    product is normal, or 0 from an exact zero (k = 0 or a = b), else the chain on Fractions with an unbounded exponent,
+    a − b and the product to 53 bits and the sum rounded once; Rust's chain for a non-finite operand."""
+    p = k * (a - b)
+    r = d - p if sub else d + p
+    if not (math.isfinite(d) and math.isfinite(k) and math.isfinite(a) and math.isfinite(b)):
+        return r
+    if math.isfinite(p) and (abs(p) >= FS_DMIN2 or (p == 0.0 and (k == 0.0 or a == b))):
+        return r
+    P = ux_mul(ux(k), ux_sub(ux(a), ux(b)))
+    return ux_fin(ux_sub(ux(d), P, r=lambda v: v) if sub else ux_add(ux(d), P, r=lambda v: v))
+
+
+def fd_curl18(d, k, a1, a0, b1, b0, sub):
+    """d ± k·((a1 − a0) − (b1 − b0)) as the port's 2D curl kernel updates a cell (row 18, M6 part 4c): Rust's chain
+    wherever its product is normal, or 0 from an exact zero (k = 0 or a zero inner difference, which is then 0
+    exactly), else the chain on Fractions, every difference and the product to 53 bits, the sum rounded once."""
+    w = (a1 - a0) - (b1 - b0)
+    p = k * w
+    r = d - p if sub else d + p
+    if not all(math.isfinite(x) for x in (d, k, a1, a0, b1, b0)):
+        return r
+    if math.isfinite(p) and (abs(p) >= FS_DMIN2 or (p == 0.0 and (k == 0.0 or w == 0.0))):
+        return r
+    W = ux_sub(ux_sub(ux(a1), ux(a0)), ux_sub(ux(b1), ux(b0)))
+    P = ux_mul(ux(k), W)
+    return ux_fin(ux_sub(ux(d), P, r=lambda v: v) if sub else ux_add(ux(d), P, r=lambda v: v))
+
+
 class Fd2:
     """An `Fdtd2d`: nx × ny, fields row-major (index y·nx + x)."""
 
@@ -10975,18 +11008,22 @@ class Fd2:
             self.fx = fx = [v * a for v, a in zip(fx, self.ca)]
             self.fy = fy = [v * a for v, a in zip(fy, self.ca)]
         kx = ch if tm else ce
+        r18 = "18" in self.port                        # ADR 0002 row 18 (M6 part 4c): each cell at its range edge
         for y in range(ny - 1):
             r = y * nx
-            if tm:
-                fx[r:r + nx] = [h - k * (a - b) for h, k, a, b in zip(fx[r:r + nx], kx[r:r + nx], fz[r + nx:r + 2 * nx],
-                                                                      fz[r:r + nx])]
+            seg = list(zip(fx[r:r + nx], kx[r:r + nx], fz[r + nx:r + 2 * nx], fz[r:r + nx]))
+            if r18:
+                fx[r:r + nx] = [fd_diff18(h, k, a, b, tm) for h, k, a, b in seg]
+            elif tm:
+                fx[r:r + nx] = [h - k * (a - b) for h, k, a, b in seg]
             else:
-                fx[r:r + nx] = [h + k * (a - b) for h, k, a, b in zip(fx[r:r + nx], kx[r:r + nx], fz[r + nx:r + 2 * nx],
-                                                                      fz[r:r + nx])]
+                fx[r:r + nx] = [h + k * (a - b) for h, k, a, b in seg]
         for y in range(ny):
             r = y * nx
             seg = zip(fy[r:r + nx - 1], kx[r:r + nx - 1], fz[r + 1:r + nx], fz[r:r + nx - 1])
-            if tm:
+            if r18:
+                fy[r:r + nx - 1] = [fd_diff18(h, k, a, b, not tm) for h, k, a, b in seg]
+            elif tm:
                 fy[r:r + nx - 1] = [h + k * (a - b) for h, k, a, b in seg]
             else:
                 fy[r:r + nx - 1] = [h - k * (a - b) for h, k, a, b in seg]
@@ -11000,7 +11037,9 @@ class Fd2:
             r = y * nx
             seg = zip(fz[r + 1:r + nx - 1], kz[r + 1:r + nx - 1], fy[r + 1:r + nx], fy[r:r + nx - 1], fx[r + 1:r + nx],
                       fx[r - nx + 1:r - 1])
-            if tm:
+            if r18:
+                fz[r + 1:r + nx - 1] = [fd_curl18(d, k, a1, a0, b1, b0, not tm) for d, k, a1, a0, b1, b0 in seg]
+            elif tm:
                 fz[r + 1:r + nx - 1] = [d + k * ((a1 - a0) - (b1 - b0)) for d, k, a1, a0, b1, b0 in seg]
             else:
                 fz[r + 1:r + nx - 1] = [d - k * ((a1 - a0) - (b1 - b0)) for d, k, a1, a0, b1, b0 in seg]
@@ -11624,8 +11663,10 @@ def cpu_fill(j, n, seed):
     return [seed * float((7 * i + 3 * j) % 11) - 1.0 for i in range(n)]
 
 
-def cpu_kernel(v):
-    """A `CpuBackend::kernel` row's outputs (emit.py's comment): the operation's error, or each buffer's digest after."""
+def cpu_kernel(v, port=frozenset()):
+    """A `CpuBackend::kernel` row's outputs (emit.py's comment): the operation's error, or each buffer's digest after;
+    the port's under "18" (M6 part 4c: the 2D grid's per-cell rule, `fd_diff18` and `fd_curl18`)."""
+    r18 = "18" in port
     op, nx, ny, arg, seed = v[0], v[1] & FD_U64, v[2] & FD_U64, v[3] & FD_U64, v[8]
     lens = [q & FD_U64 for q in v[4:8]]
     bufs = [cpu_fill(j, lens[j], seed) for j in range(4)]
@@ -11649,12 +11690,18 @@ def cpu_kernel(v):
             for y in range(ny - 1):
                 for x in range(nx):
                     i = y * nx + x
-                    h[i] -= c[i] * (ef[i + nx] - ef[i])
+                    if r18:
+                        h[i] = fd_diff18(h[i], c[i], ef[i + nx], ef[i], True)
+                    else:
+                        h[i] -= c[i] * (ef[i + nx] - ef[i])
         else:
             for y in range(ny):
                 for x in range(nx - 1):
                     i = y * nx + x
-                    h[i] += c[i] * (ef[i + 1] - ef[i])
+                    if r18:
+                        h[i] = fd_diff18(h[i], c[i], ef[i + 1], ef[i], False)
+                    else:
+                        h[i] += c[i] * (ef[i + 1] - ef[i])
     elif op == 2:
         e = grid(4)
         if e:
@@ -11663,7 +11710,10 @@ def cpu_kernel(v):
         for y in range(1, max(ny - 1, 0)):
             for x in range(1, max(nx - 1, 0)):
                 i = y * nx + x
-                ef[i] += c[i] * ((hy[i] - hy[i - 1]) - (hx[i] - hx[i - nx]))
+                if r18:
+                    ef[i] = fd_curl18(ef[i], c[i], hy[i], hy[i - 1], hx[i], hx[i - nx], False)
+                else:
+                    ef[i] += c[i] * ((hy[i] - hy[i - 1]) - (hx[i] - hx[i - nx]))
     elif op == 3:
         e = grid(1)
         if e:
@@ -11763,6 +11813,8 @@ def fd23_runs(root: Path, path: Path, port):
                 res[n] = (fd2_nf2ff(f2n, ins, P), fd2_nf2ff(f2n, ins, P, port=True))
             elif fn in ("Cpml::with_params", "Cpml::new"):
                 res[n] = fd2_eval(fn, ins, MPFR_P, C, port)
+            elif fn == "CpuBackend::kernel":
+                res[n] = cpu_kernel([parse_tok(x)[1] for x in ins.split(" ")], port)
         _FD23_RUNS[key] = res
     return _FD23_RUNS[key]
 

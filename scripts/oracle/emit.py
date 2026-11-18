@@ -513,6 +513,50 @@ def emit_4b(rows, m2, m3):
         frames3(rows, m3, (11, 11, 11), 1e-3, [cpml_with(3, 4.0, 1.0, km, 0.0), source(5, 5, 5, 1.0)], [4])
 
 
+def fill2(which, v):
+    return (i(8), i(which), f(v))
+
+
+def emit_4c(rows, m2, mg):
+    """M6 part 4c (ADR 0002 row 18): the 2D grid's and the CPU backend's per-cell updates at their range edges, in both
+    modes: neighbours of ±DBL_MAX (their differences past it), of 2^-1074 to 2^-1022 (products below the normal range)
+    and of opposite signs (products that round to ±0 on ±0 fields), lossy cells among them, seeded scenarios, the same
+    through GpuFdtd2d, and the CPU kernels on buffers near DBL_MAX."""
+    mx, tiny, dmin = sys.float_info.max, 5e-324, 2.2250738585072014e-308
+    big = ((mx, -mx), (mx, mx), (1e308, -1e308), (8.98846567431158e307, -8.98846567431158e307), (mx, 1e300))
+    small = ((tiny, -tiny), (tiny, 0.0), (1e-310, -1e-310), (dmin, -dmin), (-1e-320, 3e-321), (dmin, -tiny))
+    for mode in (0, 1):
+        for a, b in big + small:
+            frames2(rows, m2, 9, 8, 1e-3, mode, [source2d(4, 4, a), source2d(5, 4, b), source2d(4, 5, b)], [1, 2, 4])
+        # The ±0 fields: a product of a subnormal difference rounds to ∓0 against them.
+        for z in (0.0, -0.0):
+            for w in (0, 1, 2):
+                frames2(rows, m2, 8, 7, 1e-3, mode, [fill2(w, z), source2d(3, 3, -tiny), source2d(4, 3, tiny)], [1, 3])
+        # Lossy cells beside the edges: C_a·E first, then the curl term.
+        ops = [region2(3, (2, 2, 7, 6), 50.0), source2d(4, 4, mx), source2d(5, 4, -mx), source2d(3, 3, tiny)]
+        frames2(rows, m2, 9, 8, 1e-3, mode, ops, [1, 3])
+    # Seeded scenarios: sources over every binade of either sign.
+    rng = Rng(0x4C_2D)
+    for _ in range(40):
+        nx, ny, mode = rng.int(3, 10), rng.int(3, 10), rng.int(0, 1)
+        ops = []
+        for _ in range(rng.int(2, 5)):
+            v = rng.log_uniform(-323.0, 308.0)
+            ops.append(source2d(rng.int(0, nx - 1), rng.int(0, ny - 1), -v if rng.unit() < 0.5 else v))
+        frames2(rows, m2, nx, ny, rng.log_uniform(-6.0, -1.0), mode, ops, [rng.int(1, 4)])
+    # GpuFdtd2d: the same kernels through the trait.
+    for a, b in big + small:
+        frames_gpu(rows, mg, 9, 8, 1e-3, [source2(4, 4, a), source2(5, 4, b), source2(4, 5, b)], [1, 3])
+    # The CPU kernels on buffers near DBL_MAX: every difference, curl and product at its edge.
+    for seed in (1.7e307, 8.98846567431158e307 / 5, 1e307, 3e306):
+        for nx, ny in ((3, 3), (5, 4), (9, 7)):
+            n = nx * ny
+            kernel(rows, 1, nx, ny, 0, (n, n, n, n), seed)
+            kernel(rows, 1, nx, ny, 1, (n, n, n, n), seed)
+            kernel(rows, 2, nx, ny, 0, (n, n, n, n), seed)
+            kernel(rows, 2, nx, ny, 0, (n, n, n, n), -seed)
+
+
 # ── modules ─────────────────────────────────────────────────────────────────────────────────────────────────────────
 
 def module(name, parts):
@@ -538,7 +582,8 @@ def main() -> int:
     model_gpu = V.Gpu2Scripts(root, V.GLIBC_P)
     problems = 0
     parts = [lambda r: emit_2b(r, model3), lambda r: emit_3(r, model_gpu),
-             lambda r: emit_4a(r, model2, model3, model_gpu), lambda r: emit_4b(r, model2, model3)]
+             lambda r: emit_4a(r, model2, model3, model_gpu), lambda r: emit_4b(r, model2, model3),
+             lambda r: emit_4c(r, model2, model_gpu)]
     for name, parts in (("fdtd_2d3d", parts),):
         path, text, n = module(name, parts)
         big = V.too_big(f"tests/golden/{name}.tsv", text)

@@ -3571,6 +3571,174 @@ fn _bj_e_cell_row(d: *f64, k: *f64, ks, a: *f64, b: *f64, w: *f64, n) {
     return 0;
 }
 
+# ── the 2D grid's per-cell rule (M6 part 4c, ADR 0002 row 18, the answer of 2026-11-15) ───────────────────────────────
+#
+# The 2D grid's and the CPU backend's updates (src/fdtd2d.cyr's row kernels) are d ± k·(a − b), Rust's `row_diff`, and
+# d ± k·((a − a') − (b − b')), its `row_curl`. In IEEE arithmetic d − p is d + (−p), signed zeros included, and (−k)·w
+# is −(k·w): the subtract form is the add form with −k, its marker the add form's on −p. In the curl form a difference
+# past DBL_MAX reaches the product as ±∞ or NaN and a finite one is exact where it is subnormal (Hauser), so its marker
+# is the add form's on p = k·w, w = (a − a') − (b − b'), with w ≠ 0 as the zero product's factor test (w is 0 in
+# Rust's chain only where it is 0 exactly). A marked cell, for finite operands, reruns its chain with each operation to
+# 53 bits and the sum rounded once; every other cell keeps Rust's bits, the common path Rust's own operations, NaN
+# payloads included (the 1D grid's rule, above, is the add form of the first).
+
+# d + k·((a1 − a0) − (b1 − b0)) with an unbounded exponent, rounded once, or Rust's value r for a non-finite operand.
+#must_use
+fn _bj_e_curl(dv: f64, kv: f64, a1: f64, a0: f64, b1: f64, b0: f64, r: f64): f64 {
+    var z: f64 = dv * 0.0 + kv * 0.0 + a1 * 0.0 + a0 * 0.0 + b1 * 0.0 + b0 * 0.0;
+    if (z != 0.0) { return r; }
+    var p1s, p1e = _bj_k_ux_from(a1);
+    var p0s, p0e = _bj_k_ux_from(a0);
+    var das, dae = _bj_k_ux_sub(p1s, p1e, p0s, p0e);
+    var q1s, q1e = _bj_k_ux_from(b1);
+    var q0s, q0e = _bj_k_ux_from(b0);
+    var dbs, dbe = _bj_k_ux_sub(q1s, q1e, q0s, q0e);
+    var ws, we = _bj_k_ux_sub(das, dae, dbs, dbe);
+    var ks, ke = _bj_k_ux_from(kv);
+    var ps, pe = _bj_k_ux_mul(ks, ke, ws, we);
+    var ds, de = _bj_k_ux_from(dv);
+    var y: f64 = _bj_k_ux_add_f64(ds, de, ps, pe);
+    return y;
+}
+
+# The cell at byte offset i of a packed diff row, marked: d[i] := d[i] ± k[i]·(a[i] − b[i]) by _bj_e_cell (k negated
+# for the subtract form, sg the sign bit), and w[i] := ∓0 so that the packed add or subtract after leaves d[i] as it is.
+fn _bj_e_diff_at(d, k, a, b, w, i, sg) {
+    var dp: *f64 = _bj_e_f64p(d + i);
+    var wp: *f64 = _bj_e_f64p(w + i);
+    var kp: *f64 = _bj_e_f64p(k + i);
+    var ap: *f64 = _bj_e_f64p(a + i);
+    var bp: *f64 = _bj_e_f64p(b + i);
+    var dv: f64 = dp[0];
+    var pv: f64 = wp[0];
+    var kv: f64 = kp[0];
+    var rr: f64 = dv + pv;
+    if (sg != 0) {
+        rr = dv - pv;
+        kv = -kv;
+    }
+    dp[0] = _bj_e_cell(dv, kv, ap[0], bp[0], rr);
+    if (sg != 0) { wp[0] = 0.0; }
+    else { wp[0] = -0.0; }
+    return 0;
+}
+
+# A packed diff row's m cells whose product w[i] = k[i]·wd[i], wd[i] = a[i] − b[i] (−w[i] for the subtract form: sg
+# the sign bit), marks a cell beside d[i], each rerun by _bj_e_diff_at; the marker inline, as _bj_e_cell_fix's. Its zero
+# path tests the cheapest decisive word first: the difference (0 exactly where a = b, a quiet cell's case), then k, and
+# only then flips the sign and reads d (the class of a nonzero product doesn't depend on its sign). Addresses are words.
+fn _bj_e_diff_fix(d, k, a, b, wd, w, m, sg) {
+    var q = w;
+    var end = w + m * 8;
+    while (q < end) {
+        var x = load64(q);
+        var ex = (x >> 52) & 2047;
+        if (ex == 0) {
+            var i = q - w;
+            if ((x << 1) != 0) {
+                _bj_e_diff_at(d, k, a, b, w, i, sg);
+            } elif ((load64(wd + i) << 1) != 0 && (load64(k + i) << 1) != 0) {
+                x = x ^ sg;
+                var dw = load64(d + i);
+                if ((x != 0 && dw == 0) || (((dw << 1) - 1) >> 54) == 0) { _bj_e_diff_at(d, k, a, b, w, i, sg); }
+            }
+        } elif (ex == 2047) {
+            _bj_e_diff_at(d, k, a, b, w, q - w, sg);
+        }
+        q = q + 8;
+    }
+    return 0;
+}
+
+# The cell at byte offset i of a packed curl row, marked: d[i] := _bj_e_curl's value of d[i] ± k[i]·((a[i] −
+# a[i − 1]) − (b[i] − bp[i])) and wp[i] := ∓0, as _bj_e_diff_at.
+fn _bj_e_curl_at(d, k, a, b, bp, wp, i, sg) {
+    var dq: *f64 = _bj_e_f64p(d + i);
+    var wq: *f64 = _bj_e_f64p(wp + i);
+    var kq: *f64 = _bj_e_f64p(k + i);
+    var aq: *f64 = _bj_e_f64p(a + i - 8);
+    var bq: *f64 = _bj_e_f64p(b + i);
+    var cq: *f64 = _bj_e_f64p(bp + i);
+    var dv: f64 = dq[0];
+    var pv: f64 = wq[0];
+    var kv: f64 = kq[0];
+    var rr: f64 = dv + pv;
+    if (sg != 0) {
+        rr = dv - pv;
+        kv = -kv;
+    }
+    dq[0] = _bj_e_curl(dv, kv, aq[1], aq[0], bq[0], cq[0], rr);
+    if (sg != 0) { wq[0] = 0.0; }
+    else { wq[0] = -0.0; }
+    return 0;
+}
+
+# A packed curl row's m cells whose product wp[i] = k[i]·wi[i] (wi the inner difference; −wp[i] for the subtract form)
+# marks a cell beside d[i], each rerun by _bj_e_curl_at; the zero path as _bj_e_diff_fix's, the inner difference
+# first. Addresses are words; a, b and bp point at the cells' own a[x], b[x] and b'[x].
+fn _bj_e_curl_fix(d, k, a, b, bp, wi, wp, m, sg) {
+    var q = wp;
+    var end = wp + m * 8;
+    while (q < end) {
+        var x = load64(q);
+        var ex = (x >> 52) & 2047;
+        if (ex == 0) {
+            var i = q - wp;
+            if ((x << 1) != 0) {
+                _bj_e_curl_at(d, k, a, b, bp, wp, i, sg);
+            } elif ((load64(wi + i) << 1) != 0 && (load64(k + i) << 1) != 0) {
+                x = x ^ sg;
+                var dw = load64(d + i);
+                if ((x != 0 && dw == 0) || (((dw << 1) - 1) >> 54) == 0) { _bj_e_curl_at(d, k, a, b, bp, wp, i, sg); }
+            }
+        } elif (ex == 2047) {
+            _bj_e_curl_at(d, k, a, b, bp, wp, q - wp, sg);
+        }
+        q = q + 8;
+    }
+    return 0;
+}
+
+# One scalar cell of a diff row (a row's tail): Rust's d ± k·(a − b), or _bj_e_cell's at the marker (sub 1: −=).
+#must_use
+fn _bj_e_diff_one(dv: f64, kv: f64, av: f64, bv: f64, sub): f64 {
+    var ab: f64 = av - bv;
+    var p: f64 = kv * ab;
+    var r: f64 = dv + p;
+    var x = _bj_k_bits(p);
+    var kk: f64 = kv;
+    if (sub == 1) {
+        r = dv - p;
+        x = x ^ (0 - 9223372036854775807 - 1);
+        kk = -kv;
+    }
+    if (_bj_e_cell_edge(x, _bj_k_bits(dv)) == 1) {
+        if (p != 0.0 || (kv != 0.0 && av != bv)) { r = _bj_e_cell(dv, kk, av, bv, r); }
+    }
+    return r;
+}
+
+# One scalar cell of a curl row: Rust's d ± k·((a1 − a0) − (b1 − b0)), or _bj_e_curl's at the marker (sub 1: −=).
+#must_use
+fn _bj_e_curl_one(dv: f64, kv: f64, a1: f64, a0: f64, b1: f64, b0: f64, sub): f64 {
+    var da: f64 = a1 - a0;
+    var db: f64 = b1 - b0;
+    var w: f64 = da - db;
+    var p: f64 = kv * w;
+    var r: f64 = dv + p;
+    var x = _bj_k_bits(p);
+    var kk: f64 = kv;
+    if (sub == 1) {
+        r = dv - p;
+        x = x ^ (0 - 9223372036854775807 - 1);
+        kk = -kv;
+    }
+    if (_bj_e_cell_edge(x, _bj_k_bits(dv)) == 1) {
+        if (p != 0.0 || (kv != 0.0 && w != 0.0)) { r = _bj_e_curl(dv, kk, a1, a0, b1, b0, r); }
+    }
+    return r;
+}
+
 # ── the FDTD grids' coefficients rounded once (ADR 0002 row 13: M5 part 2b, M6 part 4a) ──────────────────────────────
 #
 # The 1D grid (src/fdtd1d.cyr), the 2D and 3D grids (src/fdtd2d.cyr, src/fdtd3d.cyr) and GpuFdtd2d (src/compute.cyr)

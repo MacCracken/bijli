@@ -611,6 +611,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
   Every CPML layer's c changes in its last bits, so every CPML trajectory does too: `fdtd_2d3d.adr.tsv` maps 1,401 rows
   (row 40: 522, row 18: 86, row 13: 793), and `emit.py`'s `emit_4b` appends 201 rows (1,946). validate.py's
   `cpml_profiles` runs the unbounded chain itself under row 18 (`cpml_coeffs`; the grade by MPFR at its widest range).
+- **Cyrius port, M6 part 4c — the 2D updates and the CPU kernels on the per-cell rule** (ADR 0002 row 18 amended):
+  `src/fdtd2d.cyr`'s `_bj_fd2_diff` and `_bj_fd2_curl`, which the 2D grid and `BjCpuBackend` share, scan each packed
+  product row between the multiply and the add as the 1D grid's do, with a subtract form (the add form with −k) and a
+  curl form (`src/crmath_edge.cyr`'s `_bj_e_diff_fix`, `_bj_e_curl_fix`, `_bj_e_curl`); a marked cell reruns with an
+  unbounded exponent. validate.py's `fd_diff18` and `fd_curl18` model the rule in `Fd2` and the CPU kernels;
+  `fdtd_2d3d.adr.tsv` maps 1,540 rows (row 18: 161), and `emit.py`'s `emit_4c` appends 204 rows (2,150).
 
 ### Fixed
 
@@ -1185,6 +1191,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
   exact value, and the chain runs with an unbounded exponent at its range edges. Cost: the layer's construction, once
   a layer: the classic 10-cell layer 15.6–15.7 → 19.5–19.6 µs, a 20-cell CFS one 31.1–31.7 → 68.0–68.1 µs (the
   rational where κ_max ≠ 1); no step changes (`port-parity.md` §126).
+- **fdtd** (ADR 0002 row 18 amended, M6 part 4c): the 2D grid's and the CPU backend's updates gave ±∞ and then NaN
+  where a field's neighbours differed by more than DBL_MAX (H_y = −∞ for −3.37·10³⁰⁵ beside ±DBL_MAX, then E_z = NaN
+  for 7.86·10³⁰⁷), lost bits where a product fell below 2^-1022, and left +0 where a product of nonzero factors rounded
+  to −0 (the exact sum's −0). Each such cell now runs its update with an unbounded exponent. Cost: the per-cell scan,
+  `fdtd/2d_step_100x100_tm` 45.7–50.4 → 113.4–135.0 µs (2.5–2.7×), `fdtd/gpu_fdtd2d_step_100x100_cpu` 46.6–48.4 →
+  114.3–120.2 µs, `fdtd/2d_run_50_steps_80x80` 1.74–1.82 → 5.18–5.55 ms (3.0×) (`port-parity.md` §127).
 
 ### Performance
 

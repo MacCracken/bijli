@@ -462,6 +462,26 @@ fn main() {
     fl_free(o21);
     BjGpuFdtd2d_free(&g21);
 
+    # ADR 0002 row 18 (M6 part 4c): the CPU backend's kernels follow the 2D grid's per-cell rule. The expectation is
+    # validate.py's model of the port.
+    test_group("cyrius_update_edges");
+    var g22: BjGpuFdtd2d<BjCpuBackend>;
+    var t22, v22 = BjGpuFdtd2d_new(9, 8, DX, cpu, &g22);
+    var mx22: f64 = _bj_from_bits(0x7fefffffffffffff);
+    var nm22: f64 = -mx22;
+    var a22, a22v = BjGpuFdtd2d_add_source(&g22, 4, 4, mx22);
+    var b22, b22v = BjGpuFdtd2d_add_source(&g22, 5, 4, nm22);
+    var s22, s22v = BjGpuFdtd2d_step_once(&g22);
+    var o22: *f64 = host(72, 0.0);
+    var q22, q22v = BjGpuFdtd2d_read_hy(&g22, o22, 72);
+    var h22wp: f64 = _bj_from_bits(0x7f5ec087c0428802);
+    var h22w: f64 = -h22wp;
+    var h22: f64 = o22[4 * 9 + 4];
+    assert(is_ok(s22) == 1 && is_ok(q22) == 1 && h22 == h22w,
+      "E_z's difference past DBL_MAX: H_y = −3.3741935810287543·10³⁰⁵ (Rust's −∞)");
+    fl_free(o22);
+    BjGpuFdtd2d_free(&g22);
+
     return assert_summary();
 }
 

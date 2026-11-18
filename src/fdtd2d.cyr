@@ -159,46 +159,50 @@ public fn _bj_fd2_e_coefficients(dt: f64, dx: f64, eps_r: f64, sigma: f64): (f64
     return (1.0, cb0);
 }
 
-# d[i] ± k[i]·(a[i] − b[i]) into d for i < n (add 1: `+=`, 0: `-=`), Rust's `row_diff`: the packed f64v_sub, f64v_mul
-# and f64v_add or f64v_sub through the scratch row w on the largest multiple of 4, then a scalar tail (probe p19).
-public fn _bj_fd2_diff(d: *f64, k: *f64, a: *f64, b: *f64, w: *f64, n, add) {
+# d[i] ± k[i]·(a[i] − b[i]) into d for i < n (add 1: `+=`, 0: `-=`), Rust's `row_diff`: the packed f64v_sub into the
+# scratch row w2, f64v_mul into w and f64v_add or f64v_sub on the largest multiple of 4, then a scalar tail (probe p19).
+# Each cell at its range edge reruns with an unbounded exponent (ADR 0002 row 18, M6 part 4c: src/crmath_edge.cyr's 2D
+# rule, the product row scanned between the multiply and the add, the difference row its zero test).
+public fn _bj_fd2_diff(d: *f64, k: *f64, a: *f64, b: *f64, w: *f64, w2: *f64, n, add) {
     var m = n & (0 - 4);
+    var sg = 0;
+    var sub = 1;
+    if (add == 1) { sub = 0; }
+    else { sg = 0 - 9223372036854775807 - 1; }
     if (m > 0) {
-        f64v_sub(w, a, b, m);
-        f64v_mul(w, k, w, m);
+        f64v_sub(w2, a, b, m);
+        f64v_mul(w, k, w2, m);
+        _bj_e_diff_fix(d, k, a, b, w2, w, m, sg);
         if (add == 1) { f64v_add(d, d, w, m); }
         else { f64v_sub(d, d, w, m); }
     }
-    for (var i = m; i < n; i = i + 1) {
-        var ab: f64 = a[i] - b[i];
-        var v: f64 = k[i] * ab;
-        if (add == 1) { d[i] = d[i] + v; }
-        else { d[i] = d[i] - v; }
-    }
+    for (var i = m; i < n; i = i + 1) { d[i] = _bj_e_diff_one(d[i], k[i], a[i], b[i], sub); }
     return 0;
 }
 
 # One row's interior curl update, x ∈ 1..n − 1: d[x] ± k[x]·((a[x] − a[x − 1]) − (b[x] − bp[x])) (add 1: `+=`, 0:
-# `-=`), Rust's `row_curl`, on the packed verbs through the scratch rows w and w2 (lane multiples, a scalar tail).
+# `-=`), Rust's `row_curl`, on the packed verbs through the scratch rows w (the inner difference) and w2 (the product),
+# lane multiples and a scalar tail; each cell at its range edge reruns with an unbounded exponent (ADR 0002 row 18, M6
+# part 4c).
 public fn _bj_fd2_curl(d: *f64, k: *f64, a: *f64, b: *f64, bp: *f64, w: *f64, w2: *f64, n, add) {
     if (n < 3) { return 0; }
     var c = n - 2;
     var m = c & (0 - 4);
+    var sg = 0;
+    var sub = 1;
+    if (add == 1) { sub = 0; }
+    else { sg = 0 - 9223372036854775807 - 1; }
     if (m > 0) {
         f64v_sub(w, a + 1, a, m);
         f64v_sub(w2, b + 1, bp + 1, m);
         f64v_sub(w, w, w2, m);
-        f64v_mul(w, k + 1, w, m);
-        if (add == 1) { f64v_add(d + 1, d + 1, w, m); }
-        else { f64v_sub(d + 1, d + 1, w, m); }
+        f64v_mul(w2, k + 1, w, m);
+        _bj_e_curl_fix(d + 1, k + 1, a + 1, b + 1, bp + 1, w, w2, m, sg);
+        if (add == 1) { f64v_add(d + 1, d + 1, w2, m); }
+        else { f64v_sub(d + 1, d + 1, w2, m); }
     }
     for (var x = m + 1; x < n - 1; x = x + 1) {
-        var da: f64 = a[x] - a[x - 1];
-        var db: f64 = b[x] - bp[x];
-        var dd: f64 = da - db;
-        var v: f64 = k[x] * dd;
-        if (add == 1) { d[x] = d[x] + v; }
-        else { d[x] = d[x] - v; }
+        d[x] = _bj_e_curl_one(d[x], k[x], a[x], a[x - 1], b[x], bp[x], sub);
     }
     return 0;
 }
@@ -822,8 +826,8 @@ impl BjFdtd2d {
         var w2: *f64 = _bj_fd2_f64p(self.work + nx * 8);
         for (var y = 0; y < ny; y = y + 1) {
             var r = y * nx;
-            if (y < ny - 1) { _bj_fd2_diff(fx + r, ch + r, fz + r + nx, fz + r, w, nx, 0); }
-            _bj_fd2_diff(fy + r, ch + r, fz + r + 1, fz + r, w, nx - 1, 1);
+            if (y < ny - 1) { _bj_fd2_diff(fx + r, ch + r, fz + r + nx, fz + r, w, w2, nx, 0); }
+            _bj_fd2_diff(fy + r, ch + r, fz + r + 1, fz + r, w, w2, nx - 1, 1);
         }
         if (self.cpml != 0) {
             _bj_fd2_cpml_fx(self.cpml, fx, fz, ch, nx, ny, -1.0, w);
@@ -861,8 +865,8 @@ impl BjFdtd2d {
         }
         for (var y = 0; y < ny; y = y + 1) {
             var r = y * nx;
-            if (y < ny - 1) { _bj_fd2_diff(fx + r, ce + r, fz + r + nx, fz + r, w, nx, 1); }
-            _bj_fd2_diff(fy + r, ce + r, fz + r + 1, fz + r, w, nx - 1, 0);
+            if (y < ny - 1) { _bj_fd2_diff(fx + r, ce + r, fz + r + nx, fz + r, w, w2, nx, 1); }
+            _bj_fd2_diff(fy + r, ce + r, fz + r + 1, fz + r, w, w2, nx - 1, 0);
         }
         if (self.cpml != 0) {
             _bj_fd2_cpml_fx(self.cpml, fx, fz, ce, nx, ny, 1.0, w);

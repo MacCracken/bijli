@@ -649,6 +649,40 @@ fn main() {
     assert(is_ok(tro3) == 1 && ro2e == ro2ew, "dt/(ε₀dx) at dx = 0.1 mm, rounded once (Rust's an ulp off)");
     BjFdtd2d_free(&ro2);
 
+    # ADR 0002 row 18 (M6 part 4c): a cell whose update leaves the normal range runs it with an unbounded exponent. The
+    # expectations are validate.py's model of the port.
+    test_group("cyrius_update_edges");
+    var mxv: f64 = _bj_from_bits(0x7fefffffffffffff);
+    var nmx: f64 = -mxv;
+    var ue1: BjFdtd2d;
+    var tue1, vue1 = BjFdtd2d_new(9, 8, 0.001, BJ_MODE2D_TM, &ue1);
+    ue1.add_source(4, 4, mxv);
+    ue1.add_source(5, 4, nmx);
+    ue1.step_once();
+    var ue1y: f64 = at(ue1.fy, ue1.idx(4, 4));
+    var ue1wp: f64 = _bj_from_bits(0x7f5ec087c0428802);
+    var ue1w: f64 = -ue1wp;
+    assert(is_ok(tue1) == 1 && ue1y == ue1w,
+      "E_z's difference past DBL_MAX: H_y = −3.3741935810287543·10³⁰⁵ (Rust's −∞)");
+    ue1.step_once();
+    var ue1z: f64 = at(ue1.fz, ue1.idx(5, 4));
+    var ue1zw: f64 = _bj_from_bits(0x7fdc00000000030e);
+    assert(ue1z == ue1zw, "a step on: E_z = 7.864907465023412·10³⁰⁷ (Rust's ∞ − ∞ = NaN)");
+    BjFdtd2d_free(&ue1);
+    var ue2: BjFdtd2d;
+    var tue2, vue2 = BjFdtd2d_new(9, 8, 0.001, BJ_MODE2D_TM, &ue2);
+    var tn: f64 = _bj_from_bits(1);
+    var ntn: f64 = -tn;
+    ue2.add_source(4, 4, tn);
+    ue2.add_source(5, 4, ntn);
+    ue2.step_once();
+    var ue2y: f64 = at(ue2.fy, ue2.idx(4, 4));
+    var ue2x: f64 = at(ue2.fx, ue2.idx(4, 3));
+    var negz = 0 - 9223372036854775807 - 1;
+    assert(_bj_k_bits(ue2y) == negz && _bj_k_bits(ue2x) == negz,
+      "products of 2^-1074 differences round to ∓0: the exact sums' −0 (Rust's +0 + −0 and +0 − +0 gave +0)");
+    BjFdtd2d_free(&ue2);
+
     return assert_summary();
 }
 

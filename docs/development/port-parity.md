@@ -7018,3 +7018,52 @@ eigenmode search (`dft_magnitude`'s recurrence and magnitude, `find_eigenmodes`'
   allocator's mapping per allocation (plan §10), not this bite. The gate is
   clean (no warnings; execution coverage 394 of 394); validate.py 767,378 rows, 0 problems; `emit.py --check` 1,107
   frozen rows and 839 emitted; `cr_verify.py`'s rat families 0 mismatches. Next: 4c.
+
+## 127. M6 part 4c: the 2D updates and the CPU kernels at their range edges (2026-11-17)
+
+- **ADR 0002 row 18, amended** (the user's answer of 2026-11-15: the per-cell rule for M6's grids): the 2D grid's and
+  `BjCpuBackend`'s updates, which share `src/fdtd2d.cyr`'s row kernels, run M5's per-cell rule. Rust's `row_diff`,
+  d ± k·(a − b): in IEEE arithmetic d − p is d + (−p), signed zeros included, and (−k)·w is −(k·w), so the subtract
+  form is the add form with −k and its marker the add form's on −p (`_bj_e_diff_fix`, the 1D scan with the product's
+  sign flipped and the coefficient row's own k). Rust's `row_curl`, d ± k·((a − a') − (b − b')): a difference past
+  DBL_MAX reaches the product as ±∞ or NaN, and a finite one is exact where it is subnormal, so the marker is the add
+  form's on p = k·w with w ≠ 0 as the zero product's factor test (`_bj_e_curl_fix`; w is 0 in Rust's chain only where
+  it is 0 exactly). A marked cell, for finite operands, reruns with every difference and the product to 53 bits and the
+  sum rounded once (`_bj_e_cell`, `_bj_e_curl`); the scalar tails take `_bj_e_diff_one` and `_bj_e_curl_one`. The
+  common path stays Rust's own operations (the packed sub, mul and add or sub), NaN payloads included. The difference
+  (the diff's a − b, the curl's inner w) stays in a scratch row of its own (the grid's second row, a second stack row
+  in the CPU backend) for the zero path, which tests the cheapest decisive word first: that difference, 0 exactly in a
+  quiet cell, then k, then the sign-flipped product against d. The first draft read d first, and in the subtract form
+  an exact +0 product on a +0 field always reached the factors' three loads: the driven 80 × 80 run took 3.8× HEAD's,
+  3.0–3.2× after the reorder.
+- **What changed**: beside ±DBL_MAX, H_y was −∞ for −3.3741935810287543·10³⁰⁵ and a step on E_z was NaN for
+  7.864907465023412·10³⁰⁷ (TM, 9 × 8, dx = 1 mm); products of 2^-1074 differences rounded to ∓0 and left +0 fields at
+  +0 where the exact sums give −0.
+- **validate.py**: `fd_diff18` and `fd_curl18` (the rule itself: Rust's chain wherever the product is normal or an
+  exact zero, else Fractions), in `Fd2`'s update under "18" (so `GpuFdtd2d`'s too) and in `cpu_kernel`; `fd23_runs`
+  replays the `CpuBackend::kernel` rows. **1,540 rows map** (row 18: 161, 75 of them this bite's: 58 2D scripts, 15
+  `GpuFdtd2d` scripts, 2 kernels; row 13: 857; row 40: 522). Two frozen 2D rows (676 and 681: TE regions with ε_r and
+  μ_r at DBL_MAX and about 10³⁰⁰) change with the rule.
+- **The grid**: `emit.py`'s `emit_4c` appends 204 rows (2,150; the old body an exact prefix): in both modes, sources
+  at ±DBL_MAX, 10³⁰⁸ and DBL_MAX/2 beside their negatives (differences past DBL_MAX), at 2^-1074, 10⁻³¹⁰, 2^-1022 and
+  10⁻³²⁰ beside opposite signs (subnormal products), ±0 fields under tiny opposite sources (products rounding to ∓0),
+  lossy cells beside them; 40 seeded scenarios over every binade of either sign; the same sources through
+  `GpuFdtd2d`; the CPU kernels on buffers near DBL_MAX (both axes and the curl, both signs).
+- **Tests**: `cyrius_update_edges` in `tests/fdtd2d.tcyr` (3 assertions, 80 in all: H_y beside ±DBL_MAX, E_z a step
+  on, the ∓0 sums) and `tests/compute.tcyr` (1, 36: H_y through the trait), each from validate.py's model.
+- **Benchmarks**: the interleaved A/B against HEAD (two rounds, load 2.5 to 3.2, nothing else running) left every
+  other row unchanged (median ratios 1.009 and 0.993 over 112 rows; the 3D rows 0.97–1.09, untouched; the round-2
+  extremes ns-scale circuit and wave rows at 0.5× HEAD's, noise) and measured the 2D grid's: `fdtd/2d_step_100x100_tm`
+  45.7–50.4 → 113.4–135.0 µs (2.5–2.7×), `_lossy` 49.5–51.7 → 115.0–119.8 µs (2.3×), `_cpml10` 111.5–112.5 →
+  174.4–184.7 µs (1.6×: the CPML's strips aren't on the rule yet, part 4e), `fdtd/gpu_fdtd2d_step_100x100_cpu`
+  46.6–48.4 → 114.3–120.2 µs (2.4–2.6×), `fdtd/2d_run_50_steps_80x80` 1.74–1.82 → 5.18–5.55 ms (3.0×, the quiet cells'
+  zero path). The scan costs about 2.3 ns a cell on the common path, a normal product: the same trade as the 1D grid's
+  (3.5–3.8×, §107), which a vector classify verb would remove (plan §10). A focused scratch bench of the same steps
+  confirmed the zero path's reorder (the driven run 7.5 → 5.5–5.8 ms, HEAD's 1.8–1.9).
+- **Result, every target** (x86_64 ELF, x86_64 PE, aarch64): **19 modules, 0 failing; 644,178 ok, 0 failed, 0
+  measured, 0 pending, 123,404 accepted (ADR 01: 43,087; ADR 0002: 80,317)** over 767,582 rows; **all 488 digests
+  equal**. `fdtd2d.tcyr` (80), `compute.tcyr` (36), `fdtd3d.tcyr` (86), `cpml.tcyr` (44) and `json.tcyr` (105) pass on
+  all three. The gate is clean (no warnings; execution coverage 394 of 394); `cyrius audit` first failed on one comment
+  line past 120 characters in `src/compute.cyr`, which the gate's one-call lint of every file didn't report and a
+  per-file lint does (fixed; the audit passes). validate.py 767,582 rows, 0 problems; `emit.py --check` 1,107 frozen
+  rows and 1,043 emitted. Next: 4d, the 3D updates.

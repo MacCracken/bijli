@@ -9,8 +9,7 @@ bite is done, the machinery, the scripts and the traps. Delete it once it has se
 
 ## Where it stands
 
-- **Committed through `1c12aca`** ("cleanup", after `234748d` "m6 pt4": part 4a); part 4b is in the working tree for
-  the user to commit.
+- **Committed through `c9de733`** ("m6 pt4b done"); part 4c is in the working tree for the user to commit.
 - **M6 Part 1** (the 2D CPML and `Fdtd2d`, §116–§119) runs in bites. Done: 1a the CPML layer (`src/cpml.cyr`); 1b-1
   `Fdtd2d` without the CPML (`src/fdtd2d.cyr`; its scripts `Fdtd2d::script` in `fdtd_2d3d.tsv`, replayed by
   validate.py's `Fd2Scripts` in pure Python, no NumPy on the host); 1b-2 the CPML attached (the y-strips packed, the
@@ -28,9 +27,10 @@ bite is done, the machinery, the scripts and the traps. Delete it once it has se
   the lossy pair through `BjLossyMaterial`; validate.py's `FD2_PORT` and `fd23_runs`, the mappings named 40, then 13,
   else 18; `emit_4a`), 4b the CPML profile (done, §126: c on `_bj_expm1`, 1/κ − 1 on rational 17 from κ_max and the
   grade, `_bj_cpml_coeff_ux` at the edges; validate.py's `cpml_coeffs` runs the unbounded chain itself under "18", and
-  `fd23_runs` replays the `Cpml::` rows; `emit_4b`), then 4c the per-cell rule for the 2D updates and the CPU kernels
-  (`_bj_e_cell_row` needs a subtract form and a curl form: d ± k·((a1 − a0) − (b1 − b0)), the marker on the product with
-  w = Δa − Δb ≠ 0 as the factor test), 4d the 3D updates (the same curl form), 4e the CPML corrections (two statements a
+  `fd23_runs` replays the `Cpml::` rows; `emit_4b`), 4c (done, §127: `_bj_e_diff_fix` and `_bj_e_curl_fix` in
+  `_bj_fd2_diff` and `_bj_fd2_curl`, so the CPU kernels follow; validate.py's `fd_diff18`, `fd_curl18`; `emit_4c`: the
+  subtract form is the add form with −k, the curl form's marker the product's with w = Δa − Δb ≠ 0 as the factor test),
+  then 4d the 3D updates (`_bj_fd3_curl`'s rows in `_bj_e_curl_fix`'s form), 4e the CPML corrections (two statements a
   cell: Ψ ← bΨ + cΔ, then f += (s·k)·(km1·Δ + Ψ); a product's marker tests it against the other addend, as
   `_bj_e_cell_edge` against d; Ψ's geometric decay makes b·Ψ subnormal in quiet layers), 4f `total_energy` (the 1D's
   `_bj_fd1_energy_ux` pattern) and `run`'s source (`_bj_fd1_source_ux`, to share) in the three grids. Then M6 is done.
@@ -76,14 +76,14 @@ bite is done, the machinery, the scripts and the traps. Delete it once it has se
     Rust's chain where every operation is its 53-bit value (mode 0, checked per sample by one exponent test and per
     angle), else the call or the angle unbounded (`_bj_nf_angle_ux`); a non-finite field keeps Rust's (row 18, §114).
     **Part 2 is done.**
-- **Numbers after M6 part 4b**: 19 modules, 644,113 ok, 0 failed, 123,265 accepted (ADR 01: 43,087; ADR 0002:
-  80,178) over 767,378 rows; 488 digests equal on x86_64 ELF, x86_64 PE and aarch64. Ledger 778 ported, 12 n/a, 68
+- **Numbers after M6 part 4c**: 19 modules, 644,178 ok, 0 failed, 123,404 accepted (ADR 01: 43,087; ADR 0002:
+  80,317) over 767,582 rows; 488 digests equal on x86_64 ELF, x86_64 PE and aarch64. Ledger 778 ported, 12 n/a, 68
   pending of 858; API snapshot 2,139; surface parity 653 items (15 modules); benches 80 of 80 twinned; execution
   coverage 394 of 394. `json.tsv` is 40.7 MB of the 48 MiB cap: the rest of M6 adds no JSON (`Fdtd3d` and compute.rs
   have no serde), but M7's eight serde types (integration/) will want their own module.
 - **M5 is done** (§115). The benchmark record's Cyrius column is each row's least of four full runs: rows vary up to
   1.5× between runs under other repos' loads, so take the least of several when regenerating it.
-- **Next**: part 4c, the 2D updates and the CPU backend's kernels (above).
+- **Next**: part 4d, the 3D updates (above: `_bj_fd3_curl`'s rows take `_bj_e_curl_fix`'s form).
   `nf2ff_2d` (the snapshot form) calls `_bj_nf_core` with the rotation (1, 0) and k from `_bj_nf_validate` on its
   double frequency (`_bj_k_ux_from`): the core's range edges come with it.
 - **Corpus size**: `fdtd.tsv` is 38.8 MB (107,341 rows) and `json.tsv` 40.7 MB, against the 48 MiB cap that
@@ -181,6 +181,7 @@ run() {
 }
 run cyrius fmt --check $F
 run cyrius lint $F
+run 'for f in $F; do cyrius lint $f | grep "warn line" | sed "s|^|$f |"; done'
 run cyrius vet src/main.cyr
 run cyrius build src/main.cyr build/bijli
 run "cyrius test > $S/test.out 2>&1; cat $S/test.out"
@@ -347,6 +348,9 @@ Rust 1.2.0's sources for reading: `git show 1.2.0:src/fdtd.rs > $S/fdtd.rs` (and
 - **Cost model**: a scalar loop over a row costs about 2.6–2.9 ns an element; the `f64v_*` verbs about 0.35 ns. There
   is no vector compare or classify (plan §10).
 
+- **Lint one file at a time** (M6 part 4c): `cyrius lint` over every file in one call reported no warning where a
+  per-file call finds one (a comment past 120 characters in `src/compute.cyr`), and `cyrius audit` failed on it. The
+  gate script above lints each file on its own too.
 - **Wine and `vm.max_map_count`** (2026-11-17, after a reboot onto kernel 7.3.4): the PE parity run maps every
   allocation past the bump heap separately (plan §10) and dies in the json module at about 1,048,576 mappings, with
   wine's `err:virtual ... mmap() error Cannot allocate memory` under `WINEDEBUG=err+all`. The default
