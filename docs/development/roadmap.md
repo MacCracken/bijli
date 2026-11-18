@@ -2,97 +2,101 @@
 
 > Electromagnetism simulation for AGNOS
 
-## Completed (through 1.2.0)
-
-All milestones through V2.0 are shipped. See [CHANGELOG.md](/CHANGELOG.md) for details.
-
-**V0.1–V0.5**: Foundation — fields, Maxwell's equations, charge dynamics, waves, circuits, materials, FDTD, relativistic electrodynamics.
-
-**V1.0**: API stabilization, feature audit, performance optimization.
-
-**V1.1**: Optics & scattering — trig-free Fresnel, polarization (Jones/Stokes/Mueller), Mie/Rayleigh scattering.
-
-**V1.2**: Gaussian beams — complex beam parameter, ABCD matrices, resonator stability, HG/LG modes.
-
-**V1.3**: FDTD maturity — 2D Yee grid (TM/TE), CPML, sources (Gaussian/Ricker/TFSF), dispersive materials (Drude/Lorentz/Debye), NF2FF, subpixel smoothing.
-
-**V1.4**: RF & microwave — transmission lines, VSWR, Smith chart, S-parameters, Touchstone I/O, antenna arrays.
-
-**V1.5**: Advanced fields — multipole expansion, method of images, Green's functions, Maxwell stress tensor, Poynting flux, retarded time solver.
-
-**V1.6**: Cross-module integration — PointCharge convenience methods, unified Material struct, FDTD/wave/circuit bridges.
-
-**V2.0**: 3D FDTD & GPU — full vector Yee grid, ComputeBackend trait (CPU/wgpu pipes), non-uniform grids, 4th-order FDTD, CW solver, eigenmode solver.
-
-**1.2.0 (crate release)**: Toolchain refresh (MSRV 1.99, hisab 1.4, wgpu 30) and a full physics/robustness audit — working 2D CPML (−88 dB), FDTD conductivity, correct Mie for high-index spheres, robust retarded-time solver, corrected Fresnel/Schlick/Touchstone/stub-matching/beam formulas, non-panicking public API, per-feature build isolation.
+This file lists planned work only. Everything that shipped is in the [CHANGELOG](../../CHANGELOG.md), the 1.x crate
+included. 2.0.0 (2026-11-18) is the Cyrius port of the Rust crate 1.2.0: how it was checked is in
+[port-parity.md](port-parity.md), and every behaviour it changed from Rust is in
+[ADR 0002](../adr/0002-port-api-divergences.md).
 
 ---
 
-## Next — Cyrius port (2.0.0)
+## 2.0.x — after the port
 
-Plan of record: [bijli-port-plan.md](bijli-port-plan.md). Decisions: [ADR 0001](../adr/0001-cyrius-port-with-rust-oracle.md) (the port) and [ADR 0003](../adr/0003-retire-the-rust-tree.md) (the Rust tree retired, 2026-11-16).
+These are patch releases: no API change, and every golden row keeps its bits. A change that moves a row needs an ADR
+and waits for 2.1 or later.
 
-- [ ] **Prep (plan §4)**:
-  - decisions: D1 (the 1.2.0 tag) and D5 (JSON) accepted, D2 and D4 settled (ported), D3 settled as e^{+jωt} with IEEE handedness in every module (plan §4.4);
-  - ✅ **1.2.0** tagged at `c95fd30` (2026-11-11): the last Rust release and the frozen oracle, 3D CPML included, with the P(-1) gate green;
-  - take a quiet bench baseline;
-  - land the port-plan commit.
-- [x] **M0** (done 2026-11-11): `cyrius port` moved the Rust crate to `rust-old/`; the scaffold is repaired; the oracle generator, the golden corpus (34,746 rows), the parity harness, the port tooling and the probes are in place, with baselines on three targets (`port-parity.md`).
-- [x] **M1** (done 2026-11-12): the foundation: the correctly rounded math, fmtf, log, error, complex, field, maxwell, charge and the JSON, then the range-edge review (Part 5, ADR 0002 rows 13–18); 189,015 rows ok on three targets (`port-parity.md`).
-- [x] **M2** (done 2026-11-13): media, waves, circuits and relativity: material, wave, circuit and relativity, the retarded-time solver and the Liénard–Wiechert fields, then the range-edge review (Part 2, ADR 0002 rows 13 and 17–31); 405,854 rows ok on three targets (`port-parity.md`).
-- [x] **M3** (done 2026-11-14): optics: polarization, scattering and beam, in the one convention, then the range-edge review (Part 2, ADR 0002 rows 13, 17 and 18, 33–35); 493,139 rows ok on three targets (`port-parity.md`).
-- [x] **M4** (done 2026-11-15): RF: rf.rs's lines, reflection and losses, the Smith chart, matching, the array factors, the S-parameter matrices and Touchstone read and write, then the range-edge review (Part 2, ADR 0002 rows 13, 17, 18 and 36–39); 536,306 rows ok on three targets (`port-parity.md`).
-- [x] **M5** (done 2026-11-16): the FDTD core: the 1D grid, the pulses and TF/SF, the lossy and dispersive media and the subpixel averages, the non-uniform grid, the fourth-order derivative, the CW accumulator, the eigenmodes, NF2FF's phasor form and their JSON, then the range-edge review (Part 2, ADR 0002 rows 13, 17, 18 and 40–42); 641,185 rows ok on three targets (`port-parity.md`).
-- [x] **M6** (done 2026-11-17): the FDTD 2D/3D grids: the CPML layer, `Fdtd2d` and `Fdtd3d` with their CPML, `nf2ff_2d`, compute.rs's `GpuFdtd2d` and CPU backend, the JSON of `CpmlParams` and `Mode2d`, then the range-edge review (Part 4, ADR 0002 rows 13, 18 and 40); 644,194 rows ok on three targets (`port-parity.md`).
-- [x] **M7** (done 2026-11-18): the integration surfaces: bridge.rs's eight bridges, `integration/soorat.rs`'s eight
-  structs, their constructors and JSON, and ai.rs's daimon/hoosh client in the `[lib.ai]` profile, then the range-edge
-  review (Part 2, ADR 0002 rows 13, 18 and 47); 646,281 rows ok on three targets (`port-parity.md`).
-- [x] **M8** (done 2026-11-18): release 2.0.0: the Rust-test ledger closed (846 ported, 12 not applicable),
-  the migration guide and the rest of the documentation, the surface-parity record, VERSION 2.0.0.
-- [ ] **crmath's sin and cos past 2^20**: a medium-range argument reduction (Cody–Waite with a longer π/2, or crmath_ux's Payne–Hanek) ahead of the fast path's polynomials. Today every |x| > 2^20 takes the multi-precision slow path, about 21 µs a call, which an optical plane wave reaches routinely (`wave/plane_wave_e`, port-parity §26). Performance only: the results stay correctly rounded.
-- [ ] **The FDTD updates' per-cell scan**: the range-edge rule's scan for products that leave the normal range costs about 2.7 ns a cell beside the packed update's 1 ns, so the 1D step runs 3.5–3.8× its unchecked form, the TF/SF step about 2× and `CwAccumulator::accumulate` about 3× (port-parity §107, §109, §110). M6's grids pay the same: the 2D step 2.4–2.7× its unchecked form (about 2.3 ns a cell), the 3D step 1.8× (3.4 ns a cell update), the CPML steps 1.4× (2D) and 1.5× (3D), and `total_energy` 2.3× (2D) and 2.8× (3D), a band test a cell (port-parity §127–§130). A lane-wise exponent-field test in the stdlib's vector verbs (plan §10, not yet filed) would bring each scan to about one pass. Performance only: the results stay the unbounded chain's.
-- [ ] **`propagate_beam`'s general fast path**: with C ≠ 0 (a lens in the system) q_out rounded once takes about 650 ns for Rust's 1.8 ns, the call overhead of its six TwoProducts, five double-double products and two quotient tests on this toolchain; C = 0 (free space, interfaces) takes 94 ns, and `transform_beam` 1.2 µs for 0.58. Inlining TwoProduct and deciding the threshold on the fast path's own denominator are the first steps (port-parity §66). Performance only: the results stay correctly rounded.
-- The "2.0 cleanup (breaking)" backlog item below lands in the Cyrius API only, as ADR 0002 (plan §3.3). There is no Rust 2.0.
+### Hardening
 
----
+- [ ] **A JSON fuzz harness**: the readers rest on bayan's parser and on the golden corpus's documents, not on
+  mutation (the [threat model](threat-model.md)'s open item). A harness like `tests/bijli.fcyr`, the Touchstone
+  reader's, closes it for `_bj_jr_doc` and a few readers.
+- [ ] **Retire the port's handoff**: [handoff.md](handoff.md) has served the port. Delete it once no 2.0.x work needs
+  it; git keeps it.
 
-## Cross-Crate Bridges (shipped in 1.1.0)
+### Performance
 
-- [x] **`bridge.rs` module** — primitive-value conversions for cross-crate electromagnetism
-- [x] **ushma bridge**: current density (A/m²), resistance (Ω) → Joule heating power (W); EM field energy density → temperature rise rate
-- [x] **prakash bridge**: wavelength (nm) → refractive index in medium; E-field amplitude → optical intensity (W/m²)
-- [x] **tanmatra bridge**: electron energy level (eV) → emission wavelength (nm); nuclear charge → Coulomb potential scaling
-- [x] **dravya bridge**: electric field strength (V/m) → piezoelectric stress; magnetic flux density (T) → magnetostrictive strain
+None of these changes a result: the bits stay the same. The numbers go in
+[benchmarks-rust-v-cyrius.md](../benchmarks-rust-v-cyrius.md).
 
----
+- [ ] **crmath's sin and cos past 2^20**: a medium-range argument reduction (Cody–Waite with a longer π/2, or
+  crmath_ux's Payne–Hanek) ahead of the fast path's polynomials. Today every |x| > 2^20 takes the multi-precision slow
+  path, about 21 µs a call, and an optical plane wave reaches it routinely (`wave/plane_wave_e`, port-parity §26).
+- [ ] **The FDTD updates' per-cell scan**: the range-edge rule's scan for products that leave the normal range costs
+  about 2.7 ns a cell beside the packed update's 1 ns. Against their unchecked forms:
+  - 1D: the step runs 3.5–3.8×, the TF/SF step about 2×, `CwAccumulator::accumulate` about 3× (port-parity §107, §109,
+    §110).
+  - 2D: the step runs 2.4–2.7× (about 2.3 ns a cell), the CPML step 1.4×, `total_energy` 2.3×.
+  - 3D: the step runs 1.8× (3.4 ns a cell update), the CPML step 1.5×, `total_energy` 2.8× (port-parity §127–§130).
 
-## Soorat Integration (rendering visualization — shipped in 1.1.0)
+  A lane-wise exponent-field test in the stdlib's vector verbs (the filing below) would bring each scan to about one
+  pass.
+- [ ] **`propagate_beam`'s general fast path**: with C ≠ 0 (a lens in the system), q_out rounded once takes about
+  650 ns where Rust took 1.8 ns. That is the call overhead of its six TwoProducts, five double-double products and two
+  quotient tests on this toolchain. With C = 0 (free space, interfaces) it takes 94 ns, and `transform_beam` takes
+  1.2 µs where Rust took 0.58. The first steps are inlining TwoProduct and deciding the threshold on the fast path's
+  own denominator (port-parity §66).
 
-- [x] **`integration/soorat.rs` module** — feature-gated `soorat-compat`, visualization data structures for soorat to consume
-- [x] **FDTD field slices**: Expose `FieldSlice2D` / `FieldSlice3D` structs from `Fdtd2d`/`Fdtd3d` grids (field component, dimensions, spacing, origin) for heatmap/volumetric rendering
-- [x] **Field line traces**: Expose `FieldLineVisualization` wrapping `trace_field_line()` output as `Vec<[f64; 3]>` polylines with field magnitude per point
-- [x] **Point charge visualization**: Expose `ChargeVisualization` with charge positions, magnitudes, and sign for particle rendering with field halos
-- [x] **Radiation pattern**: Expose `RadiationPattern` wrapping `Nf2ffResult` (angles + gain) for polar plot / 3D balloon rendering
-- [x] **Vector field sampling**: Expose `VectorFieldSample` — grid of `FieldVector` values at regular positions for arrow/streamline rendering
+### Upstream
 
----
-
-## Backlog — follow-ups from the 1.2.0 audit
-
-- [x] **CPML for `Fdtd3d`** — Roden–Gedney CPML on all six faces (`try_enable_cpml`/`try_enable_cpml_with`/`disable_cpml`/`cpml`): 12 Ψ fields stored only in the face slabs, −80 dB reflection measured for a 10-cell layer around a 3D point source
-- [ ] **CPML + materials for `GpuFdtd2d`** — the compute-backend solver has PEC walls and vacuum only
-- [ ] **TFSF integration into `Fdtd2d`** — `TfsfSource` is a standalone auxiliary grid; add plane-wave injection on the TF/SF contour
-- [ ] **Frequency-aware lossy Fresnel** — complex ε = ε − jσ/ω so conductors are supported (today they return `Err`)
-- [x] **Transport error variant** — `BJ_ERR_TRANSPORT` (ADR 0002 row 7); the ai client reports every registration failure as it (M7 part 1c)
-- [ ] **Sub-femtometre point-charge separations** — field/potential/Coulomb functions treat r² < 1e-30 m² as singular
-- [ ] **2.0 cleanup (breaking)** — remove the 1.2.0 deprecations (`rf::input_impedance_lossless`, `rf::write_touchstone`, `Material::reflectance_at`), make FDTD grid fields private behind accessors, make `TfsfSource::new`/`Cpml::new` fallible, unify the polarization (e^{−iωt}) and scattering (e^{+iωt}) time conventions
-- [ ] **Real `WgpuBackend`** — currently a scaffold
+- [ ] **File the gaps the plan's §10 marks as not yet filed**, each with its probe:
+  - a captured `f64` is an untyped word inside a closure (p6);
+  - `#derive(Serialize)`'s pairs decoder returns an empty `Vec<struct>` (p5);
+  - bayan's exponent notation differs from serde_json's (p5b, a note);
+  - no vector verb classifies a lane (the FDTD scan above).
+- [ ] **File the PE syscall warnings** that sandhi's stack prints under `CYRIUS_TARGET_WIN`: `lib/dynlib.cyr` lines
+  674 and 950, and `lib/fdlopen.cyr` lines 472, 530, 626 and 954. Once a fixed stdlib is pinned, drop the PE part of
+  CLAUDE.md's exception for `tests/ai.tcyr`.
 
 ---
 
-## Future — Research Watch
+## 2.1.x – 2.x.x — open work
 
-> Not scheduled — track for when they reach practical maturity
+These are minor releases: new API is appended (enum values too), and each feature gets reference tests, plus golden
+rows from validate.py's model where it has one. The order follows plan §11.
+
+Every addition must keep the default bundle under the compiler's 128 KiB static-data advisory. bijli alone is just
+under it (port-parity §135), so a large table is allocated on first use.
+
+### The 1.2.0 audit's backlog (plan §11.1)
+
+- [ ] **CPML and materials for `GpuFdtd2d`**: the compute-backend solver has PEC walls and vacuum only.
+- [ ] **TF/SF on the `Fdtd2d` contour**: `BjTfsfSource` is a standalone 1D auxiliary grid. The work is to inject its
+  plane wave on the 2D grid's TF/SF contour.
+- [ ] **Frequency-aware lossy Fresnel**: a complex ε = ε − jσ/ω (in the e^{+jωt} convention), so that conductors are
+  supported. Today the Fresnel functions return an `Err` for them.
+- [ ] **Sub-femtometre point-charge separations**: the field, potential and Coulomb functions treat r² < 10^-30 m² as
+  singular (an exact test since ADR 0002 row 17). Accepting closer points changes results that 2.0 refuses, so this
+  item needs an ADR.
+
+### A GPU backend (plan §11.2)
+
+- [ ] **`BjMabdaBackend`**: `impl BjComputeBackend` on mabda (wgpu-native, native AMD with an f64 SPIR-V compiler,
+  native NVIDIA compute), in a `[lib.gpu]` profile. It sits behind the API of the ported `BjWgpuBackend` scaffold.
+  The backend is new code, so its parity is against `BjCpuBackend`: bit for bit where the device's f64 allows.
+
+### Shared numerics (plan §10, G1–G4)
+
+- [ ] **Depend on the ecosystem's math once it exists.** The candidates:
+  - correctly rounded f64 primitives as a library (G1; bijli, impetus and kimiya each carry their own copy);
+  - spherical, Riccati and cylindrical Bessel functions with complex arguments (G2);
+  - associated Legendre functions and spherical harmonics (G3);
+  - Hermite and generalized Laguerre polynomials (G4).
+
+  bijli moves to one only when it gives bijli's results bit for bit. Until then, `src/crmath*.cyr` and the special
+  functions stay bijli's own.
+
+### Research watch (not scheduled)
+
+> These are tracked until each reaches practical maturity.
 
 - [ ] Physics-informed neural networks (PINNs) as surrogate EM solvers (17× speedup published 2025)
 - [ ] Adaptive mesh refinement (AMR) for FDTD — h/p/r refinement, subgridding
@@ -102,21 +106,13 @@ Plan of record: [bijli-port-plan.md](bijli-port-plan.md). Decisions: [ADR 0001](
 
 ---
 
-## Consumer Mapping
-
-| Consumer | Uses | Status |
-|----------|------|--------|
-| kiran | EM effects in game physics, sky rendering, volumetric scattering, beam effects | Unlocked |
-| joshua | Full EM simulation, RF circuits, antenna design, 3D FDTD | Unlocked |
-| prakash | Optical systems, polarization, beam propagation, material optics | Unlocked |
-
 ## Boundaries
 
 | Domain | Owned by | NOT bijli |
 |--------|----------|-----------|
-| PDE solvers | hisab | bijli uses hisab for numerical methods |
+| General PDE solvers | hisab | bijli's solvers are its EM ones (FDTD, eigenmodes); no hisab dependency (ADR 0001) |
 | Particle dynamics | impetus | bijli computes forces, impetus integrates |
 | Optics (ray, wave) | prakash | bijli provides EM foundations; prakash builds ray tracing, lens design, etc. |
 | Quantum EM (QED) | future | bijli is classical EM |
-| GPU compute | wgpu (interim) | bijli provides the trait; backends are pluggable — wgpu will be replaced by a custom GPU backend |
+| GPU compute | mabda | bijli provides the `BjComputeBackend` trait; backends are pluggable (mabda's is 2.x work) |
 | ML surrogates | daimon/hoosh | bijli defines solver interfaces; AI agents provide trained surrogates |
