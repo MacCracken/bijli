@@ -1038,7 +1038,7 @@ fn _bj_rf_sm_alloc(ports, z0: f64, out: *BjSMatrix): i64 {
 # empty when its block can't be had (Rust aborts). Mirrors `SMatrix::new`.
 #must_use
 public fn BjSMatrix_new(ports, z0: f64, out: *BjSMatrix): Result {
-    memset(out, 0, sizeof(BjSMatrix));
+    _bj_zero(out, sizeof(BjSMatrix));
     var e = _bj_rf_sm_alloc(ports, z0, out);
     if (e != 0) { return Err(e); }
     return Ok(0);
@@ -1069,7 +1069,7 @@ fn _bj_rf_cascade_out(e: *f64, z0: f64, a, b, out: *BjSMatrix): Result {
 #must_use
 public fn BjSMatrix_two_port(s11: BjComplex, s12: BjComplex, s21: BjComplex, s22: BjComplex, z0: f64,
   out: *BjSMatrix): Result {
-    memset(out, 0, sizeof(BjSMatrix));
+    _bj_zero(out, sizeof(BjSMatrix));
     var m: BjSMatrix;
     var e = _bj_rf_sm_alloc(2, z0, &m);
     if (e != 0) { return Err(e); }
@@ -1336,7 +1336,7 @@ impl BjSMatrix {
     # Mirrors `SMatrix::cascade`.
     #must_use
     public fn cascade(self, other: *BjSMatrix, out: *BjSMatrix): Result {
-        if (out != self && out != other) { memset(out, 0, sizeof(BjSMatrix)); }
+        if (out != self && out != other) { _bj_zero(out, sizeof(BjSMatrix)); }
         if (self.ports != 2 || other.ports != 2) {
             return Err(_bj_err_invalid_parameter("cascade requires two 2-port networks"));
         }

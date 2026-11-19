@@ -126,7 +126,7 @@ fn _bj_ai_has_control(s, n): i64 {
 # empty. Rust's struct literal, whose `String` fields hold any UTF-8. Give it back with BjDaimonConfig_free.
 #must_use
 public fn BjDaimonConfig_new(endpoint, endpoint_len, api_key, api_key_len, out: *BjDaimonConfig): Result {
-    memset(out, 0, sizeof(BjDaimonConfig));
+    _bj_zero(out, sizeof(BjDaimonConfig));
     if (endpoint_len < 0) { return Err(_bj_ai_bad_len("daimon endpoint", endpoint_len)); }
     if (api_key != 0 && api_key_len < 0) { return Err(_bj_ai_bad_len("daimon API key", api_key_len)); }
     var be = _bj_ts_utf8_bad(endpoint, endpoint_len);
@@ -155,7 +155,7 @@ public fn BjDaimonConfig_new(endpoint, endpoint_len, api_key, api_key_len, out: 
 # with out empty. Mirrors `impl Default for DaimonConfig`.
 #must_use
 public fn BjDaimonConfig_default(out: *BjDaimonConfig): Result {
-    memset(out, 0, sizeof(BjDaimonConfig));
+    _bj_zero(out, sizeof(BjDaimonConfig));
     return BjDaimonConfig_new("http://localhost:8090", 21, 0, 0, out);
 }
 
@@ -224,7 +224,7 @@ fn _bj_ai_config_dec(v, w): i64 {
 # other type refused. Give it back with BjDaimonConfig_free. Mirrors `serde_json::from_str::<DaimonConfig>`.
 #must_use
 public fn BjDaimonConfig_from_json(buf, len, out: *BjDaimonConfig): Result {
-    memset(out, 0, sizeof(BjDaimonConfig));
+    _bj_zero(out, sizeof(BjDaimonConfig));
     var w: i64[4];
     w[0] = 0;
     w[1] = 0;
@@ -250,7 +250,7 @@ public fn BjDaimonConfig_from_json(buf, len, out: *BjDaimonConfig): Result {
 # Rust's struct literal. Give it back with BjHooshConfig_free.
 #must_use
 public fn BjHooshConfig_new(endpoint, len, out: *BjHooshConfig): Result {
-    memset(out, 0, sizeof(BjHooshConfig));
+    _bj_zero(out, sizeof(BjHooshConfig));
     if (len < 0) { return Err(_bj_ai_bad_len("hoosh endpoint", len)); }
     var be = _bj_ts_utf8_bad(endpoint, len);
     if (be >= 0) { return Err(_bj_ai_not_utf8("hoosh endpoint", be)); }
@@ -265,7 +265,7 @@ public fn BjHooshConfig_new(endpoint, len, out: *BjHooshConfig): Result {
 # empty. Mirrors `impl Default for HooshConfig`.
 #must_use
 public fn BjHooshConfig_default(out: *BjHooshConfig): Result {
-    memset(out, 0, sizeof(BjHooshConfig));
+    _bj_zero(out, sizeof(BjHooshConfig));
     return BjHooshConfig_new("http://localhost:8088", 21, out);
 }
 
@@ -313,7 +313,7 @@ fn _bj_ai_hoosh_dec(v, w): i64 {
 # `serde_json::from_str::<HooshConfig>`.
 #must_use
 public fn BjHooshConfig_from_json(buf, len, out: *BjHooshConfig): Result {
-    memset(out, 0, sizeof(BjHooshConfig));
+    _bj_zero(out, sizeof(BjHooshConfig));
     var w: i64[2];
     w[0] = 0;
     w[1] = 0;

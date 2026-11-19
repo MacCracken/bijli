@@ -184,7 +184,7 @@ fn _bj_fd1_mur(dt: f64, dx: f64, eps_r: f64, mu_r: f64): f64 {
 # Mirrors `Fdtd1d::new`.
 #must_use
 public fn BjFdtd1d_new(num_cells, dx: f64, out: *BjFdtd1d): Result {
-    memset(out, 0, sizeof(BjFdtd1d));
+    _bj_zero(out, sizeof(BjFdtd1d));
     if (num_cells >= 0 && num_cells < 2) {
         var nf: f64 = f64_from(num_cells);
         var size: f64 = nf * dx;

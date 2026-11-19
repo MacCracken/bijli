@@ -5,7 +5,7 @@
 This file lists planned work only. Everything that shipped is in the [CHANGELOG](../../CHANGELOG.md), the 1.x crate
 included. 2.0.0 (2026-11-18) is the Cyrius port of the Rust crate 1.2.0: how it was checked is in
 [port-parity.md](port-parity.md), and every behaviour it changed from Rust is in
-[ADR 0002](../adr/0002-port-api-divergences.md).
+[ADR 0002](../adr/0002-port-api-divergences.md). 2.0.1 (2026-11-18) is its audit and repairs (port-parity §142–§152).
 
 ---
 
@@ -13,27 +13,6 @@ included. 2.0.0 (2026-11-18) is the Cyrius port of the Rust crate 1.2.0: how it 
 
 These are patch releases: fixes and hardening, no new features. A fix that changes a result is an ADR 0002 row, and
 any golden rows it moves are mapped in `*.adr.tsv` (the user's answer of 2026-11-18).
-
-### 2.0.1 — the audit and its repairs
-
-The audit's findings H1–H34 are in [port-parity §142](port-parity.md). They are repaired in these bites, in order:
-
-- [x] **1a** Memory safety with no result changes (H1–H11; port-parity §143).
-- [x] **1b** Constructors leave `out` empty on Err; `BjCpml_new` becomes fallible and `enable_cpml` is dropped, as
-  ADR row 3 says; the per-step CPML attach check is restored (H12–H15; port-parity §144).
-- [x] **2a** Hangs: Mie, the ai client's deadlines and allocations, the mode orders and the GPU constructor's loop
-  (H16, H19–H22; port-parity §145).
-- [x] **2b-1** The f32 reader's halfway floats: a per-document number index (H17; port-parity §146).
-- [x] **2b-2** The parallel combination: a bounded fixed-point tier ahead of the exact one, so that only a sum exactly
-  at a tie of its rounding reaches the quadratic tier (H18; port-parity §147).
-- [x] **3** Threads: the math tables become data, plus the error slot's publication and the 3D energy's scratch
-  (H23–H25; port-parity §148).
-- [x] **4** Results that change, each an ADR 0002 row (H26–H31; port-parity §149).
-- [x] **5** Rules and docs: `#must_use`, the stale claims, CLAUDE.md's cleanliness check and CI's missing gates
-  (H32–H34; port-parity §150).
-- [x] **6** A JSON fuzz harness, `tests/json.fcyr`, for the 31 readers of the default bundle: the
-  [threat model](threat-model.md)'s open item (port-parity §151).
-- [ ] **7** The release: the post-review bench against §142's baseline, the cross-targets, the docs.
 
 ### Hardening
 
@@ -73,6 +52,9 @@ None of these changes a result: the bits stay the same. The numbers go in
 - [ ] **File the PE syscall warnings** that sandhi's stack prints under `CYRIUS_TARGET_WIN`: `lib/dynlib.cyr` lines
   674 and 950, and `lib/fdlopen.cyr` lines 472, 530, 626 and 954. Once a fixed stdlib is pinned, drop the PE part of
   CLAUDE.md's exception for `tests/ai.tcyr`.
+- [ ] **File the stdlib's byte-at-a-time `memset`** (`lib/string.cyr`): about 1 ns a byte, so bijli zeroes a
+  constructor's `out` with its own word-wise `_bj_zero` (port-parity §152). The stdlib's private `_alloc_zero`
+  already stores words; once `memset` does, `_bj_zero` can go.
 - [ ] **File sandhi's client gaps** (port-parity §142):
   - DNS and the TLS handshake have no deadline;
   - the resolver skips `/etc/hosts`, so the ai client's default `localhost` endpoint resolves through DNS;

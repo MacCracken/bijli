@@ -396,7 +396,7 @@ fn _bj_fd3_zero(f: *f64, n) {
 # rounded once (ADR 0002 row 13, M6 part 4a). Give it back with BjFdtd3d_free. Mirrors `Fdtd3d::new`.
 #must_use
 public fn BjFdtd3d_new(nx, ny, nz, dx: f64, out: *BjFdtd3d): Result {
-    memset(out, 0, sizeof(BjFdtd3d));
+    _bj_zero(out, sizeof(BjFdtd3d));
     if ((nx >= 0 && nx < 3) || (ny >= 0 && ny < 3) || (nz >= 0 && nz < 3)) {
         var mn = nx;
         if (_bj_fd2_uge(mn, ny) == 1) { mn = ny; }

@@ -6,7 +6,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
 
-The 2.0.1 audit and its repairs (`docs/development/port-parity.md` §142, findings H1–H34).
+## [2.0.1] — 2026-11-18
+
+The 2.0.1 audit and its repairs (`docs/development/port-parity.md` §142–§152, findings H1–H34): fixes and hardening,
+with no new API and one breaking change (`BjCpml_new`, below). Every change to a result is an ADR 0002 row, with the
+golden rows it moves mapped: rows 48 and 49 are new, and rows 2, 3, 9, 17, 27 and 46 are amended. Of the corpus's
+770,127 rows, 645,972 equal the oracle and 124,155 are accepted (43,087 against the corrected oracle, 81,068 under
+ADR 0002), with 0 failed and the same digests on x86_64 ELF, x86_64 PE and aarch64. Against 2.0.0, the post-review
+bench's median ratio is 1.000 in both rounds over its 115 common rows.
 
 ### Breaking
 - **fdtd** — `BjCpml_new` returns a `Result`: invalid input (a zero thickness, a dx or dt not finite and positive) is
@@ -52,7 +59,9 @@ The 2.0.1 audit and its repairs (`docs/development/port-parity.md` §142, findin
   nothing; 2.0.0 left it untouched, and a `_free` after a failure (a `defer`) freed whatever the stack held. This
   covers the FDTD grids, the CPML, the TF/SF source, the non-uniform grid, the CW accumulator, the eigenmodes, NF2FF,
   Mie, the S-matrix, Touchstone, the soorat structs, `GpuFdtd2d` and the ai configs, and the JSON readers of each
-  (ADR 0002 row 48, H12). `cascade` leaves an `out` that is one of its inputs as it was.
+  (ADR 0002 row 48, H12). `cascade` leaves an `out` that is one of its inputs as it was. The struct is zeroed a word
+  at a time: the stdlib's `memset` stores a byte at a time, about 1 ns a byte, which cost `scattering/mie_x1_real`
+  4.6 % (1,904 → 1,985 ns; 1,910 ns word by word).
 
 ### Fixed
 - **docs** (H34) — stale claims corrected:

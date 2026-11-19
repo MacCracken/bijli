@@ -1212,7 +1212,7 @@ public fn BjMuellerMatrix_from_json(buf, len, out: *BjMuellerMatrix): Result {
 # `serde_json::from_str::<MieResult>`.
 #must_use
 public fn BjMieResult_from_json(buf, len, out: *BjMieResult): Result {
-    memset(out, 0, sizeof(BjMieResult));
+    _bj_zero(out, sizeof(BjMieResult));
     var w: i64[8];
     w[4] = 0;
     w[5] = 0;
@@ -1442,7 +1442,7 @@ fn _bj_jr_ts_data(v, w): i64 {
 # no matrix holds, is refused). Give the matrix back with BjSMatrix_free. Mirrors `serde_json::from_str::<SMatrix>`.
 #must_use
 public fn BjSMatrix_from_json(buf, len, out: *BjSMatrix): Result {
-    memset(out, 0, sizeof(BjSMatrix));
+    _bj_zero(out, sizeof(BjSMatrix));
     var m: BjSMatrix;
     var code = _bj_jr_read(buf, len, &_bj_jr_smatrix, &m);
     if (code != 0) { return Err(code); }
@@ -1470,7 +1470,7 @@ public fn BjTouchstoneFormat_from_json(buf, len, out: *i64): Result {
 # with BjTouchstoneData_free. Mirrors `serde_json::from_str::<TouchstoneData>`.
 #must_use
 public fn BjTouchstoneData_from_json(buf, len, out: *BjTouchstoneData): Result {
-    memset(out, 0, sizeof(BjTouchstoneData));
+    _bj_zero(out, sizeof(BjTouchstoneData));
     var d: BjTouchstoneData;
     var code = _bj_jr_read(buf, len, &_bj_jr_ts_data, &d);
     if (code != 0) { return Err(code); }
@@ -1796,7 +1796,7 @@ public fn BjDebyeMaterial_from_json(buf, len, out: *BjDebyeMaterial): Result {
 # grid validate refuses too). Give it back with BjNonUniformGrid_free. Mirrors `serde_json::from_str::<NonUniformGrid>`.
 #must_use
 public fn BjNonUniformGrid_from_json(buf, len, out: *BjNonUniformGrid): Result {
-    memset(out, 0, sizeof(BjNonUniformGrid));
+    _bj_zero(out, sizeof(BjNonUniformGrid));
     var g: BjNonUniformGrid;
     g.block = 0;
     g.nx = 0;
@@ -1816,7 +1816,7 @@ public fn BjNonUniformGrid_from_json(buf, len, out: *BjNonUniformGrid): Result {
 # where serde reads any. Give it back with BjEigenmodeResult_free. Mirrors `serde_json::from_str::<EigenmodeResult>`.
 #must_use
 public fn BjEigenmodeResult_from_json(buf, len, out: *BjEigenmodeResult): Result {
-    memset(out, 0, sizeof(BjEigenmodeResult));
+    _bj_zero(out, sizeof(BjEigenmodeResult));
     var r: BjEigenmodeResult;
     r.frequencies = 0;
     r.count = 0;
@@ -2809,7 +2809,7 @@ fn _bj_jr_zero(w: *i64, n) {
 # component any JSON string. Give it back with BjFieldSlice2D_free. Mirrors `serde_json::from_str::<FieldSlice2D>`.
 #must_use
 public fn BjFieldSlice2D_from_json(buf, len, out: *BjFieldSlice2D): Result {
-    memset(out, 0, sizeof(BjFieldSlice2D));
+    _bj_zero(out, sizeof(BjFieldSlice2D));
     var w: i64[12];
     _bj_jr_zero(&w, 12);
     var code = _bj_jr_read(buf, len, &_bj_jr_slice2, &w);
@@ -2836,7 +2836,7 @@ public fn BjFieldSlice2D_from_json(buf, len, out: *BjFieldSlice2D): Result {
 # `serde_json::from_str::<FieldSlice3D>`.
 #must_use
 public fn BjFieldSlice3D_from_json(buf, len, out: *BjFieldSlice3D): Result {
-    memset(out, 0, sizeof(BjFieldSlice3D));
+    _bj_zero(out, sizeof(BjFieldSlice3D));
     var w: i64[12];
     _bj_jr_zero(&w, 12);
     var code = _bj_jr_read(buf, len, &_bj_jr_slice3, &w);
@@ -2898,7 +2898,7 @@ fn _bj_jr_lines(v, w: *i64): i64 {
 # BjFieldLine_free. Mirrors `serde_json::from_str::<FieldLine>`.
 #must_use
 public fn BjFieldLine_from_json(buf, len, out: *BjFieldLine): Result {
-    memset(out, 0, sizeof(BjFieldLine));
+    _bj_zero(out, sizeof(BjFieldLine));
     var w: i64[4];
     _bj_jr_zero(&w, 4);
     var code = _bj_jr_read(buf, len, &_bj_jr_line, &w);
@@ -2918,7 +2918,7 @@ public fn BjFieldLine_from_json(buf, len, out: *BjFieldLine): Result {
 # it. Give it back with BjFieldLineVisualization_free. Mirrors `serde_json::from_str::<FieldLineVisualization>`.
 #must_use
 public fn BjFieldLineVisualization_from_json(buf, len, out: *BjFieldLineVisualization): Result {
-    memset(out, 0, sizeof(BjFieldLineVisualization));
+    _bj_zero(out, sizeof(BjFieldLineVisualization));
     var lv: BjFieldLineVisualization;
     lv.lines = 0;
     lv.lines_len = 0;
@@ -3021,7 +3021,7 @@ public fn BjChargePoint_from_json(buf, len, out: *BjChargePoint): Result {
 # it. Give it back with BjChargeVisualization_free. Mirrors `serde_json::from_str::<ChargeVisualization>`.
 #must_use
 public fn BjChargeVisualization_from_json(buf, len, out: *BjChargeVisualization): Result {
-    memset(out, 0, sizeof(BjChargeVisualization));
+    _bj_zero(out, sizeof(BjChargeVisualization));
     var cx: i64[7];
     _bj_jr_zero(&cx, 7);
     cx[0] = buf;
@@ -3061,7 +3061,7 @@ fn _bj_jr_pattern(v, w): i64 {
 # `serde_json::from_str::<RadiationPattern>`.
 #must_use
 public fn BjRadiationPattern_from_json(buf, len, out: *BjRadiationPattern): Result {
-    memset(out, 0, sizeof(BjRadiationPattern));
+    _bj_zero(out, sizeof(BjRadiationPattern));
     var w: i64[5];
     _bj_jr_zero(&w, 5);
     var code = _bj_jr_read(buf, len, &_bj_jr_pattern, &w);
@@ -3112,7 +3112,7 @@ fn _bj_jr_vectors(v, w): i64 {
 # `serde_json::from_str::<VectorFieldSample>`.
 #must_use
 public fn BjVectorFieldSample_from_json(buf, len, out: *BjVectorFieldSample): Result {
-    memset(out, 0, sizeof(BjVectorFieldSample));
+    _bj_zero(out, sizeof(BjVectorFieldSample));
     var w: i64[10];
     _bj_jr_zero(&w, 10);
     var code = _bj_jr_read(buf, len, &_bj_jr_vectors, &w);

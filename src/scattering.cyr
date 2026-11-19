@@ -795,7 +795,7 @@ fn _bj_sc_drop(d, a, b) {
 # Mirrors `scattering::mie`.
 #must_use
 public fn bj_mie(x: f64, m: BjComplex, out: *BjMieResult): Result {
-    memset(out, 0, sizeof(BjMieResult));
+    _bj_zero(out, sizeof(BjMieResult));
     var mre: f64 = m.re;
     var mim: f64 = m.im;
     var h: f64 = 0.0;

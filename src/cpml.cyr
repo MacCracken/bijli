@@ -371,7 +371,7 @@ fn _bj_cpml_sample(b: *f64, c: *f64, km1: *f64, t, offset: f64, params: *BjCpmlP
 # BjCpml_free. Mirrors `Cpml::with_params`.
 #must_use
 public fn BjCpml_with_params(params: *BjCpmlParams, dx: f64, dt: f64, out: *BjCpml): Result {
-    memset(out, 0, sizeof(BjCpml));
+    _bj_zero(out, sizeof(BjCpml));
     var e = _bj_cpml_params_validate(params);
     if (e != 0) { return Err(e); }
     if (!(dx > 0.0 && dx < _BJ_CPML_INF)) {
@@ -464,7 +464,7 @@ public fn BjCpml_with_params(params: *BjCpmlParams, dx: f64, dt: f64, out: *BjCp
 # `Cpml::new`.
 #must_use
 public fn BjCpml_new(thickness, dx: f64, dt: f64, out: *BjCpml): Result {
-    memset(out, 0, sizeof(BjCpml));
+    _bj_zero(out, sizeof(BjCpml));
     var p: BjCpmlParams = BjCpmlParams_new(thickness);
     return BjCpml_with_params(&p, dx, dt, out);
 }

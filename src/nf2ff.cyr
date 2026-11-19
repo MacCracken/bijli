@@ -893,7 +893,7 @@ fn _bj_nf_same53(av: f64, ae, bv: f64, be, ad: f64, bd: f64): i64 {
 #must_use
 public fn bj_nf2ff_2d_phasor(ez: *BjCwAccumulator, hx: *BjCwAccumulator, hy: *BjCwAccumulator, nx, ny, dx: f64,
   box_margin, n_angles, out: *BjNf2ffResult): Result {
-    memset(out, 0, sizeof(BjNf2ffResult));
+    _bj_zero(out, sizeof(BjNf2ffResult));
     var ok = _bj_nf_same53(ez.omega_s, ez.omega_e, hx.omega_s, hx.omega_e, ez.omega, hx.omega);
     if (ok == 1) { ok = _bj_nf_same53(ez.omega_s, ez.omega_e, hy.omega_s, hy.omega_e, ez.omega, hy.omega); }
     if (ok == 1) { ok = _bj_nf_same(ez.dt, hx.dt); }
@@ -980,7 +980,7 @@ public fn bj_nf2ff_2d_phasor(ez: *BjCwAccumulator, hx: *BjCwAccumulator, hy: *Bj
 # `nf2ff_2d`.
 #must_use
 public fn bj_nf2ff_2d(sim: *BjFdtd2d, box_margin, n_angles, frequency: f64, out: *BjNf2ffResult): Result {
-    memset(out, 0, sizeof(BjNf2ffResult));
+    _bj_zero(out, sizeof(BjNf2ffResult));
     if (sim.mode != BJ_MODE2D_TM) {
         var tm = _bj_err_reason(BJ_ERR_INVALID_PARAMETER);
         _bj_tx_cstr(tm, "NF2FF requires a TM-mode simulation, got ");

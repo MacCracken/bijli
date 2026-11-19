@@ -8147,3 +8147,53 @@ mutation.
 - **The gate**: clean, all 17 steps. Parity and the 520 digests are unchanged, and validate.py checks 770,127 rows
   with 0 problems. `cyrius fuzz` passes both harnesses on x86_64 ELF and PE, on aarch64, with `--bounds` and with
   `--poison=ab`, all with the same counts. Next: bite 7, the release.
+
+## 152. 2.0.1 bite 7: the release (2026-11-18)
+
+- **The post-review bench**: two interleaved rounds of `cyrius bench`, 2.0.0's tree (`git archive 2.0.0`, the same
+  pin and stdlib) against 2.0.1's, at load 0.8–1.0 with nothing else running. The median ratio is 1.000 in each
+  round, over the 115 rows the two share. The two new rows read `json/charge_visualization_from_json_halfway`
+  6.44 and 6.53 ms (1.23 s in 2.0.0, §146) and `circuit/resistance_parallel_triples_1600` 2.70 and 2.69 ms (525 ms,
+  §147).
+- **A finding, repaired**: a first pair of rounds had `scattering/mie_x1_real` +5.0 % in both (1,901 → 1,997 ns).
+  - Since 2.0.0, `bj_mie`'s path has gained bite 2a's finiteness test and bite 1b's
+    `memset(out, 0, sizeof(BjMieResult))` (ADR 0002 row 48).
+  - `lib/string.cyr`'s `memset` stores a byte at a time, about 1 ns a byte: 64 ns for the 64-byte struct.
+  - `_bj_zero` (`src/mathx.cyr`, a file of internals, so it stays out of the API) stores words, then the byte tail.
+    It is the same zeroing, and the 49 row-48 call sites use it.
+  - Ten runs each: 1,985 ns → 1,910 (2.0.0: 1,904). In the final rounds the row reads +1.3 and +0.5 %.
+  - The byte-wise `memset` is on the roadmap's upstream list; the stdlib's own `_alloc_zero` already stores words.
+- **Layout, measured**: `fdtd/2d_run_50_steps_80x80` read +4.7 and +3.8 % in the first rounds (−2.2 and +3.5 % in the
+  final ones), and `step_once` on 80×80 alone +3.5 % (68.5 → 70.9 µs).
+  - The 2D step's one change since 2.0.0 is the CPML attach check, which returns at once without a layer.
+  - A build that drops bite 1a's `n <= 0` guard from `_bj_e_cell_row`, a function the 2D step never calls, runs the
+    step at 101.2 µs against 104.8 (2.0.0: 100.2; ten runs each). Dropping the attach check as well gives 100.8.
+  - The cost is the code's placement, not the check.
+- **The rows that move in both final rounds**, against 2.0.0:
+  - `wave/reflectance_unpolarized` +3.7 and +3.0 % (267 → 277 ns), on a path unchanged since 2.0.0; the guard-less
+    build recovers 2.5 ns of the 6 it had then (267 → 273, 270.5 without the guard).
+  - `wave/schlick_reflectance` +4.1 % (241 → 251 ns): bite 5's check of `_bj_wave_ratio_of`'s result, and placement.
+  - `scattering/rayleigh_cross_section` +5.5 and +4.1 % (73 → 76–77 ns): bite 4's index check (§149 measured 3 ns).
+  - `polarization/mueller_apply` +3.3 % (92 → 95 ns), unchanged but for `#must_use`.
+  - `json/point_charge_from_json` +6.4 and +4.7 % (4.31–4.37 → 4.57–4.58 µs). Nothing on its path changed:
+    `_bj_jr_read`, `_bj_jr_doc` and bayan's parser are as in 2.0.0. The guard-less build reads 4,474 ns against
+    4,576 (2.0.0: 4,356), so placement moves it by 100 ns of the 220; the rest is unattributed and recorded here.
+  - Quicker: `relativity/lienard_wiechert_scalar_potential` −3.1 and −4.1 %, `json/nonuniform_grid_from_json` −3.3
+    and −3.9 %, `fdtd/2d_step_100x100_tm` −2.6 and −3.7 %, `error_record_f64` −2.6 and −3.0 %,
+    `field/charged_sphere` and `beam/abcd_compose` −3 %.
+- **The bench record** (`docs/benchmarks-rust-v-cyrius.md`) is regenerated from the second final round: 80 of 80
+  twinned.
+- **A correction to the records**: the assertion totals of §141 (2,913) and §143–§150 (2,936 to 2,976) counted
+  `cyrius test`'s last line, its count of units (33), as assertions. 2.0.1's suite has 2,943 assertions in 33 units;
+  2.0.0's had 2,880, recounted from its tree (whose parity unit, which counts rows, not assertions, needs the corpus
+  that copy left out). The per-unit counts in `state.md` are refreshed.
+- **Version**: `VERSION` reads 2.0.1, `cyrius.cyml` takes it through `${file:VERSION}`, and the bundles are
+  regenerated (`dist/bijli.cyr`, `dist/bijli-ai.cyr`; the `.deps` sidecars are unchanged since 2.0.0). The getting
+  started guide's tag reads 2.0.1. The CHANGELOG's `[Unreleased]` becomes `[2.0.1] — 2026-11-18`, and the roadmap
+  drops the finished 2.0.1 list.
+- **Result**: the gate clean, all 17 steps. 21 modules, 645,972 ok, 0 failed, 124,155 accepted (ADR 01: 43,087;
+  ADR 0002: 81,068). validate.py checks 770,127 rows with 0 problems. Coverage is 449 of 449, and the API snapshot
+  has 2,194 public fns, unchanged. Both fuzz harnesses pass. The whole suite passes on x86_64 PE and aarch64, one
+  target at a time: 33 units, 2,943 assertions, the same parity summary, and the 520 digests equal to ELF's. Only the
+  recorded warnings appear: `tests/ai.tcyr`'s static-data advisory, and on PE the six `dynlib`/`fdlopen` syscall
+  lines. **2.0.1 is ready to tag.**

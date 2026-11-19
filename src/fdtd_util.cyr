@@ -114,7 +114,7 @@ fn _bj_fu_fill(p, n, x: f64) {
 # `NonUniformGrid::uniform`.
 #must_use
 public fn BjNonUniformGrid_uniform(nx, ny, nz, spacing: f64, out: *BjNonUniformGrid): Result {
-    memset(out, 0, sizeof(BjNonUniformGrid));
+    _bj_zero(out, sizeof(BjNonUniformGrid));
     var g: BjNonUniformGrid;
     var e = _bj_fu_grid_alloc(nx, ny, nz, &g);
     if (e != 0) { return Err(e); }
@@ -128,7 +128,7 @@ public fn BjNonUniformGrid_uniform(nx, ny, nz, spacing: f64, out: *BjNonUniformG
 # Mirrors `NonUniformGrid::try_uniform`.
 #must_use
 public fn BjNonUniformGrid_try_uniform(nx, ny, nz, spacing: f64, out: *BjNonUniformGrid): Result {
-    memset(out, 0, sizeof(BjNonUniformGrid));
+    _bj_zero(out, sizeof(BjNonUniformGrid));
     if (nx == 0 || ny == 0 || nz == 0) { return Err(_bj_err_insufficient_resolution(0, 0.0)); }
     if (_bj_fu_pos(spacing) == 0) {
         var t = _bj_err_reason(BJ_ERR_INVALID_PARAMETER);
@@ -143,7 +143,7 @@ public fn BjNonUniformGrid_try_uniform(nx, ny, nz, spacing: f64, out: *BjNonUnif
 # (`NonUniformGrid { dx, dy, dz }`, `graded`'s among them). Ok(0), or Err(Allocation) with out empty. Cyrius only.
 #must_use
 public fn BjNonUniformGrid_from_axes(dx: *f64, nx, dy: *f64, ny, dz: *f64, nz, out: *BjNonUniformGrid): Result {
-    memset(out, 0, sizeof(BjNonUniformGrid));
+    _bj_zero(out, sizeof(BjNonUniformGrid));
     var g: BjNonUniformGrid;
     var e = _bj_fu_grid_alloc(nx, ny, nz, &g);
     if (e != 0) { return Err(e); }
@@ -571,7 +571,7 @@ public struct BjCwAccumulator {
 # with out empty. Give it back with BjCwAccumulator_free. Mirrors `CwAccumulator::new`.
 #must_use
 public fn BjCwAccumulator_new(field_size, frequency: f64, dt: f64, out: *BjCwAccumulator): Result {
-    memset(out, 0, sizeof(BjCwAccumulator));
+    _bj_zero(out, sizeof(BjCwAccumulator));
     var f0: f64 = frequency * 0.0;
     if ((f0 != 0.0 || _bj_fu_pos(dt) == 0) && _bj_log_on(2) == 1) {
         var lb[256];
@@ -632,7 +632,7 @@ public fn BjCwAccumulator_new(field_size, frequency: f64, dt: f64, out: *BjCwAcc
 # `CwAccumulator::try_new`.
 #must_use
 public fn BjCwAccumulator_try_new(field_size, frequency: f64, dt: f64, out: *BjCwAccumulator): Result {
-    memset(out, 0, sizeof(BjCwAccumulator));
+    _bj_zero(out, sizeof(BjCwAccumulator));
     if (!(frequency >= 0.0 && frequency < _BJ_FU_INF)) {
         var t = _bj_err_reason(BJ_ERR_INVALID_PARAMETER);
         _bj_tx_cstr(t, "CW frequency must be finite and non-negative, got ");
@@ -1209,7 +1209,7 @@ fn _bj_fu_bad(reason): i64 {
 #must_use
 public fn bj_find_eigenmodes(signal: *f64, n, dt: f64, freq_min: f64, freq_max: f64, n_freq,
   out: *BjEigenmodeResult): Result {
-    memset(out, 0, sizeof(BjEigenmodeResult));
+    _bj_zero(out, sizeof(BjEigenmodeResult));
     if (n == 0) { return Err(_bj_fu_bad("time signal is empty")); }
     if (n_freq >= 0 && n_freq < 2) {
         var t = _bj_err_reason(BJ_ERR_INVALID_PARAMETER);

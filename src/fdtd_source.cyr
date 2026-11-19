@@ -300,7 +300,7 @@ fn _bj_fs_bad_range(head, n, mid, m): i64 {
 # Give it back with BjTfsfSource_free. Mirrors `TfsfSource::try_new`.
 #must_use
 public fn BjTfsfSource_try_new(nx, boundary_x, dx: f64, dt: f64, out: *BjTfsfSource): Result {
-    memset(out, 0, sizeof(BjTfsfSource));
+    _bj_zero(out, sizeof(BjTfsfSource));
     if (nx >= 0 && nx < 3) {
         var nf: f64 = f64_from(nx);
         var size: f64 = nf * dx;
@@ -395,7 +395,7 @@ public fn BjTfsfSource_try_new(nx, boundary_x, dx: f64, dt: f64, out: *BjTfsfSou
 # error (ADR 0002 row 3). Mirrors `TfsfSource::new`.
 #must_use
 public fn BjTfsfSource_new(nx, boundary_x, dx: f64, dt: f64, out: *BjTfsfSource): Result {
-    memset(out, 0, sizeof(BjTfsfSource));
+    _bj_zero(out, sizeof(BjTfsfSource));
     return BjTfsfSource_try_new(nx, boundary_x, dx, dt, out);
 }
 

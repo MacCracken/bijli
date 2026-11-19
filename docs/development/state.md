@@ -5,14 +5,14 @@
 
 ## Version
 
-`VERSION` reads **2.0.0**, the Cyrius library's first release (M8, 2026-11-18). `cyrius.cyml` reads
-it through `version = "${file:VERSION}"`, and the release workflow checks both against the tag. The last Rust release is **1.2.0**, tag `1.2.0` at `c95fd30`
-(2026-11-11), the specification; its tree was retired from the repository with the Rust generator on 2026-11-16
-([ADR 0003](../adr/0003-retire-the-rust-tree.md)). It includes the 3D CPML. crates.io stops at 1.1.0.
+`VERSION` reads **2.0.1** (2026-11-18), the audit and repairs of 2.0.0, the Cyrius library's first release (M8,
+2026-11-18). `cyrius.cyml` reads it through `version = "${file:VERSION}"`, and the release workflow checks both against
+the tag. The last Rust release is **1.2.0**, tag `1.2.0` at `c95fd30` (2026-11-11), the specification; its tree was
+retired from the repository with the Rust generator on 2026-11-16 ([ADR 0003](../adr/0003-retire-the-rust-tree.md)). It
+includes the 3D CPML. crates.io stops at 1.1.0.
 
-**2.0.1 is in progress** (the user's request of 2026-11-18): the audit is done ([`port-parity.md`](port-parity.md)
-§142, 34 findings, H1–H34), and the repairs run in bites 1a–7, listed in the [roadmap](roadmap.md). `VERSION`
-stays 2.0.0 until bite 7.
+**2.0.1** (the user's request of 2026-11-18): the audit ([`port-parity.md`](port-parity.md) §142, 34 findings,
+H1–H34) and its repairs in bites 1a–7 (§143–§152). The open 2.0.x work is in the [roadmap](roadmap.md).
 
 ## Port progress
 
@@ -74,18 +74,18 @@ Plan of record: [`bijli-port-plan.md`](bijli-port-plan.md). Decisions:
 
 ## Tests
 
-- **Cyrius**: the parity harness (`tests/parity.tcyr`: 21 modules, 646,281 ok, 0 failed, 0 measured, 0 pending, 43,087
-  accepted against the corrected oracle and 80,759 under ADR 0002: row 12's and the mappings of rows 3, 13–42 and 47 in
-  `<module>.adr.tsv`), impetus's 78 correctly rounded tests (`tests/crmath.tcyr`), 57 of bijli's own on tan, sinh, cosh
+- **Cyrius**: the parity harness (`tests/parity.tcyr`: 21 modules, 645,972 ok, 0 failed, 0 measured, 0 pending, 43,087
+  accepted against the corrected oracle and 81,068 under ADR 0002: row 12's and the mappings of rows 3, 9, 13–42, 47
+  and 49 in `<module>.adr.tsv`), impetus's 78 correctly rounded tests (`tests/crmath.tcyr`), 64 of bijli's own on tan, sinh, cosh
   and asin (`tests/crmath_bijli.tcyr`), 148 of kimiya's on src/crmath_kx.cyr (`tests/crmath_kx.tcyr`, generated), 61 on
   errors and the record (`tests/error.tcyr`, error.rs's 10 among them), 21 on logging (`tests/log.tcyr`), 52 on
-  BjComplex (`tests/complex.tcyr`), 182 on field (`tests/field.tcyr`, all 105 of field.rs's tests), 48 on maxwell
+  BjComplex (`tests/complex.tcyr`), 193 on field (`tests/field.tcyr`, all 105 of field.rs's tests), 48 on maxwell
   (`tests/maxwell.tcyr`, maxwell.rs's 18), 66 on charge (`tests/charge.tcyr`, charge.rs's 26), 97 on material
-  (`tests/material.tcyr`, 39 of material.rs's 42), 149 on wave (`tests/wave.tcyr`, all 63 of wave.rs's), 104 on circuit
-  (`tests/circuit.tcyr`, all 51 of circuit.rs's), 138 on relativity (`tests/relativity.tcyr`, all 48 of
-  relativity.rs's), 208 on polarization (`tests/polarization.tcyr`, all 69 of polarization.rs's), 116 on scattering
-  (`tests/scattering.tcyr`, all 32), 172 on beam (`tests/beam.tcyr`, all 60), 266 on rf (`tests/rf.tcyr`, 75 of rf.rs's
-  80; 5 n/a), 33 on the bridges (`tests/bridge.tcyr`, all 18 of bridge.rs's), 56 on the soorat structs and their JSON (`tests/soorat.tcyr`, all 14 of soorat.rs's), 45 on the daimon/hoosh client (`tests/ai.tcyr`, all 10 of ai.rs's, three against a one-shot local server), 31 cross-module checks (`tests/integration.tcyr`, all 26 of tests/integration.rs's), 91 on the 1D FDTD grid (`tests/fdtd1d.tcyr`, 23 of fdtd.rs's 1D tests; 1 n/a), 78 on the pulses and TF/SF (`tests/fdtd_source.tcyr`, all 22 of theirs), 75 on the media and the subpixel averages (`tests/fdtd_media.tcyr`, all 20 of theirs), 100 on the FDTD utilities (`tests/fdtd_util.tcyr`, all 25), 35 on NF2FF (`tests/nf2ff.tcyr`, all 10), 44 on the CPML layer (`tests/cpml.tcyr`), 80 on the 2D grid and its CPML (`tests/fdtd2d.tcyr`), 92 on the 3D grid and its CPML (`tests/fdtd3d.tcyr`), 36 on the compute backend (`tests/compute.tcyr`, all 18 of compute.rs's) and 105 on the JSON (`tests/json.tcyr`, Cyrius-only), every unit through `tests/lib.cyr`; execution coverage
+  (`tests/material.tcyr`, 39 of material.rs's 42), 149 on wave (`tests/wave.tcyr`, all 63 of wave.rs's), 108 on circuit
+  (`tests/circuit.tcyr`, all 51 of circuit.rs's), 140 on relativity (`tests/relativity.tcyr`, all 48 of
+  relativity.rs's), 208 on polarization (`tests/polarization.tcyr`, all 69 of polarization.rs's), 126 on scattering
+  (`tests/scattering.tcyr`, all 32), 175 on beam (`tests/beam.tcyr`, all 60), 269 on rf (`tests/rf.tcyr`, 75 of rf.rs's
+  80; 5 n/a), 33 on the bridges (`tests/bridge.tcyr`, all 18 of bridge.rs's), 62 on the soorat structs and their JSON (`tests/soorat.tcyr`, all 14 of soorat.rs's), 50 on the daimon/hoosh client (`tests/ai.tcyr`, all 10 of ai.rs's, three against a one-shot local server), 33 cross-module checks (`tests/integration.tcyr`, all 26 of tests/integration.rs's), 91 on the 1D FDTD grid (`tests/fdtd1d.tcyr`, 23 of fdtd.rs's 1D tests; 1 n/a), 78 on the pulses and TF/SF (`tests/fdtd_source.tcyr`, all 22 of theirs), 75 on the media and the subpixel averages (`tests/fdtd_media.tcyr`, all 20 of theirs), 103 on the FDTD utilities (`tests/fdtd_util.tcyr`, all 25), 35 on NF2FF (`tests/nf2ff.tcyr`, all 10), 44 on the CPML layer (`tests/cpml.tcyr`), 89 on the 2D grid and its CPML (`tests/fdtd2d.tcyr`), 95 on the 3D grid and its CPML (`tests/fdtd3d.tcyr`), 43 on the compute backend (`tests/compute.tcyr`, all 18 of compute.rs's) and 107 on the JSON (`tests/json.tcyr`, Cyrius-only), every unit through `tests/lib.cyr`; execution coverage
   449/449 fns, the scaffold's smoke group (2 assertions), the bench twins (`tests/bijli.bcyr`: all 80 Rust
   benches) and the fuzz harnesses of the Touchstone reader (`tests/bijli.fcyr`) and the 31 JSON readers
   (`tests/json.fcyr`). The ledger

@@ -17,7 +17,7 @@ stdlib = ["syscalls", "string", "alloc", "str", "fmt", "io", "vec", "math", "gan
 
 [deps.bijli]
 git = "https://github.com/MacCracken/bijli.git"
-tag = "2.0.0"
+tag = "2.0.1"
 modules = ["dist/bijli.cyr"]
 ```
 

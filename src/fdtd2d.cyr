@@ -492,7 +492,7 @@ fn _bj_fd2_energy_ux(sim: *BjFdtd2d): f64 {
 # BjFdtd2d_free. dt and the coefficients are rounded once (ADR 0002 row 13, M6 part 4a). Mirrors `Fdtd2d::new`.
 #must_use
 public fn BjFdtd2d_new(nx, ny, dx: f64, mode, out: *BjFdtd2d): Result {
-    memset(out, 0, sizeof(BjFdtd2d));
+    _bj_zero(out, sizeof(BjFdtd2d));
     if (mode != BJ_MODE2D_TM && mode != BJ_MODE2D_TE) {
         var tm = _bj_err_reason(BJ_ERR_INVALID_PARAMETER);
         _bj_tx_cstr(tm, "unknown 2D mode ");

@@ -103,7 +103,7 @@ fn _bj_ts_alloc(ports, z0: f64, points, out: *BjTouchstoneData): i64 {
 # set and set_z0.
 #must_use
 public fn BjTouchstoneData_new(ports, z0: f64, points, out: *BjTouchstoneData): Result {
-    memset(out, 0, sizeof(BjTouchstoneData));
+    _bj_zero(out, sizeof(BjTouchstoneData));
     if (ports < 0 || points < 0) {
         var t = _bj_err_reason(BJ_ERR_ALLOCATION);
         _bj_tx_cstr(t, "Touchstone data of ");
@@ -761,7 +761,7 @@ public fn _bj_ts_format_name(fmt): i64 {
 # last record, or no record at all; Allocation when the buffers can't be had. Mirrors `rf::parse_touchstone`.
 #must_use
 public fn bj_parse_touchstone(content, len, ports, out: *BjTouchstoneData): Result {
-    memset(out, 0, sizeof(BjTouchstoneData));
+    _bj_zero(out, sizeof(BjTouchstoneData));
     if (ports <= 0 || ports > _BJ_TS_MAX_PORTS) {
         var t = _bj_err_reason(BJ_ERR_INVALID_PARAMETER);
         _bj_tx_cstr(t, "Touchstone port count must be in 1..=256, got ");

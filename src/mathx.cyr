@@ -11,6 +11,7 @@
 #   adopted by bijli's ADR 0001), and so are tan (bijli's, on impetus's sin and cos), acos, log10 (kimiya's) and
 #   asin (src/crmath_k.cyr): the same bits on every target, matching the corrected oracle. cbrt is ganita's,
 #   already correctly rounded.
+# One helper is no std method: _bj_zero, which empties a constructor's `out` (ADR 0002 row 48) a word at a time.
 # Adapted from impetus's src/mathx.cyr (its `_im_` helpers).
 
 # `std::f64::consts::PI`, the double nearest π (0x400921FB54442D18). Rust folds `4.0 * PI * EPSILON_0` and the like at
@@ -268,4 +269,20 @@ fn _bj_ln(x: f64): f64 {
 fn _bj_log10(x: f64): f64 {
     var r: f64 = _bj_k_cr_log10(x);
     return r;
+}
+
+# Sets the n bytes at p to 0, as memset(p, 0, n) does: an owning constructor empties its `out` this way before it can
+# fail (ADR 0002 row 48). The stdlib's memset stores a byte at a time, about 1 ns a byte (64 ns for a BjMieResult);
+# this stores words, then the byte tail.
+fn _bj_zero(p, n): i64 {
+    var i = 0;
+    while (i + 8 <= n) {
+        store64(p + i, 0);
+        i = i + 8;
+    }
+    while (i < n) {
+        store8(p + i, 0);
+        i = i + 1;
+    }
+    return 0;
 }
