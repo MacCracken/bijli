@@ -1945,6 +1945,13 @@ public fn bj_lienard_wiechert_fields(charge: f64, observer_pos: *f64, observatio
     var rz: f64 = observer_pos[2] - st[2];
     var r_vec: BjFieldVector = BjFieldVector_new(rx, ry, rz);
     var r_mag: f64 = r_vec.magnitude();
+    # A retarded position that isn't finite (each sample the solver took was, but not the one at t_r) makes R NaN or
+    # infinite, which bj_lienard_wiechert_e refuses (ADR 0002 row 27, amended 2.0.1, H26: the fields went on to their
+    # range-edge path, which takes a finite R). An R that overflows from finite positions is row 18's, below.
+    if (_bj_vx_finite4(st[0], st[1], st[2], 0.0) == 0) {
+        if (r_mag != r_mag) { return Err(_bj_err_invalid_parameter("R vector must not contain NaN")); }
+        return Err(_bj_err_invalid_parameter("R vector must be finite"));
+    }
     var band = _bj_x_band(r_mag, _BJ_FIELD_R2_MIN);       # the exact |observer − position| (ADR 0002 row 17's rule)
     if (band == 2) { band = _bj_x_r2_below(observer_pos, &st, 60); }
     if (band == 1) { return Err(_bj_err_singularity()); }

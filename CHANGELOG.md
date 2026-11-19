@@ -15,6 +15,23 @@ The 2.0.1 audit and its repairs (`docs/development/port-parity.md` §142, findin
   for 2.0.0, but only the TF/SF source followed it (H14).
 
 ### Changed
+- **relativity** — `bj_lienard_wiechert_fields` refuses a retarded position that isn't finite (a trajectory finite at
+  every sample the solver took, but not at t_r) as `bj_lienard_wiechert_e` refuses its R: "R vector must not contain
+  NaN", or "must be finite". The fields used to take it to their range-edge path, whose bounds assume a finite R
+  (ADR 0002 row 27, amended; H26).
+- **scattering** — `bj_rayleigh_cross_section` and `bj_rayleigh_efficiency` refuse a non-finite m with `bj_mie`'s
+  text, and `bj_rayleigh_angular_intensity` refuses a cross-section that isn't finite and non-negative; Rust returned
+  Ok(NaN), ±∞ or a negative intensity (new ADR 0002 row 49, 305 golden rows mapped; H27).
+- **fdtd** — the 2D and 3D grids, the CPML's profiles and its auxiliary fields report a refused block as Allocation
+  ("allocation failed: {n} grid values"), as the 1D grid does; Rust's `try_filled` said InvalidParameter (ADR 0002
+  row 9, amended; 5 golden rows mapped; H28). The size caps that cited freelist's "2 GiB largest request" (CPML,
+  NF2FF, soorat, the non-uniform grid, the eigenmodes) rise to 2^60 bytes: freelist maps any size, so larger grids
+  and spectra that Rust accepts are now attempted (H30).
+- **compute** — `BjGpuFdtd2d_add_source` keeps Rust's checked nx·ny: InvalidParameter "grid {nx}x{ny} is too large"
+  where a consumer's fields multiply past 2^64 (H29).
+- **ai** — a negative endpoint or key length is InvalidParameter ("daimon endpoint length must be non-negative, got
+  n"), where it was Allocation. A logged endpoint has its control bytes written as `\xNN`, and the success log
+  prints the id alone, not the caller's whole text (ADR 0002 row 46, amended; H31).
 - **every owning constructor and reader** — on an error, `out` is left empty (every word 0), so its `_free` does
   nothing; 2.0.0 left it untouched, and a `_free` after a failure (a `defer`) freed whatever the stack held. This
   covers the FDTD grids, the CPML, the TF/SF source, the non-uniform grid, the CW accumulator, the eigenmodes, NF2FF,

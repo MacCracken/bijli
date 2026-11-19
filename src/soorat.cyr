@@ -11,8 +11,10 @@
 
 private
 
-# freelist's largest request, 2 GiB.
-var _BJ_SO_FL_MAX = 2147483648;
+# The largest block a size here asks for, 2^60 bytes (2.0.1, H30): below it no size overflows, and freelist maps
+# any size it gets, so a block too large to have is the system's to refuse (Allocation). (2.0.0 capped it at
+# 2 GiB, the bump allocator's limit, not freelist's.)
+var _BJ_SO_FL_MAX = 1152921504606846976;
 
 # A 2D slice of an FDTD field for heatmap rendering: `values` (values_len f64, row-major, values[y·nx + x]), the
 # grid's (nx, ny) in `dimensions`, the slice's world-space origin (its min corner, m) and spacing (m), the component's

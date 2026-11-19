@@ -555,8 +555,9 @@ fn main() {
     var tq3, vq3 = BjFdtd2d_new(3, 3, -0.5, BJ_MODE2D_TE, &q);
     assert(text_is(bj_last_error_display(), "invalid parameter: dx must be finite and positive, got -0.5") == 1, "dx");
     var tq4, vq4 = BjFdtd2d_new(1 << 32, 1 << 30, DX, BJ_MODE2D_TM, &q);
-    var wq4 = "invalid parameter: cannot allocate 4611686018427387904 grid values";
-    assert(text_is(bj_last_error_display(), wq4) == 1, "2^62 cells");
+    var wq4 = "allocation failed: 4611686018427387904 grid values";
+    assert(vq4 == BJ_ERR_ALLOCATION && text_is(bj_last_error_display(), wq4) == 1,
+      "2^62 cells: Allocation, as the 1D grid's (ADR 0002 row 9, 2.0.1)");
     var tq5, vq5 = BjFdtd2d_new(5, 5, DX, 2, &q);
     var wq5 = "invalid parameter: unknown 2D mode 2";
     assert(text_is(bj_last_error_display(), wq5) == 1, "a mode word neither TM nor TE");

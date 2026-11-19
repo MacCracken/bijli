@@ -1955,8 +1955,10 @@ public fn BjMode2d_from_json(buf, len, out: *i64): Result {
 
 # ── soorat's visualization types (M7 part 1b-2) ──────────────────────────────────────────────────────────────────────
 
-# The largest count a writer takes: freelist's largest block is 2 GiB, so no array a constructor or reader made is
-# longer. A hand-filled struct claiming more is refused as Allocation before anything is written.
+# The largest count a writer takes, 2^28 values: a document's buffer, at most 80 bytes a value, then stays below 2^35
+# bytes, and every sum of such sizes (a visualization's lines) below 2^63. A longer array, a document of tens of
+# gigabytes, is refused as Allocation before anything is written (2.0.1: 2.0.0 tied the cap to freelist's 2 GiB,
+# which freelist doesn't have).
 var _BJ_JW_MAX = 268435456;
 
 # Appends the bytes [s, s + k) as a JSON string, escaped as serde_json escapes it: `"` and `\` after a backslash, the

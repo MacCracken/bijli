@@ -133,13 +133,13 @@ public fn _bj_fd2_pos(x: f64): i64 {
     return 0;
 }
 
-# Records InvalidParameter "cannot allocate {n} grid values" (Rust's `try_filled`); returns its code.
+# Records Allocation "{n} grid values" and returns its code: Rust's `try_filled` refusal, InvalidParameter "cannot
+# allocate {n} grid values", as the 1D grid's already was (ADR 0002 row 9, 2.0.1, H28).
 public fn _bj_fd2_alloc_err(n): i64 {
-    var t = _bj_err_reason(BJ_ERR_INVALID_PARAMETER);
-    _bj_tx_cstr(t, "cannot allocate ");
+    var t = _bj_err_reason(BJ_ERR_ALLOCATION);
     _bj_tx_u64(t, n);
     _bj_tx_cstr(t, " grid values");
-    return BJ_ERR_INVALID_PARAMETER;
+    return BJ_ERR_ALLOCATION;
 }
 
 # The E-update coefficients (C_a, C_b) for ε_r and σ: C_a = (1 − σΔt/2ε)/(1 + σΔt/2ε), C_b = (Δt/(εΔx))/(1 +
@@ -816,13 +816,13 @@ impl BjFdtd2d {
             }
         }
         if (blk == 0) {
-            var e3 = _bj_err_reason(BJ_ERR_INVALID_PARAMETER);
-            _bj_tx_cstr(e3, "cannot allocate CPML auxiliary fields for a ");
+            var e3 = _bj_err_reason(BJ_ERR_ALLOCATION);
+            _bj_tx_cstr(e3, "CPML auxiliary fields for a ");
             _bj_tx_u64(e3, nx);
             _bj_tx_cstr(e3, "×");
             _bj_tx_u64(e3, ny);
             _bj_tx_cstr(e3, " grid");
-            return Err(BJ_ERR_INVALID_PARAMETER);
+            return Err(BJ_ERR_ALLOCATION);
         }
         if (_bj_log_on(4) == 1) {
             var cl: *BjCpml = _bj_fd2_cpmlp(blk);

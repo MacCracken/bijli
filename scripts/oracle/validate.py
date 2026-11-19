@@ -922,6 +922,10 @@ def ip_err(reason):
     return [("E", "InvalidParameter"), ("s", "invalid parameter: " + reason)]
 
 
+def alloc_err(reason):
+    return [("E", "Allocation"), ("s", "allocation failed: " + reason)]
+
+
 def dz_err(context):
     return [("E", "DivisionByZero"), ("s", "division by zero in EM calculation: " + context)]
 
@@ -3515,6 +3519,10 @@ def rel_solver_rust(fn, ins, P, O, K):
         return ip_err(f"trajectory returned a non-finite acceleration at t = {rust_display(t_r)}")
     rv = [obs[i] - pos[i] for i in range(3)]
     r_mag = O["mag"](rv)
+    if O["port"] and not _fin(*pos):                # row 27, amended 2.0.1 (H26): a non-finite retarded position
+        if math.isnan(r_mag):
+            return ip_err("R vector must not contain NaN")
+        return ip_err("R vector must be finite")
     if rel_r_below(obs, pos, r_mag, O):
         return SINGULAR
     inv = fdiv(1.0, r_mag)
@@ -3673,8 +3681,9 @@ def relativity_adr_rows(root: Path, path: Path) -> list:
             continue
         # 27: the NaN R; 17: the exact |R| test; 13: the round-once functions; 18: the vector operations alone; 30: γ
         # (alone or with the vector operations).
-        if (fn == "relativity::lienard_wiechert_e" and port[0] == ("E", "InvalidParameter")
-                and port[1][1].endswith("must not contain NaN") and rust[0][0] != "E"):
+        if (fn in ("relativity::lienard_wiechert_e", "relativity::lienard_wiechert_fields")
+                and port[0] == ("E", "InvalidParameter") and port[1][1].endswith("must not contain NaN")
+                and rust[0][0] != "E"):
             row = 27
         elif port[0] == ("E", "InvalidParameter") and port[1][1].endswith("R vector must be finite"):
             row = 27                                     # amended (M2 part 2d-3e): an ∞ R refused
@@ -4485,7 +4494,7 @@ def sc_phase_ux(c):
     return ux_mul(ux(0.75), ux_add(ux(1.0), ux_mul(ux(c), ux(c))))
 
 
-def sc_eval(fn, v, P, cx14=False, r13=False, r17=False, r18=False):
+def sc_eval(fn, v, P, cx14=False, r13=False, r17=False, r18=False, r49=False):
     """scattering.rs's outputs for a row on the primitives P; cx14=True for the port's BjComplex products and |z|² in
     Rayleigh (row 14 at a range edge), r13=True for its cross_section_from_efficiency rounded once (row 13, M3 part
     2b), r17=True for mie's exact |m|·x limit (row 17, M3 part 2c-1), r18=True for Rayleigh's chains with an unbounded
@@ -4524,6 +4533,8 @@ def sc_eval(fn, v, P, cx14=False, r13=False, r17=False, r18=False):
         bad = positive("radius", a) or positive("wavelength", lam)
         if bad:
             return bad
+        if r49 and not (math.isfinite(mre) and math.isfinite(mim)):     # 2.0.1 (H27): mie's refusal
+            return ip_err(f"refractive index must be finite, got {cx_fmt(mre, mim)}")
         if r18 and math.isfinite(mre) and math.isfinite(mim):
             try:
                 k = sc_k2_ux(mre, mim)
@@ -4545,6 +4556,8 @@ def sc_eval(fn, v, P, cx14=False, r13=False, r17=False, r18=False):
         bad = positive("size parameter", x)
         if bad:
             return bad
+        if r49 and not (math.isfinite(mre) and math.isfinite(mim)):
+            return ip_err(f"refractive index must be finite, got {cx_fmt(mre, mim)}")
         if r18 and math.isfinite(mre) and math.isfinite(mim):
             try:
                 k = sc_k2_ux(mre, mim)
@@ -4568,6 +4581,8 @@ def sc_eval(fn, v, P, cx14=False, r13=False, r17=False, r18=False):
             return ip_err("distance must not be NaN")
         if abs(d) < 1e-30:
             return [("E", "Singularity"), ("s", "singularity: field evaluation at source point (distance = 0)")]
+        if r49 and not (math.isfinite(cs) and cs >= 0.0):            # 2.0.1 (H27)
+            return ip_err(f"cross-section must be finite and non-negative, got {rust_display(cs)}")
         if r18 and math.isfinite(cs) and math.isfinite(d) and math.isfinite(c):
             q = ux_div(ux(cs), ux_mul(ux(d), ux(d)))
             return [("f", ux_fin(ux_div(ux_mul(q, sc_phase_ux(c)), ux(4.0 * SC_PI), lambda t: t)))]
@@ -4674,10 +4689,12 @@ def scattering_adr_rows(path: Path) -> list:
             out.append((fn, ins, wire(port), "17", f"oracle {outs}; ADR 0002 row 17"))
             continue
         P = SC_P_MPFR if cls == "C" else SC_P_GLIBC
-        expect, port = sc_eval(fn, v, P), sc_eval(fn, v, P, cx14=True, r13=True, r18=True)
+        expect, port = sc_eval(fn, v, P), sc_eval(fn, v, P, cx14=True, r13=True, r18=True, r49=True)
         if toks_same(port, expect):
             continue
         row = "13" if fn == "scattering::cross_section_from_efficiency" else "18"
+        if toks_same(port, sc_eval(fn, v, P, r49=True)) and port[0][0] == "E":
+            row = "49"
         out.append((fn, ins, wire(port), row, f"oracle {outs}; ADR 0002 row {row}"))
     return out
 
@@ -10832,6 +10849,8 @@ def cpml_profiles(t, m, sr, km, am, dx, dt, P, C, port=frozenset()):
         sigma_max = rn_frac(rnd53(rnd53(Fraction(sr) * Fraction(0.8)) * Fraction(m + 1.0))
                             / rnd53(Fraction(eta0) * Fraction(dx)))
     if t * 8 > (1 << 63) - 1:                      # try_reserve_exact's capacity overflow
+        if "9" in port:                            # the port's Allocation (ADR 0002 row 9, 2.0.1)
+            return alloc_err(f"{t} grid values"), None, None, None
         return ip_err(f"cannot allocate {t} grid values"), None, None, None
     tf = float(t)
     node, half = ([], [], []), ([], [], [])
@@ -10891,7 +10910,7 @@ def fd2_eval(fn, ins_raw, P, C, port=frozenset()):
 # (`fm_port`'s `LossyMaterial` model: Rust's `e_update_coefficients` is that chain). M6 part 4b: the CPML profile they
 # attach is the port's too ("40" and "18", `cpml_profiles`).
 
-FD2_PORT = frozenset({"40", "13", "18", "3"})    # the port's ADR 0002 rows in the 2D and 3D models (and the CPML's)
+FD2_PORT = frozenset({"40", "13", "18", "3", "9"})    # the port's ADR 0002 rows in the 2D and 3D models (and the CPML's)
 
 
 def fd23_setup(sim, dx, root2, port):
@@ -11284,6 +11303,8 @@ class Fd2Scripts:
         if nx * ny > FD_U64:
             return ip_err(f"grid [{nx}, {ny}] is too large")
         if nx * ny * 8 > (1 << 63) - 1:
+            if "9" in self.port:
+                return alloc_err(f"{nx * ny} grid values")
             return ip_err(f"cannot allocate {nx * ny} grid values")
         ops = fd2_ops(toks[4:])
         if self.prev is not None and raw[:len(self.prev)] == self.prev and self.sim is not None:
@@ -11405,6 +11426,8 @@ class Fd3:
         if max(lens) > FD_U64:
             return ip_err(f"CPML slabs for a [{nx}, {ny}, {nz}] grid are too large")
         if lens[1] * 8 > (1 << 63) - 1:
+            if "9" in self.port:
+                return alloc_err(f"{lens[1]} grid values")
             return ip_err(f"cannot allocate {lens[1]} grid values")
         self.cpml = (t, node, half, {name: [0.0] * lens[axis] for name, axis in Fd3.SLABS})
         return None
@@ -11712,6 +11735,8 @@ class Fd3Scripts:
         if n > FD_U64:
             return ip_err(f"grid [{nx}, {ny}, {nz}] is too large")
         if n * 8 > (1 << 63) - 1:
+            if "9" in self.port:
+                return alloc_err(f"{n} grid values")
             return ip_err(f"cannot allocate {n} grid values")
         ops = fd3_ops(toks[4:])
         if self.prev is not None and raw[:len(self.prev)] == self.prev and self.sim is not None:
@@ -12004,10 +12029,10 @@ def fdtd_2d3d_adr_rows(root: Path, path: Path) -> list:
     the port's model against Rust's chain; a row whose port value is the oracle's needs no mapping."""
     out = []
     rust, port = fd23_runs(root, path, frozenset()), fd23_runs(root, path, FD2_PORT)
-    subs = [("3", fd23_runs(root, path, frozenset({"3"}))), ("40", fd23_runs(root, path, frozenset({"40"}))),
-            ("13", fd23_runs(root, path, frozenset({"40", "13"})))]
-    notes = {"3": "refused as with_params (2.0.1)", "40": "the coefficients rounded once", "13": "rounded once",
-             "18": "the range edge"}
+    subs = [("9", fd23_runs(root, path, frozenset({"9"}))), ("3", fd23_runs(root, path, frozenset({"3", "9"}))),
+            ("40", fd23_runs(root, path, frozenset({"40"}))), ("13", fd23_runs(root, path, frozenset({"40", "13"})))]
+    notes = {"9": "Allocation, as the 1D grid's (2.0.1)", "3": "refused as with_params (2.0.1)",
+             "40": "the coefficients rounded once", "13": "rounded once", "18": "the range edge"}
     for n, (fn, _cls, ins, outs, _v) in enumerate(sc_lines(path)):
         if n not in port:
             continue

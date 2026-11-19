@@ -32,8 +32,10 @@ var _BJ_NF_INF: f64 = 0x7FF0000000000000;
 # std::f64::consts::PI, and 10⁻¹² (the accumulators' agreement test).
 var _BJ_NF_PI: f64 = 3.141592653589793;
 var _BJ_NF_REL12: f64 = 0.000000000001;
-# freelist's largest request, 2 GiB.
-var _BJ_NF_FL_MAX = 2147483648;
+# The largest block a size here asks for, 2^60 bytes (2.0.1, H30): below it no size overflows, and freelist maps
+# any size it gets, so a block too large to have is the system's to refuse (Allocation). (2.0.0 capped it at
+# 2 GiB, the bump allocator's limit, not freelist's.)
+var _BJ_NF_FL_MAX = 1152921504606846976;
 # 2^-1022, and 2^-959 and 2^-960: the rotation step's and the sums' absorption bounds (M5 part 2d-6).
 var _BJ_NF_DMIN: f64 = 0x0010000000000000;
 var _BJ_NF_2M959: f64 = 0x0400000000000000;

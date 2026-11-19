@@ -24,8 +24,10 @@ var _BJ_CPML_INF: f64 = 0x7FF0000000000000;
 var _BJ_CPML_DMIN: f64 = 0x0010000000000000;
 # The nodes required between opposite layers: a grid needs 2·thickness + 3 ≤ its smallest dimension.
 var _BJ_CPML_MIN_INTERIOR = 3;
-# freelist's largest request, 2 GiB: the six profiles' block caps the thickness at 2^31/48 layers.
-var _BJ_CPML_FL_MAX = 2147483648;
+# The largest block a size here asks for, 2^60 bytes (2.0.1, H30): below it no size overflows, and freelist maps any
+# size it gets, so a block too large to have is the system's to refuse (Allocation). The six profiles' block caps the
+# thickness at 2^60/48 layers. (2.0.0 capped it at 2 GiB, the bump allocator's limit, not freelist's.)
+var _BJ_CPML_FL_MAX = 1152921504606846976;
 
 # A word as a *f64 (the typed return keeps the binding typed).
 #must_use
@@ -409,11 +411,10 @@ public fn BjCpml_with_params(params: *BjCpmlParams, dx: f64, dt: f64, out: *BjCp
     var prof = 0;
     if (t > 0 && t <= _BJ_CPML_FL_MAX / 48) { prof = fl_alloc(t * 48); }
     if (prof == 0) {
-        var t3 = _bj_err_reason(BJ_ERR_INVALID_PARAMETER);
-        _bj_tx_cstr(t3, "cannot allocate ");
+        var t3 = _bj_err_reason(BJ_ERR_ALLOCATION);
         _bj_tx_u64(t3, t);
         _bj_tx_cstr(t3, " grid values");
-        return Err(BJ_ERR_INVALID_PARAMETER);
+        return Err(BJ_ERR_ALLOCATION);
     }
     var pb: *f64 = _bj_cpml_f64p(prof);
     _bj_cpml_sample(_bj_cpml_f64p(prof), _bj_cpml_f64p(prof + t * 8), _bj_cpml_f64p(prof + 2 * t * 8), t, 0.0,

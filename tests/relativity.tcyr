@@ -80,6 +80,55 @@ fn uniform_motion_delay(w: *f64, v: *f64): f64 {
     return r2;
 }
 
+# Calls of the counting trajectory so far, and the call from which it reports a NaN position (2.0.1 bite 4, H26).
+var _cnt_calls = 0;
+var _cnt_bad = 0;
+
+# A uniform motion along x at 0.1c from (1, 0, 0) at t = 0, writing position, velocity and acceleration at out; from
+# call _cnt_bad on (when it is positive), its position is NaN.
+fn counting_traj(t, out): i64 {
+    var tt: f64 = t;
+    var o: *f64 = as_f64p(out);
+    _cnt_calls = _cnt_calls + 1;
+    for (var k = 0; k < 9; k = k + 1) { o[k] = 0.0; }
+    var v: f64 = 0.1 * BJ_SPEED_OF_LIGHT;
+    o[0] = 1.0 + v * tt;
+    o[3] = v;
+    if (_cnt_bad > 0 && _cnt_calls >= _cnt_bad) {
+        var z: f64 = 0.0;
+        o[0] = z / z;
+    }
+    return 0;
+}
+
+# 2.0.1 bite 4 (port-parity §142, H26): the fields refuse a retarded position that isn't finite, as
+# bj_lienard_wiechert_e refuses its R (ADR 0002 row 27, amended).
+fn cyrius_audit_201(): i64 {
+    test_group("cyrius_audit_201_fields_position (2.0.1 bite 4, H26)");
+    var obs: f64[3];
+    obs[0] = 0.0;
+    obs[1] = 3.0;
+    obs[2] = 0.0;
+    # The solver alone, to count its calls; the fields make the same calls, then one more at t_r.
+    _cnt_calls = 0;
+    _cnt_bad = 0;
+    var ts, vs = bj_solve_retarded_time(&obs, 0.00000001, &counting_traj, 200);
+    var n = _cnt_calls;
+    var ev: BjFieldVector;
+    var bv: BjFieldVector;
+    _cnt_calls = 0;
+    _cnt_bad = n + 1;
+    var tf, vf = bj_lienard_wiechert_fields(0.000001, &obs, 0.00000001, &counting_traj, &ev, &bv);
+    var wf = "invalid parameter: R vector must not contain NaN";
+    assert(is_ok(ts) == 1 && n > 0 && is_err_result(tf) == 1 && vf == BJ_ERR_INVALID_PARAMETER &&
+      text_is(bj_last_error_display(), wf) == 1, "a NaN position at t_r alone: refused as row 27 refuses its R");
+    _cnt_calls = 0;
+    _cnt_bad = 0;
+    var tg, vg = bj_lienard_wiechert_fields(0.000001, &obs, 0.00000001, &counting_traj, &ev, &bv);
+    assert(is_ok(tg) == 1, "the same trajectory, finite at t_r: fields");
+    return 0;
+}
+
 # The parity harness's trajectories (m_relativity.rs's `trajectory`) over the parameters at pp: 0 static at p[0..3],
 # 1 uniform r₀ + v(t − t₀) (p[0..3], p[3..6], p[6]), 2 a circular orbit (R = p[0], ω = p[1]). They write position,
 # velocity and acceleration at out.
@@ -1320,6 +1369,7 @@ fn main(): i64 {
     rust_tests_d();
     cyrius_tests();
     cyrius_solver_tests();
+    cyrius_audit_201();
     return assert_summary();
 }
 

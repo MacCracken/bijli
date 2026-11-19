@@ -702,8 +702,9 @@ fn main() {
     var w23 = "invalid parameter: grid [4294967296, 4294967296, 3] is too large";
     assert(v23 == BJ_ERR_INVALID_PARAMETER && text_is(bj_last_error_display(), w23) == 1, "nx·ny·nz past 2^64");
     var t24, v24 = BjFdtd3d_new(1048576, 1048576, 1048576, DX, &e21);
-    var w24 = "invalid parameter: cannot allocate 1152921504606846976 grid values";
-    assert(v24 == BJ_ERR_INVALID_PARAMETER && text_is(bj_last_error_display(), w24) == 1, "2^60 cells");
+    var w24 = "allocation failed: 1152921504606846976 grid values";
+    assert(v24 == BJ_ERR_ALLOCATION && text_is(bj_last_error_display(), w24) == 1,
+      "2^60 cells: Allocation, as the 1D grid's (ADR 0002 row 9, 2.0.1)");
     var g25: BjFdtd3d;
     var t25, v25 = BjFdtd3d_new(5, 6, 7, DX, &g25);
     var r25a, r25av = g25.set_conductivity(0, 6, 0, 1, 1, 1, 1.0);

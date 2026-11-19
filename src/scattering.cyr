@@ -937,14 +937,29 @@ fn _bj_sc_positive(name, v: f64): i64 {
     return BJ_ERR_INVALID_PARAMETER;
 }
 
+# InvalidParameter "refractive index must be finite, got {m}" recorded (bj_mie's text) for an m with a part not finite
+# (ADR 0002 row 49, 2.0.1); its code. The callers test the parts inline (x − x is 0 exactly for a finite x), so the
+# common path makes no call.
+fn _bj_sc_index_bad(m: BjComplex): i64 {
+    var u = _bj_err_reason(BJ_ERR_INVALID_PARAMETER);
+    _bj_tx_cstr(u, "refractive index must be finite, got ");
+    m.display(u);
+    return BJ_ERR_INVALID_PARAMETER;
+}
+
 # σ = (8π/3)(2πr/λ)⁴ r² |K|², K = (m² − 1)/(m² + 2), for a sphere with x = 2πr/λ ≪ 1. |K|² is convention-free. With an
 # unbounded exponent where x⁴, m² or the product leave the range (ADR 0002 row 18, _bj_vx_ray_sigma). InvalidParameter
-# for a radius or wavelength not finite and positive. Mirrors `scattering::rayleigh_cross_section`.
+# for a radius or wavelength not finite and positive, then for an m not finite ("refractive index must be finite",
+# bj_mie's text: ADR 0002 row 49, 2.0.1; Rust went on to Ok(NaN)). Mirrors `scattering::rayleigh_cross_section`.
 #must_use
 public fn bj_rayleigh_cross_section(radius: f64, wavelength: f64, m: BjComplex): Result {
     var c = _bj_sc_positive("radius", radius);
     if (c == 0) { c = _bj_sc_positive("wavelength", wavelength); }
     if (c != 0) { return Err(c); }
+    var mre: f64 = m.re;
+    var mim: f64 = m.im;
+    var fin: f64 = (mre - mre) + (mim - mim);
+    if (fin != 0.0) { return Err(_bj_sc_index_bad(m)); }
     var w: f64[1];
     if (_bj_vx_ray_sigma(radius, wavelength, m.re, m.im, &w) != 0) { return Err(_bj_sc_dz()); }
     var s: f64 = w[0];
@@ -952,11 +967,16 @@ public fn bj_rayleigh_cross_section(radius: f64, wavelength: f64, m: BjComplex):
 }
 
 # Q_sca = σ/(πr²) = (8/3)x⁴|K|², with an unbounded exponent at a range edge (ADR 0002 row 18, _bj_vx_ray_q).
-# InvalidParameter for an x not finite and positive. Mirrors `scattering::rayleigh_efficiency`.
+# InvalidParameter for an x not finite and positive, then for an m not finite (row 49, as the cross-section). Mirrors
+# `scattering::rayleigh_efficiency`.
 #must_use
 public fn bj_rayleigh_efficiency(x: f64, m: BjComplex): Result {
     var c = _bj_sc_positive("size parameter", x);
     if (c != 0) { return Err(c); }
+    var mre: f64 = m.re;
+    var mim: f64 = m.im;
+    var fin: f64 = (mre - mre) + (mim - mim);
+    if (fin != 0.0) { return Err(_bj_sc_index_bad(m)); }
     var w: f64[1];
     if (_bj_vx_ray_q(x, m.re, m.im, &w) != 0) { return Err(_bj_sc_dz()); }
     var q: f64 = w[0];
@@ -976,8 +996,9 @@ public fn bj_rayleigh_phase_function(cos_theta: f64): f64 {
 
 # I/I₀ = (σ/r²)·P(θ)/(4π) = 3σ(1 + cos²θ)/(16πr²) at distance r for unpolarized light; σ the total cross-section (m²),
 # for instance from bj_rayleigh_cross_section; with an unbounded exponent where r², σ/r² or its product by P leave the
-# range (ADR 0002 row 18, _bj_vx_ray_ang). InvalidParameter for a NaN distance, Singularity when |r| < 1e-30. Mirrors
-# `scattering::rayleigh_angular_intensity`.
+# range (ADR 0002 row 18, _bj_vx_ray_ang). InvalidParameter for a NaN distance, Singularity when |r| < 1e-30, then
+# InvalidParameter for a cross-section not finite and non-negative (ADR 0002 row 49, 2.0.1: Rust went on to Ok(NaN)
+# or a negative intensity). Mirrors `scattering::rayleigh_angular_intensity`.
 #must_use
 public fn bj_rayleigh_angular_intensity(cross_section: f64, distance: f64, cos_theta: f64): Result {
     if (distance != distance) {
@@ -986,6 +1007,9 @@ public fn bj_rayleigh_angular_intensity(cross_section: f64, distance: f64, cos_t
     }
     var ad: f64 = f64_abs(distance);
     if (ad < 0.000000000000000000000000000001) { return Err(_bj_err_singularity()); }
+    if (_bj_is_finite(cross_section) == 0 || cross_section < 0.0) {
+        return Err(_bj_sc_bad("cross-section must be finite and non-negative, got ", cross_section, ""));
+    }
     var r: f64 = _bj_vx_ray_ang(cross_section, distance, cos_theta);
     return Ok(r);
 }

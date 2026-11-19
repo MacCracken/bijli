@@ -551,6 +551,24 @@ fn main() {
     assert(text_is(r1e, "invalid parameter: host slice length 16 does not match buffer length 0") == 1,
       "the CPU backend's text for an empty buffer (H6)");
 
+    test_group("cyrius_audit_201_add_source (2.0.1 bite 4, H29)");
+    # nx·ny past 2^64 (the fields are a consumer's to write): Rust's checked_mul refusal, not a wrapped count.
+    var g26: BjGpuFdtd2d<BjCpuBackend>;
+    var t26, v26 = BjGpuFdtd2d_new(4, 4, DX, cpu, &g26);
+    var ox = g26.nx;
+    var oy = g26.ny;
+    g26.nx = 8589934592;
+    g26.ny = 4294967296;
+    var a26, b26 = BjGpuFdtd2d_add_source(&g26, 0, 0, 1.0);
+    var w26 = "invalid parameter: grid 8589934592x4294967296 is too large";
+    assert(is_ok(t26) == 1 && is_err_result(a26) == 1 && b26 == BJ_ERR_INVALID_PARAMETER &&
+      text_is(bj_last_error_display(), w26) == 1, "nx·ny past 2^64 refused with Rust's text");
+    g26.nx = ox;
+    g26.ny = oy;
+    var a27, b27 = BjGpuFdtd2d_add_source(&g26, 1, 1, 1.0);
+    assert(is_ok(a27) == 1, "and the grid as built takes its source");
+    BjGpuFdtd2d_free(&g26);
+
     test_group("cyrius_audit_201_failed_buffer (2.0.1 bite 1b, H15)");
     # A backend whose third buffer fails: the two made are given back and out is empty, so its free does nothing.
     var fb: FailBackend;

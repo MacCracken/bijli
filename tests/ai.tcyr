@@ -430,6 +430,25 @@ fn main() {
     var sclc: *BjDaimonConfig = scl.config();
     assert(dc.endpoint == 0 && hc.endpoint == 0 && sclc.endpoint == 0, "every block given back");
 
+    test_group("cyrius_audit_201_config_lengths (2.0.1 bite 4, H31)");
+    # A negative length is InvalidParameter (it was Allocation), with out empty.
+    var nlc: BjDaimonConfig;
+    var nl1, nl2 = BjDaimonConfig_new("http://x", 0 - 1, 0, 0, &nlc);
+    var nlw = "invalid parameter: daimon endpoint length must be non-negative, got -1";
+    assert(is_err_result(nl1) == 1 && nl2 == BJ_ERR_INVALID_PARAMETER && text_is(bj_last_error_display(), nlw) == 1 &&
+      nlc.endpoint == 0, "a negative endpoint length");
+    var nl3, nl4 = BjDaimonConfig_new("http://x", 8, "k", 0 - 2, &nlc);
+    assert(is_err_result(nl3) == 1 && nl4 == BJ_ERR_INVALID_PARAMETER, "a negative key length");
+    var nlh: BjHooshConfig;
+    var nl5, nl6 = BjHooshConfig_new("http://x", 0 - 3, &nlh);
+    assert(is_err_result(nl5) == 1 && nl6 == BJ_ERR_INVALID_PARAMETER && nlh.endpoint == 0, "a negative hoosh length");
+    # A logged endpoint has its control bytes escaped.
+    var esb[64];
+    var est[24];
+    bj_text_init(&est, &esb, 64);
+    _bj_ai_tx_escaped(&est, "a\nb\x1bc\x7f", 6);
+    assert(text_is(bj_text_ptr(&est), "a\\x0ab\\x1bc\\x7f") == 1, "LF, ESC and DEL written as \\xNN");
+
     test_group("cyrius_audit_201_deadline (2.0.1 bite 2a, H19)");
     # A listener that never accepts: the connect completes in its backlog and the request is buffered, but no answer
     # comes. The deadline now bounds each read (sandhi checked it only between reads, so the first read blocked).

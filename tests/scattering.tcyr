@@ -105,6 +105,37 @@ fn cyrius_audit_201(): i64 {
     var hp = "invalid parameter: Mie series over/underflowed for x = ";
     assert(is_err_result(ht) == 1 && hv == BJ_ERR_INVALID_PARAMETER && memeq(hd, hp, strlen(hp)) == 1 && hr.a == 0,
       "returns Rust's series error, out empty");
+    test_group("cyrius_audit_201_rayleigh (2.0.1 bite 4, H27)");
+    # A non-finite m is refused with mie's text, after Rust's radius and wavelength checks (ADR 0002 row 49).
+    var rz: f64 = 0.0;
+    var rnan: f64 = rz / rz;
+    var rinf: f64 = 1.0 / rz;
+    var ra, rb = bj_rayleigh_cross_section(0.0000001, 0.0000005, BjComplex_new(rnan, 0.0));
+    var rp = "invalid parameter: refractive index must be finite, got ";
+    var rd = bj_last_error_display();
+    assert(is_err_result(ra) == 1 && rb == BJ_ERR_INVALID_PARAMETER && memeq(rd, rp, strlen(rp)) == 1,
+      "the cross-section refuses a NaN m (Rust's Ok(NaN))");
+    var rc, rcv = bj_rayleigh_cross_section(0.0 - 1.0, 0.0000005, BjComplex_new(rnan, 0.0));
+    var wrc = "invalid parameter: radius must be positive and finite, got -1";
+    assert(is_err_result(rc) == 1 && reason_is2(wrc, "") == 1,
+      "the radius is checked first, as Rust's");
+    var re1, re2 = bj_rayleigh_efficiency(0.1, BjComplex_new(1.5, rinf));
+    assert(is_err_result(re1) == 1 && re2 == BJ_ERR_INVALID_PARAMETER, "the efficiency refuses an infinite m");
+    var rok, rokv = bj_rayleigh_efficiency(0.1, BjComplex_new(1.5, 0.0));
+    assert(is_ok(rok) == 1, "a finite m still computes");
+    # The angular intensity refuses a cross-section that isn't finite and non-negative.
+    var ia1, ia2 = bj_rayleigh_angular_intensity(rnan, 1.0, 0.5);
+    var ib1, ib2 = bj_rayleigh_angular_intensity(0.0 - 1.0, 1.0, 0.5);
+    var wb = "invalid parameter: cross-section must be finite and non-negative, got -1";
+    var ibt = text_is(bj_last_error_display(), wb);
+    var ic1, ic2 = bj_rayleigh_angular_intensity(rinf, 1.0, 0.5);
+    var id1, id2 = bj_rayleigh_angular_intensity(0.0, 1.0, 0.5);
+    var idv: f64 = id2;
+    assert(is_err_result(ia1) == 1 && is_err_result(ib1) == 1 && ibt == 1 && is_err_result(ic1) == 1,
+      "NaN, −1 and ∞ refused");
+    assert(is_ok(id1) == 1 && idv == 0.0, "a zero cross-section: 0");
+    var ie1, ie2 = bj_rayleigh_angular_intensity(rnan, 0.0, 0.5);
+    assert(is_err_result(ie1) == 1 && ie2 == BJ_ERR_SINGULARITY, "the distance is checked first, as Rust's");
     return 0;
 }
 

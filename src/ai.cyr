@@ -80,6 +80,33 @@ fn _bj_ai_alloc_err(what): i64 {
     return BJ_ERR_ALLOCATION;
 }
 
+# Records InvalidParameter "<what> length must be non-negative, got <n>" (2.0.1, H31); returns its code.
+fn _bj_ai_bad_len(what, n): i64 {
+    var t = _bj_err_reason(BJ_ERR_INVALID_PARAMETER);
+    _bj_tx_cstr(t, what);
+    _bj_tx_cstr(t, " length must be non-negative, got ");
+    _bj_tx_i64(t, n);
+    return BJ_ERR_INVALID_PARAMETER;
+}
+
+# Appends [s, s + n) to the text t with each control byte (U+0000..U+001F, U+007F) written as \xNN, so that a logged
+# endpoint can't break a log line or reach a terminal (2.0.1, H31: it was logged raw, before register_agent's check).
+# Public for tests/ai.tcyr.
+public fn _bj_ai_tx_escaped(t, s, n) {
+    var hex = "0123456789abcdef";
+    for (var i = 0; i < n; i = i + 1) {
+        var c = load8(s + i);
+        if (c < 32 || c == 127) {
+            _bj_tx_cstr(t, "\\x");
+            _bj_tx_putc(t, load8(hex + (c >> 4)));
+            _bj_tx_putc(t, load8(hex + (c & 15)));
+        } else {
+            _bj_tx_putc(t, c);
+        }
+    }
+    return 0;
+}
+
 # 1 when [s, s + n) holds a control byte (U+0000..U+001F or U+007F), which can't go into a URL or a header.
 #must_use
 fn _bj_ai_has_control(s, n): i64 {
@@ -93,12 +120,15 @@ fn _bj_ai_has_control(s, n): i64 {
 # ── DaimonConfig ──────────────────────────────────────────────────────────────────────────────────────────────────
 
 # A daimon configuration in *out from the endpoint's endpoint_len bytes and the API key's api_key_len bytes (api_key 0
-# for None), each copied into a block of its own: Ok(0), Err(InvalidParameter) for bytes that are not UTF-8 ("daimon
+# for None), each copied into a block of its own: Ok(0), Err(InvalidParameter) for a negative length ("daimon
+# endpoint length must be non-negative, got n", 2.0.1: it was Allocation) or bytes that are not UTF-8 ("daimon
 # endpoint is not valid UTF-8 (an invalid sequence at byte k)", "daimon API key …"), or Err(Allocation), with out
 # empty. Rust's struct literal, whose `String` fields hold any UTF-8. Give it back with BjDaimonConfig_free.
 #must_use
 public fn BjDaimonConfig_new(endpoint, endpoint_len, api_key, api_key_len, out: *BjDaimonConfig): Result {
     memset(out, 0, sizeof(BjDaimonConfig));
+    if (endpoint_len < 0) { return Err(_bj_ai_bad_len("daimon endpoint", endpoint_len)); }
+    if (api_key != 0 && api_key_len < 0) { return Err(_bj_ai_bad_len("daimon API key", api_key_len)); }
     var be = _bj_ts_utf8_bad(endpoint, endpoint_len);
     if (be >= 0) { return Err(_bj_ai_not_utf8("daimon endpoint", be)); }
     if (api_key != 0) {
@@ -215,12 +245,13 @@ public fn BjDaimonConfig_from_json(buf, len, out: *BjDaimonConfig): Result {
 
 # ── HooshConfig ───────────────────────────────────────────────────────────────────────────────────────────────────
 
-# A hoosh configuration in *out from the endpoint's len bytes, copied: Ok(0), Err(InvalidParameter) for bytes that are
-# not UTF-8 ("hoosh endpoint is not valid UTF-8 (…)"), or Err(Allocation), with out empty. Rust's struct literal.
-# Give it back with BjHooshConfig_free.
+# A hoosh configuration in *out from the endpoint's len bytes, copied: Ok(0), Err(InvalidParameter) for a negative len
+# or for bytes that are not UTF-8 ("hoosh endpoint is not valid UTF-8 (…)"), or Err(Allocation), with out empty.
+# Rust's struct literal. Give it back with BjHooshConfig_free.
 #must_use
 public fn BjHooshConfig_new(endpoint, len, out: *BjHooshConfig): Result {
     memset(out, 0, sizeof(BjHooshConfig));
+    if (len < 0) { return Err(_bj_ai_bad_len("hoosh endpoint", len)); }
     var be = _bj_ts_utf8_bad(endpoint, len);
     if (be >= 0) { return Err(_bj_ai_not_utf8("hoosh endpoint", be)); }
     var e = _bj_ai_copy(endpoint, len);
@@ -309,7 +340,7 @@ public fn BjDaimonClient_new(config: *BjDaimonConfig, out: *BjDaimonClient): Res
         var lt[24];
         _bj_tx_init(&lt, &lb, 256);
         _bj_tx_cstr(&lt, "creating daimon client endpoint=");
-        _bj_tx_cstr(&lt, config.endpoint);
+        _bj_ai_tx_escaped(&lt, config.endpoint, config.endpoint_len);
         _bj_log_text(4, &lt);
     }
     var oc: *BjDaimonConfig = _bj_ai_cfgp(out);
@@ -422,8 +453,9 @@ impl BjDaimonClient {
         return 0;
     }
 
-    # Registers bijli as an agent with daimon and writes the assigned id's decimal text to the text t (ADR 0002 row
-    # 46: daimon's route). Sends `POST {endpoint}/v1/agents` (the endpoint's trailing slashes dropped, as Rust's
+    # Registers bijli as an agent with daimon and appends the assigned id's decimal text to the text t (ADR 0002 row
+    # 46: daimon's route); t needs room for 20 digits and a sign, and bj_text_overflowed says when it was cut. Sends
+    # `POST {endpoint}/v1/agents` (the endpoint's trailing slashes dropped, as Rust's
     # `trim_end_matches('/')`) with Rust's body `{"capabilities":["electric_fields","magnetic_fields","maxwell",
     # "charge_dynamics"],"name":"bijli"}` (serde_json's `json!` sorts the keys), `content-type: application/json`, and
     # `Authorization: Bearer <key>` when a key is set; one exchange, no redirect followed. The 30 s deadline
@@ -444,7 +476,7 @@ impl BjDaimonClient {
             var lt[24];
             _bj_tx_init(&lt, &lb, 256);
             _bj_tx_cstr(&lt, "registering agent with daimon endpoint=");
-            _bj_tx_cstr(&lt, cfg.endpoint);
+            _bj_ai_tx_escaped(&lt, cfg.endpoint, cfg.endpoint_len);
             _bj_log_text(4, &lt);
         }
         if (_bj_ai_has_control(cfg.endpoint, en) == 1) {
@@ -505,6 +537,7 @@ impl BjDaimonClient {
             _bj_jr_close(&rg);
             return Err(code);
         }
+        var n0 = _bj_tx_len(t);
         var tr, vr = _bj_ai_register_response(sandhi_http_status(resp), sandhi_http_body(resp),
           sandhi_http_body_len(resp), t);
         _bj_jr_close(&rg);
@@ -514,7 +547,7 @@ impl BjDaimonClient {
             var lt2[24];
             _bj_tx_init(&lt2, &lb2, 256);
             _bj_tx_cstr(&lt2, "registered with daimon agent_id=");
-            _bj_tx_cstr(&lt2, _bj_tx_ptr(t));
+            _bj_tx_cstr(&lt2, _bj_tx_ptr(t) + n0);           # the id alone, not what t held before (2.0.1)
             _bj_log_text(4, &lt2);
         }
         return Ok(0);

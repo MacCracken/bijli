@@ -8011,3 +8011,54 @@ H23–H25 of §142.
   among them). Parity and the 520 digests are unchanged and equal on x86_64 ELF, x86_64 PE and aarch64 (whole suites,
   one target at a time, each with only the recorded warnings). validate.py: 770,127 rows, 0 problems; 2,960
   assertions (3 new); coverage 449 of 449; the API snapshot unchanged. Next: bite 4, the results that change.
+
+## 149. 2.0.1 bite 4: the results that change (2026-11-18)
+
+H26–H31 of §142, each an ADR 0002 row (the user's answer of 2026-11-18). H29's TouchstoneData half was fixed in
+§143.
+- **H26** (src/relativity.cyr; row 27, amended): `bj_lienard_wiechert_fields` refuses a retarded position that isn't
+  finite with row 27's two texts: a NaN gives a NaN R, an ∞ an infinite R. My first fix tested R itself, and an
+  existing test caught it: a finite charge 2e308 from its observer overflows R in doubles, and row 18's edge path
+  computes it to 53 bits (E = 2.25e-307). So the test is on the position, and the non-finite-charge branch (Rust's
+  NaN for an overflowed R) stays. validate.py's port model refuses the same way. No golden row moves: every row's
+  position is finite.
+  - `cyrius_audit_201_fields_position` (2) counts the solver's trajectory calls alone, then lets the fields' own call
+    at t_r, the next one, return a NaN position. Against bite 3's src/ it returned Ok.
+- **H27** (src/scattering.cyr; row 49, new):
+  - `bj_rayleigh_cross_section` and `bj_rayleigh_efficiency` refuse an m with a part not finite with mie's text,
+    after Rust's checks (`_bj_sc_index_finite`).
+  - `bj_rayleigh_angular_intensity` refuses a cross-section that isn't finite and non-negative, after its distance
+    checks.
+  - validate.py's `sc_eval` gains `r49`, and `scattering_adr_rows` labels a row 49 when the refusal alone accounts
+    for it. `--write` maps 305 rows (241 angular intensities, 48 efficiencies, 16 cross-sections; 12 of them were
+    row 18's before). `cyrius_audit_201_rayleigh` (7).
+- **H28** (src/fdtd2d.cyr, src/cpml.cyr; row 9, amended): `_bj_fd2_alloc_err`, the CPML profile's refusal and its
+  auxiliary fields' are Allocation, "allocation failed: {n} grid values" (the count kept). validate.py gains
+  `alloc_err` and "9" in `FD2_PORT` at the four sites, and `fdtd_2d3d_adr_rows` tries {"9"} first, then {"3", "9"}
+  for the `Cpml::new` rows. `--write` maps 5 rows to row 9 (one 2D grid, two 3D, two `Cpml::with_params`), and the
+  2^64 − 1 `Cpml::new` and attach rows now carry Allocation. cpml.tcyr, fdtd2d.tcyr and fdtd3d.tcyr assert the new
+  code and text.
+- **H29** (src/compute.cyr): `BjGpuFdtd2d_add_source` multiplies nx·ny with `_bj_fd2_umul` and refuses an overflow
+  with Rust's text. `cyrius_audit_201_add_source` (2).
+- **H30** (src/cpml.cyr, src/nf2ff.cyr, src/soorat.cyr, src/fdtd_util.cyr): the four "freelist's largest request,
+  2 GiB" caps become 2^60 bytes, the bound under which every size at those sites stays below 2^63. freelist's large
+  path maps any size; the 2 GiB was lib/alloc.cyr's `ALLOC_MAX`. Nothing in the corpus or the tests reaches either
+  cap, and a test of a grid past 2 GiB would take the memory. The JSON writers' 2^28-value count stays, documented
+  now as the writers' own limit: their document sums stay below 2^63.
+- **H31** (src/ai.cyr; row 46, amended):
+  - `BjDaimonConfig_new` and `BjHooshConfig_new` refuse a negative length first (`_bj_ai_bad_len`).
+  - `_bj_ai_tx_escaped` writes a logged endpoint's control bytes as \xNN, in both log lines.
+  - `register_agent`'s success log prints only the text it appended, and its doc says t needs room for 20 digits and
+    a sign.
+  - `cyrius_audit_201_config_lengths` (4).
+- **Benchmarks**: two interleaved rounds against bite 3's src/ (load 0.8–1.0, nothing else running), median ratio
+  1.000 and 1.003. `scattering/rayleigh_cross_section` rose 72 → 81 ns in both, from the new check called with m by
+  value; inlined as x − x on the parts, with the error built only on the refusal path, it reads 75 ns (+4 %, 3 ns, in
+  a third run). `relativity/lienard_wiechert_fields_orbit_b099` +0.1 and +0.5 %, `lienard_wiechert_e` −0.3 and
+  +0.4 %; the 2D steps −1.4 and +1.5 %.
+- **Result**: the gate clean, all 17 steps (and the ELF parity, the bundles and the audit again after the
+  inlining). 21 modules, 645,972 ok, 0 failed, 124,155 accepted (ADR 01: 43,087; ADR 0002: 81,068, the 298 new: 293
+  rows of row 49 net of its 12 earlier row-18 mappings, and 5 of row 9). The digests of the 8 functions whose rows
+  moved change, and all 520 are equal on x86_64 ELF, x86_64 PE and aarch64 (whole suites, one target at a time, each
+  with only the recorded warnings). validate.py: 770,127 rows, 0 problems; 2,975 assertions (15 new); coverage 449
+  of 449; the API snapshot unchanged. Next: bite 5, the rules and the docs.

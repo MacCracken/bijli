@@ -25231,6 +25231,13 @@ public fn bj_lienard_wiechert_fields(charge: f64, observer_pos: *f64, observatio
     var rz: f64 = observer_pos[2] - st[2];
     var r_vec: BjFieldVector = BjFieldVector_new(rx, ry, rz);
     var r_mag: f64 = r_vec.magnitude();
+    # A retarded position that isn't finite (each sample the solver took was, but not the one at t_r) makes R NaN or
+    # infinite, which bj_lienard_wiechert_e refuses (ADR 0002 row 27, amended 2.0.1, H26: the fields went on to their
+    # range-edge path, which takes a finite R). An R that overflows from finite positions is row 18's, below.
+    if (_bj_vx_finite4(st[0], st[1], st[2], 0.0) == 0) {
+        if (r_mag != r_mag) { return Err(_bj_err_invalid_parameter("R vector must not contain NaN")); }
+        return Err(_bj_err_invalid_parameter("R vector must be finite"));
+    }
     var band = _bj_x_band(r_mag, _BJ_FIELD_R2_MIN);       # the exact |observer − position| (ADR 0002 row 17's rule)
     if (band == 2) { band = _bj_x_r2_below(observer_pos, &st, 60); }
     if (band == 1) { return Err(_bj_err_singularity()); }
@@ -27222,14 +27229,29 @@ fn _bj_sc_positive(name, v: f64): i64 {
     return BJ_ERR_INVALID_PARAMETER;
 }
 
+# InvalidParameter "refractive index must be finite, got {m}" recorded (bj_mie's text) for an m with a part not finite
+# (ADR 0002 row 49, 2.0.1); its code. The callers test the parts inline (x − x is 0 exactly for a finite x), so the
+# common path makes no call.
+fn _bj_sc_index_bad(m: BjComplex): i64 {
+    var u = _bj_err_reason(BJ_ERR_INVALID_PARAMETER);
+    _bj_tx_cstr(u, "refractive index must be finite, got ");
+    m.display(u);
+    return BJ_ERR_INVALID_PARAMETER;
+}
+
 # σ = (8π/3)(2πr/λ)⁴ r² |K|², K = (m² − 1)/(m² + 2), for a sphere with x = 2πr/λ ≪ 1. |K|² is convention-free. With an
 # unbounded exponent where x⁴, m² or the product leave the range (ADR 0002 row 18, _bj_vx_ray_sigma). InvalidParameter
-# for a radius or wavelength not finite and positive. Mirrors `scattering::rayleigh_cross_section`.
+# for a radius or wavelength not finite and positive, then for an m not finite ("refractive index must be finite",
+# bj_mie's text: ADR 0002 row 49, 2.0.1; Rust went on to Ok(NaN)). Mirrors `scattering::rayleigh_cross_section`.
 #must_use
 public fn bj_rayleigh_cross_section(radius: f64, wavelength: f64, m: BjComplex): Result {
     var c = _bj_sc_positive("radius", radius);
     if (c == 0) { c = _bj_sc_positive("wavelength", wavelength); }
     if (c != 0) { return Err(c); }
+    var mre: f64 = m.re;
+    var mim: f64 = m.im;
+    var fin: f64 = (mre - mre) + (mim - mim);
+    if (fin != 0.0) { return Err(_bj_sc_index_bad(m)); }
     var w: f64[1];
     if (_bj_vx_ray_sigma(radius, wavelength, m.re, m.im, &w) != 0) { return Err(_bj_sc_dz()); }
     var s: f64 = w[0];
@@ -27237,11 +27259,16 @@ public fn bj_rayleigh_cross_section(radius: f64, wavelength: f64, m: BjComplex):
 }
 
 # Q_sca = σ/(πr²) = (8/3)x⁴|K|², with an unbounded exponent at a range edge (ADR 0002 row 18, _bj_vx_ray_q).
-# InvalidParameter for an x not finite and positive. Mirrors `scattering::rayleigh_efficiency`.
+# InvalidParameter for an x not finite and positive, then for an m not finite (row 49, as the cross-section). Mirrors
+# `scattering::rayleigh_efficiency`.
 #must_use
 public fn bj_rayleigh_efficiency(x: f64, m: BjComplex): Result {
     var c = _bj_sc_positive("size parameter", x);
     if (c != 0) { return Err(c); }
+    var mre: f64 = m.re;
+    var mim: f64 = m.im;
+    var fin: f64 = (mre - mre) + (mim - mim);
+    if (fin != 0.0) { return Err(_bj_sc_index_bad(m)); }
     var w: f64[1];
     if (_bj_vx_ray_q(x, m.re, m.im, &w) != 0) { return Err(_bj_sc_dz()); }
     var q: f64 = w[0];
@@ -27261,8 +27288,9 @@ public fn bj_rayleigh_phase_function(cos_theta: f64): f64 {
 
 # I/I₀ = (σ/r²)·P(θ)/(4π) = 3σ(1 + cos²θ)/(16πr²) at distance r for unpolarized light; σ the total cross-section (m²),
 # for instance from bj_rayleigh_cross_section; with an unbounded exponent where r², σ/r² or its product by P leave the
-# range (ADR 0002 row 18, _bj_vx_ray_ang). InvalidParameter for a NaN distance, Singularity when |r| < 1e-30. Mirrors
-# `scattering::rayleigh_angular_intensity`.
+# range (ADR 0002 row 18, _bj_vx_ray_ang). InvalidParameter for a NaN distance, Singularity when |r| < 1e-30, then
+# InvalidParameter for a cross-section not finite and non-negative (ADR 0002 row 49, 2.0.1: Rust went on to Ok(NaN)
+# or a negative intensity). Mirrors `scattering::rayleigh_angular_intensity`.
 #must_use
 public fn bj_rayleigh_angular_intensity(cross_section: f64, distance: f64, cos_theta: f64): Result {
     if (distance != distance) {
@@ -27271,6 +27299,9 @@ public fn bj_rayleigh_angular_intensity(cross_section: f64, distance: f64, cos_t
     }
     var ad: f64 = f64_abs(distance);
     if (ad < 0.000000000000000000000000000001) { return Err(_bj_err_singularity()); }
+    if (_bj_is_finite(cross_section) == 0 || cross_section < 0.0) {
+        return Err(_bj_sc_bad("cross-section must be finite and non-negative, got ", cross_section, ""));
+    }
     var r: f64 = _bj_vx_ray_ang(cross_section, distance, cos_theta);
     return Ok(r);
 }
@@ -33285,8 +33316,10 @@ var _BJ_FU_2M960: f64 = 0x03F0000000000000;
 # std::f64::consts::PI and SQRT_2.
 var _BJ_FU_PI: f64 = 3.141592653589793;
 var _BJ_FU_SQRT_2: f64 = 1.4142135623730951;
-# freelist's largest request, 2 GiB: a grid's or a result's block must fit it.
-var _BJ_FU_FL_MAX = 2147483648;
+# The largest block a size here asks for, 2^60 bytes (2.0.1, H30): below it no size overflows, and freelist maps
+# any size it gets, so a block too large to have is the system's to refuse (Allocation). (2.0.0 capped it at
+# 2 GiB, the bump allocator's limit, not freelist's.)
+var _BJ_FU_FL_MAX = 1152921504606846976;
 
 # A word as a *f64 (the typed return keeps the binding typed).
 #must_use
@@ -34623,8 +34656,10 @@ var _BJ_CPML_INF: f64 = 0x7FF0000000000000;
 var _BJ_CPML_DMIN: f64 = 0x0010000000000000;
 # The nodes required between opposite layers: a grid needs 2·thickness + 3 ≤ its smallest dimension.
 var _BJ_CPML_MIN_INTERIOR = 3;
-# freelist's largest request, 2 GiB: the six profiles' block caps the thickness at 2^31/48 layers.
-var _BJ_CPML_FL_MAX = 2147483648;
+# The largest block a size here asks for, 2^60 bytes (2.0.1, H30): below it no size overflows, and freelist maps any
+# size it gets, so a block too large to have is the system's to refuse (Allocation). The six profiles' block caps the
+# thickness at 2^60/48 layers. (2.0.0 capped it at 2 GiB, the bump allocator's limit, not freelist's.)
+var _BJ_CPML_FL_MAX = 1152921504606846976;
 
 # A word as a *f64 (the typed return keeps the binding typed).
 #must_use
@@ -35008,11 +35043,10 @@ public fn BjCpml_with_params(params: *BjCpmlParams, dx: f64, dt: f64, out: *BjCp
     var prof = 0;
     if (t > 0 && t <= _BJ_CPML_FL_MAX / 48) { prof = fl_alloc(t * 48); }
     if (prof == 0) {
-        var t3 = _bj_err_reason(BJ_ERR_INVALID_PARAMETER);
-        _bj_tx_cstr(t3, "cannot allocate ");
+        var t3 = _bj_err_reason(BJ_ERR_ALLOCATION);
         _bj_tx_u64(t3, t);
         _bj_tx_cstr(t3, " grid values");
-        return Err(BJ_ERR_INVALID_PARAMETER);
+        return Err(BJ_ERR_ALLOCATION);
     }
     var pb: *f64 = _bj_cpml_f64p(prof);
     _bj_cpml_sample(_bj_cpml_f64p(prof), _bj_cpml_f64p(prof + t * 8), _bj_cpml_f64p(prof + 2 * t * 8), t, 0.0,
@@ -35331,13 +35365,13 @@ public fn _bj_fd2_pos(x: f64): i64 {
     return 0;
 }
 
-# Records InvalidParameter "cannot allocate {n} grid values" (Rust's `try_filled`); returns its code.
+# Records Allocation "{n} grid values" and returns its code: Rust's `try_filled` refusal, InvalidParameter "cannot
+# allocate {n} grid values", as the 1D grid's already was (ADR 0002 row 9, 2.0.1, H28).
 public fn _bj_fd2_alloc_err(n): i64 {
-    var t = _bj_err_reason(BJ_ERR_INVALID_PARAMETER);
-    _bj_tx_cstr(t, "cannot allocate ");
+    var t = _bj_err_reason(BJ_ERR_ALLOCATION);
     _bj_tx_u64(t, n);
     _bj_tx_cstr(t, " grid values");
-    return BJ_ERR_INVALID_PARAMETER;
+    return BJ_ERR_ALLOCATION;
 }
 
 # The E-update coefficients (C_a, C_b) for ε_r and σ: C_a = (1 − σΔt/2ε)/(1 + σΔt/2ε), C_b = (Δt/(εΔx))/(1 +
@@ -36014,13 +36048,13 @@ impl BjFdtd2d {
             }
         }
         if (blk == 0) {
-            var e3 = _bj_err_reason(BJ_ERR_INVALID_PARAMETER);
-            _bj_tx_cstr(e3, "cannot allocate CPML auxiliary fields for a ");
+            var e3 = _bj_err_reason(BJ_ERR_ALLOCATION);
+            _bj_tx_cstr(e3, "CPML auxiliary fields for a ");
             _bj_tx_u64(e3, nx);
             _bj_tx_cstr(e3, "×");
             _bj_tx_u64(e3, ny);
             _bj_tx_cstr(e3, " grid");
-            return Err(BJ_ERR_INVALID_PARAMETER);
+            return Err(BJ_ERR_ALLOCATION);
         }
         if (_bj_log_on(4) == 1) {
             var cl: *BjCpml = _bj_fd2_cpmlp(blk);
@@ -37998,11 +38032,22 @@ public fn BjGpuFdtd2d_step_once<B: BjComputeBackend>(sim: *BjGpuFdtd2d<B>): Resu
 }
 
 # Adds value to E_z at node (x, y), a soft source; a node outside the grid is ignored (usize compares), as BjFdtd2d's
-# add_source. The host scratch is mapped on first use. Ok(0), Err(BJ_ERR_ALLOCATION) when the scratch can't be had, or
-# the backend's error. Mirrors `GpuFdtd2d::add_source`.
+# add_source. The host scratch is mapped on first use. Ok(0), Err(InvalidParameter) "grid {nx}x{ny} is too large" when
+# nx·ny passes 2^64 (Rust's checked_mul: the fields are a consumer's to write; 2.0.1, H29), Err(BJ_ERR_ALLOCATION) when
+# the scratch can't be had, or the backend's error. Mirrors `GpuFdtd2d::add_source`.
 public fn BjGpuFdtd2d_add_source<B: BjComputeBackend>(sim: *BjGpuFdtd2d<B>, x, y, value: f64): Result {
     if (_bj_fd2_uge(x, sim.nx) == 1 || _bj_fd2_uge(y, sim.ny) == 1) { return Ok(0); }
-    var n = sim.nx * sim.ny;
+    var cells: i64[1];
+    if (_bj_fd2_umul(sim.nx, sim.ny, &cells) == 0) {
+        var tg = _bj_err_reason(BJ_ERR_INVALID_PARAMETER);
+        _bj_tx_cstr(tg, "grid ");
+        _bj_tx_u64(tg, sim.nx);
+        _bj_tx_cstr(tg, "x");
+        _bj_tx_u64(tg, sim.ny);
+        _bj_tx_cstr(tg, " is too large");
+        return Err(BJ_ERR_INVALID_PARAMETER);
+    }
+    var n = cells[0];
     if (sim.scratch_len != n) {
         var s = _bj_cb_host(n, 0.0);
         if (s == 0) { return Err(BJ_ERR_ALLOCATION); }
@@ -38142,8 +38187,10 @@ var _BJ_NF_INF: f64 = 0x7FF0000000000000;
 # std::f64::consts::PI, and 10⁻¹² (the accumulators' agreement test).
 var _BJ_NF_PI: f64 = 3.141592653589793;
 var _BJ_NF_REL12: f64 = 0.000000000001;
-# freelist's largest request, 2 GiB.
-var _BJ_NF_FL_MAX = 2147483648;
+# The largest block a size here asks for, 2^60 bytes (2.0.1, H30): below it no size overflows, and freelist maps
+# any size it gets, so a block too large to have is the system's to refuse (Allocation). (2.0.0 capped it at
+# 2 GiB, the bump allocator's limit, not freelist's.)
+var _BJ_NF_FL_MAX = 1152921504606846976;
 # 2^-1022, and 2^-959 and 2^-960: the rotation step's and the sums' absorption bounds (M5 part 2d-6).
 var _BJ_NF_DMIN: f64 = 0x0010000000000000;
 var _BJ_NF_2M959: f64 = 0x0400000000000000;
@@ -39158,8 +39205,10 @@ public fn bj_nf2ff_2d(sim: *BjFdtd2d, box_margin, n_angles, frequency: f64, out:
 
 private
 
-# freelist's largest request, 2 GiB.
-var _BJ_SO_FL_MAX = 2147483648;
+# The largest block a size here asks for, 2^60 bytes (2.0.1, H30): below it no size overflows, and freelist maps
+# any size it gets, so a block too large to have is the system's to refuse (Allocation). (2.0.0 capped it at
+# 2 GiB, the bump allocator's limit, not freelist's.)
+var _BJ_SO_FL_MAX = 1152921504606846976;
 
 # A 2D slice of an FDTD field for heatmap rendering: `values` (values_len f64, row-major, values[y·nx + x]), the
 # grid's (nx, ny) in `dimensions`, the slice's world-space origin (its min corner, m) and spacing (m), the component's
@@ -41774,8 +41823,10 @@ public fn BjMode2d_from_json(buf, len, out: *i64): Result {
 
 # ── soorat's visualization types (M7 part 1b-2) ──────────────────────────────────────────────────────────────────────
 
-# The largest count a writer takes: freelist's largest block is 2 GiB, so no array a constructor or reader made is
-# longer. A hand-filled struct claiming more is refused as Allocation before anything is written.
+# The largest count a writer takes, 2^28 values: a document's buffer, at most 80 bytes a value, then stays below 2^35
+# bytes, and every sum of such sizes (a visualization's lines) below 2^63. A longer array, a document of tens of
+# gigabytes, is refused as Allocation before anything is written (2.0.1: 2.0.0 tied the cap to freelist's 2 GiB,
+# which freelist doesn't have).
 var _BJ_JW_MAX = 268435456;
 
 # Appends the bytes [s, s + k) as a JSON string, escaped as serde_json escapes it: `"` and `\` after a backslash, the

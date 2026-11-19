@@ -167,8 +167,11 @@ fn main() {
     q.thickness = 0;
     assert(refuses(&q, nan, nan, "invalid parameter: CPML thickness must be at least 1 cell") == 1, "Rust's order");
     q.thickness = 0 - 1;
-    assert(refuses(&q, DX, DT, "invalid parameter: cannot allocate 18446744073709551615 grid values") == 1,
-      "a thickness past any allocation");
+    var qc: BjCpml;
+    var qt, qv = BjCpml_with_params(&q, DX, DT, &qc);
+    assert(is_err_result(qt) == 1 && qv == BJ_ERR_ALLOCATION &&
+      text_is(bj_last_error_display(), "allocation failed: 18446744073709551615 grid values") == 1,
+      "a thickness past any allocation: Allocation, as the 1D grid's (ADR 0002 row 9, 2.0.1)");
     q.thickness = 3;
     q.sigma_ratio = _bj_from_bits(0x7fefffffffffffff);
     var wnf = "invalid parameter: CPML coefficients are not finite for dx = 0.0001, dt = 0.0000000000001";

@@ -21,8 +21,10 @@ var _BJ_FU_2M960: f64 = 0x03F0000000000000;
 # std::f64::consts::PI and SQRT_2.
 var _BJ_FU_PI: f64 = 3.141592653589793;
 var _BJ_FU_SQRT_2: f64 = 1.4142135623730951;
-# freelist's largest request, 2 GiB: a grid's or a result's block must fit it.
-var _BJ_FU_FL_MAX = 2147483648;
+# The largest block a size here asks for, 2^60 bytes (2.0.1, H30): below it no size overflows, and freelist maps
+# any size it gets, so a block too large to have is the system's to refuse (Allocation). (2.0.0 capped it at
+# 2 GiB, the bump allocator's limit, not freelist's.)
+var _BJ_FU_FL_MAX = 1152921504606846976;
 
 # A word as a *f64 (the typed return keeps the binding typed).
 #must_use

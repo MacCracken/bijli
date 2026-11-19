@@ -479,11 +479,22 @@ public fn BjGpuFdtd2d_step_once<B: BjComputeBackend>(sim: *BjGpuFdtd2d<B>): Resu
 }
 
 # Adds value to E_z at node (x, y), a soft source; a node outside the grid is ignored (usize compares), as BjFdtd2d's
-# add_source. The host scratch is mapped on first use. Ok(0), Err(BJ_ERR_ALLOCATION) when the scratch can't be had, or
-# the backend's error. Mirrors `GpuFdtd2d::add_source`.
+# add_source. The host scratch is mapped on first use. Ok(0), Err(InvalidParameter) "grid {nx}x{ny} is too large" when
+# nx·ny passes 2^64 (Rust's checked_mul: the fields are a consumer's to write; 2.0.1, H29), Err(BJ_ERR_ALLOCATION) when
+# the scratch can't be had, or the backend's error. Mirrors `GpuFdtd2d::add_source`.
 public fn BjGpuFdtd2d_add_source<B: BjComputeBackend>(sim: *BjGpuFdtd2d<B>, x, y, value: f64): Result {
     if (_bj_fd2_uge(x, sim.nx) == 1 || _bj_fd2_uge(y, sim.ny) == 1) { return Ok(0); }
-    var n = sim.nx * sim.ny;
+    var cells: i64[1];
+    if (_bj_fd2_umul(sim.nx, sim.ny, &cells) == 0) {
+        var tg = _bj_err_reason(BJ_ERR_INVALID_PARAMETER);
+        _bj_tx_cstr(tg, "grid ");
+        _bj_tx_u64(tg, sim.nx);
+        _bj_tx_cstr(tg, "x");
+        _bj_tx_u64(tg, sim.ny);
+        _bj_tx_cstr(tg, " is too large");
+        return Err(BJ_ERR_INVALID_PARAMETER);
+    }
+    var n = cells[0];
     if (sim.scratch_len != n) {
         var s = _bj_cb_host(n, 0.0);
         if (s == 0) { return Err(BJ_ERR_ALLOCATION); }
