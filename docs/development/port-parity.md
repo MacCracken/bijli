@@ -7926,3 +7926,49 @@ scaled near 1) defeats every bound now in the code.
 - **Result**: the gate clean, all 17 steps; parity and the 520 digests unchanged; validate.py: 770,127 rows, 0
   problems; 2,953 assertions (1 new); coverage 449 of 449; the bench record 80 of 80 twinned. soorat.tcyr and
   json.tcyr pass on x86_64 PE and aarch64. Next: bite 2b-2, H18.
+
+## 147. 2.0.1 bite 2b-2: the parallel combination's fixed-point tier (2026-11-18)
+
+H18 of §142. The exact path's fold is quadratic in the distinct significands, and two gaps let ordinary-looking
+lists reach it. Tier 2's expansion holds at most 252 components (about 126 terms), so a longer list that tier 1
+can't decide goes straight to the exact path. And a sum that cancels exactly, with Σ|1/xᵢ| past about 40, defeats
+both bounds: 2.03u²·Σ|q| then exceeds 10^-30. The concrete case is exactly cancelling Egyptian-fraction triples:
+a, −b, −ab/2^j with b = a + 2^j and a odd (1/a − 1/b = 2^j/(ab)), scaled near 1. Measured before, with distinct
+triples: 100 in 2 ms, 400 in 32 ms, 1,600 in 525 ms, 6,400 (19,200 values) in 8.4 s, 16× per 4×.
+- **The tier** (src/crmath_edge.cyr's `_bj_e_par_fixed`, the section comment): every finite xᵢ = ±Mᵢ·2^Eᵢ, with Mᵢ
+  odd, becomes Qᵢ = ⌊2^(L−Eᵢ)/Mᵢ⌋, with L = 256 + bitlen(m). `_bj_e_pf_quot` does the long division in 10-bit
+  digits; at 11, the remainder times 2^11 could pass 2^63, since Mᵢ < 2^53. The Qᵢ add exactly into the positive and
+  negative parts of A. S·2^L lies in [A − n₋, A + n₊]: each floor is within one unit below its value, and an ±∞ adds
+  exactly 0.
+  - |S| < 10^-30 when both ends are below it, decided exactly as X·5^30 < 2^(L−30).
+  - |S| ≥ 10^-30 when the nearer end is at least 10^-30; then RN(1/S) when RN(2^L/lo) and RN(2^L/hi) agree.
+    `_bj_e_par_round` is the exact path's rounding, factored out and called with D = 1, G = L, and RN is monotone.
+  - Otherwise −1, and the exact path runs.
+  Every bignum is a 400-byte stack buffer (49 limbs; the largest needed is about 20), so the tier allocates nothing,
+  and the division costs about 0.5 µs a term.
+- **The exact path** skips a group whose dyadic sum is 0 (it adds no term and no factor), and now sees only a sum
+  within m·2^-L of 10^-30 or of a midpoint's reciprocal, an exact tie among them. A tie is exact arithmetic's to
+  decide, so a list built on a tie plus many cancelling triples still reaches the fold; such a list has to be built to
+  sit exactly on a tie.
+- **The tiers' order**: T1 (slow = 0), T2 (slow 0 or 2), the fixed-point tier (slow 0 or 3), then the exact path.
+  slow = 3 is new, for cr_verify.py's `par_fx` and `par_rep_fx` (scripts/oracle/cr_driver.cyr reads it from the
+  name's length).
+- **Verification**: cr_verify.py's `par_cases` gains a ninth kind: up to four triples (`par_triple`), alone (S = 0)
+  or with one more value v (S = 1/v, the combination v itself), in either order. `par_rep` gains a pair of triples
+  repeated up to 20,000 times (120,000 values, past T2's room). `cr_verify.py . par par_x par_slow par_fx par_rep
+  par_rep_x par_rep_slow par_rep_fx --n 1000000`: 402,000 calls, each equal to Python's Fraction value; with
+  `--n 300000 --aarch64`, 120,600 calls on each of x86_64 and aarch64, 0 mismatches.
+- **Tests**: circuit.tcyr's `cyrius_audit_201_parallel` (4 assertions):
+  - 2,000 distinct triples are refused with Rust's text;
+  - with 47 added, the parallel combination is exactly 47;
+  - with −0.000123 added, the series capacitance is exactly that;
+  - one triple alone is refused.
+- **After**: 100 triples in 0 ms, 400 in 0 ms, 1,600 in 2 ms, 6,400 in 11 ms, about 0.6 µs a value, linear. Bench
+  `circuit/resistance_parallel_triples_1600` (EXTRA).
+- **Benchmarks**: two interleaved rounds against bite 2b-1's src/ (load 0.9–1.0, nothing else running), median
+  ratio 1.003 and 1.000. Rust's `circuit/resistance_parallel` (tier 1 decides it) +0.3 % and −0.9 %; the triples row
+  2.69 and 2.77 ms. `polarization/stokes_from_jones` reads +11 % in both, though its code didn't change: layout.
+- **Result**: the gate clean, all 17 steps. Parity and the 520 digests are unchanged: every golden parallel row
+  (`emit_inverse_edges`' knife edges among them) gives the same bits through the new tier. validate.py: 770,127
+  rows, 0 problems; 2,957 assertions (4 new); coverage 449 of 449; the bench record 80 of 80 twinned. circuit.tcyr
+  passes on x86_64 PE and aarch64. **Bite 2 is done**; next: bite 3, the threads.

@@ -13747,7 +13747,7 @@ fn _bj_cr_lw(r: *f64, b: *f64, xo, mode_in, slow, out: *f64): i64 {
 # second division would do), and exactly it when r = 0. Above 2^900, l = 0 and the term is within u|q| + 2^-1074 of
 # 1/xᵢ (q may be subnormal).
 #
-# Three tiers, each with a rigorous bound E on |S − S_dd|; the first that decides answers.
+# Four tiers, each with a rigorous bound on S; the first that decides answers. T1 and T2 bound |S − S_dd|:
 #   - T1, a compensated sum: TwoSums of the heads into σ, their errors t and the lows added into c (w = t + l, then
 #     c + w, each rounded once), S_dd = TwoSum(σ, c). E = 1.01u·Σ(|w| + |c|) + 2.03u²·Σ|q| (inexact l) +
 #     1.01(u·Σ|q| + k·2^-1074) (the k terms above 2^900); the hundredths cover the bounds' own roundings for n < 2^43.
@@ -13759,19 +13759,29 @@ fn _bj_cr_lw(r: *f64, b: *f64, xo, mode_in, slow, out: *f64): i64 {
 #     when |S_dd| − E, rounded down, reaches the double 1e-30 (above 10^-30 by 0.476 ulp); then, with E/|S| ≤ 2^-60,
 #     1/S by kimiya's quotient steps (13.12u² on 1/S_dd), whose ends at ε = y₀·(E_rel·(1 + 2^-30) + 2^-101) bracket
 #     1/S: equal ends are RN(1/S). Otherwise the next tier runs.
-#   - T3, the exact path, takes what neither decides: a sum near 10^-30, a cancellation below the bounds, a value within
-#     about 2^-101 of a midpoint (ties among them), or slow = 1.
+#   - The fixed-point tier (2.0.1, port-parity §147), after T2: each finite xᵢ = ±Mᵢ·2^Eᵢ (Mᵢ odd) becomes the integer
+#     Qᵢ = ⌊2^(L−Eᵢ)/Mᵢ⌋ (0 when L < Eᵢ), long division in 10-bit digits, L = 256 + the bit length of the count m of
+#     finite values. The Qᵢ add exactly into A = Σ ±Qᵢ, and since each floor lies within one unit below its value,
+#     S·2^L ∈ [A − n₋, A + n₊] (n± the counts of each sign): a bound of m·2^-L, about 2^-256 whatever the values'
+#     sizes or cancellation. |S| < 10^-30 when both ends are, X·5^30 < 2^(L−30); |S| ≥ 10^-30 when the nearer end is,
+#     and then RN(1/S) when both ends' RN(2^L/end), the exact path's rounding on D = 1, agree (RN is monotone).
+#     Otherwise T3. Its buffers are on the stack, so it allocates nothing; it costs about a microsecond a term.
+#   - T3, the exact path, takes what no tier decides: a sum within m·2^-L of 10^-30, a 1/S that close to a midpoint
+#     (an exact tie among them, which no bound decides), or slow = 1.
 #
 # Exact path. Each finite xᵢ is ±Mᵢ·2^Eᵢ with Mᵢ odd, so S = 2^-G·Σ ±2^(G−Eᵢ)/Mᵢ, G the largest Eᵢ. The terms are sorted
 # by M (a heapsort: the order is total, the result exact and so deterministic), each group's dyadic sum A_g (positive
 # and negative parts) is formed in integers, and the groups fold into one fraction N/D, D = Π M_g over the distinct
 # M_g: N/D + A_g/M_g = (N·M_g + A_g·D)/(D·M_g), N kept as its positive and negative parts. A group of equal Mᵢ adds
-# no factor, so [3, −3, 3, −3, …] stays small; n distinct significands make D 53n bits and the fold quadratic in n (a
-# finding, recorded; only sums the fast path cannot decide come here). |S| = X/(D·2^G) with X = |N|, so |S| < 10^-30
+# no factor, so [3, −3, 3, −3, …] stays small, and a group whose A_g is 0 adds none (2.0.1); n distinct significands
+# make D 53n bits and the fold quadratic in n (a finding, recorded). Since 2.0.1 only a sum the fixed-point tier
+# leaves comes here, an exact tie or a knife edge within m·2^-L, so a list of exactly cancelling triples no longer
+# does (port-parity §147). |S| = X/(D·2^G) with X = |N|, so |S| < 10^-30
 # is X·5^30·2^30 < D·2^G, and the candidate for 1/|S| = D·2^G/X comes from the two integers' top 62 bits (within 3.1u);
 # the neighbouring midpoints μ = m·2^f then decide, D·2^G against m·X·2^f, ties to even. The buffers, sized from n and
 # the group count, come from fl_calloc and go back by fl_free; a refused allocation returns 2 (BJ_ERR_ALLOCATION).
-# cr_verify.py's par and par_slow families check both paths against Python's Fraction, on x86_64 and aarch64.
+# cr_verify.py's par, par_x, par_fx and par_slow families check each path against Python's Fraction, on x86_64 and
+# aarch64.
 
 # Word i of the sort's triples (M, E, sign) at t.
 #must_use
@@ -13841,6 +13851,44 @@ fn _bj_e_par_mid(d, x, g, mm, f, t1, t2, t3): i64 {
     return c;
 }
 
+# RN(D·2^G/X) for bignums D, X > 0 (the reciprocal of S = X/(D·2^G), the section comment): the candidate from the
+# two integers' top 62 bits, then the neighbouring midpoints decide, ties to even; t1, t2 and t3 scratch bignums.
+#must_use
+fn _bj_e_par_round(dd, xx, gmax, t1, t2, t3): f64 {
+    var sd: i64[1];
+    var sx: i64[1];
+    var td = _bj_e_par_top(dd, t1, &sd);
+    var tx = _bj_e_par_top(xx, t1, &sx);
+    var fd: f64 = f64_from(td);
+    var fx: f64 = f64_from(tx);
+    var y0: f64 = fd / fx;
+    var y: f64 = _bj_g_scale(y0, gmax + sd[0] - sx[0]);
+    var mid[16];
+    for (var it = 0; it < 6; it = it + 1) {
+        var up: f64 = _bj_g_step(y, 1);
+        _bj_g_mid(y, up, &mid);
+        var c1 = _bj_e_par_mid(dd, xx, gmax, load64(&mid), load64(&mid + 8), t1, t2, t3);
+        if (c1 > 0) {
+            y = up;
+            continue;
+        }
+        if (c1 == 0) {
+            y = _bj_g_even(y, up);
+            break;
+        }
+        var dn: f64 = _bj_g_step(y, 0 - 1);
+        _bj_g_mid(dn, y, &mid);
+        var c2 = _bj_e_par_mid(dd, xx, gmax, load64(&mid), load64(&mid + 8), t1, t2, t3);
+        if (c2 < 0) {
+            y = dn;
+            continue;
+        }
+        if (c2 == 0) { y = _bj_g_even(dn, y); }
+        break;
+    }
+    return y;
+}
+
 # The exact path (the section comment): 1 when |Σ 1/xᵢ| < 10^-30, 0 with out[0] := RN(1/Σ 1/xᵢ), 2 when a buffer is
 # refused.
 fn _bj_e_par_exact(xs: *f64, n, out: *f64): i64 {
@@ -13904,6 +13952,7 @@ fn _bj_e_par_exact(xs: *f64, n, out: *f64): i64 {
                 if (load64(tr + 24 * k + 16) == 0) { _bj_g_add_to(ap, w); } else { _bj_g_add_to(an, w); }
                 k = k + 1;
             }
+            if (_bj_bn_cmp(ap, an) == 0) { continue; }   # A = 0: the group adds no term and no factor (2.0.1)
             _bj_g_mul(pp, mg, t1);                   # N/D + A/M = (N·M + A·D)/(D·M)
             _bj_g_mul(qq, mg, t1);
             if (load64(ap) != 0) {
@@ -13935,37 +13984,7 @@ fn _bj_e_par_exact(xs: *f64, n, out: *f64): i64 {
             if (_bj_bn_cmp(t1, t2) < 0) { res = 1; }
         }
         if (res == 0) {
-            var sd: i64[1];
-            var sx: i64[1];
-            var td = _bj_e_par_top(dd, t1, &sd);
-            var tx = _bj_e_par_top(xx, t1, &sx);
-            var fd: f64 = f64_from(td);
-            var fx: f64 = f64_from(tx);
-            var y0: f64 = fd / fx;
-            var y: f64 = _bj_g_scale(y0, gmax + sd[0] - sx[0]);
-            var mid[16];
-            for (var it = 0; it < 6; it = it + 1) {
-                var up: f64 = _bj_g_step(y, 1);
-                _bj_g_mid(y, up, &mid);
-                var c1 = _bj_e_par_mid(dd, xx, gmax, load64(&mid), load64(&mid + 8), t1, t2, t3);
-                if (c1 > 0) {
-                    y = up;
-                    continue;
-                }
-                if (c1 == 0) {
-                    y = _bj_g_even(y, up);
-                    break;
-                }
-                var dn: f64 = _bj_g_step(y, 0 - 1);
-                _bj_g_mid(dn, y, &mid);
-                var c2 = _bj_e_par_mid(dd, xx, gmax, load64(&mid), load64(&mid + 8), t1, t2, t3);
-                if (c2 < 0) {
-                    y = dn;
-                    continue;
-                }
-                if (c2 == 0) { y = _bj_g_even(dn, y); }
-                break;
-            }
+            var y: f64 = _bj_e_par_round(dd, xx, gmax, t1, t2, t3);
             if (neg == 1) { y = -y; }
             out[0] = y;
         }
@@ -14072,9 +14091,149 @@ fn _bj_e_par_decide(s_h: f64, s_l: f64, eab: f64, out: *f64): i64 {
     return 0;
 }
 
+# q := ⌊2^k/m⌋ for k ≥ 0 and odd m in [1, 2^53) (the fixed-point tier's term): long division of 2^k in 10-bit digits,
+# the top one 2^(k mod 10), each step's remainder·2^10 below 2^63; each quotient digit (below 2^10) goes into q's
+# 32-bit limbs at its place. q holds ⌈10·(k/10 + 1)/32⌉ + 2 limbs.
+fn _bj_e_pf_quot(q, k, m) {
+    var nd = k / 10 + 1;
+    var top = k - 10 * (nd - 1);
+    var nl = (10 * nd) / 32 + 2;
+    for (var i = 0; i <= nl; i = i + 1) { store64(q + i * 8, 0); }
+    var r = 0;
+    for (var j = 0; j < nd; j = j + 1) {
+        var dig = 0;
+        if (j == 0) { dig = 1 << top; }
+        var cur = (r << 10) | dig;
+        var d = cur / m;
+        r = cur - d * m;
+        if (d != 0) {
+            var pos = 10 * (nd - 1 - j);
+            var li = pos / 32;
+            var off = pos - 32 * li;
+            var w = load64(q + 8 + li * 8) | ((d << off) & 0xFFFFFFFF);
+            store64(q + 8 + li * 8, w);
+            if (off > 22) {
+                var w2 = load64(q + 16 + li * 8) | (d >> (32 - off));
+                store64(q + 16 + li * 8, w2);
+            }
+        }
+    }
+    while (nl > 0 && load64(q + nl * 8) == 0) { nl = nl - 1; }
+    store64(q, nl);
+    return 0;
+}
+
+# 1 when the bignum x satisfies x·5^30 < 2^(l − 30), x·2^-l < 10^-30 (t1, t2 scratch).
+#must_use
+fn _bj_e_pf_below(x, l, t1, t2): i64 {
+    _bj_bn_copy(t1, x);
+    _bj_g_mul(t1, 30517578125, t2);
+    _bj_g_mul(t1, 30517578125, t2);
+    _bj_bn_set(t2, 1);
+    _bj_bn_shl(t2, l - 30);
+    if (_bj_bn_cmp(t1, t2) < 0) { return 1; }
+    return 0;
+}
+
+# The fixed-point tier (the section comment, 2.0.1): 1 when |Σ 1/xᵢ| < 10^-30, 0 with out[0] := RN(1/Σ 1/xᵢ), −1 when
+# its bound cannot decide (a sum within n·2^-L of 10^-30, or one whose 1/S is that close to a midpoint: the exact
+# path's). On the stack, nothing allocated.
+fn _bj_e_par_fixed(xs: *f64, n, out: *f64): i64 {
+    var m = 0;
+    for (var i = 0; i < n; i = i + 1) {
+        var x: f64 = xs[i];
+        if (_bj_is_finite(x) == 1) { m = m + 1; }
+    }
+    if (m == 0) { return 1; }
+    var l = 256 + _bj_bitlen(m);
+    var pp[400];
+    var qq[400];
+    var q[400];
+    var t1[400];
+    var t2[400];
+    var t3[400];
+    var lo[400];
+    var hi[400];
+    var one[400];
+    store64(&pp, 0);
+    store64(&qq, 0);
+    var np = 0;
+    var nn = 0;
+    var me[16];
+    for (var i2 = 0; i2 < n; i2 = i2 + 1) {
+        var x2: f64 = xs[i2];
+        if (_bj_is_finite(x2) == 0) { continue; }
+        var negx = (_bj_bits(x2) >> 63) & 1;
+        if (negx == 1) { nn = nn + 1; } else { np = np + 1; }
+        _bj_g_split(x2, &me);
+        var mm = load64(&me);
+        var ee = load64(&me + 8);
+        while ((mm & 1) == 0) {
+            mm = mm >> 1;
+            ee = ee + 1;
+        }
+        var k = l - ee;
+        if (k < 0) { continue; }                    # 2^k/m below 1: Q = 0, the term within the bound
+        _bj_e_pf_quot(&q, k, mm);
+        if (negx == 1) { _bj_g_add_to(&qq, &q); } else { _bj_g_add_to(&pp, &q); }
+    }
+    # S·2^l lies in [A − nn, A + np], A = pp − qq: each term's ⌊⌋ is within one unit below its value.
+    var sa = _bj_bn_cmp(&pp, &qq);
+    var lneg = 0;
+    var hneg = 0;
+    _bj_bn_set(&t1, np);
+    _bj_bn_set(&t2, nn);
+    if (sa >= 0) {
+        _bj_bn_copy(&q, &pp);
+        _bj_bn_sub(&q, &qq);                        # |A|, A ≥ 0
+        _bj_bn_sum(&hi, &q, &t1);                   # A + np ≥ 0
+        if (_bj_bn_cmp(&q, &t2) >= 0) {
+            _bj_bn_copy(&lo, &q);
+            _bj_bn_sub(&lo, &t2);                   # A − nn ≥ 0
+        } else {
+            _bj_bn_copy(&lo, &t2);
+            _bj_bn_sub(&lo, &q);                    # nn − A > 0
+            lneg = 1;
+        }
+    } else {
+        _bj_bn_copy(&q, &qq);
+        _bj_bn_sub(&q, &pp);                        # |A|, A < 0
+        _bj_bn_sum(&lo, &q, &t2);                   # |A − nn| = |A| + nn
+        lneg = 1;
+        if (_bj_bn_cmp(&q, &t1) >= 0) {
+            _bj_bn_copy(&hi, &q);
+            _bj_bn_sub(&hi, &t1);                   # |A + np| = |A| − np, A + np ≤ 0
+            hneg = 1;
+        } else {
+            _bj_bn_copy(&hi, &t1);
+            _bj_bn_sub(&hi, &q);                    # A + np > 0
+        }
+    }
+    var blo = _bj_e_pf_below(&lo, l, &t1, &t2);
+    var bhi = _bj_e_pf_below(&hi, l, &t1, &t2);
+    if (blo == 1 && bhi == 1) { return 1; }         # the whole interval inside (−10^-30, 10^-30)
+    _bj_bn_set(&one, 1);
+    if (lneg == 0 && blo == 0) {                    # S ≥ lo·2^-l ≥ 10^-30: 1/S between 2^l/hi and 2^l/lo
+        var ya: f64 = _bj_e_par_round(&one, &lo, l, &t1, &t2, &t3);
+        var yb: f64 = _bj_e_par_round(&one, &hi, l, &t1, &t2, &t3);
+        if (_bj_bits(ya) != _bj_bits(yb)) { return 0 - 1; }
+        out[0] = ya;
+        return 0;
+    }
+    if (hneg == 1 && bhi == 0) {                    # S ≤ −10^-30, likewise with |lo| ≥ |hi|
+        var yc: f64 = _bj_e_par_round(&one, &lo, l, &t1, &t2, &t3);
+        var yd: f64 = _bj_e_par_round(&one, &hi, l, &t1, &t2, &t3);
+        if (_bj_bits(yc) != _bj_bits(yd)) { return 0 - 1; }
+        out[0] = -yc;
+        return 0;
+    }
+    return 0 - 1;
+}
+
 # The parallel combination (the section comment) of the n values at xs (none NaN; each finite one |xᵢ| ≥ 10^-30): 1
 # when |Σ 1/xᵢ| < 10^-30 exactly; 0 with out[0] := RN(1/Σ 1/xᵢ); 2 when the exact path's buffers are refused. slow = 1
-# runs the exact path alone, slow = 2 the expansion and then the exact path (cr_verify.py's par_slow and par_x).
+# runs the exact path alone, slow = 2 the expansion and then the exact path, slow = 3 the fixed-point tier and then
+# the exact path (cr_verify.py's par_slow, par_x and par_fx).
 #must_use
 fn _bj_cr_parallel(xs: *f64, n, slow, out: *f64): i64 {
     var sp: f64 = 134217729.0;                      # Veltkamp's 2^27 + 1
@@ -14138,7 +14297,7 @@ fn _bj_cr_parallel(xs: *f64, n, slow, out: *f64): i64 {
         var v1 = _bj_e_par_decide(fh, fl, eab, out);
         if (v1 >= 0) { return v1; }
     }
-    if (slow != 1) {
+    if (slow == 0 || slow == 2) {
         var ex: f64[256];                           # the expansion of every qᵢ and lᵢ, exact (Grow-Expansion)
         var k = 0;
         var lsum2: f64 = 0.0;
@@ -14197,6 +14356,10 @@ fn _bj_cr_parallel(xs: *f64, n, slow, out: *f64): i64 {
             var v2 = _bj_e_par_decide(gh, gl, eab2, out);
             if (v2 >= 0) { return v2; }
         }
+    }
+    if (slow == 0 || slow == 3) {
+        var v3 = _bj_e_par_fixed(xs, n, out);
+        if (v3 >= 0) { return v3; }
     }
     var rx = _bj_e_par_exact(xs, n, out);
     return rx;

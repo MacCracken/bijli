@@ -599,6 +599,31 @@ fn main(): i64 {
     bench_batch_stop(b40, 1000000);
     bench_report(b40);
 
+    # 2.0.1 H18: 1,600 distinct exactly cancelling triples a, −b, −ab/2^j (4,800 values, reciprocals near 1), decided
+    # by the fixed-point tier (the exact path's fold took 525 ms on them).
+    var ptr: *f64 = bench_f64p(alloc(8 * 4800));
+    for (var i = 0; i < 1600; i = i + 1) {
+        var pa = 2 * (16777216 + 977 * i) + 1;
+        var pj = 1 + (i % 20);
+        var pb = pa + (1 << pj);
+        var pfa: f64 = f64_from(pa);
+        var pfb: f64 = f64_from(pb);
+        var pfab: f64 = f64_from(pa * pb);
+        var psc: f64 = _bj_from_bits(0x3E50000000000000);
+        var pscj: f64 = _bj_from_bits((1023 - 26 - pj) << 52);
+        ptr[3 * i] = pfa * psc;
+        ptr[3 * i + 1] = 0.0 - pfb * psc;
+        ptr[3 * i + 2] = 0.0 - pfab * pscj;
+    }
+    var bpt = bench_new("circuit/resistance_parallel_triples_1600");
+    bench_batch_start(bpt);
+    for (var k = 0; k < 20; k = k + 1) {
+        var tpt, vpt = bj_resistance_parallel(ptr, 4800);
+        keep = keep + vpt;
+    }
+    bench_batch_stop(bpt, 20);
+    bench_report(bpt);
+
     var cr: f64[5];
     cr[0] = 10.0;
     cr[1] = 20.0;

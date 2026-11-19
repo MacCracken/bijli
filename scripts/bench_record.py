@@ -81,6 +81,8 @@ EXTRA = {
     "bridge/em_energy_to_heating_rate": "a bridge rounded once, p/(ρc_p) on kimiya's monomials (M7 part 2a, row 13)",
     "soorat/vector_field_from_components_16x16x16": "a 16³ VectorFieldSample from components, checked (M7 part 1b-1)",
     "json/charge_visualization_from_json": "16 charge points read back, each f32 rounded once (M7 part 1b-2, row 45)",
+    "circuit/resistance_parallel_triples_1600": "4,800 values whose reciprocals cancel exactly, decided by the "
+        "fixed-point tier (src/crmath_edge.cyr, 2.0.1 H18)",
     "json/charge_visualization_from_json_halfway": "1,000 charges whose numbers all sit on f32 halfway values, " \
         "each found through the number index (src/json.cyr, 2.0.1 H17)",
     "fdtd/gpu_fdtd2d_step_100x100_cpu": "GpuFdtd2d on BjCpuBackend: fdtd/2d_step_100x100_tm through the trait (M6 3)",

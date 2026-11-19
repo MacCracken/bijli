@@ -68,6 +68,13 @@ The 2.0.1 audit and its repairs (`docs/development/port-parity.md` §142, findin
   numbers on f32 halfway values): 1.23 s → 6.4 ms. On 4,000 charges, 19.7 s → 26 ms; on 16,000 (1.5 MB), more than
   300 s → 104 ms. A document with no halfway floats builds no index (`json/charge_visualization_from_json`
   unchanged).
+- **circuit** — the parallel and series combinations (`bj_resistance_parallel`, `bj_capacitance_series`,
+  `bj_inductance_parallel`) gain a fixed-point tier ahead of their exact path: each 1/xᵢ as an integer on a 2^-L grid
+  (L about 270), the sum known within the count of terms, deciding the exact threshold and the correctly rounded
+  result. The exact path's fold, quadratic in the distinct significands, now takes only a sum exactly at a rounding
+  tie or within about 2^-256 of 10^-30; it also skips a group whose reciprocals cancel (H18). Results are unchanged.
+  On lists of exactly cancelling triples (1/a − 1/b = 1/c, near 1): 1,600 triples 525 ms → 2 ms, 6,400 triples
+  (19,200 values) 8.4 s → 11 ms (`circuit/resistance_parallel_triples_1600`).
 
 ## [2.0.0] — 2026-11-18
 

@@ -582,12 +582,60 @@ fn cyrius_tests(): i64 {
     return 0;
 }
 
+# A word as a *f64.
+fn as_f64p(a): *f64 {
+    return a;
+}
+
+# Fills xs with n distinct exactly cancelling triples a, −b, −ab/2^j (b = a + 2^j, a odd near 2^25), scaled near 1:
+# their reciprocals sum to 0, Σ|1/x| far past the double-double bounds (2.0.1, H18).
+fn fill_triples(xs: *f64, n) {
+    for (var i = 0; i < n; i = i + 1) {
+        var a = 2 * (16777216 + 977 * i) + 1;
+        var j = 1 + (i % 20);
+        var b = a + (1 << j);
+        var fa: f64 = f64_from(a);
+        var fb: f64 = f64_from(b);
+        var fab: f64 = f64_from(a * b);
+        var sc: f64 = _bj_from_bits(0x3E50000000000000);
+        var scj: f64 = _bj_from_bits((1023 - 26 - j) << 52);
+        xs[3 * i] = fa * sc;
+        xs[3 * i + 1] = 0.0 - fb * sc;
+        xs[3 * i + 2] = 0.0 - fab * scj;
+    }
+    return 0;
+}
+
+# 2.0.1 bite 2b-2 (port-parity §142, H18): the fixed-point tier decides sums the double-double tiers can't, in time
+# linear in n, where the exact path's fold was quadratic.
+fn cyrius_audit_201(): i64 {
+    test_group("cyrius_audit_201_parallel (2.0.1 bite 2b-2, H18)");
+    var p: *f64 = as_f64p(alloc(8 * 6001));
+    fill_triples(p, 2000);
+    var t1, v1 = bj_resistance_parallel(p, 6000);
+    var w1 = "division by zero in EM calculation: sum of inverse resistances is zero";
+    assert(err_is(t1, v1, BJ_ERR_DIVISION_BY_ZERO, w1) == 1,
+      "2,000 distinct cancelling triples (6,000 values): their sum is exactly 0, refused");
+    p[6000] = 47.0;
+    var t2, v2 = bj_resistance_parallel(p, 6001);
+    var r2: f64 = v2;
+    assert(is_ok(t2) == 1 && r2 == 47.0, "and with one more value v: S = 1/v exactly, so the combination is v");
+    p[6000] = 0.0 - 0.000123;
+    var t3, v3 = bj_capacitance_series(p, 6001);
+    var r3: f64 = v3;
+    assert(is_ok(t3) == 1 && r3 == 0.0 - 0.000123, "the series capacitance takes the same path");
+    var t4, v4 = bj_inductance_parallel(p, 3);
+    assert(is_err_result(t4) == 1 && v4 == BJ_ERR_DIVISION_BY_ZERO, "one triple alone: refused");
+    return 0;
+}
+
 # Runs circuit.rs's tests, then the Cyrius-only checks.
 fn main(): i64 {
     alloc_init();
     rust_tests_a();
     rust_tests_b();
     cyrius_tests();
+    cyrius_audit_201();
     return assert_summary();
 }
 

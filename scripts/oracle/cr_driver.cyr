@@ -323,26 +323,30 @@ fn _call(fp, fl, w): i64 {
         # ε_r and μ_r (src/crmath_vx.cyr, M2 part 2d-2c)
         r = _bj_vx_gamma(x, y, _wf(w, 2), _wf(w, 3), _wf(w, 4), _wf(w, 5));
     }
-    elif (_is(fp, fl, "par") == 1 || _is(fp, fl, "par_slow") == 1 || _is(fp, fl, "par_x") == 1) {
+    elif (_is(fp, fl, "par") == 1 || _is(fp, fl, "par_slow") == 1 || _is(fp, fl, "par_x") == 1
+      || _is(fp, fl, "par_fx") == 1) {
         # par n x1 … xn: the parallel combination 1/Σ 1/xᵢ, correctly rounded (src/crmath_edge.cyr), the exact path
-        # alone for par_slow, the expansion then the exact path for par_x; −1 (all ones) when |Σ 1/xᵢ| < 10^-30, −2
-        # when its buffers are refused
+        # alone for par_slow, the expansion then the exact path for par_x, the fixed-point tier then the exact path
+        # for par_fx (2.0.1); −1 (all ones) when |Σ 1/xᵢ| < 10^-30, −2 when its buffers are refused
         var pn = load64(w);
         var pslow = 0;
         if (fl == 8) { pslow = 1; }
         if (fl == 5) { pslow = 2; }
+        if (fl == 6) { pslow = 3; }
         var po: f64[1];
         var pz = _bj_cr_parallel(w + 8, pn, pslow, &po);
         if (pz != 0) { return 0 - pz; }
         r = po[0];
     }
-    elif (_is(fp, fl, "par_rep") == 1 || _is(fp, fl, "par_rep_slow") == 1 || _is(fp, fl, "par_rep_x") == 1) {
+    elif (_is(fp, fl, "par_rep") == 1 || _is(fp, fl, "par_rep_slow") == 1 || _is(fp, fl, "par_rep_x") == 1
+      || _is(fp, fl, "par_rep_fx") == 1) {
         # par_rep m k x1 … xk: the same over the k values repeated m times (k·m values, a heap buffer)
         var rm = load64(w);
         var rk = load64(w + 8);
         var rslow = 0;
         if (fl == 12) { rslow = 1; }
         if (fl == 9) { rslow = 2; }
+        if (fl == 10) { rslow = 3; }
         var rb = fl_calloc(8 * rm * rk);
         if (rb == 0) { return 0 - 2; }
         for (var ri = 0; ri < rm; ri = ri + 1) {

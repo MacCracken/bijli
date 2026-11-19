@@ -558,7 +558,8 @@ EXACT = ["mono"] + list(SHAPES) + ["sqrt_div", "wsqrt", "sqrt_mono", "sqrt_mono_
          "ux_sub", "ux_sqrt", "r2_below", "gamma", "gamma_slow", "gamma2", "gamma2_slow", "gamma_ok", "prod5",
          "prod5_acc", "mono_wide", "mono_wide_acc", "below_prod", "below_quot", "below_sum", "cm", "cm_slow", "cos_t",
          "cos_t_slow", "lw_reff", "lw_reff_slow", "lw_kappa", "lw_kappa_slow", "par", "par_x", "par_slow",
-         "par_rep", "par_rep_x", "par_rep_slow", "lw_nb", "lw_nb_slow", "lw_reff_ux", "vx_sqrt", "vx_sqrt_e",
+         "par_fx", "par_rep", "par_rep_x", "par_rep_slow", "par_rep_fx", "lw_nb", "lw_nb_slow", "lw_reff_ux",
+         "vx_sqrt", "vx_sqrt_e",
          "vx_gamma", "lwo_reff", "lwo_reff_slow", "lwo_kappa", "lwo_kappa_slow", "lwo_nb", "lwo_nb_slow", "lwo_ux",
          "gammao", "gammao_slow", "gammao2", "gammao2_slow", "sumsq", "sumsq_exact", "abcd", "abcd_slow", "cascade",
          "cascade_slow", "s2z", "s2z_slow", "rat", "rat_x", "rat_slow", "dot4", "jcdot", "jint", "jnorm",
@@ -1097,15 +1098,26 @@ def par_big(rng):
             return x
 
 
+def par_triple(rng):
+    """Three values whose reciprocals cancel exactly: a, −b, −ab/2^j for odd a near 2^25.5 and b = a + 2^j (1/a − 1/b =
+    2^j/(ab)), scaled by 2^t so that the reciprocals reach near 1 (2.0.1, H18: Σ|1/x| past the double-double bounds)."""
+    a = 2 * rng.randint(2 ** 24, 2 ** 25 - 1) + 1
+    j = rng.randint(1, 20)
+    b = a + 2 ** j
+    t = rng.randint(-28, -20)
+    return [math.ldexp(a, t), -math.ldexp(b, t), -math.ldexp(a * b, t - j)]
+
+
 def par_cases(rng, count):
     """Value lists (n ≤ 15): physical positive values; mixed signs; pairs and triples that cancel to ulps; |Σ 1/x|
     within ulps of 10^-30 (one value near 10^30, k equal values near k·10^30, a pair a, −(a + j ulps) near 3e14); exact
     midpoints of 1/S (M₁ and 2^28 − M₁ for odd M₁ near 2^27, at scales 2^±s, either sign order); extremes (±DBL_MAX,
-    1e-30 itself, ±∞ among them, all ∞); repeated values with alternating signs; any finite values."""
+    1e-30 itself, ±∞ among them, all ∞); repeated values with alternating signs; any finite values; up to four exactly
+    cancelling triples (par_triple), alone or with one more value v, whose combination is then v itself (2.0.1)."""
     out = []
     i = 0
     while len(out) < count:
-        kind = i % 8
+        kind = i % 9
         i += 1
         xs = None
         if kind == 0:
@@ -1150,17 +1162,24 @@ def par_cases(rng, count):
         elif kind == 6:
             v = rng.choice([3.0, 0.1, 7.0, 1e20, 5e-30])
             xs = [v if j % 2 == 0 else -v for j in range(rng.randint(2, 15))]
-        else:
+        elif kind == 7:
             xs = [par_big(rng) for _ in range(rng.randint(1, 15))]
+        else:
+            xs = [x for _ in range(rng.randint(1, 4)) for x in par_triple(rng)]
+            if rng.random() < 0.5:
+                xs.insert(rng.randrange(len(xs) + 1), rng.uniform(0.5, 2.0) * 2.0 ** rng.randint(-40, 40))
+            if rng.random() < 0.5:
+                xs = xs[::-1]
         if xs and all(math.isinf(x) or abs(x) >= 1e-30 for x in xs):
             out.append(xs)
     return out
 
 
 def par_families(rng, count):
-    """par (the three tiers), par_x (the expansion, then the exact path) and par_slow (the exact path alone) on
-    par_cases' lists, and par_rep / par_rep_x / par_rep_slow on short patterns repeated up to 20,000 times (sums that
-    cancel to 0 or to ulps, knife edges at 10^-30)."""
+    """par (every tier), par_x (the expansion, then the exact path), par_slow (the exact path alone) and par_fx (the
+    fixed-point tier, then the exact path; 2.0.1) on par_cases' lists, and par_rep / par_rep_x / par_rep_slow /
+    par_rep_fx on short patterns repeated up to 20,000 times (sums that cancel to 0 or to ulps, knife edges at 10^-30,
+    pairs of exactly cancelling triples)."""
     out = []
     for xs in par_cases(rng, count):
         want = par_ref(xs)
@@ -1168,10 +1187,13 @@ def par_families(rng, count):
         out.append(("par", ws, want))
         out.append(("par_x", ws, want))
         out.append(("par_slow", ws, want))
+        out.append(("par_fx", ws, want))
     for _ in range(max(1, count // 200)):
         m = rng.choice([2, 10, 1000, 20000])
-        c = rng.randrange(5)
-        if c == 0:
+        c = rng.randrange(6)
+        if c == 5:
+            pat = par_triple(rng) + par_triple(rng)
+        elif c == 0:
             pat = [3.0, -3.0]
         elif c == 1:
             pat = [10.0, 20.0, 30.0, 40.0, 50.0]
@@ -1186,6 +1208,7 @@ def par_families(rng, count):
         out.append(("par_rep", ws, want))
         out.append(("par_rep_x", ws, want))
         out.append(("par_rep_slow", ws, want))
+        out.append(("par_rep_fx", ws, want))
     return out
 
 
