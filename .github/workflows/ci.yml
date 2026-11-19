@@ -76,5 +76,15 @@ jobs:
       - name: Doc examples (the README's and guides' cyrius blocks compile and run)
         run: python3 -I -B scripts/doc_examples.py .
 
-      # Joins in M1 with the first public API (it measures public fns only):
-      # cyrius coverage --exec --min 80, and cyrius api-surface.
+      - name: Vet
+        run: cyrius vet src/main.cyr
+
+      - name: Coverage (80 % of functions entered by the tests)
+        run: cyrius coverage --exec --min 80
+
+      - name: Public API against its snapshot
+        run: cyrius api-surface
+
+      # Local only: scripts/oracle/validate.py and emit.py --check replay the corpus on the oracle's own libm (its
+      # header names glibc 2.44 x86_64), which a hosted runner doesn't have; the cleanliness check in CLAUDE.md runs
+      # them before every commit.

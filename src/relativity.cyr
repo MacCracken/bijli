@@ -82,6 +82,7 @@ fn _bj_rel_dual_put(g: *f64, k, x: f64, s) {
 # 30: Rust's form cancelled near c, 1e-7 relative at β = 1 − 1e-9, and its rounded v²/c² ≥ 1 refused speeds an ulp
 # below c). InvalidParameter "speed (v m/s) must be less than c" unless |v| < c exactly (NaN refused). Mirrors
 # `relativity::lorentz_factor`.
+#must_use
 public fn bj_lorentz_factor(speed: f64): Result {
     var vv: f64[1];
     vv[0] = speed;
@@ -799,6 +800,7 @@ impl BjEmTensor {
 # E' = γ(E + v × B) − γ²/(γ + 1)·(v⋅E)v/c² and B' = γ(B − v × E/c²) − γ²/(γ + 1)·(v⋅B)v/c², exact for any small v ≠ 0.
 # γ is correctly rounded from the exact c² − |v|² (ADR 0002 row 30). InvalidParameter "boost velocity must be less than
 # c" unless |v| < c exactly (a NaN part refused); the outs untouched. Mirrors `relativity::lorentz_transform_fields`.
+#must_use
 public fn bj_lorentz_transform_fields(e: BjFieldVector, b: BjFieldVector, velocity: BjFieldVector,
   e_out: *BjFieldVector, b_out: *BjFieldVector): Result {
     var vp: f64[3];
@@ -851,6 +853,7 @@ public fn bj_lorentz_transform_fields(e: BjFieldVector, b: BjFieldVector, veloci
 # (E', B') for a boost of speed v along x, into e_out and b_out: E'_x = E_x, E'_y = γ(E_y − vB_z), E'_z = γ(E_z + vB_y);
 # B'_x = B_x, B'_y = γ(B_y + vE_z/c²), B'_z = γ(B_z − vE_y/c²). bj_lorentz_factor's error, the outs untouched. Mirrors
 # `relativity::lorentz_transform_x`.
+#must_use
 public fn bj_lorentz_transform_x(e: BjFieldVector, b: BjFieldVector, speed: f64, e_out: *BjFieldVector,
   b_out: *BjFieldVector): Result {
     var tg, vg = bj_lorentz_factor(speed);
@@ -966,6 +969,7 @@ impl BjFourVector {
 
     # The boost of speed v along x, into out: ct' = γ(ct − βx), x' = γ(x − β·ct). bj_lorentz_factor's error, out
     # untouched. Mirrors `FourVector::boost_x`.
+    #must_use
     public fn boost_x(self, speed: f64, out: *BjFourVector): Result {
         var tg, vg = bj_lorentz_factor(speed);
         if (is_err_result(tg) == 1) { return Err(vg); }
@@ -1011,6 +1015,7 @@ impl BjFourVector {
 # rest |R|, and this is Coulomb's potential), correctly rounded (ADR 0002 row 13; a non-finite q or R_eff keeps Rust's
 # q/(4π·ε₀·R_eff)). The radial distance's errors (InvalidParameter when negative or NaN, Singularity below 1e-30).
 # Mirrors `relativity::retarded_scalar_potential`.
+#must_use
 public fn bj_retarded_scalar_potential(charge: f64, retarded_distance: f64): Result {
     var tc, vc = _bj_check_radial_distance(retarded_distance);
     if (is_err_result(tc) == 1) { return Err(vc); }
@@ -1027,6 +1032,7 @@ public fn bj_retarded_scalar_potential(charge: f64, retarded_distance: f64): Res
 # A = μ₀qv/(4πR_eff) (T⋅m) into out, v and R_eff at the retarded time, each part correctly rounded (ADR 0002 row 13; a
 # non-finite q or R_eff keeps Rust's v·(μ₀q/(4πR_eff)), and a non-finite part its own). As
 # bj_retarded_scalar_potential, out untouched on an error. Mirrors `relativity::retarded_vector_potential`.
+#must_use
 public fn bj_retarded_vector_potential(charge: f64, velocity: BjFieldVector, retarded_distance: f64,
   out: *BjFieldVector): Result {
     var tc, vc = _bj_check_radial_distance(retarded_distance);
@@ -1100,6 +1106,7 @@ fn _bj_rel_reff_ux(r_vec: BjFieldVector, beta_vec: BjFieldVector): (f64, i64) {
 # a NaN input, and for an R with an infinite part ("R vector must be finite": ADR 0002 row 27, amended in M2 part 2d-3e
 # on the user's answer of 2026-11-13; Rust went on to NaN). An R_eff past DBL_MAX runs to 53 bits with an unbounded
 # exponent and φ rounds once (row 18's rule). Mirrors `relativity::lienard_wiechert_scalar_potential`.
+#must_use
 public fn bj_lienard_wiechert_scalar_potential(charge: f64, r_vec: BjFieldVector, beta_vec: BjFieldVector): Result {
     var t, v = _bj_rel_effective_distance(r_vec, beta_vec);
     if (is_err_result(t) == 1) { return Err(v); }
@@ -1121,6 +1128,7 @@ public fn bj_lienard_wiechert_scalar_potential(charge: f64, r_vec: BjFieldVector
 # untouched on an error; where μ₀q, μ₀qc or their quotient by 4πR_eff leaves the normal range, or R_eff passes DBL_MAX,
 # the chain runs with an unbounded exponent and each part rounds once (row 18's rule, M2 part 2d-3e). Mirrors
 # `relativity::lienard_wiechert_vector_potential`.
+#must_use
 public fn bj_lienard_wiechert_vector_potential(charge: f64, r_vec: BjFieldVector, beta_vec: BjFieldVector,
   out: *BjFieldVector): Result {
     var t, v = _bj_rel_effective_distance(r_vec, beta_vec);
@@ -1192,6 +1200,7 @@ fn _bj_rel_avec_edge(charge: f64, r_vec: BjFieldVector, beta_vec: BjFieldVector,
 # (γ²κ³R², the two factors, the cross products) keeps Rust's chain inside a box on q, R, β̇, n̂ − β and γ², and
 # otherwise runs with an unbounded exponent, |R| and 1/|R| included, each part's sum rounded once (row 18's rule, M2
 # part 2d-3f). Mirrors `relativity::lienard_wiechert_e`.
+#must_use
 public fn bj_lienard_wiechert_e(charge: f64, r_vec: BjFieldVector, beta_vec: BjFieldVector, beta_dot: BjFieldVector,
   out: *BjFieldVector): Result {
     return _bj_rel_e_impl(charge, r_vec, beta_vec, beta_dot, out, 0);
@@ -1360,6 +1369,7 @@ public fn bj_larmor_power(charge: f64, acceleration: f64): f64 {
 # P = q²γ⁶/(6πε₀c³)·[a² − |v × a|²/c²] (W), Liénard's relativistic Larmor formula, γ correctly rounded from the exact
 # c² − |v|² (ADR 0002 row 30). InvalidParameter "velocity must be less than c" unless |v| < c exactly. Mirrors
 # `relativity::relativistic_larmor_power`.
+#must_use
 public fn bj_relativistic_larmor_power(charge: f64, velocity: BjFieldVector, acceleration: BjFieldVector): Result {
     var vp: f64[3];
     _bj_rel_parts(velocity, &vp);
@@ -1893,6 +1903,7 @@ fn _bj_rel_solve(obs: *f64, t: f64, traj, max_iterations, st: *f64, out: *f64): 
 # finite, the trajectory returns a non-finite state, no bracket exists (a superluminal trajectory: a non-finite state
 # met while the bracket expands reports this error, ADR 0002 row 31, the user's answer of 2026-11-13), or the
 # refinement has not converged in max_iterations steps. Mirrors `relativity::solve_retarded_time`.
+#must_use
 public fn bj_solve_retarded_time(observer_pos: *f64, observation_time: f64, trajectory_fn, max_iterations): Result {
     var st: f64[9];
     var r: f64[1];
@@ -1911,6 +1922,7 @@ public fn bj_solve_retarded_time(observer_pos: *f64, observation_time: f64, traj
 # each output rounds once (ADR 0002 row 18's rule, M2 part 2d-3j): an R past DBL_MAX (Rust: ∞, then NaN fields), a
 # 1/|R| or n̂ below 2^-1022, a β or β̇ below 2^-1022, or an E that B would see degraded. A non-finite charge keeps
 # Rust's chain (NaN fields where R passes DBL_MAX). Mirrors `relativity::lienard_wiechert_fields`.
+#must_use
 public fn bj_lienard_wiechert_fields(charge: f64, observer_pos: *f64, observation_time: f64, trajectory_fn,
   e_out: *BjFieldVector, b_out: *BjFieldVector): Result {
     if (_bj_log_on(5) == 1) {

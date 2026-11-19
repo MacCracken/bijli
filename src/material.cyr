@@ -138,6 +138,7 @@ public fn bj_dielectric_energy_density(relative_permittivity: f64, e_magnitude: 
 # catastrophe); InvalidPermittivity when ε_r ≤ 0 (X ≤ −1/2, a negative α). Both tests are exact, ε_r is
 # (3ε₀ + 2Nα)/(3ε₀ − Nα) correctly rounded, and the catastrophe reports X correctly rounded (ADR 0002 row 17,
 # src/crmath_edge.cyr). Mirrors `material::clausius_mossotti`.
+#must_use
 public fn bj_clausius_mossotti(polarizability: f64, number_density: f64): Result {
     if (_bj_is_finite(polarizability) == 0 || _bj_is_finite(number_density) == 0 || number_density < 0.0) {
         var t = _bj_err_reason(BJ_ERR_INVALID_PARAMETER);
@@ -199,6 +200,7 @@ public fn bj_magnetization(relative_permeability: f64, h_field: BjFieldVector): 
 # H = B/(μ_r·μ₀) (A/m), into out, each part correctly rounded (ADR 0002 row 13; a non-finite μ_r keeps Rust's
 # B·(1/(μ_r·μ₀)), and a non-finite part its own). DivisionByZero when |μ_r| < 1e-30 (a NaN μ_r passes, as Rust's
 # test), out untouched. Mirrors `material::h_field_from_b`.
+#must_use
 public fn bj_h_field_from_b(relative_permeability: f64, b_field: BjFieldVector, out: *BjFieldVector): Result {
     var a: f64 = f64_abs(relative_permeability);
     if (a < 0.000000000000000000000000000001) {
@@ -231,6 +233,7 @@ public fn bj_b_field_from_h(relative_permeability: f64, h_field: BjFieldVector):
 # u = B²/(2μ) (J/m³), μ = μ_r·μ₀, correctly rounded (ADR 0002 row 13; a non-finite μ_r or B keeps Rust's B·B/(2μ)).
 # DivisionByZero when the exact |μ_r·μ₀| < 10^-30 (ADR 0002 row 17's rule, M2 part 2c-1: Rust tested the rounded
 # product; a NaN passes, as Rust's test). Mirrors `material::magnetic_energy_density_material`.
+#must_use
 public fn bj_magnetic_energy_density_material(relative_permeability: f64, b_magnitude: f64): Result {
     var mu: f64 = relative_permeability * BJ_MU_0;
     var a: f64 = f64_abs(mu);
@@ -260,6 +263,7 @@ public fn bj_bound_surface_current(magnetization: BjFieldVector, normal: BjField
 
 # χ_m = C/T, Curie's law for a paramagnet, C the Curie constant (K) and T the temperature (K). InvalidParameter
 # unless T > 0, a NaN T among them (ADR 0002 row 19: Rust's `T <= 0` let NaN through). Mirrors `material::curie_law`.
+#must_use
 public fn bj_curie_law(curie_constant: f64, temperature: f64): Result {
     if (!(temperature > 0.0)) {
         var t = _bj_err_reason(BJ_ERR_INVALID_PARAMETER);
@@ -274,6 +278,7 @@ public fn bj_curie_law(curie_constant: f64, temperature: f64): Result {
 
 # χ_m = C/(T − T_c), the Curie–Weiss law for a ferromagnet above its Curie temperature T_c. InvalidParameter unless
 # T − T_c > 0, a NaN difference among them (ADR 0002 row 19). Mirrors `material::curie_weiss`.
+#must_use
 public fn bj_curie_weiss(curie_constant: f64, temperature: f64, curie_temperature: f64): Result {
     var d: f64 = temperature - curie_temperature;
     if (!(d > 0.0)) {
@@ -294,6 +299,7 @@ public fn bj_curie_weiss(curie_constant: f64, temperature: f64, curie_temperatur
 # paramagnetic). The exact test χ < −10^-15 is χ ≤ −1e-15 on doubles: the double 1e-15 lies 0.39 ulp above 10^-15,
 # and no double falls between them (ADR 0002 row 17's rule, the user's answer of 2026-11-12: Rust's χ < −1e-15 left
 # the double −1e-15 itself, which is below −10^-15, paramagnetic). Mirrors `material::classify_magnetic`.
+#must_use
 public fn bj_classify_magnetic(susceptibility: f64): Result {
     if (susceptibility != susceptibility) {
         return Err(_bj_err_invalid_parameter("magnetic susceptibility must not be NaN, got NaN"));
@@ -361,6 +367,7 @@ public fn BjMaterial_default(): BjMaterial {
 # are positive and finite; InvalidParameter for σ ≠ 0 (a conductor's index depends on frequency). bijli-internal, for
 # the Fresnel functions (Rust's `pub(crate) Material::lossless_optical_constants`); public only so that src/wave.cyr
 # can call it in the tests' build.
+#must_use
 public fn _bj_material_lossless_optical_constants(m: BjMaterial, out: *f64): Result {
     var e: f64 = m.eps_r;
     var u: f64 = m.mu_r;
@@ -426,6 +433,7 @@ impl BjMaterial {
     # η = √(μ/ε) (Ω), the lossless wave impedance, correctly rounded (ADR 0002 row 13); σ is ignored.
     # InvalidPermittivity, then InvalidPermeability, unless ε_r, μ_r are positive and finite. Mirrors
     # `Material::impedance`.
+    #must_use
     public fn impedance(self): Result {
         var e: f64 = self.eps_r;
         var u: f64 = self.mu_r;
@@ -444,6 +452,7 @@ impl BjMaterial {
     # v = 1/√(ε_r·ε₀·μ_r·μ₀) (m/s), correctly rounded (ADR 0002 row 13). InvalidPermittivity, then
     # InvalidPermeability, unless ε_r, μ_r are positive and finite: impedance's validation (ADR 0002 row 20; Rust
     # refused a non-positive or NaN value as InvalidParameter and accepted ∞). Mirrors `Material::wave_speed`.
+    #must_use
     public fn wave_speed(self): Result {
         var e: f64 = self.eps_r;
         var u: f64 = self.mu_r;
@@ -472,6 +481,7 @@ impl BjMaterial {
     # _bj_material_lossless_optical_constants, this material's first. Γ as src/crmath_vx.cyr's _bj_vx_gamma (an η past
     # DBL_MAX or subnormal runs with an unbounded exponent: ADR 0002 row 18's rule, M2 part 2d-2c). Mirrors
     # `Material::try_reflectance_at`.
+    #must_use
     public fn try_reflectance_at(self, other: BjMaterial): Result {
         var c1: f64[2];
         var c2: f64[2];

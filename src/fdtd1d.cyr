@@ -27,7 +27,7 @@ var _BJ_FD1_MAX_CELLS = 164703072086692425;
 
 # Rust's `run(steps, None, ..)`: no source cell. Rust's Some(cell) with cell ≥ num_cells injects nothing either, so
 # usize::MAX (−1) is None exactly.
-public var BJ_FDTD_NO_SOURCE = 0 - 1;
+public const BJ_FDTD_NO_SOURCE = -1;
 
 # 1D FDTD simulation state: E_z and H_y along x. `e_field` and `h_field` are the addresses of num_cells f64 (read and
 # write them, as Rust's public vectors); `permittivity` and `permeability` hold ε_r per E node and μ_r per H node,

@@ -32,6 +32,13 @@ The 2.0.1 audit and its repairs (`docs/development/port-parity.md` §142, findin
 - **ai** — a negative endpoint or key length is InvalidParameter ("daimon endpoint length must be non-negative, got
   n"), where it was Allocation. A logged endpoint has its control bytes written as `\xNN`, and the success log
   prints the id alone, not the caller's whole text (ADR 0002 row 46, amended; H31).
+- **errors** — `bj_init` returns 0 in thread_local's foreign mode (a glibc host owns the thread pointer), where every
+  thread shares the static record: it answered 1, "threads get records of their own" (H34).
+- **fdtd** — `BJ_FDTD_NO_SOURCE`, `BJ_FDTD2D_NO_SOURCE` and `BJ_FDTD3D_NO_SOURCE` are consts. They were writable
+  public vars, so a consumer's write changed every `run`'s no-source test process-wide (H33).
+- **rules** — the 109 public Result functions of field, charge, maxwell, material, wave, circuit, relativity and
+  polarization carry `#must_use`, as beam's, rf's and scattering's did, so a dropped result is a compiler warning;
+  two Results wave.cyr dropped are checked (H32).
 - **every owning constructor and reader** — on an error, `out` is left empty (every word 0), so its `_free` does
   nothing; 2.0.0 left it untouched, and a `_free` after a failure (a `defer`) freed whatever the stack held. This
   covers the FDTD grids, the CPML, the TF/SF source, the non-uniform grid, the CW accumulator, the eigenmodes, NF2FF,
@@ -39,6 +46,15 @@ The 2.0.1 audit and its repairs (`docs/development/port-parity.md` §142, findin
   (ADR 0002 row 48, H12). `cascade` leaves an `out` that is one of its inputs as it was.
 
 ### Fixed
+- **docs** (H34) — stale claims corrected:
+  - ADR 0002 row 2 now gives the 2D grid three scratch rows;
+  - `bj_last_error_detail`'s list includes Deserialize;
+  - the parallel combinations' docs give the exact 10^-30 test and their Allocation error;
+  - the Lorentz helpers' preconditions name the subnormals the n̂ − β candidates reach;
+  - CLAUDE.md's memory rule names the FDTD grids' anonymous mmaps.
+  CLAUDE.md's cleanliness check gains `cyrius fuzz` and validate.py. CI gains vet, the coverage gate and the API
+  snapshot check; the two corpus replays stay local, since they need the oracle's glibc. `_bj_vx_sin53` and
+  `_bj_vx_cos53` return NaN past 2^4452, where the 2/π table ends; no caller reaches it (H33).
 - **field** — `bj_trace_field_line` copies `start` before its polyline can grow. A line continued from its own last
   point (`start = line.at(k)`) used to read the block it had just freed, unmapped once past 4 KiB (H1). The field
   function now gets a copy of the position, as Rust passes it by value, and a zeroed vector to fill (H10).

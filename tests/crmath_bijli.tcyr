@@ -313,6 +313,18 @@ fn main() {
     var e0: f64 = _bj_from_bits(load64(&_bj_cr_exp2t));
     assert(c0 == 1.0 && e0 == 1.0 && load64(&_bj_cr_2opi) == 0xA2F9836,
       "the other tables are there before any call: cos 0 = 2^0 = 1, 2/π's first chunk");
+
+    test_group("cyrius_audit_201_angle_range (2.0.1 bite 5, H33)");
+    # The 53-bit sine and cosine past DBL_MAX read 2/π up to 2^4452; past it they are NaN, where they read off the end.
+    var a1, a2 = _bj_vx_sin53(1.5, 4000);
+    var b1, b2 = _bj_vx_cos53(1.5, 4452);
+    var c1, c2 = _bj_vx_sin53(1.5, 4453);
+    var d1, d2 = _bj_vx_cos53(1.5, 100000);
+    var a1f: f64 = a1;
+    var b1f: f64 = b1;
+    var c1f: f64 = c1;
+    var d1f: f64 = d1;
+    assert(a1f == a1f && b1f == b1f && c1f != c1f && d1f != d1f, "2^4000 and 2^4452 computed; 2^4453 and past: NaN");
     return assert_summary();
 }
 

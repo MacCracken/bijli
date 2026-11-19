@@ -30,6 +30,7 @@ public fn bj_voltage(current: f64, resistance: f64): f64 {
 }
 
 # I = V/R. DivisionByZero when |R| < 1e-30. Mirrors `circuit::current`.
+#must_use
 public fn bj_current(voltage: f64, resistance: f64): Result {
     var a: f64 = f64_abs(resistance);
     if (a < 0.000000000000000000000000000001) {
@@ -40,6 +41,7 @@ public fn bj_current(voltage: f64, resistance: f64): Result {
 }
 
 # R = V/I. DivisionByZero when |I| < 1e-30. Mirrors `circuit::resistance`.
+#must_use
 public fn bj_resistance(voltage: f64, current: f64): Result {
     var a: f64 = f64_abs(current);
     if (a < 0.000000000000000000000000000001) {
@@ -59,6 +61,7 @@ public fn bj_power(current: f64, voltage: f64): f64 {
 
 # R = ρL/A, correctly rounded (ADR 0002 row 13; a non-finite ρ, L or A keeps Rust's (ρ·L)/A). InvalidParameter unless
 # A > 0, a NaN area too (row 26; Rust's `A <= 0` let it through). Mirrors `circuit::resistance_from_geometry`.
+#must_use
 public fn bj_resistance_from_geometry(resistivity: f64, length: f64, cross_section_area: f64): Result {
     if (!(cross_section_area > 0.0)) {
         var t = _bj_err_reason(BJ_ERR_INVALID_PARAMETER);
@@ -164,14 +167,17 @@ fn _bj_circuit_inverse(xs: *f64, n, what, kind): Result {
 }
 
 # R = R₁ + R₂ + … over the n values at resistances. InvalidParameter for n = 0. Mirrors `circuit::resistance_series`.
+#must_use
 public fn bj_resistance_series(resistances: *f64, n): Result {
     var t, v = _bj_circuit_sum(resistances, n, "resistance");
     if (is_err_result(t) == 1) { return Err(v); }
     return Ok(v);
 }
 
-# 1/R = 1/R₁ + 1/R₂ + …. InvalidParameter for n = 0; DivisionByZero for an |Rᵢ| < 1e-30 or an |Σ 1/Rᵢ| < 1e-30.
-# Mirrors `circuit::resistance_parallel`.
+# 1/R = 1/R₁ + 1/R₂ + …, correctly rounded from the exact sum. InvalidParameter for n = 0; DivisionByZero for an
+# |Rᵢ| < 1e-30 or an |Σ 1/Rᵢ| < 10^-30 exactly (ADR 0002 row 17); Allocation when the exact path's buffers can't be had
+# (only a sum the bounded tiers leave reaches it). Mirrors `circuit::resistance_parallel`.
+#must_use
 public fn bj_resistance_parallel(resistances: *f64, n): Result {
     var t, v = _bj_circuit_inverse(resistances, n, "resistance", "parallel");
     if (is_err_result(t) == 1) { return Err(v); }
@@ -179,6 +185,7 @@ public fn bj_resistance_parallel(resistances: *f64, n): Result {
 }
 
 # 1/C = 1/C₁ + 1/C₂ + …. As bj_resistance_parallel. Mirrors `circuit::capacitance_series`.
+#must_use
 public fn bj_capacitance_series(capacitances: *f64, n): Result {
     var t, v = _bj_circuit_inverse(capacitances, n, "capacitance", "series");
     if (is_err_result(t) == 1) { return Err(v); }
@@ -186,6 +193,7 @@ public fn bj_capacitance_series(capacitances: *f64, n): Result {
 }
 
 # C = C₁ + C₂ + …. InvalidParameter for n = 0. Mirrors `circuit::capacitance_parallel`.
+#must_use
 public fn bj_capacitance_parallel(capacitances: *f64, n): Result {
     var t, v = _bj_circuit_sum(capacitances, n, "capacitance");
     if (is_err_result(t) == 1) { return Err(v); }
@@ -193,6 +201,7 @@ public fn bj_capacitance_parallel(capacitances: *f64, n): Result {
 }
 
 # L = L₁ + L₂ + …. InvalidParameter for n = 0. Mirrors `circuit::inductance_series`.
+#must_use
 public fn bj_inductance_series(inductances: *f64, n): Result {
     var t, v = _bj_circuit_sum(inductances, n, "inductance");
     if (is_err_result(t) == 1) { return Err(v); }
@@ -200,6 +209,7 @@ public fn bj_inductance_series(inductances: *f64, n): Result {
 }
 
 # 1/L = 1/L₁ + 1/L₂ + …. As bj_resistance_parallel. Mirrors `circuit::inductance_parallel`.
+#must_use
 public fn bj_inductance_parallel(inductances: *f64, n): Result {
     var t, v = _bj_circuit_inverse(inductances, n, "inductance", "parallel");
     if (is_err_result(t) == 1) { return Err(v); }
@@ -210,6 +220,7 @@ public fn bj_inductance_parallel(inductances: *f64, n): Result {
 
 # C = εA/d, correctly rounded (ADR 0002 row 13; a non-finite ε, A or d keeps Rust's (ε·A)/d). InvalidParameter unless
 # d > 0, a NaN separation too (row 26; Rust's `d <= 0` let it through). Mirrors `circuit::parallel_plate_capacitance`.
+#must_use
 public fn bj_parallel_plate_capacitance(permittivity: f64, area: f64, separation: f64): Result {
     if (!(separation > 0.0)) {
         var t = _bj_err_reason(BJ_ERR_INVALID_PARAMETER);
@@ -497,6 +508,7 @@ public fn bj_rc_discharging_voltage(v0: f64, resistance: f64, capacitance: f64, 
 }
 
 # τ = L/R (s). DivisionByZero when |R| < 1e-30. Mirrors `circuit::rl_time_constant`.
+#must_use
 public fn bj_rl_time_constant(inductance: f64, resistance: f64): Result {
     var a: f64 = f64_abs(resistance);
     if (a < 0.000000000000000000000000000001) {
@@ -508,6 +520,7 @@ public fn bj_rl_time_constant(inductance: f64, resistance: f64): Result {
 
 # I(t) = (V/R)(1 − e^(−tR/L)); V/R when the exact |L/R| < 10^-30 (an instant rise; row 17's rule), 1 − e^(−tR/L) as
 # −expm1(−tR/L) (ADR 0002 row 29). DivisionByZero when |R| < 1e-30. Mirrors `circuit::rl_current_rise`.
+#must_use
 public fn bj_rl_current_rise(voltage: f64, resistance: f64, inductance: f64, t: f64): Result {
     var a: f64 = f64_abs(resistance);
     if (a < 0.000000000000000000000000000001) {
@@ -537,6 +550,7 @@ public fn bj_rl_current_rise(voltage: f64, resistance: f64, inductance: f64, t: 
 
 # I(t) = I₀e^(−tR/L); 0 when the exact |L/R| < 10^-30 (row 17's rule). DivisionByZero when |R| < 1e-30. Mirrors
 # `circuit::rl_current_decay`.
+#must_use
 public fn bj_rl_current_decay(i0: f64, resistance: f64, inductance: f64, t: f64): Result {
     var a: f64 = f64_abs(resistance);
     if (a < 0.000000000000000000000000000001) {
@@ -584,6 +598,7 @@ fn _bj_circuit_check_r(resistance: f64): i64 {
 
 # f₀ = 1/(2π√(LC)) (Hz), correctly rounded (ADR 0002 row 13: √(1/((2π)²LC)), 2π Rust's π doubled). InvalidParameter
 # unless L and C are finite and positive. Mirrors `circuit::resonant_frequency`.
+#must_use
 public fn bj_resonant_frequency(inductance: f64, capacitance: f64): Result {
     var c = _bj_circuit_check_lc(inductance, capacitance);
     if (c != 0) { return Err(c); }
@@ -598,6 +613,7 @@ public fn bj_resonant_frequency(inductance: f64, capacitance: f64): Result {
 
 # ω₀ = 1/√(LC) (rad/s), correctly rounded (ADR 0002 row 13). As bj_resonant_frequency. Mirrors
 # `circuit::resonant_angular_frequency`.
+#must_use
 public fn bj_resonant_angular_frequency(inductance: f64, capacitance: f64): Result {
     var c = _bj_circuit_check_lc(inductance, capacitance);
     if (c != 0) { return Err(c); }
@@ -612,6 +628,7 @@ public fn bj_resonant_angular_frequency(inductance: f64, capacitance: f64): Resu
 # correctly rounded (ADR 0002 row 13: √(L/(C·R²))).
 # InvalidParameter unless R is finite and non-negative; DivisionByZero for R < 1e-30; then InvalidParameter unless L
 # and C are finite and positive. Mirrors `circuit::quality_factor`.
+#must_use
 public fn bj_quality_factor(resistance: f64, inductance: f64, capacitance: f64): Result {
     var cr = _bj_circuit_check_r(resistance);
     if (cr != 0) { return Err(cr); }
@@ -634,6 +651,7 @@ public fn bj_quality_factor(resistance: f64, inductance: f64, capacitance: f64):
 # Correctly rounded for R > 0 (ADR 0002 row 13: kimiya's RN(R·√((C/L)·2^-2))); a zero R keeps Rust's chain (±0).
 # InvalidParameter unless R is finite and non-negative, then unless L and C are finite and positive. Mirrors
 # `circuit::damping_ratio`.
+#must_use
 public fn bj_damping_ratio(resistance: f64, inductance: f64, capacitance: f64): Result {
     var cr = _bj_circuit_check_r(resistance);
     if (cr != 0) { return Err(cr); }
@@ -655,6 +673,7 @@ public fn bj_damping_ratio(resistance: f64, inductance: f64, capacitance: f64): 
 # quotient below 2^-1022 is then absorbed, and X is the chain's wherever X² is not negligible); otherwise, for finite
 # operands, the chain runs with an unbounded exponent and √ rounds once (ADR 0002 row 18's rule, M2 part 2d-3a: R past
 # 1.3·10^154 had made |Z| ∞, and R = 10^-200 at resonance 0). Mirrors `circuit::rlc_impedance`.
+#must_use
 public fn bj_rlc_impedance(resistance: f64, inductance: f64, capacitance: f64, angular_freq: f64): Result {
     var w: f64 = angular_freq;
     var aw: f64 = f64_abs(w);

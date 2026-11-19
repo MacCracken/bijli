@@ -8062,3 +8062,43 @@ H26–H31 of §142, each an ADR 0002 row (the user's answer of 2026-11-18). H29'
   moved change, and all 520 are equal on x86_64 ELF, x86_64 PE and aarch64 (whole suites, one target at a time, each
   with only the recorded warnings). validate.py: 770,127 rows, 0 problems; 2,975 assertions (15 new); coverage 449
   of 449; the API snapshot unchanged. Next: bite 5, the rules and the docs.
+
+## 150. 2.0.1 bite 5: the rules and the docs (2026-11-18)
+
+H32–H34 of §142, and the process gaps it found.
+- **H32**: `#must_use` on the 109 public Result functions of the computing modules: field 24, charge 8, maxwell 6,
+  material 10, wave 28, circuit 18, relativity 12, polarization 3. Beam, rf and scattering already marked theirs.
+  - The grids' mutators (`set_*`, `try_enable_cpml*`, `GpuFdtd2d`'s), compute's backend calls and the ai client stay
+    unmarked: CLAUDE.md asks it of pure functions, and a caller may drop a mutator's Result once its inputs are
+    checked.
+  - A probe confirmed that the compiler warns at a call that drops one ("#must_use result of 'bj_wave_speed' is
+    discarded"); the whole suite, the benches and the doc examples drop none.
+  - The two `_bj_wave_ratio_of` results that `bj_reflectance_normal` and `bj_schlick_reflectance` dropped are now
+    checked. Their guards rule the error out.
+- **H33**:
+  - The three `NO_SOURCE` sentinels are `public const` (−1), and the API snapshot is unchanged.
+  - `_bj_vx_sin53`/`cos53` return NaN for an exponent past 4,452, inside their already-rare branch past 2^1023.
+    crmath_bijli.tcyr's `cyrius_audit_201_angle_range` checks 2^4000 and 2^4452 against 2^4453 and 2^100000.
+  - `_bj_nf_at` is `#must_use`.
+- **H34**:
+  - ADR 0002 row 2's scratch rows (three).
+  - `bj_last_error_detail`'s list (Deserialize).
+  - `bj_init` in foreign mode: code, returning 0 as its doc says.
+  - The combinations' docs (the exact threshold, Allocation).
+  - The Lorentz helpers' preconditions: `_bj_g_scale` into the subnormals, `_bj_g_step` and `_bj_g_mid` at 0 and the
+    subnormals.
+  - CLAUDE.md's memory rule (the mmaps; `out` empty on Err, row 48).
+  - The timeout, sandhi-memory and 2 GiB claims were corrected in §145 and §149.
+- **The process**:
+  - CLAUDE.md's cleanliness check runs `cyrius fuzz` and validate.py.
+  - .github/workflows/ci.yml gains `cyrius vet`, `cyrius coverage --exec --min 80` and `cyrius api-surface`. They
+    were deferred "until M1's first public API" and never added.
+  - validate.py and `emit.py --check` stay local: `check_platform` needs the oracle's libm, glibc 2.44 x86_64, which
+    a hosted runner doesn't have. CLAUDE.md and the workflow say so.
+- **Benchmarks**: two interleaved rounds against bite 4's src/ (load 0.7–1.0, nothing else running), median ratio
+  1.000 in each; the rows this bite touched move within a nanosecond or two (`wave/fresnel_rs_direct` −1.9 and −0.4 %,
+  `fdtd/run_100_steps_500_cells` 0.0 and −0.7 %).
+- **Result**: the gate clean, all 17 steps; parity and the 520 digests unchanged; validate.py: 770,127 rows, 0
+  problems; 2,976 assertions (1 new); coverage 449 of 449; the API snapshot unchanged; the doc examples and the
+  benches without a `#must_use` warning. The changed test files (crmath_bijli, error, wave, the FDTD files, nf2ff,
+  circuit) pass on x86_64 PE and aarch64. Next: bite 6, the JSON fuzz harness.

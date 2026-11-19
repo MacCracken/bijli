@@ -21,6 +21,7 @@ public struct BjPointCharge {
 
 # A point charge into out; InvalidParameter when mass is NaN or not positive, out untouched. Mirrors
 # `PointCharge::new`.
+#must_use
 public fn BjPointCharge_new(charge: f64, mass: f64, position: *f64, velocity: *f64, out: *BjPointCharge): Result {
     if (mass != mass || mass <= 0.0) {
         var t = _bj_err_reason(BJ_ERR_INVALID_PARAMETER);
@@ -72,6 +73,7 @@ fn _bj_tuple3_put(t: (f64, f64, f64), p: *f64): i64 {
 impl BjPointCharge {
     # E at field_pos from this charge, into out: bj_electric_field_point_charge's value and errors. Mirrors
     # `PointCharge::electric_field_at`.
+    #must_use
     public fn electric_field_at(self, field_pos: *f64, out: *BjFieldVector): Result {
         var pos: f64[3];
         _bj_tuple3_put(self.position, &pos);
@@ -80,6 +82,7 @@ impl BjPointCharge {
 
     # V at field_pos from this charge: bj_electric_potential_point_charge's value and errors. Mirrors
     # `PointCharge::electric_potential_at`.
+    #must_use
     public fn electric_potential_at(self, field_pos: *f64): Result {
         var pos: f64[3];
         _bj_tuple3_put(self.position, &pos);
@@ -88,6 +91,7 @@ impl BjPointCharge {
 
     # B at field_pos from this moving charge (Biot–Savart), into out: bj_magnetic_field_moving_charge's. Mirrors
     # `PointCharge::magnetic_field_at`.
+    #must_use
     public fn magnetic_field_at(self, field_pos: *f64, out: *BjFieldVector): Result {
         var pos: f64[3];
         var vel: f64[3];
@@ -109,6 +113,7 @@ impl BjPointCharge {
 # F = kq₁q₂/r²·r̂ (N) on q1 from q2, as k·q₁·q₂·(1/r)³ times the offset q1 − q2 (away from q2 when they repel).
 # At a range edge with an unbounded exponent, each component rounded once (ADR 0002 row 18). Singularity when the
 # exact r² < 10^-30 (row 17). Mirrors `charge::coulomb_force`.
+#must_use
 public fn bj_coulomb_force(q1: BjPointCharge, q2: BjPointCharge, out: *BjFieldVector): Result {
     var dx: f64 = q1.position.0 - q2.position.0;
     var dy: f64 = q1.position.1 - q2.position.1;
@@ -256,6 +261,7 @@ public fn bj_potential_energy(charge: f64, potential: f64): f64 {
 # U = kq₁q₂/r (J), correctly rounded (ADR 0002 row 13; an infinite or NaN operand keeps Rust's (k·q₁·q₂)/r).
 # InvalidParameter when r is NaN or negative, Singularity below 1e-30 m (field.rs's check_radial_distance). Mirrors
 # `charge::coulomb_potential_energy`.
+#must_use
 public fn bj_coulomb_potential_energy(q1: f64, q2: f64, distance: f64): Result {
     var t, v = _bj_check_radial_distance(distance);
     if (is_err_result(t) == 1) { return Err(v); }
@@ -290,6 +296,7 @@ fn _bj_check_mass(mass: f64, what): i64 {
 # ω_c = |q|B/m (rad/s) for |B| ≥ 0 (T), correctly rounded (ADR 0002 row 13; an infinite operand keeps Rust's
 # (|q|·B)/m). DivisionByZero for a zero mass; InvalidParameter for a negative mass, a NaN
 # charge, or a negative or NaN |B| (in that order). Mirrors `charge::cyclotron_frequency`.
+#must_use
 public fn bj_cyclotron_frequency(charge: f64, mass: f64, b_magnitude: f64): Result {
     var c = _bj_check_mass(mass, "cyclotron frequency");
     if (c != 0) { return Err(c); }
@@ -313,6 +320,7 @@ public fn bj_cyclotron_frequency(charge: f64, mass: f64, b_magnitude: f64): Resu
 # so a tiny |q|·B can't underflow, but m·|v⊥| still can; an infinite operand keeps that chain). DivisionByZero for a
 # zero mass, charge or |B|; InvalidParameter for a negative mass or |B|, or a NaN argument (in Rust's order). Mirrors
 # `charge::larmor_radius`.
+#must_use
 public fn bj_larmor_radius(mass: f64, v_perp: f64, charge: f64, b_magnitude: f64): Result {
     var c = _bj_check_mass(mass, "Larmor radius");
     if (c != 0) { return Err(c); }

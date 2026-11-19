@@ -211,6 +211,7 @@ public fn bj_plane_wave_e(e_amplitude: f64, k: f64, x: f64, omega: f64, t: f64, 
 
 # k = 2πf/v, correctly rounded (ADR 0002 row 13; a non-finite f or v keeps Rust's (2π·f)/v). DivisionByZero when
 # |v| < 1e-30 (a NaN v passes, as Rust's test). Mirrors `wave::wave_number`.
+#must_use
 public fn bj_wave_number(frequency: f64, velocity: f64): Result {
     var a: f64 = f64_abs(velocity);
     if (a < 0.000000000000000000000000000001) {
@@ -262,6 +263,7 @@ public fn bj_momentum_density(e: BjFieldVector, b: BjFieldVector): BjFieldVector
 # internal reflection). DivisionByZero when |n₂| < 1e-30. An n₁ sin θ_i below 2^-1022 (or 0 by underflow) runs with an
 # unbounded exponent, the quotient rounded once (ADR 0002 row 18's rule, M2 part 2d-2b). Mirrors
 # `wave::snell_refraction_angle`.
+#must_use
 public fn bj_snell_refraction_angle(n1: f64, n2: f64, theta_i: f64, out: *f64): Result {
     var a: f64 = f64_abs(n2);
     if (a < 0.000000000000000000000000000001) {
@@ -285,6 +287,7 @@ public fn bj_snell_refraction_angle(n1: f64, n2: f64, theta_i: f64, out: *f64): 
 
 # θ_c = asin(n₂/n₁): Ok(Some) with θ_c in *out, or Ok(None) when n₂/n₁ ≥ 1 (no total internal reflection).
 # DivisionByZero when |n₁| < 1e-30. Mirrors `wave::critical_angle`.
+#must_use
 public fn bj_critical_angle(n1: f64, n2: f64, out: *f64): Result {
     var a: f64 = f64_abs(n1);
     if (a < 0.000000000000000000000000000001) {
@@ -299,6 +302,7 @@ public fn bj_critical_angle(n1: f64, n2: f64, out: *f64): Result {
 
 # θ_B = atan(n₂/n₁), where the reflection is purely s-polarized. DivisionByZero when |n₁| < 1e-30. Mirrors
 # `wave::brewster_angle`.
+#must_use
 public fn bj_brewster_angle(n1: f64, n2: f64): Result {
     var a: f64 = f64_abs(n1);
     if (a < 0.000000000000000000000000000001) {
@@ -359,6 +363,7 @@ fn _bj_wave_fresnel_angles(a: f64, theta_i: f64, b: f64, theta_t: f64): Result {
 
 # r_s = (n₁ cos θ_i − n₂ cos θ_t)/(n₁ cos θ_i + n₂ cos θ_t), TE. DivisionByZero when the denominator's magnitude is
 # below 1e-30. Mirrors `wave::fresnel_rs`.
+#must_use
 public fn bj_fresnel_rs(n1: f64, theta_i: f64, n2: f64, theta_t: f64): Result {
     var t, v = _bj_wave_fresnel_angles(n1, theta_i, n2, theta_t);
     if (is_err_result(t) == 1) { return Err(v); }
@@ -366,6 +371,7 @@ public fn bj_fresnel_rs(n1: f64, theta_i: f64, n2: f64, theta_t: f64): Result {
 }
 
 # r_p = (n₂ cos θ_i − n₁ cos θ_t)/(n₂ cos θ_i + n₁ cos θ_t), TM. As bj_fresnel_rs. Mirrors `wave::fresnel_rp`.
+#must_use
 public fn bj_fresnel_rp(n1: f64, theta_i: f64, n2: f64, theta_t: f64): Result {
     var t, v = _bj_wave_fresnel_angles(n2, theta_i, n1, theta_t);
     if (is_err_result(t) == 1) { return Err(v); }
@@ -373,6 +379,7 @@ public fn bj_fresnel_rp(n1: f64, theta_i: f64, n2: f64, theta_t: f64): Result {
 }
 
 # R_s = r_s². As bj_fresnel_rs. Mirrors `wave::reflectance_s`.
+#must_use
 public fn bj_reflectance_s(n1: f64, theta_i: f64, n2: f64, theta_t: f64): Result {
     var t, v = _bj_wave_fresnel_angles(n1, theta_i, n2, theta_t);
     if (is_err_result(t) == 1) { return Err(v); }
@@ -382,6 +389,7 @@ public fn bj_reflectance_s(n1: f64, theta_i: f64, n2: f64, theta_t: f64): Result
 }
 
 # R_p = r_p². As bj_fresnel_rp. Mirrors `wave::reflectance_p`.
+#must_use
 public fn bj_reflectance_p(n1: f64, theta_i: f64, n2: f64, theta_t: f64): Result {
     var t, v = _bj_wave_fresnel_angles(n2, theta_i, n1, theta_t);
     if (is_err_result(t) == 1) { return Err(v); }
@@ -394,6 +402,7 @@ public fn bj_reflectance_p(n1: f64, theta_i: f64, n2: f64, theta_t: f64): Result
 # 17's rule, M2 part 2c-1: the rounded sum decides outside 64 ulps of the double nearest 10^-30, src/crmath_cmp.cyr's
 # exact sum inside; a NaN sum passes, as Rust's test). The ratio as _bj_wave_ratio_of (a sum past DBL_MAX). Mirrors
 # `wave::reflectance_normal`.
+#must_use
 public fn bj_reflectance_normal(n1: f64, n2: f64): Result {
     var den: f64 = n1 + n2;
     var m: f64 = f64_abs(den);
@@ -403,12 +412,14 @@ public fn bj_reflectance_normal(n1: f64, n2: f64): Result {
         return Err(_bj_err_division_by_zero("sum of refractive indices cannot be zero"));
     }
     var tq, vq = _bj_wave_ratio_of(n1, 1.0, n2, 1.0, 0);
+    if (is_err_result(tq) == 1) { return Err(vq); }   # the guard above rules it out; checked, not assumed (2.0.1)
     var r: f64 = vq;
     var rr: f64 = r * r;
     return Ok(rr);
 }
 
 # T = 1 − R at normal incidence; bj_reflectance_normal's error. Mirrors `wave::transmittance_normal`.
+#must_use
 public fn bj_transmittance_normal(n1: f64, n2: f64): Result {
     var t, v = bj_reflectance_normal(n1, n2);
     if (is_err_result(t) == 1) { return Err(v); }
@@ -504,6 +515,7 @@ fn _bj_wave_direct(n1: f64, n2: f64, cos_theta_i: f64, swap, out: *f64): Result 
 # cos θ_t = √(1 − (n₁/n₂)²(1 − cos²θ_i)), no trig: Ok(Some) with it in *out, or Ok(None) under total internal
 # reflection. DivisionByZero for n₂ = 0; InvalidParameter for an index that is not positive and finite, or cos θ_i
 # outside [0, 1] beyond the 1e-6 clamp. Mirrors `wave::snell_cos_theta_t`.
+#must_use
 public fn bj_snell_cos_theta_t(n1: f64, n2: f64, cos_theta_i: f64, out: *f64): Result {
     var cs: f64[2];
     var t, v = _bj_wave_cosines(n1, n2, cos_theta_i, &cs);
@@ -515,6 +527,7 @@ public fn bj_snell_cos_theta_t(n1: f64, n2: f64, cos_theta_i: f64, out: *f64): R
 
 # r_s from cos θ_i, no trig: Ok(Some) with r_s in *out (exactly 0 for n₁ = n₂, grazing incidence included), or Ok(None)
 # under total internal reflection (|r_s| = 1). The errors of bj_snell_cos_theta_t. Mirrors `wave::fresnel_rs_direct`.
+#must_use
 public fn bj_fresnel_rs_direct(n1: f64, n2: f64, cos_theta_i: f64, out: *f64): Result {
     var t, v = _bj_wave_direct(n1, n2, cos_theta_i, 0, out);
     if (is_err_result(t) == 1) { return Err(v); }
@@ -523,6 +536,7 @@ public fn bj_fresnel_rs_direct(n1: f64, n2: f64, cos_theta_i: f64, out: *f64): R
 
 # r_p from cos θ_i, no trig: as bj_fresnel_rs_direct with n₁ and n₂ swapped in the ratio. Mirrors
 # `wave::fresnel_rp_direct`.
+#must_use
 public fn bj_fresnel_rp_direct(n1: f64, n2: f64, cos_theta_i: f64, out: *f64): Result {
     var t, v = _bj_wave_direct(n1, n2, cos_theta_i, 1, out);
     if (is_err_result(t) == 1) { return Err(v); }
@@ -530,6 +544,7 @@ public fn bj_fresnel_rp_direct(n1: f64, n2: f64, cos_theta_i: f64, out: *f64): R
 }
 
 # R_s = r_s² from cos θ_i, 1 under total internal reflection. Mirrors `wave::reflectance_s_direct`.
+#must_use
 public fn bj_reflectance_s_direct(n1: f64, n2: f64, cos_theta_i: f64): Result {
     var r: f64[1];
     var t, v = _bj_wave_direct(n1, n2, cos_theta_i, 0, &r);
@@ -541,6 +556,7 @@ public fn bj_reflectance_s_direct(n1: f64, n2: f64, cos_theta_i: f64): Result {
 }
 
 # R_p = r_p² from cos θ_i, 1 under total internal reflection. Mirrors `wave::reflectance_p_direct`.
+#must_use
 public fn bj_reflectance_p_direct(n1: f64, n2: f64, cos_theta_i: f64): Result {
     var r: f64[1];
     var t, v = _bj_wave_direct(n1, n2, cos_theta_i, 1, &r);
@@ -553,6 +569,7 @@ public fn bj_reflectance_p_direct(n1: f64, n2: f64, cos_theta_i: f64): Result {
 
 # R = (R_s + R_p)/2 from cos θ_i, in [0, 1]: 1 under total internal reflection, 0 for n₁ = n₂; cos θ_t is computed
 # once for both polarizations. The errors of bj_snell_cos_theta_t. Mirrors `wave::reflectance_unpolarized`.
+#must_use
 public fn bj_reflectance_unpolarized(n1: f64, n2: f64, cos_theta_i: f64): Result {
     var cs: f64[2];
     var t, v = _bj_wave_cosines(n1, n2, cos_theta_i, &cs);
@@ -565,6 +582,7 @@ public fn bj_reflectance_unpolarized(n1: f64, n2: f64, cos_theta_i: f64): Result
 }
 
 # T = 1 − R from cos θ_i, in [0, 1]; bj_reflectance_unpolarized's errors. Mirrors `wave::transmittance_unpolarized`.
+#must_use
 public fn bj_transmittance_unpolarized(n1: f64, n2: f64, cos_theta_i: f64): Result {
     var t, v = bj_reflectance_unpolarized(n1, n2, cos_theta_i);
     if (is_err_result(t) == 1) { return Err(v); }
@@ -578,6 +596,7 @@ public fn bj_transmittance_unpolarized(n1: f64, n2: f64, cos_theta_i: f64): Resu
 # bj_snell_cos_theta_t; R₀ needs no guard of its own, since the indices are positive and finite (ADR 0002 row 24: Rust
 # refused indices summing below 1e-30 through reflectance_normal), and its ratio is _bj_wave_ratio_of's (a sum past
 # DBL_MAX). Mirrors `wave::schlick_reflectance`.
+#must_use
 public fn bj_schlick_reflectance(n1: f64, n2: f64, cos_theta_i: f64): Result {
     var cs: f64[2];
     var t, v = _bj_wave_cosines(n1, n2, cos_theta_i, &cs);
@@ -588,6 +607,7 @@ public fn bj_schlick_reflectance(n1: f64, n2: f64, cos_theta_i: f64): Result {
         c = cs[1];
     }
     var tq, vq = _bj_wave_ratio_of(n1, 1.0, n2, 1.0, 0);
+    if (is_err_result(tq) == 1) { return Err(vq); }   # as reflectance_normal's
     var r: f64 = vq;
     var r0: f64 = r * r;
     var omc: f64 = 1.0 - c;
@@ -606,6 +626,7 @@ public fn bj_schlick_reflectance(n1: f64, n2: f64, cos_theta_i: f64): Result {
 # n₁ = n₂. The errors of _bj_material_lossless_optical_constants (mat1's first), then of bj_snell_cos_theta_t. A
 # subnormal n, or an η past DBL_MAX or subnormal, runs on the roots to 53 bits with an unbounded exponent (row 18's
 # rule, M2 part 2d-2c). Mirrors `wave::reflectance_at_interface`.
+#must_use
 public fn bj_reflectance_at_interface(mat1: BjMaterial, mat2: BjMaterial, cos_theta_i: f64): Result {
     var o1: f64[2];
     var o2: f64[2];
@@ -673,6 +694,7 @@ public fn bj_reflectance_at_interface(mat1: BjMaterial, mat2: BjMaterial, cos_th
 
 # R = ((η₂ − η₁)/(η₂ + η₁))² at normal incidence between two lossless materials: BjMaterial.try_reflectance_at.
 # Mirrors `wave::reflectance_normal_materials`.
+#must_use
 public fn bj_reflectance_normal_materials(mat1: BjMaterial, mat2: BjMaterial): Result {
     var t, v = mat1.try_reflectance_at(mat2);
     if (is_err_result(t) == 1) { return Err(v); }
@@ -686,6 +708,7 @@ public fn bj_reflectance_normal_materials(mat1: BjMaterial, mat2: BjMaterial): R
 # both η are positive, so their sum never vanishes, and the guard refused only pairs of tiny impedances whose Γ is
 # well defined. An η past DBL_MAX or subnormal, or a sum past DBL_MAX, runs with an unbounded exponent
 # (src/crmath_vx.cyr's _bj_vx_gamma; row 18's rule, M2 part 2d-2c). Mirrors `wave::material_reflection_coefficient`.
+#must_use
 public fn bj_material_reflection_coefficient(mat1: BjMaterial, mat2: BjMaterial): Result {
     var o1: f64[2];
     var o2: f64[2];
@@ -777,6 +800,7 @@ fn _bj_wave_rect_root_ux(a: f64, b: f64, m, n): (f64, i64) {
 # (m, n, then a, b, then m = n = 0), then InvalidParameter unless v is positive and finite. Where the root's squares
 # under- or overflow, or v/2 is subnormal, the chain runs with an unbounded exponent and f_c rounds once (row 18's rule,
 # M2 part 2d-2c). Mirrors `wave::rectangular_waveguide_cutoff`.
+#must_use
 public fn bj_rectangular_waveguide_cutoff(a: f64, b: f64, m, n, velocity: f64): Result {
     var c = _bj_wave_check_rect(a, b, m, n);
     if (c != 0) { return Err(c); }
@@ -798,6 +822,7 @@ public fn bj_rectangular_waveguide_cutoff(a: f64, b: f64, m, n, velocity: f64): 
 # 0 or NaN, and at a range edge (squares under- or overflowing) the unbounded chain's λ_c past DBL_MAX; there a
 # representable λ_c is computed and rounded once (row 18's rule, M2 part 2d-2c: Rust gave 0 for an ∞ root and refused
 # sides of 10^300 m). Mirrors `wave::rectangular_waveguide_cutoff_wavelength`.
+#must_use
 public fn bj_rectangular_waveguide_cutoff_wavelength(a: f64, b: f64, m, n): Result {
     var c = _bj_wave_check_rect(a, b, m, n);
     if (c != 0) { return Err(c); }
@@ -825,6 +850,7 @@ public fn bj_rectangular_waveguide_cutoff_wavelength(a: f64, b: f64, m, n): Resu
 # λ_g = λ/√(1 − (λ/λ_c)²) (m), above cutoff (λ < λ_c); λ_c = +∞ (a TEM line) gives λ. DivisionByZero for λ_c = 0;
 # InvalidParameter for a NaN or negative λ_c, then a λ that is not positive and finite, then λ/λ_c ≥ 1 (its text
 # gives the ratio to 4 decimals, Rust's `{ratio:.4}`). Mirrors `wave::guide_wavelength`.
+#must_use
 public fn bj_guide_wavelength(free_space_wavelength: f64, cutoff_wavelength: f64): Result {
     var lc: f64 = cutoff_wavelength;
     var lam: f64 = free_space_wavelength;
@@ -861,6 +887,7 @@ public fn bj_guide_wavelength(free_space_wavelength: f64, cutoff_wavelength: f64
 # TM_mn (TM₀₁ 2.4048, TM₁₁ 3.8317), correctly rounded (ADR 0002 row 13: Rust's x·v and 2πa over- or underflowed
 # where f_c is representable). InvalidParameter unless the radius, then the root, then v is positive and finite.
 # Mirrors `wave::cylindrical_waveguide_cutoff`.
+#must_use
 public fn bj_cylindrical_waveguide_cutoff(radius: f64, bessel_root: f64, velocity: f64): Result {
     var c = _bj_wave_check_positive("waveguide radius", radius);
     if (c == 0) { c = _bj_wave_check_positive("Bessel root", bessel_root); }
@@ -931,6 +958,7 @@ public fn bj_half_wave_dipole_directivity(): f64 {
 # (2π/3)·η₀ is the double nearest 789.0221 (ADR 0002 row 22; Rust's 80π² = 789.5684 assumed η₀ = 120π), and the
 # product with (dl/λ)² is rounded once on that double (row 13; a non-finite dl or λ keeps K·(dl/λ)·(dl/λ)).
 # DivisionByZero when |λ| < 1e-30. Mirrors `wave::hertzian_dipole_radiation_resistance`.
+#must_use
 public fn bj_hertzian_dipole_radiation_resistance(dipole_length: f64, wavelength: f64): Result {
     var a: f64 = f64_abs(wavelength);
     if (a < 0.000000000000000000000000000001) {
@@ -958,6 +986,7 @@ public fn bj_half_wave_dipole_radiation_resistance(): f64 {
 # A_e = λ²D/(4π) (m²), an antenna's effective aperture, correctly rounded (ADR 0002 row 13; a non-finite λ or D keeps
 # Rust's λ·λ·D/(4π)). InvalidParameter unless λ ≥ 0: a NaN λ too (row 23; Rust's `λ < 0` let it through as NaN).
 # Mirrors `wave::effective_aperture`.
+#must_use
 public fn bj_effective_aperture(wavelength: f64, directivity: f64): Result {
     if (!(wavelength >= 0.0)) {
         var t = _bj_err_reason(BJ_ERR_INVALID_PARAMETER);
@@ -978,6 +1007,7 @@ public fn bj_effective_aperture(wavelength: f64, directivity: f64): Result {
 # P_r/P_t = G_t·G_r·(λ/(4πd))², Friis's transmission equation (a power ratio), correctly rounded (ADR 0002 row 13; a
 # non-finite operand keeps Rust's G_t·G_r·ratio·ratio). Singularity when |d| < 1e-30. Mirrors
 # `wave::friis_transmission`.
+#must_use
 public fn bj_friis_transmission(gain_tx: f64, gain_rx: f64, wavelength: f64, distance: f64): Result {
     var a: f64 = f64_abs(distance);
     if (a < 0.000000000000000000000000000001) { return Err(_bj_err_singularity()); }

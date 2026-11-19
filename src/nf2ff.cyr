@@ -228,6 +228,7 @@ fn _bj_nf_check_len(name, len, nx, ny): i64 {
 }
 
 # The phasor at index i of a field held as real parts at re and imaginary parts at im (0: all zero, a snapshot).
+#must_use
 fn _bj_nf_at(re, im, i): (f64, f64) {
     var rp: *f64 = _bj_nf_f64p(re);
     var r: f64 = rp[i];

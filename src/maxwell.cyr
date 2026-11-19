@@ -58,6 +58,7 @@ public fn bj_displacement_current(de_dt: BjFieldVector): BjFieldVector {
 
 # v = 1/√(εμ) (m/s), correctly rounded (ADR 0002 row 13); 0 for an infinite ε or μ, as Rust's 1/√∞.
 # InvalidPermittivity, then InvalidPermeability, for a NaN or non-positive ε or μ. Mirrors `maxwell::wave_speed`.
+#must_use
 public fn bj_wave_speed(permittivity: f64, permeability: f64): Result {
     var c = _bj_check_eps_mu(permittivity, permeability);
     if (c != 0) { return Err(c); }
@@ -71,6 +72,7 @@ public fn bj_wave_speed(permittivity: f64, permeability: f64): Result {
 
 # n = √(ε_r·μ_r), correctly rounded (ADR 0002 row 13); +∞ for an infinite ε_r or μ_r. Errors as wave_speed's.
 # Mirrors `maxwell::refractive_index`.
+#must_use
 public fn bj_refractive_index(relative_permittivity: f64, relative_permeability: f64): Result {
     var c = _bj_check_eps_mu(relative_permittivity, relative_permeability);
     if (c != 0) { return Err(c); }
@@ -84,6 +86,7 @@ public fn bj_refractive_index(relative_permittivity: f64, relative_permeability:
 
 # η = √(μ/ε) (ohms), correctly rounded (ADR 0002 row 13); an infinite ε or μ keeps Rust's √(μ/ε) (+∞, 0, or NaN for
 # both). Errors as wave_speed's. Mirrors `maxwell::impedance`.
+#must_use
 public fn bj_impedance(permittivity: f64, permeability: f64): Result {
     var c = _bj_check_eps_mu(permittivity, permeability);
     if (c != 0) { return Err(c); }
@@ -105,6 +108,7 @@ public fn bj_free_space_impedance(): f64 {
 }
 
 # λ = v/f (m). InvalidParameter for a NaN or non-positive frequency, then velocity. Mirrors `maxwell::wavelength`.
+#must_use
 public fn bj_wavelength(frequency: f64, velocity: f64): Result {
     var c = _bj_check_positive("frequency", frequency);
     if (c != 0) { return Err(c); }
@@ -115,6 +119,7 @@ public fn bj_wavelength(frequency: f64, velocity: f64): Result {
 }
 
 # f = v/λ (Hz). InvalidParameter for a NaN or non-positive wavelength, then velocity. Mirrors `maxwell::frequency`.
+#must_use
 public fn bj_frequency(wavelength_m: f64, velocity: f64): Result {
     var c = _bj_check_positive("wavelength", wavelength_m);
     if (c != 0) { return Err(c); }
@@ -139,6 +144,7 @@ fn _bj_check_skin(name, value: f64): i64 {
 # δ = √(2/(ωμσ)) (m), how far an EM wave reaches into a good conductor (σ ≫ ωε), correctly rounded (ADR 0002 row 13);
 # 0 for an infinite ω, μ or σ, as Rust's √(2/∞). InvalidParameter unless ω, μ and σ are each positive (checked in
 # that order; NaN refused). Mirrors `maxwell::skin_depth`.
+#must_use
 public fn bj_skin_depth(angular_freq: f64, permeability: f64, conductivity: f64): Result {
     var c = _bj_check_skin("angular frequency", angular_freq);
     if (c != 0) { return Err(c); }

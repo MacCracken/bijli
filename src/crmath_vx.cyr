@@ -104,12 +104,17 @@ fn _bj_vx_cross1_f64(a: f64, b: f64, c: f64, d: f64, r: f64): f64 {
 
 # ── an angle with an unbounded exponent (M1 part 5c-2's, shared by complex powf and the Green's function) ──
 
-# cos t to 53 bits, for the 53-bit t = ts·2^te: 1 below 2^-1022 (and at 0); past DBL_MAX by _bj_ux_sin_cos; else the
-# double t's correctly rounded cosine (binary64's rounding of a normal value is the 53-bit one).
+# cos t to 53 bits, for the 53-bit t = ts·2^te: 1 below 2^-1022 (and at 0); past DBL_MAX by _bj_ux_sin_cos, up to
+# 2^4452 (NaN past it, where its 2/π table ends); else the double t's correctly rounded cosine (binary64's rounding of
+# a normal value is the 53-bit one).
 #must_use
 fn _bj_vx_cos53(ts: f64, te): (f64, i64) {
     if (ts == 0.0 || te < 0 - 1022) { return (1.0, 0); }
     if (te > 1023) {
+        if (te > 4452) {                          # past the 2/π table (2.0.1, H33): no caller goes there
+            var nan0: f64 = _bj_from_bits(0x7FF8000000000000);
+            return (nan0, 0);
+        }
         var cb: f64 = _bj_ux_sin_cos(ts, te, 0);
         var bs, be = _bj_k_ux_from(cb);
         return (bs, be);
@@ -121,11 +126,16 @@ fn _bj_vx_cos53(ts: f64, te): (f64, i64) {
 }
 
 # sin t to 53 bits, for the 53-bit t = ts·2^te: t itself below 2^-1022 (sin t = t(1 − t²/6) rounds to t; ±0 keeps
-# its sign); past DBL_MAX by _bj_ux_sin_cos; else the double t's correctly rounded sine.
+# its sign); past DBL_MAX by _bj_ux_sin_cos, up to 2^4452 (NaN past it, where its 2/π table ends); else the double
+# t's correctly rounded sine.
 #must_use
 fn _bj_vx_sin53(ts: f64, te): (f64, i64) {
     if (ts == 0.0 || te < 0 - 1022) { return (ts, te); }
     if (te > 1023) {
+        if (te > 4452) {                          # past the 2/π table (2.0.1, H33): no caller goes there
+            var nan1: f64 = _bj_from_bits(0x7FF8000000000000);
+            return (nan1, 0);
+        }
         var sb: f64 = _bj_ux_sin_cos(ts, te, 1);
         var bs, be = _bj_k_ux_from(sb);
         return (bs, be);

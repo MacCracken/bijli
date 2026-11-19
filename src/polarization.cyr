@@ -174,6 +174,7 @@ impl BjJonesVector {
     # unbounded exponent there, so the result is exactly scale-invariant (ADR 0002 row 18, _bj_vx_jnorm). DivisionByZero
     # "zero Jones vector has no polarization state" for the zero vector, InvalidParameter "Jones vector components must
     # be finite" for a non-finite part; out untouched on an error. Mirrors `JonesVector::normalized`.
+    #must_use
     public fn normalized(self, out: *BjJonesVector): Result {
         var w: f64[4];
         var t = _bj_vx_jnorm(_bj_pol_f64p(self), &w);
@@ -208,6 +209,7 @@ impl BjJonesVector {
     # amplitude scales. Where Rust's squares under- or overflowed, or it rescaled both vectors, the port takes its first
     # branch with an unbounded exponent (ADR 0002 row 18, _bj_vx_overlap). DivisionByZero when either vector is zero,
     # InvalidParameter for a non-finite part, the first vector's error first. Mirrors `JonesVector::overlap`.
+    #must_use
     public fn overlap(self, other: BjJonesVector): Result {
         var w: f64[1];
         var t = _bj_vx_overlap(_bj_pol_f64p(self), _bj_pol_f64p(&other), &w);
@@ -537,6 +539,7 @@ impl BjStokesVector {
     # DBL_MAX or falls below 2^-1022 (ADR 0002 row 18, _bj_vx_dop). DivisionByZero for S₀ = 0; InvalidParameter
     # "Stokes vector must be finite with S₀ > 0, got [..]" for S₀ < 0 or a non-finite part. Mirrors
     # `StokesVector::degree_of_polarization`.
+    #must_use
     public fn degree_of_polarization(self): Result {
         var s0: f64 = self.s.0;
         if (s0 == 0.0) { return Err(_bj_err_division_by_zero("cannot compute DOP for zero-intensity light")); }

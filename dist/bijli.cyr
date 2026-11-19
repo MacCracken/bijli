@@ -8969,12 +8969,17 @@ fn _bj_vx_cross1_f64(a: f64, b: f64, c: f64, d: f64, r: f64): f64 {
 
 # ── an angle with an unbounded exponent (M1 part 5c-2's, shared by complex powf and the Green's function) ──
 
-# cos t to 53 bits, for the 53-bit t = ts·2^te: 1 below 2^-1022 (and at 0); past DBL_MAX by _bj_ux_sin_cos; else the
-# double t's correctly rounded cosine (binary64's rounding of a normal value is the 53-bit one).
+# cos t to 53 bits, for the 53-bit t = ts·2^te: 1 below 2^-1022 (and at 0); past DBL_MAX by _bj_ux_sin_cos, up to
+# 2^4452 (NaN past it, where its 2/π table ends); else the double t's correctly rounded cosine (binary64's rounding of
+# a normal value is the 53-bit one).
 #must_use
 fn _bj_vx_cos53(ts: f64, te): (f64, i64) {
     if (ts == 0.0 || te < 0 - 1022) { return (1.0, 0); }
     if (te > 1023) {
+        if (te > 4452) {                          # past the 2/π table (2.0.1, H33): no caller goes there
+            var nan0: f64 = _bj_from_bits(0x7FF8000000000000);
+            return (nan0, 0);
+        }
         var cb: f64 = _bj_ux_sin_cos(ts, te, 0);
         var bs, be = _bj_k_ux_from(cb);
         return (bs, be);
@@ -8986,11 +8991,16 @@ fn _bj_vx_cos53(ts: f64, te): (f64, i64) {
 }
 
 # sin t to 53 bits, for the 53-bit t = ts·2^te: t itself below 2^-1022 (sin t = t(1 − t²/6) rounds to t; ±0 keeps
-# its sign); past DBL_MAX by _bj_ux_sin_cos; else the double t's correctly rounded sine.
+# its sign); past DBL_MAX by _bj_ux_sin_cos, up to 2^4452 (NaN past it, where its 2/π table ends); else the double
+# t's correctly rounded sine.
 #must_use
 fn _bj_vx_sin53(ts: f64, te): (f64, i64) {
     if (ts == 0.0 || te < 0 - 1022) { return (ts, te); }
     if (te > 1023) {
+        if (te > 4452) {                          # past the 2/π table (2.0.1, H33): no caller goes there
+            var nan1: f64 = _bj_from_bits(0x7FF8000000000000);
+            return (nan1, 0);
+        }
         var sb: f64 = _bj_ux_sin_cos(ts, te, 1);
         var bs, be = _bj_k_ux_from(sb);
         return (bs, be);
@@ -11359,7 +11369,9 @@ fn _bj_g_pow2(k): f64 {
     return x;
 }
 
-# x·2^k for any k, by steps of at most 2^1000: exact unless the result overflows (+∞; every caller's x·2^k ≥ 1/4).
+# x·2^k for any k, by steps of at most 2^1000: exact unless the result overflows (+∞) or falls below 2^-1022 (then
+# rounded, possibly twice). The Lorentz factor's callers keep x·2^k ≥ 1/4; src/crmath_edge.cyr's n̂ − β candidates
+# (_bj_e_nb_cand) scale into the subnormals, where the value is an estimate the midpoint steps refine (2.0.1, H34).
 #must_use
 fn _bj_g_scale(x: f64, k): f64 {
     var r: f64 = x;
@@ -11655,7 +11667,8 @@ fn _bj_g_fast1(a: f64, c: f64, mode, out: *f64): i64 {
     return 1;
 }
 
-# me[0], me[1] := (mm, f) with (a + b)/2 = mm·2^f, for positive normal doubles a < b, adjacent.
+# me[0], me[1] := (mm, f) with (a + b)/2 = mm·2^f, for non-negative doubles a < b, adjacent (zero and the
+# subnormals included: _bj_e_nb_exact reaches them).
 fn _bj_g_mid(a: f64, b: f64, me) {
     var ab[16];
     _bj_g_split(a, &ab);
@@ -11690,7 +11703,8 @@ fn _bj_g_cmp_mid(du, mc, ec, kmin, j, mode, mm, f, a, b, t): i64 {
     return r;
 }
 
-# The double next to the positive normal y: up (dir 1) or down (dir −1).
+# The double next to the non-negative y, zero and the subnormals included: up (dir 1) or down (dir −1, for y > 0;
+# the callers stop at 0).
 #must_use
 fn _bj_g_step(y: f64, dir): f64 {
     var b = _bj_bits(y) + dir;
@@ -16717,6 +16731,9 @@ public fn _bj_err_transport(reason): i64 {
 # when threads get records of their own, 0 when they will share one (no slot was left).
 public fn bj_init(): i64 {
     if (_bj_err_claim() < 0) { return 0; }
+    # In thread_local's foreign mode (a glibc host owns %fs) every thread uses the static record (_bj_err_uses_static),
+    # so the threads share one: 0, as the doc says (2.0.1, H34: it answered 1).
+    if (_tlocal_foreign == 1) { return 0; }
     return 1;
 }
 
@@ -16747,8 +16764,7 @@ public fn bj_last_error_display(): i64 {
 }
 
 # The reason or context string of the last error when it has one (DivisionByZero, InvalidParameter, Transport,
-# Allocation),
-# NUL-terminated; "" otherwise.
+# Allocation, Deserialize), NUL-terminated; "" otherwise.
 #must_use
 public fn bj_last_error_detail(): i64 {
     var r = _bj_err_rec();
@@ -18030,6 +18046,7 @@ impl BjFieldVector {
     # with an unbounded exponent instead: |v| to 53 bits, each quotient rounded once (ADR 0002 row 18). So the result
     # is exactly scale-invariant, the same bits for 2^k·v wherever the parts stay exact. Mirrors
     # `FieldVector::normalized`.
+    #must_use
     public fn normalized(self, out: *BjFieldVector): Result {
         var ms: f64 = self.x * self.x + self.y * self.y + self.z * self.z;
         if (_bj_vx_sumsq_plain(self.x, self.y, self.z, ms) == 0) {
@@ -18166,6 +18183,7 @@ impl BjFieldVector {
 # E = kq/r²·r̂ (V/m) at field_pos from a point charge at charge_pos, as k·q·(1/r)³ times the offset; at a range edge
 # with an unbounded exponent, each component rounded once (ADR 0002 row 18). Singularity when the exact r² < 10^-30
 # (row 17). Mirrors `field::electric_field_point_charge`.
+#must_use
 public fn bj_electric_field_point_charge(charge_q: f64, charge_pos: *f64, field_pos: *f64,
   out: *BjFieldVector): Result {
     var dx: f64 = field_pos[0] - charge_pos[0];
@@ -18224,6 +18242,7 @@ fn _bj_fv_potential_edge(q: f64, f: *f64, c: *f64): f64 {
 
 # V = kq/r (volts); at a range edge with an unbounded exponent, the quotient rounded once (ADR 0002 row 18).
 # Singularity when the exact r² < 10^-30 (row 17). Mirrors `field::electric_potential_point_charge`.
+#must_use
 public fn bj_electric_potential_point_charge(charge_q: f64, charge_pos: *f64, field_pos: *f64): Result {
     var dx: f64 = field_pos[0] - charge_pos[0];
     var dy: f64 = field_pos[1] - charge_pos[1];
@@ -18309,6 +18328,7 @@ fn _bj_fv_cross_ok(c: f64, a: f64, b: f64, x: f64, y: f64): i64 {
 # B = (μ₀/4π)·q(v × r̂)/r² (tesla) at field_pos from a charge at charge_pos moving with `velocity` (Biot–Savart); at a
 # range edge with an unbounded exponent, each component rounded once (ADR 0002 row 18). Singularity when the exact
 # r² < 10^-30 (row 17). Mirrors `field::magnetic_field_moving_charge`.
+#must_use
 public fn bj_magnetic_field_moving_charge(charge_q: f64, charge_pos: *f64, velocity: *f64, field_pos: *f64,
   out: *BjFieldVector): Result {
     var dx: f64 = field_pos[0] - charge_pos[0];
@@ -18435,6 +18455,7 @@ fn _bj_fv_super_edge(charges: *f64, n, field_pos: *f64, out: *BjFieldVector) {
 # At a range edge (a field or a partial sum Rust rounded outside the normal range) the whole sum runs with an
 # unbounded exponent, each field kept to 53 bits and the last addition rounded once (ADR 0002 row 18). Mirrors
 # `field::electric_field_superposition`.
+#must_use
 public fn bj_electric_field_superposition(charges: *f64, n, field_pos: *f64, out: *BjFieldVector): Result {
     var tx: f64 = 0.0;
     var ty: f64 = 0.0;
@@ -18762,6 +18783,7 @@ fn _bj_fv_dipole_field(moment: BjFieldVector, field_pos: *f64, magnetic, out: *B
 # E = (1/4πε₀r³)·[3(p·r̂)r̂ − p] at field_pos from a dipole p at the origin, as r̂·(3(p·r̂)·f) − p·f with f =
 # (1/r)³/(4πε₀); at a range edge with an unbounded exponent, each component rounded once (ADR 0002 row 18).
 # Singularity when the exact r² < 10^-30 (row 17). Mirrors `field::electric_dipole_field`.
+#must_use
 public fn bj_electric_dipole_field(dipole_moment: BjFieldVector, field_pos: *f64, out: *BjFieldVector): Result {
     var t, v = _bj_fv_dipole_field(dipole_moment, field_pos, 0, out);
     if (is_err_result(t) == 1) { return Err(v); }
@@ -18771,6 +18793,7 @@ public fn bj_electric_dipole_field(dipole_moment: BjFieldVector, field_pos: *f64
 # V = p·r̂/(4πε₀r²) at field_pos from a dipole p at the origin, as (p·r̂)·(1/r)·(1/r)/(4πε₀); at a range edge (r̂,
 # p·r̂ or (p·r̂)/r² outside the normal range) with an unbounded exponent, the quotient rounded once (ADR 0002 row 18).
 # Singularity when the exact r² < 10^-30 (row 17). Mirrors `field::electric_dipole_potential`.
+#must_use
 public fn bj_electric_dipole_potential(dipole_moment: BjFieldVector, field_pos: *f64): Result {
     var r_hat: BjFieldVector;
     var inv_r: f64 = _bj_field_rhat(field_pos, &r_hat);
@@ -18807,6 +18830,7 @@ public fn bj_electric_dipole_potential(dipole_moment: BjFieldVector, field_pos: 
 # B = (μ₀/4πr³)·[3(m·r̂)r̂ − m] at field_pos from a magnetic dipole m at the origin, as r̂·(3(m·r̂)·f) − m·f with
 # f = μ₀·(1/r)³/(4π); at a range edge with an unbounded exponent, each component rounded once (ADR 0002 row 18).
 # Singularity when the exact r² < 10^-30 (row 17). Mirrors `field::magnetic_dipole_field`.
+#must_use
 public fn bj_magnetic_dipole_field(magnetic_moment: BjFieldVector, field_pos: *f64, out: *BjFieldVector): Result {
     var t, v = _bj_fv_dipole_field(magnetic_moment, field_pos, 1, out);
     if (is_err_result(t) == 1) { return Err(v); }
@@ -18828,6 +18852,7 @@ public fn bj_electric_field_infinite_plane(surface_charge_density: f64): f64 {
 # A radial distance's errors: InvalidParameter when NaN or negative, Singularity below 10^-30 m (the double nearest
 # 10^-30 lies above it, so Rust's `distance < 1e-30` is the exact test); else Ok(0). Mirrors
 # field.rs's `pub(crate) check_radial_distance`.
+#must_use
 public fn _bj_check_radial_distance(distance: f64): Result {
     if (distance != distance || distance < 0.0) {
         var t = _bj_err_reason(BJ_ERR_INVALID_PARAMETER);
@@ -18841,6 +18866,7 @@ public fn _bj_check_radial_distance(distance: f64): Result {
 
 # E_r = kQ/r² (V/m) outside a uniformly charged sphere (r > R), correctly rounded (ADR 0002 row 13; a non-finite
 # operand keeps Rust's k·Q/(r·r)). Errors as _bj_check_radial_distance. Mirrors `field::electric_field_charged_sphere`.
+#must_use
 public fn bj_electric_field_charged_sphere(total_charge: f64, distance: f64): Result {
     var t, v = _bj_check_radial_distance(distance);
     if (is_err_result(t) == 1) { return Err(v); }
@@ -18856,6 +18882,7 @@ public fn bj_electric_field_charged_sphere(total_charge: f64, distance: f64): Re
 # E_r = kQ·(r/R)/R² (V/m) inside a uniformly charged sphere, 0 ≤ r ≤ R: kQr/R³ correctly rounded (ADR 0002 row 13;
 # a non-finite Q keeps Rust's chain). InvalidParameter when R is not positive and
 # finite, or r is outside [0, R] (or NaN). Mirrors `field::electric_field_inside_sphere`.
+#must_use
 public fn bj_electric_field_inside_sphere(total_charge: f64, sphere_radius: f64, distance: f64): Result {
     if (!(sphere_radius > 0.0 && _bj_is_finite(sphere_radius) == 1)) {
         var t = _bj_err_reason(BJ_ERR_INVALID_PARAMETER);
@@ -18892,6 +18919,7 @@ public fn bj_electric_field_inside_sphere(total_charge: f64, sphere_radius: f64,
 # E_r = λ/(2πε₀r) (V/m) from an infinite line of linear charge density λ, correctly rounded with π as Rust's double
 # (ADR 0002 row 13; a non-finite operand keeps Rust's λ/(2·π·ε₀·r)). Errors as _bj_check_radial_distance. Mirrors
 # `field::electric_field_infinite_line`.
+#must_use
 public fn bj_electric_field_infinite_line(linear_charge_density: f64, distance: f64): Result {
     var t, v = _bj_check_radial_distance(distance);
     if (is_err_result(t) == 1) { return Err(v); }
@@ -18907,6 +18935,7 @@ public fn bj_electric_field_infinite_line(linear_charge_density: f64, distance: 
 
 # E_r = λ/(2πε₀r) outside an infinite uniformly charged cylinder: the line's field and errors. Mirrors
 # `field::electric_field_outside_cylinder`.
+#must_use
 public fn bj_electric_field_outside_cylinder(linear_charge_density: f64, distance: f64): Result {
     return bj_electric_field_infinite_line(linear_charge_density, distance);
 }
@@ -18914,6 +18943,7 @@ public fn bj_electric_field_outside_cylinder(linear_charge_density: f64, distanc
 # E_r = ρr/(2ε₀) (V/m) inside an infinite uniformly charged cylinder, correctly rounded (ADR 0002 row 13; a non-finite
 # operand keeps Rust's ρ·r/(2ε₀)). InvalidParameter when r is NaN or negative.
 # Mirrors `field::electric_field_inside_cylinder`.
+#must_use
 public fn bj_electric_field_inside_cylinder(volume_charge_density: f64, distance: f64): Result {
     if (distance != distance || distance < 0.0) {
         var t = _bj_err_reason(BJ_ERR_INVALID_PARAMETER);
@@ -18934,6 +18964,7 @@ public fn bj_electric_field_inside_cylinder(volume_charge_density: f64, distance
 # Singularity there only for R = 0 (a point charge). InvalidParameter when R is negative, NaN or infinite, or z is not
 # finite. At a range edge the chain runs with an unbounded exponent, the quotient rounded once (ADR 0002 row 18).
 # Mirrors `field::electric_field_ring_axis`.
+#must_use
 public fn bj_electric_field_ring_axis(total_charge: f64, ring_radius: f64, axial_distance: f64): Result {
     if (!(ring_radius >= 0.0 && _bj_is_finite(ring_radius) == 1)) {
         var t = _bj_err_reason(BJ_ERR_INVALID_PARAMETER);
@@ -18983,6 +19014,7 @@ public fn bj_electric_field_ring_axis(total_charge: f64, ring_radius: f64, axial
 # cancellation-free form, the one-sided limit at z = ±0 by the sign bit. InvalidParameter when R is not positive and
 # finite, or z is not finite. At a range edge the chain runs with an unbounded exponent, the last product rounded once
 # (ADR 0002 row 18). Mirrors `field::electric_field_disk_axis`.
+#must_use
 public fn bj_electric_field_disk_axis(surface_charge_density: f64, disk_radius: f64, axial_distance: f64): Result {
     if (!(disk_radius > 0.0 && _bj_is_finite(disk_radius) == 1)) {
         var t = _bj_err_reason(BJ_ERR_INVALID_PARAMETER);
@@ -19050,6 +19082,7 @@ fn _bj_fv_disk_edge(sigma: f64, rr: f64, z: f64, sign: f64, d: f64): f64 {
 # 8πε₀r⁵ with r⁵ = r²·r²·r. q_tensor is 9 f64, row-major (Rust's `[[f64; 3]; 3]`). At a range edge the chain runs with
 # an unbounded exponent, the quotient rounded once (ADR 0002 row 18). Singularity when the exact r² < 10^-30 (row 17).
 # Mirrors `field::electric_quadrupole_potential`.
+#must_use
 public fn bj_electric_quadrupole_potential(q_tensor: *f64, field_pos: *f64): Result {
     var r_sq: f64 = field_pos[0] * field_pos[0] + field_pos[1] * field_pos[1] + field_pos[2] * field_pos[2];
     var band = _bj_x_band(r_sq, _BJ_FIELD_R2_MIN);
@@ -19585,6 +19618,7 @@ fn _bj_fv_multipole_edge(l, m, m_abs, charges: *f64, n): f64 {
 # n charges at `charges` (32 bytes each: q, x, y, z), summed in order; a charge at the origin adds q to the monopole
 # only. At a range edge the whole sum runs with an unbounded exponent and its last addition rounds once (ADR 0002 row
 # 18). InvalidParameter when |m| > l. Mirrors `field::multipole_moment`.
+#must_use
 public fn bj_multipole_moment(l, m, charges: *f64, n): Result {
     var m_abs = m;
     if (m < 0) { m_abs = 0 - m; }
@@ -19691,6 +19725,7 @@ fn _bj_fv_sph_multipole_edge(l, m, m_abs, charges: *f64, n, out: *BjComplex) {
 # the origin adds q·0.5/√π to Re q₀₀ only. Static, so no time convention enters. At a range edge both sums run with an
 # unbounded exponent, each last addition rounded once (ADR 0002 row 18). InvalidParameter when |m| > l. Mirrors
 # `field::spherical_multipole_moment` (its `(f64, f64)` is a BjComplex here).
+#must_use
 public fn bj_spherical_multipole_moment(l, m, charges: *f64, n, out: *BjComplex): Result {
     var m_abs = m;
     if (m < 0) { m_abs = 0 - m; }
@@ -19787,6 +19822,7 @@ public fn bj_image_charge_plane(charge: f64, position: *f64, plane_z: f64, image
 # charge is not strictly outside (a NaN position included). At a range edge the chain runs with an unbounded exponent,
 # the comparison with R included, each output rounded once (ADR 0002 row 18). image_pos may be position (an image in
 # place); on an error it is untouched. Mirrors `field::image_charge_sphere`.
+#must_use
 public fn bj_image_charge_sphere(charge: f64, position: *f64, sphere_radius: f64, image_pos: *f64): Result {
     if (!(sphere_radius > 0.0 && _bj_is_finite(sphere_radius) == 1)) {
         var t = _bj_err_reason(BJ_ERR_INVALID_PARAMETER);
@@ -19868,6 +19904,7 @@ fn _bj_fv_sphere_edge(charge: f64, p: *f64, rr: f64, image_pos: *f64): Result {
 # InvalidPermittivity for the first of ε₁, ε₂ that is not positive and finite. Where the product −q·(ε₂ − ε₁) or the
 # sum ε₁ + ε₂ leaves the normal range (a finite q), the chain runs with an unbounded exponent and the quotient is
 # rounded once (ADR 0002 row 18). Mirrors `field::image_charge_dielectric`.
+#must_use
 public fn bj_image_charge_dielectric(charge: f64, position: *f64, eps_r1: f64, eps_r2: f64, image_pos: *f64): Result {
     var z: f64 = position[2];
     if (!(z > 0.0 && _bj_is_finite(z) == 1)) {
@@ -19956,6 +19993,7 @@ fn _bj_fv_green_scalar_edge(f: *f64, c: *f64, k: f64, out: *BjComplex) {
 # range) the chain runs with an unbounded exponent, kR's cosine and sine included, each product rounded once (row 18).
 # Singularity when the exact R < 10^-30 (row 17). Mirrors `field::greens_function_scalar` (its `(f64, f64)` is a
 # BjComplex here).
+#must_use
 public fn bj_greens_function_scalar(field_pos: *f64, source_pos: *f64, k: f64, out: *BjComplex): Result {
     var dx: f64 = field_pos[0] - source_pos[0];
     var dy: f64 = field_pos[1] - source_pos[1];
@@ -19994,6 +20032,7 @@ public fn bj_greens_function_scalar(field_pos: *f64, source_pos: *f64, k: f64, o
 # G(r, r') = 1/(4πR), the static Green's function (k = 0); where 4πR passes DBL_MAX, R and 4πR with an unbounded
 # exponent and the quotient rounded once (ADR 0002 row 18). Singularity when the exact R < 10^-30 (row 17). Mirrors
 # `field::greens_function_static`.
+#must_use
 public fn bj_greens_function_static(field_pos: *f64, source_pos: *f64): Result {
     var dx: f64 = field_pos[0] - source_pos[0];
     var dy: f64 = field_pos[1] - source_pos[1];
@@ -20426,6 +20465,7 @@ fn _bj_fv_trace_edge(fx: f64, fy: f64, fz: f64, h: f64, pos: *f64) {
 # component; any other error of field_fn's is returned as is; Allocation when out can't grow (Rust aborts there; ADR
 # 0002 row 9). On an error out is empty. A success leaves the last-error record as field_fn left it. Mirrors
 # `field::trace_field_line`.
+#must_use
 public fn bj_trace_field_line(start: *f64, step_size: f64, max_steps, field_fn, out: *BjPolyline): Result {
     # start may point into out's own block (a line continued from its last point): copy it before out can grow.
     var pos: f64[3];
@@ -20626,6 +20666,7 @@ public fn bj_displacement_current(de_dt: BjFieldVector): BjFieldVector {
 
 # v = 1/√(εμ) (m/s), correctly rounded (ADR 0002 row 13); 0 for an infinite ε or μ, as Rust's 1/√∞.
 # InvalidPermittivity, then InvalidPermeability, for a NaN or non-positive ε or μ. Mirrors `maxwell::wave_speed`.
+#must_use
 public fn bj_wave_speed(permittivity: f64, permeability: f64): Result {
     var c = _bj_check_eps_mu(permittivity, permeability);
     if (c != 0) { return Err(c); }
@@ -20639,6 +20680,7 @@ public fn bj_wave_speed(permittivity: f64, permeability: f64): Result {
 
 # n = √(ε_r·μ_r), correctly rounded (ADR 0002 row 13); +∞ for an infinite ε_r or μ_r. Errors as wave_speed's.
 # Mirrors `maxwell::refractive_index`.
+#must_use
 public fn bj_refractive_index(relative_permittivity: f64, relative_permeability: f64): Result {
     var c = _bj_check_eps_mu(relative_permittivity, relative_permeability);
     if (c != 0) { return Err(c); }
@@ -20652,6 +20694,7 @@ public fn bj_refractive_index(relative_permittivity: f64, relative_permeability:
 
 # η = √(μ/ε) (ohms), correctly rounded (ADR 0002 row 13); an infinite ε or μ keeps Rust's √(μ/ε) (+∞, 0, or NaN for
 # both). Errors as wave_speed's. Mirrors `maxwell::impedance`.
+#must_use
 public fn bj_impedance(permittivity: f64, permeability: f64): Result {
     var c = _bj_check_eps_mu(permittivity, permeability);
     if (c != 0) { return Err(c); }
@@ -20673,6 +20716,7 @@ public fn bj_free_space_impedance(): f64 {
 }
 
 # λ = v/f (m). InvalidParameter for a NaN or non-positive frequency, then velocity. Mirrors `maxwell::wavelength`.
+#must_use
 public fn bj_wavelength(frequency: f64, velocity: f64): Result {
     var c = _bj_check_positive("frequency", frequency);
     if (c != 0) { return Err(c); }
@@ -20683,6 +20727,7 @@ public fn bj_wavelength(frequency: f64, velocity: f64): Result {
 }
 
 # f = v/λ (Hz). InvalidParameter for a NaN or non-positive wavelength, then velocity. Mirrors `maxwell::frequency`.
+#must_use
 public fn bj_frequency(wavelength_m: f64, velocity: f64): Result {
     var c = _bj_check_positive("wavelength", wavelength_m);
     if (c != 0) { return Err(c); }
@@ -20707,6 +20752,7 @@ fn _bj_check_skin(name, value: f64): i64 {
 # δ = √(2/(ωμσ)) (m), how far an EM wave reaches into a good conductor (σ ≫ ωε), correctly rounded (ADR 0002 row 13);
 # 0 for an infinite ω, μ or σ, as Rust's √(2/∞). InvalidParameter unless ω, μ and σ are each positive (checked in
 # that order; NaN refused). Mirrors `maxwell::skin_depth`.
+#must_use
 public fn bj_skin_depth(angular_freq: f64, permeability: f64, conductivity: f64): Result {
     var c = _bj_check_skin("angular frequency", angular_freq);
     if (c != 0) { return Err(c); }
@@ -20750,6 +20796,7 @@ public struct BjPointCharge {
 
 # A point charge into out; InvalidParameter when mass is NaN or not positive, out untouched. Mirrors
 # `PointCharge::new`.
+#must_use
 public fn BjPointCharge_new(charge: f64, mass: f64, position: *f64, velocity: *f64, out: *BjPointCharge): Result {
     if (mass != mass || mass <= 0.0) {
         var t = _bj_err_reason(BJ_ERR_INVALID_PARAMETER);
@@ -20801,6 +20848,7 @@ fn _bj_tuple3_put(t: (f64, f64, f64), p: *f64): i64 {
 impl BjPointCharge {
     # E at field_pos from this charge, into out: bj_electric_field_point_charge's value and errors. Mirrors
     # `PointCharge::electric_field_at`.
+    #must_use
     public fn electric_field_at(self, field_pos: *f64, out: *BjFieldVector): Result {
         var pos: f64[3];
         _bj_tuple3_put(self.position, &pos);
@@ -20809,6 +20857,7 @@ impl BjPointCharge {
 
     # V at field_pos from this charge: bj_electric_potential_point_charge's value and errors. Mirrors
     # `PointCharge::electric_potential_at`.
+    #must_use
     public fn electric_potential_at(self, field_pos: *f64): Result {
         var pos: f64[3];
         _bj_tuple3_put(self.position, &pos);
@@ -20817,6 +20866,7 @@ impl BjPointCharge {
 
     # B at field_pos from this moving charge (Biot–Savart), into out: bj_magnetic_field_moving_charge's. Mirrors
     # `PointCharge::magnetic_field_at`.
+    #must_use
     public fn magnetic_field_at(self, field_pos: *f64, out: *BjFieldVector): Result {
         var pos: f64[3];
         var vel: f64[3];
@@ -20838,6 +20888,7 @@ impl BjPointCharge {
 # F = kq₁q₂/r²·r̂ (N) on q1 from q2, as k·q₁·q₂·(1/r)³ times the offset q1 − q2 (away from q2 when they repel).
 # At a range edge with an unbounded exponent, each component rounded once (ADR 0002 row 18). Singularity when the
 # exact r² < 10^-30 (row 17). Mirrors `charge::coulomb_force`.
+#must_use
 public fn bj_coulomb_force(q1: BjPointCharge, q2: BjPointCharge, out: *BjFieldVector): Result {
     var dx: f64 = q1.position.0 - q2.position.0;
     var dy: f64 = q1.position.1 - q2.position.1;
@@ -20985,6 +21036,7 @@ public fn bj_potential_energy(charge: f64, potential: f64): f64 {
 # U = kq₁q₂/r (J), correctly rounded (ADR 0002 row 13; an infinite or NaN operand keeps Rust's (k·q₁·q₂)/r).
 # InvalidParameter when r is NaN or negative, Singularity below 1e-30 m (field.rs's check_radial_distance). Mirrors
 # `charge::coulomb_potential_energy`.
+#must_use
 public fn bj_coulomb_potential_energy(q1: f64, q2: f64, distance: f64): Result {
     var t, v = _bj_check_radial_distance(distance);
     if (is_err_result(t) == 1) { return Err(v); }
@@ -21019,6 +21071,7 @@ fn _bj_check_mass(mass: f64, what): i64 {
 # ω_c = |q|B/m (rad/s) for |B| ≥ 0 (T), correctly rounded (ADR 0002 row 13; an infinite operand keeps Rust's
 # (|q|·B)/m). DivisionByZero for a zero mass; InvalidParameter for a negative mass, a NaN
 # charge, or a negative or NaN |B| (in that order). Mirrors `charge::cyclotron_frequency`.
+#must_use
 public fn bj_cyclotron_frequency(charge: f64, mass: f64, b_magnitude: f64): Result {
     var c = _bj_check_mass(mass, "cyclotron frequency");
     if (c != 0) { return Err(c); }
@@ -21042,6 +21095,7 @@ public fn bj_cyclotron_frequency(charge: f64, mass: f64, b_magnitude: f64): Resu
 # so a tiny |q|·B can't underflow, but m·|v⊥| still can; an infinite operand keeps that chain). DivisionByZero for a
 # zero mass, charge or |B|; InvalidParameter for a negative mass or |B|, or a NaN argument (in Rust's order). Mirrors
 # `charge::larmor_radius`.
+#must_use
 public fn bj_larmor_radius(mass: f64, v_perp: f64, charge: f64, b_magnitude: f64): Result {
     var c = _bj_check_mass(mass, "Larmor radius");
     if (c != 0) { return Err(c); }
@@ -21209,6 +21263,7 @@ public fn bj_dielectric_energy_density(relative_permittivity: f64, e_magnitude: 
 # catastrophe); InvalidPermittivity when ε_r ≤ 0 (X ≤ −1/2, a negative α). Both tests are exact, ε_r is
 # (3ε₀ + 2Nα)/(3ε₀ − Nα) correctly rounded, and the catastrophe reports X correctly rounded (ADR 0002 row 17,
 # src/crmath_edge.cyr). Mirrors `material::clausius_mossotti`.
+#must_use
 public fn bj_clausius_mossotti(polarizability: f64, number_density: f64): Result {
     if (_bj_is_finite(polarizability) == 0 || _bj_is_finite(number_density) == 0 || number_density < 0.0) {
         var t = _bj_err_reason(BJ_ERR_INVALID_PARAMETER);
@@ -21270,6 +21325,7 @@ public fn bj_magnetization(relative_permeability: f64, h_field: BjFieldVector): 
 # H = B/(μ_r·μ₀) (A/m), into out, each part correctly rounded (ADR 0002 row 13; a non-finite μ_r keeps Rust's
 # B·(1/(μ_r·μ₀)), and a non-finite part its own). DivisionByZero when |μ_r| < 1e-30 (a NaN μ_r passes, as Rust's
 # test), out untouched. Mirrors `material::h_field_from_b`.
+#must_use
 public fn bj_h_field_from_b(relative_permeability: f64, b_field: BjFieldVector, out: *BjFieldVector): Result {
     var a: f64 = f64_abs(relative_permeability);
     if (a < 0.000000000000000000000000000001) {
@@ -21302,6 +21358,7 @@ public fn bj_b_field_from_h(relative_permeability: f64, h_field: BjFieldVector):
 # u = B²/(2μ) (J/m³), μ = μ_r·μ₀, correctly rounded (ADR 0002 row 13; a non-finite μ_r or B keeps Rust's B·B/(2μ)).
 # DivisionByZero when the exact |μ_r·μ₀| < 10^-30 (ADR 0002 row 17's rule, M2 part 2c-1: Rust tested the rounded
 # product; a NaN passes, as Rust's test). Mirrors `material::magnetic_energy_density_material`.
+#must_use
 public fn bj_magnetic_energy_density_material(relative_permeability: f64, b_magnitude: f64): Result {
     var mu: f64 = relative_permeability * BJ_MU_0;
     var a: f64 = f64_abs(mu);
@@ -21331,6 +21388,7 @@ public fn bj_bound_surface_current(magnetization: BjFieldVector, normal: BjField
 
 # χ_m = C/T, Curie's law for a paramagnet, C the Curie constant (K) and T the temperature (K). InvalidParameter
 # unless T > 0, a NaN T among them (ADR 0002 row 19: Rust's `T <= 0` let NaN through). Mirrors `material::curie_law`.
+#must_use
 public fn bj_curie_law(curie_constant: f64, temperature: f64): Result {
     if (!(temperature > 0.0)) {
         var t = _bj_err_reason(BJ_ERR_INVALID_PARAMETER);
@@ -21345,6 +21403,7 @@ public fn bj_curie_law(curie_constant: f64, temperature: f64): Result {
 
 # χ_m = C/(T − T_c), the Curie–Weiss law for a ferromagnet above its Curie temperature T_c. InvalidParameter unless
 # T − T_c > 0, a NaN difference among them (ADR 0002 row 19). Mirrors `material::curie_weiss`.
+#must_use
 public fn bj_curie_weiss(curie_constant: f64, temperature: f64, curie_temperature: f64): Result {
     var d: f64 = temperature - curie_temperature;
     if (!(d > 0.0)) {
@@ -21365,6 +21424,7 @@ public fn bj_curie_weiss(curie_constant: f64, temperature: f64, curie_temperatur
 # paramagnetic). The exact test χ < −10^-15 is χ ≤ −1e-15 on doubles: the double 1e-15 lies 0.39 ulp above 10^-15,
 # and no double falls between them (ADR 0002 row 17's rule, the user's answer of 2026-11-12: Rust's χ < −1e-15 left
 # the double −1e-15 itself, which is below −10^-15, paramagnetic). Mirrors `material::classify_magnetic`.
+#must_use
 public fn bj_classify_magnetic(susceptibility: f64): Result {
     if (susceptibility != susceptibility) {
         return Err(_bj_err_invalid_parameter("magnetic susceptibility must not be NaN, got NaN"));
@@ -21432,6 +21492,7 @@ public fn BjMaterial_default(): BjMaterial {
 # are positive and finite; InvalidParameter for σ ≠ 0 (a conductor's index depends on frequency). bijli-internal, for
 # the Fresnel functions (Rust's `pub(crate) Material::lossless_optical_constants`); public only so that src/wave.cyr
 # can call it in the tests' build.
+#must_use
 public fn _bj_material_lossless_optical_constants(m: BjMaterial, out: *f64): Result {
     var e: f64 = m.eps_r;
     var u: f64 = m.mu_r;
@@ -21497,6 +21558,7 @@ impl BjMaterial {
     # η = √(μ/ε) (Ω), the lossless wave impedance, correctly rounded (ADR 0002 row 13); σ is ignored.
     # InvalidPermittivity, then InvalidPermeability, unless ε_r, μ_r are positive and finite. Mirrors
     # `Material::impedance`.
+    #must_use
     public fn impedance(self): Result {
         var e: f64 = self.eps_r;
         var u: f64 = self.mu_r;
@@ -21515,6 +21577,7 @@ impl BjMaterial {
     # v = 1/√(ε_r·ε₀·μ_r·μ₀) (m/s), correctly rounded (ADR 0002 row 13). InvalidPermittivity, then
     # InvalidPermeability, unless ε_r, μ_r are positive and finite: impedance's validation (ADR 0002 row 20; Rust
     # refused a non-positive or NaN value as InvalidParameter and accepted ∞). Mirrors `Material::wave_speed`.
+    #must_use
     public fn wave_speed(self): Result {
         var e: f64 = self.eps_r;
         var u: f64 = self.mu_r;
@@ -21543,6 +21606,7 @@ impl BjMaterial {
     # _bj_material_lossless_optical_constants, this material's first. Γ as src/crmath_vx.cyr's _bj_vx_gamma (an η past
     # DBL_MAX or subnormal runs with an unbounded exponent: ADR 0002 row 18's rule, M2 part 2d-2c). Mirrors
     # `Material::try_reflectance_at`.
+    #must_use
     public fn try_reflectance_at(self, other: BjMaterial): Result {
         var c1: f64[2];
         var c2: f64[2];
@@ -21795,6 +21859,7 @@ public fn bj_plane_wave_e(e_amplitude: f64, k: f64, x: f64, omega: f64, t: f64, 
 
 # k = 2πf/v, correctly rounded (ADR 0002 row 13; a non-finite f or v keeps Rust's (2π·f)/v). DivisionByZero when
 # |v| < 1e-30 (a NaN v passes, as Rust's test). Mirrors `wave::wave_number`.
+#must_use
 public fn bj_wave_number(frequency: f64, velocity: f64): Result {
     var a: f64 = f64_abs(velocity);
     if (a < 0.000000000000000000000000000001) {
@@ -21846,6 +21911,7 @@ public fn bj_momentum_density(e: BjFieldVector, b: BjFieldVector): BjFieldVector
 # internal reflection). DivisionByZero when |n₂| < 1e-30. An n₁ sin θ_i below 2^-1022 (or 0 by underflow) runs with an
 # unbounded exponent, the quotient rounded once (ADR 0002 row 18's rule, M2 part 2d-2b). Mirrors
 # `wave::snell_refraction_angle`.
+#must_use
 public fn bj_snell_refraction_angle(n1: f64, n2: f64, theta_i: f64, out: *f64): Result {
     var a: f64 = f64_abs(n2);
     if (a < 0.000000000000000000000000000001) {
@@ -21869,6 +21935,7 @@ public fn bj_snell_refraction_angle(n1: f64, n2: f64, theta_i: f64, out: *f64): 
 
 # θ_c = asin(n₂/n₁): Ok(Some) with θ_c in *out, or Ok(None) when n₂/n₁ ≥ 1 (no total internal reflection).
 # DivisionByZero when |n₁| < 1e-30. Mirrors `wave::critical_angle`.
+#must_use
 public fn bj_critical_angle(n1: f64, n2: f64, out: *f64): Result {
     var a: f64 = f64_abs(n1);
     if (a < 0.000000000000000000000000000001) {
@@ -21883,6 +21950,7 @@ public fn bj_critical_angle(n1: f64, n2: f64, out: *f64): Result {
 
 # θ_B = atan(n₂/n₁), where the reflection is purely s-polarized. DivisionByZero when |n₁| < 1e-30. Mirrors
 # `wave::brewster_angle`.
+#must_use
 public fn bj_brewster_angle(n1: f64, n2: f64): Result {
     var a: f64 = f64_abs(n1);
     if (a < 0.000000000000000000000000000001) {
@@ -21943,6 +22011,7 @@ fn _bj_wave_fresnel_angles(a: f64, theta_i: f64, b: f64, theta_t: f64): Result {
 
 # r_s = (n₁ cos θ_i − n₂ cos θ_t)/(n₁ cos θ_i + n₂ cos θ_t), TE. DivisionByZero when the denominator's magnitude is
 # below 1e-30. Mirrors `wave::fresnel_rs`.
+#must_use
 public fn bj_fresnel_rs(n1: f64, theta_i: f64, n2: f64, theta_t: f64): Result {
     var t, v = _bj_wave_fresnel_angles(n1, theta_i, n2, theta_t);
     if (is_err_result(t) == 1) { return Err(v); }
@@ -21950,6 +22019,7 @@ public fn bj_fresnel_rs(n1: f64, theta_i: f64, n2: f64, theta_t: f64): Result {
 }
 
 # r_p = (n₂ cos θ_i − n₁ cos θ_t)/(n₂ cos θ_i + n₁ cos θ_t), TM. As bj_fresnel_rs. Mirrors `wave::fresnel_rp`.
+#must_use
 public fn bj_fresnel_rp(n1: f64, theta_i: f64, n2: f64, theta_t: f64): Result {
     var t, v = _bj_wave_fresnel_angles(n2, theta_i, n1, theta_t);
     if (is_err_result(t) == 1) { return Err(v); }
@@ -21957,6 +22027,7 @@ public fn bj_fresnel_rp(n1: f64, theta_i: f64, n2: f64, theta_t: f64): Result {
 }
 
 # R_s = r_s². As bj_fresnel_rs. Mirrors `wave::reflectance_s`.
+#must_use
 public fn bj_reflectance_s(n1: f64, theta_i: f64, n2: f64, theta_t: f64): Result {
     var t, v = _bj_wave_fresnel_angles(n1, theta_i, n2, theta_t);
     if (is_err_result(t) == 1) { return Err(v); }
@@ -21966,6 +22037,7 @@ public fn bj_reflectance_s(n1: f64, theta_i: f64, n2: f64, theta_t: f64): Result
 }
 
 # R_p = r_p². As bj_fresnel_rp. Mirrors `wave::reflectance_p`.
+#must_use
 public fn bj_reflectance_p(n1: f64, theta_i: f64, n2: f64, theta_t: f64): Result {
     var t, v = _bj_wave_fresnel_angles(n2, theta_i, n1, theta_t);
     if (is_err_result(t) == 1) { return Err(v); }
@@ -21978,6 +22050,7 @@ public fn bj_reflectance_p(n1: f64, theta_i: f64, n2: f64, theta_t: f64): Result
 # 17's rule, M2 part 2c-1: the rounded sum decides outside 64 ulps of the double nearest 10^-30, src/crmath_cmp.cyr's
 # exact sum inside; a NaN sum passes, as Rust's test). The ratio as _bj_wave_ratio_of (a sum past DBL_MAX). Mirrors
 # `wave::reflectance_normal`.
+#must_use
 public fn bj_reflectance_normal(n1: f64, n2: f64): Result {
     var den: f64 = n1 + n2;
     var m: f64 = f64_abs(den);
@@ -21987,12 +22060,14 @@ public fn bj_reflectance_normal(n1: f64, n2: f64): Result {
         return Err(_bj_err_division_by_zero("sum of refractive indices cannot be zero"));
     }
     var tq, vq = _bj_wave_ratio_of(n1, 1.0, n2, 1.0, 0);
+    if (is_err_result(tq) == 1) { return Err(vq); }   # the guard above rules it out; checked, not assumed (2.0.1)
     var r: f64 = vq;
     var rr: f64 = r * r;
     return Ok(rr);
 }
 
 # T = 1 − R at normal incidence; bj_reflectance_normal's error. Mirrors `wave::transmittance_normal`.
+#must_use
 public fn bj_transmittance_normal(n1: f64, n2: f64): Result {
     var t, v = bj_reflectance_normal(n1, n2);
     if (is_err_result(t) == 1) { return Err(v); }
@@ -22088,6 +22163,7 @@ fn _bj_wave_direct(n1: f64, n2: f64, cos_theta_i: f64, swap, out: *f64): Result 
 # cos θ_t = √(1 − (n₁/n₂)²(1 − cos²θ_i)), no trig: Ok(Some) with it in *out, or Ok(None) under total internal
 # reflection. DivisionByZero for n₂ = 0; InvalidParameter for an index that is not positive and finite, or cos θ_i
 # outside [0, 1] beyond the 1e-6 clamp. Mirrors `wave::snell_cos_theta_t`.
+#must_use
 public fn bj_snell_cos_theta_t(n1: f64, n2: f64, cos_theta_i: f64, out: *f64): Result {
     var cs: f64[2];
     var t, v = _bj_wave_cosines(n1, n2, cos_theta_i, &cs);
@@ -22099,6 +22175,7 @@ public fn bj_snell_cos_theta_t(n1: f64, n2: f64, cos_theta_i: f64, out: *f64): R
 
 # r_s from cos θ_i, no trig: Ok(Some) with r_s in *out (exactly 0 for n₁ = n₂, grazing incidence included), or Ok(None)
 # under total internal reflection (|r_s| = 1). The errors of bj_snell_cos_theta_t. Mirrors `wave::fresnel_rs_direct`.
+#must_use
 public fn bj_fresnel_rs_direct(n1: f64, n2: f64, cos_theta_i: f64, out: *f64): Result {
     var t, v = _bj_wave_direct(n1, n2, cos_theta_i, 0, out);
     if (is_err_result(t) == 1) { return Err(v); }
@@ -22107,6 +22184,7 @@ public fn bj_fresnel_rs_direct(n1: f64, n2: f64, cos_theta_i: f64, out: *f64): R
 
 # r_p from cos θ_i, no trig: as bj_fresnel_rs_direct with n₁ and n₂ swapped in the ratio. Mirrors
 # `wave::fresnel_rp_direct`.
+#must_use
 public fn bj_fresnel_rp_direct(n1: f64, n2: f64, cos_theta_i: f64, out: *f64): Result {
     var t, v = _bj_wave_direct(n1, n2, cos_theta_i, 1, out);
     if (is_err_result(t) == 1) { return Err(v); }
@@ -22114,6 +22192,7 @@ public fn bj_fresnel_rp_direct(n1: f64, n2: f64, cos_theta_i: f64, out: *f64): R
 }
 
 # R_s = r_s² from cos θ_i, 1 under total internal reflection. Mirrors `wave::reflectance_s_direct`.
+#must_use
 public fn bj_reflectance_s_direct(n1: f64, n2: f64, cos_theta_i: f64): Result {
     var r: f64[1];
     var t, v = _bj_wave_direct(n1, n2, cos_theta_i, 0, &r);
@@ -22125,6 +22204,7 @@ public fn bj_reflectance_s_direct(n1: f64, n2: f64, cos_theta_i: f64): Result {
 }
 
 # R_p = r_p² from cos θ_i, 1 under total internal reflection. Mirrors `wave::reflectance_p_direct`.
+#must_use
 public fn bj_reflectance_p_direct(n1: f64, n2: f64, cos_theta_i: f64): Result {
     var r: f64[1];
     var t, v = _bj_wave_direct(n1, n2, cos_theta_i, 1, &r);
@@ -22137,6 +22217,7 @@ public fn bj_reflectance_p_direct(n1: f64, n2: f64, cos_theta_i: f64): Result {
 
 # R = (R_s + R_p)/2 from cos θ_i, in [0, 1]: 1 under total internal reflection, 0 for n₁ = n₂; cos θ_t is computed
 # once for both polarizations. The errors of bj_snell_cos_theta_t. Mirrors `wave::reflectance_unpolarized`.
+#must_use
 public fn bj_reflectance_unpolarized(n1: f64, n2: f64, cos_theta_i: f64): Result {
     var cs: f64[2];
     var t, v = _bj_wave_cosines(n1, n2, cos_theta_i, &cs);
@@ -22149,6 +22230,7 @@ public fn bj_reflectance_unpolarized(n1: f64, n2: f64, cos_theta_i: f64): Result
 }
 
 # T = 1 − R from cos θ_i, in [0, 1]; bj_reflectance_unpolarized's errors. Mirrors `wave::transmittance_unpolarized`.
+#must_use
 public fn bj_transmittance_unpolarized(n1: f64, n2: f64, cos_theta_i: f64): Result {
     var t, v = bj_reflectance_unpolarized(n1, n2, cos_theta_i);
     if (is_err_result(t) == 1) { return Err(v); }
@@ -22162,6 +22244,7 @@ public fn bj_transmittance_unpolarized(n1: f64, n2: f64, cos_theta_i: f64): Resu
 # bj_snell_cos_theta_t; R₀ needs no guard of its own, since the indices are positive and finite (ADR 0002 row 24: Rust
 # refused indices summing below 1e-30 through reflectance_normal), and its ratio is _bj_wave_ratio_of's (a sum past
 # DBL_MAX). Mirrors `wave::schlick_reflectance`.
+#must_use
 public fn bj_schlick_reflectance(n1: f64, n2: f64, cos_theta_i: f64): Result {
     var cs: f64[2];
     var t, v = _bj_wave_cosines(n1, n2, cos_theta_i, &cs);
@@ -22172,6 +22255,7 @@ public fn bj_schlick_reflectance(n1: f64, n2: f64, cos_theta_i: f64): Result {
         c = cs[1];
     }
     var tq, vq = _bj_wave_ratio_of(n1, 1.0, n2, 1.0, 0);
+    if (is_err_result(tq) == 1) { return Err(vq); }   # as reflectance_normal's
     var r: f64 = vq;
     var r0: f64 = r * r;
     var omc: f64 = 1.0 - c;
@@ -22190,6 +22274,7 @@ public fn bj_schlick_reflectance(n1: f64, n2: f64, cos_theta_i: f64): Result {
 # n₁ = n₂. The errors of _bj_material_lossless_optical_constants (mat1's first), then of bj_snell_cos_theta_t. A
 # subnormal n, or an η past DBL_MAX or subnormal, runs on the roots to 53 bits with an unbounded exponent (row 18's
 # rule, M2 part 2d-2c). Mirrors `wave::reflectance_at_interface`.
+#must_use
 public fn bj_reflectance_at_interface(mat1: BjMaterial, mat2: BjMaterial, cos_theta_i: f64): Result {
     var o1: f64[2];
     var o2: f64[2];
@@ -22257,6 +22342,7 @@ public fn bj_reflectance_at_interface(mat1: BjMaterial, mat2: BjMaterial, cos_th
 
 # R = ((η₂ − η₁)/(η₂ + η₁))² at normal incidence between two lossless materials: BjMaterial.try_reflectance_at.
 # Mirrors `wave::reflectance_normal_materials`.
+#must_use
 public fn bj_reflectance_normal_materials(mat1: BjMaterial, mat2: BjMaterial): Result {
     var t, v = mat1.try_reflectance_at(mat2);
     if (is_err_result(t) == 1) { return Err(v); }
@@ -22270,6 +22356,7 @@ public fn bj_reflectance_normal_materials(mat1: BjMaterial, mat2: BjMaterial): R
 # both η are positive, so their sum never vanishes, and the guard refused only pairs of tiny impedances whose Γ is
 # well defined. An η past DBL_MAX or subnormal, or a sum past DBL_MAX, runs with an unbounded exponent
 # (src/crmath_vx.cyr's _bj_vx_gamma; row 18's rule, M2 part 2d-2c). Mirrors `wave::material_reflection_coefficient`.
+#must_use
 public fn bj_material_reflection_coefficient(mat1: BjMaterial, mat2: BjMaterial): Result {
     var o1: f64[2];
     var o2: f64[2];
@@ -22361,6 +22448,7 @@ fn _bj_wave_rect_root_ux(a: f64, b: f64, m, n): (f64, i64) {
 # (m, n, then a, b, then m = n = 0), then InvalidParameter unless v is positive and finite. Where the root's squares
 # under- or overflow, or v/2 is subnormal, the chain runs with an unbounded exponent and f_c rounds once (row 18's rule,
 # M2 part 2d-2c). Mirrors `wave::rectangular_waveguide_cutoff`.
+#must_use
 public fn bj_rectangular_waveguide_cutoff(a: f64, b: f64, m, n, velocity: f64): Result {
     var c = _bj_wave_check_rect(a, b, m, n);
     if (c != 0) { return Err(c); }
@@ -22382,6 +22470,7 @@ public fn bj_rectangular_waveguide_cutoff(a: f64, b: f64, m, n, velocity: f64): 
 # 0 or NaN, and at a range edge (squares under- or overflowing) the unbounded chain's λ_c past DBL_MAX; there a
 # representable λ_c is computed and rounded once (row 18's rule, M2 part 2d-2c: Rust gave 0 for an ∞ root and refused
 # sides of 10^300 m). Mirrors `wave::rectangular_waveguide_cutoff_wavelength`.
+#must_use
 public fn bj_rectangular_waveguide_cutoff_wavelength(a: f64, b: f64, m, n): Result {
     var c = _bj_wave_check_rect(a, b, m, n);
     if (c != 0) { return Err(c); }
@@ -22409,6 +22498,7 @@ public fn bj_rectangular_waveguide_cutoff_wavelength(a: f64, b: f64, m, n): Resu
 # λ_g = λ/√(1 − (λ/λ_c)²) (m), above cutoff (λ < λ_c); λ_c = +∞ (a TEM line) gives λ. DivisionByZero for λ_c = 0;
 # InvalidParameter for a NaN or negative λ_c, then a λ that is not positive and finite, then λ/λ_c ≥ 1 (its text
 # gives the ratio to 4 decimals, Rust's `{ratio:.4}`). Mirrors `wave::guide_wavelength`.
+#must_use
 public fn bj_guide_wavelength(free_space_wavelength: f64, cutoff_wavelength: f64): Result {
     var lc: f64 = cutoff_wavelength;
     var lam: f64 = free_space_wavelength;
@@ -22445,6 +22535,7 @@ public fn bj_guide_wavelength(free_space_wavelength: f64, cutoff_wavelength: f64
 # TM_mn (TM₀₁ 2.4048, TM₁₁ 3.8317), correctly rounded (ADR 0002 row 13: Rust's x·v and 2πa over- or underflowed
 # where f_c is representable). InvalidParameter unless the radius, then the root, then v is positive and finite.
 # Mirrors `wave::cylindrical_waveguide_cutoff`.
+#must_use
 public fn bj_cylindrical_waveguide_cutoff(radius: f64, bessel_root: f64, velocity: f64): Result {
     var c = _bj_wave_check_positive("waveguide radius", radius);
     if (c == 0) { c = _bj_wave_check_positive("Bessel root", bessel_root); }
@@ -22515,6 +22606,7 @@ public fn bj_half_wave_dipole_directivity(): f64 {
 # (2π/3)·η₀ is the double nearest 789.0221 (ADR 0002 row 22; Rust's 80π² = 789.5684 assumed η₀ = 120π), and the
 # product with (dl/λ)² is rounded once on that double (row 13; a non-finite dl or λ keeps K·(dl/λ)·(dl/λ)).
 # DivisionByZero when |λ| < 1e-30. Mirrors `wave::hertzian_dipole_radiation_resistance`.
+#must_use
 public fn bj_hertzian_dipole_radiation_resistance(dipole_length: f64, wavelength: f64): Result {
     var a: f64 = f64_abs(wavelength);
     if (a < 0.000000000000000000000000000001) {
@@ -22542,6 +22634,7 @@ public fn bj_half_wave_dipole_radiation_resistance(): f64 {
 # A_e = λ²D/(4π) (m²), an antenna's effective aperture, correctly rounded (ADR 0002 row 13; a non-finite λ or D keeps
 # Rust's λ·λ·D/(4π)). InvalidParameter unless λ ≥ 0: a NaN λ too (row 23; Rust's `λ < 0` let it through as NaN).
 # Mirrors `wave::effective_aperture`.
+#must_use
 public fn bj_effective_aperture(wavelength: f64, directivity: f64): Result {
     if (!(wavelength >= 0.0)) {
         var t = _bj_err_reason(BJ_ERR_INVALID_PARAMETER);
@@ -22562,6 +22655,7 @@ public fn bj_effective_aperture(wavelength: f64, directivity: f64): Result {
 # P_r/P_t = G_t·G_r·(λ/(4πd))², Friis's transmission equation (a power ratio), correctly rounded (ADR 0002 row 13; a
 # non-finite operand keeps Rust's G_t·G_r·ratio·ratio). Singularity when |d| < 1e-30. Mirrors
 # `wave::friis_transmission`.
+#must_use
 public fn bj_friis_transmission(gain_tx: f64, gain_rx: f64, wavelength: f64, distance: f64): Result {
     var a: f64 = f64_abs(distance);
     if (a < 0.000000000000000000000000000001) { return Err(_bj_err_singularity()); }
@@ -22621,6 +22715,7 @@ public fn bj_voltage(current: f64, resistance: f64): f64 {
 }
 
 # I = V/R. DivisionByZero when |R| < 1e-30. Mirrors `circuit::current`.
+#must_use
 public fn bj_current(voltage: f64, resistance: f64): Result {
     var a: f64 = f64_abs(resistance);
     if (a < 0.000000000000000000000000000001) {
@@ -22631,6 +22726,7 @@ public fn bj_current(voltage: f64, resistance: f64): Result {
 }
 
 # R = V/I. DivisionByZero when |I| < 1e-30. Mirrors `circuit::resistance`.
+#must_use
 public fn bj_resistance(voltage: f64, current: f64): Result {
     var a: f64 = f64_abs(current);
     if (a < 0.000000000000000000000000000001) {
@@ -22650,6 +22746,7 @@ public fn bj_power(current: f64, voltage: f64): f64 {
 
 # R = ρL/A, correctly rounded (ADR 0002 row 13; a non-finite ρ, L or A keeps Rust's (ρ·L)/A). InvalidParameter unless
 # A > 0, a NaN area too (row 26; Rust's `A <= 0` let it through). Mirrors `circuit::resistance_from_geometry`.
+#must_use
 public fn bj_resistance_from_geometry(resistivity: f64, length: f64, cross_section_area: f64): Result {
     if (!(cross_section_area > 0.0)) {
         var t = _bj_err_reason(BJ_ERR_INVALID_PARAMETER);
@@ -22755,14 +22852,17 @@ fn _bj_circuit_inverse(xs: *f64, n, what, kind): Result {
 }
 
 # R = R₁ + R₂ + … over the n values at resistances. InvalidParameter for n = 0. Mirrors `circuit::resistance_series`.
+#must_use
 public fn bj_resistance_series(resistances: *f64, n): Result {
     var t, v = _bj_circuit_sum(resistances, n, "resistance");
     if (is_err_result(t) == 1) { return Err(v); }
     return Ok(v);
 }
 
-# 1/R = 1/R₁ + 1/R₂ + …. InvalidParameter for n = 0; DivisionByZero for an |Rᵢ| < 1e-30 or an |Σ 1/Rᵢ| < 1e-30.
-# Mirrors `circuit::resistance_parallel`.
+# 1/R = 1/R₁ + 1/R₂ + …, correctly rounded from the exact sum. InvalidParameter for n = 0; DivisionByZero for an
+# |Rᵢ| < 1e-30 or an |Σ 1/Rᵢ| < 10^-30 exactly (ADR 0002 row 17); Allocation when the exact path's buffers can't be had
+# (only a sum the bounded tiers leave reaches it). Mirrors `circuit::resistance_parallel`.
+#must_use
 public fn bj_resistance_parallel(resistances: *f64, n): Result {
     var t, v = _bj_circuit_inverse(resistances, n, "resistance", "parallel");
     if (is_err_result(t) == 1) { return Err(v); }
@@ -22770,6 +22870,7 @@ public fn bj_resistance_parallel(resistances: *f64, n): Result {
 }
 
 # 1/C = 1/C₁ + 1/C₂ + …. As bj_resistance_parallel. Mirrors `circuit::capacitance_series`.
+#must_use
 public fn bj_capacitance_series(capacitances: *f64, n): Result {
     var t, v = _bj_circuit_inverse(capacitances, n, "capacitance", "series");
     if (is_err_result(t) == 1) { return Err(v); }
@@ -22777,6 +22878,7 @@ public fn bj_capacitance_series(capacitances: *f64, n): Result {
 }
 
 # C = C₁ + C₂ + …. InvalidParameter for n = 0. Mirrors `circuit::capacitance_parallel`.
+#must_use
 public fn bj_capacitance_parallel(capacitances: *f64, n): Result {
     var t, v = _bj_circuit_sum(capacitances, n, "capacitance");
     if (is_err_result(t) == 1) { return Err(v); }
@@ -22784,6 +22886,7 @@ public fn bj_capacitance_parallel(capacitances: *f64, n): Result {
 }
 
 # L = L₁ + L₂ + …. InvalidParameter for n = 0. Mirrors `circuit::inductance_series`.
+#must_use
 public fn bj_inductance_series(inductances: *f64, n): Result {
     var t, v = _bj_circuit_sum(inductances, n, "inductance");
     if (is_err_result(t) == 1) { return Err(v); }
@@ -22791,6 +22894,7 @@ public fn bj_inductance_series(inductances: *f64, n): Result {
 }
 
 # 1/L = 1/L₁ + 1/L₂ + …. As bj_resistance_parallel. Mirrors `circuit::inductance_parallel`.
+#must_use
 public fn bj_inductance_parallel(inductances: *f64, n): Result {
     var t, v = _bj_circuit_inverse(inductances, n, "inductance", "parallel");
     if (is_err_result(t) == 1) { return Err(v); }
@@ -22801,6 +22905,7 @@ public fn bj_inductance_parallel(inductances: *f64, n): Result {
 
 # C = εA/d, correctly rounded (ADR 0002 row 13; a non-finite ε, A or d keeps Rust's (ε·A)/d). InvalidParameter unless
 # d > 0, a NaN separation too (row 26; Rust's `d <= 0` let it through). Mirrors `circuit::parallel_plate_capacitance`.
+#must_use
 public fn bj_parallel_plate_capacitance(permittivity: f64, area: f64, separation: f64): Result {
     if (!(separation > 0.0)) {
         var t = _bj_err_reason(BJ_ERR_INVALID_PARAMETER);
@@ -23088,6 +23193,7 @@ public fn bj_rc_discharging_voltage(v0: f64, resistance: f64, capacitance: f64, 
 }
 
 # τ = L/R (s). DivisionByZero when |R| < 1e-30. Mirrors `circuit::rl_time_constant`.
+#must_use
 public fn bj_rl_time_constant(inductance: f64, resistance: f64): Result {
     var a: f64 = f64_abs(resistance);
     if (a < 0.000000000000000000000000000001) {
@@ -23099,6 +23205,7 @@ public fn bj_rl_time_constant(inductance: f64, resistance: f64): Result {
 
 # I(t) = (V/R)(1 − e^(−tR/L)); V/R when the exact |L/R| < 10^-30 (an instant rise; row 17's rule), 1 − e^(−tR/L) as
 # −expm1(−tR/L) (ADR 0002 row 29). DivisionByZero when |R| < 1e-30. Mirrors `circuit::rl_current_rise`.
+#must_use
 public fn bj_rl_current_rise(voltage: f64, resistance: f64, inductance: f64, t: f64): Result {
     var a: f64 = f64_abs(resistance);
     if (a < 0.000000000000000000000000000001) {
@@ -23128,6 +23235,7 @@ public fn bj_rl_current_rise(voltage: f64, resistance: f64, inductance: f64, t: 
 
 # I(t) = I₀e^(−tR/L); 0 when the exact |L/R| < 10^-30 (row 17's rule). DivisionByZero when |R| < 1e-30. Mirrors
 # `circuit::rl_current_decay`.
+#must_use
 public fn bj_rl_current_decay(i0: f64, resistance: f64, inductance: f64, t: f64): Result {
     var a: f64 = f64_abs(resistance);
     if (a < 0.000000000000000000000000000001) {
@@ -23175,6 +23283,7 @@ fn _bj_circuit_check_r(resistance: f64): i64 {
 
 # f₀ = 1/(2π√(LC)) (Hz), correctly rounded (ADR 0002 row 13: √(1/((2π)²LC)), 2π Rust's π doubled). InvalidParameter
 # unless L and C are finite and positive. Mirrors `circuit::resonant_frequency`.
+#must_use
 public fn bj_resonant_frequency(inductance: f64, capacitance: f64): Result {
     var c = _bj_circuit_check_lc(inductance, capacitance);
     if (c != 0) { return Err(c); }
@@ -23189,6 +23298,7 @@ public fn bj_resonant_frequency(inductance: f64, capacitance: f64): Result {
 
 # ω₀ = 1/√(LC) (rad/s), correctly rounded (ADR 0002 row 13). As bj_resonant_frequency. Mirrors
 # `circuit::resonant_angular_frequency`.
+#must_use
 public fn bj_resonant_angular_frequency(inductance: f64, capacitance: f64): Result {
     var c = _bj_circuit_check_lc(inductance, capacitance);
     if (c != 0) { return Err(c); }
@@ -23203,6 +23313,7 @@ public fn bj_resonant_angular_frequency(inductance: f64, capacitance: f64): Resu
 # correctly rounded (ADR 0002 row 13: √(L/(C·R²))).
 # InvalidParameter unless R is finite and non-negative; DivisionByZero for R < 1e-30; then InvalidParameter unless L
 # and C are finite and positive. Mirrors `circuit::quality_factor`.
+#must_use
 public fn bj_quality_factor(resistance: f64, inductance: f64, capacitance: f64): Result {
     var cr = _bj_circuit_check_r(resistance);
     if (cr != 0) { return Err(cr); }
@@ -23225,6 +23336,7 @@ public fn bj_quality_factor(resistance: f64, inductance: f64, capacitance: f64):
 # Correctly rounded for R > 0 (ADR 0002 row 13: kimiya's RN(R·√((C/L)·2^-2))); a zero R keeps Rust's chain (±0).
 # InvalidParameter unless R is finite and non-negative, then unless L and C are finite and positive. Mirrors
 # `circuit::damping_ratio`.
+#must_use
 public fn bj_damping_ratio(resistance: f64, inductance: f64, capacitance: f64): Result {
     var cr = _bj_circuit_check_r(resistance);
     if (cr != 0) { return Err(cr); }
@@ -23246,6 +23358,7 @@ public fn bj_damping_ratio(resistance: f64, inductance: f64, capacitance: f64): 
 # quotient below 2^-1022 is then absorbed, and X is the chain's wherever X² is not negligible); otherwise, for finite
 # operands, the chain runs with an unbounded exponent and √ rounds once (ADR 0002 row 18's rule, M2 part 2d-3a: R past
 # 1.3·10^154 had made |Z| ∞, and R = 10^-200 at resonance 0). Mirrors `circuit::rlc_impedance`.
+#must_use
 public fn bj_rlc_impedance(resistance: f64, inductance: f64, capacitance: f64, angular_freq: f64): Result {
     var w: f64 = angular_freq;
     var aw: f64 = f64_abs(w);
@@ -23368,6 +23481,7 @@ fn _bj_rel_dual_put(g: *f64, k, x: f64, s) {
 # 30: Rust's form cancelled near c, 1e-7 relative at β = 1 − 1e-9, and its rounded v²/c² ≥ 1 refused speeds an ulp
 # below c). InvalidParameter "speed (v m/s) must be less than c" unless |v| < c exactly (NaN refused). Mirrors
 # `relativity::lorentz_factor`.
+#must_use
 public fn bj_lorentz_factor(speed: f64): Result {
     var vv: f64[1];
     vv[0] = speed;
@@ -24085,6 +24199,7 @@ impl BjEmTensor {
 # E' = γ(E + v × B) − γ²/(γ + 1)·(v⋅E)v/c² and B' = γ(B − v × E/c²) − γ²/(γ + 1)·(v⋅B)v/c², exact for any small v ≠ 0.
 # γ is correctly rounded from the exact c² − |v|² (ADR 0002 row 30). InvalidParameter "boost velocity must be less than
 # c" unless |v| < c exactly (a NaN part refused); the outs untouched. Mirrors `relativity::lorentz_transform_fields`.
+#must_use
 public fn bj_lorentz_transform_fields(e: BjFieldVector, b: BjFieldVector, velocity: BjFieldVector,
   e_out: *BjFieldVector, b_out: *BjFieldVector): Result {
     var vp: f64[3];
@@ -24137,6 +24252,7 @@ public fn bj_lorentz_transform_fields(e: BjFieldVector, b: BjFieldVector, veloci
 # (E', B') for a boost of speed v along x, into e_out and b_out: E'_x = E_x, E'_y = γ(E_y − vB_z), E'_z = γ(E_z + vB_y);
 # B'_x = B_x, B'_y = γ(B_y + vE_z/c²), B'_z = γ(B_z − vE_y/c²). bj_lorentz_factor's error, the outs untouched. Mirrors
 # `relativity::lorentz_transform_x`.
+#must_use
 public fn bj_lorentz_transform_x(e: BjFieldVector, b: BjFieldVector, speed: f64, e_out: *BjFieldVector,
   b_out: *BjFieldVector): Result {
     var tg, vg = bj_lorentz_factor(speed);
@@ -24252,6 +24368,7 @@ impl BjFourVector {
 
     # The boost of speed v along x, into out: ct' = γ(ct − βx), x' = γ(x − β·ct). bj_lorentz_factor's error, out
     # untouched. Mirrors `FourVector::boost_x`.
+    #must_use
     public fn boost_x(self, speed: f64, out: *BjFourVector): Result {
         var tg, vg = bj_lorentz_factor(speed);
         if (is_err_result(tg) == 1) { return Err(vg); }
@@ -24297,6 +24414,7 @@ impl BjFourVector {
 # rest |R|, and this is Coulomb's potential), correctly rounded (ADR 0002 row 13; a non-finite q or R_eff keeps Rust's
 # q/(4π·ε₀·R_eff)). The radial distance's errors (InvalidParameter when negative or NaN, Singularity below 1e-30).
 # Mirrors `relativity::retarded_scalar_potential`.
+#must_use
 public fn bj_retarded_scalar_potential(charge: f64, retarded_distance: f64): Result {
     var tc, vc = _bj_check_radial_distance(retarded_distance);
     if (is_err_result(tc) == 1) { return Err(vc); }
@@ -24313,6 +24431,7 @@ public fn bj_retarded_scalar_potential(charge: f64, retarded_distance: f64): Res
 # A = μ₀qv/(4πR_eff) (T⋅m) into out, v and R_eff at the retarded time, each part correctly rounded (ADR 0002 row 13; a
 # non-finite q or R_eff keeps Rust's v·(μ₀q/(4πR_eff)), and a non-finite part its own). As
 # bj_retarded_scalar_potential, out untouched on an error. Mirrors `relativity::retarded_vector_potential`.
+#must_use
 public fn bj_retarded_vector_potential(charge: f64, velocity: BjFieldVector, retarded_distance: f64,
   out: *BjFieldVector): Result {
     var tc, vc = _bj_check_radial_distance(retarded_distance);
@@ -24386,6 +24505,7 @@ fn _bj_rel_reff_ux(r_vec: BjFieldVector, beta_vec: BjFieldVector): (f64, i64) {
 # a NaN input, and for an R with an infinite part ("R vector must be finite": ADR 0002 row 27, amended in M2 part 2d-3e
 # on the user's answer of 2026-11-13; Rust went on to NaN). An R_eff past DBL_MAX runs to 53 bits with an unbounded
 # exponent and φ rounds once (row 18's rule). Mirrors `relativity::lienard_wiechert_scalar_potential`.
+#must_use
 public fn bj_lienard_wiechert_scalar_potential(charge: f64, r_vec: BjFieldVector, beta_vec: BjFieldVector): Result {
     var t, v = _bj_rel_effective_distance(r_vec, beta_vec);
     if (is_err_result(t) == 1) { return Err(v); }
@@ -24407,6 +24527,7 @@ public fn bj_lienard_wiechert_scalar_potential(charge: f64, r_vec: BjFieldVector
 # untouched on an error; where μ₀q, μ₀qc or their quotient by 4πR_eff leaves the normal range, or R_eff passes DBL_MAX,
 # the chain runs with an unbounded exponent and each part rounds once (row 18's rule, M2 part 2d-3e). Mirrors
 # `relativity::lienard_wiechert_vector_potential`.
+#must_use
 public fn bj_lienard_wiechert_vector_potential(charge: f64, r_vec: BjFieldVector, beta_vec: BjFieldVector,
   out: *BjFieldVector): Result {
     var t, v = _bj_rel_effective_distance(r_vec, beta_vec);
@@ -24478,6 +24599,7 @@ fn _bj_rel_avec_edge(charge: f64, r_vec: BjFieldVector, beta_vec: BjFieldVector,
 # (γ²κ³R², the two factors, the cross products) keeps Rust's chain inside a box on q, R, β̇, n̂ − β and γ², and
 # otherwise runs with an unbounded exponent, |R| and 1/|R| included, each part's sum rounded once (row 18's rule, M2
 # part 2d-3f). Mirrors `relativity::lienard_wiechert_e`.
+#must_use
 public fn bj_lienard_wiechert_e(charge: f64, r_vec: BjFieldVector, beta_vec: BjFieldVector, beta_dot: BjFieldVector,
   out: *BjFieldVector): Result {
     return _bj_rel_e_impl(charge, r_vec, beta_vec, beta_dot, out, 0);
@@ -24646,6 +24768,7 @@ public fn bj_larmor_power(charge: f64, acceleration: f64): f64 {
 # P = q²γ⁶/(6πε₀c³)·[a² − |v × a|²/c²] (W), Liénard's relativistic Larmor formula, γ correctly rounded from the exact
 # c² − |v|² (ADR 0002 row 30). InvalidParameter "velocity must be less than c" unless |v| < c exactly. Mirrors
 # `relativity::relativistic_larmor_power`.
+#must_use
 public fn bj_relativistic_larmor_power(charge: f64, velocity: BjFieldVector, acceleration: BjFieldVector): Result {
     var vp: f64[3];
     _bj_rel_parts(velocity, &vp);
@@ -25179,6 +25302,7 @@ fn _bj_rel_solve(obs: *f64, t: f64, traj, max_iterations, st: *f64, out: *f64): 
 # finite, the trajectory returns a non-finite state, no bracket exists (a superluminal trajectory: a non-finite state
 # met while the bracket expands reports this error, ADR 0002 row 31, the user's answer of 2026-11-13), or the
 # refinement has not converged in max_iterations steps. Mirrors `relativity::solve_retarded_time`.
+#must_use
 public fn bj_solve_retarded_time(observer_pos: *f64, observation_time: f64, trajectory_fn, max_iterations): Result {
     var st: f64[9];
     var r: f64[1];
@@ -25197,6 +25321,7 @@ public fn bj_solve_retarded_time(observer_pos: *f64, observation_time: f64, traj
 # each output rounds once (ADR 0002 row 18's rule, M2 part 2d-3j): an R past DBL_MAX (Rust: ∞, then NaN fields), a
 # 1/|R| or n̂ below 2^-1022, a β or β̇ below 2^-1022, or an E that B would see degraded. A non-finite charge keeps
 # Rust's chain (NaN fields where R passes DBL_MAX). Mirrors `relativity::lienard_wiechert_fields`.
+#must_use
 public fn bj_lienard_wiechert_fields(charge: f64, observer_pos: *f64, observation_time: f64, trajectory_fn,
   e_out: *BjFieldVector, b_out: *BjFieldVector): Result {
     if (_bj_log_on(5) == 1) {
@@ -25595,6 +25720,7 @@ impl BjJonesVector {
     # unbounded exponent there, so the result is exactly scale-invariant (ADR 0002 row 18, _bj_vx_jnorm). DivisionByZero
     # "zero Jones vector has no polarization state" for the zero vector, InvalidParameter "Jones vector components must
     # be finite" for a non-finite part; out untouched on an error. Mirrors `JonesVector::normalized`.
+    #must_use
     public fn normalized(self, out: *BjJonesVector): Result {
         var w: f64[4];
         var t = _bj_vx_jnorm(_bj_pol_f64p(self), &w);
@@ -25629,6 +25755,7 @@ impl BjJonesVector {
     # amplitude scales. Where Rust's squares under- or overflowed, or it rescaled both vectors, the port takes its first
     # branch with an unbounded exponent (ADR 0002 row 18, _bj_vx_overlap). DivisionByZero when either vector is zero,
     # InvalidParameter for a non-finite part, the first vector's error first. Mirrors `JonesVector::overlap`.
+    #must_use
     public fn overlap(self, other: BjJonesVector): Result {
         var w: f64[1];
         var t = _bj_vx_overlap(_bj_pol_f64p(self), _bj_pol_f64p(&other), &w);
@@ -25958,6 +26085,7 @@ impl BjStokesVector {
     # DBL_MAX or falls below 2^-1022 (ADR 0002 row 18, _bj_vx_dop). DivisionByZero for S₀ = 0; InvalidParameter
     # "Stokes vector must be finite with S₀ > 0, got [..]" for S₀ < 0 or a non-finite part. Mirrors
     # `StokesVector::degree_of_polarization`.
+    #must_use
     public fn degree_of_polarization(self): Result {
         var s0: f64 = self.s.0;
         if (s0 == 0.0) { return Err(_bj_err_division_by_zero("cannot compute DOP for zero-intensity light")); }
@@ -31869,7 +31997,7 @@ var _BJ_FD1_MAX_CELLS = 164703072086692425;
 
 # Rust's `run(steps, None, ..)`: no source cell. Rust's Some(cell) with cell ≥ num_cells injects nothing either, so
 # usize::MAX (−1) is None exactly.
-public var BJ_FDTD_NO_SOURCE = 0 - 1;
+public const BJ_FDTD_NO_SOURCE = -1;
 
 # 1D FDTD simulation state: E_z and H_y along x. `e_field` and `h_field` are the addresses of num_cells f64 (read and
 # write them, as Rust's public vectors); `permittivity` and `permeability` hold ε_r per E node and μ_r per H node,
@@ -35272,7 +35400,7 @@ public enum BjMode2d {
 
 # Rust's `run(steps, None, ..)`: no source. Rust's Some((x, y)) outside the grid injects nothing either, so usize::MAX
 # (−1) for x is None exactly.
-public var BJ_FDTD2D_NO_SOURCE = 0 - 1;
+public const BJ_FDTD2D_NO_SOURCE = -1;
 
 # A 2D FDTD simulation. `mode` is BJ_MODE2D_TM or BJ_MODE2D_TE; nx × ny the nodes; `dx` (m) the uniform spacing in x
 # and y, `dt` (s) the step, `step` the time-step index. `fz` (E_z in TM, H_z in TE), `fx` (H_x, E_x) and `fy` (H_y,
@@ -36386,7 +36514,7 @@ var _BJ_FD3_MAX_CELLS = 72057594037927935;
 
 # Rust's `run(steps, None, ..)`: no source. Rust's Some((x, y, z)) outside the grid injects nothing either, so
 # usize::MAX (−1) for x is None exactly.
-public var BJ_FDTD3D_NO_SOURCE = 0 - 1;
+public const BJ_FDTD3D_NO_SOURCE = -1;
 
 # A 3D FDTD simulation. nx × ny × nz are the nodes, `dx` (m) the uniform spacing, `dt` (s) the step, `step` the
 # time-step index. `ex`, `ey`, `ez`, `hx`, `hy` and `hz` are the addresses of nx·ny·nz f64 each (read and write the
@@ -38383,6 +38511,7 @@ fn _bj_nf_check_len(name, len, nx, ny): i64 {
 }
 
 # The phasor at index i of a field held as real parts at re and imaginary parts at im (0: all zero, a snapshot).
+#must_use
 fn _bj_nf_at(re, im, i): (f64, f64) {
     var rp: *f64 = _bj_nf_f64p(re);
     var r: f64 = rp[i];

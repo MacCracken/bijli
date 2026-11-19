@@ -78,6 +78,7 @@ cyrius build src/main.cyr build/bijli
 cyrius test                          # must be warning-free, not just passing
 cyrius test --bounds
 cyrius bench
+cyrius fuzz                          # tests/*.fcyr: the readers' mutation harnesses
 cyrius coverage --exec --min 80      # the 80 % target, as functions entered by the tests
 cyrius distlib --all && cyrius distlib --check
 cyrius deps --locked
@@ -88,7 +89,11 @@ python3 -I -B scripts/rust_test_ledger.py . --check  # every Rust test ported, p
 python3 -I -B scripts/bench_record.py . --check      # every Rust bench has a twin, or is pending
 python3 -I -B scripts/doc_examples.py .              # the README's and guides' cyrius blocks run
 python3 -I -B scripts/oracle/emit.py . --check       # the emitted golden rows are current
+python3 -I -B scripts/oracle/validate.py .           # the reference model: every golden row and mapping (~10 min)
 ```
+
+CI runs every step but the last two: they replay the corpus on the oracle's libm (glibc 2.44), which a hosted
+runner doesn't have.
 
 `cyrius test` must be **warning-free**, with one recorded exception (the user's answer of 2026-11-17):
 `tests/ai.tcyr`, the only unit that includes sandhi, prints the stdlib's own warnings and nothing else:
@@ -176,8 +181,11 @@ and still exits 0.
   `assert_fatal`, `panic` or `result_unwrap`. Errors return a value-form `Result` with a
   `BJ_ERR_*` code, and the error's payload goes into the per-thread last-error record.
 - **Memory.**
-  - Grid and other large buffers come from `fl_calloc` and are released by `fl_free` inside
-    `Bj*_free`.
+  - Grid and other large buffers come from `fl_calloc`, or from one anonymous mmap (the FDTD
+    grids, the TF/SF source, the CW accumulator, the CPU backend: plan §9.5), and are released
+    inside `Bj*_free` (`fl_free` or `cyr_munmap`).
+  - An owning constructor empties `out` before it can fail, so a `_free` after a failure does
+    nothing (ADR 0002 row 48).
   - No allocation inside any `step_*`.
   - **Never `alloc_reset`**: it wipes the consumer's heap.
 - **f64 hygiene.**

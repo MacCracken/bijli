@@ -38,7 +38,7 @@ var _BJ_FD3_MAX_CELLS = 72057594037927935;
 
 # Rust's `run(steps, None, ..)`: no source. Rust's Some((x, y, z)) outside the grid injects nothing either, so
 # usize::MAX (−1) for x is None exactly.
-public var BJ_FDTD3D_NO_SOURCE = 0 - 1;
+public const BJ_FDTD3D_NO_SOURCE = -1;
 
 # A 3D FDTD simulation. nx × ny × nz are the nodes, `dx` (m) the uniform spacing, `dt` (s) the step, `step` the
 # time-step index. `ex`, `ey`, `ez`, `hx`, `hy` and `hz` are the addresses of nx·ny·nz f64 each (read and write the

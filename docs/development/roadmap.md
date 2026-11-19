@@ -29,8 +29,8 @@ The audit's findings H1–H34 are in [port-parity §142](port-parity.md). They a
 - [x] **3** Threads: the math tables become data, plus the error slot's publication and the 3D energy's scratch
   (H23–H25; port-parity §148).
 - [x] **4** Results that change, each an ADR 0002 row (H26–H31; port-parity §149).
-- [ ] **5** Rules and docs: `#must_use`, the stale claims, CLAUDE.md's cleanliness check and CI's missing gates
-  (H32–H34).
+- [x] **5** Rules and docs: `#must_use`, the stale claims, CLAUDE.md's cleanliness check and CI's missing gates
+  (H32–H34; port-parity §150).
 - [ ] **6** A JSON fuzz harness: the readers rest on bayan's parser and on the golden corpus's documents, not on
   mutation (the [threat model](threat-model.md)'s open item). A harness like `tests/bijli.fcyr`, the Touchstone
   reader's, closes it for `_bj_jr_doc` and a few readers.

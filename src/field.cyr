@@ -237,6 +237,7 @@ impl BjFieldVector {
     # with an unbounded exponent instead: |v| to 53 bits, each quotient rounded once (ADR 0002 row 18). So the result
     # is exactly scale-invariant, the same bits for 2^k·v wherever the parts stay exact. Mirrors
     # `FieldVector::normalized`.
+    #must_use
     public fn normalized(self, out: *BjFieldVector): Result {
         var ms: f64 = self.x * self.x + self.y * self.y + self.z * self.z;
         if (_bj_vx_sumsq_plain(self.x, self.y, self.z, ms) == 0) {
@@ -373,6 +374,7 @@ impl BjFieldVector {
 # E = kq/r²·r̂ (V/m) at field_pos from a point charge at charge_pos, as k·q·(1/r)³ times the offset; at a range edge
 # with an unbounded exponent, each component rounded once (ADR 0002 row 18). Singularity when the exact r² < 10^-30
 # (row 17). Mirrors `field::electric_field_point_charge`.
+#must_use
 public fn bj_electric_field_point_charge(charge_q: f64, charge_pos: *f64, field_pos: *f64,
   out: *BjFieldVector): Result {
     var dx: f64 = field_pos[0] - charge_pos[0];
@@ -431,6 +433,7 @@ fn _bj_fv_potential_edge(q: f64, f: *f64, c: *f64): f64 {
 
 # V = kq/r (volts); at a range edge with an unbounded exponent, the quotient rounded once (ADR 0002 row 18).
 # Singularity when the exact r² < 10^-30 (row 17). Mirrors `field::electric_potential_point_charge`.
+#must_use
 public fn bj_electric_potential_point_charge(charge_q: f64, charge_pos: *f64, field_pos: *f64): Result {
     var dx: f64 = field_pos[0] - charge_pos[0];
     var dy: f64 = field_pos[1] - charge_pos[1];
@@ -516,6 +519,7 @@ fn _bj_fv_cross_ok(c: f64, a: f64, b: f64, x: f64, y: f64): i64 {
 # B = (μ₀/4π)·q(v × r̂)/r² (tesla) at field_pos from a charge at charge_pos moving with `velocity` (Biot–Savart); at a
 # range edge with an unbounded exponent, each component rounded once (ADR 0002 row 18). Singularity when the exact
 # r² < 10^-30 (row 17). Mirrors `field::magnetic_field_moving_charge`.
+#must_use
 public fn bj_magnetic_field_moving_charge(charge_q: f64, charge_pos: *f64, velocity: *f64, field_pos: *f64,
   out: *BjFieldVector): Result {
     var dx: f64 = field_pos[0] - charge_pos[0];
@@ -642,6 +646,7 @@ fn _bj_fv_super_edge(charges: *f64, n, field_pos: *f64, out: *BjFieldVector) {
 # At a range edge (a field or a partial sum Rust rounded outside the normal range) the whole sum runs with an
 # unbounded exponent, each field kept to 53 bits and the last addition rounded once (ADR 0002 row 18). Mirrors
 # `field::electric_field_superposition`.
+#must_use
 public fn bj_electric_field_superposition(charges: *f64, n, field_pos: *f64, out: *BjFieldVector): Result {
     var tx: f64 = 0.0;
     var ty: f64 = 0.0;
@@ -969,6 +974,7 @@ fn _bj_fv_dipole_field(moment: BjFieldVector, field_pos: *f64, magnetic, out: *B
 # E = (1/4πε₀r³)·[3(p·r̂)r̂ − p] at field_pos from a dipole p at the origin, as r̂·(3(p·r̂)·f) − p·f with f =
 # (1/r)³/(4πε₀); at a range edge with an unbounded exponent, each component rounded once (ADR 0002 row 18).
 # Singularity when the exact r² < 10^-30 (row 17). Mirrors `field::electric_dipole_field`.
+#must_use
 public fn bj_electric_dipole_field(dipole_moment: BjFieldVector, field_pos: *f64, out: *BjFieldVector): Result {
     var t, v = _bj_fv_dipole_field(dipole_moment, field_pos, 0, out);
     if (is_err_result(t) == 1) { return Err(v); }
@@ -978,6 +984,7 @@ public fn bj_electric_dipole_field(dipole_moment: BjFieldVector, field_pos: *f64
 # V = p·r̂/(4πε₀r²) at field_pos from a dipole p at the origin, as (p·r̂)·(1/r)·(1/r)/(4πε₀); at a range edge (r̂,
 # p·r̂ or (p·r̂)/r² outside the normal range) with an unbounded exponent, the quotient rounded once (ADR 0002 row 18).
 # Singularity when the exact r² < 10^-30 (row 17). Mirrors `field::electric_dipole_potential`.
+#must_use
 public fn bj_electric_dipole_potential(dipole_moment: BjFieldVector, field_pos: *f64): Result {
     var r_hat: BjFieldVector;
     var inv_r: f64 = _bj_field_rhat(field_pos, &r_hat);
@@ -1014,6 +1021,7 @@ public fn bj_electric_dipole_potential(dipole_moment: BjFieldVector, field_pos: 
 # B = (μ₀/4πr³)·[3(m·r̂)r̂ − m] at field_pos from a magnetic dipole m at the origin, as r̂·(3(m·r̂)·f) − m·f with
 # f = μ₀·(1/r)³/(4π); at a range edge with an unbounded exponent, each component rounded once (ADR 0002 row 18).
 # Singularity when the exact r² < 10^-30 (row 17). Mirrors `field::magnetic_dipole_field`.
+#must_use
 public fn bj_magnetic_dipole_field(magnetic_moment: BjFieldVector, field_pos: *f64, out: *BjFieldVector): Result {
     var t, v = _bj_fv_dipole_field(magnetic_moment, field_pos, 1, out);
     if (is_err_result(t) == 1) { return Err(v); }
@@ -1035,6 +1043,7 @@ public fn bj_electric_field_infinite_plane(surface_charge_density: f64): f64 {
 # A radial distance's errors: InvalidParameter when NaN or negative, Singularity below 10^-30 m (the double nearest
 # 10^-30 lies above it, so Rust's `distance < 1e-30` is the exact test); else Ok(0). Mirrors
 # field.rs's `pub(crate) check_radial_distance`.
+#must_use
 public fn _bj_check_radial_distance(distance: f64): Result {
     if (distance != distance || distance < 0.0) {
         var t = _bj_err_reason(BJ_ERR_INVALID_PARAMETER);
@@ -1048,6 +1057,7 @@ public fn _bj_check_radial_distance(distance: f64): Result {
 
 # E_r = kQ/r² (V/m) outside a uniformly charged sphere (r > R), correctly rounded (ADR 0002 row 13; a non-finite
 # operand keeps Rust's k·Q/(r·r)). Errors as _bj_check_radial_distance. Mirrors `field::electric_field_charged_sphere`.
+#must_use
 public fn bj_electric_field_charged_sphere(total_charge: f64, distance: f64): Result {
     var t, v = _bj_check_radial_distance(distance);
     if (is_err_result(t) == 1) { return Err(v); }
@@ -1063,6 +1073,7 @@ public fn bj_electric_field_charged_sphere(total_charge: f64, distance: f64): Re
 # E_r = kQ·(r/R)/R² (V/m) inside a uniformly charged sphere, 0 ≤ r ≤ R: kQr/R³ correctly rounded (ADR 0002 row 13;
 # a non-finite Q keeps Rust's chain). InvalidParameter when R is not positive and
 # finite, or r is outside [0, R] (or NaN). Mirrors `field::electric_field_inside_sphere`.
+#must_use
 public fn bj_electric_field_inside_sphere(total_charge: f64, sphere_radius: f64, distance: f64): Result {
     if (!(sphere_radius > 0.0 && _bj_is_finite(sphere_radius) == 1)) {
         var t = _bj_err_reason(BJ_ERR_INVALID_PARAMETER);
@@ -1099,6 +1110,7 @@ public fn bj_electric_field_inside_sphere(total_charge: f64, sphere_radius: f64,
 # E_r = λ/(2πε₀r) (V/m) from an infinite line of linear charge density λ, correctly rounded with π as Rust's double
 # (ADR 0002 row 13; a non-finite operand keeps Rust's λ/(2·π·ε₀·r)). Errors as _bj_check_radial_distance. Mirrors
 # `field::electric_field_infinite_line`.
+#must_use
 public fn bj_electric_field_infinite_line(linear_charge_density: f64, distance: f64): Result {
     var t, v = _bj_check_radial_distance(distance);
     if (is_err_result(t) == 1) { return Err(v); }
@@ -1114,6 +1126,7 @@ public fn bj_electric_field_infinite_line(linear_charge_density: f64, distance: 
 
 # E_r = λ/(2πε₀r) outside an infinite uniformly charged cylinder: the line's field and errors. Mirrors
 # `field::electric_field_outside_cylinder`.
+#must_use
 public fn bj_electric_field_outside_cylinder(linear_charge_density: f64, distance: f64): Result {
     return bj_electric_field_infinite_line(linear_charge_density, distance);
 }
@@ -1121,6 +1134,7 @@ public fn bj_electric_field_outside_cylinder(linear_charge_density: f64, distanc
 # E_r = ρr/(2ε₀) (V/m) inside an infinite uniformly charged cylinder, correctly rounded (ADR 0002 row 13; a non-finite
 # operand keeps Rust's ρ·r/(2ε₀)). InvalidParameter when r is NaN or negative.
 # Mirrors `field::electric_field_inside_cylinder`.
+#must_use
 public fn bj_electric_field_inside_cylinder(volume_charge_density: f64, distance: f64): Result {
     if (distance != distance || distance < 0.0) {
         var t = _bj_err_reason(BJ_ERR_INVALID_PARAMETER);
@@ -1141,6 +1155,7 @@ public fn bj_electric_field_inside_cylinder(volume_charge_density: f64, distance
 # Singularity there only for R = 0 (a point charge). InvalidParameter when R is negative, NaN or infinite, or z is not
 # finite. At a range edge the chain runs with an unbounded exponent, the quotient rounded once (ADR 0002 row 18).
 # Mirrors `field::electric_field_ring_axis`.
+#must_use
 public fn bj_electric_field_ring_axis(total_charge: f64, ring_radius: f64, axial_distance: f64): Result {
     if (!(ring_radius >= 0.0 && _bj_is_finite(ring_radius) == 1)) {
         var t = _bj_err_reason(BJ_ERR_INVALID_PARAMETER);
@@ -1190,6 +1205,7 @@ public fn bj_electric_field_ring_axis(total_charge: f64, ring_radius: f64, axial
 # cancellation-free form, the one-sided limit at z = ±0 by the sign bit. InvalidParameter when R is not positive and
 # finite, or z is not finite. At a range edge the chain runs with an unbounded exponent, the last product rounded once
 # (ADR 0002 row 18). Mirrors `field::electric_field_disk_axis`.
+#must_use
 public fn bj_electric_field_disk_axis(surface_charge_density: f64, disk_radius: f64, axial_distance: f64): Result {
     if (!(disk_radius > 0.0 && _bj_is_finite(disk_radius) == 1)) {
         var t = _bj_err_reason(BJ_ERR_INVALID_PARAMETER);
@@ -1257,6 +1273,7 @@ fn _bj_fv_disk_edge(sigma: f64, rr: f64, z: f64, sign: f64, d: f64): f64 {
 # 8πε₀r⁵ with r⁵ = r²·r²·r. q_tensor is 9 f64, row-major (Rust's `[[f64; 3]; 3]`). At a range edge the chain runs with
 # an unbounded exponent, the quotient rounded once (ADR 0002 row 18). Singularity when the exact r² < 10^-30 (row 17).
 # Mirrors `field::electric_quadrupole_potential`.
+#must_use
 public fn bj_electric_quadrupole_potential(q_tensor: *f64, field_pos: *f64): Result {
     var r_sq: f64 = field_pos[0] * field_pos[0] + field_pos[1] * field_pos[1] + field_pos[2] * field_pos[2];
     var band = _bj_x_band(r_sq, _BJ_FIELD_R2_MIN);
@@ -1792,6 +1809,7 @@ fn _bj_fv_multipole_edge(l, m, m_abs, charges: *f64, n): f64 {
 # n charges at `charges` (32 bytes each: q, x, y, z), summed in order; a charge at the origin adds q to the monopole
 # only. At a range edge the whole sum runs with an unbounded exponent and its last addition rounds once (ADR 0002 row
 # 18). InvalidParameter when |m| > l. Mirrors `field::multipole_moment`.
+#must_use
 public fn bj_multipole_moment(l, m, charges: *f64, n): Result {
     var m_abs = m;
     if (m < 0) { m_abs = 0 - m; }
@@ -1898,6 +1916,7 @@ fn _bj_fv_sph_multipole_edge(l, m, m_abs, charges: *f64, n, out: *BjComplex) {
 # the origin adds q·0.5/√π to Re q₀₀ only. Static, so no time convention enters. At a range edge both sums run with an
 # unbounded exponent, each last addition rounded once (ADR 0002 row 18). InvalidParameter when |m| > l. Mirrors
 # `field::spherical_multipole_moment` (its `(f64, f64)` is a BjComplex here).
+#must_use
 public fn bj_spherical_multipole_moment(l, m, charges: *f64, n, out: *BjComplex): Result {
     var m_abs = m;
     if (m < 0) { m_abs = 0 - m; }
@@ -1994,6 +2013,7 @@ public fn bj_image_charge_plane(charge: f64, position: *f64, plane_z: f64, image
 # charge is not strictly outside (a NaN position included). At a range edge the chain runs with an unbounded exponent,
 # the comparison with R included, each output rounded once (ADR 0002 row 18). image_pos may be position (an image in
 # place); on an error it is untouched. Mirrors `field::image_charge_sphere`.
+#must_use
 public fn bj_image_charge_sphere(charge: f64, position: *f64, sphere_radius: f64, image_pos: *f64): Result {
     if (!(sphere_radius > 0.0 && _bj_is_finite(sphere_radius) == 1)) {
         var t = _bj_err_reason(BJ_ERR_INVALID_PARAMETER);
@@ -2075,6 +2095,7 @@ fn _bj_fv_sphere_edge(charge: f64, p: *f64, rr: f64, image_pos: *f64): Result {
 # InvalidPermittivity for the first of ε₁, ε₂ that is not positive and finite. Where the product −q·(ε₂ − ε₁) or the
 # sum ε₁ + ε₂ leaves the normal range (a finite q), the chain runs with an unbounded exponent and the quotient is
 # rounded once (ADR 0002 row 18). Mirrors `field::image_charge_dielectric`.
+#must_use
 public fn bj_image_charge_dielectric(charge: f64, position: *f64, eps_r1: f64, eps_r2: f64, image_pos: *f64): Result {
     var z: f64 = position[2];
     if (!(z > 0.0 && _bj_is_finite(z) == 1)) {
@@ -2163,6 +2184,7 @@ fn _bj_fv_green_scalar_edge(f: *f64, c: *f64, k: f64, out: *BjComplex) {
 # range) the chain runs with an unbounded exponent, kR's cosine and sine included, each product rounded once (row 18).
 # Singularity when the exact R < 10^-30 (row 17). Mirrors `field::greens_function_scalar` (its `(f64, f64)` is a
 # BjComplex here).
+#must_use
 public fn bj_greens_function_scalar(field_pos: *f64, source_pos: *f64, k: f64, out: *BjComplex): Result {
     var dx: f64 = field_pos[0] - source_pos[0];
     var dy: f64 = field_pos[1] - source_pos[1];
@@ -2201,6 +2223,7 @@ public fn bj_greens_function_scalar(field_pos: *f64, source_pos: *f64, k: f64, o
 # G(r, r') = 1/(4πR), the static Green's function (k = 0); where 4πR passes DBL_MAX, R and 4πR with an unbounded
 # exponent and the quotient rounded once (ADR 0002 row 18). Singularity when the exact R < 10^-30 (row 17). Mirrors
 # `field::greens_function_static`.
+#must_use
 public fn bj_greens_function_static(field_pos: *f64, source_pos: *f64): Result {
     var dx: f64 = field_pos[0] - source_pos[0];
     var dy: f64 = field_pos[1] - source_pos[1];
@@ -2633,6 +2656,7 @@ fn _bj_fv_trace_edge(fx: f64, fy: f64, fz: f64, h: f64, pos: *f64) {
 # component; any other error of field_fn's is returned as is; Allocation when out can't grow (Rust aborts there; ADR
 # 0002 row 9). On an error out is empty. A success leaves the last-error record as field_fn left it. Mirrors
 # `field::trace_field_line`.
+#must_use
 public fn bj_trace_field_line(start: *f64, step_size: f64, max_steps, field_fn, out: *BjPolyline): Result {
     # start may point into out's own block (a line continued from its last point): copy it before out can grow.
     var pos: f64[3];

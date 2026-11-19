@@ -40,7 +40,7 @@ public enum BjMode2d {
 
 # Rust's `run(steps, None, ..)`: no source. Rust's Some((x, y)) outside the grid injects nothing either, so usize::MAX
 # (−1) for x is None exactly.
-public var BJ_FDTD2D_NO_SOURCE = 0 - 1;
+public const BJ_FDTD2D_NO_SOURCE = -1;
 
 # A 2D FDTD simulation. `mode` is BJ_MODE2D_TM or BJ_MODE2D_TE; nx × ny the nodes; `dx` (m) the uniform spacing in x
 # and y, `dt` (s) the step, `step` the time-step index. `fz` (E_z in TM, H_z in TE), `fx` (H_x, E_x) and `fy` (H_y,
