@@ -42632,8 +42632,142 @@ fn _bj_jr_dec_cmp(p, n, mg, er): i64 {
     return 0;
 }
 
+# ── the number index (2.0.1, H17) ──────────────────────────────────────────────────────────────────────────────────
+# A float on an f32 halfway value needs its token's digits, and bayan's nodes keep no text offset. Finding the token
+# by a walk of the tree to the node and a scan of the text to its ordinal cost the whole document per such number,
+# quadratic in a document of them. The index is built once, at a document's first such number: one walk puts every
+# number node's address and ordinal into an open-addressed table, one scan puts every number token's (start, end)
+# after it, so each later lookup is a probe. It lives in cx[3] (the block) and cx[4] (the table's slots, a power of
+# two; 0 while unbuilt, −1 where it couldn't be had, the walk and the scan per number then, as before). The table is
+# only ever probed, never iterated: its order can't reach a result.
+
+# A word as a *i64.
+#must_use
+fn _bj_jr_i64p(a): *i64 {
+    return a;
+}
+
+# The slot of node address v in the table tab of mask + 1 slots (two words each): v's, or the empty one where it goes.
+# Fibonacci hashing: the product's bits from 20 up (mask is below 2^30).
+fn _bj_jr_ix_slot(tab: *i64, mask, v): i64 {
+    var h = ((v >> 3) * 0x9E3779B97F4A7C15) >> 20;
+    var i = h & mask;
+    while (tab[2 * i] != 0 && tab[2 * i] != v) { i = (i + 1) & mask; }
+    return i;
+}
+
+# Puts every number node under v into the table, in document order (as _bj_jr_ord counts them), ordinals from cnt[0].
+fn _bj_jr_ix_walk(v, tab: *i64, mask, cnt: *i64) {
+    var tag = bayan_json_v_tag(v);
+    if (tag == JTAG_INT || tag == JTAG_FLOAT) {
+        var i = _bj_jr_ix_slot(tab, mask, v);
+        tab[2 * i] = v;
+        tab[2 * i + 1] = cnt[0];
+        cnt[0] = cnt[0] + 1;
+    } elif (tag == JTAG_ARR) {
+        var na = bayan_json_v_arr_len(v);
+        for (var k = 0; k < na; k = k + 1) { _bj_jr_ix_walk(bayan_json_v_arr_get(v, k), tab, mask, cnt); }
+    } elif (tag == JTAG_OBJ) {
+        var no = bayan_json_v_obj_len(v);
+        for (var j = 0; j < no; j = j + 1) { _bj_jr_ix_walk(bayan_json_v_obj_val(v, j), tab, mask, cnt); }
+    }
+    return 0;
+}
+
+# The number of number nodes under v.
+#must_use
+fn _bj_jr_ix_count(v): i64 {
+    var tag = bayan_json_v_tag(v);
+    if (tag == JTAG_INT || tag == JTAG_FLOAT) { return 1; }
+    var n = 0;
+    if (tag == JTAG_ARR) {
+        var na = bayan_json_v_arr_len(v);
+        for (var k = 0; k < na; k = k + 1) { n = n + _bj_jr_ix_count(bayan_json_v_arr_get(v, k)); }
+    } elif (tag == JTAG_OBJ) {
+        var no = bayan_json_v_obj_len(v);
+        for (var j = 0; j < no; j = j + 1) { n = n + _bj_jr_ix_count(bayan_json_v_obj_val(v, j)); }
+    }
+    return n;
+}
+
+# Each number token's (start, end) in the text [buf, buf + len) into toks, as _bj_jr_num_tok finds them; their count.
+fn _bj_jr_ix_toks(buf, len, toks: *i64, cap): i64 {
+    var seen = 0;
+    var i = 0;
+    while (i < len) {
+        var c = load8(buf + i);
+        if (c == 34) {
+            i = i + 1;
+            while (i < len && load8(buf + i) != 34) {
+                if (load8(buf + i) == 92) { i = i + 2; } else { i = i + 1; }
+            }
+            i = i + 1;
+        } elif (c == 45 || (c >= 48 && c <= 57)) {
+            var st = i;
+            while (i < len) {
+                var d = load8(buf + i);
+                if ((d >= 48 && d <= 57) || d == 46 || d == 101 || d == 69 || d == 43 || d == 45) { i = i + 1; }
+                else { break; }
+            }
+            if (seen < cap) {
+                toks[2 * seen] = st;
+                toks[2 * seen + 1] = i;
+            }
+            seen = seen + 1;
+        } else {
+            i = i + 1;
+        }
+    }
+    return seen;
+}
+
+# Builds the document cx's number index into cx[3] and cx[4] (−1 in cx[4] where it can't be had, or where the tokens
+# and the nodes don't pair up one to one, which a well-formed document always does).
+fn _bj_jr_ix_build(cx: *i64) {
+    cx[4] = 0 - 1;
+    var n = _bj_jr_ix_count(cx[2]);
+    var slots = 2;
+    while (slots < 2 * n && slots < 1152921504606846976) { slots = slots * 2; }
+    if (n < 1 || n > 268435456) { return 0; }
+    var blk = fl_calloc(slots * 16 + n * 16);
+    if (blk == 0) { return 0; }
+    var tab: *i64 = _bj_jr_i64p(blk);
+    var toks: *i64 = _bj_jr_i64p(blk + slots * 16);
+    var cnt: i64[1];
+    cnt[0] = 0;
+    _bj_jr_ix_walk(cx[2], tab, slots - 1, &cnt);
+    var nt = _bj_jr_ix_toks(cx[0], cx[1], toks, n);
+    if (nt != n || cnt[0] != n) {
+        fl_free(blk);
+        return 0;
+    }
+    cx[3] = blk;
+    cx[4] = slots;
+    return 0;
+}
+
+# Number node v's token in the document cx: its start, its end into end[0], or −1. By the index (built on the first
+# call), or, where it couldn't be had, by the walk and the scan.
+fn _bj_jr_tok_of(cx: *i64, v, end: *i64): i64 {
+    if (cx[4] == 0) { _bj_jr_ix_build(cx); }
+    if (cx[4] > 0) {
+        var tab: *i64 = _bj_jr_i64p(cx[3]);
+        var i = _bj_jr_ix_slot(tab, cx[4] - 1, v);
+        if (tab[2 * i] != v) { return 0 - 1; }
+        var k = tab[2 * i + 1];
+        var toks: *i64 = _bj_jr_i64p(cx[3] + cx[4] * 16);
+        end[0] = toks[2 * k + 1];
+        return toks[2 * k];
+    }
+    var cnt: i64[1];
+    cnt[0] = 0;
+    _bj_jr_ord(cx[2], v, &cnt);
+    return _bj_jr_num_tok(cx[0], cx[1], cnt[0], end);
+}
+
 # The sign of |number node v| − |x| for the f32 halfway double x with bits `bits` (quantum 2^q), exactly: an integer
-# node against x's integer value, a float node from its token in the text cx[0], cx[1] bytes, whose root node is cx[2].
+# node against x's integer value, a float node from its token in the text cx[0], cx[1] bytes, whose root node is cx[2]
+# (the token found through the index in cx[3], cx[4]).
 fn _bj_jr_f32_side(cx: *i64, v, bits, q): i64 {
     var mag = bits & 0x7FFFFFFFFFFFFFFF;
     if (bayan_json_v_tag(v) == JTAG_INT) {
@@ -42645,11 +42779,8 @@ fn _bj_jr_f32_side(cx: *i64, v, bits, q): i64 {
         if (iv > xi) { return 1; }
         return 0;
     }
-    var cnt: i64[1];
-    cnt[0] = 0;
-    _bj_jr_ord(cx[2], v, &cnt);
     var e: i64[1];
-    var s = _bj_jr_num_tok(cx[0], cx[1], cnt[0], &e);
+    var s = _bj_jr_tok_of(cx, v, &e);
     if (s < 0) { return 0; }
     var be = mag >> 52;
     var mg = (mag & 0xFFFFFFFFFFFFF) | 0x10000000000000;
@@ -42926,14 +43057,15 @@ fn _bj_jr_put_charge(c: *BjChargePoint, w: *i64) {
     return 0;
 }
 
-# The ChargePoint decoder: cx[0..2] the text, cx[2] the root (set here), cx[3..8] the five values.
+# The ChargePoint decoder: cx[0..2] the text, cx[2] the root (set here), cx[3..5] the number index, cx[5..10] the five
+# values.
 fn _bj_jr_charge1(v, cx): i64 {
     store64(cx + 16, v);
-    return _bj_jr_charge(cx, v, cx + 24);
+    return _bj_jr_charge(cx, v, cx + 40);
 }
 
-# The ChargeVisualization decoder: cx[0..2] the text, cx[2] the root (set here), cx[3..5] the points' block and count
-# (0 on entry; the caller gives the block back on a failure).
+# The ChargeVisualization decoder: cx[0..2] the text, cx[2] the root (set here), cx[3..5] the number index, cx[5..7] the
+# points' block and count (0 on entry; the caller gives the block back on a failure).
 fn _bj_jr_charges(v, cx: *i64): i64 {
     cx[2] = v;
     var f = _bj_jr_only(v, "charges", "struct ChargeVisualization");
@@ -42942,8 +43074,8 @@ fn _bj_jr_charges(v, cx: *i64): i64 {
     var n = bayan_json_v_arr_len(f);
     var b = _bj_jr_block(n * 20);
     if (b == 0) { return BJ_ERR_ALLOCATION; }
-    cx[3] = b;
-    cx[4] = n;
+    cx[5] = b;
+    cx[6] = n;
     var cs: *BjChargePoint = _bj_jw_cpp(b);
     var w: i64[5];
     for (var k = 0; k < n; k = k + 1) {
@@ -42961,13 +43093,14 @@ fn _bj_jr_charges(v, cx: *i64): i64 {
 # `serde_json::from_str::<ChargePoint>`.
 #must_use
 public fn BjChargePoint_from_json(buf, len, out: *BjChargePoint): Result {
-    var cx: i64[8];
-    _bj_jr_zero(&cx, 8);
+    var cx: i64[10];
+    _bj_jr_zero(&cx, 10);
     cx[0] = buf;
     cx[1] = len;
     var code = _bj_jr_read(buf, len, &_bj_jr_charge1, &cx);
+    _bj_jr_give(cx[3], 0);
     if (code != 0) { return Err(code); }
-    _bj_jr_put_charge(out, _bj_jr_at(&cx, 3));
+    _bj_jr_put_charge(out, _bj_jr_at(&cx, 5));
     return Ok(0);
 }
 
@@ -42977,17 +43110,18 @@ public fn BjChargePoint_from_json(buf, len, out: *BjChargePoint): Result {
 #must_use
 public fn BjChargeVisualization_from_json(buf, len, out: *BjChargeVisualization): Result {
     memset(out, 0, sizeof(BjChargeVisualization));
-    var cx: i64[5];
-    _bj_jr_zero(&cx, 5);
+    var cx: i64[7];
+    _bj_jr_zero(&cx, 7);
     cx[0] = buf;
     cx[1] = len;
     var code = _bj_jr_read(buf, len, &_bj_jr_charges, &cx);
+    _bj_jr_give(cx[3], 0);
     if (code != 0) {
-        _bj_jr_give(cx[3], 0);
+        _bj_jr_give(cx[5], 0);
         return Err(code);
     }
-    out.charges = cx[3];
-    out.charges_len = cx[4];
+    out.charges = cx[5];
+    out.charges_len = cx[6];
     return Ok(0);
 }
 

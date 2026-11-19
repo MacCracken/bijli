@@ -600,6 +600,68 @@ fn main() {
     assert(is_ok(tw2) == 1 && doc_is(wsb2, cat2("{\"values\":[],\"dimensions\":[", wdims), wtail3) == 1,
       "a volume with no values at its longest: 259 bytes and the NUL (H3)");
 
+    test_group("cyrius_audit_201_number_index (2.0.1 bite 2b, H17)");
+    # 200 charges, their keys in three rotating orders, each number one of three spellings of the f32 halfway double
+    # 16777217: "16777217" (a tie: 2²⁴), "16777217.000000001" (above: 2²⁴ + 2) and "16777216.999999999" (below: 2²⁴).
+    # The reader finds each one's token through the document's number index (built once, at the first), so a token
+    # paired with the wrong node would show as a wrong value.
+    var spell: i64[3];
+    spell[0] = "16777217";
+    spell[1] = "16777217.000000001";
+    spell[2] = "16777216.999999999";
+    var want: i64[3];
+    want[0] = 16777216;
+    want[1] = 16777218;
+    want[2] = 16777216;
+    var ixb = alloc(40000);
+    var ixt[24];
+    _bj_tx_init(&ixt, ixb, 40000);
+    _bj_tx_cstr(&ixt, "{\"charges\":[");
+    for (var k = 0; k < 200; k = k + 1) {
+        if (k > 0) { _bj_tx_cstr(&ixt, ","); }
+        _bj_tx_cstr(&ixt, "{");
+        for (var f = 0; f < 3; f = f + 1) {
+            var which = (f + k) % 3;
+            if (f > 0) { _bj_tx_cstr(&ixt, ","); }
+            if (which == 0) {
+                _bj_tx_cstr(&ixt, "\"position\":[");
+                _bj_tx_cstr(&ixt, spell[k % 3]);
+                _bj_tx_cstr(&ixt, ",");
+                _bj_tx_cstr(&ixt, spell[(k + 1) % 3]);
+                _bj_tx_cstr(&ixt, ",");
+                _bj_tx_cstr(&ixt, spell[(k + 2) % 3]);
+                _bj_tx_cstr(&ixt, "]");
+            } elif (which == 1) {
+                _bj_tx_cstr(&ixt, "\"charge\":");
+                _bj_tx_cstr(&ixt, spell[(k + 1) % 3]);
+            } else {
+                _bj_tx_cstr(&ixt, "\"magnitude\":");
+                _bj_tx_cstr(&ixt, spell[(k + 2) % 3]);
+            }
+        }
+        _bj_tx_cstr(&ixt, "}");
+    }
+    _bj_tx_cstr(&ixt, "]}");
+    var ixv: BjChargeVisualization;
+    var ixr, ixe = BjChargeVisualization_from_json(ixb, bj_text_len(&ixt), &ixv);
+    var ixbad = 0;
+    var ixcs: *BjChargePoint = cpp(ixv.charges);
+    for (var k2 = 0; k2 < 200 && is_ok(ixr) == 1; k2 = k2 + 1) {
+        var c: *BjChargePoint = ixcs + k2;
+        var px: f64 = f32_to(c.position_x);
+        var py: f64 = f32_to(c.position_y);
+        var pz: f64 = f32_to(c.position_z);
+        var pq: f64 = f32_to(c.charge);
+        var pm: f64 = f32_to(c.magnitude);
+        if (f64_to(px) != want[k2 % 3] || f64_to(py) != want[(k2 + 1) % 3] || f64_to(pz) != want[(k2 + 2) % 3]) {
+            ixbad = ixbad + 1;
+        }
+        if (f64_to(pq) != want[(k2 + 1) % 3] || f64_to(pm) != want[(k2 + 2) % 3]) { ixbad = ixbad + 1; }
+    }
+    assert(is_ok(ixr) == 1 && ixv.charges_len == 200 && ixbad == 0 && bj_text_overflowed(&ixt) == 0,
+      "1,000 halfway numbers in permuted keys: each rounded by its own token");
+    BjChargeVisualization_free(&ixv);
+
     return assert_summary();
 }
 

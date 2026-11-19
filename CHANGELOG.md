@@ -61,6 +61,14 @@ The 2.0.1 audit and its repairs (`docs/development/port-parity.md` §142, findin
 - **compute** — `BjGpuFdtd2d_new` stops at a backend's refusal whatever its code: an `Err(0)` made it ask again
   forever (H22).
 
+### Performance
+- **json** — the ChargeVisualization and ChargePoint readers find a halfway float's token through a per-document
+  index of the numbers, built once, instead of a walk of the tree and a scan of the text per number, which was
+  quadratic in a document of them (H17). `json/charge_visualization_from_json_halfway` (1,000 charges, all 5,000
+  numbers on f32 halfway values): 1.23 s → 6.4 ms. On 4,000 charges, 19.7 s → 26 ms; on 16,000 (1.5 MB), more than
+  300 s → 104 ms. A document with no halfway floats builds no index (`json/charge_visualization_from_json`
+  unchanged).
+
 ## [2.0.0] — 2026-11-18
 
 bijli is now a Cyrius library: the port of the Rust crate 1.2.0

@@ -1578,6 +1578,33 @@ fn main(): i64 {
     bench_batch_stop(bcv, 2000);
     bench_report(bcv);
     fl_free(cvb);
+    # 2.0.1 H17: 1,000 charges, every number on an f32 halfway value, so each is found through the number index (it
+    # was a walk of the tree and a scan of the text per number: 1.2 s for this document).
+    var hone = "{\"position\":[16777217.0,16777217.0,16777217.0],\"charge\":16777217.0,\"magnitude\":16777217.0}";
+    var hol = strlen(hone);
+    var hdoc = alloc(16 + 1000 * (hol + 1));
+    memcpy(hdoc, "{\"charges\":[", 12);
+    var hn = 12;
+    for (var k = 0; k < 1000; k = k + 1) {
+        if (k > 0) {
+            store8(hdoc + hn, 44);
+            hn = hn + 1;
+        }
+        memcpy(hdoc + hn, hone, hol);
+        hn = hn + hol;
+    }
+    memcpy(hdoc + hn, "]}", 2);
+    hn = hn + 2;
+    var bch = bench_new("json/charge_visualization_from_json_halfway");
+    bench_batch_start(bch);
+    for (var k = 0; k < 20; k = k + 1) {
+        var chr: BjChargeVisualization;
+        var tch, vch = BjChargeVisualization_from_json(hdoc, hn, &chr);
+        cvsum = cvsum + chr.charges_len;
+        BjChargeVisualization_free(&chr);
+    }
+    bench_batch_stop(bch, 20);
+    bench_report(bch);
     if (m7h == 7.0 || vmsum == 7.0 || cvsum == 7 || vcv == 7) { println("."); }
 
     var ar: f64 = acc.re;

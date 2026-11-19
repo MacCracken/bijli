@@ -7891,3 +7891,38 @@ of which needs an algorithm of its own.
 - **Result**: the gate clean, all 17 steps; parity and the 520 digests unchanged from §144; validate.py: 770,127 rows,
   0 problems; 2,952 assertions (6 new); coverage 449 of 449. The changed test files (beam, scattering, compute, ai)
   pass on x86_64 PE and aarch64, one target at a time, the deadline test included. Next: bite 2b.
+
+## 146. 2.0.1 bite 2b-1: the f32 reader's number index (2026-11-18)
+
+H17 of §142. Bite 2b runs in two parts: 2b-1 this one, and 2b-2 H18 (the parallel combination), which needs a tier
+of its own. Tier 2's expansion holds about 126 terms, so a larger list that tier 1 can't decide goes straight to the
+exact tier, and a list of exactly cancelling Egyptian-fraction triples (1/a − 1/b = 1/c with b − a a power of two,
+scaled near 1) defeats every bound now in the code.
+- **The cost** (port-parity §142): a float on an f32 halfway value needs its token's digits (row 45). bayan's nodes
+  keep no text offset, so `_bj_jr_f32_side` walked the tree from the root to count the numbers before the node, then
+  scanned the text from byte 0 to that token. That is the whole document per halfway float. Measured on documents of
+  n charges, all five numbers `16777217.0`: 250 in 80 ms, 1,000 in 1.23 s, 4,000 in 19.7 s; 16,000 (1.5 MB) ran past
+  a 300 s timeout.
+- **The index** (src/json.cyr, `_bj_jr_tok_of`): it is built at a document's first halfway float. One walk puts every
+  number node's address and ordinal, in the document order `_bj_jr_ord` counts, into an open-addressed table: two
+  words a slot, at least twice the numbers, a power of two, Fibonacci hashing on the address. One scan puts every
+  number token's (start, end) after it, with the tokenizer `_bj_jr_num_tok` uses. Each later lookup is a probe and a
+  load. The block is fl_calloc'd and freed by the public reader on every path. The table is only probed, never
+  iterated, so its order can't reach a result. If the block can't be had, or the tokens and nodes don't pair one to
+  one, the lookup falls back to the walk and the scan.
+- **The contexts**: ChargePoint's and ChargeVisualization's decoders share words 0–4 (the text, the root, the index)
+  and keep their own after it (the five values; the points' block and count).
+- **After**: 250 charges in 2 ms, 1,000 in 6 ms, 4,000 in 26 ms, 16,000 in 104 ms, about 1.3 µs a number, linear.
+  A document with no halfway float builds no index.
+- **Tests**: soorat.tcyr's `cyrius_audit_201_number_index` reads 200 charges whose keys rotate through three orders,
+  each number one of three spellings of the halfway double 16777217: "16777217" (a tie: 2²⁴),
+  "16777217.000000001" (above: 2²⁴ + 2) and "16777216.999999999" (below: 2²⁴). All 1,000 values come out as their
+  own token decides, through the index and, against 2.0.1-1b's src/, through the old walk.
+- **Bench**: `json/charge_visualization_from_json_halfway` (EXTRA in scripts/bench_record.py), 1,000 such charges:
+  6.4 ms (the old path: 1.23 s).
+- **Benchmarks**: two interleaved rounds against bite 2a's src/ (load 0.9–1.0, nothing else running), median ratio
+  1.001 and 1.000. `json/charge_visualization_from_json` (no halfway floats, no index) −0.7 % and +1.1 %; the new
+  halfway row 6.53 and 6.47 ms.
+- **Result**: the gate clean, all 17 steps; parity and the 520 digests unchanged; validate.py: 770,127 rows, 0
+  problems; 2,953 assertions (1 new); coverage 449 of 449; the bench record 80 of 80 twinned. soorat.tcyr and
+  json.tcyr pass on x86_64 PE and aarch64. Next: bite 2b-2, H18.

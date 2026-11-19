@@ -23,8 +23,9 @@ The audit's findings H1–H34 are in [port-parity §142](port-parity.md). They a
   ADR row 3 says; the per-step CPML attach check is restored (H12–H15; port-parity §144).
 - [x] **2a** Hangs: Mie, the ai client's deadlines and allocations, the mode orders and the GPU constructor's loop
   (H16, H19–H22; port-parity §145).
-- [ ] **2b** The quadratic costs: the f32 reader's halfway floats and the parallel combination's exact tier (H17,
-  H18).
+- [x] **2b-1** The f32 reader's halfway floats: a per-document number index (H17; port-parity §146).
+- [ ] **2b-2** The parallel combination: a bounded fixed-point tier ahead of the exact one, so that only a sum exactly
+  at a tie of its rounding reaches the quadratic tier (H18).
 - [ ] **3** Threads: the math tables become data, plus the error slot's publication and the 3D energy's scratch
   (H23–H25).
 - [ ] **4** Results that change, each an ADR 0002 row (H26–H31).
