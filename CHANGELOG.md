@@ -14,6 +14,15 @@ The 2.0.1 audit and its repairs (`docs/development/port-parity.md` §142, findin
   `try_enable_cpml` is its form, and its error leaves the walls as the warning did. ADR 0002 row 3 had decided both
   for 2.0.0, but only the TF/SF source followed it (H14).
 
+### Added
+- **json** — `tests/json.fcyr`, a fuzz harness for the 31 JSON readers of the default bundle (all but the ai configs'
+  two), which closes the threat model's open item on them. It takes 60,000 mutants of 37 seed documents: each type's
+  own writing, plus the corpus's escapes, f32 halfway floats and serde's sequence forms. Each mutant takes 1 to 4
+  edits, splices from other seeds among them. Every parse must return. A refusal must be Deserialize or Allocation,
+  recorded, with `out` empty (an owning type, ADR 0002 row 48) or untouched (a value type). An accepted document must
+  write back, read back and write again to the same bytes, and a replay must grow neither heap. It found no defect,
+  nor did a bounds-checked run of 2,000,000 mutants. `cyrius fuzz` runs it, in CI too.
+
 ### Changed
 - **relativity** — `bj_lienard_wiechert_fields` refuses a retarded position that isn't finite (a trajectory finite at
   every sample the solver took, but not at t_r) as `bj_lienard_wiechert_e` refuses its R: "R vector must not contain

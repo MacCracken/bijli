@@ -8102,3 +8102,48 @@ H32–H34 of §142, and the process gaps it found.
   problems; 2,976 assertions (1 new); coverage 449 of 449; the API snapshot unchanged; the doc examples and the
   benches without a `#must_use` warning. The changed test files (crmath_bijli, error, wave, the FDTD files, nf2ff,
   circuit) pass on x86_64 PE and aarch64. Next: bite 6, the JSON fuzz harness.
+
+## 151. 2.0.1 bite 6: the JSON fuzz harness (2026-11-18)
+
+The threat model's open item: the JSON readers rested on bayan's parser and on the golden corpus's documents, not on
+mutation.
+- **The harness** (`tests/json.fcyr`, beside the Touchstone reader's `tests/bijli.fcyr`):
+  - Its 31 kinds are the readers of the default bundle:
+    - 19 value types: FieldVector, Material, CpmlParams, Complex, PointCharge, ChargePoint, AbcdMatrix,
+      GaussianBeam, ResonatorStability, the Jones, Stokes and Mueller types, the four dispersive materials, Mode2d
+      and TouchstoneFormat;
+    - 12 owning ones: MieResult, SMatrix, TouchstoneData, NonUniformGrid, EigenmodeResult, the two field slices,
+      ChargeVisualization, FieldLine, FieldLineVisualization, RadiationPattern and VectorFieldSample.
+    The ai configs' two readers need `[lib.ai]`'s sandhi and are left out.
+  - 37 seeds. 22 are their own types' writing of a constructed value (a Mie result, a two-port S-matrix, a parsed
+    Touchstone file, a 2D grid's slice, two protons' visualization, the polarization and material presets). 15 are
+    literals: escapes in a component, f32 halfway floats, serde's sequence forms, nesting, and the corpus's
+    documents for the types no constructor builds. Every seed must read as it stands.
+  - Each mutant takes 1 to 4 edits from a fixed xorshift stream: a byte replaced, inserted or deleted, or up to 24
+    bytes spliced in from any seed. The bytes come from the grammar, the literals' letters, the controls, DEL, and
+    the bytes that break UTF-8.
+  - The properties:
+    - every parse returns;
+    - a refusal is Deserialize or Allocation and is the last error recorded;
+    - a refusal leaves `out` empty (an owning type, every byte 0 after a 0xAB fill: ADR 0002 row 48) or untouched (a
+      value type);
+    - an accepted document writes back, that writing reads back, and it writes again to the same bytes;
+    - the same mutants replayed read-only leave freelist's arena and the bump heap where the previous replay left
+      them.
+- **Its sensitivity**: each planted fault was caught:
+  - a NonUniformGrid refusal that left one byte of `out` written: 50,193 failures of 800,000 (the first version,
+    10 readers);
+  - MieResult's second writing changed: 4,769;
+  - a 32-byte freelist block leaked on each Touchstone refusal: the replay's heap growth;
+  - a FieldSlice3D and a MuellerMatrix refusal that each left a byte written: 2,982 of 60,000.
+- **Result**: 60,000 mutants, 2,356 accepted, 0 failures and no heap growth. The run is the same on x86_64 PE,
+  aarch64, bounds-checked and under the allocator's poison. It takes 0.9 s for its three passes.
+  - A longer run, 2,000,000 mutants from four streams, bounds-checked, accepted 78,993: from 646 (CpmlParams) to
+    6,137 (FieldVector) per reader. It found 0 failures.
+  - Nothing needed repair: the readers held under mutation. Bites 1a and 2b-1 had already repaired what the audit
+    found in them: the writers' budgets (H3) and the halfway-float scan (H17).
+  - The threat model's item closes, and its Memory paragraph names the harness. CI's `cyrius fuzz` step runs it.
+- src/ is unchanged, so no bench ran: bite 7 runs the post-review bench against §142's baseline.
+- **The gate**: clean, all 17 steps. Parity and the 520 digests are unchanged, and validate.py checks 770,127 rows
+  with 0 problems. `cyrius fuzz` passes both harnesses on x86_64 ELF and PE, on aarch64, with `--bounds` and with
+  `--poison=ab`, all with the same counts. Next: bite 7, the release.

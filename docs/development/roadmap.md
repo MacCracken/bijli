@@ -31,9 +31,8 @@ The audit's findings H1–H34 are in [port-parity §142](port-parity.md). They a
 - [x] **4** Results that change, each an ADR 0002 row (H26–H31; port-parity §149).
 - [x] **5** Rules and docs: `#must_use`, the stale claims, CLAUDE.md's cleanliness check and CI's missing gates
   (H32–H34; port-parity §150).
-- [ ] **6** A JSON fuzz harness: the readers rest on bayan's parser and on the golden corpus's documents, not on
-  mutation (the [threat model](threat-model.md)'s open item). A harness like `tests/bijli.fcyr`, the Touchstone
-  reader's, closes it for `_bj_jr_doc` and a few readers.
+- [x] **6** A JSON fuzz harness, `tests/json.fcyr`, for the 31 readers of the default bundle: the
+  [threat model](threat-model.md)'s open item (port-parity §151).
 - [ ] **7** The release: the post-review bench against §142's baseline, the cross-targets, the docs.
 
 ### Hardening

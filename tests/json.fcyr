@@ -1,0 +1,456 @@
+# bijli fuzz harness: the JSON readers (2.0.1 bite 6; the threat model's open item).
+#
+# Ten readers (FieldVector, Material, CpmlParams, MieResult, SMatrix, TouchstoneData, NonUniformGrid, EigenmodeResult,
+# FieldSlice2D, ChargeVisualization) take byte-level mutants of seed documents. Most seeds are their own writers'
+# output for a constructed value, so they cover each type's fields; literal ones add escapes, f32 halfway floats,
+# serde's sequence forms and nesting. Each mutant takes 1 to 4 edits from a fixed xorshift stream: a byte replaced,
+# inserted or deleted, or up to 24 bytes spliced in from any seed. The bytes are chosen to hit the grammar: braces,
+# brackets, quotes, backslashes, digits, signs, '.', 'e', the letters of true, false, null and \u, controls, DEL, and
+# bytes that break UTF-8.
+#
+# Every parse must return. A refusal must be Deserialize or Allocation, recorded as the last error, and must leave out
+# empty (an owning type: every byte 0, 2.0.1's ADR 0002 row 48) or untouched (a value type). An accepted document must
+# write back, read that writing back, and write it again to the same bytes, so the reader and the writer agree on
+# whatever the mutant made. Two further read-only passes over the same mutants must leave freelist's arena and the
+# bump heap as the first of them left them: nothing a reader allocates outlives it.
+
+include "tests/lib.cyr"
+
+var _fz_state = 0x9E3779B97F4A7C15;
+
+# The next 64 bits of the stream.
+fn fz_next(): i64 {
+    var x = _fz_state;
+    x = x ^ (x << 13);
+    x = x ^ (x >> 7);
+    x = x ^ (x << 17);
+    _fz_state = x;
+    return x;
+}
+
+# A value in [0, n).
+fn fz_below(n): i64 {
+    var r = fz_next() >> 1;
+    return r % n;
+}
+
+# A mutation byte: JSON's grammar, the letters of its literals and escapes, controls, DEL and bytes that break UTF-8.
+fn fz_byte(): i64 {
+    var pick = "{}[],:\"\\ -+.eE0123456789truefalsnu";
+    var k = fz_below(42);
+    if (k < 35) { return load8(pick + k); }
+    if (k == 35) { return 0; }
+    if (k == 36) { return 10; }
+    if (k == 37) { return 31; }
+    if (k == 38) { return 127; }
+    if (k == 39) { return 192; }
+    if (k == 40) { return 237; }
+    return 226;
+}
+
+# The kinds, one per reader of the default bundle (the ai configs' readers are in `[lib.ai]`):
+#   value types:  0 FieldVector, 1 Material, 2 CpmlParams, 10 Complex, 11 PointCharge, 12 ChargePoint, 13 AbcdMatrix,
+#                 14 GaussianBeam, 15 ResonatorStability, 16 JonesVector, 17 JonesMatrix, 18 StokesVector,
+#                 19 MuellerMatrix, 20 LossyMaterial, 21 DrudeMaterial, 22 LorentzMaterial, 23 DebyeMaterial,
+#                 24 Mode2d, 25 TouchstoneFormat;
+#   owning types: 3 MieResult, 4 SMatrix, 5 TouchstoneData, 6 NonUniformGrid, 7 EigenmodeResult, 8 FieldSlice2D,
+#                 9 ChargeVisualization, 26 FieldLine, 27 FieldLineVisualization, 28 FieldSlice3D,
+#                 29 RadiationPattern, 30 VectorFieldSample.
+var FZ_KINDS = 31;
+
+# Kind k's struct size in bytes.
+fn fz_size(k): i64 {
+    if (k == 0) { return sizeof(BjFieldVector); }
+    if (k == 1) { return sizeof(BjMaterial); }
+    if (k == 2) { return sizeof(BjCpmlParams); }
+    if (k == 3) { return sizeof(BjMieResult); }
+    if (k == 4) { return sizeof(BjSMatrix); }
+    if (k == 5) { return sizeof(BjTouchstoneData); }
+    if (k == 6) { return sizeof(BjNonUniformGrid); }
+    if (k == 7) { return sizeof(BjEigenmodeResult); }
+    if (k == 8) { return sizeof(BjFieldSlice2D); }
+    if (k == 9) { return sizeof(BjChargeVisualization); }
+    if (k == 10) { return sizeof(BjComplex); }
+    if (k == 11) { return sizeof(BjPointCharge); }
+    if (k == 12) { return sizeof(BjChargePoint); }
+    if (k == 13) { return sizeof(BjAbcdMatrix); }
+    if (k == 14) { return sizeof(BjGaussianBeam); }
+    if (k == 15) { return sizeof(BjResonatorStability); }
+    if (k == 16) { return sizeof(BjJonesVector); }
+    if (k == 17) { return sizeof(BjJonesMatrix); }
+    if (k == 18) { return sizeof(BjStokesVector); }
+    if (k == 19) { return sizeof(BjMuellerMatrix); }
+    if (k == 20) { return sizeof(BjLossyMaterial); }
+    if (k == 21) { return sizeof(BjDrudeMaterial); }
+    if (k == 22) { return sizeof(BjLorentzMaterial); }
+    if (k == 23) { return sizeof(BjDebyeMaterial); }
+    if (k == 24 || k == 25) { return 8; }
+    if (k == 26) { return sizeof(BjFieldLine); }
+    if (k == 27) { return sizeof(BjFieldLineVisualization); }
+    if (k == 28) { return sizeof(BjFieldSlice3D); }
+    if (k == 29) { return sizeof(BjRadiationPattern); }
+    return sizeof(BjVectorFieldSample);
+}
+
+# 1 when kind k owns memory (its refusal empties out), 0 for a value type (its refusal leaves out untouched).
+fn fz_owning(k): i64 {
+    if (k >= 3 && k <= 9) { return 1; }
+    if (k >= 26) { return 1; }
+    return 0;
+}
+
+# Kind k's reader on [buf, buf + n) into out: its Result.
+fn fz_read(k, buf, n, out): Result {
+    if (k == 0) { return BjFieldVector_from_json(buf, n, out); }
+    if (k == 1) { return BjMaterial_from_json(buf, n, out); }
+    if (k == 2) { return BjCpmlParams_from_json(buf, n, out); }
+    if (k == 3) { return BjMieResult_from_json(buf, n, out); }
+    if (k == 4) { return BjSMatrix_from_json(buf, n, out); }
+    if (k == 5) { return BjTouchstoneData_from_json(buf, n, out); }
+    if (k == 6) { return BjNonUniformGrid_from_json(buf, n, out); }
+    if (k == 7) { return BjEigenmodeResult_from_json(buf, n, out); }
+    if (k == 8) { return BjFieldSlice2D_from_json(buf, n, out); }
+    if (k == 9) { return BjChargeVisualization_from_json(buf, n, out); }
+    if (k == 10) { return BjComplex_from_json(buf, n, out); }
+    if (k == 11) { return BjPointCharge_from_json(buf, n, out); }
+    if (k == 12) { return BjChargePoint_from_json(buf, n, out); }
+    if (k == 13) { return BjAbcdMatrix_from_json(buf, n, out); }
+    if (k == 14) { return BjGaussianBeam_from_json(buf, n, out); }
+    if (k == 15) { return BjResonatorStability_from_json(buf, n, out); }
+    if (k == 16) { return BjJonesVector_from_json(buf, n, out); }
+    if (k == 17) { return BjJonesMatrix_from_json(buf, n, out); }
+    if (k == 18) { return BjStokesVector_from_json(buf, n, out); }
+    if (k == 19) { return BjMuellerMatrix_from_json(buf, n, out); }
+    if (k == 20) { return BjLossyMaterial_from_json(buf, n, out); }
+    if (k == 21) { return BjDrudeMaterial_from_json(buf, n, out); }
+    if (k == 22) { return BjLorentzMaterial_from_json(buf, n, out); }
+    if (k == 23) { return BjDebyeMaterial_from_json(buf, n, out); }
+    if (k == 24) { return BjMode2d_from_json(buf, n, out); }
+    if (k == 25) { return BjTouchstoneFormat_from_json(buf, n, out); }
+    if (k == 26) { return BjFieldLine_from_json(buf, n, out); }
+    if (k == 27) { return BjFieldLineVisualization_from_json(buf, n, out); }
+    if (k == 28) { return BjFieldSlice3D_from_json(buf, n, out); }
+    if (k == 29) { return BjRadiationPattern_from_json(buf, n, out); }
+    return BjVectorFieldSample_from_json(buf, n, out);
+}
+
+# Kind k's writer of the value at v into the builder sb: its Result (the two enums' writers take the value itself).
+fn fz_write(k, v, sb): Result {
+    if (k == 0) { return BjFieldVector_to_json(v, sb); }
+    if (k == 1) { return BjMaterial_to_json(v, sb); }
+    if (k == 2) { return BjCpmlParams_to_json(v, sb); }
+    if (k == 3) { return BjMieResult_to_json(v, sb); }
+    if (k == 4) { return BjSMatrix_to_json(v, sb); }
+    if (k == 5) { return BjTouchstoneData_to_json(v, sb); }
+    if (k == 6) { return BjNonUniformGrid_to_json(v, sb); }
+    if (k == 7) { return BjEigenmodeResult_to_json(v, sb); }
+    if (k == 8) { return BjFieldSlice2D_to_json(v, sb); }
+    if (k == 9) { return BjChargeVisualization_to_json(v, sb); }
+    if (k == 10) { return BjComplex_to_json(v, sb); }
+    if (k == 11) { return BjPointCharge_to_json(v, sb); }
+    if (k == 12) { return BjChargePoint_to_json(v, sb); }
+    if (k == 13) { return BjAbcdMatrix_to_json(v, sb); }
+    if (k == 14) { return BjGaussianBeam_to_json(v, sb); }
+    if (k == 15) { return BjResonatorStability_to_json(v, sb); }
+    if (k == 16) { return BjJonesVector_to_json(v, sb); }
+    if (k == 17) { return BjJonesMatrix_to_json(v, sb); }
+    if (k == 18) { return BjStokesVector_to_json(v, sb); }
+    if (k == 19) { return BjMuellerMatrix_to_json(v, sb); }
+    if (k == 20) { return BjLossyMaterial_to_json(v, sb); }
+    if (k == 21) { return BjDrudeMaterial_to_json(v, sb); }
+    if (k == 22) { return BjLorentzMaterial_to_json(v, sb); }
+    if (k == 23) { return BjDebyeMaterial_to_json(v, sb); }
+    if (k == 24) { return BjMode2d_to_json(load64(v), sb); }
+    if (k == 25) { return BjTouchstoneFormat_to_json(load64(v), sb); }
+    if (k == 26) { return BjFieldLine_to_json(v, sb); }
+    if (k == 27) { return BjFieldLineVisualization_to_json(v, sb); }
+    if (k == 28) { return BjFieldSlice3D_to_json(v, sb); }
+    if (k == 29) { return BjRadiationPattern_to_json(v, sb); }
+    return BjVectorFieldSample_to_json(v, sb);
+}
+
+# Gives back kind k's value at v (a value type owns nothing).
+fn fz_free(k, v) {
+    if (k == 3) { BjMieResult_free(v); }
+    if (k == 4) { BjSMatrix_free(v); }
+    if (k == 5) { BjTouchstoneData_free(v); }
+    if (k == 6) { BjNonUniformGrid_free(v); }
+    if (k == 7) { BjEigenmodeResult_free(v); }
+    if (k == 8) { BjFieldSlice2D_free(v); }
+    if (k == 9) { BjChargeVisualization_free(v); }
+    if (k == 26) { BjFieldLine_free(v); }
+    if (k == 27) { BjFieldLineVisualization_free(v); }
+    if (k == 28) { BjFieldSlice3D_free(v); }
+    if (k == 29) { BjRadiationPattern_free(v); }
+    if (k == 30) { BjVectorFieldSample_free(v); }
+    return 0;
+}
+
+# 1 when the n bytes at p are all b.
+fn fz_all(p, n, b): i64 {
+    for (var i = 0; i < n; i = i + 1) {
+        if (load8(p + i) != b) { return 0; }
+    }
+    return 1;
+}
+
+# The document kind k writes for the value at v, as a Str; its length is 0 when the writer refused.
+fn fz_doc(k, v): Str {
+    var sb = str_builder_new();
+    var t, e = fz_write(k, v, sb);
+    if (is_err_result(t) == 1) { return str_from(""); }
+    return str_builder_build(sb);
+}
+
+# One mutant of kind k at [buf, buf + n): 0 when every property holds, else 1.
+fn fuzz_main(k, buf, n): i64 {
+    var out[256];
+    var sz = fz_size(k);
+    for (var i = 0; i < sz; i = i + 1) { store8(&out + i, 171); }
+    var t, v = fz_read(k, buf, n, &out);
+    if (is_err_result(t) == 1) {
+        if (v != BJ_ERR_DESERIALIZE && v != BJ_ERR_ALLOCATION) { return 1; }
+        if (bj_last_error() != v) { return 1; }
+        if (fz_owning(k) == 1 && fz_all(&out, sz, 0) == 0) { return 1; }
+        if (fz_owning(k) == 0 && fz_all(&out, sz, 171) == 0) { return 1; }
+        return 0;
+    }
+    # Accepted: the writing reads back, and writes again to the same bytes.
+    var d1 = fz_doc(k, &out);
+    fz_free(k, &out);
+    if (str_len(d1) == 0) { return 1; }
+    var back[256];
+    var t2, v2 = fz_read(k, str_data(d1), str_len(d1), &back);
+    if (is_err_result(t2) == 1) { return 1; }
+    var d2 = fz_doc(k, &back);
+    fz_free(k, &back);
+    if (str_len(d2) != str_len(d1) || memeq(str_data(d1), str_data(d2), str_len(d1)) != 1) { return 1; }
+    return 0;
+}
+
+# One pass of `count` mutants from the stream's start over the seeds (their kinds, texts and lengths); adds to counts =
+# [runs, accepted, failures]. props = 1 checks the properties, 0 only reads and frees.
+fn fz_pass(kinds: *i64, texts: *i64, lens: *i64, nseeds, count, props, counts: *i64) {
+    _fz_state = 0x9E3779B97F4A7C15;
+    var buf[4096];
+    for (var it = 0; it < count; it = it + 1) {
+        var s = fz_below(nseeds);
+        var k = kinds[s];
+        var n = lens[s];
+        memcpy(&buf, texts[s], n);
+        var edits = 1 + fz_below(4);
+        for (var e = 0; e < edits; e = e + 1) {
+            var op = fz_below(4);
+            var at = fz_below(n + 1);
+            if (op == 0 && at < n) { store8(&buf + at, fz_byte()); }
+            if (op == 1 && n < 4000) {
+                for (var q = n; q > at; q = q - 1) { store8(&buf + q, load8(&buf + q - 1)); }
+                store8(&buf + at, fz_byte());
+                n = n + 1;
+            }
+            if (op == 2 && at < n && n > 1) {
+                for (var r = at; r < n - 1; r = r + 1) { store8(&buf + r, load8(&buf + r + 1)); }
+                n = n - 1;
+            }
+            if (op == 3) {
+                var from = fz_below(nseeds);
+                var w = 1 + fz_below(24);
+                if (w > lens[from]) { w = lens[from]; }
+                var src = texts[from] + fz_below(lens[from] - w + 1);
+                if (n + w <= 4000) {
+                    for (var q2 = n + w - 1; q2 >= at + w; q2 = q2 - 1) { store8(&buf + q2, load8(&buf + q2 - w)); }
+                    memcpy(&buf + at, src, w);
+                    n = n + w;
+                }
+            }
+        }
+        if (props == 1) {
+            if (fuzz_main(k, &buf, n) != 0) { counts[2] = counts[2] + 1; }
+        }
+        var out[256];
+        var t, v = fz_read(k, &buf, n, &out);
+        if (is_ok(t) == 1) {
+            counts[1] = counts[1] + 1;
+            fz_free(k, &out);
+        }
+        counts[0] = counts[0] + 1;
+    }
+    return 0;
+}
+
+# Seed i: kind k and the document of the value at v (its own writer's), or the literal text lit when v is 0.
+fn fz_seed(kinds: *i64, texts: *i64, lens: *i64, i, k, v, lit) {
+    kinds[i] = k;
+    if (v != 0) {
+        var d = fz_doc(k, v);
+        texts[i] = str_data(d);
+        lens[i] = str_len(d);
+        return 0;
+    }
+    texts[i] = lit;
+    lens[i] = strlen(lit);
+    return 0;
+}
+
+# Seed i: kind k and the literal text a followed by b, for a seed longer than a line.
+fn fz_seed2(kinds: *i64, texts: *i64, lens: *i64, i, k, a, b) {
+    var sb = str_builder_new();
+    str_builder_add_cstr(sb, a);
+    str_builder_add_cstr(sb, b);
+    var d = str_builder_build(sb);
+    kinds[i] = k;
+    texts[i] = str_data(d);
+    lens[i] = str_len(d);
+    return 0;
+}
+
+# Builds the seeds, runs 60,000 mutants with the properties, then the same mutants read-only twice: the third pass must
+# leave freelist's arena and the bump heap as the second left them. Prints the counts and returns the failures.
+fn main(): i64 {
+    alloc_init();
+    var kinds: i64[40];
+    var texts: i64[40];
+    var lens: i64[40];
+    var fv: BjFieldVector = BjFieldVector_new(1.5, -2.0, 0.000000000000000000000000000001);
+    fz_seed(&kinds, &texts, &lens, 0, 0, &fv, 0);
+    var mt: BjMaterial = BjMaterial_dielectric(2.25);
+    fz_seed(&kinds, &texts, &lens, 1, 1, &mt, 0);
+    var cp: BjCpmlParams = BjCpmlParams_new(8);
+    fz_seed(&kinds, &texts, &lens, 2, 2, &cp, 0);
+    var mr: BjMieResult;
+    var tm, vm = bj_mie(1.0, BjComplex_new(1.5, -0.01), &mr);
+    fz_seed(&kinds, &texts, &lens, 3, 3, &mr, 0);
+    var sm: BjSMatrix;
+    var ts, vs = BjSMatrix_two_port(BjComplex_new(0.1, 0.2), BjComplex_new(0.9, 0.0), BjComplex_new(0.9, 0.0),
+      BjComplex_new(0.1, -0.2), 50.0, &sm);
+    fz_seed(&kinds, &texts, &lens, 4, 4, &sm, 0);
+    var td: BjTouchstoneData;
+    var tt, vt = bj_parse_touchstone("# GHz S RI R 50\n1.0 0.5 0.1\n2.0 0.3 -0.2\n", 41, 1, &td);
+    fz_seed(&kinds, &texts, &lens, 5, 5, &td, 0);
+    var ng: BjNonUniformGrid;
+    var tn, vn = BjNonUniformGrid_uniform(3, 2, 2, 0.001, &ng);
+    fz_seed(&kinds, &texts, &lens, 6, 6, &ng, 0);
+    fz_seed(&kinds, &texts, &lens, 7, 7, 0,
+      "{\"frequencies\":[1000000000.0,2.5e9],\"quality_factors\":[10.5,3],\"amplitudes\":[0.5,1e-3]}");
+    var grid: BjFdtd2d;
+    var tg, vg = BjFdtd2d_new(4, 3, 0.001, BJ_MODE2D_TM, &grid);
+    grid.add_source(1, 1, 2.0);
+    var sl: BjFieldSlice2D;
+    var tl, vl = BjFieldSlice2D_from_fdtd_2d(&grid, "Ez", 2, &sl);
+    fz_seed(&kinds, &texts, &lens, 8, 8, &sl, 0);
+    var pos: f64[3];
+    pos[0] = 0.0;
+    pos[1] = 0.5;
+    pos[2] = -1.0;
+    var pcs[512];
+    var pc0: BjPointCharge = BjPointCharge_proton(&pos);
+    memcpy(&pcs, &pc0, sizeof(BjPointCharge));
+    pos[0] = 2.0;
+    var pc1: BjPointCharge = BjPointCharge_proton(&pos);
+    memcpy(&pcs + sizeof(BjPointCharge), &pc1, sizeof(BjPointCharge));
+    var cv: BjChargeVisualization;
+    var tc, vc = BjChargeVisualization_from_point_charges(&pcs, 2, &cv);
+    fz_seed(&kinds, &texts, &lens, 9, 9, &cv, 0);
+    # The literal seeds: escapes in a component, f32 halfway floats, serde's sequence forms, nesting.
+    fz_seed2(&kinds, &texts, &lens, 10, 8, "{\"values\":[1,-0,2.5e-310],\"dimensions\":[3,1],\"origin\":[0,0],",
+      "\"spacing\":1e-3,\"component\":\"E\\u007a\\n\\\"\",\"step\":0}");
+    fz_seed2(&kinds, &texts, &lens, 11, 9, "{\"charges\":[{\"position\":[16777217.0,16777217.000000001,",
+      "16777216.999999999],\"charge\":1e38,\"magnitude\":-0}]}");
+    fz_seed(&kinds, &texts, &lens, 12, 4, 0, "[2,[[[1,0],[0,0]],[[0,0],[1,0]]],[50,50]]");
+    fz_seed(&kinds, &texts, &lens, 13, 0, 0, "[1e308,-1e-308,0.0]");
+    fz_seed(&kinds, &texts, &lens, 14, 5, 0,
+      "[1,50.0,[1e9,2e9],[[1,[[[0.5,0.1]]],[50]],{\"z0\":[50],\"s\":[[{\"re\":0.3,\"im\":-0.2}]],\"ports\":1}]]");
+    # The other value types, from their own writers where a constructor makes one, else from the corpus.
+    var cx: BjComplex = BjComplex_new(0.5, -0.0000000000000000000000000000000000000000000001);
+    fz_seed(&kinds, &texts, &lens, 15, 10, &cx, 0);
+    fz_seed(&kinds, &texts, &lens, 16, 11, &pc1, 0);
+    fz_seed2(&kinds, &texts, &lens, 17, 12, "{\"position\":[-0.1,0.5,3.0],",
+      "\"charge\":16777216.0,\"magnitude\":16777218.0}");
+    var ab: BjAbcdMatrix = BjAbcdMatrix_free_space(0.25);
+    fz_seed(&kinds, &texts, &lens, 18, 13, &ab, 0);
+    var gb: BjGaussianBeam;
+    var tb, vb = BjGaussianBeam_new(0.000001, 0.001, &gb);
+    fz_seed(&kinds, &texts, &lens, 19, 14, &gb, 0);
+    fz_seed(&kinds, &texts, &lens, 20, 15, 0, "{\"g1\":0.5,\"g2\":-0.5,\"g_product\":-0.25,\"is_stable\":true}");
+    fz_seed(&kinds, &texts, &lens, 21, 15, 0, "[0.5,0.5,0.25,false]");
+    var jv: BjJonesVector = BjJonesVector_right_circular();
+    fz_seed(&kinds, &texts, &lens, 22, 16, &jv, 0);
+    var jm: BjJonesMatrix = BjJonesMatrix_quarter_wave_plate(0.3);
+    fz_seed(&kinds, &texts, &lens, 23, 17, &jm, 0);
+    var sv: BjStokesVector = BjStokesVector_new(1.0, 0.5, -0.25, 0.1);
+    fz_seed(&kinds, &texts, &lens, 24, 18, &sv, 0);
+    var mm: BjMuellerMatrix = BjMuellerMatrix_linear_polarizer(0.7);
+    fz_seed(&kinds, &texts, &lens, 25, 19, &mm, 0);
+    var lm: BjLossyMaterial = BjLossyMaterial_new(4.0, 0.01);
+    fz_seed(&kinds, &texts, &lens, 26, 20, &lm, 0);
+    var dm: BjDrudeMaterial = BjDrudeMaterial_gold();
+    fz_seed(&kinds, &texts, &lens, 27, 21, &dm, 0);
+    var lz: BjLorentzMaterial = BjLorentzMaterial_new(1.5, 2.0, 1000000000000000.0, 10000000000000.0);
+    fz_seed(&kinds, &texts, &lens, 28, 22, &lz, 0);
+    var db: BjDebyeMaterial = BjDebyeMaterial_water();
+    fz_seed(&kinds, &texts, &lens, 29, 23, &db, 0);
+    var md = BJ_MODE2D_TE;
+    fz_seed(&kinds, &texts, &lens, 30, 24, &md, 0);
+    fz_seed(&kinds, &texts, &lens, 31, 25, 0, "\"RealImag\"");
+    # The other owning types, from the corpus's documents.
+    fz_seed2(&kinds, &texts, &lens, 32, 26, "{\"points\":[[0.0,0.0,0.0],[1.0,0.0,0.0],[2.0,0.5,0.0]],",
+      "\"magnitudes\":[1.0,0.8,0.5]}");
+    fz_seed2(&kinds, &texts, &lens, 33, 27, "{\"lines\":[{\"points\":[[0.0,0.0,0.0],[1.0,0.0,0.0]],",
+      "\"magnitudes\":[1.0,0.8]},{\"points\":[],\"magnitudes\":[]}]}");
+    fz_seed2(&kinds, &texts, &lens, 34, 28, "{\"values\":[2.0,-0.5],\"dimensions\":[2,1,1],\"origin\":[0.0,-1.0,2.0],",
+      "\"spacing\":0.001,\"component\":\"Ez\",\"step\":7}");
+    fz_seed2(&kinds, &texts, &lens, 35, 29, "{\"angles\":[0.0,1.5707963267948966,3.141592653589793],",
+      "\"pattern\":[1.0,0.5,0.1],\"max_gain\":1.0}");
+    fz_seed2(&kinds, &texts, &lens, 36, 30, "{\"vectors\":[[1,0,0],[0,-2.5,0.001]],\"dimensions\":[2,1,1],",
+      "\"origin\":[0,0,0],\"spacing\":1,\"max_magnitude\":2.5}");
+    var nseeds = 37;
+    # Every seed reads as it stands, so each mutant starts from a document its reader takes.
+    var bad = 0;
+    for (var i = 0; i < nseeds; i = i + 1) {
+        var out[256];
+        var t, v = fz_read(kinds[i], texts[i], lens[i], &out);
+        if (is_err_result(t) == 1) {
+            print("seed ", 5);
+            fmt_int(i);
+            println(" refused");
+            bad = bad + 1;
+        }
+        if (is_ok(t) == 1) { fz_free(kinds[i], &out); }
+    }
+    var counts: i64[3];
+    counts[0] = 0;
+    counts[1] = 0;
+    counts[2] = 0;
+    fz_pass(&kinds, &texts, &lens, nseeds, 60000, 1, &counts);
+    var quiet: i64[3];
+    quiet[0] = 0;
+    quiet[1] = 0;
+    quiet[2] = 0;
+    fz_pass(&kinds, &texts, &lens, nseeds, 60000, 0, &quiet);
+    var fl0 = _fl_arena_pos;
+    var bump0 = alloc_used();
+    fz_pass(&kinds, &texts, &lens, nseeds, 60000, 0, &quiet);
+    var leaks = 0;
+    if (_fl_arena_pos != fl0 || alloc_used() != bump0) { leaks = 1; }
+    print("fuzz: ", 6);
+    fmt_int(counts[0]);
+    print(" parses, ", 9);
+    fmt_int(counts[1]);
+    print(" accepted, ", 11);
+    fmt_int(counts[2]);
+    print(" failures, ", 11);
+    fmt_int(leaks);
+    println(" heap growth on the replay");
+    BjMieResult_free(&mr);
+    BjSMatrix_free(&sm);
+    BjTouchstoneData_free(&td);
+    BjNonUniformGrid_free(&ng);
+    BjFieldSlice2D_free(&sl);
+    BjFdtd2d_free(&grid);
+    BjChargeVisualization_free(&cv);
+    if (counts[2] > 0 || leaks > 0 || bad > 0) { return 1; }
+    return 0;
+}
+
+var r = main();
+sys_exit_group(r);

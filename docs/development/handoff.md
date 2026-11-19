@@ -113,9 +113,10 @@ bite is done, the machinery, the scripts and the traps. Delete it once it has se
   first; now `rust_max` models x86-64 and `ieee_max` the port; `math.adr.tsv` maps the two frozen tie rows),
   and soorat's magnitudes on `BjFieldVector::magnitude` (row 18). kimiya's generated `_bj_k_ux_max` is left
   as it is; bijli's `_bj_ux_max` carries the rule.
-- **After 2.0.0** (none started): a JSON fuzz harness (the threat model's open item); the roadmap's backlog
-  (crmath's sin and cos past 2^20, the FDTD per-cell scan's cost, a real `WgpuBackend`); the cyrius stdlib
-  findings (the PE syscall warnings in `lib/dynlib.cyr` and `lib/fdlopen.cyr`, CLAUDE.md's one exception).
+- **After 2.0.0**: 2.0.1's audit and repairs (port-parity §142–§151, the JSON fuzz harness among them); the
+  roadmap's backlog (crmath's sin and cos past 2^20, the FDTD per-cell scan's cost, a real `WgpuBackend`); the
+  cyrius stdlib findings (the PE syscall warnings in `lib/dynlib.cyr` and `lib/fdlopen.cyr`, CLAUDE.md's one
+  exception).
   This file has served the port; delete it when no 2.0.x work needs it.
 - **Corpus size**: `fdtd.tsv` is 38.8 MB (107,341 rows) and `json.tsv` 40.7 MB, against the 48 MiB cap that
   validate.py's `too_big` guards (§81); M6's rows are in `fdtd_2d3d.tsv` (4.2 MB after 4f).

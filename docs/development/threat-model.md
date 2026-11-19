@@ -38,7 +38,11 @@ against, and what remains (M8 part 2).
   `Some("<redacted>")`. The JSON writer writes it in clear, as Rust's `Serialize` did: a written config is a secret.
 - **Memory.** No time step allocates; a grid, matrix or slice owns its blocks and its `_free` gives them back once (a
   second call does nothing). The Touchstone reader is fuzzed (`tests/bijli.fcyr`: byte-level mutants of every format,
-  1 to 4 ports, checked to return, to leave `out` empty on a refusal, and not to grow the heap on a replay).
+  1 to 4 ports, checked to return, to leave `out` empty on a refusal, and not to grow the heap on a replay). So are
+  the 31 JSON readers of the default bundle (`tests/json.fcyr`, 2.0.1): mutants of each type's documents, checked to
+  return, to refuse only as Deserialize or Allocation with `out` empty (or, for a value type, untouched), to write
+  back what they accept and read that writing back to the same bytes, and not to grow the heap on a replay. The ai
+  configs' two readers are left out: they need sandhi's profile, and their documents are a config's few strings.
 
 ## What remains
 
@@ -47,9 +51,6 @@ against, and what remains (M8 part 2).
   response-header parse allocates from the never-freed bump heap: a few hundred bytes a call, and up to about a MiB
   from a hostile endpoint. An endpoint given as an IP literal avoids the lookup.
 
-- **The JSON readers have no fuzz harness.** They rest on bayan's parser and on the golden corpus's documents
-  (malformed, repeated keys, deep nesting, every escape, numbers at every edge), not on mutation. A harness like
-  `tests/bijli.fcyr` for `_bj_jr_doc` and a few readers would close it.
 - **Size is the caller's to bound.** The readers take whatever length they are given; a multi-gigabyte document is
   parsed (or refused as Allocation) as asked. A service reading untrusted documents should cap their size first.
 - **The ai client trusts its endpoint.** It authenticates daimon only as far as TLS does for an `https` endpoint; an

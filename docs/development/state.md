@@ -87,7 +87,8 @@ Plan of record: [`bijli-port-plan.md`](bijli-port-plan.md). Decisions:
   (`tests/scattering.tcyr`, all 32), 172 on beam (`tests/beam.tcyr`, all 60), 266 on rf (`tests/rf.tcyr`, 75 of rf.rs's
   80; 5 n/a), 33 on the bridges (`tests/bridge.tcyr`, all 18 of bridge.rs's), 56 on the soorat structs and their JSON (`tests/soorat.tcyr`, all 14 of soorat.rs's), 45 on the daimon/hoosh client (`tests/ai.tcyr`, all 10 of ai.rs's, three against a one-shot local server), 31 cross-module checks (`tests/integration.tcyr`, all 26 of tests/integration.rs's), 91 on the 1D FDTD grid (`tests/fdtd1d.tcyr`, 23 of fdtd.rs's 1D tests; 1 n/a), 78 on the pulses and TF/SF (`tests/fdtd_source.tcyr`, all 22 of theirs), 75 on the media and the subpixel averages (`tests/fdtd_media.tcyr`, all 20 of theirs), 100 on the FDTD utilities (`tests/fdtd_util.tcyr`, all 25), 35 on NF2FF (`tests/nf2ff.tcyr`, all 10), 44 on the CPML layer (`tests/cpml.tcyr`), 80 on the 2D grid and its CPML (`tests/fdtd2d.tcyr`), 92 on the 3D grid and its CPML (`tests/fdtd3d.tcyr`), 36 on the compute backend (`tests/compute.tcyr`, all 18 of compute.rs's) and 105 on the JSON (`tests/json.tcyr`, Cyrius-only), every unit through `tests/lib.cyr`; execution coverage
   449/449 fns, the scaffold's smoke group (2 assertions), the bench twins (`tests/bijli.bcyr`: all 80 Rust
-  benches) and the Touchstone reader's fuzz harness (`tests/bijli.fcyr`). The ledger
+  benches) and the fuzz harnesses of the Touchstone reader (`tests/bijli.fcyr`) and the 31 JSON readers
+  (`tests/json.fcyr`). The ledger
   (`docs/development/rust-test-ledger.md`): 846 ported, 12 n/a, 0 pending of 858. `scripts/oracle/cr_verify.py` checks
   each correctly rounded primitive against MPFR beyond the corpus, natively and on aarch64, and the exact families
   (kimiya's rationals, the exact Σ, γ, the unbounded-exponent chains) against exact values.
