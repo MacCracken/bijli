@@ -246,7 +246,6 @@ fn _bj_cr_round(a, k, neg): f64 {
 # series, then 2^k. For finite x with 2^-55 ≤ |x| < 746.
 #must_use
 fn _bj_cr_exp_slow(x: f64): f64 {
-    _bj_cr_load();
     var X[112];
     var ax: f64 = f64_abs(x);
     _bj_cr_set(&X, ax);
@@ -382,7 +381,6 @@ fn _bj_cr_sin_cos_series(D, Y, want_sin) {
 # sin(x) (want_sin 1) or cos(x) (0), correctly rounded, in fixed point, for finite |x| ≥ 2^-27.
 #must_use
 fn _bj_cr_sin_cos_slow(x: f64, want_sin): f64 {
-    _bj_cr_load();
     var Y[112];
     var D[112];
     var ax: f64 = f64_abs(x);
@@ -512,7 +510,6 @@ var _bj_cr_slow_calls = 0;
 #   TwoProduct (inline, Veltkamp's split), T_hi + its high part by FastTwoSum, everything else in a low
 #   word whose roundings sum to about 2^-66.
 fn _bj_cr_exp_p1(x: f64, out) {
-    _bj_cr_load();
     var qf: f64 = x * _BJ_CR_INV_L64;
     var nf: f64 = f64_round(qf);
     var n = f64_to(nf);
@@ -625,14 +622,14 @@ fn _bj_cr_exp(x: f64): f64 {
         var l1: f64 = load64(&o + 8);
         var e1: f64 = h1 * 0.00000000000000000021684043449710088680149056017398834228515625;
         if (_bj_cr_rounds_to(h1, l1, e1) == 1) { return _bj_cr_scale(h1, load64(&o + 16)); }
-        _bj_cr_phase2_calls = _bj_cr_phase2_calls + 1;
+        atomic_fetch_add(&_bj_cr_phase2_calls, 1);
         _bj_cr_exp_p2(x, &o);
         var h2: f64 = load64(&o);
         var l2: f64 = load64(&o + 8);
         var e2: f64 = h2 * 0.0000000000000000000000000032311742677852643549664402;
         if (_bj_cr_rounds_to(h2, l2, e2) == 1) { return _bj_cr_scale(h2, load64(&o + 16)); }
     }
-    _bj_cr_slow_calls = _bj_cr_slow_calls + 1;
+    atomic_fetch_add(&_bj_cr_slow_calls, 1);
     var rs: f64 = _bj_cr_exp_slow(x);
     return rs;
 }
@@ -678,7 +675,6 @@ fn _bj_cr_dd_sin_cos(rh: f64, rl: f64, want_sin): (f64, f64) {
 #   S + C_hi·z by TwoSum; cos u likewise with −S·z. Every other term's rounding is below 2^-66 of the
 #   result (the result is at least S/2, or z itself when i = 0).
 fn _bj_cr_sc_p1(x: f64, ax: f64, want, out): i64 {
-    _bj_cr_load();
     var qf: f64 = ax * _BJ_CR_TWO_OVER_PI;
     var kf: f64 = f64_round(qf);
     var k = f64_to(kf);
@@ -937,7 +933,7 @@ fn _bj_cr_sc(x: f64, want): (f64, f64) {
             }
             if (wnt == 0) { return (sv, cv); }
         }
-        _bj_cr_phase2_calls = _bj_cr_phase2_calls + 1;
+        atomic_fetch_add(&_bj_cr_phase2_calls, 1);
         if (_bj_cr_sc_p2(x, ax, wnt, &o) == 1) {
             var es: f64 = load64(&o + 32);
             var ec: f64 = load64(&o + 40);
@@ -962,11 +958,11 @@ fn _bj_cr_sc(x: f64, want): (f64, f64) {
         }
     }
     if ((wnt & 1) == 1) {
-        _bj_cr_slow_calls = _bj_cr_slow_calls + 1;
+        atomic_fetch_add(&_bj_cr_slow_calls, 1);
         sv = _bj_cr_sin_cos_slow(x, 1);
     }
     if ((wnt & 2) == 2) {
-        _bj_cr_slow_calls = _bj_cr_slow_calls + 1;
+        atomic_fetch_add(&_bj_cr_slow_calls, 1);
         cv = _bj_cr_sin_cos_slow(x, 0);
     }
     return (sv, cv);
@@ -1004,7 +1000,6 @@ var _bj_cr_tan_slow_calls = 0;
 # relative.
 #must_use
 fn _bj_cr_tan_slow(x: f64): f64 {
-    _bj_cr_load();
     var Y[112];
     var S[112];
     var C[112];
@@ -1067,7 +1062,7 @@ fn _bj_cr_tan(x: f64): f64 {
             var e1: f64 = a1 * 0.000000000000000000867361737988403547205962240695953369140625;
             if (_bj_cr_rounds_to(t1, u1, e1) == 1) { return t1; }
         }
-        _bj_cr_tan_phase2_calls = _bj_cr_tan_phase2_calls + 1;
+        atomic_fetch_add(&_bj_cr_tan_phase2_calls, 1);
         if (_bj_cr_sc_p2(x, ax, 3, &o) == 1) {
             var h2, l2 = _bj_cr_dd_div(load64(&o), load64(&o + 8), load64(&o + 16), load64(&o + 24));
             var t2: f64 = h2;
@@ -1081,7 +1076,7 @@ fn _bj_cr_tan(x: f64): f64 {
             if (_bj_cr_rounds_to(t2, u2, e2) == 1) { return t2; }
         }
     }
-    _bj_cr_tan_slow_calls = _bj_cr_tan_slow_calls + 1;
+    atomic_fetch_add(&_bj_cr_tan_slow_calls, 1);
     var r: f64 = _bj_cr_tan_slow(x);
     return r;
 }
@@ -1164,7 +1159,6 @@ fn _bj_cr_sinh_series(D, Y) {
 # result keeps 2^-350.
 #must_use
 fn _bj_cr_hyp_slow_exp(ax: f64, minus, neg): f64 {
-    _bj_cr_load();
     var X[112];
     var S1[112];
     var S2[112];
@@ -1189,7 +1183,6 @@ fn _bj_cr_hyp_slow_exp(ax: f64, minus, neg): f64 {
 # above.
 #must_use
 fn _bj_cr_sinh_slow(x: f64): f64 {
-    _bj_cr_load();
     var ax: f64 = f64_abs(x);
     var neg = 0;
     if (x < 0.0) { neg = 1; }
@@ -1306,14 +1299,14 @@ fn _bj_cr_cosh(x: f64): f64 {
         var r1: f64 = _bj_cr_hyp_value(h1, load64(&o + 24), 0);
         return r1;
     }
-    _bj_cr_hyp_phase2_calls = _bj_cr_hyp_phase2_calls + 1;
+    atomic_fetch_add(&_bj_cr_hyp_phase2_calls, 1);
     _bj_cr_hyp_phase(ax, 0, 2, &o);
     var h2: f64 = load64(&o);
     if (_bj_cr_rounds_to(h2, load64(&o + 8), load64(&o + 16)) == 1) {
         var r2: f64 = _bj_cr_hyp_value(h2, load64(&o + 24), 0);
         return r2;
     }
-    _bj_cr_hyp_slow_calls = _bj_cr_hyp_slow_calls + 1;
+    atomic_fetch_add(&_bj_cr_hyp_slow_calls, 1);
     var r3: f64 = _bj_cr_cosh_slow(x);
     return r3;
 }
@@ -1351,7 +1344,7 @@ fn _bj_cr_sinh(x: f64): f64 {
             var r1: f64 = _bj_cr_hyp_value(h1, load64(&o + 24), neg);
             return r1;
         }
-        _bj_cr_hyp_phase2_calls = _bj_cr_hyp_phase2_calls + 1;
+        atomic_fetch_add(&_bj_cr_hyp_phase2_calls, 1);
         _bj_cr_hyp_phase(ax, 1, 2, &o);
         var h2: f64 = load64(&o);
         if (_bj_cr_rounds_to(h2, load64(&o + 8), load64(&o + 16)) == 1) {
@@ -1359,7 +1352,7 @@ fn _bj_cr_sinh(x: f64): f64 {
             return r2;
         }
     }
-    _bj_cr_hyp_slow_calls = _bj_cr_hyp_slow_calls + 1;
+    atomic_fetch_add(&_bj_cr_hyp_slow_calls, 1);
     var r3: f64 = _bj_cr_sinh_slow(x);
     return r3;
 }
@@ -1417,7 +1410,7 @@ fn _bj_cr_sq_mid(Q, M, G, c: f64, g: f64, gs) {
 # multiples of 2^(-1074-k).
 #must_use
 fn _bj_cr_hypot_slow(a: f64, b: f64, k, c0: f64): f64 {
-    _bj_cr_hypot_slow_calls = _bj_cr_hypot_slow_calls + 1;
+    atomic_fetch_add(&_bj_cr_hypot_slow_calls, 1);
     var A[112];
     var B[112];
     var S[112];
@@ -1569,22 +1562,8 @@ fn _bj_cr_hypot(x: f64, y: f64): f64 {
 var _bj_cr_pow_phase2_calls = 0;
 var _bj_cr_pow_slow_calls = 0;
 
-# The series coefficients 1/(2k + 1), k = 0 .. 24, in double-double (hi, lo pairs), computed once.
-var _bj_cr_odd_inv[400];
-var _bj_cr_odd_ready = 0;
-
-# Fills the coefficient table on first use.
-fn _bj_cr_odd_load() {
-    if (_bj_cr_odd_ready == 1) { return 0; }
-    for (var k = 0; k < 25; k = k + 1) {
-        var den: f64 = f64_from(2 * k + 1);
-        var h, l = _bj_cr_dd_div_d(1.0, 0.0, den);
-        store64(&_bj_cr_odd_inv + k * 16, h);
-        store64(&_bj_cr_odd_inv + k * 16 + 8, l);
-    }
-    _bj_cr_odd_ready = 1;
-    return 0;
-}
+# The series coefficients 1/(2k + 1), k = 0 .. 24, in double-double, are src/crmath_data.cyr's _bj_cr_odd_inv:
+# generated (2.0.1) as _bj_cr_dd_div_d(1, 0, 2k + 1) gives them, where they were filled on first use.
 
 # 1 when the finite y is an integer.
 #must_use
@@ -1671,7 +1650,6 @@ fn _bj_cr_log_m_dd(m: f64): (f64, f64) {
     var dh, dl = _bj_cr_two_sum(1.0, m);
     var sh, sl = _bj_cr_dd_div(t, 0.0, dh, dl);
     var zh, zl = _bj_cr_dd_mul(sh, sl, sh, sl);
-    _bj_cr_odd_load();
     var ph: f64 = load64(&_bj_cr_odd_inv + 24 * 16);
     var pl: f64 = load64(&_bj_cr_odd_inv + 24 * 16 + 8);
     for (var k = 23; k >= 0; k = k - 1) {
@@ -1702,7 +1680,6 @@ fn _bj_cr_log_m_p1(m: f64): (f64, f64) {
     var sh, sl = _bj_cr_dd_div(t, 0.0, dh, dl);
     var zh, zl = _bj_cr_dd_mul(sh, sl, sh, sl);
     var zhf: f64 = zh;
-    _bj_cr_odd_load();
     var tail: f64 = load64(&_bj_cr_odd_inv + 14 * 16);
     for (var k = 13; k >= 4; k = k - 1) {
         var ck: f64 = load64(&_bj_cr_odd_inv + k * 16);
@@ -2017,7 +1994,6 @@ fn _bj_cr_pow_exact(x: f64, y: f64, neg, out): i64 {
 # x^y is dyadic, else in fixed point.
 #must_use
 fn _bj_cr_pow_slow(x: f64, y: f64, neg): f64 {
-    _bj_cr_load();
     var o[8];
     if (_bj_cr_pow_exact(x, y, neg, &o) == 1) {
         var re: f64 = load64(&o);
@@ -2110,12 +2086,12 @@ fn _bj_cr_pow(x: f64, y: f64): f64 {
         var r1: f64 = load64(&o);
         return r1;
     }
-    _bj_cr_pow_phase2_calls = _bj_cr_pow_phase2_calls + 1;
+    atomic_fetch_add(&_bj_cr_pow_phase2_calls, 1);
     if (_bj_cr_pow_p1(ax, y, neg, &o, 1) == 1) {
         var r2: f64 = load64(&o);
         return r2;
     }
-    _bj_cr_pow_slow_calls = _bj_cr_pow_slow_calls + 1;
+    atomic_fetch_add(&_bj_cr_pow_slow_calls, 1);
     var rs: f64 = _bj_cr_pow_slow(ax, y, neg);
     return rs;
 }
@@ -2184,8 +2160,7 @@ fn _bj_cr_atan_pow2(T, k) {
 # its quadrant (swap: π/2 − z; neg_x: π − that) and rounded, negated when neg_y is 1.
 #must_use
 fn _bj_cr_atan2_slow(num: f64, den: f64, swap, neg_x, neg_y): f64 {
-    _bj_cr_load();
-    _bj_cr_atan2_slow_calls = _bj_cr_atan2_slow_calls + 1;
+    atomic_fetch_add(&_bj_cr_atan2_slow_calls, 1);
     var X[112];
     var Y[112];
     var XS[112];
@@ -2279,7 +2254,6 @@ fn _bj_cr_atan2(y: f64, x: f64): f64 {
         var nn: f64 = y + x;
         return nn;
     }
-    _bj_cr_load();
     var neg_y = 0;
     var neg_x = 0;
     if (_bj_cr_word(y) < 0) { neg_y = 1; }
@@ -2341,7 +2315,6 @@ fn _bj_cr_atan2(y: f64, x: f64): f64 {
         var dh, dl = _bj_cr_dd_add(1.0, 0.0, rch, rclf + rlc);
         var th, tl = _bj_cr_dd_div(nh, nl, dh, dl);
         var thf: f64 = th;
-        _bj_cr_odd_load();
         var c3: f64 = load64(&_bj_cr_odd_inv + 16);
         var c5: f64 = load64(&_bj_cr_odd_inv + 32);
         var c7: f64 = load64(&_bj_cr_odd_inv + 48);

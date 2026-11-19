@@ -26,8 +26,8 @@ The audit's findings H1–H34 are in [port-parity §142](port-parity.md). They a
 - [x] **2b-1** The f32 reader's halfway floats: a per-document number index (H17; port-parity §146).
 - [x] **2b-2** The parallel combination: a bounded fixed-point tier ahead of the exact one, so that only a sum exactly
   at a tie of its rounding reaches the quadratic tier (H18; port-parity §147).
-- [ ] **3** Threads: the math tables become data, plus the error slot's publication and the 3D energy's scratch
-  (H23–H25).
+- [x] **3** Threads: the math tables become data, plus the error slot's publication and the 3D energy's scratch
+  (H23–H25; port-parity §148).
 - [ ] **4** Results that change, each an ADR 0002 row (H26–H31).
 - [ ] **5** Rules and docs: `#must_use`, the stale claims, CLAUDE.md's cleanliness check and CI's missing gates
   (H32–H34).

@@ -60,22 +60,26 @@ const _BJ_ERR_CAP = 2048;
 # The static record: the Linux main thread's, and every thread's when there is no slot.
 var _bj_err_static[2112];
 
-# The thread_local slot holding a thread's record pointer: −1 until claimed, and −1 for good when none was left.
-var _bj_err_slot = 0 - 1;
+# The thread_local slot holding a thread's record pointer: −2 until claimed, then the slot, or −1 for good when none
+# was left. One word: a thread reads either the claim's whole result or nothing yet. 2.0.0 published it beside a
+# separate ready flag, which a thread on aarch64 could see set before the slot (2.0.1, H25); the slot is all a reader
+# needs, since thread_local_get reads the calling thread's own block.
+var _bj_err_slot = 0 - 2;
 
-# The claim's once-gate (0 unclaimed, 1 claiming) and its published flag.
+# The claim's once-gate: 0 unclaimed, 1 claiming.
 var _bj_err_gate = 0;
-var _bj_err_ready = 0;
 
-# Claims the slot once, from whichever thread gets there first; the others wait for it to be published.
+# Claims the slot once, from whichever thread gets there first; the others wait for it to be published (a CAS:
+# acquire-release on aarch64, lock cmpxchg on x86).
 fn _bj_err_claim(): i64 {
-    if (_bj_err_ready == 1) { return _bj_err_slot; }
+    var s = atomic_load(&_bj_err_slot);
+    if (s != 0 - 2) { return s; }
     if (atomic_cas(&_bj_err_gate, 0, 1) == 1) {
-        _bj_err_slot = thread_local_alloc();
-        atomic_store(&_bj_err_ready, 1);
+        var got = thread_local_alloc();
+        atomic_cas(&_bj_err_slot, 0 - 2, got);
     }
-    while (atomic_load(&_bj_err_ready) == 0) { }
-    return _bj_err_slot;
+    while (atomic_load(&_bj_err_slot) == 0 - 2) { }
+    return atomic_load(&_bj_err_slot);
 }
 
 # r = an empty record: no error.

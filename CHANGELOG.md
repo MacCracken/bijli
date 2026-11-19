@@ -60,6 +60,17 @@ The 2.0.1 audit and its repairs (`docs/development/port-parity.md` §142, findin
   of up to 2^63 steps (H21).
 - **compute** — `BjGpuFdtd2d_new` stops at a backend's refusal whatever its code: an `Err(0)` made it ask again
   forever (H22).
+- **math** — the correctly rounded functions' tables (2/π, π/2 and ln 2 in fixed point, 2^(j/64), sin and cos of
+  i/64, atan(i/64), and the series coefficients 1/(2k + 1)) are initialized data. They were filled on a call's first
+  use behind a plain flag, which a second thread on aarch64 could see set before the stores, rounding with zeros
+  (H23). The loader and its 20 call sites are gone, and the generated `1/(2k + 1)` table reproduces the division's
+  bits. A side effect: a test binary's static data shrinks by 33.6 KB (the 550 store statements' constants).
+- **errors** — the per-thread error record's slot is published in one word through a CAS. A separate ready flag
+  could be seen before the slot on aarch64, so a thread used the shared record instead of its own (H25). The math
+  layer's diagnostic call counters are incremented atomically, and fmtf's unused `_bj_json_nonfinite`, a racy
+  global, is gone.
+- **fdtd** — `BjFdtd3d.total_energy` computes in scratch rows on its own stack, where it wrote the grid's: two
+  threads reading one grid's energy could corrupt each other's sums (H24). The sum is unchanged bit for bit.
 
 ### Performance
 - **json** — the ChargeVisualization and ChargePoint readers find a halfway float's token through a per-document

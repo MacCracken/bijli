@@ -80,7 +80,6 @@ fn _bj_ux_exp_lim(x: f64, lim: f64): (f64, i64) {
     if (x > lim) { return (1.0, _BJ_UX_HUGE); }
     var nl: f64 = -lim;
     if (x < nl) { return (1.0, 0 - _BJ_UX_HUGE); }
-    _bj_cr_load();
     var X[112];
     var S[112];
     var ax: f64 = f64_abs(x);
@@ -156,7 +155,6 @@ fn _bj_ux_exp_wide(x: f64): (f64, i64) {
         if (x > 0.0) { return (1.0, _BJ_UX_FAR); }
         return (1.0, 0 - _BJ_UX_FAR);
     }
-    _bj_cr_load();
     var X[112];
     var S[112];
     var A[112];
@@ -226,7 +224,6 @@ fn _bj_ux_sinh(x: f64): (f64, i64) {
 
 # |ln(s·2^E)| into L, and its sign (1 for a value below 1), for a positive normal double s and |E| < 2^26.
 fn _bj_ux_log_fx(L, s: f64, ex): i64 {
-    _bj_cr_load();
     var ls = _bj_cr_log_fx(L, s);
     var E[112];
     var ae = ex;
@@ -358,7 +355,6 @@ fn _bj_ux_pow(s: f64, ex, y: f64): (f64, i64) {
         var xe = load64(&o + 8);
         return (xs, xe);
     }
-    _bj_cr_load();
     var L[112];
     var M[112];
     var P[112];
@@ -429,7 +425,6 @@ fn _bj_ux_reduce(Y, m, e): i64 {
 # (1 ≤ |ts| < 2, 1024 ≤ te ≤ 4452): _bj_cr_sin_cos_slow on _bj_ux_reduce.
 #must_use
 fn _bj_ux_sin_cos(ts: f64, te, want_sin): f64 {
-    _bj_cr_load();
     var Y[112];
     var D[112];
     var w = _bj_cr_word(ts);

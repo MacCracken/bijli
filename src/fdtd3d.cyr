@@ -1111,15 +1111,15 @@ impl BjFdtd3d {
 
     # The total electromagnetic energy in the grid, Σ (½·ε_r·ε₀·|E|² + ½·μ_r·μ₀·|H|²) times dx³, each square summed
     # x, y, z and each cell's two terms added before the running sum, in Rust's order from +0. The cell terms run on
-    # the packed verbs over the flat arrays in chunks of `wlen` through the scratch rows (each lane Rust's operations
-    # in Rust's order; IEEE products commute), the running sum cell by cell, a scalar tail past the last lane multiple.
+    # the packed verbs over the flat arrays in chunks of 256 through scratch rows on the stack (each lane Rust's
+    # operations in Rust's order; IEEE products commute), the running sum cell by cell, a scalar tail past the last
+    # lane multiple. It writes nothing of the grid's, so readers may call it at once.
     # Where a product or a sum leaves the normal range for finite fields, media and dx, the whole sum runs with an
     # unbounded exponent and its product with dx³ is rounded once (ADR 0002 row 18, M6 part 4f): each lane tests the
     # 2D grid's band on |E|² and ½·ε_r·ε₀, |H|² and ½·μ_r·μ₀ before their products (_bj_fd3_energy_scan), a lane
     # outside it and the tail the exact test (_bj_fd3_energy_cell). Mirrors `Fdtd3d::total_energy`.
     #must_use
     public fn total_energy(self): f64 {
-        var wl = self.wlen;
         var n = self.nx * self.ny * self.nz;
         var dx: f64 = self.dx;
         var dx2: f64 = dx * dx;
@@ -1132,13 +1132,16 @@ impl BjFdtd3d {
         var hz: *f64 = _bj_fd2_f64p(self.hz);
         var eps: *f64 = _bj_fd2_f64p(self.permittivity);
         var mu: *f64 = _bj_fd2_f64p(self.permeability);
-        var w1: *f64 = _bj_fd2_f64p(self.work);
-        var w2: *f64 = _bj_fd2_f64p(self.work + wl * 8);
-        var w3: *f64 = _bj_fd2_f64p(self.work + 2 * wl * 8);
+        # Scratch rows of its own on the stack: a reader of the grid writes none of the grid's (2.0.1, H24: two readers
+        # of one grid shared self.work). The running sum goes cell by cell, so the chunk's length can't change a bit.
+        var sw: f64[768];
+        var w1: *f64 = _bj_fd2_f64p(&sw);
+        var w2: *f64 = _bj_fd2_f64p(&sw + 2048);
+        var w3: *f64 = _bj_fd2_f64p(&sw + 4096);
         var e0: f64 = BJ_EPSILON_0;
         var m0: f64 = BJ_MU_0;
         var packed = n & (0 - 4);
-        var chunk = wl & (0 - 4);
+        var chunk = 256;
         var energy: f64 = 0.0;
         var edge = 0;
         var r = 0;

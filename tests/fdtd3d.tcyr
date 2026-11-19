@@ -244,6 +244,27 @@ fn pec_run(toggle): i64 {
     return out;
 }
 
+# The grid and the energy bits the readers compare against (2.0.1 bite 3, H24).
+var _en_grid = 0;
+var _en_want = 0;
+
+# A word as a *BjFdtd3d.
+fn gridp(a): *BjFdtd3d {
+    return a;
+}
+
+# A reader thread (its argument unused): 200 total_energy calls on the shared grid; the count that differ from the
+# single-threaded value.
+fn energy_reader(seed): i64 {
+    var g: *BjFdtd3d = gridp(_en_grid);
+    var wrong = 0;
+    for (var k = 0; k < 200; k = k + 1) {
+        var e: f64 = g.total_energy();
+        if (_bj_bits(e) != _en_want) { wrong = wrong + 1; }
+    }
+    return wrong;
+}
+
 # Rust's Fdtd3d tests, the shared 2D/3D tests, cpml3d_tests, the doc test and the Cyrius-only groups.
 fn main() {
     alloc_init();
@@ -896,6 +917,22 @@ fn main() {
     assert(is_ok(tla) == 1 && is_ok(tlc) == 1 && la.step == 1, "a layer freed through cpml(): steps and runs skipped");
     BjFdtd3d_free(&la);
     assert(la.cpml() == 0, "and the grid still frees");
+
+    test_group("cyrius_audit_201_energy_readers (2.0.1 bite 3, H24)");
+    # Four threads read one grid's energy at once: each has its own scratch rows now (2.0.0 shared the grid's).
+    var eg: BjFdtd3d;
+    var teg, veg = BjFdtd3d_new(20, 20, 20, DX4, &eg);
+    eg.run(30, 10, 10, 10, 3000000000.0, 1.0);
+    var e1: f64 = eg.total_energy();
+    _en_grid = &eg;
+    _en_want = _bj_bits(e1);
+    var h1 = thread_create(&energy_reader, 1);
+    var h2 = thread_create(&energy_reader, 2);
+    var h3 = thread_create(&energy_reader, 3);
+    var h4 = thread_create(&energy_reader, 4);
+    var bad = thread_join(h1) + thread_join(h2) + thread_join(h3) + thread_join(h4);
+    assert(is_ok(teg) == 1 && e1 > 0.0 && bad == 0, "800 concurrent reads, each the single-threaded energy");
+    BjFdtd3d_free(&eg);
 
     return assert_summary();
 }

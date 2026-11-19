@@ -7972,3 +7972,42 @@ triples: 100 in 2 ms, 400 in 32 ms, 1,600 in 525 ms, 6,400 (19,200 values) in 8.
   (`emit_inverse_edges`' knife edges among them) gives the same bits through the new tier. validate.py: 770,127
   rows, 0 problems; 2,957 assertions (4 new); coverage 449 of 449; the bench record 80 of 80 twinned. circuit.tcyr
   passes on x86_64 PE and aarch64. **Bite 2 is done**; next: bite 3, the threads.
+
+## 148. 2.0.1 bite 3: the threads (2026-11-18)
+
+H23–H25 of §142.
+- **H23, the math tables** (scripts/oracle/crtables.py, src/crmath_data.cyr, src/crmath.cyr, src/crmath_ux.cyr):
+  every table of the correctly rounded functions is generated as initialized data (`var t: i64[n] = { … }`, as
+  kimiya's already were) and read with load64 at its byte offset, as before. That covers 2/π (56 chunks), π/2 and
+  ln 2 (14 limbs each), 2^(j/64), sin and cos of i/64, atan(i/64), and the series coefficients 1/(2k + 1).
+  - `_bj_cr_load`, `_bj_cr_ready`, `_bj_cr_odd_load` and `_bj_cr_odd_ready` are gone, with their 18 calls in
+    crmath.cyr and crmath_ux.cyr.
+  - crtables.py's `odd_inv` replays `_bj_cr_dd_div_d(1, 0, 2k + 1)` operation for operation on IEEE doubles
+    (TwoProduct is error-free, and no operation fuses). crmath_bijli.tcyr's `cyrius_audit_201_tables` checks all 25
+    pairs against the division at run time, bit for bit.
+  - With no first use left, no race: on aarch64, 2.0.0's plain flag could be seen set before the table stores, and a
+    concurrent first call rounded with zeros.
+  - Measured on tests/ai.tcyr's advisory line, static data fell from 226,656 to 193,040 bytes: each of the 550
+    store64 statements' 64-bit immediates was static data (as §75's chunk loader found). So bijli alone sits about
+    33 KB further under the compiler's 128 KiB advisory.
+- **H25, shared words** (src/error.cyr, src/crmath.cyr, src/fmtf.cyr):
+  - `_bj_err_slot` is the claim's whole result in one word: −2 unclaimed, then the slot or −1. It is published by an
+    `atomic_cas` (ldaxr/stlxr on aarch64) and read with one load. Before, a separate `_bj_err_ready` could be seen
+    before the slot, and the thread then used the static record. thread_local_get reads the caller's own block, so
+    the slot is all a reader needs.
+  - The 15 diagnostic counter increments are `atomic_fetch_add`s, on phase-2 and slow paths only.
+  - `_bj_json_nonfinite` (written, never read, not reachable from the bundle) is gone.
+- **H24, the 3D energy** (src/fdtd3d.cyr): `total_energy` runs its packed lanes through three 256-value scratch rows
+  on its own stack instead of the grid's `work` rows. The running sum goes cell by cell, so the chunk length can't
+  change a bit, and the digests confirm it. fdtd3d.tcyr's `cyrius_audit_201_energy_readers` has four threads read
+  one grid's energy 200 times each, every read equal to the single-threaded value. Against bite 2b-2's src/ the same
+  test also passed, even at 2,000 reads a thread: readers of one grid write the same values, so a wrong sum needs
+  one reader in another chunk, and the threads overlapped too little to show it. The fix holds by construction.
+- **Benchmarks**: two interleaved rounds against bite 2b-2's src/ (load 0.9–1.0, nothing else running), median ratio
+  1.000 in each. With no loader call, the transcendentals are 1–1.3 % quicker (`sinh_cosh` −0.2 and −1.3 %,
+  `complex_exp` −1.1 % twice, `complex_sin` −1.2 and −1.3 %). `error_record` is unchanged, and
+  `fdtd/3d_step_30x30x30` moves +0.9 and +1.3 %.
+- **Result**: the gate clean, all 17 steps (validate.py's check that src/crmath_data.cyr is crtables.py's output
+  among them). Parity and the 520 digests are unchanged and equal on x86_64 ELF, x86_64 PE and aarch64 (whole suites,
+  one target at a time, each with only the recorded warnings). validate.py: 770,127 rows, 0 problems; 2,960
+  assertions (3 new); coverage 449 of 449; the API snapshot unchanged. Next: bite 4, the results that change.

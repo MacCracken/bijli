@@ -734,16 +734,11 @@ fn _bj_fmt_f64_fixed(t, x: f64, prec) {
     return 0;
 }
 
-# The number of non-finite values _bj_fmt_f64_json has written as `null`, as serde_json does. A caller that must
-# not lose one zeroes it, writes, and checks it.
-var _bj_json_nonfinite = 0;
-
 # Appends x as serde_json 1.0.154 writes an f64 (zmij's format). Mirrors `serde_json::to_string(&x)`.
 fn _bj_fmt_f64_json(t, x: f64) {
     var bits = _bj_bits(x);
     var mag = bits & 0x7FFFFFFFFFFFFFFF;
     if (mag >= 0x7FF0000000000000) {
-        _bj_json_nonfinite = _bj_json_nonfinite + 1;
         _bj_tx_cstr(t, "null");
         return 0;
     }
@@ -784,7 +779,6 @@ fn _bj_fmt_f32_json(t, x: f64) {
     var bits = _bj_bits(x);
     var mag = bits & 0x7FFFFFFFFFFFFFFF;
     if (mag >= 0x7FF0000000000000) {
-        _bj_json_nonfinite = _bj_json_nonfinite + 1;
         _bj_tx_cstr(t, "null");
         return 0;
     }
